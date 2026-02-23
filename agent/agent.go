@@ -10,10 +10,9 @@ import (
 
 	"xbot/bus"
 	"xbot/llm"
+	log "xbot/logger"
 	"xbot/session"
 	"xbot/tools"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // Agent 核心 Agent 引擎
@@ -26,6 +25,8 @@ type Agent struct {
 	maxIterations int
 	memoryWindow  int
 	memory        *MemoryStore
+	workDir       string
+	dataDir       string
 
 	consolidatingMu sync.Mutex
 	consolidating   bool // 是否正在进行记忆合并
@@ -40,6 +41,8 @@ type Config struct {
 	MemoryWindow  int    // 上下文窗口大小（保留的历史消息数）
 	SessionPath   string // 会话持久化文件路径（空则不持久化）
 	MemoryDir     string // 记忆文件目录（MEMORY.md / HISTORY.md）
+	WorkDir       string // 工具执行的工作目录
+	DataDir       string // 数据持久化目录
 }
 
 // New 创建 Agent
@@ -53,6 +56,12 @@ func New(cfg Config) *Agent {
 	if cfg.MemoryDir == "" {
 		cfg.MemoryDir = "data/memory"
 	}
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = "."
+	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = "data"
+	}
 	return &Agent{
 		bus:           cfg.Bus,
 		llmClient:     cfg.LLM,
@@ -62,6 +71,8 @@ func New(cfg Config) *Agent {
 		maxIterations: cfg.MaxIterations,
 		memoryWindow:  cfg.MemoryWindow,
 		memory:        NewMemoryStore(cfg.MemoryDir),
+		workDir:       cfg.WorkDir,
+		dataDir:       cfg.DataDir,
 	}
 }
 
@@ -120,10 +131,10 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// 构建 LLM 消息（注入长期记忆）
 	history := a.session.GetHistory(a.memoryWindow)
-	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory)
+	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory, a.memory.Dir(), a.workDir, a.dataDir)
 
 	// 运行 Agent 循环
-	finalContent, toolsUsed, err := a.runLoop(ctx, messages)
+	finalContent, toolsUsed, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +225,7 @@ func (a *Agent) maybeConsolidate(ctx context.Context) {
 }
 
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
-func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage) (string, []string, error) {
+func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID string) (string, []string, error) {
 	var toolsUsed []string
 
 	for i := 0; i < a.maxIterations; i++ {
@@ -249,13 +260,27 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage) (string
 				"id":   tc.ID,
 			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
 
-			result, execErr := a.executeTool(ctx, tc)
+			start := time.Now()
+			result, execErr := a.executeTool(ctx, tc, channel, chatID)
+			elapsed := time.Since(start)
+
 			content := ""
 			if execErr != nil {
 				content = fmt.Sprintf("Error: %v", execErr)
-				log.WithError(execErr).Warnf("Tool %s failed", tc.Name)
+				log.WithFields(log.Fields{
+					"tool":    tc.Name,
+					"elapsed": elapsed.Round(time.Millisecond),
+				}).WithError(execErr).Warn("Tool failed")
 			} else {
 				content = result.Summary
+				resultPreview := content
+				if len(resultPreview) > 200 {
+					resultPreview = resultPreview[:200] + "..."
+				}
+				log.WithFields(log.Fields{
+					"tool":    tc.Name,
+					"elapsed": elapsed.Round(time.Millisecond),
+				}).Infof("Tool done: %s", resultPreview)
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
@@ -270,7 +295,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage) (string
 }
 
 // executeTool 执行单个工具调用
-func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID string) (*tools.ToolResult, error) {
 	tool, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", tc.Name)
@@ -281,13 +306,38 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall) (*tools.ToolRe
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
-		Ctx:        execCtx,
-		WorkingDir: ".",
-		AgentID:    "main",
-		Manager:    a, // Agent 实现了 SubAgentManager 接口
+		Ctx:           execCtx,
+		WorkingDir:    a.workDir,
+		AgentID:       "main",
+		Manager:       a,
+		DataDir:       a.dataDir,
+		Channel:       channel,
+		ChatID:        chatID,
+		SendFunc:      a.sendMessage,
+		InjectInbound: a.injectInbound,
 	}
 
 	return tool.Execute(toolCtx, tc.Arguments)
+}
+
+// sendMessage 通过消息总线发送消息到指定渠道
+func (a *Agent) sendMessage(channel, chatID, content string) {
+	a.bus.Outbound <- bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  chatID,
+		Content: content,
+	}
+}
+
+// injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
+func (a *Agent) injectInbound(channel, chatID, content string) {
+	a.bus.Inbound <- bus.InboundMessage{
+		Channel:  channel,
+		SenderID: "cron",
+		ChatID:   chatID,
+		Content:  content,
+		Time:     time.Now(),
+	}
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口
@@ -354,7 +404,7 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 
 			toolCtx := &tools.ToolContext{
 				Ctx:        execCtx,
-				WorkingDir: ".",
+				WorkingDir: a.workDir,
 				AgentID:    parentAgentID + "/sub",
 			}
 

@@ -35,8 +35,10 @@ type FeishuConfig struct {
 
 // AgentConfig Agent 配置
 type AgentConfig struct {
-	MaxIterations int // 单次对话最大工具迭代次数
-	MemoryWindow  int // 上下文窗口（保留最近多少条消息）
+	MaxIterations int    // 单次对话最大工具迭代次数
+	MemoryWindow  int    // 上下文窗口（保留最近多少条消息）
+	DataDir       string // 数据目录（session、memory 等持久化文件的根目录）
+	WorkDir       string // 工具执行的工作目录
 }
 
 // ServerConfig 服务器配置
@@ -45,7 +47,6 @@ type ServerConfig struct {
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
-	StaticDir    string
 }
 
 // LLMConfig LLM 配置
@@ -81,7 +82,6 @@ func Load() *Config {
 			Port:         getEnvIntOrDefault("SERVER_PORT", 8080),
 			ReadTimeout:  time.Duration(getEnvIntOrDefault("SERVER_READ_TIMEOUT", 30)) * time.Second,
 			WriteTimeout: time.Duration(getEnvIntOrDefault("SERVER_WRITE_TIMEOUT", 120)) * time.Second,
-			StaticDir:    getEnvOrDefault("STATIC_DIR", "./web/dist"),
 		},
 		LLM: LLMConfig{
 			// DeepSeek 配置（OpenAI 兼容）
@@ -119,6 +119,8 @@ func Load() *Config {
 		Agent: AgentConfig{
 			MaxIterations: getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
 			MemoryWindow:  getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
+			DataDir:       getEnvOrDefault("DATA_DIR", "data"),
+			WorkDir:       getEnvOrDefault("WORK_DIR", "."),
 		},
 	}
 }

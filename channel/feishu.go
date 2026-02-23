@@ -8,8 +8,7 @@ import (
 	"sync"
 
 	"xbot/bus"
-
-	log "github.com/sirupsen/logrus"
+	log "xbot/logger"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"

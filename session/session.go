@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"xbot/llm"
-
-	log "github.com/sirupsen/logrus"
+	log "xbot/logger"
 )
 
 // Session 单一会话，保存完整对话历史并持久化到 JSONL 文件

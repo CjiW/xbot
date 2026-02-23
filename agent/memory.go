@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"xbot/llm"
-
-	log "github.com/sirupsen/logrus"
+	log "xbot/logger"
 )
 
 // saveMemoryTool 内部 LLM 工具定义，用于记忆合并时让 LLM 以结构化方式输出结果
@@ -65,6 +64,11 @@ func NewMemoryStore(dir string) *MemoryStore {
 		memoryFile:  filepath.Join(dir, "MEMORY.md"),
 		historyFile: filepath.Join(dir, "HISTORY.md"),
 	}
+}
+
+// Dir 返回记忆文件目录路径
+func (m *MemoryStore) Dir() string {
+	return m.memoryDir
 }
 
 // ReadLongTerm 读取 MEMORY.md 内容

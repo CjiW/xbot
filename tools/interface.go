@@ -7,10 +7,15 @@ import (
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	Ctx        context.Context // 可取消的上下文，用于响应 stop 信号
-	WorkingDir string          // Agent 的工作目录
-	AgentID    string          // 当前 Agent 的 ID
-	Manager    SubAgentManager // Agent 管理器引用（用于创建 SubAgent）
+	Ctx           context.Context                       // 可取消的上下文，用于响应 stop 信号
+	WorkingDir    string                                // Agent 的工作目录
+	AgentID       string                                // 当前 Agent 的 ID
+	Manager       SubAgentManager                       // Agent 管理器引用（用于创建 SubAgent）
+	DataDir       string                                // 数据持久化目录
+	Channel       string                                // 当前消息来源渠道
+	ChatID        string                                // 当前消息来源会话
+	SendFunc      func(channel, chatID, content string) // 向 IM 渠道发送消息（不经过 Agent）
+	InjectInbound func(channel, chatID, content string) // 注入入站消息，触发 Agent 完整处理循环
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -94,12 +99,14 @@ func (r *Registry) Clone() *Registry {
 // DefaultRegistry 创建包含默认工具的注册表
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.Register(&BashTool{})
+	r.Register(&ShellTool{})
 	r.Register(&GlobTool{})
 	r.Register(&GrepTool{})
 	r.Register(&ReadTool{})
 	r.Register(&EditTool{})
 	r.Register(NewWebSearchTool())
 	r.Register(&SubAgentTool{})
+	r.Register(&MessageTool{})
+	r.Register(NewCronTool())
 	return r
 }

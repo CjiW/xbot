@@ -23,7 +23,7 @@ func (t *SubAgentTool) Description() string {
 
 	return fmt.Sprintf(`Delegate a task to a sub-agent that runs independently with its own tool set and context.
 Use this when a task is complex, self-contained, or benefits from isolation (e.g., research, code generation, file operations on a separate concern).
-The sub-agent has access to all standard tools (Bash, Read, Edit, Glob, Grep, etc.) but cannot create further sub-agents.
+The sub-agent has access to all standard tools (Shell, Read, Edit, Glob, Grep, etc.) but cannot create further sub-agents.
 The sub-agent runs synchronously and returns its final response.
 
 Parameters (JSON):

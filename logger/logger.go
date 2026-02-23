@@ -4,11 +4,31 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Fields 日志字段类型（logrus.Fields 别名）
+// 类型别名
 type Fields = log.Fields
-
-// Entry 日志条目类型
 type Entry = log.Entry
+type Formatter = log.Formatter
+type Level = log.Level
+
+// 级别常量
+var (
+	InfoLevel = log.InfoLevel
+)
+
+// JSONFormatter JSON 格式化器
+type JSONFormatter = log.JSONFormatter
+
+// TextFormatter 文本格式化器
+type TextFormatter = log.TextFormatter
+
+// SetFormatter 设置日志格式
+func SetFormatter(formatter Formatter) { log.SetFormatter(formatter) }
+
+// SetLevel 设置日志级别
+func SetLevel(level Level) { log.SetLevel(level) }
+
+// ParseLevel 解析日志级别字符串
+func ParseLevel(lvl string) (Level, error) { return log.ParseLevel(lvl) }
 
 // WithField 创建带字段的日志条目
 func WithField(key string, value any) *Entry {

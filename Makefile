@@ -67,7 +67,8 @@ docker-dev: docker-build docker-stop
 	docker run -d \
 		--name $(CONTAINER_NAME) \
 		--env-file .env \
-		-v $(CURDIR)/data:/app/data \
+		-v $(CURDIR)/data:/data \
+		-v $(CURDIR)/data-work:/work \
 		--restart unless-stopped \
 		$(IMAGE_NAME)
 	@echo "Container $(CONTAINER_NAME) started. Logs: make docker-logs"

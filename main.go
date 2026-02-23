@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"xbot/agent"
@@ -12,8 +13,7 @@ import (
 	"xbot/channel"
 	"xbot/config"
 	"xbot/llm"
-
-	log "github.com/sirupsen/logrus"
+	log "xbot/logger"
 )
 
 func main() {
@@ -42,7 +42,10 @@ func main() {
 		Model:         cfg.LLM.Model,
 		MaxIterations: cfg.Agent.MaxIterations,
 		MemoryWindow:  cfg.Agent.MemoryWindow,
-		SessionPath:   "data/session.jsonl",
+		SessionPath:   filepath.Join(cfg.Agent.DataDir, "session.jsonl"),
+		MemoryDir:     filepath.Join(cfg.Agent.DataDir, "memory"),
+		WorkDir:       cfg.Agent.WorkDir,
+		DataDir:       cfg.Agent.DataDir,
 	})
 
 	// 创建消息分发器

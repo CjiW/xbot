@@ -12,33 +12,33 @@ import (
 	"xbot/llm"
 )
 
-const defaultBashTimeout = 120 * time.Second
+const defaultShellTimeout = 120 * time.Second
 
-// BashTool 执行命令工具
-type BashTool struct{}
+// ShellTool 执行命令工具
+type ShellTool struct{}
 
-func (t *BashTool) Name() string {
-	return "Bash"
+func (t *ShellTool) Name() string {
+	return "Shell"
 }
 
-func (t *BashTool) Description() string {
-	return `Execute a bash command and return its output.
+func (t *ShellTool) Description() string {
+	return `Execute a command and return its output.
 The command will be executed in the agent's working directory.
 IMPORTANT: Commands are executed non-interactively with a timeout. Do NOT run interactive commands (e.g. vim, top, htop) or commands that require manual input. For commands that might prompt for input, use non-interactive flags (e.g. "apt-get -y", "yes |", "ssh -o BatchMode=yes"). For sudo, use NOPASSWD or "echo password | sudo -S".
 Parameters (JSON):
-  - command: string, the bash command to execute
+  - command: string, the command to execute
   - timeout: number (optional), timeout in seconds (default: 120)
 Example: {"command": "ls -la"}`
 }
 
-func (t *BashTool) Parameters() []llm.ToolParam {
+func (t *ShellTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
-		{Name: "command", Type: "string", Description: "The bash command to execute", Required: true},
+		{Name: "command", Type: "string", Description: "The command to execute", Required: true},
 		{Name: "timeout", Type: "number", Description: "Timeout in seconds (default: 120)", Required: false},
 	}
 }
 
-func (t *BashTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, error) {
+func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, error) {
 	var params struct {
 		Command string  `json:"command"`
 		Timeout float64 `json:"timeout"`
@@ -51,7 +51,7 @@ func (t *BashTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("command is required")
 	}
 
-	timeout := defaultBashTimeout
+	timeout := defaultShellTimeout
 	if params.Timeout > 0 {
 		timeout = time.Duration(params.Timeout) * time.Second
 	}
@@ -64,7 +64,7 @@ func (t *BashTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, err
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", params.Command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", params.Command)
 
 	if toolCtx != nil && toolCtx.WorkingDir != "" {
 		cmd.Dir = toolCtx.WorkingDir

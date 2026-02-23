@@ -55,6 +55,7 @@ build/
 
 # Runtime output
 data/
+data-work/
 
 # Go build cache (usually in user home, but just in case)
 .cache/

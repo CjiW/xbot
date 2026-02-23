@@ -20,21 +20,21 @@ const defaultSystemPrompt = `You are xbot, a helpful AI assistant.
 ## Available Channels
 You are communicating through the "%s" channel.
 
+## Working Environment
+- Working directory: %s (Shell commands run here; use relative paths when possible)
+- Data directory: %s (persistent storage for session, memory, cron jobs, etc.)
+
 ## Memory Files
-- Long-term memory: data/memory/MEMORY.md (always loaded below)
-- History log: data/memory/HISTORY.md (grep-searchable event log)
+- Long-term memory: %s/MEMORY.md (always loaded below)
+- History log: %s/HISTORY.md (grep-searchable event log)
 
 When you learn important facts about the user or project, note that they will be automatically persisted.
 `
 
 // BuildMessages 构建完整的 LLM 消息列表
-// history: 历史对话消息
-// userContent: 当前用户消息内容
-// channel: 当前渠道名称
-// memory: MemoryStore（可为 nil）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory *MemoryStore) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory *MemoryStore, memoryDir string, workDir string, dataDir string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	systemContent := fmt.Sprintf(defaultSystemPrompt, now, channel)
+	systemContent := fmt.Sprintf(defaultSystemPrompt, now, channel, workDir, dataDir, memoryDir, memoryDir)
 
 	// 注入长期记忆
 	if memory != nil {

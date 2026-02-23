@@ -2,8 +2,7 @@ package channel
 
 import (
 	"xbot/bus"
-
-	log "github.com/sirupsen/logrus"
+	log "xbot/logger"
 )
 
 // Dispatcher 出站消息分发器

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"xbot/llm"
 	log "xbot/logger"
 )
@@ -147,7 +148,7 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 
 	now := time.Now()
 	job := &cronJob{
-		ID:           fmt.Sprintf("job_%d", now.UnixMilli()),
+		ID:           fmt.Sprintf("job_%s", uuid.New().String()[:8]),
 		Message:      p.Message,
 		CronExpr:     p.CronExpr,
 		EverySeconds: p.EverySeconds,

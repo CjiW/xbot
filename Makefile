@@ -1,8 +1,6 @@
-.PHONY: fmt test build run clean web-install web-dev web-build all docker-dev docker-build docker-stop
+.PHONY: fmt test build run clean web-install web-dev web-build all
 
 BINARY_NAME := xbot
-IMAGE_NAME := xbot
-CONTAINER_NAME := xbot-dev
 PORT ?= 8080
 
 # Go 相关
@@ -59,21 +57,4 @@ list-sessions:
 health:
 	@curl -s http://localhost:$(PORT)/health | jq .
 
-# Docker 相关
-docker-build:
-	docker build -t $(IMAGE_NAME) .
 
-docker-dev: docker-build docker-stop
-	docker run -d \
-		--name $(CONTAINER_NAME) \
-		--env-file .env \
-		-v $(CURDIR)/data:/work \
-		--restart unless-stopped \
-		$(IMAGE_NAME)
-	@echo "Container $(CONTAINER_NAME) started. Logs: make docker-logs"
-
-docker-logs:
-	docker logs -f $(CONTAINER_NAME)
-
-docker-stop:
-	@docker rm -f $(CONTAINER_NAME) 2>/dev/null || true

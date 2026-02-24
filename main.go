@@ -36,17 +36,18 @@ func main() {
 	msgBus := bus.NewMessageBus()
 
 	// 创建 Agent
+	workDir := cfg.Agent.WorkDir
+	xbotDir := filepath.Join(workDir, ".xbot")
 	agentLoop := agent.New(agent.Config{
 		Bus:           msgBus,
 		LLM:           llmClient,
 		Model:         cfg.LLM.Model,
 		MaxIterations: cfg.Agent.MaxIterations,
 		MemoryWindow:  cfg.Agent.MemoryWindow,
-		SessionPath:   filepath.Join(cfg.Agent.DataDir, "session.jsonl"),
-		MemoryDir:     filepath.Join(cfg.Agent.DataDir, "memory"),
-		SkillsDir:     filepath.Join(cfg.Agent.DataDir, "skills"),
-		WorkDir:       cfg.Agent.WorkDir,
-		DataDir:       cfg.Agent.DataDir,
+		SessionPath:   filepath.Join(xbotDir, "session.jsonl"),
+		MemoryDir:     workDir,
+		SkillsDir:     filepath.Join(xbotDir, "skills"),
+		WorkDir:       workDir,
 	})
 
 	// 创建消息分发器

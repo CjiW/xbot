@@ -37,8 +37,7 @@ type FeishuConfig struct {
 type AgentConfig struct {
 	MaxIterations int    // 单次对话最大工具迭代次数
 	MemoryWindow  int    // 上下文窗口（保留最近多少条消息）
-	DataDir       string // 数据目录（session、memory 等持久化文件的根目录）
-	WorkDir       string // 工具执行的工作目录
+	WorkDir       string // 工作目录（所有文件相对此目录存放）
 }
 
 // ServerConfig 服务器配置
@@ -119,7 +118,6 @@ func Load() *Config {
 		Agent: AgentConfig{
 			MaxIterations: getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
 			MemoryWindow:  getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
-			DataDir:       getEnvOrDefault("DATA_DIR", "data"),
 			WorkDir:       getEnvOrDefault("WORK_DIR", "."),
 		},
 	}

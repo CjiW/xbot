@@ -29,7 +29,6 @@ type Agent struct {
 	skills        *tools.SkillStore
 	mcpManager    *tools.MCPManager
 	workDir       string
-	dataDir       string
 
 	consolidatingMu sync.Mutex
 	consolidating   bool // 是否正在进行记忆合并
@@ -45,8 +44,7 @@ type Config struct {
 	SessionPath   string // 会话持久化文件路径（空则不持久化）
 	MemoryDir     string // 记忆文件目录（MEMORY.md / HISTORY.md）
 	SkillsDir     string // Skills 目录
-	WorkDir       string // 工具执行的工作目录
-	DataDir       string // 数据持久化目录
+	WorkDir       string // 工作目录（所有文件相对此目录）
 }
 
 // New 创建 Agent
@@ -57,17 +55,14 @@ func New(cfg Config) *Agent {
 	if cfg.MemoryWindow == 0 {
 		cfg.MemoryWindow = 50
 	}
-	if cfg.MemoryDir == "" {
-		cfg.MemoryDir = "data/memory"
-	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
 	}
-	if cfg.DataDir == "" {
-		cfg.DataDir = "data"
+	if cfg.MemoryDir == "" {
+		cfg.MemoryDir = cfg.WorkDir
 	}
 	if cfg.SkillsDir == "" {
-		cfg.SkillsDir = filepath.Join(cfg.DataDir, "skills")
+		cfg.SkillsDir = filepath.Join(cfg.WorkDir, ".xbot", "skills")
 	}
 
 	skillStore := tools.NewSkillStore(cfg.SkillsDir)
@@ -75,8 +70,8 @@ func New(cfg Config) *Agent {
 	registry := tools.DefaultRegistry()
 	registry.Register(tools.NewSkillTool(skillStore))
 
-	// 初始化 MCP 管理器
-	mcpConfigPath := filepath.Join(cfg.DataDir, "mcp.json")
+	// 初始化 MCP 管理器（mcp.json 放在工作目录根下）
+	mcpConfigPath := filepath.Join(cfg.WorkDir, "mcp.json")
 	mcpMgr := tools.NewMCPManager(mcpConfigPath)
 	if err := mcpMgr.LoadAndConnect(context.Background()); err != nil {
 		log.WithError(err).Warn("MCP initialization failed")
@@ -96,7 +91,6 @@ func New(cfg Config) *Agent {
 		skills:        skillStore,
 		mcpManager:    mcpMgr,
 		workDir:       cfg.WorkDir,
-		dataDir:       cfg.DataDir,
 	}
 }
 
@@ -161,7 +155,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 构建 LLM 消息（注入长期记忆和 skills）
 	history := a.session.GetHistory(a.memoryWindow)
 	skillsPrompt := a.skills.GetActiveSkillsPrompt()
-	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory, a.memory.Dir(), a.workDir, a.dataDir, skillsPrompt)
+	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory, a.memory.Dir(), a.workDir, skillsPrompt)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
@@ -340,7 +334,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		WorkingDir:    a.workDir,
 		AgentID:       "main",
 		Manager:       a,
-		DataDir:       a.dataDir,
+		DataDir:       a.workDir,
 		Channel:       channel,
 		ChatID:        chatID,
 		SendFunc:      a.sendMessage,

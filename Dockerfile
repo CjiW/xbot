@@ -18,19 +18,17 @@ RUN apk --no-cache add ca-certificates tzdata
 
 ENV TZ=Asia/Shanghai
 
-# 二进制目录
-RUN mkdir -p /app /data /work
+# 二进制目录和工作目录
+RUN mkdir -p /app /work
 
 COPY --from=builder /build/xbot /app/xbot
 
-# 数据持久化卷
-VOLUME ["/data"]
+# 工作目录持久化卷（包含 MEMORY.md, HISTORY.md, mcp.json, cron.json, .xbot/）
+VOLUME ["/work"]
 
-# 工具执行的工作目录
 WORKDIR /work
 
 # 配置路径环境变量
-ENV DATA_DIR=/data
 ENV WORK_DIR=/work
 ENV LOG_LEVEL=info
 

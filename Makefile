@@ -22,7 +22,7 @@ dev:
 	go run .
 
 clean-db:
-	rm -rf ~/.xbot/data*
+	rm -rf .xbot MEMORY.md HISTORY.md cron.json
 
 clean:
 	rm -f $(BINARY_NAME)
@@ -67,8 +67,7 @@ docker-dev: docker-build docker-stop
 	docker run -d \
 		--name $(CONTAINER_NAME) \
 		--env-file .env \
-		-v $(CURDIR)/data:/data \
-		-v $(CURDIR)/data-work:/work \
+		-v $(CURDIR)/data:/work \
 		--restart unless-stopped \
 		$(IMAGE_NAME)
 	@echo "Container $(CONTAINER_NAME) started. Logs: make docker-logs"

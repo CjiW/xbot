@@ -48,6 +48,7 @@ func main() {
 		MemoryDir:     workDir,
 		SkillsDir:     filepath.Join(xbotDir, "skills"),
 		WorkDir:       workDir,
+		PromptFile:    cfg.Agent.PromptFile,
 	})
 
 	// 创建消息分发器

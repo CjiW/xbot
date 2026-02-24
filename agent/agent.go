@@ -29,6 +29,7 @@ type Agent struct {
 	skills        *tools.SkillStore
 	mcpManager    *tools.MCPManager
 	workDir       string
+	promptLoader  *PromptLoader
 
 	consolidatingMu sync.Mutex
 	consolidating   bool // 是否正在进行记忆合并
@@ -45,6 +46,7 @@ type Config struct {
 	MemoryDir     string // 记忆文件目录（MEMORY.md / HISTORY.md）
 	SkillsDir     string // Skills 目录
 	WorkDir       string // 工作目录（所有文件相对此目录）
+	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
 }
 
 // New 创建 Agent
@@ -91,6 +93,7 @@ func New(cfg Config) *Agent {
 		skills:        skillStore,
 		mcpManager:    mcpMgr,
 		workDir:       cfg.WorkDir,
+		promptLoader:  NewPromptLoader(cfg.PromptFile),
 	}
 }
 
@@ -155,7 +158,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 构建 LLM 消息（注入长期记忆和 skills）
 	history := a.session.GetHistory(a.memoryWindow)
 	skillsPrompt := a.skills.GetActiveSkillsPrompt()
-	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory, a.memory.Dir(), a.workDir, skillsPrompt)
+	messages := BuildMessages(history, msg.Content, msg.Channel, a.memory, a.memory.Dir(), a.workDir, skillsPrompt, a.promptLoader)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)

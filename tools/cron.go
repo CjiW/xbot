@@ -8,15 +8,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"xbot/llm"
 	log "xbot/logger"
 )
-
-// jobIDCounter ensures unique job IDs even when multiple jobs are created within the same millisecond.
-var jobIDCounter uint64
 
 // CronTool 定时任务工具
 type CronTool struct {
@@ -151,7 +148,7 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 
 	now := time.Now()
 	job := &cronJob{
-		ID:           fmt.Sprintf("job_%d_%d", now.UnixMilli(), atomic.AddUint64(&jobIDCounter, 1)),
+		ID:           fmt.Sprintf("job_%s", uuid.New().String()[:8]),
 		Message:      p.Message,
 		CronExpr:     p.CronExpr,
 		EverySeconds: p.EverySeconds,

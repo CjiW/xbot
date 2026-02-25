@@ -38,6 +38,7 @@ type AgentConfig struct {
 	MaxIterations int    // 单次对话最大工具迭代次数
 	MemoryWindow  int    // 上下文窗口（保留最近多少条消息）
 	WorkDir       string // 工作目录（所有文件相对此目录存放）
+	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
 }
 
 // ServerConfig 服务器配置
@@ -119,6 +120,7 @@ func Load() *Config {
 			MaxIterations: getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
 			MemoryWindow:  getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
 			WorkDir:       getEnvOrDefault("WORK_DIR", "."),
+			PromptFile:    getEnvOrDefault("PROMPT_FILE", ""),
 		},
 	}
 }

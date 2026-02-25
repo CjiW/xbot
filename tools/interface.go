@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"sort"
 	"xbot/llm"
 )
 
@@ -69,21 +70,27 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
-// List 列出所有工具
+// List 列出所有工具（按名称排序，保证顺序稳定以优化 KV-cache）
 func (r *Registry) List() []Tool {
 	tools := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
 	}
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Name() < tools[j].Name()
+	})
 	return tools
 }
 
-// AsDefinitions 转换为 LLM 工具定义列表
+// AsDefinitions 转换为 LLM 工具定义列表（按名称排序，保证顺序稳定以优化 KV-cache）
 func (r *Registry) AsDefinitions() []llm.ToolDefinition {
 	defs := make([]llm.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
 		defs = append(defs, tool)
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name() < defs[j].Name()
+	})
 	return defs
 }
 

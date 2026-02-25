@@ -12,10 +12,11 @@ import (
 	log "xbot/logger"
 )
 
+// defaultSystemPrompt 系统提示词模板
+// 注意：模板中不包含时间戳，时间戳在 BuildMessages 中动态拼接到末尾
+// 拼接顺序经过优化以最大化 KV-cache 命中率：
+//   固定内容（模板渲染） → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
 const defaultSystemPrompt = `You are xbot, a helpful AI assistant.
-
-## Current Time
-{{.Time}}
 
 ## Guidelines
 - Be concise, accurate, and helpful
@@ -40,7 +41,6 @@ To recall past events, grep HISTORY.md in the working directory.
 
 // PromptData 模板渲染数据
 type PromptData struct {
-	Time      string
 	Channel   string
 	WorkDir   string
 	MemoryDir string
@@ -136,24 +136,31 @@ func (pl *PromptLoader) Render(data PromptData) string {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		log.WithError(err).Error("Failed to render system prompt template")
 		// fallback: 使用简单格式化
-		return fmt.Sprintf("You are xbot, a helpful AI assistant.\nCurrent Time: %s\nChannel: %s\nWorkDir: %s",
-			data.Time, data.Channel, data.WorkDir)
+		return fmt.Sprintf("You are xbot, a helpful AI assistant.\nChannel: %s\nWorkDir: %s",
+			data.Channel, data.WorkDir)
 	}
 	return buf.String()
 }
 
 // BuildMessages 构建完整的 LLM 消息列表
+// 拼接顺序经过优化以最大化 KV-cache 命中率：
+//   固定提示词 → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
 func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory *MemoryStore, memoryDir string, workDir string, skillsPrompt string, promptLoader *PromptLoader) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
+	// 渲染固定部分的模板（不含时间戳）
 	systemContent := promptLoader.Render(PromptData{
-		Time:      now,
 		Channel:   channel,
 		WorkDir:   workDir,
 		MemoryDir: memoryDir,
 	})
 
-	// 注入长期记忆
+	// 注入已激活的 skills（相对稳定，放在 Memory 之前）
+	if skillsPrompt != "" {
+		systemContent += "\n" + skillsPrompt
+	}
+
+	// 注入长期记忆（会随合并变化，放在 Skills 之后）
 	if memory != nil {
 		memCtx := memory.GetMemoryContext()
 		if memCtx != "" {
@@ -161,14 +168,15 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		}
 	}
 
-	// 注入已激活的 skills
-	if skillsPrompt != "" {
-		systemContent += "\n" + skillsPrompt
-	}
+	// 时间戳放在系统提示词最末尾（每次请求都变，放最后以最大化前缀缓存命中）
+	systemContent += fmt.Sprintf("\n## Current Time\n%s\n", now)
 
 	messages := make([]llm.ChatMessage, 0, len(history)+2)
 	messages = append(messages, llm.NewSystemMessage(systemContent))
 	messages = append(messages, history...)
-	messages = append(messages, llm.NewUserMessage(userContent))
+
+	// 用户消息中也注入时间戳，确保模型在近期注意力范围内感知当前时间
+	userMsg := fmt.Sprintf("[%s]\n%s", now, userContent)
+	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
 }

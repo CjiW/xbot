@@ -114,5 +114,6 @@ func DefaultRegistry() *Registry {
 	r.Register(NewWebSearchTool())
 	// r.Register(&SubAgentTool{})
 	r.Register(NewCronTool())
+	r.Register(&NotifyTool{})
 	return r
 }

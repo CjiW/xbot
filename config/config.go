@@ -120,7 +120,7 @@ func Load() *Config {
 			MaxIterations: getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
 			MemoryWindow:  getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
 			WorkDir:       getEnvOrDefault("WORK_DIR", "."),
-			PromptFile:    getEnvOrDefault("PROMPT_FILE", ""),
+			PromptFile:    getEnvOrDefault("PROMPT_FILE", "prompt.md"),
 		},
 	}
 }

@@ -12,39 +12,21 @@ import (
 	log "xbot/logger"
 )
 
-// defaultSystemPrompt 系统提示词模板
-// 注意：模板中不包含时间戳，时间戳在 BuildMessages 中动态拼接到末尾
-// 拼接顺序经过优化以最大化 KV-cache 命中率：
-//
-//	固定内容（模板渲染） → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
+// MemoryAccessor is the interface for accessing memory in BuildMessages
+type MemoryAccessor interface {
+	GetMemoryContext() (string, error)
+}
+
+// defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
+// 正常情况下系统提示词从 prompt.md 加载（支持热更新），此处只保留必要的模板变量。
 const defaultSystemPrompt = `You are xbot, a helpful AI assistant.
-
-## Guidelines
-- Be concise, accurate, and helpful
-- Use tools when needed to accomplish tasks
-- Explain what you're doing before taking actions
-- Ask for clarification when the request is ambiguous
-
-## Available Channels
-You are communicating through the "{{.Channel}}" channel. You shoud always respond in markdown format(e.g. *bold*, _italic_, [a](local/a.txt)).
-
-## Working Environment
-- Working directory: {{.WorkDir}} (Shell commands run here; use relative paths when possible)
-- Internal data: .xbot/ (session, skills — managed automatically)
-
-## Memory Files
-- Long-term memory: {{.MemoryDir}}/MEMORY.md (always loaded below)
-- History log: {{.MemoryDir}}/HISTORY.md (grep-searchable event log)
-
-When remembering something important, write to MEMORY.md in the working directory.
-To recall past events, grep HISTORY.md in the working directory.
+Channel: {{.Channel}} | WorkDir: {{.WorkDir}}
 `
 
 // PromptData 模板渲染数据
 type PromptData struct {
-	Channel   string
-	WorkDir   string
-	MemoryDir string
+	Channel string
+	WorkDir string
 }
 
 // PromptLoader 负责加载和渲染系统提示词模板
@@ -147,14 +129,13 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory *MemoryStore, memoryDir string, workDir string, skillsPrompt string, promptLoader *PromptLoader) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsPrompt string, skillsCatalog string, promptLoader *PromptLoader) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
 	systemContent := promptLoader.Render(PromptData{
-		Channel:   channel,
-		WorkDir:   workDir,
-		MemoryDir: memoryDir,
+		Channel: channel,
+		WorkDir: workDir,
 	})
 
 	// 注入已激活的 skills（相对稳定，放在 Memory 之前）
@@ -162,10 +143,17 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		systemContent += "\n" + skillsPrompt
 	}
 
+	// 注入未激活 skills 目录（让 LLM 按需激活）
+	if skillsCatalog != "" {
+		systemContent += "\n" + skillsCatalog
+	}
+
 	// 注入长期记忆（会随合并变化，放在 Skills 之后）
 	if memory != nil {
-		memCtx := memory.GetMemoryContext()
-		if memCtx != "" {
+		memCtx, err := memory.GetMemoryContext()
+		if err != nil {
+			log.WithError(err).Warn("Failed to get memory context")
+		} else if memCtx != "" {
 			systemContent += "\n# Memory\n\n" + memCtx + "\n"
 		}
 	}

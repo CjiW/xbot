@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"xbot/bus"
 	log "xbot/logger"
@@ -16,6 +17,7 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
@@ -75,7 +77,8 @@ func (f *FeishuChannel) Start() error {
 	eventHandler := dispatcher.NewEventDispatcher(
 		f.config.VerificationToken,
 		f.config.EncryptKey,
-	).OnP2MessageReceiveV1(f.onMessage)
+	).OnP2MessageReceiveV1(f.onMessage).
+		OnP2CardActionTrigger(f.onCardAction)
 
 	// 创建 WebSocket 客户端
 	f.wsClient = larkws.NewClient(
@@ -111,6 +114,12 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 
 	if msg.Content == "" {
 		return nil
+	}
+
+	// 检测 card builder 生成的完整卡片 JSON
+	if strings.HasPrefix(msg.Content, "__FEISHU_CARD__:") {
+		cardJSON := strings.TrimPrefix(msg.Content, "__FEISHU_CARD__:")
+		return f.sendNormalMessage(msg.ChatID, []byte(cardJSON))
 	}
 
 	originalLen := len(msg.Content)
@@ -498,6 +507,129 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	}
 
 	return nil
+}
+
+// onCardAction 处理卡片交互事件（按钮点击、表单提交）
+func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+	if event.Event == nil || event.Event.Action == nil {
+		log.Warn("Card action event is missing data")
+		return &callback.CardActionTriggerResponse{}, nil
+	}
+
+	action := event.Event.Action
+
+	// 解析用户操作数据
+	var actionData map[string]any
+	if action.Value != nil {
+		actionData = action.Value
+	} else if action.FormValue != nil {
+		actionData = action.FormValue
+	}
+
+	// 获取聊天信息
+	chatID := ""
+	if event.Event.Context != nil {
+		chatID = event.Event.Context.OpenChatID
+	}
+
+	// 获取用户 ID
+	senderID := ""
+	if event.Event.Operator != nil && event.Event.Operator.UserID != nil {
+		senderID = *event.Event.Operator.UserID
+	}
+
+	// Card Builder 路径：检测 card_id
+	if cardID, ok := actionData["card_id"].(string); ok {
+		return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID)
+	}
+
+	log.WithField("action_value", actionData).Warn("Missing card_id in card action")
+	return &callback.CardActionTriggerResponse{}, nil
+}
+
+// handleCardBuilderAction handles card actions from Card Builder MCP cards.
+func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID string) (*callback.CardActionTriggerResponse, error) {
+	responseData := make(map[string]string)
+	actionName := action.Tag
+
+	if actionName == "form_submit" || len(action.FormValue) > 0 {
+		// Collect all form field values
+		for key, value := range action.FormValue {
+			if key != "card_id" {
+				switch v := value.(type) {
+				case string:
+					responseData[key] = v
+				default:
+					data, _ := json.Marshal(v)
+					responseData[key] = string(data)
+				}
+			}
+		}
+		actionName = "form_submit"
+	} else {
+		// Button click: collect element name and custom data
+		if name, ok := actionData["element_name"].(string); ok {
+			responseData["element_name"] = name
+		}
+		for k, v := range actionData {
+			if k != "card_id" && k != "element_name" {
+				switch val := v.(type) {
+				case string:
+					responseData[k] = val
+				default:
+					data, _ := json.Marshal(val)
+					responseData[k] = string(data)
+				}
+			}
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"card_id":     cardID,
+		"action_name": actionName,
+		"chat_id":     chatID,
+		"sender_id":   senderID,
+	}).Info("Card builder action triggered")
+
+	// Build user-readable summary
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[Card Action: %s] %s", cardID, actionName))
+	for k, v := range responseData {
+		sb.WriteString(fmt.Sprintf("\n- %s: %s", k, v))
+	}
+
+	f.msgBus.Inbound <- bus.InboundMessage{
+		Channel:  f.Name(),
+		SenderID: senderID,
+		ChatID:   chatID,
+		Content:  sb.String(),
+		Time:     time.Now(),
+		Metadata: map[string]string{
+			"card_response": "true",
+			"card_id":       cardID,
+			"action_name":   actionName,
+			"response_data": formatMapString(responseData),
+		},
+	}
+
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{
+			Type:    "success",
+			Content: "已收到，正在处理...",
+		},
+	}, nil
+}
+
+// formatMapString 将 map 格式化为字符串（用于 metadata）
+func formatMapString(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	var parts []string
+	for k, v := range m {
+		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // parseContent 解析消息内容

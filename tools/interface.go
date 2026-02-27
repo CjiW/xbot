@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"sort"
+	"sync"
 	"xbot/llm"
 )
 
@@ -15,8 +16,11 @@ type ToolContext struct {
 	DataDir       string                                // 数据持久化目录
 	Channel       string                                // 当前消息来源渠道
 	ChatID        string                                // 当前消息来源会话
-	SendFunc      func(channel, chatID, content string) // 向 IM 渠道发送消息（不经过 Agent）
+	SendFunc      func(channel, chatID, content string) error // 向 IM 渠道发送消息（不经过 Agent），返回错误
 	InjectInbound func(channel, chatID, content string) // 注入入站消息，触发 Agent 完整处理循环
+	SkillStore    *SkillStore                           // Skill 存储引用（用于 ManageTools）
+	MCPManager    *MCPManager                           // MCP 管理器引用（用于 ManageTools）
+	Registry      *Registry                             // 工具注册表引用（用于动态注册工具）
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -27,13 +31,24 @@ type SubAgentManager interface {
 
 // ToolResult 工具执行结果
 type ToolResult struct {
-	Summary string // 精简结果，进入 LLM 上下文
-	Detail  string // 详细内容（如 diff），仅推前端展示，不进入上下文
+	Summary     string // 精简结果，进入 LLM 上下文
+	Detail      string // 详细内容（如 diff），仅推前端展示，不进入上下文
+	WaitingUser bool   // 标记：是否等待用户响应（如果为 true，Agent 不应生成额外回复）
 }
 
 // NewResult 创建 Summary == Detail 的简单结果
 func NewResult(content string) *ToolResult {
 	return &ToolResult{Summary: content}
+}
+
+// NewResultWithUserResponse 创建结果并标记为等待用户响应
+func NewResultWithUserResponse(summary string) *ToolResult {
+	return &ToolResult{Summary: summary, WaitingUser: true}
+}
+
+// NewResultWithDetail 创建带详情的结果
+func NewResultWithDetail(summary, detail string) *ToolResult {
+	return &ToolResult{Summary: summary, Detail: detail}
 }
 
 // Tool 工具接口
@@ -44,6 +59,7 @@ type Tool interface {
 
 // Registry 工具注册表
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 }
 
@@ -56,22 +72,30 @@ func NewRegistry() *Registry {
 
 // Register 注册工具
 func (r *Registry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[tool.Name()] = tool
 }
 
 // Unregister 注销工具
 func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.tools, name)
 }
 
 // Get 获取工具
 func (r *Registry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	return tool, ok
 }
 
 // List 列出所有工具（按名称排序，保证顺序稳定以优化 KV-cache）
 func (r *Registry) List() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tools := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
@@ -84,6 +108,8 @@ func (r *Registry) List() []Tool {
 
 // AsDefinitions 转换为 LLM 工具定义列表（按名称排序，保证顺序稳定以优化 KV-cache）
 func (r *Registry) AsDefinitions() []llm.ToolDefinition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	defs := make([]llm.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
 		defs = append(defs, tool)
@@ -96,6 +122,8 @@ func (r *Registry) AsDefinitions() []llm.ToolDefinition {
 
 // Clone 复制工具注册表
 func (r *Registry) Clone() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	clone := NewRegistry()
 	for name, tool := range r.tools {
 		clone.tools[name] = tool

@@ -1,0 +1,159 @@
+package sqlite
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	_ "github.com/mattn/go-sqlite3"
+	log "xbot/logger"
+)
+
+// DB wraps a SQLite database connection with schema management
+type DB struct {
+	conn *sql.DB
+	path string
+	mu   sync.RWMutex
+}
+
+// Schema version for potential future migrations
+const schemaVersion = 1
+
+// Open opens or creates a SQLite database at the given path
+// If the database doesn't exist, it will be created with the required schema
+func Open(path string) (*DB, error) {
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create database directory: %w", err)
+	}
+
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	// Set connection pool settings
+	conn.SetMaxOpenConns(1) // SQLite works best with a single connection
+	conn.SetMaxIdleConns(1)
+
+	db := &DB{
+		conn: conn,
+		path: path,
+	}
+
+	// Initialize schema
+	if err := db.initSchema(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("initialize schema: %w", err)
+	}
+
+	log.WithField("path", path).Info("SQLite database opened")
+	return db, nil
+}
+
+// Close closes the database connection
+func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.conn != nil {
+		if err := db.conn.Close(); err != nil {
+			return fmt.Errorf("close database: %w", err)
+		}
+		db.conn = nil
+	}
+	return nil
+}
+
+// Conn returns the underlying database connection
+func (db *DB) Conn() *sql.DB {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.conn
+}
+
+// initSchema creates the database schema if it doesn't exist
+func (db *DB) initSchema() error {
+	conn := db.Conn()
+
+	// Check if schema already exists by checking tenants table
+	var tableName string
+	err := conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'").Scan(&tableName)
+	if err == nil {
+		// Schema exists
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check schema: %w", err)
+	}
+
+	// Create schema
+	schema := `
+-- Tenants: unique (channel, chat_id) combinations
+CREATE TABLE tenants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_active_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(channel, chat_id)
+);
+
+-- Session messages: per-tenant conversation history
+CREATE TABLE session_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tool_call_id TEXT,
+    tool_name TEXT,
+    tool_arguments TEXT,
+    tool_calls TEXT,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_session_messages_tenant_created ON session_messages(tenant_id, created_at);
+
+-- Tenant state: memory consolidation tracking
+CREATE TABLE tenant_state (
+    tenant_id INTEGER PRIMARY KEY,
+    last_consolidated INTEGER DEFAULT 0,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+-- Long-term memory (replaces MEMORY.md)
+CREATE TABLE long_term_memory (
+    tenant_id INTEGER PRIMARY KEY,
+    content TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+-- Event history (replaces HISTORY.md)
+CREATE TABLE event_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    entry TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_event_history_tenant_created ON event_history(tenant_id, created_at);
+
+-- Schema version
+CREATE TABLE schema_version (
+    version INTEGER PRIMARY KEY
+);
+
+INSERT INTO schema_version (version) VALUES (1);
+`
+
+	if _, err := conn.Exec(schema); err != nil {
+		return fmt.Errorf("create schema: %w", err)
+	}
+
+	log.Info("Database schema initialized")
+	return nil
+}

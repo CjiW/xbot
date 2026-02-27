@@ -73,9 +73,22 @@ func (m *MCPManager) LoadAndConnect(ctx context.Context) error {
 			continue
 		}
 
-		if err := m.connectServer(ctx, name, serverCfg); err != nil {
-			log.WithError(err).WithField("server", name).Error("Failed to connect MCP server")
-			continue
+		var lastErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			if err := m.connectServer(ctx, name, serverCfg); err != nil {
+				lastErr = err
+				log.WithError(err).WithFields(log.Fields{
+					"server":  name,
+					"attempt": attempt,
+				}).Warn("Failed to connect MCP server, retrying...")
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+				continue
+			}
+			lastErr = nil
+			break
+		}
+		if lastErr != nil {
+			log.WithError(lastErr).WithField("server", name).Error("Failed to connect MCP server after 3 attempts")
 		}
 	}
 
@@ -103,8 +116,8 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		return err
 	}
 
-	// 初始化 MCP 协议
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// 初始化 MCP 协议（npx 启动慢，给足时间）
+	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	initReq := mcp.InitializeRequest{}
@@ -162,11 +175,8 @@ func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig
 	// 创建 stdio transport
 	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
 
-	// 启动 transport
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := stdioTransport.Start(connectCtx); err != nil {
+	// 使用父级 context 启动 transport，因为子进程生命周期绑定到此 context
+	if err := stdioTransport.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
 	}
 
@@ -212,6 +222,61 @@ func (m *MCPManager) RegisterTools(registry *Registry) {
 			registry.Register(remoteTool)
 		}
 	}
+}
+
+// ReconnectServer 重新连接指定 MCP Server（原子替换：先连新再清旧，无工具空窗期）
+func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry *Registry) error {
+	config, err := m.loadConfig()
+	if err != nil {
+		return fmt.Errorf("reload config: %w", err)
+	}
+
+	serverCfg, ok := config.MCPServers[name]
+	if !ok {
+		return fmt.Errorf("server %q not found in config", name)
+	}
+
+	if serverCfg.Enabled != nil && !*serverCfg.Enabled {
+		return fmt.Errorf("server %q is disabled", name)
+	}
+
+	m.mu.RLock()
+	oldConn := m.connections[name]
+	m.mu.RUnlock()
+
+	if err := m.connectServer(ctx, name, serverCfg); err != nil {
+		return fmt.Errorf("reconnect %s: %w", name, err)
+	}
+
+	m.mu.RLock()
+	newConn := m.connections[name]
+	m.mu.RUnlock()
+
+	if newConn != nil {
+		for _, tool := range newConn.tools {
+			remoteTool := newMCPRemoteTool(newConn.name, tool, newConn.client)
+			registry.Register(remoteTool)
+		}
+	}
+
+	if oldConn != nil {
+		newTools := make(map[string]bool)
+		if newConn != nil {
+			for _, t := range newConn.tools {
+				newTools[fmt.Sprintf("mcp_%s_%s", name, t.Name)] = true
+			}
+		}
+		for _, t := range oldConn.tools {
+			toolName := fmt.Sprintf("mcp_%s_%s", name, t.Name)
+			if !newTools[toolName] {
+				registry.Unregister(toolName)
+			}
+		}
+		m.closeTransport(oldConn.transport)
+	}
+
+	log.WithField("server", name).Info("MCP server reconnected")
+	return nil
 }
 
 // Close 关闭所有 MCP 连接

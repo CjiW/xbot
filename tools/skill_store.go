@@ -14,17 +14,19 @@ import (
 // Skill 格式: skills/{skill-name}/SKILL.md (含 YAML frontmatter)
 // 可选子目录: scripts/, references/, assets/
 type SkillStore struct {
-	mu     sync.RWMutex
-	dir    string            // skills 根目录（DataDir/skills）
-	active map[string]string // 已激活的 skill: name -> body content (不含 frontmatter)
+	mu            sync.RWMutex
+	dir           string            // skills 根目录（DataDir/skills）
+	active        map[string]string // 已激活的 skill: name -> body content (不含 frontmatter)
+	autoActivated map[string]bool   // 由 AutoActivate 自动激活的 skill（区别于手动激活，回复后自动清理）
 }
 
 // NewSkillStore 创建 SkillStore
 func NewSkillStore(dir string) *SkillStore {
 	os.MkdirAll(dir, 0755)
 	return &SkillStore{
-		dir:    dir,
-		active: make(map[string]string),
+		dir:           dir,
+		active:        make(map[string]string),
+		autoActivated: make(map[string]bool),
 	}
 }
 
@@ -35,10 +37,12 @@ func (s *SkillStore) Dir() string {
 
 // SkillInfo skill 基本信息
 type SkillInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Active      bool   `json:"active"`
-	Path        string `json:"path"` // skill 目录路径
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Triggers     []string `json:"triggers,omitempty"`
+	AutoActivate bool     `json:"auto_activate"`
+	Active       bool     `json:"active"`
+	Path         string   `json:"path"`
 }
 
 // ListSkills 列出所有可用的 skill
@@ -65,58 +69,78 @@ func (s *SkillStore) ListSkills() ([]SkillInfo, error) {
 			continue
 		}
 
-		name, desc := s.parseFrontmatter(skillFile)
+		fm := s.parseFrontmatterFull(skillFile)
+		name := fm.Name
 		if name == "" {
 			name = e.Name()
 		}
 		_, activated := s.active[name]
 		skills = append(skills, SkillInfo{
-			Name:        name,
-			Description: desc,
-			Active:      activated,
-			Path:        skillDir,
+			Name:         name,
+			Description:  fm.Description,
+			Triggers:     fm.Triggers,
+			AutoActivate: fm.AutoActivate,
+			Active:       activated,
+			Path:         skillDir,
 		})
 	}
 	return skills, nil
 }
 
-// parseFrontmatter 从 SKILL.md 解析 YAML frontmatter 中的 name 和 description
-// frontmatter 格式:
-//
-//	---
-//	name: skill-name
-//	description: ...
-//	---
-func (s *SkillStore) parseFrontmatter(path string) (name, description string) {
+// skillFrontmatter SKILL.md 的 YAML frontmatter 解析结果
+type skillFrontmatter struct {
+	Name         string
+	Description  string
+	Triggers     []string // 关键词列表，用于消息匹配自动激活
+	AutoActivate bool     // 是否参与自动激活（默认 true）
+}
+
+// parseFrontmatterFull 从 SKILL.md 解析完整 YAML frontmatter
+func (s *SkillStore) parseFrontmatterFull(path string) skillFrontmatter {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", ""
+		return skillFrontmatter{AutoActivate: true}
 	}
 	content := string(data)
 
-	// 检查是否以 --- 开头
 	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
-		return "", ""
+		return skillFrontmatter{AutoActivate: true}
 	}
 
-	// 找到第二个 ---
 	trimmed := strings.TrimSpace(content)
-	rest := trimmed[3:] // 跳过第一个 ---
+	rest := trimmed[3:]
 	endIdx := strings.Index(rest, "\n---")
 	if endIdx < 0 {
-		return "", ""
+		return skillFrontmatter{AutoActivate: true}
 	}
 
-	frontmatter := rest[:endIdx]
-	for _, line := range strings.Split(frontmatter, "\n") {
+	fm := skillFrontmatter{AutoActivate: true}
+	for _, line := range strings.Split(rest[:endIdx], "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "name:") {
-			name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			fm.Name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
 		} else if strings.HasPrefix(line, "description:") {
-			description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+			fm.Description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		} else if strings.HasPrefix(line, "triggers:") {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "triggers:"))
+			for _, t := range strings.Split(raw, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					fm.Triggers = append(fm.Triggers, strings.ToLower(t))
+				}
+			}
+		} else if strings.HasPrefix(line, "auto_activate:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "auto_activate:"))
+			fm.AutoActivate = val != "false"
 		}
 	}
-	return name, description
+	return fm
+}
+
+// parseFrontmatter 兼容旧调用，只返回 name 和 description
+func (s *SkillStore) parseFrontmatter(path string) (name, description string) {
+	fm := s.parseFrontmatterFull(path)
+	return fm.Name, fm.Description
 }
 
 // getSkillBody 读取 SKILL.md 的 body 部分（去掉 YAML frontmatter）
@@ -280,6 +304,114 @@ func (s *SkillStore) ActiveNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// AutoActivate 根据用户消息自动激活匹配的 skill
+// 对所有设置了 triggers 且 auto_activate != false 的 skill，检查用户消息是否包含触发词
+// 返回本次新激活的 skill 名称列表
+func (s *SkillStore) AutoActivate(userMessage string) []string {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil
+	}
+
+	msgLower := strings.ToLower(userMessage)
+	var activated []string
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		skillFile := filepath.Join(s.dir, e.Name(), "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue
+		}
+
+		fm := s.parseFrontmatterFull(skillFile)
+		if !fm.AutoActivate || len(fm.Triggers) == 0 {
+			continue
+		}
+
+		name := fm.Name
+		if name == "" {
+			name = e.Name()
+		}
+
+		s.mu.RLock()
+		_, alreadyActive := s.active[name]
+		s.mu.RUnlock()
+		if alreadyActive {
+			continue
+		}
+
+		for _, trigger := range fm.Triggers {
+			if strings.Contains(msgLower, trigger) {
+				body, err := s.getSkillBody(skillFile)
+				if err != nil {
+					log.WithError(err).WithField("skill", name).Warn("Auto-activate: failed to read skill body")
+					break
+				}
+				s.mu.Lock()
+				s.active[name] = body
+				s.autoActivated[name] = true
+				s.mu.Unlock()
+				activated = append(activated, name)
+				log.WithFields(log.Fields{
+					"skill":   name,
+					"trigger": trigger,
+				}).Info("Skill auto-activated by trigger match")
+				break
+			}
+		}
+	}
+	return activated
+}
+
+// DeactivateAuto 清理所有由 AutoActivate 自动激活的 skill
+// 手动激活的 skill 不受影响
+func (s *SkillStore) DeactivateAuto() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.autoActivated) == 0 {
+		return
+	}
+
+	var names []string
+	for name := range s.autoActivated {
+		delete(s.active, name)
+		names = append(names, name)
+	}
+	s.autoActivated = make(map[string]bool)
+
+	log.WithField("skills", names).Info("Auto-activated skills deactivated")
+}
+
+// GetSkillsCatalog 返回所有可用（未激活）skill 的简要目录
+// 注入到系统提示中，让 LLM 知道可以用 Skill activate 激活哪些 skill
+func (s *SkillStore) GetSkillsCatalog() string {
+	skills, err := s.ListSkills()
+	if err != nil || len(skills) == 0 {
+		return ""
+	}
+
+	var inactive []SkillInfo
+	for _, sk := range skills {
+		if !sk.Active {
+			inactive = append(inactive, sk)
+		}
+	}
+	if len(inactive) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Available Skills (not yet active)\n\n")
+	sb.WriteString("Use the Skill tool with action \"activate\" to enable a skill when the conversation topic matches.\n\n")
+	for _, sk := range inactive {
+		fmt.Fprintf(&sb, "- **%s**: %s\n", sk.Name, sk.Description)
+	}
+	return sb.String()
 }
 
 // GetActiveSkillsPrompt 返回所有已激活 skill 的合并 prompt，用于注入系统提示

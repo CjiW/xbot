@@ -14,6 +14,7 @@ import (
 	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/storage"
 )
 
 func main() {
@@ -38,14 +39,20 @@ func main() {
 	// 创建 Agent
 	workDir := cfg.Agent.WorkDir
 	xbotDir := filepath.Join(workDir, ".xbot")
+	dbPath := filepath.Join(xbotDir, "xbot.db")
+
+	// 检测并执行数据迁移（如果需要）
+	if err := storage.MigrateIfNeeded(context.Background(), workDir, dbPath); err != nil {
+		log.WithError(err).Fatal("Failed to migrate data to SQLite")
+	}
+
 	agentLoop := agent.New(agent.Config{
 		Bus:           msgBus,
 		LLM:           llmClient,
 		Model:         cfg.LLM.Model,
 		MaxIterations: cfg.Agent.MaxIterations,
 		MemoryWindow:  cfg.Agent.MemoryWindow,
-		SessionPath:   filepath.Join(xbotDir, "session.jsonl"),
-		MemoryDir:     workDir,
+		DBPath:        dbPath,
 		SkillsDir:     filepath.Join(xbotDir, "skills"),
 		WorkDir:       workDir,
 		PromptFile:    cfg.Agent.PromptFile,
@@ -65,6 +72,9 @@ func main() {
 		}, msgBus)
 		disp.Register(feishuCh)
 	}
+
+	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
+	agentLoop.SetDirectSend(disp.SendDirect)
 
 	channels := disp.EnabledChannels()
 	if len(channels) == 0 {
@@ -100,6 +110,33 @@ func main() {
 			log.WithError(err).Error("Agent loop exited with error")
 		}
 	}()
+
+	// 启动飞书 UAT 自动刷新
+	tokenFilePath := filepath.Join(xbotDir, "feishu_tokens.json")
+	uat, rt := os.Getenv("FEISHU_UAT"), os.Getenv("FEISHU_REFRESH_TOKEN")
+	if fileUAT, fileRT, err := channel.LoadFeishuTokens(tokenFilePath); err != nil {
+		log.WithError(err).Warn("Failed to load feishu_tokens.json, using .env values")
+	} else if fileUAT != "" && fileRT != "" {
+		uat, rt = fileUAT, fileRT
+		log.Info("Loaded Feishu tokens from feishu_tokens.json")
+	}
+	if uat != "" && rt != "" {
+		tokenRefresher := channel.NewFeishuTokenRefresher(channel.FeishuTokenConfig{
+			AppID:         cfg.Feishu.AppID,
+			AppSecret:     cfg.Feishu.AppSecret,
+			UAT:           uat,
+			RefreshToken:  rt,
+			MCPConfigPath: filepath.Join(cfg.Agent.WorkDir, "mcp.json"),
+			TokenFilePath: tokenFilePath,
+		})
+		tokenRefresher.SetOnRefresh(func(newUAT string) {
+			if err := agentLoop.ReconnectMCPServer("lark-mcp"); err != nil {
+				log.WithError(err).Error("Failed to reconnect lark-mcp after UAT refresh")
+			}
+		})
+		go tokenRefresher.Start(ctx)
+		log.Info("Feishu UAT auto-refresh enabled (every 1h)")
+	}
 
 	log.Info("xbot started successfully")
 	fmt.Println("🤖 xbot is running. Press Ctrl+C to stop.")

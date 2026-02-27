@@ -4,13 +4,14 @@ import "time"
 
 // InboundMessage 从 IM 渠道收到的入站消息
 type InboundMessage struct {
-	Channel  string            // 渠道名称: "feishu", "cli" 等
-	SenderID string            // 发送者标识
-	ChatID   string            // 会话/群组标识
-	Content  string            // 消息文本
-	Media    []string          // 媒体文件路径
-	Metadata map[string]string // 渠道特定元数据
-	Time     time.Time
+	Channel    string            // 渠道名称: "feishu", "cli" 等
+	SenderID   string            // 发送者标识
+	SenderName string            // 发送者姓名（由渠道解析）
+	ChatID     string            // 会话/群组标识
+	Content    string            // 消息文本
+	Media      []string          // 媒体文件路径
+	Metadata   map[string]string // 渠道特定元数据
+	Time       time.Time
 }
 
 // OutboundMessage 发送到 IM 渠道的出站消息

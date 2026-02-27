@@ -63,3 +63,6 @@ data-work/
 xbot
 xbot.tar
 CODEBUDDY.md
+.xbot/
+mcp.json
+cron.json

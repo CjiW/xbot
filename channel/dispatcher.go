@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"fmt"
 	"xbot/bus"
 	log "xbot/logger"
 )
@@ -40,7 +41,7 @@ func (d *Dispatcher) Run() {
 				log.WithField("channel", msg.Channel).Warn("Unknown channel, dropping message")
 				continue
 			}
-			if err := ch.Send(msg); err != nil {
+			if _, err := ch.Send(msg); err != nil {
 				log.WithError(err).WithField("channel", msg.Channel).Error("Failed to send message")
 			}
 		}
@@ -53,6 +54,15 @@ func (d *Dispatcher) Stop() {
 	for _, ch := range d.channels {
 		ch.Stop()
 	}
+}
+
+// SendDirect 同步发送消息到指定渠道，返回平台消息 ID
+func (d *Dispatcher) SendDirect(msg bus.OutboundMessage) (string, error) {
+	ch, ok := d.channels[msg.Channel]
+	if !ok {
+		return "", fmt.Errorf("unknown channel: %s", msg.Channel)
+	}
+	return ch.Send(msg)
 }
 
 // GetChannel 获取渠道

@@ -10,6 +10,6 @@ type Channel interface {
 	Start() error
 	// Stop 停止渠道
 	Stop()
-	// Send 发送消息
-	Send(msg bus.OutboundMessage) error
+	// Send 发送消息，返回平台消息 ID（用于后续更新）
+	Send(msg bus.OutboundMessage) (string, error)
 }

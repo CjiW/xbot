@@ -1,20 +1,24 @@
-package agent
+package session
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"xbot/llm"
+	"xbot/storage/sqlite"
 	log "xbot/logger"
 )
 
-// saveMemoryTool 内部 LLM 工具定义，用于记忆合并时让 LLM 以结构化方式输出结果
+// TenantMemory handles memory operations for a single tenant
+type TenantMemory struct {
+	tenantID  int64
+	memorySvc *sqlite.MemoryService
+}
+
+// saveMemoryTool is the LLM tool definition for memory consolidation
 var saveMemoryTool = []llm.ToolDefinition{&saveMemoryToolDef{}}
 
 type saveMemoryToolDef struct{}
@@ -40,89 +44,53 @@ func (t *saveMemoryToolDef) Parameters() []llm.ToolParam {
 	}
 }
 
-// saveMemoryArgs save_memory 工具的参数
 type saveMemoryArgs struct {
 	HistoryEntry string `json:"history_entry"`
 	MemoryUpdate string `json:"memory_update"`
 }
 
-// MemoryStore 双层记忆：MEMORY.md（长期事实）+ HISTORY.md（可 grep 搜索的事件日志）
-type MemoryStore struct {
-	mu          sync.Mutex
-	memoryDir   string
-	memoryFile  string // MEMORY.md 路径
-	historyFile string // HISTORY.md 路径
+// ReadLongTerm retrieves the long-term memory content
+func (m *TenantMemory) ReadLongTerm() (string, error) {
+	return m.memorySvc.ReadLongTerm(m.tenantID)
 }
 
-// NewMemoryStore 创建 MemoryStore，目录不存在会自动创建
-func NewMemoryStore(dir string) *MemoryStore {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.WithError(err).Error("Failed to create memory directory")
-	}
-	return &MemoryStore{
-		memoryDir:   dir,
-		memoryFile:  filepath.Join(dir, "MEMORY.md"),
-		historyFile: filepath.Join(dir, "HISTORY.md"),
-	}
+// WriteLongTerm saves the long-term memory content
+func (m *TenantMemory) WriteLongTerm(content string) error {
+	return m.memorySvc.WriteLongTerm(m.tenantID, content)
 }
 
-// Dir 返回记忆文件目录路径
-func (m *MemoryStore) Dir() string {
-	return m.memoryDir
+// AppendHistory adds an entry to the event history
+func (m *TenantMemory) AppendHistory(entry string) error {
+	return m.memorySvc.AppendHistory(m.tenantID, entry)
 }
 
-// ReadLongTerm 读取 MEMORY.md 内容
-func (m *MemoryStore) ReadLongTerm() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	data, err := os.ReadFile(m.memoryFile)
+// GetMemoryContext returns the formatted long-term memory for system prompt injection
+func (m *TenantMemory) GetMemoryContext() (string, error) {
+	content, err := m.ReadLongTerm()
 	if err != nil {
-		if !os.IsNotExist(err) {
-			log.WithError(err).Warn("Failed to read MEMORY.md")
-		}
-		return ""
+		return "", err
 	}
-	return string(data)
-}
-
-// WriteLongTerm 覆写 MEMORY.md
-func (m *MemoryStore) WriteLongTerm(content string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := os.WriteFile(m.memoryFile, []byte(content), 0o644); err != nil {
-		log.WithError(err).Error("Failed to write MEMORY.md")
-	}
-}
-
-// AppendHistory 向 HISTORY.md 追加一条条目
-func (m *MemoryStore) AppendHistory(entry string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	f, err := os.OpenFile(m.historyFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		log.WithError(err).Error("Failed to open HISTORY.md for append")
-		return
-	}
-	defer f.Close()
-	_, _ = f.WriteString(strings.TrimRight(entry, "\n") + "\n\n")
-}
-
-// GetMemoryContext 返回格式化的长期记忆文本，用于注入系统提示词
-func (m *MemoryStore) GetMemoryContext() (string, error) {
-	content := m.ReadLongTerm()
 	if content == "" {
 		return "", nil
 	}
 	return "## Long-term Memory\n" + content, nil
 }
 
-// Consolidate 使用 LLM 将旧消息合并到 MEMORY.md 和 HISTORY.md
+// Consolidate uses LLM to consolidate old messages into long-term memory and event history
 //
-// archiveAll=true 时合并所有消息（/new 命令时使用）
-// archiveAll=false 时只合并超出窗口的旧消息
+// Parameters:
+// - ctx: context for LLM call
+// - messages: all messages in the session
+// - lastConsolidated: current consolidation offset
+// - llmClient: LLM client for consolidation
+// - model: model name
+// - archiveAll: if true, consolidate all messages; otherwise only consolidate messages outside the window
+// - memoryWindow: the context window size
 //
-// 返回合并后的 lastConsolidated 指针值和是否成功
-func (m *MemoryStore) Consolidate(
+// Returns:
+// - newLastConsolidated: the new consolidation offset
+// - ok: true if consolidation succeeded
+func (m *TenantMemory) Consolidate(
 	ctx context.Context,
 	messages []llm.ChatMessage,
 	lastConsolidated int,
@@ -136,7 +104,7 @@ func (m *MemoryStore) Consolidate(
 
 	if archiveAll {
 		oldMessages = messages
-		log.Infof("Memory consolidation (archive_all): %d messages", len(messages))
+		log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation (archive_all): %d messages", len(messages))
 	} else {
 		keepCount = memoryWindow / 2
 		if len(messages) <= keepCount {
@@ -153,22 +121,20 @@ func (m *MemoryStore) Consolidate(
 		if len(oldMessages) == 0 {
 			return lastConsolidated, true
 		}
-		log.Infof("Memory consolidation: %d to consolidate, %d keep", len(oldMessages), keepCount)
+		log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation: %d to consolidate, %d keep", len(oldMessages), keepCount)
 	}
 
-	// 格式化旧消息为文本
+	// Format old messages as text
 	var lines []string
 	for _, msg := range oldMessages {
 		if msg.Content == "" {
 			continue
 		}
 		role := strings.ToUpper(msg.Role)
-		// 工具消息标注工具名
 		toolHint := ""
 		if msg.Role == "tool" && msg.ToolName != "" {
 			toolHint = fmt.Sprintf(" [tool: %s]", msg.ToolName)
 		}
-		// assistant 消息标注工具调用
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
 			names := make([]string, len(msg.ToolCalls))
 			for i, tc := range msg.ToolCalls {
@@ -191,7 +157,12 @@ func (m *MemoryStore) Consolidate(
 		return len(messages) - keepCount, true
 	}
 
-	currentMemory := m.ReadLongTerm()
+	currentMemory, err := m.ReadLongTerm()
+	if err != nil {
+		log.WithError(err).Error("Failed to read long-term memory for consolidation")
+		return lastConsolidated, false
+	}
+
 	memoryDisplay := currentMemory
 	if memoryDisplay == "" {
 		memoryDisplay = "(empty)"
@@ -205,7 +176,7 @@ func (m *MemoryStore) Consolidate(
 ## Conversation to Process
 %s`, memoryDisplay, strings.Join(lines, "\n"))
 
-	// 调用 LLM 进行合并
+	// Call LLM for consolidation
 	resp, err := llmClient.Generate(ctx, model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."),
 		llm.NewUserMessage(prompt),
@@ -220,21 +191,25 @@ func (m *MemoryStore) Consolidate(
 		return lastConsolidated, false
 	}
 
-	// 解析 save_memory 工具参数
+	// Parse save_memory tool arguments
 	var args saveMemoryArgs
 	if err := json.Unmarshal([]byte(resp.ToolCalls[0].Arguments), &args); err != nil {
 		log.WithError(err).Error("Memory consolidation: failed to parse save_memory arguments")
 		return lastConsolidated, false
 	}
 
-	// 写入 HISTORY.md
+	// Write to event history
 	if args.HistoryEntry != "" {
-		m.AppendHistory(args.HistoryEntry)
+		if err := m.AppendHistory(args.HistoryEntry); err != nil {
+			log.WithError(err).Error("Failed to append history entry")
+		}
 	}
 
-	// 写入 MEMORY.md（仅当有变化时）
+	// Write long-term memory (only if changed)
 	if args.MemoryUpdate != "" && args.MemoryUpdate != currentMemory {
-		m.WriteLongTerm(args.MemoryUpdate)
+		if err := m.WriteLongTerm(args.MemoryUpdate); err != nil {
+			log.WithError(err).Error("Failed to write long-term memory")
+		}
 	}
 
 	if archiveAll {
@@ -242,6 +217,6 @@ func (m *MemoryStore) Consolidate(
 	} else {
 		newLastConsolidated = len(messages) - keepCount
 	}
-	log.Infof("Memory consolidation done: %d messages, lastConsolidated=%d", len(messages), newLastConsolidated)
+	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation done: lastConsolidated=%d", newLastConsolidated)
 	return newLastConsolidated, true
 }

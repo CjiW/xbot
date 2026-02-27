@@ -113,6 +113,12 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 		return nil
 	}
 
+	originalLen := len(msg.Content)
+	log.WithFields(log.Fields{
+		"chat_id":     msg.ChatID,
+		"content_len": originalLen,
+	}).Debug("Feishu: sending message")
+
 	// 1) 提取 markdown 中的本地文件链接 [name](path)，上传并单独发送，从内容中移除
 	content := f.extractAndSendLocalFiles(msg.ChatID, msg.Content)
 	// 2) 替换 markdown 中的本地图片引用 ![alt](path) 为飞书 image_key
@@ -122,10 +128,11 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 		return nil
 	}
 
-	// 判断 receive_id_type
-	receiveIDType := "chat_id"
-	if !strings.HasPrefix(msg.ChatID, "oc_") {
-		receiveIDType = "open_id"
+	if len(content) != originalLen {
+		log.WithFields(log.Fields{
+			"original_len": originalLen,
+			"final_len":    len(content),
+		}).Debug("Feishu: content length changed after processing")
 	}
 
 	// 构建消息卡片
@@ -135,10 +142,69 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 		return fmt.Errorf("marshal card: %w", err)
 	}
 
+	// 检查是否需要回复消息（reply 模式）
+	messageID := ""
+	if msg.Metadata != nil {
+		messageID = msg.Metadata["message_id"]
+	}
+
+	if messageID != "" {
+		// 使用回复模式
+		return f.sendReplyMessage(msg.ChatID, messageID, cardJSON)
+	}
+
+	// 普通发送模式
+	return f.sendNormalMessage(msg.ChatID, cardJSON)
+}
+
+// sendReplyMessage 发送回复消息
+func (f *FeishuChannel) sendReplyMessage(chatID, parentID string, cardJSON []byte) error {
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(parentID).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			MsgType("interactive").
+			Content(string(cardJSON)).
+			Build()).
+		Build()
+
+	log.WithFields(log.Fields{
+		"chat_id":    chatID,
+		"parent_id":  parentID,
+		"card_len":   len(cardJSON),
+	}).Debug("Feishu: sending reply message")
+
+	resp, err := f.client.Im.Message.Reply(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("send feishu reply message: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"parent_id": parentID,
+	}).Debug("Feishu reply message sent")
+	return nil
+}
+
+// sendNormalMessage 发送普通消息
+func (f *FeishuChannel) sendNormalMessage(chatID string, cardJSON []byte) error {
+	// 判断 receive_id_type
+	receiveIDType := "chat_id"
+	if !strings.HasPrefix(chatID, "oc_") {
+		receiveIDType = "open_id"
+	}
+
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"card_len":  len(cardJSON),
+	}).Debug("Feishu: sending normal message")
+
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(receiveIDType).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(msg.ChatID).
+			ReceiveId(chatID).
 			MsgType("interactive").
 			Content(string(cardJSON)).
 			Build()).
@@ -152,7 +218,7 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 		return fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
 	}
 
-	log.WithField("chat_id", msg.ChatID).Debug("Feishu message sent")
+	log.WithField("chat_id", chatID).Debug("Feishu message sent")
 	return nil
 }
 
@@ -335,14 +401,51 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	msg := event.Event.Message
 	sender := event.Event.Sender
 
+	// 调试日志：确认收到消息事件（记录所有消息，包括未@的）
+	log.WithFields(log.Fields{
+		"message_id": *msg.MessageId,
+		"sender_type": func() string {
+			if sender.SenderType != nil {
+				return *sender.SenderType
+			}
+			return ""
+		}(),
+		"sender_id": func() string {
+			if sender.SenderId != nil && sender.SenderId.OpenId != nil {
+				return *sender.SenderId.OpenId
+			}
+			return ""
+		}(),
+		"chat_id": func() string {
+			if msg.ChatId != nil {
+				return *msg.ChatId
+			}
+			return ""
+		}(),
+		"chat_type": func() string {
+			if msg.ChatType != nil {
+				return *msg.ChatType
+			}
+			return ""
+		}(),
+		"msg_type": func() string {
+			if msg.MessageType != nil {
+				return *msg.MessageType
+			}
+			return ""
+		}(),
+	}).Info("Feishu: message event received")
+
 	// 消息去重
 	messageID := *msg.MessageId
 	if f.isDuplicate(messageID) {
+		log.WithField("message_id", messageID).Debug("Feishu: duplicate message, skipping")
 		return nil
 	}
 
 	// 跳过机器人自己的消息
 	if sender.SenderType != nil && *sender.SenderType == "bot" {
+		log.WithField("message_id", messageID).Debug("Feishu: bot message, skipping")
 		return nil
 	}
 

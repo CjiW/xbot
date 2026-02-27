@@ -15,7 +15,8 @@ import (
 // defaultSystemPrompt 系统提示词模板
 // 注意：模板中不包含时间戳，时间戳在 BuildMessages 中动态拼接到末尾
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
-//   固定内容（模板渲染） → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
+//
+//	固定内容（模板渲染） → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
 const defaultSystemPrompt = `You are xbot, a helpful AI assistant.
 
 ## Guidelines
@@ -144,7 +145,8 @@ func (pl *PromptLoader) Render(data PromptData) string {
 
 // BuildMessages 构建完整的 LLM 消息列表
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
-//   固定提示词 → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
+//
+//	固定提示词 → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
 func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory *MemoryStore, memoryDir string, workDir string, skillsPrompt string, promptLoader *PromptLoader) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
@@ -179,4 +181,30 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	userMsg := fmt.Sprintf("[%s]\n%s", now, userContent)
 	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
+}
+
+// cronSystemPrompt Cron 专用系统提示词（简洁，无记忆和技能）
+const cronSystemPrompt = `You are xbot executing a scheduled cron task.
+
+## Guidelines
+- You are processing a scheduled reminder/task
+- Execute the task directly and concisely
+- Use tools when needed
+- Report results clearly
+
+## Working Environment
+- Working directory: %s
+
+Current Time: %s
+`
+
+// BuildCronMessages 构建 cron 专用消息（无历史上下文）
+func BuildCronMessages(task string, workDir string) []llm.ChatMessage {
+	now := time.Now().Format("2006-01-02 15:04:05 MST")
+	systemContent := fmt.Sprintf(cronSystemPrompt, workDir, now)
+
+	return []llm.ChatMessage{
+		llm.NewSystemMessage(systemContent),
+		llm.NewUserMessage(task),
+	}
 }

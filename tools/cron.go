@@ -297,7 +297,8 @@ func (t *CronTool) checkAndFire(now time.Time, injectFunc func(string, string, s
 		}).Info("Cron job fired")
 
 		// 将消息注入 Agent 入站队列，触发完整处理循环
-		content := fmt.Sprintf("[Cron job %s triggered] %s", id, job.Message)
+		// 直接使用用户定义的任务描述（不加前缀，因为 cron 消息已通过 SenderID 识别）
+		content := fmt.Sprintf("%s", job.Message)
 		if injectFunc != nil && job.Channel != "" && job.ChatID != "" {
 			injectFunc(job.Channel, job.ChatID, content)
 		}

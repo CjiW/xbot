@@ -20,9 +20,11 @@ import (
 
 // MCPServerConfig 单个 MCP Server 的配置
 type MCPServerConfig struct {
-	Command string            `json:"command"`           // 可执行文件路径
-	Args    []string          `json:"args,omitempty"`    // 命令行参数
+	Command string            `json:"command,omitempty"` // 可执行文件路径（stdio 模式）
+	Args    []string          `json:"args,omitempty"`    // 命令行参数（stdio 模式）
 	Env     map[string]string `json:"env,omitempty"`     // 环境变量
+	URL     string            `json:"url,omitempty"`     // HTTP MCP URL（http 模式）
+	Headers map[string]string `json:"headers,omitempty"` // HTTP 请求头
 	Enabled *bool             `json:"enabled,omitempty"` // 是否启用（默认 true）
 }
 
@@ -35,7 +37,7 @@ type MCPConfig struct {
 type mcpConnection struct {
 	name      string
 	client    *mcpclient.Client
-	transport *transport.Stdio
+	transport any // *transport.Stdio 或 *transport.StreamableHTTP
 	tools     []mcp.Tool
 }
 
@@ -82,27 +84,29 @@ func (m *MCPManager) LoadAndConnect(ctx context.Context) error {
 
 // connectServer 连接单个 MCP Server
 func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig) error {
-	// 构建环境变量列表
-	var envList []string
-	for k, v := range cfg.Env {
-		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	var (
+		client    *mcpclient.Client
+		transport any
+		err       error
+	)
+
+	// 优先使用 HTTP transport（如果配置了 URL）
+	if cfg.URL != "" {
+		client, transport, err = m.connectHTTPServer(ctx, cfg)
+	} else if cfg.Command != "" {
+		client, transport, err = m.connectStdioServer(ctx, cfg)
+	} else {
+		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
 
-	// 创建 stdio transport
-	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
+	if err != nil {
+		return err
+	}
 
-	// 启动 transport
+	// 初始化 MCP 协议
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	if err := stdioTransport.Start(connectCtx); err != nil {
-		return fmt.Errorf("start transport: %w", err)
-	}
-
-	// 创建 client
-	client := mcpclient.NewClient(stdioTransport)
-
-	// 初始化 MCP 协议
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcp.Implementation{
@@ -110,23 +114,23 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		Version: "1.0.0",
 	}
 
-	_, err := client.Initialize(connectCtx, initReq)
+	_, err = client.Initialize(connectCtx, initReq)
 	if err != nil {
-		stdioTransport.Close()
+		m.closeTransport(transport)
 		return fmt.Errorf("initialize: %w", err)
 	}
 
 	// 获取可用工具列表
 	toolsResult, err := client.ListTools(connectCtx, mcp.ListToolsRequest{})
 	if err != nil {
-		stdioTransport.Close()
+		m.closeTransport(transport)
 		return fmt.Errorf("list tools: %w", err)
 	}
 
 	conn := &mcpConnection{
 		name:      name,
 		client:    client,
-		transport: stdioTransport,
+		transport: transport,
 		tools:     toolsResult.Tools,
 	}
 
@@ -145,6 +149,56 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	}).Infof("MCP server connected (%d tools)", len(conn.tools))
 
 	return nil
+}
+
+// connectStdioServer 连接 stdio 模式的 MCP Server
+func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
+	// 构建环境变量列表
+	var envList []string
+	for k, v := range cfg.Env {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// 创建 stdio transport
+	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
+
+	// 启动 transport
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := stdioTransport.Start(connectCtx); err != nil {
+		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
+	}
+
+	client := mcpclient.NewClient(stdioTransport)
+	return client, stdioTransport, nil
+}
+
+// connectHTTPServer 连接 HTTP 模式的 MCP Server
+func (m *MCPManager) connectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
+	opts := []transport.StreamableHTTPCOption{}
+
+	// 添加 headers
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+	}
+
+	// 创建 HTTP transport
+	httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create HTTP transport: %w", err)
+	}
+
+	// 启动 transport
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := httpTransport.Start(connectCtx); err != nil {
+		return nil, nil, fmt.Errorf("start HTTP transport: %w", err)
+	}
+
+	client := mcpclient.NewClient(httpTransport)
+	return client, httpTransport, nil
 }
 
 // RegisterTools 将所有 MCP 远程工具注册到 Registry
@@ -166,11 +220,21 @@ func (m *MCPManager) Close() {
 	defer m.mu.Unlock()
 
 	for name, conn := range m.connections {
-		if err := conn.transport.Close(); err != nil {
+		if err := m.closeTransport(conn.transport); err != nil {
 			log.WithError(err).WithField("server", name).Warn("Error closing MCP connection")
 		}
 	}
 	m.connections = make(map[string]*mcpConnection)
+}
+
+// closeTransport 关闭指定类型的 transport
+func (m *MCPManager) closeTransport(t any) error {
+	switch tr := t.(type) {
+	case interface{ Close() error }:
+		return tr.Close()
+	default:
+		return nil
+	}
 }
 
 // ServerCount 返回已连接的 MCP Server 数量

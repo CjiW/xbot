@@ -28,6 +28,7 @@ type Agent struct {
 	memory        *MemoryStore
 	skills        *tools.SkillStore
 	mcpManager    *tools.MCPManager
+	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
 	workDir       string
 	promptLoader  *PromptLoader
 
@@ -72,6 +73,10 @@ func New(cfg Config) *Agent {
 	registry := tools.DefaultRegistry()
 	registry.Register(tools.NewSkillTool(skillStore))
 
+	// 创建聊天历史存储
+	chatHistory := tools.NewChatHistoryStore(20) // 每个群组保留最近 20 条
+	registry.Register(tools.NewChatHistoryTool(chatHistory))
+
 	// 初始化 MCP 管理器（mcp.json 放在工作目录根下）
 	mcpConfigPath := filepath.Join(cfg.WorkDir, "mcp.json")
 	mcpMgr := tools.NewMCPManager(mcpConfigPath)
@@ -92,6 +97,7 @@ func New(cfg Config) *Agent {
 		memory:        NewMemoryStore(cfg.MemoryDir),
 		skills:        skillStore,
 		mcpManager:    mcpMgr,
+		chatHistory:   chatHistory,
 		workDir:       cfg.WorkDir,
 		promptLoader:  NewPromptLoader(cfg.PromptFile),
 	}
@@ -139,6 +145,19 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"sender":  msg.SenderID,
 	}).Infof("Processing: %s", preview)
 
+	// Cron 消息使用独立处理流程（不带历史上下文）
+	if msg.SenderID == "cron" {
+		return a.processCronMessage(ctx, msg)
+	}
+
+	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）
+	a.chatHistory.Add(msg.Channel, msg.ChatID, msg.SenderID, msg.Content)
+	log.WithFields(log.Fields{
+		"channel": msg.Channel,
+		"chat_id": msg.ChatID,
+		"sender":  msg.SenderID,
+	}).Debug("Message cached to chat history")
+
 	// 斜杠命令
 	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
 	if cmd == "/new" {
@@ -178,10 +197,52 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	a.session.AddMessage(assistantMsg)
 
+	// 保留原始消息 ID 以支持回复模式
+	metadata := make(map[string]string)
+	if msg.Metadata != nil {
+		metadata = msg.Metadata
+	}
+
 	return &bus.OutboundMessage{
-		Channel: msg.Channel,
-		ChatID:  msg.ChatID,
-		Content: finalContent,
+		Channel:  msg.Channel,
+		ChatID:   msg.ChatID,
+		Content:  finalContent,
+		Metadata: metadata,
+	}, nil
+}
+
+// processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
+func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	log.WithFields(log.Fields{
+		"channel": msg.Channel,
+		"chat_id": msg.ChatID,
+	}).Infof("Processing cron message: %s", truncate(msg.Content, 80))
+
+	// 构建 cron 专用消息（无历史上下文）
+	messages := BuildCronMessages(msg.Content, a.workDir)
+
+	// 运行 Agent 循环
+	finalContent, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	if finalContent == "" {
+		finalContent = "定时任务已执行，但无输出内容。"
+	}
+
+	// 注意：不保存到会话历史
+	// 保留原始消息 ID 以支持回复模式
+	metadata := make(map[string]string)
+	if msg.Metadata != nil {
+		metadata = msg.Metadata
+	}
+
+	return &bus.OutboundMessage{
+		Channel:  msg.Channel,
+		ChatID:   msg.ChatID,
+		Content:  finalContent,
+		Metadata: metadata,
 	}, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -34,6 +35,10 @@ type Agent struct {
 
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
+
+	directSend     func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
+	sessionMsgIDs  sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
+	sessionReplyTo sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
 }
 
 // Config Agent 配置
@@ -116,6 +121,29 @@ func New(cfg Config) *Agent {
 	}
 }
 
+// SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
+func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
+	a.directSend = fn
+}
+
+var ackMessages = []string{
+	"收到~",
+	"好的，让我看看",
+	"收到，处理中...",
+	"了解，稍等~",
+	"好的~",
+	"嗯嗯，马上处理",
+	"收到，稍等一下~",
+	"OK，马上看看",
+}
+
+func (a *Agent) sendAck(channel, chatID string) {
+	msg := ackMessages[rand.Intn(len(ackMessages))]
+	if err := a.sendMessage(channel, chatID, msg); err != nil {
+		log.WithError(err).Warn("Failed to send ack")
+	}
+}
+
 // ReconnectMCPServer 重新连接指定 MCP Server（用于 token 刷新后重建连接）
 func (a *Agent) ReconnectMCPServer(name string) error {
 	if a.mcpManager == nil {
@@ -166,9 +194,18 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"sender":  msg.SenderID,
 	}).Infof("Processing: %s", preview)
 
-	// Cron 消息使用独立处理流程（不带历史上下文）
+	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
 	if msg.SenderID == "cron" {
 		return a.processCronMessage(ctx, msg)
+	}
+
+	// 初始化 session 消息跟踪：清除旧的已发消息 ID，记录入站消息 ID 用于首条回复
+	key := msg.Channel + ":" + msg.ChatID
+	a.sessionMsgIDs.Delete(key)
+	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
+		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
+	} else {
+		a.sessionReplyTo.Delete(key)
 	}
 
 	// 获取或创建租户会话
@@ -185,7 +222,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"sender":  msg.SenderID,
 	}).Debug("Message cached to chat history")
 
-	// 斜杠命令
+	// 斜杠命令（不参与消息更新跟踪，直接走 bus）
 	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
 	if cmd == "/new" {
 		return a.handleNewSession(ctx, msg, tenantSession)
@@ -203,6 +240,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
+	// 立即发送随机确认回复
+	a.sendAck(msg.Channel, msg.ChatID)
+
 	// 检查是否需要触发自动记忆合并
 	a.maybeConsolidate(ctx, tenantSession)
 
@@ -212,7 +252,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	defer a.skills.DeactivateAuto()
 
-	// 构建 LLM 消息（注入长期记忆和 skills）
+	// 加载用户画像（跨 session 共享）和 bot 自身画像
+	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
+	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
+
+	// 构建 LLM 消息（注入长期记忆、skills、用户画像和自身画像）
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get history, using empty history")
@@ -221,10 +265,10 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	skillsPrompt := a.skills.GetActiveSkillsPrompt()
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
 
 	// 运行 Agent 循环
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
 		return nil, err
 	}
@@ -232,11 +276,10 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
 		log.Info("Tool is waiting for user response, skipping reply")
-		// 仍然保存用户消息到会话，但不保存 assistant 消息
 		if err := tenantSession.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
 			log.WithError(err).Warn("Failed to save user message")
 		}
-		return nil, nil // 不返回 OutboundMessage
+		return nil, nil
 	}
 
 	if finalContent == "" {
@@ -255,18 +298,16 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		log.WithError(err).Warn("Failed to save assistant message")
 	}
 
-	// 保留原始消息 ID 以支持回复模式
-	metadata := make(map[string]string)
-	if msg.Metadata != nil {
-		metadata = msg.Metadata
+	// 通过 sendMessage 发送最终回复（复用 session 内的消息更新跟踪）
+	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
+		log.WithError(err).Error("Failed to send final response via sendMessage")
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: finalContent,
+		}, nil
 	}
-
-	return &bus.OutboundMessage{
-		Channel:  msg.Channel,
-		ChatID:   msg.ChatID,
-		Content:  finalContent,
-		Metadata: metadata,
-	}, nil
+	return nil, nil
 }
 
 // processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
@@ -280,7 +321,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	messages := BuildCronMessages(msg.Content, a.workDir)
 
 	// 运行 Agent 循环
-	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
+	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, "", "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +401,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 
 	summary := msg.Content
 
+	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
+	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
+
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get history, using empty history")
@@ -368,9 +412,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	skillsPrompt := a.skills.GetActiveSkillsPrompt()
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader)
+	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
 
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
 		return nil, err
 	}
@@ -395,12 +439,16 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to save assistant message")
 	}
 
-	return &bus.OutboundMessage{
-		Channel:  msg.Channel,
-		ChatID:   msg.ChatID,
-		Content:  finalContent,
-		Metadata: msg.Metadata,
-	}, nil
+	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
+		log.WithError(err).Error("Failed to send card response via sendMessage")
+		return &bus.OutboundMessage{
+			Channel:  msg.Channel,
+			ChatID:   msg.ChatID,
+			Content:  finalContent,
+			Metadata: msg.Metadata,
+		}, nil
+	}
+	return nil, nil
 }
 
 // maybeConsolidate 检查并异步触发记忆合并
@@ -451,12 +499,29 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 }
 
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
+// autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
 // 返回: (finalContent, toolsUsed, waitingUser, error)
-func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID string) (string, []string, bool, error) {
+func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID, senderID, senderName string, autoNotify bool) (string, []string, bool, error) {
 	var toolsUsed []string
 	var waitingUser bool
+	var progressLines []string
+
+	notifyProgress := func(extra string) {
+		if !autoNotify {
+			return
+		}
+		lines := progressLines
+		if extra != "" {
+			lines = append(append([]string{}, progressLines...), extra)
+		}
+		_ = a.sendMessage(channel, chatID, strings.Join(lines, "\n"))
+	}
 
 	for i := 0; i < a.maxIterations; i++ {
+		if autoNotify && i > 0 {
+			notifyProgress("💭 思考中...")
+		}
+
 		response, err := a.llmClient.Generate(ctx, a.model, messages, a.tools.AsDefinitions())
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
@@ -465,6 +530,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		if !response.HasToolCalls() {
 			content := strings.TrimSpace(response.Content)
 			return content, toolsUsed, false, nil
+		}
+
+		// 模型的中间思考内容加入进度
+		if autoNotify && strings.TrimSpace(response.Content) != "" {
+			progressLines = append(progressLines, strings.TrimSpace(response.Content))
 		}
 
 		// 记录 assistant 消息（含 tool_calls）
@@ -479,6 +549,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
 
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", tc.Name))
+				notifyProgress("")
+			}
+
 			argPreview := tc.Arguments
 			if len(argPreview) > 200 {
 				argPreview = argPreview[:200] + "..."
@@ -489,18 +564,21 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
 
 			start := time.Now()
-			result, execErr := a.executeTool(ctx, tc, channel, chatID)
+			result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
 			elapsed := time.Since(start)
 
 			content := ""
 			if execErr != nil {
-				// 工具执行失败，格式化错误信息以引导 LLM 重试
-				// 错误信息格式: "Error: <错误详情>\n\nPlease fix the issue and try again with corrected parameters."
 				content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).WithError(execErr).Warn("Tool failed")
+
+				if autoNotify {
+					progressLines[len(progressLines)-1] = fmt.Sprintf("❌ %s (%s)", tc.Name, elapsed.Round(time.Millisecond))
+					notifyProgress("")
+				}
 			} else {
 				content = result.Summary
 				if result.WaitingUser {
@@ -515,6 +593,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).Infof("Tool done: %s", resultPreview)
+
+				if autoNotify {
+					progressLines[len(progressLines)-1] = fmt.Sprintf("✅ %s (%s)", tc.Name, elapsed.Round(time.Millisecond))
+					notifyProgress("")
+				}
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
@@ -535,7 +618,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 }
 
 // executeTool 执行单个工具调用
-func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID string) (*tools.ToolResult, error) {
+func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
 	tool, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", tc.Name)
@@ -553,27 +636,59 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		DataDir:       a.workDir,
 		Channel:       channel,
 		ChatID:        chatID,
+		SenderID:      senderID,
+		SenderName:    senderName,
 		SendFunc:      a.sendMessage,
 		InjectInbound: a.injectInbound,
 		SkillStore:    a.skills,
 		MCPManager:    a.mcpManager,
 		Registry:      a.tools,
+		SaveUserProfile: func(profile string) error {
+			return a.multiSession.SaveUserProfile(senderID, senderName, profile)
+		},
+		SaveSelfProfile: func(profile string) error {
+			return a.multiSession.SaveUserProfile("__me__", "xbot", profile)
+		},
 	}
 
 	return tool.Execute(toolCtx, tc.Arguments)
 }
 
-// sendMessage 通过消息总线发送消息到指定渠道
+// sendMessage 发送消息到指定渠道，支持 session 内消息原地更新（避免刷屏）
+//
+// 首次发送创建新消息（如有入站 message_id 则回复该消息），后续发送 Patch 更新同一条消息。
 func (a *Agent) sendMessage(channel, chatID, content string) error {
-	select {
-	case a.bus.Outbound <- bus.OutboundMessage{
+	key := channel + ":" + chatID
+	msg := bus.OutboundMessage{
 		Channel: channel,
 		ChatID:  chatID,
 		Content: content,
-	}:
+	}
+
+	if a.directSend != nil {
+		msg.Metadata = make(map[string]string)
+
+		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
+			msg.Metadata["update_message_id"] = existingID.(string)
+		} else if replyTo, ok := a.sessionReplyTo.Load(key); ok {
+			msg.Metadata["message_id"] = replyTo.(string)
+		}
+
+		msgID, err := a.directSend(msg)
+		if err != nil {
+			return err
+		}
+		if msgID != "" {
+			a.sessionMsgIDs.Store(key, msgID)
+		}
+		return nil
+	}
+
+	// 降级：directSend 不可用时走 bus（无消息更新跟踪）
+	select {
+	case a.bus.Outbound <- msg:
 		return nil
 	default:
-		// Channel is full (shouldn't happen with buffered channel)
 		return fmt.Errorf("message bus outbound channel is full")
 	}
 }

@@ -18,8 +18,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-// Schema version for potential future migrations
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -74,24 +73,34 @@ func (db *DB) Conn() *sql.DB {
 	return db.conn
 }
 
-// initSchema creates the database schema if it doesn't exist
+// initSchema creates the database schema if it doesn't exist, and runs migrations
 func (db *DB) initSchema() error {
 	conn := db.Conn()
 
 	// Check if schema already exists by checking tenants table
 	var tableName string
 	err := conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'").Scan(&tableName)
-	if err == nil {
-		// Schema exists
-		return nil
+	if err == sql.ErrNoRows {
+		return db.createSchema()
 	}
-	if err != sql.ErrNoRows {
+	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
 	}
 
-	// Create schema
+	// Schema exists — check version and run migrations
+	var version int
+	err = conn.QueryRow("SELECT version FROM schema_version LIMIT 1").Scan(&version)
+	if err != nil {
+		version = 1
+	}
+	if version < schemaVersion {
+		return db.migrateSchema(version)
+	}
+	return nil
+}
+
+func (db *DB) createSchema() error {
 	schema := `
--- Tenants: unique (channel, chat_id) combinations
 CREATE TABLE tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -101,7 +110,6 @@ CREATE TABLE tenants (
     UNIQUE(channel, chat_id)
 );
 
--- Session messages: per-tenant conversation history
 CREATE TABLE session_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,
@@ -117,14 +125,12 @@ CREATE TABLE session_messages (
 );
 CREATE INDEX idx_session_messages_tenant_created ON session_messages(tenant_id, created_at);
 
--- Tenant state: memory consolidation tracking
 CREATE TABLE tenant_state (
     tenant_id INTEGER PRIMARY KEY,
     last_consolidated INTEGER DEFAULT 0,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 );
 
--- Long-term memory (replaces MEMORY.md)
 CREATE TABLE long_term_memory (
     tenant_id INTEGER PRIMARY KEY,
     content TEXT NOT NULL,
@@ -132,7 +138,6 @@ CREATE TABLE long_term_memory (
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 );
 
--- Event history (replaces HISTORY.md)
 CREATE TABLE event_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,
@@ -142,18 +147,43 @@ CREATE TABLE event_history (
 );
 CREATE INDEX idx_event_history_tenant_created ON event_history(tenant_id, created_at);
 
--- Schema version
+CREATE TABLE user_profiles (
+    sender_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    profile TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-
-INSERT INTO schema_version (version) VALUES (1);
+INSERT INTO schema_version (version) VALUES (2);
 `
-
-	if _, err := conn.Exec(schema); err != nil {
+	if _, err := db.Conn().Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
+	log.Info("Database schema initialized (v2)")
+	return nil
+}
 
-	log.Info("Database schema initialized")
+func (db *DB) migrateSchema(from int) error {
+	conn := db.Conn()
+
+	if from < 2 {
+		migration := `
+CREATE TABLE IF NOT EXISTS user_profiles (
+    sender_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    profile TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+UPDATE schema_version SET version = 2;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v1->v2: %w", err)
+		}
+		log.Info("Database migrated to v2 (added user_profiles)")
+	}
+
 	return nil
 }

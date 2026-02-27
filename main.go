@@ -73,6 +73,9 @@ func main() {
 		disp.Register(feishuCh)
 	}
 
+	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
+	agentLoop.SetDirectSend(disp.SendDirect)
+
 	channels := disp.EnabledChannels()
 	if len(channels) == 0 {
 		log.Warn("No channels enabled. Set FEISHU_ENABLED=true and configure FEISHU_APP_ID/FEISHU_APP_SECRET.")

@@ -18,9 +18,7 @@ type MemoryAccessor interface {
 }
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
-// 正常情况下系统提示词从 prompt.md 加载（支持热更新），此处只保留必要的模板变量。
-const defaultSystemPrompt = `You are xbot, a helpful AI assistant.
-Channel: {{.Channel}} | WorkDir: {{.WorkDir}}
+const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}}
 `
 
 // PromptData 模板渲染数据
@@ -128,8 +126,8 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // BuildMessages 构建完整的 LLM 消息列表
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
-//	固定提示词 → Skills（相对稳定） → Memory（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsPrompt string, skillsCatalog string, promptLoader *PromptLoader) []llm.ChatMessage {
+//	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsPrompt string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -137,6 +135,11 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		Channel: channel,
 		WorkDir: workDir,
 	})
+
+	// 注入 bot 自身画像（很少变动，紧跟固定提示词以最大化 KV-cache 前缀命中）
+	if selfProfile != "" {
+		systemContent += "\n## Who I Am\n" + selfProfile + "\n"
+	}
 
 	// 注入已激活的 skills（相对稳定，放在 Memory 之前）
 	if skillsPrompt != "" {
@@ -158,6 +161,17 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		}
 	}
 
+	// 注入当前发送者画像（Memory 之后、Time 之前）
+	if senderName != "" || userProfile != "" {
+		systemContent += "\n## About Current Sender\n"
+		if senderName != "" {
+			systemContent += fmt.Sprintf("Name: %s\n", senderName)
+		}
+		if userProfile != "" {
+			systemContent += userProfile + "\n"
+		}
+	}
+
 	// 时间戳放在系统提示词最末尾（每次请求都变，放最后以最大化前缀缓存命中）
 	systemContent += fmt.Sprintf("\n## Current Time\n%s\n", now)
 
@@ -165,8 +179,13 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	messages = append(messages, llm.NewSystemMessage(systemContent))
 	messages = append(messages, history...)
 
-	// 用户消息中也注入时间戳，确保模型在近期注意力范围内感知当前时间
-	userMsg := fmt.Sprintf("[%s]\n%s", now, userContent)
+	// 用户消息中注入时间戳和发送者标识
+	var userMsg string
+	if senderName != "" {
+		userMsg = fmt.Sprintf("[%s] [%s]\n%s", now, senderName, userContent)
+	} else {
+		userMsg = fmt.Sprintf("[%s]\n%s", now, userContent)
+	}
 	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
 }

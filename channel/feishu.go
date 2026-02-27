@@ -18,6 +18,7 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
+	larkcontact "github.com/larksuite/oapi-sdk-go/v3/service/contact/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
@@ -44,15 +45,20 @@ type FeishuChannel struct {
 	processedIDs   map[string]struct{}
 	processedOrder []string
 	maxProcessed   int
+
+	// OpenID -> 用户姓名缓存
+	userNameCache map[string]string
+	userNameMu    sync.RWMutex
 }
 
 // NewFeishuChannel 创建飞书渠道
 func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 	return &FeishuChannel{
-		config:       cfg,
-		msgBus:       msgBus,
-		processedIDs: make(map[string]struct{}),
-		maxProcessed: 1000,
+		config:        cfg,
+		msgBus:        msgBus,
+		processedIDs:  make(map[string]struct{}),
+		maxProcessed:  1000,
+		userNameCache: make(map[string]string),
 	}
 }
 
@@ -106,17 +112,60 @@ func (f *FeishuChannel) Stop() {
 	log.Info("Feishu bot stopped")
 }
 
-// Send 发送消息到飞书
-func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
+// getUserName 通过 Contact API 获取用户姓名，带内存缓存
+func (f *FeishuChannel) getUserName(openID string) string {
+	if openID == "" {
+		return ""
+	}
+
+	f.userNameMu.RLock()
+	name, ok := f.userNameCache[openID]
+	f.userNameMu.RUnlock()
+	if ok {
+		return name
+	}
+
+	req := larkcontact.NewGetUserReqBuilder().
+		UserId(openID).
+		UserIdType("open_id").
+		Build()
+	resp, err := f.client.Contact.User.Get(context.Background(), req)
+	if err != nil {
+		log.WithError(err).WithField("open_id", openID).Warn("Feishu: failed to get user info")
+		return ""
+	}
+	if !resp.Success() {
+		log.WithFields(log.Fields{
+			"open_id": openID,
+			"code":    resp.Code,
+			"msg":     resp.Msg,
+		}).Warn("Feishu: get user info API error")
+		return ""
+	}
+
+	resolved := ""
+	if resp.Data != nil && resp.Data.User != nil && resp.Data.User.Name != nil {
+		resolved = *resp.Data.User.Name
+	}
+
+	f.userNameMu.Lock()
+	f.userNameCache[openID] = resolved
+	f.userNameMu.Unlock()
+
+	return resolved
+}
+
+// Send 发送消息到飞书，返回平台消息 ID
+func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 	if f.client == nil {
-		return fmt.Errorf("feishu client not initialized")
+		return "", fmt.Errorf("feishu client not initialized")
 	}
 
 	if msg.Content == "" {
-		return nil
+		return "", nil
 	}
 
-	// 检测 card builder 生成的完整卡片 JSON
+	// 检测 card builder 生成的完整卡片 JSON（不参与消息更新跟踪）
 	if strings.HasPrefix(msg.Content, "__FEISHU_CARD__:") {
 		cardJSON := strings.TrimPrefix(msg.Content, "__FEISHU_CARD__:")
 		return f.sendNormalMessage(msg.ChatID, []byte(cardJSON))
@@ -134,7 +183,7 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 	content = f.replaceLocalImages(content)
 
 	if strings.TrimSpace(content) == "" {
-		return nil
+		return "", nil
 	}
 
 	if len(content) != originalLen {
@@ -144,11 +193,27 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 		}).Debug("Feishu: content length changed after processing")
 	}
 
+	// 飞书卡片对 markdown 表格数量有上限（约 3 个），超出会被 API 拒绝
+	content = limitMarkdownTables(content, 3)
+
 	// 构建消息卡片
 	card := f.buildCard(content)
 	cardJSON, err := json.Marshal(card)
 	if err != nil {
-		return fmt.Errorf("marshal card: %w", err)
+		return "", fmt.Errorf("marshal card: %w", err)
+	}
+
+	// 检查是否需要更新已有消息（Patch 模式）
+	updateMsgID := ""
+	if msg.Metadata != nil {
+		updateMsgID = msg.Metadata["update_message_id"]
+	}
+	if updateMsgID != "" {
+		if err := f.patchMessage(updateMsgID, cardJSON); err != nil {
+			log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: patch failed, falling back to create")
+		} else {
+			return updateMsgID, nil
+		}
 	}
 
 	// 检查是否需要回复消息（reply 模式）
@@ -158,16 +223,14 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) error {
 	}
 
 	if messageID != "" {
-		// 使用回复模式
 		return f.sendReplyMessage(msg.ChatID, messageID, cardJSON)
 	}
 
-	// 普通发送模式
 	return f.sendNormalMessage(msg.ChatID, cardJSON)
 }
 
-// sendReplyMessage 发送回复消息
-func (f *FeishuChannel) sendReplyMessage(chatID, parentID string, cardJSON []byte) error {
+// sendReplyMessage 发送回复消息，返回新消息的 message_id
+func (f *FeishuChannel) sendReplyMessage(chatID, parentID string, cardJSON []byte) (string, error) {
 	req := larkim.NewReplyMessageReqBuilder().
 		MessageId(parentID).
 		Body(larkim.NewReplyMessageReqBodyBuilder().
@@ -184,22 +247,27 @@ func (f *FeishuChannel) sendReplyMessage(chatID, parentID string, cardJSON []byt
 
 	resp, err := f.client.Im.Message.Reply(context.Background(), req)
 	if err != nil {
-		return fmt.Errorf("send feishu reply message: %w", err)
+		return "", fmt.Errorf("send feishu reply message: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+
+	msgID := ""
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		msgID = *resp.Data.MessageId
 	}
 
 	log.WithFields(log.Fields{
-		"chat_id":   chatID,
-		"parent_id": parentID,
+		"chat_id":    chatID,
+		"parent_id":  parentID,
+		"message_id": msgID,
 	}).Debug("Feishu reply message sent")
-	return nil
+	return msgID, nil
 }
 
-// sendNormalMessage 发送普通消息
-func (f *FeishuChannel) sendNormalMessage(chatID string, cardJSON []byte) error {
-	// 判断 receive_id_type
+// sendNormalMessage 发送普通消息，返回新消息的 message_id
+func (f *FeishuChannel) sendNormalMessage(chatID string, cardJSON []byte) (string, error) {
 	receiveIDType := "chat_id"
 	if !strings.HasPrefix(chatID, "oc_") {
 		receiveIDType = "open_id"
@@ -221,13 +289,42 @@ func (f *FeishuChannel) sendNormalMessage(chatID string, cardJSON []byte) error 
 
 	resp, err := f.client.Im.Message.Create(context.Background(), req)
 	if err != nil {
-		return fmt.Errorf("send feishu message: %w", err)
+		return "", fmt.Errorf("send feishu message: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
 	}
 
-	log.WithField("chat_id", chatID).Debug("Feishu message sent")
+	msgID := ""
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		msgID = *resp.Data.MessageId
+	}
+
+	log.WithFields(log.Fields{
+		"chat_id":    chatID,
+		"message_id": msgID,
+	}).Debug("Feishu message sent")
+	return msgID, nil
+}
+
+// patchMessage 更新已有的卡片消息（原地替换内容，避免刷屏）
+func (f *FeishuChannel) patchMessage(messageID string, cardJSON []byte) error {
+	req := larkim.NewPatchMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewPatchMessageReqBodyBuilder().
+			Content(string(cardJSON)).
+			Build()).
+		Build()
+
+	resp, err := f.client.Im.Message.Patch(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("patch feishu message: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu patch API error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+
+	log.WithField("message_id", messageID).Debug("Feishu message patched")
 	return nil
 }
 
@@ -487,18 +584,35 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		return nil
 	}
 
+	// 剥离 @mention 占位符（群聊中 @bot 后内容带 @_user_N 前缀）
+	if msg.Mentions != nil {
+		for _, m := range msg.Mentions {
+			if m.Key != nil {
+				content = strings.ReplaceAll(content, *m.Key, "")
+			}
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			return nil
+		}
+	}
+
 	// 确定回复目标
 	replyTo := chatID
 	if chatType != "group" {
 		replyTo = senderID
 	}
 
+	// 解析发送者姓名
+	senderName := f.getUserName(senderID)
+
 	// 发布到消息总线
 	f.msgBus.Inbound <- bus.InboundMessage{
-		Channel:  "feishu",
-		SenderID: senderID,
-		ChatID:   replyTo,
-		Content:  content,
+		Channel:    "feishu",
+		SenderID:   senderID,
+		SenderName: senderName,
+		ChatID:     replyTo,
+		Content:    content,
 		Metadata: map[string]string{
 			"message_id": messageID,
 			"chat_type":  chatType,
@@ -599,11 +713,12 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	}
 
 	f.msgBus.Inbound <- bus.InboundMessage{
-		Channel:  f.Name(),
-		SenderID: senderID,
-		ChatID:   chatID,
-		Content:  sb.String(),
-		Time:     time.Now(),
+		Channel:    f.Name(),
+		SenderID:   senderID,
+		SenderName: f.getUserName(senderID),
+		ChatID:     chatID,
+		Content:    sb.String(),
+		Time:       time.Now(),
 		Metadata: map[string]string{
 			"card_response": "true",
 			"card_id":       cardID,
@@ -752,10 +867,13 @@ func (f *FeishuChannel) replaceLocalImages(content string) string {
 	})
 }
 
-// buildCard 构建飞书消息卡片（JSON 2.0 结构）
+// buildCard 构建飞书消息卡片（JSON 2.0 结构，启用 update_multi 以支持 Patch 更新）
 func (f *FeishuChannel) buildCard(content string) map[string]any {
 	return map[string]any{
 		"schema": "2.0",
+		"config": map[string]any{
+			"update_multi": true,
+		},
 		"body": map[string]any{
 			"elements": []map[string]any{
 				{
@@ -801,4 +919,64 @@ func (f *FeishuChannel) isAllowed(senderID string) bool {
 		}
 	}
 	return false
+}
+
+// mdTableSepRe 匹配 markdown 表格的分隔行（如 |---|---|）
+var mdTableSepRe = regexp.MustCompile(`^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)+\|?\s*$`)
+
+// limitMarkdownTables 限制 markdown 内容中的表格数量。
+// 超出 maxTables 的表格会被转成代码块（保留可读性但不触发飞书 table 渲染）。
+func limitMarkdownTables(content string, maxTables int) string {
+	lines := strings.Split(content, "\n")
+	tableCount := 0
+	inTable := false
+	inExcessTable := false
+	var result []string
+
+	for _, line := range lines {
+		isTableLine := strings.HasPrefix(strings.TrimSpace(line), "|") && strings.Contains(line, "|")
+		isSepLine := isTableLine && mdTableSepRe.MatchString(strings.TrimSpace(line))
+
+		if !inTable && isSepLine {
+			// 进入新表格：分隔行之前的 header 行也属于这个表格
+			tableCount++
+			inTable = true
+			inExcessTable = tableCount > maxTables
+
+			if inExcessTable {
+				// 把已写入的 header 行（上一行）也转成代码块内容
+				if len(result) > 0 {
+					prev := result[len(result)-1]
+					if strings.HasPrefix(strings.TrimSpace(prev), "|") {
+						result[len(result)-1] = "```"
+						result = append(result, prev)
+					} else {
+						result = append(result, "```")
+					}
+				} else {
+					result = append(result, "```")
+				}
+				result = append(result, line)
+				continue
+			}
+		}
+
+		if inTable && !isTableLine {
+			// 离开表格
+			if inExcessTable {
+				result = append(result, "```")
+			}
+			inTable = false
+			inExcessTable = false
+		}
+
+		result = append(result, line)
+	}
+
+	// 文件末尾仍在超限表格中，关闭代码块
+	if inExcessTable {
+		result = append(result, "```")
+	}
+
+	return strings.Join(result, "\n")
 }

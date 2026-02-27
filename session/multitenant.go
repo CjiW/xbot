@@ -9,13 +9,14 @@ import (
 
 // MultiTenantSession manages multiple tenant sessions with SQLite backing
 type MultiTenantSession struct {
-	db           *sqlite.DB
-	tenantSvc    *sqlite.TenantService
-	sessionSvc   *sqlite.SessionService
-	memorySvc    *sqlite.MemoryService
-	mu           sync.RWMutex
-	tenantCache  map[string]*TenantSession // key: "channel:chat_id"
-	dbPath       string
+	db             *sqlite.DB
+	tenantSvc      *sqlite.TenantService
+	sessionSvc     *sqlite.SessionService
+	memorySvc      *sqlite.MemoryService
+	userProfileSvc *sqlite.UserProfileService
+	mu             sync.RWMutex
+	tenantCache    map[string]*TenantSession // key: "channel:chat_id"
+	dbPath         string
 }
 
 // NewMultiTenant creates a new multi-tenant session manager
@@ -26,12 +27,13 @@ func NewMultiTenant(dbPath string) (*MultiTenantSession, error) {
 	}
 
 	m := &MultiTenantSession{
-		db:          db,
-		tenantSvc:   sqlite.NewTenantService(db),
-		sessionSvc:  sqlite.NewSessionService(db),
-		memorySvc:   sqlite.NewMemoryService(db),
-		tenantCache: make(map[string]*TenantSession),
-		dbPath:      dbPath,
+		db:             db,
+		tenantSvc:      sqlite.NewTenantService(db),
+		sessionSvc:     sqlite.NewSessionService(db),
+		memorySvc:      sqlite.NewMemoryService(db),
+		userProfileSvc: sqlite.NewUserProfileService(db),
+		tenantCache:    make(map[string]*TenantSession),
+		dbPath:         dbPath,
 	}
 
 	return m, nil
@@ -90,6 +92,16 @@ func (m *MultiTenantSession) Close() error {
 		return m.db.Close()
 	}
 	return nil
+}
+
+// GetUserProfile retrieves the user profile for a sender (cross-session)
+func (m *MultiTenantSession) GetUserProfile(senderID string) (name, profile string, err error) {
+	return m.userProfileSvc.GetProfile(senderID)
+}
+
+// SaveUserProfile saves or updates the user profile for a sender (cross-session)
+func (m *MultiTenantSession) SaveUserProfile(senderID, name, profile string) error {
+	return m.userProfileSvc.SaveProfile(senderID, name, profile)
 }
 
 // DBPath returns the database path (useful for migration checks)

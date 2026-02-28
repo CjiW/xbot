@@ -154,8 +154,8 @@ func TestBuildTable(t *testing.T) {
 	if elem.Tag != "table" {
 		t.Errorf("expected tag 'table', got '%s'", elem.Tag)
 	}
-	if elem.Properties["type"] != "table" {
-		t.Error("expected type=table in properties")
+	if elem.Properties["columns"] == nil {
+		t.Error("expected columns in properties")
 	}
 }
 
@@ -595,12 +595,17 @@ func TestCardSendTool(t *testing.T) {
 		t.Error("expected success message")
 	}
 
-	// Verify the sent content
+	// Verify the sent content: format is __FEISHU_CARD__:card_id:{json}
 	if !strings.HasPrefix(sentContent, "__FEISHU_CARD__:") {
 		t.Error("expected __FEISHU_CARD__ prefix")
 	}
 
-	cardJSON := strings.TrimPrefix(sentContent, "__FEISHU_CARD__:")
+	payload := strings.TrimPrefix(sentContent, "__FEISHU_CARD__:")
+	jsonStart := strings.Index(payload, ":{")
+	if jsonStart < 0 {
+		t.Fatal("expected card_id:{json} format")
+	}
+	cardJSON := payload[jsonStart+1:]
 	var card map[string]any
 	if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {
 		t.Fatalf("sent content is not valid JSON: %v", err)
@@ -753,8 +758,13 @@ func TestFullCardBuildFlow(t *testing.T) {
 		t.Fatalf("card_send failed: %v", err)
 	}
 
-	// Validate output JSON
-	raw := strings.TrimPrefix(sentJSON, "__FEISHU_CARD__:")
+	// Validate output JSON: format is __FEISHU_CARD__:card_id:{json}
+	rawPayload := strings.TrimPrefix(sentJSON, "__FEISHU_CARD__:")
+	jsonIdx := strings.Index(rawPayload, ":{")
+	if jsonIdx < 0 {
+		t.Fatal("expected card_id:{json} format")
+	}
+	raw := rawPayload[jsonIdx+1:]
 	var card map[string]any
 	if err := json.Unmarshal([]byte(raw), &card); err != nil {
 		t.Fatalf("invalid card JSON: %v", err)

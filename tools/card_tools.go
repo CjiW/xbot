@@ -659,8 +659,10 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("build card JSON: %w", err)
 	}
 
+	t.builder.SaveDescription(session.ID, session.Description())
+
 	if session.SendFunc != nil {
-		if err := session.SendFunc(session.Channel, session.ChatID, "__FEISHU_CARD__:"+string(cardJSON)); err != nil {
+		if err := session.SendFunc(session.Channel, session.ChatID, "__FEISHU_CARD__:"+session.ID+":"+string(cardJSON)); err != nil {
 			return nil, fmt.Errorf("send card: %w", err)
 		}
 	}

@@ -49,6 +49,9 @@ type FeishuChannel struct {
 	// OpenID -> 用户姓名缓存
 	userNameCache map[string]string
 	userNameMu    sync.RWMutex
+
+	// 卡片 message_id -> card_id 映射（用于回调路由）
+	cardMsgIDs sync.Map
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -165,10 +168,49 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return "", nil
 	}
 
-	// 检测 card builder 生成的完整卡片 JSON（不参与消息更新跟踪）
+	// card builder 生成的完整卡片 JSON，走正常 patch/reply/send 流程
+	// 格式: __FEISHU_CARD__:card_id:{"schema":...}
 	if strings.HasPrefix(msg.Content, "__FEISHU_CARD__:") {
-		cardJSON := strings.TrimPrefix(msg.Content, "__FEISHU_CARD__:")
-		return f.sendNormalMessage(msg.ChatID, []byte(cardJSON))
+		payload := strings.TrimPrefix(msg.Content, "__FEISHU_CARD__:")
+
+		cardID := ""
+		cardJSON := payload
+		if idx := strings.Index(payload, ":{"); idx >= 0 {
+			cardID = payload[:idx]
+			cardJSON = payload[idx+1:]
+		}
+
+		updateMsgID := ""
+		replyTo := ""
+		if msg.Metadata != nil {
+			updateMsgID = msg.Metadata["update_message_id"]
+			replyTo = msg.Metadata["message_id"]
+		}
+
+		var msgID string
+		if updateMsgID != "" {
+			if err := f.patchMessage(updateMsgID, []byte(cardJSON)); err != nil {
+				log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: card patch failed, falling back to create")
+			} else {
+				msgID = updateMsgID
+			}
+		}
+		if msgID == "" {
+			var err error
+			if replyTo != "" {
+				msgID, err = f.sendReplyMessage(msg.ChatID, replyTo, []byte(cardJSON))
+			} else {
+				msgID, err = f.sendNormalMessage(msg.ChatID, []byte(cardJSON))
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+
+		if cardID != "" && msgID != "" {
+			f.cardMsgIDs.Store(msgID, cardID)
+		}
+		return msgID, nil
 	}
 
 	originalLen := len(msg.Content)
@@ -652,50 +694,75 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		senderID = *event.Event.Operator.UserID
 	}
 
-	// Card Builder 路径：检测 card_id
-	if cardID, ok := actionData["card_id"].(string); ok {
-		return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID)
+	// 查找 card_id：优先从 actionData（按钮 value），否则通过 message_id 反查
+	messageID := ""
+	if event.Event.Context != nil {
+		messageID = event.Event.Context.OpenMessageID
+	}
+	cardID := ""
+	if id, ok := actionData["card_id"].(string); ok {
+		cardID = id
+	} else if messageID != "" {
+		if id, ok := f.cardMsgIDs.Load(messageID); ok {
+			cardID = id.(string)
+		}
+	}
+	if cardID == "" {
+		log.WithField("action_value", actionData).Warn("Missing card_id in card action")
+		return &callback.CardActionTriggerResponse{}, nil
 	}
 
-	log.WithField("action_value", actionData).Warn("Missing card_id in card action")
-	return &callback.CardActionTriggerResponse{}, nil
+	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID)
 }
 
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
-func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID string) (*callback.CardActionTriggerResponse, error) {
+// Only button clicks and form submissions are forwarded to the agent.
+// Other element interactions (select change, input change, etc.) are silently ignored.
+func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
 	responseData := make(map[string]string)
 	actionName := action.Tag
 
-	if actionName == "form_submit" || len(action.FormValue) > 0 {
-		// Collect all form field values
+	switch {
+	case actionName == "form_submit" || len(action.FormValue) > 0:
 		for key, value := range action.FormValue {
-			if key != "card_id" {
-				switch v := value.(type) {
-				case string:
-					responseData[key] = v
-				default:
-					data, _ := json.Marshal(v)
-					responseData[key] = string(data)
-				}
+			if key == "card_id" {
+				continue
+			}
+			switch v := value.(type) {
+			case string:
+				responseData[key] = v
+			default:
+				data, _ := json.Marshal(v)
+				responseData[key] = string(data)
 			}
 		}
 		actionName = "form_submit"
-	} else {
-		// Button click: collect element name and custom data
-		if name, ok := actionData["element_name"].(string); ok {
-			responseData["element_name"] = name
+
+	case actionName == "button":
+		if action.Name != "" {
+			responseData["name"] = action.Name
 		}
 		for k, v := range actionData {
-			if k != "card_id" && k != "element_name" {
-				switch val := v.(type) {
-				case string:
-					responseData[k] = val
-				default:
-					data, _ := json.Marshal(val)
-					responseData[k] = string(data)
-				}
+			if k == "card_id" {
+				continue
+			}
+			switch val := v.(type) {
+			case string:
+				responseData[k] = val
+			default:
+				data, _ := json.Marshal(val)
+				responseData[k] = string(data)
 			}
 		}
+
+	default:
+		// 非按钮/非表单提交的交互（select change、input change 等）静默忽略，不转发给 agent
+		log.WithFields(log.Fields{
+			"card_id": cardID,
+			"tag":     actionName,
+			"name":    action.Name,
+		}).Debug("Ignoring non-submit card interaction")
+		return &callback.CardActionTriggerResponse{}, nil
 	}
 
 	log.WithFields(log.Fields{
@@ -703,9 +770,19 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		"action_name": actionName,
 		"chat_id":     chatID,
 		"sender_id":   senderID,
+		"data":        responseData,
 	}).Info("Card builder action triggered")
 
-	// Build user-readable summary
+	// 表单提交后，patch 卡片为"已提交"状态（防止重复提交）
+	if actionName == "form_submit" && messageID != "" {
+		submittedCard := f.buildCard("✅ 已提交，正在处理...")
+		if cardJSON, err := json.Marshal(submittedCard); err == nil {
+			if err := f.patchMessage(messageID, cardJSON); err != nil {
+				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
+			}
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[Card Action: %s] %s", cardID, actionName))
 	for k, v := range responseData {

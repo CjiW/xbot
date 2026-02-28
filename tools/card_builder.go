@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,9 +11,10 @@ import (
 
 // CardBuilder manages card building sessions. Singleton shared across all tools.
 type CardBuilder struct {
-	mu       sync.RWMutex
-	sessions map[string]*CardSession
-	counter  atomic.Int64
+	mu           sync.RWMutex
+	sessions     map[string]*CardSession
+	counter      atomic.Int64
+	descriptions sync.Map // card_id -> description string (persists after session removal for callback context)
 }
 
 // NewCardBuilder creates a CardBuilder instance.
@@ -48,7 +50,7 @@ func (b *CardBuilder) CreateSession(channel, chatID string, sendFunc func(string
 	id := fmt.Sprintf("card_%d", b.counter.Add(1))
 	s := &CardSession{
 		ID:         id,
-		Config:     map[string]any{"wide_screen_mode": true},
+		Config:     map[string]any{"wide_screen_mode": true, "update_multi": true},
 		Containers: make(map[string]*CardElement),
 		Channel:    channel,
 		ChatID:     chatID,
@@ -81,6 +83,19 @@ func (b *CardBuilder) ActiveCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.sessions)
+}
+
+// SaveDescription stores a card's description for callback context (persists after session removal).
+func (b *CardBuilder) SaveDescription(cardID, desc string) {
+	b.descriptions.Store(cardID, desc)
+}
+
+// GetDescription retrieves a card's description by ID.
+func (b *CardBuilder) GetDescription(cardID string) string {
+	if v, ok := b.descriptions.Load(cardID); ok {
+		return v.(string)
+	}
+	return ""
 }
 
 // ---------- CardSession methods ----------
@@ -149,6 +164,7 @@ func (s *CardSession) NextElementID(prefix string) string {
 // BuildJSON generates the complete Feishu card JSON 2.0 structure.
 func (s *CardSession) BuildJSON() ([]byte, error) {
 	s.ensureFormSubmitButtons()
+	s.deduplicateNames()
 
 	card := map[string]any{
 		"schema": "2.0",
@@ -169,6 +185,28 @@ func (s *CardSession) BuildJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(card)
+}
+
+// deduplicateNames ensures all interactive element names are unique across the card.
+// Feishu requires globally unique names for all interactive elements.
+func (s *CardSession) deduplicateNames() {
+	used := make(map[string]int)
+	for _, elem := range s.Elements {
+		deduplicateNamesInTree(elem, used)
+	}
+}
+
+func deduplicateNamesInTree(elem *CardElement, used map[string]int) {
+	if name, ok := elem.Properties["name"].(string); ok && name != "" {
+		used[name]++
+		if used[name] > 1 {
+			newName := fmt.Sprintf("%s_%d", name, used[name])
+			elem.Properties["name"] = newName
+		}
+	}
+	for _, child := range elem.Children {
+		deduplicateNamesInTree(child, used)
+	}
 }
 
 // ensureFormSubmitButtons checks all form containers and auto-injects a submit
@@ -202,12 +240,15 @@ func ensureSubmitInTree(elem *CardElement, sessionID string) {
 	}
 }
 
-func hasSubmitButton(form *CardElement) bool {
-	for _, child := range form.Children {
-		if child.Tag == "button" {
-			if at, ok := child.Properties["action_type"].(string); ok && at == "form_submit" {
-				return true
-			}
+func hasSubmitButton(elem *CardElement) bool {
+	if elem.Tag == "button" {
+		if at, ok := elem.Properties["action_type"].(string); ok && at == "form_submit" {
+			return true
+		}
+	}
+	for _, child := range elem.Children {
+		if hasSubmitButton(child) {
+			return true
 		}
 	}
 	return false
@@ -226,6 +267,138 @@ func (s *CardSession) PreviewSummary() string {
 		summary += "\n" + previewElement(e, i, 1)
 	}
 	return summary
+}
+
+// Description generates a rich context description of the card for LLM understanding.
+// This is stored when the card is sent and injected into card action callbacks.
+func (s *CardSession) Description() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Card [%s]", s.ID))
+	if s.Header != nil {
+		if t, ok := s.Header["title"].(map[string]any); ok {
+			sb.WriteString(fmt.Sprintf(" — %s", t["content"]))
+		}
+	}
+	sb.WriteString("\nStructure:\n")
+	for _, e := range s.Elements {
+		describeElement(&sb, e, 1)
+	}
+	return sb.String()
+}
+
+func describeElement(sb *strings.Builder, e *CardElement, depth int) {
+	indent := strings.Repeat("  ", depth)
+	switch e.Tag {
+	case "markdown":
+		content, _ := e.Properties["content"].(string)
+		if len(content) > 80 {
+			content = content[:80] + "..."
+		}
+		fmt.Fprintf(sb, "%s- Text: %s\n", indent, content)
+	case "div":
+		if t, ok := e.Properties["text"].(map[string]any); ok {
+			content, _ := t["content"].(string)
+			if len(content) > 80 {
+				content = content[:80] + "..."
+			}
+			fmt.Fprintf(sb, "%s- Text: %s\n", indent, content)
+		}
+	case "button":
+		label := ""
+		if t, ok := e.Properties["text"].(map[string]any); ok {
+			label, _ = t["content"].(string)
+		}
+		name, _ := e.Properties["name"].(string)
+		action, _ := e.Properties["action_type"].(string)
+		if action != "" {
+			fmt.Fprintf(sb, "%s- Button \"%s\" name=%s action=%s\n", indent, label, name, action)
+		} else {
+			fmt.Fprintf(sb, "%s- Button \"%s\" name=%s\n", indent, label, name)
+		}
+	case "input":
+		name, _ := e.Properties["name"].(string)
+		desc := ""
+		if l, ok := e.Properties["label"].(map[string]any); ok {
+			desc, _ = l["content"].(string)
+		}
+		if ph, ok := e.Properties["placeholder"].(map[string]any); ok {
+			if desc == "" {
+				desc, _ = ph["content"].(string)
+			}
+		}
+		if desc != "" {
+			fmt.Fprintf(sb, "%s- Input name=%s (%s)\n", indent, name, desc)
+		} else {
+			fmt.Fprintf(sb, "%s- Input name=%s\n", indent, name)
+		}
+	case "select_static", "multi_select_static":
+		name, _ := e.Properties["name"].(string)
+		opts := describeOptions(e.Properties["options"])
+		fmt.Fprintf(sb, "%s- Select name=%s options: [%s]\n", indent, name, opts)
+	case "select_person", "multi_select_person":
+		name, _ := e.Properties["name"].(string)
+		fmt.Fprintf(sb, "%s- Person picker name=%s\n", indent, name)
+	case "date_picker", "picker_time", "picker_datetime":
+		name, _ := e.Properties["name"].(string)
+		fmt.Fprintf(sb, "%s- %s name=%s\n", indent, e.Tag, name)
+	case "checker":
+		name, _ := e.Properties["name"].(string)
+		text := ""
+		if t, ok := e.Properties["text"].(map[string]any); ok {
+			text, _ = t["content"].(string)
+		}
+		fmt.Fprintf(sb, "%s- Checkbox name=%s \"%s\"\n", indent, name, text)
+	case "overflow":
+		name, _ := e.Properties["name"].(string)
+		opts := describeOptions(e.Properties["options"])
+		fmt.Fprintf(sb, "%s- Overflow name=%s options: [%s]\n", indent, name, opts)
+	case "form":
+		name, _ := e.Properties["name"].(string)
+		fmt.Fprintf(sb, "%s- Form name=%s:\n", indent, name)
+	case "column_set":
+		fmt.Fprintf(sb, "%s- Columns:\n", indent)
+	case "table":
+		cols := ""
+		if c, ok := e.Properties["columns"].([]map[string]any); ok {
+			names := make([]string, 0, len(c))
+			for _, col := range c {
+				if dn, ok := col["display_name"].(string); ok {
+					names = append(names, dn)
+				} else if n, ok := col["name"].(string); ok {
+					names = append(names, n)
+				}
+			}
+			cols = strings.Join(names, ", ")
+		}
+		fmt.Fprintf(sb, "%s- Table columns: [%s]\n", indent, cols)
+	case "img", "img_combination", "hr", "chart", "person", "person_list":
+		fmt.Fprintf(sb, "%s- %s\n", indent, e.Tag)
+	default:
+		fmt.Fprintf(sb, "%s- [%s]\n", indent, e.Tag)
+	}
+	for _, child := range e.Children {
+		describeElement(sb, child, depth+1)
+	}
+}
+
+func describeOptions(opts any) string {
+	arr, ok := opts.([]map[string]any)
+	if !ok {
+		return ""
+	}
+	labels := make([]string, 0, len(arr))
+	for _, opt := range arr {
+		if t, ok := opt["text"].(map[string]any); ok {
+			if content, ok := t["content"].(string); ok {
+				labels = append(labels, content)
+				continue
+			}
+		}
+		if v, ok := opt["value"].(string); ok {
+			labels = append(labels, v)
+		}
+	}
+	return strings.Join(labels, ", ")
 }
 
 func previewElement(e *CardElement, idx, depth int) string {
@@ -334,7 +507,6 @@ func BuildTable(columnsDef []map[string]any, rowsData []map[string]any, props ma
 		rowsData = rowsData[:50]
 	}
 	p := map[string]any{
-		"type":        "table",
 		"page_size":   len(rowsData),
 		"columns":     columnsDef,
 		"rows":        rowsData,

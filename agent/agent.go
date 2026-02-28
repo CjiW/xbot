@@ -36,9 +36,10 @@ type Agent struct {
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
-	directSend     func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
-	sessionMsgIDs  sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
-	sessionReplyTo sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
+	directSend       func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
+	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
+	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
+	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
 }
 
 // Config Agent 配置
@@ -202,6 +203,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 初始化 session 消息跟踪：清除旧的已发消息 ID，记录入站消息 ID 用于首条回复
 	key := msg.Channel + ":" + msg.ChatID
 	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
 	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
@@ -399,7 +401,11 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		"card_id": cardID,
 	}).Info("Processing card response")
 
+	// 注入卡片上下文，让 LLM 理解用户在回应什么
 	summary := msg.Content
+	if desc := a.cardBuilder.GetDescription(cardID); desc != "" {
+		summary = desc + "\nUser interaction:\n" + summary
+	}
 
 	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
 	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
@@ -567,6 +573,13 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
 			elapsed := time.Since(start)
 
+			// 工具已发送最终回复（如飞书卡片）→ 进度消息已被替换，禁用后续进度更新
+			sessionKey := channel + ":" + chatID
+			if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
+				autoNotify = false
+				progressLines = nil
+			}
+
 			content := ""
 			if execErr != nil {
 				content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
@@ -657,20 +670,30 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 // sendMessage 发送消息到指定渠道，支持 session 内消息原地更新（避免刷屏）
 //
 // 首次发送创建新消息（如有入站 message_id 则回复该消息），后续发送 Patch 更新同一条消息。
+// 工具发送最终回复（如飞书卡片）时同样 Patch 更新，但标记 session 为"已完成"，后续调用自动跳过。
 func (a *Agent) sendMessage(channel, chatID, content string) error {
 	key := channel + ":" + chatID
+
+	// 工具已发送最终回复 → 跳过后续所有消息（进度更新、LLM 最终回复等）
+	if _, sent := a.sessionFinalSent.Load(key); sent {
+		return nil
+	}
+
 	msg := bus.OutboundMessage{
 		Channel: channel,
 		ChatID:  chatID,
 		Content: content,
 	}
 
+	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
+
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
 		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
 			msg.Metadata["update_message_id"] = existingID.(string)
-		} else if replyTo, ok := a.sessionReplyTo.Load(key); ok {
+		}
+		if replyTo, ok := a.sessionReplyTo.Load(key); ok {
 			msg.Metadata["message_id"] = replyTo.(string)
 		}
 
@@ -680,6 +703,9 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		}
 		if msgID != "" {
 			a.sessionMsgIDs.Store(key, msgID)
+		}
+		if isFinal {
+			a.sessionFinalSent.Store(key, true)
 		}
 		return nil
 	}

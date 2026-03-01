@@ -507,10 +507,10 @@ func BuildTable(columnsDef []map[string]any, rowsData []map[string]any, props ma
 		rowsData = rowsData[:50]
 	}
 	p := map[string]any{
-		"page_size":   len(rowsData),
-		"columns":     columnsDef,
-		"rows":        rowsData,
-		"row_height":  "low",
+		"page_size":    len(rowsData),
+		"columns":      columnsDef,
+		"rows":         rowsData,
+		"row_height":   "low",
 		"header_style": map[string]any{"bold": true, "text_align": "left"},
 	}
 	mergeProps(p, props, "page_size", "row_height", "header_style")

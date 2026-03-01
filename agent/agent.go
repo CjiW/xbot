@@ -29,7 +29,7 @@ type Agent struct {
 	skills        *tools.SkillStore
 	mcpManager    *tools.MCPManager
 	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
-	cardBuilder   *tools.CardBuilder       // Card Builder MCP
+	cardBuilder   *tools.CardBuilder      // Card Builder MCP
 	workDir       string
 	promptLoader  *PromptLoader
 
@@ -105,20 +105,20 @@ func New(cfg Config) *Agent {
 	}
 
 	return &Agent{
-		bus:            cfg.Bus,
-		llmClient:      cfg.LLM,
-		model:          cfg.Model,
-		multiSession:   multiSession,
-		tools:          registry,
-		maxIterations:  cfg.MaxIterations,
-		memoryWindow:   cfg.MemoryWindow,
-		skills:         skillStore,
-		mcpManager:     mcpMgr,
-		chatHistory:    chatHistory,
-		cardBuilder:    cardBuilder,
-		workDir:        cfg.WorkDir,
-		promptLoader:   NewPromptLoader(cfg.PromptFile),
-		consolidating:  make(map[string]bool),
+		bus:           cfg.Bus,
+		llmClient:     cfg.LLM,
+		model:         cfg.Model,
+		multiSession:  multiSession,
+		tools:         registry,
+		maxIterations: cfg.MaxIterations,
+		memoryWindow:  cfg.MemoryWindow,
+		skills:        skillStore,
+		mcpManager:    mcpMgr,
+		chatHistory:   chatHistory,
+		cardBuilder:   cardBuilder,
+		workDir:       cfg.WorkDir,
+		promptLoader:  NewPromptLoader(cfg.PromptFile),
+		consolidating: make(map[string]bool),
 	}
 }
 

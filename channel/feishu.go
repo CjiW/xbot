@@ -282,9 +282,9 @@ func (f *FeishuChannel) sendReplyMessage(chatID, parentID string, cardJSON []byt
 		Build()
 
 	log.WithFields(log.Fields{
-		"chat_id":    chatID,
-		"parent_id":  parentID,
-		"card_len":   len(cardJSON),
+		"chat_id":   chatID,
+		"parent_id": parentID,
+		"card_len":  len(cardJSON),
 	}).Debug("Feishu: sending reply message")
 
 	resp, err := f.client.Im.Message.Reply(context.Background(), req)
@@ -316,8 +316,8 @@ func (f *FeishuChannel) sendNormalMessage(chatID string, cardJSON []byte) (strin
 	}
 
 	log.WithFields(log.Fields{
-		"chat_id":   chatID,
-		"card_len":  len(cardJSON),
+		"chat_id":  chatID,
+		"card_len": len(cardJSON),
 	}).Debug("Feishu: sending normal message")
 
 	req := larkim.NewCreateMessageReqBuilder().

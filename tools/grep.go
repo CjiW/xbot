@@ -195,7 +195,7 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	// Format output
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d match(es):\n\n", len(matches)))
+	fmt.Fprintf(&sb, "Found %d match(es):\n\n", len(matches))
 
 	currentFile := ""
 	for _, m := range matches {
@@ -204,17 +204,17 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 				sb.WriteString("\n")
 			}
 			currentFile = m.File
-			sb.WriteString(fmt.Sprintf("## %s\n", m.File))
+			fmt.Fprintf(&sb, "## %s\n", m.File)
 		}
 		line := m.Line
 		if len(line) > maxGrepLineLength {
 			line = line[:maxGrepLineLength] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("%d: %s\n", m.LineNumber, line))
+		fmt.Fprintf(&sb, "%d: %s\n", m.LineNumber, line)
 	}
 
 	if truncated {
-		sb.WriteString(fmt.Sprintf("\n(Results truncated. Showing first %d matches.)\n", maxGrepMatches))
+		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxGrepMatches)
 	}
 
 	return NewResult(sb.String()), nil

@@ -147,7 +147,7 @@ func (t *WebSearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Tavily API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("tavily API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	// 解析响应
@@ -164,7 +164,7 @@ func (t *WebSearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 func formatSearchResults(resp *TavilySearchResponse) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("# Web Search Results for: %s\n\n", resp.Query))
+	fmt.Fprintf(&sb, "# Web Search Results for: %s\n\n", resp.Query)
 
 	// 如果有 AI 生成的答案，先显示
 	if resp.Answer != "" {
@@ -177,8 +177,8 @@ func formatSearchResults(resp *TavilySearchResponse) string {
 	if len(resp.Results) > 0 {
 		sb.WriteString("## Sources\n\n")
 		for i, result := range resp.Results {
-			sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, result.Title))
-			sb.WriteString(fmt.Sprintf("**URL:** %s\n\n", result.URL))
+			fmt.Fprintf(&sb, "### %d. %s\n", i+1, result.Title)
+			fmt.Fprintf(&sb, "**URL:** %s\n\n", result.URL)
 			if result.Content != "" {
 				sb.WriteString(result.Content)
 				sb.WriteString("\n\n")

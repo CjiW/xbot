@@ -105,7 +105,7 @@ Updated content.`
 	}
 	input, _ = json.Marshal(args)
 
-	result, err = tool.Execute(ctx, string(input))
+	_, err = tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("update_skill failed: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestManageTools_AddRemoveMCP(t *testing.T) {
 	}
 	input, _ = json.Marshal(args)
 
-	result, err = tool.Execute(ctx, string(input))
+	_, err = tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("remove_mcp failed: %v", err)
 	}

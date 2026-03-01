@@ -153,13 +153,13 @@ func (t *ManageTools) listSkills(ctx *ToolContext) (*ToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d skills:\n\n", len(skills)))
+	fmt.Fprintf(&sb, "Found %d skills:\n\n", len(skills))
 	for _, skill := range skills {
 		status := "inactive"
 		if skill.Active {
 			status = "active"
 		}
-		sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", skill.Name, status, skill.Description))
+		fmt.Fprintf(&sb, "- **%s** (%s): %s\n", skill.Name, status, skill.Description)
 	}
 
 	return &ToolResult{Summary: sb.String()}, nil
@@ -246,16 +246,16 @@ func (t *ManageTools) listMCP(ctx *ToolContext) (*ToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d MCP server(s):\n\n", len(config.MCPServers)))
+	fmt.Fprintf(&sb, "Found %d MCP server(s):\n\n", len(config.MCPServers))
 	for name, cfg := range config.MCPServers {
 		enabled := "enabled"
 		if cfg.Enabled != nil && !*cfg.Enabled {
 			enabled = "disabled"
 		}
 		if cfg.URL != "" {
-			sb.WriteString(fmt.Sprintf("- **%s** (%s, HTTP): %s\n", name, enabled, cfg.URL))
+			fmt.Fprintf(&sb, "- **%s** (%s, HTTP): %s\n", name, enabled, cfg.URL)
 		} else {
-			sb.WriteString(fmt.Sprintf("- **%s** (%s, stdio): %s %v\n", name, enabled, cfg.Command, cfg.Args))
+			fmt.Fprintf(&sb, "- **%s** (%s, stdio): %s %v\n", name, enabled, cfg.Command, cfg.Args)
 		}
 	}
 

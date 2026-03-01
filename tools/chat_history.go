@@ -174,7 +174,7 @@ func (t *ChatHistoryTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 
 	// 格式化输出
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Recent %d messages in this conversation:\n\n", len(messages)))
+	fmt.Fprintf(&sb, "Recent %d messages in this conversation:\n\n", len(messages))
 
 	for i, msg := range messages {
 		// 格式化时间
@@ -183,7 +183,7 @@ func (t *ChatHistoryTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 			timeStr = msg.Timestamp.Format("01/02 15:04")
 		}
 
-		sb.WriteString(fmt.Sprintf("[%d] %s <%s>: %s\n", i+1, timeStr, msg.SenderID, msg.Content))
+		fmt.Fprintf(&sb, "[%d] %s <%s>: %s\n", i+1, timeStr, msg.SenderID, msg.Content)
 	}
 
 	return NewResult(sb.String()), nil

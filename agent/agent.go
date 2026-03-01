@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"path/filepath"
@@ -843,20 +842,4 @@ func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, erro
 	return resp.Content, nil
 }
 
-// parseToolArgFirst 从 JSON 参数中取第一个值作为预览
-func parseToolArgFirst(argsJSON string) string {
-	var m map[string]any
-	if json.Unmarshal([]byte(argsJSON), &m) != nil {
-		return argsJSON
-	}
-	for _, v := range m {
-		s, ok := v.(string)
-		if ok {
-			if len(s) > 40 {
-				return s[:40] + "…"
-			}
-			return s
-		}
-	}
-	return argsJSON
-}
+

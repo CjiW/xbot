@@ -4,3 +4,7 @@ linters:
   disable:
     - errcheck
     - staticcheck
+
+formatters:
+  enable:
+    - gofmt

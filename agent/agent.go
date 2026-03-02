@@ -831,5 +831,3 @@ func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, erro
 	}
 	return resp.Content, nil
 }
-
-

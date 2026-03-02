@@ -20,13 +20,13 @@ import (
 // SessionMCPManager 管理单个会话的 MCP 连接
 type SessionMCPManager struct {
 	mu                sync.RWMutex
-	sessionKey        string                 // "channel:chatID"
-	configPath        string                 // mcp.json 路径
-	connections       map[string]*mcpConnection  // 懒加载的连接
-	lastActive        map[string]time.Time   // 每个服务器的最后活跃时间
-	sessionLastUsed   time.Time              // 会话级别活跃时间
-	inactivityTimeout time.Duration          // 不活跃超时配置
-	initialized       bool                   // 是否已初始化配置加载
+	sessionKey        string                    // "channel:chatID"
+	configPath        string                    // mcp.json 路径
+	connections       map[string]*mcpConnection // 懒加载的连接
+	lastActive        map[string]time.Time      // 每个服务器的最后活跃时间
+	sessionLastUsed   time.Time                 // 会话级别活跃时间
+	inactivityTimeout time.Duration             // 不活跃超时配置
+	initialized       bool                      // 是否已初始化配置加载
 }
 
 // NewSessionMCPManager 创建会话 MCP 管理器
@@ -126,6 +126,24 @@ func (sm *SessionMCPManager) Close() {
 
 	sm.connections = make(map[string]*mcpConnection)
 	sm.lastActive = make(map[string]time.Time)
+}
+
+// Invalidate 重置初始化标志，强制下次调用时重新加载配置
+func (sm *SessionMCPManager) Invalidate() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// 关闭所有现有连接
+	for _, conn := range sm.connections {
+		sm.closeConnection(conn)
+	}
+	sm.connections = make(map[string]*mcpConnection)
+	sm.lastActive = make(map[string]time.Time)
+
+	// 重置初始化标志
+	sm.initialized = false
+
+	log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")
 }
 
 // loadAndConnect 加载配置并连接所有启用的 MCP Server
@@ -298,7 +316,7 @@ func (sm *SessionMCPManager) closeTransport(t any) {
 
 			select {
 			case err := <-resultCh:
-				if err != nil && !isProcessExitError(err) {
+				if err != nil && !IsProcessExitError(err) {
 					log.WithError(err).Debug("Error closing MCP transport")
 				}
 			case <-ctx.Done():
@@ -322,17 +340,16 @@ func (sm *SessionMCPManager) loadConfig() (*MCPConfig, error) {
 	return &config, nil
 }
 
-
 // ---- SessionMCPRemoteTool: 会话感知的 MCP 远程工具 ----
 
 // SessionMCPRemoteTool 封装一个远程 MCP 工具为 xbot Tool（会话感知）
 type SessionMCPRemoteTool struct {
-	serverName     string
-	tool           mcp.Tool
-	client         *mcpclient.Client
-	sessionMCPMgr  *SessionMCPManager // 会话 MCP 管理器
-	params         []llm.ToolParam
-	description    string
+	serverName    string
+	tool          mcp.Tool
+	client        *mcpclient.Client
+	sessionMCPMgr *SessionMCPManager // 会话 MCP 管理器
+	params        []llm.ToolParam
+	description   string
 }
 
 // newSessionMCPRemoteTool 创建 SessionMCPRemoteTool

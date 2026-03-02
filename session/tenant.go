@@ -144,3 +144,13 @@ func (s *TenantSession) Close() {
 		s.mcpManager = nil
 	}
 }
+
+// InvalidateMCP 使会话的 MCP 连接失效，强制下次使用时重新加载
+func (s *TenantSession) InvalidateMCP() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.mcpManager != nil {
+		s.mcpManager.Invalidate()
+	}
+}

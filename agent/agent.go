@@ -98,7 +98,7 @@ func New(cfg Config) *Agent {
 	mcpConfigPath := filepath.Join(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
-	registry.Register(tools.NewManageTools(mcpConfigPath, cfg.SkillsDir))
+	registry.Register(tools.NewManageTools(mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
@@ -120,19 +120,19 @@ func New(cfg Config) *Agent {
 	registry.SetSessionMCPManagerProvider(multiSession)
 
 	return &Agent{
-		bus:            cfg.Bus,
-		llmClient:      cfg.LLM,
-		model:          cfg.Model,
-		multiSession:   multiSession,
-		tools:          registry,
-		maxIterations:  cfg.MaxIterations,
-		memoryWindow:   cfg.MemoryWindow,
-		skills:         skillStore,
-		chatHistory:    chatHistory,
-		cardBuilder:    cardBuilder,
-		workDir:        cfg.WorkDir,
-		promptLoader:   NewPromptLoader(cfg.PromptFile),
-		consolidating:  make(map[string]bool),
+		bus:           cfg.Bus,
+		llmClient:     cfg.LLM,
+		model:         cfg.Model,
+		multiSession:  multiSession,
+		tools:         registry,
+		maxIterations: cfg.MaxIterations,
+		memoryWindow:  cfg.MemoryWindow,
+		skills:        skillStore,
+		chatHistory:   chatHistory,
+		cardBuilder:   cardBuilder,
+		workDir:       cfg.WorkDir,
+		promptLoader:  NewPromptLoader(cfg.PromptFile),
+		consolidating: make(map[string]bool),
 	}
 }
 
@@ -162,6 +162,8 @@ func (a *Agent) sendAck(channel, chatID string) {
 // Run 启动 Agent 循环，持续消费入站消息
 func (a *Agent) Run(ctx context.Context) error {
 	log.Info("Agent loop started")
+	// 启动后台清理协程（清理不活跃的 MCP 连接和会话缓存）
+	a.multiSession.StartCleanupRoutine()
 	defer func() {
 		// 清理所有会话的 MCP 连接
 		a.multiSession.StopCleanupRoutine()
@@ -659,18 +661,21 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
-		Ctx:             execCtx,
-		WorkingDir:      a.workDir,
-		AgentID:         "main",
-		Manager:         a,
-		DataDir:         a.workDir,
-		Channel:         channel,
-		ChatID:          chatID,
-		SenderID:        senderID,
-		SenderName:      senderName,
-		SendFunc:        a.sendMessage,
-		InjectInbound:   a.injectInbound,
-		Registry:        a.tools,
+		Ctx:                    execCtx,
+		WorkingDir:             a.workDir,
+		AgentID:                "main",
+		Manager:                a,
+		DataDir:                a.workDir,
+		Channel:                channel,
+		ChatID:                 chatID,
+		SenderID:               senderID,
+		SenderName:             senderName,
+		SendFunc:               a.sendMessage,
+		InjectInbound:          a.injectInbound,
+		Registry:               a.tools,
+		InvalidateAllSessionMCP: func() {
+			a.multiSession.InvalidateAll()
+		},
 		SaveUserProfile: func(profile string) error {
 			return a.multiSession.SaveUserProfile(senderID, senderName, profile)
 		},
@@ -857,5 +862,3 @@ func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, erro
 	}
 	return resp.Content, nil
 }
-
-

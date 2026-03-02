@@ -16,7 +16,7 @@ type ManageTools struct {
 }
 
 // NewManageTools creates a new ManageTools tool
-func NewManageTools(mcpConfigPath, skillsDir string) *ManageTools {
+func NewManageTools(mcpConfigPath string) *ManageTools {
 	return &ManageTools{
 		mcpConfigPath: mcpConfigPath,
 	}
@@ -179,9 +179,13 @@ func (t *ManageTools) listMCP(ctx *ToolContext) (*ToolResult, error) {
 func (t *ManageTools) reload(ctx *ToolContext) (*ToolResult, error) {
 	results := []string{}
 
-	// MCP is now per-session and lazily loaded
-	// Sessions will reconnect on next tool use after configuration changes
-	results = append(results, "MCP: Per-session lazy loading enabled - sessions will reload MCP tools on next use")
+	// 使所有会话的 MCP 连接失效，强制重新加载配置
+	if ctx.InvalidateAllSessionMCP != nil {
+		ctx.InvalidateAllSessionMCP()
+		results = append(results, "MCP: All session connections invalidated, will reload on next use")
+	} else {
+		results = append(results, "MCP: Per-session lazy loading enabled - new sessions will load updated config")
+	}
 
 	return NewResult(strings.Join(results, "\n")), nil
 }

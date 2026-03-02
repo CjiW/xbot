@@ -10,14 +10,14 @@ import (
 )
 
 func TestManageTools_Name(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	if tool.Name() != "ManageTools" {
 		t.Errorf("Expected name 'ManageTools', got '%s'", tool.Name())
 	}
 }
 
 func TestManageTools_Description(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	desc := tool.Description()
 	if desc == "" {
 		t.Error("Description should not be empty")
@@ -25,7 +25,7 @@ func TestManageTools_Description(t *testing.T) {
 }
 
 func TestManageTools_Parameters(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	params := tool.Parameters()
 	if len(params) == 0 {
 		t.Error("Should have parameters")
@@ -50,7 +50,7 @@ func TestManageTools_AddRemoveMCP(t *testing.T) {
 	tempDir := t.TempDir()
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, "/tmp/skills")
+	tool := NewManageTools(mcpConfigPath)
 	registry := NewRegistry()
 
 	ctx := &ToolContext{
@@ -118,7 +118,7 @@ func TestManageTools_ListMCP(t *testing.T) {
 	tempDir := t.TempDir()
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, "/tmp/skills")
+	tool := NewManageTools(mcpConfigPath)
 	registry := NewRegistry()
 
 	ctx := &ToolContext{
@@ -163,7 +163,7 @@ func TestManageTools_Execute_ParamsValidation(t *testing.T) {
 	tempDir := t.TempDir()
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, "/tmp/skills")
+	tool := NewManageTools(mcpConfigPath)
 	ctx := &ToolContext{Registry: NewRegistry()}
 
 	// Test missing required parameter for add_mcp
@@ -186,7 +186,7 @@ func TestManageTools_Execute_ParamsValidation(t *testing.T) {
 }
 
 func TestManageTools_ToolDefinition(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 
 	// Verify it implements Tool interface
 	var _ llm.ToolDefinition = tool

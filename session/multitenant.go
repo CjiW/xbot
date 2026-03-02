@@ -44,12 +44,13 @@ type MultiTenantSession struct {
 	mu                   sync.RWMutex
 	tenantCache          map[string]*TenantSession // key: "channel:chat_id"
 	dbPath               string
-	mcpConfigPath        string                    // MCP 配置文件路径
-	mcpInactivityTimeout time.Duration             // MCP 不活跃超时配置
-	mcpCleanupInterval   time.Duration             // MCP 清理扫描间隔
-	sessionCacheTimeout  time.Duration             // 会话缓存超时配置
-	cleanupStopCh        chan struct{}             // 清理协程停止信号
-	cleanupWg            sync.WaitGroup            // 清理协程等待组
+	mcpConfigPath        string         // MCP 配置文件路径
+	mcpInactivityTimeout time.Duration  // MCP 不活跃超时配置
+	mcpCleanupInterval   time.Duration  // MCP 清理扫描间隔
+	sessionCacheTimeout  time.Duration  // 会话缓存超时配置
+	cleanupStopCh        chan struct{}  // 清理协程停止信号
+	cleanupWg            sync.WaitGroup // 清理协程等待组
+	cleanupStopOnce      sync.Once      // 确保 StopCleanupRoutine 只执行一次
 }
 
 // NewMultiTenant creates a new multi-tenant session manager
@@ -208,10 +209,12 @@ func (m *MultiTenantSession) StartCleanupRoutine() {
 	}).Info("MCP cleanup routine started")
 }
 
-// StopCleanupRoutine 停止清理协程
+// StopCleanupRoutine 停止清理协程（可安全重复调用）
 func (m *MultiTenantSession) StopCleanupRoutine() {
-	close(m.cleanupStopCh)
-	m.cleanupWg.Wait()
+	m.cleanupStopOnce.Do(func() {
+		close(m.cleanupStopCh)
+		m.cleanupWg.Wait()
+	})
 }
 
 // cleanupInactiveResources 清理不活跃的资源（MCP 连接和会话缓存）
@@ -237,5 +240,30 @@ func (m *MultiTenantSession) cleanupInactiveResources() {
 			delete(m.tenantCache, key)
 			log.WithField("session", key).Info("Removed session from cache due to inactivity")
 		}
+	}
+}
+
+// InvalidateAll 使所有缓存会话的 MCP 连接失效，强制下次使用时重新加载
+func (m *MultiTenantSession) InvalidateAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, sess := range m.tenantCache {
+		sess.InvalidateMCP()
+		log.WithField("session", key).Debug("Invalidated session MCP")
+	}
+
+	log.Info("All session MCP connections invalidated, will reload on next use")
+}
+
+// InvalidateSessionMCP 使特定会话的 MCP 连接失效
+// 用于 token 刷新等场景，需要重新建立特定 MCP 服务器的连接
+func (m *MultiTenantSession) InvalidateSessionMCP(sessionKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if sess, ok := m.tenantCache[sessionKey]; ok {
+		sess.InvalidateMCP()
+		log.WithField("session", sessionKey).Info("Session MCP invalidated")
 	}
 }

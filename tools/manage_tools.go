@@ -1,16 +1,13 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"xbot/llm"
-	log "xbot/logger"
 )
 
 // ManageTools allows the bot to add/update/remove MCP servers dynamically
@@ -182,39 +179,12 @@ func (t *ManageTools) listMCP(ctx *ToolContext) (*ToolResult, error) {
 func (t *ManageTools) reload(ctx *ToolContext) (*ToolResult, error) {
 	results := []string{}
 
-	// Reload MCP
-	if ctx.MCPManager != nil {
-		// Close existing connections
-		ctx.MCPManager.Close()
-
-		// Remove old MCP tools (prefix is "mcp_")
-		if ctx.Registry != nil {
-			for _, tool := range ctx.Registry.List() {
-				if strings.HasPrefix(tool.Name(), "mcp_") {
-					ctx.Registry.Unregister(tool.Name())
-				}
-			}
-		}
-
-		// Reconnect with timeout to avoid hanging on slow MCP servers (e.g. npx)
-		reloadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		if err := ctx.MCPManager.LoadAndConnect(reloadCtx); err != nil {
-			log.WithError(err).Warn("MCP reload had errors")
-			results = append(results, fmt.Sprintf("MCP reload completed with errors: %v", err))
-		} else {
-			count := ctx.MCPManager.ServerCount()
-			results = append(results, fmt.Sprintf("MCP reloaded: %d server(s) connected", count))
-		}
-
-		// Re-register MCP tools
-		if ctx.Registry != nil {
-			ctx.MCPManager.RegisterTools(ctx.Registry)
-			results = append(results, "MCP tools re-registered")
-		}
+	// 使所有会话的 MCP 连接失效，强制重新加载配置
+	if ctx.InvalidateAllSessionMCP != nil {
+		ctx.InvalidateAllSessionMCP()
+		results = append(results, "MCP: All session connections invalidated, will reload on next use")
 	} else {
-		results = append(results, "MCPManager not available, skipped MCP reload")
+		results = append(results, "MCP: Per-session lazy loading enabled - new sessions will load updated config")
 	}
 
 	return NewResult(strings.Join(results, "\n")), nil

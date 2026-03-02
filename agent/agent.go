@@ -26,7 +26,6 @@ type Agent struct {
 	maxIterations int
 	memoryWindow  int
 	skills        *SkillStore
-	mcpManager    *tools.MCPManager
 	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
 	cardBuilder   *tools.CardBuilder      // Card Builder MCP
 	workDir       string
@@ -52,6 +51,11 @@ type Config struct {
 	SkillsDir     string // Skills 目录
 	WorkDir       string // 工作目录（所有文件相对此目录）
 	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
+
+	// MCP 会话管理配置
+	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
+	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔
+	SessionCacheTimeout  time.Duration // 会话缓存超时
 }
 
 // New 创建 Agent
@@ -71,6 +75,16 @@ func New(cfg Config) *Agent {
 	if cfg.DBPath == "" {
 		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
 	}
+	// 设置 MCP 配置默认值
+	if cfg.MCPInactivityTimeout == 0 {
+		cfg.MCPInactivityTimeout = 30 * time.Minute
+	}
+	if cfg.MCPCleanupInterval == 0 {
+		cfg.MCPCleanupInterval = 5 * time.Minute
+	}
+	if cfg.SessionCacheTimeout == 0 {
+		cfg.SessionCacheTimeout = 24 * time.Hour
+	}
 
 	skillStore := NewSkillStore(cfg.SkillsDir)
 
@@ -80,27 +94,30 @@ func New(cfg Config) *Agent {
 	chatHistory := tools.NewChatHistoryStore(20) // 每个群组保留最近 20 条
 	registry.Register(tools.NewChatHistoryTool(chatHistory))
 
-	// 初始化 MCP 管理器（mcp.json 放在工作目录根下）
+	// MCP 配置路径
 	mcpConfigPath := filepath.Join(cfg.WorkDir, "mcp.json")
-	mcpMgr := tools.NewMCPManager(mcpConfigPath)
-	if err := mcpMgr.LoadAndConnect(context.Background()); err != nil {
-		log.WithError(err).Warn("MCP initialization failed")
-	} else if mcpMgr.ServerCount() > 0 {
-		mcpMgr.RegisterTools(registry)
-	}
 
-	// 注册 ManageTools tool（需要 mcpMgr 引用）
+	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
 	registry.Register(tools.NewManageTools(mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
-	// 初始化多租户会话管理器
-	multiSession, err := session.NewMultiTenant(cfg.DBPath)
+	// 初始化多租户会话管理器（带 MCP 配置选项）
+	multiSession, err := session.NewMultiTenant(
+		cfg.DBPath,
+		session.WithMCPTimeout(cfg.MCPInactivityTimeout),
+		session.WithCleanupInterval(cfg.MCPCleanupInterval),
+		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
+	)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
 	}
+	multiSession.SetMCPConfigPath(mcpConfigPath)
+
+	// 设置会话 MCP 管理器提供者
+	registry.SetSessionMCPManagerProvider(multiSession)
 
 	return &Agent{
 		bus:           cfg.Bus,
@@ -111,7 +128,6 @@ func New(cfg Config) *Agent {
 		maxIterations: cfg.MaxIterations,
 		memoryWindow:  cfg.MemoryWindow,
 		skills:        skillStore,
-		mcpManager:    mcpMgr,
 		chatHistory:   chatHistory,
 		cardBuilder:   cardBuilder,
 		workDir:       cfg.WorkDir,
@@ -143,21 +159,14 @@ func (a *Agent) sendAck(channel, chatID string) {
 	}
 }
 
-// ReconnectMCPServer 重新连接指定 MCP Server（用于 token 刷新后重建连接）
-func (a *Agent) ReconnectMCPServer(name string) error {
-	if a.mcpManager == nil {
-		return fmt.Errorf("MCP manager not initialized")
-	}
-	return a.mcpManager.ReconnectServer(context.Background(), name, a.tools)
-}
-
 // Run 启动 Agent 循环，持续消费入站消息
 func (a *Agent) Run(ctx context.Context) error {
 	log.Info("Agent loop started")
+	// 启动后台清理协程（清理不活跃的 MCP 连接和会话缓存）
+	a.multiSession.StartCleanupRoutine()
 	defer func() {
-		if a.mcpManager != nil {
-			a.mcpManager.Close()
-		}
+		// 清理所有会话的 MCP 连接
+		a.multiSession.StopCleanupRoutine()
 	}()
 	for {
 		select {
@@ -518,7 +527,10 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			notifyProgress("💭 思考中...")
 		}
 
-		response, err := a.llmClient.Generate(ctx, a.model, messages, a.tools.AsDefinitions())
+		// 使用会话特定的工具定义（包含会话的 MCP 工具）
+		sessionKey := channel + ":" + chatID
+		tools := a.tools.AsDefinitionsForSession(sessionKey)
+		response, err := a.llmClient.Generate(ctx, a.model, messages, tools)
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
 		}
@@ -622,7 +634,24 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 // executeTool 执行单个工具调用
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
+	// 首先尝试从全局注册表查找工具
 	tool, ok := a.tools.Get(tc.Name)
+
+	// 如果全局注册表中找不到，尝试从会话的 MCP 管理器查找
+	if !ok {
+		sessionKey := channel + ":" + chatID
+		if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
+			sessionTools := mcpMgr.GetSessionTools()
+			for _, st := range sessionTools {
+				if st.Name() == tc.Name {
+					tool = st
+					ok = true
+					break
+				}
+			}
+		}
+	}
+
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", tc.Name)
 	}
@@ -643,8 +672,10 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		SenderName:    senderName,
 		SendFunc:      a.sendMessage,
 		InjectInbound: a.injectInbound,
-		MCPManager:    a.mcpManager,
 		Registry:      a.tools,
+		InvalidateAllSessionMCP: func() {
+			a.multiSession.InvalidateAll()
+		},
 		SaveUserProfile: func(profile string) error {
 			return a.multiSession.SaveUserProfile(senderID, senderName, profile)
 		},

@@ -14,32 +14,8 @@ import (
 	"xbot/llm"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
-
-// MCPServerConfig 单个 MCP Server 的配置
-type MCPServerConfig struct {
-	Command string            `json:"command,omitempty"` // 可执行文件路径（stdio 模式）
-	Args    []string          `json:"args,omitempty"`    // 命令行参数（stdio 模式）
-	Env     map[string]string `json:"env,omitempty"`     // 环境变量
-	URL     string            `json:"url,omitempty"`     // HTTP MCP URL（http 模式）
-	Headers map[string]string `json:"headers,omitempty"` // HTTP 请求头
-	Enabled *bool             `json:"enabled,omitempty"` // 是否启用（默认 true）
-}
-
-// MCPConfig 整体 MCP 配置（从 mcp.json 读取）
-type MCPConfig struct {
-	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
-}
-
-// mcpConnection 一个已连接的 MCP Server
-type mcpConnection struct {
-	name      string
-	client    *mcpclient.Client
-	transport any // *transport.Stdio 或 *transport.StreamableHTTP
-	tools     []mcp.Tool
-}
 
 // MCPManager 管理所有 MCP Server 连接
 type MCPManager struct {
@@ -166,49 +142,12 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 
 // connectStdioServer 连接 stdio 模式的 MCP Server
 func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	// 构建环境变量列表
-	var envList []string
-	for k, v := range cfg.Env {
-		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	// 创建 stdio transport
-	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
-
-	// 使用父级 context 启动 transport，因为子进程生命周期绑定到此 context
-	if err := stdioTransport.Start(ctx); err != nil {
-		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
-	}
-
-	client := mcpclient.NewClient(stdioTransport)
-	return client, stdioTransport, nil
+	return ConnectStdioServer(ctx, cfg)
 }
 
 // connectHTTPServer 连接 HTTP 模式的 MCP Server
 func (m *MCPManager) connectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	opts := []transport.StreamableHTTPCOption{}
-
-	// 添加 headers
-	if len(cfg.Headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
-	}
-
-	// 创建 HTTP transport
-	httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create HTTP transport: %w", err)
-	}
-
-	// 启动 transport
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := httpTransport.Start(connectCtx); err != nil {
-		return nil, nil, fmt.Errorf("start HTTP transport: %w", err)
-	}
-
-	client := mcpclient.NewClient(httpTransport)
-	return client, httpTransport, nil
+	return ConnectHTTPServer(ctx, cfg)
 }
 
 // RegisterTools 将所有 MCP 远程工具注册到 Registry
@@ -279,24 +218,57 @@ func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry 
 	return nil
 }
 
-// Close 关闭所有 MCP 连接
+// Close 关闭所有 MCP 连接（并发关闭，带超时）
 func (m *MCPManager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for name, conn := range m.connections {
-		if err := m.closeTransport(conn.transport); err != nil {
-			log.WithError(err).WithField("server", name).Warn("Error closing MCP connection")
-		}
-	}
+	conns := m.connections
 	m.connections = make(map[string]*mcpConnection)
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for name, conn := range conns {
+		wg.Add(1)
+		go func(nm string, tr any) {
+			defer wg.Done()
+			// 设置 5 秒超时，避免等待卡死的子进程
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := m.closeTransportWithContext(ctx, tr); err != nil {
+				// "exit status 1" 等子进程退出错误是正常的，不需要 Warn
+				if !IsProcessExitError(err) {
+					log.WithError(err).WithField("server", nm).Warn("Error closing MCP connection")
+				} else {
+					log.WithField("server", nm).Debug("MCP connection closed (process exited)")
+				}
+			}
+		}(name, conn.transport)
+	}
+	wg.Wait()
 }
 
 // closeTransport 关闭指定类型的 transport
-func (m *MCPManager) closeTransport(t any) error {
+func (m *MCPManager) closeTransport(t any) {
+	CloseTransport(t)
+}
+
+// closeTransportWithContext 带超时的关闭 transport
+func (m *MCPManager) closeTransportWithContext(ctx context.Context, t any) error {
 	switch tr := t.(type) {
 	case interface{ Close() error }:
-		return tr.Close()
+		// 在 goroutine 中执行 Close，通过 channel 传递结果
+		resultCh := make(chan error, 1)
+		go func() {
+			resultCh <- tr.Close()
+		}()
+
+		select {
+		case err := <-resultCh:
+			return err
+		case <-ctx.Done():
+			// 超时不等待，直接返回（进程会被系统回收）
+			return ctx.Err()
+		}
 	default:
 		return nil
 	}
@@ -311,16 +283,7 @@ func (m *MCPManager) ServerCount() int {
 
 // loadConfig 从 JSON 文件加载 MCP 配置
 func (m *MCPManager) loadConfig() (*MCPConfig, error) {
-	data, err := os.ReadFile(m.configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var config MCPConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("parse mcp.json: %w", err)
-	}
-	return &config, nil
+	return LoadMCPConfig(m.configPath)
 }
 
 // ---- MCPRemoteTool: 将 MCP 远程工具适配为 xbot Tool 接口 ----

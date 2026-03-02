@@ -47,15 +47,18 @@ func main() {
 	}
 
 	agentLoop := agent.New(agent.Config{
-		Bus:           msgBus,
-		LLM:           llmClient,
-		Model:         cfg.LLM.Model,
-		MaxIterations: cfg.Agent.MaxIterations,
-		MemoryWindow:  cfg.Agent.MemoryWindow,
-		DBPath:        dbPath,
-		SkillsDir:     filepath.Join(xbotDir, "skills"),
-		WorkDir:       workDir,
-		PromptFile:    cfg.Agent.PromptFile,
+		Bus:                  msgBus,
+		LLM:                  llmClient,
+		Model:                cfg.LLM.Model,
+		MaxIterations:        cfg.Agent.MaxIterations,
+		MemoryWindow:         cfg.Agent.MemoryWindow,
+		DBPath:               dbPath,
+		SkillsDir:            filepath.Join(xbotDir, "skills"),
+		WorkDir:              workDir,
+		PromptFile:           cfg.Agent.PromptFile,
+		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
+		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
+		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
 	})
 
 	// 创建消息分发器
@@ -129,10 +132,11 @@ func main() {
 			MCPConfigPath: filepath.Join(cfg.Agent.WorkDir, "mcp.json"),
 			TokenFilePath: tokenFilePath,
 		})
+		// TODO: Update token refresher callback to work with per-session MCP managers
+		// The old approach of reconnecting a single MCP manager no longer works.
+		// Need to implement session-aware MCP reconnection or invalidate sessions to trigger lazy reload.
 		tokenRefresher.SetOnRefresh(func(newUAT string) {
-			if err := agentLoop.ReconnectMCPServer("lark-mcp"); err != nil {
-				log.WithError(err).Error("Failed to reconnect lark-mcp after UAT refresh")
-			}
+			log.Info("Feishu UAT refreshed, sessions will reconnect MCP on next use")
 		})
 		go tokenRefresher.Start(ctx)
 		log.Info("Feishu UAT auto-refresh enabled (every 1h)")

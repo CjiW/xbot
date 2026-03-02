@@ -39,6 +39,11 @@ type AgentConfig struct {
 	MemoryWindow  int    // 上下文窗口（保留最近多少条消息）
 	WorkDir       string // 工作目录（所有文件相对此目录存放）
 	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
+
+	// MCP 会话管理配置
+	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间（默认 30 分钟）
+	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔（默认 5 分钟）
+	SessionCacheTimeout  time.Duration // 会话缓存超时（默认 24 小时）
 }
 
 // ServerConfig 服务器配置
@@ -117,10 +122,13 @@ func Load() *Config {
 			AllowFrom:         splitEnv("FEISHU_ALLOW_FROM"),
 		},
 		Agent: AgentConfig{
-			MaxIterations: getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
-			MemoryWindow:  getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
-			WorkDir:       getEnvOrDefault("WORK_DIR", "."),
-			PromptFile:    getEnvOrDefault("PROMPT_FILE", "prompt.md"),
+			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
+			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
+			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
+			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
+			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
+			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
+			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
 		},
 	}
 }
@@ -168,4 +176,14 @@ func splitEnv(key string) []string {
 		}
 	}
 	return result
+}
+
+// getEnvDurationOrDefault 获取时长环境变量，如果不存在则返回默认值
+func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if duration, err := time.ParseDuration(value); err == nil {
+			return duration
+		}
+	}
+	return defaultValue
 }

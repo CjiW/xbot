@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build run dev clean ci
+.PHONY: fmt lint test build run dev clean ci clean-memory
 
 BINARY_NAME := xbot
 
@@ -26,3 +26,8 @@ clean:
 
 ci: lint build test
 	@echo "CI checks passed!"
+
+clean-memory:
+	rm -rf .xbot/
+	@echo "Memory cleaned!"
+

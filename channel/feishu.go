@@ -784,9 +784,9 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[Card Action: %s] %s", cardID, actionName))
+	fmt.Fprintf(&sb, "[Card Action: %s] %s", cardID, actionName)
 	for k, v := range responseData {
-		sb.WriteString(fmt.Sprintf("\n- %s: %s", k, v))
+		fmt.Fprintf(&sb, "\n- %s: %s", k, v)
 	}
 
 	f.msgBus.Inbound <- bus.InboundMessage{

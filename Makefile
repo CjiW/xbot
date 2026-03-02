@@ -1,14 +1,15 @@
-.PHONY: fmt test build run clean web-install web-dev web-build all
+.PHONY: fmt lint test build run dev clean ci clean-memory
 
 BINARY_NAME := xbot
-PORT ?= 8080
 
-# Go 相关
 fmt:
 	go fmt ./...
 
+lint:
+	golangci-lint run ./...
+
 test:
-	go test -v ./...
+	go test -v -race -coverprofile=coverage.out ./...
 
 build:
 	go build -o $(BINARY_NAME) .
@@ -19,42 +20,14 @@ run: build
 dev:
 	go run .
 
-clean-db:
-	rm -rf .xbot MEMORY.md HISTORY.md cron.json
-
 clean:
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) coverage.out
 	go clean
-	rm -rf web/dist web/node_modules
 
-# 前端相关
-web-install:
-	cd web && npm install --legacy-peer-deps
+ci: lint build test
+	@echo "CI checks passed!"
 
-web-dev:
-	cd web && npm run dev
-
-web-build:
-	cd web && npm run build
-
-# 完整构建
-all: web-build build
-	@echo "Build complete! Run ./$(BINARY_NAME) to start."
-
-all-dev:
-	$(MAKE) web-dev &
-	$(MAKE) dev
-
-# API 测试命令
-.PHONY: create-session list-sessions health
-
-create-session:
-	@curl -s -X POST http://localhost:$(PORT)/api/sessions | jq .
-
-list-sessions:
-	@curl -s http://localhost:$(PORT)/api/sessions | jq .
-
-health:
-	@curl -s http://localhost:$(PORT)/health | jq .
-
+clean-memory:
+	rm -rf .xbot/
+	@echo "Memory cleaned!"
 

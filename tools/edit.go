@@ -356,8 +356,8 @@ func generateUnifiedDiff(oldContent, newContent, filePath string) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
-	sb.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+	fmt.Fprintf(&sb, "--- a/%s\n", filePath)
+	fmt.Fprintf(&sb, "+++ b/%s\n", filePath)
 
 	// 将 diffs 转换为带行号的 hunks
 	contextLines := 3
@@ -460,7 +460,7 @@ func generateUnifiedDiff(oldContent, newContent, filePath string) string {
 			}
 		}
 
-		sb.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldLine, oldCount, newLine, newCount))
+		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", oldLine, oldCount, newLine, newCount)
 
 		for i := hStart; i < hEnd; i++ {
 			switch allLines[i].op {

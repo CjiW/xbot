@@ -432,7 +432,7 @@ func TestGrepTool_ResultTruncation(t *testing.T) {
 	// Create a file with many matching lines
 	var sb strings.Builder
 	for i := 0; i < 300; i++ {
-		sb.WriteString(fmt.Sprintf("match line %d\n", i))
+		fmt.Fprintf(&sb, "match line %d\n", i)
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "big.txt"), []byte(sb.String()), 0644); err != nil {
 		t.Fatal(err)

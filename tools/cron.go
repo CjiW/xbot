@@ -196,11 +196,11 @@ func (t *CronTool) listJobs() (*ToolResult, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Scheduled jobs (%d):\n\n", len(jobs)))
+	fmt.Fprintf(&sb, "Scheduled jobs (%d):\n\n", len(jobs))
 	for _, j := range jobs {
-		sb.WriteString(fmt.Sprintf("- **%s**\n  Schedule: %s\n  Message: %s\n  Channel: %s\n  Next: %s\n\n",
+		fmt.Fprintf(&sb, "- **%s**\n  Schedule: %s\n  Message: %s\n  Channel: %s\n  Next: %s\n\n",
 			j.ID, t.scheduleDescription(j), j.Message, j.Channel,
-			j.nextRun.Format("2006-01-02 15:04:05 MST")))
+			j.nextRun.Format("2006-01-02 15:04:05 MST"))
 	}
 	return NewResult(sb.String()), nil
 }
@@ -298,7 +298,7 @@ func (t *CronTool) checkAndFire(now time.Time, injectFunc func(string, string, s
 
 		// 将消息注入 Agent 入站队列，触发完整处理循环
 		// 直接使用用户定义的任务描述（不加前缀，因为 cron 消息已通过 SenderID 识别）
-		content := fmt.Sprintf("%s", job.Message)
+		content := job.Message
 		if injectFunc != nil && job.Channel != "" && job.ChatID != "" {
 			injectFunc(job.Channel, job.ChatID, content)
 		}

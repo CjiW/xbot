@@ -148,23 +148,6 @@ type cbFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-// cbResponse CodeBuddy 响应格式（非流式）
-type cbResponse struct {
-	ID      string     `json:"id"`
-	Object  string     `json:"object"`
-	Created int64      `json:"created"`
-	Model   string     `json:"model"`
-	Choices []cbChoice `json:"choices"`
-	Usage   cbUsage    `json:"usage"`
-}
-
-// cbChoice CodeBuddy 选择项
-type cbChoice struct {
-	Index        int       `json:"index"`
-	Message      cbMessage `json:"message"`
-	FinishReason string    `json:"finish_reason"`
-}
-
 // cbUsage CodeBuddy token 使用统计
 type cbUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`

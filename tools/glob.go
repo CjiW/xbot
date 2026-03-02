@@ -111,13 +111,13 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d matching file(s):\n", len(matches)))
+	fmt.Fprintf(&sb, "Found %d matching file(s):\n", len(matches))
 	for _, match := range matches {
 		sb.WriteString(match)
 		sb.WriteString("\n")
 	}
 	if truncated {
-		sb.WriteString(fmt.Sprintf("\n(Results truncated. Showing first %d matches.)\n", maxResults))
+		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxResults)
 	}
 
 	return NewResult(sb.String()), nil

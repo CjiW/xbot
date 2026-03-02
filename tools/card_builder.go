@@ -273,10 +273,10 @@ func (s *CardSession) PreviewSummary() string {
 // This is stored when the card is sent and injected into card action callbacks.
 func (s *CardSession) Description() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Card [%s]", s.ID))
+	fmt.Fprintf(&sb, "Card [%s]", s.ID)
 	if s.Header != nil {
 		if t, ok := s.Header["title"].(map[string]any); ok {
-			sb.WriteString(fmt.Sprintf(" — %s", t["content"]))
+			fmt.Fprintf(&sb, " — %s", t["content"])
 		}
 	}
 	sb.WriteString("\nStructure:\n")

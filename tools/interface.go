@@ -14,21 +14,21 @@ type SessionMCPManagerProvider interface {
 
 // ToolContext 工具执行上下文
 type ToolContext struct {
-	Ctx                  context.Context                             // 可取消的上下文，用于响应 stop 信号
-	WorkingDir           string                                      // Agent 的工作目录
-	AgentID              string                                      // 当前 Agent 的 ID
-	Manager              SubAgentManager                             // Agent 管理器引用（用于创建 SubAgent）
-	DataDir              string                                      // 数据持久化目录
-	Channel              string                                      // 当前消息来源渠道
-	ChatID               string                                      // 当前消息来源会话
-	SenderID             string                                      // 当前消息发送者 ID
-	SenderName           string                                      // 当前消息发送者姓名
-	SendFunc             func(channel, chatID, content string) error // 向 IM 渠道发送消息（不经过 Agent），返回错误
-	InjectInbound        func(channel, chatID, content string)       // 注入入站消息，触发 Agent 完整处理循环
-	SaveUserProfile      func(profile string) error                  // 更新当前发送者的用户画像
-	SaveSelfProfile      func(profile string) error                  // 更新 bot 自身的画像（__me__）
-	Registry             *Registry                                   // 工具注册表引用（用于动态注册工具）
-	InvalidateAllSessionMCP func()                                   // 使所有会话的 MCP 连接失效
+	Ctx                     context.Context                             // 可取消的上下文，用于响应 stop 信号
+	WorkingDir              string                                      // Agent 的工作目录
+	AgentID                 string                                      // 当前 Agent 的 ID
+	Manager                 SubAgentManager                             // Agent 管理器引用（用于创建 SubAgent）
+	DataDir                 string                                      // 数据持久化目录
+	Channel                 string                                      // 当前消息来源渠道
+	ChatID                  string                                      // 当前消息来源会话
+	SenderID                string                                      // 当前消息发送者 ID
+	SenderName              string                                      // 当前消息发送者姓名
+	SendFunc                func(channel, chatID, content string) error // 向 IM 渠道发送消息（不经过 Agent），返回错误
+	InjectInbound           func(channel, chatID, content string)       // 注入入站消息，触发 Agent 完整处理循环
+	SaveUserProfile         func(profile string) error                  // 更新当前发送者的用户画像
+	SaveSelfProfile         func(profile string) error                  // 更新 bot 自身的画像（__me__）
+	Registry                *Registry                                   // 工具注册表引用（用于动态注册工具）
+	InvalidateAllSessionMCP func()                                      // 使所有会话的 MCP 连接失效
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖

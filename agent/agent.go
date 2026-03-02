@@ -661,18 +661,18 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
-		Ctx:                    execCtx,
-		WorkingDir:             a.workDir,
-		AgentID:                "main",
-		Manager:                a,
-		DataDir:                a.workDir,
-		Channel:                channel,
-		ChatID:                 chatID,
-		SenderID:               senderID,
-		SenderName:             senderName,
-		SendFunc:               a.sendMessage,
-		InjectInbound:          a.injectInbound,
-		Registry:               a.tools,
+		Ctx:           execCtx,
+		WorkingDir:    a.workDir,
+		AgentID:       "main",
+		Manager:       a,
+		DataDir:       a.workDir,
+		Channel:       channel,
+		ChatID:        chatID,
+		SenderID:      senderID,
+		SenderName:    senderName,
+		SendFunc:      a.sendMessage,
+		InjectInbound: a.injectInbound,
+		Registry:      a.tools,
 		InvalidateAllSessionMCP: func() {
 			a.multiSession.InvalidateAll()
 		},

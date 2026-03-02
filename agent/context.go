@@ -127,7 +127,7 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsPrompt string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -141,12 +141,7 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		systemContent += "\n## Who I Am\n" + selfProfile + "\n"
 	}
 
-	// 注入已激活的 skills（相对稳定，放在 Memory 之前）
-	if skillsPrompt != "" {
-		systemContent += "\n" + skillsPrompt
-	}
-
-	// 注入未激活 skills 目录（让 LLM 按需激活）
+	// 注入 skills 目录（让 LLM 按需用 Read 工具加载 SKILL.md）
 	if skillsCatalog != "" {
 		systemContent += "\n" + skillsCatalog
 	}

@@ -22,7 +22,6 @@ type ToolContext struct {
 	InjectInbound   func(channel, chatID, content string)       // 注入入站消息，触发 Agent 完整处理循环
 	SaveUserProfile func(profile string) error                  // 更新当前发送者的用户画像
 	SaveSelfProfile func(profile string) error                  // 更新 bot 自身的画像（__me__）
-	SkillStore      *SkillStore                                 // Skill 存储引用（用于 ManageTools）
 	MCPManager      *MCPManager                                 // MCP 管理器引用（用于 ManageTools）
 	Registry        *Registry                                   // 工具注册表引用（用于动态注册工具）
 }

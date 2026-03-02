@@ -10,14 +10,14 @@ import (
 )
 
 func TestManageTools_Name(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	if tool.Name() != "ManageTools" {
 		t.Errorf("Expected name 'ManageTools', got '%s'", tool.Name())
 	}
 }
 
 func TestManageTools_Description(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	desc := tool.Description()
 	if desc == "" {
 		t.Error("Description should not be empty")
@@ -25,7 +25,7 @@ func TestManageTools_Description(t *testing.T) {
 }
 
 func TestManageTools_Parameters(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 	params := tool.Parameters()
 	if len(params) == 0 {
 		t.Error("Should have parameters")
@@ -46,179 +46,11 @@ func TestManageTools_Parameters(t *testing.T) {
 	}
 }
 
-func TestManageTools_AddUpdateSkill(t *testing.T) {
-	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
-	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
-
-	tool := NewManageTools(mcpConfigPath, skillsDir)
-	skillStore := NewSkillStore(skillsDir)
-
-	ctx := &ToolContext{
-		SkillStore: skillStore,
-		Registry:   NewRegistry(),
-	}
-
-	// Test add_skill
-	skillContent := `---
-name: test_skill
-description: A test skill
----
-This is a test skill for testing.`
-	args := manageToolsArgs{
-		Action:  "add_skill",
-		Name:    "test_skill",
-		Content: skillContent,
-	}
-	input, _ := json.Marshal(args)
-
-	result, err := tool.Execute(ctx, string(input))
-	if err != nil {
-		t.Fatalf("add_skill failed: %v", err)
-	}
-	if result.Summary == "" {
-		t.Error("Expected non-empty result summary")
-	}
-
-	// Verify skill was created
-	skills, err := skillStore.ListSkills()
-	if err != nil {
-		t.Fatalf("ListSkills failed: %v", err)
-	}
-	if len(skills) != 1 {
-		t.Errorf("Expected 1 skill, got %d", len(skills))
-	}
-	if skills[0].Name != "test_skill" {
-		t.Errorf("Expected skill name 'test_skill', got '%s'", skills[0].Name)
-	}
-
-	// Test update_skill
-	updatedContent := `---
-name: test_skill
-description: Updated description
----
-Updated content.`
-	args = manageToolsArgs{
-		Action:  "update_skill",
-		Name:    "test_skill",
-		Content: updatedContent,
-	}
-	input, _ = json.Marshal(args)
-
-	_, err = tool.Execute(ctx, string(input))
-	if err != nil {
-		t.Fatalf("update_skill failed: %v", err)
-	}
-
-	// Verify skill was updated
-	content, err := skillStore.GetSkillContent("test_skill")
-	if err != nil {
-		t.Fatalf("GetSkillContent failed: %v", err)
-	}
-	if content != updatedContent {
-		t.Error("Skill content was not updated")
-	}
-}
-
-func TestManageTools_DeleteSkill(t *testing.T) {
-	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
-	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
-
-	tool := NewManageTools(mcpConfigPath, skillsDir)
-	skillStore := NewSkillStore(skillsDir)
-
-	ctx := &ToolContext{
-		SkillStore: skillStore,
-		Registry:   NewRegistry(),
-	}
-
-	// First create a skill
-	skillContent := `---
-name: to_delete
-description: Will be deleted
----
-Content to delete.`
-	skillStore.SaveSkill("to_delete", skillContent)
-
-	// Delete the skill
-	args := manageToolsArgs{
-		Action: "delete_skill",
-		Name:   "to_delete",
-	}
-	input, _ := json.Marshal(args)
-
-	result, err := tool.Execute(ctx, string(input))
-	if err != nil {
-		t.Fatalf("delete_skill failed: %v", err)
-	}
-	if result.Summary == "" {
-		t.Error("Expected non-empty result summary")
-	}
-
-	// Verify skill was deleted
-	skills, err := skillStore.ListSkills()
-	if err != nil {
-		t.Fatalf("ListSkills failed: %v", err)
-	}
-	if len(skills) != 0 {
-		t.Errorf("Expected 0 skills after delete, got %d", len(skills))
-	}
-}
-
-func TestManageTools_ListSkills(t *testing.T) {
-	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
-	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
-
-	tool := NewManageTools(mcpConfigPath, skillsDir)
-	skillStore := NewSkillStore(skillsDir)
-
-	ctx := &ToolContext{
-		SkillStore: skillStore,
-		Registry:   NewRegistry(),
-	}
-
-	// Test with no skills
-	args := manageToolsArgs{Action: "list_skills"}
-	input, _ := json.Marshal(args)
-
-	result, err := tool.Execute(ctx, string(input))
-	if err != nil {
-		t.Fatalf("list_skills failed: %v", err)
-	}
-	if result.Summary == "" {
-		t.Error("Expected non-empty result")
-	}
-
-	// Create some skills
-	skillStore.SaveSkill("skill1", `---
-name: skill1
-description: First skill
----
-Content 1`)
-	skillStore.SaveSkill("skill2", `---
-name: skill2
-description: Second skill
----
-Content 2`)
-
-	// List again
-	result, err = tool.Execute(ctx, string(input))
-	if err != nil {
-		t.Fatalf("list_skills failed: %v", err)
-	}
-	if result.Summary == "" {
-		t.Error("Expected non-empty result")
-	}
-}
-
 func TestManageTools_AddRemoveMCP(t *testing.T) {
 	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, skillsDir)
+	tool := NewManageTools(mcpConfigPath)
 	registry := NewRegistry()
 
 	ctx := &ToolContext{
@@ -284,10 +116,9 @@ func TestManageTools_AddRemoveMCP(t *testing.T) {
 
 func TestManageTools_ListMCP(t *testing.T) {
 	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, skillsDir)
+	tool := NewManageTools(mcpConfigPath)
 	registry := NewRegistry()
 
 	ctx := &ToolContext{
@@ -330,14 +161,13 @@ func TestManageTools_ListMCP(t *testing.T) {
 
 func TestManageTools_Execute_ParamsValidation(t *testing.T) {
 	tempDir := t.TempDir()
-	skillsDir := filepath.Join(tempDir, "skills")
 	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
 
-	tool := NewManageTools(mcpConfigPath, skillsDir)
+	tool := NewManageTools(mcpConfigPath)
 	ctx := &ToolContext{Registry: NewRegistry()}
 
-	// Test missing required parameter
-	args := manageToolsArgs{Action: "add_skill"} // missing name
+	// Test missing required parameter for add_mcp
+	args := manageToolsArgs{Action: "add_mcp"} // missing name
 	input, _ := json.Marshal(args)
 
 	_, err := tool.Execute(ctx, string(input))
@@ -356,7 +186,7 @@ func TestManageTools_Execute_ParamsValidation(t *testing.T) {
 }
 
 func TestManageTools_ToolDefinition(t *testing.T) {
-	tool := NewManageTools("/tmp/mcp.json", "/tmp/skills")
+	tool := NewManageTools("/tmp/mcp.json")
 
 	// Verify it implements Tool interface
 	var _ llm.ToolDefinition = tool
@@ -369,7 +199,7 @@ func TestManageTools_ToolDefinition(t *testing.T) {
 		paramMap[p.Name] = p
 	}
 
-	expectedParams := []string{"action", "name", "content", "mcp_config"}
+	expectedParams := []string{"action", "name", "mcp_config"}
 	for _, name := range expectedParams {
 		if _, ok := paramMap[name]; !ok {
 			t.Errorf("Missing parameter: %s", name)

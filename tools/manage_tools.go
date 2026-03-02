@@ -13,17 +13,15 @@ import (
 	log "xbot/logger"
 )
 
-// ManageTools allows the bot to add/update/remove skills and MCP servers dynamically
+// ManageTools allows the bot to add/update/remove MCP servers dynamically
 type ManageTools struct {
 	mcpConfigPath string
-	skillsDir     string
 }
 
 // NewManageTools creates a new ManageTools tool
-func NewManageTools(mcpConfigPath, skillsDir string) *ManageTools {
+func NewManageTools(mcpConfigPath string) *ManageTools {
 	return &ManageTools{
 		mcpConfigPath: mcpConfigPath,
-		skillsDir:     skillsDir,
 	}
 }
 
@@ -32,7 +30,7 @@ func (t *ManageTools) Name() string {
 }
 
 func (t *ManageTools) Description() string {
-	return "Manage the bot's skills and MCP servers. Can add, update, remove skills and MCP servers, and reload configurations."
+	return "Manage the bot's MCP servers. Can add, remove, list MCP servers, and reload configurations."
 }
 
 func (t *ManageTools) Parameters() []llm.ToolParam {
@@ -40,19 +38,13 @@ func (t *ManageTools) Parameters() []llm.ToolParam {
 		{
 			Name:        "action",
 			Type:        "string",
-			Description: "Action to perform: 'add_skill', 'update_skill', 'delete_skill', 'list_skills', 'add_mcp', 'remove_mcp', 'list_mcp', 'reload'",
+			Description: "Action to perform: 'add_mcp', 'remove_mcp', 'list_mcp', 'reload'",
 			Required:    true,
 		},
 		{
 			Name:        "name",
 			Type:        "string",
-			Description: "Name of the skill or MCP server",
-			Required:    false,
-		},
-		{
-			Name:        "content",
-			Type:        "string",
-			Description: "Skill content (for add/update_skill). Format: markdown with optional YAML frontmatter (name, description)",
+			Description: "Name of the MCP server",
 			Required:    false,
 		},
 		{
@@ -67,7 +59,6 @@ func (t *ManageTools) Parameters() []llm.ToolParam {
 type manageToolsArgs struct {
 	Action    string `json:"action"`
 	Name      string `json:"name"`
-	Content   string `json:"content"`
 	MCPConfig string `json:"mcp_config"`
 }
 
@@ -78,12 +69,6 @@ func (t *ManageTools) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 	}
 
 	switch args.Action {
-	case "add_skill", "update_skill":
-		return t.addUpdateSkill(ctx, args)
-	case "delete_skill":
-		return t.deleteSkill(ctx, args)
-	case "list_skills":
-		return t.listSkills(ctx)
 	case "add_mcp":
 		return t.addMCP(ctx, args)
 	case "remove_mcp":
@@ -93,76 +78,8 @@ func (t *ManageTools) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 	case "reload":
 		return t.reload(ctx)
 	default:
-		return nil, fmt.Errorf("unknown action: %s (valid: add_skill, update_skill, delete_skill, list_skills, add_mcp, remove_mcp, list_mcp, reload)", args.Action)
+		return nil, fmt.Errorf("unknown action: %s (valid: add_mcp, remove_mcp, list_mcp, reload)", args.Action)
 	}
-}
-
-func (t *ManageTools) addUpdateSkill(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {
-	if args.Name == "" {
-		return nil, fmt.Errorf("name is required for %s", args.Action)
-	}
-	if args.Content == "" {
-		return nil, fmt.Errorf("content is required for %s", args.Action)
-	}
-
-	if ctx.SkillStore == nil {
-		return nil, fmt.Errorf("SkillStore not available")
-	}
-
-	// Save the skill
-	if err := ctx.SkillStore.SaveSkill(args.Name, args.Content); err != nil {
-		return nil, fmt.Errorf("save skill: %w", err)
-	}
-
-	// Activate the skill
-	if err := ctx.SkillStore.Activate(args.Name); err != nil {
-		return nil, fmt.Errorf("activate skill: %w", err)
-	}
-
-	return NewResult(fmt.Sprintf("Skill '%s' has been %s successfully. The skill is now active.", args.Name, strings.TrimPrefix(args.Action, "update_"))), nil
-}
-
-func (t *ManageTools) deleteSkill(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {
-	if args.Name == "" {
-		return nil, fmt.Errorf("name is required for delete_skill")
-	}
-
-	if ctx.SkillStore == nil {
-		return nil, fmt.Errorf("SkillStore not available")
-	}
-
-	if err := ctx.SkillStore.DeleteSkill(args.Name); err != nil {
-		return nil, fmt.Errorf("delete skill: %w", err)
-	}
-
-	return NewResult(fmt.Sprintf("Skill '%s' has been deleted.", args.Name)), nil
-}
-
-func (t *ManageTools) listSkills(ctx *ToolContext) (*ToolResult, error) {
-	if ctx.SkillStore == nil {
-		return nil, fmt.Errorf("SkillStore not available")
-	}
-
-	skills, err := ctx.SkillStore.ListSkills()
-	if err != nil {
-		return nil, fmt.Errorf("list skills: %w", err)
-	}
-
-	if len(skills) == 0 {
-		return NewResult("No skills found."), nil
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d skills:\n\n", len(skills))
-	for _, skill := range skills {
-		status := "inactive"
-		if skill.Active {
-			status = "active"
-		}
-		fmt.Fprintf(&sb, "- **%s** (%s): %s\n", skill.Name, status, skill.Description)
-	}
-
-	return &ToolResult{Summary: sb.String()}, nil
 }
 
 func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {
@@ -298,12 +215,6 @@ func (t *ManageTools) reload(ctx *ToolContext) (*ToolResult, error) {
 		}
 	} else {
 		results = append(results, "MCPManager not available, skipped MCP reload")
-	}
-
-	// Skills are auto-loaded from disk, no explicit reload needed
-	if ctx.SkillStore != nil {
-		active := ctx.SkillStore.ActiveNames()
-		results = append(results, fmt.Sprintf("Skills: %d active skill(s) - %s", len(active), strings.Join(active, ", ")))
 	}
 
 	return NewResult(strings.Join(results, "\n")), nil

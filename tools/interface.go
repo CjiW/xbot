@@ -149,5 +149,6 @@ func DefaultRegistry() *Registry {
 	// r.Register(&NotifyTool{})
 	r.Register(&UserProfileTool{})
 	r.Register(&SelfProfileTool{})
+	r.Register(&DownloadFileTool{})
 	return r
 }

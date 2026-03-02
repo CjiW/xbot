@@ -842,6 +842,21 @@ func (f *FeishuChannel) parseContent(msgType string, msg *larkim.EventMessage) s
 		}
 	case "post":
 		return f.extractPostText(contentJSON)
+	case "file":
+		fileKey, _ := contentJSON["file_key"].(string)
+		fileName, _ := contentJSON["file_name"].(string)
+		messageID := ""
+		if msg.MessageId != nil {
+			messageID = *msg.MessageId
+		}
+		return fmt.Sprintf(`<file name="%s" file_key="%s" message_id="%s" />`, fileName, fileKey, messageID)
+	case "image":
+		imageKey, _ := contentJSON["image_key"].(string)
+		messageID := ""
+		if msg.MessageId != nil {
+			messageID = *msg.MessageId
+		}
+		return fmt.Sprintf(`<image image_key="%s" message_id="%s" />`, imageKey, messageID)
 	default:
 		return fmt.Sprintf("[%s]", msgType)
 	}

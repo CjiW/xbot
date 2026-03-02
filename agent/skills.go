@@ -1,0 +1,119 @@
+package agent
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	log "xbot/logger"
+)
+
+// SkillStore scans skill directories and generates a catalog for the system prompt.
+// Skills are loaded on-demand by the LLM using the Read tool (OpenClaw-style progressive disclosure).
+// Skill creation/deletion is done via Edit/Shell tools — no dedicated Skill tool needed.
+type SkillStore struct {
+	dir string // skills root directory (e.g. {WorkDir}/.xbot/skills)
+}
+
+// NewSkillStore creates a SkillStore
+func NewSkillStore(dir string) *SkillStore {
+	return &SkillStore{dir: dir}
+}
+
+// SkillInfo holds basic skill metadata parsed from SKILL.md frontmatter
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Path        string `json:"path"` // absolute path to skill directory
+}
+
+// ListSkills scans the skills directory and returns all discovered skills
+func (s *SkillStore) ListSkills() ([]SkillInfo, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var skills []SkillInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		skillDir := filepath.Join(s.dir, e.Name())
+		skillFile := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue
+		}
+
+		name, description := parseSkillFrontmatter(skillFile)
+		if name == "" {
+			name = e.Name()
+		}
+		skills = append(skills, SkillInfo{
+			Name:        name,
+			Description: description,
+			Path:        skillDir,
+		})
+	}
+	return skills, nil
+}
+
+// GetSkillsCatalog returns a formatted catalog of all available skills for the system prompt.
+// The LLM uses the Read tool to load a skill's SKILL.md when the task matches its description.
+func (s *SkillStore) GetSkillsCatalog() string {
+	skills, err := s.ListSkills()
+	if err != nil {
+		log.WithError(err).Warn("Failed to list skills for catalog")
+		return ""
+	}
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Available Skills\n\n")
+	sb.WriteString("The following skills provide specialized instructions for specific tasks.\n")
+	sb.WriteString("Use the Read tool to load a skill's SKILL.md file when the task matches its description.\n")
+	sb.WriteString("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md).\n\n")
+	sb.WriteString("<available_skills>\n")
+	for _, sk := range skills {
+		location := filepath.Join(sk.Path, "SKILL.md")
+		fmt.Fprintf(&sb, "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n    <location>%s</location>\n  </skill>\n", sk.Name, sk.Description, location)
+	}
+	sb.WriteString("</available_skills>\n")
+	return sb.String()
+}
+
+// parseSkillFrontmatter extracts name and description from a SKILL.md YAML frontmatter
+func parseSkillFrontmatter(path string) (name, description string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	content := string(data)
+
+	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
+		return "", ""
+	}
+
+	trimmed := strings.TrimSpace(content)
+	rest := trimmed[3:]
+	endIdx := strings.Index(rest, "\n---")
+	if endIdx < 0 {
+		return "", ""
+	}
+
+	for _, line := range strings.Split(rest[:endIdx], "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		} else if strings.HasPrefix(line, "description:") {
+			description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		}
+	}
+	return name, description
+}

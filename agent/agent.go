@@ -25,7 +25,7 @@ type Agent struct {
 	tools         *tools.Registry
 	maxIterations int
 	memoryWindow  int
-	skills        *tools.SkillStore
+	skills        *SkillStore
 	mcpManager    *tools.MCPManager
 	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
 	cardBuilder   *tools.CardBuilder      // Card Builder MCP
@@ -72,10 +72,9 @@ func New(cfg Config) *Agent {
 		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
 	}
 
-	skillStore := tools.NewSkillStore(cfg.SkillsDir)
+	skillStore := NewSkillStore(cfg.SkillsDir)
 
 	registry := tools.DefaultRegistry()
-	registry.Register(tools.NewSkillTool(skillStore))
 
 	// 创建聊天历史存储
 	chatHistory := tools.NewChatHistoryStore(20) // 每个群组保留最近 20 条
@@ -90,8 +89,8 @@ func New(cfg Config) *Agent {
 		mcpMgr.RegisterTools(registry)
 	}
 
-	// 注册 ManageTools tool（需要 skillStore 和 mcpMgr 引用）
-	registry.Register(tools.NewManageTools(mcpConfigPath, cfg.SkillsDir))
+	// 注册 ManageTools tool（需要 mcpMgr 引用）
+	registry.Register(tools.NewManageTools(mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
@@ -247,12 +246,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 检查是否需要触发自动记忆合并
 	a.maybeConsolidate(ctx, tenantSession)
 
-	// 自动激活匹配的 skills（基于 triggers 关键词），回复后自动清理
-	if activated := a.skills.AutoActivate(msg.Content); len(activated) > 0 {
-		log.WithField("skills", activated).Info("Skills auto-activated for this message")
-	}
-	defer a.skills.DeactivateAuto()
-
 	// 加载用户画像（跨 session 共享）和 bot 自身画像
 	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
 	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
@@ -263,10 +256,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsPrompt := a.skills.GetActiveSkillsPrompt()
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -414,10 +406,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsPrompt := a.skills.GetActiveSkillsPrompt()
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsPrompt, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
+	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -652,7 +643,6 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		SenderName:    senderName,
 		SendFunc:      a.sendMessage,
 		InjectInbound: a.injectInbound,
-		SkillStore:    a.skills,
 		MCPManager:    a.mcpManager,
 		Registry:      a.tools,
 		SaveUserProfile: func(profile string) error {

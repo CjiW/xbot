@@ -279,17 +279,33 @@ func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry 
 	return nil
 }
 
-// Close 关闭所有 MCP 连接
+// Close 关闭所有 MCP 连接（并发关闭，带超时）
 func (m *MCPManager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for name, conn := range m.connections {
-		if err := m.closeTransport(conn.transport); err != nil {
-			log.WithError(err).WithField("server", name).Warn("Error closing MCP connection")
-		}
-	}
+	conns := m.connections
 	m.connections = make(map[string]*mcpConnection)
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for name, conn := range conns {
+		wg.Add(1)
+		go func(nm string, tr any) {
+			defer wg.Done()
+			// 设置 5 秒超时，避免等待卡死的子进程
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := m.closeTransportWithContext(ctx, tr); err != nil {
+				// "exit status 1" 等子进程退出错误是正常的，不需要 Warn
+				if !isProcessExitError(err) {
+					log.WithError(err).WithField("server", nm).Warn("Error closing MCP connection")
+				} else {
+					log.WithField("server", nm).Debug("MCP connection closed (process exited)")
+				}
+			}
+		}(name, conn.transport)
+	}
+	wg.Wait()
 }
 
 // closeTransport 关闭指定类型的 transport
@@ -300,6 +316,38 @@ func (m *MCPManager) closeTransport(t any) error {
 	default:
 		return nil
 	}
+}
+
+// closeTransportWithContext 带超时的关闭 transport
+func (m *MCPManager) closeTransportWithContext(ctx context.Context, t any) error {
+	switch tr := t.(type) {
+	case interface{ Close() error }:
+		// 在 goroutine 中执行 Close，通过 channel 传递结果
+		resultCh := make(chan error, 1)
+		go func() {
+			resultCh <- tr.Close()
+		}()
+
+		select {
+		case err := <-resultCh:
+			return err
+		case <-ctx.Done():
+			// 超时不等待，直接返回（进程会被系统回收）
+			return ctx.Err()
+		}
+	default:
+		return nil
+	}
+}
+
+// isProcessExitError 判断是否为子进程退出错误（如 "exit status 1"）
+func isProcessExitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// 检查错误字符串是否包含 "exit status" 或 "signal:"
+	errStr := err.Error()
+	return strings.Contains(errStr, "exit status") || strings.Contains(errStr, "signal:")
 }
 
 // ServerCount 返回已连接的 MCP Server 数量

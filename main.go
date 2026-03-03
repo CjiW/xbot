@@ -53,6 +53,7 @@ func main() {
 	// OAuth 管理
 	var oauthServer *oauth.Server
 	var oauthManager *oauth.Manager
+	var feishuProvider *providers.FeishuProvider
 	if cfg.OAuth.Enable {
 		// 创建 OAuth token 存储
 		oauthDBPath := filepath.Join(xbotDir, "oauth_tokens.db")
@@ -65,7 +66,7 @@ func main() {
 		oauthManager = oauth.NewManager(tokenStorage)
 
 		// 注册 Feishu OAuth provider
-		feishuProvider := providers.NewFeishuProvider(
+		feishuProvider = providers.NewFeishuProvider(
 			cfg.Feishu.AppID,
 			cfg.Feishu.AppSecret,
 			cfg.OAuth.BaseURL+"/oauth/callback",
@@ -111,6 +112,9 @@ func main() {
 
 		// 注册 Feishu MCP 工具
 		feishuMCP := feishu_mcp.NewFeishuMCP(oauthManager)
+		if feishuProvider != nil {
+			feishuMCP.SetLarkClient(feishuProvider.GetLarkClient())
+		}
 		agentLoop.RegisterTool(&feishu_mcp.ListAllBitablesTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.BitableFieldsTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.BitableRecordTool{MCP: feishuMCP})

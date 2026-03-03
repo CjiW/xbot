@@ -8,53 +8,50 @@ import (
 	"xbot/tools"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	bitablev1 "github.com/larksuite/oapi-sdk-go/v3/service/bitable/v1"
+	wikiv2 "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 )
 
-// bitableRecordArgs holds arguments for bitable record operations.
-type bitableRecordArgs struct {
-	Action   string
-	AppToken string
-	TableID  string
-	Filter   map[string]any
-	Fields   map[string]any
-	RecordID string
-}
-
-// BitableFieldsTool lists fields in a Bitable table.
-type BitableFieldsTool struct {
+// SearchWikiTool searches across Wiki spaces by listing nodes.
+// Note: This is a basic implementation that lists and filters nodes.
+// For full-text search, the search v2 API requires setting up data sources first.
+type SearchWikiTool struct {
 	MCP *FeishuMCP
 }
 
-func (t *BitableFieldsTool) Name() string { return "feishu_bitable_fields" }
+func (t *SearchWikiTool) Name() string { return "feishu_search_wiki" }
 
-func (t *BitableFieldsTool) Description() string {
-	return "List all fields in a Feishu Bitable table. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with app_token and table_id."
+func (t *SearchWikiTool) Description() string {
+	return "Search across Wiki spaces for documents matching a query. Note: This searches titles by listing nodes."
 }
 
-func (t *BitableFieldsTool) Parameters() []llm.ToolParam {
+func (t *SearchWikiTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "app_token",
+			Name:        "query",
 			Type:        "string",
-			Description: "Bitable app token (from the URL, e.g., bascxxxxx)",
+			Description: "Search query text (matches against node titles)",
 			Required:    true,
 		},
 		{
-			Name:        "table_id",
+			Name:        "space_id",
 			Type:        "string",
-			Description: "Table ID (from the URL, e.g., tblxxxxx)",
-			Required:    true,
+			Description: "Specific Wiki space ID to search (optional, searches all spaces if not provided)",
+			Required:    false,
+		},
+		{
+			Name:        "limit",
+			Type:        "string",
+			Description: "Maximum number of results to return (default: 50)",
+			Required:    false,
 		},
 	}
 }
 
-func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		AppToken string `json:"app_token"`
-		TableID  string `json:"table_id"`
+		Query   string `json:"query"`
+		SpaceID string `json:"space_id"`
+		Limit   string `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -65,453 +62,110 @@ func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		return nil, err
 	}
 
-	req := bitablev1.NewListAppTableFieldReqBuilder().
-		AppToken(args.AppToken).
-		TableId(args.TableID).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTableField.List(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("list fields: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	// Format result
-	var result []map[string]any
-	for _, item := range resp.Data.Items {
-		field := map[string]any{
-			"field_name": item.FieldName,
-			"type":       item.Type,
-			"ui_type":    item.UiType,
-			"desc":       item.Description,
+	// First, list all wiki spaces if no specific space_id provided
+	var spaceIDs []string
+	if args.SpaceID != "" {
+		spaceIDs = []string{args.SpaceID}
+	} else {
+		spacesReq := wikiv2.NewListSpaceReqBuilder().Build()
+		spacesResp, err := client.Client().Wiki.V2.Space.List(ctx.Ctx, spacesReq,
+			larkcore.WithUserAccessToken(client.AccessToken()))
+		if err != nil {
+			return nil, fmt.Errorf("list wiki spaces: %w", err)
 		}
-		result = append(result, field)
-	}
-
-	summary, _ := json.MarshalIndent(result, "", "  ")
-	return tools.NewResult(fmt.Sprintf("Fields: %s", summary)), nil
-}
-
-// BitableRecordTool searches, creates, or updates records in a Bitable table.
-type BitableRecordTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *BitableRecordTool) Name() string { return "feishu_bitable_record" }
-
-func (t *BitableRecordTool) Description() string {
-	return "Query, create, or update records in Feishu Bitable. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with action, app_token, and other parameters."
-}
-
-func (t *BitableRecordTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{
-			Name:        "action",
-			Type:        "string",
-			Description: "Action to perform: search, create, or update",
-			Required:    true,
-		},
-		{
-			Name:        "app_token",
-			Type:        "string",
-			Description: "Bitable app token",
-			Required:    true,
-		},
-		{
-			Name:        "table_id",
-			Type:        "string",
-			Description: "Table ID",
-			Required:    true,
-		},
-		{
-			Name:        "filter",
-			Type:        "object",
-			Description: "Search filter for search action (JSON object with conjunction, conditions)",
-			Required:    false,
-		},
-		{
-			Name:        "fields",
-			Type:        "object",
-			Description: "Record fields for create/update (JSON object with field_name: value pairs)",
-			Required:    false,
-		},
-		{
-			Name:        "record_id",
-			Type:        "string",
-			Description: "Record ID for update action",
-			Required:    false,
-		},
-	}
-}
-
-func (t *BitableRecordTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	var args bitableRecordArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
-	}
-
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
-	switch args.Action {
-	case "search":
-		return t.searchRecords(ctx, client, args)
-	case "create":
-		return t.createRecord(ctx, client, args)
-	case "update":
-		return t.updateRecord(ctx, client, args)
-	default:
-		return nil, fmt.Errorf("unknown action: %s", args.Action)
-	}
-}
-
-func (t *BitableRecordTool) searchRecords(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
-	bodyBuilder := bitablev1.NewSearchAppTableRecordReqBodyBuilder()
-	if args.Filter != nil {
-		// Convert filter map to FilterInfo structure
-		filterJSON, _ := json.Marshal(args.Filter)
-		var filter bitablev1.FilterInfo
-		if err := json.Unmarshal(filterJSON, &filter); err == nil {
-			bodyBuilder.Filter(&filter)
+		if !spacesResp.Success() {
+			return nil, NewAPIError(spacesResp.Code, spacesResp.Msg)
+		}
+		for _, space := range spacesResp.Data.Items {
+			if space.SpaceId != nil {
+				spaceIDs = append(spaceIDs, *space.SpaceId)
+			}
 		}
 	}
 
-	req := bitablev1.NewSearchAppTableRecordReqBuilder().
-		AppToken(args.AppToken).
-		TableId(args.TableID).
-		Body(bodyBuilder.Build()).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Search(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("search records: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+	// Search through nodes in each space
+	var results []map[string]any
+	maxResults := 50
+	if args.Limit != "" {
+		fmt.Sscanf(args.Limit, "%d", &maxResults)
 	}
 
-	if len(resp.Data.Items) == 0 {
-		return tools.NewResult("No records found"), nil
-	}
-
-	summary := fmt.Sprintf("Found %d record(s)", len(resp.Data.Items))
-	detail, _ := json.MarshalIndent(resp.Data.Items, "", "  ")
-	return tools.NewResultWithDetail(summary, string(detail)), nil
-}
-
-func (t *BitableRecordTool) createRecord(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
-	if args.Fields == nil {
-		return nil, fmt.Errorf("fields required for create action")
-	}
-
-	req := bitablev1.NewCreateAppTableRecordReqBuilder().
-		AppToken(args.AppToken).
-		TableId(args.TableID).
-		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Create(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("create record: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	recordID := ""
-	if resp.Data.Record.RecordId != nil {
-		recordID = *resp.Data.Record.RecordId
-	}
-	summary := fmt.Sprintf("Record created with ID: %s", recordID)
-	detail, _ := json.MarshalIndent(resp.Data.Record, "", "  ")
-	return tools.NewResultWithDetail(summary, string(detail)), nil
-}
-
-func (t *BitableRecordTool) updateRecord(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
-	if args.RecordID == "" {
-		return nil, fmt.Errorf("record_id required for update action")
-	}
-	if args.Fields == nil {
-		return nil, fmt.Errorf("fields required for update action")
-	}
-
-	req := bitablev1.NewUpdateAppTableRecordReqBuilder().
-		AppToken(args.AppToken).
-		TableId(args.TableID).
-		RecordId(args.RecordID).
-		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Update(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("update record: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	summary := fmt.Sprintf("Record updated: %s", args.RecordID)
-	detail, _ := json.MarshalIndent(resp.Data.Record, "", "  ")
-	return tools.NewResultWithDetail(summary, string(detail)), nil
-}
-
-// BitableListTool lists all tables in a Bitable app.
-type BitableListTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *BitableListTool) Name() string { return "feishu_bitable_list" }
-
-func (t *BitableListTool) Description() string {
-	return "List all tables in a Feishu Bitable app. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with app_token from the Bitable URL."
-}
-
-func (t *BitableListTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{
-			Name:        "app_token",
-			Type:        "string",
-			Description: "Bitable app token",
-			Required:    true,
-		},
-	}
-}
-func (t *BitableListTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	var args struct {
-		AppToken string `json:"app_token"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
-	}
-
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
-	req := bitablev1.NewListAppTableReqBuilder().
-		AppToken(args.AppToken).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTable.List(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("list tables: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	var result []map[string]string
-	for _, item := range resp.Data.Items {
-		tableID := ""
-		name := ""
-		if item.TableId != nil {
-			tableID = *item.TableId
+	for _, spaceID := range spaceIDs {
+		if len(results) >= maxResults {
+			break
 		}
-		if item.Name != nil {
-			name = *item.Name
+
+		nodesReq := wikiv2.NewListSpaceNodeReqBuilder().
+			SpaceId(spaceID).
+			Build()
+
+		nodesResp, err := client.Client().Wiki.V2.SpaceNode.List(ctx.Ctx, nodesReq,
+			larkcore.WithUserAccessToken(client.AccessToken()))
+		if err != nil {
+			continue // Skip spaces we can't access
 		}
-		result = append(result, map[string]string{
-			"table_id":   tableID,
-			"table_name": name,
-		})
+		if !nodesResp.Success() {
+			continue
+		}
+
+		for _, node := range nodesResp.Data.Items {
+			if len(results) >= maxResults {
+				break
+			}
+			// Simple title matching (case-insensitive)
+			if node.Title != nil {
+				title := *node.Title
+				if containsIgnoreCase(title, args.Query) {
+					result := map[string]any{
+						"title":        node.Title,
+						"space_id":     spaceID,
+						"node_token":   node.NodeToken,
+						"obj_type":     node.ObjType,
+						"obj_token":    node.ObjToken,
+						"parent_token": node.ParentNodeToken,
+					}
+					results = append(results, result)
+				}
+			}
+		}
 	}
 
-	summary, _ := json.MarshalIndent(result, "", "  ")
-	return tools.NewResult(fmt.Sprintf("Tables: %s", summary)), nil
-}
-
-// BatchCreateAppTableRecordTool batch creates records in a Bitable table.
-type BatchCreateAppTableRecordTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *BatchCreateAppTableRecordTool) Name() string { return "feishu_bitable_batch_create" }
-
-func (t *BatchCreateAppTableRecordTool) Description() string {
-	return "Batch create records in a Feishu Bitable table (up to 500 at once). " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with app_token, table_id, and records."
-}
-
-func (t *BatchCreateAppTableRecordTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{
-			Name:        "app_token",
-			Type:        "string",
-			Description: "Bitable app token",
-			Required:    true,
-		},
-		{
-			Name:        "table_id",
-			Type:        "string",
-			Description: "Table ID",
-			Required:    true,
-		},
-		{
-			Name:        "records",
-			Type:        "array",
-			Description: "Array of record objects, each with fields property",
-			Required:    true,
-		},
-	}
-}
-
-func (t *BatchCreateAppTableRecordTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	var args struct {
-		AppToken string           `json:"app_token"`
-		TableID  string           `json:"table_id"`
-		Records  []map[string]any `json:"records"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if len(results) == 0 {
+		return tools.NewResultWithTips("No matching results found", "Try different search keywords or use feishu_wiki_list_spaces to browse all Wiki spaces."), nil
 	}
 
-	if len(args.Records) == 0 {
-		return nil, fmt.Errorf("records required")
-	}
-	if len(args.Records) > 500 {
-		return nil, fmt.Errorf("too many records, max 500")
-	}
-
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert records to AppTableRecord
-	records := make([]*bitablev1.AppTableRecord, len(args.Records))
-	for i, r := range args.Records {
-		records[i] = &bitablev1.AppTableRecord{Fields: r}
-	}
-
-	body := &bitablev1.BatchCreateAppTableRecordReqBody{
-		Records: records,
-	}
-
-	req := bitablev1.NewBatchCreateAppTableRecordReqBuilder().
-		AppToken(args.AppToken).
-		TableId(args.TableID).
-		Body(body).
-		Build()
-
-	resp, err := client.Client().Bitable.V1.AppTableRecord.BatchCreate(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("batch create records: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	summary := fmt.Sprintf("Created %d records", len(resp.Data.Records))
-	detail, _ := json.MarshalIndent(resp.Data.Records, "", "  ")
+	summary := fmt.Sprintf("Found %d result(s)", len(results))
+	detail, _ := json.MarshalIndent(results, "", "  ")
 	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// ListAllBitablesTool lists all Bitables (multidimensional tables) the user has access to.
-// This tool does NOT require an app_token parameter - it lists all accessible Bitables.
-type ListAllBitablesTool struct {
-	MCP *FeishuMCP
+// containsIgnoreCase checks if a string contains a substring (case-insensitive).
+func containsIgnoreCase(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr ||
+		len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findIgnoreCase(s, substr)))
 }
 
-func (t *ListAllBitablesTool) Name() string { return "feishu_list_all_bitables" }
-
-func (t *ListAllBitablesTool) Description() string {
-	return "List all Feishu Bitables (multidimensional tables) that you have access to. " +
-		"This is the FIRST tool to call when working with Feishu Bitable - it shows all available tables. " +
-		"No parameters needed - OAuth authorization will be triggered automatically if required."
+func findIgnoreCase(s, substr string) bool {
+	s = toLower(s)
+	substr = toLower(substr)
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
-func (t *ListAllBitablesTool) Parameters() []llm.ToolParam {
-	// No parameters required - OAuth will be triggered if needed
-	return []llm.ToolParam{}
-}
-
-func (t *ListAllBitablesTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	// This call triggers OAuth check - will return TokenNeededError if not authorized
-	_, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
+func toLower(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			result[i] = c + 32
+		} else {
+			result[i] = c
+		}
 	}
-
-	// Feishu API doesn't provide a direct "list all bitables" endpoint
-	// Return helpful guidance for the user
-	return tools.NewResult(
-		"✅ OAuth 授权成功！\n\n" +
-			"飞书 API 不支持直接列出所有可访问的多维表格。\n\n" +
-			"请提供你要访问的多维表格信息：\n" +
-			"- 表格链接（如：https://xxx.feishu.cn/base/bascxxxxx）\n" +
-			"- 或者 app_token（如：bascxxxxx）",
-	), nil
-}
-
-// SendCardTool sends an interactive card to a Feishu chat.
-type SendCardTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *SendCardTool) Name() string { return "feishu_send_card" }
-
-func (t *SendCardTool) Description() string {
-	return "Send an interactive card to a Feishu chat. " +
-		"The card should be a JSON string following Feishu card format."
-}
-
-func (t *SendCardTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{
-			Name:        "card",
-			Type:        "string",
-			Description: "Feishu card JSON content",
-			Required:    true,
-		},
-		{
-			Name:        "chat_id",
-			Type:        "string",
-			Description: "Target chat ID (optional, defaults to current chat)",
-			Required:    false,
-		},
-	}
-}
-
-func (t *SendCardTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	var args struct {
-		Card   string `json:"card"`
-		ChatID string `json:"chat_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
-	}
-
-	// Validate card JSON
-	var cardObj map[string]any
-	if err := json.Unmarshal([]byte(args.Card), &cardObj); err != nil {
-		return nil, fmt.Errorf("invalid card JSON: %w", err)
-	}
-
-	// Send the card
-	chatID := args.ChatID
-	if chatID == "" {
-		chatID = ctx.ChatID
-	}
-
-	if err := ctx.SendFunc(ctx.Channel, chatID, args.Card); err != nil {
-		return nil, fmt.Errorf("send card: %w", err)
-	}
-
-	return tools.NewResult("Card sent successfully"), nil
+	return string(result)
 }

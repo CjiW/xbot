@@ -11,6 +11,7 @@ import (
 	"xbot/oauth"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkauthen "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
 )
 
@@ -129,12 +130,59 @@ func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.
 		token.Scopes = strings.Fields(*resp.Data.Scope)
 	}
 
+	// Get tenant info to fetch the enterprise domain
+	tenantInfo, err := p.getTenantInfo(ctx, token.AccessToken)
+	if err != nil {
+		log.WithError(err).Warn("Failed to get tenant info, continuing without domain")
+	} else if tenantInfo != nil {
+		token.Raw["tenant_domain"] = tenantInfo.Domain
+		token.Raw["tenant_name"] = tenantInfo.Name
+		log.WithFields(log.Fields{
+			"tenant_domain": tenantInfo.Domain,
+			"tenant_name":   tenantInfo.Name,
+		}).Info("Feishu tenant info retrieved")
+	}
+
 	log.WithFields(log.Fields{
 		"expires_in":               expiresIn,
 		"refresh_token_expires_in": refreshExpiresIn,
 	}).Info("Feishu OAuth token exchanged successfully")
 
 	return token, nil
+}
+
+// TenantInfo holds tenant (enterprise) information
+type TenantInfo struct {
+	Domain string
+	Name   string
+}
+
+// getTenantInfo retrieves tenant information using user access token
+func (p *FeishuProvider) getTenantInfo(ctx context.Context, accessToken string) (*TenantInfo, error) {
+	resp, err := p.client.Tenant.V2.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
+	if err != nil {
+		return nil, fmt.Errorf("query tenant: %w", err)
+	}
+
+	if !resp.Success() {
+		return nil, fmt.Errorf("tenant query failed: %s (code: %d)", resp.Msg, resp.Code)
+	}
+
+	info := &TenantInfo{}
+	if resp.Data.Tenant != nil {
+		if resp.Data.Tenant.Domain != nil {
+			info.Domain = *resp.Data.Tenant.Domain
+		}
+		if resp.Data.Tenant.Name != nil {
+			info.Name = *resp.Data.Tenant.Name
+		}
+	}
+
+	if info.Domain == "" {
+		return nil, fmt.Errorf("tenant domain is empty")
+	}
+
+	return info, nil
 }
 
 // RefreshToken uses a refresh token to get a new access token.
@@ -205,6 +253,11 @@ func (p *FeishuProvider) GetClient(accessToken string) any {
 		client:      p.client,
 		accessToken: accessToken,
 	}
+}
+
+// GetLarkClient returns the underlying Lark client (for tenant queries).
+func (p *FeishuProvider) GetLarkClient() *lark.Client {
+	return p.client
 }
 
 // LarkClientWrapper wraps a Lark client with a user access token.

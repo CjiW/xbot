@@ -8,105 +8,51 @@ import (
 	"xbot/tools"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	docxv1 "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
-	wikiv2 "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
+	bitablev1 "github.com/larksuite/oapi-sdk-go/v3/service/bitable/v1"
 )
 
-// WikiListSpacesTool lists all Wiki spaces the user has access to.
-type WikiListSpacesTool struct {
+// bitableRecordArgs holds arguments for bitable record operations.
+type bitableRecordArgs struct {
+	Action   string
+	AppToken string
+	TableID  string
+	Filter   map[string]any
+	Fields   map[string]any
+	RecordID string
+}
+
+// BitableFieldsTool lists fields in a Bitable table.
+type BitableFieldsTool struct {
 	MCP *FeishuMCP
 }
 
-func (t *WikiListSpacesTool) Name() string { return "feishu_wiki_list_spaces" }
+func (t *BitableFieldsTool) Name() string { return "feishu_bitable_fields" }
 
-func (t *WikiListSpacesTool) Description() string {
-	return "List all Wiki knowledge spaces you have access to. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool to list all available Wiki spaces. " +
-		"Returns space_id (numeric string like '6946843325487906839') for use with feishu_wiki_list_nodes. " +
-		"IMPORTANT: When presenting results to users, always convert space_id to a clickable URL format: " +
-		"\"https://xxx.feishu.cn/wiki/space/{space_id}\" (tell users to replace xxx with their Feishu domain)."
+func (t *BitableFieldsTool) Description() string {
+	return "List all fields in a Feishu Bitable table."
 }
 
-func (t *WikiListSpacesTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{}
-}
-
-func (t *WikiListSpacesTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
-	req := wikiv2.NewListSpaceReqBuilder().
-		Build()
-
-	resp, err := client.Client().Wiki.V2.Space.List(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("list wiki spaces: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	if len(resp.Data.Items) == 0 {
-		return tools.NewResult("No Wiki spaces found"), nil
-	}
-
-	var result []map[string]any
-	for _, item := range resp.Data.Items {
-		space := map[string]any{
-			"space_id":    item.SpaceId,
-			"name":        item.Name,
-			"description": item.Description,
-			"space_type":  item.SpaceType,
-			"visibility":  item.Visibility,
-		}
-		result = append(result, space)
-	}
-
-	summary, _ := json.MarshalIndent(result, "", "  ")
-	return tools.NewResult(fmt.Sprintf("Found %d Wiki space(s):\n%s", len(result), summary)), nil
-}
-
-// WikiListNodesTool lists nodes within a Wiki space.
-type WikiListNodesTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *WikiListNodesTool) Name() string { return "feishu_wiki_list_nodes" }
-
-func (t *WikiListNodesTool) Description() string {
-	return "List nodes (pages) within a Wiki space. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call feishu_wiki_list_spaces to get the numeric space_id. " +
-		"STEP 3: Call this tool with the space_id returned by feishu_wiki_list_spaces. " +
-		"IMPORTANT: space_id must be a numeric string (e.g., '6946843325487906839') from feishu_wiki_list_spaces, NOT a token from URL. " +
-		"Always present node_token to users as a URL: \"https://xxx.feishu.cn/wiki/{node_token}\"."
-}
-
-func (t *WikiListNodesTool) Parameters() []llm.ToolParam {
+func (t *BitableFieldsTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "space_id",
+			Name:        "app_token",
 			Type:        "string",
-			Description: "Numeric Wiki space ID from feishu_wiki_list_spaces (e.g., '6946843325487906839'). Do NOT use URL tokens like 'wikcnXXX' or base64 strings.",
+			Description: "Bitable app token (from the URL, e.g., bascxxxxx)",
 			Required:    true,
 		},
 		{
-			Name:        "page_token",
+			Name:        "table_id",
 			Type:        "string",
-			Description: "Page token for pagination (optional)",
-			Required:    false,
+			Description: "Table ID (from the URL, e.g., tblxxxxx)",
+			Required:    true,
 		},
 	}
 }
 
-func (t *WikiListNodesTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		SpaceID   string `json:"space_id"`
-		PageToken string `json:"page_token"`
+		AppToken string `json:"app_token"`
+		TableID  string `json:"table_id"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -117,271 +63,231 @@ func (t *WikiListNodesTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		return nil, err
 	}
 
-	reqBuilder := wikiv2.NewListSpaceNodeReqBuilder().
-		SpaceId(args.SpaceID)
+	req := bitablev1.NewListAppTableFieldReqBuilder().
+		AppToken(args.AppToken).
+		TableId(args.TableID).
+		Build()
 
-	if args.PageToken != "" {
-		reqBuilder.PageToken(args.PageToken)
-	}
-
-	req := reqBuilder.Build()
-
-	resp, err := client.Client().Wiki.V2.SpaceNode.List(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.V1.AppTableField.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
-		return nil, fmt.Errorf("list wiki nodes: %w", err)
+		return nil, fmt.Errorf("list fields: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	// Format result
+	var result []map[string]any
+	for _, item := range resp.Data.Items {
+		field := map[string]any{
+			"field_name": item.FieldName,
+			"type":       item.Type,
+			"ui_type":    item.UiType,
+			"desc":       item.Description,
+		}
+		result = append(result, field)
+	}
+
+	summary, _ := json.MarshalIndent(result, "", "  ")
+	return tools.NewResultWithTips(
+		fmt.Sprintf("Fields: %s", summary),
+		"Use feishu_bitable_record with action='search' to query records, or action='create' to add new records.",
+	), nil
+}
+
+// BitableRecordTool searches, creates, or updates records in a Bitable table.
+type BitableRecordTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *BitableRecordTool) Name() string { return "feishu_bitable_record" }
+
+func (t *BitableRecordTool) Description() string {
+	return "Query, create, or update records in Feishu Bitable."
+}
+
+func (t *BitableRecordTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "action",
+			Type:        "string",
+			Description: "Action to perform: search, create, or update",
+			Required:    true,
+		},
+		{
+			Name:        "app_token",
+			Type:        "string",
+			Description: "Bitable app token",
+			Required:    true,
+		},
+		{
+			Name:        "table_id",
+			Type:        "string",
+			Description: "Table ID",
+			Required:    true,
+		},
+		{
+			Name:        "filter",
+			Type:        "object",
+			Description: "Search filter for search action (JSON object with conjunction, conditions)",
+			Required:    false,
+		},
+		{
+			Name:        "fields",
+			Type:        "object",
+			Description: "Record fields for create/update (JSON object with field_name: value pairs)",
+			Required:    false,
+		},
+		{
+			Name:        "record_id",
+			Type:        "string",
+			Description: "Record ID for update action",
+			Required:    false,
+		},
+	}
+}
+
+func (t *BitableRecordTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args bitableRecordArgs
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch args.Action {
+	case "search":
+		return t.searchRecords(ctx, client, args)
+	case "create":
+		return t.createRecord(ctx, client, args)
+	case "update":
+		return t.updateRecord(ctx, client, args)
+	default:
+		return nil, fmt.Errorf("unknown action: %s", args.Action)
+	}
+}
+
+func (t *BitableRecordTool) searchRecords(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
+	bodyBuilder := bitablev1.NewSearchAppTableRecordReqBodyBuilder()
+	if args.Filter != nil {
+		// Convert filter map to FilterInfo structure
+		filterJSON, _ := json.Marshal(args.Filter)
+		var filter bitablev1.FilterInfo
+		if err := json.Unmarshal(filterJSON, &filter); err == nil {
+			bodyBuilder.Filter(&filter)
+		}
+	}
+
+	req := bitablev1.NewSearchAppTableRecordReqBuilder().
+		AppToken(args.AppToken).
+		TableId(args.TableID).
+		Body(bodyBuilder.Build()).
+		Build()
+
+	resp, err := client.Client().Bitable.V1.AppTableRecord.Search(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("search records: %w", err)
 	}
 	if !resp.Success() {
 		return nil, NewAPIError(resp.Code, resp.Msg)
 	}
 
 	if len(resp.Data.Items) == 0 {
-		return tools.NewResult("No nodes found in this Wiki space"), nil
+		return tools.NewResultWithTips("No records found", "Try adjusting your filter criteria or use feishu_bitable_fields to check available fields."), nil
 	}
 
-	var result []map[string]any
-	for _, item := range resp.Data.Items {
-		nodeToken := ""
-		if item.NodeToken != nil {
-			nodeToken = *item.NodeToken
-		}
-		objType := ""
-		if item.ObjType != nil {
-			objType = *item.ObjType
-		}
-		title := ""
-		if item.Title != nil {
-			title = *item.Title
-		}
-		parentToken := ""
-		if item.ParentNodeToken != nil {
-			parentToken = *item.ParentNodeToken
-		}
-		hasChild := false
-		if item.HasChild != nil {
-			hasChild = *item.HasChild
-		}
-
-		node := map[string]any{
-			"node_token":   nodeToken,
-			"parent_token": parentToken,
-			"obj_type":     objType,
-			"title":        title,
-			"has_child":    hasChild,
-			"url":          BuildFeishuURL(nodeToken, objType),
-		}
-		result = append(result, node)
-	}
-
-	summary := fmt.Sprintf("Found %d node(s)", len(result))
-	detail, _ := json.MarshalIndent(result, "", "  ")
+	summary := fmt.Sprintf("Found %d record(s)", len(resp.Data.Items))
+	detail, _ := json.MarshalIndent(resp.Data.Items, "", "  ")
 	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// WikiGetNodeTool gets node details and content.
-type WikiGetNodeTool struct {
-	MCP *FeishuMCP
-}
-
-func (t *WikiGetNodeTool) Name() string { return "feishu_wiki_get_node" }
-
-func (t *WikiGetNodeTool) Description() string {
-	return "Get Wiki node details and content. Supports Wiki node tokens (wikcnXXXXX) and document tokens (doxcnXXXXX, bascXXXXX). " +
-		"Note: For newly created documents not yet in a Wiki space, this will return basic document info. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with the token from the URL or node list. " +
-		"CRITICAL: Always present the URL to users, not just the token. Format: \"https://xxx.feishu.cn/{type}/{token}\" " +
-		"where type=wiki for wikcnXXX, type=docx for doxcnXXX, type=base for bascXXX."
-}
-
-func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{
-			Name:        "token",
-			Type:        "string",
-			Description: "Node token or document token (e.g., wikcnXXXXX, doxcnXXXXX, bascXXXXX)",
-			Required:    true,
-		},
-		{
-			Name:        "obj_type",
-			Type:        "string",
-			Description: "Object type: docx, wiki, bitable, etc. (auto-detected if not provided)",
-			Required:    false,
-		},
-	}
-}
-
-func (t *WikiGetNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
-	var args struct {
-		Token   string `json:"token"`
-		ObjType string `json:"obj_type"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+func (t *BitableRecordTool) createRecord(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
+	if args.Fields == nil {
+		return nil, fmt.Errorf("fields required for create action")
 	}
 
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Auto-detect obj_type from token prefix if not provided
-	objType := args.ObjType
-	if objType == "" {
-		switch {
-		case len(args.Token) >= 6 && args.Token[:5] == "wikcn":
-			objType = "wiki"
-		case len(args.Token) >= 6 && args.Token[:5] == "doxcn":
-			objType = "docx"
-		case len(args.Token) >= 6 && args.Token[:4] == "basc":
-			objType = "bitable"
-		default:
-			// Try docx as default for unknown tokens
-			objType = "docx"
-		}
-	}
-
-	// First try Wiki API (for documents in Wiki spaces)
-	req := wikiv2.NewGetNodeSpaceReqBuilder().
-		Token(args.Token).
-		ObjType(objType).
+	req := bitablev1.NewCreateAppTableRecordReqBuilder().
+		AppToken(args.AppToken).
+		TableId(args.TableID).
+		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
 		Build()
 
-	resp, err := client.Client().Wiki.V2.Space.GetNode(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-
-	// If Wiki API fails and it's a docx document, try the Docx API directly
-	if err != nil || !resp.Success() {
-		if objType == "docx" || (objType == "" && len(args.Token) >= 5 && args.Token[:4] == "doxc") {
-			return t.getDocxDocument(ctx, client, args.Token)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("get wiki node: %w", err)
-		}
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	if resp.Data.Node == nil {
-		// Try fallback to docx API for docx tokens
-		if objType == "docx" {
-			return t.getDocxDocument(ctx, client, args.Token)
-		}
-		return tools.NewResult("Node not found - the document may not be in a Wiki space yet"), nil
-	}
-
-	node := resp.Data.Node
-	var nodeToken, objToken, title string // Declare new variables
-	if node.NodeToken != nil {
-		nodeToken = *node.NodeToken
-	}
-	objType = "" // Reuse existing variable
-	if node.ObjType != nil {
-		objType = *node.ObjType
-	}
-	if node.ObjToken != nil {
-		objToken = *node.ObjToken
-	}
-	if node.Title != nil {
-		title = *node.Title
-	}
-
-	result := map[string]any{
-		"space_id":        node.SpaceId,
-		"node_token":      nodeToken,
-		"parent_token":    node.ParentNodeToken,
-		"obj_type":        objType,
-		"obj_token":       objToken,
-		"title":           title,
-		"node_type":       node.NodeType,
-		"has_child":       node.HasChild,
-		"obj_create_time": node.ObjCreateTime,
-		"obj_edit_time":   node.ObjEditTime,
-		"url":             BuildFeishuURL(nodeToken, objType),
-	}
-
-	summary, _ := json.MarshalIndent(result, "", "  ")
-	return tools.NewResult(fmt.Sprintf("Node info:\n\n📄 **%s**\n🔗 URL: %s\n\nDetails:\n%s",
-		title, BuildFeishuURL(nodeToken, objType), summary)), nil
-}
-
-// getDocxDocument gets document info directly from Docx API for documents not in Wiki spaces.
-func (t *WikiGetNodeTool) getDocxDocument(ctx *tools.ToolContext, client *Client, documentID string) (*tools.ToolResult, error) {
-	req := docxv1.NewGetDocumentReqBuilder().
-		DocumentId(documentID).
-		Build()
-
-	resp, err := client.Client().Docx.V1.Document.Get(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.V1.AppTableRecord.Create(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
-		return nil, fmt.Errorf("get document: %w", err)
+		return nil, fmt.Errorf("create record: %w", err)
 	}
 	if !resp.Success() {
 		return nil, NewAPIError(resp.Code, resp.Msg)
 	}
 
-	doc := resp.Data.Document
-	docID := ""
-	if doc.DocumentId != nil {
-		docID = *doc.DocumentId
+	recordID := ""
+	if resp.Data.Record.RecordId != nil {
+		recordID = *resp.Data.Record.RecordId
 	}
-	title := ""
-	if doc.Title != nil {
-		title = *doc.Title
-	}
-
-	return tools.NewResult(fmt.Sprintf("📄 Document created: **%s**\n\n🔗 URL: https://xxx.feishu.cn/docx/%s\n\nNote: Replace 'xxx' with your Feishu domain. This document is not yet in a Wiki space.",
-		title, docID)), nil
+	summary := fmt.Sprintf("Record created with ID: %s", recordID)
+	detail, _ := json.MarshalIndent(resp.Data.Record, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// WikiMoveNodeTool moves a Wiki node to another parent node.
-type WikiMoveNodeTool struct {
+func (t *BitableRecordTool) updateRecord(ctx *tools.ToolContext, client *Client, args bitableRecordArgs) (*tools.ToolResult, error) {
+	if args.RecordID == "" {
+		return nil, fmt.Errorf("record_id required for update action")
+	}
+	if args.Fields == nil {
+		return nil, fmt.Errorf("fields required for update action")
+	}
+
+	req := bitablev1.NewUpdateAppTableRecordReqBuilder().
+		AppToken(args.AppToken).
+		TableId(args.TableID).
+		RecordId(args.RecordID).
+		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
+		Build()
+
+	resp, err := client.Client().Bitable.V1.AppTableRecord.Update(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("update record: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	summary := fmt.Sprintf("Record updated: %s", args.RecordID)
+	detail, _ := json.MarshalIndent(resp.Data.Record, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
+}
+
+// BitableListTool lists all tables in a Bitable app.
+type BitableListTool struct {
 	MCP *FeishuMCP
 }
 
-func (t *WikiMoveNodeTool) Name() string { return "feishu_wiki_move_node" }
+func (t *BitableListTool) Name() string { return "feishu_bitable_list" }
 
-func (t *WikiMoveNodeTool) Description() string {
-	return "Move a Wiki node to another parent node within the same or different Wiki space. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with the source space_id, node_token to move, and target parent token. " +
-		"Use this to reorganize Wiki structure or move documents between spaces."
+func (t *BitableListTool) Description() string {
+	return "List all tables in a Feishu Bitable app."
 }
 
-func (t *WikiMoveNodeTool) Parameters() []llm.ToolParam {
+func (t *BitableListTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "space_id",
+			Name:        "app_token",
 			Type:        "string",
-			Description: "Source Wiki space ID (numeric string from feishu_wiki_list_spaces)",
+			Description: "Bitable app token",
 			Required:    true,
-		},
-		{
-			Name:        "node_token",
-			Type:        "string",
-			Description: "Node token to move (e.g., wikcnXXXXX)",
-			Required:    true,
-		},
-		{
-			Name:        "target_parent_token",
-			Type:        "string",
-			Description: "Target parent node token where the node will be moved to",
-			Required:    true,
-		},
-		{
-			Name:        "target_space_id",
-			Type:        "string",
-			Description: "Target space ID (optional, defaults to same space if not specified)",
-			Required:    false,
 		},
 	}
 }
-
-func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+func (t *BitableListTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		SpaceID           string `json:"space_id"`
-		NodeToken         string `json:"node_token"`
-		TargetParentToken string `json:"target_parent_token"`
-		TargetSpaceID     string `json:"target_space_id"`
+		AppToken string `json:"app_token"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -392,169 +298,212 @@ func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, err
 	}
 
-	// Build the move request body
-	bodyBuilder := wikiv2.NewMoveSpaceNodeReqBodyBuilder().
-		TargetParentToken(args.TargetParentToken)
+	req := bitablev1.NewListAppTableReqBuilder().
+		AppToken(args.AppToken).
+		Build()
 
-	// If target_space_id is specified, add it to the request
-	if args.TargetSpaceID != "" {
-		bodyBuilder.TargetSpaceId(args.TargetSpaceID)
+	resp, err := client.Client().Bitable.V1.AppTable.List(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
 	}
 
-	body := bodyBuilder.Build()
+	var result []map[string]string
+	for _, item := range resp.Data.Items {
+		tableID := ""
+		name := ""
+		if item.TableId != nil {
+			tableID = *item.TableId
+		}
+		if item.Name != nil {
+			name = *item.Name
+		}
+		result = append(result, map[string]string{
+			"table_id":   tableID,
+			"table_name": name,
+		})
+	}
 
-	req := wikiv2.NewMoveSpaceNodeReqBuilder().
-		SpaceId(args.SpaceID).
-		NodeToken(args.NodeToken).
+	summary, _ := json.MarshalIndent(result, "", "  ")
+	return tools.NewResultWithTips(
+		fmt.Sprintf("Tables: %s", summary),
+		"Use feishu_bitable_fields to list fields in a table, then feishu_bitable_record to query or modify records.",
+	), nil
+}
+
+// BatchCreateAppTableRecordTool batch creates records in a Bitable table.
+type BatchCreateAppTableRecordTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *BatchCreateAppTableRecordTool) Name() string { return "feishu_bitable_batch_create" }
+
+func (t *BatchCreateAppTableRecordTool) Description() string {
+	return "Batch create records in a Feishu Bitable table (up to 500 at once)."
+}
+
+func (t *BatchCreateAppTableRecordTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "app_token",
+			Type:        "string",
+			Description: "Bitable app token",
+			Required:    true,
+		},
+		{
+			Name:        "table_id",
+			Type:        "string",
+			Description: "Table ID",
+			Required:    true,
+		},
+		{
+			Name:        "records",
+			Type:        "array",
+			Description: "Array of record objects, each with fields property",
+			Required:    true,
+		},
+	}
+}
+
+func (t *BatchCreateAppTableRecordTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		AppToken string           `json:"app_token"`
+		TableID  string           `json:"table_id"`
+		Records  []map[string]any `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	if len(args.Records) == 0 {
+		return nil, fmt.Errorf("records required")
+	}
+	if len(args.Records) > 500 {
+		return nil, fmt.Errorf("too many records, max 500")
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert records to AppTableRecord
+	records := make([]*bitablev1.AppTableRecord, len(args.Records))
+	for i, r := range args.Records {
+		records[i] = &bitablev1.AppTableRecord{Fields: r}
+	}
+
+	body := &bitablev1.BatchCreateAppTableRecordReqBody{
+		Records: records,
+	}
+
+	req := bitablev1.NewBatchCreateAppTableRecordReqBuilder().
+		AppToken(args.AppToken).
+		TableId(args.TableID).
 		Body(body).
 		Build()
 
-	resp, err := client.Client().Wiki.V2.SpaceNode.Move(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.V1.AppTableRecord.BatchCreate(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
-		return nil, fmt.Errorf("move wiki node: %w", err)
+		return nil, fmt.Errorf("batch create records: %w", err)
 	}
 	if !resp.Success() {
 		return nil, NewAPIError(resp.Code, resp.Msg)
 	}
 
-	return tools.NewResult(fmt.Sprintf("✅ Node %s moved successfully to parent %s",
-		args.NodeToken, args.TargetParentToken)), nil
+	summary := fmt.Sprintf("Created %d records", len(resp.Data.Records))
+	detail, _ := json.MarshalIndent(resp.Data.Records, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// WikiCreateNodeTool creates a new node in a Wiki space, optionally with a new document.
-type WikiCreateNodeTool struct {
+// ListAllBitablesTool lists all Bitables (multidimensional tables) the user has access to.
+// This tool does NOT require an app_token parameter - it lists all accessible Bitables.
+type ListAllBitablesTool struct {
 	MCP *FeishuMCP
 }
 
-func (t *WikiCreateNodeTool) Name() string { return "feishu_wiki_create_node" }
+func (t *ListAllBitablesTool) Name() string { return "feishu_list_all_bitables" }
 
-func (t *WikiCreateNodeTool) Description() string {
-	return "Create a new node in a Wiki knowledge space. Can create a new document or add an existing document to the wiki. " +
-		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Call feishu_wiki_list_spaces to get the space_id. " +
-		"STEP 3: Call this tool with space_id and title. " +
-		"Use obj_token to add an existing document (from feishu_docx_create), or leave empty to create a new document. " +
-		"CRITICAL: Always present the URL to users: \"https://xxx.feishu.cn/wiki/{node_token}\"."
+func (t *ListAllBitablesTool) Description() string {
+	return "List all Feishu Bitables (multidimensional tables) that you have access to."
 }
 
-func (t *WikiCreateNodeTool) Parameters() []llm.ToolParam {
+func (t *ListAllBitablesTool) Parameters() []llm.ToolParam {
+	// No parameters required - OAuth will be triggered if needed
+	return []llm.ToolParam{}
+}
+
+func (t *ListAllBitablesTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	// This call triggers OAuth check - will return TokenNeededError if not authorized
+	_, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Feishu API doesn't provide a direct "list all bitables" endpoint
+	// Return helpful guidance for the user
+	return tools.NewResultWithTips(
+		"✅ OAuth 授权成功！\n\n飞书 API 不支持直接列出所有可访问的多维表格。\n\n请提供你要访问的多维表格的 app_token（如：bascxxxxx）。",
+		"Use feishu_bitable_list with the app_token to list tables, then feishu_bitable_fields and feishu_bitable_record to work with data.",
+	), nil
+}
+
+// SendCardTool sends an interactive card to a Feishu chat.
+type SendCardTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *SendCardTool) Name() string { return "feishu_send_card" }
+
+func (t *SendCardTool) Description() string {
+	return "Send an interactive card to a Feishu chat."
+}
+
+func (t *SendCardTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "space_id",
+			Name:        "card",
 			Type:        "string",
-			Description: "Wiki space ID (numeric string from feishu_wiki_list_spaces, e.g., '6946843325487906839')",
+			Description: "Feishu card JSON content",
 			Required:    true,
 		},
 		{
-			Name:        "title",
+			Name:        "chat_id",
 			Type:        "string",
-			Description: "Node title (document title)",
-			Required:    true,
-		},
-		{
-			Name:        "parent_node_token",
-			Type:        "string",
-			Description: "Parent node token (optional, defaults to root level). Use this to create a nested page under a specific parent.",
-			Required:    false,
-		},
-		{
-			Name:        "obj_token",
-			Type:        "string",
-			Description: "Existing document token to add to wiki (optional, e.g., 'doxcnXXXXX'). If not provided, a new document will be created.",
-			Required:    false,
-		},
-		{
-			Name:        "obj_type",
-			Type:        "string",
-			Description: "Document type: docx (default), bitable, sheet, mindnote, file, slides. Only used when obj_token is provided.",
+			Description: "Target chat ID (optional, defaults to current chat)",
 			Required:    false,
 		},
 	}
 }
 
-func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+func (t *SendCardTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		SpaceID         string `json:"space_id"`
-		Title           string `json:"title"`
-		ParentNodeToken string `json:"parent_node_token"`
-		ObjToken        string `json:"obj_token"`
-		ObjType         string `json:"obj_type"`
+		Card   string `json:"card"`
+		ChatID string `json:"chat_id"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 
-	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
-	if err != nil {
-		return nil, err
+	// Validate card JSON
+	var cardObj map[string]any
+	if err := json.Unmarshal([]byte(args.Card), &cardObj); err != nil {
+		return nil, fmt.Errorf("invalid card JSON: %w", err)
 	}
 
-	// Build the node
-	nodeBuilder := wikiv2.NewNodeBuilder().
-		Title(args.Title)
-
-	// If obj_token is provided, add existing document to wiki
-	if args.ObjToken != "" {
-		objType := args.ObjType
-		if objType == "" {
-			objType = "docx" // default to docx
-		}
-		nodeBuilder.ObjToken(args.ObjToken).ObjType(objType)
+	// Send the card
+	chatID := args.ChatID
+	if chatID == "" {
+		chatID = ctx.ChatID
 	}
 
-	// Set parent node if specified
-	if args.ParentNodeToken != "" {
-		nodeBuilder.ParentNodeToken(args.ParentNodeToken)
+	if err := ctx.SendFunc(ctx.Channel, chatID, args.Card); err != nil {
+		return nil, fmt.Errorf("send card: %w", err)
 	}
 
-	// Create the node in wiki
-	req := wikiv2.NewCreateSpaceNodeReqBuilder().
-		SpaceId(args.SpaceID).
-		Node(nodeBuilder.Build()).
-		Build()
-
-	resp, err := client.Client().Wiki.V2.SpaceNode.Create(ctx.Ctx, req,
-		larkcore.WithUserAccessToken(client.AccessToken()))
-	if err != nil {
-		return nil, fmt.Errorf("create wiki node: %w", err)
-	}
-	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
-	}
-
-	node := resp.Data.Node
-	nodeToken := ""
-	objToken := ""
-	title := args.Title
-	if node != nil {
-		if node.NodeToken != nil {
-			nodeToken = *node.NodeToken
-		}
-		if node.ObjToken != nil {
-			objToken = *node.ObjToken
-		}
-		if node.Title != nil {
-			title = *node.Title
-		}
-	}
-
-	// Build result
-	result := map[string]any{
-		"node_token": nodeToken,
-		"obj_token":  objToken,
-		"title":      title,
-		"space_id":   args.SpaceID,
-		"url":        fmt.Sprintf("https://xxx.feishu.cn/wiki/%s", nodeToken),
-	}
-
-	var summary string
-	if args.ObjToken != "" {
-		summary = fmt.Sprintf("✅ Added document to Wiki: **%s**\n\n🔗 URL: https://xxx.feishu.cn/wiki/%s", title, nodeToken)
-	} else {
-		summary = fmt.Sprintf("✅ Created new Wiki page: **%s**\n\n🔗 URL: https://xxx.feishu.cn/wiki/%s\n📄 Document ID: %s", title, nodeToken, objToken)
-	}
-
-	detail, _ := json.MarshalIndent(result, "", "  ")
-	return tools.NewResultWithDetail(summary, string(detail)), nil
+	return tools.NewResult("Card sent successfully"), nil
 }

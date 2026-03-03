@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 	"xbot/llm"
 )
@@ -73,8 +72,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	// 关闭 stdin 防止交互式命令阻塞
 	cmd.Stdin = nil
 
-	// 使用进程组，超时时杀掉整棵进程树
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 使用平台特定的进程属性设置
+	setProcessAttrs(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -98,10 +97,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			// 超时：杀掉进程组
-			if cmd.Process != nil {
-				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
+			// 超时：杀掉进程
+			killProcess(cmd)
 			if result != "" {
 				return NewResult(fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)), nil
 			}

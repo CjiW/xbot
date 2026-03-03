@@ -67,14 +67,14 @@ func IsNotFoundError(err error) bool {
 	return false
 }
 
-// BuildFeishuURL constructs a Feishu URL for a given token and type.
-// The domain is a placeholder since we don't have the user's domain from the API.
+// BuildFeishuURL constructs a Feishu URL path for a given token and type.
+// Returns only the path (e.g., "/wiki/wikcnXXX") without domain to avoid placeholder confusion.
 func BuildFeishuURL(token, objType string) string {
 	if token == "" {
 		return ""
 	}
 
-	// Determine URL path based on object type
+	// Determine URL path based on token prefix
 	var path string
 	switch {
 	case len(token) >= 5 && token[:5] == "wikcn":
@@ -83,10 +83,14 @@ func BuildFeishuURL(token, objType string) string {
 		path = "/docx/" + token
 	case len(token) >= 4 && token[:4] == "basc":
 		path = "/base/" + token
-	case len(token) >= 4 && token[:4] == "basc":
-		path = "/base/" + token
-	case len(token) >= 4 && token[:4] == "sheet":
+	case len(token) >= 5 && token[:5] == "shtcn":
 		path = "/sheets/" + token
+	case len(token) >= 5 && token[:5] == "ndtbn":
+		path = "/mindnote/" + token
+	case len(token) >= 5 && token[:5] == "pptcn":
+		path = "/slides/" + token
+	case len(token) >= 5 && token[:5] == "filcn":
+		path = "/file/" + token
 	default:
 		// Default based on objType
 		switch objType {
@@ -98,10 +102,16 @@ func BuildFeishuURL(token, objType string) string {
 			path = "/base/" + token
 		case "sheet":
 			path = "/sheets/" + token
+		case "mindnote":
+			path = "/mindnote/" + token
+		case "slides":
+			path = "/slides/" + token
+		case "file":
+			path = "/file/" + token
 		default:
-			path = "/docx/" + token
+			path = "/wiki/" + token
 		}
 	}
 
-	return fmt.Sprintf("https://your-domain.feishu.cn%s", path)
+	return path
 }

@@ -10,7 +10,7 @@ variables:
 # Lint job
 lint:
   stage: lint
-  image: golang:1.24
+  image: golang:1.25
   tags:
     - linux-x86
   script:
@@ -20,7 +20,7 @@ lint:
 # Test job
 test:
   stage: test
-  image: golang:1.24
+  image: golang:1.25
   tags:
     - linux-x86
   script:

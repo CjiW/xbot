@@ -122,12 +122,17 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.WikiListSpacesTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.WikiListNodesTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.WikiGetNodeTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.WikiMoveNodeTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.WikiCreateNodeTool{MCP: feishuMCP})
 
 		// Document tools
 		agentLoop.RegisterTool(&feishu_mcp.DocxGetContentTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxListBlocksTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxCreateTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxRawContentTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxWriteTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxUpdateBlockTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxDeleteBlocksTool{MCP: feishuMCP})
 
 		// Search tools
 		agentLoop.RegisterTool(&feishu_mcp.SearchWikiTool{MCP: feishuMCP})

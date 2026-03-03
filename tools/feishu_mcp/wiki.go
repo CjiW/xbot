@@ -23,8 +23,9 @@ func (t *WikiListSpacesTool) Description() string {
 	return "List all Wiki knowledge spaces you have access to. " +
 		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
 		"STEP 2: Then call this tool to list all available Wiki spaces. " +
+		"Returns space_id (numeric string like '6946843325487906839') for use with feishu_wiki_list_nodes. " +
 		"IMPORTANT: When presenting results to users, always convert space_id to a clickable URL format: " +
-		"\"https://xxx.feishu.cn/wiki/{space_id}\" (tell users to replace xxx with their Feishu domain)."
+		"\"https://xxx.feishu.cn/wiki/space/{space_id}\" (tell users to replace xxx with their Feishu domain)."
 }
 
 func (t *WikiListSpacesTool) Parameters() []llm.ToolParam {
@@ -79,9 +80,10 @@ func (t *WikiListNodesTool) Name() string { return "feishu_wiki_list_nodes" }
 func (t *WikiListNodesTool) Description() string {
 	return "List nodes (pages) within a Wiki space. " +
 		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
-		"STEP 2: Then call this tool with space_id from feishu_wiki_list_spaces. " +
-		"IMPORTANT: Always present node_token to users as a URL: \"https://xxx.feishu.cn/wiki/{node_token}\" " +
-		"(replace xxx with user's Feishu domain)."
+		"STEP 2: Then call feishu_wiki_list_spaces to get the numeric space_id. " +
+		"STEP 3: Call this tool with the space_id returned by feishu_wiki_list_spaces. " +
+		"IMPORTANT: space_id must be a numeric string (e.g., '6946843325487906839') from feishu_wiki_list_spaces, NOT a token from URL. " +
+		"Always present node_token to users as a URL: \"https://xxx.feishu.cn/wiki/{node_token}\"."
 }
 
 func (t *WikiListNodesTool) Parameters() []llm.ToolParam {
@@ -89,7 +91,7 @@ func (t *WikiListNodesTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Wiki space ID",
+			Description: "Numeric Wiki space ID from feishu_wiki_list_spaces (e.g., '6946843325487906839'). Do NOT use URL tokens like 'wikcnXXX' or base64 strings.",
 			Required:    true,
 		},
 		{
@@ -329,4 +331,230 @@ func (t *WikiGetNodeTool) getDocxDocument(ctx *tools.ToolContext, client *Client
 
 	return tools.NewResult(fmt.Sprintf("📄 Document created: **%s**\n\n🔗 URL: https://xxx.feishu.cn/docx/%s\n\nNote: Replace 'xxx' with your Feishu domain. This document is not yet in a Wiki space.",
 		title, docID)), nil
+}
+
+// WikiMoveNodeTool moves a Wiki node to another parent node.
+type WikiMoveNodeTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *WikiMoveNodeTool) Name() string { return "feishu_wiki_move_node" }
+
+func (t *WikiMoveNodeTool) Description() string {
+	return "Move a Wiki node to another parent node within the same or different Wiki space. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with the source space_id, node_token to move, and target parent token. " +
+		"Use this to reorganize Wiki structure or move documents between spaces."
+}
+
+func (t *WikiMoveNodeTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "space_id",
+			Type:        "string",
+			Description: "Source Wiki space ID (numeric string from feishu_wiki_list_spaces)",
+			Required:    true,
+		},
+		{
+			Name:        "node_token",
+			Type:        "string",
+			Description: "Node token to move (e.g., wikcnXXXXX)",
+			Required:    true,
+		},
+		{
+			Name:        "target_parent_token",
+			Type:        "string",
+			Description: "Target parent node token where the node will be moved to",
+			Required:    true,
+		},
+		{
+			Name:        "target_space_id",
+			Type:        "string",
+			Description: "Target space ID (optional, defaults to same space if not specified)",
+			Required:    false,
+		},
+	}
+}
+
+func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		SpaceID           string `json:"space_id"`
+		NodeToken         string `json:"node_token"`
+		TargetParentToken string `json:"target_parent_token"`
+		TargetSpaceID     string `json:"target_space_id"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the move request body
+	bodyBuilder := wikiv2.NewMoveSpaceNodeReqBodyBuilder().
+		TargetParentToken(args.TargetParentToken)
+
+	// If target_space_id is specified, add it to the request
+	if args.TargetSpaceID != "" {
+		bodyBuilder.TargetSpaceId(args.TargetSpaceID)
+	}
+
+	body := bodyBuilder.Build()
+
+	req := wikiv2.NewMoveSpaceNodeReqBuilder().
+		SpaceId(args.SpaceID).
+		NodeToken(args.NodeToken).
+		Body(body).
+		Build()
+
+	resp, err := client.Client().Wiki.V2.SpaceNode.Move(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("move wiki node: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	return tools.NewResult(fmt.Sprintf("✅ Node %s moved successfully to parent %s",
+		args.NodeToken, args.TargetParentToken)), nil
+}
+
+// WikiCreateNodeTool creates a new node in a Wiki space, optionally with a new document.
+type WikiCreateNodeTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *WikiCreateNodeTool) Name() string { return "feishu_wiki_create_node" }
+
+func (t *WikiCreateNodeTool) Description() string {
+	return "Create a new node in a Wiki knowledge space. Can create a new document or add an existing document to the wiki. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Call feishu_wiki_list_spaces to get the space_id. " +
+		"STEP 3: Call this tool with space_id and title. " +
+		"Use obj_token to add an existing document (from feishu_docx_create), or leave empty to create a new document. " +
+		"CRITICAL: Always present the URL to users: \"https://xxx.feishu.cn/wiki/{node_token}\"."
+}
+
+func (t *WikiCreateNodeTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "space_id",
+			Type:        "string",
+			Description: "Wiki space ID (numeric string from feishu_wiki_list_spaces, e.g., '6946843325487906839')",
+			Required:    true,
+		},
+		{
+			Name:        "title",
+			Type:        "string",
+			Description: "Node title (document title)",
+			Required:    true,
+		},
+		{
+			Name:        "parent_node_token",
+			Type:        "string",
+			Description: "Parent node token (optional, defaults to root level). Use this to create a nested page under a specific parent.",
+			Required:    false,
+		},
+		{
+			Name:        "obj_token",
+			Type:        "string",
+			Description: "Existing document token to add to wiki (optional, e.g., 'doxcnXXXXX'). If not provided, a new document will be created.",
+			Required:    false,
+		},
+		{
+			Name:        "obj_type",
+			Type:        "string",
+			Description: "Document type: docx (default), bitable, sheet, mindnote, file, slides. Only used when obj_token is provided.",
+			Required:    false,
+		},
+	}
+}
+
+func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		SpaceID         string `json:"space_id"`
+		Title           string `json:"title"`
+		ParentNodeToken string `json:"parent_node_token"`
+		ObjToken        string `json:"obj_token"`
+		ObjType         string `json:"obj_type"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the node
+	nodeBuilder := wikiv2.NewNodeBuilder().
+		Title(args.Title)
+
+	// If obj_token is provided, add existing document to wiki
+	if args.ObjToken != "" {
+		objType := args.ObjType
+		if objType == "" {
+			objType = "docx" // default to docx
+		}
+		nodeBuilder.ObjToken(args.ObjToken).ObjType(objType)
+	}
+
+	// Set parent node if specified
+	if args.ParentNodeToken != "" {
+		nodeBuilder.ParentNodeToken(args.ParentNodeToken)
+	}
+
+	// Create the node in wiki
+	req := wikiv2.NewCreateSpaceNodeReqBuilder().
+		SpaceId(args.SpaceID).
+		Node(nodeBuilder.Build()).
+		Build()
+
+	resp, err := client.Client().Wiki.V2.SpaceNode.Create(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("create wiki node: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	node := resp.Data.Node
+	nodeToken := ""
+	objToken := ""
+	title := args.Title
+	if node != nil {
+		if node.NodeToken != nil {
+			nodeToken = *node.NodeToken
+		}
+		if node.ObjToken != nil {
+			objToken = *node.ObjToken
+		}
+		if node.Title != nil {
+			title = *node.Title
+		}
+	}
+
+	// Build result
+	result := map[string]any{
+		"node_token": nodeToken,
+		"obj_token":  objToken,
+		"title":      title,
+		"space_id":   args.SpaceID,
+		"url":        fmt.Sprintf("https://xxx.feishu.cn/wiki/%s", nodeToken),
+	}
+
+	var summary string
+	if args.ObjToken != "" {
+		summary = fmt.Sprintf("✅ Added document to Wiki: **%s**\n\n🔗 URL: https://xxx.feishu.cn/wiki/%s", title, nodeToken)
+	} else {
+		summary = fmt.Sprintf("✅ Created new Wiki page: **%s**\n\n🔗 URL: https://xxx.feishu.cn/wiki/%s\n📄 Document ID: %s", title, nodeToken, objToken)
+	}
+
+	detail, _ := json.MarshalIndent(result, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
 }

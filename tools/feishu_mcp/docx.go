@@ -619,6 +619,267 @@ func formatImageBlock(block *docxv1.Block) string {
 	return fmt.Sprintf("![Image](%s)\n\n", token)
 }
 
+// DocxWriteTool writes Markdown content to a document using Feishu's native Markdown API.
+type DocxWriteTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxWriteTool) Name() string { return "feishu_docx_write" }
+
+func (t *DocxWriteTool) Description() string {
+	return "Write Markdown content to a Feishu document. " +
+		"Uses Feishu's native Markdown conversion API. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with document_id and markdown content. " +
+		"Supports: headings (#, ##, ###), bullet lists (-), numbered lists (1.), code blocks (```), quotes (>), tables, images, and more."
+}
+
+func (t *DocxWriteTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+		{
+			Name:        "content",
+			Type:        "string",
+			Description: "Markdown content to write to the document",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxWriteTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID string `json:"document_id"`
+		Content    string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	if args.Content == "" {
+		return nil, fmt.Errorf("content is required")
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 1: Convert Markdown to blocks using Feishu's native API
+	convertBody := docxv1.NewConvertDocumentReqBodyBuilder().
+		ContentType("markdown").
+		Content(args.Content).
+		Build()
+
+	convertReq := docxv1.NewConvertDocumentReqBuilder().
+		Body(convertBody).
+		Build()
+
+	convertResp, err := client.Client().Docx.V1.Document.Convert(ctx.Ctx, convertReq,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("convert markdown to blocks: %w", err)
+	}
+	if !convertResp.Success() {
+		return nil, NewAPIError(convertResp.Code, convertResp.Msg)
+	}
+
+	// Check if we got blocks back
+	if len(convertResp.Data.Blocks) == 0 {
+		return tools.NewResult("No content to write"), nil
+	}
+
+	// Step 2: Clean blocks for Descendant API
+	// IMPORTANT: Keep block_id and children, remove parent_id and read-only fields
+	for _, block := range convertResp.Data.Blocks {
+		cleanBlockForDescendant(block)
+	}
+
+	// Step 3: Find root block IDs (blocks with empty parent_id)
+	rootBlockIDs := findRootBlockIDs(convertResp.Data.Blocks)
+
+	// Step 4: Insert blocks using Descendant API
+	// The Descendant API supports nested structures like tables
+	descendantBody := docxv1.NewCreateDocumentBlockDescendantReqBodyBuilder().
+		Descendants(convertResp.Data.Blocks).
+		ChildrenId(rootBlockIDs).
+		Index(0). // Insert at beginning
+		Build()
+
+	descendantReq := docxv1.NewCreateDocumentBlockDescendantReqBuilder().
+		DocumentId(args.DocumentID).
+		BlockId(args.DocumentID). // For root level, block_id equals document_id
+		Body(descendantBody).
+		Build()
+
+	descendantResp, err := client.Client().Docx.V1.DocumentBlockDescendant.Create(ctx.Ctx, descendantReq,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("insert blocks to document: %w", err)
+	}
+	if !descendantResp.Success() {
+		return nil, NewAPIError(descendantResp.Code, descendantResp.Msg)
+	}
+
+	summary := fmt.Sprintf("Written %d block(s) to document", len(convertResp.Data.Blocks))
+	return tools.NewResult(summary), nil
+}
+
+// cleanBlockForDescendant cleans a block for Descendant API
+// Keeps: block_id, children (needed for hierarchy)
+// Removes: parent_id, merge_info, mention_doc.title
+func cleanBlockForDescendant(block *docxv1.Block) {
+	if block == nil {
+		return
+	}
+
+	// KEEP block_id - required for Descendant API hierarchy
+	// KEEP children - required for parent-child relationships
+	// KEEP block_type - required for API to identify block type
+
+	// Remove parent_id - not needed for Descendant API
+	block.ParentId = nil
+
+	// Clean table read-only fields
+	if block.Table != nil {
+		// Remove cells - this is a read-only field, children array is used instead
+		block.Table.Cells = nil
+
+		if block.Table.Property != nil {
+			// Remove merge_info (read-only)
+			block.Table.Property.MergeInfo = nil
+			// Remove column_width - may cause schema mismatch
+			block.Table.Property.ColumnWidth = nil
+		}
+	}
+
+	// Clean mention_doc title fields (read-only)
+	cleanTextMentionDoc(block.Page)
+	cleanTextMentionDoc(block.Text)
+	cleanTextMentionDoc(block.Heading1)
+	cleanTextMentionDoc(block.Heading2)
+	cleanTextMentionDoc(block.Heading3)
+	cleanTextMentionDoc(block.Heading4)
+	cleanTextMentionDoc(block.Heading5)
+	cleanTextMentionDoc(block.Heading6)
+	cleanTextMentionDoc(block.Heading7)
+	cleanTextMentionDoc(block.Heading8)
+	cleanTextMentionDoc(block.Heading9)
+	cleanTextMentionDoc(block.Bullet)
+	cleanTextMentionDoc(block.Ordered)
+	cleanTextMentionDoc(block.Code)
+	cleanTextMentionDoc(block.Quote)
+	cleanTextMentionDoc(block.Equation)
+	cleanTextMentionDoc(block.Todo)
+}
+
+// findRootBlockIDs finds the IDs of root blocks (blocks that are not children of any other block)
+func findRootBlockIDs(blocks []*docxv1.Block) []string {
+	// Build a set of all block IDs that are children of other blocks
+	childIDs := make(map[string]bool)
+	for _, block := range blocks {
+		for _, childID := range block.Children {
+			childIDs[childID] = true
+		}
+	}
+
+	var rootIDs []string
+	for _, block := range blocks {
+		if block.BlockId != nil {
+			// A block is a root if:
+			// 1. It's not a child of any other block
+			// 2. It's not a structural block type (table_cell, grid_column)
+			if !childIDs[*block.BlockId] && block.BlockType != nil {
+				blockType := *block.BlockType
+				// Table cells (32) and grid columns (24) are structural blocks, not root blocks
+				if blockType != 32 && blockType != 24 {
+					rootIDs = append(rootIDs, *block.BlockId)
+				}
+			}
+		}
+	}
+	return rootIDs
+}
+
+// cleanBlocksForInsertion removes read-only fields from blocks before insertion.
+// The convert API returns some fields that are read-only and cannot be passed to the create API.
+func cleanBlocksForInsertion(blocks []*docxv1.Block) []*docxv1.Block {
+	result := make([]*docxv1.Block, 0, len(blocks))
+	for _, block := range blocks {
+		cleanBlock(block)
+		result = append(result, block)
+	}
+	return result
+}
+
+// cleanBlock recursively cleans read-only fields from a block.
+// According to Feishu documentation, only merge_info in Table blocks is read-only.
+// Other fields like block_type, parent_id, children are needed for the Descendant Create API.
+func cleanBlock(block *docxv1.Block) {
+	if block == nil {
+		return
+	}
+
+	// Clean block_id - API auto-generates new IDs during creation
+	// The temporary IDs from Convert API are for parent-child reference only
+	block.BlockId = nil
+
+	// KEEP block_type - needed for API to identify block type
+	// KEEP parent_id - needed for nested structure
+	// KEEP children - needed for parent-child relationships (children are block IDs, not nested blocks)
+
+	// Clean table read-only fields
+	if block.Table != nil {
+		// Remove cells - this is a read-only field, children array is used instead
+		block.Table.Cells = nil
+
+		if block.Table.Property != nil {
+			// Remove merge_info (read-only)
+			block.Table.Property.MergeInfo = nil
+			// Remove column_width - may cause schema mismatch
+			block.Table.Property.ColumnWidth = nil
+		}
+	}
+
+	// Clean mention_doc title fields in text elements (read-only)
+	cleanTextMentionDoc(block.Page)
+	cleanTextMentionDoc(block.Text)
+	cleanTextMentionDoc(block.Heading1)
+	cleanTextMentionDoc(block.Heading2)
+	cleanTextMentionDoc(block.Heading3)
+	cleanTextMentionDoc(block.Heading4)
+	cleanTextMentionDoc(block.Heading5)
+	cleanTextMentionDoc(block.Heading6)
+	cleanTextMentionDoc(block.Heading7)
+	cleanTextMentionDoc(block.Heading8)
+	cleanTextMentionDoc(block.Heading9)
+	cleanTextMentionDoc(block.Bullet)
+	cleanTextMentionDoc(block.Ordered)
+	cleanTextMentionDoc(block.Code)
+	cleanTextMentionDoc(block.Quote)
+	cleanTextMentionDoc(block.Equation)
+	cleanTextMentionDoc(block.Todo)
+}
+
+// cleanTextMentionDoc cleans read-only fields from text elements.
+// Only removes fields that are documented as read-only.
+func cleanTextMentionDoc(text *docxv1.Text) {
+	if text == nil || text.Elements == nil {
+		return
+	}
+
+	for _, elem := range text.Elements {
+		// Clean mention_doc title (read-only according to documentation)
+		if elem.MentionDoc != nil {
+			elem.MentionDoc.Title = nil
+		}
+	}
+}
+
 // extractTextFromBlock extracts plain text from a block.
 func extractTextFromBlock(block *docxv1.Block) string {
 	var textBlocks []*docxv1.Text
@@ -673,4 +934,282 @@ func extractTextFromBlock(block *docxv1.Block) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// DocxUpdateBlockTool updates a specific block in a document.
+type DocxUpdateBlockTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxUpdateBlockTool) Name() string { return "feishu_docx_update_block" }
+
+func (t *DocxUpdateBlockTool) Description() string {
+	return "Update a specific block in a Feishu document. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Use feishu_docx_list_blocks to find the block_id you want to update. " +
+		"STEP 3: Call this tool with the block_id and update type. " +
+		"Update types: 'text_elements' (replace text elements), 'text_style' (update style only), 'text_full' (replace all text content)."
+}
+
+func (t *DocxUpdateBlockTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+		{
+			Name:        "block_id",
+			Type:        "string",
+			Description: "Block ID to update (get from feishu_docx_list_blocks)",
+			Required:    true,
+		},
+		{
+			Name:        "update_type",
+			Type:        "string",
+			Description: "Update type: 'text_elements' (provide elements array), 'text_style' (provide style object), 'text_full' (provide markdown_content)",
+			Required:    true,
+		},
+		{
+			Name:        "elements",
+			Type:        "array",
+			Description: "Text elements array (for text_elements update type). Each element should have 'content' field.",
+			Required:    false,
+		},
+		{
+			Name:        "style",
+			Type:        "object",
+			Description: "Text style object (for text_style update type). Can include 'bold', 'italic', 'underline', etc.",
+			Required:    false,
+		},
+		{
+			Name:        "markdown_content",
+			Type:        "string",
+			Description: "Markdown content (for text_full update type). Will replace all text content in the block.",
+			Required:    false,
+		},
+	}
+}
+
+func (t *DocxUpdateBlockTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID      string                   `json:"document_id"`
+		BlockID         string                   `json:"block_id"`
+		UpdateType      string                   `json:"update_type"`
+		Elements        []map[string]interface{} `json:"elements"`
+		Style           map[string]interface{}   `json:"style"`
+		MarkdownContent string                   `json:"markdown_content"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build update request based on update_type
+	var updateRequest *docxv1.UpdateBlockRequest
+
+	switch args.UpdateType {
+	case "text_elements":
+		// Convert elements to TextElement array
+		elements := make([]*docxv1.TextElement, 0, len(args.Elements))
+		for _, elem := range args.Elements {
+			content := ""
+			if c, ok := elem["content"].(string); ok {
+				content = c
+			}
+			elements = append(elements, &docxv1.TextElement{
+				TextRun: &docxv1.TextRun{
+					Content: &content,
+				},
+			})
+		}
+		updateRequest = &docxv1.UpdateBlockRequest{
+			UpdateTextElements: &docxv1.UpdateTextElementsRequest{
+				Elements: elements,
+			},
+		}
+
+	case "text_style":
+		// Build text style from input (block-level styles like alignment)
+		style := &docxv1.TextStyle{}
+		fields := []int{}
+		if align, ok := args.Style["align"].(float64); ok {
+			style.Align = ptrToInt(int(align))
+			fields = append(fields, 1) // align field index
+		}
+		if done, ok := args.Style["done"].(bool); ok {
+			style.Done = &done
+			fields = append(fields, 2) // done field index
+		}
+		updateRequest = &docxv1.UpdateBlockRequest{
+			UpdateTextStyle: &docxv1.UpdateTextStyleRequest{
+				Style:  style,
+				Fields: fields,
+			},
+		}
+
+	case "text_full":
+		// Convert markdown to block and use full text update
+		if args.MarkdownContent == "" {
+			return nil, fmt.Errorf("markdown_content is required for text_full update type")
+		}
+		// Convert markdown to blocks
+		convertBody := docxv1.NewConvertDocumentReqBodyBuilder().
+			ContentType("markdown").
+			Content(args.MarkdownContent).
+			Build()
+
+		convertReq := docxv1.NewConvertDocumentReqBuilder().
+			Body(convertBody).
+			Build()
+
+		convertResp, err := client.Client().Docx.V1.Document.Convert(ctx.Ctx, convertReq,
+			larkcore.WithUserAccessToken(client.AccessToken()))
+		if err != nil {
+			return nil, fmt.Errorf("convert markdown to blocks: %w", err)
+		}
+		if !convertResp.Success() {
+			return nil, NewAPIError(convertResp.Code, convertResp.Msg)
+		}
+
+		if len(convertResp.Data.Blocks) == 0 {
+			return tools.NewResult("No content to update"), nil
+		}
+
+		// Use the first block's text content
+		firstBlock := convertResp.Data.Blocks[0]
+		textContent := extractTextFromBlock(firstBlock)
+		elements := []*docxv1.TextElement{
+			{
+				TextRun: &docxv1.TextRun{
+					Content: &textContent,
+				},
+			},
+		}
+		updateRequest = &docxv1.UpdateBlockRequest{
+			UpdateTextElements: &docxv1.UpdateTextElementsRequest{
+				Elements: elements,
+			},
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid update_type: %s (must be 'text_elements', 'text_style', or 'text_full')", args.UpdateType)
+	}
+
+	// Execute the update
+	req := docxv1.NewPatchDocumentBlockReqBuilder().
+		DocumentId(args.DocumentID).
+		BlockId(args.BlockID).
+		UpdateBlockRequest(updateRequest).
+		Build()
+
+	resp, err := client.Client().Docx.V1.DocumentBlock.Patch(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("update block: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	return tools.NewResult(fmt.Sprintf("✅ Block %s updated successfully", args.BlockID)), nil
+}
+
+// ptrToInt returns a pointer to an int
+func ptrToInt(i int) *int { return &i }
+
+// DocxDeleteBlocksTool deletes blocks from a document by index range.
+type DocxDeleteBlocksTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxDeleteBlocksTool) Name() string { return "feishu_docx_delete_blocks" }
+
+func (t *DocxDeleteBlocksTool) Description() string {
+	return "Delete multiple blocks from a document by specifying an index range. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Use feishu_docx_list_blocks to identify the blocks and their positions. " +
+		"STEP 3: Call this tool with parent_block_id (use document_id for root level) and index range. " +
+		"Indices are 0-based, end_index is exclusive (like Python slicing)."
+}
+
+func (t *DocxDeleteBlocksTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+		{
+			Name:        "parent_block_id",
+			Type:        "string",
+			Description: "Parent block ID (use document_id for root level blocks)",
+			Required:    true,
+		},
+		{
+			Name:        "start_index",
+			Type:        "integer",
+			Description: "Start index of blocks to delete (0-based)",
+			Required:    true,
+		},
+		{
+			Name:        "end_index",
+			Type:        "integer",
+			Description: "End index of blocks to delete (exclusive, like Python slicing)",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID    string `json:"document_id"`
+		ParentBlockID string `json:"parent_block_id"`
+		StartIndex    int    `json:"start_index"`
+		EndIndex      int    `json:"end_index"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	if args.StartIndex < 0 || args.EndIndex <= args.StartIndex {
+		return nil, fmt.Errorf("invalid index range: start_index=%d, end_index=%d (must have start_index >= 0 and end_index > start_index)",
+			args.StartIndex, args.EndIndex)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the delete request
+	body := docxv1.NewBatchDeleteDocumentBlockChildrenReqBodyBuilder().
+		StartIndex(args.StartIndex).
+		EndIndex(args.EndIndex).
+		Build()
+
+	req := docxv1.NewBatchDeleteDocumentBlockChildrenReqBuilder().
+		DocumentId(args.DocumentID).
+		BlockId(args.ParentBlockID).
+		Body(body).
+		Build()
+
+	resp, err := client.Client().Docx.V1.DocumentBlockChildren.BatchDelete(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("delete blocks: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	count := args.EndIndex - args.StartIndex
+	return tools.NewResult(fmt.Sprintf("✅ Deleted %d block(s) from index %d to %d",
+		count, args.StartIndex, args.EndIndex)), nil
 }

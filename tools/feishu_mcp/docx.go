@@ -1,0 +1,676 @@
+package feishu_mcp
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"xbot/llm"
+	"xbot/tools"
+
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	docxv1 "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
+)
+
+// DocxGetContentTool gets document content in Markdown format.
+type DocxGetContentTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxGetContentTool) Name() string { return "feishu_docx_get_content" }
+
+func (t *DocxGetContentTool) Description() string {
+	return "Get document content and convert it to Markdown format. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with document_id (doxcnXXXXX). " +
+		"IMPORTANT: When referencing the document to users, always provide the URL format: " +
+		"\"https://xxx.feishu.cn/docx/{document_id}\" (replace xxx with user's Feishu domain)."
+}
+
+func (t *DocxGetContentTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get document blocks
+	req := docxv1.NewListDocumentBlockReqBuilder().
+		DocumentId(args.DocumentID).
+		Build()
+
+	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("list document blocks: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	if len(resp.Data.Items) == 0 {
+		return tools.NewResult("Document is empty"), nil
+	}
+
+	// Convert blocks to Markdown
+	markdown := formatBlocksToMarkdown(resp.Data.Items)
+
+	// Truncate if too long (limit to ~10k chars for LLM context)
+	const maxLen = 10000
+	if len(markdown) > maxLen {
+		markdown = markdown[:maxLen] + "\n\n... (content truncated)"
+	}
+
+	return tools.NewResult(fmt.Sprintf("Document content:\n\n%s", markdown)), nil
+}
+
+// DocxListBlocksTool lists document block structure.
+type DocxListBlocksTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxListBlocksTool) Name() string { return "feishu_docx_list_blocks" }
+
+func (t *DocxListBlocksTool) Description() string {
+	return "List the block structure of a document. Shows the hierarchical structure. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with document_id."
+}
+
+func (t *DocxListBlocksTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	req := docxv1.NewListDocumentBlockReqBuilder().
+		DocumentId(args.DocumentID).
+		Build()
+
+	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("list document blocks: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	if len(resp.Data.Items) == 0 {
+		return tools.NewResult("Document is empty"), nil
+	}
+
+	// Build block summary
+	var blocks []map[string]any
+	for _, block := range resp.Data.Items {
+		blockType := 0
+		if block.BlockType != nil {
+			blockType = *block.BlockType
+		}
+		parentId := ""
+		if block.ParentId != nil {
+			parentId = *block.ParentId
+		}
+		blockId := ""
+		if block.BlockId != nil {
+			blockId = *block.BlockId
+		}
+		blocks = append(blocks, map[string]any{
+			"block_id":   blockId,
+			"block_type": blockType,
+			"parent_id":  parentId,
+		})
+	}
+
+	summary := fmt.Sprintf("Document has %d block(s)", len(blocks))
+	detail, _ := json.MarshalIndent(blocks, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
+}
+
+// DocxCreateTool creates a new document.
+type DocxCreateTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxCreateTool) Name() string { return "feishu_docx_create" }
+
+func (t *DocxCreateTool) Description() string {
+	return "Create a new document in the user's cloud space. " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with title and optional folder_token. " +
+		"CRITICAL: After creation, always present the document URL to users: " +
+		"\"https://xxx.feishu.cn/docx/{document_id}\" (replace xxx with their Feishu domain)."
+}
+
+func (t *DocxCreateTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "title",
+			Type:        "string",
+			Description: "Document title",
+			Required:    true,
+		},
+		{
+			Name:        "folder_token",
+			Type:        "string",
+			Description: "Parent folder token (optional, defaults to root)",
+			Required:    false,
+		},
+	}
+}
+
+func (t *DocxCreateTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		Title       string `json:"title"`
+		FolderToken string `json:"folder_token"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build request body
+	bodyBuilder := docxv1.NewCreateDocumentReqBodyBuilder().
+		Title(args.Title)
+
+	if args.FolderToken != "" {
+		bodyBuilder.FolderToken(args.FolderToken)
+	}
+
+	// Create document
+	req := docxv1.NewCreateDocumentReqBuilder().
+		Body(bodyBuilder.Build()).
+		Build()
+
+	resp, err := client.Client().Docx.V1.Document.Create(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("create document: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	documentID := ""
+	if resp.Data.Document != nil && resp.Data.Document.DocumentId != nil {
+		documentID = *resp.Data.Document.DocumentId
+	}
+
+	summary := fmt.Sprintf("Document created with ID: %s", documentID)
+	detail, _ := json.MarshalIndent(resp.Data.Document, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
+}
+
+// DocxRawContentTool gets document plain text content.
+type DocxRawContentTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxRawContentTool) Name() string { return "feishu_docx_raw_content" }
+
+func (t *DocxRawContentTool) Description() string {
+	return "Get document plain text content (without formatting). " +
+		"STEP 1: First call oauth_authorize with provider='feishu' if not already authorized. " +
+		"STEP 2: Then call this tool with document_id."
+}
+
+func (t *DocxRawContentTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxRawContentTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID string `json:"document_id"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get document blocks and extract text
+	req := docxv1.NewListDocumentBlockReqBuilder().
+		DocumentId(args.DocumentID).
+		Build()
+
+	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+		larkcore.WithUserAccessToken(client.AccessToken()))
+	if err != nil {
+		return nil, fmt.Errorf("get document content: %w", err)
+	}
+	if !resp.Success() {
+		return nil, NewAPIError(resp.Code, resp.Msg)
+	}
+
+	// Extract plain text from blocks
+	var content strings.Builder
+	for _, block := range resp.Data.Items {
+		content.WriteString(extractTextFromBlock(block))
+		content.WriteString("\n")
+	}
+
+	// Truncate if too long
+	const maxLen = 10000
+	result := content.String()
+	if len(result) > maxLen {
+		result = result[:maxLen] + "\n\n... (content truncated)"
+	}
+
+	return tools.NewResult(fmt.Sprintf("Document content:\n\n%s", result)), nil
+}
+
+// formatBlocksToMarkdown converts document blocks to Markdown format.
+func formatBlocksToMarkdown(blocks []*docxv1.Block) string {
+	var builder strings.Builder
+
+	for _, block := range blocks {
+		if block.BlockType == nil {
+			continue
+		}
+
+		switch *block.BlockType {
+		case 1: // Page
+			builder.WriteString(formatPageBlock(block))
+		case 2: // Text
+			builder.WriteString(formatTextBlock(block))
+		case 3: // Heading 1
+			builder.WriteString(fmt.Sprintf("# %s\n\n", extractTextFromBlock(block)))
+		case 4: // Heading 2
+			builder.WriteString(fmt.Sprintf("## %s\n\n", extractTextFromBlock(block)))
+		case 5: // Heading 3
+			builder.WriteString(fmt.Sprintf("### %s\n\n", extractTextFromBlock(block)))
+		case 6: // Heading 4
+			builder.WriteString(fmt.Sprintf("#### %s\n\n", extractTextFromBlock(block)))
+		case 7: // Heading 5
+			builder.WriteString(fmt.Sprintf("##### %s\n\n", extractTextFromBlock(block)))
+		case 8: // Heading 6
+			builder.WriteString(fmt.Sprintf("###### %s\n\n", extractTextFromBlock(block)))
+		case 9: // Heading 7
+			builder.WriteString(fmt.Sprintf("####### %s\n\n", extractTextFromBlock(block)))
+		case 10: // Heading 8
+			builder.WriteString(fmt.Sprintf("######## %s\n\n", extractTextFromBlock(block)))
+		case 11: // Heading 9
+			builder.WriteString(fmt.Sprintf("######### %s\n\n", extractTextFromBlock(block)))
+		case 12: // Bullet
+			builder.WriteString(fmt.Sprintf("- %s\n", extractTextFromBlock(block)))
+		case 13: // Ordered
+			builder.WriteString(fmt.Sprintf("1. %s\n", extractTextFromBlock(block)))
+		case 14: // Code
+			builder.WriteString(formatCodeBlock(block))
+		case 15: // Quote
+			builder.WriteString(fmt.Sprintf("> %s\n\n", extractTextFromBlock(block)))
+		case 16: // Equation
+			builder.WriteString(fmt.Sprintf("$$%s$$\n\n", extractTextFromBlock(block)))
+		case 17: // Todo
+			builder.WriteString(fmt.Sprintf("- [ ] %s\n", extractTextFromBlock(block)))
+		case 18: // Divider
+			builder.WriteString("---\n\n")
+		case 19: // Image
+			builder.WriteString(formatImageBlock(block))
+		case 20: // Table
+			builder.WriteString("[Table]\n\n")
+		case 21: // Callout
+			builder.WriteString(fmt.Sprintf("> **Note**: %s\n\n", extractTextFromBlock(block)))
+		case 22: // View
+			builder.WriteString("[View]\n\n")
+		case 23: // Bitable
+			builder.WriteString("[Bitable]\n\n")
+		case 24: // ChatCard
+			builder.WriteString("[Chat Card]\n\n")
+		case 25: // Video
+			builder.WriteString("[Video]\n\n")
+		case 26: // File
+			builder.WriteString("[File]\n\n")
+		case 27: // Audio
+			builder.WriteString("[Audio]\n\n")
+		case 28: // Countdown
+			builder.WriteString("[Countdown]\n\n")
+		case 29: // Mindnote
+			builder.WriteString("[Mindmap]\n\n")
+		case 30: // Diagram
+			builder.WriteString("[Diagram]\n\n")
+		case 31: // Chart
+			builder.WriteString("[Chart]\n\n")
+		case 32: // Group
+			builder.WriteString("[Group]\n\n")
+		case 33: // TodoList
+			builder.WriteString("[Todo List]\n\n")
+		case 34: // Sprint
+			builder.WriteString("[Sprint]\n\n")
+		case 35: // Meeting
+			builder.WriteString("[Meeting]\n\n")
+		case 36: // Poll
+			builder.WriteString("[Poll]\n\n")
+		case 37: // Wiki
+			builder.WriteString("[Wiki]\n\n")
+		case 38: // CodeBlock
+			builder.WriteString(formatCodeBlock(block))
+		case 39: // Shortcut
+			builder.WriteString("[Shortcut]\n\n")
+		case 40: // SyncedSource
+			builder.WriteString("[Synced Source]\n\n")
+		case 41: // BiTableSyncedSource
+			builder.WriteString("[Bitable Synced Source]\n\n")
+		case 42: // Interface
+			builder.WriteString("[Interface]\n\n")
+		case 43: // Whiteboard
+			builder.WriteString("[Whiteboard]\n\n")
+		case 44: // Heading
+			builder.WriteString(fmt.Sprintf("## %s\n\n", extractTextFromBlock(block)))
+		case 45: // List
+			builder.WriteString(fmt.Sprintf("- %s\n", extractTextFromBlock(block)))
+		case 46: // QuoteContainer
+			builder.WriteString(fmt.Sprintf("> %s\n\n", extractTextFromBlock(block)))
+		case 47: // Org
+			builder.WriteString("[Org Chart]\n\n")
+		case 48: // Collection
+			builder.WriteString("[Collection]\n\n")
+		case 49: // Sheet
+			builder.WriteString("[Sheet]\n\n")
+		case 50: // Docx
+			builder.WriteString("[Document]\n\n")
+		case 51: // Bitable
+			builder.WriteString("[Bitable]\n\n")
+		case 52: // File
+			builder.WriteString("[File]\n\n")
+		case 53: // Folder
+			builder.WriteString("[Folder]\n\n")
+		case 54: // Mindnote
+			builder.WriteString("[Mindmap]\n\n")
+		case 55: // Docx
+			builder.WriteString("[Document]\n\n")
+		case 56: // Bitable
+			builder.WriteString("[Bitable]\n\n")
+		case 57: // File
+			builder.WriteString("[File]\n\n")
+		case 58: // Folder
+			builder.WriteString("[Folder]\n\n")
+		case 59: // Link
+			builder.WriteString("[Link]\n\n")
+		case 60: // User
+			builder.WriteString("[User]\n\n")
+		case 61: // Group
+			builder.WriteString("[Group Chat]\n\n")
+		case 62: // Room
+			builder.WriteString("[Room]\n\n")
+		case 63: // Calendar
+			builder.WriteString("[Calendar]\n\n")
+		case 64: // Event
+			builder.WriteString("[Event]\n\n")
+		case 65: // Task
+			builder.WriteString("[Task]\n\n")
+		case 66: // Email
+			builder.WriteString("[Email]\n\n")
+		case 67: // Thread
+			builder.WriteString("[Thread]\n\n")
+		case 68: // Draft
+			builder.WriteString("[Draft]\n\n")
+		case 69: // Template
+			builder.WriteString("[Template]\n\n")
+		case 70: // Story
+			builder.WriteString("[Story]\n\n")
+		case 71: // Wiki
+			builder.WriteString("[Wiki]\n\n")
+		case 72: // Drive
+			builder.WriteString("[Drive]\n\n")
+		case 73: // Wallet
+			builder.WriteString("[Wallet]\n\n")
+		case 74: // Wallet
+			builder.WriteString("[Wallet]\n\n")
+		case 75: // Invoice
+			builder.WriteString("[Invoice]\n\n")
+		case 76: // Receipt
+			builder.WriteString("[Receipt]\n\n")
+		case 77: // Contract
+			builder.WriteString("[Contract]\n\n")
+		case 78: // Report
+			builder.WriteString("[Report]\n\n")
+		case 79: // Certificate
+			builder.WriteString("[Certificate]\n\n")
+		case 80: // Badge
+			builder.WriteString("[Badge]\n\n")
+		case 81: // Trophy
+			builder.WriteString("[Trophy]\n\n")
+		case 82: // Medal
+			builder.WriteString("[Medal]\n\n")
+		case 83: // Award
+			builder.WriteString("[Award]\n\n")
+		case 84: // Other
+			builder.WriteString("[Other]\n\n")
+		default:
+			// Try to extract text for unknown block types
+			if text := extractTextFromBlock(block); text != "" {
+				builder.WriteString(fmt.Sprintf("%s\n\n", text))
+			}
+		}
+	}
+
+	return builder.String()
+}
+
+// formatPageBlock formats a page block.
+func formatPageBlock(block *docxv1.Block) string {
+	if block.Page == nil {
+		return ""
+	}
+	var text strings.Builder
+	if block.Page.Elements != nil {
+		for _, element := range block.Page.Elements {
+			if element.TextRun != nil && element.TextRun.Content != nil {
+				text.WriteString(*element.TextRun.Content)
+			}
+		}
+	}
+	if text.Len() > 0 {
+		return fmt.Sprintf("# %s\n\n", text.String())
+	}
+	return "---\n\n"
+}
+
+// formatTextBlock formats a text block with inline styles.
+func formatTextBlock(block *docxv1.Block) string {
+	if block.Text == nil {
+		return ""
+	}
+	var builder strings.Builder
+	if block.Text.Elements != nil {
+		for _, element := range block.Text.Elements {
+			if element.TextRun != nil && element.TextRun.Content != nil {
+				text := *element.TextRun.Content
+				// Add markdown styling based on text style
+				if element.TextRun.TextElementStyle != nil {
+					if element.TextRun.TextElementStyle.Bold != nil && *element.TextRun.TextElementStyle.Bold {
+						text = fmt.Sprintf("**%s**", text)
+					}
+					if element.TextRun.TextElementStyle.Italic != nil && *element.TextRun.TextElementStyle.Italic {
+						text = fmt.Sprintf("*%s*", text)
+					}
+					if element.TextRun.TextElementStyle.Strikethrough != nil && *element.TextRun.TextElementStyle.Strikethrough {
+						text = fmt.Sprintf("~~%s~~", text)
+					}
+					if element.TextRun.TextElementStyle.InlineCode != nil && *element.TextRun.TextElementStyle.InlineCode {
+						text = fmt.Sprintf("`%s`", text)
+					}
+					if element.TextRun.TextElementStyle.Link != nil && element.TextRun.TextElementStyle.Link.Url != nil {
+						text = fmt.Sprintf("[%s](%s)", text, *element.TextRun.TextElementStyle.Link.Url)
+					}
+				}
+				builder.WriteString(text)
+			} else if element.MentionUser != nil && element.MentionUser.UserId != nil {
+				builder.WriteString(fmt.Sprintf("@%s", *element.MentionUser.UserId))
+			} else if element.MentionDoc != nil && element.MentionDoc.Title != nil {
+				builder.WriteString(fmt.Sprintf("[%s]", *element.MentionDoc.Title))
+			}
+		}
+	}
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+// formatCodeBlock formats a code block.
+func formatCodeBlock(block *docxv1.Block) string {
+	lang := ""
+	var code strings.Builder
+
+	if block.Code != nil {
+		if block.Code.Style != nil && block.Code.Style.Language != nil {
+			// Language is an int, convert to common language names
+			langMap := map[int]string{
+				0:  "text",
+				1:  "javascript",
+				2:  "typescript",
+				3:  "java",
+				4:  "c",
+				5:  "cpp",
+				6:  "csharp",
+				7:  "python",
+				8:  "go",
+				9:  "rust",
+				10: "php",
+				11: "ruby",
+				12: "swift",
+				13: "kotlin",
+				14: "scala",
+				15: "dart",
+				16: "shell",
+				17: "bash",
+				18: "sql",
+				19: "html",
+				20: "css",
+				21: "xml",
+				22: "json",
+				23: "yaml",
+				24: "markdown",
+			}
+			if l, ok := langMap[*block.Code.Style.Language]; ok {
+				lang = l
+			}
+		}
+		if block.Code.Elements != nil {
+			for _, element := range block.Code.Elements {
+				if element.TextRun != nil && element.TextRun.Content != nil {
+					code.WriteString(*element.TextRun.Content)
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("```%s\n%s\n```\n\n", lang, code.String())
+}
+
+// formatImageBlock formats an image block.
+func formatImageBlock(block *docxv1.Block) string {
+	if block.Image == nil {
+		return ""
+	}
+	token := ""
+	if block.Image.Token != nil {
+		token = *block.Image.Token
+	}
+	return fmt.Sprintf("![Image](%s)\n\n", token)
+}
+
+// extractTextFromBlock extracts plain text from a block.
+func extractTextFromBlock(block *docxv1.Block) string {
+	var textBlocks []*docxv1.Text
+
+	// Try different text fields
+	switch {
+	case block.Text != nil:
+		textBlocks = []*docxv1.Text{block.Text}
+	case block.Heading1 != nil:
+		textBlocks = []*docxv1.Text{block.Heading1}
+	case block.Heading2 != nil:
+		textBlocks = []*docxv1.Text{block.Heading2}
+	case block.Heading3 != nil:
+		textBlocks = []*docxv1.Text{block.Heading3}
+	case block.Heading4 != nil:
+		textBlocks = []*docxv1.Text{block.Heading4}
+	case block.Heading5 != nil:
+		textBlocks = []*docxv1.Text{block.Heading5}
+	case block.Heading6 != nil:
+		textBlocks = []*docxv1.Text{block.Heading6}
+	case block.Heading7 != nil:
+		textBlocks = []*docxv1.Text{block.Heading7}
+	case block.Heading8 != nil:
+		textBlocks = []*docxv1.Text{block.Heading8}
+	case block.Heading9 != nil:
+		textBlocks = []*docxv1.Text{block.Heading9}
+	case block.Bullet != nil:
+		textBlocks = []*docxv1.Text{block.Bullet}
+	case block.Ordered != nil:
+		textBlocks = []*docxv1.Text{block.Ordered}
+	case block.Code != nil:
+		textBlocks = []*docxv1.Text{block.Code}
+	case block.Quote != nil:
+		textBlocks = []*docxv1.Text{block.Quote}
+	case block.Equation != nil:
+		textBlocks = []*docxv1.Text{block.Equation}
+	case block.Todo != nil:
+		textBlocks = []*docxv1.Text{block.Todo}
+	case block.Page != nil:
+		textBlocks = []*docxv1.Text{block.Page}
+	}
+
+	var parts []string
+	for _, text := range textBlocks {
+		if text == nil || text.Elements == nil {
+			continue
+		}
+		for _, element := range text.Elements {
+			if element.TextRun != nil && element.TextRun.Content != nil {
+				parts = append(parts, *element.TextRun.Content)
+			}
+		}
+	}
+	return strings.Join(parts, "")
+}

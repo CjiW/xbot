@@ -14,7 +14,11 @@ import (
 	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/oauth"
+	"xbot/oauth/providers"
 	"xbot/storage"
+	"xbot/tools"
+	"xbot/tools/feishu_mcp"
 )
 
 func main() {
@@ -46,6 +50,41 @@ func main() {
 		log.WithError(err).Fatal("Failed to migrate data to SQLite")
 	}
 
+	// OAuth 管理
+	var oauthServer *oauth.Server
+	var oauthManager *oauth.Manager
+	if cfg.OAuth.Enable {
+		// 创建 OAuth token 存储
+		oauthDBPath := filepath.Join(xbotDir, "oauth_tokens.db")
+		tokenStorage, err := oauth.NewSQLiteStorage(oauthDBPath)
+		if err != nil {
+			log.WithError(err).Fatal("Failed to create OAuth token storage")
+		}
+
+		// 创建 OAuth 管理器
+		oauthManager = oauth.NewManager(tokenStorage)
+
+		// 注册 Feishu OAuth provider
+		feishuProvider := providers.NewFeishuProvider(
+			cfg.Feishu.AppID,
+			cfg.Feishu.AppSecret,
+			cfg.OAuth.BaseURL+"/oauth/callback",
+		)
+		oauthManager.RegisterProvider(feishuProvider)
+
+		// 创建 OAuth HTTP 服务器（SendFunc 稍后设置，需要在 Dispatcher 创建后）
+		oauthServer = oauth.NewServer(oauth.Config{
+			Enable:  true,
+			Port:    cfg.OAuth.Port,
+			BaseURL: cfg.OAuth.BaseURL,
+		}, oauthManager)
+
+		log.WithFields(log.Fields{
+			"port":    cfg.OAuth.Port,
+			"baseURL": cfg.OAuth.BaseURL,
+		}).Info("OAuth server started")
+	}
+
 	agentLoop := agent.New(agent.Config{
 		Bus:                  msgBus,
 		LLM:                  llmClient,
@@ -60,6 +99,46 @@ func main() {
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
 	})
+
+	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
+	if cfg.OAuth.Enable && oauthManager != nil {
+		// 注册 OAuth 工具
+		oauthTool := &tools.OAuthTool{
+			Manager: oauthManager,
+			BaseURL: cfg.OAuth.BaseURL,
+		}
+		agentLoop.RegisterTool(oauthTool)
+
+		// 注册 Feishu MCP 工具
+		feishuMCP := feishu_mcp.NewFeishuMCP(oauthManager)
+		agentLoop.RegisterTool(&feishu_mcp.ListAllBitablesTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.BitableFieldsTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.BitableRecordTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.BitableListTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.BatchCreateAppTableRecordTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.SendCardTool{MCP: feishuMCP})
+
+		// Wiki tools
+		agentLoop.RegisterTool(&feishu_mcp.WikiListSpacesTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.WikiListNodesTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.WikiGetNodeTool{MCP: feishuMCP})
+
+		// Document tools
+		agentLoop.RegisterTool(&feishu_mcp.DocxGetContentTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxListBlocksTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxCreateTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxRawContentTool{MCP: feishuMCP})
+
+		// Search tools
+		agentLoop.RegisterTool(&feishu_mcp.SearchWikiTool{MCP: feishuMCP})
+
+		// Drive tools
+		agentLoop.RegisterTool(&feishu_mcp.UploadFileTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.ListFilesTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.AddPermissionTool{MCP: feishuMCP})
+
+		log.Info("OAuth and Feishu MCP tools registered")
+	}
 
 	// 创建消息分发器
 	disp := channel.NewDispatcher(msgBus)
@@ -78,6 +157,26 @@ func main() {
 
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
+
+	// 设置 OAuth 服务器的回调函数，使其能在授权完成后发送消息
+	if oauthServer != nil {
+		oauthServer.SendFunc = func(channel, chatID, content string) error {
+			_, err := disp.SendDirect(bus.OutboundMessage{
+				Channel: channel,
+				ChatID:  chatID,
+				Content: content,
+			})
+			return err
+		}
+		// 现在启动 OAuth HTTP 服务器
+		if err := oauthServer.Start(); err != nil {
+			log.WithError(err).Fatal("Failed to start OAuth server")
+		}
+		log.WithFields(log.Fields{
+			"port":    cfg.OAuth.Port,
+			"baseURL": cfg.OAuth.BaseURL,
+		}).Info("OAuth server started")
+	}
 
 	channels := disp.EnabledChannels()
 	if len(channels) == 0 {
@@ -148,6 +247,14 @@ func main() {
 	// 等待退出信号
 	<-sigCh
 	fmt.Println("\nShutting down...")
+
+	// 停止 OAuth 服务器
+	if oauthServer != nil {
+		if err := oauthServer.Shutdown(context.Background()); err != nil {
+			log.WithError(err).Warn("OAuth server shutdown error")
+		}
+	}
+
 	cancel()
 	disp.Stop()
 	log.Info("xbot stopped")

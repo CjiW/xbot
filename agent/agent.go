@@ -865,7 +865,7 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Metadata: map[string]string{
-			"add_reaction":         "DONE",
+			"add_reaction":        "DONE",
 			"reaction_message_id": messageID,
 		},
 	})

@@ -24,11 +24,7 @@ test:
   tags:
     - linux-x86
   script:
-    - go test -v -race -coverprofile=coverage.out ./...
-  artifacts:
-    paths:
-      - coverage.out
-    expire_in: 1 week
+    - go test -v -race ./...
 
 # Build job
 build:

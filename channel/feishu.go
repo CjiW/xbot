@@ -164,6 +164,18 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return "", fmt.Errorf("feishu client not initialized")
 	}
 
+	// 表情回复：metadata 中带 add_reaction 时，对指定消息添加表情后返回
+	if msg.Metadata != nil && msg.Metadata["add_reaction"] != "" {
+		targetMsgID := msg.Metadata["reaction_message_id"]
+		emojiType := msg.Metadata["add_reaction"]
+		if targetMsgID != "" {
+			if err := f.addReaction(targetMsgID, emojiType); err != nil {
+				log.WithError(err).WithField("message_id", targetMsgID).Warn("Feishu: failed to add reaction")
+			}
+		}
+		return "", nil
+	}
+
 	if msg.Content == "" {
 		return "", nil
 	}
@@ -367,6 +379,30 @@ func (f *FeishuChannel) patchMessage(messageID string, cardJSON []byte) error {
 	}
 
 	log.WithField("message_id", messageID).Debug("Feishu message patched")
+	return nil
+}
+
+// addReaction 对指定消息添加表情回复
+func (f *FeishuChannel) addReaction(messageID, emojiType string) error {
+	req := larkim.NewCreateMessageReactionReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+			ReactionType(larkim.NewEmojiBuilder().EmojiType(emojiType).Build()).
+			Build()).
+		Build()
+
+	resp, err := f.client.Im.MessageReaction.Create(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("add reaction: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("add reaction API error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+
+	log.WithFields(log.Fields{
+		"message_id": messageID,
+		"emoji":      emojiType,
+	}).Debug("Feishu reaction added")
 	return nil
 }
 

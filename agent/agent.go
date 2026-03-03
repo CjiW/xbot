@@ -309,6 +309,10 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			Content: finalContent,
 		}, nil
 	}
+
+	// 对用户原始消息添加表情回复，表示处理完成
+	a.addReaction(msg)
+
 	return nil, nil
 }
 
@@ -842,6 +846,32 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// addReaction 对用户消息添加表情回复，表示处理完成
+func (a *Agent) addReaction(msg bus.InboundMessage) {
+	if a.directSend == nil {
+		return
+	}
+	messageID := ""
+	if msg.Metadata != nil {
+		messageID = msg.Metadata["message_id"]
+	}
+	if messageID == "" {
+		return
+	}
+
+	_, err := a.directSend(bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Metadata: map[string]string{
+			"add_reaction":         "DONE",
+			"reaction_message_id": messageID,
+		},
+	})
+	if err != nil {
+		log.WithError(err).Debug("Failed to add reaction")
+	}
 }
 
 // ProcessDirect 直接处理一条消息（用于 CLI 模式）

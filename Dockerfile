@@ -21,7 +21,7 @@ RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
     -o xbot .
 
 # Final stage
-FROM alpine:latest
+FROM node:22-alpine
 
 RUN apk --no-cache add ca-certificates git
 
@@ -31,9 +31,5 @@ WORKDIR /app
 COPY --from=builder /build/xbot /app/xbot
 COPY --from=builder /build/prompt.md /app/prompt.md
 
-# Create working directory
-RUN mkdir -p /data && chmod 777 /data
-
-WORKDIR /data
 
 ENTRYPOINT ["/app/xbot"]

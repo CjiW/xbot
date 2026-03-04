@@ -19,6 +19,7 @@ type ToolContext struct {
 	AgentID                 string                                      // 当前 Agent 的 ID
 	Manager                 SubAgentManager                             // Agent 管理器引用（用于创建 SubAgent）
 	DataDir                 string                                      // 数据持久化目录
+	Sandbox                 bool                                        // 是否在沙箱中执行（Shell 使用 bwrap）
 	Channel                 string                                      // 当前消息来源渠道
 	ChatID                  string                                      // 当前消息来源会话
 	SenderID                string                                      // 当前消息发送者 ID

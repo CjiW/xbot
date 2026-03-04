@@ -65,10 +65,14 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		params.Type = "file"
 	}
 
-	// Resolve output path
+	// Resolve output path: 安全路径解析，防止目录逃逸
 	outputPath := params.OutputPath
-	if !filepath.IsAbs(outputPath) && ctx != nil && ctx.WorkingDir != "" {
-		outputPath = filepath.Join(ctx.WorkingDir, outputPath)
+	if ctx != nil && ctx.WorkingDir != "" {
+		var err error
+		outputPath, err = ResolveSafePath(ctx.WorkingDir, outputPath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid output path: %w", err)
+		}
 	}
 
 	switch ctx.Channel {

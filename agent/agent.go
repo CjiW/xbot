@@ -684,6 +684,19 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	return "已达到最大迭代次数，请重新描述你的需求。", toolsUsed, false, nil
 }
 
+// getTenantWorkDir 获取租户的工作目录
+// 当前单用户场景直接返回全局 workDir
+// 多租户场景返回 workDir/tenants/{channel}_{chatID}/
+func (a *Agent) getTenantWorkDir(channel, chatID string) string {
+	// 当前阶段：单用户，直接使用全局 workDir
+	return a.workDir
+
+	// 多租户阶段（未来启用）：
+	// tenantDir := filepath.Join(a.workDir, "tenants", channel+"_"+chatID)
+	// os.MkdirAll(tenantDir, 0755)
+	// return tenantDir
+}
+
 // executeTool 执行单个工具调用
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
 	// 首先尝试从全局注册表查找工具
@@ -721,10 +734,11 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 
 	toolCtx := &tools.ToolContext{
 		Ctx:           execCtx,
-		WorkingDir:    a.workDir,
+		WorkingDir:    a.getTenantWorkDir(channel, chatID),
 		AgentID:       "main",
 		Manager:       a,
 		DataDir:       a.workDir,
+		Sandbox:       false, // 当前单用户不启用沙箱
 		Channel:       channel,
 		ChatID:        chatID,
 		SenderID:      senderID,

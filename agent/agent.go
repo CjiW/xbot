@@ -700,8 +700,15 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		return nil, fmt.Errorf("unknown tool: %s", tc.Name)
 	}
 
-	timeout := 120 * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	var execCtx context.Context
+	var cancel context.CancelFunc
+	if tc.Name == "SubAgent" {
+		execCtx = ctx
+		cancel = func() {} // no-op: SubAgent manages its own timeouts internally
+	} else {
+		timeout := 120 * time.Second
+		execCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
@@ -828,13 +835,31 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 	}).Info("SubAgent started")
 
 	// 子 Agent 迭代循环（与主 Agent 的 runLoop 类似，但使用独立工具集）
-	maxIter := a.maxIterations
+	maxIter := 100                 // SubAgent 最大 100 轮（不用 a.maxIterations）
+	llmTimeout := 3 * time.Minute  // 单轮 LLM 超时
+	toolTimeout := 2 * time.Minute // 单个工具超时
 	var toolsUsed []string
+	var lastContent string
 
 	for i := 0; i < maxIter; i++ {
-		response, err := a.llmClient.Generate(ctx, a.model, messages, subTools.AsDefinitions())
+		// LLM 调用加超时
+		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
+		response, err := a.llmClient.Generate(llmCtx, a.model, messages, subTools.AsDefinitions())
+		llmCancel()
 		if err != nil {
-			return "", fmt.Errorf("sub-agent LLM failed: %w", err)
+			// 父 context 被取消时，返回已有结果
+			if ctx.Err() != nil {
+				return "Sub-agent was cancelled.", ctx.Err()
+			}
+			// LLM 超时或其他错误：优雅降级，返回已有结果而不是报错
+			if lastContent != "" {
+				log.WithFields(log.Fields{
+					"parent":    parentAgentID,
+					"iteration": i + 1,
+				}).Warnf("SubAgent LLM failed, returning partial result: %v", err)
+				return lastContent, nil
+			}
+			return fmt.Sprintf("Sub-agent LLM failed at iteration %d: %v", i+1, err), nil
 		}
 
 		if !response.HasToolCalls() {
@@ -845,6 +870,11 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 				"iteration": i + 1,
 			}).Info("SubAgent completed")
 			return content, nil
+		}
+
+		// 记录最新的中间内容，用于超时降级
+		if trimmed := strings.TrimSpace(response.Content); trimmed != "" {
+			lastContent = trimmed
 		}
 
 		assistantMsg := llm.ChatMessage{
@@ -864,8 +894,7 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 				continue
 			}
 
-			timeout := 120 * time.Second
-			execCtx, cancel := context.WithTimeout(ctx, timeout)
+			execCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 
 			toolCtx := &tools.ToolContext{
 				Ctx:        execCtx,

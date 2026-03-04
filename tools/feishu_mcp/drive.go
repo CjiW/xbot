@@ -52,7 +52,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 		DocumentId(args.DocumentID).
 		Build()
 
-	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+	resp, err := client.Client().Docx.DocumentBlock.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list document blocks: %w", err)
@@ -119,7 +119,7 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 		DocumentId(args.DocumentID).
 		Build()
 
-	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+	resp, err := client.Client().Docx.DocumentBlock.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list document blocks: %w", err)
@@ -214,7 +214,7 @@ func (t *DocxCreateTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		Body(bodyBuilder.Build()).
 		Build()
 
-	resp, err := client.Client().Docx.V1.Document.Create(ctx.Ctx, req,
+	resp, err := client.Client().Docx.Document.Create(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("create document: %w", err)
@@ -273,7 +273,7 @@ func (t *DocxRawContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 		DocumentId(args.DocumentID).
 		Build()
 
-	resp, err := client.Client().Docx.V1.DocumentBlock.List(ctx.Ctx, req,
+	resp, err := client.Client().Docx.DocumentBlock.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("get document content: %w", err)
@@ -314,35 +314,35 @@ func formatBlocksToMarkdown(blocks []*docxv1.Block) string {
 		case 2: // Text
 			builder.WriteString(formatTextBlock(block))
 		case 3: // Heading 1
-			builder.WriteString(fmt.Sprintf("# %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "# %s\n\n", extractTextFromBlock(block))
 		case 4: // Heading 2
-			builder.WriteString(fmt.Sprintf("## %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "## %s\n\n", extractTextFromBlock(block))
 		case 5: // Heading 3
-			builder.WriteString(fmt.Sprintf("### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "### %s\n\n", extractTextFromBlock(block))
 		case 6: // Heading 4
-			builder.WriteString(fmt.Sprintf("#### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "#### %s\n\n", extractTextFromBlock(block))
 		case 7: // Heading 5
-			builder.WriteString(fmt.Sprintf("##### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "##### %s\n\n", extractTextFromBlock(block))
 		case 8: // Heading 6
-			builder.WriteString(fmt.Sprintf("###### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "###### %s\n\n", extractTextFromBlock(block))
 		case 9: // Heading 7
-			builder.WriteString(fmt.Sprintf("####### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "####### %s\n\n", extractTextFromBlock(block))
 		case 10: // Heading 8
-			builder.WriteString(fmt.Sprintf("######## %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "######## %s\n\n", extractTextFromBlock(block))
 		case 11: // Heading 9
-			builder.WriteString(fmt.Sprintf("######### %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "######### %s\n\n", extractTextFromBlock(block))
 		case 12: // Bullet
-			builder.WriteString(fmt.Sprintf("- %s\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "- %s\n", extractTextFromBlock(block))
 		case 13: // Ordered
-			builder.WriteString(fmt.Sprintf("1. %s\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "1. %s\n", extractTextFromBlock(block))
 		case 14: // Code
 			builder.WriteString(formatCodeBlock(block))
 		case 15: // Quote
-			builder.WriteString(fmt.Sprintf("> %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "> %s\n\n", extractTextFromBlock(block))
 		case 16: // Equation
-			builder.WriteString(fmt.Sprintf("$$%s$$\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "$$%s$$\n\n", extractTextFromBlock(block))
 		case 17: // Todo
-			builder.WriteString(fmt.Sprintf("- [ ] %s\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "- [ ] %s\n", extractTextFromBlock(block))
 		case 18: // Divider
 			builder.WriteString("---\n\n")
 		case 19: // Image
@@ -350,7 +350,7 @@ func formatBlocksToMarkdown(blocks []*docxv1.Block) string {
 		case 20: // Table
 			builder.WriteString("[Table]\n\n")
 		case 21: // Callout
-			builder.WriteString(fmt.Sprintf("> **Note**: %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "> **Note**: %s\n\n", extractTextFromBlock(block))
 		case 22: // View
 			builder.WriteString("[View]\n\n")
 		case 23: // Bitable
@@ -396,11 +396,11 @@ func formatBlocksToMarkdown(blocks []*docxv1.Block) string {
 		case 43: // Whiteboard
 			builder.WriteString("[Whiteboard]\n\n")
 		case 44: // Heading
-			builder.WriteString(fmt.Sprintf("## %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "## %s\n\n", extractTextFromBlock(block))
 		case 45: // List
-			builder.WriteString(fmt.Sprintf("- %s\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "- %s\n", extractTextFromBlock(block))
 		case 46: // QuoteContainer
-			builder.WriteString(fmt.Sprintf("> %s\n\n", extractTextFromBlock(block)))
+			fmt.Fprintf(&builder, "> %s\n\n", extractTextFromBlock(block))
 		case 47: // Org
 			builder.WriteString("[Org Chart]\n\n")
 		case 48: // Collection
@@ -480,7 +480,7 @@ func formatBlocksToMarkdown(blocks []*docxv1.Block) string {
 		default:
 			// Try to extract text for unknown block types
 			if text := extractTextFromBlock(block); text != "" {
-				builder.WriteString(fmt.Sprintf("%s\n\n", text))
+				fmt.Fprintf(&builder, "%s\n\n", text)
 			}
 		}
 	}
@@ -537,9 +537,9 @@ func formatTextBlock(block *docxv1.Block) string {
 				}
 				builder.WriteString(text)
 			} else if element.MentionUser != nil && element.MentionUser.UserId != nil {
-				builder.WriteString(fmt.Sprintf("@%s", *element.MentionUser.UserId))
+				fmt.Fprintf(&builder, "@%s", *element.MentionUser.UserId)
 			} else if element.MentionDoc != nil && element.MentionDoc.Title != nil {
-				builder.WriteString(fmt.Sprintf("[%s]", *element.MentionDoc.Title))
+				fmt.Fprintf(&builder, "[%s]", *element.MentionDoc.Title)
 			}
 		}
 	}
@@ -666,7 +666,7 @@ func (t *DocxWriteTool) Execute(ctx *tools.ToolContext, input string) (*tools.To
 		Body(convertBody).
 		Build()
 
-	convertResp, err := client.Client().Docx.V1.Document.Convert(ctx.Ctx, convertReq,
+	convertResp, err := client.Client().Docx.Document.Convert(ctx.Ctx, convertReq,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("convert markdown to blocks: %w", err)
@@ -703,7 +703,7 @@ func (t *DocxWriteTool) Execute(ctx *tools.ToolContext, input string) (*tools.To
 		Body(descendantBody).
 		Build()
 
-	descendantResp, err := client.Client().Docx.V1.DocumentBlockDescendant.Create(ctx.Ctx, descendantReq,
+	descendantResp, err := client.Client().Docx.DocumentBlockDescendant.Create(ctx.Ctx, descendantReq,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("insert blocks to document: %w", err)
@@ -1051,7 +1051,7 @@ func (t *DocxUpdateBlockTool) Execute(ctx *tools.ToolContext, input string) (*to
 			Body(convertBody).
 			Build()
 
-		convertResp, err := client.Client().Docx.V1.Document.Convert(ctx.Ctx, convertReq,
+		convertResp, err := client.Client().Docx.Document.Convert(ctx.Ctx, convertReq,
 			larkcore.WithUserAccessToken(client.AccessToken()))
 		if err != nil {
 			return nil, fmt.Errorf("convert markdown to blocks: %w", err)
@@ -1091,7 +1091,7 @@ func (t *DocxUpdateBlockTool) Execute(ctx *tools.ToolContext, input string) (*to
 		UpdateBlockRequest(updateRequest).
 		Build()
 
-	resp, err := client.Client().Docx.V1.DocumentBlock.Patch(ctx.Ctx, req,
+	resp, err := client.Client().Docx.DocumentBlock.Patch(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("update block: %w", err)
@@ -1179,7 +1179,7 @@ func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*t
 		Body(body).
 		Build()
 
-	resp, err := client.Client().Docx.V1.DocumentBlockChildren.BatchDelete(ctx.Ctx, req,
+	resp, err := client.Client().Docx.DocumentBlockChildren.BatchDelete(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("delete blocks: %w", err)

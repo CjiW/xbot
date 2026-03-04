@@ -615,7 +615,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 							autoNotify = false
 							waitingUser = oauthResult.WaitingUser
 						} else {
-							content = fmt.Sprintf("OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment.")
+							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
 							log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
 						}
 					} else {

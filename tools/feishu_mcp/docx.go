@@ -116,7 +116,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		Body(body).
 		Build()
 
-	resp, err := client.Client().Drive.V1.Media.UploadAll(ctx.Ctx, req,
+	resp, err := client.Client().Drive.Media.UploadAll(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 
 	if err != nil {
@@ -280,7 +280,7 @@ func (t *AddPermissionTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		BaseMember(baseMember).
 		Build()
 
-	resp, err := client.Client().Drive.V1.PermissionMember.Create(ctx.Ctx, req,
+	resp, err := client.Client().Drive.PermissionMember.Create(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("add permission: %w", err)

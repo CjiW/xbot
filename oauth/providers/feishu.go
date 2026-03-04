@@ -85,7 +85,7 @@ func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.
 		Body(body).
 		Build()
 
-	resp, err := p.client.Authen.V1.OidcAccessToken.Create(ctx, req)
+	resp, err := p.client.Authen.OidcAccessToken.Create(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("create OIDC access token: %w", err)
 	}
@@ -159,7 +159,7 @@ type TenantInfo struct {
 
 // getTenantInfo retrieves tenant information using user access token
 func (p *FeishuProvider) getTenantInfo(ctx context.Context, accessToken string) (*TenantInfo, error) {
-	resp, err := p.client.Tenant.V2.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
+	resp, err := p.client.Tenant.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
 	if err != nil {
 		return nil, fmt.Errorf("query tenant: %w", err)
 	}
@@ -197,7 +197,7 @@ func (p *FeishuProvider) RefreshToken(ctx context.Context, refreshToken string) 
 		Body(body).
 		Build()
 
-	resp, err := p.client.Authen.V1.OidcRefreshAccessToken.Create(ctx, req)
+	resp, err := p.client.Authen.OidcRefreshAccessToken.Create(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("refresh OIDC access token: %w", err)
 	}

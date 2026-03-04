@@ -152,7 +152,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Send success message back to the chat
 	if s.SendFunc != nil {
-		successMsg := fmt.Sprintf("✅ 授权成功！现在可以继续之前的操作了。")
+		successMsg := "✅ 授权成功！现在可以继续之前的操作了。"
 		if err := s.SendFunc(flow.Channel, flow.ChatID, successMsg); err != nil {
 			log.WithError(err).Error("Failed to send OAuth success message")
 		}

@@ -38,7 +38,7 @@ func IsAPIError(err error) bool {
 // Common Feishu API error codes
 const (
 	ErrCodeInvalidToken     = 99991663 // Invalid access token
-	ErrCodeTokenExpired     = 99991663 // Token expired
+	ErrCodeTokenExpired     = 99991668 // Token expired
 	ErrCodePermissionDenied = 99991404 // No permission
 	ErrCodeResourceNotFound = 99991403 // Resource not found
 )

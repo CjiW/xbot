@@ -95,7 +95,7 @@ func (m *FeishuMCP) GetClient(ctx context.Context, channel, chatID string) (*Cli
 
 // fetchTenantDomain 获取租户域名
 func (m *FeishuMCP) fetchTenantDomain(ctx context.Context, accessToken string) (string, error) {
-	resp, err := m.larkClient.Tenant.V2.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
+	resp, err := m.larkClient.Tenant.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
 	if err != nil {
 		return "", fmt.Errorf("query tenant: %w", err)
 	}

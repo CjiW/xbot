@@ -68,7 +68,7 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		spaceIDs = []string{args.SpaceID}
 	} else {
 		spacesReq := wikiv2.NewListSpaceReqBuilder().Build()
-		spacesResp, err := client.Client().Wiki.V2.Space.List(ctx.Ctx, spacesReq,
+		spacesResp, err := client.Client().Wiki.Space.List(ctx.Ctx, spacesReq,
 			larkcore.WithUserAccessToken(client.AccessToken()))
 		if err != nil {
 			return nil, fmt.Errorf("list wiki spaces: %w", err)
@@ -99,7 +99,7 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 			SpaceId(spaceID).
 			Build()
 
-		nodesResp, err := client.Client().Wiki.V2.SpaceNode.List(ctx.Ctx, nodesReq,
+		nodesResp, err := client.Client().Wiki.SpaceNode.List(ctx.Ctx, nodesReq,
 			larkcore.WithUserAccessToken(client.AccessToken()))
 		if err != nil {
 			continue // Skip spaces we can't access

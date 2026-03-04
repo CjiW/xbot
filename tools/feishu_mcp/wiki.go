@@ -13,12 +13,12 @@ import (
 
 // bitableRecordArgs holds arguments for bitable record operations.
 type bitableRecordArgs struct {
-	Action   string
-	AppToken string
-	TableID  string
-	Filter   map[string]any
-	Fields   map[string]any
-	RecordID string
+	Action   string         `json:"action"`
+	AppToken string         `json:"app_token"`
+	TableID  string         `json:"table_id"`
+	Filter   map[string]any `json:"filter"`
+	Fields   map[string]any `json:"fields"`
+	RecordID string         `json:"record_id"`
 }
 
 // BitableFieldsTool lists fields in a Bitable table.
@@ -68,7 +68,7 @@ func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		TableId(args.TableID).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTableField.List(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTableField.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list fields: %w", err)
@@ -188,7 +188,7 @@ func (t *BitableRecordTool) searchRecords(ctx *tools.ToolContext, client *Client
 		Body(bodyBuilder.Build()).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Search(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTableRecord.Search(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("search records: %w", err)
@@ -217,7 +217,7 @@ func (t *BitableRecordTool) createRecord(ctx *tools.ToolContext, client *Client,
 		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Create(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTableRecord.Create(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("create record: %w", err)
@@ -250,7 +250,7 @@ func (t *BitableRecordTool) updateRecord(ctx *tools.ToolContext, client *Client,
 		AppTableRecord(&bitablev1.AppTableRecord{Fields: args.Fields}).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTableRecord.Update(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTableRecord.Update(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("update record: %w", err)
@@ -302,7 +302,7 @@ func (t *BitableListTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 		AppToken(args.AppToken).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTable.List(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTable.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list tables: %w", err)
@@ -406,7 +406,7 @@ func (t *BatchCreateAppTableRecordTool) Execute(ctx *tools.ToolContext, input st
 		Body(body).
 		Build()
 
-	resp, err := client.Client().Bitable.V1.AppTableRecord.BatchCreate(ctx.Ctx, req,
+	resp, err := client.Client().Bitable.AppTableRecord.BatchCreate(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("batch create records: %w", err)

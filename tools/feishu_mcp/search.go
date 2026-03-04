@@ -36,7 +36,7 @@ func (t *WikiListSpacesTool) Execute(ctx *tools.ToolContext, input string) (*too
 	req := wikiv2.NewListSpaceReqBuilder().
 		Build()
 
-	resp, err := client.Client().Wiki.V2.Space.List(ctx.Ctx, req,
+	resp, err := client.Client().Wiki.Space.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list wiki spaces: %w", err)
@@ -130,7 +130,7 @@ func (t *WikiListNodesTool) Execute(ctx *tools.ToolContext, input string) (*tool
 
 	req := reqBuilder.Build()
 
-	resp, err := client.Client().Wiki.V2.SpaceNode.List(ctx.Ctx, req,
+	resp, err := client.Client().Wiki.SpaceNode.List(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("list wiki nodes: %w", err)
@@ -254,7 +254,7 @@ func (t *WikiGetNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 		ObjType(objType).
 		Build()
 
-	resp, err := client.Client().Wiki.V2.Space.GetNode(ctx.Ctx, req,
+	resp, err := client.Client().Wiki.Space.GetNode(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 
 	// If Wiki API fails and it's a docx document, try the Docx API directly
@@ -317,7 +317,7 @@ func (t *WikiGetNodeTool) getDocxDocument(ctx *tools.ToolContext, client *Client
 		DocumentId(documentID).
 		Build()
 
-	resp, err := client.Client().Docx.V1.Document.Get(ctx.Ctx, req,
+	resp, err := client.Client().Docx.Document.Get(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("get document: %w", err)
@@ -415,7 +415,7 @@ func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		Body(body).
 		Build()
 
-	resp, err := client.Client().Wiki.V2.SpaceNode.Move(ctx.Ctx, req,
+	resp, err := client.Client().Wiki.SpaceNode.Move(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("move wiki node: %w", err)
@@ -515,7 +515,7 @@ func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*too
 		Node(nodeBuilder.Build()).
 		Build()
 
-	resp, err := client.Client().Wiki.V2.SpaceNode.Create(ctx.Ctx, req,
+	resp, err := client.Client().Wiki.SpaceNode.Create(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
 	if err != nil {
 		return nil, fmt.Errorf("create wiki node: %w", err)

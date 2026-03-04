@@ -259,7 +259,8 @@ func (t *CardAddInteractiveTool) Description() string {
 	return `Add an interactive component to a card.
 
 Supported types:
-- button: Params: text (required), properties: {button_type (primary/danger/default), url, name, action_type (link/form_submit/form_reset), confirm: {title,text}, size, value}
+- button: Params: text (required), properties: {button_type (primary/danger/default), url, name, action_type, confirm: {title,text}, size, value}
+  IMPORTANT: For form submit buttons, you MUST set properties.action_type="form_submit" to collect form data. Without this, button clicks will NOT include input/select values.
 - input: Params: name (required), properties: {label, placeholder, default_value, max_length, rows}
 - select_static: Single select. Params: name (required), options (JSON array, required). Options format: ["Label1","Label2"] or [{"text":"Label","value":"val"}]. properties: {placeholder, initial_option}
 - multi_select_static: Multi select. Same as select_static. properties: {placeholder, initial_options}
@@ -461,7 +462,7 @@ func (t *CardAddContainerTool) Description() string {
 
 Supported types:
 - column_set: Multi-column layout. properties: {column_count (required, int), flex_mode, background_style, horizontal_spacing, column_widths (array of weight ints), column_vertical_aligns (array of "top"/"center"/"bottom")}. Returns column IDs for each column.
-- form: Form container. properties: {name (required)}. Add inputs/selects inside, then a button with action_type="form_submit".
+- form: Form container. properties: {name (required)}. Add inputs/selects inside, then add a submit button INSIDE the form with properties.action_type="form_submit". WITHOUT this property, form data will NOT be submitted when the button is clicked.
 - collapsible_panel: Foldable section. properties: {title (required), expanded (bool)}
 - interactive_container: Clickable container. properties: {width, height, background_style, has_border, corner_radius, padding, behaviors}
 

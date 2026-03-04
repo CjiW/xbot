@@ -1,0 +1,44 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+# Lint job
+lint:
+  stage: lint
+  image: golang:1.25
+  tags:
+    - linux-x86
+  script:
+    - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.10.0
+    - $(go env GOPATH)/bin/golangci-lint run --timeout 5m
+
+# Test job
+test:
+  stage: test
+  image: golang:1.25
+  tags:
+    - linux-x86
+  script:
+    - go test -v -race ./...
+
+# Build job
+build:
+  stage: build
+  image: docker:latest
+  tags:
+    - linux-x86
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest .
+    - docker push $IMAGE_NAME:$IMAGE_TAG
+    - docker push $IMAGE_NAME:latest
+  after_script:
+    - docker rmi $IMAGE_NAME:$IMAGE_TAG || true
+  only:
+    - master

@@ -41,6 +41,7 @@ type SubAgentManager interface {
 type ToolResult struct {
 	Summary     string // 精简结果，进入 LLM 上下文
 	Detail      string // 详细内容（如 diff），仅推前端展示，不进入上下文
+	Tips        string // 操作指引，帮助 LLM 理解下一步操作
 	WaitingUser bool   // 标记：是否等待用户响应（如果为 true，Agent 不应生成额外回复）
 }
 
@@ -57,6 +58,11 @@ func NewResultWithUserResponse(summary string) *ToolResult {
 // NewResultWithDetail 创建带详情的结果
 func NewResultWithDetail(summary, detail string) *ToolResult {
 	return &ToolResult{Summary: summary, Detail: detail}
+}
+
+// NewResultWithTips 创建带指引的结果
+func NewResultWithTips(summary, tips string) *ToolResult {
+	return &ToolResult{Summary: summary, Tips: tips}
 }
 
 // Tool 工具接口

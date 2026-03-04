@@ -13,6 +13,13 @@ func init() {
 	_ = godotenv.Load(".env")
 }
 
+// OAuthConfig OAuth 配置
+type OAuthConfig struct {
+	Enable  bool   // 是否启用 OAuth 功能
+	Port    int    // OAuth 服务监听端口（默认 8081）
+	BaseURL string // OAuth 回调基础 URL (e.g., https://your-domain.com)
+}
+
 // Config 应用配置
 type Config struct {
 	Server ServerConfig
@@ -21,6 +28,7 @@ type Config struct {
 	PProf  PProfConfig
 	Feishu FeishuConfig
 	Agent  AgentConfig
+	OAuth  OAuthConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -31,6 +39,7 @@ type FeishuConfig struct {
 	EncryptKey        string
 	VerificationToken string
 	AllowFrom         []string // 允许的 open_id 列表（空则允许所有）
+	Domain            string   // 飞书域名 (e.g., "xxx.feishu.cn"，用于生成文档链接)
 }
 
 // AgentConfig Agent 配置
@@ -129,6 +138,11 @@ func Load() *Config {
 			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
 			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
 			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
+		},
+		OAuth: OAuthConfig{
+			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
+			Port:    getEnvIntOrDefault("OAUTH_PORT", 8081),
+			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},
 	}
 }

@@ -142,6 +142,11 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
 }
 
+// GetCardBuilder returns the CardBuilder for card callback handling.
+func (a *Agent) GetCardBuilder() *tools.CardBuilder {
+	return a.cardBuilder
+}
+
 var ackMessages = []string{
 	"收到~",
 	"好的，让我看看",

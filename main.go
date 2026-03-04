@@ -153,8 +153,9 @@ func main() {
 	disp := channel.NewDispatcher(msgBus)
 
 	// 注册飞书渠道
+	var feishuCh *channel.FeishuChannel
 	if cfg.Feishu.Enabled {
-		feishuCh := channel.NewFeishuChannel(channel.FeishuConfig{
+		feishuCh = channel.NewFeishuChannel(channel.FeishuConfig{
 			AppID:             cfg.Feishu.AppID,
 			AppSecret:         cfg.Feishu.AppSecret,
 			EncryptKey:        cfg.Feishu.EncryptKey,
@@ -166,6 +167,11 @@ func main() {
 
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
+
+	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
+	if feishuCh != nil {
+		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())
+	}
 
 	// 设置 OAuth 服务器的回调函数，使其能在授权完成后发送消息
 	if oauthServer != nil {
@@ -221,34 +227,6 @@ func main() {
 			log.WithError(err).Error("Agent loop exited with error")
 		}
 	}()
-
-	// 启动飞书 UAT 自动刷新
-	tokenFilePath := filepath.Join(xbotDir, "feishu_tokens.json")
-	uat, rt := os.Getenv("FEISHU_UAT"), os.Getenv("FEISHU_REFRESH_TOKEN")
-	if fileUAT, fileRT, err := channel.LoadFeishuTokens(tokenFilePath); err != nil {
-		log.WithError(err).Warn("Failed to load feishu_tokens.json, using .env values")
-	} else if fileUAT != "" && fileRT != "" {
-		uat, rt = fileUAT, fileRT
-		log.Info("Loaded Feishu tokens from feishu_tokens.json")
-	}
-	if uat != "" && rt != "" {
-		tokenRefresher := channel.NewFeishuTokenRefresher(channel.FeishuTokenConfig{
-			AppID:         cfg.Feishu.AppID,
-			AppSecret:     cfg.Feishu.AppSecret,
-			UAT:           uat,
-			RefreshToken:  rt,
-			MCPConfigPath: filepath.Join(cfg.Agent.WorkDir, "mcp.json"),
-			TokenFilePath: tokenFilePath,
-		})
-		// TODO: Update token refresher callback to work with per-session MCP managers
-		// The old approach of reconnecting a single MCP manager no longer works.
-		// Need to implement session-aware MCP reconnection or invalidate sessions to trigger lazy reload.
-		tokenRefresher.SetOnRefresh(func(newUAT string) {
-			log.Info("Feishu UAT refreshed, sessions will reconnect MCP on next use")
-		})
-		go tokenRefresher.Start(ctx)
-		log.Info("Feishu UAT auto-refresh enabled (every 1h)")
-	}
 
 	log.Info("xbot started successfully")
 	fmt.Println("🤖 xbot is running. Press Ctrl+C to stop.")

@@ -59,9 +59,13 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 				return nil, fmt.Errorf("failed to get working directory: %w", err)
 			}
 		}
-	} else if !filepath.IsAbs(baseDir) && ctx != nil && ctx.WorkingDir != "" {
-		// 如果提供的路径是相对路径，基于工作目录解析
-		baseDir = filepath.Join(ctx.WorkingDir, baseDir)
+	} else if ctx != nil && ctx.WorkingDir != "" {
+		// 安全路径解析，防止目录逃逸
+		var err error
+		baseDir, err = ResolveSafePath(ctx.WorkingDir, baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid path: %w", err)
+		}
 	}
 
 	// Convert to absolute path

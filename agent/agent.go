@@ -835,7 +835,7 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 	}).Info("SubAgent started")
 
 	// 子 Agent 迭代循环（与主 Agent 的 runLoop 类似，但使用独立工具集）
-	maxIter := 10                  // SubAgent 最大 10 轮（不用 a.maxIterations）
+	maxIter := 100                 // SubAgent 最大 100 轮（不用 a.maxIterations）
 	llmTimeout := 3 * time.Minute  // 单轮 LLM 超时
 	toolTimeout := 2 * time.Minute // 单个工具超时
 	var toolsUsed []string

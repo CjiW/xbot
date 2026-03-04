@@ -84,13 +84,13 @@ func (t *WikiListNodesTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Wiki space ID from feishu_wiki_list_spaces",
+			Description: "Wiki space ID (returned by feishu_wiki_list_spaces, looks like '7123456789012345678'). NOT the URL path token.",
 			Required:    true,
 		},
 		{
 			Name:        "parent_node_token",
 			Type:        "string",
-			Description: "Parent node token to list children (optional, lists all nodes if not specified)",
+			Description: "Node token from URL path to list child pages (e.g., from https://xxx.feishu.cn/wiki/XXXXX, use XXXXX). Optional, lists all nodes if not specified.",
 			Required:    false,
 		},
 		{
@@ -190,7 +190,7 @@ type WikiGetNodeTool struct {
 func (t *WikiGetNodeTool) Name() string { return "feishu_wiki_get_node" }
 
 func (t *WikiGetNodeTool) Description() string {
-	return "Get Wiki node details and content. Supports Wiki node tokens (wikcnXXXXX) and document tokens (doxcnXXXXX, bascXXXXX)."
+	return "Get Wiki node details and content. Extract token from Feishu URL path (e.g., from https://xxx.feishu.cn/wiki/XXXXX or https://xxx.feishu.cn/docx/XXXXX, use XXXXX as the token). Do NOT use numeric IDs."
 }
 
 func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
@@ -198,13 +198,13 @@ func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "token",
 			Type:        "string",
-			Description: "Node token or document token (e.g., wikcnXXXXX, doxcnXXXXX, bascXXXXX)",
+			Description: "Token extracted from Feishu URL path. Examples: from URL https://xxx.feishu.cn/wiki/VYaWwsuYZi, token is 'VYaWwsuYZi'; from https://xxx.feishu.cn/docx/Abc123, token is 'Abc123'. NOT a numeric ID.",
 			Required:    true,
 		},
 		{
 			Name:        "obj_type",
 			Type:        "string",
-			Description: "Object type: docx, wiki, bitable, etc. (auto-detected if not provided)",
+			Description: "Document type from URL path: 'wiki', 'docx', 'bitable', 'sheet', 'slides', 'mindnote', 'file'. Auto-detected from URL if not provided.",
 			Required:    false,
 		},
 	}
@@ -225,11 +225,14 @@ func (t *WikiGetNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 	}
 
 	// Auto-detect obj_type from token prefix if not provided
+	// Note: obj_type describes the DOCUMENT type (docx, bitable, etc.), not the node type
+	// For wiki node tokens (wikcnXXX), we should NOT pass obj_type and let API auto-detect
 	objType := args.ObjType
 	if objType == "" {
 		switch {
 		case len(args.Token) >= 5 && args.Token[:5] == "wikcn":
-			objType = "wiki"
+			// Wiki node token - don't set obj_type, let API auto-detect
+			objType = ""
 		case len(args.Token) >= 5 && args.Token[:5] == "doxcn":
 			objType = "docx"
 		case len(args.Token) >= 4 && args.Token[:4] == "basc":
@@ -242,17 +245,20 @@ func (t *WikiGetNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 			objType = "slides"
 		case len(args.Token) >= 5 && args.Token[:5] == "filcn":
 			objType = "file"
-		default:
-			// Default to wiki for unknown tokens
-			objType = "wiki"
 		}
+		// For unknown tokens, leave obj_type empty to let API auto-detect
 	}
 
 	// First try Wiki API (for documents in Wiki spaces)
-	req := wikiv2.NewGetNodeSpaceReqBuilder().
-		Token(args.Token).
-		ObjType(objType).
-		Build()
+	reqBuilder := wikiv2.NewGetNodeSpaceReqBuilder().
+		Token(args.Token)
+
+	// Only set obj_type if we have a specific document type
+	if objType != "" {
+		reqBuilder.ObjType(objType)
+	}
+
+	req := reqBuilder.Build()
 
 	resp, err := client.Client().Wiki.Space.GetNode(ctx.Ctx, req,
 		larkcore.WithUserAccessToken(client.AccessToken()))
@@ -358,19 +364,19 @@ func (t *WikiMoveNodeTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Source Wiki space ID",
+			Description: "Source Wiki space ID (numeric string from feishu_wiki_list_spaces)",
 			Required:    true,
 		},
 		{
 			Name:        "node_token",
 			Type:        "string",
-			Description: "Node token to move (e.g., wikcnXXXXX)",
+			Description: "Node token from URL path to move (e.g., from https://xxx.feishu.cn/wiki/XXXXX, use XXXXX)",
 			Required:    true,
 		},
 		{
 			Name:        "target_parent_token",
 			Type:        "string",
-			Description: "Target parent node token where the node will be moved to",
+			Description: "Target parent node token from URL path where the node will be moved to",
 			Required:    true,
 		},
 		{
@@ -444,31 +450,31 @@ func (t *WikiCreateNodeTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Wiki space ID from feishu_wiki_list_spaces",
+			Description: "Wiki space ID (numeric string from feishu_wiki_list_spaces)",
 			Required:    true,
 		},
 		{
-			Name:        "title",
+			Name:        "obj_type",
 			Type:        "string",
-			Description: "Node title (document title)",
+			Description: "Document type: docx (default), bitable, sheet, mindnote, file, slides",
 			Required:    true,
 		},
 		{
 			Name:        "parent_node_token",
 			Type:        "string",
-			Description: "Parent node token (optional, defaults to root level)",
+			Description: "Parent node token from URL path (optional, defaults to root level)",
 			Required:    false,
 		},
 		{
-			Name:        "obj_token",
+			Name:        "title",
 			Type:        "string",
-			Description: "Existing document token to add to wiki (optional, e.g., 'doxcnXXXXX'). If not provided, a new document will be created.",
+			Description: "Node title (optional, used when creating new document)",
 			Required:    false,
 		},
 		{
-			Name:        "obj_type",
+			Name:        "origin_node_token",
 			Type:        "string",
-			Description: "Document type: docx (default), bitable, sheet, mindnote, file, slides. Only used when obj_token is provided.",
+			Description: "Existing node token to create a shortcut to (optional). If provided, creates a shortcut node instead of a new document.",
 			Required:    false,
 		},
 	}
@@ -476,11 +482,11 @@ func (t *WikiCreateNodeTool) Parameters() []llm.ToolParam {
 
 func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		SpaceID         string `json:"space_id"`
-		Title           string `json:"title"`
-		ParentNodeToken string `json:"parent_node_token"`
-		ObjToken        string `json:"obj_token"`
-		ObjType         string `json:"obj_type"`
+		SpaceID          string `json:"space_id"`
+		ObjType          string `json:"obj_type"`
+		ParentNodeToken  string `json:"parent_node_token"`
+		Title            string `json:"title"`
+		OriginNodeToken  string `json:"origin_node_token"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -491,22 +497,30 @@ func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*too
 		return nil, err
 	}
 
+	// Determine node type: "origin" for new document, "shortcut" for existing document
+	nodeType := "origin"
+	if args.OriginNodeToken != "" {
+		nodeType = "shortcut"
+	}
+
 	// Build the node
 	nodeBuilder := wikiv2.NewNodeBuilder().
-		Title(args.Title)
+		ObjType(args.ObjType).
+		NodeType(nodeType)
 
-	// If obj_token is provided, add existing document to wiki
-	if args.ObjToken != "" {
-		objType := args.ObjType
-		if objType == "" {
-			objType = "docx" // default to docx
-		}
-		nodeBuilder.ObjToken(args.ObjToken).ObjType(objType)
+	// Set title if provided
+	if args.Title != "" {
+		nodeBuilder.Title(args.Title)
 	}
 
 	// Set parent node if specified
 	if args.ParentNodeToken != "" {
 		nodeBuilder.ParentNodeToken(args.ParentNodeToken)
+	}
+
+	// Set origin node token for shortcuts
+	if args.OriginNodeToken != "" {
+		nodeBuilder.OriginNodeToken(args.OriginNodeToken)
 	}
 
 	// Create the node in wiki
@@ -547,12 +561,13 @@ func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*too
 		"obj_token":  objToken,
 		"title":      title,
 		"space_id":   args.SpaceID,
+		"node_type":  nodeType,
 		"url":        wikiURL,
 	}
 
 	var summary string
-	if args.ObjToken != "" {
-		summary = fmt.Sprintf("✅ Added document to Wiki: **%s**\n\n🔗 URL: %s", title, wikiURL)
+	if nodeType == "shortcut" {
+		summary = fmt.Sprintf("✅ Created shortcut to document in Wiki: **%s**\n\n🔗 URL: %s", title, wikiURL)
 	} else {
 		summary = fmt.Sprintf("✅ Created new Wiki page: **%s**\n\n🔗 URL: %s\n📄 Document ID: %s", title, wikiURL, objToken)
 	}

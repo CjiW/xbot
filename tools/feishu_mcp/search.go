@@ -482,11 +482,11 @@ func (t *WikiCreateNodeTool) Parameters() []llm.ToolParam {
 
 func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		SpaceID          string `json:"space_id"`
-		ObjType          string `json:"obj_type"`
-		ParentNodeToken  string `json:"parent_node_token"`
-		Title            string `json:"title"`
-		OriginNodeToken  string `json:"origin_node_token"`
+		SpaceID         string `json:"space_id"`
+		ObjType         string `json:"obj_type"`
+		ParentNodeToken string `json:"parent_node_token"`
+		Title           string `json:"title"`
+		OriginNodeToken string `json:"origin_node_token"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)

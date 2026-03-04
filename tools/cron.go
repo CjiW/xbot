@@ -15,6 +15,23 @@ import (
 	log "xbot/logger"
 )
 
+// resolveCronPath 解析 cron 数据文件路径，优先使用 .xbot/cron.json，向后兼容 cron.json
+func resolveCronPath(dataDir string) string {
+	newPath := filepath.Join(dataDir, ".xbot", "cron.json")
+	oldPath := filepath.Join(dataDir, "cron.json")
+
+	// 优先使用新路径
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath
+	}
+	// 新路径不存在，检查旧路径
+	if _, err := os.Stat(oldPath); err == nil {
+		return oldPath
+	}
+	// 都不存在，返回新路径（用于创建新文件）
+	return newPath
+}
+
 // CronTool 定时任务工具
 type CronTool struct {
 	mu   sync.Mutex
@@ -92,9 +109,10 @@ func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	// 初始化持久化路径（首次调用时）
+	// 新路径: .xbot/cron.json，旧路径: cron.json（向后兼容）
 	t.mu.Lock()
 	if t.persistPath == "" && ctx != nil && ctx.DataDir != "" {
-		t.persistPath = filepath.Join(ctx.DataDir, "cron.json")
+		t.persistPath = resolveCronPath(ctx.DataDir)
 		t.loadJobs()
 	}
 	t.mu.Unlock()
@@ -356,6 +374,7 @@ func (t *CronTool) scheduleDescription(job *cronJob) string {
 }
 
 // saveJobs 持久化 jobs 到文件（调用方须持有 mu 锁）
+// 始终保存到新路径 .xbot/cron.json
 func (t *CronTool) saveJobs() {
 	if t.persistPath == "" {
 		return
@@ -365,7 +384,14 @@ func (t *CronTool) saveJobs() {
 		log.WithError(err).Error("Failed to marshal cron jobs")
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(t.persistPath), 0o755); err != nil {
+	// 始终保存到新路径 .xbot/cron.json
+	savePath := t.persistPath
+	if !strings.Contains(savePath, ".xbot") {
+		// 如果当前路径是旧路径，切换到新路径
+		savePath = filepath.Join(filepath.Dir(savePath), ".xbot", "cron.json")
+		t.persistPath = savePath // 更新持久化路径为新路径
+	}
+	if err := os.MkdirAll(filepath.Dir(savePath), 0o755); err != nil {
 		log.WithError(err).Error("Failed to create cron data directory")
 		return
 	}

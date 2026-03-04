@@ -12,6 +12,7 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/oauth"
 	"xbot/session"
 	"xbot/tools"
 )
@@ -533,8 +534,8 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
 		sessionKey := channel + ":" + chatID
-		tools := a.tools.AsDefinitionsForSession(sessionKey)
-		response, err := a.llmClient.Generate(ctx, a.model, messages, tools)
+		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+		response, err := a.llmClient.Generate(ctx, a.model, messages, toolDefs)
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
 		}
@@ -588,7 +589,41 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 			content := ""
 			if execErr != nil {
-				content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
+				// Check if this is a TokenNeededError from OAuth
+				if oauth.IsTokenNeededError(execErr) {
+					// TokenNeededError - automatically trigger oauth_authorize tool
+					log.WithFields(log.Fields{
+						"tool":    tc.Name,
+						"elapsed": elapsed.Round(time.Millisecond),
+					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
+
+					// Try to execute oauth_authorize tool directly
+					if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
+						oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
+						oauthCtx := &tools.ToolContext{
+							Ctx:      ctx,
+							Channel:  channel,
+							ChatID:   chatID,
+							SenderID: senderID,
+							SendFunc: a.sendMessage,
+						}
+						oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
+						if oauthErr == nil && oauthResult != nil {
+							content = oauthResult.Summary
+							// Mark that we've sent a final card (OAuth card)
+							a.sessionFinalSent.Store(sessionKey, true)
+							autoNotify = false
+							waitingUser = oauthResult.WaitingUser
+						} else {
+							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
+							log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
+						}
+					} else {
+						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
+					}
+				} else {
+					content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
+				}
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
@@ -691,8 +726,13 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	return tool.Execute(toolCtx, tc.Arguments)
 }
 
-// sendMessage 发送消息到指定渠道，支持 session 内消息原地更新（避免刷屏）
-//
+// RegisterTool registers a tool to the agent's tool registry.
+// This is useful for dynamically adding tools after agent creation.
+func (a *Agent) RegisterTool(tool tools.Tool) {
+	a.tools.Register(tool)
+	log.WithField("tool", tool.Name()).Info("Tool registered")
+}
+
 // 首次发送创建新消息（如有入站 message_id 则回复该消息），后续发送 Patch 更新同一条消息。
 // 工具发送最终回复（如飞书卡片）时同样 Patch 更新，但标记 session 为"已完成"，后续调用自动跳过。
 func (a *Agent) sendMessage(channel, chatID, content string) error {
@@ -710,13 +750,19 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
+	isCard := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
-		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
-			msg.Metadata["update_message_id"] = existingID.(string)
+		// Cards should always create new messages, not patch existing ones
+		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)
+		if !isCard {
+			if existingID, ok := a.sessionMsgIDs.Load(key); ok {
+				msg.Metadata["update_message_id"] = existingID.(string)
+			}
 		}
+
 		if replyTo, ok := a.sessionReplyTo.Load(key); ok {
 			msg.Metadata["message_id"] = replyTo.(string)
 		}

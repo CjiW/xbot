@@ -100,9 +100,8 @@ func CloseTransport(t any) {
 
 			select {
 			case err := <-resultCh:
-				if err != nil && !IsProcessExitError(err) {
-					// 忽略进程退出错误，只记录其他错误
-				}
+				// 忽略进程退出错误，只记录其他错误
+				_ = err
 			case <-ctx.Done():
 				// 超时不等待
 			}

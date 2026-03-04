@@ -15,6 +15,13 @@ type CardBuilder struct {
 	sessions     map[string]*CardSession
 	counter      atomic.Int64
 	descriptions sync.Map // card_id -> description string (persists after session removal for callback context)
+
+	// expectedInteractions stores which interaction types a card expects (persists after session removal)
+	expectedInteractions sync.Map // card_id -> []string
+	// activeCards tracks chat_id -> card_id for skip handling
+	activeCards sync.Map // chat_id -> card_id
+	// elementOptions stores card_id -> map[elementName]optionsDescription for callback context
+	elementOptions sync.Map // card_id -> map[string]string
 }
 
 // NewCardBuilder creates a CardBuilder instance.
@@ -35,6 +42,10 @@ type CardSession struct {
 	ChatID     string
 	SendFunc   func(channel, chatID, content string) error
 	CreatedAt  time.Time
+
+	// ExpectedInteractions tracks which interaction types this card should handle
+	// e.g., "button", "select_static", "multi_select_static", "form_submit"
+	ExpectedInteractions []string
 }
 
 // CardElement represents a single component in the card tree.
@@ -96,6 +107,63 @@ func (b *CardBuilder) GetDescription(cardID string) string {
 		return v.(string)
 	}
 	return ""
+}
+
+// SaveExpectedInteractions stores interaction types for callback routing (persists after session removal).
+func (b *CardBuilder) SaveExpectedInteractions(cardID string, interactions []string) {
+	b.expectedInteractions.Store(cardID, interactions)
+}
+
+// GetExpectedInteractions retrieves expected interaction types for a card.
+func (b *CardBuilder) GetExpectedInteractions(cardID string) []string {
+	if v, ok := b.expectedInteractions.Load(cardID); ok {
+		return v.([]string)
+	}
+	return nil
+}
+
+// SaveActiveCard stores chat_id -> card_id mapping for skip handling.
+// Only one active card per chat is tracked (the most recent one).
+func (b *CardBuilder) SaveActiveCard(chatID, cardID string) {
+	b.activeCards.Store(chatID, cardID)
+}
+
+// GetActiveCardID retrieves the active card ID for a chat.
+func (b *CardBuilder) GetActiveCardID(chatID string) (string, bool) {
+	if v, ok := b.activeCards.Load(chatID); ok {
+		return v.(string), true
+	}
+	return "", false
+}
+
+// ClearActiveCard removes the active card mapping for a chat.
+func (b *CardBuilder) ClearActiveCard(chatID string) {
+	b.activeCards.Delete(chatID)
+}
+
+// SaveElementOptions stores element name -> options description mapping for a card.
+func (b *CardBuilder) SaveElementOptions(cardID string, options map[string]string) {
+	b.elementOptions.Store(cardID, options)
+}
+
+// GetElementOptions retrieves element options for a card by element name.
+func (b *CardBuilder) GetElementOptions(cardID, elementName string) string {
+	if v, ok := b.elementOptions.Load(cardID); ok {
+		if opts, ok := v.(map[string]string); ok {
+			return opts[elementName]
+		}
+	}
+	return ""
+}
+
+// GetAllElementOptions retrieves all element options for a card.
+func (b *CardBuilder) GetAllElementOptions(cardID string) map[string]string {
+	if v, ok := b.elementOptions.Load(cardID); ok {
+		if opts, ok := v.(map[string]string); ok {
+			return opts
+		}
+	}
+	return nil
 }
 
 // ---------- CardSession methods ----------
@@ -286,6 +354,110 @@ func (s *CardSession) Description() string {
 	return sb.String()
 }
 
+// CollectExpectedInteractions scans all elements and records which interaction types
+// this card should handle. This is called before sending the card.
+// - Buttons are always handled
+// - Form submissions are always handled
+// - Standalone selects (not inside a form) are handled immediately on change
+func (s *CardSession) CollectExpectedInteractions() {
+	interactions := make(map[string]bool)
+
+	// Track if we're inside a form
+	var collectFromElement func(elem *CardElement, insideForm bool)
+	collectFromElement = func(elem *CardElement, insideForm bool) {
+		switch elem.Tag {
+		case "button":
+			// Buttons are always handled
+			interactions["button"] = true
+			// Check if this is a form submit button
+			if at, ok := elem.Properties["action_type"].(string); ok && at == "form_submit" {
+				interactions["form_submit"] = true
+			}
+
+		case "select_static", "multi_select_static",
+			"select_person", "multi_select_person",
+			"date_picker", "picker_time", "picker_datetime",
+			"overflow", "checker", "select_img":
+			// Only handle these immediately if NOT inside a form
+			// Inside a form, they're collected on submit
+			if !insideForm {
+				interactions[elem.Tag] = true
+			}
+
+		case "form":
+			// Mark that we're now inside a form
+			for _, child := range elem.Children {
+				collectFromElement(child, true)
+			}
+			return // Don't process children again
+
+		case "input":
+			// Input changes are not handled immediately; only on form submit
+			// No action needed here
+		}
+
+		// Recurse into children
+		for _, child := range elem.Children {
+			collectFromElement(child, insideForm)
+		}
+	}
+
+	for _, elem := range s.Elements {
+		collectFromElement(elem, false)
+	}
+
+	// Convert to slice
+	s.ExpectedInteractions = make([]string, 0, len(interactions))
+	for interaction := range interactions {
+		s.ExpectedInteractions = append(s.ExpectedInteractions, interaction)
+	}
+}
+
+// CollectElementOptions collects options for all interactive elements that have options.
+// Returns a map of element name -> options description for use in callbacks.
+func (s *CardSession) CollectElementOptions() map[string]string {
+	options := make(map[string]string)
+
+	var collectFromElement func(elem *CardElement)
+	collectFromElement = func(elem *CardElement) {
+		name, _ := elem.Properties["name"].(string)
+
+		switch elem.Tag {
+		case "select_static", "multi_select_static", "overflow":
+			if name != "" {
+				if opts := describeOptionsWithValues(elem.Properties["options"]); opts != "" {
+					options[name] = opts
+				}
+			}
+		case "select_img":
+			if name != "" {
+				if opts, ok := elem.Properties["options"].([]map[string]any); ok {
+					parts := make([]string, 0, len(opts))
+					for _, opt := range opts {
+						if v, ok := opt["value"].(string); ok {
+							parts = append(parts, v)
+						}
+					}
+					if len(parts) > 0 {
+						options[name] = strings.Join(parts, ", ")
+					}
+				}
+			}
+		}
+
+		// Recurse into children
+		for _, child := range elem.Children {
+			collectFromElement(child)
+		}
+	}
+
+	for _, elem := range s.Elements {
+		collectFromElement(elem)
+	}
+
+	return options
+}
+
 func describeElement(sb *strings.Builder, e *CardElement, depth int) {
 	indent := strings.Repeat("  ", depth)
 	switch e.Tag {
@@ -399,6 +571,31 @@ func describeOptions(opts any) string {
 		}
 	}
 	return strings.Join(labels, ", ")
+}
+
+// describeOptionsWithValues returns a detailed description of options including both text and value.
+// This is useful for callback context where we need complete option information.
+func describeOptionsWithValues(opts any) string {
+	arr, ok := opts.([]map[string]any)
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, len(arr))
+	for _, opt := range arr {
+		text := ""
+		if t, ok := opt["text"].(map[string]any); ok {
+			text, _ = t["content"].(string)
+		}
+		value, _ := opt["value"].(string)
+		if text != "" && value != "" && text != value {
+			parts = append(parts, fmt.Sprintf("%s (value: %s)", text, value))
+		} else if text != "" {
+			parts = append(parts, text)
+		} else if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func previewElement(e *CardElement, idx, depth int) string {

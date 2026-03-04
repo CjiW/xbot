@@ -13,6 +13,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/tools"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -52,6 +53,9 @@ type FeishuChannel struct {
 
 	// 卡片 message_id -> card_id 映射（用于回调路由）
 	cardMsgIDs sync.Map
+
+	// CardBuilder for card callback handling
+	cardBuilder *tools.CardBuilder
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -66,6 +70,11 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 }
 
 func (f *FeishuChannel) Name() string { return "feishu" }
+
+// SetCardBuilder sets the CardBuilder for card callback handling.
+func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
+	f.cardBuilder = builder
+}
 
 // Start 启动飞书 WebSocket 长连接
 func (f *FeishuChannel) Start() error {
@@ -681,6 +690,32 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		replyTo = senderID
 	}
 
+	// 检查是否有活跃的卡片会话，用户发送文本消息时跳过卡片
+	if msgType == "text" && f.cardBuilder != nil {
+		if activeCardID, ok := f.cardBuilder.GetActiveCardID(replyTo); ok {
+			// 查找卡片消息 ID 并 patch 为"已跳过"状态
+			f.cardMsgIDs.Range(func(key, value any) bool {
+				if value.(string) == activeCardID {
+					messageID := key.(string)
+					skippedCard := f.buildCard("⚠️ 用户选择直接回复，卡片已关闭")
+					if cardJSON, err := json.Marshal(skippedCard); err == nil {
+						if err := f.patchMessage(messageID, cardJSON); err != nil {
+							log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to patch skipped card")
+						}
+					}
+					return false // stop iteration
+				}
+				return true
+			})
+			// 清除活跃卡片映射
+			f.cardBuilder.ClearActiveCard(replyTo)
+			log.WithFields(log.Fields{
+				"chat_id": replyTo,
+				"card_id": activeCardID,
+			}).Info("Card skipped due to text message")
+		}
+	}
+
 	// 解析发送者姓名
 	senderName := f.getUserName(senderID)
 
@@ -752,11 +787,13 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 }
 
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
-// Only button clicks and form submissions are forwarded to the agent.
-// Other element interactions (select change, input change, etc.) are silently ignored.
+// Button clicks, form submissions, and standalone select interactions are forwarded to the agent.
 func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
 	responseData := make(map[string]string)
 	actionName := action.Tag
+
+	// Check if this interaction type is expected for this card
+	expectedInteractions := f.getExpectedInteractions(cardID)
 
 	switch {
 	case actionName == "form_submit" || len(action.FormValue) > 0:
@@ -791,13 +828,84 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			}
 		}
 
+	case actionName == "select_static", actionName == "multi_select_static":
+		// Only handle if this card expects standalone select interactions
+		if !f.isExpectedInteraction(expectedInteractions, actionName) {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring select interaction (not expected for this card)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
+
+		// Extract selection from action.Value
+		elementName := action.Name
+		if elementName != "" {
+			responseData["element_name"] = elementName
+		}
+
+		// Get selected value(s)
+		if action.Value != nil {
+			if selected, ok := action.Value["selected_option"]; ok {
+				responseData["selected"] = fmt.Sprintf("%v", selected)
+			} else if selected, ok := action.Value["selected_options"]; ok {
+				responseData["selected"] = fmt.Sprintf("%v", selected)
+			}
+		}
+
+		// Get available options from card metadata for context
+		if f.cardBuilder != nil && elementName != "" {
+			if opts := f.cardBuilder.GetElementOptions(cardID, elementName); opts != "" {
+				responseData["available_options"] = opts
+			}
+		}
+
+		// Clear active card since user interacted with it
+		if f.cardBuilder != nil && chatID != "" {
+			f.cardBuilder.ClearActiveCard(chatID)
+		}
+
+	case actionName == "overflow", actionName == "checker", actionName == "select_img":
+		// Handle other interactive elements if expected
+		if !f.isExpectedInteraction(expectedInteractions, actionName) {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring interactive element (not expected for this card)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
+
+		elementName := action.Name
+		if elementName != "" {
+			responseData["element_name"] = elementName
+		}
+		for k, v := range actionData {
+			if k == "card_id" {
+				continue
+			}
+			switch val := v.(type) {
+			case string:
+				responseData[k] = val
+			default:
+				data, _ := json.Marshal(val)
+				responseData[k] = string(data)
+			}
+		}
+
+		// Clear active card since user interacted with it
+		if f.cardBuilder != nil && chatID != "" {
+			f.cardBuilder.ClearActiveCard(chatID)
+		}
+
 	default:
-		// 非按钮/非表单提交的交互（select change、input change 等）静默忽略，不转发给 agent
+		// Unknown interaction type
 		log.WithFields(log.Fields{
 			"card_id": cardID,
 			"tag":     actionName,
 			"name":    action.Name,
-		}).Debug("Ignoring non-submit card interaction")
+		}).Debug("Ignoring unknown card interaction type")
 		return &callback.CardActionTriggerResponse{}, nil
 	}
 
@@ -816,6 +924,10 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			if err := f.patchMessage(messageID, cardJSON); err != nil {
 				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
 			}
+		}
+		// Clear active card since user interacted with it
+		if f.cardBuilder != nil && chatID != "" {
+			f.cardBuilder.ClearActiveCard(chatID)
 		}
 	}
 
@@ -846,6 +958,28 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			Content: "已收到，正在处理...",
 		},
 	}, nil
+}
+
+// getExpectedInteractions returns the expected interaction types for a card.
+func (f *FeishuChannel) getExpectedInteractions(cardID string) []string {
+	if f.cardBuilder == nil {
+		return nil
+	}
+	return f.cardBuilder.GetExpectedInteractions(cardID)
+}
+
+// isExpectedInteraction checks if an interaction type is expected for a card.
+func (f *FeishuChannel) isExpectedInteraction(expected []string, actionName string) bool {
+	if len(expected) == 0 {
+		// Default behavior: only handle button and form_submit
+		return actionName == "button" || actionName == "form_submit"
+	}
+	for _, e := range expected {
+		if e == actionName {
+			return true
+		}
+	}
+	return false
 }
 
 // formatMapString 将 map 格式化为字符串（用于 metadata）

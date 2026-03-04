@@ -660,12 +660,21 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("build card JSON: %w", err)
 	}
 
+	// Collect and save card metadata for callback handling
+	session.CollectExpectedInteractions()
 	t.builder.SaveDescription(session.ID, session.Description())
+	t.builder.SaveExpectedInteractions(session.ID, session.ExpectedInteractions)
+	t.builder.SaveElementOptions(session.ID, session.CollectElementOptions())
 
 	if session.SendFunc != nil {
 		if err := session.SendFunc(session.Channel, session.ChatID, "__FEISHU_CARD__:"+session.ID+":"+string(cardJSON)); err != nil {
 			return nil, fmt.Errorf("send card: %w", err)
 		}
+	}
+
+	// Track active card for skip handling
+	if session.ChatID != "" {
+		t.builder.SaveActiveCard(session.ChatID, session.ID)
 	}
 
 	t.builder.RemoveSession(args.CardID)

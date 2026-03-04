@@ -1,6 +1,6 @@
 module xbot
 
-go 1.25.1
+go 1.25.3
 
 require (
 	github.com/google/uuid v1.6.0
@@ -12,6 +12,7 @@ require (
 require (
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/mark3labs/mcp-go v0.44.0
+	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/sergi/go-diff v1.4.0
 )
 
@@ -22,7 +23,6 @@ require (
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect

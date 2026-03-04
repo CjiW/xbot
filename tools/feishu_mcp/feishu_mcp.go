@@ -8,7 +8,6 @@ import (
 	"xbot/oauth"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 )
 
 // FeishuMCP provides access to Feishu APIs using the generic OAuth framework.
@@ -68,7 +67,7 @@ func (m *FeishuMCP) GetClient(ctx context.Context, channel, chatID string) (*Cli
 
 	// 如果没有域名，尝试获取并更新 Token（兼容旧数据）
 	if tenantDomain == "" && m.larkClient != nil {
-		domain, err := m.fetchTenantDomain(ctx, wrapper.AccessToken())
+		domain, err := m.fetchTenantDomain(ctx)
 		if err != nil {
 			log.WithError(err).Warn("Failed to fetch tenant domain")
 		} else if domain != "" {
@@ -93,9 +92,10 @@ func (m *FeishuMCP) GetClient(ctx context.Context, channel, chatID string) (*Cli
 	}, nil
 }
 
-// fetchTenantDomain 获取租户域名
-func (m *FeishuMCP) fetchTenantDomain(ctx context.Context, accessToken string) (string, error) {
-	resp, err := m.larkClient.Tenant.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
+// fetchTenantDomain 获取租户域名 using the app's tenant_access_token
+// Returns empty string if domain is not set (some tenants don't have custom domains)
+func (m *FeishuMCP) fetchTenantDomain(ctx context.Context) (string, error) {
+	resp, err := m.larkClient.Tenant.Tenant.Query(ctx)
 	if err != nil {
 		return "", fmt.Errorf("query tenant: %w", err)
 	}
@@ -104,11 +104,12 @@ func (m *FeishuMCP) fetchTenantDomain(ctx context.Context, accessToken string) (
 		return "", fmt.Errorf("tenant query failed: %s", resp.Msg)
 	}
 
-	if resp.Data.Tenant != nil && resp.Data.Tenant.Domain != nil {
+	if resp.Data.Tenant != nil && resp.Data.Tenant.Domain != nil && *resp.Data.Tenant.Domain != "" {
 		return *resp.Data.Tenant.Domain, nil
 	}
 
-	return "", fmt.Errorf("tenant domain is empty")
+	// Some tenants don't have custom domains - return empty string (not an error)
+	return "", nil
 }
 
 // Client returns the underlying Lark client.

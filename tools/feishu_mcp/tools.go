@@ -35,7 +35,7 @@ func (t *SearchWikiTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Specific Wiki space ID to search (optional, searches all spaces if not provided)",
+			Description: "Wiki space ID (numeric string like '7123456789012345678', from feishu_wiki_list_spaces). Optional, searches all spaces if not provided.",
 			Required:    false,
 		},
 		{

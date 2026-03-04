@@ -27,7 +27,9 @@ type Tool interface {
 | `mcp.go` | MCP 管理器、远程工具适配 |
 | `mcp_common.go` | MCP 公共函数（连接、配置加载） |
 | `session_mcp.go` | 会话级 MCP 管理（懒加载、超时卸载） |
-| `feishu_mcp/*.go` | 飞书 MCP 工具封装 |
+| `feishu_mcp/*.go` | 飞书 MCP 工具封装（详见 feishu-mcp skill） |
+| `card_builder.go` | 卡片构建器（详见 card-builder skill） |
+| `card_tools.go` | 卡片工具（详见 card-builder skill） |
 
 ## 核心数据结构
 
@@ -68,6 +70,25 @@ type ToolContext struct {
 - 不要在 Description 中写步骤指引（如 "STEP 1/2/3"）
 - 操作指引应放在返回结果的 `Tips` 字段中
 
+### 参数描述最佳实践
+
+**核心原则**：让 LLM 理解参数从哪里来、格式是什么。
+
+**必须包含**：
+1. 参数的**来源**（从哪里获取）
+2. **具体示例**（展示格式）
+3. **反例**（避免什么）
+
+```go
+// ❌ 差的描述 - LLM 可能传入数字 ID
+Description: "Node token (e.g., wikcnXXXXX)"
+
+// ✅ 好的描述 - 明确从 URL 提取
+Description: "Token from Feishu URL path. From https://xxx.feishu.cn/wiki/XXXXX, use XXXXX. NOT a numeric ID."
+```
+
+**更多飞书相关参数描述模板，详见 feishu-mcp skill**
+
 ### 返回结果
 - 成功时使用 `NewResult()` 或 `NewResultWithTips()`
 - `Tips` 字段告诉 LLM 下一步可以做什么
@@ -78,68 +99,40 @@ type ToolContext struct {
 - 使用 `Client.BuildURL(token, objType)` 构建完整 URL
 - 企业域名在 OAuth 授权时自动获取并存储
 
-## 飞书 MCP 工具
+## 相关 Skills
 
-### 架构
-
-```
-FeishuMCP → OAuth Manager → FeishuProvider → Lark Client
-                ↓
-         Token.Raw["tenant_domain"]  ← 自动获取企业域名
-```
-
-### Client 结构
-
-```go
-type Client struct {
-    lark         *lark.Client
-    accessToken  string
-    tenantDomain string  // 企业域名，如 "example.feishu.cn"
-}
-
-// 构建完整 URL
-func (c *Client) BuildURL(token, objType string) string
-```
-
-### Token 类型自动检测
-
-| 前缀 | 类型 |
-|------|------|
-| `wikcn` | wiki |
-| `doxcn` | docx |
-| `basc` | bitable |
-| `shtcn` | sheet |
-| `ndtbn` | mindnote |
-| `pptcn` | slides |
-| `filcn` | file |
-
-### 企业域名获取
-
-在 `oauth/providers/feishu.go` 中，OAuth 授权成功后自动调用：
-
-```go
-resp, err := p.client.Tenant.V2.Tenant.Query(ctx, larkcore.WithUserAccessToken(accessToken))
-// 存储到 token.Raw["tenant_domain"]
-```
+- **feishu-mcp** - 飞书 MCP 工具开发详解（URL 结构、token 格式、API 调用）
+- **card-builder** - 卡片构建器和卡片工具
 
 ## 常见陷阱
 
-### 1. Description 过于冗长
+### 1. 参数描述不清晰
+**问题**：参数描述只写 "token (e.g., wikcnXXXXX)"，LLM 传入错误格式
+
+**解决**：说明来源、给出示例、明确反例。详见 feishu-mcp skill
+
+### 2. Description 过于冗长
 **问题**：在 Description 中写步骤指引，浪费 LLM context
 
 **解决**：Description 只写功能描述，操作指引放 Tips 字段
-
-### 2. 硬编码占位域名
-**问题**：使用 `xxx.feishu.cn` 会导致 LLM 输出无效 URL
-
-**解决**：使用 `client.BuildURL()` 构建真实 URL
 
 ### 3. 忘记注册新工具
 **问题**：实现了 Tool 接口但未注册
 
 **解决**：在 `main.go` 中调用 `agentLoop.RegisterTool()`
 
+### 4. 飞书相关陷阱
+详见 **feishu-mcp skill**：
+- Token 类型混用
+- Wiki API obj_type 误用
+- 硬编码占位域名
+
 ## 变更历史
 
+- 2026-03-04: 分离 feishu-mcp 为独立 skill，简化本文档
+- 2026-03-04: 添加参数描述最佳实践，添加"参数描述不清晰"陷阱
+- 2026-03-04: 添加 Wiki API obj_type 参数误用陷阱
+- 2026-03-04: 添加 Token 类型混用陷阱，修正企业域名获取方式
+- 2026-03-04: 分离 card-builder 为独立 skill，添加 ExpectedInteractions 跟踪
 - 2025-03-04: 添加 ToolResult.Tips 字段，优化飞书工具 Description，支持企业域名自动获取
 - 2025-03-03: 修复 Windows 编译问题，分离 shell.go 为跨平台实现

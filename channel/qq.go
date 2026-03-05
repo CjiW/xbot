@@ -134,6 +134,10 @@ type QQChannel struct {
 	msgSeqMap map[string]int
 	msgSeqMu  sync.Mutex
 
+	// chat type cache: chatID -> "c2c" | "group" | "guild"
+	chatTypeCache map[string]string
+	chatTypeMu    sync.RWMutex
+
 	// Quick disconnect detection
 	disconnectTimes []time.Time
 	disconnectMu    sync.Mutex
@@ -142,12 +146,13 @@ type QQChannel struct {
 // NewQQChannel 创建 QQ 渠道
 func NewQQChannel(cfg QQConfig, msgBus *bus.MessageBus) *QQChannel {
 	return &QQChannel{
-		config:       cfg,
-		msgBus:       msgBus,
-		stopCh:       make(chan struct{}),
-		processedIDs: make(map[string]struct{}),
-		maxProcessed: 1000,
-		msgSeqMap:    make(map[string]int),
+		config:        cfg,
+		msgBus:        msgBus,
+		stopCh:        make(chan struct{}),
+		processedIDs:  make(map[string]struct{}),
+		maxProcessed:  1000,
+		msgSeqMap:     make(map[string]int),
+		chatTypeCache: make(map[string]string),
 	}
 }
 
@@ -709,6 +714,9 @@ func (q *QQChannel) handleC2CMessage(data json.RawMessage) error {
 
 	msgTime := q.parseTimestamp(msg.Timestamp)
 
+	// Cache chat type for outbound routing
+	q.cacheChatType(senderID, "c2c")
+
 	// For C2C, chatID is the user's openid (reply target)
 	q.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "qq",
@@ -762,6 +770,9 @@ func (q *QQChannel) handleGroupMessage(data json.RawMessage) error {
 	}
 
 	msgTime := q.parseTimestamp(msg.Timestamp)
+
+	// Cache chat type for outbound routing
+	q.cacheChatType(groupID, "group")
 
 	q.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "qq",
@@ -820,6 +831,9 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 	}
 
 	msgTime := q.parseTimestamp(msg.Timestamp)
+
+	// Cache chat type for outbound routing
+	q.cacheChatType(channelID, "guild")
 
 	q.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "qq",
@@ -1186,12 +1200,23 @@ func (q *QQChannel) nextMsgSeq(msgID string) int {
 // Chat type inference
 // ---------------------------------------------------------------------------
 
-// inferChatType 根据 chatID 推断聊天类型
+// cacheChatType 缓存 chatID 对应的聊天类型
+func (q *QQChannel) cacheChatType(chatID, chatType string) {
+	q.chatTypeMu.Lock()
+	defer q.chatTypeMu.Unlock()
+	q.chatTypeCache[chatID] = chatType
+
+	// 防止无限增长
+	if len(q.chatTypeCache) > 10000 {
+		q.chatTypeCache = map[string]string{chatID: chatType}
+	}
+}
+
+// inferChatType 根据 chatID 查找缓存的聊天类型
 func (q *QQChannel) inferChatType(chatID string) string {
-	// This is a heuristic; QQ openids and group_openids are opaque strings.
-	// We rely on metadata from inbound messages to set chat_type correctly.
-	// If metadata is missing, we return empty and let sendAutoDetect handle it.
-	return ""
+	q.chatTypeMu.RLock()
+	defer q.chatTypeMu.RUnlock()
+	return q.chatTypeCache[chatID]
 }
 
 // ---------------------------------------------------------------------------

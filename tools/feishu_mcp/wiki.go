@@ -74,7 +74,7 @@ func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		return nil, fmt.Errorf("list fields: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	// Format result
@@ -194,7 +194,7 @@ func (t *BitableRecordTool) searchRecords(ctx *tools.ToolContext, client *Client
 		return nil, fmt.Errorf("search records: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	if len(resp.Data.Items) == 0 {
@@ -223,7 +223,7 @@ func (t *BitableRecordTool) createRecord(ctx *tools.ToolContext, client *Client,
 		return nil, fmt.Errorf("create record: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	recordID := ""
@@ -256,7 +256,7 @@ func (t *BitableRecordTool) updateRecord(ctx *tools.ToolContext, client *Client,
 		return nil, fmt.Errorf("update record: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	summary := fmt.Sprintf("Record updated: %s", args.RecordID)
@@ -308,7 +308,7 @@ func (t *BitableListTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 		return nil, fmt.Errorf("list tables: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	var result []map[string]string
@@ -412,7 +412,7 @@ func (t *BatchCreateAppTableRecordTool) Execute(ctx *tools.ToolContext, input st
 		return nil, fmt.Errorf("batch create records: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	summary := fmt.Sprintf("Created %d records", len(resp.Data.Records))

@@ -1,7 +1,10 @@
 package feishu_mcp
 
 import (
+	"encoding/json"
 	"fmt"
+
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 )
 
 // APIError represents a Feishu API error response.
@@ -20,8 +23,9 @@ func (e *APIError) Error() string {
 }
 
 // NewAPIError creates a new APIError.
-func NewAPIError(code int, msg string) *APIError {
-	return &APIError{Code: code, Msg: msg}
+func NewAPIError(err larkcore.CodeError) *APIError {
+	details, _ := json.Marshal(err)
+	return &APIError{Code: err.Code, Msg: err.Msg, Details: string(details)}
 }
 
 // NewAPIErrorWithDetails creates a new APIError with additional details.

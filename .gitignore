@@ -57,6 +57,9 @@ build/
 data/
 data-work/
 
+# Git worktrees for isolated development
+.worktrees/
+
 # Go build cache (usually in user home, but just in case)
 .cache/
 

@@ -60,7 +60,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 		return nil, fmt.Errorf("get document: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	// Convert blocks to Markdown
@@ -130,7 +130,7 @@ func (t *DocxGetBlockTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, fmt.Errorf("get document block: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	block := resp.Data.Block
@@ -191,7 +191,7 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 			return nil, fmt.Errorf("list document blocks: %w", err)
 		}
 		if !resp.Success() {
-			return nil, NewAPIError(resp.Code, resp.Msg)
+			return nil, NewAPIError(resp.CodeError)
 		}
 
 		allItems = append(allItems, resp.Data.Items...)
@@ -212,7 +212,18 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 
 	// Build block summary
 	var blocks []map[string]any
-	for i, block := range allItems {
+	childMap := make(map[string]struct{})
+	i := 0
+	for _, block := range allItems {
+		// 神秘飞书把文档也当作block返回
+		if block.BlockId == nil || *block.BlockId == args.DocumentID {
+			continue
+		}
+		trackChildren(block, childMap)
+		// check if is child
+		if _, ok := childMap[*block.BlockId]; ok {
+			continue
+		}
 		blockType := 0
 		if block.BlockType != nil {
 			blockType = *block.BlockType
@@ -234,11 +245,20 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 			"parent_id":       parentId,
 			"index":           i, // Position among siblings
 		})
+		i++
 	}
 
 	summary := fmt.Sprintf("Document has %d block(s)", len(blocks))
 	detail, _ := json.MarshalIndent(blocks, "", "  ")
 	return tools.NewResultWithDetail(summary, string(detail)).WithTips("You may use `feishu_docx_get_block` to get detailed information about a specific block."), nil
+}
+
+func trackChildren(block *docxv1.Block, childMap map[string]struct{}) {
+	if block.Children != nil {
+		for _, child := range block.Children {
+			childMap[child] = struct{}{}
+		}
+	}
 }
 
 // DocxCreateTool creates a new document.
@@ -302,7 +322,7 @@ func (t *DocxCreateTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, fmt.Errorf("create document: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	documentID := ""
@@ -384,7 +404,7 @@ func (t *DocxInsertBlockTool) Execute(ctx *tools.ToolContext, input string) (*to
 		return nil, fmt.Errorf("convert markdown to blocks: %w", err)
 	}
 	if !convertResp.Success() {
-		return nil, NewAPIError(convertResp.Code, convertResp.Msg)
+		return nil, NewAPIError(convertResp.CodeError)
 	}
 
 	// Check if we got blocks back
@@ -422,7 +442,7 @@ func (t *DocxInsertBlockTool) Execute(ctx *tools.ToolContext, input string) (*to
 		return nil, fmt.Errorf("insert blocks to document: %w", err)
 	}
 	if !descendantResp.Success() {
-		return nil, NewAPIError(descendantResp.Code, descendantResp.Msg)
+		return nil, NewAPIError(descendantResp.CodeError)
 	}
 
 	summary := fmt.Sprintf("Inserted %d block(s) to document at index %d", len(convertResp.Data.Blocks), args.InsertIndex)
@@ -464,56 +484,78 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 	}
 }
 
-// mermaidKeywords lists all known Mermaid diagram type prefixes.
+// mermaidKeywords lists all known Mermaid diagram type prefixes (lowercase).
+// Longer variants (e.g. statediagram-v2) must appear before shorter ones
+// so the longest match wins.
 var mermaidKeywords = []string{
-	"graph",
+	// flowchart
 	"flowchart",
-	"sequenceDiagram",
-	"classDiagram",
-	"stateDiagram",
-	"erDiagram",
+	"graph",
+	// sequence
+	"sequencediagram",
+	// class
+	"classdiagram-v2",
+	"classdiagram",
+	// state
+	"statediagram-v2",
+	"statediagram",
+	// entity-relationship
+	"erdiagram",
+	// gantt
 	"gantt",
+	// pie
 	"pie",
+	// user journey
 	"journey",
+	// git graph
 	"gitgraph",
+	// mindmap
 	"mindmap",
+	// timeline
 	"timeline",
+	// sankey
+	"sankey-beta",
 	"sankey",
-	"quadrantChart",
-	"requirementDiagram",
+	// quadrant chart
+	"quadrantchart",
+	// requirement diagram
+	"requirementdiagram",
+	// xy chart
 	"xychart-beta",
+	// block diagram
 	"block-beta",
+	// packet diagram
 	"packet-beta",
+	// architecture
 	"architecture-beta",
+	// kanban
 	"kanban",
+	// zenuml
 	"zenuml",
-	"C4Context",
-	"C4Container",
-	"C4Component",
-	"C4Dynamic",
-	"C4Deployment",
+	// C4 model
+	"c4context",
+	"c4container",
+	"c4component",
+	"c4dynamic",
+	"c4deployment",
 }
 
 func startsWithMermaid(content string) bool {
-	trimmed := trimLeadingWhitespace(content)
+	trimmed := strings.TrimLeft(content, " \t\n\r")
+	lower := strings.ToLower(trimmed)
 	for _, kw := range mermaidKeywords {
-		if strings.HasPrefix(trimmed, kw) {
-			// keyword must be followed by whitespace, newline, or end of string
-			if len(trimmed) == len(kw) || trimmed[len(kw)] == ' ' || trimmed[len(kw)] == '\n' || trimmed[len(kw)] == '\r' || trimmed[len(kw)] == '\t' {
+		if strings.HasPrefix(lower, kw) {
+			// keyword must be followed by whitespace or end of string
+			if len(trimmed) == len(kw) {
+				return true
+			}
+			next := trimmed[len(kw)]
+			if next == ' ' || next == '\n' || next == '\r' || next == '\t' {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-func trimLeadingWhitespace(s string) string {
-	for i, r := range s {
-		if r != ' ' && r != '\t' && r != '\n' && r != '\r' {
-			return s[i:]
-		}
-	}
-	return ""
 }
 
 func getCodeContent(block *docxv1.Block) string {
@@ -609,7 +651,7 @@ func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*t
 		return nil, fmt.Errorf("delete blocks: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	count := args.EndIndex - args.StartIndex

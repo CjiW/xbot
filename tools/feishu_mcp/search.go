@@ -42,7 +42,7 @@ func (t *WikiListSpacesTool) Execute(ctx *tools.ToolContext, input string) (*too
 		return nil, fmt.Errorf("list wiki spaces: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	if len(resp.Data.Items) == 0 {
@@ -136,7 +136,7 @@ func (t *WikiListNodesTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		return nil, fmt.Errorf("list wiki nodes: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	if len(resp.Data.Items) == 0 {
@@ -271,7 +271,7 @@ func (t *WikiGetNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 		if err != nil {
 			return nil, fmt.Errorf("get wiki node: %w", err)
 		}
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	if resp.Data.Node == nil {
@@ -329,7 +329,7 @@ func (t *WikiGetNodeTool) getDocxDocument(ctx *tools.ToolContext, client *Client
 		return nil, fmt.Errorf("get document: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	doc := resp.Data.Document
@@ -427,7 +427,7 @@ func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, fmt.Errorf("move wiki node: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	return tools.NewResult(fmt.Sprintf("✅ Node %s moved successfully to parent %s",
@@ -535,7 +535,7 @@ func (t *WikiCreateNodeTool) Execute(ctx *tools.ToolContext, input string) (*too
 		return nil, fmt.Errorf("create wiki node: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	node := resp.Data.Node

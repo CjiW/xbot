@@ -165,6 +165,16 @@ func main() {
 
 	}
 
+	// 注册 QQ 渠道
+	if cfg.QQ.Enabled {
+		qqCh := channel.NewQQChannel(channel.QQConfig{
+			AppID:        cfg.QQ.AppID,
+			ClientSecret: cfg.QQ.ClientSecret,
+			AllowFrom:    cfg.QQ.AllowFrom,
+		}, msgBus)
+		disp.Register(qqCh)
+	}
+
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
 

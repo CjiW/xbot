@@ -20,6 +20,14 @@ type OAuthConfig struct {
 	BaseURL string // OAuth 回调基础 URL (e.g., https://your-domain.com)
 }
 
+// QQConfig QQ 机器人渠道配置
+type QQConfig struct {
+	Enabled      bool
+	AppID        string
+	ClientSecret string
+	AllowFrom    []string // 允许的 openid 列表（空则允许所有）
+}
+
 // Config 应用配置
 type Config struct {
 	Server ServerConfig
@@ -27,6 +35,7 @@ type Config struct {
 	Log    LogConfig
 	PProf  PProfConfig
 	Feishu FeishuConfig
+	QQ     QQConfig
 	Agent  AgentConfig
 	OAuth  OAuthConfig
 }
@@ -121,6 +130,12 @@ func Load() *Config {
 			Enable: getEnvBoolOrDefault("PPROF_ENABLE", false),
 			Host:   getEnvOrDefault("PPROF_HOST", "localhost"),
 			Port:   getEnvIntOrDefault("PPROF_PORT", 6060),
+		},
+		QQ: QQConfig{
+			Enabled:      getEnvBoolOrDefault("QQ_ENABLED", false),
+			AppID:        getEnvOrDefault("QQ_APP_ID", ""),
+			ClientSecret: getEnvOrDefault("QQ_CLIENT_SECRET", ""),
+			AllowFrom:    splitEnv("QQ_ALLOW_FROM"),
 		},
 		Feishu: FeishuConfig{
 			Enabled:           getEnvBoolOrDefault("FEISHU_ENABLED", false),

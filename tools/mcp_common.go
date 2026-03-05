@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"xbot/llm"
+	log "xbot/logger"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -37,13 +40,54 @@ type mcpConnection struct {
 	tools     []mcp.Tool
 }
 
-// ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	// 构建环境变量列表
+// BuildStdioEnv 构建 stdio 模式的环境变量列表，将 .xbot/bin 加入 PATH
+func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	var envList []string
 	for k, v := range cfg.Env {
 		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
 	}
+
+	// 将 .xbot/bin 加入 PATH（方便 MCP 命令找到本地安装的工具）
+	if binDir := resolveXbotBinDir(configPath); binDir != "" {
+		currentPath := os.Getenv("PATH")
+		if currentPath != "" {
+			envList = append(envList, fmt.Sprintf("PATH=%s:%s", binDir, currentPath))
+		} else {
+			envList = append(envList, fmt.Sprintf("PATH=%s", binDir))
+		}
+		log.WithField("bin_dir", binDir).Debug("Added .xbot/bin to MCP server PATH")
+	}
+
+	return envList
+}
+
+// resolveXbotBinDir 从 configPath 推断 .xbot/bin 目录（存在才返回）
+func resolveXbotBinDir(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+
+	dir := filepath.Dir(configPath) // e.g. /workdir/.xbot 或 /workdir
+
+	// 如果 configPath 在 .xbot/ 目录下，bin 目录就在同一级
+	var binDir string
+	if strings.HasSuffix(dir, string(filepath.Separator)+".xbot") || filepath.Base(dir) == ".xbot" {
+		binDir = filepath.Join(dir, "bin")
+	} else {
+		// configPath 在 workDir 根目录，如 /workdir/mcp.json
+		binDir = filepath.Join(dir, ".xbot", "bin")
+	}
+
+	// 仅在目录存在时返回
+	if info, err := os.Stat(binDir); err == nil && info.IsDir() {
+		return binDir
+	}
+	return ""
+}
+
+// ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath string) (*mcpclient.Client, any, error) {
+	envList := BuildStdioEnv(cfg, configPath)
 
 	// 创建 stdio transport
 	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)

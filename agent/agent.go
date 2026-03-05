@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,26 @@ import (
 	"xbot/tools"
 	"xbot/version"
 )
+
+// resolveDataPath 解析数据文件路径，优先使用 .xbot/ 目录，向后兼容工作目录根路径
+// 读取时：优先新路径，不存在则回退旧路径
+// 写入时：始终使用新路径
+func resolveDataPath(workDir, filename string) string {
+	xbotDir := filepath.Join(workDir, ".xbot")
+	newPath := filepath.Join(xbotDir, filename)
+	oldPath := filepath.Join(workDir, filename)
+
+	// 优先使用新路径
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath
+	}
+	// 新路径不存在，检查旧路径
+	if _, err := os.Stat(oldPath); err == nil {
+		return oldPath
+	}
+	// 都不存在，返回新路径（用于创建新文件）
+	return newPath
+}
 
 // Agent 核心 Agent 引擎
 type Agent struct {
@@ -96,8 +117,8 @@ func New(cfg Config) *Agent {
 	chatHistory := tools.NewChatHistoryStore(20) // 每个群组保留最近 20 条
 	registry.Register(tools.NewChatHistoryTool(chatHistory))
 
-	// MCP 配置路径
-	mcpConfigPath := filepath.Join(cfg.WorkDir, "mcp.json")
+	// MCP 配置路径：优先使用 .xbot/mcp.json，向后兼容 mcp.json
+	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
 	registry.Register(tools.NewManageTools(mcpConfigPath))

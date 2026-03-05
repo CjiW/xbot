@@ -142,7 +142,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 
 // connectStdioServer 连接 stdio 模式的 MCP Server
 func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	return ConnectStdioServer(ctx, cfg)
+	return ConnectStdioServer(ctx, cfg, m.configPath)
 }
 
 // connectHTTPServer 连接 HTTP 模式的 MCP Server

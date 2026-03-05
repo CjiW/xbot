@@ -5,14 +5,11 @@ package feishu_mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 
+	"xbot/oauth"
+	"xbot/oauth/providers"
 	"xbot/tools"
-
-	lark "github.com/larksuite/oapi-sdk-go/v3"
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	docxv1 "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 )
 
 // TestDocxWrite tests the docx write functionality
@@ -21,14 +18,53 @@ func TestDocxWrite(t *testing.T) {
 	// Run with: go test -run TestDocxWrite ./tools/feishu_mcp/
 
 	// Create a mock MCP for testing
-	mcp := &FeishuMCP{}
+
+	sotrage, err := oauth.NewSQLiteStorage(".xbot/oauth_tokens.db")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	mcp := &FeishuMCP{
+		oauth: oauth.NewManager(sotrage),
+	}
+
+	mcp.oauth.RegisterProvider(providers.NewFeishuProvider("", "", "http://localhost:8080/callback"))
 
 	tool := &DocxWriteTool{MCP: mcp}
 
 	// Test parameters
 	params := map[string]interface{}{
-		"document_id": "test_doc_id",
-		"content":     "# Test Heading\n\nThis is a test paragraph.",
+		"document_id": "",
+		"content": `# Test Heading
+
+This is a paragraph.
+
+- Item 1
+  - 111
+  - 222
+    - 3333
+- Item 2
+
+
+
+1. Ordered 1
+2. Ordered 2
+
+| Table Header 1 | Table Header 2 |
+| --- | --- |
+| Cell 1 | $let a = 1$ |
+| Cell 3 | Cell 4 |
+## dassdad
+> Quote
+### adsdad
+` + "```" + `
+graph TD
+    A[用户申请权限] --> B[审批流程]
+    B --> C{时间评估}
+    C -->|短期| D[设置过期时间]
+    C -->|长期| E[定期审查]
+    D --> F[自动过期提醒]
+    E --> G[季度权限审计]
+` + "```",
 	}
 
 	input, _ := json.Marshal(params)
@@ -36,67 +72,12 @@ func TestDocxWrite(t *testing.T) {
 	result, err := tool.Execute(&tools.ToolContext{
 		Ctx:     context.Background(),
 		Channel: "feishu",
-		ChatID:  "test_chat",
+		ChatID:  "",
 	}, string(input))
 
 	if err != nil {
-		t.Logf("Error (expected without real credentials): %v", err)
+		t.Fatalf("Error (expected without real credentials): %v", err)
 	}
 
 	t.Logf("Result: %v", result)
-}
-
-// TestConvertMarkdown tests the markdown conversion
-func TestConvertMarkdown(t *testing.T) {
-	// You need to set LARK_APP_ID and LARK_APP_SECRET env vars
-	// and have a valid user_access_token
-
-	appID := "your_app_id"
-	appSecret := "your_app_secret"
-
-	client := lark.NewClient(appID, appSecret)
-
-	markdown := `# Test Heading
-
-This is a paragraph.
-
-- Item 1
-- Item 2
-
-1. Ordered 1
-2. Ordered 2
-
-> Quote
-
-` + "```" + `
-code block
-` + "```"
-
-	// Step 1: Convert Markdown to blocks
-	convertBody := docxv1.NewConvertDocumentReqBodyBuilder().
-		ContentType("markdown").
-		Content(markdown).
-		Build()
-
-	convertReq := docxv1.NewConvertDocumentReqBuilder().
-		Body(convertBody).
-		Build()
-
-	convertResp, err := client.Docx.V1.Document.Convert(context.Background(), convertReq)
-	if err != nil {
-		t.Fatalf("Convert failed: %v", err)
-	}
-
-	if !convertResp.Success() {
-		t.Fatalf("Convert API error: %d - %s", convertResp.Code, convertResp.Msg)
-	}
-
-	t.Logf("Converted %d blocks", len(convertResp.Data.Blocks))
-	t.Logf("First level block IDs: %v", convertResp.Data.FirstLevelBlockIds)
-
-	// Print block structure for debugging
-	for i, block := range convertResp.Data.Blocks {
-		blockJSON, _ := json.MarshalIndent(block, "", "  ")
-		t.Logf("Block %d:\n%s", i, string(blockJSON))
-	}
 }

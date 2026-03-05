@@ -254,10 +254,7 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 
 // connectStdioServer 连接 stdio 模式的 MCP Server
 func (sm *SessionMCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	var envList []string
-	for k, v := range cfg.Env {
-		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
-	}
+	envList := BuildStdioEnv(cfg, sm.configPath)
 
 	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
 

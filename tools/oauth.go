@@ -22,7 +22,8 @@ func (t *OAuthTool) Name() string {
 // Description returns the tool description.
 func (t *OAuthTool) Description() string {
 	return "Send an OAuth authorization card to the user. " +
-		"Use this when an operation requires OAuth authorization from a provider."
+		"Use this when an operation requires OAuth authorization from a provider. " +
+		"IMPORTANT: Do NOT specify scopes unless absolutely necessary - the default scopes cover all common operations."
 }
 
 // Parameters returns the tool parameters.
@@ -43,7 +44,7 @@ func (t *OAuthTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "scopes",
 			Type:        "array",
-			Description: "Required OAuth scopes as strings (optional, provider has defaults)",
+			Description: "OAuth scopes (LEAVE EMPTY to use default scopes which cover all common operations)",
 			Required:    false,
 		},
 	}

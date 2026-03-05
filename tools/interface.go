@@ -65,6 +65,16 @@ func NewResultWithTips(summary, tips string) *ToolResult {
 	return &ToolResult{Summary: summary, Tips: tips}
 }
 
+func (r *ToolResult) WithDetail(detail string) *ToolResult {
+	r.Detail = detail
+	return r
+}
+
+func (r *ToolResult) WithTips(tips string) *ToolResult {
+	r.Tips = tips
+	return r
+}
+
 // Tool 工具接口
 type Tool interface {
 	llm.ToolDefinition

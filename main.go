@@ -133,9 +133,8 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.DocxGetContentTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxListBlocksTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxCreateTool{MCP: feishuMCP})
-		agentLoop.RegisterTool(&feishu_mcp.DocxRawContentTool{MCP: feishuMCP})
-		agentLoop.RegisterTool(&feishu_mcp.DocxWriteTool{MCP: feishuMCP})
-		agentLoop.RegisterTool(&feishu_mcp.DocxUpdateBlockTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxInsertBlockTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxGetBlockTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxDeleteBlocksTool{MCP: feishuMCP})
 
 		// Search tools
@@ -163,6 +162,7 @@ func main() {
 			AllowFrom:         cfg.Feishu.AllowFrom,
 		}, msgBus)
 		disp.Register(feishuCh)
+
 	}
 
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id

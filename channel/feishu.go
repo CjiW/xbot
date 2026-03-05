@@ -56,6 +56,12 @@ type FeishuChannel struct {
 
 	// CardBuilder for card callback handling
 	cardBuilder *tools.CardBuilder
+
+	// message_id -> larkim.P2MessageReceiveV1Data（用于查找引用的关系）
+	msgMap map[string]*larkim.P2MessageReceiveV1Data
+
+	// 用于查找引用的历史消息cache数量，必须小于maxProcessed
+	maxMsgMapSize int
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -66,6 +72,8 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
 		userNameCache: make(map[string]string),
+		msgMap:        make(map[string]*larkim.P2MessageReceiveV1Data),
+		maxMsgMapSize: 50,
 	}
 }
 
@@ -666,7 +674,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	}
 
 	// 解析消息内容
-	content := f.parseContent(msgType, msg)
+	content := f.parseContent(msg)
 	if content == "" {
 		return nil
 	}
@@ -719,13 +727,31 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	// 解析发送者姓名
 	senderName := f.getUserName(senderID)
 
+	var refMsg = ""
+	refMsgEv := f.getHistoryMsgById(event.Event)
+	if refMsgEv != nil {
+		log.WithFields(log.Fields{
+			"message_id":     messageID,
+			"ref_message_id": *refMsgEv.Message.MessageId,
+		}).Info("Found reference message for incoming message")
+		refMsg = f.parseContent(refMsgEv.Message)
+		refSenderID := ""
+		if refMsgEv.Sender != nil && refMsgEv.Sender.SenderId != nil && refMsgEv.Sender.SenderId.OpenId != nil {
+			refSenderID = *refMsgEv.Sender.SenderId.OpenId
+		}
+		refSenderName := f.getUserName(refSenderID)
+		refMsg = fmt.Sprintf("> 引用自 %s 的消息：%s", refSenderName, refMsg)
+	} else if msg.RootId != nil {
+		refMsg = "[存在引用的消息但是无法找到内容，可能是因为消息过旧不在缓存中]"
+	}
+
 	// 发布到消息总线
 	f.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
 		SenderName: senderName,
 		ChatID:     replyTo,
-		Content:    content,
+		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
 		Metadata: map[string]string{
 			"message_id": messageID,
 			"chat_type":  chatType,
@@ -995,9 +1021,13 @@ func formatMapString(m map[string]string) string {
 }
 
 // parseContent 解析消息内容
-func (f *FeishuChannel) parseContent(msgType string, msg *larkim.EventMessage) string {
+func (f *FeishuChannel) parseContent(msg *larkim.EventMessage) string {
 	if msg.Content == nil || *msg.Content == "" {
 		return ""
+	}
+	var msgType string
+	if msg.MessageType != nil {
+		msgType = *msg.MessageType
 	}
 
 	var contentJSON map[string]any
@@ -1147,6 +1177,50 @@ func (f *FeishuChannel) buildCard(content string) map[string]any {
 			},
 		},
 	}
+}
+
+func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV1Data) *larkim.P2MessageReceiveV1Data {
+	currentMsg := currentMsgEV.Message
+	if currentMsg == nil {
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// 先缓存当前消息，便于后续被 RootId 引用
+	if currentMsg.MessageId != nil && *currentMsg.MessageId != "" {
+		f.msgMap[*currentMsg.MessageId] = currentMsgEV
+	}
+
+	// 控制缓存大小：仅遍历 processedOrder 末尾 maxMsgMapSize+20 个元素，减少循环次数
+	if len(f.msgMap) > f.maxMsgMapSize {
+		window := f.maxMsgMapSize + 20
+		start := 0
+		if len(f.processedOrder) > window {
+			start = len(f.processedOrder) - window
+		}
+
+		for _, id := range f.processedOrder[start:] {
+			if len(f.msgMap) <= f.maxMsgMapSize {
+				break
+			}
+			if _, ok := f.msgMap[id]; ok {
+				delete(f.msgMap, id)
+			}
+		}
+	}
+
+	// 当前消息没有 RootId，无需查找历史引用
+	if currentMsg.RootId == nil || *currentMsg.RootId == "" {
+		return nil
+	}
+
+	// 查缓存中的被引用历史消息
+	if msg, ok := f.msgMap[*currentMsg.RootId]; ok {
+		return msg
+	}
+	return nil
 }
 
 // isDuplicate 检查消息是否重复

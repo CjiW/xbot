@@ -3,7 +3,7 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (no gcc needed - using pure Go SQLite)
 RUN apk add --no-cache git
 
 # Copy go mod files
@@ -13,7 +13,7 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
+# Build the binary (no CGO needed - using pure Go SQLite)
 RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
     BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
     CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
@@ -27,8 +27,9 @@ RUN apk --no-cache add ca-certificates git
 
 WORKDIR /app
 
-# Copy the binary from builder
+# Copy the binary and prompt from builder
 COPY --from=builder /build/xbot /app/xbot
+COPY --from=builder /build/prompt.md /app/prompt.md
 
 # Create working directory
 RUN mkdir -p /data && chmod 777 /data

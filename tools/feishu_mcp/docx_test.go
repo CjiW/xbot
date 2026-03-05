@@ -19,7 +19,7 @@ func TestDocxWrite(t *testing.T) {
 
 	// Create a mock MCP for testing
 
-	sotrage, err := oauth.NewSQLiteStorage("/home/user/src/xbot/.xbot/oauth_tokens.db")
+	sotrage, err := oauth.NewSQLiteStorage(".xbot/oauth_tokens.db")
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestDocxWrite(t *testing.T) {
 
 	// Test parameters
 	params := map[string]interface{}{
-		"document_id": "O3QudiygaozHAKxRN4scEtjZnRg",
+		"document_id": "",
 		"content": `# Test Heading
 
 This is a paragraph.

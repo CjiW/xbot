@@ -22,7 +22,7 @@ type DocxGetContentTool struct {
 func (t *DocxGetContentTool) Name() string { return "feishu_docx_get_content" }
 
 func (t *DocxGetContentTool) Description() string {
-	return "Get document content and convert it to Markdown format."
+	return "Get document content in Markdown format."
 }
 
 func (t *DocxGetContentTool) Parameters() []llm.ToolParam {
@@ -74,7 +74,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 
 	return tools.NewResultWithTips(
 		fmt.Sprintf("Document content:\n\n%s", markdown),
-		"Use feishu_docx_write to add more content, or feishu_docx_update_block to modify specific blocks.",
+		"Some special nodes e.g. mermaid gragh may disappear in markdown. You can use `feishu_docx_get_block` to get detailed block content for those nodes.",
 	), nil
 }
 
@@ -207,7 +207,7 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 	}
 
 	if len(allItems) == 0 {
-		return tools.NewResultWithTips("Document is empty", "Use feishu_docx_write to add content to this document."), nil
+		return tools.NewResultWithTips("Document is empty", "Use feishu_docx_insert_block to add content to this document."), nil
 	}
 
 	// Build block summary
@@ -227,10 +227,12 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 		}
 
 		blocks = append(blocks, map[string]any{
-			"block_id":   blockId,
-			"block_type": blockType,
-			"parent_id":  parentId,
-			"index":      i, // Position among siblings
+			"block_id":        blockId,
+			"block_type":      blockType,
+			"block_type_desc": GetBlockTypeDesc(blockType),
+			"block_type_name": GetBlockTypeName(blockType),
+			"parent_id":       parentId,
+			"index":           i, // Position among siblings
 		})
 	}
 
@@ -313,18 +315,18 @@ func (t *DocxCreateTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// DocxWriteTool writes Markdown content to a document using Feishu's native Markdown API.
-type DocxWriteTool struct {
+// DocxInsertBlockTool writes Markdown content to a document using Feishu's native Markdown API.
+type DocxInsertBlockTool struct {
 	MCP *FeishuMCP
 }
 
-func (t *DocxWriteTool) Name() string { return "feishu_docx_write" }
+func (t *DocxInsertBlockTool) Name() string { return "feishu_docx_insert_block" }
 
-func (t *DocxWriteTool) Description() string {
-	return "Write Markdown content to a Feishu document. Supports headings, lists, code blocks, quotes, tables, and more."
+func (t *DocxInsertBlockTool) Description() string {
+	return "Insert content into a document at a specific block index. Content is in Markdown format and will be converted to native blocks. Use feishu_docx_list_blocks to find block indices."
 }
 
-func (t *DocxWriteTool) Parameters() []llm.ToolParam {
+func (t *DocxInsertBlockTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
 			Name:        "document_id",
@@ -341,13 +343,13 @@ func (t *DocxWriteTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "insert_index",
 			Type:        "integer",
-			Description: "Index to insert the content at (0-based), you may use feishu_docx_list_blocks to find block indices.",
+			Description: "Index to insert the content at (0-based)",
 			Required:    true,
 		},
 	}
 }
 
-func (t *DocxWriteTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+func (t *DocxInsertBlockTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
 		DocumentID  string `json:"document_id"`
 		Content     string `json:"content"`
@@ -423,8 +425,8 @@ func (t *DocxWriteTool) Execute(ctx *tools.ToolContext, input string) (*tools.To
 		return nil, NewAPIError(descendantResp.Code, descendantResp.Msg)
 	}
 
-	summary := fmt.Sprintf("Written %d block(s) to document", len(convertResp.Data.Blocks))
-	return tools.NewResult(summary), nil
+	summary := fmt.Sprintf("Inserted %d block(s) to document at index %d", len(convertResp.Data.Blocks), args.InsertIndex)
+	return tools.NewResult(summary).WithTips("If you've done editing, you may use feishu_docx_get_content to verify document content."), nil
 }
 
 // cleanBlockForDescendant cleans a block for Descendant API
@@ -456,19 +458,53 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 			block.AddOns = docxv1.NewAddOnsBuilder().ComponentTypeId("blk_631fefbbae02400430b8f9f4").Record(
 				fmt.Sprintf(`{"data":%s,"theme":"default","view":"codeChart"}`, strconv.Quote(content)),
 			).Build()
-			*block.BlockType = 40
+			*block.BlockType = BlockTypeAddOns
 		}
 
 	}
 }
 
+// mermaidKeywords lists all known Mermaid diagram type prefixes.
+var mermaidKeywords = []string{
+	"graph",
+	"flowchart",
+	"sequenceDiagram",
+	"classDiagram",
+	"stateDiagram",
+	"erDiagram",
+	"gantt",
+	"pie",
+	"journey",
+	"gitgraph",
+	"mindmap",
+	"timeline",
+	"sankey",
+	"quadrantChart",
+	"requirementDiagram",
+	"xychart-beta",
+	"block-beta",
+	"packet-beta",
+	"architecture-beta",
+	"kanban",
+	"zenuml",
+	"C4Context",
+	"C4Container",
+	"C4Component",
+	"C4Dynamic",
+	"C4Deployment",
+}
+
 func startsWithMermaid(content string) bool {
 	trimmed := trimLeadingWhitespace(content)
-	return len(trimmed) >= 7 && strings.HasPrefix(trimmed, "graph ") ||
-		len(trimmed) >= 5 && strings.HasPrefix(trimmed, "flow ") ||
-		len(trimmed) >= 9 && strings.HasPrefix(trimmed, "erDiagram") ||
-		len(trimmed) >= 15 && strings.HasPrefix(trimmed, "sequenceDiagram") ||
-		len(trimmed) >= 5 && strings.HasPrefix(trimmed, "gantt")
+	for _, kw := range mermaidKeywords {
+		if strings.HasPrefix(trimmed, kw) {
+			// keyword must be followed by whitespace, newline, or end of string
+			if len(trimmed) == len(kw) || trimmed[len(kw)] == ' ' || trimmed[len(kw)] == '\n' || trimmed[len(kw)] == '\r' || trimmed[len(kw)] == '\t' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func trimLeadingWhitespace(s string) string {

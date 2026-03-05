@@ -335,7 +335,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	log.WithFields(log.Fields{
 		"channel": msg.Channel,
 		"chat_id": msg.ChatID,
-	}).Infof("Processing cron message: %s", truncate(msg.Content, 80))
+	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
 	// 构建 cron 专用消息（无历史上下文）
 	messages := BuildCronMessages(msg.Content, a.workDir)
@@ -839,7 +839,7 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 
 	log.WithFields(log.Fields{
 		"parent": parentAgentID,
-		"task":   truncate(task, 80),
+		"task":   tools.Truncate(task, 80),
 	}).Info("SubAgent started")
 
 	// 子 Agent 迭代循环（与主 Agent 的 runLoop 类似，但使用独立工具集）
@@ -926,14 +926,6 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 	}
 
 	return "Sub-agent reached maximum iterations.", nil
-}
-
-// truncate 截断字符串
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }
 
 // addReaction 对用户消息添加表情回复，表示处理完成

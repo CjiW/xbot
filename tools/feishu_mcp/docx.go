@@ -464,56 +464,78 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 	}
 }
 
-// mermaidKeywords lists all known Mermaid diagram type prefixes.
+// mermaidKeywords lists all known Mermaid diagram type prefixes (lowercase).
+// Longer variants (e.g. statediagram-v2) must appear before shorter ones
+// so the longest match wins.
 var mermaidKeywords = []string{
-	"graph",
+	// flowchart
 	"flowchart",
-	"sequenceDiagram",
-	"classDiagram",
-	"stateDiagram",
-	"erDiagram",
+	"graph",
+	// sequence
+	"sequencediagram",
+	// class
+	"classdiagram-v2",
+	"classdiagram",
+	// state
+	"statediagram-v2",
+	"statediagram",
+	// entity-relationship
+	"erdiagram",
+	// gantt
 	"gantt",
+	// pie
 	"pie",
+	// user journey
 	"journey",
+	// git graph
 	"gitgraph",
+	// mindmap
 	"mindmap",
+	// timeline
 	"timeline",
+	// sankey
+	"sankey-beta",
 	"sankey",
-	"quadrantChart",
-	"requirementDiagram",
+	// quadrant chart
+	"quadrantchart",
+	// requirement diagram
+	"requirementdiagram",
+	// xy chart
 	"xychart-beta",
+	// block diagram
 	"block-beta",
+	// packet diagram
 	"packet-beta",
+	// architecture
 	"architecture-beta",
+	// kanban
 	"kanban",
+	// zenuml
 	"zenuml",
-	"C4Context",
-	"C4Container",
-	"C4Component",
-	"C4Dynamic",
-	"C4Deployment",
+	// C4 model
+	"c4context",
+	"c4container",
+	"c4component",
+	"c4dynamic",
+	"c4deployment",
 }
 
 func startsWithMermaid(content string) bool {
-	trimmed := trimLeadingWhitespace(content)
+	trimmed := strings.TrimLeft(content, " \t\n\r")
+	lower := strings.ToLower(trimmed)
 	for _, kw := range mermaidKeywords {
-		if strings.HasPrefix(trimmed, kw) {
-			// keyword must be followed by whitespace, newline, or end of string
-			if len(trimmed) == len(kw) || trimmed[len(kw)] == ' ' || trimmed[len(kw)] == '\n' || trimmed[len(kw)] == '\r' || trimmed[len(kw)] == '\t' {
+		if strings.HasPrefix(lower, kw) {
+			// keyword must be followed by whitespace or end of string
+			if len(trimmed) == len(kw) {
+				return true
+			}
+			next := trimmed[len(kw)]
+			if next == ' ' || next == '\n' || next == '\r' || next == '\t' {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-func trimLeadingWhitespace(s string) string {
-	for i, r := range s {
-		if r != ' ' && r != '\t' && r != '\n' && r != '\r' {
-			return s[i:]
-		}
-	}
-	return ""
 }
 
 func getCodeContent(block *docxv1.Block) string {

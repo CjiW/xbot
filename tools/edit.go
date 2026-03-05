@@ -244,14 +244,14 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		}
 		oldLine := lines[idx]
 		lines[idx] = params.Content
-		return strings.Join(lines, "\n"), fmt.Sprintf("Replaced line %d: %q -> %q", params.LineNumber, truncate(oldLine, 50), truncate(params.Content, 50)), nil
+		return strings.Join(lines, "\n"), fmt.Sprintf("Replaced line %d: %q -> %q", params.LineNumber, Truncate(oldLine, 50), Truncate(params.Content, 50)), nil
 
 	case "delete":
 		oldLine := lines[idx]
 		newLines := make([]string, 0, len(lines)-1)
 		newLines = append(newLines, lines[:idx]...)
 		newLines = append(newLines, lines[idx+1:]...)
-		return strings.Join(newLines, "\n"), fmt.Sprintf("Deleted line %d: %q", params.LineNumber, truncate(oldLine, 50)), nil
+		return strings.Join(newLines, "\n"), fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
 
 	default:
 		return "", "", fmt.Errorf("unknown action: %s (supported: insert_before, insert_after, replace, delete)", params.Action)
@@ -333,8 +333,8 @@ func (t *EditTool) doInsert(content string, params EditParams, filePath string) 
 	}
 }
 
-// truncate 截断字符串
-func truncate(s string, maxLen int) string {
+// Truncate 截断字符串（公共函数，供多处使用）
+func Truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}

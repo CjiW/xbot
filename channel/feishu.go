@@ -56,12 +56,6 @@ type FeishuChannel struct {
 
 	// CardBuilder for card callback handling
 	cardBuilder *tools.CardBuilder
-
-	// message_id -> larkim.P2MessageReceiveV1Data（用于查找引用的关系）
-	msgMap map[string]*larkim.P2MessageReceiveV1Data
-
-	// 用于查找引用的历史消息cache数量，必须小于maxProcessed
-	maxMsgMapSize int
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -72,8 +66,6 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
 		userNameCache: make(map[string]string),
-		msgMap:        make(map[string]*larkim.P2MessageReceiveV1Data),
-		maxMsgMapSize: 50,
 	}
 }
 
@@ -674,7 +666,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	}
 
 	// 解析消息内容
-	content := f.parseContent(msg)
+	content := f.parseContent(eventMessageAdapter{msg})
 	if content == "" {
 		return nil
 	}
@@ -732,15 +724,15 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	if refMsgEv != nil {
 		log.WithFields(log.Fields{
 			"message_id":     messageID,
-			"ref_message_id": *refMsgEv.Message.MessageId,
+			"ref_message_id": *refMsgEv.MessageId,
 		}).Info("Found reference message for incoming message")
-		refMsg = f.parseContent(refMsgEv.Message)
+		refMsg = f.parseContent(messageAdapter{refMsgEv})
 		refSenderID := ""
-		if refMsgEv.Sender != nil && refMsgEv.Sender.SenderId != nil && refMsgEv.Sender.SenderId.OpenId != nil {
-			refSenderID = *refMsgEv.Sender.SenderId.OpenId
+		if refMsgEv.Sender != nil && refMsgEv.Sender.Id != nil {
+			refSenderID = *refMsgEv.Sender.Id
 		}
 		refSenderName := f.getUserName(refSenderID)
-		refMsg = fmt.Sprintf("> 引用自 %s 的消息：%s", refSenderName, refMsg)
+		refMsg = fmt.Sprintf("> 引用自 %s (%s) 的消息：%s", refSenderName, refSenderID, refMsg)
 	} else if msg.ParentId != nil {
 		refMsg = "[存在引用的消息但是无法找到内容，可能是因为消息过旧不在缓存中]"
 	}
@@ -1020,18 +1012,54 @@ func formatMapString(m map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-// parseContent 解析消息内容
-func (f *FeishuChannel) parseContent(msg *larkim.EventMessage) string {
-	if msg.Content == nil || *msg.Content == "" {
+// feishuMsg is a common interface for extracting message fields from both
+// larkim.EventMessage (WebSocket event) and larkim.Message (API response),
+// which have different field names for the same logical data.
+type feishuMsg interface {
+	GetMessageId() *string
+	GetMsgType() string
+	GetContent() *string
+}
+
+// eventMessageAdapter wraps *larkim.EventMessage to implement feishuMsg.
+type eventMessageAdapter struct{ m *larkim.EventMessage }
+
+func (a eventMessageAdapter) GetMessageId() *string { return a.m.MessageId }
+func (a eventMessageAdapter) GetMsgType() string {
+	if a.m.MessageType != nil {
+		return *a.m.MessageType
+	}
+	return ""
+}
+func (a eventMessageAdapter) GetContent() *string { return a.m.Content }
+
+// messageAdapter wraps *larkim.Message to implement feishuMsg.
+type messageAdapter struct{ m *larkim.Message }
+
+func (a messageAdapter) GetMessageId() *string { return a.m.MessageId }
+func (a messageAdapter) GetMsgType() string {
+	if a.m.MsgType != nil {
+		return *a.m.MsgType
+	}
+	return ""
+}
+func (a messageAdapter) GetContent() *string {
+	if a.m.Body != nil {
+		return a.m.Body.Content
+	}
+	return nil
+}
+
+// parseContent 解析消息内容 (接受 feishuMsg 接口，兼容 EventMessage 和 Message)
+func (f *FeishuChannel) parseContent(msg feishuMsg) string {
+	content := msg.GetContent()
+	if content == nil || *content == "" {
 		return ""
 	}
-	var msgType string
-	if msg.MessageType != nil {
-		msgType = *msg.MessageType
-	}
+	msgType := msg.GetMsgType()
 
 	var contentJSON map[string]any
-	if err := json.Unmarshal([]byte(*msg.Content), &contentJSON); err != nil {
+	if err := json.Unmarshal([]byte(*content), &contentJSON); err != nil {
 		return ""
 	}
 
@@ -1046,15 +1074,15 @@ func (f *FeishuChannel) parseContent(msg *larkim.EventMessage) string {
 		fileKey, _ := contentJSON["file_key"].(string)
 		fileName, _ := contentJSON["file_name"].(string)
 		messageID := ""
-		if msg.MessageId != nil {
-			messageID = *msg.MessageId
+		if mid := msg.GetMessageId(); mid != nil {
+			messageID = *mid
 		}
 		return fmt.Sprintf(`<file name="%s" file_key="%s" message_id="%s" />`, fileName, fileKey, messageID)
 	case "image":
 		imageKey, _ := contentJSON["image_key"].(string)
 		messageID := ""
-		if msg.MessageId != nil {
-			messageID = *msg.MessageId
+		if mid := msg.GetMessageId(); mid != nil {
+			messageID = *mid
 		}
 		return fmt.Sprintf(`<image image_key="%s" message_id="%s" />`, imageKey, messageID)
 	default:
@@ -1179,48 +1207,39 @@ func (f *FeishuChannel) buildCard(content string) map[string]any {
 	}
 }
 
-func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV1Data) *larkim.P2MessageReceiveV1Data {
+func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV1Data) *larkim.Message {
 	currentMsg := currentMsgEV.Message
 	if currentMsg == nil {
 		return nil
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// 先缓存当前消息，便于后续被 RootId 引用
-	if currentMsg.MessageId != nil && *currentMsg.MessageId != "" {
-		f.msgMap[*currentMsg.MessageId] = currentMsgEV
-	}
-
-	// 控制缓存大小：仅遍历 processedOrder 末尾 maxMsgMapSize+20 个元素，减少循环次数
-	if len(f.msgMap) > f.maxMsgMapSize {
-		window := f.maxMsgMapSize + 20
-		start := 0
-		if len(f.processedOrder) > window {
-			start = len(f.processedOrder) - window
-		}
-
-		for _, id := range f.processedOrder[start:] {
-			if len(f.msgMap) <= f.maxMsgMapSize {
-				break
-			}
-			if _, ok := f.msgMap[id]; ok {
-				delete(f.msgMap, id)
-			}
-		}
 	}
 
 	// 当前消息没有 ParentId，无需查找历史引用
 	if currentMsg.ParentId == nil || *currentMsg.ParentId == "" {
 		return nil
 	}
+	req := larkim.NewGetMessageReqBuilder().
+		MessageId(*currentMsg.ParentId).
+		UserIdType(`open_id`).
+		Build()
 
-	// 查缓存中的被引用历史消息
-	if msg, ok := f.msgMap[*currentMsg.ParentId]; ok {
-		return msg
+	resp, err := f.client.Im.Message.Get(context.Background(), req)
+	if err != nil {
+		log.WithError(err).WithField("parent_id", *currentMsg.ParentId).Warn("Failed to get parent message")
+		return nil
 	}
-	return nil
+	if !resp.Success() {
+		log.WithFields(log.Fields{
+			"parent_id": *currentMsg.ParentId,
+			"code":      resp.Code,
+			"msg":       resp.Msg,
+		}).Warn("Failed to get parent message from API")
+		return nil
+	}
+	if resp.Data == nil || len(resp.Data.Items) == 0 {
+		log.WithField("parent_id", *currentMsg.ParentId).Warn("Parent message not found in response")
+		return nil
+	}
+	return resp.Data.Items[0]
 }
 
 // isDuplicate 检查消息是否重复

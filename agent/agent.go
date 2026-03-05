@@ -15,6 +15,7 @@ import (
 	"xbot/oauth"
 	"xbot/session"
 	"xbot/tools"
+	"xbot/version"
 )
 
 // Agent 核心 Agent 引擎
@@ -242,11 +243,18 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	if cmd == "/new" {
 		return a.handleNewSession(ctx, msg, tenantSession)
 	}
+	if cmd == "/version" {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: version.Info(),
+		}, nil
+	}
 	if cmd == "/help" {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/help — 显示帮助",
+			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/help — 显示帮助",
 		}, nil
 	}
 

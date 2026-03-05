@@ -14,7 +14,11 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o xbot .
+RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
+    BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+    -ldflags "-X xbot/version.Commit=${GIT_COMMIT} -X xbot/version.BuildTime=${BUILD_TIME}" \
+    -o xbot .
 
 # Final stage
 FROM alpine:latest

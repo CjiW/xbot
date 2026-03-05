@@ -503,83 +503,76 @@ func (q *QQChannel) sendIdentify() error {
 		return err
 	}
 
-	// Try intent levels from current level downward
-	for i := q.intentLevel; i < len(intentLevels); i++ {
-		il := intentLevels[i]
-		payload := map[string]any{
-			"op": qqOpIdentify,
-			"d": map[string]any{
-				"token":   auth,
-				"intents": il.value,
-				"shard":   []int{0, 1},
-			},
-		}
-
-		log.WithFields(log.Fields{
-			"intents":      il.name,
-			"intents_bits": il.value,
-		}).Info("QQ: sending Identify")
-
-		if err := q.wsSend(payload); err != nil {
-			return fmt.Errorf("send identify: %w", err)
-		}
-
-		// Wait for READY or Invalid Session
-		q.connMu.Lock()
-		conn := q.conn
-		q.connMu.Unlock()
-		if conn == nil {
-			return fmt.Errorf("no connection")
-		}
-
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		_, data, err := conn.ReadMessage()
-		conn.SetReadDeadline(time.Time{})
-		if err != nil {
-			return fmt.Errorf("read identify response: %w", err)
-		}
-
-		var msg qqWSMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse identify response: %w", err)
-		}
-
-		if msg.Op == qqOpDispatch && msg.T == "READY" {
-			var ready qqReadyData
-			if err := json.Unmarshal(msg.D, &ready); err != nil {
-				return fmt.Errorf("parse READY: %w", err)
-			}
-			q.sessionID = ready.SessionID
-			q.intentLevel = i
-			if msg.S != nil {
-				q.lastSeq.Store(*msg.S)
-			}
-			log.WithFields(log.Fields{
-				"session_id": q.sessionID,
-				"intents":    il.name,
-			}).Info("QQ: session established")
-			return nil
-		}
-
-		if msg.Op == qqOpInvalidSession {
-			log.WithField("intents", il.name).Warn("QQ: invalid session for intent level, trying lower")
-			// Need to reconnect for next attempt
-			if i+1 < len(intentLevels) {
-				q.intentLevel = i + 1
-				// Close and reconnect to try lower intent
-				return fmt.Errorf("intent degradation needed, will retry with lower intents")
-			}
-		}
-
-		// Unexpected response
-		log.WithFields(log.Fields{
-			"op": msg.Op,
-			"t":  msg.T,
-		}).Warn("QQ: unexpected response to Identify")
-		return fmt.Errorf("unexpected identify response op:%d t:%s", msg.Op, msg.T)
+	// Only try the current intent level; caller (connectAndRun) handles retry
+	il := intentLevels[q.intentLevel]
+	payload := map[string]any{
+		"op": qqOpIdentify,
+		"d": map[string]any{
+			"token":   auth,
+			"intents": il.value,
+			"shard":   []int{0, 1},
+		},
 	}
 
-	return fmt.Errorf("all intent levels exhausted")
+	log.WithFields(log.Fields{
+		"intents":      il.name,
+		"intents_bits": il.value,
+	}).Info("QQ: sending Identify")
+
+	if err := q.wsSend(payload); err != nil {
+		return fmt.Errorf("send identify: %w", err)
+	}
+
+	// Wait for READY or Invalid Session
+	q.connMu.Lock()
+	conn := q.conn
+	q.connMu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("no connection")
+	}
+
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_, data, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return fmt.Errorf("read identify response: %w", err)
+	}
+
+	var msg qqWSMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse identify response: %w", err)
+	}
+
+	if msg.Op == qqOpDispatch && msg.T == "READY" {
+		var ready qqReadyData
+		if err := json.Unmarshal(msg.D, &ready); err != nil {
+			return fmt.Errorf("parse READY: %w", err)
+		}
+		q.sessionID = ready.SessionID
+		if msg.S != nil {
+			q.lastSeq.Store(*msg.S)
+		}
+		log.WithFields(log.Fields{
+			"session_id": q.sessionID,
+			"intents":    il.name,
+		}).Info("QQ: session established")
+		return nil
+	}
+
+	if msg.Op == qqOpInvalidSession {
+		log.WithField("intents", il.name).Warn("QQ: invalid session for intent level, trying lower")
+		if q.intentLevel+1 < len(intentLevels) {
+			q.intentLevel++
+		}
+		return fmt.Errorf("intent degradation needed, will retry")
+	}
+
+	// Unexpected response
+	log.WithFields(log.Fields{
+		"op": msg.Op,
+		"t":  msg.T,
+	}).Warn("QQ: unexpected response to Identify")
+	return fmt.Errorf("unexpected identify response op:%d t:%s", msg.Op, msg.T)
 }
 
 // sendResume 发送 op:6 Resume

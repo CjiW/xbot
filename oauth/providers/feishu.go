@@ -38,19 +38,129 @@ func (p *FeishuProvider) Name() string {
 	return "feishu"
 }
 
+// allowedScopes defines all permitted OAuth scopes for Feishu.
+// These are the only scopes that can be requested.
+var allowedScopes = map[string]bool{
+	"bitable:app":                         true,
+	"bitable:app:readonly":                true,
+	"board:whiteboard:node:create":        true,
+	"board:whiteboard:node:delete":        true,
+	"board:whiteboard:node:read":          true,
+	"board:whiteboard:node:update":        true,
+	"docs:document.comment:create":        true,
+	"docs:document.comment:read":          true,
+	"docs:document.comment:update":        true,
+	"docs:document.comment:write_only":    true,
+	"docs:document.content:read":          true,
+	"docs:document.media:upload":          true,
+	"docs:document.subscription":          true,
+	"docs:document.subscription:read":     true,
+	"docs:document:copy":                  true,
+	"docs:event.document_deleted:read":    true,
+	"docs:event.document_edited:read":     true,
+	"docs:event.document_opened:read":     true,
+	"docs:event:subscribe":                true,
+	"docs:permission.member":              true,
+	"docs:permission.member:auth":         true,
+	"docs:permission.member:create":       true,
+	"docs:permission.member:delete":       true,
+	"docs:permission.member:readonly":     true,
+	"docs:permission.member:retrieve":     true,
+	"docs:permission.member:transfer":     true,
+	"docs:permission.member:update":       true,
+	"docs:permission.setting":             true,
+	"docs:permission.setting:read":        true,
+	"docs:permission.setting:readonly":    true,
+	"docs:permission.setting:write_only":  true,
+	"docx:document":                       true,
+	"docx:document.block:convert":         true,
+	"docx:document:create":                true,
+	"docx:document:readonly":              true,
+	"docx:document:write_only":            true,
+	"drive:drive.metadata:readonly":       true,
+	"drive:drive:version":                 true,
+	"drive:drive:version:readonly":        true,
+	"drive:file.like:readonly":            true,
+	"drive:file.meta.sec_label.read_only": true,
+	"drive:file:upload":                   true,
+	"drive:file:view_record:readonly":     true,
+	"im:message":                          true,
+	"im:message.pins:read":                true,
+	"im:message.pins:write_only":          true,
+	"im:message.reactions:read":           true,
+	"im:message.reactions:write_only":     true,
+	"im:message.urgent.status:write":      true,
+	"im:message:readonly":                 true,
+	"im:message:recall":                   true,
+	"im:message:update":                   true,
+	"offline_access":                      true,
+	"search:docs:read":                    true,
+	"sheets:spreadsheet":                  true,
+	"sheets:spreadsheet:create":           true,
+	"wiki:wiki":                           true,
+	"wiki:wiki:readonly":                  true,
+}
+
+// defaultScopes defines commonly used scopes as the default set.
+// This is a subset of allowedScopes to stay under the 50 scope limit.
+// Covers all MCP tool requirements: bitable, docx, wiki, drive, sheets, etc.
+var defaultScopes = []string{
+	// Bitable (多维表格)
+	"bitable:app",
+	"bitable:app:readonly",
+	// Docx (文档)
+	"docx:document",
+	"docx:document:readonly",
+	"docx:document:create",
+	"docx:document.block:convert",
+	// Wiki (知识库)
+	"wiki:wiki",
+	"wiki:wiki:readonly",
+	// Drive (云盘)
+	"drive:file:upload",
+	"drive:drive.metadata:readonly",
+	// Sheets (表格)
+	"sheets:spreadsheet",
+	"sheets:spreadsheet:create",
+	// Docs (旧版文档权限，用于权限管理)
+	"docs:permission.member",
+	"docs:permission.member:create",
+	// Search (搜索)
+	"search:docs:read",
+	// IM (消息)
+	"im:message",
+	"im:message:readonly",
+	// Offline (离线访问)
+	"offline_access",
+}
+
+// validateScopes checks if all scopes are allowed and within the limit.
+// Returns validated scopes or logs warning for invalid ones.
+func validateScopes(scopes []string) []string {
+	if len(scopes) > 50 {
+		log.WithField("count", len(scopes)).Warn("Too many scopes requested, limiting to 50")
+		scopes = scopes[:50]
+	}
+
+	valid := make([]string, 0, len(scopes))
+	for _, s := range scopes {
+		if allowedScopes[s] {
+			valid = append(valid, s)
+		} else {
+			log.WithField("scope", s).Warn("Invalid scope requested, skipping")
+		}
+	}
+	return valid
+}
+
 // BuildAuthURL generates the Feishu authorization URL.
 // Feishu OAuth docs: https://open.feishu.cn/document/common-capabilities/sso/api/get-user-info
 func (p *FeishuProvider) BuildAuthURL(state string, scopes []string) string {
-	// Default scopes for Feishu
+	// Default to common scopes if none specified
 	if len(scopes) == 0 {
-		scopes = []string{
-			"bitable:app", // Access to bitable apps
-			"bitable:app:readonly",
-			"docx:document", // Access to documents
-			"docx:document:readonly",
-			"wiki:wiki", // Access to wiki
-			"wiki:wiki:readonly",
-		}
+		scopes = defaultScopes
+	} else {
+		scopes = validateScopes(scopes)
 	}
 
 	authURL, _ := url.Parse("https://open.feishu.cn/open-apis/authen/v1/authorize")

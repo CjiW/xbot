@@ -123,7 +123,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, fmt.Errorf("upload file: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	fileToken := ""
@@ -286,7 +286,7 @@ func (t *AddPermissionTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		return nil, fmt.Errorf("add permission: %w", err)
 	}
 	if !resp.Success() {
-		return nil, NewAPIError(resp.Code, resp.Msg)
+		return nil, NewAPIError(resp.CodeError)
 	}
 
 	summary := fmt.Sprintf("Permission added successfully\nMember: %s (%s)\nPermission: %s\nType: %s",

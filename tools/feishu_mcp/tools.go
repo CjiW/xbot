@@ -74,7 +74,7 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 			return nil, fmt.Errorf("list wiki spaces: %w", err)
 		}
 		if !spacesResp.Success() {
-			return nil, NewAPIError(spacesResp.Code, spacesResp.Msg)
+			return nil, NewAPIError(spacesResp.CodeError)
 		}
 		for _, space := range spacesResp.Data.Items {
 			if space.SpaceId != nil {

@@ -136,6 +136,7 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.DocxInsertBlockTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxGetBlockTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.DocxDeleteBlocksTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.DocxFindBlockTool{MCP: feishuMCP})
 
 		// Search tools
 		agentLoop.RegisterTool(&feishu_mcp.SearchWikiTool{MCP: feishuMCP})

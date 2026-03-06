@@ -14,7 +14,7 @@ const MermaidAddOnsComponentTypeID = "blk_631fefbbae02400430b8f9f4"
 // It handles all block types that contain a *Text field (page, text, headings,
 // bullet, ordered, code, quote, todo, etc.) by dispatching on BlockType.
 // For AddOns blocks (e.g. Mermaid charts), it extracts the data from the JSON record.
-// For block types without text (e.g. image, divider, table), it returns "".
+// For block types without text (e.g. image, divider, table), it returns a hint.
 func GetBlockText(block *docxv1.Block) string {
 	if block == nil || block.BlockType == nil {
 		return ""

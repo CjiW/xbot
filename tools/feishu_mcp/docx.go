@@ -1,9 +1,11 @@
 package feishu_mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"xbot/llm"
 	"xbot/tools"
@@ -12,6 +14,42 @@ import (
 	larkdocs "github.com/larksuite/oapi-sdk-go/v3/service/docs/v1"
 	docxv1 "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 )
+
+// fetchAllBlocks fetches all blocks of a document using pagination.
+func fetchAllBlocks(ctx context.Context, client *Client, documentID string) ([]*docxv1.Block, error) {
+	var allItems []*docxv1.Block
+	pageToken := ""
+	for {
+		reqBuilder := docxv1.NewListDocumentBlockReqBuilder().
+			DocumentId(documentID).
+			PageSize(500)
+		if pageToken != "" {
+			reqBuilder.PageToken(pageToken)
+		}
+		req := reqBuilder.Build()
+
+		resp, err := client.Client().Docx.DocumentBlock.List(ctx, req,
+			larkcore.WithUserAccessToken(client.AccessToken()))
+		if err != nil {
+			return nil, fmt.Errorf("list document blocks: %w", err)
+		}
+		if !resp.Success() {
+			return nil, NewAPIError(resp.CodeError)
+		}
+
+		allItems = append(allItems, resp.Data.Items...)
+
+		if resp.Data.HasMore == nil || !*resp.Data.HasMore {
+			break
+		}
+		if resp.Data.PageToken != nil {
+			pageToken = *resp.Data.PageToken
+		} else {
+			break
+		}
+	}
+	return allItems, nil
+}
 
 // DocxGetContentTool gets document content in Markdown format.
 type DocxGetContentTool struct {
@@ -165,7 +203,7 @@ func (t *DocxListBlocksTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "limit",
 			Type:        "integer",
-			Description: "Limit for pagination (max 50, default 50)",
+			Description: "Limit for pagination (max 100, default 100)",
 			Required:    false,
 		},
 	}
@@ -180,43 +218,21 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if args.Offset < 0 {
+		args.Offset = 0
+	}
+	if args.Limit <= 0 || args.Limit > 100 {
+		args.Limit = 100
+	}
 
 	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Fetch all pages of blocks
-	var allItems []*docxv1.Block
-	pageToken := ""
-	for {
-		reqBuilder := docxv1.NewListDocumentBlockReqBuilder().
-			DocumentId(args.DocumentID).
-			PageSize(500)
-		if pageToken != "" {
-			reqBuilder.PageToken(pageToken)
-		}
-		req := reqBuilder.Build()
-
-		resp, err := client.Client().Docx.DocumentBlock.List(ctx.Ctx, req,
-			larkcore.WithUserAccessToken(client.AccessToken()))
-		if err != nil {
-			return nil, fmt.Errorf("list document blocks: %w", err)
-		}
-		if !resp.Success() {
-			return nil, NewAPIError(resp.CodeError)
-		}
-
-		allItems = append(allItems, resp.Data.Items...)
-
-		if resp.Data.HasMore == nil || !*resp.Data.HasMore {
-			break
-		}
-		if resp.Data.PageToken != nil {
-			pageToken = *resp.Data.PageToken
-		} else {
-			break
-		}
+	allItems, err := fetchAllBlocks(ctx.Ctx, client, args.DocumentID)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(allItems) == 0 {
@@ -275,6 +291,146 @@ func trackChildren(block *docxv1.Block, childMap map[string]struct{}) {
 			childMap[child] = struct{}{}
 		}
 	}
+}
+
+// DocxFindBlockTool searches blocks in a document by content.
+type DocxFindBlockTool struct {
+	MCP *FeishuMCP
+}
+
+func (t *DocxFindBlockTool) Name() string { return "feishu_docx_find_block" }
+
+func (t *DocxFindBlockTool) Description() string {
+	return "Search for blocks in a document whose content contains a given string (case-insensitive). Returns matching top-level blocks."
+}
+
+func (t *DocxFindBlockTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{
+			Name:        "document_id",
+			Type:        "string",
+			Description: "Document ID (e.g., doxcnXXXXX)",
+			Required:    true,
+		},
+		{
+			Name:        "query",
+			Type:        "string",
+			Description: "Text to search for in block content (case-insensitive, auto-trimmed)",
+			Required:    true,
+		},
+	}
+}
+
+func (t *DocxFindBlockTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		DocumentID string `json:"document_id"`
+		Query      string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	args.Query = strings.TrimSpace(args.Query)
+	if args.Query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+
+	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
+	if err != nil {
+		return nil, err
+	}
+
+	allItems, err := fetchAllBlocks(ctx.Ctx, client, args.DocumentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(allItems) == 0 {
+		return tools.NewResult("Document is empty, no blocks to search."), nil
+	}
+
+	// Build block map and identify top-level blocks
+	blockMap := make(map[string]*docxv1.Block)
+	childMap := make(map[string]struct{})
+	var topLevelIDs []string
+
+	for _, block := range allItems {
+		if block.BlockId == nil || *block.BlockId == args.DocumentID {
+			continue
+		}
+		blockMap[*block.BlockId] = block
+		trackChildren(block, childMap)
+	}
+
+	// Collect top-level block IDs in order
+	for _, block := range allItems {
+		if block.BlockId == nil || *block.BlockId == args.DocumentID {
+			continue
+		}
+		if _, isChild := childMap[*block.BlockId]; !isChild {
+			topLevelIDs = append(topLevelIDs, *block.BlockId)
+		}
+	}
+
+	// For each top-level block, check if its subtree text content contains the query
+	queryLower := strings.ToLower(args.Query)
+	var matchedBlocks []map[string]any
+
+	for i, tlID := range topLevelIDs {
+		tlBlock := blockMap[tlID]
+		// Collect this block and all descendants, check text content
+		if !subtreeContainsText(tlBlock, blockMap, queryLower) {
+			continue
+		}
+
+		blockType := 0
+		if tlBlock.BlockType != nil {
+			blockType = *tlBlock.BlockType
+		}
+		parentId := ""
+		if tlBlock.ParentId != nil {
+			parentId = *tlBlock.ParentId
+		}
+
+		matchedBlocks = append(matchedBlocks, map[string]any{
+			"block_id":        tlID,
+			"block_type":      blockType,
+			"block_type_desc": GetBlockTypeDesc(blockType),
+			"block_type_name": GetBlockTypeName(blockType),
+			"content_summary": GetBlockText(tlBlock),
+			"parent_id":       parentId,
+			"index":           i,
+		})
+	}
+
+	if len(matchedBlocks) == 0 {
+		return tools.NewResult(fmt.Sprintf("No blocks found matching %q", args.Query)), nil
+	}
+
+	summary := fmt.Sprintf("Found %d block(s) matching %q", len(matchedBlocks), args.Query)
+	detail, _ := json.MarshalIndent(matchedBlocks, "", "  ")
+	return tools.NewResultWithDetail(summary, string(detail)), nil
+}
+
+// subtreeContainsText checks if a block or any of its descendants contain the
+// query string (already lowercased) in their text content.
+func subtreeContainsText(block *docxv1.Block, blockMap map[string]*docxv1.Block, queryLower string) bool {
+	if block == nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(GetTextContent(getBlockTextBody(block))), queryLower) {
+		return true
+	}
+	if block.Children == nil {
+		return false
+	}
+	for _, childID := range block.Children {
+		if child, ok := blockMap[childID]; ok {
+			if subtreeContainsText(child, blockMap, queryLower) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DocxCreateTool creates a new document.
@@ -359,7 +515,7 @@ type DocxInsertBlockTool struct {
 func (t *DocxInsertBlockTool) Name() string { return "feishu_docx_insert_block" }
 
 func (t *DocxInsertBlockTool) Description() string {
-	return "Insert content into a document at a specific block index. Content is in Markdown format and will be converted to native blocks. Use feishu_docx_list_blocks to find block indices."
+	return "Insert content into a document at a specific block index. Content is in Markdown format and will be converted to native blocks. Use `feishu_docx_list_blocks` or `feishu_docx_find_block` to find block indices."
 }
 
 func (t *DocxInsertBlockTool) Parameters() []llm.ToolParam {

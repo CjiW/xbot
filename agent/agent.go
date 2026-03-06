@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -611,8 +612,9 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
 
+			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", tc.Name))
+				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabel))
 				notifyProgress("")
 			}
 
@@ -679,7 +681,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).WithError(execErr).Warn("Tool failed")
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("❌ %s (%s)", tc.Name, elapsed.Round(time.Millisecond))
+					progressLines[len(progressLines)-1] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					notifyProgress("")
 				}
 			} else {
@@ -698,7 +700,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("✅ %s (%s)", tc.Name, elapsed.Round(time.Millisecond))
+					progressLines[len(progressLines)-1] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					notifyProgress("")
 				}
 			}
@@ -1007,4 +1009,121 @@ func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, erro
 		return "", nil
 	}
 	return resp.Content, nil
+}
+
+// formatToolProgress generates a human-readable one-line summary of a tool call for progress display.
+// It parses the JSON args and extracts the most important parameter(s) based on the tool name.
+// Output is concise, max ~80 chars total.
+func formatToolProgress(name string, args string) string {
+	const maxLen = 80
+
+	// Helper to get a string field from parsed JSON
+	get := func(m map[string]interface{}, key string) string {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+			// Handle numeric types (e.g., limit as float64 from JSON)
+			return fmt.Sprintf("%v", v)
+		}
+		return ""
+	}
+
+	// Try to parse JSON args
+	var m map[string]interface{}
+	parsed := json.Unmarshal([]byte(args), &m) == nil
+
+	// Helper to truncate and format the final result
+	truncate := func(s string, max int) string {
+		if len(s) <= max {
+			return s
+		}
+		return s[:max-3] + "..."
+	}
+
+	// For tools that just show their name
+	switch name {
+	case "update_self_profile", "update_user_profile":
+		return name
+	}
+
+	if !parsed {
+		// JSON parsing failed: show truncated raw args
+		raw := truncate(args, maxLen-len(name)-2)
+		if raw == "" {
+			return name
+		}
+		return truncate(fmt.Sprintf("%s: %s", name, raw), maxLen)
+	}
+
+	var summary string
+	switch name {
+	case "Shell":
+		summary = fmt.Sprintf("Shell: %s", get(m, "command"))
+	case "Read":
+		summary = fmt.Sprintf("Read: %s", get(m, "path"))
+	case "Edit":
+		path := get(m, "path")
+		mode := get(m, "mode")
+		if mode != "" {
+			summary = fmt.Sprintf("Edit: %s (%s)", path, mode)
+		} else {
+			summary = fmt.Sprintf("Edit: %s", path)
+		}
+	case "Grep":
+		pattern := get(m, "pattern")
+		path := get(m, "path")
+		include := get(m, "include")
+		target := path
+		if include != "" {
+			if target != "" {
+				target = include + " in " + target
+			} else {
+				target = include
+			}
+		}
+		if target != "" {
+			summary = fmt.Sprintf("Grep: %q in %s", pattern, target)
+		} else {
+			summary = fmt.Sprintf("Grep: %q", pattern)
+		}
+	case "Glob":
+		summary = fmt.Sprintf("Glob: %s", get(m, "pattern"))
+	case "WebSearch":
+		summary = fmt.Sprintf("WebSearch: %q", get(m, "query"))
+	case "Cron":
+		summary = fmt.Sprintf("Cron: %s", get(m, "action"))
+	case "SubAgent":
+		summary = fmt.Sprintf("SubAgent: %s", get(m, "task"))
+	case "DownloadFile":
+		summary = fmt.Sprintf("DownloadFile: %s", get(m, "output_path"))
+	case "ChatHistory":
+		limit := get(m, "limit")
+		if limit != "" {
+			summary = fmt.Sprintf("ChatHistory: limit=%s", limit)
+		} else {
+			summary = "ChatHistory"
+		}
+	case "ManageTools":
+		action := get(m, "action")
+		mName := get(m, "name")
+		if mName != "" {
+			summary = fmt.Sprintf("ManageTools: %s %s", action, mName)
+		} else {
+			summary = fmt.Sprintf("ManageTools: %s", action)
+		}
+	case "card_create":
+		title := get(m, "title")
+		if title != "" {
+			summary = fmt.Sprintf("card_create: %q", title)
+		} else {
+			summary = "card_create"
+		}
+	default:
+		// Unknown tools (including MCP tools): show first 60 chars of args
+		raw := truncate(args, 60)
+		summary = fmt.Sprintf("%s: %s", name, raw)
+	}
+
+	return truncate(summary, maxLen)
 }

@@ -2,20 +2,17 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"sync"
 	"text/template"
 	"time"
+
 	"xbot/llm"
-
 	log "xbot/logger"
+	"xbot/memory"
 )
-
-// MemoryAccessor is the interface for accessing memory in BuildMessages
-type MemoryAccessor interface {
-	GetMemoryContext() (string, error)
-}
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
 const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}}
@@ -127,7 +124,7 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, memory MemoryAccessor, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -147,8 +144,8 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	}
 
 	// 注入长期记忆（会随合并变化，放在 Skills 之后）
-	if memory != nil {
-		memCtx, err := memory.GetMemoryContext()
+	if mem != nil {
+		memCtx, err := mem.Recall(context.TODO(), userContent)
 		if err != nil {
 			log.WithError(err).Warn("Failed to get memory context")
 		} else if memCtx != "" {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"xbot/llm"
+	"xbot/memory"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 )
@@ -16,8 +17,8 @@ type TenantSession struct {
 	channel    string
 	chatID     string
 	sessionSvc *sqlite.SessionService
-	memorySvc  *sqlite.MemoryService
-	memory     *TenantMemory
+	memorySvc  *sqlite.MemoryService // for consolidation state (LastConsolidated)
+	memory     memory.MemoryProvider
 	mcpManager *tools.SessionMCPManager // 会话 MCP 管理器
 	lastActive time.Time                // 会话活跃时间
 	mu         sync.RWMutex             // 保护 lastActive
@@ -63,8 +64,8 @@ func (s *TenantSession) Clear() error {
 	return s.sessionSvc.Clear(s.tenantID)
 }
 
-// Memory returns the memory accessor for this tenant
-func (s *TenantSession) Memory() *TenantMemory {
+// Memory returns the memory provider for this tenant
+func (s *TenantSession) Memory() memory.MemoryProvider {
 	return s.memory
 }
 

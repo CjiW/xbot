@@ -13,6 +13,7 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/memory"
 	"xbot/oauth"
 	"xbot/session"
 	"xbot/tools"
@@ -397,7 +398,7 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 		}, nil
 	}
 	lastConsolidated := tenantSession.LastConsolidated()
-	memory := tenantSession.Memory()
+	mem := tenantSession.Memory()
 
 	// 取尚未合并的消息进行归档
 	snapshot := messages
@@ -407,8 +408,15 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 
 	if len(snapshot) > 0 {
 		log.WithField("tenant", tenantSession.String()).Infof("/new: archiving %d unconsolidated messages", len(snapshot))
-		_, ok := memory.Consolidate(ctx, snapshot, 0, a.llmClient, a.model, true, a.memoryWindow)
-		if !ok {
+		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
+			Messages:         snapshot,
+			LastConsolidated: 0,
+			LLMClient:        a.llmClient,
+			Model:            a.model,
+			ArchiveAll:       true,
+			MemoryWindow:     a.memoryWindow,
+		})
+		if !result.OK {
 			return &bus.OutboundMessage{
 				Channel: msg.Channel,
 				ChatID:  msg.ChatID,
@@ -530,14 +538,21 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 			return
 		}
 		lastConsolidated := tenantSession.LastConsolidated()
-		memory := tenantSession.Memory()
+		mem := tenantSession.Memory()
 
-		newLC, ok := memory.Consolidate(ctx, messages, lastConsolidated, a.llmClient, a.model, false, a.memoryWindow)
-		if ok {
-			if err := tenantSession.SetLastConsolidated(newLC); err != nil {
+		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
+			Messages:         messages,
+			LastConsolidated: lastConsolidated,
+			LLMClient:        a.llmClient,
+			Model:            a.model,
+			ArchiveAll:       false,
+			MemoryWindow:     a.memoryWindow,
+		})
+		if result.OK {
+			if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
 				log.WithError(err).Warn("Failed to update last consolidated")
 			}
-			log.WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", newLC)
+			log.WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
 		}
 	}()
 }

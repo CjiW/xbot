@@ -315,7 +315,7 @@ func (t *DocxFindBlockTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "query",
 			Type:        "string",
-			Description: "Text to search for in block content (case-insensitive)",
+			Description: "Text to search for in block content (case-insensitive, auto-trimmed)",
 			Required:    true,
 		},
 	}
@@ -329,6 +329,7 @@ func (t *DocxFindBlockTool) Execute(ctx *tools.ToolContext, input string) (*tool
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	args.Query = strings.TrimSpace(args.Query)
 	if args.Query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
@@ -416,7 +417,7 @@ func subtreeContainsText(block *docxv1.Block, blockMap map[string]*docxv1.Block,
 	if block == nil {
 		return false
 	}
-	if strings.Contains(strings.ToLower(GetBlockText(block)), queryLower) {
+	if strings.Contains(strings.ToLower(GetTextContent(getBlockTextBody(block))), queryLower) {
 		return true
 	}
 	if block.Children == nil {

@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"xbot/llm"
@@ -129,32 +131,29 @@ func TestMultiTenantSession_MemoryIsolation(t *testing.T) {
 		t.Fatalf("Failed to create session 2: %v", err)
 	}
 
-	// Set memory for session 1
-	mem1 := sess1.Memory()
-	if err := mem1.WriteLongTerm("# Memory 1\nUser likes Go"); err != nil {
+	// Write memory via underlying memorySvc (FlatMemory doesn't expose WriteLongTerm)
+	if err := mt.memorySvc.WriteLongTerm(sess1.TenantID(), "# Memory 1\nUser likes Go"); err != nil {
 		t.Fatalf("Failed to write memory 1: %v", err)
 	}
-
-	// Set memory for session 2
-	mem2 := sess2.Memory()
-	if err := mem2.WriteLongTerm("# Memory 2\nUser likes Rust"); err != nil {
+	if err := mt.memorySvc.WriteLongTerm(sess2.TenantID(), "# Memory 2\nUser likes Rust"); err != nil {
 		t.Fatalf("Failed to write memory 2: %v", err)
 	}
 
-	// Verify memory isolation
-	content1, err := mem1.ReadLongTerm()
+	// Verify memory isolation via Recall
+	ctx := context.Background()
+	content1, err := sess1.Memory().Recall(ctx, "")
 	if err != nil {
-		t.Fatalf("Failed to read memory 1: %v", err)
+		t.Fatalf("Failed to recall memory 1: %v", err)
 	}
-	if content1 != "# Memory 1\nUser likes Go" {
+	if !strings.Contains(content1, "User likes Go") {
 		t.Errorf("Memory 1 incorrect: %s", content1)
 	}
 
-	content2, err := mem2.ReadLongTerm()
+	content2, err := sess2.Memory().Recall(ctx, "")
 	if err != nil {
-		t.Fatalf("Failed to read memory 2: %v", err)
+		t.Fatalf("Failed to recall memory 2: %v", err)
 	}
-	if content2 != "# Memory 2\nUser likes Rust" {
+	if !strings.Contains(content2, "User likes Rust") {
 		t.Errorf("Memory 2 incorrect: %s", content2)
 	}
 }

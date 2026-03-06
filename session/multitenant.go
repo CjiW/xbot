@@ -6,6 +6,7 @@ import (
 	"time"
 
 	log "xbot/logger"
+	"xbot/memory/flat"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 )
@@ -137,10 +138,7 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 		chatID:     chatID,
 		sessionSvc: m.sessionSvc,
 		memorySvc:  m.memorySvc,
-		memory: &TenantMemory{
-			tenantID:  tenantID,
-			memorySvc: m.memorySvc,
-		},
+		memory:     flat.New(tenantID, m.memorySvc),
 		mcpManager: mcpManager,
 		lastActive: time.Now(),
 	}

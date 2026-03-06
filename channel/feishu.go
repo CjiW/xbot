@@ -732,7 +732,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 			refSenderID = *refMsgEv.Sender.Id
 		}
 		refSenderName := f.getUserName(refSenderID)
-		refMsg = fmt.Sprintf("> 引用自 %s (%s) 的消息：%s", refSenderName, refSenderID, refMsg)
+		refMsg = fmt.Sprintf("---引用开始---\n引用自 %s (%s) 的消息：%s\n---引用结束---\n", refSenderName, refSenderID, refMsg)
 	} else if msg.ParentId != nil {
 		refMsg = "[存在引用的消息但是无法找到内容，可能是因为消息过旧不在缓存中]"
 	}
@@ -1062,6 +1062,10 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 	if err := json.Unmarshal([]byte(*content), &contentJSON); err != nil {
 		return ""
 	}
+	messageID := ""
+	if mid := msg.GetMessageId(); mid != nil {
+		messageID = *mid
+	}
 
 	switch msgType {
 	case "text":
@@ -1069,21 +1073,13 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 			return text
 		}
 	case "post":
-		return f.extractPostText(contentJSON)
+		return f.extractPostText(contentJSON, messageID)
 	case "file":
 		fileKey, _ := contentJSON["file_key"].(string)
 		fileName, _ := contentJSON["file_name"].(string)
-		messageID := ""
-		if mid := msg.GetMessageId(); mid != nil {
-			messageID = *mid
-		}
 		return fmt.Sprintf(`<file name="%s" file_key="%s" message_id="%s" />`, fileName, fileKey, messageID)
 	case "image":
 		imageKey, _ := contentJSON["image_key"].(string)
-		messageID := ""
-		if mid := msg.GetMessageId(); mid != nil {
-			messageID = *mid
-		}
 		return fmt.Sprintf(`<image image_key="%s" message_id="%s" />`, imageKey, messageID)
 	default:
 		return fmt.Sprintf("[%s]", msgType)
@@ -1092,15 +1088,15 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 }
 
 // extractPostText 提取富文本内容
-func (f *FeishuChannel) extractPostText(contentJSON map[string]any) string {
+func (f *FeishuChannel) extractPostText(contentJSON map[string]any, messageId string) string {
 	// 尝试直接格式
-	if result := f.extractFromLang(contentJSON); result != "" {
+	if result := f.extractFromLang(contentJSON, messageId); result != "" {
 		return result
 	}
 	// 尝试本地化格式
 	for _, lang := range []string{"zh_cn", "en_us", "ja_jp"} {
 		if langContent, ok := contentJSON[lang].(map[string]any); ok {
-			if result := f.extractFromLang(langContent); result != "" {
+			if result := f.extractFromLang(langContent, messageId); result != "" {
 				return result
 			}
 		}
@@ -1108,7 +1104,7 @@ func (f *FeishuChannel) extractPostText(contentJSON map[string]any) string {
 	return ""
 }
 
-func (f *FeishuChannel) extractFromLang(langContent map[string]any) string {
+func (f *FeishuChannel) extractFromLang(langContent map[string]any, messageId string) string {
 	var parts []string
 	if title, ok := langContent["title"].(string); ok && title != "" {
 		parts = append(parts, title)
@@ -1134,6 +1130,13 @@ func (f *FeishuChannel) extractFromLang(langContent map[string]any) string {
 					if name, ok := elemMap["user_name"].(string); ok {
 						parts = append(parts, "@"+name)
 					}
+				case "img":
+					if imageKey, ok := elemMap["image_key"].(string); ok {
+						parts = append(parts, fmt.Sprintf("<image image_key=\"%s\" message_id=\"%s\" />", imageKey, messageId))
+					}
+				default:
+					// 其他元素类型可以根据需要添加处理
+					parts = append(parts, fmt.Sprintf("[unsupported element: %s]", tag))
 				}
 			}
 		}

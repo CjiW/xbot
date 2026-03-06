@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"xbot/llm"
 	"xbot/tools"
@@ -157,12 +156,26 @@ func (t *DocxListBlocksTool) Parameters() []llm.ToolParam {
 			Description: "Document ID (e.g., doxcnXXXXX)",
 			Required:    true,
 		},
+		{
+			Name:        "offset",
+			Type:        "integer",
+			Description: "Offset for pagination (default 0)",
+			Required:    false,
+		},
+		{
+			Name:        "limit",
+			Type:        "integer",
+			Description: "Limit for pagination (max 50, default 50)",
+			Required:    false,
+		},
 	}
 }
 
 func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
 		DocumentID string `json:"document_id"`
+		Offset     int    `json:"offset"`
+		Limit      int    `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -237,20 +250,23 @@ func (t *DocxListBlocksTool) Execute(ctx *tools.ToolContext, input string) (*too
 			blockId = *block.BlockId
 		}
 
-		blocks = append(blocks, map[string]any{
-			"block_id":        blockId,
-			"block_type":      blockType,
-			"block_type_desc": GetBlockTypeDesc(blockType),
-			"block_type_name": GetBlockTypeName(blockType),
-			"parent_id":       parentId,
-			"index":           i, // Position among siblings
-		})
+		if i >= args.Offset && (args.Limit <= 0 || i < args.Offset+args.Limit) {
+			blocks = append(blocks, map[string]any{
+				"block_id":        blockId,
+				"block_type":      blockType,
+				"block_type_desc": GetBlockTypeDesc(blockType),
+				"block_type_name": GetBlockTypeName(blockType),
+				"content_summary": GetBlockText(block),
+				"parent_id":       parentId,
+				"index":           i, // Position among siblings
+			})
+		}
 		i++
 	}
 
-	summary := fmt.Sprintf("Document has %d block(s)", len(blocks))
+	summary := fmt.Sprintf("Document has %d block(s)", i)
 	detail, _ := json.MarshalIndent(blocks, "", "  ")
-	return tools.NewResultWithDetail(summary, string(detail)).WithTips("You may use `feishu_docx_get_block` to get detailed information about a specific block."), nil
+	return tools.NewResultWithDetail(summary, string(detail)).WithTips("If you want to know what's in a non-text block, you may use `feishu_docx_get_block`"), nil
 }
 
 func trackChildren(block *docxv1.Block, childMap map[string]struct{}) {
@@ -469,107 +485,14 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 			block.Table.Property.ColumnWidth = nil
 		}
 	}
-	if block.Code != nil {
-		content := getCodeContent(block)
-		//检查是否是mermaid语法（开头特征），以及语言是否是mermaid或者空
-		if isMermaid := (content != "" && startsWithMermaid(content)); isMermaid {
-			block.Code = nil
-			// "{\"data\":\"graph TD\\n    A[用户申请权限] --\\u003e B[审批流程]\\n    B --\\u003e C{时间评估}\\n    C --\\u003e|短期| D[设置过期时间]\\n    C --\\u003e|长期| E[定期审查]\\n    D --\\u003e F[自动过期提醒]\\n    E --\\u003e G[季度权限审计]\",\"theme\":\"default\",\"view\":\"codeChart\"}"
-			block.AddOns = docxv1.NewAddOnsBuilder().ComponentTypeId("blk_631fefbbae02400430b8f9f4").Record(
-				fmt.Sprintf(`{"data":%s,"theme":"default","view":"codeChart"}`, strconv.Quote(content)),
-			).Build()
-			*block.BlockType = BlockTypeAddOns
-		}
-
+	if IsMermaidCode(block) {
+		content := GetTextContent(block.Code)
+		block.Code = nil
+		block.AddOns = docxv1.NewAddOnsBuilder().ComponentTypeId(MermaidAddOnsComponentTypeID).Record(
+			fmt.Sprintf(`{"data":%s,"theme":"default","view":"codeChart"}`, strconv.Quote(content)),
+		).Build()
+		*block.BlockType = BlockTypeAddOns
 	}
-}
-
-// mermaidKeywords lists all known Mermaid diagram type prefixes (lowercase).
-// Longer variants (e.g. statediagram-v2) must appear before shorter ones
-// so the longest match wins.
-var mermaidKeywords = []string{
-	// flowchart
-	"flowchart",
-	"graph",
-	// sequence
-	"sequencediagram",
-	// class
-	"classdiagram-v2",
-	"classdiagram",
-	// state
-	"statediagram-v2",
-	"statediagram",
-	// entity-relationship
-	"erdiagram",
-	// gantt
-	"gantt",
-	// pie
-	"pie",
-	// user journey
-	"journey",
-	// git graph
-	"gitgraph",
-	// mindmap
-	"mindmap",
-	// timeline
-	"timeline",
-	// sankey
-	"sankey-beta",
-	"sankey",
-	// quadrant chart
-	"quadrantchart",
-	// requirement diagram
-	"requirementdiagram",
-	// xy chart
-	"xychart-beta",
-	// block diagram
-	"block-beta",
-	// packet diagram
-	"packet-beta",
-	// architecture
-	"architecture-beta",
-	// kanban
-	"kanban",
-	// zenuml
-	"zenuml",
-	// C4 model
-	"c4context",
-	"c4container",
-	"c4component",
-	"c4dynamic",
-	"c4deployment",
-}
-
-func startsWithMermaid(content string) bool {
-	trimmed := strings.TrimLeft(content, " \t\n\r")
-	lower := strings.ToLower(trimmed)
-	for _, kw := range mermaidKeywords {
-		if strings.HasPrefix(lower, kw) {
-			// keyword must be followed by whitespace or end of string
-			if len(trimmed) == len(kw) {
-				return true
-			}
-			next := trimmed[len(kw)]
-			if next == ' ' || next == '\n' || next == '\r' || next == '\t' {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func getCodeContent(block *docxv1.Block) string {
-	if block.Code == nil {
-		return ""
-	}
-	code := block.Code
-	var content string
-	for _, el := range code.Elements {
-		if el.TextRun != nil && el.TextRun.Content != nil {
-			content += *el.TextRun.Content
-		}
-	}
-	return content
 }
 
 // DocxDeleteBlocksTool deletes blocks from a document by index range.

@@ -23,7 +23,8 @@ RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
 # Final stage
 FROM node:22-alpine
 
-RUN apk --no-cache add ca-certificates git
+RUN apk --no-cache add ca-certificates git bubblewrap && \
+    bwrap --version
 
 WORKDIR /app
 

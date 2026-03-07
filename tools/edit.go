@@ -95,10 +95,9 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("mode is required")
 	}
 
-	// 解析路径：如果是相对路径，则基于工作目录
-	filePath := params.Path
-	if !filepath.IsAbs(filePath) && ctx != nil && ctx.WorkingDir != "" {
-		filePath = filepath.Join(ctx.WorkingDir, filePath)
+	filePath, err := ResolveWritePath(ctx, params.Path)
+	if err != nil {
+		return nil, err
 	}
 
 	// create 模式不需要读取现有文件

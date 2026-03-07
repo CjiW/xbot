@@ -579,7 +579,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 	for i := 0; i < a.maxIterations; i++ {
 		if autoNotify && i > 0 {
-			notifyProgress("💭 思考中...")
+			notifyProgress("> 💭 思考中...")
 		}
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
@@ -595,9 +595,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			return content, toolsUsed, false, nil
 		}
 
-		// 模型的中间思考内容加入进度
+		// 模型的中间思考内容加入进度（引用格式，避免 markdown 干扰）
 		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, strings.TrimSpace(response.Content))
+			for _, line := range strings.Split(strings.TrimSpace(response.Content), "\n") {
+				progressLines = append(progressLines, "> "+line)
+			}
 		}
 
 		// 记录 assistant 消息（含 tool_calls）
@@ -643,7 +645,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			toolsUsed = append(toolsUsed, tc.Name)
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabel))
+				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
 			}
 		}
 		if autoNotify {
@@ -676,7 +678,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			} else {
 				execResults[entry.index].content = result.Summary
@@ -691,7 +693,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			}
 		}

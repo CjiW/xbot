@@ -124,7 +124,7 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string, userProfile string, selfProfile string) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -133,17 +133,12 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		WorkDir: workDir,
 	})
 
-	// 注入 bot 自身画像（很少变动，紧跟固定提示词以最大化 KV-cache 前缀命中）
-	if selfProfile != "" {
-		systemContent += "\n## Who I Am\n" + selfProfile + "\n"
-	}
-
 	// 注入 skills 目录（让 LLM 按需用 Read 工具加载 SKILL.md）
 	if skillsCatalog != "" {
 		systemContent += "\n" + skillsCatalog
 	}
 
-	// 注入长期记忆（会随合并变化，放在 Skills 之后）
+	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）
 	if mem != nil {
 		memCtx, err := mem.Recall(context.TODO(), userContent)
 		if err != nil {
@@ -153,15 +148,9 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		}
 	}
 
-	// 注入当前发送者画像（Memory 之后、Time 之前）
-	if senderName != "" || userProfile != "" {
-		systemContent += "\n## About Current Sender\n"
-		if senderName != "" {
-			systemContent += fmt.Sprintf("Name: %s\n", senderName)
-		}
-		if userProfile != "" {
-			systemContent += userProfile + "\n"
-		}
+	// 注入当前发送者名称
+	if senderName != "" {
+		systemContent += fmt.Sprintf("\n## Current Sender\nName: %s\n", senderName)
 	}
 
 	// 时间戳放在系统提示词最末尾（每次请求都变，放最后以最大化前缀缓存命中）

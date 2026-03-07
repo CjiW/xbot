@@ -5,6 +5,8 @@ import (
 	"sort"
 	"sync"
 	"xbot/llm"
+	"xbot/storage/sqlite"
+	"xbot/storage/vectordb"
 )
 
 // SessionMCPManagerProvider 会话 MCP 管理器提供者接口
@@ -25,10 +27,15 @@ type ToolContext struct {
 	SenderName              string                                      // 当前消息发送者姓名
 	SendFunc                func(channel, chatID, content string) error // 向 IM 渠道发送消息（不经过 Agent），返回错误
 	InjectInbound           func(channel, chatID, content string)       // 注入入站消息，触发 Agent 完整处理循环
-	SaveUserProfile         func(profile string) error                  // 更新当前发送者的用户画像
-	SaveSelfProfile         func(profile string) error                  // 更新 bot 自身的画像（__me__）
 	Registry                *Registry                                   // 工具注册表引用（用于动态注册工具）
 	InvalidateAllSessionMCP func()                                      // 使所有会话的 MCP 连接失效
+
+	// Letta memory fields (nil when memory provider is not letta)
+	TenantID        int64                        // 当前租户 ID
+	CoreMemory      *sqlite.CoreMemoryService    // 核心记忆存储
+	ArchivalMemory  *vectordb.ArchivalService    // 归档记忆存储（chromem-go 向量数据库）
+	MemorySvc       *sqlite.MemoryService        // 事件历史存储（用于 rethink 日志）
+	RecallTimeRange vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -206,8 +213,6 @@ func DefaultRegistry() *Registry {
 	r.Register(&SubAgentTool{})
 	r.Register(NewCronTool())
 	// r.Register(&NotifyTool{})
-	r.Register(&UserProfileTool{})
-	r.Register(&SelfProfileTool{})
 	r.Register(&DownloadFileTool{})
 	return r
 }

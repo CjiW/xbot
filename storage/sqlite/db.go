@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	_ "modernc.org/sqlite"
 	log "xbot/logger"
+
+	_ "modernc.org/sqlite"
 )
 
 // DB wraps a SQLite database connection with schema management
@@ -18,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -154,10 +155,40 @@ CREATE TABLE user_profiles (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE core_memory_blocks (
+    tenant_id INTEGER NOT NULL,
+    block_name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    char_limit INTEGER NOT NULL DEFAULT 2000,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, block_name),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+CREATE TABLE archival_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding BLOB,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_archival_memory_tenant ON archival_memory(tenant_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS event_history_fts USING fts5(
+    entry,
+    content='event_history',
+    content_rowid='id'
+);
+
+CREATE TRIGGER event_history_ai AFTER INSERT ON event_history BEGIN
+    INSERT INTO event_history_fts(rowid, entry) VALUES (new.id, new.entry);
+END;
+
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (2);
+INSERT INTO schema_version (version) VALUES (3);
 `
 	if _, err := db.Conn().Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
@@ -183,6 +214,52 @@ UPDATE schema_version SET version = 2;
 			return fmt.Errorf("migrate v1->v2: %w", err)
 		}
 		log.Info("Database migrated to v2 (added user_profiles)")
+	}
+
+	if from < 3 {
+		migration := `
+CREATE TABLE IF NOT EXISTS core_memory_blocks (
+    tenant_id INTEGER NOT NULL,
+    block_name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    char_limit INTEGER NOT NULL DEFAULT 2000,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, block_name),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS archival_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding BLOB,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_archival_memory_tenant ON archival_memory(tenant_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS event_history_fts USING fts5(
+    entry,
+    content='event_history',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS event_history_ai AFTER INSERT ON event_history BEGIN
+    INSERT INTO event_history_fts(rowid, entry) VALUES (new.id, new.entry);
+END;
+
+UPDATE schema_version SET version = 3;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v2->v3: %w", err)
+		}
+
+		// Backfill FTS index from existing event_history entries
+		if _, err := conn.Exec(`INSERT INTO event_history_fts(rowid, entry) SELECT id, entry FROM event_history`); err != nil {
+			log.WithError(err).Warn("Failed to backfill event_history_fts (may already be populated)")
+		}
+
+		log.Info("Database migrated to v3 (added core_memory_blocks, archival_memory, event_history_fts)")
 	}
 
 	return nil

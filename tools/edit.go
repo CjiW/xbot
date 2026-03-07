@@ -335,10 +335,11 @@ func (t *EditTool) doInsert(content string, params EditParams, filePath string) 
 
 // Truncate 截断字符串（公共函数，供多处使用）
 func Truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // generateUnifiedDiff 使用 go-diff 库生成 unified diff 格式的差异

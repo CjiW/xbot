@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"xbot/llm"
 	log "xbot/logger"
@@ -32,14 +33,20 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 		toolCallsJSON = sql.NullString{String: string(data), Valid: true}
 	}
 
+	ts := msg.Timestamp
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+
 	_, err := conn.Exec(`
 		INSERT INTO session_messages
-		(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		tenantID, msg.Role, msg.Content,
 		msg.ToolCallID, msg.ToolName, msg.ToolArguments,
 		toolCallsJSON, msg.Detail,
+		ts.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		return fmt.Errorf("insert session message: %w", err)
@@ -65,7 +72,7 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 	}
 
 	rows, err := conn.Query(`
-		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail
+		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 		FROM session_messages
 		WHERE tenant_id = ?
 		ORDER BY id ASC
@@ -83,7 +90,7 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 func (s *SessionService) GetAllMessages(tenantID int64) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail
+		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 		FROM session_messages
 		WHERE tenant_id = ?
 		ORDER BY id ASC
@@ -131,11 +138,12 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 	for rows.Next() {
 		var msg llm.ChatMessage
 		var toolCallsJSON sql.NullString
+		var createdAt string
 
 		err := rows.Scan(
 			&msg.Role, &msg.Content,
 			&msg.ToolCallID, &msg.ToolName, &msg.ToolArguments,
-			&toolCallsJSON, &msg.Detail,
+			&toolCallsJSON, &msg.Detail, &createdAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
@@ -147,10 +155,28 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 			}
 		}
 
+		msg.Timestamp = parseTimestamp(createdAt)
+
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate messages: %w", err)
 	}
 	return messages, nil
+}
+
+// parseTimestamp parses a timestamp string from SQLite. New rows are stored in
+// "2006-01-02 15:04:05" UTC format; the RFC3339 variants handle any legacy rows
+// that may have been written by older SQLite driver versions.
+func parseTimestamp(s string) time.Time {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05Z", s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t
+	}
+	return time.Time{}
 }

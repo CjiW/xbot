@@ -1,5 +1,7 @@
 package llm
 
+import "time"
+
 // ChatMessage 业务层定义的消息类型，与具体 LLM 实现解耦
 type ChatMessage struct {
 	Role          string     `json:"role"` // "system", "user", "assistant", "tool"
@@ -9,21 +11,22 @@ type ChatMessage struct {
 	ToolArguments string     `json:"tool_arguments,omitempty"` // 如果是 tool 消息，记录工具调用参数
 	ToolCalls     []ToolCall `json:"tool_calls,omitempty"`     // 如果是 assistant 消息且有工具调用
 	Detail        string     `json:"-"`                        // 工具结果详情（如 diff），不参与 LLM 上下文，仅持久化和前端展示
+	Timestamp     time.Time  `json:"-"`                        // 消息时间戳，不参与 LLM 上下文
 }
 
 // NewSystemMessage 创建系统消息
 func NewSystemMessage(content string) ChatMessage {
-	return ChatMessage{Role: "system", Content: content}
+	return ChatMessage{Role: "system", Content: content, Timestamp: time.Now()}
 }
 
 // NewUserMessage 创建用户消息
 func NewUserMessage(content string) ChatMessage {
-	return ChatMessage{Role: "user", Content: content}
+	return ChatMessage{Role: "user", Content: content, Timestamp: time.Now()}
 }
 
 // NewAssistantMessage 创建助手消息
 func NewAssistantMessage(content string) ChatMessage {
-	return ChatMessage{Role: "assistant", Content: content}
+	return ChatMessage{Role: "assistant", Content: content, Timestamp: time.Now()}
 }
 
 // NewToolMessage 创建工具消息
@@ -34,6 +37,7 @@ func NewToolMessage(toolName, toolCallID, arguments, content string) ChatMessage
 		ToolName:      toolName,
 		ToolCallID:    toolCallID,
 		ToolArguments: arguments,
+		Timestamp:     time.Now(),
 	}
 }
 

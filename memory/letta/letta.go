@@ -129,12 +129,15 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 			}
 			toolHint = fmt.Sprintf(" [tools: %s]", strings.Join(names, ", "))
 		}
-		ts := time.Now().Format("2006-01-02 15:04")
+		ts := msg.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
 		content := msg.Content
 		if len(content) > 500 {
 			content = content[:500] + "..."
 		}
-		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts, role, toolHint, content))
+		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts.Format("2006-01-02 15:04"), role, toolHint, content))
 	}
 
 	if len(lines) == 0 {

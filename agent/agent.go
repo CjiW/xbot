@@ -558,6 +558,17 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 	}()
 }
 
+// loopToolResult holds the result of a single parallel tool execution.
+type loopToolResult struct {
+	toolName       string
+	content        string
+	detail         string
+	elapsed        time.Duration
+	execErr        error
+	result         *tools.ToolResult
+	oauthTriggered bool
+}
+
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
 // autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
 // 返回: (finalContent, toolsUsed, waitingUser, error)
@@ -565,15 +576,18 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	var toolsUsed []string
 	var waitingUser bool
 	var progressLines []string
+	var progressMu sync.Mutex
 
 	notifyProgress := func(extra string) {
 		if !autoNotify {
 			return
 		}
+		progressMu.Lock()
 		lines := progressLines
 		if extra != "" {
 			lines = append(append([]string{}, progressLines...), extra)
 		}
+		progressMu.Unlock()
 		_ = a.sendMessage(channel, chatID, strings.Join(lines, "\n"))
 	}
 
@@ -608,16 +622,22 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 		messages = append(messages, assistantMsg)
 
-		// 执行每个工具调用
-		for _, tc := range response.ToolCalls {
-			toolsUsed = append(toolsUsed, tc.Name)
-
-			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
+		// Pre-append all "⏳" progress lines serially before launching goroutines
+		toolCalls := response.ToolCalls
+		toolLabels := make([]string, len(toolCalls))
+		progressStartIdx := len(progressLines) // index where tool progress lines start
+		for j, tc := range toolCalls {
+			toolLabels[j] = formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabel))
-				notifyProgress("")
+				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabels[j]))
 			}
+		}
+		if autoNotify {
+			notifyProgress("")
+		}
 
+		// Log all tool calls
+		for _, tc := range toolCalls {
 			argPreview := tc.Arguments
 			if len(argPreview) > 200 {
 				argPreview = argPreview[:200] + "..."
@@ -626,26 +646,46 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				"tool": tc.Name,
 				"id":   tc.ID,
 			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
+		}
 
-			start := time.Now()
-			result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
-			elapsed := time.Since(start)
+		// Execute all tool calls in parallel
+		results := make([]loopToolResult, len(toolCalls))
+		var wg sync.WaitGroup
+		wg.Add(len(toolCalls))
+		for j, tc := range toolCalls {
+			go func(idx int, tc llm.ToolCall) {
+				defer wg.Done()
+				start := time.Now()
+				result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
+				elapsed := time.Since(start)
+				results[idx] = loopToolResult{
+					toolName: tc.Name,
+					elapsed:  elapsed,
+					execErr:  execErr,
+					result:   result,
+				}
+			}(j, tc)
+		}
+		wg.Wait()
+
+		// Process results serially in order
+		for j, tc := range toolCalls {
+			tr := results[j]
 
 			// 工具已发送最终回复（如飞书卡片）→ 进度消息已被替换，禁用后续进度更新
-			sessionKey := channel + ":" + chatID
 			if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
 				autoNotify = false
 				progressLines = nil
 			}
 
 			content := ""
-			if execErr != nil {
+			if tr.execErr != nil {
 				// Check if this is a TokenNeededError from OAuth
-				if oauth.IsTokenNeededError(execErr) {
+				if oauth.IsTokenNeededError(tr.execErr) {
 					// TokenNeededError - automatically trigger oauth_authorize tool
 					log.WithFields(log.Fields{
 						"tool":    tc.Name,
-						"elapsed": elapsed.Round(time.Millisecond),
+						"elapsed": tr.elapsed.Round(time.Millisecond),
 					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
 
 					// Try to execute oauth_authorize tool directly
@@ -673,20 +713,20 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
 					}
 				} else {
-					content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
+					content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", tr.execErr)
 				}
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
-					"elapsed": elapsed.Round(time.Millisecond),
-				}).WithError(execErr).Warn("Tool failed")
+					"elapsed": tr.elapsed.Round(time.Millisecond),
+				}).WithError(tr.execErr).Warn("Tool failed")
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+j] = fmt.Sprintf("❌ %s (%s)", toolLabels[j], tr.elapsed.Round(time.Millisecond))
 					notifyProgress("")
 				}
 			} else {
-				content = result.Summary
-				if result.WaitingUser {
+				content = tr.result.Summary
+				if tr.result.WaitingUser {
 					waitingUser = true
 				}
 
@@ -696,18 +736,21 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
-					"elapsed": elapsed.Round(time.Millisecond),
+					"elapsed": tr.elapsed.Round(time.Millisecond),
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+j] = fmt.Sprintf("✅ %s (%s)", toolLabels[j], tr.elapsed.Round(time.Millisecond))
 					notifyProgress("")
 				}
 			}
 
+			// Collect tool names
+			toolsUsed = append(toolsUsed, tc.Name)
+
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
-			if result != nil && result.Detail != "" {
-				toolMsg.Detail = result.Detail
+			if tr.result != nil && tr.result.Detail != "" {
+				toolMsg.Detail = tr.result.Detail
 			}
 			messages = append(messages, toolMsg)
 		}

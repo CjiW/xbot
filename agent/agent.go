@@ -580,7 +580,23 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		if extra != "" {
 			lines = append(append([]string{}, progressLines...), extra)
 		}
-		_ = a.sendMessage(channel, chatID, strings.Join(lines, "\n"))
+		// 在非引用行和引用行之间插入空行，避免飞书 markdown 渲染粘连
+		var buf strings.Builder
+		for i, line := range lines {
+			if i > 0 {
+				prev := lines[i-1]
+				prevIsQuote := strings.HasPrefix(prev, "> ")
+				currIsQuote := strings.HasPrefix(line, "> ")
+				if prevIsQuote != currIsQuote {
+					buf.WriteByte('\n') // 额外空行分隔引用块和正文
+				}
+			}
+			buf.WriteString(line)
+			if i < len(lines)-1 {
+				buf.WriteByte('\n')
+			}
+		}
+		_ = a.sendMessage(channel, chatID, buf.String())
 	}
 
 	for i := 0; i < a.maxIterations; i++ {
@@ -601,9 +617,9 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			return content, toolsUsed, false, nil
 		}
 
-		// 模型的中间思考内容加入进度
+		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
 		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, "> "+strings.TrimSpace(response.Content))
+			progressLines = append(progressLines, strings.TrimSpace(response.Content))
 		}
 
 		// 记录 assistant 消息（含 tool_calls）

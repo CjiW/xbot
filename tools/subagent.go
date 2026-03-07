@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"xbot/llm"
 )
 
@@ -14,23 +13,7 @@ func (t *SubAgentTool) Name() string {
 }
 
 func (t *SubAgentTool) Description() string {
-	roles := ListSubAgentRoles()
-	var roleLines []string
-	for _, r := range roles {
-		toolsInfo := ""
-		if len(r.AllowedTools) > 0 {
-			toolsInfo = fmt.Sprintf(" [tools: %s]", strings.Join(r.AllowedTools, ", "))
-		}
-		roleLines = append(roleLines, fmt.Sprintf("  - \"%s\": %s%s", r.Name, r.Description, toolsInfo))
-	}
-	roleList := strings.Join(roleLines, "\n")
-
-	if roleList == "" {
-		return `Delegate a task to a sub-agent that runs independently with its own tool set and context.
-No predefined roles are available. Please configure agent roles in the .xbot/agents/ directory.`
-	}
-
-	return fmt.Sprintf(`Delegate a task to a sub-agent with a predefined role.
+	return `Delegate a task to a sub-agent with a predefined role.
 The sub-agent runs independently with its own tool set and context, specialized for the given role.
 The sub-agent runs synchronously and returns its final response.
 
@@ -38,10 +21,9 @@ Parameters (JSON):
   - task: string (required), the task description for the sub-agent
   - role: string (required), the predefined role name to use
 
-Available roles:
-%s
+Available roles are listed in the <available_agents> section of the system prompt.
 
-Example: {"task": "Review the changes in core/agent.go for potential bugs", "role": "code-reviewer"}`, roleList)
+Example: {"task": "Review the changes in core/agent.go for potential bugs", "role": "code-reviewer"}`
 }
 
 func (t *SubAgentTool) Parameters() []llm.ToolParam {
@@ -65,20 +47,12 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	}
 
 	if params.Role == "" {
-		available := make([]string, 0)
-		for _, r := range ListSubAgentRoles() {
-			available = append(available, r.Name)
-		}
-		return nil, fmt.Errorf("role is required (available: %s)", strings.Join(available, ", "))
+		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
 	}
 
 	role, ok := GetSubAgentRole(params.Role)
 	if !ok {
-		available := make([]string, 0)
-		for _, r := range ListSubAgentRoles() {
-			available = append(available, r.Name)
-		}
-		return nil, fmt.Errorf("unknown role: %s (available: %s)", params.Role, strings.Join(available, ", "))
+		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}
 
 	if ctx == nil || ctx.Manager == nil {

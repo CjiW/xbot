@@ -20,24 +20,18 @@ type ArchivalEntry struct {
 	Similarity float32
 }
 
-// RecallFunc performs FTS5 recall search over conversation history.
-// Decoupled from SQLite so the vectordb package has no sqlite dependency.
-type RecallFunc func(tenantID int64, query string, limit int) ([]string, error)
-
 // ArchivalService stores long-term archival memory entries in chromem-go,
 // a pure-Go embedded vector database with file-based persistence.
 type ArchivalService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
-	recallFn      RecallFunc
 }
 
 // NewArchivalService creates an archival service backed by chromem-go.
 //
 // persistDir: directory for chromem-go file persistence (created if needed).
 // embeddingFunc: OpenAI-compatible embedding function (nil disables vector search).
-// recallFn: optional FTS5 recall search over conversation history.
-func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, recallFn RecallFunc) (*ArchivalService, error) {
+func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc) (*ArchivalService, error) {
 	db, err := chromem.NewPersistentDB(persistDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
@@ -51,7 +45,6 @@ func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, 
 	return &ArchivalService{
 		db:            db,
 		embeddingFunc: embeddingFunc,
-		recallFn:      recallFn,
 	}, nil
 }
 
@@ -74,7 +67,9 @@ func (s *ArchivalService) getOrCreateCollection(tenantID int64) (*chromem.Collec
 }
 
 // Insert stores a new archival memory entry. Embedding is computed automatically by chromem-go.
-func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content string) (string, error) {
+// If ts is non-zero it is recorded as the information timestamp (e.g. conversation time);
+// otherwise the current wall-clock time is used.
+func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content string, ts time.Time) (string, error) {
 	if s.embeddingFunc == nil {
 		return "", fmt.Errorf("archival insert requires embedding configuration (set LLM_EMBEDDING_MODEL)")
 	}
@@ -85,13 +80,15 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 	}
 
 	id := uuid.New().String()
-	now := time.Now()
+	if ts.IsZero() {
+		ts = time.Now()
+	}
 
 	err = coll.AddDocument(ctx, chromem.Document{
 		ID:      id,
 		Content: content,
 		Metadata: map[string]string{
-			"created_at": now.Format(time.RFC3339),
+			"created_at": ts.UTC().Format(time.RFC3339),
 		},
 	})
 	if err != nil {
@@ -99,9 +96,10 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 	}
 
 	log.WithFields(log.Fields{
-		"tenant_id": tenantID,
-		"id":        id,
-		"length":    len(content),
+		"tenant_id":  tenantID,
+		"id":         id,
+		"length":     len(content),
+		"created_at": ts.UTC().Format(time.RFC3339),
 	}).Debug("Archival memory inserted (chromem-go)")
 
 	return id, nil
@@ -146,15 +144,6 @@ func (s *ArchivalService) Search(ctx context.Context, tenantID int64, query stri
 		}
 	}
 	return entries, nil
-}
-
-// SearchText performs FTS5 full-text search over conversation history (recall memory).
-// Delegates to the injected RecallFunc (backed by SQLite FTS5).
-func (s *ArchivalService) SearchText(tenantID int64, query string, limit int) ([]string, error) {
-	if s.recallFn == nil {
-		return nil, nil
-	}
-	return s.recallFn(tenantID, query, limit)
 }
 
 // Delete removes an archival memory entry by ID.

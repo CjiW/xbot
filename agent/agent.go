@@ -230,8 +230,8 @@ func (a *Agent) Run(ctx context.Context) error {
 // processMessage 处理单条入站消息
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	preview := msg.Content
-	if len(preview) > 80 {
-		preview = preview[:80] + "..."
+	if r := []rune(preview); len(r) > 80 {
+		preview = string(r[:80]) + "..."
 	}
 	log.WithFields(log.Fields{
 		"channel": msg.Channel,
@@ -585,7 +585,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 	for i := 0; i < a.maxIterations; i++ {
 		if autoNotify && i > 0 {
-			notifyProgress("💭 思考中...")
+			notifyProgress("> 💭 思考中...")
 		}
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
@@ -603,7 +603,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 模型的中间思考内容加入进度
 		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, strings.TrimSpace(response.Content))
+			progressLines = append(progressLines, "> "+strings.TrimSpace(response.Content))
 		}
 
 		// 记录 assistant 消息（含 tool_calls）
@@ -649,7 +649,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			toolsUsed = append(toolsUsed, tc.Name)
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabel))
+				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
 			}
 		}
 		if autoNotify {
@@ -660,8 +660,8 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		execOne := func(entry toolCallEntry) {
 			tc := entry.tc
 			argPreview := tc.Arguments
-			if len(argPreview) > 200 {
-				argPreview = argPreview[:200] + "..."
+			if r := []rune(argPreview); len(r) > 200 {
+				argPreview = string(r[:200]) + "..."
 			}
 			log.WithFields(log.Fields{
 				"tool": tc.Name,
@@ -682,14 +682,14 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			} else {
 				execResults[entry.index].content = result.Summary
 
 				resultPreview := result.Summary
-				if len(resultPreview) > 200 {
-					resultPreview = resultPreview[:200] + "..."
+				if r := []rune(resultPreview); len(r) > 200 {
+					resultPreview = string(r[:200]) + "..."
 				}
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
@@ -697,7 +697,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			}
 		}
@@ -1127,12 +1127,13 @@ func formatToolProgress(name string, args string) string {
 	var m map[string]interface{}
 	parsed := json.Unmarshal([]byte(args), &m) == nil
 
-	// Helper to truncate and format the final result
+	// Helper to truncate and format the final result (rune-safe for multibyte chars)
 	truncate := func(s string, max int) string {
-		if len(s) <= max {
+		runes := []rune(s)
+		if len(runes) <= max {
 			return s
 		}
-		return s[:max-3] + "..."
+		return string(runes[:max-3]) + "..."
 	}
 
 	// For tools that just show their name

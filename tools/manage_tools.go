@@ -12,13 +12,15 @@ import (
 
 // ManageTools allows the bot to add/update/remove MCP servers dynamically
 type ManageTools struct {
-	mcpConfigPath string
+	workDir             string
+	globalMCPConfigPath string
 }
 
 // NewManageTools creates a new ManageTools tool
-func NewManageTools(mcpConfigPath string) *ManageTools {
+func NewManageTools(workDir, globalMCPConfigPath string) *ManageTools {
 	return &ManageTools{
-		mcpConfigPath: mcpConfigPath,
+		workDir:             workDir,
+		globalMCPConfigPath: globalMCPConfigPath,
 	}
 }
 
@@ -94,7 +96,8 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	}
 
 	// Load existing config
-	config, err := t.loadMCPConfig()
+	userPath := t.resolveUserMCPConfigPath(ctx)
+	config, err := t.loadMCPConfig(userPath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
@@ -109,7 +112,7 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	config.MCPServers[args.Name] = cfg
 
 	// Save config
-	if err := t.saveMCPConfig(config); err != nil {
+	if err := t.saveMCPConfig(userPath, config); err != nil {
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
@@ -122,7 +125,8 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 	}
 
 	// Load existing config
-	config, err := t.loadMCPConfig()
+	userPath := t.resolveUserMCPConfigPath(ctx)
+	config, err := t.loadMCPConfig(userPath)
 	if err != nil {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
@@ -139,7 +143,7 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 	delete(config.MCPServers, args.Name)
 
 	// Save config
-	if err := t.saveMCPConfig(config); err != nil {
+	if err := t.saveMCPConfig(userPath, config); err != nil {
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
@@ -147,7 +151,9 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 }
 
 func (t *ManageTools) listMCP(ctx *ToolContext) (*ToolResult, error) {
-	config, err := t.loadMCPConfig()
+	globalPath := t.resolveGlobalMCPConfigPath(ctx)
+	userPath := t.resolveUserMCPConfigPath(ctx)
+	config, err := t.loadMergedMCPConfig(globalPath, userPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return NewResult("No MCP servers configured."), nil
@@ -190,8 +196,22 @@ func (t *ManageTools) reload(ctx *ToolContext) (*ToolResult, error) {
 	return NewResult(strings.Join(results, "\n")), nil
 }
 
-func (t *ManageTools) loadMCPConfig() (*MCPConfig, error) {
-	data, err := os.ReadFile(t.mcpConfigPath)
+func (t *ManageTools) resolveUserMCPConfigPath(ctx *ToolContext) string {
+	if ctx != nil && ctx.MCPConfigPath != "" {
+		return ctx.MCPConfigPath
+	}
+	return filepath.Join(t.workDir, ".xbot", "users", "anonymous", "mcp.json")
+}
+
+func (t *ManageTools) resolveGlobalMCPConfigPath(ctx *ToolContext) string {
+	if ctx != nil && ctx.GlobalMCPConfigPath != "" {
+		return ctx.GlobalMCPConfigPath
+	}
+	return t.globalMCPConfigPath
+}
+
+func (t *ManageTools) loadMCPConfig(configPath string) (*MCPConfig, error) {
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -203,9 +223,36 @@ func (t *ManageTools) loadMCPConfig() (*MCPConfig, error) {
 	return &config, nil
 }
 
-func (t *ManageTools) saveMCPConfig(config *MCPConfig) error {
+func (t *ManageTools) loadMergedMCPConfig(globalPath, userPath string) (*MCPConfig, error) {
+	merged := &MCPConfig{MCPServers: map[string]MCPServerConfig{}}
+
+	if globalPath != "" {
+		if cfg, err := t.loadMCPConfig(globalPath); err == nil && cfg != nil {
+			for name, server := range cfg.MCPServers {
+				merged.MCPServers[name] = server
+			}
+		}
+	}
+
+	if userPath != "" {
+		cfg, err := t.loadMCPConfig(userPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return merged, nil
+			}
+			return nil, err
+		}
+		for name, server := range cfg.MCPServers {
+			merged.MCPServers[name] = server
+		}
+	}
+
+	return merged, nil
+}
+
+func (t *ManageTools) saveMCPConfig(configPath string, config *MCPConfig) error {
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(t.mcpConfigPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return err
 	}
 
@@ -214,5 +261,5 @@ func (t *ManageTools) saveMCPConfig(config *MCPConfig) error {
 		return err
 	}
 
-	return os.WriteFile(t.mcpConfigPath, data, 0o644)
+	return os.WriteFile(configPath, data, 0o644)
 }

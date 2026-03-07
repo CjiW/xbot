@@ -18,6 +18,12 @@ type SessionMCPManagerProvider interface {
 type ToolContext struct {
 	Ctx                     context.Context                             // 可取消的上下文，用于响应 stop 信号
 	WorkingDir              string                                      // Agent 的工作目录
+	WorkspaceRoot           string                                      // 当前用户可读写工作区根目录
+	ReadOnlyRoots           []string                                    // 当前用户额外可读目录（只读）
+	MCPConfigPath           string                                      // 当前用户 MCP 配置路径
+	GlobalMCPConfigPath     string                                      // 全局 MCP 配置路径（只读）
+	SandboxEnabled          bool                                        // 是否启用命令沙箱
+	PreferredSandbox        string                                      // 沙箱优先级（如 bwrap/nsjail）
 	AgentID                 string                                      // 当前 Agent 的 ID
 	Manager                 SubAgentManager                             // Agent 管理器引用（用于创建 SubAgent）
 	DataDir                 string                                      // 数据持久化目录

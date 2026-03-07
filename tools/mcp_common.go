@@ -86,11 +86,15 @@ func resolveXbotBinDir(configPath string) string {
 }
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath string) (*mcpclient.Client, any, error) {
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcpclient.Client, any, error) {
 	envList := BuildStdioEnv(cfg, configPath)
+	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// 创建 stdio transport
-	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
+	stdioTransport := transport.NewStdio(cmd, envList, args...)
 
 	// 使用父级 context 启动 transport，因为子进程生命周期绑定到此 context
 	if err := stdioTransport.Start(ctx); err != nil {

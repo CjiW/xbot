@@ -66,9 +66,9 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 	}
 
 	// Resolve output path
-	outputPath := params.OutputPath
-	if !filepath.IsAbs(outputPath) && ctx != nil && ctx.WorkingDir != "" {
-		outputPath = filepath.Join(ctx.WorkingDir, outputPath)
+	outputPath, err := ResolveWritePath(ctx, params.OutputPath)
+	if err != nil {
+		return nil, err
 	}
 
 	switch ctx.Channel {

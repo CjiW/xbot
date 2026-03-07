@@ -42,6 +42,33 @@ func resolveDataPath(workDir, filename string) string {
 	return newPath
 }
 
+func resolveGlobalSkillsDirs(workDir, legacySkillsDir string) []string {
+	dirs := []string{
+		filepath.Join(workDir, ".claude", "skills"),
+	}
+	if legacySkillsDir != "" {
+		dirs = append(dirs, legacySkillsDir)
+	}
+
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		result = append(result, abs)
+	}
+	return result
+}
+
 // Agent 核心 Agent 引擎
 type Agent struct {
 	bus           *bus.MessageBus
@@ -117,7 +144,8 @@ func New(cfg Config) *Agent {
 		cfg.SessionCacheTimeout = 24 * time.Hour
 	}
 
-	skillStore := NewSkillStore(cfg.SkillsDir)
+	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
+	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
 	// 加载 agent 角色定义（从 .xbot/agents/ 目录）
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
@@ -135,7 +163,7 @@ func New(cfg Config) *Agent {
 	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
-	registry.Register(tools.NewManageTools(mcpConfigPath))
+	registry.Register(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
@@ -328,9 +356,16 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsCatalog := a.skills.GetSkillsCatalog()
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, workspaceRoot, skillsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -494,9 +529,16 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsCatalog := a.skills.GetSkillsCatalog()
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -883,21 +925,31 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
-		Ctx:           execCtx,
-		WorkingDir:    a.workDir,
-		AgentID:       "main",
-		Manager:       a,
-		DataDir:       a.workDir,
-		Channel:       channel,
-		ChatID:        chatID,
-		SenderID:      senderID,
-		SenderName:    senderName,
-		SendFunc:      a.sendMessage,
-		InjectInbound: a.injectInbound,
-		Registry:      a.tools,
+		Ctx:                 execCtx,
+		WorkingDir:          a.workDir,
+		WorkspaceRoot:       tools.UserWorkspaceRoot(a.workDir, senderID),
+		ReadOnlyRoots:       resolveGlobalSkillsDirs(a.workDir, filepath.Join(a.workDir, ".xbot", "skills")),
+		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
+		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
+		SandboxEnabled:      true,
+		PreferredSandbox:    "bwrap,nsjail",
+		AgentID:             "main",
+		Manager:             a,
+		DataDir:             a.workDir,
+		Channel:             channel,
+		ChatID:              chatID,
+		SenderID:            senderID,
+		SenderName:          senderName,
+		SendFunc:            a.sendMessage,
+		InjectInbound:       a.injectInbound,
+		Registry:            a.tools,
 		InvalidateAllSessionMCP: func() {
 			a.multiSession.InvalidateAll()
 		},
+	}
+
+	if err := os.MkdirAll(toolCtx.WorkspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory

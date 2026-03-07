@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"xbot/llm"
 )
 
@@ -40,10 +39,9 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("path is required")
 	}
 
-	// 解析路径：如果是相对路径，则基于工作目录
-	filePath := params.Path
-	if !filepath.IsAbs(filePath) && ctx != nil && ctx.WorkingDir != "" {
-		filePath = filepath.Join(ctx.WorkingDir, filePath)
+	filePath, err := ResolveReadPath(ctx, params.Path)
+	if err != nil {
+		return nil, err
 	}
 
 	// Read file

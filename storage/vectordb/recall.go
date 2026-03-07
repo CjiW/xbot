@@ -6,66 +6,10 @@ import (
 	"time"
 )
 
-// NewSQLiteRecallFunc creates a RecallFunc that performs FTS5 search over
-// the event_history table in SQLite. Falls back to LIKE if FTS fails.
-func NewSQLiteRecallFunc(db *sql.DB) RecallFunc {
-	return func(tenantID int64, query string, limit int) ([]string, error) {
-		if limit <= 0 {
-			limit = 10
-		}
-
-		// Try FTS5 first
-		rows, err := db.Query(`
-			SELECT eh.entry FROM event_history eh
-			JOIN event_history_fts fts ON eh.id = fts.rowid
-            WHERE eh.tenant_id = ? AND fts MATCH ?  
-            ORDER BY bm25(fts)
-			LIMIT ?
-		`, tenantID, query, limit)
-		if err != nil {
-			// Fallback to LIKE search
-			return recallFallback(db, tenantID, query, limit)
-		}
-		defer rows.Close()
-
-		var entries []string
-		for rows.Next() {
-			var entry string
-			if err := rows.Scan(&entry); err != nil {
-				return nil, fmt.Errorf("scan fts result: %w", err)
-			}
-			entries = append(entries, entry)
-		}
-		return entries, rows.Err()
-	}
-}
-
-func recallFallback(db *sql.DB, tenantID int64, query string, limit int) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT entry FROM event_history
-		WHERE tenant_id = ? AND entry LIKE ?
-		ORDER BY id DESC
-		LIMIT ?
-	`, tenantID, "%"+query+"%", limit)
-	if err != nil {
-		return nil, fmt.Errorf("recall fallback: %w", err)
-	}
-	defer rows.Close()
-
-	var entries []string
-	for rows.Next() {
-		var entry string
-		if err := rows.Scan(&entry); err != nil {
-			return nil, fmt.Errorf("scan recall fallback: %w", err)
-		}
-		entries = append(entries, entry)
-	}
-	return entries, rows.Err()
-}
-
-// RecallTimeRangeFunc searches event_history within a time range, optionally
-// combined with a text/FTS query. If query is empty, returns all entries in range.
-type RecallTimeRangeFunc func(tenantID int64, query string, start, end time.Time, limit int) ([]RecallEntry, error)
+// RecallTimeRangeFunc retrieves conversation history entries within a time range.
+// No text search — semantic search should use ArchivalService.Search (vector) instead.
+// Returns entries ordered by created_at DESC.
+type RecallTimeRangeFunc func(tenantID int64, start, end time.Time, limit int) ([]RecallEntry, error)
 
 // RecallEntry represents a single recall search result with timestamp.
 type RecallEntry struct {
@@ -74,15 +18,14 @@ type RecallEntry struct {
 }
 
 // NewSQLiteRecallTimeRangeFunc creates a RecallTimeRangeFunc backed by SQLite.
-// Uses FTS5 when a query is provided, with LIKE fallback.
-// Uses the idx_event_history_tenant_created index for efficient time-range filtering.
+// Retrieves event_history rows filtered by tenant and time range.
+// Uses the idx_event_history_tenant_created index for efficient filtering.
 func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
-	return func(tenantID int64, query string, start, end time.Time, limit int) ([]RecallEntry, error) {
+	return func(tenantID int64, start, end time.Time, limit int) ([]RecallEntry, error) {
 		if limit <= 0 {
 			limit = 20
 		}
 
-		hasQuery := query != ""
 		hasTimeRange := !start.IsZero() || !end.IsZero()
 
 		// Set default time range bounds
@@ -99,27 +42,7 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 		startStr := start.Format("2006-01-02 15:04:05")
 		endStr := end.Format("2006-01-02 15:04:05")
 
-		if hasQuery {
-			// Try FTS5 + time range
-			rows, err := db.Query(`
-				SELECT eh.entry, eh.created_at FROM event_history eh
-				JOIN event_history_fts fts ON eh.id = fts.rowid
-				WHERE eh.tenant_id = ?
-				  AND eh.created_at >= ? AND eh.created_at <= ?
-				  AND event_history_fts MATCH ?
-				ORDER BY eh.created_at DESC
-				LIMIT ?
-			`, tenantID, startStr, endStr, query, limit)
-			if err != nil {
-				// FTS failed, fallback to LIKE + time range
-				return recallTimeRangeFallback(db, tenantID, query, startStr, endStr, limit)
-			}
-			defer rows.Close()
-			return scanRecallEntries(rows)
-		}
-
 		if hasTimeRange {
-			// Time range only, no text search
 			rows, err := db.Query(`
 				SELECT entry, created_at FROM event_history
 				WHERE tenant_id = ? AND created_at >= ? AND created_at <= ?
@@ -133,7 +56,7 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 			return scanRecallEntries(rows)
 		}
 
-		// Neither query nor time range — return recent entries
+		// No time range — return recent entries
 		rows, err := db.Query(`
 			SELECT entry, created_at FROM event_history
 			WHERE tenant_id = ?
@@ -146,20 +69,6 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 		defer rows.Close()
 		return scanRecallEntries(rows)
 	}
-}
-
-func recallTimeRangeFallback(db *sql.DB, tenantID int64, query, startStr, endStr string, limit int) ([]RecallEntry, error) {
-	rows, err := db.Query(`
-		SELECT entry, created_at FROM event_history
-		WHERE tenant_id = ? AND created_at >= ? AND created_at <= ? AND entry LIKE ?
-		ORDER BY created_at DESC
-		LIMIT ?
-	`, tenantID, startStr, endStr, "%"+query+"%", limit)
-	if err != nil {
-		return nil, fmt.Errorf("recall time range fallback: %w", err)
-	}
-	defer rows.Close()
-	return scanRecallEntries(rows)
 }
 
 // parseTimestamp parses a timestamp string, handling both RFC3339 (from modernc.org/sqlite)

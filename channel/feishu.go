@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -738,12 +739,21 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	}
 
 	// 发布到消息总线
+	msgTime := time.Now()
+	if msg.CreateTime != nil {
+		if ms, err := strconv.ParseInt(*msg.CreateTime, 10, 64); err == nil {
+			msgTime = time.UnixMilli(ms)
+		} else {
+			log.WithError(err).WithField("create_time", *msg.CreateTime).Warn("Feishu: failed to parse message CreateTime, using current time")
+		}
+	}
 	f.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
 		SenderName: senderName,
 		ChatID:     replyTo,
 		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
+		Time:       msgTime,
 		Metadata: map[string]string{
 			"message_id": messageID,
 			"chat_type":  chatType,

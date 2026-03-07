@@ -269,7 +269,7 @@ func (t *ArchivalMemoryInsertTool) Execute(ctx *ToolContext, input string) (*Too
 	}
 	tenantID := ctx.TenantID
 
-	id, err := archivalSvc.Insert(ctx.Ctx, tenantID, args.Content)
+	id, err := archivalSvc.Insert(ctx.Ctx, tenantID, args.Content, time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("insert archival: %w", err)
 	}
@@ -285,7 +285,7 @@ type ArchivalMemorySearchTool struct{}
 
 func (t *ArchivalMemorySearchTool) Name() string { return "archival_memory_search" }
 func (t *ArchivalMemorySearchTool) Description() string {
-	return "Search archival memory using semantic similarity. Returns the most relevant archived passages. Also searches conversation history."
+	return "Search archival memory using semantic similarity (vector search). Returns the most relevant archived passages with timestamps. Use the returned timestamps with recall_memory_search to retrieve surrounding conversation context."
 }
 func (t *ArchivalMemorySearchTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
@@ -329,7 +329,7 @@ func (t *ArchivalMemorySearchTool) Execute(ctx *ToolContext, input string) (*Too
 
 	var sb strings.Builder
 
-	// 1. Search archival memory (vector similarity search via chromem-go)
+	// Vector similarity search via chromem-go
 	entries, err := archivalSvc.Search(ctx.Ctx, tenantID, args.Query, args.Limit)
 	if err != nil {
 		log.WithError(err).Warn("Archival vector search failed")
@@ -338,22 +338,10 @@ func (t *ArchivalMemorySearchTool) Execute(ctx *ToolContext, input string) (*Too
 	if len(entries) > 0 {
 		sb.WriteString("## Archival Memory Results\n")
 		for i, entry := range entries {
-			fmt.Fprintf(&sb, "%d. [id=%s, %s, sim=%.2f] %s\n", i+1, entry.ID[:8], entry.CreatedAt.Format("2006-01-02"), entry.Similarity, entry.Content)
+			fmt.Fprintf(&sb, "%d. [id=%s, %s, sim=%.2f] %s\n", i+1, entry.ID[:8], entry.CreatedAt.Format("2006-01-02 15:04"), entry.Similarity, entry.Content)
 		}
 	} else {
 		sb.WriteString("No archival memory entries found.\n")
-	}
-
-	// 2. Search conversation history (FTS5 recall)
-	historyResults, err := archivalSvc.SearchText(tenantID, args.Query, args.Limit)
-	if err != nil {
-		log.WithError(err).Warn("Failed to search conversation history")
-	}
-	if len(historyResults) > 0 {
-		sb.WriteString("\n## Conversation History Results\n")
-		for i, entry := range historyResults {
-			fmt.Fprintf(&sb, "%d. %s\n", i+1, entry)
-		}
 	}
 
 	if sb.Len() == 0 {
@@ -364,32 +352,28 @@ func (t *ArchivalMemorySearchTool) Execute(ctx *ToolContext, input string) (*Too
 
 // --- Recall Memory Search ---
 
-// RecallMemorySearchTool searches conversation history by keyword and/or time range.
+// RecallMemorySearchTool retrieves conversation history entries by time range.
+// For semantic search, use archival_memory_search (vector) first to locate relevant
+// time periods, then recall_memory_search to fetch the full conversation context.
 type RecallMemorySearchTool struct{}
 
 func (t *RecallMemorySearchTool) Name() string { return "recall_memory_search" }
 func (t *RecallMemorySearchTool) Description() string {
-	return "Search conversation history (recall memory) by keyword and/or time range. Use when the user references past conversations, e.g. \"a few days ago we discussed...\". Supports date-range filtering to narrow results."
+	return "Retrieve conversation history by time range. Does NOT support keyword search — use archival_memory_search for semantic lookup first, then use the returned timestamps to query recall_memory_search for surrounding context."
 }
 func (t *RecallMemorySearchTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "query",
-			Type:        "string",
-			Description: "Search keyword or phrase. Can be empty if only filtering by time range.",
-			Required:    false,
-		},
-		{
 			Name:        "start_date",
 			Type:        "string",
 			Description: "Start date (inclusive) in YYYY-MM-DD format. Example: 2025-01-15",
-			Required:    false,
+			Required:    true,
 		},
 		{
 			Name:        "end_date",
 			Type:        "string",
 			Description: "End date (inclusive) in YYYY-MM-DD format. Example: 2025-01-20",
-			Required:    false,
+			Required:    true,
 		},
 		{
 			Name:        "limit",
@@ -401,7 +385,6 @@ func (t *RecallMemorySearchTool) Parameters() []llm.ToolParam {
 }
 
 type recallSearchArgs struct {
-	Query     string `json:"query"`
 	StartDate string `json:"start_date"`
 	EndDate   string `json:"end_date"`
 	Limit     int    `json:"limit"`
@@ -412,8 +395,8 @@ func (t *RecallMemorySearchTool) Execute(ctx *ToolContext, input string) (*ToolR
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
-	if args.Query == "" && args.StartDate == "" && args.EndDate == "" {
-		return NewResult("At least one of query, start_date, or end_date must be provided."), nil
+	if args.StartDate == "" && args.EndDate == "" {
+		return NewResult("At least one of start_date or end_date must be provided."), nil
 	}
 	if args.Limit <= 0 {
 		args.Limit = 20
@@ -441,7 +424,7 @@ func (t *RecallMemorySearchTool) Execute(ctx *ToolContext, input string) (*ToolR
 		endTime = t.Add(24*time.Hour - time.Second)
 	}
 
-	entries, err := recallFn(ctx.TenantID, args.Query, startTime, endTime, args.Limit)
+	entries, err := recallFn(ctx.TenantID, startTime, endTime, args.Limit)
 	if err != nil {
 		log.WithError(err).Warn("Recall memory search failed")
 		return NewResult(fmt.Sprintf("Search failed: %v", err)), nil

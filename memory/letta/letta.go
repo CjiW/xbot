@@ -17,7 +17,7 @@ import (
 // LettaMemory implements memory.MemoryProvider with a Letta (MemGPT) architecture:
 // - Core Memory: structured blocks injected into system prompt (persona/human/working_context)
 // - Archival Memory: long-term embedding-backed storage (on-demand via tools)
-// - Recall Memory: conversation history search (FTS5)
+// - Recall Memory: conversation history retrieval by time range
 type LettaMemory struct {
 	tenantID    int64
 	coreSvc     *sqlite.CoreMemoryService
@@ -129,12 +129,15 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 			}
 			toolHint = fmt.Sprintf(" [tools: %s]", strings.Join(names, ", "))
 		}
-		ts := time.Now().Format("2006-01-02 15:04")
+		ts := msg.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
 		content := msg.Content
 		if len(content) > 500 {
 			content = content[:500] + "..."
 		}
-		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts, role, toolHint, content))
+		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts.Format("2006-01-02 15:04"), role, toolHint, content))
 	}
 
 	if len(lines) == 0 {
@@ -216,12 +219,14 @@ Instructions:
 	}
 
 	// Archive to archival memory (embedding computed by chromem-go)
+	// Use the midpoint of the conversation time range as the information timestamp
+	archivalTS := conversationMidpoint(oldMessages)
 	for _, entry := range args.ArchivalEntries {
 		if entry == "" {
 			continue
 		}
 		if m.archivalSvc != nil {
-			if _, err := m.archivalSvc.Insert(ctx, m.tenantID, entry); err != nil {
+			if _, err := m.archivalSvc.Insert(ctx, m.tenantID, entry, archivalTS); err != nil {
 				log.WithError(err).Error("Failed to insert archival entry during consolidation")
 			}
 		}
@@ -280,6 +285,29 @@ func blockTitle(name string) string {
 	default:
 		return name
 	}
+}
+
+// conversationMidpoint returns the midpoint timestamp of a slice of messages.
+// If no message has a non-zero Timestamp, returns the current time.
+func conversationMidpoint(msgs []llm.ChatMessage) time.Time {
+	var earliest, latest time.Time
+	for _, m := range msgs {
+		ts := m.Timestamp
+		if ts.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || ts.Before(earliest) {
+			earliest = ts
+		}
+		if latest.IsZero() || ts.After(latest) {
+			latest = ts
+		}
+	}
+	if earliest.IsZero() {
+		return time.Now()
+	}
+	mid := earliest.Add(latest.Sub(earliest) / 2)
+	return mid
 }
 
 // --- consolidate_memory tool definition ---

@@ -125,8 +125,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	if m.memoryProvider == "letta" && m.archivalSvc == nil && m.embeddingConfig != nil {
 		archivalDir := filepath.Join(filepath.Dir(dbPath), "archival")
 		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
-		recallFn := vectordb.NewSQLiteRecallFunc(db.Conn())
-		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, recallFn)
+		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc)
 		if err != nil {
 			log.WithError(err).Error("Failed to initialize archival memory (chromem-go), archival tools will be unavailable")
 		} else {

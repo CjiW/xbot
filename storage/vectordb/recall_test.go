@@ -9,7 +9,7 @@ import (
 )
 
 // setupTestDB creates a temporary SQLite database with the event_history schema
-// and FTS5 index for testing recall functions.
+// for testing recall functions (no FTS needed — recall is time-range only).
 func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -24,16 +24,6 @@ CREATE TABLE event_history (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_event_history_tenant_created ON event_history(tenant_id, created_at);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS event_history_fts USING fts5(
-    entry,
-    content='event_history',
-    content_rowid='id'
-);
-
-CREATE TRIGGER event_history_ai AFTER INSERT ON event_history BEGIN
-    INSERT INTO event_history_fts(rowid, entry) VALUES (new.id, new.entry);
-END;
 `
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -52,71 +42,9 @@ func insertEntry(t *testing.T, db *sql.DB, tenantID int64, entry, createdAt stri
 	}
 }
 
-// --- RecallFunc tests ---
-
-func TestNewSQLiteRecallFunc_FTS(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	fn := NewSQLiteRecallFunc(db)
-
-	insertEntry(t, db, 1, "User asked about Go programming", "2026-03-01 10:00:00")
-	insertEntry(t, db, 1, "Discussed SQLite implementation", "2026-03-01 11:00:00")
-	insertEntry(t, db, 1, "Talked about Rust and memory safety", "2026-03-02 09:00:00")
-	insertEntry(t, db, 2, "Different tenant Go question", "2026-03-01 10:00:00")
-
-	// FTS search for "Go"
-	results, err := fn(1, "Go", 10)
-	if err != nil {
-		t.Fatalf("recall: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("expected 1 result for 'Go' in tenant 1, got %d", len(results))
-	}
-
-	// Tenant isolation
-	results, err = fn(2, "Go", 10)
-	if err != nil {
-		t.Fatalf("recall tenant 2: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("expected 1 result for tenant 2, got %d", len(results))
-	}
-
-	// No match
-	results, err = fn(1, "Python", 10)
-	if err != nil {
-		t.Fatalf("recall no match: %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected 0 results for 'Python', got %d", len(results))
-	}
-}
-
-func TestNewSQLiteRecallFunc_DefaultLimit(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	fn := NewSQLiteRecallFunc(db)
-
-	// Insert multiple entries
-	for i := 0; i < 15; i++ {
-		insertEntry(t, db, 1, "Go programming topic number something", "2026-03-01 10:00:00")
-	}
-
-	// Zero/negative limit should default to 10
-	results, err := fn(1, "Go", 0)
-	if err != nil {
-		t.Fatalf("recall: %v", err)
-	}
-	if len(results) != 10 {
-		t.Errorf("expected 10 results with default limit, got %d", len(results))
-	}
-}
-
 // --- RecallTimeRangeFunc tests ---
 
-func TestNewSQLiteRecallTimeRangeFunc_QueryAndTimeRange(t *testing.T) {
+func TestNewSQLiteRecallTimeRangeFunc_TimeRange(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -127,20 +55,17 @@ func TestNewSQLiteRecallTimeRangeFunc_QueryAndTimeRange(t *testing.T) {
 	insertEntry(t, db, 1, "Rust ownership model deep dive", "2026-03-05 09:00:00")
 	insertEntry(t, db, 1, "Go error handling best practices", "2026-03-07 16:00:00")
 
-	// Query + time range: "Go" between 2026-03-02 and 2026-03-06
+	// Time range: 2026-03-02 to 2026-03-06
 	start, _ := time.Parse("2006-01-02", "2026-03-02")
 	end, _ := time.Parse("2006-01-02", "2026-03-06")
 	end = end.Add(24*time.Hour - time.Second)
 
-	results, err := fn(1, "Go", start, end, 10)
+	results, err := fn(1, start, end, 10)
 	if err != nil {
 		t.Fatalf("recall time range: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("expected 1 result (Go interface patterns on 03-03), got %d", len(results))
-	}
-	if len(results) > 0 && results[0].Entry != "Go interface patterns explained" {
-		t.Errorf("unexpected entry: %s", results[0].Entry)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results (03-03 and 03-05), got %d", len(results))
 	}
 }
 
@@ -154,37 +79,17 @@ func TestNewSQLiteRecallTimeRangeFunc_TimeRangeOnly(t *testing.T) {
 	insertEntry(t, db, 1, "Code review feedback", "2026-03-01 14:00:00")
 	insertEntry(t, db, 1, "Deployment planning", "2026-03-03 10:00:00")
 
-	// Time range only (no query): 2026-03-01
+	// Time range: 2026-03-01 only
 	start, _ := time.Parse("2006-01-02", "2026-03-01")
 	end, _ := time.Parse("2006-01-02", "2026-03-01")
 	end = end.Add(24*time.Hour - time.Second)
 
-	results, err := fn(1, "", start, end, 10)
+	results, err := fn(1, start, end, 10)
 	if err != nil {
 		t.Fatalf("recall time range only: %v", err)
 	}
 	if len(results) != 2 {
 		t.Errorf("expected 2 results for 2026-03-01, got %d", len(results))
-	}
-}
-
-func TestNewSQLiteRecallTimeRangeFunc_QueryOnly(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	fn := NewSQLiteRecallTimeRangeFunc(db)
-
-	insertEntry(t, db, 1, "Discussed Redis caching strategies", "2026-03-01 10:00:00")
-	insertEntry(t, db, 1, "PostgreSQL query optimization", "2026-03-02 11:00:00")
-	insertEntry(t, db, 1, "Redis pub-sub architecture", "2026-03-03 15:00:00")
-
-	// Query only (no time range)
-	results, err := fn(1, "Redis", time.Time{}, time.Time{}, 10)
-	if err != nil {
-		t.Fatalf("recall query only: %v", err)
-	}
-	if len(results) != 2 {
-		t.Errorf("expected 2 results for 'Redis', got %d", len(results))
 	}
 }
 
@@ -198,8 +103,8 @@ func TestNewSQLiteRecallTimeRangeFunc_RecentNoParams(t *testing.T) {
 	insertEntry(t, db, 1, "Entry B", "2026-03-02 10:00:00")
 	insertEntry(t, db, 1, "Entry C", "2026-03-03 10:00:00")
 
-	// Neither query nor time range — should return recent entries (DESC order)
-	results, err := fn(1, "", time.Time{}, time.Time{}, 2)
+	// Neither time range — should return recent entries (DESC order)
+	results, err := fn(1, time.Time{}, time.Time{}, 2)
 	if err != nil {
 		t.Fatalf("recall recent: %v", err)
 	}
@@ -221,7 +126,7 @@ func TestNewSQLiteRecallTimeRangeFunc_TenantIsolation(t *testing.T) {
 	insertEntry(t, db, 1, "Tenant 1 secret data", "2026-03-01 10:00:00")
 	insertEntry(t, db, 2, "Tenant 2 other data", "2026-03-01 10:00:00")
 
-	results, err := fn(1, "data", time.Time{}, time.Time{}, 10)
+	results, err := fn(1, time.Time{}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("tenant isolation: %v", err)
 	}
@@ -244,7 +149,7 @@ func TestNewSQLiteRecallTimeRangeFunc_DefaultLimit(t *testing.T) {
 	}
 
 	// Zero limit should default to 20
-	results, err := fn(1, "", time.Time{}, time.Time{}, 0)
+	results, err := fn(1, time.Time{}, time.Time{}, 0)
 	if err != nil {
 		t.Fatalf("default limit: %v", err)
 	}
@@ -261,7 +166,7 @@ func TestRecallEntry_CreatedAtParsing(t *testing.T) {
 
 	insertEntry(t, db, 1, "Entry with known timestamp", "2026-03-05 14:30:00")
 
-	results, err := fn(1, "", time.Time{}, time.Time{}, 10)
+	results, err := fn(1, time.Time{}, time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("timestamp parse: %v", err)
 	}

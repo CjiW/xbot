@@ -341,7 +341,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
 		log.Info("Tool is waiting for user response, skipping reply")
-		if err := tenantSession.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+		userMsg := llm.NewUserMessage(msg.Content)
+		if !msg.Time.IsZero() {
+			userMsg.Timestamp = msg.Time
+		}
+		if err := tenantSession.AddMessage(userMsg); err != nil {
 			log.WithError(err).Warn("Failed to save user message")
 		}
 		return nil, nil
@@ -352,7 +356,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	if err := tenantSession.AddMessage(llm.NewUserMessage(msg.Content)); err != nil {
+	userMsg := llm.NewUserMessage(msg.Content)
+	if !msg.Time.IsZero() {
+		userMsg.Timestamp = msg.Time
+	}
+	if err := tenantSession.AddMessage(userMsg); err != nil {
 		log.WithError(err).Warn("Failed to save user message")
 	}
 	assistantMsg := llm.NewAssistantMessage(finalContent)
@@ -504,7 +512,11 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		finalContent = "处理完成，但没有需要回复的内容。"
 	}
 
-	if err := tenantSession.AddMessage(llm.NewUserMessage(summary)); err != nil {
+	cardUserMsg := llm.NewUserMessage(summary)
+	if !msg.Time.IsZero() {
+		cardUserMsg.Timestamp = msg.Time
+	}
+	if err := tenantSession.AddMessage(cardUserMsg); err != nil {
 		log.WithError(err).Warn("Failed to save user message")
 	}
 	assistantMsg := llm.NewAssistantMessage(finalContent)

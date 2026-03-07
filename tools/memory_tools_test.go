@@ -12,14 +12,13 @@ import (
 // mockRecallTimeRangeFunc returns a testable RecallTimeRangeFunc
 // that records the arguments and returns specified entries.
 func mockRecallTimeRangeFunc(entries []vectordb.RecallEntry) vectordb.RecallTimeRangeFunc {
-	return func(tenantID int64, query string, start, end time.Time, limit int) ([]vectordb.RecallEntry, error) {
+	return func(tenantID int64, start, end time.Time, limit int) ([]vectordb.RecallEntry, error) {
 		// Simple filtering for tests
 		var results []vectordb.RecallEntry
 		for _, e := range entries {
-			matchQuery := query == "" || strings.Contains(e.Entry, query)
 			matchStart := start.IsZero() || !e.CreatedAt.Before(start)
 			matchEnd := end.IsZero() || !e.CreatedAt.After(end)
-			if matchQuery && matchStart && matchEnd {
+			if matchStart && matchEnd {
 				results = append(results, e)
 			}
 			if len(results) >= limit && limit > 0 {
@@ -45,10 +44,13 @@ func TestRecallMemorySearchTool_Parameters(t *testing.T) {
 	for _, p := range params {
 		names[p.Name] = true
 	}
-	for _, expected := range []string{"query", "start_date", "end_date", "limit"} {
+	for _, expected := range []string{"start_date", "end_date", "limit"} {
 		if !names[expected] {
 			t.Errorf("missing parameter: %s", expected)
 		}
+	}
+	if names["query"] {
+		t.Error("recall_memory_search should NOT have a query parameter")
 	}
 }
 
@@ -76,7 +78,7 @@ func TestRecallMemorySearchTool_NotAvailable(t *testing.T) {
 		TenantID:        1,
 	}
 
-	input, _ := json.Marshal(recallSearchArgs{Query: "Go"})
+	input, _ := json.Marshal(recallSearchArgs{StartDate: "2026-03-01", EndDate: "2026-03-07"})
 	result, err := tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -86,7 +88,7 @@ func TestRecallMemorySearchTool_NotAvailable(t *testing.T) {
 	}
 }
 
-func TestRecallMemorySearchTool_QueryOnly(t *testing.T) {
+func TestRecallMemorySearchTool_DateRange(t *testing.T) {
 	entries := []vectordb.RecallEntry{
 		{Entry: "Discussed Go generics", CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)},
 		{Entry: "Go error handling patterns", CreatedAt: time.Date(2026, 3, 2, 14, 0, 0, 0, time.UTC)},
@@ -99,7 +101,7 @@ func TestRecallMemorySearchTool_QueryOnly(t *testing.T) {
 		TenantID:        1,
 	}
 
-	input, _ := json.Marshal(recallSearchArgs{Query: "Go"})
+	input, _ := json.Marshal(recallSearchArgs{StartDate: "2026-03-01", EndDate: "2026-03-02"})
 	result, err := tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -110,12 +112,9 @@ func TestRecallMemorySearchTool_QueryOnly(t *testing.T) {
 	if !strings.Contains(result.Summary, "Go error handling") {
 		t.Errorf("expected 'Go error handling' in results, got: %s", result.Summary)
 	}
-	if strings.Contains(result.Summary, "Rust") {
-		t.Errorf("should not contain 'Rust' in results, got: %s", result.Summary)
-	}
 }
 
-func TestRecallMemorySearchTool_DateRange(t *testing.T) {
+func TestRecallMemorySearchTool_DateRangeFilter(t *testing.T) {
 	entries := []vectordb.RecallEntry{
 		{Entry: "Old message", CreatedAt: time.Date(2026, 2, 28, 10, 0, 0, 0, time.UTC)},
 		{Entry: "Match message", CreatedAt: time.Date(2026, 3, 1, 14, 0, 0, 0, time.UTC)},
@@ -179,7 +178,7 @@ func TestRecallMemorySearchTool_NoResults(t *testing.T) {
 		TenantID:        1,
 	}
 
-	input, _ := json.Marshal(recallSearchArgs{Query: "nonexistent"})
+	input, _ := json.Marshal(recallSearchArgs{StartDate: "2026-03-01", EndDate: "2026-03-07"})
 	result, err := tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -201,7 +200,7 @@ func TestRecallMemorySearchTool_ResultFormatting(t *testing.T) {
 		TenantID:        1,
 	}
 
-	input, _ := json.Marshal(recallSearchArgs{Query: "entry"})
+	input, _ := json.Marshal(recallSearchArgs{StartDate: "2026-03-01", EndDate: "2026-03-07"})
 	result, err := tool.Execute(ctx, string(input))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

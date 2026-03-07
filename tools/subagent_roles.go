@@ -45,6 +45,7 @@ func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool)
 		}
 		roles, err := LoadAgentRoles(dir)
 		if err != nil {
+			log.WithField("dir", dir).WithError(err).Warn("Failed to load user agent roles, skipping directory")
 			continue
 		}
 		for i := range roles {

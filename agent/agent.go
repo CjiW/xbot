@@ -696,13 +696,17 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			}
 		}
 
-		// Phase 1: 只读操作并行执行
+		// Phase 1: 只读操作并行执行（限制并发数，避免资源耗尽）
 		if len(readOps) > 0 {
+			const maxParallel = 8
+			sem := make(chan struct{}, maxParallel)
 			var wg sync.WaitGroup
 			for _, entry := range readOps {
 				wg.Add(1)
+				sem <- struct{}{} // 获取信号量
 				go func(e toolCallEntry) {
 					defer wg.Done()
+					defer func() { <-sem }() // 释放信号量
 					execOne(e)
 				}(entry)
 			}
@@ -726,34 +730,42 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			r := execResults[idx]
 			content := r.content
 
-			// OAuth 自动触发
+			// OAuth 自动触发（已触发过则跳过，避免重复 OAuth 状态）
 			if r.err != nil && oauth.IsTokenNeededError(r.err) {
-				log.WithFields(log.Fields{
-					"tool":    tc.Name,
-					"elapsed": r.elapsed.Round(time.Millisecond),
-				}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
-
-				if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
-					oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
-					oauthCtx := &tools.ToolContext{
-						Ctx:      ctx,
-						Channel:  channel,
-						ChatID:   chatID,
-						SenderID: senderID,
-						SendFunc: a.sendMessage,
-					}
-					oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
-					if oauthErr == nil && oauthResult != nil {
-						content = oauthResult.Summary
-						a.sessionFinalSent.Store(sessionKey, true)
-						autoNotify = false
-						waitingUser = oauthResult.WaitingUser
-					} else {
-						content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
-						log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
-					}
+				if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
+					log.WithFields(log.Fields{
+						"tool":   tc.Name,
+						"reason": "sessionFinalSent already set, skipping duplicate oauth_authorize",
+					}).Info("Skip duplicate OAuth auto-trigger")
+					content = "OAuth authorization already in progress."
 				} else {
-					content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
+					log.WithFields(log.Fields{
+						"tool":    tc.Name,
+						"elapsed": r.elapsed.Round(time.Millisecond),
+					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
+
+					if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
+						oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
+						oauthCtx := &tools.ToolContext{
+							Ctx:      ctx,
+							Channel:  channel,
+							ChatID:   chatID,
+							SenderID: senderID,
+							SendFunc: a.sendMessage,
+						}
+						oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
+						if oauthErr == nil && oauthResult != nil {
+							content = oauthResult.Summary
+							a.sessionFinalSent.Store(sessionKey, true)
+							autoNotify = false
+							waitingUser = oauthResult.WaitingUser
+						} else {
+							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
+							log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
+						}
+					} else {
+						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
+					}
 				}
 			}
 

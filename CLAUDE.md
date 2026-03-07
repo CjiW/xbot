@@ -19,7 +19,10 @@ xbot is an AI Agent with a message bus + plugin architecture:
 ```
 Channel (feishu) → MessageBus → Agent (LLM + Tools) → MessageBus → Channel
                                 ↓
-                            Memory (MEMORY.md / HISTORY.md)
+                            Memory (flat / Letta three-tier)
+                            ├── Core Memory (SQLite blocks)
+                            ├── Archival Memory (chromem-go vectors)
+                            └── Recall Memory (FTS5 + time-range)
 ```
 
 ### Core Components
@@ -39,13 +42,25 @@ The `runLoop` function implements the core iteration:
 4. Append tool results as `tool` messages
 5. Repeat until max iterations (default 20)
 
-### Memory System (agent/memory.go)
+### Memory System
 
-Dual-layer memory:
-- **MEMORY.md** — Long-term facts, injected into system prompt
-- **HISTORY.md** — Append-only event log, searchable via Grep tool
+Two memory providers, selected via `MEMORY_PROVIDER` env:
 
-Auto-consolidation triggers when session exceeds `AGENT_MEMORY_WINDOW` (default 50). LLM summarizes old messages into MEMORY.md and HISTORY.md, then context is trimmed.
+**Flat** (`flat`, default) — Simple dual-layer:
+- Long-term memory blob injected into system prompt
+- Append-only event history, searchable via Grep tool
+
+**Letta** (`letta`) — Three-tier MemGPT-style architecture (`memory/letta/`):
+- **Core Memory** (`storage/sqlite/core_memory.go`) — Structured blocks always visible in system prompt:
+  - `persona` (2000 chars) — Bot identity/personality
+  - `human` (2000 chars) — Observations about current user
+  - `working_context` (4000 chars) — Active facts/tasks
+- **Archival Memory** (`storage/vectordb/archival.go`) — Long-term vector storage via chromem-go, semantic search
+- **Recall Memory** (`storage/vectordb/recall.go`) — FTS5 full-text search over event_history with time-range filtering
+
+6 Letta memory tools: `core_memory_append`, `core_memory_replace`, `rethink`, `archival_memory_insert`, `archival_memory_search`, `recall_memory_search`
+
+Auto-consolidation triggers when session exceeds `AGENT_MEMORY_WINDOW` (default 50). LLM summarizes old messages into memory, then context is trimmed.
 
 ### Context Construction (agent/context.go)
 
@@ -82,6 +97,8 @@ func (t *MyTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 All config via environment variables or `.env` file:
 - `LLM_PROVIDER` — `openai` or `codebuddy`
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- `LLM_EMBEDDING_BASE_URL`, `LLM_EMBEDDING_API_KEY`, `LLM_EMBEDDING_MODEL` — Embedding API for Letta archival memory
+- `MEMORY_PROVIDER` — `flat` (default) or `letta`
 - `FEISHU_ENABLED`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
 - `WORK_DIR` — Working directory for file operations
 - `PROMPT_FILE` — Optional custom system prompt template (Go template syntax)

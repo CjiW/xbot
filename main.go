@@ -86,6 +86,16 @@ func main() {
 		}).Info("OAuth server started")
 	}
 
+	// 嵌入向量配置（Letta 归档记忆使用 chromem-go）
+	embBaseURL := cfg.Embedding.BaseURL
+	if embBaseURL == "" {
+		embBaseURL = cfg.LLM.BaseURL // 回退到 LLM 的 base URL
+	}
+	embAPIKey := cfg.Embedding.APIKey
+	if embAPIKey == "" {
+		embAPIKey = cfg.LLM.APIKey
+	}
+
 	agentLoop := agent.New(agent.Config{
 		Bus:                  msgBus,
 		LLM:                  llmClient,
@@ -96,6 +106,10 @@ func main() {
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
+		MemoryProvider:       cfg.Agent.MemoryProvider,
+		EmbeddingBaseURL:     embBaseURL,
+		EmbeddingAPIKey:      embAPIKey,
+		EmbeddingModel:       cfg.Embedding.Model,
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,

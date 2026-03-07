@@ -28,16 +28,24 @@ type QQConfig struct {
 	AllowFrom    []string // 允许的 openid 列表（空则允许所有）
 }
 
+// EmbeddingConfig Embedding 配置
+type EmbeddingConfig struct {
+	BaseURL string // Embedding API 基础 URL（默认回退到 LLM_BASE_URL）
+	APIKey  string // Embedding API Key（默认回退到 LLM_API_KEY）
+	Model   string // Embedding 模型名称（如 bge-m3、text-embedding-3-small）
+}
+
 // Config 应用配置
 type Config struct {
-	Server ServerConfig
-	LLM    LLMConfig
-	Log    LogConfig
-	PProf  PProfConfig
-	Feishu FeishuConfig
-	QQ     QQConfig
-	Agent  AgentConfig
-	OAuth  OAuthConfig
+	Server    ServerConfig
+	LLM       LLMConfig
+	Embedding EmbeddingConfig
+	Log       LogConfig
+	PProf     PProfConfig
+	Feishu    FeishuConfig
+	QQ        QQConfig
+	Agent     AgentConfig
+	OAuth     OAuthConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -53,10 +61,11 @@ type FeishuConfig struct {
 
 // AgentConfig Agent 配置
 type AgentConfig struct {
-	MaxIterations int    // 单次对话最大工具迭代次数
-	MemoryWindow  int    // 上下文窗口（保留最近多少条消息）
-	WorkDir       string // 工作目录（所有文件相对此目录存放）
-	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
+	MaxIterations  int    // 单次对话最大工具迭代次数
+	MemoryWindow   int    // 上下文窗口（保留最近多少条消息）
+	MemoryProvider string // 记忆提供者: "flat" 或 "letta"（默认 "flat"）
+	WorkDir        string // 工作目录（所有文件相对此目录存放）
+	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间（默认 30 分钟）
@@ -145,9 +154,15 @@ func Load() *Config {
 			VerificationToken: getEnvOrDefault("FEISHU_VERIFICATION_TOKEN", ""),
 			AllowFrom:         splitEnv("FEISHU_ALLOW_FROM"),
 		},
+		Embedding: EmbeddingConfig{
+			BaseURL: getEnvOrDefault("LLM_EMBEDDING_BASE_URL", ""),
+			APIKey:  getEnvOrDefault("LLM_EMBEDDING_API_KEY", ""),
+			Model:   getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),
+		},
 		Agent: AgentConfig{
 			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
 			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
+			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
 			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
 			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
 			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),

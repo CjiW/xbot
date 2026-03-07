@@ -2,12 +2,16 @@ package session
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
 	log "xbot/logger"
+	"xbot/memory"
 	"xbot/memory/flat"
+	"xbot/memory/letta"
 	"xbot/storage/sqlite"
+	"xbot/storage/vectordb"
 	"xbot/tools"
 )
 
@@ -35,6 +39,35 @@ func WithSessionCacheTimeout(timeout time.Duration) MultiTenantOption {
 	}
 }
 
+// WithMemoryProvider 设置记忆提供者 ("flat" 或 "letta")
+func WithMemoryProvider(provider string) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.memoryProvider = provider
+	}
+}
+
+// WithArchivalService 设置向量归档服务（Letta 模式下使用）
+// 如果不设置，会在 NewMultiTenant 中根据 EmbeddingConfig 自动创建
+func WithArchivalService(svc *vectordb.ArchivalService) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.archivalSvc = svc
+	}
+}
+
+// EmbeddingConfig 嵌入向量配置（用于自动创建归档服务）
+type EmbeddingConfig struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+}
+
+// WithEmbeddingConfig 设置嵌入向量配置，NewMultiTenant 将自动创建 chromem-go 归档服务
+func WithEmbeddingConfig(cfg EmbeddingConfig) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.embeddingConfig = &cfg
+	}
+}
+
 // MultiTenantSession manages multiple tenant sessions with SQLite backing
 type MultiTenantSession struct {
 	db                   *sqlite.DB
@@ -42,6 +75,11 @@ type MultiTenantSession struct {
 	sessionSvc           *sqlite.SessionService
 	memorySvc            *sqlite.MemoryService
 	userProfileSvc       *sqlite.UserProfileService
+	coreSvc              *sqlite.CoreMemoryService
+	archivalSvc          *vectordb.ArchivalService
+	recallTimeRangeFn    vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
+	embeddingConfig      *EmbeddingConfig             // for auto-creating archival service
+	memoryProvider       string                       // "flat" or "letta"
 	mu                   sync.RWMutex
 	tenantCache          map[string]*TenantSession // key: "channel:chat_id"
 	dbPath               string
@@ -67,6 +105,8 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		sessionSvc:           sqlite.NewSessionService(db),
 		memorySvc:            sqlite.NewMemoryService(db),
 		userProfileSvc:       sqlite.NewUserProfileService(db),
+		coreSvc:              sqlite.NewCoreMemoryService(db),
+		memoryProvider:       "flat",
 		tenantCache:          make(map[string]*TenantSession),
 		dbPath:               dbPath,
 		mcpConfigPath:        "mcp.json", // 默认在工作目录下
@@ -79,6 +119,24 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	// 应用配置选项
 	for _, opt := range opts {
 		opt(m)
+	}
+
+	// Letta 模式：自动创建 chromem-go 归档服务（如果未通过 WithArchivalService 注入）
+	if m.memoryProvider == "letta" && m.archivalSvc == nil && m.embeddingConfig != nil {
+		archivalDir := filepath.Join(filepath.Dir(dbPath), "archival")
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
+		recallFn := vectordb.NewSQLiteRecallFunc(db.Conn())
+		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, recallFn)
+		if err != nil {
+			log.WithError(err).Error("Failed to initialize archival memory (chromem-go), archival tools will be unavailable")
+		} else {
+			m.archivalSvc = archSvc
+		}
+	}
+
+	// Letta 模式：创建时间范围搜索函数
+	if m.memoryProvider == "letta" {
+		m.recallTimeRangeFn = vectordb.NewSQLiteRecallTimeRangeFunc(db.Conn())
 	}
 
 	return m, nil
@@ -130,7 +188,16 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 	// 创建会话 MCP 管理器
 	sessionKey := channel + ":" + chatID
 	mcpManager := tools.NewSessionMCPManager(sessionKey, m.mcpConfigPath, m.mcpInactivityTimeout)
-
+	// 根据配置选择记忆提供者
+	var memProvider memory.MemoryProvider
+	switch m.memoryProvider {
+	case "letta":
+		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc)
+		// 前向兼容：一次性迁移 user_profiles → core memory blocks
+		m.migrateProfileToCoreMemory(tenantID)
+	default:
+		memProvider = flat.New(tenantID, m.memorySvc)
+	}
 	// Create tenant session
 	sess = &TenantSession{
 		tenantID:   tenantID,
@@ -138,13 +205,51 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 		chatID:     chatID,
 		sessionSvc: m.sessionSvc,
 		memorySvc:  m.memorySvc,
-		memory:     flat.New(tenantID, m.memorySvc),
+		memory:     memProvider,
 		mcpManager: mcpManager,
 		lastActive: time.Now(),
 	}
 
 	m.tenantCache[key] = sess
 	return sess, nil
+}
+
+// migrateProfileToCoreMemory performs a one-time forward-compatible migration
+// of legacy user_profiles data into Letta core memory blocks.
+// - __me__ profile → persona block (bot identity)
+// - Other profiles are not migrated to the human block (it's per-tenant, not per-user).
+// Only writes if the target block is currently empty to avoid overwriting user edits.
+func (m *MultiTenantSession) migrateProfileToCoreMemory(tenantID int64) {
+	// Check if persona block is already populated
+	persona, _, err := m.coreSvc.GetBlock(tenantID, "persona")
+	if err != nil {
+		log.WithError(err).Warn("Profile migration: failed to read persona block")
+		return
+	}
+	if persona != "" {
+		return // Already has content, skip migration
+	}
+
+	// Read self profile (__me__)
+	_, selfProfile, err := m.userProfileSvc.GetProfile("__me__")
+	if err != nil {
+		log.WithError(err).Warn("Profile migration: failed to read __me__ profile")
+		return
+	}
+	if selfProfile == "" {
+		return // No profile to migrate
+	}
+
+	if err := m.coreSvc.SetBlock(tenantID, "persona", selfProfile); err != nil {
+		log.WithError(err).Warn("Profile migration: failed to write persona block")
+		return
+	}
+	log.WithField("tenant_id", tenantID).Info("Migrated __me__ profile to persona core memory block")
+}
+
+// RecallTimeRangeFunc returns the time-range recall search function (nil if not in Letta mode).
+func (m *MultiTenantSession) RecallTimeRangeFunc() vectordb.RecallTimeRangeFunc {
+	return m.recallTimeRangeFn
 }
 
 // Close closes the database connection
@@ -155,16 +260,6 @@ func (m *MultiTenantSession) Close() error {
 		return m.db.Close()
 	}
 	return nil
-}
-
-// GetUserProfile retrieves the user profile for a sender (cross-session)
-func (m *MultiTenantSession) GetUserProfile(senderID string) (name, profile string, err error) {
-	return m.userProfileSvc.GetProfile(senderID)
-}
-
-// SaveUserProfile saves or updates the user profile for a sender (cross-session)
-func (m *MultiTenantSession) SaveUserProfile(senderID, name, profile string) error {
-	return m.userProfileSvc.SaveProfile(senderID, name, profile)
 }
 
 // DBPath returns the database path (useful for migration checks)

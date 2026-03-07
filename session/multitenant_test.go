@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"xbot/llm"
+	"xbot/memory/letta"
 )
 
 func TestMultiTenantSession_GetOrCreateSession(t *testing.T) {
@@ -155,5 +156,153 @@ func TestMultiTenantSession_MemoryIsolation(t *testing.T) {
 	}
 	if !strings.Contains(content2, "User likes Rust") {
 		t.Errorf("Memory 2 incorrect: %s", content2)
+	}
+}
+
+func TestMigrateProfileToCoreMemory_MigratesMe(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath, WithMemoryProvider("letta"))
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	// Insert __me__ profile before creating a session
+	selfProfile := "- I am xbot\n- I like Go programming\n- I value clarity"
+	if err := mt.userProfileSvc.SaveProfile("__me__", "xbot", selfProfile); err != nil {
+		t.Fatalf("Failed to save __me__ profile: %v", err)
+	}
+
+	// Create a Letta session — should trigger migration
+	sess, err := mt.GetOrCreateSession("feishu", "chat_migrate")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Check that persona block was populated
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona")
+	if err != nil {
+		t.Fatalf("Failed to read persona block: %v", err)
+	}
+	if persona != selfProfile {
+		t.Errorf("Expected persona block to be '%s', got '%s'", selfProfile, persona)
+	}
+}
+
+func TestMigrateProfileToCoreMemory_SkipsIfPersonaPopulated(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath, WithMemoryProvider("letta"))
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	// Insert __me__ profile
+	if err := mt.userProfileSvc.SaveProfile("__me__", "xbot", "old profile data"); err != nil {
+		t.Fatalf("Failed to save __me__ profile: %v", err)
+	}
+
+	// Create tenant and pre-populate persona block
+	tenantID, err := mt.tenantSvc.GetOrCreateTenantID("feishu", "chat_skip")
+	if err != nil {
+		t.Fatalf("Failed to create tenant: %v", err)
+	}
+	if err := mt.coreSvc.InitBlocks(tenantID); err != nil {
+		t.Fatalf("Failed to init blocks: %v", err)
+	}
+	existingPersona := "- Already configured persona"
+	if err := mt.coreSvc.SetBlock(tenantID, "persona", existingPersona); err != nil {
+		t.Fatalf("Failed to set existing persona: %v", err)
+	}
+
+	// Run migration — should NOT overwrite
+	mt.migrateProfileToCoreMemory(tenantID)
+
+	persona, _, err := mt.coreSvc.GetBlock(tenantID, "persona")
+	if err != nil {
+		t.Fatalf("Failed to read persona block: %v", err)
+	}
+	if persona != existingPersona {
+		t.Errorf("Expected persona to remain '%s', got '%s'", existingPersona, persona)
+	}
+}
+
+func TestMigrateProfileToCoreMemory_NoProfileNoError(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath, WithMemoryProvider("letta"))
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	// No __me__ profile inserted — migration should be a no-op
+	sess, err := mt.GetOrCreateSession("feishu", "chat_noprofile")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona")
+	if err != nil {
+		t.Fatalf("Failed to read persona block: %v", err)
+	}
+	if persona != "" {
+		t.Errorf("Expected empty persona block when no profile, got '%s'", persona)
+	}
+}
+
+func TestMultiTenantSession_LettaSessionRecall(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath, WithMemoryProvider("letta"))
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	sess, err := mt.GetOrCreateSession("feishu", "chat_letta")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Verify session uses LettaMemory
+	if _, ok := sess.Memory().(*letta.LettaMemory); !ok {
+		t.Fatal("Expected LettaMemory provider for letta mode")
+	}
+
+	// Recall should include core memory blocks
+	ctx := context.Background()
+	content, err := sess.Memory().Recall(ctx, "")
+	if err != nil {
+		t.Fatalf("Failed to recall: %v", err)
+	}
+	if !strings.Contains(content, "Core Memory") {
+		t.Errorf("Expected 'Core Memory' in recall, got: %s", content)
+	}
+}
+
+func TestMultiTenantSession_RecallTimeRangeFunc(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath, WithMemoryProvider("letta"))
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	fn := mt.RecallTimeRangeFunc()
+	if fn == nil {
+		t.Fatal("Expected non-nil RecallTimeRangeFunc in letta mode")
+	}
+}
+
+func TestMultiTenantSession_RecallTimeRangeFunc_NilForFlat(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	mt, err := NewMultiTenant(dbPath) // default flat mode
+	if err != nil {
+		t.Fatalf("Failed to create multi-tenant session: %v", err)
+	}
+	defer mt.Close()
+
+	fn := mt.RecallTimeRangeFunc()
+	if fn != nil {
+		t.Error("Expected nil RecallTimeRangeFunc in flat mode")
 	}
 }

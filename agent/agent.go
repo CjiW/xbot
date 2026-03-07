@@ -15,6 +15,7 @@ import (
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
+	"xbot/memory/letta"
 	"xbot/oauth"
 	"xbot/session"
 	"xbot/tools"
@@ -77,6 +78,11 @@ type Config struct {
 	WorkDir       string // 工作目录（所有文件相对此目录）
 	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
 
+	MemoryProvider   string // 记忆提供者: "flat" 或 "letta"
+	EmbeddingBaseURL string // 嵌入向量服务地址
+	EmbeddingAPIKey  string // 嵌入向量服务密钥
+	EmbeddingModel   string // 嵌入模型名称
+
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔
@@ -136,11 +142,21 @@ func New(cfg Config) *Agent {
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
 	// 初始化多租户会话管理器（带 MCP 配置选项）
+	memoryProvider := cfg.MemoryProvider
+	if memoryProvider == "" {
+		memoryProvider = "flat"
+	}
 	multiSession, err := session.NewMultiTenant(
 		cfg.DBPath,
 		session.WithMCPTimeout(cfg.MCPInactivityTimeout),
 		session.WithCleanupInterval(cfg.MCPCleanupInterval),
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
+		session.WithMemoryProvider(memoryProvider),
+		session.WithEmbeddingConfig(session.EmbeddingConfig{
+			BaseURL: cfg.EmbeddingBaseURL,
+			APIKey:  cfg.EmbeddingAPIKey,
+			Model:   cfg.EmbeddingModel,
+		}),
 	)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
@@ -149,6 +165,14 @@ func New(cfg Config) *Agent {
 
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
+
+	// 如果使用 Letta 记忆模式，注册记忆工具
+	if memoryProvider == "letta" {
+		for _, tool := range tools.LettaMemoryTools() {
+			registry.Register(tool)
+		}
+		log.Info("Letta memory tools registered")
+	}
 
 	return &Agent{
 		bus:           cfg.Bus,
@@ -298,11 +322,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 检查是否需要触发自动记忆合并
 	a.maybeConsolidate(ctx, tenantSession)
 
-	// 加载用户画像（跨 session 共享）和 bot 自身画像
-	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
-	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
-
-	// 构建 LLM 消息（注入长期记忆、skills、用户画像和自身画像）
+	// 构建 LLM 消息（注入长期记忆、skills）
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get history, using empty history")
@@ -310,7 +330,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -461,9 +481,6 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		summary = desc + "\nUser interaction:\n" + summary
 	}
 
-	_, userProfile, _ := a.multiSession.GetUserProfile(msg.SenderID)
-	_, selfProfile, _ := a.multiSession.GetUserProfile("__me__")
-
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get history, using empty history")
@@ -471,7 +488,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName, userProfile, selfProfile)
+	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -869,12 +886,19 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		InvalidateAllSessionMCP: func() {
 			a.multiSession.InvalidateAll()
 		},
-		SaveUserProfile: func(profile string) error {
-			return a.multiSession.SaveUserProfile(senderID, senderName, profile)
-		},
-		SaveSelfProfile: func(profile string) error {
-			return a.multiSession.SaveUserProfile("__me__", "xbot", profile)
-		},
+	}
+
+	// Wire Letta memory fields if the session uses LettaMemory
+	sessionKey := channel + ":" + chatID
+	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+		_ = sessionKey
+		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
+			toolCtx.TenantID = lm.TenantID()
+			toolCtx.CoreMemory = lm.CoreService()
+			toolCtx.ArchivalMemory = lm.ArchivalService()
+			toolCtx.MemorySvc = lm.MemoryService()
+			toolCtx.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
+		}
 	}
 
 	return tool.Execute(toolCtx, tc.Arguments)
@@ -1152,10 +1176,34 @@ func formatToolProgress(name string, args string) string {
 		return string(runes[:max-3]) + "..."
 	}
 
-	// For tools that just show their name
+	// Letta memory tools
 	switch name {
-	case "update_self_profile", "update_user_profile":
-		return name
+	case "core_memory_append":
+		block := get(m, "block")
+		return truncate(fmt.Sprintf("core_memory_append: %s", block), maxLen)
+	case "core_memory_replace":
+		block := get(m, "block")
+		return truncate(fmt.Sprintf("core_memory_replace: %s", block), maxLen)
+	case "rethink":
+		block := get(m, "block")
+		return truncate(fmt.Sprintf("rethink: %s", block), maxLen)
+	case "archival_memory_insert":
+		return "archival_memory_insert"
+	case "archival_memory_search":
+		query := get(m, "query")
+		return truncate(fmt.Sprintf("archival_memory_search: %q", query), maxLen)
+	case "recall_memory_search":
+		query := get(m, "query")
+		startDate := get(m, "start_date")
+		endDate := get(m, "end_date")
+		parts := []string{}
+		if query != "" {
+			parts = append(parts, fmt.Sprintf("%q", query))
+		}
+		if startDate != "" || endDate != "" {
+			parts = append(parts, fmt.Sprintf("%s~%s", startDate, endDate))
+		}
+		return truncate(fmt.Sprintf("recall_memory_search: %s", strings.Join(parts, " ")), maxLen)
 	}
 
 	if !parsed {

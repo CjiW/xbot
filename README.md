@@ -8,8 +8,7 @@
 - **丰富的内置工具** — Shell 执行、文件读写编辑、Glob/Grep 搜索、Web 搜索、定时任务、子代理、文件下载
 - **飞书深度集成** — 交互卡片构建、文档/知识库/多维表格读写、文件上传（基于 OAuth 用户授权）
 - **技能系统 (Skills)** — OpenClaw 风格的渐进式技能加载，Markdown 技能包按需注入
-- **可插拔记忆** — `MemoryProvider` 接口，当前实现 FlatMemory（全量注入），可扩展为分层/检索式记忆
-- **用户画像** — 自动记录用户偏好和沟通风格，跨会话持久化
+- **可插拔记忆** — 双模式记忆架构：Flat（简单双层）或 Letta（三层 MemGPT），基于 SQLite + chromem-go 向量数据库
 - **多租户** — 基于 channel + chatID 的租户隔离，支持多群组/多用户独立会话
 - **MCP 协议支持** — 全局配置 + 会话级懒加载，支持 stdio 和 HTTP 两种传输模式
 - **OAuth 框架** — 通用 OAuth 2.0 授权流程，支持飞书等第三方服务的用户级授权
@@ -37,10 +36,19 @@
 └─────────┘                        │       │     ├─ ChatHistory
                                    │       │     ├─ UserProfile / SelfProfile
                                    │       │     ├─ OAuth (授权工具)
+                                   │       │     ├─ Skill (技能管理)
+                                   │       │     ├─ Memory (Letta 6 工具)
                                    │       │     ├─ ManageTools
                                    │       │     ├─ Feishu MCP (文档/知识库)
                                    │       │     └─ MCP (外部工具)
                                    └───┬───┘
+                                       │
+                          ┌────────────┴────────────┐
+                          │        SQLite           │
+                          │  Sessions / Memory      │
+                          │  Core Memory Blocks     │
+                          │  Event History (FTS5)   │
+                          └────────────┬────────────┘
                                        │
                                ┌───────┴───────┐
                                │    SQLite     │
@@ -49,6 +57,9 @@
                                │ Memory        │
                                │ UserProfiles  │
                                │ OAuth Tokens  │
+                               │  chromem-go   │
+                               │  (向量数据库)  │
+                               │  Archival Mem │
                                └───────────────┘
 ```
 
@@ -293,18 +304,21 @@ sudo systemctl enable --now xbot
 | `SERVER_PORT` | 服务监听端口 | `8080` |
 | `LOG_LEVEL` | 日志级别 | `info` |
 | `LOG_FORMAT` | 日志格式（`text` / `json`） | `json` |
+| `MEMORY_PROVIDER` | 记忆提供者（`flat` / `letta`） | `flat` |
+| `LLM_EMBEDDING_BASE_URL` | 嵌入向量 API 地址（Letta 模式必填） | — |
+| `LLM_EMBEDDING_API_KEY` | 嵌入向量 API 密钥 | — |
+| `LLM_EMBEDDING_MODEL` | 嵌入向量模型名称 | — |
 | `PPROF_ENABLE` | 启用 pprof 性能分析 | `false` |
 | `PPROF_HOST` | pprof 监听地址 | `localhost` |
 | `PPROF_PORT` | pprof 监听端口 | `6060` |
 
 ## 🧠 记忆系统
 
-xbot 采用可插拔的记忆架构（`MemoryProvider` 接口），当前实现为 FlatMemory：
+xbot 支持两种记忆架构，通过 `MEMORY_PROVIDER` 环境变量切换：
 
-- **MEMORY**（长期记忆）— 持续更新的事实性知识，如用户偏好、项目信息、待办事项。每次对话时全量注入系统提示词。
-- **HISTORY**（历史日志）— 按时间追加的事件记录，支持检索。用于回溯过去发生的事情。
+### Flat 模式（默认）
 
-当会话消息超过 `AGENT_MEMORY_WINDOW` 时，Agent 自动触发异步记忆合并：LLM 将旧消息摘要写入 MEMORY 和 HISTORY，然后释放上下文空间。
+简单双层记忆，适合快速上手：
 
 ```go
 // 扩展记忆系统只需实现 MemoryProvider 接口
@@ -315,9 +329,114 @@ type MemoryProvider interface {
 }
 ```
 
-### 用户画像
 
-Agent 可通过 `update_user_profile` 工具记录对用户的观察（沟通风格、偏好等），通过 `update_self_profile` 更新自身画像。画像跨会话持久化，帮助 Agent 提供个性化服务。
+```bash
+MEMORY_PROVIDER=flat   # 或不设置，默认即 flat
+```
+
+### Letta 模式（三层 MemGPT 架构）
+
+受 [MemGPT](https://memgpt.ai/) 启发的三层记忆系统，适合需要深度个性化和长期记忆的场景：
+
+| 层级 | 存储 | 说明 |
+|------|------|------|
+| **Core Memory** | SQLite | 结构化记忆块，始终注入系统提示词（persona / human / working_context） |
+| **Archival Memory** | chromem-go 向量数据库 | 长期知识库，通过语义搜索检索 |
+| **Recall Memory** | SQLite FTS5 | 事件历史全文检索，支持时间范围过滤 |
+
+Letta 模式提供 6 个记忆工具，Agent 可自主管理记忆：
+
+| 工具 | 说明 |
+|------|------|
+| `core_memory_append` | 向核心记忆块追加内容 |
+| `core_memory_replace` | 替换核心记忆块中的内容 |
+| `rethink` | 重写 working_context（反思当前状态） |
+| `archival_memory_insert` | 存入归档记忆（长期知识） |
+| `archival_memory_search` | 语义搜索归档记忆 |
+| `recall_memory_search` | 全文 + 时间范围检索事件历史 |
+
+启用 Letta 模式需要配置嵌入向量 API（用于归档记忆的语义搜索）：
+
+```bash
+MEMORY_PROVIDER=letta
+LLM_EMBEDDING_BASE_URL=https://api.openai.com/v1
+LLM_EMBEDDING_API_KEY=your-embedding-api-key
+LLM_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+> **注意**：`LLM_EMBEDDING_BASE_URL` 必须包含 `/v1` 路径前缀。底层使用 OpenAI 兼容接口（`POST {base_url}/embeddings`），所有提供商统一格式。
+
+### 自动记忆合并
+
+两种模式都支持异步自动合并：当会话消息超过 `AGENT_MEMORY_WINDOW`（默认 50）时，Agent 在后台 goroutine 中触发记忆合并，不阻塞当前消息处理。
+
+- **Flat 模式**：LLM 将旧消息摘要写入 MEMORY 和 HISTORY 文件
+- **Letta 模式**：LLM 调用 `consolidate_memory` 内部工具，自动决定更新哪些 Core Memory 块、写入哪些 Archival 条目、生成 History 摘要
+
+合并后释放旧消息的上下文空间。也可通过 `/new` 命令手动触发全量归档。
+
+### 快速上手：本地运行 Embedding 模型
+
+Letta 模式的 Archival Memory 需要嵌入向量 API。你可以用云端服务（OpenAI、硅基流动等），也可以本地运行一个模型。
+
+#### 方案一：使用 Ollama（推荐本地方案）
+
+```bash
+# 1. 安装 Ollama（https://ollama.ai）
+# macOS / Linux:
+curl -fsSL https://ollama.ai/install.sh | sh
+# Windows: 下载安装包 https://ollama.ai/download/windows
+
+# 2. 启动 Ollama 服务（默认监听 http://localhost:11434）
+# Windows 安装后自动以后台服务运行，无需手动启动
+# macOS 安装后也会自动运行（菜单栏可见 Ollama 图标）
+# Linux 手动启动: ollama serve（或 systemctl start ollama）
+#
+# 验证服务是否在运行：
+curl http://localhost:11434
+# 返回 "Ollama is running" 即表示正常
+
+# 3. 拉取 embedding 模型
+ollama pull nomic-embed-text
+
+# 4. 配置 .env（注意 URL 必须包含 /v1，这是 Ollama 的 OpenAI 兼容端点）：
+MEMORY_PROVIDER=letta
+LLM_EMBEDDING_BASE_URL=http://localhost:11434/v1
+LLM_EMBEDDING_MODEL=nomic-embed-text
+# Ollama 不需要 API Key，留空即可
+LLM_EMBEDDING_API_KEY=
+```
+
+#### 方案二：使用云端 API
+
+**OpenAI：**
+```bash
+MEMORY_PROVIDER=letta
+LLM_EMBEDDING_BASE_URL=https://api.openai.com/v1
+LLM_EMBEDDING_API_KEY=sk-your-openai-key
+LLM_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+**硅基流动（SiliconFlow）：**
+```bash
+MEMORY_PROVIDER=letta
+LLM_EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+LLM_EMBEDDING_API_KEY=your-siliconflow-key
+LLM_EMBEDDING_MODEL=BAAI/bge-m3
+```
+
+**任何 OpenAI 兼容的 Embedding API** 都可以使用，只需填写对应的 BASE_URL（含 `/v1`）、API_KEY 和 MODEL。
+
+#### 验证配置
+
+启动 xbot 后，日志中会显示 Embedding 服务初始化状态：
+
+```
+level=info msg="Memory provider: letta"
+level=info msg="Embedding service initialized" model=nomic-embed-text
+```
+
+如果 Embedding 配置缺失，xbot 仍能启动，但 Archival Memory 的语义搜索功能不可用（仅 Core Memory 和 Recall Memory 正常工作）。
 
 ## 🔧 技能系统
 

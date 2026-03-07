@@ -113,6 +113,12 @@ func New(cfg Config) *Agent {
 
 	skillStore := NewSkillStore(cfg.SkillsDir)
 
+	// 加载 agent 角色定义（从 .xbot/agents/ 目录）
+	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
+	if err := tools.InitAgentRoles(agentsDir); err != nil {
+		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
+	}
+
 	registry := tools.DefaultRegistry()
 
 	// 创建聊天历史存储
@@ -934,7 +940,8 @@ func (a *Agent) injectInbound(channel, chatID, content string) {
 
 // RunSubAgent 实现 tools.SubAgentManager 接口
 // 创建一个独立的子 Agent 循环来执行任务，子 Agent 拥有自己的工具集但不能再创建子 Agent
-func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task string, systemPrompt string) (string, error) {
+// allowedTools 为工具白名单，为空时使用所有工具（除 SubAgent）
+func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task string, systemPrompt string, allowedTools []string) (string, error) {
 	if systemPrompt == "" {
 		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
@@ -942,6 +949,19 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 	// 子 Agent 工具集：除 SubAgent 外的所有标准工具（防止递归创建）
 	subTools := a.tools.Clone()
 	subTools.Unregister("SubAgent")
+
+	// 如果指定了工具白名单，只保留白名单中的工具
+	if len(allowedTools) > 0 {
+		allowed := make(map[string]bool, len(allowedTools))
+		for _, name := range allowedTools {
+			allowed[name] = true
+		}
+		for _, tool := range subTools.List() {
+			if !allowed[tool.Name()] {
+				subTools.Unregister(tool.Name())
+			}
+		}
+	}
 
 	// 构建子 Agent 的消息
 	messages := []llm.ChatMessage{

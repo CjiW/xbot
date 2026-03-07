@@ -608,16 +608,51 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 		messages = append(messages, assistantMsg)
 
-		// 执行每个工具调用
+		// 将工具调用分为只读和写操作两组：只读并行执行，写操作串行执行
+		readOnlyTools := map[string]bool{
+			"Read": true, "Grep": true, "Glob": true,
+			"WebSearch": true, "ChatHistory": true,
+		}
+
+		type toolCallEntry struct {
+			index int
+			tc    llm.ToolCall
+		}
+		var readOps, writeOps []toolCallEntry
+		for idx, tc := range response.ToolCalls {
+			entry := toolCallEntry{index: idx, tc: tc}
+			if readOnlyTools[tc.Name] {
+				readOps = append(readOps, entry)
+			} else {
+				writeOps = append(writeOps, entry)
+			}
+		}
+
+		// 预分配结果槽位（按原始顺序）
+		type toolExecResult struct {
+			content string
+			result  *tools.ToolResult
+			err     error
+			elapsed time.Duration
+		}
+		execResults := make([]toolExecResult, len(response.ToolCalls))
+
+		// 为所有工具调用添加进度行占位符
+		progressStartIdx := len(progressLines)
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
-
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
 				progressLines = append(progressLines, fmt.Sprintf("⏳ %s ...", toolLabel))
-				notifyProgress("")
 			}
+		}
+		if autoNotify {
+			notifyProgress("")
+		}
 
+		// execOne 执行单个工具并记录结果
+		execOne := func(entry toolCallEntry) {
+			tc := entry.tc
 			argPreview := tc.Arguments
 			if len(argPreview) > 200 {
 				argPreview = argPreview[:200] + "..."
@@ -630,67 +665,23 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			start := time.Now()
 			result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
 			elapsed := time.Since(start)
+			execResults[entry.index] = toolExecResult{err: execErr, result: result, elapsed: elapsed}
 
-			// 工具已发送最终回复（如飞书卡片）→ 进度消息已被替换，禁用后续进度更新
-			sessionKey := channel + ":" + chatID
-			if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
-				autoNotify = false
-				progressLines = nil
-			}
-
-			content := ""
+			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if execErr != nil {
-				// Check if this is a TokenNeededError from OAuth
-				if oauth.IsTokenNeededError(execErr) {
-					// TokenNeededError - automatically trigger oauth_authorize tool
-					log.WithFields(log.Fields{
-						"tool":    tc.Name,
-						"elapsed": elapsed.Round(time.Millisecond),
-					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
-
-					// Try to execute oauth_authorize tool directly
-					if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
-						oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
-						oauthCtx := &tools.ToolContext{
-							Ctx:      ctx,
-							Channel:  channel,
-							ChatID:   chatID,
-							SenderID: senderID,
-							SendFunc: a.sendMessage,
-						}
-						oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
-						if oauthErr == nil && oauthResult != nil {
-							content = oauthResult.Summary
-							// Mark that we've sent a final card (OAuth card)
-							a.sessionFinalSent.Store(sessionKey, true)
-							autoNotify = false
-							waitingUser = oauthResult.WaitingUser
-						} else {
-							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
-							log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
-						}
-					} else {
-						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
-					}
-				} else {
-					content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
-				}
 				log.WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).WithError(execErr).Warn("Tool failed")
+				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
-					notifyProgress("")
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			} else {
-				content = result.Summary
-				if result.WaitingUser {
-					waitingUser = true
-				}
+				execResults[entry.index].content = result.Summary
 
-				resultPreview := content
+				resultPreview := result.Summary
 				if len(resultPreview) > 200 {
 					resultPreview = resultPreview[:200] + "..."
 				}
@@ -700,14 +691,85 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[len(progressLines)-1] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
-					notifyProgress("")
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+				}
+			}
+		}
+
+		// Phase 1: 只读操作并行执行
+		if len(readOps) > 0 {
+			var wg sync.WaitGroup
+			for _, entry := range readOps {
+				wg.Add(1)
+				go func(e toolCallEntry) {
+					defer wg.Done()
+					execOne(e)
+				}(entry)
+			}
+			wg.Wait()
+			if autoNotify {
+				notifyProgress("")
+			}
+		}
+
+		// Phase 2: 写操作串行执行
+		for _, entry := range writeOps {
+			execOne(entry)
+			if autoNotify {
+				notifyProgress("")
+			}
+		}
+
+		// 按原始顺序处理结果：OAuth 处理、sessionFinalSent 检查、构建 tool messages
+		sessionKey = channel + ":" + chatID
+		for idx, tc := range response.ToolCalls {
+			r := execResults[idx]
+			content := r.content
+
+			// OAuth 自动触发
+			if r.err != nil && oauth.IsTokenNeededError(r.err) {
+				log.WithFields(log.Fields{
+					"tool":    tc.Name,
+					"elapsed": r.elapsed.Round(time.Millisecond),
+				}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
+
+				if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
+					oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
+					oauthCtx := &tools.ToolContext{
+						Ctx:      ctx,
+						Channel:  channel,
+						ChatID:   chatID,
+						SenderID: senderID,
+						SendFunc: a.sendMessage,
+					}
+					oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
+					if oauthErr == nil && oauthResult != nil {
+						content = oauthResult.Summary
+						a.sessionFinalSent.Store(sessionKey, true)
+						autoNotify = false
+						waitingUser = oauthResult.WaitingUser
+					} else {
+						content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
+						log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
+					}
+				} else {
+					content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
 				}
 			}
 
+			// 检查 sessionFinalSent
+			if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
+				autoNotify = false
+				progressLines = nil
+			}
+
+			if r.result != nil && r.result.WaitingUser {
+				waitingUser = true
+			}
+
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
-			if result != nil && result.Detail != "" {
-				toolMsg.Detail = result.Detail
+			if r.result != nil && r.result.Detail != "" {
+				toolMsg.Detail = r.result.Detail
 			}
 			messages = append(messages, toolMsg)
 		}

@@ -47,8 +47,9 @@ type ToolContext struct {
 // SubAgentManager SubAgent 管理接口，避免循环依赖
 type SubAgentManager interface {
 	// RunSubAgent 创建并运行一个 SubAgent，返回最终响应文本
+	// parentCtx 为父 Agent 的工具上下文，用于传播沙箱、工作区等安全配置
 	// allowedTools 为工具白名单，为空时使用所有工具（除 SubAgent）
-	RunSubAgent(ctx context.Context, parentAgentID string, task string, systemPrompt string, allowedTools []string) (string, error)
+	RunSubAgent(parentCtx *ToolContext, task string, systemPrompt string, allowedTools []string) (string, error)
 }
 
 // ToolResult 工具执行结果

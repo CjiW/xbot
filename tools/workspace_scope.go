@@ -44,6 +44,11 @@ func UserMCPConfigPath(workDir, senderID string) string {
 	return filepath.Join(UserRoot(workDir, senderID), "mcp.json")
 }
 
+// UserAgentsRoot 返回用户私有 agents 目录：{workDir}/.xbot/users/{sender}/workspace/agents
+func UserAgentsRoot(workDir, senderID string) string {
+	return filepath.Join(UserWorkspaceRoot(workDir, senderID), "agents")
+}
+
 func cleanAbsPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")

@@ -15,10 +15,10 @@ type SubAgentRole struct {
 	AllowedTools []string
 }
 
-// agentsDir 存储 agents 目录路径，供运行时按需加载
+// agentsDir 存储全局 agents 目录路径，供运行时按需加载
 var agentsDir string
 
-// InitAgentRoles 设置 agents 目录路径（启动时调用一次）
+// InitAgentRoles 设置全局 agents 目录路径（启动时调用一次）
 // 实际加载在每次 GetSubAgentRole 调用时按需进行
 func InitAgentRoles(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -36,7 +36,25 @@ func InitAgentRoles(dir string) error {
 }
 
 // GetSubAgentRole 根据名称查找角色（每次从文件加载，支持热更新）
-func GetSubAgentRole(name string) (*SubAgentRole, bool) {
+// 先查用户私有目录，再查全局目录（用户角色优先）
+func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool) {
+	// 先搜索用户私有目录
+	for _, dir := range userAgentDirs {
+		if dir == "" {
+			continue
+		}
+		roles, err := LoadAgentRoles(dir)
+		if err != nil {
+			continue
+		}
+		for i := range roles {
+			if roles[i].Name == name {
+				return &roles[i], true
+			}
+		}
+	}
+
+	// 再搜索全局目录
 	if agentsDir == "" {
 		return nil, false
 	}

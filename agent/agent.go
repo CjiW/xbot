@@ -153,7 +153,7 @@ func New(cfg Config) *Agent {
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
-	agentStore := NewAgentStore(agentsDir)
+	agentStore := NewAgentStore(cfg.WorkDir, agentsDir)
 
 	registry := tools.DefaultRegistry()
 
@@ -294,7 +294,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}).Infof("Processing: %s", preview)
 
 	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
-	if msg.SenderID == "cron" {
+	if msg.IsCron {
 		return a.processCronMessage(ctx, msg)
 	}
 
@@ -367,7 +367,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		log.WithError(err).Warn("Failed to configure session MCP scope")
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
-	agentsCatalog := a.agents.GetAgentsCatalog()
+	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
 	messages := BuildMessages(history, msg.Content, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
@@ -429,15 +429,23 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 // processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
 func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	log.WithFields(log.Fields{
-		"channel": msg.Channel,
-		"chat_id": msg.ChatID,
+		"channel":   msg.Channel,
+		"chat_id":   msg.ChatID,
+		"sender_id": msg.SenderID,
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
-	// 构建 cron 专用消息（无历史上下文）
-	messages := BuildCronMessages(msg.Content, a.workDir)
+	// 使用创建者的工作区路径
+	senderID := msg.SenderID
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		log.WithError(err).Warn("Failed to create cron user workspace")
+	}
 
-	// 运行 Agent 循环
-	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, "", "", false)
+	// 构建 cron 专用消息（无历史上下文）
+	messages := BuildCronMessages(msg.Content, workspaceRoot)
+
+	// 运行 Agent 循环（传入创建者 senderID 而非空值）
+	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -541,7 +549,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to configure session MCP scope")
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
-	agentsCatalog := a.agents.GetAgentsCatalog()
+	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
 	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
@@ -1037,13 +1045,14 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 }
 
 // injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
-func (a *Agent) injectInbound(channel, chatID, content string) {
+func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
 		Channel:  channel,
-		SenderID: "cron",
+		SenderID: senderID,
 		ChatID:   chatID,
 		Content:  content,
 		Time:     time.Now(),
+		IsCron:   true,
 	}
 }
 
@@ -1074,7 +1083,10 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 		}
 	}
 
-	// 构建子 Agent 的消息
+	// 构建子 Agent 的消息（注入工作目录信息，让 LLM 知道文件操作的上下文）
+	if parentCtx.WorkspaceRoot != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.WorkspaceRoot)
+	}
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage(systemPrompt),
 		llm.NewUserMessage(task),

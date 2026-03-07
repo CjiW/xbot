@@ -49,6 +49,7 @@ type cronJob struct {
 	Message      string `json:"message"`
 	Channel      string `json:"channel"`
 	ChatID       string `json:"chat_id"`
+	SenderID     string `json:"sender_id,omitempty"` // 创建者 ID（用于用户隔离）
 	CronExpr     string `json:"cron_expr,omitempty"`
 	EverySeconds int    `json:"every_seconds,omitempty"`
 	DelaySeconds int    `json:"delay_seconds,omitempty"` // one-shot delay
@@ -122,13 +123,18 @@ func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		t.ensureTicker(ctx.InjectInbound)
 	}
 
+	senderID := ""
+	if ctx != nil {
+		senderID = ctx.SenderID
+	}
+
 	switch p.Action {
 	case "add":
 		return t.addJob(ctx, p)
 	case "list":
-		return t.listJobs()
+		return t.listJobs(senderID)
 	case "remove":
-		return t.removeJob(p.JobID)
+		return t.removeJob(p.JobID, senderID)
 	default:
 		return nil, fmt.Errorf("unknown action: %s (use add, list, remove)", p.Action)
 	}
@@ -175,10 +181,11 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 		CreatedAt:    now.Format(time.RFC3339),
 	}
 
-	// 设置渠道信息
+	// 设置渠道和创建者信息
 	if ctx != nil {
 		job.Channel = ctx.Channel
 		job.ChatID = ctx.ChatID
+		job.SenderID = ctx.SenderID
 	}
 
 	// 初始化运行时状态
@@ -196,19 +203,23 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 		job.ID, schedDesc, job.Message, job.nextRun.Format("2006-01-02 15:04:05 MST"))), nil
 }
 
-func (t *CronTool) listJobs() (*ToolResult, error) {
+func (t *CronTool) listJobs(senderID string) (*ToolResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if len(t.jobs) == 0 {
+	// 按 SenderID 过滤（空 senderID 只能看到自己创建的空 senderID job）
+	var jobs []*cronJob
+	for _, j := range t.jobs {
+		if j.SenderID == senderID {
+			jobs = append(jobs, j)
+		}
+	}
+
+	if len(jobs) == 0 {
 		return NewResult("No scheduled jobs."), nil
 	}
 
 	// 按创建时间排序
-	jobs := make([]*cronJob, 0, len(t.jobs))
-	for _, j := range t.jobs {
-		jobs = append(jobs, j)
-	}
 	sort.Slice(jobs, func(i, j int) bool {
 		return jobs[i].CreatedAt < jobs[j].CreatedAt
 	})
@@ -223,14 +234,18 @@ func (t *CronTool) listJobs() (*ToolResult, error) {
 	return NewResult(sb.String()), nil
 }
 
-func (t *CronTool) removeJob(jobID string) (*ToolResult, error) {
+func (t *CronTool) removeJob(jobID string, senderID string) (*ToolResult, error) {
 	if jobID == "" {
 		return nil, fmt.Errorf("job_id is required for remove")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if _, ok := t.jobs[jobID]; !ok {
+	job, ok := t.jobs[jobID]
+	if !ok {
+		return nil, fmt.Errorf("job not found: %s", jobID)
+	}
+	if job.SenderID != senderID {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
 	delete(t.jobs, jobID)
@@ -276,14 +291,14 @@ func (t *CronTool) initJobRuntime(job *cronJob) error {
 }
 
 // ensureTicker 确保后台 ticker 在运行
-func (t *CronTool) ensureTicker(injectFunc func(string, string, string)) {
+func (t *CronTool) ensureTicker(injectFunc func(string, string, string, string)) {
 	t.once.Do(func() {
 		go t.tickerLoop(injectFunc)
 	})
 }
 
 // tickerLoop 每秒检查一次是否有 job 到期
-func (t *CronTool) tickerLoop(injectFunc func(string, string, string)) {
+func (t *CronTool) tickerLoop(injectFunc func(string, string, string, string)) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -297,7 +312,7 @@ func (t *CronTool) tickerLoop(injectFunc func(string, string, string)) {
 	}
 }
 
-func (t *CronTool) checkAndFire(now time.Time, injectFunc func(string, string, string)) {
+func (t *CronTool) checkAndFire(now time.Time, injectFunc func(string, string, string, string)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -318,7 +333,7 @@ func (t *CronTool) checkAndFire(now time.Time, injectFunc func(string, string, s
 		// 直接使用用户定义的任务描述（不加前缀，因为 cron 消息已通过 SenderID 识别）
 		content := job.Message
 		if injectFunc != nil && job.Channel != "" && job.ChatID != "" {
-			injectFunc(job.Channel, job.ChatID, content)
+			injectFunc(job.Channel, job.ChatID, job.SenderID, content)
 		}
 
 		if job.oneShot {

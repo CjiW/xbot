@@ -1236,5 +1236,7 @@ func formatToolProgress(name string, args string) string {
 		summary = fmt.Sprintf("%s: %s", name, raw)
 	}
 
+	// 去掉换行符，避免引用块断裂（工具参数可能含多行内容）
+	summary = strings.NewReplacer("\n", " ", "\r", "").Replace(summary)
 	return truncate(summary, maxLen)
 }

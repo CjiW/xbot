@@ -52,6 +52,7 @@ type Agent struct {
 	maxIterations int
 	memoryWindow  int
 	skills        *SkillStore
+	agents        *AgentStore
 	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
 	cardBuilder   *tools.CardBuilder      // Card Builder MCP
 	workDir       string
@@ -124,6 +125,7 @@ func New(cfg Config) *Agent {
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
+	agentStore := NewAgentStore(agentsDir)
 
 	registry := tools.DefaultRegistry()
 
@@ -183,6 +185,7 @@ func New(cfg Config) *Agent {
 		maxIterations: cfg.MaxIterations,
 		memoryWindow:  cfg.MemoryWindow,
 		skills:        skillStore,
+		agents:        agentStore,
 		chatHistory:   chatHistory,
 		cardBuilder:   cardBuilder,
 		workDir:       cfg.WorkDir,
@@ -329,8 +332,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		history = nil
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog()
+	agentsCatalog := a.agents.GetAgentsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -495,8 +499,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		history = nil
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog()
+	agentsCatalog := a.agents.GetAgentsCatalog()
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {

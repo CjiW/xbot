@@ -124,7 +124,7 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, promptLoader *PromptLoader, senderName string) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -136,6 +136,11 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	// 注入 skills 目录（让 LLM 按需用 Read 工具加载 SKILL.md）
 	if skillsCatalog != "" {
 		systemContent += "\n" + skillsCatalog
+	}
+
+	// 注入 agents 目录（让 LLM 知道可用的 SubAgent 角色）
+	if agentsCatalog != "" {
+		systemContent += "\n" + agentsCatalog
 	}
 
 	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）

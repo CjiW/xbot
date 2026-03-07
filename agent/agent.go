@@ -1050,7 +1050,9 @@ func (a *Agent) injectInbound(channel, chatID, content string) {
 // RunSubAgent 实现 tools.SubAgentManager 接口
 // 创建一个独立的子 Agent 循环来执行任务，子 Agent 拥有自己的工具集但不能再创建子 Agent
 // allowedTools 为工具白名单，为空时使用所有工具（除 SubAgent）
-func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task string, systemPrompt string, allowedTools []string) (string, error) {
+func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string) (string, error) {
+	ctx := parentCtx.Ctx
+	parentAgentID := parentCtx.AgentID
 	if systemPrompt == "" {
 		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
@@ -1146,9 +1148,13 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 			execCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 
 			toolCtx := &tools.ToolContext{
-				Ctx:        execCtx,
-				WorkingDir: a.workDir,
-				AgentID:    parentAgentID + "/sub",
+				Ctx:              execCtx,
+				WorkingDir:       parentCtx.WorkingDir,
+				WorkspaceRoot:    parentCtx.WorkspaceRoot,
+				ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
+				SandboxEnabled:   parentCtx.SandboxEnabled,
+				PreferredSandbox: parentCtx.PreferredSandbox,
+				AgentID:          parentAgentID + "/sub",
 			}
 
 			result, execErr := tool.Execute(toolCtx, tc.Arguments)

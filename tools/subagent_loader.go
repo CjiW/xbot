@@ -1,0 +1,163 @@
+package tools
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// LoadAgentRoles 从目录加载所有 agent 定义文件（*.md）
+// 每个文件包含 YAML frontmatter（name, description, tools）和 SystemPrompt 正文
+func LoadAgentRoles(dir string) ([]SubAgentRole, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read agents dir %s: %w", dir, err)
+	}
+
+	var roles []SubAgentRole
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		role, err := parseAgentFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("parse agent file %s: %w", path, err)
+		}
+		roles = append(roles, role)
+	}
+	return roles, nil
+}
+
+// parseAgentFile 解析单个 agent 定义文件
+// 格式：YAML frontmatter（--- 之间）+ Markdown 正文作为 SystemPrompt
+func parseAgentFile(path string) (SubAgentRole, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SubAgentRole{}, err
+	}
+
+	content := string(data)
+
+	// 分离 frontmatter 和正文
+	frontmatter, body, err := splitFrontmatter(content)
+	if err != nil {
+		return SubAgentRole{}, fmt.Errorf("invalid frontmatter: %w", err)
+	}
+
+	// 解析 frontmatter 字段
+	name, description, allowedTools, err := parseFrontmatter(frontmatter)
+	if err != nil {
+		return SubAgentRole{}, fmt.Errorf("parse frontmatter: %w", err)
+	}
+
+	if name == "" {
+		// 用文件名（去掉 .md）作为 fallback
+		name = strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+
+	return SubAgentRole{
+		Name:         name,
+		Description:  description,
+		SystemPrompt: strings.TrimSpace(body),
+		AllowedTools: allowedTools,
+	}, nil
+}
+
+// splitFrontmatter 分离 YAML frontmatter 和正文
+// 期望格式：以 "---\n" 开头，第二个 "---\n" 结束 frontmatter
+func splitFrontmatter(content string) (frontmatter, body string, err error) {
+	// 去掉可能的 BOM
+	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
+
+	if !strings.HasPrefix(content, "---") {
+		return "", "", fmt.Errorf("file does not start with ---")
+	}
+
+	// 找第二个 ---
+	rest := content[3:] // 跳过第一个 ---
+	rest = strings.TrimPrefix(rest, "\r\n")
+	rest = strings.TrimPrefix(rest, "\n")
+
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return "", "", fmt.Errorf("closing --- not found")
+	}
+
+	frontmatter = rest[:idx]
+	body = rest[idx+4:] // 跳过 "\n---"
+	// 跳过 --- 后面的换行
+	body = strings.TrimPrefix(body, "\r\n")
+	body = strings.TrimPrefix(body, "\n")
+
+	return frontmatter, body, nil
+}
+
+// parseFrontmatter 手动解析简单 YAML frontmatter
+// 只支持 name, description（字符串）和 tools（列表）三个字段
+func parseFrontmatter(fm string) (name, description string, tools []string, err error) {
+	lines := strings.Split(fm, "\n")
+	var currentField string
+
+	for _, line := range lines {
+		// 去掉 \r
+		line = strings.TrimRight(line, "\r")
+
+		// 跳过空行和注释
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// 列表项：以 "  - " 或 "- " 开头（属于当前字段）
+		if strings.HasPrefix(trimmed, "- ") {
+			if currentField == "tools" {
+				item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+				if item != "" {
+					tools = append(tools, item)
+				}
+			}
+			continue
+		}
+
+		// 键值对：key: value
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			continue
+		}
+
+		key := strings.TrimSpace(line[:colonIdx])
+		value := strings.TrimSpace(line[colonIdx+1:])
+
+		// 去掉引号包裹
+		value = stripQuotes(value)
+
+		switch key {
+		case "name":
+			name = value
+			currentField = "name"
+		case "description":
+			description = value
+			currentField = "description"
+		case "tools":
+			currentField = "tools"
+			// tools 的值可能在同一行（如 tools: [a, b]）或后续行（列表格式）
+			// 我们只支持列表格式，忽略同行值
+		default:
+			currentField = ""
+		}
+	}
+
+	return name, description, tools, nil
+}
+
+// stripQuotes 去掉字符串两端的引号（单引号或双引号）
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}

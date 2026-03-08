@@ -2,6 +2,34 @@ package bus
 
 import "time"
 
+const (
+	// MetadataReplyPolicy controls how Agent should behave before final reply.
+	// Supported values:
+	// - "auto" (default): normal flow, send ack/progress
+	// - "optional": no ack/progress; agent may decide to not reply
+	MetadataReplyPolicy = "reply_policy"
+
+	ReplyPolicyAuto     = "auto"
+	ReplyPolicyOptional = "optional"
+)
+
+// InboundReplyPolicy returns normalized reply policy for inbound metadata.
+func InboundReplyPolicy(metadata map[string]string) string {
+	if metadata == nil {
+		return ReplyPolicyAuto
+	}
+	policy := metadata[MetadataReplyPolicy]
+	if policy == "" {
+		return ReplyPolicyAuto
+	}
+	return policy
+}
+
+// ShouldPreReplyNotify indicates whether ack/progress UI should be sent before final reply.
+func ShouldPreReplyNotify(metadata map[string]string) bool {
+	return InboundReplyPolicy(metadata) != ReplyPolicyOptional
+}
+
 // InboundMessage 从 IM 渠道收到的入站消息
 type InboundMessage struct {
 	Channel    string            // 渠道名称: "feishu", "cli" 等

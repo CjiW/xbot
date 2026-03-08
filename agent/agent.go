@@ -497,7 +497,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
 }
 
-// handlePromptQuery 构建完整提示词并返回给用户（dryrun，不调用 LLM）
+// handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
 func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	// 提取 /prompt 之后的 query 内容（先 trim 再截取，与 cmd 解析对齐）
 	trimmed := strings.TrimSpace(msg.Content)
@@ -541,10 +541,17 @@ func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, ten
 
 	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
 
+	// 写入文件并发送
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
+	if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
+		return nil, fmt.Errorf("write prompt file: %w", err)
+	}
+
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: buf.String(),
+		Content: fmt.Sprintf("[prompt-dryrun.md](%s)", promptFile),
 	}, nil
 }
 

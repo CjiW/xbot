@@ -36,12 +36,13 @@ type FeishuConfig struct {
 
 // FeishuChannel 飞书渠道实现
 type FeishuChannel struct {
-	config   FeishuConfig
-	msgBus   *bus.MessageBus
-	client   *lark.Client
-	wsClient *larkws.Client
-	running  bool
-	mu       sync.Mutex
+	config    FeishuConfig
+	msgBus    *bus.MessageBus
+	client    *lark.Client
+	wsClient  *larkws.Client
+	running   bool
+	mu        sync.Mutex
+	botOpenID string
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}
@@ -91,6 +92,11 @@ func (f *FeishuChannel) Start() error {
 	f.client = lark.NewClient(f.config.AppID, f.config.AppSecret,
 		lark.WithLogLevel(larkcore.LogLevelInfo),
 	)
+
+	// 初始化机器人自身 open_id（用于群聊 @ 识别）
+	if err := f.refreshBotOpenID(context.Background()); err != nil {
+		log.WithError(err).Warn("Feishu: failed to initialize bot open_id from bot/v3/info")
+	}
 
 	// 创建事件处理器
 	eventHandler := dispatcher.NewEventDispatcher(
@@ -666,6 +672,25 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		msgType = *msg.MessageType
 	}
 
+	// 群聊前置拦截：
+	// 1) 未 @ 机器人 且非 @所有人 -> 直接拦截
+	// 2) 仅 @所有人 -> 放行给 Agent 决定是否回复（并标记 optional）
+	mentionScope := "direct"
+	if chatType == "group" {
+		shouldHandle, atAllOnly, reason := f.shouldHandleGroupMessage(msg)
+		if !shouldHandle {
+			log.WithFields(log.Fields{
+				"message_id": messageID,
+				"chat_id":    chatID,
+				"reason":     reason,
+			}).Debug("Feishu: group message intercepted before agent")
+			return nil
+		}
+		if atAllOnly {
+			mentionScope = "at_all_optional"
+		}
+	}
+
 	// 解析消息内容
 	content := f.parseContent(eventMessageAdapter{msg})
 	if content == "" {
@@ -683,6 +708,10 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		if content == "" {
 			return nil
 		}
+	}
+
+	if mentionScope == "at_all_optional" {
+		content = "[群聊 @所有人 消息：按相关性决定是否需要回复；不相关可不回复]\n" + content
 	}
 
 	// 确定回复目标
@@ -747,6 +776,15 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 			log.WithError(err).WithField("create_time", *msg.CreateTime).Warn("Feishu: failed to parse message CreateTime, using current time")
 		}
 	}
+	metadata := map[string]string{
+		"message_id": messageID,
+		"chat_type":  chatType,
+		"msg_type":   msgType,
+	}
+	if mentionScope == "at_all_optional" {
+		metadata[bus.MetadataReplyPolicy] = bus.ReplyPolicyOptional
+	}
+
 	f.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
@@ -754,14 +792,138 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		ChatID:     replyTo,
 		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
 		Time:       msgTime,
-		Metadata: map[string]string{
-			"message_id": messageID,
-			"chat_type":  chatType,
-			"msg_type":   msgType,
-		},
+		Metadata:   metadata,
 	}
 
 	return nil
+}
+
+type feishuBotInfoResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Bot  struct {
+		OpenID string `json:"open_id"`
+	} `json:"bot"`
+}
+
+// refreshBotOpenID calls Bot API (/open-apis/bot/v3/info) to get bot open_id.
+func (f *FeishuChannel) refreshBotOpenID(ctx context.Context) error {
+	if f.client == nil {
+		return fmt.Errorf("feishu client not initialized")
+	}
+
+	rawResp, err := f.client.Get(ctx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant)
+	if err != nil {
+		return fmt.Errorf("request bot info: %w", err)
+	}
+
+	var resp feishuBotInfoResp
+	if err := json.Unmarshal(rawResp.RawBody, &resp); err != nil {
+		return fmt.Errorf("unmarshal bot info response: %w", err)
+	}
+	if resp.Code != 0 {
+		return fmt.Errorf("bot info API error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+	if strings.TrimSpace(resp.Bot.OpenID) == "" {
+		return fmt.Errorf("bot info API returned empty bot.open_id")
+	}
+
+	f.mu.Lock()
+	f.botOpenID = strings.TrimSpace(resp.Bot.OpenID)
+	f.mu.Unlock()
+
+	log.WithField("bot_open_id", resp.Bot.OpenID).Info("Feishu: bot open_id initialized from bot/v3/info")
+	return nil
+}
+
+// shouldHandleGroupMessage determines whether a group message should be forwarded to Agent.
+// Rules:
+// - direct @bot: always forward
+// - only @all (without direct @bot): forward as optional
+// - otherwise: intercept
+func (f *FeishuChannel) shouldHandleGroupMessage(msg *larkim.EventMessage) (shouldHandle bool, atAllOnly bool, reason string) {
+	if msg == nil || len(msg.Mentions) == 0 {
+		return false, false, "no_mentions"
+	}
+
+	f.mu.Lock()
+	botOpenID := f.botOpenID
+	f.mu.Unlock()
+
+	hasAtAll := false
+	hasDirectBot := false
+
+	for _, mention := range msg.Mentions {
+		if mention == nil {
+			continue
+		}
+		if isAtAllMention(mention) {
+			hasAtAll = true
+			continue
+		}
+		if botOpenID != "" && isBotMention(mention, botOpenID) {
+			hasDirectBot = true
+		}
+	}
+
+	if hasDirectBot {
+		return true, false, "direct_bot_mention"
+	}
+	if hasAtAll {
+		return true, true, "at_all_optional"
+	}
+
+	if botOpenID == "" {
+		return false, false, "bot_open_id_unknown"
+	}
+	return false, false, "mentioned_others"
+}
+
+func isBotMention(mention *larkim.MentionEvent, botOpenID string) bool {
+	if mention == nil || mention.Id == nil || botOpenID == "" {
+		return false
+	}
+	if mention.Id.OpenId != nil && *mention.Id.OpenId == botOpenID {
+		return true
+	}
+	if mention.Id.UserId != nil && *mention.Id.UserId == botOpenID {
+		return true
+	}
+	if mention.Id.UnionId != nil && *mention.Id.UnionId == botOpenID {
+		return true
+	}
+	return false
+}
+
+func isAtAllMention(mention *larkim.MentionEvent) bool {
+	if mention == nil {
+		return false
+	}
+	if mention.Key != nil {
+		key := strings.TrimSpace(strings.ToLower(*mention.Key))
+		if key == "@all" || key == "@_all" {
+			return true
+		}
+	}
+	if mention.Name != nil {
+		name := strings.TrimSpace(strings.ToLower(*mention.Name))
+		switch name {
+		case "all", "everyone", "所有人", "全体成员":
+			return true
+		}
+	}
+	if mention.Id != nil {
+		if mention.Id.OpenId != nil && strings.EqualFold(strings.TrimSpace(*mention.Id.OpenId), "all") {
+			return true
+		}
+		if mention.Id.UserId != nil && strings.EqualFold(strings.TrimSpace(*mention.Id.UserId), "all") {
+			return true
+		}
+		if mention.Id.UnionId != nil && strings.EqualFold(strings.TrimSpace(*mention.Id.UnionId), "all") {
+			return true
+		}
+	}
+	return false
 }
 
 // onCardAction 处理卡片交互事件（按钮点击、表单提交）

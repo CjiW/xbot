@@ -347,8 +347,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
+	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata)
+	replyPolicy := bus.InboundReplyPolicy(msg.Metadata)
+
 	// 立即发送随机确认回复
-	a.sendAck(msg.Channel, msg.ChatID)
+	if preReplyNotify {
+		a.sendAck(msg.Channel, msg.ChatID)
+	}
 
 	// 检查是否需要触发自动记忆合并
 	a.maybeConsolidate(ctx, tenantSession)
@@ -372,7 +377,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	messages := BuildMessages(history, msg.Content, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, preReplyNotify)
 	if err != nil {
 		return nil, err
 	}
@@ -390,8 +395,20 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, nil
 	}
 
-	if finalContent == "" {
-		finalContent = "处理完成，但没有需要回复的内容。"
+	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
+		userMsg := llm.NewUserMessage(msg.Content)
+		if !msg.Time.IsZero() {
+			userMsg.Timestamp = msg.Time
+		}
+		if err := tenantSession.AddMessage(userMsg); err != nil {
+			log.WithError(err).Warn("Failed to save user message")
+		}
+		log.WithFields(log.Fields{
+			"channel":      msg.Channel,
+			"chat_id":      msg.ChatID,
+			"reply_policy": replyPolicy,
+		}).Info("Optional reply policy: no final response generated, skipping outbound")
+		return nil, nil
 	}
 
 	// 保存会话
@@ -561,10 +578,6 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	if waitingUser {
 		log.Info("Tool is waiting for user response, skipping reply")
 		return nil, nil
-	}
-
-	if finalContent == "" {
-		finalContent = "处理完成，但没有需要回复的内容。"
 	}
 
 	cardUserMsg := llm.NewUserMessage(summary)

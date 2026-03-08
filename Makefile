@@ -11,7 +11,8 @@ lint:
 test:
 	go test -v -race -coverprofile=coverage.out ./...
 
-LDFLAGS := -X xbot/version.Commit=$(shell git rev-parse --short HEAD) -X xbot/version.BuildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION := $(shell git describe --tags --always 2>/dev/null || echo dev)
+LDFLAGS := -X xbot/version.Version=$(VERSION) -X xbot/version.Commit=$(shell git rev-parse --short HEAD) -X xbot/version.BuildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) .
@@ -20,7 +21,7 @@ run: build
 	./$(BINARY_NAME)
 
 dev:
-	go run .
+	go run -ldflags "$(LDFLAGS)" .
 
 clean:
 	rm -f $(BINARY_NAME) coverage.out

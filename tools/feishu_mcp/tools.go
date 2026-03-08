@@ -1,19 +1,20 @@
 package feishu_mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 
 	"xbot/llm"
 	"xbot/tools"
-
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	wikiv2 "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 )
 
-// SearchWikiTool searches across Wiki spaces by listing nodes.
-// Note: This is a basic implementation that lists and filters nodes.
-// For full-text search, the search v2 API requires setting up data sources first.
+// SearchWikiTool searches wiki nodes via Feishu open API /wiki/v2/nodes/search.
+// This endpoint is currently not available in the Go SDK, so it is called directly with HTTP.
 type SearchWikiTool struct {
 	MCP *FeishuMCP
 }
@@ -21,7 +22,7 @@ type SearchWikiTool struct {
 func (t *SearchWikiTool) Name() string { return "feishu_search_wiki" }
 
 func (t *SearchWikiTool) Description() string {
-	return "Search across Wiki spaces for documents matching a query. Note: This searches titles by listing nodes."
+	return "Search Wiki documents by query using Feishu's native wiki search endpoint."
 }
 
 func (t *SearchWikiTool) Parameters() []llm.ToolParam {
@@ -29,19 +30,25 @@ func (t *SearchWikiTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "query",
 			Type:        "string",
-			Description: "Search query text (matches against node titles)",
+			Description: "Search keyword (max 50 chars).",
 			Required:    true,
 		},
 		{
 			Name:        "space_id",
 			Type:        "string",
-			Description: "Wiki space ID (numeric string like '7123456789012345678', from feishu_wiki_list_spaces). Optional, searches all spaces if not provided.",
+			Description: "Wiki space ID (numeric string like '7123456789012345678', from feishu_wiki_list_spaces). Optional, searches all spaces if omitted.",
+			Required:    false,
+		},
+		{
+			Name:        "node_id",
+			Type:        "string",
+			Description: "Wiki node ID to scope search to this node and descendants. Requires space_id when provided.",
 			Required:    false,
 		},
 		{
 			Name:        "limit",
 			Type:        "string",
-			Description: "Maximum number of results to return (default: 50)",
+			Description: "Maximum number of results to return (default: 50, max: 200)",
 			Required:    false,
 		},
 	}
@@ -51,10 +58,17 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	var args struct {
 		Query   string `json:"query"`
 		SpaceID string `json:"space_id"`
+		NodeID  string `json:"node_id"`
 		Limit   string `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if args.Query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if args.NodeID != "" && args.SpaceID == "" {
+		return nil, fmt.Errorf("space_id is required when node_id is provided")
 	}
 
 	client, err := t.MCP.GetClient(ctx.Ctx, ctx.Channel, ctx.ChatID)
@@ -62,76 +76,58 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, err
 	}
 
-	// First, list all wiki spaces if no specific space_id provided
-	var spaceIDs []string
-	if args.SpaceID != "" {
-		spaceIDs = []string{args.SpaceID}
-	} else {
-		spacesReq := wikiv2.NewListSpaceReqBuilder().Build()
-		spacesResp, err := client.Client().Wiki.Space.List(ctx.Ctx, spacesReq,
-			larkcore.WithUserAccessToken(client.AccessToken()))
-		if err != nil {
-			return nil, fmt.Errorf("list wiki spaces: %w", err)
-		}
-		if !spacesResp.Success() {
-			return nil, NewAPIError(spacesResp.CodeError)
-		}
-		for _, space := range spacesResp.Data.Items {
-			if space.SpaceId != nil {
-				spaceIDs = append(spaceIDs, *space.SpaceId)
-			}
-		}
-	}
-
-	// Search through nodes in each space
-	var results []map[string]any
 	maxResults := 50
 	if args.Limit != "" {
-		fmt.Sscanf(args.Limit, "%d", &maxResults)
+		parsedLimit, parseErr := strconv.Atoi(args.Limit)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid limit: %w", parseErr)
+		}
+		maxResults = parsedLimit
+	}
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+	if maxResults > 200 {
+		maxResults = 200
 	}
 
-	for _, spaceID := range spaceIDs {
-		if len(results) >= maxResults {
-			break
+	var results []map[string]any
+	pageToken := ""
+	hasMore := true
+	for hasMore && len(results) < maxResults {
+		pageSize := maxResults - len(results)
+		if pageSize > 50 {
+			pageSize = 50
 		}
 
-		nodesReq := wikiv2.NewListSpaceNodeReqBuilder().
-			SpaceId(spaceID).
-			Build()
-
-		nodesResp, err := client.Client().Wiki.SpaceNode.List(ctx.Ctx, nodesReq,
-			larkcore.WithUserAccessToken(client.AccessToken()))
+		resp, err := t.searchWiki(ctx, client.AccessToken(), args.Query, args.SpaceID, args.NodeID, pageToken, pageSize)
 		if err != nil {
-			continue // Skip spaces we can't access
-		}
-		if !nodesResp.Success() {
-			continue
+			return nil, err
 		}
 
-		for _, node := range nodesResp.Data.Items {
+		for _, item := range resp.Data.Items {
 			if len(results) >= maxResults {
 				break
 			}
-			// Simple title matching (case-insensitive)
-			if node.Title != nil {
-				title := *node.Title
-				if containsIgnoreCase(title, args.Query) {
-					result := map[string]any{
-						"title":        node.Title,
-						"space_id":     spaceID,
-						"node_token":   node.NodeToken,
-						"obj_type":     node.ObjType,
-						"obj_token":    node.ObjToken,
-						"parent_token": node.ParentNodeToken,
-					}
-					results = append(results, result)
-				}
-			}
+			results = append(results, map[string]any{
+				"title":     item.Title,
+				"space_id":  item.SpaceID,
+				"node_id":   item.NodeID,
+				"obj_type":  item.ObjType,
+				"obj_token": item.ObjToken,
+				"url":       item.URL,
+			})
+		}
+
+		hasMore = resp.Data.HasMore
+		pageToken = resp.Data.PageToken
+		if !hasMore || pageToken == "" {
+			break
 		}
 	}
 
 	if len(results) == 0 {
-		return tools.NewResultWithTips("No matching results found", "Try different search keywords or use feishu_wiki_list_spaces to browse all Wiki spaces."), nil
+		return tools.NewResultWithTips("No matching results found", "Try different search keywords, or narrow with space_id/node_id to search within a specific Wiki scope."), nil
 	}
 
 	summary := fmt.Sprintf("Found %d result(s)", len(results))
@@ -139,33 +135,76 @@ func (t *SearchWikiTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	return tools.NewResultWithDetail(summary, string(detail)), nil
 }
 
-// containsIgnoreCase checks if a string contains a substring (case-insensitive).
-func containsIgnoreCase(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findIgnoreCase(s, substr)))
+type wikiSearchResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Items []struct {
+			NodeID   string `json:"node_id"`
+			SpaceID  string `json:"space_id"`
+			ObjType  int    `json:"obj_type"`
+			ObjToken string `json:"obj_token"`
+			Title    string `json:"title"`
+			URL      string `json:"url"`
+		} `json:"items"`
+		PageToken string `json:"page_token"`
+		HasMore   bool   `json:"has_more"`
+	} `json:"data"`
 }
 
-func findIgnoreCase(s, substr string) bool {
-	s = toLower(s)
-	substr = toLower(substr)
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func (t *SearchWikiTool) searchWiki(ctx *tools.ToolContext, accessToken, query, spaceID, nodeID, pageToken string, pageSize int) (*wikiSearchResponse, error) {
+	reqBody := map[string]any{
+		"query": query,
 	}
-	return false
-}
+	if spaceID != "" {
+		reqBody["space_id"] = spaceID
+	}
+	if nodeID != "" {
+		reqBody["node_id"] = nodeID
+	}
 
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			result[i] = c + 32
-		} else {
-			result[i] = c
-		}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal wiki search request: %w", err)
 	}
-	return string(result)
+
+	u, err := url.Parse("https://open.feishu.cn/open-apis/wiki/v2/nodes/search")
+	if err != nil {
+		return nil, fmt.Errorf("build wiki search URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("page_size", strconv.Itoa(pageSize))
+	if pageToken != "" {
+		q.Set("page_token", pageToken)
+	}
+	u.RawQuery = q.Encode()
+
+	httpReq, err := http.NewRequestWithContext(ctx.Ctx, http.MethodPost, u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("build wiki search request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+	httpReq.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("call wiki search API: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	respBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read wiki search response: %w", err)
+	}
+
+	var resp wikiSearchResponse
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return nil, fmt.Errorf("decode wiki search response: %w", err)
+	}
+
+	if resp.Code != 0 {
+		return nil, NewAPIErrorWithDetails(resp.Code, resp.Msg, string(respBytes))
+	}
+
+	return &resp, nil
 }

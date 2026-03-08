@@ -338,8 +338,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/help — 显示帮助",
+			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助",
 		}, nil
+	}
+	if strings.HasPrefix(cmd, "/prompt") {
+		return a.handlePromptQuery(ctx, msg, tenantSession)
 	}
 
 	// 处理卡片响应（按钮点击、表单提交）
@@ -347,37 +350,20 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
-	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata)
-	replyPolicy := bus.InboundReplyPolicy(msg.Metadata)
-
 	// 立即发送随机确认回复
-	if preReplyNotify {
-		a.sendAck(msg.Channel, msg.ChatID)
-	}
+	a.sendAck(msg.Channel, msg.ChatID)
 
 	// 检查是否需要触发自动记忆合并
 	a.maybeConsolidate(ctx, tenantSession)
 
 	// 构建 LLM 消息（注入长期记忆、skills）
-	history, err := tenantSession.GetHistory(a.memoryWindow)
+	messages, err := a.buildPrompt(msg, tenantSession)
 	if err != nil {
-		log.WithError(err).Warn("Failed to get history, using empty history")
-		history = nil
+		return nil, err
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create user workspace: %w", err)
-	}
-	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
-		log.WithError(err).Warn("Failed to configure session MCP scope")
-	}
-	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
-	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
-	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, preReplyNotify)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
 		return nil, err
 	}
@@ -395,20 +381,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, nil
 	}
 
-	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.WithError(err).Warn("Failed to save user message")
-		}
-		log.WithFields(log.Fields{
-			"channel":      msg.Channel,
-			"chat_id":      msg.ChatID,
-			"reply_policy": replyPolicy,
-		}).Info("Optional reply policy: no final response generated, skipping outbound")
-		return nil, nil
+	if finalContent == "" {
+		finalContent = "处理完成，但没有需要回复的内容。"
 	}
 
 	// 保存会话
@@ -483,6 +457,77 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 		ChatID:   msg.ChatID,
 		Content:  finalContent,
 		Metadata: metadata,
+	}, nil
+}
+
+// buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）
+func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
+	history, err := tenantSession.GetHistory(a.memoryWindow)
+	if err != nil {
+		log.WithError(err).Warn("Failed to get history, using empty history")
+		history = nil
+	}
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
+	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
+	mem := tenantSession.Memory()
+	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+}
+
+// handlePromptQuery 构建完整提示词并返回给用户（dryrun，不调用 LLM）
+func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	// 提取 /prompt 之后的 query 内容（先 trim 再截取，与 cmd 解析对齐）
+	trimmed := strings.TrimSpace(msg.Content)
+	query := strings.TrimSpace(trimmed[len("/prompt"):])
+	if query == "" {
+		query = "(empty query)"
+	}
+
+	// 替换 msg.Content 为 query，复用 buildPrompt
+	dryMsg := msg
+	dryMsg.Content = query
+	messages, err := a.buildPrompt(dryMsg, tenantSession)
+	if err != nil {
+		return nil, err
+	}
+
+	// 获取工具定义
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+
+	// 格式化输出
+	var buf strings.Builder
+	buf.WriteString("=== Prompt Dry Run ===\n\n")
+	for i, m := range messages {
+		fmt.Fprintf(&buf, "--- [%d] role: %s ---\n", i, m.Role)
+		buf.WriteString(m.Content)
+		buf.WriteString("\n\n")
+	}
+
+	fmt.Fprintf(&buf, "--- Tools (%d) ---\n", len(toolDefs))
+	for _, td := range toolDefs {
+		fmt.Fprintf(&buf, "- %s: %s\n", td.Name(), td.Description())
+		for _, p := range td.Parameters() {
+			req := ""
+			if p.Required {
+				req = " (required)"
+			}
+			fmt.Fprintf(&buf, "    %s (%s)%s: %s\n", p.Name, p.Type, req, p.Description)
+		}
+	}
+
+	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: buf.String(),
 	}, nil
 }
 
@@ -578,6 +623,10 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	if waitingUser {
 		log.Info("Tool is waiting for user response, skipping reply")
 		return nil, nil
+	}
+
+	if finalContent == "" {
+		finalContent = "处理完成，但没有需要回复的内容。"
 	}
 
 	cardUserMsg := llm.NewUserMessage(summary)

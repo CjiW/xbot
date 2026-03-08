@@ -7,10 +7,11 @@
 - **多渠道接入** — 消息总线架构，支持飞书（HTTP 回调）和 QQ（WebSocket），易于扩展
 - **丰富的内置工具** — Shell 执行、文件读写编辑、Glob/Grep 搜索、Web 搜索、定时任务、子代理、文件下载
 - **飞书深度集成** — 交互卡片构建、文档/知识库/多维表格读写、文件上传（基于 OAuth 用户授权）
-- **技能系统 (Skills)** — OpenClaw 风格的渐进式技能加载，Markdown 技能包按需注入
+- **技能系统 (Skills)** — OpenClaw 风格的渐进式技能加载，支持全局只读技能 + 用户私有技能
 - **可插拔记忆** — 双模式记忆架构：Flat（简单双层）或 Letta（三层 MemGPT），基于 SQLite + chromem-go 向量数据库
 - **多租户** — 基于 channel + chatID 的租户隔离，支持多群组/多用户独立会话
-- **MCP 协议支持** — 全局配置 + 会话级懒加载，支持 stdio 和 HTTP 两种传输模式
+- **MCP 协议支持** — 全局配置 + 用户私有配置合并，会话级懒加载，支持 stdio 和 HTTP 两种传输模式
+- **用户工作区隔离** — 文件读写/下载限定在用户工作区，命令工具在 Linux 沙箱中执行
 - **OAuth 框架** — 通用 OAuth 2.0 授权流程，支持飞书等第三方服务的用户级授权
 - **子代理 (SubAgent)** — 可委派独立任务给子代理执行，支持预定义角色（如 code-reviewer）
 - **提示词外置** — 系统提示词模板化（Go template），支持热加载
@@ -18,6 +19,28 @@
 - **多 LLM 后端** — 支持 OpenAI 兼容 API（DeepSeek 等）及 CodeBuddy
 
 ## 🏗️ 架构
+
+## 🔒 隔离与权限模型
+
+- **工作区隔离（按 SenderID）**
+  - 用户工作区：`{WORK_DIR}/.xbot/users/{sender_id}/workspace`
+  - 同一用户跨群共享工作区；不同用户彼此隔离
+- **文件访问边界**
+  - `Edit` / `DownloadFile` 仅允许写入用户工作区
+  - `Read` / `Glob` / `Grep` 仅允许读取用户工作区 + 全局只读技能目录
+- **Skill 可见性**
+  - 全局只读技能：`.claude/skills`（兼容 `.xbot/skills`）
+  - 用户私有技能：`{WORK_DIR}/.xbot/users/{sender_id}/workspace/skills`
+  - 同名技能优先使用用户私有版本
+- **MCP 配置隔离**
+  - 全局配置：`{WORK_DIR}/.xbot/mcp.json`（只读基线）
+  - 用户配置：`{WORK_DIR}/.xbot/users/{sender_id}/mcp.json`（`ManageTools` 仅写这里）
+  - 运行时视图为“全局 + 用户覆盖”
+- **命令沙箱（优先 Linux）**
+  - `Shell` 与 MCP stdio 子进程统一走沙箱执行：优先 `bwrap`，缺失时回退 `nsjail`
+  - Windows 默认禁用 command 执行（`Shell` / MCP stdio）
+
+> 建议在 Linux 生产环境预装 `bubblewrap (bwrap)`；若无 `bwrap`，可安装 `nsjail` 作为回退。
 
 ```
 ┌─────────┐     ┌────────────┐     ┌───────┐     ┌─────────┐

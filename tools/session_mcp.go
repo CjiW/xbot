@@ -21,7 +21,9 @@ import (
 type SessionMCPManager struct {
 	mu                sync.RWMutex
 	sessionKey        string                    // "channel:chatID"
-	configPath        string                    // mcp.json 路径
+	globalConfigPath  string                    // 全局 mcp.json 路径（只读）
+	userConfigPath    string                    // 用户 mcp.json 路径（可写）
+	workspaceRoot     string                    // 用户命令执行工作区
 	connections       map[string]*mcpConnection // 懒加载的连接
 	lastActive        map[string]time.Time      // 每个服务器的最后活跃时间
 	sessionLastUsed   time.Time                 // 会话级别活跃时间
@@ -30,15 +32,36 @@ type SessionMCPManager struct {
 }
 
 // NewSessionMCPManager 创建会话 MCP 管理器
-func NewSessionMCPManager(sessionKey, configPath string, inactivityTimeout time.Duration) *SessionMCPManager {
+func NewSessionMCPManager(sessionKey, globalConfigPath, userConfigPath, workspaceRoot string, inactivityTimeout time.Duration) *SessionMCPManager {
 	return &SessionMCPManager{
 		sessionKey:        sessionKey,
-		configPath:        configPath,
+		globalConfigPath:  globalConfigPath,
+		userConfigPath:    userConfigPath,
+		workspaceRoot:     workspaceRoot,
 		connections:       make(map[string]*mcpConnection),
 		lastActive:        make(map[string]time.Time),
 		sessionLastUsed:   time.Now(),
 		inactivityTimeout: inactivityTimeout,
 	}
+}
+
+// UpdateScope 更新当前会话可见的用户配置与工作区。
+func (sm *SessionMCPManager) UpdateScope(userConfigPath, workspaceRoot string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.userConfigPath == userConfigPath && sm.workspaceRoot == workspaceRoot {
+		return
+	}
+
+	for _, conn := range sm.connections {
+		sm.closeConnection(conn)
+	}
+	sm.connections = make(map[string]*mcpConnection)
+	sm.lastActive = make(map[string]time.Time)
+	sm.userConfigPath = userConfigPath
+	sm.workspaceRoot = workspaceRoot
+	sm.initialized = false
 }
 
 // GetSessionTools 懒加载并返回此会话的 MCP 工具
@@ -254,9 +277,20 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 
 // connectStdioServer 连接 stdio 模式的 MCP Server
 func (sm *SessionMCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	envList := BuildStdioEnv(cfg, sm.configPath)
+	configPath := sm.globalConfigPath
+	if configPath == "" {
+		configPath = sm.userConfigPath
+	}
+	envList := BuildStdioEnv(cfg, configPath)
 
-	stdioTransport := transport.NewStdio(cfg.Command, envList, cfg.Args...)
+	command := cfg.Command
+	args := cfg.Args
+	wrappedCommand, wrappedArgs, err := WrapCommandForSandbox(command, args, sm.workspaceRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	stdioTransport := transport.NewStdio(wrappedCommand, envList, wrappedArgs...)
 
 	if err := stdioTransport.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
@@ -325,16 +359,46 @@ func (sm *SessionMCPManager) closeTransport(t any) {
 
 // loadConfig 从 JSON 文件加载 MCP 配置
 func (sm *SessionMCPManager) loadConfig() (*MCPConfig, error) {
-	data, err := os.ReadFile(sm.configPath)
+	merged := &MCPConfig{MCPServers: map[string]MCPServerConfig{}}
+
+	if sm.globalConfigPath != "" {
+		if data, err := os.ReadFile(sm.globalConfigPath); err == nil {
+			var cfg MCPConfig
+			if err := json.Unmarshal(data, &cfg); err == nil {
+				for name, server := range cfg.MCPServers {
+					merged.MCPServers[name] = server
+				}
+			}
+		}
+	}
+
+	if sm.userConfigPath == "" {
+		if len(merged.MCPServers) == 0 {
+			return nil, os.ErrNotExist
+		}
+		return merged, nil
+	}
+
+	data, err := os.ReadFile(sm.userConfigPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			if len(merged.MCPServers) == 0 {
+				return nil, err
+			}
+			return merged, nil
+		}
 		return nil, err
 	}
 
-	var config MCPConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	var userConfig MCPConfig
+	if err := json.Unmarshal(data, &userConfig); err != nil {
 		return nil, fmt.Errorf("parse mcp.json: %w", err)
 	}
-	return &config, nil
+	for name, server := range userConfig.MCPServers {
+		merged.MCPServers[name] = server
+	}
+
+	return merged, nil
 }
 
 // ---- SessionMCPRemoteTool: 会话感知的 MCP 远程工具 ----

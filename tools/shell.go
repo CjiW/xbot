@@ -63,10 +63,24 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", params.Command)
+	workspaceRoot := ""
+	if toolCtx != nil {
+		if toolCtx.WorkspaceRoot != "" {
+			workspaceRoot = toolCtx.WorkspaceRoot
+		} else {
+			workspaceRoot = toolCtx.WorkingDir
+		}
+	}
 
-	if toolCtx != nil && toolCtx.WorkingDir != "" {
-		cmd.Dir = toolCtx.WorkingDir
+	cmdName, cmdArgs, err := shellWrapForSandbox(params.Command, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
+
+	if workspaceRoot != "" {
+		cmd.Dir = workspaceRoot
 	}
 
 	// 关闭 stdin 防止交互式命令阻塞
@@ -79,7 +93,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	// 合并输出
 	var resultBuilder strings.Builder

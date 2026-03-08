@@ -4,21 +4,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	log "xbot/logger"
+	"xbot/tools"
 )
 
 // SkillStore scans skill directories and generates a catalog for the system prompt.
 // Skills are loaded on-demand by the LLM using the Read tool (OpenClaw-style progressive disclosure).
 // Skill creation/deletion is done via Edit/Shell tools — no dedicated Skill tool needed.
 type SkillStore struct {
-	dir string // skills root directory (e.g. {WorkDir}/.xbot/skills)
+	globalDirs []string // 全局只读 skills 根目录
+	workDir    string   // 用于派生用户私有 skills 目录
 }
 
 // NewSkillStore creates a SkillStore
-func NewSkillStore(dir string) *SkillStore {
-	return &SkillStore{dir: dir}
+func NewSkillStore(workDir string, globalDirs []string) *SkillStore {
+	return &SkillStore{workDir: workDir, globalDirs: globalDirs}
 }
 
 // SkillInfo holds basic skill metadata parsed from SKILL.md frontmatter
@@ -29,43 +32,63 @@ type SkillInfo struct {
 }
 
 // ListSkills scans the skills directory and returns all discovered skills
-func (s *SkillStore) ListSkills() ([]SkillInfo, error) {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+func (s *SkillStore) ListSkills(senderID string) ([]SkillInfo, error) {
+	sources := make([]string, 0, len(s.globalDirs)+1)
+	sources = append(sources, s.globalDirs...)
+	if senderID != "" {
+		sources = append(sources, tools.UserSkillsRoot(s.workDir, senderID))
 	}
 
-	var skills []SkillInfo
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		skillDir := filepath.Join(s.dir, e.Name())
-		skillFile := filepath.Join(skillDir, "SKILL.md")
-		if _, err := os.Stat(skillFile); err != nil {
-			continue
+	merged := make(map[string]SkillInfo)
+	orderedNames := make([]string, 0)
+
+	for _, dir := range sources {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
 		}
 
-		name, description := parseSkillFrontmatter(skillFile)
-		if name == "" {
-			name = e.Name()
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			skillDir := filepath.Join(dir, e.Name())
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			if _, err := os.Stat(skillFile); err != nil {
+				continue
+			}
+
+			name, description := parseSkillFrontmatter(skillFile)
+			if name == "" {
+				name = e.Name()
+			}
+
+			if _, exists := merged[name]; !exists {
+				orderedNames = append(orderedNames, name)
+			}
+			merged[name] = SkillInfo{
+				Name:        name,
+				Description: description,
+				Path:        skillDir,
+			}
 		}
-		skills = append(skills, SkillInfo{
-			Name:        name,
-			Description: description,
-			Path:        skillDir,
-		})
+	}
+
+	sort.Strings(orderedNames)
+	skills := make([]SkillInfo, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		skills = append(skills, merged[name])
 	}
 	return skills, nil
 }
 
 // GetSkillsCatalog returns a formatted catalog of all available skills for the system prompt.
 // The LLM uses the Read tool to load a skill's SKILL.md when the task matches its description.
-func (s *SkillStore) GetSkillsCatalog() string {
-	skills, err := s.ListSkills()
+func (s *SkillStore) GetSkillsCatalog(senderID string) string {
+	skills, err := s.ListSkills(senderID)
 	if err != nil {
 		log.WithError(err).Warn("Failed to list skills for catalog")
 		return ""

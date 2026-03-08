@@ -42,6 +42,33 @@ func resolveDataPath(workDir, filename string) string {
 	return newPath
 }
 
+func resolveGlobalSkillsDirs(workDir, legacySkillsDir string) []string {
+	dirs := []string{
+		filepath.Join(workDir, ".claude", "skills"),
+	}
+	if legacySkillsDir != "" {
+		dirs = append(dirs, legacySkillsDir)
+	}
+
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		result = append(result, abs)
+	}
+	return result
+}
+
 // Agent 核心 Agent 引擎
 type Agent struct {
 	bus           *bus.MessageBus
@@ -118,14 +145,15 @@ func New(cfg Config) *Agent {
 		cfg.SessionCacheTimeout = 24 * time.Hour
 	}
 
-	skillStore := NewSkillStore(cfg.SkillsDir)
+	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
+	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
 	// 加载 agent 角色定义（从 .xbot/agents/ 目录）
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
-	agentStore := NewAgentStore(agentsDir)
+	agentStore := NewAgentStore(cfg.WorkDir, agentsDir)
 
 	registry := tools.DefaultRegistry()
 
@@ -137,7 +165,7 @@ func New(cfg Config) *Agent {
 	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
-	registry.Register(tools.NewManageTools(mcpConfigPath))
+	registry.Register(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
@@ -266,7 +294,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}).Infof("Processing: %s", preview)
 
 	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
-	if msg.SenderID == "cron" {
+	if msg.IsCron {
 		return a.processCronMessage(ctx, msg)
 	}
 
@@ -331,10 +359,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsCatalog := a.skills.GetSkillsCatalog()
-	agentsCatalog := a.agents.GetAgentsCatalog()
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
+	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, msg.Content, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, msg.Content, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	// 运行 Agent 循环
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -394,15 +429,23 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 // processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
 func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	log.WithFields(log.Fields{
-		"channel": msg.Channel,
-		"chat_id": msg.ChatID,
+		"channel":   msg.Channel,
+		"chat_id":   msg.ChatID,
+		"sender_id": msg.SenderID,
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
-	// 构建 cron 专用消息（无历史上下文）
-	messages := BuildCronMessages(msg.Content, a.workDir)
+	// 使用创建者的工作区路径
+	senderID := msg.SenderID
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		log.WithError(err).Warn("Failed to create cron user workspace")
+	}
 
-	// 运行 Agent 循环
-	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, "", "", false)
+	// 构建 cron 专用消息（无历史上下文）
+	messages := BuildCronMessages(msg.Content, workspaceRoot)
+
+	// 运行 Agent 循环（传入创建者 senderID 而非空值）
+	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -498,10 +541,17 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	skillsCatalog := a.skills.GetSkillsCatalog()
-	agentsCatalog := a.agents.GetAgentsCatalog()
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
+	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
+	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -888,21 +938,31 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	defer cancel()
 
 	toolCtx := &tools.ToolContext{
-		Ctx:           execCtx,
-		WorkingDir:    a.workDir,
-		AgentID:       "main",
-		Manager:       a,
-		DataDir:       a.workDir,
-		Channel:       channel,
-		ChatID:        chatID,
-		SenderID:      senderID,
-		SenderName:    senderName,
-		SendFunc:      a.sendMessage,
-		InjectInbound: a.injectInbound,
-		Registry:      a.tools,
+		Ctx:                 execCtx,
+		WorkingDir:          a.workDir,
+		WorkspaceRoot:       tools.UserWorkspaceRoot(a.workDir, senderID),
+		ReadOnlyRoots:       resolveGlobalSkillsDirs(a.workDir, filepath.Join(a.workDir, ".xbot", "skills")),
+		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
+		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
+		SandboxEnabled:      true,
+		PreferredSandbox:    "bwrap,nsjail",
+		AgentID:             "main",
+		Manager:             a,
+		DataDir:             a.workDir,
+		Channel:             channel,
+		ChatID:              chatID,
+		SenderID:            senderID,
+		SenderName:          senderName,
+		SendFunc:            a.sendMessage,
+		InjectInbound:       a.injectInbound,
+		Registry:            a.tools,
 		InvalidateAllSessionMCP: func() {
 			a.multiSession.InvalidateAll()
 		},
+	}
+
+	if err := os.MkdirAll(toolCtx.WorkspaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
@@ -985,20 +1045,23 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 }
 
 // injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
-func (a *Agent) injectInbound(channel, chatID, content string) {
+func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
 		Channel:  channel,
-		SenderID: "cron",
+		SenderID: senderID,
 		ChatID:   chatID,
 		Content:  content,
 		Time:     time.Now(),
+		IsCron:   true,
 	}
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口
 // 创建一个独立的子 Agent 循环来执行任务，子 Agent 拥有自己的工具集但不能再创建子 Agent
 // allowedTools 为工具白名单，为空时使用所有工具（除 SubAgent）
-func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task string, systemPrompt string, allowedTools []string) (string, error) {
+func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string) (string, error) {
+	ctx := parentCtx.Ctx
+	parentAgentID := parentCtx.AgentID
 	if systemPrompt == "" {
 		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
@@ -1020,7 +1083,10 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 		}
 	}
 
-	// 构建子 Agent 的消息
+	// 构建子 Agent 的消息（注入工作目录信息，让 LLM 知道文件操作的上下文）
+	if parentCtx.WorkspaceRoot != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.WorkspaceRoot)
+	}
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage(systemPrompt),
 		llm.NewUserMessage(task),
@@ -1094,9 +1160,13 @@ func (a *Agent) RunSubAgent(ctx context.Context, parentAgentID string, task stri
 			execCtx, cancel := context.WithTimeout(ctx, toolTimeout)
 
 			toolCtx := &tools.ToolContext{
-				Ctx:        execCtx,
-				WorkingDir: a.workDir,
-				AgentID:    parentAgentID + "/sub",
+				Ctx:              execCtx,
+				WorkingDir:       parentCtx.WorkingDir,
+				WorkspaceRoot:    parentCtx.WorkspaceRoot,
+				ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
+				SandboxEnabled:   parentCtx.SandboxEnabled,
+				PreferredSandbox: parentCtx.PreferredSandbox,
+				AgentID:          parentAgentID + "/sub",
 			}
 
 			result, execErr := tool.Execute(toolCtx, tc.Arguments)

@@ -184,9 +184,9 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 		return nil, fmt.Errorf("get/create tenant: %w", err)
 	}
 
-	// 创建会话 MCP 管理器
+	// 创建会话 MCP 管理器（用户作用域由 ConfigureSessionMCP 在消息处理时注入）
 	sessionKey := channel + ":" + chatID
-	mcpManager := tools.NewSessionMCPManager(sessionKey, m.mcpConfigPath, m.mcpInactivityTimeout)
+	mcpManager := tools.NewSessionMCPManager(sessionKey, m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 	// 根据配置选择记忆提供者
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
@@ -211,6 +211,24 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 
 	m.tenantCache[key] = sess
 	return sess, nil
+}
+
+// ConfigureSessionMCP 根据当前用户更新会话 MCP 作用域。
+func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, workDir string) error {
+	sess, err := m.GetOrCreateSession(channel, chatID)
+	if err != nil {
+		return err
+	}
+
+	mgr := sess.GetMCPManager()
+	if mgr == nil {
+		return nil
+	}
+
+	userConfigPath := tools.UserMCPConfigPath(workDir, senderID)
+	workspaceRoot := tools.UserWorkspaceRoot(workDir, senderID)
+	mgr.UpdateScope(userConfigPath, workspaceRoot)
+	return nil
 }
 
 // migrateProfileToCoreMemory performs a one-time forward-compatible migration

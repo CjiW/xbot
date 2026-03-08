@@ -50,7 +50,12 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
 	}
 
-	role, ok := GetSubAgentRole(params.Role)
+	// 查找用户私有 + 全局角色（用户角色优先）
+	var userAgentDir string
+	if ctx != nil && ctx.SenderID != "" && ctx.WorkingDir != "" {
+		userAgentDir = UserAgentsRoot(ctx.WorkingDir, ctx.SenderID)
+	}
+	role, ok := GetSubAgentRole(params.Role, userAgentDir)
 	if !ok {
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}
@@ -59,7 +64,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("sub-agent capability not available")
 	}
 
-	result, err := ctx.Manager.RunSubAgent(ctx.Ctx, ctx.AgentID, params.Task, role.SystemPrompt, role.AllowedTools)
+	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools)
 	if err != nil {
 		return nil, fmt.Errorf("sub-agent failed: %w", err)
 	}

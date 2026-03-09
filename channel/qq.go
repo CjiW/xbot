@@ -158,6 +158,14 @@ func NewQQChannel(cfg QQConfig, msgBus *bus.MessageBus) *QQChannel {
 
 func (q *QQChannel) Name() string { return "qq" }
 
+func (q *QQChannel) Capabilities() bus.ChannelCapabilities {
+	return bus.ChannelCapabilities{
+		SupportsPatch:      false,
+		SupportsCard:       false,
+		SupportsFileUpload: true,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Start / Stop
 // ---------------------------------------------------------------------------
@@ -852,6 +860,11 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 
 // Send 发送消息到 QQ，返回平台消息 ID
 func (q *QQChannel) Send(msg bus.OutboundMessage) (string, error) {
+	// QQ 不支持消息更新，跳过 patch 消息避免重复发送
+	if msg.Metadata != nil && msg.Metadata["update_message_id"] != "" {
+		return "", nil
+	}
+
 	if msg.Content == "" {
 		return "", nil
 	}

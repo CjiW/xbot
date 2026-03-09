@@ -88,10 +88,13 @@ type Agent struct {
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
-	directSend       func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
-	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
-	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
-	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
+	directSend             func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
+	getChannelCapabilities func(string) bus.ChannelCapabilities      // 获取渠道能力
+	sessionMsgIDs          sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
+	sessionReplyTo         sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
+	sessionFinalSent       sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
+	sessionSenderID        sync.Map                                  // key: "channel:chatID" -> senderID string
+	sessionSenderName      sync.Map                                  // key: "channel:chatID" -> senderName string
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -238,6 +241,11 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
 }
 
+// SetGetChannelCapabilities 注入获取渠道能力的函数
+func (a *Agent) SetGetChannelCapabilities(fn func(string) bus.ChannelCapabilities) {
+	a.getChannelCapabilities = fn
+}
+
 // GetCardBuilder returns the CardBuilder for card callback handling.
 func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
@@ -313,6 +321,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	key := msg.Channel + ":" + msg.ChatID
 	a.sessionMsgIDs.Delete(key)
 	a.sessionFinalSent.Delete(key)
+	a.sessionSenderID.Store(key, msg.SenderID)
+	a.sessionSenderName.Store(key, msg.SenderName)
 	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
@@ -1109,6 +1119,26 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
+
+		// 构建 SessionContext
+		if senderIDIface, ok := a.sessionSenderID.Load(key); ok {
+			senderID := senderIDIface.(string)
+			senderName, _ := a.sessionSenderName.Load(key)
+			senderNameStr, _ := senderName.(string)
+
+			var caps bus.ChannelCapabilities
+			if a.getChannelCapabilities != nil {
+				caps = a.getChannelCapabilities(channel)
+			}
+			msg.SessionContext = &bus.SessionContext{
+				SenderID:           senderID,
+				SenderName:         senderNameStr,
+				WorkspaceRoot:      tools.UserWorkspaceRoot(a.workDir, senderID),
+				SupportsPatch:      caps.SupportsPatch,
+				SupportsCard:       caps.SupportsCard,
+				SupportsFileUpload: caps.SupportsFileUpload,
+			}
+		}
 
 		// Cards should always create new messages, not patch existing ones
 		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)

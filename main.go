@@ -193,6 +193,14 @@ func main() {
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
 
+	// 注入获取渠道能力的函数
+	agentLoop.SetGetChannelCapabilities(func(ch string) bus.ChannelCapabilities {
+		if c, ok := disp.GetChannel(ch); ok {
+			return c.Capabilities()
+		}
+		return bus.ChannelCapabilities{}
+	})
+
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())

@@ -141,3 +141,25 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 
 	return "", fmt.Errorf("read path is outside allowed roots: %s", inputPath)
 }
+
+// ResolvePathForWorkspace 解析相对于 workspace root 的路径
+// 用于 channel 层，不需要完整的 ToolContext
+func ResolvePathForWorkspace(inputPath, workspaceRoot string) (string, error) {
+	if inputPath == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
+	if filepath.IsAbs(inputPath) {
+		return cleanAbsPath(inputPath)
+	}
+
+	if workspaceRoot == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+		return cleanAbsPath(filepath.Join(cwd, inputPath))
+	}
+
+	return cleanAbsPath(filepath.Join(workspaceRoot, inputPath))
+}

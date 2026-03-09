@@ -6,6 +6,8 @@ import "xbot/bus"
 type Channel interface {
 	// Name 返回渠道名称
 	Name() string
+	// Capabilities 返回渠道能力
+	Capabilities() bus.ChannelCapabilities
 	// Start 启动渠道，阻塞运行直到 ctx 取消
 	Start() error
 	// Stop 停止渠道

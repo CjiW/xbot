@@ -43,13 +43,34 @@ type InboundMessage struct {
 	IsCron     bool // 是否由 cron 定时任务触发
 }
 
+// SessionContext 封装 session 级上下文信息
+type SessionContext struct {
+	// Session 级信息
+	SenderID      string // 发送者 ID
+	SenderName    string // 发送者姓名
+	WorkspaceRoot string // 用户沙盒工作目录
+
+	// Channel capabilities（便于下游直接使用）
+	SupportsPatch      bool
+	SupportsCard       bool
+	SupportsFileUpload bool
+}
+
+// ChannelCapabilities 描述渠道的能力
+type ChannelCapabilities struct {
+	SupportsPatch      bool // 是否支持消息更新（飞书支持，QQ不支持）
+	SupportsCard       bool // 是否支持卡片消息
+	SupportsFileUpload bool // 是否支持文件上传
+}
+
 // OutboundMessage 发送到 IM 渠道的出站消息
 type OutboundMessage struct {
-	Channel  string            // 目标渠道
-	ChatID   string            // 目标会话
-	Content  string            // 消息文本
-	Media    []string          // 附件文件路径
-	Metadata map[string]string // 附加元数据
+	Channel        string            // 目标渠道
+	ChatID         string            // 目标会话
+	Content        string            // 消息文本
+	Media          []string          // 附件文件路径
+	Metadata       map[string]string // 附加元数据
+	SessionContext *SessionContext   // Session 级上下文
 }
 
 // MessageBus 异步消息总线，解耦渠道和 Agent

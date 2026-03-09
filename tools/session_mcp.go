@@ -12,9 +12,7 @@ import (
 
 	"xbot/llm"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // SessionMCPManager 管理单个会话的 MCP 连接
@@ -116,7 +114,7 @@ func (sm *SessionMCPManager) GetSessionTools() []Tool {
 	var tools []Tool
 	for _, conn := range sm.connections {
 		for _, tool := range conn.tools {
-			remoteTool := newSessionMCPRemoteTool(conn.name, tool, conn.client, sm)
+			remoteTool := newSessionMCPRemoteTool(conn.name, tool, conn.session, sm)
 			tools = append(tools, remoteTool)
 		}
 	}
@@ -239,16 +237,19 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 // connectServer 连接单个 MCP Server
 func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig) error {
 	var (
-		client    *mcpclient.Client
-		transport any
-		err       error
+		session *mcp.ClientSession
+		err     error
 	)
 
 	// 优先使用 HTTP transport（如果配置了 URL）
 	if cfg.URL != "" {
-		client, transport, err = sm.connectHTTPServer(ctx, cfg)
+		session, err = ConnectHTTPServer(ctx, cfg)
 	} else if cfg.Command != "" {
-		client, transport, err = sm.connectStdioServer(ctx, cfg)
+		configPath := sm.globalConfigPath
+		if configPath == "" {
+			configPath = sm.userConfigPath
+		}
+		session, err = ConnectStdioServer(ctx, cfg, configPath, sm.workspaceRoot)
 	} else {
 		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
@@ -257,35 +258,17 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		return err
 	}
 
-	// 初始化 MCP 协议
-	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "xbot",
-		Version: "1.0.0",
-	}
-
-	initResult, err := client.Initialize(connectCtx, initReq)
+	// 获取可用工具列表和服务器说明 (session is already initialized by Connect)
+	initResult, err := InitializeMCPClient(ctx, session)
 	if err != nil {
-		sm.closeTransport(transport)
-		return fmt.Errorf("initialize: %w", err)
-	}
-
-	// 获取可用工具列表
-	toolsResult, err := client.ListTools(connectCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		sm.closeTransport(transport)
-		return fmt.Errorf("list tools: %w", err)
+		_ = session.Close()
+		return err
 	}
 
 	conn := &mcpConnection{
 		name:         name,
-		client:       client,
-		transport:    transport,
-		tools:        toolsResult.Tools,
+		session:      session,
+		tools:        initResult.Tools,
 		instructions: initResult.Instructions,
 	}
 
@@ -306,85 +289,14 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 	return nil
 }
 
-// connectStdioServer 连接 stdio 模式的 MCP Server
-func (sm *SessionMCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	configPath := sm.globalConfigPath
-	if configPath == "" {
-		configPath = sm.userConfigPath
-	}
-	envList := BuildStdioEnv(cfg, configPath)
-
-	command := cfg.Command
-	args := cfg.Args
-	wrappedCommand, wrappedArgs, err := WrapCommandForSandbox(command, args, sm.workspaceRoot)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	stdioTransport := transport.NewStdio(wrappedCommand, envList, wrappedArgs...)
-
-	if err := stdioTransport.Start(ctx); err != nil {
-		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
-	}
-
-	client := mcpclient.NewClient(stdioTransport)
-	return client, stdioTransport, nil
-}
-
-// connectHTTPServer 连接 HTTP 模式的 MCP Server
-func (sm *SessionMCPManager) connectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	opts := []transport.StreamableHTTPCOption{}
-
-	if len(cfg.Headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
-	}
-
-	httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create HTTP transport: %w", err)
-	}
-
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := httpTransport.Start(connectCtx); err != nil {
-		return nil, nil, fmt.Errorf("start HTTP transport: %w", err)
-	}
-
-	client := mcpclient.NewClient(httpTransport)
-	return client, httpTransport, nil
-}
-
 // closeConnection 关闭单个连接
 func (sm *SessionMCPManager) closeConnection(conn *mcpConnection) {
-	if conn != nil {
-		sm.closeTransport(conn.transport)
-	}
-}
-
-// closeTransport 关闭指定类型的 transport
-func (sm *SessionMCPManager) closeTransport(t any) {
-	switch tr := t.(type) {
-	case interface{ Close() error }:
-		// 使用 goroutine 和超时避免卡死
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			resultCh := make(chan error, 1)
-			go func() {
-				resultCh <- tr.Close()
-			}()
-
-			select {
-			case err := <-resultCh:
-				if err != nil && !IsProcessExitError(err) {
-					log.WithError(err).Debug("Error closing MCP transport")
-				}
-			case <-ctx.Done():
-				// 超时不等待
+	if conn != nil && conn.session != nil {
+		if err := conn.session.Close(); err != nil {
+			if !IsProcessExitError(err) {
+				log.WithError(err).Debug("Error closing MCP session")
 			}
-		}()
+		}
 	}
 }
 
@@ -437,15 +349,15 @@ func (sm *SessionMCPManager) loadConfig() (*MCPConfig, error) {
 // SessionMCPRemoteTool 封装一个远程 MCP 工具为 xbot Tool（会话感知）
 type SessionMCPRemoteTool struct {
 	serverName    string
-	tool          mcp.Tool
-	client        *mcpclient.Client
+	tool          *mcp.Tool
+	session       *mcp.ClientSession
 	sessionMCPMgr *SessionMCPManager // 会话 MCP 管理器
 	params        []llm.ToolParam
 	description   string
 }
 
 // newSessionMCPRemoteTool 创建 SessionMCPRemoteTool
-func newSessionMCPRemoteTool(serverName string, tool mcp.Tool, client *mcpclient.Client, sessionMCPMgr *SessionMCPManager) *SessionMCPRemoteTool {
+func newSessionMCPRemoteTool(serverName string, tool *mcp.Tool, session *mcp.ClientSession, sessionMCPMgr *SessionMCPManager) *SessionMCPRemoteTool {
 	params := convertMCPParams(tool)
 	desc := tool.Description
 	if desc == "" {
@@ -455,7 +367,7 @@ func newSessionMCPRemoteTool(serverName string, tool mcp.Tool, client *mcpclient
 	return &SessionMCPRemoteTool{
 		serverName:    serverName,
 		tool:          tool,
-		client:        client,
+		session:       session,
 		sessionMCPMgr: sessionMCPMgr,
 		params:        params,
 		description:   desc,
@@ -505,13 +417,11 @@ func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		}
 	}
 
-	// 构建 MCP CallToolRequest
-	req := mcp.CallToolRequest{}
-	req.Params.Name = t.tool.Name
-	req.Params.Arguments = args
-
 	// 调用远程工具
-	result, err := t.client.CallTool(ctx.Ctx, req)
+	result, err := t.session.CallTool(ctx.Ctx, &mcp.CallToolParams{
+		Name:      t.tool.Name,
+		Arguments: args,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP call %s/%s: %w", t.serverName, t.tool.Name, err)
 	}

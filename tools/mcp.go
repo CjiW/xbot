@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +12,7 @@ import (
 
 	"xbot/llm"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // MCPManager 管理所有 MCP Server 连接
@@ -74,16 +72,16 @@ func (m *MCPManager) LoadAndConnect(ctx context.Context) error {
 // connectServer 连接单个 MCP Server
 func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig) error {
 	var (
-		client    *mcpclient.Client
-		transport any
-		err       error
+		session *mcp.ClientSession
+		err     error
 	)
 
 	// 优先使用 HTTP transport（如果配置了 URL）
 	if cfg.URL != "" {
-		client, transport, err = m.connectHTTPServer(ctx, cfg)
+		session, err = ConnectHTTPServer(ctx, cfg)
 	} else if cfg.Command != "" {
-		client, transport, err = m.connectStdioServer(ctx, cfg)
+		ws := resolveWorkspaceRoot(m.configPath)
+		session, err = ConnectStdioServer(ctx, cfg, m.configPath, ws)
 	} else {
 		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
@@ -92,35 +90,17 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		return err
 	}
 
-	// 初始化 MCP 协议（npx 启动慢，给足时间）
-	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "xbot",
-		Version: "1.0.0",
-	}
-
-	initResult, err := client.Initialize(connectCtx, initReq)
+	// 获取可用工具列表和服务器说明 (session is already initialized by Connect)
+	initResult, err := InitializeMCPClient(ctx, session)
 	if err != nil {
-		m.closeTransport(transport)
-		return fmt.Errorf("initialize: %w", err)
-	}
-
-	// 获取可用工具列表
-	toolsResult, err := client.ListTools(connectCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		m.closeTransport(transport)
-		return fmt.Errorf("list tools: %w", err)
+		_ = session.Close()
+		return err
 	}
 
 	conn := &mcpConnection{
 		name:         name,
-		client:       client,
-		transport:    transport,
-		tools:        toolsResult.Tools,
+		session:      session,
+		tools:        initResult.Tools,
 		instructions: initResult.Instructions,
 	}
 
@@ -139,19 +119,6 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	}).Infof("MCP server connected (%d tools)", len(conn.tools))
 
 	return nil
-}
-
-// connectStdioServer 连接 stdio 模式的 MCP Server
-func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	// Derive a workspace root from the MCP config path so sandbox runner
-	// uses the repository/workspace as PWD instead of the process cwd.
-	ws := resolveWorkspaceRoot(m.configPath)
-	return ConnectStdioServer(ctx, cfg, m.configPath, ws)
-}
-
-// connectHTTPServer 连接 HTTP 模式的 MCP Server
-func (m *MCPManager) connectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	return ConnectHTTPServer(ctx, cfg)
 }
 
 // GetCatalog 返回所有已连接 MCP Server 的目录信息（服务器名、说明、工具列表）
@@ -185,7 +152,7 @@ func (m *MCPManager) RegisterTools(registry *Registry) {
 
 	for _, conn := range m.connections {
 		for _, tool := range conn.tools {
-			remoteTool := newMCPRemoteTool(conn.name, tool, conn.client)
+			remoteTool := newMCPRemoteTool(conn.name, tool, conn.session)
 			registry.Register(remoteTool)
 		}
 	}
@@ -225,7 +192,7 @@ func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry 
 
 	if newConn != nil {
 		for _, tool := range newConn.tools {
-			remoteTool := newMCPRemoteTool(newConn.name, tool, newConn.client)
+			remoteTool := newMCPRemoteTool(newConn.name, tool, newConn.session)
 			registry.Register(remoteTool)
 		}
 	}
@@ -243,7 +210,7 @@ func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry 
 				registry.Unregister(toolName)
 			}
 		}
-		m.closeTransport(oldConn.transport)
+		_ = oldConn.session.Close()
 	}
 
 	log.WithField("server", name).Info("MCP server reconnected")
@@ -264,50 +231,18 @@ func (m *MCPManager) Close() {
 	var wg sync.WaitGroup
 	for name, conn := range conns {
 		wg.Add(1)
-		go func(nm string, tr any) {
+		go func(nm string, c *mcpConnection) {
 			defer wg.Done()
-			// 设置 5 秒超时，避免等待卡死的子进程
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			if err := m.closeTransportWithContext(ctx, tr); err != nil {
-				// "exit status 1" 等子进程退出错误是正常的，不需要 Warn
+			if err := c.session.Close(); err != nil {
 				if !IsProcessExitError(err) {
 					log.WithError(err).WithField("server", nm).Warn("Error closing MCP connection")
 				} else {
 					log.WithField("server", nm).Debug("MCP connection closed (process exited)")
 				}
 			}
-		}(name, conn.transport)
+		}(name, conn)
 	}
 	wg.Wait()
-}
-
-// closeTransport 关闭指定类型的 transport
-func (m *MCPManager) closeTransport(t any) {
-	CloseTransport(t)
-}
-
-// closeTransportWithContext 带超时的关闭 transport
-func (m *MCPManager) closeTransportWithContext(ctx context.Context, t any) error {
-	switch tr := t.(type) {
-	case interface{ Close() error }:
-		// 在 goroutine 中执行 Close，通过 channel 传递结果
-		resultCh := make(chan error, 1)
-		go func() {
-			resultCh <- tr.Close()
-		}()
-
-		select {
-		case err := <-resultCh:
-			return err
-		case <-ctx.Done():
-			// 超时不等待，直接返回（进程会被系统回收）
-			return ctx.Err()
-		}
-	default:
-		return nil
-	}
 }
 
 // ServerCount 返回已连接的 MCP Server 数量
@@ -327,14 +262,14 @@ func (m *MCPManager) loadConfig() (*MCPConfig, error) {
 // MCPRemoteTool 封装一个远程 MCP 工具为 xbot Tool
 type MCPRemoteTool struct {
 	serverName  string
-	tool        mcp.Tool
-	client      *mcpclient.Client
+	tool        *mcp.Tool
+	session     *mcp.ClientSession
 	params      []llm.ToolParam
 	description string
 }
 
 // newMCPRemoteTool 创建 MCPRemoteTool
-func newMCPRemoteTool(serverName string, tool mcp.Tool, client *mcpclient.Client) *MCPRemoteTool {
+func newMCPRemoteTool(serverName string, tool *mcp.Tool, session *mcp.ClientSession) *MCPRemoteTool {
 	params := convertMCPParams(tool)
 	desc := tool.Description
 	if desc == "" {
@@ -344,7 +279,7 @@ func newMCPRemoteTool(serverName string, tool mcp.Tool, client *mcpclient.Client
 	return &MCPRemoteTool{
 		serverName:  serverName,
 		tool:        tool,
-		client:      client,
+		session:     session,
 		params:      params,
 		description: desc,
 	}
@@ -389,13 +324,11 @@ func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 		}
 	}
 
-	// 构建 MCP CallToolRequest
-	req := mcp.CallToolRequest{}
-	req.Params.Name = t.tool.Name
-	req.Params.Arguments = args
-
 	// 调用远程工具
-	result, err := t.client.CallTool(ctx.Ctx, req)
+	result, err := t.session.CallTool(ctx.Ctx, &mcp.CallToolParams{
+		Name:      t.tool.Name,
+		Arguments: args,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP call %s/%s: %w", t.serverName, t.tool.Name, err)
 	}
@@ -408,95 +341,4 @@ func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 	}
 
 	return NewResult(content), nil
-}
-
-// convertMCPParams 将 MCP Tool 的 JSON Schema 参数转为 xbot ToolParam 列表
-func convertMCPParams(tool mcp.Tool) []llm.ToolParam {
-	schema := tool.InputSchema
-	props := schema.Properties
-	if props == nil {
-		return nil
-	}
-
-	// 构建 required 集合
-	requiredSet := make(map[string]bool)
-	for _, r := range schema.Required {
-		requiredSet[r] = true
-	}
-
-	var params []llm.ToolParam
-	for name, propRaw := range props {
-		// propRaw 是 interface{}，通常是 map[string]interface{}
-		propMap, ok := propRaw.(map[string]interface{})
-		if !ok {
-			params = append(params, llm.ToolParam{
-				Name:     name,
-				Type:     "string",
-				Required: requiredSet[name],
-			})
-			continue
-		}
-
-		paramType := "string"
-		if t, ok := propMap["type"].(string); ok {
-			paramType = t
-		}
-
-		desc := ""
-		if d, ok := propMap["description"].(string); ok {
-			desc = d
-		}
-
-		// 如果有 enum，附加到描述
-		if enumVals, ok := propMap["enum"].([]interface{}); ok && len(enumVals) > 0 {
-			enumStrs := make([]string, len(enumVals))
-			for i, v := range enumVals {
-				enumStrs[i] = fmt.Sprintf("%v", v)
-			}
-			desc += fmt.Sprintf(" (options: %s)", strings.Join(enumStrs, ", "))
-		}
-
-		params = append(params, llm.ToolParam{
-			Name:        name,
-			Type:        paramType,
-			Description: desc,
-			Required:    requiredSet[name],
-		})
-	}
-	return params
-}
-
-// formatMCPResult 将 MCP CallToolResult 的 Content 转为文本
-func formatMCPResult(result *mcp.CallToolResult) string {
-	if result == nil || len(result.Content) == 0 {
-		return "(no output)"
-	}
-
-	var parts []string
-	for _, c := range result.Content {
-		switch v := c.(type) {
-		case mcp.TextContent:
-			parts = append(parts, v.Text)
-		case *mcp.TextContent:
-			parts = append(parts, v.Text)
-		case mcp.ImageContent:
-			parts = append(parts, fmt.Sprintf("[image: %s]", v.MIMEType))
-		case *mcp.ImageContent:
-			parts = append(parts, fmt.Sprintf("[image: %s]", v.MIMEType))
-		case mcp.AudioContent:
-			parts = append(parts, fmt.Sprintf("[audio: %s]", v.MIMEType))
-		case *mcp.AudioContent:
-			parts = append(parts, fmt.Sprintf("[audio: %s]", v.MIMEType))
-		case mcp.EmbeddedResource:
-			data, _ := json.Marshal(v)
-			parts = append(parts, string(data))
-		case *mcp.EmbeddedResource:
-			data, _ := json.Marshal(v)
-			parts = append(parts, string(data))
-		default:
-			data, _ := json.Marshal(c)
-			parts = append(parts, string(data))
-		}
-	}
-	return strings.Join(parts, "\n")
 }

@@ -53,8 +53,8 @@ type SubAgentManager interface {
 
 // ToolResult 工具执行结果
 type ToolResult struct {
-	Summary     string `json:"summary,omitempty"` // 精简结果，进入 LLM 上下文
-	Detail      string `json:"detail,omitempty"`  // 详细内容（如 diff），进入 LLM 上下文；同时可用于前端展示
+	Summary     string `json:"summary,omitempty"` // 精简结果，log用
+	Detail      string `json:"detail,omitempty"`  // 详细内容
 	Tips        string `json:"tips,omitempty"`    // 操作指引，帮助 LLM 理解下一步操作
 	WaitingUser bool   `json:"-"`                 // 控制字段：是否等待用户响应（不进入 LLM 上下文）
 }

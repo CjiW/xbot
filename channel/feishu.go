@@ -217,11 +217,11 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 
 		var msgID string
 		if updateMsgID != "" {
-			if err := f.patchMessageWithRetry(updateMsgID, []byte(cardJSON), 3); err != nil {
-				log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: card patch failed after retries, skip create fallback to avoid duplicate message")
-				return updateMsgID, nil
+			if err := f.patchMessage(updateMsgID, []byte(cardJSON)); err != nil {
+				log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: card patch failed, falling back to create")
+			} else {
+				msgID = updateMsgID
 			}
-			msgID = updateMsgID
 		}
 		if msgID == "" {
 			var err error
@@ -279,11 +279,11 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		updateMsgID = msg.Metadata["update_message_id"]
 	}
 	if updateMsgID != "" {
-		if err := f.patchMessageWithRetry(updateMsgID, cardJSON, 3); err != nil {
-			log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: patch failed after retries, skip create fallback to avoid duplicate message")
+		if err := f.patchMessage(updateMsgID, cardJSON); err != nil {
+			log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: patch failed, falling back to create")
+		} else {
 			return updateMsgID, nil
 		}
-		return updateMsgID, nil
 	}
 
 	// 检查是否需要回复消息（reply 模式）
@@ -391,37 +391,11 @@ func (f *FeishuChannel) patchMessage(messageID string, cardJSON []byte) error {
 		return fmt.Errorf("patch feishu message: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu patch API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		return fmt.Errorf("feishu patch API error: code=%d, msg=%s detail: %s", resp.Code, resp.Msg, resp.ErrorResp())
 	}
 
 	log.WithField("message_id", messageID).Debug("Feishu message patched")
 	return nil
-}
-
-func (f *FeishuChannel) patchMessageWithRetry(messageID string, cardJSON []byte, maxAttempts int) error {
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if err := f.patchMessage(messageID, cardJSON); err != nil {
-			lastErr = err
-			if attempt < maxAttempts {
-				log.WithFields(log.Fields{
-					"message_id": messageID,
-					"attempt":    attempt,
-					"max":        maxAttempts,
-				}).WithError(err).Warn("Feishu: patch failed, retrying")
-				time.Sleep(time.Duration(attempt) * 120 * time.Millisecond)
-				continue
-			}
-			return err
-		}
-		return nil
-	}
-
-	return lastErr
 }
 
 // addReaction 对指定消息添加表情回复

@@ -175,7 +175,7 @@ func main() {
 			EncryptKey:        cfg.Feishu.EncryptKey,
 			VerificationToken: cfg.Feishu.VerificationToken,
 			AllowFrom:         cfg.Feishu.AllowFrom,
-		}, msgBus)
+		}, msgBus, workDir)
 		disp.Register(feishuCh)
 
 	}

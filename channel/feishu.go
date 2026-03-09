@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,16 +59,22 @@ type FeishuChannel struct {
 
 	// CardBuilder for card callback handling
 	cardBuilder *tools.CardBuilder
+	// server working directory (root for user workspaces)
+	workDir string
 }
 
 // NewFeishuChannel 创建飞书渠道
-func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
+func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus, workDir string) *FeishuChannel {
+	if workDir == "" {
+		workDir = "."
+	}
 	return &FeishuChannel{
 		config:        cfg,
 		msgBus:        msgBus,
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
 		userNameCache: make(map[string]string),
+		workDir:       workDir,
 	}
 }
 
@@ -248,9 +255,9 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}).Debug("Feishu: sending message")
 
 	// 1) 提取 markdown 中的本地文件链接 [name](path)，上传并单独发送，从内容中移除
-	content := f.extractAndSendLocalFiles(msg.ChatID, msg.Content)
+	content := f.extractAndSendLocalFiles(msg.ChatID, msg.Content, msg.Metadata)
 	// 2) 替换 markdown 中的本地图片引用 ![alt](path) 为飞书 image_key
-	content = f.replaceLocalImages(content)
+	content = f.replaceLocalImages(content, msg.Metadata)
 
 	if strings.TrimSpace(content) == "" {
 		return "", nil
@@ -432,7 +439,7 @@ var imageExtensions = map[string]bool{
 var mdLinkRe = regexp.MustCompile(`(?:^|[^!])\[([^\]]+)\]\(([^)]+)\)`)
 
 // extractAndSendLocalFiles 从 markdown 中提取本地文件链接（非图片），上传并发送文件消息，从内容中移除该链接
-func (f *FeishuChannel) extractAndSendLocalFiles(chatID, content string) string {
+func (f *FeishuChannel) extractAndSendLocalFiles(chatID, content string, metadata map[string]string) string {
 	return mdLinkRe.ReplaceAllStringFunc(content, func(match string) string {
 		subs := mdLinkRe.FindStringSubmatch(match)
 		if len(subs) < 3 {
@@ -457,18 +464,23 @@ func (f *FeishuChannel) extractAndSendLocalFiles(chatID, content string) string 
 			return match
 		}
 
+		// Resolve and validate path against workspace
+		resolved, ok := f.resolveAndValidatePath(linkPath, metadata)
+		if !ok {
+			return match
+		}
 		// 检查文件是否存在
-		if _, err := os.Stat(linkPath); err != nil {
+		if _, err := os.Stat(resolved); err != nil {
 			return match
 		}
 
 		// 上传并发送文件
-		if err := f.sendFile(chatID, linkPath); err != nil {
+		if err := f.sendFile(chatID, resolved); err != nil {
 			log.WithError(err).WithField("path", linkPath).Warn("Failed to send local file")
 			return match
 		}
 
-		log.WithField("path", linkPath).Debug("Sent local file from markdown link")
+		log.WithField("path", resolved).Debug("Sent local file from markdown link")
 
 		// 替换链接为纯文本提示
 		return prefix + "📎 " + subs[1]
@@ -587,6 +599,55 @@ func (f *FeishuChannel) detectFileType(filePath string) string {
 	default:
 		return "stream"
 	}
+}
+
+// resolveAndValidatePath resolves a candidate path and ensures it is within the allowed workspace.
+// If metadata contains "sender_id", the user's workspace root is used as base for relative paths
+// and as the allowed root for absolute paths. Otherwise the server workDir is used.
+func (f *FeishuChannel) resolveAndValidatePath(candidate string, metadata map[string]string) (string, bool) {
+	// empty candidate
+	if strings.TrimSpace(candidate) == "" {
+		return "", false
+	}
+
+	// Determine base root
+	base := f.workDir
+	if metadata != nil {
+		if sid, ok := metadata["sender_id"]; ok && sid != "" {
+			base = tools.UserWorkspaceRoot(f.workDir, sid)
+		}
+	}
+
+	// If relative path, interpret relative to base
+	var p string
+	if filepath.IsAbs(candidate) {
+		p = filepath.Clean(candidate)
+	} else {
+		p = filepath.Clean(filepath.Join(base, candidate))
+	}
+
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(base, abs)
+	if err != nil {
+		return "", false
+	}
+	if rel == "." {
+		return abs, true
+	}
+	if strings.HasPrefix(rel, "..") {
+		// on Windows, also check case-insensitive
+		if runtime.GOOS == "windows" {
+			if !strings.HasPrefix(strings.ToLower(rel), "..") {
+				return abs, true
+			}
+		}
+		return "", false
+	}
+	return abs, true
 }
 
 // onMessage 处理收到的消息
@@ -1328,7 +1389,7 @@ func (f *FeishuChannel) extractFromLang(langContent map[string]any, messageId st
 var mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 
 // replaceLocalImages 扫描 markdown 中的本地图片引用，上传后替换为飞书 image_key
-func (f *FeishuChannel) replaceLocalImages(content string) string {
+func (f *FeishuChannel) replaceLocalImages(content string, metadata map[string]string) string {
 	return mdImageRe.ReplaceAllStringFunc(content, func(match string) string {
 		subs := mdImageRe.FindStringSubmatch(match)
 		if len(subs) < 3 {
@@ -1347,21 +1408,28 @@ func (f *FeishuChannel) replaceLocalImages(content string) string {
 			return match
 		}
 
+		// Resolve and validate against workspace
+		resolved, ok := f.resolveAndValidatePath(imgPath, metadata)
+		if !ok {
+			log.WithField("path", imgPath).Debug("Local image not within workspace, keeping original markdown")
+			return match
+		}
+
 		// 检查文件是否存在
-		if _, err := os.Stat(imgPath); err != nil {
-			log.WithField("path", imgPath).Debug("Local image not found, keeping original markdown")
+		if _, err := os.Stat(resolved); err != nil {
+			log.WithField("path", resolved).Debug("Local image not found, keeping original markdown")
 			return match
 		}
 
 		// 上传图片
-		imageKey, err := f.uploadImage(imgPath)
+		imageKey, err := f.uploadImage(resolved)
 		if err != nil {
-			log.WithError(err).WithField("path", imgPath).Warn("Failed to upload local image, keeping original markdown")
+			log.WithError(err).WithField("path", resolved).Warn("Failed to upload local image, keeping original markdown")
 			return match
 		}
 
 		log.WithFields(log.Fields{
-			"path":      imgPath,
+			"path":      resolved,
 			"image_key": imageKey,
 		}).Debug("Replaced local image with image_key")
 

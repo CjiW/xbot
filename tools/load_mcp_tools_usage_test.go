@@ -3,8 +3,11 @@ package tools
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"xbot/llm"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // mockMCPTool simulates a registered MCPRemoteTool for testing purposes.
@@ -25,6 +28,34 @@ func (m *mockMCPTool) Execute(_ *ToolContext, _ string) (*ToolResult, error) {
 func (m *mockMCPTool) fullDescription() string     { return m.description }
 func (m *mockMCPTool) fullParams() []llm.ToolParam { return m.params }
 func (m *mockMCPTool) mcpServerName() string       { return m.server }
+
+type mockBuiltinTool struct {
+	name string
+}
+
+func (m *mockBuiltinTool) Name() string                { return m.name }
+func (m *mockBuiltinTool) Description() string         { return "builtin test tool" }
+func (m *mockBuiltinTool) Parameters() []llm.ToolParam { return nil }
+func (m *mockBuiltinTool) Execute(_ *ToolContext, _ string) (*ToolResult, error) {
+	return NewResult("ok"), nil
+}
+
+type mockSessionMCPProvider struct {
+	manager *SessionMCPManager
+}
+
+func (m *mockSessionMCPProvider) GetSessionMCPManager(_ string) *SessionMCPManager {
+	return m.manager
+}
+
+func hasToolDefinitionName(defs []llm.ToolDefinition, name string) bool {
+	for _, d := range defs {
+		if d.Name() == name {
+			return true
+		}
+	}
+	return false
+}
 
 func TestLoadMCPToolsUsageTool_Name(t *testing.T) {
 	tool := &LoadMCPToolsUsageTool{}
@@ -230,6 +261,54 @@ func TestMCPRemoteTool_StubMode(t *testing.T) {
 		}
 	} else {
 		t.Error("Tool should implement mcpSchemaProvider")
+	}
+}
+
+func TestRegistry_AsDefinitionsForSession_FiltersGlobalMCPStubTools(t *testing.T) {
+	registry := NewRegistry()
+
+	registry.Register(&mockBuiltinTool{name: "builtin_tool"})
+	registry.Register(&mockMCPTool{
+		name:        "search",
+		server:      "github",
+		description: "Search",
+		params: []llm.ToolParam{
+			{Name: "query", Type: "string", Required: true},
+		},
+	})
+
+	defs := registry.AsDefinitionsForSession("test:chat")
+
+	if !hasToolDefinitionName(defs, "builtin_tool") {
+		t.Fatal("Expected builtin tool in function definitions")
+	}
+	if hasToolDefinitionName(defs, "mcp_github_search") {
+		t.Fatal("MCP stub tool should be excluded from function definitions")
+	}
+}
+
+func TestRegistry_AsDefinitionsForSession_FiltersSessionMCPStubTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "builtin_tool"})
+
+	sessionMCP := NewSessionMCPManager("test:chat", "", "", "", time.Minute)
+	sessionMCP.initialized = true
+	sessionMCP.connections["github"] = &mcpConnection{
+		name: "github",
+		tools: []mcp.Tool{
+			{Name: "search", Description: "Search"},
+		},
+	}
+
+	registry.SetSessionMCPManagerProvider(&mockSessionMCPProvider{manager: sessionMCP})
+
+	defs := registry.AsDefinitionsForSession("test:chat")
+
+	if !hasToolDefinitionName(defs, "builtin_tool") {
+		t.Fatal("Expected builtin tool in function definitions")
+	}
+	if hasToolDefinitionName(defs, "mcp_github_search") {
+		t.Fatal("Session MCP stub tool should be excluded from function definitions")
 	}
 }
 

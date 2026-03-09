@@ -152,6 +152,9 @@ func (r *Registry) AsDefinitions() []llm.ToolDefinition {
 	defer r.mu.RUnlock()
 	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
 	for _, tool := range r.globalTools {
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
+		}
 		defs = append(defs, tool)
 	}
 	sort.Slice(defs, func(i, j int) bool {
@@ -175,6 +178,9 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 	// 收集全局工具
 	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
 	for _, tool := range r.globalTools {
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
+		}
 		defs = append(defs, tool)
 	}
 
@@ -184,6 +190,9 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 		if sessionMCP != nil {
 			sessionTools := sessionMCP.GetSessionTools()
 			for _, tool := range sessionTools {
+				if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+					continue
+				}
 				defs = append(defs, tool)
 			}
 		}

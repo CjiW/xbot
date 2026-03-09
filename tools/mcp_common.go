@@ -92,6 +92,21 @@ func resolveXbotBinDir(configPath string) string {
 	return ""
 }
 
+// resolveWorkspaceRoot 推断工作区根路径：
+// - 如果 configPath 位于 .xbot/ 下，返回 .xbot 的父目录（项目根）
+// - 否则返回 configPath 所在目录
+func resolveWorkspaceRoot(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+
+	dir := filepath.Dir(configPath)
+	if strings.HasSuffix(dir, string(filepath.Separator)+".xbot") || filepath.Base(dir) == ".xbot" {
+		return filepath.Dir(dir)
+	}
+	return dir
+}
+
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcpclient.Client, any, error) {
 	envList := BuildStdioEnv(cfg, configPath)

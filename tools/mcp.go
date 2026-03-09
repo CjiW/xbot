@@ -143,7 +143,10 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 
 // connectStdioServer 连接 stdio 模式的 MCP Server
 func (m *MCPManager) connectStdioServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	return ConnectStdioServer(ctx, cfg, m.configPath, "")
+	// Derive a workspace root from the MCP config path so sandbox runner
+	// uses the repository/workspace as PWD instead of the process cwd.
+	ws := resolveWorkspaceRoot(m.configPath)
+	return ConnectStdioServer(ctx, cfg, m.configPath, ws)
 }
 
 // connectHTTPServer 连接 HTTP 模式的 MCP Server

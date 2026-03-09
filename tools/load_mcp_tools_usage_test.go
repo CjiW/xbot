@@ -7,7 +7,7 @@ import (
 
 	"xbot/llm"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // mockMCPTool simulates a registered MCPRemoteTool for testing purposes.
@@ -295,7 +295,7 @@ func TestRegistry_AsDefinitionsForSession_FiltersSessionMCPStubTools(t *testing.
 	sessionMCP.initialized = true
 	sessionMCP.connections["github"] = &mcpConnection{
 		name: "github",
-		tools: []mcp.Tool{
+		tools: []*mcp.Tool{
 			{Name: "search", Description: "Search"},
 		},
 	}

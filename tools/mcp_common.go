@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	log "xbot/logger"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/client/transport"
-	"github.com/mark3labs/mcp-go/mcp"
+	"xbot/llm"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // MCPServerConfig 单个 MCP Server 的配置
@@ -34,9 +36,8 @@ type MCPConfig struct {
 // mcpConnection MCP 连接封装
 type mcpConnection struct {
 	name         string
-	client       *mcpclient.Client
-	transport    any
-	tools        []mcp.Tool
+	session      *mcp.ClientSession
+	tools        []*mcp.Tool
 	instructions string // from server's InitializeResult
 }
 
@@ -46,6 +47,13 @@ type MCPServerCatalogEntry struct {
 	Instructions string   // Server 初始化返回的使用说明
 	ToolNames    []string // 工具名称列表（不含参数信息）
 }
+
+// sharedMCPClient is a singleton MCP client shared across all connections.
+// The official SDK separates Client (long-lived) from ClientSession (per-connection).
+var sharedMCPClient = mcp.NewClient(&mcp.Implementation{
+	Name:    "xbot",
+	Version: "1.0.0",
+}, nil)
 
 // BuildStdioEnv 构建 stdio 模式的环境变量列表，将 .xbot/bin 加入 PATH
 func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
@@ -108,75 +116,59 @@ func resolveWorkspaceRoot(configPath string) string {
 }
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcpclient.Client, any, error) {
+// Returns a ClientSession (auto-initialized) and the session itself for closing.
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
 	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	// 创建 stdio transport
-	stdioTransport := transport.NewStdio(cmd, envList, args...)
-
-	// 使用父级 context 启动 transport，因为子进程生命周期绑定到此 context
-	if err := stdioTransport.Start(ctx); err != nil {
-		return nil, nil, fmt.Errorf("start stdio transport: %w", err)
+	// Build exec.Cmd for CommandTransport
+	execCmd := exec.Command(cmd, args...)
+	if len(envList) > 0 {
+		// Inherit current env and append MCP-specific env
+		execCmd.Env = append(os.Environ(), envList...)
 	}
 
-	client := mcpclient.NewClient(stdioTransport)
-	return client, stdioTransport, nil
+	transport := &mcp.CommandTransport{
+		Command:           execCmd,
+		TerminateDuration: 5 * time.Second,
+	}
+
+	// Connect auto-initializes the MCP session (initialize + initialized handshake)
+	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect stdio: %w", err)
+	}
+
+	return session, nil
 }
 
 // ConnectHTTPServer 连接 HTTP 模式的 MCP Server（公共函数）
-func ConnectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcpclient.Client, any, error) {
-	opts := []transport.StreamableHTTPCOption{}
+func ConnectHTTPServer(ctx context.Context, cfg MCPServerConfig) (*mcp.ClientSession, error) {
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: cfg.URL,
+	}
 
-	// 添加 headers
+	// Note: Headers are injected via custom HTTP client if needed.
+	// The official SDK's StreamableClientTransport uses HTTPClient field.
 	if len(cfg.Headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+		transport.HTTPClient = newHeaderInjectorClient(cfg.Headers)
 	}
 
-	// 创建 HTTP transport
-	httpTransport, err := transport.NewStreamableHTTP(cfg.URL, opts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create HTTP transport: %w", err)
-	}
-
-	// 启动 transport
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	if err := httpTransport.Start(connectCtx); err != nil {
-		return nil, nil, fmt.Errorf("start HTTP transport: %w", err)
+	session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect HTTP: %w", err)
 	}
 
-	client := mcpclient.NewClient(httpTransport)
-	return client, httpTransport, nil
-}
-
-// CloseTransport 关闭指定类型的 transport（公共函数）
-func CloseTransport(t any) {
-	switch tr := t.(type) {
-	case interface{ Close() error }:
-		// 使用 goroutine 和超时避免卡死
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			resultCh := make(chan error, 1)
-			go func() {
-				resultCh <- tr.Close()
-			}()
-
-			select {
-			case err := <-resultCh:
-				// 忽略进程退出错误，只记录其他错误
-				_ = err
-			case <-ctx.Done():
-				// 超时不等待
-			}
-		}()
-	}
+	return session, nil
 }
 
 // IsProcessExitError 判断是否为子进程退出错误（如 "exit status 1"）
@@ -184,31 +176,134 @@ func IsProcessExitError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// 检查错误字符串是否包含 "exit status" 或 "signal:"
 	errStr := err.Error()
-	return hasPrefixSuffix(errStr, "exit status") || hasPrefixSuffix(errStr, "signal:")
+	return strings.Contains(errStr, "exit status") || strings.Contains(errStr, "signal:")
 }
 
-// hasPrefixSuffix 检查字符串是否以指定子串开头或结尾，或在中间包含
-func hasPrefixSuffix(s, substr string) bool {
-	if len(s) < len(substr) {
-		return false
-	}
-	if s == substr {
-		return true
-	}
-	if len(s) > len(substr) {
-		if s[:len(substr)] == substr || s[len(s)-len(substr):] == substr {
-			return true
+// MCPInitResult holds the result of MCP client initialization.
+type MCPInitResult struct {
+	Tools        []*mcp.Tool
+	Instructions string
+}
+
+// InitializeMCPClient lists tools and extracts server instructions from an already-connected session.
+// With the official SDK, Connect() auto-initializes; this function collects the results.
+func InitializeMCPClient(ctx context.Context, session *mcp.ClientSession) (*MCPInitResult, error) {
+	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	var tools []*mcp.Tool
+	for tool, err := range session.Tools(connectCtx, nil) {
+		if err != nil {
+			return nil, fmt.Errorf("list tools: %w", err)
 		}
-		// 检查中间
-		for i := 0; i <= len(s)-len(substr); i++ {
-			if s[i:i+len(substr)] == substr {
-				return true
+		tools = append(tools, tool)
+	}
+
+	var instructions string
+	if initResult := session.InitializeResult(); initResult != nil {
+		instructions = initResult.Instructions
+	}
+
+	return &MCPInitResult{
+		Tools:        tools,
+		Instructions: instructions,
+	}, nil
+}
+
+// ConvertMCPParams 将 MCP 参数转换为 LLM ToolParam 格式
+// The official SDK's Tool.InputSchema is `any` (client-side: map[string]any).
+func ConvertMCPParams(tool *mcp.Tool) []llm.ToolParam {
+	return convertMCPParams(tool)
+}
+
+// convertMCPParams 将 MCP Tool 的 JSON Schema 参数转为 xbot ToolParam 列表
+func convertMCPParams(tool *mcp.Tool) []llm.ToolParam {
+	schema, ok := tool.InputSchema.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	props, _ := schema["properties"].(map[string]any)
+	if props == nil {
+		return nil
+	}
+
+	// 构建 required 集合
+	requiredSet := make(map[string]bool)
+	if reqList, ok := schema["required"].([]any); ok {
+		for _, r := range reqList {
+			if s, ok := r.(string); ok {
+				requiredSet[s] = true
 			}
 		}
 	}
-	return false
+
+	var params []llm.ToolParam
+	for name, propRaw := range props {
+		propMap, ok := propRaw.(map[string]any)
+		if !ok {
+			params = append(params, llm.ToolParam{
+				Name:     name,
+				Type:     "string",
+				Required: requiredSet[name],
+			})
+			continue
+		}
+
+		paramType := "string"
+		if t, ok := propMap["type"].(string); ok {
+			paramType = t
+		}
+
+		desc := ""
+		if d, ok := propMap["description"].(string); ok {
+			desc = d
+		}
+
+		// 如果有 enum，附加到描述
+		if enumVals, ok := propMap["enum"].([]any); ok && len(enumVals) > 0 {
+			enumStrs := make([]string, len(enumVals))
+			for i, v := range enumVals {
+				enumStrs[i] = fmt.Sprintf("%v", v)
+			}
+			desc += fmt.Sprintf(" (options: %s)", strings.Join(enumStrs, ", "))
+		}
+
+		params = append(params, llm.ToolParam{
+			Name:        name,
+			Type:        paramType,
+			Description: desc,
+			Required:    requiredSet[name],
+		})
+	}
+	return params
+}
+
+// formatMCPResult 将 MCP CallToolResult 的 Content 转为文本
+func formatMCPResult(result *mcp.CallToolResult) string {
+	if result == nil || len(result.Content) == 0 {
+		return "(no output)"
+	}
+
+	var parts []string
+	for _, c := range result.Content {
+		switch v := c.(type) {
+		case *mcp.TextContent:
+			parts = append(parts, v.Text)
+		case *mcp.ImageContent:
+			parts = append(parts, fmt.Sprintf("[image: %s]", v.MIMEType))
+		case *mcp.AudioContent:
+			parts = append(parts, fmt.Sprintf("[audio: %s]", v.MIMEType))
+		case *mcp.EmbeddedResource:
+			data, _ := json.Marshal(v)
+			parts = append(parts, string(data))
+		default:
+			data, _ := json.Marshal(c)
+			parts = append(parts, string(data))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // LoadMCPConfig 从文件加载 MCP 配置
@@ -223,4 +318,27 @@ func LoadMCPConfig(configPath string) (*MCPConfig, error) {
 		return nil, fmt.Errorf("parse mcp.json: %w", err)
 	}
 	return &config, nil
+}
+
+// headerInjectorTransport wraps http.RoundTripper to inject custom headers.
+type headerInjectorTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *headerInjectorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// newHeaderInjectorClient creates an http.Client that injects custom headers into every request.
+func newHeaderInjectorClient(headers map[string]string) *http.Client {
+	return &http.Client{
+		Transport: &headerInjectorTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
+	}
 }

@@ -90,9 +90,9 @@ func TestRecallMemorySearchTool_NotAvailable(t *testing.T) {
 
 func TestRecallMemorySearchTool_DateRange(t *testing.T) {
 	entries := []vectordb.RecallEntry{
-		{Entry: "Discussed Go generics", CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)},
-		{Entry: "Go error handling patterns", CreatedAt: time.Date(2026, 3, 2, 14, 0, 0, 0, time.UTC)},
-		{Entry: "Rust ownership model", CreatedAt: time.Date(2026, 3, 3, 9, 0, 0, 0, time.UTC)},
+		{Entry: "Discussed Go generics", CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.Local)},
+		{Entry: "Go error handling patterns", CreatedAt: time.Date(2026, 3, 2, 14, 0, 0, 0, time.Local)},
+		{Entry: "Rust ownership model", CreatedAt: time.Date(2026, 3, 3, 9, 0, 0, 0, time.Local)},
 	}
 
 	tool := &RecallMemorySearchTool{}
@@ -116,9 +116,9 @@ func TestRecallMemorySearchTool_DateRange(t *testing.T) {
 
 func TestRecallMemorySearchTool_DateRangeFilter(t *testing.T) {
 	entries := []vectordb.RecallEntry{
-		{Entry: "Old message", CreatedAt: time.Date(2026, 2, 28, 10, 0, 0, 0, time.UTC)},
-		{Entry: "Match message", CreatedAt: time.Date(2026, 3, 1, 14, 0, 0, 0, time.UTC)},
-		{Entry: "Future message", CreatedAt: time.Date(2026, 3, 5, 9, 0, 0, 0, time.UTC)},
+		{Entry: "Old message", CreatedAt: time.Date(2026, 2, 28, 10, 0, 0, 0, time.Local)},
+		{Entry: "Match message", CreatedAt: time.Date(2026, 3, 1, 14, 0, 0, 0, time.Local)},
+		{Entry: "Future message", CreatedAt: time.Date(2026, 3, 5, 9, 0, 0, 0, time.Local)},
 	}
 
 	tool := &RecallMemorySearchTool{}
@@ -190,8 +190,8 @@ func TestRecallMemorySearchTool_NoResults(t *testing.T) {
 
 func TestRecallMemorySearchTool_ResultFormatting(t *testing.T) {
 	entries := []vectordb.RecallEntry{
-		{Entry: "First entry", CreatedAt: time.Date(2026, 3, 1, 10, 30, 0, 0, time.UTC)},
-		{Entry: "Second entry", CreatedAt: time.Date(2026, 3, 2, 15, 45, 0, 0, time.UTC)},
+		{Entry: "First entry", CreatedAt: time.Date(2026, 3, 1, 10, 30, 0, 0, time.Local)},
+		{Entry: "Second entry", CreatedAt: time.Date(2026, 3, 2, 15, 45, 0, 0, time.Local)},
 	}
 
 	tool := &RecallMemorySearchTool{}

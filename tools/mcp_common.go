@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"xbot/llm"
 	log "xbot/logger"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
@@ -34,10 +33,18 @@ type MCPConfig struct {
 
 // mcpConnection MCP 连接封装
 type mcpConnection struct {
-	name      string
-	client    *mcpclient.Client
-	transport any
-	tools     []mcp.Tool
+	name         string
+	client       *mcpclient.Client
+	transport    any
+	tools        []mcp.Tool
+	instructions string // from server's InitializeResult
+}
+
+// MCPServerCatalogEntry 单个 MCP Server 的目录条目（用于系统提示词中的轻量展示）
+type MCPServerCatalogEntry struct {
+	Name         string   // Server 名称
+	Instructions string   // Server 初始化返回的使用说明
+	ToolNames    []string // 工具名称列表（不含参数信息）
 }
 
 // BuildStdioEnv 构建 stdio 模式的环境变量列表，将 .xbot/bin 加入 PATH
@@ -187,80 +194,6 @@ func hasPrefixSuffix(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-// InitializeMCPClient 初始化 MCP 客户端并获取工具列表（公共函数）
-func InitializeMCPClient(ctx context.Context, client *mcpclient.Client) ([]mcp.Tool, error) {
-	// 初始化 MCP 协议
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "xbot",
-		Version: "1.0.0",
-	}
-
-	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	_, err := client.Initialize(connectCtx, initReq)
-	if err != nil {
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-
-	// 获取可用工具列表
-	toolsResult, err := client.ListTools(connectCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		return nil, fmt.Errorf("list tools: %w", err)
-	}
-
-	return toolsResult.Tools, nil
-}
-
-// ConvertMCPParams 将 MCP 参数转换为 LLM ToolParam 格式
-func ConvertMCPParams(tool mcp.Tool) []llm.ToolParam {
-	schema := tool.InputSchema
-	props := schema.Properties
-	if props == nil {
-		return nil
-	}
-
-	// 构建 required 集合
-	requiredSet := make(map[string]bool)
-	for _, r := range schema.Required {
-		requiredSet[r] = true
-	}
-
-	var params []llm.ToolParam
-	for name, propRaw := range props {
-		// propRaw 是 interface{}，通常是 map[string]interface{}
-		propMap, ok := propRaw.(map[string]interface{})
-		if !ok {
-			params = append(params, llm.ToolParam{
-				Name:     name,
-				Type:     "string",
-				Required: requiredSet[name],
-			})
-			continue
-		}
-
-		paramType := "string"
-		if t, ok := propMap["type"].(string); ok {
-			paramType = t
-		}
-
-		desc := ""
-		if d, ok := propMap["description"].(string); ok {
-			desc = d
-		}
-
-		params = append(params, llm.ToolParam{
-			Name:        name,
-			Type:        paramType,
-			Description: desc,
-			Required:    requiredSet[name],
-		})
-	}
-	return params
 }
 
 // LoadMCPConfig 从文件加载 MCP 配置

@@ -64,20 +64,26 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	defer cancel()
 
 	workspaceRoot := ""
+	sandboxEnabled := true
 	if toolCtx != nil {
 		if toolCtx.WorkspaceRoot != "" {
 			workspaceRoot = toolCtx.WorkspaceRoot
 		} else {
 			workspaceRoot = toolCtx.WorkingDir
 		}
+		sandboxEnabled = toolCtx.SandboxEnabled
 	}
 
-	cmdName, cmdArgs, err := shellWrapForSandbox(params.Command, workspaceRoot)
-	if err != nil {
-		return nil, err
+	var cmd *exec.Cmd
+	if sandboxEnabled {
+		cmdName, cmdArgs, err := shellWrapForSandbox(params.Command, workspaceRoot)
+		if err != nil {
+			return nil, err
+		}
+		cmd = exec.CommandContext(ctx, cmdName, cmdArgs...)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", params.Command)
 	}
-
-	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 
 	if workspaceRoot != "" {
 		cmd.Dir = workspaceRoot
@@ -93,7 +99,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err = cmd.Run()
+	runErr := cmd.Run()
 
 	// 合并输出
 	var resultBuilder strings.Builder
@@ -109,7 +115,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 	result := strings.TrimSpace(resultBuilder.String())
 
-	if err != nil {
+	if runErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			// 超时：杀掉进程
 			killProcess(cmd)
@@ -120,9 +126,9 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		}
 		// 命令执行失败但有输出（如 exit code != 0）
 		if result != "" {
-			return NewResult(fmt.Sprintf("[EXIT %s]\n%s", err, result)), nil
+			return NewResult(fmt.Sprintf("[EXIT %s]\n%s", runErr, result)), nil
 		}
-		return nil, fmt.Errorf("command failed: %w", err)
+		return nil, fmt.Errorf("command failed: %w", runErr)
 	}
 
 	if result == "" {

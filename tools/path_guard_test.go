@@ -8,7 +8,7 @@ import (
 func TestResolveWritePath_EnforceWorkspace(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
-	ctx := &ToolContext{WorkspaceRoot: workspace}
+	ctx := &ToolContext{WorkspaceRoot: workspace, SandboxEnabled: true}
 
 	allowed, err := ResolveWritePath(ctx, "notes/todo.txt")
 	if err != nil {
@@ -30,8 +30,9 @@ func TestResolveReadPath_AllowReadOnlyRoots(t *testing.T) {
 	globalSkills := filepath.Join(root, "global-skills")
 
 	ctx := &ToolContext{
-		WorkspaceRoot: workspace,
-		ReadOnlyRoots: []string{globalSkills},
+		WorkspaceRoot:  workspace,
+		ReadOnlyRoots:  []string{globalSkills},
+		SandboxEnabled: true,
 	}
 
 	workspaceFile := filepath.Join(workspace, "a.txt")

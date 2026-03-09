@@ -67,6 +67,8 @@ type AgentConfig struct {
 	WorkDir        string // 工作目录（所有文件相对此目录存放）
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
+	SandboxEnabled bool // 是否启用沙箱隔离（默认 true）
+
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间（默认 30 分钟）
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔（默认 5 分钟）
@@ -165,6 +167,7 @@ func Load() *Config {
 			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
 			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
 			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
+			SandboxEnabled:       getEnvBoolOrDefault("SANDBOX_ENABLED", true),
 			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
 			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
 			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),

@@ -72,7 +72,8 @@ func shellWrapForSandbox(shellCommand string, workspaceRoot string) (string, []s
 		if strings.Contains(err.Error(), "disabled on Windows") {
 			return "", nil, err
 		}
-		return "", nil, err
+		// No sandbox runner found: fall back to direct execution
+		return "sh", []string{"-c", shellCommand}, nil
 	}
 	return baseCmd, baseArgs, nil
 }

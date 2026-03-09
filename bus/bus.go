@@ -45,11 +45,12 @@ type InboundMessage struct {
 
 // OutboundMessage 发送到 IM 渠道的出站消息
 type OutboundMessage struct {
-	Channel  string            // 目标渠道
-	ChatID   string            // 目标会话
-	Content  string            // 消息文本
-	Media    []string          // 附件文件路径
-	Metadata map[string]string // 附加元数据
+	Channel       string            // 目标渠道
+	ChatID        string            // 目标会话
+	Content       string            // 消息文本
+	Media         []string          // 附件文件路径
+	Metadata      map[string]string // 附加元数据
+	WorkspaceRoot string            // 发送者的工作目录（用于解析文件路径）
 }
 
 // MessageBus 异步消息总线，解耦渠道和 Agent

@@ -37,15 +37,23 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
+	// When sandbox is disabled or no workspace configured, allow unrestricted access
+	if ctx == nil || !ctx.SandboxEnabled || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get working directory: %w", err)
+		base := ""
+		if ctx != nil {
+			base = defaultWorkspaceRoot(ctx)
 		}
-		return cleanAbsPath(filepath.Join(cwd, inputPath))
+		if base == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return "", fmt.Errorf("failed to get working directory: %w", err)
+			}
+			base = cwd
+		}
+		return cleanAbsPath(filepath.Join(base, inputPath))
 	}
 
 	root, err := resolveScopedBase(ctx)
@@ -87,15 +95,23 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
+	// When sandbox is disabled or no workspace configured, allow unrestricted access
+	if ctx == nil || !ctx.SandboxEnabled || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get working directory: %w", err)
+		base := ""
+		if ctx != nil {
+			base = defaultWorkspaceRoot(ctx)
 		}
-		return cleanAbsPath(filepath.Join(cwd, inputPath))
+		if base == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return "", fmt.Errorf("failed to get working directory: %w", err)
+			}
+			base = cwd
+		}
+		return cleanAbsPath(filepath.Join(base, inputPath))
 	}
 
 	root, err := resolveScopedBase(ctx)

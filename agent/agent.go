@@ -71,19 +71,20 @@ func resolveGlobalSkillsDirs(workDir, legacySkillsDir string) []string {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus           *bus.MessageBus
-	llmClient     llm.LLM
-	model         string
-	multiSession  *session.MultiTenantSession // Multi-tenant session manager
-	tools         *tools.Registry
-	maxIterations int
-	memoryWindow  int
-	skills        *SkillStore
-	agents        *AgentStore
-	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
-	cardBuilder   *tools.CardBuilder      // Card Builder MCP
-	workDir       string
-	promptLoader  *PromptLoader
+	bus            *bus.MessageBus
+	llmClient      llm.LLM
+	model          string
+	multiSession   *session.MultiTenantSession // Multi-tenant session manager
+	tools          *tools.Registry
+	maxIterations  int
+	memoryWindow   int
+	skills         *SkillStore
+	agents         *AgentStore
+	chatHistory    *tools.ChatHistoryStore // 聊天历史缓存
+	cardBuilder    *tools.CardBuilder      // Card Builder MCP
+	workDir        string
+	sandboxEnabled bool
+	promptLoader   *PromptLoader
 
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
@@ -92,6 +93,7 @@ type Agent struct {
 	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
 	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
 	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
+	sessionWorkspace sync.Map                                  // key: "channel:chatID" -> string, 当前会话的工作目录（用于文件发送路径解析）
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -121,6 +123,8 @@ type Config struct {
 	EmbeddingBaseURL string // 嵌入向量服务地址
 	EmbeddingAPIKey  string // 嵌入向量服务密钥
 	EmbeddingModel   string // 嵌入模型名称
+
+	SandboxEnabled bool // 是否启用沙箱隔离（默认 true）
 
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
@@ -216,20 +220,21 @@ func New(cfg Config) *Agent {
 	}
 
 	return &Agent{
-		bus:           cfg.Bus,
-		llmClient:     cfg.LLM,
-		model:         cfg.Model,
-		multiSession:  multiSession,
-		tools:         registry,
-		maxIterations: cfg.MaxIterations,
-		memoryWindow:  cfg.MemoryWindow,
-		skills:        skillStore,
-		agents:        agentStore,
-		chatHistory:   chatHistory,
-		cardBuilder:   cardBuilder,
-		workDir:       cfg.WorkDir,
-		promptLoader:  NewPromptLoader(cfg.PromptFile),
-		consolidating: make(map[string]bool),
+		bus:            cfg.Bus,
+		llmClient:      cfg.LLM,
+		model:          cfg.Model,
+		multiSession:   multiSession,
+		tools:          registry,
+		maxIterations:  cfg.MaxIterations,
+		memoryWindow:   cfg.MemoryWindow,
+		skills:         skillStore,
+		agents:         agentStore,
+		chatHistory:    chatHistory,
+		cardBuilder:    cardBuilder,
+		workDir:        cfg.WorkDir,
+		sandboxEnabled: cfg.SandboxEnabled,
+		promptLoader:   NewPromptLoader(cfg.PromptFile),
+		consolidating:  make(map[string]bool),
 	}
 }
 
@@ -313,6 +318,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	key := msg.Channel + ":" + msg.ChatID
 	a.sessionMsgIDs.Delete(key)
 	a.sessionFinalSent.Delete(key)
+	a.sessionWorkspace.Store(key, resolveWorkDir(a.workDir, msg.SenderID, a.sandboxEnabled))
 	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
@@ -455,7 +461,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	workspaceRoot := resolveWorkDir(a.workDir, senderID, a.sandboxEnabled)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		log.WithError(err).Warn("Failed to create cron user workspace")
 	}
@@ -488,6 +494,16 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}, nil
 }
 
+// resolveWorkDir 根据隔离模式决定工作目录
+// 隔离开启：{workDir}/.xbot/users/{senderID}/workspace
+// 隔离关闭：workDir
+func resolveWorkDir(workDir, senderID string, sandboxEnabled bool) string {
+	if !sandboxEnabled || senderID == "" {
+		return workDir
+	}
+	return tools.UserWorkspaceRoot(workDir, senderID)
+}
+
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）
 func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
 	history, err := tenantSession.GetHistory(a.memoryWindow)
@@ -495,7 +511,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := resolveWorkDir(a.workDir, msg.SenderID, a.sandboxEnabled)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
@@ -555,7 +571,7 @@ func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, ten
 	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
 
 	// 写入文件并发送
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := resolveWorkDir(a.workDir, msg.SenderID, a.sandboxEnabled)
 	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
 	if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
 		return nil, fmt.Errorf("write prompt file: %w", err)
@@ -640,7 +656,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		log.WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := resolveWorkDir(a.workDir, msg.SenderID, a.sandboxEnabled)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
@@ -1037,14 +1053,15 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 	defer cancel()
 
+	workspaceRoot := resolveWorkDir(a.workDir, senderID, a.sandboxEnabled)
 	toolCtx := &tools.ToolContext{
 		Ctx:                 execCtx,
 		WorkingDir:          a.workDir,
-		WorkspaceRoot:       tools.UserWorkspaceRoot(a.workDir, senderID),
+		WorkspaceRoot:       workspaceRoot,
 		ReadOnlyRoots:       resolveGlobalSkillsDirs(a.workDir, filepath.Join(a.workDir, ".xbot", "skills")),
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
-		SandboxEnabled:      true,
+		SandboxEnabled:      a.sandboxEnabled,
 		PreferredSandbox:    "bwrap,nsjail",
 		AgentID:             "main",
 		Manager:             a,
@@ -1102,6 +1119,11 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		Channel: channel,
 		ChatID:  chatID,
 		Content: content,
+	}
+
+	// Attach workspace root for file path resolution
+	if ws, ok := a.sessionWorkspace.Load(key); ok {
+		msg.WorkspaceRoot = ws.(string)
 	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")

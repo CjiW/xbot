@@ -23,8 +23,12 @@ RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
 # Final stage
 FROM node:22-alpine
 
-RUN apk --no-cache add ca-certificates git bubblewrap && \
+RUN apk --no-cache add ca-certificates git bubblewrap tzdata && \
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
     bwrap --version
+
+ENV TZ=Asia/Shanghai
 
 WORKDIR /app
 

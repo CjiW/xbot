@@ -263,6 +263,14 @@ var ackMessages = []string{
 }
 
 func (a *Agent) sendAck(channel, chatID string) {
+	// 不支持 patch 的渠道跳过 ack，避免占用消息额度
+	if a.getChannelCapabilities != nil {
+		caps := a.getChannelCapabilities(channel)
+		if !caps.SupportsPatch {
+			return
+		}
+	}
+
 	msg := ackMessages[rand.Intn(len(ackMessages))]
 	if err := a.sendMessage(channel, chatID, msg); err != nil {
 		log.WithError(err).Warn("Failed to send ack")
@@ -1120,16 +1128,18 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
+		// 获取渠道能力
+		var caps bus.ChannelCapabilities
+		if a.getChannelCapabilities != nil {
+			caps = a.getChannelCapabilities(channel)
+		}
+
 		// 构建 SessionContext
 		if senderIDIface, ok := a.sessionSenderID.Load(key); ok {
 			senderID := senderIDIface.(string)
 			senderName, _ := a.sessionSenderName.Load(key)
 			senderNameStr, _ := senderName.(string)
 
-			var caps bus.ChannelCapabilities
-			if a.getChannelCapabilities != nil {
-				caps = a.getChannelCapabilities(channel)
-			}
 			msg.SessionContext = &bus.SessionContext{
 				SenderID:           senderID,
 				SenderName:         senderNameStr,
@@ -1140,9 +1150,17 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 			}
 		}
 
+		// 检查是否已发送过消息
+		_, hasExistingMsg := a.sessionMsgIDs.Load(key)
+
+		// 不支持 patch 的渠道：跳过进度更新，只发送最终回复
+		if !caps.SupportsPatch && hasExistingMsg && !isFinal {
+			return nil
+		}
+
 		// Cards should always create new messages, not patch existing ones
 		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)
-		if !isCard {
+		if !isCard && caps.SupportsPatch {
 			if existingID, ok := a.sessionMsgIDs.Load(key); ok {
 				msg.Metadata["update_message_id"] = existingID.(string)
 			}

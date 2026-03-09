@@ -391,7 +391,7 @@ func (f *FeishuChannel) patchMessage(messageID string, cardJSON []byte) error {
 		return fmt.Errorf("patch feishu message: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu patch API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		return fmt.Errorf("feishu patch API error: code=%d, msg=%s detail: %s", resp.Code, resp.Msg, resp.ErrorResp())
 	}
 
 	log.WithField("message_id", messageID).Debug("Feishu message patched")

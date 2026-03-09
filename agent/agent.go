@@ -94,6 +94,17 @@ type Agent struct {
 	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
 }
 
+func buildToolMessageContent(result *tools.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return strings.TrimSpace(result.Summary)
+	}
+	return string(b)
+}
+
 // Config Agent 配置
 type Config struct {
 	Bus           *bus.MessageBus
@@ -494,7 +505,9 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
-	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -637,7 +650,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -818,10 +833,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 预分配结果槽位（按原始顺序）
 		type toolExecResult struct {
-			content string
-			result  *tools.ToolResult
-			err     error
-			elapsed time.Duration
+			content    string
+			llmContent string
+			result     *tools.ToolResult
+			err        error
+			elapsed    time.Duration
 		}
 		execResults := make([]toolExecResult, len(response.ToolCalls))
 
@@ -862,12 +878,14 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).WithError(execErr).Warn("Tool failed")
 				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
+				execResults[entry.index].llmContent = execResults[entry.index].content
 
 				if autoNotify {
 					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
 			} else {
 				execResults[entry.index].content = result.Summary
+				execResults[entry.index].llmContent = buildToolMessageContent(result)
 
 				resultPreview := result.Summary
 				if r := []rune(resultPreview); len(r) > 200 {
@@ -916,7 +934,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		sessionKey = channel + ":" + chatID
 		for idx, tc := range response.ToolCalls {
 			r := execResults[idx]
-			content := r.content
+			content := r.llmContent
 
 			// OAuth 自动触发（已触发过则跳过，避免重复 OAuth 状态）
 			if r.err != nil && oauth.IsTokenNeededError(r.err) {
@@ -1258,7 +1276,7 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			if execErr != nil {
 				content = fmt.Sprintf("Error: %v", execErr)
 			} else {
-				content = result.Summary
+				content = buildToolMessageContent(result)
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)

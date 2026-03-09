@@ -257,6 +257,60 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now xbot
 ```
 
+### 使用 Docker 部署
+
+> Ubuntu 上使用命令型 MCP（stdio）时，建议为容器加上 `bwrap` 所需权限参数；否则可能出现
+> `bwrap: Creating new namespace failed: Operation not permitted`。
+
+```bash
+docker run -d --name xbot --restart unless-stopped \
+  --add-host=host.docker.internal:host-gateway \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  --cap-add SYS_ADMIN \
+  -v /opt/xbot/.xbot:/data/.xbot \
+  -e WORK_DIR=/data \
+  -e LLM_PROVIDER=openai \
+  -e LLM_BASE_URL=https://api.openai.com/v1 \
+  -e LLM_API_KEY=your_api_key \
+  -e LLM_MODEL=gpt-4o-mini \
+  -e FEISHU_ENABLED=true \
+  -e FEISHU_APP_ID=your_app_id \
+  -e FEISHU_APP_SECRET=your_app_secret \
+  xxxx:latest
+```
+
+#### Docker + 本地 Ollama（Letta + Embedding）
+
+```bash
+docker run -d --name xbot --restart unless-stopped \
+  --add-host=host.docker.internal:host-gateway \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  --cap-add SYS_ADMIN \
+  -v /opt/xbot/.xbot:/data/.xbot \
+  -e WORK_DIR=/data \
+  -e MEMORY_PROVIDER=letta \
+  -e LLM_PROVIDER=openai \
+  -e LLM_BASE_URL=https://api.openai.com/v1 \
+  -e LLM_API_KEY=your_api_key \
+  -e LLM_MODEL=gpt-4o-mini \
+  -e LLM_EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e LLM_EMBEDDING_API_KEY=ollama \
+  -e LLM_EMBEDDING_MODEL=nomic-embed-text \
+  -e FEISHU_ENABLED=true \
+  -e FEISHU_APP_ID=your_app_id \
+  -e FEISHU_APP_SECRET=your_app_secret \
+  xxxx:latest
+```
+
+说明：
+
+- `--add-host=host.docker.internal:host-gateway`：让 Linux 容器访问宿主机服务（如本机 Ollama）。
+- `--security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN`：允许 `bwrap` 创建 namespace，供命令型 MCP 使用。
+- `MEMORY_PROVIDER=letta`：启用 Letta 三层记忆。
+- `LLM_EMBEDDING_*` 指向本地 Ollama（`/v1`），用于 Archival Memory 的向量检索。
+
 ## ⚙️ 配置
 
 所有配置通过环境变量或 `.env` 文件设置：

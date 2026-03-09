@@ -53,10 +53,10 @@ type SubAgentManager interface {
 
 // ToolResult 工具执行结果
 type ToolResult struct {
-	Summary     string // 精简结果，进入 LLM 上下文
-	Detail      string // 详细内容（如 diff），仅推前端展示，不进入上下文
-	Tips        string // 操作指引，帮助 LLM 理解下一步操作
-	WaitingUser bool   // 标记：是否等待用户响应（如果为 true，Agent 不应生成额外回复）
+	Summary     string `json:"summary,omitempty"` // 精简结果，log用
+	Detail      string `json:"detail,omitempty"`  // 详细内容
+	Tips        string `json:"tips,omitempty"`    // 操作指引，帮助 LLM 理解下一步操作
+	WaitingUser bool   `json:"-"`                 // 控制字段：是否等待用户响应（不进入 LLM 上下文）
 }
 
 // NewResult 创建 Summary == Detail 的简单结果
@@ -97,9 +97,10 @@ type Tool interface {
 
 // Registry 工具注册表
 type Registry struct {
-	mu            sync.RWMutex
-	globalTools   map[string]Tool           // 非MCP工具（全局共享）
-	sessionMCPMgr SessionMCPManagerProvider // 会话MCP管理器提供者
+	mu               sync.RWMutex
+	globalTools      map[string]Tool           // 非MCP工具（全局共享）
+	sessionMCPMgr    SessionMCPManagerProvider // 会话MCP管理器提供者
+	globalMCPCatalog []MCPServerCatalogEntry   // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
 }
 
 // NewRegistry 创建工具注册表
@@ -151,6 +152,9 @@ func (r *Registry) AsDefinitions() []llm.ToolDefinition {
 	defer r.mu.RUnlock()
 	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
 	for _, tool := range r.globalTools {
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
+		}
 		defs = append(defs, tool)
 	}
 	sort.Slice(defs, func(i, j int) bool {
@@ -174,6 +178,9 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 	// 收集全局工具
 	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
 	for _, tool := range r.globalTools {
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
+		}
 		defs = append(defs, tool)
 	}
 
@@ -183,6 +190,9 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 		if sessionMCP != nil {
 			sessionTools := sessionMCP.GetSessionTools()
 			for _, tool := range sessionTools {
+				if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+					continue
+				}
 				defs = append(defs, tool)
 			}
 		}
@@ -207,6 +217,111 @@ func (r *Registry) Clone() *Registry {
 	return clone
 }
 
+// mcpSchemaProvider 内部接口，MCPRemoteTool 和 SessionMCPRemoteTool 都实现此接口
+// 用于 load_mcp_tools_usage 获取完整参数信息
+type mcpSchemaProvider interface {
+	fullDescription() string
+	fullParams() []llm.ToolParam
+	mcpServerName() string
+}
+
+// MCPToolSchema MCP 工具完整 schema 信息（供 load_mcp_tools_usage 使用）
+type MCPToolSchema struct {
+	ToolName    string
+	ServerName  string
+	Description string
+	Params      []llm.ToolParam
+}
+
+// GetBuiltinToolNames 返回所有内置（非 MCP）工具的名称列表（按名称排序）
+// 内置工具不实现 mcpSchemaProvider 接口
+func (r *Registry) GetBuiltinToolNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var names []string
+	for name, tool := range r.globalTools {
+		if _, isMCP := tool.(mcpSchemaProvider); !isMCP {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// SetGlobalMCPCatalog 设置全局 MCP Server 目录（由 MCPManager.RegisterTools 调用）
+func (r *Registry) SetGlobalMCPCatalog(catalog []MCPServerCatalogEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// 防御性复制，避免调用方修改切片导致竞争条件
+	r.globalMCPCatalog = append([]MCPServerCatalogEntry{}, catalog...)
+}
+
+// GetMCPCatalog 获取完整 MCP Server 目录（全局 + 会话特定）
+func (r *Registry) GetMCPCatalog(sessionKey string) []MCPServerCatalogEntry {
+	r.mu.RLock()
+	global := append([]MCPServerCatalogEntry{}, r.globalMCPCatalog...)
+	r.mu.RUnlock()
+
+	if r.sessionMCPMgr != nil {
+		sessionMCP := r.sessionMCPMgr.GetSessionMCPManager(sessionKey)
+		if sessionMCP != nil {
+			sessionCatalog := sessionMCP.GetCatalog()
+			global = append(global, sessionCatalog...)
+		}
+	}
+	return global
+}
+
+// GetMCPToolSchemas 获取指定工具的完整 schema 信息（参数定义、描述等）
+// toolNames 为工具全名（如 "mcp_server_toolname"）列表；传入 nil 返回所有 MCP 工具 schema
+func (r *Registry) GetMCPToolSchemas(sessionKey string, toolNames []string) []MCPToolSchema {
+	nameSet := make(map[string]bool, len(toolNames))
+	matchAll := len(toolNames) == 0
+	for _, n := range toolNames {
+		nameSet[n] = true
+	}
+
+	var schemas []MCPToolSchema
+
+	// 扫描全局 MCP 工具
+	r.mu.RLock()
+	for name, tool := range r.globalTools {
+		if matchAll || nameSet[name] {
+			if p, ok := tool.(mcpSchemaProvider); ok {
+				schemas = append(schemas, MCPToolSchema{
+					ToolName:    name,
+					ServerName:  p.mcpServerName(),
+					Description: p.fullDescription(),
+					Params:      p.fullParams(),
+				})
+			}
+		}
+	}
+	r.mu.RUnlock()
+
+	// 扫描会话 MCP 工具
+	if r.sessionMCPMgr != nil {
+		sessionMCP := r.sessionMCPMgr.GetSessionMCPManager(sessionKey)
+		if sessionMCP != nil {
+			sessionTools := sessionMCP.GetSessionTools()
+			for _, tool := range sessionTools {
+				if matchAll || nameSet[tool.Name()] {
+					if p, ok := tool.(mcpSchemaProvider); ok {
+						schemas = append(schemas, MCPToolSchema{
+							ToolName:    tool.Name(),
+							ServerName:  p.mcpServerName(),
+							Description: p.fullDescription(),
+							Params:      p.fullParams(),
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return schemas
+}
+
 // DefaultRegistry 创建包含默认工具的注册表
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
@@ -220,5 +335,6 @@ func DefaultRegistry() *Registry {
 	r.Register(NewCronTool())
 	// r.Register(&NotifyTool{})
 	r.Register(&DownloadFileTool{})
+	r.Register(&LoadMCPToolsUsageTool{})
 	return r
 }

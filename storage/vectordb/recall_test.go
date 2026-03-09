@@ -174,8 +174,8 @@ func TestRecallEntry_CreatedAtParsing(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 
-	// modernc.org/sqlite returns timestamps as RFC3339 (e.g. "2026-03-05T14:30:00Z")
-	expected := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
+	// Parsed timestamps should be normalized to system local timezone.
+	expected := time.Date(2026, 3, 5, 14, 30, 0, 0, time.Local)
 	if !results[0].CreatedAt.Equal(expected) {
 		t.Errorf("expected CreatedAt %v, got %v", expected, results[0].CreatedAt)
 	}

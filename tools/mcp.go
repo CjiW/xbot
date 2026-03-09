@@ -103,7 +103,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		Version: "1.0.0",
 	}
 
-	_, err = client.Initialize(connectCtx, initReq)
+	initResult, err := client.Initialize(connectCtx, initReq)
 	if err != nil {
 		m.closeTransport(transport)
 		return fmt.Errorf("initialize: %w", err)
@@ -117,10 +117,11 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 	}
 
 	conn := &mcpConnection{
-		name:      name,
-		client:    client,
-		transport: transport,
-		tools:     toolsResult.Tools,
+		name:         name,
+		client:       client,
+		transport:    transport,
+		tools:        toolsResult.Tools,
+		instructions: initResult.Instructions,
 	}
 
 	m.mu.Lock()
@@ -150,7 +151,31 @@ func (m *MCPManager) connectHTTPServer(ctx context.Context, cfg MCPServerConfig)
 	return ConnectHTTPServer(ctx, cfg)
 }
 
-// RegisterTools 将所有 MCP 远程工具注册到 Registry
+// GetCatalog 返回所有已连接 MCP Server 的目录信息（服务器名、说明、工具列表）
+func (m *MCPManager) GetCatalog() []MCPServerCatalogEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.buildCatalogLocked()
+}
+
+// buildCatalogLocked 构建目录（必须在持有读锁时调用）
+func (m *MCPManager) buildCatalogLocked() []MCPServerCatalogEntry {
+	var catalog []MCPServerCatalogEntry
+	for _, conn := range m.connections {
+		toolNames := make([]string, len(conn.tools))
+		for i, t := range conn.tools {
+			toolNames[i] = t.Name
+		}
+		catalog = append(catalog, MCPServerCatalogEntry{
+			Name:         conn.name,
+			Instructions: conn.instructions,
+			ToolNames:    toolNames,
+		})
+	}
+	return catalog
+}
+
+// RegisterTools 将所有 MCP 远程工具注册到 Registry，并更新目录信息
 func (m *MCPManager) RegisterTools(registry *Registry) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -161,6 +186,10 @@ func (m *MCPManager) RegisterTools(registry *Registry) {
 			registry.Register(remoteTool)
 		}
 	}
+
+	// 更新 Registry 中的全局 MCP 目录信息
+	catalog := m.buildCatalogLocked()
+	registry.SetGlobalMCPCatalog(catalog)
 }
 
 // ReconnectServer 重新连接指定 MCP Server（原子替换：先连新再清旧，无工具空窗期）
@@ -215,6 +244,10 @@ func (m *MCPManager) ReconnectServer(ctx context.Context, name string, registry 
 	}
 
 	log.WithField("server", name).Info("MCP server reconnected")
+
+	// 更新 Registry 中的全局 MCP 目录信息（含新 server 的工具列表）
+	registry.SetGlobalMCPCatalog(m.GetCatalog())
+
 	return nil
 }
 
@@ -324,7 +357,24 @@ func (t *MCPRemoteTool) Description() string {
 }
 
 func (t *MCPRemoteTool) Parameters() []llm.ToolParam {
+	// Stub mode: return nil so full schemas are not loaded into LLM context.
+	// Call load_mcp_tools_usage to get parameter details before invoking this tool.
+	return nil
+}
+
+// fullDescription returns the original server description (used by load_mcp_tools_usage).
+func (t *MCPRemoteTool) fullDescription() string {
+	return t.description
+}
+
+// fullParams returns the complete parameter list (used by load_mcp_tools_usage).
+func (t *MCPRemoteTool) fullParams() []llm.ToolParam {
 	return t.params
+}
+
+// mcpServerName returns the MCP server name this tool belongs to.
+func (t *MCPRemoteTool) mcpServerName() string {
+	return t.serverName
 }
 
 func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {

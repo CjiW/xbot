@@ -64,6 +64,36 @@ func (sm *SessionMCPManager) UpdateScope(userConfigPath, workspaceRoot string) {
 	sm.initialized = false
 }
 
+// GetCatalog 返回此会话所有已连接 MCP Server 的目录信息（需在锁外调用，内部加锁）
+func (sm *SessionMCPManager) GetCatalog() []MCPServerCatalogEntry {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// 首次调用时确保配置已加载
+	if !sm.initialized {
+		if err := sm.loadAndConnect(context.Background()); err != nil {
+			log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
+			sm.initialized = true
+			return nil
+		}
+		sm.initialized = true
+	}
+
+	var catalog []MCPServerCatalogEntry
+	for _, conn := range sm.connections {
+		toolNames := make([]string, len(conn.tools))
+		for i, t := range conn.tools {
+			toolNames[i] = t.Name
+		}
+		catalog = append(catalog, MCPServerCatalogEntry{
+			Name:         conn.name,
+			Instructions: conn.instructions,
+			ToolNames:    toolNames,
+		})
+	}
+	return catalog
+}
+
 // GetSessionTools 懒加载并返回此会话的 MCP 工具
 func (sm *SessionMCPManager) GetSessionTools() []Tool {
 	sm.mu.Lock()
@@ -238,7 +268,7 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		Version: "1.0.0",
 	}
 
-	_, err = client.Initialize(connectCtx, initReq)
+	initResult, err := client.Initialize(connectCtx, initReq)
 	if err != nil {
 		sm.closeTransport(transport)
 		return fmt.Errorf("initialize: %w", err)
@@ -252,10 +282,11 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 	}
 
 	conn := &mcpConnection{
-		name:      name,
-		client:    client,
-		transport: transport,
-		tools:     toolsResult.Tools,
+		name:         name,
+		client:       client,
+		transport:    transport,
+		tools:        toolsResult.Tools,
+		instructions: initResult.Instructions,
 	}
 
 	sm.connections[name] = conn
@@ -440,7 +471,24 @@ func (t *SessionMCPRemoteTool) Description() string {
 }
 
 func (t *SessionMCPRemoteTool) Parameters() []llm.ToolParam {
+	// Stub mode: return nil so full schemas are not loaded into LLM context.
+	// Call load_mcp_tools_usage to get parameter details before invoking this tool.
+	return nil
+}
+
+// fullDescription returns the original server description (used by load_mcp_tools_usage).
+func (t *SessionMCPRemoteTool) fullDescription() string {
+	return t.description
+}
+
+// fullParams returns the complete parameter list (used by load_mcp_tools_usage).
+func (t *SessionMCPRemoteTool) fullParams() []llm.ToolParam {
 	return t.params
+}
+
+// mcpServerName returns the MCP server name this tool belongs to.
+func (t *SessionMCPRemoteTool) mcpServerName() string {
+	return t.serverName
 }
 
 func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {

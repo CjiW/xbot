@@ -53,10 +53,10 @@ type SubAgentManager interface {
 
 // ToolResult 工具执行结果
 type ToolResult struct {
-	Summary     string // 精简结果，进入 LLM 上下文
-	Detail      string // 详细内容（如 diff），仅推前端展示，不进入上下文
-	Tips        string // 操作指引，帮助 LLM 理解下一步操作
-	WaitingUser bool   // 标记：是否等待用户响应（如果为 true，Agent 不应生成额外回复）
+	Summary     string `json:"summary,omitempty"` // 精简结果，进入 LLM 上下文
+	Detail      string `json:"detail,omitempty"`  // 详细内容（如 diff），进入 LLM 上下文；同时可用于前端展示
+	Tips        string `json:"tips,omitempty"`    // 操作指引，帮助 LLM 理解下一步操作
+	WaitingUser bool   `json:"-"`                 // 控制字段：是否等待用户响应（不进入 LLM 上下文）
 }
 
 // NewResult 创建 Summary == Detail 的简单结果

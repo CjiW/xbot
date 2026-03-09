@@ -30,14 +30,11 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 
 		// Set default time range bounds
 		if start.IsZero() {
-			start = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+			start = time.Date(2000, 1, 1, 0, 0, 0, 0, time.Local)
 		}
 		if end.IsZero() {
-			end = time.Now().UTC().Add(24 * time.Hour)
+			end = time.Now().Add(24 * time.Hour)
 		}
-
-		start = start.UTC()
-		end = end.UTC()
 
 		startStr := start.Format("2006-01-02 15:04:05")
 		endStr := end.Format("2006-01-02 15:04:05")
@@ -74,15 +71,16 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 // parseTimestamp parses a timestamp string, handling both RFC3339 (from modernc.org/sqlite)
 // and plain "2006-01-02 15:04:05" formats.
 func parseTimestamp(s string) time.Time {
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local); err == nil {
+		return t
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04:05Z", s, time.Local); err == nil {
+		return t
+	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t
+		return t.Local()
 	}
-	if t, err := time.Parse("2006-01-02T15:04:05Z", s); err == nil {
-		return t
-	}
-	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-		return t
-	}
+
 	return time.Time{}
 }
 

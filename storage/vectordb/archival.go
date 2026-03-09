@@ -88,7 +88,7 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 		ID:      id,
 		Content: content,
 		Metadata: map[string]string{
-			"created_at": ts.UTC().Format(time.RFC3339),
+			"created_at": ts.Format(time.RFC3339),
 		},
 	})
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 		"tenant_id":  tenantID,
 		"id":         id,
 		"length":     len(content),
-		"created_at": ts.UTC().Format(time.RFC3339),
+		"created_at": ts.Format(time.RFC3339),
 	}).Debug("Archival memory inserted (chromem-go)")
 
 	return id, nil

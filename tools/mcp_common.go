@@ -34,10 +34,18 @@ type MCPConfig struct {
 
 // mcpConnection MCP 连接封装
 type mcpConnection struct {
-	name      string
-	client    *mcpclient.Client
-	transport any
-	tools     []mcp.Tool
+	name         string
+	client       *mcpclient.Client
+	transport    any
+	tools        []mcp.Tool
+	instructions string // from server's InitializeResult
+}
+
+// MCPServerCatalogEntry 单个 MCP Server 的目录条目（用于系统提示词中的轻量展示）
+type MCPServerCatalogEntry struct {
+	Name         string   // Server 名称
+	Instructions string   // Server 初始化返回的使用说明
+	ToolNames    []string // 工具名称列表（不含参数信息）
 }
 
 // BuildStdioEnv 构建 stdio 模式的环境变量列表，将 .xbot/bin 加入 PATH
@@ -189,8 +197,15 @@ func hasPrefixSuffix(s, substr string) bool {
 	return false
 }
 
-// InitializeMCPClient 初始化 MCP 客户端并获取工具列表（公共函数）
-func InitializeMCPClient(ctx context.Context, client *mcpclient.Client) ([]mcp.Tool, error) {
+// MCPInitResult MCP 初始化结果
+type MCPInitResult struct {
+	Tools        []mcp.Tool
+	Instructions string // from server's InitializeResult
+	ServerName   string // from server's InitializeResult.ServerInfo.Name
+}
+
+// InitializeMCPClient 初始化 MCP 客户端并获取工具列表和服务器说明（公共函数）
+func InitializeMCPClient(ctx context.Context, client *mcpclient.Client) (*MCPInitResult, error) {
 	// 初始化 MCP 协议
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
@@ -202,7 +217,7 @@ func InitializeMCPClient(ctx context.Context, client *mcpclient.Client) ([]mcp.T
 	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	_, err := client.Initialize(connectCtx, initReq)
+	initResult, err := client.Initialize(connectCtx, initReq)
 	if err != nil {
 		return nil, fmt.Errorf("initialize: %w", err)
 	}
@@ -213,7 +228,11 @@ func InitializeMCPClient(ctx context.Context, client *mcpclient.Client) ([]mcp.T
 		return nil, fmt.Errorf("list tools: %w", err)
 	}
 
-	return toolsResult.Tools, nil
+	return &MCPInitResult{
+		Tools:        toolsResult.Tools,
+		Instructions: initResult.Instructions,
+		ServerName:   initResult.ServerInfo.Name,
+	}, nil
 }
 
 // ConvertMCPParams 将 MCP 参数转换为 LLM ToolParam 格式

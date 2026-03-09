@@ -505,7 +505,9 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
-	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -648,7 +650,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {

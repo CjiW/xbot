@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -117,35 +119,49 @@ func resolveWorkspaceRoot(configPath string) string {
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcp.ClientSession, error) {
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
 	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build exec.Cmd for CommandTransport
 	execCmd := exec.Command(cmd, args...)
 	if len(envList) > 0 {
-		// Inherit current env and append MCP-specific env
 		execCmd.Env = append(os.Environ(), envList...)
 	}
+
+	// Capture stderr so MCP server diagnostics appear in xbot logs
+	stderrR, stderrW := io.Pipe()
+	execCmd.Stderr = stderrW
+	go drainStderr(serverName, stderrR)
 
 	transport := &mcp.CommandTransport{
 		Command:           execCmd,
 		TerminateDuration: 5 * time.Second,
 	}
 
-	// Connect auto-initializes the MCP session (initialize + initialized handshake)
 	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
 	if err != nil {
+		_ = stderrW.Close()
 		return nil, fmt.Errorf("connect stdio: %w", err)
 	}
 
 	return session, nil
+}
+
+// drainStderr reads lines from an MCP server's stderr and logs them.
+func drainStderr(serverName string, r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			log.WithField("mcp_server", serverName).Warn(line)
+		}
+	}
 }
 
 // ConnectHTTPServer 连接 HTTP 模式的 MCP Server（公共函数）

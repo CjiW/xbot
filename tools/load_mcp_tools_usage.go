@@ -52,12 +52,10 @@ func (t *LoadMCPToolsUsageTool) Execute(ctx *ToolContext, input string) (*ToolRe
 
 	sessionKey := ctx.Channel + ":" + ctx.ChatID
 
-	// 没有指定工具名时，返回所有 MCP 工具的摘要列表
 	if strings.TrimSpace(args.Tools) == "" {
-		return t.listAllMCPTools(ctx.Registry, sessionKey)
+		return t.listAllTools(ctx.Registry, sessionKey)
 	}
 
-	// 解析工具名列表
 	var toolNames []string
 	for _, name := range strings.Split(args.Tools, ",") {
 		if trimmed := strings.TrimSpace(name); trimmed != "" {
@@ -65,59 +63,77 @@ func (t *LoadMCPToolsUsageTool) Execute(ctx *ToolContext, input string) (*ToolRe
 		}
 	}
 
-	return t.loadToolSchemas(ctx.Registry, sessionKey, toolNames)
+	result, err := t.loadToolSchemas(ctx.Registry, sessionKey, toolNames)
+	if err != nil {
+		return nil, err
+	}
+
+	// 激活工具，使其出现在后续 LLM 调用的 tool definitions 中
+	ctx.Registry.ActivateTools(sessionKey, toolNames)
+
+	return result, nil
 }
 
-// listAllMCPTools 列出所有可用 MCP 工具的简要信息
-func (t *LoadMCPToolsUsageTool) listAllMCPTools(registry *Registry, sessionKey string) (*ToolResult, error) {
-	catalog := registry.GetMCPCatalog(sessionKey)
-	if len(catalog) == 0 {
-		return NewResult("No MCP servers are currently connected."), nil
+// listAllTools 列出所有可加载工具（内置 + MCP）的简要信息
+func (t *LoadMCPToolsUsageTool) listAllTools(registry *Registry, sessionKey string) (*ToolResult, error) {
+	schemas := registry.GetToolSchemas(sessionKey, nil)
+	if len(schemas) == 0 {
+		return NewResult("No loadable tools available."), nil
+	}
+
+	sort.Slice(schemas, func(i, j int) bool {
+		return schemas[i].ToolName < schemas[j].ToolName
+	})
+
+	// 按来源分组：内置 vs MCP server
+	var builtinNames []string
+	mcpByServer := make(map[string][]string)
+	for _, s := range schemas {
+		if s.ServerName == "" {
+			builtinNames = append(builtinNames, s.ToolName)
+		} else {
+			mcpByServer[s.ServerName] = append(mcpByServer[s.ServerName], s.ToolName)
+		}
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Available MCP Tools\n\n")
+	sb.WriteString("## Available Tools\n\n")
 
-	// 按服务器名排序保证输出稳定
-	sort.Slice(catalog, func(i, j int) bool {
-		return catalog[i].Name < catalog[j].Name
-	})
+	if len(builtinNames) > 0 {
+		sb.WriteString("### Built-in Tools\n")
+		fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(builtinNames, ", "))
+	}
 
+	// MCP 服务器工具
+	catalog := registry.GetMCPCatalog(sessionKey)
+	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Name < catalog[j].Name })
 	for _, entry := range catalog {
 		fmt.Fprintf(&sb, "### MCP Server: %s\n", entry.Name)
 		if entry.Instructions != "" {
 			fmt.Fprintf(&sb, "%s\n\n", entry.Instructions)
 		}
-		if len(entry.ToolNames) == 0 {
-			sb.WriteString("_(no tools)_\n\n")
-			continue
+		if tools, ok := mcpByServer[entry.Name]; ok {
+			fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(tools, ", "))
 		}
-		sb.WriteString("Tools:\n")
-		for _, toolName := range entry.ToolNames {
-			fmt.Fprintf(&sb, "  - mcp_%s_%s\n", entry.Name, toolName)
-		}
-		sb.WriteByte('\n')
 	}
 
-	sb.WriteString("Use `load_mcp_tools_usage` with specific tool names to get parameter details.")
+	sb.WriteString("Call `load_mcp_tools_usage` with specific tool names to load them (e.g. `tools=\"shell,read,edit\"`).\n")
 	return NewResult(sb.String()), nil
 }
 
-// loadToolSchemas 返回指定工具的完整参数 schema
+// loadToolSchemas 返回指定工具的完整参数 schema（内置 + MCP）
 func (t *LoadMCPToolsUsageTool) loadToolSchemas(registry *Registry, sessionKey string, toolNames []string) (*ToolResult, error) {
-	schemas := registry.GetMCPToolSchemas(sessionKey, toolNames)
+	schemas := registry.GetToolSchemas(sessionKey, toolNames)
 
 	if len(schemas) == 0 {
-		return NewResult(fmt.Sprintf("No MCP tool schemas found for: %s\n\nUse load_mcp_tools_usage with no arguments to list all available MCP tools.",
+		return NewResult(fmt.Sprintf("No tool schemas found for: %s\n\nUse load_mcp_tools_usage with no arguments to list all available tools.",
 			strings.Join(toolNames, ", "))), nil
 	}
 
-	// 按工具名排序
 	sort.Slice(schemas, func(i, j int) bool {
 		return schemas[i].ToolName < schemas[j].ToolName
 	})
 
-	// 找出未找到的工具（有请求但无 schema）
 	found := make(map[string]bool, len(schemas))
 	for _, s := range schemas {
 		found[s.ToolName] = true
@@ -130,11 +146,14 @@ func (t *LoadMCPToolsUsageTool) loadToolSchemas(registry *Registry, sessionKey s
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## MCP Tool Parameter Details\n\n")
+	sb.WriteString("## Tool Parameter Details\n\n")
+	sb.WriteString("The following tools are now loaded and available for calling.\n\n")
 
 	for _, schema := range schemas {
 		fmt.Fprintf(&sb, "### %s\n", schema.ToolName)
-		fmt.Fprintf(&sb, "**Server:** %s\n\n", schema.ServerName)
+		if schema.ServerName != "" {
+			fmt.Fprintf(&sb, "**Server:** %s\n\n", schema.ServerName)
+		}
 		if schema.Description != "" {
 			fmt.Fprintf(&sb, "**Description:** %s\n\n", schema.Description)
 		}

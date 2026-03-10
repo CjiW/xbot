@@ -207,12 +207,12 @@ func New(cfg Config) *Agent {
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
 
-	// 如果使用 Letta 记忆模式，注册记忆工具
+	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
 	if memoryProvider == "letta" {
 		for _, tool := range tools.LettaMemoryTools() {
-			registry.Register(tool)
+			registry.RegisterCore(tool)
 		}
-		log.Info("Letta memory tools registered")
+		log.Info("Letta memory tools registered (core)")
 	}
 
 	return &Agent{
@@ -1026,6 +1026,14 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		return nil, fmt.Errorf("unknown tool: %s", tc.Name)
 	}
 
+	// 拦截未激活工具的调用：返回提示而非执行
+	sessionKey := channel + ":" + chatID
+	if !a.tools.IsToolActive(sessionKey, tc.Name) {
+		return &tools.ToolResult{
+			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_mcp_tools_usage(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
+		}, nil
+	}
+
 	var execCtx context.Context
 	var cancel context.CancelFunc
 	if tc.Name == "SubAgent" {
@@ -1066,9 +1074,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
-	sessionKey := channel + ":" + chatID
 	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
-		_ = sessionKey
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
 			toolCtx.TenantID = lm.TenantID()
 			toolCtx.CoreMemory = lm.CoreService()

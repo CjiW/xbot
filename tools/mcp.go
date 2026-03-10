@@ -81,7 +81,7 @@ func (m *MCPManager) connectServer(ctx context.Context, name string, cfg MCPServ
 		session, err = ConnectHTTPServer(ctx, cfg)
 	} else if cfg.Command != "" {
 		ws := resolveWorkspaceRoot(m.configPath)
-		session, err = ConnectStdioServer(ctx, cfg, m.configPath, ws)
+		session, err = ConnectStdioServer(ctx, cfg, m.configPath, ws, name)
 	} else {
 		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
@@ -316,7 +316,6 @@ func (t *MCPRemoteTool) mcpServerName() string {
 }
 
 func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	// 解析 JSON 参数为 map
 	var args map[string]any
 	if input != "" && input != "{}" {
 		if err := json.Unmarshal([]byte(input), &args); err != nil {
@@ -324,20 +323,26 @@ func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 		}
 	}
 
-	// 调用远程工具
 	result, err := t.session.CallTool(ctx.Ctx, &mcp.CallToolParams{
 		Name:      t.tool.Name,
 		Arguments: args,
 	})
 	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"server": t.serverName,
+			"tool":   t.tool.Name,
+		}).Warn("MCP tool call failed")
 		return nil, fmt.Errorf("MCP call %s/%s: %w", t.serverName, t.tool.Name, err)
 	}
 
-	// 将 MCP 结果转为字符串
 	content := formatMCPResult(result)
 
 	if result.IsError {
-		return nil, fmt.Errorf("MCP tool error: %s", content)
+		log.WithFields(log.Fields{
+			"server": t.serverName,
+			"tool":   t.tool.Name,
+		}).Warnf("MCP tool returned error: %s", content)
+		return NewResult("Error: " + content), nil
 	}
 
 	return NewResult(content), nil

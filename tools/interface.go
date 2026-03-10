@@ -95,26 +95,44 @@ type Tool interface {
 	Execute(ctx *ToolContext, input string) (*ToolResult, error)
 }
 
+const defaultMaxIdleRounds int64 = 5
+
 // Registry 工具注册表
 type Registry struct {
 	mu               sync.RWMutex
-	globalTools      map[string]Tool           // 非MCP工具（全局共享）
-	sessionMCPMgr    SessionMCPManagerProvider // 会话MCP管理器提供者
-	globalMCPCatalog []MCPServerCatalogEntry   // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
+	globalTools      map[string]Tool             // 所有工具（全局共享）
+	coreTools        map[string]bool             // 核心工具名（始终在 tool definitions 中）
+	sessionActivated map[string]map[string]int64 // sessionKey → toolName → lastUsedRound
+	sessionRound     map[string]int64            // sessionKey → 当前 round 计数
+	maxIdleRounds    int64                       // 连续多少轮未使用后自动失效
+	sessionMCPMgr    SessionMCPManagerProvider   // 会话MCP管理器提供者
+	globalMCPCatalog []MCPServerCatalogEntry     // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
 }
 
 // NewRegistry 创建工具注册表
 func NewRegistry() *Registry {
 	return &Registry{
-		globalTools: make(map[string]Tool),
+		globalTools:      make(map[string]Tool),
+		coreTools:        make(map[string]bool),
+		sessionActivated: make(map[string]map[string]int64),
+		sessionRound:     make(map[string]int64),
+		maxIdleRounds:    defaultMaxIdleRounds,
 	}
 }
 
-// Register 注册工具
+// Register 注册工具（非核心，需通过 load_mcp_tools_usage 激活后才出现在 tool definitions 中）
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.globalTools[tool.Name()] = tool
+}
+
+// RegisterCore 注册核心工具（始终出现在 tool definitions 中，无需激活）
+func (r *Registry) RegisterCore(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.globalTools[tool.Name()] = tool
+	r.coreTools[tool.Name()] = true
 }
 
 // Unregister 注销工具
@@ -146,16 +164,15 @@ func (r *Registry) List() []Tool {
 	return tools
 }
 
-// AsDefinitions 转换为 LLM 工具定义列表（按名称排序，保证顺序稳定以优化 KV-cache）
+// AsDefinitions 转换为 LLM 工具定义列表（仅核心工具，按名称排序）
 func (r *Registry) AsDefinitions() []llm.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
+	var defs []llm.ToolDefinition
 	for _, tool := range r.globalTools {
-		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
-			continue
+		if r.coreTools[tool.Name()] {
+			defs = append(defs, tool)
 		}
-		defs = append(defs, tool)
 	}
 	sort.Slice(defs, func(i, j int) bool {
 		return defs[i].Name() < defs[j].Name()
@@ -170,40 +187,124 @@ func (r *Registry) SetSessionMCPManagerProvider(provider SessionMCPManagerProvid
 	r.sessionMCPMgr = provider
 }
 
-// AsDefinitionsForSession 获取特定会话的工具定义（包含全局工具 + 会话 MCP 工具）
+// AsDefinitionsForSession 获取特定会话的工具定义：
+//   - 核心工具始终包含
+//   - 非核心工具仅在激活且未过期（maxIdleRounds 内有使用）时才包含
 func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// 收集全局工具
-	defs := make([]llm.ToolDefinition, 0, len(r.globalTools))
+	active := r.activeToolSet(sessionKey)
+
+	var defs []llm.ToolDefinition
 	for _, tool := range r.globalTools {
 		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
 			continue
 		}
-		defs = append(defs, tool)
-	}
-
-	// 如果有会话 MCP 管理器提供者，获取会话特定的 MCP 工具
-	if r.sessionMCPMgr != nil {
-		sessionMCP := r.sessionMCPMgr.GetSessionMCPManager(sessionKey)
-		if sessionMCP != nil {
-			sessionTools := sessionMCP.GetSessionTools()
-			for _, tool := range sessionTools {
-				if _, isMCP := tool.(mcpSchemaProvider); isMCP {
-					continue
-				}
-				defs = append(defs, tool)
-			}
+		if r.coreTools[tool.Name()] || active[tool.Name()] {
+			defs = append(defs, tool)
 		}
 	}
 
-	// 按名称排序，保证顺序稳定以优化 KV-cache
+	// 追加已激活的 MCP 工具（带完整参数 schema）
+	if r.sessionMCPMgr != nil {
+		if sm := r.sessionMCPMgr.GetSessionMCPManager(sessionKey); sm != nil {
+			defs = append(defs, sm.GetActivatedToolDefs(active)...)
+		}
+	}
+
 	sort.Slice(defs, func(i, j int) bool {
 		return defs[i].Name() < defs[j].Name()
 	})
 
 	return defs
+}
+
+// activeToolSet 返回指定会话中未过期的已激活工具名集合（调用方需持有 r.mu 读锁）
+func (r *Registry) activeToolSet(sessionKey string) map[string]bool {
+	toolRounds := r.sessionActivated[sessionKey]
+	if len(toolRounds) == 0 {
+		return nil
+	}
+	curRound := r.sessionRound[sessionKey]
+	active := make(map[string]bool, len(toolRounds))
+	for name, lastRound := range toolRounds {
+		if curRound-lastRound <= r.maxIdleRounds {
+			active[name] = true
+		}
+	}
+	return active
+}
+
+// TickSession 推进会话 round 计数（每次处理新用户消息时调用），同时清理已过期的工具。
+// 返回新的 round 编号。
+func (r *Registry) TickSession(sessionKey string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessionRound[sessionKey]++
+	curRound := r.sessionRound[sessionKey]
+
+	// 清理过期工具，防止 map 无限增长
+	if toolRounds := r.sessionActivated[sessionKey]; len(toolRounds) > 0 {
+		for name, lastRound := range toolRounds {
+			if curRound-lastRound > r.maxIdleRounds {
+				delete(toolRounds, name)
+			}
+		}
+	}
+
+	return curRound
+}
+
+// ActivateTools 激活指定会话的工具，记录当前 round（内置 + MCP 均通过此方法）
+func (r *Registry) ActivateTools(sessionKey string, toolNames []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m := r.sessionActivated[sessionKey]
+	if m == nil {
+		m = make(map[string]int64, len(toolNames))
+		r.sessionActivated[sessionKey] = m
+	}
+	curRound := r.sessionRound[sessionKey]
+	for _, name := range toolNames {
+		m[name] = curRound
+	}
+}
+
+// TouchTool 刷新工具的最后使用 round（在工具实际执行时调用）
+func (r *Registry) TouchTool(sessionKey, toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.coreTools[toolName] {
+		return
+	}
+	if m := r.sessionActivated[sessionKey]; m != nil {
+		if _, exists := m[toolName]; exists {
+			m[toolName] = r.sessionRound[sessionKey]
+		}
+	}
+}
+
+// IsToolActive 检查工具是否对指定会话可用（核心工具始终返回 true，已过期的返回 false）
+func (r *Registry) IsToolActive(sessionKey, toolName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.coreTools[toolName] {
+		return true
+	}
+	lastRound, ok := r.sessionActivated[sessionKey][toolName]
+	if !ok {
+		return false
+	}
+	return r.sessionRound[sessionKey]-lastRound <= r.maxIdleRounds
+}
+
+// DeactivateSession 清理指定会话的全部激活状态和 round 计数
+func (r *Registry) DeactivateSession(sessionKey string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.sessionActivated, sessionKey)
+	delete(r.sessionRound, sessionKey)
 }
 
 // Clone 复制工具注册表
@@ -225,10 +326,10 @@ type mcpSchemaProvider interface {
 	mcpServerName() string
 }
 
-// MCPToolSchema MCP 工具完整 schema 信息（供 load_mcp_tools_usage 使用）
-type MCPToolSchema struct {
+// ToolSchema 工具完整 schema 信息（供 load_mcp_tools_usage 使用）
+type ToolSchema struct {
 	ToolName    string
-	ServerName  string
+	ServerName  string // 内置工具为空，MCP 工具为 server 名
 	Description string
 	Params      []llm.ToolParam
 }
@@ -272,48 +373,53 @@ func (r *Registry) GetMCPCatalog(sessionKey string) []MCPServerCatalogEntry {
 	return global
 }
 
-// GetMCPToolSchemas 获取指定工具的完整 schema 信息（参数定义、描述等）
-// toolNames 为工具全名（如 "mcp_server_toolname"）列表；传入 nil 返回所有 MCP 工具 schema
-func (r *Registry) GetMCPToolSchemas(sessionKey string, toolNames []string) []MCPToolSchema {
+// GetToolSchemas 获取指定工具的完整 schema 信息（参数定义、描述等）
+// 支持内置工具和 MCP 工具。toolNames 为工具全名列表；传入 nil 返回所有可加载工具的 schema。
+func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolSchema {
 	nameSet := make(map[string]bool, len(toolNames))
 	matchAll := len(toolNames) == 0
 	for _, n := range toolNames {
 		nameSet[n] = true
 	}
 
-	var schemas []MCPToolSchema
+	var schemas []ToolSchema
 
-	// 扫描全局 MCP 工具
 	r.mu.RLock()
 	for name, tool := range r.globalTools {
-		if matchAll || nameSet[name] {
-			if p, ok := tool.(mcpSchemaProvider); ok {
-				schemas = append(schemas, MCPToolSchema{
-					ToolName:    name,
-					ServerName:  p.mcpServerName(),
-					Description: p.fullDescription(),
-					Params:      p.fullParams(),
-				})
-			}
+		if !matchAll && !nameSet[name] {
+			continue
+		}
+		if p, ok := tool.(mcpSchemaProvider); ok {
+			schemas = append(schemas, ToolSchema{
+				ToolName:    name,
+				ServerName:  p.mcpServerName(),
+				Description: p.fullDescription(),
+				Params:      p.fullParams(),
+			})
+		} else if !r.coreTools[name] {
+			schemas = append(schemas, ToolSchema{
+				ToolName:    name,
+				Description: tool.Description(),
+				Params:      tool.Parameters(),
+			})
 		}
 	}
 	r.mu.RUnlock()
 
 	// 扫描会话 MCP 工具
 	if r.sessionMCPMgr != nil {
-		sessionMCP := r.sessionMCPMgr.GetSessionMCPManager(sessionKey)
-		if sessionMCP != nil {
-			sessionTools := sessionMCP.GetSessionTools()
-			for _, tool := range sessionTools {
-				if matchAll || nameSet[tool.Name()] {
-					if p, ok := tool.(mcpSchemaProvider); ok {
-						schemas = append(schemas, MCPToolSchema{
-							ToolName:    tool.Name(),
-							ServerName:  p.mcpServerName(),
-							Description: p.fullDescription(),
-							Params:      p.fullParams(),
-						})
-					}
+		if sm := r.sessionMCPMgr.GetSessionMCPManager(sessionKey); sm != nil {
+			for _, tool := range sm.GetSessionTools() {
+				if !matchAll && !nameSet[tool.Name()] {
+					continue
+				}
+				if p, ok := tool.(mcpSchemaProvider); ok {
+					schemas = append(schemas, ToolSchema{
+						ToolName:    tool.Name(),
+						ServerName:  p.mcpServerName(),
+						Description: p.fullDescription(),
+						Params:      p.fullParams(),
+					})
 				}
 			}
 		}
@@ -323,18 +429,20 @@ func (r *Registry) GetMCPToolSchemas(sessionKey string, toolNames []string) []MC
 }
 
 // DefaultRegistry 创建包含默认工具的注册表
+// 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_mcp_tools_usage 激活。
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.Register(&ShellTool{})
-	r.Register(&GlobTool{})
-	r.Register(&GrepTool{})
-	r.Register(&ReadTool{})
-	r.Register(&EditTool{})
+	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
+	r.RegisterCore(&ShellTool{})
+	r.RegisterCore(&GlobTool{})
+	r.RegisterCore(&GrepTool{})
+	r.RegisterCore(&ReadTool{})
+	r.RegisterCore(&EditTool{})
+	r.RegisterCore(&LoadMCPToolsUsageTool{})
+	// 可加载工具：需通过 load_mcp_tools_usage 按需激活
 	r.Register(NewWebSearchTool())
 	r.Register(&SubAgentTool{})
 	r.Register(NewCronTool())
-	// r.Register(&NotifyTool{})
 	r.Register(&DownloadFileTool{})
-	r.Register(&LoadMCPToolsUsageTool{})
 	return r
 }

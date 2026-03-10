@@ -184,14 +184,11 @@ func (sm *SessionMCPManager) Invalidate() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// 关闭所有现有连接
 	for _, conn := range sm.connections {
 		sm.closeConnection(conn)
 	}
 	sm.connections = make(map[string]*mcpConnection)
 	sm.lastActive = make(map[string]time.Time)
-
-	// 重置初始化标志
 	sm.initialized = false
 
 	log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")
@@ -249,7 +246,7 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		if configPath == "" {
 			configPath = sm.userConfigPath
 		}
-		session, err = ConnectStdioServer(ctx, cfg, configPath, sm.workspaceRoot)
+		session, err = ConnectStdioServer(ctx, cfg, configPath, sm.workspaceRoot, name)
 	} else {
 		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
@@ -404,12 +401,10 @@ func (t *SessionMCPRemoteTool) mcpServerName() string {
 }
 
 func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	// 标记服务器为活跃
 	if t.sessionMCPMgr != nil {
 		t.sessionMCPMgr.MarkActive(t.serverName)
 	}
 
-	// 解析 JSON 参数为 map
 	var args map[string]any
 	if input != "" && input != "{}" {
 		if err := json.Unmarshal([]byte(input), &args); err != nil {
@@ -417,21 +412,72 @@ func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		}
 	}
 
-	// 调用远程工具
 	result, err := t.session.CallTool(ctx.Ctx, &mcp.CallToolParams{
 		Name:      t.tool.Name,
 		Arguments: args,
 	})
 	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"server": t.serverName,
+			"tool":   t.tool.Name,
+		}).Warn("MCP tool call failed")
 		return nil, fmt.Errorf("MCP call %s/%s: %w", t.serverName, t.tool.Name, err)
 	}
 
-	// 将 MCP 结果转为字符串
 	content := formatMCPResult(result)
 
 	if result.IsError {
-		return nil, fmt.Errorf("MCP tool error: %s", content)
+		log.WithFields(log.Fields{
+			"server": t.serverName,
+			"tool":   t.tool.Name,
+		}).Warnf("MCP tool returned error: %s", content)
+		return NewResult("Error: " + content), nil
 	}
 
 	return NewResult(content), nil
 }
+
+// ---- MCP 工具激活机制 ----
+
+// GetActivatedToolDefs 返回已激活 MCP 工具的 LLM 工具定义（含完整参数 schema）。
+// activated 由 Registry.sessionActivated 提供，统一管理激活状态。
+func (sm *SessionMCPManager) GetActivatedToolDefs(activated map[string]bool) []llm.ToolDefinition {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if len(activated) == 0 {
+		return nil
+	}
+
+	var defs []llm.ToolDefinition
+	for _, conn := range sm.connections {
+		for _, tool := range conn.tools {
+			fullName := fmt.Sprintf("mcp_%s_%s", conn.name, tool.Name)
+			if !activated[fullName] {
+				continue
+			}
+			params := convertMCPParams(tool)
+			desc := tool.Description
+			if desc == "" {
+				desc = fmt.Sprintf("MCP tool from %s", conn.name)
+			}
+			defs = append(defs, &mcpToolDefinition{
+				name:   fullName,
+				desc:   fmt.Sprintf("[MCP:%s] %s", conn.name, desc),
+				params: params,
+			})
+		}
+	}
+	return defs
+}
+
+// mcpToolDefinition 是已激活 MCP 工具的 LLM 工具定义（含完整参数 schema）。
+type mcpToolDefinition struct {
+	name   string
+	desc   string
+	params []llm.ToolParam
+}
+
+func (d *mcpToolDefinition) Name() string                { return d.name }
+func (d *mcpToolDefinition) Description() string         { return d.desc }
+func (d *mcpToolDefinition) Parameters() []llm.ToolParam { return d.params }

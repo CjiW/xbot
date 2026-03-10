@@ -30,12 +30,21 @@ func (m *mockMCPTool) fullParams() []llm.ToolParam { return m.params }
 func (m *mockMCPTool) mcpServerName() string       { return m.server }
 
 type mockBuiltinTool struct {
-	name string
+	name   string
+	desc   string
+	params []llm.ToolParam
 }
 
-func (m *mockBuiltinTool) Name() string                { return m.name }
-func (m *mockBuiltinTool) Description() string         { return "builtin test tool" }
-func (m *mockBuiltinTool) Parameters() []llm.ToolParam { return nil }
+func (m *mockBuiltinTool) Name() string {
+	return m.name
+}
+func (m *mockBuiltinTool) Description() string {
+	if m.desc != "" {
+		return m.desc
+	}
+	return "builtin test tool"
+}
+func (m *mockBuiltinTool) Parameters() []llm.ToolParam { return m.params }
 func (m *mockBuiltinTool) Execute(_ *ToolContext, _ string) (*ToolResult, error) {
 	return NewResult("ok"), nil
 }
@@ -86,7 +95,6 @@ func TestLoadMCPToolsUsageTool_Parameters(t *testing.T) {
 func TestLoadMCPToolsUsageTool_ListAll(t *testing.T) {
 	registry := NewRegistry()
 
-	// Register a mock MCP tool
 	registry.Register(&mockMCPTool{
 		name:        "search",
 		server:      "github",
@@ -96,7 +104,6 @@ func TestLoadMCPToolsUsageTool_ListAll(t *testing.T) {
 		},
 	})
 
-	// Set catalog
 	registry.SetGlobalMCPCatalog([]MCPServerCatalogEntry{
 		{
 			Name:         "github",
@@ -121,6 +128,31 @@ func TestLoadMCPToolsUsageTool_ListAll(t *testing.T) {
 	}
 	if !strings.Contains(result.Summary, "mcp_github_search") {
 		t.Errorf("Expected 'mcp_github_search' in result, got: %s", result.Summary)
+	}
+}
+
+func TestLoadMCPToolsUsageTool_ListAll_IncludesBuiltinTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "shell", desc: "Run shell commands"})
+	registry.Register(&mockBuiltinTool{name: "read", desc: "Read files"})
+	registry.RegisterCore(&mockBuiltinTool{name: "core_tool", desc: "Always available"})
+
+	tool := &LoadMCPToolsUsageTool{}
+	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
+
+	result, err := tool.Execute(ctx, `{}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "shell") {
+		t.Errorf("Expected 'shell' in result, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "read") {
+		t.Errorf("Expected 'read' in result, got: %s", result.Summary)
+	}
+	// Core tools should NOT appear in the loadable list
+	if strings.Contains(result.Summary, "core_tool") {
+		t.Errorf("Core tool should not appear in loadable tool list, got: %s", result.Summary)
 	}
 }
 
@@ -157,6 +189,52 @@ func TestLoadMCPToolsUsageTool_GetSchemas(t *testing.T) {
 	}
 	if !strings.Contains(result.Summary, "limit") {
 		t.Errorf("Expected 'limit' parameter in result, got: %s", result.Summary)
+	}
+}
+
+func TestLoadMCPToolsUsageTool_GetSchemas_BuiltinTool(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{
+		name: "shell",
+		desc: "Execute shell commands",
+		params: []llm.ToolParam{
+			{Name: "command", Type: "string", Required: true, Description: "Command to run"},
+		},
+	})
+
+	tool := &LoadMCPToolsUsageTool{}
+	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
+
+	result, err := tool.Execute(ctx, `{"tools": "shell"}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "shell") {
+		t.Errorf("Expected 'shell' in result, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "command") {
+		t.Errorf("Expected 'command' parameter, got: %s", result.Summary)
+	}
+}
+
+func TestLoadMCPToolsUsageTool_ActivatesToolsOnLoad(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "shell", desc: "Shell"})
+
+	tool := &LoadMCPToolsUsageTool{}
+	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
+
+	if registry.IsToolActive("test:chat1", "shell") {
+		t.Fatal("Tool should not be active before loading")
+	}
+
+	_, err := tool.Execute(ctx, `{"tools": "shell"}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !registry.IsToolActive("test:chat1", "shell") {
+		t.Fatal("Tool should be active after loading")
 	}
 }
 
@@ -202,10 +280,9 @@ func TestRegistry_GetMCPCatalog(t *testing.T) {
 	}
 }
 
-func TestRegistry_GetMCPToolSchemas(t *testing.T) {
+func TestRegistry_GetToolSchemas_MCP(t *testing.T) {
 	registry := NewRegistry()
 
-	// Register a mock MCP tool
 	registry.Register(&mockMCPTool{
 		name:        "search",
 		server:      "github",
@@ -215,7 +292,7 @@ func TestRegistry_GetMCPToolSchemas(t *testing.T) {
 		},
 	})
 
-	schemas := registry.GetMCPToolSchemas("test:chat", []string{"mcp_github_search"})
+	schemas := registry.GetToolSchemas("test:chat", []string{"mcp_github_search"})
 	if len(schemas) != 1 {
 		t.Errorf("Expected 1 schema, got %d", len(schemas))
 	}
@@ -230,8 +307,54 @@ func TestRegistry_GetMCPToolSchemas(t *testing.T) {
 	}
 }
 
+func TestRegistry_GetToolSchemas_Builtin(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{
+		name: "shell",
+		desc: "Execute shell commands",
+		params: []llm.ToolParam{
+			{Name: "command", Type: "string", Required: true},
+		},
+	})
+
+	schemas := registry.GetToolSchemas("test:chat", []string{"shell"})
+	if len(schemas) != 1 {
+		t.Fatalf("Expected 1 schema, got %d", len(schemas))
+	}
+	if schemas[0].ToolName != "shell" {
+		t.Errorf("Expected 'shell', got '%s'", schemas[0].ToolName)
+	}
+	if schemas[0].ServerName != "" {
+		t.Errorf("Built-in tool should have empty ServerName, got '%s'", schemas[0].ServerName)
+	}
+	if schemas[0].Description != "Execute shell commands" {
+		t.Errorf("Unexpected description: %s", schemas[0].Description)
+	}
+}
+
+func TestRegistry_GetToolSchemas_ExcludesCoreTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "core_tool"})
+	registry.Register(&mockBuiltinTool{name: "loadable_tool"})
+
+	schemas := registry.GetToolSchemas("test:chat", nil)
+	for _, s := range schemas {
+		if s.ToolName == "core_tool" {
+			t.Error("Core tools should not appear in GetToolSchemas (they are always loaded)")
+		}
+	}
+	found := false
+	for _, s := range schemas {
+		if s.ToolName == "loadable_tool" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Non-core tool should appear in GetToolSchemas")
+	}
+}
+
 func TestMCPRemoteTool_StubMode(t *testing.T) {
-	// Verify that MCPRemoteTool returns nil parameters in stub mode
 	registry := NewRegistry()
 	registry.Register(&mockMCPTool{
 		name:        "search",
@@ -247,13 +370,11 @@ func TestMCPRemoteTool_StubMode(t *testing.T) {
 		t.Fatal("Tool not found")
 	}
 
-	// In stub mode, Parameters() should return nil
 	params := tool.Parameters()
 	if params != nil {
 		t.Errorf("Stub mode: expected nil parameters, got %v", params)
 	}
 
-	// But full params should be accessible via mcpSchemaProvider
 	if p, ok := tool.(mcpSchemaProvider); ok {
 		fullParams := p.fullParams()
 		if len(fullParams) != 1 {
@@ -264,51 +385,236 @@ func TestMCPRemoteTool_StubMode(t *testing.T) {
 	}
 }
 
-func TestRegistry_AsDefinitionsForSession_FiltersGlobalMCPStubTools(t *testing.T) {
-	registry := NewRegistry()
+// ---- AsDefinitionsForSession: 二阶段加载逻辑 ----
 
-	registry.Register(&mockBuiltinTool{name: "builtin_tool"})
-	registry.Register(&mockMCPTool{
-		name:        "search",
-		server:      "github",
-		description: "Search",
-		params: []llm.ToolParam{
-			{Name: "query", Type: "string", Required: true},
-		},
-	})
+func TestRegistry_AsDefinitionsForSession_OnlyCoreToolsByDefault(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.Register(&mockBuiltinTool{name: "shell"})
+	registry.Register(&mockBuiltinTool{name: "read"})
+	registry.Register(&mockMCPTool{name: "search", server: "github", description: "Search"})
 
 	defs := registry.AsDefinitionsForSession("test:chat")
 
-	if !hasToolDefinitionName(defs, "builtin_tool") {
-		t.Fatal("Expected builtin tool in function definitions")
+	if !hasToolDefinitionName(defs, "load_mcp_tools_usage") {
+		t.Fatal("Core tool should always be in definitions")
+	}
+	if hasToolDefinitionName(defs, "shell") {
+		t.Fatal("Non-core builtin tool should NOT be in definitions before activation")
+	}
+	if hasToolDefinitionName(defs, "read") {
+		t.Fatal("Non-core builtin tool should NOT be in definitions before activation")
 	}
 	if hasToolDefinitionName(defs, "mcp_github_search") {
-		t.Fatal("MCP stub tool should be excluded from function definitions")
+		t.Fatal("MCP tool should NOT be in definitions before activation")
 	}
 }
 
-func TestRegistry_AsDefinitionsForSession_FiltersSessionMCPStubTools(t *testing.T) {
+func TestRegistry_AsDefinitionsForSession_IncludesActivatedBuiltinTools(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&mockBuiltinTool{name: "builtin_tool"})
+	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.Register(&mockBuiltinTool{name: "shell"})
+	registry.Register(&mockBuiltinTool{name: "read"})
+
+	registry.ActivateTools("test:chat", []string{"shell"})
+
+	defs := registry.AsDefinitionsForSession("test:chat")
+
+	if !hasToolDefinitionName(defs, "load_mcp_tools_usage") {
+		t.Fatal("Core tool should be present")
+	}
+	if !hasToolDefinitionName(defs, "shell") {
+		t.Fatal("Activated builtin tool should be in definitions")
+	}
+	if hasToolDefinitionName(defs, "read") {
+		t.Fatal("Non-activated builtin tool should NOT be in definitions")
+	}
+}
+
+func TestRegistry_AsDefinitionsForSession_IncludesActivatedSessionMCPTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
 
 	sessionMCP := NewSessionMCPManager("test:chat", "", "", "", time.Minute)
 	sessionMCP.initialized = true
 	sessionMCP.connections["github"] = &mcpConnection{
 		name: "github",
 		tools: []*mcp.Tool{
-			{Name: "search", Description: "Search"},
+			{Name: "search", Description: "Search GitHub"},
 		},
 	}
 
 	registry.SetSessionMCPManagerProvider(&mockSessionMCPProvider{manager: sessionMCP})
 
 	defs := registry.AsDefinitionsForSession("test:chat")
-
-	if !hasToolDefinitionName(defs, "builtin_tool") {
-		t.Fatal("Expected builtin tool in function definitions")
-	}
 	if hasToolDefinitionName(defs, "mcp_github_search") {
-		t.Fatal("Session MCP stub tool should be excluded from function definitions")
+		t.Fatal("Unactivated session MCP tool should be excluded")
+	}
+
+	registry.ActivateTools("test:chat", []string{"mcp_github_search"})
+
+	defs = registry.AsDefinitionsForSession("test:chat")
+	if !hasToolDefinitionName(defs, "mcp_github_search") {
+		t.Fatal("Activated session MCP tool should be included")
+	}
+
+	for _, d := range defs {
+		if d.Name() == "mcp_github_search" {
+			if d.Description() != "[MCP:github] Search GitHub" {
+				t.Errorf("Unexpected description: %s", d.Description())
+			}
+		}
+	}
+}
+
+// ---- IsToolActive ----
+
+func TestRegistry_IsToolActive(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "core_tool"})
+	registry.Register(&mockBuiltinTool{name: "non_core"})
+
+	if !registry.IsToolActive("test:chat", "core_tool") {
+		t.Fatal("Core tool should always be active")
+	}
+	if registry.IsToolActive("test:chat", "non_core") {
+		t.Fatal("Non-core tool should not be active before activation")
+	}
+
+	registry.ActivateTools("test:chat", []string{"non_core"})
+	if !registry.IsToolActive("test:chat", "non_core") {
+		t.Fatal("Tool should be active after activation")
+	}
+
+	// Different session should not be affected
+	if registry.IsToolActive("other:chat", "non_core") {
+		t.Fatal("Activation should be per-session")
+	}
+}
+
+func TestRegistry_DeactivateSession(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "shell"})
+
+	registry.ActivateTools("test:chat", []string{"shell"})
+	if !registry.IsToolActive("test:chat", "shell") {
+		t.Fatal("Tool should be active")
+	}
+
+	registry.DeactivateSession("test:chat")
+	if registry.IsToolActive("test:chat", "shell") {
+		t.Fatal("Tool should not be active after session deactivation")
+	}
+}
+
+func tickN(registry *Registry, sessionKey string, n int) {
+	for i := 0; i < n; i++ {
+		registry.TickSession(sessionKey)
+	}
+}
+
+func TestRegistry_ToolExpiry_AfterIdleRounds(t *testing.T) {
+	registry := NewRegistry()
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "tool_a"})
+	registry.Register(&mockBuiltinTool{name: "tool_b"})
+
+	registry.ActivateTools("s", []string{"tool_a", "tool_b"})
+
+	if !registry.IsToolActive("s", "tool_a") || !registry.IsToolActive("s", "tool_b") {
+		t.Fatal("Both tools should be active immediately after activation")
+	}
+
+	// Tick exactly maxIdleRounds: idle == max, still within limit
+	tickN(registry, "s", max)
+	if !registry.IsToolActive("s", "tool_a") {
+		t.Fatalf("Tool should still be active after %d idle rounds (maxIdleRounds=%d)", max, max)
+	}
+
+	// One more tick: idle == max+1, exceeds limit → expired
+	registry.TickSession("s")
+	if registry.IsToolActive("s", "tool_a") {
+		t.Fatal("Tool should expire after exceeding maxIdleRounds")
+	}
+
+	defs := registry.AsDefinitionsForSession("s")
+	if hasToolDefinitionName(defs, "tool_a") {
+		t.Fatal("Expired tool should not appear in definitions")
+	}
+}
+
+func TestRegistry_TouchTool_ExtendsLifetime(t *testing.T) {
+	registry := NewRegistry()
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "touched"})
+	registry.Register(&mockBuiltinTool{name: "untouched"})
+
+	registry.ActivateTools("s", []string{"touched", "untouched"})
+
+	// Advance halfway, touch only one tool
+	half := max / 2
+	if half < 1 {
+		half = 1
+	}
+	tickN(registry, "s", half)
+	registry.TouchTool("s", "touched")
+
+	// Advance maxIdleRounds more from activation (total > max from activation, but ≤ max from touch)
+	remaining := max - half + 1
+	tickN(registry, "s", remaining)
+
+	// "touched" was refreshed at round `half`, now at round `half + remaining`
+	// idle from touch = remaining ≤ max → still active
+	if !registry.IsToolActive("s", "touched") {
+		t.Fatal("Touched tool should still be active")
+	}
+
+	// "untouched" was last used at round 0, now at round half+remaining > max → expired
+	if registry.IsToolActive("s", "untouched") {
+		t.Fatal("Untouched tool should have expired")
+	}
+}
+
+func TestRegistry_TickSession_PrunesExpiredEntries(t *testing.T) {
+	registry := NewRegistry()
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "ephemeral"})
+
+	registry.ActivateTools("s", []string{"ephemeral"})
+
+	// Advance well past expiry
+	tickN(registry, "s", max+2)
+
+	registry.mu.RLock()
+	_, exists := registry.sessionActivated["s"]["ephemeral"]
+	registry.mu.RUnlock()
+	if exists {
+		t.Fatal("TickSession should prune expired entries from the map")
+	}
+}
+
+// ---- GetBuiltinToolNames ----
+
+func TestRegistry_GetBuiltinToolNames(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "core_a"})
+	registry.Register(&mockBuiltinTool{name: "tool_b"})
+	registry.Register(&mockMCPTool{name: "search", server: "github"})
+
+	names := registry.GetBuiltinToolNames()
+	// Should include core and non-core built-in tools, but NOT MCP tools
+	found := map[string]bool{}
+	for _, n := range names {
+		found[n] = true
+	}
+	if !found["core_a"] {
+		t.Error("Expected core_a in builtin names")
+	}
+	if !found["tool_b"] {
+		t.Error("Expected tool_b in builtin names")
+	}
+	if found["mcp_github_search"] {
+		t.Error("MCP tools should not be in builtin names")
 	}
 }
 
@@ -320,5 +626,25 @@ func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
 	}
 	if tool.Name() != "load_mcp_tools_usage" {
 		t.Errorf("Expected 'load_mcp_tools_usage', got '%s'", tool.Name())
+	}
+}
+
+func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
+	registry := DefaultRegistry()
+	defs := registry.AsDefinitions()
+
+	coreExpected := []string{"load_mcp_tools_usage", "Shell", "Glob", "Grep", "Read", "Edit"}
+	for _, name := range coreExpected {
+		if !hasToolDefinitionName(defs, name) {
+			t.Errorf("%s should always appear in definitions (core tool)", name)
+		}
+	}
+
+	// Non-core tools should NOT be in AsDefinitions
+	nonCore := []string{"WebSearch", "SubAgent", "Cron", "DownloadFile"}
+	for _, name := range nonCore {
+		if hasToolDefinitionName(defs, name) {
+			t.Errorf("%s should NOT appear in AsDefinitions (non-core)", name)
+		}
 	}
 }

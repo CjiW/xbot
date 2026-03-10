@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -117,26 +119,31 @@ func resolveWorkspaceRoot(configPath string) string {
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcp.ClientSession, error) {
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
 	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build exec.Cmd for CommandTransport
 	execCmd := exec.Command(cmd, args...)
 	if len(envList) > 0 {
-		// Inherit current env and append MCP-specific env
 		execCmd.Env = append(os.Environ(), envList...)
 	}
+
+	// StderrPipe returns a reader that is closed automatically when the process exits,
+	// so the drainStderr goroutine will not leak.
+	stderrPipe, err := execCmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	go drainStderr(serverName, stderrPipe)
 
 	transport := &mcp.CommandTransport{
 		Command:           execCmd,
 		TerminateDuration: 5 * time.Second,
 	}
 
-	// Connect auto-initializes the MCP session (initialize + initialized handshake)
 	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
@@ -146,6 +153,21 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 	}
 
 	return session, nil
+}
+
+// drainStderr reads lines from an MCP server's stderr and logs them.
+// The reader is expected to close when the process exits.
+func drainStderr(serverName string, r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			log.WithField("mcp_server", serverName).Warn(line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.WithError(err).WithField("mcp_server", serverName).Debug("stderr reader closed")
+	}
 }
 
 // ConnectHTTPServer 连接 HTTP 模式的 MCP Server（公共函数）

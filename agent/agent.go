@@ -215,7 +215,7 @@ func New(cfg Config) *Agent {
 		log.Info("Letta memory tools registered (core)")
 	}
 
-	return &Agent{
+	agent := &Agent{
 		bus:           cfg.Bus,
 		llmClient:     cfg.LLM,
 		model:         cfg.Model,
@@ -231,6 +231,15 @@ func New(cfg Config) *Agent {
 		promptLoader:  NewPromptLoader(cfg.PromptFile),
 		consolidating: make(map[string]bool),
 	}
+
+	// 初始化 Cron 工具：加载持久化的 jobs 并启动 ticker
+	if cronTool, ok := registry.Get("Cron"); ok {
+		if ct, ok := cronTool.(*tools.CronTool); ok {
+			ct.Init(cfg.WorkDir, agent.injectInbound)
+		}
+	}
+
+	return agent
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
@@ -1007,22 +1016,26 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 // executeTool 执行单个工具调用
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
-	// 首先尝试从全局注册表查找工具
-	tool, ok := a.tools.Get(tc.Name)
+	// 会话级别的工具优先级高于全局注册表
+	sessionKey := channel + ":" + chatID
+	var tool tools.Tool
+	ok := false
 
-	// 如果全局注册表中找不到，尝试从会话的 MCP 管理器查找
-	if !ok {
-		sessionKey := channel + ":" + chatID
-		if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
-			sessionTools := mcpMgr.GetSessionTools()
-			for _, st := range sessionTools {
-				if st.Name() == tc.Name {
-					tool = st
-					ok = true
-					break
-				}
+	// 首先从会话的 MCP 管理器查找
+	if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
+		sessionTools := mcpMgr.GetSessionTools()
+		for _, st := range sessionTools {
+			if st.Name() == tc.Name {
+				tool = st
+				ok = true
+				break
 			}
 		}
+	}
+
+	// 会话中找不到，再从全局注册表查找
+	if !ok {
+		tool, ok = a.tools.Get(tc.Name)
 	}
 
 	if !ok {
@@ -1030,7 +1043,6 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 
 	// 拦截未激活工具的调用：返回提示而非执行
-	sessionKey := channel + ":" + chatID
 	if !a.tools.IsToolActive(sessionKey, tc.Name) {
 		return &tools.ToolResult{
 			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_mcp_tools_usage(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),

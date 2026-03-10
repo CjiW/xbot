@@ -448,10 +448,10 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&ReadTool{})
 	r.RegisterCore(&EditTool{})
 	r.RegisterCore(&LoadMCPToolsUsageTool{})
+	r.RegisterCore(&SubAgentTool{})
+	r.RegisterCore(NewCronTool())
 	// 可加载工具：需通过 load_mcp_tools_usage 按需激活
 	r.Register(NewWebSearchTool())
-	r.Register(&SubAgentTool{})
-	r.Register(NewCronTool())
 	r.Register(&DownloadFileTool{})
 	return r
 }

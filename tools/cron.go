@@ -10,9 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"xbot/llm"
 	log "xbot/logger"
+
+	"github.com/google/uuid"
 )
 
 // resolveCronPath 解析 cron 数据文件路径，优先使用 .xbot/cron.json，向后兼容 cron.json
@@ -70,6 +71,25 @@ func NewCronTool() *CronTool {
 		stopCh: make(chan struct{}),
 	}
 	return ct
+}
+
+// Init 在启动时初始化：加载 jobs 并启动 ticker
+// dataDir: 工作目录，用于查找 cron.json
+// injectFunc: 消息注入函数，用于触发 job 时发送消息
+func (t *CronTool) Init(dataDir string, injectFunc func(string, string, string, string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// 加载 jobs
+	if dataDir != "" {
+		t.persistPath = resolveCronPath(dataDir)
+		t.loadJobs()
+	}
+
+	// 启动 ticker
+	if injectFunc != nil {
+		t.ensureTicker(injectFunc)
+	}
 }
 
 func (t *CronTool) Name() string { return "Cron" }

@@ -720,7 +720,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	registry := DefaultRegistry()
 	defs := registry.AsDefinitions()
 
-	coreExpected := []string{"load_mcp_tools_usage", "Shell", "Glob", "Grep", "Read", "Edit"}
+	coreExpected := []string{"load_mcp_tools_usage", "Shell", "Glob", "Grep", "Read", "Edit", "SubAgent", "Cron"}
 	for _, name := range coreExpected {
 		if !hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should always appear in definitions (core tool)", name)
@@ -728,7 +728,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	}
 
 	// Non-core tools should NOT be in AsDefinitions
-	nonCore := []string{"WebSearch", "SubAgent", "Cron", "DownloadFile"}
+	nonCore := []string{"WebSearch", "DownloadFile"}
 	for _, name := range nonCore {
 		if hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should NOT appear in AsDefinitions (non-core)", name)

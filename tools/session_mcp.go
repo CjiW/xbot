@@ -159,6 +159,11 @@ func (sm *SessionMCPManager) UnloadInactiveServers() time.Time {
 		}
 	}
 
+	// 所有服务器都被卸载后，重置初始化标志以便下次自动重连
+	if len(sm.connections) == 0 && len(serversToUnload) > 0 {
+		sm.initialized = false
+	}
+
 	return sm.sessionLastUsed
 }
 

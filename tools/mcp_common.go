@@ -116,16 +116,17 @@ func resolveWorkspaceRoot(configPath string) string {
 }
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
+// MCP servers run outside the sandbox — they are infrastructure processes that may
+// need full system access (e.g., Chromium for Playwright, Docker for container tools).
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
 func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
-	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
 
-	// Build exec.Cmd for CommandTransport
-	execCmd := exec.Command(cmd, args...)
+	// Build exec.Cmd directly (no sandbox wrapping)
+	execCmd := exec.Command(cfg.Command, cfg.Args...)
+	if workspaceRoot != "" {
+		execCmd.Dir = workspaceRoot
+	}
 	if len(envList) > 0 {
 		// Inherit current env and append MCP-specific env
 		execCmd.Env = append(os.Environ(), envList...)

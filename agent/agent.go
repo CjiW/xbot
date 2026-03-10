@@ -801,10 +801,8 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			return content, toolsUsed, false, nil
 		}
 
-		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
-		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, strings.TrimSpace(response.Content))
-		}
+		// 模型的中间思考内容不显示给用户（避免暴露推理过程）
+		// response.Content 仍然会记录到 messages 中供 LLM 上下文使用
 
 		// 记录 assistant 消息（含 tool_calls）
 		assistantMsg := llm.ChatMessage{

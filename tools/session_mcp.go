@@ -159,6 +159,11 @@ func (sm *SessionMCPManager) UnloadInactiveServers() time.Time {
 		}
 	}
 
+	// 有服务器被卸载时重置 initialized，使下次访问时触发 loadAndConnect 重连
+	if len(serversToUnload) > 0 {
+		sm.initialized = false
+	}
+
 	return sm.sessionLastUsed
 }
 
@@ -194,7 +199,7 @@ func (sm *SessionMCPManager) Invalidate() {
 	log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")
 }
 
-// loadAndConnect 加载配置并连接所有启用的 MCP Server
+// loadAndConnect 加载配置并连接所有启用的 MCP Server（跳过已连接的服务器）
 func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 	config, err := sm.loadConfig()
 	if err != nil {
@@ -206,6 +211,11 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 
 	for name, serverCfg := range config.MCPServers {
 		if serverCfg.Enabled != nil && !*serverCfg.Enabled {
+			continue
+		}
+
+		// 跳过已连接的服务器，避免重复连接
+		if _, connected := sm.connections[name]; connected {
 			continue
 		}
 
@@ -405,8 +415,8 @@ func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		t.sessionMCPMgr.MarkActive(t.serverName)
 	}
 
-	var args map[string]any
-	if input != "" && input != "{}" {
+	args := map[string]any{}
+	if input != "" {
 		if err := json.Unmarshal([]byte(input), &args); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}

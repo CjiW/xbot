@@ -284,6 +284,11 @@ func (m *MultiTenantSession) DBPath() string {
 	return m.dbPath
 }
 
+// DB returns the underlying SQLite database connection
+func (m *MultiTenantSession) DB() *sqlite.DB {
+	return m.db
+}
+
 // GetSessionMCPManager 实现 SessionMCPManagerProvider 接口
 func (m *MultiTenantSession) GetSessionMCPManager(sessionKey string) *tools.SessionMCPManager {
 	m.mu.RLock()

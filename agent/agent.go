@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/cron"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
 	"xbot/memory/letta"
 	"xbot/oauth"
 	"xbot/session"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
 )
@@ -84,6 +86,10 @@ type Agent struct {
 	cardBuilder   *tools.CardBuilder      // Card Builder MCP
 	workDir       string
 	promptLoader  *PromptLoader
+
+	// Cron service and scheduler
+	cronSvc *sqlite.CronService
+	cronSch *cron.Scheduler
 
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
@@ -232,12 +238,20 @@ func New(cfg Config) *Agent {
 		consolidating: make(map[string]bool),
 	}
 
-	// 初始化 Cron 工具：加载持久化的 jobs 并启动 ticker
-	if cronTool, ok := registry.Get("Cron"); ok {
-		if ct, ok := cronTool.(*tools.CronTool); ok {
-			ct.Init(cfg.WorkDir, agent.injectInbound)
-		}
+	// 初始化 Cron 服务和调度器
+	cronSvc := sqlite.NewCronService(multiSession.DB())
+	cronSch := cron.NewScheduler(cronSvc)
+
+	// 从旧的 JSON 文件迁移数据（如果需要）
+	if err := cronSvc.MigrateFromJSON(cfg.WorkDir); err != nil {
+		log.WithError(err).Warn("Failed to migrate cron jobs from JSON")
 	}
+
+	// 注册 CronTool（核心工具，始终可用）
+	registry.RegisterCore(tools.NewCronTool(cronSvc))
+
+	agent.cronSvc = cronSvc
+	agent.cronSch = cronSch
 
 	return agent
 }
@@ -273,12 +287,21 @@ func (a *Agent) sendAck(channel, chatID string) {
 // Run 启动 Agent 循环，持续消费入站消息
 func (a *Agent) Run(ctx context.Context) error {
 	log.Info("Agent loop started")
+
 	// 启动后台清理协程（清理不活跃的 MCP 连接和会话缓存）
 	a.multiSession.StartCleanupRoutine()
+
+	// 启动 Cron 调度器，设置消息注入函数
+	a.cronSch.SetInjectFunc(a.injectInbound)
+	a.cronSch.Start()
+
 	defer func() {
+		// 停止 Cron 调度器
+		a.cronSch.Stop()
 		// 清理所有会话的 MCP 连接
 		a.multiSession.StopCleanupRoutine()
 	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -515,7 +538,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
 	sessionKey := msg.Channel + ":" + msg.ChatID
-	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	mcpCatalog := buildToolsSection(a.tools, sessionKey)
 	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog), nil
 }
 
@@ -660,7 +683,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
 	sessionKey := msg.Channel + ":" + msg.ChatID
-	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
+	mcpCatalog := buildToolsSection(a.tools, sessionKey)
 	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
@@ -1045,7 +1068,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	// 拦截未激活工具的调用：返回提示而非执行
 	if !a.tools.IsToolActive(sessionKey, tc.Name) {
 		return &tools.ToolResult{
-			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_mcp_tools_usage(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
+			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_tools(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
 		}, nil
 	}
 

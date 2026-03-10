@@ -391,16 +391,16 @@ func (t *SessionMCPRemoteTool) Description() string {
 
 func (t *SessionMCPRemoteTool) Parameters() []llm.ToolParam {
 	// Stub mode: return nil so full schemas are not loaded into LLM context.
-	// Call load_mcp_tools_usage to get parameter details before invoking this tool.
+	// Call load_tools to get parameter details before invoking this tool.
 	return nil
 }
 
-// fullDescription returns the original server description (used by load_mcp_tools_usage).
+// fullDescription returns the original server description (used by load_tools).
 func (t *SessionMCPRemoteTool) fullDescription() string {
 	return t.description
 }
 
-// fullParams returns the complete parameter list (used by load_mcp_tools_usage).
+// fullParams returns the complete parameter list (used by load_tools).
 func (t *SessionMCPRemoteTool) fullParams() []llm.ToolParam {
 	return t.params
 }

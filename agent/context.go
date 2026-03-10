@@ -183,23 +183,37 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	return messages
 }
 
+func filterInactiveTools(tools []string, registry *tools.Registry, session string) []string {
+	inactive := []string{}
+	for _, t := range tools {
+		if !registry.IsToolActive(session, t) {
+			inactive = append(inactive, t)
+		}
+	}
+	return inactive
+}
+
 // buildToolsSection 将工具目录格式化为系统提示词片段：
 //   - 内置系统工具（system group）
 //   - MCP Server 工具（每个 server 一组，含服务器说明）
 //
-// MCP 工具仅列出名称，不含参数详情（由 load_mcp_tools_usage 按需加载）
-func buildToolsSection(builtinTools []string, mcpCatalog []tools.MCPServerCatalogEntry) string {
+// MCP 工具仅列出名称，不含参数详情（由 load_tools 按需加载）
+func buildToolsSection(registry *tools.Registry, session string) string {
+	builtinTools := registry.GetBuiltinToolNames()
+	mcpCatalog := registry.GetMCPCatalog(session)
 	if len(builtinTools) == 0 && len(mcpCatalog) == 0 {
 		return ""
 	}
 
+	builtinTools = filterInactiveTools(builtinTools, registry, session)
 	var sb strings.Builder
-	sb.WriteString("## Available Tools\n\n")
+	sb.WriteString("## Available Tool Names(Not loaded)\n")
+	sb.WriteString("tools in this section are available but not loaded yet. Use `load_tools` to load and get detailed parameter information for any tool before calling it.\n\n")
 
 	// 内置系统工具组
 	if len(builtinTools) > 0 {
-		sb.WriteString("### system\n")
-		sb.WriteString("Built-in system tools for file operations, shell, web search, and agent management.\n\n")
+		sb.WriteString("### Built-In\n")
+		sb.WriteString("Built-in tools\n\n")
 		fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(builtinTools, ", "))
 	}
 
@@ -213,12 +227,15 @@ func buildToolsSection(builtinTools []string, mcpCatalog []tools.MCPServerCatalo
 			if len(entry.ToolNames) > 0 {
 				toolList := make([]string, len(entry.ToolNames))
 				for i, t := range entry.ToolNames {
+					if registry.IsToolActive(session, t) {
+						continue
+					}
 					toolList[i] = fmt.Sprintf("mcp_%s_%s", entry.Name, t)
 				}
 				fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(toolList, ", "))
 			}
 		}
-		sb.WriteString("Use `load_mcp_tools_usage` to get detailed parameter information for any MCP tool before calling it.\n")
+		sb.WriteString("Use `load_tools` to load and get detailed parameter information for any tool before calling it.\n")
 	}
 
 	return sb.String()

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -188,7 +188,24 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (3);
+INSERT INTO schema_version (version) VALUES (4);
+
+CREATE TABLE cron_jobs (
+    id TEXT PRIMARY KEY,
+    message TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    sender_id TEXT NOT NULL DEFAULT '',
+    cron_expr TEXT,
+    every_seconds INTEGER DEFAULT 0,
+    delay_seconds INTEGER DEFAULT 0,
+    at TEXT,
+    created_at DATETIME NOT NULL,
+    next_run DATETIME NOT NULL,
+    one_shot INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_cron_jobs_next_run ON cron_jobs(next_run);
+CREATE INDEX idx_cron_jobs_sender ON cron_jobs(sender_id);
 `
 	if _, err := db.Conn().Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
@@ -260,6 +277,33 @@ UPDATE schema_version SET version = 3;
 		}
 
 		log.Info("Database migrated to v3 (added core_memory_blocks, archival_memory, event_history_fts)")
+	}
+
+	if from < 4 {
+		migration := `
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    id TEXT PRIMARY KEY,
+    message TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    sender_id TEXT NOT NULL DEFAULT '',
+    cron_expr TEXT,
+    every_seconds INTEGER DEFAULT 0,
+    delay_seconds INTEGER DEFAULT 0,
+    at TEXT,
+    created_at DATETIME NOT NULL,
+    next_run DATETIME NOT NULL,
+    one_shot INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_next_run ON cron_jobs(next_run);
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_sender ON cron_jobs(sender_id);
+
+UPDATE schema_version SET version = 4;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v3->v4: %w", err)
+		}
+		log.Info("Database migrated to v4 (added cron_jobs)")
 	}
 
 	return nil

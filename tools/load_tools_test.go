@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -66,23 +65,23 @@ func hasToolDefinitionName(defs []llm.ToolDefinition, name string) bool {
 	return false
 }
 
-func TestLoadMCPToolsUsageTool_Name(t *testing.T) {
-	tool := &LoadMCPToolsUsageTool{}
-	if tool.Name() != "load_mcp_tools_usage" {
-		t.Errorf("Expected 'load_mcp_tools_usage', got '%s'", tool.Name())
+func TestLoadToolsTool_Name(t *testing.T) {
+	tool := &LoadToolsTool{}
+	if tool.Name() != "load_tools" {
+		t.Errorf("Expected 'load_tools', got '%s'", tool.Name())
 	}
 }
 
-func TestLoadMCPToolsUsageTool_Description(t *testing.T) {
-	tool := &LoadMCPToolsUsageTool{}
+func TestLoadToolsTool_Description(t *testing.T) {
+	tool := &LoadToolsTool{}
 	desc := tool.Description()
 	if desc == "" {
 		t.Error("Description should not be empty")
 	}
 }
 
-func TestLoadMCPToolsUsageTool_Parameters(t *testing.T) {
-	tool := &LoadMCPToolsUsageTool{}
+func TestLoadToolsTool_Parameters(t *testing.T) {
+	tool := &LoadToolsTool{}
 	params := tool.Parameters()
 	if len(params) != 1 {
 		t.Errorf("Expected 1 parameter, got %d", len(params))
@@ -92,136 +91,11 @@ func TestLoadMCPToolsUsageTool_Parameters(t *testing.T) {
 	}
 }
 
-func TestLoadMCPToolsUsageTool_ListAll(t *testing.T) {
-	registry := NewRegistry()
-
-	registry.Register(&mockMCPTool{
-		name:        "search",
-		server:      "github",
-		description: "Search GitHub",
-		params: []llm.ToolParam{
-			{Name: "query", Type: "string", Required: true, Description: "Search query"},
-		},
-	})
-
-	registry.SetGlobalMCPCatalog([]MCPServerCatalogEntry{
-		{
-			Name:         "github",
-			Instructions: "GitHub MCP server",
-			ToolNames:    []string{"search"},
-		},
-	})
-
-	tool := &LoadMCPToolsUsageTool{}
-	ctx := &ToolContext{
-		Registry: registry,
-		Channel:  "test",
-		ChatID:   "chat1",
-	}
-
-	result, err := tool.Execute(ctx, `{}`)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if !strings.Contains(result.Summary, "github") {
-		t.Errorf("Expected 'github' in result, got: %s", result.Summary)
-	}
-	if !strings.Contains(result.Summary, "mcp_github_search") {
-		t.Errorf("Expected 'mcp_github_search' in result, got: %s", result.Summary)
-	}
-}
-
-func TestLoadMCPToolsUsageTool_ListAll_IncludesBuiltinTools(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&mockBuiltinTool{name: "shell", desc: "Run shell commands"})
-	registry.Register(&mockBuiltinTool{name: "read", desc: "Read files"})
-	registry.RegisterCore(&mockBuiltinTool{name: "core_tool", desc: "Always available"})
-
-	tool := &LoadMCPToolsUsageTool{}
-	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
-
-	result, err := tool.Execute(ctx, `{}`)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if !strings.Contains(result.Summary, "shell") {
-		t.Errorf("Expected 'shell' in result, got: %s", result.Summary)
-	}
-	if !strings.Contains(result.Summary, "read") {
-		t.Errorf("Expected 'read' in result, got: %s", result.Summary)
-	}
-	// Core tools should NOT appear in the loadable list
-	if strings.Contains(result.Summary, "core_tool") {
-		t.Errorf("Core tool should not appear in loadable tool list, got: %s", result.Summary)
-	}
-}
-
-func TestLoadMCPToolsUsageTool_GetSchemas(t *testing.T) {
-	registry := NewRegistry()
-
-	registry.Register(&mockMCPTool{
-		name:        "list_repos",
-		server:      "github",
-		description: "List GitHub repositories",
-		params: []llm.ToolParam{
-			{Name: "org", Type: "string", Required: true, Description: "Organization name"},
-			{Name: "limit", Type: "integer", Required: false, Description: "Max results"},
-		},
-	})
-
-	tool := &LoadMCPToolsUsageTool{}
-	ctx := &ToolContext{
-		Registry: registry,
-		Channel:  "test",
-		ChatID:   "chat1",
-	}
-
-	result, err := tool.Execute(ctx, `{"tools": "mcp_github_list_repos"}`)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	if !strings.Contains(result.Summary, "mcp_github_list_repos") {
-		t.Errorf("Expected tool name in result, got: %s", result.Summary)
-	}
-	if !strings.Contains(result.Summary, "org") {
-		t.Errorf("Expected 'org' parameter in result, got: %s", result.Summary)
-	}
-	if !strings.Contains(result.Summary, "limit") {
-		t.Errorf("Expected 'limit' parameter in result, got: %s", result.Summary)
-	}
-}
-
-func TestLoadMCPToolsUsageTool_GetSchemas_BuiltinTool(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&mockBuiltinTool{
-		name: "shell",
-		desc: "Execute shell commands",
-		params: []llm.ToolParam{
-			{Name: "command", Type: "string", Required: true, Description: "Command to run"},
-		},
-	})
-
-	tool := &LoadMCPToolsUsageTool{}
-	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
-
-	result, err := tool.Execute(ctx, `{"tools": "shell"}`)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if !strings.Contains(result.Summary, "shell") {
-		t.Errorf("Expected 'shell' in result, got: %s", result.Summary)
-	}
-	if !strings.Contains(result.Summary, "command") {
-		t.Errorf("Expected 'command' parameter, got: %s", result.Summary)
-	}
-}
-
-func TestLoadMCPToolsUsageTool_ActivatesToolsOnLoad(t *testing.T) {
+func TestLoadToolsTool_ActivatesToolsOnLoad(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&mockBuiltinTool{name: "shell", desc: "Shell"})
 
-	tool := &LoadMCPToolsUsageTool{}
+	tool := &LoadToolsTool{}
 	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
 
 	if registry.IsToolActive("test:chat1", "shell") {
@@ -238,9 +112,9 @@ func TestLoadMCPToolsUsageTool_ActivatesToolsOnLoad(t *testing.T) {
 	}
 }
 
-func TestLoadMCPToolsUsageTool_NotFound(t *testing.T) {
+func TestLoadToolsTool_NotFound(t *testing.T) {
 	registry := NewRegistry()
-	tool := &LoadMCPToolsUsageTool{}
+	tool := &LoadToolsTool{}
 	ctx := &ToolContext{
 		Registry: registry,
 		Channel:  "test",
@@ -389,14 +263,14 @@ func TestMCPRemoteTool_StubMode(t *testing.T) {
 
 func TestRegistry_AsDefinitionsForSession_OnlyCoreToolsByDefault(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.RegisterCore(&mockBuiltinTool{name: "load_tools"})
 	registry.Register(&mockBuiltinTool{name: "shell"})
 	registry.Register(&mockBuiltinTool{name: "read"})
 	registry.Register(&mockMCPTool{name: "search", server: "github", description: "Search"})
 
 	defs := registry.AsDefinitionsForSession("test:chat")
 
-	if !hasToolDefinitionName(defs, "load_mcp_tools_usage") {
+	if !hasToolDefinitionName(defs, "load_tools") {
 		t.Fatal("Core tool should always be in definitions")
 	}
 	if hasToolDefinitionName(defs, "shell") {
@@ -412,7 +286,7 @@ func TestRegistry_AsDefinitionsForSession_OnlyCoreToolsByDefault(t *testing.T) {
 
 func TestRegistry_AsDefinitionsForSession_IncludesActivatedBuiltinTools(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.RegisterCore(&mockBuiltinTool{name: "load_tools"})
 	registry.Register(&mockBuiltinTool{name: "shell"})
 	registry.Register(&mockBuiltinTool{name: "read"})
 
@@ -420,7 +294,7 @@ func TestRegistry_AsDefinitionsForSession_IncludesActivatedBuiltinTools(t *testi
 
 	defs := registry.AsDefinitionsForSession("test:chat")
 
-	if !hasToolDefinitionName(defs, "load_mcp_tools_usage") {
+	if !hasToolDefinitionName(defs, "load_tools") {
 		t.Fatal("Core tool should be present")
 	}
 	if !hasToolDefinitionName(defs, "shell") {
@@ -433,7 +307,7 @@ func TestRegistry_AsDefinitionsForSession_IncludesActivatedBuiltinTools(t *testi
 
 func TestRegistry_AsDefinitionsForSession_IncludesActivatedSessionMCPTools(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.RegisterCore(&mockBuiltinTool{name: "load_tools"})
 
 	sessionMCP := NewSessionMCPManager("test:chat", "", "", "", time.Minute)
 	sessionMCP.initialized = true
@@ -620,12 +494,12 @@ func TestRegistry_GetBuiltinToolNames(t *testing.T) {
 
 func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
 	registry := DefaultRegistry()
-	tool, ok := registry.Get("load_mcp_tools_usage")
+	tool, ok := registry.Get("load_tools")
 	if !ok {
-		t.Error("DefaultRegistry should contain load_mcp_tools_usage tool")
+		t.Error("DefaultRegistry should contain load_tools tool")
 	}
-	if tool.Name() != "load_mcp_tools_usage" {
-		t.Errorf("Expected 'load_mcp_tools_usage', got '%s'", tool.Name())
+	if tool.Name() != "load_tools" {
+		t.Errorf("Expected 'load_tools', got '%s'", tool.Name())
 	}
 }
 
@@ -677,7 +551,7 @@ func TestSessionMCP_UnloadKeepsInitializedWhenNothingUnloaded(t *testing.T) {
 
 func TestRegistry_AsDefinitionsForSession_ActivatedGlobalMCPToolHasFullParams(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+	registry.RegisterCore(&mockBuiltinTool{name: "load_tools"})
 
 	expectedParams := []llm.ToolParam{
 		{Name: "query", Type: "string", Description: "Search query", Required: true},
@@ -720,7 +594,8 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	registry := DefaultRegistry()
 	defs := registry.AsDefinitions()
 
-	coreExpected := []string{"load_mcp_tools_usage", "Shell", "Glob", "Grep", "Read", "Edit", "SubAgent", "Cron"}
+	// Note: Cron is now registered separately with dependency injection
+	coreExpected := []string{"load_tools", "Shell", "Glob", "Grep", "Read", "Edit", "DownloadFile", "SubAgent"}
 	for _, name := range coreExpected {
 		if !hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should always appear in definitions (core tool)", name)
@@ -728,7 +603,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	}
 
 	// Non-core tools should NOT be in AsDefinitions
-	nonCore := []string{"WebSearch", "DownloadFile"}
+	nonCore := []string{"WebSearch"}
 	for _, name := range nonCore {
 		if hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should NOT appear in AsDefinitions (non-core)", name)

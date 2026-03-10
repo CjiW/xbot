@@ -120,7 +120,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register 注册工具（非核心，需通过 load_mcp_tools_usage 激活后才出现在 tool definitions 中）
+// Register 注册工具（非核心，需通过 load_tools 激活后才出现在 tool definitions 中）
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -328,14 +328,14 @@ func (r *Registry) Clone() *Registry {
 }
 
 // mcpSchemaProvider 内部接口，MCPRemoteTool 和 SessionMCPRemoteTool 都实现此接口
-// 用于 load_mcp_tools_usage 获取完整参数信息
+// 用于 load_tools 获取完整参数信息
 type mcpSchemaProvider interface {
 	fullDescription() string
 	fullParams() []llm.ToolParam
 	mcpServerName() string
 }
 
-// ToolSchema 工具完整 schema 信息（供 load_mcp_tools_usage 使用）
+// ToolSchema 工具完整 schema 信息（供 load_tools 使用）
 type ToolSchema struct {
 	ToolName    string
 	ServerName  string // 内置工具为空，MCP 工具为 server 名
@@ -438,7 +438,8 @@ func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolS
 }
 
 // DefaultRegistry 创建包含默认工具的注册表
-// 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_mcp_tools_usage 激活。
+// 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_tools 激活。
+// 注意：CronTool 需要依赖注入，不在默认注册表中，需单独注册
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
@@ -447,11 +448,11 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&GrepTool{})
 	r.RegisterCore(&ReadTool{})
 	r.RegisterCore(&EditTool{})
-	r.RegisterCore(&LoadMCPToolsUsageTool{})
+	r.RegisterCore(&LoadToolsTool{})
 	r.RegisterCore(&SubAgentTool{})
-	r.RegisterCore(NewCronTool())
-	// 可加载工具：需通过 load_mcp_tools_usage 按需激活
+	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
+	r.RegisterCore(&DownloadFileTool{})
+	// 可加载工具：需通过 load_tools 按需激活
 	r.Register(NewWebSearchTool())
-	r.Register(&DownloadFileTool{})
 	return r
 }

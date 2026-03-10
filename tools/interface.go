@@ -190,6 +190,7 @@ func (r *Registry) SetSessionMCPManagerProvider(provider SessionMCPManagerProvid
 // AsDefinitionsForSession 获取特定会话的工具定义：
 //   - 核心工具始终包含
 //   - 非核心工具仅在激活且未过期（maxIdleRounds 内有使用）时才包含
+//   - 全局 MCP 工具激活后以完整参数 schema 加入（而非 stub 模式的空 params）
 func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -198,7 +199,15 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 
 	var defs []llm.ToolDefinition
 	for _, tool := range r.globalTools {
-		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+		if mcp, isMCP := tool.(mcpSchemaProvider); isMCP {
+			// 全局 MCP 工具：仅在激活后以完整参数 schema 加入
+			if active[tool.Name()] {
+				defs = append(defs, &mcpToolDefinition{
+					name:   tool.Name(),
+					desc:   tool.Description(),
+					params: mcp.fullParams(),
+				})
+			}
 			continue
 		}
 		if r.coreTools[tool.Name()] || active[tool.Name()] {
@@ -206,7 +215,7 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 		}
 	}
 
-	// 追加已激活的 MCP 工具（带完整参数 schema）
+	// 追加已激活的会话 MCP 工具（带完整参数 schema）
 	if r.sessionMCPMgr != nil {
 		if sm := r.sessionMCPMgr.GetSessionMCPManager(sessionKey); sm != nil {
 			defs = append(defs, sm.GetActivatedToolDefs(active)...)

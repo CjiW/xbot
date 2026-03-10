@@ -272,11 +272,17 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		return err
 	}
 
+	// 优先使用服务器返回的 instructions，否则使用 config 中的 fallback
+	instructions := initResult.Instructions
+	if instructions == "" {
+		instructions = cfg.Instructions
+	}
+
 	conn := &mcpConnection{
 		name:         name,
 		session:      session,
 		tools:        initResult.Tools,
-		instructions: initResult.Instructions,
+		instructions: instructions,
 	}
 
 	sm.connections[name] = conn

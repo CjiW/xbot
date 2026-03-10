@@ -335,6 +335,20 @@ type mcpSchemaProvider interface {
 	mcpServerName() string
 }
 
+// ToolGroupProvider 工具组提供者接口，用于将工具分组显示
+// 实现此接口的工具将显示在独立的工具组中，而非 Built-in 分组
+type ToolGroupProvider interface {
+	GroupName() string        // 工具组名称（如 "Feishu"）
+	GroupInstructions() string // 工具组使用说明
+}
+
+// ToolGroupEntry 工具组条目
+type ToolGroupEntry struct {
+	Name         string   // 工具组名称
+	Instructions string   // 工具组使用说明
+	ToolNames    []string // 工具名称列表
+}
+
 // ToolSchema 工具完整 schema 信息（供 load_tools 使用）
 type ToolSchema struct {
 	ToolName    string
@@ -343,19 +357,56 @@ type ToolSchema struct {
 	Params      []llm.ToolParam
 }
 
-// GetBuiltinToolNames 返回所有内置（非 MCP）工具的名称列表（按名称排序）
-// 内置工具不实现 mcpSchemaProvider 接口
+// GetBuiltinToolNames 返回所有内置（非 MCP、非工具组）工具的名称列表（按名称排序）
+// 内置工具不实现 mcpSchemaProvider 接口，也不实现 ToolGroupProvider 接口
 func (r *Registry) GetBuiltinToolNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var names []string
 	for name, tool := range r.globalTools {
-		if _, isMCP := tool.(mcpSchemaProvider); !isMCP {
-			names = append(names, name)
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
 		}
+		if _, hasGroup := tool.(ToolGroupProvider); hasGroup {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// GetToolGroups 返回所有工具组（按组名排序）
+// 每个工具组包含组名、说明和工具名称列表
+func (r *Registry) GetToolGroups() []ToolGroupEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	groups := make(map[string]*ToolGroupEntry)
+	for _, tool := range r.globalTools {
+		if groupProvider, ok := tool.(ToolGroupProvider); ok {
+			groupName := groupProvider.GroupName()
+			if groups[groupName] == nil {
+				groups[groupName] = &ToolGroupEntry{
+					Name:         groupName,
+					Instructions: groupProvider.GroupInstructions(),
+					ToolNames:    []string{},
+				}
+			}
+			groups[groupName].ToolNames = append(groups[groupName].ToolNames, tool.Name())
+		}
+	}
+
+	// 转换为切片并排序
+	result := make([]ToolGroupEntry, 0, len(groups))
+	for _, entry := range groups {
+		sort.Strings(entry.ToolNames)
+		result = append(result, *entry)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
 }
 
 // SetGlobalMCPCatalog 设置全局 MCP Server 目录（由 MCPManager.RegisterTools 调用）

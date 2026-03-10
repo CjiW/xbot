@@ -22,12 +22,13 @@ import (
 
 // MCPServerConfig 单个 MCP Server 的配置
 type MCPServerConfig struct {
-	Command string            `json:"command,omitempty"` // 可执行文件路径（stdio 模式）
-	Args    []string          `json:"args,omitempty"`    // 命令行参数（stdio 模式）
-	Env     map[string]string `json:"env,omitempty"`     // 环境变量
-	URL     string            `json:"url,omitempty"`     // HTTP MCP URL（http 模式）
-	Headers map[string]string `json:"headers,omitempty"` // HTTP 请求头
-	Enabled *bool             `json:"enabled,omitempty"` // 是否启用（默认 true）
+	Command      string            `json:"command,omitempty"`      // 可执行文件路径（stdio 模式）
+	Args         []string          `json:"args,omitempty"`         // 命令行参数（stdio 模式）
+	Env          map[string]string `json:"env,omitempty"`          // 环境变量
+	URL          string            `json:"url,omitempty"`          // HTTP MCP URL（http 模式）
+	Headers      map[string]string `json:"headers,omitempty"`      // HTTP 请求头
+	Enabled      *bool             `json:"enabled,omitempty"`      // 是否启用（默认 true）
+	Instructions string            `json:"instructions,omitempty"` // MCP 服务器使用说明（fallback，当服务器不返回时使用）
 }
 
 // MCPConfig MCP 配置文件结构

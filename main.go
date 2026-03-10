@@ -253,6 +253,11 @@ func main() {
 		}
 	}()
 
+	// 异步检查并生成 MCP instructions
+	globalMCPConfigPath := filepath.Join(workDir, ".xbot", "mcp.json")
+	instructionsMgr := tools.NewMCPInstructionsManager(globalMCPConfigPath, llmClient, cfg.LLM.Model)
+	instructionsMgr.CheckAndGenerateInstructionsAsync(ctx)
+
 	log.Info("xbot started successfully")
 	fmt.Println("🤖 xbot is running. Press Ctrl+C to stop.")
 

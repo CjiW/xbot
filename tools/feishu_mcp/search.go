@@ -14,6 +14,7 @@ import (
 
 // WikiListSpacesTool lists all Wiki spaces the user has access to.
 type WikiListSpacesTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -70,6 +71,7 @@ func (t *WikiListSpacesTool) Execute(ctx *tools.ToolContext, input string) (*too
 
 // WikiListNodesTool lists nodes within a Wiki space.
 type WikiListNodesTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -184,6 +186,7 @@ func (t *WikiListNodesTool) Execute(ctx *tools.ToolContext, input string) (*tool
 
 // WikiGetNodeTool gets node details and content.
 type WikiGetNodeTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -350,6 +353,7 @@ func (t *WikiGetNodeTool) getDocxDocument(ctx *tools.ToolContext, client *Client
 
 // WikiMoveNodeTool moves a Wiki node to another parent node.
 type WikiMoveNodeTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -436,6 +440,7 @@ func (t *WikiMoveNodeTool) Execute(ctx *tools.ToolContext, input string) (*tools
 
 // WikiCreateNodeTool creates a new node in a Wiki space, optionally with a new document.
 type WikiCreateNodeTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 

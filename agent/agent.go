@@ -182,7 +182,7 @@ func New(cfg Config) *Agent {
 	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
-	registry.Register(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
+	registry.RegisterCore(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()

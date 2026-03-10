@@ -195,13 +195,15 @@ func filterInactiveTools(tools []string, registry *tools.Registry, session strin
 
 // buildToolsSection 将工具目录格式化为系统提示词片段：
 //   - 内置系统工具（system group）
+//   - 工具组（如 Feishu，每组含组说明）
 //   - MCP Server 工具（每个 server 一组，含服务器说明）
 //
 // MCP 工具仅列出名称，不含参数详情（由 load_tools 按需加载）
 func buildToolsSection(registry *tools.Registry, session string) string {
 	builtinTools := registry.GetBuiltinToolNames()
+	toolGroups := registry.GetToolGroups()
 	mcpCatalog := registry.GetMCPCatalog(session)
-	if len(builtinTools) == 0 && len(mcpCatalog) == 0 {
+	if len(builtinTools) == 0 && len(toolGroups) == 0 && len(mcpCatalog) == 0 {
 		return ""
 	}
 
@@ -215,6 +217,18 @@ func buildToolsSection(registry *tools.Registry, session string) string {
 		sb.WriteString("### Built-In\n")
 		sb.WriteString("Built-in tools\n\n")
 		fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(builtinTools, ", "))
+	}
+
+	// 工具组（如 Feishu）
+	for _, group := range toolGroups {
+		fmt.Fprintf(&sb, "### %s\n", group.Name)
+		if group.Instructions != "" {
+			fmt.Fprintf(&sb, "%s\n\n", group.Instructions)
+		}
+		activeTools := filterInactiveTools(group.ToolNames, registry, session)
+		if len(activeTools) > 0 {
+			fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(activeTools, ", "))
+		}
 	}
 
 	// MCP 服务器工具组

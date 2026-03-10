@@ -52,13 +52,20 @@ func (t *ManageTools) Parameters() []llm.ToolParam {
 			Description: "MCP server configuration as JSON (for add_mcp). Example: {\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"/path\"]}",
 			Required:    false,
 		},
+		{
+			Name:        "instructions",
+			Type:        "string",
+			Description: "Brief description of what this MCP server does and when to use its tools (required for add_mcp)",
+			Required:    false,
+		},
 	}
 }
 
 type manageToolsArgs struct {
-	Action    string `json:"action"`
-	Name      string `json:"name"`
-	MCPConfig string `json:"mcp_config"`
+	Action       string `json:"action"`
+	Name         string `json:"name"`
+	MCPConfig    string `json:"mcp_config"`
+	Instructions string `json:"instructions"`
 }
 
 func (t *ManageTools) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -88,12 +95,18 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	if args.MCPConfig == "" {
 		return nil, fmt.Errorf("mcp_config is required for add_mcp")
 	}
+	if args.Instructions == "" {
+		return nil, fmt.Errorf("instructions is required for add_mcp - please provide a brief description of what this MCP server does and when to use its tools")
+	}
 
 	// Parse MCP config
 	var cfg MCPServerConfig
 	if err := json.Unmarshal([]byte(args.MCPConfig), &cfg); err != nil {
 		return nil, fmt.Errorf("parse mcp_config: %w", err)
 	}
+
+	// Set instructions from args
+	cfg.Instructions = args.Instructions
 
 	// Load existing config
 	userPath := t.resolveUserMCPConfigPath(ctx)

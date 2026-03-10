@@ -53,6 +53,7 @@ func fetchAllBlocks(ctx context.Context, client *Client, documentID string) ([]*
 
 // DocxGetContentTool gets document content in Markdown format.
 type DocxGetContentTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -116,6 +117,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 }
 
 type DocxGetBlockTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -177,6 +179,7 @@ func (t *DocxGetBlockTool) Execute(ctx *tools.ToolContext, input string) (*tools
 
 // DocxListBlocksTool lists document block structure.
 type DocxListBlocksTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -295,6 +298,7 @@ func trackChildren(block *docxv1.Block, childMap map[string]struct{}) {
 
 // DocxFindBlockTool searches blocks in a document by content.
 type DocxFindBlockTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -435,6 +439,7 @@ func subtreeContainsText(block *docxv1.Block, blockMap map[string]*docxv1.Block,
 
 // DocxCreateTool creates a new document.
 type DocxCreateTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -509,6 +514,7 @@ func (t *DocxCreateTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 
 // DocxInsertBlockTool writes Markdown content to a document using Feishu's native Markdown API.
 type DocxInsertBlockTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -653,6 +659,7 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 
 // DocxDeleteBlocksTool deletes blocks from a document by index range.
 type DocxDeleteBlocksTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 

@@ -63,13 +63,18 @@ func (t *LoadMCPToolsUsageTool) Execute(ctx *ToolContext, input string) (*ToolRe
 		}
 	}
 
-	result, err := t.loadToolSchemas(ctx.Registry, sessionKey, toolNames)
-	if err != nil {
-		return nil, err
-	}
+	schemas := ctx.Registry.GetToolSchemas(sessionKey, toolNames)
 
-	// 激活工具，使其出现在后续 LLM 调用的 tool definitions 中
-	ctx.Registry.ActivateTools(sessionKey, toolNames)
+	result := t.formatSchemaResult(schemas, toolNames)
+
+	// 只激活实际找到 schema 的工具
+	if len(schemas) > 0 {
+		found := make([]string, 0, len(schemas))
+		for _, s := range schemas {
+			found = append(found, s.ToolName)
+		}
+		ctx.Registry.ActivateTools(sessionKey, found)
+	}
 
 	return result, nil
 }
@@ -121,13 +126,11 @@ func (t *LoadMCPToolsUsageTool) listAllTools(registry *Registry, sessionKey stri
 	return NewResult(sb.String()), nil
 }
 
-// loadToolSchemas 返回指定工具的完整参数 schema（内置 + MCP）
-func (t *LoadMCPToolsUsageTool) loadToolSchemas(registry *Registry, sessionKey string, toolNames []string) (*ToolResult, error) {
-	schemas := registry.GetToolSchemas(sessionKey, toolNames)
-
+// formatSchemaResult 格式化 schema 查询结果为可读文本
+func (t *LoadMCPToolsUsageTool) formatSchemaResult(schemas []ToolSchema, requestedNames []string) *ToolResult {
 	if len(schemas) == 0 {
 		return NewResult(fmt.Sprintf("No tool schemas found for: %s\n\nUse load_mcp_tools_usage with no arguments to list all available tools.",
-			strings.Join(toolNames, ", "))), nil
+			strings.Join(requestedNames, ", ")))
 	}
 
 	sort.Slice(schemas, func(i, j int) bool {
@@ -139,7 +142,7 @@ func (t *LoadMCPToolsUsageTool) loadToolSchemas(registry *Registry, sessionKey s
 		found[s.ToolName] = true
 	}
 	var notFound []string
-	for _, name := range toolNames {
+	for _, name := range requestedNames {
 		if !found[name] {
 			notFound = append(notFound, name)
 		}
@@ -182,5 +185,5 @@ func (t *LoadMCPToolsUsageTool) loadToolSchemas(registry *Registry, sessionKey s
 		fmt.Fprintf(&sb, "_Tools not found: %s_\n", strings.Join(notFound, ", "))
 	}
 
-	return NewResult(sb.String()), nil
+	return NewResult(sb.String())
 }

@@ -131,10 +131,13 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 		execCmd.Env = append(os.Environ(), envList...)
 	}
 
-	// Capture stderr so MCP server diagnostics appear in xbot logs
-	stderrR, stderrW := io.Pipe()
-	execCmd.Stderr = stderrW
-	go drainStderr(serverName, stderrR)
+	// StderrPipe returns a reader that is closed automatically when the process exits,
+	// so the drainStderr goroutine will not leak.
+	stderrPipe, err := execCmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	go drainStderr(serverName, stderrPipe)
 
 	transport := &mcp.CommandTransport{
 		Command:           execCmd,
@@ -146,7 +149,6 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 
 	session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
 	if err != nil {
-		_ = stderrW.Close()
 		return nil, fmt.Errorf("connect stdio: %w", err)
 	}
 
@@ -154,6 +156,7 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 }
 
 // drainStderr reads lines from an MCP server's stderr and logs them.
+// The reader is expected to close when the process exits.
 func drainStderr(serverName string, r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -161,6 +164,9 @@ func drainStderr(serverName string, r io.Reader) {
 		if strings.TrimSpace(line) != "" {
 			log.WithField("mcp_server", serverName).Warn(line)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.WithError(err).WithField("mcp_server", serverName).Debug("stderr reader closed")
 	}
 }
 

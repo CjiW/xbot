@@ -316,8 +316,8 @@ func (t *MCPRemoteTool) mcpServerName() string {
 }
 
 func (t *MCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args map[string]any
-	if input != "" && input != "{}" {
+	args := map[string]any{}
+	if input != "" {
 		if err := json.Unmarshal([]byte(input), &args); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}

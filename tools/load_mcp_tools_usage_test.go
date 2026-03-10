@@ -629,6 +629,93 @@ func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
 	}
 }
 
+// ---- UnloadInactiveServers: 卸载后重连 ----
+
+func TestSessionMCP_UnloadResetsInitialized(t *testing.T) {
+	sm := NewSessionMCPManager("test:chat", "", "", "", 0) // timeout=0 → 立即过期
+	sm.initialized = true
+	sm.connections["linear"] = &mcpConnection{
+		name: "linear",
+		tools: []*mcp.Tool{
+			{Name: "list_issues", Description: "List issues"},
+		},
+	}
+	sm.lastActive["linear"] = time.Now().Add(-time.Hour) // 1 小时前活跃
+
+	sm.UnloadInactiveServers()
+
+	if len(sm.connections) != 0 {
+		t.Fatal("Connection should be unloaded")
+	}
+	if sm.initialized {
+		t.Fatal("initialized should be reset to false after unloading servers, so next access triggers reconnection")
+	}
+}
+
+func TestSessionMCP_UnloadKeepsInitializedWhenNothingUnloaded(t *testing.T) {
+	sm := NewSessionMCPManager("test:chat", "", "", "", time.Hour)
+	sm.initialized = true
+	sm.connections["linear"] = &mcpConnection{
+		name: "linear",
+		tools: []*mcp.Tool{
+			{Name: "list_issues", Description: "List issues"},
+		},
+	}
+	sm.lastActive["linear"] = time.Now() // 刚刚活跃
+
+	sm.UnloadInactiveServers()
+
+	if len(sm.connections) != 1 {
+		t.Fatal("Active connection should not be unloaded")
+	}
+	if !sm.initialized {
+		t.Fatal("initialized should remain true when no servers were unloaded")
+	}
+}
+
+// ---- AsDefinitionsForSession: 全局 MCP 工具激活后含完整参数 ----
+
+func TestRegistry_AsDefinitionsForSession_ActivatedGlobalMCPToolHasFullParams(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterCore(&mockBuiltinTool{name: "load_mcp_tools_usage"})
+
+	expectedParams := []llm.ToolParam{
+		{Name: "query", Type: "string", Description: "Search query", Required: true},
+		{Name: "limit", Type: "number", Description: "Max results"},
+	}
+	registry.Register(&mockMCPTool{
+		name:        "search",
+		server:      "github",
+		description: "Search GitHub",
+		params:      expectedParams,
+	})
+
+	// 未激活时不应出现
+	defs := registry.AsDefinitionsForSession("test:chat")
+	if hasToolDefinitionName(defs, "mcp_github_search") {
+		t.Fatal("Unactivated global MCP tool should NOT be in definitions")
+	}
+
+	// 激活后应出现，且带完整参数
+	registry.ActivateTools("test:chat", []string{"mcp_github_search"})
+	defs = registry.AsDefinitionsForSession("test:chat")
+	if !hasToolDefinitionName(defs, "mcp_github_search") {
+		t.Fatal("Activated global MCP tool should be in definitions")
+	}
+
+	for _, d := range defs {
+		if d.Name() == "mcp_github_search" {
+			params := d.Parameters()
+			if len(params) != len(expectedParams) {
+				t.Fatalf("Expected %d params, got %d (empty params bug)", len(expectedParams), len(params))
+			}
+			if params[0].Name != "query" || !params[0].Required {
+				t.Errorf("First param should be 'query' (required), got %+v", params[0])
+			}
+		}
+	}
+}
+
 func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	registry := DefaultRegistry()
 	defs := registry.AsDefinitions()

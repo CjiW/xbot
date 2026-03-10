@@ -95,18 +95,18 @@ type Tool interface {
 	Execute(ctx *ToolContext, input string) (*ToolResult, error)
 }
 
-const defaultMaxIdleRounds int64 = 3
+const defaultMaxIdleRounds int64 = 5
 
 // Registry 工具注册表
 type Registry struct {
 	mu               sync.RWMutex
-	globalTools      map[string]Tool              // 所有工具（全局共享）
-	coreTools        map[string]bool              // 核心工具名（始终在 tool definitions 中）
-	sessionActivated map[string]map[string]int64  // sessionKey → toolName → lastUsedRound
-	sessionRound     map[string]int64             // sessionKey → 当前 round 计数
-	maxIdleRounds    int64                         // 连续多少轮未使用后自动失效
-	sessionMCPMgr    SessionMCPManagerProvider    // 会话MCP管理器提供者
-	globalMCPCatalog []MCPServerCatalogEntry      // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
+	globalTools      map[string]Tool             // 所有工具（全局共享）
+	coreTools        map[string]bool             // 核心工具名（始终在 tool definitions 中）
+	sessionActivated map[string]map[string]int64 // sessionKey → toolName → lastUsedRound
+	sessionRound     map[string]int64            // sessionKey → 当前 round 计数
+	maxIdleRounds    int64                       // 连续多少轮未使用后自动失效
+	sessionMCPMgr    SessionMCPManagerProvider   // 会话MCP管理器提供者
+	globalMCPCatalog []MCPServerCatalogEntry     // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
 }
 
 // NewRegistry 创建工具注册表
@@ -432,15 +432,17 @@ func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolS
 // 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_mcp_tools_usage 激活。
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.Register(&ShellTool{})
-	r.Register(&GlobTool{})
-	r.Register(&GrepTool{})
-	r.Register(&ReadTool{})
-	r.Register(&EditTool{})
+	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
+	r.RegisterCore(&ShellTool{})
+	r.RegisterCore(&GlobTool{})
+	r.RegisterCore(&GrepTool{})
+	r.RegisterCore(&ReadTool{})
+	r.RegisterCore(&EditTool{})
+	r.RegisterCore(&LoadMCPToolsUsageTool{})
+	// 可加载工具：需通过 load_mcp_tools_usage 按需激活
 	r.Register(NewWebSearchTool())
 	r.Register(&SubAgentTool{})
 	r.Register(NewCronTool())
 	r.Register(&DownloadFileTool{})
-	r.RegisterCore(&LoadMCPToolsUsageTool{})
 	return r
 }

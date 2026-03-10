@@ -507,81 +507,86 @@ func TestRegistry_DeactivateSession(t *testing.T) {
 	}
 }
 
+func tickN(registry *Registry, sessionKey string, n int) {
+	for i := 0; i < n; i++ {
+		registry.TickSession(sessionKey)
+	}
+}
+
 func TestRegistry_ToolExpiry_AfterIdleRounds(t *testing.T) {
 	registry := NewRegistry()
-	// maxIdleRounds defaults to 3
-	registry.Register(&mockBuiltinTool{name: "shell"})
-	registry.Register(&mockBuiltinTool{name: "read"})
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "tool_a"})
+	registry.Register(&mockBuiltinTool{name: "tool_b"})
 
-	registry.ActivateTools("s", []string{"shell", "read"})
+	registry.ActivateTools("s", []string{"tool_a", "tool_b"})
 
-	// Round 0 (activation round): both active
-	if !registry.IsToolActive("s", "shell") || !registry.IsToolActive("s", "read") {
-		t.Fatal("Both tools should be active at round 0")
+	if !registry.IsToolActive("s", "tool_a") || !registry.IsToolActive("s", "tool_b") {
+		t.Fatal("Both tools should be active immediately after activation")
 	}
 
-	// Tick 3 rounds without touching: round goes to 3, idle = 3, still within limit
-	registry.TickSession("s")
-	registry.TickSession("s")
-	registry.TickSession("s")
-	if !registry.IsToolActive("s", "shell") {
-		t.Fatal("Tool should still be active after 3 idle rounds (maxIdleRounds=3)")
+	// Tick exactly maxIdleRounds: idle == max, still within limit
+	tickN(registry, "s", max)
+	if !registry.IsToolActive("s", "tool_a") {
+		t.Fatalf("Tool should still be active after %d idle rounds (maxIdleRounds=%d)", max, max)
 	}
 
-	// Tick one more: round 4, idle = 4 > 3 → expired
+	// One more tick: idle == max+1, exceeds limit → expired
 	registry.TickSession("s")
-	if registry.IsToolActive("s", "shell") {
+	if registry.IsToolActive("s", "tool_a") {
 		t.Fatal("Tool should expire after exceeding maxIdleRounds")
 	}
 
-	// AsDefinitionsForSession should also exclude expired tools
 	defs := registry.AsDefinitionsForSession("s")
-	if hasToolDefinitionName(defs, "shell") {
+	if hasToolDefinitionName(defs, "tool_a") {
 		t.Fatal("Expired tool should not appear in definitions")
 	}
 }
 
 func TestRegistry_TouchTool_ExtendsLifetime(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&mockBuiltinTool{name: "shell"})
-	registry.Register(&mockBuiltinTool{name: "read"})
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "touched"})
+	registry.Register(&mockBuiltinTool{name: "untouched"})
 
-	registry.ActivateTools("s", []string{"shell", "read"})
+	registry.ActivateTools("s", []string{"touched", "untouched"})
 
-	// Advance 2 rounds, touch only "shell"
-	registry.TickSession("s")
-	registry.TickSession("s")
-	registry.TouchTool("s", "shell")
+	// Advance halfway, touch only one tool
+	half := max / 2
+	if half < 1 {
+		half = 1
+	}
+	tickN(registry, "s", half)
+	registry.TouchTool("s", "touched")
 
-	// Advance 2 more rounds (total 4 from activation, 2 from last shell touch)
-	registry.TickSession("s")
-	registry.TickSession("s")
+	// Advance maxIdleRounds more from activation (total > max from activation, but ≤ max from touch)
+	remaining := max - half + 1
+	tickN(registry, "s", remaining)
 
-	// shell was touched at round 2, now round 4: idle = 2 ≤ 3 → active
-	if !registry.IsToolActive("s", "shell") {
+	// "touched" was refreshed at round `half`, now at round `half + remaining`
+	// idle from touch = remaining ≤ max → still active
+	if !registry.IsToolActive("s", "touched") {
 		t.Fatal("Touched tool should still be active")
 	}
 
-	// read was last used at round 0, now round 4: idle = 4 > 3 → expired
-	if registry.IsToolActive("s", "read") {
+	// "untouched" was last used at round 0, now at round half+remaining > max → expired
+	if registry.IsToolActive("s", "untouched") {
 		t.Fatal("Untouched tool should have expired")
 	}
 }
 
 func TestRegistry_TickSession_PrunesExpiredEntries(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&mockBuiltinTool{name: "shell"})
+	max := int(registry.maxIdleRounds)
+	registry.Register(&mockBuiltinTool{name: "ephemeral"})
 
-	registry.ActivateTools("s", []string{"shell"})
+	registry.ActivateTools("s", []string{"ephemeral"})
 
-	// Advance past expiry
-	for i := 0; i < 5; i++ {
-		registry.TickSession("s")
-	}
+	// Advance well past expiry
+	tickN(registry, "s", max+2)
 
-	// The expired entry should have been pruned from the map by TickSession
 	registry.mu.RLock()
-	_, exists := registry.sessionActivated["s"]["shell"]
+	_, exists := registry.sessionActivated["s"]["ephemeral"]
 	registry.mu.RUnlock()
 	if exists {
 		t.Fatal("TickSession should prune expired entries from the map")
@@ -624,16 +629,22 @@ func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistry_LoadMCPToolsUsageIsCore(t *testing.T) {
+func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	registry := DefaultRegistry()
 	defs := registry.AsDefinitions()
 
-	if !hasToolDefinitionName(defs, "load_mcp_tools_usage") {
-		t.Error("load_mcp_tools_usage should always appear in definitions (core tool)")
+	coreExpected := []string{"load_mcp_tools_usage", "Shell", "Glob", "Grep", "Read", "Edit"}
+	for _, name := range coreExpected {
+		if !hasToolDefinitionName(defs, name) {
+			t.Errorf("%s should always appear in definitions (core tool)", name)
+		}
 	}
 
 	// Non-core tools should NOT be in AsDefinitions
-	if hasToolDefinitionName(defs, "shell") {
-		t.Error("shell should NOT appear in AsDefinitions (non-core)")
+	nonCore := []string{"WebSearch", "SubAgent", "Cron", "DownloadFile"}
+	for _, name := range nonCore {
+		if hasToolDefinitionName(defs, name) {
+			t.Errorf("%s should NOT appear in AsDefinitions (non-core)", name)
+		}
 	}
 }

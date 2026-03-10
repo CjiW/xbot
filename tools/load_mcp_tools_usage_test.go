@@ -507,6 +507,87 @@ func TestRegistry_DeactivateSession(t *testing.T) {
 	}
 }
 
+func TestRegistry_ToolExpiry_AfterIdleRounds(t *testing.T) {
+	registry := NewRegistry()
+	// maxIdleRounds defaults to 3
+	registry.Register(&mockBuiltinTool{name: "shell"})
+	registry.Register(&mockBuiltinTool{name: "read"})
+
+	registry.ActivateTools("s", []string{"shell", "read"})
+
+	// Round 0 (activation round): both active
+	if !registry.IsToolActive("s", "shell") || !registry.IsToolActive("s", "read") {
+		t.Fatal("Both tools should be active at round 0")
+	}
+
+	// Tick 3 rounds without touching: round goes to 3, idle = 3, still within limit
+	registry.TickSession("s")
+	registry.TickSession("s")
+	registry.TickSession("s")
+	if !registry.IsToolActive("s", "shell") {
+		t.Fatal("Tool should still be active after 3 idle rounds (maxIdleRounds=3)")
+	}
+
+	// Tick one more: round 4, idle = 4 > 3 → expired
+	registry.TickSession("s")
+	if registry.IsToolActive("s", "shell") {
+		t.Fatal("Tool should expire after exceeding maxIdleRounds")
+	}
+
+	// AsDefinitionsForSession should also exclude expired tools
+	defs := registry.AsDefinitionsForSession("s")
+	if hasToolDefinitionName(defs, "shell") {
+		t.Fatal("Expired tool should not appear in definitions")
+	}
+}
+
+func TestRegistry_TouchTool_ExtendsLifetime(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "shell"})
+	registry.Register(&mockBuiltinTool{name: "read"})
+
+	registry.ActivateTools("s", []string{"shell", "read"})
+
+	// Advance 2 rounds, touch only "shell"
+	registry.TickSession("s")
+	registry.TickSession("s")
+	registry.TouchTool("s", "shell")
+
+	// Advance 2 more rounds (total 4 from activation, 2 from last shell touch)
+	registry.TickSession("s")
+	registry.TickSession("s")
+
+	// shell was touched at round 2, now round 4: idle = 2 ≤ 3 → active
+	if !registry.IsToolActive("s", "shell") {
+		t.Fatal("Touched tool should still be active")
+	}
+
+	// read was last used at round 0, now round 4: idle = 4 > 3 → expired
+	if registry.IsToolActive("s", "read") {
+		t.Fatal("Untouched tool should have expired")
+	}
+}
+
+func TestRegistry_TickSession_PrunesExpiredEntries(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&mockBuiltinTool{name: "shell"})
+
+	registry.ActivateTools("s", []string{"shell"})
+
+	// Advance past expiry
+	for i := 0; i < 5; i++ {
+		registry.TickSession("s")
+	}
+
+	// The expired entry should have been pruned from the map by TickSession
+	registry.mu.RLock()
+	_, exists := registry.sessionActivated["s"]["shell"]
+	registry.mu.RUnlock()
+	if exists {
+		t.Fatal("TickSession should prune expired entries from the map")
+	}
+}
+
 // ---- GetBuiltinToolNames ----
 
 func TestRegistry_GetBuiltinToolNames(t *testing.T) {

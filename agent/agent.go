@@ -780,13 +780,16 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		_ = a.sendMessage(channel, chatID, buf.String())
 	}
 
+	// 推进 round 计数，自动清理长期未使用的工具激活
+	sessionKey := channel + ":" + chatID
+	a.tools.TickSession(sessionKey)
+
 	for i := 0; i < a.maxIterations; i++ {
 		if autoNotify && i > 0 {
 			notifyProgress("> 💭 思考中...")
 		}
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
-		sessionKey := channel + ":" + chatID
 		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
 		response, err := a.llmClient.Generate(ctx, a.model, messages, toolDefs)
 		if err != nil {
@@ -1033,6 +1036,9 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_mcp_tools_usage(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
 		}, nil
 	}
+
+	// 刷新工具最后使用 round，延长激活有效期
+	a.tools.TouchTool(sessionKey, tc.Name)
 
 	var execCtx context.Context
 	var cancel context.CancelFunc

@@ -95,14 +95,18 @@ type Tool interface {
 	Execute(ctx *ToolContext, input string) (*ToolResult, error)
 }
 
+const defaultMaxIdleRounds int64 = 3
+
 // Registry 工具注册表
 type Registry struct {
 	mu               sync.RWMutex
-	globalTools      map[string]Tool            // 所有工具（全局共享）
-	coreTools        map[string]bool            // 核心工具名（始终在 tool definitions 中）
-	sessionActivated map[string]map[string]bool // sessionKey → toolName → activated
-	sessionMCPMgr    SessionMCPManagerProvider  // 会话MCP管理器提供者
-	globalMCPCatalog []MCPServerCatalogEntry    // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
+	globalTools      map[string]Tool              // 所有工具（全局共享）
+	coreTools        map[string]bool              // 核心工具名（始终在 tool definitions 中）
+	sessionActivated map[string]map[string]int64  // sessionKey → toolName → lastUsedRound
+	sessionRound     map[string]int64             // sessionKey → 当前 round 计数
+	maxIdleRounds    int64                         // 连续多少轮未使用后自动失效
+	sessionMCPMgr    SessionMCPManagerProvider    // 会话MCP管理器提供者
+	globalMCPCatalog []MCPServerCatalogEntry      // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
 }
 
 // NewRegistry 创建工具注册表
@@ -110,7 +114,9 @@ func NewRegistry() *Registry {
 	return &Registry{
 		globalTools:      make(map[string]Tool),
 		coreTools:        make(map[string]bool),
-		sessionActivated: make(map[string]map[string]bool),
+		sessionActivated: make(map[string]map[string]int64),
+		sessionRound:     make(map[string]int64),
+		maxIdleRounds:    defaultMaxIdleRounds,
 	}
 }
 
@@ -183,19 +189,19 @@ func (r *Registry) SetSessionMCPManagerProvider(provider SessionMCPManagerProvid
 
 // AsDefinitionsForSession 获取特定会话的工具定义：
 //   - 核心工具始终包含
-//   - 非核心内置工具和 MCP 工具仅在通过 load_mcp_tools_usage 激活后才包含（带完整参数 schema）
+//   - 非核心工具仅在激活且未过期（maxIdleRounds 内有使用）时才包含
 func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	activated := r.sessionActivated[sessionKey]
+	active := r.activeToolSet(sessionKey)
 
 	var defs []llm.ToolDefinition
 	for _, tool := range r.globalTools {
 		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
-			continue // MCP 工具由 SessionMCPManager 提供完整定义
+			continue
 		}
-		if r.coreTools[tool.Name()] || activated[tool.Name()] {
+		if r.coreTools[tool.Name()] || active[tool.Name()] {
 			defs = append(defs, tool)
 		}
 	}
@@ -203,7 +209,7 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 	// 追加已激活的 MCP 工具（带完整参数 schema）
 	if r.sessionMCPMgr != nil {
 		if sm := r.sessionMCPMgr.GetSessionMCPManager(sessionKey); sm != nil {
-			defs = append(defs, sm.GetActivatedToolDefs(activated)...)
+			defs = append(defs, sm.GetActivatedToolDefs(active)...)
 		}
 	}
 
@@ -214,35 +220,91 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 	return defs
 }
 
-// ActivateTools 激活指定会话的工具（内置 + MCP 均通过此方法）
+// activeToolSet 返回指定会话中未过期的已激活工具名集合（调用方需持有 r.mu 读锁）
+func (r *Registry) activeToolSet(sessionKey string) map[string]bool {
+	toolRounds := r.sessionActivated[sessionKey]
+	if len(toolRounds) == 0 {
+		return nil
+	}
+	curRound := r.sessionRound[sessionKey]
+	active := make(map[string]bool, len(toolRounds))
+	for name, lastRound := range toolRounds {
+		if curRound-lastRound <= r.maxIdleRounds {
+			active[name] = true
+		}
+	}
+	return active
+}
+
+// TickSession 推进会话 round 计数（每次处理新用户消息时调用），同时清理已过期的工具。
+// 返回新的 round 编号。
+func (r *Registry) TickSession(sessionKey string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessionRound[sessionKey]++
+	curRound := r.sessionRound[sessionKey]
+
+	// 清理过期工具，防止 map 无限增长
+	if toolRounds := r.sessionActivated[sessionKey]; len(toolRounds) > 0 {
+		for name, lastRound := range toolRounds {
+			if curRound-lastRound > r.maxIdleRounds {
+				delete(toolRounds, name)
+			}
+		}
+	}
+
+	return curRound
+}
+
+// ActivateTools 激活指定会话的工具，记录当前 round（内置 + MCP 均通过此方法）
 func (r *Registry) ActivateTools(sessionKey string, toolNames []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	m := r.sessionActivated[sessionKey]
 	if m == nil {
-		m = make(map[string]bool, len(toolNames))
+		m = make(map[string]int64, len(toolNames))
 		r.sessionActivated[sessionKey] = m
 	}
+	curRound := r.sessionRound[sessionKey]
 	for _, name := range toolNames {
-		m[name] = true
+		m[name] = curRound
 	}
 }
 
-// IsToolActive 检查工具是否对指定会话可用（核心工具始终返回 true）
+// TouchTool 刷新工具的最后使用 round（在工具实际执行时调用）
+func (r *Registry) TouchTool(sessionKey, toolName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.coreTools[toolName] {
+		return
+	}
+	if m := r.sessionActivated[sessionKey]; m != nil {
+		if _, exists := m[toolName]; exists {
+			m[toolName] = r.sessionRound[sessionKey]
+		}
+	}
+}
+
+// IsToolActive 检查工具是否对指定会话可用（核心工具始终返回 true，已过期的返回 false）
 func (r *Registry) IsToolActive(sessionKey, toolName string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.coreTools[toolName] {
 		return true
 	}
-	return r.sessionActivated[sessionKey][toolName]
+	lastRound, ok := r.sessionActivated[sessionKey][toolName]
+	if !ok {
+		return false
+	}
+	return r.sessionRound[sessionKey]-lastRound <= r.maxIdleRounds
 }
 
-// DeactivateSession 清理指定会话的激活状态
+// DeactivateSession 清理指定会话的全部激活状态和 round 计数
 func (r *Registry) DeactivateSession(sessionKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sessionActivated, sessionKey)
+	delete(r.sessionRound, sessionKey)
 }
 
 // Clone 复制工具注册表

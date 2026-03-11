@@ -13,18 +13,19 @@ import (
 
 // CronJob represents a scheduled cron job
 type CronJob struct {
-	ID           string    `json:"id"`
-	Message      string    `json:"message"`
-	Channel      string    `json:"channel"`
-	ChatID       string    `json:"chat_id"`
-	SenderID     string    `json:"sender_id,omitempty"`
-	CronExpr     string    `json:"cron_expr,omitempty"`
-	EverySeconds int       `json:"every_seconds,omitempty"`
-	DelaySeconds int       `json:"delay_seconds,omitempty"`
-	At           string    `json:"at,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	NextRun      time.Time `json:"next_run"`
-	OneShot      bool      `json:"one_shot"`
+	ID           string     `json:"id"`
+	Message      string     `json:"message"`
+	Channel      string     `json:"channel"`
+	ChatID       string     `json:"chat_id"`
+	SenderID     string     `json:"sender_id,omitempty"`
+	CronExpr     string     `json:"cron_expr,omitempty"`
+	EverySeconds int        `json:"every_seconds,omitempty"`
+	DelaySeconds int        `json:"delay_seconds,omitempty"`
+	At           string     `json:"at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	NextRun      time.Time  `json:"next_run"`
+	LastTrigger  *time.Time `json:"last_trigger,omitempty"` // 上次触发时间，用于防重复
+	OneShot      bool       `json:"one_shot"`
 }
 
 // CronService provides SQLite storage for cron jobs
@@ -40,10 +41,14 @@ func NewCronService(db *DB) *CronService {
 // AddJob inserts a new cron job
 func (s *CronService) AddJob(job *CronJob) error {
 	conn := s.db.Conn()
+	var lastTrigger *time.Time
+	if job.LastTrigger != nil {
+		lastTrigger = job.LastTrigger
+	}
 	_, err := conn.Exec(`
-		INSERT INTO cron_jobs (id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, one_shot)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt.Format(time.RFC3339), job.NextRun.Format(time.RFC3339), job.OneShot)
+		INSERT INTO cron_jobs (id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, last_trigger, one_shot)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt.Format(time.RFC3339), job.NextRun.Format(time.RFC3339), lastTrigger, job.OneShot)
 	if err != nil {
 		return fmt.Errorf("insert cron job: %w", err)
 	}
@@ -64,14 +69,15 @@ func (s *CronService) RemoveJob(id string) error {
 func (s *CronService) GetJob(id string) (*CronJob, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`
-		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, one_shot
+		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, last_trigger, one_shot
 		FROM cron_jobs WHERE id = ?
 	`, id)
 
 	job := &CronJob{}
 	var createdAt, nextRun string
+	var lastTrigger *time.Time
 	err := row.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-		&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &job.OneShot)
+		&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -88,6 +94,7 @@ func (s *CronService) GetJob(id string) (*CronJob, error) {
 	if parseErr != nil {
 		return nil, fmt.Errorf("parse next_run %q: %w", nextRun, parseErr)
 	}
+	job.LastTrigger = lastTrigger
 	return job, nil
 }
 
@@ -95,7 +102,7 @@ func (s *CronService) GetJob(id string) (*CronJob, error) {
 func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, one_shot
+		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, last_trigger, one_shot
 		FROM cron_jobs WHERE sender_id = ? ORDER BY created_at
 	`, senderID)
 	if err != nil {
@@ -107,8 +114,9 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 	for rows.Next() {
 		job := &CronJob{}
 		var createdAt, nextRun string
+		var lastTrigger *time.Time
 		if err := rows.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &job.OneShot); err != nil {
+			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
 		var parseErr error
@@ -120,6 +128,7 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
 		}
+		job.LastTrigger = lastTrigger
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -129,7 +138,7 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, one_shot
+		SELECT id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, last_trigger, one_shot
 		FROM cron_jobs ORDER BY next_run
 	`)
 	if err != nil {
@@ -141,8 +150,9 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 	for rows.Next() {
 		job := &CronJob{}
 		var createdAt, nextRun string
+		var lastTrigger *time.Time
 		if err := rows.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &job.OneShot); err != nil {
+			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
 		var parseErr error
@@ -154,6 +164,7 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
 		}
+		job.LastTrigger = lastTrigger
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -165,6 +176,16 @@ func (s *CronService) UpdateNextRun(id string, nextRun time.Time) error {
 	_, err := conn.Exec(`UPDATE cron_jobs SET next_run = ? WHERE id = ?`, nextRun.Format(time.RFC3339), id)
 	if err != nil {
 		return fmt.Errorf("update cron job next_run: %w", err)
+	}
+	return nil
+}
+
+// UpdateLastTrigger updates the last_trigger time for a job
+func (s *CronService) UpdateLastTrigger(id string, lastTrigger time.Time) error {
+	conn := s.db.Conn()
+	_, err := conn.Exec(`UPDATE cron_jobs SET last_trigger = ? WHERE id = ?`, lastTrigger.Format(time.RFC3339), id)
+	if err != nil {
+		return fmt.Errorf("update cron job last_trigger: %w", err)
 	}
 	return nil
 }

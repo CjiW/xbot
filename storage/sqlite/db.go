@@ -306,5 +306,16 @@ UPDATE schema_version SET version = 4;
 		log.Info("Database migrated to v4 (added cron_jobs)")
 	}
 
+	if from < 5 {
+		migration := `
+ALTER TABLE cron_jobs ADD COLUMN last_trigger DATETIME;
+UPDATE schema_version SET version = 5;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v4->v5: %w", err)
+		}
+		log.Info("Database migrated to v5 (added last_trigger to cron_jobs)")
+	}
+
 	return nil
 }

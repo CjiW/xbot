@@ -49,6 +49,87 @@ func (s *Scheduler) Start() {
 	})
 }
 
+// StartDelayed starts the scheduler after a delay, first cleaning up expired jobs
+// This is useful when the scheduler needs to wait for other initialization (like tool indexing)
+func (s *Scheduler) StartDelayed(delay time.Duration) {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.running = true
+		s.mu.Unlock()
+
+		// Wait for the delay
+		log.WithField("delay", delay).Info("Cron scheduler waiting before start")
+		time.Sleep(delay)
+
+		// Clean up expired jobs before first tick
+		s.cleanupExpiredJobs()
+
+		go s.runLoop()
+		log.Info("Cron scheduler started after delay")
+	})
+}
+
+// cleanupExpiredJobs removes or updates expired jobs on startup
+func (s *Scheduler) cleanupExpiredJobs() {
+	now := time.Now()
+	jobs, err := s.cronSvc.ListAllJobs()
+	if err != nil {
+		log.WithError(err).Error("Failed to list cron jobs during cleanup")
+		return
+	}
+
+	cleaned := 0
+	for _, job := range jobs {
+		if job.OneShot && job.NextRun.Before(now) {
+			// Remove expired one-shot jobs
+			if err := s.cronSvc.RemoveJob(job.ID); err != nil {
+				log.WithError(err).WithField("job_id", job.ID).Warn("Failed to remove expired one-shot job")
+			} else {
+				log.WithFields(log.Fields{
+					"job_id":   job.ID,
+					"next_run": job.NextRun,
+				}).Info("Removed expired one-shot cron job on startup")
+				cleaned++
+			}
+		} else if !job.OneShot && job.NextRun.Before(now) {
+			// For recurring jobs with expired next_run, recalculate next run
+			var nextRun time.Time
+			var err error
+
+			if job.EverySeconds > 0 {
+				// Simple interval: calculate next run from now
+				nextRun = now.Add(time.Duration(job.EverySeconds) * time.Second)
+			} else if job.CronExpr != "" {
+				// Cron expression: calculate next run from now
+				nextRun, err = nextCronTime(job.CronExpr, now)
+				if err != nil {
+					log.WithError(err).WithField("job_id", job.ID).Warn("Failed to calculate next cron time, removing job")
+					s.cronSvc.RemoveJob(job.ID)
+					cleaned++
+					continue
+				}
+			} else {
+				continue
+			}
+
+			if err := s.cronSvc.UpdateNextRun(job.ID, nextRun); err != nil {
+				log.WithError(err).WithField("job_id", job.ID).Warn("Failed to update expired recurring job")
+			} else {
+				log.WithFields(log.Fields{
+					"job_id":   job.ID,
+					"old_next": job.NextRun,
+					"new_next": nextRun,
+				}).Info("Updated expired recurring cron job on startup")
+				cleaned++
+			}
+		}
+	}
+
+	if cleaned > 0 {
+		log.WithField("count", cleaned).Info("Cleaned up expired cron jobs on startup")
+	}
+}
+
 // Stop stops the scheduler
 func (s *Scheduler) Stop() {
 	s.mu.Lock()
@@ -97,7 +178,39 @@ func (s *Scheduler) checkAndFire(now time.Time) {
 	}
 
 	for _, job := range jobs {
+		// Skip jobs not yet due
 		if now.Before(job.NextRun) {
+			continue
+		}
+
+		// Skip expired one-shot jobs (next_run is in the past and already triggered)
+		if job.OneShot && job.NextRun.Before(now) {
+			// Check if this was already triggered recently (within last minute)
+			// This handles the case where service was restarted after a job was due
+			if job.LastTrigger != nil && now.Sub(*job.LastTrigger) < time.Minute {
+				// Already triggered recently, skip
+				log.WithFields(log.Fields{
+					"job_id":       job.ID,
+					"last_trigger": job.LastTrigger,
+				}).Info("Cron job already triggered recently, skipping expired one-shot")
+			} else {
+				// Hasn't been triggered, remove the expired one-shot job
+				log.WithFields(log.Fields{
+					"job_id":   job.ID,
+					"next_run": job.NextRun,
+				}).Info("Removing expired one-shot cron job")
+				s.cronSvc.RemoveJob(job.ID)
+			}
+			continue
+		}
+
+		// Prevent double-firing: check if this job was already triggered very recently
+		// This handles edge cases where the job runs again within the same second
+		if job.LastTrigger != nil && now.Sub(*job.LastTrigger) < time.Second {
+			log.WithFields(log.Fields{
+				"job_id":       job.ID,
+				"last_trigger": job.LastTrigger,
+			}).Warn("Cron job triggered too recently, skipping")
 			continue
 		}
 
@@ -109,6 +222,11 @@ func (s *Scheduler) checkAndFire(now time.Time) {
 		}).Info("Cron job fired")
 
 		injectFunc(job.Channel, job.ChatID, job.SenderID, job.Message)
+
+		// Record trigger time for deduplication
+		if err := s.cronSvc.UpdateLastTrigger(job.ID, now); err != nil {
+			log.WithError(err).WithField("job_id", job.ID).Warn("Failed to update last trigger time")
+		}
 
 		// Handle job after firing
 		if job.OneShot {

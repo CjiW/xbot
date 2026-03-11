@@ -376,8 +376,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.multiSession.StartCleanupRoutine()
 
 	// 启动 Cron 调度器，设置消息注入函数
+	// 延迟启动，等待 tool index 索引完成（异步索引延迟 2 秒）
 	a.cronSch.SetInjectFunc(a.injectInbound)
-	a.cronSch.Start()
+	a.cronSch.StartDelayed(3 * time.Second)
 
 	defer func() {
 		// 停止 Cron 调度器

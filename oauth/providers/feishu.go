@@ -111,6 +111,8 @@ var defaultScopes = []string{
 	// Docx (文档)
 	"docx:document",
 	"docx:document:readonly",
+	"docs:document.content:read",
+	"docx:document:write_only",
 	"docx:document:create",
 	"docx:document.block:convert",
 	// Wiki (知识库)

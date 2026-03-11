@@ -122,7 +122,7 @@ func main() {
 			Manager: oauthManager,
 			BaseURL: cfg.OAuth.BaseURL,
 		}
-		agentLoop.RegisterTool(oauthTool)
+		agentLoop.RegisterCoreTool(oauthTool)
 
 		// 注册 Feishu MCP 工具
 		feishuMCP := feishu_mcp.NewFeishuMCP(oauthManager)

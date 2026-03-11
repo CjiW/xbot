@@ -62,9 +62,10 @@ func TestManageTools_AddRemoveMCP(t *testing.T) {
 	// Test add_mcp
 	mcpConfig := `{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}`
 	args := manageToolsArgs{
-		Action:    "add_mcp",
-		Name:      "test-filesystem",
-		MCPConfig: mcpConfig,
+		Action:       "add_mcp",
+		Name:         "test-filesystem",
+		MCPConfig:    mcpConfig,
+		Instructions: "test-filesystem",
 	}
 	input, _ := json.Marshal(args)
 
@@ -230,9 +231,10 @@ func TestManageTools_UserIsolationAndGlobalMerge(t *testing.T) {
 	ctx2 := &ToolContext{Registry: NewRegistry(), MCPConfigPath: user2Path, GlobalMCPConfigPath: globalConfigPath}
 
 	addArgs := manageToolsArgs{
-		Action:    "add_mcp",
-		Name:      "user1-only",
-		MCPConfig: `{"command":"echo","args":["u1"]}`,
+		Action:       "add_mcp",
+		Name:         "user1-only",
+		MCPConfig:    `{"command":"echo","args":["u1"]}`,
+		Instructions: "test-filesystem",
 	}
 	input, _ := json.Marshal(addArgs)
 	if _, err := tool.Execute(ctx1, string(input)); err != nil {

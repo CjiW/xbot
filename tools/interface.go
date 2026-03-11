@@ -338,7 +338,7 @@ type mcpSchemaProvider interface {
 // ToolGroupProvider 工具组提供者接口，用于将工具分组显示
 // 实现此接口的工具将显示在独立的工具组中，而非 Built-in 分组
 type ToolGroupProvider interface {
-	GroupName() string        // 工具组名称（如 "Feishu"）
+	GroupName() string         // 工具组名称（如 "Feishu"）
 	GroupInstructions() string // 工具组使用说明
 }
 

@@ -196,13 +196,13 @@ func (m *MCPInstructionsManager) generateInstructions(ctx context.Context, serve
 
 	// 构建工具信息描述
 	var toolsDesc strings.Builder
-	toolsDesc.WriteString(fmt.Sprintf("MCP Server: %s\n\n", serverName))
+	fmt.Fprintf(&toolsDesc, "MCP Server: %s\n\n", serverName)
 	toolsDesc.WriteString("Available Tools:\n")
 
 	for _, tool := range serverInfo.tools {
-		toolsDesc.WriteString(fmt.Sprintf("\n## %s\n", tool.Name))
+		fmt.Fprintf(&toolsDesc, "\n## %s\n", tool.Name)
 		if tool.Description != "" {
-			toolsDesc.WriteString(fmt.Sprintf("Description: %s\n", tool.Description))
+			fmt.Fprintf(&toolsDesc, "Description: %s\n", tool.Description)
 		}
 
 		// 添加参数信息
@@ -214,7 +214,7 @@ func (m *MCPInstructionsManager) generateInstructions(ctx context.Context, serve
 				if p.Required {
 					req = " (required)"
 				}
-				toolsDesc.WriteString(fmt.Sprintf("  - %s (%s)%s: %s\n", p.Name, p.Type, req, p.Description))
+				fmt.Fprintf(&toolsDesc, "  - %s (%s)%s: %s\n", p.Name, p.Type, req, p.Description)
 			}
 		}
 	}

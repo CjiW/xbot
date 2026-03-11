@@ -249,7 +249,52 @@ func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, work
 	userConfigPath := tools.UserMCPConfigPath(workDir, senderID)
 	workspaceRoot := tools.UserWorkspaceRoot(workDir, senderID)
 	mgr.UpdateScope(senderID, userConfigPath, workspaceRoot)
+
+	// Index personal MCP tools for this tenant
+	m.indexPersonalMCPTools(sess.TenantID(), mgr)
+
 	return nil
+}
+
+// indexPersonalMCPTools indexes personal MCP tools for a tenant
+func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.SessionMCPManager) {
+	if m.toolIndexSvc == nil || mgr == nil {
+		return
+	}
+
+	// Get personal MCP catalog (not global)
+	catalog := mgr.GetCatalog()
+	if len(catalog) == 0 {
+		return
+	}
+
+	// Convert to ToolIndexEntry
+	var entries []memory.ToolIndexEntry
+	for _, entry := range catalog {
+		for _, toolName := range entry.ToolNames {
+			fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)
+			desc := fmt.Sprintf("MCP server: %s. Tool: %s", entry.Name, toolName)
+			if entry.Instructions != "" {
+				desc = fmt.Sprintf("%s. %s", desc, entry.Instructions)
+			}
+			entries = append(entries, memory.ToolIndexEntry{
+				Name:        fullName,
+				ServerName:  entry.Name,
+				Source:      "personal",
+				Description: desc,
+			})
+		}
+	}
+
+	if len(entries) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.IndexToolsForTenant(ctx, tenantID, entries); err != nil {
+			log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
+		} else {
+			log.Infof("Indexed %d personal MCP tools for tenant %d", len(entries), tenantID)
+		}
+	}
 }
 
 // migrateProfileToCoreMemory performs a one-time forward-compatible migration

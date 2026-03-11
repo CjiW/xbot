@@ -43,7 +43,7 @@ func (s *CronService) AddJob(job *CronJob) error {
 	_, err := conn.Exec(`
 		INSERT INTO cron_jobs (id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, one_shot)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt, job.NextRun, job.OneShot)
+	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt.Format(time.RFC3339), job.NextRun.Format(time.RFC3339), job.OneShot)
 	if err != nil {
 		return fmt.Errorf("insert cron job: %w", err)
 	}
@@ -79,8 +79,15 @@ func (s *CronService) GetJob(id string) (*CronJob, error) {
 		return nil, fmt.Errorf("scan cron job: %w", err)
 	}
 
-	job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	job.NextRun, _ = time.Parse(time.RFC3339, nextRun)
+	var parseErr error
+	job.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAt)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse created_at %q: %w", createdAt, parseErr)
+	}
+	job.NextRun, parseErr = time.Parse(time.RFC3339, nextRun)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse next_run %q: %w", nextRun, parseErr)
+	}
 	return job, nil
 }
 
@@ -104,8 +111,15 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
-		job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		job.NextRun, _ = time.Parse(time.RFC3339, nextRun)
+		var parseErr error
+		job.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at %q for job %s: %w", createdAt, job.ID, parseErr)
+		}
+		job.NextRun, parseErr = time.Parse(time.RFC3339, nextRun)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
+		}
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -131,8 +145,15 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
-		job.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		job.NextRun, _ = time.Parse(time.RFC3339, nextRun)
+		var parseErr error
+		job.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at %q for job %s: %w", createdAt, job.ID, parseErr)
+		}
+		job.NextRun, parseErr = time.Parse(time.RFC3339, nextRun)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
+		}
 		jobs = append(jobs, job)
 	}
 	return jobs, nil

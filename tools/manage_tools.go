@@ -29,7 +29,7 @@ func (t *ManageTools) Name() string {
 }
 
 func (t *ManageTools) Description() string {
-	return "Manage the bot's MCP servers. Can add, remove, list MCP servers, and reload configurations."
+	return "Manage the bot's MCP servers. Can add, remove, list MCP servers, and reload configurations. This tool is not related to specified tools, if you want anything related to tools, use `search_tools` or `load_tools` instead."
 }
 
 func (t *ManageTools) Parameters() []llm.ToolParam {

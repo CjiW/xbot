@@ -301,12 +301,17 @@ func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEn
 	return nil
 }
 
-// SearchTools implements memory.ToolIndexer.
+// SearchTools implements memory.ToolIndexer (searches current tenant).
 func (m *LettaMemory) SearchTools(ctx context.Context, query string, topK int) ([]memory.ToolIndexEntry, error) {
+	return m.SearchToolsForTenant(ctx, m.tenantID, query, topK)
+}
+
+// SearchToolsForTenant searches tools for a specific tenant.
+func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, query string, topK int) ([]memory.ToolIndexEntry, error) {
 	if m.toolIndexSvc == nil {
 		return nil, fmt.Errorf("tool index service not available")
 	}
-	results, err := m.toolIndexSvc.SearchTools(ctx, m.tenantID, query, topK)
+	results, err := m.toolIndexSvc.SearchTools(ctx, tenantID, query, topK)
 	if err != nil {
 		return nil, fmt.Errorf("search tools: %w", err)
 	}

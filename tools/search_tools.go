@@ -7,6 +7,8 @@ import (
 
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/memory"
+	"xbot/memory/letta"
 )
 
 // SearchToolsTool 搜索可用工具
@@ -15,7 +17,7 @@ type SearchToolsTool struct{}
 func (t *SearchToolsTool) Name() string { return "search_tools" }
 
 func (t *SearchToolsTool) Description() string {
-	return "Search for available tools using semantic similarity. Use this when you need to find tools related to a specific task but don't know their exact names."
+	return "Search for available tools using semantic similarity in english. Use this when you need to find tools related to a specific task but don't know their exact names."
 }
 
 func (t *SearchToolsTool) Parameters() []llm.ToolParam {
@@ -29,7 +31,7 @@ func (t *SearchToolsTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "top_k",
 			Type:        "number",
-			Description: "Maximum number of results to return (default: 5)",
+			Description: "Maximum number of results to return (default: 20)",
 			Required:    false,
 		},
 	}
@@ -57,47 +59,88 @@ func (t *SearchToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	}
 
 	if args.TopK <= 0 {
-		args.TopK = 5
+		args.TopK = 20
 	}
 
-	// Get tool indexer from context
+	// Try to get tool indexer from context (Letta mode)
 	indexer := ctx.ToolIndexer
-	if indexer == nil {
-		// Fallback: try to get from registry's MCP catalog
-		return t.executeFallback(ctx, args.Query, args.TopK)
+	if indexer != nil {
+		// Try to cast to LettaMemory to access both global (tenant 0) and personal tools
+		if lm, ok := indexer.(*letta.LettaMemory); ok {
+			// Search global tools first (tenant 0)
+			globalResults, err := lm.SearchToolsForTenant(ctx.Ctx, 0, args.Query, args.TopK)
+			if err != nil {
+				log.WithError(err).Warn("Global tool index search failed")
+			}
+
+			// Then search personal tools (user's tenant)
+			personalResults, err := lm.SearchToolsForTenant(ctx.Ctx, lm.TenantID(), args.Query, args.TopK)
+			if err != nil {
+				log.WithError(err).Warn("Personal tool index search failed")
+			}
+
+			// Merge results, prefer personal over global for same tools
+			allResults := append(personalResults, globalResults...)
+
+			if len(allResults) > 0 {
+				return t.formatResultsDedup(allResults, args.Query)
+			}
+		} else {
+			// Generic ToolIndexer (flat mode)
+			results, err := indexer.SearchTools(ctx.Ctx, args.Query, args.TopK)
+			if err != nil {
+				log.WithError(err).Warn("Tool index search failed, using fallback")
+			} else if len(results) > 0 {
+				return t.formatResults(results, args.Query)
+			}
+		}
 	}
 
-	// Search using the tool indexer
-	results, err := indexer.SearchTools(ctx.Ctx, args.Query, args.TopK)
-	if err != nil {
-		log.WithError(err).Warn("Tool index search failed, using fallback")
-		return t.executeFallback(ctx, args.Query, args.TopK)
-	}
+	// Fallback: use registry's MCP catalog for text-based search
+	return t.executeFallback(ctx, args.Query, args.TopK)
+}
 
-	if len(results) == 0 {
-		return &ToolResult{
-			Summary: "No tools found",
-			Detail:  "No tools match your query. Try a different search term or use load_tools to see all available tools.",
-		}, nil
-	}
-
-	// Format results
+func (t *SearchToolsTool) formatResults(results []memory.ToolIndexEntry, query string) (*ToolResult, error) {
 	var sb strings.Builder
 	sb.WriteString("## Search Results\n\n")
 	sb.WriteString("Found the following tools that match your query:\n\n")
 
 	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("%d. **%s** (server: %s, source: %s)\n", i+1, r.Name, r.ServerName, r.Source))
-		sb.WriteString(fmt.Sprintf("   %s\n\n", r.Description))
+		// Name is already the correct loadable name (e.g., mcp_linear_list_issues or feishu_search_wiki)
+		fmt.Fprintf(&sb, "%d. **%s** (server: %s, source: %s)\n", i+1, r.Name, r.ServerName, r.Source)
+		fmt.Fprintf(&sb, "   %s\n\n", r.Description)
 	}
 
-	sb.WriteString("To use a tool, first call `load_tools` with the tool name to load it, then you can call the tool.\n")
+	sb.WriteString("To use a tool, call `load_tools` with the tool name to load it, then you can call the tool.\n")
 
 	return &ToolResult{
-		Summary: fmt.Sprintf("Found %d tools matching '%s'", len(results), args.Query),
+		Summary: fmt.Sprintf("Found %d tools matching '%s'", len(results), query),
 		Detail:  sb.String(),
-		Tips:    "Use `load_tools` to load the tool you want to use, then call it directly.",
+		Tips:    "Use `load_tools` with the tool name to use the tool.",
 	}, nil
+}
+
+// formatResultsDedup deduplicates results by tool name and formats them.
+func (t *SearchToolsTool) formatResultsDedup(results []memory.ToolIndexEntry, query string) (*ToolResult, error) {
+	// Deduplicate by tool name, prefer personal over global
+	seen := make(map[string]memory.ToolIndexEntry)
+	for _, r := range results {
+		key := r.Name + "@" + r.ServerName
+		if _, exists := seen[key]; !exists {
+			seen[key] = r
+		}
+	}
+
+	var deduped []memory.ToolIndexEntry
+	for _, r := range results {
+		key := r.Name + "@" + r.ServerName
+		if existing, ok := seen[key]; ok {
+			deduped = append(deduped, existing)
+			delete(seen, key)
+		}
+	}
+
+	return t.formatResults(deduped, query)
 }
 
 // executeFallback provides a simple text-based search when tool indexer is not available
@@ -106,6 +149,13 @@ func (t *SearchToolsTool) executeFallback(ctx *ToolContext, query string, topK i
 	sessionKey := ctx.Channel + ":" + ctx.ChatID
 	mcpCatalog := ctx.Registry.GetMCPCatalog(sessionKey)
 	toolGroups := ctx.Registry.GetToolGroups()
+
+	log.WithFields(log.Fields{
+		"session":    sessionKey,
+		"mcpCount":   len(mcpCatalog),
+		"groupCount": len(toolGroups),
+		"query":      query,
+	}).Warn("search_tools fallback: checking catalogs")
 
 	var allTools []string
 	var toolDescriptions []string
@@ -192,13 +242,20 @@ func (t *SearchToolsTool) executeFallback(ctx *ToolContext, query string, topK i
 	sb.WriteString("Found the following tools that match your query:\n\n")
 
 	for i, m := range matched {
-		sb.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, m.name))
+		// Check if it's already a full MCP tool name
+		loadableName := m.name
+		if !strings.HasPrefix(m.name, "mcp_") && !strings.HasPrefix(m.name, "feishu_") {
+			// This might be a server tool without prefix, try to detect from description
+			// Just show as-is, user can try loading
+			loadableName = m.name
+		}
+		fmt.Fprintf(&sb, "%d. **%s**\n", i+1, loadableName)
 		if m.description != "" {
-			sb.WriteString(fmt.Sprintf("   %s\n\n", m.description))
+			fmt.Fprintf(&sb, "   %s\n\n", m.description)
 		}
 	}
 
-	sb.WriteString("To use a tool, first call `load_tools` with the tool name to load it, then you can call the tool.\n")
+	sb.WriteString("To use a tool, first call `load_tools` with the loadable name to load it, then you can call the tool.\n")
 
 	return &ToolResult{
 		Summary: fmt.Sprintf("Found %d tools matching '%s'", len(matched), query),

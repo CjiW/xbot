@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -287,6 +288,24 @@ func (m *MultiTenantSession) migrateProfileToCoreMemory(tenantID int64) {
 // RecallTimeRangeFunc returns the time-range recall search function (nil if not in Letta mode).
 func (m *MultiTenantSession) RecallTimeRangeFunc() vectordb.RecallTimeRangeFunc {
 	return m.recallTimeRangeFn
+}
+
+// IndexToolsForTenant indexes MCP tools for a specific tenant.
+func (m *MultiTenantSession) IndexToolsForTenant(ctx context.Context, tenantID int64, tools []memory.ToolIndexEntry) error {
+	if m.toolIndexSvc == nil {
+		return nil // Tool index not available (flat mode or no embedding config)
+	}
+	// Convert memory.ToolIndexEntry to vectordb.ToolIndexEntry
+	entries := make([]vectordb.ToolIndexEntry, len(tools))
+	for i, t := range tools {
+		entries[i] = vectordb.ToolIndexEntry{
+			Name:        t.Name,
+			ServerName:  t.ServerName,
+			Source:      t.Source,
+			Description: t.Description,
+		}
+	}
+	return m.toolIndexSvc.IndexTools(ctx, tenantID, entries)
 }
 
 // Close closes the database connection

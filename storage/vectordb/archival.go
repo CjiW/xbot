@@ -285,3 +285,31 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 	}
 	return nil
 }
+
+// ToolIndexEntry represents a tool for indexing.
+type ToolIndexEntry struct {
+	Name        string
+	ServerName  string
+	Source      string
+	Description string
+}
+
+// IndexTools indexes multiple tools at once.
+func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools []ToolIndexEntry) error {
+	if s.embeddingFunc == nil {
+		return fmt.Errorf("tool index requires embedding configuration")
+	}
+	// Clear existing and re-index
+	if err := s.ClearTools(ctx, tenantID); err != nil {
+		return fmt.Errorf("clear tools: %w", err)
+	}
+	for _, tool := range tools {
+		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
+		if err := s.InsertTool(ctx, tenantID, toolID, content); err != nil {
+			return fmt.Errorf("insert tool %s: %w", tool.Name, err)
+		}
+	}
+	return nil
+}

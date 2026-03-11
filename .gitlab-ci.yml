@@ -30,11 +30,8 @@ test:
 build:
   stage: build
   image: docker:latest
-  services:
-    - docker:dind
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: unix:///var/run/docker.sock
   tags:
     - linux-x86
   before_script:

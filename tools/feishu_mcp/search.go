@@ -193,7 +193,7 @@ type WikiGetNodeTool struct {
 func (t *WikiGetNodeTool) Name() string { return "feishu_wiki_get_node" }
 
 func (t *WikiGetNodeTool) Description() string {
-	return "Get Wiki node details and content. Extract token from Feishu URL path (e.g., from https://xxx.feishu.cn/wiki/XXXXX or https://xxx.feishu.cn/docx/XXXXX, use XXXXX as the token). Do NOT use numeric IDs."
+	return "Get Wiki node details and content. The token must be a node_token from other Feishu API responses (e.g., feishu_wiki_search_nodes returns node_token field). Token prefixes: wikcn (wiki), doxcn (docx), basc (bitable), shtcn (sheet), ndtbn (mindnote), pptcn (slides), filcn (file). Do NOT use URL tokens or numeric IDs."
 }
 
 func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
@@ -201,13 +201,13 @@ func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "token",
 			Type:        "string",
-			Description: "Token extracted from Feishu URL path. Examples: from URL https://xxx.feishu.cn/wiki/VYaWwsuYZi, token is 'VYaWwsuYZi'; from https://xxx.feishu.cn/docx/Abc123, token is 'Abc123'. NOT a numeric ID.",
+			Description: "node_token from other Feishu API responses (NOT URL token). Prefixes: wikcnXXX (wiki), doxcnXXX (docx), bascXXX (bitable), shtcnXXX (sheet), ndtbnXXX (mindnote), pptcnXXX (slides), filcnXXX (file). Get this from feishu_wiki_search_nodes results.",
 			Required:    true,
 		},
 		{
 			Name:        "obj_type",
 			Type:        "string",
-			Description: "Document type from URL path: 'wiki', 'docx', 'bitable', 'sheet', 'slides', 'mindnote', 'file'. Auto-detected from URL if not provided.",
+			Description: "Document type: 'wiki', 'docx', 'bitable', 'sheet', 'slides', 'mindnote', 'file'. Auto-detected from token prefix if not provided.",
 			Required:    false,
 		},
 	}

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -307,14 +307,24 @@ UPDATE schema_version SET version = 4;
 	}
 
 	if from < 5 {
-		migration := `
-ALTER TABLE cron_jobs ADD COLUMN last_trigger DATETIME;
-UPDATE schema_version SET version = 5;
-`
-		if _, err := conn.Exec(migration); err != nil {
-			return fmt.Errorf("migrate v4->v5: %w", err)
+		// Check if column already exists before adding
+		var count int
+		err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('cron_jobs') WHERE name = 'last_trigger'").Scan(&count)
+		if err == nil && count == 0 {
+			// Column doesn't exist, add it
+			_, err = conn.Exec("ALTER TABLE cron_jobs ADD COLUMN last_trigger DATETIME")
+			if err != nil {
+				return fmt.Errorf("migrate v4->v5: %w", err)
+			}
+			log.Info("Database migrated to v5 (added last_trigger to cron_jobs)")
 		}
-		log.Info("Database migrated to v5 (added last_trigger to cron_jobs)")
+		// Always update version even if column exists (for fresh databases)
+		if _, err := conn.Exec("UPDATE schema_version SET version = 5"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		if from < 5 {
+			log.Info("Database migrated to v5")
+		}
 	}
 
 	return nil

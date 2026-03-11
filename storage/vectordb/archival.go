@@ -273,8 +273,13 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 	if coll == nil {
 		return nil
 	}
+	// Skip if collection is empty
+	count := coll.Count()
+	if count == 0 {
+		return nil
+	}
 	// Delete all documents by querying and then deleting
-	docs, err := coll.Query(ctx, "*", coll.Count(), nil, nil)
+	docs, err := coll.Query(ctx, "*", count, nil, nil)
 	if err != nil {
 		return fmt.Errorf("query all tools: %w", err)
 	}

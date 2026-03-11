@@ -68,6 +68,13 @@ func WithEmbeddingConfig(cfg EmbeddingConfig) MultiTenantOption {
 	}
 }
 
+// WithToolIndexService 设置工具索引服务
+func WithToolIndexService(svc *vectordb.ToolIndexService) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.toolIndexSvc = svc
+	}
+}
+
 // MultiTenantSession manages multiple tenant sessions with SQLite backing
 type MultiTenantSession struct {
 	db                   *sqlite.DB
@@ -77,6 +84,7 @@ type MultiTenantSession struct {
 	userProfileSvc       *sqlite.UserProfileService
 	coreSvc              *sqlite.CoreMemoryService
 	archivalSvc          *vectordb.ArchivalService
+	toolIndexSvc         *vectordb.ToolIndexService
 	recallTimeRangeFn    vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
 	embeddingConfig      *EmbeddingConfig             // for auto-creating archival service
 	memoryProvider       string                       // "flat" or "letta"
@@ -130,6 +138,18 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 			log.WithError(err).Error("Failed to initialize archival memory (chromem-go), archival tools will be unavailable")
 		} else {
 			m.archivalSvc = archSvc
+		}
+	}
+
+	// Letta 模式：自动创建工具索引服务（如果未通过 WithToolIndexService 注入）
+	if m.memoryProvider == "letta" && m.toolIndexSvc == nil && m.embeddingConfig != nil {
+		toolIndexDir := filepath.Join(filepath.Dir(dbPath), "tool_index")
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
+		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc)
+		if err != nil {
+			log.WithError(err).Error("Failed to initialize tool index service, tool search will be unavailable")
+		} else {
+			m.toolIndexSvc = toolIdxSvc
 		}
 	}
 
@@ -191,11 +211,11 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
 	case "letta":
-		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc)
+		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
 		// 前向兼容：一次性迁移 user_profiles → core memory blocks
 		m.migrateProfileToCoreMemory(tenantID)
 	default:
-		memProvider = flat.New(tenantID, m.memorySvc)
+		memProvider = flat.New(tenantID, m.memorySvc, m.toolIndexSvc)
 	}
 	// Create tenant session
 	sess = &TenantSession{

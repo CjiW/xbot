@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 	"xbot/llm"
+	"xbot/memory"
 	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 )
@@ -42,6 +43,7 @@ type ToolContext struct {
 	ArchivalMemory  *vectordb.ArchivalService    // 归档记忆存储（chromem-go 向量数据库）
 	MemorySvc       *sqlite.MemoryService        // 事件历史存储（用于 rethink 日志）
 	RecallTimeRange vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
+	ToolIndexer     memory.ToolIndexer           // 工具索引服务（Letta 模式下可用）
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -501,6 +503,7 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&EditTool{})
 	r.RegisterCore(&LoadToolsTool{})
 	r.RegisterCore(&SubAgentTool{})
+	r.RegisterCore(&SearchToolsTool{})
 	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
 	r.RegisterCore(&DownloadFileTool{})
 	// 可加载工具：需通过 load_tools 按需激活

@@ -164,3 +164,124 @@ func (s *ArchivalService) Count(tenantID int64) (int, error) {
 	}
 	return coll.Count(), nil
 }
+
+// ToolIndexService provides tool indexing using a separate collection.
+type ToolIndexService struct {
+	db            *chromem.DB
+	embeddingFunc chromem.EmbeddingFunc
+}
+
+// NewToolIndexService creates a tool index service.
+func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc) (*ToolIndexService, error) {
+	db, err := chromem.NewPersistentDB(persistDir, false)
+	if err != nil {
+		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
+	}
+	return &ToolIndexService{
+		db:            db,
+		embeddingFunc: embeddingFunc,
+	}, nil
+}
+
+func (s *ToolIndexService) collectionName(tenantID int64) string {
+	return fmt.Sprintf("tools_%d", tenantID)
+}
+
+func (s *ToolIndexService) getOrCreateCollection(tenantID int64) (*chromem.Collection, error) {
+	name := s.collectionName(tenantID)
+	return s.db.GetOrCreateCollection(name, nil, s.embeddingFunc)
+}
+
+// InsertTool indexes a tool with its embedding.
+func (s *ToolIndexService) InsertTool(ctx context.Context, tenantID int64, toolID, content string) error {
+	if s.embeddingFunc == nil {
+		return fmt.Errorf("tool index requires embedding configuration")
+	}
+	coll, err := s.getOrCreateCollection(tenantID)
+	if err != nil {
+		return fmt.Errorf("get collection: %w", err)
+	}
+	err = coll.AddDocument(ctx, chromem.Document{
+		ID:      toolID,
+		Content: content,
+	})
+	if err != nil {
+		return fmt.Errorf("add document: %w", err)
+	}
+	return nil
+}
+
+// SearchTools searches for tools by semantic similarity.
+func (s *ToolIndexService) SearchTools(ctx context.Context, tenantID int64, query string, limit int) ([]struct {
+	ID         string
+	Content    string
+	Similarity float32
+}, error) {
+	if s.embeddingFunc == nil {
+		return nil, fmt.Errorf("tool search requires embedding configuration")
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	coll, err := s.getOrCreateCollection(tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("get collection: %w", err)
+	}
+	count := coll.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	if limit > count {
+		limit = count
+	}
+	results, err := coll.Query(ctx, query, limit, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("query tools: %w", err)
+	}
+	entries := make([]struct {
+		ID         string
+		Content    string
+		Similarity float32
+	}, len(results))
+	for i, r := range results {
+		entries[i] = struct {
+			ID         string
+			Content    string
+			Similarity float32
+		}{
+			ID:         r.ID,
+			Content:    r.Content,
+			Similarity: r.Similarity,
+		}
+	}
+	return entries, nil
+}
+
+// DeleteTool removes a tool from the index.
+func (s *ToolIndexService) DeleteTool(ctx context.Context, tenantID int64, toolID string) error {
+	coll, err := s.getOrCreateCollection(tenantID)
+	if err != nil {
+		return fmt.Errorf("get collection: %w", err)
+	}
+	return coll.Delete(ctx, nil, nil, toolID)
+}
+
+// ClearTools removes all tools from the index for a tenant.
+func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error {
+	name := s.collectionName(tenantID)
+	coll := s.db.GetCollection(name, s.embeddingFunc)
+	if coll == nil {
+		return nil
+	}
+	// Delete all documents by querying and then deleting
+	docs, err := coll.Query(ctx, "*", coll.Count(), nil, nil)
+	if err != nil {
+		return fmt.Errorf("query all tools: %w", err)
+	}
+	for _, doc := range docs {
+		if err := coll.Delete(ctx, nil, nil, doc.ID); err != nil {
+			return fmt.Errorf("delete tool %s: %w", doc.ID, err)
+		}
+	}
+	return nil
+}

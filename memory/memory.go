@@ -20,6 +20,23 @@ type MemoryProvider interface {
 	Close() error
 }
 
+// ToolIndexer 提供工具语义搜索能力
+type ToolIndexer interface {
+	// IndexTools 将工具索引到向量存储（启动时调用）
+	IndexTools(ctx context.Context, tools []ToolIndexEntry) error
+
+	// SearchTools 语义搜索工具
+	SearchTools(ctx context.Context, query string, topK int) ([]ToolIndexEntry, error)
+}
+
+// ToolIndexEntry 工具索引条目
+type ToolIndexEntry struct {
+	Name        string // 工具名称 (如 mcp_server_tool)
+	ServerName  string // MCP服务器名 (如 feishu, global)
+	Source      string // 来源: "global" 或 "personal"
+	Description string // 工具描述
+}
+
 // MemorizeInput 记忆写入的输入参数。
 type MemorizeInput struct {
 	Messages         []llm.ChatMessage // 需要处理的对话消息

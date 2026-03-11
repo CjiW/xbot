@@ -19,25 +19,28 @@ import (
 // - Archival Memory: long-term embedding-backed storage (on-demand via tools)
 // - Recall Memory: conversation history retrieval by time range
 type LettaMemory struct {
-	tenantID    int64
-	coreSvc     *sqlite.CoreMemoryService
-	archivalSvc *vectordb.ArchivalService
-	memorySvc   *sqlite.MemoryService
+	tenantID     int64
+	coreSvc      *sqlite.CoreMemoryService
+	archivalSvc  *vectordb.ArchivalService
+	memorySvc    *sqlite.MemoryService
+	toolIndexSvc *vectordb.ToolIndexService
 }
 
 var _ memory.MemoryProvider = (*LettaMemory)(nil)
+var _ memory.ToolIndexer = (*LettaMemory)(nil)
 
 // New creates a LettaMemory instance.
-func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService) *LettaMemory {
+func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
 	// Ensure default blocks exist
 	if err := coreSvc.InitBlocks(tenantID); err != nil {
 		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to init core memory blocks")
 	}
 	return &LettaMemory{
-		tenantID:    tenantID,
-		coreSvc:     coreSvc,
-		archivalSvc: archivalSvc,
-		memorySvc:   memorySvc,
+		tenantID:     tenantID,
+		coreSvc:      coreSvc,
+		archivalSvc:  archivalSvc,
+		memorySvc:    memorySvc,
+		toolIndexSvc: toolIndexSvc,
 	}
 }
 
@@ -270,6 +273,62 @@ func (m *LettaMemory) ArchivalService() *vectordb.ArchivalService {
 // MemoryService returns the underlying memory service (exposed for recall search).
 func (m *LettaMemory) MemoryService() *sqlite.MemoryService {
 	return m.memorySvc
+}
+
+// ToolIndexerService returns the tool index service.
+func (m *LettaMemory) ToolIndexerService() *vectordb.ToolIndexService {
+	return m.toolIndexSvc
+}
+
+// IndexTools implements memory.ToolIndexer.
+func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEntry) error {
+	if m.toolIndexSvc == nil {
+		return fmt.Errorf("tool index service not available")
+	}
+	// Clear existing tools and re-index
+	if err := m.toolIndexSvc.ClearTools(ctx, m.tenantID); err != nil {
+		log.WithError(err).Warn("Failed to clear tool index")
+	}
+	for _, tool := range tools {
+		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
+		if err := m.toolIndexSvc.InsertTool(ctx, m.tenantID, toolID, content); err != nil {
+			log.WithError(err).WithField("tool", tool.Name).Warn("Failed to index tool")
+		}
+	}
+	log.WithField("tenant_id", m.tenantID).Infof("Indexed %d tools", len(tools))
+	return nil
+}
+
+// SearchTools implements memory.ToolIndexer.
+func (m *LettaMemory) SearchTools(ctx context.Context, query string, topK int) ([]memory.ToolIndexEntry, error) {
+	if m.toolIndexSvc == nil {
+		return nil, fmt.Errorf("tool index service not available")
+	}
+	results, err := m.toolIndexSvc.SearchTools(ctx, m.tenantID, query, topK)
+	if err != nil {
+		return nil, fmt.Errorf("search tools: %w", err)
+	}
+	entries := make([]memory.ToolIndexEntry, len(results))
+	for i, r := range results {
+		// Parse tool ID to extract server and name
+		// Format: serverName_toolName
+		parts := strings.SplitN(r.ID, "_", 2)
+		serverName := ""
+		toolName := r.ID
+		if len(parts) >= 2 {
+			serverName = parts[0]
+			toolName = parts[1]
+		}
+		entries[i] = memory.ToolIndexEntry{
+			Name:        toolName,
+			ServerName:  serverName,
+			Source:      "personal",
+			Description: r.Content,
+		}
+	}
+	return entries, nil
 }
 
 // --- helpers ---

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
-	"xbot/tools"
 )
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
@@ -126,7 +124,7 @@ func (pl *PromptLoader) Render(data PromptData) string {
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
 //	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string, mcpCatalog string) []llm.ChatMessage {
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string) []llm.ChatMessage {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
 	// 渲染固定部分的模板（不含时间戳）
@@ -143,11 +141,6 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	// 注入 agents 目录（让 LLM 知道可用的 SubAgent 角色）
 	if agentsCatalog != "" {
 		systemContent += "\n" + agentsCatalog
-	}
-
-	// 注入 MCP 服务器目录（让 LLM 知道可用的 MCP 服务器及其工具）
-	if mcpCatalog != "" {
-		systemContent += "\n" + mcpCatalog
 	}
 
 	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）
@@ -181,78 +174,6 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	}
 	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
-}
-
-func filterInactiveTools(tools []string, registry *tools.Registry, session string) []string {
-	inactive := []string{}
-	for _, t := range tools {
-		if !registry.IsToolActive(session, t) {
-			inactive = append(inactive, t)
-		}
-	}
-	return inactive
-}
-
-// buildToolsSection 将工具目录格式化为系统提示词片段：
-//   - 内置系统工具（system group）
-//   - 工具组（如 Feishu，每组含组说明）
-//   - MCP Server 工具（每个 server 一组，含服务器说明）
-//
-// MCP 工具仅列出名称，不含参数详情（由 load_tools 按需加载）
-func buildToolsSection(registry *tools.Registry, session string) string {
-	builtinTools := registry.GetBuiltinToolNames()
-	toolGroups := registry.GetToolGroups()
-	mcpCatalog := registry.GetMCPCatalog(session)
-	if len(builtinTools) == 0 && len(toolGroups) == 0 && len(mcpCatalog) == 0 {
-		return ""
-	}
-
-	builtinTools = filterInactiveTools(builtinTools, registry, session)
-	var sb strings.Builder
-	sb.WriteString("## Available Tool Names(Not loaded)\n")
-	sb.WriteString("tools in this section are available but not loaded yet. Use `load_tools` to load and get detailed parameter information for any tool before calling it.\n\n")
-
-	// 内置系统工具组
-	if len(builtinTools) > 0 {
-		sb.WriteString("### Built-In\n")
-		sb.WriteString("Built-in tools\n\n")
-		fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(builtinTools, ", "))
-	}
-
-	// 工具组（如 Feishu）
-	for _, group := range toolGroups {
-		fmt.Fprintf(&sb, "### %s\n", group.Name)
-		if group.Instructions != "" {
-			fmt.Fprintf(&sb, "%s\n\n", group.Instructions)
-		}
-		activeTools := filterInactiveTools(group.ToolNames, registry, session)
-		if len(activeTools) > 0 {
-			fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(activeTools, ", "))
-		}
-	}
-
-	// MCP 服务器工具组
-	if len(mcpCatalog) > 0 {
-		for _, entry := range mcpCatalog {
-			fmt.Fprintf(&sb, "### mcp/%s\n", entry.Name)
-			if entry.Instructions != "" {
-				fmt.Fprintf(&sb, "%s\n\n", entry.Instructions)
-			}
-			if len(entry.ToolNames) > 0 {
-				toolList := make([]string, len(entry.ToolNames))
-				for i, t := range entry.ToolNames {
-					if registry.IsToolActive(session, t) {
-						continue
-					}
-					toolList[i] = fmt.Sprintf("mcp_%s_%s", entry.Name, t)
-				}
-				fmt.Fprintf(&sb, "Tools: %s\n\n", strings.Join(toolList, ", "))
-			}
-		}
-		sb.WriteString("Use `load_tools` to load and get detailed parameter information for any tool before calling it.\n")
-	}
-
-	return sb.String()
 }
 
 // cronSystemPrompt Cron 专用系统提示词（简洁，无记忆和技能）

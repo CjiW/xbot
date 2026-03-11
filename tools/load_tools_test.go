@@ -309,7 +309,7 @@ func TestRegistry_AsDefinitionsForSession_IncludesActivatedSessionMCPTools(t *te
 	registry := NewRegistry()
 	registry.RegisterCore(&mockBuiltinTool{name: "load_tools"})
 
-	sessionMCP := NewSessionMCPManager("test:chat", "", "", "", time.Minute)
+	sessionMCP := NewSessionMCPManager("test:chat", "test-user", "", "", "", time.Minute)
 	sessionMCP.initialized = true
 	sessionMCP.connections["github"] = &mcpConnection{
 		name: "github",
@@ -506,7 +506,7 @@ func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
 // ---- UnloadInactiveServers: 卸载后重连 ----
 
 func TestSessionMCP_UnloadResetsInitialized(t *testing.T) {
-	sm := NewSessionMCPManager("test:chat", "", "", "", 0) // timeout=0 → 立即过期
+	sm := NewSessionMCPManager("test:chat", "test-user", "", "", "", 0) // timeout=0 → 立即过期
 	sm.initialized = true
 	sm.connections["linear"] = &mcpConnection{
 		name: "linear",
@@ -527,7 +527,7 @@ func TestSessionMCP_UnloadResetsInitialized(t *testing.T) {
 }
 
 func TestSessionMCP_UnloadKeepsInitializedWhenNothingUnloaded(t *testing.T) {
-	sm := NewSessionMCPManager("test:chat", "", "", "", time.Hour)
+	sm := NewSessionMCPManager("test:chat", "test-user", "", "", "", time.Hour)
 	sm.initialized = true
 	sm.connections["linear"] = &mcpConnection{
 		name: "linear",

@@ -64,15 +64,19 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	defer cancel()
 
 	workspaceRoot := ""
+	userID := ""
 	if toolCtx != nil {
 		if toolCtx.WorkspaceRoot != "" {
 			workspaceRoot = toolCtx.WorkspaceRoot
 		} else {
 			workspaceRoot = toolCtx.WorkingDir
 		}
+		userID = toolCtx.SenderID
 	}
 
-	cmdName, cmdArgs, err := shellWrapForSandbox(params.Command, workspaceRoot)
+	// 使用全局沙箱实例
+	sandbox := GetSandbox()
+	cmdName, cmdArgs, err := sandbox.Wrap("sh", []string{"-c", params.Command}, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}

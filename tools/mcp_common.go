@@ -105,9 +105,12 @@ func resolveXbotBinDir(configPath string) string {
 
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, serverName string) (*mcp.ClientSession, error) {
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, userID, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
-	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
+
+	// 使用全局沙箱实例
+	sandbox := GetSandbox()
+	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}

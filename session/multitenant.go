@@ -207,7 +207,7 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 
 	// 创建会话 MCP 管理器（用户作用域由 ConfigureSessionMCP 在消息处理时注入）
 	sessionKey := channel + ":" + chatID
-	mcpManager := tools.NewSessionMCPManager(sessionKey, m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
+	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 	// 根据配置选择记忆提供者
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
@@ -248,7 +248,7 @@ func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, work
 
 	userConfigPath := tools.UserMCPConfigPath(workDir, senderID)
 	workspaceRoot := tools.UserWorkspaceRoot(workDir, senderID)
-	mgr.UpdateScope(userConfigPath, workspaceRoot)
+	mgr.UpdateScope(senderID, userConfigPath, workspaceRoot)
 	return nil
 }
 

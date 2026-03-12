@@ -57,100 +57,6 @@ func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspac
 	return command, args, nil
 }
 
-// BwrapSandbox bwrap 沙箱实现
-type BwrapSandbox struct{}
-
-func (s *BwrapSandbox) Name() string { return "bwrap" }
-
-func (s *BwrapSandbox) Close() error { return nil }
-
-func (s *BwrapSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil, fmt.Errorf("command execution is disabled on Windows")
-	}
-
-	ws := workspace
-	if ws == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", nil, err
-		}
-		ws = cwd
-	}
-	ws, err := filepath.Abs(ws)
-	if err != nil {
-		return "", nil, err
-	}
-	if err := os.MkdirAll(ws, 0o755); err != nil {
-		return "", nil, err
-	}
-	_ = os.MkdirAll(filepath.Join(ws, ".tmp"), 0o755)
-
-	bwrapArgs := []string{
-		"--die-with-parent",
-		"--new-session",
-		"--unshare-pid",
-		"--ro-bind", "/", "/",
-		"--proc", "/proc",
-		"--dev", "/dev",
-		"--bind", ws, ws,
-		"--chdir", ws,
-		"--setenv", "HOME", ws,
-		"--setenv", "TMPDIR", filepath.Join(ws, ".tmp"),
-	}
-
-	// 添加自定义环境变量（必须在 -- 之前）
-	for _, e := range env {
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) == 2 {
-			bwrapArgs = append(bwrapArgs, "--setenv", parts[0], parts[1])
-		}
-	}
-
-	bwrapArgs = append(bwrapArgs, "--", command)
-	bwrapArgs = append(bwrapArgs, args...)
-	return "bwrap", bwrapArgs, nil
-}
-
-// NsjailSandbox nsjail 沙箱实现
-type NsjailSandbox struct{}
-
-func (s *NsjailSandbox) Name() string { return "nsjail" }
-
-func (s *NsjailSandbox) Close() error { return nil }
-
-func (s *NsjailSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil, fmt.Errorf("command execution is disabled on Windows")
-	}
-
-	ws := workspace
-	if ws == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", nil, err
-		}
-		ws = cwd
-	}
-	ws, err := filepath.Abs(ws)
-	if err != nil {
-		return "", nil, err
-	}
-
-	nsArgs := []string{
-		"-Mo",
-		"--cwd", ws,
-		"--",
-		command,
-	}
-	// nsjail 通过 --env 可以传递环境变量
-	for _, e := range env {
-		nsArgs = append(nsArgs, "--env", e)
-	}
-	nsArgs = append(nsArgs, args...)
-	return "nsjail", nsArgs, nil
-}
-
 // dockerSandbox Docker 沙箱实现
 // 使用 docker commit 持久化用户环境：Close 时将容器提交为用户专属镜像，
 // 下次创建容器时优先使用该镜像，从而完整保留 apt install 等所有变更。
@@ -375,10 +281,6 @@ func NewSandbox(mode, image string) Sandbox {
 	switch mode {
 	case "none":
 		return &NoneSandbox{}
-	case "bwrap":
-		return &BwrapSandbox{}
-	case "nsjail":
-		return &NsjailSandbox{}
 	case "docker":
 		return &dockerSandbox{image: image}
 	default:
@@ -394,17 +296,7 @@ func WrapCommandForSandbox(command string, args []string, workspaceRoot string) 
 
 // WrapCommandForSandboxWithEnv 将命令包装到沙箱执行，带环境变量
 func WrapCommandForSandboxWithEnv(command string, args []string, env []string, workspaceRoot string) (string, []string, error) {
-	// 尝试查找可用的沙箱
-	if _, err := exec.LookPath("bwrap"); err == nil {
-		s := &BwrapSandbox{}
-		return s.Wrap(command, args, env, workspaceRoot, "")
-	}
-
-	if _, err := exec.LookPath("nsjail"); err == nil {
-		s := &NsjailSandbox{}
-		return s.Wrap(command, args, env, workspaceRoot, "")
-	}
-
-	// 如果没有任何沙箱可用，返回错误
-	return "", nil, fmt.Errorf("no sandbox runner found, install bwrap or nsjail")
+	// 使用 docker 沙箱
+	s := &dockerSandbox{image: "ubuntu:22.04"}
+	return s.Wrap(command, args, env, workspaceRoot, "")
 }

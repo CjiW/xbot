@@ -1218,7 +1218,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
 		SandboxEnabled:      true,
-		PreferredSandbox:    "bwrap,nsjail",
+		PreferredSandbox:    "docker",
 		AgentID:             "main",
 		Manager:             a,
 		DataDir:             a.workDir,

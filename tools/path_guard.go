@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func defaultWorkspaceRoot(ctx *ToolContext) string {
@@ -138,4 +139,25 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("read path is outside allowed roots: %s", inputPath)
+}
+
+// SandboxToHostPath 将沙箱路径转换为宿主机路径（输入方向：LLM → 宿主机）
+// 例如 /workspace/foo.go → /data/.xbot/users/xxx/workspace/foo.go
+func SandboxToHostPath(ctx *ToolContext, sandboxPath string) string {
+	if ctx == nil || !ctx.SandboxEnabled || ctx.SandboxWorkDir == "" || ctx.WorkspaceRoot == "" {
+		return sandboxPath
+	}
+	if ctx.SandboxWorkDir == ctx.WorkspaceRoot {
+		return sandboxPath
+	}
+	if !strings.HasPrefix(sandboxPath, ctx.SandboxWorkDir) {
+		return sandboxPath
+	}
+	rel := strings.TrimPrefix(sandboxPath, ctx.SandboxWorkDir)
+	rel = strings.TrimPrefix(rel, string(filepath.Separator))
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		return ctx.WorkspaceRoot
+	}
+	return filepath.Join(ctx.WorkspaceRoot, rel)
 }

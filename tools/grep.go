@@ -73,148 +73,99 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("pattern is required")
 	}
 
-	// Compile regex
-	regexPattern := params.Pattern
-	if params.IgnoreCase {
-		regexPattern = "(?i)" + regexPattern
-	}
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid regex pattern: %w", err)
+	// 沙箱模式：在容器内执行 grep 命令
+	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+		return t.executeInSandbox(ctx, params.Pattern, params.Path, params.Include, params.IgnoreCase, params.ContextLines)
 	}
 
-	// Determine base directory
-	baseDir := params.Path
-	if baseDir == "" {
-		if ctx != nil && ctx.WorkspaceRoot != "" {
-			baseDir = ctx.WorkspaceRoot
-		} else if ctx != nil && ctx.WorkingDir != "" {
-			baseDir = ctx.WorkingDir
+	// 非沙箱模式：本地搜索
+	return t.executeLocal(ctx, params.Pattern, params.Path, params.Include, params.IgnoreCase, params.ContextLines)
+}
+
+// executeInSandbox 在沙箱容器内执行 grep 命令
+func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include string, ignoreCase bool, contextLines int) (*ToolResult, error) {
+	searchDir := "/workspace"
+	if path != "" {
+		if strings.HasPrefix(path, "/workspace/") {
+			searchDir = path
 		} else {
-			baseDir, err = os.Getwd()
-			if err != nil {
-				return nil, fmt.Errorf("failed to get working directory: %w", err)
-			}
+			searchDir = "/workspace/" + path
 		}
 	}
 
-	baseDir, err = ResolveReadPath(ctx, baseDir)
+	// 构建 grep 命令
+	grepCmd := "grep"
+	if ignoreCase {
+		grepCmd += " -i"
+	}
+	if contextLines > 0 {
+		grepCmd += fmt.Sprintf(" -C %d", contextLines)
+	}
+	grepCmd += " -rn --binary-files=without-match --exclude-dir=.git --exclude-dir=node_modules"
+
+	if include != "" {
+		grepCmd += fmt.Sprintf(" --include='%s'", include)
+	}
+
+	grepCmd += fmt.Sprintf(" '%s' %s", pattern, searchDir)
+	grepCmd += " | head -200"
+
+	output, err := RunInSandboxWithShell(ctx, grepCmd)
 	if err != nil {
-		return nil, err
+		if output == "" || strings.Contains(output, "No matches found") {
+			return NewResult("No matches found."), nil
+		}
+		return nil, fmt.Errorf("sandbox grep failed: %v, output: %s", err, output)
 	}
 
-	info, err := os.Stat(baseDir)
-	if err != nil {
-		return nil, fmt.Errorf("base directory does not exist: %s", baseDir)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("path is not a directory: %s", baseDir)
-	}
-
-	// Expand brace patterns in include (e.g., "*.{go,ts}" -> ["*.go", "*.ts"])
-	var includePatterns []string
-	if params.Include != "" {
-		includePatterns = expandBracePattern(params.Include)
-	}
-
-	contextLines := params.ContextLines
-	if contextLines < 0 {
-		contextLines = 0
-	}
-
-	// Walk the directory and search files
-	var matches []grepMatch
-	truncated := false
-
-	err = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil // skip inaccessible files
-		}
-
-		// Skip hidden directories
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-
-		// Skip node_modules
-		if d.IsDir() && d.Name() == "node_modules" {
-			return filepath.SkipDir
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		// Apply include filter
-		if len(includePatterns) > 0 {
-			matched := false
-			for _, pattern := range includePatterns {
-				if m, _ := filepath.Match(pattern, d.Name()); m {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				return nil
-			}
-		}
-
-		// Skip large files
-		fileInfo, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if fileInfo.Size() > maxGrepFileSize {
-			return nil
-		}
-
-		// Search file
-		fileMatches, err := searchFile(path, re, contextLines)
-		if err != nil {
-			return nil // skip files that can't be read
-		}
-
-		matches = append(matches, fileMatches...)
-		if len(matches) >= maxGrepMatches {
-			truncated = true
-			matches = matches[:maxGrepMatches]
-			return filepath.SkipAll
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("search failed: %w", err)
-	}
-
-	if len(matches) == 0 {
+	if output == "" {
 		return NewResult("No matches found."), nil
 	}
 
-	// Format output
+	// 解析 grep 输出并格式化
+	lines := strings.Split(output, "\n")
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d match(es):\n\n", len(matches))
-
+	matchCount := 0
 	currentFile := ""
-	for _, m := range matches {
-		if m.File != currentFile {
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// grep -n 输出格式: filename:linenumber:content
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		filePath := parts[0]
+		rest := parts[1]
+
+		// 解析行号
+		var lineNum int
+		restParts := strings.SplitN(rest, ":", 2)
+		if len(restParts) >= 2 {
+			fmt.Sscanf(restParts[0], "%d", &lineNum)
+			rest = restParts[1]
+		}
+
+		if filePath != currentFile {
 			if currentFile != "" {
 				sb.WriteString("\n")
 			}
-			currentFile = m.File
-			fmt.Fprintf(&sb, "## %s\n", m.File)
+			currentFile = filePath
+			sb.WriteString("## ")
+			sb.WriteString(filePath)
+			sb.WriteString("\n")
 		}
-		line := m.Line
-		if len(line) > maxGrepLineLength {
-			line = line[:maxGrepLineLength] + "..."
-		}
-		fmt.Fprintf(&sb, "%d: %s\n", m.LineNumber, line)
+		fmt.Fprintf(&sb, "%d: %s\n", lineNum, rest)
+		matchCount++
 	}
 
-	if truncated {
-		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxGrepMatches)
+	if matchCount == 0 {
+		return NewResult("No matches found."), nil
 	}
 
+	fmt.Fprintf(&sb, "\n(Found %d match(es))", matchCount)
 	return NewResult(sb.String()), nil
 }
 
@@ -304,4 +255,150 @@ func expandBracePattern(pattern string) []string {
 		results = append(results, prefix+strings.TrimSpace(alt)+suffix)
 	}
 	return results
+}
+
+// executeLocal 在本地执行 grep 搜索（非沙箱模式）
+func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string, ignoreCase bool, contextLines int) (*ToolResult, error) {
+	// Compile regex
+	regexPattern := pattern
+	if ignoreCase {
+		regexPattern = "(?i)" + regexPattern
+	}
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	// Determine base directory
+	baseDir := path
+	if baseDir == "" {
+		if ctx != nil && ctx.WorkspaceRoot != "" {
+			baseDir = ctx.WorkspaceRoot
+		} else if ctx != nil && ctx.WorkingDir != "" {
+			baseDir = ctx.WorkingDir
+		} else {
+			baseDir, err = os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get working directory: %w", err)
+			}
+		}
+	}
+
+	baseDir, err = ResolveReadPath(ctx, baseDir)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("base directory does not exist: %s", baseDir)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("path is not a directory: %s", baseDir)
+	}
+
+	// Expand brace patterns in include (e.g., "*.{go,ts}" -> ["*.go", "*.ts"])
+	var includePatterns []string
+	if include != "" {
+		includePatterns = expandBracePattern(include)
+	}
+
+	if contextLines < 0 {
+		contextLines = 0
+	}
+
+	// Walk the directory and search files
+	var matches []grepMatch
+	truncated := false
+
+	err = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible files
+		}
+
+		// Skip hidden directories
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+
+		// Skip node_modules
+		if d.IsDir() && d.Name() == "node_modules" {
+			return filepath.SkipDir
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		// Apply include filter
+		if len(includePatterns) > 0 {
+			matched := false
+			for _, p := range includePatterns {
+				if m, _ := filepath.Match(p, d.Name()); m {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil
+			}
+		}
+
+		// Skip large files
+		fileInfo, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if fileInfo.Size() > maxGrepFileSize {
+			return nil
+		}
+
+		// Search file
+		fileMatches, err := searchFile(path, re, contextLines)
+		if err != nil {
+			return nil // skip files that can't be read
+		}
+
+		matches = append(matches, fileMatches...)
+		if len(matches) >= maxGrepMatches {
+			truncated = true
+			matches = matches[:maxGrepMatches]
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return NewResult("No matches found."), nil
+	}
+
+	// Format output
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d match(es):\n\n", len(matches))
+
+	currentFile := ""
+	for _, m := range matches {
+		if m.File != currentFile {
+			if currentFile != "" {
+				sb.WriteString("\n")
+			}
+			currentFile = m.File
+			fmt.Fprintf(&sb, "## %s\n", m.File)
+		}
+		line := m.Line
+		if len(line) > maxGrepLineLength {
+			line = line[:maxGrepLineLength] + "..."
+		}
+		fmt.Fprintf(&sb, "%d: %s\n", m.LineNumber, line)
+	}
+
+	if truncated {
+		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxGrepMatches)
+	}
+
+	return NewResult(sb.String()), nil
 }

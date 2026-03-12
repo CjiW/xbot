@@ -95,6 +95,173 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("mode is required")
 	}
 
+	// 沙箱模式
+	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+		return t.executeInSandbox(ctx, params)
+	}
+
+	// 非沙箱模式
+	return t.executeLocal(ctx, params)
+}
+
+// executeInSandbox 在沙箱内执行编辑操作
+func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
+	// 将用户输入的路径转换为容器内路径
+	sandboxPath := params.Path
+	if !strings.HasPrefix(params.Path, "/workspace/") && !strings.HasPrefix(params.Path, "/") {
+		sandboxPath = "/workspace/" + params.Path
+	} else if strings.HasPrefix(params.Path, "/workspace/") {
+		sandboxPath = params.Path
+	} else if strings.HasPrefix(params.Path, "/") && ctx.WorkspaceRoot != "" {
+		rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			sandboxPath = "/workspace/" + rel
+		}
+	}
+
+	// 根据不同模式执行
+	switch params.Mode {
+	case "create":
+		return t.sandboxCreate(ctx, sandboxPath, params.Content)
+	case "replace":
+		return t.sandboxReplace(ctx, sandboxPath, params.OldString, params.NewString, params.ReplaceAll)
+	case "line":
+		return t.sandboxLineEdit(ctx, sandboxPath, params.LineNumber, params.Action, params.Content)
+	case "regex":
+		return t.sandboxRegexReplace(ctx, sandboxPath, params.Pattern, params.Replacement, params.ReplaceAll)
+	case "insert":
+		return t.sandboxInsert(ctx, sandboxPath, params.Position, params.Content)
+	default:
+		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
+	}
+}
+
+func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
+	// 使用 tee 命令创建文件（避免 shell 转义问题）
+	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
+	cmd := fmt.Sprintf("printf '%%s' '%s' > '%s'", escapedContent, path)
+	output, err := RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file: %v, output: %s", err, output)
+	}
+	summary := fmt.Sprintf("File created successfully: %s", path)
+	diff := generateUnifiedDiff("", content, path)
+	return &ToolResult{Summary: summary, Detail: diff}, nil
+}
+
+func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
+	// 先读取文件内容，确认oldStr存在
+	readCmd := fmt.Sprintf("cat '%s'", path)
+	content, err := RunInSandboxWithShell(ctx, readCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// 检查要替换的文本是否存在
+	if !strings.Contains(content, oldStr) {
+		return nil, fmt.Errorf("text not found: %q", oldStr)
+	}
+
+	// 使用 sed 替换
+	var cmd string
+	if replaceAll {
+		escapedOld := strings.ReplaceAll(oldStr, "'", "'\\''")
+		escapedNew := strings.ReplaceAll(newStr, "'", "'\\''")
+		cmd = fmt.Sprintf("sed -i 's/%s/%s/g' '%s'", escapedOld, escapedNew, path)
+	} else {
+		escapedOld := strings.ReplaceAll(oldStr, "'", "'\\''")
+		escapedNew := strings.ReplaceAll(newStr, "'", "'\\''")
+		cmd = fmt.Sprintf("sed -i 's/%s/%s/' '%s'", escapedOld, escapedNew, path)
+	}
+
+	_, err = RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to replace text: %v", err)
+	}
+
+	// 读取修改后的内容并生成 diff
+	newContent, _ := RunInSandboxWithShell(ctx, readCmd)
+	summary := fmt.Sprintf("Successfully replaced in %s", path)
+	diff := generateUnifiedDiff(content, newContent, path)
+	return &ToolResult{Summary: summary, Detail: diff}, nil
+}
+
+func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
+	var cmd string
+	switch action {
+	case "insert_before":
+		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum-1, content, path)
+	case "insert_after":
+		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum, content, path)
+	case "replace":
+		cmd = fmt.Sprintf("sed -i '%ds/.*/%s/' '%s'", lineNum, content, path)
+	case "delete":
+		cmd = fmt.Sprintf("sed -i '%dd' '%s'", lineNum, path)
+	default:
+		return nil, fmt.Errorf("unknown action: %s", action)
+	}
+
+	_, err := RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to edit line: %v", err)
+	}
+
+	summary := fmt.Sprintf("Line %d %sd successfully", lineNum, action)
+	return NewResult(summary), nil
+}
+
+func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool) (*ToolResult, error) {
+	// 读取原内容
+	readCmd := fmt.Sprintf("cat '%s'", path)
+	content, err := RunInSandboxWithShell(ctx, readCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %v", err)
+	}
+
+	// 使用 sed 正则替换
+	flag := ""
+	if replaceAll {
+		flag = "g"
+	}
+	escapedPattern := strings.ReplaceAll(pattern, "'", "'\\''")
+	escapedReplacement := strings.ReplaceAll(replacement, "'", "'\\''")
+	cmd := fmt.Sprintf("sed -i -E 's/%s/%s/%s' '%s'", escapedPattern, escapedReplacement, flag, path)
+
+	_, err = RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to regex replace: %v", err)
+	}
+
+	newContent, _ := RunInSandboxWithShell(ctx, readCmd)
+	summary := fmt.Sprintf("Regex replaced in %s", path)
+	diff := generateUnifiedDiff(content, newContent, path)
+	return &ToolResult{Summary: summary, Detail: diff}, nil
+}
+
+func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
+	var cmd string
+	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
+	switch position {
+	case "start":
+		cmd = fmt.Sprintf("sed -i '1i%s' '%s'", escapedContent, path)
+	case "end":
+		cmd = fmt.Sprintf("echo '%s' >> '%s'", escapedContent, path)
+	default:
+		// 尝试解析为行号
+		cmd = fmt.Sprintf("sed -i '%si%s' '%s'", position, escapedContent, path)
+	}
+
+	_, err := RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert content: %v", err)
+	}
+
+	summary := fmt.Sprintf("Content inserted at %s of %s", position, path)
+	return NewResult(summary), nil
+}
+
+// executeLocal 在本地执行编辑操作（非沙箱模式）
+func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResult, error) {
 	filePath, err := ResolveWritePath(ctx, params.Path)
 	if err != nil {
 		return nil, err
@@ -106,7 +273,6 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		if err != nil {
 			return nil, err
 		}
-		// create 模式：detail 显示新文件内容的 diff
 		diff := generateUnifiedDiff("", params.Content, filePath)
 		return &ToolResult{Summary: summary, Detail: diff}, nil
 	}
@@ -143,7 +309,6 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	// 生成 unified diff 作为 detail
 	diff := generateUnifiedDiff(oldContent, newContent, filePath)
 	return &ToolResult{Summary: result, Detail: diff}, nil
 }

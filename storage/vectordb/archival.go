@@ -3,6 +3,7 @@ package vectordb
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -288,22 +289,35 @@ type ToolIndexEntry struct {
 	Description string
 }
 
-// IndexTools indexes multiple tools at once.
+// IndexTools indexes multiple tools at once using batch concurrent embedding.
 func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools []ToolIndexEntry) error {
 	if s.embeddingFunc == nil {
 		return fmt.Errorf("tool index requires embedding configuration")
 	}
-	// Clear existing and re-index
 	if err := s.ClearTools(ctx, tenantID); err != nil {
 		return fmt.Errorf("clear tools: %w", err)
 	}
-	for _, tool := range tools {
-		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
-			tool.Name, tool.ServerName, tool.Source, tool.Description)
-		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
-		if err := s.InsertTool(ctx, tenantID, toolID, content); err != nil {
-			return fmt.Errorf("insert tool %s: %w", tool.Name, err)
+	if len(tools) == 0 {
+		return nil
+	}
+	coll, err := s.getOrCreateCollection(tenantID)
+	if err != nil {
+		return fmt.Errorf("get collection: %w", err)
+	}
+	docs := make([]chromem.Document, len(tools))
+	for i, tool := range tools {
+		docs[i] = chromem.Document{
+			ID: fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
+			Content: fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+				tool.Name, tool.ServerName, tool.Source, tool.Description),
 		}
+	}
+	concurrency := runtime.NumCPU()
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if err := coll.AddDocuments(ctx, docs, concurrency); err != nil {
+		return fmt.Errorf("add documents: %w", err)
 	}
 	return nil
 }

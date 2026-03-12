@@ -260,7 +260,10 @@ func main() {
 	<-sigCh
 	fmt.Println("\nShutting down...")
 
-	// 关闭 Agent（清理 MCP 连接等资源）
+	// 先取消 context，让 agent.Run() 退出（其 defer 会清理 cron 和 cleanup routine）
+	cancel()
+
+	// 等待 agent loop 退出后再继续关闭
 	if agentLoop != nil {
 		agentLoop.Close()
 	}
@@ -280,7 +283,6 @@ func main() {
 		}
 	}
 
-	cancel()
 	disp.Stop()
 	log.Info("xbot stopped")
 }

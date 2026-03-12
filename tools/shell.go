@@ -74,9 +74,9 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		userID = toolCtx.SenderID
 	}
 
-	// 使用全局沙箱实例
+	// 使用全局沙箱实例，不传递宿主机环境变量（避免泄漏敏感信息到容器）
 	sandbox := GetSandbox()
-	cmdName, cmdArgs, err := sandbox.Wrap("sh", []string{"-c", params.Command}, workspaceRoot, userID)
+	cmdName, cmdArgs, err := sandbox.Wrap("sh", []string{"-c", params.Command}, nil, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}

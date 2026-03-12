@@ -260,6 +260,19 @@ func main() {
 	<-sigCh
 	fmt.Println("\nShutting down...")
 
+	// 关闭 Agent（清理 MCP 连接等资源）
+	if agentLoop != nil {
+		agentLoop.Close()
+	}
+
+	// 关闭沙箱（清理 Docker 容器等资源）
+	sandbox := tools.GetSandbox()
+	if sandbox != nil {
+		if err := sandbox.Close(); err != nil {
+			log.WithError(err).Warn("Sandbox close error")
+		}
+	}
+
 	// 停止 OAuth 服务器
 	if oauthServer != nil {
 		if err := oauthServer.Shutdown(context.Background()); err != nil {

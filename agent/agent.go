@@ -133,6 +133,8 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 				})
 			}
 		}
+		// Close MCP manager to prevent resource leak
+		mcpMgr.Close()
 	}
 
 	if len(toolEntries) == 0 {
@@ -349,6 +351,16 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 // GetCardBuilder returns the CardBuilder for card callback handling.
 func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
+}
+
+// Close 关闭 Agent 及其所有资源
+func (a *Agent) Close() error {
+	if a.multiSession != nil {
+		if err := a.multiSession.Close(); err != nil {
+			log.WithError(err).Warn("MultiTenantSession close error")
+		}
+	}
+	return nil
 }
 
 var ackMessages = []string{

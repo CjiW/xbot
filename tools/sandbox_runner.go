@@ -38,12 +38,16 @@ type Sandbox interface {
 	Wrap(command string, args []string, workspace string, userID string) (string, []string, error)
 	// Name 返回沙箱名称
 	Name() string
+	// Close 关闭并清理沙箱资源
+	Close() error
 }
 
 // NoneSandbox 无沙箱模式，直接执行
 type NoneSandbox struct{}
 
 func (s *NoneSandbox) Name() string { return "none" }
+
+func (s *NoneSandbox) Close() error { return nil }
 
 func (s *NoneSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -56,6 +60,8 @@ func (s *NoneSandbox) Wrap(command string, args []string, workspace string, user
 type BwrapSandbox struct{}
 
 func (s *BwrapSandbox) Name() string { return "bwrap" }
+
+func (s *BwrapSandbox) Close() error { return nil }
 
 func (s *BwrapSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -102,6 +108,8 @@ type NsjailSandbox struct{}
 
 func (s *NsjailSandbox) Name() string { return "nsjail" }
 
+func (s *NsjailSandbox) Close() error { return nil }
+
 func (s *NsjailSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
@@ -145,6 +153,34 @@ type dockerContainer struct {
 }
 
 func (s *dockerSandbox) Name() string { return "docker" }
+
+// Close 关闭并清理所有 Docker 容器（保留 volume 以便重启后恢复）
+func (s *dockerSandbox) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for userID, c := range s.containers {
+		if c.started {
+			// 停止容器
+			stopCmd := exec.Command("docker", "stop", "-t", "10", c.name)
+			if err := stopCmd.Run(); err != nil {
+				log.WithError(err).Warnf("Failed to stop container %s", c.name)
+			} else {
+				log.Infof("Stopped Docker container %s", c.name)
+			}
+			// 删除容器（保留 volume 以便重启后恢复）
+			rmCmd := exec.Command("docker", "rm", c.name)
+			if err := rmCmd.Run(); err != nil {
+				log.WithError(err).Warnf("Failed to remove container %s", c.name)
+			} else {
+				log.Infof("Removed Docker container %s", c.name)
+			}
+		}
+		_ = userID // silence unused variable warning
+	}
+	s.containers = make(map[string]*dockerContainer)
+	return nil
+}
 
 func (s *dockerSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {

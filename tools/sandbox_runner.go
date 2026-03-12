@@ -168,17 +168,25 @@ type dockerContainer struct {
 func (s *dockerSandbox) Name() string { return "docker" }
 
 // Close 关闭并清理所有 Docker 容器
-// 仅当容器有文件系统变更时才 commit，commit 后清理旧的 dangling 镜像
+// 分两阶段执行：先 commit 所有用户容器（保证数据持久化优先），再 stop+rm。
+// 这样即使进程在 stop 阶段被外层 Docker SIGKILL，用户数据也已 commit。
 func (s *dockerSandbox) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Phase 1: commit all user containers (fast, critical for data persistence)
 	for userID, c := range s.containers {
 		if !c.started {
 			continue
 		}
-
 		s.commitIfDirty(c.name, userID)
+	}
+
+	// Phase 2: stop + rm all containers (may be slow, less critical)
+	for _, c := range s.containers {
+		if !c.started {
+			continue
+		}
 
 		stopCmd := exec.Command("docker", "stop", "-t", "10", c.name)
 		if err := stopCmd.Run(); err != nil {
@@ -200,6 +208,11 @@ func (s *dockerSandbox) Close() error {
 
 // commitIfDirty 仅在容器有文件系统变更时 commit，并清理旧的 dangling 镜像
 func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
+	if userID == "" || strings.HasPrefix(userID, "__") {
+		log.Debugf("Skipping commit for system container %s (userID=%q)", containerName, userID)
+		return
+	}
+
 	diffCmd := exec.Command("docker", "diff", containerName)
 	diffOutput, err := diffCmd.Output()
 	if err != nil {

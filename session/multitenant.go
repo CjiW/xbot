@@ -94,14 +94,15 @@ type MultiTenantSession struct {
 	mu                    sync.RWMutex
 	tenantCache           map[string]*TenantSession // key: "channel:chat_id"
 	dbPath                string
-	mcpConfigPath         string           // MCP 配置文件路径
-	mcpInactivityTimeout  time.Duration    // MCP 不活跃超时配置
-	mcpCleanupInterval    time.Duration    // MCP 清理扫描间隔
-	sessionCacheTimeout   time.Duration    // 会话缓存超时配置
-	cleanupStopCh         chan struct{}    // 清理协程停止信号
-	cleanupWg             sync.WaitGroup   // 清理协程等待组
-	cleanupStopOnce       sync.Once        // 确保 StopCleanupRoutine 只执行一次
-	toolIndexFingerprints map[int64]string // per-tenant catalog fingerprint (guarded by mu)
+	mcpConfigPath         string                    // MCP 配置文件路径
+	mcpInactivityTimeout  time.Duration             // MCP 不活跃超时配置
+	mcpCleanupInterval    time.Duration             // MCP 清理扫描间隔
+	sessionCacheTimeout   time.Duration             // 会话缓存超时配置
+	cleanupStopCh         chan struct{}             // 清理协程停止信号
+	cleanupWg             sync.WaitGroup            // 清理协程等待组
+	cleanupStopOnce       sync.Once                 // 确保 StopCleanupRoutine 只执行一次
+	toolIndexFingerprints map[int64]string          // per-tenant catalog fingerprint (guarded by mu)
+	toolIndexPrevNames    map[int64]map[string]bool // per-tenant previous tool name set (guarded by mu)
 }
 
 // NewMultiTenant creates a new multi-tenant session manager
@@ -121,6 +122,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		memoryProvider:        "flat",
 		tenantCache:           make(map[string]*TenantSession),
 		toolIndexFingerprints: make(map[int64]string),
+		toolIndexPrevNames:    make(map[int64]map[string]bool),
 		dbPath:                dbPath,
 		mcpConfigPath:         "mcp.json", // 默认在工作目录下
 		mcpInactivityTimeout:  30 * time.Minute,
@@ -277,8 +279,8 @@ func catalogFingerprint(catalog []tools.MCPServerCatalogEntry) string {
 }
 
 // indexPersonalMCPTools indexes personal MCP tools for a tenant.
-// Returns the full tool name list when catalog changes (for immediate activation);
-// returns nil when catalog is unchanged or tool index is unavailable.
+// Returns only truly NEW tool names (added since last catalog snapshot) for immediate activation.
+// On first load or when catalog is unchanged, returns nil.
 func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.SessionMCPManager) []string {
 	if mgr == nil {
 		return nil
@@ -313,6 +315,7 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 	fp := catalogFingerprint(catalog)
 	m.mu.RLock()
 	prev := m.toolIndexFingerprints[tenantID]
+	prevNames := m.toolIndexPrevNames[tenantID]
 	m.mu.RUnlock()
 	if fp == prev {
 		return nil
@@ -327,7 +330,6 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 			defer cancel()
 			if err := m.IndexToolsForTenant(ctx, tenantID, entriesCopy); err != nil {
 				log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
-				// Clear fingerprint so next message retries
 				m.mu.Lock()
 				delete(m.toolIndexFingerprints, tenantID)
 				m.mu.Unlock()
@@ -337,12 +339,29 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 		}()
 	}
 
-	// Update fingerprint optimistically (async indexing in progress)
+	// Update fingerprint and tool name snapshot
+	currentNames := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
+		currentNames[name] = true
+	}
 	m.mu.Lock()
 	m.toolIndexFingerprints[tenantID] = fp
+	m.toolIndexPrevNames[tenantID] = currentNames
 	m.mu.Unlock()
 
-	return toolNames
+	// First load: no previous snapshot → all tools are pre-existing, not "new"
+	if prevNames == nil {
+		return nil
+	}
+
+	// Subsequent change: only return tools not in previous catalog
+	var newTools []string
+	for _, name := range toolNames {
+		if !prevNames[name] {
+			newTools = append(newTools, name)
+		}
+	}
+	return newTools
 }
 
 // migrateProfileToCoreMemory performs a one-time forward-compatible migration

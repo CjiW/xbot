@@ -129,7 +129,7 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
-	return NewResult(fmt.Sprintf("MCP server '%s' has been added. Use 'reload' action to connect to it.", args.Name)), nil
+	return NewResult(fmt.Sprintf("MCP server '%s' has been added. Use ManageTools' 'reload' action to connect to it.", args.Name)), nil
 }
 
 func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {

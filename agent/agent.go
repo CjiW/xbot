@@ -916,12 +916,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 
 		if !response.HasToolCalls() {
-			// 过滤掉think块
+			// 返回给用户的内容需要过滤掉think块
 			content := llm.StripThinkBlocks(response.Content)
 			return content, toolsUsed, false, nil
 		}
 
-		// 过滤掉think块，保留干净的content
+		// 过滤掉think块，用于用户展示和进度通知
 		cleanContent := llm.StripThinkBlocks(response.Content)
 
 		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
@@ -929,10 +929,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			progressLines = append(progressLines, cleanContent)
 		}
 
-		// 记录 assistant 消息（含 tool_calls），使用过滤后的content
+		// 记录 assistant 消息（含 tool_calls），保留原始content（包括think块）
+		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   cleanContent,
+			Content:   response.Content, // 保留原始content，包含think块
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)
@@ -1369,7 +1370,7 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			return fmt.Sprintf("Sub-agent LLM failed at iteration %d: %v", i+1, err), nil
 		}
 
-		// 过滤掉think块
+		// 过滤掉think块，用于用户展示
 		cleanContent := llm.StripThinkBlocks(response.Content)
 
 		if !response.HasToolCalls() {
@@ -1386,9 +1387,11 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			lastContent = cleanContent
 		}
 
+		// 记录 assistant 消息（含 tool_calls），保留原始content（包括think块）
+		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   cleanContent,
+			Content:   response.Content, // 保留原始content，包含think块
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)

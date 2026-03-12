@@ -107,7 +107,7 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 	dummySessionKey := "indexing:dummy"
 	mcpMgr := tools.NewSessionMCPManager(
 		dummySessionKey,
-		"",                  // userID (not needed for global indexing)
+		"__system__",        // system userID (avoids invalid Docker image name "xbot-:latest")
 		globalMCPConfigPath, // global config (read-only)
 		"",                  // no user config
 		"",                  // no workspace root needed

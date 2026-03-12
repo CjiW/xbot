@@ -30,6 +30,8 @@ test:
 build:
   stage: build
   image: docker:latest
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
   tags:
     - linux-x86
   before_script:

@@ -16,6 +16,7 @@ import (
 // SearchWikiTool searches wiki nodes via Feishu open API /wiki/v2/nodes/search.
 // This endpoint is currently not available in the Go SDK, so it is called directly with HTTP.
 type SearchWikiTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 

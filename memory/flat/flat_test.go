@@ -26,7 +26,7 @@ func setupTestDB(t *testing.T) (*sqlite.DB, int64) {
 func TestFlatMemory_Recall_Empty(t *testing.T) {
 	db, tenantID := setupTestDB(t)
 	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc)
+	m := New(tenantID, memorySvc, nil)
 
 	result, err := m.Recall(context.Background(), "any query")
 	if err != nil {
@@ -40,7 +40,7 @@ func TestFlatMemory_Recall_Empty(t *testing.T) {
 func TestFlatMemory_Recall_WithContent(t *testing.T) {
 	db, tenantID := setupTestDB(t)
 	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc)
+	m := New(tenantID, memorySvc, nil)
 
 	if err := memorySvc.WriteLongTerm(tenantID, "# Facts\nUser likes Go"); err != nil {
 		t.Fatalf("WriteLongTerm failed: %v", err)
@@ -62,7 +62,7 @@ func TestFlatMemory_Recall_WithContent(t *testing.T) {
 func TestFlatMemory_Close(t *testing.T) {
 	db, tenantID := setupTestDB(t)
 	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc)
+	m := New(tenantID, memorySvc, nil)
 
 	if err := m.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)

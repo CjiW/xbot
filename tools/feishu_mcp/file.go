@@ -19,6 +19,7 @@ import (
 
 // UploadFileTool uploads a file to the user's cloud space.
 type UploadFileTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -138,6 +139,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 
 // ListFilesTool lists files in a folder.
 type ListFilesTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -176,6 +178,7 @@ func (t *ListFilesTool) Execute(ctx *tools.ToolContext, input string) (*tools.To
 
 // AddPermissionTool adds a collaborator to a file or folder.
 type AddPermissionTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 

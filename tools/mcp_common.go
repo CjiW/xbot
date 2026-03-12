@@ -22,12 +22,13 @@ import (
 
 // MCPServerConfig 单个 MCP Server 的配置
 type MCPServerConfig struct {
-	Command string            `json:"command,omitempty"` // 可执行文件路径（stdio 模式）
-	Args    []string          `json:"args,omitempty"`    // 命令行参数（stdio 模式）
-	Env     map[string]string `json:"env,omitempty"`     // 环境变量
-	URL     string            `json:"url,omitempty"`     // HTTP MCP URL（http 模式）
-	Headers map[string]string `json:"headers,omitempty"` // HTTP 请求头
-	Enabled *bool             `json:"enabled,omitempty"` // 是否启用（默认 true）
+	Command      string            `json:"command,omitempty"`      // 可执行文件路径（stdio 模式）
+	Args         []string          `json:"args,omitempty"`         // 命令行参数（stdio 模式）
+	Env          map[string]string `json:"env,omitempty"`          // 环境变量
+	URL          string            `json:"url,omitempty"`          // HTTP MCP URL（http 模式）
+	Headers      map[string]string `json:"headers,omitempty"`      // HTTP 请求头
+	Enabled      *bool             `json:"enabled,omitempty"`      // 是否启用（默认 true）
+	Instructions string            `json:"instructions,omitempty"` // MCP 服务器使用说明（fallback，当服务器不返回时使用）
 }
 
 // MCPConfig MCP 配置文件结构
@@ -102,26 +103,14 @@ func resolveXbotBinDir(configPath string) string {
 	return ""
 }
 
-// resolveWorkspaceRoot 推断工作区根路径：
-// - 如果 configPath 位于 .xbot/ 下，返回 .xbot 的父目录（项目根）
-// - 否则返回 configPath 所在目录
-func resolveWorkspaceRoot(configPath string) string {
-	if configPath == "" {
-		return ""
-	}
-
-	dir := filepath.Dir(configPath)
-	if strings.HasSuffix(dir, string(filepath.Separator)+".xbot") || filepath.Base(dir) == ".xbot" {
-		return filepath.Dir(dir)
-	}
-	return dir
-}
-
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
-func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, serverName string) (*mcp.ClientSession, error) {
+func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, userID, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
-	cmd, args, err := WrapCommandForSandbox(cfg.Command, cfg.Args, workspaceRoot)
+
+	// 使用全局沙箱实例
+	sandbox := GetSandbox()
+	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}

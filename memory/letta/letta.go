@@ -19,25 +19,28 @@ import (
 // - Archival Memory: long-term embedding-backed storage (on-demand via tools)
 // - Recall Memory: conversation history retrieval by time range
 type LettaMemory struct {
-	tenantID    int64
-	coreSvc     *sqlite.CoreMemoryService
-	archivalSvc *vectordb.ArchivalService
-	memorySvc   *sqlite.MemoryService
+	tenantID     int64
+	coreSvc      *sqlite.CoreMemoryService
+	archivalSvc  *vectordb.ArchivalService
+	memorySvc    *sqlite.MemoryService
+	toolIndexSvc *vectordb.ToolIndexService
 }
 
 var _ memory.MemoryProvider = (*LettaMemory)(nil)
+var _ memory.ToolIndexer = (*LettaMemory)(nil)
 
 // New creates a LettaMemory instance.
-func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService) *LettaMemory {
+func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
 	// Ensure default blocks exist
 	if err := coreSvc.InitBlocks(tenantID); err != nil {
 		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to init core memory blocks")
 	}
 	return &LettaMemory{
-		tenantID:    tenantID,
-		coreSvc:     coreSvc,
-		archivalSvc: archivalSvc,
-		memorySvc:   memorySvc,
+		tenantID:     tenantID,
+		coreSvc:      coreSvc,
+		archivalSvc:  archivalSvc,
+		memorySvc:    memorySvc,
+		toolIndexSvc: toolIndexSvc,
 	}
 }
 
@@ -167,18 +170,20 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	prompt := fmt.Sprintf(`You are a memory consolidation agent for a Letta-style memory system.
 Review the conversation below and call the consolidate_memory tool to update the memory system.
 
+## Instructions
+
+- Update core memory blocks (persona/human/working_context) if the conversation reveals new important information
+- Archive detailed facts/events to archival memory that don't fit in core memory
+- Write a history entry summarizing key events
+- Only update blocks that need changes. Set unchanged block values to empty string "".
+- Keep core memory blocks concise (bullet points, not prose)
+
 ## Current Core Memory
 %s
 
 ## Conversation to Process
 %s
-
-Instructions:
-- Update core memory blocks (persona/human/working_context) if the conversation reveals new important information
-- Archive detailed facts/events to archival memory that don't fit in core memory
-- Write a history entry summarizing key events
-- Only update blocks that need changes. Set unchanged block values to empty string "".
-- Keep core memory blocks concise (bullet points, not prose)`, coreDisplay.String(), strings.Join(lines, "\n"))
+`, coreDisplay.String(), strings.Join(lines, "\n"))
 
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the consolidate_memory tool."),
@@ -211,7 +216,14 @@ Instructions:
 		case "working_context":
 			newContent = args.WorkingContext
 		}
+		oldContent := blocks[blockName]
 		if newContent != "" {
+			log.WithFields(log.Fields{
+				"tenant_id": m.tenantID,
+				"block":     blockName,
+				"old_len":   len(oldContent),
+				"new_len":   len(newContent),
+			}).Info("Updating core memory block")
 			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent); err != nil {
 				log.WithError(err).WithField("block", blockName).Error("Failed to update core memory block")
 			}
@@ -272,6 +284,67 @@ func (m *LettaMemory) MemoryService() *sqlite.MemoryService {
 	return m.memorySvc
 }
 
+// ToolIndexerService returns the tool index service.
+func (m *LettaMemory) ToolIndexerService() *vectordb.ToolIndexService {
+	return m.toolIndexSvc
+}
+
+// IndexTools implements memory.ToolIndexer.
+func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEntry) error {
+	if m.toolIndexSvc == nil {
+		return fmt.Errorf("tool index service not available")
+	}
+	// Clear existing tools and re-index
+	if err := m.toolIndexSvc.ClearTools(ctx, m.tenantID); err != nil {
+		log.WithError(err).Warn("Failed to clear tool index")
+	}
+	for _, tool := range tools {
+		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
+		if err := m.toolIndexSvc.InsertTool(ctx, m.tenantID, toolID, content); err != nil {
+			log.WithError(err).WithField("tool", tool.Name).Warn("Failed to index tool")
+		}
+	}
+	log.WithField("tenant_id", m.tenantID).Infof("Indexed %d tools", len(tools))
+	return nil
+}
+
+// SearchTools implements memory.ToolIndexer (searches current tenant).
+func (m *LettaMemory) SearchTools(ctx context.Context, query string, topK int) ([]memory.ToolIndexEntry, error) {
+	return m.SearchToolsForTenant(ctx, m.tenantID, query, topK)
+}
+
+// SearchToolsForTenant searches tools for a specific tenant.
+func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, query string, topK int) ([]memory.ToolIndexEntry, error) {
+	if m.toolIndexSvc == nil {
+		return nil, fmt.Errorf("tool index service not available")
+	}
+	results, err := m.toolIndexSvc.SearchTools(ctx, tenantID, query, topK)
+	if err != nil {
+		return nil, fmt.Errorf("search tools: %w", err)
+	}
+	entries := make([]memory.ToolIndexEntry, len(results))
+	for i, r := range results {
+		// Parse tool ID to extract server and name
+		// Format: serverName_toolName
+		parts := strings.SplitN(r.ID, "_", 2)
+		serverName := ""
+		toolName := r.ID
+		if len(parts) >= 2 {
+			serverName = parts[0]
+			toolName = parts[1]
+		}
+		entries[i] = memory.ToolIndexEntry{
+			Name:        toolName,
+			ServerName:  serverName,
+			Source:      "personal",
+			Description: r.Content,
+		}
+	}
+	return entries, nil
+}
+
 // --- helpers ---
 
 func blockTitle(name string) string {
@@ -325,19 +398,19 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "persona",
 			Type:        "string",
-			Description: "Updated persona block (bot's identity/personality). Empty string if unchanged.",
+			Description: "Updated persona block. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "human",
 			Type:        "string",
-			Description: "Updated human block (observations about the user). Empty string if unchanged.",
+			Description: "Updated human block (observations about the user). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "working_context",
 			Type:        "string",
-			Description: "Updated working context block (active facts/session context). Empty string if unchanged.",
+			Description: "Updated working context block (active facts/session context). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{

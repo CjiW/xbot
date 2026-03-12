@@ -118,9 +118,7 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 	}
 
 	allowedRoots := []string{root}
-	if ctx != nil {
-		allowedRoots = append(allowedRoots, ctx.ReadOnlyRoots...)
-	}
+	allowedRoots = append(allowedRoots, ctx.ReadOnlyRoots...)
 
 	for _, allowed := range allowedRoots {
 		if allowed == "" {

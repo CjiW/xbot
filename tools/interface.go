@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 	"xbot/llm"
+	"xbot/memory"
 	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 )
@@ -42,6 +43,7 @@ type ToolContext struct {
 	ArchivalMemory  *vectordb.ArchivalService    // 归档记忆存储（chromem-go 向量数据库）
 	MemorySvc       *sqlite.MemoryService        // 事件历史存储（用于 rethink 日志）
 	RecallTimeRange vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
+	ToolIndexer     memory.ToolIndexer           // 工具索引服务（Letta 模式下可用）
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -120,7 +122,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register 注册工具（非核心，需通过 load_mcp_tools_usage 激活后才出现在 tool definitions 中）
+// Register 注册工具（非核心，需通过 load_tools 激活后才出现在 tool definitions 中）
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -328,14 +330,28 @@ func (r *Registry) Clone() *Registry {
 }
 
 // mcpSchemaProvider 内部接口，MCPRemoteTool 和 SessionMCPRemoteTool 都实现此接口
-// 用于 load_mcp_tools_usage 获取完整参数信息
+// 用于 load_tools 获取完整参数信息
 type mcpSchemaProvider interface {
 	fullDescription() string
 	fullParams() []llm.ToolParam
 	mcpServerName() string
 }
 
-// ToolSchema 工具完整 schema 信息（供 load_mcp_tools_usage 使用）
+// ToolGroupProvider 工具组提供者接口，用于将工具分组显示
+// 实现此接口的工具将显示在独立的工具组中，而非 Built-in 分组
+type ToolGroupProvider interface {
+	GroupName() string         // 工具组名称（如 "Feishu"）
+	GroupInstructions() string // 工具组使用说明
+}
+
+// ToolGroupEntry 工具组条目
+type ToolGroupEntry struct {
+	Name         string   // 工具组名称
+	Instructions string   // 工具组使用说明
+	ToolNames    []string // 工具名称列表
+}
+
+// ToolSchema 工具完整 schema 信息（供 load_tools 使用）
 type ToolSchema struct {
 	ToolName    string
 	ServerName  string // 内置工具为空，MCP 工具为 server 名
@@ -343,19 +359,56 @@ type ToolSchema struct {
 	Params      []llm.ToolParam
 }
 
-// GetBuiltinToolNames 返回所有内置（非 MCP）工具的名称列表（按名称排序）
-// 内置工具不实现 mcpSchemaProvider 接口
+// GetBuiltinToolNames 返回所有内置（非 MCP、非工具组）工具的名称列表（按名称排序）
+// 内置工具不实现 mcpSchemaProvider 接口，也不实现 ToolGroupProvider 接口
 func (r *Registry) GetBuiltinToolNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var names []string
 	for name, tool := range r.globalTools {
-		if _, isMCP := tool.(mcpSchemaProvider); !isMCP {
-			names = append(names, name)
+		if _, isMCP := tool.(mcpSchemaProvider); isMCP {
+			continue
 		}
+		if _, hasGroup := tool.(ToolGroupProvider); hasGroup {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// GetToolGroups 返回所有工具组（按组名排序）
+// 每个工具组包含组名、说明和工具名称列表
+func (r *Registry) GetToolGroups() []ToolGroupEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	groups := make(map[string]*ToolGroupEntry)
+	for _, tool := range r.globalTools {
+		if groupProvider, ok := tool.(ToolGroupProvider); ok {
+			groupName := groupProvider.GroupName()
+			if groups[groupName] == nil {
+				groups[groupName] = &ToolGroupEntry{
+					Name:         groupName,
+					Instructions: groupProvider.GroupInstructions(),
+					ToolNames:    []string{},
+				}
+			}
+			groups[groupName].ToolNames = append(groups[groupName].ToolNames, tool.Name())
+		}
+	}
+
+	// 转换为切片并排序
+	result := make([]ToolGroupEntry, 0, len(groups))
+	for _, entry := range groups {
+		sort.Strings(entry.ToolNames)
+		result = append(result, *entry)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
 }
 
 // SetGlobalMCPCatalog 设置全局 MCP Server 目录（由 MCPManager.RegisterTools 调用）
@@ -438,7 +491,8 @@ func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolS
 }
 
 // DefaultRegistry 创建包含默认工具的注册表
-// 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_mcp_tools_usage 激活。
+// 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_tools 激活。
+// 注意：CronTool 需要依赖注入，不在默认注册表中，需单独注册
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
@@ -447,11 +501,12 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&GrepTool{})
 	r.RegisterCore(&ReadTool{})
 	r.RegisterCore(&EditTool{})
-	r.RegisterCore(&LoadMCPToolsUsageTool{})
-	// 可加载工具：需通过 load_mcp_tools_usage 按需激活
+	r.RegisterCore(&LoadToolsTool{})
+	r.RegisterCore(&SubAgentTool{})
+	r.RegisterCore(&SearchToolsTool{})
+	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
+	r.RegisterCore(&DownloadFileTool{})
+	// 可加载工具：需通过 load_tools 按需激活
 	r.Register(NewWebSearchTool())
-	r.Register(&SubAgentTool{})
-	r.Register(NewCronTool())
-	r.Register(&DownloadFileTool{})
 	return r
 }

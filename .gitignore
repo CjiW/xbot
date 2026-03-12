@@ -69,3 +69,6 @@ CODEBUDDY.md
 .xbot/
 mcp.json
 cron.json
+.claude/settings.local.json
+.tmp
+.npm

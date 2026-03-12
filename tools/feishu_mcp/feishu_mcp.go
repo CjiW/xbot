@@ -10,6 +10,19 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 )
 
+const (
+	// FeishuGroupName 飞书工具组名称
+	FeishuGroupName = "Feishu"
+	// FeishuGroupInstructions 飞书工具组使用说明
+	FeishuGroupInstructions = `Feishu (飞书) integration tools for Wiki, Bitable, Docs, and file operations.`
+)
+
+// FeishuToolBase 飞书工具基类，实现 ToolGroupProvider 接口
+type FeishuToolBase struct{}
+
+func (b FeishuToolBase) GroupName() string         { return FeishuGroupName }
+func (b FeishuToolBase) GroupInstructions() string { return FeishuGroupInstructions }
+
 // FeishuMCP provides access to Feishu APIs using the generic OAuth framework.
 type FeishuMCP struct {
 	oauth      *oauth.Manager

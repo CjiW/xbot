@@ -1,6 +1,17 @@
 package llm
 
-import "time"
+import (
+	"regexp"
+	"strings"
+	"time"
+)
+
+// Pre-compiled regex patterns for stripping think blocks
+var (
+	thinkBlockRegex     = regexp.MustCompile(`(?s)<think>.*?</think>`)
+	reasoningBlockRegex = regexp.MustCompile(`(?s)<reasoning>.*?</reasoning>`)
+	thinkingBlockRegex  = regexp.MustCompile(`(?s)<thinking>.*?</thinking>`)
+)
 
 // ChatMessage 业务层定义的消息类型，与具体 LLM 实现解耦
 type ChatMessage struct {
@@ -127,4 +138,22 @@ type ToolDefinition interface {
 	Name() string
 	Description() string
 	Parameters() []ToolParam
+}
+
+// StripThinkBlocks removes thinking/reasoning blocks from content.
+// Models like DeepSeek return thinking content in formats like:
+// - <think>...</think>
+// - <reasoning>...</reasoning>
+// This content should not be included in context or shown to users.
+func StripThinkBlocks(content string) string {
+	if content == "" {
+		return ""
+	}
+	// Remove <think>...</think> blocks
+	content = thinkBlockRegex.ReplaceAllString(content, "")
+	// Remove <reasoning>...</reasoning> blocks
+	content = reasoningBlockRegex.ReplaceAllString(content, "")
+	// Remove <thinking>...</thinking> blocks
+	content = thinkingBlockRegex.ReplaceAllString(content, "")
+	return strings.TrimSpace(content)
 }

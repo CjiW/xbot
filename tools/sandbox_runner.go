@@ -175,10 +175,11 @@ func (s *dockerSandbox) Wrap(command string, args []string, workspace string, us
 	}
 
 	// 使用 docker exec 执行命令
+	// 注意：-w 参数需要使用容器内的路径 /workspace，而不是宿主机的路径
 	dockerArgs := []string{
 		"exec",
 		"-i",
-		"-w", ws,
+		"-w", "/workspace",
 		containerName,
 		command,
 	}

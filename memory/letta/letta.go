@@ -170,18 +170,20 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	prompt := fmt.Sprintf(`You are a memory consolidation agent for a Letta-style memory system.
 Review the conversation below and call the consolidate_memory tool to update the memory system.
 
+## Instructions
+
+- Update core memory blocks (persona/human/working_context) if the conversation reveals new important information
+- Archive detailed facts/events to archival memory that don't fit in core memory
+- Write a history entry summarizing key events
+- Only update blocks that need changes. Set unchanged block values to empty string "".
+- Keep core memory blocks concise (bullet points, not prose)
+
 ## Current Core Memory
 %s
 
 ## Conversation to Process
 %s
-
-Instructions:
-- Update core memory blocks (persona/human/working_context) if the conversation reveals new important information
-- Archive detailed facts/events to archival memory that don't fit in core memory
-- Write a history entry summarizing key events
-- Only update blocks that need changes. Set unchanged block values to empty string "".
-- Keep core memory blocks concise (bullet points, not prose)`, coreDisplay.String(), strings.Join(lines, "\n"))
+`, coreDisplay.String(), strings.Join(lines, "\n"))
 
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the consolidate_memory tool."),
@@ -214,7 +216,14 @@ Instructions:
 		case "working_context":
 			newContent = args.WorkingContext
 		}
+		oldContent := blocks[blockName]
 		if newContent != "" {
+			log.WithFields(log.Fields{
+				"tenant_id": m.tenantID,
+				"block":     blockName,
+				"old_len":   len(oldContent),
+				"new_len":   len(newContent),
+			}).Info("Updating core memory block")
 			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent); err != nil {
 				log.WithError(err).WithField("block", blockName).Error("Failed to update core memory block")
 			}
@@ -389,19 +398,19 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "persona",
 			Type:        "string",
-			Description: "Updated persona block (bot's identity/personality). Empty string if unchanged.",
+			Description: "Updated persona block. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "human",
 			Type:        "string",
-			Description: "Updated human block (observations about the user). Empty string if unchanged.",
+			Description: "Updated human block (observations about the user). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "working_context",
 			Type:        "string",
-			Description: "Updated working context block (active facts/session context). Empty string if unchanged.",
+			Description: "Updated working context block (active facts/session context). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{

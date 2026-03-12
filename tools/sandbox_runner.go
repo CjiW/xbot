@@ -179,6 +179,8 @@ func (s *dockerSandbox) Wrap(command string, args []string, workspace string, us
 	dockerArgs := []string{
 		"exec",
 		"-i",
+		"-e", "PATH=/root/.local/usr_local/bin:/root/.local/opt/bin:/root/.local/usr_bin:/root/.local/bin:/root/.local/usr_sbin:/root/.local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		"-e", "LD_LIBRARY_PATH=/root/.local/usr_lib:/root/.local/lib:/usr/lib:/lib",
 		"-w", "/workspace",
 		containerName,
 		command,
@@ -277,26 +279,52 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 		return "", "", fmt.Errorf("failed to create container: %w, output: %s", err, string(output))
 	}
 
-	// 设置符号链接：将 /usr/local 和 /opt 指向 volume 中的持久化目录
+	// 设置符号链接：将 /usr/local, /opt 和系统 bin/lib 目录指向 volume 中的持久化目录
 	// 这样用户安装的系统级工具也能持久化
 	if volumeName != "" {
-		setupCmds := []string{
-			// 创建持久化目录
-			"mkdir -p /root/.local/usr_local /root/.local/opt",
-			// 备份并替换 /usr/local（如果不存在）
-			"rm -rf /usr/local.bak 2>/dev/null; mv /usr/local /usr/local.bak 2>/dev/null || true",
+		binLibSetupCmds := []string{
+			// 创建 volume 中的目录
+			"mkdir -p /root/.local/usr_local /root/.local/opt /root/.local/usr_bin /root/.local/bin /root/.local/usr_lib /root/.local/lib /root/.local/usr_sbin /root/.local/sbin",
+
+			// /usr/local
+			"[ -d /usr/local ] && [ ! -L /usr/local ] && rm -rf /usr/local.bak 2>/dev/null; mv /usr/local /usr/local.bak 2>/dev/null || true",
 			"ln -sf /root/.local/usr_local /usr/local",
-			// 同样处理 /opt
-			"rm -rf /opt.bak 2>/dev/null; mv /opt /opt.bak 2>/dev/null || true",
+
+			// /opt
+			"[ -d /opt ] && [ ! -L /opt ] && rm -rf /opt.bak 2>/dev/null; mv /opt /opt.bak 2>/dev/null || true",
 			"ln -sf /root/.local/opt /opt",
+
+			// /usr/bin
+			"[ -d /usr/bin ] && [ ! -L /usr/bin ] && rm -rf /usr/bin.bak 2>/dev/null; mv /usr/bin /usr/bin.bak 2>/dev/null || true",
+			"ln -sf /root/.local/usr_bin /usr/bin",
+
+			// /bin
+			"[ -d /bin ] && [ ! -L /bin ] && rm -rf /bin.bak 2>/dev/null; mv /bin /bin.bak 2>/dev/null || true",
+			"ln -sf /root/.local/bin /bin",
+
+			// /usr/lib
+			"[ -d /usr/lib ] && [ ! -L /usr/lib ] && rm -rf /usr/lib.bak 2>/dev/null; mv /usr/lib /usr/lib.bak 2>/dev/null || true",
+			"ln -sf /root/.local/usr_lib /usr/lib",
+
+			// /lib
+			"[ -d /lib ] && [ ! -L /lib ] && rm -rf /lib.bak 2>/dev/null; mv /lib /lib.bak 2>/dev/null || true",
+			"ln -sf /root/.local/lib /lib",
+
+			// /usr/sbin
+			"[ -d /usr/sbin ] && [ ! -L /usr/sbin ] && rm -rf /usr/sbin.bak 2>/dev/null; mv /usr/sbin /usr/sbin.bak 2>/dev/null || true",
+			"ln -sf /root/.local/usr_sbin /usr/sbin",
+
+			// /sbin
+			"[ -d /sbin ] && [ ! -L /sbin ] && rm -rf /sbin.bak 2>/dev/null; mv /sbin /sbin.bak 2>/dev/null || true",
+			"ln -sf /root/.local/sbin /sbin",
 		}
-		for _, cmd := range setupCmds {
+		for _, cmd := range binLibSetupCmds {
 			setupCmd := exec.Command("docker", "exec", containerName, "sh", "-c", cmd)
 			if out, err := setupCmd.CombinedOutput(); err != nil {
 				log.WithError(err).Warnf("Failed to setup symlinks: %s, output: %s", cmd, string(out))
 			}
 		}
-		log.Infof("Setup symlinks for /usr/local and /opt in container %s", containerName)
+		log.Infof("Setup symlinks for /usr/local, /opt, /usr/bin, /bin, /usr/lib, /lib, /usr/sbin, /sbin in container %s", containerName)
 	}
 
 	// 记录容器
@@ -311,18 +339,44 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	return containerName, volumeName, nil
 }
 
-// ensureSymlinks 确保容器内的符号链接存在
+// ensureSymlinks 确保容器内的符号链接存在（容器重启后调用）
 func (s *dockerSandbox) ensureSymlinks(containerName string) {
 	setupCmds := []string{
 		// 创建持久化目录（如果不存在）
-		"mkdir -p /root/.local/usr_local /root/.local/opt",
+		"mkdir -p /root/.local/usr_local /root/.local/opt /root/.local/usr_bin /root/.local/bin /root/.local/usr_lib /root/.local/lib /root/.local/usr_sbin /root/.local/sbin",
+
 		// 如果 /usr/local 是目录且不是符号链接，迁移它
 		"[ -d /usr/local ] && [ ! -L /usr/local ] && rm -rf /usr/local.bak 2>/dev/null; mv /usr/local /usr/local.bak 2>/dev/null || true",
-		// 创建符号链接
+		// 创建符号链接（-fn 强制创建，-n 处理目录已存在的情况）
 		"ln -sfn /root/.local/usr_local /usr/local",
+
 		// 同样处理 /opt
 		"[ -d /opt ] && [ ! -L /opt ] && rm -rf /opt.bak 2>/dev/null; mv /opt /opt.bak 2>/dev/null || true",
 		"ln -sfn /root/.local/opt /opt",
+
+		// /usr/bin
+		"[ -d /usr/bin ] && [ ! -L /usr/bin ] && rm -rf /usr/bin.bak 2>/dev/null; mv /usr/bin /usr/bin.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/usr_bin /usr/bin",
+
+		// /bin
+		"[ -d /bin ] && [ ! -L /bin ] && rm -rf /bin.bak 2>/dev/null; mv /bin /bin.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/bin /bin",
+
+		// /usr/lib
+		"[ -d /usr/lib ] && [ ! -L /usr/lib ] && rm -rf /usr/lib.bak 2>/dev/null; mv /usr/lib /usr/lib.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/usr_lib /usr/lib",
+
+		// /lib
+		"[ -d /lib ] && [ ! -L /lib ] && rm -rf /lib.bak 2>/dev/null; mv /lib /lib.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/lib /lib",
+
+		// /usr/sbin
+		"[ -d /usr/sbin ] && [ ! -L /usr/sbin ] && rm -rf /usr/sbin.bak 2>/dev/null; mv /usr/sbin /usr/sbin.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/usr_sbin /usr/sbin",
+
+		// /sbin
+		"[ -d /sbin ] && [ ! -L /sbin ] && rm -rf /sbin.bak 2>/dev/null; mv /sbin /sbin.bak 2>/dev/null || true",
+		"ln -sfn /root/.local/sbin /sbin",
 	}
 	for _, cmd := range setupCmds {
 		setupCmd := exec.Command("docker", "exec", containerName, "sh", "-c", cmd)

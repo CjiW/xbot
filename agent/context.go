@@ -158,9 +158,6 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		systemContent += fmt.Sprintf("\n## Current Sender\nName: %s\n", senderName)
 	}
 
-	// 时间戳放在系统提示词最末尾（每次请求都变，放最后以最大化前缀缓存命中）
-	systemContent += fmt.Sprintf("\n## Current Time\n%s\n", now)
-
 	messages := make([]llm.ChatMessage, 0, len(history)+2)
 	messages = append(messages, llm.NewSystemMessage(systemContent))
 	messages = append(messages, history...)
@@ -172,6 +169,7 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	} else {
 		userMsg = fmt.Sprintf("[%s]\n%s", now, userContent)
 	}
+	userMsg = fmt.Sprintf("%s\n\n[系统引导] 在执行任何操作前，**必须**先用`search_tools`搜索工具库尝试寻找工具。现在时间：%s\n", userMsg, now)
 	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
 }

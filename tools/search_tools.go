@@ -17,7 +17,8 @@ type SearchToolsTool struct{}
 func (t *SearchToolsTool) Name() string { return "search_tools" }
 
 func (t *SearchToolsTool) Description() string {
-	return "Search for available tools using semantic similarity in english. Use this when you need to find tools related to a specific task but don't know their exact names."
+	return "Search for available tools using semantic similarity in english. Use this when you need to find tools related to a specific task.\n\n" +
+		"DO NOT: use this tool for vague queries like 'what tools are available' or 'list tools'\n"
 }
 
 func (t *SearchToolsTool) Parameters() []llm.ToolParam {
@@ -25,7 +26,7 @@ func (t *SearchToolsTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "query",
 			Type:        "string",
-			Description: "Search query describing what you want to do (e.g., 'send message to user', 'search wiki', 'create file')",
+			Description: "Search query describing demanded task (e.g., 'send message to user', 'search wiki', 'create file', 'github issues management')",
 			Required:    true,
 		},
 		{

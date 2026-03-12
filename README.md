@@ -183,7 +183,7 @@ docker run -d --name xbot --restart unless-stopped \
   xbot:latest
 ```
 
-Note: Requires `bwrap` (bubblewrap) installed on host for sandbox execution.
+Note: Requires Docker installed on host for sandbox execution.
 
 ## License
 

@@ -25,7 +25,7 @@ type ToolContext struct {
 	MCPConfigPath           string                                          // 当前用户 MCP 配置路径
 	GlobalMCPConfigPath     string                                          // 全局 MCP 配置路径（只读）
 	SandboxEnabled          bool                                            // 是否启用命令沙箱
-	PreferredSandbox        string                                          // 沙箱优先级（如 bwrap/nsjail）
+	PreferredSandbox        string                                          // 沙箱优先级（docker 优先）
 	AgentID                 string                                          // 当前 Agent 的 ID
 	Manager                 SubAgentManager                                 // Agent 管理器引用（用于创建 SubAgent）
 	DataDir                 string                                          // 数据持久化目录

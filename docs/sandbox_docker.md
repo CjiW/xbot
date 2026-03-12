@@ -2,9 +2,8 @@
 
 ## 概述
 
-xbot 支持三种沙箱模式：
+xbot 支持两种沙箱模式：
 - `none` - 无沙箱，直接执行命令
-- `bwrap` - 使用 bwrap 隔离（需要安装 bwrap）
 - `docker` - Docker 容器隔离（默认）
 
 本文档介绍 Docker 模式的使用方法。
@@ -29,7 +28,7 @@ xbot 支持三种沙箱模式：
 
    在 `.env` 文件中添加：
    ```bash
-   # 沙箱模式：none / bwrap / docker
+   # 沙箱模式：none / docker
    SANDBOX_MODE=docker
 
    # Docker 镜像（可选，默认 ubuntu:22.04）

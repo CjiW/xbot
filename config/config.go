@@ -22,7 +22,7 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode        string // 沙箱模式: "none", "bwrap", "docker"
+	Mode        string // 沙箱模式: "none", "docker"
 	DockerImage string // Docker 镜像（如 "ubuntu:22.04"）
 }
 

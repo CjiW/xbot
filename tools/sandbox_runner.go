@@ -281,40 +281,49 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 
 	// 设置符号链接：将 /usr/local, /opt 和系统 bin/lib 目录指向 volume 中的持久化目录
 	// 这样用户安装的系统级工具也能持久化
+	// 重要：必须先复制内容到 volume 目录，再创建符号链接，否则容器会失去基本命令
 	if volumeName != "" {
 		binLibSetupCmds := []string{
 			// 创建 volume 中的目录
 			"mkdir -p /root/.local/usr_local /root/.local/opt /root/.local/usr_bin /root/.local/bin /root/.local/usr_lib /root/.local/lib /root/.local/usr_sbin /root/.local/sbin",
 
-			// /usr/local
+			// /usr/local: 先复制内容，再移动原目录，最后创建符号链接
+			"[ -d /usr/local ] && [ ! -L /usr/local ] && cp -a /usr/local/. /root/.local/usr_local/ 2>/dev/null || true",
 			"[ -d /usr/local ] && [ ! -L /usr/local ] && rm -rf /usr/local.bak 2>/dev/null; mv /usr/local /usr/local.bak 2>/dev/null || true",
 			"ln -sf /root/.local/usr_local /usr/local",
 
 			// /opt
+			"[ -d /opt ] && [ ! -L /opt ] && cp -a /opt/. /root/.local/opt/ 2>/dev/null || true",
 			"[ -d /opt ] && [ ! -L /opt ] && rm -rf /opt.bak 2>/dev/null; mv /opt /opt.bak 2>/dev/null || true",
 			"ln -sf /root/.local/opt /opt",
 
-			// /usr/bin
+			// /usr/bin - 必须先复制，否则 symlink 后 sh 不可用
+			"[ -d /usr/bin ] && [ ! -L /usr/bin ] && cp -a /usr/bin/. /root/.local/usr_bin/ 2>/dev/null || true",
 			"[ -d /usr/bin ] && [ ! -L /usr/bin ] && rm -rf /usr/bin.bak 2>/dev/null; mv /usr/bin /usr/bin.bak 2>/dev/null || true",
 			"ln -sf /root/.local/usr_bin /usr/bin",
 
 			// /bin
+			"[ -d /bin ] && [ ! -L /bin ] && cp -a /bin/. /root/.local/bin/ 2>/dev/null || true",
 			"[ -d /bin ] && [ ! -L /bin ] && rm -rf /bin.bak 2>/dev/null; mv /bin /bin.bak 2>/dev/null || true",
 			"ln -sf /root/.local/bin /bin",
 
 			// /usr/lib
+			"[ -d /usr/lib ] && [ ! -L /usr/lib ] && cp -a /usr/lib/. /root/.local/usr_lib/ 2>/dev/null || true",
 			"[ -d /usr/lib ] && [ ! -L /usr/lib ] && rm -rf /usr/lib.bak 2>/dev/null; mv /usr/lib /usr/lib.bak 2>/dev/null || true",
 			"ln -sf /root/.local/usr_lib /usr/lib",
 
 			// /lib
+			"[ -d /lib ] && [ ! -L /lib ] && cp -a /lib/. /root/.local/lib/ 2>/dev/null || true",
 			"[ -d /lib ] && [ ! -L /lib ] && rm -rf /lib.bak 2>/dev/null; mv /lib /lib.bak 2>/dev/null || true",
 			"ln -sf /root/.local/lib /lib",
 
 			// /usr/sbin
+			"[ -d /usr/sbin ] && [ ! -L /usr/sbin ] && cp -a /usr/sbin/. /root/.local/usr_sbin/ 2>/dev/null || true",
 			"[ -d /usr/sbin ] && [ ! -L /usr/sbin ] && rm -rf /usr/sbin.bak 2>/dev/null; mv /usr/sbin /usr/sbin.bak 2>/dev/null || true",
 			"ln -sf /root/.local/usr_sbin /usr/sbin",
 
 			// /sbin
+			"[ -d /sbin ] && [ ! -L /sbin ] && cp -a /sbin/. /root/.local/sbin/ 2>/dev/null || true",
 			"[ -d /sbin ] && [ ! -L /sbin ] && rm -rf /sbin.bak 2>/dev/null; mv /sbin /sbin.bak 2>/dev/null || true",
 			"ln -sf /root/.local/sbin /sbin",
 		}

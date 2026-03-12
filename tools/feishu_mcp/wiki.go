@@ -23,6 +23,7 @@ type bitableRecordArgs struct {
 
 // BitableFieldsTool lists fields in a Bitable table.
 type BitableFieldsTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -98,6 +99,7 @@ func (t *BitableFieldsTool) Execute(ctx *tools.ToolContext, input string) (*tool
 
 // BitableRecordTool searches, creates, or updates records in a Bitable table.
 type BitableRecordTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -266,6 +268,7 @@ func (t *BitableRecordTool) updateRecord(ctx *tools.ToolContext, client *Client,
 
 // BitableListTool lists all tables in a Bitable app.
 type BitableListTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -336,6 +339,7 @@ func (t *BitableListTool) Execute(ctx *tools.ToolContext, input string) (*tools.
 
 // BatchCreateAppTableRecordTool batch creates records in a Bitable table.
 type BatchCreateAppTableRecordTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -423,6 +427,7 @@ func (t *BatchCreateAppTableRecordTool) Execute(ctx *tools.ToolContext, input st
 // ListAllBitablesTool lists all Bitables (multidimensional tables) the user has access to.
 // This tool does NOT require an app_token parameter - it lists all accessible Bitables.
 type ListAllBitablesTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -454,6 +459,7 @@ func (t *ListAllBitablesTool) Execute(ctx *tools.ToolContext, input string) (*to
 
 // SendCardTool sends an interactive card to a Feishu chat.
 type SendCardTool struct {
+	FeishuToolBase
 	MCP *FeishuMCP
 }
 
@@ -501,7 +507,7 @@ func (t *SendCardTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		chatID = ctx.ChatID
 	}
 
-	if err := ctx.SendFunc(ctx.Channel, chatID, args.Card); err != nil {
+	if err := ctx.SendFunc(ctx.Channel, chatID, "__FEISHU_CARD__:"+args.Card); err != nil {
 		return nil, fmt.Errorf("send card: %w", err)
 	}
 

@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/cron"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
 	"xbot/memory/letta"
 	"xbot/oauth"
 	"xbot/session"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
 )
@@ -69,6 +71,86 @@ func resolveGlobalSkillsDirs(workDir, legacySkillsDir string) []string {
 	return result
 }
 
+// indexGlobalMCPTools indexes global MCP tools and built-in tool groups for search
+func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTenantSession, globalMCPConfigPath string) {
+	ctx := context.Background()
+	var toolEntries []memory.ToolIndexEntry
+
+	// 1. Index built-in tool groups (like Feishu) - use each tool's own description
+	toolGroups := registry.GetToolGroups()
+	for _, group := range toolGroups {
+		for _, toolName := range group.ToolNames {
+			// Get the actual tool to get its description
+			tool, ok := registry.Get(toolName)
+			desc := fmt.Sprintf("Built-in tool group: %s", group.Name)
+			if ok {
+				toolDesc := tool.Description()
+				if toolDesc != "" {
+					desc = fmt.Sprintf("Tool: %s. %s", toolName, toolDesc)
+				}
+			}
+			if group.Instructions != "" {
+				desc = fmt.Sprintf("%s. %s", desc, group.Instructions)
+			}
+			// Store the name as-is (already has correct format like feishu_search_wiki)
+			toolEntries = append(toolEntries, memory.ToolIndexEntry{
+				Name:        toolName, // This is the loadable name
+				ServerName:  group.Name,
+				Source:      "global",
+				Description: desc,
+			})
+		}
+	}
+
+	// 2. Index global MCP servers
+	// Create a dummy MCP manager to load global MCP servers
+	dummySessionKey := "indexing:dummy"
+	mcpMgr := tools.NewSessionMCPManager(
+		dummySessionKey,
+		"",                  // userID (not needed for global indexing)
+		globalMCPConfigPath, // global config (read-only)
+		"",                  // no user config
+		"",                  // no workspace root needed
+		30*time.Minute,      // inactivity timeout (won't matter)
+	)
+	if mcpMgr != nil {
+		// Trigger MCP connection to get the catalog (this connects to servers)
+		catalog := mcpMgr.GetCatalog()
+		for _, entry := range catalog {
+			for _, toolName := range entry.ToolNames {
+				// MCP tools need mcp_{server}_{toolName} format
+				fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)
+				desc := fmt.Sprintf("MCP server: %s. Tool: %s", entry.Name, toolName)
+				if entry.Instructions != "" {
+					desc = fmt.Sprintf("%s. %s", desc, entry.Instructions)
+				}
+
+				toolEntries = append(toolEntries, memory.ToolIndexEntry{
+					Name:        fullName, // This is the loadable name with mcp_ prefix
+					ServerName:  entry.Name,
+					Source:      "global",
+					Description: desc,
+				})
+			}
+		}
+		// Close MCP manager to prevent resource leak
+		mcpMgr.Close()
+	}
+
+	if len(toolEntries) == 0 {
+		log.Info("No tools to index")
+		return
+	}
+
+	// Index for tenant 0 (special global tenant ID)
+	if err := multiSession.IndexToolsForTenant(ctx, 0, toolEntries); err != nil {
+		log.WithError(err).Warn("Failed to index global tools")
+		return
+	}
+
+	log.WithField("count", len(toolEntries)).Infof("Indexed %d global tools (MCP + built-in)", len(toolEntries))
+}
+
 // Agent 核心 Agent 引擎
 type Agent struct {
 	bus           *bus.MessageBus
@@ -84,6 +166,10 @@ type Agent struct {
 	cardBuilder   *tools.CardBuilder      // Card Builder MCP
 	workDir       string
 	promptLoader  *PromptLoader
+
+	// Cron service and scheduler
+	cronSvc *sqlite.CronService
+	cronSch *cron.Scheduler
 
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
@@ -176,7 +262,7 @@ func New(cfg Config) *Agent {
 	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
-	registry.Register(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
+	registry.RegisterCore(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
 
 	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
@@ -207,6 +293,13 @@ func New(cfg Config) *Agent {
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
 
+	// 异步索引全局 MCP 工具（在后台进行，不阻塞启动）
+	go func() {
+		// 等待 MCP 配置加载完成
+		time.Sleep(2 * time.Second)
+		indexGlobalMCPTools(registry, multiSession, mcpConfigPath)
+	}()
+
 	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
 	if memoryProvider == "letta" {
 		for _, tool := range tools.LettaMemoryTools() {
@@ -215,7 +308,7 @@ func New(cfg Config) *Agent {
 		log.Info("Letta memory tools registered (core)")
 	}
 
-	return &Agent{
+	agent := &Agent{
 		bus:           cfg.Bus,
 		llmClient:     cfg.LLM,
 		model:         cfg.Model,
@@ -231,6 +324,23 @@ func New(cfg Config) *Agent {
 		promptLoader:  NewPromptLoader(cfg.PromptFile),
 		consolidating: make(map[string]bool),
 	}
+
+	// 初始化 Cron 服务和调度器
+	cronSvc := sqlite.NewCronService(multiSession.DB())
+	cronSch := cron.NewScheduler(cronSvc)
+
+	// 从旧的 JSON 文件迁移数据（如果需要）
+	if err := cronSvc.MigrateFromJSON(cfg.WorkDir); err != nil {
+		log.WithError(err).Warn("Failed to migrate cron jobs from JSON")
+	}
+
+	// 注册 CronTool（核心工具，始终可用）
+	registry.RegisterCore(tools.NewCronTool(cronSvc))
+
+	agent.cronSvc = cronSvc
+	agent.cronSch = cronSch
+
+	return agent
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
@@ -241,6 +351,16 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 // GetCardBuilder returns the CardBuilder for card callback handling.
 func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
+}
+
+// Close 关闭 Agent 及其所有资源
+func (a *Agent) Close() error {
+	if a.multiSession != nil {
+		if err := a.multiSession.Close(); err != nil {
+			log.WithError(err).Warn("MultiTenantSession close error")
+		}
+	}
+	return nil
 }
 
 var ackMessages = []string{
@@ -264,12 +384,22 @@ func (a *Agent) sendAck(channel, chatID string) {
 // Run 启动 Agent 循环，持续消费入站消息
 func (a *Agent) Run(ctx context.Context) error {
 	log.Info("Agent loop started")
+
 	// 启动后台清理协程（清理不活跃的 MCP 连接和会话缓存）
 	a.multiSession.StartCleanupRoutine()
+
+	// 启动 Cron 调度器，设置消息注入函数
+	// 延迟启动，等待 tool index 索引完成（异步索引延迟 2 秒）
+	a.cronSch.SetInjectFunc(a.injectInbound)
+	a.cronSch.StartDelayed(3 * time.Second)
+
 	defer func() {
+		// 停止 Cron 调度器
+		a.cronSch.Stop()
 		// 清理所有会话的 MCP 连接
 		a.multiSession.StopCleanupRoutine()
 	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -453,6 +583,11 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 		"sender_id": msg.SenderID,
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
+	// 清除旧的 session 状态，确保 cron 消息可以正常发送
+	key := msg.Channel + ":" + msg.ChatID
+	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
+
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
 	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
@@ -505,9 +640,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
-	sessionKey := msg.Channel + ":" + msg.ChatID
-	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
-	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog), nil
+	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -650,9 +783,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	sessionKey := msg.Channel + ":" + msg.ChatID
-	mcpCatalog := buildToolsSection(a.tools.GetBuiltinToolNames(), a.tools.GetMCPCatalog(sessionKey))
-	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, mcpCatalog)
+	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -797,19 +928,24 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 
 		if !response.HasToolCalls() {
-			content := strings.TrimSpace(response.Content)
+			// 返回给用户的内容需要过滤掉think块
+			content := llm.StripThinkBlocks(response.Content)
 			return content, toolsUsed, false, nil
 		}
 
+		// 过滤掉think块，用于用户展示和进度通知
+		cleanContent := llm.StripThinkBlocks(response.Content)
+
 		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
-		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, strings.TrimSpace(response.Content))
+		if autoNotify && cleanContent != "" {
+			progressLines = append(progressLines, cleanContent)
 		}
 
-		// 记录 assistant 消息（含 tool_calls）
+		// 记录 assistant 消息（含 tool_calls），保留原始content（包括think块）
+		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   response.Content,
+			Content:   response.Content, // 保留原始content，包含think块
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)
@@ -1007,22 +1143,26 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 // executeTool 执行单个工具调用
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
-	// 首先尝试从全局注册表查找工具
-	tool, ok := a.tools.Get(tc.Name)
+	// 会话级别的工具优先级高于全局注册表
+	sessionKey := channel + ":" + chatID
+	var tool tools.Tool
+	ok := false
 
-	// 如果全局注册表中找不到，尝试从会话的 MCP 管理器查找
-	if !ok {
-		sessionKey := channel + ":" + chatID
-		if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
-			sessionTools := mcpMgr.GetSessionTools()
-			for _, st := range sessionTools {
-				if st.Name() == tc.Name {
-					tool = st
-					ok = true
-					break
-				}
+	// 首先从会话的 MCP 管理器查找
+	if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
+		sessionTools := mcpMgr.GetSessionTools()
+		for _, st := range sessionTools {
+			if st.Name() == tc.Name {
+				tool = st
+				ok = true
+				break
 			}
 		}
+	}
+
+	// 会话中找不到，再从全局注册表查找
+	if !ok {
+		tool, ok = a.tools.Get(tc.Name)
 	}
 
 	if !ok {
@@ -1030,10 +1170,9 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 
 	// 拦截未激活工具的调用：返回提示而非执行
-	sessionKey := channel + ":" + chatID
 	if !a.tools.IsToolActive(sessionKey, tc.Name) {
 		return &tools.ToolResult{
-			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_mcp_tools_usage(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
+			Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_tools(tools=\"%s\") first to load it before use.", tc.Name, tc.Name),
 		}, nil
 	}
 
@@ -1087,6 +1226,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 			toolCtx.ArchivalMemory = lm.ArchivalService()
 			toolCtx.MemorySvc = lm.MemoryService()
 			toolCtx.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
+			toolCtx.ToolIndexer = lm
 		}
 	}
 
@@ -1097,6 +1237,11 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 // This is useful for dynamically adding tools after agent creation.
 func (a *Agent) RegisterTool(tool tools.Tool) {
 	a.tools.Register(tool)
+	log.WithField("tool", tool.Name()).Info("Tool registered")
+}
+
+func (a *Agent) RegisterCoreTool(tool tools.Tool) {
+	a.tools.RegisterCore(tool)
 	log.WithField("tool", tool.Name()).Info("Tool registered")
 }
 
@@ -1237,24 +1382,28 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			return fmt.Sprintf("Sub-agent LLM failed at iteration %d: %v", i+1, err), nil
 		}
 
+		// 过滤掉think块，用于用户展示
+		cleanContent := llm.StripThinkBlocks(response.Content)
+
 		if !response.HasToolCalls() {
-			content := strings.TrimSpace(response.Content)
 			log.WithFields(log.Fields{
 				"parent":    parentAgentID,
 				"tools":     toolsUsed,
 				"iteration": i + 1,
 			}).Info("SubAgent completed")
-			return content, nil
+			return cleanContent, nil
 		}
 
 		// 记录最新的中间内容，用于超时降级
-		if trimmed := strings.TrimSpace(response.Content); trimmed != "" {
-			lastContent = trimmed
+		if cleanContent != "" {
+			lastContent = cleanContent
 		}
 
+		// 记录 assistant 消息（含 tool_calls），保留原始content（包括think块）
+		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   response.Content,
+			Content:   response.Content, // 保留原始content，包含think块
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)

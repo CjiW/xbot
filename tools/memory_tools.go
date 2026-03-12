@@ -178,7 +178,7 @@ func (t *RethinkTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "new_content",
 			Type:        "string",
-			Description: "The complete new content for the block",
+			Description: "The complete new content for the block. WARNING: This will COMPLETELY REPLACE existing content.",
 			Required:    true,
 		},
 		{

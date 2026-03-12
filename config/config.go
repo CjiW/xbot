@@ -20,6 +20,13 @@ type OAuthConfig struct {
 	BaseURL string // OAuth 回调基础 URL (e.g., https://your-domain.com)
 }
 
+// SandboxConfig 沙箱配置
+type SandboxConfig struct {
+	Mode            string // 沙箱", "bwrap模式: "none", "docker"
+	DockerImage     string // Docker 镜像（如 "ubuntu:22.04"）
+	DockerVolumeDir string // 持久化卷目录（默认 ".xbot/sandbox"）
+}
+
 // QQConfig QQ 机器人渠道配置
 type QQConfig struct {
 	Enabled      bool
@@ -46,6 +53,7 @@ type Config struct {
 	QQ        QQConfig
 	Agent     AgentConfig
 	OAuth     OAuthConfig
+	Sandbox   SandboxConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -173,6 +181,11 @@ func Load() *Config {
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
 			Port:    getEnvIntOrDefault("OAUTH_PORT", 8081),
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
+		},
+		Sandbox: SandboxConfig{
+			Mode:            getEnvOrDefault("SANDBOX_MODE", "docker"),
+			DockerImage:     getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
+			DockerVolumeDir: getEnvOrDefault("SANDBOX_DOCKER_VOLUME_DIR", ".xbot/sandbox"),
 		},
 	}
 }

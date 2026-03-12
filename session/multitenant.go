@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -68,6 +69,13 @@ func WithEmbeddingConfig(cfg EmbeddingConfig) MultiTenantOption {
 	}
 }
 
+// WithToolIndexService 设置工具索引服务
+func WithToolIndexService(svc *vectordb.ToolIndexService) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.toolIndexSvc = svc
+	}
+}
+
 // MultiTenantSession manages multiple tenant sessions with SQLite backing
 type MultiTenantSession struct {
 	db                   *sqlite.DB
@@ -77,6 +85,7 @@ type MultiTenantSession struct {
 	userProfileSvc       *sqlite.UserProfileService
 	coreSvc              *sqlite.CoreMemoryService
 	archivalSvc          *vectordb.ArchivalService
+	toolIndexSvc         *vectordb.ToolIndexService
 	recallTimeRangeFn    vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
 	embeddingConfig      *EmbeddingConfig             // for auto-creating archival service
 	memoryProvider       string                       // "flat" or "letta"
@@ -133,6 +142,18 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		}
 	}
 
+	// Letta 模式：自动创建工具索引服务（如果未通过 WithToolIndexService 注入）
+	if m.memoryProvider == "letta" && m.toolIndexSvc == nil && m.embeddingConfig != nil {
+		toolIndexDir := filepath.Join(filepath.Dir(dbPath), "tool_index")
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
+		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc)
+		if err != nil {
+			log.WithError(err).Error("Failed to initialize tool index service, tool search will be unavailable")
+		} else {
+			m.toolIndexSvc = toolIdxSvc
+		}
+	}
+
 	// Letta 模式：创建时间范围搜索函数
 	if m.memoryProvider == "letta" {
 		m.recallTimeRangeFn = vectordb.NewSQLiteRecallTimeRangeFunc(db.Conn())
@@ -186,16 +207,16 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 
 	// 创建会话 MCP 管理器（用户作用域由 ConfigureSessionMCP 在消息处理时注入）
 	sessionKey := channel + ":" + chatID
-	mcpManager := tools.NewSessionMCPManager(sessionKey, m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
+	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 	// 根据配置选择记忆提供者
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
 	case "letta":
-		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc)
+		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
 		// 前向兼容：一次性迁移 user_profiles → core memory blocks
 		m.migrateProfileToCoreMemory(tenantID)
 	default:
-		memProvider = flat.New(tenantID, m.memorySvc)
+		memProvider = flat.New(tenantID, m.memorySvc, m.toolIndexSvc)
 	}
 	// Create tenant session
 	sess = &TenantSession{
@@ -227,8 +248,53 @@ func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, work
 
 	userConfigPath := tools.UserMCPConfigPath(workDir, senderID)
 	workspaceRoot := tools.UserWorkspaceRoot(workDir, senderID)
-	mgr.UpdateScope(userConfigPath, workspaceRoot)
+	mgr.UpdateScope(senderID, userConfigPath, workspaceRoot)
+
+	// Index personal MCP tools for this tenant
+	m.indexPersonalMCPTools(sess.TenantID(), mgr)
+
 	return nil
+}
+
+// indexPersonalMCPTools indexes personal MCP tools for a tenant
+func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.SessionMCPManager) {
+	if m.toolIndexSvc == nil || mgr == nil {
+		return
+	}
+
+	// Get personal MCP catalog (not global)
+	catalog := mgr.GetCatalog()
+	if len(catalog) == 0 {
+		return
+	}
+
+	// Convert to ToolIndexEntry
+	var entries []memory.ToolIndexEntry
+	for _, entry := range catalog {
+		for _, toolName := range entry.ToolNames {
+			fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)
+			desc := fmt.Sprintf("MCP server: %s. Tool: %s", entry.Name, toolName)
+			if entry.Instructions != "" {
+				desc = fmt.Sprintf("%s. %s", desc, entry.Instructions)
+			}
+			entries = append(entries, memory.ToolIndexEntry{
+				Name:        fullName,
+				ServerName:  entry.Name,
+				Source:      "personal",
+				Description: desc,
+			})
+		}
+	}
+
+	if len(entries) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := m.IndexToolsForTenant(ctx, tenantID, entries); err != nil {
+			log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
+		} else {
+			log.Infof("Indexed %d personal MCP tools for tenant %d", len(entries), tenantID)
+		}
+	}
 }
 
 // migrateProfileToCoreMemory performs a one-time forward-compatible migration
@@ -269,6 +335,24 @@ func (m *MultiTenantSession) RecallTimeRangeFunc() vectordb.RecallTimeRangeFunc 
 	return m.recallTimeRangeFn
 }
 
+// IndexToolsForTenant indexes MCP tools for a specific tenant.
+func (m *MultiTenantSession) IndexToolsForTenant(ctx context.Context, tenantID int64, tools []memory.ToolIndexEntry) error {
+	if m.toolIndexSvc == nil {
+		return nil // Tool index not available (flat mode or no embedding config)
+	}
+	// Convert memory.ToolIndexEntry to vectordb.ToolIndexEntry
+	entries := make([]vectordb.ToolIndexEntry, len(tools))
+	for i, t := range tools {
+		entries[i] = vectordb.ToolIndexEntry{
+			Name:        t.Name,
+			ServerName:  t.ServerName,
+			Source:      t.Source,
+			Description: t.Description,
+		}
+	}
+	return m.toolIndexSvc.IndexTools(ctx, tenantID, entries)
+}
+
 // Close closes the database connection
 func (m *MultiTenantSession) Close() error {
 	m.mu.Lock()
@@ -282,6 +366,11 @@ func (m *MultiTenantSession) Close() error {
 // DBPath returns the database path (useful for migration checks)
 func (m *MultiTenantSession) DBPath() string {
 	return m.dbPath
+}
+
+// DB returns the underlying SQLite database connection
+func (m *MultiTenantSession) DB() *sqlite.DB {
+	return m.db
 }
 
 // GetSessionMCPManager 实现 SessionMCPManagerProvider 接口

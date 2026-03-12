@@ -19,6 +19,7 @@ import (
 type SessionMCPManager struct {
 	mu                sync.RWMutex
 	sessionKey        string                    // "channel:chatID"
+	userID            string                    // 用户 ID（用于沙箱容器标识）
 	globalConfigPath  string                    // 全局 mcp.json 路径（只读）
 	userConfigPath    string                    // 用户 mcp.json 路径（可写）
 	workspaceRoot     string                    // 用户命令执行工作区
@@ -30,9 +31,10 @@ type SessionMCPManager struct {
 }
 
 // NewSessionMCPManager 创建会话 MCP 管理器
-func NewSessionMCPManager(sessionKey, globalConfigPath, userConfigPath, workspaceRoot string, inactivityTimeout time.Duration) *SessionMCPManager {
+func NewSessionMCPManager(sessionKey, userID, globalConfigPath, userConfigPath, workspaceRoot string, inactivityTimeout time.Duration) *SessionMCPManager {
 	return &SessionMCPManager{
 		sessionKey:        sessionKey,
+		userID:            userID,
 		globalConfigPath:  globalConfigPath,
 		userConfigPath:    userConfigPath,
 		workspaceRoot:     workspaceRoot,
@@ -44,11 +46,11 @@ func NewSessionMCPManager(sessionKey, globalConfigPath, userConfigPath, workspac
 }
 
 // UpdateScope 更新当前会话可见的用户配置与工作区。
-func (sm *SessionMCPManager) UpdateScope(userConfigPath, workspaceRoot string) {
+func (sm *SessionMCPManager) UpdateScope(userID, userConfigPath, workspaceRoot string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if sm.userConfigPath == userConfigPath && sm.workspaceRoot == workspaceRoot {
+	if sm.userID == userID && sm.userConfigPath == userConfigPath && sm.workspaceRoot == workspaceRoot {
 		return
 	}
 
@@ -57,6 +59,7 @@ func (sm *SessionMCPManager) UpdateScope(userConfigPath, workspaceRoot string) {
 	}
 	sm.connections = make(map[string]*mcpConnection)
 	sm.lastActive = make(map[string]time.Time)
+	sm.userID = userID
 	sm.userConfigPath = userConfigPath
 	sm.workspaceRoot = workspaceRoot
 	sm.initialized = false
@@ -256,7 +259,7 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		if configPath == "" {
 			configPath = sm.userConfigPath
 		}
-		session, err = ConnectStdioServer(ctx, cfg, configPath, sm.workspaceRoot, name)
+		session, err = ConnectStdioServer(ctx, cfg, configPath, sm.workspaceRoot, sm.userID, name)
 	} else {
 		return fmt.Errorf("mcp server config must have either 'url' or 'command'")
 	}
@@ -272,11 +275,17 @@ func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg
 		return err
 	}
 
+	// 优先使用服务器返回的 instructions，否则使用 config 中的 fallback
+	instructions := initResult.Instructions
+	if instructions == "" {
+		instructions = cfg.Instructions
+	}
+
 	conn := &mcpConnection{
 		name:         name,
 		session:      session,
 		tools:        initResult.Tools,
-		instructions: initResult.Instructions,
+		instructions: instructions,
 	}
 
 	sm.connections[name] = conn
@@ -391,16 +400,16 @@ func (t *SessionMCPRemoteTool) Description() string {
 
 func (t *SessionMCPRemoteTool) Parameters() []llm.ToolParam {
 	// Stub mode: return nil so full schemas are not loaded into LLM context.
-	// Call load_mcp_tools_usage to get parameter details before invoking this tool.
+	// Call load_tools to get parameter details before invoking this tool.
 	return nil
 }
 
-// fullDescription returns the original server description (used by load_mcp_tools_usage).
+// fullDescription returns the original server description (used by load_tools).
 func (t *SessionMCPRemoteTool) fullDescription() string {
 	return t.description
 }
 
-// fullParams returns the complete parameter list (used by load_mcp_tools_usage).
+// fullParams returns the complete parameter list (used by load_tools).
 func (t *SessionMCPRemoteTool) fullParams() []llm.ToolParam {
 	return t.params
 }

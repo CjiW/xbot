@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	log "xbot/logger"
 	"xbot/config"
+	log "xbot/logger"
 )
 
 // 全局沙箱实例
@@ -132,10 +132,10 @@ func (s *NsjailSandbox) Wrap(command string, args []string, workspace string, us
 
 // dockerSandbox Docker 沙箱实现
 type dockerSandbox struct {
-	image       string
-	volumeDir   string
-	mu          sync.Mutex
-	containers  map[string]*dockerContainer // userID -> container
+	image      string
+	volumeDir  string
+	mu         sync.Mutex
+	containers map[string]*dockerContainer // userID -> container
 }
 
 type dockerContainer struct {
@@ -372,15 +372,4 @@ func WrapCommandForSandbox(command string, args []string, workspaceRoot string) 
 
 	// 如果没有任何沙箱可用，返回错误
 	return "", nil, fmt.Errorf("no sandbox runner found, install bwrap or nsjail")
-}
-
-func shellWrapForSandbox(shellCommand string, workspaceRoot string) (string, []string, error) {
-	baseCmd, baseArgs, err := WrapCommandForSandbox("sh", []string{"-c", shellCommand}, workspaceRoot)
-	if err != nil {
-		if strings.Contains(err.Error(), "disabled on Windows") {
-			return "", nil, err
-		}
-		return "", nil, err
-	}
-	return baseCmd, baseArgs, nil
 }

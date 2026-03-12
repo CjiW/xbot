@@ -41,14 +41,15 @@ func NewCronService(db *DB) *CronService {
 // AddJob inserts a new cron job
 func (s *CronService) AddJob(job *CronJob) error {
 	conn := s.db.Conn()
-	var lastTrigger *time.Time
+	var lastTriggerStr *string
 	if job.LastTrigger != nil {
-		lastTrigger = job.LastTrigger
+		s := job.LastTrigger.Format(time.RFC3339)
+		lastTriggerStr = &s
 	}
 	_, err := conn.Exec(`
 		INSERT INTO cron_jobs (id, message, channel, chat_id, sender_id, cron_expr, every_seconds, delay_seconds, at, created_at, next_run, last_trigger, one_shot)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt.Format(time.RFC3339), job.NextRun.Format(time.RFC3339), lastTrigger, job.OneShot)
+	`, job.ID, job.Message, job.Channel, job.ChatID, job.SenderID, job.CronExpr, job.EverySeconds, job.DelaySeconds, job.At, job.CreatedAt.Format(time.RFC3339), job.NextRun.Format(time.RFC3339), lastTriggerStr, job.OneShot)
 	if err != nil {
 		return fmt.Errorf("insert cron job: %w", err)
 	}
@@ -75,9 +76,9 @@ func (s *CronService) GetJob(id string) (*CronJob, error) {
 
 	job := &CronJob{}
 	var createdAt, nextRun string
-	var lastTrigger *time.Time
+	var lastTriggerStr *string
 	err := row.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-		&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot)
+		&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTriggerStr, &job.OneShot)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -94,7 +95,13 @@ func (s *CronService) GetJob(id string) (*CronJob, error) {
 	if parseErr != nil {
 		return nil, fmt.Errorf("parse next_run %q: %w", nextRun, parseErr)
 	}
-	job.LastTrigger = lastTrigger
+	if lastTriggerStr != nil {
+		t, err := time.Parse(time.RFC3339, *lastTriggerStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse last_trigger %q: %w", *lastTriggerStr, err)
+		}
+		job.LastTrigger = &t
+	}
 	return job, nil
 }
 
@@ -114,9 +121,9 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 	for rows.Next() {
 		job := &CronJob{}
 		var createdAt, nextRun string
-		var lastTrigger *time.Time
+		var lastTriggerStr *string
 		if err := rows.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot); err != nil {
+			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTriggerStr, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
 		var parseErr error
@@ -128,7 +135,13 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
 		}
-		job.LastTrigger = lastTrigger
+		if lastTriggerStr != nil {
+			t, err := time.Parse(time.RFC3339, *lastTriggerStr)
+			if err != nil {
+				return nil, fmt.Errorf("parse last_trigger %q for job %s: %w", *lastTriggerStr, job.ID, err)
+			}
+			job.LastTrigger = &t
+		}
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -150,9 +163,9 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 	for rows.Next() {
 		job := &CronJob{}
 		var createdAt, nextRun string
-		var lastTrigger *time.Time
+		var lastTriggerStr *string
 		if err := rows.Scan(&job.ID, &job.Message, &job.Channel, &job.ChatID, &job.SenderID, &job.CronExpr,
-			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTrigger, &job.OneShot); err != nil {
+			&job.EverySeconds, &job.DelaySeconds, &job.At, &createdAt, &nextRun, &lastTriggerStr, &job.OneShot); err != nil {
 			return nil, fmt.Errorf("scan cron job row: %w", err)
 		}
 		var parseErr error
@@ -164,7 +177,13 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse next_run %q for job %s: %w", nextRun, job.ID, parseErr)
 		}
-		job.LastTrigger = lastTrigger
+		if lastTriggerStr != nil {
+			t, err := time.Parse(time.RFC3339, *lastTriggerStr)
+			if err != nil {
+				return nil, fmt.Errorf("parse last_trigger %q for job %s: %w", *lastTriggerStr, job.ID, err)
+			}
+			job.LastTrigger = &t
+		}
 		jobs = append(jobs, job)
 	}
 	return jobs, nil

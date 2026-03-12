@@ -571,6 +571,11 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 		"sender_id": msg.SenderID,
 	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
 
+	// 清除旧的 session 状态，确保 cron 消息可以正常发送
+	key := msg.Channel + ":" + msg.ChatID
+	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
+
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
 	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
@@ -911,19 +916,23 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 
 		if !response.HasToolCalls() {
-			content := strings.TrimSpace(response.Content)
+			// 过滤掉think块
+			content := llm.StripThinkBlocks(response.Content)
 			return content, toolsUsed, false, nil
 		}
 
+		// 过滤掉think块，保留干净的content
+		cleanContent := llm.StripThinkBlocks(response.Content)
+
 		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
-		if autoNotify && strings.TrimSpace(response.Content) != "" {
-			progressLines = append(progressLines, strings.TrimSpace(response.Content))
+		if autoNotify && cleanContent != "" {
+			progressLines = append(progressLines, cleanContent)
 		}
 
-		// 记录 assistant 消息（含 tool_calls）
+		// 记录 assistant 消息（含 tool_calls），使用过滤后的content
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   response.Content,
+			Content:   cleanContent,
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)
@@ -1360,24 +1369,26 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			return fmt.Sprintf("Sub-agent LLM failed at iteration %d: %v", i+1, err), nil
 		}
 
+		// 过滤掉think块
+		cleanContent := llm.StripThinkBlocks(response.Content)
+
 		if !response.HasToolCalls() {
-			content := strings.TrimSpace(response.Content)
 			log.WithFields(log.Fields{
 				"parent":    parentAgentID,
 				"tools":     toolsUsed,
 				"iteration": i + 1,
 			}).Info("SubAgent completed")
-			return content, nil
+			return cleanContent, nil
 		}
 
 		// 记录最新的中间内容，用于超时降级
-		if trimmed := strings.TrimSpace(response.Content); trimmed != "" {
-			lastContent = trimmed
+		if cleanContent != "" {
+			lastContent = cleanContent
 		}
 
 		assistantMsg := llm.ChatMessage{
 			Role:      "assistant",
-			Content:   response.Content,
+			Content:   cleanContent,
 			ToolCalls: response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)

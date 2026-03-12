@@ -507,7 +507,7 @@ func (t *SendCardTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		chatID = ctx.ChatID
 	}
 
-	if err := ctx.SendFunc(ctx.Channel, chatID, args.Card); err != nil {
+	if err := ctx.SendFunc(ctx.Channel, chatID, "__FEISHU_CARD__:"+args.Card); err != nil {
 		return nil, fmt.Errorf("send card: %w", err)
 	}
 

@@ -22,8 +22,8 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode           string // 沙箱", "bwrap模式: "none", "docker"
-	DockerImage    string // Docker 镜像（如 "ubuntu:22.04"）
+	Mode            string // 沙箱", "bwrap模式: "none", "docker"
+	DockerImage     string // Docker 镜像（如 "ubuntu:22.04"）
 	DockerVolumeDir string // 持久化卷目录（默认 ".xbot/sandbox"）
 }
 
@@ -183,8 +183,8 @@ func Load() *Config {
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},
 		Sandbox: SandboxConfig{
-			Mode:           getEnvOrDefault("SANDBOX_MODE", "docker"),
-			DockerImage:    getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
+			Mode:            getEnvOrDefault("SANDBOX_MODE", "docker"),
+			DockerImage:     getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
 			DockerVolumeDir: getEnvOrDefault("SANDBOX_DOCKER_VOLUME_DIR", ".xbot/sandbox"),
 		},
 	}

@@ -19,7 +19,7 @@ import (
 type SessionMCPManager struct {
 	mu                sync.RWMutex
 	sessionKey        string                    // "channel:chatID"
-	userID             string                    // 用户 ID（用于沙箱容器标识）
+	userID            string                    // 用户 ID（用于沙箱容器标识）
 	globalConfigPath  string                    // 全局 mcp.json 路径（只读）
 	userConfigPath    string                    // 用户 mcp.json 路径（可写）
 	workspaceRoot     string                    // 用户命令执行工作区

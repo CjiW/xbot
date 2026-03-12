@@ -188,7 +188,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (4);
+INSERT INTO schema_version (version) VALUES (5);
 
 CREATE TABLE cron_jobs (
     id TEXT PRIMARY KEY,
@@ -202,6 +202,7 @@ CREATE TABLE cron_jobs (
     at TEXT,
     created_at DATETIME NOT NULL,
     next_run DATETIME NOT NULL,
+    last_trigger DATETIME,
     one_shot INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_cron_jobs_next_run ON cron_jobs(next_run);

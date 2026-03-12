@@ -355,6 +355,11 @@ func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
+	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
+	if a.cronSch != nil {
+		a.cronSch.Stop()
+	}
+	// 再关闭数据库连接
 	if a.multiSession != nil {
 		if err := a.multiSession.Close(); err != nil {
 			log.WithError(err).Warn("MultiTenantSession close error")

@@ -97,16 +97,17 @@ func (s *BwrapSandbox) Wrap(command string, args []string, env []string, workspa
 		"--chdir", ws,
 		"--setenv", "HOME", ws,
 		"--setenv", "TMPDIR", filepath.Join(ws, ".tmp"),
-		"--",
-		command,
 	}
-	// 添加自定义环境变量
+
+	// 添加自定义环境变量（必须在 -- 之前）
 	for _, e := range env {
 		parts := strings.SplitN(e, "=", 2)
 		if len(parts) == 2 {
 			bwrapArgs = append(bwrapArgs, "--setenv", parts[0], parts[1])
 		}
 	}
+
+	bwrapArgs = append(bwrapArgs, "--", command)
 	bwrapArgs = append(bwrapArgs, args...)
 	return "bwrap", bwrapArgs, nil
 }

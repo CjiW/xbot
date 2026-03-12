@@ -176,15 +176,26 @@ func (s *dockerSandbox) Wrap(command string, args []string, workspace string, us
 
 	// 使用 docker exec 执行命令
 	// 注意：-w 参数需要使用容器内的路径 /workspace，而不是宿主机的路径
+
+	// 传递所有环境变量到容器
 	dockerArgs := []string{
 		"exec",
 		"-i",
+		"-w", "/workspace",
+	}
+
+	// 传递所有宿主机的环境变量
+	for _, env := range os.Environ() {
+		dockerArgs = append(dockerArgs, "-e", env)
+	}
+
+	// 添加自定义 PATH 和 LD_LIBRARY_PATH（覆盖宿主机的）
+	dockerArgs = append(dockerArgs,
 		"-e", "PATH=/root/.local/usr_local/bin:/root/.local/opt/bin:/root/.local/usr_bin:/root/.local/bin:/root/.local/usr_sbin:/root/.local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		"-e", "LD_LIBRARY_PATH=/root/.local/usr_lib:/root/.local/lib:/usr/lib:/lib",
-		"-w", "/workspace",
-		containerName,
-		command,
-	}
+	)
+
+	dockerArgs = append(dockerArgs, containerName, command)
 	dockerArgs = append(dockerArgs, args...)
 
 	return "docker", dockerArgs, nil

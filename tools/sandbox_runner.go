@@ -35,7 +35,8 @@ func SetSandbox(s Sandbox) {
 // Sandbox 沙箱接口
 type Sandbox interface {
 	// Wrap 将命令包装到沙箱执行，返回可直接用于 exec.Command 的 command 与 args
-	Wrap(command string, args []string, workspace string, userID string) (string, []string, error)
+	// env 参数指定要传递到沙箱的环境变量（格式：KEY=VALUE）
+	Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error)
 	// Name 返回沙箱名称
 	Name() string
 	// Close 关闭并清理沙箱资源
@@ -49,7 +50,7 @@ func (s *NoneSandbox) Name() string { return "none" }
 
 func (s *NoneSandbox) Close() error { return nil }
 
-func (s *NoneSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
+func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
 	}
@@ -63,7 +64,7 @@ func (s *BwrapSandbox) Name() string { return "bwrap" }
 
 func (s *BwrapSandbox) Close() error { return nil }
 
-func (s *BwrapSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
+func (s *BwrapSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
 	}
@@ -99,6 +100,13 @@ func (s *BwrapSandbox) Wrap(command string, args []string, workspace string, use
 		"--",
 		command,
 	}
+	// 添加自定义环境变量
+	for _, e := range env {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			bwrapArgs = append(bwrapArgs, "--setenv", parts[0], parts[1])
+		}
+	}
 	bwrapArgs = append(bwrapArgs, args...)
 	return "bwrap", bwrapArgs, nil
 }
@@ -110,7 +118,7 @@ func (s *NsjailSandbox) Name() string { return "nsjail" }
 
 func (s *NsjailSandbox) Close() error { return nil }
 
-func (s *NsjailSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
+func (s *NsjailSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
 	}
@@ -133,6 +141,10 @@ func (s *NsjailSandbox) Wrap(command string, args []string, workspace string, us
 		"--cwd", ws,
 		"--",
 		command,
+	}
+	// nsjail 通过 --env 可以传递环境变量
+	for _, e := range env {
+		nsArgs = append(nsArgs, "--env", e)
 	}
 	nsArgs = append(nsArgs, args...)
 	return "nsjail", nsArgs, nil
@@ -182,7 +194,7 @@ func (s *dockerSandbox) Close() error {
 	return nil
 }
 
-func (s *dockerSandbox) Wrap(command string, args []string, workspace string, userID string) (string, []string, error) {
+func (s *dockerSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
 	}
@@ -220,9 +232,9 @@ func (s *dockerSandbox) Wrap(command string, args []string, workspace string, us
 		"-w", "/workspace",
 	}
 
-	// 传递所有宿主机的环境变量
-	for _, env := range os.Environ() {
-		dockerArgs = append(dockerArgs, "-e", env)
+	// 传递调用者传入的环境变量（多会话场景下每个用户独立）
+	for _, e := range env {
+		dockerArgs = append(dockerArgs, "-e", e)
 	}
 
 	// 添加自定义 PATH 和 LD_LIBRARY_PATH（覆盖宿主机的）
@@ -474,15 +486,20 @@ func NewSandbox(mode, image, volumeDir string) Sandbox {
 // WrapCommandForSandbox 将命令包装到沙箱执行（兼容旧接口）
 // Deprecated: 使用 NewSandbox 创建的沙箱实例的 Wrap 方法
 func WrapCommandForSandbox(command string, args []string, workspaceRoot string) (string, []string, error) {
+	return WrapCommandForSandboxWithEnv(command, args, nil, workspaceRoot)
+}
+
+// WrapCommandForSandboxWithEnv 将命令包装到沙箱执行，带环境变量
+func WrapCommandForSandboxWithEnv(command string, args []string, env []string, workspaceRoot string) (string, []string, error) {
 	// 尝试查找可用的沙箱
 	if _, err := exec.LookPath("bwrap"); err == nil {
 		s := &BwrapSandbox{}
-		return s.Wrap(command, args, workspaceRoot, "")
+		return s.Wrap(command, args, env, workspaceRoot, "")
 	}
 
 	if _, err := exec.LookPath("nsjail"); err == nil {
 		s := &NsjailSandbox{}
-		return s.Wrap(command, args, workspaceRoot, "")
+		return s.Wrap(command, args, env, workspaceRoot, "")
 	}
 
 	// 如果没有任何沙箱可用，返回错误

@@ -4,7 +4,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 
 ## Features
 
-- **Multi-channel** — Message bus architecture with Feishu (HTTP callback) and QQ (WebSocket) support
+- **Multi-channel** — Message bus architecture with Feishu (WebSocket) and QQ (WebSocket) support
 - **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download
 - **Feishu integration** — Interactive cards, doc/wiki/bitable access, file upload
 - **Skills system** — OpenClaw-style progressive skill loading
@@ -161,6 +161,7 @@ Predefined roles: `code-reviewer`
 | `/new` | Archive memory and reset session |
 | `/version` | Show version |
 | `/help` | Show help |
+| `/prompt` | Show current prompt (dry run without calling LLM) |
 
 ## Deployment
 

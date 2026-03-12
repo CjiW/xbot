@@ -344,6 +344,8 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	// 重要：必须先复制内容到 volume 目录，再创建符号链接，否则容器会失去基本命令
 	if volumeName != "" {
 		// 第一步：将宿主机的 bin/lib 复制到 volume（此时容器内 /root 已经是 volume 挂载点）
+		// 设置临时 PATH，确保基本命令可用
+		tmpPath := "/root/.local/usr_local/bin:/root/.local/opt/bin:/root/.local/usr_bin:/root/.local/bin:/root/.local/usr_sbin:/root/.local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 		hostBinLibCmds := []string{
 			// 创建 volume 中的目录
 			"mkdir -p /root/.local/usr_local /root/.local/opt /root/.local/usr_bin /root/.local/bin /root/.local/usr_lib /root/.local/lib /root/.local/usr_sbin /root/.local/sbin",
@@ -359,14 +361,15 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 			"cp -a /sbin/. /root/.local/sbin/ 2>/dev/null || true",
 		}
 		for _, cmd := range hostBinLibCmds {
-			setupCmd := exec.Command("docker", "exec", containerName, "sh", "-c", cmd)
+			// 设置临时 PATH，确保 sh 和 cp 等基本命令可用
+			setupCmd := exec.Command("docker", "exec", "-e", "PATH="+tmpPath, containerName, "sh", "-c", cmd)
 			if out, err := setupCmd.CombinedOutput(); err != nil {
 				log.WithError(err).Warnf("Failed to copy bin/lib to volume: %s, output: %s", cmd, string(out))
 			}
 		}
 
 		// 第二步：先移动系统目录（此时原位置还有命令可用）
-		tmpPath := "/root/.local/usr_local/bin:/root/.local/opt/bin:/root/.local/usr_bin:/root/.local/bin:/root/.local/usr_sbin:/root/.local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+		tmpPath = "/root/.local/usr_local/bin:/root/.local/opt/bin:/root/.local/usr_bin:/root/.local/bin:/root/.local/usr_sbin:/root/.local/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 		mvCmds := []string{
 			"[ -d /usr/local ] && [ ! -L /usr/local ] && rm -rf /usr/local.bak 2>/dev/null; mv /usr/local /usr/local.bak 2>/dev/null || true",
@@ -379,7 +382,8 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 			"[ -d /sbin ] && [ ! -L /sbin ] && rm -rf /sbin.bak 2>/dev/null; mv /sbin /sbin.bak 2>/dev/null || true",
 		}
 		for _, cmd := range mvCmds {
-			setupCmd := exec.Command("docker", "exec", containerName, "sh", "-c", cmd)
+			// 设置临时 PATH，确保 sh 能找到基本命令
+			setupCmd := exec.Command("docker", "exec", "-e", "PATH="+tmpPath, containerName, "sh", "-c", cmd)
 			if out, err := setupCmd.CombinedOutput(); err != nil {
 				log.WithError(err).Warnf("Failed to move system directory: %s, output: %s", cmd, string(out))
 			}

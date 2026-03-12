@@ -1,643 +1,189 @@
-# 🤖 xbot
+# xbot
 
-一个可扩展的 AI Agent 助手，基于 Go 构建，采用消息总线 + 插件化架构。支持飞书、QQ 等 IM 渠道接入，具备工具调用、可插拔记忆系统、技能系统和定时任务等能力。
+An extensible AI Agent built with Go, featuring a message bus + plugin architecture. Supports IM channels like Feishu and QQ, with tool calling, pluggable memory, skills, and scheduled tasks.
 
-## ✨ 特性
+## Features
 
-- **多渠道接入** — 消息总线架构，支持飞书（HTTP 回调）和 QQ（WebSocket），易于扩展
-- **丰富的内置工具** — Shell 执行、文件读写编辑、Glob/Grep 搜索、Web 搜索、定时任务、子代理、文件下载
-- **飞书深度集成** — 交互卡片构建、文档/知识库/多维表格读写、文件上传（基于 OAuth 用户授权）
-- **技能系统 (Skills)** — OpenClaw 风格的渐进式技能加载，支持全局只读技能 + 用户私有技能
-- **可插拔记忆** — 双模式记忆架构：Flat（简单双层）或 Letta（三层 MemGPT），基于 SQLite + chromem-go 向量数据库
-- **多租户** — 基于 channel + chatID 的租户隔离，支持多群组/多用户独立会话
-- **MCP 协议支持** — 全局配置 + 用户私有配置合并，会话级懒加载，支持 stdio 和 HTTP 两种传输模式
-- **用户工作区隔离** — 文件读写/下载限定在用户工作区，命令工具在 Linux 沙箱中执行
-- **OAuth 框架** — 通用 OAuth 2.0 授权流程，支持飞书等第三方服务的用户级授权
-- **子代理 (SubAgent)** — 可委派独立任务给子代理执行，支持预定义角色（如 code-reviewer）
-- **提示词外置** — 系统提示词模板化（Go template），支持热加载
-- **KV-Cache 优化** — 精心设计的上下文拼接顺序，最大化 LLM 推理缓存命中率
-- **多 LLM 后端** — 支持 OpenAI 兼容 API（DeepSeek 等）及 CodeBuddy
+- **Multi-channel** — Message bus architecture with Feishu (HTTP callback) and QQ (WebSocket) support
+- **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download
+- **Feishu integration** — Interactive cards, doc/wiki/bitable access, file upload
+- **Skills system** — OpenClaw-style progressive skill loading
+- **Pluggable memory** — Dual-mode: Flat (simple) or Letta (three-tier MemGPT)
+- **Multi-tenant** — Channel + chatID based isolation
+- **MCP protocol** — Global + user-private config, session-level lazy loading
+- **Workspace isolation** — File ops limited to user workspace, commands run in Linux sandbox
+- **OAuth** — Generic OAuth 2.0 for user-level authorization
+- **SubAgent** — Delegate tasks to sub-agents with predefined roles
+- **Hot-reload prompts** — System prompts as Go templates
+- **KV-Cache optimized** — Context ordering maximizes LLM cache hits
 
-## 🏗️ 架构
-
-## 🔒 隔离与权限模型
-
-- **工作区隔离（按 SenderID）**
-  - 用户工作区：`{WORK_DIR}/.xbot/users/{sender_id}/workspace`
-  - 同一用户跨群共享工作区；不同用户彼此隔离
-- **文件访问边界**
-  - `Edit` / `DownloadFile` 仅允许写入用户工作区
-  - `Read` / `Glob` / `Grep` 仅允许读取用户工作区 + 全局只读技能目录
-- **Skill 可见性**
-  - 全局只读技能：`.claude/skills`（兼容 `.xbot/skills`）
-  - 用户私有技能：`{WORK_DIR}/.xbot/users/{sender_id}/workspace/skills`
-  - 同名技能优先使用用户私有版本
-- **MCP 配置隔离**
-  - 全局配置：`{WORK_DIR}/.xbot/mcp.json`（只读基线）
-  - 用户配置：`{WORK_DIR}/.xbot/users/{sender_id}/mcp.json`（`ManageTools` 仅写这里）
-  - 运行时视图为“全局 + 用户覆盖”
-- **命令沙箱（优先 Linux）**
-  - `Shell` 与 MCP stdio 子进程统一走沙箱执行：优先 `bwrap`，缺失时回退 `nsjail`
-  - Windows 默认禁用 command 执行（`Shell` / MCP stdio）
-
-> 建议在 Linux 生产环境预装 `bubblewrap (bwrap)`；若无 `bwrap`，可安装 `nsjail` 作为回退。
+## Architecture
 
 ```
 ┌─────────┐     ┌────────────┐     ┌───────┐     ┌─────────┐
-│  飞书    │────▶│ MessageBus │────▶│ Agent │────▶│   LLM   │
-│ Channel  │◀────│   (消息总线) │◀────│       │◀────│         │
+│  Feishu │────▶│ MessageBus │────▶│ Agent │────▶│   LLM   │
+│ Channel │◀────│            │◀────│       │◀────│         │
 └─────────┘     └────────────┘     │       │     └─────────┘
                                    │       │
 ┌─────────┐                        │       │────▶ Tools
-│   QQ    │                        │       │     ├─ Shell / Read / Edit
-│ Channel  │                        │       │     ├─ Glob / Grep
-└─────────┘                        │       │     ├─ WebSearch
-                                   │       │     ├─ Cron (定时任务)
-┌─────────┐                        │       │     ├─ SubAgent (子代理)
-│  更多    │                        │       │     ├─ DownloadFile
-│ Channel  │                        │       │     ├─ Card (飞书卡片)
-└─────────┘                        │       │     ├─ ChatHistory
-                                   │       │     ├─ UserProfile / SelfProfile
-                                   │       │     ├─ OAuth (授权工具)
-                                   │       │     ├─ Skill (技能管理)
-                                   │       │     ├─ Memory (Letta 6 工具)
-                                   │       │     ├─ ManageTools
-                                   │       │     ├─ Feishu MCP (文档/知识库)
-                                   │       │     └─ MCP (外部工具)
-                                   └───┬───┘
-                                       │
-                          ┌────────────┴────────────┐
-                          │        SQLite           │
-                          │  Sessions / Memory      │
-                          │  Core Memory Blocks     │
-                          │  Event History (FTS5)   │
-                          └────────────┬────────────┘
-                                       │
-                               ┌───────┴───────┐
-                               │    SQLite     │
-                               │  (多租户存储)  │
-                               │ Sessions      │
-                               │ Memory        │
-                               │ UserProfiles  │
-                               │ OAuth Tokens  │
-                               │  chromem-go   │
-                               │  (向量数据库)  │
-                               │  Archival Mem │
-                               └───────────────┘
+│   QQ    │                        │       │
+└─────────┘                        └───────┘
 ```
 
-## 📦 项目结构
+### Core Components
 
-```
-xbot/
-├── main.go                  # 入口：初始化各组件并启动
-├── prompt.md                # 系统提示词模板（Go template，可热加载）
-├── Makefile                 # 构建 / 测试 / CI 命令
-├── .env.example             # 环境变量配置模板
-├── .github/workflows/ci.yml # GitHub Actions CI（lint + build + test）
-│
-├── agent/                   # Agent 核心引擎
-│   ├── agent.go             # 主循环、工具调用（只读并行/写串行）、消息发送
-│   ├── context.go           # 上下文构建、提示词加载与渲染
-│   └── skills.go            # 技能发现与加载（OpenClaw 风格渐进式）
-│
-├── bus/                     # 消息总线
-│   └── bus.go               # Inbound / Outbound 消息通道
-│
-├── channel/                 # IM 渠道
-│   ├── channel.go           # Channel 接口定义
-│   ├── dispatcher.go        # 消息分发器
-│   ├── feishu.go            # 飞书渠道（HTTP 回调、卡片回调、文件发送）
-│   ├── feishu_token.go      # 飞书 Token 管理
-│   └── qq.go                # QQ 渠道（WebSocket、支持私聊/群聊/频道）
-│
-├── llm/                     # LLM 客户端
-│   ├── interface.go         # LLM 接口与类型定义
-│   ├── openai.go            # OpenAI 兼容 API 客户端
-│   ├── codebuddy.go         # CodeBuddy 客户端
-│   ├── types.go             # 消息、工具调用等数据结构
-│   └── mock.go              # 测试用 Mock 客户端
-│
-├── memory/                  # 可插拔记忆系统
-│   ├── memory.go            # MemoryProvider 接口定义
-│   └── flat/
-│       └── flat.go          # FlatMemory 实现（全量注入）
-│
-├── tools/                   # 内置工具
-│   ├── interface.go         # Tool 接口、Registry 注册表
-│   ├── shell.go             # Shell 命令执行
-│   ├── glob.go              # 文件 Glob 搜索
-│   ├── grep.go              # 文件内容 Grep 搜索
-│   ├── read.go              # 文件读取
-│   ├── edit.go              # 文件编辑（创建 / 替换 / 行编辑 / 正则）
-│   ├── download.go          # 飞书聊天文件/图片下载
-│   ├── web_search.go        # Web 搜索（Tavily API）
-│   ├── cron.go              # 定时任务调度
-│   ├── subagent.go          # 子代理工具
-│   ├── subagent_roles.go    # 子代理预定义角色
-│   ├── card_builder.go      # 飞书卡片构建器（Session / Element 模型）
-│   ├── card_tools.go        # 卡片工具集（create / add / preview / send）
-│   ├── chat_history.go      # 聊天历史查询
-│   ├── user_profile.go      # 用户画像 & Bot 自画像
-│   ├── oauth.go             # OAuth 授权工具
-│   ├── manage_tools.go      # 动态工具 / MCP / 技能管理
-│   ├── mcp.go               # MCP 协议工具桥接（全局）
-│   ├── mcp_common.go        # MCP 共享基础设施（配置、连接管理）
-│   ├── session_mcp.go       # 会话级 MCP 管理（懒加载、超时清理）
-│   └── feishu_mcp/          # 飞书工作台工具集
-│       ├── feishu_mcp.go    # 核心：OAuth 客户端获取、工具注册
-│       ├── docx.go          # 飞书文档读写（Markdown 互转）
-│       ├── wiki.go          # 知识库/多维表格操作
-│       ├── search.go        # 知识库搜索
-│       ├── file.go          # 文件上传
-│       ├── tools.go         # 工具定义
-│       ├── block_helper.go  # 飞书 Block 类型映射与文本提取
-│       ├── block_type_map.go
-│       └── errors.go        # 飞书 API 错误处理
-│
-├── oauth/                   # OAuth 2.0 框架
-│   ├── provider.go          # Provider 接口、Token 类型
-│   ├── manager.go           # 授权流程管理（CSRF、pending flows）
-│   ├── server.go            # OAuth 回调 HTTP 服务器
-│   ├── storage.go           # Token 持久化（SQLite）
-│   └── providers/
-│       └── feishu.go        # 飞书 OAuth Provider
-│
-├── session/                 # 会话管理
-│   ├── multitenant.go       # 多租户会话管理器
-│   └── tenant.go            # 租户会话（消息历史 + 记忆）
-│
-├── storage/                 # 存储层
-│   ├── migrate.go           # 数据库迁移
-│   └── sqlite/              # SQLite 实现（纯 Go，无 CGO）
-│       ├── db.go            # 数据库连接与初始化
-│       ├── session.go       # 会话存储
-│       ├── memory.go        # 记忆存储
-│       ├── tenant.go        # 租户存储
-│       └── user_profile.go  # 用户画像存储
-│
-├── config/                  # 配置加载
-│   └── config.go            # 环境变量 → 结构体
-│
-├── version/                 # 版本信息
-│   └── version.go           # 构建时注入（Version / Commit / BuildTime）
-│
-├── logger/                  # 日志
-│   └── logger.go            # logrus 封装
-│
-└── pprof/                   # 性能分析
-    └── pprof.go             # pprof HTTP 服务器（可选启用）
-```
+- **bus/** — Inbound/Outbound message channels
+- **channel/** — IM channels (feishu, qq), dispatcher
+- **agent/** — Agent loop: LLM → tool calls → response
+- **llm/** — LLM clients (OpenAI-compatible, CodeBuddy)
+- **tools/** — Tool registry and implementations
+- **memory/** — Memory providers (flat/letta)
+- **session/** — Multi-tenant session management
+- **storage/** — SQLite persistence (sessions, memory, tenants)
+- **oauth/** — OAuth 2.0 framework
 
-## 🚀 快速开始
-
-### 前置要求
-
-- Go 1.25+
-- 飞书开放平台应用 和/或 QQ 开放平台应用
-- LLM API Key（DeepSeek / OpenAI 兼容 / CodeBuddy）
-
-### 安装与运行
+## Quick Start
 
 ```bash
-# 克隆仓库
+# Clone and setup
 git clone https://github.com/CjiW/xbot.git
 cd xbot
-
-# 配置环境变量
 cp .env.example .env
-# 编辑 .env，填写 LLM API Key、飞书/QQ 应用凭证等
 
-# 构建并运行
+# Build and run
 make build
 ./xbot
 
-# 或直接开发模式运行
+# Or development mode
 make dev
 ```
 
-### Makefile 命令
+### Makefile Commands
 
 ```bash
-make fmt      # 格式化代码
-make lint     # golangci-lint 检查
-make test     # 运行测试（-race + 覆盖率）
-make build    # 编译二进制（注入版本信息）
-make run      # 编译并运行
-make dev      # go run 开发模式
-make clean    # 清理构建产物
-make ci       # 本地模拟完整 CI（lint → build → test）
+make dev      # Run in development mode
+make build    # Build binary
+make test     # Run tests with race detection
+make fmt      # Format code
+make lint     # Run golangci-lint
+make ci       # lint → build → test
+make clean-db # Clear .xbot data
 ```
 
-### 使用 systemd 部署
+## Configuration
 
-```bash
-sudo vim /etc/systemd/system/xbot.service
-```
+All config via environment variables or `.env`:
 
-```ini
-[Unit]
-Description=xbot AI Assistant
-After=network.target
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | LLM provider (`openai`/`codebuddy`) | `openai` |
+| `LLM_BASE_URL` | API URL | — |
+| `LLM_API_KEY` | API key | — |
+| `LLM_MODEL` | Model name | `deepseek-chat` |
+| `MEMORY_PROVIDER` | Memory (`flat`/`letta`) | `flat` |
+| `LLM_EMBEDDING_*` | Embedding API for Letta | — |
+| `FEISHU_ENABLED` | Enable Feishu | `false` |
+| `FEISHU_APP_ID` | Feishu app ID | — |
+| `FEISHU_APP_SECRET` | Feishu app secret | — |
+| `QQ_ENABLED` | Enable QQ | `false` |
+| `WORK_DIR` | Working directory | `.` |
+| `PROMPT_FILE` | Custom prompt template | — |
+| `OAUTH_ENABLE` | Enable OAuth | `false` |
 
-[Service]
-Type=simple
-WorkingDirectory=/path/to/workdir
-ExecStart=/usr/local/bin/xbot
-Restart=always
-RestartSec=5
-EnvironmentFile=/path/to/workdir/.env
+## Memory System
 
-[Install]
-WantedBy=multi-user.target
-```
+Set via `MEMORY_PROVIDER`:
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now xbot
-```
+### Flat (default)
 
-### 使用 Docker 部署
+Simple dual-layer: long-term memory blob + event history (Grep-searchable)
 
-> Ubuntu 上使用命令型 MCP（stdio）时，建议为容器加上 `bwrap` 所需权限参数；否则可能出现
-> `bwrap: Creating new namespace failed: Operation not permitted`。
+### Letta (three-tier MemGPT)
 
-```bash
-docker run -d --name xbot --restart unless-stopped \
-  --add-host=host.docker.internal:host-gateway \
-  --security-opt seccomp=unconfined \
-  --security-opt apparmor=unconfined \
-  --cap-add SYS_ADMIN \
-  -v /opt/xbot/.xbot:/data/.xbot \
-  -e WORK_DIR=/data \
-  -e LLM_PROVIDER=openai \
-  -e LLM_BASE_URL=https://api.openai.com/v1 \
-  -e LLM_API_KEY=your_api_key \
-  -e LLM_MODEL=gpt-4o-mini \
-  -e FEISHU_ENABLED=true \
-  -e FEISHU_APP_ID=your_app_id \
-  -e FEISHU_APP_SECRET=your_app_secret \
-  xxxx:latest
-```
+| Layer | Storage | Description |
+|-------|---------|-------------|
+| Core Memory | SQLite | Structured blocks always in system prompt |
+| Archival Memory | chromem-go vectors | Long-term semantic search |
+| Recall Memory | FTS5 | Full-text event history search |
 
-#### Docker + 本地 Ollama（Letta + Embedding）
+6 Letta tools: `core_memory_append`, `core_memory_replace`, `rethink`, `archival_memory_insert`, `archival_memory_search`, `recall_memory_search`
 
-```bash
-docker run -d --name xbot --restart unless-stopped \
-  --add-host=host.docker.internal:host-gateway \
-  --security-opt seccomp=unconfined \
-  --security-opt apparmor=unconfined \
-  --cap-add SYS_ADMIN \
-  -v /opt/xbot/.xbot:/data/.xbot \
-  -e WORK_DIR=/data \
-  -e MEMORY_PROVIDER=letta \
-  -e LLM_PROVIDER=openai \
-  -e LLM_BASE_URL=https://api.openai.com/v1 \
-  -e LLM_API_KEY=your_api_key \
-  -e LLM_MODEL=gpt-4o-mini \
-  -e LLM_EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1 \
-  -e LLM_EMBEDDING_API_KEY=ollama \
-  -e LLM_EMBEDDING_MODEL=nomic-embed-text \
-  -e FEISHU_ENABLED=true \
-  -e FEISHU_APP_ID=your_app_id \
-  -e FEISHU_APP_SECRET=your_app_secret \
-  xxxx:latest
-```
+Auto-consolidation triggers at `AGENT_MEMORY_WINDOW` (default 50 messages).
 
-说明：
+## Skills
 
-- `--add-host=host.docker.internal:host-gateway`：让 Linux 容器访问宿主机服务（如本机 Ollama）。
-- `--security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN`：允许 `bwrap` 创建 namespace，供命令型 MCP 使用。
-- `MEMORY_PROVIDER=letta`：启用 Letta 三层记忆。
-- `LLM_EMBEDDING_*` 指向本地 Ollama（`/v1`），用于 Archival Memory 的向量检索。
-
-## ⚙️ 配置
-
-所有配置通过环境变量或 `.env` 文件设置：
-
-### LLM
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `LLM_PROVIDER` | LLM 提供商（`openai` / `codebuddy`） | `openai` |
-| `LLM_BASE_URL` | API 地址 | — |
-| `LLM_API_KEY` | API 密钥 | — |
-| `LLM_MODEL` | 模型名称 | `deepseek-chat` |
-| `LLM_USER_ID` | CodeBuddy 用户 ID | — |
-| `LLM_ENTERPRISE_ID` | CodeBuddy 企业 ID | — |
-| `LLM_DOMAIN` | CodeBuddy 域名 | — |
-
-### 飞书
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `FEISHU_ENABLED` | 启用飞书渠道 | `false` |
-| `FEISHU_APP_ID` | 飞书应用 ID | — |
-| `FEISHU_APP_SECRET` | 飞书应用密钥 | — |
-| `FEISHU_ENCRYPT_KEY` | 事件加密密钥 | — |
-| `FEISHU_VERIFICATION_TOKEN` | 验证 Token | — |
-| `FEISHU_ALLOW_FROM` | 允许的用户 ID（逗号分隔） | 空（允许所有） |
-| `FEISHU_DOMAIN` | 飞书域名（用于文档链接） | — |
-
-### QQ
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `QQ_ENABLED` | 启用 QQ 渠道 | `false` |
-| `QQ_APP_ID` | QQ 应用 ID | — |
-| `QQ_CLIENT_SECRET` | QQ 应用密钥 | — |
-| `QQ_ALLOW_FROM` | 允许的用户 ID（逗号分隔） | 空（允许所有） |
-
-### Agent
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `AGENT_MAX_ITERATIONS` | 单次对话最大工具调用轮数 | `20` |
-| `AGENT_MEMORY_WINDOW` | 上下文保留的历史消息数 | `50` |
-| `WORK_DIR` | 工作目录 | `.` |
-| `PROMPT_FILE` | 自定义提示词模板路径 | 空（使用内置） |
-
-### MCP 会话管理
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `MCP_INACTIVITY_TIMEOUT` | MCP 连接不活跃超时 | `30m` |
-| `MCP_CLEANUP_INTERVAL` | MCP 清理扫描间隔 | `5m` |
-| `SESSION_CACHE_TIMEOUT` | 会话缓存超时 | `24h` |
-
-### OAuth
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `OAUTH_ENABLE` | 启用 OAuth 功能 | `false` |
-| `OAUTH_PORT` | OAuth 回调端口 | `8081` |
-| `OAUTH_BASE_URL` | OAuth 回调基础 URL（需公网可达） | — |
-
-### 服务器 & 日志
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `SERVER_HOST` | 服务监听地址 | `0.0.0.0` |
-| `SERVER_PORT` | 服务监听端口 | `8080` |
-| `LOG_LEVEL` | 日志级别 | `info` |
-| `LOG_FORMAT` | 日志格式（`text` / `json`） | `json` |
-| `MEMORY_PROVIDER` | 记忆提供者（`flat` / `letta`） | `flat` |
-| `LLM_EMBEDDING_BASE_URL` | 嵌入向量 API 地址（Letta 模式必填） | — |
-| `LLM_EMBEDDING_API_KEY` | 嵌入向量 API 密钥 | — |
-| `LLM_EMBEDDING_MODEL` | 嵌入向量模型名称 | — |
-| `PPROF_ENABLE` | 启用 pprof 性能分析 | `false` |
-| `PPROF_HOST` | pprof 监听地址 | `localhost` |
-| `PPROF_PORT` | pprof 监听端口 | `6060` |
-
-## 🧠 记忆系统
-
-xbot 支持两种记忆架构，通过 `MEMORY_PROVIDER` 环境变量切换：
-
-### Flat 模式（默认）
-
-简单双层记忆，适合快速上手：
-
-```go
-// 扩展记忆系统只需实现 MemoryProvider 接口
-type MemoryProvider interface {
-    Recall(ctx context.Context, query string) (string, error)
-    Memorize(ctx context.Context, input MemorizeInput) (MemorizeResult, error)
-    Close() error
-}
-```
-
-
-```bash
-MEMORY_PROVIDER=flat   # 或不设置，默认即 flat
-```
-
-### Letta 模式（三层 MemGPT 架构）
-
-受 [MemGPT](https://memgpt.ai/) 启发的三层记忆系统，适合需要深度个性化和长期记忆的场景：
-
-| 层级 | 存储 | 说明 |
-|------|------|------|
-| **Core Memory** | SQLite | 结构化记忆块，始终注入系统提示词（persona / human / working_context） |
-| **Archival Memory** | chromem-go 向量数据库 | 长期知识库，通过语义搜索检索 |
-| **Recall Memory** | SQLite FTS5 | 事件历史全文检索，支持时间范围过滤 |
-
-Letta 模式提供 6 个记忆工具，Agent 可自主管理记忆：
-
-| 工具 | 说明 |
-|------|------|
-| `core_memory_append` | 向核心记忆块追加内容 |
-| `core_memory_replace` | 替换核心记忆块中的内容 |
-| `rethink` | 重写 working_context（反思当前状态） |
-| `archival_memory_insert` | 存入归档记忆（长期知识） |
-| `archival_memory_search` | 语义搜索归档记忆 |
-| `recall_memory_search` | 全文 + 时间范围检索事件历史 |
-
-启用 Letta 模式需要配置嵌入向量 API（用于归档记忆的语义搜索）：
-
-```bash
-MEMORY_PROVIDER=letta
-LLM_EMBEDDING_BASE_URL=https://api.openai.com/v1
-LLM_EMBEDDING_API_KEY=your-embedding-api-key
-LLM_EMBEDDING_MODEL=text-embedding-3-small
-```
-
-> **注意**：`LLM_EMBEDDING_BASE_URL` 必须包含 `/v1` 路径前缀。底层使用 OpenAI 兼容接口（`POST {base_url}/embeddings`），所有提供商统一格式。
-
-### 自动记忆合并
-
-两种模式都支持异步自动合并：当会话消息超过 `AGENT_MEMORY_WINDOW`（默认 50）时，Agent 在后台 goroutine 中触发记忆合并，不阻塞当前消息处理。
-
-- **Flat 模式**：LLM 将旧消息摘要写入 MEMORY 和 HISTORY 文件
-- **Letta 模式**：LLM 调用 `consolidate_memory` 内部工具，自动决定更新哪些 Core Memory 块、写入哪些 Archival 条目、生成 History 摘要
-
-合并后释放旧消息的上下文空间。也可通过 `/new` 命令手动触发全量归档。
-
-### 快速上手：本地运行 Embedding 模型
-
-Letta 模式的 Archival Memory 需要嵌入向量 API。你可以用云端服务（OpenAI、硅基流动等），也可以本地运行一个模型。
-
-#### 方案一：使用 Ollama（推荐本地方案）
-
-```bash
-# 1. 安装 Ollama（https://ollama.ai）
-# macOS / Linux:
-curl -fsSL https://ollama.ai/install.sh | sh
-# Windows: 下载安装包 https://ollama.ai/download/windows
-
-# 2. 启动 Ollama 服务（默认监听 http://localhost:11434）
-# Windows 安装后自动以后台服务运行，无需手动启动
-# macOS 安装后也会自动运行（菜单栏可见 Ollama 图标）
-# Linux 手动启动: ollama serve（或 systemctl start ollama）
-#
-# 验证服务是否在运行：
-curl http://localhost:11434
-# 返回 "Ollama is running" 即表示正常
-
-# 3. 拉取 embedding 模型
-ollama pull nomic-embed-text
-
-# 4. 配置 .env（注意 URL 必须包含 /v1，这是 Ollama 的 OpenAI 兼容端点）：
-MEMORY_PROVIDER=letta
-LLM_EMBEDDING_BASE_URL=http://localhost:11434/v1
-LLM_EMBEDDING_MODEL=nomic-embed-text
-# Ollama 不需要 API Key，留空即可
-LLM_EMBEDDING_API_KEY=
-```
-
-#### 方案二：使用云端 API
-
-**OpenAI：**
-```bash
-MEMORY_PROVIDER=letta
-LLM_EMBEDDING_BASE_URL=https://api.openai.com/v1
-LLM_EMBEDDING_API_KEY=sk-your-openai-key
-LLM_EMBEDDING_MODEL=text-embedding-3-small
-```
-
-**硅基流动（SiliconFlow）：**
-```bash
-MEMORY_PROVIDER=letta
-LLM_EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
-LLM_EMBEDDING_API_KEY=your-siliconflow-key
-LLM_EMBEDDING_MODEL=BAAI/bge-m3
-```
-
-**任何 OpenAI 兼容的 Embedding API** 都可以使用，只需填写对应的 BASE_URL（含 `/v1`）、API_KEY 和 MODEL。
-
-#### 验证配置
-
-启动 xbot 后，日志中会显示 Embedding 服务初始化状态：
+Skills use OpenClaw-style progressive loading:
 
 ```
-level=info msg="Memory provider: letta"
-level=info msg="Embedding service initialized" model=nomic-embed-text
-```
-
-如果 Embedding 配置缺失，xbot 仍能启动，但 Archival Memory 的语义搜索功能不可用（仅 Core Memory 和 Recall Memory 正常工作）。
-
-## 🔧 技能系统
-
-技能（Skill）采用 OpenClaw 风格的渐进式加载：启动时扫描目录生成技能目录，对话时 Agent 按需通过 `Read` 工具加载相关技能。
-
-```
-.xbot/skills/
+.claude/skills/
 └── my-skill/
-    ├── SKILL.md          # 技能定义（必需）
-    ├── scripts/          # 可选：脚本文件
-    ├── references/       # 可选：参考资料
-    └── assets/           # 可选：资源文件
+    ├── SKILL.md          # Required: name + description
+    ├── scripts/          # Optional
+    ├── references/      # Optional
+    └── assets/          # Optional
 ```
 
-SKILL.md 格式：
+## MCP Support
 
-```markdown
----
-name: my-skill
-description: 技能简介（用于自动匹配和发现）
----
+### Global MCP
 
-（Markdown 正文，加载后注入系统提示词）
-```
-
-技能目录在系统提示词中以 XML 格式列出，Agent 根据对话主题自主决定是否加载。
-
-## 🎴 飞书交互卡片
-
-内置渐进式卡片构建系统，通过工具调用逐步构建复杂的飞书交互卡片：
-
-```
-card_create → card_add_content / card_add_interactive / card_add_container → card_send
-```
-
-支持的组件：
-
-| 类别 | 组件 |
-|------|------|
-| **展示** | Markdown、文本、图片、分割线、表格、图表、人员 |
-| **交互** | 按钮、输入框、下拉选择、人员选择、日期/时间选择器、复选框 |
-| **布局** | 多列布局、表单、折叠面板、可点击容器 |
-
-卡片工具按需动态注册：只有调用 `card_create` 后才会注册其余卡片工具，发送完成后自动注销。
-
-## 📄 飞书文档 & 知识库
-
-通过 OAuth 用户授权，xbot 可以直接操作飞书工作台：
-
-- **文档读写** — 读取飞书文档内容（转为 Markdown）、写入/更新文档
-- **知识库搜索** — 搜索知识库空间和节点
-- **多维表格** — 读取字段定义、查询/创建/更新记录
-- **文件上传** — 上传文件到飞书云盘
-
-需要配置 OAuth（`OAUTH_ENABLE=true`）并完成飞书应用的 OAuth 权限配置。
-
-## 🔌 MCP 支持
-
-xbot 支持两层 MCP 工具管理：
-
-### 全局 MCP
-
-在工作目录下创建 `mcp.json` 配置全局 MCP 工具服务器，启动时自动连接：
+Create `.xbot/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "server-name": {
       "command": "npx",
-      "args": ["-y", "@some/mcp-server"],
-      "env": {
-        "API_KEY": "xxx"
-      }
+      "args": ["-y", "@some/mcp-server"]
     }
   }
 }
 ```
 
-### 会话级 MCP
+### Session MCP
 
-通过 `ManageTools` 工具在运行时动态添加/移除 MCP 服务器。会话级 MCP 连接支持：
+Use `ManageTools` tool at runtime. Supports lazy loading, inactivity timeout, and stdio/HTTP transport.
 
-- **懒加载** — 首次使用时才建立连接
-- **不活跃超时** — 超过 `MCP_INACTIVITY_TIMEOUT` 自动断开
-- **自动清理** — 定期扫描并回收空闲连接
+## SubAgent
 
-支持 **stdio** 和 **HTTP** 两种 MCP 传输模式。
-
-## 🤖 子代理 (SubAgent)
-
-可将独立任务委派给子代理执行，子代理拥有完整的工具集但不能创建更多子代理：
+Delegate tasks to sub-agents:
 
 ```
-SubAgent(task="审查 agent.go 的改动", role="code-reviewer")
+SubAgent(task="...", role="code-reviewer")
 ```
 
-预定义角色：
+Predefined roles: `code-reviewer`
 
-| 角色 | 说明 |
-|------|------|
-| `code-reviewer` | 代码审查专家，对照计划/需求审查实现，按严重程度分类问题 |
+## Commands
 
-也可通过 `system_prompt` 参数自定义子代理行为。
+| Command | Description |
+|---------|-------------|
+| `/new` | Archive memory and reset session |
+| `/version` | Show version |
+| `/help` | Show help |
 
-## 📝 命令
+## Deployment
 
-对话中可使用的斜杠命令：
+### Docker
 
-| 命令 | 说明 |
-|------|------|
-| `/new` | 归档记忆并重置会话 |
-| `/version` | 显示版本信息 |
-| `/help` | 显示帮助信息 |
+```bash
+docker run -d --name xbot --restart unless-stopped \
+  --security-opt seccomp=unconfined \
+  --cap-add SYS_ADMIN \
+  -v /opt/xbot/.xbot:/data/.xbot \
+  -e WORK_DIR=/data \
+  -e LLM_PROVIDER=openai \
+  -e LLM_BASE_URL=https://api.openai.com/v1 \
+  -e LLM_API_KEY=your_key \
+  -e LLM_MODEL=gpt-4o-mini \
+  -e FEISHU_ENABLED=true \
+  -e FEISHU_APP_ID=your_app_id \
+  -e FEISHU_APP_SECRET=your_secret \
+  xbot:latest
+```
 
-## 🔄 CI
+Note: Requires `bwrap` (bubblewrap) installed on host for sandbox execution.
 
-项目使用 GitHub Actions 进行持续集成，在 push 到 master 或 PR 时自动运行：
-
-- **Lint** — golangci-lint 代码检查
-- **Build** — 编译验证
-- **Test** — 单元测试（race 检测 + 覆盖率）
-
-本地可通过 `make ci` 模拟完整 CI 流程。
-
-## 📄 License
+## License
 
 MIT

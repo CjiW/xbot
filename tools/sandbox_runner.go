@@ -433,7 +433,7 @@ func (s *dockerSandbox) ensureSymlinks(containerName string) {
 		"[ -d /sbin ] && [ ! -L /sbin ] && rm -rf /sbin.bak 2>/dev/null; mv /sbin /sbin.bak 2>/dev/null || true",
 	}
 	for _, cmd := range mvCmds {
-		setupCmd := exec.Command("docker", "exec", containerName, "sh", "-c", cmd)
+		setupCmd := exec.Command("docker", "exec", "-e", "PATH="+tmpPath, containerName, "sh", "-c", cmd)
 		if out, err := setupCmd.CombinedOutput(); err != nil {
 			log.WithError(err).Warnf("Failed to move system directory: %s, output: %s", cmd, string(out))
 		}

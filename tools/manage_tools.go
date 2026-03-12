@@ -163,36 +163,67 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 	return NewResult(fmt.Sprintf("MCP server '%s' has been removed. Use 'reload' action to apply changes.", args.Name)), nil
 }
 
+type mcpServerInfo struct {
+	Name         string   `json:"name"`
+	Enabled      bool     `json:"enabled"`
+	Protocol     string   `json:"protocol"` // "http" or "stdio"
+	Command      string   `json:"command,omitempty"`
+	Args         []string `json:"args,omitempty"`
+	URL          string   `json:"url,omitempty"`
+	Headers      any      `json:"headers,omitempty"` // map[string]string, marshaled as any for flexibility
+	Instructions string   `json:"instructions,omitempty"`
+}
+
 func (t *ManageTools) listMCP(ctx *ToolContext) (*ToolResult, error) {
 	globalPath := t.resolveGlobalMCPConfigPath(ctx)
 	userPath := t.resolveUserMCPConfigPath(ctx)
 	config, err := t.loadMergedMCPConfig(globalPath, userPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return NewResult("No MCP servers configured."), nil
+			return NewResult("[]"), nil
 		}
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 
 	if config == nil || len(config.MCPServers) == 0 {
-		return NewResult("No MCP servers configured."), nil
+		return NewResult("[]"), nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d MCP server(s):\n\n", len(config.MCPServers))
+	servers := make([]mcpServerInfo, 0, len(config.MCPServers))
 	for name, cfg := range config.MCPServers {
-		enabled := "enabled"
-		if cfg.Enabled != nil && !*cfg.Enabled {
-			enabled = "disabled"
+		enabled := true
+		if cfg.Enabled != nil {
+			enabled = *cfg.Enabled
 		}
+
+		protocol := "stdio"
 		if cfg.URL != "" {
-			fmt.Fprintf(&sb, "- **%s** (%s, HTTP): %s\n", name, enabled, cfg.URL)
-		} else {
-			fmt.Fprintf(&sb, "- **%s** (%s, stdio): %s %v\n", name, enabled, cfg.Command, cfg.Args)
+			protocol = "http"
 		}
+
+		var headers any
+		if len(cfg.Headers) > 0 {
+			headers = cfg.Headers
+		}
+
+		servers = append(servers, mcpServerInfo{
+			Name:         name,
+			Enabled:      enabled,
+			Protocol:     protocol,
+			Command:      cfg.Command,
+			Args:         cfg.Args,
+			URL:          cfg.URL,
+			Headers:      headers,
+			Instructions: cfg.Instructions,
+		})
 	}
 
-	return &ToolResult{Summary: sb.String()}, nil
+	data, err := json.Marshal(servers)
+	if err != nil {
+		return nil, fmt.Errorf("marshal json: %w", err)
+	}
+
+	return &ToolResult{Summary: string(data)}, nil
 }
 
 func (t *ManageTools) reload(ctx *ToolContext) (*ToolResult, error) {

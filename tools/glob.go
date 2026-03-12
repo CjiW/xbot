@@ -46,8 +46,62 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("pattern is required")
 	}
 
+	// 沙箱模式：在容器内执行 find 命令
+	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+		return t.executeInSandbox(ctx, params.Pattern, params.Path)
+	}
+
+	// 非沙箱模式：本地文件搜索
+	return t.executeLocal(ctx, params.Pattern, params.Path)
+}
+
+// executeInSandbox 在沙箱容器内执行 find 命令
+func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*ToolResult, error) {
+	searchDir := "/workspace"
+	if path != "" {
+		// 用户可能传相对路径或 /workspace 开头的路径
+		if strings.HasPrefix(path, "/workspace/") {
+			searchDir = path
+		} else {
+			searchDir = "/workspace/" + path
+		}
+	}
+
+	// 构建 find 命令，过滤隐藏目录和 node_modules
+	findCmd := fmt.Sprintf(
+		"find %s -type f -name '%s' -not -path '*/.*' -not -path '*/node_modules/*' 2>/dev/null | head -200",
+		searchDir, pattern)
+	output, err := RunInSandboxWithShell(ctx, findCmd)
+	if err != nil {
+		// 如果是"没有匹配文件"的情况，返回空结果
+		if output == "" {
+			return NewResult("No files matched the pattern."), nil
+		}
+		return nil, fmt.Errorf("sandbox glob failed: %v, output: %s", err, output)
+	}
+
+	if output == "" {
+		return NewResult("No files matched the pattern."), nil
+	}
+
+	// 输出即为容器内路径，直接返回
+	lines := strings.Split(output, "\n")
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d matching file(s):\n", len(lines))
+	for _, line := range lines {
+		if line != "" {
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+
+	return NewResult(sb.String()), nil
+}
+
+// executeLocal 在本地执行文件搜索（非沙箱模式）
+func (t *GlobTool) executeLocal(ctx *ToolContext, pattern, path string) (*ToolResult, error) {
 	// Determine base directory
-	baseDir := params.Path
+	baseDir := path
 	if baseDir == "" {
 		if ctx != nil && ctx.WorkspaceRoot != "" {
 			baseDir = ctx.WorkspaceRoot
@@ -78,15 +132,15 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	var matches []string
 
-	if strings.Contains(params.Pattern, "**") {
+	if strings.Contains(pattern, "**") {
 		// Handle ** patterns with recursive walk
-		matches, err = globWithDoublestar(baseDir, params.Pattern)
+		matches, err = globWithDoublestar(baseDir, pattern)
 		if err != nil {
 			return nil, fmt.Errorf("glob search failed: %w", err)
 		}
 	} else {
 		// Use standard filepath.Glob for simple patterns
-		fullPattern := filepath.Join(baseDir, params.Pattern)
+		fullPattern := filepath.Join(baseDir, pattern)
 		matches, err = filepath.Glob(fullPattern)
 		if err != nil {
 			return nil, fmt.Errorf("invalid glob pattern: %w", err)

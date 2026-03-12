@@ -639,13 +639,19 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
-	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
+	if err != nil {
 		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	if len(newTools) > 0 {
+		sessionKey := msg.Channel + ":" + msg.ChatID
+		a.tools.ActivateTools(sessionKey, newTools)
+		log.WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
-	return BuildMessages(history, msg.Content, msg.Channel, mem, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+	return BuildMessages(history, msg.Content, msg.Channel, mem, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -782,13 +788,18 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
-	if err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir); err != nil {
+	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
+	if err != nil {
 		log.WithError(err).Warn("Failed to configure session MCP scope")
+	}
+	if len(newTools) > 0 {
+		sessionKey := msg.Channel + ":" + msg.ChatID
+		a.tools.ActivateTools(sessionKey, newTools)
 	}
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, workspaceRoot, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -827,7 +838,8 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	return nil, nil
 }
 
-// maybeConsolidate 检查并异步触发记忆合并
+// maybeConsolidate 检查并异步触发记忆合并。
+// 只在未合并消息数达到 memoryWindow 时触发，避免每轮对话都调用 LLM。
 func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
 	length, err := tenantSession.Len()
@@ -836,7 +848,9 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		return
 	}
 
-	if length <= a.memoryWindow {
+	lastConsolidated := tenantSession.LastConsolidated()
+	unconsolidated := length - lastConsolidated
+	if unconsolidated < a.memoryWindow {
 		return
 	}
 
@@ -1199,6 +1213,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		Ctx:                 execCtx,
 		WorkingDir:          a.workDir,
 		WorkspaceRoot:       tools.UserWorkspaceRoot(a.workDir, senderID),
+		SandboxWorkDir:      "/workspace",
 		ReadOnlyRoots:       resolveGlobalSkillsDirs(a.workDir, filepath.Join(a.workDir, ".xbot", "skills")),
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
@@ -1346,7 +1361,9 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 	}
 
 	// 构建子 Agent 的消息（注入工作目录信息，让 LLM 知道文件操作的上下文）
-	if parentCtx.WorkspaceRoot != "" {
+	if parentCtx.SandboxEnabled && parentCtx.SandboxWorkDir != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.SandboxWorkDir)
+	} else if parentCtx.WorkspaceRoot != "" {
 		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.WorkspaceRoot)
 	}
 	messages := []llm.ChatMessage{
@@ -1429,6 +1446,7 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 				Ctx:              execCtx,
 				WorkingDir:       parentCtx.WorkingDir,
 				WorkspaceRoot:    parentCtx.WorkspaceRoot,
+				SandboxWorkDir:   "/workspace",
 				ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
 				SandboxEnabled:   parentCtx.SandboxEnabled,
 				PreferredSandbox: parentCtx.PreferredSandbox,

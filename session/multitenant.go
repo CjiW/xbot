@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -78,27 +80,28 @@ func WithToolIndexService(svc *vectordb.ToolIndexService) MultiTenantOption {
 
 // MultiTenantSession manages multiple tenant sessions with SQLite backing
 type MultiTenantSession struct {
-	db                   *sqlite.DB
-	tenantSvc            *sqlite.TenantService
-	sessionSvc           *sqlite.SessionService
-	memorySvc            *sqlite.MemoryService
-	userProfileSvc       *sqlite.UserProfileService
-	coreSvc              *sqlite.CoreMemoryService
-	archivalSvc          *vectordb.ArchivalService
-	toolIndexSvc         *vectordb.ToolIndexService
-	recallTimeRangeFn    vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
-	embeddingConfig      *EmbeddingConfig             // for auto-creating archival service
-	memoryProvider       string                       // "flat" or "letta"
-	mu                   sync.RWMutex
-	tenantCache          map[string]*TenantSession // key: "channel:chat_id"
-	dbPath               string
-	mcpConfigPath        string         // MCP 配置文件路径
-	mcpInactivityTimeout time.Duration  // MCP 不活跃超时配置
-	mcpCleanupInterval   time.Duration  // MCP 清理扫描间隔
-	sessionCacheTimeout  time.Duration  // 会话缓存超时配置
-	cleanupStopCh        chan struct{}  // 清理协程停止信号
-	cleanupWg            sync.WaitGroup // 清理协程等待组
-	cleanupStopOnce      sync.Once      // 确保 StopCleanupRoutine 只执行一次
+	db                    *sqlite.DB
+	tenantSvc             *sqlite.TenantService
+	sessionSvc            *sqlite.SessionService
+	memorySvc             *sqlite.MemoryService
+	userProfileSvc        *sqlite.UserProfileService
+	coreSvc               *sqlite.CoreMemoryService
+	archivalSvc           *vectordb.ArchivalService
+	toolIndexSvc          *vectordb.ToolIndexService
+	recallTimeRangeFn     vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
+	embeddingConfig       *EmbeddingConfig             // for auto-creating archival service
+	memoryProvider        string                       // "flat" or "letta"
+	mu                    sync.RWMutex
+	tenantCache           map[string]*TenantSession // key: "channel:chat_id"
+	dbPath                string
+	mcpConfigPath         string           // MCP 配置文件路径
+	mcpInactivityTimeout  time.Duration    // MCP 不活跃超时配置
+	mcpCleanupInterval    time.Duration    // MCP 清理扫描间隔
+	sessionCacheTimeout   time.Duration    // 会话缓存超时配置
+	cleanupStopCh         chan struct{}    // 清理协程停止信号
+	cleanupWg             sync.WaitGroup   // 清理协程等待组
+	cleanupStopOnce       sync.Once        // 确保 StopCleanupRoutine 只执行一次
+	toolIndexFingerprints map[int64]string // per-tenant catalog fingerprint (guarded by mu)
 }
 
 // NewMultiTenant creates a new multi-tenant session manager
@@ -109,20 +112,21 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	}
 
 	m := &MultiTenantSession{
-		db:                   db,
-		tenantSvc:            sqlite.NewTenantService(db),
-		sessionSvc:           sqlite.NewSessionService(db),
-		memorySvc:            sqlite.NewMemoryService(db),
-		userProfileSvc:       sqlite.NewUserProfileService(db),
-		coreSvc:              sqlite.NewCoreMemoryService(db),
-		memoryProvider:       "flat",
-		tenantCache:          make(map[string]*TenantSession),
-		dbPath:               dbPath,
-		mcpConfigPath:        "mcp.json", // 默认在工作目录下
-		mcpInactivityTimeout: 30 * time.Minute,
-		mcpCleanupInterval:   5 * time.Minute,
-		sessionCacheTimeout:  24 * time.Hour,
-		cleanupStopCh:        make(chan struct{}),
+		db:                    db,
+		tenantSvc:             sqlite.NewTenantService(db),
+		sessionSvc:            sqlite.NewSessionService(db),
+		memorySvc:             sqlite.NewMemoryService(db),
+		userProfileSvc:        sqlite.NewUserProfileService(db),
+		coreSvc:               sqlite.NewCoreMemoryService(db),
+		memoryProvider:        "flat",
+		tenantCache:           make(map[string]*TenantSession),
+		toolIndexFingerprints: make(map[int64]string),
+		dbPath:                dbPath,
+		mcpConfigPath:         "mcp.json", // 默认在工作目录下
+		mcpInactivityTimeout:  30 * time.Minute,
+		mcpCleanupInterval:    5 * time.Minute,
+		sessionCacheTimeout:   24 * time.Hour,
+		cleanupStopCh:         make(chan struct{}),
 	}
 
 	// 应用配置选项
@@ -235,41 +239,59 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 }
 
 // ConfigureSessionMCP 根据当前用户更新会话 MCP 作用域。
-func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, workDir string) error {
+// 返回新注册的个人 MCP 工具名列表（用于立即激活），catalog 未变化时返回 nil。
+func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, workDir string) ([]string, error) {
 	sess, err := m.GetOrCreateSession(channel, chatID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	mgr := sess.GetMCPManager()
 	if mgr == nil {
-		return nil
+		return nil, nil
 	}
 
 	userConfigPath := tools.UserMCPConfigPath(workDir, senderID)
 	workspaceRoot := tools.UserWorkspaceRoot(workDir, senderID)
 	mgr.UpdateScope(senderID, userConfigPath, workspaceRoot)
 
-	// Index personal MCP tools for this tenant
-	m.indexPersonalMCPTools(sess.TenantID(), mgr)
-
-	return nil
+	newTools := m.indexPersonalMCPTools(sess.TenantID(), mgr)
+	return newTools, nil
 }
 
-// indexPersonalMCPTools indexes personal MCP tools for a tenant
-func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.SessionMCPManager) {
-	if m.toolIndexSvc == nil || mgr == nil {
-		return
+// catalogFingerprint computes a stable hash of the MCP catalog tool names.
+func catalogFingerprint(catalog []tools.MCPServerCatalogEntry) string {
+	var keys []string
+	for _, entry := range catalog {
+		for _, toolName := range entry.ToolNames {
+			keys = append(keys, entry.Name+":"+toolName)
+		}
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// indexPersonalMCPTools indexes personal MCP tools for a tenant.
+// Returns the full tool name list when catalog changes (for immediate activation);
+// returns nil when catalog is unchanged or tool index is unavailable.
+func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.SessionMCPManager) []string {
+	if mgr == nil {
+		return nil
 	}
 
-	// Get personal MCP catalog (not global)
 	catalog := mgr.GetCatalog()
 	if len(catalog) == 0 {
-		return
+		return nil
 	}
 
-	// Convert to ToolIndexEntry
+	// Build tool entries and names
 	var entries []memory.ToolIndexEntry
+	var toolNames []string
 	for _, entry := range catalog {
 		for _, toolName := range entry.ToolNames {
 			fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)
@@ -283,18 +305,44 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 				Source:      "personal",
 				Description: desc,
 			})
+			toolNames = append(toolNames, fullName)
 		}
 	}
 
-	if len(entries) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := m.IndexToolsForTenant(ctx, tenantID, entries); err != nil {
-			log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
-		} else {
-			log.Infof("Indexed %d personal MCP tools for tenant %d", len(entries), tenantID)
-		}
+	// Fingerprint check: skip if catalog unchanged
+	fp := catalogFingerprint(catalog)
+	m.mu.RLock()
+	prev := m.toolIndexFingerprints[tenantID]
+	m.mu.RUnlock()
+	if fp == prev {
+		return nil
 	}
+
+	// Catalog changed — kick off async indexing (if tool index is available)
+	if m.toolIndexSvc != nil && len(entries) > 0 {
+		entriesCopy := make([]memory.ToolIndexEntry, len(entries))
+		copy(entriesCopy, entries)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			if err := m.IndexToolsForTenant(ctx, tenantID, entriesCopy); err != nil {
+				log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
+				// Clear fingerprint so next message retries
+				m.mu.Lock()
+				delete(m.toolIndexFingerprints, tenantID)
+				m.mu.Unlock()
+			} else {
+				log.Infof("Indexed %d personal MCP tools for tenant %d", len(entriesCopy), tenantID)
+			}
+		}()
+	}
+
+	// Update fingerprint optimistically (async indexing in progress)
+	m.mu.Lock()
+	m.toolIndexFingerprints[tenantID] = fp
+	m.mu.Unlock()
+
+	return toolNames
 }
 
 // migrateProfileToCoreMemory performs a one-time forward-compatible migration

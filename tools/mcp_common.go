@@ -107,17 +107,22 @@ func resolveXbotBinDir(configPath string) string {
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
 func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, userID, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
+	origEnv := os.Environ()
 
-	// 使用全局沙箱实例
+	// 使用全局沙箱实例，将 MCP 环境变量传入（每个会话独立）
+	// 注意：envList 包含 MCP 配置的变量和 .xbot/bin PATH
 	sandbox := GetSandbox()
-	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, workspaceRoot, userID)
+	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, envList, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}
 
 	execCmd := exec.Command(cmd, args...)
+	// 使用原始环境 + MCP 配置的环境变量（确保 MCP 变量覆盖同名系统变量）
 	if len(envList) > 0 {
-		execCmd.Env = append(os.Environ(), envList...)
+		execCmd.Env = append(origEnv, envList...)
+	} else {
+		execCmd.Env = origEnv
 	}
 
 	// StderrPipe returns a reader that is closed automatically when the process exits,

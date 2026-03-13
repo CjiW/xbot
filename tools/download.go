@@ -71,16 +71,19 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		return nil, err
 	}
 
+	// For return value: show sandbox-visible path instead of host path
+	displayPath := HostToSandboxPath(ctx, outputPath)
+
 	switch ctx.Channel {
 	case "feishu":
-		return t.downloadFeishu(params.MessageID, params.FileKey, params.Type, outputPath)
+		return t.downloadFeishu(params.MessageID, params.FileKey, params.Type, outputPath, displayPath)
 	default:
 		return nil, fmt.Errorf("file download not supported for channel: %s", ctx.Channel)
 	}
 }
 
 // downloadFeishu downloads a file/image from Feishu via Message Resource API.
-func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPath string) (*ToolResult, error) {
+func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPath, displayPath string) (*ToolResult, error) {
 	token, err := t.getFeishuTenantToken()
 	if err != nil {
 		return nil, fmt.Errorf("get tenant token: %w", err)
@@ -129,7 +132,7 @@ func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPa
 		"size":        written,
 	}).Info("File downloaded from Feishu")
 
-	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", outputPath, written)), nil
+	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, written)), nil
 }
 
 // getFeishuTenantToken obtains a tenant_access_token using app credentials from environment.

@@ -161,3 +161,24 @@ func SandboxToHostPath(ctx *ToolContext, sandboxPath string) string {
 	}
 	return filepath.Join(ctx.WorkspaceRoot, rel)
 }
+
+// HostToSandboxPath 将宿主机路径转换为沙箱路径（输出方向：宿主机 → LLM）
+// 例如 /data/.xbot/users/xxx/workspace/foo.go → /workspace/foo.go
+func HostToSandboxPath(ctx *ToolContext, hostPath string) string {
+	if ctx == nil || !ctx.SandboxEnabled || ctx.SandboxWorkDir == "" || ctx.WorkspaceRoot == "" {
+		return hostPath
+	}
+	if ctx.SandboxWorkDir == ctx.WorkspaceRoot {
+		return hostPath
+	}
+	if !strings.HasPrefix(hostPath, ctx.WorkspaceRoot) {
+		return hostPath
+	}
+	rel := strings.TrimPrefix(hostPath, ctx.WorkspaceRoot)
+	rel = strings.TrimPrefix(rel, string(filepath.Separator))
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		return ctx.SandboxWorkDir
+	}
+	return filepath.Join(ctx.SandboxWorkDir, rel)
+}

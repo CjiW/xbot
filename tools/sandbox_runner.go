@@ -346,22 +346,22 @@ func (s *dockerSandbox) commitAndRemove(containerName, userID string) {
 }
 
 // migrateDinDWorkspaces migrates user workspace data that was written to the wrong
-// host path due to DinD path mismatch. This happens when xbot runs in a container
-// (e.g., WORK_DIR=/app) and creates sandbox containers with bind mounts using the
-// container-internal path instead of the real host path. The Docker daemon interprets
-// this as a host path, creating data at e.g. host:/app/.xbot/ instead of
-// host:/home/user/.xbot/. This function detects and moves such misplaced data.
+// host path due to DinD path mismatch. Before the fix, sandbox bind mounts used the
+// container-internal path (containerWorkDir) as a host path, causing Docker daemon to
+// create data at host:<containerWorkDir>/users/ instead of host:<hostWorkDir>/users/.
+//
+// Example: containerWorkDir=/app/.xbot, hostWorkDir=/home/octopus/.xbot
+//   - Wrong location on host:   /app/.xbot/users/...
+//   - Correct location on host: /home/octopus/.xbot/users/...
 func (s *dockerSandbox) migrateDinDWorkspaces() {
 	if s.hostWorkDir == "" || s.containerWorkDir == "" || s.hostWorkDir == s.containerWorkDir {
 		return
 	}
 
-	// The wrong host path is where Docker daemon wrote data (using container-internal path as host path)
-	// e.g., /app/.xbot/users  (on the real host filesystem)
-	oldHostUsers := s.containerWorkDir + "/.xbot/users"
-	newHostUsers := s.hostWorkDir + "/.xbot/users"
+	// The wrong host path is containerWorkDir used verbatim as a host path
+	oldHostUsers := s.containerWorkDir + "/users"
+	newHostUsers := s.hostWorkDir + "/users"
 
-	// Quick check: see if the wrong path exists on the host by mounting it into a temp container
 	checkCmd := exec.Command("docker", "run", "--rm",
 		"-v", oldHostUsers+":/dind_check:ro",
 		s.image,
@@ -373,7 +373,6 @@ func (s *dockerSandbox) migrateDinDWorkspaces() {
 
 	log.Warnf("DinD migration: found misplaced workspace data at host:%s, migrating to host:%s", oldHostUsers, newHostUsers)
 
-	// Copy data from wrong location to correct location (preserve existing data with cp -a)
 	migrateCmd := exec.Command("docker", "run", "--rm",
 		"-v", oldHostUsers+":/old:ro",
 		"-v", newHostUsers+":/new",
@@ -384,11 +383,13 @@ func (s *dockerSandbox) migrateDinDWorkspaces() {
 		return
 	}
 
-	// Remove the wrong host path to prevent future confusion
+	// Cleanup: mount the PARENT of containerWorkDir, remove the base dir
+	parentDir := filepath.Dir(s.containerWorkDir)
+	baseName := filepath.Base(s.containerWorkDir)
 	cleanCmd := exec.Command("docker", "run", "--rm",
-		"-v", s.containerWorkDir+":/dind_cleanup",
+		"-v", parentDir+":/dind_cleanup",
 		s.image,
-		"sh", "-c", "rm -rf /dind_cleanup/.xbot")
+		"sh", "-c", fmt.Sprintf("rm -rf /dind_cleanup/%s", baseName))
 	if out, err := cleanCmd.CombinedOutput(); err != nil {
 		log.Warnf("DinD migration: cleanup failed: %v, output: %s", err, string(out))
 	}
@@ -415,6 +416,9 @@ func NewSandbox(mode, image string) Sandbox {
 // When xbot runs inside a container, bind mount paths must be translated from
 // the container-internal path (e.g., /app/.xbot/...) to the real host path
 // (e.g., /home/user/.xbot/...) because the Docker daemon runs on the host.
+//
+// The mount can be at workDir itself (/home/octopus → /app) or at a sub-path
+// (/home/octopus/.xbot → /app/.xbot). Both cases are handled.
 func (s *dockerSandbox) detectDinD(cfg *config.Config) {
 	absWorkDir, _ := filepath.Abs(cfg.Agent.WorkDir)
 
@@ -428,70 +432,82 @@ func (s *dockerSandbox) detectDinD(cfg *config.Config) {
 	}
 
 	// Priority 2: auto-detect by scanning running containers for a bind mount
-	// covering our WORK_DIR. No need to know our own container ID.
-	hostPath := s.autoDetectHostPath(absWorkDir)
-	if hostPath == "" || hostPath == absWorkDir {
-		return // not DinD, or host path equals container path (no translation needed)
+	// that covers or is under our WORK_DIR.
+	containerMount, hostMount := s.autoDetectDinDMount(absWorkDir)
+	if containerMount == "" || hostMount == "" || containerMount == hostMount {
+		return
 	}
 
-	s.containerWorkDir = absWorkDir
-	s.hostWorkDir = hostPath
-	log.Infof("DinD path mapping (auto-detected): container %s → host %s", absWorkDir, hostPath)
+	s.containerWorkDir = containerMount
+	s.hostWorkDir = hostMount
+	log.Infof("DinD path mapping (auto-detected): container %s → host %s", containerMount, hostMount)
 	s.migrateDinDWorkspaces()
 }
 
-// autoDetectHostPath scans all running Docker containers to find a bind mount
-// whose destination matches containerPath (or is a parent of it).
-// This works without knowing our own container ID — we just need to find ANY
-// container that has a bind mount destination covering our WORK_DIR.
-// In practice, only the xbot container itself will have /app mounted.
-func (s *dockerSandbox) autoDetectHostPath(containerPath string) string {
-	// List all running container IDs
-	listCmd := exec.Command("docker", "ps", "-q", "--no-trunc")
+// autoDetectDinDMount scans all running Docker containers to find a bind mount
+// related to workDir. It matches mounts whose destination:
+//   - equals workDir or is an ancestor (/app when workDir is /app/.xbot)
+//   - is a descendant of workDir (/app/.xbot when workDir is /app)
+//
+// Returns (mountDest, mountSrc) directly — caller uses them as containerWorkDir/hostWorkDir.
+func (s *dockerSandbox) autoDetectDinDMount(workDir string) (containerMount, hostMount string) {
+	listCmd := exec.Command("docker", "ps", "-q")
 	listOutput, err := listCmd.Output()
 	if err != nil {
-		log.WithError(err).Debug("DinD auto-detect: docker ps failed")
-		return ""
+		log.Warnf("DinD auto-detect: docker ps failed: %v", err)
+		return "", ""
 	}
 
 	ids := strings.Fields(strings.TrimSpace(string(listOutput)))
+	log.Infof("DinD auto-detect: scanning %d containers for mount related to %s", len(ids), workDir)
 	if len(ids) == 0 {
-		return ""
-	}
-
-	// Inspect all containers at once for efficiency
-	inspectArgs := append([]string{"inspect", "-f",
-		`{{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}` + "\n" + `{{end}}{{end}}`},
-		ids...)
-	inspectCmd := exec.Command("docker", inspectArgs...)
-	inspectOutput, err := inspectCmd.Output()
-	if err != nil {
-		log.WithError(err).Debug("DinD auto-detect: docker inspect failed")
-		return ""
+		return "", ""
 	}
 
 	var bestDest, bestSrc string
-	for _, line := range strings.Split(string(inspectOutput), "\n") {
-		line = strings.TrimSpace(line)
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 || parts[0] == "" {
+	for _, id := range ids {
+		cmd := exec.Command("docker", "inspect", "-f",
+			`{{range .Mounts}}{{.Destination}}={{.Source}}={{.Type}}`+"\n"+`{{end}}`,
+			id)
+		output, err := cmd.Output()
+		if err != nil {
 			continue
 		}
-		dest, src := parts[0], parts[1]
-		if containerPath == dest || strings.HasPrefix(containerPath, dest+"/") {
-			if len(dest) > len(bestDest) {
+		for _, line := range strings.Split(string(output), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			eqIdx := strings.Index(line, "=")
+			if eqIdx <= 0 {
+				continue
+			}
+			dest := line[:eqIdx]
+			rest := line[eqIdx+1:]
+			lastEq := strings.LastIndex(rest, "=")
+			if lastEq < 0 {
+				continue
+			}
+			src := rest[:lastEq]
+
+			// Match: dest is workDir, ancestor of workDir, or descendant of workDir
+			matched := dest == workDir ||
+				strings.HasPrefix(workDir, dest+"/") ||
+				strings.HasPrefix(dest, workDir+"/")
+
+			if matched && len(dest) > len(bestDest) {
 				bestDest, bestSrc = dest, src
+				log.Infof("DinD auto-detect: candidate mount %s → %s (container %s)", dest, src, id[:12])
 			}
 		}
 	}
 
 	if bestDest == "" {
-		log.Debugf("DinD auto-detect: no bind mount found covering %s", containerPath)
-		return ""
+		log.Warnf("DinD auto-detect: no mount found related to %s among %d containers", workDir, len(ids))
+		return "", ""
 	}
 
-	rel := strings.TrimPrefix(containerPath, bestDest)
-	return bestSrc + rel
+	return bestDest, bestSrc
 }
 
 // WrapCommandForSandbox 将命令包装到沙箱执行（兼容旧接口）

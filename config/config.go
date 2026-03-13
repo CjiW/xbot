@@ -70,6 +70,7 @@ type FeishuConfig struct {
 // AgentConfig Agent 配置
 type AgentConfig struct {
 	MaxIterations  int    // 单次对话最大工具迭代次数
+	MaxConcurrency int    // 最大并发处理数（不同会话并行处理上限，默认 2）
 	MemoryWindow   int    // 上下文窗口（保留最近多少条消息）
 	MemoryProvider string // 记忆提供者: "flat" 或 "letta"（默认 "flat"）
 	WorkDir        string // 工作目录（所有文件相对此目录存放）
@@ -169,6 +170,7 @@ func Load() *Config {
 		},
 		Agent: AgentConfig{
 			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
+			MaxConcurrency:       getEnvIntOrDefault("AGENT_MAX_CONCURRENCY", 3),
 			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
 			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
 			WorkDir:              getEnvOrDefault("WORK_DIR", "."),

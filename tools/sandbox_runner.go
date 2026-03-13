@@ -335,13 +335,13 @@ func (s *dockerSandbox) containerExists(containerName string) bool {
 // commitAndRemove commits a container (preserving installed packages etc.) then stops and removes it.
 func (s *dockerSandbox) commitAndRemove(containerName, userID string) {
 	s.commitIfDirty(containerName, userID)
-	stopCmd := exec.Command("docker", "stop", "-t", "5", containerName)
-	_ = stopCmd.Run()
-	rmCmd := exec.Command("docker", "rm", containerName)
-	if err := rmCmd.Run(); err != nil {
-		log.WithError(err).Warnf("Failed to remove stale container %s, trying force remove", containerName)
-		forceRm := exec.Command("docker", "rm", "-f", containerName)
-		_ = forceRm.Run()
+
+	// Force-kill + remove in one step (most reliable for stale containers)
+	forceRm := exec.Command("docker", "rm", "-f", containerName)
+	if out, err := forceRm.CombinedOutput(); err != nil {
+		log.WithError(err).Warnf("Failed to force-remove container %s: %s", containerName, strings.TrimSpace(string(out)))
+	} else {
+		log.Infof("Force-removed stale container %s", containerName)
 	}
 }
 

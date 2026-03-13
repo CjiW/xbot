@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"xbot/llm"
 )
 
@@ -50,12 +51,18 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
 	}
 
-	// 查找用户私有 + 全局角色（用户角色优先）
-	var userAgentDir string
+	// Ensure global agents are synced to workspace
+	EnsureSynced(ctx)
+
+	// Search order: user private > synced global > host global
+	var userAgentDirs []string
 	if ctx != nil && ctx.SenderID != "" && ctx.WorkingDir != "" {
-		userAgentDir = UserAgentsRoot(ctx.WorkingDir, ctx.SenderID)
+		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, ctx.SenderID))
 	}
-	role, ok := GetSubAgentRole(params.Role, userAgentDir)
+	if ctx != nil && ctx.WorkspaceRoot != "" {
+		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
+	}
+	role, ok := GetSubAgentRole(params.Role, userAgentDirs...)
 	if !ok {
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}

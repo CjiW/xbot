@@ -31,22 +31,21 @@ func TestSkillStore_GlobalAndPrivateCatalog(t *testing.T) {
 	globalDir := filepath.Join(workDir, ".claude", "skills")
 	privateDir := tools.UserSkillsRoot(workDir, "user-1")
 
-	globalSkillPath := writeSkill(t, globalDir, "global-tool", "global-tool", "global skill")
-	privateSkillPath := writeSkill(t, privateDir, "private-tool", "private-tool", "private skill")
-	_ = globalSkillPath
-	_ = privateSkillPath
+	writeSkill(t, globalDir, "global-tool", "global-tool", "global skill")
+	writeSkill(t, privateDir, "private-tool", "private-tool", "private skill")
 
 	store := NewSkillStore(workDir, []string{globalDir})
 	catalog := store.GetSkillsCatalog("user-1")
 
-	if !strings.Contains(catalog, "global-tool") {
+	if !strings.Contains(catalog, "<name>global-tool</name>") {
 		t.Fatalf("expected global skill in catalog, got: %s", catalog)
 	}
-	if !strings.Contains(catalog, "private-tool") {
+	if !strings.Contains(catalog, "<name>private-tool</name>") {
 		t.Fatalf("expected private skill in catalog, got: %s", catalog)
 	}
-	if !strings.Contains(catalog, filepath.Join(privateDir, "private-tool", "SKILL.md")) {
-		t.Fatalf("expected private skill path in catalog, got: %s", catalog)
+	// Catalog must NOT contain host filesystem paths
+	if strings.Contains(catalog, "<location>") {
+		t.Fatalf("catalog must not contain <location> tags (path leakage), got: %s", catalog)
 	}
 }
 
@@ -56,7 +55,7 @@ func TestSkillStore_PrivateOverrideGlobal(t *testing.T) {
 	privateDir := tools.UserSkillsRoot(workDir, "user-1")
 
 	writeSkill(t, globalDir, "dup", "dup", "global dup")
-	privateSkillPath := writeSkill(t, privateDir, "dup", "dup", "private dup")
+	writeSkill(t, privateDir, "dup", "dup", "private dup")
 
 	store := NewSkillStore(workDir, []string{globalDir})
 	catalog := store.GetSkillsCatalog("user-1")
@@ -64,7 +63,7 @@ func TestSkillStore_PrivateOverrideGlobal(t *testing.T) {
 	if strings.Count(catalog, "<name>dup</name>") != 1 {
 		t.Fatalf("expected deduped skill entry, got: %s", catalog)
 	}
-	if !strings.Contains(catalog, privateSkillPath) {
+	if !strings.Contains(catalog, "private dup") {
 		t.Fatalf("expected private dup to override global dup, got: %s", catalog)
 	}
 }

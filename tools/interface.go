@@ -22,6 +22,8 @@ type ToolContext struct {
 	WorkspaceRoot           string                                          // 当前用户可读写工作区根目录（宿主机路径）
 	SandboxWorkDir          string                                          // 沙箱内工作目录（如 Docker 为 /workspace，非沙箱时与 WorkspaceRoot 相同）
 	ReadOnlyRoots           []string                                        // 当前用户额外可读目录（只读）
+	SkillsDirs              []string                                        // 全局 skill 目录列表（宿主机路径，同步源）
+	AgentsDir               string                                          // 全局 agents 目录（宿主机路径，同步源）
 	MCPConfigPath           string                                          // 当前用户 MCP 配置路径
 	GlobalMCPConfigPath     string                                          // 全局 MCP 配置路径（只读）
 	SandboxEnabled          bool                                            // 是否启用命令沙箱
@@ -504,6 +506,7 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&EditTool{})
 	r.RegisterCore(&LoadToolsTool{})
 	r.RegisterCore(&SubAgentTool{})
+	r.RegisterCore(&SkillTool{})
 	r.RegisterCore(&SearchToolsTool{})
 	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
 	r.RegisterCore(&DownloadFileTool{})

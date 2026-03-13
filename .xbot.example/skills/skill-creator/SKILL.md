@@ -1,101 +1,111 @@
 ---
 name: skill-creator
-description: Create, update, or delete skills. Use when designing, structuring, or packaging skills with scripts, references, and assets. Activate when user asks to create a new skill, modify an existing skill, or discusses skill design.
+description: Create, update, or delete skills. Use when the user asks to create a new skill, modify an existing skill, package scripts/assets into a skill, or discusses skill design and structure.
 ---
 
 # Skill Creator
 
-Guide for creating and managing skills in xbot.
-
-## What is a Skill
-
-A skill is a directory containing:
-- `SKILL.md` - Required: YAML frontmatter + markdown body
-- `scripts/` - Optional: executable scripts (bash/python)
-- `references/` - Optional: docs loaded into context on demand
-- `assets/` - Optional: templates, images, fonts for output
-
-## How Skills Work
-
-1. **Discovery**: On every message, all skill `name` + `description` are listed in system prompt
-2. **Loading**: LLM uses `Read` tool to load SKILL.md when task matches a skill's description
-3. **Execution**: LLM runs scripts via `Shell` tool
-
-**Key**: `description` in frontmatter is the ONLY trigger. Write it clearly and comprehensively.
-
-## Where to Create Skills
-
-Skills must be created relative to the current working directory:
+## Skill Structure
 
 ```
-./skills/{skill-name}/
-├── SKILL.md
-├── scripts/
-├── references/
-└── assets/
+skills/{skill-name}/
+├── SKILL.md              # Required: frontmatter + instructions
+├── scripts/              # Optional: executable scripts
+│   └── setup.sh
+├── references/           # Optional: docs loaded on demand
+└── assets/               # Optional: templates, config files
 ```
+
+Create skills under `skills/` in the working directory. The `Skill` tool auto-discovers them by name.
+
+## Lifecycle
+
+1. **Discovery** — Every message, all skill names + descriptions appear in the system prompt
+2. **Loading** — LLM calls `Skill(name=..., action=load)` to read SKILL.md
+3. **Tool loading** — LLM **immediately** calls `load_tools` for all tools listed in the skill's "Required Tools" section
+4. **File listing** — `Skill(name=..., action=list_files)` returns full paths of all files in the skill
+5. **Execution** — LLM runs scripts via `Shell` tool using the paths from `list_files`
 
 ## Creating a Skill
 
-Use `Edit` tool to create the skill directory and files.
+### 1. Discover relevant tools
 
-### Step 1: Create SKILL.md
+Before writing SKILL.md, use `search_tools` to find tools the skill will need:
+
+```
+search_tools(query="send feishu message")  → finds feishu_send_message, etc.
+search_tools(query="github pull request")  → finds mcp_github_create_pr, etc.
+```
+
+Include the discovered tool names in the skill body so the LLM knows which tools to `load_tools` after activating the skill.
+
+### 2. Write SKILL.md
 
 ```markdown
 ---
 name: my-skill
-description: What this skill does and WHEN to use it. Be specific about triggers.
+description: What this skill does and WHEN to activate it. Be specific — this is the only trigger.
 ---
 
-# Skill Title
+# My Skill
 
-Instructions for using this skill...
+## Required Tools
+After loading this skill, immediately call `load_tools` for these tools:
+- feishu_send_message
+- feishu_search_wiki
+
+## Instructions
+Step-by-step instructions for the LLM...
 ```
 
-### Step 2: Add scripts/references/assets if needed
+**Critical**: Every skill MUST include a "Required Tools" section listing tools to load. After `Skill(action=load)` returns, the LLM must **immediately** call `load_tools` for all listed tools before doing anything else.
 
-Create executable scripts with proper shebangs:
+### 3. Add scripts (optional)
+
 ```bash
 #!/usr/bin/env bash
-# scripts/run.sh
-
-echo "Hello from skill"
+# scripts/setup.sh
+set -euo pipefail
+echo "Running setup with args: $@"
 ```
 
-### Step 3: Reference files in SKILL.md
+Make scripts executable: `chmod +x scripts/*.sh`
 
-Use relative paths from the skill directory:
+Reference scripts in SKILL.md with relative paths from the skill root:
+
 ```markdown
-Run the script:
-bash scripts/run.sh <args>
+Run setup:
+`Shell` tool: `bash scripts/setup.sh <args>` (working directory: the skill root)
 
-Read the reference:
-See references/docs.md for details.
+Or use `Skill(name=my-skill, action=list_files)` to get the absolute path,
+then call `Shell` with the full path from any working directory.
+```
+
+### 4. Add references (optional)
+
+Large docs or API specs go in `references/`. Load them with:
+```
+Skill(name=my-skill, action=load, file=references/api-spec.md)
 ```
 
 ## Updating a Skill
 
-Use `Read` tool to view current SKILL.md, then `Edit` tool to modify.
-
-## Deleting a Skill
-
-Use `Shell` tool to remove the skill directory.
+1. `Skill(name=..., action=load)` — read current content
+2. `Edit` tool — modify SKILL.md or other files
+3. `Skill(name=..., action=list_files)` — verify file layout
 
 ## Writing Guidelines
 
-### Frontmatter
-- `name`: lowercase, hyphens (e.g. `pdf-editor`)
-- `description`: include WHAT it does + WHEN to use it
+**Frontmatter:**
+- `name`: lowercase with hyphens (e.g. `pdf-editor`)
+- `description`: WHAT it does + WHEN to use it — this is the sole activation trigger
 
-### Body
-- Keep under 500 lines
-- Use imperative form
-- Only include info the LLM doesn't already know
+**Body:**
+- Keep under 300 lines (auto-truncated beyond this)
+- Imperative form, concise — only include what the LLM doesn't already know
+- Relative paths for internal references (`scripts/run.sh`, not absolute paths)
 
-### Scripts
-- Use when code would be rewritten repeatedly
-- Test scripts before finalizing
-- Use `#!/usr/bin/env bash` or `#!/usr/bin/env python3`
-
-### References
-- For large docs (>100 lines), include a table of contents
+**Scripts:**
+- Shebangs: `#!/usr/bin/env bash` or `#!/usr/bin/env python3`
+- Accept arguments via `$@` or `$1`/`$2` for flexibility
+- Use `set -euo pipefail` in bash scripts

@@ -427,14 +427,11 @@ func (s *dockerSandbox) detectDinD(cfg *config.Config) {
 		return
 	}
 
-	// Priority 2: auto-detect by inspecting our own container
-	if _, err := os.Stat("/.dockerenv"); err != nil {
-		return // not running inside Docker
-	}
-
+	// Priority 2: auto-detect by scanning running containers for a bind mount
+	// covering our WORK_DIR. No need to know our own container ID.
 	hostPath := s.autoDetectHostPath(absWorkDir)
 	if hostPath == "" || hostPath == absWorkDir {
-		return // not DinD or path is the same (direct host mount matches)
+		return // not DinD, or host path equals container path (no translation needed)
 	}
 
 	s.containerWorkDir = absWorkDir
@@ -443,35 +440,45 @@ func (s *dockerSandbox) detectDinD(cfg *config.Config) {
 	s.migrateDinDWorkspaces()
 }
 
-// autoDetectHostPath inspects xbot's own container to find the host-side path
-// that corresponds to containerPath. Returns "" if detection fails.
+// autoDetectHostPath scans all running Docker containers to find a bind mount
+// whose destination matches containerPath (or is a parent of it).
+// This works without knowing our own container ID — we just need to find ANY
+// container that has a bind mount destination covering our WORK_DIR.
+// In practice, only the xbot container itself will have /app mounted.
 func (s *dockerSandbox) autoDetectHostPath(containerPath string) string {
-	containerID := detectOwnContainerID()
-	if containerID == "" {
-		log.Debug("DinD auto-detect: could not determine own container ID")
+	// List all running container IDs
+	listCmd := exec.Command("docker", "ps", "-q", "--no-trunc")
+	listOutput, err := listCmd.Output()
+	if err != nil {
+		log.WithError(err).Debug("DinD auto-detect: docker ps failed")
 		return ""
 	}
 
-	// Inspect our own container's bind mounts
-	cmd := exec.Command("docker", "inspect", "-f",
-		`{{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}`+"\n"+`{{end}}{{end}}`,
-		containerID)
-	output, err := cmd.Output()
+	ids := strings.Fields(strings.TrimSpace(string(listOutput)))
+	if len(ids) == 0 {
+		return ""
+	}
+
+	// Inspect all containers at once for efficiency
+	inspectArgs := append([]string{"inspect", "-f",
+		`{{.Name}} {{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}` + "\n" + `{{end}}{{end}}`},
+		ids...)
+	inspectCmd := exec.Command("docker", inspectArgs...)
+	inspectOutput, err := inspectCmd.Output()
 	if err != nil {
 		log.WithError(err).Debug("DinD auto-detect: docker inspect failed")
 		return ""
 	}
 
-	// Find the mount whose Destination is containerPath or a parent of it
 	var bestDest, bestSrc string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+	for _, line := range strings.Split(string(inspectOutput), "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 || parts[0] == "" {
 			continue
 		}
 		dest, src := parts[0], parts[1]
 		if containerPath == dest || strings.HasPrefix(containerPath, dest+"/") {
-			// Prefer the longest (most specific) match
 			if len(dest) > len(bestDest) {
 				bestDest, bestSrc = dest, src
 			}
@@ -479,52 +486,12 @@ func (s *dockerSandbox) autoDetectHostPath(containerPath string) string {
 	}
 
 	if bestDest == "" {
+		log.Debugf("DinD auto-detect: no bind mount found covering %s", containerPath)
 		return ""
 	}
 
-	// Translate: if mount is /app→/home/user and containerPath is /app,
-	// then host path is /home/user
 	rel := strings.TrimPrefix(containerPath, bestDest)
 	return bestSrc + rel
-}
-
-// detectOwnContainerID returns our container ID if we're running in Docker.
-func detectOwnContainerID() string {
-	// Method 1: hostname (Docker sets it to the short container ID by default)
-	hostname, err := os.Hostname()
-	if err == nil && hostname != "" {
-		cmd := exec.Command("docker", "inspect", "-f", "{{.Id}}", hostname)
-		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
-			return hostname
-		}
-	}
-
-	// Method 2: /proc/self/cgroup (cgroup v1)
-	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			// Format: hierarchy-ID:controller-list:/docker/<container-id>
-			if idx := strings.Index(line, "/docker/"); idx >= 0 {
-				id := line[idx+len("/docker/"):]
-				id = strings.TrimSpace(id)
-				if len(id) >= 12 {
-					return id[:12]
-				}
-			}
-		}
-	}
-
-	// Method 3: /proc/1/cpuset
-	if data, err := os.ReadFile("/proc/1/cpuset"); err == nil {
-		content := strings.TrimSpace(string(data))
-		if strings.HasPrefix(content, "/docker/") {
-			id := strings.TrimPrefix(content, "/docker/")
-			if len(id) >= 12 {
-				return id[:12]
-			}
-		}
-	}
-
-	return ""
 }
 
 // WrapCommandForSandbox 将命令包装到沙箱执行（兼容旧接口）

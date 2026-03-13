@@ -3,7 +3,6 @@ package agent
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -33,9 +32,8 @@ func (s *AgentStore) GetAgentsCatalog(senderID string) string {
 	}
 
 	type agentInfo struct {
-		name     string
-		role     tools.SubAgentRole
-		location string
+		name string
+		role tools.SubAgentRole
 	}
 
 	merged := make(map[string]agentInfo)
@@ -57,9 +55,8 @@ func (s *AgentStore) GetAgentsCatalog(senderID string) string {
 				orderedNames = append(orderedNames, r.Name)
 			}
 			merged[r.Name] = agentInfo{
-				name:     r.Name,
-				role:     r,
-				location: filepath.Join(dir, r.Name+".md"),
+				name: r.Name,
+				role: r,
 			}
 		}
 	}
@@ -78,8 +75,8 @@ func (s *AgentStore) GetAgentsCatalog(senderID string) string {
 		if len(info.role.AllowedTools) > 0 {
 			toolsInfo = strings.Join(info.role.AllowedTools, ", ")
 		}
-		fmt.Fprintf(&sb, "  <agent>\n    <name>%s</name>\n    <description>%s</description>\n    <tools>%s</tools>\n    <location>%s</location>\n  </agent>\n",
-			info.role.Name, info.role.Description, toolsInfo, info.location)
+		fmt.Fprintf(&sb, "  <agent>\n    <name>%s</name>\n    <description>%s</description>\n    <tools>%s</tools>\n  </agent>\n",
+			info.role.Name, info.role.Description, toolsInfo)
 	}
 	sb.WriteString("</available_agents>\n")
 	return sb.String()

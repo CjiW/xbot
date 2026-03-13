@@ -73,10 +73,10 @@ func TestIsRetryableError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type failNLLM struct {
-	failCount int           // 前 N 次返回错误
-	failErr   error         // 返回的错误
-	calls     atomic.Int32  // 实际调用次数
-	response  *LLMResponse  // 成功时返回的响应
+	failCount int          // 前 N 次返回错误
+	failErr   error        // 返回的错误
+	calls     atomic.Int32 // 实际调用次数
+	response  *LLMResponse // 成功时返回的响应
 }
 
 func newFailNLLM(failCount int, err error) *failNLLM {

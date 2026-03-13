@@ -231,16 +231,26 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	checkCmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", containerName)
 	checkOutput, checkErr := checkCmd.Output()
 	if checkErr == nil && strings.Contains(string(checkOutput), "true") {
-		s.containers[userID] = &dockerContainer{name: containerName, started: true}
-		return containerName, nil
+		if s.verifyWorkspaceMount(containerName, workspace) {
+			s.containers[userID] = &dockerContainer{name: containerName, started: true}
+			return containerName, nil
+		}
+		log.Warnf("Container %s has stale workspace mount, will recreate", containerName)
+		s.commitAndRemove(containerName, userID)
 	}
 
-	// 容器已存在但未运行，尝试启动
-	startCmd := exec.Command("docker", "start", containerName)
-	if _, startErr := startCmd.CombinedOutput(); startErr == nil {
-		log.Infof("Started existing Docker container %s", containerName)
-		s.containers[userID] = &dockerContainer{name: containerName, started: true}
-		return containerName, nil
+	// 容器已存在但未运行，尝试启动（先校验 mount 再决定是否复用）
+	if s.containerExists(containerName) {
+		if s.verifyWorkspaceMount(containerName, workspace) {
+			startCmd := exec.Command("docker", "start", containerName)
+			if _, startErr := startCmd.CombinedOutput(); startErr == nil {
+				log.Infof("Started existing Docker container %s", containerName)
+				s.containers[userID] = &dockerContainer{name: containerName, started: true}
+				return containerName, nil
+			}
+		}
+		log.Warnf("Container %s has stale workspace mount or failed to start, will recreate", containerName)
+		s.commitAndRemove(containerName, userID)
 	}
 
 	// 容器不存在，选择镜像：优先用户专属镜像，否则基础镜像
@@ -274,6 +284,46 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	log.Infof("Docker container %s created successfully", containerName)
 
 	return containerName, nil
+}
+
+// verifyWorkspaceMount checks that the container's /workspace bind mount points to the expected host path.
+func (s *dockerSandbox) verifyWorkspaceMount(containerName, expectedWorkspace string) bool {
+	cmd := exec.Command("docker", "inspect", "-f",
+		`{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}`,
+		containerName)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	actual := strings.TrimSpace(string(output))
+	if actual == expectedWorkspace {
+		return true
+	}
+	log.WithFields(log.Fields{
+		"container": containerName,
+		"expected":  expectedWorkspace,
+		"actual":    actual,
+	}).Warn("Workspace mount mismatch")
+	return false
+}
+
+// containerExists checks whether a Docker container exists (running or stopped).
+func (s *dockerSandbox) containerExists(containerName string) bool {
+	cmd := exec.Command("docker", "inspect", "-f", "{{.Id}}", containerName)
+	return cmd.Run() == nil
+}
+
+// commitAndRemove commits a container (preserving installed packages etc.) then stops and removes it.
+func (s *dockerSandbox) commitAndRemove(containerName, userID string) {
+	s.commitIfDirty(containerName, userID)
+	stopCmd := exec.Command("docker", "stop", "-t", "5", containerName)
+	_ = stopCmd.Run()
+	rmCmd := exec.Command("docker", "rm", containerName)
+	if err := rmCmd.Run(); err != nil {
+		log.WithError(err).Warnf("Failed to remove stale container %s, trying force remove", containerName)
+		forceRm := exec.Command("docker", "rm", "-f", containerName)
+		_ = forceRm.Run()
+	}
 }
 
 // NewSandbox 创建沙箱实例

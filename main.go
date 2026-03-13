@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"xbot/agent"
 	"xbot/bus"
@@ -19,6 +20,7 @@ import (
 	"xbot/storage"
 	"xbot/tools"
 	"xbot/tools/feishu_mcp"
+	"xbot/version"
 )
 
 func main() {
@@ -257,6 +259,11 @@ func main() {
 	log.Info("xbot started successfully")
 	fmt.Println("🤖 xbot is running. Press Ctrl+C to stop.")
 
+	// 启动后发送上线通知
+	if cfg.StartupNotify.Channel != "" && cfg.StartupNotify.ChatID != "" {
+		go sendStartupNotify(disp, cfg)
+	}
+
 	// 等待退出信号
 	<-sigCh
 	fmt.Println("\nShutting down...")
@@ -343,4 +350,36 @@ func getChannels(disp *channel.Dispatcher) map[string]channel.Channel {
 		}
 	}
 	return result
+}
+
+// sendStartupNotify 发送启动上线通知
+func sendStartupNotify(disp *channel.Dispatcher, cfg *config.Config) {
+	// 等待渠道 WebSocket 连接建立
+	time.Sleep(3 * time.Second)
+
+	content := fmt.Sprintf("🟢 **xbot 已上线**\n- 版本：%s\n- 时间：%s\n- 模型：%s\n- 沙箱：%s\n- 记忆：%s",
+		version.Info(),
+		time.Now().Format("2006-01-02 15:04:05 MST"),
+		cfg.LLM.Model,
+		cfg.Sandbox.Mode,
+		cfg.Agent.MemoryProvider,
+	)
+
+	for i := 0; i < 3; i++ {
+		_, err := disp.SendDirect(bus.OutboundMessage{
+			Channel: cfg.StartupNotify.Channel,
+			ChatID:  cfg.StartupNotify.ChatID,
+			Content: content,
+		})
+		if err == nil {
+			log.WithFields(log.Fields{
+				"channel": cfg.StartupNotify.Channel,
+				"chat_id": cfg.StartupNotify.ChatID,
+			}).Info("Startup notification sent")
+			return
+		}
+		log.WithError(err).Warn("Failed to send startup notification, retrying...")
+		time.Sleep(2 * time.Second)
+	}
+	log.Error("Failed to send startup notification after 3 attempts")
 }

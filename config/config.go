@@ -42,18 +42,25 @@ type EmbeddingConfig struct {
 	Model   string // Embedding 模型名称（如 bge-m3、text-embedding-3-small）
 }
 
+// StartupNotifyConfig 启动通知配置
+type StartupNotifyConfig struct {
+	Channel string // 通知渠道: "feishu", "qq" 等，空则不发送
+	ChatID  string // 通知目标 chat_id
+}
+
 // Config 应用配置
 type Config struct {
-	Server    ServerConfig
-	LLM       LLMConfig
-	Embedding EmbeddingConfig
-	Log       LogConfig
-	PProf     PProfConfig
-	Feishu    FeishuConfig
-	QQ        QQConfig
-	Agent     AgentConfig
-	OAuth     OAuthConfig
-	Sandbox   SandboxConfig
+	Server        ServerConfig
+	LLM           LLMConfig
+	Embedding     EmbeddingConfig
+	Log           LogConfig
+	PProf         PProfConfig
+	Feishu        FeishuConfig
+	QQ            QQConfig
+	Agent         AgentConfig
+	OAuth         OAuthConfig
+	Sandbox       SandboxConfig
+	StartupNotify StartupNotifyConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -188,6 +195,10 @@ func Load() *Config {
 			Mode:        getEnvOrDefault("SANDBOX_MODE", "docker"),
 			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
 			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
+		},
+		StartupNotify: StartupNotifyConfig{
+			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),
+			ChatID:  getEnvOrDefault("STARTUP_NOTIFY_CHAT_ID", ""),
 		},
 	}
 }

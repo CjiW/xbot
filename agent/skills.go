@@ -100,12 +100,10 @@ func (s *SkillStore) GetSkillsCatalog(senderID string) string {
 	var sb strings.Builder
 	sb.WriteString("# Available Skills\n\n")
 	sb.WriteString("The following skills provide specialized instructions for specific tasks.\n")
-	sb.WriteString("Use the Read tool to load a skill's SKILL.md file when the task matches its description.\n")
-	sb.WriteString("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md).\n\n")
+	sb.WriteString("Use the Skill tool to load a skill by name when the task matches its description.\n\n")
 	sb.WriteString("<available_skills>\n")
 	for _, sk := range skills {
-		location := filepath.Join(sk.Path, "SKILL.md")
-		fmt.Fprintf(&sb, "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n    <location>%s</location>\n  </skill>\n", sk.Name, sk.Description, location)
+		fmt.Fprintf(&sb, "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n  </skill>\n", sk.Name, sk.Description)
 	}
 	sb.WriteString("</available_skills>\n")
 	return sb.String()

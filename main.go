@@ -101,6 +101,7 @@ func main() {
 		LLM:                  llmClient,
 		Model:                cfg.LLM.Model,
 		MaxIterations:        cfg.Agent.MaxIterations,
+		MaxConcurrency:       cfg.Agent.MaxConcurrency,
 		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotDir, "skills"),

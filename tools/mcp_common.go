@@ -58,25 +58,64 @@ var sharedMCPClient = mcp.NewClient(&mcp.Implementation{
 	Version: "1.0.0",
 }, nil)
 
-// BuildStdioEnv 构建 stdio 模式的环境变量列表，将 .xbot/bin 加入 PATH
+// safeDefaultPATH is the standard system PATH used for MCP server processes
+// instead of leaking the host's full PATH.
+const safeDefaultPATH = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+
+// BuildStdioEnv 构建 stdio 模式的环境变量列表，使用安全 PATH（不泄漏宿主机 PATH）
 func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	var envList []string
 	for k, v := range cfg.Env {
 		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// 将 .xbot/bin 加入 PATH（方便 MCP 命令找到本地安装的工具）
+	pathParts := []string{}
 	if binDir := resolveXbotBinDir(configPath); binDir != "" {
-		currentPath := os.Getenv("PATH")
-		if currentPath != "" {
-			envList = append(envList, fmt.Sprintf("PATH=%s:%s", binDir, currentPath))
-		} else {
-			envList = append(envList, fmt.Sprintf("PATH=%s", binDir))
-		}
+		pathParts = append(pathParts, binDir)
 		log.WithField("bin_dir", binDir).Debug("Added .xbot/bin to MCP server PATH")
 	}
+	pathParts = append(pathParts, safeDefaultPATH)
+	envList = append(envList, fmt.Sprintf("PATH=%s", strings.Join(pathParts, ":")))
 
 	return envList
+}
+
+// buildMinimalExecEnv constructs a minimal env for the exec.Command that launches
+// the MCP server (or docker exec). Only safe, non-secret vars are forwarded from
+// the host; everything the MCP process actually needs comes from envList (which
+// contains mcp.json "env" fields + sanitised PATH).
+func buildMinimalExecEnv(envList []string) []string {
+	safeKeys := []string{
+		"HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP",
+		"DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONFIG",
+		"XDG_RUNTIME_DIR",
+	}
+
+	env := make([]string, 0, len(safeKeys)+len(envList)+1)
+
+	// Forward safe host vars needed by docker/system
+	for _, key := range safeKeys {
+		if val := os.Getenv(key); val != "" {
+			env = append(env, fmt.Sprintf("%s=%s", key, val))
+		}
+	}
+
+	// The docker binary needs PATH to be located; provide a safe default
+	// if envList doesn't already contain one.
+	hasPath := false
+	for _, e := range envList {
+		if strings.HasPrefix(e, "PATH=") {
+			hasPath = true
+			break
+		}
+	}
+	if !hasPath {
+		env = append(env, "PATH="+safeDefaultPATH)
+	}
+
+	// Append MCP-configured env (overrides any same-name safe var above)
+	env = append(env, envList...)
+	return env
 }
 
 // resolveXbotBinDir 从 configPath 推断 .xbot/bin 目录（存在才返回）
@@ -107,10 +146,7 @@ func resolveXbotBinDir(configPath string) string {
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
 func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, userID, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
-	origEnv := os.Environ()
 
-	// 使用全局沙箱实例，将 MCP 环境变量传入（每个会话独立）
-	// 注意：envList 包含 MCP 配置的变量和 .xbot/bin PATH
 	sandbox := GetSandbox()
 	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, envList, workspaceRoot, userID)
 	if err != nil {
@@ -118,12 +154,9 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 	}
 
 	execCmd := exec.Command(cmd, args...)
-	// 使用原始环境 + MCP 配置的环境变量（确保 MCP 变量覆盖同名系统变量）
-	if len(envList) > 0 {
-		execCmd.Env = append(origEnv, envList...)
-	} else {
-		execCmd.Env = origEnv
-	}
+	// Build a minimal safe environment instead of passing os.Environ() which
+	// would leak host secrets (LLM_API_KEY, FEISHU_APP_SECRET, etc.).
+	execCmd.Env = buildMinimalExecEnv(envList)
 
 	// StderrPipe returns a reader that is closed automatically when the process exits,
 	// so the drainStderr goroutine will not leak.

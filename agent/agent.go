@@ -153,19 +153,23 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus           *bus.MessageBus
-	llmClient     llm.LLM
-	model         string
-	multiSession  *session.MultiTenantSession // Multi-tenant session manager
-	tools         *tools.Registry
-	maxIterations int
-	memoryWindow  int
-	skills        *SkillStore
-	agents        *AgentStore
-	chatHistory   *tools.ChatHistoryStore // 聊天历史缓存
-	cardBuilder   *tools.CardBuilder      // Card Builder MCP
-	workDir       string
-	promptLoader  *PromptLoader
+	bus             *bus.MessageBus
+	llmClient       llm.LLM
+	model           string
+	multiSession    *session.MultiTenantSession // Multi-tenant session manager
+	tools           *tools.Registry
+	maxIterations   int
+	memoryWindow    int
+	skills          *SkillStore
+	agents          *AgentStore
+	chatHistory     *tools.ChatHistoryStore // 聊天历史缓存
+	cardBuilder     *tools.CardBuilder      // Card Builder MCP
+	workDir         string
+	promptLoader    *PromptLoader
+	sandboxMode     string   // "none" or "docker"
+	maxConcurrency  int      // 最大并发会话处理数
+	globalSkillDirs []string // 全局 skill 目录（宿主机路径）
+	agentsDir       string   // 全局 agents 目录（宿主机路径）
 
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
@@ -193,15 +197,16 @@ func buildToolMessageContent(result *tools.ToolResult) string {
 
 // Config Agent 配置
 type Config struct {
-	Bus           *bus.MessageBus
-	LLM           llm.LLM
-	Model         string
-	MaxIterations int    // 单次对话最大工具调用迭代次数
-	MemoryWindow  int    // 上下文窗口大小（保留的历史消息数）
-	DBPath        string // SQLite 数据库路径（空则使用默认路径）
-	SkillsDir     string // Skills 目录
-	WorkDir       string // 工作目录（所有文件相对此目录）
-	PromptFile    string // 系统提示词模板文件路径（空则使用内置默认值）
+	Bus            *bus.MessageBus
+	LLM            llm.LLM
+	Model          string
+	MaxIterations  int    // 单次对话最大工具调用迭代次数
+	MaxConcurrency int    // 最大并发会话处理数（默认 2）
+	MemoryWindow   int    // 上下文窗口大小（保留的历史消息数）
+	DBPath         string // SQLite 数据库路径（空则使用默认路径）
+	SkillsDir      string // Skills 目录
+	WorkDir        string // 工作目录（所有文件相对此目录）
+	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
 	MemoryProvider   string // 记忆提供者: "flat" 或 "letta"
 	EmbeddingBaseURL string // 嵌入向量服务地址
@@ -218,6 +223,9 @@ type Config struct {
 func New(cfg Config) *Agent {
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = 20
+	}
+	if cfg.MaxConcurrency <= 0 {
+		cfg.MaxConcurrency = 2
 	}
 	if cfg.MemoryWindow == 0 {
 		cfg.MemoryWindow = 50
@@ -308,21 +316,30 @@ func New(cfg Config) *Agent {
 		log.Info("Letta memory tools registered (core)")
 	}
 
+	sandboxMode := os.Getenv("SANDBOX_MODE")
+	if sandboxMode == "" {
+		sandboxMode = "docker"
+	}
+
 	agent := &Agent{
-		bus:           cfg.Bus,
-		llmClient:     cfg.LLM,
-		model:         cfg.Model,
-		multiSession:  multiSession,
-		tools:         registry,
-		maxIterations: cfg.MaxIterations,
-		memoryWindow:  cfg.MemoryWindow,
-		skills:        skillStore,
-		agents:        agentStore,
-		chatHistory:   chatHistory,
-		cardBuilder:   cardBuilder,
-		workDir:       cfg.WorkDir,
-		promptLoader:  NewPromptLoader(cfg.PromptFile),
-		consolidating: make(map[string]bool),
+		bus:             cfg.Bus,
+		llmClient:       cfg.LLM,
+		model:           cfg.Model,
+		multiSession:    multiSession,
+		tools:           registry,
+		maxIterations:   cfg.MaxIterations,
+		maxConcurrency:  cfg.MaxConcurrency,
+		memoryWindow:    cfg.MemoryWindow,
+		skills:          skillStore,
+		agents:          agentStore,
+		chatHistory:     chatHistory,
+		cardBuilder:     cardBuilder,
+		workDir:         cfg.WorkDir,
+		promptLoader:    NewPromptLoader(cfg.PromptFile),
+		sandboxMode:     sandboxMode,
+		globalSkillDirs: globalSkillDirs,
+		agentsDir:       agentsDir,
+		consolidating:   make(map[string]bool),
 	}
 
 	// 初始化 Cron 服务和调度器
@@ -386,44 +403,96 @@ func (a *Agent) sendAck(channel, chatID string) {
 	}
 }
 
-// Run 启动 Agent 循环，持续消费入站消息
+// Run 启动 Agent 循环，持续消费入站消息。
+// 消息按 chat (channel:chatID) 分组，同一 chat 内顺序处理，不同 chat 并行处理。
+// 全局并发数由 AGENT_MAX_CONCURRENCY 控制（默认 3），避免 LLM 并发过高。
 func (a *Agent) Run(ctx context.Context) error {
-	log.Info("Agent loop started")
+	log.WithField("max_concurrency", a.maxConcurrency).Info("Agent loop started")
 
-	// 启动后台清理协程（清理不活跃的 MCP 连接和会话缓存）
 	a.multiSession.StartCleanupRoutine()
-
-	// 启动 Cron 调度器，设置消息注入函数
-	// 延迟启动，等待 tool index 索引完成（异步索引延迟 2 秒）
 	a.cronSch.SetInjectFunc(a.injectInbound)
 	a.cronSch.StartDelayed(3 * time.Second)
 
 	defer func() {
-		// 停止 Cron 调度器
 		a.cronSch.Stop()
-		// 清理所有会话的 MCP 连接
 		a.multiSession.StopCleanupRoutine()
 	}()
+
+	sem := make(chan struct{}, a.maxConcurrency)
+
+	var mu sync.Mutex
+	chatQueues := make(map[string]chan bus.InboundMessage)
+	var wg sync.WaitGroup
+
+	getOrCreateQueue := func(key string) chan bus.InboundMessage {
+		mu.Lock()
+		defer mu.Unlock()
+		if q, ok := chatQueues[key]; ok {
+			return q
+		}
+		q := make(chan bus.InboundMessage, 32)
+		chatQueues[key] = q
+		wg.Go(func() {
+			a.chatWorker(ctx, key, q, sem)
+			mu.Lock()
+			delete(chatQueues, key)
+			mu.Unlock()
+		})
+		return q
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("Agent loop stopping, draining chat workers...")
+			mu.Lock()
+			for _, q := range chatQueues {
+				close(q)
+			}
+			mu.Unlock()
+			wg.Wait()
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
-			response, err := a.processMessage(ctx, msg)
-			if err != nil {
-				log.WithError(err).Error("Error processing message")
-				a.bus.Outbound <- bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: fmt.Sprintf("处理消息时发生错误: %v", err),
-				}
-				continue
+			key := msg.Channel + ":" + msg.ChatID
+			q := getOrCreateQueue(key)
+			select {
+			case q <- msg:
+			default:
+				log.WithField("chat", key).Warn("Chat queue full, dropping message")
 			}
-			if response != nil {
-				a.bus.Outbound <- *response
+		}
+	}
+}
+
+// chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
+// 通过全局 sem 控制并发：获取信号量后才开始处理，处理完释放。
+func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, sem chan struct{}) {
+	for msg := range ch {
+		if ctx.Err() != nil {
+			return
+		}
+		// 获取全局并发槽位
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+
+		response, err := a.processMessage(ctx, msg)
+		<-sem // 释放槽位
+
+		if err != nil {
+			log.WithError(err).WithField("chat", chatKey).Error("Error processing message")
+			a.bus.Outbound <- bus.OutboundMessage{
+				Channel: msg.Channel,
+				ChatID:  msg.ChatID,
+				Content: fmt.Sprintf("处理消息时发生错误: %v", err),
 			}
+			continue
+		}
+		if response != nil {
+			a.bus.Outbound <- *response
 		}
 	}
 }
@@ -601,7 +670,11 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}
 
 	// 构建 cron 专用消息（无历史上下文）
-	messages := BuildCronMessages(msg.Content, workspaceRoot)
+	cronWorkDir := workspaceRoot
+	if a.sandboxMode == "docker" {
+		cronWorkDir = "/workspace"
+	}
+	messages := BuildCronMessages(msg.Content, cronWorkDir)
 
 	// 运行 Agent 循环（传入创建者 senderID 而非空值）
 	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false)
@@ -651,7 +724,12 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	mem := tenantSession.Memory()
-	return BuildMessages(history, msg.Content, msg.Channel, mem, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+
+	promptWorkDir := a.workDir
+	if a.sandboxMode == "docker" {
+		promptWorkDir = "/workspace"
+	}
+	return BuildMessages(history, msg.Content, msg.Channel, mem, promptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -799,7 +877,11 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
 	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
 	memory := tenantSession.Memory()
-	messages := BuildMessages(history, summary, msg.Channel, memory, a.workDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	cardPromptWorkDir := a.workDir
+	if a.sandboxMode == "docker" {
+		cardPromptWorkDir = "/workspace"
+	}
+	messages := BuildMessages(history, summary, msg.Channel, memory, cardPromptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
@@ -1214,7 +1296,9 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 		WorkingDir:          a.workDir,
 		WorkspaceRoot:       tools.UserWorkspaceRoot(a.workDir, senderID),
 		SandboxWorkDir:      "/workspace",
-		ReadOnlyRoots:       resolveGlobalSkillsDirs(a.workDir, filepath.Join(a.workDir, ".xbot", "skills")),
+		ReadOnlyRoots:       a.globalSkillDirs,
+		SkillsDirs:          a.globalSkillDirs,
+		AgentsDir:           a.agentsDir,
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
 		SandboxEnabled:      true,

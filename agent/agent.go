@@ -175,8 +175,9 @@ type Agent struct {
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
 
-	// User LLM config service
+	// User LLM config service and factory
 	llmConfigSvc *sqlite.UserLLMConfigService
+	llmFactory   *LLMFactory
 
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
@@ -362,6 +363,7 @@ func New(cfg Config) *Agent {
 
 	// Initialize UserLLMConfigService
 	agent.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
+	agent.llmFactory = NewLLMFactory(agent.llmConfigSvc, cfg.LLM, cfg.Model)
 
 	return agent
 }
@@ -1024,6 +1026,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		_ = a.sendMessage(channel, chatID, buf.String())
 	}
 
+	// 获取用户特定的 LLM 客户端
+	llmClient, model := a.llmFactory.GetLLM(senderID)
+	if model == "" {
+		model = a.model
+	}
+
 	// 推进 round 计数，自动清理长期未使用的工具激活
 	sessionKey := channel + ":" + chatID
 	a.tools.TickSession(sessionKey)
@@ -1035,7 +1043,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
 		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
-		response, err := a.llmClient.Generate(ctx, a.model, messages, toolDefs)
+		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
 		}

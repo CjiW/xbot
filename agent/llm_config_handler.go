@@ -81,6 +81,9 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		}, nil
 	}
 
+	// Invalidate cached LLM client
+	a.llmFactory.Invalidate(msg.SenderID)
+
 	// Mask API key for display
 	maskedKey := maskAPIKey(cfg.APIKey)
 

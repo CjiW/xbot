@@ -51,9 +51,6 @@ func isRetryableError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "context deadline exceeded") {
-		return false
-	}
 	// 网络层错误可重试
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -86,7 +83,6 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 				"error":   err.Error(),
 			}).Warn("[LLM] " + label)
 		}),
-		retry.LastErrorOnly(true),
 	}
 }
 

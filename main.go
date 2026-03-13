@@ -287,7 +287,7 @@ func main() {
 	log.Info("xbot stopped")
 }
 
-// createLLM 根据配置创建 LLM 客户端（带重试和指数退避）
+// createLLM 根据配置创建 LLM 客户端（带重试、指数退避和随机抖动）
 func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
 	retryCfg := llm.DefaultRetryConfig()
 

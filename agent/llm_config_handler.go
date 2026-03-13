@@ -9,8 +9,30 @@ import (
 	"xbot/storage/sqlite"
 )
 
+const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>]
+
+参数说明:
+  provider    - LLM 提供商: codebuddy 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
+  base_url    - API 基础地址
+  api_key     - API 密钥
+  model       - 模型名称（可选）
+
+CodeBuddy 额外参数:
+  user_id       - 用户 ID
+  enterprise_id - 企业 ID
+  domain        - 域名
+
+示例:
+  # OpenAI 格式（适用于 OpenAI、DeepSeek、SiliconFlow 等）
+  /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4
+  /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-chat
+  
+  # CodeBuddy（专有 API）
+  /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
+
+注意: API Key 会被加密存储，查询时只显示前4位。`
+
 // handleSetLLM handles /set-llm command to set user's LLM configuration
-// Usage: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [user_id=<id>] [enterprise_id=<id>] [domain=<domain>]
 func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	// Parse command arguments
 	trimmed := strings.TrimSpace(msg.Content)
@@ -20,14 +42,7 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>]
-
-示例:
-  /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4
-  /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-chat
-  /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
-
-注意: API Key 会被加密存储，查询时只显示前4位。`,
+			Content: setLLMUsage,
 		}, nil
 	}
 
@@ -37,9 +52,11 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	}
 
 	parts := strings.Fields(args)
+	parseErrors := false
 	for _, part := range parts {
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
+			parseErrors = true
 			continue
 		}
 		key := strings.ToLower(kv[0])
@@ -68,8 +85,14 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "错误: 必须提供 provider, base_url 和 api_key 参数。",
+			Content: fmt.Sprintf("错误: 必须提供 provider, base_url 和 api_key 参数。\n\n%s", setLLMUsage),
 		}, nil
+	}
+
+	// Warn about parse errors
+	var warning string
+	if parseErrors {
+		warning = "\n⚠️ 注意: 部分参数格式不正确，已被忽略。"
 	}
 
 	// Save configuration
@@ -90,8 +113,8 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s",
-			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model),
+		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s%s",
+			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model, warning),
 	}, nil
 }
 

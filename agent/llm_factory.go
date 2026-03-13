@@ -65,26 +65,14 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string) {
 
 // createClient 根据配置创建 LLM 客户端
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
-	switch cfg.Provider {
-	case "openai", "deepseek", "siliconflow", "anthropic":
-		// 这些提供商都使用 OpenAI 兼容 API
-		model := cfg.Model
-		if model == "" {
-			model = f.defaultModel
-		}
-		client := llm.NewOpenAILLM(llm.OpenAIConfig{
-			BaseURL:      cfg.BaseURL,
-			APIKey:       cfg.APIKey,
-			DefaultModel: model,
-		})
-		return client, model
+	model := cfg.Model
+	if model == "" {
+		model = f.defaultModel
+	}
 
+	switch cfg.Provider {
 	case "codebuddy":
 		// CodeBuddy 使用专有 API
-		model := cfg.Model
-		if model == "" {
-			model = f.defaultModel
-		}
 		client := llm.NewCodeBuddyLLM(llm.CodeBuddyConfig{
 			BaseURL:      cfg.BaseURL,
 			Token:        cfg.APIKey,
@@ -96,8 +84,13 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 		return client, model
 
 	default:
-		// 未知 provider，使用默认客户端
-		return nil, ""
+		// 其他所有 provider（openai, deepseek, siliconflow 等）都使用 OpenAI 兼容 API
+		client := llm.NewOpenAILLM(llm.OpenAIConfig{
+			BaseURL:      cfg.BaseURL,
+			APIKey:       cfg.APIKey,
+			DefaultModel: model,
+		})
+		return client, model
 	}
 }
 

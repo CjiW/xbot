@@ -24,6 +24,7 @@ type OAuthConfig struct {
 type SandboxConfig struct {
 	Mode        string // 沙箱模式: "none", "docker"
 	DockerImage string // Docker 镜像（如 "ubuntu:22.04"）
+	HostWorkDir string // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -184,6 +185,7 @@ func Load() *Config {
 		Sandbox: SandboxConfig{
 			Mode:        getEnvOrDefault("SANDBOX_MODE", "docker"),
 			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
+			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
 		},
 	}
 }

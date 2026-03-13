@@ -461,7 +461,7 @@ func (s *dockerSandbox) autoDetectHostPath(containerPath string) string {
 
 	// Inspect all containers at once for efficiency
 	inspectArgs := append([]string{"inspect", "-f",
-		`{{.Name}} {{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}` + "\n" + `{{end}}{{end}}`},
+		`{{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}` + "\n" + `{{end}}{{end}}`},
 		ids...)
 	inspectCmd := exec.Command("docker", inspectArgs...)
 	inspectOutput, err := inspectCmd.Output()

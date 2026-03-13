@@ -124,3 +124,151 @@ new_string: // User LLM config service and factory
 **分析**: 这个错误是 sed 命令的语法问题。old_string 中包含换行符，而 sed 默认按行处理，无法正确匹配跨行内容。Edit 工具的实现可能需要改进以支持多行替换。
 
 **解决方案**: 使用 Shell 直接编辑文件。
+## Edit 工具 Bug 分析
+
+### 根本原因
+`tools/edit.go` 的 `sandboxReplace` 函数使用 `sed` 命令实现替换：
+```go
+cmd = fmt.Sprintf("sed -i 's/%s/%s/' '%s'", escapedOld, escapedNew, path)
+```
+
+**问题 1: sed 不支持多行匹配**
+- sed 默认按行处理，无法匹配包含换行符的 `oldStr`
+- 当 `oldStr` 包含 `
+` 时，sed 会报错 `unknown option to 's'`
+
+**问题 2: 分隔符冲突**
+- 使用 `/` 作为 sed 分隔符
+- 如果 `oldStr` 或 `newStr` 包含 `/`，sed 会解析错误
+
+**问题 3: 转义不完整**
+- 只转义了单引号 `'` -> `'\''`
+- 未转义 sed 特殊字符：`/`、`&`、`\` 等
+
+### 复现测试
+### 复现测试结果（2026-03-13）
+
+**测试环境**: Docker 沙箱
+
+| 测试项 | 结果 | 错误信息 |
+|--------|------|----------|
+| 多行替换 | ❌ 失败 | `sed: -e expression #1, char 7: unterminated 's' command` |
+| 包含 `/` 的内容 | ❌ 失败 | `sed: -e expression #1, char 11: unknown option to 's'` |
+| 使用 `#` 分隔符 | ✅ 成功 | - |
+| awk 多行处理 | ✅ 成功 | - |
+
+### 修复方案
+
+**方案 A（推荐）: 读取文件 → Go 中替换 → 写回**
+
+修改 `sandboxReplace` 函数：
+1. 使用 `cat` 读取文件内容
+2. 在 Go 代码中使用 `strings.Replace` 处理（天然支持多行和特殊字符）
+3. 使用 `printf` 写回文件
+
+优点：
+- 不依赖额外工具
+- 复用已有逻辑（`doReplace` 函数）
+- 完全解决多行和特殊字符问题
+
+**方案 B: 使用 awk**
+
+用 awk 替代 sed，可以处理多行但语法复杂。
+
+**方案 C: 安装 Python**
+
+使用 Python 进行文本处理，最灵活但增加依赖。
+
+### 实现代码（方案 A）
+
+```go
+func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
+    // 读取文件内容
+    readCmd := fmt.Sprintf("cat '%s'", path)
+    content, err := RunInSandboxWithShell(ctx, readCmd)
+    if err != nil {
+        return nil, fmt.Errorf("failed to read file: %v", err)
+    }
+
+    // 检查要替换的文本是否存在
+    if !strings.Contains(content, oldStr) {
+        return nil, fmt.Errorf("text not found: %q", oldStr)
+    }
+
+    // 在 Go 中进行替换（天然支持多行和特殊字符）
+    var newContent string
+    if replaceAll {
+        newContent = strings.ReplaceAll(content, oldStr, newStr)
+    } else {
+        newContent = strings.Replace(content, oldStr, newStr, 1)
+    }
+
+    // 写回文件
+    escapedContent := strings.ReplaceAll(newContent, "'", "'\''")
+    writeCmd := fmt.Sprintf("printf '%%s' '%s' > '%s'", escapedContent, path)
+    _, err = RunInSandboxWithShell(ctx, writeCmd)
+    if err != nil {
+        return nil, fmt.Errorf("failed to write file: %v", err)
+    }
+
+    summary := fmt.Sprintf("Successfully replaced in %s", path)
+    diff := generateUnifiedDiff(content, newContent, path)
+    return &ToolResult{Summary: summary, Detail: diff}, nil
+}
+```
+
+### 需要修复的文件
+
+- `tools/edit.go`: `sandboxReplace` 函数
+- `tools/edit.go`: `sandboxRegexReplace` 函数（可能也有类似问题）
+
+---
+
+## 修复总结（2026-03-14 00:15）
+
+### 问题根因
+`tools/edit.go` 的 `sandboxReplace` 函数使用 `sed` 命令实现文本替换，存在以下问题：
+
+1. **sed 不支持多行匹配** - 当 `old_string` 包含 `\n` 时直接报错
+2. **分隔符冲突** - 内容包含 `/` 时 sed 解析失败
+3. **转义不完整** - 只转义了单引号，未处理 `&`、`\` 等 sed 特殊字符
+
+### 修复方案
+**采用方案 A**：读取文件 → Go 中替换 → 写回
+
+修改后的 `sandboxReplace` 函数：
+```go
+func (t *EditTool) sandboxReplace(...) (*ToolResult, error) {
+    // 1. 读取文件内容
+    content, err := RunInSandboxWithShell(ctx, "cat '"+path+"'")
+    
+    // 2. 在 Go 中进行替换（天然支持多行和特殊字符）
+    newContent := strings.Replace(content, oldStr, newStr, 1)
+    
+    // 3. 使用 heredoc 写回文件
+    writeCmd := fmt.Sprintf("cat > '%s' << 'XBOT_EOF'\n%s\nXBOT_EOF", path, newContent)
+    _, err = RunInSandboxWithShell(ctx, writeCmd)
+}
+```
+
+### 测试结果
+所有测试通过 ✅
+
+```
+=== RUN   TestSandboxReplaceMultiline
+    edit_test.go:26: ✅ 多行替换成功: "replaced\nline3"
+=== RUN   TestSandboxReplaceWithSlash
+    edit_test.go:43: ✅ 包含 / 的替换成功: "replaced\nanother/line"
+=== RUN   TestSandboxReplaceWithSpecialChars
+    ✅ ampersand, backslash, dollar, multiline_with_special 全部通过
+=== RUN   TestSandboxReplaceAll
+    edit_test.go:108: ✅ 全部替换成功
+```
+
+### 文件变更
+- `tools/edit.go` - 修复 `sandboxReplace` 函数
+- `tools/edit_test.go` - 新增单元测试
+- `go.mod` - 修复 go 版本格式
+
+### 提交记录
+修复代码已就绪，待创建 PR 提交。

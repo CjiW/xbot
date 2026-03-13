@@ -63,8 +63,13 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string) {
 	return client, model
 }
 
-// createClient 根据配置创建 LLM 客户端
+// createClient 根据配置创建 LLM 客户端，配置无效时返回 nil
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
+	// 检查必要字段
+	if cfg.BaseURL == "" || cfg.APIKey == "" {
+		return nil, ""
+	}
+
 	model := cfg.Model
 	if model == "" {
 		model = f.defaultModel

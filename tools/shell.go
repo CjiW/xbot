@@ -162,23 +162,26 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 // persistEnvFromCommand 从命令中提取 export 语句并持久化到 ~/.xbot_env
 func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) bool {
-	// 检测是否包含 export 命令
+	// 检测是否包含 export 命令（快速检查）
 	if !strings.Contains(command, "export") {
 		return false
 	}
 
-	// 提取 export 语句
-	exportPattern := regexp.MustCompile(`export\s+([A-Za-z_][A-Za-z0-9_]*=.*)`)
+	// 提取 export 后面的所有 KEY=VALUE 对
+	// 先匹配整个 export 语句，再解析其中的 KEY=VALUE
+	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)
 	matches := exportPattern.FindAllStringSubmatch(command, -1)
 	if len(matches) == 0 {
 		return false
 	}
 
-	// 构建 export 语句
+	// 解析所有的 KEY=VALUE 对
 	var exports []string
+	kvPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*=\S+)`)
 	for _, match := range matches {
 		if len(match) > 1 {
-			exports = append(exports, match[1])
+			kvMatches := kvPattern.FindAllString(match[1], -1)
+			exports = append(exports, kvMatches...)
 		}
 	}
 

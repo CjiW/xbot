@@ -175,6 +175,9 @@ type Agent struct {
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
 
+	// User LLM config service
+	llmConfigSvc *sqlite.UserLLMConfigService
+
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
@@ -356,6 +359,9 @@ func New(cfg Config) *Agent {
 
 	agent.cronSvc = cronSvc
 	agent.cronSch = cronSch
+
+	// Initialize UserLLMConfigService
+	agent.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
 
 	return agent
 }
@@ -553,11 +559,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助",
+			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助\n/set-llm — 设置自定义 LLM API\n/llm — 查看当前 LLM 配置",
 		}, nil
 	}
 	if strings.HasPrefix(cmd, "/prompt") {
 		return a.handlePromptQuery(ctx, msg, tenantSession)
+	}
+	if strings.HasPrefix(cmd, "/set-llm") {
+		return a.handleSetLLM(ctx, msg)
+	}
+	if cmd == "/llm" {
+		return a.handleGetLLM(ctx, msg)
 	}
 
 	// 处理卡片响应（按钮点击、表单提交）

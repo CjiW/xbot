@@ -1,6 +1,8 @@
 module xbot
 
-go 1.25.3
+go 1.24.0
+
+toolchain go1.24.2
 
 require (
 	github.com/google/uuid v1.6.0
@@ -10,6 +12,7 @@ require (
 )
 
 require (
+	github.com/avast/retry-go/v5 v5.0.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/modelcontextprotocol/go-sdk v1.4.0
@@ -19,7 +22,6 @@ require (
 )
 
 require (
-	github.com/avast/retry-go/v5 v5.0.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect

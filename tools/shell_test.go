@@ -74,7 +74,7 @@ func TestEnvMergeDeduplication(t *testing.T) {
 	// 模拟 persistEnvFromCommand 中的去重逻辑
 	mergeEnv := func(existing string, newExports []string) []string {
 		envMap := make(map[string]string)
-		
+
 		// 解析现有环境变量
 		for _, line := range strings.Split(existing, "\n") {
 			line = strings.TrimSpace(line)

@@ -287,27 +287,32 @@ func main() {
 	log.Info("xbot stopped")
 }
 
-// createLLM 根据配置创建 LLM 客户端
+// createLLM 根据配置创建 LLM 客户端（带重试、指数退避和随机抖动）
 func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
+	retryCfg := llm.DefaultRetryConfig()
+
+	var inner llm.LLM
 	switch cfg.Provider {
 	case "openai":
-		return llm.NewOpenAILLM(llm.OpenAIConfig{
+		inner = llm.NewOpenAILLM(llm.OpenAIConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
-		}), nil
+		})
 	case "codebuddy":
-		return llm.NewCodeBuddyLLM(llm.CodeBuddyConfig{
+		inner = llm.NewCodeBuddyLLM(llm.CodeBuddyConfig{
 			BaseURL:      cfg.BaseURL,
 			Token:        cfg.APIKey,
 			UserID:       cfg.UserID,
 			EnterpriseID: cfg.EnterpriseID,
 			Domain:       cfg.Domain,
 			DefaultModel: cfg.Model,
-		}), nil
+		})
 	default:
 		return nil, fmt.Errorf("unknown LLM provider: %s", cfg.Provider)
 	}
+
+	return llm.NewRetryLLM(inner, retryCfg), nil
 }
 
 // setupLogger 配置日志

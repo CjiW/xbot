@@ -175,6 +175,10 @@ type Agent struct {
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
 
+	// User LLM config service and factory
+	llmConfigSvc *sqlite.UserLLMConfigService
+	llmFactory   *LLMFactory
+
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
@@ -356,6 +360,10 @@ func New(cfg Config) *Agent {
 
 	agent.cronSvc = cronSvc
 	agent.cronSch = cronSch
+
+	// Initialize UserLLMConfigService
+	agent.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
+	agent.llmFactory = NewLLMFactory(agent.llmConfigSvc, cfg.LLM, cfg.Model)
 
 	return agent
 }
@@ -553,11 +561,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助",
+			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助\n/set-llm — 设置自定义 LLM API\n/llm — 查看当前 LLM 配置",
 		}, nil
 	}
 	if strings.HasPrefix(cmd, "/prompt") {
 		return a.handlePromptQuery(ctx, msg, tenantSession)
+	}
+	if strings.HasPrefix(cmd, "/set-llm") {
+		return a.handleSetLLM(ctx, msg)
+	}
+	if cmd == "/llm" {
+		return a.handleGetLLM(ctx, msg)
 	}
 
 	// 处理卡片响应（按钮点击、表单提交）
@@ -1012,6 +1026,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		_ = a.sendMessage(channel, chatID, buf.String())
 	}
 
+	// 获取用户特定的 LLM 客户端
+	llmClient, model := a.llmFactory.GetLLM(senderID)
+	if model == "" {
+		model = a.model
+	}
+
 	// 推进 round 计数，自动清理长期未使用的工具激活
 	sessionKey := channel + ":" + chatID
 	a.tools.TickSession(sessionKey)
@@ -1023,7 +1043,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
 		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
-		response, err := a.llmClient.Generate(ctx, a.model, messages, toolDefs)
+		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
 		}

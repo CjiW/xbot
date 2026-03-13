@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -188,7 +188,20 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (5);
+INSERT INTO schema_version (version) VALUES (6);
+
+CREATE TABLE user_llm_configs (
+    sender_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    model TEXT,
+    user_id TEXT,
+    enterprise_id TEXT,
+    domain TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE cron_jobs (
     id TEXT PRIMARY KEY,
@@ -326,6 +339,29 @@ UPDATE schema_version SET version = 4;
 		if from < 5 {
 			log.Info("Database migrated to v5")
 		}
+	}
+
+	if from < 6 {
+		migration := `
+CREATE TABLE IF NOT EXISTS user_llm_configs (
+    sender_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    model TEXT,
+    user_id TEXT,
+    enterprise_id TEXT,
+    domain TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+UPDATE schema_version SET version = 6;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v5->v6: %w", err)
+		}
+		log.Info("Database migrated to v6 (added user_llm_configs)")
 	}
 
 	return nil

@@ -150,7 +150,7 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 }
 
 func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
-	// 先读取文件内容，确认oldStr存在
+	// 读取文件内容
 	readCmd := fmt.Sprintf("cat '%s'", path)
 	content, err := RunInSandboxWithShell(ctx, readCmd)
 	if err != nil {
@@ -162,26 +162,26 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 		return nil, fmt.Errorf("text not found: %q", oldStr)
 	}
 
-	// 使用 sed 替换
-	var cmd string
+	// 在 Go 中进行替换（天然支持多行和特殊字符）
+	var newContent string
+	count := strings.Count(content, oldStr)
 	if replaceAll {
-		escapedOld := strings.ReplaceAll(oldStr, "'", "'\\''")
-		escapedNew := strings.ReplaceAll(newStr, "'", "'\\''")
-		cmd = fmt.Sprintf("sed -i 's/%s/%s/g' '%s'", escapedOld, escapedNew, path)
+		newContent = strings.ReplaceAll(content, oldStr, newStr)
 	} else {
-		escapedOld := strings.ReplaceAll(oldStr, "'", "'\\''")
-		escapedNew := strings.ReplaceAll(newStr, "'", "'\\''")
-		cmd = fmt.Sprintf("sed -i 's/%s/%s/' '%s'", escapedOld, escapedNew, path)
+		newContent = strings.Replace(content, oldStr, newStr, 1)
 	}
 
-	_, err = RunInSandboxWithShell(ctx, cmd)
+	// 写回文件（使用 heredoc 避免转义问题）
+	writeCmd := fmt.Sprintf("cat > '%s' << 'XBOT_EOF'\n%s\nXBOT_EOF", path, newContent)
+	_, err = RunInSandboxWithShell(ctx, writeCmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to replace text: %v", err)
+		return nil, fmt.Errorf("failed to write file: %v", err)
 	}
 
-	// 读取修改后的内容并生成 diff
-	newContent, _ := RunInSandboxWithShell(ctx, readCmd)
-	summary := fmt.Sprintf("Successfully replaced in %s", path)
+	summary := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, path)
+	if count > 1 && !replaceAll {
+		summary = fmt.Sprintf("Replaced 1 of %d occurrences. Use replace_all=true to replace all.", count)
+	}
 	diff := generateUnifiedDiff(content, newContent, path)
 	return &ToolResult{Summary: summary, Detail: diff}, nil
 }

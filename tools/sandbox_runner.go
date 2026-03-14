@@ -71,6 +71,7 @@ type dockerSandbox struct {
 type dockerContainer struct {
 	name    string
 	started bool
+	shell   string // 用户默认 shell（从容器内 /etc/passwd 获取）
 }
 
 func (s *dockerSandbox) Name() string { return "docker" }
@@ -192,7 +193,7 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 	}
 	_ = os.MkdirAll(filepath.Join(ws, ".tmp"), 0o755)
 
-	containerName, err := s.getOrCreateContainer(userID, ws)
+	containerName, shell, err := s.getOrCreateContainer(userID, ws)
 	if err != nil {
 		return "", nil, err
 	}
@@ -207,15 +208,21 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 		dockerArgs = append(dockerArgs, "-e", e)
 	}
 
-	dockerArgs = append(dockerArgs, containerName, command)
-	dockerArgs = append(dockerArgs, args...)
+	// 使用 login shell 执行命令，自动加载环境变量配置文件
+	// shell -l -c "command args..."
+	shellCmd := command
+	if len(args) > 0 {
+		shellCmd = command + " " + strings.Join(args, " ")
+	}
+	dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
 
 	return "docker", dockerArgs, nil
 }
 
 // getOrCreateContainer 获取或创建用户的 Docker 容器
 // 优先使用用户专属镜像（由 docker commit 生成），不存在则用基础镜像
-func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containerName string, err error) {
+// 返回容器名称和检测到的用户默认 shell
+func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containerName, shell string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -224,7 +231,7 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	}
 
 	if c, ok := s.containers[userID]; ok && c.started {
-		return c.name, nil
+		return c.name, c.shell, nil
 	}
 
 	containerName = fmt.Sprintf("xbot-%s", userID)
@@ -234,8 +241,9 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	checkOutput, checkErr := checkCmd.Output()
 	if checkErr == nil && strings.Contains(string(checkOutput), "true") {
 		if s.verifyWorkspaceMount(containerName, workspace) {
-			s.containers[userID] = &dockerContainer{name: containerName, started: true}
-			return containerName, nil
+			shell := s.detectShell(containerName)
+			s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+			return containerName, shell, nil
 		}
 		log.Warnf("Container %s has stale workspace mount, will recreate", containerName)
 		s.commitAndRemove(containerName, userID)
@@ -247,8 +255,9 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 			startCmd := exec.Command("docker", "start", containerName)
 			if _, startErr := startCmd.CombinedOutput(); startErr == nil {
 				log.Infof("Started existing Docker container %s", containerName)
-				s.containers[userID] = &dockerContainer{name: containerName, started: true}
-				return containerName, nil
+				shell := s.detectShell(containerName)
+				s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+				return containerName, shell, nil
 			}
 		}
 		log.Warnf("Container %s has stale workspace mount or failed to start, will recreate", containerName)
@@ -281,13 +290,30 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	runCmd := exec.Command("docker", runArgs...)
 	output, err := runCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to create container: %w, output: %s", err, string(output))
+		return "", "", fmt.Errorf("failed to create container: %w, output: %s", err, string(output))
 	}
 
-	s.containers[userID] = &dockerContainer{name: containerName, started: true}
-	log.Infof("Docker container %s created successfully", containerName)
+	// 检测用户的默认 shell
+	shell = s.detectShell(containerName)
+	s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+	log.Infof("Docker container %s created successfully with shell %s", containerName, shell)
 
-	return containerName, nil
+	return containerName, shell, nil
+}
+
+// detectShell 从容器内的 /etc/passwd 获取用户的默认 shell
+func (s *dockerSandbox) detectShell(containerName string) string {
+	// 获取 root 用户的默认 shell
+	cmd := exec.Command("docker", "exec", containerName,
+		"sh", "-c", "grep '^root:' /etc/passwd | cut -d: -f7")
+	output, err := cmd.Output()
+	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+		log.WithError(err).Warnf("Failed to detect shell for container %s, using /bin/sh", containerName)
+		return "/bin/sh"
+	}
+	shell := strings.TrimSpace(string(output))
+	log.Debugf("Detected shell %s for container %s", shell, containerName)
+	return shell
 }
 
 // toHostPath translates a container-local path to the Docker host path.

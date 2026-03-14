@@ -510,7 +510,7 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&SearchToolsTool{})
 	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
 	r.RegisterCore(&DownloadFileTool{})
-	// 可加载工具：需通过 load_tools 按需激活
-	r.Register(NewWebSearchTool())
+	// WebSearch: always available (requires TAVILY_API_KEY)
+	r.RegisterCore(NewWebSearchTool())
 	return r
 }

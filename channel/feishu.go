@@ -790,6 +790,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		SenderID:   senderID,
 		SenderName: senderName,
 		ChatID:     replyTo,
+		ChatType:   chatType,
 		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
 		Time:       msgTime,
 		Metadata:   metadata,

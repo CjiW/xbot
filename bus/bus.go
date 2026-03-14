@@ -36,6 +36,7 @@ type InboundMessage struct {
 	SenderID   string            // 发送者标识
 	SenderName string            // 发送者姓名（由渠道解析）
 	ChatID     string            // 会话/群组标识
+	ChatType   string            // 会话类型: "p2p" (私聊) / "group" (群聊)
 	Content    string            // 消息文本
 	Media      []string          // 媒体文件路径
 	Metadata   map[string]string // 渠道特定元数据

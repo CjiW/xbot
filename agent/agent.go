@@ -494,27 +494,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// isGroupChat 判断是否为群聊（根据 chatID 是否有群特征）
-// 飞书群聊 ID 通常以 "oc_" 开头，私聊也是，但可以通过检查 senderID 是否与 ChatID 相同来判断不太准确
-// 这里简化处理：群聊中不同用户会发送消息，但我们无法直接从结构判断
-// 为了安全起见，我们不在 worker 创建时固定信号量，而是在每次处理消息时动态选择
+// isGroupChat 判断是否为群聊
+// 使用消息的 ChatType 字段：p2p 为私聊，group 为群聊
 func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
-	// 飞书群聊 ID 通常以 "oc_" 开头，私聊也以 "oc_" 开头
-	// 但群聊的 ChatID 和 SenderID 不同
-	// 简化：检查消息的 metadata 中是否有群聊标识
-	// 这里我们使用启发式方法：如果消息来自群聊，则使用全局信号量
-	// 实际上，我们需要检查是否是私聊
-	// 飞书私聊的 ChatID 格式为 "ou_xxx"，群聊为 "oc_xxx"
-	// 但这个启发式不完全准确，我们采用保守策略：始终使用全局信号量
-	// 除非我们可以明确确定是私聊
-	//
-	// 更准确的方式是检查 ChatID 是否以 "ou_" 开头（私聊）
-	// 但由于我们无法 100% 确定，这里我们默认使用全局信号量
-	// 除非消息来自私聊（可以通过其他元信息判断）
-	//
-	// 为了简化，我们假设：如果 senderID 不为空且可以获取到自定义 LLM，则使用独立信号量
-	// 这在私聊场景下是正确的，群里不会触发独立信号量（因为群里有多人）
-	return strings.HasPrefix(msg.ChatID, "oc_")
+	return msg.ChatType == "group"
 }
 
 // getSemaphoreForMessage 获取消息应该使用的信号量

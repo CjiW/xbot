@@ -1314,9 +1314,48 @@ func (f *FeishuChannel) extractFromLang(langContent map[string]any, messageId st
 					if imageKey, ok := elemMap["image_key"].(string); ok {
 						parts = append(parts, fmt.Sprintf("<image image_key=\"%s\" message_id=\"%s\" />", imageKey, messageId))
 					}
+				case "code_block":
+					// 代码块 - 重点支持
+					language, _ := elemMap["language"].(string)
+					code, _ := elemMap["text"].(string)
+					if code != "" {
+						parts = append(parts, fmt.Sprintf("```%s\n%s\n```", language, code))
+					}
+				case "emotion":
+					// 表情
+					if emojiType, ok := elemMap["emoji_type"].(string); ok {
+						parts = append(parts, fmt.Sprintf("[表情: %s]", emojiType))
+					}
+				case "hr":
+					// 分割线
+					parts = append(parts, "---")
+				case "media":
+					// 视频
+					fileKey, _ := elemMap["file_key"].(string)
+					imageKey, _ := elemMap["image_key"].(string)
+					if fileKey != "" {
+						parts = append(parts, fmt.Sprintf("<video file_key=\"%s\" image_key=\"%s\" message_id=\"%s\" />", fileKey, imageKey, messageId))
+					}
+				case "folder":
+					// 文件夹
+					fileKey, _ := elemMap["file_key"].(string)
+					fileName, _ := elemMap["file_name"].(string)
+					if fileKey != "" {
+						parts = append(parts, fmt.Sprintf("<folder name=\"%s\" file_key=\"%s\" />", fileName, fileKey))
+					}
+				// TODO: 其他不常用类型
+				// case "button": parts = append(parts, "[按钮]")
+				// case "note": parts = append(parts, "[备注]")
+				// case "select_static": parts = append(parts, "[下拉选择]")
+				// case "date_picker": parts = append(parts, "[日期选择]")
+				// case "overflow": parts = append(parts, "[更多选项]")
+				// case "video_chat": parts = append(parts, "[视频通话]")
+				// case "location": parts = append(parts, "[位置]")
 				default:
-					// 其他元素类型可以根据需要添加处理
-					parts = append(parts, fmt.Sprintf("[unsupported element: %s]", tag))
+					// 其他未处理的元素类型，记录但不阻塞
+					if tag != "" {
+						parts = append(parts, fmt.Sprintf("[%s]", tag))
+					}
 				}
 			}
 		}

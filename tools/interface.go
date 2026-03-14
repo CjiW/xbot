@@ -512,5 +512,6 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&DownloadFileTool{})
 	// WebSearch: always available (requires TAVILY_API_KEY)
 	r.RegisterCore(NewWebSearchTool())
+	r.RegisterCore(NewFetchTool())
 	return r
 }

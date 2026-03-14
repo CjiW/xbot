@@ -208,14 +208,21 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 		dockerArgs = append(dockerArgs, "-e", e)
 	}
 
-	// 使用检测到的 shell + login mode 执行命令
-	// - 检测到的 shell：确保 bashrc 等配置文件语法兼容
-	// - -l (login shell)：自动 source /etc/profile, ~/.bashrc 等，加载用户环境配置
+	// 智能选择 shell 执行模式：
+	// - 有环境变量传入（env != nil）：使用 -c，直接执行命令，避免 login shell 覆盖 -e 变量
+	// - 无环境变量传入：使用 -l (login shell)，自动 source /etc/profile, ~/.bashrc 等
+	// 这样 MCP 可以传递私有变量而不被覆盖，同时普通用户能自动加载环境配置
 	shellCmd := command
 	if len(args) > 0 {
 		shellCmd = command + " " + strings.Join(args, " ")
 	}
-	dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
+
+	useLoginShell := len(env) == 0
+	if useLoginShell {
+		dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
+	} else {
+		dockerArgs = append(dockerArgs, containerName, shell, "-c", shellCmd)
+	}
 
 	return "docker", dockerArgs, nil
 }

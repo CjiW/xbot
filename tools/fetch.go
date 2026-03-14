@@ -276,8 +276,7 @@ func (t *FetchTool) truncateByTokens(content string, maxTokens int) (string, int
 	// 添加截断提示
 	var sb strings.Builder
 	sb.WriteString(truncatedContent)
-	sb.WriteString("\n\n---\n\n")
-	sb.WriteString(fmt.Sprintf("*⚠️ 内容已截断（已截取 %d / %d tokens）*", maxTokens, actualTokens))
+	fmt.Fprintf(&sb, "\n\n---\n\n*⚠️ 内容已截断（已截取 %d / %d tokens）*", maxTokens, actualTokens)
 
 	return sb.String(), maxTokens
 }

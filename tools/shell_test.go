@@ -1,17 +1,12 @@
 package tools
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// TestExportPattern 提取 export 语句的正则表达式测试
-func TestExportPattern(t *testing.T) {
-	// 使用与 shell.go 相同的正则表达式
-	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)
-	kvPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*=\S+)`)
-
+// TestParseExportCommand 测试 export 命令解析
+func TestParseExportCommand(t *testing.T) {
 	tests := []struct {
 		name     string
 		command  string
@@ -33,27 +28,35 @@ func TestExportPattern(t *testing.T) {
 			expected: []string{"PATH=/a", "GOPATH=/root/go"},
 		},
 		{
-			name:     "带引号的 export",
-			command:  `export MY_VAR="hello"`,
-			expected: []string{`MY_VAR="hello"`},
+			name:     "带双引号的 export",
+			command:  `export MY_VAR="hello world"`,
+			expected: []string{`MY_VAR="hello world"`},
+		},
+		{
+			name:     "带单引号的 export",
+			command:  `export MY_VAR='hello world'`,
+			expected: []string{`MY_VAR='hello world'`},
 		},
 		{
 			name:     "没有 export 命令",
 			command:  "echo hello",
 			expected: nil,
 		},
+		{
+			name:     "复杂值带冒号",
+			command:  "export PATH=/usr/local/go/bin:$PATH",
+			expected: []string{"PATH=/usr/local/go/bin:$PATH"},
+		},
+		{
+			name:     "混合引号和无引号",
+			command:  `export A=1 B="hello world" C=/simple/path`,
+			expected: []string{"A=1", `B="hello world"`, "C=/simple/path"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matches := exportPattern.FindAllStringSubmatch(tt.command, -1)
-			var results []string
-			for _, match := range matches {
-				if len(match) > 1 {
-					kvMatches := kvPattern.FindAllString(match[1], -1)
-					results = append(results, kvMatches...)
-				}
-			}
+			results := parseExportCommand(tt.command)
 
 			if len(results) != len(tt.expected) {
 				t.Errorf("expected %d matches, got %d: %v", len(tt.expected), len(results), results)
@@ -192,28 +195,9 @@ func TestEnvMergeDeduplication(t *testing.T) {
 
 // TestEnvPersistIntegration 集成测试：模拟完整的 export 命令处理流程
 func TestEnvPersistIntegration(t *testing.T) {
-	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)
-	kvPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*=\S+)`)
-
 	// 模拟完整的处理流程
 	processExportCommand := func(existingEnv string, command string) (string, bool) {
-		if !strings.Contains(command, "export") {
-			return existingEnv, false
-		}
-
-		matches := exportPattern.FindAllStringSubmatch(command, -1)
-		if len(matches) == 0 {
-			return existingEnv, false
-		}
-
-		var exports []string
-		for _, match := range matches {
-			if len(match) > 1 {
-				kvMatches := kvPattern.FindAllString(match[1], -1)
-				exports = append(exports, kvMatches...)
-			}
-		}
-
+		exports := parseExportCommand(command)
 		if len(exports) == 0 {
 			return existingEnv, false
 		}
@@ -266,5 +250,71 @@ func TestEnvPersistIntegration(t *testing.T) {
 	pathCount := strings.Count(env, "PATH=")
 	if pathCount != 1 {
 		t.Errorf("expected 1 PATH entry, got %d: %s", pathCount, env)
+	}
+
+	// 测试引号内空格
+	env = ""
+	env, _ = processExportCommand(env, `export MY_VAR="hello world"`)
+	// 检查完整的值是否存在
+	if !strings.Contains(env, `MY_VAR="hello world"`) {
+		t.Errorf("quoted export failed: %s", env)
+	}
+	// 检查值是否完整（不应该被截断）
+	// 正确的值应该包含 "hello world"，而不是只有 "hello
+	if strings.Count(env, "MY_VAR=") != 1 {
+		t.Errorf("expected 1 MY_VAR entry, got: %s", env)
+	}
+}
+
+// TestParseValue 详细测试 parseValue 函数
+func TestParseValue(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectedValue  string
+		expectedRemain string
+	}{
+		{
+			name:           "无引号简单值",
+			input:          "/usr/bin",
+			expectedValue:  "/usr/bin",
+			expectedRemain: "",
+		},
+		{
+			name:           "无引号带变量",
+			input:          "$PATH:/usr/local/bin",
+			expectedValue:  "$PATH:/usr/local/bin",
+			expectedRemain: "",
+		},
+		{
+			name:           "双引号值",
+			input:          `"hello world" rest`,
+			expectedValue:  `"hello world"`,
+			expectedRemain: " rest",
+		},
+		{
+			name:           "单引号值",
+			input:          `'hello world' rest`,
+			expectedValue:  `'hello world'`,
+			expectedRemain: " rest",
+		},
+		{
+			name:           "值后有空格",
+			input:          "/usr/bin next",
+			expectedValue:  "/usr/bin",
+			expectedRemain: " next",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, remain := parseValue(tt.input)
+			if value != tt.expectedValue {
+				t.Errorf("value: expected %q, got %q", tt.expectedValue, value)
+			}
+			if remain != tt.expectedRemain {
+				t.Errorf("remain: expected %q, got %q", tt.expectedRemain, remain)
+			}
+		})
 	}
 }

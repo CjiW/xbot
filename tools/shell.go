@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 	"xbot/llm"
@@ -167,24 +166,8 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 		return false
 	}
 
-	// 提取 export 后面的所有 KEY=VALUE 对
-	// 先匹配整个 export 语句，再解析其中的 KEY=VALUE
-	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)
-	matches := exportPattern.FindAllStringSubmatch(command, -1)
-	if len(matches) == 0 {
-		return false
-	}
-
-	// 解析所有的 KEY=VALUE 对
-	var exports []string
-	kvPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*=\S+)`)
-	for _, match := range matches {
-		if len(match) > 1 {
-			kvMatches := kvPattern.FindAllString(match[1], -1)
-			exports = append(exports, kvMatches...)
-		}
-	}
-
+	// 解析 export 语句，提取 KEY=VALUE 对
+	exports := parseExportCommand(command)
 	if len(exports) == 0 {
 		return false
 	}
@@ -233,4 +216,149 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	}
 
 	return true
+}
+
+// parseExportCommand 解析 export 命令，提取 KEY=VALUE 对
+// 支持：KEY=value, KEY="value with spaces", KEY='value', KEY=$VAR, KEY=$PATH:/new
+func parseExportCommand(command string) []string {
+	var exports []string
+
+	// 按行处理
+	for _, line := range strings.Split(command, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "export ") {
+			continue
+		}
+
+		// 去掉 export 前缀
+		rest := strings.TrimPrefix(line, "export ")
+		rest = strings.TrimSpace(rest)
+
+		// 解析 KEY=VALUE 对
+		exports = append(exports, parseKeyValuePairs(rest)...)
+	}
+
+	return exports
+}
+
+// parseKeyValuePairs 解析 export 后面的 KEY=VALUE 对
+// 支持：VAR=value VAR="value with spaces" VAR='value' VAR=$VAR
+func parseKeyValuePairs(s string) []string {
+	var result []string
+
+	for len(s) > 0 {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			break
+		}
+
+		// 找 KEY=
+		eqIdx := strings.Index(s, "=")
+		if eqIdx == -1 {
+			break
+		}
+
+		key := s[:eqIdx]
+		// 验证 key 是合法的变量名
+		if !isValidVarName(key) {
+			break
+		}
+
+		s = s[eqIdx+1:]
+
+		// 解析 value
+		value, remaining := parseValue(s)
+
+		result = append(result, key+"="+value)
+		s = remaining
+	}
+
+	return result
+}
+
+// parseValue 解析值部分，返回 (value, remaining)
+func parseValue(s string) (string, string) {
+	if len(s) == 0 {
+		return "", ""
+	}
+
+	// 检查引号开头
+	if s[0] == '"' {
+		// 双引号：找到结束引号（处理转义）
+		for i := 1; i < len(s); i++ {
+			if s[i] == '"' && s[i-1] != '\\' {
+				return s[:i+1], s[i+1:]
+			}
+		}
+		// 没有结束引号，返回到末尾
+		return s, ""
+	}
+
+	if s[0] == '\'' {
+		// 单引号：找到结束引号（不处理转义）
+		end := strings.Index(s[1:], "'")
+		if end == -1 {
+			return s, ""
+		}
+		return s[:end+2], s[end+2:]
+	}
+
+	// 无引号：遇到空格或下一个变量赋值结束
+	// 但要处理 $VAR:/path 这种情况
+	end := 0
+	for end < len(s) {
+		c := s[end]
+		if c == ' ' || c == '\t' {
+			break
+		}
+		// 检查是否是下一个 KEY=VALUE 的开始
+		// 例如：PATH=/a GOPATH=/b 中间有空格
+		// 或者：A=1B=2（没有空格，但 B 是新变量）
+		if c == '=' && end > 0 {
+			// 检查前面是否是合法的变量名
+			potentialKey := ""
+			for j := end - 1; j >= 0; j-- {
+				ch := s[j]
+				if isValidVarNameChar(ch) {
+					potentialKey = string(ch) + potentialKey
+				} else {
+					break
+				}
+			}
+			if isValidVarName(potentialKey) {
+				// 这是下一个 KEY=VALUE，截断
+				break
+			}
+		}
+		end++
+	}
+
+	return s[:end], s[end:]
+}
+
+func isValidVarName(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	if !isAlpha(s[0]) && s[0] != '_' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isValidVarNameChar(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidVarNameChar(c byte) bool {
+	return isAlpha(c) || isDigit(c) || c == '_'
+}
+
+func isAlpha(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
 }

@@ -130,14 +130,14 @@ func formatBangOutput(command, output string, execErr error) string {
 
 	if execErr != nil {
 		if output != "" {
-			buf.WriteString(fmt.Sprintf("```\n%s\n```\n`exit: %s`", output, execErr))
+			fmt.Fprintf(&buf, "```\n%s\n```\n`exit: %s`", output, execErr)
 		} else {
-			buf.WriteString(fmt.Sprintf("`exit: %s`", execErr))
+			fmt.Fprintf(&buf, "`exit: %s`", execErr)
 		}
 	} else if output == "" {
 		buf.WriteString("`OK (no output)`")
 	} else {
-		buf.WriteString(fmt.Sprintf("```\n%s\n```", output))
+		fmt.Fprintf(&buf, "```\n%s\n```", output)
 	}
 
 	return buf.String()

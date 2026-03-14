@@ -18,13 +18,13 @@ func TestIsBangCommand(t *testing.T) {
 		{"!pwd", "pwd", true},
 		{"! echo hello", " echo hello", true},
 		{"!cat /etc/os-release", "cat /etc/os-release", true},
-		{"!", "", false},          // just `!`, no command
-		{"!  ", "", false},        // `!` followed by whitespace only
-		{"hello", "", false},      // normal message
-		{"/version", "", false},   // slash command
-		{"", "", false},           // empty
-		{"  !ls", "ls", true},     // leading whitespace
-		{"!!ls", "!ls", true},     // double bang (passes through, shell handles it)
+		{"!", "", false},        // just `!`, no command
+		{"!  ", "", false},      // `!` followed by whitespace only
+		{"hello", "", false},    // normal message
+		{"/version", "", false}, // slash command
+		{"", "", false},         // empty
+		{"  !ls", "ls", true},   // leading whitespace
+		{"!!ls", "!ls", true},   // double bang (passes through, shell handles it)
 	}
 
 	for _, tt := range tests {

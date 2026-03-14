@@ -60,6 +60,7 @@ func TestDockerSandboxEnvVariables(t *testing.T) {
 	s := newDockerSandbox("node:20-slim")
 
 	env := []string{"MY_VAR=test_value"}
+	// 确保容器已创建（Wrap 会自动 getOrCreateContainer）
 	cmd, args, err := s.Wrap("sh", []string{"-c", "echo $MY_VAR"}, env, ws, "test-env")
 	if err != nil {
 		t.Fatalf("Failed to wrap command: %v", err)
@@ -98,7 +99,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 
 	// 第一轮：创建文件并 Close（触发 commit）
 	s1 := newDockerSandbox("node:20-slim")
-	cmd, args, err := s1.Wrap("sh", []string{"-c", "echo persist > /tmp/testfile"}, nil, ws, userID)
+	cmd, args, err := s1.Wrap("sh", []string{"-c", "echo persist > /workspace/testfile"}, nil, ws, userID)
 	if err != nil {
 		t.Fatalf("Wrap failed: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 
 	// 第二轮：用新 sandbox 实例（模拟重启），应自动使用 committed 镜像
 	s2 := newDockerSandbox("node:20-slim")
-	cmd, args, err = s2.Wrap("cat", []string{"/tmp/testfile"}, nil, ws, userID)
+	cmd, args, err = s2.Wrap("cat", []string{"/workspace/testfile"}, nil, ws, userID)
 	if err != nil {
 		t.Fatalf("Wrap failed: %v", err)
 	}

@@ -208,13 +208,23 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 		dockerArgs = append(dockerArgs, "-e", e)
 	}
 
-	// 使用 login shell 执行命令，自动加载环境变量配置文件
-	// shell -l -c "command args..."
+	// 智能选择 shell 模式：
+	// - 有 env 传入时：用 -c 直接执行，避免 login shell 覆盖 -e 传入的变量
+	// - 无 env 传入时：用 -l (login shell)，自动加载用户的 ~/.bashrc 等配置文件
+	useLoginShell := len(env) == 0
+
 	shellCmd := command
 	if len(args) > 0 {
 		shellCmd = command + " " + strings.Join(args, " ")
 	}
-	dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
+
+	if useLoginShell {
+		// login shell 自动加载 /etc/profile, ~/.bashrc 等
+		dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
+	} else {
+		// 直接执行，-e 传入的环境变量不会被覆盖
+		dockerArgs = append(dockerArgs, containerName, shell, "-c", shellCmd)
+	}
 
 	return "docker", dockerArgs, nil
 }

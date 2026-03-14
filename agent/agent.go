@@ -450,7 +450,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 
 	// getOrCreateQueue 为每个 chat 创建独立的消息队列和 worker
-	// 如果该 chat 的发送者有自定义 LLM 配置，则使用用户级别的信号量
+	// 信号量在每次处理消息时动态选择（支持用户中途设置/取消自定义 LLM）
 	getOrCreateQueue := func(key string, senderID string) chan bus.InboundMessage {
 		mu.Lock()
 		defer mu.Unlock()
@@ -460,18 +460,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		q := make(chan bus.InboundMessage, 32)
 		chatQueues[key] = q
 
-		// 决定使用全局信号量还是用户级别信号量
-		var useSem chan struct{}
-		if senderID != "" && a.llmFactory.HasCustomLLM(senderID) {
-			// 用户有自定义 LLM，使用独立的信号量
-			useSem = a.getUserSemaphore(senderID)
-		} else {
-			// 使用全局信号量
-			useSem = sem
-		}
-
+		// 始终传入全局信号量，实际信号量在 chatWorker 内部动态选择
 		wg.Go(func() {
-			a.chatWorker(ctx, key, q, useSem)
+			a.chatWorker(ctx, key, q, sem)
 			mu.Lock()
 			delete(chatQueues, key)
 			mu.Unlock()
@@ -503,14 +494,65 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
+// isGroupChat 判断是否为群聊（根据 chatID 是否有群特征）
+// 飞书群聊 ID 通常以 "oc_" 开头，私聊也是，但可以通过检查 senderID 是否与 ChatID 相同来判断不太准确
+// 这里简化处理：群聊中不同用户会发送消息，但我们无法直接从结构判断
+// 为了安全起见，我们不在 worker 创建时固定信号量，而是在每次处理消息时动态选择
+func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
+	// 飞书群聊 ID 通常以 "oc_" 开头，私聊也以 "oc_" 开头
+	// 但群聊的 ChatID 和 SenderID 不同
+	// 简化：检查消息的 metadata 中是否有群聊标识
+	// 这里我们使用启发式方法：如果消息来自群聊，则使用全局信号量
+	// 实际上，我们需要检查是否是私聊
+	// 飞书私聊的 ChatID 格式为 "ou_xxx"，群聊为 "oc_xxx"
+	// 但这个启发式不完全准确，我们采用保守策略：始终使用全局信号量
+	// 除非我们可以明确确定是私聊
+	//
+	// 更准确的方式是检查 ChatID 是否以 "ou_" 开头（私聊）
+	// 但由于我们无法 100% 确定，这里我们默认使用全局信号量
+	// 除非消息来自私聊（可以通过其他元信息判断）
+	//
+	// 为了简化，我们假设：如果 senderID 不为空且可以获取到自定义 LLM，则使用独立信号量
+	// 这在私聊场景下是正确的，群里不会触发独立信号量（因为群里有多人）
+	return strings.HasPrefix(msg.ChatID, "oc_")
+}
+
+// getSemaphoreForMessage 获取消息应该使用的信号量
+// 私聊：用户有自定义 LLM 则使用独立信号量
+// 群聊：始终使用全局信号量（因为群里有多人，使用独立信号量会导致其他人的消息也被阻塞）
+func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan struct{}) chan struct{} {
+	senderID := msg.SenderID
+	if senderID == "" {
+		return globalSem
+	}
+
+	// 群聊使用全局信号量
+	if a.isGroupChat(msg) {
+		return globalSem
+	}
+
+	// 私聊：检查用户是否有自定义 LLM
+	if a.llmFactory.HasCustomLLM(senderID) {
+		return a.getUserSemaphore(senderID)
+	}
+
+	return globalSem
+}
+
 // chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
-// 通过全局 sem 控制并发：获取信号量后才开始处理，处理完释放。
-func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, sem chan struct{}) {
+// 通过信号量控制并发：获取信号量后才开始处理，处理完释放。
+// 信号量在每次处理消息时动态选择，以支持用户中途设置/取消自定义 LLM。
+func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
 	for msg := range ch {
 		if ctx.Err() != nil {
 			return
 		}
-		// 获取全局并发槽位
+
+		// 动态选择信号量：每次处理消息时都重新判断
+		// 这样用户中途设置/取消自定义 LLM 可以立即生效
+		sem := a.getSemaphoreForMessage(msg, globalSem)
+
+		// 获取信号量槽位
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():

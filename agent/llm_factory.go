@@ -63,12 +63,22 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string) {
 	return client, model
 }
 
+// hasCustomLLMCache 缓存用户是否有自定义 LLM 配置（避免频繁查数据库）
+// key: senderID, value: true 表示有配置
+var hasCustomLLMCache = make(map[string]bool)
+
 // HasCustomLLM 检查用户是否有自定义 LLM 配置
 func (f *LLMFactory) HasCustomLLM(senderID string) bool {
 	// 先检查缓存
+	if hasCustom, ok := hasCustomLLMCache[senderID]; ok {
+		return hasCustom
+	}
+
+	// 再检查客户端缓存
 	f.mu.RLock()
 	if _, ok := f.clients[senderID]; ok {
 		f.mu.RUnlock()
+		hasCustomLLMCache[senderID] = true
 		return true
 	}
 	f.mu.RUnlock()
@@ -76,9 +86,17 @@ func (f *LLMFactory) HasCustomLLM(senderID string) bool {
 	// 从数据库检查
 	cfg, err := f.configSvc.GetConfig(senderID)
 	if err != nil || cfg == nil {
+		hasCustomLLMCache[senderID] = false
 		return false
 	}
-	return cfg.BaseURL != "" && cfg.APIKey != ""
+	hasCustom := cfg.BaseURL != "" && cfg.APIKey != ""
+	hasCustomLLMCache[senderID] = hasCustom
+	return hasCustom
+}
+
+// InvalidateCustomLLMCache 使指定用户的自定义 LLM 缓存失效
+func (f *LLMFactory) InvalidateCustomLLMCache(senderID string) {
+	delete(hasCustomLLMCache, senderID)
 }
 
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil

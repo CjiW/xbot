@@ -1261,6 +1261,55 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 			messageID = *mid
 		}
 		return fmt.Sprintf(`<image image_key="%s" message_id="%s" />`, imageKey, messageID)
+	case "folder":
+		// 文件夹
+		fileKey, _ := contentJSON["file_key"].(string)
+		fileName, _ := contentJSON["file_name"].(string)
+		return fmt.Sprintf(`<folder name="%s" file_key="%s" />`, fileName, fileKey)
+	case "audio":
+		// 音频
+		fileKey, _ := contentJSON["file_key"].(string)
+		duration, _ := contentJSON["duration"].(float64)
+		messageID := ""
+		if mid := msg.GetMessageId(); mid != nil {
+			messageID = *mid
+		}
+		return fmt.Sprintf(`<audio file_key="%s" duration="%.0f" message_id="%s" />`, fileKey, duration, messageID)
+	case "media":
+		// 视频（带封面）
+		fileKey, _ := contentJSON["file_key"].(string)
+		imageKey, _ := contentJSON["image_key"].(string)
+		fileName, _ := contentJSON["file_name"].(string)
+		duration, _ := contentJSON["duration"].(float64)
+		messageID := ""
+		if mid := msg.GetMessageId(); mid != nil {
+			messageID = *mid
+		}
+		return fmt.Sprintf(`<video name="%s" file_key="%s" image_key="%s" duration="%.0f" message_id="%s" />`, fileName, fileKey, imageKey, duration, messageID)
+	case "sticker":
+		// 表情包
+		fileKey, _ := contentJSON["file_key"].(string)
+		return fmt.Sprintf(`<sticker file_key="%s" />`, fileKey)
+	case "interactive":
+		// 卡片消息 - 解析卡片元素
+		return f.extractInteractiveContent(contentJSON)
+	case "share_chat":
+		// 群名片
+		chatID, _ := contentJSON["chat_id"].(string)
+		return fmt.Sprintf(`[分享群聊: %s]`, chatID)
+	case "share_user":
+		// 个人名片
+		userID, _ := contentJSON["user_id"].(string)
+		return fmt.Sprintf(`[分享用户: %s]`, userID)
+	// TODO: 其他不常用类型
+	// case "hongbao": return "[红包]"
+	// case "system": return "[系统消息]"
+	// case "location": return "[位置]"
+	// case "vote": return "[投票]"
+	// case "task": return "[任务]"
+	// case "share_calendar_event", "calendar", "general_calendar": return "[日程]"
+	// case "video_chat": return "[视频通话]"
+	// case "merge_forward": return "[合并转发]"
 	default:
 		return fmt.Sprintf("[%s]", msgType)
 	}
@@ -1314,12 +1363,143 @@ func (f *FeishuChannel) extractFromLang(langContent map[string]any, messageId st
 					if imageKey, ok := elemMap["image_key"].(string); ok {
 						parts = append(parts, fmt.Sprintf("<image image_key=\"%s\" message_id=\"%s\" />", imageKey, messageId))
 					}
+				case "code_block":
+					// 代码块 - 重点支持
+					language, _ := elemMap["language"].(string)
+					code, _ := elemMap["text"].(string)
+					if code != "" {
+						parts = append(parts, fmt.Sprintf("```%s\n%s\n```", language, code))
+					}
+				case "emotion":
+					// 表情
+					if emojiType, ok := elemMap["emoji_type"].(string); ok {
+						parts = append(parts, fmt.Sprintf("[表情: %s]", emojiType))
+					}
+				case "hr":
+					// 分割线
+					parts = append(parts, "---")
+				case "media":
+					// 视频
+					fileKey, _ := elemMap["file_key"].(string)
+					imageKey, _ := elemMap["image_key"].(string)
+					if fileKey != "" {
+						parts = append(parts, fmt.Sprintf("<video file_key=\"%s\" image_key=\"%s\" message_id=\"%s\" />", fileKey, imageKey, messageId))
+					}
+				case "folder":
+					// 文件夹
+					fileKey, _ := elemMap["file_key"].(string)
+					fileName, _ := elemMap["file_name"].(string)
+					if fileKey != "" {
+						parts = append(parts, fmt.Sprintf("<folder name=\"%s\" file_key=\"%s\" />", fileName, fileKey))
+					}
+				// TODO: 其他不常用类型
+				// case "button": parts = append(parts, "[按钮]")
+				// case "note": parts = append(parts, "[备注]")
+				// case "select_static": parts = append(parts, "[下拉选择]")
+				// case "date_picker": parts = append(parts, "[日期选择]")
+				// case "overflow": parts = append(parts, "[更多选项]")
+				// case "video_chat": parts = append(parts, "[视频通话]")
+				// case "location": parts = append(parts, "[位置]")
 				default:
-					// 其他元素类型可以根据需要添加处理
-					parts = append(parts, fmt.Sprintf("[unsupported element: %s]", tag))
+					// 其他未处理的元素类型，记录但不阻塞
+					if tag != "" {
+						parts = append(parts, fmt.Sprintf("[%s]", tag))
+					}
 				}
 			}
 		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// extractInteractiveContent 解析卡片消息内容（接收到的卡片结构与发送时不一致，仅支持部分元素）
+func (f *FeishuChannel) extractInteractiveContent(contentJSON map[string]any) string {
+	var parts []string
+
+	// 解析标题
+	if title, ok := contentJSON["title"].(string); ok && title != "" {
+		parts = append(parts, "[卡片: "+title+"]")
+	}
+
+	// 解析元素
+	if elements, ok := contentJSON["elements"].([]any); ok {
+		for _, block := range elements {
+			blockElems, ok := block.([]any)
+			if !ok {
+				continue
+			}
+			for _, elem := range blockElems {
+				elemMap, ok := elem.(map[string]any)
+				if !ok {
+					continue
+				}
+				tag, _ := elemMap["tag"].(string)
+				switch tag {
+				case "text":
+					if text, ok := elemMap["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				case "a":
+					if text, ok := elemMap["text"].(string); ok {
+						href, _ := elemMap["href"].(string)
+						parts = append(parts, fmt.Sprintf("%s (%s)", text, href))
+					}
+				case "at":
+					if userID, ok := elemMap["user_id"].(string); ok {
+						parts = append(parts, fmt.Sprintf("@%s", userID))
+					}
+				case "img":
+					if imageKey, ok := elemMap["image_key"].(string); ok {
+						parts = append(parts, fmt.Sprintf("<image image_key=\"%s\" />", imageKey))
+					}
+				case "button":
+					if text, ok := elemMap["text"].(string); ok {
+						btnType, _ := elemMap["type"].(string)
+						parts = append(parts, fmt.Sprintf("[按钮: %s (%s)]", text, btnType))
+					}
+				case "hr":
+					parts = append(parts, "---")
+				case "note":
+					// 备注元素
+					if noteElems, ok := elemMap["elements"].([]any); ok {
+						var noteParts []string
+						for _, ne := range noteElems {
+							if neMap, ok := ne.(map[string]any); ok {
+								if neTag, _ := neMap["tag"].(string); neTag == "img" {
+									if ik, ok := neMap["image_key"].(string); ok {
+										noteParts = append(noteParts, fmt.Sprintf("<image image_key=\"%s\" />", ik))
+									}
+								} else if neText, ok := neMap["text"].(string); ok {
+									noteParts = append(noteParts, neText)
+								}
+							}
+						}
+						if len(noteParts) > 0 {
+							parts = append(parts, "[备注: "+strings.Join(noteParts, " ")+"]")
+						}
+					}
+				case "select_static", "multi_select_static":
+					if placeholder, ok := elemMap["placeholder"].(string); ok {
+						parts = append(parts, fmt.Sprintf("[下拉选择: %s]", placeholder))
+					}
+				case "date_picker":
+					if placeholder, ok := elemMap["placeholder"].(string); ok {
+						parts = append(parts, fmt.Sprintf("[日期选择: %s]", placeholder))
+					}
+				case "overflow":
+					parts = append(parts, "[更多选项]")
+				default:
+					// 未知元素类型，记录但不阻塞
+					if tag != "" {
+						parts = append(parts, fmt.Sprintf("[%s]", tag))
+					}
+				}
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return "[卡片消息]"
 	}
 	return strings.Join(parts, " ")
 }

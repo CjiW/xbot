@@ -1293,6 +1293,23 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 	case "interactive":
 		// 卡片消息 - 解析卡片元素
 		return f.extractInteractiveContent(contentJSON)
+	case "share_chat":
+		// 群名片
+		chatID, _ := contentJSON["chat_id"].(string)
+		return fmt.Sprintf(`[分享群聊: %s]`, chatID)
+	case "share_user":
+		// 个人名片
+		userID, _ := contentJSON["user_id"].(string)
+		return fmt.Sprintf(`[分享用户: %s]`, userID)
+	// TODO: 其他不常用类型
+	// case "hongbao": return "[红包]"
+	// case "system": return "[系统消息]"
+	// case "location": return "[位置]"
+	// case "vote": return "[投票]"
+	// case "task": return "[任务]"
+	// case "share_calendar_event", "calendar", "general_calendar": return "[日程]"
+	// case "video_chat": return "[视频通话]"
+	// case "merge_forward": return "[合并转发]"
 	default:
 		return fmt.Sprintf("[%s]", msgType)
 	}

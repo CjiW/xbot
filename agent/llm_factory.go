@@ -63,6 +63,24 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string) {
 	return client, model
 }
 
+// HasCustomLLM 检查用户是否有自定义 LLM 配置
+func (f *LLMFactory) HasCustomLLM(senderID string) bool {
+	// 先检查缓存
+	f.mu.RLock()
+	if _, ok := f.clients[senderID]; ok {
+		f.mu.RUnlock()
+		return true
+	}
+	f.mu.RUnlock()
+
+	// 从数据库检查
+	cfg, err := f.configSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return false
+	}
+	return cfg.BaseURL != "" && cfg.APIKey != ""
+}
+
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	// 检查必要字段

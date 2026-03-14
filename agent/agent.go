@@ -179,6 +179,10 @@ type Agent struct {
 	llmConfigSvc *sqlite.UserLLMConfigService
 	llmFactory   *LLMFactory
 
+	// 用户级别的信号量：设置了自己的 LLM 配置的用户使用独立信号量
+	// key: senderID, value: 用户独立的信号量（容量为1）
+	userSemaphores sync.Map // map[string]chan struct{}
+
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
@@ -378,6 +382,18 @@ func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
 }
 
+// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户
+// 每个用户有独立的信号量（容量为1），确保该用户的请求串行处理
+func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
+	if val, ok := a.userSemaphores.Load(senderID); ok {
+		return val.(chan struct{})
+	}
+	// 创建新的用户信号量
+	sem := make(chan struct{}, 1)
+	a.userSemaphores.Store(senderID, sem)
+	return sem
+}
+
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
@@ -414,6 +430,7 @@ func (a *Agent) sendAck(channel, chatID string) {
 // Run 启动 Agent 循环，持续消费入站消息。
 // 消息按 chat (channel:chatID) 分组，同一 chat 内顺序处理，不同 chat 并行处理。
 // 全局并发数由 AGENT_MAX_CONCURRENCY 控制（默认 3），避免 LLM 并发过高。
+// 用户设置了自己的 LLM 配置后，该用户的请求使用独立的信号量，不再占用全局资源。
 func (a *Agent) Run(ctx context.Context) error {
 	log.WithField("max_concurrency", a.maxConcurrency).Info("Agent loop started")
 
@@ -432,7 +449,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	chatQueues := make(map[string]chan bus.InboundMessage)
 	var wg sync.WaitGroup
 
-	getOrCreateQueue := func(key string) chan bus.InboundMessage {
+	// getOrCreateQueue 为每个 chat 创建独立的消息队列和 worker
+	// 如果该 chat 的发送者有自定义 LLM 配置，则使用用户级别的信号量
+	getOrCreateQueue := func(key string, senderID string) chan bus.InboundMessage {
 		mu.Lock()
 		defer mu.Unlock()
 		if q, ok := chatQueues[key]; ok {
@@ -440,8 +459,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		q := make(chan bus.InboundMessage, 32)
 		chatQueues[key] = q
+
+		// 决定使用全局信号量还是用户级别信号量
+		var useSem chan struct{}
+		if senderID != "" && a.llmFactory.HasCustomLLM(senderID) {
+			// 用户有自定义 LLM，使用独立的信号量
+			useSem = a.getUserSemaphore(senderID)
+		} else {
+			// 使用全局信号量
+			useSem = sem
+		}
+
 		wg.Go(func() {
-			a.chatWorker(ctx, key, q, sem)
+			a.chatWorker(ctx, key, q, useSem)
 			mu.Lock()
 			delete(chatQueues, key)
 			mu.Unlock()
@@ -463,7 +493,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
 			key := msg.Channel + ":" + msg.ChatID
-			q := getOrCreateQueue(key)
+			q := getOrCreateQueue(key, msg.SenderID)
 			select {
 			case q <- msg:
 			default:

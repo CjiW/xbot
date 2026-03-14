@@ -595,7 +595,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	defs := registry.AsDefinitions()
 
 	// Note: Cron is now registered separately with dependency injection
-	coreExpected := []string{"load_tools", "Shell", "Glob", "Grep", "Read", "Edit", "DownloadFile", "SubAgent"}
+	coreExpected := []string{"load_tools", "Shell", "Glob", "Grep", "Read", "Edit", "DownloadFile", "SubAgent", "WebSearch"}
 	for _, name := range coreExpected {
 		if !hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should always appear in definitions (core tool)", name)
@@ -603,7 +603,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	}
 
 	// Non-core tools should NOT be in AsDefinitions
-	nonCore := []string{"WebSearch"}
+	nonCore := []string{}
 	for _, name := range nonCore {
 		if hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should NOT appear in AsDefinitions (non-core)", name)

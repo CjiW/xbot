@@ -451,7 +451,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// getOrCreateQueue 为每个 chat 创建独立的消息队列和 worker
 	// 信号量在每次处理消息时动态选择（支持用户中途设置/取消自定义 LLM）
-	getOrCreateQueue := func(key string, senderID string) chan bus.InboundMessage {
+	getOrCreateQueue := func(key string) chan bus.InboundMessage {
 		mu.Lock()
 		defer mu.Unlock()
 		if q, ok := chatQueues[key]; ok {
@@ -484,7 +484,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
 			key := msg.Channel + ":" + msg.ChatID
-			q := getOrCreateQueue(key, msg.SenderID)
+			q := getOrCreateQueue(key)
 			select {
 			case q <- msg:
 			default:

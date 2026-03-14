@@ -169,7 +169,7 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 	} else {
 		userMsg = fmt.Sprintf("[%s]\n%s", now, userContent)
 	}
-	userMsg = fmt.Sprintf("%s\n\n[系统引导] 在执行任何操作前，**必须**先用`search_tools`搜索工具库尝试寻找工具。现在时间：%s\n", userMsg, now)
+	userMsg = fmt.Sprintf("%s\n\n[系统引导] 在执行任何操作前，**必须**先用`search_tools`搜索工具库尝试寻找工具。\n- 如果需要浏览网页/搜索实时信息，请使用 `web_search` 工具\n- 如果需要查找或使用 skill，请使用 `Skill` 工具（不是 search_tools）\n- search_tools 仅用于搜索其他工具\n现在时间：%s\n", userMsg, now)
 	messages = append(messages, llm.NewUserMessage(userMsg))
 	return messages
 }

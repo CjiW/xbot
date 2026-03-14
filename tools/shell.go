@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 	"xbot/llm"
@@ -169,22 +168,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 
 	// 提取 export 后面的所有 KEY=VALUE 对
 	// 先匹配整个 export 语句，再解析其中的 KEY=VALUE
-	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)
-	matches := exportPattern.FindAllStringSubmatch(command, -1)
-	if len(matches) == 0 {
-		return false
-	}
-
-	// 解析所有的 KEY=VALUE 对
-	var exports []string
-	kvPattern := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*=\S+)`)
-	for _, match := range matches {
-		if len(match) > 1 {
-			kvMatches := kvPattern.FindAllString(match[1], -1)
-			exports = append(exports, kvMatches...)
-		}
-	}
-
+	exports := parseExportStatements(command)
 	if len(exports) == 0 {
 		return false
 	}

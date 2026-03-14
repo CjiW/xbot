@@ -213,9 +213,16 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 	// - 无 env 传入时：用 -l (login shell)，自动加载用户的 ~/.bashrc 等配置文件
 	useLoginShell := len(env) == 0
 
-	shellCmd := command
-	if len(args) > 0 {
+	// 从 args 中提取实际的命令（处理用户传入 "-c cmd" 的情况）
+	var shellCmd string
+	if len(args) >= 2 && args[0] == "-c" {
+		// 用户已传入 -c，后续内容就是要执行的命令
+		shellCmd = strings.Join(args[1:], " ")
+	} else if len(args) > 0 {
+		// 用户传入其他参数，拼接 command + args
 		shellCmd = command + " " + strings.Join(args, " ")
+	} else {
+		shellCmd = command
 	}
 
 	if useLoginShell {

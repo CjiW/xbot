@@ -45,9 +45,7 @@ func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, err
 }
 
 // RunInSandboxWithShell 在沙箱容器内执行 shell 命令并返回输出
-// 自动 source ~/.xbot_env 以持久化环境变量
+// 使用 login shell 自动加载环境变量配置文件
 func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
-	// 在命令前 source 环境变量文件（如果存在）
-	wrappedCmd := fmt.Sprintf("[ -f ~/.xbot_env ] && . ~/.xbot_env; %s", shellCmd)
-	return RunInSandbox(ctx, "sh", "-c", wrappedCmd)
+	return RunInSandbox(ctx, shellCmd)
 }

@@ -82,9 +82,15 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	// 使用全局沙箱实例
 	sandbox := GetSandbox()
 
-	// 沙箱会自动检测容器内用户的默认 shell，并使用 login shell 执行命令
-	// 例如: bash -l -c "user_command" 或 sh -l -c "user_command"
-	cmdName, cmdArgs, err := sandbox.Wrap(params.Command, nil, nil, workspaceRoot, userID)
+	// 获取容器默认 shell 并使用 login shell 执行命令
+	// 这样可以自动加载 /etc/profile, ~/.bashrc 等配置文件
+	shell, err := sandbox.GetShell(userID, workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shell: %w", err)
+	}
+
+	// 使用 login shell 自动加载环境配置
+	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, workspaceRoot, userID)
 	if err != nil {
 		return nil, err
 	}

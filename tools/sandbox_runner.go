@@ -37,6 +37,8 @@ type Sandbox interface {
 	// Wrap 将命令包装到沙箱执行，返回可直接用于 exec.Command 的 command 与 args
 	// env 参数指定要传递到沙箱的环境变量（格式：KEY=VALUE）
 	Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error)
+	// GetShell 获取用户在沙箱中的默认 shell（如 /bin/bash）
+	GetShell(userID string, workspace string) (string, error)
 	// Name 返回沙箱名称
 	Name() string
 	// Close 关闭并清理沙箱资源
@@ -55,6 +57,11 @@ func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspac
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
 	}
 	return command, args, nil
+}
+
+func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) {
+	// 返回系统默认 shell
+	return "/bin/bash", nil
 }
 
 // dockerSandbox Docker 沙箱实现
@@ -193,7 +200,7 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 	}
 	_ = os.MkdirAll(filepath.Join(ws, ".tmp"), 0o755)
 
-	containerName, shell, err := s.getOrCreateContainer(userID, ws)
+	containerName, _, err := s.getOrCreateContainer(userID, ws)
 	if err != nil {
 		return "", nil, err
 	}
@@ -208,30 +215,14 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 		dockerArgs = append(dockerArgs, "-e", e)
 	}
 
-	// 智能选择 shell 模式：
-	// - 有 env 传入时：用 -c 直接执行，避免 login shell 覆盖 -e 传入的变量
-	// - 无 env 传入时：用 -l (login shell)，自动加载用户的 ~/.bashrc 等配置文件
-	useLoginShell := len(env) == 0
-
-	// 从 args 中提取实际的命令（处理用户传入 "-c cmd" 的情况）
-	var shellCmd string
-	if len(args) >= 2 && args[0] == "-c" {
-		// 用户已传入 -c，后续内容就是要执行的命令
-		shellCmd = strings.Join(args[1:], " ")
-	} else if len(args) > 0 {
-		// 用户传入其他参数，拼接 command + args
-		shellCmd = command + " " + strings.Join(args, " ")
-	} else {
-		shellCmd = command
-	}
-
-	if useLoginShell {
-		// login shell 自动加载 /etc/profile, ~/.bashrc 等
-		dockerArgs = append(dockerArgs, containerName, shell, "-l", "-c", shellCmd)
-	} else {
-		// 直接执行，-e 传入的环境变量不会被覆盖
-		dockerArgs = append(dockerArgs, containerName, shell, "-c", shellCmd)
-	}
+	// 直接透传 command + args，不做 shell 包装
+	// 职责边界：Wrap 只负责将调用方的命令透传给 docker exec
+	// shell 包装（-l -c）由调用方在需要时自行构造，例如：
+	//   - ShellTool: 用 login shell 自动加载 ~/.bashrc
+	//   - RunInSandboxWithShell: 用 login shell
+	//   - 测试: 直接传 command + args，按需自行决定
+	dockerArgs = append(dockerArgs, containerName, command)
+	dockerArgs = append(dockerArgs, args...)
 
 	return "docker", dockerArgs, nil
 }
@@ -316,6 +307,27 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	log.Infof("Docker container %s created successfully with shell %s", containerName, shell)
 
 	return containerName, shell, nil
+}
+
+// GetShell 获取用户在沙箱中的默认 shell（如 /bin/bash）
+// 如果容器不存在会自动创建
+func (s *dockerSandbox) GetShell(userID string, workspace string) (string, error) {
+	ws := workspace
+	if ws == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		ws = cwd
+	}
+	ws, err := filepath.Abs(ws)
+	if err != nil {
+		return "", err
+	}
+
+	// 获取或创建容器，同时获取 shell
+	_, shell, err := s.getOrCreateContainer(userID, ws)
+	return shell, err
 }
 
 // detectShell 从容器内的 /etc/passwd 获取用户的默认 shell

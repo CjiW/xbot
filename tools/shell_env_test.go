@@ -67,9 +67,14 @@ func TestParseExportStatements(t *testing.T) {
 			expected: []string{"A=1"},
 		},
 		{
-			name:     "带转义字符",
+			name:     "带转义字符（双引号）",
 			command:  `export MSG="hello\"world"`,
 			expected: []string{`MSG=hello"world`},
+		},
+		{
+			name:     "单引号内反斜杠不转义",
+			command:  `export MSG='hello\"world'`,
+			expected: []string{`MSG=hello\"world`},
 		},
 		{
 			name:     "GOPATH 设置",
@@ -80,6 +85,47 @@ func TestParseExportStatements(t *testing.T) {
 			name:     "复杂 PATH 设置",
 			command:  "export PATH=/usr/local/go/bin:/root/go/bin:$PATH",
 			expected: []string{"PATH=/usr/local/go/bin:/root/go/bin:$PATH"},
+		},
+		// P2: 边界测试
+		{
+			name:     "空值",
+			command:  "export A=",
+			expected: []string{"A="},
+		},
+		{
+			name:     "值含等号",
+			command:  "export A=foo=bar",
+			expected: []string{"A=foo=bar"},
+		},
+		{
+			name:     "未闭合双引号 - 不应添加变量",
+			command:  `export A="hello world`,
+			expected: nil,
+		},
+		{
+			name:     "未闭合单引号 - 不应添加变量",
+			command:  `export A='hello world`,
+			expected: nil,
+		},
+		{
+			name:     "非法变量名（数字开头）- 不应添加变量",
+			command:  "export 1ABC=val",
+			expected: nil,
+		},
+		{
+			name:     "单引号内反斜杠保持原样",
+			command:  `export A='hello\nworld'`,
+			expected: []string{`A=hello\nworld`},
+		},
+		{
+			name:     "双引号内转义反斜杠",
+			command:  `export A="hello\\nworld"`,
+			expected: []string{`A=hello\nworld`},
+		},
+		{
+			name:     "未闭合引号后无有效变量",
+			command:  `export A=valid B="unclosed`,
+			expected: []string{"A=valid"},
 		},
 	}
 

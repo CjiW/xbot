@@ -58,10 +58,16 @@ func parseExportStatements(command string) []string {
 					break
 				}
 			}
-			
+
 			// 检查是否有有效的变量名和等号
 			if varNameEnd == 0 {
 				// 没有有效的变量名，跳过
+				break
+			}
+			// P0: 变量名不能以数字开头
+			firstChar := command[0]
+			if firstChar >= '0' && firstChar <= '9' {
+				// 非法变量名，跳过
 				break
 			}
 			if varNameEnd >= len(command) {
@@ -78,10 +84,12 @@ func parseExportStatements(command string) []string {
 
 			// 解析值
 			var value strings.Builder
+			quoteClosed := true // P0: 追踪引号是否闭合
 			if len(command) > 0 {
 				quote := byte(0)
 				if command[0] == '"' || command[0] == '\'' {
 					quote = command[0]
+					quoteClosed = false
 					command = command[1:]
 				}
 
@@ -89,8 +97,8 @@ func parseExportStatements(command string) []string {
 					c := command[0]
 					if quote != 0 {
 						// 引号模式
-						if c == '\\' && len(command) > 1 {
-							// 转义字符
+						if c == '\\' && len(command) > 1 && quote == '"' {
+							// P0: 转义字符只在双引号模式下处理
 							command = command[1:]
 							if len(command) > 0 {
 								value.WriteByte(command[0])
@@ -100,6 +108,7 @@ func parseExportStatements(command string) []string {
 						}
 						if c == quote {
 							// 引号结束
+							quoteClosed = true
 							command = command[1:]
 							break
 						}
@@ -116,7 +125,10 @@ func parseExportStatements(command string) []string {
 				}
 			}
 
-			exports = append(exports, varName+"="+value.String())
+			// P0: 只有引号闭合（或没有引号）才添加变量
+			if quoteClosed {
+				exports = append(exports, varName+"="+value.String())
+			}
 		}
 	}
 

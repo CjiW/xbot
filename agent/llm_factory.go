@@ -17,6 +17,10 @@ type LLMFactory struct {
 	mu      sync.RWMutex
 	clients map[string]llm.LLM // senderID -> LLM client
 	models  map[string]string  // senderID -> model name
+
+	// hasCustomLLMCache 缓存用户是否有自定义 LLM 配置（避免频繁查数据库）
+	// 使用 sync.Map 保证并发安全
+	hasCustomLLMCache sync.Map
 }
 
 // NewLLMFactory 创建 LLM 工厂
@@ -27,6 +31,7 @@ func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, d
 		defaultModel: defaultModel,
 		clients:      make(map[string]llm.LLM),
 		models:       make(map[string]string),
+		// hasCustomLLMCache 使用零值 sync.Map，无需初始化
 	}
 }
 
@@ -61,6 +66,38 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string) {
 	f.mu.Unlock()
 
 	return client, model
+}
+
+// HasCustomLLM 检查用户是否有自定义 LLM 配置
+func (f *LLMFactory) HasCustomLLM(senderID string) bool {
+	// 先检查缓存
+	if val, ok := f.hasCustomLLMCache.Load(senderID); ok {
+		return val.(bool)
+	}
+
+	// 再检查客户端缓存
+	f.mu.RLock()
+	if _, ok := f.clients[senderID]; ok {
+		f.mu.RUnlock()
+		f.hasCustomLLMCache.Store(senderID, true)
+		return true
+	}
+	f.mu.RUnlock()
+
+	// 从数据库检查
+	cfg, err := f.configSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		f.hasCustomLLMCache.Store(senderID, false)
+		return false
+	}
+	hasCustom := cfg.BaseURL != "" && cfg.APIKey != ""
+	f.hasCustomLLMCache.Store(senderID, hasCustom)
+	return hasCustom
+}
+
+// InvalidateCustomLLMCache 使指定用户的自定义 LLM 缓存失效
+func (f *LLMFactory) InvalidateCustomLLMCache(senderID string) {
+	f.hasCustomLLMCache.Delete(senderID)
 }
 
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil

@@ -179,6 +179,10 @@ type Agent struct {
 	llmConfigSvc *sqlite.UserLLMConfigService
 	llmFactory   *LLMFactory
 
+	// 用户级别的信号量：设置了自己的 LLM 配置的用户使用独立信号量
+	// key: senderID, value: 用户独立的信号量（容量为1）
+	userSemaphores sync.Map // map[string]chan struct{}
+
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
@@ -378,6 +382,18 @@ func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
 }
 
+// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户
+// 每个用户有独立的信号量（容量为1），确保该用户的请求串行处理
+// 使用 LoadOrStore 原子操作避免并发创建多个信号量
+func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
+	if val, ok := a.userSemaphores.Load(senderID); ok {
+		return val.(chan struct{})
+	}
+	// LoadOrStore 原子操作：如果 key 不存在则存储，返回存储的值
+	sem, _ := a.userSemaphores.LoadOrStore(senderID, make(chan struct{}, 1))
+	return sem.(chan struct{})
+}
+
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
@@ -414,6 +430,7 @@ func (a *Agent) sendAck(channel, chatID string) {
 // Run 启动 Agent 循环，持续消费入站消息。
 // 消息按 chat (channel:chatID) 分组，同一 chat 内顺序处理，不同 chat 并行处理。
 // 全局并发数由 AGENT_MAX_CONCURRENCY 控制（默认 3），避免 LLM 并发过高。
+// 用户设置了自己的 LLM 配置后，该用户的请求使用独立的信号量，不再占用全局资源。
 func (a *Agent) Run(ctx context.Context) error {
 	log.WithField("max_concurrency", a.maxConcurrency).Info("Agent loop started")
 
@@ -432,6 +449,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	chatQueues := make(map[string]chan bus.InboundMessage)
 	var wg sync.WaitGroup
 
+	// getOrCreateQueue 为每个 chat 创建独立的消息队列和 worker
+	// 信号量在每次处理消息时动态选择（支持用户中途设置/取消自定义 LLM）
 	getOrCreateQueue := func(key string) chan bus.InboundMessage {
 		mu.Lock()
 		defer mu.Unlock()
@@ -440,6 +459,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		q := make(chan bus.InboundMessage, 32)
 		chatQueues[key] = q
+
+		// 始终传入全局信号量，实际信号量在 chatWorker 内部动态选择
 		wg.Go(func() {
 			a.chatWorker(ctx, key, q, sem)
 			mu.Lock()
@@ -473,14 +494,48 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
+// isGroupChat 判断是否为群聊
+// 使用消息的 ChatType 字段：p2p 为私聊，group 为群聊
+func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
+	return msg.ChatType == "group"
+}
+
+// getSemaphoreForMessage 获取消息应该使用的信号量
+// 私聊：用户有自定义 LLM 则使用独立信号量
+// 群聊：始终使用全局信号量（因为群里有多人，使用独立信号量会导致其他人的消息也被阻塞）
+func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan struct{}) chan struct{} {
+	senderID := msg.SenderID
+	if senderID == "" {
+		return globalSem
+	}
+
+	// 群聊使用全局信号量
+	if a.isGroupChat(msg) {
+		return globalSem
+	}
+
+	// 私聊：检查用户是否有自定义 LLM
+	if a.llmFactory.HasCustomLLM(senderID) {
+		return a.getUserSemaphore(senderID)
+	}
+
+	return globalSem
+}
+
 // chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
-// 通过全局 sem 控制并发：获取信号量后才开始处理，处理完释放。
-func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, sem chan struct{}) {
+// 通过信号量控制并发：获取信号量后才开始处理，处理完释放。
+// 信号量在每次处理消息时动态选择，以支持用户中途设置/取消自定义 LLM。
+func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
 	for msg := range ch {
 		if ctx.Err() != nil {
 			return
 		}
-		// 获取全局并发槽位
+
+		// 动态选择信号量：每次处理消息时都重新判断
+		// 这样用户中途设置/取消自定义 LLM 可以立即生效
+		sem := a.getSemaphoreForMessage(msg, globalSem)
+
+		// 获取信号量槽位
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():

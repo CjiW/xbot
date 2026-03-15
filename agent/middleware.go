@@ -70,6 +70,16 @@ func (mc *MessageContext) SetExtra(key string, value any) {
 	mc.Extra[key] = value
 }
 
+// GetExtraString 从 Extra 中获取 string 类型的值
+func (mc *MessageContext) GetExtraString(key string) (string, bool) {
+	v, ok := mc.GetExtra(key)
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
 // BuildSystemPrompt 将 SystemParts 按 key 排序后拼接为完整的系统提示词。
 // key 的命名约定决定了拼接顺序（字典序），建议使用数字前缀：
 //
@@ -159,6 +169,17 @@ func NewMessagePipeline(middlewares ...MessageMiddleware) *MessagePipeline {
 func (p *MessagePipeline) Use(mw ...MessageMiddleware) {
 	p.middlewares = append(p.middlewares, mw...)
 	p.sorted = false
+}
+
+// Remove 按名称移除中间件。返回是否找到并移除了中间件。
+func (p *MessagePipeline) Remove(name string) bool {
+	for i, mw := range p.middlewares {
+		if mw.Name() == name {
+			p.middlewares = append(p.middlewares[:i], p.middlewares[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // sort 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）

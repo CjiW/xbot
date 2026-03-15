@@ -166,10 +166,12 @@ type Agent struct {
 	cardBuilder     *tools.CardBuilder      // Card Builder MCP
 	workDir         string
 	promptLoader    *PromptLoader
-	sandboxMode     string   // "none" or "docker"
-	maxConcurrency  int      // 最大并发会话处理数
-	globalSkillDirs []string // 全局 skill 目录（宿主机路径）
-	agentsDir       string   // 全局 agents 目录（宿主机路径）
+	pipeline        *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
+	cronPipeline    *MessagePipeline // Cron 专用消息构建管道
+	sandboxMode     string           // "none" or "docker"
+	maxConcurrency  int              // 最大并发会话处理数
+	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
+	agentsDir       string           // 全局 agents 目录（宿主机路径）
 
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
@@ -349,6 +351,9 @@ func New(cfg Config) *Agent {
 		agentsDir:       agentsDir,
 		consolidating:   make(map[string]bool),
 	}
+
+	// 初始化消息构建管道
+	agent.initPipelines()
 
 	// 初始化 Cron 服务和调度器
 	cronSvc := sqlite.NewCronService(multiSession.DB())
@@ -748,11 +753,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}
 
 	// 构建 cron 专用消息（无历史上下文）
-	cronWorkDir := workspaceRoot
-	if a.sandboxMode == "docker" {
-		cronWorkDir = "/workspace"
-	}
-	messages := BuildCronMessages(msg.Content, cronWorkDir)
+	mc := NewCronMessageContext(msg.Content)
+	messages := a.cronPipeline.Run(mc)
 
 	// 运行 Agent 循环（传入创建者 senderID 而非空值）
 	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false)
@@ -779,7 +781,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	}, nil
 }
 
-// buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）
+// buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。
+// 使用 Agent 持有的 pipeline 实例，通过 MessageContext.Extra 传递动态数据。
 func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
@@ -799,15 +802,27 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 		a.tools.ActivateTools(sessionKey, newTools)
 		log.WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
 	}
-	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
-	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
-	mem := tenantSession.Memory()
 
 	promptWorkDir := a.workDir
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
 	}
-	return BuildMessages(history, msg.Content, msg.Channel, mem, promptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, msg.SenderID), nil
+
+	mc := NewMessageContext(
+		letta.WithUserID(context.TODO(), msg.SenderID),
+		msg.Content,
+		history,
+		msg.Channel,
+		promptWorkDir,
+		msg.SenderName,
+		msg.SenderID,
+		msg.ChatID,
+	)
+	mc.SetExtra("skills_catalog", a.skills.GetSkillsCatalog(msg.SenderID))
+	mc.SetExtra("agents_catalog", a.agents.GetAgentsCatalog(msg.SenderID))
+	mc.SetExtra("memory_provider", tenantSession.Memory())
+
+	return a.pipeline.Run(mc), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -935,31 +950,14 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		summary = desc + "\nUser interaction:\n" + summary
 	}
 
-	history, err := tenantSession.GetHistory(a.memoryWindow)
+	// 复用 buildPrompt，替换 Content 为卡片摘要
+	cardMsg := msg
+	cardMsg.Content = summary
+	messages, err := a.buildPrompt(cardMsg, tenantSession)
 	if err != nil {
-		log.WithError(err).Warn("Failed to get history, using empty history")
-		history = nil
+		return nil, err
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create user workspace: %w", err)
-	}
-	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
-	if err != nil {
-		log.WithError(err).Warn("Failed to configure session MCP scope")
-	}
-	if len(newTools) > 0 {
-		sessionKey := msg.Channel + ":" + msg.ChatID
-		a.tools.ActivateTools(sessionKey, newTools)
-	}
-	skillsCatalog := a.skills.GetSkillsCatalog(msg.SenderID)
-	agentsCatalog := a.agents.GetAgentsCatalog(msg.SenderID)
-	memory := tenantSession.Memory()
-	cardPromptWorkDir := a.workDir
-	if a.sandboxMode == "docker" {
-		cardPromptWorkDir = "/workspace"
-	}
-	messages := BuildMessages(history, summary, msg.Channel, memory, cardPromptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, msg.SenderID)
+
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {

@@ -121,36 +121,6 @@ func (pl *PromptLoader) Render(data PromptData) string {
 	return buf.String()
 }
 
-// BuildMessages 构建完整的 LLM 消息列表。
-// 内部使用 MessagePipeline 实现，保留此函数签名以兼容现有调用方。
-//
-// 拼接顺序经过优化以最大化 KV-cache 命中率：
-//
-//	固定提示词 → Skills（相对稳定） → Agents → Memory（会变化） → Sender Info → Time（每次都变）
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string, senderID string) []llm.ChatMessage {
-	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(promptLoader),
-		NewSkillsCatalogMiddleware(skillsCatalog),
-		NewAgentsCatalogMiddleware(agentsCatalog),
-		NewMemoryMiddleware(mem),
-		NewSenderInfoMiddleware(),
-		NewUserMessageMiddleware(),
-	)
-
-	mc := &MessageContext{
-		Ctx:         letta.WithUserID(context.TODO(), senderID),
-		SystemParts: make(map[string]string),
-		UserContent: userContent,
-		History:     history,
-		Channel:     channel,
-		WorkDir:     workDir,
-		SenderName:  senderName,
-		SenderID:    senderID,
-	}
-
-	return pipeline.Run(mc)
-}
-
 // cronSystemPrompt Cron 专用系统提示词（简洁，无记忆和技能）
 const cronSystemPrompt = `You are xbot executing a scheduled cron task.
 
@@ -166,17 +136,106 @@ const cronSystemPrompt = `You are xbot executing a scheduled cron task.
 Current Time: %s
 `
 
+// initPipelines 初始化 Agent 的消息构建管道。
+// 在 Agent 创建时调用一次，后续通过 pipeline.Use/Remove 动态调整。
+func (a *Agent) initPipelines() {
+	promptWorkDir := a.workDir
+	if a.sandboxMode == "docker" {
+		promptWorkDir = "/workspace"
+	}
+
+	// 主 pipeline：用于普通消息和卡片响应
+	a.pipeline = NewMessagePipeline(
+		NewSystemPromptMiddleware(a.promptLoader),
+		NewSkillsCatalogMiddleware(),
+		NewAgentsCatalogMiddleware(),
+		NewMemoryMiddleware(),
+		NewSenderInfoMiddleware(),
+		NewUserMessageMiddleware(),
+	)
+
+	// Cron pipeline：用于定时任务（简洁，无记忆和技能）
+	a.cronPipeline = NewMessagePipeline(
+		NewCronSystemPromptMiddleware(promptWorkDir),
+	)
+}
+
+// Pipeline 返回 Agent 的主消息构建管道，支持运行时动态增删中间件。
+func (a *Agent) Pipeline() *MessagePipeline {
+	return a.pipeline
+}
+
+// CronPipeline 返回 Agent 的 Cron 消息构建管道。
+func (a *Agent) CronPipeline() *MessagePipeline {
+	return a.cronPipeline
+}
+
+// NewMessageContext 创建一个预填充的 MessageContext，用于主 pipeline。
+// 调用方设置动态字段（Extra 中的 skills_catalog、agents_catalog、memory_provider）后，
+// 传入 pipeline.Run(mc) 执行。
+func NewMessageContext(ctx context.Context, userContent string, history []llm.ChatMessage, channel, workDir, senderName, senderID, chatID string) *MessageContext {
+	return &MessageContext{
+		Ctx:         ctx,
+		SystemParts: make(map[string]string),
+		UserContent: userContent,
+		History:     history,
+		Channel:     channel,
+		WorkDir:     workDir,
+		SenderName:  senderName,
+		SenderID:    senderID,
+		ChatID:      chatID,
+		Extra:       make(map[string]any),
+	}
+}
+
+// NewCronMessageContext 创建一个 Cron 专用的 MessageContext。
+func NewCronMessageContext(task string) *MessageContext {
+	return &MessageContext{
+		SystemParts: make(map[string]string),
+		UserContent: task,
+		Extra:       make(map[string]any),
+	}
+}
+
+// BuildMessages 构建完整的 LLM 消息列表。
+// Deprecated: 保留此函数以兼容测试和外部调用方。
+// 新代码应直接使用 Agent.Pipeline() + NewMessageContext()。
+func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string, senderID string) []llm.ChatMessage {
+	pipeline := NewMessagePipeline(
+		NewSystemPromptMiddleware(promptLoader),
+		NewSkillsCatalogMiddleware(),
+		NewAgentsCatalogMiddleware(),
+		NewMemoryMiddleware(),
+		NewSenderInfoMiddleware(),
+		NewUserMessageMiddleware(),
+	)
+
+	mc := &MessageContext{
+		Ctx:         letta.WithUserID(context.TODO(), senderID),
+		SystemParts: make(map[string]string),
+		UserContent: userContent,
+		History:     history,
+		Channel:     channel,
+		WorkDir:     workDir,
+		SenderName:  senderName,
+		SenderID:    senderID,
+		Extra:       make(map[string]any),
+	}
+	mc.SetExtra("skills_catalog", skillsCatalog)
+	mc.SetExtra("agents_catalog", agentsCatalog)
+	mc.SetExtra("memory_provider", mem)
+
+	return pipeline.Run(mc)
+}
+
 // BuildCronMessages 构建 cron 专用消息（无历史上下文）。
-// 内部使用 MessagePipeline 实现。
+// Deprecated: 保留此函数以兼容测试和外部调用方。
+// 新代码应直接使用 Agent.CronPipeline() + NewCronMessageContext()。
 func BuildCronMessages(task string, workDir string) []llm.ChatMessage {
 	pipeline := NewMessagePipeline(
 		NewCronSystemPromptMiddleware(workDir),
 	)
 
-	mc := &MessageContext{
-		SystemParts: make(map[string]string),
-		UserContent: task,
-	}
-
+	mc := NewCronMessageContext(task)
 	return pipeline.Run(mc)
 }

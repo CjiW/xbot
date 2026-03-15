@@ -21,7 +21,6 @@ import (
 	"xbot/session"
 	"xbot/storage/sqlite"
 	"xbot/tools"
-	"xbot/version"
 )
 
 // resolveDataPath 解析数据文件路径，优先使用 .xbot/ 目录，向后兼容工作目录根路径
@@ -193,6 +192,7 @@ type Agent struct {
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
+	commands         *CommandRegistry                           // 指令注册表
 	directSend       func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
 	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
 	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
@@ -371,6 +371,10 @@ func New(cfg Config) *Agent {
 		agentsDir:            agentsDir,
 		consolidating:        make(map[string]bool),
 	}
+
+	// 初始化指令注册表
+	agent.commands = NewCommandRegistry()
+	registerBuiltinCommands(agent.commands)
 
 	// 初始化消息构建管道
 	agent.initPipelines()
@@ -629,41 +633,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"sender":  msg.SenderID,
 	}).Debug("Message cached to chat history")
 
-	// 斜杠命令（不参与消息更新跟踪，直接走 bus）
-	cmd := strings.TrimSpace(strings.ToLower(msg.Content))
-	if cmd == "/new" {
-		return a.handleNewSession(ctx, msg, tenantSession)
-	}
-	if cmd == "/version" {
-		return &bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: version.Info(),
-		}, nil
-	}
-	if cmd == "/help" {
-		return &bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助\n/set-llm — 设置自定义 LLM API\n/llm — 查看当前 LLM 配置\n!<command> — 快捷执行命令（跳过 LLM，直接在 sandbox 中运行）",
-		}, nil
-	}
-	if strings.HasPrefix(cmd, "/prompt") {
-		return a.handlePromptQuery(ctx, msg, tenantSession)
-	}
-	if strings.HasPrefix(cmd, "/set-llm") {
-		return a.handleSetLLM(ctx, msg)
-	}
-	if cmd == "/llm" {
-		return a.handleGetLLM(ctx, msg)
-	}
-	if cmd == "/compress" {
-		return a.handleCompress(ctx, msg, tenantSession)
-	}
-
-	// `!` 前缀快捷命令：跳过 LLM，直接在 sandbox 中执行
-	if bangCmd, ok := isBangCommand(msg.Content); ok {
-		return a.handleBangCommand(ctx, msg, bangCmd)
+	// 指令匹配：通过 CommandRegistry 统一分发
+	if cmd := a.commands.Match(msg.Content); cmd != nil {
+		log.WithFields(log.Fields{
+			"channel": msg.Channel,
+			"command": cmd.Name(),
+		}).Info("Command matched")
+		return cmd.Execute(ctx, a, msg)
 	}
 
 	// 处理卡片响应（按钮点击、表单提交）

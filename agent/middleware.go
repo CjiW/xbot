@@ -54,6 +54,14 @@ type MessageContext struct {
 	Extra map[string]any
 }
 
+// Well-known Extra keys used by built-in middlewares.
+// Use these constants instead of raw strings to avoid typos.
+const (
+	ExtraKeySkillsCatalog  = "skills_catalog"
+	ExtraKeyAgentsCatalog  = "agents_catalog"
+	ExtraKeyMemoryProvider = "memory_provider"
+)
+
 // GetExtra 从 Extra 中获取指定类型的值
 func (mc *MessageContext) GetExtra(key string) (any, bool) {
 	if mc.Extra == nil {
@@ -79,6 +87,20 @@ func (mc *MessageContext) GetExtraString(key string) (string, bool) {
 	}
 	s, ok := v.(string)
 	return s, ok
+}
+
+// GetExtraTyped 从 Extra 中获取指定类型 T 的值（泛型 helper）。
+// 避免手动 GetExtra + 类型断言的样板代码。
+//
+//	mem, ok := GetExtraTyped[memory.MemoryProvider](mc, ExtraKeyMemoryProvider)
+func GetExtraTyped[T any](mc *MessageContext, key string) (T, bool) {
+	v, ok := mc.GetExtra(key)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	typed, ok := v.(T)
+	return typed, ok
 }
 
 // BuildSystemPrompt 将 SystemParts 按 key 排序后拼接为完整的系统提示词。

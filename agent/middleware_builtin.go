@@ -34,7 +34,7 @@ func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 // --- Priority 100-199: 上下文注入 ---
 
 // SkillsCatalogMiddleware 注入 Skills 目录。
-// 从 MessageContext.Extra["skills_catalog"] 读取动态内容。
+// 从 MessageContext.Extra[ExtraKeySkillsCatalog] 读取动态内容。
 type SkillsCatalogMiddleware struct{}
 
 func NewSkillsCatalogMiddleware() *SkillsCatalogMiddleware {
@@ -45,7 +45,7 @@ func (m *SkillsCatalogMiddleware) Name() string  { return "skills_catalog" }
 func (m *SkillsCatalogMiddleware) Priority() int { return 100 }
 
 func (m *SkillsCatalogMiddleware) Process(mc *MessageContext) error {
-	catalog, _ := mc.GetExtraString("skills_catalog")
+	catalog, _ := mc.GetExtraString(ExtraKeySkillsCatalog)
 	if catalog != "" {
 		mc.SystemParts["10_skills"] = catalog
 	}
@@ -53,7 +53,7 @@ func (m *SkillsCatalogMiddleware) Process(mc *MessageContext) error {
 }
 
 // AgentsCatalogMiddleware 注入 Agents 目录。
-// 从 MessageContext.Extra["agents_catalog"] 读取动态内容。
+// 从 MessageContext.Extra[ExtraKeyAgentsCatalog] 读取动态内容。
 type AgentsCatalogMiddleware struct{}
 
 func NewAgentsCatalogMiddleware() *AgentsCatalogMiddleware {
@@ -64,7 +64,7 @@ func (m *AgentsCatalogMiddleware) Name() string  { return "agents_catalog" }
 func (m *AgentsCatalogMiddleware) Priority() int { return 110 }
 
 func (m *AgentsCatalogMiddleware) Process(mc *MessageContext) error {
-	catalog, _ := mc.GetExtraString("agents_catalog")
+	catalog, _ := mc.GetExtraString(ExtraKeyAgentsCatalog)
 	if catalog != "" {
 		mc.SystemParts["15_agents"] = catalog
 	}
@@ -72,7 +72,7 @@ func (m *AgentsCatalogMiddleware) Process(mc *MessageContext) error {
 }
 
 // MemoryMiddleware 注入长期记忆。
-// 从 MessageContext.Extra["memory_provider"] 读取动态 MemoryProvider。
+// 从 MessageContext.Extra[ExtraKeyMemoryProvider] 读取动态 MemoryProvider。
 type MemoryMiddleware struct{}
 
 func NewMemoryMiddleware() *MemoryMiddleware {
@@ -83,12 +83,8 @@ func (m *MemoryMiddleware) Name() string  { return "memory" }
 func (m *MemoryMiddleware) Priority() int { return 120 }
 
 func (m *MemoryMiddleware) Process(mc *MessageContext) error {
-	memRaw, ok := mc.GetExtra("memory_provider")
-	if !ok || memRaw == nil {
-		return nil
-	}
-	mem, ok := memRaw.(memory.MemoryProvider)
-	if !ok {
+	mem, ok := GetExtraTyped[memory.MemoryProvider](mc, ExtraKeyMemoryProvider)
+	if !ok || mem == nil {
 		return nil
 	}
 	ctx := mc.Ctx

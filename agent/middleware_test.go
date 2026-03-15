@@ -421,7 +421,7 @@ func TestSkillsCatalogMiddleware(t *testing.T) {
 	}
 
 	// Non-empty catalog via Extra
-	mc.SetExtra("skills_catalog", "# Skills\n- deploy\n- github")
+	mc.SetExtra(ExtraKeySkillsCatalog, "# Skills\n- deploy\n- github")
 	mw := NewSkillsCatalogMiddleware()
 	_ = mw.Process(mc)
 	if mc.SystemParts["10_skills"] == "" {
@@ -445,7 +445,7 @@ func TestAgentsCatalogMiddleware(t *testing.T) {
 		Extra:       make(map[string]any),
 	}
 
-	mc.SetExtra("agents_catalog", "# Agents\n- code-reviewer")
+	mc.SetExtra(ExtraKeyAgentsCatalog, "# Agents\n- code-reviewer")
 	mw := NewAgentsCatalogMiddleware()
 	_ = mw.Process(mc)
 	if mc.SystemParts["15_agents"] == "" {
@@ -476,7 +476,7 @@ func TestMemoryMiddleware(t *testing.T) {
 			UserContent: "hello",
 			Extra:       make(map[string]any),
 		}
-		mc.SetExtra("memory_provider", &mockMemoryProvider{
+		mc.SetExtra(ExtraKeyMemoryProvider, &mockMemoryProvider{
 			recallResult: "## Core Memory\nSome facts",
 		})
 		mw := NewMemoryMiddleware()
@@ -497,7 +497,7 @@ func TestMemoryMiddleware(t *testing.T) {
 			UserContent: "hello",
 			Extra:       make(map[string]any),
 		}
-		mc.SetExtra("memory_provider", &mockMemoryProvider{
+		mc.SetExtra(ExtraKeyMemoryProvider, &mockMemoryProvider{
 			recallErr: fmt.Errorf("db connection failed"),
 		})
 		mw := NewMemoryMiddleware()
@@ -514,7 +514,7 @@ func TestMemoryMiddleware(t *testing.T) {
 			UserContent: "hello",
 			Extra:       make(map[string]any),
 		}
-		mc.SetExtra("memory_provider", &mockMemoryProvider{recallResult: ""})
+		mc.SetExtra(ExtraKeyMemoryProvider, &mockMemoryProvider{recallResult: ""})
 		mw := NewMemoryMiddleware()
 		err := mw.Process(mc)
 		if err != nil {
@@ -635,9 +635,9 @@ func TestPipeline_MatchesBuildMessages(t *testing.T) {
 		SenderName: "TestUser",
 		Extra:      make(map[string]any),
 	}
-	mc.SetExtra("skills_catalog", "# Available Skills\n- deploy")
-	mc.SetExtra("agents_catalog", "# Available Agents\n- code-reviewer")
-	mc.SetExtra("memory_provider", &mockMemoryProvider{recallResult: "## Persona\nI am xbot"})
+	mc.SetExtra(ExtraKeySkillsCatalog, "# Available Skills\n- deploy")
+	mc.SetExtra(ExtraKeyAgentsCatalog, "# Available Agents\n- code-reviewer")
+	mc.SetExtra(ExtraKeyMemoryProvider, &mockMemoryProvider{recallResult: "## Persona\nI am xbot"})
 
 	messages := pipeline.Run(mc)
 
@@ -787,7 +787,7 @@ func TestPipeline_DynamicUseRemove(t *testing.T) {
 		UserContent: "test",
 		Extra:       make(map[string]any),
 	}
-	mc.SetExtra("skills_catalog", "# Skills\n- deploy")
+	mc.SetExtra(ExtraKeySkillsCatalog, "# Skills\n- deploy")
 
 	messages := pipeline.Run(mc)
 	sys := messages[0].Content
@@ -861,7 +861,7 @@ func TestMessagePipeline_ConcurrentRun(t *testing.T) {
 		name:     "skills",
 		priority: 100,
 		process: func(mc *MessageContext) error {
-			catalog, _ := mc.GetExtraString("skills_catalog")
+			catalog, _ := mc.GetExtraString(ExtraKeySkillsCatalog)
 			if catalog != "" {
 				mc.SystemParts["10_skills"] = catalog
 			}
@@ -890,7 +890,7 @@ func TestMessagePipeline_ConcurrentRun(t *testing.T) {
 				UserContent: fmt.Sprintf("message from goroutine %d", id),
 				Extra:       make(map[string]any),
 			}
-			mc.SetExtra("skills_catalog", "# Skills\n- deploy")
+			mc.SetExtra(ExtraKeySkillsCatalog, "# Skills\n- deploy")
 
 			messages := pipeline.Run(mc)
 			if len(messages) < 2 {

@@ -341,7 +341,7 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 		model = c.GetDefaultModel()
 	}
 
-	logger.WithFields(logger.Fields{
+	logger.Ctx(ctx).WithFields(logger.Fields{
 		"provider":    "codebuddy",
 		"model":       model,
 		"stream":      true,
@@ -353,14 +353,14 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 
 	httpReq, err := c.buildRequest(ctx, model, messages, tools, true)
 	if err != nil {
-		logger.WithError(err).Error("[LLM] Failed to build request")
+		logger.Ctx(ctx).WithError(err).Error("[LLM] Failed to build request")
 		return nil, err
 	}
 
 	// 发送请求
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		logger.WithFields(logger.Fields{
+		logger.Ctx(ctx).WithFields(logger.Fields{
 			"provider": "codebuddy",
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
@@ -368,7 +368,7 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
-	logger.WithFields(logger.Fields{
+	logger.Ctx(ctx).WithFields(logger.Fields{
 		"provider":    "codebuddy",
 		"status_code": resp.StatusCode,
 		"duration":    time.Since(startTime).String(),
@@ -378,7 +378,7 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
-		logger.WithFields(logger.Fields{
+		logger.Ctx(ctx).WithFields(logger.Fields{
 			"provider":    "codebuddy",
 			"status_code": resp.StatusCode,
 			"body":        string(body),
@@ -400,9 +400,11 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 	defer close(eventChan)
 	defer resp.Body.Close()
 
+	l := logger.Ctx(ctx)
 	reader := bufio.NewReader(resp.Body)
 	chunkCount := 0
 	var firstChunkTime time.Time
+	var lastUsage *TokenUsage
 
 	for {
 		select {
@@ -441,12 +443,18 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 
 		// 检查结束标记
 		if data == "[DONE]" {
-			logger.WithFields(logger.Fields{
+			fields := logger.Fields{
 				"provider":       "codebuddy",
 				"chunk_count":    chunkCount,
 				"total_duration": time.Since(startTime).String(),
-				"ttft":           firstChunkTime.Sub(startTime).String(), // Time to first token
-			}).Info("[LLM] Stream completed")
+				"ttft":           firstChunkTime.Sub(startTime).String(),
+			}
+			if lastUsage != nil {
+				fields["prompt_tokens"] = lastUsage.PromptTokens
+				fields["completion_tokens"] = lastUsage.CompletionTokens
+				fields["total_tokens"] = lastUsage.TotalTokens
+			}
+			l.WithFields(fields).Info("[LLM] Stream completed")
 			eventChan <- StreamEvent{
 				Type: EventDone,
 			}
@@ -456,7 +464,7 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 		// 解析 JSON
 		var streamResp cbStreamResponse
 		if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
-			logger.Warnf("failed to parse stream response: %v, data: %s", err, data)
+			l.Warnf("failed to parse stream response: %v, data: %s", err, data)
 			continue
 		}
 
@@ -464,7 +472,7 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 		chunkCount++
 		if chunkCount == 1 {
 			firstChunkTime = time.Now()
-			logger.WithFields(logger.Fields{
+			l.WithFields(logger.Fields{
 				"provider": "codebuddy",
 				"ttft":     firstChunkTime.Sub(startTime).String(),
 			}).Debug("[LLM] First chunk received")
@@ -483,7 +491,7 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 			// 处理工具调用
 			for _, tc := range choice.Delta.ToolCalls {
 				if tc.ID != "" || tc.Function.Name != "" {
-					logger.WithFields(logger.Fields{
+					l.WithFields(logger.Fields{
 						"provider":  "codebuddy",
 						"tool_id":   tc.ID,
 						"tool_name": tc.Function.Name,
@@ -523,21 +531,16 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 			}
 		}
 
-		// 处理 usage（通常在最后一个 chunk）
+		// 收集 usage（通常在最后一个 chunk），不单独打日志，合并到 Stream completed
 		if streamResp.Usage != nil {
-			logger.WithFields(logger.Fields{
-				"provider":          "codebuddy",
-				"prompt_tokens":     streamResp.Usage.PromptTokens,
-				"completion_tokens": streamResp.Usage.CompletionTokens,
-				"total_tokens":      streamResp.Usage.TotalTokens,
-			}).Info("[LLM] Token usage")
+			lastUsage = &TokenUsage{
+				PromptTokens:     streamResp.Usage.PromptTokens,
+				CompletionTokens: streamResp.Usage.CompletionTokens,
+				TotalTokens:      streamResp.Usage.TotalTokens,
+			}
 			eventChan <- StreamEvent{
-				Type: EventUsage,
-				Usage: &TokenUsage{
-					PromptTokens:     streamResp.Usage.PromptTokens,
-					CompletionTokens: streamResp.Usage.CompletionTokens,
-					TotalTokens:      streamResp.Usage.TotalTokens,
-				},
+				Type:  EventUsage,
+				Usage: lastUsage,
 			}
 		}
 	}
@@ -550,7 +553,7 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 		model = c.GetDefaultModel()
 	}
 
-	logger.WithFields(logger.Fields{
+	logger.Ctx(ctx).WithFields(logger.Fields{
 		"provider":    "codebuddy",
 		"model":       model,
 		"stream":      false,
@@ -625,11 +628,14 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 		}
 	}
 
-	logger.WithFields(logger.Fields{
-		"provider":      "codebuddy",
-		"content_len":   len(resp.Content),
-		"tool_calls":    len(resp.ToolCalls),
-		"finish_reason": resp.FinishReason,
+	logger.Ctx(ctx).WithFields(logger.Fields{
+		"provider":          "codebuddy",
+		"content_len":       len(resp.Content),
+		"tool_calls":        len(resp.ToolCalls),
+		"finish_reason":     resp.FinishReason,
+		"prompt_tokens":     resp.Usage.PromptTokens,
+		"completion_tokens": resp.Usage.CompletionTokens,
+		"total_tokens":      resp.Usage.TotalTokens,
 	}).Info("[LLM] Non-stream response aggregated")
 
 	return resp, nil

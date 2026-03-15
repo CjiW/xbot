@@ -197,6 +197,10 @@ type Agent struct {
 	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
 	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
 	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
+
+	// per-request cancel: 用于 /cancel 取消当前正在处理的请求
+	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
+	chatCancelCh sync.Map
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -512,12 +516,36 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
+			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
+			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
+					select {
+					case ch.(chan struct{}) <- struct{}{}:
+						a.bus.Outbound <- bus.OutboundMessage{
+							Channel: msg.Channel,
+							ChatID:  msg.ChatID,
+							Content: "✅ 已取消当前请求",
+						}
+					default:
+						// cancel 信号已发过
+					}
+				} else {
+					a.bus.Outbound <- bus.OutboundMessage{
+						Channel: msg.Channel,
+						ChatID:  msg.ChatID,
+						Content: "当前没有正在处理的请求",
+					}
+				}
+				continue
+			}
+
 			key := msg.Channel + ":" + msg.ChatID
 			q := getOrCreateQueue(key)
 			select {
 			case q <- msg:
 			default:
-				log.WithField("chat", key).Warn("Chat queue full, dropping message")
+				log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": key}).Warn("Chat queue full, dropping message")
 			}
 		}
 	}
@@ -554,28 +582,120 @@ func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan st
 // chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
 // 通过信号量控制并发：获取信号量后才开始处理，处理完释放。
 // 信号量在每次处理消息时动态选择，以支持用户中途设置/取消自定义 LLM。
+// chatWorker 处理单个 chat 的消息队列。
+// 主循环持续从 ch 取消息并分发：
+//   - 指令消息（/version, /help 等）：独立 goroutine 立即执行，不阻塞
+//   - 普通消息：发送到内部 msgCh，由专门的 goroutine 串行处理（带信号量 + cancel）
+//
+// 这样即使普通消息正在长时间处理（LLM 推理），主循环仍能取出并执行命令消息。
 func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+	// 内部普通消息队列：主循环写入，processLoop 消费
+	msgCh := make(chan bus.InboundMessage, 32)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.chatProcessLoop(ctx, chatKey, msgCh, globalSem)
+	}()
+
+	for msg := range ch {
+		if ctx.Err() != nil {
+			break
+		}
+
+		// 指令消息分发：根据 Concurrent() 决定执行方式
+		if cmd := a.commands.Match(msg.Content); cmd != nil {
+			if cmd.Concurrent() {
+				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
+				go func(m bus.InboundMessage, c Command) {
+					response, err := c.Execute(ctx, a, m)
+					if err != nil {
+						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
+						a.bus.Outbound <- bus.OutboundMessage{
+							Channel: m.Channel,
+							ChatID:  m.ChatID,
+							Content: fmt.Sprintf("处理命令时发生错误: %v", err),
+						}
+						return
+					}
+					if response != nil {
+						a.bus.Outbound <- *response
+					}
+				}(msg, cmd)
+			} else {
+				// 有状态命令（/new, /compress, /set-llm 等）：走串行队列，
+				// 避免与正在处理的普通消息产生 session 数据竞态
+				select {
+				case msgCh <- msg:
+				case <-ctx.Done():
+				}
+			}
+			continue
+		}
+
+		// 普通消息：转发到内部队列，由 processLoop 串行处理
+		select {
+		case msgCh <- msg:
+		case <-ctx.Done():
+		}
+	}
+
+	close(msgCh)
+	wg.Wait()
+}
+
+// chatProcessLoop 串行处理普通消息（非命令），带信号量控制和 per-request cancel 支持。
+func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
 	for msg := range ch {
 		if ctx.Err() != nil {
 			return
 		}
 
-		// 动态选择信号量：每次处理消息时都重新判断
-		// 这样用户中途设置/取消自定义 LLM 可以立即生效
 		sem := a.getSemaphoreForMessage(msg, globalSem)
 
-		// 获取信号量槽位
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			return
 		}
 
-		response, err := a.processMessage(ctx, msg)
-		<-sem // 释放槽位
+		// 创建 per-request cancel context
+		var response *bus.OutboundMessage
+		var err error
+		cancelCh := make(chan struct{}, 1)
+		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+		a.chatCancelCh.Store(cancelKey, cancelCh)
+
+		reqCtx, reqCancel := context.WithCancel(ctx)
+
+		// 监听 cancel 信号
+		go func() {
+			select {
+			case <-cancelCh:
+				reqCancel()
+			case <-reqCtx.Done():
+			}
+		}()
+
+		// defer 确保 cancelCh 清理：即使 processMessage panic 也不会泄漏
+		func() {
+			defer func() {
+				reqCancel()
+				a.chatCancelCh.Delete(cancelKey)
+				<-sem // 释放槽位
+			}()
+			response, err = a.processMessage(reqCtx, msg)
+		}()
+
+		if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
+			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
+			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
+			continue
+		}
 
 		if err != nil {
-			log.WithError(err).WithField("chat", chatKey).Error("Error processing message")
+			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).WithError(err).Error("Error processing message")
 			a.bus.Outbound <- bus.OutboundMessage{
 				Channel: msg.Channel,
 				ChatID:  msg.ChatID,
@@ -591,6 +711,13 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 
 // processMessage 处理单条入站消息
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// 使用消息携带的 requestID（在渠道收到消息时生成），如果没有则生成新的
+	reqID := msg.RequestID
+	if reqID == "" {
+		reqID = log.NewRequestID()
+	}
+	ctx = log.WithRequestID(ctx, reqID)
+
 	// 注入 senderID 到 context，用于 per-user human block（Letta 模式）
 	// Recall/Memorize 会通过 letta.GetUserID(ctx) 获取 userID
 	ctx = letta.WithUserID(ctx, msg.SenderID)
@@ -599,7 +726,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	if r := []rune(preview); len(r) > 80 {
 		preview = string(r[:80]) + "..."
 	}
-	log.WithFields(log.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"channel": msg.Channel,
 		"sender":  msg.SenderID,
 	}).Infof("Processing: %s", preview)
@@ -627,7 +754,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）
 	a.chatHistory.Add(msg.Channel, msg.ChatID, msg.SenderID, msg.Content)
-	log.WithFields(log.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"channel": msg.Channel,
 		"chat_id": msg.ChatID,
 		"sender":  msg.SenderID,
@@ -635,7 +762,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// 指令匹配：通过 CommandRegistry 统一分发
 	if cmd := a.commands.Match(msg.Content); cmd != nil {
-		log.WithFields(log.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"channel": msg.Channel,
 			"command": cmd.Name(),
 		}).Info("Command matched")
@@ -672,13 +799,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
-		log.Info("Tool is waiting for user response, skipping reply")
+		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
 		userMsg := llm.NewUserMessage(msg.Content)
 		if !msg.Time.IsZero() {
 			userMsg.Timestamp = msg.Time
 		}
 		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.WithError(err).Warn("Failed to save user message")
+			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 		}
 		return nil, nil
 	}
@@ -689,9 +816,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			userMsg.Timestamp = msg.Time
 		}
 		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.WithError(err).Warn("Failed to save user message")
+			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 		}
-		log.WithFields(log.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"channel":      msg.Channel,
 			"chat_id":      msg.ChatID,
 			"reply_policy": replyPolicy,
@@ -705,19 +832,19 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		userMsg.Timestamp = msg.Time
 	}
 	if err := tenantSession.AddMessage(userMsg); err != nil {
-		log.WithError(err).Warn("Failed to save user message")
+		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 	}
 	assistantMsg := llm.NewAssistantMessage(finalContent)
 	if len(toolsUsed) > 0 {
 		_ = toolsUsed
 	}
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
-		log.WithError(err).Warn("Failed to save assistant message")
+		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
 	}
 
 	// 通过 sendMessage 发送最终回复（复用 session 内的消息更新跟踪）
 	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
-		log.WithError(err).Error("Failed to send final response via sendMessage")
+		log.Ctx(ctx).WithError(err).Error("Failed to send final response via sendMessage")
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
@@ -733,7 +860,12 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 // processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
 func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
-	log.WithFields(log.Fields{
+	// 注入 requestID（如果 processMessage 未注入）
+	if log.RequestID(ctx) == "" {
+		ctx = log.WithRequestID(ctx, log.NewRequestID())
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
 		"channel":   msg.Channel,
 		"chat_id":   msg.ChatID,
 		"sender_id": msg.SenderID,
@@ -748,7 +880,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	senderID := msg.SenderID
 	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		log.WithError(err).Warn("Failed to create cron user workspace")
+		log.Ctx(ctx).WithError(err).Warn("Failed to create cron user workspace")
 	}
 
 	// 构建 cron 专用消息（无历史上下文）
@@ -785,7 +917,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
-		log.WithError(err).Warn("Failed to get history, using empty history")
+		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
 	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
@@ -794,12 +926,12 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	}
 	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
 	if err != nil {
-		log.WithError(err).Warn("Failed to configure session MCP scope")
+		log.Ctx(ctx).WithError(err).Warn("Failed to configure session MCP scope")
 	}
 	if len(newTools) > 0 {
 		sessionKey := msg.Channel + ":" + msg.ChatID
 		a.tools.ActivateTools(sessionKey, newTools)
-		log.WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
+		log.Ctx(ctx).WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
 	}
 
 	promptWorkDir := a.workDir
@@ -902,7 +1034,7 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 	}
 
 	if len(snapshot) > 0 {
-		log.WithField("tenant", tenantSession.String()).Infof("/new: archiving %d unconsolidated messages", len(snapshot))
+		log.Ctx(ctx).WithField("tenant", tenantSession.String()).Infof("/new: archiving %d unconsolidated messages", len(snapshot))
 		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
 			Messages:         snapshot,
 			LastConsolidated: 0,
@@ -921,10 +1053,10 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 	}
 
 	if err := tenantSession.Clear(); err != nil {
-		log.WithError(err).Warn("Failed to clear tenant session")
+		log.Ctx(ctx).WithError(err).Warn("Failed to clear tenant session")
 	}
 	if err := tenantSession.SetLastConsolidated(0); err != nil {
-		log.WithError(err).Warn("Failed to reset last consolidated")
+		log.Ctx(ctx).WithError(err).Warn("Failed to reset last consolidated")
 	}
 
 	return &bus.OutboundMessage{
@@ -960,7 +1092,8 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 计算完整上下文的 token 数
 	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
 	if err != nil {
-		log.WithError(err).Warn("Failed to count tokens for compression")
+		log.Ctx(ctx).WithError(err).Warn("Failed to count tokens for compression")
+		// 用户手动触发压缩时，计数失败应该强制执行或报错，而不是静默跳过
 	}
 
 	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
@@ -989,7 +1122,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 替换会话消息
 	// 先收集，全部成功才持久化，避免部分写入导致数据损坏
 	if err := tenantSession.Clear(); err != nil {
-		log.WithError(err).Warn("Failed to clear session for compression")
+		log.Ctx(ctx).WithError(err).Warn("Failed to clear session for compression")
 		// Clear 失败时只返回压缩结果，不持久化，避免数据损坏
 		newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
 		return &bus.OutboundMessage{
@@ -1001,7 +1134,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	allOk := true
 	for _, msg := range compressed {
 		if err := tenantSession.AddMessage(msg); err != nil {
-			log.WithError(err).Error("Partial write during compression, session may be corrupted")
+			log.Ctx(ctx).WithError(err).Error("Partial write during compression, session may be corrupted")
 			allOk = false
 			break
 		}
@@ -1178,7 +1311,7 @@ Please output the compressed content directly without additional explanations.`
 // handleCardResponse 处理卡片响应（按钮点击、表单提交）
 func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	cardID := msg.Metadata["card_id"]
-	log.WithFields(log.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"channel": msg.Channel,
 		"chat_id": msg.ChatID,
 		"card_id": cardID,
@@ -1204,7 +1337,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	}
 
 	if waitingUser {
-		log.Info("Tool is waiting for user response, skipping reply")
+		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
 		return nil, nil
 	}
 
@@ -1213,18 +1346,18 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		cardUserMsg.Timestamp = msg.Time
 	}
 	if err := tenantSession.AddMessage(cardUserMsg); err != nil {
-		log.WithError(err).Warn("Failed to save user message")
+		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 	}
 	assistantMsg := llm.NewAssistantMessage(finalContent)
 	if len(toolsUsed) > 0 {
 		_ = toolsUsed
 	}
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
-		log.WithError(err).Warn("Failed to save assistant message")
+		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
 	}
 
 	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
-		log.WithError(err).Error("Failed to send card response via sendMessage")
+		log.Ctx(ctx).WithError(err).Error("Failed to send card response via sendMessage")
 		return &bus.OutboundMessage{
 			Channel:  msg.Channel,
 			ChatID:   msg.ChatID,
@@ -1241,7 +1374,7 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
 	length, err := tenantSession.Len()
 	if err != nil {
-		log.WithError(err).Warn("Failed to get session length for consolidation check")
+		log.Ctx(ctx).WithError(err).Warn("Failed to get session length for consolidation check")
 		return
 	}
 
@@ -1269,7 +1402,7 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 
 		messages, err := tenantSession.GetMessages()
 		if err != nil {
-			log.WithError(err).Error("Failed to get messages for consolidation")
+			log.Ctx(ctx).WithError(err).Error("Failed to get messages for consolidation")
 			return
 		}
 		lastConsolidated := tenantSession.LastConsolidated()
@@ -1285,9 +1418,9 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		})
 		if result.OK {
 			if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
-				log.WithError(err).Warn("Failed to update last consolidated")
+				log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")
 			}
-			log.WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
+			log.Ctx(ctx).WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
 		}
 	}()
 }
@@ -1368,7 +1501,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			notifyProgress("")
 		}
 
-		log.WithFields(log.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"tokens":    tokenCount,
 			"threshold": threshold,
 		}).Info("Auto context compression triggered")
@@ -1383,7 +1516,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
 				notifyProgress("")
 			}
-			log.WithFields(log.Fields{
+			log.Ctx(ctx).WithFields(log.Fields{
 				"old_tokens": tokenCount,
 				"new_tokens": newTokenCount,
 			}).Info("Auto context compression completed")
@@ -1392,25 +1525,25 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			// 先收集，全部成功才持久化，避免部分写入导致数据损坏
 			if tenantSession != nil {
 				if err := tenantSession.Clear(); err != nil {
-					log.WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
+					log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
 				} else {
 					allOk := true
 					for _, msg := range compressed {
 						if err := tenantSession.AddMessage(msg); err != nil {
-							log.WithError(err).Error("Partial write during auto compression, session may be corrupted")
+							log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
 							allOk = false
 							break
 						}
 					}
 					if allOk {
-						log.Info("Auto compression persisted to session")
+						log.Ctx(ctx).Info("Auto compression persisted to session")
 					} else {
-						log.Warn("Auto compression persistence failed, using in-memory result only")
+						log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 					}
 				}
 			}
 		} else {
-			log.WithError(compressErr).Warn("Auto context compression failed")
+			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
 		}
 	}
 
@@ -1502,7 +1635,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			if r := []rune(argPreview); len(r) > 200 {
 				argPreview = string(r[:200]) + "..."
 			}
-			log.WithFields(log.Fields{
+			log.Ctx(ctx).WithFields(log.Fields{
 				"tool": tc.Name,
 				"id":   tc.ID,
 			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
@@ -1514,7 +1647,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if execErr != nil {
-				log.WithFields(log.Fields{
+				log.Ctx(ctx).WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).WithError(execErr).Warn("Tool failed")
@@ -1532,7 +1665,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				if r := []rune(resultPreview); len(r) > 200 {
 					resultPreview = string(r[:200]) + "..."
 				}
-				log.WithFields(log.Fields{
+				log.Ctx(ctx).WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
 				}).Infof("Tool done: %s", resultPreview)
@@ -1580,13 +1713,13 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			// OAuth 自动触发（已触发过则跳过，避免重复 OAuth 状态）
 			if r.err != nil && oauth.IsTokenNeededError(r.err) {
 				if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
-					log.WithFields(log.Fields{
+					log.Ctx(ctx).WithFields(log.Fields{
 						"tool":   tc.Name,
 						"reason": "sessionFinalSent already set, skipping duplicate oauth_authorize",
 					}).Info("Skip duplicate OAuth auto-trigger")
 					content = "OAuth authorization already in progress."
 				} else {
-					log.WithFields(log.Fields{
+					log.Ctx(ctx).WithFields(log.Fields{
 						"tool":    tc.Name,
 						"elapsed": r.elapsed.Round(time.Millisecond),
 					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
@@ -1608,7 +1741,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 							waitingUser = oauthResult.WaitingUser
 						} else {
 							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
-							log.WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
+							log.Ctx(ctx).WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
 						}
 					} else {
 						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
@@ -1635,7 +1768,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 如果有任何工具标记为等待用户响应，则停止循环，不生成额外回复
 		if waitingUser {
-			log.Info("Tool is waiting for user response, ending loop without additional reply")
+			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
 			return "", toolsUsed, true, nil
 		}
 	}
@@ -1809,12 +1942,13 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 // injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
 func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
-		Channel:  channel,
-		SenderID: senderID,
-		ChatID:   chatID,
-		Content:  content,
-		Time:     time.Now(),
-		IsCron:   true,
+		Channel:   channel,
+		SenderID:  senderID,
+		ChatID:    chatID,
+		Content:   content,
+		Time:      time.Now(),
+		IsCron:    true,
+		RequestID: log.NewRequestID(),
 	}
 }
 
@@ -1985,11 +2119,12 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 // ProcessDirect 直接处理一条消息（用于 CLI 模式）
 func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, error) {
 	msg := bus.InboundMessage{
-		Channel:  "cli",
-		SenderID: "user",
-		ChatID:   "direct",
-		Content:  content,
-		Time:     time.Now(),
+		Channel:   "cli",
+		SenderID:  "user",
+		ChatID:    "direct",
+		Content:   content,
+		Time:      time.Now(),
+		RequestID: log.NewRequestID(),
 	}
 	resp, err := a.processMessage(ctx, msg)
 	if err != nil {

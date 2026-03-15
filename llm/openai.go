@@ -205,7 +205,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		model = o.GetDefaultModel()
 	}
 
-	logrus.WithFields(logrus.Fields{
+	logrus.Ctx(ctx).WithFields(logrus.Fields{
 		"provider":    "openai",
 		"model":       model,
 		"stream":      false,
@@ -217,11 +217,11 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	params := o.buildParams(model, messages, tools)
 
 	data, _ := params.MarshalJSON()
-	logrus.Debugf("[LLM] Request params: %s", string(data))
+	logrus.Ctx(ctx).Debugf("[LLM] Request params: %s", string(data))
 
 	completion, err := o.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		logrus.WithFields(logrus.Fields{
+		logrus.Ctx(ctx).WithFields(logrus.Fields{
 			"provider": "openai",
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
@@ -248,7 +248,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		if len(choice.Message.ToolCalls) > 0 {
 			resp.ToolCalls = make([]ToolCall, 0, len(choice.Message.ToolCalls))
 			for _, tc := range choice.Message.ToolCalls {
-				logrus.WithFields(logrus.Fields{
+				logrus.Ctx(ctx).WithFields(logrus.Fields{
 					"provider":  "openai",
 					"tool_id":   tc.ID,
 					"tool_name": tc.Function.Name,
@@ -262,7 +262,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		}
 	}
 
-	logrus.WithFields(logrus.Fields{
+	logrus.Ctx(ctx).WithFields(logrus.Fields{
 		"provider":          "openai",
 		"duration":          time.Since(startTime).String(),
 		"content_len":       len(resp.Content),
@@ -283,7 +283,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 		model = o.GetDefaultModel()
 	}
 
-	logrus.WithFields(logrus.Fields{
+	logrus.Ctx(ctx).WithFields(logrus.Fields{
 		"provider":    "openai",
 		"model":       model,
 		"stream":      true,
@@ -295,7 +295,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	params := o.buildParams(model, messages, tools)
 
 	data, _ := params.MarshalJSON()
-	logrus.Debugf("[LLM] Stream request params: %s", string(data))
+	logrus.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
 
 	// 创建流式请求
 	stream := o.client.Chat.Completions.NewStreaming(ctx, params)
@@ -314,14 +314,16 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	defer close(eventChan)
 	defer stream.Close()
 
+	l := logrus.Ctx(ctx)
 	chunkCount := 0
 	var firstChunkTime time.Time
+	var lastUsage *TokenUsage
 	doneSent := false
 
 	for stream.Next() {
 		select {
 		case <-ctx.Done():
-			logrus.WithFields(logrus.Fields{
+			l.WithFields(logrus.Fields{
 				"provider": "openai",
 				"reason":   ctx.Err().Error(),
 			}).Warn("[LLM] Stream cancelled")
@@ -339,7 +341,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		// 记录第一个 chunk 时间
 		if chunkCount == 1 {
 			firstChunkTime = time.Now()
-			logrus.WithFields(logrus.Fields{
+			l.WithFields(logrus.Fields{
 				"provider": "openai",
 				"ttft":     firstChunkTime.Sub(startTime).String(),
 			}).Debug("[LLM] First chunk received")
@@ -357,7 +359,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			// 处理工具调用
 			for _, tc := range choice.Delta.ToolCalls {
 				if tc.ID != "" || tc.Function.Name != "" {
-					logrus.WithFields(logrus.Fields{
+					l.WithFields(logrus.Fields{
 						"provider":  "openai",
 						"tool_id":   tc.ID,
 						"tool_name": tc.Function.Name,
@@ -385,28 +387,23 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			}
 		}
 
-		// 处理 usage（如果有）
+		// 收集 usage（通常在最后一个 chunk），不单独打日志，合并到 Stream completed
 		if chunk.Usage.TotalTokens > 0 {
-			logrus.WithFields(logrus.Fields{
-				"provider":          "openai",
-				"prompt_tokens":     chunk.Usage.PromptTokens,
-				"completion_tokens": chunk.Usage.CompletionTokens,
-				"total_tokens":      chunk.Usage.TotalTokens,
-			}).Info("[LLM] Token usage")
+			lastUsage = &TokenUsage{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:      chunk.Usage.TotalTokens,
+			}
 			eventChan <- StreamEvent{
-				Type: EventUsage,
-				Usage: &TokenUsage{
-					PromptTokens:     chunk.Usage.PromptTokens,
-					CompletionTokens: chunk.Usage.CompletionTokens,
-					TotalTokens:      chunk.Usage.TotalTokens,
-				},
+				Type:  EventUsage,
+				Usage: lastUsage,
 			}
 		}
 	}
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
-		logrus.WithFields(logrus.Fields{
+		l.WithFields(logrus.Fields{
 			"provider":    "openai",
 			"chunk_count": chunkCount,
 			"duration":    time.Since(startTime).String(),
@@ -419,12 +416,18 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		return
 	}
 
-	logrus.WithFields(logrus.Fields{
+	fields := logrus.Fields{
 		"provider":       "openai",
 		"chunk_count":    chunkCount,
 		"total_duration": time.Since(startTime).String(),
 		"ttft":           firstChunkTime.Sub(startTime).String(),
-	}).Info("[LLM] Stream completed")
+	}
+	if lastUsage != nil {
+		fields["prompt_tokens"] = lastUsage.PromptTokens
+		fields["completion_tokens"] = lastUsage.CompletionTokens
+		fields["total_tokens"] = lastUsage.TotalTokens
+	}
+	l.WithFields(fields).Info("[LLM] Stream completed")
 
 	// 仅在未通过 finish_reason 发送过 Done 时补发
 	if !doneSent {

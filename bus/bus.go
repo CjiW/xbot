@@ -41,7 +41,8 @@ type InboundMessage struct {
 	Media      []string          // 媒体文件路径
 	Metadata   map[string]string // 渠道特定元数据
 	Time       time.Time
-	IsCron     bool // 是否由 cron 定时任务触发
+	IsCron     bool   // 是否由 cron 定时任务触发
+	RequestID  string // 请求追踪 ID（UUID 无横线），在渠道收到消息时生成
 }
 
 // OutboundMessage 发送到 IM 渠道的出站消息

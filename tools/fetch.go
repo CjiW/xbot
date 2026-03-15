@@ -19,11 +19,19 @@ import (
 
 // FetchTool 网页获取工具
 type FetchTool struct {
-	httpClient *http.Client
+	httpClient  *http.Client
+	converter   *converter.Converter
+	tokenizer   tokenizer.Codec
 }
 
 // NewFetchTool 创建 FetchTool
 func NewFetchTool() *FetchTool {
+	// 创建 converter 和 tokenizer（复用）
+	conv := converter.NewConverter(
+		converter.WithPlugins(commonmark.NewCommonmarkPlugin()),
+	)
+	enc, _ := tokenizer.Get(tokenizer.Cl100kBase)
+
 	return &FetchTool{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -35,6 +43,8 @@ func NewFetchTool() *FetchTool {
 				return nil
 			},
 		},
+		converter: conv,
+		tokenizer: enc,
 	}
 }
 
@@ -97,19 +107,26 @@ func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 
 	// 检查 Content-Type
 	contentType := resp.Header.Get("Content-Type")
-	// 支持 text/html、text/plain（如 GitHub raw）、application/xhtml+xml
-	isHTML := strings.Contains(contentType, "text/html") ||
-		strings.Contains(contentType, "text/plain") ||
-		strings.Contains(contentType, "application/xhtml+xml")
-	if !isHTML {
-		return nil, fmt.Errorf("unsupported content type: %s", contentType)
-	}
 
 	// 读取响应（限制最大 10MB）
 	reader := io.LimitedReader{R: resp.Body, N: 10 * 1024 * 1024}
 	htmlContent, err := io.ReadAll(&reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// text/plain（如 GitHub raw 文件）直接返回原文
+	if strings.Contains(contentType, "text/plain") {
+		content := string(htmlContent)
+		content, _ = t.truncateByTokens(content, params.MaxTokens)
+		return NewResult(content), nil
+	}
+
+	// 支持 text/html 和 application/xhtml+xml
+	isHTML := strings.Contains(contentType, "text/html") ||
+		strings.Contains(contentType, "application/xhtml+xml")
+	if !isHTML {
+		return nil, fmt.Errorf("unsupported content type: %s", contentType)
 	}
 
 	// 使用 go-readability 提取正文
@@ -244,23 +261,19 @@ func (t *FetchTool) formatAsMarkdown(article *readability.Article, pageURL strin
 	sb.WriteString("---\n\n")
 
 	// 正文 - 将 HTML 转换为 Markdown 格式
-	markdownContent := convertHTMLToMarkdown(article.Content, pageURL, article.TextContent)
+	markdownContent := convertHTMLToMarkdown(t.converter, article.Content, pageURL, article.TextContent)
 	sb.WriteString(markdownContent)
 
 	return sb.String()
 }
 
 // convertHTMLToMarkdown 将 HTML 内容转换为 Markdown 格式
-func convertHTMLToMarkdown(htmlContent, baseURL string, fallbackText string) string {
+// 注意：converter 应该在 FetchTool 初始化时创建并复用
+func convertHTMLToMarkdown(conv *converter.Converter, htmlContent, baseURL string, fallbackText string) string {
 	// 如果没有 HTML 内容，使用回退文本
 	if htmlContent == "" {
 		return fallbackText
 	}
-
-	// 创建转换器（只使用 plugins，domain 在处理图片链接时需要）
-	conv := converter.NewConverter(
-		converter.WithPlugins(commonmark.NewCommonmarkPlugin()),
-	)
 
 	// 转换 HTML 到 Markdown
 	markdown, err := conv.ConvertString(htmlContent)
@@ -274,14 +287,13 @@ func convertHTMLToMarkdown(htmlContent, baseURL string, fallbackText string) str
 
 // truncateByTokens 按 token 数量截断内容，返回实际 token 数
 func (t *FetchTool) truncateByTokens(content string, maxTokens int) (string, int) {
-	// 使用 tiktoken 计算 token 数
-	enc, err := tokenizer.Get(tokenizer.Cl100kBase)
-	if err != nil {
-		// 如果失败，不截断
+	// 使用结构体中的 tokenizer（已在初始化时创建）
+	if t.tokenizer == nil {
+		// 如果 tokenizer 未初始化，不截断
 		return content, countTokensRoughly(content)
 	}
 
-	ids, _, err := enc.Encode(content)
+	ids, _, err := t.tokenizer.Encode(content)
 	if err != nil {
 		// 如果失败，不截断
 		return content, countTokensRoughly(content)
@@ -296,7 +308,7 @@ func (t *FetchTool) truncateByTokens(content string, maxTokens int) (string, int
 
 	// 截断到 maxTokens
 	truncated := ids[:maxTokens]
-	truncatedContent, err := enc.Decode(truncated)
+	truncatedContent, err := t.tokenizer.Decode(truncated)
 	if err != nil {
 		// 截断失败，不截断
 		return content, actualTokens

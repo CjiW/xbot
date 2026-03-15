@@ -173,6 +173,11 @@ type Agent struct {
 	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
 	agentsDir       string           // 全局 agents 目录（宿主机路径）
 
+	// 上下文压缩配置
+	maxContextTokens     int
+	compressionThreshold float64
+	enableAutoCompress   bool
+
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
@@ -227,6 +232,11 @@ type Config struct {
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔
 	SessionCacheTimeout  time.Duration // 会话缓存超时
+
+	// 上下文压缩配置
+	MaxContextTokens     int     // 最大上下文 token 数（默认 8000，0 表示不限制）
+	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
+	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 false）
 }
 
 // New 创建 Agent
@@ -258,6 +268,13 @@ func New(cfg Config) *Agent {
 	}
 	if cfg.SessionCacheTimeout == 0 {
 		cfg.SessionCacheTimeout = 24 * time.Hour
+	}
+	// 设置上下文压缩配置默认值
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = 8000
+	}
+	if cfg.CompressionThreshold == 0 {
+		cfg.CompressionThreshold = 0.8
 	}
 
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
@@ -332,24 +349,27 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:             cfg.Bus,
-		llmClient:       cfg.LLM,
-		model:           cfg.Model,
-		multiSession:    multiSession,
-		tools:           registry,
-		maxIterations:   cfg.MaxIterations,
-		maxConcurrency:  cfg.MaxConcurrency,
-		memoryWindow:    cfg.MemoryWindow,
-		skills:          skillStore,
-		agents:          agentStore,
-		chatHistory:     chatHistory,
-		cardBuilder:     cardBuilder,
-		workDir:         cfg.WorkDir,
-		promptLoader:    NewPromptLoader(cfg.PromptFile),
-		sandboxMode:     sandboxMode,
-		globalSkillDirs: globalSkillDirs,
-		agentsDir:       agentsDir,
-		consolidating:   make(map[string]bool),
+		bus:                  cfg.Bus,
+		llmClient:            cfg.LLM,
+		model:                cfg.Model,
+		multiSession:         multiSession,
+		tools:                registry,
+		maxIterations:        cfg.MaxIterations,
+		maxConcurrency:       cfg.MaxConcurrency,
+		memoryWindow:         cfg.MemoryWindow,
+		skills:               skillStore,
+		agents:               agentStore,
+		chatHistory:          chatHistory,
+		cardBuilder:          cardBuilder,
+		workDir:              cfg.WorkDir,
+		promptLoader:         NewPromptLoader(cfg.PromptFile),
+		sandboxMode:          sandboxMode,
+		globalSkillDirs:      globalSkillDirs,
+		maxContextTokens:     cfg.MaxContextTokens,
+		compressionThreshold: cfg.CompressionThreshold,
+		enableAutoCompress:   cfg.EnableAutoCompress,
+		agentsDir:            agentsDir,
+		consolidating:        make(map[string]bool),
 	}
 
 	// 初始化消息构建管道
@@ -636,6 +656,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	if cmd == "/llm" {
 		return a.handleGetLLM(ctx, msg)
+	}
+	if cmd == "/compress" {
+		return a.handleCompress(ctx, msg, tenantSession)
 	}
 
 	// `!` 前缀快捷命令：跳过 LLM，直接在 sandbox 中执行
@@ -935,6 +958,129 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 	}, nil
 }
 
+// handleCompress 处理 /compress 命令：手动触发上下文压缩
+func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	// 检查自动压缩是否启用
+	if !a.enableAutoCompress {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "自动上下文压缩未启用。如需启用，请在配置中设置 EnableAutoCompress=true。",
+		}, nil
+	}
+
+	// 获取当前消息数
+	messages, err := tenantSession.GetMessages()
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "获取会话消息失败，请重试。",
+		}, nil
+	}
+
+	if len(messages) == 0 {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "当前没有消息需要压缩。",
+		}, nil
+	}
+
+	// 计算当前 token 数
+	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
+	if err != nil {
+		log.WithError(err).Warn("Failed to count tokens for compression")
+		tokenCount = 0
+	}
+
+	// 检查是否需要压缩
+	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+	if tokenCount < threshold {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("当前上下文 token 数 (%d) 未达到压缩阈值 (%d)，无需压缩。", tokenCount, threshold),
+		}, nil
+	}
+
+	// 执行压缩
+	compressed, err := a.compressContext(ctx, messages, a.model)
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("上下文压缩失败: %v", err),
+		}, nil
+	}
+
+	// 替换会话消息
+	if err := tenantSession.Clear(); err != nil {
+		log.WithError(err).Warn("Failed to clear session for compression")
+	}
+	for _, msg := range compressed {
+		if err := tenantSession.AddMessage(msg); err != nil {
+			log.WithError(err).Warn("Failed to add compressed message")
+		}
+	}
+
+	newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: fmt.Sprintf("上下文压缩完成: %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+	}, nil
+}
+
+// compressContext 使用 LLM 压缩对话历史
+func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, model string) ([]llm.ChatMessage, error) {
+	// 构建压缩 prompt
+	var historyText strings.Builder
+	for _, msg := range messages {
+		role := strings.ToUpper(msg.Role)
+		if msg.Role == "tool" && msg.ToolName != "" {
+			role = fmt.Sprintf("TOOL[%s]", msg.ToolName)
+		}
+		content := msg.Content
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
+	}
+
+	compressionPrompt := `你是一个上下文压缩专家。你的任务是将冗长的对话历史压缩成简洁的摘要，同时保留所有重要信息。
+
+## 压缩规则
+1. 保留关键事实和决定
+2. 合并重复信息
+3. 移除无关细节
+4. 保持对话的逻辑连贯性
+5. 使用中文输出
+
+## 对话历史
+` + historyText.String() + `
+
+请直接输出压缩后的内容，不要添加额外解释。`
+
+	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
+		llm.NewSystemMessage("你是一个上下文压缩专家。直接输出压缩后的内容。"),
+		llm.NewUserMessage(compressionPrompt),
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("LLM compress failed: %w", err)
+	}
+
+	compressed := llm.StripThinkBlocks(resp.Content)
+
+	// 保留 system 消息和用户最新的消息，中间历史压缩成摘要
+	var result []llm.ChatMessage
+	result = append(result, messages[0])                             // 保留 system message
+	result = append(result, llm.NewUserMessage(messages[1].Content)) // 保留最新用户消息
+	result = append(result, llm.NewAssistantMessage(compressed))     // 添加压缩后的摘要
+
+	return result, nil
+}
+
 // handleCardResponse 处理卡片响应（按钮点击、表单提交）
 func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	cardID := msg.Metadata["card_id"]
@@ -1096,6 +1242,28 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	// 推进 round 计数，自动清理长期未使用的工具激活
 	sessionKey := channel + ":" + chatID
 	a.tools.TickSession(sessionKey)
+
+	// 自动上下文压缩检测
+	if a.enableAutoCompress && len(messages) > 3 {
+		tokenCount, err := llm.CountMessagesTokens(messages, model)
+		if err == nil {
+			threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+			if tokenCount >= threshold {
+				log.WithFields(log.Fields{
+					"tokens":    tokenCount,
+					"threshold": threshold,
+				}).Info("Auto context compression triggered")
+
+				compressed, compressErr := a.compressContext(ctx, messages, model)
+				if compressErr == nil {
+					messages = compressed
+					log.Info("Auto context compression completed")
+				} else {
+					log.WithError(compressErr).Warn("Auto context compression failed")
+				}
+			}
+		}
+	}
 
 	for i := 0; i < a.maxIterations; i++ {
 		if autoNotify && i > 0 {

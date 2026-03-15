@@ -143,6 +143,26 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		systemContent += "\n" + agentsCatalog
 	}
 
+	// SubAgent 使用指南（当有 agents 可用时）
+	if agentsCatalog != "" {
+		systemContent += `
+## SubAgent 使用指南
+
+当任务需要深入探索、审查代码或执行复杂操作时，可以主动调用 SubAgent 工具将任务委托给专业助手：
+
+- **explorer**: 探索项目结构、查找文件、搜索代码
+- **code-reviewer**: 代码审查、发现潜在 bug
+- **tester**: 编写测试、验证功能
+
+使用方式：直接调用 SubAgent 工具，传入 task（任务描述）和 role（角色名）。
+
+例如：
+- "探索这个项目的目录结构" → 用 explorer
+- "审查 recent changes" → 用 code-reviewer
+- "写一些单元测试" → 用 tester
+`
+	}
+
 	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）
 	if mem != nil {
 		memCtx, err := mem.Recall(context.TODO(), userContent)

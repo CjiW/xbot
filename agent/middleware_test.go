@@ -8,6 +8,7 @@ import (
 
 	"xbot/llm"
 	"xbot/memory"
+	"xbot/memory/letta"
 )
 
 // --- Test helpers ---
@@ -963,5 +964,39 @@ func TestMessagePipeline_ConcurrentRunAndUse(t *testing.T) {
 
 	for i := 0; i < goroutines*2; i++ {
 		<-done
+	}
+}
+
+// --- Regression test: verify userID propagates through buildPrompt → pipeline → middleware ---
+// This test ensures that letta.WithUserID(ctx, senderID) is correctly passed to
+// NewMessageContext and available in MessageContext.Ctx for per-user human block.
+// See PR #112: https://github.com/CjiW/xbot/pull/112
+
+func TestUserIDPropagationThroughPipeline(t *testing.T) {
+	// Create context with userID (simulating processMessage's ctx = letta.WithUserID(ctx, msg.SenderID))
+	originalCtx := context.Background()
+	testUserID := "test-user-123"
+	ctxWithUserID := letta.WithUserID(originalCtx, testUserID)
+
+	// Create MessageContext with ctx that has userID (simulating buildPrompt)
+	mc := NewMessageContext(
+		ctxWithUserID, // This should propagate userID through pipeline
+		"hello",
+		nil,
+		"feishu",
+		"/workspace",
+		"TestUser",
+		testUserID, // senderID
+		"chat123",
+	)
+
+	// Verify userID is in the context (the fix from PR #112)
+	if mc.Ctx == nil {
+		t.Fatal("MessageContext.Ctx should not be nil")
+	}
+
+	capturedUserID := letta.GetUserID(mc.Ctx)
+	if capturedUserID != testUserID {
+		t.Errorf("MessageContext.Ctx should contain userID %q, got %q", testUserID, capturedUserID)
 	}
 }

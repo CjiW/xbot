@@ -683,7 +683,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	a.maybeConsolidate(ctx, tenantSession)
 
 	// 构建 LLM 消息（注入长期记忆、skills）
-	messages, err := a.buildPrompt(msg, tenantSession)
+	messages, err := a.buildPrompt(ctx, msg, tenantSession)
 	if err != nil {
 		return nil, err
 	}
@@ -806,7 +806,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。
 // 使用 Agent 持有的 pipeline 实例，通过 MessageContext.Extra 传递动态数据。
-func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
+func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get history, using empty history")
@@ -832,7 +832,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	}
 
 	mc := NewMessageContext(
-		letta.WithUserID(context.TODO(), msg.SenderID),
+		letta.WithUserID(ctx, msg.SenderID),
 		msg.Content,
 		history,
 		msg.Channel,
@@ -849,7 +849,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
-func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	// 提取 /prompt 之后的 query 内容（先 trim 再截取，与 cmd 解析对齐）
 	trimmed := strings.TrimSpace(msg.Content)
 	query := strings.TrimSpace(trimmed[len("/prompt"):])
@@ -860,7 +860,7 @@ func (a *Agent) handlePromptQuery(_ context.Context, msg bus.InboundMessage, ten
 	// 替换 msg.Content 为 query，复用 buildPrompt
 	dryMsg := msg
 	dryMsg.Content = query
-	messages, err := a.buildPrompt(dryMsg, tenantSession)
+	messages, err := a.buildPrompt(ctx, dryMsg, tenantSession)
 	if err != nil {
 		return nil, err
 	}
@@ -1136,7 +1136,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	// 复用 buildPrompt，替换 Content 为卡片摘要
 	cardMsg := msg
 	cardMsg.Content = summary
-	messages, err := a.buildPrompt(cardMsg, tenantSession)
+	messages, err := a.buildPrompt(ctx, cardMsg, tenantSession)
 	if err != nil {
 		return nil, err
 	}

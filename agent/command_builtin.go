@@ -61,6 +61,7 @@ func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (
 			"/llm — 查看当前 LLM 配置\n" +
 			"/compress — 手动触发上下文压缩\n" +
 			"/context — 查看当前 token 数和组成\n" +
+			"/cancel — 取消当前正在处理的请求\n" +
 			"!<command> — 快捷执行命令（跳过 LLM，直接在 sandbox 中运行）",
 	}, nil
 }

@@ -197,6 +197,10 @@ type Agent struct {
 	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
 	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
 	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
+
+	// per-request cancel: 用于 /cancel 取消当前正在处理的请求
+	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
+	chatCancelCh sync.Map
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -512,6 +516,30 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
+			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
+			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
+					select {
+					case ch.(chan struct{}) <- struct{}{}:
+						a.bus.Outbound <- bus.OutboundMessage{
+							Channel: msg.Channel,
+							ChatID:  msg.ChatID,
+							Content: "✅ 已取消当前请求",
+						}
+					default:
+						// cancel 信号已发过
+					}
+				} else {
+					a.bus.Outbound <- bus.OutboundMessage{
+						Channel: msg.Channel,
+						ChatID:  msg.ChatID,
+						Content: "当前没有正在处理的请求",
+					}
+				}
+				continue
+			}
+
 			key := msg.Channel + ":" + msg.ChatID
 			q := getOrCreateQueue(key)
 			select {
@@ -554,25 +582,68 @@ func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan st
 // chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
 // 通过信号量控制并发：获取信号量后才开始处理，处理完释放。
 // 信号量在每次处理消息时动态选择，以支持用户中途设置/取消自定义 LLM。
+// 指令消息（/new, /help 等）绕过信号量，在独立 goroutine 中执行，不阻塞后续消息。
 func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
 	for msg := range ch {
 		if ctx.Err() != nil {
 			return
 		}
 
-		// 动态选择信号量：每次处理消息时都重新判断
-		// 这样用户中途设置/取消自定义 LLM 可以立即生效
+		// 指令消息：独立 goroutine 处理，不占信号量，不阻塞后续消息
+		if a.commands.IsCommand(msg.Content) {
+			go func(m bus.InboundMessage) {
+				response, err := a.processMessage(ctx, m)
+				if err != nil {
+					log.WithError(err).WithField("chat", chatKey).Error("Error processing command")
+					a.bus.Outbound <- bus.OutboundMessage{
+						Channel: m.Channel,
+						ChatID:  m.ChatID,
+						Content: fmt.Sprintf("处理命令时发生错误: %v", err),
+					}
+					return
+				}
+				if response != nil {
+					a.bus.Outbound <- *response
+				}
+			}(msg)
+			continue
+		}
+
+		// 普通消息：信号量 + per-request cancel context
 		sem := a.getSemaphoreForMessage(msg, globalSem)
 
-		// 获取信号量槽位
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			return
 		}
 
-		response, err := a.processMessage(ctx, msg)
+		// 创建 per-request cancel context
+		cancelCh := make(chan struct{}, 1)
+		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+		a.chatCancelCh.Store(cancelKey, cancelCh)
+
+		reqCtx, reqCancel := context.WithCancel(ctx)
+
+		// 监听 cancel 信号
+		go func() {
+			select {
+			case <-cancelCh:
+				reqCancel()
+			case <-reqCtx.Done():
+			}
+		}()
+
+		response, err := a.processMessage(reqCtx, msg)
+		reqCancel()
+		a.chatCancelCh.Delete(cancelKey)
 		<-sem // 释放槽位
+
+		if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
+			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
+			log.WithField("chat", chatKey).Info("Request cancelled by user")
+			continue
+		}
 
 		if err != nil {
 			log.WithError(err).WithField("chat", chatKey).Error("Error processing message")

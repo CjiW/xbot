@@ -271,7 +271,7 @@ func New(cfg Config) *Agent {
 	}
 	// 设置上下文压缩配置默认值
 	if cfg.MaxContextTokens == 0 {
-		cfg.MaxContextTokens = 8000
+		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 0.8
@@ -939,13 +939,13 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制
 	// 用户可能不想自动压缩但偶尔需要手动压缩一下
 
-	// 获取当前消息数
-	messages, err := tenantSession.GetMessages()
+	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
+	messages, err := a.buildPrompt(ctx, msg, tenantSession)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "获取会话消息失败，请重试。",
+			Content: "获取上下文失败，请重试。",
 		}, nil
 	}
 
@@ -957,7 +957,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
-	// 计算当前 token 数
+	// 计算当前 token 数（完整上下文）
 	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
 	if err != nil {
 		log.WithError(err).Warn("Failed to count tokens for compression")
@@ -974,8 +974,9 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
-	// 执行压缩
-	compressed, err := a.compressContext(ctx, messages, a.model)
+	// 执行压缩（只压缩 session 历史，压缩后重新构建完整上下文）
+	sessionMsgs, _ := tenantSession.GetMessages()
+	compressed, err := a.compressContext(ctx, sessionMsgs, a.model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -1019,6 +1020,78 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		ChatID:  msg.ChatID,
 		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
 	}, nil
+}
+
+// handleContext 处理 /context 命令：显示当前 token 数和组成
+func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
+	messages, err := a.buildPrompt(ctx, msg, tenantSession)
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "获取上下文失败，请重试。",
+		}, nil
+	}
+
+	// 按角色统计 token 数
+	var systemTokens, userTokens, assistantTokens, toolTokens int
+
+	for _, m := range messages {
+		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, a.model)
+		if err != nil {
+			continue
+		}
+		switch m.Role {
+		case "system":
+			systemTokens += tokens
+		case "user":
+			userTokens += tokens
+		case "assistant":
+			assistantTokens += tokens
+		case "tool":
+			toolTokens += tokens
+		}
+	}
+
+	total := systemTokens + userTokens + assistantTokens + toolTokens
+	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+
+	content := fmt.Sprintf(`📊 上下文 Token 统计
+
+| 角色 | Token | 占比 |
+|------|-------|------|
+| System | %d | %.1f%% |
+| User | %d | %.1f%% |
+| Assistant | %d | %.1f%% |
+| Tool | %d | %.1f%% |
+| **总计** | **%d** | 100%% |
+
+⚙️ 配置:
+- 最大上下文: %d tokens
+- 压缩阈值: %d tokens (%.0f%%)`,
+		systemTokens, float64(systemTokens)*100/float64(max(total, 1)),
+		userTokens, float64(userTokens)*100/float64(max(total, 1)),
+		assistantTokens, float64(assistantTokens)*100/float64(max(total, 1)),
+		toolTokens, float64(toolTokens)*100/float64(max(total, 1)),
+		total,
+		a.maxContextTokens,
+		threshold,
+		a.compressionThreshold*100,
+	)
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: content,
+	}, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // compressContext 使用 LLM 压缩对话历史
@@ -1257,51 +1330,76 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	sessionKey := channel + ":" + chatID
 	a.tools.TickSession(sessionKey)
 
-	// 自动上下文压缩检测
-	if a.enableAutoCompress && len(messages) > 3 {
+	// 压缩检测和执行的辅助函数：在每次 LLM 调用前检测并执行压缩
+	maybeCompress := func() {
+		if !a.enableAutoCompress || len(messages) <= 3 {
+			return
+		}
 		tokenCount, err := llm.CountMessagesTokens(messages, model)
-		if err == nil {
-			threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
-			if tokenCount >= threshold {
-				log.WithFields(log.Fields{
-					"tokens":    tokenCount,
-					"threshold": threshold,
-				}).Info("Auto context compression triggered")
+		if err != nil {
+			return
+		}
+		threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+		if tokenCount < threshold {
+			return
+		}
 
-				compressed, compressErr := a.compressContext(ctx, messages, model)
-				if compressErr == nil {
-					messages = compressed
-					log.Info("Auto context compression completed")
+		// 发送压缩进度信息
+		if autoNotify {
+			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", tokenCount))
+			notifyProgress("")
+		}
 
-					// 持久化压缩结果到 session
-					// 先收集，全部成功才持久化，避免部分写入导致数据损坏
-					if tenantSession != nil {
-						if err := tenantSession.Clear(); err != nil {
-							log.WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
-						} else {
-							allOk := true
-							for _, msg := range compressed {
-								if err := tenantSession.AddMessage(msg); err != nil {
-									log.WithError(err).Error("Partial write during auto compression, session may be corrupted")
-									allOk = false
-									break
-								}
-							}
-							if allOk {
-								log.Info("Auto compression persisted to session")
-							} else {
-								log.Warn("Auto compression persistence failed, using in-memory result only")
-							}
+		log.WithFields(log.Fields{
+			"tokens":    tokenCount,
+			"threshold": threshold,
+		}).Info("Auto context compression triggered")
+
+		compressed, compressErr := a.compressContext(ctx, messages, model)
+		if compressErr == nil {
+			messages = compressed
+
+			// 发送压缩完成进度信息
+			newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
+				notifyProgress("")
+			}
+			log.WithFields(log.Fields{
+				"old_tokens": tokenCount,
+				"new_tokens": newTokenCount,
+			}).Info("Auto context compression completed")
+
+			// 持久化压缩结果到 session
+			// 先收集，全部成功才持久化，避免部分写入导致数据损坏
+			if tenantSession != nil {
+				if err := tenantSession.Clear(); err != nil {
+					log.WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
+				} else {
+					allOk := true
+					for _, msg := range compressed {
+						if err := tenantSession.AddMessage(msg); err != nil {
+							log.WithError(err).Error("Partial write during auto compression, session may be corrupted")
+							allOk = false
+							break
 						}
 					}
-				} else {
-					log.WithError(compressErr).Warn("Auto context compression failed")
+					if allOk {
+						log.Info("Auto compression persisted to session")
+					} else {
+						log.Warn("Auto compression persistence failed, using in-memory result only")
+					}
 				}
 			}
+		} else {
+			log.WithError(compressErr).Warn("Auto context compression failed")
 		}
 	}
 
 	for i := 0; i < a.maxIterations; i++ {
+		// 每次 LLM 调用前检测是否需要压缩
+		maybeCompress()
+
 		if autoNotify && i > 0 {
 			notifyProgress("> 💭 思考中...")
 		}

@@ -139,17 +139,21 @@ func CountTokens(text string, model string) (int, error) {
 }
 
 // CountMessagesTokens counts the total tokens for a list of messages.
-// This is more accurate than simple text counting as it accounts for role formatting.
+// Uses OpenAI's official formula: https://cookbook.openai.com/examples/how_to_count_tokens_with_tiktoken
+// Formula:
+// - Every message: 3 tokens (role + content separators)
+// - For each tool call: function name + arguments + overhead
+// - For tool role messages: tool_call_id adds overhead
 func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 	total := 0
 
-	// Approximate token overhead per message (role + formatting)
-	// Typically 4 tokens for role + 2 for formatting
-	overheadPerMessage := 4
+	// OpenAI official constants
+	const tokensPerMessage = 3
+	const tokensPerName = 1
 
-	for _, msg := range messages {
-		// Add overhead
-		total += overheadPerMessage
+	for i, msg := range messages {
+		// Every message gets base overhead
+		total += tokensPerMessage
 
 		// Count content tokens
 		if msg.Content != "" {
@@ -160,9 +164,9 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 			total += count
 		}
 
-		// Count tool call tokens if present
+		// Handle tool_calls - these are in the assistant message
 		for _, tc := range msg.ToolCalls {
-			total += overheadPerMessage // role
+			// Function name
 			if tc.Name != "" {
 				count, err := CountTokens(tc.Name, model)
 				if err != nil {
@@ -170,6 +174,7 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 				}
 				total += count
 			}
+			// Arguments (JSON string)
 			if tc.Arguments != "" {
 				count, err := CountTokens(tc.Arguments, model)
 				if err != nil {
@@ -179,8 +184,19 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 			}
 		}
 
-		// Count tool result tokens (only for tool role, content counted above)
-		// Note: tool messages already counted in the content section above, don't double count
+		// Handle tool role messages - they have tool_call_id
+		// The content is the tool result
+		if msg.Role == "tool" {
+			// tool_call_id adds overhead
+			if msg.ToolCallID != "" {
+				total += tokensPerName
+			}
+		}
+
+		// Last message gets +1 token (usually the assistant message)
+		if i == len(messages)-1 {
+			total += 1
+		}
 	}
 
 	return total, nil

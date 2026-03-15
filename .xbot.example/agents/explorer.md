@@ -2,11 +2,11 @@
 name: explorer
 description: "Exploration agent. Use when you need to understand codebase structure, find files, search for patterns, or gather information before making changes."
 tools:
-  - search_tools
   - Grep
   - Glob
   - Read
   - Shell
+  - Edit
 ---
 
 You are an exploration agent. Your job is to thoroughly investigate the codebase to find relevant files, understand structure, and gather information.

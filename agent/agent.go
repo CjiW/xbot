@@ -587,7 +587,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 获取或创建租户会话
-	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
+	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID, msg.SenderID)
 	if err != nil {
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
 	}
@@ -1403,7 +1403,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
-	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID, senderID); err == nil {
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
 			toolCtx.TenantID = lm.TenantID()
 			toolCtx.CoreMemory = lm.CoreService()

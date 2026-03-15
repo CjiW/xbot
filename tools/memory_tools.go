@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,8 +60,9 @@ func (t *CoreMemoryAppendTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		return NewResult("Core memory is not available (memory provider is not letta)."), nil
 	}
 	tenantID := ctx.TenantID
+	userID := parseUserID(ctx.SenderID)
 
-	current, _, err := coreSvc.GetBlock(tenantID, args.Block)
+	current, _, err := coreSvc.GetBlock(tenantID, args.Block, userID)
 	if err != nil {
 		return nil, fmt.Errorf("read block: %w", err)
 	}
@@ -72,7 +74,7 @@ func (t *CoreMemoryAppendTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		newContent = current + "\n" + args.Content
 	}
 
-	if err := coreSvc.SetBlock(tenantID, args.Block, newContent); err != nil {
+	if err := coreSvc.SetBlock(tenantID, args.Block, newContent, userID); err != nil {
 		return nil, fmt.Errorf("update block: %w", err)
 	}
 
@@ -140,8 +142,9 @@ func (t *CoreMemoryReplaceTool) Execute(ctx *ToolContext, input string) (*ToolRe
 		return NewResult("Core memory is not available (memory provider is not letta)."), nil
 	}
 	tenantID := ctx.TenantID
+	userID := parseUserID(ctx.SenderID)
 
-	current, _, err := coreSvc.GetBlock(tenantID, args.Block)
+	current, _, err := coreSvc.GetBlock(tenantID, args.Block, userID)
 	if err != nil {
 		return nil, fmt.Errorf("read block: %w", err)
 	}
@@ -151,7 +154,7 @@ func (t *CoreMemoryReplaceTool) Execute(ctx *ToolContext, input string) (*ToolRe
 	}
 
 	newContent := strings.Replace(current, args.OldText, args.NewText, 1)
-	if err := coreSvc.SetBlock(tenantID, args.Block, newContent); err != nil {
+	if err := coreSvc.SetBlock(tenantID, args.Block, newContent, userID); err != nil {
 		return nil, fmt.Errorf("update block: %w", err)
 	}
 
@@ -211,8 +214,9 @@ func (t *RethinkTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 		return NewResult("Core memory is not available (memory provider is not letta)."), nil
 	}
 	tenantID := ctx.TenantID
+	userID := parseUserID(ctx.SenderID)
 
-	if err := coreSvc.SetBlock(tenantID, args.Block, args.NewContent); err != nil {
+	if err := coreSvc.SetBlock(tenantID, args.Block, args.NewContent, userID); err != nil {
 		return nil, fmt.Errorf("rewrite block: %w", err)
 	}
 
@@ -452,6 +456,20 @@ func isValidBlock(name string) bool {
 		return true
 	}
 	return false
+}
+
+// parseUserID parses senderID string to *int64 for per-user human block.
+// Returns nil if senderID is empty or cannot be parsed.
+func parseUserID(senderID string) *int64 {
+	if senderID == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(senderID, 10, 64)
+	if err != nil {
+		log.WithField("sender_id", senderID).Warn("Failed to parse senderID as int64 for core memory")
+		return nil
+	}
+	return &parsed
 }
 
 // LettaMemoryTools returns all Letta memory tools for registration.

@@ -12,6 +12,8 @@ import (
 
 	"github.com/go-shiori/go-readability"
 	"github.com/tiktoken-go/tokenizer"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"xbot/llm"
 )
 
@@ -237,40 +239,33 @@ func (t *FetchTool) formatAsMarkdown(article *readability.Article, pageURL strin
 	sb.WriteString("\n\n")
 	sb.WriteString("---\n\n")
 
-	// 正文 - 转换为 Markdown 格式
-	sb.WriteString(convertToMarkdown(article.TextContent))
+	// 正文 - 将 HTML 转换为 Markdown 格式
+	markdownContent := convertHTMLToMarkdown(article.Content, pageURL, article.TextContent)
+	sb.WriteString(markdownContent)
 
 	return sb.String()
 }
 
-// convertToMarkdown 将纯文本转换为 Markdown 格式
-func convertToMarkdown(text string) string {
-	lines := strings.Split(text, "\n")
-	var sb strings.Builder
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			sb.WriteString("\n")
-			continue
-		}
-
-		// 检测标题格式 (全大写或短行且无标点结尾)
-		isTitle := len(line) < 80 && len(line) > 3 &&
-			!strings.ContainsAny(line, ".!?;:,") &&
-			strings.ToUpper(line) == line
-
-		if isTitle {
-			sb.WriteString("## ")
-			sb.WriteString(line)
-			sb.WriteString("\n\n")
-		} else {
-			sb.WriteString(line)
-			sb.WriteString("\n")
-		}
+// convertHTMLToMarkdown 将 HTML 内容转换为 Markdown 格式
+func convertHTMLToMarkdown(htmlContent, baseURL string, fallbackText string) string {
+	// 如果没有 HTML 内容，使用回退文本
+	if htmlContent == "" {
+		return fallbackText
 	}
 
-	return sb.String()
+	// 创建转换器（只使用 plugins，domain 在处理图片链接时需要）
+	conv := converter.NewConverter(
+		converter.WithPlugins(commonmark.NewCommonmarkPlugin()),
+	)
+
+	// 转换 HTML 到 Markdown
+	markdown, err := conv.ConvertString(htmlContent)
+	if err != nil {
+		// 如果转换失败，回退到纯文本
+		return fallbackText
+	}
+
+	return strings.TrimSpace(markdown)
 }
 
 // truncateByTokens 按 token 数量截断内容，返回实际 token 数

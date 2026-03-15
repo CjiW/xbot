@@ -619,6 +619,8 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		}
 
 		// 创建 per-request cancel context
+		var response *bus.OutboundMessage
+		var err error
 		cancelCh := make(chan struct{}, 1)
 		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
 		a.chatCancelCh.Store(cancelKey, cancelCh)
@@ -634,10 +636,15 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 			}
 		}()
 
-		response, err := a.processMessage(reqCtx, msg)
-		reqCancel()
-		a.chatCancelCh.Delete(cancelKey)
-		<-sem // 释放槽位
+		// defer 确保 cancelCh 清理：即使 processMessage panic 也不会泄漏
+		func() {
+			defer func() {
+				reqCancel()
+				a.chatCancelCh.Delete(cancelKey)
+				<-sem // 释放槽位
+			}()
+			response, err = a.processMessage(reqCtx, msg)
+		}()
 
 		if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）

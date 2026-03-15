@@ -184,7 +184,11 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 // GetOrCreateSession retrieves or creates a tenant session for the given channel, chatID and senderID.
 // senderID is used to create per-user human block in Letta memory. Can be empty for backward compatibility.
 func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string) (*TenantSession, error) {
+	// Cache key includes senderID to ensure per-user human block in group chats
 	key := channel + ":" + chatID
+	if senderID != "" {
+		key = key + ":" + senderID
+	}
 
 	// Fast path: check cache with read lock
 	m.mu.RLock()

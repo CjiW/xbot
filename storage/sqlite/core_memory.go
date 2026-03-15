@@ -46,7 +46,7 @@ func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 }
 
 // GetBlock reads a single core memory block.
-// - persona: always uses tenantID=1 (global shared)
+// - persona: always uses tenantID=0 (global shared)
 // - human: uses userID directly as key (cross-tenant shared)
 // - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID string) (content string, charLimit int, err error) {
@@ -58,8 +58,8 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 
 	switch blockName {
 	case "persona":
-		// persona is global, always use tenantID=1
-		effectiveTenantID = 1
+		// persona is global, always use tenantID=0 (for backward compatibility)
+		effectiveTenantID = 0
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
 		if userID != "" {
@@ -88,7 +88,7 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 }
 
 // SetBlock upserts a core memory block.
-// - persona: always uses tenantID=1 (global shared)
+// - persona: always uses tenantID=0 (global shared)
 // - human: uses userID directly as key (cross-tenant shared)
 // - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, userID string) error {
@@ -100,8 +100,8 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 
 	switch blockName {
 	case "persona":
-		// persona is global, always use tenantID=1
-		effectiveTenantID = 1
+		// persona is global, always use tenantID=0
+		effectiveTenantID = 0 // for backward compatibility
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
 		if userID != "" {
@@ -142,7 +142,7 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 }
 
 // GetAllBlocks reads all core memory blocks.
-// - persona: from tenantID=1 (global shared)
+// - persona: from tenantID=0 (global shared)
 // - human: from userID directly (cross-tenant shared)
 // - working_context: from tenantID (per-tenant)
 func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[string]string, error) {
@@ -150,10 +150,10 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 
 	blocks := make(map[string]string)
 
-	// Get persona from tenantID=1 (global)
+	// Get persona from tenantID=0 (global)
 	var personaContent string
 	err := conn.QueryRow(
-		"SELECT content FROM core_memory_blocks WHERE tenant_id = 1 AND block_name = 'persona' AND user_id = ''",
+		"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",
 	).Scan(&personaContent)
 	if err == nil {
 		blocks["persona"] = personaContent

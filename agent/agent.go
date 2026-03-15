@@ -985,12 +985,12 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
 	if err != nil {
 		log.WithError(err).Warn("Failed to count tokens for compression")
-		tokenCount = 0
+		// 用户手动触发压缩时，计数失败应该强制执行或报错，而不是静默跳过
 	}
 
-	// 检查是否需要压缩
+	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
 	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
-	if tokenCount < threshold {
+	if err == nil && tokenCount < threshold {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
@@ -1068,7 +1068,11 @@ Please output the compressed content directly without additional explanations.`
 
 	// 保留 system 消息，找最后一条 user/assistant 消息（不是 tool 消息），中间历史压缩成摘要
 	var result []llm.ChatMessage
-	result = append(result, messages[0]) // 保留 system message
+
+	// 防御性检查：只保留 role 为 "system" 的消息
+	if len(messages) > 0 && messages[0].Role == "system" {
+		result = append(result, messages[0])
+	}
 
 	// 找到最后一条 user 或 assistant 消息
 	var lastUserMsg *llm.ChatMessage
@@ -1084,8 +1088,9 @@ Please output the compressed content directly without additional explanations.`
 		result = append(result, *lastUserMsg)
 	}
 
-	// 添加压缩后的摘要
-	result = append(result, llm.NewAssistantMessage(compressed))
+	// 添加压缩后的摘要（用 user role 包装，避免连续 assistant 消息问题）
+	summaryMsg := llm.NewUserMessage("[Previous conversation summary]: " + compressed)
+	result = append(result, summaryMsg)
 
 	return result, nil
 }

@@ -165,7 +165,7 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 				queryBuilder.WriteString(msg.Content)
 				queryBuilder.WriteString(" ")
 			}
-			if len(queryBuilder.String()) > 500 {
+			if queryBuilder.Len() > 500 {
 				break
 			}
 		}

@@ -1291,18 +1291,34 @@ Please output the compressed content directly without additional explanations.`
 		result = append(result, summaryMsg)
 	}
 
-	// 找到最后一条 user 或 assistant 消息
-	var lastUserMsg *llm.ChatMessage
-	for i := len(messages) - 1; i >= 1; i-- { // 从后往前遍历，跳过 system message
-		if messages[i].Role == "user" || messages[i].Role == "assistant" {
-			lastUserMsg = &messages[i]
+	// 保留尾部的完整 tool_calls/tool_result 链
+	// API 要求：assistant 的 tool_calls 必须紧跟对应的 tool result 消息
+	// 从后往前扫描，找到最后一个"安全切割点"：
+	//   - user 消息是安全切割点
+	//   - 不带 tool_calls 的 assistant 消息是安全切割点
+	//   - tool result 或 assistant(tool_calls) 必须成对保留，继续往前找
+	tailStart := len(messages) // 默认不保留任何尾部消息
+	for i := len(messages) - 1; i >= 1; i-- {
+		msg := messages[i]
+		if msg.Role == "user" {
+			tailStart = i
 			break
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			tailStart = i
+			break
+		}
+		// tool result 或 assistant(tool_calls)：继续往前找，确保配对完整
+		// 如果一直找到 index 1（紧接 system message），说明整个对话都是 tool 链，
+		// 全部保留以避免破坏配对
+		if i == 1 {
+			tailStart = 1
 		}
 	}
 
-	// 如果找到了，加入最后一条消息
-	if lastUserMsg != nil {
-		result = append(result, *lastUserMsg)
+	// 保留从 tailStart 到末尾的所有消息
+	if tailStart < len(messages) {
+		result = append(result, messages[tailStart:]...)
 	}
 
 	return result, nil

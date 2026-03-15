@@ -1048,22 +1048,22 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
 	}
 
-	compressionPrompt := `你是一个上下文压缩专家。你的任务是将冗长的对话历史压缩成简洁的摘要，同时保留所有重要信息。
+	// 使用可配置的压缩 prompt（支持国际化）
+	compressionPrompt := `You are a context compression expert. Your task is to compress lengthy conversation history into a concise summary while retaining all important information.
 
-## 压缩规则
-1. 保留关键事实和决定
-2. 合并重复信息
-3. 移除无关细节
-4. 保持对话的逻辑连贯性
-5. 使用中文输出
+## Compression Rules
+1. Retain key facts and decisions
+2. Merge duplicate information
+3. Remove irrelevant details
+4. Maintain logical coherence of the conversation
 
-## 对话历史
+## Conversation History
 ` + historyText.String() + `
 
-请直接输出压缩后的内容，不要添加额外解释。`
+Please output the compressed content directly without additional explanations.`
 
 	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
-		llm.NewSystemMessage("你是一个上下文压缩专家。直接输出压缩后的内容。"),
+		llm.NewSystemMessage("You are a context compression expert. Output the compressed content directly without additional explanations."),
 		llm.NewUserMessage(compressionPrompt),
 	}, nil)
 	if err != nil {
@@ -1072,11 +1072,26 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 
 	compressed := llm.StripThinkBlocks(resp.Content)
 
-	// 保留 system 消息和用户最新的消息，中间历史压缩成摘要
+	// 保留 system 消息，找最后一条 user/assistant 消息（不是 tool 消息），中间历史压缩成摘要
 	var result []llm.ChatMessage
-	result = append(result, messages[0])                             // 保留 system message
-	result = append(result, llm.NewUserMessage(messages[1].Content)) // 保留最新用户消息
-	result = append(result, llm.NewAssistantMessage(compressed))     // 添加压缩后的摘要
+	result = append(result, messages[0]) // 保留 system message
+
+	// 找到最后一条 user 或 assistant 消息
+	var lastUserMsg *llm.ChatMessage
+	for i := len(messages) - 1; i >= 1; i-- { // 从后往前遍历，跳过 system message
+		if messages[i].Role == "user" || messages[i].Role == "assistant" {
+			lastUserMsg = &messages[i]
+			break
+		}
+	}
+
+	// 如果找到了，加入最后一条消息
+	if lastUserMsg != nil {
+		result = append(result, *lastUserMsg)
+	}
+
+	// 添加压缩后的摘要
+	result = append(result, llm.NewAssistantMessage(compressed))
 
 	return result, nil
 }

@@ -141,8 +141,8 @@ type contextCmd struct{}
 
 func (c *contextCmd) Name() string        { return "/context" }
 func (c *contextCmd) Aliases() []string   { return nil }
-func (c *contextCmd) Concurrent() bool { return true }
 func (c *contextCmd) Match(s string) bool { return strings.ToLower(s) == "/context" }
+func (c *contextCmd) Concurrent() bool    { return true }
 
 func (c *contextCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)

@@ -1011,6 +1011,13 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 替换会话消息
 	if err := tenantSession.Clear(); err != nil {
 		log.WithError(err).Warn("Failed to clear session for compression")
+		// Clear 失败时只返回压缩结果，不持久化，避免数据损坏
+		newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+		}, nil
 	}
 	for _, msg := range compressed {
 		if err := tenantSession.AddMessage(msg); err != nil {
@@ -1035,9 +1042,10 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 		if msg.Role == "tool" && msg.ToolName != "" {
 			role = fmt.Sprintf("TOOL[%s]", msg.ToolName)
 		}
+		// 按 rune 截断，避免中文乱码
 		content := msg.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		if len([]rune(content)) > 500 {
+			content = string([]rune(content)[:500]) + "..."
 		}
 		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
 	}
@@ -1074,6 +1082,10 @@ Please output the compressed content directly without additional explanations.`
 		result = append(result, messages[0])
 	}
 
+	// 添加压缩后的摘要（用 system role 包装，因为它是上下文信息，不是用户发言）
+	summaryMsg := llm.NewSystemMessage("[Previous conversation summary]: " + compressed)
+	result = append(result, summaryMsg)
+
 	// 找到最后一条 user 或 assistant 消息
 	var lastUserMsg *llm.ChatMessage
 	for i := len(messages) - 1; i >= 1; i-- { // 从后往前遍历，跳过 system message
@@ -1087,10 +1099,6 @@ Please output the compressed content directly without additional explanations.`
 	if lastUserMsg != nil {
 		result = append(result, *lastUserMsg)
 	}
-
-	// 添加压缩后的摘要（用 user role 包装，避免连续 assistant 消息问题）
-	summaryMsg := llm.NewUserMessage("[Previous conversation summary]: " + compressed)
-	result = append(result, summaryMsg)
 
 	return result, nil
 }
@@ -1277,14 +1285,16 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					// 持久化压缩结果到 session
 					if tenantSession != nil {
 						if err := tenantSession.Clear(); err != nil {
-							log.WithError(err).Warn("Failed to clear session for auto compression")
-						}
-						for _, msg := range compressed {
-							if err := tenantSession.AddMessage(msg); err != nil {
-								log.WithError(err).Warn("Failed to add compressed message")
+							log.WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
+							// Clear 失败时只使用内存中的压缩结果，不持久化，避免数据损坏
+						} else {
+							for _, msg := range compressed {
+								if err := tenantSession.AddMessage(msg); err != nil {
+									log.WithError(err).Warn("Failed to add compressed message")
+								}
 							}
+							log.Info("Auto compression persisted to session")
 						}
-						log.Info("Auto compression persisted to session")
 					}
 				} else {
 					log.WithError(compressErr).Warn("Auto context compression failed")

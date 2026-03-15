@@ -214,9 +214,10 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 		if ts.IsZero() {
 			ts = time.Now()
 		}
+		// 按 rune 截断，避免中文乱码
 		content := msg.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		if len([]rune(content)) > 500 {
+			content = string([]rune(content)[:500]) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts.Format("2006-01-02 15:04"), role, toolHint, content))
 	}
@@ -539,22 +540,19 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 			Type:        "array",
 			Description: "List of existing memory IDs to delete (for deduplication/conflict resolution). Only include IDs that should be replaced or removed.",
 			Required:    false,
+			Items:       &llm.ToolParamItems{Type: "string"},
 		},
 	}
 }
 
 // consolidateMemoryArgs consolidates memory with deduplication and conflict detection.
-// New parameters:
-// - existing_memories: list of similar memories found before consolidation (for deduplication)
-// - entries_to_delete: IDs of memories to delete (duplicates/conflicts resolved by LLM)
 type consolidateMemoryArgs struct {
-	Persona          string           `json:"persona"`
-	Human            string           `json:"human"`
-	WorkingContext   string           `json:"working_context"`
-	ArchivalEntries  []string         `json:"archival_entries"`
-	HistoryEntry     string           `json:"history_entry"`
-	ExistingMemories []ExistingMemory `json:"-"` // Input only, not returned by LLM
-	EntriesToDelete  []string         `json:"entries_to_delete"`
+	Persona         string   `json:"persona"`
+	Human           string   `json:"human"`
+	WorkingContext  string   `json:"working_context"`
+	ArchivalEntries []string `json:"archival_entries"`
+	HistoryEntry    string   `json:"history_entry"`
+	EntriesToDelete []string `json:"entries_to_delete"`
 }
 
 // ExistingMemory represents a similar memory found during deduplication search.

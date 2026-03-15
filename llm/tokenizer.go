@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/tiktoken-go/tokenizer"
 )
@@ -70,14 +72,10 @@ func getEncodingForModel(model string) tokenizer.Model {
 			prefixes = append(prefixes, prefix)
 		}
 	}
-	// Sort by length descending (longest prefix first)
-	for i := 0; i < len(prefixes)-1; i++ {
-		for j := i + 1; j < len(prefixes); j++ {
-			if len(prefixes[j]) > len(prefixes[i]) {
-				prefixes[i], prefixes[j] = prefixes[j], prefixes[i]
-			}
-		}
-	}
+	// Sort by length descending (longest prefix first) using sort.Slice
+	sort.Slice(prefixes, func(i, j int) bool {
+		return len(prefixes[i]) > len(prefixes[j])
+	})
 
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(model, prefix) {
@@ -88,16 +86,32 @@ func getEncodingForModel(model string) tokenizer.Model {
 	return tokenizer.GPT4 // Default fallback
 }
 
+// encoderCache caches tokenizer encoders to avoid repeated initialization
+var encoderCache sync.Map // map[tokenizer.Model]tokenizer.Codec
+
+// getEncoder returns a cached encoder for the given model, or creates a new one
+func getEncoder(encodingModel tokenizer.Model) (tokenizer.Codec, error) {
+	if enc, ok := encoderCache.Load(encodingModel); ok {
+		return enc.(tokenizer.Codec), nil
+	}
+	enc, err := tokenizer.ForModel(encodingModel)
+	if err != nil {
+		return nil, err
+	}
+	encoderCache.Store(encodingModel, enc)
+	return enc, nil
+}
+
 // CountTokens counts the number of tokens in the given text for the specified model.
 // Returns the token count and any error.
 func CountTokens(text string, model string) (int, error) {
 	encodingModel := getEncodingForModel(model)
 
-	// Get the encoder
-	enc, err := tokenizer.ForModel(encodingModel)
+	// Get the encoder (with caching)
+	enc, err := getEncoder(encodingModel)
 	if err != nil {
 		// Fallback to GPT-4 encoder
-		enc, err = tokenizer.ForModel(tokenizer.GPT4)
+		enc, err = getEncoder(tokenizer.GPT4)
 		if err != nil {
 			return 0, err
 		}

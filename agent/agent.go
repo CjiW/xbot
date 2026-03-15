@@ -803,7 +803,7 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
 	}
-	return BuildMessages(history, msg.Content, msg.Channel, mem, promptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName), nil
+	return BuildMessages(history, msg.Content, msg.Channel, mem, promptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, msg.SenderID), nil
 }
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -955,7 +955,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	if a.sandboxMode == "docker" {
 		cardPromptWorkDir = "/workspace"
 	}
-	messages := BuildMessages(history, summary, msg.Channel, memory, cardPromptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName)
+	messages := BuildMessages(history, summary, msg.Channel, memory, cardPromptWorkDir, skillsCatalog, agentsCatalog, a.promptLoader, msg.SenderName, msg.SenderID)
 
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {

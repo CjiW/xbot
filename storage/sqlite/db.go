@@ -367,13 +367,49 @@ UPDATE schema_version SET version = 6;
 
 	if from < 8 {
 		// Migration to add user_id to core_memory_blocks for per-user human block
-		// Direct v6 -> v8: Add user_id as TEXT NOT NULL DEFAULT '' (allows storing senderID strings like "ou_xxx")
-		_, err := conn.Exec("ALTER TABLE core_memory_blocks ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+		// SQLite's ALTER TABLE ADD COLUMN doesn't modify existing PRIMARY KEY.
+		// Must recreate table to update PRIMARY KEY from (tenant_id, block_name) to (tenant_id, block_name, user_id).
+
+		// Step 1: Create new table with correct PRIMARY KEY
+		_, err := conn.Exec(`
+			CREATE TABLE IF NOT EXISTS core_memory_blocks_new (
+				tenant_id INTEGER NOT NULL,
+				block_name TEXT NOT NULL,
+				user_id TEXT NOT NULL DEFAULT '',
+				content TEXT NOT NULL DEFAULT '',
+				char_limit INTEGER NOT NULL DEFAULT 2000,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (tenant_id, block_name, user_id),
+				FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+			)
+		`)
 		if err != nil {
-			return fmt.Errorf("migrate v6->v8: add user_id column: %w", err)
+			return fmt.Errorf("migrate v6->v8: create new table: %w", err)
 		}
 
-		log.Info("Database migrated to v8 (added user_id to core_memory_blocks)")
+		// Step 2: Copy data from old table (user_id defaults to '' for existing rows)
+		_, err = conn.Exec(`
+			INSERT INTO core_memory_blocks_new (tenant_id, block_name, user_id, content, char_limit, updated_at)
+			SELECT tenant_id, block_name, '', content, char_limit, updated_at
+			FROM core_memory_blocks
+		`)
+		if err != nil {
+			return fmt.Errorf("migrate v6->v8: copy data: %w", err)
+		}
+
+		// Step 3: Drop old table
+		_, err = conn.Exec("DROP TABLE core_memory_blocks")
+		if err != nil {
+			return fmt.Errorf("migrate v6->v8: drop old table: %w", err)
+		}
+
+		// Step 4: Rename new table to original name
+		_, err = conn.Exec("ALTER TABLE core_memory_blocks_new RENAME TO core_memory_blocks")
+		if err != nil {
+			return fmt.Errorf("migrate v6->v8: rename table: %w", err)
+		}
+
+		log.Info("Database migrated to v8 (added user_id with correct PRIMARY KEY to core_memory_blocks)")
 
 		// Update schema version
 		if _, err := conn.Exec("UPDATE schema_version SET version = 8"); err != nil {

@@ -605,9 +605,11 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		}
 
 		// 指令消息：独立 goroutine 处理，不占信号量，不阻塞
-		if a.commands.IsCommand(msg.Content) {
-			go func(m bus.InboundMessage) {
-				response, err := a.processMessage(ctx, m)
+		// 直接调用 cmd.Execute()，跳过 processMessage 的 session 初始化，
+		// 避免与正在处理的普通消息产生竞态（清掉 sessionMsgIDs 等）或因锁阻塞。
+		if cmd := a.commands.Match(msg.Content); cmd != nil {
+			go func(m bus.InboundMessage, c Command) {
+				response, err := c.Execute(ctx, a, m)
 				if err != nil {
 					log.WithError(err).WithField("chat", chatKey).Error("Error processing command")
 					a.bus.Outbound <- bus.OutboundMessage{
@@ -620,7 +622,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 				if response != nil {
 					a.bus.Outbound <- *response
 				}
-			}(msg)
+			}(msg, cmd)
 			continue
 		}
 

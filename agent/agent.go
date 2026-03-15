@@ -604,25 +604,33 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 			break
 		}
 
-		// 指令消息：独立 goroutine 处理，不占信号量，不阻塞
-		// 直接调用 cmd.Execute()，跳过 processMessage 的 session 初始化，
-		// 避免与正在处理的普通消息产生竞态（清掉 sessionMsgIDs 等）或因锁阻塞。
+		// 指令消息分发：根据 Concurrent() 决定执行方式
 		if cmd := a.commands.Match(msg.Content); cmd != nil {
-			go func(m bus.InboundMessage, c Command) {
-				response, err := c.Execute(ctx, a, m)
-				if err != nil {
-					log.WithError(err).WithField("chat", chatKey).Error("Error processing command")
-					a.bus.Outbound <- bus.OutboundMessage{
-						Channel: m.Channel,
-						ChatID:  m.ChatID,
-						Content: fmt.Sprintf("处理命令时发生错误: %v", err),
+			if cmd.Concurrent() {
+				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
+				go func(m bus.InboundMessage, c Command) {
+					response, err := c.Execute(ctx, a, m)
+					if err != nil {
+						log.WithError(err).WithField("chat", chatKey).Error("Error processing command")
+						a.bus.Outbound <- bus.OutboundMessage{
+							Channel: m.Channel,
+							ChatID:  m.ChatID,
+							Content: fmt.Sprintf("处理命令时发生错误: %v", err),
+						}
+						return
 					}
-					return
+					if response != nil {
+						a.bus.Outbound <- *response
+					}
+				}(msg, cmd)
+			} else {
+				// 有状态命令（/new, /compress, /set-llm 等）：走串行队列，
+				// 避免与正在处理的普通消息产生 session 数据竞态
+				select {
+				case msgCh <- msg:
+				case <-ctx.Done():
 				}
-				if response != nil {
-					a.bus.Outbound <- *response
-				}
-			}(msg, cmd)
+			}
 			continue
 		}
 

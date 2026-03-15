@@ -27,6 +27,13 @@ type Command interface {
 	// Execute runs the command and returns an outbound message (or nil to suppress reply).
 	// The command receives the full Agent context to access sessions, tools, etc.
 	Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+
+	// Concurrent reports whether this command can safely run concurrently with
+	// normal message processing. Stateless commands (e.g., /version, /help)
+	// return true and are dispatched in an independent goroutine. Commands that
+	// mutate session state (e.g., /new, /compress) return false and are
+	// serialized through the normal message queue to avoid data races.
+	Concurrent() bool
 }
 
 // CommandRegistry holds registered commands and provides lookup.

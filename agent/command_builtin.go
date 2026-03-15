@@ -15,6 +15,7 @@ type newCmd struct{}
 func (c *newCmd) Name() string        { return "/new" }
 func (c *newCmd) Aliases() []string   { return nil }
 func (c *newCmd) Match(s string) bool { return strings.ToLower(s) == "/new" }
+func (c *newCmd) Concurrent() bool    { return false } // mutates session
 
 func (c *newCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
@@ -31,6 +32,7 @@ type versionCmd struct{}
 func (c *versionCmd) Name() string        { return "/version" }
 func (c *versionCmd) Aliases() []string   { return nil }
 func (c *versionCmd) Match(s string) bool { return strings.ToLower(s) == "/version" }
+func (c *versionCmd) Concurrent() bool    { return true } // stateless
 
 func (c *versionCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	return &bus.OutboundMessage{
@@ -47,6 +49,7 @@ type helpCmd struct{}
 func (c *helpCmd) Name() string        { return "/help" }
 func (c *helpCmd) Aliases() []string   { return nil }
 func (c *helpCmd) Match(s string) bool { return strings.ToLower(s) == "/help" }
+func (c *helpCmd) Concurrent() bool    { return true } // stateless
 
 func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	return &bus.OutboundMessage{
@@ -76,6 +79,7 @@ func (c *promptCmd) Match(s string) bool {
 	lower := strings.ToLower(s)
 	return lower == "/prompt" || strings.HasPrefix(lower, "/prompt ")
 }
+func (c *promptCmd) Concurrent() bool { return false } // reads session state
 
 func (c *promptCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
@@ -95,6 +99,7 @@ func (c *setLLMCmd) Match(s string) bool {
 	lower := strings.ToLower(s)
 	return lower == "/set-llm" || strings.HasPrefix(lower, "/set-llm ")
 }
+func (c *setLLMCmd) Concurrent() bool { return false } // mutates LLM config
 
 func (c *setLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	return a.handleSetLLM(ctx, msg)
@@ -107,6 +112,7 @@ type getLLMCmd struct{}
 func (c *getLLMCmd) Name() string        { return "/llm" }
 func (c *getLLMCmd) Aliases() []string   { return nil }
 func (c *getLLMCmd) Match(s string) bool { return strings.ToLower(s) == "/llm" }
+func (c *getLLMCmd) Concurrent() bool    { return true } // read-only
 
 func (c *getLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	return a.handleGetLLM(ctx, msg)
@@ -119,6 +125,7 @@ type compressCmd struct{}
 func (c *compressCmd) Name() string        { return "/compress" }
 func (c *compressCmd) Aliases() []string   { return nil }
 func (c *compressCmd) Match(s string) bool { return strings.ToLower(s) == "/compress" }
+func (c *compressCmd) Concurrent() bool    { return false } // mutates session
 
 func (c *compressCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
@@ -154,6 +161,7 @@ func (c *bangCmd) Match(s string) bool {
 	_, ok := isBangCommand(s)
 	return ok
 }
+func (c *bangCmd) Concurrent() bool { return true } // runs in sandbox, no session mutation
 
 func (c *bangCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	cmd, _ := isBangCommand(msg.Content)

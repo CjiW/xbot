@@ -100,3 +100,40 @@ func TestCommandRegistry_Commands(t *testing.T) {
 		}
 	}
 }
+
+
+func TestCommandConcurrency(t *testing.T) {
+	r := NewCommandRegistry()
+	registerBuiltinCommands(r)
+
+	// Commands that mutate session state must NOT be concurrent
+	nonConcurrent := map[string]bool{
+		"/new":      true,
+		"/compress": true,
+		"/set-llm":  true,
+		"/prompt":   true,
+	}
+
+	// Commands that are stateless should be concurrent
+	concurrent := map[string]bool{
+		"/version": true,
+		"/help":    true,
+		"/llm":     true,
+		"!":        true,
+	}
+
+	for _, cmd := range r.Commands() {
+		name := cmd.Name()
+		if nonConcurrent[name] {
+			if cmd.Concurrent() {
+				t.Errorf("Command %q: Concurrent() = true, want false (mutates session state)", name)
+			}
+		}
+		if concurrent[name] {
+			if !cmd.Concurrent() {
+				t.Errorf("Command %q: Concurrent() = false, want true (stateless)", name)
+			}
+		}
+	}
+}
+

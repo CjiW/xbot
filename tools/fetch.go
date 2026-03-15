@@ -19,9 +19,9 @@ import (
 
 // FetchTool 网页获取工具
 type FetchTool struct {
-	httpClient  *http.Client
-	converter   *converter.Converter
-	tokenizer   tokenizer.Codec
+	httpClient *http.Client
+	converter  *converter.Converter
+	tokenizer  tokenizer.Codec
 }
 
 // NewFetchTool 创建 FetchTool

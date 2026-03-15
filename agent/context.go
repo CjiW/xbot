@@ -11,8 +11,6 @@ import (
 
 	"xbot/llm"
 	log "xbot/logger"
-	"xbot/memory"
-	"xbot/memory/letta"
 )
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
@@ -195,47 +193,4 @@ func NewCronMessageContext(task string) *MessageContext {
 		UserContent: task,
 		Extra:       make(map[string]any),
 	}
-}
-
-// BuildMessages 构建完整的 LLM 消息列表。
-// Deprecated: 保留此函数以兼容测试和外部调用方。
-// 新代码应直接使用 Agent.Pipeline() + NewMessageContext()。
-func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string, senderID string) []llm.ChatMessage {
-	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(promptLoader),
-		NewSkillsCatalogMiddleware(),
-		NewAgentsCatalogMiddleware(),
-		NewMemoryMiddleware(),
-		NewSenderInfoMiddleware(),
-		NewUserMessageMiddleware(),
-	)
-
-	mc := &MessageContext{
-		Ctx:         letta.WithUserID(context.TODO(), senderID),
-		SystemParts: make(map[string]string),
-		UserContent: userContent,
-		History:     history,
-		Channel:     channel,
-		WorkDir:     workDir,
-		SenderName:  senderName,
-		SenderID:    senderID,
-		Extra:       make(map[string]any),
-	}
-	mc.SetExtra(ExtraKeySkillsCatalog, skillsCatalog)
-	mc.SetExtra(ExtraKeyAgentsCatalog, agentsCatalog)
-	mc.SetExtra(ExtraKeyMemoryProvider, mem)
-
-	return pipeline.Run(mc)
-}
-
-// BuildCronMessages 构建 cron 专用消息（无历史上下文）。
-// Deprecated: 保留此函数以兼容测试和外部调用方。
-// 新代码应直接使用 Agent.CronPipeline() + NewCronMessageContext()。
-func BuildCronMessages(task string, workDir string) []llm.ChatMessage {
-	pipeline := NewMessagePipeline(
-		NewCronSystemPromptMiddleware(workDir),
-	)
-
-	mc := NewCronMessageContext(task)
-	return pipeline.Run(mc)
 }

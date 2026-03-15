@@ -607,9 +607,9 @@ func TestCronSystemPromptMiddleware(t *testing.T) {
 	}
 }
 
-// --- Integration test: full pipeline matches old BuildMessages ---
+// --- Integration test: full pipeline output structure ---
 
-func TestPipeline_MatchesBuildMessages(t *testing.T) {
+func TestPipeline_FullIntegration(t *testing.T) {
 	// Build a pipeline with all standard middlewares
 	loader := NewPromptLoader("") // uses default template
 
@@ -810,24 +810,27 @@ func TestPipeline_DynamicUseRemove(t *testing.T) {
 	}
 }
 
-// --- Test deprecated BuildMessages compatibility ---
+// --- Test full pipeline with all standard middlewares ---
 
-func TestBuildMessages_Deprecated(t *testing.T) {
+func TestFullPipeline_AllMiddlewares(t *testing.T) {
 	loader := NewPromptLoader("")
 	mem := &mockMemoryProvider{recallResult: "## Persona\nI am xbot"}
 
-	messages := BuildMessages(
-		[]llm.ChatMessage{llm.NewUserMessage("prev")},
-		"hello",
-		"feishu",
-		mem,
-		"/work",
-		"# Skills\n- deploy",
-		"# Agents\n- reviewer",
-		loader,
-		"TestUser",
-		"ou_test123",
+	pipeline := NewMessagePipeline(
+		NewSystemPromptMiddleware(loader),
+		NewSkillsCatalogMiddleware(),
+		NewAgentsCatalogMiddleware(),
+		NewMemoryMiddleware(),
+		NewSenderInfoMiddleware(),
+		NewUserMessageMiddleware(),
 	)
+
+	mc := NewMessageContext(context.Background(), "hello", []llm.ChatMessage{llm.NewUserMessage("prev")}, "feishu", "/work", "TestUser", "", "")
+	mc.SetExtra(ExtraKeySkillsCatalog, "# Skills\n- deploy")
+	mc.SetExtra(ExtraKeyAgentsCatalog, "# Agents\n- reviewer")
+	mc.SetExtra(ExtraKeyMemoryProvider, mem)
+
+	messages := pipeline.Run(mc)
 
 	if len(messages) != 3 { // system + 1 history + user
 		t.Fatalf("expected 3 messages, got %d", len(messages))

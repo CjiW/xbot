@@ -218,12 +218,12 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string
 	sessionKey := channel + ":" + chatID
 	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 
-	// senderID 作为 string 直接传递给 LettaMemory（用于 per-user human block）
+	// Letta 模式：创建 LettaMemory（userID 通过 context 传递，不存储在结构体中）
 	// 根据配置选择记忆提供者
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
 	case "letta":
-		memProvider = letta.New(tenantID, senderID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
+		memProvider = letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
 		// 前向兼容：一次性迁移 user_profiles → core memory blocks
 		m.migrateProfileToCoreMemory(tenantID)
 	default:

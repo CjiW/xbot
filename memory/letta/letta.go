@@ -14,13 +14,35 @@ import (
 	"xbot/storage/vectordb"
 )
 
+// userIDKey is the context key for per-user human block senderID
+type contextKey string
+
+const userIDKey contextKey = "letta_user_id"
+
+// WithUserID returns a context with the senderID for per-user human block
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
+// GetUserID extracts senderID from context for per-user human block
+func GetUserID(ctx context.Context) string {
+	if uid, ok := ctx.Value(userIDKey).(string); ok {
+		return uid
+	}
+	return ""
+}
+
 // LettaMemory implements memory.MemoryProvider with a Letta (MemGPT) architecture:
 // - Core Memory: structured blocks injected into system prompt (persona/human/working_context)
 // - Archival Memory: long-term embedding-backed storage (on-demand via tools)
 // - Recall Memory: conversation history retrieval by time range
+//
+// NOTE: userID is NOT stored in struct. Per-user human block is handled dynamically
+// via context (WithUserID/GetUserID) passed to Recall/Memorize at call time.
+// This avoids session cache key issues where different users would share a cached LettaMemory
+// with a stale userID.
 type LettaMemory struct {
 	tenantID     int64
-	userID       string // senderID for per-user human block (empty = global)
 	coreSvc      *sqlite.CoreMemoryService
 	archivalSvc  *vectordb.ArchivalService
 	memorySvc    *sqlite.MemoryService
@@ -31,15 +53,16 @@ var _ memory.MemoryProvider = (*LettaMemory)(nil)
 var _ memory.ToolIndexer = (*LettaMemory)(nil)
 
 // New creates a LettaMemory instance.
-// If userID is non-empty, the human block will be per-user instead of per-tenant.
-func New(tenantID int64, userID string, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
-	// Ensure default blocks exist (with userID for human block)
-	if err := coreSvc.InitBlocks(tenantID, userID); err != nil {
+// NOTE: senderID is NOT passed here. Per-user human block is handled dynamically
+// via context (WithUserID/GetUserID) passed to Recall/Memorize at call time.
+func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
+	// Ensure default blocks exist (global, userID="")
+	// Per-user blocks are created on-demand when Recall/Memorize is called with userID in context
+	if err := coreSvc.InitBlocks(tenantID, ""); err != nil {
 		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to init core memory blocks")
 	}
 	return &LettaMemory{
 		tenantID:     tenantID,
-		userID:       userID,
 		coreSvc:      coreSvc,
 		archivalSvc:  archivalSvc,
 		memorySvc:    memorySvc,
@@ -50,8 +73,12 @@ func New(tenantID int64, userID string, coreSvc *sqlite.CoreMemoryService, archi
 // Recall returns formatted core memory blocks for system prompt injection.
 // Unlike FlatMemory which dumps everything, Letta injects only structured blocks.
 // Archival memory is accessed on-demand via tools.
-func (m *LettaMemory) Recall(_ context.Context, _ string) (string, error) {
-	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, m.userID)
+// userID for per-user human block is extracted from ctx via GetUserID(ctx).
+func (m *LettaMemory) Recall(ctx context.Context, _ string) (string, error) {
+	// Get userID from context for per-user human block (empty = global)
+	userID := GetUserID(ctx)
+
+	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, userID)
 	if err != nil {
 		return "", fmt.Errorf("recall core blocks: %w", err)
 	}
@@ -86,7 +113,11 @@ func (m *LettaMemory) Recall(_ context.Context, _ string) (string, error) {
 
 // Memorize consolidates conversation messages into core memory updates + archival storage.
 // Uses LLM with a multi-tool rethink prompt.
+// userID for per-user human block is extracted from ctx via GetUserID(ctx).
 func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (memory.MemorizeResult, error) {
+	// Get userID from context for per-user human block (empty = global)
+	userID := GetUserID(ctx)
+
 	messages := input.Messages
 	lastConsolidated := input.LastConsolidated
 	archiveAll := input.ArchiveAll
@@ -155,7 +186,7 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	}
 
 	// Read current core memory blocks
-	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, m.userID)
+	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, userID)
 	if err != nil {
 		log.WithError(err).Error("Failed to read core memory for consolidation")
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil
@@ -227,7 +258,7 @@ Review the conversation below and call the consolidate_memory tool to update the
 				"old_len":   len(oldContent),
 				"new_len":   len(newContent),
 			}).Info("Updating core memory block")
-			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent, m.userID); err != nil {
+			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent, userID); err != nil {
 				log.WithError(err).WithField("block", blockName).Error("Failed to update core memory block")
 			}
 		}

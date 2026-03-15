@@ -77,7 +77,7 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 		retry.Context(ctx),
 		retry.RetryIf(isRetryableError),
 		retry.OnRetry(func(n uint, err error) {
-			logrus.WithFields(logrus.Fields{
+			logrus.Ctx(ctx).WithFields(logrus.Fields{
 				"attempt": n + 1,
 				"max":     r.config.Attempts,
 				"error":   err.Error(),

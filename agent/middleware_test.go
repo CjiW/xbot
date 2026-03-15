@@ -929,4 +929,3 @@ func TestMessagePipeline_ConcurrentRunAndUse(t *testing.T) {
 		<-done
 	}
 }
-

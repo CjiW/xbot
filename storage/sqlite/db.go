@@ -373,24 +373,9 @@ UPDATE schema_version SET version = 6;
 			return fmt.Errorf("migrate v6->v7: add user_id column: %w", err)
 		}
 
-		// Step 2: Migrate existing private chat human blocks to user_id
-		// Private chats have tenant_id in tenants table where channel='private'
-		// We can infer user_id from the chat_id (format: private:{userID})
-		_, err = conn.Exec(`
-			UPDATE core_memory_blocks
-			SET user_id = CAST(SUBSTR(t.chat_id, 9) AS INTEGER)
-			FROM tenants t
-			WHERE t.channel = 'private'
-			  AND t.id = core_memory_blocks.tenant_id
-			  AND core_memory_blocks.block_name = 'human'
-			  AND t.chat_id LIKE 'private:%'
-		`)
-		if err != nil {
-			return fmt.Errorf("migrate v6->v7: migrate private human blocks: %w", err)
-		}
-		log.Info("Database migrated to v7 (added user_id to core_memory_blocks, migrated private human blocks)")
+		log.Info("Database migrated to v7 (added user_id to core_memory_blocks)")
 
-		// Step 3: Update schema version
+		// Step 2: Update schema version
 		if _, err := conn.Exec("UPDATE schema_version SET version = 7"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}

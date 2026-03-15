@@ -84,8 +84,8 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	registerBuiltinCommands(r)
 
 	cmds := r.Commands()
-	if len(cmds) != 8 {
-		t.Errorf("Commands() returned %d commands, want 8", len(cmds))
+	if len(cmds) != 9 {
+		t.Errorf("Commands() returned %d commands, want 9", len(cmds))
 	}
 
 	// Verify all expected commands are registered
@@ -93,7 +93,7 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	for _, cmd := range cmds {
 		names[cmd.Name()] = true
 	}
-	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/llm", "/compress", "!"}
+	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/llm", "/compress", "/context", "!"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("Command %q not found in registry", name)

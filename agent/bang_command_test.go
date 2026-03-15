@@ -16,7 +16,8 @@ func TestIsBangCommand(t *testing.T) {
 	}{
 		{"!ls -la", "ls -la", true},
 		{"!pwd", "pwd", true},
-		{"! echo hello", " echo hello", true},
+		{"! echo hello", "echo hello", true},
+		{"!  echo hello", "echo hello", true}, // multiple spaces after !
 		{"!cat /etc/os-release", "cat /etc/os-release", true},
 		{"!", "", false},        // just `!`, no command
 		{"!  ", "", false},      // `!` followed by whitespace only

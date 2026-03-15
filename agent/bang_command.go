@@ -26,9 +26,9 @@ const (
 func isBangCommand(content string) (string, bool) {
 	trimmed := strings.TrimSpace(content)
 	if strings.HasPrefix(trimmed, "!") && len(trimmed) > 1 {
-		cmd := trimmed[1:]
+		cmd := strings.TrimSpace(trimmed[1:])
 		// Avoid conflict with `!!` or `!` followed by whitespace only
-		if strings.TrimSpace(cmd) == "" {
+		if cmd == "" {
 			return "", false
 		}
 		return cmd, true
@@ -77,29 +77,26 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 }
 
 // executeBangCommand runs the command in the user's sandbox (or locally if sandbox is disabled).
+// Both paths use login shell (bash -l -c) via the sandbox infrastructure for consistent behavior.
 func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, senderID string) (string, error) {
 	execCtx, cancel := context.WithTimeout(ctx, bangDefaultTimeout)
 	defer cancel()
 
-	toolCtx := &tools.ToolContext{
-		Ctx:              execCtx,
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    workspaceRoot,
-		SandboxWorkDir:   "/workspace",
-		SandboxEnabled:   a.sandboxMode == "docker",
-		PreferredSandbox: a.sandboxMode,
-		SenderID:         senderID,
+	sandbox := tools.GetSandbox()
+
+	// Get the container/system default shell
+	shell, err := sandbox.GetShell(senderID, workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	if toolCtx.SandboxEnabled {
-		// Sandbox mode: use RunInSandboxWithShell (auto-sources ~/.xbot_env)
-		output, err := tools.RunInSandboxWithShell(toolCtx, command)
-		return output, err
+	// Use login shell (-l) to auto-source /etc/profile, ~/.bashrc, ~/.xbot_env, etc.
+	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", command}, nil, workspaceRoot, senderID)
+	if err != nil {
+		return "", fmt.Errorf("wrap command: %w", err)
 	}
 
-	// Non-sandbox mode: execute locally
-	wrappedCmd := fmt.Sprintf("[ -f ~/.xbot_env ] && . ~/.xbot_env; %s", command)
-	cmd := exec.CommandContext(execCtx, "sh", "-c", wrappedCmd)
+	cmd := exec.CommandContext(execCtx, cmdName, cmdArgs...)
 	cmd.Dir = workspaceRoot
 	cmd.Stdin = nil
 
@@ -107,7 +104,7 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	runErr := cmd.Run()
 
 	var result strings.Builder
 	if stdout.Len() > 0 {
@@ -121,7 +118,7 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		result.Write(stderr.Bytes())
 	}
 
-	return strings.TrimSpace(result.String()), err
+	return strings.TrimSpace(result.String()), runErr
 }
 
 // formatBangOutput formats the command output for inline display.

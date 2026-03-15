@@ -616,7 +616,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助\n/set-llm — 设置自定义 LLM API\n/llm — 查看当前 LLM 配置",
+			Content: "xbot 命令:\n/new — 开始新对话（归档记忆后重置）\n/version — 显示版本信息\n/prompt <query> — 预览完整提示词（不调用 LLM）\n/help — 显示帮助\n/set-llm — 设置自定义 LLM API\n/llm — 查看当前 LLM 配置\n!<command> — 快捷执行命令（跳过 LLM，直接在 sandbox 中运行）",
 		}, nil
 	}
 	if strings.HasPrefix(cmd, "/prompt") {
@@ -627,6 +627,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	if cmd == "/llm" {
 		return a.handleGetLLM(ctx, msg)
+	}
+
+	// `!` 前缀快捷命令：跳过 LLM，直接在 sandbox 中执行
+	if bangCmd, ok := isBangCommand(msg.Content); ok {
+		return a.handleBangCommand(ctx, msg, bangCmd)
 	}
 
 	// 处理卡片响应（按钮点击、表单提交）

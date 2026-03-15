@@ -258,7 +258,11 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 
 // GetAllBlocks reads all core memory blocks.
 // - persona: from tenantID=0 (global shared)
+<<<<<<< HEAD
 // - human: from tenantID=0 with userID (cross-tenant per-user)
+=======
+// - human: from userID directly (cross-tenant shared)
+>>>>>>> e3ab98b (fix: use tenantID=0 for persona (backward compatibility))
 // - working_context: from tenantID (per-tenant)
 func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[string]string, error) {
 	conn := s.db.Conn()

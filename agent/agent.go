@@ -545,7 +545,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			select {
 			case q <- msg:
 			default:
-				log.WithField("chat", key).Warn("Chat queue full, dropping message")
+				log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": key}).Warn("Chat queue full, dropping message")
 			}
 		}
 	}
@@ -611,7 +611,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 				go func(m bus.InboundMessage, c Command) {
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
-						log.WithError(err).WithField("chat", chatKey).Error("Error processing command")
+						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
 						a.bus.Outbound <- bus.OutboundMessage{
 							Channel: m.Channel,
 							ChatID:  m.ChatID,
@@ -690,12 +690,12 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 
 		if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
-			log.WithField("chat", chatKey).Info("Request cancelled by user")
+			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
 			continue
 		}
 
 		if err != nil {
-			log.WithError(err).WithField("chat", chatKey).Error("Error processing message")
+			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).WithError(err).Error("Error processing message")
 			a.bus.Outbound <- bus.OutboundMessage{
 				Channel: msg.Channel,
 				ChatID:  msg.ChatID,
@@ -711,8 +711,11 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 
 // processMessage 处理单条入站消息
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
-	// 注入 requestID 到 context，用于关联同一请求的所有日志
-	reqID := log.NewRequestID()
+	// 使用消息携带的 requestID（在渠道收到消息时生成），如果没有则生成新的
+	reqID := msg.RequestID
+	if reqID == "" {
+		reqID = log.NewRequestID()
+	}
 	ctx = log.WithRequestID(ctx, reqID)
 
 	// 注入 senderID 到 context，用于 per-user human block（Letta 模式）
@@ -1920,12 +1923,13 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 // injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
 func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
-		Channel:  channel,
-		SenderID: senderID,
-		ChatID:   chatID,
-		Content:  content,
-		Time:     time.Now(),
-		IsCron:   true,
+		Channel:   channel,
+		SenderID:  senderID,
+		ChatID:    chatID,
+		Content:   content,
+		Time:      time.Now(),
+		IsCron:    true,
+		RequestID: log.NewRequestID(),
 	}
 }
 
@@ -2096,11 +2100,12 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 // ProcessDirect 直接处理一条消息（用于 CLI 模式）
 func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, error) {
 	msg := bus.InboundMessage{
-		Channel:  "cli",
-		SenderID: "user",
-		ChatID:   "direct",
-		Content:  content,
-		Time:     time.Now(),
+		Channel:   "cli",
+		SenderID:  "user",
+		ChatID:    "direct",
+		Content:   content,
+		Time:      time.Now(),
+		RequestID: log.NewRequestID(),
 	}
 	resp, err := a.processMessage(ctx, msg)
 	if err != nil {

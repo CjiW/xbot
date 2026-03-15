@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -23,16 +24,16 @@ func RequestID(ctx context.Context) string {
 	return ""
 }
 
-// NewRequestID generates a short request ID (first 8 chars of UUID).
+// NewRequestID generates a request ID (UUID without dashes).
 func NewRequestID() string {
-	return uuid.New().String()[:8]
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
 
 // Ctx returns a logrus Entry with the request_id field from context (if present).
 // Use this as the starting point for structured logging within a request scope.
 func Ctx(ctx context.Context) *Entry {
 	if id := RequestID(ctx); id != "" {
-		return WithField("req", id)
+		return WithField("request_id", id)
 	}
 	return WithFields(Fields{})
 }

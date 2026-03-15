@@ -591,6 +591,10 @@ func (f *FeishuChannel) detectFileType(filePath string) string {
 
 // onMessage 处理收到的消息
 func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+	// 在渠道收到消息的第一时间生成 requestID
+	requestID := log.NewRequestID()
+	l := log.WithField("request_id", requestID)
+
 	f.mu.Lock()
 	if !f.running {
 		f.mu.Unlock()
@@ -602,7 +606,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	sender := event.Event.Sender
 
 	// 调试日志：确认收到消息事件（记录所有消息，包括未@的）
-	log.WithFields(log.Fields{
+	l.WithFields(log.Fields{
 		"message_id": *msg.MessageId,
 		"sender_type": func() string {
 			if sender.SenderType != nil {
@@ -639,13 +643,13 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	// 消息去重
 	messageID := *msg.MessageId
 	if f.isDuplicate(messageID) {
-		log.WithField("message_id", messageID).Debug("Feishu: duplicate message, skipping")
+		l.WithField("message_id", messageID).Debug("Feishu: duplicate message, skipping")
 		return nil
 	}
 
 	// 跳过机器人自己的消息
 	if sender.SenderType != nil && *sender.SenderType == "bot" {
-		log.WithField("message_id", messageID).Debug("Feishu: bot message, skipping")
+		l.WithField("message_id", messageID).Debug("Feishu: bot message, skipping")
 		return nil
 	}
 
@@ -655,7 +659,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		senderID = *sender.SenderId.OpenId
 	}
 	if !f.isAllowed(senderID) {
-		log.WithField("sender", senderID).Warn("Feishu: access denied")
+		l.WithField("sender", senderID).Warn("Feishu: access denied")
 		return nil
 	}
 
@@ -679,7 +683,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	if chatType == "group" {
 		shouldHandle, atAllOnly, reason := f.shouldHandleGroupMessage(msg)
 		if !shouldHandle {
-			log.WithFields(log.Fields{
+			l.WithFields(log.Fields{
 				"message_id": messageID,
 				"chat_id":    chatID,
 				"reason":     reason,
@@ -730,7 +734,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 					skippedCard := f.buildCard("⚠️ 用户选择直接回复，卡片已关闭")
 					if cardJSON, err := json.Marshal(skippedCard); err == nil {
 						if err := f.patchMessage(messageID, cardJSON); err != nil {
-							log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to patch skipped card")
+							l.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to patch skipped card")
 						}
 					}
 					return false // stop iteration
@@ -739,7 +743,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 			})
 			// 清除活跃卡片映射
 			f.cardBuilder.ClearActiveCard(replyTo)
-			log.WithFields(log.Fields{
+			l.WithFields(log.Fields{
 				"chat_id": replyTo,
 				"card_id": activeCardID,
 			}).Info("Card skipped due to text message")
@@ -752,7 +756,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	var refMsg = ""
 	refMsgEv := f.getHistoryMsgById(event.Event)
 	if refMsgEv != nil {
-		log.WithFields(log.Fields{
+		l.WithFields(log.Fields{
 			"message_id":     messageID,
 			"ref_message_id": *refMsgEv.MessageId,
 		}).Info("Found reference message for incoming message")
@@ -773,7 +777,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		if ms, err := strconv.ParseInt(*msg.CreateTime, 10, 64); err == nil {
 			msgTime = time.UnixMilli(ms)
 		} else {
-			log.WithError(err).WithField("create_time", *msg.CreateTime).Warn("Feishu: failed to parse message CreateTime, using current time")
+			l.WithError(err).WithField("create_time", *msg.CreateTime).Warn("Feishu: failed to parse message CreateTime, using current time")
 		}
 	}
 	metadata := map[string]string{
@@ -794,6 +798,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
 		Time:       msgTime,
 		Metadata:   metadata,
+		RequestID:  requestID,
 	}
 
 	return nil
@@ -929,6 +934,9 @@ func isAtAllMention(mention *larkim.MentionEvent) bool {
 
 // onCardAction 处理卡片交互事件（按钮点击、表单提交）
 func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+	// 在渠道收到卡片交互的第一时间生成 requestID
+	requestID := log.NewRequestID()
+
 	if event.Event == nil || event.Event.Action == nil {
 		log.Warn("Card action event is missing data")
 		return &callback.CardActionTriggerResponse{}, nil
@@ -974,12 +982,12 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		return &callback.CardActionTriggerResponse{}, nil
 	}
 
-	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID)
+	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID, requestID)
 }
 
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
 // Button clicks, form submissions, and standalone select interactions are forwarded to the agent.
-func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
+func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID, requestID string) (*callback.CardActionTriggerResponse, error) {
 	responseData := make(map[string]string)
 	actionName := action.Tag
 
@@ -1135,6 +1143,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		ChatID:     chatID,
 		Content:    sb.String(),
 		Time:       time.Now(),
+		RequestID:  requestID,
 		Metadata: map[string]string{
 			"card_response": "true",
 			"card_id":       cardID,

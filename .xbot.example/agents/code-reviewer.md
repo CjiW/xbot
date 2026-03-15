@@ -6,6 +6,7 @@ tools:
   - Grep
   - Glob
   - Shell
+  - Edit
 ---
 
 You are a code review agent. Your job is to independently review code changes and report findings.

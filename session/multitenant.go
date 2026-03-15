@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -184,11 +183,9 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 // GetOrCreateSession retrieves or creates a tenant session for the given channel, chatID and senderID.
 // senderID is used to create per-user human block in Letta memory. Can be empty for backward compatibility.
 func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string) (*TenantSession, error) {
-	// Cache key includes senderID to ensure per-user human block in group chats
+	// Cache key: channel:chat_id (NOT senderID)
+	// Per-user human block is handled dynamically via Recall/Memorize with senderID parameter
 	key := channel + ":" + chatID
-	if senderID != "" {
-		key = key + ":" + senderID
-	}
 
 	// Fast path: check cache with read lock
 	m.mu.RLock()
@@ -221,14 +218,11 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string
 	sessionKey := channel + ":" + chatID
 	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 
-	// 解析 senderID 为 int64，用于 per-user human block
-	var userID *int64
+	// senderID 作为 string 直接传递给 LettaMemory（用于 per-user human block）
+	// 不需要 ParseInt，直接存字符串
+	var userID *string
 	if senderID != "" {
-		if parsed, err := strconv.ParseInt(senderID, 10, 64); err == nil {
-			userID = &parsed
-		} else {
-			log.WithField("sender_id", senderID).Warn("Failed to parse senderID as int64, using nil for human block")
-		}
+		userID = &senderID
 	}
 
 	// 根据配置选择记忆提供者

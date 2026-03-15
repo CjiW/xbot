@@ -12,7 +12,6 @@ import (
 
 	"github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
-	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"github.com/go-shiori/go-readability"
 	"github.com/tiktoken-go/tokenizer"
 	"xbot/llm"
@@ -21,16 +20,12 @@ import (
 // FetchTool 网页获取工具
 type FetchTool struct {
 	httpClient *http.Client
-	converter  *converter.Converter
 	tokenizer  tokenizer.Codec
 }
 
 // NewFetchTool 创建 FetchTool
 func NewFetchTool() *FetchTool {
-	// 创建 converter 和 tokenizer（复用）
-	conv := converter.NewConverter(
-		converter.WithPlugins(commonmark.NewCommonmarkPlugin()),
-	)
+	// 创建 tokenizer（复用）
 	enc, _ := tokenizer.Get(tokenizer.Cl100kBase)
 
 	return &FetchTool{
@@ -44,7 +39,6 @@ func NewFetchTool() *FetchTool {
 				return nil
 			},
 		},
-		converter: conv,
 		tokenizer: enc,
 	}
 }
@@ -119,6 +113,8 @@ func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 	// text/plain（如 GitHub raw 文件）直接返回原文
 	if strings.Contains(contentType, "text/plain") {
 		content := string(htmlContent)
+		// 格式化为与 HTML 一致的输出（带 URL 和分隔线）
+		content = t.formatAsPlainText(content, params.URL)
 		content, _ = t.truncateByTokens(content, params.MaxTokens)
 		return NewResult(content), nil
 	}
@@ -264,6 +260,22 @@ func (t *FetchTool) formatAsMarkdown(article *readability.Article, pageURL strin
 	// 正文 - 将 HTML 转换为 Markdown 格式
 	markdownContent := convertHTMLToMarkdown(article.Content, pageURL, article.TextContent)
 	sb.WriteString(markdownContent)
+
+	return sb.String()
+}
+
+// formatAsPlainText 将纯文本格式化为 Markdown（与 HTML 分支格式一致）
+func (t *FetchTool) formatAsPlainText(content, pageURL string) string {
+	var sb strings.Builder
+
+	// URL
+	sb.WriteString("**URL:** ")
+	sb.WriteString(pageURL)
+	sb.WriteString("\n\n")
+	sb.WriteString("---\n\n")
+
+	// 正文
+	sb.WriteString(content)
 
 	return sb.String()
 }

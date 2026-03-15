@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -939,13 +940,15 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制
 	// 用户可能不想自动压缩但偶尔需要手动压缩一下
 
-	// 获取当前消息数
-	messages, err := tenantSession.GetMessages()
+	// 构建完整上下文（包括 system、skills、memory、history）
+	// 注意：这里不直接使用 tenantSession.GetMessages()，因为那只是会话历史
+	// 需要使用 buildPrompt 构建完整的 LLM 消息列表
+	messages, err := a.buildPrompt(ctx, msg, tenantSession)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "获取会话消息失败，请重试。",
+			Content: fmt.Sprintf("构建上下文失败: %v", err),
 		}, nil
 	}
 
@@ -957,11 +960,10 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
-	// 计算当前 token 数
+	// 计算完整上下文的 token 数
 	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
 	if err != nil {
 		log.WithError(err).Warn("Failed to count tokens for compression")
-		// 用户手动触发压缩时，计数失败应该强制执行或报错，而不是静默跳过
 	}
 
 	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
@@ -973,6 +975,9 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 			Content: fmt.Sprintf("当前上下文 token 数 (%d) 未达到压缩阈值 (%d)，无需压缩。", tokenCount, threshold),
 		}, nil
 	}
+
+	// 发送压缩开始进度
+	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
 	// 执行压缩
 	compressed, err := a.compressContext(ctx, messages, a.model)
@@ -1018,6 +1023,122 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+	}, nil
+}
+
+// handleContext 处理 /context 命令：显示当前 token 统计
+func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	// 构建完整上下文（包括 system、skills、memory、history）
+	messages, err := a.buildPrompt(ctx, msg, tenantSession)
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("构建上下文失败: %v", err),
+		}, nil
+	}
+
+	if len(messages) == 0 {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "当前没有消息。",
+		}, nil
+	}
+
+	// 按角色统计 token
+	roleTokens := make(map[string]int)
+	var totalTokens int
+	for _, m := range messages {
+		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, a.model)
+		if err != nil {
+			continue
+		}
+		role := m.Role
+		if m.Role == "tool" && m.ToolName != "" {
+			role = "tool:" + m.ToolName
+		}
+		roleTokens[role] += tokens
+		totalTokens += tokens
+	}
+
+	// 获取工具定义 token（单独计算）
+	toolDefs := a.tools.AsDefinitionsForSession(msg.Channel + ":" + msg.ChatID)
+	toolTokenCount := 0
+	for _, td := range toolDefs {
+		// 工具定义的 token 近似计算
+		var paramsStr string
+		for _, p := range td.Parameters() {
+			paramsStr += fmt.Sprintf("%s %s: %s; ", p.Name, p.Type, p.Description)
+		}
+		toolDesc := fmt.Sprintf("name: %s\ndescription: %s\nparameters: %s", td.Name(), td.Description(), paramsStr)
+		toolTokenCount += len([]rune(toolDesc)) / 4 // 近似：4 字符 = 1 token
+	}
+
+	// 构建输出
+	var buf strings.Builder
+	buf.WriteString("📊 上下文 Token 统计\n\n")
+
+	// 按数量排序输出
+	type roleStat struct {
+		role   string
+		tokens int
+	}
+	var stats []roleStat
+	for role, tokens := range roleTokens {
+		stats = append(stats, roleStat{role: role, tokens: tokens})
+	}
+	// 排序：system > user > assistant > tool
+	sort.Slice(stats, func(i, j int) bool {
+		order := map[string]int{"system": 0, "user": 1, "assistant": 2}
+		oi, oiOk := order[stats[i].role]
+		oj, ojOk := order[stats[j].role]
+		if oiOk && ojOk {
+			return oi < oj
+		}
+		if oiOk {
+			return true
+		}
+		if ojOk {
+			return false
+		}
+		return stats[i].tokens > stats[j].tokens
+	})
+
+	for _, s := range stats {
+		percent := 0.0
+		if totalTokens > 0 {
+			percent = float64(s.tokens) / float64(totalTokens) * 100
+		}
+		buf.WriteString(fmt.Sprintf("| %s | %d | %.1f%% |\n", s.role, s.tokens, percent))
+	}
+
+	// 工具定义 token（单独显示）
+	if toolTokenCount > 0 {
+		percent := 0.0
+		if totalTokens > 0 {
+			percent = float64(toolTokenCount) / float64(totalTokens) * 100
+		}
+		buf.WriteString(fmt.Sprintf("| **Tools** | %d | %.1f%% |\n", toolTokenCount, percent))
+		totalTokens += toolTokenCount
+	}
+
+	buf.WriteString(fmt.Sprintf("| **总计** | **%d** | 100%% |\n\n", totalTokens))
+
+	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+	buf.WriteString("⚙️ 配置:\n")
+	buf.WriteString(fmt.Sprintf("- 最大上下文: %d tokens\n", a.maxContextTokens))
+	buf.WriteString(fmt.Sprintf("- 压缩阈值: %d tokens (%.0f%%)\n", threshold, a.compressionThreshold*100))
+	if a.enableAutoCompress {
+		buf.WriteString("- 自动压缩: ✅ 启用\n")
+	} else {
+		buf.WriteString("- 自动压缩: ❌ 禁用\n")
+	}
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: buf.String(),
 	}, nil
 }
 

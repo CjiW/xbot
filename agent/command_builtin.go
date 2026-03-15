@@ -60,6 +60,7 @@ func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (
 			"/set-llm — 设置自定义 LLM API\n" +
 			"/llm — 查看当前 LLM 配置\n" +
 			"/compress — 手动触发上下文压缩\n" +
+			"/context — 查看当前 token 统计\n" +
 			"!<command> — 快捷执行命令（跳过 LLM，直接在 sandbox 中运行）",
 	}, nil
 }
@@ -126,6 +127,22 @@ func (c *compressCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMess
 	return a.handleCompress(ctx, msg, tenantSession)
 }
 
+// --- /context ---
+
+type contextCmd struct{}
+
+func (c *contextCmd) Name() string        { return "/context" }
+func (c *contextCmd) Aliases() []string   { return nil }
+func (c *contextCmd) Match(s string) bool { return strings.ToLower(s) == "/context" }
+
+func (c *contextCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
+	if err != nil {
+		return nil, err
+	}
+	return a.handleContext(ctx, msg, tenantSession)
+}
+
 // --- ! (bang command) ---
 
 type bangCmd struct{}
@@ -151,5 +168,6 @@ func registerBuiltinCommands(r *CommandRegistry) {
 	r.Register(&setLLMCmd{})
 	r.Register(&getLLMCmd{})
 	r.Register(&compressCmd{})
+	r.Register(&contextCmd{})
 	r.Register(&bangCmd{})
 }

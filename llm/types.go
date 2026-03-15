@@ -127,10 +127,16 @@ type StreamEvent struct {
 
 // ToolParam 工具参数定义
 type ToolParam struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
+	Name        string          `json:"name"`
+	Type        string          `json:"type"`
+	Description string          `json:"description"`
+	Required    bool            `json:"required"`
+	Items       *ToolParamItems `json:"items,omitempty"` // For array types
+}
+
+// ToolParamItems 定义数组类型的元素类型
+type ToolParamItems struct {
+	Type string `json:"type"`
 }
 
 // ToolDefinition 工具定义接口（用于 LLM 调用）

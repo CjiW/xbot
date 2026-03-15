@@ -148,6 +148,50 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 		log.WithField("tenant_id", m.tenantID).Infof("Letta memory consolidation: %d to consolidate, %d keep", len(oldMessages), keepCount)
 	}
 
+	// Deduplication: search for similar existing memories before archiving
+	// Similarity thresholds:
+	// - > 0.9: duplicate, merge or skip
+	// - 0.5-0.9: potential conflict, let LLM decide
+	// - < 0.5: new information, insert directly
+	const dedupSearchLimit = 10
+	const similarityConflictThreshold = float32(0.5)
+
+	var existingMemories []ExistingMemory
+	if m.archivalSvc != nil && len(oldMessages) > 0 {
+		// Build a query from the messages to consolidate
+		var queryBuilder strings.Builder
+		for _, msg := range oldMessages {
+			if msg.Content != "" {
+				queryBuilder.WriteString(msg.Content)
+				queryBuilder.WriteString(" ")
+			}
+			if queryBuilder.Len() > 500 {
+				break
+			}
+		}
+		query := queryBuilder.String()
+		if query != "" {
+			results, err := m.archivalSvc.Search(ctx, m.tenantID, query, dedupSearchLimit)
+			if err != nil {
+				log.WithError(err).Warn("Failed to search for similar memories during deduplication")
+			} else {
+				for _, r := range results {
+					// Only include memories with similarity > conflict threshold
+					if r.Similarity > similarityConflictThreshold {
+						existingMemories = append(existingMemories, ExistingMemory{
+							ID:         r.ID,
+							Content:    r.Content,
+							Similarity: r.Similarity,
+						})
+					}
+				}
+				if len(existingMemories) > 0 {
+					log.WithField("tenant_id", m.tenantID).Infof("Found %d similar memories for deduplication", len(existingMemories))
+				}
+			}
+		}
+	}
+
 	// Format old messages as text
 	var lines []string
 	for _, msg := range oldMessages {
@@ -170,9 +214,10 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 		if ts.IsZero() {
 			ts = time.Now()
 		}
+		// 按 rune 截断，避免中文乱码
 		content := msg.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		if len([]rune(content)) > 500 {
+			content = string([]rune(content)[:500]) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts.Format("2006-01-02 15:04"), role, toolHint, content))
 	}
@@ -201,6 +246,23 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 		fmt.Fprintf(&coreDisplay, "### %s\n%s\n\n", blockTitle(name), content)
 	}
 
+	// Build deduplication context for the prompt
+	var dedupContext string
+	if len(existingMemories) > 0 {
+		dedupContext = "\n## Existing Similar Memories (for deduplication)\n"
+		dedupContext += "The following memories are similar to what you're about to archive. Use this to:\n"
+		dedupContext += "- Skip duplicate information (similarity > 0.9)\n"
+		dedupContext += "- Resolve conflicts by choosing the more accurate one (similarity 0.5-0.9)\n"
+		dedupContext += "- Set entries_to_delete for any memories that should be replaced/removed\n\n"
+		for _, mem := range existingMemories {
+			dedupContext += fmt.Sprintf("- [ID: %s, Similarity: %.2f]: %s\n", mem.ID, mem.Similarity, mem.Content)
+			if len(dedupContext) > 2000 {
+				dedupContext += "... (truncated)\n"
+				break
+			}
+		}
+	}
+
 	prompt := fmt.Sprintf(`You are a memory consolidation agent for a Letta-style memory system.
 Review the conversation below and call the consolidate_memory tool to update the memory system.
 
@@ -211,13 +273,16 @@ Review the conversation below and call the consolidate_memory tool to update the
 - Write a history entry summarizing key events
 - Only update blocks that need changes. Set unchanged block values to empty string "".
 - Keep core memory blocks concise (bullet points, not prose)
+- Deduplicate: compare new archival_entries against existing memories. If information is redundant (similarity > 0.9), merge or skip it. If there's conflict (similarity 0.5-0.9), decide which to keep and add its ID to entries_to_delete.
+- Always prefer new information when in doubt
 
 ## Current Core Memory
+%s
 %s
 
 ## Conversation to Process
 %s
-`, coreDisplay.String(), strings.Join(lines, "\n"))
+`, coreDisplay.String(), dedupContext, strings.Join(lines, "\n"))
 
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the consolidate_memory tool."),
@@ -274,6 +339,17 @@ Review the conversation below and call the consolidate_memory tool to update the
 		if m.archivalSvc != nil {
 			if _, err := m.archivalSvc.Insert(ctx, m.tenantID, entry, archivalTS); err != nil {
 				log.WithError(err).Error("Failed to insert archival entry during consolidation")
+			}
+		}
+	}
+
+	// Delete duplicate/conflicting memories as determined by LLM
+	if len(args.EntriesToDelete) > 0 && m.archivalSvc != nil {
+		for _, entryID := range args.EntriesToDelete {
+			if err := m.archivalSvc.Delete(ctx, m.tenantID, entryID); err != nil {
+				log.WithError(err).WithField("entry_id", entryID).Warn("Failed to delete duplicate memory during consolidation")
+			} else {
+				log.WithField("tenant_id", m.tenantID).Infof("Deleted duplicate memory: %s", entryID)
 			}
 		}
 	}
@@ -459,13 +535,29 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 			Description: "A paragraph summarizing key events/decisions. Start with [YYYY-MM-DD HH:MM].",
 			Required:    true,
 		},
+		{
+			Name:        "entries_to_delete",
+			Type:        "array",
+			Description: "List of existing memory IDs to delete (for deduplication/conflict resolution). Only include IDs that should be replaced or removed.",
+			Required:    false,
+			Items:       &llm.ToolParamItems{Type: "string"},
+		},
 	}
 }
 
+// consolidateMemoryArgs consolidates memory with deduplication and conflict detection.
 type consolidateMemoryArgs struct {
 	Persona         string   `json:"persona"`
 	Human           string   `json:"human"`
 	WorkingContext  string   `json:"working_context"`
 	ArchivalEntries []string `json:"archival_entries"`
 	HistoryEntry    string   `json:"history_entry"`
+	EntriesToDelete []string `json:"entries_to_delete"`
+}
+
+// ExistingMemory represents a similar memory found during deduplication search.
+type ExistingMemory struct {
+	ID         string  `json:"id"`
+	Content    string  `json:"content"`
+	Similarity float32 `json:"similarity"`
 }

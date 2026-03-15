@@ -185,3 +185,59 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 
 	return total, nil
 }
+
+// CountToolsTokens counts the total tokens for a list of tool definitions.
+// Each tool definition includes name, description, and parameters.
+func CountToolsTokens(toolDefs []ToolDefinition, model string) (int, error) {
+	if len(toolDefs) == 0 {
+		return 0, nil
+	}
+
+	total := 0
+	// Approximate token overhead for tools structure
+	// Format: {"type":"function","function":{"name":"...","description":"...","parameters":{...}}}
+	overheadPerTool := 30 // JSON formatting overhead per tool
+
+	for _, td := range toolDefs {
+		total += overheadPerTool
+
+		// Tool name
+		if td.Name() != "" {
+			count, err := CountTokens(td.Name(), model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+
+		// Tool description
+		if td.Description() != "" {
+			count, err := CountTokens(td.Description(), model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+
+		// Tool parameters
+		for _, p := range td.Parameters() {
+			// Parameter name and type
+			count, err := CountTokens(p.Name+" "+p.Type, model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+
+			// Parameter description
+			if p.Description != "" {
+				count, err := CountTokens(p.Description, model)
+				if err != nil {
+					return 0, err
+				}
+				total += count
+			}
+		}
+	}
+
+	return total, nil
+}

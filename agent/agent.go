@@ -1035,8 +1035,13 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 		}, nil
 	}
 
+	// 获取工具定义并计算 token
+	sessionKey := msg.Channel + ":" + msg.ChatID
+	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, a.model)
+
 	// 按角色统计 token 数
-	var systemTokens, userTokens, assistantTokens, toolTokens int
+	var systemTokens, userTokens, assistantTokens, toolMsgTokens int
 
 	for _, m := range messages {
 		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, a.model)
@@ -1051,11 +1056,11 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 		case "assistant":
 			assistantTokens += tokens
 		case "tool":
-			toolTokens += tokens
+			toolMsgTokens += tokens
 		}
 	}
 
-	total := systemTokens + userTokens + assistantTokens + toolTokens
+	total := systemTokens + userTokens + assistantTokens + toolMsgTokens + toolDefsTokens
 	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
 
 	content := fmt.Sprintf(`📊 上下文 Token 统计
@@ -1065,7 +1070,8 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 | System | %d | %.1f%% |
 | User | %d | %.1f%% |
 | Assistant | %d | %.1f%% |
-| Tool | %d | %.1f%% |
+| Tool (消息) | %d | %.1f%% |
+| Tool (定义) | %d | %.1f%% |
 | **总计** | **%d** | 100%% |
 
 ⚙️ 配置:
@@ -1074,7 +1080,8 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 		systemTokens, float64(systemTokens)*100/float64(max(total, 1)),
 		userTokens, float64(userTokens)*100/float64(max(total, 1)),
 		assistantTokens, float64(assistantTokens)*100/float64(max(total, 1)),
-		toolTokens, float64(toolTokens)*100/float64(max(total, 1)),
+		toolMsgTokens, float64(toolMsgTokens)*100/float64(max(total, 1)),
+		toolDefsTokens, float64(toolDefsTokens)*100/float64(max(total, 1)),
 		total,
 		a.maxContextTokens,
 		threshold,
@@ -1336,10 +1343,20 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		if !a.enableAutoCompress || len(messages) <= 3 {
 			return
 		}
-		tokenCount, err := llm.CountMessagesTokens(messages, model)
+
+		// 计算 messages token
+		msgTokens, err := llm.CountMessagesTokens(messages, model)
 		if err != nil {
 			return
 		}
+
+		// 计算 tools token
+		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+		toolTokens, _ := llm.CountToolsTokens(toolDefs, model)
+
+		// 总 token = messages + tools
+		tokenCount := msgTokens + toolTokens
+
 		threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
 		if tokenCount < threshold {
 			return

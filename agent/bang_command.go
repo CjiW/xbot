@@ -146,10 +146,10 @@ func formatBangOutput(command, output string, execErr error) string {
 // writeBangOutputFile writes long output to a .md file and returns the file path.
 func writeBangOutputFile(workspaceRoot, command, output string, execErr error) (string, error) {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("# Command: `%s`\n\n", command))
+	fmt.Fprintf(&buf, "# Command: `%s`\n\n", command)
 
 	if execErr != nil {
-		buf.WriteString(fmt.Sprintf("**Exit**: `%s`\n\n", execErr))
+		fmt.Fprintf(&buf, "**Exit**: `%s`\n\n", execErr)
 	}
 
 	buf.WriteString("```\n")

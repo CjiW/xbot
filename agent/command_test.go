@@ -101,7 +101,6 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	}
 }
 
-
 func TestCommandConcurrency(t *testing.T) {
 	r := NewCommandRegistry()
 	registerBuiltinCommands(r)

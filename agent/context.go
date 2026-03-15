@@ -121,60 +121,34 @@ func (pl *PromptLoader) Render(data PromptData) string {
 	return buf.String()
 }
 
-// BuildMessages 构建完整的 LLM 消息列表
+// BuildMessages 构建完整的 LLM 消息列表。
+// 内部使用 MessagePipeline 实现，保留此函数签名以兼容现有调用方。
+//
 // 拼接顺序经过优化以最大化 KV-cache 命中率：
 //
-//	固定提示词 → Self Profile（很少变） → Skills（相对稳定） → Memory（会变化） → User Profile（会变化） → Time（每次都变）
+//	固定提示词 → Skills（相对稳定） → Agents → Memory（会变化） → Sender Info → Time（每次都变）
 func BuildMessages(history []llm.ChatMessage, userContent string, channel string, mem memory.MemoryProvider, workDir string, skillsCatalog string, agentsCatalog string, promptLoader *PromptLoader, senderName string, senderID string) []llm.ChatMessage {
-	now := time.Now().Format("2006-01-02 15:04:05 MST")
+	pipeline := NewMessagePipeline(
+		NewSystemPromptMiddleware(promptLoader),
+		NewSkillsCatalogMiddleware(skillsCatalog),
+		NewAgentsCatalogMiddleware(agentsCatalog),
+		NewMemoryMiddleware(mem),
+		NewSenderInfoMiddleware(),
+		NewUserMessageMiddleware(),
+	)
 
-	// 渲染固定部分的模板（不含时间戳）
-	systemContent := promptLoader.Render(PromptData{
-		Channel: channel,
-		WorkDir: workDir,
-	})
-
-	// 注入 skills 目录（让 LLM 按需用 Read 工具加载 SKILL.md）
-	if skillsCatalog != "" {
-		systemContent += "\n" + skillsCatalog
+	mc := &MessageContext{
+		Ctx:         letta.WithUserID(context.TODO(), senderID),
+		SystemParts: make(map[string]string),
+		UserContent: userContent,
+		History:     history,
+		Channel:     channel,
+		WorkDir:     workDir,
+		SenderName:  senderName,
+		SenderID:    senderID,
 	}
 
-	// 注入 agents 目录（让 LLM 知道可用的 SubAgent 角色）
-	if agentsCatalog != "" {
-		systemContent += "\n" + agentsCatalog
-	}
-
-	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）
-	// 使用 letta.WithUserID 传递 senderID，用于 per-user human block
-	if mem != nil {
-		ctx := letta.WithUserID(context.Background(), senderID)
-		memCtx, err := mem.Recall(ctx, userContent)
-		if err != nil {
-			log.WithError(err).Warn("Failed to get memory context")
-		} else if memCtx != "" {
-			systemContent += "\n# Memory\n\n" + memCtx + "\n"
-		}
-	}
-
-	// 注入当前发送者名称
-	if senderName != "" {
-		systemContent += fmt.Sprintf("\n## Current Sender\nName: %s\n", senderName)
-	}
-
-	messages := make([]llm.ChatMessage, 0, len(history)+2)
-	messages = append(messages, llm.NewSystemMessage(systemContent))
-	messages = append(messages, history...)
-
-	// 用户消息中注入时间戳和发送者标识
-	var userMsg string
-	if senderName != "" {
-		userMsg = fmt.Sprintf("[%s] [%s]\n%s", now, senderName, userContent)
-	} else {
-		userMsg = fmt.Sprintf("[%s]\n%s", now, userContent)
-	}
-	userMsg = fmt.Sprintf("%s\n\n[系统引导] 在执行任何操作前，**必须**先用`search_tools`搜索工具库尝试寻找工具。\n- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）\n- 浏览/获取网页内容 → Fetch\n- 如果需要查找或使用 skill，请使用 `Skill` 工具（不是 search_tools）\n- search_tools 仅用于搜索其他工具\n现在时间：%s\n", userMsg, now)
-	messages = append(messages, llm.NewUserMessage(userMsg))
-	return messages
+	return pipeline.Run(mc)
 }
 
 // cronSystemPrompt Cron 专用系统提示词（简洁，无记忆和技能）
@@ -192,13 +166,17 @@ const cronSystemPrompt = `You are xbot executing a scheduled cron task.
 Current Time: %s
 `
 
-// BuildCronMessages 构建 cron 专用消息（无历史上下文）
+// BuildCronMessages 构建 cron 专用消息（无历史上下文）。
+// 内部使用 MessagePipeline 实现。
 func BuildCronMessages(task string, workDir string) []llm.ChatMessage {
-	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	systemContent := fmt.Sprintf(cronSystemPrompt, workDir, now)
+	pipeline := NewMessagePipeline(
+		NewCronSystemPromptMiddleware(workDir),
+	)
 
-	return []llm.ChatMessage{
-		llm.NewSystemMessage(systemContent),
-		llm.NewUserMessage(task),
+	mc := &MessageContext{
+		SystemParts: make(map[string]string),
+		UserContent: task,
 	}
+
+	return pipeline.Run(mc)
 }

@@ -582,14 +582,29 @@ func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan st
 // chatWorker 处理单个 chat 的消息队列，保证同一 chat 内顺序处理。
 // 通过信号量控制并发：获取信号量后才开始处理，处理完释放。
 // 信号量在每次处理消息时动态选择，以支持用户中途设置/取消自定义 LLM。
-// 指令消息（/new, /help 等）绕过信号量，在独立 goroutine 中执行，不阻塞后续消息。
+// chatWorker 处理单个 chat 的消息队列。
+// 主循环持续从 ch 取消息并分发：
+//   - 指令消息（/version, /help 等）：独立 goroutine 立即执行，不阻塞
+//   - 普通消息：发送到内部 msgCh，由专门的 goroutine 串行处理（带信号量 + cancel）
+//
+// 这样即使普通消息正在长时间处理（LLM 推理），主循环仍能取出并执行命令消息。
 func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+	// 内部普通消息队列：主循环写入，processLoop 消费
+	msgCh := make(chan bus.InboundMessage, 32)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.chatProcessLoop(ctx, chatKey, msgCh, globalSem)
+	}()
+
 	for msg := range ch {
 		if ctx.Err() != nil {
-			return
+			break
 		}
 
-		// 指令消息：独立 goroutine 处理，不占信号量，不阻塞后续消息
+		// 指令消息：独立 goroutine 处理，不占信号量，不阻塞
 		if a.commands.IsCommand(msg.Content) {
 			go func(m bus.InboundMessage) {
 				response, err := a.processMessage(ctx, m)
@@ -609,7 +624,24 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 			continue
 		}
 
-		// 普通消息：信号量 + per-request cancel context
+		// 普通消息：转发到内部队列，由 processLoop 串行处理
+		select {
+		case msgCh <- msg:
+		case <-ctx.Done():
+		}
+	}
+
+	close(msgCh)
+	wg.Wait()
+}
+
+// chatProcessLoop 串行处理普通消息（非命令），带信号量控制和 per-request cancel 支持。
+func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+	for msg := range ch {
+		if ctx.Err() != nil {
+			return
+		}
+
 		sem := a.getSemaphoreForMessage(msg, globalSem)
 
 		select {

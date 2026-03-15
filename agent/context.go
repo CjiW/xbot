@@ -143,6 +143,9 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		systemContent += "\n" + agentsCatalog
 	}
 
+	// SubAgent 使用指南（鼓励 LLM 主动调用 SubAgent）
+	systemContent += "\n\n## SubAgent 使用指南\n\n当任务涉及以下场景时，**强烈建议**使用 SubAgent 工具来委托任务：\n- 探索项目结构、查找文件、搜索代码 → 使用 explorer\n- 代码审查、发现潜在 bug → 使用 code-reviewer\n- 编写测试、验证功能 → 使用 tester\n\n使用方式：在 task 中清晰描述任务目标和上下文，SubAgent 会独立完成并返回结果。\n\n例如：\n- \"探索 agent 目录的结构，找出所有处理消息的逻辑\"\n- \"审查刚才提交的代码变更，检查是否有潜在 bug\"\n- \"为 tools/shell.go 添加单元测试\"\n\n**注意**：SubAgent 是独立的工作单元，不会继承当前对话的历史记录。请在 task 中提供足够的上下文信息。"
+
 	// 注入长期记忆（Letta 模式下包含 Core Memory blocks + archival summary）
 	if mem != nil {
 		memCtx, err := mem.Recall(context.TODO(), userContent)

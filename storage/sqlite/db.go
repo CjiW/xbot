@@ -365,73 +365,17 @@ UPDATE schema_version SET version = 6;
 		log.Info("Database migrated to v6 (added user_llm_configs)")
 	}
 
-	if from < 7 {
-		// Migration to add user_id to core_memory_blocks for per-user human block
-		// Step 1: Add user_id column (允许 NULL，兼容旧数据)
-		_, err := conn.Exec("ALTER TABLE core_memory_blocks ADD COLUMN user_id INTEGER")
-		if err != nil {
-			return fmt.Errorf("migrate v6->v7: add user_id column: %w", err)
-		}
-
-		log.Info("Database migrated to v7 (added user_id to core_memory_blocks)")
-
-		// Step 2: Update schema version
-		if _, err := conn.Exec("UPDATE schema_version SET version = 7"); err != nil {
-			return fmt.Errorf("update schema version: %w", err)
-		}
-	}
-
 	if from < 8 {
-		// Migration to change user_id from INTEGER to TEXT NOT NULL DEFAULT ""
-		// This allows storing senderID strings directly (e.g., "ou_xxx")
-		// Step 1: Update existing NULL values to empty string
-		_, err := conn.Exec("UPDATE core_memory_blocks SET user_id = '' WHERE user_id IS NULL")
+		// Migration to add user_id to core_memory_blocks for per-user human block
+		// Direct v6 -> v8: Add user_id as TEXT NOT NULL DEFAULT '' (allows storing senderID strings like "ou_xxx")
+		_, err := conn.Exec("ALTER TABLE core_memory_blocks ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
 		if err != nil {
-			return fmt.Errorf("migrate v7->v8: update NULL to empty string: %w", err)
+			return fmt.Errorf("migrate v6->v8: add user_id column: %w", err)
 		}
 
-		// Step 2: Drop the old INTEGER column and add new TEXT column
-		// SQLite doesn't support ALTER COLUMN, so we need to recreate the table
-		_, err = conn.Exec(`
-			CREATE TABLE core_memory_blocks_new (
-				tenant_id INTEGER NOT NULL,
-				block_name TEXT NOT NULL,
-				user_id TEXT NOT NULL DEFAULT '',
-				content TEXT NOT NULL DEFAULT '',
-				char_limit INTEGER NOT NULL DEFAULT 2000,
-				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				PRIMARY KEY (tenant_id, block_name, user_id),
-				FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-			);
-		`)
-		if err != nil {
-			return fmt.Errorf("migrate v7->v8: create new table: %w", err)
-		}
+		log.Info("Database migrated to v8 (added user_id to core_memory_blocks)")
 
-		// Step 3: Copy data from old table to new table
-		_, err = conn.Exec(`
-			INSERT INTO core_memory_blocks_new (tenant_id, block_name, user_id, content, char_limit, updated_at)
-			SELECT tenant_id, block_name, COALESCE(user_id, ''), content, char_limit, updated_at
-			FROM core_memory_blocks;
-		`)
-		if err != nil {
-			return fmt.Errorf("migrate v7->v8: copy data: %w", err)
-		}
-
-		// Step 4: Drop old table and rename new table
-		_, err = conn.Exec("DROP TABLE core_memory_blocks")
-		if err != nil {
-			return fmt.Errorf("migrate v7->v8: drop old table: %w", err)
-		}
-
-		_, err = conn.Exec("ALTER TABLE core_memory_blocks_new RENAME TO core_memory_blocks")
-		if err != nil {
-			return fmt.Errorf("migrate v7->v8: rename table: %w", err)
-		}
-
-		log.Info("Database migrated to v8 (user_id changed to TEXT NOT NULL DEFAULT '')")
-
-		// Step 5: Update schema version
+		// Update schema version
 		if _, err := conn.Exec("UPDATE schema_version SET version = 8"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}

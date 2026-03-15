@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"sort"
+	"sync"
 
 	"xbot/llm"
 	log "xbot/logger"
@@ -153,26 +154,35 @@ type MessageMiddleware interface {
 }
 
 // MessagePipeline 消息构建管道，按优先级执行中间件链。
+// 并发安全：Agent 持有单个 pipeline 实例，多个 goroutine 可同时调用 Run()。
+// Use/Remove 是写操作（通常在初始化阶段调用），Run/Middlewares 是读操作。
 type MessagePipeline struct {
+	mu          sync.RWMutex
 	middlewares []MessageMiddleware
 	sorted      bool
 }
 
 // NewMessagePipeline 创建消息构建管道
 func NewMessagePipeline(middlewares ...MessageMiddleware) *MessagePipeline {
-	return &MessagePipeline{
+	p := &MessagePipeline{
 		middlewares: middlewares,
 	}
+	p.sortLocked()
+	return p
 }
 
 // Use 添加中间件到管道
 func (p *MessagePipeline) Use(mw ...MessageMiddleware) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.middlewares = append(p.middlewares, mw...)
-	p.sorted = false
+	p.sortLocked()
 }
 
 // Remove 按名称移除中间件。返回是否找到并移除了中间件。
 func (p *MessagePipeline) Remove(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for i, mw := range p.middlewares {
 		if mw.Name() == name {
 			p.middlewares = append(p.middlewares[:i], p.middlewares[i+1:]...)
@@ -182,23 +192,31 @@ func (p *MessagePipeline) Remove(name string) bool {
 	return false
 }
 
-// sort 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）
-func (p *MessagePipeline) sort() {
-	if p.sorted {
-		return
-	}
+// sortLocked 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）。
+// 调用方必须持有锁（mu.Lock）。
+func (p *MessagePipeline) sortLocked() {
 	sort.SliceStable(p.middlewares, func(i, j int) bool {
 		return p.middlewares[i].Priority() < p.middlewares[j].Priority()
 	})
 	p.sorted = true
 }
 
-// Run 执行管道，返回构建好的消息列表。
-// 流程：排序中间件 → 依次执行 → 组装最终消息。
-func (p *MessagePipeline) Run(mc *MessageContext) []llm.ChatMessage {
-	p.sort()
+// snapshot 返回当前中间件列表的快照（浅拷贝）。
+// 调用方持有读锁即可。
+func (p *MessagePipeline) snapshot() []MessageMiddleware {
+	result := make([]MessageMiddleware, len(p.middlewares))
+	copy(result, p.middlewares)
+	return result
+}
 
-	for _, mw := range p.middlewares {
+// Run 执行管道，返回构建好的消息列表。
+// 并发安全：先获取中间件快照，再在快照上执行，不持有锁。
+func (p *MessagePipeline) Run(mc *MessageContext) []llm.ChatMessage {
+	p.mu.RLock()
+	mws := p.snapshot()
+	p.mu.RUnlock()
+
+	for _, mw := range mws {
 		if err := mw.Process(mc); err != nil {
 			log.WithError(err).WithField("middleware", mw.Name()).Warn("Message middleware failed, skipping")
 		}
@@ -207,10 +225,9 @@ func (p *MessagePipeline) Run(mc *MessageContext) []llm.ChatMessage {
 	return mc.Assemble()
 }
 
-// Middlewares 返回当前管道中的中间件列表（按优先级排序）
+// Middlewares 返回当前管道中的中间件列表（按优先级排序的快照）
 func (p *MessagePipeline) Middlewares() []MessageMiddleware {
-	p.sort()
-	result := make([]MessageMiddleware, len(p.middlewares))
-	copy(result, p.middlewares)
-	return result
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.snapshot()
 }

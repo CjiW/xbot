@@ -945,7 +945,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "获取上下文失败，请重试。",
+			Content: fmt.Sprintf("构建上下文失败: %v", err),
 		}, nil
 	}
 
@@ -957,11 +957,10 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
-	// 计算当前 token 数（完整上下文）
+	// 计算完整上下文的 token 数
 	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
 	if err != nil {
 		log.WithError(err).Warn("Failed to count tokens for compression")
-		// 用户手动触发压缩时，计数失败应该强制执行或报错，而不是静默跳过
 	}
 
 	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
@@ -974,9 +973,11 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
-	// 执行压缩（只压缩 session 历史，压缩后重新构建完整上下文）
-	sessionMsgs, _ := tenantSession.GetMessages()
-	compressed, err := a.compressContext(ctx, sessionMsgs, a.model)
+	// 发送压缩开始进度
+	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
+
+	// 执行压缩
+	compressed, err := a.compressContext(ctx, messages, a.model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,

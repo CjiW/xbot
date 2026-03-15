@@ -237,8 +237,38 @@ func (t *FetchTool) formatAsMarkdown(article *readability.Article, pageURL strin
 	sb.WriteString("\n\n")
 	sb.WriteString("---\n\n")
 
-	// 正文
-	sb.WriteString(article.TextContent)
+	// 正文 - 转换为 Markdown 格式
+	sb.WriteString(convertToMarkdown(article.TextContent))
+
+	return sb.String()
+}
+
+// convertToMarkdown 将纯文本转换为 Markdown 格式
+func convertToMarkdown(text string) string {
+	lines := strings.Split(text, "\n")
+	var sb strings.Builder
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			sb.WriteString("\n")
+			continue
+		}
+
+		// 检测标题格式 (全大写或短行且无标点结尾)
+		isTitle := len(line) < 80 && len(line) > 3 &&
+			!strings.ContainsAny(line, ".!?;:,") &&
+			strings.ToUpper(line) == line
+
+		if isTitle {
+			sb.WriteString("## ")
+			sb.WriteString(line)
+			sb.WriteString("\n\n")
+		} else {
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
 
 	return sb.String()
 }

@@ -18,7 +18,7 @@ func TestMultiTenantSession_GetOrCreateSession(t *testing.T) {
 	defer mt.Close()
 
 	// Create session for tenant 1
-	sess1, err := mt.GetOrCreateSession("feishu", "chat123")
+	sess1, err := mt.GetOrCreateSession("feishu", "chat123", "")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestMultiTenantSession_GetOrCreateSession(t *testing.T) {
 	}
 
 	// Get same session - should return cached version
-	sess1Again, err := mt.GetOrCreateSession("feishu", "chat123")
+	sess1Again, err := mt.GetOrCreateSession("feishu", "chat123", "")
 	if err != nil {
 		t.Fatalf("Failed to get existing session: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestMultiTenantSession_GetOrCreateSession(t *testing.T) {
 	}
 
 	// Create session for different tenant
-	sess2, err := mt.GetOrCreateSession("feishu", "chat456")
+	sess2, err := mt.GetOrCreateSession("feishu", "chat456", "")
 	if err != nil {
 		t.Fatalf("Failed to create second session: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestMultiTenantSession_GetOrCreateSession(t *testing.T) {
 	}
 
 	// Create session for different channel
-	sess3, err := mt.GetOrCreateSession("slack", "chat123")
+	sess3, err := mt.GetOrCreateSession("slack", "chat123", "")
 	if err != nil {
 		t.Fatalf("Failed to create session with different channel: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestMultiTenantSession_Isolation(t *testing.T) {
 	defer mt.Close()
 
 	// Create two sessions
-	sess1, err := mt.GetOrCreateSession("feishu", "chat1")
+	sess1, err := mt.GetOrCreateSession("feishu", "chat1", "")
 	if err != nil {
 		t.Fatalf("Failed to create session 1: %v", err)
 	}
-	sess2, err := mt.GetOrCreateSession("feishu", "chat2")
+	sess2, err := mt.GetOrCreateSession("feishu", "chat2", "")
 	if err != nil {
 		t.Fatalf("Failed to create session 2: %v", err)
 	}
@@ -123,11 +123,11 @@ func TestMultiTenantSession_MemoryIsolation(t *testing.T) {
 	defer mt.Close()
 
 	// Create two sessions
-	sess1, err := mt.GetOrCreateSession("feishu", "chat1")
+	sess1, err := mt.GetOrCreateSession("feishu", "chat1", "")
 	if err != nil {
 		t.Fatalf("Failed to create session 1: %v", err)
 	}
-	sess2, err := mt.GetOrCreateSession("feishu", "chat2")
+	sess2, err := mt.GetOrCreateSession("feishu", "chat2", "")
 	if err != nil {
 		t.Fatalf("Failed to create session 2: %v", err)
 	}
@@ -174,13 +174,13 @@ func TestMigrateProfileToCoreMemory_MigratesMe(t *testing.T) {
 	}
 
 	// Create a Letta session — should trigger migration
-	sess, err := mt.GetOrCreateSession("feishu", "chat_migrate")
+	sess, err := mt.GetOrCreateSession("feishu", "chat_migrate", "")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	// Check that persona block was populated
-	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona")
+	// Check that persona block was populated (persona is global, use nil for userID)
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", nil)
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}
@@ -207,18 +207,18 @@ func TestMigrateProfileToCoreMemory_SkipsIfPersonaPopulated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create tenant: %v", err)
 	}
-	if err := mt.coreSvc.InitBlocks(tenantID); err != nil {
+	if err := mt.coreSvc.InitBlocks(tenantID, nil); err != nil {
 		t.Fatalf("Failed to init blocks: %v", err)
 	}
 	existingPersona := "- Already configured persona"
-	if err := mt.coreSvc.SetBlock(tenantID, "persona", existingPersona); err != nil {
+	if err := mt.coreSvc.SetBlock(tenantID, "persona", existingPersona, nil); err != nil {
 		t.Fatalf("Failed to set existing persona: %v", err)
 	}
 
 	// Run migration — should NOT overwrite
 	mt.migrateProfileToCoreMemory(tenantID)
 
-	persona, _, err := mt.coreSvc.GetBlock(tenantID, "persona")
+	persona, _, err := mt.coreSvc.GetBlock(tenantID, "persona", nil)
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}
@@ -236,12 +236,12 @@ func TestMigrateProfileToCoreMemory_NoProfileNoError(t *testing.T) {
 	defer mt.Close()
 
 	// No __me__ profile inserted — migration should be a no-op
-	sess, err := mt.GetOrCreateSession("feishu", "chat_noprofile")
+	sess, err := mt.GetOrCreateSession("feishu", "chat_noprofile", "")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona")
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", nil)
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestMultiTenantSession_LettaSessionRecall(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("feishu", "chat_letta")
+	sess, err := mt.GetOrCreateSession("feishu", "chat_letta", "")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}

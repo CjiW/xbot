@@ -151,6 +151,30 @@ func TestMessageContext_Extra(t *testing.T) {
 	}
 }
 
+func TestMessageContext_GetExtraString(t *testing.T) {
+	mc := &MessageContext{}
+
+	// Missing key
+	s, ok := mc.GetExtraString("missing")
+	if ok || s != "" {
+		t.Error("GetExtraString should return empty for missing key")
+	}
+
+	// Non-string value
+	mc.SetExtra("number", 42)
+	s, ok = mc.GetExtraString("number")
+	if ok || s != "" {
+		t.Error("GetExtraString should return false for non-string value")
+	}
+
+	// String value
+	mc.SetExtra("name", "xbot")
+	s, ok = mc.GetExtraString("name")
+	if !ok || s != "xbot" {
+		t.Errorf("GetExtraString: got %q, %v", s, ok)
+	}
+}
+
 // --- Pipeline tests ---
 
 func TestMessagePipeline_PriorityOrdering(t *testing.T) {
@@ -314,6 +338,31 @@ func TestMessagePipeline_Use(t *testing.T) {
 	}
 }
 
+func TestMessagePipeline_Remove(t *testing.T) {
+	mw1 := &mockMiddleware{name: "a", priority: 100}
+	mw2 := &mockMiddleware{name: "b", priority: 200}
+	mw3 := &mockMiddleware{name: "c", priority: 300}
+
+	pipeline := NewMessagePipeline(mw1, mw2, mw3)
+
+	// Remove existing
+	if !pipeline.Remove("b") {
+		t.Error("Remove should return true for existing middleware")
+	}
+	mws := pipeline.Middlewares()
+	if len(mws) != 2 {
+		t.Fatalf("expected 2 middlewares after remove, got %d", len(mws))
+	}
+	if mws[0].Name() != "a" || mws[1].Name() != "c" {
+		t.Errorf("wrong middlewares after remove: [%s, %s]", mws[0].Name(), mws[1].Name())
+	}
+
+	// Remove non-existing
+	if pipeline.Remove("nonexistent") {
+		t.Error("Remove should return false for non-existing middleware")
+	}
+}
+
 func TestMessagePipeline_EmptyPipeline(t *testing.T) {
 	pipeline := NewMessagePipeline()
 	mc := &MessageContext{
@@ -333,28 +382,38 @@ func TestMessagePipeline_EmptyPipeline(t *testing.T) {
 // --- Builtin middleware tests ---
 
 func TestSkillsCatalogMiddleware(t *testing.T) {
-	mc := &MessageContext{SystemParts: make(map[string]string)}
+	mc := &MessageContext{
+		SystemParts: make(map[string]string),
+		Extra:       make(map[string]any),
+	}
 
-	// Non-empty catalog
-	mw := NewSkillsCatalogMiddleware("# Skills\n- deploy\n- github")
+	// Non-empty catalog via Extra
+	mc.SetExtra("skills_catalog", "# Skills\n- deploy\n- github")
+	mw := NewSkillsCatalogMiddleware()
 	_ = mw.Process(mc)
 	if mc.SystemParts["10_skills"] == "" {
 		t.Error("skills catalog should be set")
 	}
 
 	// Empty catalog
-	mc2 := &MessageContext{SystemParts: make(map[string]string)}
-	mw2 := NewSkillsCatalogMiddleware("")
-	_ = mw2.Process(mc2)
+	mc2 := &MessageContext{
+		SystemParts: make(map[string]string),
+		Extra:       make(map[string]any),
+	}
+	_ = mw.Process(mc2)
 	if _, ok := mc2.SystemParts["10_skills"]; ok {
 		t.Error("empty catalog should not set key")
 	}
 }
 
 func TestAgentsCatalogMiddleware(t *testing.T) {
-	mc := &MessageContext{SystemParts: make(map[string]string)}
+	mc := &MessageContext{
+		SystemParts: make(map[string]string),
+		Extra:       make(map[string]any),
+	}
 
-	mw := NewAgentsCatalogMiddleware("# Agents\n- code-reviewer")
+	mc.SetExtra("agents_catalog", "# Agents\n- code-reviewer")
+	mw := NewAgentsCatalogMiddleware()
 	_ = mw.Process(mc)
 	if mc.SystemParts["15_agents"] == "" {
 		t.Error("agents catalog should be set")
@@ -363,8 +422,11 @@ func TestAgentsCatalogMiddleware(t *testing.T) {
 
 func TestMemoryMiddleware(t *testing.T) {
 	t.Run("nil provider", func(t *testing.T) {
-		mc := &MessageContext{SystemParts: make(map[string]string)}
-		mw := NewMemoryMiddleware(nil)
+		mc := &MessageContext{
+			SystemParts: make(map[string]string),
+			Extra:       make(map[string]any),
+		}
+		mw := NewMemoryMiddleware()
 		err := mw.Process(mc)
 		if err != nil {
 			t.Errorf("nil provider should not error: %v", err)
@@ -379,10 +441,12 @@ func TestMemoryMiddleware(t *testing.T) {
 			Ctx:         context.Background(),
 			SystemParts: make(map[string]string),
 			UserContent: "hello",
+			Extra:       make(map[string]any),
 		}
-		mw := NewMemoryMiddleware(&mockMemoryProvider{
+		mc.SetExtra("memory_provider", &mockMemoryProvider{
 			recallResult: "## Core Memory\nSome facts",
 		})
+		mw := NewMemoryMiddleware()
 		err := mw.Process(mc)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -398,10 +462,12 @@ func TestMemoryMiddleware(t *testing.T) {
 			Ctx:         context.Background(),
 			SystemParts: make(map[string]string),
 			UserContent: "hello",
+			Extra:       make(map[string]any),
 		}
-		mw := NewMemoryMiddleware(&mockMemoryProvider{
+		mc.SetExtra("memory_provider", &mockMemoryProvider{
 			recallErr: fmt.Errorf("db connection failed"),
 		})
+		mw := NewMemoryMiddleware()
 		err := mw.Process(mc)
 		if err == nil {
 			t.Error("expected error from failed recall")
@@ -413,8 +479,10 @@ func TestMemoryMiddleware(t *testing.T) {
 			Ctx:         context.Background(),
 			SystemParts: make(map[string]string),
 			UserContent: "hello",
+			Extra:       make(map[string]any),
 		}
-		mw := NewMemoryMiddleware(&mockMemoryProvider{recallResult: ""})
+		mc.SetExtra("memory_provider", &mockMemoryProvider{recallResult: ""})
+		mw := NewMemoryMiddleware()
 		err := mw.Process(mc)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -514,9 +582,9 @@ func TestPipeline_MatchesBuildMessages(t *testing.T) {
 
 	pipeline := NewMessagePipeline(
 		NewSystemPromptMiddleware(loader),
-		NewSkillsCatalogMiddleware("# Available Skills\n- deploy"),
-		NewAgentsCatalogMiddleware("# Available Agents\n- code-reviewer"),
-		NewMemoryMiddleware(&mockMemoryProvider{recallResult: "## Persona\nI am xbot"}),
+		NewSkillsCatalogMiddleware(),
+		NewAgentsCatalogMiddleware(),
+		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
 		NewUserMessageMiddleware(),
 	)
@@ -532,7 +600,11 @@ func TestPipeline_MatchesBuildMessages(t *testing.T) {
 		Channel:    "feishu",
 		WorkDir:    "/work",
 		SenderName: "TestUser",
+		Extra:      make(map[string]any),
 	}
+	mc.SetExtra("skills_catalog", "# Available Skills\n- deploy")
+	mc.SetExtra("agents_catalog", "# Available Agents\n- code-reviewer")
+	mc.SetExtra("memory_provider", &mockMemoryProvider{recallResult: "## Persona\nI am xbot"})
 
 	messages := pipeline.Run(mc)
 
@@ -592,10 +664,7 @@ func TestCronPipeline(t *testing.T) {
 		NewCronSystemPromptMiddleware("/work"),
 	)
 
-	mc := &MessageContext{
-		SystemParts: make(map[string]string),
-		UserContent: "remind me to standup",
-	}
+	mc := NewCronMessageContext("remind me to standup")
 
 	messages := pipeline.Run(mc)
 
@@ -607,5 +676,137 @@ func TestCronPipeline(t *testing.T) {
 	}
 	if messages[1].Content != "remind me to standup" {
 		t.Errorf("user message should be raw content, got: %q", messages[1].Content)
+	}
+}
+
+// --- Test NewMessageContext / NewCronMessageContext ---
+
+func TestNewMessageContext(t *testing.T) {
+	ctx := context.Background()
+	mc := NewMessageContext(ctx, "hello", nil, "feishu", "/work", "Alice", "user1", "chat1")
+
+	if mc.Ctx != ctx {
+		t.Error("Ctx should be set")
+	}
+	if mc.UserContent != "hello" {
+		t.Error("UserContent should be set")
+	}
+	if mc.Channel != "feishu" {
+		t.Error("Channel should be set")
+	}
+	if mc.WorkDir != "/work" {
+		t.Error("WorkDir should be set")
+	}
+	if mc.SenderName != "Alice" {
+		t.Error("SenderName should be set")
+	}
+	if mc.SenderID != "user1" {
+		t.Error("SenderID should be set")
+	}
+	if mc.ChatID != "chat1" {
+		t.Error("ChatID should be set")
+	}
+	if mc.SystemParts == nil {
+		t.Error("SystemParts should be initialized")
+	}
+	if mc.Extra == nil {
+		t.Error("Extra should be initialized")
+	}
+}
+
+func TestNewCronMessageContext(t *testing.T) {
+	mc := NewCronMessageContext("check status")
+
+	if mc.UserContent != "check status" {
+		t.Error("UserContent should be set")
+	}
+	if mc.SystemParts == nil {
+		t.Error("SystemParts should be initialized")
+	}
+	if mc.Extra == nil {
+		t.Error("Extra should be initialized")
+	}
+}
+
+// --- Test Pipeline dynamic Use/Remove ---
+
+func TestPipeline_DynamicUseRemove(t *testing.T) {
+	loader := NewPromptLoader("")
+	pipeline := NewMessagePipeline(
+		NewSystemPromptMiddleware(loader),
+		NewSkillsCatalogMiddleware(),
+		NewUserMessageMiddleware(),
+	)
+
+	// Add a custom middleware
+	custom := &mockMiddleware{
+		name:     "custom_injector",
+		priority: 150,
+		process: func(mc *MessageContext) error {
+			mc.SystemParts["16_custom"] = "# Custom\nInjected by custom middleware"
+			return nil
+		},
+	}
+	pipeline.Use(custom)
+
+	mc := &MessageContext{
+		SystemParts: make(map[string]string),
+		UserContent: "test",
+		Extra:       make(map[string]any),
+	}
+	mc.SetExtra("skills_catalog", "# Skills\n- deploy")
+
+	messages := pipeline.Run(mc)
+	sys := messages[0].Content
+	if !strings.Contains(sys, "Injected by custom middleware") {
+		t.Error("custom middleware should inject content")
+	}
+
+	// Remove the custom middleware
+	pipeline.Remove("custom_injector")
+
+	mc2 := &MessageContext{
+		SystemParts: make(map[string]string),
+		UserContent: "test2",
+		Extra:       make(map[string]any),
+	}
+	messages2 := pipeline.Run(mc2)
+	sys2 := messages2[0].Content
+	if strings.Contains(sys2, "Injected by custom middleware") {
+		t.Error("custom middleware should be removed")
+	}
+}
+
+// --- Test deprecated BuildMessages compatibility ---
+
+func TestBuildMessages_Deprecated(t *testing.T) {
+	loader := NewPromptLoader("")
+	mem := &mockMemoryProvider{recallResult: "## Persona\nI am xbot"}
+
+	messages := BuildMessages(
+		[]llm.ChatMessage{llm.NewUserMessage("prev")},
+		"hello",
+		"feishu",
+		mem,
+		"/work",
+		"# Skills\n- deploy",
+		"# Agents\n- reviewer",
+		loader,
+		"TestUser",
+		"ou_test123",
+	)
+
+	if len(messages) != 3 { // system + 1 history + user
+		t.Fatalf("expected 3 messages, got %d", len(messages))
+	}
+	sys := messages[0].Content
+	if !strings.Contains(sys, "deploy") {
+		t.Error("should contain skills")
+	}
+	if !strings.Contains(sys, "reviewer") {
+		t.Error("should contain agents")
+	}
+	if !strings.Contains(sys, "I am xbot") {
+		t.Error("should contain memory")
 	}
 }

@@ -33,65 +33,69 @@ func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 
 // --- Priority 100-199: 上下文注入 ---
 
-// SkillsCatalogMiddleware 注入 Skills 目录
-type SkillsCatalogMiddleware struct {
-	catalog string
-}
+// SkillsCatalogMiddleware 注入 Skills 目录。
+// 从 MessageContext.Extra["skills_catalog"] 读取动态内容。
+type SkillsCatalogMiddleware struct{}
 
-func NewSkillsCatalogMiddleware(catalog string) *SkillsCatalogMiddleware {
-	return &SkillsCatalogMiddleware{catalog: catalog}
+func NewSkillsCatalogMiddleware() *SkillsCatalogMiddleware {
+	return &SkillsCatalogMiddleware{}
 }
 
 func (m *SkillsCatalogMiddleware) Name() string  { return "skills_catalog" }
 func (m *SkillsCatalogMiddleware) Priority() int { return 100 }
 
 func (m *SkillsCatalogMiddleware) Process(mc *MessageContext) error {
-	if m.catalog != "" {
-		mc.SystemParts["10_skills"] = m.catalog
+	catalog, _ := mc.GetExtraString("skills_catalog")
+	if catalog != "" {
+		mc.SystemParts["10_skills"] = catalog
 	}
 	return nil
 }
 
-// AgentsCatalogMiddleware 注入 Agents 目录
-type AgentsCatalogMiddleware struct {
-	catalog string
-}
+// AgentsCatalogMiddleware 注入 Agents 目录。
+// 从 MessageContext.Extra["agents_catalog"] 读取动态内容。
+type AgentsCatalogMiddleware struct{}
 
-func NewAgentsCatalogMiddleware(catalog string) *AgentsCatalogMiddleware {
-	return &AgentsCatalogMiddleware{catalog: catalog}
+func NewAgentsCatalogMiddleware() *AgentsCatalogMiddleware {
+	return &AgentsCatalogMiddleware{}
 }
 
 func (m *AgentsCatalogMiddleware) Name() string  { return "agents_catalog" }
 func (m *AgentsCatalogMiddleware) Priority() int { return 110 }
 
 func (m *AgentsCatalogMiddleware) Process(mc *MessageContext) error {
-	if m.catalog != "" {
-		mc.SystemParts["15_agents"] = m.catalog
+	catalog, _ := mc.GetExtraString("agents_catalog")
+	if catalog != "" {
+		mc.SystemParts["15_agents"] = catalog
 	}
 	return nil
 }
 
-// MemoryMiddleware 注入长期记忆
-type MemoryMiddleware struct {
-	mem memory.MemoryProvider
-}
+// MemoryMiddleware 注入长期记忆。
+// 从 MessageContext.Extra["memory_provider"] 读取动态 MemoryProvider。
+type MemoryMiddleware struct{}
 
-func NewMemoryMiddleware(mem memory.MemoryProvider) *MemoryMiddleware {
-	return &MemoryMiddleware{mem: mem}
+func NewMemoryMiddleware() *MemoryMiddleware {
+	return &MemoryMiddleware{}
 }
 
 func (m *MemoryMiddleware) Name() string  { return "memory" }
 func (m *MemoryMiddleware) Priority() int { return 120 }
 
 func (m *MemoryMiddleware) Process(mc *MessageContext) error {
-	if m.mem == nil {
+	memRaw, ok := mc.GetExtra("memory_provider")
+	if !ok || memRaw == nil {
+		return nil
+	}
+	mem, ok := memRaw.(memory.MemoryProvider)
+	if !ok {
 		return nil
 	}
 	ctx := mc.Ctx
 	if ctx == nil {
 		ctx = context.TODO()
 	}
-	memCtx, err := m.mem.Recall(ctx, mc.UserContent)
+	memCtx, err := mem.Recall(ctx, mc.UserContent)
 	if err != nil {
 		return fmt.Errorf("recall memory: %w", err)
 	}

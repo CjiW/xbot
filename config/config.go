@@ -87,6 +87,11 @@ type AgentConfig struct {
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间（默认 30 分钟）
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔（默认 5 分钟）
 	SessionCacheTimeout  time.Duration // 会话缓存超时（默认 24 小时）
+
+	// 上下文压缩配置
+	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true）
+	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
+	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
 }
 
 // ServerConfig 服务器配置
@@ -185,6 +190,9 @@ func Load() *Config {
 			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
 			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
 			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
+			EnableAutoCompress:   getEnvBoolOrDefault("AGENT_ENABLE_AUTO_COMPRESS", true),
+			MaxContextTokens:     getEnvIntOrDefault("AGENT_MAX_CONTEXT_TOKENS", 100000),
+			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.8),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
@@ -253,6 +261,16 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
+		}
+	}
+	return defaultValue
+}
+
+// getEnvFloatOrDefault 获取浮点数环境变量，如果不存在则返回默认值
+func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue

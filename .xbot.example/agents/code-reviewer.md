@@ -2,7 +2,6 @@
 name: code-reviewer
 description: "Code review agent. Use after completing a significant piece of code, before merging, or when the user requests a review."
 tools:
-  - search_tools
   - Read
   - Grep
   - Glob

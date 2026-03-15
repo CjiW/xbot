@@ -2,7 +2,6 @@
 name: explorer
 description: "Exploration agent. Use when you need to understand codebase structure, find files, search for patterns, or gather information before making changes."
 tools:
-  - search_tools
   - Grep
   - Glob
   - Read

@@ -2,7 +2,6 @@
 name: tester
 description: "Testing agent. Use when you need to write tests, verify bug fixes, or validate functionality."
 tools:
-  - search_tools
   - Grep
   - Glob
   - Read

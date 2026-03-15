@@ -1303,16 +1303,25 @@ Please output the compressed content directly without additional explanations.`
 		}
 	}
 
-	// 如果找到了，加入最后一条消息及其后续的所有 tool 消息
+	// 如果找到了，加入最后一条消息及其后续的最后 N 个 tool 消息
+	// 只保留最后 5 个 tool 消息，避免过多 tool 结果导致上下文再次过大
 	if lastUserMsg != nil {
 		result = append(result, *lastUserMsg)
 
-		// 保留最后一条 assistant/user 之后的所有 tool 消息（保持 tool_calls 和 tool result 配对）
+		// 收集最后一条 assistant/user 之后的所有 tool 消息
+		var recentTools []llm.ChatMessage
 		for i := lastUserMsgIndex + 1; i < len(messages); i++ {
 			if messages[i].Role == "tool" {
-				result = append(result, messages[i])
+				recentTools = append(recentTools, messages[i])
 			}
 		}
+
+		// 只保留最后 5 个 tool 消息（保持 tool_calls 和 tool result 配对）
+		const maxRetainedTools = 5
+		if len(recentTools) > maxRetainedTools {
+			recentTools = recentTools[len(recentTools)-maxRetainedTools:]
+		}
+		result = append(result, recentTools...)
 	}
 
 	return result, nil

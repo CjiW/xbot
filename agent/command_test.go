@@ -111,14 +111,14 @@ func TestCommandConcurrency(t *testing.T) {
 		"/new":      true,
 		"/compress": true,
 		"/set-llm":  true,
-		"/prompt":   true,
 	}
 
-	// Commands that are stateless should be concurrent
+	// Commands that are stateless/read-only should be concurrent
 	concurrent := map[string]bool{
 		"/version": true,
 		"/help":    true,
 		"/llm":     true,
+		"/prompt":  true,
 		"!":        true,
 	}
 
@@ -136,4 +136,3 @@ func TestCommandConcurrency(t *testing.T) {
 		}
 	}
 }
-

@@ -179,17 +179,21 @@ func (p *MessagePipeline) Use(mw ...MessageMiddleware) {
 	p.sortLocked()
 }
 
-// Remove 按名称移除中间件。返回是否找到并移除了中间件。
-func (p *MessagePipeline) Remove(name string) bool {
+// Remove 按名称移除所有同名中间件。返回实际移除的数量。
+func (p *MessagePipeline) Remove(name string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for i, mw := range p.middlewares {
+	n := 0
+	filtered := p.middlewares[:0]
+	for _, mw := range p.middlewares {
 		if mw.Name() == name {
-			p.middlewares = append(p.middlewares[:i], p.middlewares[i+1:]...)
-			return true
+			n++
+		} else {
+			filtered = append(filtered, mw)
 		}
 	}
-	return false
+	p.middlewares = filtered
+	return n
 }
 
 // sortLocked 按优先级排序中间件（稳定排序，相同优先级保持添加顺序）。

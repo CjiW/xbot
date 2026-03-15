@@ -958,7 +958,6 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		return nil, err
 	}
 
-
 	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
 	if err != nil {
 		return nil, err

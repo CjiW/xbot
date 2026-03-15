@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -458,18 +457,13 @@ func isValidBlock(name string) bool {
 	return false
 }
 
-// parseUserID parses senderID string to *int64 for per-user human block.
-// Returns nil if senderID is empty or cannot be parsed.
-func parseUserID(senderID string) *int64 {
+// parseUserID returns senderID string pointer for per-user human block.
+// Returns nil if senderID is empty.
+func parseUserID(senderID string) *string {
 	if senderID == "" {
 		return nil
 	}
-	parsed, err := strconv.ParseInt(senderID, 10, 64)
-	if err != nil {
-		log.WithField("sender_id", senderID).Warn("Failed to parse senderID as int64 for core memory")
-		return nil
-	}
-	return &parsed
+	return &senderID
 }
 
 // LettaMemoryTools returns all Letta memory tools for registration.

@@ -97,8 +97,12 @@ func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 
 	// 检查 Content-Type
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "text/html") {
-		return nil, fmt.Errorf("unsupported content type: %s (only text/html is supported)", contentType)
+	// 支持 text/html、text/plain（如 GitHub raw）、application/xhtml+xml
+	isHTML := strings.Contains(contentType, "text/html") ||
+		strings.Contains(contentType, "text/plain") ||
+		strings.Contains(contentType, "application/xhtml+xml")
+	if !isHTML {
+		return nil, fmt.Errorf("unsupported content type: %s", contentType)
 	}
 
 	// 读取响应（限制最大 10MB）

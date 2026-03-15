@@ -1241,47 +1241,72 @@ func max(a, b int) int {
 // 2. 把压缩后的摘要作为 user prompt 直接调用 LLM
 // 3. 保留 system 消息和最近的对话轮次
 func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, model string) ([]llm.ChatMessage, error) {
-	// 第一步：分离消息类型
-	var systemMsgs []llm.ChatMessage       // system 消息
-	var toolMsgs []llm.ChatMessage         // tool 消息（完整保留）
-	var conversationMsgs []llm.ChatMessage // user/assistant 消息（需要压缩的部分）
-	var recentMsgs []llm.ChatMessage       // 最近 2 轮对话（保留）
+	// 第一步：找到尾部安全切割点
+	// API 要求：assistant 的 tool_calls 必须紧跟对应的 tool result 消息
+	// 从后往前扫描，找到最后一个"安全切割点"：
+	//   - user 消息是安全切割点
+	//   - 不带 tool_calls 的 assistant 消息是安全切割点
+	//   - tool result 或 assistant(tool_calls) 必须成对保留，继续往前找
+	tailStart := len(messages) // 默认不保留任何尾部消息
+	for i := len(messages) - 1; i >= 1; i-- {
+		msg := messages[i]
+		if msg.Role == "user" {
+			tailStart = i
+			break
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			tailStart = i
+			break
+		}
+		// tool result 或 assistant(tool_calls)：继续往前找，确保配对完整
+		// 如果一直找到 index 1（紧接 system message），说明整个对话都是 tool 链，
+		// 全部保留以避免破坏配对
+		if i == 1 {
+			tailStart = 1
+		}
+	}
+
+	// 第二步：分离消息
+	// system 消息单独保留，tailStart 之前的非 system 消息需要压缩
+	var systemMsgs []llm.ChatMessage
+	var toCompress []llm.ChatMessage
 
 	for i, msg := range messages {
-		switch msg.Role {
-		case "system":
+		if i >= tailStart {
+			break // 尾部消息原样保留，不参与分类
+		}
+		if msg.Role == "system" {
 			systemMsgs = append(systemMsgs, msg)
-		case "tool":
-			toolMsgs = append(toolMsgs, msg)
-		case "user", "assistant":
-			// 保留最近 2 轮完整对话（user + assistant + tool 结果）
-			// 这样可以保持对话的连续性，LLM 能理解最近在讨论什么
-			if i >= len(messages)-6 { // 约最近 2-3 轮
-				recentMsgs = append(recentMsgs, msg)
-			} else {
-				conversationMsgs = append(conversationMsgs, msg)
-			}
+		} else {
+			toCompress = append(toCompress, msg)
 		}
 	}
 
 	// 如果没有需要压缩的内容，直接返回原消息
-	if len(conversationMsgs) == 0 {
+	if len(toCompress) == 0 {
 		return messages, nil
 	}
 
-	// 第二步：构建压缩 prompt（只压缩对话部分，tool 信息完整保留）
+	// 第三步：构建压缩 prompt
 	var historyText strings.Builder
-	for _, msg := range conversationMsgs {
+	for _, msg := range toCompress {
 		role := strings.ToUpper(msg.Role)
-		// 按 rune 截断，避免中文乱码
 		content := msg.Content
+		// 对 tool_calls 也记录函数名，帮助 LLM 理解上下文
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			var toolNames []string
+			for _, tc := range msg.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			content += fmt.Sprintf(" [called tools: %s]", strings.Join(toolNames, ", "))
+		}
+		// 按 rune 截断，避免中文乱码
 		if len([]rune(content)) > 800 {
 			content = string([]rune(content)[:800]) + "..."
 		}
 		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
 	}
 
-	// Claude 风格的压缩 prompt
 	compressionPrompt := `You are a context compression expert. Your task is to compress the conversation history into a concise summary while retaining ALL important information.
 
 ## Compression Rules
@@ -1301,7 +1326,7 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 
 Output the compressed content directly, preserving as much context as possible.`
 
-	// 第三步：调用 LLM 压缩
+	// 第四步：调用 LLM 压缩
 	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a context compression expert."),
 		llm.NewUserMessage(compressionPrompt),
@@ -1312,24 +1337,20 @@ Output the compressed content directly, preserving as much context as possible.`
 
 	compressed := llm.StripThinkBlocks(resp.Content)
 
-	// 第四步：构建压缩后的消息结构
-	// 结构：[system, user(压缩摘要), tool(完整历史), recent(最近对话)]
+	// 第五步：构建压缩后的消息结构
+	// 结构：[system, user(压缩摘要), 尾部原始消息(tool_calls/tool_result 配对完整)]
 	var result []llm.ChatMessage
 
 	// 保留 system 消息
-	if len(systemMsgs) > 0 {
-		result = append(result, systemMsgs...)
+	result = append(result, systemMsgs...)
+
+	// 将压缩摘要作为 user 消息插入
+	result = append(result, llm.NewUserMessage("[Previous conversation context]\n\n"+compressed))
+
+	// 保留从 tailStart 到末尾的所有原始消息（tool_calls/tool_result 配对完整）
+	if tailStart < len(messages) {
+		result = append(result, messages[tailStart:]...)
 	}
-
-	// 将压缩摘要作为 user 消息（Claude 风格：压缩信息作为 user prompt）
-	summaryUserMsg := llm.NewUserMessage("[Previous conversation context]\n\n" + compressed)
-	result = append(result, summaryUserMsg)
-
-	// 保留所有 tool 消息（完整保留，确保 tool_calls 和 tool result 配对）
-	result = append(result, toolMsgs...)
-
-	// 保留最近一轮完整对话
-	result = append(result, recentMsgs...)
 
 	return result, nil
 }

@@ -1291,18 +1291,28 @@ Please output the compressed content directly without additional explanations.`
 		result = append(result, summaryMsg)
 	}
 
-	// 找到最后一条 user 或 assistant 消息
+	// 找到最后一条 user 或 assistant 消息，并保留其后的所有 tool 消息
+	// 这是关键修复：如果 assistant 有 tool_calls，必须保留对应的 tool 消息，否则 LLM API 会报错 "tool call and result not match"
 	var lastUserMsg *llm.ChatMessage
+	var lastUserMsgIndex int
 	for i := len(messages) - 1; i >= 1; i-- { // 从后往前遍历，跳过 system message
 		if messages[i].Role == "user" || messages[i].Role == "assistant" {
 			lastUserMsg = &messages[i]
+			lastUserMsgIndex = i
 			break
 		}
 	}
 
-	// 如果找到了，加入最后一条消息
+	// 如果找到了，加入最后一条消息及其后续的所有 tool 消息
 	if lastUserMsg != nil {
 		result = append(result, *lastUserMsg)
+
+		// 保留最后一条 assistant/user 之后的所有 tool 消息（保持 tool_calls 和 tool result 配对）
+		for i := lastUserMsgIndex + 1; i < len(messages); i++ {
+			if messages[i].Role == "tool" {
+				result = append(result, messages[i])
+			}
+		}
 	}
 
 	return result, nil

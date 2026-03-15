@@ -25,23 +25,115 @@ var DefaultBlocks = map[string]int{
 }
 
 // InitBlocks ensures all default blocks exist for a tenant.
-// For human block, uses userID if non-empty (for per-user human block).
+// - persona: always uses tenantID=0 (global shared)
+// - human: uses userID if non-empty, with tenantID=0 (cross-tenant per-user)
+// - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 	conn := s.db.Conn()
+
+	// Run migration first (no-op if already done)
+	if err := s.migrateLegacyData(conn); err != nil {
+		return fmt.Errorf("migration: %w", err)
+	}
+
 	for name, limit := range DefaultBlocks {
-		// human block is per-user, others are per-tenant (userID="")
+		// Determine effective tenantID and userID based on block type
+		effectiveTenantID := tenantID
 		uid := ""
-		if name == "human" && userID != "" {
-			uid = userID
+
+		switch name {
+		case "persona":
+			// persona is global, always use tenantID=0
+			effectiveTenantID = 0
+		case "human":
+			// human is per-user, use userID directly (cross-tenant)
+			if userID != "" {
+				uid = userID
+			}
+			// Also use tenantID=0 for consistency
+			effectiveTenantID = 0
+		case "working_context":
+			// working_context is per-tenant
+			uid = ""
 		}
+
 		_, err := conn.Exec(`
 			INSERT OR IGNORE INTO core_memory_blocks (tenant_id, block_name, user_id, char_limit)
 			VALUES (?, ?, ?, ?)
-		`, tenantID, name, uid, limit)
+		`, effectiveTenantID, name, uid, limit)
 		if err != nil {
 			return fmt.Errorf("init block %s: %w", name, err)
 		}
 	}
+	return nil
+}
+
+// migrateLegacyData migrates legacy core memory data to the new scheme:
+// - persona: merge all tenantID's persona blocks to tenantID=0 (keep longest)
+// - human: merge all tenantID's human blocks to tenantID=0 (keep longest)
+func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
+	// Check if migration marker exists
+	var marker int
+	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='core_memory_migrations'").Scan(&marker)
+	if err != nil {
+		return err
+	}
+
+	// Create migration marker table if not exists
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS core_memory_migrations (
+			name TEXT PRIMARY KEY,
+			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Check if migration already applied
+	err = db.QueryRow("SELECT 1 FROM core_memory_migrations WHERE name = 'migrate_to_tenant_0'").Scan(&marker)
+	if err == nil {
+		// Already migrated
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	// Migration: merge persona blocks
+	_, err = db.Exec(`
+		INSERT INTO core_memory_migrations (name)
+		VALUES ('migrate_to_tenant_0')
+	`)
+	if err != nil {
+		return err
+	}
+
+	// For persona: keep longest content from any tenant, insert to tenantID=0
+	_, err = db.Exec(`
+		INSERT OR REPLACE INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit, updated_at)
+		SELECT 0, 'persona', '', content, char_limit, CURRENT_TIMESTAMP
+		FROM core_memory_blocks
+		WHERE block_name = 'persona' AND user_id = ''
+		GROUP BY block_name
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate persona: %w", err)
+	}
+
+	// For human: for each user_id, keep longest content from any tenant, insert to tenantID=0
+	_, err = db.Exec(`
+		INSERT OR REPLACE INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit, updated_at)
+		SELECT 0, 'human', user_id, content, char_limit, CURRENT_TIMESTAMP
+		FROM core_memory_blocks
+		WHERE block_name = 'human' AND user_id != ''
+		GROUP BY user_id
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate human: %w", err)
+	}
+
+	log.Info("Core memory migration completed: legacy data merged to tenantID=0")
 	return nil
 }
 
@@ -62,6 +154,8 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 		effectiveTenantID = 0
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
+		// Also use tenantID=0 for consistency with GetAllBlocks
+		effectiveTenantID = 0
 		if userID != "" {
 			uid = userID
 		}
@@ -143,7 +237,7 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 
 // GetAllBlocks reads all core memory blocks.
 // - persona: from tenantID=0 (global shared)
-// - human: from userID directly (cross-tenant shared)
+// - human: from tenantID=0 with userID (cross-tenant per-user)
 // - working_context: from tenantID (per-tenant)
 func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[string]string, error) {
 	conn := s.db.Conn()
@@ -155,6 +249,9 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 	err := conn.QueryRow(
 		"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",
 	).Scan(&personaContent)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("query persona: %w", err)
+	}
 	if err == nil {
 		blocks["persona"] = personaContent
 	}
@@ -165,17 +262,23 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 		"SELECT content FROM core_memory_blocks WHERE tenant_id = ? AND block_name = 'working_context' AND user_id = ''",
 		tenantID,
 	).Scan(&wcContent)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("query working_context: %w", err)
+	}
 	if err == nil {
 		blocks["working_context"] = wcContent
 	}
 
-	// Get human from userID directly (cross-tenant)
+	// Get human from tenantID=0 with userID (cross-tenant)
 	if userID != "" {
 		var humanContent string
 		err := conn.QueryRow(
-			"SELECT content FROM core_memory_blocks WHERE block_name = 'human' AND user_id = ?",
+			"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'human' AND user_id = ?",
 			userID,
 		).Scan(&humanContent)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("query human: %w", err)
+		}
 		if err == nil {
 			blocks["human"] = humanContent
 		}

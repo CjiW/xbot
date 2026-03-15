@@ -810,3 +810,123 @@ func TestBuildMessages_Deprecated(t *testing.T) {
 		t.Error("should contain memory")
 	}
 }
+
+// --- Concurrency safety tests ---
+
+func TestMessagePipeline_ConcurrentRun(t *testing.T) {
+	// Verify that multiple goroutines can call Run() concurrently without data races.
+	// Run with: go test -race ./agent/...
+	mw1 := &mockMiddleware{
+		name:     "base",
+		priority: 0,
+		process: func(mc *MessageContext) error {
+			mc.SystemParts["00_base"] = "You are xbot."
+			return nil
+		},
+	}
+	mw2 := &mockMiddleware{
+		name:     "skills",
+		priority: 100,
+		process: func(mc *MessageContext) error {
+			catalog, _ := mc.GetExtraString("skills_catalog")
+			if catalog != "" {
+				mc.SystemParts["10_skills"] = catalog
+			}
+			return nil
+		},
+	}
+	mw3 := &mockMiddleware{
+		name:     "user_msg",
+		priority: 200,
+		process: func(mc *MessageContext) error {
+			mc.UserMessage = mc.UserContent
+			return nil
+		},
+	}
+
+	pipeline := NewMessagePipeline(mw1, mw2, mw3)
+
+	const goroutines = 50
+	done := make(chan bool, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+			mc := &MessageContext{
+				SystemParts: make(map[string]string),
+				UserContent: fmt.Sprintf("message from goroutine %d", id),
+				Extra:       make(map[string]any),
+			}
+			mc.SetExtra("skills_catalog", "# Skills\n- deploy")
+
+			messages := pipeline.Run(mc)
+			if len(messages) < 2 {
+				t.Errorf("goroutine %d: expected at least 2 messages, got %d", id, len(messages))
+			}
+			if messages[0].Role != "system" {
+				t.Errorf("goroutine %d: first message should be system", id)
+			}
+		}(i)
+	}
+
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}
+
+func TestMessagePipeline_ConcurrentRunAndUse(t *testing.T) {
+	// Verify that Run() and Use() can be called concurrently without data races.
+	mw1 := &mockMiddleware{
+		name:     "base",
+		priority: 0,
+		process: func(mc *MessageContext) error {
+			mc.SystemParts["00_base"] = "You are xbot."
+			mc.UserMessage = mc.UserContent
+			return nil
+		},
+	}
+
+	pipeline := NewMessagePipeline(mw1)
+
+	const goroutines = 50
+	done := make(chan bool, goroutines*2)
+
+	// Half goroutines do Run()
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+			mc := &MessageContext{
+				SystemParts: make(map[string]string),
+				UserContent: fmt.Sprintf("msg %d", id),
+				Extra:       make(map[string]any),
+			}
+			messages := pipeline.Run(mc)
+			if len(messages) < 2 {
+				t.Errorf("goroutine %d: expected at least 2 messages", id)
+			}
+		}(i)
+	}
+
+	// Other half goroutines do Use() and Remove()
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer func() { done <- true }()
+			name := fmt.Sprintf("dynamic_%d", id)
+			mw := &mockMiddleware{
+				name:     name,
+				priority: 150,
+				process: func(mc *MessageContext) error {
+					mc.SystemParts["15_dynamic"] = "dynamic content"
+					return nil
+				},
+			}
+			pipeline.Use(mw)
+			pipeline.Remove(name)
+		}(i)
+	}
+
+	for i := 0; i < goroutines*2; i++ {
+		<-done
+	}
+}
+

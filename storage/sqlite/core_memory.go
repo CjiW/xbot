@@ -25,14 +25,14 @@ var DefaultBlocks = map[string]int{
 }
 
 // InitBlocks ensures all default blocks exist for a tenant.
-// For human block, uses userID if provided (for per-user human block).
-func (s *CoreMemoryService) InitBlocks(tenantID int64, userID *string) error {
+// For human block, uses userID if non-empty (for per-user human block).
+func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 	conn := s.db.Conn()
 	for name, limit := range DefaultBlocks {
-		// human block is per-user, others are per-tenant
-		var uid string
-		if name == "human" && userID != nil {
-			uid = *userID
+		// human block is per-user, others are per-tenant (userID="")
+		uid := ""
+		if name == "human" && userID != "" {
+			uid = userID
 		}
 		_, err := conn.Exec(`
 			INSERT OR IGNORE INTO core_memory_blocks (tenant_id, block_name, user_id, char_limit)
@@ -46,29 +46,20 @@ func (s *CoreMemoryService) InitBlocks(tenantID int64, userID *string) error {
 }
 
 // GetBlock reads a single core memory block.
-// For human block, if userID is provided, reads the user-specific block.
-func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID *string) (content string, charLimit int, err error) {
+// For human block, if userID is non-empty, reads the user-specific block.
+func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID string) (content string, charLimit int, err error) {
 	conn := s.db.Conn()
 
-	// For human block, use userID if provided
-	var uid string
-	if blockName == "human" && userID != nil {
-		uid = *userID
+	// For human block, use userID if non-empty
+	uid := ""
+	if blockName == "human" && userID != "" {
+		uid = userID
 	}
 
-	var query string
-	var args []interface{}
-	if uid == "" {
-		// Query for global block (user_id = '')
-		query = "SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id = ''"
-		args = []interface{}{tenantID, blockName}
-	} else {
-		// Query for user-specific block
-		query = "SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id = ?"
-		args = []interface{}{tenantID, blockName, uid}
-	}
-
-	err = conn.QueryRow(query, args...).Scan(&content, &charLimit)
+	err = conn.QueryRow(
+		"SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id = ?",
+		tenantID, blockName, uid,
+	).Scan(&content, &charLimit)
 	if err == sql.ErrNoRows {
 		// Return defaults for known blocks
 		if limit, ok := DefaultBlocks[blockName]; ok {
@@ -83,18 +74,18 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID *s
 }
 
 // SetBlock upserts a core memory block.
-// For human block, if userID is provided, writes to the user-specific block.
-func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, userID *string) error {
+// For human block, if userID is non-empty, writes to the user-specific block.
+func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, userID string) error {
 	conn := s.db.Conn()
 
-	// For human block, use userID if provided
-	var uid string
-	if blockName == "human" && userID != nil {
-		uid = *userID
+	// For human block, use userID if non-empty
+	uid := ""
+	if blockName == "human" && userID != "" {
+		uid = userID
 	}
 
 	// Get char limit
-	_, charLimit, err := s.GetBlock(tenantID, blockName, userID)
+	_, charLimit, err := s.GetBlock(tenantID, blockName, uid)
 	if err != nil {
 		return err
 	}
@@ -102,37 +93,15 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 		return fmt.Errorf("content length %d exceeds block %q char_limit %d", len(content), blockName, charLimit)
 	}
 
-	// Use UPDATE + INSERT pattern
-	var result sql.Result
-	if uid == "" {
-		// Try UPDATE first for global blocks
-		result, err = conn.Exec(`
-			UPDATE core_memory_blocks SET content = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE tenant_id = ? AND block_name = ? AND user_id = ''
-		`, content, tenantID, blockName)
-	} else {
-		result, err = conn.Exec(`
-			UPDATE core_memory_blocks SET content = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE tenant_id = ? AND block_name = ? AND user_id = ?
-		`, content, tenantID, blockName, uid)
-	}
+	// user_id is TEXT NOT NULL DEFAULT '', so ON CONFLICT works correctly
+	_, err = conn.Exec(`
+		INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(tenant_id, block_name, user_id)
+		DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
+	`, tenantID, blockName, uid, content, charLimit)
 	if err != nil {
-		return fmt.Errorf("set block %s (update): %w", blockName, err)
-	}
-
-	// If no rows affected, INSERT
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("set block %s (rows): %w", blockName, err)
-	}
-	if rowsAffected == 0 {
-		_, err = conn.Exec(`
-			INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
-			VALUES (?, ?, ?, ?, ?)
-		`, tenantID, blockName, uid, content, charLimit)
-		if err != nil {
-			return fmt.Errorf("set block %s (insert): %w", blockName, err)
-		}
+		return fmt.Errorf("set block %s: %w", blockName, err)
 	}
 
 	log.WithFields(log.Fields{
@@ -145,46 +114,43 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 }
 
 // GetAllBlocks reads all core memory blocks for a tenant.
-// If userID is provided, includes user-specific human block (takes priority over global).
-func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID *string) (map[string]string, error) {
+// If userID is non-empty, returns user-specific human block instead of global one.
+func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[string]string, error) {
 	conn := s.db.Conn()
 
-	// Query: get all blocks for this tenant
-	// If userID is provided, user-specific human block will be returned alongside global blocks
-	// We need to handle priority in code (user block takes precedence)
-	rows, err := conn.Query(`
-		SELECT block_name, content, user_id FROM core_memory_blocks
-		WHERE tenant_id = ?
-		  AND (user_id = '' OR user_id = ?)
-		ORDER BY block_name, user_id
-	`, tenantID, userID)
+	// First get all global blocks (user_id = '')
+	rows, err := conn.Query(
+		"SELECT block_name, content FROM core_memory_blocks WHERE tenant_id = ? AND user_id = '' ORDER BY block_name",
+		tenantID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query blocks: %w", err)
 	}
 	defer rows.Close()
 
 	blocks := make(map[string]string)
-	var userBlock string
 	for rows.Next() {
-		var name, content, uid string
-		if err := rows.Scan(&name, &content, &uid); err != nil {
+		var name, content string
+		if err := rows.Scan(&name, &content); err != nil {
 			return nil, fmt.Errorf("scan block: %w", err)
 		}
-		// For human block: if this is a user-specific block, store separately
-		// Otherwise (global), use directly
-		if name == "human" && uid != "" {
-			userBlock = content
-		} else {
-			blocks[name] = content
-		}
+		blocks[name] = content
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate blocks: %w", err)
 	}
 
-	// User-specific human block takes priority
-	if userBlock != "" {
-		blocks["human"] = userBlock
+	// If userID is non-empty, override human block with user-specific one
+	if userID != "" {
+		var content string
+		err := conn.QueryRow(
+			"SELECT content FROM core_memory_blocks WHERE tenant_id = ? AND block_name = 'human' AND user_id = ?",
+			tenantID, userID,
+		).Scan(&content)
+		if err == nil {
+			blocks["human"] = content
+		}
+		// If no user-specific human block exists, keep the global one (or empty)
 	}
 
 	return blocks, nil

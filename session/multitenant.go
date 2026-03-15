@@ -219,17 +219,11 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string
 	mcpManager := tools.NewSessionMCPManager(sessionKey, "", m.mcpConfigPath, "", "", m.mcpInactivityTimeout)
 
 	// senderID 作为 string 直接传递给 LettaMemory（用于 per-user human block）
-	// 不需要 ParseInt，直接存字符串
-	var userID *string
-	if senderID != "" {
-		userID = &senderID
-	}
-
 	// 根据配置选择记忆提供者
 	var memProvider memory.MemoryProvider
 	switch m.memoryProvider {
 	case "letta":
-		memProvider = letta.New(tenantID, userID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
+		memProvider = letta.New(tenantID, senderID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
 		// 前向兼容：一次性迁移 user_profiles → core memory blocks
 		m.migrateProfileToCoreMemory(tenantID)
 	default:
@@ -380,8 +374,8 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 // - __me__ profile → persona block (bot identity, global per-tenant)
 // Only writes if the target block is currently empty to avoid overwriting user edits.
 func (m *MultiTenantSession) migrateProfileToCoreMemory(tenantID int64) {
-	// Check if persona block is already populated (persona is global, use nil for userID)
-	persona, _, err := m.coreSvc.GetBlock(tenantID, "persona", nil)
+	// Check if persona block is already populated (persona is global, use "" for userID)
+	persona, _, err := m.coreSvc.GetBlock(tenantID, "persona", "")
 	if err != nil {
 		log.WithError(err).Warn("Profile migration: failed to read persona block")
 		return
@@ -400,8 +394,8 @@ func (m *MultiTenantSession) migrateProfileToCoreMemory(tenantID int64) {
 		return // No profile to migrate
 	}
 
-	// Write to persona block (global, use nil for userID)
-	if err := m.coreSvc.SetBlock(tenantID, "persona", selfProfile, nil); err != nil {
+	// Write to persona block (global, use "" for userID)
+	if err := m.coreSvc.SetBlock(tenantID, "persona", selfProfile, ""); err != nil {
 		log.WithError(err).Warn("Profile migration: failed to write persona block")
 		return
 	}

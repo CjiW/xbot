@@ -20,7 +20,7 @@ import (
 // - Recall Memory: conversation history retrieval by time range
 type LettaMemory struct {
 	tenantID     int64
-	userID       *string // for per-user human block (senderID string like "ou_xxx")
+	userID       string // senderID for per-user human block (empty = global)
 	coreSvc      *sqlite.CoreMemoryService
 	archivalSvc  *vectordb.ArchivalService
 	memorySvc    *sqlite.MemoryService
@@ -31,8 +31,8 @@ var _ memory.MemoryProvider = (*LettaMemory)(nil)
 var _ memory.ToolIndexer = (*LettaMemory)(nil)
 
 // New creates a LettaMemory instance.
-// If userID is provided (senderID string like "ou_xxx"), the human block will be per-user instead of per-tenant.
-func New(tenantID int64, userID *string, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
+// If userID is non-empty, the human block will be per-user instead of per-tenant.
+func New(tenantID int64, userID string, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
 	// Ensure default blocks exist (with userID for human block)
 	if err := coreSvc.InitBlocks(tenantID, userID); err != nil {
 		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to init core memory blocks")

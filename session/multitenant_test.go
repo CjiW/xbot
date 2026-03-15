@@ -179,8 +179,8 @@ func TestMigrateProfileToCoreMemory_MigratesMe(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	// Check that persona block was populated (persona is global, use nil for userID)
-	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", nil)
+	// Check that persona block was populated (persona is global, use "" for userID)
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", "")
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}
@@ -207,18 +207,18 @@ func TestMigrateProfileToCoreMemory_SkipsIfPersonaPopulated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create tenant: %v", err)
 	}
-	if err := mt.coreSvc.InitBlocks(tenantID, nil); err != nil {
+	if err := mt.coreSvc.InitBlocks(tenantID, ""); err != nil {
 		t.Fatalf("Failed to init blocks: %v", err)
 	}
 	existingPersona := "- Already configured persona"
-	if err := mt.coreSvc.SetBlock(tenantID, "persona", existingPersona, nil); err != nil {
+	if err := mt.coreSvc.SetBlock(tenantID, "persona", existingPersona, ""); err != nil {
 		t.Fatalf("Failed to set existing persona: %v", err)
 	}
 
 	// Run migration — should NOT overwrite
 	mt.migrateProfileToCoreMemory(tenantID)
 
-	persona, _, err := mt.coreSvc.GetBlock(tenantID, "persona", nil)
+	persona, _, err := mt.coreSvc.GetBlock(tenantID, "persona", "")
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestMigrateProfileToCoreMemory_NoProfileNoError(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", nil)
+	persona, _, err := mt.coreSvc.GetBlock(sess.TenantID(), "persona", "")
 	if err != nil {
 		t.Fatalf("Failed to read persona block: %v", err)
 	}

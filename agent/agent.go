@@ -1009,6 +1009,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}
 
 	// 替换会话消息
+	// 先收集，全部成功才持久化，避免部分写入导致数据损坏
 	if err := tenantSession.Clear(); err != nil {
 		log.WithError(err).Warn("Failed to clear session for compression")
 		// Clear 失败时只返回压缩结果，不持久化，避免数据损坏
@@ -1019,17 +1020,28 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 			Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
 		}, nil
 	}
+	allOk := true
 	for _, msg := range compressed {
 		if err := tenantSession.AddMessage(msg); err != nil {
-			log.WithError(err).Warn("Failed to add compressed message")
+			log.WithError(err).Error("Partial write during compression, session may be corrupted")
+			allOk = false
+			break
 		}
 	}
 
 	newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
+	if allOk {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("上下文压缩完成: %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+		}, nil
+	}
+	// 部分写入失败，只返回内存结果
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("上下文压缩完成: %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
 	}, nil
 }
 
@@ -1065,7 +1077,7 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 Please output the compressed content directly without additional explanations.`
 
 	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
-		llm.NewSystemMessage("You are a context compression expert. Output the compressed content directly without additional explanations."),
+		llm.NewSystemMessage("You are a context compression expert."),
 		llm.NewUserMessage(compressionPrompt),
 	}, nil)
 	if err != nil {
@@ -1078,13 +1090,16 @@ Please output the compressed content directly without additional explanations.`
 	var result []llm.ChatMessage
 
 	// 防御性检查：只保留 role 为 "system" 的消息
+	// 如果有 system message，将 summary 合并到其中，避免出现两条连续 system 消息
 	if len(messages) > 0 && messages[0].Role == "system" {
-		result = append(result, messages[0])
+		merged := messages[0]
+		merged.Content += "\n\n[Previous conversation summary]:\n" + compressed
+		result = append(result, merged)
+	} else {
+		// 没有 system message 时，创建一条
+		summaryMsg := llm.NewSystemMessage("[Previous conversation summary]: " + compressed)
+		result = append(result, summaryMsg)
 	}
-
-	// 添加压缩后的摘要（用 system role 包装，因为它是上下文信息，不是用户发言）
-	summaryMsg := llm.NewSystemMessage("[Previous conversation summary]: " + compressed)
-	result = append(result, summaryMsg)
 
 	// 找到最后一条 user 或 assistant 消息
 	var lastUserMsg *llm.ChatMessage
@@ -1283,17 +1298,24 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					log.Info("Auto context compression completed")
 
 					// 持久化压缩结果到 session
+					// 先收集，全部成功才持久化，避免部分写入导致数据损坏
 					if tenantSession != nil {
 						if err := tenantSession.Clear(); err != nil {
 							log.WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
-							// Clear 失败时只使用内存中的压缩结果，不持久化，避免数据损坏
 						} else {
+							allOk := true
 							for _, msg := range compressed {
 								if err := tenantSession.AddMessage(msg); err != nil {
-									log.WithError(err).Warn("Failed to add compressed message")
+									log.WithError(err).Error("Partial write during auto compression, session may be corrupted")
+									allOk = false
+									break
 								}
 							}
-							log.Info("Auto compression persisted to session")
+							if allOk {
+								log.Info("Auto compression persisted to session")
+							} else {
+								log.Warn("Auto compression persistence failed, using in-memory result only")
+							}
 						}
 					}
 				} else {

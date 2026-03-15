@@ -55,6 +55,27 @@ var modelToEncoding = map[string]tokenizer.Model{
 	"default": tokenizer.GPT4,
 }
 
+// sortedPrefixes caches the sorted model prefixes for prefix matching
+// Sorted by length descending (longest first) to avoid mis匹配
+var (
+	sortedPrefixes []string
+	prefixOnce     sync.Once
+)
+
+func getSortedPrefixes() []string {
+	prefixOnce.Do(func() {
+		for k := range modelToEncoding {
+			if k != "default" {
+				sortedPrefixes = append(sortedPrefixes, k)
+			}
+		}
+		sort.Slice(sortedPrefixes, func(i, j int) bool {
+			return len(sortedPrefixes[i]) > len(sortedPrefixes[j])
+		})
+	})
+	return sortedPrefixes
+}
+
 // getEncodingForModel returns the tokenizer model for a given model name
 func getEncodingForModel(model string) tokenizer.Model {
 	model = strings.ToLower(model)
@@ -65,17 +86,8 @@ func getEncodingForModel(model string) tokenizer.Model {
 	}
 
 	// Prefix match for models like "gpt-4o-xxx" -> "gpt-4o"
-	// Sort prefixes by length (longest first) to avoid mis匹配
-	prefixes := make([]string, 0, len(modelToEncoding))
-	for prefix := range modelToEncoding {
-		if prefix != "default" { // Skip default entry
-			prefixes = append(prefixes, prefix)
-		}
-	}
-	// Sort by length descending (longest prefix first) using sort.Slice
-	sort.Slice(prefixes, func(i, j int) bool {
-		return len(prefixes[i]) > len(prefixes[j])
-	})
+	// Use cached sorted prefixes (sorted by length descending)
+	prefixes := getSortedPrefixes()
 
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(model, prefix) {

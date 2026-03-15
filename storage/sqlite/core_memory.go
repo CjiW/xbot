@@ -56,10 +56,18 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID *i
 		uid = userID
 	}
 
-	err = conn.QueryRow(
-		"SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND (user_id = ? OR (user_id IS NULL AND ? IS NULL))",
-		tenantID, blockName, uid, uid,
-	).Scan(&content, &charLimit)
+	// Handle NULL comparison for user_id
+	var query string
+	var args []interface{}
+	if uid == nil {
+		query = "SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id IS NULL"
+		args = []interface{}{tenantID, blockName}
+	} else {
+		query = "SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id = ?"
+		args = []interface{}{tenantID, blockName, *uid}
+	}
+
+	err = conn.QueryRow(query, args...).Scan(&content, &charLimit)
 	if err == sql.ErrNoRows {
 		// Return defaults for known blocks
 		if limit, ok := DefaultBlocks[blockName]; ok {
@@ -93,12 +101,30 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 		return fmt.Errorf("content length %d exceeds block %q char_limit %d", len(content), blockName, charLimit)
 	}
 
-	_, err = conn.Exec(`
-		INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(tenant_id, block_name, user_id)
-		DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
-	`, tenantID, blockName, uid, content, charLimit)
+	// SQLite ON CONFLICT doesn't handle NULL correctly, so use different strategies
+	if uid == nil {
+		// For NULL user_id, use check-then-update/insert
+		var count int
+		err = conn.QueryRow("SELECT COUNT(*) FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id IS NULL",
+			tenantID, blockName).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("check block existence: %w", err)
+		}
+		if count > 0 {
+			_, err = conn.Exec("UPDATE core_memory_blocks SET content = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND block_name = ? AND user_id IS NULL",
+				content, tenantID, blockName)
+		} else {
+			_, err = conn.Exec("INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit) VALUES (?, ?, NULL, ?, ?)",
+				tenantID, blockName, content, charLimit)
+		}
+	} else {
+		_, err = conn.Exec(`
+			INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(tenant_id, block_name, user_id)
+			DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
+		`, tenantID, blockName, *uid, content, charLimit)
+	}
 	if err != nil {
 		return fmt.Errorf("set block %s: %w", blockName, err)
 	}

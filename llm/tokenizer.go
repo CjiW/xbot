@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -187,57 +188,85 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 }
 
 // CountToolsTokens counts the total tokens for a list of tool definitions.
-// Each tool definition includes name, description, and parameters.
+// It serializes the tool definitions to JSON format and counts tokens accurately.
 func CountToolsTokens(toolDefs []ToolDefinition, model string) (int, error) {
 	if len(toolDefs) == 0 {
 		return 0, nil
 	}
 
-	total := 0
-	// Approximate token overhead for tools structure
-	// Format: {"type":"function","function":{"name":"...","description":"...","parameters":{...}}}
-	overheadPerTool := 30 // JSON formatting overhead per tool
-
-	for _, td := range toolDefs {
-		total += overheadPerTool
-
-		// Tool name
-		if td.Name() != "" {
-			count, err := CountTokens(td.Name(), model)
-			if err != nil {
-				return 0, err
-			}
-			total += count
-		}
-
-		// Tool description
-		if td.Description() != "" {
-			count, err := CountTokens(td.Description(), model)
-			if err != nil {
-				return 0, err
-			}
-			total += count
-		}
-
-		// Tool parameters
-		for _, p := range td.Parameters() {
-			// Parameter name and type
-			count, err := CountTokens(p.Name+" "+p.Type, model)
-			if err != nil {
-				return 0, err
-			}
-			total += count
-
-			// Parameter description
-			if p.Description != "" {
-				count, err := CountTokens(p.Description, model)
-				if err != nil {
-					return 0, err
-				}
-				total += count
-			}
-		}
+	// Convert to OpenAI tool format JSON and count tokens
+	// This is the most accurate method as it counts the exact JSON sent to the LLM
+	toolsJSON, err := serializeToolsToJSON(toolDefs)
+	if err != nil {
+		// Fallback: use rough estimation if serialization fails
+		return estimateToolsTokens(toolDefs), nil
 	}
 
-	return total, nil
+	return CountTokens(toolsJSON, model)
+}
+
+// serializeToolsToJSON serializes tool definitions to JSON (same format as sent to LLM)
+func serializeToolsToJSON(toolDefs []ToolDefinition) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("[")
+
+	for i, td := range toolDefs {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+
+		// Build properties map
+		properties := make(map[string]map[string]any)
+		var required []string
+		for _, p := range td.Parameters() {
+			properties[p.Name] = map[string]any{
+				"type":        p.Type,
+				"description": p.Description,
+			}
+			if p.Required {
+				required = append(required, p.Name)
+			}
+		}
+
+		// Build the JSON structure
+		toolJSON := map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        td.Name(),
+				"description": td.Description(),
+				"parameters": map[string]any{
+					"type":       "object",
+					"properties": properties,
+					"required":   required,
+				},
+			},
+		}
+
+		jsonBytes, err := json.Marshal(toolJSON)
+		if err != nil {
+			return "", err
+		}
+		sb.Write(jsonBytes)
+	}
+
+	sb.WriteString("]")
+	return sb.String(), nil
+}
+
+// estimateToolsTokens provides a rough estimate when JSON serialization fails
+func estimateToolsTokens(toolDefs []ToolDefinition) int {
+	// More accurate estimation based on typical tool definition sizes
+	// Each tool: ~200 tokens overhead (JSON structure) + name + description + parameters
+	overheadPerTool := 200
+
+	total := 0
+	for _, td := range toolDefs {
+		total += overheadPerTool
+		total += len(td.Name()) / 4        // rough: 4 chars per token
+		total += len(td.Description()) / 4 // rough: 4 chars per token
+		for range td.Parameters() {
+			total += 50 // each parameter ~50 tokens
+		}
+	}
+	return total
 }

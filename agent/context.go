@@ -171,7 +171,7 @@ func (a *Agent) CronPipeline() *MessagePipeline {
 }
 
 // NewMessageContext 创建一个预填充的 MessageContext，用于主 pipeline。
-// 调用方设置动态字段（Extra 中的 skills_catalog、agents_catalog、memory_provider）后，
+// 调用方设置动态字段（Extra 中的 ExtraKeySkillsCatalog、ExtraKeyAgentsCatalog、ExtraKeyMemoryProvider）后，
 // 传入 pipeline.Run(mc) 执行。
 func NewMessageContext(ctx context.Context, userContent string, history []llm.ChatMessage, channel, workDir, senderName, senderID, chatID string) *MessageContext {
 	return &MessageContext{
@@ -221,9 +221,9 @@ func BuildMessages(history []llm.ChatMessage, userContent string, channel string
 		SenderID:    senderID,
 		Extra:       make(map[string]any),
 	}
-	mc.SetExtra("skills_catalog", skillsCatalog)
-	mc.SetExtra("agents_catalog", agentsCatalog)
-	mc.SetExtra("memory_provider", mem)
+	mc.SetExtra(ExtraKeySkillsCatalog, skillsCatalog)
+	mc.SetExtra(ExtraKeyAgentsCatalog, agentsCatalog)
+	mc.SetExtra(ExtraKeyMemoryProvider, mem)
 
 	return pipeline.Run(mc)
 }

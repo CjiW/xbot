@@ -818,9 +818,9 @@ func (a *Agent) buildPrompt(msg bus.InboundMessage, tenantSession *session.Tenan
 		msg.SenderID,
 		msg.ChatID,
 	)
-	mc.SetExtra("skills_catalog", a.skills.GetSkillsCatalog(msg.SenderID))
-	mc.SetExtra("agents_catalog", a.agents.GetAgentsCatalog(msg.SenderID))
-	mc.SetExtra("memory_provider", tenantSession.Memory())
+	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(msg.SenderID))
+	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(msg.SenderID))
+	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
 
 	return a.pipeline.Run(mc), nil
 }

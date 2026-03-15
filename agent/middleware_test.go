@@ -346,8 +346,8 @@ func TestMessagePipeline_Remove(t *testing.T) {
 	pipeline := NewMessagePipeline(mw1, mw2, mw3)
 
 	// Remove existing
-	if !pipeline.Remove("b") {
-		t.Error("Remove should return true for existing middleware")
+	if n := pipeline.Remove("b"); n != 1 {
+		t.Errorf("Remove should return 1 for single existing middleware, got %d", n)
 	}
 	mws := pipeline.Middlewares()
 	if len(mws) != 2 {
@@ -358,8 +358,41 @@ func TestMessagePipeline_Remove(t *testing.T) {
 	}
 
 	// Remove non-existing
-	if pipeline.Remove("nonexistent") {
-		t.Error("Remove should return false for non-existing middleware")
+	if n := pipeline.Remove("nonexistent"); n != 0 {
+		t.Errorf("Remove should return 0 for non-existing middleware, got %d", n)
+	}
+}
+
+func TestMessagePipeline_RemoveDuplicates(t *testing.T) {
+	// Simulate duplicate names (e.g., Use() called twice with same name)
+	mw1 := &mockMiddleware{name: "dup", priority: 100}
+	mw2 := &mockMiddleware{name: "dup", priority: 200}
+	mw3 := &mockMiddleware{name: "keep", priority: 150}
+	mw4 := &mockMiddleware{name: "dup", priority: 300}
+
+	pipeline := NewMessagePipeline(mw1, mw2, mw3, mw4)
+
+	// Should have 4 middlewares
+	if len(pipeline.Middlewares()) != 4 {
+		t.Fatalf("expected 4 middlewares, got %d", len(pipeline.Middlewares()))
+	}
+
+	// Remove all "dup" — should remove 3
+	if n := pipeline.Remove("dup"); n != 3 {
+		t.Errorf("Remove should return 3 for 3 duplicates, got %d", n)
+	}
+
+	mws := pipeline.Middlewares()
+	if len(mws) != 1 {
+		t.Fatalf("expected 1 middleware after removing duplicates, got %d", len(mws))
+	}
+	if mws[0].Name() != "keep" {
+		t.Errorf("remaining middleware should be 'keep', got %q", mws[0].Name())
+	}
+
+	// Remove again — should return 0
+	if n := pipeline.Remove("dup"); n != 0 {
+		t.Errorf("Remove should return 0 after all removed, got %d", n)
 	}
 }
 

@@ -14,7 +14,7 @@ func TestTenantSession_AddMessage(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("test", "chat1", "")
+	sess, err := mt.GetOrCreateSession("test", "chat1")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestTenantSession_GetHistory(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("test", "chat1", "")
+	sess, err := mt.GetOrCreateSession("test", "chat1")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestTenantSession_Clear(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("test", "chat1", "")
+	sess, err := mt.GetOrCreateSession("test", "chat1")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestTenantSession_LastConsolidated(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("test", "chat1", "")
+	sess, err := mt.GetOrCreateSession("test", "chat1")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestTenantSession_String(t *testing.T) {
 	}
 	defer mt.Close()
 
-	sess, err := mt.GetOrCreateSession("feishu", "chat123", "")
+	sess, err := mt.GetOrCreateSession("feishu", "chat123")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}

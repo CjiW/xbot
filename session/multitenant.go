@@ -180,9 +180,9 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 	m.mcpConfigPath = path
 }
 
-// GetOrCreateSession retrieves or creates a tenant session for the given channel, chatID and senderID.
-// senderID is used to create per-user human block in Letta memory. Can be empty for backward compatibility.
-func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string) (*TenantSession, error) {
+// GetOrCreateSession retrieves or creates a tenant session for the given channel and chatID.
+// senderID is passed via context (letta.WithUserID) at call time, not here.
+func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*TenantSession, error) {
 	// Cache key: channel:chat_id (NOT senderID)
 	// Per-user human block is handled dynamically via Recall/Memorize with senderID parameter
 	key := channel + ":" + chatID
@@ -248,7 +248,7 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID, senderID string
 // ConfigureSessionMCP 根据当前用户更新会话 MCP 作用域。
 // 返回新注册的个人 MCP 工具名列表（用于立即激活），catalog 未变化时返回 nil。
 func (m *MultiTenantSession) ConfigureSessionMCP(channel, chatID, senderID, workDir string) ([]string, error) {
-	sess, err := m.GetOrCreateSession(channel, chatID, senderID)
+	sess, err := m.GetOrCreateSession(channel, chatID)
 	if err != nil {
 		return nil, err
 	}

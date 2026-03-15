@@ -271,7 +271,7 @@ func New(cfg Config) *Agent {
 	}
 	// 设置上下文压缩配置默认值
 	if cfg.MaxContextTokens == 0 {
-		cfg.MaxContextTokens = 8000
+		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 0.8

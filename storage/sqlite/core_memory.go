@@ -3,13 +3,16 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 
 	log "xbot/logger"
 )
 
 // CoreMemoryService handles core memory block CRUD operations.
 type CoreMemoryService struct {
-	db *DB
+	db           *DB
+	migrateOnce  sync.Once
+	migrateError error
 }
 
 // NewCoreMemoryService creates a new core memory service.
@@ -31,9 +34,12 @@ var DefaultBlocks = map[string]int{
 func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 	conn := s.db.Conn()
 
-	// Run migration first (no-op if already done)
-	if err := s.migrateLegacyData(conn); err != nil {
-		return fmt.Errorf("migration: %w", err)
+	// Run migration once (no-op if already done)
+	s.migrateOnce.Do(func() {
+		s.migrateError = s.migrateLegacyData(conn)
+	})
+	if s.migrateError != nil {
+		return fmt.Errorf("migration: %w", s.migrateError)
 	}
 
 	for name, limit := range DefaultBlocks {
@@ -100,22 +106,14 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 		return err
 	}
 
-	// Migration: merge persona blocks
-	_, err = db.Exec(`
-		INSERT INTO core_memory_migrations (name)
-		VALUES ('migrate_to_tenant_0')
-	`)
-	if err != nil {
-		return err
-	}
-
-	// For persona: keep longest content from any tenant, insert to tenantID=0
+	// Migration: for persona, keep longest content from any tenant, insert to tenantID=0
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit, updated_at)
 		SELECT 0, 'persona', '', content, char_limit, CURRENT_TIMESTAMP
 		FROM core_memory_blocks
 		WHERE block_name = 'persona' AND user_id = ''
-		GROUP BY block_name
+		ORDER BY LENGTH(content) DESC
+		LIMIT 1
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate persona: %w", err)
@@ -125,12 +123,34 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit, updated_at)
 		SELECT 0, 'human', user_id, content, char_limit, CURRENT_TIMESTAMP
-		FROM core_memory_blocks
-		WHERE block_name = 'human' AND user_id != ''
-		GROUP BY user_id
+		FROM (
+			SELECT user_id, content, char_limit,
+				ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY LENGTH(content) DESC) AS rn
+			FROM core_memory_blocks
+			WHERE block_name = 'human' AND user_id != ''
+		)
+		WHERE rn = 1
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate human: %w", err)
+	}
+
+	// Clean up legacy data (old tenantID != 0)
+	_, err = db.Exec(`
+		DELETE FROM core_memory_blocks
+		WHERE block_name IN ('persona', 'human') AND tenant_id != 0
+	`)
+	if err != nil {
+		return fmt.Errorf("cleanup legacy: %w", err)
+	}
+
+	// Mark migration as completed (after successful migration)
+	_, err = db.Exec(`
+		INSERT INTO core_memory_migrations (name)
+		VALUES ('migrate_to_tenant_0')
+	`)
+	if err != nil {
+		return fmt.Errorf("mark migration: %w", err)
 	}
 
 	log.Info("Core memory migration completed: legacy data merged to tenantID=0")
@@ -198,6 +218,7 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 		effectiveTenantID = 0 // for backward compatibility
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
+		effectiveTenantID = 0
 		if userID != "" {
 			uid = userID
 		}

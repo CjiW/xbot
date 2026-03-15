@@ -20,6 +20,7 @@ import (
 // - Recall Memory: conversation history retrieval by time range
 type LettaMemory struct {
 	tenantID     int64
+	userID       *int64 // for per-user human block
 	coreSvc      *sqlite.CoreMemoryService
 	archivalSvc  *vectordb.ArchivalService
 	memorySvc    *sqlite.MemoryService
@@ -30,13 +31,15 @@ var _ memory.MemoryProvider = (*LettaMemory)(nil)
 var _ memory.ToolIndexer = (*LettaMemory)(nil)
 
 // New creates a LettaMemory instance.
-func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
-	// Ensure default blocks exist
-	if err := coreSvc.InitBlocks(tenantID); err != nil {
+// If userID is provided, the human block will be per-user instead of per-tenant.
+func New(tenantID int64, userID *int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectordb.ArchivalService, memorySvc *sqlite.MemoryService, toolIndexSvc *vectordb.ToolIndexService) *LettaMemory {
+	// Ensure default blocks exist (with userID for human block)
+	if err := coreSvc.InitBlocks(tenantID, userID); err != nil {
 		log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to init core memory blocks")
 	}
 	return &LettaMemory{
 		tenantID:     tenantID,
+		userID:       userID,
 		coreSvc:      coreSvc,
 		archivalSvc:  archivalSvc,
 		memorySvc:    memorySvc,
@@ -48,7 +51,7 @@ func New(tenantID int64, coreSvc *sqlite.CoreMemoryService, archivalSvc *vectord
 // Unlike FlatMemory which dumps everything, Letta injects only structured blocks.
 // Archival memory is accessed on-demand via tools.
 func (m *LettaMemory) Recall(_ context.Context, _ string) (string, error) {
-	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID)
+	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, m.userID)
 	if err != nil {
 		return "", fmt.Errorf("recall core blocks: %w", err)
 	}
@@ -152,7 +155,7 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	}
 
 	// Read current core memory blocks
-	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID)
+	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, m.userID)
 	if err != nil {
 		log.WithError(err).Error("Failed to read core memory for consolidation")
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil
@@ -224,7 +227,7 @@ Review the conversation below and call the consolidate_memory tool to update the
 				"old_len":   len(oldContent),
 				"new_len":   len(newContent),
 			}).Info("Updating core memory block")
-			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent); err != nil {
+			if err := m.coreSvc.SetBlock(m.tenantID, blockName, newContent, m.userID); err != nil {
 				log.WithError(err).WithField("block", blockName).Error("Failed to update core memory block")
 			}
 		}

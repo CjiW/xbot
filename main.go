@@ -116,6 +116,9 @@ func main() {
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
+		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		MaxContextTokens:     cfg.Agent.MaxContextTokens,
+		CompressionThreshold: cfg.Agent.CompressionThreshold,
 	})
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）

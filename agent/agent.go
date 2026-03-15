@@ -1615,6 +1615,11 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 				SandboxEnabled:   parentCtx.SandboxEnabled,
 				PreferredSandbox: parentCtx.PreferredSandbox,
 				AgentID:          parentAgentID + "/sub",
+				Channel:          parentCtx.Channel,
+				ChatID:           parentCtx.ChatID,
+				SenderID:         parentCtx.SenderID,
+				SendFunc:         parentCtx.SendFunc,
+				InjectInbound:    parentCtx.InjectInbound,
 			}
 
 			result, execErr := tool.Execute(toolCtx, tc.Arguments)

@@ -176,7 +176,7 @@ func Load() *Config {
 			Model:   getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),
 		},
 		Agent: AgentConfig{
-			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 20),
+			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 100),
 			MaxConcurrency:       getEnvIntOrDefault("AGENT_MAX_CONCURRENCY", 3),
 			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
 			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),

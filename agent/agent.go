@@ -232,7 +232,7 @@ type Config struct {
 // New 创建 Agent
 func New(cfg Config) *Agent {
 	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 20
+		cfg.MaxIterations = 100
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 2

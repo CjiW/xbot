@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"github.com/go-shiori/go-readability"
@@ -261,22 +262,30 @@ func (t *FetchTool) formatAsMarkdown(article *readability.Article, pageURL strin
 	sb.WriteString("---\n\n")
 
 	// 正文 - 将 HTML 转换为 Markdown 格式
-	markdownContent := convertHTMLToMarkdown(t.converter, article.Content, pageURL, article.TextContent)
+	markdownContent := convertHTMLToMarkdown(article.Content, pageURL, article.TextContent)
 	sb.WriteString(markdownContent)
 
 	return sb.String()
 }
 
 // convertHTMLToMarkdown 将 HTML 内容转换为 Markdown 格式
-// 注意：converter 应该在 FetchTool 初始化时创建并复用
-func convertHTMLToMarkdown(conv *converter.Converter, htmlContent, baseURL string, fallbackText string) string {
+func convertHTMLToMarkdown(htmlContent, pageURL string, fallbackText string) string {
 	// 如果没有 HTML 内容，使用回退文本
 	if htmlContent == "" {
 		return fallbackText
 	}
 
-	// 转换 HTML 到 Markdown
-	markdown, err := conv.ConvertString(htmlContent)
+	// 解析 pageURL 获取域名，用于处理相对链接
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return fallbackText
+	}
+
+	// 使用顶层函数转换（支持 WithDomain）
+	markdown, err := htmltomarkdown.ConvertString(
+		htmlContent,
+		converter.WithDomain(u.Hostname()),
+	)
 	if err != nil {
 		// 如果转换失败，回退到纯文本
 		return fallbackText

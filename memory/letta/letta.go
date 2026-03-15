@@ -535,12 +535,6 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 			Required:    true,
 		},
 		{
-			Name:        "existing_memories",
-			Type:        "array",
-			Description: "READ-ONLY list of similar existing memories for deduplication reference. Each has id, content, and similarity (0-1). DO NOT include this in output.",
-			Required:    false,
-		},
-		{
 			Name:        "entries_to_delete",
 			Type:        "array",
 			Description: "List of existing memory IDs to delete (for deduplication/conflict resolution). Only include IDs that should be replaced or removed.",

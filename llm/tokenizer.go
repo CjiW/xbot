@@ -62,10 +62,26 @@ func getEncodingForModel(model string) tokenizer.Model {
 		return encoding
 	}
 
-	// Prefix match for models like "gpt-4-xxx" -> "gpt-4"
-	for prefix, encoding := range modelToEncoding {
+	// Prefix match for models like "gpt-4o-xxx" -> "gpt-4o"
+	// Sort prefixes by length (longest first) to avoid mis匹配
+	prefixes := make([]string, 0, len(modelToEncoding))
+	for prefix := range modelToEncoding {
+		if prefix != "default" { // Skip default entry
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	// Sort by length descending (longest prefix first)
+	for i := 0; i < len(prefixes)-1; i++ {
+		for j := i + 1; j < len(prefixes); j++ {
+			if len(prefixes[j]) > len(prefixes[i]) {
+				prefixes[i], prefixes[j] = prefixes[j], prefixes[i]
+			}
+		}
+	}
+
+	for _, prefix := range prefixes {
 		if strings.HasPrefix(model, prefix) {
-			return encoding
+			return modelToEncoding[prefix]
 		}
 	}
 
@@ -137,14 +153,8 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 			}
 		}
 
-		// Count tool result tokens
-		if msg.Role == "tool" && msg.Content != "" {
-			count, err := CountTokens(msg.Content, model)
-			if err != nil {
-				return 0, err
-			}
-			total += count
-		}
+		// Count tool result tokens (only for tool role, content counted above)
+		// Note: tool messages already counted in the content section above, don't double count
 	}
 
 	return total, nil

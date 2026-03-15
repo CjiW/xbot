@@ -689,7 +689,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 运行 Agent 循环
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, preReplyNotify)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, preReplyNotify, tenantSession)
 	if err != nil {
 		return nil, err
 	}
@@ -779,8 +779,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	mc := NewCronMessageContext(msg.Content)
 	messages := a.cronPipeline.Run(mc)
 
-	// 运行 Agent 循环（传入创建者 senderID 而非空值）
-	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false)
+	// 运行 Agent 循环（传入创建者 senderID 而非空值，cron 不需要自动压缩，传 nil）
+	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -960,14 +960,8 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 
 // handleCompress 处理 /compress 命令：手动触发上下文压缩
 func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
-	// 检查自动压缩是否启用
-	if !a.enableAutoCompress {
-		return &bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "自动上下文压缩未启用。如需启用，请在配置中设置 EnableAutoCompress=true。",
-		}, nil
-	}
+	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制
+	// 用户可能不想自动压缩但偶尔需要手动压缩一下
 
 	// 获取当前消息数
 	messages, err := tenantSession.GetMessages()
@@ -1119,7 +1113,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		return nil, err
 	}
 
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true)
+	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true, tenantSession)
 	if err != nil {
 		return nil, err
 	}
@@ -1215,8 +1209,9 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
 // autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
+// tenantSession 用于自动压缩后持久化压缩结果（可传 nil）
 // 返回: (finalContent, toolsUsed, waitingUser, error)
-func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID, senderID, senderName string, autoNotify bool) (string, []string, bool, error) {
+func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID, senderID, senderName string, autoNotify bool, tenantSession *session.TenantSession) (string, []string, bool, error) {
 	var toolsUsed []string
 	var waitingUser bool
 	var progressLines []string
@@ -1273,6 +1268,19 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				if compressErr == nil {
 					messages = compressed
 					log.Info("Auto context compression completed")
+
+					// 持久化压缩结果到 session
+					if tenantSession != nil {
+						if err := tenantSession.Clear(); err != nil {
+							log.WithError(err).Warn("Failed to clear session for auto compression")
+						}
+						for _, msg := range compressed {
+							if err := tenantSession.AddMessage(msg); err != nil {
+								log.WithError(err).Warn("Failed to add compressed message")
+							}
+						}
+						log.Info("Auto compression persisted to session")
+					}
 				} else {
 					log.WithError(compressErr).Warn("Auto context compression failed")
 				}

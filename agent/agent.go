@@ -562,6 +562,10 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 
 // processMessage 处理单条入站消息
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// 注入 senderID 到 context，用于 per-user human block（Letta 模式）
+	// Recall/Memorize 会通过 letta.GetUserID(ctx) 获取 userID
+	ctx = letta.WithUserID(ctx, msg.SenderID)
+
 	preview := msg.Content
 	if r := []rune(preview); len(r) > 80 {
 		preview = string(r[:80]) + "..."
@@ -586,8 +590,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		a.sessionReplyTo.Delete(key)
 	}
 
-	// 获取或创建租户会话
-	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID, msg.SenderID)
+	// 获取或创建租户会话（senderID 通过 context 传递，不在这里传）
+	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
 	if err != nil {
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
 	}
@@ -1403,7 +1407,7 @@ func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatI
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
-	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID, senderID); err == nil {
+	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
 			toolCtx.TenantID = lm.TenantID()
 			toolCtx.CoreMemory = lm.CoreService()

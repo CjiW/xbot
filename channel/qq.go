@@ -145,6 +145,9 @@ type QQChannel struct {
 	// Quick disconnect detection
 	disconnectTimes []time.Time
 	disconnectMu    sync.Mutex
+
+	// Markdown support: disabled after first failure (auto-fallback to text)
+	markdownDisabled atomic.Bool
 }
 
 // NewQQChannel 创建 QQ 渠道
@@ -987,16 +990,18 @@ func (q *QQChannel) sendC2CMessage(openID, content string, metadata map[string]s
 		msgID = metadata["message_id"]
 	}
 
-	body := map[string]any{
-		"content":  content,
-		"msg_type": 0, // text
-	}
-	if msgID != "" {
-		body["msg_id"] = msgID
-	}
-	body["msg_seq"] = q.nextMsgSeq(msgID)
+	seq := q.nextMsgSeq(msgID)
 
-	return q.doSendRequest(url, body, "c2c", openID)
+	// Try markdown first, fallback to plain text if markdown is not enabled
+	body := q.buildMarkdownBody(content, msgID, seq)
+	id, err := q.doSendRequest(url, body, "c2c", openID)
+	if err != nil && q.isMarkdownUnsupported(err) {
+		log.Debug("QQ: markdown not supported for c2c, falling back to plain text")
+		q.markdownDisabled.Store(true)
+		body = q.buildTextBody(content, msgID, q.nextMsgSeq(msgID))
+		return q.doSendRequest(url, body, "c2c", openID)
+	}
+	return id, err
 }
 
 // sendGroupMessage 发送群消息
@@ -1008,16 +1013,18 @@ func (q *QQChannel) sendGroupMessage(groupOpenID, content string, metadata map[s
 		msgID = metadata["message_id"]
 	}
 
-	body := map[string]any{
-		"content":  content,
-		"msg_type": 0, // text
-	}
-	if msgID != "" {
-		body["msg_id"] = msgID
-	}
-	body["msg_seq"] = q.nextMsgSeq(msgID)
+	seq := q.nextMsgSeq(msgID)
 
-	return q.doSendRequest(url, body, "group", groupOpenID)
+	// Try markdown first, fallback to plain text if markdown is not enabled
+	body := q.buildMarkdownBody(content, msgID, seq)
+	id, err := q.doSendRequest(url, body, "group", groupOpenID)
+	if err != nil && q.isMarkdownUnsupported(err) {
+		log.Debug("QQ: markdown not supported for group, falling back to plain text")
+		q.markdownDisabled.Store(true)
+		body = q.buildTextBody(content, msgID, q.nextMsgSeq(msgID))
+		return q.doSendRequest(url, body, "group", groupOpenID)
+	}
+	return id, err
 }
 
 // sendGuildMessage 发送频道消息
@@ -1721,6 +1728,58 @@ func (q *QQChannel) isQuickDisconnectLoop() bool {
 	// Reset after detection to avoid repeated triggers
 	q.disconnectTimes = nil
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// Markdown message helpers
+// ---------------------------------------------------------------------------
+
+// buildMarkdownBody 构建 markdown 格式的消息体 (msg_type: 2)
+// 如果 markdown 已被禁用（之前发送失败），直接返回纯文本格式
+func (q *QQChannel) buildMarkdownBody(content, msgID string, seq int) map[string]any {
+	if q.markdownDisabled.Load() {
+		return q.buildTextBody(content, msgID, seq)
+	}
+	body := map[string]any{
+		"content":  content,
+		"msg_type": 2, // markdown
+		"markdown": map[string]string{
+			"content": content,
+		},
+		"msg_seq": seq,
+	}
+	if msgID != "" {
+		body["msg_id"] = msgID
+	}
+	return body
+}
+
+// buildTextBody 构建纯文本格式的消息体 (msg_type: 0)
+func (q *QQChannel) buildTextBody(content, msgID string, seq int) map[string]any {
+	body := map[string]any{
+		"content":  content,
+		"msg_type": 0, // text
+		"msg_seq":  seq,
+	}
+	if msgID != "" {
+		body["msg_id"] = msgID
+	}
+	return body
+}
+
+// isMarkdownUnsupported 判断错误是否表示 markdown 消息类型不被支持
+// QQ API 在未开通 markdown 权限时会返回特定错误码
+func (q *QQChannel) isMarkdownUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	// QQ API 返回的错误中包含 "not support" 或权限相关错误码
+	return strings.Contains(errMsg, "not support") ||
+		strings.Contains(errMsg, "msg_type") ||
+		strings.Contains(errMsg, "304003") || // 无权限
+		strings.Contains(errMsg, "304004") || // 消息类型不支持
+		strings.Contains(errMsg, "50006") // 不支持的消息类型
 }
 
 // ---------------------------------------------------------------------------

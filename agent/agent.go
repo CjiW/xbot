@@ -1634,9 +1634,14 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	}
 
 	// 获取用户特定的 LLM 客户端
-	llmClient, model := a.llmFactory.GetLLM(senderID)
+	llmClient, model, userMaxCtx := a.llmFactory.GetLLM(senderID)
 	if model == "" {
 		model = a.model
+	}
+	// 用户设置了 max_context 时覆盖全局值
+	maxContextTokens := a.maxContextTokens
+	if userMaxCtx > 0 {
+		maxContextTokens = userMaxCtx
 	}
 
 	// 推进 round 计数，自动清理长期未使用的工具激活
@@ -1662,7 +1667,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		// 总 token = messages + tools
 		tokenCount := msgTokens + toolTokens
 
-		threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+		threshold := int(float64(maxContextTokens) * a.compressionThreshold)
 		if tokenCount < threshold {
 			return
 		}

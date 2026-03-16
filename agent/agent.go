@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -23,21 +24,22 @@ import (
 	"xbot/tools"
 )
 
+// ErrLLMGenerate 表示 LLM 生成调用失败（网络、API 4xx/5xx 等）
+var ErrLLMGenerate = errors.New("LLM generate failed")
+
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
 func assertNoSystemPersist(m llm.ChatMessage) {
 	if m.Role == "system" {
-		panic("assert: must not persist system message to session")
+		log.WithField("message", m).Fatal("assert: must not persist system message to session")
 	}
 }
 
-// formatErrorForUser 将错误格式化为对用户可见的提示，LLM 调用失败（如 400）时给出明确说明。
+// formatErrorForUser 将错误格式化为对用户可见的提示
 func formatErrorForUser(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
-	// runLoop 返回 "LLM generate failed: ..."，下游 API 可能包含 400、参数等
-	if strings.Contains(s, "LLM generate failed") || strings.Contains(s, "400") || strings.Contains(s, "参数") {
+	if errors.Is(err, ErrLLMGenerate) {
 		return fmt.Sprintf("LLM 服务调用失败，请稍后重试或检查配置。\n错误详情: %v", err)
 	}
 	return fmt.Sprintf("处理消息时发生错误: %v", err)
@@ -1659,7 +1661,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
 		if err != nil {
-			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
+			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)
 		}
 
 		if !response.HasToolCalls() {

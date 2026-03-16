@@ -76,7 +76,7 @@ All config via environment variables or `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_PROVIDER` | LLM provider (`openai`/`codebuddy`) | `openai` |
+| `LLM_PROVIDER` | LLM provider (`openai`/`codebuddy`/`anthropic`) | `openai` |
 | `LLM_BASE_URL` | API URL | — |
 | `LLM_API_KEY` | API key | — |
 | `LLM_MODEL` | Model name | `deepseek-chat` |

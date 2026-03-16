@@ -1,0 +1,585 @@
+package llm
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	log "xbot/logger"
+)
+
+const (
+	anthropicDefaultBaseURL = "https://api.anthropic.com"
+	anthropicAPIVersion     = "2023-06-01"
+	anthropicMaxTokens      = 8192
+)
+
+// AnthropicLLM Anthropic Messages API 实现
+type AnthropicLLM struct {
+	baseURL      string
+	apiKey       string
+	httpClient   *http.Client
+	models       []string
+	defaultModel string
+}
+
+// AnthropicConfig Anthropic 配置
+type AnthropicConfig struct {
+	BaseURL      string // 默认 https://api.anthropic.com
+	APIKey       string
+	DefaultModel string
+}
+
+// 常用 Claude 模型列表（供 ListModels）
+var anthropicKnownModels = []string{
+	"claude-3-5-sonnet-20241022",
+	"claude-3-5-sonnet-20240620",
+	"claude-3-opus-20240229",
+	"claude-3-sonnet-20240229",
+	"claude-3-haiku-20240307",
+}
+
+// NewAnthropicLLM 创建 Anthropic LLM 实例
+func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = anthropicDefaultBaseURL
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "https://" + baseURL
+	}
+
+	a := &AnthropicLLM{
+		baseURL: baseURL,
+		apiKey:  cfg.APIKey,
+		httpClient: &http.Client{
+			Timeout: 300 * time.Second,
+		},
+		models:       anthropicKnownModels,
+		defaultModel: cfg.DefaultModel,
+	}
+	if a.defaultModel == "" && len(a.models) > 0 {
+		a.defaultModel = a.models[0]
+	}
+	return a
+}
+
+// ListModels 返回可用模型列表
+func (a *AnthropicLLM) ListModels() []string {
+	result := make([]string, len(a.models))
+	copy(result, a.models)
+	return result
+}
+
+// GetDefaultModel 返回默认模型
+func (a *AnthropicLLM) GetDefaultModel() string {
+	if a.defaultModel != "" {
+		return a.defaultModel
+	}
+	if len(a.models) > 0 {
+		return a.models[0]
+	}
+	return ""
+}
+
+// --- 请求/响应类型（Anthropic Messages API）---
+
+type anthropicMessage struct {
+	Role    string      `json:"role"`
+	Content interface{} `json:"content"` // string or []contentBlock
+}
+
+type anthropicTextBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type anthropicToolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type anthropicToolResultBlock struct {
+	Type      string `json:"type"`
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	InputSchema interface{} `json:"input_schema"`
+}
+
+type anthropicReq struct {
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	System    string             `json:"system,omitempty"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream,omitempty"`
+}
+
+type anthropicUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+type anthropicContentBlock struct {
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+}
+
+type anthropicResp struct {
+	ID           string                  `json:"id"`
+	Type         string                  `json:"type"`
+	Role         string                  `json:"role"`
+	Content      []anthropicContentBlock `json:"content"`
+	StopReason   string                  `json:"stop_reason"`
+	StopSequence *string                 `json:"stop_sequence"`
+	Usage        anthropicUsage          `json:"usage"`
+	Model        string                  `json:"model"`
+}
+
+// toAnthropicMessages 将业务消息转为 Anthropic 格式，返回 system 与 messages
+func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropicMessage) {
+	var firstSystem string
+	var msgs []anthropicMessage
+
+	i := 0
+	for i < len(messages) {
+		msg := messages[i]
+		switch msg.Role {
+		case "system":
+			if firstSystem == "" {
+				firstSystem = msg.Content
+			} else {
+				firstSystem += "\n\n" + msg.Content
+			}
+			i++
+		case "user":
+			msgs = append(msgs, anthropicMessage{Role: "user", Content: msg.Content})
+			i++
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				blocks := make([]interface{}, 0, 1+len(msg.ToolCalls))
+				if msg.Content != "" {
+					blocks = append(blocks, anthropicTextBlock{Type: "text", Text: msg.Content})
+				}
+				for _, tc := range msg.ToolCalls {
+					input := json.RawMessage(tc.Arguments)
+					if len(input) == 0 {
+						input = json.RawMessage("{}")
+					}
+					blocks = append(blocks, anthropicToolUseBlock{
+						Type:  "tool_use",
+						ID:    tc.ID,
+						Name:  tc.Name,
+						Input: input,
+					})
+				}
+				msgs = append(msgs, anthropicMessage{Role: "assistant", Content: blocks})
+			} else {
+				msgs = append(msgs, anthropicMessage{Role: "assistant", Content: msg.Content})
+			}
+			i++
+		case "tool":
+			// 连续多条 tool 消息合并为一条 user 消息，content 为多个 tool_result
+			var results []anthropicToolResultBlock
+			for i < len(messages) && messages[i].Role == "tool" {
+				t := messages[i]
+				results = append(results, anthropicToolResultBlock{
+					Type:      "tool_result",
+					ToolUseID: t.ToolCallID,
+					Content:   t.Content,
+				})
+				i++
+			}
+			blocks := make([]interface{}, 0, len(results))
+			for _, r := range results {
+				blocks = append(blocks, r)
+			}
+			msgs = append(msgs, anthropicMessage{Role: "user", Content: blocks})
+		default:
+			i++
+		}
+	}
+
+	return firstSystem, msgs
+}
+
+// toAnthropicTools 将工具定义转为 Anthropic tools（input_schema 为 JSON Schema）
+func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
+	out := make([]anthropicTool, 0, len(tools))
+	for _, tool := range tools {
+		properties := make(map[string]interface{})
+		required := make([]string, 0)
+		for _, p := range tool.Parameters() {
+			prop := map[string]interface{}{
+				"type":        p.Type,
+				"description": p.Description,
+			}
+			if p.Items != nil {
+				prop["items"] = map[string]string{"type": p.Items.Type}
+			}
+			properties[p.Name] = prop
+			if p.Required {
+				required = append(required, p.Name)
+			}
+		}
+		out = append(out, anthropicTool{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": properties,
+				"required":   required,
+			},
+		})
+	}
+	return out
+}
+
+func (a *AnthropicLLM) setHeaders(req *http.Request) {
+	req.Header.Set("x-api-key", a.apiKey)
+	req.Header.Set("anthropic-version", anthropicAPIVersion)
+	req.Header.Set("Content-Type", "application/json")
+}
+
+// Generate 非流式生成
+func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+	if model == "" {
+		model = a.GetDefaultModel()
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"provider":    "anthropic",
+		"model":       model,
+		"stream":      false,
+		"msg_count":   len(messages),
+		"tools_count": len(tools),
+	}).Info("[LLM] Starting non-stream request")
+
+	system, anthropicMsgs := toAnthropicMessages(messages)
+	body := anthropicReq{
+		Model:     model,
+		MaxTokens: anthropicMaxTokens,
+		Messages:  anthropicMsgs,
+		System:    system,
+		Stream:    false,
+	}
+	if len(tools) > 0 {
+		body.Tools = toAnthropicTools(tools)
+	}
+
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+	}
+
+	url := a.baseURL + "/v1/messages"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: create request: %w", err)
+	}
+	a.setHeaders(httpReq)
+
+	startTime := time.Now()
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		log.Ctx(ctx).WithFields(log.Fields{
+			"provider":    "anthropic",
+			"status_code": resp.StatusCode,
+			"body":        string(bodyBytes),
+		}).Error("[LLM] API error")
+		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var apiResp anthropicResp
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("anthropic: decode response: %w", err)
+	}
+
+	out := &LLMResponse{
+		Usage: TokenUsage{
+			PromptTokens:     int64(apiResp.Usage.InputTokens),
+			CompletionTokens: int64(apiResp.Usage.OutputTokens),
+			TotalTokens:      int64(apiResp.Usage.InputTokens + apiResp.Usage.OutputTokens),
+		},
+		FinishReason: mapStopReason(apiResp.StopReason),
+	}
+
+	var textParts []string
+	for _, block := range apiResp.Content {
+		switch block.Type {
+		case "text":
+			textParts = append(textParts, block.Text)
+		case "tool_use":
+			out.ToolCalls = append(out.ToolCalls, ToolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: string(block.Input),
+			})
+		}
+	}
+	out.Content = strings.Join(textParts, "")
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"provider":      "anthropic",
+		"content_len":   len(out.Content),
+		"tool_calls":    len(out.ToolCalls),
+		"finish_reason": out.FinishReason,
+		"duration":      time.Since(startTime).String(),
+	}).Info("[LLM] Non-stream response")
+
+	return out, nil
+}
+
+func mapStopReason(s string) FinishReason {
+	switch s {
+	case "end_turn":
+		return FinishReasonStop
+	case "max_tokens":
+		return FinishReasonLength
+	case "tool_use":
+		return FinishReasonToolCalls
+	default:
+		return FinishReason(s)
+	}
+}
+
+// GenerateStream 流式生成
+func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	if model == "" {
+		model = a.GetDefaultModel()
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"provider":    "anthropic",
+		"model":       model,
+		"stream":      true,
+		"msg_count":   len(messages),
+		"tools_count": len(tools),
+	}).Info("[LLM] Starting stream request")
+
+	system, anthropicMsgs := toAnthropicMessages(messages)
+	body := anthropicReq{
+		Model:     model,
+		MaxTokens: anthropicMaxTokens,
+		Messages:  anthropicMsgs,
+		System:    system,
+		Stream:    true,
+	}
+	if len(tools) > 0 {
+		body.Tools = toAnthropicTools(tools)
+	}
+
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+	}
+
+	url := a.baseURL + "/v1/messages"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: create request: %w", err)
+	}
+	a.setHeaders(httpReq)
+
+	startTime := time.Now()
+	resp, err := a.httpClient.Do(httpReq)
+	if err != nil {
+		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
+	}
+
+	eventChan := make(chan StreamEvent, 100)
+	go a.processStream(ctx, resp, eventChan, startTime)
+	return eventChan, nil
+}
+
+// Anthropic SSE 事件类型
+type anthropicStreamEvent struct {
+	Type         string          `json:"type"`
+	Index        int             `json:"index,omitempty"`
+	Message      *anthropicResp  `json:"message,omitempty"`
+	Delta        json.RawMessage `json:"delta,omitempty"`
+	ContentBlock *struct {
+		Type  string          `json:"type"`
+		Text  string          `json:"text,omitempty"`
+		ID    string          `json:"id,omitempty"`
+		Name  string          `json:"name,omitempty"`
+		Input json.RawMessage `json:"input,omitempty"`
+	} `json:"content_block,omitempty"`
+	Usage *struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage,omitempty"`
+}
+
+func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, eventChan chan<- StreamEvent, startTime time.Time) {
+	defer close(eventChan)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	var currentIndex int
+	toolCallsByIndex := make(map[int]*ToolCall)
+	var lastUsage *TokenUsage
+	doneSent := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			eventChan <- StreamEvent{Type: EventError, Error: ctx.Err().Error()}
+			return
+		default:
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				if !doneSent {
+					eventChan <- StreamEvent{Type: EventDone}
+				}
+				return
+			}
+			eventChan <- StreamEvent{Type: EventError, Error: fmt.Sprintf("read stream: %v", err)}
+			return
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" || data == "" {
+			if lastUsage != nil {
+				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+			}
+			if !doneSent {
+				eventChan <- StreamEvent{Type: EventDone}
+			}
+			return
+		}
+
+		var ev anthropicStreamEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+
+		switch ev.Type {
+		case "message_start":
+			// 可选：从 message.content 解析已有块（流式时通常为空）
+			if ev.Message != nil {
+				for _, block := range ev.Message.Content {
+					if block.Type == "text" && block.Text != "" {
+						eventChan <- StreamEvent{Type: EventContent, Content: block.Text}
+					}
+					if block.Type == "tool_use" {
+						tc := &ToolCall{ID: block.ID, Name: block.Name, Arguments: string(block.Input)}
+						eventChan <- StreamEvent{
+							Type:     EventToolCall,
+							ToolCall: &ToolCallDelta{Index: currentIndex, ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments},
+						}
+						toolCallsByIndex[currentIndex] = tc
+						currentIndex++
+					}
+				}
+				if ev.Message.Usage.InputTokens+ev.Message.Usage.OutputTokens > 0 {
+					lastUsage = &TokenUsage{
+						PromptTokens:     int64(ev.Message.Usage.InputTokens),
+						CompletionTokens: int64(ev.Message.Usage.OutputTokens),
+						TotalTokens:      int64(ev.Message.Usage.InputTokens + ev.Message.Usage.OutputTokens),
+					}
+				}
+			}
+
+		case "content_block_start":
+			if ev.ContentBlock != nil {
+				switch ev.ContentBlock.Type {
+				case "tool_use":
+					tc := &ToolCall{
+						ID:        ev.ContentBlock.ID,
+						Name:      ev.ContentBlock.Name,
+						Arguments: string(ev.ContentBlock.Input),
+					}
+					toolCallsByIndex[ev.Index] = tc
+					eventChan <- StreamEvent{
+						Type: EventToolCall,
+						ToolCall: &ToolCallDelta{
+							Index:     ev.Index,
+							ID:        tc.ID,
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					}
+				}
+			}
+
+		case "content_block_delta":
+			if len(ev.Delta) == 0 {
+				continue
+			}
+			var delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text,omitempty"`
+				PartialJSON string `json:"partial_json,omitempty"`
+			}
+			if err := json.Unmarshal(ev.Delta, &delta); err != nil {
+				continue
+			}
+			if delta.Type == "text_delta" && delta.Text != "" {
+				eventChan <- StreamEvent{Type: EventContent, Content: delta.Text}
+			}
+			if delta.Type == "input_json_delta" && delta.PartialJSON != "" {
+				if tc, ok := toolCallsByIndex[ev.Index]; ok {
+					tc.Arguments += delta.PartialJSON
+					eventChan <- StreamEvent{
+						Type:     EventToolCall,
+						ToolCall: &ToolCallDelta{Index: ev.Index, Arguments: delta.PartialJSON},
+					}
+				}
+			}
+
+		case "message_delta":
+			if ev.Usage != nil {
+				lastUsage = &TokenUsage{
+					PromptTokens:     int64(ev.Usage.InputTokens),
+					CompletionTokens: int64(ev.Usage.OutputTokens),
+					TotalTokens:      int64(ev.Usage.InputTokens + ev.Usage.OutputTokens),
+				}
+				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+			}
+
+		case "message_stop":
+			doneSent = true
+			eventChan <- StreamEvent{Type: EventDone, FinishReason: FinishReasonStop}
+		}
+	}
+}

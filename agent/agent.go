@@ -350,9 +350,9 @@ func New(cfg Config) *Agent {
 			BaseURL:    cfg.EmbeddingBaseURL,
 			APIKey:     cfg.EmbeddingAPIKey,
 			Model:      cfg.EmbeddingModel,
-			LLMClient:  cfg.LLM,        // Pass LLM client for content compression
-			LLMModel:   cfg.Model,      // Use main model for compression
-			TokenModel: cfg.Model,      // Use main model for token counting
+			LLMClient:  cfg.LLM,
+			LLMModel:   cfg.Model,
+			TokenModel: cfg.Model,
 		}),
 	)
 	if err != nil {

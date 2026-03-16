@@ -69,19 +69,19 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 // 下次创建容器时优先使用该镜像，从而完整保留 apt install 等所有变更。
 // 定期用 export+import 扁平化镜像，避免层累积浪费磁盘空间。
 type dockerSandbox struct {
-	image              string // 基础镜像
-	hostWorkDir        string // DinD: 宿主机上对应 WORK_DIR 的路径（空则不翻译）
-	containerWorkDir   string // DinD: 容器内 WORK_DIR 的路径（空则不翻译）
-	mu                 sync.Mutex
-	containers         map[string]*dockerContainer // userID -> container
-	commitSquashThreshold int                      // commit 达到此阈值时扁平化镜像
+	image                 string // 基础镜像
+	hostWorkDir           string // DinD: 宿主机上对应 WORK_DIR 的路径（空则不翻译）
+	containerWorkDir      string // DinD: 容器内 WORK_DIR 的路径（空则不翻译）
+	mu                    sync.Mutex
+	containers            map[string]*dockerContainer // userID -> container
+	commitSquashThreshold int                         // commit 达到此阈值时扁平化镜像
 }
 
 type dockerContainer struct {
-	name         string
-	started      bool
-	shell        string // 用户默认 shell（从容器内 /etc/passwd 获取）
-	commitCount  int    // 自上次扁平化以来的 commit 次数
+	name        string
+	started     bool
+	shell       string // 用户默认 shell（从容器内 /etc/passwd 获取）
+	commitCount int    // 自上次扁平化以来的 commit 次数
 }
 
 func (s *dockerSandbox) Name() string { return "docker" }

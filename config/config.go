@@ -22,10 +22,10 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode                string // 沙箱模式: "none", "docker"
-	DockerImage         string // Docker 镜像（如 "ubuntu:22.04"）
-	HostWorkDir         string // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
-	CommitSquashThreshold int   // commit 达到此阈值时，用 export+import 扁平化镜像（默认 5，设为 0 禁用）
+	Mode                  string // 沙箱模式: "none", "docker"
+	DockerImage           string // Docker 镜像（如 "ubuntu:22.04"）
+	HostWorkDir           string // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
+	CommitSquashThreshold int    // commit 达到此阈值时，用 export+import 扁平化镜像（默认 5，设为 0 禁用）
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -203,9 +203,9 @@ func Load() *Config {
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},
 		Sandbox: SandboxConfig{
-			Mode:                getEnvOrDefault("SANDBOX_MODE", "docker"),
-			DockerImage:         getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
-			HostWorkDir:         getEnvOrDefault("HOST_WORK_DIR", ""),
+			Mode:                  getEnvOrDefault("SANDBOX_MODE", "docker"),
+			DockerImage:           getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
+			HostWorkDir:           getEnvOrDefault("HOST_WORK_DIR", ""),
 			CommitSquashThreshold: getEnvIntOrDefault("SANDBOX_COMMIT_SQUASH_THRESHOLD", 5),
 		},
 		StartupNotify: StartupNotifyConfig{

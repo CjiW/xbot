@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	chromem "github.com/philippgille/chromem-go"
 
-	log "xbot/logger"
 	"xbot/llm"
+	log "xbot/logger"
 	"xbot/memory"
 )
 
@@ -224,10 +224,10 @@ func (s *ArchivalService) ensureContentFits(ctx context.Context, content string,
 	}
 
 	log.WithFields(log.Fields{
-		"context":       contextHint,
-		"original_len":  len(content),
-		"token_count":   tokenCount,
-		"max_tokens":    s.maxTokens,
+		"context":      contextHint,
+		"original_len": len(content),
+		"token_count":  tokenCount,
+		"max_tokens":   s.maxTokens,
 	}).Warn("Content exceeds embedding model token limit, compressing")
 
 	// Compress using configured compressor (LLM or default truncation)
@@ -480,10 +480,10 @@ func (s *ToolIndexService) ensureContentFits(ctx context.Context, content string
 	}
 
 	log.WithFields(log.Fields{
-		"context":       contextHint,
-		"original_len":  len(content),
-		"token_count":   tokenCount,
-		"max_tokens":    s.maxTokens,
+		"context":      contextHint,
+		"original_len": len(content),
+		"token_count":  tokenCount,
+		"max_tokens":   s.maxTokens,
 	}).Warn("Content exceeds embedding model token limit, compressing")
 
 	// Compress using configured compressor (LLM or default truncation)

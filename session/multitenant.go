@@ -345,6 +345,16 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 	prev := m.toolIndexFingerprints[tenantID]
 	prevNames := m.toolIndexPrevNames[tenantID]
 	m.mu.RUnlock()
+
+	// Fall back to persisted fingerprint (survives process restart)
+	if prev == "" && m.toolIndexSvc != nil {
+		prev = m.toolIndexSvc.GetFingerprint(tenantID)
+		if prev != "" {
+			m.mu.Lock()
+			m.toolIndexFingerprints[tenantID] = prev
+			m.mu.Unlock()
+		}
+	}
 	if fp == prev {
 		return nil
 	}
@@ -353,16 +363,19 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 	if m.toolIndexSvc != nil && len(entries) > 0 {
 		entriesCopy := make([]memory.ToolIndexEntry, len(entries))
 		copy(entriesCopy, entries)
+		fpCopy := fp
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if err := m.IndexToolsForTenant(ctx, tenantID, entriesCopy); err != nil {
 				log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
 				m.mu.Lock()
 				delete(m.toolIndexFingerprints, tenantID)
 				m.mu.Unlock()
+				m.toolIndexSvc.DeleteFingerprint(tenantID)
 			} else {
 				log.Infof("Indexed %d personal MCP tools for tenant %d", len(entriesCopy), tenantID)
+				m.toolIndexSvc.SetFingerprint(tenantID, fpCopy)
 			}
 		}()
 	}

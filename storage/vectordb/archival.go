@@ -2,9 +2,13 @@ package vectordb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -308,6 +312,8 @@ func (s *ArchivalService) Count(tenantID int64) (int, error) {
 type ToolIndexService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
+	persistDir    string
+	fpMu          sync.Mutex
 	embeddingLimitConfig
 }
 
@@ -326,6 +332,7 @@ func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc,
 	return &ToolIndexService{
 		db:                   db,
 		embeddingFunc:        embeddingFunc,
+		persistDir:           persistDir,
 		embeddingLimitConfig: cfg,
 	}, nil
 }
@@ -489,4 +496,67 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 		return fmt.Errorf("add documents: %w", err)
 	}
 	return nil
+}
+
+func (s *ToolIndexService) fingerprintPath() string {
+	return filepath.Join(s.persistDir, "fingerprints.json")
+}
+
+func (s *ToolIndexService) loadFingerprints() map[string]string {
+	data, err := os.ReadFile(s.fingerprintPath())
+	if err != nil {
+		return nil
+	}
+	var fps map[string]string
+	if err := json.Unmarshal(data, &fps); err != nil {
+		return nil
+	}
+	return fps
+}
+
+func (s *ToolIndexService) saveFingerprints(fps map[string]string) error {
+	out, err := json.Marshal(fps)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.fingerprintPath(), out, 0644)
+}
+
+// GetFingerprint returns the persisted catalog fingerprint for a tenant.
+func (s *ToolIndexService) GetFingerprint(tenantID int64) string {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		return ""
+	}
+	return fps[fmt.Sprintf("%d", tenantID)]
+}
+
+// SetFingerprint persists the catalog fingerprint for a tenant.
+func (s *ToolIndexService) SetFingerprint(tenantID int64, fp string) {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		fps = make(map[string]string)
+	}
+	fps[fmt.Sprintf("%d", tenantID)] = fp
+	if err := s.saveFingerprints(fps); err != nil {
+		log.WithError(err).Warn("Failed to persist tool index fingerprint")
+	}
+}
+
+// DeleteFingerprint removes the persisted catalog fingerprint for a tenant.
+func (s *ToolIndexService) DeleteFingerprint(tenantID int64) {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		return
+	}
+	delete(fps, fmt.Sprintf("%d", tenantID))
+	if err := s.saveFingerprints(fps); err != nil {
+		log.WithError(err).Warn("Failed to persist tool index fingerprint")
+	}
 }

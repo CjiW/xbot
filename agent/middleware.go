@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -151,6 +152,16 @@ func (mc *MessageContext) Assemble() []llm.ChatMessage {
 	messages = append(messages, mc.History...)
 	messages = append(messages, llm.NewUserMessage(mc.UserMessage))
 
+	// assert: 最终只能有一条 system（本 pipeline 生成），history 不得含 system（session 不持久化 system）
+	var systemCount int
+	for _, m := range messages {
+		if m.Role == "system" {
+			systemCount++
+		}
+	}
+	if systemCount != 1 {
+		panic("assert: Assemble must produce exactly one system message; got " + fmt.Sprint(systemCount) + " (history may contain system)")
+	}
 	mc.Messages = messages
 	return messages
 }

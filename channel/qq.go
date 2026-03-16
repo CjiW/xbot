@@ -421,14 +421,27 @@ type qqReadyData struct {
 	SessionID string `json:"session_id"`
 }
 
+// qqAttachment 富媒体文件附件
+type qqAttachment struct {
+	ContentType string `json:"content_type"` // "image/jpeg", "image/png", "image/gif", "file", "video/mp4", "voice"
+	Filename    string `json:"filename"`
+	Height      int    `json:"height,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Size        int    `json:"size,omitempty"`
+	URL         string `json:"url"`
+	VoiceWavURL string `json:"voice_wav_url,omitempty"` // 语音 wav 格式链接
+	ASRText     string `json:"asr_refer_text,omitempty"` // 语音 ASR 参考结果
+}
+
 // qqC2CMessage C2C_MESSAGE_CREATE payload
 type qqC2CMessage struct {
 	Author struct {
 		UserOpenID string `json:"user_openid"`
 	} `json:"author"`
-	Content   string `json:"content"`
-	ID        string `json:"id"`
-	Timestamp string `json:"timestamp"`
+	Content     string         `json:"content"`
+	ID          string         `json:"id"`
+	Timestamp   string         `json:"timestamp"`
+	Attachments []qqAttachment `json:"attachments,omitempty"`
 }
 
 // qqGroupMessage GROUP_AT_MESSAGE_CREATE payload
@@ -436,10 +449,11 @@ type qqGroupMessage struct {
 	Author struct {
 		MemberOpenID string `json:"member_openid"`
 	} `json:"author"`
-	Content     string `json:"content"`
-	ID          string `json:"id"`
-	Timestamp   string `json:"timestamp"`
-	GroupOpenID string `json:"group_openid"`
+	Content     string         `json:"content"`
+	ID          string         `json:"id"`
+	Timestamp   string         `json:"timestamp"`
+	GroupOpenID string         `json:"group_openid"`
+	Attachments []qqAttachment `json:"attachments,omitempty"`
 }
 
 // qqGuildMessage AT_MESSAGE_CREATE payload
@@ -448,11 +462,12 @@ type qqGuildMessage struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 	} `json:"author"`
-	Content   string `json:"content"`
-	ID        string `json:"id"`
-	Timestamp string `json:"timestamp"`
-	ChannelID string `json:"channel_id"`
-	GuildID   string `json:"guild_id"`
+	Content     string         `json:"content"`
+	ID          string         `json:"id"`
+	Timestamp   string         `json:"timestamp"`
+	ChannelID   string         `json:"channel_id"`
+	GuildID     string         `json:"guild_id"`
+	Attachments []qqAttachment `json:"attachments,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -686,9 +701,10 @@ func (q *QQChannel) handleC2CMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":  messageID,
-		"sender_id":   senderID,
-		"content_len": len(content),
+		"message_id":      messageID,
+		"sender_id":       senderID,
+		"content_len":     len(content),
+		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: C2C message received")
 
 	if q.isDuplicate(messageID) {
@@ -699,6 +715,15 @@ func (q *QQChannel) handleC2CMessage(data json.RawMessage) error {
 	if !q.isAllowed(senderID) {
 		log.WithField("sender", senderID).Warn("QQ: access denied")
 		return nil
+	}
+
+	// Append attachment tags to content
+	if attTags := formatAttachments(msg.Attachments); attTags != "" {
+		if content != "" {
+			content = content + "\n" + attTags
+		} else {
+			content = attTags
+		}
 	}
 
 	if content == "" {
@@ -740,10 +765,11 @@ func (q *QQChannel) handleGroupMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":  messageID,
-		"sender_id":   senderID,
-		"group_id":    groupID,
-		"content_len": len(content),
+		"message_id":      messageID,
+		"sender_id":       senderID,
+		"group_id":        groupID,
+		"content_len":     len(content),
+		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: group message received")
 
 	if q.isDuplicate(messageID) {
@@ -758,6 +784,16 @@ func (q *QQChannel) handleGroupMessage(data json.RawMessage) error {
 
 	// Strip leading/trailing whitespace and @mention artifacts
 	content = stripQQMention(content)
+
+	// Append attachment tags to content
+	if attTags := formatAttachments(msg.Attachments); attTags != "" {
+		if content != "" {
+			content = content + "\n" + attTags
+		} else {
+			content = attTags
+		}
+	}
+
 	if content == "" {
 		return nil
 	}
@@ -799,12 +835,13 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":  messageID,
-		"sender_id":   senderID,
-		"sender_name": senderName,
-		"channel_id":  channelID,
-		"guild_id":    guildID,
-		"content_len": len(content),
+		"message_id":      messageID,
+		"sender_id":       senderID,
+		"sender_name":     senderName,
+		"channel_id":      channelID,
+		"guild_id":        guildID,
+		"content_len":     len(content),
+		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: guild message received")
 
 	if q.isDuplicate(messageID) {
@@ -819,6 +856,16 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 
 	// Strip @mention artifacts
 	content = stripQQMention(content)
+
+	// Append attachment tags to content
+	if attTags := formatAttachments(msg.Attachments); attTags != "" {
+		if content != "" {
+			content = content + "\n" + attTags
+		} else {
+			content = attTags
+		}
+	}
+
 	if content == "" {
 		return nil
 	}
@@ -1210,6 +1257,79 @@ func (q *QQChannel) inferChatType(chatID string) string {
 	q.chatTypeMu.RLock()
 	defer q.chatTypeMu.RUnlock()
 	return q.chatTypeCache[chatID]
+}
+
+// ---------------------------------------------------------------------------
+// Attachment formatting
+// ---------------------------------------------------------------------------
+
+// formatAttachments 将 QQ attachments 转为与飞书一致的 XML 标签格式
+// 图片: <image url="..." filename="..." width="..." height="..." />
+// 文件: <file url="..." filename="..." size="..." />
+// 视频: <video url="..." filename="..." />
+// 语音: <audio url="..." filename="..." asr_text="..." />
+func formatAttachments(attachments []qqAttachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, att := range attachments {
+		url := att.URL
+		if url == "" {
+			continue
+		}
+		// QQ 返回的 URL 可能不带 scheme
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			url = "https://" + url
+		}
+
+		ct := strings.ToLower(att.ContentType)
+		switch {
+		case strings.HasPrefix(ct, "image/"):
+			tag := fmt.Sprintf(`<image url="%s" filename="%s"`, url, att.Filename)
+			if att.Width > 0 {
+				tag += fmt.Sprintf(` width="%d"`, att.Width)
+			}
+			if att.Height > 0 {
+				tag += fmt.Sprintf(` height="%d"`, att.Height)
+			}
+			tag += " />"
+			parts = append(parts, tag)
+
+		case ct == "video/mp4" || strings.HasPrefix(ct, "video/"):
+			parts = append(parts, fmt.Sprintf(`<video url="%s" filename="%s" />`, url, att.Filename))
+
+		case ct == "voice" || strings.HasPrefix(ct, "audio/"):
+			tag := fmt.Sprintf(`<audio url="%s" filename="%s"`, url, att.Filename)
+			if att.VoiceWavURL != "" {
+				wavURL := att.VoiceWavURL
+				if !strings.HasPrefix(wavURL, "http://") && !strings.HasPrefix(wavURL, "https://") {
+					wavURL = "https://" + wavURL
+				}
+				tag += fmt.Sprintf(` wav_url="%s"`, wavURL)
+			}
+			if att.ASRText != "" {
+				tag += fmt.Sprintf(` asr_text="%s"`, att.ASRText)
+			}
+			tag += " />"
+			parts = append(parts, tag)
+
+		default:
+			// 通用文件
+			tag := fmt.Sprintf(`<file url="%s" filename="%s"`, url, att.Filename)
+			if att.Size > 0 {
+				tag += fmt.Sprintf(` size="%d"`, att.Size)
+			}
+			tag += " />"
+			parts = append(parts, tag)
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
 }
 
 // ---------------------------------------------------------------------------

@@ -1271,6 +1271,75 @@ func max(a, b int) int {
 	return b
 }
 
+// thinTail 精简尾部旧工具组，保留最近 keepGroups 组完整内容。
+// 一个"工具组"= 一条 assistant(tool_calls) + 紧随其后的所有 tool result 消息。
+// 对更早的组：截断 Content/Arguments，strip think blocks，保留消息结构不变（API 兼容）。
+func thinTail(tail []llm.ChatMessage, keepGroups int) []llm.ChatMessage {
+	const (
+		thinContentMax = 300
+		thinArgsMax    = 200
+	)
+	if keepGroups <= 0 {
+		keepGroups = 3
+	}
+
+	// 识别工具组边界：每个 assistant(tool_calls) 开始一个新组，后续 tool 消息属于该组
+	type toolGroup struct{ start, end int }
+	var groups []toolGroup
+
+	for i := range tail {
+		if tail[i].Role == "assistant" && len(tail[i].ToolCalls) > 0 {
+			g := toolGroup{start: i, end: i}
+			for j := i + 1; j < len(tail) && tail[j].Role == "tool"; j++ {
+				g.end = j
+			}
+			groups = append(groups, g)
+		}
+	}
+
+	thinCount := len(groups) - keepGroups
+	if thinCount <= 0 {
+		return tail
+	}
+
+	result := make([]llm.ChatMessage, len(tail))
+	copy(result, tail)
+
+	for g := range thinCount {
+		grp := groups[g]
+		for j := grp.start; j <= grp.end; j++ {
+			msg := result[j] // copy struct
+			switch msg.Role {
+			case "assistant":
+				msg.Content = llm.StripThinkBlocks(msg.Content)
+				msg.Content = truncateRunes(msg.Content, thinContentMax)
+				if len(msg.ToolCalls) > 0 {
+					tcs := make([]llm.ToolCall, len(msg.ToolCalls))
+					copy(tcs, msg.ToolCalls)
+					for k := range tcs {
+						tcs[k].Arguments = truncateRunes(tcs[k].Arguments, thinArgsMax)
+					}
+					msg.ToolCalls = tcs
+				}
+			case "tool":
+				msg.Content = truncateRunes(msg.Content, thinContentMax)
+				msg.ToolArguments = truncateRunes(msg.ToolArguments, thinArgsMax)
+			}
+			result[j] = msg
+		}
+	}
+
+	return result
+}
+
+func truncateRunes(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "...[truncated]"
+}
+
 // compressContext 使用 LLM 压缩对话历史（Claude 风格）
 // 核心原则：
 // 1. 保留所有 tool 消息（tool_calls 和 tool result 必须配对，否则 API 报错）
@@ -1302,14 +1371,20 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 		}
 	}
 
-	// 第二步：分离消息
+	// 第二步：精简尾部旧工具组（保留最近 3 组完整，截断更早的组）
+	var thinnedTail []llm.ChatMessage
+	if tailStart < len(messages) {
+		thinnedTail = thinTail(messages[tailStart:], 3)
+	}
+
+	// 第三步：分离消息
 	// system 消息单独保留，tailStart 之前的非 system 消息需要压缩
 	var systemMsgs []llm.ChatMessage
 	var toCompress []llm.ChatMessage
 
 	for i, msg := range messages {
 		if i >= tailStart {
-			break // 尾部消息原样保留，不参与分类
+			break
 		}
 		if msg.Role == "system" {
 			systemMsgs = append(systemMsgs, msg)
@@ -1318,12 +1393,15 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 		}
 	}
 
-	// 如果没有需要压缩的内容，直接返回原消息
+	// 如果没有需要压缩的内容，返回 system + thinned tail（仍可因 tail thinning 减少 token）
 	if len(toCompress) == 0 {
-		return messages, nil
+		var result []llm.ChatMessage
+		result = append(result, systemMsgs...)
+		result = append(result, thinnedTail...)
+		return result, nil
 	}
 
-	// 第三步：构建压缩 prompt
+	// 第四步：构建压缩 prompt
 	var historyText strings.Builder
 	for _, msg := range toCompress {
 		role := strings.ToUpper(msg.Role)
@@ -1362,7 +1440,7 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 
 Output the compressed content directly, preserving as much context as possible.`
 
-	// 第四步：调用 LLM 压缩
+	// 第五步：调用 LLM 压缩
 	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a context compression expert."),
 		llm.NewUserMessage(compressionPrompt),
@@ -1373,7 +1451,7 @@ Output the compressed content directly, preserving as much context as possible.`
 
 	compressed := llm.StripThinkBlocks(resp.Content)
 
-	// 第五步：构建压缩后的消息结构
+	// 第六步：构建压缩后的消息结构
 	// 结构：[system, user(压缩摘要), 尾部原始消息(tool_calls/tool_result 配对完整)]
 	// assert: buildPrompt 应只产出一条 system，否则会导致 LLM 400 / 多人 sysprompt 混用
 	if len(systemMsgs) > 1 {
@@ -1387,10 +1465,8 @@ Output the compressed content directly, preserving as much context as possible.`
 	// 将压缩摘要作为 user 消息插入
 	result = append(result, llm.NewUserMessage("[Previous conversation context]\n\n"+compressed))
 
-	// 保留从 tailStart 到末尾的所有原始消息（tool_calls/tool_result 配对完整）
-	if tailStart < len(messages) {
-		result = append(result, messages[tailStart:]...)
-	}
+	// 保留精简后的尾部消息（tool_calls/tool_result 配对完整，旧组已截断）
+	result = append(result, thinnedTail...)
 
 	return result, nil
 }
@@ -2001,16 +2077,18 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		Content: content,
 	}
 
-	// isFinal: 卡片消息（__FEISHU_CARD__: 前缀）发送后标记 session 结束
-	// 注意：不在此处跳过 patch，而是由 feishu.go 决定是否 patch
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
+	isCard := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
-		// 始终尝试 patch 已有消息，由 feishu.go 决定是 patch 还是创建新消息
-		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
-			msg.Metadata["update_message_id"] = existingID.(string)
+		// Cards should always create new messages, not patch existing ones
+		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)
+		if !isCard {
+			if existingID, ok := a.sessionMsgIDs.Load(key); ok {
+				msg.Metadata["update_message_id"] = existingID.(string)
+			}
 		}
 
 		if replyTo, ok := a.sessionReplyTo.Load(key); ok {

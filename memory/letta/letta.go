@@ -400,28 +400,14 @@ func (m *LettaMemory) ToolIndexerService() *vectordb.ToolIndexService {
 }
 
 // IndexTools implements memory.ToolIndexer.
+// Delegates to ToolIndexService.IndexTools which handles metadata storage properly.
 func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEntry) error {
 	if m.toolIndexSvc == nil {
 		return fmt.Errorf("tool index service not available")
 	}
-	// Clear existing tools and re-index
-	if err := m.toolIndexSvc.ClearTools(ctx, m.tenantID); err != nil {
-		log.WithError(err).Warn("Failed to clear tool index")
-	}
-	for _, tool := range tools {
-		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
-			tool.Name, tool.ServerName, tool.Source, tool.Description)
-		// Add channels info if present
-		if len(tool.Channels) > 0 {
-			content += fmt.Sprintf("\nChannels: %s", strings.Join(tool.Channels, ","))
-		}
-		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
-		if err := m.toolIndexSvc.InsertTool(ctx, m.tenantID, toolID, content); err != nil {
-			log.WithError(err).WithField("tool", tool.Name).Warn("Failed to index tool")
-		}
-	}
-	log.WithField("tenant_id", m.tenantID).Infof("Indexed %d tools", len(tools))
-	return nil
+	// Directly delegate to ToolIndexService.IndexTools
+	// It handles storing channels in metadata (not content) to avoid affecting embeddings
+	return m.toolIndexSvc.IndexTools(ctx, m.tenantID, tools)
 }
 
 // SearchTools implements memory.ToolIndexer (searches current tenant without channel filter).
@@ -431,6 +417,7 @@ func (m *LettaMemory) SearchTools(ctx context.Context, query string, topK int) (
 
 // SearchToolsForTenant searches tools for a specific tenant.
 // If channel is not empty, filters results to only include tools that support that channel.
+// Channels are read from metadata (stored during indexing).
 func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, query string, topK int, channel string) ([]memory.ToolIndexEntry, error) {
 	if m.toolIndexSvc == nil {
 		return nil, fmt.Errorf("tool index service not available")
@@ -450,12 +437,23 @@ func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, 
 			serverName = parts[0]
 			toolName = parts[1]
 		}
+		// Extract channels from metadata (stored during indexing)
+		var channels []string
+		if r.Metadata != nil {
+			if chStr, ok := r.Metadata["channels"]; ok && chStr != "" {
+				channels = strings.Split(chStr, ",")
+			}
+			// Also prefer metadata server_name if available
+			if sn, ok := r.Metadata["server_name"]; ok && sn != "" {
+				serverName = sn
+			}
+		}
 		entry := memory.ToolIndexEntry{
 			Name:        toolName,
 			ServerName:  serverName,
 			Source:      "personal",
 			Description: r.Content,
-			Channels:    parseChannelsFromContent(r.Content),
+			Channels:    channels,
 		}
 		// 渠道过滤：如果指定了渠道，检查工具是否支持
 		if channel != "" && len(entry.Channels) > 0 {
@@ -473,25 +471,6 @@ func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, 
 		entries = append(entries, entry)
 	}
 	return entries, nil
-}
-
-// parseChannelsFromContent extracts channel info from tool description content
-// Content format: "Tool: xxx\nServer: xxx\nSource: xxx\nDescription: xxx"
-// Channels are stored in metadata during indexing
-func parseChannelsFromContent(content string) []string {
-	// Channels are appended to description during indexing
-	// Format: ... "Channels: feishu,qq" or no Channels line means all channels
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Channels: ") {
-			channelsStr := strings.TrimPrefix(line, "Channels: ")
-			if channelsStr == "" {
-				return nil
-			}
-			return strings.Split(channelsStr, ",")
-		}
-	}
-	return nil
 }
 
 // --- helpers ---

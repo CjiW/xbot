@@ -405,37 +405,11 @@ func (r *Registry) GetBuiltinToolNames() []string {
 	return names
 }
 
-// GetToolGroups 返回所有工具组（按组名排序）
-// 每个工具组包含组名、说明和工具名称列表
+// GetToolGroups returns all tool groups (sorted by name).
+// Each group contains name, instructions, and tool names.
+// Equivalent to GetToolGroupsForChannel("") with no channel filtering.
 func (r *Registry) GetToolGroups() []ToolGroupEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	groups := make(map[string]*ToolGroupEntry)
-	for _, tool := range r.globalTools {
-		if groupProvider, ok := tool.(ToolGroupProvider); ok {
-			groupName := groupProvider.GroupName()
-			if groups[groupName] == nil {
-				groups[groupName] = &ToolGroupEntry{
-					Name:         groupName,
-					Instructions: groupProvider.GroupInstructions(),
-					ToolNames:    []string{},
-				}
-			}
-			groups[groupName].ToolNames = append(groups[groupName].ToolNames, tool.Name())
-		}
-	}
-
-	// 转换为切片并排序
-	result := make([]ToolGroupEntry, 0, len(groups))
-	for _, entry := range groups {
-		sort.Strings(entry.ToolNames)
-		result = append(result, *entry)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-	return result
+	return r.GetToolGroupsForChannel("")
 }
 
 // GetToolGroupsForChannel 返回指定渠道可用的工具组（按组名排序）

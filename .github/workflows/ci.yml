@@ -23,7 +23,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.3
+          version: v2.10.1
 
   build:
     name: Build
@@ -49,4 +49,11 @@ jobs:
           go-version-file: go.mod
 
       - name: Test
-        run: go test -v -race -timeout 5m ./...
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out

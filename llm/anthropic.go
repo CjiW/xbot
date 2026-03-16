@@ -414,8 +414,13 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		log.Ctx(ctx).WithFields(log.Fields{
+			"provider":    "anthropic",
+			"status_code": resp.StatusCode,
+			"body":        string(bodyBytes),
+		}).Error("[LLM] API error")
 		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -451,6 +456,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 	var currentIndex int
 	toolCallsByIndex := make(map[int]*ToolCall)
 	var lastUsage *TokenUsage
+	lastFinishReason := FinishReasonStop
 	doneSent := false
 
 	for {
@@ -512,11 +518,12 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					}
 				}
 				if ev.Message.Usage.InputTokens+ev.Message.Usage.OutputTokens > 0 {
-					lastUsage = &TokenUsage{
-						PromptTokens:     int64(ev.Message.Usage.InputTokens),
-						CompletionTokens: int64(ev.Message.Usage.OutputTokens),
-						TotalTokens:      int64(ev.Message.Usage.InputTokens + ev.Message.Usage.OutputTokens),
+					if lastUsage == nil {
+						lastUsage = &TokenUsage{}
 					}
+					lastUsage.PromptTokens = int64(ev.Message.Usage.InputTokens)
+					lastUsage.CompletionTokens = int64(ev.Message.Usage.OutputTokens)
+					lastUsage.TotalTokens = lastUsage.PromptTokens + lastUsage.CompletionTokens
 				}
 			}
 
@@ -569,17 +576,30 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 
 		case "message_delta":
 			if ev.Usage != nil {
-				lastUsage = &TokenUsage{
-					PromptTokens:     int64(ev.Usage.InputTokens),
-					CompletionTokens: int64(ev.Usage.OutputTokens),
-					TotalTokens:      int64(ev.Usage.InputTokens + ev.Usage.OutputTokens),
+				if lastUsage == nil {
+					lastUsage = &TokenUsage{}
 				}
+				if ev.Usage.InputTokens > 0 {
+					lastUsage.PromptTokens = int64(ev.Usage.InputTokens)
+				}
+				if ev.Usage.OutputTokens > 0 {
+					lastUsage.CompletionTokens = int64(ev.Usage.OutputTokens)
+				}
+				lastUsage.TotalTokens = lastUsage.PromptTokens + lastUsage.CompletionTokens
 				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+			}
+			if len(ev.Delta) > 0 {
+				var delta struct {
+					StopReason string `json:"stop_reason"`
+				}
+				if err := json.Unmarshal(ev.Delta, &delta); err == nil && delta.StopReason != "" {
+					lastFinishReason = mapStopReason(delta.StopReason)
+				}
 			}
 
 		case "message_stop":
 			doneSent = true
-			eventChan <- StreamEvent{Type: EventDone, FinishReason: FinishReasonStop}
+			eventChan <- StreamEvent{Type: EventDone, FinishReason: lastFinishReason}
 		}
 	}
 }

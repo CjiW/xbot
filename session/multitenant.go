@@ -142,26 +142,27 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		opt(m)
 	}
 
+	// Build shared embedding limit options (used by both archival and tool index)
+	var embOpts []vectordb.EmbeddingLimitOption
+	if m.embeddingConfig != nil {
+		if m.embeddingConfig.MaxTokens > 0 {
+			embOpts = append(embOpts, vectordb.WithMaxTokens(m.embeddingConfig.MaxTokens))
+		}
+		if m.embeddingConfig.TokenModel != "" {
+			embOpts = append(embOpts, vectordb.WithTokenModel(m.embeddingConfig.TokenModel))
+		}
+		if m.embeddingConfig.LLMClient != nil && m.embeddingConfig.LLMModel != "" {
+			compressor := vectordb.LLMContentCompressor(m.embeddingConfig.LLMClient, m.embeddingConfig.LLMModel)
+			embOpts = append(embOpts, vectordb.WithCompressor(compressor))
+		}
+	}
+
 	// Letta 模式：自动创建 chromem-go 归档服务（如果未通过 WithArchivalService 注入）
 	if m.memoryProvider == "letta" && m.archivalSvc == nil && m.embeddingConfig != nil {
 		archivalDir := filepath.Join(filepath.Dir(dbPath), "archival")
 		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
 
-		// Build options for archival service
-		var archivalOpts []vectordb.ArchivalServiceOption
-		if m.embeddingConfig.MaxTokens > 0 {
-			archivalOpts = append(archivalOpts, vectordb.WithMaxTokens(m.embeddingConfig.MaxTokens))
-		}
-		if m.embeddingConfig.TokenModel != "" {
-			archivalOpts = append(archivalOpts, vectordb.WithTokenModel(m.embeddingConfig.TokenModel))
-		}
-		// Add LLM compressor if LLM client is provided
-		if m.embeddingConfig.LLMClient != nil && m.embeddingConfig.LLMModel != "" {
-			compressor := vectordb.LLMContentCompressor(m.embeddingConfig.LLMClient, m.embeddingConfig.LLMModel)
-			archivalOpts = append(archivalOpts, vectordb.WithCompressor(compressor))
-		}
-
-		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, archivalOpts...)
+		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, embOpts...)
 		if err != nil {
 			log.WithError(err).Error("Failed to initialize archival memory (chromem-go), archival tools will be unavailable")
 		} else {
@@ -174,21 +175,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		toolIndexDir := filepath.Join(filepath.Dir(dbPath), "tool_index")
 		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
 
-		// Build options for tool index service
-		var toolIndexOpts []vectordb.ToolIndexServiceOption
-		if m.embeddingConfig.MaxTokens > 0 {
-			toolIndexOpts = append(toolIndexOpts, vectordb.WithToolMaxTokens(m.embeddingConfig.MaxTokens))
-		}
-		if m.embeddingConfig.TokenModel != "" {
-			toolIndexOpts = append(toolIndexOpts, vectordb.WithToolTokenModel(m.embeddingConfig.TokenModel))
-		}
-		// Add LLM compressor if LLM client is provided
-		if m.embeddingConfig.LLMClient != nil && m.embeddingConfig.LLMModel != "" {
-			compressor := vectordb.LLMContentCompressor(m.embeddingConfig.LLMClient, m.embeddingConfig.LLMModel)
-			toolIndexOpts = append(toolIndexOpts, vectordb.WithToolCompressor(compressor))
-		}
-
-		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc, toolIndexOpts...)
+		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc, embOpts...)
 		if err != nil {
 			log.WithError(err).Error("Failed to initialize tool index service, tool search will be unavailable")
 		} else {

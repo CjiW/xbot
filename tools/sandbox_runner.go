@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,10 +9,30 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"xbot/config"
 	log "xbot/logger"
 )
+
+const (
+	dockerCmdTimeout  = 30 * time.Second  // 普通 docker 命令超时
+	dockerSlowTimeout = 120 * time.Second // 慢操作（export/import/commit）超时
+)
+
+// dockerExec runs a docker command with a timeout, returning combined output.
+func dockerExec(timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+}
+
+// dockerRun runs a docker command with a timeout, returning only error.
+func dockerRun(timeout time.Duration, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "docker", args...).Run()
+}
 
 // 全局沙箱实例
 var globalSandbox Sandbox
@@ -107,15 +128,13 @@ func (s *dockerSandbox) Close() error {
 			continue
 		}
 
-		stopCmd := exec.Command("docker", "stop", "-t", "1", c.name)
-		if err := stopCmd.Run(); err != nil {
+		if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to stop container %s", c.name)
 		} else {
 			log.Infof("Stopped Docker container %s", c.name)
 		}
 
-		rmCmd := exec.Command("docker", "rm", c.name)
-		if err := rmCmd.Run(); err != nil {
+		if err := dockerRun(dockerCmdTimeout, "rm", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to remove container %s", c.name)
 		} else {
 			log.Infof("Removed Docker container %s", c.name)
@@ -125,64 +144,51 @@ func (s *dockerSandbox) Close() error {
 	return nil
 }
 
-// commitIfDirty 仅在容器有文件系统变更时 commit，保存用户环境状态
-// 通过定期 export+import 扁平化镜像，避免层累积浪费磁盘空间
+// commitIfDirty 仅在容器有文件系统变更时 commit，保存用户环境状态。
+// 通过定期 export+import 扁平化镜像，避免层累积浪费磁盘空间。
+// 调用方必须持有 s.mu 锁。
 func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping commit for system container %s (userID=%q)", containerName, userID)
 		return
 	}
 
-	// 获取容器实例以更新 commit 计数
-	s.mu.Lock()
-	c, containerExists := s.containers[userID]
-	s.mu.Unlock()
-	if !containerExists {
+	c := s.containers[userID]
+	if c == nil {
 		c = &dockerContainer{name: containerName, started: true}
+		s.containers[userID] = c
 	}
 
-	diffCmd := exec.Command("docker", "diff", containerName)
-	diffOutput, err := diffCmd.Output()
+	diffOut, err := dockerExec(dockerCmdTimeout, "diff", containerName)
 	if err != nil {
 		log.WithError(err).Warnf("Failed to check diff for container %s, skipping commit", containerName)
 		return
 	}
-	if len(strings.TrimSpace(string(diffOutput))) == 0 {
+	if len(strings.TrimSpace(string(diffOut))) == 0 {
 		log.Infof("Container %s has no changes, skipping commit", containerName)
 		return
 	}
 
 	userImage := userImageName(userID)
 
-	// 记录旧镜像 ID（如果存在），用于 commit 后清理
 	var oldImageID string
-	idCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
-	if out, err := idCmd.Output(); err == nil {
+	if out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	// commit 容器状态到用户镜像
-	commitCmd := exec.Command("docker", "commit", containerName, userImage)
-	if err := commitCmd.Run(); err != nil {
+	if err := dockerRun(dockerSlowTimeout, "commit", containerName, userImage); err != nil {
 		log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
 		return
 	}
 	log.Infof("Committed container %s to image %s", containerName, userImage)
 
-	// 更新 commit 计数
 	c.commitCount++
-	s.mu.Lock()
-	s.containers[userID] = c
-	s.mu.Unlock()
 
-	// 清理旧镜像：commit 后 tag 指向新镜像，旧镜像变为 dangling
 	if oldImageID != "" {
-		newIDCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
-		if newOut, err := newIDCmd.Output(); err == nil {
+		if newOut, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 			newImageID := strings.TrimSpace(string(newOut))
 			if newImageID != oldImageID {
-				rmCmd := exec.Command("docker", "rmi", oldImageID)
-				if err := rmCmd.Run(); err != nil {
+				if err := dockerRun(dockerCmdTimeout, "rmi", oldImageID); err != nil {
 					log.WithError(err).Debugf("Failed to remove old image %s (may still be referenced)", oldImageID)
 				} else {
 					log.Infof("Cleaned up old image %s", oldImageID[:12])
@@ -191,62 +197,86 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 		}
 	}
 
-	// 清理 dangling images（不再被任何 tag 引用的层）
-	pruneCmd := exec.Command("docker", "image", "prune", "-f")
-	if out, err := pruneCmd.Output(); err != nil {
+	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err != nil {
 		log.WithError(err).Debugf("Failed to prune dangling images")
 	} else if strings.Contains(string(out), "Total") {
 		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
 	}
 
-	// 检查是否需要扁平化镜像
 	if s.commitSquashThreshold > 0 && c.commitCount >= s.commitSquashThreshold {
 		log.Infof("Commit count reached threshold (%d >= %d), squashing image %s",
 			c.commitCount, s.commitSquashThreshold, userImage)
 		if s.squashImage(containerName, userImage) {
 			c.commitCount = 0
-			s.mu.Lock()
-			s.containers[userID] = c
-			s.mu.Unlock()
 		}
 	}
 }
 
-// squashImage 用 export+import 扁平化镜像，生成单层镜像节省空间
+// squashImage 用 export+import 扁平化镜像，生成单层镜像节省空间。
+// 调用方必须持有 s.mu 锁（通过 commitIfDirty 调用）。
 func (s *dockerSandbox) squashImage(containerName, userImage string) bool {
-	// 1. export 容器文件系统到临时 tar
-	tmpTar := fmt.Sprintf("/tmp/xbot-squash-%s.tar", containerName)
-	exportCmd := exec.Command("docker", "export", "-o", tmpTar, containerName)
-	if out, err := exportCmd.CombinedOutput(); err != nil {
-		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
-		_ = os.Remove(tmpTar)
+	// 1. 获取旧镜像的元数据（docker export/import 会丢失这些）
+	inspectFmt := "{{json .Config.Cmd}}||{{json .Config.Entrypoint}}||{{.Config.WorkingDir}}||{{json .Config.Env}}"
+	inspectOut, _ := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", inspectFmt, userImage)
+	var changes []string
+	if parts := strings.SplitN(strings.TrimSpace(string(inspectOut)), "||", 4); len(parts) == 4 {
+		if cmd := parts[0]; cmd != "" && cmd != "null" {
+			changes = append(changes, fmt.Sprintf("CMD %s", cmd))
+		}
+		if ep := parts[1]; ep != "" && ep != "null" {
+			changes = append(changes, fmt.Sprintf("ENTRYPOINT %s", ep))
+		}
+		if wd := parts[2]; wd != "" {
+			changes = append(changes, fmt.Sprintf("WORKDIR %s", wd))
+		}
+		if envJSON := parts[3]; envJSON != "" && envJSON != "null" {
+			for _, env := range parseJSONStringArray(envJSON) {
+				if !strings.HasPrefix(env, "PATH=") {
+					changes = append(changes, fmt.Sprintf("ENV %s", env))
+				}
+			}
+		}
+	}
+
+	// 2. export 容器文件系统到临时 tar
+	tmpFile, err := os.CreateTemp("", "xbot-squash-*.tar")
+	if err != nil {
+		log.WithError(err).Warnf("Failed to create temp file for squash")
 		return false
 	}
+	tmpTar := tmpFile.Name()
+	tmpFile.Close()
 	defer os.Remove(tmpTar)
 
-	// 2. 记录旧镜像 ID
+	if out, err := dockerExec(dockerSlowTimeout, "export", "-o", tmpTar, containerName); err != nil {
+		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
+		return false
+	}
+
+	// 3. 记录旧镜像 ID
 	var oldImageID string
-	idCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
-	if out, err := idCmd.Output(); err == nil {
+	if out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	// 3. import 为新镜像（只有一层，不引用旧层）
-	importCmd := exec.Command("docker", "import", tmpTar, userImage)
-	if out, err := importCmd.CombinedOutput(); err != nil {
+	// 4. import 为新镜像，用 --change 恢复元数据
+	importArgs := []string{"import"}
+	for _, c := range changes {
+		importArgs = append(importArgs, "--change", c)
+	}
+	importArgs = append(importArgs, tmpTar, userImage)
+	if out, err := dockerExec(dockerSlowTimeout, importArgs...); err != nil {
 		log.WithError(err).Warnf("Failed to import squashed image %s: %s", userImage, strings.TrimSpace(string(out)))
 		return false
 	}
-	log.Infof("Squashed image %s (single layer, no layer references)", userImage)
+	log.WithField("changes", len(changes)).Infof("Squashed image %s (single layer with metadata restored)", userImage)
 
-	// 4. 删除旧镜像（如果 ID 不同，说明 import 生成了新镜像）
+	// 5. 删除旧镜像（如果 ID 不同，说明 import 生成了新镜像）
 	if oldImageID != "" {
-		newIDCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
-		if newOut, err := newIDCmd.Output(); err == nil {
+		if newOut, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 			newImageID := strings.TrimSpace(string(newOut))
 			if newImageID != oldImageID {
-				rmCmd := exec.Command("docker", "rmi", oldImageID)
-				if err := rmCmd.Run(); err != nil {
+				if err := dockerRun(dockerCmdTimeout, "rmi", oldImageID); err != nil {
 					log.WithError(err).Debugf("Failed to remove old image %s after squash (may still be referenced)", oldImageID[:12])
 				} else {
 					log.Infof("Removed old multi-layer image %s", oldImageID[:12])
@@ -255,15 +285,34 @@ func (s *dockerSandbox) squashImage(containerName, userImage string) bool {
 		}
 	}
 
-	// 5. 清理 dangling images
-	pruneCmd := exec.Command("docker", "image", "prune", "-f")
-	if out, err := pruneCmd.Output(); err != nil {
+	// 6. 清理 dangling images
+	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err != nil {
 		log.WithError(err).Debugf("Failed to prune dangling images after squash")
 	} else if strings.Contains(string(out), "Total") {
 		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
 	}
 
 	return true
+}
+
+// parseJSONStringArray parses a JSON string array like ["foo","bar"] into a Go slice.
+func parseJSONStringArray(s string) []string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "[") || !strings.HasSuffix(s, "]") {
+		return nil
+	}
+	s = s[1 : len(s)-1]
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if len(item) >= 2 && item[0] == '"' && item[len(item)-1] == '"' {
+			result = append(result, item[1:len(item)-1])
+		}
+	}
+	return result
 }
 
 // userImageName 返回用户专属镜像名称
@@ -485,8 +534,7 @@ func (s *dockerSandbox) commitAndRemove(containerName, userID string) {
 	s.commitIfDirty(containerName, userID)
 
 	// Force-kill + remove in one step (most reliable for stale containers)
-	forceRm := exec.Command("docker", "rm", "-f", containerName)
-	if out, err := forceRm.CombinedOutput(); err != nil {
+	if out, err := dockerExec(dockerCmdTimeout, "rm", "-f", containerName); err != nil {
 		log.WithError(err).Warnf("Failed to force-remove container %s: %s", containerName, strings.TrimSpace(string(out)))
 	} else {
 		log.Infof("Force-removed stale container %s", containerName)

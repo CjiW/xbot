@@ -32,22 +32,18 @@ func DefaultContentCompressor(ctx context.Context, content string, maxTokens int
 
 // LLMContentCompressor creates a compressor using LLM to summarize content.
 // The compressor preserves key information while fitting within token limits.
+// Callers (ensureContentFits) already verify tokens exceed the limit via tiktoken,
+// so this function skips redundant estimation and always compresses.
 func LLMContentCompressor(llmClient llm.LLM, model string) ContentCompressor {
 	return func(ctx context.Context, content string, maxTokens int) (string, error) {
-		// Rough estimate of current tokens
-		currentTokens := len(content) / 4
-		if currentTokens <= maxTokens {
-			return content, nil
-		}
-
 		prompt := fmt.Sprintf(`Summarize the following content for semantic search embedding. 
 Keep ALL important information (names, dates, facts, decisions, technical details).
-Target length: under %d tokens (currently ~%d tokens).
+Target length: under %d tokens.
 
 Content:
 %s
 
-Output the summarized content directly, no explanations.`, maxTokens, currentTokens, content)
+Output the summarized content directly, no explanations.`, maxTokens, content)
 
 		resp, err := llmClient.Generate(ctx, model, []llm.ChatMessage{
 			llm.NewSystemMessage("You are a content compressor. Summarize content for embedding while preserving all important information."),
@@ -59,13 +55,80 @@ Output the summarized content directly, no explanations.`, maxTokens, currentTok
 
 		compressed := llm.StripThinkBlocks(resp.Content)
 		log.WithFields(log.Fields{
-			"original_len":    len(content),
-			"compressed_len":  len(compressed),
-			"original_tokens": currentTokens,
-			"target_tokens":   maxTokens,
+			"original_len":   len(content),
+			"compressed_len": len(compressed),
+			"target_tokens":  maxTokens,
 		}).Info("Content compressed for embedding")
 
 		return compressed, nil
+	}
+}
+
+// embeddingLimitConfig holds shared configuration for token limit enforcement
+// used by both ArchivalService and ToolIndexService.
+type embeddingLimitConfig struct {
+	compressor ContentCompressor
+	maxTokens  int
+	tokenModel string
+}
+
+func defaultEmbeddingLimitConfig() embeddingLimitConfig {
+	return embeddingLimitConfig{
+		compressor: DefaultContentCompressor,
+		maxTokens:  2048,
+		tokenModel: "gpt-4",
+	}
+}
+
+// ensureContentFits checks token count and compresses content if it exceeds the limit.
+// Uses accurate token counting via tiktoken, and the configured compressor if needed.
+func ensureContentFits(ctx context.Context, cfg embeddingLimitConfig, content string, contextHint string) (string, error) {
+	tokenCount, err := llm.CountTokens(content, cfg.tokenModel)
+	if err != nil {
+		log.WithError(err).Warn("Failed to count tokens, using rough estimate")
+		tokenCount = len(content) / 4
+	}
+
+	if tokenCount <= cfg.maxTokens {
+		return content, nil
+	}
+
+	log.WithFields(log.Fields{
+		"context":      contextHint,
+		"original_len": len(content),
+		"token_count":  tokenCount,
+		"max_tokens":   cfg.maxTokens,
+	}).Warn("Content exceeds embedding model token limit, compressing")
+
+	compressed, err := cfg.compressor(ctx, content, cfg.maxTokens)
+	if err != nil {
+		return "", fmt.Errorf("compress content: %w", err)
+	}
+
+	return compressed, nil
+}
+
+// EmbeddingLimitOption configures embedding token limit behavior for both ArchivalService and ToolIndexService.
+type EmbeddingLimitOption func(*embeddingLimitConfig)
+
+// WithCompressor sets the content compressor.
+func WithCompressor(compressor ContentCompressor) EmbeddingLimitOption {
+	return func(c *embeddingLimitConfig) {
+		c.compressor = compressor
+	}
+}
+
+// WithMaxTokens sets the maximum tokens for the embedding model.
+func WithMaxTokens(maxTokens int) EmbeddingLimitOption {
+	return func(c *embeddingLimitConfig) {
+		c.maxTokens = maxTokens
+	}
+}
+
+// WithTokenModel sets the model name for token counting.
+func WithTokenModel(model string) EmbeddingLimitOption {
+	return func(c *embeddingLimitConfig) {
+		c.tokenModel = model
 	}
 }
 
@@ -83,33 +146,7 @@ type ArchivalEntry struct {
 type ArchivalService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
-	compressor    ContentCompressor // Compresses content exceeding token limits
-	maxTokens     int               // Maximum tokens for embedding model (default 2048)
-	tokenModel    string            // Model name for token counting
-}
-
-// ArchivalServiceOption configures the archival service.
-type ArchivalServiceOption func(*ArchivalService)
-
-// WithCompressor sets the content compressor for the archival service.
-func WithCompressor(compressor ContentCompressor) ArchivalServiceOption {
-	return func(s *ArchivalService) {
-		s.compressor = compressor
-	}
-}
-
-// WithMaxTokens sets the maximum tokens for the embedding model.
-func WithMaxTokens(maxTokens int) ArchivalServiceOption {
-	return func(s *ArchivalService) {
-		s.maxTokens = maxTokens
-	}
-}
-
-// WithTokenModel sets the model name for token counting.
-func WithTokenModel(model string) ArchivalServiceOption {
-	return func(s *ArchivalService) {
-		s.tokenModel = model
-	}
+	embeddingLimitConfig
 }
 
 // NewArchivalService creates an archival service backed by chromem-go.
@@ -117,22 +154,21 @@ func WithTokenModel(model string) ArchivalServiceOption {
 // persistDir: directory for chromem-go file persistence (created if needed).
 // embeddingFunc: OpenAI-compatible embedding function (nil disables vector search).
 // options: optional configuration (compressor, maxTokens, tokenModel).
-func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...ArchivalServiceOption) (*ArchivalService, error) {
+func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...EmbeddingLimitOption) (*ArchivalService, error) {
 	db, err := chromem.NewPersistentDB(persistDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
 	}
 
-	s := &ArchivalService{
-		db:            db,
-		embeddingFunc: embeddingFunc,
-		compressor:    DefaultContentCompressor,
-		maxTokens:     2048, // Default for most embedding models
-		tokenModel:    "gpt-4",
+	cfg := defaultEmbeddingLimitConfig()
+	for _, opt := range options {
+		opt(&cfg)
 	}
 
-	for _, opt := range options {
-		opt(s)
+	s := &ArchivalService{
+		db:                   db,
+		embeddingFunc:        embeddingFunc,
+		embeddingLimitConfig: cfg,
 	}
 
 	log.WithFields(log.Fields{
@@ -177,8 +213,7 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 		return "", fmt.Errorf("get collection: %w", err)
 	}
 
-	// Check token count and compress if needed
-	content, err = s.ensureContentFits(ctx, content, "archival")
+	content, err = ensureContentFits(ctx, s.embeddingLimitConfig, content, "archival")
 	if err != nil {
 		return "", fmt.Errorf("ensure content fits: %w", err)
 	}
@@ -207,36 +242,6 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 	}).Debug("Archival memory inserted (chromem-go)")
 
 	return id, nil
-}
-
-// ensureContentFits checks token count and compresses content if it exceeds the limit.
-// Uses accurate token counting via tiktoken, and LLM compression if configured.
-func (s *ArchivalService) ensureContentFits(ctx context.Context, content string, contextHint string) (string, error) {
-	// Count tokens accurately
-	tokenCount, err := llm.CountTokens(content, s.tokenModel)
-	if err != nil {
-		log.WithError(err).Warn("Failed to count tokens, using rough estimate")
-		tokenCount = len(content) / 4 // Fallback to rough estimate
-	}
-
-	if tokenCount <= s.maxTokens {
-		return content, nil
-	}
-
-	log.WithFields(log.Fields{
-		"context":      contextHint,
-		"original_len": len(content),
-		"token_count":  tokenCount,
-		"max_tokens":   s.maxTokens,
-	}).Warn("Content exceeds embedding model token limit, compressing")
-
-	// Compress using configured compressor (LLM or default truncation)
-	compressed, err := s.compressor(ctx, content, s.maxTokens)
-	if err != nil {
-		return "", fmt.Errorf("compress content: %w", err)
-	}
-
-	return compressed, nil
 }
 
 // Search performs semantic similarity search over archival entries for a tenant.
@@ -303,55 +308,26 @@ func (s *ArchivalService) Count(tenantID int64) (int, error) {
 type ToolIndexService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
-	compressor    ContentCompressor // Compresses content exceeding token limits
-	maxTokens     int               // Maximum tokens for embedding model (default 2048)
-	tokenModel    string            // Model name for token counting
-}
-
-// ToolIndexServiceOption configures the tool index service.
-type ToolIndexServiceOption func(*ToolIndexService)
-
-// WithToolCompressor sets the content compressor for the tool index service.
-func WithToolCompressor(compressor ContentCompressor) ToolIndexServiceOption {
-	return func(s *ToolIndexService) {
-		s.compressor = compressor
-	}
-}
-
-// WithToolMaxTokens sets the maximum tokens for the embedding model.
-func WithToolMaxTokens(maxTokens int) ToolIndexServiceOption {
-	return func(s *ToolIndexService) {
-		s.maxTokens = maxTokens
-	}
-}
-
-// WithToolTokenModel sets the model name for token counting.
-func WithToolTokenModel(model string) ToolIndexServiceOption {
-	return func(s *ToolIndexService) {
-		s.tokenModel = model
-	}
+	embeddingLimitConfig
 }
 
 // NewToolIndexService creates a tool index service.
-func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...ToolIndexServiceOption) (*ToolIndexService, error) {
+func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...EmbeddingLimitOption) (*ToolIndexService, error) {
 	db, err := chromem.NewPersistentDB(persistDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
 	}
 
-	s := &ToolIndexService{
-		db:            db,
-		embeddingFunc: embeddingFunc,
-		compressor:    DefaultContentCompressor,
-		maxTokens:     2048,
-		tokenModel:    "gpt-4",
-	}
-
+	cfg := defaultEmbeddingLimitConfig()
 	for _, opt := range options {
-		opt(s)
+		opt(&cfg)
 	}
 
-	return s, nil
+	return &ToolIndexService{
+		db:                   db,
+		embeddingFunc:        embeddingFunc,
+		embeddingLimitConfig: cfg,
+	}, nil
 }
 
 func (s *ToolIndexService) collectionName(tenantID int64) string {
@@ -372,8 +348,7 @@ func (s *ToolIndexService) InsertTool(ctx context.Context, tenantID int64, toolI
 	if err != nil {
 		return fmt.Errorf("get collection: %w", err)
 	}
-	// Check token count and compress if needed
-	content, err = s.ensureContentFits(ctx, content, toolID)
+	content, err = ensureContentFits(ctx, s.embeddingLimitConfig, content, toolID)
 	if err != nil {
 		return fmt.Errorf("ensure content fits: %w", err)
 	}
@@ -465,36 +440,6 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 // This alias is kept for backward compatibility with existing code.
 type ToolIndexEntry = memory.ToolIndexEntry
 
-// ensureContentFits checks token count and compresses content if it exceeds the limit.
-// Uses accurate token counting via tiktoken, and LLM compression if configured.
-func (s *ToolIndexService) ensureContentFits(ctx context.Context, content string, contextHint string) (string, error) {
-	// Count tokens accurately
-	tokenCount, err := llm.CountTokens(content, s.tokenModel)
-	if err != nil {
-		log.WithError(err).Warn("Failed to count tokens, using rough estimate")
-		tokenCount = len(content) / 4 // Fallback to rough estimate
-	}
-
-	if tokenCount <= s.maxTokens {
-		return content, nil
-	}
-
-	log.WithFields(log.Fields{
-		"context":      contextHint,
-		"original_len": len(content),
-		"token_count":  tokenCount,
-		"max_tokens":   s.maxTokens,
-	}).Warn("Content exceeds embedding model token limit, compressing")
-
-	// Compress using configured compressor (LLM or default truncation)
-	compressed, err := s.compressor(ctx, content, s.maxTokens)
-	if err != nil {
-		return "", fmt.Errorf("compress content: %w", err)
-	}
-
-	return compressed, nil
-}
-
 // IndexTools indexes multiple tools at once using batch concurrent embedding.
 // Channels are stored in Metadata (not Content) to avoid affecting embedding similarity.
 // If content exceeds embedding model token limit, it is compressed using the configured compressor.
@@ -518,8 +463,7 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 		// Content is pure semantic content for embedding (no channel info)
 		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
 			tool.Name, tool.ServerName, tool.Source, tool.Description)
-		// Check token count and compress if needed
-		content, err = s.ensureContentFits(ctx, content, toolID)
+		content, err = ensureContentFits(ctx, s.embeddingLimitConfig, content, toolID)
 		if err != nil {
 			return fmt.Errorf("ensure content fits for %s: %w", toolID, err)
 		}

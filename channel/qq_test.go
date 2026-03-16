@@ -290,4 +290,3 @@ func TestUploadFileToQQ_UnsupportedChatType(t *testing.T) {
 		t.Error("expected error for unsupported chat type")
 	}
 }
-

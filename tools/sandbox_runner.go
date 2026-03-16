@@ -131,7 +131,7 @@ func (s *dockerSandbox) Close() error {
 		s.commitIfDirty(c.name, userID)
 
 		// 3. 最后 rm
-		if err := dockerRun(dockerCmdTimeout, "rm", c.name); err != nil {
+		if err := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to remove container %s", c.name)
 		} else {
 			log.Infof("Removed Docker container %s", c.name)

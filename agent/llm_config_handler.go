@@ -12,7 +12,7 @@ import (
 const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>]
 
 参数说明:
-  provider    - LLM 提供商: codebuddy 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
+  provider    - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
   base_url    - API 基础地址
   api_key     - API 密钥
   model       - 模型名称（可选）
@@ -26,7 +26,10 @@ CodeBuddy 额外参数:
   # OpenAI 格式（适用于 OpenAI、DeepSeek、SiliconFlow 等）
   /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4
   /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-chat
-  
+
+  # Anthropic Claude
+  /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-3-5-sonnet-20241022
+
   # CodeBuddy（专有 API）
   /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
 

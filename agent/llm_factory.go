@@ -125,6 +125,14 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 		})
 		return client, model
 
+	case "anthropic":
+		client := llm.NewAnthropicLLM(llm.AnthropicConfig{
+			BaseURL:      cfg.BaseURL,
+			APIKey:       cfg.APIKey,
+			DefaultModel: model,
+		})
+		return client, model
+
 	default:
 		// 其他所有 provider（openai, deepseek, siliconflow 等）都使用 OpenAI 兼容 API
 		client := llm.NewOpenAILLM(llm.OpenAIConfig{

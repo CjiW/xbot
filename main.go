@@ -319,6 +319,12 @@ func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
 			Domain:       cfg.Domain,
 			DefaultModel: cfg.Model,
 		})
+	case "anthropic":
+		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
+			BaseURL:      cfg.BaseURL,
+			APIKey:       cfg.APIKey,
+			DefaultModel: cfg.Model,
+		})
 	default:
 		return nil, fmt.Errorf("unknown LLM provider: %s", cfg.Provider)
 	}

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -22,6 +23,27 @@ import (
 	"xbot/storage/sqlite"
 	"xbot/tools"
 )
+
+// ErrLLMGenerate 表示 LLM 生成调用失败（网络、API 4xx/5xx 等）
+var ErrLLMGenerate = errors.New("LLM generate failed")
+
+// assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
+func assertNoSystemPersist(m llm.ChatMessage) {
+	if m.Role == "system" {
+		log.WithField("message", m).Fatal("assert: must not persist system message to session")
+	}
+}
+
+// formatErrorForUser 将错误格式化为对用户可见的提示
+func formatErrorForUser(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, ErrLLMGenerate) {
+		return fmt.Sprintf("LLM 服务调用失败，请稍后重试或检查配置。\n错误详情: %v", err)
+	}
+	return fmt.Sprintf("处理消息时发生错误: %v", err)
+}
 
 // resolveDataPath 解析数据文件路径，优先使用 .xbot/ 目录，向后兼容工作目录根路径
 // 读取时：优先新路径，不存在则回退旧路径
@@ -612,10 +634,13 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
 						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
-						a.bus.Outbound <- bus.OutboundMessage{
-							Channel: m.Channel,
-							ChatID:  m.ChatID,
-							Content: fmt.Sprintf("处理命令时发生错误: %v", err),
+						content := formatErrorForUser(err)
+						if sendErr := a.sendMessage(m.Channel, m.ChatID, content); sendErr != nil {
+							a.bus.Outbound <- bus.OutboundMessage{
+								Channel: m.Channel,
+								ChatID:  m.ChatID,
+								Content: content,
+							}
 						}
 						return
 					}
@@ -696,10 +721,15 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 
 		if err != nil {
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).WithError(err).Error("Error processing message")
-			a.bus.Outbound <- bus.OutboundMessage{
-				Channel: msg.Channel,
-				ChatID:  msg.ChatID,
-				Content: fmt.Sprintf("处理消息时发生错误: %v", err),
+			// 走 sendMessage 与正常回复同一路径：可 Patch 已发出的进度条为错误内容，避免错误静默不达用户
+			content := formatErrorForUser(err)
+			if sendErr := a.sendMessage(msg.Channel, msg.ChatID, content); sendErr != nil {
+				log.Ctx(ctx).WithError(sendErr).Warn("Failed to send error via sendMessage, fallback to bus")
+				a.bus.Outbound <- bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: content,
+				}
 			}
 			continue
 		}
@@ -1132,7 +1162,13 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 	allOk := true
+	systemSkipped := 0
 	for _, msg := range compressed {
+		if msg.Role == "system" {
+			systemSkipped++
+			continue
+		}
+		assertNoSystemPersist(msg)
 		if err := tenantSession.AddMessage(msg); err != nil {
 			log.Ctx(ctx).WithError(err).Error("Partial write during compression, session may be corrupted")
 			allOk = false
@@ -1339,9 +1375,13 @@ Output the compressed content directly, preserving as much context as possible.`
 
 	// 第五步：构建压缩后的消息结构
 	// 结构：[system, user(压缩摘要), 尾部原始消息(tool_calls/tool_result 配对完整)]
+	// assert: buildPrompt 应只产出一条 system，否则会导致 LLM 400 / 多人 sysprompt 混用
+	if len(systemMsgs) > 1 {
+		panic("assert: at most one system message in compress input; got " + fmt.Sprint(len(systemMsgs)))
+	}
 	var result []llm.ChatMessage
 
-	// 保留 system 消息
+	// 保留 system 消息（仅用于本次 runLoop 内后续 LLM 调用；持久化时不得写入 session，见 runLoop/handleCompress）
 	result = append(result, systemMsgs...)
 
 	// 将压缩摘要作为 user 消息插入
@@ -1568,14 +1608,19 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				"new_tokens": newTokenCount,
 			}).Info("Auto context compression completed")
 
-			// 持久化压缩结果到 session
-			// 先收集，全部成功才持久化，避免部分写入导致数据损坏
+			// 持久化压缩结果到 session（不写入 system 消息，否则下次 GetHistory 会带回 system，导致多条 system + 400 + 不同人 sysprompt 混用）
 			if tenantSession != nil {
 				if err := tenantSession.Clear(); err != nil {
 					log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
 				} else {
 					allOk := true
+					systemSkipped := 0
 					for _, msg := range compressed {
+						if msg.Role == "system" {
+							systemSkipped++
+							continue
+						}
+						assertNoSystemPersist(msg)
 						if err := tenantSession.AddMessage(msg); err != nil {
 							log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
 							allOk = false
@@ -1604,9 +1649,19 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 
 		// 使用会话特定的工具定义（包含会话的 MCP 工具）
 		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+		// assert: 发给 LLM 的消息必须恰好一条 system，否则易触发 400 / 行为异常
+		var systemCount int
+		for _, m := range messages {
+			if m.Role == "system" {
+				systemCount++
+			}
+		}
+		if systemCount != 1 {
+			panic("assert: LLM messages must have exactly one system message; got " + fmt.Sprint(systemCount))
+		}
 		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
 		if err != nil {
-			return "", toolsUsed, false, fmt.Errorf("LLM generate failed: %w", err)
+			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)
 		}
 
 		if !response.HasToolCalls() {

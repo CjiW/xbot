@@ -104,7 +104,7 @@ type ServerConfig struct {
 
 // LLMConfig LLM 配置
 type LLMConfig struct {
-	Provider string // LLM 提供商: "openai" 或 "codebuddy"
+	Provider string // LLM 提供商: "openai"、"codebuddy" 或 "anthropic"
 	BaseURL  string
 	APIKey   string
 	Model    string // 默认模型（API 获取失败时的回退模型）

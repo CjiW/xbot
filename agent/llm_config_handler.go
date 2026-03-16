@@ -9,13 +9,14 @@ import (
 	"xbot/storage/sqlite"
 )
 
-const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>]
+const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>]
 
 参数说明:
   provider    - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
   base_url    - API 基础地址
   api_key     - API 密钥
   model       - 模型名称（可选）
+  max_context - 最大上下文 token 数（可选，0 表示不限制）
 
 CodeBuddy 额外参数:
   user_id       - 用户 ID
@@ -32,6 +33,9 @@ CodeBuddy 额外参数:
 
   # CodeBuddy（专有 API）
   /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
+
+  # 限制上下文大小
+  /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4 max_context=8000
 
 注意: API Key 会被加密存储，查询时只显示前4位。`
 
@@ -74,6 +78,11 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			cfg.APIKey = value
 		case "model":
 			cfg.Model = value
+		case "max_context":
+			var maxCtx int
+			if _, err := fmt.Sscanf(value, "%d", &maxCtx); err == nil {
+				cfg.MaxContext = maxCtx
+			}
 		case "user_id":
 			cfg.UserID = value
 		case "enterprise_id":
@@ -114,11 +123,16 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	// Mask API key for display
 	maskedKey := maskAPIKey(cfg.APIKey)
 
+	var maxContextStr string
+	if cfg.MaxContext > 0 {
+		maxContextStr = fmt.Sprintf("\n- Max Context: %d", cfg.MaxContext)
+	}
+
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s%s",
-			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model, warning),
+		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s%s%s",
+			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model, maxContextStr, warning),
 	}, nil
 }
 
@@ -145,6 +159,9 @@ func (a *Agent) handleGetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	maskedKey := maskAPIKey(cfg.APIKey)
 
 	var extraFields string
+	if cfg.MaxContext > 0 {
+		extraFields += fmt.Sprintf("\n- Max Context: %d", cfg.MaxContext)
+	}
 	if cfg.UserID != "" {
 		extraFields += fmt.Sprintf("\n- User ID: %s", cfg.UserID)
 	}

@@ -122,7 +122,8 @@ func (s *dockerSandbox) Close() error {
 	return nil
 }
 
-// commitIfDirty 仅在容器有文件系统变更时 commit，并清理旧的 dangling 镜像
+// commitIfDirty 仅在容器有文件系统变更时 commit，使用 --squash 压缩层以节省磁盘空间
+// Docker 25.0+ 已将 --squash 从实验性功能毕业为正式功能
 func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping commit for system container %s (userID=%q)", containerName, userID)
@@ -149,12 +150,18 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	commitCmd := exec.Command("docker", "commit", containerName, userImage)
+	// 使用 --squash 压缩层，避免层累积浪费磁盘空间
+	commitCmd := exec.Command("docker", "commit", "--squash", containerName, userImage)
 	if err := commitCmd.Run(); err != nil {
-		log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
-		return
+		// 如果 --squash 不支持（Docker < 25.0），fallback 到普通 commit
+		log.WithError(err).Warnf("docker commit --squash failed, trying without squash (Docker < 25.0?)")
+		commitCmd = exec.Command("docker", "commit", containerName, userImage)
+		if err := commitCmd.Run(); err != nil {
+			log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
+			return
+		}
 	}
-	log.Infof("Committed container %s to image %s", containerName, userImage)
+	log.Infof("Committed container %s to image %s (squashed)", containerName, userImage)
 
 	// 清理旧镜像：commit 后 tag 指向新镜像，旧镜像变为 dangling
 	if oldImageID != "" {
@@ -170,6 +177,15 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 				}
 			}
 		}
+	}
+
+	// 清理 dangling images（不再被任何 tag 引用的层）
+	// 这是额外的安全措施，确保不残留无用层
+	pruneCmd := exec.Command("docker", "image", "prune", "-f")
+	if out, err := pruneCmd.Output(); err != nil {
+		log.WithError(err).Debugf("Failed to prune dangling images")
+	} else if strings.Contains(string(out), "Total") {
+		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
 	}
 }
 

@@ -2001,18 +2001,16 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		Content: content,
 	}
 
+	// isFinal: 卡片消息（__FEISHU_CARD__: 前缀）发送后标记 session 结束
+	// 注意：不在此处跳过 patch，而是由 feishu.go 决定是否 patch
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
-	isCard := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
-		// Cards should always create new messages, not patch existing ones
-		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)
-		if !isCard {
-			if existingID, ok := a.sessionMsgIDs.Load(key); ok {
-				msg.Metadata["update_message_id"] = existingID.(string)
-			}
+		// 始终尝试 patch 已有消息，由 feishu.go 决定是 patch 还是创建新消息
+		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
+			msg.Metadata["update_message_id"] = existingID.(string)
 		}
 
 		if replyTo, ok := a.sessionReplyTo.Load(key); ok {

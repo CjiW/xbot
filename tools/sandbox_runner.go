@@ -108,38 +108,36 @@ type dockerContainer struct {
 func (s *dockerSandbox) Name() string { return "docker" }
 
 // Close 关闭并清理所有 Docker 容器
-// 分两阶段执行：先 commit 所有用户容器（保证数据持久化优先），再 stop+rm。
-// 这样即使进程在 stop 阶段被外层 Docker SIGKILL，用户数据也已 commit。
+// 优化流程：每个容器单独 stop → commit → rm
+// 先 stop 让容器停止（避免 commit 时的并发写入），再 commit（更快更稳定），最后 rm
 func (s *dockerSandbox) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Phase 1: commit all user containers (fast, critical for data persistence)
+	// 每个容器单独处理：stop → commit → rm
 	for userID, c := range s.containers {
 		if !c.started {
 			continue
 		}
-		s.commitIfDirty(c.name, userID)
-	}
 
-	// Phase 2: stop + rm all containers (may be slow, less critical)
-	for _, c := range s.containers {
-		if !c.started {
-			continue
-		}
-
+		// 1. 先 stop（1秒足够，workspace 是 bind mount 不会丢数据）
 		if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to stop container %s", c.name)
 		} else {
 			log.Infof("Stopped Docker container %s", c.name)
 		}
 
-		if err := dockerRun(dockerCmdTimeout, "rm", c.name); err != nil {
+		// 2. 容器停止后 commit（更快更稳定，无需处理并发写入）
+		s.commitIfDirty(c.name, userID)
+
+		// 3. 最后 rm
+		if err := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to remove container %s", c.name)
 		} else {
 			log.Infof("Removed Docker container %s", c.name)
 		}
 	}
+
 	s.containers = make(map[string]*dockerContainer)
 	return nil
 }

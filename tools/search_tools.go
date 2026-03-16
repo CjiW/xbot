@@ -149,19 +149,21 @@ func (t *SearchToolsTool) executeFallback(ctx *ToolContext, query string, topK i
 	// Get MCP catalog from registry
 	sessionKey := ctx.Channel + ":" + ctx.ChatID
 	mcpCatalog := ctx.Registry.GetMCPCatalog(sessionKey)
-	toolGroups := ctx.Registry.GetToolGroups()
+	// 使用渠道过滤的工具组
+	toolGroups := ctx.Registry.GetToolGroupsForChannel(ctx.Channel)
 
 	log.WithFields(log.Fields{
 		"session":    sessionKey,
 		"mcpCount":   len(mcpCatalog),
 		"groupCount": len(toolGroups),
 		"query":      query,
+		"channel":    ctx.Channel,
 	}).Warn("search_tools fallback: checking catalogs")
 
 	var allTools []string
 	var toolDescriptions []string
 
-	// Collect tool groups
+	// Collect tool groups (already filtered by channel)
 	for _, group := range toolGroups {
 		for _, toolName := range group.ToolNames {
 			allTools = append(allTools, toolName)

@@ -40,9 +40,10 @@ type FeishuChannel struct {
 	msgBus    *bus.MessageBus
 	client    *lark.Client
 	wsClient  *larkws.Client
-	running   bool
-	mu        sync.Mutex
-	botOpenID string
+	running     bool
+	mu          sync.Mutex
+	botOpenID   string
+	botName     string // 机器人名称，用于引用消息中标识自己
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}
@@ -132,14 +133,20 @@ func (f *FeishuChannel) Stop() {
 }
 
 // getUserName 通过 Contact API 获取用户姓名，带内存缓存
-// 对于 bot 类型的 sender（以 "cli_" 开头），返回 "Bot" 作为名称
+// 对于 bot 类型的 sender（以 "cli_" 开头），返回机器人名称
 func (f *FeishuChannel) getUserName(openID string) string {
 	if openID == "" {
 		return ""
 	}
 
-	// Bot open_id 通常以 "cli_" 开头，直接返回标识
+	// Bot open_id 通常以 "cli_" 开头，返回机器人名称
 	if strings.HasPrefix(openID, "cli_") {
+		f.mu.Lock()
+		botName := f.botName
+		f.mu.Unlock()
+		if botName != "" {
+			return botName
+		}
 		return "Bot"
 	}
 
@@ -823,6 +830,7 @@ type feishuBotInfoResp struct {
 	Msg  string `json:"msg"`
 	Bot  struct {
 		OpenID string `json:"open_id"`
+		Name   string `json:"app_name"` // 机器人名称
 	} `json:"bot"`
 }
 
@@ -850,9 +858,13 @@ func (f *FeishuChannel) refreshBotOpenID(ctx context.Context) error {
 
 	f.mu.Lock()
 	f.botOpenID = strings.TrimSpace(resp.Bot.OpenID)
+	f.botName = strings.TrimSpace(resp.Bot.Name)
 	f.mu.Unlock()
 
-	log.WithField("bot_open_id", resp.Bot.OpenID).Info("Feishu: bot open_id initialized from bot/v3/info")
+	log.WithFields(log.Fields{
+		"bot_open_id": resp.Bot.OpenID,
+		"bot_name":    resp.Bot.Name,
+	}).Info("Feishu: bot info initialized from bot/v3/info")
 	return nil
 }
 

@@ -82,6 +82,8 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			var maxCtx int
 			if _, err := fmt.Sscanf(value, "%d", &maxCtx); err == nil {
 				cfg.MaxContext = maxCtx
+			} else {
+				parseErrors = true
 			}
 		case "user_id":
 			cfg.UserID = value

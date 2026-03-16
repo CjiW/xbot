@@ -2,10 +2,14 @@ package channel
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -894,6 +898,37 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 }
 
 // ---------------------------------------------------------------------------
+// QQ rich media file types
+// ---------------------------------------------------------------------------
+
+const (
+	qqFileTypeImage = 1 // 图片 (png/jpg)
+	qqFileTypeVideo = 2 // 视频 (mp4)
+	qqFileTypeVoice = 3 // 语音 (silk/wav/mp3/flac)
+	qqFileTypeFile  = 4 // 文件（群场景暂不开放）
+)
+
+// qqFileUploadResponse 富媒体上传 API 返回
+type qqFileUploadResponse struct {
+	FileUUID string `json:"file_uuid"`
+	FileInfo string `json:"file_info"`
+	TTL      int    `json:"ttl"`
+	ID       string `json:"id"`
+}
+
+// qqImageExtensions 图片文件扩展名集合
+var qqImageExtensions = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+	".gif": true, ".bmp": true, ".ico": true, ".tiff": true, ".heic": true,
+}
+
+// qqMdImageRe 匹配 markdown 图片语法 ![alt](path)
+var qqMdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+
+// qqMdLinkRe 匹配 markdown 链接语法 [name](path)，但不匹配图片 ![alt](path)
+var qqMdLinkRe = regexp.MustCompile(`(?:^|[^!])\[([^\]]+)\]\(([^)]+)\)`)
+
+// ---------------------------------------------------------------------------
 // Send (outbound)
 // ---------------------------------------------------------------------------
 
@@ -913,20 +948,33 @@ func (q *QQChannel) Send(msg bus.OutboundMessage) (string, error) {
 		chatType = q.inferChatType(msg.ChatID)
 	}
 
+	// Resolve target ID for group messages
+	targetID := msg.ChatID
+	if chatType == "group" && msg.Metadata != nil && msg.Metadata["group_id"] != "" {
+		targetID = msg.Metadata["group_id"]
+	}
+
+	// Process content: extract and send local images/files (c2c and group only)
+	content := msg.Content
+	if chatType == "c2c" || chatType == "group" {
+		content = q.extractAndSendLocalFiles(targetID, chatType, content, msg.Metadata)
+		content = q.extractAndSendLocalImages(targetID, chatType, content, msg.Metadata)
+	}
+
+	// If all content was media (nothing left after extraction), skip text send
+	if strings.TrimSpace(content) == "" {
+		return "", nil
+	}
+
 	switch chatType {
 	case "c2c":
-		return q.sendC2CMessage(msg.ChatID, msg.Content, msg.Metadata)
+		return q.sendC2CMessage(targetID, content, msg.Metadata)
 	case "group":
-		groupID := msg.ChatID
-		if msg.Metadata != nil && msg.Metadata["group_id"] != "" {
-			groupID = msg.Metadata["group_id"]
-		}
-		return q.sendGroupMessage(groupID, msg.Content, msg.Metadata)
+		return q.sendGroupMessage(targetID, content, msg.Metadata)
 	case "guild":
-		return q.sendGuildMessage(msg.ChatID, msg.Content, msg.Metadata)
+		return q.sendGuildMessage(msg.ChatID, content, msg.Metadata)
 	default:
-		// Default: try to infer from chatID
-		return q.sendAutoDetect(msg.ChatID, msg.Content, msg.Metadata)
+		return q.sendAutoDetect(msg.ChatID, content, msg.Metadata)
 	}
 }
 
@@ -1014,6 +1062,241 @@ func (q *QQChannel) sendAutoDetect(chatID, content string, metadata map[string]s
 
 	// Try c2c
 	return q.sendC2CMessage(chatID, content, metadata)
+}
+
+// ---------------------------------------------------------------------------
+// Rich media upload & send (images / files)
+// ---------------------------------------------------------------------------
+
+// uploadFileToQQ 上传富媒体文件到 QQ，返回 file_info 用于发送消息
+// targetID: c2c 场景为 user openid，group 场景为 group_openid
+// chatType: "c2c" 或 "group"
+// fileType: qqFileTypeImage / qqFileTypeVideo / qqFileTypeVoice / qqFileTypeFile
+// fileData: base64 编码的文件内容
+func (q *QQChannel) uploadFileToQQ(targetID, chatType string, fileType int, fileData string) (*qqFileUploadResponse, error) {
+	var apiURL string
+	switch chatType {
+	case "c2c":
+		apiURL = fmt.Sprintf("%s/v2/users/%s/files", qqAPIBase, targetID)
+	case "group":
+		apiURL = fmt.Sprintf("%s/v2/groups/%s/files", qqAPIBase, targetID)
+	default:
+		return nil, fmt.Errorf("qq: unsupported chat type for file upload: %s", chatType)
+	}
+
+	body := map[string]any{
+		"file_type":    fileType,
+		"file_data":    fileData,
+		"srv_send_msg": false, // 不直接发送，获取 file_info 后再发
+	}
+
+	auth, err := q.authHeader()
+	if err != nil {
+		return nil, fmt.Errorf("qq: auth for upload: %w", err)
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("qq: marshal upload body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("qq: create upload request: %w", err)
+	}
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("Content-Type", "application/json")
+
+	log.WithFields(log.Fields{
+		"url":       apiURL,
+		"chat_type": chatType,
+		"file_type": fileType,
+		"body_len":  len(jsonBody),
+	}).Debug("QQ: uploading file")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("qq: upload request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("qq: read upload response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("qq: upload API error: status=%d body=%s", resp.StatusCode, string(respData))
+	}
+
+	var result qqFileUploadResponse
+	if err := json.Unmarshal(respData, &result); err != nil {
+		return nil, fmt.Errorf("qq: parse upload response: %w (body: %s)", err, string(respData))
+	}
+
+	log.WithFields(log.Fields{
+		"file_uuid": result.FileUUID,
+		"ttl":       result.TTL,
+	}).Debug("QQ: file uploaded")
+
+	return &result, nil
+}
+
+// sendMediaMessage 发送富媒体消息 (msg_type: 7)
+func (q *QQChannel) sendMediaMessage(targetID, chatType, fileInfo string, metadata map[string]string) (string, error) {
+	var apiURL string
+	switch chatType {
+	case "c2c":
+		apiURL = fmt.Sprintf("%s/v2/users/%s/messages", qqAPIBase, targetID)
+	case "group":
+		apiURL = fmt.Sprintf("%s/v2/groups/%s/messages", qqAPIBase, targetID)
+	default:
+		return "", fmt.Errorf("qq: unsupported chat type for media send: %s", chatType)
+	}
+
+	msgID := ""
+	if metadata != nil {
+		msgID = metadata["message_id"]
+	}
+
+	body := map[string]any{
+		"content":  " ", // QQ requires non-empty content even for media
+		"msg_type": 7,   // rich media
+		"media": map[string]string{
+			"file_info": fileInfo,
+		},
+	}
+	if msgID != "" {
+		body["msg_id"] = msgID
+	}
+	body["msg_seq"] = q.nextMsgSeq(msgID)
+
+	return q.doSendRequest(apiURL, body, chatType, targetID)
+}
+
+// extractAndSendLocalImages 从 markdown 中提取本地图片 ![alt](path)，上传并发送，从内容中移除
+func (q *QQChannel) extractAndSendLocalImages(targetID, chatType, content string, metadata map[string]string) string {
+	return qqMdImageRe.ReplaceAllStringFunc(content, func(match string) string {
+		subs := qqMdImageRe.FindStringSubmatch(match)
+		if len(subs) < 3 {
+			return match
+		}
+		imgPath := subs[2]
+		altText := subs[1]
+
+		// Skip URLs and image_key references
+		if strings.HasPrefix(imgPath, "http://") || strings.HasPrefix(imgPath, "https://") || strings.HasPrefix(imgPath, "img_") {
+			return match
+		}
+
+		// Check if it's an image extension
+		ext := strings.ToLower(filepath.Ext(imgPath))
+		if !qqImageExtensions[ext] {
+			return match
+		}
+
+		// Check file exists
+		if _, err := os.Stat(imgPath); err != nil {
+			log.WithField("path", imgPath).Debug("QQ: local image not found, keeping original markdown")
+			return match
+		}
+
+		// Read and base64 encode
+		fileData, err := os.ReadFile(imgPath)
+		if err != nil {
+			log.WithError(err).WithField("path", imgPath).Warn("QQ: failed to read local image")
+			return match
+		}
+		b64Data := base64.StdEncoding.EncodeToString(fileData)
+
+		// Upload to QQ
+		uploadResp, err := q.uploadFileToQQ(targetID, chatType, qqFileTypeImage, b64Data)
+		if err != nil {
+			log.WithError(err).WithField("path", imgPath).Warn("QQ: failed to upload image")
+			return match
+		}
+
+		// Send as media message
+		if _, err := q.sendMediaMessage(targetID, chatType, uploadResp.FileInfo, metadata); err != nil {
+			log.WithError(err).WithField("path", imgPath).Warn("QQ: failed to send image message")
+			return match
+		}
+
+		log.WithField("path", imgPath).Debug("QQ: sent local image")
+
+		// Replace with text indicator
+		if altText != "" {
+			return "📷 " + altText
+		}
+		return "📷 " + filepath.Base(imgPath)
+	})
+}
+
+// extractAndSendLocalFiles 从 markdown 中提取本地文件链接 [name](path)（非图片），上传并发送
+func (q *QQChannel) extractAndSendLocalFiles(targetID, chatType, content string, metadata map[string]string) string {
+	return qqMdLinkRe.ReplaceAllStringFunc(content, func(match string) string {
+		subs := qqMdLinkRe.FindStringSubmatch(match)
+		if len(subs) < 3 {
+			return match
+		}
+		linkPath := subs[2]
+
+		// Preserve prefix character (regex may capture non-! char before [)
+		prefix := ""
+		if len(match) > 0 && match[0] != '[' {
+			prefix = string(match[0])
+		}
+
+		// Skip URLs
+		if strings.HasPrefix(linkPath, "http://") || strings.HasPrefix(linkPath, "https://") {
+			return match
+		}
+
+		// Skip image extensions (handled by extractAndSendLocalImages)
+		ext := strings.ToLower(filepath.Ext(linkPath))
+		if qqImageExtensions[ext] {
+			return match
+		}
+
+		// Check file exists
+		if _, err := os.Stat(linkPath); err != nil {
+			return match
+		}
+
+		// Read and base64 encode
+		fileData, err := os.ReadFile(linkPath)
+		if err != nil {
+			log.WithError(err).WithField("path", linkPath).Warn("QQ: failed to read local file")
+			return match
+		}
+		b64Data := base64.StdEncoding.EncodeToString(fileData)
+
+		// Determine file type
+		fileType := qqFileTypeFile
+		switch ext {
+		case ".mp4":
+			fileType = qqFileTypeVideo
+		case ".silk", ".wav", ".mp3", ".flac", ".amr":
+			fileType = qqFileTypeVoice
+		}
+
+		// Upload to QQ
+		uploadResp, err := q.uploadFileToQQ(targetID, chatType, fileType, b64Data)
+		if err != nil {
+			log.WithError(err).WithField("path", linkPath).Warn("QQ: failed to upload file")
+			return match
+		}
+
+		// Send as media message
+		if _, err := q.sendMediaMessage(targetID, chatType, uploadResp.FileInfo, metadata); err != nil {
+			log.WithError(err).WithField("path", linkPath).Warn("QQ: failed to send file message")
+			return match
+		}
+
+		log.WithField("path", linkPath).Debug("QQ: sent local file")
+
+		return prefix + "📎 " + subs[1]
+	})
 }
 
 // doSendRequest 执行发送消息的 HTTP 请求

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -189,7 +189,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (9);
+INSERT INTO schema_version (version) VALUES (10);
 
 CREATE TABLE user_llm_configs (
     sender_id TEXT PRIMARY KEY,
@@ -197,6 +197,7 @@ CREATE TABLE user_llm_configs (
     base_url TEXT NOT NULL,
     api_key TEXT NOT NULL,
     model TEXT,
+    max_context INTEGER DEFAULT 0,
     user_id TEXT,
     enterprise_id TEXT,
     domain TEXT,
@@ -483,6 +484,22 @@ UPDATE schema_version SET version = 6;
 
 		// Update schema version
 		if _, err := conn.Exec("UPDATE schema_version SET version = 9"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+	}
+
+	if from < 10 {
+		// v10: Add max_context column to user_llm_configs
+		var count int
+		err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('user_llm_configs') WHERE name = 'max_context'").Scan(&count)
+		if err == nil && count == 0 {
+			_, err = conn.Exec("ALTER TABLE user_llm_configs ADD COLUMN max_context INTEGER DEFAULT 0")
+			if err != nil {
+				return fmt.Errorf("migrate v9->v10: %w", err)
+			}
+			log.Info("Database migrated to v10 (added max_context to user_llm_configs)")
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 10"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}
 	}

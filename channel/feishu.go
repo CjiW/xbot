@@ -132,9 +132,15 @@ func (f *FeishuChannel) Stop() {
 }
 
 // getUserName 通过 Contact API 获取用户姓名，带内存缓存
+// 对于 bot 类型的 sender（以 "cli_" 开头），返回 "Bot" 作为名称
 func (f *FeishuChannel) getUserName(openID string) string {
 	if openID == "" {
 		return ""
+	}
+
+	// Bot open_id 通常以 "cli_" 开头，直接返回标识
+	if strings.HasPrefix(openID, "cli_") {
+		return "Bot"
 	}
 
 	f.userNameMu.RLock()
@@ -771,6 +777,14 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		refMsg = "[存在引用的消息但是无法找到内容，可能是因为消息过旧不在缓存中]"
 	}
 
+	// 构建消息内容：refMsg 非空时添加引用前缀
+	var finalContent string
+	if refMsg != "" {
+		finalContent = fmt.Sprintf("%s\n%s", refMsg, content)
+	} else {
+		finalContent = content
+	}
+
 	// 发布到消息总线
 	msgTime := time.Now()
 	if msg.CreateTime != nil {
@@ -795,7 +809,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		SenderName: senderName,
 		ChatID:     replyTo,
 		ChatType:   chatType,
-		Content:    fmt.Sprintf("%s\n%s", refMsg, content),
+		Content:    finalContent,
 		Time:       msgTime,
 		Metadata:   metadata,
 		RequestID:  requestID,

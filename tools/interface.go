@@ -413,15 +413,15 @@ func (r *Registry) GetToolGroups() []ToolGroupEntry {
 }
 
 // GetToolGroupsForChannel 返回指定渠道可用的工具组（按组名排序）
-// 过滤掉不支持该渠道的工具
+// channel 为空时不进行渠道过滤，返回所有工具组
 func (r *Registry) GetToolGroupsForChannel(channel string) []ToolGroupEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	groups := make(map[string]*ToolGroupEntry)
 	for _, tool := range r.globalTools {
-		// 渠道过滤
-		if !IsChannelSupported(tool, channel) {
+		// 渠道过滤（空渠道不过滤）
+		if channel != "" && !IsChannelSupported(tool, channel) {
 			continue
 		}
 		if groupProvider, ok := tool.(ToolGroupProvider); ok {

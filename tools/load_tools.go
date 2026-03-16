@@ -58,10 +58,10 @@ func (t *LoadToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 
 	sessionKey := ctx.Channel + ":" + ctx.ChatID
 
-	// Get schemas to find which tools exist
-	schemas := ctx.Registry.GetToolSchemas(sessionKey, toolNames)
+	// Get schemas to find which tools exist (with channel filtering)
+	schemas := ctx.Registry.GetToolSchemasForChannel(sessionKey, toolNames, ctx.Channel)
 	if len(schemas) == 0 {
-		return NewResult(fmt.Sprintf("No tools found for: %s", strings.Join(toolNames, ", "))), nil
+		return NewResult(fmt.Sprintf("No tools found for: %s (channel: %s)", strings.Join(toolNames, ", "), ctx.Channel)), nil
 	}
 
 	// Activate found tools

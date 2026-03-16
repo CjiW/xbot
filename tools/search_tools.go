@@ -68,14 +68,14 @@ func (t *SearchToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	if indexer != nil {
 		// Try to cast to LettaMemory to access both global (tenant 0) and personal tools
 		if lm, ok := indexer.(*letta.LettaMemory); ok {
-			// Search global tools first (tenant 0)
-			globalResults, err := lm.SearchToolsForTenant(ctx.Ctx, 0, args.Query, args.TopK)
+			// Search global tools first (tenant 0), filter by current channel
+			globalResults, err := lm.SearchToolsForTenant(ctx.Ctx, 0, args.Query, args.TopK, ctx.Channel)
 			if err != nil {
 				log.WithError(err).Warn("Global tool index search failed")
 			}
 
-			// Then search personal tools (user's tenant)
-			personalResults, err := lm.SearchToolsForTenant(ctx.Ctx, lm.TenantID(), args.Query, args.TopK)
+			// Then search personal tools (user's tenant), filter by current channel
+			personalResults, err := lm.SearchToolsForTenant(ctx.Ctx, lm.TenantID(), args.Query, args.TopK, ctx.Channel)
 			if err != nil {
 				log.WithError(err).Warn("Personal tool index search failed")
 			}
@@ -149,19 +149,21 @@ func (t *SearchToolsTool) executeFallback(ctx *ToolContext, query string, topK i
 	// Get MCP catalog from registry
 	sessionKey := ctx.Channel + ":" + ctx.ChatID
 	mcpCatalog := ctx.Registry.GetMCPCatalog(sessionKey)
-	toolGroups := ctx.Registry.GetToolGroups()
+	// 使用渠道过滤的工具组
+	toolGroups := ctx.Registry.GetToolGroupsForChannel(ctx.Channel)
 
 	log.WithFields(log.Fields{
 		"session":    sessionKey,
 		"mcpCount":   len(mcpCatalog),
 		"groupCount": len(toolGroups),
 		"query":      query,
+		"channel":    ctx.Channel,
 	}).Warn("search_tools fallback: checking catalogs")
 
 	var allTools []string
 	var toolDescriptions []string
 
-	// Collect tool groups
+	// Collect tool groups (already filtered by channel)
 	for _, group := range toolGroups {
 		for _, toolName := range group.ToolNames {
 			allTools = append(allTools, toolName)

@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	chromem "github.com/philippgille/chromem-go"
 
 	log "xbot/logger"
+	"xbot/memory"
 )
 
 // ArchivalEntry represents a single archival memory search result.
@@ -213,10 +215,12 @@ func (s *ToolIndexService) InsertTool(ctx context.Context, tenantID int64, toolI
 }
 
 // SearchTools searches for tools by semantic similarity.
+// Returns ID, Content, Similarity, and Metadata for each result.
 func (s *ToolIndexService) SearchTools(ctx context.Context, tenantID int64, query string, limit int) ([]struct {
 	ID         string
 	Content    string
 	Similarity float32
+	Metadata   map[string]string
 }, error) {
 	if s.embeddingFunc == nil {
 		return nil, fmt.Errorf("tool search requires embedding configuration")
@@ -243,16 +247,19 @@ func (s *ToolIndexService) SearchTools(ctx context.Context, tenantID int64, quer
 		ID         string
 		Content    string
 		Similarity float32
+		Metadata   map[string]string
 	}, len(results))
 	for i, r := range results {
 		entries[i] = struct {
 			ID         string
 			Content    string
 			Similarity float32
+			Metadata   map[string]string
 		}{
 			ID:         r.ID,
 			Content:    r.Content,
 			Similarity: r.Similarity,
+			Metadata:   r.Metadata,
 		}
 	}
 	return entries, nil
@@ -281,15 +288,12 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 	return nil
 }
 
-// ToolIndexEntry represents a tool for indexing.
-type ToolIndexEntry struct {
-	Name        string
-	ServerName  string
-	Source      string
-	Description string
-}
+// Use memory.ToolIndexEntry instead of duplicating the definition here.
+// This alias is kept for backward compatibility with existing code.
+type ToolIndexEntry = memory.ToolIndexEntry
 
 // IndexTools indexes multiple tools at once using batch concurrent embedding.
+// Channels are stored in Metadata (not Content) to avoid affecting embedding similarity.
 func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools []ToolIndexEntry) error {
 	if s.embeddingFunc == nil {
 		return fmt.Errorf("tool index requires embedding configuration")
@@ -306,10 +310,21 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 	}
 	docs := make([]chromem.Document, len(tools))
 	for i, tool := range tools {
+		// Content is pure semantic content for embedding (no channel info)
+		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		// Metadata stores structured data (channels) for filtering
+		metadata := map[string]string{
+			"server_name": tool.ServerName,
+			"source":      tool.Source,
+		}
+		if len(tool.Channels) > 0 {
+			metadata["channels"] = strings.Join(tool.Channels, ",")
+		}
 		docs[i] = chromem.Document{
-			ID: fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
-			Content: fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
-				tool.Name, tool.ServerName, tool.Source, tool.Description),
+			ID:       fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
+			Content:  content,
+			Metadata: metadata,
 		}
 	}
 	concurrency := runtime.NumCPU()

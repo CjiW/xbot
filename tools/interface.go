@@ -347,6 +347,30 @@ type ToolGroupProvider interface {
 	GroupInstructions() string // 工具组使用说明
 }
 
+// ChannelProvider 渠道提供者接口，用于限制工具仅在特定渠道可用
+// 未实现此接口的工具在所有渠道可用
+type ChannelProvider interface {
+	SupportedChannels() []string // 返回支持的渠道列表，空则表示所有渠道
+}
+
+// IsChannelSupported 检查工具是否支持指定渠道
+// 如果工具未实现 ChannelProvider 接口，则默认支持所有渠道
+func IsChannelSupported(tool Tool, channel string) bool {
+	if cp, ok := tool.(ChannelProvider); ok {
+		channels := cp.SupportedChannels()
+		if len(channels) == 0 {
+			return true // 空列表 = 所有渠道
+		}
+		for _, c := range channels {
+			if c == channel {
+				return true
+			}
+		}
+		return false
+	}
+	return true // 未实现接口 = 所有渠道可用
+}
+
 // ToolGroupEntry 工具组条目
 type ToolGroupEntry struct {
 	Name         string   // 工具组名称
@@ -381,14 +405,25 @@ func (r *Registry) GetBuiltinToolNames() []string {
 	return names
 }
 
-// GetToolGroups 返回所有工具组（按组名排序）
-// 每个工具组包含组名、说明和工具名称列表
+// GetToolGroups returns all tool groups (sorted by name).
+// Each group contains name, instructions, and tool names.
+// Equivalent to GetToolGroupsForChannel("") with no channel filtering.
 func (r *Registry) GetToolGroups() []ToolGroupEntry {
+	return r.GetToolGroupsForChannel("")
+}
+
+// GetToolGroupsForChannel 返回指定渠道可用的工具组（按组名排序）
+// channel 为空时不进行渠道过滤，返回所有工具组
+func (r *Registry) GetToolGroupsForChannel(channel string) []ToolGroupEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	groups := make(map[string]*ToolGroupEntry)
 	for _, tool := range r.globalTools {
+		// 渠道过滤（空渠道不过滤）
+		if channel != "" && !IsChannelSupported(tool, channel) {
+			continue
+		}
 		if groupProvider, ok := tool.(ToolGroupProvider); ok {
 			groupName := groupProvider.GroupName()
 			if groups[groupName] == nil {
@@ -440,7 +475,14 @@ func (r *Registry) GetMCPCatalog(sessionKey string) []MCPServerCatalogEntry {
 
 // GetToolSchemas 获取指定工具的完整 schema 信息（参数定义、描述等）
 // 支持内置工具和 MCP 工具。toolNames 为工具全名列表；传入 nil 返回所有可加载工具的 schema。
+// 如果 channel 不为空，则过滤掉不支持该渠道的工具。
 func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolSchema {
+	return r.GetToolSchemasForChannel(sessionKey, toolNames, "")
+}
+
+// GetToolSchemasForChannel 获取指定渠道可用的工具 schema 信息
+// channel 为空时不进行渠道过滤
+func (r *Registry) GetToolSchemasForChannel(sessionKey string, toolNames []string, channel string) []ToolSchema {
 	nameSet := make(map[string]bool, len(toolNames))
 	matchAll := len(toolNames) == 0
 	for _, n := range toolNames {
@@ -452,6 +494,10 @@ func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolS
 	r.mu.RLock()
 	for name, tool := range r.globalTools {
 		if !matchAll && !nameSet[name] {
+			continue
+		}
+		// 渠道过滤
+		if channel != "" && !IsChannelSupported(tool, channel) {
 			continue
 		}
 		if p, ok := tool.(mcpSchemaProvider); ok {
@@ -478,6 +524,7 @@ func (r *Registry) GetToolSchemas(sessionKey string, toolNames []string) []ToolS
 				if !matchAll && !nameSet[tool.Name()] {
 					continue
 				}
+				// 会话 MCP 工具暂不做渠道过滤（MCP 工具通常是通用的）
 				if p, ok := tool.(mcpSchemaProvider); ok {
 					schemas = append(schemas, ToolSchema{
 						ToolName:    tool.Name(),

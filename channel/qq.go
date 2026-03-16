@@ -429,7 +429,7 @@ type qqAttachment struct {
 	Width       int    `json:"width,omitempty"`
 	Size        int    `json:"size,omitempty"`
 	URL         string `json:"url"`
-	VoiceWavURL string `json:"voice_wav_url,omitempty"` // 语音 wav 格式链接
+	VoiceWavURL string `json:"voice_wav_url,omitempty"`  // 语音 wav 格式链接
 	ASRText     string `json:"asr_refer_text,omitempty"` // 语音 ASR 参考结果
 }
 
@@ -701,9 +701,9 @@ func (q *QQChannel) handleC2CMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":      messageID,
-		"sender_id":       senderID,
-		"content_len":     len(content),
+		"message_id":       messageID,
+		"sender_id":        senderID,
+		"content_len":      len(content),
 		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: C2C message received")
 
@@ -765,10 +765,10 @@ func (q *QQChannel) handleGroupMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":      messageID,
-		"sender_id":       senderID,
-		"group_id":        groupID,
-		"content_len":     len(content),
+		"message_id":       messageID,
+		"sender_id":        senderID,
+		"group_id":         groupID,
+		"content_len":      len(content),
 		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: group message received")
 
@@ -835,12 +835,12 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 	content := strings.TrimSpace(msg.Content)
 
 	log.WithFields(log.Fields{
-		"message_id":      messageID,
-		"sender_id":       senderID,
-		"sender_name":     senderName,
-		"channel_id":      channelID,
-		"guild_id":        guildID,
-		"content_len":     len(content),
+		"message_id":       messageID,
+		"sender_id":        senderID,
+		"sender_name":      senderName,
+		"channel_id":       channelID,
+		"guild_id":         guildID,
+		"content_len":      len(content),
 		"attachment_count": len(msg.Attachments),
 	}).Info("QQ: guild message received")
 

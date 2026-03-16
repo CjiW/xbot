@@ -1,0 +1,363 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"xbot/bus"
+	"xbot/llm"
+	log "xbot/logger"
+	"xbot/memory/letta"
+	"xbot/oauth"
+	"xbot/session"
+	"xbot/tools"
+)
+
+// buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
+// 从 processMessage / handleCardResponse 调用。
+func (a *Agent) buildMainRunConfig(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	messages []llm.ChatMessage,
+	tenantSession *session.TenantSession,
+	autoNotify bool,
+) RunConfig {
+	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
+	sessionKey := channel + ":" + chatID
+
+	// 获取用户特定的 LLM 客户端
+	llmClient, model, userMaxCtx := a.llmFactory.GetLLM(senderID)
+	if model == "" {
+		model = a.model
+	}
+	maxContextTokens := a.maxContextTokens
+	if userMaxCtx > 0 {
+		maxContextTokens = userMaxCtx
+	}
+
+	cfg := RunConfig{
+		// 必需
+		LLMClient: llmClient,
+		Model:     model,
+		Tools:     a.tools,
+		Messages:  messages,
+
+		// 身份
+		AgentID:    "main",
+		Channel:    channel,
+		ChatID:     chatID,
+		SenderID:   senderID,
+		SenderName: senderName,
+
+		// 循环控制
+		MaxIterations: a.maxIterations,
+
+		// Session
+		Session:    tenantSession,
+		SessionKey: sessionKey,
+
+		// 发送
+		SendFunc: a.sendMessage,
+
+		// 工具执行
+		ToolExecutor: a.buildToolExecutor(channel, chatID, senderID, senderName),
+		ToolTimeout:  120 * time.Second,
+
+		// 读写分离（主 Agent 始终启用）
+		EnableReadWriteSplit: true,
+
+		// SessionFinalSent 回调
+		SessionFinalSentCallback: func() bool {
+			_, sent := a.sessionFinalSent.Load(sessionKey)
+			return sent
+		},
+
+		// OAuth 处理
+		OAuthHandler: a.buildOAuthHandler(channel, chatID, senderID, sessionKey),
+
+		// Letta 记忆字段
+		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
+	}
+
+	// 进度通知
+	if autoNotify {
+		cfg.ProgressNotifier = func(lines []string) {
+			if len(lines) > 0 {
+				_ = a.sendMessage(channel, chatID, lines[0])
+			}
+		}
+	}
+
+	// 自动压缩
+	if a.enableAutoCompress {
+		cfg.AutoCompress = &CompressConfig{
+			MaxContextTokens:     maxContextTokens,
+			CompressionThreshold: a.compressionThreshold,
+			CompressFunc:         a.compressContext,
+		}
+	}
+
+	// SpawnAgent（主 Agent 可以创建 SubAgent）
+	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
+		return a.spawnSubAgent(ctx, inMsg)
+	}
+
+	return cfg
+}
+
+// buildCronRunConfig 为 Cron 消息构建 RunConfig。
+// Cron 消息不需要自动压缩、进度通知、session 持久化。
+func (a *Agent) buildCronRunConfig(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	messages []llm.ChatMessage,
+) RunConfig {
+	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
+	sessionKey := channel + ":" + chatID
+
+	return RunConfig{
+		LLMClient:  a.llmClient,
+		Model:      a.model,
+		Tools:      a.tools,
+		Messages:   messages,
+		AgentID:    "main",
+		Channel:    channel,
+		ChatID:     chatID,
+		SenderID:   senderID,
+		SenderName: "",
+
+		MaxIterations: a.maxIterations,
+		SessionKey:    sessionKey,
+		SendFunc:      a.sendMessage,
+
+		ToolExecutor:         a.buildToolExecutor(channel, chatID, senderID, ""),
+		ToolTimeout:          120 * time.Second,
+		EnableReadWriteSplit: true,
+
+		SessionFinalSentCallback: func() bool {
+			_, sent := a.sessionFinalSent.Load(sessionKey)
+			return sent
+		},
+
+		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
+	}
+}
+
+// buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
+// SubAgent 使用独立工具集、无 session、无压缩、无进度通知。
+func (a *Agent) buildSubAgentRunConfig(
+	ctx context.Context,
+	parentCtx *tools.ToolContext,
+	task string,
+	systemPrompt string,
+	allowedTools []string,
+) RunConfig {
+	parentAgentID := parentCtx.AgentID
+
+	if systemPrompt == "" {
+		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
+	}
+
+	// 子 Agent 工具集：除 SubAgent 外的所有标准工具（防止递归创建）
+	subTools := a.tools.Clone()
+	subTools.Unregister("SubAgent")
+
+	// 如果指定了工具白名单，只保留白名单中的工具
+	if len(allowedTools) > 0 {
+		allowed := make(map[string]bool, len(allowedTools))
+		for _, name := range allowedTools {
+			allowed[name] = true
+		}
+		for _, tool := range subTools.List() {
+			if !allowed[tool.Name()] {
+				subTools.Unregister(tool.Name())
+			}
+		}
+	}
+
+	// 构建子 Agent 的消息（注入工作目录信息）
+	if parentCtx.SandboxEnabled && parentCtx.SandboxWorkDir != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.SandboxWorkDir)
+	} else if parentCtx.WorkspaceRoot != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.WorkspaceRoot)
+	}
+	messages := []llm.ChatMessage{
+		llm.NewSystemMessage(systemPrompt),
+		llm.NewUserMessage(task),
+	}
+
+	subAgentID := parentAgentID + "/sub"
+
+	return RunConfig{
+		LLMClient: a.llmClient,
+		Model:     a.model,
+		Tools:     subTools,
+		Messages:  messages,
+		AgentID:   subAgentID,
+		Channel:   parentCtx.Channel,
+		ChatID:    parentCtx.ChatID,
+		SenderID:  parentCtx.SenderID,
+
+		MaxIterations: 100,
+		LLMTimeout:    3 * time.Minute,
+		ToolTimeout:   2 * time.Minute,
+
+		// SubAgent 使用简化的工具执行器（直接从 registry 查找）
+		// 不需要 session MCP、激活检查等
+		ToolExecutor: func(execCtx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+			tool, ok := subTools.Get(tc.Name)
+			if !ok {
+				return nil, fmt.Errorf("unknown tool: %s", tc.Name)
+			}
+
+			toolCtx := &tools.ToolContext{
+				Ctx:              execCtx,
+				WorkingDir:       parentCtx.WorkingDir,
+				WorkspaceRoot:    parentCtx.WorkspaceRoot,
+				SandboxWorkDir:   "/workspace",
+				ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
+				SandboxEnabled:   parentCtx.SandboxEnabled,
+				PreferredSandbox: parentCtx.PreferredSandbox,
+				AgentID:          subAgentID,
+			}
+			return tool.Execute(toolCtx, tc.Arguments)
+		},
+	}
+}
+
+// buildToolExecutor 构建主 Agent 的工具执行器。
+// 包含 session MCP 查找、激活检查、Letta 记忆注入等完整逻辑。
+func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+		// 复用现有的 executeTool 方法
+		return a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
+	}
+}
+
+// buildOAuthHandler 构建 OAuth 自动触发处理器。
+func (a *Agent) buildOAuthHandler(channel, chatID, senderID, sessionKey string) func(ctx context.Context, tc llm.ToolCall, execErr error) (string, bool) {
+	return func(ctx context.Context, tc llm.ToolCall, execErr error) (string, bool) {
+		if !oauth.IsTokenNeededError(execErr) {
+			return "", false
+		}
+
+		// 已触发过则跳过，避免重复 OAuth 状态
+		if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"tool":   tc.Name,
+				"reason": "sessionFinalSent already set, skipping duplicate oauth_authorize",
+			}).Info("Skip duplicate OAuth auto-trigger")
+			return "OAuth authorization already in progress.", true
+		}
+
+		log.Ctx(ctx).WithFields(log.Fields{
+			"tool": tc.Name,
+		}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
+
+		oauthTool, ok := a.tools.Get("oauth_authorize")
+		if !ok {
+			return "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration.", true
+		}
+
+		oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
+		oauthCtx := &tools.ToolContext{
+			Ctx:      ctx,
+			Channel:  channel,
+			ChatID:   chatID,
+			SenderID: senderID,
+			SendFunc: a.sendMessage,
+		}
+		oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
+		if oauthErr == nil && oauthResult != nil {
+			a.sessionFinalSent.Store(sessionKey, true)
+			return oauthResult.Summary, true
+		}
+
+		log.Ctx(ctx).WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
+		return "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment.", true
+	}
+}
+
+// buildToolContextExtras 构建 Letta 记忆相关的 ToolContext 扩展字段。
+func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtras {
+	extras := &ToolContextExtras{
+		InjectInbound:           a.injectInbound,
+		Registry:                a.tools,
+		InvalidateAllSessionMCP: func() { a.multiSession.InvalidateAll() },
+	}
+
+	// Wire Letta memory fields if the session uses LettaMemory
+	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
+			extras.TenantID = lm.TenantID()
+			extras.CoreMemory = lm.CoreService()
+			extras.ArchivalMemory = lm.ArchivalService()
+			extras.MemorySvc = lm.MemoryService()
+			extras.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
+			extras.ToolIndexer = lm
+		}
+	}
+
+	return extras
+}
+
+// spawnSubAgent 通过 Run() 创建并运行 SubAgent。
+// 这是 SpawnAgent 回调的实现，将 InboundMessage 转换为 RunConfig 并调用 Run()。
+func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	parentAgentID := msg.ParentAgentID
+	task := msg.Content
+	systemPrompt := msg.SystemPrompt
+	allowedTools := msg.AllowedTools
+
+	// 构建 parentCtx（从 InboundMessage 恢复）
+	originChannel := msg.OriginChannel()
+	originChatID := msg.OriginChatID()
+	originSender := msg.OriginSenderID()
+	if originChannel == "" {
+		originChannel = msg.Channel
+	}
+	if originChatID == "" {
+		originChatID = msg.ChatID
+	}
+	if originSender == "" {
+		originSender = msg.SenderID
+	}
+
+	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, originSender)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to create sub-agent workspace")
+	}
+
+	parentCtx := &tools.ToolContext{
+		Ctx:              ctx,
+		WorkingDir:       a.workDir,
+		WorkspaceRoot:    workspaceRoot,
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    a.globalSkillDirs,
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+		AgentID:          parentAgentID,
+		Channel:          originChannel,
+		ChatID:           originChatID,
+		SenderID:         originSender,
+		SenderName:       msg.SenderName,
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"parent": parentAgentID,
+		"task":   tools.Truncate(task, 80),
+	}).Info("SubAgent started (via Run)")
+
+	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools)
+	out := Run(ctx, cfg)
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"parent":    parentAgentID,
+		"tools":     out.ToolsUsed,
+		"has_error": out.Error != nil,
+	}).Info("SubAgent completed (via Run)")
+
+	return out, nil
+}

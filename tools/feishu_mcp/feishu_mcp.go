@@ -20,8 +20,8 @@ const (
 // FeishuToolBase 飞书工具基类，实现 ToolGroupProvider 和 ChannelProvider 接口
 type FeishuToolBase struct{}
 
-func (b FeishuToolBase) GroupName() string         { return FeishuGroupName }
-func (b FeishuToolBase) GroupInstructions() string { return FeishuGroupInstructions }
+func (b FeishuToolBase) GroupName() string           { return FeishuGroupName }
+func (b FeishuToolBase) GroupInstructions() string   { return FeishuGroupInstructions }
 func (b FeishuToolBase) SupportedChannels() []string { return []string{"feishu"} }
 
 // FeishuMCP provides access to Feishu APIs using the generic OAuth framework.

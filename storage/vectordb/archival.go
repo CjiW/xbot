@@ -11,8 +11,63 @@ import (
 	chromem "github.com/philippgille/chromem-go"
 
 	log "xbot/logger"
+	"xbot/llm"
 	"xbot/memory"
 )
+
+// ContentCompressor compresses content that exceeds token limits.
+// Returns compressed content or error. Used when embedding content exceeds model token limit.
+type ContentCompressor func(ctx context.Context, content string, maxTokens int) (string, error)
+
+// DefaultContentCompressor is a no-op compressor that just truncates.
+// Used when no LLM is available for compression.
+func DefaultContentCompressor(ctx context.Context, content string, maxTokens int) (string, error) {
+	// Rough truncation: ~4 chars per token
+	maxChars := maxTokens * 4
+	if len(content) <= maxChars {
+		return content, nil
+	}
+	return content[:maxChars], nil
+}
+
+// LLMContentCompressor creates a compressor using LLM to summarize content.
+// The compressor preserves key information while fitting within token limits.
+func LLMContentCompressor(llmClient llm.LLM, model string) ContentCompressor {
+	return func(ctx context.Context, content string, maxTokens int) (string, error) {
+		// Rough estimate of current tokens
+		currentTokens := len(content) / 4
+		if currentTokens <= maxTokens {
+			return content, nil
+		}
+
+		prompt := fmt.Sprintf(`Summarize the following content for semantic search embedding. 
+Keep ALL important information (names, dates, facts, decisions, technical details).
+Target length: under %d tokens (currently ~%d tokens).
+
+Content:
+%s
+
+Output the summarized content directly, no explanations.`, maxTokens, currentTokens, content)
+
+		resp, err := llmClient.Generate(ctx, model, []llm.ChatMessage{
+			llm.NewSystemMessage("You are a content compressor. Summarize content for embedding while preserving all important information."),
+			llm.NewUserMessage(prompt),
+		}, nil)
+		if err != nil {
+			return "", fmt.Errorf("LLM compression failed: %w", err)
+		}
+
+		compressed := llm.StripThinkBlocks(resp.Content)
+		log.WithFields(log.Fields{
+			"original_len":    len(content),
+			"compressed_len":  len(compressed),
+			"original_tokens": currentTokens,
+			"target_tokens":   maxTokens,
+		}).Info("Content compressed for embedding")
+
+		return compressed, nil
+	}
+}
 
 // ArchivalEntry represents a single archival memory search result.
 type ArchivalEntry struct {
@@ -28,27 +83,66 @@ type ArchivalEntry struct {
 type ArchivalService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
+	compressor    ContentCompressor // Compresses content exceeding token limits
+	maxTokens     int               // Maximum tokens for embedding model (default 2048)
+	tokenModel    string            // Model name for token counting
+}
+
+// ArchivalServiceOption configures the archival service.
+type ArchivalServiceOption func(*ArchivalService)
+
+// WithCompressor sets the content compressor for the archival service.
+func WithCompressor(compressor ContentCompressor) ArchivalServiceOption {
+	return func(s *ArchivalService) {
+		s.compressor = compressor
+	}
+}
+
+// WithMaxTokens sets the maximum tokens for the embedding model.
+func WithMaxTokens(maxTokens int) ArchivalServiceOption {
+	return func(s *ArchivalService) {
+		s.maxTokens = maxTokens
+	}
+}
+
+// WithTokenModel sets the model name for token counting.
+func WithTokenModel(model string) ArchivalServiceOption {
+	return func(s *ArchivalService) {
+		s.tokenModel = model
+	}
 }
 
 // NewArchivalService creates an archival service backed by chromem-go.
 //
 // persistDir: directory for chromem-go file persistence (created if needed).
 // embeddingFunc: OpenAI-compatible embedding function (nil disables vector search).
-func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc) (*ArchivalService, error) {
+// options: optional configuration (compressor, maxTokens, tokenModel).
+func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...ArchivalServiceOption) (*ArchivalService, error) {
 	db, err := chromem.NewPersistentDB(persistDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
 	}
 
+	s := &ArchivalService{
+		db:            db,
+		embeddingFunc: embeddingFunc,
+		compressor:    DefaultContentCompressor,
+		maxTokens:     2048, // Default for most embedding models
+		tokenModel:    "gpt-4",
+	}
+
+	for _, opt := range options {
+		opt(s)
+	}
+
 	log.WithFields(log.Fields{
 		"persist_dir":    persistDir,
 		"embedding_func": embeddingFunc != nil,
+		"max_tokens":     s.maxTokens,
+		"compressor":     s.compressor != nil,
 	}).Info("Archival memory (chromem-go) initialized")
 
-	return &ArchivalService{
-		db:            db,
-		embeddingFunc: embeddingFunc,
-	}, nil
+	return s, nil
 }
 
 // NewEmbeddingFunc creates a chromem-go EmbeddingFunc from OpenAI-compatible API config.
@@ -72,6 +166,7 @@ func (s *ArchivalService) getOrCreateCollection(tenantID int64) (*chromem.Collec
 // Insert stores a new archival memory entry. Embedding is computed automatically by chromem-go.
 // If ts is non-zero it is recorded as the information timestamp (e.g. conversation time);
 // otherwise the current wall-clock time is used.
+// If content exceeds embedding model token limit, it is compressed using the configured compressor.
 func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content string, ts time.Time) (string, error) {
 	if s.embeddingFunc == nil {
 		return "", fmt.Errorf("archival insert requires embedding configuration (set LLM_EMBEDDING_MODEL)")
@@ -80,6 +175,12 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 	coll, err := s.getOrCreateCollection(tenantID)
 	if err != nil {
 		return "", fmt.Errorf("get collection: %w", err)
+	}
+
+	// Check token count and compress if needed
+	content, err = s.ensureContentFits(ctx, content, "archival")
+	if err != nil {
+		return "", fmt.Errorf("ensure content fits: %w", err)
 	}
 
 	id := uuid.New().String()
@@ -106,6 +207,36 @@ func (s *ArchivalService) Insert(ctx context.Context, tenantID int64, content st
 	}).Debug("Archival memory inserted (chromem-go)")
 
 	return id, nil
+}
+
+// ensureContentFits checks token count and compresses content if it exceeds the limit.
+// Uses accurate token counting via tiktoken, and LLM compression if configured.
+func (s *ArchivalService) ensureContentFits(ctx context.Context, content string, contextHint string) (string, error) {
+	// Count tokens accurately
+	tokenCount, err := llm.CountTokens(content, s.tokenModel)
+	if err != nil {
+		log.WithError(err).Warn("Failed to count tokens, using rough estimate")
+		tokenCount = len(content) / 4 // Fallback to rough estimate
+	}
+
+	if tokenCount <= s.maxTokens {
+		return content, nil
+	}
+
+	log.WithFields(log.Fields{
+		"context":       contextHint,
+		"original_len":  len(content),
+		"token_count":   tokenCount,
+		"max_tokens":    s.maxTokens,
+	}).Warn("Content exceeds embedding model token limit, compressing")
+
+	// Compress using configured compressor (LLM or default truncation)
+	compressed, err := s.compressor(ctx, content, s.maxTokens)
+	if err != nil {
+		return "", fmt.Errorf("compress content: %w", err)
+	}
+
+	return compressed, nil
 }
 
 // Search performs semantic similarity search over archival entries for a tenant.
@@ -172,18 +303,55 @@ func (s *ArchivalService) Count(tenantID int64) (int, error) {
 type ToolIndexService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
+	compressor    ContentCompressor // Compresses content exceeding token limits
+	maxTokens     int               // Maximum tokens for embedding model (default 2048)
+	tokenModel    string            // Model name for token counting
+}
+
+// ToolIndexServiceOption configures the tool index service.
+type ToolIndexServiceOption func(*ToolIndexService)
+
+// WithToolCompressor sets the content compressor for the tool index service.
+func WithToolCompressor(compressor ContentCompressor) ToolIndexServiceOption {
+	return func(s *ToolIndexService) {
+		s.compressor = compressor
+	}
+}
+
+// WithToolMaxTokens sets the maximum tokens for the embedding model.
+func WithToolMaxTokens(maxTokens int) ToolIndexServiceOption {
+	return func(s *ToolIndexService) {
+		s.maxTokens = maxTokens
+	}
+}
+
+// WithToolTokenModel sets the model name for token counting.
+func WithToolTokenModel(model string) ToolIndexServiceOption {
+	return func(s *ToolIndexService) {
+		s.tokenModel = model
+	}
 }
 
 // NewToolIndexService creates a tool index service.
-func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc) (*ToolIndexService, error) {
+func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc, options ...ToolIndexServiceOption) (*ToolIndexService, error) {
 	db, err := chromem.NewPersistentDB(persistDir, false)
 	if err != nil {
 		return nil, fmt.Errorf("create chromem-go DB at %s: %w", persistDir, err)
 	}
-	return &ToolIndexService{
+
+	s := &ToolIndexService{
 		db:            db,
 		embeddingFunc: embeddingFunc,
-	}, nil
+		compressor:    DefaultContentCompressor,
+		maxTokens:     2048,
+		tokenModel:    "gpt-4",
+	}
+
+	for _, opt := range options {
+		opt(s)
+	}
+
+	return s, nil
 }
 
 func (s *ToolIndexService) collectionName(tenantID int64) string {
@@ -203,6 +371,11 @@ func (s *ToolIndexService) InsertTool(ctx context.Context, tenantID int64, toolI
 	coll, err := s.getOrCreateCollection(tenantID)
 	if err != nil {
 		return fmt.Errorf("get collection: %w", err)
+	}
+	// Check token count and compress if needed
+	content, err = s.ensureContentFits(ctx, content, toolID)
+	if err != nil {
+		return fmt.Errorf("ensure content fits: %w", err)
 	}
 	err = coll.AddDocument(ctx, chromem.Document{
 		ID:      toolID,
@@ -292,8 +465,39 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 // This alias is kept for backward compatibility with existing code.
 type ToolIndexEntry = memory.ToolIndexEntry
 
+// ensureContentFits checks token count and compresses content if it exceeds the limit.
+// Uses accurate token counting via tiktoken, and LLM compression if configured.
+func (s *ToolIndexService) ensureContentFits(ctx context.Context, content string, contextHint string) (string, error) {
+	// Count tokens accurately
+	tokenCount, err := llm.CountTokens(content, s.tokenModel)
+	if err != nil {
+		log.WithError(err).Warn("Failed to count tokens, using rough estimate")
+		tokenCount = len(content) / 4 // Fallback to rough estimate
+	}
+
+	if tokenCount <= s.maxTokens {
+		return content, nil
+	}
+
+	log.WithFields(log.Fields{
+		"context":       contextHint,
+		"original_len":  len(content),
+		"token_count":   tokenCount,
+		"max_tokens":    s.maxTokens,
+	}).Warn("Content exceeds embedding model token limit, compressing")
+
+	// Compress using configured compressor (LLM or default truncation)
+	compressed, err := s.compressor(ctx, content, s.maxTokens)
+	if err != nil {
+		return "", fmt.Errorf("compress content: %w", err)
+	}
+
+	return compressed, nil
+}
+
 // IndexTools indexes multiple tools at once using batch concurrent embedding.
 // Channels are stored in Metadata (not Content) to avoid affecting embedding similarity.
+// If content exceeds embedding model token limit, it is compressed using the configured compressor.
 func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools []ToolIndexEntry) error {
 	if s.embeddingFunc == nil {
 		return fmt.Errorf("tool index requires embedding configuration")
@@ -310,9 +514,15 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 	}
 	docs := make([]chromem.Document, len(tools))
 	for i, tool := range tools {
+		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
 		// Content is pure semantic content for embedding (no channel info)
 		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
 			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		// Check token count and compress if needed
+		content, err = s.ensureContentFits(ctx, content, toolID)
+		if err != nil {
+			return fmt.Errorf("ensure content fits for %s: %w", toolID, err)
+		}
 		// Metadata stores structured data (channels) for filtering
 		metadata := map[string]string{
 			"server_name": tool.ServerName,
@@ -322,7 +532,7 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 			metadata["channels"] = strings.Join(tool.Channels, ",")
 		}
 		docs[i] = chromem.Document{
-			ID:       fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
+			ID:       toolID,
 			Content:  content,
 			Metadata: metadata,
 		}

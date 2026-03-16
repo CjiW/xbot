@@ -347,9 +347,12 @@ func New(cfg Config) *Agent {
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
 		session.WithMemoryProvider(memoryProvider),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
-			BaseURL: cfg.EmbeddingBaseURL,
-			APIKey:  cfg.EmbeddingAPIKey,
-			Model:   cfg.EmbeddingModel,
+			BaseURL:    cfg.EmbeddingBaseURL,
+			APIKey:     cfg.EmbeddingAPIKey,
+			Model:      cfg.EmbeddingModel,
+			LLMClient:  cfg.LLM,        // Pass LLM client for content compression
+			LLMModel:   cfg.Model,      // Use main model for compression
+			TokenModel: cfg.Model,      // Use main model for token counting
 		}),
 	)
 	if err != nil {

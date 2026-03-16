@@ -67,18 +67,21 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 // dockerSandbox Docker 沙箱实现
 // 使用 docker commit 持久化用户环境：Close 时将容器提交为用户专属镜像，
 // 下次创建容器时优先使用该镜像，从而完整保留 apt install 等所有变更。
+// 定期用 export+import 扁平化镜像，避免层累积浪费磁盘空间。
 type dockerSandbox struct {
-	image            string // 基础镜像
-	hostWorkDir      string // DinD: 宿主机上对应 WORK_DIR 的路径（空则不翻译）
-	containerWorkDir string // DinD: 容器内 WORK_DIR 的路径（空则不翻译）
-	mu               sync.Mutex
-	containers       map[string]*dockerContainer // userID -> container
+	image              string // 基础镜像
+	hostWorkDir        string // DinD: 宿主机上对应 WORK_DIR 的路径（空则不翻译）
+	containerWorkDir   string // DinD: 容器内 WORK_DIR 的路径（空则不翻译）
+	mu                 sync.Mutex
+	containers         map[string]*dockerContainer // userID -> container
+	commitSquashThreshold int                      // commit 达到此阈值时扁平化镜像
 }
 
 type dockerContainer struct {
-	name    string
-	started bool
-	shell   string // 用户默认 shell（从容器内 /etc/passwd 获取）
+	name         string
+	started      bool
+	shell        string // 用户默认 shell（从容器内 /etc/passwd 获取）
+	commitCount  int    // 自上次扁平化以来的 commit 次数
 }
 
 func (s *dockerSandbox) Name() string { return "docker" }
@@ -104,7 +107,7 @@ func (s *dockerSandbox) Close() error {
 			continue
 		}
 
-		stopCmd := exec.Command("docker", "stop", "-t", "10", c.name)
+		stopCmd := exec.Command("docker", "stop", "-t", "1", c.name)
 		if err := stopCmd.Run(); err != nil {
 			log.WithError(err).Warnf("Failed to stop container %s", c.name)
 		} else {
@@ -122,12 +125,20 @@ func (s *dockerSandbox) Close() error {
 	return nil
 }
 
-// commitIfDirty 仅在容器有文件系统变更时 commit，使用 --squash 压缩层以节省磁盘空间
-// Docker 25.0+ 已将 --squash 从实验性功能毕业为正式功能
+// commitIfDirty 仅在容器有文件系统变更时 commit，保存用户环境状态
+// 通过定期 export+import 扁平化镜像，避免层累积浪费磁盘空间
 func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping commit for system container %s (userID=%q)", containerName, userID)
 		return
+	}
+
+	// 获取容器实例以更新 commit 计数
+	s.mu.Lock()
+	c, containerExists := s.containers[userID]
+	s.mu.Unlock()
+	if !containerExists {
+		c = &dockerContainer{name: containerName, started: true}
 	}
 
 	diffCmd := exec.Command("docker", "diff", containerName)
@@ -150,18 +161,19 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	// 使用 --squash 压缩层，避免层累积浪费磁盘空间
-	commitCmd := exec.Command("docker", "commit", "--squash", containerName, userImage)
+	// commit 容器状态到用户镜像
+	commitCmd := exec.Command("docker", "commit", containerName, userImage)
 	if err := commitCmd.Run(); err != nil {
-		// 如果 --squash 不支持（Docker < 25.0），fallback 到普通 commit
-		log.WithError(err).Warnf("docker commit --squash failed, trying without squash (Docker < 25.0?)")
-		commitCmd = exec.Command("docker", "commit", containerName, userImage)
-		if err := commitCmd.Run(); err != nil {
-			log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
-			return
-		}
+		log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
+		return
 	}
-	log.Infof("Committed container %s to image %s (squashed)", containerName, userImage)
+	log.Infof("Committed container %s to image %s", containerName, userImage)
+
+	// 更新 commit 计数
+	c.commitCount++
+	s.mu.Lock()
+	s.containers[userID] = c
+	s.mu.Unlock()
 
 	// 清理旧镜像：commit 后 tag 指向新镜像，旧镜像变为 dangling
 	if oldImageID != "" {
@@ -180,13 +192,78 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 	}
 
 	// 清理 dangling images（不再被任何 tag 引用的层）
-	// 这是额外的安全措施，确保不残留无用层
 	pruneCmd := exec.Command("docker", "image", "prune", "-f")
 	if out, err := pruneCmd.Output(); err != nil {
 		log.WithError(err).Debugf("Failed to prune dangling images")
 	} else if strings.Contains(string(out), "Total") {
 		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
 	}
+
+	// 检查是否需要扁平化镜像
+	if s.commitSquashThreshold > 0 && c.commitCount >= s.commitSquashThreshold {
+		log.Infof("Commit count reached threshold (%d >= %d), squashing image %s",
+			c.commitCount, s.commitSquashThreshold, userImage)
+		if s.squashImage(containerName, userImage) {
+			c.commitCount = 0
+			s.mu.Lock()
+			s.containers[userID] = c
+			s.mu.Unlock()
+		}
+	}
+}
+
+// squashImage 用 export+import 扁平化镜像，生成单层镜像节省空间
+func (s *dockerSandbox) squashImage(containerName, userImage string) bool {
+	// 1. export 容器文件系统到临时 tar
+	tmpTar := fmt.Sprintf("/tmp/xbot-squash-%s.tar", containerName)
+	exportCmd := exec.Command("docker", "export", "-o", tmpTar, containerName)
+	if out, err := exportCmd.CombinedOutput(); err != nil {
+		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
+		_ = os.Remove(tmpTar)
+		return false
+	}
+	defer os.Remove(tmpTar)
+
+	// 2. 记录旧镜像 ID
+	var oldImageID string
+	idCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
+	if out, err := idCmd.Output(); err == nil {
+		oldImageID = strings.TrimSpace(string(out))
+	}
+
+	// 3. import 为新镜像（只有一层，不引用旧层）
+	importCmd := exec.Command("docker", "import", tmpTar, userImage)
+	if out, err := importCmd.CombinedOutput(); err != nil {
+		log.WithError(err).Warnf("Failed to import squashed image %s: %s", userImage, strings.TrimSpace(string(out)))
+		return false
+	}
+	log.Infof("Squashed image %s (single layer, no layer references)", userImage)
+
+	// 4. 删除旧镜像（如果 ID 不同，说明 import 生成了新镜像）
+	if oldImageID != "" {
+		newIDCmd := exec.Command("docker", "image", "inspect", "-f", "{{.Id}}", userImage)
+		if newOut, err := newIDCmd.Output(); err == nil {
+			newImageID := strings.TrimSpace(string(newOut))
+			if newImageID != oldImageID {
+				rmCmd := exec.Command("docker", "rmi", oldImageID)
+				if err := rmCmd.Run(); err != nil {
+					log.WithError(err).Debugf("Failed to remove old image %s after squash (may still be referenced)", oldImageID[:12])
+				} else {
+					log.Infof("Removed old multi-layer image %s", oldImageID[:12])
+				}
+			}
+		}
+	}
+
+	// 5. 清理 dangling images
+	pruneCmd := exec.Command("docker", "image", "prune", "-f")
+	if out, err := pruneCmd.Output(); err != nil {
+		log.WithError(err).Debugf("Failed to prune dangling images after squash")
+	} else if strings.Contains(string(out), "Total") {
+		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
+	}
+
+	return true
 }
 
 // userImageName 返回用户专属镜像名称
@@ -475,7 +552,10 @@ func NewSandbox(mode, image string) Sandbox {
 	case "none":
 		return &NoneSandbox{}
 	case "docker":
-		s := &dockerSandbox{image: image}
+		s := &dockerSandbox{
+			image:                 image,
+			commitSquashThreshold: cfg.Sandbox.CommitSquashThreshold,
+		}
 		s.detectDinD(cfg)
 		return s
 	default:

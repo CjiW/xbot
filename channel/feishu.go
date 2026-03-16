@@ -36,14 +36,14 @@ type FeishuConfig struct {
 
 // FeishuChannel 飞书渠道实现
 type FeishuChannel struct {
-	config      FeishuConfig
-	msgBus      *bus.MessageBus
-	client      *lark.Client
-	wsClient    *larkws.Client
-	running     bool
-	mu          sync.Mutex
-	botOpenID   string
-	botName     string // 机器人名称，用于引用消息中标识自己
+	config    FeishuConfig
+	msgBus    *bus.MessageBus
+	client    *lark.Client
+	wsClient  *larkws.Client
+	running   bool
+	mu        sync.Mutex
+	botOpenID string
+	botName   string // 机器人名称，用于引用消息中标识自己
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}

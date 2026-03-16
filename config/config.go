@@ -22,9 +22,10 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode        string // 沙箱模式: "none", "docker"
-	DockerImage string // Docker 镜像（如 "ubuntu:22.04"）
-	HostWorkDir string // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
+	Mode                  string // 沙箱模式: "none", "docker"
+	DockerImage           string // Docker 镜像（如 "ubuntu:22.04"）
+	HostWorkDir           string // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
+	CommitSquashThreshold int    // commit 达到此阈值时，用 export+import 扁平化镜像（默认 5，设为 0 禁用）
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -37,9 +38,10 @@ type QQConfig struct {
 
 // EmbeddingConfig Embedding 配置
 type EmbeddingConfig struct {
-	BaseURL string // Embedding API 基础 URL（默认回退到 LLM_BASE_URL）
-	APIKey  string // Embedding API Key（默认回退到 LLM_API_KEY）
-	Model   string // Embedding 模型名称（如 bge-m3、text-embedding-3-small）
+	BaseURL   string // Embedding API 基础 URL（默认回退到 LLM_BASE_URL）
+	APIKey    string // Embedding API Key（默认回退到 LLM_API_KEY）
+	Model     string // Embedding 模型名称（如 bge-m3、text-embedding-3-small）
+	MaxTokens int    // Embedding 模型最大 token 数（默认 2048，超限时用 LLM 压缩）
 }
 
 // StartupNotifyConfig 启动通知配置
@@ -176,9 +178,10 @@ func Load() *Config {
 			AllowFrom:         splitEnv("FEISHU_ALLOW_FROM"),
 		},
 		Embedding: EmbeddingConfig{
-			BaseURL: getEnvOrDefault("LLM_EMBEDDING_BASE_URL", ""),
-			APIKey:  getEnvOrDefault("LLM_EMBEDDING_API_KEY", ""),
-			Model:   getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),
+			BaseURL:   getEnvOrDefault("LLM_EMBEDDING_BASE_URL", ""),
+			APIKey:    getEnvOrDefault("LLM_EMBEDDING_API_KEY", ""),
+			Model:     getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),
+			MaxTokens: getEnvIntOrDefault("LLM_EMBEDDING_MAX_TOKENS", 2048),
 		},
 		Agent: AgentConfig{
 			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 100),
@@ -200,9 +203,10 @@ func Load() *Config {
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},
 		Sandbox: SandboxConfig{
-			Mode:        getEnvOrDefault("SANDBOX_MODE", "docker"),
-			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
-			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
+			Mode:                  getEnvOrDefault("SANDBOX_MODE", "docker"),
+			DockerImage:           getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
+			HostWorkDir:           getEnvOrDefault("HOST_WORK_DIR", ""),
+			CommitSquashThreshold: getEnvIntOrDefault("SANDBOX_COMMIT_SQUASH_THRESHOLD", 5),
 		},
 		StartupNotify: StartupNotifyConfig{
 			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),

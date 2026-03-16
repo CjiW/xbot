@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
+	logrus "xbot/logger"
+
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/packages/ssestream"
-	logrus "xbot/logger"
 )
 
 // OpenAILLM OpenAI LLM 实现
@@ -188,14 +189,16 @@ func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam
 // buildParams 构建请求参数
 func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition) openai.ChatCompletionNewParams {
 	openaiMessages := toOpenAIMessages(messages)
-	openaiTools := toOpenAITools(tools)
 
-	return openai.ChatCompletionNewParams{
+	p := openai.ChatCompletionNewParams{
 		Model:    model,
 		Messages: openaiMessages,
 		N:        param.Opt[int64]{Value: 1},
-		Tools:    openaiTools,
 	}
+	if len(tools) > 0 {
+		p.Tools = toOpenAITools(tools)
+	}
+	return p
 }
 
 // Generate 生成 LLM 响应

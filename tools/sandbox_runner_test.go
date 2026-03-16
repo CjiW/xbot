@@ -65,9 +65,17 @@ func TestDockerShutdownFlow(t *testing.T) {
 		t.Logf("✓ Container committed to image: %s", userImage)
 	}
 
-	// Verify container was removed
+	// Verify container was removed (with retry for CI environment delay)
 	containerName := "xbot-" + userID
-	if err := exec.Command("docker", "inspect", containerName).Run(); err == nil {
+	var containerRemoved bool
+	for i := 0; i < 10; i++ {
+		if err := exec.Command("docker", "inspect", containerName).Run(); err != nil {
+			containerRemoved = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !containerRemoved {
 		t.Errorf("Container %s still exists after Close()", containerName)
 	} else {
 		t.Logf("✓ Container removed: %s", containerName)

@@ -36,10 +36,10 @@ type FeishuConfig struct {
 
 // FeishuChannel 飞书渠道实现
 type FeishuChannel struct {
-	config    FeishuConfig
-	msgBus    *bus.MessageBus
-	client    *lark.Client
-	wsClient  *larkws.Client
+	config      FeishuConfig
+	msgBus      *bus.MessageBus
+	client      *lark.Client
+	wsClient    *larkws.Client
 	running     bool
 	mu          sync.Mutex
 	botOpenID   string

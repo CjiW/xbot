@@ -712,7 +712,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			}
 		}()
 
-		// defer 确保 cancelCh 清理：即使 processMessage panic 也不会泄漏
+		// 执行消息处理，完成后检查是否被取消
+		// 注意：必须在 reqCancel() 调用前检查，否则 reqCtx.Err() 总是返回 Canceled
+		wasCancelled := reqCtx.Err() == context.Canceled
 		func() {
 			defer func() {
 				reqCancel()
@@ -720,9 +722,13 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 				<-sem // 释放槽位
 			}()
 			response, err = a.processMessage(reqCtx, msg)
+			// 在 defer 执行前检查是否被取消（processMessage 过程中用户可能 /cancel）
+			if reqCtx.Err() == context.Canceled {
+				wasCancelled = true
+			}
 		}()
 
-		if reqCtx.Err() == context.Canceled && ctx.Err() == nil {
+		if wasCancelled && ctx.Err() == nil {
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
 			continue

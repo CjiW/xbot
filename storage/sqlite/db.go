@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -189,7 +189,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (8);
+INSERT INTO schema_version (version) VALUES (9);
 
 CREATE TABLE user_llm_configs (
     sender_id TEXT PRIMARY KEY,
@@ -413,6 +413,76 @@ UPDATE schema_version SET version = 6;
 
 		// Update schema version
 		if _, err := conn.Exec("UPDATE schema_version SET version = 8"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+	}
+
+	if from < 9 {
+		// v9: Fix incorrect PRIMARY KEY from buggy v6->v8 migration
+		// The buggy migration (commit 92403ae) added user_id column but didn't update PRIMARY KEY.
+		// This caused PRIMARY KEY to remain (tenant_id, block_name) instead of (tenant_id, block_name, user_id).
+		// Result: per-user human blocks were overwriting each other.
+
+		// Check if PRIMARY KEY is correct by inspecting pragma_table_info
+		var pkCount int
+		err := conn.QueryRow(`
+			SELECT COUNT(*) FROM pragma_table_info('core_memory_blocks') WHERE pk > 0
+		`).Scan(&pkCount)
+		if err != nil {
+			return fmt.Errorf("migrate v8->v9: check primary key: %w", err)
+		}
+
+		// If pkCount is 2, PRIMARY KEY is wrong (tenant_id, block_name)
+		// If pkCount is 3, PRIMARY KEY is correct (tenant_id, block_name, user_id)
+		if pkCount == 2 {
+			log.Warn("Detected incorrect PRIMARY KEY (2 columns), rebuilding core_memory_blocks table...")
+
+			// Step 1: Create new table with correct PRIMARY KEY
+			_, err = conn.Exec(`
+				CREATE TABLE core_memory_blocks_new (
+					tenant_id INTEGER NOT NULL,
+					block_name TEXT NOT NULL,
+					user_id TEXT NOT NULL DEFAULT '',
+					content TEXT NOT NULL DEFAULT '',
+					char_limit INTEGER NOT NULL DEFAULT 2000,
+					updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+					PRIMARY KEY (tenant_id, block_name, user_id),
+					FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+				)
+			`)
+			if err != nil {
+				return fmt.Errorf("migrate v8->v9: create new table: %w", err)
+			}
+
+			// Step 2: Copy existing data (user_id may already exist or default to '')
+			_, err = conn.Exec(`
+				INSERT INTO core_memory_blocks_new (tenant_id, block_name, user_id, content, char_limit, updated_at)
+				SELECT tenant_id, block_name, COALESCE(user_id, ''), content, char_limit, updated_at
+				FROM core_memory_blocks
+			`)
+			if err != nil {
+				return fmt.Errorf("migrate v8->v9: copy data: %w", err)
+			}
+
+			// Step 3: Drop old table
+			_, err = conn.Exec("DROP TABLE core_memory_blocks")
+			if err != nil {
+				return fmt.Errorf("migrate v8->v9: drop old table: %w", err)
+			}
+
+			// Step 4: Rename new table
+			_, err = conn.Exec("ALTER TABLE core_memory_blocks_new RENAME TO core_memory_blocks")
+			if err != nil {
+				return fmt.Errorf("migrate v8->v9: rename table: %w", err)
+			}
+
+			log.Info("Database migrated to v9 (fixed PRIMARY KEY to include user_id)")
+		} else {
+			log.WithField("pk_count", pkCount).Info("PRIMARY KEY already correct, skipping v9 rebuild")
+		}
+
+		// Update schema version
+		if _, err := conn.Exec("UPDATE schema_version SET version = 9"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}
 	}

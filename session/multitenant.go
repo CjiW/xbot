@@ -331,7 +331,8 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 		entriesCopy := make([]memory.ToolIndexEntry, len(entries))
 		copy(entriesCopy, entries)
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			// Use 5 minute timeout for embedding operations (ollama can be slow)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			if err := m.IndexToolsForTenant(ctx, tenantID, entriesCopy); err != nil {
 				log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)

@@ -292,8 +292,23 @@ func (s *ToolIndexService) ClearTools(ctx context.Context, tenantID int64) error
 // This alias is kept for backward compatibility with existing code.
 type ToolIndexEntry = memory.ToolIndexEntry
 
+// maxEmbeddingContentChars is the maximum characters for embedding content.
+// Most embedding models have token limits (e.g., nomic-embed-text: 2048-8192 tokens).
+// Using ~6000 chars as a safe default (roughly 2000 tokens for most tokenizers).
+const maxEmbeddingContentChars = 6000
+
+// truncateContent truncates content to maxEmbeddingContentChars runes for embedding.
+func truncateContent(content string) string {
+	runes := []rune(content)
+	if len(runes) <= maxEmbeddingContentChars {
+		return content
+	}
+	return string(runes[:maxEmbeddingContentChars]) + "...[truncated]"
+}
+
 // IndexTools indexes multiple tools at once using batch concurrent embedding.
 // Channels are stored in Metadata (not Content) to avoid affecting embedding similarity.
+// Content is truncated to maxEmbeddingContentChars to avoid exceeding model context limits.
 func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools []ToolIndexEntry) error {
 	if s.embeddingFunc == nil {
 		return fmt.Errorf("tool index requires embedding configuration")
@@ -313,6 +328,8 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 		// Content is pure semantic content for embedding (no channel info)
 		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
 			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		// Truncate content to avoid exceeding embedding model context limits
+		content = truncateContent(content)
 		// Metadata stores structured data (channels) for filtering
 		metadata := map[string]string{
 			"server_name": tool.ServerName,

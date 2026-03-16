@@ -19,7 +19,6 @@ import (
 	log "xbot/logger"
 	"xbot/memory"
 	"xbot/memory/letta"
-	"xbot/oauth"
 	"xbot/session"
 	"xbot/storage/sqlite"
 	"xbot/tools"
@@ -841,11 +840,15 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, err
 	}
 
-	// 运行 Agent 循环
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, preReplyNotify, tenantSession)
-	if err != nil {
-		return nil, err
+	// 运行 Agent 循环（统一 Run）
+	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
+	out := Run(ctx, cfg)
+	if out.Error != nil {
+		return nil, out.Error
 	}
+	finalContent := out.Content
+	toolsUsed := out.ToolsUsed
+	waitingUser := out.WaitingUser
 
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
@@ -937,11 +940,15 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	mc := NewCronMessageContext(msg.Content)
 	messages := a.cronPipeline.Run(mc)
 
-	// 运行 Agent 循环（传入创建者 senderID 而非空值，cron 不需要自动压缩，传 nil）
-	finalContent, _, _, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, senderID, "", false, nil)
-	if err != nil {
-		return nil, err
+	// 运行 Agent 循环（统一 Run，cron 不需要自动压缩和进度通知）
+	cronMsg := msg
+	cronMsg.SenderID = senderID
+	cronCfg := a.buildCronRunConfig(ctx, cronMsg, messages)
+	cronOut := Run(ctx, cronCfg)
+	if cronOut.Error != nil {
+		return nil, cronOut.Error
 	}
+	finalContent := cronOut.Content
 
 	if finalContent == "" {
 		finalContent = "定时任务已执行，但无输出内容。"
@@ -1514,10 +1521,15 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		return nil, err
 	}
 
-	finalContent, toolsUsed, waitingUser, err := a.runLoop(ctx, messages, msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName, true, tenantSession)
-	if err != nil {
-		return nil, err
+	// 运行 Agent 循环（统一 Run）
+	cardCfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, true)
+	cardOut := Run(ctx, cardCfg)
+	if cardOut.Error != nil {
+		return nil, cardOut.Error
 	}
+	finalContent := cardOut.Content
+	toolsUsed := cardOut.ToolsUsed
+	waitingUser := cardOut.WaitingUser
 
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
@@ -1640,425 +1652,6 @@ func summarizeRetryError(err error) string {
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
 // autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
 // tenantSession 用于自动压缩后持久化压缩结果（可传 nil）
-// 返回: (finalContent, toolsUsed, waitingUser, error)
-func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel, chatID, senderID, senderName string, autoNotify bool, tenantSession *session.TenantSession) (string, []string, bool, error) {
-	var toolsUsed []string
-	var waitingUser bool
-	var progressLines []string
-
-	notifyProgress := func(extra string) {
-		if !autoNotify {
-			return
-		}
-		lines := progressLines
-		if extra != "" {
-			lines = append(append([]string{}, progressLines...), extra)
-		}
-		// 在非引用行和引用行之间插入空行，避免飞书 markdown 渲染粘连
-		var buf strings.Builder
-		for i, line := range lines {
-			if i > 0 {
-				prev := lines[i-1]
-				prevIsQuote := strings.HasPrefix(prev, "> ")
-				currIsQuote := strings.HasPrefix(line, "> ")
-				if prevIsQuote != currIsQuote {
-					buf.WriteByte('\n') // 额外空行分隔引用块和正文
-				}
-			}
-			buf.WriteString(line)
-			if i < len(lines)-1 {
-				buf.WriteByte('\n')
-			}
-		}
-		_ = a.sendMessage(channel, chatID, buf.String())
-	}
-
-	// 获取用户特定的 LLM 客户端
-	llmClient, model, userMaxCtx := a.llmFactory.GetLLM(senderID)
-	if model == "" {
-		model = a.model
-	}
-	// 用户设置了 max_context 时覆盖全局值
-	maxContextTokens := a.maxContextTokens
-	if userMaxCtx > 0 {
-		maxContextTokens = userMaxCtx
-	}
-
-	// 推进 round 计数，自动清理长期未使用的工具激活
-	sessionKey := channel + ":" + chatID
-	a.tools.TickSession(sessionKey)
-
-	// 压缩检测和执行的辅助函数：在每次 LLM 调用前检测并执行压缩
-	maybeCompress := func() {
-		if !a.enableAutoCompress || len(messages) <= 3 {
-			return
-		}
-
-		// 计算 messages token
-		msgTokens, err := llm.CountMessagesTokens(messages, model)
-		if err != nil {
-			return
-		}
-
-		// 计算 tools token
-		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
-		toolTokens, _ := llm.CountToolsTokens(toolDefs, model)
-
-		// 总 token = messages + tools
-		tokenCount := msgTokens + toolTokens
-
-		threshold := int(float64(maxContextTokens) * a.compressionThreshold)
-		if tokenCount < threshold {
-			return
-		}
-
-		// 发送压缩进度信息
-		if autoNotify {
-			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", tokenCount))
-			notifyProgress("")
-		}
-
-		log.Ctx(ctx).WithFields(log.Fields{
-			"tokens":    tokenCount,
-			"threshold": threshold,
-		}).Info("Auto context compression triggered")
-
-		compressed, compressErr := a.compressContext(ctx, messages, model)
-		if compressErr == nil {
-			messages = compressed
-
-			// 发送压缩完成进度信息
-			newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
-			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
-				notifyProgress("")
-			}
-			log.Ctx(ctx).WithFields(log.Fields{
-				"old_tokens": tokenCount,
-				"new_tokens": newTokenCount,
-			}).Info("Auto context compression completed")
-
-			// 持久化压缩结果到 session（不写入 system 消息，否则下次 GetHistory 会带回 system，导致多条 system + 400 + 不同人 sysprompt 混用）
-			if tenantSession != nil {
-				if err := tenantSession.Clear(); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
-				} else {
-					allOk := true
-					systemSkipped := 0
-					for _, msg := range compressed {
-						if msg.Role == "system" {
-							systemSkipped++
-							continue
-						}
-						assertNoSystemPersist(msg)
-						if err := tenantSession.AddMessage(msg); err != nil {
-							log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
-							allOk = false
-							break
-						}
-					}
-					if allOk {
-						log.Ctx(ctx).Info("Auto compression persisted to session")
-					} else {
-						log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
-					}
-				}
-			}
-		} else {
-			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
-		}
-	}
-
-	// 注入 LLM 重试通知回调：重试时实时更新用户可见的进度消息
-	retryCtx := llm.WithRetryNotify(ctx, func(attempt, max uint, err error) {
-		if !autoNotify {
-			return
-		}
-		reason := summarizeRetryError(err)
-		progressLines = append(progressLines,
-			fmt.Sprintf("> ⚠️ LLM 请求失败 (%s)，重试中 %d/%d ...", reason, attempt, max))
-		notifyProgress("")
-	})
-
-	for i := 0; i < a.maxIterations; i++ {
-		// 每次 LLM 调用前检测是否需要压缩
-		maybeCompress()
-
-		if autoNotify && i > 0 {
-			notifyProgress("> 💭 思考中...")
-		}
-
-		// 使用会话特定的工具定义（包含会话的 MCP 工具）
-		toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
-		// assert: 发给 LLM 的消息必须恰好一条 system，否则易触发 400 / 行为异常
-		var systemCount int
-		for _, m := range messages {
-			if m.Role == "system" {
-				systemCount++
-			}
-		}
-		if systemCount != 1 {
-			panic("assert: LLM messages must have exactly one system message; got " + fmt.Sprint(systemCount))
-		}
-		response, err := llmClient.Generate(retryCtx, model, messages, toolDefs)
-		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
-			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
-			if autoNotify {
-				progressLines = append(progressLines, "> ⚠️ 输入超限，正在强制压缩上下文...")
-				notifyProgress("")
-			}
-			compressed, compressErr := a.compressContext(ctx, messages, model)
-			if compressErr != nil {
-				return "", toolsUsed, false, fmt.Errorf("%w: context compression after input-too-long also failed: %w (original: %v)", ErrLLMGenerate, compressErr, err)
-			}
-			messages = compressed
-			if autoNotify {
-				newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
-				notifyProgress("")
-			}
-			if tenantSession != nil {
-				if clearErr := tenantSession.Clear(); clearErr == nil {
-					for _, msg := range compressed {
-						if msg.Role == "system" {
-							continue
-						}
-						assertNoSystemPersist(msg)
-						if addErr := tenantSession.AddMessage(msg); addErr != nil {
-							log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
-							break
-						}
-					}
-				}
-			}
-			response, err = llmClient.Generate(retryCtx, model, messages, toolDefs)
-		}
-		if err != nil {
-			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)
-		}
-
-		if !response.HasToolCalls() {
-			// 返回给用户的内容需要过滤掉think块
-			content := llm.StripThinkBlocks(response.Content)
-			return content, toolsUsed, false, nil
-		}
-
-		// 过滤掉think块，用于用户展示和进度通知
-		cleanContent := llm.StripThinkBlocks(response.Content)
-
-		// 模型的中间思考内容加入进度（不加引用前缀，保留原始 markdown 格式）
-		if autoNotify && cleanContent != "" {
-			progressLines = append(progressLines, cleanContent)
-		}
-
-		// 记录 assistant 消息（含 tool_calls），保留原始content（包括think块）
-		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
-		assistantMsg := llm.ChatMessage{
-			Role:      "assistant",
-			Content:   response.Content, // 保留原始content，包含think块
-			ToolCalls: response.ToolCalls,
-		}
-		messages = append(messages, assistantMsg)
-
-		// 将工具调用分为只读和写操作两组：只读并行执行，写操作串行执行
-		readOnlyTools := map[string]bool{
-			"Read": true, "Grep": true, "Glob": true,
-			"WebSearch": true, "ChatHistory": true,
-		}
-
-		type toolCallEntry struct {
-			index int
-			tc    llm.ToolCall
-		}
-		var readOps, writeOps []toolCallEntry
-		for idx, tc := range response.ToolCalls {
-			entry := toolCallEntry{index: idx, tc: tc}
-			if readOnlyTools[tc.Name] {
-				readOps = append(readOps, entry)
-			} else {
-				writeOps = append(writeOps, entry)
-			}
-		}
-
-		// 预分配结果槽位（按原始顺序）
-		type toolExecResult struct {
-			content    string
-			llmContent string
-			result     *tools.ToolResult
-			err        error
-			elapsed    time.Duration
-		}
-		execResults := make([]toolExecResult, len(response.ToolCalls))
-
-		// 为所有工具调用添加进度行占位符
-		progressStartIdx := len(progressLines)
-		for _, tc := range response.ToolCalls {
-			toolsUsed = append(toolsUsed, tc.Name)
-			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
-			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
-			}
-		}
-		if autoNotify {
-			notifyProgress("")
-		}
-
-		// execOne 执行单个工具并记录结果
-		execOne := func(entry toolCallEntry) {
-			tc := entry.tc
-			argPreview := tc.Arguments
-			if r := []rune(argPreview); len(r) > 200 {
-				argPreview = string(r[:200]) + "..."
-			}
-			log.Ctx(ctx).WithFields(log.Fields{
-				"tool": tc.Name,
-				"id":   tc.ID,
-			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
-
-			start := time.Now()
-			result, execErr := a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
-			elapsed := time.Since(start)
-			execResults[entry.index] = toolExecResult{err: execErr, result: result, elapsed: elapsed}
-
-			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
-			if execErr != nil {
-				log.Ctx(ctx).WithFields(log.Fields{
-					"tool":    tc.Name,
-					"elapsed": elapsed.Round(time.Millisecond),
-				}).WithError(execErr).Warn("Tool failed")
-				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
-				execResults[entry.index].llmContent = execResults[entry.index].content
-
-				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
-				}
-			} else {
-				execResults[entry.index].content = result.Summary
-				execResults[entry.index].llmContent = buildToolMessageContent(result)
-
-				if result.IsError {
-					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execResults[entry.index].llmContent)
-				}
-
-				resultPreview := result.Summary
-				if r := []rune(resultPreview); len(r) > 200 {
-					resultPreview = string(r[:200]) + "..."
-				}
-				log.Ctx(ctx).WithFields(log.Fields{
-					"tool":    tc.Name,
-					"elapsed": elapsed.Round(time.Millisecond),
-				}).Infof("Tool done: %s", resultPreview)
-
-				if autoNotify {
-					icon := "✅"
-					if result.IsError {
-						icon = "❌"
-					}
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> %s %s (%s)", icon, toolLabel, elapsed.Round(time.Millisecond))
-				}
-			}
-		}
-
-		// Phase 1: 只读操作并行执行（限制并发数，避免资源耗尽）
-		if len(readOps) > 0 {
-			const maxParallel = 8
-			sem := make(chan struct{}, maxParallel)
-			var wg sync.WaitGroup
-			for _, entry := range readOps {
-				wg.Add(1)
-				sem <- struct{}{} // 获取信号量
-				go func(e toolCallEntry) {
-					defer wg.Done()
-					defer func() { <-sem }() // 释放信号量
-					execOne(e)
-				}(entry)
-			}
-			wg.Wait()
-			if autoNotify {
-				notifyProgress("")
-			}
-		}
-
-		// Phase 2: 写操作串行执行
-		for _, entry := range writeOps {
-			execOne(entry)
-			if autoNotify {
-				notifyProgress("")
-			}
-		}
-
-		// 按原始顺序处理结果：OAuth 处理、sessionFinalSent 检查、构建 tool messages
-		sessionKey = channel + ":" + chatID
-		for idx, tc := range response.ToolCalls {
-			r := execResults[idx]
-			content := r.llmContent
-
-			// OAuth 自动触发（已触发过则跳过，避免重复 OAuth 状态）
-			if r.err != nil && oauth.IsTokenNeededError(r.err) {
-				if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
-					log.Ctx(ctx).WithFields(log.Fields{
-						"tool":   tc.Name,
-						"reason": "sessionFinalSent already set, skipping duplicate oauth_authorize",
-					}).Info("Skip duplicate OAuth auto-trigger")
-					content = "OAuth authorization already in progress."
-				} else {
-					log.Ctx(ctx).WithFields(log.Fields{
-						"tool":    tc.Name,
-						"elapsed": r.elapsed.Round(time.Millisecond),
-					}).Info("OAuth token needed, auto-triggering oauth_authorize tool")
-
-					if oauthTool, ok := a.tools.Get("oauth_authorize"); ok {
-						oauthInput := fmt.Sprintf(`{"provider": "feishu", "reason": "needed to access %s"}`, tc.Name)
-						oauthCtx := &tools.ToolContext{
-							Ctx:      ctx,
-							Channel:  channel,
-							ChatID:   chatID,
-							SenderID: senderID,
-							SendFunc: a.sendMessage,
-						}
-						oauthResult, oauthErr := oauthTool.Execute(oauthCtx, oauthInput)
-						if oauthErr == nil && oauthResult != nil {
-							content = oauthResult.Summary
-							a.sessionFinalSent.Store(sessionKey, true)
-							autoNotify = false
-							waitingUser = oauthResult.WaitingUser
-						} else {
-							content = "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment."
-							log.Ctx(ctx).WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
-						}
-					} else {
-						content = "OAuth authorization required but oauth_authorize tool not found. Please enable OAuth in configuration."
-					}
-				}
-			}
-
-			// 检查 sessionFinalSent
-			if _, sent := a.sessionFinalSent.Load(sessionKey); sent {
-				autoNotify = false
-				progressLines = nil
-			}
-
-			if r.result != nil && r.result.WaitingUser {
-				waitingUser = true
-			}
-
-			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
-			if r.result != nil && r.result.Detail != "" {
-				toolMsg.Detail = r.result.Detail
-			}
-			messages = append(messages, toolMsg)
-		}
-
-		// 如果有任何工具标记为等待用户响应，则停止循环，不生成额外回复
-		if waitingUser {
-			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
-			return "", toolsUsed, true, nil
-		}
-	}
-
-	return "已达到最大迭代次数，请重新描述你的需求。", toolsUsed, false, nil
-}
-
 // executeTool 执行单个工具调用
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall, channel, chatID, senderID, senderName string) (*tools.ToolResult, error) {
 	// 会话级别的工具优先级高于全局注册表

@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Pre-push hook: run CI checks before pushing
+# Install: cp scripts/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# Skip with: git push --no-verify
+
+set -e
+
+echo "Running pre-push checks..."
+
+# Run lint
+echo "==> Running lint..."
+golangci-lint run ./...
+
+# Run build
+echo "==> Running build..."
+go build ./...
+
+# Run tests
+echo "==> Running tests..."
+go test -v -race -timeout 5m ./...
+
+echo "✅ All checks passed!"

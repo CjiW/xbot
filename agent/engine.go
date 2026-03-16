@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"xbot/bus"
@@ -12,6 +14,8 @@ import (
 	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 	"xbot/tools"
+
+	log "xbot/logger"
 )
 
 // RunConfig 统一的 Agent 运行配置。
@@ -63,6 +67,25 @@ type RunConfig struct {
 	// OAuthHandler OAuth 自动触发处理器（nil = 不处理 OAuth）
 	// 返回 (content, handled)：handled=true 时用 content 替换工具错误
 	OAuthHandler func(ctx context.Context, tc llm.ToolCall, execErr error) (content string, handled bool)
+
+	// ToolExecutor 工具执行函数。
+	// 主 Agent 注入带 session MCP、激活检查、Letta memory 的完整版本；
+	// SubAgent 注入简化版本（仅 registry lookup + execute）。
+	// nil 时使用 defaultToolExecutor（从 cfg.Tools 查找并执行）。
+	ToolExecutor func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error)
+
+	// LLMTimeout 单次 LLM 调用超时（0 = 不设超时）
+	LLMTimeout time.Duration
+
+	// ToolTimeout 单个工具调用超时（0 = 使用默认 120s）
+	ToolTimeout time.Duration
+
+	// EnableReadWriteSplit 启用读写分离并行执行（默认 false = 全部串行）
+	EnableReadWriteSplit bool
+
+	// SessionFinalSentCallback 工具发送最终回复时的回调（如飞书卡片）。
+	// 返回 true 表示已发送最终回复，后续进度通知应停止。
+	SessionFinalSentCallback func() bool
 }
 
 // CompressConfig 自动压缩配置。
@@ -89,27 +112,462 @@ type ToolContextExtras struct {
 // DefaultMaxIterations 默认最大迭代次数。
 const DefaultMaxIterations = 100
 
+// readOnlyTools 只读工具集合，用于读写分离并行执行。
+var readOnlyTools = map[string]bool{
+	"Read": true, "Grep": true, "Glob": true,
+	"WebSearch": true, "ChatHistory": true,
+}
+
 // Run 统一的 Agent 循环。
 //
 // 输入：RunConfig（从 InboundMessage 构建）
-// 输出：*OutboundMessage（可直接发送到 IM 或返回给父 Agent）
+// 输出：*bus.OutboundMessage（可直接发送到 IM 或返回给父 Agent）
 //
-// 当前为接口占位，Phase 1 实现时将从 runLoop + RunSubAgent 提取合并。
-// TODO(#127): 实现统一循环，替换 runLoop 和 RunSubAgent
+// 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
+//   - 主 Agent: ToolExecutor=executeTool, ProgressNotifier=sendMessage, AutoCompress=enabled, ...
+//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, AutoCompress=nil, ...
 func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = DefaultMaxIterations
 	}
 
-	_ = maxIter // will be used when implemented
+	sessionKey := cfg.SessionKey
+	if sessionKey == "" && cfg.Channel != "" {
+		sessionKey = cfg.Channel + ":" + cfg.ChatID
+	}
 
-	// placeholder: 直接返回错误，表示尚未实现
+	toolExecutor := cfg.ToolExecutor
+	if toolExecutor == nil {
+		toolExecutor = defaultToolExecutor(&cfg)
+	}
+
+	toolTimeout := cfg.ToolTimeout
+	if toolTimeout == 0 {
+		toolTimeout = 120 * time.Second
+	}
+
+	messages := cfg.Messages
+	var toolsUsed []string
+	var waitingUser bool
+	var progressLines []string
+	var lastContent string // 用于 LLM 错误时的降级返回
+
+	autoNotify := cfg.ProgressNotifier != nil
+
+	// --- 进度通知 ---
+	notifyProgress := func(extra string) {
+		if !autoNotify {
+			return
+		}
+		lines := progressLines
+		if extra != "" {
+			lines = append(append([]string{}, progressLines...), extra)
+		}
+		// 在非引用行和引用行之间插入空行，避免飞书 markdown 渲染粘连
+		var buf strings.Builder
+		for i, line := range lines {
+			if i > 0 {
+				prev := lines[i-1]
+				prevIsQuote := strings.HasPrefix(prev, "> ")
+				currIsQuote := strings.HasPrefix(line, "> ")
+				if prevIsQuote != currIsQuote {
+					buf.WriteByte('\n')
+				}
+			}
+			buf.WriteString(line)
+			if i < len(lines)-1 {
+				buf.WriteByte('\n')
+			}
+		}
+		cfg.ProgressNotifier([]string{buf.String()})
+	}
+
+	// --- 自动压缩 ---
+	maybeCompress := func() {
+		cc := cfg.AutoCompress
+		if cc == nil || len(messages) <= 3 {
+			return
+		}
+
+		msgTokens, err := llm.CountMessagesTokens(messages, cfg.Model)
+		if err != nil {
+			return
+		}
+
+		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
+		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
+		tokenCount := msgTokens + toolTokens
+
+		threshold := int(float64(cc.MaxContextTokens) * cc.CompressionThreshold)
+		if tokenCount < threshold {
+			return
+		}
+
+		if autoNotify {
+			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", tokenCount))
+			notifyProgress("")
+		}
+
+		log.Ctx(ctx).WithFields(log.Fields{
+			"tokens":    tokenCount,
+			"threshold": threshold,
+		}).Info("Auto context compression triggered")
+
+		compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.Model)
+		if compressErr != nil {
+			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
+			return
+		}
+
+		messages = compressed
+
+		newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+		if autoNotify {
+			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
+			notifyProgress("")
+		}
+		log.Ctx(ctx).WithFields(log.Fields{
+			"old_tokens": tokenCount,
+			"new_tokens": newTokenCount,
+		}).Info("Auto context compression completed")
+
+		// 持久化压缩结果到 session
+		if cfg.Session != nil {
+			if err := cfg.Session.Clear(); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
+			} else {
+				allOk := true
+				for _, msg := range compressed {
+					if msg.Role == "system" {
+						continue
+					}
+					assertNoSystemPersist(msg)
+					if err := cfg.Session.AddMessage(msg); err != nil {
+						log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
+						allOk = false
+						break
+					}
+				}
+				if allOk {
+					log.Ctx(ctx).Info("Auto compression persisted to session")
+				} else {
+					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
+				}
+			}
+		}
+	}
+
+	// 推进 round 计数，自动清理长期未使用的工具激活
+	if sessionKey != "" {
+		cfg.Tools.TickSession(sessionKey)
+	}
+
+	// --- 主循环 ---
+	for i := 0; i < maxIter; i++ {
+		maybeCompress()
+
+		if autoNotify && i > 0 {
+			notifyProgress("> 💭 思考中...")
+		}
+
+		// assert: 发给 LLM 的消息必须恰好一条 system
+		var systemCount int
+		for _, m := range messages {
+			if m.Role == "system" {
+				systemCount++
+			}
+		}
+		if systemCount != 1 {
+			log.Ctx(ctx).WithField("system_count", systemCount).Error("assert: LLM messages must have exactly one system message")
+			return &bus.OutboundMessage{
+				Channel: cfg.Channel,
+				ChatID:  cfg.ChatID,
+				Content: "内部错误：system 消息数量异常",
+				Error:   fmt.Errorf("assert: LLM messages must have exactly one system message; got %d", systemCount),
+			}
+		}
+
+		// 使用会话特定的工具定义
+		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
+
+		// LLM 调用（可选超时）
+		var llmCtx context.Context
+		var llmCancel context.CancelFunc
+		if cfg.LLMTimeout > 0 {
+			llmCtx, llmCancel = context.WithTimeout(ctx, cfg.LLMTimeout)
+		} else {
+			llmCtx, llmCancel = ctx, func() {}
+		}
+
+		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs)
+		llmCancel()
+
+		if err != nil {
+			if ctx.Err() != nil {
+				return &bus.OutboundMessage{
+					Channel:   cfg.Channel,
+					ChatID:    cfg.ChatID,
+					Content:   "Agent was cancelled.",
+					Error:     ctx.Err(),
+					ToolsUsed: toolsUsed,
+				}
+			}
+			// LLM 错误时优雅降级：如果有之前的中间内容，返回它
+			if lastContent != "" {
+				log.Ctx(ctx).WithFields(log.Fields{
+					"agent_id":  cfg.AgentID,
+					"iteration": i + 1,
+				}).Warnf("LLM failed, returning partial result: %v", err)
+				return &bus.OutboundMessage{
+					Channel:   cfg.Channel,
+					ChatID:    cfg.ChatID,
+					Content:   lastContent,
+					ToolsUsed: toolsUsed,
+				}
+			}
+			return &bus.OutboundMessage{
+				Channel:   cfg.Channel,
+				ChatID:    cfg.ChatID,
+				Error:     fmt.Errorf("%w: %w", ErrLLMGenerate, err),
+				ToolsUsed: toolsUsed,
+			}
+		}
+
+		// 过滤 think 块
+		cleanContent := llm.StripThinkBlocks(response.Content)
+
+		if !response.HasToolCalls() {
+			return &bus.OutboundMessage{
+				Channel:     cfg.Channel,
+				ChatID:      cfg.ChatID,
+				Content:     cleanContent,
+				ToolsUsed:   toolsUsed,
+				WaitingUser: waitingUser,
+			}
+		}
+
+		// 记录最新的中间内容，用于 LLM 错误时降级
+		if cleanContent != "" {
+			lastContent = cleanContent
+		}
+
+		// 模型的中间思考内容加入进度
+		if autoNotify && cleanContent != "" {
+			progressLines = append(progressLines, cleanContent)
+		}
+
+		// 记录 assistant 消息（含 tool_calls），保留原始 content（包括 think 块）
+		assistantMsg := llm.ChatMessage{
+			Role:      "assistant",
+			Content:   response.Content,
+			ToolCalls: response.ToolCalls,
+		}
+		messages = append(messages, assistantMsg)
+
+		// --- 工具执行 ---
+		type toolCallEntry struct {
+			index int
+			tc    llm.ToolCall
+		}
+
+		// 为所有工具调用添加进度行占位符
+		progressStartIdx := len(progressLines)
+		for _, tc := range response.ToolCalls {
+			toolsUsed = append(toolsUsed, tc.Name)
+			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
+			}
+		}
+		if autoNotify {
+			notifyProgress("")
+		}
+
+		// 预分配结果槽位
+		type toolExecResult struct {
+			content    string
+			llmContent string
+			result     *tools.ToolResult
+			err        error
+			elapsed    time.Duration
+		}
+		execResults := make([]toolExecResult, len(response.ToolCalls))
+
+		// execOne 执行单个工具并记录结果
+		execOne := func(entry toolCallEntry) {
+			tc := entry.tc
+			argPreview := tc.Arguments
+			if r := []rune(argPreview); len(r) > 200 {
+				argPreview = string(r[:200]) + "..."
+			}
+			log.Ctx(ctx).WithFields(log.Fields{
+				"tool": tc.Name,
+				"id":   tc.ID,
+			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
+
+			// 工具执行加超时（SubAgent 工具不加超时）
+			var execCtx context.Context
+			var cancel context.CancelFunc
+			if tc.Name == "SubAgent" {
+				execCtx = ctx
+				cancel = func() {}
+			} else {
+				execCtx, cancel = context.WithTimeout(ctx, toolTimeout)
+			}
+
+			start := time.Now()
+			// 临时替换 ToolExecutor 的 ctx
+			result, execErr := toolExecutor(execCtx, tc)
+			elapsed := time.Since(start)
+			cancel()
+
+			execResults[entry.index] = toolExecResult{err: execErr, result: result, elapsed: elapsed}
+
+			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
+			if execErr != nil {
+				log.Ctx(ctx).WithFields(log.Fields{
+					"tool":    tc.Name,
+					"elapsed": elapsed.Round(time.Millisecond),
+				}).WithError(execErr).Warn("Tool failed")
+				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
+				execResults[entry.index].llmContent = execResults[entry.index].content
+
+				if autoNotify {
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+				}
+			} else {
+				execResults[entry.index].content = result.Summary
+				execResults[entry.index].llmContent = buildToolMessageContent(result)
+
+				resultPreview := result.Summary
+				if r := []rune(resultPreview); len(r) > 200 {
+					resultPreview = string(r[:200]) + "..."
+				}
+				log.Ctx(ctx).WithFields(log.Fields{
+					"tool":    tc.Name,
+					"elapsed": elapsed.Round(time.Millisecond),
+				}).Infof("Tool done: %s", resultPreview)
+
+				if autoNotify {
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+				}
+			}
+		}
+
+		// 读写分离并行执行
+		if cfg.EnableReadWriteSplit {
+			var readOps, writeOps []toolCallEntry
+			for idx, tc := range response.ToolCalls {
+				entry := toolCallEntry{index: idx, tc: tc}
+				if readOnlyTools[tc.Name] {
+					readOps = append(readOps, entry)
+				} else {
+					writeOps = append(writeOps, entry)
+				}
+			}
+
+			// Phase 1: 只读操作并行执行
+			if len(readOps) > 0 {
+				const maxParallel = 8
+				sem := make(chan struct{}, maxParallel)
+				var wg sync.WaitGroup
+				for _, entry := range readOps {
+					wg.Add(1)
+					sem <- struct{}{}
+					go func(e toolCallEntry) {
+						defer wg.Done()
+						defer func() { <-sem }()
+						execOne(e)
+					}(entry)
+				}
+				wg.Wait()
+				if autoNotify {
+					notifyProgress("")
+				}
+			}
+
+			// Phase 2: 写操作串行执行
+			for _, entry := range writeOps {
+				execOne(entry)
+				if autoNotify {
+					notifyProgress("")
+				}
+			}
+		} else {
+			// 全部串行执行
+			for idx, tc := range response.ToolCalls {
+				execOne(toolCallEntry{index: idx, tc: tc})
+				if autoNotify {
+					notifyProgress("")
+				}
+			}
+		}
+
+		// 按原始顺序处理结果
+		for idx, tc := range response.ToolCalls {
+			r := execResults[idx]
+			content := r.llmContent
+
+			// OAuth 自动触发
+			if r.err != nil && cfg.OAuthHandler != nil {
+				if oauthContent, handled := cfg.OAuthHandler(ctx, tc, r.err); handled {
+					content = oauthContent
+					autoNotify = false
+					if r.result != nil && r.result.WaitingUser {
+						waitingUser = true
+					}
+				}
+			}
+
+			// 检查 sessionFinalSent
+			if cfg.SessionFinalSentCallback != nil && cfg.SessionFinalSentCallback() {
+				autoNotify = false
+				progressLines = nil
+			}
+
+			if r.result != nil && r.result.WaitingUser {
+				waitingUser = true
+			}
+
+			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
+			if r.result != nil && r.result.Detail != "" {
+				toolMsg.Detail = r.result.Detail
+			}
+			messages = append(messages, toolMsg)
+		}
+
+		// 如果有任何工具标记为等待用户响应，则停止循环
+		if waitingUser {
+			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
+			return &bus.OutboundMessage{
+				Channel:     cfg.Channel,
+				ChatID:      cfg.ChatID,
+				ToolsUsed:   toolsUsed,
+				WaitingUser: true,
+			}
+		}
+	}
+
 	return &bus.OutboundMessage{
-		Channel: cfg.Channel,
-		ChatID:  cfg.ChatID,
-		Content: "unified agent engine not yet implemented",
-		Error:   fmt.Errorf("Run() not yet implemented (issue #127)"),
+		Channel:   cfg.Channel,
+		ChatID:    cfg.ChatID,
+		Content:   "已达到最大迭代次数，请重新描述你的需求。",
+		ToolsUsed: toolsUsed,
+	}
+}
+
+// defaultToolExecutor 创建默认的工具执行器（从 Registry 查找并执行）。
+// 用于 SubAgent 等不需要 session MCP / 激活检查的场景。
+func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+		tool, ok := cfg.Tools.Get(tc.Name)
+		if !ok {
+			return nil, fmt.Errorf("unknown tool: %s", tc.Name)
+		}
+
+		toolCtx := buildToolContext(ctx, cfg)
+		return tool.Execute(toolCtx, tc.Arguments)
 	}
 }
 
@@ -138,7 +596,7 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 	msg := bus.InboundMessage{
 		// 统一寻址
 		From: bus.NewIMAddress(a.channel, a.senderID),
-		To:   bus.NewAgentAddress(a.parentID), // 目标是父 Agent 下的 SubAgent
+		To:   bus.NewAgentAddress(a.parentID),
 
 		// 旧字段（兼容）
 		Channel:    bus.SchemeAgent,
@@ -167,8 +625,6 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 }
 
 // buildToolContext 统一构建 ToolContext。
-//
-// TODO(#127): Phase 1 实现时，从 executeTool 和 RunSubAgent 中提取公共逻辑。
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	tc := &tools.ToolContext{
 		Ctx:        ctx,
@@ -236,8 +692,6 @@ func (cc *CallChain) CanSpawn(targetRole string) error {
 	if len(cc.Chain) >= MaxSubAgentDepth {
 		return fmt.Errorf("max SubAgent depth %d reached (chain: %v)", MaxSubAgentDepth, cc.Chain)
 	}
-	// 检查链中是否已有同名角色（防止 A→B→A 或 A→A 循环）
-	// 每个 chain entry 的最后一段是角色名（如 "main/code-reviewer" → "code-reviewer"）
 	for _, id := range cc.Chain {
 		role := id
 		if idx := lastIndexByte(id, '/'); idx >= 0 {

@@ -101,13 +101,18 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 	toolGroups := registry.GetToolGroups()
 	for _, group := range toolGroups {
 		for _, toolName := range group.ToolNames {
-			// Get the actual tool to get its description
+			// Get the actual tool to get its description and channel support
 			tool, ok := registry.Get(toolName)
 			desc := fmt.Sprintf("Built-in tool group: %s", group.Name)
+			var channels []string
 			if ok {
 				toolDesc := tool.Description()
 				if toolDesc != "" {
 					desc = fmt.Sprintf("Tool: %s. %s", toolName, toolDesc)
+				}
+				// Get supported channels
+				if cp, ok := tool.(tools.ChannelProvider); ok {
+					channels = cp.SupportedChannels()
 				}
 			}
 			if group.Instructions != "" {
@@ -119,6 +124,7 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 				ServerName:  group.Name,
 				Source:      "global",
 				Description: desc,
+				Channels:    channels,
 			})
 		}
 	}

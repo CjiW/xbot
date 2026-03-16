@@ -31,10 +31,11 @@ type ToolIndexer interface {
 
 // ToolIndexEntry 工具索引条目
 type ToolIndexEntry struct {
-	Name        string // 工具名称 (如 mcp_server_tool)
-	ServerName  string // MCP服务器名 (如 feishu, global)
-	Source      string // 来源: "global" 或 "personal"
-	Description string // 工具描述
+	Name        string   // 工具名称 (如 mcp_server_tool)
+	ServerName  string   // MCP服务器名 (如 feishu, global)
+	Source      string   // 来源: "global" 或 "personal"
+	Description string   // 工具描述
+	Channels    []string // 支持的渠道列表（空=所有渠道）
 }
 
 // MemorizeInput 记忆写入的输入参数。

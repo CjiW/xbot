@@ -68,14 +68,14 @@ func (t *SearchToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	if indexer != nil {
 		// Try to cast to LettaMemory to access both global (tenant 0) and personal tools
 		if lm, ok := indexer.(*letta.LettaMemory); ok {
-			// Search global tools first (tenant 0)
-			globalResults, err := lm.SearchToolsForTenant(ctx.Ctx, 0, args.Query, args.TopK)
+			// Search global tools first (tenant 0), filter by current channel
+			globalResults, err := lm.SearchToolsForTenant(ctx.Ctx, 0, args.Query, args.TopK, ctx.Channel)
 			if err != nil {
 				log.WithError(err).Warn("Global tool index search failed")
 			}
 
-			// Then search personal tools (user's tenant)
-			personalResults, err := lm.SearchToolsForTenant(ctx.Ctx, lm.TenantID(), args.Query, args.TopK)
+			// Then search personal tools (user's tenant), filter by current channel
+			personalResults, err := lm.SearchToolsForTenant(ctx.Ctx, lm.TenantID(), args.Query, args.TopK, ctx.Channel)
 			if err != nil {
 				log.WithError(err).Warn("Personal tool index search failed")
 			}

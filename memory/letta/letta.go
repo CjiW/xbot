@@ -411,6 +411,10 @@ func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEn
 	for _, tool := range tools {
 		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
 			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		// Add channels info if present
+		if len(tool.Channels) > 0 {
+			content += fmt.Sprintf("\nChannels: %s", strings.Join(tool.Channels, ","))
+		}
 		toolID := fmt.Sprintf("%s_%s", tool.ServerName, tool.Name)
 		if err := m.toolIndexSvc.InsertTool(ctx, m.tenantID, toolID, content); err != nil {
 			log.WithError(err).WithField("tool", tool.Name).Warn("Failed to index tool")
@@ -420,13 +424,14 @@ func (m *LettaMemory) IndexTools(ctx context.Context, tools []memory.ToolIndexEn
 	return nil
 }
 
-// SearchTools implements memory.ToolIndexer (searches current tenant).
+// SearchTools implements memory.ToolIndexer (searches current tenant without channel filter).
 func (m *LettaMemory) SearchTools(ctx context.Context, query string, topK int) ([]memory.ToolIndexEntry, error) {
-	return m.SearchToolsForTenant(ctx, m.tenantID, query, topK)
+	return m.SearchToolsForTenant(ctx, m.tenantID, query, topK, "")
 }
 
 // SearchToolsForTenant searches tools for a specific tenant.
-func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, query string, topK int) ([]memory.ToolIndexEntry, error) {
+// If channel is not empty, filters results to only include tools that support that channel.
+func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, query string, topK int, channel string) ([]memory.ToolIndexEntry, error) {
 	if m.toolIndexSvc == nil {
 		return nil, fmt.Errorf("tool index service not available")
 	}
@@ -434,8 +439,8 @@ func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, 
 	if err != nil {
 		return nil, fmt.Errorf("search tools: %w", err)
 	}
-	entries := make([]memory.ToolIndexEntry, len(results))
-	for i, r := range results {
+	entries := make([]memory.ToolIndexEntry, 0, len(results))
+	for _, r := range results {
 		// Parse tool ID to extract server and name
 		// Format: serverName_toolName
 		parts := strings.SplitN(r.ID, "_", 2)
@@ -445,14 +450,48 @@ func (m *LettaMemory) SearchToolsForTenant(ctx context.Context, tenantID int64, 
 			serverName = parts[0]
 			toolName = parts[1]
 		}
-		entries[i] = memory.ToolIndexEntry{
+		entry := memory.ToolIndexEntry{
 			Name:        toolName,
 			ServerName:  serverName,
 			Source:      "personal",
 			Description: r.Content,
+			Channels:    parseChannelsFromContent(r.Content),
 		}
+		// 渠道过滤：如果指定了渠道，检查工具是否支持
+		if channel != "" && len(entry.Channels) > 0 {
+			supported := false
+			for _, c := range entry.Channels {
+				if c == channel {
+					supported = true
+					break
+				}
+			}
+			if !supported {
+				continue
+			}
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// parseChannelsFromContent extracts channel info from tool description content
+// Content format: "Tool: xxx\nServer: xxx\nSource: xxx\nDescription: xxx"
+// Channels are stored in metadata during indexing
+func parseChannelsFromContent(content string) []string {
+	// Channels are appended to description during indexing
+	// Format: ... "Channels: feishu,qq" or no Channels line means all channels
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Channels: ") {
+			channelsStr := strings.TrimPrefix(line, "Channels: ")
+			if channelsStr == "" {
+				return nil
+			}
+			return strings.Split(channelsStr, ",")
+		}
+	}
+	return nil
 }
 
 // --- helpers ---

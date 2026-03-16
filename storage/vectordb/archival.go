@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -287,6 +288,7 @@ type ToolIndexEntry struct {
 	ServerName  string
 	Source      string
 	Description string
+	Channels    []string // Supported channels (empty = all channels)
 }
 
 // IndexTools indexes multiple tools at once using batch concurrent embedding.
@@ -306,10 +308,15 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 	}
 	docs := make([]chromem.Document, len(tools))
 	for i, tool := range tools {
+		content := fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
+			tool.Name, tool.ServerName, tool.Source, tool.Description)
+		// Add channels info if present
+		if len(tool.Channels) > 0 {
+			content += fmt.Sprintf("\nChannels: %s", strings.Join(tool.Channels, ","))
+		}
 		docs[i] = chromem.Document{
-			ID: fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
-			Content: fmt.Sprintf("Tool: %s\nServer: %s\nSource: %s\nDescription: %s",
-				tool.Name, tool.ServerName, tool.Source, tool.Description),
+			ID:      fmt.Sprintf("%s_%s", tool.ServerName, tool.Name),
+			Content: content,
 		}
 	}
 	concurrency := runtime.NumCPU()

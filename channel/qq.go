@@ -1779,7 +1779,7 @@ func (q *QQChannel) isMarkdownUnsupported(err error) bool {
 		strings.Contains(errMsg, "msg_type") ||
 		strings.Contains(errMsg, "304003") || // 无权限
 		strings.Contains(errMsg, "304004") || // 消息类型不支持
-		strings.Contains(errMsg, "50006")     // 不支持的消息类型
+		strings.Contains(errMsg, "50006") // 不支持的消息类型
 }
 
 // ---------------------------------------------------------------------------

@@ -1833,6 +1833,10 @@ func formatToolProgress(name string, args string) string {
 		return string(runes[:max-3]) + "..."
 	}
 
+	if !parsed {
+		log.WithField("tool", name).WithField("raw_args", truncate(args, 200)).Debug("formatToolProgress: failed to parse tool args as JSON")
+	}
+
 	// Letta memory tools
 	switch name {
 	case "core_memory_append":

@@ -144,6 +144,9 @@ func (s *CronService) ListJobsBySender(senderID string) ([]*CronJob, error) {
 		}
 		jobs = append(jobs, job)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sender cron jobs: %w", err)
+	}
 	return jobs, nil
 }
 
@@ -185,6 +188,9 @@ func (s *CronService) ListAllJobs() ([]*CronJob, error) {
 			job.LastTrigger = &t
 		}
 		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all cron jobs: %w", err)
 	}
 	return jobs, nil
 }

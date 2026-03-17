@@ -95,6 +95,30 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("mode is required")
 	}
 
+	// 根据不同 mode 检查必要字段非空
+	switch params.Mode {
+	case "create":
+		if params.Path == "" {
+			return nil, fmt.Errorf("path is required for create mode")
+		}
+	case "replace":
+		if params.OldString == "" {
+			return nil, fmt.Errorf("old_string is required for replace mode")
+		}
+	case "regex":
+		if params.Pattern == "" {
+			return nil, fmt.Errorf("pattern is required for regex mode")
+		}
+	case "line":
+		if params.Action == "" {
+			return nil, fmt.Errorf("action is required for line mode")
+		}
+	case "insert":
+		if params.Position == "" {
+			return nil, fmt.Errorf("position is required for insert mode")
+		}
+	}
+
 	// 沙箱模式
 	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
 		return t.executeInSandbox(ctx, params)

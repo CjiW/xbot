@@ -335,19 +335,23 @@ func (c *CodeBuddyLLM) buildRequest(ctx context.Context, model string, messages 
 }
 
 // GenerateStream 流式生成 LLM 响应
-func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	// 如果未指定模型，使用默认模型
 	if model == "" {
 		model = c.GetDefaultModel()
 	}
 
 	logger.Ctx(ctx).WithFields(logger.Fields{
-		"provider":    "codebuddy",
-		"model":       model,
-		"stream":      true,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
+		"provider":      "codebuddy",
+		"model":         model,
+		"stream":        true,
+		"msg_count":     len(messages),
+		"tools_count":   len(tools),
+		"thinking_mode": thinkingMode,
 	}).Info("[LLM] Starting stream request")
+
+	// 注意：CodeBuddy 不支持 thinking_mode 参数，忽略该参数
+	// 如果未来支持，可以在 buildRequest 中添加相应参数
 
 	startTime := time.Now()
 
@@ -547,22 +551,23 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 }
 
 // Generate 生成 LLM 响应（通过聚合流式响应实现）
-func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	// 如果未指定模型，使用默认模型
 	if model == "" {
 		model = c.GetDefaultModel()
 	}
 
 	logger.Ctx(ctx).WithFields(logger.Fields{
-		"provider":    "codebuddy",
-		"model":       model,
-		"stream":      false,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
+		"provider":      "codebuddy",
+		"model":         model,
+		"stream":        false,
+		"msg_count":     len(messages),
+		"tools_count":   len(tools),
+		"thinking_mode": thinkingMode,
 	}).Info("[LLM] Starting non-stream request (via stream aggregation)")
 
 	// 调用流式接口
-	eventChan, err := c.GenerateStream(ctx, model, messages, tools)
+	eventChan, err := c.GenerateStream(ctx, model, messages, tools, thinkingMode)
 	if err != nil {
 		return nil, err
 	}
@@ -573,12 +578,16 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 	}
 
 	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	toolCallsMap := make(map[int]*ToolCall) // 按 index 聚合工具调用
 
 	for event := range eventChan {
 		switch event.Type {
 		case EventContent:
 			contentBuilder.WriteString(event.Content)
+
+		case EventReasoningContent:
+			reasoningBuilder.WriteString(event.ReasoningContent)
 
 		case EventToolCall:
 			if event.ToolCall != nil {
@@ -612,6 +621,7 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 	}
 
 	resp.Content = contentBuilder.String()
+	resp.ReasoningContent = reasoningBuilder.String()
 
 	// 转换工具调用 map 为 slice
 	if len(toolCallsMap) > 0 {
@@ -631,6 +641,7 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 	logger.Ctx(ctx).WithFields(logger.Fields{
 		"provider":          "codebuddy",
 		"content_len":       len(resp.Content),
+		"reasoning_len":     len(resp.ReasoningContent),
 		"tool_calls":        len(resp.ToolCalls),
 		"finish_reason":     resp.FinishReason,
 		"prompt_tokens":     resp.Usage.PromptTokens,

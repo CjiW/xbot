@@ -12,12 +12,16 @@ import (
 const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [thinking_mode=<mode>]
 
 参数说明:
-  provider      - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
+  provider      - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/zhipu 等 OpenAI 兼容服务
   base_url      - API 基础地址
   api_key       - API 密钥
   model         - 模型名称（可选）
   max_context   - 最大上下文 token 数（可选，0 表示不限制）
-  thinking_mode - 思考模式（可选）: enabled（强制开启）、disabled（强制关闭）、留空则自动检测
+  thinking_mode - 思考模式（可选，支持 DeepSeek/智谱 GLM 等推理模型）:
+                  - enabled: 强制开启思考模式
+                  - disabled: 强制关闭思考模式
+                  - {"type":"enabled","clear_thinking":false}: GLM 保留式思考（多轮推理连贯）
+                  - 留空则不发送参数（模型自动决定）
 
 CodeBuddy 额外参数:
   user_id       - 用户 ID
@@ -31,6 +35,12 @@ CodeBuddy 额外参数:
 
   # DeepSeek R1 (Thinking Mode)
   /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-reasoner thinking_mode=enabled
+
+  # 智谱 GLM-5/GLM-4.7 (深度思考)
+  /set-llm provider=openai base_url=https://open.bigmodel.cn/api/paas/v4 api_key=xxx model=glm-5 thinking_mode=enabled
+
+  # GLM 保留式思考（多轮对话保持推理连贯性）
+  /set-llm provider=openai base_url=https://open.bigmodel.cn/api/paas/v4 api_key=xxx model=glm-4.7 thinking_mode={"type":"enabled","clear_thinking":false}
 
   # Anthropic Claude
   /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-3-5-sonnet-20241022
@@ -96,10 +106,11 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		case "domain":
 			cfg.Domain = value
 		case "thinking_mode":
-			if value == "enabled" || value == "disabled" {
+			// 支持: enabled, disabled, 自定义 JSON 字符串
+			if value == "enabled" || value == "disabled" || (len(value) > 0 && value[0] == '{') {
 				cfg.ThinkingMode = value
 			} else {
-				cfg.ThinkingMode = "" // auto
+				cfg.ThinkingMode = "" // 空/无效值表示不发送参数
 			}
 		}
 	}

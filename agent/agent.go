@@ -1464,7 +1464,7 @@ Output the compressed content directly, preserving as much context as possible.`
 	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a context compression expert."),
 		llm.NewUserMessage(compressionPrompt),
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("LLM compress failed: %w", err)
 	}
@@ -1674,7 +1674,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 	}
 
 	// 获取用户特定的 LLM 客户端
-	llmClient, model, userMaxCtx := a.llmFactory.GetLLM(senderID)
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
 	if model == "" {
 		model = a.model
 	}
@@ -1800,7 +1800,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		if systemCount != 1 {
 			panic("assert: LLM messages must have exactly one system message; got " + fmt.Sprint(systemCount))
 		}
-		response, err := llmClient.Generate(retryCtx, model, messages, toolDefs)
+		response, err := llmClient.Generate(retryCtx, model, messages, toolDefs, thinkingMode)
 		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
 			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
 			if autoNotify {
@@ -1831,7 +1831,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					}
 				}
 			}
-			response, err = llmClient.Generate(retryCtx, model, messages, toolDefs)
+			response, err = llmClient.Generate(retryCtx, model, messages, toolDefs, thinkingMode)
 		}
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)
@@ -2289,7 +2289,7 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 	for i := 0; i < maxIter; i++ {
 		// LLM 调用加超时
 		llmCtx, llmCancel := context.WithTimeout(ctx, llmTimeout)
-		response, err := a.llmClient.Generate(llmCtx, a.model, messages, subTools.AsDefinitions())
+		response, err := a.llmClient.Generate(llmCtx, a.model, messages, subTools.AsDefinitions(), "")
 		llmCancel()
 		if err != nil {
 			// 父 context 被取消时，返回已有结果

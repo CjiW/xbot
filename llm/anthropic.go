@@ -260,7 +260,7 @@ func (a *AnthropicLLM) setHeaders(req *http.Request) {
 }
 
 // Generate 非流式生成
-func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	if model == "" {
 		model = a.GetDefaultModel()
 	}
@@ -369,7 +369,7 @@ func mapStopReason(s string) FinishReason {
 }
 
 // GenerateStream 流式生成
-func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	if model == "" {
 		model = a.GetDefaultModel()
 	}

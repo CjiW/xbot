@@ -142,11 +142,11 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 }
 
 // Generate 生成 LLM 响应，失败时按配置重试
-func (r *RetryLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (r *RetryLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	return retry.NewWithData[*LLMResponse](
 		r.retryOptions(ctx, "Retrying request")...,
 	).Do(func() (*LLMResponse, error) {
-		return r.inner.Generate(ctx, model, messages, tools)
+		return r.inner.Generate(ctx, model, messages, tools, thinkingMode)
 	})
 }
 
@@ -156,7 +156,7 @@ func (r *RetryLLM) ListModels() []string {
 }
 
 // GenerateStream 仅在获取 channel 时重试，流开始后不重试
-func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	streaming, ok := r.inner.(StreamingLLM)
 	if !ok {
 		return nil, fmt.Errorf("underlying LLM does not support streaming")
@@ -164,6 +164,6 @@ func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []
 	return retry.NewWithData[<-chan StreamEvent](
 		r.retryOptions(ctx, "Retrying stream connection")...,
 	).Do(func() (<-chan StreamEvent, error) {
-		return streaming.GenerateStream(ctx, model, messages, tools)
+		return streaming.GenerateStream(ctx, model, messages, tools, thinkingMode)
 	})
 }

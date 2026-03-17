@@ -58,7 +58,7 @@ Output the summarized content directly, no explanations.`, maxTokens, content)
 		resp, err := llmClient.Generate(ctx, model, []llm.ChatMessage{
 			llm.NewSystemMessage("You are a content compressor. Summarize content for embedding while preserving all important information."),
 			llm.NewUserMessage(prompt),
-		}, nil)
+		}, nil, "")
 		if err != nil {
 			return "", fmt.Errorf("LLM compression failed: %w", err)
 		}

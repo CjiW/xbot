@@ -276,19 +276,68 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	return p
 }
 
+// buildThinkingOptions 根据 thinkingMode 构建对应的 request options
+// 支持多种模型的 thinking mode：
+// - DeepSeek: {"thinking": {"type": "enabled"}}
+// - 智谱 GLM: {"thinking": {"type": "enabled", "clear_thinking": false}}
+// - 其他模型可扩展
+//
+// 参数格式：
+// - "enabled" -> {"thinking": {"type": "enabled"}}
+// - "disabled" -> {"thinking": {"type": "disabled"}} (不发送参数，让模型自己决定)
+// - 自定义 JSON: 直接使用，如 {"type": "enabled", "clear_thinking": false}
+func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOption {
+	if thinkingMode == "" {
+		return nil
+	}
+
+	var opts []option.RequestOption
+
+	switch thinkingMode {
+	case "enabled":
+		// DeepSeek/GLM 标准格式
+		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "enabled"}))
+	case "disabled":
+		// 显式禁用 thinking
+		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
+	default:
+		// 尝试解析为 JSON 对象（高级用法）
+		// 支持两种格式：
+		// 1. 完整 thinking 参数: {"type": "enabled", "clear_thinking": false}
+		// 2. 直接设置字段: {"budget_tokens": 10000}
+		if len(thinkingMode) > 0 && thinkingMode[0] == '{' {
+			var customParams map[string]any
+			if err := json.Unmarshal([]byte(thinkingMode), &customParams); err == nil {
+				// 如果包含 type 字段，说明是完整的 thinking 参数
+				if _, hasType := customParams["type"]; hasType {
+					opts = append(opts, option.WithJSONSet("thinking", customParams))
+				} else {
+					// 否则直接设置字段（如 budget_tokens）
+					for key, value := range customParams {
+						opts = append(opts, option.WithJSONSet(key, value))
+					}
+				}
+			}
+		}
+	}
+
+	return opts
+}
+
 // Generate 生成 LLM 响应
-func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	// 如果未指定模型，使用默认模型
 	if model == "" {
 		model = o.GetDefaultModel()
 	}
 
 	logrus.Ctx(ctx).WithFields(logrus.Fields{
-		"provider":    "openai",
-		"model":       model,
-		"stream":      false,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
+		"provider":      "openai",
+		"model":         model,
+		"stream":        false,
+		"msg_count":     len(messages),
+		"tools_count":   len(tools),
+		"thinking_mode": thinkingMode,
 	}).Info("[LLM] Starting non-stream request")
 
 	startTime := time.Now()
@@ -297,7 +346,13 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	data, _ := params.MarshalJSON()
 	logrus.Ctx(ctx).Debugf("[LLM] Request params: %s", string(data))
 
-	completion, err := o.client.Chat.Completions.New(ctx, params)
+	// 构建 thinking mode 相关的 request options
+	opts := o.buildThinkingOptions(thinkingMode)
+	if len(opts) > 0 {
+		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+	}
+
+	completion, err := o.client.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
 		logrus.Ctx(ctx).WithFields(logrus.Fields{
 			"provider": "openai",
@@ -347,6 +402,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		"provider":          "openai",
 		"duration":          time.Since(startTime).String(),
 		"content_len":       len(resp.Content),
+		"reasoning_len":     len(resp.ReasoningContent),
 		"tool_calls":        len(resp.ToolCalls),
 		"finish_reason":     resp.FinishReason,
 		"prompt_tokens":     resp.Usage.PromptTokens,
@@ -358,18 +414,19 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 }
 
 // GenerateStream 流式生成 LLM 响应
-func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	// 如果未指定模型，使用默认模型
 	if model == "" {
 		model = o.GetDefaultModel()
 	}
 
 	logrus.Ctx(ctx).WithFields(logrus.Fields{
-		"provider":    "openai",
-		"model":       model,
-		"stream":      true,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
+		"provider":      "openai",
+		"model":         model,
+		"stream":        true,
+		"msg_count":     len(messages),
+		"tools_count":   len(tools),
+		"thinking_mode": thinkingMode,
 	}).Info("[LLM] Starting stream request")
 
 	startTime := time.Now()
@@ -378,8 +435,14 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	data, _ := params.MarshalJSON()
 	logrus.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
 
+	// 构建 thinking mode 相关的 request options
+	opts := o.buildThinkingOptions(thinkingMode)
+	if len(opts) > 0 {
+		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+	}
+
 	// 创建流式请求
-	stream := o.client.Chat.Completions.NewStreaming(ctx, params)
+	stream := o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
 
 	// 创建事件 channel
 	eventChan := make(chan StreamEvent, 100)

@@ -121,6 +121,12 @@ type anthropicTool struct {
 	InputSchema interface{} `json:"input_schema"`
 }
 
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Effort       string `json:"effort,omitempty"` // "low" | "medium" | "high" (for adaptive mode)
+}
+
 type anthropicReq struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
@@ -128,6 +134,7 @@ type anthropicReq struct {
 	System    string             `json:"system,omitempty"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicUsage struct {
@@ -141,6 +148,8 @@ type anthropicContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	// Thinking block fields
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type anthropicResp struct {
@@ -259,8 +268,39 @@ func (a *AnthropicLLM) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 }
 
+// parseAnthropicThinking 解析 thinkingMode 参数为 Anthropic thinking 结构
+// 支持格式:
+//   - "enabled" -> {type: "enabled"}
+//   - "adaptive" -> {type: "adaptive"}
+//   - "disabled" -> nil (不发送 thinking 参数)
+//   - JSON 格式: {"type": "enabled", "budget_tokens": 10000} 或 {"type": "adaptive", "effort": "high"}
+func parseAnthropicThinking(thinkingMode string) *anthropicThinking {
+	if thinkingMode == "" || thinkingMode == "disabled" {
+		return nil
+	}
+
+	// 简单关键字
+	switch thinkingMode {
+	case "enabled":
+		return &anthropicThinking{Type: "enabled"}
+	case "adaptive":
+		return &anthropicThinking{Type: "adaptive", Effort: "high"}
+	}
+
+	// JSON 格式解析
+	var thinking anthropicThinking
+	if err := json.Unmarshal([]byte(thinkingMode), &thinking); err == nil {
+		if thinking.Type != "" {
+			return &thinking
+		}
+	}
+
+	// 无法解析，默认启用
+	return &anthropicThinking{Type: "enabled"}
+}
+
 // Generate 非流式生成
-func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	if model == "" {
 		model = a.GetDefaultModel()
 	}
@@ -284,6 +324,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	if len(tools) > 0 {
 		body.Tools = toAnthropicTools(tools)
 	}
+	body.Thinking = parseAnthropicThinking(thinkingMode)
 
 	reqBody, err := json.Marshal(body)
 	if err != nil {
@@ -330,10 +371,14 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	}
 
 	var textParts []string
+	var reasoningParts []string
 	for _, block := range apiResp.Content {
 		switch block.Type {
 		case "text":
 			textParts = append(textParts, block.Text)
+		case "thinking":
+			// Anthropic extended thinking block
+			reasoningParts = append(reasoningParts, block.Thinking)
 		case "tool_use":
 			out.ToolCalls = append(out.ToolCalls, ToolCall{
 				ID:        block.ID,
@@ -343,6 +388,9 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		}
 	}
 	out.Content = strings.Join(textParts, "")
+	if len(reasoningParts) > 0 {
+		out.ReasoningContent = strings.Join(reasoningParts, "\n")
+	}
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "anthropic",
@@ -369,7 +417,7 @@ func mapStopReason(s string) FinishReason {
 }
 
 // GenerateStream 流式生成
-func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	if model == "" {
 		model = a.GetDefaultModel()
 	}
@@ -393,6 +441,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	if len(tools) > 0 {
 		body.Tools = toAnthropicTools(tools)
 	}
+	body.Thinking = parseAnthropicThinking(thinkingMode)
 
 	reqBody, err := json.Marshal(body)
 	if err != nil {
@@ -546,6 +595,9 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 							Arguments: tc.Arguments,
 						},
 					}
+				case "thinking":
+					// Anthropic extended thinking block - no action needed here
+					// The thinking content will be delivered via thinking_delta events
 				}
 			}
 
@@ -556,6 +608,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			var delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text,omitempty"`
+				Thinking    string `json:"thinking,omitempty"`
 				PartialJSON string `json:"partial_json,omitempty"`
 			}
 			if err := json.Unmarshal(ev.Delta, &delta); err != nil {
@@ -563,6 +616,10 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			}
 			if delta.Type == "text_delta" && delta.Text != "" {
 				eventChan <- StreamEvent{Type: EventContent, Content: delta.Text}
+			}
+			if delta.Type == "thinking_delta" && delta.Thinking != "" {
+				// Anthropic extended thinking delta
+				eventChan <- StreamEvent{Type: EventReasoningContent, ReasoningContent: delta.Thinking}
 			}
 			if delta.Type == "input_json_delta" && delta.PartialJSON != "" {
 				if tc, ok := toolCallsByIndex[ev.Index]; ok {

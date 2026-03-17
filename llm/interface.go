@@ -8,7 +8,8 @@ type LLM interface {
 	// model: 模型名称
 	// messages: 消息列表
 	// tools: 工具定义列表
-	Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error)
+	// thinkingMode: 思考模式 ("", "enabled", "disabled")，用于 DeepSeek/OpenAI reasoning 模型
+	Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error)
 
 	// ListModels 获取可用模型列表
 	ListModels() []string
@@ -21,6 +22,7 @@ type StreamingLLM interface {
 	// model: 模型名称
 	// messages: 消息列表
 	// tools: 工具定义列表
+	// thinkingMode: 思考模式 ("", "enabled", "disabled")
 	// channel 会在完成或出错时关闭
-	GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error)
+	GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error)
 }

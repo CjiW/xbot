@@ -136,7 +136,7 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."),
 		llm.NewUserMessage(prompt),
-	}, saveMemoryTool)
+	}, saveMemoryTool, "")
 	if err != nil {
 		log.WithError(err).Error("Memory consolidation LLM call failed")
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil

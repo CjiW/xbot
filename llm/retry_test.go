@@ -91,7 +91,7 @@ func newFailNLLM(failCount int, err error) *failNLLM {
 	}
 }
 
-func (m *failNLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (m *failNLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	n := int(m.calls.Add(1))
 	if n <= m.failCount {
 		return nil, m.failErr
@@ -103,7 +103,8 @@ func (m *failNLLM) ListModels() []string {
 	return []string{"fail-n-mock"}
 }
 
-func (m *failNLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (m *failNLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (
+	<-chan StreamEvent, error) {
 	n := int(m.calls.Add(1))
 	if n <= m.failCount {
 		return nil, m.failErr
@@ -123,7 +124,7 @@ func TestRetryLLM_Generate_SuccessOnFirstTry(t *testing.T) {
 	inner := newFailNLLM(0, nil)
 	r := NewRetryLLM(inner, DefaultRetryConfig())
 
-	resp, err := r.Generate(context.Background(), "test", nil, nil)
+	resp, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestRetryLLM_Generate_RetryThenSuccess(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	resp, err := r.Generate(context.Background(), "test", nil, nil)
+	resp, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestRetryLLM_Generate_ExhaustedRetries(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	_, err := r.Generate(context.Background(), "test", nil, nil)
+	_, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -177,7 +178,7 @@ func TestRetryLLM_Generate_NonRetryableError(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	_, err := r.Generate(context.Background(), "test", nil, nil)
+	_, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -200,7 +201,7 @@ func TestRetryLLM_Generate_ContextCanceled(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := r.Generate(ctx, "test", nil, nil)
+	_, err := r.Generate(ctx, "test", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error after context cancel")
 	}
@@ -217,7 +218,7 @@ func TestRetryLLM_Generate_NetworkError(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	resp, err := r.Generate(context.Background(), "test", nil, nil)
+	resp, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +238,7 @@ func TestRetryLLM_GenerateStream_SuccessOnFirstTry(t *testing.T) {
 	inner := newFailNLLM(0, nil)
 	r := NewRetryLLM(inner, DefaultRetryConfig())
 
-	ch, err := r.GenerateStream(context.Background(), "test", nil, nil)
+	ch, err := r.GenerateStream(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestRetryLLM_GenerateStream_RetryConnection(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	ch, err := r.GenerateStream(context.Background(), "test", nil, nil)
+	ch, err := r.GenerateStream(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +280,7 @@ func TestRetryLLM_GenerateStream_NonStreamingInner(t *testing.T) {
 	inner := &nonStreamingLLM{}
 	r := NewRetryLLM(inner, DefaultRetryConfig())
 
-	_, err := r.GenerateStream(context.Background(), "test", nil, nil)
+	_, err := r.GenerateStream(context.Background(), "test", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error for non-streaming LLM")
 	}
@@ -326,7 +327,7 @@ func TestDefaultRetryConfig(t *testing.T) {
 // nonStreamingLLM 只实现 LLM 接口，不实现 StreamingLLM
 type nonStreamingLLM struct{}
 
-func (n *nonStreamingLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (n *nonStreamingLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	return &LLMResponse{Content: "ok", FinishReason: FinishReasonStop}, nil
 }
 
@@ -356,7 +357,7 @@ func TestRetryLLM_Generate_NotifiesOnRetry(t *testing.T) {
 		}{attempt, max, err})
 	})
 
-	resp, err := r.Generate(ctx, "test", nil, nil)
+	resp, err := r.Generate(ctx, "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -383,7 +384,7 @@ func TestRetryLLM_Generate_NoNotifyWithoutCallback(t *testing.T) {
 	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
 	r := NewRetryLLM(inner, cfg)
 
-	resp, err := r.Generate(context.Background(), "test", nil, nil)
+	resp, err := r.Generate(context.Background(), "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -403,7 +404,7 @@ func TestRetryLLM_GenerateStream_NotifiesOnRetry(t *testing.T) {
 		notified.Add(1)
 	})
 
-	ch, err := r.GenerateStream(ctx, "test", nil, nil)
+	ch, err := r.GenerateStream(ctx, "test", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

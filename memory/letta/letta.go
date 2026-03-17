@@ -287,7 +287,7 @@ Review the conversation below and call the consolidate_memory tool to update the
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the consolidate_memory tool."),
 		llm.NewUserMessage(prompt),
-	}, consolidateMemoryTool)
+	}, consolidateMemoryTool, "")
 	if err != nil {
 		log.WithError(err).Error("Letta memory consolidation LLM call failed")
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil

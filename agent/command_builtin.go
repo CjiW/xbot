@@ -61,7 +61,10 @@ func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (
 			"/prompt <query> — 预览完整提示词（不调用 LLM）\n" +
 			"/help — 显示帮助\n" +
 			"/set-llm — 设置自定义 LLM API\n" +
+			"/unset-llm — 清除自定义 LLM 配置\n" +
 			"/llm — 查看当前 LLM 配置\n" +
+			"/models — 列出当前 API 可用模型\n" +
+			"/set-model <model> — 设置当前使用的模型\n" +
 			"/compress — 手动触发上下文压缩\n" +
 			"/context — 查看当前 token 数和组成\n" +
 			"/cancel — 取消当前正在处理的请求\n" +
@@ -118,6 +121,19 @@ func (c *getLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessag
 	return a.handleGetLLM(ctx, msg)
 }
 
+// --- /unset-llm ---
+
+type unsetLLMCmd struct{}
+
+func (c *unsetLLMCmd) Name() string        { return "/unset-llm" }
+func (c *unsetLLMCmd) Aliases() []string   { return nil }
+func (c *unsetLLMCmd) Match(s string) bool { return strings.ToLower(s) == "/unset-llm" }
+func (c *unsetLLMCmd) Concurrent() bool    { return false } // mutates LLM config
+
+func (c *unsetLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	return a.handleUnsetLLM(ctx, msg)
+}
+
 // --- /compress ---
 
 type compressCmd struct{}
@@ -152,6 +168,35 @@ func (c *contextCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessa
 	return a.handleContext(ctx, msg, tenantSession)
 }
 
+// --- /models ---
+
+type modelsCmd struct{}
+
+func (c *modelsCmd) Name() string        { return "/models" }
+func (c *modelsCmd) Aliases() []string   { return nil }
+func (c *modelsCmd) Match(s string) bool { return strings.ToLower(s) == "/models" }
+func (c *modelsCmd) Concurrent() bool    { return true } // read-only
+
+func (c *modelsCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	return a.handleModels(ctx, msg)
+}
+
+// --- /set-model ---
+
+type setModelCmd struct{}
+
+func (c *setModelCmd) Name() string      { return "/set-model" }
+func (c *setModelCmd) Aliases() []string { return nil }
+func (c *setModelCmd) Match(s string) bool {
+	lower := strings.ToLower(s)
+	return lower == "/set-model" || strings.HasPrefix(lower, "/set-model ")
+}
+func (c *setModelCmd) Concurrent() bool { return false } // mutates LLM config
+
+func (c *setModelCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	return a.handleSetModel(ctx, msg)
+}
+
 // --- ! (bang command) ---
 
 type bangCmd struct{}
@@ -176,8 +221,11 @@ func registerBuiltinCommands(r *CommandRegistry) {
 	r.Register(&helpCmd{})
 	r.Register(&promptCmd{})
 	r.Register(&setLLMCmd{})
+	r.Register(&unsetLLMCmd{})
 	r.Register(&getLLMCmd{})
 	r.Register(&compressCmd{})
 	r.Register(&contextCmd{})
+	r.Register(&modelsCmd{})
+	r.Register(&setModelCmd{})
 	r.Register(&bangCmd{})
 }

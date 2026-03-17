@@ -16,6 +16,7 @@ type UserLLMConfig struct {
 	APIKey       string    // API Key
 	Model        string    // 默认模型
 	MaxContext   int       // 最大上下文 token 数（0 表示不限制）
+	ThinkingMode string    // 思考模式: "" (自动), "enabled", "disabled"
 	UserID       string    // CodeBuddy 专用: X-User-Id
 	EnterpriseID string    // CodeBuddy 专用: X-Enterprise-Id
 	Domain       string    // CodeBuddy 专用: X-Domain
@@ -39,13 +40,14 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 
 	var cfg UserLLMConfig
 	var createdAt, updatedAt sql.NullTime
+	var thinkingMode sql.NullString
 	err := conn.QueryRow(`
-		SELECT sender_id, provider, base_url, api_key, model, max_context, user_id, enterprise_id, domain, created_at, updated_at
+		SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, user_id, enterprise_id, domain, created_at, updated_at
 		FROM user_llm_configs
 		WHERE sender_id = ?
 	`, senderID).Scan(
 		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model, &cfg.MaxContext,
-		&cfg.UserID, &cfg.EnterpriseID, &cfg.Domain,
+		&thinkingMode, &cfg.UserID, &cfg.EnterpriseID, &cfg.Domain,
 		&createdAt, &updatedAt,
 	)
 
@@ -54,6 +56,10 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query user llm config: %w", err)
+	}
+
+	if thinkingMode.Valid {
+		cfg.ThinkingMode = thinkingMode.String
 	}
 
 	if createdAt.Valid {
@@ -72,19 +78,20 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 
 	now := time.Now()
 	_, err := conn.Exec(`
-		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, user_id, enterprise_id, domain, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, thinking_mode, user_id, enterprise_id, domain, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(sender_id) DO UPDATE SET
 			provider = excluded.provider,
 			base_url = excluded.base_url,
 			api_key = excluded.api_key,
 			model = excluded.model,
 			max_context = excluded.max_context,
+			thinking_mode = excluded.thinking_mode,
 			user_id = excluded.user_id,
 			enterprise_id = excluded.enterprise_id,
 			domain = excluded.domain,
 			updated_at = excluded.updated_at
-	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.MaxContext,
+	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode,
 		cfg.UserID, cfg.EnterpriseID, cfg.Domain, now, now,
 	)
 
@@ -93,10 +100,11 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	}
 
 	log.WithFields(log.Fields{
-		"sender_id":   cfg.SenderID,
-		"provider":    cfg.Provider,
-		"model":       cfg.Model,
-		"max_context": cfg.MaxContext,
+		"sender_id":     cfg.SenderID,
+		"provider":      cfg.Provider,
+		"model":         cfg.Model,
+		"max_context":   cfg.MaxContext,
+		"thinking_mode": cfg.ThinkingMode,
 	}).Info("User LLM config saved")
 
 	return nil

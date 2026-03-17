@@ -13,6 +13,41 @@ type SubAgentRole struct {
 	Description  string
 	SystemPrompt string
 	AllowedTools []string
+
+	// Capabilities 声明 SubAgent 可获得的能力（Phase 3）
+	// 在 .xbot/agents/*.md frontmatter 中通过 capabilities 字段声明
+	Capabilities SubAgentCapabilities
+}
+
+// SubAgentCapabilities SubAgent 能力声明
+type SubAgentCapabilities struct {
+	Memory      bool // 可访问 Letta memory（core/archival/recall）
+	SendMessage bool // 可直接向 IM 渠道发送消息
+	SpawnAgent  bool // 可创建子 Agent（需注意递归深度限制）
+}
+
+// ToMap 转换为 map[string]bool，用于跨包传递（避免循环依赖）。
+func (c SubAgentCapabilities) ToMap() map[string]bool {
+	m := make(map[string]bool)
+	if c.Memory {
+		m["memory"] = true
+	}
+	if c.SendMessage {
+		m["send_message"] = true
+	}
+	if c.SpawnAgent {
+		m["spawn_agent"] = true
+	}
+	return m
+}
+
+// CapabilitiesFromMap 从 map[string]bool 构造 SubAgentCapabilities。
+func CapabilitiesFromMap(m map[string]bool) SubAgentCapabilities {
+	return SubAgentCapabilities{
+		Memory:      m["memory"],
+		SendMessage: m["send_message"],
+		SpawnAgent:  m["spawn_agent"],
+	}
 }
 
 // agentsDir 存储全局 agents 目录路径，供运行时按需加载

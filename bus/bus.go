@@ -59,6 +59,10 @@ type InboundMessage struct {
 	SystemPrompt  string   // 覆盖 system prompt
 	AllowedTools  []string // 工具白名单（空=全部可用工具，除 SubAgent）
 	RoleName      string   // SubAgent 角色名（如 "code-reviewer"）
+	// Capabilities 声明 SubAgent 可获得的能力。
+	// 使用 map[string]bool 避免 bus→tools 循环依赖。
+	// 已知 key: "memory", "send_message", "spawn_agent"
+	Capabilities map[string]bool
 }
 
 // IsFromAgent 判断消息是否来自其他 Agent（而非 IM 渠道）。

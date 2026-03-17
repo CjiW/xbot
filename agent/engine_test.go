@@ -942,7 +942,10 @@ func TestSpawnAgentAdapter(t *testing.T) {
 		ChatID:     "oc_xxx",
 	}
 
-	result, err := adapter.RunSubAgent(parentCtx, "review this code", "You are a code reviewer.", []string{"Shell", "Read"})
+	result, err := adapter.RunSubAgent(parentCtx, "review this code", "You are a code reviewer.", []string{"Shell", "Read"}, tools.SubAgentCapabilities{
+		Memory:      true,
+		SendMessage: true,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -986,6 +989,17 @@ func TestSpawnAgentAdapter(t *testing.T) {
 	if !capturedMsg.To.IsAgent() {
 		t.Errorf("To should be Agent address, got %v", capturedMsg.To)
 	}
+
+	// Verify capabilities are propagated
+	if !capturedMsg.Capabilities["memory"] {
+		t.Error("expected capabilities[memory] = true")
+	}
+	if !capturedMsg.Capabilities["send_message"] {
+		t.Error("expected capabilities[send_message] = true")
+	}
+	if capturedMsg.Capabilities["spawn_agent"] {
+		t.Error("expected capabilities[spawn_agent] = false")
+	}
 }
 
 func TestSpawnAgentAdapter_ErrorPropagation(t *testing.T) {
@@ -1006,7 +1020,7 @@ func TestSpawnAgentAdapter_ErrorPropagation(t *testing.T) {
 		Ctx: context.Background(),
 	}
 
-	result, err := adapter.RunSubAgent(parentCtx, "task", "", nil)
+	result, err := adapter.RunSubAgent(parentCtx, "task", "", nil, tools.SubAgentCapabilities{})
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
@@ -1114,7 +1128,7 @@ func TestBuildToolContext(t *testing.T) {
 	}
 
 	// Verify Manager works
-	_, _ = tc.Manager.RunSubAgent(tc, "test", "prompt", nil)
+	_, _ = tc.Manager.RunSubAgent(tc, "test", "prompt", nil, tools.SubAgentCapabilities{})
 	if !called {
 		t.Error("SpawnAgent was not called through Manager")
 	}

@@ -183,6 +183,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	task string,
 	systemPrompt string,
 	allowedTools []string,
+	caps tools.SubAgentCapabilities,
 ) RunConfig {
 	parentAgentID := parentCtx.AgentID
 
@@ -190,9 +191,11 @@ func (a *Agent) buildSubAgentRunConfig(
 		systemPrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
 
-	// 子 Agent 工具集：除 SubAgent 外的所有标准工具（防止递归创建）
+	// 子 Agent 工具集：根据 capabilities 决定是否保留 SubAgent 工具
 	subTools := a.tools.Clone()
-	subTools.Unregister("SubAgent")
+	if !caps.SpawnAgent {
+		subTools.Unregister("SubAgent")
+	}
 
 	// 如果指定了工具白名单，只保留白名单中的工具
 	if len(allowedTools) > 0 {
@@ -220,7 +223,7 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	subAgentID := parentAgentID + "/sub"
 
-	return RunConfig{
+	cfg := RunConfig{
 		LLMClient: a.llmClient,
 		Model:     a.model,
 		Tools:     subTools,
@@ -249,6 +252,25 @@ func (a *Agent) buildSubAgentRunConfig(
 
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
 	}
+
+	// Capability: send_message — 允许 SubAgent 向 IM 渠道发送消息
+	if caps.SendMessage {
+		cfg.SendFunc = a.sendMessage
+	}
+
+	// Capability: memory — 注入 Letta 记忆系统
+	if caps.Memory {
+		cfg.ToolContextExtras = a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
+	}
+
+	// Capability: spawn_agent — 允许 SubAgent 创建子 Agent
+	if caps.SpawnAgent {
+		cfg.SpawnAgent = func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+			return a.spawnSubAgent(ctx, msg)
+		}
+	}
+
+	return cfg
 }
 
 // buildToolExecutor 构建主 Agent 的工具执行器。
@@ -373,7 +395,10 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"task":   tools.Truncate(task, 80),
 	}).Info("SubAgent started (via Run)")
 
-	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools)
+	// 从 InboundMessage 恢复 capabilities
+	caps := tools.CapabilitiesFromMap(msg.Capabilities)
+
+	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps)
 	out := Run(ctx, cfg)
 
 	log.Ctx(ctx).WithFields(log.Fields{

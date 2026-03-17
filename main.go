@@ -109,6 +109,7 @@ func main() {
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
+		SingleUser:           cfg.Agent.SingleUser,
 		MemoryProvider:       cfg.Agent.MemoryProvider,
 		EmbeddingProvider:    cfg.Embedding.Provider,
 		EmbeddingBaseURL:     embBaseURL,

@@ -26,7 +26,7 @@ type RunConfig struct {
 	Model        string
 	ThinkingMode string // 思考模式（如 "enabled", "auto"）
 	Tools        *tools.Registry
-	Messages  []llm.ChatMessage
+	Messages     []llm.ChatMessage
 
 	// === 身份（从 InboundMessage 提取） ===
 	AgentID    string // "main", "main/code-reviewer"
@@ -455,7 +455,7 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 
 		// --- 工具执行 ---
 
-	// 为所有工具调用添加进度行占位符
+		// 为所有工具调用添加进度行占位符
 		progressStartIdx := len(progressLines)
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)

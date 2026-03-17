@@ -40,7 +40,7 @@ func (a *Agent) buildMainRunConfig(
 		Model:        model,
 		ThinkingMode: thinkingMode,
 		Tools:        a.tools,
-		Messages:  messages,
+		Messages:     messages,
 
 		// 身份
 		AgentID:    "main",
@@ -136,12 +136,12 @@ func (a *Agent) buildCronRunConfig(
 		Model:        model,
 		ThinkingMode: thinkingMode,
 		Tools:        a.tools,
-		Messages:   messages,
-		AgentID:    "main",
-		Channel:    channel,
-		ChatID:     chatID,
-		SenderID:   senderID,
-		SenderName: "",
+		Messages:     messages,
+		AgentID:      "main",
+		Channel:      channel,
+		ChatID:       chatID,
+		SenderID:     senderID,
+		SenderName:   "",
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
@@ -232,11 +232,11 @@ func (a *Agent) buildSubAgentRunConfig(
 		Model:        model,
 		ThinkingMode: thinkingMode,
 		Tools:        subTools,
-		Messages:  messages,
-		AgentID:   subAgentID,
-		Channel:   parentCtx.Channel,
-		ChatID:    parentCtx.ChatID,
-		SenderID:  parentCtx.SenderID,
+		Messages:     messages,
+		AgentID:      subAgentID,
+		Channel:      parentCtx.Channel,
+		ChatID:       parentCtx.ChatID,
+		SenderID:     parentCtx.SenderID,
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,

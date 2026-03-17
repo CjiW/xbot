@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"time"
 
 	logrus "xbot/logger"
@@ -126,6 +128,67 @@ func buildToolCallsParam(toolCalls []ToolCall) []openai.ChatCompletionMessageToo
 	return result
 }
 
+// isReasoningModel 检测是否为 reasoning 模型
+// DeepSeek: deepseek-reasoner 或 deepseek-chat with thinking enabled
+// OpenAI: o1-, o3-, o4- series
+func isReasoningModel(model string) bool {
+	model = strings.ToLower(model)
+	// DeepSeek reasoner
+	if strings.Contains(model, "deepseek-reasoner") {
+		return true
+	}
+	// OpenAI reasoning models
+	reasoningPrefixes := []string{"o1-", "o1.", "o3-", "o3.", "o4-", "o4."}
+	for _, prefix := range reasoningPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractReasoningContent 从 OpenAI 响应的 ExtraFields 中提取 reasoning_content
+func extractReasoningContent(msg openai.ChatCompletionMessage) string {
+	if field, ok := msg.JSON.ExtraFields["reasoning_content"]; ok {
+		raw := field.Raw()
+		if raw != "" && raw != "null" {
+			// 尝试解析为字符串
+			var str string
+			if err := json.Unmarshal([]byte(raw), &str); err == nil {
+				return str
+			}
+			// 如果解析失败，返回原始值
+			return raw
+		}
+	}
+	return ""
+}
+
+// extractReasoningContentFromDelta 从流式响应的 Delta 中提取 reasoning_content
+func extractReasoningContentFromDelta(delta openai.ChatCompletionChunkChoiceDelta) string {
+	if field, ok := delta.JSON.ExtraFields["reasoning_content"]; ok {
+		raw := field.Raw()
+		if raw != "" && raw != "null" {
+			// 尝试解析为字符串
+			var str string
+			if err := json.Unmarshal([]byte(raw), &str); err == nil {
+				return str
+			}
+			// 如果解析失败，返回原始值
+			return raw
+		}
+	}
+	return ""
+}
+
+// assistantMessageWithReasoning 用于构建包含 reasoning_content 的 assistant message
+type assistantMessageWithReasoning struct {
+	Role             string `json:"role"`
+	Content          string `json:"content,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	ToolCalls        any    `json:"tool_calls,omitempty"`
+}
+
 // toOpenAIMessages 将业务消息转换为 OpenAI 消息格式
 func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessageParamUnion {
 	result := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
@@ -136,7 +199,23 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 		case "user":
 			result = append(result, openai.UserMessage(msg.Content))
 		case "assistant":
-			if len(msg.ToolCalls) > 0 {
+			// 如果有 reasoning_content，使用原始 JSON 构建消息
+			if msg.ReasoningContent != "" {
+				// 使用 param.Override 构建包含 reasoning_content 的消息
+				rawMsg := assistantMessageWithReasoning{
+					Role:             "assistant",
+					Content:          msg.Content,
+					ReasoningContent: msg.ReasoningContent,
+				}
+				if len(msg.ToolCalls) > 0 {
+					rawMsg.ToolCalls = buildToolCallsParamForJSON(msg.ToolCalls)
+				}
+				jsonData, _ := json.Marshal(rawMsg)
+				overridden := param.Override[openai.ChatCompletionAssistantMessageParam](jsonData)
+				result = append(result, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &overridden,
+				})
+			} else if len(msg.ToolCalls) > 0 {
 				result = append(result, openai.ChatCompletionMessageParamUnion{
 					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 						Content:   openai.ChatCompletionAssistantMessageParamContentUnion{OfString: param.Opt[string]{Value: msg.Content}},
@@ -149,6 +228,22 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 		case "tool":
 			result = append(result, openai.ToolMessage(msg.Content, msg.ToolCallID))
 		}
+	}
+	return result
+}
+
+// buildToolCallsParamForJSON 构建用于 JSON 序列化的 tool calls
+func buildToolCallsParamForJSON(toolCalls []ToolCall) []map[string]any {
+	result := make([]map[string]any, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		result = append(result, map[string]any{
+			"id":   tc.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      tc.Name,
+				"arguments": tc.Arguments,
+			},
+		})
 	}
 	return result
 }
@@ -246,6 +341,9 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		choice := completion.Choices[0]
 		resp.Content = choice.Message.Content
 		resp.FinishReason = FinishReason(choice.FinishReason)
+
+		// 提取 reasoning_content（DeepSeek/OpenAI reasoning 模型）
+		resp.ReasoningContent = extractReasoningContent(choice.Message)
 
 		// 解析工具调用
 		if len(choice.Message.ToolCalls) > 0 {
@@ -351,6 +449,14 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		}
 
 		for _, choice := range chunk.Choices {
+			// 处理 reasoning_content（DeepSeek/OpenAI reasoning 模型）
+			if reasoningDelta := extractReasoningContentFromDelta(choice.Delta); reasoningDelta != "" {
+				eventChan <- StreamEvent{
+					Type:             EventReasoningContent,
+					ReasoningContent: reasoningDelta,
+				}
+			}
+
 			// 处理文本内容
 			if choice.Delta.Content != "" {
 				eventChan <- StreamEvent{

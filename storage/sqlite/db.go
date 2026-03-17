@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 10
+const schemaVersion = 11
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -189,7 +189,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (10);
+INSERT INTO schema_version (version) VALUES (11);
 
 CREATE TABLE user_llm_configs (
     sender_id TEXT PRIMARY KEY,
@@ -198,6 +198,7 @@ CREATE TABLE user_llm_configs (
     api_key TEXT NOT NULL,
     model TEXT,
     max_context INTEGER DEFAULT 0,
+    thinking_mode TEXT DEFAULT '',
     user_id TEXT,
     enterprise_id TEXT,
     domain TEXT,
@@ -500,6 +501,22 @@ UPDATE schema_version SET version = 6;
 			log.Info("Database migrated to v10 (added max_context to user_llm_configs)")
 		}
 		if _, err := conn.Exec("UPDATE schema_version SET version = 10"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+	}
+
+	if from < 11 {
+		// v11: Add thinking_mode column to user_llm_configs
+		var count int
+		err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('user_llm_configs') WHERE name = 'thinking_mode'").Scan(&count)
+		if err == nil && count == 0 {
+			_, err = conn.Exec("ALTER TABLE user_llm_configs ADD COLUMN thinking_mode TEXT DEFAULT ''")
+			if err != nil {
+				return fmt.Errorf("migrate v10->v11: %w", err)
+			}
+			log.Info("Database migrated to v11 (added thinking_mode to user_llm_configs)")
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 11"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}
 	}

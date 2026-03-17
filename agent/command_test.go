@@ -84,8 +84,8 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	registerBuiltinCommands(r)
 
 	cmds := r.Commands()
-	if len(cmds) != 9 {
-		t.Errorf("Commands() returned %d commands, want 9", len(cmds))
+	if len(cmds) != 10 {
+		t.Errorf("Commands() returned %d commands, want 10", len(cmds))
 	}
 
 	// Verify all expected commands are registered
@@ -93,7 +93,7 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	for _, cmd := range cmds {
 		names[cmd.Name()] = true
 	}
-	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/llm", "/compress", "/context", "!"}
+	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/unset-llm", "/llm", "/compress", "/context", "!"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("Command %q not found in registry", name)
@@ -107,9 +107,10 @@ func TestCommandConcurrency(t *testing.T) {
 
 	// Commands that mutate session state must NOT be concurrent
 	nonConcurrent := map[string]bool{
-		"/new":      true,
-		"/compress": true,
-		"/set-llm":  true,
+		"/new":       true,
+		"/compress":  true,
+		"/set-llm":   true,
+		"/unset-llm": true,
 	}
 
 	// Commands that are stateless/read-only should be concurrent

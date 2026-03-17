@@ -15,14 +15,15 @@ var (
 
 // ChatMessage 业务层定义的消息类型，与具体 LLM 实现解耦
 type ChatMessage struct {
-	Role          string     `json:"role"` // "system", "user", "assistant", "tool"
-	Content       string     `json:"content"`
-	ToolCallID    string     `json:"tool_call_id,omitempty"`   // 如果是 tool 消息，记录工具调用 ID
-	ToolName      string     `json:"tool_name,omitempty"`      // 如果是 tool 消息，记录工具名称
-	ToolArguments string     `json:"tool_arguments,omitempty"` // 如果是 tool 消息，记录工具调用参数
-	ToolCalls     []ToolCall `json:"tool_calls,omitempty"`     // 如果是 assistant 消息且有工具调用
-	Detail        string     `json:"-"`                        // 工具结果详情（如 diff），不参与 LLM 上下文，仅持久化和前端展示
-	Timestamp     time.Time  `json:"-"`                        // 消息时间戳，不参与 LLM 上下文
+	Role             string     `json:"role"` // "system", "user", "assistant", "tool"
+	Content          string     `json:"content"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // DeepSeek/OpenAI reasoning 模型的思维链内容
+	ToolCallID       string     `json:"tool_call_id,omitempty"`      // 如果是 tool 消息，记录工具调用 ID
+	ToolName         string     `json:"tool_name,omitempty"`         // 如果是 tool 消息，记录工具名称
+	ToolArguments    string     `json:"tool_arguments,omitempty"`    // 如果是 tool 消息，记录工具调用参数
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`        // 如果是 assistant 消息且有工具调用
+	Detail           string     `json:"-"`                           // 工具结果详情（如 diff），不参与 LLM 上下文，仅持久化和前端展示
+	Timestamp        time.Time  `json:"-"`                           // 消息时间戳，不参与 LLM 上下文
 }
 
 // NewSystemMessage 创建系统消息
@@ -85,10 +86,11 @@ func (u TokenUsage) Add(u1 TokenUsage) TokenUsage {
 
 // LLMResponse 业务层定义的 LLM 响应类型
 type LLMResponse struct {
-	Content      string       `json:"content"`       // 文本内容
-	ToolCalls    []ToolCall   `json:"tool_calls"`    // 工具调用列表（可能为空）
-	FinishReason FinishReason `json:"finish_reason"` // 结束原因
-	Usage        TokenUsage   `json:"usage"`         // token 使用统计
+	Content          string       `json:"content"`                    // 文本内容
+	ReasoningContent string       `json:"reasoning_content,omitempty"` // 思维链内容（DeepSeek/OpenAI reasoning 模型）
+	ToolCalls        []ToolCall   `json:"tool_calls,omitempty"`       // 工具调用列表（可能为空）
+	FinishReason     FinishReason `json:"finish_reason"`              // 结束原因
+	Usage            TokenUsage   `json:"usage"`                      // token 使用统计
 }
 
 // HasToolCalls 检查是否有工具调用
@@ -100,11 +102,12 @@ func (r *LLMResponse) HasToolCalls() bool {
 type StreamEventType string
 
 const (
-	EventContent  StreamEventType = "content"   // 文本内容增量
-	EventToolCall StreamEventType = "tool_call" // 工具调用增量
-	EventUsage    StreamEventType = "usage"     // Token 统计
-	EventDone     StreamEventType = "done"      // 完成
-	EventError    StreamEventType = "error"     // 错误
+	EventContent          StreamEventType = "content"            // 文本内容增量
+	EventReasoningContent StreamEventType = "reasoning_content" // 思维链内容增量（DeepSeek/OpenAI reasoning 模型）
+	EventToolCall         StreamEventType = "tool_call"         // 工具调用增量
+	EventUsage            StreamEventType = "usage"             // Token 统计
+	EventDone             StreamEventType = "done"              // 完成
+	EventError            StreamEventType = "error"             // 错误
 )
 
 // ToolCallDelta 工具调用增量
@@ -117,12 +120,13 @@ type ToolCallDelta struct {
 
 // StreamEvent 流式事件
 type StreamEvent struct {
-	Type         StreamEventType `json:"type"`
-	Content      string          `json:"content,omitempty"`       // 文本增量
-	ToolCall     *ToolCallDelta  `json:"tool_call,omitempty"`     // 工具调用增量
-	Usage        *TokenUsage     `json:"usage,omitempty"`         // Token 统计
-	FinishReason FinishReason    `json:"finish_reason,omitempty"` // 结束原因
-	Error        string          `json:"error,omitempty"`         // 错误信息
+	Type             StreamEventType `json:"type"`
+	Content          string          `json:"content,omitempty"`            // 文本增量
+	ReasoningContent string          `json:"reasoning_content,omitempty"` // 思维链增量（DeepSeek/OpenAI reasoning 模型）
+	ToolCall         *ToolCallDelta  `json:"tool_call,omitempty"`         // 工具调用增量
+	Usage            *TokenUsage     `json:"usage,omitempty"`             // Token 统计
+	FinishReason     FinishReason    `json:"finish_reason,omitempty"`     // 结束原因
+	Error            string          `json:"error,omitempty"`             // 错误信息
 }
 
 // ToolParam 工具参数定义

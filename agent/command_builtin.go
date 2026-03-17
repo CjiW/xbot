@@ -61,6 +61,7 @@ func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (
 			"/prompt <query> — 预览完整提示词（不调用 LLM）\n" +
 			"/help — 显示帮助\n" +
 			"/set-llm — 设置自定义 LLM API\n" +
+			"/unset-llm — 清除自定义 LLM 配置\n" +
 			"/llm — 查看当前 LLM 配置\n" +
 			"/compress — 手动触发上下文压缩\n" +
 			"/context — 查看当前 token 数和组成\n" +
@@ -116,6 +117,19 @@ func (c *getLLMCmd) Concurrent() bool    { return true } // read-only
 
 func (c *getLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	return a.handleGetLLM(ctx, msg)
+}
+
+// --- /unset-llm ---
+
+type unsetLLMCmd struct{}
+
+func (c *unsetLLMCmd) Name() string        { return "/unset-llm" }
+func (c *unsetLLMCmd) Aliases() []string   { return nil }
+func (c *unsetLLMCmd) Match(s string) bool { return strings.ToLower(s) == "/unset-llm" }
+func (c *unsetLLMCmd) Concurrent() bool    { return false } // mutates LLM config
+
+func (c *unsetLLMCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	return a.handleUnsetLLM(ctx, msg)
 }
 
 // --- /compress ---
@@ -176,6 +190,7 @@ func registerBuiltinCommands(r *CommandRegistry) {
 	r.Register(&helpCmd{})
 	r.Register(&promptCmd{})
 	r.Register(&setLLMCmd{})
+	r.Register(&unsetLLMCmd{})
 	r.Register(&getLLMCmd{})
 	r.Register(&compressCmd{})
 	r.Register(&contextCmd{})

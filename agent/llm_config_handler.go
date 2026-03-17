@@ -9,14 +9,15 @@ import (
 	"xbot/storage/sqlite"
 )
 
-const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>]
+const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [thinking_mode=<mode>]
 
 参数说明:
-  provider    - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
-  base_url    - API 基础地址
-  api_key     - API 密钥
-  model       - 模型名称（可选）
-  max_context - 最大上下文 token 数（可选，0 表示不限制）
+  provider      - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/siliconflow 等 OpenAI 兼容服务
+  base_url      - API 基础地址
+  api_key       - API 密钥
+  model         - 模型名称（可选）
+  max_context   - 最大上下文 token 数（可选，0 表示不限制）
+  thinking_mode - 思考模式（可选）: enabled（强制开启）、disabled（强制关闭）、留空则自动检测
 
 CodeBuddy 额外参数:
   user_id       - 用户 ID
@@ -27,6 +28,9 @@ CodeBuddy 额外参数:
   # OpenAI 格式（适用于 OpenAI、DeepSeek、SiliconFlow 等）
   /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4
   /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-chat
+
+  # DeepSeek R1 (Thinking Mode)
+  /set-llm provider=deepseek base_url=https://api.deepseek.com/v1 api_key=sk-xxx model=deepseek-reasoner thinking_mode=enabled
 
   # Anthropic Claude
   /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-3-5-sonnet-20241022
@@ -91,6 +95,12 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			cfg.EnterpriseID = value
 		case "domain":
 			cfg.Domain = value
+		case "thinking_mode":
+			if value == "enabled" || value == "disabled" {
+				cfg.ThinkingMode = value
+			} else {
+				cfg.ThinkingMode = "" // auto
+			}
 		}
 	}
 
@@ -130,11 +140,18 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		maxContextStr = fmt.Sprintf("\n- Max Context: %d", cfg.MaxContext)
 	}
 
+	var thinkingModeStr string
+	if cfg.ThinkingMode != "" {
+		thinkingModeStr = fmt.Sprintf("\n- Thinking Mode: %s", cfg.ThinkingMode)
+	} else {
+		thinkingModeStr = "\n- Thinking Mode: auto"
+	}
+
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s%s%s",
-			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model, maxContextStr, warning),
+		Content: fmt.Sprintf("LLM 配置已保存:\n- Provider: %s\n- Base URL: %s\n- API Key: %s\n- Model: %s%s%s%s",
+			cfg.Provider, cfg.BaseURL, maskedKey, cfg.Model, maxContextStr, thinkingModeStr, warning),
 	}, nil
 }
 
@@ -164,6 +181,11 @@ func (a *Agent) handleGetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	if cfg.MaxContext > 0 {
 		extraFields += fmt.Sprintf("\n- Max Context: %d", cfg.MaxContext)
 	}
+	if cfg.ThinkingMode != "" {
+		extraFields += fmt.Sprintf("\n- Thinking Mode: %s", cfg.ThinkingMode)
+	} else {
+		extraFields += "\n- Thinking Mode: auto"
+	}
 	if cfg.UserID != "" {
 		extraFields += fmt.Sprintf("\n- User ID: %s", cfg.UserID)
 	}
@@ -188,4 +210,44 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****"
+}
+
+// handleUnsetLLM handles /unset-llm command to remove user's LLM configuration
+func (a *Agent) handleUnsetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// Check if user has a custom config
+	cfg, err := a.llmConfigSvc.GetConfig(msg.SenderID)
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("查询配置失败: %v", err),
+		}, nil
+	}
+
+	if cfg == nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "当前未配置自定义 LLM，无需清除。",
+		}, nil
+	}
+
+	// Delete the config
+	if err := a.llmConfigSvc.DeleteConfig(msg.SenderID); err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("清除配置失败: %v", err),
+		}, nil
+	}
+
+	// Invalidate cached LLM client and HasCustomLLM cache
+	a.llmFactory.Invalidate(msg.SenderID)
+	a.llmFactory.InvalidateCustomLLMCache(msg.SenderID)
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: "已清除自定义 LLM 配置，将使用系统默认配置。",
+	}, nil
 }

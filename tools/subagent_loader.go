@@ -57,6 +57,8 @@ func parseAgentFile(path string) (SubAgentRole, error) {
 		name = strings.TrimSuffix(filepath.Base(path), ".md")
 	}
 
+	// 默认允许 spawn_agent，除非 frontmatter 中显式设置 spawn_agent: false
+	// （已在 parseFrontmatter 中处理）
 	return SubAgentRole{
 		Name:         name,
 		Description:  description,
@@ -97,7 +99,11 @@ func splitFrontmatter(content string) (frontmatter, body string, err error) {
 
 // parseFrontmatter 手动解析简单 YAML frontmatter
 // 支持 name, description（字符串）、tools（列表）和 capabilities（子字段）
+// 默认 spawn_agent=true，除非显式设置 spawn_agent: false
 func parseFrontmatter(fm string) (name, description string, tools []string, caps SubAgentCapabilities, err error) {
+	caps = SubAgentCapabilities{
+		SpawnAgent: true, // 默认允许 spawn 子 agent
+	}
 	lines := strings.Split(fm, "\n")
 	var currentField string
 

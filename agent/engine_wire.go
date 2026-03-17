@@ -240,6 +240,12 @@ func (a *Agent) buildSubAgentRunConfig(
 	sysPrompt := fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, now)
 	sysPrompt += "\n## 角色描述\n\n" + rolePrompt + "\n"
 
+	// 注入可用 agent 目录（与主 Agent 的 buildPrompt 保持一致）
+	// SubAgent 也需要知道自己能调用哪些 agent（特别是 spawn_agent=true 时）
+	if agentsCatalog := a.agents.GetAgentsCatalog(parentCtx.SenderID); agentsCatalog != "" {
+		sysPrompt += "\n" + agentsCatalog
+	}
+
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage(sysPrompt),
 		llm.NewUserMessage(task),

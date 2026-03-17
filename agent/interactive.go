@@ -63,6 +63,17 @@ func (a *Agent) SpawnInteractiveSession(
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName)
 
+	// SubAgent 进度上报：通过父 Agent 的消息通道实时反馈给用户
+	if originChannel != "" && originChatID != "" {
+		rn := roleName // 闭包捕获
+		cfg.ProgressNotifier = func(lines []string) {
+			if len(lines) > 0 {
+				prefixed := "📋 [" + rn + "] " + lines[0]
+				_ = a.sendMessage(originChannel, originChatID, prefixed)
+			}
+		}
+	}
+
 	// 记录 spawn 前的消息数量，用于提取本次任务的对话
 	preLen := len(cfg.Messages)
 

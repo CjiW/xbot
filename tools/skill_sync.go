@@ -5,38 +5,37 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	log "xbot/logger"
 )
 
-// skillSyncer manages lazy one-shot sync of global skills/agents into user workspaces.
-// Each user (by senderID) is synced at most once per process lifetime until invalidated.
+// skillSyncer manages lazy sync of global skills/agents into user workspaces.
+// Each user (by senderID) is synced periodically (every 5 minutes) to pick up
+// changes to global skills/agents directories.
 type skillSyncer struct {
 	mu     sync.Mutex
-	synced map[string]bool // senderID → done
+	synced map[string]time.Time // senderID → last sync time
 }
 
-var globalSkillSyncer = &skillSyncer{synced: make(map[string]bool)}
+var globalSkillSyncer = &skillSyncer{synced: make(map[string]time.Time)}
 
 // EnsureSynced lazily copies global skills and agents into the user's workspace volume.
-// Safe to call repeatedly; actual I/O only happens once per user per process lifetime.
+// Safe to call repeatedly; actual I/O only happens once per user every 5 minutes.
 func EnsureSynced(ctx *ToolContext) {
 	if ctx == nil || ctx.SenderID == "" || ctx.WorkspaceRoot == "" {
 		return
 	}
 
 	globalSkillSyncer.mu.Lock()
-	if globalSkillSyncer.synced[ctx.SenderID] {
+	if last, ok := globalSkillSyncer.synced[ctx.SenderID]; ok && time.Since(last) < 5*time.Minute {
 		globalSkillSyncer.mu.Unlock()
 		return
 	}
+	globalSkillSyncer.synced[ctx.SenderID] = time.Now()
 	globalSkillSyncer.mu.Unlock()
 
 	syncSkillsAndAgents(ctx)
-
-	globalSkillSyncer.mu.Lock()
-	globalSkillSyncer.synced[ctx.SenderID] = true
-	globalSkillSyncer.mu.Unlock()
 }
 
 func syncSkillsAndAgents(ctx *ToolContext) {

@@ -236,14 +236,20 @@ func (a *Agent) buildSubAgentRunConfig(
 		rolePrompt = "You are a helpful assistant. Complete the given task using the available tools."
 	}
 
-	// 通用模板 + 角色描述
-	sysPrompt := fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, now)
+	// 通用模板 + 角色描述（有白名单时使用精简模板）
+	var sysPrompt string
+	if len(allowedTools) > 0 {
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplateConcise, workDir, roleName, now)
+	} else {
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, now)
+	}
 	sysPrompt += "\n## 角色描述\n\n" + rolePrompt + "\n"
 
-	// 注入可用 agent 目录（与主 Agent 的 buildPrompt 保持一致）
-	// SubAgent 也需要知道自己能调用哪些 agent（特别是 spawn_agent=true 时）
-	if agentsCatalog := a.agents.GetAgentsCatalog(parentCtx.SenderID); agentsCatalog != "" {
-		sysPrompt += "\n" + agentsCatalog
+	// 注入可用 agent 目录（只在 spawn_agent=true 时注入）
+	if caps.SpawnAgent {
+		if agentsCatalog := a.agents.GetAgentsCatalog(parentCtx.SenderID); agentsCatalog != "" {
+			sysPrompt += "\n" + agentsCatalog
+		}
 	}
 
 	messages := []llm.ChatMessage{
@@ -633,6 +639,17 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 
 	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName)
+
+	// SubAgent 进度上报：通过父 Agent 的消息通道实时反馈给用户
+	if originChannel != "" && originChatID != "" {
+		rn := roleName // 闭包捕获
+		cfg.ProgressNotifier = func(lines []string) {
+			if len(lines) > 0 {
+				prefixed := "📋 [" + rn + "] " + lines[0]
+				_ = a.sendMessage(originChannel, originChatID, prefixed)
+			}
+		}
+	}
 
 	// 传递 CallChain 给子 Agent
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))

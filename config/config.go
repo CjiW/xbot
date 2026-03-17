@@ -85,6 +85,7 @@ type AgentConfig struct {
 	MemoryProvider string // 记忆提供者: "flat" 或 "letta"（默认 "flat"）
 	WorkDir        string // 工作目录（所有文件相对此目录存放）
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
+	SingleUser     bool   // 单用户模式：所有消息的 SenderID 归一化为 "default"
 
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间（默认 30 分钟）
@@ -192,6 +193,7 @@ func Load() *Config {
 			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
 			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
 			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
+			SingleUser:           getEnvBoolOrDefault("SINGLE_USER", false),
 			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
 			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
 			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),

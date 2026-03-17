@@ -194,6 +194,7 @@ type Agent struct {
 	pipeline        *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
 	cronPipeline    *MessagePipeline // Cron 专用消息构建管道
 	sandboxMode     string           // "none" or "docker"
+	singleUser      bool             // 单用户模式
 	maxConcurrency  int              // 最大并发会话处理数
 	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
 	agentsDir       string           // 全局 agents 目录（宿主机路径）
@@ -257,6 +258,7 @@ type Config struct {
 	SkillsDir      string // Skills 目录
 	WorkDir        string // 工作目录（所有文件相对此目录）
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
+	SingleUser     bool   // 单用户模式：所有消息的 SenderID 归一化为 "default"
 
 	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
 	EmbeddingProvider  string // 嵌入提供者: "openai"(默认) 或 "ollama"
@@ -404,6 +406,7 @@ func New(cfg Config) *Agent {
 		workDir:              cfg.WorkDir,
 		promptLoader:         NewPromptLoader(cfg.PromptFile),
 		sandboxMode:          sandboxMode,
+		singleUser:           cfg.SingleUser,
 		globalSkillDirs:      globalSkillDirs,
 		maxContextTokens:     cfg.MaxContextTokens,
 		compressionThreshold: cfg.CompressionThreshold,
@@ -501,7 +504,10 @@ func (a *Agent) sendAck(channel, chatID string) {
 // 全局并发数由 AGENT_MAX_CONCURRENCY 控制（默认 3），避免 LLM 并发过高。
 // 用户设置了自己的 LLM 配置后，该用户的请求使用独立的信号量，不再占用全局资源。
 func (a *Agent) Run(ctx context.Context) error {
-	log.WithField("max_concurrency", a.maxConcurrency).Info("Agent loop started")
+	log.WithFields(log.Fields{
+		"max_concurrency": a.maxConcurrency,
+		"single_user":     a.singleUser,
+	}).Info("Agent loop started")
 
 	a.multiSession.StartCleanupRoutine()
 	a.cronSch.SetInjectFunc(a.injectInbound)
@@ -552,6 +558,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
+			// 单用户模式：在 bus 入口统一归一化 SenderID
+			msg.SenderID = a.normalizeSenderID(msg.SenderID)
+
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
 				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
@@ -585,6 +594,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// normalizeSenderID returns the effective sender ID for the message.
+// In single-user mode, all sender IDs are mapped to "default".
+func (a *Agent) normalizeSenderID(senderID string) string {
+	if a.singleUser {
+		return "default"
+	}
+	return senderID
 }
 
 // isGroupChat 判断是否为群聊
@@ -1786,7 +1804,7 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, error) {
 	msg := bus.InboundMessage{
 		Channel:   "cli",
-		SenderID:  "user",
+		SenderID:  a.normalizeSenderID("user"),
 		ChatID:    "direct",
 		Content:   content,
 		Time:      time.Now(),

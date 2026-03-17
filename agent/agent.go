@@ -227,6 +227,10 @@ type Agent struct {
 	// per-request cancel: 用于 /cancel 取消当前正在处理的请求
 	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
 	chatCancelCh sync.Map
+
+	// interactiveSubAgents stores interactive SubAgent sessions
+	// key: "channel:chatID/roleName" -> *interactiveAgent
+	interactiveSubAgents sync.Map
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {

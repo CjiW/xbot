@@ -102,6 +102,17 @@ type RunConfig struct {
 	// SessionFinalSentCallback 工具发送最终回复时的回调（如飞书卡片）。
 	// 返回 true 表示已发送最终回复，后续进度通知应停止。
 	SessionFinalSentCallback func() bool
+
+	// InteractiveCallbacks Interactive SubAgent 回调（nil = 不支持 interactive）。
+	// 主 Agent 注入，SubAgent 不注入。
+	InteractiveCallbacks *InteractiveCallbacks
+}
+
+// InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
+type InteractiveCallbacks struct {
+	SpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	SendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	UnloadFn func(ctx context.Context, roleName string) error
 }
 
 // CompressConfig 自动压缩配置。
@@ -686,40 +697,16 @@ type spawnAgentAdapter struct {
 	channel  string
 	chatID   string
 	senderID string
+
+	// Interactive mode callbacks (nil = interactive not supported)
+	interactiveSpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	interactiveSendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	interactiveUnloadFn func(ctx context.Context, roleName string) error
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
 func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
-	// 构造统一的 InboundMessage
-	metadata := map[string]string{
-		"origin_channel": a.channel,
-		"origin_chat_id": a.chatID,
-		"origin_sender":  a.senderID,
-	}
-
-	msg := bus.InboundMessage{
-		// 统一寻址
-		From: bus.NewIMAddress(a.channel, a.senderID),
-		To:   bus.NewAgentAddress(a.parentID),
-
-		// 旧字段（兼容）
-		Channel:    bus.SchemeAgent,
-		Content:    task,
-		SenderID:   parentCtx.SenderID,
-		SenderName: parentCtx.SenderName,
-		ChatID:     parentCtx.ChatID,
-		ChatType:   "agent",
-		Time:       time.Now(),
-
-		// Agent 间通信
-		ParentAgentID: a.parentID,
-		RoleName:      roleName,
-		SystemPrompt:  systemPrompt,
-		AllowedTools:  allowedTools,
-		Capabilities:  caps.ToMap(),
-		Metadata:      metadata,
-	}
-
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false)
 	out, err := a.spawnFn(parentCtx.Ctx, msg)
 	if err != nil {
 		return "", err
@@ -728,6 +715,78 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 		return out.Content, out.Error
 	}
 	return out.Content, nil
+}
+
+// SpawnInteractive 实现 InteractiveSubAgentManager.SpawnInteractive。
+func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+	if a.interactiveSpawnFn == nil {
+		return "", fmt.Errorf("interactive mode not supported")
+	}
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
+	out, err := a.interactiveSpawnFn(parentCtx.Ctx, roleName, msg)
+	if err != nil {
+		return "", err
+	}
+	if out.Error != nil {
+		return out.Content, out.Error
+	}
+	return out.Content, nil
+}
+
+// SendInteractive 实现 InteractiveSubAgentManager.SendInteractive。
+func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+	if a.interactiveSendFn == nil {
+		return "", fmt.Errorf("interactive mode not supported")
+	}
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
+	out, err := a.interactiveSendFn(parentCtx.Ctx, roleName, msg)
+	if err != nil {
+		return "", err
+	}
+	if out.Error != nil {
+		return out.Content, out.Error
+	}
+	return out.Content, nil
+}
+
+// UnloadInteractive 实现 InteractiveSubAgentManager.UnloadInteractive。
+func (a *spawnAgentAdapter) UnloadInteractive(parentCtx *tools.ToolContext, roleName string) error {
+	if a.interactiveUnloadFn == nil {
+		return fmt.Errorf("interactive mode not supported")
+	}
+	return a.interactiveUnloadFn(parentCtx.Ctx, roleName)
+}
+
+// buildMsg 构造 SubAgent InboundMessage。
+func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool) bus.InboundMessage {
+	metadata := map[string]string{
+		"origin_channel": a.channel,
+		"origin_chat_id": a.chatID,
+		"origin_sender":  a.senderID,
+	}
+	if interactive {
+		metadata["interactive"] = "true"
+	}
+
+	return bus.InboundMessage{
+		From: bus.NewIMAddress(a.channel, a.senderID),
+		To:   bus.NewAgentAddress(a.parentID),
+
+		Channel:    bus.SchemeAgent,
+		Content:    task,
+		SenderID:   parentCtx.SenderID,
+		SenderName: parentCtx.SenderName,
+		ChatID:     a.chatID,
+		ChatType:   "agent",
+		Time:       time.Now(),
+
+		ParentAgentID: a.parentID,
+		RoleName:      roleName,
+		SystemPrompt:  systemPrompt,
+		AllowedTools:  allowedTools,
+		Capabilities:  caps.ToMap(),
+		Metadata:      metadata,
+	}
 }
 
 // buildToolContext 统一构建 ToolContext。
@@ -764,13 +823,20 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 	// 注入 SpawnAgent（包装为 SubAgentManager 接口）
 	if cfg.SpawnAgent != nil {
-		tc.Manager = &spawnAgentAdapter{
+		adapter := &spawnAgentAdapter{
 			spawnFn:  cfg.SpawnAgent,
 			parentID: cfg.AgentID,
 			channel:  cfg.Channel,
 			chatID:   cfg.ChatID,
 			senderID: cfg.SenderID,
 		}
+		// 注入 Interactive callbacks（主 Agent 专有）
+		if cb := cfg.InteractiveCallbacks; cb != nil {
+			adapter.interactiveSpawnFn = cb.SpawnFn
+			adapter.interactiveSendFn = cb.SendFn
+			adapter.interactiveUnloadFn = cb.UnloadFn
+		}
+		tc.Manager = adapter
 	}
 
 	// 注入 Letta 记忆字段（覆盖上面的默认值）

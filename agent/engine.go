@@ -407,13 +407,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 							}
 						}
 					}
-					// 重试 LLM 调用
+					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
 					var retryCtx context.Context
 					var retryCancel context.CancelFunc
 					if cfg.LLMTimeout > 0 {
-						retryCtx, retryCancel = context.WithTimeout(ctx, cfg.LLMTimeout)
+						retryCtx, retryCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
 					} else {
-						retryCtx, retryCancel = ctx, func() {}
+						retryCtx, retryCancel = retryNotifyCtx, func() {}
 					}
 					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					retryCancel()

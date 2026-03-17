@@ -231,6 +231,7 @@ type Agent struct {
 	// interactiveSubAgents stores interactive SubAgent sessions
 	// key: "channel:chatID/roleName" -> *interactiveAgent
 	interactiveSubAgents sync.Map
+	interactiveMu        sync.Mutex // protects spawn race in SpawnInteractiveSession
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {

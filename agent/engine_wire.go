@@ -118,6 +118,15 @@ func (a *Agent) buildMainRunConfig(
 		return a.spawnSubAgent(ctx, inMsg)
 	}
 
+	// InteractiveCallbacks — interactive SubAgent 支持
+	cfg.InteractiveCallbacks = &InteractiveCallbacks{
+		SpawnFn: a.SpawnInteractiveSession,
+		SendFn:  a.SendToInteractiveSession,
+		UnloadFn: func(ctx context.Context, roleName string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID)
+		},
+	}
+
 	return cfg
 }
 

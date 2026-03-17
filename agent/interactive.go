@@ -39,13 +39,14 @@ func (a *Agent) SpawnInteractiveSession(
 
 	key := interactiveKey(originChannel, originChatID, roleName)
 
-	// 检查是否已存在
-	if _, loaded := a.interactiveSubAgents.LoadOrStore(key, (*interactiveAgent)(nil)); loaded {
+	// 检查是否已存在（用 interactiveMu 保护，避免 LoadOrStore(nil) 的竞态）
+	a.interactiveMu.Lock()
+	defer a.interactiveMu.Unlock()
+	if _, loaded := a.interactiveSubAgents.Load(key); loaded {
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
 		}, nil
 	}
-	a.interactiveSubAgents.Delete(key)
 
 	// 构建 parentCtx
 	parentCtx := a.buildParentToolContext(ctx, originChannel, originChatID, originSender, msg)

@@ -17,11 +17,17 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
   api_key       - API 密钥
   model         - 模型名称（可选）
   max_context   - 最大上下文 token 数（可选，0 表示不限制）
-  thinking_mode - 思考模式（可选，支持 DeepSeek/智谱 GLM 等推理模型）:
-                  - enabled: 强制开启思考模式
-                  - disabled: 强制关闭思考模式
-                  - {"type":"enabled","clear_thinking":false}: GLM 保留式思考（多轮推理连贯）
-                  - 留空则不发送参数（模型自动决定）
+  thinking_mode - 思考模式（可选，各厂商格式不同）:
+                  DeepSeek/OpenAI reasoning:
+                    - enabled: 强制开启
+                    - disabled: 强制关闭
+                  智谱 GLM:
+                    - {"type":"enabled","clear_thinking":false}: 保留式思考（多轮推理连贯）
+                  Anthropic Claude:
+                    - enabled: 手动模式（需配合 budget_tokens）
+                    - adaptive: 自适应模式（Opus 4.6/Sonnet 4.6）
+                    - {"type":"enabled","budget_tokens":10000}
+                    - {"type":"adaptive","effort":"high"}  (low/medium/high)
 
 CodeBuddy 额外参数:
   user_id       - 用户 ID
@@ -44,6 +50,12 @@ CodeBuddy 额外参数:
 
   # Anthropic Claude
   /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-3-5-sonnet-20241022
+
+  # Anthropic Claude Extended Thinking (手动模式)
+  /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-3-5-sonnet-20241022 thinking_mode={"type":"enabled","budget_tokens":10000}
+
+  # Anthropic Claude Adaptive Thinking (Opus 4.6/Sonnet 4.6)
+  /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-sonnet-4-20250514 thinking_mode=adaptive
 
   # CodeBuddy（专有 API）
   /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
@@ -106,8 +118,8 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		case "domain":
 			cfg.Domain = value
 		case "thinking_mode":
-			// 支持: enabled, disabled, 自定义 JSON 字符串
-			if value == "enabled" || value == "disabled" || (len(value) > 0 && value[0] == '{') {
+			// 支持: enabled, disabled, adaptive, 自定义 JSON 字符串
+			if value == "enabled" || value == "disabled" || value == "adaptive" || (len(value) > 0 && value[0] == '{') {
 				cfg.ThinkingMode = value
 			} else {
 				cfg.ThinkingMode = "" // 空/无效值表示不发送参数

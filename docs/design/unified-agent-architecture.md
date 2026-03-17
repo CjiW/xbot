@@ -242,27 +242,42 @@ IM → InboundMessage → Engine.Run(cfg) → OutboundMessage
 
 ### 2.3 SubAgent 记忆模型
 
+**核心原则**：`(agentID, userID)` 确定一套记忆和上下文。
+
+- `agentID` 标识被调 Agent：`"main"`, `"main/code-reviewer"`, `"main/deploy"` 等
+- `userID` 标识调用者（IM 用户）：`"ou_xxx"` 等
+
 ```
-用户请求 → 主 Agent (tenant: feishu:oc_xxx)
+用户请求 → 主 Agent (agentID="main", tenant: feishu:oc_xxx)
               │
-              ├─ Persona:  tenantID=0, userID=""     (全局唯一)
-              ├─ Human:    tenantID=0, userID=ou_xxx  (跨 tenant 按用户)
-              └─ Working:  tenantID=N                 (按会话)
+              ├─ Persona:  agentID="main"                        (和 agent 绑定)
+              ├─ Human:    userID=ou_xxx                         (和调用者绑定)
+              ├─ Working:  agentID="main", tenantID=N            (和 agent+tenant 绑定)
+              └─ Archival: agentID="main", tenantID=N            (和 agent+tenant 绑定)
               │
               ▼ SubAgent("code-reviewer", task)
 
-SubAgent "code-reviewer":
-  ├─ Persona:  tenantID=0, userID="", subagent="code-reviewer"  (全局唯一)
-  ├─ Human:    继承调用者的 human block（只读引用，不独立存储）
-  ├─ Working:  不持久化（每次任务清空）
-  └─ Archival: collection="subagent_code-reviewer" (全局共享，独立 collection)
+SubAgent "code-reviewer" (agentID="main/code-reviewer"):
+  ├─ Persona:  agentID="main/code-reviewer"                     (和 agent 绑定，独立于主 Agent)
+  ├─ Human:    继承调用者的 human block（只读引用，和调用者 userID 绑定）
+  ├─ Working:  agentID="main/code-reviewer", tenantID=N         (和 agent+tenant 绑定，持久化)
+  └─ Archival: agentID="main/code-reviewer", tenantID=N         (和 agent+tenant 绑定，持久化)
 ```
 
 **关键决策**：
-1. SubAgent 的 **persona** 独立于主 Agent（每个角色有自己的身份认知）
-2. SubAgent 的 **human** 继承调用者（code-reviewer 需要知道它在为谁工作）
-3. SubAgent 的 **working_context** 不持久化（任务完成即清空，避免跨任务污染）
-4. SubAgent 的 **archival memory** 全局共享（code-reviewer 的经验所有用户共享）
+1. SubAgent 的 **persona** 和被调 agent 绑定（每个角色有自己的身份认知，独立于主 Agent）
+2. SubAgent 的 **human** 和调用者绑定（继承调用者的 human block，只读；code-reviewer 需要知道它在为谁工作）
+3. SubAgent 的 **working_context** 按 `tenant + agentID` 隔离并持久化（和主 Agent 类似，同一聊天窗口内跨任务积累上下文）
+4. SubAgent 的 **archival memory** 按 `tenant + agentID` 隔离并持久化（和主 Agent 类似，每个 agent 在每个聊天窗口有独立的归档记忆）
+
+**存储键总结**：
+
+| Block | 存储键 | 隔离维度 |
+|-------|--------|---------|
+| `persona` | `(agentID)` | 被调 agent |
+| `human` | `(userID)` | 调用者 |
+| `working_context` | `(agentID, tenantID)` | 被调 agent × 聊天窗口 |
+| `archival` | `(agentID, tenantID)` | 被调 agent × 聊天窗口 |
 
 ## 3. 详细设计
 
@@ -687,98 +702,120 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 
 ### 3.6 SubAgent 记忆隔离实现（Phase 2）
 
-#### 3.6.1 数据库 Schema 扩展
+#### 3.6.1 数据库 Schema 变更
 
-`core_memory_blocks` 表新增 `subagent_id` 列：
+用 `agent_id` 列替代 `tenantID=0` hack，统一所有 block 的隔离逻辑：
 
 ```sql
--- 现有 schema
-CREATE TABLE core_memory_blocks (
-    tenant_id  INTEGER NOT NULL,
-    block_name TEXT NOT NULL,
-    user_id    TEXT NOT NULL DEFAULT '',
+-- 新表（替代 core_memory_blocks）
+CREATE TABLE agent_memory_blocks (
+    agent_id   TEXT NOT NULL DEFAULT 'main',  -- "main", "main/code-reviewer", ...
+    tenant_id  INTEGER NOT NULL DEFAULT 0,    -- 聊天窗口（working_context 用）
+    block_name TEXT NOT NULL,                 -- "persona", "human", "working_context"
+    user_id    TEXT NOT NULL DEFAULT '',       -- 调用者 ID（human 用）
     content    TEXT NOT NULL DEFAULT '',
     char_limit INTEGER NOT NULL DEFAULT 2000,
-    PRIMARY KEY (tenant_id, block_name, user_id)
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (agent_id, tenant_id, block_name, user_id)
 );
 
--- 迁移：重建表以更新 PRIMARY KEY（SQLite 不支持 ALTER PRIMARY KEY）
-CREATE TABLE core_memory_blocks_new (
-    tenant_id   INTEGER NOT NULL,
-    block_name  TEXT NOT NULL,
-    user_id     TEXT NOT NULL DEFAULT '',
-    subagent_id TEXT NOT NULL DEFAULT '',
-    content     TEXT NOT NULL DEFAULT '',
-    char_limit  INTEGER NOT NULL DEFAULT 2000,
-    PRIMARY KEY (tenant_id, block_name, user_id, subagent_id)
-);
-INSERT INTO core_memory_blocks_new (tenant_id, block_name, user_id, content, char_limit)
-    SELECT tenant_id, block_name, user_id, content, char_limit FROM core_memory_blocks;
-DROP TABLE core_memory_blocks;
-ALTER TABLE core_memory_blocks_new RENAME TO core_memory_blocks;
+-- 迁移旧数据
+INSERT INTO agent_memory_blocks (agent_id, tenant_id, block_name, user_id, content, char_limit)
+    SELECT 'main', tenant_id, block_name, user_id, content, char_limit
+    FROM core_memory_blocks;
 ```
 
-SubAgent 记忆存储规则：
+**存储规则**（消除 `tenantID=0` hack）：
 
-| Block | tenant_id | user_id | subagent_id | 说明 |
-|-------|-----------|---------|-------------|------|
-| persona (主) | 0 | "" | "" | 全局唯一 |
-| persona (SubAgent) | 0 | "" | "code-reviewer" | 每角色唯一 |
-| human | 0 | "ou_xxx" | "" | 跨 tenant 按用户（SubAgent 继承，不独立存储） |
-| working_context (主) | N | "" | "" | 按会话 |
-| working_context (SubAgent) | — | — | — | **不持久化** |
+| Block | agent_id | tenant_id | user_id | 说明 |
+|-------|----------|-----------|---------|------|
+| persona (主) | `"main"` | `0` | `""` | 主 Agent 全局唯一 |
+| persona (SubAgent) | `"main/code-reviewer"` | `0` | `""` | 每角色全局唯一 |
+| human | `"main"` | `0` | `"ou_xxx"` | 和调用者绑定，SubAgent 继承（只读） |
+| working_context (主) | `"main"` | `N` | `""` | 按 agent × 聊天窗口 |
+| working_context (SubAgent) | `"main/code-reviewer"` | `N` | `""` | 按 agent × 聊天窗口（持久化） |
+
+**CoreMemoryService 接口变更**：
+
+```go
+// 旧接口（tenantID=0 hack 硬编码在每个方法里）
+GetBlock(tenantID int64, blockName, userID string) (string, int, error)
+SetBlock(tenantID int64, blockName, content, userID string) error
+
+// 新接口（agentID 显式传入，路由逻辑统一）
+GetBlock(agentID string, tenantID int64, blockName, userID string) (string, int, error)
+SetBlock(agentID string, tenantID int64, blockName, content, userID string) error
+GetAllBlocks(agentID string, tenantID int64, userID string) (map[string]string, error)
+InitBlocks(agentID string, tenantID int64, userID string) error
+```
+
+路由逻辑从方法内部的 `switch blockName` 移到调用方：
+- `persona`: `agentID=当前agent, tenantID=0, userID=""`
+- `human`: `agentID="main", tenantID=0, userID=senderID`（SubAgent 继承主 Agent 的 human）
+- `working_context`: `agentID=当前agent, tenantID=当前tenant, userID=""`
 
 #### 3.6.2 Archival Memory 隔离
 
-SubAgent 使用独立的向量 collection：
+Archival memory 按 `(agentID, tenantID)` 隔离，每个 agent 在每个聊天窗口有独立的 collection：
 
 ```go
-// 主 Agent archival collection: "tenant_{tenantID}"（现有）
-// SubAgent archival collection: "subagent_{role}"（新增，全局共享）
-
+// collection 命名规则
 func archivalCollectionName(agentID string, tenantID int64) string {
-    if strings.Contains(agentID, "/") {
-        parts := strings.Split(agentID, "/")
-        role := parts[len(parts)-1]
-        if role == "sub" && len(parts) >= 2 {
-            role = parts[len(parts)-2]
-        }
-        return "subagent_" + role
+    // 主 Agent:    "archival_main_42"
+    // SubAgent:    "archival_main/code-reviewer_42"
+    return fmt.Sprintf("archival_%s_%d", agentID, tenantID)
+}
+```
+
+`ArchivalService` 新增 `ForAgent` 方法：
+
+```go
+// ForAgent 返回一个绑定到特定 agentID 的 ArchivalService 视图。
+// collection 名从 "archival_{tenantID}" 变为 "archival_{agentID}_{tenantID}"。
+func (s *ArchivalService) ForAgent(agentID string) *ArchivalService {
+    return &ArchivalService{
+        db:            s.db,
+        embeddingFunc: s.embeddingFunc,
+        agentID:       agentID,  // 新字段
     }
-    return fmt.Sprintf("tenant_%d", tenantID)
 }
 ```
 
 #### 3.6.3 SubAgent 记忆创建流程
 
 ```go
-func (a *Agent) createSubAgentMemory(role string, msg bus.InboundMessage) (memory.MemoryProvider, *ToolContextExtras) {
-    // 1. 获取或创建 SubAgent persona
-    persona, _, _ := a.coreSvc.GetBlockWithSubAgent(0, "persona", "", role)
+func (a *Agent) createSubAgentMemory(role string, tenantID int64, msg bus.InboundMessage) (memory.MemoryProvider, *ToolContextExtras) {
+    subAgentID := msg.ParentAgentID + "/" + role
+
+    // 1. 获取或创建 SubAgent persona（和 agentID 绑定）
+    persona, _, _ := a.coreSvc.GetBlock(subAgentID, 0, "persona", "")
     if persona == "" {
         roleDef, _ := tools.GetSubAgentRole(role)
         if roleDef != nil {
             persona = fmt.Sprintf("I am %s. %s", role, roleDef.Description)
-            a.coreSvc.SetBlockWithSubAgent(0, "persona", persona, "", role)
+            a.coreSvc.SetBlock(subAgentID, 0, "persona", persona, "")
         }
     }
 
-    // 2. 继承调用者的 human block（只读快照）
+    // 2. 继承调用者的 human block（只读，和 userID 绑定）
     originSender := msg.OriginSenderID()
-    human, _, _ := a.coreSvc.GetBlock(0, "human", originSender, "")
+    human, _, _ := a.coreSvc.GetBlock("main", 0, "human", originSender)
 
-    // 3. 创建 SubAgent 专用的 ArchivalService
-    collectionName := "subagent_" + role
-    archival := a.archivalSvc.ForCollection(collectionName)
+    // 3. 获取 SubAgent 的 working_context（和 agentID+tenant 绑定，持久化）
+    workingCtx, _, _ := a.coreSvc.GetBlock(subAgentID, tenantID, "working_context", "")
 
-    // 4. 构建 SubAgentMemory
-    mem := letta.NewSubAgentMemory(persona, human, archival)
+    // 4. 创建 SubAgent 专用的 ArchivalService（和 agentID+tenant 绑定）
+    archival := a.archivalSvc.ForAgent(subAgentID)
 
-    // 5. 构建 ToolContextExtras
+    // 5. 构建 SubAgentMemory
+    mem := letta.NewSubAgentMemory(persona, human, workingCtx, archival)
+
+    // 6. 构建 ToolContextExtras
     extras := &ToolContextExtras{
-        TenantID:       0,
+        TenantID:       tenantID,
         CoreMemory:     a.coreSvc,
         ArchivalMemory: archival,
+        MemorySvc:      a.memorySvc,
     }
 
     return mem, extras
@@ -921,24 +958,28 @@ type SubAgentRole struct {
 
 ### Phase 2: SubAgent 记忆隔离
 
-**目标**：SubAgent 获得独立的 persona + archival memory。
+**目标**：SubAgent 获得独立的 persona + working_context + archival memory，按 `(agentID, tenantID)` 隔离。
 
 **文件变更**：
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `storage/sqlite/core_memory.go` | 修改 | 新增 `subagent_id` 列 + 迁移 + `GetBlockWithSubAgent` / `SetBlockWithSubAgent` |
-| `storage/vectordb/archival.go` | 修改 | `ForCollection(name)` 方法，支持自定义 collection |
+| `storage/sqlite/db.go` | 修改 | 新建 `agent_memory_blocks` 表 + 迁移旧数据 |
+| `storage/sqlite/core_memory.go` | 修改 | 接口新增 `agentID` 参数，消除 `tenantID=0` hack |
+| `storage/vectordb/archival.go` | 修改 | 新增 `agentID` 字段 + `ForAgent()` 方法 |
 | `memory/letta/subagent_memory.go` | 新增 | `SubAgentMemory` 实现 `MemoryProvider` |
 | `agent/agent.go` | 修改 | `handleSubAgentMessage()` 中创建 SubAgent 记忆并注入 RunConfig |
+| `tools/memory_tools.go` | 修改 | `ctx.TenantID` → `ctx.AgentID` + `ctx.TenantID` 传入 CoreMemoryService |
 | `tools/subagent_loader.go` | 修改 | frontmatter 解析 `memory` 字段 |
 | `tools/subagent_roles.go` | 修改 | `SubAgentRole` 新增 `Memory` 字段 |
 
 **验证**：
-- SubAgent persona 独立于主 Agent
-- SubAgent archival memory 跨用户共享
+- SubAgent persona 独立于主 Agent（按 agentID 隔离）
+- SubAgent working_context 按 agentID × tenant 持久化
+- SubAgent archival memory 按 agentID × tenant 隔离
 - SubAgent human block 继承调用者（只读）
 - `memory: false` 的角色行为不变
+- 主 Agent 记忆行为不变（agentID="main" 兼容旧数据）
 
 **预估**：3-4 天
 
@@ -976,8 +1017,8 @@ type SubAgentRole struct {
 |------|------|----------|
 | `runLoop` 回归 | 🔴 高 | Phase 0 补充集成测试（mock LLM + mock tools）作为安全网 |
 | InboundMessage 字段膨胀 | 🟡 中 | Agent 间通信字段仅在 `channel="agent"` 时有值，IM 渠道不受影响；后续可拆为 embedded struct |
-| SubAgent 记忆泄漏 | 🟡 中 | working_context 不持久化；archival 有 collection 隔离 |
-| 数据库迁移失败 | 🟡 中 | `subagent_id` 列有默认值 ''，重建表在事务中执行 |
+| SubAgent 记忆膨胀 | 🟡 中 | working_context 和 archival 按 agentID×tenant 持久化，需要后续清理 API（§7 排除项） |
+| 数据库迁移失败 | 🟡 中 | 新建 `agent_memory_blocks` 表 + 迁移旧数据，在事务中执行；旧表保留一段时间 |
 | 性能影响 | 🟢 低 | SubAgent 记忆是可选的（`memory: false` 时零开销） |
 | 向后兼容 | 🟢 低 | `SubAgentManager` 接口不变，`SubAgentTool` 零改动 |
 
@@ -987,8 +1028,8 @@ type SubAgentRole struct {
 |---|------|------|------|------|
 | 1 | 通信协议 | A: 保持两套（函数调用 + 消息） B: 统一为 InboundMessage/OutboundMessage | **B** | 消除两套通信方式的割裂，SubAgent 获得完整的上下文信息（sender、channel、media） |
 | 2 | SubAgent human block | A: 独立存储 B: 继承调用者 | **B** | SubAgent 为调用者服务，需要知道调用者是谁；独立存储会导致数据冗余 |
-| 3 | SubAgent working_context | A: 持久化 B: 不持久化 | **B** | 每次任务独立，持久化会导致跨任务污染 |
-| 4 | SubAgent archival | A: 按用户隔离 B: 全局共享 | **B** | code-reviewer 的经验应该所有用户共享 |
+| 3 | SubAgent working_context | A: 持久化（按 tenant+agentID） B: 不持久化 | **A** | 和主 Agent 一致，同一聊天窗口内跨任务积累上下文；agentID 隔离避免污染主 Agent |
+| 4 | SubAgent archival | A: 按 agentID+tenant 隔离 B: 全局共享 | **A** | 和主 Agent 一致，每个 agent 在每个聊天窗口有独立的归档记忆 |
 | 5 | 统一方式 | A: 提取 AgentEngine 类 B: RunConfig + 函数 | **B** | 函数式更简单，避免引入新的类层次；Go 惯用法 |
 | 6 | 记忆启用方式 | A: 代码硬编码 B: 角色定义声明 | **B** | 灵活，用户可自定义角色能力 |
 | 7 | 防递归深度 | 3 / 5 / 无限制 | **3** | 实际场景很少超过 2 层，3 层足够且安全 |
@@ -1292,10 +1333,11 @@ func (s *TenantService) GetOrCreateTenantID(addr bus.Address) (int64, error) {
 }
 ```
 
-**记忆隔离规则不变**：
-- persona: `tenantID=0`（全局）
-- human: `tenantID=0, userID=Address.ID`（按用户）
-- working_context: 按 `tenantID`（按会话）
+**记忆隔离规则（新模型）**：
+- persona: `(agentID, tenantID=0)`（按 agent 全局唯一）
+- human: `(agentID="main", tenantID=0, userID)`（按调用者，SubAgent 继承）
+- working_context: `(agentID, tenantID)`（按 agent × 聊天窗口）
+- archival: `(agentID, tenantID)`（按 agent × 聊天窗口）
 
 ### 8.5 Session Key 统一
 
@@ -1412,4 +1454,3 @@ msg := bus.InboundMessage{
 | 3 | 多 Agent 实例（未来）如何寻址？ | 每个 Agent 有唯一 `agent://` 地址，Router 分发 | 当前单 Agent 不需要 |
 | 4 | Address 是否需要序列化到 DB？ | **是** — tenant 表的 `(channel, chat_id)` 可以改为 `address TEXT` | 需要迁移 |
 | 5 | cancelKey 用 `From` 还是 `From+To`？ | **From+To** — 群聊中同一用户在不同群的请求应独立取消 | 当前 `channel:chatID:senderID` 已经是 To+From |
-

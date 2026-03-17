@@ -62,11 +62,18 @@ type ToolResult struct {
 	Detail      string `json:"detail,omitempty"`  // 详细内容
 	Tips        string `json:"tips,omitempty"`    // 操作指引，帮助 LLM 理解下一步操作
 	WaitingUser bool   `json:"-"`                 // 控制字段：是否等待用户响应（不进入 LLM 上下文）
+	IsError     bool   `json:"-"`                 // 控制字段：工具本身执行成功但底层操作失败（如 shell 非零退出码），影响进度图标
 }
 
 // NewResult 创建 Summary == Detail 的简单结果
 func NewResult(content string) *ToolResult {
 	return &ToolResult{Summary: content}
+}
+
+// NewErrorResult 创建表示底层操作失败的结果（如 shell 非零退出码）
+// 区别于返回 error：工具本身执行成功（JSON 解析、沙箱启动等正常），但命令/操作失败
+func NewErrorResult(content string) *ToolResult {
+	return &ToolResult{Summary: content, IsError: true}
 }
 
 // NewResultWithUserResponse 创建结果并标记为等待用户响应

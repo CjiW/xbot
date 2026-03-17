@@ -113,6 +113,7 @@ func main() {
 		EmbeddingBaseURL:     embBaseURL,
 		EmbeddingAPIKey:      embAPIKey,
 		EmbeddingModel:       cfg.Embedding.Model,
+		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,

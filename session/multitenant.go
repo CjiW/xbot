@@ -100,13 +100,15 @@ type MultiTenantSession struct {
 	mu                    sync.RWMutex
 	tenantCache           map[string]*TenantSession // key: "channel:chat_id"
 	dbPath                string
-	mcpConfigPath         string                    // MCP 配置文件路径
-	mcpInactivityTimeout  time.Duration             // MCP 不活跃超时配置
-	mcpCleanupInterval    time.Duration             // MCP 清理扫描间隔
-	sessionCacheTimeout   time.Duration             // 会话缓存超时配置
-	cleanupStopCh         chan struct{}             // 清理协程停止信号
-	cleanupWg             sync.WaitGroup            // 清理协程等待组
-	cleanupStopOnce       sync.Once                 // 确保 StopCleanupRoutine 只执行一次
+	mcpConfigPath         string          // MCP 配置文件路径
+	mcpInactivityTimeout  time.Duration   // MCP 不活跃超时配置
+	mcpCleanupInterval    time.Duration   // MCP 清理扫描间隔
+	sessionCacheTimeout   time.Duration   // 会话缓存超时配置
+	cleanupStopCh         chan struct{}   // 清理协程停止信号
+	cleanupWg             sync.WaitGroup  // 清理协程等待组
+	cleanupStopOnce       sync.Once       // 确保 StopCleanupRoutine 只执行一次
+	shutdownCtx           context.Context // cancelled on StopCleanupRoutine; used as parent for background goroutines
+	shutdownCancel        context.CancelFunc
 	toolIndexFingerprints map[int64]string          // per-tenant catalog fingerprint (guarded by mu)
 	toolIndexPrevNames    map[int64]map[string]bool // per-tenant previous tool name set (guarded by mu)
 }
@@ -118,6 +120,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	m := &MultiTenantSession{
 		db:                    db,
 		tenantSvc:             sqlite.NewTenantService(db),
@@ -135,6 +138,8 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		mcpCleanupInterval:    5 * time.Minute,
 		sessionCacheTimeout:   24 * time.Hour,
 		cleanupStopCh:         make(chan struct{}),
+		shutdownCtx:           shutdownCtx,
+		shutdownCancel:        shutdownCancel,
 	}
 
 	// 应用配置选项
@@ -160,7 +165,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	// Letta 模式：自动创建 chromem-go 归档服务（如果未通过 WithArchivalService 注入）
 	if m.memoryProvider == "letta" && m.archivalSvc == nil && m.embeddingConfig != nil {
 		archivalDir := filepath.Join(filepath.Dir(dbPath), "archival")
-		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.MaxTokens)
 
 		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, embOpts...)
 		if err != nil {
@@ -173,7 +178,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	// Letta 模式：自动创建工具索引服务（如果未通过 WithToolIndexService 注入）
 	if m.memoryProvider == "letta" && m.toolIndexSvc == nil && m.embeddingConfig != nil {
 		toolIndexDir := filepath.Join(filepath.Dir(dbPath), "tool_index")
-		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model)
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.MaxTokens)
 
 		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc, embOpts...)
 		if err != nil {
@@ -353,16 +358,23 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 	if m.toolIndexSvc != nil && len(entries) > 0 {
 		entriesCopy := make([]memory.ToolIndexEntry, len(entries))
 		copy(entriesCopy, entries)
+		fpCopy := fp
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx, cancel := context.WithTimeout(m.shutdownCtx, 10*time.Minute)
 			defer cancel()
 			if err := m.IndexToolsForTenant(ctx, tenantID, entriesCopy); err != nil {
-				log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
+				if m.shutdownCtx.Err() != nil {
+					log.Debugf("Index personal MCP tools for tenant %d cancelled by shutdown", tenantID)
+				} else {
+					log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
+				}
 				m.mu.Lock()
 				delete(m.toolIndexFingerprints, tenantID)
 				m.mu.Unlock()
+				m.toolIndexSvc.DeleteFingerprint(tenantID)
 			} else {
 				log.Infof("Indexed %d personal MCP tools for tenant %d", len(entriesCopy), tenantID)
+				m.toolIndexSvc.SetFingerprint(tenantID, fpCopy)
 			}
 		}()
 	}
@@ -503,9 +515,10 @@ func (m *MultiTenantSession) StartCleanupRoutine() {
 	}).Info("MCP cleanup routine started")
 }
 
-// StopCleanupRoutine 停止清理协程（可安全重复调用）
+// StopCleanupRoutine 停止清理协程并取消后台任务（可安全重复调用）
 func (m *MultiTenantSession) StopCleanupRoutine() {
 	m.cleanupStopOnce.Do(func() {
+		m.shutdownCancel()
 		close(m.cleanupStopCh)
 		m.cleanupWg.Wait()
 	})

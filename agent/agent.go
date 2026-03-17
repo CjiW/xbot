@@ -255,10 +255,11 @@ type Config struct {
 	WorkDir        string // 工作目录（所有文件相对此目录）
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
-	MemoryProvider   string // 记忆提供者: "flat" 或 "letta"
-	EmbeddingBaseURL string // 嵌入向量服务地址
-	EmbeddingAPIKey  string // 嵌入向量服务密钥
-	EmbeddingModel   string // 嵌入模型名称
+	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
+	EmbeddingBaseURL   string // 嵌入向量服务地址
+	EmbeddingAPIKey    string // 嵌入向量服务密钥
+	EmbeddingModel     string // 嵌入模型名称
+	EmbeddingMaxTokens int    // 嵌入模型最大 token 数
 
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
@@ -350,6 +351,7 @@ func New(cfg Config) *Agent {
 			BaseURL:    cfg.EmbeddingBaseURL,
 			APIKey:     cfg.EmbeddingAPIKey,
 			Model:      cfg.EmbeddingModel,
+			MaxTokens:  cfg.EmbeddingMaxTokens,
 			LLMClient:  cfg.LLM,
 			LLMModel:   cfg.Model,
 			TokenModel: cfg.Model,
@@ -1756,6 +1758,38 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 			panic("assert: LLM messages must have exactly one system message; got " + fmt.Sprint(systemCount))
 		}
 		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
+		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
+			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
+			if autoNotify {
+				progressLines = append(progressLines, "> ⚠️ 输入超限，正在强制压缩上下文...")
+				notifyProgress("")
+			}
+			compressed, compressErr := a.compressContext(ctx, messages, model)
+			if compressErr != nil {
+				return "", toolsUsed, false, fmt.Errorf("%w: context compression after input-too-long also failed: %w (original: %v)", ErrLLMGenerate, compressErr, err)
+			}
+			messages = compressed
+			if autoNotify {
+				newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
+				progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
+				notifyProgress("")
+			}
+			if tenantSession != nil {
+				if clearErr := tenantSession.Clear(); clearErr == nil {
+					for _, msg := range compressed {
+						if msg.Role == "system" {
+							continue
+						}
+						assertNoSystemPersist(msg)
+						if addErr := tenantSession.AddMessage(msg); addErr != nil {
+							log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
+							break
+						}
+					}
+				}
+			}
+			response, err = llmClient.Generate(ctx, model, messages, toolDefs)
+		}
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)
 		}
@@ -1859,6 +1893,10 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				execResults[entry.index].content = result.Summary
 				execResults[entry.index].llmContent = buildToolMessageContent(result)
 
+				if result.IsError {
+					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", result.Summary)
+				}
+
 				resultPreview := result.Summary
 				if r := []rune(resultPreview); len(r) > 200 {
 					resultPreview = string(r[:200]) + "..."
@@ -1869,7 +1907,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					icon := "✅"
+					if result.IsError {
+						icon = "❌"
+					}
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> %s %s (%s)", icon, toolLabel, elapsed.Round(time.Millisecond))
 				}
 			}
 		}
@@ -2275,7 +2317,9 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 
 			content := ""
 			if execErr != nil {
-				content = fmt.Sprintf("Error: %v", execErr)
+				content = fmt.Sprintf("Error: %v\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execErr)
+			} else if result != nil && result.IsError {
+				content = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", result.Summary)
 			} else {
 				content = buildToolMessageContent(result)
 			}

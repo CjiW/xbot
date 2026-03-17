@@ -1,10 +1,20 @@
 package vectordb
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,13 +191,126 @@ func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, 
 	return s, nil
 }
 
-// NewEmbeddingFunc creates a chromem-go EmbeddingFunc from OpenAI-compatible API config.
+// NewEmbeddingFunc creates a chromem-go EmbeddingFunc.
+// When maxTokens > 0 and the URL looks like Ollama, uses the native /api/embed
+// endpoint with options.num_ctx to avoid the "requested context size too large" warning.
+// Otherwise falls back to the OpenAI-compatible endpoint.
 // Returns nil if model is empty.
-func NewEmbeddingFunc(baseURL, apiKey, model string) chromem.EmbeddingFunc {
+func NewEmbeddingFunc(baseURL, apiKey, model string, maxTokens int) chromem.EmbeddingFunc {
 	if model == "" || baseURL == "" {
 		return nil
 	}
+	if maxTokens > 0 && isOllamaURL(baseURL) {
+		ollamaBase := toOllamaBaseURL(baseURL)
+		log.WithFields(log.Fields{
+			"base_url": ollamaBase,
+			"model":    model,
+			"num_ctx":  maxTokens,
+		}).Info("Using Ollama native embedding API with num_ctx")
+		return newOllamaEmbedFunc(ollamaBase, model, maxTokens)
+	}
 	return chromem.NewEmbeddingFuncOpenAICompat(baseURL, apiKey, model, nil)
+}
+
+func isOllamaURL(rawURL string) bool {
+	return strings.Contains(rawURL, ":11434")
+}
+
+func toOllamaBaseURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	return u.String()
+}
+
+// newOllamaEmbedFunc returns an EmbeddingFunc using Ollama's native /api/embed
+// with explicit num_ctx so the model isn't loaded with an oversized context.
+func newOllamaEmbedFunc(baseURL, model string, numCtx int) chromem.EmbeddingFunc {
+	client := &http.Client{}
+
+	var checkedNormalized bool
+	checkNormalized := sync.Once{}
+
+	return func(ctx context.Context, text string) ([]float32, error) {
+		reqBody, err := json.Marshal(map[string]any{
+			"model": model,
+			"input": text,
+			"options": map[string]any{
+				"num_ctx": numCtx,
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("couldn't marshal request body: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/api/embed", bytes.NewBuffer(reqBody))
+		if err != nil {
+			return nil, fmt.Errorf("couldn't create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("embedding API error %s: %s", resp.Status, string(body))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("couldn't read response body: %w", err)
+		}
+
+		var result struct {
+			Embeddings [][]float32 `json:"embeddings"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("couldn't unmarshal response body: %w", err)
+		}
+		if len(result.Embeddings) == 0 || len(result.Embeddings[0]) == 0 {
+			return nil, errors.New("no embeddings found in the response")
+		}
+
+		v := result.Embeddings[0]
+		checkNormalized.Do(func() {
+			checkedNormalized = isNormalized(v)
+		})
+		if !checkedNormalized {
+			v = normalizeVector(v)
+		}
+		return v, nil
+	}
+}
+
+func isNormalized(v []float32) bool {
+	var sqSum float64
+	for _, val := range v {
+		sqSum += float64(val) * float64(val)
+	}
+	return math.Abs(sqSum-1) < 1e-3
+}
+
+func normalizeVector(v []float32) []float32 {
+	var sqSum float64
+	for _, val := range v {
+		sqSum += float64(val) * float64(val)
+	}
+	norm := math.Sqrt(sqSum)
+	if norm == 0 {
+		return v
+	}
+	out := make([]float32, len(v))
+	for i, val := range v {
+		out[i] = float32(float64(val) / norm)
+	}
+	return out
 }
 
 func (s *ArchivalService) collectionName(tenantID int64) string {
@@ -308,6 +431,8 @@ func (s *ArchivalService) Count(tenantID int64) (int, error) {
 type ToolIndexService struct {
 	db            *chromem.DB
 	embeddingFunc chromem.EmbeddingFunc
+	persistDir    string
+	fpMu          sync.Mutex
 	embeddingLimitConfig
 }
 
@@ -326,6 +451,7 @@ func NewToolIndexService(persistDir string, embeddingFunc chromem.EmbeddingFunc,
 	return &ToolIndexService{
 		db:                   db,
 		embeddingFunc:        embeddingFunc,
+		persistDir:           persistDir,
 		embeddingLimitConfig: cfg,
 	}, nil
 }
@@ -489,4 +615,67 @@ func (s *ToolIndexService) IndexTools(ctx context.Context, tenantID int64, tools
 		return fmt.Errorf("add documents: %w", err)
 	}
 	return nil
+}
+
+func (s *ToolIndexService) fingerprintPath() string {
+	return filepath.Join(s.persistDir, "fingerprints.json")
+}
+
+func (s *ToolIndexService) loadFingerprints() map[string]string {
+	data, err := os.ReadFile(s.fingerprintPath())
+	if err != nil {
+		return nil
+	}
+	var fps map[string]string
+	if err := json.Unmarshal(data, &fps); err != nil {
+		return nil
+	}
+	return fps
+}
+
+func (s *ToolIndexService) saveFingerprints(fps map[string]string) error {
+	out, err := json.Marshal(fps)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.fingerprintPath(), out, 0644)
+}
+
+// GetFingerprint returns the persisted catalog fingerprint for a tenant.
+func (s *ToolIndexService) GetFingerprint(tenantID int64) string {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		return ""
+	}
+	return fps[fmt.Sprintf("%d", tenantID)]
+}
+
+// SetFingerprint persists the catalog fingerprint for a tenant.
+func (s *ToolIndexService) SetFingerprint(tenantID int64, fp string) {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		fps = make(map[string]string)
+	}
+	fps[fmt.Sprintf("%d", tenantID)] = fp
+	if err := s.saveFingerprints(fps); err != nil {
+		log.WithError(err).Warn("Failed to persist tool index fingerprint")
+	}
+}
+
+// DeleteFingerprint removes the persisted catalog fingerprint for a tenant.
+func (s *ToolIndexService) DeleteFingerprint(tenantID int64) {
+	s.fpMu.Lock()
+	defer s.fpMu.Unlock()
+	fps := s.loadFingerprints()
+	if fps == nil {
+		return
+	}
+	delete(fps, fmt.Sprintf("%d", tenantID))
+	if err := s.saveFingerprints(fps); err != nil {
+		log.WithError(err).Warn("Failed to persist tool index fingerprint")
+	}
 }

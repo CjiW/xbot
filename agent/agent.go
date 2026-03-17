@@ -256,6 +256,7 @@ type Config struct {
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
 	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
+	EmbeddingProvider  string // 嵌入提供者: "openai"(默认) 或 "ollama"
 	EmbeddingBaseURL   string // 嵌入向量服务地址
 	EmbeddingAPIKey    string // 嵌入向量服务密钥
 	EmbeddingModel     string // 嵌入模型名称
@@ -348,6 +349,7 @@ func New(cfg Config) *Agent {
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
 		session.WithMemoryProvider(memoryProvider),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
+			Provider:   cfg.EmbeddingProvider,
 			BaseURL:    cfg.EmbeddingBaseURL,
 			APIKey:     cfg.EmbeddingAPIKey,
 			Model:      cfg.EmbeddingModel,
@@ -1894,7 +1896,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 				execResults[entry.index].llmContent = buildToolMessageContent(result)
 
 				if result.IsError {
-					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", result.Summary)
+					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execResults[entry.index].llmContent)
 				}
 
 				resultPreview := result.Summary
@@ -2318,10 +2320,11 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 			content := ""
 			if execErr != nil {
 				content = fmt.Sprintf("Error: %v\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execErr)
-			} else if result != nil && result.IsError {
-				content = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", result.Summary)
 			} else {
 				content = buildToolMessageContent(result)
+				if result != nil && result.IsError {
+					content = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", content)
+				}
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)

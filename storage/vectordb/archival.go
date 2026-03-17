@@ -192,15 +192,16 @@ func NewArchivalService(persistDir string, embeddingFunc chromem.EmbeddingFunc, 
 }
 
 // NewEmbeddingFunc creates a chromem-go EmbeddingFunc.
-// When maxTokens > 0 and the URL looks like Ollama, uses the native /api/embed
-// endpoint with options.num_ctx to avoid the "requested context size too large" warning.
-// Otherwise falls back to the OpenAI-compatible endpoint.
+// When provider is "ollama" (or auto-detected from URL port :11434 for backward compat),
+// uses the native /api/embed endpoint with options.num_ctx.
+// Otherwise uses the OpenAI-compatible endpoint.
 // Returns nil if model is empty.
-func NewEmbeddingFunc(baseURL, apiKey, model string, maxTokens int) chromem.EmbeddingFunc {
+func NewEmbeddingFunc(baseURL, apiKey, model, provider string, maxTokens int) chromem.EmbeddingFunc {
 	if model == "" || baseURL == "" {
 		return nil
 	}
-	if maxTokens > 0 && isOllamaURL(baseURL) {
+	useOllama := provider == "ollama" || (provider == "" && isOllamaURL(baseURL))
+	if maxTokens > 0 && useOllama {
 		ollamaBase := toOllamaBaseURL(baseURL)
 		log.WithFields(log.Fields{
 			"base_url": ollamaBase,

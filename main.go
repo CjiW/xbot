@@ -110,6 +110,7 @@ func main() {
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		MemoryProvider:       cfg.Agent.MemoryProvider,
+		EmbeddingProvider:    cfg.Embedding.Provider,
 		EmbeddingBaseURL:     embBaseURL,
 		EmbeddingAPIKey:      embAPIKey,
 		EmbeddingModel:       cfg.Embedding.Model,

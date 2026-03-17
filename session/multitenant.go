@@ -61,6 +61,7 @@ func WithArchivalService(svc *vectordb.ArchivalService) MultiTenantOption {
 
 // EmbeddingConfig 嵌入向量配置（用于自动创建归档服务）
 type EmbeddingConfig struct {
+	Provider   string // Embedding 提供者: "openai"(默认) 或 "ollama"
 	BaseURL    string
 	APIKey     string
 	Model      string
@@ -165,7 +166,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	// Letta 模式：自动创建 chromem-go 归档服务（如果未通过 WithArchivalService 注入）
 	if m.memoryProvider == "letta" && m.archivalSvc == nil && m.embeddingConfig != nil {
 		archivalDir := filepath.Join(filepath.Dir(dbPath), "archival")
-		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.MaxTokens)
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.Provider, m.embeddingConfig.MaxTokens)
 
 		archSvc, err := vectordb.NewArchivalService(archivalDir, embFunc, embOpts...)
 		if err != nil {
@@ -178,7 +179,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 	// Letta 模式：自动创建工具索引服务（如果未通过 WithToolIndexService 注入）
 	if m.memoryProvider == "letta" && m.toolIndexSvc == nil && m.embeddingConfig != nil {
 		toolIndexDir := filepath.Join(filepath.Dir(dbPath), "tool_index")
-		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.MaxTokens)
+		embFunc := vectordb.NewEmbeddingFunc(m.embeddingConfig.BaseURL, m.embeddingConfig.APIKey, m.embeddingConfig.Model, m.embeddingConfig.Provider, m.embeddingConfig.MaxTokens)
 
 		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc, embOpts...)
 		if err != nil {
@@ -345,11 +346,20 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 	}
 
 	// Fingerprint check: skip if catalog unchanged
+	// Check in-memory first, fall back to disk (survives restart)
 	fp := catalogFingerprint(catalog)
 	m.mu.RLock()
 	prev := m.toolIndexFingerprints[tenantID]
 	prevNames := m.toolIndexPrevNames[tenantID]
 	m.mu.RUnlock()
+	if prev == "" && m.toolIndexSvc != nil {
+		prev = m.toolIndexSvc.GetFingerprint(tenantID)
+		if prev != "" {
+			m.mu.Lock()
+			m.toolIndexFingerprints[tenantID] = prev
+			m.mu.Unlock()
+		}
+	}
 	if fp == prev {
 		return nil
 	}
@@ -368,24 +378,22 @@ func (m *MultiTenantSession) indexPersonalMCPTools(tenantID int64, mgr *tools.Se
 				} else {
 					log.WithError(err).Warnf("Failed to index personal MCP tools for tenant %d", tenantID)
 				}
-				m.mu.Lock()
-				delete(m.toolIndexFingerprints, tenantID)
-				m.mu.Unlock()
-				m.toolIndexSvc.DeleteFingerprint(tenantID)
-			} else {
-				log.Infof("Indexed %d personal MCP tools for tenant %d", len(entriesCopy), tenantID)
-				m.toolIndexSvc.SetFingerprint(tenantID, fpCopy)
+				return
 			}
+			log.Infof("Indexed %d personal MCP tools for tenant %d", len(entriesCopy), tenantID)
+			m.toolIndexSvc.SetFingerprint(tenantID, fpCopy)
+			m.mu.Lock()
+			m.toolIndexFingerprints[tenantID] = fpCopy
+			m.mu.Unlock()
 		}()
 	}
 
-	// Update fingerprint and tool name snapshot
+	// Update tool name snapshot (fingerprint updated in goroutine after success)
 	currentNames := make(map[string]bool, len(toolNames))
 	for _, name := range toolNames {
 		currentNames[name] = true
 	}
 	m.mu.Lock()
-	m.toolIndexFingerprints[tenantID] = fp
 	m.toolIndexPrevNames[tenantID] = currentNames
 	m.mu.Unlock()
 

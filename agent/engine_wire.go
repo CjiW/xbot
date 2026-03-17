@@ -274,11 +274,83 @@ func (a *Agent) buildSubAgentRunConfig(
 }
 
 // buildToolExecutor 构建主 Agent 的工具执行器。
-// 包含 session MCP 查找、激活检查、Letta 记忆注入等完整逻辑。
+// 包含 session MCP 查找、激活检查、工具使用追踪等完整逻辑。
+// 这是主 Agent 和 Cron 使用的执行器，SubAgent 使用 defaultToolExecutor。
 func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+	sessionKey := channel + ":" + chatID
+
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
-		// 复用现有的 executeTool 方法
-		return a.executeTool(ctx, tc, channel, chatID, senderID, senderName)
+		// 1. 工具查找：session MCP 优先，然后全局注册表
+		var tool tools.Tool
+		ok := false
+
+		if mcpMgr := a.multiSession.GetSessionMCPManager(sessionKey); mcpMgr != nil {
+			for _, st := range mcpMgr.GetSessionTools() {
+				if st.Name() == tc.Name {
+					tool = st
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok {
+			tool, ok = a.tools.Get(tc.Name)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unknown tool: %s", tc.Name)
+		}
+
+		// 2. 激活检查：未激活的工具返回提示
+		if !a.tools.IsToolActive(sessionKey, tc.Name) {
+			return &tools.ToolResult{
+				Summary: fmt.Sprintf("Tool %q is not loaded yet. Call load_tools(tools=%q) first to load it before use.", tc.Name, tc.Name),
+			}, nil
+		}
+
+		// 3. 刷新工具最后使用 round，延长激活有效期
+		a.tools.TouchTool(sessionKey, tc.Name)
+
+		// 4. 确保用户工作目录存在
+		wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+		if err := os.MkdirAll(wsRoot, 0o755); err != nil {
+			return nil, fmt.Errorf("create user workspace: %w", err)
+		}
+
+		// 5. 构建 ToolContext（统一路径）
+		cfg := &RunConfig{
+			AgentID:    "main",
+			Channel:    channel,
+			ChatID:     chatID,
+			SenderID:   senderID,
+			SenderName: senderName,
+			SendFunc:   a.sendMessage,
+
+			WorkingDir:       a.workDir,
+			WorkspaceRoot:    wsRoot,
+			SandboxWorkDir:   "/workspace",
+			ReadOnlyRoots:    a.globalSkillDirs,
+			SkillsDirs:       a.globalSkillDirs,
+			AgentsDir:        a.agentsDir,
+			MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+			GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+			DataDir:          a.workDir,
+			SandboxEnabled:   true,
+			PreferredSandbox: "docker",
+
+			InjectInbound: a.injectInbound,
+			Tools:         a.tools,
+		}
+
+		// SpawnAgent
+		cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
+			return a.spawnSubAgent(spawnCtx, inMsg)
+		}
+
+		// Letta 记忆
+		cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
+
+		toolCtx := buildToolContext(ctx, cfg)
+		return tool.Execute(toolCtx, tc.Arguments)
 	}
 }
 

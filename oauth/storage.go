@@ -2,7 +2,9 @@ package oauth
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -77,8 +79,10 @@ func (s *SQLiteStorage) GetToken(ctx context.Context, provider, channel, chatID 
 		&accessToken, &refreshToken, &expiresAt, &scopesJSON, &rawJSON,
 	)
 	if err != nil {
-		// sql.ErrNoRows means no token found
-		return nil, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query token: %w", err)
 	}
 
 	var scopes []string

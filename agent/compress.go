@@ -80,10 +80,8 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 	allOk := true
-	systemSkipped := 0
 	for _, msg := range compressed {
 		if msg.Role == "system" {
-			systemSkipped++
 			continue
 		}
 		assertNoSystemPersist(msg)

@@ -224,12 +224,12 @@ func (p *FeishuProvider) buildTokenFromOIDCResponse(data *OIDCResponse) *oauth.T
 // OIDCResponse 封装 Feishu OIDC token 响应的公共字段，
 // 用于 ExchangeCode 和 RefreshToken 的统一 token 构建。
 type OIDCResponse struct {
-	AccessToken       *string
-	RefreshToken      *string
-	TokenType         *string
-	Scope             *string
-	ExpiresIn         *int
-	RefreshExpiresIn  *int
+	AccessToken      *string
+	RefreshToken     *string
+	TokenType        *string
+	Scope            *string
+	ExpiresIn        *int
+	RefreshExpiresIn *int
 }
 
 // ExchangeCode exchanges the authorization code for tokens.
@@ -282,8 +282,8 @@ func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.
 	}
 
 	log.WithFields(log.Fields{
-		"expires_in":               *resp.Data.ExpiresIn,
-		"refresh_token_expires_in": *resp.Data.RefreshExpiresIn,
+		"expires_in":               token.Raw["expires_in"],
+		"refresh_token_expires_in": token.Raw["refresh_token_expires_in"],
 	}).Info("Feishu OAuth token exchanged successfully")
 
 	return token, nil

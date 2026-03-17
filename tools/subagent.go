@@ -71,7 +71,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("sub-agent capability not available")
 	}
 
-	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities)
+	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Role)
 	if err != nil {
 		return nil, fmt.Errorf("sub-agent failed: %w", err)
 	}

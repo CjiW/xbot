@@ -945,7 +945,7 @@ func TestSpawnAgentAdapter(t *testing.T) {
 	result, err := adapter.RunSubAgent(parentCtx, "review this code", "You are a code reviewer.", []string{"Shell", "Read"}, tools.SubAgentCapabilities{
 		Memory:      true,
 		SendMessage: true,
-	})
+	}, "code-reviewer")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1020,7 +1020,7 @@ func TestSpawnAgentAdapter_ErrorPropagation(t *testing.T) {
 		Ctx: context.Background(),
 	}
 
-	result, err := adapter.RunSubAgent(parentCtx, "task", "", nil, tools.SubAgentCapabilities{})
+	result, err := adapter.RunSubAgent(parentCtx, "task", "", nil, tools.SubAgentCapabilities{}, "test-role")
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
@@ -1128,7 +1128,7 @@ func TestBuildToolContext(t *testing.T) {
 	}
 
 	// Verify Manager works
-	_, _ = tc.Manager.RunSubAgent(tc, "test", "prompt", nil, tools.SubAgentCapabilities{})
+	_, _ = tc.Manager.RunSubAgent(tc, "test", "prompt", nil, tools.SubAgentCapabilities{}, "test")
 	if !called {
 		t.Error("SpawnAgent was not called through Manager")
 	}

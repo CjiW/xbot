@@ -18,7 +18,7 @@ import (
 // buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
 // 从 processMessage / handleCardResponse 调用。
 func (a *Agent) buildMainRunConfig(
-	ctx context.Context,
+	_ context.Context,
 	msg bus.InboundMessage,
 	messages []llm.ChatMessage,
 	tenantSession *session.TenantSession,
@@ -129,12 +129,13 @@ func (a *Agent) buildCronRunConfig(
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 	sessionKey := channel + ":" + chatID
 
-	llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
 
 	return RunConfig{
-		LLMClient:  llmClient,
-		Model:      model,
-		Tools:      a.tools,
+		LLMClient:    llmClient,
+		Model:        model,
+		ThinkingMode: thinkingMode,
+		Tools:        a.tools,
 		Messages:   messages,
 		AgentID:    "main",
 		Channel:    channel,
@@ -224,12 +225,13 @@ func (a *Agent) buildSubAgentRunConfig(
 	subAgentID := parentAgentID + "/sub"
 
 	// SubAgent 继承父 Agent 的 LLM 配置
-	llmClient, model, _, _ := a.llmFactory.GetLLM(parentCtx.SenderID)
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(parentCtx.SenderID)
 
 	cfg := RunConfig{
-		LLMClient: llmClient,
-		Model:     model,
-		Tools:     subTools,
+		LLMClient:    llmClient,
+		Model:        model,
+		ThinkingMode: thinkingMode,
+		Tools:        subTools,
 		Messages:  messages,
 		AgentID:   subAgentID,
 		Channel:   parentCtx.Channel,
@@ -430,6 +432,25 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	task := msg.Content
 	systemPrompt := msg.SystemPrompt
 	allowedTools := msg.AllowedTools
+	roleName := msg.RoleName
+
+	// --- CallChain 深度 & 循环检查 ---
+	cc := CallChainFromContext(ctx)
+	if roleName != "" {
+		if err := cc.CanSpawn(roleName); err != nil {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"parent": parentAgentID,
+				"role":   roleName,
+				"chain":  cc.Chain,
+			}).Warn("SubAgent spawn blocked by CallChain")
+			return &bus.OutboundMessage{
+				Channel: "",
+				ChatID:  "",
+				Content: err.Error(),
+				Error:   err,
+			}, nil
+		}
+	}
 
 	// 构建 parentCtx（从 InboundMessage 恢复）
 	originChannel := msg.OriginChannel()
@@ -467,6 +488,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent": parentAgentID,
+		"role":   roleName,
 		"task":   tools.Truncate(task, 80),
 	}).Info("SubAgent started (via Run)")
 
@@ -474,10 +496,15 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 
 	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps)
-	out := Run(ctx, cfg)
+
+	// 传递 CallChain 给子 Agent
+	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
+
+	out := Run(subCtx, cfg)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,
+		"role":      roleName,
 		"tools":     out.ToolsUsed,
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")

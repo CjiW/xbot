@@ -1742,7 +1742,7 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 // RunSubAgent 实现 tools.SubAgentManager 接口
 // 创建一个独立的子 Agent 循环来执行任务，子 Agent 拥有自己的工具集但不能再创建子 Agent
 // allowedTools 为工具白名单，为空时使用所有工具（除 SubAgent）
-func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
 	cfg := a.buildSubAgentRunConfig(parentCtx.Ctx, parentCtx, task, systemPrompt, allowedTools, caps)
 	out := Run(parentCtx.Ctx, cfg)
 	if out.Error != nil {

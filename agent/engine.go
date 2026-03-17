@@ -278,7 +278,31 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 		cfg.Tools.TickSession(sessionKey)
 	}
 
+	// --- 注入 LLM 重试通知回调 ---
+	retryNotifyCtx := llm.WithRetryNotify(ctx, func(attempt, max uint, err error) {
+		if !autoNotify {
+			return
+		}
+		reason := summarizeRetryError(err)
+		progressLines = append(progressLines,
+			fmt.Sprintf("> ⚠️ LLM 请求失败 (%s)，重试中 %d/%d ...", reason, attempt, max))
+		notifyProgress("")
+	})
+
 	// --- 主循环 ---
+
+	// 工具执行相关类型（提取到循环外，避免每轮重新定义）
+	type toolCallEntry struct {
+		index int
+		tc    llm.ToolCall
+	}
+	type toolExecResult struct {
+		content    string
+		llmContent string
+		result     *tools.ToolResult
+		err        error
+		elapsed    time.Duration
+	}
 	for i := 0; i < maxIter; i++ {
 		maybeCompress()
 
@@ -310,13 +334,61 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 		var llmCtx context.Context
 		var llmCancel context.CancelFunc
 		if cfg.LLMTimeout > 0 {
-			llmCtx, llmCancel = context.WithTimeout(ctx, cfg.LLMTimeout)
+			llmCtx, llmCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
 		} else {
-			llmCtx, llmCancel = ctx, func() {}
+			llmCtx, llmCancel = retryNotifyCtx, func() {}
 		}
 
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 		llmCancel()
+
+		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
+			// 输入超限时强制压缩上下文后重试
+			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
+			if autoNotify {
+				progressLines = append(progressLines, "> ⚠️ 输入超限，正在强制压缩上下文...")
+				notifyProgress("")
+			}
+
+			if cc := cfg.AutoCompress; cc != nil {
+				compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
+				if compressErr != nil {
+					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
+				} else {
+					messages = compressed
+					if autoNotify {
+						newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
+						notifyProgress("")
+					}
+					// 持久化压缩结果到 session
+					if cfg.Session != nil {
+						if clearErr := cfg.Session.Clear(); clearErr == nil {
+							for _, msg := range compressed {
+								if msg.Role == "system" {
+									continue
+								}
+								assertNoSystemPersist(msg)
+								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
+									log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
+									break
+								}
+							}
+						}
+					}
+					// 重试 LLM 调用
+					var retryCtx context.Context
+					var retryCancel context.CancelFunc
+					if cfg.LLMTimeout > 0 {
+						retryCtx, retryCancel = context.WithTimeout(ctx, cfg.LLMTimeout)
+					} else {
+						retryCtx, retryCancel = ctx, func() {}
+					}
+					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
+					retryCancel()
+				}
+			}
+		}
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -374,19 +446,16 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 
 		// 记录 assistant 消息（含 tool_calls），保留原始 content（包括 think 块）
 		assistantMsg := llm.ChatMessage{
-			Role:      "assistant",
-			Content:   response.Content,
-			ToolCalls: response.ToolCalls,
+			Role:             "assistant",
+			Content:          response.Content,
+			ReasoningContent: response.ReasoningContent, // DeepSeek/OpenAI reasoning 模型的思维链
+			ToolCalls:        response.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)
 
 		// --- 工具执行 ---
-		type toolCallEntry struct {
-			index int
-			tc    llm.ToolCall
-		}
 
-		// 为所有工具调用添加进度行占位符
+	// 为所有工具调用添加进度行占位符
 		progressStartIdx := len(progressLines)
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
@@ -399,14 +468,6 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 			notifyProgress("")
 		}
 
-		// 预分配结果槽位
-		type toolExecResult struct {
-			content    string
-			llmContent string
-			result     *tools.ToolResult
-			err        error
-			elapsed    time.Duration
-		}
 		execResults := make([]toolExecResult, len(response.ToolCalls))
 
 		// execOne 执行单个工具并记录结果
@@ -455,6 +516,10 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 				execResults[entry.index].content = result.Summary
 				execResults[entry.index].llmContent = buildToolMessageContent(result)
 
+				if result.IsError {
+					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execResults[entry.index].llmContent)
+				}
+
 				resultPreview := result.Summary
 				if r := []rune(resultPreview); len(r) > 200 {
 					resultPreview = string(r[:200]) + "..."
@@ -465,7 +530,11 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 				}).Infof("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ✅ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					icon := "✅"
+					if result.IsError {
+						icon = "❌"
+					}
+					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> %s %s (%s)", icon, toolLabel, elapsed.Round(time.Millisecond))
 				}
 			}
 		}
@@ -600,7 +669,7 @@ type spawnAgentAdapter struct {
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
-func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
 	// 构造统一的 InboundMessage
 	metadata := map[string]string{
 		"origin_channel": a.channel,
@@ -624,6 +693,7 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 
 		// Agent 间通信
 		ParentAgentID: a.parentID,
+		RoleName:      roleName,
 		SystemPrompt:  systemPrompt,
 		AllowedTools:  allowedTools,
 		Capabilities:  caps.ToMap(),
@@ -730,7 +800,7 @@ func (cc *CallChain) CanSpawn(targetRole string) error {
 	}
 	for _, id := range cc.Chain {
 		role := id
-		if idx := lastIndexByte(id, '/'); idx >= 0 {
+		if idx := strings.LastIndexByte(id, '/'); idx >= 0 {
 			role = id[idx+1:]
 		}
 		if role == targetRole {
@@ -738,16 +808,6 @@ func (cc *CallChain) CanSpawn(targetRole string) error {
 		}
 	}
 	return nil
-}
-
-// lastIndexByte returns the index of the last instance of c in s, or -1.
-func lastIndexByte(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // Spawn 创建新的调用链（追加目标角色）。

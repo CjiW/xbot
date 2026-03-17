@@ -181,8 +181,6 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 // Agent 核心 Agent 引擎
 type Agent struct {
 	bus             *bus.MessageBus
-	llmClient       llm.LLM
-	model           string
 	multiSession    *session.MultiTenantSession // Multi-tenant session manager
 	tools           *tools.Registry
 	maxIterations   int
@@ -389,8 +387,6 @@ func New(cfg Config) *Agent {
 
 	agent := &Agent{
 		bus:                  cfg.Bus,
-		llmClient:            cfg.LLM,
-		model:                cfg.Model,
 		multiSession:         multiSession,
 		tools:                registry,
 		maxIterations:        cfg.MaxIterations,
@@ -832,7 +828,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 检查是否需要触发自动记忆合并
-	a.maybeConsolidate(ctx, tenantSession)
+	a.maybeConsolidate(ctx, tenantSession, msg.SenderID)
 
 	// 构建 LLM 消息（注入长期记忆、skills）
 	messages, err := a.buildPrompt(ctx, msg, tenantSession)
@@ -1073,6 +1069,8 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 
 // handleNewSession 处理 /new 命令：先归档记忆，再清空会话
 func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	llmClient, model, _, _ := a.llmFactory.GetLLM(msg.SenderID)
+
 	messages, err := tenantSession.GetMessages()
 	if err != nil {
 		return &bus.OutboundMessage{
@@ -1095,8 +1093,8 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
 			Messages:         snapshot,
 			LastConsolidated: 0,
-			LLMClient:        a.llmClient,
-			Model:            a.model,
+			LLMClient:        llmClient,
+			Model:            model,
 			ArchiveAll:       true,
 			MemoryWindow:     a.memoryWindow,
 		})
@@ -1128,6 +1126,9 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制
 	// 用户可能不想自动压缩但偶尔需要手动压缩一下
 
+	// 获取用户特定的 LLM 客户端
+	llmClient, model, _, _ := a.llmFactory.GetLLM(msg.SenderID)
+
 	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
 	messages, err := a.buildPrompt(ctx, msg, tenantSession)
 	if err != nil {
@@ -1147,7 +1148,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}
 
 	// 计算完整上下文的 token 数
-	tokenCount, err := llm.CountMessagesTokens(messages, a.model)
+	tokenCount, err := llm.CountMessagesTokens(messages, model)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to count tokens for compression")
 		// 用户手动触发压缩时，计数失败应该强制执行或报错，而不是静默跳过
@@ -1167,7 +1168,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
 	// 执行压缩
-	compressed, err := a.compressContext(ctx, messages, a.model)
+	compressed, err := a.compressContext(ctx, messages, llmClient, model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -1181,7 +1182,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	if err := tenantSession.Clear(); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to clear session for compression")
 		// Clear 失败时只返回压缩结果，不持久化，避免数据损坏
-		newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
+		newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
@@ -1203,7 +1204,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}
 	}
 
-	newTokenCount, _ := llm.CountMessagesTokens(compressed, a.model)
+	newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
 	if allOk {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -1221,6 +1222,8 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 
 // handleContext 处理 /context 命令：显示当前 token 数和组成
 func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+	_, model, _, _ := a.llmFactory.GetLLM(msg.SenderID)
+
 	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
 	messages, err := a.buildPrompt(ctx, msg, tenantSession)
 	if err != nil {
@@ -1234,13 +1237,13 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 	// 获取工具定义并计算 token
 	sessionKey := msg.Channel + ":" + msg.ChatID
 	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
-	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, a.model)
+	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, model)
 
 	// 按角色统计 token 数
 	var systemTokens, userTokens, assistantTokens, toolMsgTokens int
 
 	for _, m := range messages {
-		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, a.model)
+		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, model)
 		if err != nil {
 			continue
 		}
@@ -1372,7 +1375,7 @@ func truncateRunes(s string, maxLen int) string {
 // 1. 保留所有 tool 消息（tool_calls 和 tool result 必须配对，否则 API 报错）
 // 2. 把压缩后的摘要作为 user prompt 直接调用 LLM
 // 3. 保留 system 消息和最近的对话轮次
-func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, model string) ([]llm.ChatMessage, error) {
+func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) ([]llm.ChatMessage, error) {
 	// 第一步：找到尾部安全切割点
 	// API 要求：assistant 的 tool_calls 必须紧跟对应的 tool result 消息
 	// 从后往前扫描，找到最后一个"安全切割点"：
@@ -1468,10 +1471,10 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 Output the compressed content directly, preserving as much context as possible.`
 
 	// 第五步：调用 LLM 压缩
-	resp, err := a.llmClient.Generate(ctx, model, []llm.ChatMessage{
+	resp, err := client.Generate(ctx, model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a context compression expert."),
 		llm.NewUserMessage(compressionPrompt),
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("LLM compress failed: %w", err)
 	}
@@ -1565,7 +1568,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 
 // maybeConsolidate 检查并异步触发记忆合并。
 // 只在未合并消息数达到 memoryWindow 时触发，避免每轮对话都调用 LLM。
-func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession) {
+func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
 	length, err := tenantSession.Len()
 	if err != nil {
@@ -1603,11 +1606,13 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		lastConsolidated := tenantSession.LastConsolidated()
 		mem := tenantSession.Memory()
 
+		llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+
 		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
 			Messages:         messages,
 			LastConsolidated: lastConsolidated,
-			LLMClient:        a.llmClient,
-			Model:            a.model,
+			LLMClient:        llmClient,
+			Model:            model,
 			ArchiveAll:       false,
 			MemoryWindow:     a.memoryWindow,
 		})

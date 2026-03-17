@@ -28,7 +28,7 @@ type mockLLMCall struct {
 	Tools    []llm.ToolDefinition
 }
 
-func (m *mockLLM) Generate(_ context.Context, model string, messages []llm.ChatMessage, toolDefs []llm.ToolDefinition) (*llm.LLMResponse, error) {
+func (m *mockLLM) Generate(_ context.Context, model string, messages []llm.ChatMessage, toolDefs []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
 	m.calls = append(m.calls, mockLLMCall{Model: model, Messages: messages, Tools: toolDefs})
 	if m.callCount >= len(m.responses) {
 		return nil, fmt.Errorf("no more mock responses (call %d)", m.callCount)

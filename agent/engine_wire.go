@@ -28,10 +28,7 @@ func (a *Agent) buildMainRunConfig(
 	sessionKey := channel + ":" + chatID
 
 	// 获取用户特定的 LLM 客户端
-	llmClient, model, userMaxCtx := a.llmFactory.GetLLM(senderID)
-	if model == "" {
-		model = a.model
-	}
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
 	maxContextTokens := a.maxContextTokens
 	if userMaxCtx > 0 {
 		maxContextTokens = userMaxCtx
@@ -39,9 +36,10 @@ func (a *Agent) buildMainRunConfig(
 
 	cfg := RunConfig{
 		// 必需
-		LLMClient: llmClient,
-		Model:     model,
-		Tools:     a.tools,
+		LLMClient:    llmClient,
+		Model:        model,
+		ThinkingMode: thinkingMode,
+		Tools:        a.tools,
 		Messages:  messages,
 
 		// 身份
@@ -131,9 +129,11 @@ func (a *Agent) buildCronRunConfig(
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 	sessionKey := channel + ":" + chatID
 
+	llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+
 	return RunConfig{
-		LLMClient:  a.llmClient,
-		Model:      a.model,
+		LLMClient:  llmClient,
+		Model:      model,
 		Tools:      a.tools,
 		Messages:   messages,
 		AgentID:    "main",
@@ -223,9 +223,12 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	subAgentID := parentAgentID + "/sub"
 
+	// SubAgent 继承父 Agent 的 LLM 配置
+	llmClient, model, _, _ := a.llmFactory.GetLLM(parentCtx.SenderID)
+
 	cfg := RunConfig{
-		LLMClient: a.llmClient,
-		Model:     a.model,
+		LLMClient: llmClient,
+		Model:     model,
 		Tools:     subTools,
 		Messages:  messages,
 		AgentID:   subAgentID,

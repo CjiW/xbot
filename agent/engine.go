@@ -22,9 +22,10 @@ import (
 // 主 Agent 和 SubAgent 使用同一个 Run() 方法，差异通过配置注入。
 type RunConfig struct {
 	// === 必需 ===
-	LLMClient llm.LLM
-	Model     string
-	Tools     *tools.Registry
+	LLMClient    llm.LLM
+	Model        string
+	ThinkingMode string // 思考模式（如 "enabled", "auto"）
+	Tools        *tools.Registry
 	Messages  []llm.ChatMessage
 
 	// === 身份（从 InboundMessage 提取） ===
@@ -107,7 +108,7 @@ type RunConfig struct {
 type CompressConfig struct {
 	MaxContextTokens     int
 	CompressionThreshold float64
-	CompressFunc         func(ctx context.Context, messages []llm.ChatMessage, model string) ([]llm.ChatMessage, error)
+	CompressFunc         func(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) ([]llm.ChatMessage, error)
 }
 
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
@@ -228,7 +229,7 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 			"threshold": threshold,
 		}).Info("Auto context compression triggered")
 
-		compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.Model)
+		compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
 		if compressErr != nil {
 			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
 			return
@@ -314,7 +315,7 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 			llmCtx, llmCancel = ctx, func() {}
 		}
 
-		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs)
+		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 		llmCancel()
 
 		if err != nil {

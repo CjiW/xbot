@@ -488,6 +488,38 @@ func (m *MultiTenantSession) DB() *sqlite.DB {
 	return m.db
 }
 
+// CoreMemoryService returns the shared core memory service.
+func (m *MultiTenantSession) CoreMemoryService() *sqlite.CoreMemoryService {
+	return m.coreSvc
+}
+
+// ArchivalService returns the shared archival memory service.
+func (m *MultiTenantSession) ArchivalService() *vectordb.ArchivalService {
+	return m.archivalSvc
+}
+
+// MemoryService returns the shared memory (recall) service.
+func (m *MultiTenantSession) MemoryService() *sqlite.MemoryService {
+	return m.memorySvc
+}
+
+// ToolIndexService returns the shared tool index service.
+func (m *MultiTenantSession) ToolIndexService() *vectordb.ToolIndexService {
+	return m.toolIndexSvc
+}
+
+// RecallTimeRange returns the recall time-range search function.
+func (m *MultiTenantSession) RecallTimeRange() vectordb.RecallTimeRangeFunc {
+	return m.recallTimeRangeFn
+}
+
+// NewLettaMemory creates a new LettaMemory instance with an independent tenantID.
+// The service instances (coreSvc, archivalSvc, etc.) are shared — data isolation
+// is provided by the tenantID parameter.
+func (m *MultiTenantSession) NewLettaMemory(tenantID int64) *letta.LettaMemory {
+	return letta.New(tenantID, m.coreSvc, m.archivalSvc, m.memorySvc, m.toolIndexSvc)
+}
+
 // GetSessionMCPManager 实现 SessionMCPManagerProvider 接口
 func (m *MultiTenantSession) GetSessionMCPManager(sessionKey string) *tools.SessionMCPManager {
 	m.mu.RLock()

@@ -133,15 +133,25 @@ var readOnlyTools = map[string]bool{
 	"WebSearch": true, "ChatHistory": true,
 }
 
+// RunOutput is the result of a Run() call.
+// It extends OutboundMessage with internal messages needed for post-run processing
+// (e.g., SubAgent memory consolidation).
+type RunOutput struct {
+	*bus.OutboundMessage
+	// Messages contains the full conversation messages from the Run loop.
+	// Only populated when Memory is set in RunConfig (used for memorize after exit).
+	Messages []llm.ChatMessage
+}
+
 // Run 统一的 Agent 循环。
 //
 // 输入：RunConfig（从 InboundMessage 构建）
-// 输出：*bus.OutboundMessage（可直接发送到 IM 或返回给父 Agent）
+// 输出：*RunOutput（可直接发送到 IM 或返回给父 Agent）
 //
 // 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, AutoCompress=enabled, ...
 //   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, AutoCompress=nil, ...
-func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
+func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = DefaultMaxIterations
@@ -289,6 +299,16 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 		notifyProgress("")
 	})
 
+	// buildOutput creates a RunOutput with messages populated when Memory is set.
+	// This is used by SubAgent memory consolidation after Run() returns.
+	buildOutput := func(ob *bus.OutboundMessage) *RunOutput {
+		out := &RunOutput{OutboundMessage: ob}
+		if cfg.Memory != nil {
+			out.Messages = messages
+		}
+		return out
+	}
+
 	// --- 主循环 ---
 
 	// 工具执行相关类型（提取到循环外，避免每轮重新定义）
@@ -319,12 +339,12 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 		}
 		if systemCount != 1 {
 			log.Ctx(ctx).WithField("system_count", systemCount).Error("assert: LLM messages must have exactly one system message")
-			return &bus.OutboundMessage{
+			return buildOutput(&bus.OutboundMessage{
 				Channel: cfg.Channel,
 				ChatID:  cfg.ChatID,
 				Content: "内部错误：system 消息数量异常",
 				Error:   fmt.Errorf("assert: LLM messages must have exactly one system message; got %d", systemCount),
-			}
+			})
 		}
 
 		// 使用会话特定的工具定义
@@ -392,13 +412,13 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 
 		if err != nil {
 			if ctx.Err() != nil {
-				return &bus.OutboundMessage{
+				return buildOutput(&bus.OutboundMessage{
 					Channel:   cfg.Channel,
 					ChatID:    cfg.ChatID,
 					Content:   "Agent was cancelled.",
 					Error:     ctx.Err(),
 					ToolsUsed: toolsUsed,
-				}
+				})
 			}
 			// LLM 错误时优雅降级：如果有之前的中间内容，返回它
 			if lastContent != "" {
@@ -406,32 +426,32 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 					"agent_id":  cfg.AgentID,
 					"iteration": i + 1,
 				}).Warnf("LLM failed, returning partial result: %v", err)
-				return &bus.OutboundMessage{
+				return buildOutput(&bus.OutboundMessage{
 					Channel:   cfg.Channel,
 					ChatID:    cfg.ChatID,
 					Content:   lastContent,
 					ToolsUsed: toolsUsed,
-				}
+				})
 			}
-			return &bus.OutboundMessage{
+			return buildOutput(&bus.OutboundMessage{
 				Channel:   cfg.Channel,
 				ChatID:    cfg.ChatID,
 				Error:     fmt.Errorf("%w: %w", ErrLLMGenerate, err),
 				ToolsUsed: toolsUsed,
-			}
+			})
 		}
 
 		// 过滤 think 块
 		cleanContent := llm.StripThinkBlocks(response.Content)
 
 		if !response.HasToolCalls() {
-			return &bus.OutboundMessage{
+			return buildOutput(&bus.OutboundMessage{
 				Channel:     cfg.Channel,
 				ChatID:      cfg.ChatID,
 				Content:     cleanContent,
 				ToolsUsed:   toolsUsed,
 				WaitingUser: waitingUser,
-			}
+			})
 		}
 
 		// 记录最新的中间内容，用于 LLM 错误时降级
@@ -624,21 +644,21 @@ func Run(ctx context.Context, cfg RunConfig) *bus.OutboundMessage {
 		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
-			return &bus.OutboundMessage{
+			return buildOutput(&bus.OutboundMessage{
 				Channel:     cfg.Channel,
 				ChatID:      cfg.ChatID,
 				ToolsUsed:   toolsUsed,
 				WaitingUser: true,
-			}
+			})
 		}
 	}
 
-	return &bus.OutboundMessage{
+	return buildOutput(&bus.OutboundMessage{
 		Channel:   cfg.Channel,
 		ChatID:    cfg.ChatID,
 		Content:   "已达到最大迭代次数，请重新描述你的需求。",
 		ToolsUsed: toolsUsed,
-	}
+	})
 }
 
 // defaultToolExecutor 创建默认的工具执行器（从 Registry 查找并执行）。

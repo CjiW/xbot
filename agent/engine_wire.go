@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"xbot/bus"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/memory"
 	"xbot/memory/letta"
 	"xbot/oauth"
 	"xbot/session"
@@ -185,6 +187,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	systemPrompt string,
 	allowedTools []string,
 	caps tools.SubAgentCapabilities,
+	roleName string,
 ) RunConfig {
 	parentAgentID := parentCtx.AgentID
 
@@ -211,18 +214,29 @@ func (a *Agent) buildSubAgentRunConfig(
 		}
 	}
 
-	// 构建子 Agent 的消息（注入工作目录信息）
-	if parentCtx.SandboxEnabled && parentCtx.SandboxWorkDir != "" {
-		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.SandboxWorkDir)
-	} else if parentCtx.WorkspaceRoot != "" {
-		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s\n", parentCtx.WorkspaceRoot)
+	// 构建 SubAgent 的 system prompt：通用模板 + 角色专有能力描述
+	workDir := parentCtx.SandboxWorkDir
+	if workDir == "" {
+		workDir = parentCtx.WorkspaceRoot
 	}
+	now := time.Now().Format("2006-01-02 15:04:05 MST")
+
+	// role.SystemPrompt 作为角色专有能力描述（非通用 prompt）
+	rolePrompt := strings.TrimSpace(systemPrompt)
+	if rolePrompt == "" {
+		rolePrompt = "You are a helpful assistant. Complete the given task using the available tools."
+	}
+
+	// 通用模板 + 角色描述
+	sysPrompt := fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, now)
+	sysPrompt += "\n## 角色描述\n\n" + rolePrompt + "\n"
+
 	messages := []llm.ChatMessage{
-		llm.NewSystemMessage(systemPrompt),
+		llm.NewSystemMessage(sysPrompt),
 		llm.NewUserMessage(task),
 	}
 
-	subAgentID := parentAgentID + "/sub"
+	subAgentID := parentAgentID + "/" + roleName
 
 	// SubAgent 继承父 Agent 的 LLM 配置
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(parentCtx.SenderID)
@@ -263,9 +277,32 @@ func (a *Agent) buildSubAgentRunConfig(
 		cfg.SendFunc = a.sendMessage
 	}
 
-	// Capability: memory — 注入 Letta 记忆系统
+	// Capability: memory — 创建独立记忆系统
+	// SubAgent 的会话 = 与调用者 Agent 的私有聊天。调用者是 "user"，SubAgent 是 "xbot"。
+	// 通过 deriveSubAgentTenantID 隔离：每个 (parentTenantID, parentAgentID, roleName) 组合
+	// 产生唯一的 tenantID，确保 SubAgent 和父 Agent 读写完全不同的记忆数据。
 	if caps.Memory {
-		cfg.ToolContextExtras = a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
+		extras, mem := a.buildSubAgentMemory(ctx, parentCtx, parentAgentID, roleName)
+		if extras != nil && mem != nil {
+			cfg.ToolContextExtras = extras
+			cfg.Memory = mem
+
+			// 注入记忆到 system prompt（SubAgent 不使用 pipeline，需手动调用 Recall）
+			subSenderID := subAgentHumanBlockSenderID(parentAgentID)
+			memCtx := letta.WithUserID(ctx, subSenderID)
+			if recallText, err := mem.Recall(memCtx, task); err == nil && recallText != "" {
+				messages[0].Content += "\n\n" + recallText
+			}
+
+			// 启用上下文压缩（与主 Agent 相同配置，但无进度通知）
+			if a.enableAutoCompress {
+				cfg.AutoCompress = &CompressConfig{
+					MaxContextTokens:     a.maxContextTokens,
+					CompressionThreshold: a.compressionThreshold,
+					CompressFunc:         a.compressContext,
+				}
+			}
+		}
 	}
 
 	// Capability: spawn_agent — 允许 SubAgent 创建子 Agent
@@ -425,6 +462,120 @@ func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtra
 	return extras
 }
 
+// buildSubAgentMemory 为 SubAgent 构建独立的记忆系统。
+//
+// 核心设计：SubAgent 的会话 = 与调用者 Agent 的私有聊天。
+// 调用者是 "user"，SubAgent 是 "xbot"。这保持了高度一致的 agent 逻辑抽象。
+//
+// 隔离策略：
+//   - tenantID: 通过 deriveSubAgentTenantID(parentTenantID, parentAgentID, roleName) 生成
+//   - persona: 完全独立（SubAgent 自己的身份，不从父级继承）
+//   - human: 通过 parentAgentID 隔离（记录调用者 agent 的特征，而非原始终端用户）
+//   - archival memory / working_context: 通过 tenantID 自动隔离
+//
+// 返回 (ToolContextExtras, MemoryProvider)。如果创建失败，返回 nil, nil 并记录警告。
+func (a *Agent) buildSubAgentMemory(
+	ctx context.Context,
+	parentCtx *tools.ToolContext,
+	parentAgentID, roleName string,
+) (*ToolContextExtras, memory.MemoryProvider) {
+	// 1. 获取父 Agent 的 tenantID（用于推导 SubAgent 的 tenantID）
+	parentExtras := a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
+	if parentExtras.TenantID == 0 {
+		log.Ctx(ctx).WithField("parent", parentAgentID).Warn("SubAgent memory: parent tenantID is 0, skipping memory setup")
+		return nil, nil
+	}
+
+	// 2. 推导 SubAgent 的独立 tenantID
+	subTenantID := deriveSubAgentTenantID(parentExtras.TenantID, parentAgentID, roleName)
+
+	// 3. 获取共享服务（通过 multiSession 访问）
+	coreSvc := a.multiSession.CoreMemoryService()
+	archivalSvc := a.multiSession.ArchivalService()
+	memorySvc := a.multiSession.MemoryService()
+
+	// 4. 初始化 SubAgent 的 core memory blocks（persona + human）
+	//    persona: 空的，由 SubAgent 通过 memorize 自行积累（不预填 systemPrompt，避免重复注入）
+	//    human: 以 parentAgentID 为 senderID 隔离
+	subSenderID := subAgentHumanBlockSenderID(parentAgentID)
+	if err := coreSvc.InitBlocks(subTenantID, subSenderID); err != nil {
+		log.Ctx(ctx).WithError(err).WithFields(log.Fields{
+			"tenant_id":     subTenantID,
+			"parent_agent":  parentAgentID,
+			"role":          roleName,
+			"sub_sender_id": subSenderID,
+		}).Warn("SubAgent memory: failed to init core blocks")
+		return nil, nil
+	}
+
+	// 5. 创建独立的 LettaMemory 实例
+	toolIndexSvc := a.multiSession.ToolIndexService()
+	mem := letta.New(subTenantID, coreSvc, archivalSvc, memorySvc, toolIndexSvc)
+
+	// 6. 构建 ToolContextExtras（供 SubAgent 的工具使用）
+	extras := &ToolContextExtras{
+		TenantID:                subTenantID,
+		CoreMemory:              coreSvc,
+		ArchivalMemory:          archivalSvc,
+		MemorySvc:               memorySvc,
+		RecallTimeRange:         a.multiSession.RecallTimeRangeFunc(),
+		ToolIndexer:             mem,
+		InvalidateAllSessionMCP: func() { a.multiSession.InvalidateAll() },
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"sub_tenant_id": subTenantID,
+		"parent_agent":  parentAgentID,
+		"role":          roleName,
+		"sub_sender_id": subSenderID,
+	}).Info("SubAgent memory: created independent memory system")
+
+	return extras, mem
+}
+
+// subAgentHumanBlockSenderID returns the virtual senderID used for the SubAgent's
+// human block. This isolates SubAgent's human block from the parent's by using
+// parentAgentID as the key, so each SubAgent role sees a different "user".
+func subAgentHumanBlockSenderID(parentAgentID string) string {
+	return "agent:" + parentAgentID
+}
+
+// consolidateSubAgentMemory runs a lightweight memorize pass after SubAgent exits.
+// It extracts key information from the SubAgent's conversation messages and
+// persists them to the SubAgent's independent memory via Memorize().
+func (a *Agent) consolidateSubAgentMemory(
+	ctx context.Context,
+	cfg RunConfig,
+	messages []llm.ChatMessage,
+	task string,
+	roleName string,
+	parentAgentID string,
+) {
+	mem := cfg.Memory
+	extras := cfg.ToolContextExtras
+	if mem == nil || extras == nil {
+		return
+	}
+
+	// Build memorize input with all conversation messages and LLM client
+	memInput := memory.MemorizeInput{
+		Messages:  messages,
+		LLMClient: cfg.LLMClient,
+		Model:     cfg.Model,
+	}
+
+	// Call Memorize with the SubAgent's virtual senderID context
+	subSenderID := subAgentHumanBlockSenderID(parentAgentID)
+	memCtx := letta.WithUserID(ctx, subSenderID)
+
+	if _, err := mem.Memorize(memCtx, memInput); err != nil {
+		log.Ctx(ctx).WithError(err).WithFields(log.Fields{
+			"role":      roleName,
+			"tenant_id": extras.TenantID,
+		}).Warn("SubAgent memory consolidation failed")
+	}
+}
+
 // spawnSubAgent 通过 Run() 创建并运行 SubAgent。
 // 这是 SpawnAgent 回调的实现，将 InboundMessage 转换为 RunConfig 并调用 Run()。
 func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -495,7 +646,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	// 从 InboundMessage 恢复 capabilities
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 
-	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps)
+	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName)
 
 	// 传递 CallChain 给子 Agent
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
@@ -509,5 +660,10 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")
 
-	return out, nil
+	// SubAgent 记忆整合：将本次对话的关键信息写入 SubAgent 的独立记忆
+	if cfg.Memory != nil && len(out.Messages) > 0 {
+		a.consolidateSubAgentMemory(ctx, cfg, out.Messages, task, roleName, parentAgentID)
+	}
+
+	return out.OutboundMessage, nil
 }

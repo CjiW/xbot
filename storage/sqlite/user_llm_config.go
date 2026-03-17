@@ -102,7 +102,7 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	log.WithFields(log.Fields{
 		"sender_id":     cfg.SenderID,
 		"provider":      cfg.Provider,
-		"model":        cfg.Model,
+		"model":         cfg.Model,
 		"max_context":   cfg.MaxContext,
 		"thinking_mode": cfg.ThinkingMode,
 	}).Info("User LLM config saved")

@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	logrus "xbot/logger"
@@ -126,25 +125,6 @@ func buildToolCallsParam(toolCalls []ToolCall) []openai.ChatCompletionMessageToo
 		})
 	}
 	return result
-}
-
-// isReasoningModel 检测是否为 reasoning 模型
-// DeepSeek: deepseek-reasoner 或 deepseek-chat with thinking enabled
-// OpenAI: o1-, o3-, o4- series
-func isReasoningModel(model string) bool {
-	model = strings.ToLower(model)
-	// DeepSeek reasoner
-	if strings.Contains(model, "deepseek-reasoner") {
-		return true
-	}
-	// OpenAI reasoning models
-	reasoningPrefixes := []string{"o1-", "o1.", "o3-", "o3.", "o4-", "o4."}
-	for _, prefix := range reasoningPrefixes {
-		if strings.HasPrefix(model, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // extractReasoningContent 从 OpenAI 响应的 ExtraFields 中提取 reasoning_content

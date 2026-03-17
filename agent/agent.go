@@ -1855,7 +1855,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:             "assistant",
-			Content:          response.Content, // 保留原始content，包含think块
+			Content:          response.Content,          // 保留原始content，包含think块
 			ReasoningContent: response.ReasoningContent, // DeepSeek/OpenAI reasoning 模型的思维链
 			ToolCalls:        response.ToolCalls,
 		}
@@ -2328,7 +2328,7 @@ func (a *Agent) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPro
 		// 重要：根据 MiniMax 文档，think块需要完整保留在消息历史中才能发挥模型最佳性能
 		assistantMsg := llm.ChatMessage{
 			Role:             "assistant",
-			Content:          response.Content, // 保留原始content，包含think块
+			Content:          response.Content,          // 保留原始content，包含think块
 			ReasoningContent: response.ReasoningContent, // DeepSeek/OpenAI reasoning 模型的思维链
 			ToolCalls:        response.ToolCalls,
 		}

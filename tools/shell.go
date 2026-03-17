@@ -135,16 +135,14 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			// 超时：杀掉进程
 			killProcess(cmd)
 			if result != "" {
-				return NewResult(fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)), nil
+				return NewErrorResult(fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)), nil
 			}
-			return NewResult(fmt.Sprintf("[TIMEOUT after %s] Command timed out with no output. The command may be waiting for input or running too long.", timeout)), nil
+			return NewErrorResult(fmt.Sprintf("[TIMEOUT after %s] Command timed out with no output. The command may be waiting for input or running too long.", timeout)), nil
 		}
-		// 命令执行失败但有输出（如 exit code != 0）
 		if result != "" {
-			return NewResult(fmt.Sprintf("[EXIT %s]\n%s", err, result)), nil
+			return NewErrorResult(fmt.Sprintf("[EXIT %s]\n%s", err, result)), nil
 		}
 		return nil, fmt.Errorf("command failed: %w", err)
 	}

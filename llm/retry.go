@@ -39,6 +39,38 @@ func NewRetryLLM(inner LLM, cfg RetryConfig) *RetryLLM {
 	return &RetryLLM{inner: inner, config: cfg}
 }
 
+// IsInputTooLongError detects 400-class errors caused by the input exceeding the
+// model's context window. Different providers return this in different formats:
+//   - Dashscope: "Range of input length should be [1, 202752]"
+//   - OpenAI:    "maximum context length" / "max_tokens"
+//   - Anthropic: "prompt is too long"
+func IsInputTooLongError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "400") {
+		return false
+	}
+	indicators := []string{
+		"range of input length",
+		"maximum context length",
+		"max_tokens",
+		"context_length_exceeded",
+		"prompt is too long",
+		"input too long",
+		"token limit",
+		"reduce the length",
+		"too many tokens",
+	}
+	for _, ind := range indicators {
+		if strings.Contains(msg, ind) {
+			return true
+		}
+	}
+	return false
+}
+
 // isRetryableError 判断错误是否可重试
 // 可重试：429、5xx、网络错误
 // 不可重试：context 取消/超时、其他 4xx

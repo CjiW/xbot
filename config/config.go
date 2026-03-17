@@ -38,6 +38,7 @@ type QQConfig struct {
 
 // EmbeddingConfig Embedding 配置
 type EmbeddingConfig struct {
+	Provider  string // Embedding 提供者: "openai"(默认) 或 "ollama"
 	BaseURL   string // Embedding API 基础 URL（默认回退到 LLM_BASE_URL）
 	APIKey    string // Embedding API Key（默认回退到 LLM_API_KEY）
 	Model     string // Embedding 模型名称（如 bge-m3、text-embedding-3-small）
@@ -178,6 +179,7 @@ func Load() *Config {
 			AllowFrom:         splitEnv("FEISHU_ALLOW_FROM"),
 		},
 		Embedding: EmbeddingConfig{
+			Provider:  getEnvOrDefault("LLM_EMBEDDING_PROVIDER", ""),
 			BaseURL:   getEnvOrDefault("LLM_EMBEDDING_BASE_URL", ""),
 			APIKey:    getEnvOrDefault("LLM_EMBEDDING_API_KEY", ""),
 			Model:     getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),

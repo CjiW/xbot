@@ -333,3 +333,85 @@ func (n *nonStreamingLLM) Generate(ctx context.Context, model string, messages [
 func (n *nonStreamingLLM) ListModels() []string {
 	return []string{"non-streaming"}
 }
+
+// ---------------------------------------------------------------------------
+// WithRetryNotify 回调测试
+// ---------------------------------------------------------------------------
+
+func TestRetryLLM_Generate_NotifiesOnRetry(t *testing.T) {
+	// 前 2 次返回 502，第 3 次成功
+	retryableErr := errors.New(`POST "url": 502 Bad Gateway`)
+	inner := newFailNLLM(2, retryableErr)
+	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
+	r := NewRetryLLM(inner, cfg)
+
+	var notifications []struct {
+		attempt, max uint
+		err          error
+	}
+	ctx := WithRetryNotify(context.Background(), func(attempt, max uint, err error) {
+		notifications = append(notifications, struct {
+			attempt, max uint
+			err          error
+		}{attempt, max, err})
+	})
+
+	resp, err := r.Generate(ctx, "test", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("content = %q, want %q", resp.Content, "ok")
+	}
+
+	// 应该收到 2 次通知（第 1 次和第 2 次失败后各一次）
+	if len(notifications) != 2 {
+		t.Fatalf("notifications count = %d, want 2", len(notifications))
+	}
+	if notifications[0].attempt != 1 || notifications[0].max != 3 {
+		t.Errorf("notification[0]: attempt=%d, max=%d, want 1, 3", notifications[0].attempt, notifications[0].max)
+	}
+	if notifications[1].attempt != 2 || notifications[1].max != 3 {
+		t.Errorf("notification[1]: attempt=%d, max=%d, want 2, 3", notifications[1].attempt, notifications[1].max)
+	}
+}
+
+func TestRetryLLM_Generate_NoNotifyWithoutCallback(t *testing.T) {
+	// 没有注入回调时不应 panic
+	retryableErr := errors.New(`POST "url": 502 Bad Gateway`)
+	inner := newFailNLLM(1, retryableErr)
+	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
+	r := NewRetryLLM(inner, cfg)
+
+	resp, err := r.Generate(context.Background(), "test", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("content = %q, want %q", resp.Content, "ok")
+	}
+}
+
+func TestRetryLLM_GenerateStream_NotifiesOnRetry(t *testing.T) {
+	retryableErr := errors.New(`POST "url": 503 Service Unavailable`)
+	inner := newFailNLLM(1, retryableErr)
+	cfg := RetryConfig{Attempts: 3, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
+	r := NewRetryLLM(inner, cfg)
+
+	var notified atomic.Int32
+	ctx := WithRetryNotify(context.Background(), func(attempt, max uint, err error) {
+		notified.Add(1)
+	})
+
+	ch, err := r.GenerateStream(ctx, "test", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// drain channel
+	for range ch {
+	}
+
+	if notified.Load() != 1 {
+		t.Errorf("notified = %d, want 1", notified.Load())
+	}
+}

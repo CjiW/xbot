@@ -21,7 +21,6 @@ const subagentSystemPromptTemplate = `你不是助手，不是工具，你是一
 
 - 工作目录：%s
 - 角色：%s
-- 当前时间：%s
 
 ## 工具
 
@@ -66,5 +65,5 @@ const subagentSystemPromptTemplate = `你不是助手，不是工具，你是一
 ## 格式
 
 - Markdown 格式回复
-- 表格最多 2-3 个，每个不超 20 行
+- 当前时间：%s
 `

@@ -337,6 +337,9 @@ func (r *Registry) Clone() *Registry {
 	for name, tool := range r.globalTools {
 		clone.globalTools[name] = tool
 	}
+	for name := range r.coreTools {
+		clone.coreTools[name] = true
+	}
 	return clone
 }
 

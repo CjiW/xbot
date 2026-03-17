@@ -274,3 +274,101 @@ func (a *Agent) handleUnsetLLM(ctx context.Context, msg bus.InboundMessage) (*bu
 		Content: "已清除自定义 LLM 配置，将使用系统默认配置。",
 	}, nil
 }
+
+// handleModels handles /models command to list available models for current user's LLM
+func (a *Agent) handleModels(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// Get user's LLM client
+	llmClient, currentModel, _, _ := a.llmFactory.GetLLM(msg.SenderID)
+
+	// Get available models
+	models := llmClient.ListModels()
+	if len(models) == 0 {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "当前 API 未返回可用模型列表。\n\n如果你使用自定义 LLM，请确保 /set-llm 配置正确。",
+		}, nil
+	}
+
+	// Build response
+	var sb strings.Builder
+	sb.WriteString("可用模型列表:\n")
+	for _, m := range models {
+		if m == currentModel {
+			fmt.Fprintf(&sb, "• %s (当前)\n", m)
+		} else {
+			fmt.Fprintf(&sb, "• %s\n", m)
+		}
+	}
+
+	fmt.Fprintf(&sb, "\n共 %d 个模型。使用 /set-model <model> 切换模型。", len(models))
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: sb.String(),
+	}, nil
+}
+
+// handleSetModel handles /set-model command to change the model for user's LLM
+func (a *Agent) handleSetModel(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// Parse command arguments
+	trimmed := strings.TrimSpace(msg.Content)
+	args := strings.TrimSpace(trimmed[len("/set-model"):])
+
+	if args == "" {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "用法: /set-model <model>\n\n示例:\n  /set-model gpt-4\n  /set-model deepseek-chat\n  /set-model claude-3-5-sonnet-20241022\n\n使用 /models 查看可用模型列表。",
+		}, nil
+	}
+
+	// Get current config
+	cfg, err := a.llmConfigSvc.GetConfig(msg.SenderID)
+	if err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("查询配置失败: %v", err),
+		}, nil
+	}
+
+	if cfg == nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "当前未配置自定义 LLM。\n\n请先使用 /set-llm 设置你的 LLM 配置。",
+		}, nil
+	}
+
+	// Update model
+	oldModel := cfg.Model
+	cfg.Model = strings.TrimSpace(args)
+
+	// Save configuration
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("保存配置失败: %v", err),
+		}, nil
+	}
+
+	// Invalidate cached LLM client
+	a.llmFactory.Invalidate(msg.SenderID)
+
+	if oldModel == "" {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("模型已设置为: %s", cfg.Model),
+		}, nil
+	}
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: fmt.Sprintf("模型已从 %s 切换为: %s", oldModel, cfg.Model),
+	}, nil
+}

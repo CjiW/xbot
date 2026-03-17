@@ -34,6 +34,19 @@ type RunConfig struct {
 	SenderID   string // 原始发送者
 	SenderName string
 
+	// === 工作区 & 沙箱 ===
+	WorkingDir       string   // Agent 工作目录（宿主机）
+	WorkspaceRoot    string   // 用户可读写工作区根目录（宿主机路径）
+	SandboxWorkDir   string   // 沙箱内工作目录（如 /workspace）
+	ReadOnlyRoots    []string // 额外只读目录
+	SkillsDirs       []string // 全局 skill 目录列表
+	AgentsDir        string   // 全局 agents 目录
+	MCPConfigPath    string   // 用户 MCP 配置路径
+	GlobalMCPConfig  string   // 全局 MCP 配置路径（只读）
+	DataDir          string   // 数据持久化目录
+	SandboxEnabled   bool     // 是否启用命令沙箱
+	PreferredSandbox string   // 沙箱类型（docker 优先）
+
 	// === 循环控制 ===
 	MaxIterations int // 0 = 使用默认值 100
 
@@ -54,10 +67,13 @@ type RunConfig struct {
 	// SendFunc 向 IM 渠道发送消息（nil = 不能发消息）
 	SendFunc func(channel, chatID, content string) error
 
+	// InjectInbound 注入入站消息，触发 Agent 完整处理循环（nil = 不支持）
+	InjectInbound func(channel, chatID, senderID, content string)
+
 	// Memory 记忆提供者（nil = 无记忆）
 	Memory memory.MemoryProvider
 
-	// ToolContextExtras 额外的 ToolContext 字段注入
+	// ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段
 	ToolContextExtras *ToolContextExtras
 
 	// SpawnAgent SubAgent 创建能力（nil = 不能创建子 Agent）
@@ -70,8 +86,7 @@ type RunConfig struct {
 
 	// ToolExecutor 工具执行函数。
 	// 主 Agent 注入带 session MCP、激活检查、Letta memory 的完整版本；
-	// SubAgent 注入简化版本（仅 registry lookup + execute）。
-	// nil 时使用 defaultToolExecutor（从 cfg.Tools 查找并执行）。
+	// SubAgent 使用 nil（defaultToolExecutor 从 cfg.Tools 查找并执行）。
 	ToolExecutor func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error)
 
 	// LLMTimeout 单次 LLM 调用超时（0 = 不设超时）
@@ -96,7 +111,8 @@ type CompressConfig struct {
 }
 
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
-// 主 Agent 和 SubAgent 按需注入不同的字段。
+// 仅包含 Letta memory 特有的字段，通用字段（InjectInbound、Registry 等）
+// 已迁移到 RunConfig 中。
 type ToolContextExtras struct {
 	TenantID                int64
 	CoreMemory              *sqlite.CoreMemoryService
@@ -104,8 +120,6 @@ type ToolContextExtras struct {
 	MemorySvc               *sqlite.MemoryService
 	RecallTimeRange         vectordb.RecallTimeRangeFunc
 	ToolIndexer             memory.ToolIndexer
-	InjectInbound           func(channel, chatID, senderID, content string)
-	Registry                *tools.Registry
 	InvalidateAllSessionMCP func()
 }
 
@@ -625,6 +639,7 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 }
 
 // buildToolContext 统一构建 ToolContext。
+// 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	tc := &tools.ToolContext{
 		Ctx:        ctx,
@@ -634,6 +649,25 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		SenderID:   cfg.SenderID,
 		SenderName: cfg.SenderName,
 		SendFunc:   cfg.SendFunc,
+
+		// 工作区 & 沙箱
+		WorkingDir:          cfg.WorkingDir,
+		WorkspaceRoot:       cfg.WorkspaceRoot,
+		SandboxWorkDir:      cfg.SandboxWorkDir,
+		ReadOnlyRoots:       cfg.ReadOnlyRoots,
+		SkillsDirs:          cfg.SkillsDirs,
+		AgentsDir:           cfg.AgentsDir,
+		MCPConfigPath:       cfg.MCPConfigPath,
+		GlobalMCPConfigPath: cfg.GlobalMCPConfig,
+		SandboxEnabled:      cfg.SandboxEnabled,
+		PreferredSandbox:    cfg.PreferredSandbox,
+		DataDir:             cfg.DataDir,
+
+		// 注入入站消息
+		InjectInbound: cfg.InjectInbound,
+
+		// 工具注册表
+		Registry: cfg.Tools,
 	}
 
 	// 注入 SpawnAgent（包装为 SubAgentManager 接口）
@@ -647,7 +681,7 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		}
 	}
 
-	// 注入 Letta 记忆字段
+	// 注入 Letta 记忆字段（覆盖上面的默认值）
 	if ext := cfg.ToolContextExtras; ext != nil {
 		tc.TenantID = ext.TenantID
 		tc.CoreMemory = ext.CoreMemory
@@ -655,9 +689,9 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.MemorySvc = ext.MemorySvc
 		tc.RecallTimeRange = ext.RecallTimeRange
 		tc.ToolIndexer = ext.ToolIndexer
-		tc.InjectInbound = ext.InjectInbound
-		tc.Registry = ext.Registry
-		tc.InvalidateAllSessionMCP = ext.InvalidateAllSessionMCP
+		if ext.InvalidateAllSessionMCP != nil {
+			tc.InvalidateAllSessionMCP = ext.InvalidateAllSessionMCP
+		}
 	}
 
 	return tc

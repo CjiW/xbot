@@ -622,6 +622,96 @@ func TestRun_DefaultToolExecutor(t *testing.T) {
 	}
 }
 
+func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
+	// Verify that defaultToolExecutor passes workspace/sandbox fields to ToolContext
+	var capturedCtx *tools.ToolContext
+	captureTool := &mockTool{
+		name: "CaptureTool",
+		execFunc: func(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+			capturedCtx = ctx
+			return tools.NewResult("captured"), nil
+		},
+	}
+
+	mock := &mockLLM{
+		responses: []llm.LLMResponse{
+			{
+				FinishReason: llm.FinishReasonToolCalls,
+				ToolCalls: []llm.ToolCall{
+					{ID: "tc1", Name: "CaptureTool", Arguments: `{}`},
+				},
+			},
+			{Content: "Done."},
+		},
+	}
+
+	out := Run(context.Background(), RunConfig{
+		LLMClient: mock,
+		Model:     "test",
+		Tools:     newTestRegistry(captureTool),
+		Messages:  baseMessages(),
+		AgentID:   "sub/code-reviewer",
+		Channel:   "feishu",
+		ChatID:    "oc_test",
+		SenderID:  "ou_test",
+
+		// Workspace fields (simulating SubAgent inheriting from parent)
+		WorkingDir:       "/work",
+		WorkspaceRoot:    "/work/users/ou_test",
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
+		SkillsDirs:       []string{"/work/.xbot/skills"},
+		AgentsDir:        "/work/.xbot/agents",
+		MCPConfigPath:    "/work/users/ou_test/mcp.json",
+		GlobalMCPConfig:  "/work/mcp.json",
+		DataDir:          "/work",
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+	})
+
+	if out.Error != nil {
+		t.Fatalf("unexpected error: %v", out.Error)
+	}
+	if capturedCtx == nil {
+		t.Fatal("tool was not called")
+	}
+
+	// Verify workspace fields propagated to ToolContext
+	if capturedCtx.WorkingDir != "/work" {
+		t.Errorf("WorkingDir = %q", capturedCtx.WorkingDir)
+	}
+	if capturedCtx.WorkspaceRoot != "/work/users/ou_test" {
+		t.Errorf("WorkspaceRoot = %q", capturedCtx.WorkspaceRoot)
+	}
+	if capturedCtx.SandboxWorkDir != "/workspace" {
+		t.Errorf("SandboxWorkDir = %q", capturedCtx.SandboxWorkDir)
+	}
+	if !capturedCtx.SandboxEnabled {
+		t.Error("SandboxEnabled should be true")
+	}
+	if capturedCtx.PreferredSandbox != "docker" {
+		t.Errorf("PreferredSandbox = %q", capturedCtx.PreferredSandbox)
+	}
+	if len(capturedCtx.SkillsDirs) != 1 || capturedCtx.SkillsDirs[0] != "/work/.xbot/skills" {
+		t.Errorf("SkillsDirs = %v", capturedCtx.SkillsDirs)
+	}
+	if capturedCtx.AgentsDir != "/work/.xbot/agents" {
+		t.Errorf("AgentsDir = %q", capturedCtx.AgentsDir)
+	}
+	if capturedCtx.MCPConfigPath != "/work/users/ou_test/mcp.json" {
+		t.Errorf("MCPConfigPath = %q", capturedCtx.MCPConfigPath)
+	}
+	if capturedCtx.GlobalMCPConfigPath != "/work/mcp.json" {
+		t.Errorf("GlobalMCPConfigPath = %q", capturedCtx.GlobalMCPConfigPath)
+	}
+	if capturedCtx.DataDir != "/work" {
+		t.Errorf("DataDir = %q", capturedCtx.DataDir)
+	}
+	if capturedCtx.AgentID != "sub/code-reviewer" {
+		t.Errorf("AgentID = %q", capturedCtx.AgentID)
+	}
+}
+
 func TestRun_DefaultToolExecutor_UnknownTool(t *testing.T) {
 	mock := &mockLLM{
 		responses: []llm.LLMResponse{
@@ -927,6 +1017,7 @@ func TestSpawnAgentAdapter_ErrorPropagation(t *testing.T) {
 
 func TestBuildToolContext(t *testing.T) {
 	called := false
+	injectCalled := false
 	cfg := &RunConfig{
 		AgentID:    "main",
 		Channel:    "feishu",
@@ -936,14 +1027,33 @@ func TestBuildToolContext(t *testing.T) {
 		SendFunc: func(ch, cid, content string) error {
 			return nil
 		},
+		InjectInbound: func(ch, cid, sid, content string) {
+			injectCalled = true
+		},
 		SpawnAgent: func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 			called = true
 			return &bus.OutboundMessage{Content: "ok"}, nil
 		},
+
+		// 工作区 & 沙箱
+		WorkingDir:       "/work",
+		WorkspaceRoot:    "/work/users/ou_xxx",
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
+		SkillsDirs:       []string{"/work/.xbot/skills"},
+		AgentsDir:        "/work/.xbot/agents",
+		MCPConfigPath:    "/work/users/ou_xxx/mcp.json",
+		GlobalMCPConfig:  "/work/mcp.json",
+		DataDir:          "/work",
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+
+		Tools: tools.NewRegistry(),
 	}
 
 	tc := buildToolContext(context.Background(), cfg)
 
+	// 基本字段
 	if tc.AgentID != "main" {
 		t.Errorf("AgentID = %q", tc.AgentID)
 	}
@@ -952,6 +1062,55 @@ func TestBuildToolContext(t *testing.T) {
 	}
 	if tc.Manager == nil {
 		t.Fatal("Manager should not be nil when SpawnAgent is set")
+	}
+
+	// 工作区 & 沙箱字段
+	if tc.WorkingDir != "/work" {
+		t.Errorf("WorkingDir = %q, want /work", tc.WorkingDir)
+	}
+	if tc.WorkspaceRoot != "/work/users/ou_xxx" {
+		t.Errorf("WorkspaceRoot = %q", tc.WorkspaceRoot)
+	}
+	if tc.SandboxWorkDir != "/workspace" {
+		t.Errorf("SandboxWorkDir = %q", tc.SandboxWorkDir)
+	}
+	if len(tc.ReadOnlyRoots) != 1 || tc.ReadOnlyRoots[0] != "/work/.xbot/skills" {
+		t.Errorf("ReadOnlyRoots = %v", tc.ReadOnlyRoots)
+	}
+	if len(tc.SkillsDirs) != 1 || tc.SkillsDirs[0] != "/work/.xbot/skills" {
+		t.Errorf("SkillsDirs = %v", tc.SkillsDirs)
+	}
+	if tc.AgentsDir != "/work/.xbot/agents" {
+		t.Errorf("AgentsDir = %q", tc.AgentsDir)
+	}
+	if tc.MCPConfigPath != "/work/users/ou_xxx/mcp.json" {
+		t.Errorf("MCPConfigPath = %q", tc.MCPConfigPath)
+	}
+	if tc.GlobalMCPConfigPath != "/work/mcp.json" {
+		t.Errorf("GlobalMCPConfigPath = %q", tc.GlobalMCPConfigPath)
+	}
+	if tc.DataDir != "/work" {
+		t.Errorf("DataDir = %q", tc.DataDir)
+	}
+	if !tc.SandboxEnabled {
+		t.Error("SandboxEnabled should be true")
+	}
+	if tc.PreferredSandbox != "docker" {
+		t.Errorf("PreferredSandbox = %q", tc.PreferredSandbox)
+	}
+
+	// InjectInbound
+	if tc.InjectInbound == nil {
+		t.Fatal("InjectInbound should not be nil")
+	}
+	tc.InjectInbound("", "", "", "")
+	if !injectCalled {
+		t.Error("InjectInbound was not called")
+	}
+
+	// Registry
+	if tc.Registry == nil {
+		t.Fatal("Registry should not be nil")
 	}
 
 	// Verify Manager works

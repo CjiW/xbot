@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"xbot/bus"
 	"xbot/llm"
@@ -21,6 +22,33 @@ type interactiveAgent struct {
 	mu           sync.Mutex        // 保护 messages 并发访问
 	systemPrompt llm.ChatMessage   // spawn 时的 system prompt（保持一致性，后续 send 不重建）
 	cfg          *RunConfig        // RunConfig 模板（Messages=nil，复用于 send/unload）
+	lastUsed     time.Time         // 最后访问时间，用于 TTL 清理
+}
+
+// interactiveSessionTTL 是 interactive SubAgent 会话的生存时间。
+const interactiveSessionTTL = 30 * time.Minute
+
+// cleanupExpiredSessions 清理所有过期的 interactive SubAgent 会话。
+// 调用方不需要持有 interactiveMu 锁（如果需要请在外部加锁）。
+func (a *Agent) cleanupExpiredSessions() {
+	now := time.Now()
+	a.interactiveSubAgents.Range(func(k, v interface{}) bool {
+		ia, ok := v.(*interactiveAgent)
+		if !ok || ia == nil {
+			a.interactiveSubAgents.Delete(k)
+			return true
+		}
+		if now.Sub(ia.lastUsed) > interactiveSessionTTL {
+			key := k.(string)
+			log.WithFields(log.Fields{
+				"key":       key,
+				"role":      ia.roleName,
+				"idle_time": now.Sub(ia.lastUsed).String(),
+			}).Info("Cleaning up expired interactive session")
+			a.interactiveSubAgents.Delete(key)
+		}
+		return true
+	})
 }
 
 // interactiveKey 生成 interactive session 在 map 中的 key。
@@ -43,6 +71,10 @@ func (a *Agent) SpawnInteractiveSession(
 	// 检查是否已存在（用 interactiveMu 保护，避免 LoadOrStore(nil) 的竞态）
 	a.interactiveMu.Lock()
 	defer a.interactiveMu.Unlock()
+
+	// 顺便清理过期会话
+	a.cleanupExpiredSessions()
+
 	if _, loaded := a.interactiveSubAgents.Load(key); loaded {
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
@@ -90,6 +122,7 @@ func (a *Agent) SpawnInteractiveSession(
 		messages:     append([]llm.ChatMessage(nil), out.Messages[preLen:]...),
 		systemPrompt: cfg.Messages[0], // 保存 system prompt，后续 send 不重建
 		cfg:          &cfg,
+		lastUsed:     time.Now(),
 	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)
@@ -130,8 +163,14 @@ func (a *Agent) SendToInteractiveSession(
 	ia.mu.Lock()
 	defer ia.mu.Unlock()
 
+	// 更新最后访问时间
+	ia.lastUsed = time.Now()
+
 	// 复用存储的 RunConfig 模板，只更新 Messages 和刷新 LLM 配置。
 	// 不重建工具集、记忆系统、system prompt 等，保持 session 一致性。
+	// 注意：此处为浅拷贝，slice 字段（Messages, ReadOnlyRoots, SkillsDirs 等）
+	// 与 ia.cfg 共享底层数组。当前安全因 mutex 保护且拷贝后仅做非 slice 字段覆盖，
+	// 但如果需要修改 slice 内容，必须先深拷贝。
 	cfg := *ia.cfg // copy
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(cfg.SenderID)
 	cfg.LLMClient = llmClient

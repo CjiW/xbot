@@ -138,7 +138,7 @@ func migrateMemoryFiles(memoryPath, historyPath string, tenantID int64, memorySv
 			return fmt.Errorf("read MEMORY.md: %w", err)
 		}
 		if len(content) > 0 {
-			if err := memorySvc.WriteLongTerm(tenantID, string(content)); err != nil {
+			if err := memorySvc.WriteLongTerm(context.Background(), tenantID, string(content)); err != nil {
 				return fmt.Errorf("write long-term memory: %w", err)
 			}
 			log.Info("Long-term memory migrated")
@@ -164,7 +164,7 @@ func migrateMemoryFiles(memoryPath, historyPath string, tenantID int64, memorySv
 			if entry == "" {
 				continue
 			}
-			if err := memorySvc.AppendHistory(tenantID, entry); err != nil {
+			if err := memorySvc.AppendHistory(context.Background(), tenantID, entry); err != nil {
 				log.WithError(err).Warn("Failed to migrate history entry")
 				continue
 			}

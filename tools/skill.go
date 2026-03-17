@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,12 +28,12 @@ func (t *SkillTool) Parameters() []llm.ToolParam {
 }
 
 func (t *SkillTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := parseToolArgs[struct {
 		Name   string `json:"name"`
 		Action string `json:"action"`
 		File   string `json:"file"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 	if params.Name == "" {

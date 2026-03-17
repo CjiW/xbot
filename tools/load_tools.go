@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -36,8 +35,8 @@ type loadToolsArgs struct {
 }
 
 func (t *LoadToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args loadToolsArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	args, err := parseToolArgs[loadToolsArgs](input)
+	if err != nil {
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
 

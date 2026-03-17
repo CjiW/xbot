@@ -356,7 +356,7 @@ Review the conversation below and call the consolidate_memory tool to update the
 
 	// Append history entry
 	if args.HistoryEntry != "" {
-		if err := m.memorySvc.AppendHistory(m.tenantID, args.HistoryEntry); err != nil {
+		if err := m.memorySvc.AppendHistory(ctx, m.tenantID, args.HistoryEntry); err != nil {
 			log.WithError(err).Error("Failed to append history entry")
 		}
 	}

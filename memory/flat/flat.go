@@ -37,8 +37,8 @@ func New(tenantID int64, memorySvc *sqlite.MemoryService, _ *vectordb.ToolIndexS
 }
 
 // Recall 返回全量长期记忆（忽略 query 参数）。
-func (m *FlatMemory) Recall(_ context.Context, _ string) (string, error) {
-	content, err := m.memorySvc.ReadLongTerm(m.tenantID)
+func (m *FlatMemory) Recall(ctx context.Context, _ string) (string, error) {
+	content, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
 	if err != nil {
 		return "", err
 	}
@@ -114,7 +114,7 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		return memory.MemorizeResult{NewLastConsolidated: newLC, OK: true}, nil
 	}
 
-	currentMemory, err := m.memorySvc.ReadLongTerm(m.tenantID)
+	currentMemory, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
 	if err != nil {
 		log.WithError(err).Error("Failed to read long-term memory for consolidation")
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil
@@ -154,13 +154,13 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	}
 
 	if args.HistoryEntry != "" {
-		if err := m.memorySvc.AppendHistory(m.tenantID, args.HistoryEntry); err != nil {
+		if err := m.memorySvc.AppendHistory(ctx, m.tenantID, args.HistoryEntry); err != nil {
 			log.WithError(err).Error("Failed to append history entry")
 		}
 	}
 
 	if args.MemoryUpdate != "" && args.MemoryUpdate != currentMemory {
-		if err := m.memorySvc.WriteLongTerm(m.tenantID, args.MemoryUpdate); err != nil {
+		if err := m.memorySvc.WriteLongTerm(ctx, m.tenantID, args.MemoryUpdate); err != nil {
 			log.WithError(err).Error("Failed to write long-term memory")
 		}
 	}

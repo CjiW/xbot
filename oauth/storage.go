@@ -2,14 +2,12 @@ package oauth
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"xbot/storage/sqlite"
+
 	log "xbot/logger"
 )
 
@@ -28,41 +26,22 @@ type TokenStorage interface {
 	Close() error
 }
 
-// SQLiteStorage implements TokenStorage using SQLite.
+// SQLiteStorage implements TokenStorage using the shared SQLite database.
 type SQLiteStorage struct {
-	db *sql.DB
+	db *sqlite.DB
 }
 
-// NewSQLiteStorage creates a new SQLite-based token storage.
-// The database file is created at the specified path if it doesn't exist.
-func NewSQLiteStorage(dbPath string) (*SQLiteStorage, error) {
-	// Ensure directory exists
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create storage directory: %w", err)
-	}
-
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
-	}
-
-	// Set pragmatic settings
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
+// NewSQLiteStorage creates a new SQLite-based token storage using the shared DB.
+func NewSQLiteStorage(db *sqlite.DB) *SQLiteStorage {
 	storage := &SQLiteStorage{db: db}
-
 	if err := storage.initSchema(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("initialize schema: %w", err)
+		log.WithError(err).Warn("Failed to initialize OAuth token schema")
 	}
-
-	log.WithField("db", dbPath).Info("OAuth token storage initialized")
-	return storage, nil
+	log.Info("OAuth token storage initialized (shared DB)")
+	return storage
 }
 
-// initSchema creates the necessary tables if they don't exist.
+// initSchema creates the oauth_tokens table if it doesn't exist.
 func (s *SQLiteStorage) initSchema() error {
 	query := `
 	CREATE TABLE IF NOT EXISTS oauth_tokens (
@@ -79,7 +58,7 @@ func (s *SQLiteStorage) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS oauth_tokens_expires_at ON oauth_tokens(expires_at);
 	`
-	_, err := s.db.Exec(query)
+	_, err := s.db.Conn().Exec(query)
 	return err
 }
 
@@ -94,14 +73,12 @@ func (s *SQLiteStorage) GetToken(ctx context.Context, provider, channel, chatID 
 	var accessToken, refreshToken, scopesJSON, rawJSON string
 	var expiresAt int64
 
-	err := s.db.QueryRowContext(ctx, query, provider, channel, chatID).Scan(
+	err := s.db.Conn().QueryRowContext(ctx, query, provider, channel, chatID).Scan(
 		&accessToken, &refreshToken, &expiresAt, &scopesJSON, &rawJSON,
 	)
-	if err == sql.ErrNoRows {
-		return nil, nil // No token found, not an error
-	}
 	if err != nil {
-		return nil, fmt.Errorf("query token: %w", err)
+		// sql.ErrNoRows means no token found
+		return nil, nil
 	}
 
 	var scopes []string
@@ -137,7 +114,7 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err := s.db.Conn().ExecContext(ctx, query,
 		provider, channel, chatID,
 		token.AccessToken, token.RefreshToken, token.ExpiresAt.Unix(),
 		string(scopesJSON), string(rawJSON), time.Now().Unix(),
@@ -157,23 +134,22 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 // DeleteToken removes a token for a provider and session.
 func (s *SQLiteStorage) DeleteToken(ctx context.Context, provider, channel, chatID string) error {
 	query := `DELETE FROM oauth_tokens WHERE provider = ? AND channel = ? AND chat_id = ?`
-	_, err := s.db.ExecContext(ctx, query, provider, channel, chatID)
+	_, err := s.db.Conn().ExecContext(ctx, query, provider, channel, chatID)
 	if err != nil {
 		return fmt.Errorf("delete token: %w", err)
 	}
 	return nil
 }
 
-// Close closes the database connection.
+// Close is a no-op since the shared DB is managed externally.
 func (s *SQLiteStorage) Close() error {
-	return s.db.Close()
+	return nil
 }
 
 // CleanupExpiredTokens removes tokens that have expired.
-// This is a maintenance operation to keep the database clean.
 func (s *SQLiteStorage) CleanupExpiredTokens(ctx context.Context, olderThan time.Duration) error {
 	cutoff := time.Now().Add(-olderThan)
-	result, err := s.db.ExecContext(ctx, `DELETE FROM oauth_tokens WHERE expires_at < ?`, cutoff.Unix())
+	result, err := s.db.Conn().ExecContext(ctx, `DELETE FROM oauth_tokens WHERE expires_at < ?`, cutoff.Unix())
 	if err != nil {
 		return fmt.Errorf("cleanup expired tokens: %w", err)
 	}

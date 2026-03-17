@@ -3,6 +3,9 @@ package agent
 // subagentSystemPromptTemplate 是 SubAgent 的通用系统提示词模板。
 // 所有 SubAgent 共享这个模板，role.SystemPrompt 作为角色专有能力描述插入其中。
 //
+// TODO(i18n): 模板当前硬编码中文。如果 SubAgent 需要英文输出，中文 prompt 可能影响效果。
+// 后续可支持 i18n 或让角色定义覆盖通用模板。
+//
 // 结构与主 Agent 类似：
 //   - 固定 prompt（记忆使用指南 + 环境信息 + 工具提示）
 //   - role.SystemPrompt（角色专有能力描述）

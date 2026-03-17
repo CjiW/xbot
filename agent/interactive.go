@@ -16,10 +16,11 @@ import (
 // interactiveAgent 封装一个 interactive SubAgent 会话。
 // 存储在 parent Agent 的 interactiveSubAgents map 中。
 type interactiveAgent struct {
-	roleName string            // 角色名
-	messages []llm.ChatMessage // 累积的对话历史（不含 system prompt）
-	mu       sync.Mutex        // 保护 messages 并发访问
-	cfg      RunConfig         // SubAgent 的 RunConfig（保留 LLM/Memory 等配置，用于后续 send/unload）
+	roleName     string            // 角色名
+	messages     []llm.ChatMessage // 累积的对话历史（不含 system prompt）
+	mu           sync.Mutex        // 保护 messages 并发访问
+	systemPrompt llm.ChatMessage   // spawn 时的 system prompt（保持一致性，后续 send 不重建）
+	cfg          *RunConfig        // RunConfig 模板（Messages=nil，复用于 send/unload）
 }
 
 // interactiveKey 生成 interactive session 在 map 中的 key。
@@ -72,12 +73,14 @@ func (a *Agent) SpawnInteractiveSession(
 		return out.OutboundMessage, nil
 	}
 
-	// 创建 interactiveAgent 并保存（保存 system 之后的所有消息）
+	// 创建 interactiveAgent 并保存（保存 system prompt 和 config 模板，避免重复构建）
 	ia := &interactiveAgent{
-		roleName: roleName,
-		messages: append([]llm.ChatMessage(nil), out.Messages[preLen:]...),
-		cfg:      cfg,
+		roleName:     roleName,
+		messages:     append([]llm.ChatMessage(nil), out.Messages[preLen:]...),
+		systemPrompt: cfg.Messages[0], // 保存 system prompt，后续 send 不重建
+		cfg:          &cfg,
 	}
+	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)
 
 	log.WithFields(log.Fields{
@@ -94,7 +97,7 @@ func (a *Agent) SendToInteractiveSession(
 	roleName string,
 	msg bus.InboundMessage,
 ) (*bus.OutboundMessage, error) {
-	originChannel, originChatID, originSender := resolveOriginIDs(msg)
+	originChannel, originChatID, _ := resolveOriginIDs(msg)
 
 	key := interactiveKey(originChannel, originChatID, roleName)
 
@@ -116,21 +119,19 @@ func (a *Agent) SendToInteractiveSession(
 	ia.mu.Lock()
 	defer ia.mu.Unlock()
 
-	// 构建 parentCtx
-	parentCtx := a.buildParentToolContext(ctx, originChannel, originChatID, originSender, msg)
+	// 复用存储的 RunConfig 模板，只更新 Messages 和刷新 LLM 配置。
+	// 不重建工具集、记忆系统、system prompt 等，保持 session 一致性。
+	cfg := *ia.cfg // copy
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(cfg.SenderID)
+	cfg.LLMClient = llmClient
+	cfg.Model = model
+	cfg.ThinkingMode = thinkingMode
 
-	// 重新构建 RunConfig（获取最新 LLM 配置等）
-	caps := tools.CapabilitiesFromMap(msg.Capabilities)
-	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName)
-
-	// 把历史消息插入到 system prompt 之后、新 task 之前
-	// cfg.Messages 的结构: [system_prompt, user_task]
+	// 重建消息：[system_prompt, 历史对话, 新的 user task]
 	var newMessages []llm.ChatMessage
-	newMessages = append(newMessages, cfg.Messages[0]) // system prompt
-	newMessages = append(newMessages, ia.messages...)  // 历史对话
-	if len(cfg.Messages) > 1 {
-		newMessages = append(newMessages, cfg.Messages[1:]...) // 新的 user task
-	}
+	newMessages = append(newMessages, ia.systemPrompt)                 // spawn 时的 system prompt
+	newMessages = append(newMessages, ia.messages...)                  // 累积的对话历史
+	newMessages = append(newMessages, llm.NewUserMessage(msg.Content)) // 新任务
 	cfg.Messages = newMessages
 
 	// 传递 CallChain
@@ -148,7 +149,6 @@ func (a *Agent) SendToInteractiveSession(
 
 	// 追加新的对话消息
 	ia.messages = append(ia.messages, out.Messages[preLen:]...)
-	ia.cfg = cfg
 
 	log.WithFields(log.Fields{
 		"role":       roleName,
@@ -181,7 +181,7 @@ func (a *Agent) UnloadInteractiveSession(
 	ia.mu.Lock()
 	messages := make([]llm.ChatMessage, len(ia.messages))
 	copy(messages, ia.messages)
-	cfg := ia.cfg
+	cfg := *ia.cfg // dereference pointer for consolidateSubAgentMemory
 	ia.mu.Unlock()
 
 	// 巩固记忆

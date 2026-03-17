@@ -330,6 +330,40 @@ func (a *Agent) buildSubAgentRunConfig(
 func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 	sessionKey := channel + ":" + chatID
 
+	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
+	// Only ctx (from the caller) changes per-call; all config fields are stable.
+	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	cfg := &RunConfig{
+		AgentID:    "main",
+		Channel:    channel,
+		ChatID:     chatID,
+		SenderID:   senderID,
+		SenderName: senderName,
+		SendFunc:   a.sendMessage,
+
+		WorkingDir:       a.workDir,
+		WorkspaceRoot:    wsRoot,
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    a.globalSkillDirs,
+		SkillsDirs:       a.globalSkillDirs,
+		AgentsDir:        a.agentsDir,
+		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+		DataDir:          a.workDir,
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+
+		InjectInbound: a.injectInbound,
+		Tools:         a.tools,
+	}
+
+	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
+		return a.spawnSubAgent(spawnCtx, inMsg)
+	}
+
+	// Pre-build Letta memory extras (involves GetOrCreateSession + LettaMemory lookup).
+	cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
+
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		// 1. 工具查找：session MCP 优先，然后全局注册表
 		var tool tools.Tool
@@ -362,44 +396,11 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		a.tools.TouchTool(sessionKey, tc.Name)
 
 		// 4. 确保用户工作目录存在
-		wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 		if err := os.MkdirAll(wsRoot, 0o755); err != nil {
 			return nil, fmt.Errorf("create user workspace: %w", err)
 		}
 
-		// 5. 构建 ToolContext（统一路径）
-		cfg := &RunConfig{
-			AgentID:    "main",
-			Channel:    channel,
-			ChatID:     chatID,
-			SenderID:   senderID,
-			SenderName: senderName,
-			SendFunc:   a.sendMessage,
-
-			WorkingDir:       a.workDir,
-			WorkspaceRoot:    wsRoot,
-			SandboxWorkDir:   "/workspace",
-			ReadOnlyRoots:    a.globalSkillDirs,
-			SkillsDirs:       a.globalSkillDirs,
-			AgentsDir:        a.agentsDir,
-			MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-			GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-			DataDir:          a.workDir,
-			SandboxEnabled:   true,
-			PreferredSandbox: "docker",
-
-			InjectInbound: a.injectInbound,
-			Tools:         a.tools,
-		}
-
-		// SpawnAgent
-		cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
-			return a.spawnSubAgent(spawnCtx, inMsg)
-		}
-
-		// Letta 记忆
-		cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
-
+		// 5. 构建 ToolContext（统一路径，只有 ctx 变化）
 		toolCtx := buildToolContext(ctx, cfg)
 		return tool.Execute(toolCtx, tc.Arguments)
 	}
@@ -613,38 +614,8 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}
 
 	// 构建 parentCtx（从 InboundMessage 恢复）
-	originChannel := msg.OriginChannel()
-	originChatID := msg.OriginChatID()
-	originSender := msg.OriginSenderID()
-	if originChannel == "" {
-		originChannel = msg.Channel
-	}
-	if originChatID == "" {
-		originChatID = msg.ChatID
-	}
-	if originSender == "" {
-		originSender = msg.SenderID
-	}
-
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, originSender)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to create sub-agent workspace")
-	}
-
-	parentCtx := &tools.ToolContext{
-		Ctx:              ctx,
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    workspaceRoot,
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
-		AgentID:          parentAgentID,
-		Channel:          originChannel,
-		ChatID:           originChatID,
-		SenderID:         originSender,
-		SenderName:       msg.SenderName,
-	}
+	originChannel, originChatID, originSender := resolveOriginIDs(msg)
+	parentCtx := a.buildParentToolContext(ctx, originChannel, originChatID, originSender, msg)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent": parentAgentID,
@@ -670,8 +641,14 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}).Info("SubAgent completed (via Run)")
 
 	// SubAgent 记忆整合：将本次对话的关键信息写入 SubAgent 的独立记忆
+	// 异步执行，避免 Memorize() (调用 LLM 做摘要) 阻塞父 Agent 的工具执行循环。
 	if cfg.Memory != nil && len(out.Messages) > 0 {
-		a.consolidateSubAgentMemory(ctx, cfg, out.Messages, task, roleName, parentAgentID)
+		memMessages := make([]llm.ChatMessage, len(out.Messages))
+		copy(memMessages, out.Messages)
+		go func() {
+			bgCtx := context.WithoutCancel(ctx)
+			a.consolidateSubAgentMemory(bgCtx, cfg, memMessages, task, roleName, parentAgentID)
+		}()
 	}
 
 	return out.OutboundMessage, nil

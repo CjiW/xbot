@@ -44,6 +44,14 @@ func ParseAddress(s string) (Address, error) {
 	scheme := s[:idx]
 	rest := s[idx+3:] // domain[/id]
 
+	// Validate scheme against known values
+	switch scheme {
+	case SchemeIM, SchemeAgent, SchemeSystem:
+		// ok
+	default:
+		return Address{}, fmt.Errorf("invalid address %q: unknown scheme %q (valid: im, agent, system)", s, scheme)
+	}
+
 	slash := strings.IndexByte(rest, '/')
 	if slash < 0 {
 		// no id part: "agent://main"

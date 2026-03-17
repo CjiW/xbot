@@ -342,6 +342,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		// assert: 发给 LLM 的消息必须恰好一条 system
+		// NOTE: 旧代码用 panic 暴露问题，新代码改为 log.Error + 返回错误消息。
+		// 这是生产环境的改进（不应 panic），需确保日志监控能捕获此 Error 级别日志。
 		var systemCount int
 		for _, m := range messages {
 			if m.Role == "system" {

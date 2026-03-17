@@ -640,15 +640,10 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")
 
-	// SubAgent 记忆整合：将本次对话的关键信息写入 SubAgent 的独立记忆
-	// 异步执行，避免 Memorize() (调用 LLM 做摘要) 阻塞父 Agent 的工具执行循环。
+	// SubAgent 记忆整合：将本次对话的关键信息写入 SubAgent 的独立记忆。
+	// 同步执行，确保记忆在返回前完成写入，避免并发问题。
 	if cfg.Memory != nil && len(out.Messages) > 0 {
-		memMessages := make([]llm.ChatMessage, len(out.Messages))
-		copy(memMessages, out.Messages)
-		go func() {
-			bgCtx := context.WithoutCancel(ctx)
-			a.consolidateSubAgentMemory(bgCtx, cfg, memMessages, task, roleName, parentAgentID)
-		}()
+		a.consolidateSubAgentMemory(ctx, cfg, out.Messages, task, roleName, parentAgentID)
 	}
 
 	return out.OutboundMessage, nil

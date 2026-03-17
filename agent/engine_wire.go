@@ -53,16 +53,16 @@ func (a *Agent) buildMainRunConfig(
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		WorkspaceRoot:    a.resolveWorkspaceRoot(senderID),
 		SandboxWorkDir:   "/workspace",
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:    a.resolveMCPConfigPath(senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		PreferredSandbox: a.sandboxMode,
 
 		// 循环控制
 		MaxIterations: a.maxIterations,
@@ -156,16 +156,16 @@ func (a *Agent) buildCronRunConfig(
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		WorkspaceRoot:    a.resolveWorkspaceRoot(senderID),
 		SandboxWorkDir:   "/workspace",
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:    a.resolveMCPConfigPath(senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		PreferredSandbox: a.sandboxMode,
 
 		MaxIterations: a.maxIterations,
 		SessionKey:    sessionKey,
@@ -332,7 +332,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
-	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	wsRoot := a.resolveWorkspaceRoot(senderID)
 	cfg := &RunConfig{
 		AgentID:    "main",
 		Channel:    channel,
@@ -347,11 +347,11 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:    a.resolveMCPConfigPath(senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		PreferredSandbox: a.sandboxMode,
 
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,

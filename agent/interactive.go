@@ -199,7 +199,7 @@ func (a *Agent) UnloadInteractiveSession(
 // buildParentToolContext 从 InboundMessage 构建 SubAgent 需要的 parent ToolContext。
 // 与 spawnSubAgent 中的 parentCtx 构建保持一致。
 func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, senderID string, msg bus.InboundMessage) *tools.ToolContext {
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	workspaceRoot := a.resolveWorkspaceRoot(senderID)
 	_ = os.MkdirAll(workspaceRoot, 0o755)
 
 	return &tools.ToolContext{
@@ -210,11 +210,11 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		ReadOnlyRoots:       a.globalSkillDirs,
 		SkillsDirs:          a.globalSkillDirs,
 		AgentsDir:           a.agentsDir,
-		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:       a.resolveMCPConfigPath(senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:             a.workDir,
 		SandboxEnabled:      true,
-		PreferredSandbox:    "docker",
+		PreferredSandbox:    a.sandboxMode,
 		AgentID:             msg.ParentAgentID,
 		Channel:             channel,
 		ChatID:              chatID,

@@ -194,6 +194,7 @@ type Agent struct {
 	pipeline        *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
 	cronPipeline    *MessagePipeline // Cron 专用消息构建管道
 	sandboxMode     string           // "none" or "docker"
+	singleUser      bool             // 单用户模式：不按 senderID 隔离
 	maxConcurrency  int              // 最大并发会话处理数
 	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
 	agentsDir       string           // 全局 agents 目录（宿主机路径）
@@ -259,6 +260,7 @@ type Config struct {
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 
 	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
+	SingleUser         bool   // 单用户模式：不按 senderID 隔离
 	EmbeddingProvider  string // 嵌入提供者: "openai"(默认) 或 "ollama"
 	EmbeddingBaseURL   string // 嵌入向量服务地址
 	EmbeddingAPIKey    string // 嵌入向量服务密钥
@@ -390,6 +392,13 @@ func New(cfg Config) *Agent {
 		sandboxMode = "docker"
 	}
 
+	// 单用户模式校验：必须搭配 SANDBOX_MODE=none
+	singleUser := cfg.SingleUser
+	if singleUser && sandboxMode != "none" {
+		log.Warn("SINGLE_USER=true requires SANDBOX_MODE=none, disabling single-user mode")
+		singleUser = false
+	}
+
 	agent := &Agent{
 		bus:                  cfg.Bus,
 		multiSession:         multiSession,
@@ -404,6 +413,7 @@ func New(cfg Config) *Agent {
 		workDir:              cfg.WorkDir,
 		promptLoader:         NewPromptLoader(cfg.PromptFile),
 		sandboxMode:          sandboxMode,
+		singleUser:           singleUser,
 		globalSkillDirs:      globalSkillDirs,
 		maxContextTokens:     cfg.MaxContextTokens,
 		compressionThreshold: cfg.CompressionThreshold,
@@ -415,6 +425,10 @@ func New(cfg Config) *Agent {
 	// 初始化指令注册表
 	agent.commands = NewCommandRegistry()
 	registerBuiltinCommands(agent.commands)
+
+	if agent.singleUser {
+		log.Info("Single-user mode enabled: all users share the same workspace, memory, and LLM config")
+	}
 
 	// 初始化消息构建管道
 	agent.initPipelines()
@@ -444,6 +458,38 @@ func New(cfg Config) *Agent {
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
 func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
+}
+
+// SingleUserSenderID 单用户模式下的统一 senderID
+const SingleUserSenderID = "default"
+
+// normalizeSenderID 在单用户模式下将所有 senderID 统一为固定值，
+// 使所有用户共享同一会话记忆、LLM 配置等。
+func (a *Agent) normalizeSenderID(senderID string) string {
+	if a.singleUser {
+		return SingleUserSenderID
+	}
+	return senderID
+}
+
+// resolveWorkspaceRoot 返回工具执行的工作区根目录。
+// 单用户模式：使用 workDir（.xbot 同级目录），不做用户隔离。
+// 多用户模式：使用 {workDir}/.xbot/users/{sender}/workspace/。
+func (a *Agent) resolveWorkspaceRoot(senderID string) string {
+	if a.singleUser {
+		return a.workDir
+	}
+	return tools.UserWorkspaceRoot(a.workDir, senderID)
+}
+
+// resolveMCPConfigPath 返回 MCP 配置文件路径。
+// 单用户模式：使用全局配置（.xbot/mcp.json）。
+// 多用户模式：使用用户级配置（.xbot/users/{sender}/mcp.json）。
+func (a *Agent) resolveMCPConfigPath(senderID string) string {
+	if a.singleUser {
+		return resolveDataPath(a.workDir, "mcp.json")
+	}
+	return tools.UserMCPConfigPath(a.workDir, senderID)
 }
 
 // GetCardBuilder returns the CardBuilder for card callback handling.
@@ -554,7 +600,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		case msg := <-a.bus.Inbound:
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + a.normalizeSenderID(msg.SenderID)
 				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
@@ -597,7 +643,7 @@ func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
 // 私聊：用户有自定义 LLM 则使用独立信号量
 // 群聊：始终使用全局信号量（因为群里有多人，使用独立信号量会导致其他人的消息也被阻塞）
 func (a *Agent) getSemaphoreForMessage(msg bus.InboundMessage, globalSem chan struct{}) chan struct{} {
-	senderID := msg.SenderID
+	senderID := a.normalizeSenderID(msg.SenderID)
 	if senderID == "" {
 		return globalSem
 	}
@@ -639,6 +685,9 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		if ctx.Err() != nil {
 			break
 		}
+
+		// 单用户模式：在所有分支之前统一归一化 senderID
+		msg.SenderID = a.normalizeSenderID(msg.SenderID)
 
 		// 指令消息分发：根据 Concurrent() 决定执行方式
 		if cmd := a.commands.Match(msg.Content); cmd != nil {
@@ -703,7 +752,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		var response *bus.OutboundMessage
 		var err error
 		cancelCh := make(chan struct{}, 1)
-		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + a.normalizeSenderID(msg.SenderID)
 		a.chatCancelCh.Store(cancelKey, cancelCh)
 
 		reqCtx, reqCancel := context.WithCancel(ctx)
@@ -761,6 +810,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 
 // processMessage 处理单条入站消息
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// 单用户模式：归一化 senderID，所有用户共享同一身份
+	msg.SenderID = a.normalizeSenderID(msg.SenderID)
+
 	// 使用消息携带的 requestID（在渠道收到消息时生成），如果没有则生成新的
 	reqID := msg.RequestID
 	if reqID == "" {
@@ -931,8 +983,8 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	a.sessionFinalSent.Delete(key)
 
 	// 使用创建者的工作区路径
-	senderID := msg.SenderID
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	senderID := a.normalizeSenderID(msg.SenderID)
+	workspaceRoot := a.resolveWorkspaceRoot(senderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to create cron user workspace")
 	}
@@ -978,18 +1030,21 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := a.resolveWorkspaceRoot(msg.SenderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
-	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
-	if err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to configure session MCP scope")
-	}
-	if len(newTools) > 0 {
-		sessionKey := msg.Channel + ":" + msg.ChatID
-		a.tools.ActivateTools(sessionKey, newTools)
-		log.Ctx(ctx).WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
+	// 单用户模式下不配置用户级 MCP（使用全局配置）
+	if !a.singleUser {
+		newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
+		if err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to configure session MCP scope")
+		}
+		if len(newTools) > 0 {
+			sessionKey := msg.Channel + ":" + msg.ChatID
+			a.tools.ActivateTools(sessionKey, newTools)
+			log.Ctx(ctx).WithField("tools", len(newTools)).Info("Auto-activated new personal MCP tools")
+		}
 	}
 
 	promptWorkDir := a.workDir
@@ -1007,8 +1062,13 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		msg.SenderID,
 		msg.ChatID,
 	)
-	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(msg.SenderID))
-	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(msg.SenderID))
+	// 单用户模式下传空 senderID 给 catalog，跳过用户私有 skills/agents 目录
+	catalogSenderID := msg.SenderID
+	if a.singleUser {
+		catalogSenderID = ""
+	}
+	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(catalogSenderID))
+	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(catalogSenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
 
 	return a.pipeline.Run(mc), nil
@@ -1059,7 +1119,7 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
 
 	// 写入文件并发送
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := a.resolveWorkspaceRoot(msg.SenderID)
 	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
 	if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
 		return nil, fmt.Errorf("write prompt file: %w", err)
@@ -1658,10 +1718,6 @@ func summarizeRetryError(err error) string {
 		return "临时错误"
 	}
 }
-
-// runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
-// autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
-// tenantSession 用于自动压缩后持久化压缩结果（可传 nil）
 
 // RegisterTool registers a tool to the agent's tool registry.
 // This is useful for dynamically adding tools after agent creation.

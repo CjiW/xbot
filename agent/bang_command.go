@@ -45,7 +45,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 		"command": tools.Truncate(command, 80),
 	}).Info("Bang command")
 
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := a.resolveWorkspaceRoot(msg.SenderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}

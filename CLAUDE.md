@@ -54,3 +54,4 @@ Environment variables (or `.env`):
 - `MEMORY_PROVIDER` — `flat` (default) or `letta`
 - `FEISHU_ENABLED`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
 - `WORK_DIR` — Working directory
+- `SINGLE_USER` — Single-user mode (default false): disables per-user isolation for workspace, memory, MCP config, and LLM config

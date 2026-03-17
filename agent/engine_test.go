@@ -997,8 +997,9 @@ func TestSpawnAgentAdapter(t *testing.T) {
 	if !capturedMsg.Capabilities["send_message"] {
 		t.Error("expected capabilities[send_message] = true")
 	}
+	// SpawnAgent=false was explicitly set, should be preserved in map
 	if capturedMsg.Capabilities["spawn_agent"] {
-		t.Error("expected capabilities[spawn_agent] = false")
+		t.Error("expected capabilities[spawn_agent] = false (explicitly set)")
 	}
 }
 

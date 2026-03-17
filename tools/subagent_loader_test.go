@@ -35,8 +35,9 @@ capabilities:
 	if !caps.SendMessage {
 		t.Error("expected SendMessage=true")
 	}
-	if caps.SpawnAgent {
-		t.Error("expected SpawnAgent=false")
+	// SpawnAgent defaults to true when not explicitly set in frontmatter
+	if !caps.SpawnAgent {
+		t.Error("expected SpawnAgent=true (default)")
 	}
 }
 
@@ -50,8 +51,12 @@ tools:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if caps.Memory || caps.SendMessage || caps.SpawnAgent {
-		t.Error("expected all capabilities false when not specified")
+	if caps.Memory || caps.SendMessage {
+		t.Error("expected memory and send_message false when not specified")
+	}
+	// SpawnAgent defaults to true
+	if !caps.SpawnAgent {
+		t.Error("expected SpawnAgent=true (default) when not specified")
 	}
 }
 

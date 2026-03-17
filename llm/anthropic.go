@@ -619,7 +619,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			}
 			if delta.Type == "thinking_delta" && delta.Thinking != "" {
 				// Anthropic extended thinking delta
-				eventChan <- StreamEvent{Type: EventReasoningContent, Content: delta.Thinking}
+				eventChan <- StreamEvent{Type: EventReasoningContent, ReasoningContent: delta.Thinking}
 			}
 			if delta.Type == "input_json_delta" && delta.PartialJSON != "" {
 				if tc, ok := toolCallsByIndex[ev.Index]; ok {

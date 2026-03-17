@@ -12,6 +12,24 @@ import (
 	logrus "xbot/logger"
 )
 
+// RetryNotifyFunc 重试通知回调。
+// attempt: 当前重试次数（从 1 开始），maxAttempts: 最大尝试次数，err: 触发重试的错误。
+type RetryNotifyFunc func(attempt, maxAttempts uint, err error)
+
+type retryNotifyKey struct{}
+
+// WithRetryNotify 将重试通知回调注入 context。
+// RetryLLM 在每次重试时会调用该回调，调用方可借此向用户推送进度。
+func WithRetryNotify(ctx context.Context, fn RetryNotifyFunc) context.Context {
+	return context.WithValue(ctx, retryNotifyKey{}, fn)
+}
+
+// getRetryNotify 从 context 获取通知回调（可能为 nil）。
+func getRetryNotify(ctx context.Context) RetryNotifyFunc {
+	fn, _ := ctx.Value(retryNotifyKey{}).(RetryNotifyFunc)
+	return fn
+}
+
 // RetryConfig 重试配置
 type RetryConfig struct {
 	Attempts uint          // 最大尝试次数（含首次），默认 3
@@ -114,6 +132,11 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 				"max":     r.config.Attempts,
 				"error":   err.Error(),
 			}).Warn("[LLM] " + label)
+
+			// 通知调用方（如 agent runLoop）以便向用户推送进度
+			if notify := getRetryNotify(ctx); notify != nil {
+				notify(n+1, r.config.Attempts, err)
+			}
 		}),
 	}
 }

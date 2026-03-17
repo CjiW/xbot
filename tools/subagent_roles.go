@@ -27,27 +27,29 @@ type SubAgentCapabilities struct {
 }
 
 // ToMap 转换为 map[string]bool，用于跨包传递（避免循环依赖）。
+// 始终包含所有三个 key，确保显式设置的 false 值不会在反序列化时被默认值覆盖。
 func (c SubAgentCapabilities) ToMap() map[string]bool {
 	m := make(map[string]bool)
-	if c.Memory {
-		m["memory"] = true
-	}
-	if c.SendMessage {
-		m["send_message"] = true
-	}
-	if c.SpawnAgent {
-		m["spawn_agent"] = true
-	}
+	m["memory"] = c.Memory
+	m["send_message"] = c.SendMessage
+	m["spawn_agent"] = c.SpawnAgent
 	return m
 }
 
 // CapabilitiesFromMap 从 map[string]bool 构造 SubAgentCapabilities。
+// 默认 SpawnAgent=true：所有 agent 都能创建子 agent，除非显式设置 spawn_agent=false。
 func CapabilitiesFromMap(m map[string]bool) SubAgentCapabilities {
-	return SubAgentCapabilities{
-		Memory:      m["memory"],
-		SendMessage: m["send_message"],
-		SpawnAgent:  m["spawn_agent"],
+	caps := SubAgentCapabilities{
+		SpawnAgent: true, // 默认允许 spawn 子 agent
 	}
+	if m != nil {
+		caps.Memory = m["memory"]
+		caps.SendMessage = m["send_message"]
+		if _, ok := m["spawn_agent"]; ok {
+			caps.SpawnAgent = m["spawn_agent"]
+		}
+	}
+	return caps
 }
 
 // agentsDir 存储全局 agents 目录路径，供运行时按需加载

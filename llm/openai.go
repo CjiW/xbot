@@ -191,7 +191,7 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 					rawMsg.ToolCalls = buildToolCallsParamForJSON(msg.ToolCalls)
 				}
 				jsonData, _ := json.Marshal(rawMsg)
-				overridden := param.Override[openai.ChatCompletionAssistantMessageParam](jsonData)
+				overridden := param.Override[openai.ChatCompletionAssistantMessageParam](json.RawMessage(jsonData))
 				result = append(result, openai.ChatCompletionMessageParamUnion{
 					OfAssistant: &overridden,
 				})

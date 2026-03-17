@@ -599,7 +599,7 @@ type spawnAgentAdapter struct {
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
-func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string) (string, error) {
+func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
 	// 构造统一的 InboundMessage
 	metadata := map[string]string{
 		"origin_channel": a.channel,
@@ -625,6 +625,7 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 		ParentAgentID: a.parentID,
 		SystemPrompt:  systemPrompt,
 		AllowedTools:  allowedTools,
+		Capabilities:  caps.ToMap(),
 		Metadata:      metadata,
 	}
 

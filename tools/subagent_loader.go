@@ -47,7 +47,7 @@ func parseAgentFile(path string) (SubAgentRole, error) {
 	}
 
 	// 解析 frontmatter 字段
-	name, description, allowedTools, err := parseFrontmatter(frontmatter)
+	name, description, allowedTools, caps, err := parseFrontmatter(frontmatter)
 	if err != nil {
 		return SubAgentRole{}, fmt.Errorf("parse frontmatter: %w", err)
 	}
@@ -62,6 +62,7 @@ func parseAgentFile(path string) (SubAgentRole, error) {
 		Description:  description,
 		SystemPrompt: strings.TrimSpace(body),
 		AllowedTools: allowedTools,
+		Capabilities: caps,
 	}, nil
 }
 
@@ -95,8 +96,8 @@ func splitFrontmatter(content string) (frontmatter, body string, err error) {
 }
 
 // parseFrontmatter 手动解析简单 YAML frontmatter
-// 只支持 name, description（字符串）和 tools（列表）三个字段
-func parseFrontmatter(fm string) (name, description string, tools []string, err error) {
+// 支持 name, description（字符串）、tools（列表）和 capabilities（子字段）
+func parseFrontmatter(fm string) (name, description string, tools []string, caps SubAgentCapabilities, err error) {
 	lines := strings.Split(fm, "\n")
 	var currentField string
 
@@ -117,6 +118,26 @@ func parseFrontmatter(fm string) (name, description string, tools []string, err 
 				if item != "" {
 					tools = append(tools, item)
 				}
+			}
+			continue
+		}
+
+		// 缩进的键值对（capabilities 子字段）
+		if (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")) && currentField == "capabilities" {
+			colonIdx := strings.Index(trimmed, ":")
+			if colonIdx < 0 {
+				continue
+			}
+			key := strings.TrimSpace(trimmed[:colonIdx])
+			value := strings.TrimSpace(trimmed[colonIdx+1:])
+			value = stripQuotes(value)
+			switch key {
+			case "memory":
+				caps.Memory = isTruthy(value)
+			case "send_message":
+				caps.SendMessage = isTruthy(value)
+			case "spawn_agent":
+				caps.SpawnAgent = isTruthy(value)
 			}
 			continue
 		}
@@ -144,12 +165,20 @@ func parseFrontmatter(fm string) (name, description string, tools []string, err 
 			currentField = "tools"
 			// tools 的值可能在同一行（如 tools: [a, b]）或后续行（列表格式）
 			// 我们只支持列表格式，忽略同行值
+		case "capabilities":
+			currentField = "capabilities"
 		default:
 			currentField = ""
 		}
 	}
 
-	return name, description, tools, nil
+	return name, description, tools, caps, nil
+}
+
+// isTruthy 判断字符串是否表示 true
+func isTruthy(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "true" || s == "yes" || s == "1"
 }
 
 // stripQuotes 去掉字符串两端的引号（单引号或双引号）

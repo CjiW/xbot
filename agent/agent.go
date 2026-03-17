@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1607,6 +1608,35 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 	}()
 }
 
+// summarizeRetryError 将 LLM 错误简化为用户友好的描述。
+func summarizeRetryError(err error) string {
+	if err == nil {
+		return "未知错误"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "TLS handshake timeout"):
+		return "网络超时"
+	case strings.Contains(msg, "connection refused"):
+		return "连接被拒绝"
+	case strings.Contains(msg, "429") || strings.Contains(msg, "rate limit"):
+		return "请求限流"
+	case strings.Contains(msg, "502") || strings.Contains(msg, "503"):
+		return "服务暂时不可用"
+	case strings.Contains(msg, "500") || strings.Contains(msg, "504"):
+		return "服务端错误"
+	default:
+		var netErr net.Error
+		if errors.As(err, &netErr) {
+			if netErr.Timeout() {
+				return "网络超时"
+			}
+			return "网络错误"
+		}
+		return "临时错误"
+	}
+}
+
 // runLoop 执行 Agent 迭代循环（LLM -> 工具调用 -> LLM ...）
 // autoNotify 为 true 时，累积显示模型中间内容和工具调用状态，实时更新同一条消息
 // tenantSession 用于自动压缩后持久化压缩结果（可传 nil）
@@ -1739,6 +1769,17 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		}
 	}
 
+	// 注入 LLM 重试通知回调：重试时实时更新用户可见的进度消息
+	retryCtx := llm.WithRetryNotify(ctx, func(attempt, max uint, err error) {
+		if !autoNotify {
+			return
+		}
+		reason := summarizeRetryError(err)
+		progressLines = append(progressLines,
+			fmt.Sprintf("> ⚠️ LLM 请求失败 (%s)，重试中 %d/%d ...", reason, attempt, max))
+		notifyProgress("")
+	})
+
 	for i := 0; i < a.maxIterations; i++ {
 		// 每次 LLM 调用前检测是否需要压缩
 		maybeCompress()
@@ -1759,7 +1800,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 		if systemCount != 1 {
 			panic("assert: LLM messages must have exactly one system message; got " + fmt.Sprint(systemCount))
 		}
-		response, err := llmClient.Generate(ctx, model, messages, toolDefs)
+		response, err := llmClient.Generate(retryCtx, model, messages, toolDefs)
 		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
 			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
 			if autoNotify {
@@ -1790,7 +1831,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []llm.ChatMessage, channel
 					}
 				}
 			}
-			response, err = llmClient.Generate(ctx, model, messages, toolDefs)
+			response, err = llmClient.Generate(retryCtx, model, messages, toolDefs)
 		}
 		if err != nil {
 			return "", toolsUsed, false, fmt.Errorf("%w: %w", ErrLLMGenerate, err)

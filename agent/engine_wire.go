@@ -51,6 +51,19 @@ func (a *Agent) buildMainRunConfig(
 		SenderID:   senderID,
 		SenderName: senderName,
 
+		// 工作区 & 沙箱
+		WorkingDir:       a.workDir,
+		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    a.globalSkillDirs,
+		SkillsDirs:       a.globalSkillDirs,
+		AgentsDir:        a.agentsDir,
+		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+		DataDir:          a.workDir,
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+
 		// 循环控制
 		MaxIterations: a.maxIterations,
 
@@ -59,7 +72,8 @@ func (a *Agent) buildMainRunConfig(
 		SessionKey: sessionKey,
 
 		// 发送
-		SendFunc: a.sendMessage,
+		SendFunc:      a.sendMessage,
+		InjectInbound: a.injectInbound,
 
 		// 工具执行
 		ToolExecutor: a.buildToolExecutor(channel, chatID, senderID, senderName),
@@ -128,9 +142,23 @@ func (a *Agent) buildCronRunConfig(
 		SenderID:   senderID,
 		SenderName: "",
 
+		// 工作区 & 沙箱
+		WorkingDir:       a.workDir,
+		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    a.globalSkillDirs,
+		SkillsDirs:       a.globalSkillDirs,
+		AgentsDir:        a.agentsDir,
+		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+		DataDir:          a.workDir,
+		SandboxEnabled:   true,
+		PreferredSandbox: "docker",
+
 		MaxIterations: a.maxIterations,
 		SessionKey:    sessionKey,
 		SendFunc:      a.sendMessage,
+		InjectInbound: a.injectInbound,
 
 		ToolExecutor:         a.buildToolExecutor(channel, chatID, senderID, ""),
 		ToolTimeout:          120 * time.Second,
@@ -147,6 +175,8 @@ func (a *Agent) buildCronRunConfig(
 
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
 // SubAgent 使用独立工具集、无 session、无压缩、无进度通知。
+// Phase 2: SubAgent 通过 RunConfig 继承父 Agent 的工作区配置，
+// 使用统一的 defaultToolExecutor + buildToolContext 构建 ToolContext。
 func (a *Agent) buildSubAgentRunConfig(
 	ctx context.Context,
 	parentCtx *tools.ToolContext,
@@ -200,30 +230,24 @@ func (a *Agent) buildSubAgentRunConfig(
 		ChatID:    parentCtx.ChatID,
 		SenderID:  parentCtx.SenderID,
 
+		// 从父 Agent 继承工作区 & 沙箱配置
+		WorkingDir:       parentCtx.WorkingDir,
+		WorkspaceRoot:    parentCtx.WorkspaceRoot,
+		SandboxWorkDir:   "/workspace",
+		ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
+		SkillsDirs:       parentCtx.SkillsDirs,
+		AgentsDir:        parentCtx.AgentsDir,
+		MCPConfigPath:    parentCtx.MCPConfigPath,
+		GlobalMCPConfig:  parentCtx.GlobalMCPConfigPath,
+		DataDir:          parentCtx.DataDir,
+		SandboxEnabled:   parentCtx.SandboxEnabled,
+		PreferredSandbox: parentCtx.PreferredSandbox,
+
 		MaxIterations: 100,
 		LLMTimeout:    3 * time.Minute,
 		ToolTimeout:   2 * time.Minute,
 
-		// SubAgent 使用简化的工具执行器（直接从 registry 查找）
-		// 不需要 session MCP、激活检查等
-		ToolExecutor: func(execCtx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
-			tool, ok := subTools.Get(tc.Name)
-			if !ok {
-				return nil, fmt.Errorf("unknown tool: %s", tc.Name)
-			}
-
-			toolCtx := &tools.ToolContext{
-				Ctx:              execCtx,
-				WorkingDir:       parentCtx.WorkingDir,
-				WorkspaceRoot:    parentCtx.WorkspaceRoot,
-				SandboxWorkDir:   "/workspace",
-				ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
-				SandboxEnabled:   parentCtx.SandboxEnabled,
-				PreferredSandbox: parentCtx.PreferredSandbox,
-				AgentID:          subAgentID,
-			}
-			return tool.Execute(toolCtx, tc.Arguments)
-		},
+		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
 	}
 }
 
@@ -281,10 +305,9 @@ func (a *Agent) buildOAuthHandler(channel, chatID, senderID, sessionKey string) 
 }
 
 // buildToolContextExtras 构建 Letta 记忆相关的 ToolContext 扩展字段。
+// 通用字段（InjectInbound、Registry）已迁移到 RunConfig，此处仅处理 Letta memory。
 func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtras {
 	extras := &ToolContextExtras{
-		InjectInbound:           a.injectInbound,
-		Registry:                a.tools,
 		InvalidateAllSessionMCP: func() { a.multiSession.InvalidateAll() },
 	}
 

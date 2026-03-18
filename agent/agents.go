@@ -68,6 +68,8 @@ func (s *AgentStore) GetAgentsCatalog(senderID string) string {
 	sort.Strings(orderedNames)
 
 	var sb strings.Builder
+	sb.WriteString("# Available Agents (SubAgents)\n\n")
+	sb.WriteString("SubAgent 是拥有独立工具集和上下文的子代理，可委托专门任务并行处理。用 `SubAgent` 工具调用。\n\n")
 	sb.WriteString("<available_agents>\n")
 	for _, name := range orderedNames {
 		info := merged[name]

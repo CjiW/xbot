@@ -27,6 +27,12 @@ import (
 // ErrLLMGenerate 表示 LLM 生成调用失败（网络、API 4xx/5xx 等）
 var ErrLLMGenerate = errors.New("LLM generate failed")
 
+// consolidateRequest 记忆整理请求
+type consolidateRequest struct {
+	tenantSession *session.TenantSession
+	senderID      string
+}
+
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
 func assertNoSystemPersist(m llm.ChatMessage) {
 	if m.Role == "system" {
@@ -216,6 +222,8 @@ type Agent struct {
 	// key: senderID, value: 用户独立的信号量（容量为1）
 	userSemaphores sync.Map // map[string]chan struct{}
 
+	// 记忆整理 channel 机制
+	consolidateCh   chan consolidateRequest // 记忆整理请求 channel
 	consolidatingMu sync.Mutex
 	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
@@ -412,6 +420,7 @@ func New(cfg Config) *Agent {
 		compressionThreshold: cfg.CompressionThreshold,
 		enableAutoCompress:   cfg.EnableAutoCompress,
 		agentsDir:            agentsDir,
+		consolidateCh:        make(chan consolidateRequest, 64),
 		consolidating:        make(map[string]bool),
 	}
 
@@ -510,6 +519,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	}).Info("Agent loop started")
 
 	a.multiSession.StartCleanupRoutine()
+
+	// 启动记忆整理 worker
+	go a.consolidationWorker(ctx)
+
 	a.cronSch.SetInjectFunc(a.injectInbound)
 	a.cronSch.StartDelayed(3 * time.Second)
 
@@ -1039,6 +1052,66 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// consolidationWorker 专门的记忆整理 goroutine，通过 channel 接收整理请求
+// 避免每次整理都创建新的 goroutine，同时保证同一个 tenant 不会并发整理
+func (a *Agent) consolidationWorker(ctx context.Context) {
+	log.Info("Memory consolidation worker started")
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("Memory consolidation worker stopped")
+			return
+		case req := <-a.consolidateCh:
+			a.doConsolidate(ctx, req.tenantSession, req.senderID)
+		}
+	}
+}
+
+// doConsolidate 执行实际的记忆整理
+func (a *Agent) doConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
+	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
+
+	a.consolidatingMu.Lock()
+	if a.consolidating[tenantKey] {
+		a.consolidatingMu.Unlock()
+		return
+	}
+	a.consolidating[tenantKey] = true
+	a.consolidatingMu.Unlock()
+
+	defer func() {
+		a.consolidatingMu.Lock()
+		a.consolidating[tenantKey] = false
+		a.consolidatingMu.Unlock()
+	}()
+
+	messages, err := tenantSession.GetMessages()
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Error("Failed to get messages for consolidation")
+		return
+	}
+	lastConsolidated := tenantSession.LastConsolidated()
+	mem := tenantSession.Memory()
+
+	llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+
+	result, _ := mem.Memorize(ctx, memory.MemorizeInput{
+		Messages:         messages,
+		LastConsolidated: lastConsolidated,
+		LLMClient:        llmClient,
+		Model:            model,
+		ArchiveAll:       false,
+		MemoryWindow:     a.memoryWindow,
+	})
+	if result.OK {
+		if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")
+		}
+		log.Ctx(ctx).WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
+	}
+}
+
 func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
 	length, err := tenantSession.Len()
@@ -1058,42 +1131,15 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		a.consolidatingMu.Unlock()
 		return
 	}
-	a.consolidating[tenantKey] = true
 	a.consolidatingMu.Unlock()
 
-	// 异步执行合并，不阻塞当前消息处理
-	go func() {
-		defer func() {
-			a.consolidatingMu.Lock()
-			a.consolidating[tenantKey] = false
-			a.consolidatingMu.Unlock()
-		}()
-
-		messages, err := tenantSession.GetMessages()
-		if err != nil {
-			log.Ctx(ctx).WithError(err).Error("Failed to get messages for consolidation")
-			return
-		}
-		lastConsolidated := tenantSession.LastConsolidated()
-		mem := tenantSession.Memory()
-
-		llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
-
-		result, _ := mem.Memorize(ctx, memory.MemorizeInput{
-			Messages:         messages,
-			LastConsolidated: lastConsolidated,
-			LLMClient:        llmClient,
-			Model:            model,
-			ArchiveAll:       false,
-			MemoryWindow:     a.memoryWindow,
-		})
-		if result.OK {
-			if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")
-			}
-			log.Ctx(ctx).WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
-		}
-	}()
+	// 发送整理请求到 channel，由专门的 worker 处理
+	select {
+	case a.consolidateCh <- consolidateRequest{tenantSession: tenantSession, senderID: senderID}:
+	default:
+		// channel 满了，丢弃本次请求（避免阻塞）
+		log.Ctx(ctx).Warn("Consolidation channel full, dropping request")
+	}
 }
 
 // summarizeRetryError 将 LLM 错误简化为用户友好的描述。

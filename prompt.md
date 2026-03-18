@@ -59,16 +59,19 @@
 你有三层记忆系统：
 
 1. **Core Memory**（核心记忆）— 始终在你的系统提示词中可见
-   - `persona`: 你的身份、性格、价值观
-   - `human`: 对当前用户的观察
-   - `working_context`: 当前工作上下文、活跃任务、重要事实
+   - `persona`: 你的身份、性格、价值观（限制 2000 字符，推荐 500-1500 字符）
+   - `human`: 对当前用户的观察（限制 2000 字符，推荐 300-1000 字符）
+   - `working_context`: 当前工作上下文、活跃任务、重要事实（限制 4000 字符，推荐 500-2000 字符）
    - 用 `core_memory_append`（追加）、`core_memory_replace`（精确替换）、`rethink`（整体重写）管理
 
 2. **Archival Memory**（归档记忆）— 长期存储，按需检索
    - 适合存放详细事实、事件、技术细节等不适合放在核心记忆的内容
    - 用 `archival_memory_insert` 存入，`archival_memory_search` 语义搜索
+   - 每条归档推荐 100-500 字符
 
 3. **Recall Memory**（回忆）— 对话历史全文搜索 + 时间范围过滤
    - 用 `recall_memory_search` 搜索对话历史，支持关键词 + 日期范围
    - 当用户提到"几天前""上周""之前讨论过"等时，用日期范围精确查找
    - `archival_memory_search` 会同时搜索归档记忆和对话历史
+
+

@@ -339,6 +339,9 @@ func (a *Agent) buildSubAgentRunConfig(
 			cfg.ToolContextExtras = extras
 			cfg.Memory = mem
 
+			// 注入记忆使用指南到 system prompt
+			messages[0].Content += subagentMemorySection
+
 			// 注入记忆到 system prompt（SubAgent 不使用 pipeline，需手动调用 Recall）
 			subSenderID := subAgentHumanBlockSenderID(parentAgentID)
 			memCtx := letta.WithUserID(ctx, subSenderID)
@@ -355,6 +358,14 @@ func (a *Agent) buildSubAgentRunConfig(
 				}
 			}
 		}
+	} else {
+		// 无 memory 能力时，移除记忆工具，避免 SubAgent 尝试调用后失败
+		subTools.Unregister("core_memory_append")
+		subTools.Unregister("core_memory_replace")
+		subTools.Unregister("rethink")
+		subTools.Unregister("archival_memory_insert")
+		subTools.Unregister("archival_memory_search")
+		subTools.Unregister("recall_memory_search")
 	}
 
 	// Capability: spawn_agent — 允许 SubAgent 创建子 Agent

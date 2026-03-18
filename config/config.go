@@ -36,15 +36,6 @@ type QQConfig struct {
 	AllowFrom    []string // 允许的 openid 列表（空则允许所有）
 }
 
-// OneBotConfig OneBot v11 渠道配置（go-cqhttp / Lagrange 等）
-type OneBotConfig struct {
-	Enabled   bool
-	WSUrl     string   // go-cqhttp 正向 WS 地址，如 "ws://127.0.0.1:8080"
-	HTTPUrl   string   // go-cqhttp HTTP API 地址，如 "http://127.0.0.1:8080"
-	Token     string   // access_token（可选鉴权）
-	AllowFrom []string // 允许的 QQ 号列表（空则允许所有）
-}
-
 // EmbeddingConfig Embedding 配置
 type EmbeddingConfig struct {
 	Provider  string // Embedding 提供者: "openai"(默认) 或 "ollama"
@@ -69,7 +60,6 @@ type Config struct {
 	PProf         PProfConfig
 	Feishu        FeishuConfig
 	QQ            QQConfig
-	OneBot        OneBotConfig
 	Agent         AgentConfig
 	OAuth         OAuthConfig
 	Sandbox       SandboxConfig
@@ -166,13 +156,6 @@ func Load() *Config {
 			AppID:        getEnvOrDefault("QQ_APP_ID", ""),
 			ClientSecret: getEnvOrDefault("QQ_CLIENT_SECRET", ""),
 			AllowFrom:    splitEnv("QQ_ALLOW_FROM"),
-		},
-		OneBot: OneBotConfig{
-			Enabled:   getEnvBoolOrDefault("ONEBOT_ENABLED", false),
-			WSUrl:     getEnvOrDefault("ONEBOT_WS_URL", "ws://127.0.0.1:8080"),
-			HTTPUrl:   getEnvOrDefault("ONEBOT_HTTP_URL", "http://127.0.0.1:8080"),
-			Token:     getEnvOrDefault("ONEBOT_TOKEN", ""),
-			AllowFrom: splitEnv("ONEBOT_ALLOW_FROM"),
 		},
 		Feishu: FeishuConfig{
 			Enabled:           getEnvBoolOrDefault("FEISHU_ENABLED", false),

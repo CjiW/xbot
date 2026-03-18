@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 11
+const schemaVersion = 12
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -189,7 +189,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (11);
+INSERT INTO schema_version (version) VALUES (12);
 
 CREATE TABLE user_llm_configs (
     sender_id TEXT PRIMARY KEY,
@@ -199,9 +199,6 @@ CREATE TABLE user_llm_configs (
     model TEXT,
     max_context INTEGER DEFAULT 0,
     thinking_mode TEXT DEFAULT '',
-    user_id TEXT,
-    enterprise_id TEXT,
-    domain TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -519,6 +516,51 @@ UPDATE schema_version SET version = 6;
 		if _, err := conn.Exec("UPDATE schema_version SET version = 11"); err != nil {
 			return fmt.Errorf("update schema version: %w", err)
 		}
+	}
+
+	if from < 12 {
+		// v12: Remove CodeBuddy-specific columns from user_llm_configs
+		_, err := conn.Exec(`
+			CREATE TABLE user_llm_configs_new (
+				sender_id TEXT PRIMARY KEY,
+				provider TEXT NOT NULL,
+				base_url TEXT NOT NULL,
+				api_key TEXT NOT NULL,
+				model TEXT,
+				max_context INTEGER DEFAULT 0,
+				thinking_mode TEXT DEFAULT '',
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			);
+		`)
+		if err != nil {
+			return fmt.Errorf("migrate v11->v12: create new table: %w", err)
+		}
+
+		_, err = conn.Exec(`
+			INSERT INTO user_llm_configs_new
+			(sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at)
+			SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at
+			FROM user_llm_configs;
+		`)
+		if err != nil {
+			return fmt.Errorf("migrate v11->v12: copy data: %w", err)
+		}
+
+		_, err = conn.Exec(`DROP TABLE user_llm_configs;`)
+		if err != nil {
+			return fmt.Errorf("migrate v11->v12: drop old table: %w", err)
+		}
+
+		_, err = conn.Exec(`ALTER TABLE user_llm_configs_new RENAME TO user_llm_configs;`)
+		if err != nil {
+			return fmt.Errorf("migrate v11->v12: rename table: %w", err)
+		}
+
+		if _, err := conn.Exec("UPDATE schema_version SET version = 12"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v12 (removed CodeBuddy columns)")
 	}
 
 	return nil

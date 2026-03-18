@@ -53,6 +53,7 @@ const onebotMaxReconnectAttempts = 100
 // ---------------------------------------------------------------------------
 
 const onebotMaxImageSize = 50 << 20 // 50 MB
+const selfAtTemplate = `[CQ:at,qq=%s[^\]]*]` // at 自己的 CQ 码模板
 
 var (
 	cqImageRe     = regexp.MustCompile(`\[CQ:image,[^\]]*url=([^\],]+)[^\]]*\]`)
@@ -106,15 +107,27 @@ type OneBotChannel struct {
 	selfID   string         // bot 自身 QQ 号，从 lifecycle 事件获取
 	selfAtRe *regexp.Regexp // 预编译的 at 自己 CQ 码正则
 	chatMeta sync.Map       // chatID -> chatType ("p2p"/"group") 缓存
+
+	// Message deduplication
+	processedIDs   map[string]struct{}
+	processedOrder []string
+	processedMu    sync.Mutex
+	maxProcessed   int
+
+	// Stable connection tracking for reconnect strategy
+	stableConnectTime time.Time // 连接稳定的时间点
+	stableMu          sync.Mutex
 }
 
 // NewOneBotChannel 创建 OneBot 渠道
 func NewOneBotChannel(cfg OneBotConfig, msgBus *bus.MessageBus) *OneBotChannel {
 	return &OneBotChannel{
-		cfg:     cfg,
-		bus:     msgBus,
-		httpCli: &http.Client{Timeout: 30 * time.Second},
-		done:    make(chan struct{}),
+		cfg:           cfg,
+		bus:           msgBus,
+		httpCli:       &http.Client{Timeout: 30 * time.Second},
+		done:          make(chan struct{}),
+		processedIDs:  make(map[string]struct{}),
+		maxProcessed:  1000,
 	}
 }
 
@@ -180,9 +193,18 @@ func (c *OneBotChannel) connectAndListen() {
 			log.WithError(err).Warn("OneBot: WebSocket session ended")
 		}
 
-		// 如果曾成功建立连接并收到过消息，重置重连计数
-		if connected {
+		// 只有在连接稳定（持续连接超过阈值）后才重置重连计数
+		c.stableMu.Lock()
+		stable := !c.stableConnectTime.IsZero()
+		c.stableMu.Unlock()
+
+		if connected && stable {
+			log.Info("OneBot: stable connection achieved, resetting reconnect counter")
 			attempt = 0
+			// 清除稳定时间，下次需要重新稳定
+			c.stableMu.Lock()
+			c.stableConnectTime = time.Time{}
+			c.stableMu.Unlock()
 		}
 
 		delay := onebotReconnectDelays[attempt%len(onebotReconnectDelays)]
@@ -276,6 +298,10 @@ func (c *OneBotChannel) runOnce() (connected bool, err error) {
 
 	log.Info("OneBot: WebSocket connected")
 
+	// 记录连接开始时间，用于重连策略
+	connectStartTime := time.Now()
+	const stableThreshold = 5 * time.Minute // 连接稳定阈值
+
 	for {
 		select {
 		case <-c.done:
@@ -289,7 +315,18 @@ func (c *OneBotChannel) runOnce() (connected bool, err error) {
 		}
 
 		// 成功读到消息，标记已连接
-		connected = true
+		if !connected {
+			connected = true
+		}
+
+		// 如果连接时间超过稳定阈值，记录稳定时间
+		c.stableMu.Lock()
+		if c.stableConnectTime.IsZero() && time.Since(connectStartTime) >= stableThreshold {
+			c.stableConnectTime = time.Now()
+			log.Info("OneBot: connection is now stable")
+		}
+		c.stableMu.Unlock()
+
 		// 重置读超时
 		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 
@@ -314,7 +351,9 @@ func (c *OneBotChannel) runOnce() (connected bool, err error) {
 			}
 			if selfID != 0 {
 				c.selfID = strconv.FormatInt(selfID, 10)
-				c.selfAtRe = regexp.MustCompile(`\[CQ:at,qq=` + regexp.QuoteMeta(c.selfID) + `[^\]]*\]`)
+				// 使用预编译的模板动态构建正则，避免每次编译
+				selfAtPattern := fmt.Sprintf(selfAtTemplate, regexp.QuoteMeta(c.selfID))
+				c.selfAtRe = regexp.MustCompile(selfAtPattern)
 				log.WithField("self_id", c.selfID).Info("OneBot: bot self_id obtained")
 			}
 		case "message":
@@ -334,6 +373,13 @@ func (c *OneBotChannel) handleOneBotMessage(data []byte) {
 	var evt onebotEvent
 	if err := json.Unmarshal(data, &evt); err != nil {
 		log.WithError(err).Warn("OneBot: failed to parse message event")
+		return
+	}
+
+	// 消息去重
+	messageID := strconv.FormatInt(evt.MessageID, 10)
+	if c.isDuplicate(messageID) {
+		log.WithField("message_id", messageID).Debug("OneBot: duplicate message, skipping")
 		return
 	}
 
@@ -621,6 +667,15 @@ func (c *OneBotChannel) uploadFile(chatType, targetID, filePath string) error {
 		payload["user_id"] = id
 	}
 
+	// 尝试使用 file:/// 路径
+	_, err = c.callAPI(endpoint, payload)
+	if err == nil {
+		return nil
+	}
+
+	// 如果 file:/// 失败，尝试直接用绝对路径
+	log.WithField("path", absPath).Debug("OneBot: file:/// upload failed, trying absolute path")
+	payload["file"] = absPath
 	_, err = c.callAPI(endpoint, payload)
 	return err
 }
@@ -693,7 +748,8 @@ func markdownToOneBotMessage(content string) string {
 
 // downloadOneBotImage 下载图片到本地临时目录
 func (c *OneBotChannel) downloadOneBotImage(imgURL string) (string, error) {
-	dir := "/tmp/onebot_images"
+	// 使用系统临时目录，避免硬编码路径
+	dir := filepath.Join(os.TempDir(), "onebot_images")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create image dir: %w", err)
 	}
@@ -747,4 +803,29 @@ func extractNumericID(chatID string) string {
 	}
 	// 如果没有前缀，直接返回（可能本身就是数字）
 	return chatID
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication
+// ---------------------------------------------------------------------------
+
+// isDuplicate 检查消息是否重复
+func (c *OneBotChannel) isDuplicate(messageID string) bool {
+	c.processedMu.Lock()
+	defer c.processedMu.Unlock()
+
+	if _, exists := c.processedIDs[messageID]; exists {
+		return true
+	}
+
+	c.processedIDs[messageID] = struct{}{}
+	c.processedOrder = append(c.processedOrder, messageID)
+
+	// 清理过期缓存
+	for len(c.processedOrder) > c.maxProcessed {
+		oldest := c.processedOrder[0]
+		c.processedOrder = c.processedOrder[1:]
+		delete(c.processedIDs, oldest)
+	}
+	return false
 }

@@ -526,31 +526,31 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "persona",
 			Type:        "string",
-			Description: "Updated persona block (200-500 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated persona block. LIMIT: 2000 chars. Recommended: 500-1500 chars. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "human",
 			Type:        "string",
-			Description: "Updated human block (100-300 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated human block. LIMIT: 2000 chars. Recommended: 300-1000 chars. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "working_context",
 			Type:        "string",
-			Description: "Updated working context block (100-200 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated working context block. LIMIT: 4000 chars. Recommended: 500-2000 chars. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "archival_entries",
 			Type:        "array",
-			Description: "List of detailed facts/events to archive (50-200 chars per entry recommended). Each entry is a string.",
+			Description: "List of detailed facts/events to archive. Recommended: 100-500 chars per entry. Each entry is a string.",
 			Required:    false,
 		},
 		{
 			Name:        "history_entry",
 			Type:        "string",
-			Description: "A paragraph summarizing key events/decisions (50-150 chars recommended). Start with [YYYY-MM-DD HH:MM].",
+			Description: "A paragraph summarizing key events/decisions. Recommended: 50-200 chars. Start with [YYYY-MM-DD HH:MM].",
 			Required:    true,
 		},
 		{

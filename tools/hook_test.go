@@ -12,13 +12,13 @@ import (
 // --- Mock Hooks ---
 
 type mockHook struct {
-	name         string
-	preCalls     []mockCall
-	postCalls    []mockCall
-	preErr       error
-	panicInPre   bool
-	panicInPost  bool
-	mu           sync.Mutex
+	name        string
+	preCalls    []mockCall
+	postCalls   []mockCall
+	preErr      error
+	panicInPre  bool
+	panicInPost bool
+	mu          sync.Mutex
 }
 
 type mockCall struct {

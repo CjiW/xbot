@@ -526,31 +526,31 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "persona",
 			Type:        "string",
-			Description: "Updated persona block. WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated persona block (200-500 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "human",
 			Type:        "string",
-			Description: "Updated human block (observations about the user). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated human block (100-300 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "working_context",
 			Type:        "string",
-			Description: "Updated working context block (active facts/session context). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
+			Description: "Updated working context block (100-200 chars recommended). WARNING: This will COMPLETELY REPLACE existing content. Return empty string if no changes needed.",
 			Required:    true,
 		},
 		{
 			Name:        "archival_entries",
 			Type:        "array",
-			Description: "List of detailed facts/events to archive to long-term storage. Each entry is a string.",
+			Description: "List of detailed facts/events to archive (50-200 chars per entry recommended). Each entry is a string.",
 			Required:    false,
 		},
 		{
 			Name:        "history_entry",
 			Type:        "string",
-			Description: "A paragraph summarizing key events/decisions. Start with [YYYY-MM-DD HH:MM].",
+			Description: "A paragraph summarizing key events/decisions (50-150 chars recommended). Start with [YYYY-MM-DD HH:MM].",
 			Required:    true,
 		},
 		{

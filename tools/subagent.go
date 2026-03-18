@@ -82,9 +82,14 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	EnsureSynced(ctx)
 
 	// Search order: user private > synced global > host global
+	// Use OriginUserID for user private agents (original user's directory)
 	var userAgentDirs []string
-	if ctx != nil && ctx.SenderID != "" && ctx.WorkingDir != "" {
-		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, ctx.SenderID))
+	originUserID := ctx.OriginUserID
+	if originUserID == "" {
+		originUserID = ctx.SenderID // fallback：兼容旧数据
+	}
+	if ctx != nil && originUserID != "" && ctx.WorkingDir != "" {
+		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
 	}
 	if ctx != nil && ctx.WorkspaceRoot != "" {
 		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))

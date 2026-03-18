@@ -90,6 +90,15 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		} else {
 			searchDir = "/workspace/" + path
 		}
+	} else if ctx != nil && ctx.CurrentDir != "" {
+		// 使用 CurrentDir（PWD 工具优化）
+		// CurrentDir 是宿主机路径，需要转换为容器内路径
+		if strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+			if err == nil {
+				searchDir = "/workspace/" + rel
+			}
+		}
 	}
 
 	// 构建 grep 命令
@@ -271,7 +280,10 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 	// Determine base directory
 	baseDir := path
 	if baseDir == "" {
-		if ctx != nil && ctx.WorkspaceRoot != "" {
+		// 优先使用 CurrentDir（PWD 工具优化）
+		if ctx != nil && ctx.CurrentDir != "" {
+			baseDir = ctx.CurrentDir
+		} else if ctx != nil && ctx.WorkspaceRoot != "" {
 			baseDir = ctx.WorkspaceRoot
 		} else if ctx != nil && ctx.WorkingDir != "" {
 			baseDir = ctx.WorkingDir

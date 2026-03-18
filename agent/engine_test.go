@@ -837,41 +837,67 @@ func TestRun_MultipleToolCallsInOneResponse(t *testing.T) {
 
 func TestCallChain_CanSpawn(t *testing.T) {
 	tests := []struct {
-		name    string
-		chain   []string
-		target  string
-		wantErr bool
+		name     string
+		chain    []string
+		target   string
+		maxDepth int
+		wantErr  bool
 	}{
 		{
-			name:    "normal spawn from main",
-			chain:   []string{"main"},
-			target:  "code-reviewer",
-			wantErr: false,
+			name:     "normal spawn from main",
+			chain:    []string{"main"},
+			target:   "code-reviewer",
+			maxDepth: 6,
+			wantErr:  false,
 		},
 		{
-			name:    "depth 2 spawn",
-			chain:   []string{"main", "main/code-reviewer"},
-			target:  "explorer",
-			wantErr: false,
+			name:     "depth 2 spawn",
+			chain:    []string{"main", "main/code-reviewer"},
+			target:   "explorer",
+			maxDepth: 6,
+			wantErr:  false,
 		},
 		{
-			name:    "max depth reached",
-			chain:   []string{"main", "main/a", "main/a/b"},
-			target:  "c",
-			wantErr: true,
+			name:     "max depth reached (old default 3)",
+			chain:    []string{"main", "main/a", "main/a/b"},
+			target:   "c",
+			maxDepth: 3,
+			wantErr:  true,
 		},
 		{
-			name:    "circular call",
-			chain:   []string{"main", "main/code-reviewer"},
-			target:  "code-reviewer",
-			wantErr: true,
+			name:     "max depth reached (new default 6)",
+			chain:    []string{"main", "main/a", "main/a/b", "main/a/b/c", "main/a/b/c/d", "main/a/b/c/d/e"},
+			target:   "f",
+			maxDepth: 6,
+			wantErr:  true,
+		},
+		{
+			name:     "within new default depth 6",
+			chain:    []string{"main", "main/a", "main/a/b", "main/a/b/c", "main/a/b/c/d"},
+			target:   "e",
+			maxDepth: 6,
+			wantErr:  false,
+		},
+		{
+			name:     "circular call",
+			chain:    []string{"main", "main/code-reviewer"},
+			target:   "code-reviewer",
+			maxDepth: 6,
+			wantErr:  true,
+		},
+		{
+			name:     "zero maxDepth uses default",
+			chain:    []string{"main", "main/a", "main/a/b"},
+			target:   "c",
+			maxDepth: 0, // should use DefaultMaxSubAgentDepth (6)
+			wantErr:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cc := &CallChain{Chain: tt.chain}
-			err := cc.CanSpawn(tt.target)
+			err := cc.CanSpawn(tt.target, tt.maxDepth)
 			if tt.wantErr && err == nil {
 				t.Error("expected error, got nil")
 			}

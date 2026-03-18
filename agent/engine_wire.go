@@ -45,11 +45,12 @@ func (a *Agent) buildMainRunConfig(
 		Messages:     messages,
 
 		// 身份
-		AgentID:    "main",
-		Channel:    channel,
-		ChatID:     chatID,
-		SenderID:   senderID,
-		SenderName: senderName,
+		AgentID:      "main",
+		Channel:      channel,
+		ChatID:       chatID,
+		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
+		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
+		SenderName:   senderName,
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
@@ -151,7 +152,8 @@ func (a *Agent) buildCronRunConfig(
 		AgentID:      "main",
 		Channel:      channel,
 		ChatID:       chatID,
-		SenderID:     senderID,
+		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
+		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
 		SenderName:   "",
 
 		// 工作区 & 沙箱
@@ -270,8 +272,12 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	subAgentID := parentAgentID + "/" + roleName
 
-	// SubAgent 继承父 Agent 的 LLM 配置
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(parentCtx.SenderID)
+	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
+	originUserID := parentCtx.OriginUserID
+	if originUserID == "" {
+		originUserID = parentCtx.SenderID // fallback：主 Agent 兼容（OriginUserID = SenderID）
+	}
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
 	cfg := RunConfig{
 		LLMClient:    llmClient,
@@ -282,7 +288,8 @@ func (a *Agent) buildSubAgentRunConfig(
 		AgentID:      subAgentID,
 		Channel:      parentCtx.Channel,
 		ChatID:       parentCtx.ChatID,
-		SenderID:     parentCtx.SenderID,
+		SenderID:     parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID: originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
@@ -357,12 +364,13 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
 	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 	cfg := &RunConfig{
-		AgentID:    "main",
-		Channel:    channel,
-		ChatID:     chatID,
-		SenderID:   senderID,
-		SenderName: senderName,
-		SendFunc:   a.sendMessage,
+		AgentID:      "main",
+		Channel:      channel,
+		ChatID:       chatID,
+		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
+		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
+		SenderName:   senderName,
+		SendFunc:     a.sendMessage,
 
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    wsRoot,
@@ -629,7 +637,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	// --- CallChain 深度 & 循环检查 ---
 	cc := CallChainFromContext(ctx)
 	if roleName != "" {
-		if err := cc.CanSpawn(roleName); err != nil {
+		if err := cc.CanSpawn(roleName, a.maxSubAgentDepth); err != nil {
 			log.Ctx(ctx).WithFields(log.Fields{
 				"parent": parentAgentID,
 				"role":   roleName,

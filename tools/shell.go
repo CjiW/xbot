@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -84,7 +85,10 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	workspaceRoot := ""
 	userID := ""
 	if toolCtx != nil {
-		if toolCtx.WorkspaceRoot != "" {
+		// 优先使用 CurrentDir（PWD 工具优化）
+		if toolCtx.CurrentDir != "" {
+			workspaceRoot = toolCtx.CurrentDir
+		} else if toolCtx.WorkspaceRoot != "" {
 			workspaceRoot = toolCtx.WorkspaceRoot
 		} else {
 			workspaceRoot = toolCtx.WorkingDir
@@ -167,11 +171,16 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	if result == "" {
+		// 解析 cd 命令并更新 cwd（PWD 工具优化）
+		t.maybeUpdateCwd(toolCtx, params.Command, workspaceRoot)
 		if envPersisted {
 			return NewResult("Command executed successfully. Environment variables persisted to ~/.xbot_env"), nil
 		}
 		return NewResult("Command executed successfully (no output)"), nil
 	}
+
+	// 解析 cd 命令并更新 cwd（PWD 工具优化）
+	t.maybeUpdateCwd(toolCtx, params.Command, workspaceRoot)
 
 	if envPersisted {
 		result += "\n[Environment variables persisted to ~/.xbot_env]"
@@ -286,4 +295,96 @@ func checkDangerousCommand(cmd string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// maybeUpdateCwd 解析命令中的 cd 操作，更新 session 中的 cwd（PWD 工具优化）
+// 支持：
+//   - cd /path
+//   - cd subdir
+//   - cd ..
+//   - cd dir && other_command
+//   - cd dir; other_command
+func (t *ShellTool) maybeUpdateCwd(toolCtx *ToolContext, command, currentDir string) {
+	if toolCtx == nil || toolCtx.SetCurrentDir == nil || currentDir == "" {
+		return
+	}
+
+	// 提取 cd 命令的目标路径
+	targetDir := extractCdTarget(command)
+	if targetDir == "" {
+		return
+	}
+
+	// 计算绝对路径
+	var absDir string
+	if filepath.IsAbs(targetDir) {
+		absDir = filepath.Clean(targetDir)
+	} else {
+		absDir = filepath.Clean(filepath.Join(currentDir, targetDir))
+	}
+
+	// 验证路径在工作区内（防止目录穿越）
+	// 获取工作区根目录用于验证
+	workspaceRoot := toolCtx.WorkspaceRoot
+	if workspaceRoot == "" {
+		workspaceRoot = toolCtx.WorkingDir
+	}
+	if workspaceRoot == "" {
+		return
+	}
+
+	// 确保最终路径在工作区内
+	rel, err := filepath.Rel(workspaceRoot, absDir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		log.WithFields(log.Fields{
+			"target_dir":     targetDir,
+			"resolved_dir":   absDir,
+			"workspace_root": workspaceRoot,
+		}).Debug("CD command targets directory outside workspace, ignoring")
+		return
+	}
+
+	// 更新 session 中的 cwd
+	log.WithFields(log.Fields{
+		"old_dir": currentDir,
+		"new_dir": absDir,
+	}).Debug("Updating cwd from cd command")
+	toolCtx.SetCurrentDir(absDir)
+}
+
+// cdPattern 匹配 cd 命令的正则表达式
+// 支持: cd /path, cd path, cd .., cd ~, cd $HOME 等
+var cdPattern = regexp.MustCompile(`(?:^|&&|;)\s*cd\s+([^\s;&|]+|"[^"]+"|'[^']+')`)
+
+// extractCdTarget 从命令中提取 cd 的目标路径
+// 返回空字符串表示没有找到有效的 cd 命令
+func extractCdTarget(command string) string {
+	matches := cdPattern.FindAllStringSubmatch(command, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+
+	// 取最后一个 cd 命令（如果有多个）
+	lastMatch := matches[len(matches)-1]
+	target := lastMatch[1]
+
+	// 去除引号
+	if len(target) >= 2 {
+		if (target[0] == '"' && target[len(target)-1] == '"') ||
+			(target[0] == '\'' && target[len(target)-1] == '\'') {
+			target = target[1 : len(target)-1]
+		}
+	}
+
+	// 处理 ~ 和 $HOME
+	if target == "~" || target == "$HOME" {
+		// 返回空，让调用方处理（保持在当前目录或工作区根目录）
+		return ""
+	}
+	if strings.HasPrefix(target, "~/") {
+		// ~/path -> 暂不处理，返回空
+		return ""
+	}
+
+	return target
 }

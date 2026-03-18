@@ -54,8 +54,20 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 	// 将用户输入的路径转换为容器内路径
 	sandboxPath := filePath
 	if !strings.HasPrefix(filePath, "/workspace/") && !strings.HasPrefix(filePath, "/") {
-		// 相对路径，假设相对于 /workspace
-		sandboxPath = "/workspace/" + filePath
+		// 相对路径，优先使用 CurrentDir（PWD 工具优化）
+		if ctx != nil && ctx.CurrentDir != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+			if err == nil {
+				// 从 CurrentDir 解析相对路径
+				sandboxPath = "/workspace/" + filepath.Join(rel, filePath)
+			} else {
+				// fallback 到 /workspace
+				sandboxPath = "/workspace/" + filePath
+			}
+		} else {
+			// 相对路径，假设相对于 /workspace
+			sandboxPath = "/workspace/" + filePath
+		}
 	} else if strings.HasPrefix(filePath, "/workspace/") {
 		sandboxPath = filePath
 	} else if strings.HasPrefix(filePath, "/") {
@@ -81,6 +93,22 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 
 // executeLocal 在本地读取文件
 func (t *ReadTool) executeLocal(ctx *ToolContext, filePath string) (*ToolResult, error) {
+	// 如果是相对路径且 CurrentDir 存在，先尝试从 CurrentDir 解析
+	if ctx != nil && ctx.CurrentDir != "" && !filepath.IsAbs(filePath) {
+		// 尝试从 CurrentDir 解析
+		absPath := filepath.Join(ctx.CurrentDir, filePath)
+		if resolved, err := ResolveReadPath(ctx, absPath); err == nil {
+			// 检查文件是否存在
+			if _, statErr := os.Stat(resolved); statErr == nil {
+				content, err := os.ReadFile(resolved)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read file: %w", err)
+				}
+				return NewResult(string(content)), nil
+			}
+		}
+	}
+
 	resolvedPath, err := ResolveReadPath(ctx, filePath)
 	if err != nil {
 		return nil, err

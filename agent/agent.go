@@ -213,6 +213,9 @@ type Agent struct {
 	compressionThreshold float64
 	enableAutoCompress   bool
 
+	// SubAgent 深度控制
+	maxSubAgentDepth int
+
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
@@ -289,6 +292,9 @@ type Config struct {
 	MaxContextTokens     int     // 最大上下文 token 数（默认 8000，0 表示不限制）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
 	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 false）
+
+	// SubAgent 深度控制
+	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 }
 
 // New 创建 Agent
@@ -327,6 +333,10 @@ func New(cfg Config) *Agent {
 	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 0.8
+	}
+	// 设置 SubAgent 深度默认值
+	if cfg.MaxSubAgentDepth <= 0 {
+		cfg.MaxSubAgentDepth = 6
 	}
 
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
@@ -424,6 +434,7 @@ func New(cfg Config) *Agent {
 		maxContextTokens:     cfg.MaxContextTokens,
 		compressionThreshold: cfg.CompressionThreshold,
 		enableAutoCompress:   cfg.EnableAutoCompress,
+		maxSubAgentDepth:     cfg.MaxSubAgentDepth,
 		agentsDir:            agentsDir,
 		consolidateCh:        make(chan consolidateRequest, 64),
 		consolidateStopCh:    make(chan struct{}),

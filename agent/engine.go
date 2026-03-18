@@ -29,11 +29,12 @@ type RunConfig struct {
 	Messages     []llm.ChatMessage
 
 	// === 身份（从 InboundMessage 提取） ===
-	AgentID    string // "main", "main/code-reviewer"
-	Channel    string // 原始 IM 渠道（用于 ToolContext）
-	ChatID     string // 原始 IM 会话
-	SenderID   string // 原始发送者
-	SenderName string
+	AgentID      string // "main", "main/code-reviewer"
+	Channel      string // 原始 IM 渠道（用于 ToolContext）
+	ChatID       string // 原始 IM 会话
+	SenderID     string // 直接调用者 ID（SubAgent 场景下为父 Agent ID）
+	OriginUserID string // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等）
+	SenderName   string
 
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）
@@ -800,13 +801,14 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 // 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	tc := &tools.ToolContext{
-		Ctx:        ctx,
-		AgentID:    cfg.AgentID,
-		Channel:    cfg.Channel,
-		ChatID:     cfg.ChatID,
-		SenderID:   cfg.SenderID,
-		SenderName: cfg.SenderName,
-		SendFunc:   cfg.SendFunc,
+		Ctx:          ctx,
+		AgentID:      cfg.AgentID,
+		Channel:      cfg.Channel,
+		ChatID:       cfg.ChatID,
+		SenderID:     cfg.SenderID,
+		OriginUserID: cfg.OriginUserID,
+		SenderName:   cfg.SenderName,
+		SendFunc:     cfg.SendFunc,
 
 		// 工作区 & 沙箱
 		WorkingDir:          cfg.WorkingDir,
@@ -830,12 +832,17 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 	// 注入 SpawnAgent（包装为 SubAgentManager 接口）
 	if cfg.SpawnAgent != nil {
+		// 使用 OriginUserID 构建 adapter（用于消息溯源）
+		originUserID := cfg.OriginUserID
+		if originUserID == "" {
+			originUserID = cfg.SenderID // fallback：兼容旧数据
+		}
 		adapter := &spawnAgentAdapter{
 			spawnFn:  cfg.SpawnAgent,
 			parentID: cfg.AgentID,
 			channel:  cfg.Channel,
 			chatID:   cfg.ChatID,
-			senderID: cfg.SenderID,
+			senderID: originUserID, // 使用原始用户 ID（用于消息溯源）
 		}
 		// 注入 Interactive callbacks（主 Agent 专有）
 		if cb := cfg.InteractiveCallbacks; cb != nil {
@@ -859,6 +866,14 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		}
 	}
 
+	// 注入 session cwd（PWD 工具优化）
+	if cfg.Session != nil {
+		tc.CurrentDir = cfg.Session.GetCurrentDir()
+		tc.SetCurrentDir = func(dir string) {
+			cfg.Session.SetCurrentDir(dir)
+		}
+	}
+
 	return tc
 }
 
@@ -867,8 +882,8 @@ type CallChain struct {
 	Chain []string // 调用链: ["main", "main/code-reviewer"]
 }
 
-// MaxSubAgentDepth 最大 SubAgent 嵌套深度。
-const MaxSubAgentDepth = 3
+// DefaultMaxSubAgentDepth 默认 SubAgent 嵌套深度。
+const DefaultMaxSubAgentDepth = 6
 
 type callChainKey struct{}
 
@@ -887,9 +902,13 @@ func WithCallChain(ctx context.Context, cc *CallChain) context.Context {
 
 // CanSpawn 检查是否可以创建指定角色的 SubAgent。
 // 返回 nil 表示可以，返回 error 表示不可以（深度超限或循环调用）。
-func (cc *CallChain) CanSpawn(targetRole string) error {
-	if len(cc.Chain) >= MaxSubAgentDepth {
-		return fmt.Errorf("max SubAgent depth %d reached (chain: %v)", MaxSubAgentDepth, cc.Chain)
+// maxDepth 为最大允许深度，如果 <= 0 则使用默认值 DefaultMaxSubAgentDepth。
+func (cc *CallChain) CanSpawn(targetRole string, maxDepth int) error {
+	if maxDepth <= 0 {
+		maxDepth = DefaultMaxSubAgentDepth
+	}
+	if len(cc.Chain) >= maxDepth {
+		return fmt.Errorf("max SubAgent depth %d reached (chain: %v)", maxDepth, cc.Chain)
 	}
 	for _, id := range cc.Chain {
 		role := id

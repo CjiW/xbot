@@ -42,13 +42,13 @@ func (t *DownloadFileTool) Parameters() []llm.ToolParam {
 }
 
 func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := ParseInput[struct {
 		MessageID  string `json:"message_id"`
 		FileKey    string `json:"file_key"`
 		OutputPath string `json:"output_path"`
 		Type       string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

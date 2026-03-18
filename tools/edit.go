@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,8 +81,8 @@ type EditParams struct {
 }
 
 func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params EditParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	params, err := ParseInput[EditParams](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

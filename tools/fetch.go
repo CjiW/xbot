@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -70,9 +69,8 @@ type fetchParams struct {
 }
 
 func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	// 解析参数
-	var params fetchParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	params, err := ParseInput[fetchParams](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

@@ -426,9 +426,11 @@ func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolRes
 
 	args := map[string]any{}
 	if input != "" {
-		if err := json.Unmarshal([]byte(input), &args); err != nil {
+		parsed, err := ParseInput[map[string]any](input)
+		if err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
+		args = parsed
 	}
 
 	result, err := t.session.CallTool(ctx.Ctx, &mcp.CallToolParams{

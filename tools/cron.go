@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -59,8 +58,8 @@ type cronParams struct {
 }
 
 func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var p cronParams
-	if err := json.Unmarshal([]byte(input), &p); err != nil {
+	p, err := ParseInput[cronParams](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

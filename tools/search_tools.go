@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -44,8 +43,8 @@ type searchToolsArgs struct {
 }
 
 func (t *SearchToolsTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args searchToolsArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	args, err := ParseInput[searchToolsArgs](input)
+	if err != nil {
 		return &ToolResult{
 			Summary: "Failed to parse arguments",
 			Detail:  fmt.Sprintf("Error: %v", err),

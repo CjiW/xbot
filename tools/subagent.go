@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"xbot/llm"
@@ -60,13 +59,13 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 }
 
 func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := ParseInput[struct {
 		Task        string `json:"task"`
 		Role        string `json:"role"`
 		Interactive bool   `json:"interactive"`
 		Action      string `json:"action"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

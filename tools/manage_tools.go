@@ -69,8 +69,8 @@ type manageToolsArgs struct {
 }
 
 func (t *ManageTools) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args manageToolsArgs
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	args, err := ParseInput[manageToolsArgs](input)
+	if err != nil {
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
 

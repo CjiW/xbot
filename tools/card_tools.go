@@ -66,9 +66,15 @@ func (t *CardCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		Template string `json:"template"`
 	}
 	if input != "" && input != "{}" {
-		if err := json.Unmarshal([]byte(input), &args); err != nil {
+		parsed, err := ParseInput[struct {
+			Title    string `json:"title"`
+			Subtitle string `json:"subtitle"`
+			Template string `json:"template"`
+		}](input)
+		if err != nil {
 			return nil, fmt.Errorf("parse arguments: %w", err)
 		}
+		args = parsed
 	}
 
 	session := t.builder.CreateSession(ctx.Channel, ctx.ChatID, ctx.SendFunc)
@@ -129,7 +135,7 @@ func (t *CardAddContentTool) Parameters() []llm.ToolParam {
 }
 
 func (t *CardAddContentTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args struct {
+	args, err := ParseInput[struct {
 		CardID     string `json:"card_id"`
 		Type       string `json:"type"`
 		Content    string `json:"content"`
@@ -140,8 +146,8 @@ func (t *CardAddContentTool) Execute(ctx *ToolContext, input string) (*ToolResul
 		UserIDs    string `json:"user_ids"`
 		Properties string `json:"properties"`
 		ParentID   string `json:"parent_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
 
@@ -289,7 +295,7 @@ func (t *CardAddInteractiveTool) Parameters() []llm.ToolParam {
 }
 
 func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args struct {
+	args, err := ParseInput[struct {
 		CardID     string `json:"card_id"`
 		Type       string `json:"type"`
 		Name       string `json:"name"`
@@ -299,8 +305,8 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		Value      string `json:"value"`
 		Properties string `json:"properties"`
 		ParentID   string `json:"parent_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
 

@@ -2,7 +2,6 @@ package tools
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,8 +63,8 @@ const (
 )
 
 func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params grepParams
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	params, err := ParseInput[grepParams](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

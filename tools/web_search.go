@@ -82,13 +82,13 @@ func (t *WebSearchTool) Execute(ctx *ToolContext, input string) (*ToolResult, er
 	}
 
 	// 解析输入参数
-	var params struct {
+	params, err := ParseInput[struct {
 		Query         string `json:"query"`
 		SearchDepth   string `json:"search_depth"`
 		MaxResults    int    `json:"max_results"`
 		IncludeAnswer *bool  `json:"include_answer"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

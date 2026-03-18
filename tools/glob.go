@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,11 +33,11 @@ func (t *GlobTool) Parameters() []llm.ToolParam {
 }
 
 func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params struct {
+	params, err := ParseInput[struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
-	}
-	if err := json.Unmarshal([]byte(input), &params); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 

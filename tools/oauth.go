@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"xbot/llm"
 	"xbot/oauth"
@@ -52,12 +51,12 @@ func (t *OAuthTool) Parameters() []llm.ToolParam {
 
 // Execute sends an OAuth authorization card.
 func (t *OAuthTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args struct {
+	args, err := ParseInput[struct {
 		Provider string   `json:"provider"`
 		Reason   string   `json:"reason"`
 		Scopes   []string `json:"scopes"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
+	}](input)
+	if err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 

@@ -292,11 +292,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				} else {
 					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 				}
-				if allOk {
-					log.Ctx(ctx).Info("Auto compression persisted to session")
-				} else {
-					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
-				}
 			}
 		}
 	}

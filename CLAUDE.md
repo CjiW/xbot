@@ -26,7 +26,7 @@ Channel → MessageBus → Agent → LLM → Tools
 - **bus/** — Inbound/Outbound message channels
 - **channel/** — IM channels (feishu, qq), dispatcher routes messages
 - **agent/** — Agent loop: LLM → tool calls → response
-- **llm/** — LLM clients (OpenAI-compatible, CodeBuddy, Anthropic)
+- **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry; implement `Tool` interface and register in `DefaultRegistry()`
 - **memory/** — Memory providers: `flat` (default) or `letta` (three-tier MemGPT)
 
@@ -49,7 +49,7 @@ Channel → MessageBus → Agent → LLM → Tools
 ## Configuration
 
 Environment variables (or `.env`):
-- `LLM_PROVIDER` — `openai`, `codebuddy`, or `anthropic`
+- `LLM_PROVIDER` — `openai` or `anthropic`
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 - `MEMORY_PROVIDER` — `flat` (default) or `letta`
 - `FEISHU_ENABLED`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`

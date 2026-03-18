@@ -317,15 +317,6 @@ func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
 		})
-	case "codebuddy":
-		inner = llm.NewCodeBuddyLLM(llm.CodeBuddyConfig{
-			BaseURL:      cfg.BaseURL,
-			Token:        cfg.APIKey,
-			UserID:       cfg.UserID,
-			EnterpriseID: cfg.EnterpriseID,
-			Domain:       cfg.Domain,
-			DefaultModel: cfg.Model,
-		})
 	case "anthropic":
 		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
 			BaseURL:      cfg.BaseURL,

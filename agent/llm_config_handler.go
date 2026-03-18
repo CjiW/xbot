@@ -12,7 +12,7 @@ import (
 const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [thinking_mode=<mode>]
 
 参数说明:
-  provider      - LLM 提供商: codebuddy、anthropic 或 openai/deepseek/zhipu 等 OpenAI 兼容服务
+  provider      - LLM 提供商: anthropic 或 openai/deepseek/zhipu 等 OpenAI 兼容服务
   base_url      - API 基础地址
   api_key       - API 密钥
   model         - 模型名称（可选）
@@ -28,11 +28,6 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
                     - adaptive: 自适应模式（Opus 4.6/Sonnet 4.6）
                     - {"type":"enabled","budget_tokens":10000}
                     - {"type":"adaptive","effort":"high"}  (low/medium/high)
-
-CodeBuddy 额外参数:
-  user_id       - 用户 ID
-  enterprise_id - 企业 ID
-  domain        - 域名
 
 示例:
   # OpenAI 格式（适用于 OpenAI、DeepSeek、SiliconFlow 等）
@@ -56,9 +51,6 @@ CodeBuddy 额外参数:
 
   # Anthropic Claude Adaptive Thinking (Opus 4.6/Sonnet 4.6)
   /set-llm provider=anthropic base_url=https://api.anthropic.com api_key=sk-ant-xxx model=claude-sonnet-4-20250514 thinking_mode=adaptive
-
-  # CodeBuddy（专有 API）
-  /set-llm provider=codebuddy base_url=https://codebuddy.xxx.com api_key=xxx user_id=123 enterprise_id=456
 
   # 限制上下文大小
   /set-llm provider=openai base_url=https://api.openai.com/v1 api_key=sk-xxx model=gpt-4 max_context=8000
@@ -111,12 +103,6 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			} else {
 				parseErrors = true
 			}
-		case "user_id":
-			cfg.UserID = value
-		case "enterprise_id":
-			cfg.EnterpriseID = value
-		case "domain":
-			cfg.Domain = value
 		case "thinking_mode":
 			// 支持: enabled, disabled, adaptive, 自定义 JSON 字符串
 			if value == "enabled" || value == "disabled" || value == "adaptive" || (len(value) > 0 && value[0] == '{') {
@@ -208,15 +194,6 @@ func (a *Agent) handleGetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		extraFields += fmt.Sprintf("\n- Thinking Mode: %s", cfg.ThinkingMode)
 	} else {
 		extraFields += "\n- Thinking Mode: auto"
-	}
-	if cfg.UserID != "" {
-		extraFields += fmt.Sprintf("\n- User ID: %s", cfg.UserID)
-	}
-	if cfg.EnterpriseID != "" {
-		extraFields += fmt.Sprintf("\n- Enterprise ID: %s", cfg.EnterpriseID)
-	}
-	if cfg.Domain != "" {
-		extraFields += fmt.Sprintf("\n- Domain: %s", cfg.Domain)
 	}
 
 	return &bus.OutboundMessage{

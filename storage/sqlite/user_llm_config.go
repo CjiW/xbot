@@ -11,15 +11,12 @@ import (
 // UserLLMConfig 用户 LLM 配置
 type UserLLMConfig struct {
 	SenderID     string    // 用户 ID
-	Provider     string    // LLM 提供商: "openai", "codebuddy", "deepseek" 等
+	Provider     string    // LLM 提供商: "openai", "deepseek", "anthropic" 等
 	BaseURL      string    // API Base URL
 	APIKey       string    // API Key
 	Model        string    // 默认模型
 	MaxContext   int       // 最大上下文 token 数（0 表示不限制）
 	ThinkingMode string    // 思考模式: "" (自动), "enabled", "disabled"
-	UserID       string    // CodeBuddy 专用: X-User-Id
-	EnterpriseID string    // CodeBuddy 专用: X-Enterprise-Id
-	Domain       string    // CodeBuddy 专用: X-Domain
 	CreatedAt    time.Time // 创建时间
 	UpdatedAt    time.Time // 更新时间
 }
@@ -42,13 +39,12 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	var createdAt, updatedAt sql.NullTime
 	var thinkingMode sql.NullString
 	err := conn.QueryRow(`
-		SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, user_id, enterprise_id, domain, created_at, updated_at
+		SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at
 		FROM user_llm_configs
 		WHERE sender_id = ?
 	`, senderID).Scan(
 		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model, &cfg.MaxContext,
-		&thinkingMode, &cfg.UserID, &cfg.EnterpriseID, &cfg.Domain,
-		&createdAt, &updatedAt,
+		&thinkingMode, &createdAt, &updatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -78,8 +74,8 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 
 	now := time.Now()
 	_, err := conn.Exec(`
-		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, thinking_mode, user_id, enterprise_id, domain, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(sender_id) DO UPDATE SET
 			provider = excluded.provider,
 			base_url = excluded.base_url,
@@ -87,13 +83,8 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 			model = excluded.model,
 			max_context = excluded.max_context,
 			thinking_mode = excluded.thinking_mode,
-			user_id = excluded.user_id,
-			enterprise_id = excluded.enterprise_id,
-			domain = excluded.domain,
 			updated_at = excluded.updated_at
-	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode,
-		cfg.UserID, cfg.EnterpriseID, cfg.Domain, now, now,
-	)
+	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode, now, now)
 
 	if err != nil {
 		return fmt.Errorf("upsert user llm config: %w", err)

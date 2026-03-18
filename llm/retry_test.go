@@ -42,16 +42,11 @@ func TestIsRetryableError(t *testing.T) {
 		{"503 OpenAI", errors.New(`POST "https://api.openai.com/v1/chat": 503 Service Unavailable`), true},
 		{"504 OpenAI", errors.New(`POST "https://api.openai.com/v1/chat": 504 Gateway Timeout`), true},
 
-		// HTTP 状态码 — CodeBuddy 格式: `status=NNN`
-		{"429 CodeBuddy", errors.New("CodeBuddy API error: status=429, body=rate limited"), true},
-		{"502 CodeBuddy", errors.New("CodeBuddy API error: status=502, body=bad gateway"), true},
-
 		// 不可重试的 4xx
 		{"400 OpenAI", errors.New(`POST "url": 400 Bad Request`), false},
 		{"401 OpenAI", errors.New(`POST "url": 401 Unauthorized`), false},
 		{"403 OpenAI", errors.New(`POST "url": 403 Forbidden`), false},
 		{"404 OpenAI", errors.New(`POST "url": 404 Not Found`), false},
-		{"400 CodeBuddy", errors.New("CodeBuddy API error: status=400, body=invalid"), false},
 
 		// 普通错误 — 不重试
 		{"generic error", errors.New("something went wrong"), false},

@@ -42,6 +42,9 @@ type MessageContext struct {
 	// WorkDir 工作目录（展示给 LLM 的路径）
 	WorkDir string
 
+	// CWD 当前工作目录（Agent 运行时的 cwd，可能与 WorkDir 不同）
+	CWD string
+
 	// SenderName 发送者名称
 	SenderName string
 

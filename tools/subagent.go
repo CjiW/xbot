@@ -104,7 +104,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}
 
-	if ctx == nil || ctx.Manager == nil {
+	if ctx.Manager == nil {
 		return nil, fmt.Errorf("sub-agent capability not available")
 	}
 

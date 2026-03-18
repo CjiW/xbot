@@ -238,6 +238,13 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
+	// CWD 继承父 Agent 的当前目录，无则默认 workDir
+	cwd := parentCtx.CurrentDir
+	if cwd == "" {
+		cwd = workDir
+	}
+	cwdPart := "\n- 当前目录：" + cwd
+
 	// role.SystemPrompt 作为角色专有能力描述（非通用 prompt）
 	rolePrompt := strings.TrimSpace(systemPrompt)
 	if rolePrompt == "" {
@@ -247,9 +254,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 通用模板 + 角色描述（有白名单时使用精简模板）
 	var sysPrompt string
 	if len(allowedTools) > 0 {
-		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplateConcise, workDir, roleName, parentAgentID, now)
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplateConcise, workDir, cwdPart, roleName, parentAgentID, now)
 	} else {
-		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, parentAgentID, now)
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplate, workDir, cwdPart, roleName, parentAgentID, now)
 	}
 	if interactive {
 		sysPrompt += subagentExecutionModeInteractive
@@ -303,6 +310,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		DataDir:          parentCtx.DataDir,
 		SandboxEnabled:   parentCtx.SandboxEnabled,
 		PreferredSandbox: parentCtx.PreferredSandbox,
+		InitialCWD:       parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
 		MaxIterations: 100,
 		LLMTimeout:    3 * time.Minute,

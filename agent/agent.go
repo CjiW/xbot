@@ -1061,6 +1061,14 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		msg.SenderID,
 		msg.ChatID,
 	)
+
+	// 注入当前工作目录（CWD）到 prompt
+	// sandbox 模式下 CWD 已经是 sandbox 内路径，无 cd 时默认为 promptWorkDir
+	mc.CWD = tenantSession.GetCurrentDir()
+	if mc.CWD == "" {
+		mc.CWD = promptWorkDir
+	}
+
 	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(msg.SenderID))
 	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(msg.SenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())

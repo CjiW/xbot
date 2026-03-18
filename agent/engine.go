@@ -48,6 +48,7 @@ type RunConfig struct {
 	DataDir          string   // 数据持久化目录
 	SandboxEnabled   bool     // 是否启用命令沙箱
 	PreferredSandbox string   // 沙箱类型（docker 优先）
+	InitialCWD       string   // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
 	MaxIterations int // 0 = 使用默认值 100
@@ -872,6 +873,9 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.SetCurrentDir = func(dir string) {
 			cfg.Session.SetCurrentDir(dir)
 		}
+	} else if cfg.InitialCWD != "" {
+		// SubAgent 继承父 Agent 的 CWD（无 session 时使用 InitialCWD）
+		tc.CurrentDir = cfg.InitialCWD
 	}
 
 	return tc

@@ -249,6 +249,9 @@ type Agent struct {
 	// key: "channel:chatID/roleName" -> *interactiveAgent
 	interactiveSubAgents sync.Map
 	interactiveMu        sync.Mutex // protects spawn race (map check/store) in SpawnInteractiveSession; NOT held during Run()
+
+	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
+	hookChain *tools.HookChain
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -438,6 +441,12 @@ func New(cfg Config) *Agent {
 		consolidateCh:        make(chan consolidateRequest, 64),
 		consolidateStopCh:    make(chan struct{}),
 		consolidating:        make(map[string]bool),
+
+		// Initialize hook chain with default hooks (LoggingHook + TimingHook)
+		hookChain: tools.NewHookChain(
+			tools.NewLoggingHook(),
+			tools.NewTimingHook(),
+		),
 	}
 
 	// 初始化指令注册表
@@ -472,6 +481,12 @@ func New(cfg Config) *Agent {
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
 func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
+}
+
+// ToolHookChain returns the Agent's shared hook chain for tool execution.
+// Callers can use this to add/remove hooks at runtime.
+func (a *Agent) ToolHookChain() *tools.HookChain {
+	return a.hookChain
 }
 
 // GetCardBuilder returns the CardBuilder for card callback handling.

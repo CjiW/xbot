@@ -193,8 +193,7 @@ func sandboxBaseDir(ctx *ToolContext) string {
 }
 
 // shellEscape 对字符串进行 shell 单引号转义，防止命令注入。
-// 将字符串中的单引号替换为 '\''（结束单引号、转义单引号、开始新单引号）。
+// 将字符串中的单引号替换为 '\”（结束单引号、转义单引号、开始新单引号）。
 func shellEscape(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
 }
-

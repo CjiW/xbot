@@ -19,7 +19,6 @@ func NewMemoryService(db *DB) *MemoryService {
 }
 
 // ReadLongTerm retrieves the long-term memory content for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) ReadLongTerm(ctx context.Context, tenantID int64) (string, error) {
 	conn := s.db.Conn()
 	var content sql.NullString
@@ -41,7 +40,6 @@ func (s *MemoryService) ReadLongTerm(ctx context.Context, tenantID int64) (strin
 }
 
 // WriteLongTerm saves or updates the long-term memory content for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) WriteLongTerm(ctx context.Context, tenantID int64, content string) error {
 	conn := s.db.Conn()
 	_, err := conn.ExecContext(ctx, `
@@ -56,7 +54,6 @@ func (s *MemoryService) WriteLongTerm(ctx context.Context, tenantID int64, conte
 }
 
 // AppendHistory adds an entry to the event history for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) AppendHistory(ctx context.Context, tenantID int64, entry string) error {
 	conn := s.db.Conn()
 	_, err := conn.ExecContext(ctx,
@@ -71,7 +68,6 @@ func (s *MemoryService) AppendHistory(ctx context.Context, tenantID int64, entry
 }
 
 // GetState retrieves the consolidation state for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) GetState(ctx context.Context, tenantID int64) (lastConsolidated int, err error) {
 	conn := s.db.Conn()
 	err = conn.QueryRowContext(ctx,
@@ -92,7 +88,6 @@ func (s *MemoryService) GetState(ctx context.Context, tenantID int64) (lastConso
 }
 
 // SetState updates the consolidation state for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) SetState(ctx context.Context, tenantID int64, lastConsolidated int) error {
 	conn := s.db.Conn()
 	_, err := conn.ExecContext(ctx, `
@@ -106,7 +101,6 @@ func (s *MemoryService) SetState(ctx context.Context, tenantID int64, lastConsol
 }
 
 // GetHistoryEntries retrieves recent history entries for a tenant.
-// TODO(P2-14): Use ctx for query context propagation instead of context.Background().
 func (s *MemoryService) GetHistoryEntries(ctx context.Context, tenantID int64, limit int) ([]string, error) {
 	conn := s.db.Conn()
 	rows, err := conn.QueryContext(ctx, `

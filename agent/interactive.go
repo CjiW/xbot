@@ -38,7 +38,11 @@ func (a *Agent) cleanupExpiredSessions() {
 			a.interactiveSubAgents.Delete(k)
 			return true
 		}
-		if now.Sub(ia.lastUsed) > interactiveSessionTTL {
+		// 读取 lastUsed 需要加锁，避免与 SendToInteractiveSession 的写入竞争
+		ia.mu.Lock()
+		lastUsed := ia.lastUsed
+		ia.mu.Unlock()
+		if now.Sub(lastUsed) > interactiveSessionTTL {
 			key := k.(string)
 			log.WithFields(log.Fields{
 				"key":       key,

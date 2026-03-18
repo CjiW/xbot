@@ -111,7 +111,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 
 	return tools.NewResultWithTips(
 		fmt.Sprintf("Document content:\n\n%s", markdown),
-		"Some special nodes e.g. mermaid gragh may disappear in markdown. You can use `feishu_docx_get_block` to get detailed block content for those nodes.",
+		"Some special nodes e.g. mermaid graph may disappear in markdown. You can use `feishu_docx_get_block` to get detailed block content for those nodes.",
 	), nil
 }
 

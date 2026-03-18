@@ -153,6 +153,10 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 		block.AddOns = docxv1.NewAddOnsBuilder().ComponentTypeId(MermaidAddOnsComponentTypeID).Record(
 			fmt.Sprintf(`{"data":%s,"theme":"default","view":"codeChart"}`, strconv.Quote(content)),
 		).Build()
+		// 确保 BlockType 已初始化，避免 nil pointer panic
+		if block.BlockType == nil {
+			block.BlockType = new(int)
+		}
 		*block.BlockType = BlockTypeAddOns
 	}
 }

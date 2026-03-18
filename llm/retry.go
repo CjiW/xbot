@@ -65,15 +65,18 @@ func NewRetryLLM(inner LLM, cfg RetryConfig) *RetryLLM {
 
 // acquire 获取并发信号量，返回释放函数。
 // 如果 sem 为 nil（不限制并发），返回空操作函数。
+// 注意：返回的 release 函数仅在成功获取信号量后才执行释放，
+// 如果 ctx 已取消，返回空操作函数避免死锁。
 func (r *RetryLLM) acquire(ctx context.Context) func() {
 	if r.sem == nil {
 		return func() {}
 	}
 	select {
 	case r.sem <- struct{}{}:
+		return func() { <-r.sem }
 	case <-ctx.Done():
+		return func() {} // ctx 已取消，返回空操作避免死锁
 	}
-	return func() { <-r.sem }
 }
 
 // IsInputTooLongError detects 400-class errors caused by the input exceeding the
@@ -168,7 +171,7 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 
 			// 429 额外指数退避：避免短时间内重复触发速率限制
 			if isRateLimitError(err) {
-				extraDelay := time.Duration(1<<min(n, 5)) * time.Second // 2s, 4s, 8s, 16s, 32s
+				extraDelay := time.Duration(2<<min(n, 4)) * time.Second // 2s, 4s, 8s, 16s, 32s
 				logrus.Ctx(ctx).WithField("delay", extraDelay).Warn("[LLM] Rate limited, backing off")
 				select {
 				case <-time.After(extraDelay):

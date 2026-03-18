@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// TestCoreMemoryService_PersonaGlobal tests that persona is always stored at tenantID=0 (global shared).
-func TestCoreMemoryService_PersonaGlobal(t *testing.T) {
+// TestCoreMemoryService_PersonaPerTenant tests that persona is per-tenant isolated.
+// Each tenant/Agent/SubAgent has its own independent persona block.
+func TestCoreMemoryService_PersonaPerTenant(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
 	db, err := Open(dbPath)
 	if err != nil {
@@ -32,12 +33,12 @@ func TestCoreMemoryService_PersonaGlobal(t *testing.T) {
 		t.Fatalf("SetBlock persona tenant1 failed: %v", err)
 	}
 
-	// Set persona from tenant2 (should overwrite tenant1's)
+	// Set persona from tenant2 (should NOT overwrite tenant1's - they are isolated)
 	if err := svc.SetBlock(tenantID2, "persona", "Persona from tenant2", ""); err != nil {
 		t.Fatalf("SetBlock persona tenant2 failed: %v", err)
 	}
 
-	// Both tenants should read the same (last write wins)
+	// Each tenant should read its own persona
 	content1, _, err := svc.GetBlock(tenantID1, "persona", "")
 	if err != nil {
 		t.Fatalf("GetBlock persona tenant1 failed: %v", err)
@@ -47,18 +48,22 @@ func TestCoreMemoryService_PersonaGlobal(t *testing.T) {
 		t.Fatalf("GetBlock persona tenant2 failed: %v", err)
 	}
 
-	if content1 != content2 {
-		t.Errorf("Persona should be global, got tenant1: %q, tenant2: %q", content1, content2)
+	// Personas should be different (per-tenant isolation)
+	if content1 == content2 {
+		t.Errorf("Persona should be per-tenant isolated, both got: %q", content1)
 	}
-	if content1 != "Persona from tenant2" {
-		t.Errorf("Expected last write 'Persona from tenant2', got: %q", content1)
+	if content1 != "Persona from tenant1" {
+		t.Errorf("Expected 'Persona from tenant1', got: %q", content1)
+	}
+	if content2 != "Persona from tenant2" {
+		t.Errorf("Expected 'Persona from tenant2', got: %q", content2)
 	}
 
-	// GetAllBlocks also returns same persona
+	// GetAllBlocks also returns different persona per tenant
 	blocks1, _ := svc.GetAllBlocks(tenantID1, "")
 	blocks2, _ := svc.GetAllBlocks(tenantID2, "")
-	if blocks1["persona"] != blocks2["persona"] {
-		t.Errorf("GetAllBlocks persona should be same: %q vs %q", blocks1["persona"], blocks2["persona"])
+	if blocks1["persona"] == blocks2["persona"] {
+		t.Errorf("GetAllBlocks persona should be different: %q vs %q", blocks1["persona"], blocks2["persona"])
 	}
 }
 
@@ -355,8 +360,9 @@ func TestCoreMemoryService_DifferentUsersDifferentHuman(t *testing.T) {
 	}
 }
 
-// TestCoreMemoryService_MigrationKeepsLongest tests that migration keeps the longest content.
-func TestCoreMemoryService_MigrationKeepsLongest(t *testing.T) {
+// TestCoreMemoryService_MigrationKeepsLongestHuman tests that migration keeps the longest human content.
+// Note: persona is no longer migrated - each tenant keeps its own persona.
+func TestCoreMemoryService_MigrationKeepsLongestHuman(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
 	db, err := Open(dbPath)
 	if err != nil {
@@ -382,7 +388,7 @@ func TestCoreMemoryService_MigrationKeepsLongest(t *testing.T) {
 		t.Fatalf("Failed to create table: %v", err)
 	}
 
-	// Insert legacy persona data in different tenants
+	// Insert legacy persona data in different tenants (these should stay at their original tenantID)
 	_, err = conn.Exec(`
 		INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
 		VALUES (1, 'persona', '', 'Short', 2000)
@@ -416,23 +422,14 @@ func TestCoreMemoryService_MigrationKeepsLongest(t *testing.T) {
 
 	// Now create service and init (triggers migration)
 	svc := NewCoreMemoryService(db)
-	tenantID := int64(100)
 	userID := "ou_123"
 
-	if err := svc.InitBlocks(tenantID, userID); err != nil {
+	if err := svc.InitBlocks(100, userID); err != nil {
 		t.Fatalf("InitBlocks failed: %v", err)
 	}
 
-	// Check migration result - should keep longest
-	personaContent, _, err := svc.GetBlock(tenantID, "persona", "")
-	if err != nil {
-		t.Fatalf("GetBlock persona failed: %v", err)
-	}
-	if personaContent != "Much longer persona content" {
-		t.Errorf("Expected longest persona, got: %q", personaContent)
-	}
-
-	humanContent, _, err := svc.GetBlock(tenantID, "human", userID)
+	// Check migration result for human - should keep longest at tenantID=0
+	humanContent, _, err := svc.GetBlock(100, "human", userID)
 	if err != nil {
 		t.Fatalf("GetBlock human failed: %v", err)
 	}
@@ -440,16 +437,43 @@ func TestCoreMemoryService_MigrationKeepsLongest(t *testing.T) {
 		t.Errorf("Expected longest human, got: %q", humanContent)
 	}
 
-	// Verify old data is cleaned up
+	// Verify persona data is NOT migrated - each tenant keeps its own
+	// Tenant 1's persona should still be at tenantID=1
+	var persona1 string
+	err = conn.QueryRow(`
+		SELECT content FROM core_memory_blocks 
+		WHERE tenant_id = 1 AND block_name = 'persona' AND user_id = ''
+	`).Scan(&persona1)
+	if err != nil {
+		t.Fatalf("Failed to query persona1: %v", err)
+	}
+	if persona1 != "Short" {
+		t.Errorf("Expected persona1 'Short', got: %q", persona1)
+	}
+
+	// Tenant 2's persona should still be at tenantID=2
+	var persona2 string
+	err = conn.QueryRow(`
+		SELECT content FROM core_memory_blocks 
+		WHERE tenant_id = 2 AND block_name = 'persona' AND user_id = ''
+	`).Scan(&persona2)
+	if err != nil {
+		t.Fatalf("Failed to query persona2: %v", err)
+	}
+	if persona2 != "Much longer persona content" {
+		t.Errorf("Expected persona2 'Much longer persona content', got: %q", persona2)
+	}
+
+	// Verify old human data is cleaned up (only human, not persona)
 	var count int
 	err = conn.QueryRow(`
 		SELECT COUNT(*) FROM core_memory_blocks 
-		WHERE block_name IN ('persona', 'human') AND tenant_id != 0
+		WHERE block_name = 'human' AND tenant_id != 0
 	`).Scan(&count)
 	if err != nil && err != sql.ErrNoRows {
 		t.Fatalf("Failed to check old data: %v", err)
 	}
 	if count != 0 {
-		t.Errorf("Expected 0 legacy records, got: %d", count)
+		t.Errorf("Expected 0 legacy human records, got: %d", count)
 	}
 }

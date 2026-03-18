@@ -130,16 +130,18 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 // executeInSandbox 在沙箱内执行编辑操作
 func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
+	sandboxBase := sandboxBaseDir(ctx)
+
 	// 将用户输入的路径转换为容器内路径
 	sandboxPath := params.Path
-	if !strings.HasPrefix(params.Path, "/workspace/") && !strings.HasPrefix(params.Path, "/") {
-		sandboxPath = "/workspace/" + params.Path
-	} else if strings.HasPrefix(params.Path, "/workspace/") {
+	if !strings.HasPrefix(params.Path, sandboxBase+"/") && !strings.HasPrefix(params.Path, "/") {
+		sandboxPath = sandboxBase + "/" + params.Path
+	} else if strings.HasPrefix(params.Path, sandboxBase+"/") {
 		sandboxPath = params.Path
 	} else if strings.HasPrefix(params.Path, "/") && ctx.WorkspaceRoot != "" {
 		rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
 		if err == nil && !strings.HasPrefix(rel, "..") {
-			sandboxPath = "/workspace/" + rel
+			sandboxPath = sandboxBase + "/" + rel
 		}
 	}
 

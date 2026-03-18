@@ -69,3 +69,48 @@ func TestUserPaths_SenderScoped(t *testing.T) {
 		t.Fatalf("different sender should map to different MCP config directory")
 	}
 }
+
+func TestSandboxBaseDir(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  *ToolContext
+		want string
+	}{
+		{"nil ctx", nil, "/workspace"},
+		{"empty SandboxWorkDir", &ToolContext{SandboxWorkDir: ""}, "/workspace"},
+		{"custom SandboxWorkDir", &ToolContext{SandboxWorkDir: "/data/ws"}, "/data/ws"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sandboxBaseDir(tt.ctx)
+			if got != tt.want {
+				t.Errorf("sandboxBaseDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShellEscape(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", "hello"},
+		{"hello world", "hello world"},
+		{"it's", "it'\\''s"},
+		{"\"", "\""},
+		{"\\", "\\"},
+		{"$HOME", "$HOME"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := shellEscape(tt.input)
+			if got != tt.want {
+				t.Errorf("shellEscape(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

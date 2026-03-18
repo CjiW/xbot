@@ -182,3 +182,18 @@ func HostToSandboxPath(ctx *ToolContext, hostPath string) string {
 	}
 	return filepath.Join(ctx.SandboxWorkDir, rel)
 }
+
+// sandboxBaseDir 返回沙箱内的工作目录前缀。
+// 优先使用 ctx.SandboxWorkDir，兜底为 "/workspace"。
+func sandboxBaseDir(ctx *ToolContext) string {
+	if ctx != nil && ctx.SandboxWorkDir != "" {
+		return ctx.SandboxWorkDir
+	}
+	return "/workspace"
+}
+
+// shellEscape 对字符串进行 shell 单引号转义，防止命令注入。
+// 将字符串中的单引号替换为 '\”（结束单引号、转义单引号、开始新单引号）。
+func shellEscape(s string) string {
+	return strings.ReplaceAll(s, "'", "'\\''")
+}

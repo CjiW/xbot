@@ -108,6 +108,9 @@ type RunConfig struct {
 	// InteractiveCallbacks Interactive SubAgent 回调（nil = 不支持 interactive）。
 	// 主 Agent 注入，SubAgent 不注入。
 	InteractiveCallbacks *InteractiveCallbacks
+
+	// HookChain tool execution hook chain (nil = no hooks).
+	HookChain *tools.HookChain
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -520,7 +523,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			log.Ctx(ctx).WithFields(log.Fields{
 				"tool": tc.Name,
 				"id":   tc.ID,
-			}).Infof("Tool call: %s(%s)", tc.Name, argPreview)
+			}).Debugf("Tool call: %s(%s)", tc.Name, argPreview)
 
 			// 工具执行加超时（SubAgent 工具不加超时）
 			var execCtx context.Context
@@ -545,7 +548,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
-				}).WithError(execErr).Warn("Tool failed")
+				}).WithError(execErr).Debug("Tool failed (hook also logged)")
 				execResults[entry.index].content = fmt.Sprintf("Error: %v\n\nPlease fix the issue and try again with corrected parameters.", execErr)
 				execResults[entry.index].llmContent = execResults[entry.index].content
 
@@ -567,7 +570,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
-				}).Infof("Tool done: %s", resultPreview)
+				}).Debugf("Tool done: %s", resultPreview)
 
 				if autoNotify {
 					icon := "✅"
@@ -681,8 +684,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	})
 }
 
-// defaultToolExecutor 创建默认的工具执行器（从 Registry 查找并执行）。
-// 用于 SubAgent 等不需要 session MCP / 激活检查的场景。
+// defaultToolExecutor creates the default tool executor (looks up from Registry and executes).
+// Used for SubAgent and other scenarios that don't need session MCP / activation checks.
 func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		tool, ok := cfg.Tools.Get(tc.Name)
@@ -691,7 +694,24 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 		}
 
 		toolCtx := buildToolContext(ctx, cfg)
-		return tool.Execute(toolCtx, tc.Arguments)
+
+		// Run pre-tool hooks
+		if cfg.HookChain != nil {
+			if err := cfg.HookChain.RunPre(ctx, tc.Name, tc.Arguments); err != nil {
+				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
+			}
+		}
+
+		start := time.Now()
+		result, err := tool.Execute(toolCtx, tc.Arguments)
+		elapsed := time.Since(start)
+
+		// Run post-tool hooks (always, even on error)
+		if cfg.HookChain != nil {
+			cfg.HookChain.RunPost(ctx, tc.Name, tc.Arguments, result, err, elapsed)
+		}
+
+		return result, err
 	}
 }
 

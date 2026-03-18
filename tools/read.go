@@ -51,38 +51,40 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 // executeInSandbox 在沙箱容器内执行 cat 命令
 func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolResult, error) {
+	sandboxBase := sandboxBaseDir(ctx)
+
 	// 将用户输入的路径转换为容器内路径
 	sandboxPath := filePath
-	if !strings.HasPrefix(filePath, "/workspace/") && !strings.HasPrefix(filePath, "/") {
+	if !strings.HasPrefix(filePath, sandboxBase+"/") && !strings.HasPrefix(filePath, "/") {
 		// 相对路径，优先使用 CurrentDir（PWD 工具优化）
 		if ctx != nil && ctx.CurrentDir != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
 			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
 			if err == nil {
 				// 从 CurrentDir 解析相对路径
-				sandboxPath = "/workspace/" + filepath.Join(rel, filePath)
+				sandboxPath = sandboxBase + "/" + filepath.Join(rel, filePath)
 			} else {
-				// fallback 到 /workspace
-				sandboxPath = "/workspace/" + filePath
+				// fallback 到 sandboxBase
+				sandboxPath = sandboxBase + "/" + filePath
 			}
 		} else {
-			// 相对路径，假设相对于 /workspace
-			sandboxPath = "/workspace/" + filePath
+			// 相对路径，假设相对于 sandboxBase
+			sandboxPath = sandboxBase + "/" + filePath
 		}
-	} else if strings.HasPrefix(filePath, "/workspace/") {
+	} else if strings.HasPrefix(filePath, sandboxBase+"/") {
 		sandboxPath = filePath
 	} else if strings.HasPrefix(filePath, "/") {
-		// 绝对路径，检查是否在 /workspace 内
+		// 绝对路径，检查是否在 workspace 内
 		if ctx.WorkspaceRoot != "" {
 			// 尝试转换为容器内路径
 			rel, err := filepath.Rel(ctx.WorkspaceRoot, filePath)
 			if err == nil && !strings.HasPrefix(rel, "..") {
-				sandboxPath = "/workspace/" + rel
+				sandboxPath = sandboxBase + "/" + rel
 			}
 		}
 	}
 
 	// 在容器内执行 cat
-	cmd := fmt.Sprintf("cat '%s'", sandboxPath)
+	cmd := fmt.Sprintf("cat '%s'", shellEscape(sandboxPath))
 	output, err := RunInSandboxWithShell(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file in sandbox: %v, output: %s", err, output)

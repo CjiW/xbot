@@ -73,16 +73,17 @@ func (t *SkillTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 }
 
 // resolveSkill finds the skill's host-side directory and returns the container-side base path.
-// Search order: user private (/workspace/skills/) > global synced (/workspace/.skills/)
+// Search order: user private (workspace/skills/) > global synced (workspace/.skills/)
 // Returns ("", "") if not found.
 func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (hostDir, containerBase string) {
 	type candidate struct {
 		hostRoot      string
 		containerRoot string
 	}
+	sandboxBase := sandboxBaseDir(ctx)
 	candidates := []candidate{
-		{filepath.Join(ctx.WorkspaceRoot, "skills"), "/workspace/skills"},
-		{filepath.Join(ctx.WorkspaceRoot, ".skills"), "/workspace/.skills"},
+		{filepath.Join(ctx.WorkspaceRoot, "skills"), filepath.Join(sandboxBase, "skills")},
+		{filepath.Join(ctx.WorkspaceRoot, ".skills"), filepath.Join(sandboxBase, ".skills")},
 	}
 
 	for _, c := range candidates {

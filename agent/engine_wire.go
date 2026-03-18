@@ -119,6 +119,9 @@ func (a *Agent) buildMainRunConfig(
 		return a.spawnSubAgent(ctx, inMsg)
 	}
 
+	// HookChain — inherit from Agent
+	cfg.HookChain = a.hookChain
+
 	// InteractiveCallbacks — interactive SubAgent 支持
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,
@@ -184,6 +187,9 @@ func (a *Agent) buildCronRunConfig(
 		},
 
 		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
+
+		// HookChain — inherit from Agent
+		HookChain: a.hookChain,
 	}
 }
 
@@ -374,6 +380,9 @@ func (a *Agent) buildSubAgentRunConfig(
 			return a.spawnSubAgent(ctx, msg)
 		}
 	}
+	// HookChain — SubAgent inherits parent Agent's hook chain
+	cfg.HookChain = a.hookChain
+
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,
@@ -435,6 +444,9 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	// Pre-build Letta memory extras (involves GetOrCreateSession + LettaMemory lookup).
 	cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
 
+	// Inherit hook chain from Agent.
+	cfg.HookChain = a.hookChain
+
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		// 1. 工具查找：session MCP 优先，然后全局注册表
 		var tool tools.Tool
@@ -471,9 +483,27 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 			return nil, fmt.Errorf("create user workspace: %w", err)
 		}
 
-		// 5. 构建 ToolContext（统一路径，只有 ctx 变化）
+		// 5. Run pre-tool hooks
+		if cfg.HookChain != nil {
+			if err := cfg.HookChain.RunPre(ctx, tc.Name, tc.Arguments); err != nil {
+				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
+			}
+		}
+
+		// 6. 构建 ToolContext（统一路径，只有 ctx 变化）
 		toolCtx := buildToolContext(ctx, cfg)
-		return tool.Execute(toolCtx, tc.Arguments)
+
+		// 7. Execute tool with timing
+		start := time.Now()
+		result, err := tool.Execute(toolCtx, tc.Arguments)
+		elapsed := time.Since(start)
+
+		// 8. Run post-tool hooks (always, even on error)
+		if cfg.HookChain != nil {
+			cfg.HookChain.RunPost(ctx, tc.Name, tc.Arguments, result, err, elapsed)
+		}
+
+		return result, err
 	}
 }
 

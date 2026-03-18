@@ -22,11 +22,9 @@ const (
 
 // AnthropicLLM Anthropic Messages API 实现
 type AnthropicLLM struct {
-	baseURL      string
-	apiKey       string
-	httpClient   *http.Client
-	models       []string
-	defaultModel string
+	BaseLLM
+	baseURL string
+	apiKey  string
 }
 
 // AnthropicConfig Anthropic 配置
@@ -57,36 +55,20 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 	}
 
 	a := &AnthropicLLM{
+		BaseLLM: BaseLLM{
+			models:       anthropicKnownModels,
+			defaultModel: cfg.DefaultModel,
+			httpClient: &http.Client{
+				Timeout: 300 * time.Second,
+			},
+		},
 		baseURL: baseURL,
 		apiKey:  cfg.APIKey,
-		httpClient: &http.Client{
-			Timeout: 300 * time.Second,
-		},
-		models:       anthropicKnownModels,
-		defaultModel: cfg.DefaultModel,
 	}
 	if a.defaultModel == "" && len(a.models) > 0 {
 		a.defaultModel = a.models[0]
 	}
 	return a
-}
-
-// ListModels 返回可用模型列表
-func (a *AnthropicLLM) ListModels() []string {
-	result := make([]string, len(a.models))
-	copy(result, a.models)
-	return result
-}
-
-// GetDefaultModel 返回默认模型
-func (a *AnthropicLLM) GetDefaultModel() string {
-	if a.defaultModel != "" {
-		return a.defaultModel
-	}
-	if len(a.models) > 0 {
-		return a.models[0]
-	}
-	return ""
 }
 
 // --- 请求/响应类型（Anthropic Messages API）---
@@ -234,29 +216,10 @@ func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropic
 func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 	out := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]interface{})
-		required := make([]string, 0)
-		for _, p := range tool.Parameters() {
-			prop := map[string]interface{}{
-				"type":        p.Type,
-				"description": p.Description,
-			}
-			if p.Items != nil {
-				prop["items"] = map[string]string{"type": p.Items.Type}
-			}
-			properties[p.Name] = prop
-			if p.Required {
-				required = append(required, p.Name)
-			}
-		}
 		out = append(out, anthropicTool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
-			InputSchema: map[string]interface{}{
-				"type":       "object",
-				"properties": properties,
-				"required":   required,
-			},
+			InputSchema: buildToolJSONSchema(tool),
 		})
 	}
 	return out
@@ -299,27 +262,15 @@ func parseAnthropicThinking(thinkingMode string) *anthropicThinking {
 	return &anthropicThinking{Type: "enabled"}
 }
 
-// Generate 非流式生成
-func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
-	if model == "" {
-		model = a.GetDefaultModel()
-	}
-
-	log.Ctx(ctx).WithFields(log.Fields{
-		"provider":    "anthropic",
-		"model":       model,
-		"stream":      false,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
-	}).Info("[LLM] Starting non-stream request")
-
+// buildAnthropicRequest 构建 Anthropic API 请求体（Generate 和 GenerateStream 共用）
+func (a *AnthropicLLM) buildAnthropicRequest(messages []ChatMessage, tools []ToolDefinition, model, thinkingMode string, stream bool) ([]byte, error) {
 	system, anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: anthropicMaxTokens,
 		Messages:  anthropicMsgs,
 		System:    system,
-		Stream:    false,
+		Stream:    stream,
 	}
 	if len(tools) > 0 {
 		body.Tools = toAnthropicTools(tools)
@@ -329,6 +280,25 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+	}
+	return reqBody, nil
+}
+
+// Generate 非流式生成
+func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
+	model = a.resolveModel(model)
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"provider":    "anthropic",
+		"model":       model,
+		"stream":      false,
+		"msg_count":   len(messages),
+		"tools_count": len(tools),
+	}).Info("[LLM] Starting non-stream request")
+
+	reqBody, err := a.buildAnthropicRequest(messages, tools, model, thinkingMode, false)
+	if err != nil {
+		return nil, err
 	}
 
 	url := a.baseURL + "/v1/messages"
@@ -347,13 +317,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Ctx(ctx).WithFields(log.Fields{
-			"provider":    "anthropic",
-			"status_code": resp.StatusCode,
-			"body":        string(bodyBytes),
-		}).Error("[LLM] API error")
-		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
+		return nil, a.handleHTTPError(ctx, "anthropic", resp)
 	}
 
 	var apiResp anthropicResp
@@ -369,7 +333,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 			CompletionTokens: int64(apiResp.Usage.OutputTokens),
 			TotalTokens:      int64(apiResp.Usage.InputTokens + apiResp.Usage.OutputTokens),
 		},
-		FinishReason: mapStopReason(apiResp.StopReason),
+		FinishReason: MapFinishReason(apiResp.StopReason),
 	}
 
 	var textParts []string
@@ -405,24 +369,9 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	return out, nil
 }
 
-func mapStopReason(s string) FinishReason {
-	switch s {
-	case "end_turn":
-		return FinishReasonStop
-	case "max_tokens":
-		return FinishReasonLength
-	case "tool_use":
-		return FinishReasonToolCalls
-	default:
-		return FinishReason(s)
-	}
-}
-
 // GenerateStream 流式生成
 func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
-	if model == "" {
-		model = a.GetDefaultModel()
-	}
+	model = a.resolveModel(model)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":    "anthropic",
@@ -432,22 +381,9 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"tools_count": len(tools),
 	}).Info("[LLM] Starting stream request")
 
-	system, anthropicMsgs := toAnthropicMessages(messages)
-	body := anthropicReq{
-		Model:     model,
-		MaxTokens: anthropicMaxTokens,
-		Messages:  anthropicMsgs,
-		System:    system,
-		Stream:    true,
-	}
-	if len(tools) > 0 {
-		body.Tools = toAnthropicTools(tools)
-	}
-	body.Thinking = parseAnthropicThinking(thinkingMode)
-
-	reqBody, err := json.Marshal(body)
+	reqBody, err := a.buildAnthropicRequest(messages, tools, model, thinkingMode, true)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+		return nil, err
 	}
 
 	url := a.baseURL + "/v1/messages"
@@ -465,14 +401,8 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		log.Ctx(ctx).WithFields(log.Fields{
-			"provider":    "anthropic",
-			"status_code": resp.StatusCode,
-			"body":        string(bodyBytes),
-		}).Error("[LLM] API error")
-		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
+		defer resp.Body.Close()
+		return nil, a.handleHTTPError(ctx, "anthropic", resp)
 	}
 
 	eventChan := make(chan StreamEvent, 100)
@@ -510,41 +440,8 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 	lastFinishReason := FinishReasonStop
 	doneSent := false
 
-	for {
-		select {
-		case <-ctx.Done():
-			eventChan <- StreamEvent{Type: EventError, Error: ctx.Err().Error()}
-			return
-		default:
-		}
-
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				if !doneSent {
-					eventChan <- StreamEvent{Type: EventDone}
-				}
-				return
-			}
-			eventChan <- StreamEvent{Type: EventError, Error: fmt.Sprintf("read stream: %v", err)}
-			return
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" || data == "" {
-			if lastUsage != nil {
-				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
-			}
-			if !doneSent {
-				eventChan <- StreamEvent{Type: EventDone}
-			}
-			return
-		}
-
+	sseChan := ReadSSEEvents(ctx, reader)
+	for data := range sseChan {
 		var ev anthropicStreamEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue
@@ -652,7 +549,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					StopReason string `json:"stop_reason"`
 				}
 				if err := json.Unmarshal(ev.Delta, &delta); err == nil && delta.StopReason != "" {
-					lastFinishReason = mapStopReason(delta.StopReason)
+					lastFinishReason = MapFinishReason(delta.StopReason)
 				}
 			}
 
@@ -660,5 +557,19 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 			doneSent = true
 			eventChan <- StreamEvent{Type: EventDone, FinishReason: lastFinishReason}
 		}
+	}
+
+	// SSE channel closed — check if ctx was cancelled
+	if ctx.Err() != nil {
+		eventChan <- StreamEvent{Type: EventError, Error: ctx.Err().Error()}
+		return
+	}
+
+	// If we didn't get a message_stop, send usage + done
+	if lastUsage != nil && !doneSent {
+		eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+	}
+	if !doneSent {
+		eventChan <- StreamEvent{Type: EventDone}
 	}
 }

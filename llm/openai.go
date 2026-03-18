@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	logrus "xbot/logger"
+	log "xbot/logger"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -15,9 +15,8 @@ import (
 
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
-	client       *openai.Client
-	models       []string // 可用模型列表
-	defaultModel string   // 默认模型
+	BaseLLM
+	client *openai.Client
 }
 
 // OpenAIConfig OpenAI 配置
@@ -35,47 +34,31 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 	)
 
 	o := &OpenAILLM{
-		client:       &client,
-		models:       nil,
-		defaultModel: cfg.DefaultModel,
+		BaseLLM: BaseLLM{
+			models:       nil,
+			defaultModel: cfg.DefaultModel,
+		},
+		client: &client,
 	}
 
 	// 尝试从 API 加载模型列表
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := o.LoadModelsFromAPI(ctx); err != nil {
-		logrus.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+		log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
 		// API 获取失败，使用默认模型作为回退
 		if cfg.DefaultModel != "" {
 			o.models = []string{cfg.DefaultModel}
-			logrus.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
+			log.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
 		}
 	}
 
 	return o
 }
 
-// ListModels 获取可用模型列表
-func (o *OpenAILLM) ListModels() []string {
-	result := make([]string, len(o.models))
-	copy(result, o.models)
-	return result
-}
-
-// GetDefaultModel 获取默认模型
-func (o *OpenAILLM) GetDefaultModel() string {
-	if o.defaultModel != "" {
-		return o.defaultModel
-	}
-	if len(o.models) > 0 {
-		return o.models[0]
-	}
-	return ""
-}
-
 // LoadModelsFromAPI 从 OpenAI API 加载可用模型列表
 func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
-	logrus.Debug("[LLM] Loading models from OpenAI API")
+	log.Debug("[LLM] Loading models from OpenAI API")
 
 	// 使用 openai-go SDK 获取模型列表
 	page, err := o.client.Models.List(ctx)
@@ -90,7 +73,7 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	}
 
 	if len(models) == 0 {
-		logrus.Warn("[LLM] No models found from OpenAI API")
+		log.Warn("[LLM] No models found from OpenAI API")
 		return nil
 	}
 
@@ -102,7 +85,7 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 		o.defaultModel = o.models[0]
 	}
 
-	logrus.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"model_count":   len(o.models),
 		"default_model": o.defaultModel,
 	}).Info("[LLM] Models loaded from OpenAI API")
@@ -232,22 +215,7 @@ func buildToolCallsParamForJSON(toolCalls []ToolCall) []map[string]any {
 func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam {
 	result := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]any)
-		required := make([]string, 0)
-		for _, p := range tool.Parameters() {
-			properties[p.Name] = map[string]any{
-				"type":        p.Type,
-				"description": p.Description,
-			}
-			if p.Required {
-				required = append(required, p.Name)
-			}
-		}
-		params := map[string]any{
-			"type":       "object",
-			"properties": properties,
-			"required":   required,
-		}
+		params := buildToolJSONSchema(tool)
 		result = append(result, openai.ChatCompletionToolUnionParam{
 			OfFunction: &openai.ChatCompletionFunctionToolParam{
 				Function: openai.FunctionDefinitionParam{
@@ -326,12 +294,9 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 
 // Generate 生成 LLM 响应
 func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
-	// 如果未指定模型，使用默认模型
-	if model == "" {
-		model = o.GetDefaultModel()
-	}
+	model = o.resolveModel(model)
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "openai",
 		"model":         model,
 		"stream":        false,
@@ -344,17 +309,17 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	params := o.buildParams(model, messages, tools)
 
 	data, _ := params.MarshalJSON()
-	logrus.Ctx(ctx).Debugf("[LLM] Request params: %s", string(data))
+	log.Ctx(ctx).Debugf("[LLM] Request params: %s", string(data))
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
-		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
 	completion, err := o.client.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
-		logrus.Ctx(ctx).WithFields(logrus.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"provider": "openai",
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
@@ -384,7 +349,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		if len(choice.Message.ToolCalls) > 0 {
 			resp.ToolCalls = make([]ToolCall, 0, len(choice.Message.ToolCalls))
 			for _, tc := range choice.Message.ToolCalls {
-				logrus.Ctx(ctx).WithFields(logrus.Fields{
+				log.Ctx(ctx).WithFields(log.Fields{
 					"provider":  "openai",
 					"tool_id":   tc.ID,
 					"tool_name": tc.Function.Name,
@@ -398,7 +363,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		}
 	}
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":          "openai",
 		"duration":          time.Since(startTime).String(),
 		"content_len":       len(resp.Content),
@@ -415,12 +380,9 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 
 // GenerateStream 流式生成 LLM 响应
 func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
-	// 如果未指定模型，使用默认模型
-	if model == "" {
-		model = o.GetDefaultModel()
-	}
+	model = o.resolveModel(model)
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "openai",
 		"model":         model,
 		"stream":        true,
@@ -433,12 +395,12 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	params := o.buildParams(model, messages, tools)
 
 	data, _ := params.MarshalJSON()
-	logrus.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
+	log.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
-		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
 	// 创建流式请求
@@ -458,7 +420,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	defer close(eventChan)
 	defer stream.Close()
 
-	l := logrus.Ctx(ctx)
+	l := log.Ctx(ctx)
 	chunkCount := 0
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
@@ -467,7 +429,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	for stream.Next() {
 		select {
 		case <-ctx.Done():
-			l.WithFields(logrus.Fields{
+			l.WithFields(log.Fields{
 				"provider": "openai",
 				"reason":   ctx.Err().Error(),
 			}).Warn("[LLM] Stream cancelled")
@@ -485,7 +447,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		// 记录第一个 chunk 时间
 		if chunkCount == 1 {
 			firstChunkTime = time.Now()
-			l.WithFields(logrus.Fields{
+			l.WithFields(log.Fields{
 				"provider": "openai",
 				"ttft":     firstChunkTime.Sub(startTime).String(),
 			}).Debug("[LLM] First chunk received")
@@ -511,7 +473,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			// 处理工具调用
 			for _, tc := range choice.Delta.ToolCalls {
 				if tc.ID != "" || tc.Function.Name != "" {
-					l.WithFields(logrus.Fields{
+					l.WithFields(log.Fields{
 						"provider":  "openai",
 						"tool_id":   tc.ID,
 						"tool_name": tc.Function.Name,
@@ -555,7 +517,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
-		l.WithFields(logrus.Fields{
+		l.WithFields(log.Fields{
 			"provider":    "openai",
 			"chunk_count": chunkCount,
 			"duration":    time.Since(startTime).String(),
@@ -568,7 +530,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		return
 	}
 
-	fields := logrus.Fields{
+	fields := log.Fields{
 		"provider":       "openai",
 		"chunk_count":    chunkCount,
 		"total_duration": time.Since(startTime).String(),

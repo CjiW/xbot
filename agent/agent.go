@@ -335,7 +335,7 @@ func New(cfg Config) *Agent {
 		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
-		cfg.CompressionThreshold = 0.8
+		cfg.CompressionThreshold = 0.7
 	}
 	// 设置 SubAgent 深度默认值
 	if cfg.MaxSubAgentDepth <= 0 {

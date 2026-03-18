@@ -81,6 +81,11 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	// Ensure global agents are synced to workspace
 	EnsureSynced(ctx)
 
+	// Check ctx validity before using it
+	if ctx == nil {
+		return nil, fmt.Errorf("tool context is required")
+	}
+
 	// Search order: user private > synced global > host global
 	// Use OriginUserID for user private agents (original user's directory)
 	var userAgentDirs []string
@@ -88,10 +93,10 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	if originUserID == "" {
 		originUserID = ctx.SenderID // fallback：兼容旧数据
 	}
-	if ctx != nil && originUserID != "" && ctx.WorkingDir != "" {
+	if originUserID != "" && ctx.WorkingDir != "" {
 		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
 	}
-	if ctx != nil && ctx.WorkspaceRoot != "" {
+	if ctx.WorkspaceRoot != "" {
 		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
 	}
 	role, ok := GetSubAgentRole(params.Role, userAgentDirs...)

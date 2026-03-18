@@ -190,6 +190,40 @@ func TestEnvMergeDeduplication(t *testing.T) {
 	}
 }
 
+func TestDetectCdTip(t *testing.T) {
+	tests := []struct {
+		command string
+		hasTip  bool
+	}{
+		// Should detect
+		{"cd /tmp", true},
+		{"cd src && ls", true},
+		{"cd src/components", true},
+		{"cd ..", true},
+		{"cd ~", true},
+		{"ls && cd subdir", true},
+		{"echo hi; cd foo", true},
+		{"false || cd bar", true},
+
+		// Should NOT detect
+		{"ls -la", false},
+		{"echo cd is cool", false},
+		{"mkdir -p foo", false},
+		{"echo 'cd /tmp'", false}, // inside string — regex is simple, may match; acceptable tradeoff
+		{"abcd /tmp", false},      // "abcd" is not "cd"
+		{"git checkout develop", false},
+		{"grep cd file.txt", false},
+	}
+
+	for _, tt := range tests {
+		tip := detectCdTip(tt.command)
+		got := tip != ""
+		if got != tt.hasTip {
+			t.Errorf("detectCdTip(%q) = %v, want hasTip=%v", tt.command, got, tt.hasTip)
+		}
+	}
+}
+
 // TestEnvPersistIntegration 集成测试：模拟完整的 export 命令处理流程
 func TestEnvPersistIntegration(t *testing.T) {
 	exportPattern := regexp.MustCompile(`export\s+((?:[A-Za-z_][A-Za-z0-9_]*=\S+\s*)+)`)

@@ -170,7 +170,6 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	if result == "" {
-
 		if envPersisted {
 			return NewResult("Command executed successfully. Environment variables persisted to ~/.xbot_env"), nil
 		}
@@ -181,7 +180,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		result += "\n[Environment variables persisted to ~/.xbot_env]"
 	}
 
-	return NewResult(result), nil
+	res := NewResult(result)
+	if tip := detectCdTip(params.Command); tip != "" {
+		res = res.WithTips(tip)
+	}
+	return res, nil
 }
 
 // persistEnvFromCommand 从命令中提取 export 语句并持久化到 ~/.xbot_env
@@ -247,6 +250,18 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
 
 	return true
+}
+
+// cdPattern detects standalone cd commands (not inside subshells, comments, or strings).
+// Matches: "cd foo", "cd /path", "cd ..", "cd ~", as well as "cd foo && ls" etc.
+var cdPattern = regexp.MustCompile(`(?:^|&&|\|\||;)\s*cd\s+`)
+
+// detectCdTip returns a tip string if the command contains a cd that won't persist.
+func detectCdTip(command string) string {
+	if !cdPattern.MatchString(command) {
+		return ""
+	}
+	return `NOTE: "cd" inside Shell only affects this single command — the working directory resets on the next tool call. Use the Cd tool to persistently change directory.`
 }
 
 // dangerPatterns 定义绝对禁止执行的命令模式（黑名单拦截，直接拒绝）

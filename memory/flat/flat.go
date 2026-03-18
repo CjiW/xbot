@@ -272,13 +272,13 @@ func (t *saveMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "history_entry",
 			Type:        "string",
-			Description: "A paragraph (2-5 sentences) summarizing key events/decisions/topics. Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.",
+			Description: "A paragraph (50-150 chars, 2-5 sentences) summarizing key events/decisions/topics. Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search. Keep concise.",
 			Required:    true,
 		},
 		{
 			Name:        "memory_update",
 			Type:        "string",
-			Description: "Full updated long-term memory as markdown. Include all existing facts plus new ones. Return unchanged if nothing new.",
+			Description: "Full updated long-term memory as markdown (200-500 chars recommended). Include all existing facts plus new ones. Use bullet points. Return unchanged if nothing new.",
 			Required:    true,
 		},
 	}

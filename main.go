@@ -63,7 +63,10 @@ func main() {
 		if err != nil {
 			log.WithError(err).Fatal("Failed to open shared database for OAuth")
 		}
-		tokenStorage := oauth.NewSQLiteStorage(sharedDB)
+		tokenStorage, err := oauth.NewSQLiteStorage(sharedDB)
+		if err != nil {
+			log.WithError(err).Fatal("Failed to create OAuth token storage")
+		}
 
 		// 创建 OAuth 管理器
 		oauthManager = oauth.NewManager(tokenStorage)

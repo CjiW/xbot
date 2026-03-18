@@ -34,13 +34,13 @@ type SQLiteStorage struct {
 }
 
 // NewSQLiteStorage creates a new SQLite-based token storage using the shared DB.
-func NewSQLiteStorage(db *sqlite.DB) *SQLiteStorage {
+func NewSQLiteStorage(db *sqlite.DB) (*SQLiteStorage, error) {
 	storage := &SQLiteStorage{db: db}
 	if err := storage.initSchema(); err != nil {
-		log.WithError(err).Warn("Failed to initialize OAuth token schema")
+		return nil, fmt.Errorf("initialize OAuth token schema: %w", err)
 	}
 	log.Info("OAuth token storage initialized (shared DB)")
-	return storage
+	return storage, nil
 }
 
 // initSchema creates the oauth_tokens table if it doesn't exist.

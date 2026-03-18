@@ -247,24 +247,24 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 
 // dangerPatterns 定义绝对禁止执行的命令模式（黑名单拦截，直接拒绝）
 var dangerPatterns = []struct {
-	pattern string
+	pattern *regexp.Regexp
 	reason  string
 }{
-	{`rm\s+-[^\s]*rf\s+/\s*`, "rm -rf / is destructive and will wipe the entire filesystem"},
-	{`mkfs\b`, "mkfs will destroy filesystem data"},
-	{`dd\s+.*(/dev/zero|/dev/random|/dev/null)\s+.*of=/dev/`, "dd writing to device is destructive"},
-	{`:\(\)\s*\{.*\}\s*;`, "fork bomb detected"},
-	{`chmod\s+777\s+/\s*`, "chmod 777 / is a security risk"},
-	{`mv\s+/\s+/dev/null`, "mv / /dev/null is destructive"},
+	{regexp.MustCompile(`rm\s+-[^\s]*rf\s+/\s*`), "rm -rf / is destructive and will wipe the entire filesystem"},
+	{regexp.MustCompile(`mkfs\b`), "mkfs will destroy filesystem data"},
+	{regexp.MustCompile(`dd\s+.*(/dev/zero|/dev/random|/dev/null)\s+.*of=/dev/`), "dd writing to device is destructive"},
+	{regexp.MustCompile(`:\(\)\s*\{.*\}\s*;`), "fork bomb detected"},
+	{regexp.MustCompile(`chmod\s+777\s+/\s*`), "chmod 777 / is a security risk"},
+	{regexp.MustCompile(`mv\s+/\s+/dev/null`), "mv / /dev/null is destructive"},
 }
 
 // warningPatterns 定义高危命令（告警但允许执行）
-var warningPatterns = []string{
-	`\brm\s+(-[^\s]*rf|-rf)\b`,
-	`\bdd\b`,
-	`\bmkfs\b`,
-	`\bchmod\s+777\b`,
-	`\b(format| FORMAT)\b`,
+var warningPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\brm\s+(-[^\s]*rf|-rf)\b`),
+	regexp.MustCompile(`\bdd\b`),
+	regexp.MustCompile(`\bmkfs\b`),
+	regexp.MustCompile(`\bchmod\s+777\b`),
+	regexp.MustCompile(`\b(format| FORMAT)\b`),
 }
 
 // checkDangerousCommand 检查命令是否包含危险模式
@@ -272,14 +272,14 @@ var warningPatterns = []string{
 func checkDangerousCommand(cmd string) (bool, string) {
 	// 检查绝对禁止模式
 	for _, dp := range dangerPatterns {
-		if matched, _ := regexp.MatchString(dp.pattern, cmd); matched {
+		if dp.pattern.MatchString(cmd) {
 			return true, dp.reason
 		}
 	}
 
 	// 检查高危告警模式（仅日志记录，不拦截）
 	for _, wp := range warningPatterns {
-		if matched, _ := regexp.MatchString(wp, cmd); matched {
+		if wp.MatchString(cmd) {
 			log.WithField("command", cmd).Warn("Dangerous command detected (allowed with warning)")
 			break
 		}

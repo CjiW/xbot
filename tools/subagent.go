@@ -78,6 +78,11 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
 	}
 
+	// 检查 ctx 是否为 nil，避免后续访问 panic
+	if ctx == nil {
+		return nil, fmt.Errorf("tool context is required")
+	}
+
 	// Ensure global agents are synced to workspace
 	EnsureSynced(ctx)
 
@@ -88,10 +93,10 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	if originUserID == "" {
 		originUserID = ctx.SenderID // fallback：兼容旧数据
 	}
-	if ctx != nil && originUserID != "" && ctx.WorkingDir != "" {
+	if originUserID != "" && ctx.WorkingDir != "" {
 		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
 	}
-	if ctx != nil && ctx.WorkspaceRoot != "" {
+	if ctx.WorkspaceRoot != "" {
 		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
 	}
 	role, ok := GetSubAgentRole(params.Role, userAgentDirs...)

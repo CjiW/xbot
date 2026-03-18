@@ -292,8 +292,8 @@ type Config struct {
 	SessionCacheTimeout  time.Duration // 会话缓存超时
 
 	// 上下文压缩配置
-	MaxContextTokens     int     // 最大上下文 token 数（默认 8000，0 表示不限制）
-	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
+	MaxContextTokens     int     // 最大上下文 token 数（默认 100000，0 表示不限制）
+	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7，即 70% 时触发）
 	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 false）
 
 	// SubAgent 深度控制

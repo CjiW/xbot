@@ -362,13 +362,14 @@ func (a *Agent) buildSubAgentRunConfig(
 		cfg.SpawnAgent = func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 			return a.spawnSubAgent(ctx, msg)
 		}
-		cfg.InteractiveCallbacks = &InteractiveCallbacks{
-			SpawnFn: a.SpawnInteractiveSession,
-			SendFn:  a.SendToInteractiveSession,
-			UnloadFn: func(ctx context.Context, roleName string) error {
-				return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID)
-			},
-		}
+	}
+	// Interactive 回调独立注入，不依赖 SpawnAgent
+	cfg.InteractiveCallbacks = &InteractiveCallbacks{
+		SpawnFn: a.SpawnInteractiveSession,
+		SendFn:  a.SendToInteractiveSession,
+		UnloadFn: func(ctx context.Context, roleName string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID)
+		},
 	}
 
 	return cfg

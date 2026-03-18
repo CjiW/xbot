@@ -63,6 +63,12 @@ func interactiveKey(channel, chatID, roleName string) string {
 
 // SpawnInteractiveSession 创建一个新的 interactive SubAgent 会话并执行首次任务。
 // 如果同名 role 的 session 已存在，返回 error。
+//
+// 锁策略：interactiveMu 仅保护 interactiveSubAgents map 的检查/创建/替换操作，
+// Run() 执行前必须释放锁，否则嵌套 interactive SubAgent（如太子→尚书令）
+// 会在同一 goroutine 中递归获取同一把互斥锁导致死锁。
+// 使用占位符模式：在锁内 Store 一个最小占位符，锁外 Run() 完成后替换为完整数据。
+// 任何错误路径都必须清理占位符，避免 session 卡死。
 func (a *Agent) SpawnInteractiveSession(
 	ctx context.Context,
 	roleName string,
@@ -72,30 +78,30 @@ func (a *Agent) SpawnInteractiveSession(
 
 	key := interactiveKey(originChannel, originChatID, roleName)
 
-	// 检查是否已存在（用 interactiveMu 保护，避免 LoadOrStore(nil) 的竞态）
+	// --- 阶段 1：锁内检查 map + 创建占位符 ---
 	a.interactiveMu.Lock()
-	defer a.interactiveMu.Unlock()
-
-	// 顺便清理过期会话
 	a.cleanupExpiredSessions()
-
 	if _, loaded := a.interactiveSubAgents.Load(key); loaded {
+		a.interactiveMu.Unlock()
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
 		}, nil
 	}
+	// 存储占位符，防止并发 spawn 同一 role
+	placeholder := &interactiveAgent{roleName: roleName, lastUsed: time.Now()}
+	a.interactiveSubAgents.Store(key, placeholder)
+	a.interactiveMu.Unlock()
 
-	// 构建 parentCtx
+	// --- 阶段 2：锁外构建 config（不需要锁） ---
 	parentCtx := a.buildParentToolContext(ctx, originChannel, originChatID, originSender, msg)
 
-	// CallChain 检查
 	cc := CallChainFromContext(ctx)
 	if err := cc.CanSpawn(roleName, a.maxSubAgentDepth); err != nil {
+		a.interactiveSubAgents.Delete(key) // 清理占位符
 		return &bus.OutboundMessage{Content: err.Error(), Error: err}, nil
 	}
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
 
-	// 构建 SubAgent RunConfig
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true)
 
@@ -110,27 +116,25 @@ func (a *Agent) SpawnInteractiveSession(
 		}
 	}
 
-	// 记录 spawn 前的消息数量，用于提取本次任务的对话
+	// --- 阶段 3：锁外执行 Run（嵌套 spawn 不会死锁） ---
 	preLen := len(cfg.Messages)
-
-	// 执行
 	out := Run(subCtx, cfg)
+
 	if out.Error != nil {
-		a.interactiveSubAgents.Delete(key)
+		a.interactiveSubAgents.Delete(key) // 清理占位符
 		return out.OutboundMessage, nil
 	}
 
-	// 提取本次任务的对话（SubAgent 不启用 Memory，out.Messages 可能为空）
+	// --- 阶段 4：替换占位符为完整 session 数据 ---
 	var newMessages []llm.ChatMessage
 	if len(out.Messages) > preLen {
 		newMessages = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
 	}
 
-	// 创建 interactiveAgent 并保存（保存 system prompt 和 config 模板，避免重复构建）
 	ia := &interactiveAgent{
 		roleName:     roleName,
 		messages:     newMessages,
-		systemPrompt: cfg.Messages[0], // 保存 system prompt，后续 send 不重建
+		systemPrompt: cfg.Messages[0],
 		cfg:          &cfg,
 		lastUsed:     time.Now(),
 	}
@@ -172,6 +176,14 @@ func (a *Agent) SendToInteractiveSession(
 
 	ia.mu.Lock()
 	defer ia.mu.Unlock()
+
+	// 防护：占位符尚未被替换为完整数据（SpawnInteractiveSession 正在执行 Run()）。
+	// 这在正常流程中不会发生（spawn 返回后才能 send），但防御性检查避免 panic。
+	if ia.cfg == nil {
+		return &bus.OutboundMessage{
+			Content: fmt.Sprintf("interactive session for role %q is still initializing, please try again later", roleName),
+		}, nil
+	}
 
 	// 更新最后访问时间
 	ia.lastUsed = time.Now()
@@ -246,6 +258,12 @@ func (a *Agent) UnloadInteractiveSession(
 	}
 
 	ia.mu.Lock()
+	// 防护：占位符尚未被替换为完整数据
+	if ia.cfg == nil {
+		ia.mu.Unlock()
+		a.interactiveSubAgents.Delete(key)
+		return nil
+	}
 	messages := make([]llm.ChatMessage, len(ia.messages))
 	copy(messages, ia.messages)
 	cfg := *ia.cfg // dereference pointer for consolidateSubAgentMemory

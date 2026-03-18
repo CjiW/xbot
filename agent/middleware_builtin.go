@@ -53,7 +53,7 @@ func (m *SkillsCatalogMiddleware) Process(mc *MessageContext) error {
 	return nil
 }
 
-// AgentsCatalogMiddleware 注入 Agents 目录。
+// AgentsCatalogMiddleware injects available agents catalog.
 // 从 MessageContext.Extra[ExtraKeyAgentsCatalog] 读取动态内容。
 type AgentsCatalogMiddleware struct{}
 

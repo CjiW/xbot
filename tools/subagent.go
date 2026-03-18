@@ -86,8 +86,6 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	// Ensure global agents are synced to workspace
 	EnsureSynced(ctx)
 
-	// Search order: user private > synced global > host global
-	// Use OriginUserID for user private agents (original user's directory)
 	var userAgentDirs []string
 	originUserID := ctx.OriginUserID
 	if originUserID == "" {

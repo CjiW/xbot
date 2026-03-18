@@ -42,13 +42,13 @@ type RunConfig struct {
 	SandboxWorkDir   string   // 沙箱内工作目录（如 /workspace）
 	ReadOnlyRoots    []string // 额外只读目录
 	SkillsDirs       []string // 全局 skill 目录列表
-	AgentsDir        string   // 全局 agents 目录
-	MCPConfigPath    string   // 用户 MCP 配置路径
-	GlobalMCPConfig  string   // 全局 MCP 配置路径（只读）
-	DataDir          string   // 数据持久化目录
-	SandboxEnabled   bool     // 是否启用命令沙箱
-	PreferredSandbox string   // 沙箱类型（docker 优先）
-	InitialCWD       string   // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
+	AgentsDir        string
+	MCPConfigPath    string // 用户 MCP 配置路径
+	GlobalMCPConfig  string // 全局 MCP 配置路径（只读）
+	DataDir          string // 数据持久化目录
+	SandboxEnabled   bool   // 是否启用命令沙箱
+	PreferredSandbox string // 沙箱类型（docker 优先）
+	InitialCWD       string // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
 	MaxIterations int // 0 = 使用默认值 100

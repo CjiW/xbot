@@ -18,7 +18,7 @@ Ask the user:
 
 ### Step 2: Create Agent File
 
-Create `agents/{agent-name}.md` in the workspace root (the file will be loaded from the `agents/` directory automatically).
+Create `agents/{agent-name}.md` in the workspace root. This is the user's personal agents directory — files here are loaded automatically and override same-name global agents.
 
 Agent definition uses YAML frontmatter + Markdown body:
 

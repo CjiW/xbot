@@ -7,13 +7,6 @@ description: "Create a new SubAgent role. Use when user asks to create a new age
 
 Create new SubAgent roles for specialized tasks.
 
-## Required Tools
-
-After loading this skill, immediately call `load_tools` for these tools:
-- Edit
-- Shell
-- Glob
-
 ## Instructions
 
 ### Step 1: Understand the Agent's Purpose
@@ -25,7 +18,9 @@ Ask the user:
 
 ### Step 2: Create Agent File
 
-Create `.xbot/agents/{agent-name}.md` with this template:
+Create `agents/{agent-name}.md` in the workspace root (the file will be loaded from the `agents/` directory automatically).
+
+Agent definition uses YAML frontmatter + Markdown body:
 
 ```markdown
 ---
@@ -34,6 +29,10 @@ description: "{What this agent does. Use WHEN to use it — this is the trigger.
 tools:
   - ToolName1
   - ToolName2
+capabilities:
+  memory: true
+  send_message: false
+  spawn_agent: true
 ---
 
 You are a {agent-name} agent. Your job is to {one-sentence purpose}.
@@ -67,7 +66,20 @@ Common tools for agents:
 - **Testing**: Shell, Read, Glob
 - **Communication**: feishu_send_message, feishu_docx_*
 
-### Step 4: Write Quality Content
+If `tools` is omitted, the agent gets the full dynamic tool set (search_tools + load_tools).
+If `tools` is specified, only those tools are directly available — no search/load needed.
+
+### Step 4: Configure Capabilities
+
+Capabilities control what extra powers the agent has:
+
+| Capability | Default | Description |
+|------------|---------|-------------|
+| `memory` | false | Access to Letta memory system (core/archival/recall) |
+| `send_message` | false | Can send messages directly to IM channels |
+| `spawn_agent` | true | Can create sub-agents (watch recursion depth) |
+
+### Step 5: Write Quality Content
 
 Follow `code-reviewer.md` quality standard:
 - ✅ Specific process steps (not vague)
@@ -76,11 +88,11 @@ Follow `code-reviewer.md` quality standard:
 - ✅ Edge case handling
 - ❌ Avoid generic descriptions like "analyze code" — specify how
 
-### Step 5: Verify
+### Step 6: Verify
 
 List available agents to confirm:
 ```bash
-ls -la .xbot/agents/
+ls -la agents/
 ```
 
 ## Agent Naming Convention
@@ -91,8 +103,6 @@ ls -la .xbot/agents/
 
 ## Example
 
-User wants: "a data analyst agent"
-
 ```markdown
 ---
 name: data-analyst
@@ -101,6 +111,8 @@ tools:
   - Read
   - Grep
   - Shell
+capabilities:
+  memory: true
 ---
 
 You are a data analyst agent. Your job is to analyze data and generate actionable insights.

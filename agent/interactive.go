@@ -97,14 +97,14 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// 构建 SubAgent RunConfig
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
-	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName)
+	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true)
 
 	// SubAgent 进度上报：通过父 Agent 的消息通道实时反馈给用户
 	if originChannel != "" && originChatID != "" {
 		rn := roleName // 闭包捕获
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				prefixed := "📋 [" + rn + "] " + lines[0]
+				prefixed := "📋 subagent: [" + rn + "] " + lines[0] + "\n"
 				_ = a.sendMessage(originChannel, originChatID, prefixed)
 			}
 		}

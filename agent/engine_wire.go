@@ -197,6 +197,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	allowedTools []string,
 	caps tools.SubAgentCapabilities,
 	roleName string,
+	interactive bool,
 ) RunConfig {
 	parentAgentID := parentCtx.AgentID
 
@@ -244,9 +245,14 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 通用模板 + 角色描述（有白名单时使用精简模板）
 	var sysPrompt string
 	if len(allowedTools) > 0 {
-		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplateConcise, workDir, roleName, now)
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplateConcise, workDir, roleName, parentAgentID, now)
 	} else {
-		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, now)
+		sysPrompt = fmt.Sprintf(subagentSystemPromptTemplate, workDir, roleName, parentAgentID, now)
+	}
+	if interactive {
+		sysPrompt += subagentExecutionModeInteractive
+	} else {
+		sysPrompt += subagentExecutionModeOneShot
 	}
 	sysPrompt += "\n## 角色描述\n\n" + rolePrompt + "\n"
 
@@ -376,6 +382,14 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
 		return a.spawnSubAgent(spawnCtx, inMsg)
+	}
+
+	cfg.InteractiveCallbacks = &InteractiveCallbacks{
+		SpawnFn: a.SpawnInteractiveSession,
+		SendFn:  a.SendToInteractiveSession,
+		UnloadFn: func(ctx context.Context, roleName string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID)
+		},
 	}
 
 	// Pre-build Letta memory extras (involves GetOrCreateSession + LettaMemory lookup).
@@ -643,14 +657,14 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	// 从 InboundMessage 恢复 capabilities
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 
-	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName)
+	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName, false)
 
 	// SubAgent 进度上报：通过父 Agent 的消息通道实时反馈给用户
 	if originChannel != "" && originChatID != "" {
 		rn := roleName // 闭包捕获
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				prefixed := "📋 [" + rn + "] " + lines[0]
+				prefixed := "📋 subagent: [" + rn + "] " + lines[0] + "\n"
 				_ = a.sendMessage(originChannel, originChatID, prefixed)
 			}
 		}

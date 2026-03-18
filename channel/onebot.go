@@ -52,7 +52,7 @@ const onebotMaxReconnectAttempts = 100
 // CQ 码正则
 // ---------------------------------------------------------------------------
 
-const onebotMaxImageSize = 50 << 20 // 50 MB
+const onebotMaxImageSize = 50 << 20          // 50 MB
 const selfAtTemplate = `[CQ:at,qq=%s[^\]]*]` // at 自己的 CQ 码模板
 
 var (
@@ -122,12 +122,12 @@ type OneBotChannel struct {
 // NewOneBotChannel 创建 OneBot 渠道
 func NewOneBotChannel(cfg OneBotConfig, msgBus *bus.MessageBus) *OneBotChannel {
 	return &OneBotChannel{
-		cfg:           cfg,
-		bus:           msgBus,
-		httpCli:       &http.Client{Timeout: 30 * time.Second},
-		done:          make(chan struct{}),
-		processedIDs:  make(map[string]struct{}),
-		maxProcessed:  1000,
+		cfg:          cfg,
+		bus:          msgBus,
+		httpCli:      &http.Client{Timeout: 30 * time.Second},
+		done:         make(chan struct{}),
+		processedIDs: make(map[string]struct{}),
+		maxProcessed: 1000,
 	}
 }
 

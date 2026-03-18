@@ -360,6 +360,8 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("anthropic: decode response: %w", err)
 	}
+	// Drain remaining body to allow connection reuse
+	io.Copy(io.Discard, resp.Body)
 
 	out := &LLMResponse{
 		Usage: TokenUsage{

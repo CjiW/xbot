@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 	"xbot/llm"
+
+	log "xbot/logger"
 )
 
 const defaultShellTimeout = 120 * time.Second
@@ -55,6 +58,16 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		return nil, fmt.Errorf("command is required")
 	}
 
+	// 检测命令中的控制字符和 null bytes
+	if strings.ContainsAny(params.Command, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f") {
+		return nil, fmt.Errorf("command contains control characters (null bytes or other non-printable characters)")
+	}
+
+	// 安全预检：拦截危险命令
+	if blocked, reason := checkDangerousCommand(params.Command); blocked {
+		return nil, fmt.Errorf("command blocked by safety check: %s", reason)
+	}
+
 	timeout := defaultShellTimeout
 	if params.Timeout > 0 {
 		timeout = time.Duration(params.Timeout) * time.Second
@@ -96,6 +109,12 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
+
+	// 审计日志：记录每次 shell 执行
+	log.WithFields(log.Fields{
+		"command": params.Command,
+		"timeout": timeout,
+	}).Debug("Shell command executing")
 
 	if workspaceRoot != "" {
 		cmd.Dir = workspaceRoot
@@ -224,4 +243,47 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
 
 	return true
+}
+
+// dangerPatterns 定义绝对禁止执行的命令模式（黑名单拦截，直接拒绝）
+var dangerPatterns = []struct {
+	pattern *regexp.Regexp
+	reason  string
+}{
+	{regexp.MustCompile(`rm\s+-[^\s]*rf\s+/\s*`), "rm -rf / is destructive and will wipe the entire filesystem"},
+	{regexp.MustCompile(`mkfs\b`), "mkfs will destroy filesystem data"},
+	{regexp.MustCompile(`dd\s+.*(/dev/zero|/dev/random|/dev/null)\s+.*of=/dev/`), "dd writing to device is destructive"},
+	{regexp.MustCompile(`:\(\)\s*\{.*\}\s*;`), "fork bomb detected"},
+	{regexp.MustCompile(`chmod\s+777\s+/\s*`), "chmod 777 / is a security risk"},
+	{regexp.MustCompile(`mv\s+/\s+/dev/null`), "mv / /dev/null is destructive"},
+}
+
+// warningPatterns 定义高危命令（告警但允许执行）
+var warningPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`\brm\s+(-[^\s]*rf|-rf)\b`),
+	regexp.MustCompile(`\bdd\b`),
+	regexp.MustCompile(`\bmkfs\b`),
+	regexp.MustCompile(`\bchmod\s+777\b`),
+	regexp.MustCompile(`\b(format| FORMAT)\b`),
+}
+
+// checkDangerousCommand 检查命令是否包含危险模式
+// 返回 (blocked, reason)，如果 blocked=true 则应拒绝执行
+func checkDangerousCommand(cmd string) (bool, string) {
+	// 检查绝对禁止模式
+	for _, dp := range dangerPatterns {
+		if dp.pattern.MatchString(cmd) {
+			return true, dp.reason
+		}
+	}
+
+	// 检查高危告警模式（仅日志记录，不拦截）
+	for _, wp := range warningPatterns {
+		if wp.MatchString(cmd) {
+			log.WithField("command", cmd).Warn("Dangerous command detected (allowed with warning)")
+			break
+		}
+	}
+
+	return false, ""
 }

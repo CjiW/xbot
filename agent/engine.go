@@ -433,25 +433,30 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					ToolsUsed: toolsUsed,
 				})
 			}
-			// LLM 错误时优雅降级：如果有之前的中间内容，返回它
+			// LLM 错误时优雅降级：如果有之前的中间内容，返回它（附加错误提示）
 			if lastContent != "" {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"agent_id":  cfg.AgentID,
 					"iteration": i + 1,
 				}).Warnf("LLM failed, returning partial result: %v", err)
-				return buildOutput(&bus.OutboundMessage{
+				return buildOutput(
+					&bus.OutboundMessage{
+						Channel:   cfg.Channel,
+						ChatID:    cfg.ChatID,
+						Content:   lastContent + "\n\n> ⚠️ LLM 调用失败 (" + summarizeRetryError(err) + ")，以上为部分结果。",
+						ToolsUsed: toolsUsed,
+					})
+			}
+			// 所有重试失败且无中间内容，返回用户友好的错误信息
+			userErrMsg := fmt.Sprintf("❌ LLM 服务调用失败 (%s)，请稍后重试。", summarizeRetryError(err))
+			return buildOutput(
+				&bus.OutboundMessage{
 					Channel:   cfg.Channel,
 					ChatID:    cfg.ChatID,
-					Content:   lastContent,
+					Content:   userErrMsg,
+					Error:     fmt.Errorf("%w: %w", ErrLLMGenerate, err),
 					ToolsUsed: toolsUsed,
 				})
-			}
-			return buildOutput(&bus.OutboundMessage{
-				Channel:   cfg.Channel,
-				ChatID:    cfg.ChatID,
-				Error:     fmt.Errorf("%w: %w", ErrLLMGenerate, err),
-				ToolsUsed: toolsUsed,
-			})
 		}
 
 		// 过滤 think 块

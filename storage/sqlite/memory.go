@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -17,11 +18,11 @@ func NewMemoryService(db *DB) *MemoryService {
 	return &MemoryService{db: db}
 }
 
-// ReadLongTerm retrieves the long-term memory content for a tenant
-func (s *MemoryService) ReadLongTerm(tenantID int64) (string, error) {
+// ReadLongTerm retrieves the long-term memory content for a tenant.
+func (s *MemoryService) ReadLongTerm(ctx context.Context, tenantID int64) (string, error) {
 	conn := s.db.Conn()
 	var content sql.NullString
-	err := conn.QueryRow(
+	err := conn.QueryRowContext(ctx,
 		"SELECT content FROM long_term_memory WHERE tenant_id = ?",
 		tenantID,
 	).Scan(&content)
@@ -38,10 +39,10 @@ func (s *MemoryService) ReadLongTerm(tenantID int64) (string, error) {
 	return content.String, nil
 }
 
-// WriteLongTerm saves or updates the long-term memory content for a tenant
-func (s *MemoryService) WriteLongTerm(tenantID int64, content string) error {
+// WriteLongTerm saves or updates the long-term memory content for a tenant.
+func (s *MemoryService) WriteLongTerm(ctx context.Context, tenantID int64, content string) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec(`
+	_, err := conn.ExecContext(ctx, `
 		INSERT INTO long_term_memory (tenant_id, content) VALUES (?, ?)
 		ON CONFLICT(tenant_id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP
 	`, tenantID, content)
@@ -52,10 +53,10 @@ func (s *MemoryService) WriteLongTerm(tenantID int64, content string) error {
 	return nil
 }
 
-// AppendHistory adds an entry to the event history for a tenant
-func (s *MemoryService) AppendHistory(tenantID int64, entry string) error {
+// AppendHistory adds an entry to the event history for a tenant.
+func (s *MemoryService) AppendHistory(ctx context.Context, tenantID int64, entry string) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec(
+	_, err := conn.ExecContext(ctx,
 		"INSERT INTO event_history (tenant_id, entry) VALUES (?, ?)",
 		tenantID, entry,
 	)
@@ -66,16 +67,16 @@ func (s *MemoryService) AppendHistory(tenantID int64, entry string) error {
 	return nil
 }
 
-// GetState retrieves the consolidation state for a tenant
-func (s *MemoryService) GetState(tenantID int64) (lastConsolidated int, err error) {
+// GetState retrieves the consolidation state for a tenant.
+func (s *MemoryService) GetState(ctx context.Context, tenantID int64) (lastConsolidated int, err error) {
 	conn := s.db.Conn()
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		"SELECT last_consolidated FROM tenant_state WHERE tenant_id = ?",
 		tenantID,
 	).Scan(&lastConsolidated)
 	if err == sql.ErrNoRows {
 		// No state yet, initialize to 0
-		if err := s.SetState(tenantID, 0); err != nil {
+		if err := s.SetState(ctx, tenantID, 0); err != nil {
 			return 0, fmt.Errorf("initialize tenant state: %w", err)
 		}
 		return 0, nil
@@ -86,10 +87,10 @@ func (s *MemoryService) GetState(tenantID int64) (lastConsolidated int, err erro
 	return lastConsolidated, nil
 }
 
-// SetState updates the consolidation state for a tenant
-func (s *MemoryService) SetState(tenantID int64, lastConsolidated int) error {
+// SetState updates the consolidation state for a tenant.
+func (s *MemoryService) SetState(ctx context.Context, tenantID int64, lastConsolidated int) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec(`
+	_, err := conn.ExecContext(ctx, `
 		INSERT INTO tenant_state (tenant_id, last_consolidated) VALUES (?, ?)
 		ON CONFLICT(tenant_id) DO UPDATE SET last_consolidated = excluded.last_consolidated
 	`, tenantID, lastConsolidated)
@@ -99,10 +100,10 @@ func (s *MemoryService) SetState(tenantID int64, lastConsolidated int) error {
 	return nil
 }
 
-// GetHistoryEntries retrieves recent history entries for a tenant
-func (s *MemoryService) GetHistoryEntries(tenantID int64, limit int) ([]string, error) {
+// GetHistoryEntries retrieves recent history entries for a tenant.
+func (s *MemoryService) GetHistoryEntries(ctx context.Context, tenantID int64, limit int) ([]string, error) {
 	conn := s.db.Conn()
-	rows, err := conn.Query(`
+	rows, err := conn.QueryContext(ctx, `
 		SELECT entry FROM event_history
 		WHERE tenant_id = ?
 		ORDER BY id DESC

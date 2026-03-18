@@ -18,6 +18,7 @@ import (
 	"xbot/oauth"
 	"xbot/oauth/providers"
 	"xbot/storage"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/tools/feishu_mcp"
 	"xbot/version"
@@ -57,9 +58,12 @@ func main() {
 	var oauthManager *oauth.Manager
 	var feishuProvider *providers.FeishuProvider
 	if cfg.OAuth.Enable {
-		// 创建 OAuth token 存储
-		oauthDBPath := filepath.Join(xbotDir, "oauth_tokens.db")
-		tokenStorage, err := oauth.NewSQLiteStorage(oauthDBPath)
+		// Use the shared database for OAuth token storage
+		sharedDB, err := sqlite.Open(dbPath)
+		if err != nil {
+			log.WithError(err).Fatal("Failed to open shared database for OAuth")
+		}
+		tokenStorage, err := oauth.NewSQLiteStorage(sharedDB)
 		if err != nil {
 			log.WithError(err).Fatal("Failed to create OAuth token storage")
 		}

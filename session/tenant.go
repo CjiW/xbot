@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func (s *TenantSession) Len() (int, error) {
 
 // LastConsolidated returns the last consolidated message index
 func (s *TenantSession) LastConsolidated() int {
-	lastConsolidated, err := s.memorySvc.GetState(s.tenantID)
+	lastConsolidated, err := s.memorySvc.GetState(context.Background(), s.tenantID)
 	if err != nil {
 		// If error, return 0 as safe default
 		return 0
@@ -56,7 +57,7 @@ func (s *TenantSession) LastConsolidated() int {
 
 // SetLastConsolidated updates the last consolidated message index
 func (s *TenantSession) SetLastConsolidated(n int) error {
-	return s.memorySvc.SetState(s.tenantID, n)
+	return s.memorySvc.SetState(context.Background(), s.tenantID, n)
 }
 
 // Clear removes all messages from this tenant's session

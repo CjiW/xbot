@@ -413,6 +413,8 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 	for {
 		select {
 		case <-ctx.Done():
+			// Drain remaining body before returning to allow connection reuse
+			io.Copy(io.Discard, resp.Body)
 			eventChan <- StreamEvent{
 				Type:  EventError,
 				Error: ctx.Err().Error(),
@@ -426,6 +428,8 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 			if err == io.EOF {
 				return
 			}
+			// Drain remaining body before returning
+			io.Copy(io.Discard, resp.Body)
 			eventChan <- StreamEvent{
 				Type:  EventError,
 				Error: fmt.Sprintf("read stream error: %v", err),

@@ -133,10 +133,10 @@ func TestMultiTenantSession_MemoryIsolation(t *testing.T) {
 	}
 
 	// Write memory via underlying memorySvc (FlatMemory doesn't expose WriteLongTerm)
-	if err := mt.memorySvc.WriteLongTerm(sess1.TenantID(), "# Memory 1\nUser likes Go"); err != nil {
+	if err := mt.memorySvc.WriteLongTerm(context.Background(), sess1.TenantID(), "# Memory 1\nUser likes Go"); err != nil {
 		t.Fatalf("Failed to write memory 1: %v", err)
 	}
-	if err := mt.memorySvc.WriteLongTerm(sess2.TenantID(), "# Memory 2\nUser likes Rust"); err != nil {
+	if err := mt.memorySvc.WriteLongTerm(context.Background(), sess2.TenantID(), "# Memory 2\nUser likes Rust"); err != nil {
 		t.Fatalf("Failed to write memory 2: %v", err)
 	}
 

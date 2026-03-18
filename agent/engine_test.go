@@ -284,9 +284,12 @@ func TestRun_LLMError_GracefulDegradation(t *testing.T) {
 		},
 	})
 
-	// Should return partial content instead of error
-	if out.Content != "Let me check..." {
-		t.Errorf("content = %q, want partial result", out.Content)
+	// Should return partial content with error warning appended
+	if out.Content == "" || !strings.HasPrefix(out.Content, "Let me check...") {
+		t.Errorf("content = %q, want partial result with warning", out.Content)
+	}
+	if !strings.Contains(out.Content, "⚠️ LLM 调用失败") {
+		t.Errorf("content = %q, want partial result to contain warning", out.Content)
 	}
 }
 
@@ -308,6 +311,10 @@ func TestRun_LLMError_NoPartialResult(t *testing.T) {
 	}
 	if !errors.Is(out.Error, ErrLLMGenerate) {
 		t.Errorf("error = %v, want ErrLLMGenerate", out.Error)
+	}
+	// Content should also contain user-friendly error message
+	if out.Content == "" || !strings.Contains(out.Content, "❌ LLM 服务调用失败") {
+		t.Errorf("content = %q, want user-friendly error message", out.Content)
 	}
 }
 

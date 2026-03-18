@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestMemoryService_LongTermMemory(t *testing.T) {
 	}
 
 	// Initially no memory
-	content, err := memorySvc.ReadLongTerm(tenantID)
+	content, err := memorySvc.ReadLongTerm(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to read long-term memory: %v", err)
 	}
@@ -32,12 +33,12 @@ func TestMemoryService_LongTermMemory(t *testing.T) {
 
 	// Write memory
 	testMemory := "# Key Facts\n- User likes Go\n- Project name is xbot"
-	if err := memorySvc.WriteLongTerm(tenantID, testMemory); err != nil {
+	if err := memorySvc.WriteLongTerm(context.Background(), tenantID, testMemory); err != nil {
 		t.Fatalf("Failed to write long-term memory: %v", err)
 	}
 
 	// Read back
-	content, err = memorySvc.ReadLongTerm(tenantID)
+	content, err = memorySvc.ReadLongTerm(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to read long-term memory: %v", err)
 	}
@@ -47,11 +48,11 @@ func TestMemoryService_LongTermMemory(t *testing.T) {
 
 	// Overwrite memory
 	newMemory := "# Updated Facts\n- User loves Go"
-	if err := memorySvc.WriteLongTerm(tenantID, newMemory); err != nil {
+	if err := memorySvc.WriteLongTerm(context.Background(), tenantID, newMemory); err != nil {
 		t.Fatalf("Failed to overwrite long-term memory: %v", err)
 	}
 
-	content, err = memorySvc.ReadLongTerm(tenantID)
+	content, err = memorySvc.ReadLongTerm(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to read updated memory: %v", err)
 	}
@@ -84,21 +85,21 @@ func TestMemoryService_EventHistory(t *testing.T) {
 	// Add history entries to tenant 1
 	entry1 := "[2026-02-27 10:00] User asked about Go programming"
 	entry2 := "[2026-02-27 11:00] Discussed SQLite implementation"
-	if err := memorySvc.AppendHistory(tenantID1, entry1); err != nil {
+	if err := memorySvc.AppendHistory(context.Background(), tenantID1, entry1); err != nil {
 		t.Fatalf("Failed to append history entry 1: %v", err)
 	}
-	if err := memorySvc.AppendHistory(tenantID1, entry2); err != nil {
+	if err := memorySvc.AppendHistory(context.Background(), tenantID1, entry2); err != nil {
 		t.Fatalf("Failed to append history entry 2: %v", err)
 	}
 
 	// Add history entry to tenant 2
 	entry3 := "[2026-02-27 12:00] Different conversation"
-	if err := memorySvc.AppendHistory(tenantID2, entry3); err != nil {
+	if err := memorySvc.AppendHistory(context.Background(), tenantID2, entry3); err != nil {
 		t.Fatalf("Failed to append history entry 3: %v", err)
 	}
 
 	// Get history for tenant 1
-	entries1, err := memorySvc.GetHistoryEntries(tenantID1, 10)
+	entries1, err := memorySvc.GetHistoryEntries(context.Background(), tenantID1, 10)
 	if err != nil {
 		t.Fatalf("Failed to get history entries for tenant 1: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestMemoryService_EventHistory(t *testing.T) {
 	}
 
 	// Get history for tenant 2
-	entries2, err := memorySvc.GetHistoryEntries(tenantID2, 10)
+	entries2, err := memorySvc.GetHistoryEntries(context.Background(), tenantID2, 10)
 	if err != nil {
 		t.Fatalf("Failed to get history entries for tenant 2: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestMemoryService_EventHistory(t *testing.T) {
 	}
 
 	// Test limit
-	limitedEntries, err := memorySvc.GetHistoryEntries(tenantID1, 1)
+	limitedEntries, err := memorySvc.GetHistoryEntries(context.Background(), tenantID1, 1)
 	if err != nil {
 		t.Fatalf("Failed to get limited history entries: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestMemoryService_State(t *testing.T) {
 	}
 
 	// Initially state should be 0
-	state, err := memorySvc.GetState(tenantID)
+	state, err := memorySvc.GetState(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to get state: %v", err)
 	}
@@ -152,12 +153,12 @@ func TestMemoryService_State(t *testing.T) {
 	}
 
 	// Update state
-	if err := memorySvc.SetState(tenantID, 42); err != nil {
+	if err := memorySvc.SetState(context.Background(), tenantID, 42); err != nil {
 		t.Fatalf("Failed to set state: %v", err)
 	}
 
 	// Read back state
-	state, err = memorySvc.GetState(tenantID)
+	state, err = memorySvc.GetState(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to get updated state: %v", err)
 	}
@@ -166,11 +167,11 @@ func TestMemoryService_State(t *testing.T) {
 	}
 
 	// Update again
-	if err := memorySvc.SetState(tenantID, 100); err != nil {
+	if err := memorySvc.SetState(context.Background(), tenantID, 100); err != nil {
 		t.Fatalf("Failed to update state: %v", err)
 	}
 
-	state, err = memorySvc.GetState(tenantID)
+	state, err = memorySvc.GetState(context.Background(), tenantID)
 	if err != nil {
 		t.Fatalf("Failed to get final state: %v", err)
 	}

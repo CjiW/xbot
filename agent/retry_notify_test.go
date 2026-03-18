@@ -18,7 +18,7 @@ func TestSummarizeRetryError(t *testing.T) {
 		{"429", errors.New(`POST "url": 429 Too Many Requests`), "请求限流"},
 		{"rate limit", errors.New("rate limit exceeded"), "请求限流"},
 		{"502", errors.New(`POST "url": 502 Bad Gateway`), "服务暂时不可用"},
-		{"503", errors.New("CodeBuddy API error: status=503"), "服务暂时不可用"},
+		{"503", errors.New(`POST "url": 503 Service Unavailable`), "服务暂时不可用"},
 		{"500", errors.New(`POST "url": 500 Internal Server Error`), "服务端错误"},
 		{"504", errors.New(`POST "url": 504 Gateway Timeout`), "服务端错误"},
 		{"net.OpError timeout", &net.OpError{Op: "dial", Net: "tcp", Err: &timeoutErr{}}, "网络超时"},

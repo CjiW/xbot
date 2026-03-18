@@ -129,10 +129,8 @@ func isRetryableError(err error) bool {
 		return true
 	}
 	// OpenAI SDK 错误格式: `POST "URL": NNN StatusText ...`
-	// CodeBuddy 错误格式: `CodeBuddy API error: status=NNN, body=...`
 	for _, code := range []string{"429", "500", "502", "503", "504"} {
-		if strings.Contains(msg, ": "+code+" ") || // OpenAI
-			strings.Contains(msg, "status="+code) { // CodeBuddy
+		if strings.Contains(msg, ": "+code+" ") { // OpenAI
 			return true
 		}
 	}
@@ -145,7 +143,7 @@ func isRateLimitError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, ": 429 ") || strings.Contains(msg, "status=429")
+	return strings.Contains(msg, ": 429 ")
 }
 
 // retryOptions 构建通用重试选项

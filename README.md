@@ -35,7 +35,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **bus/** — Inbound/Outbound message channels
 - **channel/** — IM channels (feishu, qq), dispatcher
 - **agent/** — Agent loop: LLM → tool calls → response
-- **llm/** — LLM clients (OpenAI-compatible, CodeBuddy)
+- **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry and implementations
 - **memory/** — Memory providers (flat/letta)
 - **session/** — Multi-tenant session management
@@ -76,7 +76,7 @@ All config via environment variables or `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_PROVIDER` | LLM provider (`openai`/`codebuddy`/`anthropic`) | `openai` |
+| `LLM_PROVIDER` | LLM provider (`openai`/`anthropic`) | `openai` |
 | `LLM_BASE_URL` | API URL | — |
 | `LLM_API_KEY` | API key | — |
 | `LLM_MODEL` | Model name | `deepseek-chat` |

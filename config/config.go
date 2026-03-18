@@ -118,14 +118,10 @@ type ServerConfig struct {
 
 // LLMConfig LLM 配置
 type LLMConfig struct {
-	Provider string // LLM 提供商: "openai"、"codebuddy" 或 "anthropic"
+	Provider string // LLM 提供商: "openai" 或 "anthropic"
 	BaseURL  string
 	APIKey   string
 	Model    string // 默认模型（API 获取失败时的回退模型）
-	// CodeBuddy 专用配置
-	UserID       string // X-User-Id
-	EnterpriseID string // X-Enterprise-Id / X-Tenant-Id
-	Domain       string // X-Domain
 }
 
 // LogConfig 日志配置
@@ -151,20 +147,10 @@ func Load() *Config {
 			WriteTimeout: time.Duration(getEnvIntOrDefault("SERVER_WRITE_TIMEOUT", 120)) * time.Second,
 		},
 		LLM: LLMConfig{
-			// DeepSeek 配置（OpenAI 兼容）
-			// Provider: getEnvOrDefault("LLM_PROVIDER", "openai"),
-			// BaseURL:  getEnvOrDefault("LLM_BASE_URL", "https://api.deepseek.com"),
-			// APIKey:   getEnvOrDefault("LLM_API_KEY", ""),
-			// Model:    getEnvOrDefault("LLM_MODEL", "deepseek-chat"),
-
-			// CodeBuddy 配置
-			Provider:     getEnvOrDefault("LLM_PROVIDER", "codebuddy"),
-			BaseURL:      getEnvOrDefault("LLM_BASE_URL", "https://copilot.tencent.com/v2/chat/completions"),
-			APIKey:       getEnvOrDefault("LLM_API_KEY", ""),
-			Model:        getEnvOrDefault("LLM_MODEL", ""),
-			UserID:       getEnvOrDefault("LLM_USER_ID", ""),
-			EnterpriseID: getEnvOrDefault("LLM_ENTERPRISE_ID", ""),
-			Domain:       getEnvOrDefault("LLM_DOMAIN", ""),
+			Provider: getEnvOrDefault("LLM_PROVIDER", "openai"),
+			BaseURL:  getEnvOrDefault("LLM_BASE_URL", "https://api.openai.com/v1"),
+			APIKey:   getEnvOrDefault("LLM_API_KEY", ""),
+			Model:    getEnvOrDefault("LLM_MODEL", "gpt-4o"),
 		},
 		Log: LogConfig{
 			Level:  getEnvOrDefault("LOG_LEVEL", "info"),

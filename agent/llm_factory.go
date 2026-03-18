@@ -122,18 +122,6 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	}
 
 	switch cfg.Provider {
-	case "codebuddy":
-		// CodeBuddy 使用专有 API
-		client := llm.NewCodeBuddyLLM(llm.CodeBuddyConfig{
-			BaseURL:      cfg.BaseURL,
-			Token:        cfg.APIKey,
-			UserID:       cfg.UserID,
-			EnterpriseID: cfg.EnterpriseID,
-			Domain:       cfg.Domain,
-			DefaultModel: model,
-		})
-		return client, model
-
 	case "anthropic":
 		client := llm.NewAnthropicLLM(llm.AnthropicConfig{
 			BaseURL:      cfg.BaseURL,

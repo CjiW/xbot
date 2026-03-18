@@ -11,6 +11,26 @@ import (
 // cardToolNames lists dynamically registered card tool names for cleanup.
 var cardToolNames = []string{"card_add_content", "card_add_interactive", "card_add_container", "card_preview", "card_send"}
 
+// parseAndGetSession is a helper that unmarshals JSON input into args and retrieves the card session.
+// args must be a pointer to a struct with a CardID string field tagged `json:"card_id"`.
+func parseAndGetSession[T interface{ getCardID() string }](builder *CardBuilder, input string, args T) (*CardSession, error) {
+	if err := json.Unmarshal([]byte(input), args); err != nil {
+		return nil, fmt.Errorf("parse arguments: %w", err)
+	}
+	session, ok := builder.GetSession(args.getCardID())
+	if !ok {
+		return nil, fmt.Errorf("card session '%s' not found", args.getCardID())
+	}
+	return session, nil
+}
+
+// cardArgs is a common base for tool arguments that include a card_id.
+type cardArgs struct {
+	CardID string `json:"card_id"`
+}
+
+func (a *cardArgs) getCardID() string { return a.CardID }
+
 // ensureCardToolsRegistered registers the dynamic card tools if not already present.
 func ensureCardToolsRegistered(registry *Registry, builder *CardBuilder) {
 	if _, ok := registry.Get("card_send"); ok {
@@ -130,7 +150,7 @@ func (t *CardAddContentTool) Parameters() []llm.ToolParam {
 
 func (t *CardAddContentTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	var args struct {
-		CardID     string `json:"card_id"`
+		cardArgs
 		Type       string `json:"type"`
 		Content    string `json:"content"`
 		ImgKey     string `json:"img_key"`
@@ -141,13 +161,9 @@ func (t *CardAddContentTool) Execute(ctx *ToolContext, input string) (*ToolResul
 		Properties string `json:"properties"`
 		ParentID   string `json:"parent_id"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
-	}
-
-	session, ok := t.builder.GetSession(args.CardID)
-	if !ok {
-		return nil, fmt.Errorf("card session '%s' not found. Create one with card_create first", args.CardID)
+	session, err := parseAndGetSession(t.builder, input, &args)
+	if err != nil {
+		return nil, err
 	}
 
 	props, err := ParseProperties(args.Properties)
@@ -290,7 +306,7 @@ func (t *CardAddInteractiveTool) Parameters() []llm.ToolParam {
 
 func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	var args struct {
-		CardID     string `json:"card_id"`
+		cardArgs
 		Type       string `json:"type"`
 		Name       string `json:"name"`
 		Text       string `json:"text"`
@@ -300,13 +316,9 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		Properties string `json:"properties"`
 		ParentID   string `json:"parent_id"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
-	}
-
-	session, ok := t.builder.GetSession(args.CardID)
-	if !ok {
-		return nil, fmt.Errorf("card session '%s' not found", args.CardID)
+	session, err := parseAndGetSession(t.builder, input, &args)
+	if err != nil {
+		return nil, err
 	}
 
 	props, err := ParseProperties(args.Properties)
@@ -317,6 +329,11 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 	var elem *CardElement
 	typeName := args.Type
 	elemID := session.NextElementID(typeName)
+
+	// All interactive types except button require a name
+	if typeName != "button" && args.Name == "" {
+		return nil, fmt.Errorf("name is required for %s", typeName)
+	}
 
 	switch typeName {
 	case "button":
@@ -354,15 +371,9 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		elem = BuildButton(args.Text, btnType, props)
 
 	case "input":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for input")
-		}
 		elem = BuildInput(args.Name, props)
 
 	case "select_static":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for select_static")
-		}
 		opts, err := ParseSelectOptions(args.Options)
 		if err != nil {
 			return nil, fmt.Errorf("select_static: %w", err)
@@ -370,9 +381,6 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		elem = BuildSelectStatic(args.Name, opts, props)
 
 	case "multi_select_static":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for multi_select_static")
-		}
 		opts, err := ParseSelectOptions(args.Options)
 		if err != nil {
 			return nil, fmt.Errorf("multi_select_static: %w", err)
@@ -380,39 +388,21 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		elem = BuildMultiSelectStatic(args.Name, opts, props)
 
 	case "select_person":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for select_person")
-		}
 		elem = BuildSelectPerson(args.Name, props)
 
 	case "multi_select_person":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for multi_select_person")
-		}
 		elem = BuildMultiSelectPerson(args.Name, props)
 
 	case "date_picker":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for date_picker")
-		}
 		elem = BuildDatePicker(args.Name, props)
 
 	case "picker_time":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for picker_time")
-		}
 		elem = BuildTimePicker(args.Name, props)
 
 	case "picker_datetime":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for picker_datetime")
-		}
 		elem = BuildDateTimePicker(args.Name, props)
 
 	case "overflow":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for overflow")
-		}
 		opts, err := ParseSelectOptions(args.Options)
 		if err != nil {
 			return nil, fmt.Errorf("overflow: %w", err)
@@ -420,15 +410,12 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		elem = BuildOverflow(args.Name, opts, props)
 
 	case "checker":
-		if args.Name == "" || args.Text == "" {
+		if args.Text == "" {
 			return nil, fmt.Errorf("name and text are required for checker")
 		}
 		elem = BuildChecker(args.Name, args.Text, props)
 
 	case "select_img":
-		if args.Name == "" {
-			return nil, fmt.Errorf("name is required for select_img")
-		}
 		opts, err := ParseImgSelectOptions(args.Options)
 		if err != nil {
 			return nil, err
@@ -480,18 +467,14 @@ func (t *CardAddContainerTool) Parameters() []llm.ToolParam {
 
 func (t *CardAddContainerTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	var args struct {
-		CardID     string `json:"card_id"`
+		cardArgs
 		Type       string `json:"type"`
 		Properties string `json:"properties"`
 		ParentID   string `json:"parent_id"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
-	}
-
-	session, ok := t.builder.GetSession(args.CardID)
-	if !ok {
-		return nil, fmt.Errorf("card session '%s' not found", args.CardID)
+	session, err := parseAndGetSession(t.builder, input, &args)
+	if err != nil {
+		return nil, err
 	}
 
 	props, err := ParseProperties(args.Properties)
@@ -601,16 +584,10 @@ func (t *CardPreviewTool) Parameters() []llm.ToolParam {
 }
 
 func (t *CardPreviewTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var args struct {
-		CardID string `json:"card_id"`
-	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
-	}
-
-	session, ok := t.builder.GetSession(args.CardID)
-	if !ok {
-		return nil, fmt.Errorf("card session '%s' not found", args.CardID)
+	var args cardArgs
+	session, err := parseAndGetSession(t.builder, input, &args)
+	if err != nil {
+		return nil, err
 	}
 
 	return NewResult(session.PreviewSummary()), nil
@@ -639,16 +616,12 @@ func (t *CardSendTool) Parameters() []llm.ToolParam {
 
 func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	var args struct {
-		CardID       string `json:"card_id"`
+		cardArgs
 		WaitResponse string `json:"wait_response"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return nil, fmt.Errorf("parse arguments: %w", err)
-	}
-
-	session, ok := t.builder.GetSession(args.CardID)
-	if !ok {
-		return nil, fmt.Errorf("card session '%s' not found", args.CardID)
+	session, err := parseAndGetSession(t.builder, input, &args)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(session.Elements) == 0 {

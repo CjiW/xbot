@@ -166,6 +166,22 @@ func (b *CardBuilder) GetAllElementOptions(cardID string) map[string]string {
 	return nil
 }
 
+// WalkElements traverses all elements in the card tree, calling fn for each element.
+// insideForm indicates whether the current element is nested inside a form container.
+func (s *CardSession) WalkElements(fn func(elem *CardElement, insideForm bool)) {
+	for _, elem := range s.Elements {
+		walkTree(elem, false, fn)
+	}
+}
+
+func walkTree(elem *CardElement, insideForm bool, fn func(elem *CardElement, insideForm bool)) {
+	fn(elem, insideForm)
+	childInsideForm := insideForm || elem.Tag == "form"
+	for _, child := range elem.Children {
+		walkTree(child, childInsideForm, fn)
+	}
+}
+
 // ---------- CardSession methods ----------
 
 // SetHeader sets the card header.
@@ -214,14 +230,11 @@ func (s *CardSession) containerIDs() string {
 	if len(s.Containers) == 0 {
 		return "none"
 	}
-	ids := ""
+	ids := make([]string, 0, len(s.Containers))
 	for id := range s.Containers {
-		if ids != "" {
-			ids += ", "
-		}
-		ids += id
+		ids = append(ids, id)
 	}
-	return ids
+	return strings.Join(ids, ", ")
 }
 
 // NextElementID generates a unique element ID within this session.
@@ -259,53 +272,38 @@ func (s *CardSession) BuildJSON() ([]byte, error) {
 // Feishu requires globally unique names for all interactive elements.
 func (s *CardSession) deduplicateNames() {
 	used := make(map[string]int)
-	for _, elem := range s.Elements {
-		deduplicateNamesInTree(elem, used)
-	}
-}
-
-func deduplicateNamesInTree(elem *CardElement, used map[string]int) {
-	if name, ok := elem.Properties["name"].(string); ok && name != "" {
-		used[name]++
-		if used[name] > 1 {
-			newName := fmt.Sprintf("%s_%d", name, used[name])
-			elem.Properties["name"] = newName
+	s.WalkElements(func(elem *CardElement, _ bool) {
+		if name, ok := elem.Properties["name"].(string); ok && name != "" {
+			used[name]++
+			if used[name] > 1 {
+				elem.Properties["name"] = fmt.Sprintf("%s_%d", name, used[name])
+			}
 		}
-	}
-	for _, child := range elem.Children {
-		deduplicateNamesInTree(child, used)
-	}
+	})
 }
 
 // ensureFormSubmitButtons checks all form containers and auto-injects a submit
 // button if none exists. Feishu requires at least one button with
 // action_type=form_submit inside every form container.
 func (s *CardSession) ensureFormSubmitButtons() {
-	for _, elem := range s.Elements {
-		ensureSubmitInTree(elem, s.ID)
-	}
-}
-
-func ensureSubmitInTree(elem *CardElement, sessionID string) {
-	if elem.Tag == "form" && !hasSubmitButton(elem) {
-		formName, _ := elem.Properties["name"].(string)
-		submitID := fmt.Sprintf("%s_submit_auto", elem.ID)
-		submit := &CardElement{
-			ID:  submitID,
-			Tag: "button",
-			Properties: map[string]any{
-				"text":        map[string]any{"tag": "plain_text", "content": "提交"},
-				"type":        "primary",
-				"action_type": "form_submit",
-				"name":        submitID,
-				"value":       map[string]any{"card_id": sessionID, "form_name": formName},
-			},
+	s.WalkElements(func(elem *CardElement, _ bool) {
+		if elem.Tag == "form" && !hasSubmitButton(elem) {
+			formName, _ := elem.Properties["name"].(string)
+			submitID := fmt.Sprintf("%s_submit_auto", elem.ID)
+			submit := &CardElement{
+				ID:  submitID,
+				Tag: "button",
+				Properties: map[string]any{
+					"text":        map[string]any{"tag": "plain_text", "content": "提交"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"name":        submitID,
+					"value":       map[string]any{"card_id": s.ID, "form_name": formName},
+				},
+			}
+			elem.Children = append(elem.Children, submit)
 		}
-		elem.Children = append(elem.Children, submit)
-	}
-	for _, child := range elem.Children {
-		ensureSubmitInTree(child, sessionID)
-	}
+	})
 }
 
 func hasSubmitButton(elem *CardElement) bool {
@@ -362,14 +360,10 @@ func (s *CardSession) Description() string {
 func (s *CardSession) CollectExpectedInteractions() {
 	interactions := make(map[string]bool)
 
-	// Track if we're inside a form
-	var collectFromElement func(elem *CardElement, insideForm bool)
-	collectFromElement = func(elem *CardElement, insideForm bool) {
+	s.WalkElements(func(elem *CardElement, insideForm bool) {
 		switch elem.Tag {
 		case "button":
-			// Buttons are always handled
 			interactions["button"] = true
-			// Check if this is a form submit button
 			if at, ok := elem.Properties["action_type"].(string); ok && at == "form_submit" {
 				interactions["form_submit"] = true
 			}
@@ -378,33 +372,14 @@ func (s *CardSession) CollectExpectedInteractions() {
 			"select_person", "multi_select_person",
 			"date_picker", "picker_time", "picker_datetime",
 			"overflow", "checker", "select_img":
-			// Only handle these immediately if NOT inside a form
-			// Inside a form, they're collected on submit
 			if !insideForm {
 				interactions[elem.Tag] = true
 			}
 
-		case "form":
-			// Mark that we're now inside a form
-			for _, child := range elem.Children {
-				collectFromElement(child, true)
-			}
-			return // Don't process children again
-
 		case "input":
 			// Input changes are not handled immediately; only on form submit
-			// No action needed here
 		}
-
-		// Recurse into children
-		for _, child := range elem.Children {
-			collectFromElement(child, insideForm)
-		}
-	}
-
-	for _, elem := range s.Elements {
-		collectFromElement(elem, false)
-	}
+	})
 
 	// Convert to slice
 	s.ExpectedInteractions = make([]string, 0, len(interactions))
@@ -418,8 +393,7 @@ func (s *CardSession) CollectExpectedInteractions() {
 func (s *CardSession) CollectElementOptions() map[string]string {
 	options := make(map[string]string)
 
-	var collectFromElement func(elem *CardElement)
-	collectFromElement = func(elem *CardElement) {
+	s.WalkElements(func(elem *CardElement, _ bool) {
 		name, _ := elem.Properties["name"].(string)
 
 		switch elem.Tag {
@@ -444,16 +418,7 @@ func (s *CardSession) CollectElementOptions() map[string]string {
 				}
 			}
 		}
-
-		// Recurse into children
-		for _, child := range elem.Children {
-			collectFromElement(child)
-		}
-	}
-
-	for _, elem := range s.Elements {
-		collectFromElement(elem)
-	}
+	})
 
 	return options
 }
@@ -599,10 +564,7 @@ func describeOptionsWithValues(opts any) string {
 }
 
 func previewElement(e *CardElement, idx, depth int) string {
-	indent := ""
-	for i := 0; i < depth; i++ {
-		indent += "  "
-	}
+	indent := strings.Repeat("  ", depth)
 	line := fmt.Sprintf("%s%d. [%s] id=%s", indent, idx+1, e.Tag, e.ID)
 	if len(e.Children) > 0 {
 		line += fmt.Sprintf(" (%d children)", len(e.Children))
@@ -630,14 +592,6 @@ func renderElement(e *CardElement) map[string]any {
 		switch e.Tag {
 		case "column_set":
 			result["columns"] = children
-		case "column":
-			result["elements"] = children
-		case "form":
-			result["elements"] = children
-		case "collapsible_panel":
-			result["elements"] = children
-		case "interactive_container":
-			result["elements"] = children
 		case "action":
 			result["actions"] = children
 		default:
@@ -766,84 +720,61 @@ func BuildButton(text, btnType string, props map[string]any) *CardElement {
 // BuildInput creates an input element.
 func BuildInput(name string, props map[string]any) *CardElement {
 	p := map[string]any{"name": name}
-	if label, ok := props["label"].(string); ok && label != "" {
-		p["label"] = map[string]any{"tag": "plain_text", "content": label}
-	}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
+	setPlainTextProp(p, "label", props)
+	setPlainTextProp(p, "placeholder", props)
 	mergeProps(p, props, "default_value", "max_length", "rows", "auto_resize", "max_rows", "width")
 	return &CardElement{Tag: "input", Properties: p}
 }
 
+// buildSelectStatic is the shared implementation for single and multi select dropdowns.
+func buildSelectStatic(name, tag string, options []map[string]any, props map[string]any, extraKeys ...string) *CardElement {
+	p := map[string]any{"name": name, "options": options}
+	setPlainTextProp(p, "placeholder", props)
+	mergeProps(p, props, append(extraKeys, "width")...)
+	return &CardElement{Tag: tag, Properties: p}
+}
+
 // BuildSelectStatic creates a single-select dropdown.
 func BuildSelectStatic(name string, options []map[string]any, props map[string]any) *CardElement {
-	p := map[string]any{"name": name, "options": options}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "initial_option", "width")
-	return &CardElement{Tag: "select_static", Properties: p}
+	return buildSelectStatic(name, "select_static", options, props, "initial_option")
 }
 
 // BuildMultiSelectStatic creates a multi-select dropdown.
 func BuildMultiSelectStatic(name string, options []map[string]any, props map[string]any) *CardElement {
-	p := map[string]any{"name": name, "options": options}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "initial_options", "width")
-	return &CardElement{Tag: "multi_select_static", Properties: p}
+	return buildSelectStatic(name, "multi_select_static", options, props, "initial_options")
+}
+
+// buildNamedPicker creates a picker-style element with a name, optional placeholder, and extra merge keys.
+func buildNamedPicker(name, tag string, props map[string]any, extraKeys ...string) *CardElement {
+	p := map[string]any{"name": name}
+	setPlainTextProp(p, "placeholder", props)
+	mergeProps(p, props, append(extraKeys, "width")...)
+	return &CardElement{Tag: tag, Properties: p}
 }
 
 // BuildSelectPerson creates a single-select person picker.
 func BuildSelectPerson(name string, props map[string]any) *CardElement {
-	p := map[string]any{"name": name}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "width")
-	return &CardElement{Tag: "select_person", Properties: p}
+	return buildNamedPicker(name, "select_person", props)
 }
 
 // BuildMultiSelectPerson creates a multi-select person picker.
 func BuildMultiSelectPerson(name string, props map[string]any) *CardElement {
-	p := map[string]any{"name": name}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "width")
-	return &CardElement{Tag: "multi_select_person", Properties: p}
+	return buildNamedPicker(name, "multi_select_person", props)
 }
 
 // BuildDatePicker creates a date picker element.
 func BuildDatePicker(name string, props map[string]any) *CardElement {
-	p := map[string]any{"name": name}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "initial_date", "width")
-	return &CardElement{Tag: "date_picker", Properties: p}
+	return buildNamedPicker(name, "date_picker", props, "initial_date")
 }
 
 // BuildTimePicker creates a time picker element.
 func BuildTimePicker(name string, props map[string]any) *CardElement {
-	p := map[string]any{"name": name}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "initial_time", "width")
-	return &CardElement{Tag: "picker_time", Properties: p}
+	return buildNamedPicker(name, "picker_time", props, "initial_time")
 }
 
 // BuildDateTimePicker creates a date-time picker element.
 func BuildDateTimePicker(name string, props map[string]any) *CardElement {
-	p := map[string]any{"name": name}
-	if ph, ok := props["placeholder"].(string); ok && ph != "" {
-		p["placeholder"] = map[string]any{"tag": "plain_text", "content": ph}
-	}
-	mergeProps(p, props, "initial_datetime", "width")
-	return &CardElement{Tag: "picker_datetime", Properties: p}
+	return buildNamedPicker(name, "picker_datetime", props, "initial_datetime")
 }
 
 // BuildOverflow creates an overflow button group element.
@@ -937,6 +868,13 @@ func BuildInteractiveContainer(props map[string]any) *CardElement {
 }
 
 // ---------- Helpers ----------
+
+// setPlainTextProp checks if src[key] is a non-empty string and sets dst[key] to a plain_text object.
+func setPlainTextProp(dst map[string]any, key string, src map[string]any) {
+	if v, ok := src[key].(string); ok && v != "" {
+		dst[key] = map[string]any{"tag": "plain_text", "content": v}
+	}
+}
 
 // mergeProps copies allowed keys from src to dst.
 func mergeProps(dst, src map[string]any, keys ...string) {

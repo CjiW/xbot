@@ -42,6 +42,12 @@ type MessageContext struct {
 	// WorkDir 工作目录（展示给 LLM 的路径）
 	WorkDir string
 
+	// WorkspaceRoot 工作区根目录（宿主机路径）
+	WorkspaceRoot string
+
+	// CurrentDir 当前工作目录（PWD，可变）
+	CurrentDir string
+
 	// SenderName 发送者名称
 	SenderName string
 

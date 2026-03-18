@@ -14,13 +14,15 @@ import (
 )
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
-const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}}
+const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}} | Workspace根目录：{{.WorkspaceRoot}} | 当前目录：{{.CurrentDir}}
 `
 
 // PromptData 模板渲染数据
 type PromptData struct {
-	Channel string
-	WorkDir string
+	Channel       string
+	WorkDir       string
+	WorkspaceRoot string
+	CurrentDir    string
 }
 
 // PromptLoader 负责加载和渲染系统提示词模板
@@ -171,18 +173,24 @@ func (a *Agent) CronPipeline() *MessagePipeline {
 // NewMessageContext 创建一个预填充的 MessageContext，用于主 pipeline。
 // 调用方设置动态字段（Extra 中的 ExtraKeySkillsCatalog、ExtraKeyAgentsCatalog、ExtraKeyMemoryProvider）后，
 // 传入 pipeline.Run(mc) 执行。
-func NewMessageContext(ctx context.Context, userContent string, history []llm.ChatMessage, channel, workDir, senderName, senderID, chatID string) *MessageContext {
+func NewMessageContext(ctx context.Context, userContent string, history []llm.ChatMessage, channel, workDir, workspaceRoot, currentDir, senderName, senderID, chatID string) *MessageContext {
+	// 如果 currentDir 为空，使用 workspaceRoot
+	if currentDir == "" {
+		currentDir = workspaceRoot
+	}
 	return &MessageContext{
-		Ctx:         ctx,
-		SystemParts: make(map[string]string),
-		UserContent: userContent,
-		History:     history,
-		Channel:     channel,
-		WorkDir:     workDir,
-		SenderName:  senderName,
-		SenderID:    senderID,
-		ChatID:      chatID,
-		Extra:       make(map[string]any),
+		Ctx:           ctx,
+		SystemParts:   make(map[string]string),
+		UserContent:   userContent,
+		History:       history,
+		Channel:       channel,
+		WorkDir:       workDir,
+		WorkspaceRoot: workspaceRoot,
+		CurrentDir:    currentDir,
+		SenderName:    senderName,
+		SenderID:      senderID,
+		ChatID:        chatID,
+		Extra:         make(map[string]any),
 	}
 }
 

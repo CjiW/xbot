@@ -1057,6 +1057,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		history,
 		msg.Channel,
 		promptWorkDir,
+		workspaceRoot,
+		tenantSession.GetCurrentDir(), // 从 session 获取当前目录
 		msg.SenderName,
 		msg.SenderID,
 		msg.ChatID,

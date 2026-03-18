@@ -24,8 +24,10 @@ func (m *SystemPromptMiddleware) Priority() int { return 0 }
 
 func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 	content := m.loader.Render(PromptData{
-		Channel: mc.Channel,
-		WorkDir: mc.WorkDir,
+		Channel:       mc.Channel,
+		WorkDir:       mc.WorkDir,
+		WorkspaceRoot: mc.WorkspaceRoot,
+		CurrentDir:    mc.CurrentDir,
 	})
 	mc.SystemParts["00_base"] = content
 	return nil

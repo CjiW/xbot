@@ -176,6 +176,10 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		if envPersisted {
 			return NewResult("Command executed successfully. Environment variables persisted to ~/.xbot_env"), nil
 		}
+		// 检测 cd 命令，添加提醒
+		if containsCdCommand(params.Command) {
+			return NewResult("Command executed successfully (no output).\n\n💡 提示：Shell 中的 cd 命令在下一条命令时会失效。请使用 PWD 工具切换目录。"), nil
+		}
 		return NewResult("Command executed successfully (no output)"), nil
 	}
 
@@ -184,6 +188,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	if envPersisted {
 		result += "\n[Environment variables persisted to ~/.xbot_env]"
+	}
+
+	// 检测 cd 命令，添加提醒
+	if containsCdCommand(params.Command) {
+		result += "\n\n💡 提示：Shell 中的 cd 命令在下一条命令时会失效。请使用 PWD 工具切换目录。"
 	}
 
 	return NewResult(result), nil
@@ -387,4 +396,10 @@ func extractCdTarget(command string) string {
 	}
 
 	return target
+}
+
+// containsCdCommand 检测命令中是否包含 cd（不解析，只提醒）
+func containsCdCommand(command string) bool {
+	// 简单匹配：cd 后跟空格
+	return strings.Contains(command, "cd ")
 }

@@ -563,6 +563,7 @@ func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
 	r.RegisterCore(&ShellTool{})
+	r.RegisterCore(&PWDTool{})
 	r.RegisterCore(&GlobTool{})
 	r.RegisterCore(&GrepTool{})
 	r.RegisterCore(&ReadTool{})

@@ -717,7 +717,7 @@ func TestCronPipeline(t *testing.T) {
 
 func TestNewMessageContext(t *testing.T) {
 	ctx := context.Background()
-	mc := NewMessageContext(ctx, "hello", nil, "feishu", "/work", "Alice", "user1", "chat1")
+	mc := NewMessageContext(ctx, "hello", nil, "feishu", "/workspace", "/workspace", "", "Alice", "user1", "chat1")
 
 	if mc.Ctx != ctx {
 		t.Error("Ctx should be set")
@@ -728,8 +728,14 @@ func TestNewMessageContext(t *testing.T) {
 	if mc.Channel != "feishu" {
 		t.Error("Channel should be set")
 	}
-	if mc.WorkDir != "/work" {
+	if mc.WorkDir != "/workspace" {
 		t.Error("WorkDir should be set")
+	}
+	if mc.WorkspaceRoot != "/workspace" {
+		t.Error("WorkspaceRoot should be set")
+	}
+	if mc.CurrentDir != "/workspace" {
+		t.Error("CurrentDir should default to WorkspaceRoot when empty")
 	}
 	if mc.SenderName != "Alice" {
 		t.Error("SenderName should be set")
@@ -826,7 +832,7 @@ func TestFullPipeline_AllMiddlewares(t *testing.T) {
 		NewUserMessageMiddleware(),
 	)
 
-	mc := NewMessageContext(context.Background(), "hello", []llm.ChatMessage{llm.NewUserMessage("prev")}, "feishu", "/work", "TestUser", "", "")
+	mc := NewMessageContext(context.Background(), "hello", []llm.ChatMessage{llm.NewUserMessage("prev")}, "feishu", "/work", "/work", "", "TestUser", "", "")
 	mc.SetExtra(ExtraKeySkillsCatalog, "# Skills\n- deploy")
 	mc.SetExtra(ExtraKeyAgentsCatalog, "# Agents\n- reviewer")
 	mc.SetExtra(ExtraKeyMemoryProvider, mem)
@@ -985,6 +991,8 @@ func TestUserIDPropagationThroughPipeline(t *testing.T) {
 		nil,
 		"feishu",
 		"/workspace",
+		"/workspace",
+		"", // currentDir - empty, will default to workspaceRoot
 		"TestUser",
 		testUserID, // senderID
 		"chat123",

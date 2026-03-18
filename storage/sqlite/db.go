@@ -540,7 +540,7 @@ UPDATE schema_version SET version = 6;
 		_, err = conn.Exec(`
 			INSERT INTO user_llm_configs_new
 			(sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at)
-			SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at
+			SELECT sender_id, provider, base_url, api_key, model, COALESCE(max_context, 0), COALESCE(thinking_mode, ''), created_at, updated_at
 			FROM user_llm_configs;
 		`)
 		if err != nil {

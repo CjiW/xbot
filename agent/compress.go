@@ -11,6 +11,64 @@ import (
 	"xbot/session"
 )
 
+// CompressResult 压缩结果，区分 LLM 视图和 Session 视图。
+type CompressResult struct {
+	LLMView     []llm.ChatMessage // 含 tool 消息，继续当前 Run()
+	SessionView []llm.ChatMessage // 纯 user/assistant，持久化到 session
+}
+
+// extractDialogueFromTail 从含 tool 消息的尾部提取纯对话视图。
+// 每个 tool group 的摘要融入 assistant 消息。
+func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
+	var result []llm.ChatMessage
+	var pendingToolSummary strings.Builder
+
+	for _, msg := range tail {
+		switch {
+		case msg.Role == "user":
+			flushPending(&result, &pendingToolSummary)
+			result = append(result, llm.NewUserMessage(msg.Content))
+
+		case msg.Role == "assistant" && len(msg.ToolCalls) > 0:
+			// assistant 发起了 tool call
+			if msg.Content != "" {
+				pendingToolSummary.WriteString(msg.Content + "\n")
+			}
+			for _, tc := range msg.ToolCalls {
+				pendingToolSummary.WriteString(fmt.Sprintf("🔧 %s(%s)\n", tc.Name, truncateArgs(tc.Arguments, 100)))
+			}
+
+		case msg.Role == "assistant":
+			flushPending(&result, &pendingToolSummary)
+			result = append(result, llm.NewAssistantMessage(msg.Content))
+
+		case msg.Role == "tool":
+			toolContent := truncateRunes(msg.Content, 200)
+			pendingToolSummary.WriteString(fmt.Sprintf("  → %s\n", toolContent))
+		}
+	}
+	flushPending(&result, &pendingToolSummary)
+	return result
+}
+
+// flushPending 将累积的 tool 执行摘要作为 assistant 消息添加到结果
+func flushPending(result *[]llm.ChatMessage, builder *strings.Builder) {
+	if builder.Len() == 0 {
+		return
+	}
+	*result = append(*result, llm.NewAssistantMessage(builder.String()))
+	builder.Reset()
+}
+
+// truncateArgs 截断工具参数用于摘要显示
+func truncateArgs(args string, maxLen int) string {
+	runes := []rune(args)
+	if len(runes) <= maxLen {
+		return args
+	}
+	return string(runes[:maxLen]) + "..."
+}
+
 // handleCompress 处理 /compress 命令：手动触发上下文压缩
 func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制
@@ -58,7 +116,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
 	// 执行压缩
-	compressed, err := a.compressContext(ctx, messages, llmClient, model)
+	result, err := a.compressContext(ctx, messages, llmClient, model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -72,18 +130,15 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	if err := tenantSession.Clear(); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to clear session for compression")
 		// Clear 失败时只返回压缩结果，不持久化，避免数据损坏
-		newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
+		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, model)
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+			Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (LLM %d 条, Session %d 条)", tokenCount, newTokenCount, len(result.LLMView), len(result.SessionView)),
 		}, nil
 	}
 	allOk := true
-	for _, msg := range compressed {
-		if msg.Role == "system" {
-			continue
-		}
+	for _, msg := range result.SessionView {
 		assertNoSystemPersist(msg)
 		if err := tenantSession.AddMessage(msg); err != nil {
 			log.Ctx(ctx).WithError(err).Error("Partial write during compression, session may be corrupted")
@@ -92,19 +147,19 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}
 	}
 
-	newTokenCount, _ := llm.CountMessagesTokens(compressed, model)
+	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, model)
 	if allOk {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: fmt.Sprintf("上下文压缩完成: %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+			Content: fmt.Sprintf("上下文压缩完成: %d → %d tokens (LLM %d 条, Session %d 条)", tokenCount, newTokenCount, len(result.LLMView), len(result.SessionView)),
 		}, nil
 	}
 	// 部分写入失败，只返回内存结果
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (%d 条消息)", tokenCount, newTokenCount, len(compressed)),
+		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (LLM %d 条, Session %d 条)", tokenCount, newTokenCount, len(result.LLMView), len(result.SessionView)),
 	}, nil
 }
 
@@ -182,7 +237,7 @@ func truncateRunes(s string, maxLen int) string {
 // 1. 保留所有 tool 消息（tool_calls 和 tool result 必须配对，否则 API 报错）
 // 2. 把压缩后的摘要作为 user prompt 直接调用 LLM
 // 3. 保留 system 消息和最近的对话轮次
-func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) ([]llm.ChatMessage, error) {
+func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
 	// 第一步：找到尾部安全切割点
 	tailStart := len(messages) // 默认不保留任何尾部消息
 	for i := len(messages) - 1; i >= 1; i-- {
@@ -222,10 +277,15 @@ func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage,
 	}
 
 	if len(toCompress) == 0 {
-		var result []llm.ChatMessage
-		result = append(result, systemMsgs...)
-		result = append(result, thinnedTail...)
-		return result, nil
+		llmView := make([]llm.ChatMessage, 0, len(systemMsgs)+len(thinnedTail))
+		llmView = append(llmView, systemMsgs...)
+		llmView = append(llmView, thinnedTail...)
+
+		tailSummary := extractDialogueFromTail(thinnedTail)
+		return &CompressResult{
+			LLMView:     llmView,
+			SessionView: tailSummary,
+		}, nil
 	}
 
 	// 第四步：构建压缩 prompt
@@ -280,11 +340,22 @@ Output the compressed content directly, preserving as much context as possible.`
 	if len(systemMsgs) > 1 {
 		panic("assert: at most one system message in compress input; got " + fmt.Sprint(len(systemMsgs)))
 	}
-	var result []llm.ChatMessage
+	summaryMsg := llm.NewUserMessage("[Previous conversation context]\n\n" + compressed)
 
-	result = append(result, systemMsgs...)
-	result = append(result, llm.NewUserMessage("[Previous conversation context]\n\n"+compressed))
-	result = append(result, thinnedTail...)
+	// LLM View: system + 压缩摘要 + thinnedTail（含 tool 消息）
+	llmView := make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(thinnedTail))
+	llmView = append(llmView, systemMsgs...)
+	llmView = append(llmView, summaryMsg)
+	llmView = append(llmView, thinnedTail...)
 
-	return result, nil
+	// Session View: 压缩摘要 + 尾部对话摘要（纯 user/assistant）
+	tailSummary := extractDialogueFromTail(thinnedTail)
+	sessionView := make([]llm.ChatMessage, 0, 1+len(tailSummary))
+	sessionView = append(sessionView, summaryMsg)
+	sessionView = append(sessionView, tailSummary...)
+
+	return &CompressResult{
+		LLMView:     llmView,
+		SessionView: sessionView,
+	}, nil
 }

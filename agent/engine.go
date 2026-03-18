@@ -124,7 +124,7 @@ type InteractiveCallbacks struct {
 type CompressConfig struct {
 	MaxContextTokens     int
 	CompressionThreshold float64
-	CompressFunc         func(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) ([]llm.ChatMessage, error)
+	CompressFunc         func(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error)
 }
 
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
@@ -255,15 +255,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			"threshold": threshold,
 		}).Info("Auto context compression triggered")
 
-		compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
+		result, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
 		if compressErr != nil {
 			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
 			return
 		}
 
-		messages = compressed
+		messages = result.LLMView
 
-		newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 		if autoNotify {
 			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
 			notifyProgress("")
@@ -279,16 +279,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
 			} else {
 				allOk := true
-				for _, msg := range compressed {
-					if msg.Role == "system" {
-						continue
-					}
+				for _, msg := range result.SessionView {
 					assertNoSystemPersist(msg)
 					if err := cfg.Session.AddMessage(msg); err != nil {
 						log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
 						allOk = false
 						break
 					}
+				}
+				if allOk {
+					log.Ctx(ctx).Info("Auto compression persisted to session")
+				} else {
+					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 				}
 				if allOk {
 					log.Ctx(ctx).Info("Auto compression persisted to session")
@@ -389,23 +391,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 
 			if cc := cfg.AutoCompress; cc != nil {
-				compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
+				result, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 				} else {
-					messages = compressed
+					messages = result.LLMView
 					if autoNotify {
-						newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+						newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
 						notifyProgress("")
 					}
-					// 持久化压缩结果到 session
+					// 持久化压缩结果到 session（使用 SessionView，不含 tool 消息）
 					if cfg.Session != nil {
 						if clearErr := cfg.Session.Clear(); clearErr == nil {
-							for _, msg := range compressed {
-								if msg.Role == "system" {
-									continue
-								}
+							for _, msg := range result.SessionView {
 								assertNoSystemPersist(msg)
 								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
 									log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")

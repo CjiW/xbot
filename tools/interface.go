@@ -33,7 +33,8 @@ type ToolContext struct {
 	DataDir                 string                                          // 数据持久化目录
 	Channel                 string                                          // 当前消息来源渠道
 	ChatID                  string                                          // 当前消息来源会话
-	SenderID                string                                          // 当前消息发送者 ID
+	SenderID                string                                          // 直接调用者 ID（SubAgent 场景下为父 Agent ID，主 Agent 场景下等于 OriginUserID）
+	OriginUserID            string                                          // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等需要原始用户的场景）
 	SenderName              string                                          // 当前消息发送者姓名
 	SendFunc                func(channel, chatID, content string) error     // 向 IM 渠道发送消息（不经过 Agent），返回错误
 	InjectInbound           func(channel, chatID, senderID, content string) // 注入入站消息，触发 Agent 完整处理循环
@@ -47,6 +48,10 @@ type ToolContext struct {
 	MemorySvc       *sqlite.MemoryService        // 事件历史存储（用于 rethink 日志）
 	RecallTimeRange vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
 	ToolIndexer     memory.ToolIndexer           // 工具索引服务（Letta 模式下可用）
+
+	// PWD 工具优化：当前工作目录（可变，从 session 读取）
+	CurrentDir    string           // 当前工作目录（优先级高于 WorkspaceRoot）
+	SetCurrentDir func(dir string) // 更新 session 中的 cwd
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -558,6 +563,7 @@ func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
 	r.RegisterCore(&ShellTool{})
+	r.RegisterCore(&CdTool{})
 	r.RegisterCore(&GlobTool{})
 	r.RegisterCore(&GrepTool{})
 	r.RegisterCore(&ReadTool{})

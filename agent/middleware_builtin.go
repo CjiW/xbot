@@ -26,6 +26,7 @@ func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 	content := m.loader.Render(PromptData{
 		Channel: mc.Channel,
 		WorkDir: mc.WorkDir,
+		CWD:     mc.CWD,
 	})
 	mc.SystemParts["00_base"] = content
 	return nil

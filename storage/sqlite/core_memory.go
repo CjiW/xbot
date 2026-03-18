@@ -28,7 +28,7 @@ var DefaultBlocks = map[string]int{
 }
 
 // InitBlocks ensures all default blocks exist for a tenant.
-// - persona: always uses tenantID=0 (global shared)
+// - persona: uses tenantID (per-tenant, each Agent/SubAgent has independent persona)
 // - human: uses userID if non-empty, with tenantID=0 (cross-tenant per-user)
 // - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
@@ -49,14 +49,14 @@ func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 
 		switch name {
 		case "persona":
-			// persona is global, always use tenantID=0
-			effectiveTenantID = 0
+			// persona is per-tenant, each Agent/SubAgent has independent persona
+			// Use the passed tenantID directly (no override)
 		case "human":
 			// human is per-user, use userID directly (cross-tenant)
 			if userID != "" {
 				uid = userID
 			}
-			// Also use tenantID=0 for consistency
+			// Use tenantID=0 for cross-tenant sharing
 			effectiveTenantID = 0
 		case "working_context":
 			// working_context is per-tenant
@@ -75,8 +75,8 @@ func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 }
 
 // migrateLegacyData migrates legacy core memory data to the new scheme:
-// - persona: merge all tenantID's persona blocks to tenantID=0 (keep longest)
-// - human: merge all tenantID's human blocks to tenantID=0 (keep longest)
+// - persona: kept at original tenantID (no longer merged to tenantID=0)
+// - human: merge all tenantID's human blocks to tenantID=0 (keep longest per user_id)
 func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 	// Check if migration marker exists
 	var marker int
@@ -106,18 +106,8 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 		return err
 	}
 
-	// Migration: for persona, keep longest content from any tenant, insert to tenantID=0
-	_, err = db.Exec(`
-		INSERT OR REPLACE INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit, updated_at)
-		SELECT 0, 'persona', '', content, char_limit, CURRENT_TIMESTAMP
-		FROM core_memory_blocks
-		WHERE block_name = 'persona' AND user_id = ''
-		ORDER BY LENGTH(content) DESC
-		LIMIT 1
-	`)
-	if err != nil {
-		return fmt.Errorf("migrate persona: %w", err)
-	}
+	// NOTE: persona is no longer migrated to tenantID=0
+	// Each tenant keeps its own persona at its original tenantID
 
 	// For human: for each user_id, keep longest content from any tenant, insert to tenantID=0
 	_, err = db.Exec(`
@@ -135,13 +125,13 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 		return fmt.Errorf("migrate human: %w", err)
 	}
 
-	// Clean up legacy data (old tenantID != 0)
+	// Clean up legacy human data (old tenantID != 0)
 	_, err = db.Exec(`
 		DELETE FROM core_memory_blocks
-		WHERE block_name IN ('persona', 'human') AND tenant_id != 0
+		WHERE block_name = 'human' AND tenant_id != 0
 	`)
 	if err != nil {
-		return fmt.Errorf("cleanup legacy: %w", err)
+		return fmt.Errorf("cleanup legacy human: %w", err)
 	}
 
 	// Mark migration as completed (after successful migration)
@@ -153,12 +143,12 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 		return fmt.Errorf("mark migration: %w", err)
 	}
 
-	log.Info("Core memory migration completed: legacy data merged to tenantID=0")
+	log.Info("Core memory migration completed: human blocks merged to tenantID=0, persona kept at original tenantID")
 	return nil
 }
 
 // GetBlock reads a single core memory block.
-// - persona: always uses tenantID=0 (global shared)
+// - persona: uses tenantID (per-tenant, each Agent/SubAgent has independent persona)
 // - human: uses userID directly as key (cross-tenant shared)
 // - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID string) (content string, charLimit int, err error) {
@@ -170,11 +160,10 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 
 	switch blockName {
 	case "persona":
-		// persona is global, always use tenantID=0 (for backward compatibility)
-		effectiveTenantID = 0
+		// persona is per-tenant, use the passed tenantID directly
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
-		// Also use tenantID=0 for consistency with GetAllBlocks
+		// Use tenantID=0 for cross-tenant sharing
 		effectiveTenantID = 0
 		if userID != "" {
 			uid = userID
@@ -191,18 +180,40 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 	if err == sql.ErrNoRows {
 		// Return defaults for known blocks
 		if limit, ok := DefaultBlocks[blockName]; ok {
-			return "", limit, nil
+			charLimit = limit
+		} else {
+			charLimit = 2000
 		}
-		return "", 2000, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return "", 0, fmt.Errorf("get block %s: %w", blockName, err)
 	}
+
+	// Fallback: if persona is empty at current tenantID, try tenantID=0.
+	// This handles instances where an older v1 migration merged all persona
+	// data into tenantID=0; new code reads from the actual tenantID and
+	// would otherwise see empty persona (either ErrNoRows or empty content
+	// from InitBlocks' INSERT OR IGNORE).
+	if content == "" && blockName == "persona" && effectiveTenantID != 0 {
+		var fbContent string
+		var fbLimit int
+		fbErr := conn.QueryRow(
+			"SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = ? AND user_id = ?",
+			blockName, uid,
+		).Scan(&fbContent, &fbLimit)
+		if fbErr == nil && fbContent != "" {
+			log.WithFields(log.Fields{
+				"tenant_id":  effectiveTenantID,
+				"block_name": blockName,
+			}).Debug("Persona fallback: read from tenantID=0 (legacy v1 migration data)")
+			return fbContent, fbLimit, nil
+		}
+	}
+
 	return content, charLimit, nil
 }
 
 // SetBlock upserts a core memory block.
-// - persona: always uses tenantID=0 (global shared)
+// - persona: uses tenantID (per-tenant, each Agent/SubAgent has independent persona)
 // - human: uses userID directly as key (cross-tenant shared)
 // - working_context: uses tenantID (per-tenant)
 func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, userID string) error {
@@ -214,8 +225,7 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 
 	switch blockName {
 	case "persona":
-		// persona is global, always use tenantID=0
-		effectiveTenantID = 0 // for backward compatibility
+		// persona is per-tenant, use the passed tenantID directly
 	case "human":
 		// human is per-user, use userID directly (cross-tenant)
 		effectiveTenantID = 0
@@ -257,7 +267,7 @@ func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, 
 }
 
 // GetAllBlocks reads all core memory blocks.
-// - persona: from tenantID=0 (global shared)
+// - persona: from tenantID (per-tenant, each Agent/SubAgent has independent persona)
 // - human: from tenantID=0 with userID (cross-tenant per-user)
 // - working_context: from tenantID (per-tenant)
 func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[string]string, error) {
@@ -265,16 +275,29 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 
 	blocks := make(map[string]string)
 
-	// Get persona from tenantID=0 (global)
+	// Get persona from current tenantID (per-tenant)
 	var personaContent string
 	err := conn.QueryRow(
-		"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",
+		"SELECT content FROM core_memory_blocks WHERE tenant_id = ? AND block_name = 'persona' AND user_id = ''",
+		tenantID,
 	).Scan(&personaContent)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("query persona: %w", err)
 	}
 	if err == nil {
 		blocks["persona"] = personaContent
+	}
+	// Fallback: if persona empty/missing at current tenantID, try tenantID=0
+	// (handles legacy v1 migration that merged persona into tenantID=0)
+	if blocks["persona"] == "" && tenantID != 0 {
+		var fallbackContent string
+		fbErr := conn.QueryRow(
+			"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",
+		).Scan(&fallbackContent)
+		if fbErr == nil && fallbackContent != "" {
+			blocks["persona"] = fallbackContent
+			log.WithField("tenant_id", tenantID).Debug("Persona fallback: read from tenantID=0 in GetAllBlocks")
+		}
 	}
 
 	// Get working_context from current tenantID

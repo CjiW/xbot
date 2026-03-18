@@ -42,7 +42,7 @@ func TestFlatMemory_Recall_WithContent(t *testing.T) {
 	memorySvc := sqlite.NewMemoryService(db)
 	m := New(tenantID, memorySvc, nil)
 
-	if err := memorySvc.WriteLongTerm(tenantID, "# Facts\nUser likes Go"); err != nil {
+	if err := memorySvc.WriteLongTerm(context.Background(), tenantID, "# Facts\nUser likes Go"); err != nil {
 		t.Fatalf("WriteLongTerm failed: %v", err)
 	}
 

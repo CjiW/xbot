@@ -123,6 +123,14 @@ func (s *dockerSandbox) Close() error {
 		// 1. 先 stop（1秒足够，workspace 是 bind mount 不会丢数据）
 		if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to stop container %s", c.name)
+			// stop 失败，尝试直接 force remove
+			if rmErr := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); rmErr != nil {
+				log.WithError(rmErr).Warnf("Failed to force remove container %s after stop failure", c.name)
+			} else {
+				log.Infof("Force removed Docker container %s (stop failed)", c.name)
+				delete(s.containers, userID)
+				continue
+			}
 		} else {
 			log.Infof("Stopped Docker container %s", c.name)
 		}

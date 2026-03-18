@@ -32,9 +32,10 @@ func getRetryNotify(ctx context.Context) RetryNotifyFunc {
 
 // RetryConfig 重试配置
 type RetryConfig struct {
-	Attempts uint          // 最大尝试次数（含首次），默认 3
-	Delay    time.Duration // 初始延迟，默认 500ms
-	MaxDelay time.Duration // 最大延迟，默认 10s
+	Attempts      uint          // 最大尝试次数（含首次），默认 3
+	Delay         time.Duration // 初始延迟，默认 500ms
+	MaxDelay      time.Duration // 最大延迟，默认 10s
+	MaxConcurrent int           // 最大并发数（0 表示不限制）
 }
 
 // DefaultRetryConfig 返回默认重试配置
@@ -50,11 +51,32 @@ func DefaultRetryConfig() RetryConfig {
 type RetryLLM struct {
 	inner  LLM
 	config RetryConfig
+	sem    chan struct{} // 并发信号量，nil 表示不限制
 }
 
 // NewRetryLLM 创建重试包装器；inner 可选实现 StreamingLLM
 func NewRetryLLM(inner LLM, cfg RetryConfig) *RetryLLM {
-	return &RetryLLM{inner: inner, config: cfg}
+	r := &RetryLLM{inner: inner, config: cfg}
+	if cfg.MaxConcurrent > 0 {
+		r.sem = make(chan struct{}, cfg.MaxConcurrent)
+	}
+	return r
+}
+
+// acquire 获取并发信号量，返回释放函数。
+// 如果 sem 为 nil（不限制并发），返回空操作函数。
+// 注意：返回的 release 函数仅在成功获取信号量后才执行释放，
+// 如果 ctx 已取消，返回空操作函数避免死锁。
+func (r *RetryLLM) acquire(ctx context.Context) func() {
+	if r.sem == nil {
+		return func() {}
+	}
+	select {
+	case r.sem <- struct{}{}:
+		return func() { <-r.sem }
+	case <-ctx.Done():
+		return func() {} // ctx 已取消，返回空操作避免死锁
+	}
 }
 
 // IsInputTooLongError detects 400-class errors caused by the input exceeding the
@@ -117,6 +139,15 @@ func isRetryableError(err error) bool {
 	return false
 }
 
+// isRateLimitError 判断错误是否为 429 Rate Limit 错误
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, ": 429 ") || strings.Contains(msg, "status=429")
+}
+
 // retryOptions 构建通用重试选项
 func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Option {
 	return []retry.Option{
@@ -137,12 +168,24 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 			if notify := getRetryNotify(ctx); notify != nil {
 				notify(n+1, r.config.Attempts, err)
 			}
+
+			// 429 额外指数退避：避免短时间内重复触发速率限制
+			if isRateLimitError(err) {
+				extraDelay := time.Duration(2<<min(n, 4)) * time.Second // 2s, 4s, 8s, 16s, 32s
+				logrus.Ctx(ctx).WithField("delay", extraDelay).Warn("[LLM] Rate limited, backing off")
+				select {
+				case <-time.After(extraDelay):
+				case <-ctx.Done():
+				}
+			}
 		}),
 	}
 }
 
 // Generate 生成 LLM 响应，失败时按配置重试
 func (r *RetryLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
+	release := r.acquire(ctx)
+	defer release()
 	return retry.NewWithData[*LLMResponse](
 		r.retryOptions(ctx, "Retrying request")...,
 	).Do(func() (*LLMResponse, error) {
@@ -157,6 +200,8 @@ func (r *RetryLLM) ListModels() []string {
 
 // GenerateStream 仅在获取 channel 时重试，流开始后不重试
 func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
+	release := r.acquire(ctx)
+	defer release()
 	streaming, ok := r.inner.(StreamingLLM)
 	if !ok {
 		return nil, fmt.Errorf("underlying LLM does not support streaming")

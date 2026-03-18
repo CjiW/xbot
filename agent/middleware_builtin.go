@@ -120,6 +120,14 @@ func (m *SenderInfoMiddleware) Process(mc *MessageContext) error {
 
 // --- Priority 200-299: 用户消息处理 ---
 
+// systemGuideText 系统引导文本，提示 Agent 使用正确的工具搜索策略。
+const systemGuideText = `[系统引导] 在执行任何操作前，**必须**先用` + "`search_tools`" + `搜索工具库尝试寻找工具。
+- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）
+- 浏览/获取网页内容 → Fetch
+- 如果需要查找或使用 skill，请使用 ` + "`Skill`" + ` 工具（不是 search_tools）
+- search_tools 仅用于搜索其他工具
+`
+
 // UserMessageMiddleware 构建最终的用户消息（注入时间戳、发送者标识、系统引导）
 type UserMessageMiddleware struct{}
 
@@ -140,12 +148,7 @@ func (m *UserMessageMiddleware) Process(mc *MessageContext) error {
 		userMsg = fmt.Sprintf("[%s]\n%s", now, mc.UserContent)
 	}
 
-	userMsg = fmt.Sprintf("%s\n\n[系统引导] 在执行任何操作前，**必须**先用`search_tools`搜索工具库尝试寻找工具。\n"+
-		"- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）\n"+
-		"- 浏览/获取网页内容 → Fetch\n"+
-		"- 如果需要查找或使用 skill，请使用 `Skill` 工具（不是 search_tools）\n"+
-		"- search_tools 仅用于搜索其他工具\n"+
-		"现在时间：%s\n", userMsg, now)
+	userMsg = fmt.Sprintf("%s\n\n%s现在时间：%s\n", userMsg, systemGuideText, now)
 
 	mc.UserMessage = userMsg
 	return nil

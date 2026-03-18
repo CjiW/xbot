@@ -183,6 +183,55 @@ func (p *FeishuProvider) BuildAuthURL(state string, scopes []string) string {
 	return authURL.String()
 }
 
+// buildTokenFromOIDCResponse 从 OIDC 响应数据构建 oauth.Token。
+// ExchangeCode 和 RefreshToken 共用此方法以消除重复逻辑。
+func (p *FeishuProvider) buildTokenFromOIDCResponse(data *OIDCResponse) *oauth.Token {
+	expiresIn := 7200 // default 2 hours
+	if data.ExpiresIn != nil {
+		expiresIn = *data.ExpiresIn
+	}
+
+	refreshExpiresIn := 2592000 // default 30 days
+	if data.RefreshExpiresIn != nil {
+		refreshExpiresIn = *data.RefreshExpiresIn
+	}
+
+	token := &oauth.Token{
+		AccessToken:  *data.AccessToken,
+		RefreshToken: "",
+		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
+		Scopes:       []string{},
+		Raw: map[string]any{
+			"token_type":               "Bearer",
+			"expires_in":               expiresIn,
+			"refresh_token_expires_in": refreshExpiresIn,
+		},
+	}
+
+	if data.RefreshToken != nil {
+		token.RefreshToken = *data.RefreshToken
+	}
+	if data.TokenType != nil {
+		token.Raw["token_type"] = *data.TokenType
+	}
+	if data.Scope != nil {
+		token.Scopes = strings.Fields(*data.Scope)
+	}
+
+	return token
+}
+
+// OIDCResponse 封装 Feishu OIDC token 响应的公共字段，
+// 用于 ExchangeCode 和 RefreshToken 的统一 token 构建。
+type OIDCResponse struct {
+	AccessToken      *string
+	RefreshToken     *string
+	TokenType        *string
+	Scope            *string
+	ExpiresIn        *int
+	RefreshExpiresIn *int
+}
+
 // ExchangeCode exchanges the authorization code for tokens.
 // Uses Feishu OIDC endpoint for user access token.
 func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.Token, error) {
@@ -210,37 +259,14 @@ func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.
 		return nil, fmt.Errorf("missing access_token in response")
 	}
 
-	expiresIn := 7200 // default 2 hours
-	if resp.Data.ExpiresIn != nil {
-		expiresIn = *resp.Data.ExpiresIn
-	}
-
-	refreshExpiresIn := 2592000 // default 30 days
-	if resp.Data.RefreshExpiresIn != nil {
-		refreshExpiresIn = *resp.Data.RefreshExpiresIn
-	}
-
-	token := &oauth.Token{
-		AccessToken:  *resp.Data.AccessToken,
-		RefreshToken: "",
-		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
-		Scopes:       []string{},
-		Raw: map[string]any{
-			"token_type":               "Bearer",
-			"expires_in":               expiresIn,
-			"refresh_token_expires_in": refreshExpiresIn,
-		},
-	}
-
-	if resp.Data.RefreshToken != nil {
-		token.RefreshToken = *resp.Data.RefreshToken
-	}
-	if resp.Data.TokenType != nil {
-		token.Raw["token_type"] = *resp.Data.TokenType
-	}
-	if resp.Data.Scope != nil {
-		token.Scopes = strings.Fields(*resp.Data.Scope)
-	}
+	token := p.buildTokenFromOIDCResponse(&OIDCResponse{
+		AccessToken:      resp.Data.AccessToken,
+		RefreshToken:     resp.Data.RefreshToken,
+		TokenType:        resp.Data.TokenType,
+		Scope:            resp.Data.Scope,
+		ExpiresIn:        resp.Data.ExpiresIn,
+		RefreshExpiresIn: resp.Data.RefreshExpiresIn,
+	})
 
 	// Get tenant info to fetch the enterprise domain
 	tenantInfo, err := p.getTenantInfo(ctx, token.AccessToken)
@@ -256,8 +282,8 @@ func (p *FeishuProvider) ExchangeCode(ctx context.Context, code string) (*oauth.
 	}
 
 	log.WithFields(log.Fields{
-		"expires_in":               expiresIn,
-		"refresh_token_expires_in": refreshExpiresIn,
+		"expires_in":               token.Raw["expires_in"],
+		"refresh_token_expires_in": token.Raw["refresh_token_expires_in"],
 	}).Info("Feishu OAuth token exchanged successfully")
 
 	return token, nil
@@ -322,37 +348,14 @@ func (p *FeishuProvider) RefreshToken(ctx context.Context, refreshToken string) 
 		return nil, fmt.Errorf("missing access_token in response")
 	}
 
-	expiresIn := 7200 // default 2 hours
-	if resp.Data.ExpiresIn != nil {
-		expiresIn = *resp.Data.ExpiresIn
-	}
-
-	refreshExpiresIn := 2592000 // default 30 days
-	if resp.Data.RefreshExpiresIn != nil {
-		refreshExpiresIn = *resp.Data.RefreshExpiresIn
-	}
-
-	token := &oauth.Token{
-		AccessToken:  *resp.Data.AccessToken,
-		RefreshToken: "",
-		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
-		Scopes:       []string{},
-		Raw: map[string]any{
-			"token_type":               "Bearer",
-			"expires_in":               expiresIn,
-			"refresh_token_expires_in": refreshExpiresIn,
-		},
-	}
-
-	if resp.Data.RefreshToken != nil {
-		token.RefreshToken = *resp.Data.RefreshToken
-	}
-	if resp.Data.TokenType != nil {
-		token.Raw["token_type"] = *resp.Data.TokenType
-	}
-	if resp.Data.Scope != nil {
-		token.Scopes = strings.Fields(*resp.Data.Scope)
-	}
+	token := p.buildTokenFromOIDCResponse(&OIDCResponse{
+		AccessToken:      resp.Data.AccessToken,
+		RefreshToken:     resp.Data.RefreshToken,
+		TokenType:        resp.Data.TokenType,
+		Scope:            resp.Data.Scope,
+		ExpiresIn:        resp.Data.ExpiresIn,
+		RefreshExpiresIn: resp.Data.RefreshExpiresIn,
+	})
 
 	return token, nil
 }

@@ -216,7 +216,9 @@ func (t *RethinkTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 	// Log to event history for traceability
 	if ctx.MemorySvc != nil {
 		entry := fmt.Sprintf("[rethink:%s] %s", args.Block, args.Reasoning)
-		_ = ctx.MemorySvc.AppendHistory(tenantID, entry)
+		if err := ctx.MemorySvc.AppendHistory(ctx.Ctx, tenantID, entry); err != nil {
+			log.Ctx(ctx.Ctx).WithError(err).WithField("tenant", tenantID).Warn("Failed to append history entry")
+		}
 	}
 
 	log.WithFields(log.Fields{

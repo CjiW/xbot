@@ -114,6 +114,9 @@ func (s *TenantService) ListTenants() ([]TenantInfo, error) {
 		}
 		tenants = append(tenants, t)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenants: %w", err)
+	}
 	return tenants, nil
 }
 

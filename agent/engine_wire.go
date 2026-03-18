@@ -272,6 +272,15 @@ func (a *Agent) buildSubAgentRunConfig(
 		}
 	}
 
+	// 注入 skills 目录（SubAgent 可使用 Skill 工具加载 skill）
+	originUserID := parentCtx.OriginUserID
+	if originUserID == "" {
+		originUserID = parentCtx.SenderID
+	}
+	if skillsCatalog := a.skills.GetSkillsCatalog(originUserID); skillsCatalog != "" {
+		sysPrompt += "\n" + skillsCatalog
+	}
+
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage(sysPrompt),
 		llm.NewUserMessage(task),
@@ -280,10 +289,6 @@ func (a *Agent) buildSubAgentRunConfig(
 	subAgentID := parentAgentID + "/" + roleName
 
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
-	originUserID := parentCtx.OriginUserID
-	if originUserID == "" {
-		originUserID = parentCtx.SenderID // fallback：主 Agent 兼容（OriginUserID = SenderID）
-	}
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
 	cfg := RunConfig{
@@ -356,6 +361,13 @@ func (a *Agent) buildSubAgentRunConfig(
 	if caps.SpawnAgent {
 		cfg.SpawnAgent = func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 			return a.spawnSubAgent(ctx, msg)
+		}
+		cfg.InteractiveCallbacks = &InteractiveCallbacks{
+			SpawnFn: a.SpawnInteractiveSession,
+			SendFn:  a.SendToInteractiveSession,
+			UnloadFn: func(ctx context.Context, roleName string) error {
+				return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID)
+			},
 		}
 	}
 

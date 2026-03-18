@@ -28,9 +28,12 @@ import (
 var ErrLLMGenerate = errors.New("LLM generate failed")
 
 // consolidateRequest 记忆整理请求
+// 传递 key 而非 session 引用，避免排队期间 session 被修改或失效
 type consolidateRequest struct {
-	tenantSession *session.TenantSession
-	senderID      string
+	channel        string
+	chatID         string
+	senderID       string
+	unconsolidated int // 触发时的未整理消息数，用于 worker 中验证
 }
 
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
@@ -223,9 +226,11 @@ type Agent struct {
 	userSemaphores sync.Map // map[string]chan struct{}
 
 	// 记忆整理 channel 机制
-	consolidateCh   chan consolidateRequest // 记忆整理请求 channel
-	consolidatingMu sync.Mutex
-	consolidating   map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
+	consolidateCh     chan consolidateRequest // 记忆整理请求 channel
+	consolidateStopCh chan struct{}           // 停止信号
+	consolidateWg     sync.WaitGroup          // 等待 worker 退出
+	consolidatingMu   sync.Mutex
+	consolidating     map[string]bool // key: "channel:chat_id", value: 是否正在进行记忆合并
 
 	commands         *CommandRegistry                          // 指令注册表
 	directSend       func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
@@ -421,6 +426,7 @@ func New(cfg Config) *Agent {
 		enableAutoCompress:   cfg.EnableAutoCompress,
 		agentsDir:            agentsDir,
 		consolidateCh:        make(chan consolidateRequest, 64),
+		consolidateStopCh:    make(chan struct{}),
 		consolidating:        make(map[string]bool),
 	}
 
@@ -477,6 +483,11 @@ func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
 
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
+	// 先停止 consolidation worker（发送 stop 信号）
+	close(a.consolidateStopCh)
+	a.consolidateWg.Wait()
+	log.Info("Consolidation worker stopped")
+
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
 	if a.cronSch != nil {
 		a.cronSch.Stop()
@@ -521,6 +532,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.multiSession.StartCleanupRoutine()
 
 	// 启动记忆整理 worker
+	a.consolidateWg.Add(1)
 	go a.consolidationWorker(ctx)
 
 	a.cronSch.SetInjectFunc(a.injectInbound)
@@ -1055,30 +1067,47 @@ func max(a, b int) int {
 
 // consolidationWorker 专门的记忆整理 goroutine，通过 channel 接收整理请求
 // 避免每次整理都创建新的 goroutine，同时保证同一个 tenant 不会并发整理
+// 支持优雅关闭：收到 stop 信号后 drain 剩余请求再退出
 func (a *Agent) consolidationWorker(ctx context.Context) {
 	log.Info("Memory consolidation worker started")
+	defer a.consolidateWg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Memory consolidation worker stopped")
-			return
+			log.Info("Memory consolidation worker: context done, draining remaining requests...")
+			// Drain 剩余请求
+			for {
+				select {
+				case req := <-a.consolidateCh:
+					a.doConsolidate(ctx, req)
+				default:
+					log.Info("Memory consolidation worker stopped (drained)")
+					return
+				}
+			}
+		case <-a.consolidateStopCh:
+			log.Info("Memory consolidation worker: stop signal received, draining remaining requests...")
+			// Drain 剩余请求
+			for {
+				select {
+				case req := <-a.consolidateCh:
+					a.doConsolidate(ctx, req)
+				default:
+					log.Info("Memory consolidation worker stopped (drained)")
+					return
+				}
+			}
 		case req := <-a.consolidateCh:
-			a.doConsolidate(ctx, req.tenantSession, req.senderID)
+			a.doConsolidate(ctx, req)
 		}
 	}
 }
 
 // doConsolidate 执行实际的记忆整理
-func (a *Agent) doConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
-	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
-
-	a.consolidatingMu.Lock()
-	if a.consolidating[tenantKey] {
-		a.consolidatingMu.Unlock()
-		return
-	}
-	a.consolidating[tenantKey] = true
-	a.consolidatingMu.Unlock()
+// 从 channel 接收请求后，重新获取 session 并验证是否仍需整理
+func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
+	tenantKey := req.channel + ":" + req.chatID
 
 	defer func() {
 		a.consolidatingMu.Lock()
@@ -1086,18 +1115,37 @@ func (a *Agent) doConsolidate(ctx context.Context, tenantSession *session.Tenant
 		a.consolidatingMu.Unlock()
 	}()
 
-	messages, err := tenantSession.GetMessages()
+	// 重新获取 session（避免引用过期）
+	tenantSession, err := a.multiSession.GetOrCreateSession(req.channel, req.chatID)
 	if err != nil {
-		log.Ctx(ctx).WithError(err).Error("Failed to get messages for consolidation")
+		log.Ctx(ctx).WithError(err).Error("Failed to get session for consolidation")
+		return
+	}
+
+	// 验证是否仍需整理（可能已被其他路径整理过）
+	length, err := tenantSession.Len()
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Error("Failed to get session length for consolidation")
 		return
 	}
 	lastConsolidated := tenantSession.LastConsolidated()
-	mem := tenantSession.Memory()
+	currentUnconsolidated := length - lastConsolidated
 
-	llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+	// 如果当前未整理数小于触发时的数量，说明已被其他路径整理过
+	if currentUnconsolidated < req.unconsolidated {
+		log.Ctx(ctx).WithFields(log.Fields{
+			"tenant":                 tenantKey,
+			"current_unconsolidated": currentUnconsolidated,
+			"trigger_unconsolidated": req.unconsolidated,
+		}).Debug("Consolidation already done by another path, skipping")
+		return
+	}
+
+	mem := tenantSession.Memory()
+	llmClient, model, _, _ := a.llmFactory.GetLLM(req.senderID)
 
 	result, _ := mem.Memorize(ctx, memory.MemorizeInput{
-		Messages:         messages,
+		Messages:         nil, // 由 Memorize 内部从 session 获取
 		LastConsolidated: lastConsolidated,
 		LLMClient:        llmClient,
 		Model:            model,
@@ -1108,7 +1156,10 @@ func (a *Agent) doConsolidate(ctx context.Context, tenantSession *session.Tenant
 		if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
 			log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")
 		}
-		log.Ctx(ctx).WithField("tenant", tenantSession.String()).Infof("Auto memory consolidation completed, lastConsolidated=%d", result.NewLastConsolidated)
+		log.Ctx(ctx).WithFields(log.Fields{
+			"tenant":           tenantKey,
+			"lastConsolidated": result.NewLastConsolidated,
+		}).Info("Auto memory consolidation completed")
 	}
 }
 
@@ -1126,19 +1177,39 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		return
 	}
 
+	// 持锁期间完成检查 + 标记，避免 TOCTOU 竞态
 	a.consolidatingMu.Lock()
+	defer a.consolidatingMu.Unlock()
+
 	if a.consolidating[tenantKey] {
-		a.consolidatingMu.Unlock()
 		return
 	}
-	a.consolidatingMu.Unlock()
 
-	// 发送整理请求到 channel，由专门的 worker 处理
+	// 立即尝试发送，失败则跳过（简化锁逻辑，避免阻塞）
 	select {
-	case a.consolidateCh <- consolidateRequest{tenantSession: tenantSession, senderID: senderID}:
+	case a.consolidateCh <- consolidateRequest{
+		channel:        tenantSession.Channel(),
+		chatID:         tenantSession.ChatID(),
+		senderID:       senderID,
+		unconsolidated: unconsolidated,
+	}:
+		// 发送成功，标记为正在整理
+		a.consolidating[tenantKey] = true
 	default:
-		// channel 满了，丢弃本次请求（避免阻塞）
-		log.Ctx(ctx).Warn("Consolidation channel full, dropping request")
+		// channel 满，立即放弃（不阻塞）
+		log.Ctx(ctx).WithField("tenant", tenantKey).Warn("Consolidation channel full, request dropped")
+	}
+}
+
+// clearConsolidationState 清除指定 tenant 的记忆整理状态
+// 用于多路径协调：当 /new 清空会话时，需要取消正在进行的整理任务
+func (a *Agent) clearConsolidationState(tenantKey string) {
+	a.consolidatingMu.Lock()
+	defer a.consolidatingMu.Unlock()
+
+	if a.consolidating[tenantKey] {
+		log.WithField("tenant", tenantKey).Info("Clearing consolidation state for /new")
+		a.consolidating[tenantKey] = false
 	}
 }
 

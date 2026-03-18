@@ -92,7 +92,10 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		} else {
 			execDir = toolCtx.WorkingDir
 		}
-		userID = toolCtx.SenderID
+		userID = toolCtx.OriginUserID
+		if userID == "" {
+			userID = toolCtx.SenderID // fallback
+		}
 	}
 
 	// 使用全局沙箱实例

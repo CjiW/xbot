@@ -14,8 +14,6 @@ type SubAgentRole struct {
 	SystemPrompt string
 	AllowedTools []string
 
-	// Capabilities 声明 SubAgent 可获得的能力（Phase 3）
-	// 在 .xbot/agents/*.md frontmatter 中通过 capabilities 字段声明
 	Capabilities SubAgentCapabilities
 }
 
@@ -52,14 +50,13 @@ func CapabilitiesFromMap(m map[string]bool) SubAgentCapabilities {
 	return caps
 }
 
-// agentsDir 存储全局 agents 目录路径，供运行时按需加载
 var agentsDir string
 
-// InitAgentRoles 设置全局 agents 目录路径（启动时调用一次）
-// 实际加载在每次 GetSubAgentRole 调用时按需进行
+// InitAgentRoles sets the global agents directory (called once at startup).
+// Actual loading happens on-demand in each GetSubAgentRole call.
 func InitAgentRoles(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		log.WithField("dir", dir).Info("Agents directory not found, no predefined roles available")
+		log.WithField("dir", dir).Info("Agents directory not found, no predefined roles")
 		return nil
 	}
 	agentsDir = dir

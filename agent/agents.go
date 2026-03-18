@@ -11,11 +11,9 @@ import (
 )
 
 // AgentStore scans agent directories and generates a catalog for the system prompt.
-// Agents are predefined SubAgent roles loaded from .xbot/agents/*.md files.
-// Supports global + user-private merge strategy (like SkillStore).
 type AgentStore struct {
-	globalDir string // 全局 agents 目录 (e.g. {WorkDir}/.xbot/agents)
-	workDir   string // 用于派生用户私有 agents 目录
+	globalDir string
+	workDir   string
 }
 
 // NewAgentStore creates an AgentStore

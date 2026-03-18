@@ -112,7 +112,7 @@ func GetExtraTyped[T any](mc *MessageContext, key string) (T, bool) {
 //
 //	"00_base"    - 基础提示词模板
 //	"10_skills"  - Skills 目录
-//	"15_agents"  - Agents 目录
+//	"15_agents"  - Agents catalog
 //	"20_memory"  - 记忆内容
 //	"30_sender"  - 发送者信息
 //	"90_time"    - 时间戳（变化最频繁，放最后以优化 KV-cache）

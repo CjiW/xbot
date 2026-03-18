@@ -206,7 +206,7 @@ type Agent struct {
 	singleUser      bool             // 单用户模式
 	maxConcurrency  int              // 最大并发会话处理数
 	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
-	agentsDir       string           // 全局 agents 目录（宿主机路径）
+	agentsDir       string
 
 	// 上下文压缩配置
 	maxContextTokens     int
@@ -342,7 +342,6 @@ func New(cfg Config) *Agent {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
-	// 加载 agent 角色定义（从 .xbot/agents/ 目录）
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")

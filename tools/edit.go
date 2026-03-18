@@ -81,6 +81,92 @@ type EditParams struct {
 	ReplaceAll  bool   `json:"replace_all"`
 }
 
+// FileIO abstracts file I/O operations so that the same business logic
+// can be shared between local (os) and sandbox (docker exec) modes.
+type FileIO interface {
+	ReadFile(path string) (string, error)
+	WriteFile(path string, content string) error
+	MkdirAll(path string) error
+	FileExists(path string) (bool, error)
+}
+
+// localFileIO implements FileIO using the local filesystem.
+type localFileIO struct{}
+
+func (f *localFileIO) ReadFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	return string(data), nil
+}
+
+func (f *localFileIO) WriteFile(path string, content string) error {
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	return nil
+}
+
+func (f *localFileIO) MkdirAll(path string) error {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	return nil
+}
+
+func (f *localFileIO) FileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// sandboxFileIO implements FileIO by executing commands inside a sandbox container.
+type sandboxFileIO struct {
+	ctx *ToolContext
+}
+
+func (f *sandboxFileIO) ReadFile(path string) (string, error) {
+	cmd := fmt.Sprintf("cat '%s'", path)
+	content, err := RunInSandboxWithShell(f.ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %v", err)
+	}
+	return content, nil
+}
+
+func (f *sandboxFileIO) WriteFile(path string, content string) error {
+	writeCmd := fmt.Sprintf("cat > '%s' << 'XBOT_EOF'\n%s\nXBOT_EOF", path, content)
+	_, err := RunInSandboxWithShell(f.ctx, writeCmd)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %v", err)
+	}
+	return nil
+}
+
+func (f *sandboxFileIO) MkdirAll(path string) error {
+	cmd := fmt.Sprintf("mkdir -p '%s'", path)
+	_, err := RunInSandboxWithShell(f.ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+	return nil
+}
+
+func (f *sandboxFileIO) FileExists(path string) (bool, error) {
+	cmd := fmt.Sprintf("test -e '%s' && echo yes || echo no", path)
+	output, err := RunInSandboxWithShell(f.ctx, cmd)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) == "yes", nil
+}
+
 func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	var params EditParams
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
@@ -98,9 +184,7 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	// 根据不同 mode 检查必要字段非空
 	switch params.Mode {
 	case "create":
-		if params.Path == "" {
-			return nil, fmt.Errorf("path is required for create mode")
-		}
+		// path already validated above
 	case "replace":
 		if params.OldString == "" {
 			return nil, fmt.Errorf("old_string is required for replace mode")
@@ -117,6 +201,8 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		if params.Position == "" {
 			return nil, fmt.Errorf("position is required for insert mode")
 		}
+	default:
+		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
 	}
 
 	// 沙箱模式
@@ -128,160 +214,28 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	return t.executeLocal(ctx, params)
 }
 
-// executeInSandbox 在沙箱内执行编辑操作
-func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
-	// 将用户输入的路径转换为容器内路径
-	sandboxPath := params.Path
-	if !strings.HasPrefix(params.Path, "/workspace/") && !strings.HasPrefix(params.Path, "/") {
-		sandboxPath = "/workspace/" + params.Path
-	} else if strings.HasPrefix(params.Path, "/workspace/") {
-		sandboxPath = params.Path
-	} else if strings.HasPrefix(params.Path, "/") && ctx.WorkspaceRoot != "" {
-		rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
+// resolveSandboxPath converts a user-supplied path to a container-internal path.
+func resolveSandboxPath(ctx *ToolContext, path string) string {
+	if !strings.HasPrefix(path, "/workspace/") && !strings.HasPrefix(path, "/") {
+		return "/workspace/" + path
+	}
+	if strings.HasPrefix(path, "/workspace/") {
+		return path
+	}
+	if strings.HasPrefix(path, "/") && ctx.WorkspaceRoot != "" {
+		rel, err := filepath.Rel(ctx.WorkspaceRoot, path)
 		if err == nil && !strings.HasPrefix(rel, "..") {
-			sandboxPath = "/workspace/" + rel
+			return "/workspace/" + rel
 		}
 	}
-
-	// 根据不同模式执行
-	switch params.Mode {
-	case "create":
-		return t.sandboxCreate(ctx, sandboxPath, params.Content)
-	case "replace":
-		return t.sandboxReplace(ctx, sandboxPath, params.OldString, params.NewString, params.ReplaceAll)
-	case "line":
-		return t.sandboxLineEdit(ctx, sandboxPath, params.LineNumber, params.Action, params.Content)
-	case "regex":
-		return t.sandboxRegexReplace(ctx, sandboxPath, params.Pattern, params.Replacement, params.ReplaceAll)
-	case "insert":
-		return t.sandboxInsert(ctx, sandboxPath, params.Position, params.Content)
-	default:
-		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
-	}
+	return path
 }
 
-func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
-	// 使用 tee 命令创建文件（避免 shell 转义问题）
-	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
-	cmd := fmt.Sprintf("printf '%%s' '%s' > '%s'", escapedContent, path)
-	output, err := RunInSandboxWithShell(ctx, cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create file: %v, output: %s", err, output)
-	}
-	summary := fmt.Sprintf("File created successfully: %s", path)
-	diff := generateUnifiedDiff("", content, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
-}
-
-func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
-	// 读取文件内容
-	readCmd := fmt.Sprintf("cat '%s'", path)
-	content, err := RunInSandboxWithShell(ctx, readCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %v", err)
-	}
-
-	// 检查要替换的文本是否存在
-	if !strings.Contains(content, oldStr) {
-		return nil, fmt.Errorf("text not found: %q", oldStr)
-	}
-
-	// 在 Go 中进行替换（天然支持多行和特殊字符）
-	var newContent string
-	count := strings.Count(content, oldStr)
-	if replaceAll {
-		newContent = strings.ReplaceAll(content, oldStr, newStr)
-	} else {
-		newContent = strings.Replace(content, oldStr, newStr, 1)
-	}
-
-	// 写回文件（使用 heredoc 避免转义问题）
-	writeCmd := fmt.Sprintf("cat > '%s' << 'XBOT_EOF'\n%s\nXBOT_EOF", path, newContent)
-	_, err = RunInSandboxWithShell(ctx, writeCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write file: %v", err)
-	}
-
-	summary := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, path)
-	if count > 1 && !replaceAll {
-		summary = fmt.Sprintf("Replaced 1 of %d occurrences. Use replace_all=true to replace all.", count)
-	}
-	diff := generateUnifiedDiff(content, newContent, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
-}
-
-func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
-	var cmd string
-	switch action {
-	case "insert_before":
-		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum-1, content, path)
-	case "insert_after":
-		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum, content, path)
-	case "replace":
-		cmd = fmt.Sprintf("sed -i '%ds/.*/%s/' '%s'", lineNum, content, path)
-	case "delete":
-		cmd = fmt.Sprintf("sed -i '%dd' '%s'", lineNum, path)
-	default:
-		return nil, fmt.Errorf("unknown action: %s", action)
-	}
-
-	_, err := RunInSandboxWithShell(ctx, cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to edit line: %v", err)
-	}
-
-	summary := fmt.Sprintf("Line %d %sd successfully", lineNum, action)
-	return NewResult(summary), nil
-}
-
-func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool) (*ToolResult, error) {
-	// 读取原内容
-	readCmd := fmt.Sprintf("cat '%s'", path)
-	content, err := RunInSandboxWithShell(ctx, readCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %v", err)
-	}
-
-	// 使用 sed 正则替换
-	flag := ""
-	if replaceAll {
-		flag = "g"
-	}
-	escapedPattern := strings.ReplaceAll(pattern, "'", "'\\''")
-	escapedReplacement := strings.ReplaceAll(replacement, "'", "'\\''")
-	cmd := fmt.Sprintf("sed -i -E 's/%s/%s/%s' '%s'", escapedPattern, escapedReplacement, flag, path)
-
-	_, err = RunInSandboxWithShell(ctx, cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to regex replace: %v", err)
-	}
-
-	newContent, _ := RunInSandboxWithShell(ctx, readCmd)
-	summary := fmt.Sprintf("Regex replaced in %s", path)
-	diff := generateUnifiedDiff(content, newContent, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
-}
-
-func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
-	var cmd string
-	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
-	switch position {
-	case "start":
-		cmd = fmt.Sprintf("sed -i '1i%s' '%s'", escapedContent, path)
-	case "end":
-		cmd = fmt.Sprintf("echo '%s' >> '%s'", escapedContent, path)
-	default:
-		// 尝试解析为行号
-		cmd = fmt.Sprintf("sed -i '%si%s' '%s'", position, escapedContent, path)
-	}
-
-	_, err := RunInSandboxWithShell(ctx, cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to insert content: %v", err)
-	}
-
-	summary := fmt.Sprintf("Content inserted at %s of %s", position, path)
-	return NewResult(summary), nil
+// executeInSandbox 在沙箱内执行编辑操作
+func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
+	sandboxPath := resolveSandboxPath(ctx, params.Path)
+	fio := &sandboxFileIO{ctx: ctx}
+	return t.executeWithIO(fio, sandboxPath, params)
 }
 
 // executeLocal 在本地执行编辑操作（非沙箱模式）
@@ -290,36 +244,35 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 	if err != nil {
 		return nil, err
 	}
+	fio := &localFileIO{}
+	return t.executeWithIO(fio, filePath, params)
+}
 
+// executeWithIO is the unified implementation that works with any FileIO backend.
+func (t *EditTool) executeWithIO(fio FileIO, filePath string, params EditParams) (*ToolResult, error) {
 	// create 模式不需要读取现有文件
 	if params.Mode == "create" {
-		summary, err := t.doCreate(filePath, params)
-		if err != nil {
-			return nil, err
-		}
-		diff := generateUnifiedDiff("", params.Content, filePath)
-		return &ToolResult{Summary: summary, Detail: diff}, nil
+		return doCreate(fio, filePath, params.Content)
 	}
 
 	// 读取文件内容
-	content, err := os.ReadFile(filePath)
+	oldContent, err := fio.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return nil, err
 	}
 
-	oldContent := string(content)
 	var newContent string
 	var result string
 
 	switch params.Mode {
 	case "replace":
-		newContent, result, err = t.doReplace(oldContent, params, filePath)
+		newContent, result, err = doReplace(oldContent, params.OldString, params.NewString, params.ReplaceAll, filePath)
 	case "line":
-		newContent, result, err = t.doLineEdit(oldContent, params)
+		newContent, result, err = doLineEdit(oldContent, params)
 	case "regex":
-		newContent, result, err = t.doRegexReplace(oldContent, params, filePath)
+		newContent, result, err = doRegexReplace(oldContent, params.Pattern, params.Replacement, params.ReplaceAll, filePath)
 	case "insert":
-		newContent, result, err = t.doInsert(oldContent, params, filePath)
+		newContent, result, err = doInsert(oldContent, params, filePath)
 	default:
 		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
 	}
@@ -329,8 +282,8 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 	}
 
 	// 写入文件
-	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write file: %w", err)
+	if err := fio.WriteFile(filePath, newContent); err != nil {
+		return nil, err
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, filePath)
@@ -338,47 +291,45 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 }
 
 // doCreate 创建新文件
-func (t *EditTool) doCreate(filePath string, params EditParams) (string, error) {
+func doCreate(fio FileIO, filePath string, content string) (*ToolResult, error) {
 	// Create parent directories if they don't exist
 	dir := filepath.Dir(filePath)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory: %w", err)
+		if err := fio.MkdirAll(dir); err != nil {
+			return nil, err
 		}
 	}
 
 	// Write file
-	if err := os.WriteFile(filePath, []byte(params.Content), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+	if err := fio.WriteFile(filePath, content); err != nil {
+		return nil, err
 	}
 
-	return fmt.Sprintf("File created successfully: %s", filePath), nil
+	summary := fmt.Sprintf("File created successfully: %s", filePath)
+	diff := generateUnifiedDiff("", content, filePath)
+	return &ToolResult{Summary: summary, Detail: diff}, nil
 }
 
 // doReplace 执行文本替换
-func (t *EditTool) doReplace(content string, params EditParams, filePath string) (string, string, error) {
-	if params.OldString == "" {
-		return "", "", fmt.Errorf("old_string is required for replace mode")
-	}
-
+func doReplace(content, oldStr, newStr string, replaceAll bool, filePath string) (string, string, error) {
 	// 检查是否存在要替换的文本
-	count := strings.Count(content, params.OldString)
+	count := strings.Count(content, oldStr)
 	if count == 0 {
-		return "", "", fmt.Errorf("text not found: %q", params.OldString)
+		return "", "", fmt.Errorf("text not found: %q", oldStr)
 	}
 
 	var newContent string
 	var replacedCount int
 
-	if params.ReplaceAll {
-		newContent = strings.ReplaceAll(content, params.OldString, params.NewString)
+	if replaceAll {
+		newContent = strings.ReplaceAll(content, oldStr, newStr)
 		replacedCount = count
 	} else {
-		newContent = strings.Replace(content, params.OldString, params.NewString, 1)
+		newContent = strings.Replace(content, oldStr, newStr, 1)
 		replacedCount = 1
 	}
 
-	if count > 1 && !params.ReplaceAll {
+	if count > 1 && !replaceAll {
 		return newContent, fmt.Sprintf("Replaced 1 of %d occurrences. Use replace_all=true to replace all.", count), nil
 	}
 
@@ -386,13 +337,9 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 }
 
 // doLineEdit 执行行编辑
-func (t *EditTool) doLineEdit(content string, params EditParams) (string, string, error) {
+func doLineEdit(content string, params EditParams) (string, string, error) {
 	if params.LineNumber <= 0 {
 		return "", "", fmt.Errorf("line_number must be positive (1-based)")
-	}
-
-	if params.Action == "" {
-		return "", "", fmt.Errorf("action is required for line mode")
 	}
 
 	lines := strings.Split(content, "\n")
@@ -447,12 +394,8 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 }
 
 // doRegexReplace 执行正则替换
-func (t *EditTool) doRegexReplace(content string, params EditParams, filePath string) (string, string, error) {
-	if params.Pattern == "" {
-		return "", "", fmt.Errorf("pattern is required for regex mode")
-	}
-
-	re, err := regexp.Compile(params.Pattern)
+func doRegexReplace(content, pattern, replacement string, replaceAll bool, filePath string) (string, string, error) {
+	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid regex pattern: %w", err)
 	}
@@ -460,26 +403,26 @@ func (t *EditTool) doRegexReplace(content string, params EditParams, filePath st
 	// 统计匹配数量
 	matches := re.FindAllString(content, -1)
 	if len(matches) == 0 {
-		return "", "", fmt.Errorf("no match found for pattern: %s", params.Pattern)
+		return "", "", fmt.Errorf("no match found for pattern: %s", pattern)
 	}
 
 	var newContent string
 	var replacedCount int
 
-	if params.ReplaceAll {
-		newContent = re.ReplaceAllString(content, params.Replacement)
+	if replaceAll {
+		newContent = re.ReplaceAllString(content, replacement)
 		replacedCount = len(matches)
 	} else {
 		newContent = re.ReplaceAllStringFunc(content, func(m string) string {
 			if replacedCount == 0 {
 				replacedCount++
-				return re.ReplaceAllString(m, params.Replacement)
+				return re.ReplaceAllString(m, replacement)
 			}
 			return m
 		})
 	}
 
-	if len(matches) > 1 && !params.ReplaceAll {
+	if len(matches) > 1 && !replaceAll {
 		return newContent, fmt.Sprintf("Replaced 1 of %d matches. Use replace_all=true to replace all.", len(matches)), nil
 	}
 
@@ -487,13 +430,9 @@ func (t *EditTool) doRegexReplace(content string, params EditParams, filePath st
 }
 
 // doInsert 执行插入操作
-func (t *EditTool) doInsert(content string, params EditParams, filePath string) (string, string, error) {
+func doInsert(content string, params EditParams, filePath string) (string, string, error) {
 	if params.Content == "" {
 		return "", "", fmt.Errorf("content is required for insert mode")
-	}
-
-	if params.Position == "" {
-		return "", "", fmt.Errorf("position is required for insert mode")
 	}
 
 	switch params.Position {
@@ -517,7 +456,7 @@ func (t *EditTool) doInsert(content string, params EditParams, filePath string) 
 		// 使用行编辑逻辑
 		params.LineNumber = lineNum
 		params.Action = "insert_after"
-		return t.doLineEdit(content, params)
+		return doLineEdit(content, params)
 	}
 }
 
@@ -528,6 +467,128 @@ func Truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// diffLine represents a single line in a diff with its operation type.
+type diffLine struct {
+	op   diffmatchpatch.Operation
+	text string
+}
+
+// flattenDiffsToLines expands diff chunks into individual lines.
+func flattenDiffsToLines(diffs []diffmatchpatch.Diff) []diffLine {
+	var allLines []diffLine
+	for _, d := range diffs {
+		lines := strings.Split(d.Text, "\n")
+		// 如果最后一个元素是空字符串（trailing newline），去掉
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		for _, l := range lines {
+			allLines = append(allLines, diffLine{op: d.Type, text: l})
+		}
+	}
+	return allLines
+}
+
+// hunkRange represents a contiguous range of changed lines.
+type hunkRange struct{ start, end int }
+
+// findChangeRanges identifies index ranges where changes (non-equal lines) occur.
+func findChangeRanges(allLines []diffLine) []hunkRange {
+	var ranges []hunkRange
+	inChange := false
+	changeStart := 0
+	for i, l := range allLines {
+		if l.op != diffmatchpatch.DiffEqual {
+			if !inChange {
+				inChange = true
+				changeStart = i
+			}
+		} else {
+			if inChange {
+				ranges = append(ranges, hunkRange{changeStart, i})
+				inChange = false
+			}
+		}
+	}
+	if inChange {
+		ranges = append(ranges, hunkRange{changeStart, len(allLines)})
+	}
+	return ranges
+}
+
+// mergeRanges merges adjacent change ranges that are within 2*contextLines of each other.
+func mergeRanges(ranges []hunkRange, contextLines int) []hunkRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+	var merged []hunkRange
+	cur := ranges[0]
+	for i := 1; i < len(ranges); i++ {
+		if ranges[i].start-cur.end <= 2*contextLines {
+			cur.end = ranges[i].end
+		} else {
+			merged = append(merged, cur)
+			cur = ranges[i]
+		}
+	}
+	merged = append(merged, cur)
+	return merged
+}
+
+// formatHunk writes a single unified-diff hunk for the given merged range.
+func formatHunk(sb *strings.Builder, allLines []diffLine, mr hunkRange, contextLines int) {
+	hStart := mr.start - contextLines
+	if hStart < 0 {
+		hStart = 0
+	}
+	hEnd := mr.end + contextLines
+	if hEnd > len(allLines) {
+		hEnd = len(allLines)
+	}
+
+	// 计算 old/new 行号
+	oldLine := 1
+	newLine := 1
+	for i := 0; i < hStart; i++ {
+		switch allLines[i].op {
+		case diffmatchpatch.DiffEqual:
+			oldLine++
+			newLine++
+		case diffmatchpatch.DiffDelete:
+			oldLine++
+		case diffmatchpatch.DiffInsert:
+			newLine++
+		}
+	}
+
+	// 计算 hunk 中 old/new 的行数
+	oldCount, newCount := 0, 0
+	for i := hStart; i < hEnd; i++ {
+		switch allLines[i].op {
+		case diffmatchpatch.DiffEqual:
+			oldCount++
+			newCount++
+		case diffmatchpatch.DiffDelete:
+			oldCount++
+		case diffmatchpatch.DiffInsert:
+			newCount++
+		}
+	}
+
+	fmt.Fprintf(sb, "@@ -%d,%d +%d,%d @@\n", oldLine, oldCount, newLine, newCount)
+
+	for i := hStart; i < hEnd; i++ {
+		switch allLines[i].op {
+		case diffmatchpatch.DiffEqual:
+			sb.WriteString(" " + allLines[i].text + "\n")
+		case diffmatchpatch.DiffDelete:
+			sb.WriteString("-" + allLines[i].text + "\n")
+		case diffmatchpatch.DiffInsert:
+			sb.WriteString("+" + allLines[i].text + "\n")
+		}
+	}
 }
 
 // generateUnifiedDiff 使用 go-diff 库生成 unified diff 格式的差异
@@ -548,119 +609,18 @@ func generateUnifiedDiff(oldContent, newContent, filePath string) string {
 	fmt.Fprintf(&sb, "--- a/%s\n", filePath)
 	fmt.Fprintf(&sb, "+++ b/%s\n", filePath)
 
-	// 将 diffs 转换为带行号的 hunks
 	contextLines := 3
-	type line struct {
-		op   diffmatchpatch.Operation
-		text string
-	}
-
-	// 展平所有 diff 为行
-	var allLines []line
-	for _, d := range diffs {
-		text := d.Text
-		// 拆分成行
-		lines := strings.Split(text, "\n")
-		// 如果最后一个元素是空字符串（trailing newline），去掉
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		for _, l := range lines {
-			allLines = append(allLines, line{op: d.Type, text: l})
-		}
-	}
-
-	// 找出变更行的索引
-	type hunkRange struct{ start, end int }
-	var changeRanges []hunkRange
-	inChange := false
-	changeStart := 0
-	for i, l := range allLines {
-		if l.op != diffmatchpatch.DiffEqual {
-			if !inChange {
-				inChange = true
-				changeStart = i
-			}
-		} else {
-			if inChange {
-				changeRanges = append(changeRanges, hunkRange{changeStart, i})
-				inChange = false
-			}
-		}
-	}
-	if inChange {
-		changeRanges = append(changeRanges, hunkRange{changeStart, len(allLines)})
-	}
+	allLines := flattenDiffsToLines(diffs)
+	changeRanges := findChangeRanges(allLines)
 
 	if len(changeRanges) == 0 {
 		return ""
 	}
 
-	// 合并相邻的 change ranges（间距 <= 2*contextLines）
-	var merged []hunkRange
-	cur := changeRanges[0]
-	for i := 1; i < len(changeRanges); i++ {
-		if changeRanges[i].start-cur.end <= 2*contextLines {
-			cur.end = changeRanges[i].end
-		} else {
-			merged = append(merged, cur)
-			cur = changeRanges[i]
-		}
-	}
-	merged = append(merged, cur)
+	merged := mergeRanges(changeRanges, contextLines)
 
-	// 为每个合并后的 range 生成 hunk
 	for _, mr := range merged {
-		hStart := mr.start - contextLines
-		if hStart < 0 {
-			hStart = 0
-		}
-		hEnd := mr.end + contextLines
-		if hEnd > len(allLines) {
-			hEnd = len(allLines)
-		}
-
-		// 计算 old/new 行号
-		oldLine := 1
-		newLine := 1
-		for i := 0; i < hStart; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				oldLine++
-				newLine++
-			case diffmatchpatch.DiffDelete:
-				oldLine++
-			case diffmatchpatch.DiffInsert:
-				newLine++
-			}
-		}
-
-		// 计算 hunk 中 old/new 的行数
-		oldCount, newCount := 0, 0
-		for i := hStart; i < hEnd; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				oldCount++
-				newCount++
-			case diffmatchpatch.DiffDelete:
-				oldCount++
-			case diffmatchpatch.DiffInsert:
-				newCount++
-			}
-		}
-
-		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", oldLine, oldCount, newLine, newCount)
-
-		for i := hStart; i < hEnd; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				sb.WriteString(" " + allLines[i].text + "\n")
-			case diffmatchpatch.DiffDelete:
-				sb.WriteString("-" + allLines[i].text + "\n")
-			case diffmatchpatch.DiffInsert:
-				sb.WriteString("+" + allLines[i].text + "\n")
-			}
-		}
+		formatHunk(&sb, allLines, mr, contextLines)
 	}
 
 	return sb.String()

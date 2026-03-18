@@ -99,8 +99,7 @@ func (s *SkillStore) GetSkillsCatalog(senderID string) string {
 
 	var sb strings.Builder
 	sb.WriteString("# Available Skills\n\n")
-	sb.WriteString("The following skills provide specialized instructions for specific tasks.\n")
-	sb.WriteString("Use the Skill tool to load a skill by name when the task matches its description.\n\n")
+	sb.WriteString("Skills 是特定任务的专门指导文档。当任务匹配时，用 `Skill` 工具加载对应的 skill 获取详细指令。\n\n")
 	sb.WriteString("<available_skills>\n")
 	for _, sk := range skills {
 		fmt.Fprintf(&sb, "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n  </skill>\n", sk.Name, sk.Description)

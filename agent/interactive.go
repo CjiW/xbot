@@ -120,10 +120,16 @@ func (a *Agent) SpawnInteractiveSession(
 		return out.OutboundMessage, nil
 	}
 
+	// 提取本次任务的对话（SubAgent 不启用 Memory，out.Messages 可能为空）
+	var newMessages []llm.ChatMessage
+	if len(out.Messages) > preLen {
+		newMessages = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+	}
+
 	// 创建 interactiveAgent 并保存（保存 system prompt 和 config 模板，避免重复构建）
 	ia := &interactiveAgent{
 		roleName:     roleName,
-		messages:     append([]llm.ChatMessage(nil), out.Messages[preLen:]...),
+		messages:     newMessages,
 		systemPrompt: cfg.Messages[0], // 保存 system prompt，后续 send 不重建
 		cfg:          &cfg,
 		lastUsed:     time.Now(),
@@ -201,12 +207,14 @@ func (a *Agent) SendToInteractiveSession(
 		return out.OutboundMessage, nil
 	}
 
-	// 追加新的对话消息
-	ia.messages = append(ia.messages, out.Messages[preLen:]...)
+	// 追加新的对话消息（SubAgent 不启用 Memory，out.Messages 可能为空）
+	if len(out.Messages) > preLen {
+		ia.messages = append(ia.messages, out.Messages[preLen:]...)
+	}
 
 	log.WithFields(log.Fields{
 		"role":       roleName,
-		"new_msgs":   len(out.Messages[preLen:]),
+		"new_msgs":   len(out.Messages) - preLen,
 		"total_msgs": len(ia.messages),
 	}).Info("Interactive session: sent message")
 

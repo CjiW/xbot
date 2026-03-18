@@ -9,7 +9,7 @@ import (
 	"time"
 
 	retry "github.com/avast/retry-go/v5"
-	logrus "xbot/logger"
+	log "xbot/logger"
 )
 
 // RetryNotifyFunc 重试通知回调。
@@ -127,7 +127,7 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 		retry.Context(ctx),
 		retry.RetryIf(isRetryableError),
 		retry.OnRetry(func(n uint, err error) {
-			logrus.Ctx(ctx).WithFields(logrus.Fields{
+			log.Ctx(ctx).WithFields(log.Fields{
 				"attempt": n + 1,
 				"max":     r.config.Attempts,
 				"error":   err.Error(),

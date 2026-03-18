@@ -167,3 +167,58 @@ func StripThinkBlocks(content string) string {
 	content = thinkingBlockRegex.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
 }
+
+// BaseLLM 提供 LLM 实现的公共字段和方法
+type BaseLLM struct {
+	models       []string
+	defaultModel string
+}
+
+// ListModels 获取可用模型列表（返回副本）
+func (b *BaseLLM) ListModels() []string {
+	result := make([]string, len(b.models))
+	copy(result, b.models)
+	return result
+}
+
+// GetDefaultModel 获取默认模型
+func (b *BaseLLM) GetDefaultModel() string {
+	if b.defaultModel != "" {
+		return b.defaultModel
+	}
+	if len(b.models) > 0 {
+		return b.models[0]
+	}
+	return ""
+}
+
+// SetModels 设置模型列表
+func (b *BaseLLM) SetModels(models []string) {
+	b.models = models
+}
+
+// SetDefaultModel 设置默认模型
+func (b *BaseLLM) SetDefaultModel(model string) {
+	b.defaultModel = model
+}
+
+// BuildToolParamSchema 从 ToolDefinition 的参数列表构建 JSON Schema 的 properties 和 required 列表。
+// 返回的 properties 值为 map[string]any，包含 type、description，以及可选的 items。
+func BuildToolParamSchema(params []ToolParam) (properties map[string]any, required []string) {
+	properties = make(map[string]any)
+	required = make([]string, 0)
+	for _, p := range params {
+		prop := map[string]any{
+			"type":        p.Type,
+			"description": p.Description,
+		}
+		if p.Items != nil {
+			prop["items"] = map[string]string{"type": p.Items.Type}
+		}
+		properties[p.Name] = prop
+		if p.Required {
+			required = append(required, p.Name)
+		}
+	}
+	return
+}

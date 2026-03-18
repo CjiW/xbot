@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,22 +9,21 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"xbot/logger"
+	log "xbot/logger"
 
 	"github.com/google/uuid"
 )
 
 // CodeBuddyLLM CodeBuddy LLM 实现
 type CodeBuddyLLM struct {
+	BaseLLM
 	baseURL      string
 	token        string
 	httpClient   *http.Client
 	headers      map[string]string
-	userID       string   // X-User-Id
-	enterpriseID string   // X-Enterprise-Id / X-Tenant-Id
-	domain       string   // X-Domain
-	models       []string // 可用模型列表
-	defaultModel string   // 默认模型
+	userID       string // X-User-Id
+	enterpriseID string // X-Enterprise-Id / X-Tenant-Id
+	domain       string // X-Domain
 }
 
 // CodeBuddyConfig CodeBuddy 配置
@@ -51,41 +49,22 @@ func NewCodeBuddyLLM(cfg CodeBuddyConfig) *CodeBuddyLLM {
 		userID:       cfg.UserID,
 		enterpriseID: cfg.EnterpriseID,
 		domain:       cfg.Domain,
-		models:       nil,
-		defaultModel: cfg.DefaultModel,
 	}
+	c.SetDefaultModel(cfg.DefaultModel)
 
 	// 尝试从 API 加载模型列表
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := c.LoadModelsFromAPI(ctx); err != nil {
-		logger.WithError(err).Warn("[LLM] Failed to load models from CodeBuddy API")
+		log.WithError(err).Warn("[LLM] Failed to load models from CodeBuddy API")
 		// API 获取失败，使用默认模型作为回退
 		if cfg.DefaultModel != "" {
-			c.models = []string{cfg.DefaultModel}
-			logger.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
+			c.SetModels([]string{cfg.DefaultModel})
+			log.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
 		}
 	}
 
 	return c
-}
-
-// ListModels 获取可用模型列表
-func (c *CodeBuddyLLM) ListModels() []string {
-	result := make([]string, len(c.models))
-	copy(result, c.models)
-	return result
-}
-
-// GetDefaultModel 获取默认模型
-func (c *CodeBuddyLLM) GetDefaultModel() string {
-	if c.defaultModel != "" {
-		return c.defaultModel
-	}
-	if len(c.models) > 0 {
-		return c.models[0]
-	}
-	return ""
 }
 
 // CodeBuddy 请求/响应类型定义
@@ -124,15 +103,9 @@ type cbFunction struct {
 
 // cbParameters CodeBuddy 参数定义
 type cbParameters struct {
-	Type       string                 `json:"type"`
-	Properties map[string]*cbProperty `json:"properties"`
-	Required   []string               `json:"required"`
-}
-
-// cbProperty CodeBuddy 属性定义
-type cbProperty struct {
-	Description string `json:"description"`
-	Type        string `json:"type"`
+	Type       string         `json:"type"`
+	Properties map[string]any `json:"properties"`
+	Required   []string       `json:"required"`
 }
 
 // cbToolCall CodeBuddy 工具调用
@@ -235,18 +208,7 @@ func toCodeBuddyMessages(messages []ChatMessage) []cbMessage {
 func toCodeBuddyTools(tools []ToolDefinition) []cbTool {
 	result := make([]cbTool, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]*cbProperty)
-		required := make([]string, 0)
-
-		for _, p := range tool.Parameters() {
-			properties[p.Name] = &cbProperty{
-				Type:        p.Type,
-				Description: p.Description,
-			}
-			if p.Required {
-				required = append(required, p.Name)
-			}
-		}
+		properties, required := BuildToolParamSchema(tool.Parameters())
 
 		result = append(result, cbTool{
 			Type: "function",
@@ -317,7 +279,7 @@ func (c *CodeBuddyLLM) buildRequest(ctx context.Context, model string, messages 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	logger.Debugf("CodeBuddy request: %s", string(reqBody))
+	log.Debugf("CodeBuddy request: %s", string(reqBody))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(reqBody))
 	if err != nil {
@@ -326,9 +288,9 @@ func (c *CodeBuddyLLM) buildRequest(ctx context.Context, model string, messages 
 
 	c.setCommonHeaders(httpReq)
 
-	logger.Debugf("[LLM] Request URL: %s", httpReq.URL.String())
+	log.Debugf("[LLM] Request URL: %s", httpReq.URL.String())
 	for k, v := range httpReq.Header {
-		logger.Debugf("[LLM] Header: %s = %s", k, v)
+		log.Debugf("[LLM] Header: %s = %s", k, v)
 	}
 
 	return httpReq, nil
@@ -341,7 +303,7 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 		model = c.GetDefaultModel()
 	}
 
-	logger.Ctx(ctx).WithFields(logger.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "codebuddy",
 		"model":         model,
 		"stream":        true,
@@ -357,38 +319,26 @@ func (c *CodeBuddyLLM) GenerateStream(ctx context.Context, model string, message
 
 	httpReq, err := c.buildRequest(ctx, model, messages, tools, true)
 	if err != nil {
-		logger.Ctx(ctx).WithError(err).Error("[LLM] Failed to build request")
+		log.Ctx(ctx).WithError(err).Error("[LLM] Failed to build request")
 		return nil, err
 	}
 
 	// 发送请求
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := doLLMRequest(c.httpClient, httpReq, "CodeBuddy")
 	if err != nil {
-		logger.Ctx(ctx).WithFields(logger.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"provider": "codebuddy",
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
 		}).Error("[LLM] Request failed")
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, err
 	}
 
-	logger.Ctx(ctx).WithFields(logger.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":    "codebuddy",
 		"status_code": resp.StatusCode,
 		"duration":    time.Since(startTime).String(),
 	}).Debug("[LLM] Got HTTP response")
-
-	// 检查 HTTP 状态码
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		logger.Ctx(ctx).WithFields(logger.Fields{
-			"provider":    "codebuddy",
-			"status_code": resp.StatusCode,
-			"body":        string(body),
-		}).Error("[LLM] API error")
-		return nil, fmt.Errorf("CodeBuddy API error: status=%d, body=%s", resp.StatusCode, string(body))
-	}
 
 	// 创建事件 channel
 	eventChan := make(chan StreamEvent, 100)
@@ -404,8 +354,8 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 	defer close(eventChan)
 	defer resp.Body.Close()
 
-	l := logger.Ctx(ctx)
-	reader := bufio.NewReader(resp.Body)
+	l := log.Ctx(ctx)
+	sse := NewSSEReader(resp.Body)
 	chunkCount := 0
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
@@ -421,33 +371,16 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
+		data, done, err := sse.Next()
 		if err != nil {
-			if err == io.EOF {
-				return
-			}
 			eventChan <- StreamEvent{
 				Type:  EventError,
 				Error: fmt.Sprintf("read stream error: %v", err),
 			}
 			return
 		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// SSE 格式: data: {...}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		// 检查结束标记
-		if data == "[DONE]" {
-			fields := logger.Fields{
+		if done {
+			fields := log.Fields{
 				"provider":       "codebuddy",
 				"chunk_count":    chunkCount,
 				"total_duration": time.Since(startTime).String(),
@@ -476,7 +409,7 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 		chunkCount++
 		if chunkCount == 1 {
 			firstChunkTime = time.Now()
-			l.WithFields(logger.Fields{
+			l.WithFields(log.Fields{
 				"provider": "codebuddy",
 				"ttft":     firstChunkTime.Sub(startTime).String(),
 			}).Debug("[LLM] First chunk received")
@@ -495,7 +428,7 @@ func (c *CodeBuddyLLM) processStreamResponse(ctx context.Context, resp *http.Res
 			// 处理工具调用
 			for _, tc := range choice.Delta.ToolCalls {
 				if tc.ID != "" || tc.Function.Name != "" {
-					l.WithFields(logger.Fields{
+					l.WithFields(log.Fields{
 						"provider":  "codebuddy",
 						"tool_id":   tc.ID,
 						"tool_name": tc.Function.Name,
@@ -557,7 +490,7 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 		model = c.GetDefaultModel()
 	}
 
-	logger.Ctx(ctx).WithFields(logger.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "codebuddy",
 		"model":         model,
 		"stream":        false,
@@ -638,7 +571,7 @@ func (c *CodeBuddyLLM) Generate(ctx context.Context, model string, messages []Ch
 		}
 	}
 
-	logger.Ctx(ctx).WithFields(logger.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":          "codebuddy",
 		"content_len":       len(resp.Content),
 		"reasoning_len":     len(resp.ReasoningContent),
@@ -681,7 +614,7 @@ func (c *CodeBuddyLLM) LoadModelsFromAPI(ctx context.Context) error {
 
 	c.setCommonHeaders(httpReq)
 
-	logger.WithFields(logger.Fields{
+	log.WithFields(log.Fields{
 		"url":      configURL,
 		"trace_id": traceID,
 	}).Debug("[LLM] Loading models from CodeBuddy API")
@@ -715,20 +648,20 @@ func (c *CodeBuddyLLM) LoadModelsFromAPI(ctx context.Context) error {
 	}
 
 	if len(models) == 0 {
-		logger.Warn("[LLM] No models found from CodeBuddy API")
+		log.Warn("[LLM] No models found from CodeBuddy API")
 		return nil
 	}
 
-	c.models = models
+	c.SetModels(models)
 
-	if c.defaultModel == "" && len(c.models) > 0 {
-		c.defaultModel = c.models[0]
+	if c.GetDefaultModel() == "" && len(c.ListModels()) > 0 {
+		c.SetDefaultModel(c.ListModels()[0])
 	}
 
-	logger.WithFields(logger.Fields{
-		"model_count":   len(c.models),
-		"models":        c.models,
-		"default_model": c.defaultModel,
+	log.WithFields(log.Fields{
+		"model_count":   len(c.ListModels()),
+		"models":        c.ListModels(),
+		"default_model": c.GetDefaultModel(),
 	}).Info("[LLM] Models loaded from CodeBuddy API")
 
 	return nil

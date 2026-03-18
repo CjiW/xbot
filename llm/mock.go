@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var _ StreamingLLM = (*MockLLM)(nil)
+
 // MockLLM Mock LLM 实现，用于测试
 type MockLLM struct {
 	ChunkSize     int           // 流式输出每个片段的字符数，默认 5
@@ -21,7 +23,7 @@ func NewMockLLM() *MockLLM {
 }
 
 // Generate 非流式：拼接所有消息内容作为响应，token 消耗为内容长度
-func (m *MockLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (*LLMResponse, error) {
+func (m *MockLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	var sb strings.Builder
 	for _, msg := range messages {
 		if msg.Content != "" {
@@ -52,7 +54,7 @@ func (m *MockLLM) ListModels() []string {
 }
 
 // GenerateStream 流式输出：按 ChunkSize 和 ChunkInterval 分片发送所有消息内容
-func (m *MockLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition) (<-chan StreamEvent, error) {
+func (m *MockLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	var sb strings.Builder
 	for _, msg := range messages {
 		if msg.Content != "" && msg.Role != "tool" && msg.Role != "system" {

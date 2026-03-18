@@ -1,12 +1,10 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -22,11 +20,10 @@ const (
 
 // AnthropicLLM Anthropic Messages API 实现
 type AnthropicLLM struct {
-	baseURL      string
-	apiKey       string
-	httpClient   *http.Client
-	models       []string
-	defaultModel string
+	BaseLLM
+	baseURL    string
+	apiKey     string
+	httpClient *http.Client
 }
 
 // AnthropicConfig Anthropic 配置
@@ -62,31 +59,13 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 		},
-		models:       anthropicKnownModels,
-		defaultModel: cfg.DefaultModel,
 	}
-	if a.defaultModel == "" && len(a.models) > 0 {
-		a.defaultModel = a.models[0]
+	a.SetModels(anthropicKnownModels)
+	a.SetDefaultModel(cfg.DefaultModel)
+	if a.GetDefaultModel() == "" && len(a.ListModels()) > 0 {
+		a.SetDefaultModel(a.ListModels()[0])
 	}
 	return a
-}
-
-// ListModels 返回可用模型列表
-func (a *AnthropicLLM) ListModels() []string {
-	result := make([]string, len(a.models))
-	copy(result, a.models)
-	return result
-}
-
-// GetDefaultModel 返回默认模型
-func (a *AnthropicLLM) GetDefaultModel() string {
-	if a.defaultModel != "" {
-		return a.defaultModel
-	}
-	if len(a.models) > 0 {
-		return a.models[0]
-	}
-	return ""
 }
 
 // --- 请求/响应类型（Anthropic Messages API）---
@@ -234,21 +213,7 @@ func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropic
 func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 	out := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		properties := make(map[string]interface{})
-		required := make([]string, 0)
-		for _, p := range tool.Parameters() {
-			prop := map[string]interface{}{
-				"type":        p.Type,
-				"description": p.Description,
-			}
-			if p.Items != nil {
-				prop["items"] = map[string]string{"type": p.Items.Type}
-			}
-			properties[p.Name] = prop
-			if p.Required {
-				required = append(required, p.Name)
-			}
-		}
+		properties, required := BuildToolParamSchema(tool.Parameters())
 		out = append(out, anthropicTool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
@@ -339,22 +304,12 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	a.setHeaders(httpReq)
 
 	startTime := time.Now()
-	resp, err := a.httpClient.Do(httpReq)
+	resp, err := doLLMRequest(a.httpClient, httpReq, "anthropic")
 	if err != nil {
 		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		log.Ctx(ctx).WithFields(log.Fields{
-			"provider":    "anthropic",
-			"status_code": resp.StatusCode,
-			"body":        string(bodyBytes),
-		}).Error("[LLM] API error")
-		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
-	}
 
 	var apiResp anthropicResp
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
@@ -456,21 +411,10 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	a.setHeaders(httpReq)
 
 	startTime := time.Now()
-	resp, err := a.httpClient.Do(httpReq)
+	resp, err := doLLMRequest(a.httpClient, httpReq, "anthropic")
 	if err != nil {
 		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
 		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		log.Ctx(ctx).WithFields(log.Fields{
-			"provider":    "anthropic",
-			"status_code": resp.StatusCode,
-			"body":        string(bodyBytes),
-		}).Error("[LLM] API error")
-		return nil, fmt.Errorf("anthropic API error: status=%d, body=%s", resp.StatusCode, string(bodyBytes))
 	}
 
 	eventChan := make(chan StreamEvent, 100)
@@ -501,7 +445,7 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 	defer close(eventChan)
 	defer resp.Body.Close()
 
-	reader := bufio.NewReader(resp.Body)
+	sse := NewSSEReader(resp.Body)
 	var currentIndex int
 	toolCallsByIndex := make(map[int]*ToolCall)
 	var lastUsage *TokenUsage
@@ -516,24 +460,12 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
+		data, done, err := sse.Next()
 		if err != nil {
-			if err == io.EOF {
-				if !doneSent {
-					eventChan <- StreamEvent{Type: EventDone}
-				}
-				return
-			}
 			eventChan <- StreamEvent{Type: EventError, Error: fmt.Sprintf("read stream: %v", err)}
 			return
 		}
-
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" || data == "" {
+		if done {
 			if lastUsage != nil {
 				eventChan <- StreamEvent{Type: EventUsage, Usage: lastUsage}
 			}

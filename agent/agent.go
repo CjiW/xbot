@@ -74,31 +74,15 @@ func resolveDataPath(workDir, filename string) string {
 	return newPath
 }
 
-func resolveGlobalSkillsDirs(workDir, legacySkillsDir string) []string {
-	dirs := []string{
-		filepath.Join(workDir, ".claude", "skills"),
+func resolveGlobalSkillsDirs(legacySkillsDir string) []string {
+	if legacySkillsDir == "" {
+		return nil
 	}
-	if legacySkillsDir != "" {
-		dirs = append(dirs, legacySkillsDir)
+	abs, err := filepath.Abs(legacySkillsDir)
+	if err != nil {
+		return nil
 	}
-
-	seen := make(map[string]struct{})
-	result := make([]string, 0, len(dirs))
-	for _, dir := range dirs {
-		if dir == "" {
-			continue
-		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			continue
-		}
-		if _, ok := seen[abs]; ok {
-			continue
-		}
-		seen[abs] = struct{}{}
-		result = append(result, abs)
-	}
-	return result
+	return []string{abs}
 }
 
 // indexGlobalMCPTools indexes global MCP tools and built-in tool groups for search
@@ -342,7 +326,7 @@ func New(cfg Config) *Agent {
 		cfg.MaxSubAgentDepth = 6
 	}
 
-	globalSkillDirs := resolveGlobalSkillsDirs(cfg.WorkDir, cfg.SkillsDir)
+	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	log "xbot/logger"
 )
 
 // ToolHook is the interface for tool execution lifecycle hooks.
@@ -83,7 +85,7 @@ func (hc *HookChain) RunPre(ctx context.Context, toolName string, args string) e
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					// Recover from panic, continue with next hook
+					log.Warnf("ToolHook.PreToolUse panic in hook %q: %v", h.Name(), r)
 				}
 			}()
 			if err := h.PreToolUse(ctx, toolName, args); err != nil && firstErr == nil {
@@ -106,7 +108,7 @@ func (hc *HookChain) RunPost(ctx context.Context, toolName string, args string, 
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					// Recover from panic, continue with next hook
+					log.Warnf("ToolHook.PostToolUse panic in hook %q: %v", h.Name(), r)
 				}
 			}()
 			h.PostToolUse(ctx, toolName, args, result, err, elapsed)

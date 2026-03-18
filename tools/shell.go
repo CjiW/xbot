@@ -81,16 +81,16 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	workspaceRoot := ""
+	execDir := ""
 	userID := ""
 	if toolCtx != nil {
 		// 优先使用 CurrentDir（PWD 工具优化）
 		if toolCtx.CurrentDir != "" {
-			workspaceRoot = toolCtx.CurrentDir
+			execDir = toolCtx.CurrentDir
 		} else if toolCtx.WorkspaceRoot != "" {
-			workspaceRoot = toolCtx.WorkspaceRoot
+			execDir = toolCtx.WorkspaceRoot
 		} else {
-			workspaceRoot = toolCtx.WorkingDir
+			execDir = toolCtx.WorkingDir
 		}
 		userID = toolCtx.SenderID
 	}
@@ -100,13 +100,13 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	// 获取容器默认 shell 并使用 login shell 执行命令
 	// 这样可以自动加载 /etc/profile, ~/.bashrc 等配置文件
-	shell, err := sandbox.GetShell(userID, workspaceRoot)
+	shell, err := sandbox.GetShell(userID, execDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shell: %w", err)
 	}
 
 	// 使用 login shell 自动加载环境配置
-	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, workspaceRoot, userID)
+	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, execDir, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +119,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		"timeout": timeout,
 	}).Debug("Shell command executing")
 
-	if workspaceRoot != "" {
-		cmd.Dir = workspaceRoot
+	if execDir != "" {
+		cmd.Dir = execDir
 	}
 
 	// 关闭 stdin 防止交互式命令阻塞

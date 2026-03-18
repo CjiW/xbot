@@ -477,3 +477,95 @@ func TestCoreMemoryService_MigrationKeepsLongestHuman(t *testing.T) {
 		t.Errorf("Expected 0 legacy human records, got: %d", count)
 	}
 }
+
+// TestCoreMemoryService_PersonaFallbackFromTenant0 simulates the scenario where
+// a legacy v1 migration merged all persona data into tenantID=0. New code reads
+// from the actual tenantID but should fall back to tenantID=0 if not found.
+func TestCoreMemoryService_PersonaFallbackFromTenant0(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	conn := db.Conn()
+
+	// Manually create table and insert persona at tenantID=0 (simulates legacy v1 state)
+	_, err = conn.Exec(`
+		CREATE TABLE IF NOT EXISTS core_memory_blocks (
+			tenant_id INTEGER NOT NULL,
+			block_name TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT '',
+			content TEXT DEFAULT '',
+			char_limit INTEGER DEFAULT 2000,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (tenant_id, block_name, user_id)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Mark v1 migration as done so it won't run again
+	_, err = conn.Exec(`
+		CREATE TABLE IF NOT EXISTS core_memory_migrations (
+			name TEXT PRIMARY KEY,
+			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create migrations table: %v", err)
+	}
+	_, err = conn.Exec(`INSERT INTO core_memory_migrations (name) VALUES ('migrate_to_tenant_0')`)
+	if err != nil {
+		t.Fatalf("Failed to mark migration: %v", err)
+	}
+
+	// Persona only exists at tenantID=0 (legacy v1 state)
+	_, err = conn.Exec(`
+		INSERT INTO core_memory_blocks (tenant_id, block_name, user_id, content, char_limit)
+		VALUES (0, 'persona', '', 'Legacy persona from v1 migration', 2000)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert legacy persona: %v", err)
+	}
+
+	svc := NewCoreMemoryService(db)
+
+	// InitBlocks for tenant 5 — creates empty persona at tenantID=5 (INSERT OR IGNORE)
+	if err := svc.InitBlocks(5, ""); err != nil {
+		t.Fatalf("InitBlocks failed: %v", err)
+	}
+
+	// GetBlock for persona at tenantID=5: row exists but content is empty,
+	// should fall back to tenantID=0
+	content, _, err := svc.GetBlock(5, "persona", "")
+	if err != nil {
+		t.Fatalf("GetBlock persona failed: %v", err)
+	}
+	if content != "Legacy persona from v1 migration" {
+		t.Errorf("Expected fallback persona from tenantID=0, got: %q", content)
+	}
+
+	// GetAllBlocks should also return the fallback persona
+	blocks, err := svc.GetAllBlocks(5, "")
+	if err != nil {
+		t.Fatalf("GetAllBlocks failed: %v", err)
+	}
+	if blocks["persona"] != "Legacy persona from v1 migration" {
+		t.Errorf("GetAllBlocks expected fallback persona, got: %q", blocks["persona"])
+	}
+
+	// Once persona is explicitly set for tenant 5, fallback should NOT be used
+	if err := svc.SetBlock(5, "persona", "Tenant 5 own persona", ""); err != nil {
+		t.Fatalf("SetBlock failed: %v", err)
+	}
+	content, _, err = svc.GetBlock(5, "persona", "")
+	if err != nil {
+		t.Fatalf("GetBlock after set failed: %v", err)
+	}
+	if content != "Tenant 5 own persona" {
+		t.Errorf("Expected tenant's own persona, got: %q", content)
+	}
+}

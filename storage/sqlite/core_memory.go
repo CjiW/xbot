@@ -180,13 +180,35 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 	if err == sql.ErrNoRows {
 		// Return defaults for known blocks
 		if limit, ok := DefaultBlocks[blockName]; ok {
-			return "", limit, nil
+			charLimit = limit
+		} else {
+			charLimit = 2000
 		}
-		return "", 2000, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return "", 0, fmt.Errorf("get block %s: %w", blockName, err)
 	}
+
+	// Fallback: if persona is empty at current tenantID, try tenantID=0.
+	// This handles instances where an older v1 migration merged all persona
+	// data into tenantID=0; new code reads from the actual tenantID and
+	// would otherwise see empty persona (either ErrNoRows or empty content
+	// from InitBlocks' INSERT OR IGNORE).
+	if content == "" && blockName == "persona" && effectiveTenantID != 0 {
+		var fbContent string
+		var fbLimit int
+		fbErr := conn.QueryRow(
+			"SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = ? AND user_id = ?",
+			blockName, uid,
+		).Scan(&fbContent, &fbLimit)
+		if fbErr == nil && fbContent != "" {
+			log.WithFields(log.Fields{
+				"tenant_id":  effectiveTenantID,
+				"block_name": blockName,
+			}).Debug("Persona fallback: read from tenantID=0 (legacy v1 migration data)")
+			return fbContent, fbLimit, nil
+		}
+	}
+
 	return content, charLimit, nil
 }
 
@@ -264,6 +286,18 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 	}
 	if err == nil {
 		blocks["persona"] = personaContent
+	}
+	// Fallback: if persona empty/missing at current tenantID, try tenantID=0
+	// (handles legacy v1 migration that merged persona into tenantID=0)
+	if blocks["persona"] == "" && tenantID != 0 {
+		var fallbackContent string
+		fbErr := conn.QueryRow(
+			"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",
+		).Scan(&fallbackContent)
+		if fbErr == nil && fallbackContent != "" {
+			blocks["persona"] = fallbackContent
+			log.WithField("tenant_id", tenantID).Debug("Persona fallback: read from tenantID=0 in GetAllBlocks")
+		}
 	}
 
 	// Get working_context from current tenantID

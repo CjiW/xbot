@@ -93,12 +93,12 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 
 // executeLocal 在本地读取文件
 func (t *ReadTool) executeLocal(ctx *ToolContext, filePath string) (*ToolResult, error) {
-	// 如果是相对路径且 CurrentDir 存在，先尝试从 CurrentDir 解析
+	// 如果是相对路径且 CurrentDir 存在，先尝试从 CurrentDir 解析。
+	// 若在 CurrentDir 中未找到，有意 fallthrough 到 WorkspaceRoot 解析——
+	// 这使得 agent cd 到子目录后仍能读取 workspace root 下的文件。
 	if ctx != nil && ctx.CurrentDir != "" && !filepath.IsAbs(filePath) {
-		// 尝试从 CurrentDir 解析
 		absPath := filepath.Join(ctx.CurrentDir, filePath)
 		if resolved, err := ResolveReadPath(ctx, absPath); err == nil {
-			// 检查文件是否存在
 			if _, statErr := os.Stat(resolved); statErr == nil {
 				content, err := os.ReadFile(resolved)
 				if err != nil {

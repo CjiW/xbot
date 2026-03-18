@@ -90,7 +90,7 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// CallChain 检查
 	cc := CallChainFromContext(ctx)
-	if err := cc.CanSpawn(roleName); err != nil {
+	if err := cc.CanSpawn(roleName, a.maxSubAgentDepth); err != nil {
 		return &bus.OutboundMessage{Content: err.Error(), Error: err}, nil
 	}
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
@@ -182,7 +182,12 @@ func (a *Agent) SendToInteractiveSession(
 	// 与 ia.cfg 共享底层数组。当前安全因 mutex 保护且拷贝后仅做非 slice 字段覆盖，
 	// 但如果需要修改 slice 内容，必须先深拷贝。
 	cfg := *ia.cfg // copy
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(cfg.SenderID)
+	// 使用 OriginUserID 获取 LLM 配置（SubAgent 应继承原始用户的配置）
+	originUserID := cfg.OriginUserID
+	if originUserID == "" {
+		originUserID = cfg.SenderID // fallback：兼容旧数据
+	}
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(originUserID)
 	cfg.LLMClient = llmClient
 	cfg.Model = model
 	cfg.ThinkingMode = thinkingMode
@@ -280,7 +285,8 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		AgentID:             msg.ParentAgentID,
 		Channel:             channel,
 		ChatID:              chatID,
-		SenderID:            senderID,
+		SenderID:            msg.ParentAgentID, // SubAgent 的父上下文：SenderID = 父 Agent ID
+		OriginUserID:        senderID,          // 原始用户 ID
 		SenderName:          msg.SenderName,
 	}
 }

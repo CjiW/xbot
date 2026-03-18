@@ -19,8 +19,13 @@ func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, err
 		return "", fmt.Errorf("workspace root not set")
 	}
 
+	// 使用 OriginUserID 作为沙箱用户标识（基于原始用户隔离）
+	sandboxUserID := ctx.OriginUserID
+	if sandboxUserID == "" {
+		sandboxUserID = ctx.SenderID // fallback：兼容旧数据
+	}
 	sandbox := GetSandbox()
-	cmdName, cmdArgs, err := sandbox.Wrap(command, args, nil, workspaceRoot, ctx.SenderID)
+	cmdName, cmdArgs, err := sandbox.Wrap(command, args, nil, workspaceRoot, sandboxUserID)
 	if err != nil {
 		return "", fmt.Errorf("wrap command for sandbox: %w", err)
 	}
@@ -56,10 +61,15 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 		return "", fmt.Errorf("workspace root not set")
 	}
 
+	// 使用 OriginUserID 作为沙箱用户标识（基于原始用户隔离）
+	sandboxUserID := ctx.OriginUserID
+	if sandboxUserID == "" {
+		sandboxUserID = ctx.SenderID // fallback：兼容旧数据
+	}
 	sandbox := GetSandbox()
 
 	// 获取容器默认 shell 并使用 login shell 执行命令
-	shell, err := sandbox.GetShell(ctx.SenderID, workspaceRoot)
+	shell, err := sandbox.GetShell(sandboxUserID, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}

@@ -14,13 +14,14 @@ import (
 )
 
 // defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
-const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}}
+const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}} | 当前目录：{{.CWD}}
 `
 
 // PromptData 模板渲染数据
 type PromptData struct {
 	Channel string
 	WorkDir string
+	CWD     string // 当前工作目录（始终有值，默认等于 WorkDir）
 }
 
 // PromptLoader 负责加载和渲染系统提示词模板

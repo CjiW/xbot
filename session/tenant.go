@@ -22,7 +22,8 @@ type TenantSession struct {
 	memory     memory.MemoryProvider
 	mcpManager *tools.SessionMCPManager // 会话 MCP 管理器
 	lastActive time.Time                // 会话活跃时间
-	mu         sync.RWMutex             // 保护 lastActive
+	mu         sync.RWMutex             // 保护 lastActive 和 cwd
+	cwd        string                   // 当前工作目录（PWD 工具优化）
 }
 
 // AddMessage adds a message to this tenant's session
@@ -155,4 +156,18 @@ func (s *TenantSession) InvalidateMCP() {
 	if s.mcpManager != nil {
 		s.mcpManager.Invalidate()
 	}
+}
+
+// GetCurrentDir 获取当前工作目录（PWD 工具优化）
+func (s *TenantSession) GetCurrentDir() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cwd
+}
+
+// SetCurrentDir 设置当前工作目录（PWD 工具优化）
+func (s *TenantSession) SetCurrentDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cwd = dir
 }

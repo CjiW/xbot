@@ -27,6 +27,21 @@ import (
 // ErrLLMGenerate 表示 LLM 生成调用失败（网络、API 4xx/5xx 等）
 var ErrLLMGenerate = errors.New("LLM generate failed")
 
+// feishuCardPrefix 飞书卡片消息前缀标识。
+const feishuCardPrefix = "__FEISHU_CARD__:"
+
+// saveUserMessage 构建 user 消息并持久化到 session。
+// 提取自 processMessage 中 3 处相同的 userMsg 构建+保存模式。
+func saveUserMessage(ctx context.Context, sess *session.TenantSession, msg bus.InboundMessage) {
+	userMsg := llm.NewUserMessage(msg.Content)
+	if !msg.Time.IsZero() {
+		userMsg.Timestamp = msg.Time
+	}
+	if err := sess.AddMessage(userMsg); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+	}
+}
+
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
 func assertNoSystemPersist(m llm.ChatMessage) {
 	if m.Role == "system" {
@@ -481,6 +496,17 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// sendWithFallback 先通过 sendMessage 发送消息，失败则 fallback 到 bus.Outbound。
+func (a *Agent) sendWithFallback(channel, chatID, content string) {
+	if err := a.sendMessage(channel, chatID, content); err != nil {
+		a.bus.Outbound <- bus.OutboundMessage{
+			Channel: channel,
+			ChatID:  chatID,
+			Content: content,
+		}
+	}
+}
+
 var ackMessages = []string{
 	"收到~",
 	"好的，让我看看",
@@ -667,13 +693,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 					if err != nil {
 						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
 						content := formatErrorForUser(err)
-						if sendErr := a.sendMessage(m.Channel, m.ChatID, content); sendErr != nil {
-							a.bus.Outbound <- bus.OutboundMessage{
-								Channel: m.Channel,
-								ChatID:  m.ChatID,
-								Content: content,
-							}
-						}
+						a.sendWithFallback(m.Channel, m.ChatID, content)
 						return
 					}
 					if response != nil {
@@ -761,14 +781,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).WithError(err).Error("Error processing message")
 			// 走 sendMessage 与正常回复同一路径：可 Patch 已发出的进度条为错误内容，避免错误静默不达用户
 			content := formatErrorForUser(err)
-			if sendErr := a.sendMessage(msg.Channel, msg.ChatID, content); sendErr != nil {
-				log.Ctx(ctx).WithError(sendErr).Warn("Failed to send error via sendMessage, fallback to bus")
-				a.bus.Outbound <- bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: content,
-				}
-			}
+			a.sendWithFallback(msg.Channel, msg.ChatID, content)
 			continue
 		}
 		if response != nil {
@@ -866,30 +879,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, out.Error
 	}
 	finalContent := out.Content
-	toolsUsed := out.ToolsUsed
 	waitingUser := out.WaitingUser
 
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-		}
+		saveUserMessage(ctx, tenantSession, msg)
 		return nil, nil
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-		}
+		saveUserMessage(ctx, tenantSession, msg)
 		log.Ctx(ctx).WithFields(log.Fields{
 			"channel":      msg.Channel,
 			"chat_id":      msg.ChatID,
@@ -899,17 +899,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	userMsg := llm.NewUserMessage(msg.Content)
-	if !msg.Time.IsZero() {
-		userMsg.Timestamp = msg.Time
-	}
-	if err := tenantSession.AddMessage(userMsg); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-	}
+	saveUserMessage(ctx, tenantSession, msg)
 	assistantMsg := llm.NewAssistantMessage(finalContent)
-	if len(toolsUsed) > 0 {
-		_ = toolsUsed
-	}
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
 	}
@@ -1032,13 +1023,6 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	return a.pipeline.Run(mc), nil
 }
 
-// max returns the larger of a and b.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
 	length, err := tenantSession.Len()
@@ -1157,8 +1141,7 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		Content: content,
 	}
 
-	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
-	isCard := strings.HasPrefix(content, "__FEISHU_CARD__:")
+	isCard := strings.HasPrefix(content, feishuCardPrefix)
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
@@ -1182,7 +1165,7 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		if msgID != "" {
 			a.sessionMsgIDs.Store(key, msgID)
 		}
-		if isFinal {
+		if isCard {
 			a.sessionFinalSent.Store(key, true)
 		}
 		return nil

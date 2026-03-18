@@ -17,6 +17,22 @@ import (
 	"xbot/tools"
 )
 
+// applyWorkspaceConfig 将 Agent 级别的工作区 & 沙箱配置填充到 RunConfig 中。
+// 提取自 buildMainRunConfig / buildCronRunConfig / buildToolExecutor 中 3 处重复的赋值块。
+func (a *Agent) applyWorkspaceConfig(cfg *RunConfig, senderID string) {
+	cfg.WorkingDir = a.workDir
+	cfg.WorkspaceRoot = tools.UserWorkspaceRoot(a.workDir, senderID)
+	cfg.SandboxWorkDir = "/workspace"
+	cfg.ReadOnlyRoots = a.globalSkillDirs
+	cfg.SkillsDirs = a.globalSkillDirs
+	cfg.AgentsDir = a.agentsDir
+	cfg.MCPConfigPath = tools.UserMCPConfigPath(a.workDir, senderID)
+	cfg.GlobalMCPConfig = resolveDataPath(a.workDir, "mcp.json")
+	cfg.DataDir = a.workDir
+	cfg.SandboxEnabled = true
+	cfg.PreferredSandbox = "docker"
+}
+
 // buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
 // 从 processMessage / handleCardResponse 调用。
 func (a *Agent) buildMainRunConfig(
@@ -51,19 +67,6 @@ func (a *Agent) buildMainRunConfig(
 		SenderID:   senderID,
 		SenderName: senderName,
 
-		// 工作区 & 沙箱
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
-
 		// 循环控制
 		MaxIterations: a.maxIterations,
 
@@ -94,6 +97,7 @@ func (a *Agent) buildMainRunConfig(
 		// Letta 记忆字段
 		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
 	}
+	a.applyWorkspaceConfig(&cfg, senderID)
 
 	// 进度通知
 	if autoNotify {
@@ -114,9 +118,7 @@ func (a *Agent) buildMainRunConfig(
 	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
-	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
-		return a.spawnSubAgent(ctx, inMsg)
-	}
+	cfg.SpawnAgent = a.spawnSubAgent
 
 	// InteractiveCallbacks — interactive SubAgent 支持
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -142,7 +144,7 @@ func (a *Agent) buildCronRunConfig(
 
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
 
-	return RunConfig{
+	cfg := RunConfig{
 		LLMClient:    llmClient,
 		Model:        model,
 		ThinkingMode: thinkingMode,
@@ -153,19 +155,6 @@ func (a *Agent) buildCronRunConfig(
 		ChatID:       chatID,
 		SenderID:     senderID,
 		SenderName:   "",
-
-		// 工作区 & 沙箱
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
 
 		MaxIterations: a.maxIterations,
 		SessionKey:    sessionKey,
@@ -183,6 +172,8 @@ func (a *Agent) buildCronRunConfig(
 
 		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
 	}
+	a.applyWorkspaceConfig(&cfg, senderID)
+	return cfg
 }
 
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
@@ -328,9 +319,7 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	// Capability: spawn_agent — 允许 SubAgent 创建子 Agent
 	if caps.SpawnAgent {
-		cfg.SpawnAgent = func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
-			return a.spawnSubAgent(ctx, msg)
-		}
+		cfg.SpawnAgent = a.spawnSubAgent
 	}
 
 	return cfg
@@ -344,7 +333,6 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
-	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 	cfg := &RunConfig{
 		AgentID:    "main",
 		Channel:    channel,
@@ -353,25 +341,12 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		SenderName: senderName,
 		SendFunc:   a.sendMessage,
 
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    wsRoot,
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
-
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,
 	}
+	a.applyWorkspaceConfig(cfg, senderID)
 
-	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
-		return a.spawnSubAgent(spawnCtx, inMsg)
-	}
+	cfg.SpawnAgent = a.spawnSubAgent
 
 	// Pre-build Letta memory extras (involves GetOrCreateSession + LettaMemory lookup).
 	cfg.ToolContextExtras = a.buildToolContextExtras(channel, chatID)
@@ -408,7 +383,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		a.tools.TouchTool(sessionKey, tc.Name)
 
 		// 4. 确保用户工作目录存在
-		if err := os.MkdirAll(wsRoot, 0o755); err != nil {
+		if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
 			return nil, fmt.Errorf("create user workspace: %w", err)
 		}
 

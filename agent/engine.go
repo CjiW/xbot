@@ -18,6 +18,36 @@ import (
 	log "xbot/logger"
 )
 
+// withOptionalTimeout 创建可选超时的 context。
+// timeout > 0 时返回带超时的 context，否则返回原始 context 和空 cancel。
+func withOptionalTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return parent, func() {}
+}
+
+// persistCompressedToSession 将压缩后的消息持久化到 session。
+// 先清空 session，再逐条写入非 system 消息。
+// 提取自 maybeCompress 闭包和强制压缩处的 2 处相同逻辑。
+func persistCompressedToSession(ctx context.Context, sess *session.TenantSession, compressed []llm.ChatMessage) bool {
+	if err := sess.Clear(); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to clear session for compression, skipping persistence")
+		return false
+	}
+	for _, msg := range compressed {
+		if msg.Role == "system" {
+			continue
+		}
+		assertNoSystemPersist(msg)
+		if err := sess.AddMessage(msg); err != nil {
+			log.Ctx(ctx).WithError(err).Error("Partial write during compression, session may be corrupted")
+			return false
+		}
+	}
+	return true
+}
+
 // RunConfig 统一的 Agent 运行配置。
 // 主 Agent 和 SubAgent 使用同一个 Run() 方法，差异通过配置注入。
 type RunConfig struct {
@@ -270,26 +300,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// 持久化压缩结果到 session
 		if cfg.Session != nil {
-			if err := cfg.Session.Clear(); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
+			if persistCompressedToSession(ctx, cfg.Session, compressed) {
+				log.Ctx(ctx).Info("Auto compression persisted to session")
 			} else {
-				allOk := true
-				for _, msg := range compressed {
-					if msg.Role == "system" {
-						continue
-					}
-					assertNoSystemPersist(msg)
-					if err := cfg.Session.AddMessage(msg); err != nil {
-						log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
-						allOk = false
-						break
-					}
-				}
-				if allOk {
-					log.Ctx(ctx).Info("Auto compression persisted to session")
-				} else {
-					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
-				}
+				log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 			}
 		}
 	}
@@ -364,13 +378,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 
 		// LLM 调用（可选超时）
-		var llmCtx context.Context
-		var llmCancel context.CancelFunc
-		if cfg.LLMTimeout > 0 {
-			llmCtx, llmCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-		} else {
-			llmCtx, llmCancel = retryNotifyCtx, func() {}
-		}
+		llmCtx, llmCancel := withOptionalTimeout(retryNotifyCtx, cfg.LLMTimeout)
 
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 		llmCancel()
@@ -396,27 +404,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 					// 持久化压缩结果到 session
 					if cfg.Session != nil {
-						if clearErr := cfg.Session.Clear(); clearErr == nil {
-							for _, msg := range compressed {
-								if msg.Role == "system" {
-									continue
-								}
-								assertNoSystemPersist(msg)
-								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
-									log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
-									break
-								}
-							}
-						}
+						persistCompressedToSession(ctx, cfg.Session, compressed)
 					}
 					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
-					var retryCtx context.Context
-					var retryCancel context.CancelFunc
-					if cfg.LLMTimeout > 0 {
-						retryCtx, retryCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-					} else {
-						retryCtx, retryCancel = retryNotifyCtx, func() {}
-					}
+					retryCtx, retryCancel := withOptionalTimeout(retryNotifyCtx, cfg.LLMTimeout)
 					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					retryCancel()
 				}
@@ -712,9 +703,19 @@ type spawnAgentAdapter struct {
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
-func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false)
-	out, err := a.spawnFn(parentCtx.Ctx, msg)
+// callAndUnwrap 构建 InboundMessage 并调用 spawnFn，统一解包 OutboundMessage 结果。
+// 提取自 RunSubAgent / SpawnInteractive / SendInteractive 三个方法的公共逻辑。
+func (a *spawnAgentAdapter) callAndUnwrap(
+	ctx context.Context,
+	parentCtx *tools.ToolContext,
+	task, roleName, systemPrompt string,
+	allowedTools []string,
+	caps tools.SubAgentCapabilities,
+	interactive bool,
+	fn func(context.Context, bus.InboundMessage) (*bus.OutboundMessage, error),
+) (string, error) {
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, interactive)
+	out, err := fn(ctx, msg)
 	if err != nil {
 		return "", err
 	}
@@ -722,6 +723,14 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 		return out.Content, out.Error
 	}
 	return out.Content, nil
+}
+
+// RunSubAgent 实现 tools.SubAgentManager 接口。
+func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
+	return a.callAndUnwrap(parentCtx.Ctx, parentCtx, task, roleName, systemPrompt, allowedTools, caps, false,
+		func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+			return a.spawnFn(ctx, msg)
+		})
 }
 
 // SpawnInteractive 实现 InteractiveSubAgentManager.SpawnInteractive。
@@ -729,15 +738,10 @@ func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task,
 	if a.interactiveSpawnFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
-	out, err := a.interactiveSpawnFn(parentCtx.Ctx, roleName, msg)
-	if err != nil {
-		return "", err
-	}
-	if out.Error != nil {
-		return out.Content, out.Error
-	}
-	return out.Content, nil
+	return a.callAndUnwrap(parentCtx.Ctx, parentCtx, task, roleName, systemPrompt, allowedTools, caps, true,
+		func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+			return a.interactiveSpawnFn(ctx, roleName, msg)
+		})
 }
 
 // SendInteractive 实现 InteractiveSubAgentManager.SendInteractive。
@@ -745,15 +749,10 @@ func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, 
 	if a.interactiveSendFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
-	out, err := a.interactiveSendFn(parentCtx.Ctx, roleName, msg)
-	if err != nil {
-		return "", err
-	}
-	if out.Error != nil {
-		return out.Content, out.Error
-	}
-	return out.Content, nil
+	return a.callAndUnwrap(parentCtx.Ctx, parentCtx, task, roleName, systemPrompt, allowedTools, caps, true,
+		func(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+			return a.interactiveSendFn(ctx, roleName, msg)
+		})
 }
 
 // UnloadInteractive 实现 InteractiveSubAgentManager.UnloadInteractive。

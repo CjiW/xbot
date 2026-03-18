@@ -435,12 +435,14 @@ func TestOneBotChatID_OtherType(t *testing.T) {
 // onebotChatID 模拟 handleOneBotMessage 中的 chatID 生成逻辑
 func onebotChatID(evt onebotEvent) string {
 	userIDStr := strconv.FormatInt(evt.UserID, 10)
-	if evt.MessageType == "private" {
+	switch evt.MessageType {
+	case "private":
 		return "private_" + userIDStr
-	} else if evt.MessageType == "group" {
+	case "group":
 		return "group_" + strconv.FormatInt(evt.GroupID, 10)
+	default:
+		return "other_" + userIDStr
 	}
-	return "other_" + userIDStr
 }
 
 // 确保 fmt 被使用（用于其他测试辅助）
@@ -667,12 +669,14 @@ func TestOneBotChatType_Other(t *testing.T) {
 
 // onebotChatType 模拟 handleOneBotMessage 中的 chatType 生成逻辑
 func onebotChatType(evt onebotEvent) string {
-	if evt.MessageType == "private" {
+	switch evt.MessageType {
+	case "private":
 		return "p2p"
-	} else if evt.MessageType == "group" {
+	case "group":
 		return "group"
+	default:
+		return evt.MessageType
 	}
-	return evt.MessageType
 }
 
 // ===========================================================================

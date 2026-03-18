@@ -356,13 +356,14 @@ func (c *OneBotChannel) handleOneBotMessage(data []byte) {
 
 	// 确定 chatType 和 chatID
 	var chatType, chatID string
-	if evt.MessageType == "private" {
+	switch evt.MessageType {
+	case "private":
 		chatType = "p2p"
 		chatID = "private_" + userIDStr
-	} else if evt.MessageType == "group" {
+	case "group":
 		chatType = "group"
 		chatID = "group_" + strconv.FormatInt(evt.GroupID, 10)
-	} else {
+	default:
 		chatType = evt.MessageType
 		chatID = "other_" + userIDStr
 	}

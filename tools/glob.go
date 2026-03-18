@@ -9,6 +9,61 @@ import (
 	"xbot/llm"
 )
 
+// globToFindArgs 将 glob pattern 翻译为 find 命令的参数。
+// 返回值：(find 搜索子目录, find 过滤参数片段)
+//
+// 翻译规则：
+//   - *.go            → ("", "-maxdepth 1 -name '*.go'")
+//   - **/*.go         → ("", "-name '*.go'")               // 递归
+//   - src/*.go        → ("src", "-maxdepth 1 -name '*.go'")
+//   - src/**/*.go     → ("src", "-name '*.go'")            // 递归
+//   - **/test/*.go    → ("", "-path '*/test/*.go'")        // 递归
+//   - src/**/test/*.go→ ("src", "-path '*/test/*.go'")     // 递归
+func globToFindArgs(pattern string) (searchBase string, args string) {
+	pattern = strings.Trim(pattern, "/")
+	pattern = filepath.ToSlash(pattern)
+	if pattern == "" {
+		return "", ""
+	}
+
+	segments := strings.Split(pattern, "/")
+
+	// 定位第一个 ** 的位置
+	doubleStarIdx := -1
+	for i, seg := range segments {
+		if seg == "**" {
+			doubleStarIdx = i
+			break
+		}
+	}
+
+	if doubleStarIdx == -1 {
+		// 无 **：简单匹配，-maxdepth 1 限定不递归
+		if len(segments) == 1 {
+			return "", fmt.Sprintf("-maxdepth 1 -name '%s'", segments[0])
+		}
+		base := strings.Join(segments[:len(segments)-1], "/")
+		name := segments[len(segments)-1]
+		return base, fmt.Sprintf("-maxdepth 1 -name '%s'", name)
+	}
+
+	// 有 **：
+	prefix := strings.Join(segments[:doubleStarIdx], "/")
+	suffixSegments := segments[doubleStarIdx+1:]
+
+	if len(suffixSegments) == 0 {
+		return prefix, ""
+	}
+
+	if len(suffixSegments) == 1 {
+		return prefix, fmt.Sprintf("-name '%s'", suffixSegments[0])
+	}
+
+	// 多个后缀 segment：用 -path
+	pathPattern := "*/" + strings.Join(suffixSegments, "/")
+	return prefix, fmt.Sprintf("-path '%s'", pathPattern)
+}
+
 // GlobTool 文件模式匹配搜索工具
 type GlobTool struct{}
 
@@ -56,29 +111,38 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 // executeInSandbox 在沙箱容器内执行 find 命令
 func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*ToolResult, error) {
-	searchDir := "/workspace"
+	sandboxBase := sandboxBaseDir(ctx)
+
+	// 翻译 glob pattern → find 参数
+	searchBase, findArgs := globToFindArgs(pattern)
+
+	// 确定 find 搜索目录
+	searchDir := sandboxBase
 	if path != "" {
-		// 用户可能传相对路径或 /workspace 开头的路径
-		if strings.HasPrefix(path, "/workspace/") {
+		if strings.HasPrefix(path, sandboxBase+"/") {
 			searchDir = path
 		} else {
-			searchDir = "/workspace/" + path
+			searchDir = sandboxBase + "/" + path
 		}
 	} else if ctx != nil && ctx.CurrentDir != "" {
 		// 使用 CurrentDir（PWD 工具优化）
 		// CurrentDir 是宿主机路径，需要转换为容器内路径
 		if strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
-			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
-			if err == nil {
-				searchDir = "/workspace/" + rel
-			}
+			rel, _ := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+			searchDir = sandboxBase + "/" + rel
 		}
 	}
 
-	// 构建 find 命令，过滤隐藏目录和 node_modules
+	// 合并 globToFindArgs 的子目录前缀
+	if searchBase != "" {
+		searchDir = searchDir + "/" + searchBase
+	}
+
+	// 构建 find 命令（对 searchDir 做 shellEscape 防注入）
+	escapedDir := shellEscape(searchDir)
 	findCmd := fmt.Sprintf(
-		"find %s -type f -name '%s' -not -path '*/.*' -not -path '*/node_modules/*' 2>/dev/null | head -200",
-		searchDir, pattern)
+		"find %s -type f %s -not -path '*/.*' -not -path '*/node_modules/*' 2>/dev/null | head -200",
+		escapedDir, findArgs)
 	output, err := RunInSandboxWithShell(ctx, findCmd)
 	if err != nil {
 		// 如果是"没有匹配文件"的情况，返回空结果

@@ -320,3 +320,41 @@ func TestMatchDoublestar(t *testing.T) {
 		})
 	}
 }
+
+func TestGlobToFindArgs(t *testing.T) {
+	tests := []struct {
+		pattern    string
+		searchBase string
+		args       string
+	}{
+		{"*.go", "", "-maxdepth 1 -name '*.go'"},
+		{"*.txt", "", "-maxdepth 1 -name '*.txt'"},
+		{"*", "", "-maxdepth 1 -name '*'"},
+		{"src/*.go", "src", "-maxdepth 1 -name '*.go'"},
+		{"pkg/utils/*.go", "pkg/utils", "-maxdepth 1 -name '*.go'"},
+		{"a/b/c/*.go", "a/b/c", "-maxdepth 1 -name '*.go'"},
+		{"**/*.go", "", "-name '*.go'"},
+		{"**/*.ts", "", "-name '*.ts'"},
+		{"src/**/*.go", "src", "-name '*.go'"},
+		{"**/test/*.go", "", "-path '*/test/*.go'"},
+		{"src/**/test/*.go", "src", "-path '*/test/*.go'"},
+		{"**", "", ""},
+		{"src/**", "src", ""},
+		{"**/*", "", "-name '*'"},
+		{"/**/*.go", "", "-name '*.go'"},
+		{"**/*.go/", "", "-name '*.go'"},
+		{"", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			searchBase, args := globToFindArgs(tt.pattern)
+			if searchBase != tt.searchBase {
+				t.Errorf("globToFindArgs(%q) searchBase = %q, want %q", tt.pattern, searchBase, tt.searchBase)
+			}
+			if args != tt.args {
+				t.Errorf("globToFindArgs(%q) args = %q, want %q", tt.pattern, args, tt.args)
+			}
+		})
+	}
+}

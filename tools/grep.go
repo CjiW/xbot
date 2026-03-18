@@ -83,12 +83,14 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 // executeInSandbox 在沙箱容器内执行 grep 命令
 func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include string, ignoreCase bool, contextLines int) (*ToolResult, error) {
-	searchDir := "/workspace"
+	sandboxBase := sandboxBaseDir(ctx)
+
+	searchDir := sandboxBase
 	if path != "" {
-		if strings.HasPrefix(path, "/workspace/") {
+		if strings.HasPrefix(path, sandboxBase+"/") {
 			searchDir = path
 		} else {
-			searchDir = "/workspace/" + path
+			searchDir = sandboxBase + "/" + path
 		}
 	} else if ctx != nil && ctx.CurrentDir != "" {
 		// 使用 CurrentDir（PWD 工具优化）
@@ -96,7 +98,7 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		if strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
 			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
 			if err == nil {
-				searchDir = "/workspace/" + rel
+				searchDir = sandboxBase + "/" + rel
 			}
 		}
 	}
@@ -111,11 +113,15 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 	}
 	grepCmd += " -rn --binary-files=without-match --exclude-dir=.git --exclude-dir=node_modules"
 
+	// include brace 展开（复用已有函数 expandBracePattern）
 	if include != "" {
-		grepCmd += fmt.Sprintf(" --include='%s'", include)
+		patterns := expandBracePattern(include)
+		for _, p := range patterns {
+			grepCmd += fmt.Sprintf(" --include='%s'", shellEscape(p))
+		}
 	}
 
-	grepCmd += fmt.Sprintf(" '%s' %s", pattern, searchDir)
+	grepCmd += fmt.Sprintf(" '%s' '%s'", shellEscape(pattern), shellEscape(searchDir))
 	grepCmd += " | head -200"
 
 	output, err := RunInSandboxWithShell(ctx, grepCmd)

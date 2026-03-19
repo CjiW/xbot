@@ -246,8 +246,8 @@ func registerBuiltinCommands(r *CommandRegistry) {
 	r.Register(&unsetLLMCmd{})
 	r.Register(&getLLMCmd{})
 	r.Register(&compressCmd{})
-	r.Register(&contextModeCmd{})  // 先注册（更精确的匹配优先）
-	r.Register(&contextInfoCmd{})  // 后注册（更宽泛的匹配）
+	r.Register(&contextModeCmd{}) // 先注册（更精确的匹配优先）
+	r.Register(&contextInfoCmd{}) // 后注册（更宽泛的匹配）
 	r.Register(&modelsCmd{})
 	r.Register(&setModelCmd{})
 	r.Register(&bangCmd{})

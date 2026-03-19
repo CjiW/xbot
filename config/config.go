@@ -103,9 +103,9 @@ type AgentConfig struct {
 	SessionCacheTimeout  time.Duration // 会话缓存超时（默认 24 小时）
 
 	// 上下文压缩配置
-	ContextMode           string // 上下文管理模式（空则由 EnableAutoCompress 决定）
-	EnableAutoCompress   bool   // 是否启用自动上下文压缩（默认 true）
-	MaxContextTokens     int    // 最大上下文 token 数（默认 100000）
+	ContextMode          string  // 上下文管理模式（空则由 EnableAutoCompress 决定）
+	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true）
+	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7，即 70% 时触发）
 
 	// SubAgent 深度控制

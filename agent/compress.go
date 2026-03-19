@@ -103,6 +103,10 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}
 
 	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
+	// 直接访问 config 字段而非通过 ContextManager 接口，因为：
+	// 1. handleCompress 是手动触发路径，不涉及并发竞争
+	// 2. contextManagerConfig 是 Agent 的私有字段，生命周期与 Agent 相同
+	// 3. 阈值配置是启动时设定的不变值，不需要锁保护
 	threshold := int(float64(a.contextManagerConfig.MaxContextTokens) * a.contextManagerConfig.CompressionThreshold)
 	if err == nil && tokenCount < threshold {
 		return &bus.OutboundMessage{

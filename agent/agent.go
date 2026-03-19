@@ -410,26 +410,26 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:                  cfg.Bus,
-		multiSession:         multiSession,
-		tools:                registry,
-		maxIterations:        cfg.MaxIterations,
-		maxConcurrency:       cfg.MaxConcurrency,
-		memoryWindow:         cfg.MemoryWindow,
-		skills:               skillStore,
-		agents:               agentStore,
-		chatHistory:          chatHistory,
-		cardBuilder:          cardBuilder,
-		workDir:              cfg.WorkDir,
-		promptLoader:         NewPromptLoader(cfg.PromptFile),
-		sandboxMode:          sandboxMode,
-		singleUser:           cfg.SingleUser,
-		globalSkillDirs:      globalSkillDirs,
-		maxSubAgentDepth:     cfg.MaxSubAgentDepth,
-		agentsDir:            agentsDir,
-		consolidateCh:        make(chan consolidateRequest, 64),
-		consolidateStopCh:    make(chan struct{}),
-		consolidating:        make(map[string]bool),
+		bus:               cfg.Bus,
+		multiSession:      multiSession,
+		tools:             registry,
+		maxIterations:     cfg.MaxIterations,
+		maxConcurrency:    cfg.MaxConcurrency,
+		memoryWindow:      cfg.MemoryWindow,
+		skills:            skillStore,
+		agents:            agentStore,
+		chatHistory:       chatHistory,
+		cardBuilder:       cardBuilder,
+		workDir:           cfg.WorkDir,
+		promptLoader:      NewPromptLoader(cfg.PromptFile),
+		sandboxMode:       sandboxMode,
+		singleUser:        cfg.SingleUser,
+		globalSkillDirs:   globalSkillDirs,
+		maxSubAgentDepth:  cfg.MaxSubAgentDepth,
+		agentsDir:         agentsDir,
+		consolidateCh:     make(chan consolidateRequest, 64),
+		consolidateStopCh: make(chan struct{}),
+		consolidating:     make(map[string]bool),
 
 		// Initialize hook chain with default hooks (LoggingHook + TimingHook)
 		hookChain: tools.NewHookChain(
@@ -489,12 +489,6 @@ func (a *Agent) SetContextManager(cm ContextManager) {
 	a.contextManagerMu.Lock()
 	defer a.contextManagerMu.Unlock()
 	a.contextManager = cm
-}
-
-// compressContext 使用 LLM 压缩对话历史（Agent 方法 wrapper）。
-// 委托给独立函数 compressMessages，保持向后兼容。
-func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compressMessages(ctx, messages, client, model)
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）

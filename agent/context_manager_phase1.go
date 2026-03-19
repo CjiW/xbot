@@ -65,17 +65,17 @@ func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, to
 	threshold := int(float64(cfg.MaxContextTokens) * cfg.CompressionThreshold)
 
 	return &ContextStats{
-		SystemTokens:    systemTokens,
-		UserTokens:      userTokens,
-		AssistantTokens: assistantTokens,
-		ToolMsgTokens:   toolMsgTokens,
-		ToolDefTokens:   toolTokens,
-		TotalTokens:     total,
-		MaxTokens:       cfg.MaxContextTokens,
-		Threshold:       threshold,
-		Mode:            cfg.EffectiveMode(),
+		SystemTokens:      systemTokens,
+		UserTokens:        userTokens,
+		AssistantTokens:   assistantTokens,
+		ToolMsgTokens:     toolMsgTokens,
+		ToolDefTokens:     toolTokens,
+		TotalTokens:       total,
+		MaxTokens:         cfg.MaxContextTokens,
+		Threshold:         threshold,
+		Mode:              cfg.EffectiveMode(),
 		IsRuntimeOverride: cfg.RuntimeMode() != "",
-		DefaultMode:     cfg.DefaultMode,
+		DefaultMode:       cfg.DefaultMode,
 	}
 }
 

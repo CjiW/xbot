@@ -273,13 +273,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 				if allOk {
 					log.Ctx(ctx).Info("Auto compression persisted to session")
+					// 调用 SessionHook（Phase 2 可能需要在此做额外操作，如更新话题分区索引）
+					if hook := cm.SessionHook(); hook != nil {
+						hook.AfterPersist(ctx, cfg.Session, result)
+					}
 				} else {
 					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 				}
 			}
 		}
 	}
-
 
 	// 推进 round 计数，自动清理长期未使用的工具激活
 	if sessionKey != "" {

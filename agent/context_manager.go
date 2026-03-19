@@ -67,17 +67,17 @@ type ContextManager interface {
 
 // ContextStats 上下文统计信息
 type ContextStats struct {
-	SystemTokens    int
-	UserTokens      int
-	AssistantTokens int
-	ToolMsgTokens   int
-	ToolDefTokens   int
-	TotalTokens     int
-	MaxTokens       int
-	Threshold       int
-	Mode            ContextMode
+	SystemTokens      int
+	UserTokens        int
+	AssistantTokens   int
+	ToolMsgTokens     int
+	ToolDefTokens     int
+	TotalTokens       int
+	MaxTokens         int
+	Threshold         int
+	Mode              ContextMode
 	IsRuntimeOverride bool // 是否为运行时覆盖
-	DefaultMode     ContextMode
+	DefaultMode       ContextMode
 }
 
 // SessionCompressHook 压缩后的 session 处理钩子
@@ -208,6 +208,10 @@ func resolveContextMode(cfg Config) ContextMode {
 		}
 		log.WithField("mode", cfg.ContextMode).Warn("Invalid AGENT_CONTEXT_MODE, ignoring")
 	}
-	// 2. 默认 phase1
+	// 2. 向后兼容旧字段：EnableAutoCompress=false 时禁用压缩
+	if !cfg.EnableAutoCompress {
+		return ContextModeNone
+	}
+	// 3. 默认 phase1
 	return ContextModePhase1
 }

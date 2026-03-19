@@ -702,16 +702,3 @@ func (s *dockerSandbox) autoDetectDinDMount(workDir string) (containerMount, hos
 
 	return bestDest, bestSrc
 }
-
-// WrapCommandForSandbox 将命令包装到沙箱执行（兼容旧接口）
-// Deprecated: 使用 NewSandbox 创建的沙箱实例的 Wrap 方法
-func WrapCommandForSandbox(command string, args []string, workspaceRoot string) (string, []string, error) {
-	return WrapCommandForSandboxWithEnv(command, args, nil, workspaceRoot)
-}
-
-// WrapCommandForSandboxWithEnv 将命令包装到沙箱执行，带环境变量
-func WrapCommandForSandboxWithEnv(command string, args []string, env []string, workspaceRoot string) (string, []string, error) {
-	// 使用 docker 沙箱
-	s := &dockerSandbox{image: "ubuntu:22.04"}
-	return s.Wrap(command, args, env, workspaceRoot, "")
-}

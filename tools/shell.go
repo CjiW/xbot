@@ -169,15 +169,42 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
+			timeoutErr := fmt.Sprintf("[TIMEOUT after %s] Command timed out", timeout)
 			if result != "" {
-				return NewErrorResult(fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)), nil
+				timeoutErr = fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)
 			}
-			return NewErrorResult(fmt.Sprintf("[TIMEOUT after %s] Command timed out with no output. The command may be waiting for input or running too long.", timeout)), nil
+			log.Ctx(ctx).WithFields(log.Fields{
+				"command": params.Command,
+				"timeout": timeout,
+				"output":  result,
+			}).Warn("Shell command timed out")
+			return NewErrorResult(timeoutErr), nil
 		}
+
+		// 构建详细的错误信息，包含 exit code 和 stderr
+		exitCode := cmd.ProcessState.ExitCode()
+		stderrStr := strings.TrimSpace(stderr.String())
+
+		var errMsg string
 		if result != "" {
-			return NewErrorResult(fmt.Sprintf("[EXIT %s]\n%s", err, result)), nil
+			// 有输出时保持原格式
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n%s", exitCode, params.Command, result)
+		} else if stderrStr != "" {
+			// 无标准输出但有 stderr 时，显示 stderr
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n[stderr] %s", exitCode, params.Command, stderrStr)
+		} else {
+			// 无任何输出时，显示命令和 exit code
+			errMsg = fmt.Sprintf("[EXIT %d] %s (no output)", exitCode, params.Command)
 		}
-		return nil, fmt.Errorf("command failed: %w", err)
+
+		// 打印错误日志，方便排查问题
+		log.Ctx(ctx).WithFields(log.Fields{
+			"command":  params.Command,
+			"exitCode": exitCode,
+			"stderr":   stderrStr,
+		}).Warn("Shell command failed")
+
+		return NewErrorResult(errMsg), nil
 	}
 
 	if result == "" {

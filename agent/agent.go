@@ -192,10 +192,10 @@ type Agent struct {
 	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
 	agentsDir       string
 
-	// 上下文压缩配置
-	maxContextTokens     int
-	compressionThreshold float64
-	enableAutoCompress   bool
+	// 上下文管理配置
+	contextManagerConfig *ContextManagerConfig
+	contextManagerMu     sync.RWMutex // 保护 contextManager 的并发读写
+	contextManager       ContextManager
 
 	// SubAgent 深度控制
 	maxSubAgentDepth int
@@ -275,10 +275,15 @@ type Config struct {
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔
 	SessionCacheTimeout  time.Duration // 会话缓存超时
 
-	// 上下文压缩配置
-	MaxContextTokens     int     // 最大上下文 token 数（默认 8000，0 表示不限制）
-	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
-	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 false）
+	// 上下文管理模式
+	// 优先级：ContextMode > EnableAutoCompress 旧字段
+	// 默认 ""，由 resolveContextMode 决定
+	ContextMode ContextMode
+
+	// 旧压缩配置（保留用于初始化 ContextManagerConfig，向后兼容 main.go 传参）
+	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
+	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7）
+	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true，旧字段）
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
@@ -319,8 +324,11 @@ func New(cfg Config) *Agent {
 		cfg.MaxContextTokens = 100000 // 默认 100k token
 	}
 	if cfg.CompressionThreshold == 0 {
-		cfg.CompressionThreshold = 0.8
+		cfg.CompressionThreshold = 0.7
 	}
+
+	// 确定初始上下文管理模式
+	contextMode := resolveContextMode(cfg)
 	// 设置 SubAgent 深度默认值
 	if cfg.MaxSubAgentDepth <= 0 {
 		cfg.MaxSubAgentDepth = 6
@@ -402,29 +410,26 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:                  cfg.Bus,
-		multiSession:         multiSession,
-		tools:                registry,
-		maxIterations:        cfg.MaxIterations,
-		maxConcurrency:       cfg.MaxConcurrency,
-		memoryWindow:         cfg.MemoryWindow,
-		skills:               skillStore,
-		agents:               agentStore,
-		chatHistory:          chatHistory,
-		cardBuilder:          cardBuilder,
-		workDir:              cfg.WorkDir,
-		promptLoader:         NewPromptLoader(cfg.PromptFile),
-		sandboxMode:          sandboxMode,
-		singleUser:           cfg.SingleUser,
-		globalSkillDirs:      globalSkillDirs,
-		maxContextTokens:     cfg.MaxContextTokens,
-		compressionThreshold: cfg.CompressionThreshold,
-		enableAutoCompress:   cfg.EnableAutoCompress,
-		maxSubAgentDepth:     cfg.MaxSubAgentDepth,
-		agentsDir:            agentsDir,
-		consolidateCh:        make(chan consolidateRequest, 64),
-		consolidateStopCh:    make(chan struct{}),
-		consolidating:        make(map[string]bool),
+		bus:               cfg.Bus,
+		multiSession:      multiSession,
+		tools:             registry,
+		maxIterations:     cfg.MaxIterations,
+		maxConcurrency:    cfg.MaxConcurrency,
+		memoryWindow:      cfg.MemoryWindow,
+		skills:            skillStore,
+		agents:            agentStore,
+		chatHistory:       chatHistory,
+		cardBuilder:       cardBuilder,
+		workDir:           cfg.WorkDir,
+		promptLoader:      NewPromptLoader(cfg.PromptFile),
+		sandboxMode:       sandboxMode,
+		singleUser:        cfg.SingleUser,
+		globalSkillDirs:   globalSkillDirs,
+		maxSubAgentDepth:  cfg.MaxSubAgentDepth,
+		agentsDir:         agentsDir,
+		consolidateCh:     make(chan consolidateRequest, 64),
+		consolidateStopCh: make(chan struct{}),
+		consolidating:     make(map[string]bool),
 
 		// Initialize hook chain with default hooks (LoggingHook + TimingHook)
 		hookChain: tools.NewHookChain(
@@ -459,7 +464,31 @@ func New(cfg Config) *Agent {
 	agent.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
 	agent.llmFactory = NewLLMFactory(agent.llmConfigSvc, cfg.LLM, cfg.Model)
 
+	// 初始化上下文管理器
+	agent.contextManagerConfig = &ContextManagerConfig{
+		MaxContextTokens:     cfg.MaxContextTokens,
+		CompressionThreshold: cfg.CompressionThreshold,
+		DefaultMode:          contextMode,
+	}
+	agent.contextManager = NewContextManager(agent.contextManagerConfig)
+
 	return agent
+}
+
+// GetContextManager 获取当前上下文管理器（读锁保护）。
+// 用于 buildMainRunConfig / buildSubAgentRunConfig / handleCompress 等场景。
+func (a *Agent) GetContextManager() ContextManager {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.contextManager
+}
+
+// SetContextManager 替换当前上下文管理器（写锁保护）。
+// 用于 /context mode 命令运行时切换。
+func (a *Agent) SetContextManager(cm ContextManager) {
+	a.contextManagerMu.Lock()
+	defer a.contextManagerMu.Unlock()
+	a.contextManager = cm
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）

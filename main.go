@@ -126,6 +126,7 @@ func main() {
 		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
+		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
 	})
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）

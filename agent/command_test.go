@@ -87,8 +87,8 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	registerBuiltinCommands(r)
 
 	cmds := r.Commands()
-	if len(cmds) != 12 {
-		t.Errorf("Commands() returned %d commands, want 12", len(cmds))
+	if len(cmds) != 13 {
+		t.Errorf("Commands() returned %d commands, want 13", len(cmds))
 	}
 
 	// Verify all expected commands are registered
@@ -110,11 +110,12 @@ func TestCommandConcurrency(t *testing.T) {
 
 	// Commands that mutate session state must NOT be concurrent
 	nonConcurrent := map[string]bool{
-		"/new":       true,
-		"/compress":  true,
-		"/set-llm":   true,
-		"/unset-llm": true,
-		"/set-model": true,
+		"/new":          true,
+		"/compress":     true,
+		"/set-llm":      true,
+		"/unset-llm":    true,
+		"/set-model":    true,
+		"/context mode": true,
 	}
 
 	// Commands that are stateless/read-only should be concurrent

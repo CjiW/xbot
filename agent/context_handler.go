@@ -9,8 +9,8 @@ import (
 	"xbot/session"
 )
 
-// handleContext 处理 /context 命令：显示当前 token 数和组成
-func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
+// handleContextInfo 处理 /context info 命令：显示当前 token 数和组成
+func (a *Agent) handleContextInfo(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	_, model, _, _ := a.llmFactory.GetLLM(msg.SenderID)
 
 	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
@@ -28,28 +28,9 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
 	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, model)
 
-	// 按角色统计 token 数
-	var systemTokens, userTokens, assistantTokens, toolMsgTokens int
-
-	for _, m := range messages {
-		tokens, err := llm.CountMessagesTokens([]llm.ChatMessage{m}, model)
-		if err != nil {
-			continue
-		}
-		switch m.Role {
-		case "system":
-			systemTokens += tokens
-		case "user":
-			userTokens += tokens
-		case "assistant":
-			assistantTokens += tokens
-		case "tool":
-			toolMsgTokens += tokens
-		}
-	}
-
-	total := systemTokens + userTokens + assistantTokens + toolMsgTokens + toolDefsTokens
-	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+	// 通过 ContextManager 获取统计信息
+	cm := a.GetContextManager()
+	stats := cm.ContextInfo(messages, model, toolDefsTokens)
 
 	content := fmt.Sprintf(`📊 上下文 Token 统计
 
@@ -64,21 +45,82 @@ func (a *Agent) handleContext(ctx context.Context, msg bus.InboundMessage, tenan
 
 ⚙️ 配置:
 - 最大上下文: %d tokens
-- 压缩阈值: %d tokens (%.0f%%)`,
-		systemTokens, float64(systemTokens)*100/float64(max(total, 1)),
-		userTokens, float64(userTokens)*100/float64(max(total, 1)),
-		assistantTokens, float64(assistantTokens)*100/float64(max(total, 1)),
-		toolMsgTokens, float64(toolMsgTokens)*100/float64(max(total, 1)),
-		toolDefsTokens, float64(toolDefsTokens)*100/float64(max(total, 1)),
-		total,
-		a.maxContextTokens,
-		threshold,
-		a.compressionThreshold*100,
+- 压缩阈值: %d tokens (%.0f%%)
+- 当前模式: %s`,
+		stats.SystemTokens, float64(stats.SystemTokens)*100/float64(max(stats.TotalTokens, 1)),
+		stats.UserTokens, float64(stats.UserTokens)*100/float64(max(stats.TotalTokens, 1)),
+		stats.AssistantTokens, float64(stats.AssistantTokens)*100/float64(max(stats.TotalTokens, 1)),
+		stats.ToolMsgTokens, float64(stats.ToolMsgTokens)*100/float64(max(stats.TotalTokens, 1)),
+		stats.ToolDefTokens, float64(stats.ToolDefTokens)*100/float64(max(stats.TotalTokens, 1)),
+		stats.TotalTokens,
+		stats.MaxTokens,
+		stats.Threshold,
+		a.contextManagerConfig.CompressionThreshold*100,
+		stats.Mode,
 	)
+
+	// 运行时覆盖信息
+	if stats.IsRuntimeOverride {
+		content += fmt.Sprintf("（运行时覆盖，默认为 %s）", stats.DefaultMode)
+	}
 
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: content,
+	}, nil
+}
+
+// handleContextMode 处理 /context mode 子命令
+func (a *Agent) handleContextMode(ctx context.Context, msg bus.InboundMessage, modeStr string) (*bus.OutboundMessage, error) {
+	cfg := a.contextManagerConfig
+
+	if modeStr == "" {
+		// 仅查询当前模式
+		stats := a.GetContextManager().ContextInfo(nil, "", 0)
+		overrideInfo := ""
+		if stats.IsRuntimeOverride {
+			overrideInfo = fmt.Sprintf("（运行时覆盖，默认为 %s）", stats.DefaultMode)
+		}
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("当前上下文模式: %s %s", cfg.EffectiveMode(), overrideInfo),
+		}, nil
+	}
+
+	target := ContextMode(modeStr)
+	if target == "default" {
+		cfg.ResetRuntimeMode()
+		a.SetContextManager(NewContextManager(cfg))
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: fmt.Sprintf("已恢复默认上下文模式: %s", cfg.DefaultMode),
+		}, nil
+	}
+
+	if !IsValidContextMode(target) {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "无效模式。可选: phase1, phase2, none, default",
+		}, nil
+	}
+
+	// Phase 2 未实现时的额外提示
+	extraMsg := ""
+	if target == ContextModePhase2 {
+		extraMsg = "（Phase 2 尚未实现，压缩时将自动降级到 Phase 1）"
+	}
+
+	// 先设置配置，再替换 manager
+	cfg.SetRuntimeMode(target)
+	a.SetContextManager(NewContextManager(cfg))
+
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: fmt.Sprintf("已切换上下文模式: %s %s", target, extraMsg),
 	}, nil
 }

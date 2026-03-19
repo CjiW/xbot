@@ -64,8 +64,8 @@ type RunConfig struct {
 	// ProgressNotifier 进度通知回调（nil = 不通知）
 	ProgressNotifier func(lines []string)
 
-	// AutoCompress 自动上下文压缩配置（nil = 不压缩）
-	AutoCompress *CompressConfig
+	// ContextManager 上下文管理器（nil = 不压缩）
+	ContextManager ContextManager
 
 	// SendFunc 向 IM 渠道发送消息（nil = 不能发消息）
 	SendFunc func(channel, chatID, content string) error
@@ -120,13 +120,6 @@ type InteractiveCallbacks struct {
 	UnloadFn func(ctx context.Context, roleName string) error
 }
 
-// CompressConfig 自动压缩配置。
-type CompressConfig struct {
-	MaxContextTokens     int
-	CompressionThreshold float64
-	CompressFunc         func(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) ([]llm.ChatMessage, error)
-}
-
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
 // 仅包含 Letta memory 特有的字段，通用字段（InjectInbound、Registry 等）
 // 已迁移到 RunConfig 中。
@@ -165,8 +158,8 @@ type RunOutput struct {
 // 输出：*RunOutput（可直接发送到 IM 或返回给父 Agent）
 //
 // 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
-//   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, AutoCompress=enabled, ...
-//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, AutoCompress=nil, ...
+//   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
+//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=nil, ...
 func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
@@ -226,50 +219,41 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// --- 自动压缩 ---
 	maybeCompress := func() {
-		cc := cfg.AutoCompress
-		if cc == nil || len(messages) <= 3 {
-			return
-		}
-
-		msgTokens, err := llm.CountMessagesTokens(messages, cfg.Model)
-		if err != nil {
+		cm := cfg.ContextManager
+		if cm == nil || len(messages) <= 3 {
 			return
 		}
 
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
-		tokenCount := msgTokens + toolTokens
 
-		threshold := int(float64(cc.MaxContextTokens) * cc.CompressionThreshold)
-		if tokenCount < threshold {
+		if !cm.ShouldCompress(messages, cfg.Model, toolTokens) {
 			return
 		}
 
 		if autoNotify {
-			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", tokenCount))
+			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
+			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", msgTokens+toolTokens))
 			notifyProgress("")
 		}
 
-		log.Ctx(ctx).WithFields(log.Fields{
-			"tokens":    tokenCount,
-			"threshold": threshold,
-		}).Info("Auto context compression triggered")
+		log.Ctx(ctx).Info("Auto context compression triggered via ContextManager")
 
-		compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
+		result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
 		if compressErr != nil {
 			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
 			return
 		}
 
-		messages = compressed
+		messages = result.LLMView
 
-		newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 		if autoNotify {
-			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", tokenCount, newTokenCount))
+			oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
+			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
 			notifyProgress("")
 		}
 		log.Ctx(ctx).WithFields(log.Fields{
-			"old_tokens": tokenCount,
 			"new_tokens": newTokenCount,
 		}).Info("Auto context compression completed")
 
@@ -279,10 +263,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
 			} else {
 				allOk := true
-				for _, msg := range compressed {
-					if msg.Role == "system" {
-						continue
-					}
+				for _, msg := range result.SessionView {
 					assertNoSystemPersist(msg)
 					if err := cfg.Session.AddMessage(msg); err != nil {
 						log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
@@ -292,6 +273,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 				if allOk {
 					log.Ctx(ctx).Info("Auto compression persisted to session")
+					// 调用 SessionHook（Phase 2 可能需要在此做额外操作，如更新话题分区索引）
+					if hook := cm.SessionHook(); hook != nil {
+						hook.AfterPersist(ctx, cfg.Session, result)
+					}
 				} else {
 					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 				}
@@ -388,24 +373,22 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				notifyProgress("")
 			}
 
-			if cc := cfg.AutoCompress; cc != nil {
-				compressed, compressErr := cc.CompressFunc(ctx, messages, cfg.LLMClient, cfg.Model)
+			if cm := cfg.ContextManager; cm != nil {
+				// 强制压缩：输入超限时，不检查阈值，直接压缩
+				result, compressErr := cm.ManualCompress(ctx, messages, cfg.LLMClient, cfg.Model)
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 				} else {
-					messages = compressed
+					messages = result.LLMView
 					if autoNotify {
-						newTokenCount, _ := llm.CountMessagesTokens(compressed, cfg.Model)
+						newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
 						notifyProgress("")
 					}
-					// 持久化压缩结果到 session
+					// 持久化压缩结果到 session（使用 SessionView，不含 tool 消息）
 					if cfg.Session != nil {
 						if clearErr := cfg.Session.Clear(); clearErr == nil {
-							for _, msg := range compressed {
-								if msg.Role == "system" {
-									continue
-								}
+							for _, msg := range result.SessionView {
 								assertNoSystemPersist(msg)
 								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
 									log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
@@ -426,6 +409,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					retryCancel()
 				}
 			}
+
 		}
 
 		if err != nil {

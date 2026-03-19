@@ -73,7 +73,10 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	}).Info("Phase 2 compress: starting eviction")
 
 	// Phase 1: Evict（信息密度驱逐）
-	evicted := evictByDensity(messages, 3, targetTokens, model)
+	// BUG FIX: keepGroups 从 3 降到 1。
+	// 之前保留最后 3 组完整，当 conversation 只有 ≤3 组 tool 时直接返回 0 驱逐。
+	// 保留 1 组足够 LLM 继续当前工具对话，其余全走密度评分驱逐。
+	evicted := evictByDensity(messages, 1, targetTokens, model)
 	evictTokens, _ := llm.CountMessagesTokens(evicted, model)
 	evictedCount := countEvictedMessages(messages, evicted)
 
@@ -166,7 +169,7 @@ func (m *phase2Manager) ManualCompress(ctx context.Context, messages []llm.ChatM
 	targetTokens := int(float64(m.config.MaxContextTokens) * 0.7)
 
 	// Phase 1: Evict
-	evicted := evictByDensity(messages, 3, targetTokens, model)
+	evicted := evictByDensity(messages, 1, targetTokens, model)
 	evictTokens, _ := llm.CountMessagesTokens(evicted, model)
 
 	log.Ctx(ctx).WithFields(map[string]interface{}{

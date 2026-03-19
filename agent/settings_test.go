@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xbot/bus"
 	"xbot/storage/sqlite"
 )
 
@@ -47,12 +46,11 @@ func TestSettingsServiceGetSettingsUI(t *testing.T) {
 	store := sqlite.NewUserSettingsService(db)
 	svc := NewSettingsService(store)
 
-	// Use a mock channel that doesn't implement SettingsCapability
-	ui, err := svc.GetSettingsUI(&noCapabilityChannel{}, "user1")
+	// No channelFinder set — should return "no settings" fallback
+	ui, err := svc.GetSettingsUI("test", "user1")
 	if err != nil {
 		t.Fatalf("get settings ui: %v", err)
 	}
-	// Should return "no settings" since channel has no schema
 	if ui != "当前渠道没有可配置的设置项。" {
 		t.Errorf("expected no settings message, got %q", ui)
 	}
@@ -70,10 +68,8 @@ func TestSettingsServiceSubmitSettingsTextMode(t *testing.T) {
 	store := sqlite.NewUserSettingsService(db)
 	svc := NewSettingsService(store)
 
-	ch := &noCapabilityChannel{}
-
-	// Submit key=value pairs
-	err = svc.SubmitSettings(ch, "cli", "user1", "key1=value1\nkey2=value2")
+	// No channelFinder set — text mode fallback
+	err = svc.SubmitSettings("cli", "user1", "key1=value1\nkey2=value2")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -87,18 +83,8 @@ func TestSettingsServiceSubmitSettingsTextMode(t *testing.T) {
 	}
 
 	// Test error on invalid format
-	err = svc.SubmitSettings(ch, "cli", "user1", "invalid_line_no_equals")
+	err = svc.SubmitSettings("cli", "user1", "invalid_line_no_equals")
 	if err == nil {
 		t.Error("expected error for invalid format")
 	}
-}
-
-// noCapabilityChannel is a minimal channel that doesn't implement SettingsCapability
-type noCapabilityChannel struct{}
-
-func (c *noCapabilityChannel) Name() string { return "test" }
-func (c *noCapabilityChannel) Start() error { return nil }
-func (c *noCapabilityChannel) Stop()        {}
-func (c *noCapabilityChannel) Send(msg bus.OutboundMessage) (string, error) {
-	return "", nil
 }

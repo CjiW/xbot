@@ -504,6 +504,29 @@ func (c *settingsCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMess
 		}
 		key := setParts[0]
 		value := strings.Join(setParts[1:], " ")
+
+		// Fix 4: Validate key against schema if channelFinder is available
+		schema := a.settingsSvc.GetSettingsSchema(msg.Channel)
+		if len(schema) > 0 {
+			valid := false
+			for _, def := range schema {
+				if def.Key == key {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				var validKeys []string
+				for _, def := range schema {
+					validKeys = append(validKeys, def.Key)
+				}
+				return &bus.OutboundMessage{
+					Channel: msg.Channel, ChatID: msg.ChatID,
+					Content: fmt.Sprintf("未知设置项: %q\n可用设置项: %s", key, strings.Join(validKeys, ", ")),
+				}, nil
+			}
+		}
+
 		err := a.settingsSvc.SetSetting(msg.Channel, msg.SenderID, key, value)
 		if err != nil {
 			return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("设置失败：%v", err)}, nil
@@ -511,8 +534,8 @@ func (c *settingsCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMess
 		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("✅ %s = %s", key, value)}, nil
 	}
 
-	// /settings (list)
-	ui, err := a.settingsSvc.GetSettingsUI(nil, msg.SenderID)
+	// /settings (list) — now uses channelName string directly
+	ui, err := a.settingsSvc.GetSettingsUI(msg.Channel, msg.SenderID)
 	if err != nil {
 		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("获取设置失败：%v", err)}, nil
 	}

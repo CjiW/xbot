@@ -87,7 +87,7 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 
 	searchDir := sandboxBase
 	if path != "" {
-		if strings.HasPrefix(path, sandboxBase+"/") {
+		if path == sandboxBase || strings.HasPrefix(path, sandboxBase+"/") {
 			searchDir = path
 		} else {
 			searchDir = sandboxBase + "/" + path
@@ -122,7 +122,7 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 	}
 
 	grepCmd += fmt.Sprintf(" '%s' '%s'", shellEscape(pattern), shellEscape(searchDir))
-	grepCmd += " | head -200"
+	grepCmd = "set -o pipefail; " + grepCmd + " | head -200"
 
 	output, err := RunInSandboxWithShell(ctx, grepCmd)
 	if err != nil {
@@ -147,16 +147,27 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 			continue
 		}
 		// grep -n 输出格式: filename:linenumber:content
+		// grep -C 上下文行格式: filename-linenumber-content
 		parts := strings.SplitN(line, ":", 2)
+		useDashSep := false
 		if len(parts) < 2 {
-			continue
+			// 上下文行使用 '-' 分隔符
+			parts = strings.SplitN(line, "-", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			useDashSep = true
 		}
 		filePath := parts[0]
 		rest := parts[1]
 
-		// 解析行号
+		// 解析行号（匹配行用 ':' 分隔，上下文行用 '-' 分隔）
 		var lineNum int
-		restParts := strings.SplitN(rest, ":", 2)
+		sep := ":"
+		if useDashSep {
+			sep = "-"
+		}
+		restParts := strings.SplitN(rest, sep, 2)
 		if len(restParts) >= 2 {
 			fmt.Sscanf(restParts[0], "%d", &lineNum)
 			rest = restParts[1]

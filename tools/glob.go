@@ -119,7 +119,7 @@ func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*To
 	// 确定 find 搜索目录
 	searchDir := sandboxBase
 	if path != "" {
-		if strings.HasPrefix(path, sandboxBase+"/") {
+		if path == sandboxBase || strings.HasPrefix(path, sandboxBase+"/") {
 			searchDir = path
 		} else {
 			searchDir = sandboxBase + "/" + path

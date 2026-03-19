@@ -1911,7 +1911,7 @@ func (f *FeishuChannel) BuildProgressUI(ctx context.Context, progress interface{
 				pct)
 		}
 	default:
-		sb.WriteString(fmt.Sprintf("%v\n", p))
+		fmt.Fprintf(&sb, "%v\n", p)
 	}
 
 	return sb.String()

@@ -95,7 +95,7 @@ func BuildTextSettingsUI(schema []SettingDefinition, currentValues map[string]st
 					if i > 0 {
 						sb.WriteString(", ")
 					}
-					sb.WriteString(fmt.Sprintf("`%s`", opt.Value))
+					fmt.Fprintf(&sb, "`%s`", opt.Value)
 				}
 				sb.WriteString("\n")
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // RunInSandbox 在沙箱容器内执行命令并返回输出
@@ -33,6 +34,16 @@ func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, err
 	cmd := exec.CommandContext(ctx.Ctx, cmdName, cmdArgs...)
 	cmd.Dir = workspaceRoot
 	cmd.Stdin = nil
+
+	// 使用平台特定的进程属性设置（Setpgid），超时时可以杀掉整棵进程树
+	setProcessAttrs(cmd)
+	// Cancel 回调：context 超时/取消时 kill 整个进程组
+	cmd.Cancel = func() error {
+		killProcess(cmd)
+		return nil
+	}
+	// WaitDelay：Cancel 后最多等 5 秒让 I/O drain，然后强制关闭 pipe 使 Wait 返回
+	cmd.WaitDelay = 5 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

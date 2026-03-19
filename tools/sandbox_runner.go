@@ -393,8 +393,7 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	containerName = fmt.Sprintf("xbot-%s", userID)
 
 	// 检查容器是否已在运行
-	checkCmd := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", containerName)
-	checkOutput, checkErr := checkCmd.Output()
+	checkOutput, checkErr := dockerExec(dockerCmdTimeout, "inspect", "-f", "{{.State.Running}}", containerName)
 	if checkErr == nil && strings.Contains(string(checkOutput), "true") {
 		if s.verifyWorkspaceMount(containerName, workspace) {
 			shell := s.detectShell(containerName)
@@ -408,8 +407,7 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	// 容器已存在但未运行，尝试启动（先校验 mount 再决定是否复用）
 	if s.containerExists(containerName) {
 		if s.verifyWorkspaceMount(containerName, workspace) {
-			startCmd := exec.Command("docker", "start", containerName)
-			if _, startErr := startCmd.CombinedOutput(); startErr == nil {
+			if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
 				log.Infof("Started existing Docker container %s", containerName)
 				shell := s.detectShell(containerName)
 				s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
@@ -423,8 +421,7 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	// 容器不存在，选择镜像：优先用户专属镜像，否则基础镜像
 	image := s.image
 	userImage := userImageName(userID)
-	inspectCmd := exec.Command("docker", "image", "inspect", userImage)
-	if inspectCmd.Run() == nil {
+	if err := dockerRun(dockerCmdTimeout, "image", "inspect", userImage); err == nil {
 		image = userImage
 		log.Infof("Using user image %s for container %s", userImage, containerName)
 	}
@@ -443,8 +440,7 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 
 	log.Infof("Creating Docker container %s with image %s (mount %s → /workspace)", containerName, image, hostPath)
 
-	runCmd := exec.Command("docker", runArgs...)
-	output, err := runCmd.CombinedOutput()
+	output, err := dockerExec(dockerCmdTimeout, runArgs...)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create container: %w, output: %s", err, string(output))
 	}
@@ -481,9 +477,8 @@ func (s *dockerSandbox) GetShell(userID string, workspace string) (string, error
 // detectShell 从容器内的 /etc/passwd 获取用户的默认 shell
 func (s *dockerSandbox) detectShell(containerName string) string {
 	// 获取 root 用户的默认 shell
-	cmd := exec.Command("docker", "exec", containerName,
+	output, err := dockerExec(dockerCmdTimeout, "exec", containerName,
 		"sh", "-c", "grep '^root:' /etc/passwd | cut -d: -f7")
-	output, err := cmd.Output()
 	if err != nil || len(strings.TrimSpace(string(output))) == 0 {
 		log.WithError(err).Warnf("Failed to detect shell for container %s, using /bin/sh", containerName)
 		return "/bin/sh"
@@ -509,10 +504,9 @@ func (s *dockerSandbox) toHostPath(containerPath string) string {
 
 // verifyWorkspaceMount checks that the container's /workspace bind mount points to the expected host path.
 func (s *dockerSandbox) verifyWorkspaceMount(containerName, expectedWorkspace string) bool {
-	cmd := exec.Command("docker", "inspect", "-f",
+	output, err := dockerExec(dockerCmdTimeout, "inspect", "-f",
 		`{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}`,
 		containerName)
-	output, err := cmd.Output()
 	if err != nil {
 		return false
 	}
@@ -531,8 +525,7 @@ func (s *dockerSandbox) verifyWorkspaceMount(containerName, expectedWorkspace st
 
 // containerExists checks whether a Docker container exists (running or stopped).
 func (s *dockerSandbox) containerExists(containerName string) bool {
-	cmd := exec.Command("docker", "inspect", "-f", "{{.Id}}", containerName)
-	return cmd.Run() == nil
+	return dockerRun(dockerCmdTimeout, "inspect", "-f", "{{.Id}}", containerName) == nil
 }
 
 // commitAndRemove commits a container (preserving installed packages etc.) then stops and removes it.
@@ -564,23 +557,21 @@ func (s *dockerSandbox) migrateDinDWorkspaces() {
 	oldHostUsers := s.containerWorkDir + "/users"
 	newHostUsers := s.hostWorkDir + "/users"
 
-	checkCmd := exec.Command("docker", "run", "--rm",
+	checkOutput, err := dockerExec(dockerCmdTimeout, "run", "--rm",
 		"-v", oldHostUsers+":/dind_check:ro",
 		s.image,
 		"sh", "-c", "ls /dind_check 2>/dev/null | head -1")
-	checkOutput, err := checkCmd.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(checkOutput)) == "" {
 		return
 	}
 
 	log.Warnf("DinD migration: found misplaced workspace data at host:%s, migrating to host:%s", oldHostUsers, newHostUsers)
 
-	migrateCmd := exec.Command("docker", "run", "--rm",
+	if out, err := dockerExec(dockerSlowTimeout, "run", "--rm",
 		"-v", oldHostUsers+":/old:ro",
 		"-v", newHostUsers+":/new",
 		s.image,
-		"sh", "-c", "cp -a /old/. /new/")
-	if out, err := migrateCmd.CombinedOutput(); err != nil {
+		"sh", "-c", "cp -a /old/. /new/"); err != nil {
 		log.Warnf("DinD migration: copy failed: %v, output: %s", err, string(out))
 		return
 	}
@@ -588,11 +579,10 @@ func (s *dockerSandbox) migrateDinDWorkspaces() {
 	// Cleanup: mount the PARENT of containerWorkDir, remove the base dir
 	parentDir := filepath.Dir(s.containerWorkDir)
 	baseName := filepath.Base(s.containerWorkDir)
-	cleanCmd := exec.Command("docker", "run", "--rm",
+	if out, err := dockerExec(dockerCmdTimeout, "run", "--rm",
 		"-v", parentDir+":/dind_cleanup",
 		s.image,
-		"sh", "-c", fmt.Sprintf("rm -rf /dind_cleanup/%s", baseName))
-	if out, err := cleanCmd.CombinedOutput(); err != nil {
+		"sh", "-c", fmt.Sprintf("rm -rf /dind_cleanup/%s", baseName)); err != nil {
 		log.Warnf("DinD migration: cleanup failed: %v, output: %s", err, string(out))
 	}
 
@@ -656,8 +646,7 @@ func (s *dockerSandbox) detectDinD(cfg *config.Config) {
 //
 // Returns (mountDest, mountSrc) directly — caller uses them as containerWorkDir/hostWorkDir.
 func (s *dockerSandbox) autoDetectDinDMount(workDir string) (containerMount, hostMount string) {
-	listCmd := exec.Command("docker", "ps", "-q")
-	listOutput, err := listCmd.Output()
+	listOutput, err := dockerExec(dockerCmdTimeout, "ps", "-q")
 	if err != nil {
 		log.Warnf("DinD auto-detect: docker ps failed: %v", err)
 		return "", ""
@@ -671,10 +660,9 @@ func (s *dockerSandbox) autoDetectDinDMount(workDir string) (containerMount, hos
 
 	var bestDest, bestSrc string
 	for _, id := range ids {
-		cmd := exec.Command("docker", "inspect", "-f",
+		output, err := dockerExec(dockerCmdTimeout, "inspect", "-f",
 			`{{range .Mounts}}{{.Destination}}={{.Source}}={{.Type}}`+"\n"+`{{end}}`,
 			id)
-		output, err := cmd.Output()
 		if err != nil {
 			continue
 		}

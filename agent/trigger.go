@@ -256,8 +256,15 @@ func DetectToolPattern(recentTools []string) ToolCallPattern {
 
 // BuildTriggerInfo 从运行时数据构建 TriggerInfo。
 func BuildTriggerInfo(iteration int, messages []llm.ChatMessage, toolsUsed []string, provider *TriggerInfoProvider, cfg *ContextManagerConfig, model string) TriggerInfo {
+	maxTokens := 100000 // 默认值
+	if cfg != nil {
+		maxTokens = cfg.MaxContextTokens
+	}
+	if maxTokens == 0 {
+		maxTokens = 100000
+	}
 	info := TriggerInfo{
-		MaxTokens:      cfg.MaxContextTokens,
+		MaxTokens:      maxTokens,
 		IterationCount: iteration,
 		ToolCallCount:  len(toolsUsed),
 	}

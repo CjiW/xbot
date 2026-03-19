@@ -8,6 +8,7 @@ import (
 )
 
 // phase2Manager Phase 2 三层渐进压缩管理器，实现 SmartCompressor 接口。
+// 压缩流程：Offload（大 tool result 落盘）→ Evict（信息密度驱逐）→ Compact（LLM 摘要）
 type phase2Manager struct {
 	config   *ContextManagerConfig
 	provider *TriggerInfoProvider

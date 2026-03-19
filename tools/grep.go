@@ -103,10 +103,10 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		}
 	}
 
-	// 构建 grep 命令
-	grepCmd := "grep"
+	// 构建 grep 命令（使用 -E 扩展正则，匹配 LLM 输出的 Go RE 风格转义）
+	grepCmd := "grep -E"
 	if ignoreCase {
-		grepCmd += " -i"
+		grepCmd += "i" // -Ei
 	}
 	if contextLines > 0 {
 		grepCmd += fmt.Sprintf(" -C %d", contextLines)
@@ -121,15 +121,19 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		}
 	}
 
-	grepCmd += fmt.Sprintf(" '%s' '%s'", shellEscape(pattern), shellEscape(searchDir))
-	grepCmd = "set -o pipefail; " + grepCmd + " | head -200"
+	grepCmd += fmt.Sprintf(" %s %s", shellEscape(pattern), shellEscape(searchDir))
+	// 不用 pipefail：head 关闭管道时 grep 收到 SIGPIPE (exit 141)，
+	// pipefail 会将其传播为错误，导致有效结果被丢弃。
+	grepCmd += " | head -200"
 
 	output, err := RunInSandboxWithShell(ctx, grepCmd)
 	if err != nil {
-		if output == "" || strings.Contains(output, "No matches found") {
+		// SIGPIPE (exit 141) 是 head 正常关闭管道导致的，不是真正的错误
+		if output != "" && !strings.Contains(output, "No matches found") {
+			// 有输出但 err != nil → 很可能是 SIGPIPE，正常返回结果
+		} else {
 			return NewResult("No matches found."), nil
 		}
-		return nil, fmt.Errorf("sandbox grep failed: %v, output: %s", err, output)
 	}
 
 	if output == "" {

@@ -272,6 +272,27 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			"new_tokens": newTokenCount,
 		}).Info("Auto context compression completed")
 
+		// BUG FIX: 记录压缩迭代号 + 有效性检测。
+		// 之前从未调用 RecordCompress，导致 Cooldown.ShouldTrigger 永远返回 true，
+		// 每次迭代都触发压缩，压缩无效时形成死循环。
+		// 新增：缩减率 <10% 视为低效，连续 2 次低效后加大冷却期到 10 次迭代。
+		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil {
+			smart.TriggerProvider().Cooldown.RecordCompress(iteration)
+			if oldTokenCount > 0 {
+				reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
+				if reductionRate < 0.10 {
+					log.Ctx(ctx).WithFields(log.Fields{
+						"old_tokens": oldTokenCount,
+						"new_tokens": newTokenCount,
+						"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
+					}).Warn("Phase 2 compress: ineffective (reduction < 10%), increasing cooldown")
+					smart.TriggerProvider().Cooldown.RecordIneffective()
+				} else {
+					smart.TriggerProvider().Cooldown.RecordEffective()
+				}
+			}
+		}
+
 		// 持久化压缩结果到 session
 		if cfg.Session != nil {
 			if err := cfg.Session.Clear(); err != nil {

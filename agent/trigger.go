@@ -119,9 +119,12 @@ func (t *TokenGrowthTracker) Reset() {
 }
 
 // CompressCooldown 压缩冷却期管理器，防止短时间内重复压缩。
+// 内置死循环检测：连续压缩缩减率低于 10% 时，自动加大冷却期。
 type CompressCooldown struct {
 	lastCompressIteration int
 	cooldownIterations    int // 默认 3
+	ineffectiveCount      int // 连续低效压缩计数
+	baseCooldown          int // 初始冷却期（用于重置）
 }
 
 // NewCompressCooldown 创建冷却期管理器，iterations 默认 3。
@@ -131,6 +134,7 @@ func NewCompressCooldown(iterations int) *CompressCooldown {
 	}
 	return &CompressCooldown{
 		cooldownIterations: iterations,
+		baseCooldown:       iterations,
 	}
 }
 
@@ -145,6 +149,28 @@ func (c *CompressCooldown) ShouldTrigger(currentIteration int) bool {
 // RecordCompress 记录一次压缩发生的迭代号。
 func (c *CompressCooldown) RecordCompress(iteration int) {
 	c.lastCompressIteration = iteration
+}
+
+// RecordIneffective 记录一次低效压缩（缩减率 <10%）。
+// 连续 2 次低效后加大冷却期到 10 次迭代，防止死循环。
+func (c *CompressCooldown) RecordIneffective() {
+	c.ineffectiveCount++
+	if c.ineffectiveCount >= 2 {
+		c.cooldownIterations = 10
+	}
+}
+
+// RecordEffective 记录一次有效压缩（缩减率 >=10%），重置低效计数和冷却期。
+func (c *CompressCooldown) RecordEffective() {
+	c.ineffectiveCount = 0
+	if c.cooldownIterations > c.baseCooldown {
+		c.cooldownIterations = c.baseCooldown
+	}
+}
+
+// IneffectiveCount 返回当前连续低效压缩次数。
+func (c *CompressCooldown) IneffectiveCount() int {
+	return c.ineffectiveCount
 }
 
 // Reset 重置冷却状态。

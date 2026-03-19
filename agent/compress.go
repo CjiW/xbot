@@ -35,7 +35,7 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 				pendingToolSummary.WriteString(msg.Content + "\n")
 			}
 			for _, tc := range msg.ToolCalls {
-				pendingToolSummary.WriteString(fmt.Sprintf("🔧 %s(%s)\n", tc.Name, truncateArgs(tc.Arguments, 100)))
+				fmt.Fprintf(&pendingToolSummary, "🔧 %s(%s)\n", tc.Name, truncateArgs(tc.Arguments, 100))
 			}
 
 		case msg.Role == "assistant":
@@ -44,7 +44,7 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 
 		case msg.Role == "tool":
 			toolContent := truncateRunes(msg.Content, 200)
-			pendingToolSummary.WriteString(fmt.Sprintf("  → %s\n", toolContent))
+			fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
 		}
 	}
 	flushPending(&result, &pendingToolSummary)

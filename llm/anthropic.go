@@ -127,19 +127,29 @@ type anthropicThinking struct {
 	Effort       string `json:"effort,omitempty"` // "low" | "medium" | "high" (for adaptive mode)
 }
 
+type anthropicSystemBlock struct {
+	Type         string `json:"type"` // "text"
+	Text         string `json:"text"`
+	CacheControl *struct {
+		Type string `json:"type"` // "ephemeral"
+	} `json:"cache_control,omitempty"`
+}
+
 type anthropicReq struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
 	Messages  []anthropicMessage `json:"messages"`
-	System    string             `json:"system,omitempty"`
+	System    interface{}        `json:"system,omitempty"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 type anthropicContentBlock struct {
@@ -262,6 +272,41 @@ func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 	return out
 }
 
+// buildAnthropicSystem 根据 ChatMessage 中的 system 消息构建 Anthropic system 字段。
+// - 无 system 消息时返回空字符串（向后兼容）
+// - 单条无缓存 system 时返回 string（向后兼容，避免不必要的数组序列化）
+// - 有 CacheHint="static" 时返回带 cache_control 的 blocks 数组
+// - 混合 static 和非 static 时返回 blocks 数组
+func buildAnthropicSystem(messages []ChatMessage) interface{} {
+	var blocks []anthropicSystemBlock
+	for _, msg := range messages {
+		if msg.Role != "system" {
+			continue
+		}
+		if msg.CacheHint == "static" {
+			blocks = append(blocks, anthropicSystemBlock{
+				Type: "text",
+				Text: msg.Content,
+				CacheControl: &struct {
+					Type string `json:"type"`
+				}{Type: "ephemeral"},
+			})
+		} else {
+			blocks = append(blocks, anthropicSystemBlock{
+				Type: "text",
+				Text: msg.Content,
+			})
+		}
+	}
+	if len(blocks) == 0 {
+		return ""
+	}
+	if len(blocks) == 1 && blocks[0].CacheControl == nil {
+		return blocks[0].Text
+	}
+	return blocks
+}
+
 func (a *AnthropicLLM) setHeaders(req *http.Request) {
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", anthropicAPIVersion)
@@ -313,12 +358,12 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		"tools_count": len(tools),
 	}).Info("[LLM] Starting non-stream request")
 
-	system, anthropicMsgs := toAnthropicMessages(messages)
+	_, anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: anthropicMaxTokens,
 		Messages:  anthropicMsgs,
-		System:    system,
+		System:    buildAnthropicSystem(messages),
 		Stream:    false,
 	}
 	if len(tools) > 0 {
@@ -394,13 +439,20 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		out.ReasoningContent = strings.Join(reasoningParts, "\n")
 	}
 
-	log.Ctx(ctx).WithFields(log.Fields{
+	logFields := log.Fields{
 		"provider":      "anthropic",
 		"content_len":   len(out.Content),
 		"tool_calls":    len(out.ToolCalls),
 		"finish_reason": out.FinishReason,
 		"duration":      time.Since(startTime).String(),
-	}).Info("[LLM] Non-stream response")
+	}
+	if apiResp.Usage.CacheReadInputTokens > 0 {
+		logFields["cache_read_tokens"] = apiResp.Usage.CacheReadInputTokens
+	}
+	if apiResp.Usage.CacheCreationInputTokens > 0 {
+		logFields["cache_creation_tokens"] = apiResp.Usage.CacheCreationInputTokens
+	}
+	log.Ctx(ctx).WithFields(logFields).Info("[LLM] Non-stream response")
 
 	return out, nil
 }
@@ -432,12 +484,12 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"tools_count": len(tools),
 	}).Info("[LLM] Starting stream request")
 
-	system, anthropicMsgs := toAnthropicMessages(messages)
+	_, anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: anthropicMaxTokens,
 		Messages:  anthropicMsgs,
-		System:    system,
+		System:    buildAnthropicSystem(messages),
 		Stream:    true,
 	}
 	if len(tools) > 0 {

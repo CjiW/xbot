@@ -651,3 +651,34 @@ func TestConvertGoRE2ToERE_Roundtrip(t *testing.T) {
 		})
 	}
 }
+
+func TestGrepTool_AltPatternMatchesBoth(t *testing.T) {
+	// Regression test: pattern with | (alternation) must match both alternatives.
+	// Without single-quoting in sandbox mode, the shell interprets | as a pipe.
+	tmpDir := t.TempDir()
+	content := "first line: publish event\nsecond line: browse catalog\nthird line: nothing here\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &GrepTool{}
+	input, _ := json.Marshal(map[string]any{
+		"pattern": "publish|browse",
+		"path":    tmpDir,
+	})
+
+	result, err := tool.Execute(nil, string(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.Summary, "publish") {
+		t.Errorf("expected 'publish' in results, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "browse") {
+		t.Errorf("expected 'browse' in results, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "nothing here") {
+		t.Errorf("should not contain 'nothing here', got: %s", result.Summary)
+	}
+}

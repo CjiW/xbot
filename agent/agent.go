@@ -246,7 +246,22 @@ type Agent struct {
 	// TopicDetector for topic partition isolation (Phase 2.5, disabled by default)
 	topicDetector        *TopicDetector
 	enableTopicIsolation bool
+
+	// channelPromptProviders channel 特化 prompt 提供者列表（由外部注入）
+	channelPromptProviders []ChannelPromptProvider
+
+	// RegistryManager for skill/agent sharing and marketplace
+	registryManager *RegistryManager
+
+	// SettingsService for per-user settings
+	settingsSvc *SettingsService
 }
+
+// SetRegistryManager sets the RegistryManager (for external injection or override).
+func (a *Agent) SetRegistryManager(rm *RegistryManager) { a.registryManager = rm }
+
+// SetSettingsService sets the SettingsService (for external injection or override).
+func (a *Agent) SetSettingsService(svc *SettingsService) { a.settingsSvc = svc }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {
@@ -516,6 +531,16 @@ func New(cfg Config) *Agent {
 		registry.RegisterCore(recallTool)
 	}
 
+	// Initialize SharedSkillRegistry
+	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())
+
+	// Initialize RegistryManager
+	agent.registryManager = NewRegistryManager(skillStore, agentStore, sharedRegistry, cfg.WorkDir)
+
+	// Initialize UserSettingsService and SettingsService
+	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
+	agent.settingsSvc = NewSettingsService(userSettingsSvc)
+
 	return agent
 }
 
@@ -538,6 +563,13 @@ func (a *Agent) SetContextManager(cm ContextManager) {
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
 func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
+}
+
+// SetChannelPromptProviders 设置 channel 特化 prompt 提供者。
+// 调用后会重建 pipeline，将 ChannelPromptMiddleware 插入到管道中。
+func (a *Agent) SetChannelPromptProviders(providers ...ChannelPromptProvider) {
+	a.channelPromptProviders = providers
+	a.pipeline.Use(NewChannelPromptMiddleware(providers...))
 }
 
 // ToolHookChain returns the Agent's shared hook chain for tool execution.

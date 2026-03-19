@@ -64,6 +64,9 @@ type RunConfig struct {
 	// ProgressNotifier 进度通知回调（nil = 不通知）
 	ProgressNotifier func(lines []string)
 
+	// ProgressEventHandler 结构化进度事件回调（nil = 不发送）
+	ProgressEventHandler func(event *ProgressEvent)
+
 	// ContextManager 上下文管理器（nil = 不压缩）
 	ContextManager ContextManager
 
@@ -194,6 +197,24 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	var lastContent string // 用于 LLM 错误时的降级返回
 	var iteration int      // 当前迭代次数（maybeCompress 闭包内需要访问）
 
+	// --- 结构化进度状态 ---
+	var structuredProgress *StructuredProgress
+	if cfg.ProgressEventHandler != nil {
+		structuredProgress = &StructuredProgress{
+			Phase:          PhaseThinking,
+			Iteration:      0,
+			ActiveTools:    nil,
+			CompletedTools: nil,
+		}
+	}
+
+	// copyLines 返回 progressLines 的浅拷贝（避免闭包捕获后修改）
+	copyLines := func(lines []string) []string {
+		cp := make([]string, len(lines))
+		copy(cp, lines)
+		return cp
+	}
+
 	autoNotify := cfg.ProgressNotifier != nil
 
 	// --- 进度通知 ---
@@ -222,6 +243,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 		}
 		cfg.ProgressNotifier([]string{buf.String()})
+		// 结构化进度事件回调
+		if cfg.ProgressEventHandler != nil && structuredProgress != nil {
+			cfg.ProgressEventHandler(&ProgressEvent{
+				Lines:      copyLines(progressLines),
+				Structured: structuredProgress,
+				Timestamp:  time.Now(),
+			})
+		}
 	}
 
 	// --- 自动压缩 ---
@@ -362,6 +391,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 	for i := 0; i < maxIter; i++ {
 		iteration = i
+		// 更新结构化进度
+		if structuredProgress != nil {
+			structuredProgress.Iteration = i
+			structuredProgress.Phase = PhaseThinking
+			structuredProgress.ActiveTools = nil
+		}
 		maybeCompress()
 
 		if autoNotify && i > 0 {
@@ -507,6 +542,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if autoNotify && cleanContent != "" {
 			progressLines = append(progressLines, cleanContent)
 		}
+		// 更新结构化进度：记录思考内容
+		if structuredProgress != nil && cleanContent != "" {
+			structuredProgress.ThinkingContent = cleanContent
+		}
 
 		// 记录 assistant 消息（含 tool_calls），保留原始 content（包括 think 块）
 		assistantMsg := llm.ChatMessage{
@@ -533,6 +572,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		execResults := make([]toolExecResult, len(response.ToolCalls))
+		// 更新结构化进度：进入工具执行阶段
+		if structuredProgress != nil {
+			structuredProgress.Phase = PhaseToolExec
+			structuredProgress.ActiveTools = make([]ToolProgress, len(response.ToolCalls))
+			for j, tc := range response.ToolCalls {
+				structuredProgress.ActiveTools[j] = ToolProgress{
+					Name:   tc.Name,
+					Label:  formatToolProgress(tc.Name, tc.Arguments),
+					Status: ToolPending,
+				}
+			}
+		}
 
 		// execOne 执行单个工具并记录结果
 		execOne := func(entry toolCallEntry) {
@@ -557,12 +608,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 
 			start := time.Now()
+			// 更新结构化进度：工具开始执行
+			if structuredProgress != nil && entry.index < len(structuredProgress.ActiveTools) {
+				structuredProgress.ActiveTools[entry.index].Status = ToolRunning
+			}
 			// 临时替换 ToolExecutor 的 ctx
 			result, execErr := toolExecutor(execCtx, tc)
 			elapsed := time.Since(start)
 			cancel()
 
 			execResults[entry.index] = toolExecResult{err: execErr, result: result, elapsed: elapsed}
+			// 更新结构化进度：工具执行完成
+			if structuredProgress != nil && entry.index < len(structuredProgress.ActiveTools) {
+				status := ToolDone
+				if execErr != nil || (result != nil && result.IsError) {
+					status = ToolError
+				}
+				structuredProgress.ActiveTools[entry.index].Status = status
+				structuredProgress.ActiveTools[entry.index].Elapsed = elapsed
+			}
 
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if execErr != nil {
@@ -652,14 +716,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 		}
 
+		// 更新结构化进度：所有工具执行完毕
+		if structuredProgress != nil {
+			structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, structuredProgress.ActiveTools...)
+			structuredProgress.ActiveTools = nil
+		}
 		// 按原始顺序处理结果
 		for idx, tc := range response.ToolCalls {
 			r := execResults[idx]
 			content := r.llmContent
 
 			// Phase 2: Layer 1 Offload
+			// Use raw Summary (with real newlines) instead of llmContent (JSON-serialized),
+			// so summarizeRead can correctly split multi-line file content.
 			if cfg.OffloadStore != nil && r.err == nil {
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(sessionKey, tc.Name, tc.Arguments, content)
+				offloadContent := content // default fallback
+				if r.result != nil && r.result.Summary != "" {
+					offloadContent = r.result.Summary
+				}
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(sessionKey, tc.Name, tc.Arguments, offloadContent)
 				if wasOffloaded {
 					content = offloaded.Summary
 					log.Ctx(ctx).WithFields(log.Fields{
@@ -696,6 +771,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				toolMsg.Detail = r.result.Detail
 			}
 			messages = append(messages, toolMsg)
+		}
+
+		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
+		if cfg.OffloadStore != nil {
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(sessionKey, cfg.WorkingDir)
+			if len(staleIDs) > 0 {
+				log.Ctx(ctx).WithFields(log.Fields{
+					"stale_count": len(staleIDs),
+					"stale_ids":   staleIDs,
+				}).Info("Stale offloads detected and invalidated")
+				messages = cfg.OffloadStore.PurgeStaleMessages(sessionKey, messages)
+			}
 		}
 
 		// 如果有任何工具标记为等待用户响应，则停止循环

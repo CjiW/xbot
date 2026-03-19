@@ -141,7 +141,7 @@ func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*To
 	// 构建 find 命令（对 searchDir 做 shellEscape 防注入）
 	escapedDir := shellEscape(searchDir)
 	findCmd := fmt.Sprintf(
-		"find %s -type f %s -not -path '*/.*' -not -path '*/node_modules/*' 2>/dev/null | head -200",
+		"find '%s' -type f %s -not -path '*/.*' -not -path '*/node_modules/*' 2>/dev/null | head -200",
 		escapedDir, findArgs)
 	output, err := RunInSandboxWithShell(ctx, findCmd)
 	if err != nil {

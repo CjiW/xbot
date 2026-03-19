@@ -87,8 +87,8 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	registerBuiltinCommands(r)
 
 	cmds := r.Commands()
-	if len(cmds) != 13 {
-		t.Errorf("Commands() returned %d commands, want 13", len(cmds))
+	if len(cmds) != 21 {
+		t.Errorf("Commands() returned %d commands, want 21", len(cmds))
 	}
 
 	// Verify all expected commands are registered
@@ -96,7 +96,7 @@ func TestCommandRegistry_Commands(t *testing.T) {
 	for _, cmd := range cmds {
 		names[cmd.Name()] = true
 	}
-	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/unset-llm", "/llm", "/models", "/set-model", "/compress", "/context", "!"}
+	expected := []string{"/new", "/version", "/help", "/prompt", "/set-llm", "/unset-llm", "/llm", "/models", "/set-model", "/compress", "/context", "!", "/publish", "/unpublish", "/browse", "/install", "/uninstall", "/my", "/settings", "/menu"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Errorf("Command %q not found in registry", name)
@@ -116,17 +116,25 @@ func TestCommandConcurrency(t *testing.T) {
 		"/unset-llm":    true,
 		"/set-model":    true,
 		"/context mode": true,
+		"/publish":      true,
+		"/unpublish":    true,
+		"/install":      true,
+		"/uninstall":    true,
 	}
 
 	// Commands that are stateless/read-only should be concurrent
 	concurrent := map[string]bool{
-		"/version": true,
-		"/help":    true,
-		"/llm":     true,
-		"/models":  true,
-		"/prompt":  true,
-		"/context": true,
-		"!":        true,
+		"/version":  true,
+		"/help":     true,
+		"/llm":      true,
+		"/models":   true,
+		"/prompt":   true,
+		"/context":  true,
+		"!":         true,
+		"/browse":   true,
+		"/my":       true,
+		"/settings": true,
+		"/menu":     true,
 	}
 
 	for _, cmd := range r.Commands() {

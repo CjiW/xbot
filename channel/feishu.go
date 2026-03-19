@@ -74,6 +74,18 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 
 func (f *FeishuChannel) Name() string { return "feishu" }
 
+// ChannelSystemParts 返回飞书渠道的特化 prompt。
+// 由 main.go 中的适配器调用，注入到 agent 中间件 pipeline。
+func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID string) map[string]string {
+	return map[string]string{
+		"05_channel_feishu": `## 飞书渠道规则
+- 不要在群聊中 @ 所有人
+- 使用 card_create 构建交互式卡片，提升信息密度
+- 飞书 markdown 支持有限，避免使用复杂表格
+- 可以使用飞书表情符号增强表达`,
+	}
+}
+
 // SetCardBuilder sets the CardBuilder for card callback handling.
 func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
 	f.cardBuilder = builder
@@ -1733,4 +1745,235 @@ func limitMarkdownTables(content string, maxTables int) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+// --- SettingsCapability implementation ---
+
+// feishuSettingsSchema returns the settings definitions for Feishu channel.
+func feishuSettingsSchema() []SettingDefinition {
+	return []SettingDefinition{
+		{
+			Key:         "reply_style",
+			Label:       "回复风格",
+			Description: "控制机器人的回复风格",
+			Type:        SettingTypeSelect,
+			Category:    "对话",
+			Options: []SettingOption{
+				{Label: "简洁", Value: "concise"},
+				{Label: "详细", Value: "detailed"},
+				{Label: "技术", Value: "technical"},
+			},
+			DefaultValue: "detailed",
+		},
+		{
+			Key:         "language",
+			Label:       "语言",
+			Description: "机器人回复的首选语言",
+			Type:        SettingTypeSelect,
+			Category:    "对话",
+			Options: []SettingOption{
+				{Label: "中文", Value: "zh"},
+				{Label: "English", Value: "en"},
+				{Label: "日本語", Value: "ja"},
+			},
+			DefaultValue: "zh",
+		},
+		{
+			Key:          "notify_on_complete",
+			Label:        "完成通知",
+			Description:  "长时间任务完成后是否发送通知",
+			Type:         SettingTypeToggle,
+			Category:     "通知",
+			DefaultValue: "true",
+		},
+	}
+}
+
+// SettingsSchema returns the settings definitions for Feishu channel.
+func (f *FeishuChannel) SettingsSchema() []SettingDefinition {
+	return feishuSettingsSchema()
+}
+
+// HandleSettingSubmit parses a card callback JSON and returns key-value pairs.
+func (f *FeishuChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// Try parsing as JSON (from card callback)
+	var data map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &data); err == nil {
+		// Extract form values from card callback
+		for key, value := range data {
+			if key == "card_id" {
+				continue
+			}
+			if s, ok := value.(string); ok {
+				result[key] = s
+			}
+		}
+		if len(result) > 0 {
+			return result, nil
+		}
+	}
+
+	// Fallback: parse as "key=value" text format
+	for _, line := range strings.Split(rawInput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf("no valid settings found in input")
+	}
+	return result, nil
+}
+
+// --- UIBuilder implementation ---
+
+// BuildSettingsUI builds a Feishu card for settings display.
+func (f *FeishuChannel) BuildSettingsUI(ctx context.Context, schema []SettingDefinition, currentValues map[string]string) string {
+	var sb strings.Builder
+	sb.WriteString("## ⚙️ 设置\n\n")
+
+	// Group by category
+	categories := make(map[string][]SettingDefinition)
+	for _, def := range schema {
+		cat := def.Category
+		if cat == "" {
+			cat = "通用"
+		}
+		categories[cat] = append(categories[cat], def)
+	}
+
+	for cat, defs := range categories {
+		fmt.Fprintf(&sb, "### %s\n\n", cat)
+		for _, def := range defs {
+			currentValue := ""
+			if currentValues != nil {
+				if v, ok := currentValues[def.Key]; ok {
+					currentValue = v
+				}
+			}
+			if currentValue == "" {
+				currentValue = def.DefaultValue
+			}
+
+			fmt.Fprintf(&sb, "**%s**：`%s`\n", def.Label, currentValue)
+			if def.Description != "" {
+				fmt.Fprintf(&sb, "%s\n", def.Description)
+			}
+			if def.Type == SettingTypeSelect && len(def.Options) > 0 {
+				sb.WriteString("可选：")
+				for i, opt := range def.Options {
+					if i > 0 {
+						sb.WriteString(" / ")
+					}
+					marker := "  "
+					if opt.Value == currentValue {
+						marker = "✓ "
+					}
+					fmt.Fprintf(&sb, "%s%s", marker, opt.Label)
+				}
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("---\n使用 `/settings set <key> <value>` 修改设置\n")
+	return sb.String()
+}
+
+// BuildProgressUI builds a Feishu card for progress display.
+func (f *FeishuChannel) BuildProgressUI(ctx context.Context, progress interface{}) string {
+	// Use text-based progress for now
+	var sb strings.Builder
+	sb.WriteString("## 📊 进度\n\n")
+
+	switch p := progress.(type) {
+	case map[string]any:
+		if phase, ok := p["phase"].(string); ok {
+			fmt.Fprintf(&sb, "**阶段**：%s\n", phase)
+		}
+		if detail, ok := p["detail"].(string); ok {
+			fmt.Fprintf(&sb, "%s\n", detail)
+		}
+		if pct, ok := p["percent"].(float64); ok {
+			bars := int(pct / 5)
+			fmt.Fprintf(&sb, "`%s%s` %.0f%%\n",
+				strings.Repeat("█", bars),
+				strings.Repeat("░", 20-bars),
+				pct)
+		}
+	default:
+		sb.WriteString(fmt.Sprintf("%v\n", p))
+	}
+
+	return sb.String()
+}
+
+// --- Menu UI methods ---
+
+// BuildMainMenuUI builds a main menu card for Feishu.
+func (f *FeishuChannel) BuildMainMenuUI(ctx context.Context, senderID string) string {
+	var sb strings.Builder
+	sb.WriteString("## 🏠 主菜单\n\n")
+	sb.WriteString("欢迎使用 xbot！请选择功能：\n\n")
+	sb.WriteString("- ⚙️ `/settings` — 个人设置\n")
+	sb.WriteString("- 📦 `/my skills` — 我的 Skills\n")
+	sb.WriteString("- 🤖 `/my agents` — 我的 Agents\n")
+	sb.WriteString("- 🏪 `/browse` — 浏览市场\n")
+	sb.WriteString("- 📤 `/publish skill|agent <name>` — 发布\n")
+	sb.WriteString("- 📥 `/install skill|agent <id>` — 安装\n")
+	sb.WriteString("- 🗑️ `/uninstall skill|agent <name>` — 卸载\n")
+	return sb.String()
+}
+
+// BuildMySkillsUI builds a Skills panel for Feishu.
+func (f *FeishuChannel) BuildMySkillsUI(ctx context.Context, skills []string, senderID string) string {
+	if len(skills) == 0 {
+		return "## 📦 我的 Skills\n\n暂无已安装的 Skills。\n使用 `/browse skills` 浏览市场。"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## 📦 我的 Skills\n\n")
+	for i, s := range skills {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, s)
+	}
+	sb.WriteString("\n使用 `/uninstall skill <name>` 卸载。")
+	return sb.String()
+}
+
+// BuildBrowseMarketUI builds a marketplace browse panel for Feishu.
+func (f *FeishuChannel) BuildBrowseMarketUI(ctx context.Context, entries interface{}, senderID string) string {
+	var sb strings.Builder
+	sb.WriteString("## 🏪 市场浏览\n\n")
+
+	switch e := entries.(type) {
+	case []map[string]string:
+		if len(e) == 0 {
+			sb.WriteString("市场暂无公开的 Skill/Agent。")
+			return sb.String()
+		}
+		for i, entry := range e {
+			typeLabel := "📦"
+			if entry["type"] == "agent" {
+				typeLabel = "🤖"
+			}
+			fmt.Fprintf(&sb, "%d. %s **%s** — %s\n", i+1, typeLabel, entry["name"], entry["description"])
+			if entry["author"] != "" {
+				fmt.Fprintf(&sb, "   作者：%s\n", entry["author"])
+			}
+			fmt.Fprintf(&sb, "   安装：`/install %s %s`\n\n", entry["type"], entry["id"])
+		}
+	default:
+		sb.WriteString("暂无数据。")
+	}
+
+	return sb.String()
 }

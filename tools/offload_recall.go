@@ -60,10 +60,10 @@ func (t *OffloadRecallTool) Execute(ctx *ToolContext, args string) (*ToolResult,
 		return nil, fmt.Errorf("recall failed: %w", err)
 	}
 
-	// 截断到 8000 字符防止上下文爆炸
+	// 截断到 8000 字符防止上下文爆炸（使用 []rune 避免 UTF-8 多字节截断）
 	const maxLen = 8000
-	if len(content) > maxLen {
-		content = content[:maxLen] + "\n\n... (truncated, original " + fmt.Sprintf("%d", len(content)) + " bytes)"
+	if len([]rune(content)) > maxLen {
+		content = string([]rune(content)[:maxLen]) + "\n\n... (truncated, original " + fmt.Sprintf("%d", len(content)) + " bytes)"
 	}
 
 	return NewResult(content), nil

@@ -684,7 +684,7 @@ func compressMessagesWithFingerprint(ctx context.Context, messages []llm.ChatMes
 		if len(fp.FilePaths) > 0 {
 			fpSection.WriteString("Files:\n")
 			for _, p := range fp.FilePaths {
-				fpSection.WriteString(fmt.Sprintf("  @file:%s\n", p))
+				fmt.Fprintf(&fpSection, "  @file:%s\n", p)
 			}
 		}
 		if len(fp.Identifiers) > 0 {
@@ -694,10 +694,10 @@ func compressMessagesWithFingerprint(ctx context.Context, messages []llm.ChatMes
 			}
 			fpSection.WriteString("Identifiers:\n")
 			for _, id := range fp.Identifiers[:shown] {
-				fpSection.WriteString(fmt.Sprintf("  @func:%s\n", id))
+				fmt.Fprintf(&fpSection, "  @func:%s\n", id)
 			}
 			if len(fp.Identifiers) > 50 {
-				fpSection.WriteString(fmt.Sprintf("  ... and %d more identifiers\n", len(fp.Identifiers)-50))
+				fmt.Fprintf(&fpSection, "  ... and %d more identifiers\n", len(fp.Identifiers)-50)
 			}
 		}
 		if len(fp.Errors) > 0 {

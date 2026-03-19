@@ -358,3 +358,31 @@ func TestGlobToFindArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestGlobTool_PathWithSpaces(t *testing.T) {
+	// Regression test: paths with spaces must work in sandbox find commands.
+	// Without single-quoting the search directory, paths with spaces break.
+	tmpDir := t.TempDir()
+	spaceDir := filepath.Join(tmpDir, "my project")
+	if err := os.MkdirAll(spaceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spaceDir, "app.go"), []byte("package main"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &GlobTool{}
+	input, _ := json.Marshal(map[string]string{
+		"pattern": "**/*.go",
+		"path":    spaceDir,
+	})
+
+	result, err := tool.Execute(nil, string(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.Summary, "app.go") {
+		t.Errorf("expected app.go in results, got: %s", result.Summary)
+	}
+}

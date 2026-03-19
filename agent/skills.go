@@ -29,6 +29,13 @@ type SkillInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Path        string `json:"path"` // absolute path to skill directory
+
+	// v2: sharing & installation metadata
+	Author        string `json:"author,omitempty"`
+	Tags          string `json:"tags,omitempty"`
+	Sharing       string `json:"sharing,omitempty"`
+	InstalledFrom string `json:"installed_from,omitempty"`
+	InstalledAt   int64  `json:"installed_at,omitempty"`
 }
 
 // ListSkills scans the skills directory and returns all discovered skills
@@ -136,4 +143,64 @@ func parseSkillFrontmatter(path string) (name, description string) {
 		}
 	}
 	return name, description
+}
+
+// parseSkillFrontmatterV2 parses SKILL.md YAML frontmatter from a skill directory.
+// It extracts name, description, sharing, author, and tags fields.
+// On parse failure, it falls back to the directory name with sharing="private".
+func parseSkillFrontmatterV2(skillDir string) SkillInfo {
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		dirName := filepath.Base(skillDir)
+		return SkillInfo{
+			Name:    dirName,
+			Path:    skillDir,
+			Sharing: "private",
+		}
+	}
+
+	content := string(data)
+	info := SkillInfo{
+		Path:    skillDir,
+		Sharing: "private",
+	}
+
+	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
+		dirName := filepath.Base(skillDir)
+		info.Name = dirName
+		return info
+	}
+
+	trimmed := strings.TrimSpace(content)
+	rest := trimmed[3:]
+	endIdx := strings.Index(rest, "\n---")
+	if endIdx < 0 {
+		dirName := filepath.Base(skillDir)
+		info.Name = dirName
+		return info
+	}
+
+	for _, line := range strings.Split(rest[:endIdx], "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			info.Name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		} else if strings.HasPrefix(line, "description:") {
+			info.Description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		} else if strings.HasPrefix(line, "author:") {
+			info.Author = strings.TrimSpace(strings.TrimPrefix(line, "author:"))
+		} else if strings.HasPrefix(line, "tags:") {
+			info.Tags = strings.TrimSpace(strings.TrimPrefix(line, "tags:"))
+		} else if strings.HasPrefix(line, "sharing:") {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "sharing:"))
+			if val == "public" {
+				info.Sharing = "public"
+			}
+		}
+	}
+
+	if info.Name == "" {
+		info.Name = filepath.Base(skillDir)
+	}
+	return info
 }

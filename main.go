@@ -221,6 +221,9 @@ func main() {
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())
+
+		// 注入飞书渠道特化 prompt 提供者
+		agentLoop.SetChannelPromptProviders(&feishuPromptAdapter{ch: feishuCh})
 	}
 
 	// 设置 OAuth 服务器的回调函数，使其能在授权完成后发送消息
@@ -401,4 +404,18 @@ func sendStartupNotify(disp *channel.Dispatcher, cfg *config.Config) {
 		time.Sleep(2 * time.Second)
 	}
 	log.Error("Failed to send startup notification after 3 attempts")
+}
+
+// feishuPromptAdapter 将 FeishuChannel 桥接为 agent.ChannelPromptProvider 接口。
+// 避免在 agent 包中直接依赖 channel 包。
+type feishuPromptAdapter struct {
+	ch *channel.FeishuChannel
+}
+
+func (a *feishuPromptAdapter) ChannelPromptName() string {
+	return a.ch.Name()
+}
+
+func (a *feishuPromptAdapter) ChannelSystemParts(ctx context.Context, chatID, senderID string) map[string]string {
+	return a.ch.ChannelSystemParts(ctx, chatID, senderID)
 }

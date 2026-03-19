@@ -2,6 +2,7 @@ package agent
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -32,13 +33,16 @@ type OffloadConfig struct {
 
 // OffloadedResult 表示一个已被 offload 的工具结果元数据。
 type OffloadedResult struct {
-	ID        string    `json:"id"`
-	ToolName  string    `json:"tool_name"`
-	Args      string    `json:"args"`
-	FilePath  string    `json:"file_path"`
-	TokenSize int       `json:"token_size"`
-	Timestamp time.Time `json:"timestamp"`
-	Summary   string    `json:"summary"`
+	ID          string    `json:"id"`
+	ToolName    string    `json:"tool_name"`
+	Args        string    `json:"args"`
+	FilePath    string    `json:"file_path"`
+	TokenSize   int       `json:"token_size"`
+	Timestamp   time.Time `json:"timestamp"`
+	Summary     string    `json:"summary"`
+	ContentHash string    `json:"content_hash"` // SHA256 of content at offload time (Read only)
+	ReadPath    string    `json:"read_path"`    // Resolved file path from Read tool args
+	Stale       bool      `json:"stale"`        // Whether this offload is stale
 }
 
 // offloadIndex 单个 session 的 offload 索引。
@@ -183,6 +187,15 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 		Timestamp: time.Now(),
 		Summary:   summaryContent,
 	}
+
+	// For Read tool: compute content hash and extract resolved file path
+	if toolName == "Read" {
+		entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(result)))
+		if readPath := extractJSONStringField(args, "path"); readPath != "" {
+			entry.ReadPath = readPath
+		}
+	}
+
 	idx := s.getOrCreateIndex(sessionKey)
 	idx.mu.Lock()
 	idx.entries = append(idx.entries, entry)
@@ -289,6 +302,96 @@ func (s *OffloadStore) persistIndex(sessionDir string, idx *offloadIndex) {
 	}
 }
 
+// InvalidateStaleReads checks all Read offloads in a session and marks stale ones.
+// Returns IDs of newly-staled entries (previously not stale).
+// workDir is used to resolve relative paths.
+func (s *OffloadStore) InvalidateStaleReads(sessionKey, workDir string) []string {
+	idx := s.getOrCreateIndex(sessionKey)
+	idx.mu.Lock()
+
+	var newlyStale []string
+
+	for i := range idx.entries {
+		e := &idx.entries[i]
+		// Only check Read offloads that are not already stale
+		if e.ToolName != "Read" || e.Stale || e.ContentHash == "" || e.ReadPath == "" {
+			continue
+		}
+
+		// Resolve the file path relative to workDir
+		resolvedPath := e.ReadPath
+		if !filepath.IsAbs(resolvedPath) && workDir != "" {
+			resolvedPath = filepath.Join(workDir, resolvedPath)
+		}
+
+		// Read current file content
+		currentData, err := os.ReadFile(resolvedPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// File deleted → stale
+				e.Stale = true
+				newlyStale = append(newlyStale, e.ID)
+			}
+			// Other read errors → skip (don't mark as stale)
+			continue
+		}
+
+		// Compare hash
+		currentHash := fmt.Sprintf("%x", sha256.Sum256(currentData))
+		if currentHash != e.ContentHash {
+			e.Stale = true
+			newlyStale = append(newlyStale, e.ID)
+		}
+	}
+
+	// Release lock before persisting (persistIndex acquires RLock internally)
+	sessionDir := s.getSessionDir(sessionKey)
+	idx.mu.Unlock()
+
+	if len(newlyStale) > 0 {
+		s.persistIndex(sessionDir, idx)
+	}
+
+	return newlyStale
+}
+
+// PurgeStaleMessages removes stale offload references from messages.
+// For each stale offload ID, finds the corresponding tool message and replaces
+// its content with a stale marker. Returns a new slice (does not modify the original).
+func (s *OffloadStore) PurgeStaleMessages(sessionKey string, messages []llm.ChatMessage) []llm.ChatMessage {
+	idx := s.getOrCreateIndex(sessionKey)
+	idx.mu.RLock()
+	staleIDs := make(map[string]bool)
+	for _, e := range idx.entries {
+		if e.Stale {
+			staleIDs[e.ID] = true
+		}
+	}
+	idx.mu.RUnlock()
+
+	if len(staleIDs) == 0 {
+		return messages
+	}
+
+	result := make([]llm.ChatMessage, len(messages))
+	copy(result, messages)
+
+	for i, msg := range result {
+		if msg.Role != "tool" {
+			continue
+		}
+		for staleID := range staleIDs {
+			marker := fmt.Sprintf("📂 [offload:%s]", staleID)
+			if strings.Contains(msg.Content, marker) {
+				result[i].Content = fmt.Sprintf("⚠️ [offload:%s] STALE — 该文件已被修改，此内容已过期。请重新 Read 获取最新内容。", staleID)
+				break // only replace once per message
+			}
+		}
+	}
+
+	return result
+}
+
 // truncateOffloadArgs 截断工具参数用于 offload 显示。
 func truncateOffloadArgs(args string) string {
 	if len(args) <= 80 {
@@ -324,6 +427,18 @@ func summarizeRead(args, content string) string {
 	lines := strings.Split(content, "\n")
 	lineCount := len(lines)
 
+	// 单行截断保护：防止极长单行（如 JSON 序列化后的内容）撑爆 summary
+	// 使用 []rune 进行 UTF-8 安全截断
+	const maxLineRunes = 500
+	const lineTruncSuffix = "...(truncated, %d chars)"
+	for i, line := range lines {
+		runes := []rune(line)
+		if len(runes) > maxLineRunes {
+			suffix := fmt.Sprintf(lineTruncSuffix, len(runes))
+			lines[i] = string(runes[:maxLineRunes]) + suffix
+		}
+	}
+
 	// 提取关键函数名
 	funcNames := extractFunctionNames(content)
 
@@ -353,7 +468,17 @@ func summarizeRead(args, content string) string {
 		fmt.Fprintf(&sb, "Key functions: %s\n", strings.Join(funcNames[:min(len(funcNames), 10)], ", "))
 	}
 
-	return sb.String()
+	summary := sb.String()
+
+	// 总量上限保护：防止 summary 本身过大（如文件行数极多但每行都接近截断长度）
+	// 使用 []rune 进行 UTF-8 安全截断
+	const maxSummaryRunes = 3000
+	summaryRunes := []rune(summary)
+	if len(summaryRunes) > maxSummaryRunes {
+		summary = string(summaryRunes[:maxSummaryRunes]) + "\n...(summary truncated)"
+	}
+
+	return summary
 }
 
 // summarizeGrep 生成 Grep 工具结果的摘要。

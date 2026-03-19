@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 12
+const schemaVersion = 13
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -189,8 +189,33 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (12);
+INSERT INTO schema_version (version) VALUES (13);
 
+CREATE TABLE shared_registry (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL CHECK(type IN ('skill', 'agent')),
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    author      TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL,
+    sharing     TEXT NOT NULL DEFAULT 'private' CHECK(sharing IN ('private', 'public')),
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_shared_type_sharing ON shared_registry(type, sharing);
+CREATE INDEX idx_shared_author ON shared_registry(author);
+
+CREATE TABLE user_settings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel    TEXT NOT NULL,
+    sender_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    UNIQUE(channel, sender_id, key)
+);
+CREATE INDEX idx_user_settings_sender ON user_settings(channel, sender_id);
 CREATE TABLE user_llm_configs (
     sender_id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
@@ -561,6 +586,42 @@ UPDATE schema_version SET version = 6;
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v12 (removed CodeBuddy columns)")
+	}
+
+	if from < 13 {
+		migration := `
+CREATE TABLE IF NOT EXISTS shared_registry (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL CHECK(type IN ('skill', 'agent')),
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    author      TEXT NOT NULL,
+    tags        TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL,
+    sharing     TEXT NOT NULL DEFAULT 'private' CHECK(sharing IN ('private', 'public')),
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shared_type_sharing ON shared_registry(type, sharing);
+CREATE INDEX IF NOT EXISTS idx_shared_author ON shared_registry(author);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel    TEXT NOT NULL,
+    sender_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    UNIQUE(channel, sender_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_user_settings_sender ON user_settings(channel, sender_id);
+
+UPDATE schema_version SET version = 13;
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v12->v13: %w", err)
+		}
+		log.Info("Database migrated to v13 (added shared_registry, user_settings)")
 	}
 
 	return nil

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"xbot/llm"
 )
 
 func TestNewOffloadStore_Defaults(t *testing.T) {
@@ -369,5 +373,306 @@ func TestEstimateTokenSize(t *testing.T) {
 	tokens := estimateTokenSize(strings.Repeat("a", 100), "gpt-4o")
 	if tokens <= 0 || tokens > 100 {
 		t.Errorf("unexpected token estimate: %d", tokens)
+	}
+}
+
+func TestSummarizeRead_LongSingleLine(t *testing.T) {
+	// 构造一个超长单行（模拟 JSON 压缩输出）
+	longLine := strings.Repeat("x", 2000)
+	content := "first line\n" + longLine + "\nlast line\n"
+
+	// summarizeRead 接收 (args, content)，文件名从 args JSON 中提取
+	summary := summarizeRead(`{"path":"bigfile.json"}`, content)
+
+	// 超长单行应被截断到 500 字符（rune）+ 截断标记
+	for _, line := range strings.Split(summary, "\n") {
+		runes := []rune(line)
+		if len(runes) > 530 { // 500 runes + truncation suffix ~30 chars
+			t.Errorf("single line exceeds 530 chars (500+suffix): got %d runes, content: %.80s...", len(runes), line)
+		}
+	}
+	// 应包含截断标记
+	if !strings.Contains(summary, "truncated") {
+		t.Error("summary should contain truncation marker 'truncated'")
+	}
+	// 应包含文件名
+	if !strings.Contains(summary, "bigfile.json") {
+		t.Error("summary should contain file name 'bigfile.json'")
+	}
+}
+
+func TestSummarizeRead_TotalLimit(t *testing.T) {
+	// 构造多行内容，总量超过 3000 字符
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, strings.Repeat("line content number "+fmt.Sprintf("%04d", i)+" ", 30))
+	}
+	content := strings.Join(lines, "\n")
+
+	summary := summarizeRead("hugefile.go", content)
+
+	// 总量不应超过 3000 字符 + 尾部附加信息
+	runes := []rune(summary)
+	if len(runes) > 3200 {
+		t.Errorf("summary total exceeds 3200 chars (3000 + margin): got %d", len(runes))
+	}
+	// 应包含截断指示
+	if !strings.Contains(summary, "omitted") {
+		t.Error("summary should indicate omitted lines")
+	}
+}
+
+func TestSummarizeRead_UTF8SafeTruncation(t *testing.T) {
+	// 构造含中文的长单行，确保 UTF-8 安全截断
+	// "中文内容测试" 6 chars × 100 = 600 runes, 超过 500 会被截断
+	longLine := strings.Repeat("中文内容测试", 100) // 600 runes, 1800 bytes
+	content := "header\n" + longLine + "\nfooter\n"
+
+	summary := summarizeRead("utf8file.txt", content)
+
+	// 不应出现乱码（无效 UTF-8）
+	for i, r := range summary {
+		if r == utf8.RuneError {
+			t.Errorf("invalid UTF-8 rune at position %d", i)
+		}
+	}
+
+	// 每行 rune 数不应超过 540（500 runes + truncation suffix ~40 chars）
+	for _, line := range strings.Split(summary, "\n") {
+		if len([]rune(line)) > 540 {
+			t.Errorf("line exceeds 540 runes: %d", len([]rune(line)))
+		}
+	}
+}
+
+// --- Offload staleness detection tests ---
+
+// helper to create a store with very low thresholds and a temp dir
+func newTestStore(t *testing.T) (*OffloadStore, string) {
+	t.Helper()
+	dir := t.TempDir()
+	store := NewOffloadStore(OffloadConfig{
+		StoreDir:        dir,
+		MaxResultTokens: 100,
+		MaxResultBytes:  10240,
+	})
+	return store, dir
+}
+
+func TestInvalidateStaleReads_NoChange(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	// Create a file and offload its content
+	filePath := filepath.Join(dir, "testfile.go")
+	content := strings.Repeat("line of content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+	if offloaded.ContentHash == "" {
+		t.Fatal("ContentHash should be set for Read tool")
+	}
+	if offloaded.ReadPath != filePath {
+		t.Fatalf("ReadPath = %q, want %q", offloaded.ReadPath, filePath)
+	}
+
+	// File unchanged → no stale
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 0 {
+		t.Errorf("expected 0 stale IDs, got %v", staleIDs)
+	}
+}
+
+func TestInvalidateStaleReads_FileModified(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	filePath := filepath.Join(dir, "testfile.go")
+	content := strings.Repeat("original content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+
+	// Modify the file
+	newContent := strings.Repeat("modified content\n", 500)
+	os.WriteFile(filePath, []byte(newContent), 0o644)
+
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale ID, got %v", staleIDs)
+	}
+	if staleIDs[0] != offloaded.ID {
+		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
+	}
+}
+
+func TestInvalidateStaleReads_FileDeleted(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	filePath := filepath.Join(dir, "tempfile.go")
+	content := strings.Repeat("temp content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+
+	// Delete the file
+	os.Remove(filePath)
+
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale ID, got %v", staleIDs)
+	}
+	if staleIDs[0] != offloaded.ID {
+		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
+	}
+}
+
+func TestInvalidateStaleReads_NonReadTool(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	// Create a Shell offload (no ContentHash/ReadPath)
+	shellContent := strings.Repeat("shell output\n", 500)
+	offloaded, ok := store.MaybeOffload("stale:test", "Shell", `{}`, shellContent)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+
+	// Shell offload should not have ContentHash
+	if offloaded.ContentHash != "" {
+		t.Error("Shell offload should not have ContentHash")
+	}
+
+	// Should not be marked stale
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 0 {
+		t.Errorf("expected 0 stale IDs for non-Read tool, got %v", staleIDs)
+	}
+}
+
+func TestPurgeStaleMessages(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	// Create a file and offload it
+	filePath := filepath.Join(dir, "purgetest.go")
+	content := strings.Repeat("purge content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content)
+
+	// Modify file to make it stale
+	os.WriteFile(filePath, []byte("modified\n"), 0o644)
+	store.InvalidateStaleReads("stale:test", dir)
+
+	// Build messages with a tool message containing the offload marker
+	originalContent := fmt.Sprintf("📂 [offload:%s] Read(...) summary here", offloaded.ID)
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "read the file"},
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{ID: "tc_1", Name: "Read", Arguments: args}}},
+		{Role: "tool", Content: originalContent, ToolCallID: "tc_1", ToolName: "Read"},
+	}
+
+	// Purge should replace the tool message content
+	purged := store.PurgeStaleMessages("stale:test", messages)
+
+	// Original messages should not be modified
+	if messages[3].Content != originalContent {
+		t.Error("PurgeStaleMessages should not modify original messages slice")
+	}
+
+	// Purged message should have stale marker
+	expectedStale := fmt.Sprintf("⚠️ [offload:%s] STALE — 该文件已被修改，此内容已过期。请重新 Read 获取最新内容。", offloaded.ID)
+	if purged[3].Content != expectedStale {
+		t.Errorf("purged content = %q, want %q", purged[3].Content, expectedStale)
+	}
+
+	// Non-tool messages should be unchanged
+	if purged[0].Content != "system prompt" {
+		t.Error("system message should be unchanged")
+	}
+	if purged[1].Content != "read the file" {
+		t.Error("user message should be unchanged")
+	}
+}
+
+func TestPurgeStaleMessages_NoStale(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+
+	purged := store.PurgeStaleMessages("stale:test", messages)
+
+	if len(purged) != len(messages) {
+		t.Errorf("expected same length, got %d vs %d", len(purged), len(messages))
+	}
+
+	// Should return the same messages (or equivalent)
+	if purged[1].Content != "hello" {
+		t.Error("messages should be unchanged when no stale offloads")
+	}
+}
+
+func TestInvalidateStaleReads_AlreadyStale(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	filePath := filepath.Join(dir, "already_stale.go")
+	content := strings.Repeat("already stale content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	_, _ = store.MaybeOffload("stale:test", "Read", args, content)
+
+	// Modify file and invalidate → first time should return the ID
+	os.WriteFile(filePath, []byte("changed\n"), 0o644)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale ID on first call, got %v", staleIDs)
+	}
+
+	// Second call → already stale, should not return again
+	staleIDs2 := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs2) != 0 {
+		t.Errorf("expected 0 stale IDs on second call (already stale), got %v", staleIDs2)
+	}
+}
+
+func TestInvalidateStaleReads_RelativePath(t *testing.T) {
+	store, dir := newTestStore(t)
+
+	// Use a relative path
+	filePath := filepath.Join(dir, "relfile.go")
+	content := strings.Repeat("relative path content\n", 500)
+	os.WriteFile(filePath, []byte(content), 0o644)
+
+	// Use relative path in args
+	relPath := "relfile.go"
+	args := fmt.Sprintf(`{"path":"%s"}`, relPath)
+	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content)
+
+	// Modify the file
+	os.WriteFile(filePath, []byte("modified relative\n"), 0o644)
+
+	// Invalidate with workDir = dir should resolve the relative path
+	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale ID with relative path, got %v", staleIDs)
+	}
+	if staleIDs[0] != offloaded.ID {
+		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
 	}
 }

@@ -299,7 +299,7 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		}
 	}
 
-	grepCmd += fmt.Sprintf(" %s %s", shellEscape(erePattern), shellEscape(searchDir))
+	grepCmd += fmt.Sprintf(" '%s' '%s'", shellEscape(erePattern), shellEscape(searchDir))
 	// 不用 pipefail：head 关闭管道时 grep 收到 SIGPIPE (exit 141)，
 	// pipefail 会将其传播为错误，导致有效结果被丢弃。
 	grepCmd += " | head -200"

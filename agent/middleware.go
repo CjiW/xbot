@@ -151,7 +151,9 @@ func (mc *MessageContext) Assemble() []llm.ChatMessage {
 	systemPrompt := mc.BuildSystemPrompt()
 
 	messages := make([]llm.ChatMessage, 0, len(mc.History)+2)
-	messages = append(messages, llm.NewSystemMessage(systemPrompt))
+	sysMsg := llm.NewSystemMessage(systemPrompt)
+	sysMsg.CacheHint = "static"
+	messages = append(messages, sysMsg)
 	messages = append(messages, mc.History...)
 	messages = append(messages, llm.NewUserMessage(mc.UserMessage))
 

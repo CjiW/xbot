@@ -12,7 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
+
+	"xbot/llm"
 
 	log "xbot/logger"
 )
@@ -26,6 +27,7 @@ type OffloadConfig struct {
 	MaxResultBytes  int    // 触发 offload 的字节阈值（默认 10240）
 	StoreDir        string // offload 文件存储根目录
 	CleanupAgeDays  int    // 过期清理天数（默认 7）
+	Model           string // tokenizer 使用的模型（默认 "gpt-4o"）
 }
 
 // OffloadedResult 表示一个已被 offload 的工具结果元数据。
@@ -74,6 +76,9 @@ func NewOffloadStore(config OffloadConfig) *OffloadStore {
 	if config.CleanupAgeDays <= 0 {
 		config.CleanupAgeDays = 7
 	}
+	if config.Model == "" {
+		config.Model = "gpt-4o"
+	}
 	return &OffloadStore{config: config}
 }
 
@@ -111,17 +116,13 @@ func (s *OffloadStore) offloadFilePath(sessionDir, id string) string {
 	return filepath.Join(sessionDir, id+".json")
 }
 
-// estimateTokenSize 区分 CJK/ASCII 的 token 估算：CJK ~1.5 字符/token，ASCII ~4 字符/token。
-func estimateTokenSize(text string) int {
-	cjk, ascii := 0, 0
-	for _, r := range text {
-		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) {
-			cjk++
-		} else {
-			ascii++
-		}
+// estimateTokenSize 使用 llm.CountTokens 估算 token 数，error 时 fallback 到 len(text)*2/5。
+func estimateTokenSize(text string, model string) int {
+	n, err := llm.CountTokens(text, model)
+	if err != nil {
+		return len(text) * 2 / 5
 	}
-	return cjk*2/3 + ascii/4
+	return n
 }
 
 // MaybeOffload 检测 tool result 是否超过阈值，超过则 offload 到磁盘。
@@ -133,7 +134,7 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 	}
 
 	// 检查是否超过阈值
-	tokenSize := estimateTokenSize(result)
+	tokenSize := estimateTokenSize(result, s.config.Model)
 	byteSize := len(result)
 
 	if tokenSize < s.config.MaxResultTokens && byteSize < s.config.MaxResultBytes {
@@ -455,11 +456,11 @@ func summarizeDefault(content string) string {
 	runes := []rune(content)
 	maxPreview := 300
 	if len(runes) <= maxPreview {
-		return fmt.Sprintf("Content: %s\n(Size: %d bytes, ~%d tokens)", content, len(content), estimateTokenSize(content))
+		return fmt.Sprintf("Content: %s\n(Size: %d bytes, ~%d tokens)", content, len(content), estimateTokenSize(content, "gpt-4o"))
 	}
 
 	preview := string(runes[:maxPreview])
-	tokens := estimateTokenSize(content)
+	tokens := estimateTokenSize(content, "gpt-4o")
 	return fmt.Sprintf("Content (first %d chars): %s...\n(Size: %d bytes, ~%d tokens)", maxPreview, preview, len(content), tokens)
 }
 

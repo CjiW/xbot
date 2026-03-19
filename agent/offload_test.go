@@ -366,7 +366,7 @@ func TestOffloadStore_PersistAndLoadIndex(t *testing.T) {
 
 func TestEstimateTokenSize(t *testing.T) {
 	// 100 chars should give roughly 40 tokens
-	tokens := estimateTokenSize(strings.Repeat("a", 100))
+	tokens := estimateTokenSize(strings.Repeat("a", 100), "gpt-4o")
 	if tokens <= 0 || tokens > 100 {
 		t.Errorf("unexpected token estimate: %d", tokens)
 	}

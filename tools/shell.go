@@ -173,7 +173,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 			if result != "" {
 				timeoutErr = fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)
 			}
-			log.WithFields(log.Fields{
+			log.Ctx(ctx).WithFields(log.Fields{
 				"command": params.Command,
 				"timeout": timeout,
 				"output":  result,
@@ -198,7 +198,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		}
 
 		// 打印错误日志，方便排查问题
-		log.WithFields(log.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"command":  params.Command,
 			"exitCode": exitCode,
 			"stderr":   stderrStr,

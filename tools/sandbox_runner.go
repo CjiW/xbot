@@ -702,5 +702,3 @@ func (s *dockerSandbox) autoDetectDinDMount(workDir string) (containerMount, hos
 
 	return bestDest, bestSrc
 }
-
-

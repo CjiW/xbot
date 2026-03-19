@@ -132,8 +132,8 @@ func TestNoopManager(t *testing.T) {
 	}
 }
 
-// TestPhase2Manager_ManualCompress tests that Phase 2 ManualCompress falls back to Phase 1
-func TestPhase2Manager_ManualCompress(t *testing.T) {
+// TestPhase2Manager_Compress tests Phase 2 Compress evict+compact pipeline
+func TestPhase2Manager_Compress(t *testing.T) {
 	cfg := &ContextManagerConfig{
 		MaxContextTokens:     100000,
 		CompressionThreshold: 0.7,
@@ -146,10 +146,22 @@ func TestPhase2Manager_ManualCompress(t *testing.T) {
 		t.Errorf("phase2Manager.Mode() = %q, want %q", m.Mode(), ContextModePhase2)
 	}
 
-	// Compress should return error (not implemented)
-	_, err := m.Compress(context.TODO(), nil, nil, "model")
-	if err == nil {
-		t.Error("phase2Manager.Compress should return error (not implemented)")
+	// Compress with nil messages should not panic
+	result, err := m.Compress(context.TODO(), nil, nil, "model")
+	if err != nil {
+		t.Errorf("phase2Manager.Compress with nil messages should not error, got: %v", err)
+	}
+	if result == nil {
+		t.Error("phase2Manager.Compress should return non-nil result")
+	}
+
+	// ManualCompress with nil client should work for nil messages (short-circuit path)
+	result2, err := m.ManualCompress(context.TODO(), nil, nil, "model")
+	if err != nil {
+		t.Errorf("phase2Manager.ManualCompress with nil messages should not error, got: %v", err)
+	}
+	if result2 == nil {
+		t.Error("phase2Manager.ManualCompress should return non-nil result")
 	}
 }
 

@@ -67,6 +67,9 @@ type RunConfig struct {
 	// ContextManager 上下文管理器（nil = 不压缩）
 	ContextManager ContextManager
 
+	// ContextManagerConfig 上下文管理器配置（Phase 2 智能触发需要访问 MaxContextTokens 等）
+	ContextManagerConfig *ContextManagerConfig
+
 	// SendFunc 向 IM 渠道发送消息（nil = 不能发消息）
 	SendFunc func(channel, chatID, content string) error
 
@@ -111,6 +114,9 @@ type RunConfig struct {
 
 	// HookChain tool execution hook chain (nil = no hooks).
 	HookChain *tools.HookChain
+
+	// OffloadStore Layer 1 offload store（nil = 不启用）
+	OffloadStore *OffloadStore
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -186,6 +192,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	var waitingUser bool
 	var progressLines []string
 	var lastContent string // 用于 LLM 错误时的降级返回
+	var iteration int      // 当前迭代次数（maybeCompress 闭包内需要访问）
 
 	autoNotify := cfg.ProgressNotifier != nil
 
@@ -227,7 +234,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 
-		if !cm.ShouldCompress(messages, cfg.Model, toolTokens) {
+		// Phase 2: SmartCompressor 智能触发（动态阈值+冷却）
+		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil {
+			provider := smart.TriggerProvider()
+			triggerInfo := BuildTriggerInfo(iteration, messages, toolsUsed, provider, cfg.ContextManagerConfig, cfg.Model)
+			if !smart.ShouldCompressDynamic(triggerInfo) {
+				return
+			}
+			// 智能触发命中，继续执行压缩...
+		} else if !cm.ShouldCompress(messages, cfg.Model, toolTokens) {
 			return
 		}
 
@@ -245,11 +260,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			return
 		}
 
+		oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
 		messages = result.LLMView
 
 		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 		if autoNotify {
-			oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
 			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
 			notifyProgress("")
 		}
@@ -325,6 +340,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		elapsed    time.Duration
 	}
 	for i := 0; i < maxIter; i++ {
+		iteration = i
 		maybeCompress()
 
 		if autoNotify && i > 0 {
@@ -619,6 +635,19 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		for idx, tc := range response.ToolCalls {
 			r := execResults[idx]
 			content := r.llmContent
+
+			// Phase 2: Layer 1 Offload
+			if cfg.OffloadStore != nil && r.err == nil {
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(sessionKey, tc.Name, tc.Arguments, content)
+				if wasOffloaded {
+					content = offloaded.Summary
+					log.Ctx(ctx).WithFields(log.Fields{
+						"tool":         tc.Name,
+						"offload_id":   offloaded.ID,
+						"tokens_saved": offloaded.TokenSize,
+					}).Info("Tool result offloaded")
+				}
+			}
 
 			// OAuth 自动触发
 			if r.err != nil && cfg.OAuthHandler != nil {

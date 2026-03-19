@@ -103,6 +103,12 @@ func (a *Agent) buildMainRunConfig(
 
 	// 注入 ContextManager
 	cfg.ContextManager = a.GetContextManager()
+	cfg.ContextManagerConfig = a.contextManagerConfig
+
+	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
+	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
+		smart.(*phase2Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
+	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -111,6 +117,9 @@ func (a *Agent) buildMainRunConfig(
 
 	// HookChain — inherit from Agent
 	cfg.HookChain = a.hookChain
+
+	// OffloadStore — Layer 1 offload
+	cfg.OffloadStore = a.offloadStore
 
 	// InteractiveCallbacks — interactive SubAgent 支持
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{

@@ -1603,7 +1603,8 @@ func (f *FeishuChannel) buildCard(content string) map[string]any {
 	return map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
-			"update_multi": true,
+			"wide_screen_mode": true,
+			"update_multi":     true,
 		},
 		"body": map[string]any{
 			"elements": []map[string]any{
@@ -1796,39 +1797,72 @@ func (f *FeishuChannel) SettingsSchema() []SettingDefinition {
 
 // HandleSettingSubmit parses a card callback JSON and returns key-value pairs.
 func (f *FeishuChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (map[string]string, error) {
+	// Defensive: reject empty input
+	rawInput = strings.TrimSpace(rawInput)
+	if rawInput == "" {
+		return nil, fmt.Errorf("empty settings input")
+	}
+
 	result := make(map[string]string)
 
 	// Try parsing as JSON (from card callback)
 	var data map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &data); err == nil {
+		// Defensive: check for empty JSON object
+		if len(data) == 0 {
+			return nil, fmt.Errorf("empty JSON object in settings input")
+		}
+
 		// Extract form values from card callback
 		for key, value := range data {
-			if key == "card_id" {
+			if key == "card_id" || key == "" {
 				continue
 			}
-			if s, ok := value.(string); ok {
-				result[key] = s
+			switch v := value.(type) {
+			case string:
+				result[key] = v
+			case bool:
+				result[key] = strconv.FormatBool(v)
+			case float64:
+				// Avoid scientific notation for whole numbers
+				if v == float64(int64(v)) {
+					result[key] = strconv.FormatInt(int64(v), 10)
+				} else {
+					result[key] = strconv.FormatFloat(v, 'f', -1, 64)
+				}
+			case nil:
+				// Skip nil values
+			default:
+				// For other types (arrays, nested objects), marshal to string
+				if b, err := json.Marshal(v); err == nil {
+					result[key] = string(b)
+				}
 			}
 		}
 		if len(result) > 0 {
 			return result, nil
 		}
+		// JSON parsed but no valid keys found — fall through to text parsing
 	}
 
 	// Fallback: parse as "key=value" text format
 	for _, line := range strings.Split(rawInput, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if key != "" {
+				result[key] = value
+			}
 		}
 	}
 
 	if len(result) == 0 {
-		return nil, fmt.Errorf("no valid settings found in input")
+		return nil, fmt.Errorf("no valid settings found in input: %q", rawInput)
 	}
 	return result, nil
 }

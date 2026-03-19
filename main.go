@@ -217,6 +217,7 @@ func main() {
 
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
+	agentLoop.SetChannelFinder(disp.GetChannel)
 
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {

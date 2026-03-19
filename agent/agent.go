@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/channel"
 	"xbot/cron"
 	"xbot/llm"
 	log "xbot/logger"
@@ -255,6 +256,9 @@ type Agent struct {
 
 	// SettingsService for per-user settings
 	settingsSvc *SettingsService
+
+	// channelFinder looks up a channel instance by name (injected from main.go).
+	channelFinder func(name string) (channel.Channel, bool)
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -262,6 +266,15 @@ func (a *Agent) SetRegistryManager(rm *RegistryManager) { a.registryManager = rm
 
 // SetSettingsService sets the SettingsService (for external injection or override).
 func (a *Agent) SetSettingsService(svc *SettingsService) { a.settingsSvc = svc }
+
+// SetChannelFinder sets the channel finder callback (for external injection).
+// Also propagates to SettingsService so it can resolve channels by name.
+func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
+	a.channelFinder = fn
+	if a.settingsSvc != nil {
+		a.settingsSvc.SetChannelFinder(fn)
+	}
+}
 
 func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {

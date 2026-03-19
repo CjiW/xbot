@@ -7,13 +7,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	log "xbot/logger"
 )
+
+// sessionDirReplacer 用于清理 sessionKey 中的危险路径字符，声明为包级变量避免重复创建。
+var sessionDirReplacer = strings.NewReplacer("/", "_", "\\", "_", ":", "_", "\x00", "_")
 
 // OffloadConfig 配置大 tool result 的 offload 行为。
 type OffloadConfig struct {
@@ -82,12 +87,7 @@ func generateID() string {
 // getSessionDir 获取指定 session 的存储目录。
 func (s *OffloadStore) getSessionDir(sessionKey string) string {
 	// 清理 sessionKey 中的路径分隔符，防止目录穿越
-	safe := strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' || r == ':' || r == '\x00' {
-			return '_'
-		}
-		return r
-	}, sessionKey)
+	safe := sessionDirReplacer.Replace(sessionKey)
 	return filepath.Join(s.config.StoreDir, safe)
 }
 
@@ -111,11 +111,17 @@ func (s *OffloadStore) offloadFilePath(sessionDir, id string) string {
 	return filepath.Join(sessionDir, id+".json")
 }
 
-// estimateTokenSize 粗略估算文本的 token 数（约 4 字符/token）。
+// estimateTokenSize 区分 CJK/ASCII 的 token 估算：CJK ~1.5 字符/token，ASCII ~4 字符/token。
 func estimateTokenSize(text string) int {
-	// 简单估算：英文 ~4 字符/token，中文 ~1.5 字符/token
-	// 使用折中方式：2.5 字符/token
-	return len(text) * 2 / 5
+	cjk, ascii := 0, 0
+	for _, r := range text {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) {
+			cjk++
+		} else {
+			ascii++
+		}
+	}
+	return cjk*2/3 + ascii/4
 }
 
 // MaybeOffload 检测 tool result 是否超过阈值，超过则 offload 到磁盘。
@@ -459,79 +465,52 @@ func summarizeDefault(content string) string {
 
 // extractJSONStringField 从 JSON 字符串中提取指定字符串字段的值。
 func extractJSONStringField(jsonStr, field string) string {
-	// 简单 JSON 字段提取，避免完整解析开销
-	key := `"` + field + `"`
-	idx := strings.Index(jsonStr, key)
-	if idx == -1 {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
 		return ""
 	}
-
-	// 找到冒号后的值
-	rest := jsonStr[idx+len(key):]
-	colonIdx := strings.Index(rest, ":")
-	if colonIdx == -1 {
+	v, ok := m[field]
+	if !ok {
 		return ""
 	}
-	rest = rest[colonIdx+1:]
-
-	// 跳过空格
-	rest = strings.TrimSpace(rest)
-	if len(rest) == 0 || rest[0] != '"' {
+	s, ok := v.(string)
+	if !ok {
 		return ""
 	}
-	rest = rest[1:]
-
-	// 找到结束引号
-	endIdx := 0
-	for endIdx < len(rest) {
-		if rest[endIdx] == '"' && (endIdx == 0 || rest[endIdx-1] != '\\') {
-			break
-		}
-		endIdx++
-	}
-
-	return rest[:endIdx]
+	return s
 }
 
-// extractFunctionNames 从代码内容中提取函数名（Go, Python, JS 等常见模式）。
+// extractFunctionNames 从代码内容中提取函数名（Go, Python, JS 等）。
 func extractFunctionNames(content string) []string {
-	// 简单正则匹配常见函数声明
-	patterns := []string{
-		"func ",
-		"function ",
-		"def ",
-		"fn ",
+	// Go: func Name( 或 func (recv) Name(
+	// Python: def Name(
+	// JS: function Name(
+	reGoFunc := regexp.MustCompile(`func\s+\([^)]+\)\s+(\w+)\s*\(|func\s+(\w+)\s*\(`)
+	rePyFunc := regexp.MustCompile(`def\s+(\w+)\s*\(`)
+	reJSFunc := regexp.MustCompile(`function\s+(\w+)\s*\(`)
+
+	seen := make(map[string]bool)
+	var names []string
+	addName := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
 	}
 
-	var names []string
-	lines := strings.Split(content, "\n")
-	seen := make(map[string]bool)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		for _, pat := range patterns {
-			if strings.HasPrefix(line, pat) {
-				// 提取函数名
-				rest := line[len(pat):]
-				// 跳过可能的接收者（Go）
-				if pat == "func " && strings.HasPrefix(rest, "(") {
-					closeParen := strings.Index(rest, ")")
-					if closeParen >= 0 {
-						rest = strings.TrimSpace(rest[closeParen+1:])
-					}
-				}
-				// 取到第一个括号或空格
-				end := strings.IndexAny(rest, "( \t\n{")
-				if end > 0 {
-					name := rest[:end]
-					if name != "" && !seen[name] {
-						seen[name] = true
-						names = append(names, name)
-					}
-				}
-				break
-			}
+	for _, m := range reGoFunc.FindAllStringSubmatch(content, -1) {
+		if m[1] != "" {
+			addName(m[1])
 		}
+		if m[2] != "" {
+			addName(m[2])
+		}
+	}
+	for _, m := range rePyFunc.FindAllStringSubmatch(content, -1) {
+		addName(m[1])
+	}
+	for _, m := range reJSFunc.FindAllStringSubmatch(content, -1) {
+		addName(m[1])
 	}
 
 	return names

@@ -275,25 +275,19 @@ func extractCodeIdentifiers(text string) []string {
 	return result
 }
 
-// commonWords 常见英文单词集合，避免将普通英文词识别为代码标识符。
-var commonWords = map[string]bool{
-	"the": true, "and": true, "for": true, "not": true, "you": true,
-	"all": true, "can": true, "her": true, "was": true, "one": true,
-	"our": true, "out": true, "has": true, "have": true, "had": true,
-	"are": true, "but": true, "from": true, "they": true, "been": true,
-	"will": true, "each": true, "make": true, "like": true, "just": true,
-	"over": true, "such": true, "take": true, "than": true, "them": true,
-	"this": true, "that": true, "with": true, "what": true, "when": true,
-	"into": true, "could": true, "other": true, "about": true, "which": true,
-	"their": true, "there": true, "would": true, "these": true, "should": true,
-	"also": true, "some": true, "only": true, "very": true, "more": true,
+// codeKeywords 高频代码词汇，用于过滤代码标识符中的常见关键字（区分于通用停用词）。
+var codeKeywords = map[string]bool{
+	"get": true, "set": true, "new": true, "err": true, "ctx": true,
+	"val": true, "msg": true, "req": true, "res": true, "ret": true,
+	"tmp": true, "buf": true, "opt": true, "ref": true, "src": true,
+	"dst": true, "num": true, "idx": true, "len": true, "key": true,
 }
 
 func isCommonWord(word string) bool {
 	if len(word) <= 3 {
 		return true
 	}
-	return commonWords[strings.ToLower(word)]
+	return stopWords[strings.ToLower(word)] || codeKeywords[strings.ToLower(word)]
 }
 
 // isErrorContext 检测错误上下文。

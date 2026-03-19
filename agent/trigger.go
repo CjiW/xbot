@@ -204,6 +204,7 @@ func calculateDynamicThreshold(info TriggerInfo) float64 {
 }
 
 // DetectToolPattern 根据最近工具调用列表检测使用模式。
+// 基于频率占比分类：readRatio > 0.7 算 ReadHeavy，writeRatio > 0.7 算 WriteHeavy，subAgentRatio > 0.3 算 SubAgent。
 func DetectToolPattern(recentTools []string) ToolCallPattern {
 	if len(recentTools) == 0 {
 		return PatternConversation
@@ -217,32 +218,37 @@ func DetectToolPattern(recentTools []string) ToolCallPattern {
 		"Edit": true, "Shell": true, "Write": true,
 	}
 
-	hasRead := false
-	hasWrite := false
-	hasSubAgent := false
+	total := float64(len(recentTools))
+	readCount := 0
+	writeCount := 0
+	subAgentCount := 0
 
 	for _, tool := range recentTools {
 		if readTools[tool] {
-			hasRead = true
+			readCount++
 		}
 		if writeTools[tool] {
-			hasWrite = true
+			writeCount++
 		}
 		if tool == "SubAgent" {
-			hasSubAgent = true
+			subAgentCount++
 		}
 	}
 
-	if hasSubAgent {
+	readRatio := float64(readCount) / total
+	writeRatio := float64(writeCount) / total
+	subAgentRatio := float64(subAgentCount) / total
+
+	if subAgentRatio > 0.3 {
 		return PatternSubAgent
 	}
-	if hasWrite && !hasRead {
-		return PatternWriteHeavy
-	}
-	if hasRead && !hasWrite {
+	if readRatio > 0.7 {
 		return PatternReadHeavy
 	}
-	if hasRead && hasWrite {
+	if writeRatio > 0.7 {
+		return PatternWriteHeavy
+	}
+	if readCount > 0 || writeCount > 0 {
 		return PatternMixed
 	}
 	return PatternConversation

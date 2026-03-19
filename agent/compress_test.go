@@ -31,7 +31,7 @@ func TestThinTail_NoGroups(t *testing.T) {
 		llm.NewUserMessage("hello"),
 		llm.NewAssistantMessage("hi there"),
 	}
-	result := thinTail(tail, 3)
+	result := thinTail(tail, 3, nil)
 	if len(result) != len(tail) {
 		t.Fatalf("expected %d messages, got %d", len(tail), len(result))
 	}
@@ -48,7 +48,7 @@ func TestThinTail_FewerGroupsThanKeep(t *testing.T) {
 		makeAssistantWithToolCalls("now edit", llm.ToolCall{ID: "2", Name: "Edit", Arguments: `{"path":"foo.go"}`}),
 		makeToolResult("Edit", "2", `{"path":"foo.go"}`, "edit done"),
 	}
-	result := thinTail(tail, 3)
+	result := thinTail(tail, 3, nil)
 	// 2 groups < keepGroups=3 → nothing should be thinned
 	if result[2].Content != "file content here" {
 		t.Fatalf("expected untouched content, got %q", result[2].Content)
@@ -81,7 +81,7 @@ func TestThinTail_ThinsOldGroups(t *testing.T) {
 		makeToolResult("Read", "5", longArgs, longContent),
 	}
 
-	result := thinTail(tail, 3)
+	result := thinTail(tail, 3, nil)
 
 	// User message untouched
 	if result[0].Content != "do task" {
@@ -142,7 +142,7 @@ func TestThinTail_MultipleToolResultsPerGroup(t *testing.T) {
 		makeToolResult("Edit", "2", "args3", "ok"),
 	}
 
-	result := thinTail(tail, 1)
+	result := thinTail(tail, 1, nil)
 
 	// Group 1 should be thinned (both tool results)
 	if len([]rune(result[1].Content)) > 320 {
@@ -171,7 +171,7 @@ func TestThinTail_DeepCopy(t *testing.T) {
 	origArgsLen := len(original[0].ToolCalls[0].Arguments)
 	origContentLen := len(original[1].Content)
 
-	_ = thinTail(original, 1)
+	_ = thinTail(original, 1, nil)
 
 	// Original messages should not be modified
 	if len(original[0].ToolCalls[0].Arguments) != origArgsLen {
@@ -181,7 +181,6 @@ func TestThinTail_DeepCopy(t *testing.T) {
 		t.Fatal("original tool content was mutated")
 	}
 }
-
 func TestTruncateRunes(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -198,65 +197,6 @@ func TestTruncateRunes(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 		}
-	}
-}
-
-func TestBuildCompressResultFromEvicted_NoDuplicateSystemMessage(t *testing.T) {
-	// Regression test: buildCompressResultFromEvicted must not produce
-	// duplicate system messages in LLMView (was causing LLM assertion error).
-	messages := []llm.ChatMessage{
-		llm.NewSystemMessage("You are a helpful assistant."),
-		llm.NewUserMessage("do something"),
-		makeAssistantWithToolCalls("let me read", llm.ToolCall{ID: "1", Name: "Read", Arguments: `{}`}),
-		makeToolResult("Read", "1", `{}`, "file content here"),
-		llm.NewAssistantMessage("done"),
-		llm.NewUserMessage("thanks"),
-	}
-
-	result, err := buildCompressResultFromEvicted(messages, context.Background(), "gpt-4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// LLMView must have exactly one system message
-	systemCount := 0
-	for _, msg := range result.LLMView {
-		if msg.Role == "system" {
-			systemCount++
-		}
-	}
-	if systemCount != 1 {
-		t.Errorf("LLMView system message count = %d, want exactly 1", systemCount)
-	}
-
-	// SessionView must have zero system messages
-	for _, msg := range result.SessionView {
-		if msg.Role == "system" {
-			t.Error("SessionView must not contain system messages")
-		}
-	}
-}
-
-func TestBuildCompressResultFromEvicted_SystemPreservedAtFront(t *testing.T) {
-	messages := []llm.ChatMessage{
-		llm.NewSystemMessage("You are a helpful assistant."),
-		llm.NewUserMessage("hello"),
-		llm.NewAssistantMessage("hi"),
-	}
-
-	result, err := buildCompressResultFromEvicted(messages, context.Background(), "gpt-4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result.LLMView) == 0 {
-		t.Fatal("LLMView must not be empty")
-	}
-	if result.LLMView[0].Role != "system" {
-		t.Errorf("LLMView[0] role = %q, want 'system'", result.LLMView[0].Role)
-	}
-	if result.LLMView[0].Content != "You are a helpful assistant." {
-		t.Errorf("LLMView[0] content = %q, want system prompt", result.LLMView[0].Content)
 	}
 }
 

@@ -576,3 +576,78 @@ func TestSandboxPathResolution(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertGoRE2ToERE(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"digit shorthand", `\d+`, `[0-9]+`},
+		{"word char with literal parens", `\w+\(\)`, `[a-zA-Z0-9_]+\(\)`},
+		{"inline case-insensitive flag", `(?i)hello`, `hello`},
+		{"space and word shorthand", `func\s+\w+`, "func[[:space:]]+[a-zA-Z0-9_]+"},
+		{"tab and newline escapes", `\t\n`, "\t\n"},
+		{"digit quantifier", `\d{2,4}`, `[0-9]{2,4}`},
+		{"named group", `(?P<name>\w+)`, `([a-zA-Z0-9_]+)`},
+		{"double backslash literal", `\\d`, `\\d`},
+		{"non-capturing group", `(?:hello)`, `(hello)`},
+		{"compound flags", `(?im)test`, `test`},
+		{"flag group with colon", `(?i:hello)`, `(hello)`},
+		{"word boundary preserved", `\bword\b`, `\bword\b`},
+		{"uppercase shortcuts", `\D\W\S`, `[^0-9][^a-zA-Z0-9_][^[:space:]]`},
+		{"braced quantifier exact", `\d{3}`, `[0-9]{3}`},
+		{"braced quantifier open", `\d{3,}`, `[0-9]{3,}`},
+		{"braced quantifier range", `\w{2,5}`, `[a-zA-Z0-9_]{2,5}`},
+		{"escaped backslash then word", `\\\w`, `\\[a-zA-Z0-9_]`},
+		{"no change plain text", `hello world`, `hello world`},
+		{"no change ere alternation", `foo|bar`, `foo|bar`},
+		{"no change ere quantifier", `a{2,4}`, `a{2,4}`},
+		{"escaped brace non-quantifier", `\{`, `\{`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := convertGoRE2ToERE(tt.input)
+			if err != nil {
+				t.Fatalf("convertGoRE2ToERE(%q) returned error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("convertGoRE2ToERE(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConvertGoRE2ToERE_Roundtrip(t *testing.T) {
+	// Verify that common Go RE2 patterns compile after conversion.
+	// We can't easily test grep -E here, but we can at least verify
+	// that the conversion doesn't produce obviously broken output
+	// by checking that simple cases round-trip correctly through
+	// Go's regexp (which accepts both RE2 and many ERE constructs).
+	patterns := []string{
+		`\d+`,
+		`\w+\(\)`,
+		`func\s+\w+`,
+		`\d{2,4}`,
+		`\bword\b`,
+		`(?P<name>\w+)`,
+	}
+
+	for _, pat := range patterns {
+		t.Run(pat, func(t *testing.T) {
+			ere, err := convertGoRE2ToERE(pat)
+			if err != nil {
+				t.Fatalf("conversion error: %v", err)
+			}
+			// The ERE output should also be a valid Go RE2 pattern
+			// (since RE2 is a superset of ERE in most practical cases).
+			// This is just a sanity check, not a guarantee of ERE correctness.
+			re, err := regexp.Compile(ere)
+			if err != nil {
+				t.Errorf("converted ERE pattern %q is not valid Go RE2: %v", ere, err)
+			}
+			_ = re // use re to avoid unused variable error
+		})
+	}
+}

@@ -29,6 +29,13 @@ import (
 // Returns compressed content or error. Used when embedding content exceeds model token limit.
 type ContentCompressor func(ctx context.Context, content string, maxTokens int) (string, error)
 
+// ContentCompressorFunc is a type alias for content compression functions.
+type ContentCompressorFunc func(ctx context.Context, content string, maxTokens int) (string, error)
+
+// llmContentCompressor is a package-level LLM-based content compressor.
+// It is initialized on startup if an LLM client is available.
+var llmContentCompressor ContentCompressorFunc
+
 // DefaultContentCompressor is a no-op compressor that just truncates.
 // Used when no LLM is available for compression.
 func DefaultContentCompressor(ctx context.Context, content string, maxTokens int) (string, error) {
@@ -109,6 +116,16 @@ func ensureContentFits(ctx context.Context, cfg embeddingLimitConfig, content st
 		"token_count":  tokenCount,
 		"max_tokens":   cfg.maxTokens,
 	}).Warn("Content exceeds embedding model token limit, compressing")
+
+	// 优先使用 LLM Content Compressor 做语义压缩
+	if llmContentCompressor != nil {
+		compressed, err := llmContentCompressor(ctx, content, cfg.maxTokens)
+		if err == nil {
+			return compressed, nil
+		}
+		// LLM compressor 失败则 fallback 到暴力截断（尽量保留一些内容）
+		log.Warnf("LLM content compression failed, falling back to default: %v", err)
+	}
 
 	compressed, err := cfg.compressor(ctx, content, cfg.maxTokens)
 	if err != nil {

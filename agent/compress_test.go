@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -197,5 +198,64 @@ func TestTruncateRunes(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 		}
+	}
+}
+
+func TestBuildCompressResultFromEvicted_NoDuplicateSystemMessage(t *testing.T) {
+	// Regression test: buildCompressResultFromEvicted must not produce
+	// duplicate system messages in LLMView (was causing LLM assertion error).
+	messages := []llm.ChatMessage{
+		llm.NewSystemMessage("You are a helpful assistant."),
+		llm.NewUserMessage("do something"),
+		makeAssistantWithToolCalls("let me read", llm.ToolCall{ID: "1", Name: "Read", Arguments: `{}`}),
+		makeToolResult("Read", "1", `{}`, "file content here"),
+		llm.NewAssistantMessage("done"),
+		llm.NewUserMessage("thanks"),
+	}
+
+	result, err := buildCompressResultFromEvicted(messages, context.Background(), "gpt-4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// LLMView must have exactly one system message
+	systemCount := 0
+	for _, msg := range result.LLMView {
+		if msg.Role == "system" {
+			systemCount++
+		}
+	}
+	if systemCount != 1 {
+		t.Errorf("LLMView system message count = %d, want exactly 1", systemCount)
+	}
+
+	// SessionView must have zero system messages
+	for _, msg := range result.SessionView {
+		if msg.Role == "system" {
+			t.Error("SessionView must not contain system messages")
+		}
+	}
+}
+
+func TestBuildCompressResultFromEvicted_SystemPreservedAtFront(t *testing.T) {
+	messages := []llm.ChatMessage{
+		llm.NewSystemMessage("You are a helpful assistant."),
+		llm.NewUserMessage("hello"),
+		llm.NewAssistantMessage("hi"),
+	}
+
+	result, err := buildCompressResultFromEvicted(messages, context.Background(), "gpt-4")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.LLMView) == 0 {
+		t.Fatal("LLMView must not be empty")
+	}
+	if result.LLMView[0].Role != "system" {
+		t.Errorf("LLMView[0] role = %q, want 'system'", result.LLMView[0].Role)
+	}
+	if result.LLMView[0].Content != "You are a helpful assistant." {
+		t.Errorf("LLMView[0] content = %q, want system prompt", result.LLMView[0].Content)
 	}
 }

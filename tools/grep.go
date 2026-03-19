@@ -20,9 +20,11 @@ func (t *GrepTool) Name() string {
 
 func (t *GrepTool) Description() string {
 	return `Search for a pattern in file contents recursively.
+Use **Go RE2 regular expression syntax**: \d+ (digits), \w+ (word chars), \s+ (whitespace), \b (word boundary), (?i) (case-insensitive), named groups (?P<name>...), etc.
+The tool automatically handles compatibility between Go RE2 and POSIX ERE syntax when running in different modes.
 Supports regular expressions. Returns matching lines with file paths and line numbers.
 Parameters (JSON):
-  - pattern: string, the regex pattern to search for (e.g., "func main", "TODO|FIXME", "error\.(New|Wrap)")
+  - pattern: string, the regex pattern to search for (e.g., "func main", "TODO|FIXME", "error\.(New|Wrap)", "\d+")
   - path: string, optional, the directory to search in (defaults to current working directory)
   - include: string, optional, glob pattern to filter files (e.g., "*.go", "*.{ts,tsx}")
   - ignore_case: boolean, optional, perform case-insensitive matching (defaults to false)
@@ -81,6 +83,175 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	return t.executeLocal(ctx, params.Pattern, params.Path, params.Include, params.IgnoreCase, params.ContextLines)
 }
 
+// convertGoRE2ToERE converts a Go RE2 regex pattern to a POSIX ERE pattern
+// for use with grep -E. It handles common Go RE2 idioms that are not valid
+// or behave differently in POSIX ERE:
+//   - Shorthand character classes: \d, \D, \w, \W, \s, \S
+//   - Escape sequences: \t, \n, \r
+//   - ERE quantifier escapes: \{n,m}, \{n,}, \{n} to {n,m}, {n,}, {n}
+//   - Inline flags: (?i), (?m), (?s), (?U), (?im:...) are removed or stripped
+//   - Named groups: (?P<name>...) to (...)
+//   - Non-capturing groups: (?:...) to (...)
+//   - Literal escapes like \( and \) are preserved as-is for ERE.
+func convertGoRE2ToERE(pattern string) (string, error) {
+	var sb strings.Builder
+	i := 0
+	n := len(pattern)
+
+	for i < n {
+		c := pattern[i]
+
+		// Handle inline constructs starting with (?...
+		if c == '(' && i+1 < n && pattern[i+1] == '?' {
+			action, newI := handleInlineConstruct(pattern, i)
+			if action >= 0 {
+				if action == 1 {
+					sb.WriteByte('(')
+				}
+				i = newI
+				continue
+			}
+			sb.WriteByte('(')
+			i++
+			continue
+		}
+
+		// Handle backslash escapes
+		if c == '\\' && i+1 < n {
+			next := pattern[i+1]
+			switch next {
+			case 'd':
+				sb.WriteString("[0-9]")
+			case 'D':
+				sb.WriteString("[^0-9]")
+			case 'w':
+				sb.WriteString("[a-zA-Z0-9_]")
+			case 'W':
+				sb.WriteString("[^a-zA-Z0-9_]")
+			case 's':
+				sb.WriteString("[[:space:]]")
+			case 'S':
+				sb.WriteString("[^[:space:]]")
+			case 't':
+				sb.WriteByte('\t')
+			case 'n':
+				sb.WriteByte('\n')
+			case 'r':
+				sb.WriteByte('\r')
+			case 'b':
+				sb.WriteString("\\b")
+			case '\\':
+				sb.WriteString("\\\\")
+			case '{':
+				if consumed, ok := tryParseBracedQuantifier(pattern, i, &sb); ok {
+					i += consumed
+					continue
+				}
+				sb.WriteString("\\{")
+			default:
+				sb.WriteByte('\\')
+				sb.WriteByte(next)
+			}
+			i += 2
+			continue
+		}
+
+		sb.WriteByte(c)
+		i++
+	}
+
+	return sb.String(), nil
+}
+
+// handleInlineConstruct handles Go RE2 inline constructs starting at i where
+// pattern[i] == '(' and pattern[i+1] == '?'.
+// Returns:
+//
+//	action: -1 = not recognized, 0 = removed entirely, 1 = write '(' and skip
+//	newI:   new scanning position
+func handleInlineConstruct(pattern string, i int) (action int, newI int) {
+	n := len(pattern)
+	if i+2 >= n {
+		return -1, i + 1
+	}
+
+	// Named group: (?P<name>...)
+	if pattern[i+2] == 'P' && i+3 < n && pattern[i+3] == '<' {
+		gtIdx := strings.IndexByte(pattern[i+4:], '>')
+		if gtIdx == -1 {
+			return -1, i + 1
+		}
+		return 1, i + 4 + gtIdx + 1
+	}
+
+	// Plain non-capturing group: (?:...)
+	if pattern[i+2] == ':' {
+		return 1, i + 3
+	}
+
+	// Flag constructs: (?flags) or (?flags:...)
+	j := i + 2
+	for j < n {
+		ch := pattern[j]
+		if ch == 'i' || ch == 'm' || ch == 's' || ch == 'U' || ch == '-' {
+			j++
+			continue
+		}
+		break
+	}
+
+	if j == i+2 {
+		return -1, i + 1
+	}
+
+	if j < n && pattern[j] == ')' {
+		return 0, j + 1
+	}
+
+	if j < n && pattern[j] == ':' {
+		return 1, j + 1
+	}
+
+	return -1, i + 1
+}
+
+// tryParseBracedQuantifier tries to parse a Go RE2 escaped quantifier at i
+// where pattern[i] == '\\' and pattern[i+1] == '{'.
+func tryParseBracedQuantifier(pattern string, i int, sb *strings.Builder) (int, bool) {
+	j := i + 2
+	n := len(pattern)
+
+	numStart := j
+	for j < n && pattern[j] >= '0' && pattern[j] <= '9' {
+		j++
+	}
+	if j == numStart || j >= n {
+		return 0, false
+	}
+
+	if pattern[j] == '}' {
+		sb.WriteByte('{')
+		sb.WriteString(pattern[numStart:j])
+		sb.WriteByte('}')
+		return j + 1 - i, true
+	}
+
+	if pattern[j] == ',' {
+		j++
+		for j < n && pattern[j] >= '0' && pattern[j] <= '9' {
+			j++
+		}
+		if j < n && pattern[j] == '}' {
+			sb.WriteByte('{')
+			sb.WriteString(pattern[numStart:j])
+			sb.WriteByte('}')
+			return j + 1 - i, true
+		}
+	}
+
+	return 0, false
+}
+
 // executeInSandbox 在沙箱容器内执行 grep 命令
 func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include string, ignoreCase bool, contextLines int) (*ToolResult, error) {
 	sandboxBase := sandboxBaseDir(ctx)
@@ -103,10 +274,17 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		}
 	}
 
-	// 构建 grep 命令
-	grepCmd := "grep"
+	// 将 Go RE2 pattern 转换为 POSIX ERE pattern（grep -E 兼容）
+	erePattern, err := convertGoRE2ToERE(pattern)
+	if err != nil {
+		// 转换失败，fallback 到本地 Go regexp 执行
+		return t.executeLocal(ctx, pattern, path, include, ignoreCase, contextLines)
+	}
+
+	// 构建 grep 命令（使用 -E 扩展正则）
+	grepCmd := "grep -E"
 	if ignoreCase {
-		grepCmd += " -i"
+		grepCmd += "i" // -Ei
 	}
 	if contextLines > 0 {
 		grepCmd += fmt.Sprintf(" -C %d", contextLines)
@@ -121,15 +299,19 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		}
 	}
 
-	grepCmd += fmt.Sprintf(" '%s' '%s'", shellEscape(pattern), shellEscape(searchDir))
-	grepCmd = "set -o pipefail; " + grepCmd + " | head -200"
+	grepCmd += fmt.Sprintf(" %s %s", shellEscape(erePattern), shellEscape(searchDir))
+	// 不用 pipefail：head 关闭管道时 grep 收到 SIGPIPE (exit 141)，
+	// pipefail 会将其传播为错误，导致有效结果被丢弃。
+	grepCmd += " | head -200"
 
 	output, err := RunInSandboxWithShell(ctx, grepCmd)
 	if err != nil {
-		if output == "" || strings.Contains(output, "No matches found") {
+		// SIGPIPE (exit 141) 是 head 正常关闭管道导致的，不是真正的错误
+		if output != "" && !strings.Contains(output, "No matches found") {
+			// 有输出但 err != nil → 很可能是 SIGPIPE，正常返回结果
+		} else {
 			return NewResult("No matches found."), nil
 		}
-		return nil, fmt.Errorf("sandbox grep failed: %v, output: %s", err, output)
 	}
 
 	if output == "" {

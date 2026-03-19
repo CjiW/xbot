@@ -703,13 +703,13 @@ func compressMessagesWithFingerprint(ctx context.Context, messages []llm.ChatMes
 		if len(fp.Errors) > 0 {
 			fpSection.WriteString("Errors (MUST preserve ALL):\n")
 			for _, e := range fp.Errors {
-				fpSection.WriteString(fmt.Sprintf("  @error:%s\n", truncateRunes(e, 150)))
+				fmt.Fprintf(&fpSection, "  @error:%s\n", truncateRunes(e, 150))
 			}
 		}
 		if len(fp.Decisions) > 0 {
 			fpSection.WriteString("Decisions:\n")
 			for _, d := range fp.Decisions {
-				fpSection.WriteString(fmt.Sprintf("  @decision:%s\n", truncateRunes(d, 150)))
+				fmt.Fprintf(&fpSection, "  @decision:%s\n", truncateRunes(d, 150))
 			}
 		}
 	}

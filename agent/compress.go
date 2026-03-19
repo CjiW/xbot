@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"xbot/bus"
@@ -16,6 +17,39 @@ type CompressResult struct {
 	LLMView     []llm.ChatMessage // 含 tool 消息，继续当前 Run()
 	SessionView []llm.ChatMessage // 纯 user/assistant，持久化到 session
 }
+
+// structuredCompressionPrompt 结构化压缩提示词，引导 LLM 使用标记化输出。
+const structuredCompressionPrompt = `You are a context compression expert. Your task is to compress the conversation history into a concise summary while retaining ALL important information.
+
+## Compression Rules
+1. Retain ALL key facts, decisions, and important details
+2. Keep track of what the user has asked for and what has been done
+3. Preserve any file paths, code snippets, or technical details
+4. Maintain the logical flow and context of the conversation
+5. CRITICAL: MUST preserve ALL @error: items — errors are essential for debugging continuity
+6. If the conversation contains 📂 [offload:...] markers, preserve the marker text as-is (it references disk-stored data)
+7. If the conversation involves multiple topics, use ## Topic: headers to separate them
+
+## OUTPUT FORMAT
+Use these structured markers to tag key information:
+@file:{path} — File references
+@func:{name} — Function signatures
+@type:{name} — Type definitions
+@error:{description} — Errors encountered (MUST preserve ALL of these)
+@decision:{description} — Decisions made
+@todo:{description} — Pending tasks
+@config:{key=value} — Config changes
+
+## Topic Separation
+When the conversation covers multiple distinct topics, use section headers:
+## Topic: {topic name}
+...content for this topic...
+
+## Important
+- This is NOT a summary — it's a compressed version that preserves context
+- Include specific details like file names, function names, variable names
+- Note what tools were used and their results if relevant
+- Never drop error information or pending decisions`
 
 // extractDialogueFromTail 从含 tool 消息的尾部提取纯对话视图。
 // 每个 tool group 的摘要融入 assistant 消息。
@@ -43,8 +77,13 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 			result = append(result, llm.NewAssistantMessage(msg.Content))
 
 		case msg.Role == "tool":
-			toolContent := truncateRunes(msg.Content, 200)
-			fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
+			if strings.HasPrefix(msg.Content, "📂 [offload:") {
+				// 保留 offload 摘要完整，不截断
+				pendingToolSummary.WriteString(msg.Content + "\n")
+			} else {
+				toolContent := truncateRunes(msg.Content, 200)
+				fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
+			}
 		}
 	}
 	flushPending(&result, &pendingToolSummary)
@@ -164,6 +203,285 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: fmt.Sprintf("上下文压缩完成 (内存): %d → %d tokens (LLM %d 条, Session %d 条)", tokenCount, newTokenCount, len(result.LLMView), len(result.SessionView)),
+	}, nil
+}
+
+// ----------------------------------------------------------------
+// Information density eviction (Phase 2)
+// ----------------------------------------------------------------
+
+// DensityScore 信息密度评分结果
+type DensityScore struct {
+	Score float64
+	Index int // 在 messages 切片中的索引
+}
+
+// defaultDensityScorer 默认信息密度评分。
+// 分数越高 = 越重要，越不应被驱逐。
+func defaultDensityScorer(msg llm.ChatMessage) float64 {
+	score := 0.0
+	content := msg.Content
+
+	// Offload 标记消息：已是摘要，不再驱逐（保留引用标记供 offload_recall 使用）
+	if strings.HasPrefix(content, "📂 [offload:") {
+		return 1.0 // 中性分数，不会被优先驱逐
+	}
+
+	// 高密度信号（重要信息）
+	if containsErrorPattern(content) {
+		score += 3.0
+	}
+	if containsDecisionPattern(content) {
+		score += 2.5
+	}
+	if len(extractFilePaths(content)) > 0 {
+		score += 1.0
+	}
+	if len([]rune(content)) < 500 {
+		score += 1.5 // 短消息信息密度高
+	}
+
+	// Low-density signal penalties
+	if isLargeCodeDump(content) {
+		score -= 3.0 // raised from -2.0: large code dump is the strongest eviction signal
+	}
+	if isRepetitiveGrepResult(content) {
+		score -= 1.5
+	}
+	if msg.Role == "tool" && len([]rune(content)) > 3000 {
+		score -= 2.5 // raised from -2.0: large content without value signals = prime eviction target
+	}
+	if msg.Role == "tool" && len([]rune(content)) > 1000 && !containsErrorPattern(content) && !containsDecisionPattern(content) {
+		score -= 1.0 // medium-length content without value signals
+	}
+
+	return score
+}
+
+// containsErrorPattern 检测 error/panic/failed 等错误关键词。
+func containsErrorPattern(text string) bool {
+	lower := strings.ToLower(text)
+	patterns := []string{"error", "panic", "failed", "failure", "fatal", "exception"}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsDecisionPattern 检测 decided to/chose/will use 等决策关键词。
+func containsDecisionPattern(text string) bool {
+	lower := strings.ToLower(text)
+	patterns := []string{"decided to", "chose to", "will use", "going to use", "agreed to", "plan to"}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLargeCodeDump 检测大代码块（超过 2000 字符且含 3 个以上连续的函数定义/代码行）。
+func isLargeCodeDump(text string) bool {
+	if len([]rune(text)) <= 2000 {
+		return false
+	}
+	// 统计函数定义模式
+	funcPatterns := []string{"func ", "function ", "def ", "fn "}
+	count := 0
+	for _, p := range funcPatterns {
+		count += strings.Count(text, p)
+	}
+	return count >= 3
+}
+
+// isRepetitiveGrepResult 检测重复性 grep 结果（很多匹配行但信息密度低）。
+func isRepetitiveGrepResult(text string) bool {
+	lines := strings.Split(text, "\n")
+	if len(lines) < 15 {
+		return false
+	}
+	// grep 结果格式：file:line: content
+	matchCount := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 3)
+		if len(parts) >= 3 {
+			matchCount++
+		}
+	}
+	// 超过 15 行匹配且占比 > 60% 视为重复 grep
+	totalNonEmpty := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			totalNonEmpty++
+		}
+	}
+	if totalNonEmpty == 0 {
+		return false
+	}
+	return matchCount >= 15 && float64(matchCount)/float64(totalNonEmpty) > 0.6
+}
+
+// evictToolGroup 一个工具组的边界 [start, end]。
+type evictToolGroup struct {
+	start, end int
+}
+
+// evictByDensity 按信息密度驱逐旧 tool result。
+// 保留尾部 keepGroups 组完整，对剩余 tool 消息按密度评分从低到高驱逐。
+// 仅替换 tool result 的 Content，保留 assistant(tool_calls) 消息结构（API 兼容）。
+func evictByDensity(messages []llm.ChatMessage, keepGroups int, targetTokens int, model string) []llm.ChatMessage {
+	if keepGroups < 0 {
+		keepGroups = 0
+	}
+
+	// 1. 识别工具组（复用 thinTail 的组识别逻辑）
+	var groups []evictToolGroup
+	for i := range messages {
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			g := evictToolGroup{start: i, end: i}
+			for j := i + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
+				g.end = j
+			}
+			groups = append(groups, g)
+		}
+	}
+
+	// 2. 保留尾部 keepGroups 组完整
+	totalGroups := len(groups)
+	if totalGroups <= keepGroups {
+		return messages
+	}
+	thinCount := totalGroups - keepGroups
+
+	// 3. 对可驱逐组的 tool 消息按密度评分排序（从低到高）
+	type evictableTool struct {
+		score    float64
+		msgIndex int
+	}
+	var candidates []evictableTool
+	for g := 0; g < thinCount; g++ {
+		grp := groups[g]
+		for j := grp.start; j <= grp.end; j++ {
+			if messages[j].Role == "tool" {
+				// 跳过 offload 标记消息
+				if strings.HasPrefix(messages[j].Content, "📂 [offload:") {
+					continue
+				}
+				candidates = append(candidates, evictableTool{
+					score:    defaultDensityScorer(messages[j]),
+					msgIndex: j,
+				})
+			}
+		}
+	}
+
+	// 按分数从低到高排序（低分 = 先驱逐）
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score < candidates[j].score
+	})
+
+	// 4. 从低密度开始驱逐，直到 targetTokens 以下或无可驱逐的消息
+	// 先做浅拷贝
+	result := make([]llm.ChatMessage, len(messages))
+	copy(result, messages)
+
+	currentTokens, _ := llm.CountMessagesTokens(result, model)
+	for _, cand := range candidates {
+		if currentTokens <= targetTokens {
+			break
+		}
+		msg := result[cand.msgIndex]
+		// 计算驱逐此消息可节省的 tokens
+		msgTokens, _ := llm.CountMessagesTokens([]llm.ChatMessage{msg}, model)
+		if msgTokens <= 0 {
+			continue
+		}
+		// 替换 tool result 的 Content
+		argsPreview := truncateRunes(msg.ToolArguments, 80)
+		evictedContent := fmt.Sprintf("[evicted] %s(%s) — %d tokens evicted", msg.ToolName, argsPreview, msgTokens)
+		msg.Content = evictedContent
+		result[cand.msgIndex] = msg
+		currentTokens -= msgTokens
+		// 加上 eviction marker 的 token 数（远小于原内容）
+		markerTokens, _ := llm.CountMessagesTokens([]llm.ChatMessage{msg}, model)
+		currentTokens += markerTokens
+	}
+
+	return result
+}
+
+// buildCompressResultFromEvicted 从 evict 后的消息构建 CompressResult。
+// 类似 compressMessages 的构建逻辑：分离 system/tail/compressed。
+func buildCompressResultFromEvicted(messages []llm.ChatMessage, ctx context.Context, model string) (*CompressResult, error) {
+	// 1. 找 tailStart（同 compressMessages 逻辑）
+	tailStart := len(messages) // 默认不保留任何尾部消息
+	for i := len(messages) - 1; i >= 1; i-- {
+		msg := messages[i]
+		if msg.Role == "user" {
+			tailStart = i
+			break
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			tailStart = i
+			break
+		}
+		if i == 1 {
+			tailStart = 1
+		}
+	}
+
+	// 2. 分离 system 消息和 tail
+	var systemMsgs []llm.ChatMessage
+	for i, msg := range messages {
+		if i >= tailStart {
+			break
+		}
+		if msg.Role == "system" {
+			systemMsgs = append(systemMsgs, msg)
+		}
+	}
+
+	// 3. LLMView = system + evicted messages（全部）
+	llmView := make([]llm.ChatMessage, 0, len(messages))
+	llmView = append(llmView, systemMsgs...)
+	llmView = append(llmView, messages...)
+
+	// 4. SessionView = extractDialogueFromTail(tail part)
+	var tailPart []llm.ChatMessage
+	if tailStart < len(messages) {
+		tailPart = messages[tailStart:]
+	}
+	tailSummary := extractDialogueFromTail(tailPart)
+
+	// 5. 如果有非 tail 非 system 的消息，将 evicted 后的前半部分作为压缩摘要
+	var sessionView []llm.ChatMessage
+	if tailStart > 0 {
+		// 从 evicted 的前半部分提取对话摘要
+		evictedPart := make([]llm.ChatMessage, 0)
+		for i, msg := range messages {
+			if i >= tailStart {
+				break
+			}
+			if msg.Role != "system" {
+				evictedPart = append(evictedPart, msg)
+			}
+		}
+		if len(evictedPart) > 0 {
+			evictedSummary := extractDialogueFromTail(evictedPart)
+			sessionView = append(sessionView, evictedSummary...)
+		}
+	}
+	sessionView = append(sessionView, tailSummary...)
+
+	return &CompressResult{
+		LLMView:     llmView,
+		SessionView: sessionView,
 	}, nil
 }
 
@@ -310,19 +628,7 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
 	}
 
-	compressionPrompt := `You are a context compression expert. Your task is to compress the conversation history into a concise summary while retaining ALL important information.
-
-## Compression Rules
-1. Retain ALL key facts, decisions, and important details
-2. Keep track of what the user has asked for and what has been done
-3. Preserve any file paths, code snippets, or technical details
-4. Maintain the logical flow and context of the conversation
-5. Note any errors or issues that were encountered
-
-## Important
-- This is NOT a summary - it's a compressed version that preserves context
-- Include specific details like file names, function names, variable names
-- Note what tools were used and their results if relevant
+	compressionPrompt := structuredCompressionPrompt + `
 
 ## Conversation History (to compress)
 ` + historyText.String() + `

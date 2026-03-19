@@ -236,6 +236,16 @@ type Agent struct {
 
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
+
+	// Phase 2: 智能触发状态（按 sessionKey 索引）
+	triggerProviders sync.Map // map[string]*TriggerInfoProvider
+
+	// OffloadStore manages large tool result offload to disk (Phase 2: Layer 1)
+	offloadStore *OffloadStore
+
+	// TopicDetector for topic partition isolation (Phase 2.5, disabled by default)
+	topicDetector        *TopicDetector
+	enableTopicIsolation bool
 }
 
 func buildToolMessageContent(result *tools.ToolResult) string {
@@ -287,6 +297,11 @@ type Config struct {
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
+
+	// 话题分区隔离（Phase 2.5，默认关闭）
+	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
+	TopicMinSegmentSize      int     `json:"topic_min_segment_size"`     // 最小话题片段大小（默认 3）
+	TopicSimilarityThreshold float64 `json:"topic_similarity_threshold"` // 话题相似度阈值（默认 0.3）
 }
 
 // New 创建 Agent
@@ -436,6 +451,19 @@ func New(cfg Config) *Agent {
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
 		),
+
+		// Topic partition isolation (Phase 2.5, disabled by default)
+		enableTopicIsolation: cfg.EnableTopicIsolation,
+		topicDetector: func() *TopicDetector {
+			d := NewTopicDetector()
+			if cfg.TopicMinSegmentSize > 0 {
+				d.MinSegmentSize = cfg.TopicMinSegmentSize
+			}
+			if cfg.TopicSimilarityThreshold > 0 {
+				d.CosineThreshold = cfg.TopicSimilarityThreshold
+			}
+			return &d
+		}(),
 	}
 
 	// 初始化指令注册表
@@ -472,6 +500,22 @@ func New(cfg Config) *Agent {
 	}
 	agent.contextManager = NewContextManager(agent.contextManagerConfig)
 
+	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
+	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	agent.offloadStore = NewOffloadStore(OffloadConfig{
+		StoreDir:        offloadDir,
+		MaxResultTokens: 2000,
+		MaxResultBytes:  10240,
+		CleanupAgeDays:  7,
+	})
+	agent.offloadStore.CleanStale()
+
+	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
+	if agent.offloadStore != nil {
+		recallTool := &tools.OffloadRecallTool{Store: agent.offloadStore}
+		registry.RegisterCore(recallTool)
+	}
+
 	return agent
 }
 
@@ -500,6 +544,16 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 // Callers can use this to add/remove hooks at runtime.
 func (a *Agent) ToolHookChain() *tools.HookChain {
 	return a.hookChain
+}
+
+// getTriggerProvider 获取或创建指定 session 的 TriggerInfoProvider。
+func (a *Agent) getTriggerProvider(sessionKey string) *TriggerInfoProvider {
+	if v, ok := a.triggerProviders.Load(sessionKey); ok {
+		return v.(*TriggerInfoProvider)
+	}
+	provider := NewTriggerInfoProvider()
+	actual, _ := a.triggerProviders.LoadOrStore(sessionKey, provider)
+	return actual.(*TriggerInfoProvider)
 }
 
 // GetCardBuilder returns the CardBuilder for card callback handling.

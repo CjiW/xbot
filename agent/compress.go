@@ -446,11 +446,16 @@ func buildCompressResultFromEvicted(messages []llm.ChatMessage, ctx context.Cont
 			systemMsgs = append(systemMsgs, msg)
 		}
 	}
-
-	// 3. LLMView = system + evicted messages（全部）
+	// 3. LLMView = system + non-system evicted messages（全部）
+	//    BUG FIX: 原代码直接 append(messages...) 导致 system 消息重复
+	//    （messages 本身包含 system 消息，已单独提取到 systemMsgs 中）
 	llmView := make([]llm.ChatMessage, 0, len(messages))
 	llmView = append(llmView, systemMsgs...)
-	llmView = append(llmView, messages...)
+	for _, msg := range messages {
+		if msg.Role != "system" {
+			llmView = append(llmView, msg)
+		}
+	}
 
 	// 4. SessionView = extractDialogueFromTail(tail part)
 	var tailPart []llm.ChatMessage

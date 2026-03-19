@@ -103,7 +103,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}
 
 	// 检查是否需要压缩（计数失败时也执行，用户明确要求压缩）
-	threshold := int(float64(a.maxContextTokens) * a.compressionThreshold)
+	threshold := int(float64(a.contextManagerConfig.MaxContextTokens) * a.contextManagerConfig.CompressionThreshold)
 	if err == nil && tokenCount < threshold {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -115,8 +115,8 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	// 发送压缩开始进度
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
-	// 执行压缩
-	result, err := a.compressContext(ctx, messages, llmClient, model)
+	// 执行压缩（通过 ContextManager，保证 /compress 始终可用）
+	result, err := a.GetContextManager().ManualCompress(ctx, messages, llmClient, model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -232,12 +232,12 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "...[truncated]"
 }
 
-// compressContext 使用 LLM 压缩对话历史（Claude 风格）
-// 核心原则：
-// 1. 保留所有 tool 消息（tool_calls 和 tool result 必须配对，否则 API 报错）
-// 2. 把压缩后的摘要作为 user prompt 直接调用 LLM
-// 3. 保留 system 消息和最近的对话轮次
-func (a *Agent) compressContext(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
+// compressMessages 使用 LLM 压缩对话历史（独立函数，不依赖 Agent receiver）。
+// 逻辑与现有 compressContext() 完全一致，仅为消除 phase1Manager 对 *Agent 的引用。
+// 现有 compressContext() 改为调用此函数：
+//
+//	func (a *Agent) compressContext(...) { return compressMessages(...) }
+func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
 	// 第一步：找到尾部安全切割点
 	tailStart := len(messages) // 默认不保留任何尾部消息
 	for i := len(messages) - 1; i >= 1; i-- {

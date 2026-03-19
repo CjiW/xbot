@@ -66,7 +66,8 @@ func (c *helpCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (
 			"/models — 列出当前 API 可用模型\n" +
 			"/set-model <model> — 设置当前使用的模型\n" +
 			"/compress — 手动触发上下文压缩\n" +
-			"/context — 查看当前 token 数和组成\n" +
+			"/context info — 查看 token 统计\n" +
+			"/context mode — 查看/切换压缩模式\n" +
 			"/cancel — 取消当前正在处理的请求\n" +
 			"!<command> — 快捷执行命令（跳过 LLM，直接在 sandbox 中运行）",
 	}, nil
@@ -151,21 +152,42 @@ func (c *compressCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMess
 	return a.handleCompress(ctx, msg, tenantSession)
 }
 
-// --- /context ---
+// --- /context info --- (read-only, concurrent)
 
-type contextCmd struct{}
+type contextInfoCmd struct{}
 
-func (c *contextCmd) Name() string        { return "/context" }
-func (c *contextCmd) Aliases() []string   { return nil }
-func (c *contextCmd) Match(s string) bool { return strings.ToLower(s) == "/context" }
-func (c *contextCmd) Concurrent() bool    { return true }
+func (c *contextInfoCmd) Name() string      { return "/context" }
+func (c *contextInfoCmd) Aliases() []string { return nil }
+func (c *contextInfoCmd) Match(s string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(s))
+	return trimmed == "/context" || trimmed == "/context info"
+}
+func (c *contextInfoCmd) Concurrent() bool { return true } // read-only
 
-func (c *contextCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+func (c *contextInfoCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
 	if err != nil {
 		return nil, err
 	}
-	return a.handleContext(ctx, msg, tenantSession)
+	return a.handleContextInfo(ctx, msg, tenantSession)
+}
+
+// --- /context mode --- (stateful, NOT concurrent)
+
+type contextModeCmd struct{}
+
+func (c *contextModeCmd) Name() string      { return "/context mode" }
+func (c *contextModeCmd) Aliases() []string { return nil }
+func (c *contextModeCmd) Match(s string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(s))
+	return strings.HasPrefix(trimmed, "/context mode")
+}
+func (c *contextModeCmd) Concurrent() bool { return false } // mutates runtime mode
+
+func (c *contextModeCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	content := strings.TrimSpace(msg.Content)
+	modeStr := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(content), "/context mode"))
+	return a.handleContextMode(ctx, msg, modeStr)
 }
 
 // --- /models ---
@@ -224,7 +246,8 @@ func registerBuiltinCommands(r *CommandRegistry) {
 	r.Register(&unsetLLMCmd{})
 	r.Register(&getLLMCmd{})
 	r.Register(&compressCmd{})
-	r.Register(&contextCmd{})
+	r.Register(&contextModeCmd{})  // 先注册（更精确的匹配优先）
+	r.Register(&contextInfoCmd{})  // 后注册（更宽泛的匹配）
 	r.Register(&modelsCmd{})
 	r.Register(&setModelCmd{})
 	r.Register(&bangCmd{})

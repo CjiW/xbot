@@ -103,9 +103,10 @@ type AgentConfig struct {
 	SessionCacheTimeout  time.Duration // 会话缓存超时（默认 24 小时）
 
 	// 上下文压缩配置
-	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true）
-	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
-	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.8，即 80% 时触发）
+	ContextMode           string // 上下文管理模式（空则由 EnableAutoCompress 决定）
+	EnableAutoCompress   bool   // 是否启用自动上下文压缩（默认 true）
+	MaxContextTokens     int    // 最大上下文 token 数（默认 100000）
+	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7，即 70% 时触发）
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
@@ -205,7 +206,8 @@ func Load() *Config {
 			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
 			EnableAutoCompress:   getEnvBoolOrDefault("AGENT_ENABLE_AUTO_COMPRESS", true),
 			MaxContextTokens:     getEnvIntOrDefault("AGENT_MAX_CONTEXT_TOKENS", 100000),
-			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.8),
+			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
+			ContextMode:          getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
 			MaxSubAgentDepth:     getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
 		},
 		OAuth: OAuthConfig{

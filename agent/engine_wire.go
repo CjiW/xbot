@@ -30,11 +30,7 @@ func (a *Agent) buildMainRunConfig(
 	sessionKey := channel + ":" + chatID
 
 	// 获取用户特定的 LLM 客户端
-	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
-	maxContextTokens := a.maxContextTokens
-	if userMaxCtx > 0 {
-		maxContextTokens = userMaxCtx
-	}
+	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
 
 	cfg := RunConfig{
 		// 必需
@@ -105,14 +101,8 @@ func (a *Agent) buildMainRunConfig(
 		}
 	}
 
-	// 自动压缩
-	if a.enableAutoCompress {
-		cfg.AutoCompress = &CompressConfig{
-			MaxContextTokens:     maxContextTokens,
-			CompressionThreshold: a.compressionThreshold,
-			CompressFunc:         a.compressContext,
-		}
-	}
+	// 注入 ContextManager
+	cfg.ContextManager = a.GetContextManager()
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -355,14 +345,8 @@ func (a *Agent) buildSubAgentRunConfig(
 				messages[0].Content += "\n\n" + recallText
 			}
 
-			// 启用上下文压缩（与主 Agent 相同配置，但无进度通知）
-			if a.enableAutoCompress {
-				cfg.AutoCompress = &CompressConfig{
-					MaxContextTokens:     a.maxContextTokens,
-					CompressionThreshold: a.compressionThreshold,
-					CompressFunc:         a.compressContext,
-				}
-			}
+			// 注入 ContextManager（SubAgent 共享主 Agent 的 ContextManager）
+			cfg.ContextManager = a.GetContextManager()
 		}
 	} else {
 		// 无 memory 能力时，移除记忆工具，避免 SubAgent 尝试调用后失败

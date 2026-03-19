@@ -252,8 +252,8 @@ func containsSemanticMatch(text, target string) bool {
 // 匹配：/absolute/path, ./relative/path, ../parent/path, 文件名.ext（至少含一个 / 或 .ext）
 var filePathRe = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|[./~][\w./~-]*|/\S+?\.\w{1,10})(?:\s|[),;:}"'\n]|$)`)
 
-
 var funcSigRe = regexp.MustCompile(`func\s+(\w+)`)
+
 func extractFilePaths(text string) []string {
 	matches := filePathRe.FindAllString(text, -1)
 	var result []string

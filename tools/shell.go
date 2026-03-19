@@ -132,6 +132,15 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	// 使用平台特定的进程属性设置
 	setProcessAttrs(cmd)
 
+	// 设置 Cancel 回调：context 超时/取消时 kill 整个进程组（而非仅主进程）
+	// 默认 exec.CommandContext 只 kill 主进程，在 docker exec / Setpgid 场景下子进程会残留导致 Wait 卡住
+	cmd.Cancel = func() error {
+		killProcess(cmd)
+		return nil
+	}
+	// WaitDelay：Cancel 后最多等 5 秒让 I/O drain，然后强制关闭 pipe 使 Wait 返回
+	cmd.WaitDelay = 5 * time.Second
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -159,8 +168,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	result := strings.TrimSpace(resultBuilder.String())
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			killProcess(cmd)
+		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
 			if result != "" {
 				return NewErrorResult(fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)), nil
 			}

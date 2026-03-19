@@ -18,3 +18,9 @@ func killProcess(cmd *exec.Cmd) {
 		cmd.Process.Kill()
 	}
 }
+
+// SetProcessAttrs 是 setProcessAttrs 的导出版本，供其他包使用
+func SetProcessAttrs(cmd *exec.Cmd) { setProcessAttrs(cmd) }
+
+// KillProcess 是 killProcess 的导出版本，供其他包使用
+func KillProcess(cmd *exec.Cmd) { killProcess(cmd) }

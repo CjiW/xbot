@@ -235,7 +235,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 
 		// Phase 2: SmartCompressor 智能触发（动态阈值+冷却）
-		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil {
+		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil && cfg.ContextManagerConfig != nil {
 			provider := smart.TriggerProvider()
 			triggerInfo := BuildTriggerInfo(iteration, messages, toolsUsed, provider, cfg.ContextManagerConfig, cfg.Model)
 			if !smart.ShouldCompressDynamic(triggerInfo) {

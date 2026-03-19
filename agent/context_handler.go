@@ -108,12 +108,6 @@ func (a *Agent) handleContextMode(ctx context.Context, msg bus.InboundMessage, m
 		}, nil
 	}
 
-	// Phase 2 未实现时的额外提示
-	extraMsg := ""
-	if target == ContextModePhase2 {
-		extraMsg = "（Phase 2 尚未实现，压缩时将自动降级到 Phase 1）"
-	}
-
 	// 先设置配置，再替换 manager
 	cfg.SetRuntimeMode(target)
 	a.SetContextManager(NewContextManager(cfg))
@@ -121,6 +115,6 @@ func (a *Agent) handleContextMode(ctx context.Context, msg bus.InboundMessage, m
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: fmt.Sprintf("已切换上下文模式: %s %s", target, extraMsg),
+		Content: fmt.Sprintf("已切换上下文模式: %s", target),
 	}, nil
 }

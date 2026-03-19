@@ -16,7 +16,7 @@ type ContextMode string
 const (
 	// ContextModePhase1 Phase 1 双视图架构（当前默认）
 	ContextModePhase1 ContextMode = "phase1"
-	// ContextModePhase2 Phase 2 三层渐进压缩（未来实现）
+	// ContextModePhase2 Phase 2 三层渐进压缩
 	ContextModePhase2 ContextMode = "phase2"
 	// ContextModeNone 禁用自动上下文压缩
 	ContextModeNone ContextMode = "none"
@@ -213,9 +213,8 @@ func NewContextManager(cfg *ContextManagerConfig) ContextManager {
 	mode := cfg.EffectiveMode()
 	switch mode {
 	case ContextModePhase2:
-		// Phase 2: 即使未实现也创建 phase2Manager，
-		// Compress 会返回错误并自动降级，ManualCompress 降级到 Phase 1
-		log.WithField("mode", mode).Warn("Phase 2 not yet implemented, will fallback to Phase 1 on actual compression")
+		// Phase 2: 三层渐进压缩（Offload → Evict → Compact）
+		log.WithField("mode", mode).Info("Using Phase 2 smart compression (Offload → Evict → Compact)")
 		return newPhase2Manager(cfg)
 	case ContextModeNone:
 		return newNoopManager(cfg)

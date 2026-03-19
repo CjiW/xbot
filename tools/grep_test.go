@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -478,6 +479,99 @@ func TestExpandBracePattern(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Errorf("expandBracePattern(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestSearchFile_ContextLines(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "line1\nline2\nmatch here\nline4\nline5\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	re := regexp.MustCompile("match here")
+	matches, err := searchFile(filepath.Join(tmpDir, "test.txt"), re, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// contextLines=2 should return 5 lines (line1, line2, match here, line4, line5)
+	if len(matches) != 5 {
+		t.Errorf("expected 5 matches with context_lines=2, got %d: %+v", len(matches), matches)
+	}
+	if matches[0].LineNumber != 1 {
+		t.Errorf("expected first context line to be line 1, got line %d", matches[0].LineNumber)
+	}
+	if matches[2].LineNumber != 3 || !strings.Contains(matches[2].Line, "match here") {
+		t.Errorf("expected match line to be line 3, got line %d: %s", matches[2].LineNumber, matches[2].Line)
+	}
+}
+
+func TestParseGrepOutputWithContextLines(t *testing.T) {
+	// Simulate grep -C 2 output with '-' separator for context lines
+	input := `main.go-8-import "fmt"
+main.go-9-
+main.go:10:func main() {
+main.go-11-	fmt.Println("hello")
+main.go-12-}`
+
+	lines := strings.Split(input, "\n")
+	contextLineCount := 0
+	matchLineCount := 0
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) < 2 {
+			dashParts := strings.SplitN(line, "-", 2)
+			if len(dashParts) >= 2 {
+				contextLineCount++
+			}
+		} else {
+			matchLineCount++
+		}
+	}
+
+	if contextLineCount != 4 {
+		t.Errorf("expected 4 context lines (using '-' separator), got %d", contextLineCount)
+	}
+	if matchLineCount != 1 {
+		t.Errorf("expected 1 match line (using ':' separator), got %d", matchLineCount)
+	}
+}
+
+func TestSandboxPathResolution(t *testing.T) {
+	sandboxBase := "/workspace"
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{"exact match with sandboxBase", "/workspace", "/workspace"},
+		{"subdirectory", "/workspace/src", "/workspace/src"},
+		{"relative path", "src", "/workspace/src"},
+		{"empty path uses sandboxBase", "", "/workspace"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var searchDir string
+			if tt.path != "" {
+				if tt.path == sandboxBase || strings.HasPrefix(tt.path, sandboxBase+"/") {
+					searchDir = tt.path
+				} else {
+					searchDir = sandboxBase + "/" + tt.path
+				}
+			} else {
+				searchDir = sandboxBase
+			}
+
+			if searchDir != tt.expected {
+				t.Errorf("got %q, want %q", searchDir, tt.expected)
 			}
 		})
 	}

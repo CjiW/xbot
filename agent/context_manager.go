@@ -179,6 +179,35 @@ func (m *noopManager) ContextInfo(messages []llm.ChatMessage, model string, tool
 
 func (m *noopManager) SessionHook() SessionCompressHook { return nil }
 
+// SmartCompressor 智能压缩接口（Phase 2 扩展）。
+// phase2Manager 实现此接口，Run() 中的 maybeCompress 通过类型断言检测。
+// Phase1 和 noopManager 不实现此接口，走原有 ShouldCompress 路径。
+type SmartCompressor interface {
+	ContextManager
+	ShouldCompressDynamic(info TriggerInfo) bool
+	TriggerProvider() *TriggerInfoProvider
+}
+
+// TriggerInfoProvider 提供压缩触发所需的状态追踪器。
+type TriggerInfoProvider struct {
+	GrowthTracker *TokenGrowthTracker
+	Cooldown      *CompressCooldown
+}
+
+// NewTriggerInfoProvider 创建带默认配置的 TriggerInfoProvider。
+func NewTriggerInfoProvider() *TriggerInfoProvider {
+	return &TriggerInfoProvider{
+		GrowthTracker: NewTokenGrowthTracker(10),
+		Cooldown:      NewCompressCooldown(3),
+	}
+}
+
+// Reset 重置所有追踪器状态。
+func (p *TriggerInfoProvider) Reset() {
+	p.GrowthTracker.Reset()
+	p.Cooldown.Reset()
+}
+
 // NewContextManager 根据配置创建对应的 ContextManager 实例。
 func NewContextManager(cfg *ContextManagerConfig) ContextManager {
 	mode := cfg.EffectiveMode()

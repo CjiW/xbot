@@ -518,9 +518,7 @@ func ExtractActiveFiles(messages []llm.ChatMessage, lastN int) []ActiveFile {
 			// 从 tool result 中提取路径（Shell 特殊处理）
 			if msg.ToolName == "Shell" {
 				// 从 Shell 输出中正则提取文件路径
-				for _, p := range extractFilePaths(msg.Content) {
-					currentPaths = append(currentPaths, p)
-				}
+				currentPaths = append(currentPaths, extractFilePaths(msg.Content)...)
 			}
 			// 从 tool result 中提取函数签名
 			funcSigs := extractFunctionSignatures(msg.Content)

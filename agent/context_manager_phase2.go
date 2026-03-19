@@ -63,19 +63,39 @@ func (m *phase2Manager) ShouldCompress(messages []llm.ChatMessage, model string,
 // Phase 1: Evict（信息密度驱逐）将上下文降到 70% MaxContextTokens。
 // Phase 2: Compact（如果 Evict 后仍超阈值）使用 LLM 压缩。
 func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
+	originalTokens, _ := llm.CountMessagesTokens(messages, model)
 	targetTokens := int(float64(m.config.MaxContextTokens) * 0.7)
+
+	log.Ctx(ctx).WithFields(map[string]interface{}{
+		"original_tokens": originalTokens,
+		"target_tokens":   targetTokens,
+		"max_tokens":      m.config.MaxContextTokens,
+	}).Info("Phase 2 compress: starting eviction")
 
 	// Phase 1: Evict（信息密度驱逐）
 	evicted := evictByDensity(messages, 3, targetTokens, model)
 	evictTokens, _ := llm.CountMessagesTokens(evicted, model)
+	evictedCount := countEvictedMessages(messages, evicted)
+
+	log.Ctx(ctx).WithFields(map[string]interface{}{
+		"original_tokens": originalTokens,
+		"evict_tokens":    evictTokens,
+		"tokens_saved":    originalTokens - evictTokens,
+		"evicted_msgs":    evictedCount,
+	}).Info("Phase 2 compress: eviction complete")
 
 	// Phase 2: Compact（如果 Evict 后仍超阈值）
 	if evictTokens >= int(float64(m.config.MaxContextTokens)*m.config.CompressionThreshold) {
+		log.Ctx(ctx).Info("Phase 2 compress: eviction insufficient, proceeding to LLM compact")
+
 		// 压缩前提取指纹用于质量校验
 		fp := ExtractFingerprint(messages)
-		originalTokens, _ := llm.CountMessagesTokens(messages, model)
 
-		result, err := compressMessages(ctx, evicted, client, model)
+		// 使用 evicted 消息进行 LLM 压缩：
+		// evicted 消息中低密度 tool result 已被 [evicted] marker 替换（token 节省），
+		// 同时通过指纹引导（compressMessagesWithFingerprint 内部注入）确保关键信息被保留。
+		// 指纹从原始 messages 提取（而非 evicted），保证信息完整度。
+		result, err := compressMessagesWithFingerprint(ctx, evicted, fp, client, model)
 		if err != nil {
 			return nil, err
 		}
@@ -93,14 +113,14 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 		}
 
 		// 低质量重新压缩（最多1次）
-		if quality < 0.6 && retentionRate < 0.8 && client != nil {
+		if quality < 0.6 && retentionRate < 0.8 && client != nil && len(lostItems) > 0 {
 			log.Ctx(ctx).WithFields(map[string]interface{}{
 				"quality_score":  quality,
 				"retention_rate": retentionRate,
 				"lost_items":     len(lostItems),
-			}).Warn("Phase 2 compress quality low, retrying with enhanced prompt")
-			// compressMessages 内部已使用结构化 prompt，重试一次
-			retryResult, retryErr := compressMessages(ctx, evicted, client, model)
+			}).Warn("Phase 2 compress quality low, retrying with lost items injected")
+			// 使用增强函数重试：将丢失的关键信息注入 prompt，引导 LLM 补全
+			retryResult, retryErr := compressMessagesWithFingerprintAndLostItems(ctx, evicted, fp, lostItems, client, model)
 			if retryErr == nil {
 				retryText := joinMessages(retryResult.SessionView)
 				retryTokens, _ := llm.CountMessagesTokens(retryResult.LLMView, model)
@@ -125,17 +145,49 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 			"quality_score":  quality,
 			"retention_rate": retentionRate,
 			"markers":        countStructuredMarkers(compressedText),
+			"new_tokens":     compressedTokens,
 		}).Info("Phase 2 compress quality report")
 		return result, nil
 	}
 
 	// Evict 后已足够，构建双视图
+	log.Ctx(ctx).WithFields(map[string]interface{}{
+		"evict_tokens": evictTokens,
+		"tokens_saved": originalTokens - evictTokens,
+	}).Info("Phase 2 compress: eviction sufficient, no LLM compact needed")
 	return buildCompressResultFromEvicted(evicted, ctx, model)
 }
 
-// ManualCompress 手动压缩走完整流水线（忽略阈值检查）。
+// ManualCompress 手动压缩走完整流水线（Evict → Compact）。
+// BUG FIX: 之前直接调用 compressMessages 跳过了 eviction，浪费 LLM tokens。
+// 现在手动压缩也先执行 eviction，不足时再 LLM compress。
 func (m *phase2Manager) ManualCompress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compressMessages(ctx, messages, client, model)
+	originalTokens, _ := llm.CountMessagesTokens(messages, model)
+	targetTokens := int(float64(m.config.MaxContextTokens) * 0.7)
+
+	// Phase 1: Evict
+	evicted := evictByDensity(messages, 3, targetTokens, model)
+	evictTokens, _ := llm.CountMessagesTokens(evicted, model)
+
+	log.Ctx(ctx).WithFields(map[string]interface{}{
+		"original_tokens": originalTokens,
+		"evict_tokens":    evictTokens,
+		"tokens_saved":    originalTokens - evictTokens,
+	}).Info("Phase 2 manual compress: eviction complete")
+
+	// 如果 eviction 后低于阈值，直接返回 evicted 结果
+	if evictTokens < int(float64(m.config.MaxContextTokens)*m.config.CompressionThreshold) {
+		return buildCompressResultFromEvicted(evicted, ctx, model)
+	}
+
+	// Phase 2: Compact（使用 evicted messages + 指纹引导）
+	fp := ExtractFingerprint(messages)
+	result, err := compressMessagesWithFingerprint(ctx, evicted, fp, client, model)
+	if err != nil {
+		// 降级到不带指纹的压缩
+		return compressMessages(ctx, messages, client, model)
+	}
+	return result, nil
 }
 
 func (m *phase2Manager) ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats {

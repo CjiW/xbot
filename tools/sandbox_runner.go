@@ -39,12 +39,20 @@ func dockerRun(timeout time.Duration, args ...string) error {
 var globalSandbox Sandbox
 var sandboxInitOnce sync.Once
 
+// InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
+func InitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
+	sandboxInitOnce.Do(func() {
+		globalSandbox = NewSandbox(sandboxCfg, workDir)
+		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
+	})
+}
+
 // GetSandbox 获取全局沙箱实例
 func GetSandbox() Sandbox {
 	sandboxInitOnce.Do(func() {
-		cfg := config.Load()
-		globalSandbox = NewSandbox(cfg.Sandbox.Mode, cfg.Sandbox.DockerImage)
-		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
+		// Fallback: 如果 InitSandbox 未被调用（例如测试场景），使用 NoneSandbox
+		log.Warn("GetSandbox called before InitSandbox, falling back to NoneSandbox")
+		globalSandbox = &NoneSandbox{}
 	})
 	return globalSandbox
 }
@@ -631,20 +639,19 @@ func (s *dockerSandbox) migrateDinDWorkspaces() {
 }
 
 // NewSandbox 创建沙箱实例
-func NewSandbox(mode, image string) Sandbox {
-	cfg := config.Load()
-	switch mode {
+func NewSandbox(sandboxCfg config.SandboxConfig, workDir string) Sandbox {
+	switch sandboxCfg.Mode {
 	case "none":
 		return &NoneSandbox{}
 	case "docker":
 		s := &dockerSandbox{
-			image:                 image,
-			commitSquashThreshold: cfg.Sandbox.CommitSquashThreshold,
+			image:                 sandboxCfg.DockerImage,
+			commitSquashThreshold: sandboxCfg.CommitSquashThreshold,
 		}
-		s.detectDinD(cfg)
+		s.detectDinD(sandboxCfg, workDir)
 		return s
 	default:
-		return &dockerSandbox{image: image}
+		return &dockerSandbox{image: sandboxCfg.DockerImage}
 	}
 }
 
@@ -655,13 +662,13 @@ func NewSandbox(mode, image string) Sandbox {
 //
 // The mount can be at workDir itself (/home/octopus → /app) or at a sub-path
 // (/home/octopus/.xbot → /app/.xbot). Both cases are handled.
-func (s *dockerSandbox) detectDinD(cfg *config.Config) {
-	absWorkDir, _ := filepath.Abs(cfg.Agent.WorkDir)
+func (s *dockerSandbox) detectDinD(sandboxCfg config.SandboxConfig, workDir string) {
+	absWorkDir, _ := filepath.Abs(workDir)
 
 	// Priority 1: explicit override via HOST_WORK_DIR
-	if cfg.Sandbox.HostWorkDir != "" {
+	if sandboxCfg.HostWorkDir != "" {
 		s.containerWorkDir = absWorkDir
-		s.hostWorkDir = cfg.Sandbox.HostWorkDir
+		s.hostWorkDir = sandboxCfg.HostWorkDir
 		log.Infof("DinD path mapping (explicit): container %s → host %s", absWorkDir, s.hostWorkDir)
 		s.migrateDinDWorkspaces()
 		return

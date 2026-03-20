@@ -28,13 +28,16 @@ func (b FeishuToolBase) SupportedChannels() []string { return []string{"feishu"}
 type FeishuMCP struct {
 	oauth      *oauth.Manager
 	larkClient *lark.Client // 用于获取租户信息
+	appID      string       // 飞书应用 ID（用于获取 tenant_access_token）
+	appSecret  string       // 飞书应用密钥
 }
 
 // NewFeishuMCP creates a new Feishu MCP instance.
-func NewFeishuMCP(oauthMgr *oauth.Manager) *FeishuMCP {
-	// 从 OAuth provider 获取 lark client（需要 app credentials）
+func NewFeishuMCP(oauthMgr *oauth.Manager, appID, appSecret string) *FeishuMCP {
 	return &FeishuMCP{
-		oauth: oauthMgr,
+		oauth:     oauthMgr,
+		appID:     appID,
+		appSecret: appSecret,
 	}
 }
 

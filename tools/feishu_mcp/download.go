@@ -133,10 +133,10 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 
 // getTenantToken obtains a tenant_access_token using app credentials from environment.
 func (t *DownloadFileTool) getTenantToken() (string, error) {
-	appID := os.Getenv("FEISHU_APP_ID")
-	appSecret := os.Getenv("FEISHU_APP_SECRET")
+	appID := t.MCP.appID
+	appSecret := t.MCP.appSecret
 	if appID == "" || appSecret == "" {
-		return "", fmt.Errorf("FEISHU_APP_ID and FEISHU_APP_SECRET must be set")
+		return "", fmt.Errorf("FEISHU_APP_ID and FEISHU_APP_SECRET must be configured")
 	}
 
 	reqBody, _ := json.Marshal(map[string]string{

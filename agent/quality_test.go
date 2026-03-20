@@ -176,14 +176,14 @@ func TestValidateCompression_EmptyFingerprint(t *testing.T) {
 // ----------------------------------------------------------------
 
 func TestEvaluateQuality_HighQuality(t *testing.T) {
-	// High quality: good compression ratio + structured markers + key info retained
+	// High quality: good compression ratio + key info retained
 	fp := KeyInfoFingerprint{
 		FilePaths:   []string{"/workspace/xbot/agent/compress.go"},
 		Identifiers: []string{"handleCompress", "SmartCompressor"},
 		Errors:      []string{"nil pointer"},
 		Decisions:   []string{"use singleton pattern"},
 	}
-	compressed := `@file:/workspace/xbot/agent/compress.go @func:handleCompress @type:SmartCompressor @error:nil pointer @decision:use singleton pattern`
+	compressed := `Reviewed compress.go, handleCompress and SmartCompressor. Encountered nil pointer error. Decided to use singleton pattern.`
 
 	score := EvaluateQuality(1000, 300, fp, compressed)
 	if score < 0.5 {
@@ -442,50 +442,6 @@ func TestExtractDecisions_None(t *testing.T) {
 	decisions := extractDecisions(text)
 	if len(decisions) > 0 {
 		t.Errorf("expected no decisions, got %v", decisions)
-	}
-}
-
-// ----------------------------------------------------------------
-// countStructuredMarkers tests
-// ----------------------------------------------------------------
-
-func TestCountStructuredMarkers(t *testing.T) {
-	text := "@file:compress.go @func:handleCompress @error:nil pointer @decision:use cache"
-	count := countStructuredMarkers(text)
-	if count != 4 {
-		t.Errorf("expected 4 markers, got %d", count)
-	}
-}
-
-func TestCountStructuredMarkers_None(t *testing.T) {
-	text := "No markers here at all."
-	count := countStructuredMarkers(text)
-	if count != 0 {
-		t.Errorf("expected 0 markers, got %d", count)
-	}
-}
-
-func TestCountStructuredMarkers_ExtendedFormats(t *testing.T) {
-	tests := []struct {
-		text string
-		want int
-	}{
-		// 带空格的标记
-		{"@file: compress.go @func: handleCompress", 2},
-		// 带引号的标记
-		{`@file: "compress.go" @error: "nil pointer"`, 2},
-		// 列表格式
-		{"- file: compress.go\n- func: handleCompress\n- error: nil pointer", 3},
-		// 圆点列表格式
-		{"• file: compress.go • func: handleCompress", 2},
-		// 混合格式
-		{"@file:compress.go\n- file: engine.go", 2},
-	}
-	for _, tt := range tests {
-		got := countStructuredMarkers(tt.text)
-		if got != tt.want {
-			t.Errorf("countStructuredMarkers(%q) = %d, want %d", tt.text, got, tt.want)
-		}
 	}
 }
 

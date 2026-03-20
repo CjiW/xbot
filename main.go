@@ -271,6 +271,12 @@ func main() {
 			RegistryPublish: func(entryType, name, senderID string) error {
 				return agentLoop.RegistryManager().Publish(entryType, name, senderID)
 			},
+			RegistryUnpublish: func(entryType, name, senderID string) error {
+				return agentLoop.RegistryManager().Unpublish(entryType, name, senderID)
+			},
+			RegistryDelete: func(entryType, name, senderID string) error {
+				return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

@@ -31,7 +31,17 @@ func NewRegistryManager(store *SkillStore, agentStore *AgentStore, sharedStore *
 }
 
 // Publish publishes a skill or agent to the shared registry.
+// Returns error if a public entry with the same type+name already exists from a different author.
 func (rm *RegistryManager) Publish(entryType, name, author string) error {
+	// Dedup: reject if same type+name already public by another author
+	existing, err := rm.sharedStore.GetByTypeAndName(entryType, name)
+	if err != nil {
+		return fmt.Errorf("dedup check: %w", err)
+	}
+	if existing != nil && existing.Author != author && existing.Sharing == "public" {
+		return fmt.Errorf("%s %q 已被 %s 发布，不能重名分享", entryType, name, existing.Author)
+	}
+
 	switch entryType {
 	case "skill":
 		return rm.publishSkill(name, author)
@@ -43,8 +53,7 @@ func (rm *RegistryManager) Publish(entryType, name, author string) error {
 }
 
 func (rm *RegistryManager) publishSkill(name, author string) error {
-	// Find skill directory (search global + user dirs)
-	skillDir := rm.findSkillDir(name)
+	skillDir := rm.findSkillDirForUser(name, author)
 	if skillDir == "" {
 		return fmt.Errorf("skill %q not found", name)
 	}
@@ -57,13 +66,18 @@ func (rm *RegistryManager) publishSkill(name, author string) error {
 		info.Author = author
 	}
 
+	cacheDir := rm.registryCacheDir("skill", info.Name)
+	if err := rm.snapshotToCache(skillDir, cacheDir); err != nil {
+		return fmt.Errorf("snapshot skill: %w", err)
+	}
+
 	entry := &sqlite.SharedEntry{
 		Type:        "skill",
 		Name:        info.Name,
 		Description: info.Description,
 		Author:      info.Author,
 		Tags:        info.Tags,
-		SourcePath:  skillDir,
+		SourcePath:  cacheDir,
 		Sharing:     "public",
 	}
 
@@ -71,25 +85,29 @@ func (rm *RegistryManager) publishSkill(name, author string) error {
 }
 
 func (rm *RegistryManager) publishAgent(name, author string) error {
-	// Find agent role file
-	agentDir := rm.findAgentDir(name)
+	agentDir := rm.findAgentDirForUser(name, author)
 	if agentDir == "" {
 		return fmt.Errorf("agent %q not found", name)
 	}
 
-	// Parse agent role file for description
 	roles, err := tools.LoadAgentRoles(agentDir)
 	if err != nil || len(roles) == 0 {
 		return fmt.Errorf("failed to load agent %q: %v", name, err)
 	}
 
 	role := roles[0]
+
+	cacheDir := rm.registryCacheDir("agent", role.Name)
+	if err := rm.snapshotToCache(agentDir, cacheDir); err != nil {
+		return fmt.Errorf("snapshot agent: %w", err)
+	}
+
 	entry := &sqlite.SharedEntry{
 		Type:        "agent",
 		Name:        role.Name,
 		Description: role.Description,
 		Author:      author,
-		SourcePath:  agentDir,
+		SourcePath:  cacheDir,
 		Sharing:     "public",
 	}
 
@@ -134,12 +152,14 @@ func (rm *RegistryManager) Install(entryType string, id int64, senderID string) 
 		return fmt.Errorf("unknown type %q", entryType)
 	}
 
-	// Don't overwrite existing
 	if _, err := os.Stat(destDir); err == nil {
 		return fmt.Errorf("%s %q already installed", entryType, entry.Name)
 	}
 
-	// Copy directory recursively
+	if _, err := os.Stat(entry.SourcePath); os.IsNotExist(err) {
+		return fmt.Errorf("%s %q 的源文件已不存在（可能已被删除或改名），请联系发布者重新发布", entryType, entry.Name)
+	}
+
 	if err := copyDir(entry.SourcePath, destDir); err != nil {
 		return fmt.Errorf("copy %s: %w", entryType, err)
 	}
@@ -203,15 +223,15 @@ func (rm *RegistryManager) Search(query, entryType string, limit int) ([]sqlite.
 	return rm.sharedStore.SearchShared(query, entryType, limit)
 }
 
-// ListMy lists the user's own published and installed entries.
-func (rm *RegistryManager) ListMy(senderID string, entryType string) (published []sqlite.SharedEntry, installed []string, err error) {
-	// Published
+// ListMy lists the user's own published entries and all locally available items
+// (global + user-private directories).
+func (rm *RegistryManager) ListMy(senderID string, entryType string) (published []sqlite.SharedEntry, local []string, err error) {
+	// Published by this user
 	published, err = rm.sharedStore.ListByAuthor(senderID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Filter by type if specified
 	if entryType != "" {
 		var filtered []sqlite.SharedEntry
 		for _, e := range published {
@@ -222,29 +242,63 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 		published = filtered
 	}
 
-	// Installed: scan user's private directories
+	seen := make(map[string]bool)
+
+	// Skills: global dirs + user-private dir
 	if entryType == "" || entryType == "skill" {
-		skillsDir := tools.UserSkillsRoot(rm.workDir, senderID)
-		if entries, e := os.ReadDir(skillsDir); e == nil {
-			for _, ent := range entries {
-				if ent.IsDir() {
-					installed = append(installed, "skill:"+ent.Name())
-				}
-			}
+		for _, dir := range rm.store.globalDirs {
+			scanSkillDir(dir, &local, seen)
 		}
-	}
-	if entryType == "" || entryType == "agent" {
-		agentsDir := tools.UserAgentsRoot(rm.workDir, senderID)
-		if entries, e := os.ReadDir(agentsDir); e == nil {
-			for _, ent := range entries {
-				if ent.IsDir() {
-					installed = append(installed, "agent:"+ent.Name())
-				}
-			}
-		}
+		scanSkillDir(tools.UserSkillsRoot(rm.workDir, senderID), &local, seen)
 	}
 
-	return published, installed, nil
+	// Agents: global dir + user-private dir
+	if entryType == "" || entryType == "agent" {
+		if rm.agentStore != nil && rm.agentStore.globalDir != "" {
+			scanAgentDir(rm.agentStore.globalDir, &local, seen)
+		}
+		scanAgentDir(tools.UserAgentsRoot(rm.workDir, senderID), &local, seen)
+	}
+
+	return published, local, nil
+}
+
+func scanSkillDir(dir string, out *[]string, seen map[string]bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		key := "skill:" + ent.Name()
+		if seen[key] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, ent.Name(), "SKILL.md")); err == nil {
+			seen[key] = true
+			*out = append(*out, key)
+		}
+	}
+}
+
+func scanAgentDir(dir string, out *[]string, seen map[string]bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		key := "agent:" + ent.Name()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		*out = append(*out, key)
+	}
 }
 
 // Browse lists public entries in the marketplace.
@@ -252,10 +306,24 @@ func (rm *RegistryManager) Browse(entryType string, limit, offset int) ([]sqlite
 	return rm.sharedStore.ListShared(entryType, limit, offset)
 }
 
+// --- registry cache ---
+
+// registryCacheDir returns the snapshot directory for a published entry.
+func (rm *RegistryManager) registryCacheDir(entryType, name string) string {
+	return filepath.Join(rm.workDir, ".xbot", "registry", entryType, name)
+}
+
+// snapshotToCache copies src directory into cacheDir, replacing any existing cache.
+func (rm *RegistryManager) snapshotToCache(src, cacheDir string) error {
+	if err := os.RemoveAll(cacheDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clean cache: %w", err)
+	}
+	return copyDir(src, cacheDir)
+}
+
 // --- helpers ---
 
 func (rm *RegistryManager) findSkillDir(name string) string {
-	// Search global dirs
 	for _, dir := range rm.store.globalDirs {
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
@@ -265,10 +333,37 @@ func (rm *RegistryManager) findSkillDir(name string) string {
 	return ""
 }
 
+// findSkillDirForUser searches global + user-private skill dirs.
+func (rm *RegistryManager) findSkillDirForUser(name, senderID string) string {
+	if dir := rm.findSkillDir(name); dir != "" {
+		return dir
+	}
+	if senderID != "" {
+		path := filepath.Join(tools.UserSkillsRoot(rm.workDir, senderID), name)
+		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 func (rm *RegistryManager) findAgentDir(name string) string {
-	// Search global agents dir
 	if rm.agentStore != nil && rm.agentStore.globalDir != "" {
 		path := filepath.Join(rm.agentStore.globalDir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// findAgentDirForUser searches global + user-private agent dirs.
+func (rm *RegistryManager) findAgentDirForUser(name, senderID string) string {
+	if dir := rm.findAgentDir(name); dir != "" {
+		return dir
+	}
+	if senderID != "" {
+		path := filepath.Join(tools.UserAgentsRoot(rm.workDir, senderID), name)
 		if _, err := os.Stat(path); err == nil {
 			return path
 		}

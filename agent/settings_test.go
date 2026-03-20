@@ -20,7 +20,7 @@ func TestSettingsServiceGetSettings(t *testing.T) {
 	svc := NewSettingsService(store)
 
 	// Set some values
-	if err := svc.SetSetting("feishu", "user1", "reply_style", "concise"); err != nil {
+	if err := svc.SetSetting("feishu", "user1", "context_mode", "phase2"); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
@@ -29,8 +29,8 @@ func TestSettingsServiceGetSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if settings["reply_style"] != "concise" {
-		t.Errorf("expected 'concise', got %q", settings["reply_style"])
+	if settings["context_mode"] != "phase2" {
+		t.Errorf("expected 'phase2', got %q", settings["context_mode"])
 	}
 }
 

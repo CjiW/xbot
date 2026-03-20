@@ -7,32 +7,6 @@ import (
 	"strings"
 )
 
-func defaultWorkspaceRoot(ctx *ToolContext) string {
-	if ctx == nil {
-		return ""
-	}
-	if ctx.WorkspaceRoot != "" {
-		return ctx.WorkspaceRoot
-	}
-	return ctx.WorkingDir
-}
-
-func resolveScopedBase(ctx *ToolContext) (string, error) {
-	root := defaultWorkspaceRoot(ctx)
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get working directory: %w", err)
-		}
-		root = cwd
-	}
-	absRoot, err := cleanAbsPath(root)
-	if err != nil {
-		return "", fmt.Errorf("invalid workspace root: %w", err)
-	}
-	return absRoot, nil
-}
-
 // resolvePath 解析路径为绝对路径，不做任何权限/范围检查。
 func resolvePath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
@@ -122,7 +96,7 @@ func sandboxBaseDir(ctx *ToolContext) string {
 }
 
 // shellEscape 对字符串进行 shell 单引号转义，防止命令注入。
-// 将字符串中的单引号替换为 '\”（结束单引号、转义单引号、开始新单引号）。
+// 将字符串中的单引号替换为 '\''（结束单引号、转义单引号、开始新单引号）。
 func shellEscape(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
 }

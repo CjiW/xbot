@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 )
 
@@ -58,27 +57,4 @@ func cleanAbsPath(path string) (string, error) {
 		return "", err
 	}
 	return abs, nil
-}
-
-func isWithinRoot(path, root string) bool {
-	if root == "" {
-		return false
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	if strings.HasPrefix(rel, "..") {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		relLower := strings.ToLower(rel)
-		if strings.HasPrefix(relLower, "..") {
-			return false
-		}
-	}
-	return true
 }

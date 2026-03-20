@@ -120,30 +120,10 @@ func (pl *PromptLoader) Render(data PromptData) string {
 	return buf.String()
 }
 
-// cronSystemPrompt Cron 专用系统提示词（简洁，无记忆和技能）
-const cronSystemPrompt = `You are xbot executing a scheduled cron task.
-
-## Guidelines
-- You are processing a scheduled reminder/task
-- Execute the task directly and concisely
-- Use tools when needed
-- Report results clearly
-
-## Working Environment
-- Working directory: %s
-
-Current Time: %s
-`
-
 // initPipelines 初始化 Agent 的消息构建管道。
 // 在 Agent 创建时调用一次，后续通过 pipeline.Use/Remove 动态调整。
 func (a *Agent) initPipelines() {
-	promptWorkDir := a.workDir
-	if a.sandboxMode == "docker" {
-		promptWorkDir = "/workspace"
-	}
-
-	// 主 pipeline：用于普通消息和卡片响应
+	// 主 pipeline：用于所有消息（包括 cron），cron 通过 Extra 标记走特殊处理
 	a.pipeline = NewMessagePipeline(
 		NewProjectHintMiddleware(a.multiSession.ArchivalService),
 		NewSystemPromptMiddleware(a.promptLoader),
@@ -153,21 +133,11 @@ func (a *Agent) initPipelines() {
 		NewSenderInfoMiddleware(),
 		NewUserMessageMiddleware(),
 	)
-
-	// Cron pipeline：用于定时任务（简洁，无记忆和技能）
-	a.cronPipeline = NewMessagePipeline(
-		NewCronSystemPromptMiddleware(promptWorkDir),
-	)
 }
 
 // Pipeline 返回 Agent 的主消息构建管道，支持运行时动态增删中间件。
 func (a *Agent) Pipeline() *MessagePipeline {
 	return a.pipeline
-}
-
-// CronPipeline 返回 Agent 的 Cron 消息构建管道。
-func (a *Agent) CronPipeline() *MessagePipeline {
-	return a.cronPipeline
 }
 
 // NewMessageContext 创建一个预填充的 MessageContext，用于主 pipeline。
@@ -184,15 +154,6 @@ func NewMessageContext(ctx context.Context, userContent string, history []llm.Ch
 		SenderName:  senderName,
 		SenderID:    senderID,
 		ChatID:      chatID,
-		Extra:       make(map[string]any),
-	}
-}
-
-// NewCronMessageContext 创建一个 Cron 专用的 MessageContext。
-func NewCronMessageContext(task string) *MessageContext {
-	return &MessageContext{
-		SystemParts: make(map[string]string),
-		UserContent: task,
 		Extra:       make(map[string]any),
 	}
 }

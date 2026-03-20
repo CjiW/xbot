@@ -588,26 +588,6 @@ func TestUserMessageMiddleware(t *testing.T) {
 	})
 }
 
-func TestCronSystemPromptMiddleware(t *testing.T) {
-	mc := &MessageContext{
-		SystemParts: make(map[string]string),
-		UserContent: "check server status",
-	}
-	mw := NewCronSystemPromptMiddleware("/work")
-	_ = mw.Process(mc)
-
-	base := mc.SystemParts["00_base"]
-	if !strings.Contains(base, "/work") {
-		t.Error("cron prompt should contain work dir")
-	}
-	if !strings.Contains(base, "scheduled") {
-		t.Error("cron prompt should mention scheduled task")
-	}
-	if mc.UserMessage != "check server status" {
-		t.Errorf("cron should use raw user content, got: %q", mc.UserMessage)
-	}
-}
-
 // --- Integration test: full pipeline output structure ---
 
 func TestPipeline_FullIntegration(t *testing.T) {
@@ -691,29 +671,7 @@ func TestPipeline_FullIntegration(t *testing.T) {
 	}
 }
 
-// --- Test Cron pipeline ---
-
-func TestCronPipeline(t *testing.T) {
-	pipeline := NewMessagePipeline(
-		NewCronSystemPromptMiddleware("/work"),
-	)
-
-	mc := NewCronMessageContext("remind me to standup")
-
-	messages := pipeline.Run(mc)
-
-	if len(messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(messages))
-	}
-	if messages[0].Role != "system" {
-		t.Error("first should be system")
-	}
-	if messages[1].Content != "remind me to standup" {
-		t.Errorf("user message should be raw content, got: %q", messages[1].Content)
-	}
-}
-
-// --- Test NewMessageContext / NewCronMessageContext ---
+// --- Test NewMessageContext ---
 
 func TestNewMessageContext(t *testing.T) {
 	ctx := context.Background()
@@ -748,18 +706,44 @@ func TestNewMessageContext(t *testing.T) {
 	}
 }
 
-func TestNewCronMessageContext(t *testing.T) {
-	mc := NewCronMessageContext("check status")
+// --- Test UserMessageMiddleware cron detection ---
 
-	if mc.UserContent != "check status" {
-		t.Error("UserContent should be set")
-	}
-	if mc.SystemParts == nil {
-		t.Error("SystemParts should be initialized")
-	}
-	if mc.Extra == nil {
-		t.Error("Extra should be initialized")
-	}
+func TestUserMessageMiddleware_CronDetection(t *testing.T) {
+	t.Run("cron message appends guide", func(t *testing.T) {
+		mc := &MessageContext{
+			UserContent: "check server status",
+			Extra:       make(map[string]any),
+		}
+		mc.SetExtra(ExtraKeyIsCron, true)
+		mw := NewUserMessageMiddleware()
+		_ = mw.Process(mc)
+
+		if !strings.Contains(mc.UserMessage, "Cron") {
+			t.Error("cron user message should contain cron guide text")
+		}
+		if !strings.Contains(mc.UserMessage, "check server status") {
+			t.Error("cron user message should contain original content")
+		}
+		if !strings.Contains(mc.UserMessage, cronGuideText) {
+			t.Error("cron user message should contain full cron guide text")
+		}
+	})
+
+	t.Run("non-cron message no guide", func(t *testing.T) {
+		mc := &MessageContext{
+			UserContent: "hello world",
+			Extra:       make(map[string]any),
+		}
+		mw := NewUserMessageMiddleware()
+		_ = mw.Process(mc)
+
+		if strings.Contains(mc.UserMessage, "Cron") {
+			t.Error("non-cron user message should not contain cron guide")
+		}
+		if strings.Contains(mc.UserMessage, cronGuideText) {
+			t.Error("non-cron user message should not contain cron guide text")
+		}
+	})
 }
 
 // --- Test Pipeline dynamic Use/Remove ---

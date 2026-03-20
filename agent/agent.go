@@ -186,7 +186,6 @@ type Agent struct {
 	workDir            string
 	promptLoader       *PromptLoader
 	pipeline           *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
-	cronPipeline       *MessagePipeline // Cron 专用消息构建管道
 	sandboxMode        string           // "none" or "docker"
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
 	singleUser         bool             // 单用户模式
@@ -1100,10 +1099,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"sender":  msg.SenderID,
 	}).Infof("Processing: %s", preview)
 
-	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
-	if msg.IsCron {
-		return a.processCronMessage(ctx, msg)
-	}
+	// Cron 消息走主流程（完整 middleware pipeline + 完整 agent 能力），但跳过 preReplyNotify 和 addReaction。
+	isCron := msg.IsCron
 
 	// 初始化 session 消息跟踪：清除旧的已发消息 ID，记录入站消息 ID 用于首条回复
 	key := msg.Channel + ":" + msg.ChatID
@@ -1143,7 +1140,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
-	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata)
+	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata) && !isCron
 	replyPolicy := bus.InboundReplyPolicy(msg.Metadata)
 
 	// 立即发送随机确认回复
@@ -1155,7 +1152,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	a.maybeConsolidate(ctx, tenantSession, msg.SenderID)
 
 	// 构建 LLM 消息（注入长期记忆、skills）
-	messages, err := a.buildPrompt(ctx, msg, tenantSession)
+	// Cron 消息走完整 middleware pipeline，但通过 Extra 标记 is_cron
+	// 以便 UserMessageMiddleware 追加 cron 行为指引
+	messages, err := a.buildPrompt(ctx, msg, tenantSession, isCron)
 	if err != nil {
 		return nil, err
 	}
@@ -1225,73 +1224,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		}, nil
 	}
 
-	// 对用户原始消息添加表情回复，表示处理完成
-	a.addReaction(msg)
+	// 对用户原始消息添加表情回复，表示处理完成（cron 不需要）
+	if !isCron {
+		a.addReaction(msg)
+	}
 
 	return nil, nil
 }
 
-// processCronMessage 处理 cron 触发消息（不带历史上下文，使用专用系统提示词）
-func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
-	// 注入 requestID（如果 processMessage 未注入）
-	if log.RequestID(ctx) == "" {
-		ctx = log.WithRequestID(ctx, log.NewRequestID())
-	}
-
-	log.Ctx(ctx).WithFields(log.Fields{
-		"channel":   msg.Channel,
-		"chat_id":   msg.ChatID,
-		"sender_id": msg.SenderID,
-	}).Infof("Processing cron message: %s", tools.Truncate(msg.Content, 80))
-
-	// 清除旧的 session 状态，确保 cron 消息可以正常发送
-	key := msg.Channel + ":" + msg.ChatID
-	a.sessionMsgIDs.Delete(key)
-	a.sessionFinalSent.Delete(key)
-
-	// 使用创建者的工作区路径
-	senderID := msg.SenderID
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to create cron user workspace")
-	}
-
-	// 构建 cron 专用消息（无历史上下文）
-	mc := NewCronMessageContext(msg.Content)
-	messages := a.cronPipeline.Run(mc)
-
-	// 运行 Agent 循环（统一 Run，cron 不需要自动压缩和进度通知）
-	cronMsg := msg
-	cronMsg.SenderID = senderID
-	cronCfg := a.buildCronRunConfig(ctx, cronMsg, messages)
-	cronOut := Run(ctx, cronCfg)
-	if cronOut.Error != nil {
-		return nil, cronOut.Error
-	}
-	finalContent := cronOut.Content
-
-	if finalContent == "" {
-		finalContent = "定时任务已执行，但无输出内容。"
-	}
-
-	// 注意：不保存到会话历史
-	// 保留原始消息 ID 以支持回复模式
-	metadata := make(map[string]string)
-	if msg.Metadata != nil {
-		metadata = msg.Metadata
-	}
-
-	return &bus.OutboundMessage{
-		Channel:  msg.Channel,
-		ChatID:   msg.ChatID,
-		Content:  finalContent,
-		Metadata: metadata,
-	}, nil
-}
-
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。
 // 使用 Agent 持有的 pipeline 实例，通过 MessageContext.Extra 传递动态数据。
-func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
+func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession, isCron bool) ([]llm.ChatMessage, error) {
 	history, err := tenantSession.GetHistory(a.memoryWindow)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
@@ -1339,6 +1282,11 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
 
 	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
+
+	// Cron 消息标记，UserMessageMiddleware 检测后追加 cron 行为指引
+	if isCron {
+		mc.SetExtra(ExtraKeyIsCron, true)
+	}
 
 	return a.pipeline.Run(mc), nil
 }

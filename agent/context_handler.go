@@ -14,7 +14,7 @@ func (a *Agent) handleContextInfo(ctx context.Context, msg bus.InboundMessage, t
 	_, model, _, _ := a.llmFactory.GetLLM(msg.SenderID)
 
 	// 使用 buildPrompt 获取完整上下文（包含 system、skills、memory 等）
-	messages, err := a.buildPrompt(ctx, msg, tenantSession)
+	messages, err := a.buildPrompt(ctx, msg, tenantSession, false)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,

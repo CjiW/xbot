@@ -133,65 +133,6 @@ func (a *Agent) buildMainRunConfig(
 	return cfg
 }
 
-// buildCronRunConfig 为 Cron 消息构建 RunConfig。
-// Cron 消息不需要自动压缩、进度通知、session 持久化。
-func (a *Agent) buildCronRunConfig(
-	ctx context.Context,
-	msg bus.InboundMessage,
-	messages []llm.ChatMessage,
-) RunConfig {
-	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
-	sessionKey := channel + ":" + chatID
-
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
-
-	return RunConfig{
-		LLMClient:    llmClient,
-		Model:        model,
-		ThinkingMode: thinkingMode,
-		Tools:        a.tools,
-		Messages:     messages,
-		AgentID:      "main",
-		Channel:      channel,
-		ChatID:       chatID,
-		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
-		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
-		SenderName:   "",
-
-		// 工作区 & 沙箱
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
-
-		MaxIterations: a.maxIterations,
-		SessionKey:    sessionKey,
-		SendFunc:      a.sendMessage,
-		InjectInbound: a.injectInbound,
-
-		ToolExecutor:         a.buildToolExecutor(channel, chatID, senderID, ""),
-		ToolTimeout:          120 * time.Second,
-		EnableReadWriteSplit: true,
-
-		SessionFinalSentCallback: func() bool {
-			_, sent := a.sessionFinalSent.Load(sessionKey)
-			return sent
-		},
-
-		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
-
-		// HookChain — inherit from Agent
-		HookChain: a.hookChain,
-	}
-}
-
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
 // SubAgent 使用独立工具集、无 session、无压缩、无进度通知。
 // Phase 2: SubAgent 通过 RunConfig 继承父 Agent 的工作区配置，

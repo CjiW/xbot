@@ -129,6 +129,13 @@ const systemGuideText = `[系统引导] 在执行任何操作前，**必须**先
 - search_tools 仅用于搜索其他工具
 `
 
+// cronGuideText 当消息来自 cron 定时任务时，追加到用户消息末尾的行为指引。
+const cronGuideText = `[Cron 任务模式] 这是一条定时任务触发的消息。请直接执行需求并给出结果，不要反问或等待用户确认。如有操作，直接完成并报告。
+`
+
+// ExtraKeyIsCron 标记消息是否来自 cron 定时任务。
+const ExtraKeyIsCron = "is_cron"
+
 // UserMessageMiddleware 构建最终的用户消息（注入时间戳、发送者标识、系统引导）
 type UserMessageMiddleware struct{}
 
@@ -151,28 +158,11 @@ func (m *UserMessageMiddleware) Process(mc *MessageContext) error {
 
 	userMsg = fmt.Sprintf("%s\n\n%s现在时间：%s\n", userMsg, systemGuideText, now)
 
+	// Cron 消息追加行为指引：直接执行，不要反问
+	if isCron, _ := mc.GetExtra(ExtraKeyIsCron); isCron != nil && isCron.(bool) {
+		userMsg += cronGuideText
+	}
+
 	mc.UserMessage = userMsg
-	return nil
-}
-
-// --- Cron 专用中间件 ---
-
-// CronSystemPromptMiddleware 注入 Cron 专用系统提示词
-type CronSystemPromptMiddleware struct {
-	workDir string
-}
-
-func NewCronSystemPromptMiddleware(workDir string) *CronSystemPromptMiddleware {
-	return &CronSystemPromptMiddleware{workDir: workDir}
-}
-
-func (m *CronSystemPromptMiddleware) Name() string  { return "cron_system_prompt" }
-func (m *CronSystemPromptMiddleware) Priority() int { return 0 }
-
-func (m *CronSystemPromptMiddleware) Process(mc *MessageContext) error {
-	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	mc.SystemParts["00_base"] = fmt.Sprintf(cronSystemPrompt, m.workDir, now)
-	// Cron 消息不需要额外处理 UserMessage，直接使用原始内容
-	mc.UserMessage = mc.UserContent
 	return nil
 }

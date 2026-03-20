@@ -27,7 +27,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 	// 复用 buildPrompt，替换 Content 为卡片摘要
 	cardMsg := msg
 	cardMsg.Content = summary
-	messages, err := a.buildPrompt(ctx, cardMsg, tenantSession)
+	messages, err := a.buildPrompt(ctx, cardMsg, tenantSession, false)
 	if err != nil {
 		return nil, err
 	}

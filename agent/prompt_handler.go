@@ -26,7 +26,7 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 	// 替换 msg.Content 为 query，复用 buildPrompt
 	dryMsg := msg
 	dryMsg.Content = query
-	messages, err := a.buildPrompt(ctx, dryMsg, tenantSession)
+	messages, err := a.buildPrompt(ctx, dryMsg, tenantSession, false)
 	if err != nil {
 		return nil, err
 	}

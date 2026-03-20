@@ -14,6 +14,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -32,6 +33,17 @@ type FeishuConfig struct {
 	EncryptKey        string   // 事件订阅加密 Key（可选）
 	VerificationToken string   // 事件订阅验证 Token（可选）
 	AllowFrom         []string // 允许的用户 open_id 白名单（空则允许所有人）
+}
+
+// SettingsCallbacks holds the callback functions for settings card interaction.
+// Injected from Agent to decouple channel from agent packages.
+type SettingsCallbacks struct {
+	LLMList         func(senderID string) ([]string, string) // returns (models, currentModel)
+	LLMSet          func(senderID, model string) error
+	RegistryBrowse  func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
+	RegistryInstall func(entryType string, id int64, senderID string) error
+	SettingsGet     func(channelName, senderID string) (map[string]string, error)
+	SettingsSet     func(channelName, senderID, key, value string) error
 }
 
 // FeishuChannel 飞书渠道实现
@@ -59,6 +71,9 @@ type FeishuChannel struct {
 
 	// CardBuilder for card callback handling
 	cardBuilder *tools.CardBuilder
+
+	// Settings card callbacks (injected from Agent via main.go)
+	settingsCallbacks SettingsCallbacks
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -89,6 +104,11 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 // SetCardBuilder sets the CardBuilder for card callback handling.
 func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
 	f.cardBuilder = builder
+}
+
+// SetSettingsCallbacks injects settings card callbacks from Agent.
+func (f *FeishuChannel) SetSettingsCallbacks(cb SettingsCallbacks) {
+	f.settingsCallbacks = cb
 }
 
 // Start 启动飞书 WebSocket 长连接
@@ -1002,11 +1022,20 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		senderID = *event.Event.Operator.UserID
 	}
 
-	// 查找 card_id：优先从 actionData（按钮 value），否则通过 message_id 反查
+	// 获取 message_id（settings 卡片拦截和 CardBuilder 路由都需要）
 	messageID := ""
 	if event.Event.Context != nil {
 		messageID = event.Event.Context.OpenMessageID
 	}
+
+	// 拦截 settings 卡片按钮点击（在 CardBuilder 路由之前）
+	if parsed := parseActionDataFromMap(actionData); parsed != nil {
+		if actionName := parsed["action"]; strings.HasPrefix(actionName, settingsCardActionPrefix) {
+			return f.handleSettingsCardAction(ctx, actionData, chatID, senderID, messageID)
+		}
+	}
+
+	// 查找 card_id：优先从 actionData（按钮 value），否则通过 message_id 反查
 	cardID := ""
 	if id, ok := actionData["card_id"].(string); ok {
 		cardID = id
@@ -1021,6 +1050,54 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 	}
 
 	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID, requestID)
+}
+
+// handleSettingsCardAction handles settings card button clicks.
+// It processes the action, rebuilds the card, and patches the original message.
+func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData map[string]any, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
+	updatedCard, err := f.HandleSettingsAction(ctx, actionData, senderID, chatID, messageID)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"chat_id":   chatID,
+			"sender_id": senderID,
+		}).Warn("Settings card action failed")
+		return &callback.CardActionTriggerResponse{
+			Toast: &callback.Toast{
+				Type:    "error",
+				Content: "操作失败: " + err.Error(),
+			},
+		}, nil
+	}
+
+	// Patch the updated card back to the original message
+	if messageID != "" {
+		cardJSON, err := json.Marshal(updatedCard)
+		if err != nil {
+			log.WithError(err).Warn("Failed to marshal settings card")
+			return &callback.CardActionTriggerResponse{
+				Toast: &callback.Toast{
+					Type:    "error",
+					Content: "卡片序列化失败",
+				},
+			}, nil
+		}
+		if err := f.patchMessage(messageID, cardJSON); err != nil {
+			log.WithError(err).WithField("message_id", messageID).Warn("Failed to patch settings card")
+			return &callback.CardActionTriggerResponse{
+				Toast: &callback.Toast{
+					Type:    "error",
+					Content: "卡片更新失败",
+				},
+			}, nil
+		}
+	}
+
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{
+			Type:    "success",
+			Content: "已更新",
+		},
+	}, nil
 }
 
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
@@ -1767,17 +1844,17 @@ func feishuSettingsSchema() []SettingDefinition {
 			DefaultValue: "detailed",
 		},
 		{
-			Key:         "language",
-			Label:       "语言",
-			Description: "机器人回复的首选语言",
+			Key:         "context_mode",
+			Label:       "上下文模式",
+			Description: "控制上下文压缩方式",
 			Type:        SettingTypeSelect,
 			Category:    "对话",
 			Options: []SettingOption{
-				{Label: "中文", Value: "zh"},
-				{Label: "English", Value: "en"},
-				{Label: "日本語", Value: "ja"},
+				{Label: "渐进压缩", Value: "phase2"},
+				{Label: "双视图", Value: "phase1"},
+				{Label: "禁用", Value: "none"},
 			},
-			DefaultValue: "zh",
+			DefaultValue: "phase1",
 		},
 		{
 			Key:          "notify_on_complete",

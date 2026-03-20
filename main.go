@@ -223,6 +223,29 @@ func main() {
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())
 
+		// 注入设置卡片回调（让飞书渠道能访问 Agent 的 LLM/Registry/Settings 功能）
+		feishuCh.SetSettingsCallbacks(channel.SettingsCallbacks{
+			LLMList: func(senderID string) ([]string, string) {
+				llmClient, currentModel, _, _ := agentLoop.LLMFactory().GetLLM(senderID)
+				return llmClient.ListModels(), currentModel
+			},
+			LLMSet: func(senderID, model string) error {
+				return agentLoop.SetUserModel(senderID, model)
+			},
+			RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+				return agentLoop.RegistryManager().Browse(entryType, limit, offset)
+			},
+			RegistryInstall: func(entryType string, id int64, senderID string) error {
+				return agentLoop.RegistryManager().Install(entryType, id, senderID)
+			},
+			SettingsGet: func(channelName, senderID string) (map[string]string, error) {
+				return agentLoop.SettingsService().GetSettings(channelName, senderID)
+			},
+			SettingsSet: func(channelName, senderID, key, value string) error {
+				return agentLoop.SettingsService().SetSetting(channelName, senderID, key, value)
+			},
+		})
+
 		// 注入飞书渠道特化 prompt 提供者
 		agentLoop.SetChannelPromptProviders(&feishuPromptAdapter{ch: feishuCh})
 	}

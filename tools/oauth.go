@@ -78,7 +78,7 @@ func (t *OAuthTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 
 	// Build authorization card with proper prefix
 	cardJSON := t.buildAuthCard(args.Provider, args.Reason, authURL, state)
-	cardContent := "__FEISHU_CARD__:" + cardJSON
+	cardContent := "__FEISHU_CARD__::" + cardJSON
 
 	// Send card
 	if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, cardContent); err != nil {

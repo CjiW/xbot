@@ -47,6 +47,10 @@ type SettingsCallbacks struct {
 	ContextModeGet func() string
 	ContextModeSet func(mode string) error
 
+	// NormalizeSenderID normalizes sender ID for single-user mode.
+	// In single-user mode, all sender IDs are mapped to "default".
+	NormalizeSenderID func(senderID string) string
+
 	RegistryBrowse    func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
 	RegistryInstall   func(entryType string, id int64, senderID string) error
 	RegistryListMy    func(senderID, entryType string) (published []sqlite.SharedEntry, installed []string, err error)
@@ -1073,6 +1077,11 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 // handleSettingsCardAction handles settings card interactions (buttons & selects).
 // Returns the updated card directly in the callback response for instant UI refresh.
 func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData map[string]any, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
+	// Normalize senderID for single-user mode
+	if f.settingsCallbacks.NormalizeSenderID != nil {
+		senderID = f.settingsCallbacks.NormalizeSenderID(senderID)
+	}
+
 	updatedCard, err := f.HandleSettingsAction(ctx, actionData, senderID, chatID, messageID)
 	if err != nil {
 		log.WithError(err).WithFields(log.Fields{

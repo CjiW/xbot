@@ -16,7 +16,7 @@ func TestNormalizeSenderID_SingleUser(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := a.normalizeSenderID(tt.input)
+		got := a.NormalizeSenderID(tt.input)
 		if got != tt.want {
 			t.Errorf("normalizeSenderID(%q) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -37,7 +37,7 @@ func TestNormalizeSenderID_MultiUser(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := a.normalizeSenderID(tt.input)
+		got := a.NormalizeSenderID(tt.input)
 		if got != tt.want {
 			t.Errorf("normalizeSenderID(%q) = %q, want %q", tt.input, got, tt.want)
 		}

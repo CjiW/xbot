@@ -812,7 +812,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
 			// 单用户模式：在 bus 入口统一归一化 SenderID
-			msg.SenderID = a.normalizeSenderID(msg.SenderID)
+			msg.SenderID = a.NormalizeSenderID(msg.SenderID)
 
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
@@ -849,9 +849,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// normalizeSenderID returns the effective sender ID for the message.
+// NormalizeSenderID returns the effective sender ID for the message.
 // In single-user mode, all sender IDs are mapped to "default".
-func (a *Agent) normalizeSenderID(senderID string) string {
+func (a *Agent) NormalizeSenderID(senderID string) string {
 	if a.singleUser {
 		return "default"
 	}
@@ -1605,7 +1605,7 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, error) {
 	msg := bus.InboundMessage{
 		Channel:   "cli",
-		SenderID:  a.normalizeSenderID("user"),
+		SenderID:  a.NormalizeSenderID("user"),
 		ChatID:    "direct",
 		Content:   content,
 		Time:      time.Now(),

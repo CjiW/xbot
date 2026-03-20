@@ -18,29 +18,57 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 	ws := t.TempDir()
 	userID := "test-squash-" + time.Now().Format("20060102-150405")
 	userImage := userImageName(userID)
+	containerName := "xbot-" + userID
 	threshold := 3
 
 	defer func() {
-		exec.Command("docker", "rm", "-f", "xbot-"+userID).Run()
+		exec.Command("docker", "rm", "-f", containerName).Run()
 		exec.Command("docker", "rmi", "-f", userImage).Run()
 	}()
 
-	// Phase 1: Legacy image without label should trigger squash immediately
+	// Phase 1: Legacy image (exists but has NO commit count label) should trigger
+	// immediate squash on the next commit. This simulates a pre-existing image
+	// from before the P0 fix was deployed.
 	t.Run("legacy_image_triggers_squash", func(t *testing.T) {
-		s := newDockerSandboxWithThreshold("ubuntu:22.04", threshold)
+		// Step 1: Manually create a legacy image WITHOUT the commit count label.
+		// This simulates an image that was built up over many commits before
+		// the label-based tracking was introduced.
+		exec.Command("docker", "rm", "-f", containerName).Run()
+		runCmd := exec.Command("docker", "run", "-d", "--name", containerName,
+			"ubuntu:22.04", "tail", "-f", "/dev/null")
+		if out, err := runCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to create container: %v, %s", err, string(out))
+		}
+		exec.Command("docker", "exec", containerName, "sh", "-c",
+			"echo legacy > /tmp/legacy.txt").Run()
+		// Commit WITHOUT label → legacy image (no xbot.commit.count)
+		commitCmd := exec.Command("docker", "commit", containerName, userImage)
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to commit legacy image: %v, %s", err, string(out))
+		}
+		exec.Command("docker", "rm", "-f", containerName).Run()
 
-		// Create a file to ensure dirty state
-		cmd, args, _ := s.Wrap("sh", []string{"-c", "echo legacy > /tmp/legacy.txt"}, nil, ws, userID)
+		// Verify setup: readCommitCount should return -1 (legacy)
+		count := readCommitCount(userImage)
+		if count != -1 {
+			t.Fatalf("setup: expected legacy image to return -1, got %d", count)
+		}
+		t.Logf("✓ Legacy image created (readCommitCount = -1)")
+
+		// Step 2: Use sandbox to make another change and Close.
+		// commitIfDirty should detect legacy (-1), force commitCount = threshold,
+		// and trigger immediate squash.
+		s := newDockerSandboxWithThreshold("ubuntu:22.04", threshold)
+		cmd, args, _ := s.Wrap("sh", []string{"-c", "echo more > /tmp/more.txt"}, nil, ws, userID)
 		if out, err := exec.Command(cmd, args...).CombinedOutput(); err != nil {
 			t.Fatalf("command failed: %v, output: %s", err, string(out))
 		}
 
-		// Close should commit + squash (legacy image, no label)
 		if err := s.Close(); err != nil {
 			t.Fatalf("Close failed: %v", err)
 		}
 
-		// Verify image has the squashed label (count=0)
+		// After squash, label should be "0"
 		out, err := exec.Command("docker", "image", "inspect", "-f",
 			`{{index .Config.Labels "xbot.commit.count"}}`, userImage).CombinedOutput()
 		if err != nil {
@@ -48,15 +76,21 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 		}
 		label := strings.TrimSpace(string(out))
 		t.Logf("Commit count label after squash: %q", label)
-		// After squash, label should be "0"
-		if label != "0" && label != "" {
+		if label != "0" {
 			t.Errorf("expected label '0' after squash, got %q", label)
 		}
 	})
 
-	// Phase 2: Multiple restart cycles — count should accumulate
+	// Phase 2: Multiple restart cycles — count should accumulate from 0
+	// (Phase 1 left label=0 after squash).
 	t.Run("count_accumulates_across_restarts", func(t *testing.T) {
+		// Clean up any leftover container before starting
+		exec.Command("docker", "rm", "-f", containerName).Run()
+
 		for i := 1; i <= threshold; i++ {
+			// Clean up before each round to avoid stale container issues
+			exec.Command("docker", "rm", "-f", containerName).Run()
+
 			s := newDockerSandboxWithThreshold("ubuntu:22.04", threshold)
 
 			// Make a change each cycle
@@ -89,7 +123,7 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 			`{{index .Config.Labels "xbot.commit.count"}}`, userImage).CombinedOutput()
 		label := strings.TrimSpace(string(out))
 		t.Logf("After threshold (%d) rounds: commit count label = %q", threshold, label)
-		if label != "0" && label != "" {
+		if label != "0" {
 			t.Errorf("expected label '0' after threshold squash, got %q", label)
 		}
 	})

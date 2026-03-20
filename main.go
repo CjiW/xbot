@@ -27,8 +27,12 @@ import (
 func main() {
 	cfg := config.Load()
 
-	// 配置日志
-	setupLogger(cfg.Log)
+	// 配置日志（支持文件输出 + 按日轮转）
+	workDir := cfg.Agent.WorkDir
+	if err := setupLogger(cfg.Log, workDir); err != nil {
+		log.WithError(err).Fatal("Failed to setup logger")
+	}
+	defer log.Close()
 
 	// 创建 LLM 客户端
 	llmClient, err := createLLM(cfg.LLM)
@@ -44,7 +48,7 @@ func main() {
 	msgBus := bus.NewMessageBus()
 
 	// 创建 Agent
-	workDir := cfg.Agent.WorkDir
+	workDir = cfg.Agent.WorkDir
 	xbotDir := filepath.Join(workDir, ".xbot")
 	dbPath := filepath.Join(xbotDir, "xbot.db")
 
@@ -175,6 +179,14 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.AddPermissionTool{MCP: feishuMCP})
 
 		log.Info("OAuth and Feishu MCP tools registered")
+	}
+
+	// 注册 Logs 工具（仅管理员可用）
+	adminChatID := cfg.Admin.ChatID
+	if adminChatID != "" {
+		logsTool := tools.NewLogsTool(adminChatID)
+		agentLoop.RegisterCoreTool(logsTool)
+		log.WithField("admin_chat_id", adminChatID).Info("Logs tool registered (admin only)")
 	}
 
 	// 创建消息分发器
@@ -385,21 +397,13 @@ func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
 }
 
 // setupLogger 配置日志
-func setupLogger(cfg config.LogConfig) {
-	switch cfg.Format {
-	case "json":
-		log.SetFormatter(&log.JSONFormatter{})
-	default:
-		log.SetFormatter(&log.TextFormatter{
-			FullTimestamp: true,
-		})
-	}
-
-	level, err := log.ParseLevel(cfg.Level)
-	if err != nil {
-		level = log.InfoLevel
-	}
-	log.SetLevel(level)
+func setupLogger(cfg config.LogConfig, workDir string) error {
+	return log.Setup(log.SetupConfig{
+		Level:   cfg.Level,
+		Format:  cfg.Format,
+		WorkDir: workDir,
+		MaxAge:  7, // 保留 7 天日志
+	})
 }
 
 // getChannels 获取分发器中的所有渠道（辅助函数）

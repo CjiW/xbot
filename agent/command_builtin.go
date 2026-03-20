@@ -490,6 +490,10 @@ func (c *settingsCmd) Match(s string) bool {
 func (c *settingsCmd) Concurrent() bool { return true }
 
 func (c *settingsCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	if msg.ChatType == "group" {
+		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: "⚠️ 设置仅限私聊使用，请私信我发送 /settings"}, nil
+	}
+
 	if a.settingsSvc == nil {
 		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: "SettingsService 未初始化"}, nil
 	}

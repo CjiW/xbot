@@ -2,6 +2,28 @@ package tools
 
 import "strings"
 
+// parseEnvFileLines 解析 .xbot_env 文件内容为 envMap。
+// 正确处理 "export " 前缀（包括多次堆积），避免因前缀导致的 key 不匹配。
+func parseEnvFileLines(content string) map[string]string {
+	envMap := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Strip "export " prefix(es) if present (file stores "export KEY=VALUE")
+		// Handle corrupted lines with stacked prefixes like "export export PATH=..."
+		for strings.HasPrefix(line, "export ") {
+			line = strings.TrimPrefix(line, "export ")
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+	return envMap
+}
+
 // parseExportStatements 解析 export 语句，提取所有 KEY=VALUE 对
 // 支持引号内的空格、单引号、双引号、$变量引用等
 func parseExportStatements(command string) []string {

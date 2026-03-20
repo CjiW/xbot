@@ -119,6 +119,11 @@ type AgentConfig struct {
 
 	// SubAgent 超时控制
 	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
+
+	// LLM 重试配置
+	LLMRetryAttempts int           // LLM 重试次数（默认 5）
+	LLMRetryDelay    time.Duration // 初始重试延迟（默认 1s）
+	LLMRetryMaxDelay time.Duration // 最大重试延迟（默认 30s）
 }
 
 // ServerConfig 服务器配置
@@ -219,6 +224,9 @@ func Load() *Config {
 			ContextMode:          getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
 			MaxSubAgentDepth:     getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
 			SubAgentLLMTimeout:   getEnvDurationOrDefault("SUBAGENT_LLM_TIMEOUT", 3*time.Minute),
+			LLMRetryAttempts:     getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
+			LLMRetryDelay:        getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
+			LLMRetryMaxDelay:     getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),

@@ -108,9 +108,20 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 	return map[string]string{
 		"05_channel_feishu": `## 飞书渠道规则
 - 不要在群聊中 @ 所有人
+- 飞书 markdown 支持有限：不支持复杂表格、嵌套列表、HTML标签
 - 使用 card_create 构建交互式卡片，提升信息密度
-- 飞书 markdown 支持有限，避免使用复杂表格
-- 可以使用飞书表情符号增强表达`,
+- 可以使用飞书表情符号增强表达
+
+## 飞书文件操作
+- 用户发送的文件/图片会在消息中标记为 <file .../> 或 <image .../> 标签
+- 使用 feishu_download_file 下载用户发送的文件到工作目录
+- 使用 feishu_send_file 向用户发送文件（支持 file/image 两种类型）
+- feishu_upload_file 是上传到用户云盘，不是直接发送消息
+
+## 飞书卡片交互
+- card_create 创建卡片后，card_add_content/card_add_interactive 等工具自动可用
+- 设置 wait_response=true 可等待用户交互
+- feishu_send_card 可直接发送 JSON 卡片`,
 	}
 }
 
@@ -297,6 +308,64 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 			f.cardMsgIDs.Store(msgID, cardID)
 		}
 		return msgID, nil
+	}
+
+	// 文件发送协议：__FEISHU_FILE__::file_path 或 __FEISHU_FILE__::image::file_path
+	if strings.HasPrefix(msg.Content, "__FEISHU_FILE__::") {
+		payload := strings.TrimPrefix(msg.Content, "__FEISHU_FILE__::")
+		msgType := "file"
+		filePath := payload
+		if strings.HasPrefix(payload, "image::") {
+			msgType = "image"
+			filePath = strings.TrimPrefix(payload, "image::")
+		}
+
+		if _, err := os.Stat(filePath); err != nil {
+			return "", fmt.Errorf("file not found: %s", filePath)
+		}
+
+		switch msgType {
+		case "image":
+			imageKey, err := f.uploadImage(filePath)
+			if err != nil {
+				return "", fmt.Errorf("upload image: %w", err)
+			}
+			imgContent, _ := json.Marshal(map[string]string{"image_key": imageKey})
+
+			receiveIDType := "chat_id"
+			if !strings.HasPrefix(msg.ChatID, "oc_") {
+				receiveIDType = "open_id"
+			}
+
+			req := larkim.NewCreateMessageReqBuilder().
+				ReceiveIdType(receiveIDType).
+				Body(larkim.NewCreateMessageReqBodyBuilder().
+					ReceiveId(msg.ChatID).
+					MsgType("image").
+					Content(string(imgContent)).
+					Build()).
+				Build()
+			resp, err := f.client.Im.Message.Create(context.Background(), req)
+			if err != nil {
+				return "", fmt.Errorf("send image message: %w", err)
+			}
+			if !resp.Success() {
+				return "", fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+			}
+			var sentMsgID string
+			if resp.Data != nil && resp.Data.MessageId != nil {
+				sentMsgID = *resp.Data.MessageId
+			}
+			log.WithFields(log.Fields{"chat_id": msg.ChatID, "image_key": imageKey, "message_id": sentMsgID}).Debug("Feishu image sent via __FEISHU_FILE__ protocol")
+			return sentMsgID, nil
+
+		default: // file
+			if err := f.sendFile(msg.ChatID, filePath); err != nil {
+				return "", err
+			}
+			log.WithFields(log.Fields{"chat_id": msg.ChatID, "file_path": filePath}).Debug("Feishu file sent via __FEISHU_FILE__ protocol")
+			return "", nil
+		}
 	}
 
 	originalLen := len(msg.Content)

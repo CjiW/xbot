@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -99,10 +100,9 @@ type dockerSandbox struct {
 }
 
 type dockerContainer struct {
-	name        string
-	started     bool
-	shell       string // 用户默认 shell（从容器内 /etc/passwd 获取）
-	commitCount int    // 自上次扁平化以来的 commit 次数
+	name    string
+	started bool
+	shell   string // 用户默认 shell（从容器内 /etc/passwd 获取）
 }
 
 func (s *dockerSandbox) Name() string { return "docker" }
@@ -150,19 +150,43 @@ func (s *dockerSandbox) Close() error {
 	return nil
 }
 
+// commitCountLabel is the Docker image label key used to persist the commit
+// count across xbot restarts. Previously this was stored in-memory on
+// dockerContainer.commitCount, which reset to 0 on every restart, causing
+// squash to never trigger and user images to bloat (8GB FS → 50GB image).
+const commitCountLabel = "xbot.commit.count"
+
+// readCommitCount reads the persisted commit count from a Docker image label.
+// Returns 0 if the image doesn't exist.
+// Returns -1 if the image exists but has no commit count label (legacy image,
+// never been squashed — caller should treat this as "needs immediate squash").
+func readCommitCount(imageName string) int {
+	// Use `index` function because the label key "xbot.commit.count" contains dots,
+	// which would be misinterpreted as nested field access in Go templates.
+	out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f",
+		fmt.Sprintf(`{{index .Config.Labels "%s"}}`, commitCountLabel), imageName)
+	if err != nil {
+		return 0 // image doesn't exist
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" || trimmed == "<no value>" {
+		return -1 // image exists but label missing (legacy)
+	}
+	n, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // commitIfDirty 仅在容器有文件系统变更时 commit，保存用户环境状态。
 // 通过定期 export+import 扁平化镜像，避免层累积浪费磁盘空间。
+// commitCount 持久化在 Docker image label 上，跨重启存活。
 // 调用方必须持有 s.mu 锁。
 func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping commit for system container %s (userID=%q)", containerName, userID)
 		return
-	}
-
-	c := s.containers[userID]
-	if c == nil {
-		c = &dockerContainer{name: containerName, started: true}
-		s.containers[userID] = c
 	}
 
 	diffOut, err := dockerExec(dockerCmdTimeout, "diff", containerName)
@@ -177,19 +201,32 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 
 	userImage := userImageName(userID)
 
+	// Read persisted commit count from image label.
+	// -1 = legacy image without label → treat as needing immediate squash.
+	persistedCount := readCommitCount(userImage)
+	commitCount := persistedCount + 1
+	if persistedCount < 0 {
+		// Legacy image: force squash on this commit regardless of threshold
+		commitCount = s.commitSquashThreshold
+		log.Infof("Legacy image %s detected (no commit count label), will squash after commit", userImage)
+	}
+
+	// Capture old image ID before commit
 	var oldImageID string
 	if out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	if err := dockerRun(dockerSlowTimeout, "commit", containerName, userImage); err != nil {
+	// Commit with incremented count as image label
+	if err := dockerRun(dockerSlowTimeout, "commit",
+		"--change", fmt.Sprintf("LABEL %s=%d", commitCountLabel, commitCount),
+		containerName, userImage); err != nil {
 		log.WithError(err).Warnf("Failed to commit container %s to image %s", containerName, userImage)
 		return
 	}
-	log.Infof("Committed container %s to image %s", containerName, userImage)
+	log.Infof("Committed container %s to image %s (commit count: %d)", containerName, userImage, commitCount)
 
-	c.commitCount++
-
+	// Clean up old image layer
 	if oldImageID != "" {
 		if newOut, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 			newImageID := strings.TrimSpace(string(newOut))
@@ -209,11 +246,13 @@ func (s *dockerSandbox) commitIfDirty(containerName, userID string) {
 		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
 	}
 
-	if s.commitSquashThreshold > 0 && c.commitCount >= s.commitSquashThreshold {
+	// Check if squash is needed (count persisted in image label survives restarts)
+	if s.commitSquashThreshold > 0 && commitCount >= s.commitSquashThreshold {
 		log.Infof("Commit count reached threshold (%d >= %d), squashing image %s",
-			c.commitCount, s.commitSquashThreshold, userImage)
+			commitCount, s.commitSquashThreshold, userImage)
 		if s.squashImage(containerName, userImage) {
-			c.commitCount = 0
+			// squashImage resets the label to 0 via --change during import
+			log.Infof("Squash complete, commit count reset for image %s", userImage)
 		}
 	}
 }
@@ -265,8 +304,10 @@ func (s *dockerSandbox) squashImage(containerName, userImage string) bool {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	// 4. import 为新镜像，用 --change 恢复元数据
+	// 4. import 为新镜像，用 --change 恢复元数据并重置 commitCount label
 	importArgs := []string{"import"}
+	// Reset commit count label (squash starts a new cycle)
+	importArgs = append(importArgs, "--change", fmt.Sprintf("LABEL %s=0", commitCountLabel))
 	for _, c := range changes {
 		importArgs = append(importArgs, "--change", c)
 	}

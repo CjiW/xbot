@@ -64,6 +64,7 @@ const (
 	ExtraKeySkillsCatalog  = "skills_catalog"
 	ExtraKeyAgentsCatalog  = "agents_catalog"
 	ExtraKeyMemoryProvider = "memory_provider"
+	ExtraKeyTenantID       = "tenant_id"
 )
 
 // GetExtra 从 Extra 中获取指定类型的值

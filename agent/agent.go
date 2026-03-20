@@ -1299,6 +1299,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(msg.SenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
 
+	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
+
 	return a.pipeline.Run(mc), nil
 }
 

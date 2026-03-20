@@ -286,6 +286,14 @@ func (a *Agent) buildSubAgentRunConfig(
 		sysPrompt += "\n" + skillsCatalog
 	}
 
+	// Pre-compute parentExtras once (shared between Phase 4 and buildSubAgentMemory)
+	parentExtras := a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
+
+	// Phase 4: Inject project knowledge from parent agent's archival memory
+	if hint := BuildProjectHintText(ctx, a.multiSession.ArchivalService(), parentExtras.TenantID); hint != "" {
+		sysPrompt += hint
+	}
+
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage(sysPrompt),
 		llm.NewUserMessage(task),
@@ -339,7 +347,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 通过 deriveSubAgentTenantID 隔离：每个 (parentTenantID, parentAgentID, roleName) 组合
 	// 产生唯一的 tenantID，确保 SubAgent 和父 Agent 读写完全不同的记忆数据。
 	if caps.Memory {
-		extras, mem := a.buildSubAgentMemory(ctx, parentCtx, parentAgentID, roleName)
+		extras, mem := a.buildSubAgentMemory(ctx, parentCtx, parentExtras, parentAgentID, roleName)
 		if extras != nil && mem != nil {
 			cfg.ToolContextExtras = extras
 			cfg.Memory = mem
@@ -581,10 +589,10 @@ func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtra
 func (a *Agent) buildSubAgentMemory(
 	ctx context.Context,
 	parentCtx *tools.ToolContext,
+	parentExtras *ToolContextExtras,
 	parentAgentID, roleName string,
 ) (*ToolContextExtras, memory.MemoryProvider) {
 	// 1. 获取父 Agent 的 tenantID（用于推导 SubAgent 的 tenantID）
-	parentExtras := a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
 	if parentExtras.TenantID == 0 {
 		log.Ctx(ctx).WithField("parent", parentAgentID).Warn("SubAgent memory: parent tenantID is 0, skipping memory setup")
 		return nil, nil

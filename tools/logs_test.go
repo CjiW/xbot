@@ -40,7 +40,7 @@ func TestLogsToolPermission(t *testing.T) {
 	t.Run("denies_non_admin_session", func(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "user456",
+			ChatID:  "user456",
 			DataDir: t.TempDir(),
 		}
 
@@ -68,7 +68,7 @@ func TestLogsToolPermission(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -84,7 +84,7 @@ func TestLogsToolPermission(t *testing.T) {
 	t.Run("denies_when_admin_chatid_empty", func(t *testing.T) {
 		tool := NewLogsTool("") // empty admin chat ID
 		ctx := &ToolContext{
-			ChatID:        "anyone",
+			ChatID:  "anyone",
 			DataDir: t.TempDir(),
 		}
 
@@ -97,7 +97,7 @@ func TestLogsToolPermission(t *testing.T) {
 	t.Run("denies_different_admin_chatid", func(t *testing.T) {
 		tool := NewLogsTool("real_admin")
 		ctx := &ToolContext{
-			ChatID:        "fake_admin",
+			ChatID:  "fake_admin",
 			DataDir: t.TempDir(),
 		}
 
@@ -131,7 +131,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -157,7 +157,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -176,7 +176,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -208,7 +208,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -247,7 +247,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -282,7 +282,7 @@ func TestLogsToolReadAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -308,7 +308,7 @@ func TestLogsToolReadAction(t *testing.T) {
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -338,7 +338,7 @@ time="2026-03-20T10:03:00Z" level=error msg="another error"
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -372,7 +372,7 @@ plain text line
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -406,7 +406,7 @@ plain text line
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -438,7 +438,7 @@ plain text line
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -462,7 +462,7 @@ plain text line
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -487,7 +487,7 @@ plain text line
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -516,7 +516,7 @@ time="2026-03-20T10:02:00Z" level=info msg="database connected"
 
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
-			ChatID:        "admin123",
+			ChatID:  "admin123",
 			DataDir: tmpDir,
 		}
 
@@ -542,7 +542,7 @@ func TestLogsToolInvalidAction(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
-		ChatID:        "admin123",
+		ChatID:  "admin123",
 		DataDir: tmpDir,
 	}
 
@@ -556,7 +556,7 @@ func TestLogsToolInvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
-		ChatID:        "admin123",
+		ChatID:  "admin123",
 		DataDir: tmpDir,
 	}
 
@@ -570,7 +570,7 @@ func TestLogsToolMissingAction(t *testing.T) {
 	tmpDir := t.TempDir()
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
-		ChatID:        "admin123",
+		ChatID:  "admin123",
 		DataDir: tmpDir,
 	}
 

@@ -1106,6 +1106,7 @@ func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData
 		"chat_id":   chatID,
 		"card_size": len(cardJSON),
 	}).Info("Settings card action completed")
+	log.WithField("card_json", string(cardJSON)).Debug("Settings card response payload")
 
 	return &callback.CardActionTriggerResponse{
 		Card: &callback.Card{

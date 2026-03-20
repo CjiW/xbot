@@ -185,11 +185,7 @@ func buildTabButtons(currentTab string) []map[string]any {
 		})
 	}
 
-	elements = append(elements, map[string]any{
-		"tag":     "action",
-		"layout":  "flow",
-		"actions": actions,
-	})
+	elements = append(elements, wrapButtonsAsColumnSet(actions))
 
 	return elements
 }
@@ -258,11 +254,7 @@ func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[s
 						},
 					})
 				}
-				elements = append(elements, map[string]any{
-					"tag":     "action",
-					"layout":  "flow",
-					"actions": actions,
-				})
+				elements = append(elements, wrapButtonsAsColumnSet(actions))
 
 			case SettingTypeToggle:
 				isOn := currentValue == "true"
@@ -278,27 +270,23 @@ func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[s
 				if isOn {
 					toggleValue = "false"
 				}
-				elements = append(elements, map[string]any{
-					"tag":    "action",
-					"layout": "flow",
-					"actions": []map[string]any{
-						{
-							"tag": "button",
-							"text": map[string]any{
-								"tag":     "plain_text",
-								"content": "切换",
-							},
-							"type": "default",
-							"value": map[string]string{
-								"action_data": mustMapToJSON(map[string]string{
-									"action": "settings_set",
-									"key":    def.Key,
-									"value":  toggleValue,
-								}),
-							},
+				elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
+					{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "切换",
+						},
+						"type": "default",
+						"value": map[string]string{
+							"action_data": mustMapToJSON(map[string]string{
+								"action": "settings_set",
+								"key":    def.Key,
+								"value":  toggleValue,
+							}),
 						},
 					},
-				})
+				}))
 			}
 		}
 	}
@@ -362,11 +350,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		})
 	}
 
-	elements = append(elements, map[string]any{
-		"tag":     "action",
-		"layout":  "flow",
-		"actions": actions,
-	})
+	elements = append(elements, wrapButtonsAsColumnSet(actions))
 
 	if len(models) > 0 {
 		elements = append(elements, map[string]any{
@@ -412,27 +396,23 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		})
 	} else {
 		for _, entry := range skillEntries {
-			elements = append(elements, map[string]any{
-				"tag":    "action",
-				"layout": "flow",
-				"actions": []map[string]any{
-					{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": fmt.Sprintf("📥 %s", entry.Name),
-						},
-						"type": "default",
-						"value": map[string]string{
-							"action_data": mustMapToJSON(map[string]string{
-								"action":     "settings_install",
-								"entry_type": "skill",
-								"entry_id":   fmt.Sprintf("%d", entry.ID),
-							}),
-						},
+			elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
+				{
+					"tag": "button",
+					"text": map[string]any{
+						"tag":     "plain_text",
+						"content": fmt.Sprintf("📥 %s", entry.Name),
+					},
+					"type": "default",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action":     "settings_install",
+							"entry_type": "skill",
+							"entry_id":   fmt.Sprintf("%d", entry.ID),
+						}),
 					},
 				},
-			})
+			}))
 		}
 	}
 
@@ -454,27 +434,23 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		})
 	} else {
 		for _, entry := range agentEntries {
-			elements = append(elements, map[string]any{
-				"tag":    "action",
-				"layout": "flow",
-				"actions": []map[string]any{
-					{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": fmt.Sprintf("📥 %s", entry.Name),
-						},
-						"type": "default",
-						"value": map[string]string{
-							"action_data": mustMapToJSON(map[string]string{
-								"action":     "settings_install",
-								"entry_type": "agent",
-								"entry_id":   fmt.Sprintf("%d", entry.ID),
-							}),
-						},
+			elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
+				{
+					"tag": "button",
+					"text": map[string]any{
+						"tag":     "plain_text",
+						"content": fmt.Sprintf("📥 %s", entry.Name),
+					},
+					"type": "default",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action":     "settings_install",
+							"entry_type": "agent",
+							"entry_id":   fmt.Sprintf("%d", entry.ID),
+						}),
 					},
 				},
-			})
+			}))
 		}
 	}
 
@@ -492,6 +468,30 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 }
 
 // --- Helpers ---
+
+// wrapButtonsAsColumnSet wraps a slice of button elements in a Schema V2-compatible
+// column_set > column > interactive_container structure, replacing the deprecated
+// V1 "action" tag.
+func wrapButtonsAsColumnSet(buttons []map[string]any) map[string]any {
+	return map[string]any{
+		"tag":                "column_set",
+		"flex_mode":          "none",
+		"horizontal_spacing": "default",
+		"columns": []map[string]any{
+			{
+				"tag":    "column",
+				"width":  "weighted",
+				"weight": 1,
+				"elements": []map[string]any{
+					{
+						"tag":      "interactive_container",
+						"elements": buttons,
+					},
+				},
+			},
+		},
+	}
+}
 
 // formatCurrentValue returns the display label for the current setting value.
 func formatCurrentValue(value string, def SettingDefinition) string {

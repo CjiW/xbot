@@ -10,10 +10,8 @@ import (
 	log "xbot/logger"
 )
 
-// settingsCardActionPrefix is the prefix for all settings card callback actions.
 const settingsCardActionPrefix = "settings_"
 
-// context mode display labels
 var contextModeLabels = map[string]string{
 	"phase1": "双视图压缩",
 	"phase2": "渐进压缩",
@@ -21,7 +19,6 @@ var contextModeLabels = map[string]string{
 }
 
 // BuildSettingsCard constructs an interactive Feishu card JSON for settings.
-// tab: "general" | "model" | "market"
 func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string) (map[string]any, error) {
 	switch tab {
 	case "general", "model", "market":
@@ -77,8 +74,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	action := parsed["action"]
 	switch action {
 	case "settings_tab":
-		tab := parsed["tab"]
-		return f.BuildSettingsCard(ctx, senderID, chatID, tab)
+		return f.BuildSettingsCard(ctx, senderID, chatID, parsed["tab"])
 
 	case "settings_context_mode":
 		mode := parsed["mode"]
@@ -114,6 +110,29 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_set_llm":
+		provider := formStr(actionData, "provider")
+		baseURL := formStr(actionData, "base_url")
+		apiKey := formStr(actionData, "api_key")
+		model := formStr(actionData, "model")
+		if provider == "" || baseURL == "" || apiKey == "" {
+			return nil, fmt.Errorf("请填写完整配置")
+		}
+		if f.settingsCallbacks.LLMSetConfig != nil {
+			if err := f.settingsCallbacks.LLMSetConfig(senderID, provider, baseURL, apiKey, model); err != nil {
+				return nil, fmt.Errorf("保存失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
+	case "settings_delete_llm":
+		if f.settingsCallbacks.LLMDelete != nil {
+			if err := f.settingsCallbacks.LLMDelete(senderID); err != nil {
+				return nil, fmt.Errorf("删除失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_install":
 		entryType := parsed["entry_type"]
 		entryIDStr := parsed["entry_id"]
@@ -127,6 +146,19 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if f.settingsCallbacks.RegistryInstall != nil {
 			if err := f.settingsCallbacks.RegistryInstall(entryType, entryID, senderID); err != nil {
 				log.WithError(err).Warnf("HandleSettingsAction: failed to install %s/%d", entryType, entryID)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+
+	case "settings_publish":
+		entryType := parsed["entry_type"]
+		name := parsed["name"]
+		if entryType == "" || name == "" {
+			return nil, fmt.Errorf("missing entry_type or name")
+		}
+		if f.settingsCallbacks.RegistryPublish != nil {
+			if err := f.settingsCallbacks.RegistryPublish(entryType, name, senderID); err != nil {
+				log.WithError(err).Warnf("HandleSettingsAction: failed to publish %s/%s", entryType, name)
 			}
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
@@ -173,11 +205,9 @@ func buildTabButtons(currentTab string) []map[string]any {
 	return []map[string]any{wrapButtonsInColumns(buttons)}
 }
 
-// buildGeneralTabContent builds the general settings tab with real controls.
 func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
 	var elements []map[string]any
 
-	// --- Context Mode ---
 	currentMode := "phase1"
 	if f.settingsCallbacks.ContextModeGet != nil {
 		currentMode = f.settingsCallbacks.ContextModeGet()
@@ -235,172 +265,334 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	var elements []map[string]any
 
 	hasCustom := false
-	if f.settingsCallbacks.LLMHasCustom != nil {
-		hasCustom = f.settingsCallbacks.LLMHasCustom(senderID)
-	}
-
-	var models []string
-	currentModel := ""
-	if f.settingsCallbacks.LLMList != nil {
-		models, currentModel = f.settingsCallbacks.LLMList(senderID)
+	var cfgProvider, cfgBaseURL, cfgModel string
+	if f.settingsCallbacks.LLMGetConfig != nil {
+		var ok bool
+		cfgProvider, cfgBaseURL, cfgModel, ok = f.settingsCallbacks.LLMGetConfig(senderID)
+		hasCustom = ok
 	}
 
 	if !hasCustom {
+		// No custom LLM — show setup form
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": fmt.Sprintf("当前使用全局模型：**%s**", currentModel),
+			"content": "**配置个人模型**",
 		})
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": "配置自定义 LLM 后可在此切换模型：\n```\n/set-llm provider=openai base_url=https://... api_key=sk-xxx model=gpt-4o\n```",
+			"content": "当前使用系统默认模型，配置个人 LLM 后可自由选择模型。",
 		})
+
+		formElements := []map[string]any{
+			{
+				"tag":  "select_static",
+				"name": "provider",
+				"placeholder": map[string]any{
+					"tag":     "plain_text",
+					"content": "选择 Provider",
+				},
+				"options": []map[string]any{
+					{"text": map[string]any{"tag": "plain_text", "content": "OpenAI（含兼容 API）"}, "value": "openai"},
+					{"text": map[string]any{"tag": "plain_text", "content": "Anthropic"}, "value": "anthropic"},
+				},
+			},
+			{
+				"tag":  "input",
+				"name": "base_url",
+				"label": map[string]any{
+					"tag":     "plain_text",
+					"content": "API 地址",
+				},
+				"placeholder": map[string]any{
+					"tag":     "plain_text",
+					"content": "https://api.openai.com/v1",
+				},
+			},
+			{
+				"tag":  "input",
+				"name": "api_key",
+				"label": map[string]any{
+					"tag":     "plain_text",
+					"content": "API Key",
+				},
+				"placeholder": map[string]any{
+					"tag":     "plain_text",
+					"content": "sk-...",
+				},
+			},
+			{
+				"tag":  "input",
+				"name": "model",
+				"label": map[string]any{
+					"tag":     "plain_text",
+					"content": "模型名称（可选，保存后可从列表选择）",
+				},
+				"placeholder": map[string]any{
+					"tag":     "plain_text",
+					"content": "gpt-4o",
+				},
+			},
+			{
+				"tag":         "button",
+				"text":        map[string]any{"tag": "plain_text", "content": "保存配置"},
+				"type":        "primary",
+				"action_type": "form_submit",
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action": "settings_set_llm",
+					}),
+				},
+			},
+		}
+
 		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": "支持 `openai`（含兼容 API）和 `anthropic` 两种 provider。\n使用 `/llm` 查看当前配置。",
+			"tag":      "form",
+			"name":     "llm_setup_form",
+			"elements": formElements,
 		})
+
 		return elements
 	}
 
-	maxModels := 20
+	// Has custom LLM — show config info + model switch + delete
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**个人模型配置**",
+	})
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": fmt.Sprintf("Provider：**%s**\nAPI 地址：**%s**", cfgProvider, cfgBaseURL),
+	})
+
+	var models []string
+	currentModel := cfgModel
+	if f.settingsCallbacks.LLMList != nil {
+		models, currentModel = f.settingsCallbacks.LLMList(senderID)
+	}
+	if currentModel == "" {
+		currentModel = cfgModel
+	}
+
+	maxModels := 30
 	if len(models) > maxModels {
 		models = models[:maxModels]
 	}
 
-	var options []map[string]any
-	for _, model := range models {
-		options = append(options, map[string]any{
-			"text":  map[string]any{"tag": "plain_text", "content": model},
-			"value": model,
-		})
-	}
+	if len(models) > 0 {
+		var options []map[string]any
+		for _, m := range models {
+			options = append(options, map[string]any{
+				"text":  map[string]any{"tag": "plain_text", "content": m},
+				"value": m,
+			})
+		}
 
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": fmt.Sprintf("当前模型：**%s**", currentModel),
-	})
-
-	if len(options) > 0 {
-		elements = append(elements, map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_model_select",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
-			"initial_option": currentModel,
-			"options":        options,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_set_model",
-				}),
+		elements = append(elements, buildSettingRow(
+			"当前模型",
+			currentModel,
+			map[string]any{
+				"tag":            "select_static",
+				"name":           "settings_model_select",
+				"placeholder":    map[string]any{"tag": "plain_text", "content": "切换模型..."},
+				"initial_option": currentModel,
+				"options":        options,
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action": "settings_set_model",
+					}),
+				},
 			},
+		))
+	} else {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("当前模型：**%s**", currentModel),
 		})
 	}
 
+	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": "💡 `/llm` 查看完整配置 · `/set-llm` 修改配置 · `/unset-llm` 恢复全局默认",
+		"tag": "button",
+		"text": map[string]any{
+			"tag":     "plain_text",
+			"content": "🗑️ 删除个人配置，恢复系统默认",
+		},
+		"type": "danger",
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{
+				"action": "settings_delete_llm",
+			}),
+		},
 	})
 
 	return elements
 }
 
-// buildMarketTabContent builds the market browsing tab.
+// buildMarketTabContent builds the market browsing tab with my items + marketplace.
 func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
+	// "我的" section
+	if f.settingsCallbacks.RegistryListMy != nil {
+		elements = append(elements, f.buildMyItemsSection(senderID, "skill", "技能")...)
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, f.buildMyItemsSection(senderID, "agent", "代理")...)
+		elements = append(elements, map[string]any{"tag": "hr"})
+	}
+
+	// Marketplace section
 	if f.settingsCallbacks.RegistryBrowse == nil {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": "_Registry 功能未启用_",
+			"content": "_市场功能未启用_",
 		})
 		return elements
 	}
 
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": "**📦 Skills**",
-	})
-
-	skillEntries, err := f.settingsCallbacks.RegistryBrowse("skill", 10, 0)
-	if err != nil {
-		log.WithError(err).Warn("BuildSettingsCard: failed to browse skills")
-	}
-	if len(skillEntries) == 0 {
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": "_暂无公开的 Skill_",
-		})
-	} else {
-		var buttons []map[string]any
-		for _, entry := range skillEntries {
-			buttons = append(buttons, map[string]any{
-				"tag": "button",
-				"text": map[string]any{
-					"tag":     "plain_text",
-					"content": fmt.Sprintf("📥 %s", entry.Name),
-				},
-				"type": "default",
-				"size": "small",
-				"value": map[string]string{
-					"action_data": mustMapToJSON(map[string]string{
-						"action":     "settings_install",
-						"entry_type": "skill",
-						"entry_id":   fmt.Sprintf("%d", entry.ID),
-					}),
-				},
-			})
-		}
-		elements = append(elements, wrapButtonsInColumns(buttons))
-	}
-
+	elements = append(elements, f.buildMarketSection("skill", "技能市场")...)
 	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, f.buildMarketSection("agent", "代理市场")...)
+
+	return elements
+}
+
+func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) []map[string]any {
+	var elements []map[string]any
+
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**🤖 Agents**",
+		"content": fmt.Sprintf("**📁 我的%s**", label),
 	})
 
-	agentEntries, err := f.settingsCallbacks.RegistryBrowse("agent", 10, 0)
+	published, installed, err := f.settingsCallbacks.RegistryListMy(senderID, entryType)
 	if err != nil {
-		log.WithError(err).Warn("BuildSettingsCard: failed to browse agents")
+		log.WithError(err).Warnf("buildMyItemsSection: ListMy failed for %s", entryType)
 	}
-	if len(agentEntries) == 0 {
+
+	// Build a set of published names for quick lookup
+	publishedNames := make(map[string]bool)
+	for _, e := range published {
+		publishedNames[e.Name] = true
+	}
+
+	prefix := entryType + ":"
+	if len(installed) == 0 && len(published) == 0 {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": "_暂无公开的 Agent_",
+			"content": fmt.Sprintf("_暂无%s_", label),
 		})
-	} else {
-		var buttons []map[string]any
-		for _, entry := range agentEntries {
-			buttons = append(buttons, map[string]any{
-				"tag": "button",
-				"text": map[string]any{
-					"tag":     "plain_text",
-					"content": fmt.Sprintf("📥 %s", entry.Name),
+		return elements
+	}
+
+	// Show local items with share/published status
+	for _, item := range installed {
+		name := strings.TrimPrefix(item, prefix)
+		if publishedNames[name] {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("• %s　✅ 已分享", name),
+			})
+		} else {
+			elements = append(elements, buildSettingRow(
+				"• "+name,
+				"",
+				map[string]any{
+					"tag": "button",
+					"text": map[string]any{
+						"tag":     "plain_text",
+						"content": "📤 分享",
+					},
+					"type": "default",
+					"size": "small",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action":     "settings_publish",
+							"entry_type": entryType,
+							"name":       name,
+						}),
+					},
 				},
-				"type": "default",
-				"size": "small",
-				"value": map[string]string{
-					"action_data": mustMapToJSON(map[string]string{
-						"action":     "settings_install",
-						"entry_type": "agent",
-						"entry_id":   fmt.Sprintf("%d", entry.ID),
-					}),
-				},
+			))
+		}
+	}
+
+	// Show published items that aren't in local (edge case)
+	for _, e := range published {
+		found := false
+		for _, item := range installed {
+			if strings.TrimPrefix(item, prefix) == e.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("• %s　✅ 已分享", e.Name),
 			})
 		}
-		elements = append(elements, wrapButtonsInColumns(buttons))
 	}
+
+	return elements
+}
+
+func (f *FeishuChannel) buildMarketSection(entryType, title string) []map[string]any {
+	var elements []map[string]any
 
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "💡 `/browse` 浏览市场 · `/install` 安装 · `/my skills` 查看已安装",
+		"content": fmt.Sprintf("**🏪 %s**", title),
 	})
+
+	entries, err := f.settingsCallbacks.RegistryBrowse(entryType, 10, 0)
+	if err != nil {
+		log.WithError(err).Warnf("buildMarketSection: Browse failed for %s", entryType)
+	}
+
+	if len(entries) == 0 {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "_暂无公开内容_",
+		})
+		return elements
+	}
+
+	var buttons []map[string]any
+	for _, entry := range entries {
+		desc := entry.Name
+		if entry.Description != "" {
+			desc = fmt.Sprintf("%s - %s", entry.Name, entry.Description)
+		}
+		buttons = append(buttons, map[string]any{
+			"tag": "button",
+			"text": map[string]any{
+				"tag":     "plain_text",
+				"content": fmt.Sprintf("📥 %s", desc),
+			},
+			"type": "default",
+			"size": "small",
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action":     "settings_install",
+					"entry_type": entryType,
+					"entry_id":   fmt.Sprintf("%d", entry.ID),
+				}),
+			},
+		})
+	}
+	elements = append(elements, wrapButtonsInColumns(buttons))
 
 	return elements
 }
 
 // --- Layout helpers ---
 
-// buildSettingRow creates a two-column row: label+value on the left, control on the right.
 func buildSettingRow(label, currentDisplay string, control map[string]any) map[string]any {
+	leftContent := label
+	if currentDisplay != "" {
+		leftContent = fmt.Sprintf("%s　**%s**", label, currentDisplay)
+	}
 	return map[string]any{
 		"tag":                "column_set",
 		"flex_mode":          "none",
@@ -414,7 +606,7 @@ func buildSettingRow(label, currentDisplay string, control map[string]any) map[s
 				"elements": []map[string]any{
 					{
 						"tag":     "markdown",
-						"content": fmt.Sprintf("%s　**%s**", label, currentDisplay),
+						"content": leftContent,
 					},
 				},
 			},
@@ -480,4 +672,11 @@ func parseActionDataFromMap(actionData map[string]any) map[string]string {
 		return nil
 	}
 	return parseActionData(raw)
+}
+
+func formStr(actionData map[string]any, key string) string {
+	if v, ok := actionData[key].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
 }

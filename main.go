@@ -232,8 +232,14 @@ func main() {
 			LLMSet: func(senderID, model string) error {
 				return agentLoop.SetUserModel(senderID, model)
 			},
-			LLMHasCustom: func(senderID string) bool {
-				return agentLoop.LLMFactory().HasCustomLLM(senderID)
+			LLMGetConfig: func(senderID string) (string, string, string, bool) {
+				return agentLoop.GetUserLLMConfig(senderID)
+			},
+			LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+				return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+			},
+			LLMDelete: func(senderID string) error {
+				return agentLoop.DeleteUserLLM(senderID)
 			},
 			ContextModeGet: func() string {
 				return agentLoop.GetContextMode()
@@ -247,11 +253,11 @@ func main() {
 			RegistryInstall: func(entryType string, id int64, senderID string) error {
 				return agentLoop.RegistryManager().Install(entryType, id, senderID)
 			},
-			SettingsGet: func(channelName, senderID string) (map[string]string, error) {
-				return agentLoop.SettingsService().GetSettings(channelName, senderID)
+			RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+				return agentLoop.RegistryManager().ListMy(senderID, entryType)
 			},
-			SettingsSet: func(channelName, senderID, key, value string) error {
-				return agentLoop.SettingsService().SetSetting(channelName, senderID, key, value)
+			RegistryPublish: func(entryType, name, senderID string) error {
+				return agentLoop.RegistryManager().Publish(entryType, name, senderID)
 			},
 		})
 

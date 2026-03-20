@@ -38,15 +38,19 @@ type FeishuConfig struct {
 // SettingsCallbacks holds the callback functions for settings card interaction.
 // Injected from Agent to decouple channel from agent packages.
 type SettingsCallbacks struct {
-	LLMList         func(senderID string) ([]string, string) // returns (models, currentModel)
-	LLMSet          func(senderID, model string) error
-	LLMHasCustom    func(senderID string) bool // true if user has custom LLM config
-	ContextModeGet  func() string              // returns current effective context mode
-	ContextModeSet  func(mode string) error    // sets runtime context mode
+	LLMList      func(senderID string) ([]string, string)                         // (models, currentModel)
+	LLMSet       func(senderID, model string) error                               // switch model
+	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool) // user config (no key)
+	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error    // create/update config
+	LLMDelete    func(senderID string) error                                      // revert to global
+
+	ContextModeGet func() string
+	ContextModeSet func(mode string) error
+
 	RegistryBrowse  func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
 	RegistryInstall func(entryType string, id int64, senderID string) error
-	SettingsGet     func(channelName, senderID string) (map[string]string, error)
-	SettingsSet     func(channelName, senderID, key, value string) error
+	RegistryListMy  func(senderID, entryType string) (published []sqlite.SharedEntry, installed []string, err error)
+	RegistryPublish func(entryType, name, senderID string) error
 }
 
 // FeishuChannel 飞书渠道实现
@@ -1031,7 +1035,7 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		messageID = event.Event.Context.OpenMessageID
 	}
 
-	// 拦截 settings 卡片交互（按钮点击和下拉选择，在 CardBuilder 路由之前）
+	// 拦截 settings 卡片交互（按钮点击、下拉选择、表单提交，在 CardBuilder 路由之前）
 	if parsed := parseActionDataFromMap(actionData); parsed != nil {
 		if actionName := parsed["action"]; strings.HasPrefix(actionName, settingsCardActionPrefix) {
 			if action.Option != "" {
@@ -1039,6 +1043,9 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 					actionData = make(map[string]any)
 				}
 				actionData["selected_option"] = action.Option
+			}
+			for k, v := range action.FormValue {
+				actionData[k] = v
 			}
 			return f.handleSettingsCardAction(ctx, actionData, chatID, senderID, messageID)
 		}

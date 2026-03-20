@@ -1151,6 +1151,11 @@ func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData
 		senderID = f.settingsCallbacks.NormalizeSenderID(senderID)
 	}
 
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"sender_id": senderID,
+	}).Info("Settings card action received")
+
 	updatedCard, err := f.HandleSettingsAction(ctx, actionData, senderID, chatID, messageID)
 	if err != nil {
 		log.WithError(err).WithFields(log.Fields{
@@ -1164,6 +1169,13 @@ func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData
 			},
 		}, nil
 	}
+
+	cardJSON, _ := json.Marshal(updatedCard)
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"card_size": len(cardJSON),
+	}).Info("Settings card action completed")
+	log.WithField("card_json", string(cardJSON)).Debug("Settings card response payload")
 
 	return &callback.CardActionTriggerResponse{
 		Card: &callback.Card{

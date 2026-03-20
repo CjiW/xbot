@@ -26,6 +26,8 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 		tab = "general"
 	}
 
+	log.WithField("tab", tab).Info("BuildSettingsCard start")
+
 	elements := buildTabButtons(tab)
 	elements = append(elements, map[string]any{"tag": "hr"})
 
@@ -72,6 +74,11 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	}
 
 	action := parsed["action"]
+	log.WithFields(log.Fields{
+		"action":    action,
+		"sender_id": senderID,
+	}).Info("HandleSettingsAction routing")
+
 	switch action {
 	case "settings_tab":
 		return f.BuildSettingsCard(ctx, senderID, chatID, parsed["tab"])
@@ -469,6 +476,7 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 
 	// Marketplace section
 	if f.settingsCallbacks.RegistryBrowse == nil {
+		log.Info("buildMarketTabContent: RegistryBrowse callback not set")
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
 			"content": "_市场功能未启用_",
@@ -480,6 +488,7 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, f.buildMarketSection("agent", "代理市场")...)
 
+	log.WithField("element_count", len(elements)).Info("buildMarketTabContent completed")
 	return elements
 }
 

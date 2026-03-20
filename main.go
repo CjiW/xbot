@@ -259,6 +259,9 @@ func main() {
 			ContextModeSet: func(mode string) error {
 				return agentLoop.SetContextMode(mode)
 			},
+			NormalizeSenderID: func(senderID string) string {
+				return agentLoop.NormalizeSenderID(senderID)
+			},
 			RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 				return agentLoop.RegistryManager().Browse(entryType, limit, offset)
 			},

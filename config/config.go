@@ -60,6 +60,11 @@ type StartupNotifyConfig struct {
 	ChatID  string // 通知目标 chat_id
 }
 
+// AdminConfig 管理员配置
+type AdminConfig struct {
+	ChatID string // 管理员会话 ID（用于 Logs 工具等敏感操作的权限控制）
+}
+
 // Config 应用配置
 type Config struct {
 	Server        ServerConfig
@@ -74,6 +79,7 @@ type Config struct {
 	OAuth         OAuthConfig
 	Sandbox       SandboxConfig
 	StartupNotify StartupNotifyConfig
+	Admin         AdminConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -225,6 +231,9 @@ func Load() *Config {
 			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),
 			ChatID:  getEnvOrDefault("STARTUP_NOTIFY_CHAT_ID", ""),
 		},
+		Admin: AdminConfig{
+			ChatID: getAdminChatID(),
+		},
 	}
 }
 
@@ -291,4 +300,14 @@ func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
 		}
 	}
 	return defaultValue
+}
+
+// getAdminChatID 获取管理员会话 ID，实现回退逻辑
+// 优先读取 ADMIN_CHAT_ID，如果为空则回退到 STARTUP_NOTIFY_CHAT_ID
+func getAdminChatID() string {
+	if adminChatID := os.Getenv("ADMIN_CHAT_ID"); adminChatID != "" {
+		return adminChatID
+	}
+	// 回退到 STARTUP_NOTIFY_CHAT_ID
+	return os.Getenv("STARTUP_NOTIFY_CHAT_ID")
 }

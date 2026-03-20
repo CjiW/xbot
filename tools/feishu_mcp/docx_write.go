@@ -161,7 +161,7 @@ func cleanBlockForDescendant(block *docxv1.Block) {
 	}
 }
 
-// DocxDeleteBlocksTool deletes blocks from a document by index range.
+// DocxDeleteBlocksTool deletes top-level blocks from a document by index range.
 type DocxDeleteBlocksTool struct {
 	FeishuToolBase
 	MCP *FeishuMCP
@@ -170,7 +170,7 @@ type DocxDeleteBlocksTool struct {
 func (t *DocxDeleteBlocksTool) Name() string { return "feishu_docx_delete_blocks" }
 
 func (t *DocxDeleteBlocksTool) Description() string {
-	return "Delete multiple blocks from a document by specifying an index range. Indices are 0-based, end_index is exclusive."
+	return "Delete top-level blocks from a document by specifying an index range [start_index, end_index). Use `feishu_docx_list_blocks` to find block indices before deleting."
 }
 
 func (t *DocxDeleteBlocksTool) Parameters() []llm.ToolParam {
@@ -182,21 +182,15 @@ func (t *DocxDeleteBlocksTool) Parameters() []llm.ToolParam {
 			Required:    true,
 		},
 		{
-			Name:        "parent_block_id",
-			Type:        "string",
-			Description: "Parent block ID (use document_id for root level blocks)",
-			Required:    true,
-		},
-		{
 			Name:        "start_index",
 			Type:        "integer",
-			Description: "Start index of blocks to delete (0-based)",
+			Description: "Start index of blocks to delete (0-based, inclusive)",
 			Required:    true,
 		},
 		{
 			Name:        "end_index",
 			Type:        "integer",
-			Description: "End index of blocks to delete (exclusive, like Python slicing)",
+			Description: "End index of blocks to delete (exclusive)",
 			Required:    true,
 		},
 	}
@@ -204,10 +198,9 @@ func (t *DocxDeleteBlocksTool) Parameters() []llm.ToolParam {
 
 func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
 	var args struct {
-		DocumentID    string `json:"document_id"`
-		ParentBlockID string `json:"parent_block_id"`
-		StartIndex    int    `json:"start_index"`
-		EndIndex      int    `json:"end_index"`
+		DocumentID string `json:"document_id"`
+		StartIndex int    `json:"start_index"`
+		EndIndex   int    `json:"end_index"`
 	}
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -223,7 +216,6 @@ func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*t
 		return nil, err
 	}
 
-	// Build the delete request
 	body := docxv1.NewBatchDeleteDocumentBlockChildrenReqBodyBuilder().
 		StartIndex(args.StartIndex).
 		EndIndex(args.EndIndex).
@@ -231,7 +223,7 @@ func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*t
 
 	req := docxv1.NewBatchDeleteDocumentBlockChildrenReqBuilder().
 		DocumentId(args.DocumentID).
-		BlockId(args.ParentBlockID).
+		BlockId(args.DocumentID). // top-level only: block_id == document_id
 		Body(body).
 		Build()
 
@@ -245,6 +237,6 @@ func (t *DocxDeleteBlocksTool) Execute(ctx *tools.ToolContext, input string) (*t
 	}
 
 	count := args.EndIndex - args.StartIndex
-	return tools.NewResult(fmt.Sprintf("✅ Deleted %d block(s) from index %d to %d",
+	return tools.NewResult(fmt.Sprintf("Deleted %d block(s) [%d, %d) from document",
 		count, args.StartIndex, args.EndIndex)), nil
 }

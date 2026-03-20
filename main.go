@@ -180,6 +180,10 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.ListFilesTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.AddPermissionTool{MCP: feishuMCP})
 
+		// Message resource tools
+		agentLoop.RegisterTool(&feishu_mcp.DownloadFileTool{MCP: feishuMCP})
+		agentLoop.RegisterTool(&feishu_mcp.SendFileTool{MCP: feishuMCP})
+
 		log.Info("OAuth and Feishu MCP tools registered")
 	}
 

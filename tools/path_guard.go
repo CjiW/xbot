@@ -11,6 +11,10 @@ func defaultWorkspaceRoot(ctx *ToolContext) string {
 	if ctx == nil {
 		return ""
 	}
+	// 沙箱模式下，xbot 运行在容器内，应以容器内可见的 SandboxWorkDir 为校验根
+	if ctx.SandboxEnabled && ctx.SandboxWorkDir != "" {
+		return ctx.SandboxWorkDir
+	}
 	if ctx.WorkspaceRoot != "" {
 		return ctx.WorkspaceRoot
 	}
@@ -38,10 +42,7 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	// 将沙箱路径转换为宿主机路径（LLM 输入方向）
-	inputPath = normalizeInputPath(ctx, inputPath)
-
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
+	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0 && !ctx.SandboxEnabled) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
@@ -86,27 +87,12 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 	return candidate, nil
 }
 
-// normalizeInputPath 将 LLM 可见的沙箱路径转换为宿主机路径后再校验。
-// LLM 始终使用沙箱路径（如 /workspace/foo.go），内置宿主机工具需要先转换。
-func normalizeInputPath(ctx *ToolContext, inputPath string) string {
-	if ctx == nil || !ctx.SandboxEnabled || ctx.SandboxWorkDir == "" {
-		return inputPath
-	}
-	if !strings.HasPrefix(inputPath, ctx.SandboxWorkDir) {
-		return inputPath
-	}
-	return SandboxToHostPath(ctx, inputPath)
-}
-
 func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("path is required")
 	}
 
-	// 将沙箱路径转换为宿主机路径（LLM 输入方向）
-	inputPath = normalizeInputPath(ctx, inputPath)
-
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
+	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0 && !ctx.SandboxEnabled) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}

@@ -343,21 +343,24 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		args.Type = "file"
 	}
 
-	// Resolve path with sandbox path guard
+	// Resolve path with sandbox path guard (returns container-visible path)
 	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Verify file exists
+	// Verify file exists (using container path)
 	if _, err := os.Stat(resolvedPath); err != nil {
 		return nil, fmt.Errorf("file not found: %s", args.FilePath)
 	}
 
+	// For protocol message, translate to host path (feishu channel runs on host)
+	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
+
 	// Build protocol message
-	protocolMsg := "__FEISHU_FILE__::" + args.Type + "::" + resolvedPath
+	protocolMsg := "__FEISHU_FILE__::" + args.Type + "::" + hostPath
 	if args.Type == "file" {
-		protocolMsg = "__FEISHU_FILE__::" + resolvedPath
+		protocolMsg = "__FEISHU_FILE__::" + hostPath
 	}
 
 	if ctx.SendFunc == nil {

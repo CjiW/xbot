@@ -54,8 +54,8 @@ func TestOffloadRecallTool_Description(t *testing.T) {
 func TestOffloadRecallTool_Parameters(t *testing.T) {
 	tool := &OffloadRecallTool{}
 	params := tool.Parameters()
-	if len(params) != 1 {
-		t.Fatalf("expected 1 parameter, got %d", len(params))
+	if len(params) != 3 {
+		t.Fatalf("expected 3 parameters, got %d", len(params))
 	}
 	if params[0].Name != "id" {
 		t.Errorf("expected param name 'id', got %q", params[0].Name)
@@ -133,27 +133,100 @@ func TestOffloadRecallTool_Execute_NotFound(t *testing.T) {
 	}
 }
 
-func TestOffloadRecallTool_Execute_Truncation(t *testing.T) {
+func TestOffloadRecallTool_Execute_DefaultPagination(t *testing.T) {
 	store := newMockOffloadStore()
-	// Content larger than 8000 chars
 	largeContent := strings.Repeat("a", 10000)
-	store.store("cli:direct", "ol_truncate", largeContent)
+	store.store("cli:direct", "ol_page", largeContent)
 
 	tool := &OffloadRecallTool{Store: store}
-	ctx := &ToolContext{
-		Channel: "cli",
-		ChatID:  "direct",
-	}
+	ctx := &ToolContext{Channel: "cli", ChatID: "direct"}
 
-	result, err := tool.Execute(ctx, `{"id":"ol_truncate"}`)
+	// 默认 offset=0, limit=8000 → 应返回第一页，且有分页提示
+	result, err := tool.Execute(ctx, `{"id":"ol_page"}`)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if len(result.Summary) > 8100 { // 8000 + some overhead for truncation message
-		t.Errorf("result should be truncated, got %d bytes", len(result.Summary))
+	if !strings.Contains(result.Summary, "runes:0-8000/10000") {
+		t.Errorf("should show pagination range, got: %s", result.Summary)
 	}
-	if !strings.Contains(result.Summary, "truncated") {
-		t.Error("result should indicate truncation")
+	if !strings.Contains(result.Summary, "offset=8000") {
+		t.Error("should suggest next page offset")
+	}
+}
+
+func TestOffloadRecallTool_Execute_SecondPage(t *testing.T) {
+	store := newMockOffloadStore()
+	largeContent := strings.Repeat("a", 10000)
+	store.store("cli:direct", "ol_page2", largeContent)
+
+	tool := &OffloadRecallTool{Store: store}
+	ctx := &ToolContext{Channel: "cli", ChatID: "direct"}
+
+	// offset=8000 → 应返回剩余内容
+	result, err := tool.Execute(ctx, `{"id":"ol_page2","offset":8000}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "runes:8000-10000/10000") {
+		t.Errorf("should show second page range, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "more content") {
+		t.Error("last page should not have 'more content' hint")
+	}
+	if !strings.Contains(result.Summary, "previous") {
+		t.Error("should have previous page hint when offset > 0")
+	}
+}
+
+func TestOffloadRecallTool_Execute_OverrunOffset(t *testing.T) {
+	store := newMockOffloadStore()
+	store.store("cli:direct", "ol_short", "hello")
+
+	tool := &OffloadRecallTool{Store: store}
+	ctx := &ToolContext{Channel: "cli", ChatID: "direct"}
+
+	result, err := tool.Execute(ctx, `{"id":"ol_short","offset":100}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "exceeds total length") {
+		t.Errorf("should warn about overrun offset, got: %s", result.Summary)
+	}
+}
+
+func TestOffloadRecallTool_Execute_CustomLimit(t *testing.T) {
+	store := newMockOffloadStore()
+	content := strings.Repeat("x", 5000)
+	store.store("cli:direct", "ol_limit", content)
+
+	tool := &OffloadRecallTool{Store: store}
+	ctx := &ToolContext{Channel: "cli", ChatID: "direct"}
+
+	// limit=1000 → 只返回 1000 个字符
+	result, err := tool.Execute(ctx, `{"id":"ol_limit","limit":1000}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "runes:0-1000/5000") {
+		t.Errorf("should respect custom limit, got: %s", result.Summary)
+	}
+}
+
+func TestOffloadRecallTool_Execute_LimitClamped(t *testing.T) {
+	store := newMockOffloadStore()
+	content := strings.Repeat("z", 20000)
+	store.store("cli:direct", "ol_clamp", content)
+
+	tool := &OffloadRecallTool{Store: store}
+	ctx := &ToolContext{Channel: "cli", ChatID: "direct"}
+
+	// limit=99999 → 应被限制到 16000
+	result, err := tool.Execute(ctx, `{"id":"ol_clamp","limit":99999}`)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "runes:0-16000/20000") {
+		t.Errorf("should clamp limit to 16000, got: %s", result.Summary)
 	}
 }
 
@@ -171,7 +244,7 @@ func TestOffloadRecallTool_Execute_SessionKeyFromContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if result.Summary != "content for custom session" {
-		t.Errorf("unexpected result: %s", result.Summary)
+	if !strings.Contains(result.Summary, "content for custom session") {
+		t.Errorf("result should contain stored content, got: %s", result.Summary)
 	}
 }

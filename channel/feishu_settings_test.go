@@ -25,29 +25,43 @@ func getCardElements(card map[string]any) ([]map[string]any, bool) {
 	return elements, ok
 }
 
-// helper to find action values from card elements
+// helper to find action values from card elements (supports V1 "action" and V2 "column_set" nesting)
 func collectActionDataFromCard(card map[string]any) []string {
 	var results []string
 	elements, ok := getCardElements(card)
 	if !ok {
 		return results
 	}
+	collectButtonsRecursive(elements, &results)
+	return results
+}
+
+// collectButtonsRecursive searches for buttons at any nesting depth within card elements.
+// Handles both V1 (action > button) and V2 (column_set > column > interactive_container > button).
+func collectButtonsRecursive(elements []map[string]any, results *[]string) {
 	for _, elem := range elements {
-		actions, ok := elem["actions"].([]map[string]any)
-		if !ok {
-			continue
-		}
-		for _, act := range actions {
-			value, ok := act["value"].(map[string]string)
-			if !ok {
-				continue
+		switch elem["tag"] {
+		case "action":
+			// V1: action > button[]
+			if actions, ok := elem["actions"].([]map[string]any); ok {
+				collectButtonsRecursive(actions, results)
 			}
-			if ad := value["action_data"]; ad != "" {
-				results = append(results, ad)
+		case "button":
+			if value, ok := elem["value"].(map[string]string); ok {
+				if ad := value["action_data"]; ad != "" {
+					*results = append(*results, ad)
+				}
+			}
+		case "column_set":
+			if columns, ok := elem["columns"].([]map[string]any); ok {
+				collectButtonsRecursive(columns, results)
+			}
+		case "column", "interactive_container", "form", "collapsible_panel":
+			if children, ok := elem["elements"].([]map[string]any); ok {
+				collectButtonsRecursive(children, results)
 			}
 		}
 	}
-	return results
 }
 
 // --- parseActionData tests ---
@@ -211,30 +225,17 @@ func TestBuildSettingsCard_BasicTab(t *testing.T) {
 
 	// Verify that there are markdown elements and button elements
 	hasMarkdown := false
-	hasButton := false
+	actionDataList := collectActionDataFromCard(card)
+	hasButton := len(actionDataList) > 0
 	hasSettingsAction := false
 	for _, elem := range elements {
 		if elem["tag"] == "markdown" {
 			hasMarkdown = true
 		}
-		if elem["tag"] == "action" {
-			actions, ok := elem["actions"].([]map[string]any)
-			if !ok {
-				continue
-			}
-			for _, act := range actions {
-				if act["tag"] == "button" {
-					hasButton = true
-					value, ok := act["value"].(map[string]string)
-					if !ok {
-						continue
-					}
-					actionData := value["action_data"]
-					if strings.Contains(actionData, "settings_") {
-						hasSettingsAction = true
-					}
-				}
-			}
+	}
+	for _, ad := range actionDataList {
+		if strings.Contains(ad, "settings_") {
+			hasSettingsAction = true
 		}
 	}
 

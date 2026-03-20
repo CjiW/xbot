@@ -104,17 +104,18 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 
 	// 步骤5：标记完整性检测
 	missingMarkers := ValidateMarkers(compressedText, fp)
-	if len(missingMarkers) > 0 {
+	totalItems := len(fp.FilePaths) + len(fp.Errors) + len(fp.Decisions)
+	if totalItems > 0 && float64(len(missingMarkers))/float64(totalItems) > 0.5 {
 		log.Ctx(ctx).WithFields(map[string]interface{}{
 			"missing_markers": len(missingMarkers),
+			"missing_ratio":   float64(len(missingMarkers)) / float64(totalItems),
 			"quality_score":   quality,
-		}).Warn("Phase 1.5 compress missing structured markers")
+		}).Warn("Phase 1.5 compress missing markers (>50%)")
 	}
 
 	log.Ctx(ctx).WithFields(map[string]interface{}{
 		"quality_score":  quality,
 		"retention_rate": retentionRate,
-		"markers":        countStructuredMarkers(compressedText),
 		"new_tokens":     compressedTokens,
 	}).Info("Phase 1.5 compress quality report")
 

@@ -32,18 +32,19 @@ func getRetryNotify(ctx context.Context) RetryNotifyFunc {
 
 // RetryConfig 重试配置
 type RetryConfig struct {
-	Attempts      uint          // 最大尝试次数（含首次），默认 3
-	Delay         time.Duration // 初始延迟，默认 500ms
-	MaxDelay      time.Duration // 最大延迟，默认 10s
+	Attempts      uint          // 最大尝试次数（含首次），默认 5
+	Delay         time.Duration // 初始延迟，默认 1s
+	MaxDelay      time.Duration // 最大延迟，默认 30s
 	MaxConcurrent int           // 最大并发数（0 表示不限制）
+	Timeout       time.Duration // 单次 LLM 调用超时（0 = 不设超时）
 }
 
 // DefaultRetryConfig 返回默认重试配置
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
-		Attempts: 3,
-		Delay:    500 * time.Millisecond,
-		MaxDelay: 10 * time.Second,
+		Attempts: 5,
+		Delay:    1 * time.Second,
+		MaxDelay: 30 * time.Second,
 	}
 }
 
@@ -115,10 +116,8 @@ func IsInputTooLongError(err error) bool {
 // 可重试：429、5xx、网络错误、context 超时
 // 不可重试：context 取消（用户主动 /cancel）、其他 4xx
 //
-// 注意：context.DeadlineExceeded 允许重试，但实际是否重试取决于 retry.Context(ctx)。
-// 如果传入 Generate 的 ctx 本身携带 deadline，超时后 ctx.Done() 关闭，
-// retry 框架会在下次尝试前检查 ctx 并放弃。因此，仅在调用方不使用
-// context.WithTimeout 包裹 ctx 时，超时重试才实际生效。
+// 注意：由于 retryOptions 不再传 retry.Context(ctx)，超时重试现在可以正常工作。
+// 每次重试通过 perAttemptCtx 创建全新的超时上下文。
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
@@ -162,7 +161,8 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 		retry.Delay(r.config.Delay),
 		retry.MaxDelay(r.config.MaxDelay),
 		retry.DelayType(retry.CombineDelay(retry.BackOffDelay, retry.RandomDelay)),
-		retry.Context(ctx),
+		// 不传 retry.Context(ctx) —— 超时后 ctx 已取消会导致 retry 框架跳过重试
+		// context.Canceled 由 isRetryableError 处理（返回 false → 不重试）
 		retry.RetryIf(isRetryableError),
 		retry.OnRetry(func(n uint, err error) {
 			logrus.Ctx(ctx).WithFields(logrus.Fields{
@@ -189,6 +189,40 @@ func (r *RetryLLM) retryOptions(ctx context.Context, label string) []retry.Optio
 	}
 }
 
+// perAttemptCtx 为每次重试创建全新的超时上下文。
+// 如果调用方 ctx 携带 deadline（如 engine.go 的 context.WithTimeout），
+// 提取超时 duration 创建新 ctx，而非复用同一个 deadline。
+// 这样每次重试都有完整的超时窗口。
+// 父 ctx 的取消信号仍然会被传播。
+func (r *RetryLLM) perAttemptCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := r.config.Timeout
+	if timeout <= 0 {
+		if deadline, ok := parent.Deadline(); ok {
+			timeout = time.Until(deadline)
+		}
+	}
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	// 父 ctx 已取消则不启动
+	select {
+	case <-parent.Done():
+		return parent, func() {}
+	default:
+	}
+	// 创建全新超时上下文（不继承父 ctx 的 deadline）
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// 传播父 ctx 的取消信号（但不是 deadline）
+	go func() {
+		select {
+		case <-parent.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
 // Generate 生成 LLM 响应，失败时按配置重试
 func (r *RetryLLM) Generate(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (*LLMResponse, error) {
 	release := r.acquire(ctx)
@@ -196,7 +230,9 @@ func (r *RetryLLM) Generate(ctx context.Context, model string, messages []ChatMe
 	return retry.NewWithData[*LLMResponse](
 		r.retryOptions(ctx, "Retrying request")...,
 	).Do(func() (*LLMResponse, error) {
-		return r.inner.Generate(ctx, model, messages, tools, thinkingMode)
+		attemptCtx, cancel := r.perAttemptCtx(ctx)
+		defer cancel()
+		return r.inner.Generate(attemptCtx, model, messages, tools, thinkingMode)
 	})
 }
 
@@ -216,6 +252,8 @@ func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []
 	return retry.NewWithData[<-chan StreamEvent](
 		r.retryOptions(ctx, "Retrying stream connection")...,
 	).Do(func() (<-chan StreamEvent, error) {
-		return streaming.GenerateStream(ctx, model, messages, tools, thinkingMode)
+		attemptCtx, cancel := r.perAttemptCtx(ctx)
+		defer cancel()
+		return streaming.GenerateStream(attemptCtx, model, messages, tools, thinkingMode)
 	})
 }

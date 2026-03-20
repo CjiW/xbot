@@ -183,26 +183,22 @@ func TestRetryLLM_Generate_NonRetryableError(t *testing.T) {
 }
 
 func TestRetryLLM_Generate_ContextCanceled(t *testing.T) {
-	// context 取消后应立即停止，不继续重试
-	retryableErr := errors.New(`POST "url": 502 Bad Gateway`)
-	inner := newFailNLLM(100, retryableErr)
-	cfg := RetryConfig{Attempts: 5, Delay: 100 * time.Millisecond, MaxDelay: 1 * time.Second}
+	// context.Canceled 应停止重试（isRetryableError 返回 false）
+	inner := newFailNLLM(100, context.Canceled)
+	cfg := RetryConfig{Attempts: 5, Delay: 10 * time.Millisecond, MaxDelay: 50 * time.Millisecond}
+
 	r := NewRetryLLM(inner, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// 50ms 后取消，应该来不及完成所有重试
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	cancel() // 立即取消
 
 	_, err := r.Generate(ctx, "test", nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error after context cancel")
 	}
-	// 不应该用完所有 5 次尝试
-	if inner.calls.Load() >= 5 {
-		t.Errorf("calls = %d, expected less than 5 (context should cancel early)", inner.calls.Load())
+	// context.Canceled 不可重试，应只调用 1 次
+	if inner.calls.Load() != 1 {
+		t.Errorf("calls = %d, want 1 (context.Canceled is not retryable)", inner.calls.Load())
 	}
 }
 
@@ -304,14 +300,14 @@ func TestRetryLLM_ListModels(t *testing.T) {
 
 func TestDefaultRetryConfig(t *testing.T) {
 	cfg := DefaultRetryConfig()
-	if cfg.Attempts != 3 {
-		t.Errorf("Attempts = %d, want 3", cfg.Attempts)
+	if cfg.Attempts != 5 {
+		t.Errorf("Attempts = %d, want 5", cfg.Attempts)
 	}
-	if cfg.Delay != 500*time.Millisecond {
-		t.Errorf("Delay = %v, want 500ms", cfg.Delay)
+	if cfg.Delay != 1*time.Second {
+		t.Errorf("Delay = %v, want 1s", cfg.Delay)
 	}
-	if cfg.MaxDelay != 10*time.Second {
-		t.Errorf("MaxDelay = %v, want 10s", cfg.MaxDelay)
+	if cfg.MaxDelay != 30*time.Second {
+		t.Errorf("MaxDelay = %v, want 30s", cfg.MaxDelay)
 	}
 }
 
@@ -410,4 +406,109 @@ func TestRetryLLM_GenerateStream_NotifiesOnRetry(t *testing.T) {
 	if notified.Load() != 1 {
 		t.Errorf("notified = %d, want 1", notified.Load())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 超时重试测试
+// ---------------------------------------------------------------------------
+
+func TestRetryLLM_Generate_TimeoutRetry(t *testing.T) {
+	// 前 2 次返回 context.DeadlineExceeded，第 3 次成功
+	inner := newFailNLLM(2, context.DeadlineExceeded)
+	cfg := RetryConfig{
+		Attempts: 5,
+		Delay:    10 * time.Millisecond,
+		MaxDelay: 50 * time.Millisecond,
+		Timeout:  50 * time.Millisecond,
+	}
+
+	r := NewRetryLLM(inner, cfg)
+
+	// 使用 context.WithTimeout 模拟调用方设置的超时
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer parentCancel()
+
+	resp, err := r.Generate(parentCtx, "test", nil, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("content = %q, want %q", resp.Content, "ok")
+	}
+	// 应该调用了 3 次（前 2 次超时，第 3 次成功）
+	if inner.calls.Load() != 3 {
+		t.Errorf("calls = %d, want 3", inner.calls.Load())
+	}
+}
+
+func TestRetryLLM_perAttemptCtx(t *testing.T) {
+	t.Run("parent has deadline", func(t *testing.T) {
+		r := NewRetryLLM(&nonStreamingLLM{}, RetryConfig{})
+		parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		child, childCancel := r.perAttemptCtx(parent)
+		defer childCancel()
+
+		// child 应该有自己的 deadline（不继承 parent 的）
+		if child == parent {
+			t.Error("perAttemptCtx should create a new context")
+		}
+		childDeadline, ok := child.Deadline()
+		if !ok {
+			t.Fatal("child context should have a deadline")
+		}
+		parentDeadline, _ := parent.Deadline()
+		if childDeadline.Equal(parentDeadline) {
+			t.Error("child deadline should not equal parent deadline")
+		}
+	})
+
+	t.Run("parent has no deadline", func(t *testing.T) {
+		r := NewRetryLLM(&nonStreamingLLM{}, RetryConfig{})
+
+		child, childCancel := r.perAttemptCtx(context.Background())
+		defer childCancel()
+
+		// 没有配置 Timeout 且 parent 无 deadline，应返回原 ctx
+		if _, ok := child.Deadline(); ok {
+			t.Error("child should not have a deadline when parent has none and Timeout is 0")
+		}
+	})
+
+	t.Run("config Timeout takes priority", func(t *testing.T) {
+		r := NewRetryLLM(&nonStreamingLLM{}, RetryConfig{
+			Timeout: 2 * time.Second,
+		})
+
+		// parent 有 10 秒 deadline，但 config.Timeout = 2s 应优先
+		parent, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		child, childCancel := r.perAttemptCtx(parent)
+		defer childCancel()
+
+		childDeadline, ok := child.Deadline()
+		if !ok {
+			t.Fatal("child should have a deadline")
+		}
+		remaining := time.Until(childDeadline)
+		if remaining > 3*time.Second || remaining < time.Second {
+			t.Errorf("child deadline should be ~2s, got %v", remaining)
+		}
+	})
+
+	t.Run("parent already canceled", func(t *testing.T) {
+		r := NewRetryLLM(&nonStreamingLLM{}, RetryConfig{})
+		parent, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		child, childCancel := r.perAttemptCtx(parent)
+		defer childCancel()
+
+		// 父 ctx 已取消，应返回父 ctx 本身
+		if child != parent {
+			t.Error("should return parent context when already canceled")
+		}
+	})
 }

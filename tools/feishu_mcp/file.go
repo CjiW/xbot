@@ -296,3 +296,72 @@ func (t *AddPermissionTool) Execute(ctx *tools.ToolContext, input string) (*tool
 		args.MemberID, args.MemberType, args.Perm, docType)
 	return tools.NewResult(summary), nil
 }
+
+// SendFileTool sends a file or image directly to the current Feishu chat.
+// Uses the __FEISHU_FILE__:: protocol to bridge to the channel layer.
+type SendFileTool struct {
+	FeishuToolBase
+	MCP *FeishuMCP
+}
+
+func (t *SendFileTool) Name() string { return "feishu_send_file" }
+
+func (t *SendFileTool) Description() string {
+	return `Send a file or image to the current Feishu chat. Supports any file type (pdf, doc, etc.) and images (png, jpg, gif).
+Parameters (JSON):
+  - file_path: string, absolute or relative path to the file/image to send
+  - type: string, optional, "file" (default) or "image"
+Example: {"file_path": "report.pdf"}
+Example: {"file_path": "chart.png", "type": "image"}`
+}
+
+func (t *SendFileTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{Name: "file_path", Type: "string", Description: "Path to the file or image to send", Required: true},
+		{Name: "type", Type: "string", Description: `Message type: "file" (default) or "image"`, Required: false},
+	}
+}
+
+func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.ToolResult, error) {
+	var args struct {
+		FilePath string `json:"file_path"`
+		Type     string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if args.FilePath == "" {
+		return nil, fmt.Errorf("file_path is required")
+	}
+	if args.Type == "" {
+		args.Type = "file"
+	}
+
+	// Resolve path with sandbox path guard
+	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(resolvedPath); err != nil {
+		return nil, fmt.Errorf("file not found: %s", args.FilePath)
+	}
+
+	// Build protocol message
+	protocolMsg := "__FEISHU_FILE__::" + args.Type + "::" + resolvedPath
+	if args.Type == "file" {
+		protocolMsg = "__FEISHU_FILE__::" + resolvedPath
+	}
+
+	if ctx.SendFunc == nil {
+		return nil, fmt.Errorf("send function not available (not in a Feishu chat)")
+	}
+
+	if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, protocolMsg); err != nil {
+		return nil, fmt.Errorf("send file: %w", err)
+	}
+
+	displayPath := tools.HostToSandboxPath(ctx, resolvedPath)
+	return tools.NewResult(fmt.Sprintf("File sent: %s (type: %s)", displayPath, args.Type)), nil
+}

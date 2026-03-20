@@ -69,6 +69,24 @@ func ExtractFingerprint(messages []llm.ChatMessage) KeyInfoFingerprint {
 	// 提取活跃文件
 	fp.ActiveFiles = ExtractActiveFiles(messages, 3)
 
+	// 限制收集规模：避免长对话累积过多项
+	// FilePaths: 取最近出现的（从后往前保留最后 50 个唯一路径）
+	if len(fp.FilePaths) > 50 {
+		fp.FilePaths = fp.FilePaths[len(fp.FilePaths)-50:]
+	}
+	// Identifiers: 上限 100
+	if len(fp.Identifiers) > 100 {
+		fp.Identifiers = fp.Identifiers[len(fp.Identifiers)-100:]
+	}
+	// Errors: 上限 20
+	if len(fp.Errors) > 20 {
+		fp.Errors = fp.Errors[len(fp.Errors)-20:]
+	}
+	// Decisions: 上限 20
+	if len(fp.Decisions) > 20 {
+		fp.Decisions = fp.Decisions[len(fp.Decisions)-20:]
+	}
+
 	return fp
 }
 
@@ -133,7 +151,12 @@ func ValidateCompression(original []llm.ChatMessage, compressed []llm.ChatMessag
 }
 
 // EvaluateQuality 综合质量评分 (0-1)。
-// 考量：信息保留率、压缩比、结构化标记覆盖。
+// 考量：压缩比、信息保留率、关键信息密度。
+// 评分公式：
+//
+//	ratioScore:     0-0.3（压缩比）
+//	retentionScore: 0-0.5（信息保留率，核心指标）
+//	densityScore:   0-0.2（压缩后文本中匹配到的指纹项数量评分）
 func EvaluateQuality(originalTokens, compressedTokens int, fp KeyInfoFingerprint, compressed string) float64 {
 	if originalTokens == 0 {
 		return 1.0
@@ -155,36 +178,9 @@ func EvaluateQuality(originalTokens, compressedTokens int, fp KeyInfoFingerprint
 		ratioScore = 0.0
 	}
 
-	// 2. 结构化标记评分 (0-0.2)：标记越多，说明保留的上下文越结构化
-	markerCount := countStructuredMarkers(compressed)
-	var markerScore float64
-	switch {
-	case markerCount >= 5:
-		markerScore = 0.2
-	case markerCount >= 3:
-		markerScore = 0.15
-	case markerCount >= 1:
-		markerScore = 0.1
-	default:
-		markerScore = 0.0
-	}
-
-	// 3. 关键信息密度评分 (0-0.2)：指纹项总数
-	totalKeyItems := len(fp.FilePaths) + len(fp.Identifiers) + len(fp.Errors) + len(fp.Decisions)
-	var densityScore float64
-	switch {
-	case totalKeyItems >= 10:
-		densityScore = 0.2
-	case totalKeyItems >= 5:
-		densityScore = 0.15
-	case totalKeyItems >= 1:
-		densityScore = 0.1
-	default:
-		densityScore = 0.0
-	}
-
-	// 4. 信息保留率评分 (0-0.3)：需要压缩前后对比，这里基于指纹在压缩结果中的匹配度
+	// 2. 信息保留率评分 (0-0.5)：核心指标，权重最高
 	retainedCount := 0
+	totalKeyItems := len(fp.FilePaths) + len(fp.Identifiers) + len(fp.Errors) + len(fp.Decisions)
 	compressedLower := strings.ToLower(compressed)
 	for _, p := range fp.FilePaths {
 		if strings.Contains(compressedLower, strings.ToLower(p)) {
@@ -209,12 +205,26 @@ func EvaluateQuality(originalTokens, compressedTokens int, fp KeyInfoFingerprint
 	var retentionScore float64
 	if totalKeyItems > 0 {
 		retention := float64(retainedCount) / float64(totalKeyItems)
-		retentionScore = 0.3 * retention
+		retentionScore = 0.5 * retention
 	} else {
-		retentionScore = 0.3
+		retentionScore = 0.5
 	}
 
-	return clamp01(ratioScore + markerScore + densityScore + retentionScore)
+	// 3. 关键信息密度评分 (0-0.2)：评估压缩后文本中匹配到的指纹项数量
+	// retainedCount 即压缩后文本中出现的指纹项数，而非指纹总数
+	var densityScore float64
+	switch {
+	case retainedCount >= 10:
+		densityScore = 0.2
+	case retainedCount >= 5:
+		densityScore = 0.15
+	case retainedCount >= 1:
+		densityScore = 0.1
+	default:
+		densityScore = 0.0
+	}
+
+	return clamp01(ratioScore + retentionScore + densityScore)
 }
 
 // containsSemanticMatch 语义模糊匹配：归一化子串 + 关键词重叠度。
@@ -439,20 +449,6 @@ func splitToWords(text string) []string {
 		}
 	}
 	return result
-}
-
-// countStructuredMarkers 统计 @file:, @func: 等结构化标记数量。
-// BUG FIX: 扩展匹配模式，兼容 LLM 输出的常见变体：
-//   - 严格格式: @file:path
-//   - 带空格:   @file: path, @file: "path"
-//   - 列表格式: - file: path, • file: path
-var structuredMarkerRe = regexp.MustCompile(`@(?:file|func|type|error|decision|todo|config):\s*\S`)
-var structuredMarkerListRe = regexp.MustCompile(`[-•*]\s*(?:file|func|type|error|decision|todo|config):\s*\S`)
-
-func countStructuredMarkers(text string) int {
-	count := len(structuredMarkerRe.FindAllString(text, -1))
-	count += len(structuredMarkerListRe.FindAllString(text, -1))
-	return count
 }
 
 // ----------------------------------------------------------------

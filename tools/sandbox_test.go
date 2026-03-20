@@ -134,3 +134,11 @@ func newDockerSandbox(image string) *dockerSandbox {
 		containers: make(map[string]*dockerContainer),
 	}
 }
+
+func newDockerSandboxWithThreshold(image string, threshold int) *dockerSandbox {
+	return &dockerSandbox{
+		image:                 image,
+		containers:            make(map[string]*dockerContainer),
+		commitSquashThreshold: threshold,
+	}
+}

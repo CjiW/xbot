@@ -625,6 +625,45 @@ func (a *Agent) SetContextMode(mode string) error {
 	return nil
 }
 
+// GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
+func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil || cfg == nil || (cfg.BaseURL == "" && cfg.APIKey == "") {
+		return "", "", "", false
+	}
+	return cfg.Provider, cfg.BaseURL, cfg.Model, true
+}
+
+// SetUserLLM creates or replaces a user's full LLM config.
+func (a *Agent) SetUserLLM(senderID, provider, baseURL, apiKey, model string) error {
+	if provider == "" || baseURL == "" || apiKey == "" {
+		return fmt.Errorf("provider, base_url, api_key 必填")
+	}
+	cfg := &sqlite.UserLLMConfig{
+		SenderID: senderID,
+		Provider: provider,
+		BaseURL:  baseURL,
+		APIKey:   apiKey,
+		Model:    model,
+	}
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return err
+	}
+	a.llmFactory.Invalidate(senderID)
+	a.llmFactory.InvalidateCustomLLMCache(senderID)
+	return nil
+}
+
+// DeleteUserLLM removes a user's LLM config and reverts to global.
+func (a *Agent) DeleteUserLLM(senderID string) error {
+	if err := a.llmConfigSvc.DeleteConfig(senderID); err != nil {
+		return err
+	}
+	a.llmFactory.Invalidate(senderID)
+	a.llmFactory.InvalidateCustomLLMCache(senderID)
+	return nil
+}
+
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
 func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn

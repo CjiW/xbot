@@ -48,6 +48,10 @@ func collectInteractiveRecursive(elements []map[string]any, buttons *[]string, s
 			if children, ok := elem["elements"].([]map[string]any); ok {
 				collectInteractiveRecursive(children, buttons, selects)
 			}
+		case "form":
+			if children, ok := elem["elements"].([]map[string]any); ok {
+				collectInteractiveRecursive(children, buttons, selects)
+			}
 		}
 	}
 }
@@ -89,6 +93,11 @@ func containsTagRecursive(elements []map[string]any, tag string) bool {
 	return false
 }
 
+func cardJSON(card map[string]any) string {
+	data, _ := json.Marshal(card)
+	return string(data)
+}
+
 // --- Parsing helpers tests ---
 
 func TestParseActionData(t *testing.T) {
@@ -121,7 +130,20 @@ func TestMustMapToJSON(t *testing.T) {
 	}
 }
 
-// --- General tab (context mode) ---
+func TestFormStr(t *testing.T) {
+	data := map[string]any{"name": "  hello  ", "number": 42}
+	if formStr(data, "name") != "hello" {
+		t.Error("should trim spaces")
+	}
+	if formStr(data, "number") != "" {
+		t.Error("non-string should return empty")
+	}
+	if formStr(data, "missing") != "" {
+		t.Error("missing key should return empty")
+	}
+}
+
+// --- General tab ---
 
 func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 	f := newTestFeishuChannel()
@@ -137,7 +159,6 @@ func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 		t.Errorf("expected schema=2.0")
 	}
 
-	// Should have context mode select
 	selects := collectSelectsFromCard(card)
 	hasContextMode := false
 	for _, ad := range selects {
@@ -149,9 +170,7 @@ func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 		t.Error("general tab should have context mode select dropdown")
 	}
 
-	// Should show current mode label
-	cardJSON, _ := json.Marshal(card)
-	if !strings.Contains(string(cardJSON), "渐进压缩") {
+	if !strings.Contains(cardJSON(card), "渐进压缩") {
 		t.Error("should show current mode label '渐进压缩' for phase2")
 	}
 }
@@ -167,8 +186,7 @@ func TestBuildSettingsCard_DefaultsToGeneral(t *testing.T) {
 		if err != nil {
 			t.Fatalf("tab=%q error: %v", tab, err)
 		}
-		cardJSON, _ := json.Marshal(card)
-		if !strings.Contains(string(cardJSON), "上下文管理") {
+		if !strings.Contains(cardJSON(card), "上下文管理") {
 			t.Errorf("tab=%q should default to general tab", tab)
 		}
 	}
@@ -176,22 +194,16 @@ func TestBuildSettingsCard_DefaultsToGeneral(t *testing.T) {
 
 func TestHandleSettingsAction_ContextMode(t *testing.T) {
 	f := newTestFeishuChannel()
-
 	var setMode string
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		ContextModeGet: func() string { return "phase1" },
-		ContextModeSet: func(mode string) error {
-			setMode = mode
-			return nil
-		},
+		ContextModeSet: func(mode string) error { setMode = mode; return nil },
 	})
 
-	// Via select_static (selected_option)
 	actionData := map[string]any{
 		"action_data":     `{"action":"settings_context_mode"}`,
 		"selected_option": "phase2",
 	}
-
 	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -206,21 +218,15 @@ func TestHandleSettingsAction_ContextMode(t *testing.T) {
 
 func TestHandleSettingsAction_ContextMode_Inline(t *testing.T) {
 	f := newTestFeishuChannel()
-
 	var setMode string
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		ContextModeGet: func() string { return "phase1" },
-		ContextModeSet: func(mode string) error {
-			setMode = mode
-			return nil
-		},
+		ContextModeSet: func(mode string) error { setMode = mode; return nil },
 	})
 
-	// Via inline mode in action_data
 	actionData := map[string]any{
 		"action_data": `{"action":"settings_context_mode","mode":"none"}`,
 	}
-
 	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -238,8 +244,9 @@ func TestHandleSettingsAction_ContextMode_Inline(t *testing.T) {
 func TestBuildSettingsCard_ModelTab_NoCustomLLM(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMHasCustom: func(senderID string) bool { return false },
-		LLMList:      func(senderID string) ([]string, string) { return []string{"gpt-4o"}, "gpt-4o" },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "", "", "", false
+		},
 	})
 
 	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
@@ -247,14 +254,16 @@ func TestBuildSettingsCard_ModelTab_NoCustomLLM(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 
-	cardJSON, _ := json.Marshal(card)
-	cardStr := string(cardJSON)
+	s := cardJSON(card)
 
-	if !strings.Contains(cardStr, "全局模型") {
-		t.Error("should show global model")
+	if !cardContainsTag(card, "form") {
+		t.Error("should show setup form when no custom LLM")
 	}
-	if !strings.Contains(cardStr, "/set-llm") {
-		t.Error("should guide to /set-llm")
+	if !strings.Contains(s, "配置个人模型") {
+		t.Error("should show setup title")
+	}
+	if strings.Contains(s, "/set-llm") {
+		t.Error("should NOT show command instructions")
 	}
 
 	selects := collectSelectsFromCard(card)
@@ -268,7 +277,9 @@ func TestBuildSettingsCard_ModelTab_NoCustomLLM(t *testing.T) {
 func TestBuildSettingsCard_ModelTab_WithCustomLLM(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMHasCustom: func(senderID string) bool { return true },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "openai", "https://api.example.com/v1", "gpt-4", true
+		},
 		LLMList: func(senderID string) ([]string, string) {
 			return []string{"gpt-4", "claude-3"}, "gpt-4"
 		},
@@ -277,6 +288,18 @@ func TestBuildSettingsCard_ModelTab_WithCustomLLM(t *testing.T) {
 	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
 	if err != nil {
 		t.Fatalf("error: %v", err)
+	}
+
+	s := cardJSON(card)
+
+	if strings.Contains(s, "api_key") || strings.Contains(s, "sk-") {
+		t.Error("API key must NEVER appear in card")
+	}
+	if !strings.Contains(s, "openai") {
+		t.Error("should show provider")
+	}
+	if !strings.Contains(s, "api.example.com") {
+		t.Error("should show base URL")
 	}
 
 	selects := collectSelectsFromCard(card)
@@ -289,23 +312,58 @@ func TestBuildSettingsCard_ModelTab_WithCustomLLM(t *testing.T) {
 	if !hasModel {
 		t.Error("should have model select when custom LLM configured")
 	}
+
+	var buttons []string
+	elements, _ := getCardElements(card)
+	collectInteractiveRecursive(elements, &buttons, nil)
+	hasDelete := false
+	for _, ad := range buttons {
+		if strings.Contains(ad, "settings_delete_llm") {
+			hasDelete = true
+		}
+	}
+	if !hasDelete {
+		t.Error("should have delete button when custom LLM configured")
+	}
+}
+
+func TestBuildSettingsCard_ModelTab_NoAPIKeyExposed(t *testing.T) {
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "openai", "https://api.openai.com/v1", "gpt-4o", true
+		},
+		LLMList: func(senderID string) ([]string, string) {
+			return []string{"gpt-4o"}, "gpt-4o"
+		},
+	})
+
+	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	s := cardJSON(card)
+	if strings.Contains(s, "api_key") || strings.Contains(s, "API Key") {
+		t.Error("API key field should not appear in existing config display")
+	}
 }
 
 func TestHandleSettingsAction_SetModel(t *testing.T) {
 	f := newTestFeishuChannel()
-
 	var setModel string
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMSet:       func(senderID, model string) error { setModel = model; return nil },
-		LLMHasCustom: func(senderID string) bool { return true },
-		LLMList:      func(senderID string) ([]string, string) { return []string{"gpt-4", "claude-3"}, "claude-3" },
+		LLMSet: func(senderID, model string) error { setModel = model; return nil },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "openai", "https://api.openai.com/v1", "claude-3", true
+		},
+		LLMList: func(senderID string) ([]string, string) { return []string{"gpt-4", "claude-3"}, "claude-3" },
 	})
 
 	actionData := map[string]any{
 		"action_data":     `{"action":"settings_set_model"}`,
 		"selected_option": "claude-3",
 	}
-
 	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -318,16 +376,96 @@ func TestHandleSettingsAction_SetModel(t *testing.T) {
 	}
 }
 
+func TestHandleSettingsAction_SetLLM(t *testing.T) {
+	f := newTestFeishuChannel()
+	var gotProvider, gotURL, gotKey, gotModel string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+			gotProvider = provider
+			gotURL = baseURL
+			gotKey = apiKey
+			gotModel = model
+			return nil
+		},
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return gotProvider, gotURL, gotModel, gotProvider != ""
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_set_llm"}`,
+		"provider":    "openai",
+		"base_url":    "https://api.openai.com/v1",
+		"api_key":     "sk-test123",
+		"model":       "gpt-4o",
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	if gotProvider != "openai" || gotURL != "https://api.openai.com/v1" || gotKey != "sk-test123" || gotModel != "gpt-4o" {
+		t.Errorf("unexpected config: provider=%q url=%q key=%q model=%q", gotProvider, gotURL, gotKey, gotModel)
+	}
+}
+
+func TestHandleSettingsAction_SetLLM_MissingFields(t *testing.T) {
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_set_llm"}`,
+		"provider":    "openai",
+	}
+	_, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err == nil {
+		t.Error("should fail with missing required fields")
+	}
+}
+
+func TestHandleSettingsAction_DeleteLLM(t *testing.T) {
+	f := newTestFeishuChannel()
+	deleted := false
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		LLMDelete: func(senderID string) error { deleted = true; return nil },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "", "", "", false
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_delete_llm"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	if !deleted {
+		t.Error("LLMDelete should have been called")
+	}
+}
+
 // --- Market tab ---
 
 func TestBuildSettingsCard_MarketTab(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
-			return []sqlite.SharedEntry{
-				{ID: 1, Type: "skill", Name: "my-skill"},
-				{ID: 2, Type: "agent", Name: "my-agent"},
-			}, nil
+			if entryType == "skill" {
+				return []sqlite.SharedEntry{{ID: 1, Type: "skill", Name: "cool-skill"}}, nil
+			}
+			return []sqlite.SharedEntry{{ID: 2, Type: "agent", Name: "cool-agent"}}, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			if entryType == "skill" {
+				return nil, []string{"skill:my-local-skill"}, nil
+			}
+			return nil, nil, nil
 		},
 	})
 
@@ -336,29 +474,61 @@ func TestBuildSettingsCard_MarketTab(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 
-	cardJSON, _ := json.Marshal(card)
-	cardStr := string(cardJSON)
-	if !strings.Contains(cardStr, "my-skill") {
-		t.Error("should contain skill")
+	s := cardJSON(card)
+	if !strings.Contains(s, "cool-skill") {
+		t.Error("should contain marketplace skill")
 	}
-	if !strings.Contains(cardStr, "my-agent") {
-		t.Error("should contain agent")
+	if !strings.Contains(s, "cool-agent") {
+		t.Error("should contain marketplace agent")
+	}
+	if !strings.Contains(s, "my-local-skill") {
+		t.Error("should contain user's local skill")
+	}
+	if !strings.Contains(s, "分享") {
+		t.Error("should have share button for unpublished local items")
+	}
+}
+
+func TestBuildSettingsCard_MarketTab_PublishedItem(t *testing.T) {
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			if entryType == "skill" {
+				return []sqlite.SharedEntry{{Name: "shared-skill"}}, []string{"skill:shared-skill"}, nil
+			}
+			return nil, nil, nil
+		},
+	})
+
+	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	s := cardJSON(card)
+	if !strings.Contains(s, "已分享") {
+		t.Error("should show '已分享' for published items")
 	}
 }
 
 func TestHandleSettingsAction_Install(t *testing.T) {
 	f := newTestFeishuChannel()
-
 	var installedType string
 	var installedID int64
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
-			return []sqlite.SharedEntry{{ID: 42, Name: "test"}}, nil
+			return nil, nil
 		},
 		RegistryInstall: func(entryType string, id int64, senderID string) error {
 			installedType = entryType
 			installedID = id
 			return nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
 		},
 	})
 
@@ -374,6 +544,38 @@ func TestHandleSettingsAction_Install(t *testing.T) {
 	}
 	if installedType != "skill" || installedID != 42 {
 		t.Errorf("expected skill/42, got %s/%d", installedType, installedID)
+	}
+}
+
+func TestHandleSettingsAction_Publish(t *testing.T) {
+	f := newTestFeishuChannel()
+	var pubType, pubName string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryPublish: func(entryType, name, senderID string) error {
+			pubType = entryType
+			pubName = name
+			return nil
+		},
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_publish","entry_type":"skill","name":"my-skill"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	if pubType != "skill" || pubName != "my-skill" {
+		t.Errorf("expected skill/my-skill, got %s/%s", pubType, pubName)
 	}
 }
 
@@ -403,10 +605,15 @@ func TestSettingsCard_NoUnsupportedV2Tags(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		ContextModeGet: func() string { return "phase1" },
-		LLMHasCustom:   func(senderID string) bool { return true },
-		LLMList:        func(senderID string) ([]string, string) { return []string{"gpt-4"}, "gpt-4" },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "openai", "https://api.openai.com/v1", "gpt-4", true
+		},
+		LLMList: func(senderID string) ([]string, string) { return []string{"gpt-4"}, "gpt-4" },
 		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 			return []sqlite.SharedEntry{{ID: 1, Name: "test"}}, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
 		},
 	})
 
@@ -420,6 +627,35 @@ func TestSettingsCard_NoUnsupportedV2Tags(t *testing.T) {
 		}
 		if cardContainsTag(card, "action") {
 			t.Errorf("tab %s: 'action' tag not supported in V2", tab)
+		}
+	}
+}
+
+func TestSettingsCard_NoCommandReferences(t *testing.T) {
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		ContextModeGet: func() string { return "phase1" },
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return "", "", "", false
+		},
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	for _, tab := range []string{"general", "model", "market"} {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", tab)
+		if err != nil {
+			t.Fatalf("tab %s: %v", tab, err)
+		}
+		s := cardJSON(card)
+		for _, cmd := range []string{"/set-llm", "/unset-llm", "/llm", "/browse", "/install", "/my skills", "/publish"} {
+			if strings.Contains(s, cmd) {
+				t.Errorf("tab %s: should not reference command %q", tab, cmd)
+			}
 		}
 	}
 }

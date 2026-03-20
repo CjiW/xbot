@@ -14,7 +14,18 @@ import (
 
 // DownloadFileTool downloads files/images sent by users in chat.
 // Currently supports: feishu (via Message Resource API).
-type DownloadFileTool struct{}
+type DownloadFileTool struct {
+	appID     string
+	appSecret string
+}
+
+// NewDownloadFileTool 创建下载文件工具（注入飞书凭证）
+func NewDownloadFileTool(appID, appSecret string) *DownloadFileTool {
+	return &DownloadFileTool{
+		appID:     appID,
+		appSecret: appSecret,
+	}
+}
 
 func (t *DownloadFileTool) Name() string {
 	return "DownloadFile"
@@ -137,10 +148,10 @@ func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPa
 
 // getFeishuTenantToken obtains a tenant_access_token using app credentials from environment.
 func (t *DownloadFileTool) getFeishuTenantToken() (string, error) {
-	appID := os.Getenv("FEISHU_APP_ID")
-	appSecret := os.Getenv("FEISHU_APP_SECRET")
+	appID := t.appID
+	appSecret := t.appSecret
 	if appID == "" || appSecret == "" {
-		return "", fmt.Errorf("FEISHU_APP_ID and FEISHU_APP_SECRET must be set")
+		return "", fmt.Errorf("FEISHU_APP_ID and FEISHU_APP_SECRET must be configured")
 	}
 
 	reqBody, _ := json.Marshal(map[string]string{

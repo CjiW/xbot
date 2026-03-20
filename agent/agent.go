@@ -320,13 +320,14 @@ type Config struct {
 	LLM            llm.LLM
 	Model          string
 	MaxIterations  int    // 单次对话最大工具调用迭代次数
-	MaxConcurrency int    // 最大并发会话处理数（默认 2）
+	MaxConcurrency int    // 最大并发会话处理数（默认 3）
 	MemoryWindow   int    // 上下文窗口大小（保留的历史消息数）
 	DBPath         string // SQLite 数据库路径（空则使用默认路径）
 	SkillsDir      string // Skills 目录
 	WorkDir        string // 工作目录（所有文件相对此目录）
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 	SingleUser     bool   // 单用户模式：所有消息的 SenderID 归一化为 "default"
+	SandboxMode    string // 沙箱模式: "none" 或 "docker"（默认 "docker"）
 
 	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
 	EmbeddingProvider  string // 嵌入提供者: "openai"(默认) 或 "ollama"
@@ -368,7 +369,7 @@ func New(cfg Config) *Agent {
 		cfg.MaxIterations = 100
 	}
 	if cfg.MaxConcurrency <= 0 {
-		cfg.MaxConcurrency = 2
+		cfg.MaxConcurrency = 3
 	}
 	if cfg.MemoryWindow == 0 {
 		cfg.MemoryWindow = 50
@@ -481,7 +482,7 @@ func New(cfg Config) *Agent {
 		log.Info("Letta memory tools registered (core)")
 	}
 
-	sandboxMode := os.Getenv("SANDBOX_MODE")
+	sandboxMode := cfg.SandboxMode
 	if sandboxMode == "" {
 		sandboxMode = "docker"
 	}

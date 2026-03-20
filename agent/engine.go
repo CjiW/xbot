@@ -729,7 +729,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// Phase 2: Layer 1 Offload
 			// Use raw Summary (with real newlines) instead of llmContent (JSON-serialized),
 			// so summarizeRead can correctly split multi-line file content.
-			if cfg.OffloadStore != nil && r.err == nil {
+			// Skip offload_recall to prevent recursive offloading: its result would exceed
+			// the threshold and get offloaded again, creating an infinite loop.
+			if cfg.OffloadStore != nil && r.err == nil && tc.Name != "offload_recall" {
 				offloadContent := content // default fallback
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 	"xbot/llm"
@@ -19,9 +18,9 @@ type WebSearchTool struct {
 }
 
 // NewWebSearchTool 创建网络搜索工具
-func NewWebSearchTool() *WebSearchTool {
+func NewWebSearchTool(apiKey string) *WebSearchTool {
 	return &WebSearchTool{
-		apiKey: os.Getenv("TAVILY_API_KEY"),
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -162,13 +163,44 @@ func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolR
 	}
 }
 
-func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
-	// 使用 tee 命令创建文件（避免 shell 转义问题）
-	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
-	cmd := fmt.Sprintf("printf '%%s' '%s' > '%s'", escapedContent, path)
-	output, err := RunInSandboxWithShell(ctx, cmd)
+// sandboxReadFile 通过 cat 读取沙箱内文件内容（保留原始内容，不做 TrimSpace）
+func sandboxReadFile(ctx *ToolContext, path string) (string, error) {
+	cmd := fmt.Sprintf("cat '%s'", strings.ReplaceAll(path, "'", "'\\''"))
+	content, err := RunInSandboxRawWithShell(ctx, cmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create file: %v, output: %s", err, output)
+		return "", fmt.Errorf("failed to read file %s: %v", path, err)
+	}
+	return content, nil
+}
+
+// sandboxWriteFile 将内容 base64 编码后写入沙箱内文件（彻底避免 shell 转义问题）
+func sandboxWriteFile(ctx *ToolContext, path, content string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	safePath := strings.ReplaceAll(path, "'", "'\\''")
+	cmd := fmt.Sprintf("echo '%s' | base64 -d > '%s'", encoded, safePath)
+	_, err := RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to write file %s: %v", path, err)
+	}
+	return nil
+}
+
+// sandboxWriteNewFile 创建新文件并写入内容（含 mkdir -p），通过 base64 避免转义
+func sandboxWriteNewFile(ctx *ToolContext, path, content string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	safePath := strings.ReplaceAll(path, "'", "'\\''")
+	cmd := fmt.Sprintf("mkdir -p '%s' && echo '%s' | base64 -d > '%s'",
+		strings.ReplaceAll(filepath.Dir(path), "'", "'\\''"), encoded, safePath)
+	_, err := RunInSandboxWithShell(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %v", path, err)
+	}
+	return nil
+}
+
+func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
+	if err := sandboxWriteNewFile(ctx, path, content); err != nil {
+		return nil, err
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
 	diff := generateUnifiedDiff("", content, path)
@@ -176,114 +208,106 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 }
 
 func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
-	// 读取文件内容
-	readCmd := fmt.Sprintf("cat '%s'", path)
-	content, err := RunInSandboxWithShell(ctx, readCmd)
+	// 读取文件内容（保留原始内容含 trailing newline）
+	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %v", err)
+		return nil, err
 	}
 
-	// 检查要替换的文本是否存在
-	if !strings.Contains(content, oldStr) {
-		return nil, fmt.Errorf("text not found: %q", oldStr)
-	}
-
-	// 在 Go 中进行替换（天然支持多行和特殊字符）
-	var newContent string
-	count := strings.Count(content, oldStr)
-	if replaceAll {
-		newContent = strings.ReplaceAll(content, oldStr, newStr)
-	} else {
-		newContent = strings.Replace(content, oldStr, newStr, 1)
-	}
-
-	// 写回文件（使用 heredoc 避免转义问题）
-	writeCmd := fmt.Sprintf("cat > '%s' << 'XBOT_EOF'\n%s\nXBOT_EOF", path, newContent)
-	_, err = RunInSandboxWithShell(ctx, writeCmd)
+	// 复用 doReplace 逻辑（纯 Go，无 shell 转义问题）
+	params := EditParams{OldString: oldStr, NewString: newStr, ReplaceAll: replaceAll}
+	newContent, result, err := t.doReplace(oldContent, params, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to write file: %v", err)
+		return nil, err
 	}
 
-	summary := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, path)
-	if count > 1 && !replaceAll {
-		summary = fmt.Sprintf("Replaced 1 of %d occurrences. Use replace_all=true to replace all.", count)
+	// 写回文件（base64 编码，彻底避免 shell 转义）
+	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
+		return nil, err
 	}
-	diff := generateUnifiedDiff(content, newContent, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
+
+	diff := generateUnifiedDiff(oldContent, newContent, path)
+	return &ToolResult{Summary: result, Detail: diff}, nil
 }
 
 func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
-	var cmd string
-	switch action {
-	case "insert_before":
-		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum-1, content, path)
-	case "insert_after":
-		cmd = fmt.Sprintf("sed -i '%di%s' '%s'", lineNum, content, path)
-	case "replace":
-		cmd = fmt.Sprintf("sed -i '%ds/.*/%s/' '%s'", lineNum, content, path)
-	case "delete":
-		cmd = fmt.Sprintf("sed -i '%dd' '%s'", lineNum, path)
-	default:
-		return nil, fmt.Errorf("unknown action: %s", action)
-	}
-
-	_, err := RunInSandboxWithShell(ctx, cmd)
+	// 读取文件内容
+	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to edit line: %v", err)
+		return nil, err
 	}
 
-	summary := fmt.Sprintf("Line %d %sd successfully", lineNum, action)
-	return NewResult(summary), nil
+	// 构造 EditParams 复用纯 Go 的 doLineEdit 逻辑
+	params := EditParams{
+		LineNumber: lineNum,
+		Action:     action,
+		Content:    content,
+	}
+	newContent, result, err := t.doLineEdit(oldContent, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// 写回文件
+	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
+		return nil, err
+	}
+
+	diff := generateUnifiedDiff(oldContent, newContent, path)
+	return &ToolResult{Summary: result, Detail: diff}, nil
 }
 
 func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool) (*ToolResult, error) {
-	// 读取原内容
-	readCmd := fmt.Sprintf("cat '%s'", path)
-	content, err := RunInSandboxWithShell(ctx, readCmd)
+	// 读取文件内容
+	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %v", err)
+		return nil, err
 	}
 
-	// 使用 sed 正则替换
-	flag := ""
-	if replaceAll {
-		flag = "g"
+	// 构造 EditParams 复用纯 Go 的 doRegexReplace 逻辑
+	params := EditParams{
+		Pattern:     pattern,
+		Replacement: replacement,
+		ReplaceAll:  replaceAll,
 	}
-	escapedPattern := strings.ReplaceAll(pattern, "'", "'\\''")
-	escapedReplacement := strings.ReplaceAll(replacement, "'", "'\\''")
-	cmd := fmt.Sprintf("sed -i -E 's/%s/%s/%s' '%s'", escapedPattern, escapedReplacement, flag, path)
-
-	_, err = RunInSandboxWithShell(ctx, cmd)
+	newContent, result, err := t.doRegexReplace(oldContent, params, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to regex replace: %v", err)
+		return nil, err
 	}
 
-	newContent, _ := RunInSandboxWithShell(ctx, readCmd)
-	summary := fmt.Sprintf("Regex replaced in %s", path)
-	diff := generateUnifiedDiff(content, newContent, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
+	// 写回文件
+	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
+		return nil, err
+	}
+
+	diff := generateUnifiedDiff(oldContent, newContent, path)
+	return &ToolResult{Summary: result, Detail: diff}, nil
 }
 
 func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
-	var cmd string
-	escapedContent := strings.ReplaceAll(content, "'", "'\\''")
-	switch position {
-	case "start":
-		cmd = fmt.Sprintf("sed -i '1i%s' '%s'", escapedContent, path)
-	case "end":
-		cmd = fmt.Sprintf("echo '%s' >> '%s'", escapedContent, path)
-	default:
-		// 尝试解析为行号
-		cmd = fmt.Sprintf("sed -i '%si%s' '%s'", position, escapedContent, path)
-	}
-
-	_, err := RunInSandboxWithShell(ctx, cmd)
+	// 读取文件内容
+	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert content: %v", err)
+		return nil, err
 	}
 
-	summary := fmt.Sprintf("Content inserted at %s of %s", position, path)
-	return NewResult(summary), nil
+	// 构造 EditParams 复用纯 Go 的 doInsert 逻辑
+	params := EditParams{
+		Position: position,
+		Content:  content,
+	}
+	newContent, result, err := t.doInsert(oldContent, params, path)
+	if err != nil {
+		return nil, err
+	}
+
+	// 写回文件
+	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
+		return nil, err
+	}
+
+	diff := generateUnifiedDiff(oldContent, newContent, path)
+	return &ToolResult{Summary: result, Detail: diff}, nil
 }
 
 // executeLocal 在本地执行编辑操作（非沙箱模式）

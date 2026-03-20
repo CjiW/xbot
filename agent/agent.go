@@ -267,6 +267,32 @@ func (a *Agent) SetRegistryManager(rm *RegistryManager) { a.registryManager = rm
 // SetSettingsService sets the SettingsService (for external injection or override).
 func (a *Agent) SetSettingsService(svc *SettingsService) { a.settingsSvc = svc }
 
+// LLMFactory returns the Agent's LLMFactory (for external injection of callbacks).
+func (a *Agent) LLMFactory() *LLMFactory { return a.llmFactory }
+
+// RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
+func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
+
+// SettingsService returns the Agent's SettingsService (for external injection of callbacks).
+func (a *Agent) SettingsService() *SettingsService { return a.settingsSvc }
+
+// SetUserModel sets the model for a user's LLM configuration (used by settings card callback).
+func (a *Agent) SetUserModel(senderID, model string) error {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil {
+		return fmt.Errorf("get LLM config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("user has no custom LLM config; use /set-llm first")
+	}
+	cfg.Model = model
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return fmt.Errorf("save model: %w", err)
+	}
+	a.llmFactory.Invalidate(senderID)
+	return nil
+}
+
 // SetChannelFinder sets the channel finder callback (for external injection).
 // Also propagates to SettingsService so it can resolve channels by name.
 func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {

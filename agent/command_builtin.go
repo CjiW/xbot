@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"xbot/bus"
+	"xbot/channel"
 	"xbot/version"
 )
 
@@ -534,7 +536,28 @@ func (c *settingsCmd) Execute(ctx context.Context, a *Agent, msg bus.InboundMess
 		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("✅ %s = %s", key, value)}, nil
 	}
 
-	// /settings (list) — now uses channelName string directly
+	// /settings (list) — 检测飞书渠道使用交互式卡片，其他渠道使用 markdown
+	if a.channelFinder != nil {
+		if ch, ok := a.channelFinder(msg.Channel); ok {
+			if fc, ok := ch.(*channel.FeishuChannel); ok {
+				card, err := fc.BuildSettingsCard(ctx, msg.SenderID, msg.ChatID, "basic")
+				if err != nil {
+					return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("构建设置卡片失败：%v", err)}, nil
+				}
+				cardJSON, err := json.Marshal(card)
+				if err != nil {
+					return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("序列化设置卡片失败：%v", err)}, nil
+				}
+				return &bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: "__FEISHU_CARD__::" + string(cardJSON),
+				}, nil
+			}
+		}
+	}
+
+	// Fallback: 非 Feishu 渠道使用 markdown UI
 	ui, err := a.settingsSvc.GetSettingsUI(msg.Channel, msg.SenderID)
 	if err != nil {
 		return &bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("获取设置失败：%v", err)}, nil

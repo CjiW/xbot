@@ -67,8 +67,14 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, err
 	}
 
+	// Resolve path (convert sandbox path to host path if needed)
+	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+
 	// Open the file
-	file, err := os.Open(args.FilePath)
+	file, err := os.Open(resolvedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
@@ -83,7 +89,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	// Determine file name and size
 	fileName := args.FileName
 	if fileName == "" {
-		fileName = filepath.Base(args.FilePath)
+		fileName = filepath.Base(resolvedPath)
 	}
 	fileSize := int(fileInfo.Size())
 

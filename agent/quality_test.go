@@ -33,13 +33,24 @@ func TestExtractFingerprint_WithFilePaths(t *testing.T) {
 }
 
 func TestExtractFingerprint_WithErrors(t *testing.T) {
+	// BUG FIX: 错误只从 tool 消息中提取。
+	// assistant 消息中包含 "error" 但不是实际错误（是元讨论），应被过滤。
 	messages := []llm.ChatMessage{
 		llm.NewAssistantMessage("I encountered an error: nil pointer dereference in handleCompress.\npanic: runtime error"),
+		// 实际错误在 tool result 中
+		llm.NewToolMessage("Shell", "1", "{}", "error: cannot find module 'xbot'\nexit status 1"),
 	}
 
 	fp := ExtractFingerprint(messages)
+	// 应该只提取 tool 消息中的错误（不含元讨论）
 	if len(fp.Errors) == 0 {
-		t.Error("expected to extract error messages, got none")
+		t.Error("expected to extract error messages from tool messages, got none")
+	}
+	// 验证提取的错误来自 tool result，而非 assistant 的元讨论
+	for _, e := range fp.Errors {
+		if strings.Contains(strings.ToLower(e), "encountered an error") {
+			t.Errorf("should not extract meta-discussion about errors, got: %q", e)
+		}
 	}
 }
 
@@ -454,6 +465,30 @@ func TestCountStructuredMarkers_None(t *testing.T) {
 	}
 }
 
+func TestCountStructuredMarkers_ExtendedFormats(t *testing.T) {
+	tests := []struct {
+		text string
+		want int
+	}{
+		// 带空格的标记
+		{"@file: compress.go @func: handleCompress", 2},
+		// 带引号的标记
+		{`@file: "compress.go" @error: "nil pointer"`, 2},
+		// 列表格式
+		{"- file: compress.go\n- func: handleCompress\n- error: nil pointer", 3},
+		// 圆点列表格式
+		{"• file: compress.go • func: handleCompress", 2},
+		// 混合格式
+		{"@file:compress.go\n- file: engine.go", 2},
+	}
+	for _, tt := range tests {
+		got := countStructuredMarkers(tt.text)
+		if got != tt.want {
+			t.Errorf("countStructuredMarkers(%q) = %d, want %d", tt.text, got, tt.want)
+		}
+	}
+}
+
 // ----------------------------------------------------------------
 // isErrorContext tests
 // ----------------------------------------------------------------
@@ -481,6 +516,22 @@ func TestIsErrorContext_False(t *testing.T) {
 	for _, text := range tests {
 		if isErrorContext(text) {
 			t.Errorf("expected isErrorContext(%q) = false", text)
+		}
+	}
+}
+
+func TestIsErrorContext_MetaDiscussion(t *testing.T) {
+	// 这些包含 "error" 但不是实际错误，是元讨论
+	tests := []string{
+		"error handling code should be improved",
+		"the error message format is",
+		"error recovery strategy",
+		"if error != nil",
+		"return error from function",
+	}
+	for _, text := range tests {
+		if isErrorContext(text) {
+			t.Errorf("expected isErrorContext(%q) = false (meta-discussion)", text)
 		}
 	}
 }

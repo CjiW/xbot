@@ -131,6 +131,8 @@ func main() {
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
 		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
+		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
+		SubAgentLLMTimeout:   cfg.Agent.SubAgentLLMTimeout,
 	})
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）

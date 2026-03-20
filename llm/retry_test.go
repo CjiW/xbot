@@ -23,13 +23,13 @@ func TestIsRetryableError(t *testing.T) {
 		// nil
 		{"nil error", nil, false},
 
-		// context 错误 — 不重试
+		// context 错误
 		{"context.Canceled", context.Canceled, false},
-		{"context.DeadlineExceeded", context.DeadlineExceeded, false},
+		{"context.DeadlineExceeded", context.DeadlineExceeded, true}, // 超时允许重试
 		{"wrapped context.Canceled", fmt.Errorf("call failed: %w", context.Canceled), false},
-		{"wrapped context.DeadlineExceeded", fmt.Errorf("timeout: %w", context.DeadlineExceeded), false},
+		{"wrapped context.DeadlineExceeded", fmt.Errorf("timeout: %w", context.DeadlineExceeded), true}, // 超时允许重试
 		{"string context canceled", errors.New("something context canceled here"), false},
-		{"string context deadline exceeded", errors.New("context deadline exceeded"), false},
+		{"string context deadline exceeded", errors.New("context deadline exceeded"), false}, // 纯字符串不匹配 sentinel
 
 		// 网络错误 — 重试
 		{"net.DNSError timeout", &net.DNSError{Err: "timeout", IsTimeout: true}, true},

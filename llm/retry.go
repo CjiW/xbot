@@ -111,16 +111,25 @@ func IsInputTooLongError(err error) bool {
 	return false
 }
 
-// isRetryableError 判断错误是否可重试
-// 可重试：429、5xx、网络错误
-// 不可重试：context 取消/超时、其他 4xx
+// isRetryableError 判断错误是否可重试。
+// 可重试：429、5xx、网络错误、context 超时
+// 不可重试：context 取消（用户主动 /cancel）、其他 4xx
+//
+// 注意：context.DeadlineExceeded 允许重试，但实际是否重试取决于 retry.Context(ctx)。
+// 如果传入 Generate 的 ctx 本身携带 deadline，超时后 ctx.Done() 关闭，
+// retry 框架会在下次尝试前检查 ctx 并放弃。因此，仅在调用方不使用
+// context.WithTimeout 包裹 ctx 时，超时重试才实际生效。
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// context 错误不重试
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// context.Canceled：用户主动取消（/cancel 等），不重试
+	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	// context.DeadlineExceeded：超时是瞬态错误，允许重试
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	msg := err.Error()
 	// 网络层错误可重试

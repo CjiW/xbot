@@ -323,7 +323,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		InitialCWD:       parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
 		MaxIterations: 100,
-		LLMTimeout:    3 * time.Minute,
+		LLMTimeout:    a.subAgentLLMTimeout,
 		ToolTimeout:   2 * time.Minute,
 
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
@@ -744,6 +744,19 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"tools":     out.ToolsUsed,
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")
+
+	// BUG FIX: 当 SubAgent 遇到错误时，确保错误信息在 Content 中可见。
+	// spawnSubAgent 返回 (out.OutboundMessage, nil)，Go error 始终为 nil。
+	// 虽然 adapter 会检查 OutboundMessage.Error 并传播，但为了确保主 Agent LLM
+	// 能清晰识别 SubAgent 的异常状态，在 Content 中也附加错误标注。
+	if out.Error != nil {
+		content := out.Content
+		if content == "" {
+			content = "⚠️ SubAgent 执行失败，未产生任何输出。"
+		}
+		content += fmt.Sprintf("\n\n> ❌ SubAgent Error: %v", out.Error)
+		out.Content = content
+	}
 
 	// SubAgent 记忆整合：将本次对话的关键信息写入 SubAgent 的独立记忆
 	// 同步执行，确保记忆写入完成后再返回，避免 session 被 unload 导致记忆丢失。

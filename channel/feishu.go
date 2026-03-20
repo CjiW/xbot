@@ -1028,9 +1028,15 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		messageID = event.Event.Context.OpenMessageID
 	}
 
-	// 拦截 settings 卡片按钮点击（在 CardBuilder 路由之前）
+	// 拦截 settings 卡片交互（按钮点击和下拉选择，在 CardBuilder 路由之前）
 	if parsed := parseActionDataFromMap(actionData); parsed != nil {
 		if actionName := parsed["action"]; strings.HasPrefix(actionName, settingsCardActionPrefix) {
+			if action.Option != "" {
+				if actionData == nil {
+					actionData = make(map[string]any)
+				}
+				actionData["selected_option"] = action.Option
+			}
 			return f.handleSettingsCardAction(ctx, actionData, chatID, senderID, messageID)
 		}
 	}
@@ -1052,8 +1058,8 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID, requestID)
 }
 
-// handleSettingsCardAction handles settings card button clicks.
-// It processes the action, rebuilds the card, and patches the original message.
+// handleSettingsCardAction handles settings card interactions (buttons & selects).
+// Returns the updated card directly in the callback response for instant UI refresh.
 func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData map[string]any, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, error) {
 	updatedCard, err := f.HandleSettingsAction(ctx, actionData, senderID, chatID, messageID)
 	if err != nil {
@@ -1069,33 +1075,10 @@ func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData
 		}, nil
 	}
 
-	// Patch the updated card back to the original message
-	if messageID != "" {
-		cardJSON, err := json.Marshal(updatedCard)
-		if err != nil {
-			log.WithError(err).Warn("Failed to marshal settings card")
-			return &callback.CardActionTriggerResponse{
-				Toast: &callback.Toast{
-					Type:    "error",
-					Content: "卡片序列化失败",
-				},
-			}, nil
-		}
-		if err := f.patchMessage(messageID, cardJSON); err != nil {
-			log.WithError(err).WithField("message_id", messageID).Warn("Failed to patch settings card")
-			return &callback.CardActionTriggerResponse{
-				Toast: &callback.Toast{
-					Type:    "error",
-					Content: "卡片更新失败",
-				},
-			}, nil
-		}
-	}
-
 	return &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{
-			Type:    "success",
-			Content: "已更新",
+		Card: &callback.Card{
+			Type: "raw",
+			Data: updatedCard,
 		},
 	}, nil
 }
@@ -1830,19 +1813,6 @@ func limitMarkdownTables(content string, maxTables int) string {
 // feishuSettingsSchema returns the settings definitions for Feishu channel.
 func feishuSettingsSchema() []SettingDefinition {
 	return []SettingDefinition{
-		{
-			Key:         "reply_style",
-			Label:       "回复风格",
-			Description: "控制机器人的回复风格",
-			Type:        SettingTypeSelect,
-			Category:    "对话",
-			Options: []SettingOption{
-				{Label: "简洁", Value: "concise"},
-				{Label: "详细", Value: "detailed"},
-				{Label: "技术", Value: "technical"},
-			},
-			DefaultValue: "detailed",
-		},
 		{
 			Key:         "context_mode",
 			Label:       "上下文模式",

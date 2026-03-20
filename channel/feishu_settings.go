@@ -33,20 +33,9 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 		}
 	}
 
-	// Build header elements
-	elements := []map[string]any{
-		{
-			"tag":     "markdown",
-			"content": "**⚙️ 设置面板**",
-		},
-		{"tag": "hr"},
-	}
-
-	// Tab buttons
-	elements = append(elements, buildTabButtons(tab)...)
+	elements := buildTabButtons(tab)
 	elements = append(elements, map[string]any{"tag": "hr"})
 
-	// Tab content
 	switch tab {
 	case "basic":
 		elements = append(elements, f.buildBasicTabContent(settings)...)
@@ -67,7 +56,7 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 				"tag":     "plain_text",
 				"content": "⚙️ 设置",
 			},
-			"template": "blue",
+			"template": "indigo",
 		},
 		"body": map[string]any{
 			"elements": elements,
@@ -78,9 +67,8 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 }
 
 // HandleSettingsAction processes settings card callback actions.
-// It returns the updated card JSON that should be patched back to the message.
+// It returns the updated card JSON that should be returned in the callback response.
 func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map[string]any, senderID, chatID, messageID string) (map[string]any, error) {
-	// Extract action_data JSON string
 	actionDataJSON, _ := actionData["action_data"].(string)
 	if actionDataJSON == "" {
 		return nil, fmt.Errorf("missing action_data")
@@ -100,6 +88,11 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_set":
 		key := parsed["key"]
 		value := parsed["value"]
+		if value == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				value = opt
+			}
+		}
 		if key == "" {
 			return nil, fmt.Errorf("missing key in settings_set action")
 		}
@@ -112,6 +105,11 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 
 	case "settings_set_model":
 		model := parsed["model"]
+		if model == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				model = opt
+			}
+		}
 		if model == "" {
 			return nil, fmt.Errorf("missing model in settings_set_model action")
 		}
@@ -146,7 +144,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 
 // --- Tab content builders ---
 
-// buildTabButtons creates the three tab switching buttons.
+// buildTabButtons creates the tab switching buttons in a horizontal layout.
 func buildTabButtons(currentTab string) []map[string]any {
 	tabs := []struct {
 		key   string
@@ -157,23 +155,18 @@ func buildTabButtons(currentTab string) []map[string]any {
 		{"market", "📦 市场"},
 	}
 
-	var elements []map[string]any
-	var actions []map[string]any
+	var buttons []map[string]any
 	for _, t := range tabs {
 		isActive := t.key == currentTab
 		btnType := "default"
 		if isActive {
 			btnType = "primary"
 		}
-		label := t.label
-		if isActive {
-			label = "▶ " + t.label
-		}
-		actions = append(actions, map[string]any{
+		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
 				"tag":     "plain_text",
-				"content": label,
+				"content": t.label,
 			},
 			"type": btnType,
 			"value": map[string]string{
@@ -185,17 +178,14 @@ func buildTabButtons(currentTab string) []map[string]any {
 		})
 	}
 
-	elements = append(elements, wrapButtonsAsColumnSet(actions))
-
-	return elements
+	return []map[string]any{wrapButtonsInColumns(buttons)}
 }
 
-// buildBasicTabContent builds the basic settings tab content.
+// buildBasicTabContent builds the basic settings tab with select dropdowns and toggles.
 func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[string]any {
 	schema := feishuSettingsSchema()
 	var elements []map[string]any
 
-	// Group by category
 	categories := make(map[string][]SettingDefinition)
 	var catOrder []string
 	for _, def := range schema {
@@ -224,60 +214,33 @@ func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[s
 
 			switch def.Type {
 			case SettingTypeSelect:
-				// Show current value as markdown
-				displayVal := formatCurrentValue(currentValue, def)
-				elements = append(elements, map[string]any{
-					"tag":     "markdown",
-					"content": fmt.Sprintf("- %s：**%s**", def.Label, displayVal),
-				})
-				// Option buttons
-				var actions []map[string]any
-				for _, opt := range def.Options {
-					isActive := opt.Value == currentValue
-					btnType := "default"
-					if isActive {
-						btnType = "primary"
-					}
-					actions = append(actions, map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": opt.Label,
-						},
-						"type": btnType,
-						"value": map[string]string{
-							"action_data": mustMapToJSON(map[string]string{
-								"action": "settings_set",
-								"key":    def.Key,
-								"value":  opt.Value,
-							}),
-						},
-					})
-				}
-				elements = append(elements, wrapButtonsAsColumnSet(actions))
+				elements = append(elements, buildSelectSetting(def, currentValue))
 
 			case SettingTypeToggle:
 				isOn := currentValue == "true"
-				displayLabel := "❌ 关"
-				if isOn {
-					displayLabel = "✅ 开"
-				}
-				elements = append(elements, map[string]any{
-					"tag":     "markdown",
-					"content": fmt.Sprintf("- %s：**%s**", def.Label, displayLabel),
-				})
 				toggleValue := "true"
 				if isOn {
 					toggleValue = "false"
 				}
-				elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
-					{
+
+				statusIcon := "🔴"
+				statusText := "关闭"
+				if isOn {
+					statusIcon = "🟢"
+					statusText = "开启"
+				}
+
+				elements = append(elements, buildSettingRow(
+					fmt.Sprintf("%s %s", def.Label, def.Description),
+					fmt.Sprintf("%s %s", statusIcon, statusText),
+					map[string]any{
 						"tag": "button",
 						"text": map[string]any{
 							"tag":     "plain_text",
 							"content": "切换",
 						},
 						"type": "default",
+						"size": "small",
 						"value": map[string]string{
 							"action_data": mustMapToJSON(map[string]string{
 								"action": "settings_set",
@@ -286,7 +249,7 @@ func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[s
 							}),
 						},
 					},
-				}))
+				))
 			}
 		}
 	}
@@ -294,7 +257,7 @@ func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[s
 	return elements
 }
 
-// buildModelTabContent builds the model selection tab content.
+// buildModelTabContent builds the model selection tab with a dropdown.
 func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
@@ -304,70 +267,57 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		models, currentModel = f.settingsCallbacks.LLMList(senderID)
 	}
 
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": fmt.Sprintf("**当前模型：** `%s`", currentModel),
-	})
-
 	if len(models) == 0 {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": "_暂无可用模型。请先使用 `/set-llm` 配置自定义 LLM。_",
+			"content": "**当前模型：** `" + currentModel + "`\n\n_暂无可用模型。请先使用 `/set-llm` 配置自定义 LLM。_",
 		})
 		return elements
 	}
 
-	// Model selection buttons (limit to avoid oversized card)
-	maxModels := 10
+	maxModels := 20
 	if len(models) > maxModels {
 		models = models[:maxModels]
 	}
 
-	var actions []map[string]any
+	var options []map[string]any
 	for _, model := range models {
-		isActive := model == currentModel
-		btnType := "default"
-		if isActive {
-			btnType = "primary"
-		}
-		label := model
-		if isActive {
-			label = "✅ " + model
-		}
-		actions = append(actions, map[string]any{
-			"tag": "button",
+		options = append(options, map[string]any{
 			"text": map[string]any{
 				"tag":     "plain_text",
-				"content": label,
+				"content": model,
 			},
-			"type": btnType,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_set_model",
-					"model":  model,
-				}),
-			},
+			"value": model,
 		})
 	}
 
-	elements = append(elements, wrapButtonsAsColumnSet(actions))
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": fmt.Sprintf("当前模型：**%s**", currentModel),
+	})
 
-	if len(models) > 0 {
-		elements = append(elements, map[string]any{
-			"tag": "note",
-			"elements": []map[string]any{
-				{
-					"tag":     "plain_text",
-					"content": "💡 点击模型名称即可切换。使用 `/llm` 查看完整 LLM 配置。",
-				},
-			},
-		})
-	}
+	elements = append(elements, map[string]any{
+		"tag":            "select_static",
+		"name":           "settings_model_select",
+		"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
+		"initial_option": currentModel,
+		"options":        options,
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{
+				"action": "settings_set_model",
+			}),
+		},
+	})
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "💡 选择即可切换。使用 `/llm` 查看完整 LLM 配置。",
+	})
 
 	return elements
 }
 
-// buildMarketTabContent builds the registry/market browsing tab content.
+// buildMarketTabContent builds the registry/market browsing tab.
 func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
@@ -379,10 +329,10 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		return elements
 	}
 
-	// Browse skills
+	// Skills section
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**📦 Skills 市场**",
+		"content": "**📦 Skills**",
 	})
 
 	skillEntries, err := f.settingsCallbacks.RegistryBrowse("skill", 10, 0)
@@ -395,32 +345,33 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 			"content": "_暂无公开的 Skill_",
 		})
 	} else {
+		var buttons []map[string]any
 		for _, entry := range skillEntries {
-			elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
-				{
-					"tag": "button",
-					"text": map[string]any{
-						"tag":     "plain_text",
-						"content": fmt.Sprintf("📥 %s", entry.Name),
-					},
-					"type": "default",
-					"value": map[string]string{
-						"action_data": mustMapToJSON(map[string]string{
-							"action":     "settings_install",
-							"entry_type": "skill",
-							"entry_id":   fmt.Sprintf("%d", entry.ID),
-						}),
-					},
+			buttons = append(buttons, map[string]any{
+				"tag": "button",
+				"text": map[string]any{
+					"tag":     "plain_text",
+					"content": fmt.Sprintf("📥 %s", entry.Name),
 				},
-			}))
+				"type": "default",
+				"size": "small",
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action":     "settings_install",
+						"entry_type": "skill",
+						"entry_id":   fmt.Sprintf("%d", entry.ID),
+					}),
+				},
+			})
 		}
+		elements = append(elements, wrapButtonsInColumns(buttons))
 	}
 
-	// Browse agents
+	// Agents section
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**🤖 Agents 市场**",
+		"content": "**🤖 Agents**",
 	})
 
 	agentEntries, err := f.settingsCallbacks.RegistryBrowse("agent", 10, 0)
@@ -433,35 +384,31 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 			"content": "_暂无公开的 Agent_",
 		})
 	} else {
+		var buttons []map[string]any
 		for _, entry := range agentEntries {
-			elements = append(elements, wrapButtonsAsColumnSet([]map[string]any{
-				{
-					"tag": "button",
-					"text": map[string]any{
-						"tag":     "plain_text",
-						"content": fmt.Sprintf("📥 %s", entry.Name),
-					},
-					"type": "default",
-					"value": map[string]string{
-						"action_data": mustMapToJSON(map[string]string{
-							"action":     "settings_install",
-							"entry_type": "agent",
-							"entry_id":   fmt.Sprintf("%d", entry.ID),
-						}),
-					},
+			buttons = append(buttons, map[string]any{
+				"tag": "button",
+				"text": map[string]any{
+					"tag":     "plain_text",
+					"content": fmt.Sprintf("📥 %s", entry.Name),
 				},
-			}))
+				"type": "default",
+				"size": "small",
+				"value": map[string]string{
+					"action_data": mustMapToJSON(map[string]string{
+						"action":     "settings_install",
+						"entry_type": "agent",
+						"entry_id":   fmt.Sprintf("%d", entry.ID),
+					}),
+				},
+			})
 		}
+		elements = append(elements, wrapButtonsInColumns(buttons))
 	}
 
 	elements = append(elements, map[string]any{
-		"tag": "note",
-		"elements": []map[string]any{
-			{
-				"tag":     "plain_text",
-				"content": "💡 也可以使用 `/browse` 和 `/install` 命令管理市场资源。",
-			},
-		},
+		"tag":     "markdown",
+		"content": "💡 也可以使用 `/browse` 和 `/install` 命令管理市场资源。",
 	})
 
 	return elements
@@ -469,10 +416,72 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 
 // --- Helpers ---
 
-// wrapButtonsAsColumnSet wraps a slice of button elements in a Schema V2-compatible
-// column_set > column > interactive_container structure, replacing the deprecated
-// V1 "action" tag.
-func wrapButtonsAsColumnSet(buttons []map[string]any) map[string]any {
+// buildSelectSetting builds a select_static dropdown for a setting definition.
+func buildSelectSetting(def SettingDefinition, currentValue string) map[string]any {
+	var options []map[string]any
+	for _, opt := range def.Options {
+		options = append(options, map[string]any{
+			"text": map[string]any{
+				"tag":     "plain_text",
+				"content": opt.Label,
+			},
+			"value": opt.Value,
+		})
+	}
+
+	return buildSettingRow(
+		fmt.Sprintf("%s %s", def.Label, def.Description),
+		formatCurrentValue(currentValue, def),
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_" + def.Key,
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择..."},
+			"initial_option": currentValue,
+			"options":        options,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_set",
+					"key":    def.Key,
+				}),
+			},
+		},
+	)
+}
+
+// buildSettingRow creates a two-column layout with label on the left and control on the right.
+func buildSettingRow(label, currentDisplay string, control map[string]any) map[string]any {
+	return map[string]any{
+		"tag":                "column_set",
+		"flex_mode":          "none",
+		"horizontal_spacing": "default",
+		"columns": []map[string]any{
+			{
+				"tag":            "column",
+				"width":          "weighted",
+				"weight":         1,
+				"vertical_align": "center",
+				"elements": []map[string]any{
+					{
+						"tag":     "markdown",
+						"content": fmt.Sprintf("%s　**%s**", label, currentDisplay),
+					},
+				},
+			},
+			{
+				"tag":            "column",
+				"width":          "weighted",
+				"weight":         1,
+				"vertical_align": "center",
+				"elements": []map[string]any{
+					control,
+				},
+			},
+		},
+	}
+}
+
+// wrapButtonsInColumns wraps button elements in a V2-compatible column_set layout.
+func wrapButtonsInColumns(buttons []map[string]any) map[string]any {
 	return map[string]any{
 		"tag":                "column_set",
 		"flex_mode":          "none",

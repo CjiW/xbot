@@ -25,43 +25,84 @@ func getCardElements(card map[string]any) ([]map[string]any, bool) {
 	return elements, ok
 }
 
-// helper to find action values from card elements (supports V1 "action" and V2 "column_set" nesting)
+// helper to find action values from card elements (supports V2 column_set nesting)
 func collectActionDataFromCard(card map[string]any) []string {
 	var results []string
 	elements, ok := getCardElements(card)
 	if !ok {
 		return results
 	}
-	collectButtonsRecursive(elements, &results)
+	collectInteractiveRecursive(elements, &results, nil)
 	return results
 }
 
-// collectButtonsRecursive searches for buttons at any nesting depth within card elements.
-// Handles both V1 (action > button) and V2 (column_set > column > interactive_container > button).
-func collectButtonsRecursive(elements []map[string]any, results *[]string) {
+// collectInteractiveRecursive searches for buttons and selects at any nesting depth.
+func collectInteractiveRecursive(elements []map[string]any, buttonResults *[]string, selectResults *[]string) {
 	for _, elem := range elements {
 		switch elem["tag"] {
-		case "action":
-			// V1: action > button[]
-			if actions, ok := elem["actions"].([]map[string]any); ok {
-				collectButtonsRecursive(actions, results)
-			}
 		case "button":
 			if value, ok := elem["value"].(map[string]string); ok {
 				if ad := value["action_data"]; ad != "" {
-					*results = append(*results, ad)
+					*buttonResults = append(*buttonResults, ad)
+				}
+			}
+		case "select_static":
+			if selectResults != nil {
+				if value, ok := elem["value"].(map[string]string); ok {
+					if ad := value["action_data"]; ad != "" {
+						*selectResults = append(*selectResults, ad)
+					}
 				}
 			}
 		case "column_set":
 			if columns, ok := elem["columns"].([]map[string]any); ok {
-				collectButtonsRecursive(columns, results)
+				collectInteractiveRecursive(columns, buttonResults, selectResults)
 			}
 		case "column", "interactive_container", "form", "collapsible_panel":
 			if children, ok := elem["elements"].([]map[string]any); ok {
-				collectButtonsRecursive(children, results)
+				collectInteractiveRecursive(children, buttonResults, selectResults)
 			}
 		}
 	}
+}
+
+// collectSelectsFromCard collects action_data from select_static elements.
+func collectSelectsFromCard(card map[string]any) []string {
+	var buttons, selects []string
+	elements, ok := getCardElements(card)
+	if !ok {
+		return selects
+	}
+	collectInteractiveRecursive(elements, &buttons, &selects)
+	return selects
+}
+
+// cardContainsTag checks if a card contains any element with the given tag (recursively).
+func cardContainsTag(card map[string]any, tag string) bool {
+	elements, ok := getCardElements(card)
+	if !ok {
+		return false
+	}
+	return containsTagRecursive(elements, tag)
+}
+
+func containsTagRecursive(elements []map[string]any, tag string) bool {
+	for _, elem := range elements {
+		if elem["tag"] == tag {
+			return true
+		}
+		if columns, ok := elem["columns"].([]map[string]any); ok {
+			if containsTagRecursive(columns, tag) {
+				return true
+			}
+		}
+		if children, ok := elem["elements"].([]map[string]any); ok {
+			if containsTagRecursive(children, tag) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // --- parseActionData tests ---
@@ -185,7 +226,6 @@ func TestBuildSettingsCard_BasicTab(t *testing.T) {
 		SettingsGet: func(channelName, senderID string) (map[string]string, error) {
 			settingsGetCalled = true
 			return map[string]string{
-				"reply_style":        "concise",
 				"context_mode":       "phase2",
 				"notify_on_complete": "true",
 			}, nil
@@ -201,7 +241,6 @@ func TestBuildSettingsCard_BasicTab(t *testing.T) {
 		t.Fatal("expected non-nil card")
 	}
 
-	// Verify card structure
 	if card["schema"] != "2.0" {
 		t.Errorf("expected schema=2.0, got %v", card["schema"])
 	}
@@ -218,38 +257,40 @@ func TestBuildSettingsCard_BasicTab(t *testing.T) {
 		t.Errorf("expected header title '⚙️ 设置', got %v", titleMap["content"])
 	}
 
-	elements, ok := getCardElements(card)
-	if !ok {
-		t.Fatal("expected body.elements to be a []map[string]any")
+	// Verify select_static elements for select-type settings
+	selects := collectSelectsFromCard(card)
+	hasSettingsSelect := false
+	for _, ad := range selects {
+		if strings.Contains(ad, "settings_set") {
+			hasSettingsSelect = true
+		}
+	}
+	if !hasSettingsSelect {
+		t.Error("expected select_static element with 'settings_set' action for select-type settings")
 	}
 
-	// Verify that there are markdown elements and button elements
-	hasMarkdown := false
+	// Verify tab buttons exist
 	actionDataList := collectActionDataFromCard(card)
-	hasButton := len(actionDataList) > 0
-	hasSettingsAction := false
-	for _, elem := range elements {
-		if elem["tag"] == "markdown" {
-			hasMarkdown = true
+	hasTabButton := false
+	for _, ad := range actionDataList {
+		if strings.Contains(ad, "settings_tab") {
+			hasTabButton = true
 		}
 	}
-	for _, ad := range actionDataList {
-		if strings.Contains(ad, "settings_") {
-			hasSettingsAction = true
-		}
+	if !hasTabButton {
+		t.Error("expected tab button with 'settings_tab' action")
 	}
 
-	if !hasMarkdown {
-		t.Error("expected at least one markdown element in card")
-	}
-	if !hasButton {
-		t.Error("expected at least one button element in card")
-	}
-	if !hasSettingsAction {
-		t.Error("expected button value to contain 'settings_' action prefix")
-	}
 	if !settingsGetCalled {
 		t.Error("expected SettingsGet callback to be called")
+	}
+
+	// Ensure no V2-unsupported tags
+	if cardContainsTag(card, "note") {
+		t.Error("card should not contain 'note' tag (unsupported in V2)")
+	}
+	if cardContainsTag(card, "action") {
+		t.Error("card should not contain 'action' tag (unsupported in V2)")
 	}
 }
 
@@ -271,31 +312,26 @@ func TestBuildSettingsCard_ModelTab(t *testing.T) {
 		t.Fatal("expected non-nil card")
 	}
 
-	elements, ok := getCardElements(card)
-	if !ok {
-		t.Fatal("expected body.elements to be a []map[string]any")
-	}
-
-	// Verify current model info is in card
 	cardJSON, _ := json.Marshal(card)
 	cardStr := string(cardJSON)
 	if !strings.Contains(cardStr, "gpt-4") {
 		t.Error("expected card to contain current model 'gpt-4'")
 	}
 
-	// Verify model selection buttons contain settings_set_model action
-	actionDataList := collectActionDataFromCard(card)
-	hasSetModelAction := false
-	for _, ad := range actionDataList {
+	// Model tab should have a select_static for model selection
+	selects := collectSelectsFromCard(card)
+	hasSetModelSelect := false
+	for _, ad := range selects {
 		if strings.Contains(ad, "settings_set_model") {
-			hasSetModelAction = true
+			hasSetModelSelect = true
 		}
 	}
-	if !hasSetModelAction {
-		t.Error("expected model tab buttons to contain 'settings_set_model' action")
+	if !hasSetModelSelect {
+		t.Error("expected select_static with 'settings_set_model' action in model tab")
 	}
 
-	// Verify there are markdown elements for model display
+	// Verify markdown showing current model
+	elements, _ := getCardElements(card)
 	hasModelMarkdown := false
 	for _, elem := range elements {
 		if elem["tag"] == "markdown" {
@@ -307,6 +343,11 @@ func TestBuildSettingsCard_ModelTab(t *testing.T) {
 	}
 	if !hasModelMarkdown {
 		t.Error("expected markdown element showing current model")
+	}
+
+	// Must NOT contain 'note' tag
+	if cardContainsTag(card, "note") {
+		t.Error("model tab should not contain 'note' tag (unsupported in V2)")
 	}
 }
 
@@ -334,7 +375,6 @@ func TestHandleSettingsAction_TabSwitch(t *testing.T) {
 		t.Fatal("expected non-nil card")
 	}
 
-	// Verify the returned card is for the model tab (contains model info)
 	cardJSON, _ := json.Marshal(card)
 	cardStr := string(cardJSON)
 	if !strings.Contains(cardStr, "gpt-4") {
@@ -357,13 +397,13 @@ func TestHandleSettingsAction_SetValue(t *testing.T) {
 		},
 		SettingsGet: func(channelName, senderID string) (map[string]string, error) {
 			return map[string]string{
-				"reply_style": "concise",
+				"context_mode": "phase1",
 			}, nil
 		},
 	})
 
 	actionData := map[string]any{
-		"action_data": `{"action":"settings_set","key":"reply_style","value":"detailed"}`,
+		"action_data": `{"action":"settings_set","key":"context_mode","value":"phase2"}`,
 	}
 
 	ctx := context.Background()
@@ -378,16 +418,86 @@ func TestHandleSettingsAction_SetValue(t *testing.T) {
 	if !settingsSetCalled {
 		t.Error("expected SettingsSet callback to be called")
 	}
-	if setKey != "reply_style" {
-		t.Errorf("expected key=reply_style, got %q", setKey)
+	if setKey != "context_mode" {
+		t.Errorf("expected key=context_mode, got %q", setKey)
 	}
-	if setValue != "detailed" {
-		t.Errorf("expected value=detailed, got %q", setValue)
+	if setValue != "phase2" {
+		t.Errorf("expected value=phase2, got %q", setValue)
 	}
 
-	// Verify returned card is valid (basic tab after set)
 	if card["schema"] != "2.0" {
 		t.Errorf("expected returned card schema=2.0, got %v", card["schema"])
+	}
+}
+
+func TestHandleSettingsAction_SetValueFromSelect(t *testing.T) {
+	f := newTestFeishuChannel()
+
+	var setKey, setValue string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		SettingsSet: func(channelName, senderID, key, value string) error {
+			setKey = key
+			setValue = value
+			return nil
+		},
+		SettingsGet: func(channelName, senderID string) (map[string]string, error) {
+			return map[string]string{}, nil
+		},
+	})
+
+	// Simulate select_static callback: action_data has key but no value,
+	// selected_option is injected by onCardAction from action.Option
+	actionData := map[string]any{
+		"action_data":     `{"action":"settings_set","key":"context_mode"}`,
+		"selected_option": "phase2",
+	}
+
+	ctx := context.Background()
+	card, err := f.HandleSettingsAction(ctx, actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("HandleSettingsAction returned error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected non-nil card")
+	}
+	if setKey != "context_mode" {
+		t.Errorf("expected key=context_mode, got %q", setKey)
+	}
+	if setValue != "phase2" {
+		t.Errorf("expected value=phase2 from selected_option, got %q", setValue)
+	}
+}
+
+func TestHandleSettingsAction_SetModelFromSelect(t *testing.T) {
+	f := newTestFeishuChannel()
+
+	var setModel string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		LLMSet: func(senderID, model string) error {
+			setModel = model
+			return nil
+		},
+		LLMList: func(senderID string) ([]string, string) {
+			return []string{"gpt-4", "claude-3"}, "gpt-4"
+		},
+	})
+
+	// Simulate select_static callback for model selection
+	actionData := map[string]any{
+		"action_data":     `{"action":"settings_set_model"}`,
+		"selected_option": "claude-3",
+	}
+
+	ctx := context.Background()
+	card, err := f.HandleSettingsAction(ctx, actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("HandleSettingsAction returned error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected non-nil card")
+	}
+	if setModel != "claude-3" {
+		t.Errorf("expected model=claude-3, got %q", setModel)
 	}
 }
 
@@ -541,6 +651,11 @@ func TestBuildSettingsCard_MarketTab(t *testing.T) {
 	if !strings.Contains(cardStr, "my-agent") {
 		t.Error("expected market tab to contain agent entry 'my-agent'")
 	}
+
+	// Must NOT contain 'note' tag
+	if cardContainsTag(card, "note") {
+		t.Error("market tab should not contain 'note' tag (unsupported in V2)")
+	}
 }
 
 func TestBuildSettingsCard_DefaultTab(t *testing.T) {
@@ -552,7 +667,6 @@ func TestBuildSettingsCard_DefaultTab(t *testing.T) {
 		},
 	})
 
-	// Pass empty tab — should default to "basic"
 	ctx := context.Background()
 	card, err := f.BuildSettingsCard(ctx, "user1", "chat1", "")
 	if err != nil {
@@ -562,17 +676,21 @@ func TestBuildSettingsCard_DefaultTab(t *testing.T) {
 		t.Fatal("expected non-nil card")
 	}
 
-	// Basic tab should have "设置面板" title
-	cardJSON, _ := json.Marshal(card)
-	cardStr := string(cardJSON)
-	if !strings.Contains(cardStr, "设置面板") {
-		t.Error("expected default tab card to contain '设置面板'")
+	header, ok := card["header"].(map[string]any)
+	if !ok {
+		t.Fatal("expected header to be a map")
+	}
+	titleMap, ok := header["title"].(map[string]any)
+	if !ok {
+		t.Fatal("expected header.title to be a map")
+	}
+	if titleMap["content"] != "⚙️ 设置" {
+		t.Errorf("expected header title '⚙️ 设置', got %v", titleMap["content"])
 	}
 }
 
 func TestBuildSettingsCard_NilCallbacks(t *testing.T) {
 	f := newTestFeishuChannel()
-	// No callbacks set — should not panic
 
 	ctx := context.Background()
 	card, err := f.BuildSettingsCard(ctx, "user1", "chat1", "basic")
@@ -584,5 +702,27 @@ func TestBuildSettingsCard_NilCallbacks(t *testing.T) {
 	}
 	if card["schema"] != "2.0" {
 		t.Errorf("expected schema=2.0, got %v", card["schema"])
+	}
+}
+
+func TestBuildSettingsCard_NoReplyStyle(t *testing.T) {
+	f := newTestFeishuChannel()
+
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		SettingsGet: func(channelName, senderID string) (map[string]string, error) {
+			return map[string]string{}, nil
+		},
+	})
+
+	ctx := context.Background()
+	card, err := f.BuildSettingsCard(ctx, "user1", "chat1", "basic")
+	if err != nil {
+		t.Fatalf("BuildSettingsCard returned error: %v", err)
+	}
+
+	cardJSON, _ := json.Marshal(card)
+	cardStr := string(cardJSON)
+	if strings.Contains(cardStr, "reply_style") || strings.Contains(cardStr, "回复风格") {
+		t.Error("card should not contain removed reply_style setting")
 	}
 }

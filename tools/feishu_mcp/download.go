@@ -68,7 +68,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		args.Type = "file"
 	}
 
-	// Resolve output path with sandbox path guard
+	// Resolve output path
 	outputPath, err := tools.ResolveWritePath(ctx, args.OutputPath)
 	if err != nil {
 		return nil, err

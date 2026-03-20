@@ -337,7 +337,7 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		args.Type = "file"
 	}
 
-	// Resolve path with sandbox path guard
+	// Resolve path
 	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)

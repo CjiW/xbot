@@ -33,112 +33,41 @@ func resolveScopedBase(ctx *ToolContext) (string, error) {
 	return absRoot, nil
 }
 
-func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
+// resolvePath 解析路径为绝对路径，不做任何权限/范围检查。
+func resolvePath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("path is required")
 	}
-
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
-		if filepath.IsAbs(inputPath) {
-			return cleanAbsPath(inputPath)
-		}
+	if filepath.IsAbs(inputPath) {
+		return cleanAbsPath(inputPath)
+	}
+	// 解析相对路径：优先使用 WorkspaceRoot 作为基准目录
+	base := ""
+	if ctx != nil && ctx.WorkspaceRoot != "" {
+		base = ctx.WorkspaceRoot
+	} else if ctx != nil && ctx.WorkingDir != "" {
+		base = ctx.WorkingDir
+	}
+	if base == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}
-		return cleanAbsPath(filepath.Join(cwd, inputPath))
+		base = cwd
 	}
-
-	root, err := resolveScopedBase(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	candidate := inputPath
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
-	}
-	candidate, err = cleanAbsPath(candidate)
-	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
-	}
-
-	// 检查目标或父目录（处理符号链接）
-	checkPath := candidate
-	if _, err := os.Stat(candidate); err != nil {
-		checkPath = filepath.Dir(candidate)
-	}
-	realCheckPath, err := filepath.EvalSymlinks(checkPath)
-	if err == nil {
-		checkPath = realCheckPath
-	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		realRoot = root
-	}
-
-	if !isWithinRoot(checkPath, realRoot) {
-		return "", fmt.Errorf("write path escapes workspace: %s", inputPath)
-	}
-	return candidate, nil
+	return cleanAbsPath(filepath.Join(base, inputPath))
 }
 
+// ResolveWritePath 解析写入路径为绝对路径（仅做路径解析，不做权限检查）。
+// 保留函数签名以兼容已有调用方。
+func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
+	return resolvePath(ctx, inputPath)
+}
+
+// ResolveReadPath 解析读取路径为绝对路径（仅做路径解析，不做权限检查）。
+// 保留函数签名以兼容已有调用方。
 func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
-	if inputPath == "" {
-		return "", fmt.Errorf("path is required")
-	}
-
-	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0) {
-		if filepath.IsAbs(inputPath) {
-			return cleanAbsPath(inputPath)
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get working directory: %w", err)
-		}
-		return cleanAbsPath(filepath.Join(cwd, inputPath))
-	}
-
-	root, err := resolveScopedBase(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	candidate := inputPath
-	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
-	}
-	candidate, err = cleanAbsPath(candidate)
-	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
-	}
-
-	realCandidate, err := filepath.EvalSymlinks(candidate)
-	if err == nil {
-		candidate = realCandidate
-	}
-
-	allowedRoots := []string{root}
-	allowedRoots = append(allowedRoots, ctx.ReadOnlyRoots...)
-
-	for _, allowed := range allowedRoots {
-		if allowed == "" {
-			continue
-		}
-		absAllowed, err := cleanAbsPath(allowed)
-		if err != nil {
-			continue
-		}
-		realAllowed, err := filepath.EvalSymlinks(absAllowed)
-		if err == nil {
-			absAllowed = realAllowed
-		}
-		if isWithinRoot(candidate, absAllowed) {
-			return candidate, nil
-		}
-	}
-
-	return "", fmt.Errorf("read path is outside allowed roots: %s", inputPath)
+	return resolvePath(ctx, inputPath)
 }
 
 // SandboxToHostPath 将沙箱路径转换为宿主机路径（输入方向：LLM → 宿主机）

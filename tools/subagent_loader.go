@@ -21,7 +21,7 @@ func LoadAgentRoles(dir string) ([]SubAgentRole, error) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		role, err := parseAgentFile(path)
+		role, err := ParseAgentFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("parse agent file %s: %w", path, err)
 		}
@@ -30,9 +30,9 @@ func LoadAgentRoles(dir string) ([]SubAgentRole, error) {
 	return roles, nil
 }
 
-// parseAgentFile 解析单个 agent 定义文件
+// ParseAgentFile 解析单个 agent 定义文件
 // 格式：YAML frontmatter（--- 之间）+ Markdown 正文作为 SystemPrompt
-func parseAgentFile(path string) (SubAgentRole, error) {
+func ParseAgentFile(path string) (SubAgentRole, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return SubAgentRole{}, err

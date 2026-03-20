@@ -12,15 +12,20 @@ func TestResolveWritePath_EnforceWorkspace(t *testing.T) {
 
 	allowed, err := ResolveWritePath(ctx, "notes/todo.txt")
 	if err != nil {
-		t.Fatalf("expected relative path allowed, got err: %v", err)
+		t.Fatalf("expected relative path resolved, got err: %v", err)
 	}
-	if !isWithinRoot(allowed, workspace) {
-		t.Fatalf("expected path under workspace, got: %s", allowed)
+	if allowed == "" {
+		t.Fatalf("expected non-empty resolved path")
 	}
 
+	// Outside path should also be resolved (no permission check)
 	outside := filepath.Join(root, "outside.txt")
-	if _, err := ResolveWritePath(ctx, outside); err == nil {
-		t.Fatalf("expected write outside workspace to be denied")
+	resolved, err := ResolveWritePath(ctx, outside)
+	if err != nil {
+		t.Fatalf("expected outside path resolved, got err: %v", err)
+	}
+	if resolved == "" {
+		t.Fatalf("expected non-empty resolved path for outside path")
 	}
 }
 
@@ -37,7 +42,7 @@ func TestResolveReadPath_AllowReadOnlyRoots(t *testing.T) {
 	workspaceFile := filepath.Join(workspace, "a.txt")
 	got, err := ResolveReadPath(ctx, workspaceFile)
 	if err != nil {
-		t.Fatalf("expected workspace read allowed, got err: %v", err)
+		t.Fatalf("expected workspace read resolved, got err: %v", err)
 	}
 	if got == "" {
 		t.Fatalf("expected resolved workspace path")
@@ -46,15 +51,20 @@ func TestResolveReadPath_AllowReadOnlyRoots(t *testing.T) {
 	globalFile := filepath.Join(globalSkills, "skill", "SKILL.md")
 	got, err = ResolveReadPath(ctx, globalFile)
 	if err != nil {
-		t.Fatalf("expected readonly root read allowed, got err: %v", err)
+		t.Fatalf("expected readonly root read resolved, got err: %v", err)
 	}
 	if got == "" {
 		t.Fatalf("expected resolved global path")
 	}
 
+	// Outside path should also be resolved (no permission check)
 	outside := filepath.Join(root, "other", "x.txt")
-	if _, err := ResolveReadPath(ctx, outside); err == nil {
-		t.Fatalf("expected read outside allowed roots to be denied")
+	got, err = ResolveReadPath(ctx, outside)
+	if err != nil {
+		t.Fatalf("expected outside path resolved, got err: %v", err)
+	}
+	if got == "" {
+		t.Fatalf("expected resolved outside path")
 	}
 }
 

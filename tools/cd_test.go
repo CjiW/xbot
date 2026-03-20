@@ -145,16 +145,20 @@ func TestCdTool_NonExistent(t *testing.T) {
 
 func TestCdTool_EscapeWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
+	var savedDir string
 	ctx := &ToolContext{
 		WorkspaceRoot: tmpDir,
 		CurrentDir:    tmpDir,
-		SetCurrentDir: func(dir string) {},
+		SetCurrentDir: func(dir string) { savedDir = dir },
 	}
 
 	tool := &CdTool{}
 	_, err := tool.Execute(ctx, `{"path":"/tmp"}`)
-	if err == nil {
-		t.Error("expected error when trying to cd outside workspace")
+	if err != nil {
+		t.Errorf("expected cd /tmp to succeed (no permission check), got err: %v", err)
+	}
+	if savedDir != "/tmp" {
+		t.Errorf("expected savedDir=/tmp, got %q", savedDir)
 	}
 }
 

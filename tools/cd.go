@@ -76,45 +76,6 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 		return nil, fmt.Errorf("not a directory: %s", dir)
 	}
 
-	// Validate the target is within allowed roots
-	if ctx != nil && (ctx.WorkspaceRoot != "" || ctx.WorkingDir != "") {
-		root := ctx.WorkspaceRoot
-		if root == "" {
-			root = ctx.WorkingDir
-		}
-		realTarget, err := filepath.EvalSymlinks(target)
-		if err == nil {
-			target = realTarget
-		}
-		realRoot, _ := filepath.EvalSymlinks(root)
-		if realRoot == "" {
-			realRoot = root
-		}
-
-		allowed := false
-		if isWithinRoot(target, realRoot) {
-			allowed = true
-		}
-		if !allowed && ctx.ReadOnlyRoots != nil {
-			for _, ro := range ctx.ReadOnlyRoots {
-				if ro == "" {
-					continue
-				}
-				realRO, err := filepath.EvalSymlinks(ro)
-				if err != nil {
-					realRO = ro
-				}
-				if isWithinRoot(target, realRO) {
-					allowed = true
-					break
-				}
-			}
-		}
-		if !allowed {
-			return nil, fmt.Errorf("directory is outside allowed workspace: %s", dir)
-		}
-	}
-
 	if ctx != nil && ctx.SetCurrentDir != nil {
 		ctx.CurrentDir = target
 		ctx.SetCurrentDir(target)

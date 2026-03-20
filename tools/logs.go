@@ -77,7 +77,8 @@ func (t *LogsTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	// 确定日志目录
-	logDir := filepath.Join(ctx.WorkspaceRoot, ".xbot", "logs")
+	// 使用 DataDir 而非 WorkspaceRoot，因为日志是全局的，不是用户隔离的
+	logDir := filepath.Join(ctx.DataDir, ".xbot", "logs")
 
 	switch params.Action {
 	case "list":

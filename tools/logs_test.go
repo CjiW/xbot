@@ -41,7 +41,7 @@ func TestLogsToolPermission(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "user456",
-			WorkspaceRoot: t.TempDir(),
+			DataDir: t.TempDir(),
 		}
 
 		_, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -69,7 +69,7 @@ func TestLogsToolPermission(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -85,7 +85,7 @@ func TestLogsToolPermission(t *testing.T) {
 		tool := NewLogsTool("") // empty admin chat ID
 		ctx := &ToolContext{
 			ChatID:        "anyone",
-			WorkspaceRoot: t.TempDir(),
+			DataDir: t.TempDir(),
 		}
 
 		_, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -98,7 +98,7 @@ func TestLogsToolPermission(t *testing.T) {
 		tool := NewLogsTool("real_admin")
 		ctx := &ToolContext{
 			ChatID:        "fake_admin",
-			WorkspaceRoot: t.TempDir(),
+			DataDir: t.TempDir(),
 		}
 
 		_, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -132,7 +132,7 @@ func TestLogsToolListAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -158,7 +158,7 @@ func TestLogsToolListAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -177,7 +177,7 @@ func TestLogsToolListAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -209,7 +209,7 @@ func TestLogsToolListAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -248,7 +248,7 @@ func TestLogsToolListAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"list"}`)
@@ -283,7 +283,7 @@ func TestLogsToolReadAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read"}`)
@@ -309,7 +309,7 @@ func TestLogsToolReadAction(t *testing.T) {
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","file":"xbot-2026-03-18.log"}`)
@@ -339,7 +339,7 @@ time="2026-03-20T10:03:00Z" level=error msg="another error"
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","level":"error"}`)
@@ -373,7 +373,7 @@ plain text line
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","grep":"request_id"}`)
@@ -407,7 +407,7 @@ plain text line
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","lines":50}`)
@@ -439,7 +439,7 @@ plain text line
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read"}`)
@@ -463,7 +463,7 @@ plain text line
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		_, err := tool.Execute(ctx, `{"action":"read"}`)
@@ -488,7 +488,7 @@ plain text line
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","level":"error"}`)
@@ -517,7 +517,7 @@ time="2026-03-20T10:02:00Z" level=info msg="database connected"
 		tool := NewLogsTool("admin123")
 		ctx := &ToolContext{
 			ChatID:        "admin123",
-			WorkspaceRoot: tmpDir,
+			DataDir: tmpDir,
 		}
 
 		result, err := tool.Execute(ctx, `{"action":"read","level":"error","grep":"database"}`)
@@ -543,7 +543,7 @@ func TestLogsToolInvalidAction(t *testing.T) {
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
 		ChatID:        "admin123",
-		WorkspaceRoot: tmpDir,
+		DataDir: tmpDir,
 	}
 
 	_, err := tool.Execute(ctx, `{"action":"invalid"}`)
@@ -557,7 +557,7 @@ func TestLogsToolInvalidJSON(t *testing.T) {
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
 		ChatID:        "admin123",
-		WorkspaceRoot: tmpDir,
+		DataDir: tmpDir,
 	}
 
 	_, err := tool.Execute(ctx, `{invalid json`)
@@ -571,7 +571,7 @@ func TestLogsToolMissingAction(t *testing.T) {
 	tool := NewLogsTool("admin123")
 	ctx := &ToolContext{
 		ChatID:        "admin123",
-		WorkspaceRoot: tmpDir,
+		DataDir: tmpDir,
 	}
 
 	_, err := tool.Execute(ctx, `{}`)

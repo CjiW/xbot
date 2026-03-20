@@ -435,6 +435,52 @@ func (s *ArchivalService) Delete(ctx context.Context, tenantID int64, entryID st
 	return coll.Delete(ctx, nil, nil, entryID)
 }
 
+// SearchByDocumentContains searches archival entries where document content
+// contains the specified substring, using chromem-go's whereDocument filter.
+// This is useful for finding entries with specific markers like [PROJECT_CARD].
+func (s *ArchivalService) SearchByDocumentContains(ctx context.Context, tenantID int64, contains string, limit int) ([]ArchivalEntry, error) {
+	if s.embeddingFunc == nil {
+		return nil, nil // no embedding = no archival service, skip silently
+	}
+	if limit <= 0 {
+		limit = 3
+	}
+
+	coll, err := s.getOrCreateCollection(tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("get collection: %w", err)
+	}
+
+	count := coll.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	if limit > count {
+		limit = count
+	}
+
+	// chromem-go whereDocument: $contains does substring matching on document content
+	results, err := coll.Query(ctx, contains, limit, nil, map[string]string{
+		"$contains": contains,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query by document contains: %w", err)
+	}
+
+	entries := make([]ArchivalEntry, len(results))
+	for i, r := range results {
+		createdAt, _ := time.Parse(time.RFC3339, r.Metadata["created_at"])
+		entries[i] = ArchivalEntry{
+			ID:         r.ID,
+			TenantID:   tenantID,
+			Content:    r.Content,
+			CreatedAt:  createdAt,
+			Similarity: r.Similarity,
+		}
+	}
+	return entries, nil
+}
+
 // Count returns the number of archival memory entries for a tenant.
 func (s *ArchivalService) Count(tenantID int64) (int, error) {
 	name := s.collectionName(tenantID)

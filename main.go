@@ -35,7 +35,11 @@ func main() {
 	defer log.Close()
 
 	// 创建 LLM 客户端
-	llmClient, err := createLLM(cfg.LLM)
+	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
+		Attempts: uint(cfg.Agent.LLMRetryAttempts),
+		Delay:    cfg.Agent.LLMRetryDelay,
+		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
+	})
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create LLM client")
 	}
@@ -387,9 +391,7 @@ func main() {
 }
 
 // createLLM 根据配置创建 LLM 客户端（带重试、指数退避和随机抖动）
-func createLLM(cfg config.LLMConfig) (llm.LLM, error) {
-	retryCfg := llm.DefaultRetryConfig()
-
+func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) {
 	var inner llm.LLM
 	switch cfg.Provider {
 	case "openai":

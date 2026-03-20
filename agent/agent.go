@@ -599,6 +599,32 @@ func (a *Agent) SetContextManager(cm ContextManager) {
 	a.contextManager = cm
 }
 
+// GetContextMode returns the current effective context mode.
+func (a *Agent) GetContextMode() string {
+	return string(a.contextManagerConfig.EffectiveMode())
+}
+
+// SetContextMode changes the runtime context mode and rebuilds the context manager.
+// Pass "default" to reset to the default mode.
+func (a *Agent) SetContextMode(mode string) error {
+	cfg := a.contextManagerConfig
+	target := ContextMode(mode)
+
+	if target == "default" {
+		cfg.ResetRuntimeMode()
+		a.SetContextManager(NewContextManager(cfg))
+		return nil
+	}
+
+	if !IsValidContextMode(target) {
+		return fmt.Errorf("invalid mode %q; valid: phase1, phase2, none, default", mode)
+	}
+
+	cfg.SetRuntimeMode(target)
+	a.SetContextManager(NewContextManager(cfg))
+	return nil
+}
+
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）
 func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn

@@ -40,6 +40,9 @@ type FeishuConfig struct {
 type SettingsCallbacks struct {
 	LLMList         func(senderID string) ([]string, string) // returns (models, currentModel)
 	LLMSet          func(senderID, model string) error
+	LLMHasCustom    func(senderID string) bool // true if user has custom LLM config
+	ContextModeGet  func() string              // returns current effective context mode
+	ContextModeSet  func(mode string) error    // sets runtime context mode
 	RegistryBrowse  func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
 	RegistryInstall func(entryType string, id int64, senderID string) error
 	SettingsGet     func(channelName, senderID string) (map[string]string, error)
@@ -1812,29 +1815,7 @@ func limitMarkdownTables(content string, maxTables int) string {
 
 // feishuSettingsSchema returns the settings definitions for Feishu channel.
 func feishuSettingsSchema() []SettingDefinition {
-	return []SettingDefinition{
-		{
-			Key:         "context_mode",
-			Label:       "上下文模式",
-			Description: "控制上下文压缩方式",
-			Type:        SettingTypeSelect,
-			Category:    "对话",
-			Options: []SettingOption{
-				{Label: "渐进压缩", Value: "phase2"},
-				{Label: "双视图", Value: "phase1"},
-				{Label: "禁用", Value: "none"},
-			},
-			DefaultValue: "phase1",
-		},
-		{
-			Key:          "notify_on_complete",
-			Label:        "完成通知",
-			Description:  "长时间任务完成后是否发送通知",
-			Type:         SettingTypeToggle,
-			Category:     "通知",
-			DefaultValue: "true",
-		},
-	}
+	return nil
 }
 
 // SettingsSchema returns the settings definitions for Feishu channel.

@@ -232,6 +232,15 @@ func main() {
 			LLMSet: func(senderID, model string) error {
 				return agentLoop.SetUserModel(senderID, model)
 			},
+			LLMHasCustom: func(senderID string) bool {
+				return agentLoop.LLMFactory().HasCustomLLM(senderID)
+			},
+			ContextModeGet: func() string {
+				return agentLoop.GetContextMode()
+			},
+			ContextModeSet: func(mode string) error {
+				return agentLoop.SetContextMode(mode)
+			},
 			RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 				return agentLoop.RegistryManager().Browse(entryType, limit, offset)
 			},

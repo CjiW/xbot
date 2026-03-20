@@ -42,7 +42,7 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 
 		// Verify image has the squashed label (count=0)
 		out, err := exec.Command("docker", "image", "inspect", "-f",
-			"{{.Config.Labels.xbot_commit_count}}", userImage).CombinedOutput()
+			`{{index .Config.Labels "xbot.commit.count"}}`, userImage).CombinedOutput()
 		if err != nil {
 			t.Fatalf("image not found after squash: %v", err)
 		}
@@ -72,7 +72,7 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 
 			// Check label
 			out, _ := exec.Command("docker", "image", "inspect", "-f",
-				"{{.Config.Labels.xbot_commit_count}}", userImage).CombinedOutput()
+				`{{index .Config.Labels "xbot.commit.count"}}`, userImage).CombinedOutput()
 			label := strings.TrimSpace(string(out))
 			t.Logf("After round %d: commit count label = %q", i, label)
 
@@ -86,7 +86,7 @@ func TestSquashTriggersAcrossRestarts(t *testing.T) {
 
 		// After threshold rounds, squash should have triggered (label reset to 0)
 		out, _ := exec.Command("docker", "image", "inspect", "-f",
-			"{{.Config.Labels.xbot_commit_count}}", userImage).CombinedOutput()
+			`{{index .Config.Labels "xbot.commit.count"}}`, userImage).CombinedOutput()
 		label := strings.TrimSpace(string(out))
 		t.Logf("After threshold (%d) rounds: commit count label = %q", threshold, label)
 		if label != "0" && label != "" {

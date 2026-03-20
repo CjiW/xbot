@@ -161,8 +161,10 @@ const commitCountLabel = "xbot.commit.count"
 // Returns -1 if the image exists but has no commit count label (legacy image,
 // never been squashed — caller should treat this as "needs immediate squash").
 func readCommitCount(imageName string) int {
+	// Use `index` function because the label key "xbot.commit.count" contains dots,
+	// which would be misinterpreted as nested field access in Go templates.
 	out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f",
-		fmt.Sprintf("{{.Config.Labels.%s}}", strings.ReplaceAll(commitCountLabel, ".", "_")), imageName)
+		fmt.Sprintf(`{{index .Config.Labels "%s"}}`, commitCountLabel), imageName)
 	if err != nil {
 		return 0 // image doesn't exist
 	}

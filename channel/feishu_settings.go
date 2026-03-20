@@ -13,32 +13,28 @@ import (
 // settingsCardActionPrefix is the prefix for all settings card callback actions.
 const settingsCardActionPrefix = "settings_"
 
-// BuildSettingsCard constructs an interactive Feishu card JSON for settings.
-// tab: "basic" | "model" | "market"
-// senderID: current user ID (needed for model listing)
-// chatID: current chat ID
-func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string) (map[string]any, error) {
-	if tab == "" {
-		tab = "basic"
-	}
+// context mode display labels
+var contextModeLabels = map[string]string{
+	"phase1": "双视图压缩",
+	"phase2": "渐进压缩",
+	"none":   "禁用压缩",
+}
 
-	// Fetch current settings
-	var settings map[string]string
-	if f.settingsCallbacks.SettingsGet != nil {
-		var err error
-		settings, err = f.settingsCallbacks.SettingsGet(f.Name(), senderID)
-		if err != nil {
-			log.WithError(err).Warn("BuildSettingsCard: failed to get settings")
-			settings = make(map[string]string)
-		}
+// BuildSettingsCard constructs an interactive Feishu card JSON for settings.
+// tab: "general" | "model" | "market"
+func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string) (map[string]any, error) {
+	switch tab {
+	case "general", "model", "market":
+	default:
+		tab = "general"
 	}
 
 	elements := buildTabButtons(tab)
 	elements = append(elements, map[string]any{"tag": "hr"})
 
 	switch tab {
-	case "basic":
-		elements = append(elements, f.buildBasicTabContent(settings)...)
+	case "general":
+		elements = append(elements, f.buildGeneralTabContent()...)
 	case "model":
 		elements = append(elements, f.buildModelTabContent(ctx, senderID)...)
 	case "market":
@@ -67,7 +63,6 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 }
 
 // HandleSettingsAction processes settings card callback actions.
-// It returns the updated card JSON that should be returned in the callback response.
 func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map[string]any, senderID, chatID, messageID string) (map[string]any, error) {
 	actionDataJSON, _ := actionData["action_data"].(string)
 	if actionDataJSON == "" {
@@ -85,23 +80,22 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		tab := parsed["tab"]
 		return f.BuildSettingsCard(ctx, senderID, chatID, tab)
 
-	case "settings_set":
-		key := parsed["key"]
-		value := parsed["value"]
-		if value == "" {
+	case "settings_context_mode":
+		mode := parsed["mode"]
+		if mode == "" {
 			if opt, ok := actionData["selected_option"].(string); ok {
-				value = opt
+				mode = opt
 			}
 		}
-		if key == "" {
-			return nil, fmt.Errorf("missing key in settings_set action")
+		if mode == "" {
+			return nil, fmt.Errorf("missing mode")
 		}
-		if f.settingsCallbacks.SettingsSet != nil {
-			if err := f.settingsCallbacks.SettingsSet(f.Name(), senderID, key, value); err != nil {
-				log.WithError(err).Warnf("HandleSettingsAction: failed to set %s=%s", key, value)
+		if f.settingsCallbacks.ContextModeSet != nil {
+			if err := f.settingsCallbacks.ContextModeSet(mode); err != nil {
+				return nil, fmt.Errorf("切换失败: %v", err)
 			}
 		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "basic")
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
 	case "settings_set_model":
 		model := parsed["model"]
@@ -111,11 +105,11 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 			}
 		}
 		if model == "" {
-			return nil, fmt.Errorf("missing model in settings_set_model action")
+			return nil, fmt.Errorf("missing model")
 		}
 		if f.settingsCallbacks.LLMSet != nil {
 			if err := f.settingsCallbacks.LLMSet(senderID, model); err != nil {
-				log.WithError(err).Warnf("HandleSettingsAction: failed to set model %s", model)
+				return nil, fmt.Errorf("设置模型失败: %v", err)
 			}
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
@@ -124,7 +118,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		entryType := parsed["entry_type"]
 		entryIDStr := parsed["entry_id"]
 		if entryType == "" || entryIDStr == "" {
-			return nil, fmt.Errorf("missing entry_type or entry_id in settings_install action")
+			return nil, fmt.Errorf("missing entry_type or entry_id")
 		}
 		entryID, err := strconv.ParseInt(entryIDStr, 10, 64)
 		if err != nil {
@@ -144,22 +138,20 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 
 // --- Tab content builders ---
 
-// buildTabButtons creates the tab switching buttons in a horizontal layout.
 func buildTabButtons(currentTab string) []map[string]any {
 	tabs := []struct {
 		key   string
 		label string
 	}{
-		{"basic", "🎯 基础"},
+		{"general", "🎯 通用"},
 		{"model", "🤖 模型"},
 		{"market", "📦 市场"},
 	}
 
 	var buttons []map[string]any
 	for _, t := range tabs {
-		isActive := t.key == currentTab
 		btnType := "default"
-		if isActive {
+		if t.key == currentTab {
 			btnType = "primary"
 		}
 		buttons = append(buttons, map[string]any{
@@ -181,85 +173,71 @@ func buildTabButtons(currentTab string) []map[string]any {
 	return []map[string]any{wrapButtonsInColumns(buttons)}
 }
 
-// buildBasicTabContent builds the basic settings tab with select dropdowns and toggles.
-func (f *FeishuChannel) buildBasicTabContent(settings map[string]string) []map[string]any {
-	schema := feishuSettingsSchema()
+// buildGeneralTabContent builds the general settings tab with real controls.
+func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
 	var elements []map[string]any
 
-	categories := make(map[string][]SettingDefinition)
-	var catOrder []string
-	for _, def := range schema {
-		cat := def.Category
-		if cat == "" {
-			cat = "通用"
-		}
-		if _, exists := categories[cat]; !exists {
-			catOrder = append(catOrder, cat)
-		}
-		categories[cat] = append(categories[cat], def)
+	// --- Context Mode ---
+	currentMode := "phase1"
+	if f.settingsCallbacks.ContextModeGet != nil {
+		currentMode = f.settingsCallbacks.ContextModeGet()
 	}
 
-	for _, cat := range catOrder {
-		defs := categories[cat]
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": fmt.Sprintf("**%s**", cat),
+	modeLabel := contextModeLabels[currentMode]
+	if modeLabel == "" {
+		modeLabel = currentMode
+	}
+
+	var modeOptions []map[string]any
+	for _, m := range []struct{ value, label string }{
+		{"phase1", "双视图压缩"},
+		{"phase2", "渐进压缩"},
+		{"none", "禁用压缩"},
+	} {
+		modeOptions = append(modeOptions, map[string]any{
+			"text":  map[string]any{"tag": "plain_text", "content": m.label},
+			"value": m.value,
 		})
-
-		for _, def := range defs {
-			currentValue := settings[def.Key]
-			if currentValue == "" {
-				currentValue = def.DefaultValue
-			}
-
-			switch def.Type {
-			case SettingTypeSelect:
-				elements = append(elements, buildSelectSetting(def, currentValue))
-
-			case SettingTypeToggle:
-				isOn := currentValue == "true"
-				toggleValue := "true"
-				if isOn {
-					toggleValue = "false"
-				}
-
-				statusIcon := "🔴"
-				statusText := "关闭"
-				if isOn {
-					statusIcon = "🟢"
-					statusText = "开启"
-				}
-
-				elements = append(elements, buildSettingRow(
-					fmt.Sprintf("%s %s", def.Label, def.Description),
-					fmt.Sprintf("%s %s", statusIcon, statusText),
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "切换",
-						},
-						"type": "default",
-						"size": "small",
-						"value": map[string]string{
-							"action_data": mustMapToJSON(map[string]string{
-								"action": "settings_set",
-								"key":    def.Key,
-								"value":  toggleValue,
-							}),
-						},
-					},
-				))
-			}
-		}
 	}
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**上下文管理**",
+	})
+
+	elements = append(elements, buildSettingRow(
+		"压缩模式",
+		modeLabel,
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_context_mode",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模式..."},
+			"initial_option": currentMode,
+			"options":        modeOptions,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_context_mode",
+				}),
+			},
+		},
+	))
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**双视图**：摘要+尾部原文 · **渐进**：渐进式智能压缩 · **禁用**：不自动压缩",
+	})
 
 	return elements
 }
 
-// buildModelTabContent builds the model selection tab with a dropdown.
+// buildModelTabContent builds the model configuration tab.
 func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
+
+	hasCustom := false
+	if f.settingsCallbacks.LLMHasCustom != nil {
+		hasCustom = f.settingsCallbacks.LLMHasCustom(senderID)
+	}
 
 	var models []string
 	currentModel := ""
@@ -267,10 +245,18 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		models, currentModel = f.settingsCallbacks.LLMList(senderID)
 	}
 
-	if len(models) == 0 {
+	if !hasCustom {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
-			"content": "**当前模型：** `" + currentModel + "`\n\n_暂无可用模型。请先使用 `/set-llm` 配置自定义 LLM。_",
+			"content": fmt.Sprintf("当前使用全局模型：**%s**", currentModel),
+		})
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "配置自定义 LLM 后可在此切换模型：\n```\n/set-llm provider=openai base_url=https://... api_key=sk-xxx model=gpt-4o\n```",
+		})
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "支持 `openai`（含兼容 API）和 `anthropic` 两种 provider。\n使用 `/llm` 查看当前配置。",
 		})
 		return elements
 	}
@@ -283,10 +269,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	var options []map[string]any
 	for _, model := range models {
 		options = append(options, map[string]any{
-			"text": map[string]any{
-				"tag":     "plain_text",
-				"content": model,
-			},
+			"text":  map[string]any{"tag": "plain_text", "content": model},
 			"value": model,
 		})
 	}
@@ -296,28 +279,30 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		"content": fmt.Sprintf("当前模型：**%s**", currentModel),
 	})
 
-	elements = append(elements, map[string]any{
-		"tag":            "select_static",
-		"name":           "settings_model_select",
-		"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
-		"initial_option": currentModel,
-		"options":        options,
-		"value": map[string]string{
-			"action_data": mustMapToJSON(map[string]string{
-				"action": "settings_set_model",
-			}),
-		},
-	})
+	if len(options) > 0 {
+		elements = append(elements, map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_model_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
+			"initial_option": currentModel,
+			"options":        options,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_set_model",
+				}),
+			},
+		})
+	}
 
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "💡 选择即可切换。使用 `/llm` 查看完整 LLM 配置。",
+		"content": "💡 `/llm` 查看完整配置 · `/set-llm` 修改配置 · `/unset-llm` 恢复全局默认",
 	})
 
 	return elements
 }
 
-// buildMarketTabContent builds the registry/market browsing tab.
+// buildMarketTabContent builds the market browsing tab.
 func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
@@ -329,7 +314,6 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		return elements
 	}
 
-	// Skills section
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
 		"content": "**📦 Skills**",
@@ -367,7 +351,6 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		elements = append(elements, wrapButtonsInColumns(buttons))
 	}
 
-	// Agents section
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
@@ -408,47 +391,15 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "💡 也可以使用 `/browse` 和 `/install` 命令管理市场资源。",
+		"content": "💡 `/browse` 浏览市场 · `/install` 安装 · `/my skills` 查看已安装",
 	})
 
 	return elements
 }
 
-// --- Helpers ---
+// --- Layout helpers ---
 
-// buildSelectSetting builds a select_static dropdown for a setting definition.
-func buildSelectSetting(def SettingDefinition, currentValue string) map[string]any {
-	var options []map[string]any
-	for _, opt := range def.Options {
-		options = append(options, map[string]any{
-			"text": map[string]any{
-				"tag":     "plain_text",
-				"content": opt.Label,
-			},
-			"value": opt.Value,
-		})
-	}
-
-	return buildSettingRow(
-		fmt.Sprintf("%s %s", def.Label, def.Description),
-		formatCurrentValue(currentValue, def),
-		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_" + def.Key,
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择..."},
-			"initial_option": currentValue,
-			"options":        options,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_set",
-					"key":    def.Key,
-				}),
-			},
-		},
-	)
-}
-
-// buildSettingRow creates a two-column layout with label on the left and control on the right.
+// buildSettingRow creates a two-column row: label+value on the left, control on the right.
 func buildSettingRow(label, currentDisplay string, control map[string]any) map[string]any {
 	return map[string]any{
 		"tag":                "column_set",
@@ -480,7 +431,6 @@ func buildSettingRow(label, currentDisplay string, control map[string]any) map[s
 	}
 }
 
-// wrapButtonsInColumns wraps button elements in a V2-compatible column_set layout.
 func wrapButtonsInColumns(buttons []map[string]any) map[string]any {
 	return map[string]any{
 		"tag":                "column_set",
@@ -502,17 +452,8 @@ func wrapButtonsInColumns(buttons []map[string]any) map[string]any {
 	}
 }
 
-// formatCurrentValue returns the display label for the current setting value.
-func formatCurrentValue(value string, def SettingDefinition) string {
-	for _, opt := range def.Options {
-		if opt.Value == value {
-			return opt.Label
-		}
-	}
-	return value
-}
+// --- Parsing helpers ---
 
-// mustMapToJSON serializes a flat map[string]string to a compact JSON string.
 func mustMapToJSON(m map[string]string) string {
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -521,7 +462,6 @@ func mustMapToJSON(m map[string]string) string {
 	return string(data)
 }
 
-// parseActionData parses a JSON action_data string to map[string]string.
 func parseActionData(raw string) map[string]string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -534,8 +474,6 @@ func parseActionData(raw string) map[string]string {
 	return result
 }
 
-// parseActionDataFromMap extracts action_data from a raw action data map
-// and parses it to map[string]string.
 func parseActionDataFromMap(actionData map[string]any) map[string]string {
 	raw, ok := actionData["action_data"].(string)
 	if !ok {

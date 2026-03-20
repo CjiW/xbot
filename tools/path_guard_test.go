@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -117,93 +118,51 @@ func TestShellEscape(t *testing.T) {
 
 func TestResolveReadPath_SandboxPathConversion(t *testing.T) {
 	root := t.TempDir()
-	hostWorkspace := filepath.Join(root, "workspace")
+	sandboxDir := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(sandboxDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx := &ToolContext{
-		WorkspaceRoot:  hostWorkspace,
-		SandboxWorkDir: "/workspace",
+		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
+		SandboxWorkDir: sandboxDir,
 		SandboxEnabled: true,
 	}
 
-	// LLM sends /workspace/foo.txt (Docker path), should be converted to host path
-	got, err := ResolveReadPath(ctx, "/workspace/foo.txt")
+	// LLM sends sandbox path, should be accepted (no translation needed inside container)
+	got, err := ResolveReadPath(ctx, filepath.Join(sandboxDir, "foo.txt"))
 	if err != nil {
 		t.Fatalf("expected sandbox path to be accepted, got err: %v", err)
 	}
-	if !isWithinRoot(got, hostWorkspace) {
-		t.Fatalf("expected resolved path under host workspace, got: %s", got)
+	if !isWithinRoot(got, sandboxDir) {
+		t.Fatalf("expected resolved path under sandbox dir, got: %s", got)
 	}
 
-	// Non-sandbox paths should still be checked against allowed roots
+	// Outside path should be denied
 	outside := filepath.Join(root, "other", "x.txt")
 	if _, err := ResolveReadPath(ctx, outside); err == nil {
-		t.Fatalf("expected read outside allowed roots to be denied")
+		t.Fatalf("expected read outside sandbox to be denied")
 	}
 }
 
 func TestResolveWritePath_SandboxPathConversion(t *testing.T) {
 	root := t.TempDir()
-	hostWorkspace := filepath.Join(root, "workspace")
+	sandboxDir := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(filepath.Join(sandboxDir, "notes"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx := &ToolContext{
-		WorkspaceRoot:  hostWorkspace,
-		SandboxWorkDir: "/workspace",
+		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
+		SandboxWorkDir: sandboxDir,
 		SandboxEnabled: true,
 	}
 
-	// LLM sends /workspace/notes/todo.txt (Docker path), should be converted to host path
-	got, err := ResolveWritePath(ctx, "/workspace/notes/todo.txt")
+	got, err := ResolveWritePath(ctx, filepath.Join(sandboxDir, "notes", "todo.txt"))
 	if err != nil {
 		t.Fatalf("expected sandbox path to be accepted, got err: %v", err)
 	}
-	if !isWithinRoot(got, hostWorkspace) {
-		t.Fatalf("expected resolved path under host workspace, got: %s", got)
-	}
-}
-
-func TestNormalizeInputPath(t *testing.T) {
-	tests := []struct {
-		name     string
-		ctx      *ToolContext
-		input    string
-		expected string
-	}{
-		{
-			name:     "nil ctx returns input",
-			ctx:      nil,
-			input:    "/workspace/foo.txt",
-			expected: "/workspace/foo.txt",
-		},
-		{
-			name:     "sandbox disabled returns input",
-			ctx:      &ToolContext{SandboxEnabled: false, SandboxWorkDir: "/workspace"},
-			input:    "/workspace/foo.txt",
-			expected: "/workspace/foo.txt",
-		},
-		{
-			name:     "non-sandbox path returns input",
-			ctx:      &ToolContext{SandboxEnabled: true, SandboxWorkDir: "/workspace", WorkspaceRoot: "/data/ws"},
-			input:    "/tmp/foo.txt",
-			expected: "/tmp/foo.txt",
-		},
-		{
-			name:     "sandbox path converted",
-			ctx:      &ToolContext{SandboxEnabled: true, SandboxWorkDir: "/workspace", WorkspaceRoot: "/data/ws"},
-			input:    "/workspace/foo.txt",
-			expected: "/data/ws/foo.txt",
-		},
-		{
-			name:     "sandbox subpath converted",
-			ctx:      &ToolContext{SandboxEnabled: true, SandboxWorkDir: "/workspace", WorkspaceRoot: "/data/ws"},
-			input:    "/workspace/sub/dir/file.go",
-			expected: "/data/ws/sub/dir/file.go",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeInputPath(tt.ctx, tt.input)
-			if got != tt.expected {
-				t.Errorf("normalizeInputPath() = %q, want %q", got, tt.expected)
-			}
-		})
+	if !isWithinRoot(got, sandboxDir) {
+		t.Fatalf("expected resolved path under sandbox dir, got: %s", got)
 	}
 }

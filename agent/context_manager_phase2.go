@@ -107,9 +107,9 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	totalItems := len(fp.FilePaths) + len(fp.Errors) + len(fp.Decisions)
 	if totalItems > 0 && float64(len(missingMarkers))/float64(totalItems) > 0.5 {
 		log.Ctx(ctx).WithFields(map[string]interface{}{
-			"missing_markers":  len(missingMarkers),
-			"missing_ratio":    float64(len(missingMarkers)) / float64(totalItems),
-			"quality_score":    quality,
+			"missing_markers": len(missingMarkers),
+			"missing_ratio":   float64(len(missingMarkers)) / float64(totalItems),
+			"quality_score":   quality,
 		}).Warn("Phase 1.5 compress missing markers (>50%)")
 	}
 

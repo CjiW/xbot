@@ -153,9 +153,10 @@ func ValidateCompression(original []llm.ChatMessage, compressed []llm.ChatMessag
 // EvaluateQuality 综合质量评分 (0-1)。
 // 考量：压缩比、信息保留率、关键信息密度。
 // 评分公式：
-//   ratioScore:     0-0.3（压缩比）
-//   retentionScore: 0-0.5（信息保留率，核心指标）
-//   densityScore:   0-0.2（压缩后文本中匹配到的指纹项数量评分）
+//
+//	ratioScore:     0-0.3（压缩比）
+//	retentionScore: 0-0.5（信息保留率，核心指标）
+//	densityScore:   0-0.2（压缩后文本中匹配到的指纹项数量评分）
 func EvaluateQuality(originalTokens, compressedTokens int, fp KeyInfoFingerprint, compressed string) float64 {
 	if originalTokens == 0 {
 		return 1.0

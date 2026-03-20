@@ -163,6 +163,32 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
 
+	case "settings_unpublish":
+		entryType := parsed["entry_type"]
+		name := parsed["name"]
+		if entryType == "" || name == "" {
+			return nil, fmt.Errorf("missing entry_type or name")
+		}
+		if f.settingsCallbacks.RegistryUnpublish != nil {
+			if err := f.settingsCallbacks.RegistryUnpublish(entryType, name, senderID); err != nil {
+				log.WithError(err).Warnf("HandleSettingsAction: failed to unpublish %s/%s", entryType, name)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+
+	case "settings_delete_item":
+		entryType := parsed["entry_type"]
+		name := parsed["name"]
+		if entryType == "" || name == "" {
+			return nil, fmt.Errorf("missing entry_type or name")
+		}
+		if f.settingsCallbacks.RegistryDelete != nil {
+			if err := f.settingsCallbacks.RegistryDelete(entryType, name, senderID); err != nil {
+				log.WithError(err).Warnf("HandleSettingsAction: failed to delete %s/%s", entryType, name)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -465,19 +491,20 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) [
 		"content": fmt.Sprintf("**📁 我的%s**", label),
 	})
 
-	published, installed, err := f.settingsCallbacks.RegistryListMy(senderID, entryType)
+	published, local, err := f.settingsCallbacks.RegistryListMy(senderID, entryType)
 	if err != nil {
 		log.WithError(err).Warnf("buildMyItemsSection: ListMy failed for %s", entryType)
 	}
 
-	// Build a set of published names for quick lookup
 	publishedNames := make(map[string]bool)
 	for _, e := range published {
-		publishedNames[e.Name] = true
+		if e.Sharing == "public" {
+			publishedNames[e.Name] = true
+		}
 	}
 
 	prefix := entryType + ":"
-	if len(installed) == 0 && len(published) == 0 {
+	if len(local) == 0 && len(published) == 0 {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
 			"content": fmt.Sprintf("_暂无%s_", label),
@@ -485,56 +512,91 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) [
 		return elements
 	}
 
-	// Show local items with share/published status
-	for _, item := range installed {
+	for _, item := range local {
 		name := strings.TrimPrefix(item, prefix)
 		if publishedNames[name] {
-			elements = append(elements, map[string]any{
-				"tag":     "markdown",
-				"content": fmt.Sprintf("• %s　✅ 已分享", name),
-			})
+			// Already shared: show unpublish + delete
+			elements = append(elements, buildItemRow(name, "✅ 已分享",
+				actionBtn("📤 下架", "settings_unpublish", entryType, name),
+				actionBtn("🗑️", "settings_delete_item", entryType, name),
+			))
 		} else {
-			elements = append(elements, buildSettingRow(
-				"• "+name,
-				"",
-				map[string]any{
-					"tag": "button",
-					"text": map[string]any{
-						"tag":     "plain_text",
-						"content": "📤 分享",
-					},
-					"type": "default",
-					"size": "small",
-					"value": map[string]string{
-						"action_data": mustMapToJSON(map[string]string{
-							"action":     "settings_publish",
-							"entry_type": entryType,
-							"name":       name,
-						}),
-					},
-				},
+			// Not shared: show share + delete
+			elements = append(elements, buildItemRow(name, "",
+				actionBtn("📤 分享", "settings_publish", entryType, name),
+				actionBtn("🗑️", "settings_delete_item", entryType, name),
 			))
 		}
 	}
 
-	// Show published items that aren't in local (edge case)
+	// Published items that are no longer local (edge case: deleted locally but still in registry)
 	for _, e := range published {
 		found := false
-		for _, item := range installed {
+		for _, item := range local {
 			if strings.TrimPrefix(item, prefix) == e.Name {
 				found = true
 				break
 			}
 		}
-		if !found {
-			elements = append(elements, map[string]any{
-				"tag":     "markdown",
-				"content": fmt.Sprintf("• %s　✅ 已分享", e.Name),
-			})
+		if !found && e.Sharing == "public" {
+			elements = append(elements, buildItemRow(e.Name, "✅ 已分享（本地已删除）",
+				actionBtn("📤 下架", "settings_unpublish", entryType, e.Name),
+			))
 		}
 	}
 
 	return elements
+}
+
+func actionBtn(text, action, entryType, name string) map[string]any {
+	return map[string]any{
+		"tag":  "button",
+		"text": map[string]any{"tag": "plain_text", "content": text},
+		"type": "default",
+		"size": "small",
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{
+				"action":     action,
+				"entry_type": entryType,
+				"name":       name,
+			}),
+		},
+	}
+}
+
+func buildItemRow(name, status string, buttons ...map[string]any) map[string]any {
+	leftText := "• " + name
+	if status != "" {
+		leftText += "　" + status
+	}
+	return map[string]any{
+		"tag":                "column_set",
+		"flex_mode":          "none",
+		"horizontal_spacing": "default",
+		"columns": []map[string]any{
+			{
+				"tag":            "column",
+				"width":          "weighted",
+				"weight":         2,
+				"vertical_align": "center",
+				"elements": []map[string]any{
+					{"tag": "markdown", "content": leftText},
+				},
+			},
+			{
+				"tag":            "column",
+				"width":          "weighted",
+				"weight":         1,
+				"vertical_align": "center",
+				"elements": []map[string]any{
+					{
+						"tag":      "interactive_container",
+						"elements": buttons,
+					},
+				},
+			},
+		},
+	}
 }
 
 func (f *FeishuChannel) buildMarketSection(entryType, title string) []map[string]any {

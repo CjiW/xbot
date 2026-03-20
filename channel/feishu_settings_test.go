@@ -465,6 +465,9 @@ func TestBuildSettingsCard_MarketTab(t *testing.T) {
 			if entryType == "skill" {
 				return nil, []string{"skill:my-local-skill"}, nil
 			}
+			if entryType == "agent" {
+				return nil, []string{"agent:my-agent"}, nil
+			}
 			return nil, nil, nil
 		},
 	})
@@ -484,8 +487,14 @@ func TestBuildSettingsCard_MarketTab(t *testing.T) {
 	if !strings.Contains(s, "my-local-skill") {
 		t.Error("should contain user's local skill")
 	}
+	if !strings.Contains(s, "my-agent") {
+		t.Error("should contain user's local agent")
+	}
 	if !strings.Contains(s, "分享") {
 		t.Error("should have share button for unpublished local items")
+	}
+	if !strings.Contains(s, "settings_delete_item") {
+		t.Error("should have delete button for local items")
 	}
 }
 
@@ -497,7 +506,7 @@ func TestBuildSettingsCard_MarketTab_PublishedItem(t *testing.T) {
 		},
 		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
 			if entryType == "skill" {
-				return []sqlite.SharedEntry{{Name: "shared-skill"}}, []string{"skill:shared-skill"}, nil
+				return []sqlite.SharedEntry{{Name: "shared-skill", Sharing: "public"}}, []string{"skill:shared-skill"}, nil
 			}
 			return nil, nil, nil
 		},
@@ -511,6 +520,9 @@ func TestBuildSettingsCard_MarketTab_PublishedItem(t *testing.T) {
 	s := cardJSON(card)
 	if !strings.Contains(s, "已分享") {
 		t.Error("should show '已分享' for published items")
+	}
+	if !strings.Contains(s, "settings_unpublish") {
+		t.Error("published items should have unpublish button")
 	}
 }
 
@@ -576,6 +588,70 @@ func TestHandleSettingsAction_Publish(t *testing.T) {
 	}
 	if pubType != "skill" || pubName != "my-skill" {
 		t.Errorf("expected skill/my-skill, got %s/%s", pubType, pubName)
+	}
+}
+
+func TestHandleSettingsAction_Unpublish(t *testing.T) {
+	f := newTestFeishuChannel()
+	var unpubType, unpubName string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryUnpublish: func(entryType, name, senderID string) error {
+			unpubType = entryType
+			unpubName = name
+			return nil
+		},
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_unpublish","entry_type":"skill","name":"my-skill"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	if unpubType != "skill" || unpubName != "my-skill" {
+		t.Errorf("expected skill/my-skill, got %s/%s", unpubType, unpubName)
+	}
+}
+
+func TestHandleSettingsAction_DeleteItem(t *testing.T) {
+	f := newTestFeishuChannel()
+	var delType, delName string
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryDelete: func(entryType, name, senderID string) error {
+			delType = entryType
+			delName = name
+			return nil
+		},
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_delete_item","entry_type":"agent","name":"old-agent"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	if delType != "agent" || delName != "old-agent" {
+		t.Errorf("expected agent/old-agent, got %s/%s", delType, delName)
 	}
 }
 

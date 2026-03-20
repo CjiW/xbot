@@ -47,10 +47,12 @@ type SettingsCallbacks struct {
 	ContextModeGet func() string
 	ContextModeSet func(mode string) error
 
-	RegistryBrowse  func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
-	RegistryInstall func(entryType string, id int64, senderID string) error
-	RegistryListMy  func(senderID, entryType string) (published []sqlite.SharedEntry, installed []string, err error)
-	RegistryPublish func(entryType, name, senderID string) error
+	RegistryBrowse    func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
+	RegistryInstall   func(entryType string, id int64, senderID string) error
+	RegistryListMy    func(senderID, entryType string) (published []sqlite.SharedEntry, installed []string, err error)
+	RegistryPublish   func(entryType, name, senderID string) error
+	RegistryUnpublish func(entryType, name, senderID string) error
+	RegistryDelete    func(entryType, name, senderID string) error
 }
 
 // FeishuChannel 飞书渠道实现

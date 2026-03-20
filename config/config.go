@@ -116,6 +116,9 @@ type AgentConfig struct {
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
+
+	// SubAgent 超时控制
+	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
 }
 
 // ServerConfig 服务器配置
@@ -215,6 +218,7 @@ func Load() *Config {
 			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
 			ContextMode:          getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
 			MaxSubAgentDepth:     getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
+			SubAgentLLMTimeout:   getEnvDurationOrDefault("SUBAGENT_LLM_TIMEOUT", 3*time.Minute),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),

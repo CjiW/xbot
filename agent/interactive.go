@@ -122,6 +122,13 @@ func (a *Agent) SpawnInteractiveSession(
 
 	if out.Error != nil {
 		a.interactiveSubAgents.Delete(key) // 清理占位符
+		// BUG FIX: 在 Content 中附加错误标注，确保主 Agent LLM 能识别异常状态
+		content := out.Content
+		if content == "" {
+			content = "⚠️ Interactive SubAgent 执行失败。"
+		}
+		content += fmt.Sprintf("\n\n> ❌ SubAgent Error: %v", out.Error)
+		out.Content = content
 		return out.OutboundMessage, nil
 	}
 
@@ -221,6 +228,13 @@ func (a *Agent) SendToInteractiveSession(
 	// 执行
 	out := Run(subCtx, cfg)
 	if out.Error != nil {
+		// BUG FIX: 在 Content 中附加错误标注，确保主 Agent LLM 能识别异常状态
+		content := out.Content
+		if content == "" {
+			content = "⚠️ Interactive SubAgent 执行失败。"
+		}
+		content += fmt.Sprintf("\n\n> ❌ SubAgent Error: %v", out.Error)
+		out.Content = content
 		return out.OutboundMessage, nil
 	}
 

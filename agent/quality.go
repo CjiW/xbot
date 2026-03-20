@@ -52,8 +52,14 @@ func ExtractFingerprint(messages []llm.ChatMessage) KeyInfoFingerprint {
 		for _, id := range extractCodeIdentifiers(text) {
 			addUnique(&fp.Identifiers, id)
 		}
-		for _, e := range extractErrorMessages(text) {
-			addUnique(&fp.Errors, e)
+		// BUG FIX: 只从 tool 消息中提取 error。
+		// 之前从所有消息（user/assistant/tool）中提取，导致 "error handling"、
+		// "error message format" 等元讨论也被当作 error，膨胀 Errors 数量，
+		// 拉低 retention_rate（从 400+ 噪音行降至实际错误行数）。
+		if msg.Role == "tool" {
+			for _, e := range extractErrorMessages(text) {
+				addUnique(&fp.Errors, e)
+			}
 		}
 		for _, d := range extractDecisions(text) {
 			addUnique(&fp.Decisions, d)
@@ -307,14 +313,31 @@ func isCommonWord(word string) bool {
 }
 
 // isErrorContext 检测错误上下文。
+// 优先匹配具体的错误模式（高精度），再匹配泛化错误关键词（会有些噪音）。
+// 过滤元讨论模式（"error handling"、"error message" 等非错误文本）。
 var errorIndicators = []string{
 	"error", "failed", "failure", "panic", "fatal",
 	"exception", "timeout", "refused", "denied",
 	"cannot", "undefined", "nil pointer",
 }
 
+// errorMetaPatterns 元讨论模式：这些行的 "error" 不是实际错误，而是对错误的概念性讨论。
+var errorMetaPatterns = []string{
+	"error handling", "error message", "error recovery", "error format",
+	"error output", "error type", "error checking", "error code",
+	"error case", "error scenario", "error pattern", "error log",
+	"if error", "if err", "return error", "no error", "the error",
+	"any error", "this error", "that error", "an error",
+}
+
 func isErrorContext(text string) bool {
 	lower := strings.ToLower(text)
+	// 排除元讨论模式
+	for _, meta := range errorMetaPatterns {
+		if strings.Contains(lower, meta) {
+			return false
+		}
+	}
 	for _, indicator := range errorIndicators {
 		if strings.Contains(lower, indicator) {
 			return true
@@ -419,10 +442,17 @@ func splitToWords(text string) []string {
 }
 
 // countStructuredMarkers 统计 @file:, @func: 等结构化标记数量。
-var structuredMarkerRe = regexp.MustCompile(`@(?:file|func|type|error|decision|todo|config):\S`)
+// BUG FIX: 扩展匹配模式，兼容 LLM 输出的常见变体：
+//   - 严格格式: @file:path
+//   - 带空格:   @file: path, @file: "path"
+//   - 列表格式: - file: path, • file: path
+var structuredMarkerRe = regexp.MustCompile(`@(?:file|func|type|error|decision|todo|config):\s*\S`)
+var structuredMarkerListRe = regexp.MustCompile(`[-•*]\s*(?:file|func|type|error|decision|todo|config):\s*\S`)
 
 func countStructuredMarkers(text string) int {
-	return len(structuredMarkerRe.FindAllString(text, -1))
+	count := len(structuredMarkerRe.FindAllString(text, -1))
+	count += len(structuredMarkerListRe.FindAllString(text, -1))
+	return count
 }
 
 // ----------------------------------------------------------------
@@ -430,10 +460,12 @@ func countStructuredMarkers(text string) int {
 // ----------------------------------------------------------------
 
 // ValidateMarkers checks compressed output for required structured markers.
+// BUG FIX: 对文件路径使用 containsSemanticMatch（不区分大小写 + 关键词重叠），
+// 而非 strings.Contains 精确子串匹配。压缩后 LLM 可能改变路径大小写或格式。
 func ValidateMarkers(compressed string, fp KeyInfoFingerprint) []string {
 	var missing []string
 	for _, path := range fp.FilePaths {
-		if !strings.Contains(compressed, path) {
+		if !containsSemanticMatch(compressed, path) {
 			missing = append(missing, "file:"+path)
 		}
 	}

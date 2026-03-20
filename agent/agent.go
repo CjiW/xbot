@@ -199,7 +199,8 @@ type Agent struct {
 	contextManager       ContextManager
 
 	// SubAgent 深度控制
-	maxSubAgentDepth int
+	maxSubAgentDepth   int
+	subAgentLLMTimeout time.Duration
 
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
@@ -352,6 +353,9 @@ type Config struct {
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
+	// SubAgent 超时控制
+	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
+
 	// 话题分区隔离（Phase 2.5，默认关闭）
 	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
 	TopicMinSegmentSize      int     `json:"topic_min_segment_size"`     // 最小话题片段大小（默认 3）
@@ -401,6 +405,10 @@ func New(cfg Config) *Agent {
 	// 设置 SubAgent 深度默认值
 	if cfg.MaxSubAgentDepth <= 0 {
 		cfg.MaxSubAgentDepth = 6
+	}
+	// 设置 SubAgent LLM 超时默认值
+	if cfg.SubAgentLLMTimeout <= 0 {
+		cfg.SubAgentLLMTimeout = 3 * time.Minute
 	}
 
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
@@ -479,26 +487,27 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:               cfg.Bus,
-		multiSession:      multiSession,
-		tools:             registry,
-		maxIterations:     cfg.MaxIterations,
-		maxConcurrency:    cfg.MaxConcurrency,
-		memoryWindow:      cfg.MemoryWindow,
-		skills:            skillStore,
-		agents:            agentStore,
-		chatHistory:       chatHistory,
-		cardBuilder:       cardBuilder,
-		workDir:           cfg.WorkDir,
-		promptLoader:      NewPromptLoader(cfg.PromptFile),
-		sandboxMode:       sandboxMode,
-		singleUser:        cfg.SingleUser,
-		globalSkillDirs:   globalSkillDirs,
-		maxSubAgentDepth:  cfg.MaxSubAgentDepth,
-		agentsDir:         agentsDir,
-		consolidateCh:     make(chan consolidateRequest, 64),
-		consolidateStopCh: make(chan struct{}),
-		consolidating:     make(map[string]bool),
+		bus:                cfg.Bus,
+		multiSession:       multiSession,
+		tools:              registry,
+		maxIterations:      cfg.MaxIterations,
+		maxConcurrency:     cfg.MaxConcurrency,
+		memoryWindow:       cfg.MemoryWindow,
+		skills:             skillStore,
+		agents:             agentStore,
+		chatHistory:        chatHistory,
+		cardBuilder:        cardBuilder,
+		workDir:            cfg.WorkDir,
+		promptLoader:       NewPromptLoader(cfg.PromptFile),
+		sandboxMode:        sandboxMode,
+		singleUser:         cfg.SingleUser,
+		globalSkillDirs:    globalSkillDirs,
+		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
+		subAgentLLMTimeout: cfg.SubAgentLLMTimeout,
+		agentsDir:          agentsDir,
+		consolidateCh:      make(chan consolidateRequest, 64),
+		consolidateStopCh:  make(chan struct{}),
+		consolidating:      make(map[string]bool),
 
 		// Initialize hook chain with default hooks (LoggingHook + TimingHook)
 		hookChain: tools.NewHookChain(

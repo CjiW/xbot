@@ -1023,10 +1023,10 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		chatID = event.Event.Context.OpenChatID
 	}
 
-	// 获取用户 ID
+	// 获取用户 ID（必须用 OpenID，与消息事件中的 sender.SenderId.OpenId 一致）
 	senderID := ""
-	if event.Event.Operator != nil && event.Event.Operator.UserID != nil {
-		senderID = *event.Event.Operator.UserID
+	if event.Event.Operator != nil {
+		senderID = event.Event.Operator.OpenID
 	}
 
 	// 获取 message_id（settings 卡片拦截和 CardBuilder 路由都需要）

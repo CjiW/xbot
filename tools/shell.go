@@ -247,17 +247,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	}
 
 	// 合并环境变量（去重）
-	envMap := make(map[string]string)
-	for _, line := range strings.Split(existing, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			envMap[parts[0]] = parts[1]
-		}
-	}
+	envMap := parseEnvFileLines(existing)
 
 	// 添加新的环境变量
 	for _, exp := range exports {
@@ -282,9 +272,23 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 		return false
 	}
 
-	// 确保 ~/.bashrc 包含 source ~/.xbot_env
-	// 这样 bash -l 会自动加载环境变量
-	ensureBashrcCmd := `grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null || echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env' >> ~/.bashrc`
+	// 确保 ~/.bashrc 在 non-interactive guard 之前 source ~/.xbot_env
+	// bash -l 通过 /etc/profile → ~/.profile → . ~/.bashrc 链条加载 .bashrc，
+	// 但 [ -z "$PS1" ] && return 会阻止非交互模式执行后续内容，
+	// 所以 source 语句必须插在 early return 之前。
+	ensureBashrcCmd := `# Remove existing source block (including adjacent blank lines)
+if grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    sed -i '/# Source xbot environment variables/,/source ~\/\.xbot_env/d' ~/.bashrc
+    # Clean up consecutive blank lines left by deletion
+    sed -i '/^$/{ N; /^\n$/d; }' ~/.bashrc
+fi
+
+# Insert before PS1 guard if present, otherwise append to end (fallback for Alpine etc.)
+if grep -q '\[ -z "\$PS1" \]' ~/.bashrc 2>/dev/null; then
+    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' ~/.bashrc
+elif ! grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> ~/.bashrc
+fi`
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
 
 	return true

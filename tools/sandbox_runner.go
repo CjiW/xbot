@@ -73,6 +73,8 @@ type Sandbox interface {
 	Name() string
 	// Close 关闭并清理沙箱资源
 	Close() error
+	// CloseForUser 关闭并清理指定用户的沙箱资源（stop → commit → squash → rm）
+	CloseForUser(userID string) error
 }
 
 // NoneSandbox 无沙箱模式，直接执行
@@ -80,7 +82,8 @@ type NoneSandbox struct{}
 
 func (s *NoneSandbox) Name() string { return "none" }
 
-func (s *NoneSandbox) Close() error { return nil }
+func (s *NoneSandbox) Close() error                     { return nil }
+func (s *NoneSandbox) CloseForUser(userID string) error { return nil }
 
 func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -155,6 +158,38 @@ func (s *dockerSandbox) Close() error {
 	}
 
 	s.containers = make(map[string]*dockerContainer)
+	return nil
+}
+
+// CloseForUser 关闭并清理指定用户的 Docker 容器（stop → commitIfDirty → rm）。
+// 仅清理单个用户的沙箱，不影响其他用户。用于空闲超时自动卸载。
+func (s *dockerSandbox) CloseForUser(userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	c, ok := s.containers[userID]
+	if !ok || !c.started {
+		return nil
+	}
+
+	// 1. 先 stop（1秒足够，workspace 是 bind mount 不会丢数据）
+	if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
+		log.WithError(err).Warnf("Failed to stop container %s for idle cleanup", c.name)
+	} else {
+		log.Infof("Stopped Docker container %s (idle cleanup for user %s)", c.name, userID)
+	}
+
+	// 2. 容器停止后 commit（更快更稳定，无需处理并发写入）
+	s.commitIfDirty(c.name, userID)
+
+	// 3. 最后 rm
+	if err := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); err != nil {
+		log.WithError(err).Warnf("Failed to remove container %s for idle cleanup", c.name)
+	} else {
+		log.Infof("Removed Docker container %s (idle cleanup for user %s)", c.name, userID)
+	}
+
+	delete(s.containers, userID)
 	return nil
 }
 

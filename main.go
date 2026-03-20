@@ -144,6 +144,7 @@ func main() {
 		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
 		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
 		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,
+		SandboxIdleTimeout:       cfg.Sandbox.IdleTimeout,
 	})
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）

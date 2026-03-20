@@ -174,24 +174,25 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus             *bus.MessageBus
-	multiSession    *session.MultiTenantSession // Multi-tenant session manager
-	tools           *tools.Registry
-	maxIterations   int
-	memoryWindow    int
-	skills          *SkillStore
-	agents          *AgentStore
-	chatHistory     *tools.ChatHistoryStore // 聊天历史缓存
-	cardBuilder     *tools.CardBuilder      // Card Builder MCP
-	workDir         string
-	promptLoader    *PromptLoader
-	pipeline        *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
-	cronPipeline    *MessagePipeline // Cron 专用消息构建管道
-	sandboxMode     string           // "none" or "docker"
-	singleUser      bool             // 单用户模式
-	maxConcurrency  int              // 最大并发会话处理数
-	globalSkillDirs []string         // 全局 skill 目录（宿主机路径）
-	agentsDir       string
+	bus                *bus.MessageBus
+	multiSession       *session.MultiTenantSession // Multi-tenant session manager
+	tools              *tools.Registry
+	maxIterations      int
+	memoryWindow       int
+	skills             *SkillStore
+	agents             *AgentStore
+	chatHistory        *tools.ChatHistoryStore // 聊天历史缓存
+	cardBuilder        *tools.CardBuilder      // Card Builder MCP
+	workDir            string
+	promptLoader       *PromptLoader
+	pipeline           *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
+	cronPipeline       *MessagePipeline // Cron 专用消息构建管道
+	sandboxMode        string           // "none" or "docker"
+	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
+	singleUser         bool             // 单用户模式
+	maxConcurrency     int              // 最大并发会话处理数
+	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
+	agentsDir          string
 
 	// 上下文管理配置
 	contextManagerConfig *ContextManagerConfig
@@ -328,6 +329,8 @@ type Config struct {
 	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
 	SingleUser     bool   // 单用户模式：所有消息的 SenderID 归一化为 "default"
 	SandboxMode    string // 沙箱模式: "none" 或 "docker"（默认 "docker"）
+
+	SandboxIdleTimeout time.Duration // 沙箱空闲超时（0 禁用）
 
 	MemoryProvider     string // 记忆提供者: "flat" 或 "letta"
 	EmbeddingProvider  string // 嵌入提供者: "openai"(默认) 或 "ollama"
@@ -501,6 +504,7 @@ func New(cfg Config) *Agent {
 		workDir:            cfg.WorkDir,
 		promptLoader:       NewPromptLoader(cfg.PromptFile),
 		sandboxMode:        sandboxMode,
+		sandboxIdleTimeout: cfg.SandboxIdleTimeout,
 		singleUser:         cfg.SingleUser,
 		globalSkillDirs:    globalSkillDirs,
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
@@ -967,9 +971,28 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 
 // chatProcessLoop 串行处理普通消息（非命令），带信号量控制和 per-request cancel 支持。
 func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan bus.InboundMessage, globalSem chan struct{}) {
+	var idleTimer *time.Timer
+	defer func() {
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
+	}()
+
+	var lastSenderID string // 记录最后活跃的 senderID
+
 	for msg := range ch {
 		if ctx.Err() != nil {
 			return
+		}
+
+		// 停止上一次的 idle timer（收到新消息，重置计时）
+		if idleTimer != nil {
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
 		}
 
 		sem := a.getSemaphoreForMessage(msg, globalSem)
@@ -1036,6 +1059,21 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		}
 		if response != nil {
 			a.bus.Outbound <- *response
+		}
+
+		// 更新最后活跃的 senderID
+		lastSenderID = msg.SenderID
+
+		// 处理完成后，如果启用了 idle timeout，设置 timer
+		if a.sandboxIdleTimeout > 0 && lastSenderID != "" {
+			idleTimer = time.AfterFunc(a.sandboxIdleTimeout, func() {
+				sb := tools.GetSandbox()
+				if err := sb.CloseForUser(lastSenderID); err != nil {
+					log.WithError(err).Warnf("Idle sandbox cleanup failed for user %s", lastSenderID)
+				} else {
+					log.Infof("Idle sandbox cleaned up for user %s (timeout: %s)", lastSenderID, a.sandboxIdleTimeout)
+				}
+			})
 		}
 	}
 }

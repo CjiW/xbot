@@ -110,33 +110,40 @@ func main() {
 		embAPIKey = cfg.LLM.APIKey
 	}
 
+	// 初始化沙箱
+	tools.InitSandbox(cfg.Sandbox, workDir)
+
 	agentLoop := agent.New(agent.Config{
-		Bus:                  msgBus,
-		LLM:                  llmClient,
-		Model:                cfg.LLM.Model,
-		MaxIterations:        cfg.Agent.MaxIterations,
-		MaxConcurrency:       cfg.Agent.MaxConcurrency,
-		MemoryWindow:         cfg.Agent.MemoryWindow,
-		DBPath:               dbPath,
-		SkillsDir:            filepath.Join(xbotDir, "skills"),
-		WorkDir:              workDir,
-		PromptFile:           cfg.Agent.PromptFile,
-		SingleUser:           cfg.Agent.SingleUser,
-		MemoryProvider:       cfg.Agent.MemoryProvider,
-		EmbeddingProvider:    cfg.Embedding.Provider,
-		EmbeddingBaseURL:     embBaseURL,
-		EmbeddingAPIKey:      embAPIKey,
-		EmbeddingModel:       cfg.Embedding.Model,
-		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
-		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
-		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
-		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
-		MaxContextTokens:     cfg.Agent.MaxContextTokens,
-		CompressionThreshold: cfg.Agent.CompressionThreshold,
-		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
-		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
-		SubAgentLLMTimeout:   cfg.Agent.SubAgentLLMTimeout,
+		Bus:                      msgBus,
+		LLM:                      llmClient,
+		Model:                    cfg.LLM.Model,
+		MaxIterations:            cfg.Agent.MaxIterations,
+		MaxConcurrency:           cfg.Agent.MaxConcurrency,
+		MemoryWindow:             cfg.Agent.MemoryWindow,
+		DBPath:                   dbPath,
+		SkillsDir:                filepath.Join(xbotDir, "skills"),
+		WorkDir:                  workDir,
+		PromptFile:               cfg.Agent.PromptFile,
+		SingleUser:               cfg.Agent.SingleUser,
+		SandboxMode:              cfg.Sandbox.Mode,
+		MemoryProvider:           cfg.Agent.MemoryProvider,
+		EmbeddingProvider:        cfg.Embedding.Provider,
+		EmbeddingBaseURL:         embBaseURL,
+		EmbeddingAPIKey:          embAPIKey,
+		EmbeddingModel:           cfg.Embedding.Model,
+		EmbeddingMaxTokens:       cfg.Embedding.MaxTokens,
+		MCPInactivityTimeout:     cfg.Agent.MCPInactivityTimeout,
+		MCPCleanupInterval:       cfg.Agent.MCPCleanupInterval,
+		SessionCacheTimeout:      cfg.Agent.SessionCacheTimeout,
+		EnableAutoCompress:       cfg.Agent.EnableAutoCompress,
+		MaxContextTokens:         cfg.Agent.MaxContextTokens,
+		CompressionThreshold:     cfg.Agent.CompressionThreshold,
+		ContextMode:              agent.ContextMode(cfg.Agent.ContextMode),
+		MaxSubAgentDepth:         cfg.Agent.MaxSubAgentDepth,
+		SubAgentLLMTimeout:       cfg.Agent.SubAgentLLMTimeout,
+		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
+		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
+		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,
 	})
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
@@ -149,7 +156,7 @@ func main() {
 		agentLoop.RegisterCoreTool(oauthTool)
 
 		// 注册 Feishu MCP 工具
-		feishuMCP := feishu_mcp.NewFeishuMCP(oauthManager)
+		feishuMCP := feishu_mcp.NewFeishuMCP(oauthManager, cfg.Feishu.AppID, cfg.Feishu.AppSecret)
 		if feishuProvider != nil {
 			feishuMCP.SetLarkClient(feishuProvider.GetLarkClient())
 		}
@@ -190,6 +197,10 @@ func main() {
 
 		log.Info("OAuth and Feishu MCP tools registered")
 	}
+
+	// 注册需要配置注入的核心工具
+	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
+	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
 
 	// 注册 Logs 工具（仅管理员可用）
 	adminChatID := cfg.Admin.ChatID

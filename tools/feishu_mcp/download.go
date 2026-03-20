@@ -74,8 +74,11 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, err
 	}
 
+	// Built-in tools run on host; translate sandbox path → host path
+	hostPath := tools.SandboxToHostPath(ctx, outputPath)
+
 	// For display: show sandbox-visible path
-	displayPath := tools.HostToSandboxPath(ctx, outputPath)
+	displayPath := tools.HostToSandboxPath(ctx, hostPath)
 
 	token, err := t.getTenantToken()
 	if err != nil {
@@ -103,11 +106,11 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 	}
 
 	// Ensure output directory exists
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 
-	outFile, err := os.Create(outputPath)
+	outFile, err := os.Create(hostPath)
 	if err != nil {
 		return nil, fmt.Errorf("create output file: %w", err)
 	}

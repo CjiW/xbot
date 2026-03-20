@@ -67,14 +67,17 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, err
 	}
 
-	// Resolve path (convert sandbox path to host path if needed)
+	// Resolve path (sandbox-aware validation)
 	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Open the file
-	file, err := os.Open(resolvedPath)
+	// Built-in tools run on host; translate sandbox path → host path
+	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
+
+	// Open the file (using host-visible path)
+	file, err := os.Open(hostPath)
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
@@ -89,7 +92,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	// Determine file name and size
 	fileName := args.FileName
 	if fileName == "" {
-		fileName = filepath.Base(resolvedPath)
+		fileName = filepath.Base(hostPath)
 	}
 	fileSize := int(fileInfo.Size())
 
@@ -349,15 +352,15 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Verify file exists (using container path)
-	if _, err := os.Stat(resolvedPath); err != nil {
+	// Built-in tools run on host; translate sandbox path → host path
+	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
+
+	// Verify file exists (using host-visible path)
+	if _, err := os.Stat(hostPath); err != nil {
 		return nil, fmt.Errorf("file not found: %s", args.FilePath)
 	}
 
-	// For protocol message, translate to host path (feishu channel runs on host)
-	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
-
-	// Build protocol message
+	// Build protocol message with host path (feishu channel runs on host)
 	protocolMsg := "__FEISHU_FILE__::" + args.Type + "::" + hostPath
 	if args.Type == "file" {
 		protocolMsg = "__FEISHU_FILE__::" + hostPath
@@ -371,6 +374,6 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		return nil, fmt.Errorf("send file: %w", err)
 	}
 
-	displayPath := tools.HostToSandboxPath(ctx, resolvedPath)
+	displayPath := tools.HostToSandboxPath(ctx, hostPath)
 	return tools.NewResult(fmt.Sprintf("File sent: %s (type: %s)", displayPath, args.Type)), nil
 }

@@ -166,3 +166,90 @@ func TestResolveWritePath_SandboxPathConversion(t *testing.T) {
 		t.Fatalf("expected resolved path under sandbox dir, got: %s", got)
 	}
 }
+
+func TestSandboxToHostPath_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  *ToolContext
+		in   string
+		want string
+	}{
+		{
+			name: "nil ctx returns input",
+			ctx:  nil,
+			in:   "/data/.xbot/users/ou_xxx/workspace/foo.go",
+			want: "/data/.xbot/users/ou_xxx/workspace/foo.go",
+		},
+		{
+			name: "host to sandbox path translation",
+			ctx: &ToolContext{
+				SandboxEnabled: true,
+				SandboxWorkDir: "/workspace",
+				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
+			},
+			in:   "/data/.xbot/users/ou_xxx/workspace/foo.go",
+			want: "/workspace/foo.go",
+		},
+		{
+			name: "host to sandbox nested path",
+			ctx: &ToolContext{
+				SandboxEnabled: true,
+				SandboxWorkDir: "/workspace",
+				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
+			},
+			in:   "/data/.xbot/users/ou_xxx/workspace/deep/nested/dir/file.txt",
+			want: "/workspace/deep/nested/dir/file.txt",
+		},
+		{
+			name: "host root only",
+			ctx: &ToolContext{
+				SandboxEnabled: true,
+				SandboxWorkDir: "/workspace",
+				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
+			},
+			in:   "/data/.xbot/users/ou_xxx/workspace",
+			want: "/workspace",
+		},
+		{
+			name: "outside workspace prefix returns input",
+			ctx: &ToolContext{
+				SandboxEnabled: true,
+				SandboxWorkDir: "/workspace",
+				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
+			},
+			in:   "/etc/passwd",
+			want: "/etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HostToSandboxPath(tt.ctx, tt.in)
+			if got != tt.want {
+				t.Errorf("HostToSandboxPath(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSandboxHostPathRoundTrip(t *testing.T) {
+	ctx := &ToolContext{
+		SandboxEnabled: true,
+		SandboxWorkDir: "/workspace",
+		WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
+	}
+
+	paths := []string{
+		"/workspace/foo.go",
+		"/workspace/deep/nested/file.txt",
+		"/workspace/readme.md",
+	}
+
+	for _, sandboxPath := range paths {
+		hostPath := SandboxToHostPath(ctx, sandboxPath)
+		roundTrip := HostToSandboxPath(ctx, hostPath)
+		if roundTrip != sandboxPath {
+			t.Errorf("round trip failed: %q → %q → %q", sandboxPath, hostPath, roundTrip)
+		}
+	}
+}

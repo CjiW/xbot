@@ -1,4 +1,16 @@
 //go:build ignore
+// +build ignore
+
+//
+// This test is excluded from normal test runs because it requires:
+//   - Valid Feishu OAuth credentials (app_id, app_secret)
+//   - An actual Feishu document to write to (document_id)
+//   - Network access to Feishu API
+//
+// To run manually: go test -run TestDocxWrite -tags ignore ./tools/feishu_mcp/
+//
+// TODO: Consider converting to a proper test with mock Feishu API responses
+// so it can run in CI without real credentials.
 
 package feishu_mcp
 

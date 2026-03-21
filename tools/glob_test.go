@@ -359,6 +359,63 @@ func TestGlobToFindArgs(t *testing.T) {
 	}
 }
 
+func TestGlobToFindArgs_ShellEscape(t *testing.T) {
+	// Security regression tests: verify shellEscape prevents command injection
+	// via crafted glob patterns containing single quotes.
+	tests := []struct {
+		name           string
+		pattern        string
+		wantArgs       string
+		wantNoContains []string
+	}{
+		{
+			name:     "single quote injection attempt",
+			pattern:  "*'; echo pwned; '",
+			wantArgs: "-maxdepth 1 -name '*'\\''; echo pwned; '\\'''",
+		},
+		{
+			name:     "single quote in doublestar pattern",
+			pattern:  "**/*'; echo pwned; '",
+			wantArgs: "-name '*'\\''; echo pwned; '\\'''",
+		},
+		{
+			name:     "single quote in path pattern",
+			pattern:  "**/test'/*.go",
+			wantArgs: "-path '*/test'\\''/*.go'",
+		},
+		{
+			name:     "dollar sign in pattern (no-op in single quotes)",
+			pattern:  "*$HOME*",
+			wantArgs: "-maxdepth 1 -name '*$HOME*'",
+		},
+		{
+			name:     "backtick in pattern",
+			pattern:  "*`whoami`*",
+			wantArgs: "-maxdepth 1 -name '*`whoami`*'",
+		},
+		{
+			name:     "normal patterns unchanged (no quotes)",
+			pattern:  "*.go",
+			wantArgs: "-maxdepth 1 -name '*.go'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, args := globToFindArgs(tt.pattern)
+			if args != tt.wantArgs {
+				t.Errorf("globToFindArgs(%q) args = %q, want %q", tt.pattern, args, tt.wantArgs)
+			}
+			// Verify raw injected pattern doesn't appear unescaped
+			for _, forbidden := range tt.wantNoContains {
+				if strings.Contains(args, forbidden) {
+					t.Errorf("globToFindArgs(%q) args contains unescaped sequence %q: %s", tt.pattern, forbidden, args)
+				}
+			}
+		})
+	}
+}
+
 func TestGlobTool_PathWithSpaces(t *testing.T) {
 	// Regression test: paths with spaces must work in sandbox find commands.
 	// Without single-quoting the search directory, paths with spaces break.

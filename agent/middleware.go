@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"sync"
 
@@ -166,7 +165,22 @@ func (mc *MessageContext) Assemble() []llm.ChatMessage {
 		}
 	}
 	if systemCount != 1 {
-		panic("assert: Assemble must produce exactly one system message; got " + fmt.Sprint(systemCount) + " (history may contain system)")
+		// R-02 修复：panic 改为安全降级，移除多余的 system 消息，只保留第一条
+		log.WithField("system_count", systemCount).Error("assert: Assemble should produce exactly one system message (history may contain system)")
+		// 安全降级：移除多余的 system 消息，只保留第一条
+		filtered := make([]llm.ChatMessage, 0, len(messages))
+		seen := false
+		for _, m := range messages {
+			if m.Role == "system" {
+				if !seen {
+					filtered = append(filtered, m)
+					seen = true
+				}
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		messages = filtered
 	}
 	mc.Messages = messages
 	return messages

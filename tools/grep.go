@@ -64,6 +64,16 @@ const (
 	maxGrepLineLength = 500
 )
 
+// Pre-compiled regexes for parsing grep output lines.
+// Match lines:    "filename:linenumber:content"
+// Context lines:  "filename-linenumber-content" (from grep -C)
+// Using greedy (.+) ensures the rightmost separator is matched,
+// correctly handling filenames that contain ':' or '-' characters.
+var (
+	grepMatchLineRe   = regexp.MustCompile(`^(.+):(\d+):(.*)$`)
+	grepContextLineRe = regexp.MustCompile(`^(.+)-(\d+)-(.*)$`)
+)
+
 func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	params, err := parseToolArgs[grepParams](input)
 	if err != nil {
@@ -72,6 +82,10 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	if params.Pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
+	}
+
+	if params.ContextLines < 0 {
+		params.ContextLines = 0
 	}
 
 	// 沙箱模式：在容器内执行 grep 命令
@@ -328,31 +342,22 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		if line == "" {
 			continue
 		}
-		// grep -n 输出格式: filename:linenumber:content
-		// grep -C 上下文行格式: filename-linenumber-content
-		parts := strings.SplitN(line, ":", 2)
-		useDashSep := false
-		if len(parts) < 2 {
-			// 上下文行使用 '-' 分隔符
-			parts = strings.SplitN(line, "-", 2)
-			if len(parts) < 2 {
-				continue
-			}
-			useDashSep = true
-		}
-		filePath := parts[0]
-		rest := parts[1]
-
-		// 解析行号（匹配行用 ':' 分隔，上下文行用 '-' 分隔）
+		// Parse grep output using regex for precise separator handling.
+		// Try match-line format first (filename:linenumber:content), then
+		// context-line format (filename-linenumber-content from grep -C).
+		var filePath, rest string
 		var lineNum int
-		sep := ":"
-		if useDashSep {
-			sep = "-"
-		}
-		restParts := strings.SplitN(rest, sep, 2)
-		if len(restParts) >= 2 {
-			fmt.Sscanf(restParts[0], "%d", &lineNum)
-			rest = restParts[1]
+		if m := grepMatchLineRe.FindStringSubmatch(line); m != nil {
+			filePath = m[1]
+			fmt.Sscanf(m[2], "%d", &lineNum)
+			rest = m[3]
+		} else if m := grepContextLineRe.FindStringSubmatch(line); m != nil {
+			filePath = m[1]
+			fmt.Sscanf(m[2], "%d", &lineNum)
+			rest = m[3]
+		} else {
+			// Skip lines that don't match either format (e.g., "--" group separators)
+			continue
 		}
 
 		if filePath != currentFile {
@@ -511,10 +516,6 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 	var includePatterns []string
 	if include != "" {
 		includePatterns = expandBracePattern(include)
-	}
-
-	if contextLines < 0 {
-		contextLines = 0
 	}
 
 	// Walk the directory and search files

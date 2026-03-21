@@ -102,6 +102,33 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		mimeType = "application/octet-stream"
 	}
 
+	// Validate MIME type against allowlist
+	var allowedMIMETypes = map[string]bool{
+		// Common document types
+		"application/pdf":    true,
+		"application/msword": true,
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+		"application/vnd.ms-excel": true,
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+		"application/vnd.ms-powerpoint":                                             true,
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+		"application/json":         true,
+		"application/xml":          true,
+		"text/plain":               true,
+		"text/csv":                 true,
+		"text/html":                true,
+		"text/markdown":            true,
+		"application/zip":          true,
+		"application/gzip":         true,
+		"application/x-tar":        true,
+		"application/octet-stream": true,
+	}
+
+	// Allow all image/* and text/* types
+	if !strings.HasPrefix(mimeType, "image/") && !strings.HasPrefix(mimeType, "text/") && !allowedMIMETypes[mimeType] {
+		return nil, fmt.Errorf("file type %q is not allowed for upload", mimeType)
+	}
+
 	// Read file content
 	fileContent, err := io.ReadAll(file)
 	if err != nil {

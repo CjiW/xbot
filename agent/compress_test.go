@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -197,88 +196,5 @@ func TestTruncateRunes(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 		}
-	}
-}
-
-func TestCompressMessagesWithFingerprint_InjectsFingerprint(t *testing.T) {
-	// 构造含关键信息的消息
-	messages := []llm.ChatMessage{
-		llm.NewSystemMessage("You are an assistant."),
-		llm.NewUserMessage("Read /workspace/xbot/agent/compress.go and fix the bug"),
-		llm.NewAssistantMessage("I'll read the compressMessagesWithFingerprint function."),
-		llm.NewUserMessage("Also check /workspace/xbot/agent/engine.go"),
-		llm.NewAssistantMessage("Found error: nil pointer dereference in handleCompress. Decided to use a singleton pattern."),
-	}
-
-	fp := KeyInfoFingerprint{
-		FilePaths:   []string{"/workspace/xbot/agent/compress.go", "/workspace/xbot/agent/engine.go"},
-		Identifiers: []string{"compressMessagesWithFingerprint", "handleCompress"},
-		Errors:      []string{"nil pointer dereference in handleCompress"},
-		Decisions:   []string{"use a singleton pattern"},
-	}
-
-	var capturedPrompt string
-	mockLLM := &llm.MockLLM{
-		GenerateFn: func(ctx context.Context, model string, msgs []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
-			for _, m := range msgs {
-				if m.Role == "user" && strings.Contains(m.Content, "CRITICAL") {
-					capturedPrompt = m.Content
-				}
-			}
-			return &llm.LLMResponse{Content: "Compressed summary with @file:/workspace/xbot/agent/compress.go @error:nil pointer @decision:singleton"}, nil
-		},
-	}
-
-	_, err := compressMessagesWithFingerprint(context.Background(), messages, fp, mockLLM, "gpt-4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if capturedPrompt == "" {
-		t.Fatal("expected fingerprint to be injected into prompt, but no CRITICAL section found")
-	}
-	if !strings.Contains(capturedPrompt, "Must-Preserve Key Information") {
-		t.Error("expected 'Must-Preserve Key Information' in prompt")
-	}
-	if !strings.Contains(capturedPrompt, "/workspace/xbot/agent/compress.go") {
-		t.Error("expected file path from fingerprint in prompt")
-	}
-	if !strings.Contains(capturedPrompt, "nil pointer dereference") {
-		t.Error("expected error from fingerprint in prompt")
-	}
-	if !strings.Contains(capturedPrompt, "singleton pattern") {
-		t.Error("expected decision from fingerprint in prompt")
-	}
-	if !strings.Contains(capturedPrompt, "compressMessagesWithFingerprint") {
-		t.Error("expected identifier from fingerprint in prompt")
-	}
-}
-
-func TestCompressMessagesWithFingerprint_EmptyFingerprintNoInjection(t *testing.T) {
-	messages := []llm.ChatMessage{
-		llm.NewSystemMessage("You are an assistant."),
-		llm.NewUserMessage("Hello"),
-		llm.NewAssistantMessage("Hi there"),
-	}
-
-	var capturedPrompt string
-	mockLLM := &llm.MockLLM{
-		GenerateFn: func(ctx context.Context, model string, msgs []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
-			for _, m := range msgs {
-				if m.Role == "user" {
-					capturedPrompt = m.Content
-				}
-			}
-			return &llm.LLMResponse{Content: "Summary"}, nil
-		},
-	}
-
-	_, err := compressMessagesWithFingerprint(context.Background(), messages, KeyInfoFingerprint{}, mockLLM, "gpt-4")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if strings.Contains(capturedPrompt, "Must-Preserve Key Information") {
-		t.Error("expected NO fingerprint injection when fp is empty")
 	}
 }

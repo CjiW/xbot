@@ -59,6 +59,15 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
 
 // handleSetLLM handles /set-llm command to set user's LLM configuration
 func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	// Security: warn in group chat to avoid exposing API key
+	if msg.ChatType == "group" {
+		return &bus.OutboundMessage{
+			Channel: msg.Channel,
+			ChatID:  msg.ChatID,
+			Content: "⚠️ 安全提醒：此命令涉及 API Key 等敏感信息，请通过私聊发送 /set-llm，避免在群聊中暴露密钥。",
+		}, nil
+	}
+
 	// Parse command arguments
 	trimmed := strings.TrimSpace(msg.Content)
 	args := strings.TrimSpace(trimmed[len("/set-llm"):])

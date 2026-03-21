@@ -17,22 +17,18 @@ import (
 	"xbot/tools"
 )
 
-// buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
-// 从 processMessage / handleCardResponse 调用。
-func (a *Agent) buildMainRunConfig(
-	_ context.Context,
-	msg bus.InboundMessage,
+// buildBaseRunConfig 构建主 Agent（main/cron）共用的基础 RunConfig。
+// 包含 LLM、身份、工作区、工具执行器、循环控制、HookChain 等公共字段。
+func (a *Agent) buildBaseRunConfig(
+	channel, chatID, senderID string,
 	messages []llm.ChatMessage,
-	tenantSession *session.TenantSession,
-	autoNotify bool,
+	senderName string,
 ) RunConfig {
-	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
 	sessionKey := channel + ":" + chatID
 
-	// 获取用户特定的 LLM 客户端
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
 
-	cfg := RunConfig{
+	return RunConfig{
 		// 必需
 		LLMClient:    llmClient,
 		Model:        model,
@@ -65,7 +61,6 @@ func (a *Agent) buildMainRunConfig(
 		MaxIterations: a.maxIterations,
 
 		// Session
-		Session:    tenantSession,
 		SessionKey: sessionKey,
 
 		// 发送
@@ -85,12 +80,33 @@ func (a *Agent) buildMainRunConfig(
 			return sent
 		},
 
-		// OAuth 处理
-		OAuthHandler: a.buildOAuthHandler(channel, chatID, senderID, sessionKey),
-
 		// Letta 记忆字段
 		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
+
+		// HookChain — inherit from Agent
+		HookChain: a.hookChain,
 	}
+}
+
+// buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
+// 从 processMessage / handleCardResponse 调用。
+func (a *Agent) buildMainRunConfig(
+	_ context.Context,
+	msg bus.InboundMessage,
+	messages []llm.ChatMessage,
+	tenantSession *session.TenantSession,
+	autoNotify bool,
+) RunConfig {
+	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
+	sessionKey := channel + ":" + chatID
+
+	cfg := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName)
+
+	// 主 Agent 特有字段
+	cfg.Session = tenantSession
+
+	// OAuth 处理
+	cfg.OAuthHandler = a.buildOAuthHandler(channel, chatID, senderID, sessionKey)
 
 	// 进度通知
 	if autoNotify {
@@ -107,16 +123,13 @@ func (a *Agent) buildMainRunConfig(
 
 	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
 	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
-		smart.(*phase2Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
+		smart.(*phase1Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
 	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
 		return a.spawnSubAgent(ctx, inMsg)
 	}
-
-	// HookChain — inherit from Agent
-	cfg.HookChain = a.hookChain
 
 	// OffloadStore — Layer 1 offload
 	cfg.OffloadStore = a.offloadStore
@@ -136,60 +149,13 @@ func (a *Agent) buildMainRunConfig(
 // buildCronRunConfig 为 Cron 消息构建 RunConfig。
 // Cron 消息不需要自动压缩、进度通知、session 持久化。
 func (a *Agent) buildCronRunConfig(
-	ctx context.Context,
+	_ context.Context,
 	msg bus.InboundMessage,
 	messages []llm.ChatMessage,
 ) RunConfig {
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
-	sessionKey := channel + ":" + chatID
 
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
-
-	return RunConfig{
-		LLMClient:    llmClient,
-		Model:        model,
-		ThinkingMode: thinkingMode,
-		Tools:        a.tools,
-		Messages:     messages,
-		AgentID:      "main",
-		Channel:      channel,
-		ChatID:       chatID,
-		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
-		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
-		SenderName:   "",
-
-		// 工作区 & 沙箱
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
-
-		MaxIterations: a.maxIterations,
-		SessionKey:    sessionKey,
-		SendFunc:      a.sendMessage,
-		InjectInbound: a.injectInbound,
-
-		ToolExecutor:         a.buildToolExecutor(channel, chatID, senderID, ""),
-		ToolTimeout:          120 * time.Second,
-		EnableReadWriteSplit: true,
-
-		SessionFinalSentCallback: func() bool {
-			_, sent := a.sessionFinalSent.Load(sessionKey)
-			return sent
-		},
-
-		ToolContextExtras: a.buildToolContextExtras(channel, chatID),
-
-		// HookChain — inherit from Agent
-		HookChain: a.hookChain,
-	}
+	return a.buildBaseRunConfig(channel, chatID, senderID, messages, "")
 }
 
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
@@ -560,7 +526,13 @@ func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtra
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
-	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+	ts, err := a.multiSession.GetOrCreateSession(channel, chatID)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"channel": channel,
+			"chat_id": chatID,
+		}).Warn("buildToolContextExtras: GetOrCreateSession failed, Letta memory fields will be empty")
+	} else {
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
 			extras.TenantID = lm.TenantID()
 			extras.CoreMemory = lm.CoreService()

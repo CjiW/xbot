@@ -1,21 +1,40 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
 )
 
 func init() {
-	_ = godotenv.Load(".env")
+	if err := godotenv.Load(".env"); err != nil {
+		slog.Debug("failed to load .env file, using environment variables only", "error", err)
+	}
+}
+
+// envParseWarned 记录哪些环境变量已经打印过格式错误警告（每个变量只警告一次）
+var envParseWarned sync.Map
+
+func warnEnvParse(key, value, defaultValue string) {
+	if _, loaded := envParseWarned.LoadOrStore(key, true); loaded {
+		return
+	}
+	slog.Warn("invalid environment variable format, using default",
+		"key", key,
+		"value", value,
+		"default", defaultValue,
+	)
 }
 
 // OAuthConfig OAuth 配置
 type OAuthConfig struct {
 	Enable  bool   // 是否启用 OAuth 功能
+	Host    string // OAuth 服务监听地址（默认 127.0.0.1，仅本地访问，避免暴露到所有网络接口）
 	Port    int    // OAuth 服务监听端口（默认 8081）
 	BaseURL string // OAuth 回调基础 URL (e.g., https://your-domain.com)
 }
@@ -223,6 +242,7 @@ func Load() *Config {
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
+			Host:    getEnvOrDefault("OAUTH_HOST", "127.0.0.1"), // 默认绑定 localhost，防止暴露到所有网络接口
 			Port:    getEnvIntOrDefault("OAUTH_PORT", 8081),
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},
@@ -257,6 +277,7 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
 		}
+		warnEnvParse(key, value, strconv.Itoa(defaultValue))
 	}
 	return defaultValue
 }
@@ -267,6 +288,7 @@ func getEnvBoolOrDefault(key string, defaultValue bool) bool {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			return boolValue
 		}
+		warnEnvParse(key, value, strconv.FormatBool(defaultValue))
 	}
 	return defaultValue
 }
@@ -294,6 +316,7 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
 		}
+		warnEnvParse(key, value, defaultValue.String())
 	}
 	return defaultValue
 }
@@ -304,6 +327,7 @@ func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
 		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
 			return floatValue
 		}
+		warnEnvParse(key, value, strconv.FormatFloat(defaultValue, 'f', -1, 64))
 	}
 	return defaultValue
 }

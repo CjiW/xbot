@@ -38,6 +38,10 @@ type AnthropicConfig struct {
 
 // 常用 Claude 模型列表（供 ListModels）
 var anthropicKnownModels = []string{
+	"claude-sonnet-4-20250514",
+	"claude-opus-4-20250115",
+	"claude-3-7-sonnet-20250219",
+	"claude-3-5-haiku-20241022",
 	"claude-3-5-sonnet-20241022",
 	"claude-3-5-sonnet-20240620",
 	"claude-3-opus-20240229",
@@ -173,9 +177,8 @@ type anthropicResp struct {
 	Model        string                  `json:"model"`
 }
 
-// toAnthropicMessages 将业务消息转为 Anthropic 格式，返回 system 与 messages
-func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropicMessage) {
-	var firstSystem string
+// toAnthropicMessages 将业务消息转为 Anthropic 格式（跳过 system 消息，由 buildAnthropicSystem 处理）。
+func toAnthropicMessages(messages []ChatMessage) []anthropicMessage {
 	var msgs []anthropicMessage
 
 	i := 0
@@ -183,11 +186,7 @@ func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropic
 		msg := messages[i]
 		switch msg.Role {
 		case "system":
-			if firstSystem == "" {
-				firstSystem = msg.Content
-			} else {
-				firstSystem += "\n\n" + msg.Content
-			}
+			// system 消息由 buildAnthropicSystem 单独处理，此处跳过
 			i++
 		case "user":
 			msgs = append(msgs, anthropicMessage{Role: "user", Content: msg.Content})
@@ -237,7 +236,7 @@ func toAnthropicMessages(messages []ChatMessage) (system string, out []anthropic
 		}
 	}
 
-	return firstSystem, msgs
+	return msgs
 }
 
 // toAnthropicTools 将工具定义转为 Anthropic tools（input_schema 为 JSON Schema）
@@ -252,7 +251,7 @@ func toAnthropicTools(tools []ToolDefinition) []anthropicTool {
 				"description": p.Description,
 			}
 			if p.Items != nil {
-				prop["items"] = map[string]string{"type": p.Items.Type}
+				prop["items"] = p.Items
 			}
 			properties[p.Name] = prop
 			if p.Required {
@@ -358,7 +357,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		"tools_count": len(tools),
 	}).Info("[LLM] Starting non-stream request")
 
-	_, anthropicMsgs := toAnthropicMessages(messages)
+	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: anthropicMaxTokens,
@@ -484,7 +483,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"tools_count": len(tools),
 	}).Info("[LLM] Starting stream request")
 
-	_, anthropicMsgs := toAnthropicMessages(messages)
+	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
 		MaxTokens: anthropicMaxTokens,

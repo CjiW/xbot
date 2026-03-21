@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"xbot/crypto"
 	log "xbot/logger"
 )
 
@@ -65,12 +66,33 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 		cfg.UpdatedAt = updatedAt.Time
 	}
 
+	// Decrypt API key
+	if cfg.APIKey != "" {
+		decrypted, err := crypto.Decrypt(cfg.APIKey)
+		if err != nil {
+			log.WithError(err).WithField("sender_id", cfg.SenderID).Error("failed to decrypt API key")
+			return nil, fmt.Errorf("decrypt API key: %w", err)
+		}
+		cfg.APIKey = decrypted
+	}
+
 	return &cfg, nil
 }
 
 // SetConfig 设置用户的 LLM 配置
 func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	conn := s.db.Conn()
+
+	// Encrypt API key before storage
+	encryptedAPIKey := cfg.APIKey
+	if cfg.APIKey != "" {
+		encrypted, err := crypto.Encrypt(cfg.APIKey)
+		if err != nil {
+			log.WithError(err).WithField("sender_id", cfg.SenderID).Error("failed to encrypt API key")
+			return fmt.Errorf("encrypt API key: %w", err)
+		}
+		encryptedAPIKey = encrypted
+	}
 
 	now := time.Now()
 	_, err := conn.Exec(`
@@ -84,7 +106,7 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 			max_context = excluded.max_context,
 			thinking_mode = excluded.thinking_mode,
 			updated_at = excluded.updated_at
-	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode, now, now)
+	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode, now, now)
 
 	if err != nil {
 		return fmt.Errorf("upsert user llm config: %w", err)

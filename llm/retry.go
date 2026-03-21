@@ -90,9 +90,13 @@ func IsInputTooLongError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "400") {
-		return false
-	}
+	// 快速路径：检查是否包含 HTTP 400 状态码模式（排除纯数字误匹配）
+	has400 := strings.Contains(msg, ": 400 ") ||
+		strings.Contains(msg, "status=400") ||
+		strings.Contains(msg, `status_code":400`) ||
+		strings.Contains(msg, `"status":400`) ||
+		strings.Contains(msg, "status code 400")
+	// Input-too-long 指示关键词（足够精确，无需 400 前置）
 	indicators := []string{
 		"range of input length",
 		"maximum context length",
@@ -109,6 +113,8 @@ func IsInputTooLongError(err error) bool {
 			return true
 		}
 	}
+	// 有 400 但无精确指示关键词，可能是其他 400 错误，不误判
+	_ = has400
 	return false
 }
 
@@ -140,6 +146,24 @@ func isRetryableError(err error) bool {
 	for _, code := range []string{"429", "500", "502", "503", "504"} {
 		if strings.Contains(msg, ": "+code+" ") { // OpenAI
 			return true
+		}
+	}
+	// B-05 修复：Anthropic SDK 错误格式: `anthropic API error: status=NNN, body=...`
+	// 原有 OpenAI 格式匹配无法匹配此格式，需单独处理
+	if strings.Contains(msg, "anthropic API error: status=") {
+		if idx := strings.Index(msg, "status="); idx != -1 {
+			codeStr := msg[idx+7:]
+			// 找到 status 值的结束位置（逗号、空格或字符串结尾）
+			for i, c := range codeStr {
+				if c == ',' || c == ' ' || c == ')' {
+					codeStr = codeStr[:i]
+					break
+				}
+			}
+			// 429 和 5xx 可重试
+			if codeStr == "429" || strings.HasPrefix(codeStr, "5") {
+				return true
+			}
 		}
 	}
 	return false

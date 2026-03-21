@@ -14,7 +14,6 @@ const settingsCardActionPrefix = "settings_"
 
 var contextModeLabels = map[string]string{
 	"phase1": "双视图压缩",
-	"phase2": "渐进压缩",
 	"none":   "禁用压缩",
 }
 
@@ -254,7 +253,6 @@ func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
 	var modeOptions []map[string]any
 	for _, m := range []struct{ value, label string }{
 		{"phase1", "双视图压缩"},
-		{"phase2", "渐进压缩"},
 		{"none", "禁用压缩"},
 	} {
 		modeOptions = append(modeOptions, map[string]any{

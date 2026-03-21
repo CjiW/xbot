@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 13
+const schemaVersion = 14
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -38,6 +38,17 @@ func Open(path string) (*DB, error) {
 	// Set connection pool settings
 	conn.SetMaxOpenConns(1) // SQLite works best with a single connection
 	conn.SetMaxIdleConns(1)
+
+	// P-08 修复：启用 WAL 模式提升并发读性能和韧性
+	if _, err := conn.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set WAL mode: %w", err)
+	}
+	// 设置 busy_timeout 为 5 秒，避免 "database is locked" 错误
+	if _, err := conn.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
+	}
 
 	db := &DB{
 		conn: conn,
@@ -189,7 +200,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (13);
+INSERT INTO schema_version (version) VALUES (14);
 
 CREATE TABLE shared_registry (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,7 +212,8 @@ CREATE TABLE shared_registry (
     source_path TEXT NOT NULL,
     sharing     TEXT NOT NULL DEFAULT 'private' CHECK(sharing IN ('private', 'public')),
     created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
+    updated_at  INTEGER NOT NULL,
+    UNIQUE(type, name, author)
 );
 CREATE INDEX idx_shared_type_sharing ON shared_registry(type, sharing);
 CREATE INDEX idx_shared_author ON shared_registry(author);
@@ -255,6 +267,20 @@ CREATE INDEX idx_cron_jobs_sender ON cron_jobs(sender_id);
 
 func (db *DB) migrateSchema(from int) error {
 	conn := db.Conn()
+
+	// Warn on unexpected version numbers.
+	// The migration sequence is: 1→2→3→4→5→6→8→9→10→11→12→13→14 (v7 never existed).
+	// If the stored version is an impossible value (e.g., 7 or > schemaVersion),
+	// log a warning to aid debugging, but still proceed with applicable migrations.
+	if from == 7 {
+		log.WithField("from_version", from).Warn("Schema version 7 never existed; possible manual version corruption. Proceeding with migrations.")
+	}
+	if from > schemaVersion {
+		log.WithFields(log.Fields{
+			"from_version":   from,
+			"schema_version": schemaVersion,
+		}).Warn("Stored schema version exceeds expected; database may be from a newer build")
+	}
 
 	if from < 2 {
 		migration := `
@@ -622,6 +648,62 @@ UPDATE schema_version SET version = 13;
 			return fmt.Errorf("migrate v12->v13: %w", err)
 		}
 		log.Info("Database migrated to v13 (added shared_registry, user_settings)")
+	}
+
+	if from < 14 {
+		// v14: Add UNIQUE(type, name, author) constraint to shared_registry for atomic UPSERT
+		_, err := conn.Exec(`
+			CREATE TABLE shared_registry_new (
+			    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			    type        TEXT NOT NULL CHECK(type IN ('skill', 'agent')),
+			    name        TEXT NOT NULL,
+			    description TEXT NOT NULL DEFAULT '',
+			    author      TEXT NOT NULL,
+			    tags        TEXT NOT NULL DEFAULT '',
+			    source_path TEXT NOT NULL,
+			    sharing     TEXT NOT NULL DEFAULT 'private' CHECK(sharing IN ('private', 'public')),
+			    created_at  INTEGER NOT NULL,
+			    updated_at  INTEGER NOT NULL,
+			    UNIQUE(type, name, author)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: create new table: %w", err)
+		}
+
+		_, err = conn.Exec(`
+			INSERT INTO shared_registry_new (id, type, name, description, author, tags, source_path, sharing, created_at, updated_at)
+			SELECT id, type, name, description, author, tags, source_path, sharing, created_at, updated_at
+			FROM shared_registry
+		`)
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: copy data: %w", err)
+		}
+
+		_, err = conn.Exec("DROP TABLE shared_registry")
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: drop old table: %w", err)
+		}
+
+		_, err = conn.Exec("ALTER TABLE shared_registry_new RENAME TO shared_registry")
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: rename table: %w", err)
+		}
+
+		_, err = conn.Exec("CREATE INDEX IF NOT EXISTS idx_shared_type_sharing ON shared_registry(type, sharing)")
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: create index: %w", err)
+		}
+
+		_, err = conn.Exec("CREATE INDEX IF NOT EXISTS idx_shared_author ON shared_registry(author)")
+		if err != nil {
+			return fmt.Errorf("migrate v13->v14: create index: %w", err)
+		}
+
+		if _, err := conn.Exec("UPDATE schema_version SET version = 14"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v14 (added UNIQUE constraint to shared_registry)")
 	}
 
 	return nil

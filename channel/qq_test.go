@@ -148,7 +148,7 @@ func TestFormatAttachments_VoiceNoScheme(t *testing.T) {
 
 func TestExtractAndSendLocalImages_SkipsURLs(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "Check this: ![photo](https://example.com/photo.jpg) and ![img](http://example.com/img.png)"
 	result := q.extractAndSendLocalImages("target", "c2c", content, nil)
@@ -159,7 +159,7 @@ func TestExtractAndSendLocalImages_SkipsURLs(t *testing.T) {
 
 func TestExtractAndSendLocalImages_SkipsImageKey(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "![alt](img_v3_xxx)"
 	result := q.extractAndSendLocalImages("target", "c2c", content, nil)
@@ -170,7 +170,7 @@ func TestExtractAndSendLocalImages_SkipsImageKey(t *testing.T) {
 
 func TestExtractAndSendLocalImages_SkipsNonImageExt(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "![doc](report.pdf)"
 	result := q.extractAndSendLocalImages("target", "c2c", content, nil)
@@ -181,7 +181,7 @@ func TestExtractAndSendLocalImages_SkipsNonImageExt(t *testing.T) {
 
 func TestExtractAndSendLocalImages_SkipsMissingFile(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "![photo](/nonexistent/path/photo.jpg)"
 	result := q.extractAndSendLocalImages("target", "c2c", content, nil)
@@ -192,7 +192,7 @@ func TestExtractAndSendLocalImages_SkipsMissingFile(t *testing.T) {
 
 func TestExtractAndSendLocalFiles_SkipsURLs(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "See [report](https://example.com/report.pdf)"
 	result := q.extractAndSendLocalFiles("target", "c2c", content, nil)
@@ -203,7 +203,7 @@ func TestExtractAndSendLocalFiles_SkipsURLs(t *testing.T) {
 
 func TestExtractAndSendLocalFiles_SkipsImageExtensions(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "See [photo](photo.jpg)"
 	result := q.extractAndSendLocalFiles("target", "c2c", content, nil)
@@ -214,7 +214,7 @@ func TestExtractAndSendLocalFiles_SkipsImageExtensions(t *testing.T) {
 
 func TestExtractAndSendLocalFiles_SkipsMissingFile(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	content := "See [report](/nonexistent/report.pdf)"
 	result := q.extractAndSendLocalFiles("target", "c2c", content, nil)
@@ -273,7 +273,7 @@ func TestQQMdLinkRe(t *testing.T) {
 
 func TestSendMediaMessage_UnsupportedChatType(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	_, err := q.sendMediaMessage("target", "guild", "file_info", nil)
 	if err == nil {
@@ -283,7 +283,7 @@ func TestSendMediaMessage_UnsupportedChatType(t *testing.T) {
 
 func TestUploadFileToQQ_UnsupportedChatType(t *testing.T) {
 	q := &QQChannel{
-		msgSeqMap: make(map[string]int),
+		msgSeqMap: make(map[string]msgSeqEntry),
 	}
 	_, err := q.uploadFileToQQ("target", "guild", qqFileTypeImage, "base64data")
 	if err == nil {

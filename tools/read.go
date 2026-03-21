@@ -8,6 +8,10 @@ import (
 	"xbot/llm"
 )
 
+// DefaultMaxReadLines is the default maximum lines returned by the Read tool.
+// Users can override via the max_lines parameter.
+const DefaultMaxReadLines = 500
+
 // ReadTool 读取文件工具
 type ReadTool struct{}
 
@@ -25,12 +29,14 @@ Example: {"path": "hello.txt"}`
 func (t *ReadTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "path", Type: "string", Description: "The file path to read", Required: true},
+		{Name: "max_lines", Type: "integer", Description: "Maximum lines to return (default 500, 0 = no limit)"},
 	}
 }
 
 func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	params, err := parseToolArgs[struct {
-		Path string `json:"path"`
+		Path     string `json:"path"`
+		MaxLines int    `json:"max_lines"`
 	}](input)
 	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -42,11 +48,37 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	// 沙箱模式：在容器内执行 cat 命令
 	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
-		return t.executeInSandbox(ctx, params.Path)
+		result, err := t.executeInSandbox(ctx, params.Path)
+		if err != nil {
+			return nil, err
+		}
+		return applyLineLimit(result, params.MaxLines), nil
 	}
 
 	// 非沙箱模式：本地读取
-	return t.executeLocal(ctx, params.Path)
+	result, err := t.executeLocal(ctx, params.Path)
+	if err != nil {
+		return nil, err
+	}
+	return applyLineLimit(result, params.MaxLines), nil
+}
+
+// applyLineLimit truncates the tool result to maxLines lines.
+func applyLineLimit(result *ToolResult, maxLines int) *ToolResult {
+	if result == nil {
+		return result
+	}
+	if maxLines <= 0 {
+		maxLines = DefaultMaxReadLines
+	}
+	lines := strings.Split(result.Summary, "\n")
+	if len(lines) <= maxLines {
+		return result
+	}
+	result.Summary = strings.Join(lines[:maxLines], "\n") +
+		fmt.Sprintf("\n\n... [truncated: showing %d of %d lines, use max_lines parameter to see more]", maxLines, len(lines))
+	result.Detail = result.Summary
+	return result
 }
 
 // executeInSandbox 在沙箱容器内执行 cat 命令

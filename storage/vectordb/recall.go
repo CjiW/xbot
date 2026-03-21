@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"xbot/storage/internal"
 )
 
 // RecallTimeRangeFunc retrieves conversation history entries within a time range.
@@ -68,22 +70,6 @@ func NewSQLiteRecallTimeRangeFunc(db *sql.DB) RecallTimeRangeFunc {
 	}
 }
 
-// parseTimestamp parses a timestamp string, handling both RFC3339 (from modernc.org/sqlite)
-// and plain "2006-01-02 15:04:05" formats.
-func parseTimestamp(s string) time.Time {
-	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05Z", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.Local()
-	}
-
-	return time.Time{}
-}
-
 func scanRecallEntries(rows *sql.Rows) ([]RecallEntry, error) {
 	var entries []RecallEntry
 	for rows.Next() {
@@ -92,7 +78,7 @@ func scanRecallEntries(rows *sql.Rows) ([]RecallEntry, error) {
 		if err := rows.Scan(&e.Entry, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan recall entry: %w", err)
 		}
-		e.CreatedAt = parseTimestamp(createdAt)
+		e.CreatedAt = internal.ParseTimestamp(createdAt)
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()

@@ -18,7 +18,7 @@ type Scheduler struct {
 	cronSvc    *sqlite.CronService
 	injectFunc InjectFunc
 	stopCh     chan struct{}
-	once       sync.Once
+	once       sync.Once // 共用 once 保证 Start 和 StartDelayed 互斥：只有第一个调用者会启动调度器
 	running    bool
 	mu         sync.Mutex
 }
@@ -57,15 +57,17 @@ func (s *Scheduler) StartDelayed(delay time.Duration) {
 		s.running = true
 		s.mu.Unlock()
 
-		// Wait for the delay
-		log.WithField("delay", delay).Info("Cron scheduler waiting before start")
-		time.Sleep(delay)
+		go func() {
+			// Wait for the delay
+			log.WithField("delay", delay).Info("Cron scheduler waiting before start")
+			time.Sleep(delay)
 
-		// Clean up expired jobs before first tick
-		s.cleanupExpiredJobs()
+			// Clean up expired jobs before first tick
+			s.cleanupExpiredJobs()
 
-		go s.runLoop()
-		log.Info("Cron scheduler started after delay")
+			go s.runLoop()
+			log.Info("Cron scheduler started after delay")
+		}()
 	})
 }
 
@@ -147,7 +149,7 @@ func (s *Scheduler) Stop() {
 
 // runLoop is the main scheduling loop
 func (s *Scheduler) runLoop() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -280,6 +282,12 @@ func CalculateNextRun(job *sqlite.CronJob, now time.Time) (time.Time, error) {
 }
 
 // ===== Simple cron expression parser (5 fields: min hour dom mon dow) =====
+
+// ValidateCronExpr pre-validates a cron expression format
+func ValidateCronExpr(expr string) error {
+	_, err := nextCronTime(expr, time.Now())
+	return err
+}
 
 // nextCronTime calculates the next trigger time for a cron expression after now
 func nextCronTime(expr string, now time.Time) (time.Time, error) {

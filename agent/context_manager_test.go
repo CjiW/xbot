@@ -16,7 +16,6 @@ func TestNewContextManager(t *testing.T) {
 		want ContextMode
 	}{
 		{"phase1", ContextModePhase1, ContextModePhase1},
-		{"phase2", ContextModePhase2, ContextModePhase2},
 		{"none", ContextModeNone, ContextModeNone},
 		{"empty string", "", ContextModePhase1},
 		{"invalid value", ContextMode("invalid"), ContextModePhase1},
@@ -129,39 +128,6 @@ func TestNoopManager(t *testing.T) {
 	_, err := m.Compress(context.TODO(), nil, nil, "model")
 	if err == nil {
 		t.Error("noopManager.Compress should return error")
-	}
-}
-
-// TestPhase2Manager_Compress tests Phase 2 Compress evict+compact pipeline
-func TestPhase2Manager_Compress(t *testing.T) {
-	cfg := &ContextManagerConfig{
-		MaxContextTokens:     100000,
-		CompressionThreshold: 0.7,
-		DefaultMode:          ContextModePhase2,
-	}
-	m := newPhase2Manager(cfg)
-
-	// Mode should be phase2
-	if m.Mode() != ContextModePhase2 {
-		t.Errorf("phase2Manager.Mode() = %q, want %q", m.Mode(), ContextModePhase2)
-	}
-
-	// Compress with nil messages should not panic
-	result, err := m.Compress(context.TODO(), nil, nil, "model")
-	if err != nil {
-		t.Errorf("phase2Manager.Compress with nil messages should not error, got: %v", err)
-	}
-	if result == nil {
-		t.Error("phase2Manager.Compress should return non-nil result")
-	}
-
-	// ManualCompress with nil client should work for nil messages (short-circuit path)
-	result2, err := m.ManualCompress(context.TODO(), nil, nil, "model")
-	if err != nil {
-		t.Errorf("phase2Manager.ManualCompress with nil messages should not error, got: %v", err)
-	}
-	if result2 == nil {
-		t.Error("phase2Manager.ManualCompress should return non-nil result")
 	}
 }
 

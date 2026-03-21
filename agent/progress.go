@@ -1,12 +1,24 @@
 package agent
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ProgressEvent 结构化进度事件，供上层消费（如飞书卡片渲染）。
 type ProgressEvent struct {
 	Lines      []string
 	Structured *StructuredProgress
 	Timestamp  time.Time
+}
+
+// FullText returns all progress lines joined into a single string.
+// Consumers should use this instead of only accessing Lines[0].
+func (e *ProgressEvent) FullText() string {
+	if len(e.Lines) == 0 {
+		return ""
+	}
+	return strings.Join(e.Lines, "\n")
 }
 
 // StructuredProgress 结构化进度信息，描述 Agent 当前状态。

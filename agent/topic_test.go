@@ -38,7 +38,7 @@ func TestSingleTopicNoPartition(t *testing.T) {
 		)...)
 	}
 
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 
 	if len(segments) != 1 {
 		t.Errorf("expected 1 segment for single topic, got %d", len(segments))
@@ -75,7 +75,7 @@ func TestTopicSwitchEnglish(t *testing.T) {
 		)...)
 	}
 
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 
 	if len(segments) < 2 {
 		t.Errorf("expected at least 2 segments for topic switch, got %d", len(segments))
@@ -132,7 +132,7 @@ func TestTopicSwitchCJK(t *testing.T) {
 		)...)
 	}
 
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 
 	if len(segments) < 2 {
 		t.Errorf("expected at least 2 segments for CJK topic switch, got %d", len(segments))
@@ -155,7 +155,7 @@ func TestShortHistoryNoTrigger(t *testing.T) {
 		assistantMsg("Mix flour and sugar"),
 	}
 
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 
 	if len(segments) != 1 {
 		t.Errorf("expected 1 segment for short history (<10), got %d", len(segments))
@@ -190,7 +190,7 @@ func TestFragmentNoTrigger(t *testing.T) {
 		)...)
 	}
 
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 
 	// The short cooking fragment should be merged into adjacent segments
 	for _, seg := range segments {
@@ -234,7 +234,7 @@ func TestLargeConversationPerformance(t *testing.T) {
 	}
 
 	start := time.Now()
-	segments := d.Detect(messages)
+	segments, _ := d.Detect(messages)
 	elapsed := time.Since(start)
 
 	if elapsed > 50*time.Millisecond {
@@ -467,7 +467,7 @@ func TestNewTopicDetectorDefaults(t *testing.T) {
 // TestDetectEmptyMessages 测试空消息列表
 func TestDetectEmptyMessages(t *testing.T) {
 	d := NewTopicDetector()
-	segments := d.Detect(nil)
+	segments, _ := d.Detect(nil)
 
 	if len(segments) != 1 {
 		t.Errorf("expected 1 segment for empty input, got %d", len(segments))

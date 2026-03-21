@@ -74,6 +74,11 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("task is required")
 	}
 
+	const maxTaskLength = 50 * 1024 // 50KB
+	if len(params.Task) > maxTaskLength {
+		return nil, fmt.Errorf("task parameter exceeds maximum allowed size (%d bytes)", maxTaskLength)
+	}
+
 	if params.Role == "" {
 		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
 	}

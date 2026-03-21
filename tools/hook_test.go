@@ -244,19 +244,19 @@ func TestHookChain_RunPost_AlwaysAll(t *testing.T) {
 func TestHookChain_ConcurrentSafety(t *testing.T) {
 	hc := NewHookChain()
 
-	// Concurrently add hooks
+	// Concurrently add hooks (MaxHookChainLen caps at 20, but Use returns error instead of panicking)
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			hc.Use(&mockHook{name: fmt.Sprintf("hook-%d", i)})
+			_ = hc.Use(&mockHook{name: fmt.Sprintf("hook-%d", i)})
 		}(i)
 	}
 	wg.Wait()
 
-	if len(hc.hooks) != 100 {
-		t.Fatalf("expected 100 hooks, got %d", len(hc.hooks))
+	if len(hc.hooks) > MaxHookChainLen {
+		t.Fatalf("expected at most %d hooks, got %d", MaxHookChainLen, len(hc.hooks))
 	}
 
 	// Concurrently run pre hooks
@@ -289,7 +289,7 @@ func TestHookChain_ConcurrentSafety(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			hc.Use(&mockHook{name: fmt.Sprintf("new-%d", i)})
+			_ = hc.Use(&mockHook{name: fmt.Sprintf("new-%d", i)})
 		}(i)
 	}
 	wg.Wait()

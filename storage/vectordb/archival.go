@@ -36,15 +36,22 @@ type ContentCompressorFunc func(ctx context.Context, content string, maxTokens i
 // It is initialized on startup if an LLM client is available.
 var llmContentCompressor ContentCompressorFunc
 
+// SetLLMContentCompressor sets the package-level LLM-based content compressor.
+// This should be called during application startup if an LLM client is available,
+// so that ensureContentFits can prefer semantic compression over naive truncation.
+func SetLLMContentCompressor(c ContentCompressorFunc) {
+	llmContentCompressor = c
+}
+
 // DefaultContentCompressor is a no-op compressor that just truncates.
 // Used when no LLM is available for compression.
 func DefaultContentCompressor(ctx context.Context, content string, maxTokens int) (string, error) {
 	// Rough truncation: ~4 chars per token
 	maxChars := maxTokens * 4
-	if len(content) <= maxChars {
+	if len([]rune(content)) <= maxChars {
 		return content, nil
 	}
-	return content[:maxChars], nil
+	return string([]rune(content)[:maxChars]), nil
 }
 
 // LLMContentCompressor creates a compressor using LLM to summarize content.
@@ -231,7 +238,19 @@ func NewEmbeddingFunc(baseURL, apiKey, model, provider string, maxTokens int) ch
 }
 
 func isOllamaURL(rawURL string) bool {
-	return strings.Contains(rawURL, ":11434")
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	// Check default Ollama port
+	if u.Port() == "11434" {
+		return true
+	}
+	// Check default Ollama host without explicit port (e.g. http://localhost)
+	if u.Host == "localhost" || u.Host == "127.0.0.1" || u.Host == "::1" {
+		return u.Port() == "" || u.Port() == "11434"
+	}
+	return false
 }
 
 func toOllamaBaseURL(rawURL string) string {
@@ -250,6 +269,8 @@ func newOllamaEmbedFunc(baseURL, model string, numCtx int) chromem.EmbeddingFunc
 	client := &http.Client{}
 
 	var checkedNormalized bool
+	// checkedNormalized 是闭包变量，在每个 embedding 调用后被读取。
+	// sync.Once.Do 保证首次写入 happens-before 后续所有读取，因此无需额外同步。
 	checkNormalized := sync.Once{}
 
 	return func(ctx context.Context, text string) ([]float32, error) {
@@ -438,6 +459,13 @@ func (s *ArchivalService) Delete(ctx context.Context, tenantID int64, entryID st
 // SearchByDocumentContains searches archival entries where document content
 // contains the specified substring, using chromem-go's whereDocument filter.
 // This is useful for finding entries with specific markers like [PROJECT_CARD].
+//
+// Parameters:
+//   - ctx: context for cancellation
+//   - tenantID: the tenant whose archival entries to search
+//   - contains: the substring to match against document content (passed as both
+//     the query text and the $contains filter to leverage chromem-go's hybrid matching)
+//   - limit: maximum number of results to return (<= 0 defaults to 3)
 func (s *ArchivalService) SearchByDocumentContains(ctx context.Context, tenantID int64, contains string, limit int) ([]ArchivalEntry, error) {
 	if s.embeddingFunc == nil {
 		return nil, nil // no embedding = no archival service, skip silently
@@ -498,6 +526,12 @@ type ToolIndexService struct {
 	persistDir    string
 	fpMu          sync.Mutex
 	embeddingLimitConfig
+
+	// fingerprints cache: in-memory copy with debounced writes
+	fpCache      map[string]string // in-memory fingerprint data
+	fpDirty      bool              // true if cache has unsaved changes
+	fpLoadOnce   sync.Once         // ensure fingerprints are loaded once
+	fpFlushTimer *time.Timer       // debounced flush timer
 }
 
 // NewToolIndexService creates a tool index service.
@@ -709,37 +743,65 @@ func (s *ToolIndexService) saveFingerprints(fps map[string]string) error {
 func (s *ToolIndexService) GetFingerprint(tenantID int64) string {
 	s.fpMu.Lock()
 	defer s.fpMu.Unlock()
-	fps := s.loadFingerprints()
-	if fps == nil {
-		return ""
-	}
-	return fps[fmt.Sprintf("%d", tenantID)]
+	s.fpLoadOnce.Do(s.initFPCache)
+	return s.fpCache[fmt.Sprintf("%d", tenantID)]
 }
 
 // SetFingerprint persists the catalog fingerprint for a tenant.
 func (s *ToolIndexService) SetFingerprint(tenantID int64, fp string) {
 	s.fpMu.Lock()
 	defer s.fpMu.Unlock()
-	fps := s.loadFingerprints()
-	if fps == nil {
-		fps = make(map[string]string)
-	}
-	fps[fmt.Sprintf("%d", tenantID)] = fp
-	if err := s.saveFingerprints(fps); err != nil {
-		log.WithError(err).Warn("Failed to persist tool index fingerprint")
-	}
+	s.fpLoadOnce.Do(s.initFPCache)
+	s.fpCache[fmt.Sprintf("%d", tenantID)] = fp
+	s.fpDirty = true
+	s.scheduleFPFlush()
 }
 
 // DeleteFingerprint removes the persisted catalog fingerprint for a tenant.
 func (s *ToolIndexService) DeleteFingerprint(tenantID int64) {
 	s.fpMu.Lock()
 	defer s.fpMu.Unlock()
-	fps := s.loadFingerprints()
-	if fps == nil {
+	s.fpLoadOnce.Do(s.initFPCache)
+	delete(s.fpCache, fmt.Sprintf("%d", tenantID))
+	s.fpDirty = true
+	s.scheduleFPFlush()
+}
+
+// initFPCache lazily loads fingerprints from disk on first access.
+func (s *ToolIndexService) initFPCache() {
+	s.fpCache = s.loadFingerprints()
+	if s.fpCache == nil {
+		s.fpCache = make(map[string]string)
+	}
+	s.fpDirty = false
+}
+
+// scheduleFPFlush debounces fingerprint writes to disk.
+// Writes are delayed by 1 second; if another write comes in, the timer resets.
+func (s *ToolIndexService) scheduleFPFlush() {
+	if s.fpFlushTimer != nil {
+		s.fpFlushTimer.Stop()
+	}
+	s.fpFlushTimer = time.AfterFunc(1*time.Second, func() {
+		s.flushFingerprints()
+	})
+}
+
+// flushFingerprints writes the in-memory cache to disk.
+func (s *ToolIndexService) flushFingerprints() {
+	s.fpMu.Lock()
+	if !s.fpDirty {
+		s.fpMu.Unlock()
 		return
 	}
-	delete(fps, fmt.Sprintf("%d", tenantID))
+	fps := make(map[string]string, len(s.fpCache))
+	for k, v := range s.fpCache {
+		fps[k] = v
+	}
+	s.fpDirty = false
+	s.fpMu.Unlock()
+
 	if err := s.saveFingerprints(fps); err != nil {
-		log.WithError(err).Warn("Failed to persist tool index fingerprint")
+		log.WithError(err).Warn("Failed to persist tool index fingerprints")
 	}
 }

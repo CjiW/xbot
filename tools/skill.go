@@ -10,6 +10,9 @@ import (
 
 const skillLoadMaxLines = 300
 
+// MaxSkillSearchResults limits the number of files returned by skill search.
+const MaxSkillSearchResults = 20
+
 // SkillTool discovers and reads skills from the workspace.
 // In sandbox mode, skills are pre-synced to /workspace/.skills/ (global) and /workspace/skills/ (user).
 // Supports two actions: "load" (read content) and "list_files" (list all files with container paths).
@@ -140,9 +143,18 @@ func (t *SkillTool) doListFiles(hostDir, containerBase string) (*ToolResult, err
 		rel, _ := filepath.Rel(hostDir, path)
 		containerPath := filepath.Join(containerBase, rel)
 		files = append(files, containerPath)
+		if len(files) >= MaxSkillSearchResults {
+			return fmt.Errorf("skill has too many files, showing first %d", MaxSkillSearchResults)
+		}
 		return nil
 	})
 	if err != nil {
+		// If err is our sentinel about too many files, still return the results
+		if len(files) > 0 {
+			result := strings.Join(files, "\n")
+			result += fmt.Sprintf("\n\n... [truncated: showing %d of potentially more files]", len(files))
+			return NewResult(result), nil
+		}
 		return nil, fmt.Errorf("listing skill files: %w", err)
 	}
 	if len(files) == 0 {

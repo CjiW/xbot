@@ -154,6 +154,9 @@ StackSys: %d KB
 }
 
 // gcHandler 手动触发 GC
+// SECURITY NOTE: This endpoint has no authentication. It is protected only by
+// binding to localhost (default Config.Host). If the server is exposed on a
+// public interface, add authentication middleware (e.g., API key or token check).
 func (s *Server) gcHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed. Use POST to trigger GC.", http.StatusMethodNotAllowed)

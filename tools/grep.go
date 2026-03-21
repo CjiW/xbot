@@ -517,7 +517,6 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 		includePatterns = expandBracePattern(include)
 	}
 
-
 	// Walk the directory and search files
 	var matches []grepMatch
 	truncated := false

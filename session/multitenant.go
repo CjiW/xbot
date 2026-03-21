@@ -112,7 +112,7 @@ type MultiTenantSession struct {
 	shutdownCancel        context.CancelFunc
 	toolIndexFingerprints map[int64]string          // per-tenant catalog fingerprint (guarded by mu)
 	toolIndexPrevNames    map[int64]map[string]bool // per-tenant previous tool name set (guarded by mu)
-	onSessionEvict        func(sessionKey string)    // 会话被清理时的回调（用于 Registry 清理 sessionActivated/sessionRound）
+	onSessionEvict        func(sessionKey string)   // 会话被清理时的回调（用于 Registry 清理 sessionActivated/sessionRound）
 }
 
 // NewMultiTenant creates a new multi-tenant session manager

@@ -59,7 +59,7 @@ func (m *phase1Manager) ShouldCompress(messages []llm.ChatMessage, model string,
 	return tokenCount >= threshold
 }
 
-// Compress 压缩：LLM 压缩 + ineffective 检测 + mechanicalTruncate 兜底。
+// Compress 压缩：LLM 压缩 + ineffective 检测 + mechanicalTruncate 兜底 + nuclear fallback。
 func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
 	originalTokens, _ := llm.CountMessagesTokens(messages, model)
 
@@ -72,23 +72,22 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	result, err := compressMessages(ctx, messages, client, model)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Phase 1 compress: LLM compression failed, trying mechanical truncation")
-		mechResult := m.mechanicalTruncate(messages, model)
-		return mechResult, nil
+		result = m.mechanicalTruncate(messages, model)
 	}
 
-	// 步骤2：ineffective 检测 + mechanicalTruncate 兜底
+	// 步骤2：验证压缩效果，低于 20% 时升级处理
 	newTokens, _ := llm.CountMessagesTokens(result.LLMView, model)
 	reductionRate := 0.0
 	if originalTokens > 0 {
 		reductionRate = 1.0 - float64(newTokens)/float64(originalTokens)
 	}
 
-	if reductionRate < 0.10 {
+	if reductionRate < 0.20 {
 		log.Ctx(ctx).WithFields(map[string]interface{}{
 			"reduction_rate":  reductionRate,
 			"new_tokens":      newTokens,
 			"original_tokens": originalTokens,
-		}).Warn("Phase 1 compress: ineffective (reduction<10%), trying mechanical truncation")
+		}).Warn("Phase 1 compress: LLM result under 20%, trying mechanical truncation")
 
 		mechResult := m.mechanicalTruncate(messages, model)
 		mechTokens, _ := llm.CountMessagesTokens(mechResult.LLMView, model)
@@ -96,11 +95,6 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 		if originalTokens > 0 {
 			mechReduction = 1.0 - float64(mechTokens)/float64(originalTokens)
 		}
-		log.Ctx(ctx).WithFields(map[string]interface{}{
-			"mech_reduction":  mechReduction,
-			"mech_tokens":     mechTokens,
-			"original_tokens": originalTokens,
-		}).Info("Phase 1 compress: mechanical truncation result")
 
 		if mechReduction > reductionRate {
 			result = mechResult
@@ -108,11 +102,34 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 		}
 	}
 
-	// 步骤3：质量报告
+	// 步骤3：nuclear fallback — 如果所有方法都失败，丢掉一切只保留 system + 摘要
 	finalTokens, _ := llm.CountMessagesTokens(result.LLMView, model)
 	if originalTokens > 0 {
 		reductionRate = 1.0 - float64(finalTokens)/float64(originalTokens)
 	}
+	if reductionRate < 0.10 {
+		log.Ctx(ctx).WithFields(map[string]interface{}{
+			"reduction_rate":  reductionRate,
+			"final_tokens":    finalTokens,
+			"original_tokens": originalTokens,
+		}).Error("Phase 1 compress: ALL methods ineffective, using nuclear fallback")
+
+		nuclearResult := m.nuclearTruncate(messages, model)
+		nuclearTokens, _ := llm.CountMessagesTokens(nuclearResult.LLMView, model)
+		nuclearReduction := 0.0
+		if originalTokens > 0 {
+			nuclearReduction = 1.0 - float64(nuclearTokens)/float64(originalTokens)
+		}
+
+		// nuclear 必须比现有结果更好才使用
+		if nuclearReduction > reductionRate {
+			result = nuclearResult
+			reductionRate = nuclearReduction
+			finalTokens = nuclearTokens
+		}
+	}
+
+	// 步骤4：质量报告
 	log.Ctx(ctx).WithFields(map[string]interface{}{
 		"reduction_rate": reductionRate,
 		"new_tokens":     finalTokens,
@@ -214,6 +231,83 @@ func (m *phase1Manager) mechanicalTruncate(messages []llm.ChatMessage, model str
 		}
 	}
 	sessionView = append(sessionView, extractDialogueFromTail(thinnedTail)...)
+
+	return &CompressResult{
+		LLMView:     llmView,
+		SessionView: sessionView,
+	}
+}
+
+// nuclearTruncate 核弹级截断：当所有其他方法都失败时的最后手段。
+// 直接丢弃所有历史消息，只保留 system + 最近 1 条 user 消息 + 最后 1 个 tool group。
+// 保证产生至少 50% 的缩减（除非原始消息极少）。
+func (m *phase1Manager) nuclearTruncate(messages []llm.ChatMessage, model string) *CompressResult {
+	var systemMsgs []llm.ChatMessage
+	var lastUserIdx = -1
+	var lastToolGroupStart = len(messages)
+	var lastToolGroupEnd = len(messages)
+
+	// 找 system 消息、最后一条 user 消息、最后一个 tool group
+	for i, msg := range messages {
+		if msg.Role == "system" {
+			systemMsgs = append(systemMsgs, msg)
+			continue
+		}
+		if msg.Role == "user" {
+			lastUserIdx = i
+		}
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			lastToolGroupStart = i
+			lastToolGroupEnd = i
+			for j := i + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
+				lastToolGroupEnd = j
+			}
+			break
+		}
+	}
+
+	truncationNotice := llm.NewUserMessage("[Earlier context truncated — compression failure, keeping minimal context]")
+
+	llmView := make([]llm.ChatMessage, 0, len(systemMsgs)+3)
+	llmView = append(llmView, systemMsgs...)
+	llmView = append(llmView, truncationNotice)
+
+	// 保留最后一条 user 消息
+	if lastUserIdx >= 0 {
+		llmView = append(llmView, messages[lastUserIdx])
+	}
+
+	// 保留最后一个 tool group（截断内容）
+	for i := lastToolGroupStart; i <= lastToolGroupEnd && i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role == "system" || (msg.Role == "user" && i == lastUserIdx) {
+			continue // 已添加
+		}
+		switch msg.Role {
+		case "assistant":
+			msg.Content = truncateRunes(llm.StripThinkBlocks(msg.Content), 200)
+			if len(msg.ToolCalls) > 0 {
+				tcs := make([]llm.ToolCall, len(msg.ToolCalls))
+				copy(tcs, msg.ToolCalls)
+				for k := range tcs {
+					tcs[k].Arguments = truncateRunes(tcs[k].Arguments, 80)
+				}
+				msg.ToolCalls = tcs
+			}
+		case "tool":
+			msg.Content = truncateRunes(msg.Content, 150)
+			msg.ToolArguments = truncateRunes(msg.ToolArguments, 80)
+		}
+		llmView = append(llmView, msg)
+	}
+
+	sessionView := []llm.ChatMessage{truncationNotice}
+	if lastUserIdx >= 0 {
+		sessionView = append(sessionView, messages[lastUserIdx])
+	}
 
 	return &CompressResult{
 		LLMView:     llmView,

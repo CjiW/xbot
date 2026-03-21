@@ -396,6 +396,85 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "...[truncated]"
 }
 
+// keepLastToolGroup 只保留 tail 中的最后一个工具组（最新一轮 tool call + result），
+// 以及最后一个 user 消息之后的所有纯文本消息。
+// 用于 aggressiveThinTail 仍不够压缩时的终极裁剪。
+func keepLastToolGroup(tail []llm.ChatMessage) []llm.ChatMessage {
+	if len(tail) == 0 {
+		return tail
+	}
+
+	// 找最后一个 user 消息位置（tail 开头的 user 消息要保留）
+	lastUserIdx := -1
+	for i, msg := range tail {
+		if msg.Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+
+	// 找最后一个 tool group 的起点
+	lastToolGroupStart := len(tail)
+	for i := len(tail) - 1; i >= 0; i-- {
+		if tail[i].Role == "assistant" && len(tail[i].ToolCalls) > 0 {
+			lastToolGroupStart = i
+			break
+		}
+	}
+
+	// 找最后一个 tool group 的终点
+	lastToolGroupEnd := lastToolGroupStart
+	if lastToolGroupStart < len(tail) {
+		for j := lastToolGroupStart + 1; j < len(tail) && tail[j].Role == "tool"; j++ {
+			lastToolGroupEnd = j
+		}
+	}
+
+	// 构建结果：开头的 user 消息 + 最后一个 tool group
+	var result []llm.ChatMessage
+
+	// 保留开头的 user 消息
+	if lastUserIdx >= 0 {
+		result = append(result, tail[lastUserIdx])
+	}
+
+	// 在 user 和最后一个 tool group 之间，可能有纯 assistant 消息，保留
+	for i := lastUserIdx + 1; i < lastToolGroupStart; i++ {
+		if tail[i].Role == "assistant" && len(tail[i].ToolCalls) == 0 {
+			result = append(result, tail[i])
+		}
+	}
+
+	// 保留最后一个 tool group（截断内容）
+	for i := lastToolGroupStart; i <= lastToolGroupEnd && i < len(tail); i++ {
+		msg := tail[i]
+		switch msg.Role {
+		case "assistant":
+			msg.Content = truncateRunes(llm.StripThinkBlocks(msg.Content), 300)
+			if len(msg.ToolCalls) > 0 {
+				tcs := make([]llm.ToolCall, len(msg.ToolCalls))
+				copy(tcs, msg.ToolCalls)
+				for k := range tcs {
+					tcs[k].Arguments = truncateRunes(tcs[k].Arguments, 100)
+				}
+				msg.ToolCalls = tcs
+			}
+		case "tool":
+			msg.Content = truncateRunes(msg.Content, 200)
+			msg.ToolArguments = truncateRunes(msg.ToolArguments, 100)
+		}
+		result = append(result, msg)
+	}
+
+	// 如果没有 user 消息也没有 tool group，至少保留最后几条消息
+	if len(result) == 0 {
+		keep := min(3, len(tail))
+		result = append(result, tail[len(tail)-keep:]...)
+	}
+
+	return result
+}
+
 // compressMessages 使用 LLM 压缩对话历史（独立函数，不依赖 Agent receiver）。
 // 不使用 fingerprint 体系，直接压缩。
 func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
@@ -489,6 +568,13 @@ Output the compressed content directly, preserving as much context as possible.`
 
 	compressed := llm.StripThinkBlocks(resp.Content)
 
+	// 限制 LLM 摘要长度，防止 LLM 生成比原文还长的冗长摘要。
+	// 3000 rune ≈ 1000-1500 tokens，足够保留关键上下文。
+	const maxSummaryRunes = 3000
+	if len([]rune(compressed)) > maxSummaryRunes {
+		compressed = string([]rune(compressed)[:maxSummaryRunes]) + "\n\n[...summary truncated]"
+	}
+
 	// 第六步：构建压缩后的消息结构
 	if len(systemMsgs) > 1 {
 		// R-01 修复：panic 改为 error 返回，避免运行时崩溃
@@ -503,13 +589,15 @@ Output the compressed content directly, preserving as much context as possible.`
 	llmView = append(llmView, summaryMsg)
 	llmView = append(llmView, thinnedTail...)
 
-	// BUG FIX: 最低缩减保证。
-	// 如果 LLM compress + thinTail 后缩减不到 20%，说明 tail 中的 tool 消息过大。
-	// 此时做激进截断：将 thinnedTail 中的旧 tool 组进一步压缩到 100 字符。
+	// BUG FIX: 多级缩减保证。
+	// 如果 LLM compress + thinTail 后缩减不到 20%，逐级加强：
+	//   Level 1: aggressiveThinTail (100字符截断)
+	//   Level 2: 只保留 tail 最后 1 组，丢弃更早的 tail 组
 	originalTokens, _ := llm.CountMessagesTokens(messages, model)
 	resultTokens, _ := llm.CountMessagesTokens(llmView, model)
 	minTarget := int(float64(originalTokens) * 0.8) // 至少缩减 20%
 	if resultTokens > minTarget && minTarget > 0 {
+		// Level 1: aggressive thinning
 		aggressiveTail := aggressiveThinTail(messages[tailStart:], 1, activeFiles)
 		llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(aggressiveTail))
 		llmView = append(llmView, systemMsgs...)
@@ -522,6 +610,20 @@ Output the compressed content directly, preserving as much context as possible.`
 			"aggressive_tokens": aggressiveTokens,
 			"min_target":        minTarget,
 		}).Info("Phase 1 compress: normal result insufficient, using aggressive thinning")
+
+		// Level 2: 如果 aggressive 仍不够，丢弃 tail 中非最后组的所有内容
+		if aggressiveTokens > minTarget {
+			trimmedTail := keepLastToolGroup(messages[tailStart:])
+			llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(trimmedTail))
+			llmView = append(llmView, systemMsgs...)
+			llmView = append(llmView, summaryMsg)
+			llmView = append(llmView, trimmedTail...)
+			trimmedTokens, _ := llm.CountMessagesTokens(llmView, model)
+			log.Ctx(ctx).WithFields(map[string]interface{}{
+				"trimmed_tokens": trimmedTokens,
+				"min_target":     minTarget,
+			}).Warn("Phase 1 compress: aggressive still insufficient, dropping old tail groups")
+		}
 	}
 
 	// Session View: 压缩摘要 + 尾部对话摘要（纯 user/assistant）

@@ -309,12 +309,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			smart.TriggerProvider().Cooldown.RecordCompress(iteration)
 			if oldTokenCount > 0 {
 				reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
-				if reductionRate < 0.10 {
+				if reductionRate < 0.20 {
 					log.Ctx(ctx).WithFields(log.Fields{
 						"old_tokens": oldTokenCount,
 						"new_tokens": newTokenCount,
 						"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
-					}).Warn("Phase 2 compress: ineffective (reduction < 10%), increasing cooldown")
+					}).Warn("Phase 1 compress: ineffective (reduction < 20%), increasing cooldown")
 					smart.TriggerProvider().Cooldown.RecordIneffective()
 				} else {
 					smart.TriggerProvider().Cooldown.RecordEffective()

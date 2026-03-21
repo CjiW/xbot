@@ -363,9 +363,9 @@ func TestGlobToFindArgs_ShellEscape(t *testing.T) {
 	// Security regression tests: verify shellEscape prevents command injection
 	// via crafted glob patterns containing single quotes.
 	tests := []struct {
-		name       string
-		pattern    string
-		wantArgs   string
+		name           string
+		pattern        string
+		wantArgs       string
 		wantNoContains []string
 	}{
 		{

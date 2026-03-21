@@ -15,6 +15,7 @@ import (
 )
 
 var (
+	//nolint:unused // used by tests (resetPackage) and reserved for key rotation
 	encryptionKey  []byte
 	encryptionAEAD cipher.AEAD
 	keyOnce        sync.Once

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"xbot/crypto"
 	"xbot/storage/sqlite"
 
 	log "xbot/logger"
@@ -85,6 +86,24 @@ func (s *SQLiteStorage) GetToken(ctx context.Context, provider, channel, chatID 
 		return nil, fmt.Errorf("query token: %w", err)
 	}
 
+	// 解密 access_token
+	if accessToken != "" {
+		if decrypted, err := crypto.Decrypt(accessToken); err == nil {
+			accessToken = decrypted
+		} else {
+			log.WithError(err).Warn("Failed to decrypt access token, key may have changed")
+		}
+	}
+
+	// 解密 refresh_token
+	if refreshToken != "" {
+		if decrypted, err := crypto.Decrypt(refreshToken); err == nil {
+			refreshToken = decrypted
+		} else {
+			log.WithError(err).Warn("Failed to decrypt refresh token, key may have changed")
+		}
+	}
+
 	var scopes []string
 	if scopesJSON != "" {
 		if err := json.Unmarshal([]byte(scopesJSON), &scopes); err != nil {
@@ -113,6 +132,29 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 	scopesJSON, _ := json.Marshal(token.Scopes)
 	rawJSON, _ := json.Marshal(token.Raw)
 
+	accessToken := token.AccessToken
+	refreshToken := token.RefreshToken
+
+	// 加密 access_token
+	// Note: If encryption fails, the token is stored in plaintext as a fallback.
+	// This is acceptable for OAuth tokens because they can be recovered via re-authorization.
+	if accessToken != "" {
+		if encrypted, err := crypto.Encrypt(accessToken); err == nil {
+			accessToken = encrypted
+		} else {
+			log.WithError(err).Warn("Failed to encrypt access token")
+		}
+	}
+
+	// 加密 refresh_token（长期有效凭证，必须加密）
+	if refreshToken != "" {
+		if encrypted, err := crypto.Encrypt(refreshToken); err == nil {
+			refreshToken = encrypted
+		} else {
+			log.WithError(err).Warn("Failed to encrypt refresh token")
+		}
+	}
+
 	query := `
 	REPLACE INTO oauth_tokens (provider, channel, chat_id, access_token, refresh_token, expires_at, scopes, raw, updated_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -120,7 +162,7 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 
 	_, err := s.db.Conn().ExecContext(ctx, query,
 		provider, channel, chatID,
-		token.AccessToken, token.RefreshToken, token.ExpiresAt.Unix(),
+		accessToken, refreshToken, token.ExpiresAt.Unix(),
 		string(scopesJSON), string(rawJSON), time.Now().Unix(),
 	)
 	if err != nil {

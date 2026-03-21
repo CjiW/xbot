@@ -181,7 +181,7 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 	// 校验 name 格式
 	if name != "" {
 		for _, c := range name {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid agent name %q: only letters, digits, hyphens and underscores are allowed", name)
 			}
 		}
@@ -193,7 +193,7 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 			return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("empty tool name in tools list")
 		}
 		for _, c := range t {
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
 				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid tool name %q: only letters, digits, hyphens, underscores and dots are allowed", t)
 			}
 		}

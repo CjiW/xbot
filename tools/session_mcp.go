@@ -224,12 +224,39 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 			continue
 		}
 
-		// 尝试连接，最多 3 次
+		// 尝试连接，使用指数退避（初始 1s，最大 30s，最多 10 次）
+		const maxAttempts = 10
+		const initialBackoff = 1 * time.Second
+		const maxBackoff = 30 * time.Second
+
 		var lastErr error
-		for attempt := 1; attempt <= 3; attempt++ {
+	RetryLoop:
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			if err := sm.connectServer(ctx, name, serverCfg); err != nil {
 				lastErr = err
-				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+				if attempt < maxAttempts {
+					backoff := initialBackoff
+					for i := 1; i < attempt; i++ {
+						backoff *= 2
+						if backoff > maxBackoff {
+							backoff = maxBackoff
+							break
+						}
+					}
+					log.WithError(err).WithFields(log.Fields{
+						"session": sm.sessionKey,
+						"server":  name,
+						"attempt": attempt,
+						"backoff": backoff,
+					}).Warnf("MCP server connection failed, retrying in %v", backoff)
+					select {
+					case <-time.After(backoff):
+						// continue retry
+					case <-ctx.Done():
+						lastErr = ctx.Err()
+						break RetryLoop
+					}
+				}
 				continue
 			}
 			lastErr = nil
@@ -239,7 +266,7 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 			log.WithError(lastErr).WithFields(log.Fields{
 				"session": sm.sessionKey,
 				"server":  name,
-			}).Warn("Failed to connect MCP server after 3 attempts")
+			}).Warnf("Failed to connect MCP server after %d attempts", maxAttempts)
 		}
 	}
 

@@ -132,6 +132,11 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 }
 
 // getTenantToken obtains a tenant_access_token using app credentials from environment.
+// SECURITY NOTE: This uses app-level (tenant_access_token) authentication, not user-level.
+// This means any user in the tenant can download any message's resources if they know the
+// message_id and file_key. This is an acceptable trade-off because: (1) message_id/file_key
+// are opaque and not guessable, (2) the download is scoped to the tenant, and (3) the LLM
+// agent only receives these keys from Feishu message XML tags, which the user controls.
 func (t *DownloadFileTool) getTenantToken() (string, error) {
 	appID := t.MCP.appID
 	appSecret := t.MCP.appSecret

@@ -32,16 +32,23 @@ var modelToEncoding = map[string]tokenizer.Model{
 	"gpt-3.5-turbo-1106": tokenizer.GPT35Turbo,
 	"gpt-3.5-turbo-0125": tokenizer.GPT35Turbo,
 
-	// Claude series (uses cl100k_base similar encoding)
+	// Claude series (uses cl100k_base as approximate tokenizer)
+	// Note: Claude's actual tokenizer differs from cl100k_base with 10-20% deviation.
+	// We use cl100k_base as an approximation since Claude's native tokenizer is not
+	// publicly available. Token counts should be treated as estimates, not exact values.
 	"claude-3-opus":              tokenizer.GPT4,
 	"claude-3-sonnet":            tokenizer.GPT4,
 	"claude-3-haiku":             tokenizer.GPT4,
 	"claude-3-5-sonnet":          tokenizer.GPT4,
+	"claude-3-5-sonnet-20240620": tokenizer.GPT4,
 	"claude-3-5-sonnet-20241022": tokenizer.GPT4,
 	"claude-3-5-haiku":           tokenizer.GPT4,
 	"claude-2":                   tokenizer.GPT4,
 	"claude-2.1":                 tokenizer.GPT4,
 	"claude-instant":             tokenizer.GPT4,
+	"claude-sonnet-4-20250514":   tokenizer.GPT4,
+	"claude-opus-4-20250115":     tokenizer.GPT4,
+	"claude-3-7-sonnet-20250219": tokenizer.GPT4,
 
 	// MiniMax series (uses cl100k_base)
 	"abab6.5s-chat": tokenizer.GPT35Turbo,

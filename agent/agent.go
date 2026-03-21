@@ -366,55 +366,8 @@ type Config struct {
 	TopicSimilarityThreshold float64 `json:"topic_similarity_threshold"` // 话题相似度阈值（默认 0.3）
 }
 
-// New 创建 Agent
-func New(cfg Config) *Agent {
-	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 100
-	}
-	if cfg.MaxConcurrency <= 0 {
-		cfg.MaxConcurrency = 3
-	}
-	if cfg.MemoryWindow == 0 {
-		cfg.MemoryWindow = 50
-	}
-	if cfg.WorkDir == "" {
-		cfg.WorkDir = "."
-	}
-	if cfg.SkillsDir == "" {
-		cfg.SkillsDir = filepath.Join(cfg.WorkDir, ".xbot", "skills")
-	}
-	if cfg.DBPath == "" {
-		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
-	}
-	// 设置 MCP 配置默认值
-	if cfg.MCPInactivityTimeout == 0 {
-		cfg.MCPInactivityTimeout = 30 * time.Minute
-	}
-	if cfg.MCPCleanupInterval == 0 {
-		cfg.MCPCleanupInterval = 5 * time.Minute
-	}
-	if cfg.SessionCacheTimeout == 0 {
-		cfg.SessionCacheTimeout = 24 * time.Hour
-	}
-	// 设置上下文压缩配置默认值
-	if cfg.MaxContextTokens == 0 {
-		cfg.MaxContextTokens = 100000 // 默认 100k token
-	}
-	if cfg.CompressionThreshold == 0 {
-		cfg.CompressionThreshold = 0.7
-	}
-
-	// 确定初始上下文管理模式
-	contextMode := resolveContextMode(cfg)
-	// 设置 SubAgent 深度默认值
-	if cfg.MaxSubAgentDepth <= 0 {
-		cfg.MaxSubAgentDepth = 6
-	}
-	// 设置 SubAgent LLM 超时默认值
-	if cfg.SubAgentLLMTimeout <= 0 {
-		cfg.SubAgentLLMTimeout = 3 * time.Minute
-	}
-
+// initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
+func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, *tools.Registry, *tools.CardBuilder) {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
@@ -440,7 +393,11 @@ func New(cfg Config) *Agent {
 	cardBuilder := tools.NewCardBuilder()
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
-	// 初始化多租户会话管理器（带 MCP 配置选项）
+	return skillStore, agentStore, chatHistory, registry, cardBuilder
+}
+
+// initSession 初始化多租户会话管理器。
+func initSession(cfg Config) (*session.MultiTenantSession, error) {
 	memoryProvider := cfg.MemoryProvider
 	if memoryProvider == "" {
 		memoryProvider = "flat"
@@ -465,6 +422,15 @@ func New(cfg Config) *Agent {
 	if err != nil {
 		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
 	}
+	return multiSession, nil
+}
+
+// initServices 注册工具、初始化 cron/LLM/offload/registry/settings 等服务。
+// 此方法直接修改 Agent 指针。
+func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession, registry *tools.Registry) {
+	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
+	contextMode := resolveContextMode(cfg)
+
 	multiSession.SetMCPConfigPath(mcpConfigPath)
 
 	// 设置会话被清理时的回调，同步清理 Registry 中的 sessionActivated/sessionRound（C-09）
@@ -482,6 +448,10 @@ func New(cfg Config) *Agent {
 	}()
 
 	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
+	memoryProvider := cfg.MemoryProvider
+	if memoryProvider == "" {
+		memoryProvider = "flat"
+	}
 	if memoryProvider == "letta" {
 		for _, tool := range tools.LettaMemoryTools() {
 			registry.RegisterCore(tool)
@@ -489,6 +459,118 @@ func New(cfg Config) *Agent {
 		log.Info("Letta memory tools registered (core)")
 	}
 
+	// 初始化指令注册表
+	a.commands = NewCommandRegistry()
+	registerBuiltinCommands(a.commands)
+
+	// 初始化消息构建管道
+	a.initPipelines()
+
+	// 初始化 Cron 服务和调度器
+	cronSvc := sqlite.NewCronService(multiSession.DB())
+	cronSch := cron.NewScheduler(cronSvc)
+
+	// 从旧的 JSON 文件迁移数据（如果需要）
+	if err := cronSvc.MigrateFromJSON(cfg.WorkDir); err != nil {
+		log.WithError(err).Warn("Failed to migrate cron jobs from JSON")
+	}
+
+	// 注册 CronTool（核心工具，始终可用）
+	registry.RegisterCore(tools.NewCronTool(cronSvc))
+
+	a.cronSvc = cronSvc
+	a.cronSch = cronSch
+
+	// Initialize UserLLMConfigService
+	a.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
+	a.llmFactory = NewLLMFactory(a.llmConfigSvc, cfg.LLM, cfg.Model)
+
+	// 初始化上下文管理器
+	a.contextManagerConfig = &ContextManagerConfig{
+		MaxContextTokens:     cfg.MaxContextTokens,
+		CompressionThreshold: cfg.CompressionThreshold,
+		DefaultMode:          contextMode,
+	}
+	a.contextManager = NewContextManager(a.contextManagerConfig)
+
+	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
+	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	a.offloadStore = NewOffloadStore(OffloadConfig{
+		StoreDir:        offloadDir,
+		MaxResultTokens: 2000,
+		MaxResultBytes:  10240,
+		CleanupAgeDays:  7,
+	})
+	go a.offloadStore.CleanStale()
+
+	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
+	if a.offloadStore != nil {
+		recallTool := &tools.OffloadRecallTool{Store: a.offloadStore}
+		registry.RegisterCore(recallTool)
+	}
+
+	// Initialize SharedSkillRegistry
+	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())
+
+	// Initialize RegistryManager
+	a.registryManager = NewRegistryManager(a.skills, a.agents, sharedRegistry, cfg.WorkDir)
+
+	// Initialize UserSettingsService and SettingsService
+	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
+	a.settingsSvc = NewSettingsService(userSettingsSvc)
+}
+
+
+// New 创建 Agent
+func New(cfg Config) *Agent {
+	// 1. 设置配置默认值
+	if cfg.MaxIterations == 0 {
+		cfg.MaxIterations = 100
+	}
+	if cfg.MaxConcurrency <= 0 {
+		cfg.MaxConcurrency = 3
+	}
+	if cfg.MemoryWindow == 0 {
+		cfg.MemoryWindow = 50
+	}
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = "."
+	}
+	if cfg.SkillsDir == "" {
+		cfg.SkillsDir = filepath.Join(cfg.WorkDir, ".xbot", "skills")
+	}
+	if cfg.DBPath == "" {
+		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
+	}
+	if cfg.MCPInactivityTimeout == 0 {
+		cfg.MCPInactivityTimeout = 30 * time.Minute
+	}
+	if cfg.MCPCleanupInterval == 0 {
+		cfg.MCPCleanupInterval = 5 * time.Minute
+	}
+	if cfg.SessionCacheTimeout == 0 {
+		cfg.SessionCacheTimeout = 24 * time.Hour
+	}
+	if cfg.MaxContextTokens == 0 {
+		cfg.MaxContextTokens = 100000 // 默认 100k token
+	}
+	if cfg.CompressionThreshold == 0 {
+		cfg.CompressionThreshold = 0.7
+	}
+	if cfg.MaxSubAgentDepth <= 0 {
+		cfg.MaxSubAgentDepth = 6
+	}
+	if cfg.SubAgentLLMTimeout <= 0 {
+		cfg.SubAgentLLMTimeout = 3 * time.Minute
+	}
+
+	// 2. 初始化存储和注册表
+	skillStore, agentStore, chatHistory, registry, cardBuilder := initStores(cfg)
+
+	// 3. 初始化会话管理器
+	multiSession, _ := initSession(cfg)
+
+	// 4. 构建 Agent 实例
 	sandboxMode := cfg.SandboxMode
 	if sandboxMode == "" {
 		sandboxMode = "docker"
@@ -510,21 +592,19 @@ func New(cfg Config) *Agent {
 		sandboxMode:        sandboxMode,
 		sandboxIdleTimeout: cfg.SandboxIdleTimeout,
 		singleUser:         cfg.SingleUser,
-		globalSkillDirs:    globalSkillDirs,
+		globalSkillDirs:    resolveGlobalSkillsDirs(cfg.SkillsDir),
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
 		subAgentLLMTimeout: cfg.SubAgentLLMTimeout,
-		agentsDir:          agentsDir,
+		agentsDir:          filepath.Join(cfg.WorkDir, ".xbot", "agents"),
 		consolidateCh:      make(chan consolidateRequest, 64),
 		consolidateStopCh:  make(chan struct{}),
 		consolidating:      make(map[string]bool),
 
-		// Initialize hook chain with default hooks (LoggingHook + TimingHook)
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
 		),
 
-		// Topic partition isolation (Phase 2.5, disabled by default)
 		enableTopicIsolation: cfg.EnableTopicIsolation,
 		topicDetector: func() *TopicDetector {
 			d := NewTopicDetector()
@@ -538,65 +618,8 @@ func New(cfg Config) *Agent {
 		}(),
 	}
 
-	// 初始化指令注册表
-	agent.commands = NewCommandRegistry()
-	registerBuiltinCommands(agent.commands)
-
-	// 初始化消息构建管道
-	agent.initPipelines()
-
-	// 初始化 Cron 服务和调度器
-	cronSvc := sqlite.NewCronService(multiSession.DB())
-	cronSch := cron.NewScheduler(cronSvc)
-
-	// 从旧的 JSON 文件迁移数据（如果需要）
-	if err := cronSvc.MigrateFromJSON(cfg.WorkDir); err != nil {
-		log.WithError(err).Warn("Failed to migrate cron jobs from JSON")
-	}
-
-	// 注册 CronTool（核心工具，始终可用）
-	registry.RegisterCore(tools.NewCronTool(cronSvc))
-
-	agent.cronSvc = cronSvc
-	agent.cronSch = cronSch
-
-	// Initialize UserLLMConfigService
-	agent.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
-	agent.llmFactory = NewLLMFactory(agent.llmConfigSvc, cfg.LLM, cfg.Model)
-
-	// 初始化上下文管理器
-	agent.contextManagerConfig = &ContextManagerConfig{
-		MaxContextTokens:     cfg.MaxContextTokens,
-		CompressionThreshold: cfg.CompressionThreshold,
-		DefaultMode:          contextMode,
-	}
-	agent.contextManager = NewContextManager(agent.contextManagerConfig)
-
-	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
-	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
-	agent.offloadStore = NewOffloadStore(OffloadConfig{
-		StoreDir:        offloadDir,
-		MaxResultTokens: 2000,
-		MaxResultBytes:  10240,
-		CleanupAgeDays:  7,
-	})
-	go agent.offloadStore.CleanStale()
-
-	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
-	if agent.offloadStore != nil {
-		recallTool := &tools.OffloadRecallTool{Store: agent.offloadStore}
-		registry.RegisterCore(recallTool)
-	}
-
-	// Initialize SharedSkillRegistry
-	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())
-
-	// Initialize RegistryManager
-	agent.registryManager = NewRegistryManager(skillStore, agentStore, sharedRegistry, cfg.WorkDir)
-
-	// Initialize UserSettingsService and SettingsService
-	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
-	agent.settingsSvc = NewSettingsService(userSettingsSvc)
+	// 5. 初始化各类服务（修改 agent 指针）
+	initServices(agent, cfg, multiSession, registry)
 
 	return agent
 }
@@ -747,6 +770,9 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// NOTE: math/rand is intentionally used here for non-cryptographic random selection
+// (picking a casual ack message). Go 1.20+ automatically seeds math/rand on package
+// init, so there is no security concern and no explicit seeding is required.
 var ackMessages = []string{
 	"收到~",
 	"好的，让我看看",

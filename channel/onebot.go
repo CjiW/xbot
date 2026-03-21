@@ -52,7 +52,7 @@ const onebotMaxReconnectAttempts = 100
 // CQ 码正则
 // ---------------------------------------------------------------------------
 
-const onebotMaxImageSize = 50 << 20          // 50 MB
+const onebotMaxImageSize = 20 << 20          // 20 MB — 聊天图片 20MB 足够，50MB 过大可能被恶意 URL 利用
 const selfAtTemplate = `[CQ:at,qq=%s[^\]]*]` // at 自己的 CQ 码模板
 
 var (

@@ -473,6 +473,10 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 }
 
 // doRegexReplace 执行正则替换
+// SECURITY NOTE: Go's regexp package uses RE2 engine which guarantees O(n) time complexity
+// for all operations, preventing ReDoS (Regular Expression Denial of Service) attacks.
+// No explicit step limit is needed because RE2's design fundamentally avoids exponential
+// backtracking found in PCRE/Perl-style engines.
 func (t *EditTool) doRegexReplace(content string, params EditParams, filePath string) (string, string, error) {
 	if params.Pattern == "" {
 		return "", "", fmt.Errorf("pattern is required for regex mode")

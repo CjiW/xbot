@@ -118,6 +118,26 @@ func truncateArgs(args string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
+// formatCompressResult formats the compression result into a human-readable message.
+func formatCompressResult(originalTokens, newTokens int, result *CompressResult, partial bool) string {
+	prefix := ""
+	if partial {
+		prefix = " (内存)"
+	}
+	return fmt.Sprintf("上下文压缩完成%s: %d → %d tokens (LLM %d 条, Session %d 条)",
+		prefix, originalTokens, newTokens, len(result.LLMView), len(result.SessionView))
+}
+
+// sendCompressedResult sends the compression result as an OutboundMessage.
+func (a *Agent) sendCompressedResult(msg bus.InboundMessage, originalTokens int, result *CompressResult, partial bool) *bus.OutboundMessage {
+	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, "")
+	return &bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: formatCompressResult(originalTokens, newTokenCount, result, partial),
+	}
+}
+
 // handleCompress 处理 /compress 命令：手动触发上下文压缩
 func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) (*bus.OutboundMessage, error) {
 	// 注意：手动 /compress 命令不受 enableAutoCompress 开关限制

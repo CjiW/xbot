@@ -43,25 +43,7 @@ func (s *CoreMemoryService) InitBlocks(tenantID int64, userID string) error {
 	}
 
 	for name, limit := range DefaultBlocks {
-		// Determine effective tenantID and userID based on block type
-		effectiveTenantID := tenantID
-		uid := ""
-
-		switch name {
-		case "persona":
-			// persona is per-tenant, each Agent/SubAgent has independent persona
-			// Use the passed tenantID directly (no override)
-		case "human":
-			// human is per-user, use userID directly (cross-tenant)
-			if userID != "" {
-				uid = userID
-			}
-			// Use tenantID=0 for cross-tenant sharing
-			effectiveTenantID = 0
-		case "working_context":
-			// working_context is per-tenant
-			uid = ""
-		}
+		effectiveTenantID, uid := resolveBlockKey(tenantID, name, userID)
 
 		_, err := conn.Exec(`
 			INSERT OR IGNORE INTO core_memory_blocks (tenant_id, block_name, user_id, char_limit)
@@ -147,6 +129,26 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 	return nil
 }
 
+// resolveBlockKey resolves the effective tenantID and userID for a given block type.
+// - persona: per-tenant, uses the passed tenantID directly
+// - human: per-user cross-tenant, uses tenantID=0 and the provided userID
+// - working_context: per-tenant, uses the passed tenantID directly
+func resolveBlockKey(tenantID int64, blockName, userID string) (effectiveTenantID int64, uid string) {
+	effectiveTenantID = tenantID
+	switch blockName {
+	case "persona":
+		// per-tenant, use the passed tenantID directly
+	case "human":
+		effectiveTenantID = 0
+		if userID != "" {
+			uid = userID
+		}
+	case "working_context":
+		// per-tenant
+	}
+	return effectiveTenantID, uid
+}
+
 // GetBlock reads a single core memory block.
 // - persona: uses tenantID (per-tenant, each Agent/SubAgent has independent persona)
 // - human: uses userID directly as key (cross-tenant shared)
@@ -154,24 +156,7 @@ func (s *CoreMemoryService) migrateLegacyData(db *sql.DB) error {
 func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID string) (content string, charLimit int, err error) {
 	conn := s.db.Conn()
 
-	// Resolve effective tenantID and userID based on block type
-	effectiveTenantID := tenantID
-	uid := ""
-
-	switch blockName {
-	case "persona":
-		// persona is per-tenant, use the passed tenantID directly
-	case "human":
-		// human is per-user, use userID directly (cross-tenant)
-		// Use tenantID=0 for cross-tenant sharing
-		effectiveTenantID = 0
-		if userID != "" {
-			uid = userID
-		}
-	case "working_context":
-		// working_context is per-tenant
-		uid = ""
-	}
+	effectiveTenantID, uid := resolveBlockKey(tenantID, blockName, userID)
 
 	err = conn.QueryRow(
 		"SELECT content, char_limit FROM core_memory_blocks WHERE tenant_id = ? AND block_name = ? AND user_id = ?",
@@ -219,23 +204,7 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 func (s *CoreMemoryService) SetBlock(tenantID int64, blockName, content string, userID string) error {
 	conn := s.db.Conn()
 
-	// Resolve effective tenantID and userID based on block type
-	effectiveTenantID := tenantID
-	uid := ""
-
-	switch blockName {
-	case "persona":
-		// persona is per-tenant, use the passed tenantID directly
-	case "human":
-		// human is per-user, use userID directly (cross-tenant)
-		effectiveTenantID = 0
-		if userID != "" {
-			uid = userID
-		}
-	case "working_context":
-		// working_context is per-tenant
-		uid = ""
-	}
+	effectiveTenantID, uid := resolveBlockKey(tenantID, blockName, userID)
 
 	// Get char limit
 	_, charLimit, err := s.GetBlock(effectiveTenantID, blockName, uid)

@@ -1407,11 +1407,8 @@ func formatMapString(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
-	var parts []string
-	for k, v := range m {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
-	}
-	return strings.Join(parts, ", ")
+	data, _ := json.Marshal(m)
+	return string(data)
 }
 
 // feishuMsg is a common interface for extracting message fields from both
@@ -1547,6 +1544,9 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 }
 
 // extractPostText 提取富文本内容
+// Design note: messageId is threaded through parseContent → extractPostText → extractFromLang
+// so that embedded images/videos in the post can include message_id in their XML tags.
+// This enables the agent to call feishu_download_file with the correct message_id later.
 func (f *FeishuChannel) extractPostText(contentJSON map[string]any, messageId string) string {
 	// 尝试直接格式
 	if result := f.extractFromLang(contentJSON, messageId); result != "" {
@@ -1881,6 +1881,12 @@ var mdTableSepRe = regexp.MustCompile(`^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)+\|?\s
 
 // limitMarkdownTables 限制 markdown 内容中的表格数量。
 // 超出 maxTables 的表格会被转成代码块（保留可读性但不触发飞书 table 渲染）。
+//
+// 表格检测逻辑：
+//   - 以 separator 行（|---|---|）作为表格起始标记
+//   - separator 前紧邻的 pipe 行（|）视为 header 行
+//   - 表格以 separator 开头（无 header）是合法的 markdown 边界情况，
+//     此时 header 行包裹逻辑被自然跳过（prev 不是 pipe 行）
 func limitMarkdownTables(content string, maxTables int) string {
 	lines := strings.Split(content, "\n")
 	tableCount := 0

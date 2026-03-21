@@ -2,11 +2,15 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	log "xbot/logger"
 )
+
+// MaxHookChainLen is the maximum number of hooks allowed in a HookChain.
+const MaxHookChainLen = 20
 
 // ToolHook is the interface for tool execution lifecycle hooks.
 // Implement PreToolUse and/or PostToolUse to intercept tool execution.
@@ -36,6 +40,10 @@ func NewHookChain(hooks ...ToolHook) *HookChain {
 	}
 	for _, h := range hooks {
 		if h != nil {
+			if len(hc.hooks) >= MaxHookChainLen {
+				log.Warnf("NewHookChain: hook chain exceeds maximum length of %d, truncating", MaxHookChainLen)
+				break
+			}
 			hc.hooks = append(hc.hooks, h)
 		}
 	}
@@ -44,7 +52,8 @@ func NewHookChain(hooks ...ToolHook) *HookChain {
 
 // Use adds a hook to the end of the chain.
 // If a hook with the same name already exists, it is replaced.
-func (hc *HookChain) Use(hook ToolHook) {
+// Returns an error if the chain is at maximum capacity.
+func (hc *HookChain) Use(hook ToolHook) error {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 
@@ -52,10 +61,14 @@ func (hc *HookChain) Use(hook ToolHook) {
 	for i, h := range hc.hooks {
 		if h.Name() == name {
 			hc.hooks[i] = hook
-			return
+			return nil
 		}
 	}
+	if len(hc.hooks) >= MaxHookChainLen {
+		return fmt.Errorf("hook chain exceeds maximum length of %d", MaxHookChainLen)
+	}
 	hc.hooks = append(hc.hooks, hook)
+	return nil
 }
 
 // Remove removes a hook by name.

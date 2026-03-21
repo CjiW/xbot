@@ -13,6 +13,10 @@ import (
 	"xbot/llm"
 )
 
+// LogsSubDir is the subdirectory relative to DataDir where logs are stored.
+// Can be overridden via config if needed.
+const LogsSubDir = ".xbot/logs"
+
 // LogsTool 读取 xbot 日志文件的工具（仅管理员可用）
 type LogsTool struct {
 	adminChatID string
@@ -78,7 +82,7 @@ func (t *LogsTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	// 确定日志目录
 	// 使用 DataDir 而非 WorkspaceRoot，因为日志是全局的，不是用户隔离的
-	logDir := filepath.Join(ctx.DataDir, ".xbot", "logs")
+	logDir := filepath.Join(ctx.DataDir, LogsSubDir)
 
 	switch params.Action {
 	case "list":
@@ -98,11 +102,11 @@ func (t *LogsTool) listLogs(logDir string) (*ToolResult, error) {
 	}
 
 	if len(files) == 0 {
-		return NewResult("No log files found in .xbot/logs directory."), nil
+		return NewResult(fmt.Sprintf("No log files found in %s directory.", LogsSubDir)), nil
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d log file(s) in .xbot/logs:\n\n", len(files))
+	fmt.Fprintf(&sb, "Found %d log file(s) in %s:\n\n", len(files), LogsSubDir)
 	for i, f := range files {
 		fmt.Fprintf(&sb, "%d. %s (%s)\n", i+1, f.Name, f.Size)
 	}

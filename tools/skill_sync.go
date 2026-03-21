@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -110,15 +112,43 @@ func syncTree(srcDir, dstDir string) {
 	}
 }
 
-// syncFile copies src → dst only if dst is missing or older than src.
+// fileChecksum computes SHA256 hex digest of a file.
+func fileChecksum(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// syncFile copies src → dst only if dst is missing, older than src, or has different content.
+// When mtime differs, uses SHA256 checksum to confirm whether content actually changed.
 func syncFile(src, dst string) {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
 		return
 	}
 	dstInfo, err := os.Stat(dst)
-	if err == nil && !srcInfo.ModTime().After(dstInfo.ModTime()) {
-		return // dst exists and is up-to-date
+	if err == nil {
+		// dst exists — check if up-to-date
+		if !srcInfo.ModTime().After(dstInfo.ModTime()) {
+			return // dst is same age or newer, skip
+		}
+		// mtime differs; verify content actually changed via checksum
+		srcSum := fileChecksum(src)
+		if srcSum != "" {
+			dstSum := fileChecksum(dst)
+			if dstSum != "" && srcSum == dstSum {
+				// Content identical despite mtime difference (e.g. touch);
+				// preserve dst to avoid unnecessary I/O
+				return
+			}
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

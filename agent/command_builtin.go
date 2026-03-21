@@ -39,10 +39,14 @@ func (c *versionCmd) Match(s string) bool { return strings.ToLower(s) == "/versi
 func (c *versionCmd) Concurrent() bool    { return true } // stateless
 
 func (c *versionCmd) Execute(_ context.Context, _ *Agent, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
+	info := version.Info()
+	if version.Commit != "" {
+		info += "\ncommit: " + version.Commit
+	}
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: version.Info(),
+		Content: info,
 	}, nil
 }
 

@@ -956,6 +956,9 @@ var qqMdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 // qqMdLinkRe 匹配 markdown 链接语法 [name](path)，但不匹配图片 ![alt](path)
 var qqMdLinkRe = regexp.MustCompile(`(?:^|[^!])\[([^\]]+)\]\(([^)]+)\)`)
 
+// qqMentionRegex matches QQ @mention artifacts like <@!123456> or <@123456>
+var qqMentionRegex = regexp.MustCompile(`<@!?\d+>`)
+
 // ---------------------------------------------------------------------------
 // Send (outbound)
 // ---------------------------------------------------------------------------
@@ -1073,27 +1076,57 @@ func (q *QQChannel) sendGuildMessage(channelID, content string, metadata map[str
 
 // sendAutoDetect 自动检测消息类型并发送
 func (q *QQChannel) sendAutoDetect(chatID, content string, metadata map[string]string) (string, error) {
-	// If chatID looks like a channel_id (numeric), try guild first
-	// Otherwise try group, then c2c
-	// This is a best-effort heuristic
 	log.WithField("chat_id", chatID).Warn("QQ: unknown chat type, attempting auto-detect")
 
-	// Try group first (most common)
-	msgID, err := q.sendGroupMessage(chatID, content, metadata)
-	if err == nil {
-		return msgID, nil
-	}
-	log.WithError(err).Debug("QQ: group send failed, trying guild")
+	const maxAttempts = 3
 
-	// Try guild
-	msgID, err = q.sendGuildMessage(chatID, content, metadata)
-	if err == nil {
-		return msgID, nil
+	// Try cached type first
+	if cached := q.inferChatType(chatID); cached != "" {
+		var id string
+		var err error
+		switch cached {
+		case "group":
+			id, err = q.sendGroupMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached group send failed, trying other types")
+		case "guild":
+			id, err = q.sendGuildMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached guild send failed, trying other types")
+		case "c2c":
+			id, err = q.sendC2CMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached c2c send failed, trying other types")
+		}
+		_ = id
 	}
-	log.WithError(err).Debug("QQ: guild send failed, trying c2c")
 
-	// Try c2c
-	return q.sendC2CMessage(chatID, content, metadata)
+	// Try all types with attempt limit
+	attempts := 0
+	for _, tryFn := range []func() (string, error){
+		func() (string, error) { return q.sendGroupMessage(chatID, content, metadata) },
+		func() (string, error) { return q.sendGuildMessage(chatID, content, metadata) },
+		func() (string, error) { return q.sendC2CMessage(chatID, content, metadata) },
+	} {
+		id, err := tryFn()
+		if err == nil {
+			return id, nil
+		}
+		attempts++
+		if attempts >= maxAttempts {
+			break
+		}
+		log.WithError(err).Debug("QQ: auto-detect send attempt failed")
+		_ = id
+	}
+
+	return "", fmt.Errorf("qq: all auto-detect attempts failed for chat_id=%s", chatID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1679,32 +1712,7 @@ func formatAttachments(attachments []qqAttachment) string {
 // stripQQMention 去除 QQ @mention 标记
 // QQ messages may contain <@!botid> or similar mention artifacts
 func stripQQMention(content string) string {
-	// Remove <@!xxx> patterns (guild @mentions)
-	result := content
-	for {
-		start := strings.Index(result, "<@!")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], ">")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + result[start+end+1:]
-	}
-	// Also remove <@xxx> patterns
-	for {
-		start := strings.Index(result, "<@")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], ">")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + result[start+end+1:]
-	}
-	return strings.TrimSpace(result)
+	return strings.TrimSpace(qqMentionRegex.ReplaceAllString(content, ""))
 }
 
 // parseTimestamp 解析 QQ 消息时间戳

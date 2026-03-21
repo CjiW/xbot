@@ -245,10 +245,14 @@ func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam
 		properties := make(map[string]any)
 		required := make([]string, 0)
 		for _, p := range tool.Parameters() {
-			properties[p.Name] = map[string]any{
+			prop := map[string]any{
 				"type":        p.Type,
 				"description": p.Description,
 			}
+			if p.Items != nil {
+				prop["items"] = p.Items
+			}
+			properties[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}
@@ -311,6 +315,7 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// 显式禁用 thinking
 		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
 	default:
+		logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode, attempting JSON parse")
 		// 尝试解析为 JSON 对象（高级用法）
 		// 支持两种格式：
 		// 1. 完整 thinking 参数: {"type": "enabled", "clear_thinking": false}
@@ -327,7 +332,14 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 						opts = append(opts, option.WithJSONSet(key, value))
 					}
 				}
+			} else {
+				logrus.WithFields(logrus.Fields{
+					"thinking_mode": thinkingMode,
+					"error":         err.Error(),
+				}).Warn("[LLM] Failed to parse thinking mode as JSON, ignoring")
 			}
+		} else {
+			logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode is not valid JSON, ignoring")
 		}
 	}
 

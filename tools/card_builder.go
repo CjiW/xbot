@@ -57,6 +57,9 @@ type CardElement struct {
 }
 
 // CreateSession creates a new card building session.
+// Note: expired session cleanup is triggered lazily when CreateSession is called,
+// not on a background timer. This is acceptable because card sessions are short-lived
+// (users build cards interactively) and stale sessions consume minimal memory.
 func (b *CardBuilder) CreateSession(channel, chatID string, sendFunc func(string, string, string) error) *CardSession {
 	id := fmt.Sprintf("card_%d", b.counter.Add(1))
 	s := &CardSession{

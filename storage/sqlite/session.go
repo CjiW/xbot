@@ -8,6 +8,7 @@ import (
 
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/storage/internal"
 )
 
 // SessionService handles session message operations
@@ -46,7 +47,7 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 		tenantID, msg.Role, msg.Content,
 		msg.ToolCallID, msg.ToolName, msg.ToolArguments,
 		toolCallsJSON, msg.Detail,
-		ts.Format("2006-01-02 15:04:05"),
+		ts.Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("insert session message: %w", err)
@@ -152,7 +153,7 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 			}
 		}
 
-		msg.Timestamp = parseTimestamp(createdAt)
+		msg.Timestamp = internal.ParseTimestamp(createdAt)
 
 		messages = append(messages, msg)
 	}
@@ -162,20 +163,3 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 	return messages, nil
 }
 
-// parseTimestamp parses a timestamp string from SQLite. New rows are stored in
-// local wall-clock format "2006-01-02 15:04:05". Legacy "...Z" timestamps from
-// older SQLite driver versions are treated as local wall-clock values to avoid
-// timezone shifts.
-func parseTimestamp(s string) time.Time {
-	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05Z", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.Local()
-	}
-
-	return time.Time{}
-}

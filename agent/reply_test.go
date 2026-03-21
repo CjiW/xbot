@@ -25,8 +25,11 @@ func TestExtractFinalReply_NormalLongContent(t *testing.T) {
 	}
 
 	got := ExtractFinalReply(input)
-	if got != p3 {
-		t.Errorf("expected last paragraph, got %q", got)
+	// New strategy: takes last 2-3 paragraphs (up to 2000 chars).
+	// With 3 paragraphs totaling ~1012 chars (< 2000), all 3 are returned.
+	want := strings.TrimSpace(input)
+	if got != want {
+		t.Errorf("expected all 3 paragraphs (within 2000 char limit), got %q", got)
 	}
 }
 
@@ -41,10 +44,9 @@ func TestExtractFinalReply_LastParagraphTooShort(t *testing.T) {
 	}
 
 	got := ExtractFinalReply(input)
-	// p3 is < 50 chars and there are > 2 paragraphs, so it merges p2 + p3
-	// paragraphs[-2] retains the trailing space from Repeat, last = trimmed p3
-	// The final TrimSpace only trims outer whitespace, not the space within
-	want := strings.Repeat("Second paragraph detailed explanation. ", 8) + "\n\nOK."
+	// New strategy: takes last 2-3 paragraphs (up to 2000 chars).
+	// All 3 paragraphs fit within 2000 chars, so all are returned.
+	want := strings.TrimSpace(input)
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}

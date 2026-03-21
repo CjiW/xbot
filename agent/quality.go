@@ -11,6 +11,8 @@ import (
 )
 
 // KeyInfoFingerprint 对话关键信息指纹，用于压缩质量校验。
+// 当前在 compressMessagesWithFingerprint 中引导 LLM 保留关键信息。
+// 未来可用于压缩后自动验证（对比压缩前后的指纹一致性）。
 type KeyInfoFingerprint struct {
 	FilePaths   []string
 	Identifiers []string

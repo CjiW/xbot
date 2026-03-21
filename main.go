@@ -65,9 +65,10 @@ func main() {
 	var oauthServer *oauth.Server
 	var oauthManager *oauth.Manager
 	var feishuProvider *providers.FeishuProvider
+	var sharedDB *sqlite.DB
 	if cfg.OAuth.Enable {
 		// Use the shared database for OAuth token storage
-		sharedDB, err := sqlite.Open(dbPath)
+		sharedDB, err = sqlite.Open(dbPath)
 		if err != nil {
 			log.WithError(err).Fatal("Failed to open shared database for OAuth")
 		}
@@ -406,6 +407,13 @@ func main() {
 		oauthManager.Close()
 	}
 
+	// 关闭 OAuth 共享数据库连接
+	if sharedDB != nil {
+		if err := sharedDB.Close(); err != nil {
+			log.WithError(err).Warn("OAuth shared DB close error")
+		}
+	}
+
 	disp.Stop()
 	log.Info("xbot stopped")
 }
@@ -456,8 +464,19 @@ func getChannels(disp *channel.Dispatcher) map[string]channel.Channel {
 
 // sendStartupNotify 发送启动上线通知
 func sendStartupNotify(disp *channel.Dispatcher, cfg *config.Config) {
-	// 等待渠道 WebSocket 连接建立
-	time.Sleep(3 * time.Second)
+	// 等待渠道 WebSocket 连接建立（轮询，最多 10 秒）
+	const maxWait = 10 * time.Second
+	const pollInterval = 500 * time.Millisecond
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		channels := disp.EnabledChannels()
+		if len(channels) > 0 {
+			// Give channels a moment to fully initialize
+			time.Sleep(1 * time.Second)
+			break
+		}
+		time.Sleep(pollInterval)
+	}
 
 	content := fmt.Sprintf("🟢 **xbot 已上线**\n- 版本：%s\n- 时间：%s\n- 模型：%s\n- 沙箱：%s\n- 记忆：%s",
 		version.Info(),

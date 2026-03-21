@@ -18,7 +18,7 @@ type Scheduler struct {
 	cronSvc    *sqlite.CronService
 	injectFunc InjectFunc
 	stopCh     chan struct{}
-	once       sync.Once
+	once       sync.Once // 共用 once 保证 Start 和 StartDelayed 互斥：只有第一个调用者会启动调度器
 	running    bool
 	mu         sync.Mutex
 }
@@ -282,6 +282,12 @@ func CalculateNextRun(job *sqlite.CronJob, now time.Time) (time.Time, error) {
 }
 
 // ===== Simple cron expression parser (5 fields: min hour dom mon dow) =====
+
+// ValidateCronExpr pre-validates a cron expression format
+func ValidateCronExpr(expr string) error {
+	_, err := nextCronTime(expr, time.Now())
+	return err
+}
 
 // nextCronTime calculates the next trigger time for a cron expression after now
 func nextCronTime(expr string, now time.Time) (time.Time, error) {

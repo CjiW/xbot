@@ -68,9 +68,18 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		return nil, fmt.Errorf("command blocked by safety check: %s", reason)
 	}
 
+	const maxShellTimeout = 600 * time.Second
+
 	timeout := defaultShellTimeout
 	if params.Timeout > 0 {
 		timeout = time.Duration(params.Timeout) * time.Second
+		if timeout > maxShellTimeout {
+			log.WithFields(log.Fields{
+				"requested": timeout,
+				"max":       maxShellTimeout,
+			}).Warn("Shell timeout exceeds maximum, capping")
+			timeout = maxShellTimeout
+		}
 	}
 
 	// 使用传入的 context 作为父 context，支持外部取消（如用户 stop）

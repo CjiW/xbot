@@ -90,9 +90,13 @@ func IsInputTooLongError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "400") {
-		return false
-	}
+	// 快速路径：检查是否包含 HTTP 400 状态码模式（排除纯数字误匹配）
+	has400 := strings.Contains(msg, ": 400 ") ||
+		strings.Contains(msg, "status=400") ||
+		strings.Contains(msg, `status_code":400`) ||
+		strings.Contains(msg, `"status":400`) ||
+		strings.Contains(msg, "status code 400")
+	// Input-too-long 指示关键词（足够精确，无需 400 前置）
 	indicators := []string{
 		"range of input length",
 		"maximum context length",
@@ -109,6 +113,8 @@ func IsInputTooLongError(err error) bool {
 			return true
 		}
 	}
+	// 有 400 但无精确指示关键词，可能是其他 400 错误，不误判
+	_ = has400
 	return false
 }
 

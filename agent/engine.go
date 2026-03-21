@@ -379,8 +379,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// 工具执行相关类型（提取到循环外，避免每轮重新定义）
 	type toolCallEntry struct {
-		index int
-		tc    llm.ToolCall
+		iteration int         // Agent 循环迭代号（用于调试追踪）
+		index     int         // 本次 LLM 响应中 tool call 的序号
+		tc        llm.ToolCall
 	}
 	type toolExecResult struct {
 		content    string
@@ -593,8 +594,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				argPreview = string(r[:200]) + "..."
 			}
 			log.Ctx(ctx).WithFields(log.Fields{
-				"tool": tc.Name,
-				"id":   tc.ID,
+				"tool":      tc.Name,
+				"id":        tc.ID,
+				"iteration": entry.iteration,
+				"call_idx":  entry.index,
 			}).Debugf("Tool call: %s(%s)", tc.Name, argPreview)
 
 			// 工具执行加超时（SubAgent 工具不加超时）
@@ -671,7 +674,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.EnableReadWriteSplit {
 			var readOps, writeOps []toolCallEntry
 			for idx, tc := range response.ToolCalls {
-				entry := toolCallEntry{index: idx, tc: tc}
+				entry := toolCallEntry{iteration: i, index: idx, tc: tc}
 				if readOnlyTools[tc.Name] {
 					readOps = append(readOps, entry)
 				} else {
@@ -709,7 +712,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		} else {
 			// 全部串行执行
 			for idx, tc := range response.ToolCalls {
-				execOne(toolCallEntry{index: idx, tc: tc})
+				execOne(toolCallEntry{iteration: i, index: idx, tc: tc})
 				if autoNotify {
 					notifyProgress("")
 				}

@@ -13,6 +13,7 @@ func parseEnvFileLines(content string) map[string]string {
 		}
 		// Strip "export " prefix(es) if present (file stores "export KEY=VALUE")
 		// Handle corrupted lines with stacked prefixes like "export export PATH=..."
+		// 循环剥离所有 "export " 前缀（处理 "export export KEY=VAL" 等异常情况）
 		for strings.HasPrefix(line, "export ") {
 			line = strings.TrimPrefix(line, "export ")
 		}

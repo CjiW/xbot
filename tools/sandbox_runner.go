@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -410,6 +411,23 @@ func userImageName(userID string) string {
 	return fmt.Sprintf("xbot-%s:latest", userID)
 }
 
+// validUserIDRe validates userID format for Docker container/image naming.
+// Only allows lowercase alphanumeric, underscores, hyphens, and dots —
+// the safe subset of Docker's [a-zA-Z0-9][a-zA-Z0-9_.-]+ naming rules.
+var validUserIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
+
+// validateUserID checks that userID contains only characters safe for Docker
+// container and image names. Returns an error if the userID is invalid.
+func validateUserID(userID string) error {
+	if userID == "" {
+		return fmt.Errorf("userID must not be empty")
+	}
+	if !validUserIDRe.MatchString(userID) {
+		return fmt.Errorf("invalid userID %q: must match ^[a-z0-9][a-z0-9_.-]{0,127}$ (Docker-safe characters only)", userID)
+	}
+	return nil
+}
+
 func (s *dockerSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
 		return "", nil, fmt.Errorf("command execution is disabled on Windows")
@@ -468,6 +486,11 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 
 	if s.containers == nil {
 		s.containers = make(map[string]*dockerContainer)
+	}
+
+	// Validate userID to prevent command injection via Docker container/image names
+	if err := validateUserID(userID); err != nil {
+		return "", "", err
 	}
 
 	if c, ok := s.containers[userID]; ok && c.started {

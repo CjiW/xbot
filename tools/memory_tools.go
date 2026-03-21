@@ -204,6 +204,12 @@ func (t *RethinkTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 		return NewResult("Invalid block name. Must be: persona, human, or working_context"), nil
 	}
 
+	// Enforce max content length (100KB) to prevent excessive memory usage
+	const maxRethinkContentLen = 100 * 1024
+	if len(args.NewContent) > maxRethinkContentLen {
+		return NewResult(fmt.Sprintf("new_content exceeds maximum length of %d bytes (got %d bytes)", maxRethinkContentLen, len(args.NewContent))), nil
+	}
+
 	coreSvc := ctx.CoreMemory
 	if coreSvc == nil {
 		return NewResult("Core memory is not available (memory provider is not letta)."), nil

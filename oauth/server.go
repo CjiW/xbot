@@ -24,6 +24,7 @@ type Server struct {
 // Config contains the OAuth server configuration.
 type Config struct {
 	Enable  bool   // Whether to enable the OAuth server
+	Host    string // Host to listen on (default 127.0.0.1, safer than 0.0.0.0)
 	Port    int    // Port to listen on (default 8081, can reuse pprof port)
 	BaseURL string // Public base URL for callbacks (e.g., https://your-domain.com)
 }
@@ -32,6 +33,9 @@ type Config struct {
 func NewServer(cfg Config, mgr *Manager) *Server {
 	if cfg.Port == 0 {
 		cfg.Port = 8081
+	}
+	if cfg.Host == "" {
+		cfg.Host = "127.0.0.1" // 默认绑定 localhost，避免暴露到所有网络接口
 	}
 	return &Server{
 		config: cfg,
@@ -58,7 +62,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/oauth/health", s.handleHealth)
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf("0.0.0.0:%d", s.config.Port),
+		Addr:         fmt.Sprintf("%s:%d", s.config.Host, s.config.Port),
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -71,6 +75,7 @@ func (s *Server) Start() error {
 	}()
 
 	log.WithFields(log.Fields{
+		"host":    s.config.Host,
 		"port":    s.config.Port,
 		"baseURL": s.config.BaseURL,
 	}).Info("OAuth server started")
@@ -163,8 +168,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "ok",
-		"providers": s.mgr.ListProviders(),
+		"status": "ok",
 	})
 }
 

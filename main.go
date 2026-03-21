@@ -90,6 +90,7 @@ func main() {
 		// 创建 OAuth HTTP 服务器（SendFunc 稍后设置，需要在 Dispatcher 创建后）
 		oauthServer = oauth.NewServer(oauth.Config{
 			Enable:  true,
+			Host:    cfg.OAuth.Host,
 			Port:    cfg.OAuth.Port,
 			BaseURL: cfg.OAuth.BaseURL,
 		}, oauthManager)

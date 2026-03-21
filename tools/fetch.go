@@ -185,56 +185,82 @@ func validateURL(rawURL string) error {
 		return fmt.Errorf("private/internal IP addresses are not allowed: %s", host)
 	}
 
+	// S-02: DNS 解析验证 — 防止域名解析到内网 IP（DNS rebinding attack）
+	ips, err := net.LookupIP(host)
+	if err == nil {
+		for _, ip := range ips {
+			if isPrivateIPRaw(ip) {
+				return fmt.Errorf("hostname %s resolves to private/internal IP %s (DNS rebinding protection)", host, ip)
+			}
+		}
+	}
+
 	return nil
 }
 
-// isPrivateIP 检查是否为内网 IP
+// isPrivateIP 检查主机名是否为内网 IP（仅对字面 IP 地址检查，不含 DNS 解析）
+// S-03: 重构支持 IPv6 私有地址检测，内部委托 isPrivateIPRaw
 func isPrivateIP(host string) bool {
-	// 先尝试解析为 IP
 	ip := net.ParseIP(host)
 	if ip == nil {
-		// 如果不是 IP，可能是域名，暂时允许（可通过 DNS 解析进一步检查）
+		// 不是字面 IP 地址（可能是域名），DNS 解析检查在 validateURL 中单独处理
 		return false
 	}
+	return isPrivateIPRaw(ip)
+}
 
-	// 转换为 IPv4 4字节表示
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		// 不是 IPv4 地址，可能是 IPv6
-		// 对于 IPv6，暂不阻止
-		return false
+// isPrivateIPRaw 检查 IP 地址（IPv4 或 IPv6）是否为私有/内网地址
+// S-03: 新增 IPv6 私有地址检查（loopback、ULA、link-local、IPv4-mapped）
+func isPrivateIPRaw(ip net.IP) bool {
+	// IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+	if ip4 := ip.To4(); ip4 != nil {
+		return isPrivateIPv4(ip4)
 	}
 
+	// 原生 IPv6 检查
+	if ip.IsLoopback() { // ::1
+		return true
+	}
+
+	// fc00::/7 — Unique Local Addresses (ULA/私有)
+	if len(ip) >= 1 && (ip[0]&0xfe) == 0xfc {
+		return true
+	}
+
+	// fe80::/10 — Link-Local Addresses
+	if len(ip) >= 2 && ip[0] == 0xfe && (ip[1]&0xc0) == 0x80 {
+		return true
+	}
+
+	return false
+}
+
+// isPrivateIPv4 检查 IPv4 地址是否为私有/内网地址
+func isPrivateIPv4(ipv4 net.IP) bool {
 	// 127.0.0.0/8 (loopback)
 	if ipv4.IsLoopback() {
 		return true
 	}
-
 	// 10.0.0.0/8
 	if ipv4[0] == 10 {
 		return true
 	}
-
 	// 172.16.0.0/12
 	if ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31 {
 		return true
 	}
-
 	// 192.168.0.0/16
 	if ipv4[0] == 192 && ipv4[1] == 168 {
 		return true
 	}
-
 	// 169.254.0.0/16 (link-local)
 	if ipv4[0] == 169 && ipv4[1] == 254 {
 		return true
 	}
-
 	// 0.0.0.0/8
 	if ipv4[0] == 0 {
 		return true
 	}
-
 	return false
 }
 

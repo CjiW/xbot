@@ -16,6 +16,7 @@ func init() {
 // OAuthConfig OAuth 配置
 type OAuthConfig struct {
 	Enable  bool   // 是否启用 OAuth 功能
+	Host    string // OAuth 服务监听地址（默认 127.0.0.1，仅本地访问，避免暴露到所有网络接口）
 	Port    int    // OAuth 服务监听端口（默认 8081）
 	BaseURL string // OAuth 回调基础 URL (e.g., https://your-domain.com)
 }
@@ -240,6 +241,7 @@ func Load() *Config {
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
+			Host:    getEnvOrDefault("OAUTH_HOST", "127.0.0.1"), // 默认绑定 localhost，防止暴露到所有网络接口
 			Port:    getEnvIntOrDefault("OAUTH_PORT", 8081),
 			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
 		},

@@ -1077,6 +1077,19 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 	// 在渠道收到卡片交互的第一时间生成 requestID
 	requestID := log.NewRequestID()
 
+	// S-01: 权限检查 — 防止 AllowFrom 白名单外的用户通过卡片回调绕过权限向消息总线发送消息
+	// 对比 onMessage 函数有 isAllowed(senderID) 检查，此处需同步添加
+	{
+		var senderID string
+		if event.Event != nil && event.Event.Operator != nil {
+			senderID = event.Event.Operator.OpenID
+		}
+		if !f.isAllowed(senderID) {
+			log.WithField("sender_id", senderID).Warn("Card action denied: sender not in AllowFrom whitelist")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
+	}
+
 	if event.Event == nil || event.Event.Action == nil {
 		log.Warn("Card action event is missing data")
 		return &callback.CardActionTriggerResponse{}, nil

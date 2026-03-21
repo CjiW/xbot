@@ -15,6 +15,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const maxMCPConnections = 20
+
 // SessionMCPManager 管理单个会话的 MCP 连接
 type SessionMCPManager struct {
 	mu                sync.RWMutex
@@ -246,6 +248,11 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 
 // connectServer 连接单个 MCP Server
 func (sm *SessionMCPManager) connectServer(ctx context.Context, name string, cfg MCPServerConfig) error {
+	// 限制最大连接数，防止恶意或异常情况创建大量连接
+	if len(sm.connections) >= maxMCPConnections {
+		return fmt.Errorf("MCP connection limit reached (%d), cannot connect server %q", maxMCPConnections, name)
+	}
+
 	var (
 		session *mcp.ClientSession
 		err     error

@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,9 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	if args.Name == "" {
 		return nil, fmt.Errorf("name is required for add_mcp")
 	}
+	if err := sanitizeMCPName(args.Name); err != nil {
+		return nil, err
+	}
 	if args.MCPConfig == "" {
 		return nil, fmt.Errorf("mcp_config is required for add_mcp")
 	}
@@ -135,6 +139,9 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {
 	if args.Name == "" {
 		return nil, fmt.Errorf("name is required for remove_mcp")
+	}
+	if err := sanitizeMCPName(args.Name); err != nil {
+		return nil, err
 	}
 
 	// Load existing config
@@ -305,5 +312,58 @@ func (t *ManageTools) saveMCPConfig(configPath string, config *MCPConfig) error 
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0o644)
+	// Atomic write: write to temp file first, then rename to final path.
+	// On the same filesystem, os.Rename is an atomic operation,
+	// preventing concurrent writes from corrupting the config file.
+	dir := filepath.Dir(configPath)
+	tmpFile, err := os.CreateTemp(dir, ".mcp-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, configPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
+}
+
+// sanitizeMCPName cleans MCP server name to prevent path traversal and injection.
+// Rejects names containing path separators, URL-encoded separators, or "..".
+func sanitizeMCPName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("name cannot contain path separators ('/' or '\\')")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("name cannot contain '..'")
+	}
+	// Also reject URL-encoded path separators
+	decoded, err := url.PathUnescape(name)
+	if err != nil {
+		return fmt.Errorf("name contains invalid URL encoding: %w", err)
+	}
+	if strings.ContainsAny(decoded, "/\\") || strings.Contains(decoded, "..") {
+		return fmt.Errorf("name cannot contain path separators or '..' (including URL-encoded)")
+	}
+	return nil
 }

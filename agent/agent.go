@@ -234,8 +234,8 @@ type Agent struct {
 
 	// interactiveSubAgents stores interactive SubAgent sessions
 	// key: "channel:chatID/roleName" -> *interactiveAgent
+	// sync.Map provides atomic Load/Store/Delete/LoadOrStore, no additional mutex needed
 	interactiveSubAgents sync.Map
-	interactiveMu        sync.Mutex // protects spawn race (map check/store) in SpawnInteractiveSession; NOT held during Run()
 
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
@@ -427,7 +427,7 @@ func New(cfg Config) *Agent {
 	registry := tools.DefaultRegistry()
 
 	// 创建聊天历史存储
-	chatHistory := tools.NewChatHistoryStore(20) // 每个群组保留最近 20 条
+	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
 	registry.Register(tools.NewChatHistoryTool(chatHistory))
 
 	// MCP 配置路径：优先使用 .xbot/mcp.json，向后兼容 mcp.json
@@ -466,6 +466,10 @@ func New(cfg Config) *Agent {
 		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
 	}
 	multiSession.SetMCPConfigPath(mcpConfigPath)
+
+	// 设置会话被清理时的回调，同步清理 Registry 中的 sessionActivated/sessionRound（C-09）
+	registryRef := registry // capture for closure
+	multiSession.SetOnSessionEvict(func(sessionKey string) { registryRef.DeactivateSession(sessionKey) })
 
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
@@ -576,7 +580,7 @@ func New(cfg Config) *Agent {
 		MaxResultBytes:  10240,
 		CleanupAgeDays:  7,
 	})
-	agent.offloadStore.CleanStale()
+	go agent.offloadStore.CleanStale()
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if agent.offloadStore != nil {
@@ -1183,6 +1187,15 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, nil
 	}
 
+	// 如果最终内容为空且不是 Optional reply 策略，向用户发送提示
+	if finalContent == "" && !waitingUser && replyPolicy != bus.ReplyPolicyOptional {
+		log.Ctx(ctx).Warn("Run produced empty content without waiting for user input")
+		if err := a.sendMessage(msg.Channel, msg.ChatID, "⚠️ 处理完成，但未生成回复内容。请尝试重新描述您的需求。"); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to send empty content notification")
+		}
+		return nil, nil
+	}
+
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
 		userMsg := llm.NewUserMessage(msg.Content)
 		if !msg.Time.IsZero() {
@@ -1397,7 +1410,7 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 
 	defer func() {
 		a.consolidatingMu.Lock()
-		a.consolidating[tenantKey] = false
+		delete(a.consolidating, tenantKey)
 		a.consolidatingMu.Unlock()
 	}()
 
@@ -1495,7 +1508,7 @@ func (a *Agent) clearConsolidationState(tenantKey string) {
 
 	if a.consolidating[tenantKey] {
 		log.WithField("tenant", tenantKey).Info("Clearing consolidation state for /new")
-		a.consolidating[tenantKey] = false
+		delete(a.consolidating, tenantKey)
 	}
 }
 

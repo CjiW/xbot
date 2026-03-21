@@ -560,7 +560,13 @@ func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtra
 	}
 
 	// Wire Letta memory fields if the session uses LettaMemory
-	if ts, err := a.multiSession.GetOrCreateSession(channel, chatID); err == nil {
+	ts, err := a.multiSession.GetOrCreateSession(channel, chatID)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"channel": channel,
+			"chat_id": chatID,
+		}).Warn("buildToolContextExtras: GetOrCreateSession failed, Letta memory fields will be empty")
+	} else {
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
 			extras.TenantID = lm.TenantID()
 			extras.CoreMemory = lm.CoreService()

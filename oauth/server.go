@@ -128,6 +128,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	state := query.Get("state")
 	code := query.Get("code")
+
+	if len(state) > 256 {
+		s.renderError(w, "Invalid callback", "state parameter too long")
+		return
+	}
+	if len(code) > 4096 {
+		s.renderError(w, "Invalid callback", "code parameter too long")
+		return
+	}
 	errorMsg := query.Get("error")
 
 	log.WithFields(log.Fields{

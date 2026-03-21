@@ -74,7 +74,8 @@ func (m *phase2Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	// 步骤2：带 fingerprint 引导的 LLM 压缩
 	result, err := compressMessagesWithFingerprint(ctx, messages, fp, client, model)
 	if err != nil {
-		return nil, err
+		log.Ctx(ctx).WithError(err).Warn("Phase 1.5 compress: LLM compression failed, falling back to Phase 1 truncation")
+		return compressMessages(ctx, messages, client, model)
 	}
 
 	// 步骤3：质量校验

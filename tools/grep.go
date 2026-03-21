@@ -74,6 +74,10 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("pattern is required")
 	}
 
+	if params.ContextLines < 0 {
+		params.ContextLines = 0
+	}
+
 	// 沙箱模式：在容器内执行 grep 命令
 	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
 		return t.executeInSandbox(ctx, params.Pattern, params.Path, params.Include, params.IgnoreCase, params.ContextLines)
@@ -513,9 +517,6 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 		includePatterns = expandBracePattern(include)
 	}
 
-	if contextLines < 0 {
-		contextLines = 0
-	}
 
 	// Walk the directory and search files
 	var matches []grepMatch

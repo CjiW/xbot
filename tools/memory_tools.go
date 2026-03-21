@@ -145,7 +145,7 @@ func (t *CoreMemoryReplaceTool) Execute(ctx *ToolContext, input string) (*ToolRe
 	}
 
 	if !strings.Contains(current, args.OldText) {
-		return NewResult(fmt.Sprintf("old_text not found in %s block. Current content:\n%s", args.Block, current)), nil
+		return NewErrorResult(fmt.Sprintf("old_text not found in %s block. No changes made.", args.Block)), nil
 	}
 
 	newContent := strings.Replace(current, args.OldText, args.NewText, 1)

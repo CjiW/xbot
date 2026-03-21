@@ -131,6 +131,7 @@ func (drf *dailyRotateFile) rotateLocked() error {
 
 // 全局日志文件写入器（用于 Close）
 var globalRotateFile *dailyRotateFile
+var globalRotateFileMu sync.Mutex // 保护 globalRotateFile 的并发写入（C-11）
 
 // Setup 设置日志系统（文件输出 + 按日轮转 + 自动清理）
 func Setup(cfg SetupConfig) error {
@@ -161,7 +162,9 @@ func Setup(cfg SetupConfig) error {
 
 		// 同时输出到文件和标准输出（方便 docker logs 查看）
 		log.SetOutput(io.MultiWriter(os.Stdout, drf))
+		globalRotateFileMu.Lock()
 		globalRotateFile = drf
+		globalRotateFileMu.Unlock()
 
 		// 启动后台清理旧日志
 		maxAge := cfg.MaxAge
@@ -176,8 +179,12 @@ func Setup(cfg SetupConfig) error {
 
 // Close 关闭日志系统（刷新缓冲区，关闭文件）
 func Close() {
-	if globalRotateFile != nil {
-		_ = globalRotateFile.Close()
+	globalRotateFileMu.Lock()
+	drf := globalRotateFile
+	globalRotateFile = nil
+	globalRotateFileMu.Unlock()
+	if drf != nil {
+		_ = drf.Close()
 	}
 }
 

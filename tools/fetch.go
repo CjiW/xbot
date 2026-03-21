@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,7 +26,10 @@ type FetchTool struct {
 // NewFetchTool 创建 FetchTool
 func NewFetchTool() *FetchTool {
 	// 创建 tokenizer（复用）
-	enc, _ := tokenizer.Get(tokenizer.Cl100kBase)
+	enc, err := tokenizer.Get(tokenizer.Cl100kBase)
+	if err != nil {
+		slog.Warn("Failed to initialize tokenizer, token counting will use rough estimation", "error", err)
+	}
 
 	return &FetchTool{
 		httpClient: &http.Client{

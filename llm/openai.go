@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	logrus "xbot/logger"
@@ -16,8 +17,9 @@ import (
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
 	client       *openai.Client
-	models       []string // 可用模型列表
-	defaultModel string   // 默认模型
+	mu           sync.RWMutex // 保护 models 和 defaultModel 的并发读写（C-12）
+	models       []string     // 可用模型列表
+	defaultModel string       // 默认模型
 }
 
 // OpenAIConfig OpenAI 配置
@@ -47,7 +49,9 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		logrus.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
 		// API 获取失败，使用默认模型作为回退
 		if cfg.DefaultModel != "" {
+			o.mu.Lock()
 			o.models = []string{cfg.DefaultModel}
+			o.mu.Unlock()
 			logrus.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
 		}
 	}
@@ -57,6 +61,8 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 
 // ListModels 获取可用模型列表
 func (o *OpenAILLM) ListModels() []string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	result := make([]string, len(o.models))
 	copy(result, o.models)
 	return result
@@ -64,6 +70,8 @@ func (o *OpenAILLM) ListModels() []string {
 
 // GetDefaultModel 获取默认模型
 func (o *OpenAILLM) GetDefaultModel() string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	if o.defaultModel != "" {
 		return o.defaultModel
 	}
@@ -95,16 +103,18 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	}
 
 	// 更新模型列表
+	o.mu.Lock()
 	o.models = models
-
-	// 如果没有设置默认模型，使用第一个模型
 	if o.defaultModel == "" && len(o.models) > 0 {
 		o.defaultModel = o.models[0]
 	}
+	modelCount := len(o.models)
+	defaultModel := o.defaultModel
+	o.mu.Unlock()
 
 	logrus.WithFields(logrus.Fields{
-		"model_count":   len(o.models),
-		"default_model": o.defaultModel,
+		"model_count":   modelCount,
+		"default_model": defaultModel,
 	}).Info("[LLM] Models loaded from OpenAI API")
 
 	return nil

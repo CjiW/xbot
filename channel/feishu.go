@@ -69,7 +69,7 @@ type FeishuChannel struct {
 	running   atomic.Bool
 	mu        sync.Mutex
 	botOpenID string
-	botName   string // 机器人名称，用于引用消息中标识自己
+	botName   atomic.Value // 机器人名称，用于引用消息中标识自己（存储 string）
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}
@@ -199,11 +199,10 @@ func (f *FeishuChannel) getUserName(openID string) string {
 
 	// Bot open_id 通常以 "cli_" 开头，返回机器人名称
 	if strings.HasPrefix(openID, "cli_") {
-		f.mu.Lock()
-		botName := f.botName
-		f.mu.Unlock()
-		if botName != "" {
-			return botName
+		if v := f.botName.Load(); v != nil {
+			if name := v.(string); name != "" {
+				return name
+			}
 		}
 		return "Bot"
 	}
@@ -980,8 +979,8 @@ func (f *FeishuChannel) refreshBotOpenID(ctx context.Context) error {
 
 	f.mu.Lock()
 	f.botOpenID = strings.TrimSpace(resp.Bot.OpenID)
-	f.botName = strings.TrimSpace(resp.Bot.Name)
 	f.mu.Unlock()
+	f.botName.Store(strings.TrimSpace(resp.Bot.Name))
 
 	log.WithFields(log.Fields{
 		"bot_open_id": resp.Bot.OpenID,
@@ -1854,6 +1853,12 @@ func (f *FeishuChannel) isDuplicate(messageID string) bool {
 		oldest := f.processedOrder[0]
 		f.processedOrder = f.processedOrder[1:]
 		delete(f.processedIDs, oldest)
+	}
+	// 防止底层数组无限增长：当容量超过阈值时收缩
+	if cap(f.processedOrder) > f.maxProcessed*10 {
+		trimmed := make([]string, len(f.processedOrder))
+		copy(trimmed, f.processedOrder)
+		f.processedOrder = trimmed
 	}
 	return false
 }

@@ -311,15 +311,26 @@ func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {
 		return ""
 	}
-	b, err := json.Marshal(result)
-	if err != nil {
-		return strings.TrimSpace(result.Summary)
+	// 将 Summary + Detail + Tips 组合为纯文本，避免 JSON 序列化转义换行符。
+	// 旧方案用 json.Marshal(result) 导致 Detail 中的 diff 换行被编码为 \n，
+	// LLM 看到的是不可读的文本块而非格式化的 diff。
+	var sb strings.Builder
+	if result.Summary != "" {
+		sb.WriteString(result.Summary)
 	}
-	content := string(b)
+	if result.Detail != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(result.Detail)
+	}
 	if result.Tips != "" {
-		content += "\n\n[Tips] " + result.Tips
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(result.Tips)
 	}
-	return content
+	return sb.String()
 }
 
 // Config Agent 配置

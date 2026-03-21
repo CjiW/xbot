@@ -219,9 +219,19 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 // thinTail 精简尾部旧工具组，保留最近 keepGroups 组完整内容。
 // 一个"工具组"= 一条 assistant(tool_calls) + 紧随其后的所有 tool result 消息。
 // 对更早的组：截断 Content/Arguments，strip think blocks，保留消息结构不变（API 兼容）。
-// activeFiles 中的活跃文件不会被截断（保护当前工作文件）。
+// thinTail 精简尾部旧工具组，保留最近 keepGroups 组完整内容。
+// 一个"工具组"= 一条 assistant(tool_calls) + 紧随其后的所有 tool result 消息。
+// 对更早的组：截断 Content/Arguments，strip think blocks，保留消息结构不变（API 兼容）。
+//
+// BUG FIX: activeFiles 保护从"完全跳过截断"改为"轻量截断"。
+// 旧逻辑：涉及活跃文件的组完全不截断 → 编程会话中几乎所有组都涉及活跃文件 → thinTail 完全无效。
+// 新逻辑：active 组做轻量截断（保留更多上下文），non-active 组做强截断。
 func thinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []ActiveFile) []llm.ChatMessage {
 	const (
+		// active 组：轻量截断，保留更多上下文（因为涉及当前工作文件）
+		activeContentMax = 800
+		activeArgsMax    = 300
+		// non-active 组：强截断
 		thinContentMax = 300
 		thinArgsMax    = 200
 	)
@@ -259,7 +269,7 @@ func thinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []ActiveFile) 
 
 	for g := range thinCount {
 		grp := groups[g]
-		// 跳过涉及活跃文件的组
+		// 检查是否涉及活跃文件
 		isActive := false
 		for j := grp.start; j <= grp.end && !isActive; j++ {
 			msg := tail[j]
@@ -275,26 +285,30 @@ func thinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []ActiveFile) 
 				}
 			}
 		}
+		// 根据是否 active 选择截断强度
+		contentMax := thinContentMax
+		argsMax := thinArgsMax
 		if isActive {
-			continue
+			contentMax = activeContentMax
+			argsMax = activeArgsMax
 		}
 		for j := grp.start; j <= grp.end; j++ {
 			msg := result[j] // copy struct
 			switch msg.Role {
 			case "assistant":
 				msg.Content = llm.StripThinkBlocks(msg.Content)
-				msg.Content = truncateRunes(msg.Content, thinContentMax)
+				msg.Content = truncateRunes(msg.Content, contentMax)
 				if len(msg.ToolCalls) > 0 {
 					tcs := make([]llm.ToolCall, len(msg.ToolCalls))
 					copy(tcs, msg.ToolCalls)
 					for k := range tcs {
-						tcs[k].Arguments = truncateRunes(tcs[k].Arguments, thinArgsMax)
+						tcs[k].Arguments = truncateRunes(tcs[k].Arguments, argsMax)
 					}
 					msg.ToolCalls = tcs
 				}
 			case "tool":
-				msg.Content = truncateRunes(msg.Content, thinContentMax)
-				msg.ToolArguments = truncateRunes(msg.ToolArguments, thinArgsMax)
+				msg.Content = truncateRunes(msg.Content, contentMax)
+				msg.ToolArguments = truncateRunes(msg.ToolArguments, argsMax)
 			}
 			result[j] = msg
 		}
@@ -306,9 +320,14 @@ func thinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []ActiveFile) 
 // aggressiveThinTail 激进版 thinTail，用于 normal thinTail 压缩不足时的回退。
 // 与 thinTail 相同逻辑，但截断长度更短（100 vs 300），且对 assistant(tool_calls)
 // 消息也完全清空 Content（只保留 tool_calls 结构）。
-// activeFiles 中的活跃文件不会被截断（保护当前工作文件）。
+//
+// BUG FIX: 同 thinTail，activeFiles 从"完全跳过"改为"轻量截断"。
 func aggressiveThinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []ActiveFile) []llm.ChatMessage {
 	const (
+		// active 组：轻量截断
+		activeContentMax = 200
+		activeArgsMax    = 120
+		// non-active 组：激进截断
 		thinContentMax = 100
 		thinArgsMax    = 80
 	)
@@ -360,25 +379,33 @@ func aggressiveThinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []Ac
 				}
 			}
 		}
+		// 根据是否 active 选择截断强度
+		contentMax := thinContentMax
+		argsMax := thinArgsMax
 		if isActive {
-			continue
+			contentMax = activeContentMax
+			argsMax = activeArgsMax
 		}
 		for j := grp.start; j <= grp.end; j++ {
 			msg := result[j]
 			switch msg.Role {
 			case "assistant":
 				msg.Content = ""
+				if isActive {
+					// active 组保留部分 content（而非完全清空）
+					msg.Content = truncateRunes(llm.StripThinkBlocks(msg.Content), contentMax)
+				}
 				if len(msg.ToolCalls) > 0 {
 					tcs := make([]llm.ToolCall, len(msg.ToolCalls))
 					copy(tcs, msg.ToolCalls)
 					for k := range tcs {
-						tcs[k].Arguments = truncateRunes(tcs[k].Arguments, thinArgsMax)
+						tcs[k].Arguments = truncateRunes(tcs[k].Arguments, argsMax)
 					}
 					msg.ToolCalls = tcs
 				}
 			case "tool":
-				msg.Content = truncateRunes(msg.Content, thinContentMax)
-				msg.ToolArguments = truncateRunes(msg.ToolArguments, thinArgsMax)
+				msg.Content = truncateRunes(msg.Content, contentMax)
+				msg.ToolArguments = truncateRunes(msg.ToolArguments, argsMax)
 			}
 			result[j] = msg
 		}
@@ -442,11 +469,25 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 	}
 
 	if len(toCompress) == 0 {
+		// 所有非 system 消息都在 tail 中，无需 LLM 压缩，直接 thinTail
+		// 但仍需检查缩减效果
 		llmView := make([]llm.ChatMessage, 0, len(systemMsgs)+len(thinnedTail))
 		llmView = append(llmView, systemMsgs...)
 		llmView = append(llmView, thinnedTail...)
 
-		tailSummary := extractDialogueFromTail(thinnedTail)
+		// 检查缩减效果，不足时升级
+		originalTokens, _ := llm.CountMessagesTokens(messages, model)
+		resultTokens, _ := llm.CountMessagesTokens(llmView, model)
+		minTarget := int(float64(originalTokens) * 0.8)
+		if resultTokens > minTarget && minTarget > 0 && tailStart < len(messages) {
+			// 升级为 aggressive thinning
+			aggressiveTail := aggressiveThinTail(messages[tailStart:], 1, activeFiles)
+			llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+len(aggressiveTail))
+			llmView = append(llmView, systemMsgs...)
+			llmView = append(llmView, aggressiveTail...)
+		}
+
+		tailSummary := extractDialogueFromTail(llmView[len(systemMsgs):])
 		return &CompressResult{
 			LLMView:     llmView,
 			SessionView: tailSummary,

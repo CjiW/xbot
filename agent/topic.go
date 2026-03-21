@@ -1,13 +1,16 @@
 package agent
 
 import (
+	"fmt"
 	"math"
+	"runtime/debug"
 	"strings"
 	"unicode"
 
 	"github.com/google/uuid"
 
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 // TopicDetector 话题分区检测器（无状态纯算法对象，值接收者，天然线程安全）。
@@ -45,7 +48,7 @@ const DefaultMinHistory = 10
 //  3. 余弦相似度 < CosineThreshold（0.3）才切分
 //  4. 新话题片段消息数 <= 2 时合并回上一个话题（避免碎片）
 //  5. 检测失败时降级返回单个分区（全量保留）
-func (d TopicDetector) Detect(messages []llm.ChatMessage) []TopicSegment {
+func (d TopicDetector) Detect(messages []llm.ChatMessage) (segments []TopicSegment, err error) {
 	// Layer 1: 最小历史检查
 	if len(messages) < DefaultMinHistory {
 		return []TopicSegment{{
@@ -54,12 +57,23 @@ func (d TopicDetector) Detect(messages []llm.ChatMessage) []TopicSegment {
 			EndIdx:       len(messages),
 			MessageCount: len(messages),
 			IsCurrent:    true,
-		}}
+		}}, nil
 	}
 
-	// Layer 5: 安全兜底，Detect 内部 panic 时降级为单个分区
+	// Layer 5: 安全兜底，Detect 内部 panic 时降级为单个分区（B-01 修复）
+	// panic 时记录日志并返回安全的降级值，避免 nil slice 穿透导致下游 nil pointer
 	defer func() {
-		recover() // 由调用方通过返回值判断
+		if r := recover(); r != nil {
+			log.Error(fmt.Sprintf("topic detect panic recovered: %v\n%s", r, debug.Stack()))
+			segments = []TopicSegment{{
+				ID:           uuid.New().String(),
+				StartIdx:     0,
+				EndIdx:       len(messages),
+				MessageCount: len(messages),
+				IsCurrent:    true,
+			}}
+			err = fmt.Errorf("topic detect panic recovered: %v", r)
+		}
 	}()
 
 	// 按对话轮次分组
@@ -71,7 +85,7 @@ func (d TopicDetector) Detect(messages []llm.ChatMessage) []TopicSegment {
 			EndIdx:       len(messages),
 			MessageCount: len(messages),
 			IsCurrent:    true,
-		}}
+		}}, nil
 	}
 
 	// 为每个轮次提取关键词
@@ -111,7 +125,7 @@ func (d TopicDetector) Detect(messages []llm.ChatMessage) []TopicSegment {
 	}
 
 	// Layer 2+4: 按边界切分，合并过短片段
-	segments := splitByBoundaries(messages, msgBoundaries)
+	segments = splitByBoundaries(messages, msgBoundaries)
 	segments = mergeShortSegments(segments, d.MinSegmentSize)
 
 	// 为每个片段生成关键词（合并片段内所有轮次的关键词）
@@ -156,7 +170,7 @@ func (d TopicDetector) Detect(messages []llm.ChatMessage) []TopicSegment {
 		segments[len(segments)-1].IsCurrent = true
 	}
 
-	return segments
+	return segments, nil
 }
 
 // splitByBoundaries 按消息边界索引切分为话题片段。

@@ -142,6 +142,24 @@ func isRetryableError(err error) bool {
 			return true
 		}
 	}
+	// B-05 修复：Anthropic SDK 错误格式: `anthropic API error: status=NNN, body=...`
+	// 原有 OpenAI 格式匹配无法匹配此格式，需单独处理
+	if strings.Contains(msg, "anthropic API error: status=") {
+		if idx := strings.Index(msg, "status="); idx != -1 {
+			codeStr := msg[idx+7:]
+			// 找到 status 值的结束位置（逗号、空格或字符串结尾）
+			for i, c := range codeStr {
+				if c == ',' || c == ' ' || c == ')' {
+					codeStr = codeStr[:i]
+					break
+				}
+			}
+			// 429 和 5xx 可重试
+			if codeStr == "429" || strings.HasPrefix(codeStr, "5") {
+				return true
+			}
+		}
+	}
 	return false
 }
 

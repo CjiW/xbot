@@ -309,16 +309,23 @@ func main() {
 		agentLoop.SetChannelPromptProviders(&feishuPromptAdapter{ch: feishuCh})
 	}
 
+	// 设置优雅退出（提前声明 ctx，供 OAuth Manager cleanup goroutine 使用）
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// 设置 OAuth 服务器的回调函数，使其能在授权完成后发送消息
 	if oauthServer != nil {
-		oauthServer.SendFunc = func(channel, chatID, content string) error {
+		// 启动 OAuth flow 定期清理 goroutine
+		oauthManager.Start(ctx)
+
+		oauthServer.SetSendFunc(func(channel, chatID, content string) error {
 			_, err := disp.SendDirect(bus.OutboundMessage{
 				Channel: channel,
 				ChatID:  chatID,
 				Content: content,
 			})
 			return err
-		}
+		})
 		// 现在启动 OAuth HTTP 服务器
 		if err := oauthServer.Start(); err != nil {
 			log.WithError(err).Fatal("Failed to start OAuth server")
@@ -336,10 +343,6 @@ func main() {
 	} else {
 		log.WithField("channels", channels).Info("Channels enabled")
 	}
-
-	// 设置优雅退出
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -397,6 +400,10 @@ func main() {
 		if err := oauthServer.Shutdown(context.Background()); err != nil {
 			log.WithError(err).Warn("OAuth server shutdown error")
 		}
+	}
+	// 停止 OAuth Manager 的定期清理 goroutine
+	if oauthManager != nil {
+		oauthManager.Close()
 	}
 
 	disp.Stop()

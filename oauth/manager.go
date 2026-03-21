@@ -18,6 +18,9 @@ type Manager struct {
 	providers map[string]Provider
 	flows     map[string]*Flow
 	storage   TokenStorage
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
 }
 
 // GetStorage returns the token storage (for tool managers)
@@ -44,6 +47,41 @@ func NewManager(storage TokenStorage) *Manager {
 		flows:     make(map[string]*Flow),
 		storage:   storage,
 	}
+}
+
+// Start begins the periodic cleanup of expired OAuth flows.
+// It launches a background goroutine that calls CleanupExpiredFlows every 5 minutes.
+// The goroutine exits when the provided context is cancelled (via Close).
+func (m *Manager) Start(ctx context.Context) {
+	m.ctx, m.cancel = context.WithCancel(ctx)
+	m.done = make(chan struct{})
+
+	go func() {
+		defer close(m.done)
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.CleanupExpiredFlows(30 * time.Minute)
+			}
+		}
+	}()
+
+	log.Info("OAuth flow cleanup routine started")
+}
+
+// Close stops the periodic cleanup goroutine and waits for it to exit.
+func (m *Manager) Close() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.done != nil {
+		<-m.done
+	}
+	log.Info("OAuth flow cleanup routine stopped")
 }
 
 // RegisterProvider registers an OAuth provider.

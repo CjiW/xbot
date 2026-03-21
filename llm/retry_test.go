@@ -51,6 +51,14 @@ func TestIsRetryableError(t *testing.T) {
 		// 普通错误 — 不重试
 		{"generic error", errors.New("something went wrong"), false},
 		{"EOF", errors.New("unexpected EOF"), false},
+
+		// B-05 修复：Anthropic SDK 错误格式: `anthropic API error: status=NNN, body=...`
+		{"429 Anthropic", errors.New("anthropic API error: status=429, body={\"type\":\"error\"}"), true},
+		{"500 Anthropic", errors.New("anthropic API error: status=500, body=internal error"), true},
+		{"502 Anthropic", errors.New("anthropic API error: status=502, body=bad gateway"), true},
+		{"503 Anthropic", errors.New("anthropic API error: status=503, body=overloaded"), true},
+		{"400 Anthropic", errors.New("anthropic API error: status=400, body=bad request"), false},
+		{"401 Anthropic", errors.New("anthropic API error: status=401, body=unauthorized"), false},
 	}
 
 	for _, tt := range tests {

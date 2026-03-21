@@ -566,7 +566,9 @@ Output the compressed content directly, preserving as much context as possible.`
 
 	// 第六步：构建压缩后的消息结构
 	if len(systemMsgs) > 1 {
-		panic("assert: at most one system message in compress input; got " + fmt.Sprint(len(systemMsgs)))
+		// R-01 修复：panic 改为 error 返回，避免运行时崩溃
+		log.Ctx(ctx).WithField("system_count", len(systemMsgs)).Error("assert: at most one system message in compress input")
+		return nil, fmt.Errorf("compress: expected at most one system message, got %d", len(systemMsgs))
 	}
 	summaryMsg := llm.NewUserMessage("[Previous conversation context]\n\n" + compressed)
 

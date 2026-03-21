@@ -7,18 +7,34 @@ import (
 	"html"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
 )
 
+// sendFuncHolder wraps a send function for safe storage in atomic.Value.
+type sendFuncHolder struct {
+	fn func(channel, chatID, content string) error
+}
+
 // Server is a lightweight HTTP server for OAuth callbacks.
 type Server struct {
-	mu       sync.Mutex
-	config   Config
-	server   *http.Server
-	mgr      *Manager
-	SendFunc func(channel, chatID, content string) error // Function to send messages back to chat
+	mu          sync.Mutex
+	config      Config
+	server      *http.Server
+	mgr         *Manager
+	sendFuncVal atomic.Value // stores sendFuncHolder
+}
+
+// SetSendFunc atomically sets the function used to send messages back to chat.
+func (s *Server) SetSendFunc(fn func(channel, chatID, content string) error) {
+	s.sendFuncVal.Store(sendFuncHolder{fn: fn})
+}
+
+// getSendFunc atomically retrieves the send function (never nil after NewServer).
+func (s *Server) getSendFunc() func(channel, chatID, content string) error {
+	return s.sendFuncVal.Load().(sendFuncHolder).fn
 }
 
 // Config contains the OAuth server configuration.
@@ -37,10 +53,14 @@ func NewServer(cfg Config, mgr *Manager) *Server {
 	if cfg.Host == "" {
 		cfg.Host = "127.0.0.1" // 默认绑定 localhost，避免暴露到所有网络接口
 	}
-	return &Server{
+	s := &Server{
 		config: cfg,
 		mgr:    mgr,
 	}
+	s.sendFuncVal.Store(sendFuncHolder{fn: func(channel, chatID, content string) error {
+		return nil // no-op default, prevents nil function call
+	}})
+	return s
 }
 
 // Start starts the OAuth HTTP server if enabled.
@@ -156,9 +176,9 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	s.renderSuccess(w, provider)
 
 	// Send success message back to the chat
-	if s.SendFunc != nil {
+	if fn := s.getSendFunc(); fn != nil {
 		successMsg := "✅ 授权成功！现在可以继续之前的操作了。"
-		if err := s.SendFunc(flow.Channel, flow.ChatID, successMsg); err != nil {
+		if err := fn(flow.Channel, flow.ChatID, successMsg); err != nil {
 			log.WithError(err).Error("Failed to send OAuth success message")
 		}
 	}

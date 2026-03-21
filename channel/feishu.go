@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xbot/bus"
@@ -65,7 +66,7 @@ type FeishuChannel struct {
 	msgBus    *bus.MessageBus
 	client    *lark.Client
 	wsClient  *larkws.Client
-	running   bool
+	running   atomic.Bool
 	mu        sync.Mutex
 	botOpenID string
 	botName   string // 机器人名称，用于引用消息中标识自己
@@ -74,6 +75,7 @@ type FeishuChannel struct {
 	processedIDs   map[string]struct{}
 	processedOrder []string
 	maxProcessed   int
+	processedMu    sync.Mutex // 专门保护 processedIDs 和 processedOrder
 
 	// OpenID -> 用户姓名缓存
 	userNameCache map[string]string
@@ -141,9 +143,7 @@ func (f *FeishuChannel) Start() error {
 		return fmt.Errorf("feishu app_id and app_secret are required")
 	}
 
-	f.mu.Lock()
-	f.running = true
-	f.mu.Unlock()
+	f.running.Store(true)
 
 	// 创建 Lark 客户端（用于发送消息）
 	f.client = lark.NewClient(f.config.AppID, f.config.AppSecret,
@@ -182,9 +182,11 @@ func (f *FeishuChannel) Start() error {
 
 // Stop 停止飞书渠道
 func (f *FeishuChannel) Stop() {
+	if !f.running.CompareAndSwap(true, false) {
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.running = false
 	log.Info("Feishu bot stopped")
 }
 
@@ -723,7 +725,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	l := log.WithField("request_id", requestID)
 
 	f.mu.Lock()
-	if !f.running {
+	if !f.running.Load() {
 		f.mu.Unlock()
 		return nil
 	}
@@ -731,6 +733,12 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 
 	msg := event.Event.Message
 	sender := event.Event.Sender
+
+	// B-04: nil guard — 飞书 SDK 可能传入 MessageId == nil
+	if msg.MessageId == nil || *msg.MessageId == "" {
+		l.Warn("Feishu: received message with nil or empty MessageId, skipping")
+		return nil
+	}
 
 	// 调试日志：确认收到消息事件（记录所有消息，包括未@的）
 	l.WithFields(log.Fields{
@@ -1831,8 +1839,8 @@ func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV
 
 // isDuplicate 检查消息是否重复
 func (f *FeishuChannel) isDuplicate(messageID string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.processedMu.Lock()
+	defer f.processedMu.Unlock()
 
 	if _, exists := f.processedIDs[messageID]; exists {
 		return true

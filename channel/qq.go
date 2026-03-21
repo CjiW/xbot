@@ -22,6 +22,31 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Cache entry types with expiry tracking
+// ---------------------------------------------------------------------------
+
+// msgSeqEntry tracks msg_seq state per conversation with last-access time.
+type msgSeqEntry struct {
+	seq      int
+	lastUsed time.Time
+}
+
+// chatTypeEntry tracks chat type with last-access time for expiry.
+type chatTypeEntry struct {
+	chatType string
+	lastUsed time.Time
+}
+
+const (
+	// cacheExpiry is the duration after which cache entries are eligible for eviction.
+	cacheExpiry = 30 * time.Minute
+	// cacheMaxEntries is the safety threshold; when exceeded, cleanup is triggered.
+	cacheMaxEntries = 10000
+	// cacheMaxScanPerCleanup limits iterations per cleanup call to avoid holding the lock too long.
+	cacheMaxScanPerCleanup = 500
+)
+
+// ---------------------------------------------------------------------------
 // QQ Bot intent bit flags
 // ---------------------------------------------------------------------------
 
@@ -135,11 +160,11 @@ type QQChannel struct {
 	maxProcessed   int
 
 	// msg_seq tracking per conversation for replies
-	msgSeqMap map[string]int
+	msgSeqMap map[string]msgSeqEntry
 	msgSeqMu  sync.Mutex
 
 	// chat type cache: chatID -> "c2c" | "group" | "guild"
-	chatTypeCache map[string]string
+	chatTypeCache map[string]chatTypeEntry
 	chatTypeMu    sync.RWMutex
 
 	// Quick disconnect detection
@@ -158,8 +183,8 @@ func NewQQChannel(cfg QQConfig, msgBus *bus.MessageBus) *QQChannel {
 		stopCh:        make(chan struct{}),
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
-		msgSeqMap:     make(map[string]int),
-		chatTypeCache: make(map[string]string),
+		msgSeqMap:     make(map[string]msgSeqEntry),
+		chatTypeCache: make(map[string]chatTypeEntry),
 	}
 }
 
@@ -1514,13 +1539,25 @@ func (q *QQChannel) nextMsgSeq(msgID string) int {
 	q.msgSeqMu.Lock()
 	defer q.msgSeqMu.Unlock()
 
-	q.msgSeqMap[msgID]++
-	seq := q.msgSeqMap[msgID]
+	entry := q.msgSeqMap[msgID]
+	entry.seq++
+	entry.lastUsed = time.Now()
+	q.msgSeqMap[msgID] = entry
+	seq := entry.seq
 
-	// Prevent unbounded growth: clean up old entries if map is too large
-	if len(q.msgSeqMap) > 10000 {
-		q.msgSeqMap = make(map[string]int)
-		q.msgSeqMap[msgID] = seq
+	// Prevent unbounded growth: evict entries not used recently
+	if len(q.msgSeqMap) > cacheMaxEntries {
+		cutoff := time.Now().Add(-cacheExpiry)
+		scanned := 0
+		for k, v := range q.msgSeqMap {
+			if v.lastUsed.Before(cutoff) {
+				delete(q.msgSeqMap, k)
+			}
+			scanned++
+			if scanned >= cacheMaxScanPerCleanup {
+				break
+			}
+		}
 	}
 
 	return seq
@@ -1534,11 +1571,21 @@ func (q *QQChannel) nextMsgSeq(msgID string) int {
 func (q *QQChannel) cacheChatType(chatID, chatType string) {
 	q.chatTypeMu.Lock()
 	defer q.chatTypeMu.Unlock()
-	q.chatTypeCache[chatID] = chatType
+	q.chatTypeCache[chatID] = chatTypeEntry{chatType: chatType, lastUsed: time.Now()}
 
-	// 防止无限增长
-	if len(q.chatTypeCache) > 10000 {
-		q.chatTypeCache = map[string]string{chatID: chatType}
+	// 防止无限增长：淘汰过期条目
+	if len(q.chatTypeCache) > cacheMaxEntries {
+		cutoff := time.Now().Add(-cacheExpiry)
+		scanned := 0
+		for k, v := range q.chatTypeCache {
+			if v.lastUsed.Before(cutoff) {
+				delete(q.chatTypeCache, k)
+			}
+			scanned++
+			if scanned >= cacheMaxScanPerCleanup {
+				break
+			}
+		}
 	}
 }
 
@@ -1546,7 +1593,10 @@ func (q *QQChannel) cacheChatType(chatID, chatType string) {
 func (q *QQChannel) inferChatType(chatID string) string {
 	q.chatTypeMu.RLock()
 	defer q.chatTypeMu.RUnlock()
-	return q.chatTypeCache[chatID]
+	if entry, ok := q.chatTypeCache[chatID]; ok {
+		return entry.chatType
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

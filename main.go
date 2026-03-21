@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -338,11 +339,23 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// 启动出站消息分发
-	go disp.Run()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WithField("panic", r).Error("Dispatcher panicked\n" + string(debug.Stack()))
+			}
+		}()
+		disp.Run()
+	}()
 
 	// 启动所有渠道
 	for name, ch := range getChannels(disp) {
 		go func(n string, c channel.Channel) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithFields(log.Fields{"channel": n, "panic": r}).Error("Channel goroutine panicked\n" + string(debug.Stack()))
+				}
+			}()
 			log.WithField("channel", n).Info("Starting channel...")
 			if err := c.Start(); err != nil {
 				log.WithError(err).WithField("channel", n).Error("Channel failed")
@@ -352,6 +365,13 @@ func main() {
 
 	// 启动 Agent 循环
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WithField("panic", r).Error("Agent loop panicked\n" + string(debug.Stack()))
+				// 触发优雅退出，避免僵尸进程
+				sigCh <- syscall.SIGTERM
+			}
+		}()
 		if err := agentLoop.Run(ctx); err != nil && ctx.Err() == nil {
 			log.WithError(err).Error("Agent loop exited with error")
 		}

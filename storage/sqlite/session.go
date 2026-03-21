@@ -162,4 +162,3 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 	}
 	return messages, nil
 }
-

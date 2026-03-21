@@ -379,8 +379,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// 工具执行相关类型（提取到循环外，避免每轮重新定义）
 	type toolCallEntry struct {
-		iteration int         // Agent 循环迭代号（用于调试追踪）
-		index     int         // 本次 LLM 响应中 tool call 的序号
+		iteration int // Agent 循环迭代号（用于调试追踪）
+		index     int // 本次 LLM 响应中 tool call 的序号
 		tc        llm.ToolCall
 	}
 	type toolExecResult struct {

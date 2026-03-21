@@ -520,7 +520,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.settingsSvc = NewSettingsService(userSettingsSvc)
 }
 
-
 // New 创建 Agent
 func New(cfg Config) *Agent {
 	// 1. 设置配置默认值

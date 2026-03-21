@@ -2,12 +2,12 @@ package feishu_mcp
 
 // Block type constants matching Feishu Docx API.
 const (
-	BlockTypePage            = 1
-	BlockTypeText            = 2
-	BlockTypeHeading1        = 3
-	BlockTypeHeading2        = 4
-	BlockTypeHeading3        = 5
-	BlockTypeHeading4        = 6
+	BlockTypePage     = 1
+	BlockTypeText     = 2
+	BlockTypeHeading1 = 3
+	BlockTypeHeading2 = 4
+	BlockTypeHeading3 = 5
+	BlockTypeHeading4 = 6
 	// NOTE: Heading5~Heading9 (7-11) 是飞书文档 API 保留类型，
 	// 虽然目前飞书 UI 仅支持 Heading1~Heading4，但 block_helper.go
 	// 的 getBlockContent 函数已处理这些类型，保留以兼容未来 API 扩展。

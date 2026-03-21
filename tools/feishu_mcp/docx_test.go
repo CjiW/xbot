@@ -1,5 +1,6 @@
 //go:build ignore
 // +build ignore
+
 //
 // This test is excluded from normal test runs because it requires:
 //   - Valid Feishu OAuth credentials (app_id, app_secret)

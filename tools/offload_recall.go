@@ -13,9 +13,9 @@ type OffloadRecallStore interface {
 }
 
 const (
-	offloadDefaultLimit  = 8000  // 每次默认返回的 rune 数（约 8000 字符/16000 字节中文）
-	offloadMaxLimit      = 16000 // 最大返回 rune 数上限：平衡 LLM 上下文窗口与信息完整性，
-	                          // 单次约 16000 字符（约 32KB 中文），超大内容通过 offset 分页读取
+	offloadDefaultLimit = 8000  // 每次默认返回的 rune 数（约 8000 字符/16000 字节中文）
+	offloadMaxLimit     = 16000 // 最大返回 rune 数上限：平衡 LLM 上下文窗口与信息完整性，
+	// 单次约 16000 字符（约 32KB 中文），超大内容通过 offset 分页读取
 	offloadDefaultOffset = 0
 )
 

@@ -123,7 +123,7 @@ func (a *Agent) buildMainRunConfig(
 
 	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
 	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
-		smart.(*phase2Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
+		smart.(*phase1Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
 	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）

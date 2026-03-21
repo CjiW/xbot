@@ -16,14 +16,12 @@ type ContextMode string
 const (
 	// ContextModePhase1 Phase 1 双视图架构（当前默认）
 	ContextModePhase1 ContextMode = "phase1"
-	// ContextModePhase2 Phase 2 智能压缩（Offload → Compact，含 fingerprint 引导与活跃文件保护）
-	ContextModePhase2 ContextMode = "phase2"
 	// ContextModeNone 禁用自动上下文压缩
 	ContextModeNone ContextMode = "none"
 )
 
 // ValidContextModes 所有可能的上下文模式
-var ValidContextModes = []ContextMode{ContextModePhase1, ContextModePhase2, ContextModeNone}
+var ValidContextModes = []ContextMode{ContextModePhase1, ContextModeNone}
 
 // IsValidContextMode 检查是否为有效的上下文模式
 func IsValidContextMode(mode ContextMode) bool {
@@ -180,8 +178,8 @@ func (m *noopManager) ContextInfo(messages []llm.ChatMessage, model string, tool
 func (m *noopManager) SessionHook() SessionCompressHook { return nil }
 
 // SmartCompressor 智能压缩接口（Phase 2 扩展）。
-// phase2Manager 实现此接口，Run() 中的 maybeCompress 通过类型断言检测。
-// Phase1 和 noopManager 不实现此接口，走原有 ShouldCompress 路径。
+// phase1Manager 实现此接口，Run() 中的 maybeCompress 通过类型断言检测。
+// noopManager 不实现此接口，走原有 ShouldCompress 路径。
 type SmartCompressor interface {
 	ContextManager
 	ShouldCompressDynamic(info TriggerInfo) bool
@@ -212,10 +210,6 @@ func (p *TriggerInfoProvider) Reset() {
 func NewContextManager(cfg *ContextManagerConfig) ContextManager {
 	mode := cfg.EffectiveMode()
 	switch mode {
-	case ContextModePhase2:
-		// Phase 2: 智能压缩（Offload → Compact）
-		log.WithField("mode", mode).Info("Using Phase 1.5 smart compression (Offload → Compact)")
-		return newPhase2Manager(cfg)
 	case ContextModeNone:
 		return newNoopManager(cfg)
 	case ContextModePhase1, "":

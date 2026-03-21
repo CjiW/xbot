@@ -216,22 +216,6 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}, nil
 }
 
-// compressMessagesWithFingerprintAndLostItems 使用 LLM 压缩对话历史，并注入指纹和丢失信息引导。
-// 与 compressMessagesWithFingerprint 相同，但在 prompt 中额外追加"之前丢失的信息"，
-// 用于质量不达标时的重试，引导 LLM 补全遗漏的关键信息。
-func compressMessagesWithFingerprintAndLostItems(ctx context.Context, messages []llm.ChatMessage, fp KeyInfoFingerprint, lostItems []string, client llm.LLM, model string) (*CompressResult, error) {
-	// 构建增强指纹：将丢失项追加为 Decisions
-	enhancedFP := fp
-	for _, item := range lostItems {
-		trimmed := strings.TrimPrefix(item, "file:")
-		trimmed = strings.TrimPrefix(trimmed, "identifier:")
-		trimmed = strings.TrimPrefix(trimmed, "error:")
-		trimmed = strings.TrimPrefix(trimmed, "decision:")
-		enhancedFP.Decisions = append(enhancedFP.Decisions, "[MUST INCLUDE] "+trimmed)
-	}
-	return compressMessagesWithFingerprint(ctx, messages, enhancedFP, client, model)
-}
-
 // thinTail 精简尾部旧工具组，保留最近 keepGroups 组完整内容。
 // 一个"工具组"= 一条 assistant(tool_calls) + 紧随其后的所有 tool result 消息。
 // 对更早的组：截断 Content/Arguments，strip think blocks，保留消息结构不变（API 兼容）。
@@ -413,18 +397,8 @@ func truncateRunes(s string, maxLen int) string {
 }
 
 // compressMessages 使用 LLM 压缩对话历史（独立函数，不依赖 Agent receiver）。
-// 逻辑与现有 compressContext() 完全一致，仅为消除 phase1Manager 对 *Agent 的引用。
-// 现有 compressContext() 改为调用此函数：
-//
-//	func (a *Agent) compressContext(...) { return compressMessages(...) }
+// 不使用 fingerprint 体系，直接压缩。
 func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compressMessagesWithFingerprint(ctx, messages, KeyInfoFingerprint{}, client, model)
-}
-
-// compressMessagesWithFingerprint 使用 LLM 压缩对话历史，并注入指纹引导。
-// 与 compressMessages 相同，但在 prompt 中追加关键信息指纹，引导 LLM 保留重要信息。
-// 当 fp 为空时行为与 compressMessages 完全一致。
-func compressMessagesWithFingerprint(ctx context.Context, messages []llm.ChatMessage, fp KeyInfoFingerprint, client llm.LLM, model string) (*CompressResult, error) {
 	// 第一步：找到尾部安全切割点
 	tailStart := len(messages) // 默认不保留任何尾部消息
 	for i := len(messages) - 1; i >= 1; i-- {
@@ -497,56 +471,7 @@ func compressMessagesWithFingerprint(ctx context.Context, messages []llm.ChatMes
 		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
 	}
 
-	// 注入指纹引导 LLM 保留关键信息
-	var fpSection strings.Builder
-	hasFP := len(fp.FilePaths) > 0 || len(fp.Identifiers) > 0 || len(fp.Errors) > 0 || len(fp.Decisions) > 0 || len(fp.ActiveFiles) > 0
-	if hasFP {
-		fpSection.WriteString("\n\n## CRITICAL: Must-Preserve Key Information\n")
-		fpSection.WriteString("The following information MUST be retained in the compressed output using the structured markers:\n\n")
-
-		if len(fp.FilePaths) > 0 {
-			fpSection.WriteString("Files:\n")
-			for _, p := range fp.FilePaths {
-				fmt.Fprintf(&fpSection, "  @file:%s\n", p)
-			}
-		}
-		if len(fp.Identifiers) > 0 {
-			shown := len(fp.Identifiers)
-			if shown > 50 {
-				shown = 50
-			}
-			fpSection.WriteString("Identifiers:\n")
-			for _, id := range fp.Identifiers[:shown] {
-				fmt.Fprintf(&fpSection, "  @func:%s\n", id)
-			}
-			if len(fp.Identifiers) > 50 {
-				fmt.Fprintf(&fpSection, "  ... and %d more identifiers\n", len(fp.Identifiers)-50)
-			}
-		}
-		if len(fp.Errors) > 0 {
-			fpSection.WriteString("Errors (MUST preserve ALL):\n")
-			for _, e := range fp.Errors {
-				fmt.Fprintf(&fpSection, "  @error:%s\n", truncateRunes(e, 150))
-			}
-		}
-		if len(fp.Decisions) > 0 {
-			fpSection.WriteString("Decisions:\n")
-			for _, d := range fp.Decisions {
-				fmt.Fprintf(&fpSection, "  @decision:%s\n", truncateRunes(d, 150))
-			}
-		}
-		if len(fp.ActiveFiles) > 0 {
-			fpSection.WriteString("\n## ACTIVE FILES (must be fully preserved in output):\n")
-			for _, af := range fp.ActiveFiles {
-				fmt.Fprintf(&fpSection, "  @file:%s\n", af.Path)
-				for _, fn := range af.Functions {
-					fmt.Fprintf(&fpSection, "  @func:%s\n", fn)
-				}
-			}
-		}
-	}
-
-	compressionPrompt := taskStatePrompt + fpSection.String() + `
+	compressionPrompt := taskStatePrompt + `
 
 ## Conversation History (to compress)
 ` + historyText.String() + `
@@ -596,7 +521,7 @@ Output the compressed content directly, preserving as much context as possible.`
 			"normal_tokens":     resultTokens,
 			"aggressive_tokens": aggressiveTokens,
 			"min_target":        minTarget,
-		}).Info("Phase 2 compress: normal result insufficient, using aggressive thinning")
+		}).Info("Phase 1 compress: normal result insufficient, using aggressive thinning")
 	}
 
 	// Session View: 压缩摘要 + 尾部对话摘要（纯 user/assistant）

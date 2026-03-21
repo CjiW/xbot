@@ -22,6 +22,14 @@ import (
 // sessionDirReplacer 用于清理 sessionKey 中的危险路径字符，声明为包级变量避免重复创建。
 var sessionDirReplacer = strings.NewReplacer("/", "_", "\\", "_", ":", "_", "\x00", "_")
 
+// extractGoStructure 使用的正则，声明为包级变量避免每次调用重复编译。
+var (
+	goImportRe   = regexp.MustCompile(`"([^"]+)"`)
+	goTypeRe     = regexp.MustCompile(`type\s+(\w+)\s+(struct|interface|func)\b`)
+	goConstVarRe = regexp.MustCompile(`^(?:const|var)\s+\(?(\w+)\s*$`)
+	goFuncRe     = regexp.MustCompile(`func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)`)
+)
+
 // OffloadConfig 配置大 tool result 的 offload 行为。
 type OffloadConfig struct {
 	MaxResultTokens int    // 触发 offload 的 token 阈值（默认 2000）
@@ -468,6 +476,12 @@ func summarizeRead(args, content string) string {
 		fmt.Fprintf(&sb, "Key functions: %s\n", strings.Join(funcNames[:min(len(funcNames), 10)], ", "))
 	}
 
+	// 对 Go 文件，额外提取结构体信息增强摘要
+	if goStruct := extractGoStructure(content); goStruct != "" {
+		fmt.Fprintln(&sb, "--- Structure ---")
+		fmt.Fprintln(&sb, goStruct)
+	}
+
 	summary := sb.String()
 
 	// 总量上限保护：防止 summary 本身过大（如文件行数极多但每行都接近截断长度）
@@ -640,4 +654,104 @@ func extractFunctionNames(content string) []string {
 	}
 
 	return names
+}
+
+// extractGoStructure 从 Go 源码中提取结构体信息（类型、接口、常量、变量）。
+// 用于增强 summarizeRead 的摘要质量，帮助 LLM 理解文件骨架。
+// 使用包级正则变量（goImportRe, goTypeRe, goConstVarRe, goFuncRe），
+// 单次 strings.Split 遍历完成所有提取。
+func extractGoStructure(content string) string {
+	// 快速检测：非 Go 文件跳过
+	if !strings.Contains(content, "package ") {
+		return ""
+	}
+
+	lines := strings.Split(content, "\n")
+	var parts []string
+	inImport := false
+	var imports []string
+	funcCount := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// 跳过注释行
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			continue
+		}
+
+		// package
+		if strings.HasPrefix(trimmed, "package ") {
+			parts = append(parts, trimmed)
+			continue
+		}
+
+		// import 块
+		if trimmed == "import (" {
+			inImport = true
+			continue
+		}
+		if inImport {
+			if trimmed == ")" {
+				inImport = false
+				continue
+			}
+			if m := goImportRe.FindStringSubmatch(line); len(m) > 1 {
+				imports = append(imports, m[1])
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "import ") {
+			if m := goImportRe.FindStringSubmatch(line); len(m) > 1 {
+				imports = append(imports, m[1])
+			}
+			continue
+		}
+
+		// type 定义
+		if m := goTypeRe.FindStringSubmatch(trimmed); len(m) > 0 {
+			parts = append(parts, fmt.Sprintf("type %s %s", m[1], m[2]))
+			continue
+		}
+
+		// const/var 组名
+		if m := goConstVarRe.FindStringSubmatch(trimmed); len(m) > 0 {
+			parts = append(parts, trimmed)
+			continue
+		}
+
+		// func 签名（截断 15 个）
+		if m := goFuncRe.FindStringSubmatch(trimmed); len(m) > 0 {
+			params := strings.TrimSpace(m[2])
+			if params == "" {
+				params = "(no params)"
+			}
+			parts = append(parts, fmt.Sprintf("  %s(%s)", m[1], params))
+			funcCount++
+			if funcCount >= 15 {
+				parts = append(parts, "  ...(more functions omitted)")
+				break
+			}
+			continue
+		}
+	}
+
+	// 汇总 import 为短名列表
+	if len(imports) > 0 {
+		shortNames := make([]string, len(imports))
+		for i, imp := range imports {
+			if idx := strings.LastIndex(imp, "/"); idx >= 0 {
+				shortNames[i] = imp[idx+1:]
+			} else {
+				shortNames[i] = imp
+			}
+		}
+		parts = append(parts, "Imports: "+strings.Join(shortNames, ", "))
+	}
+
+	if len(parts) <= 1 {
+		return "" // 只有 package 名，没有其他结构信息
+	}
+
+	return strings.Join(parts, "\n")
 }

@@ -120,6 +120,14 @@ type RunConfig struct {
 
 	// OffloadStore Layer 1 offload store（nil = 不启用）
 	OffloadStore *OffloadStore
+
+	// TodoManager TODO 管理器（可选）
+	TodoManager TodoManagerProvider
+}
+
+// TodoManagerProvider 提供 TODO 状态查询
+type TodoManagerProvider interface {
+	GetTodoSummary(sessionKey string) string
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -787,6 +795,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					"stale_ids":   staleIDs,
 				}).Info("Stale offloads detected and invalidated")
 				messages = cfg.OffloadStore.PurgeStaleMessages(sessionKey, messages)
+			}
+		}
+
+		// --- System Reminder 注入 ---
+		if len(response.ToolCalls) > 0 {
+			var roundToolNames []string
+			for _, tc2 := range response.ToolCalls {
+				roundToolNames = append(roundToolNames, tc2.Name)
+			}
+			var todoSummary string
+			if cfg.TodoManager != nil && sessionKey != "" {
+				todoSummary = cfg.TodoManager.GetTodoSummary(sessionKey)
+			}
+			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary)
+			if reminder != "" && len(messages) > 0 {
+				lastIdx := len(messages) - 1
+				messages[lastIdx].Content += "\n\n" + reminder
 			}
 		}
 

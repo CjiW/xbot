@@ -150,13 +150,13 @@ func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*To
 	if err != nil {
 		// 如果是"没有匹配文件"的情况，返回空结果
 		if output == "" {
-			return NewResult("No files matched the pattern."), nil
+			return NewResultWithTips("No files matched the pattern.", "检查 glob 模式语法，或尝试更宽泛的匹配（如 **/*.go）。"), nil
 		}
 		return nil, fmt.Errorf("sandbox glob failed: %v, output: %s", err, output)
 	}
 
 	if output == "" {
-		return NewResult("No files matched the pattern."), nil
+		return NewResultWithTips("No files matched the pattern.", "检查 glob 模式语法，或尝试更宽泛的匹配（如 **/*.go）。"), nil
 	}
 
 	// 输出即为容器内路径，直接返回
@@ -170,7 +170,7 @@ func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*To
 		}
 	}
 
-	return NewResult(sb.String()), nil
+	return NewResultWithTips(sb.String(), "使用 Read 查看感兴趣的文件内容。"), nil
 }
 
 // executeLocal 在本地执行文件搜索（非沙箱模式）
@@ -228,7 +228,7 @@ func (t *GlobTool) executeLocal(ctx *ToolContext, pattern, path string) (*ToolRe
 	sort.Strings(matches)
 
 	if len(matches) == 0 {
-		return NewResult("No files matched the pattern."), nil
+		return NewResultWithTips("No files matched the pattern.", "检查 glob 模式语法，或尝试更宽泛的匹配（如 **/*.go）。"), nil
 	}
 
 	// Limit results to avoid excessive output
@@ -249,7 +249,7 @@ func (t *GlobTool) executeLocal(ctx *ToolContext, pattern, path string) (*ToolRe
 		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxResults)
 	}
 
-	return NewResult(sb.String()), nil
+	return NewResultWithTips(sb.String(), "使用 Read 查看感兴趣的文件内容。"), nil
 }
 
 // globWithDoublestar handles glob patterns containing ** for recursive directory matching.

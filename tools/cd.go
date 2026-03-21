@@ -484,6 +484,12 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 
 func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, error) {
 	// Resolve relative paths against CurrentDir in sandbox
+	// CurrentDir 在沙箱模式下存储的是宿主机路径（如 /host/workspace/src），
+	// 因为沙箱容器的工作目录与宿主机挂载路径不同，但 CdTool 的 CurrentDir
+	// 在沙箱模式下需要被 Glob/Grep/Shell 等工具的沙箱逻辑正确转换。
+	// 此处使用 CurrentDir 做 relative path 解析后，传递给 RunInSandboxWithShell，
+	// 由沙箱层负责路径映射。因此 CurrentDir 始终使用宿主机路径作为 prefix
+	// 检查基准（如 GlobTool.executeInSandbox 中的路径转换逻辑依赖此约定）。
 	target := dir
 	if !filepath.IsAbs(target) {
 		base := ""

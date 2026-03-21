@@ -87,49 +87,31 @@ func (r *SharedSkillRegistry) SearchShared(query string, entryType string, limit
 	return scanSharedEntries(rows)
 }
 
-// Publish inserts or updates a shared entry (marks as shared).
+// Publish inserts or updates a shared entry (marks as shared) atomically.
+// Uses INSERT ... ON CONFLICT DO UPDATE to avoid race conditions between SELECT and INSERT.
 func (r *SharedSkillRegistry) Publish(entry *SharedEntry) error {
 	now := time.Now().UnixMilli()
 
-	// Check if entry already exists (by type + name + author)
-	var existingID int64
-	err := r.db.Conn().QueryRow(
-		"SELECT id FROM shared_registry WHERE type = ? AND name = ? AND author = ?",
-		entry.Type, entry.Name, entry.Author,
-	).Scan(&existingID)
+	// Atomically upsert: INSERT new row, or UPDATE existing on conflict
+	result, err := r.db.Conn().Exec(`
+		INSERT INTO shared_registry (type, name, description, author, tags, source_path, sharing, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(type, name, author) DO UPDATE SET
+			description = excluded.description,
+			tags = excluded.tags,
+			source_path = excluded.source_path,
+			sharing = excluded.sharing,
+			updated_at = excluded.updated_at
+	`, entry.Type, entry.Name, entry.Description, entry.Author, entry.Tags,
+		entry.SourcePath, entry.Sharing, now, now)
+	if err != nil {
+		return fmt.Errorf("publish upsert: %w", err)
+	}
 
-	if err == sql.ErrNoRows {
-		// Insert new entry
-		entry.CreatedAt = now
-		entry.UpdatedAt = now
-		result, err := r.db.Conn().Exec(
-			`INSERT INTO shared_registry (type, name, description, author, tags, source_path, sharing, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			entry.Type, entry.Name, entry.Description, entry.Author, entry.Tags,
-			entry.SourcePath, entry.Sharing, entry.CreatedAt, entry.UpdatedAt,
-		)
-		if err != nil {
-			return fmt.Errorf("publish insert: %w", err)
-		}
-		id, _ := result.LastInsertId()
+	id, _ := result.LastInsertId()
+	if id > 0 {
 		entry.ID = id
-		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("publish check: %w", err)
-	}
-
-	// Update existing entry
-	_, err = r.db.Conn().Exec(
-		`UPDATE shared_registry SET description = ?, tags = ?, source_path = ?, sharing = ?, updated_at = ?
-		 WHERE id = ?`,
-		entry.Description, entry.Tags, entry.SourcePath, entry.Sharing, now, existingID,
-	)
-	if err != nil {
-		return fmt.Errorf("publish update: %w", err)
-	}
-
-	entry.ID = existingID
 	entry.UpdatedAt = now
 	return nil
 }

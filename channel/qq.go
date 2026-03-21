@@ -22,6 +22,31 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Cache entry types with expiry tracking
+// ---------------------------------------------------------------------------
+
+// msgSeqEntry tracks msg_seq state per conversation with last-access time.
+type msgSeqEntry struct {
+	seq      int
+	lastUsed time.Time
+}
+
+// chatTypeEntry tracks chat type with last-access time for expiry.
+type chatTypeEntry struct {
+	chatType string
+	lastUsed time.Time
+}
+
+const (
+	// cacheExpiry is the duration after which cache entries are eligible for eviction.
+	cacheExpiry = 30 * time.Minute
+	// cacheMaxEntries is the safety threshold; when exceeded, cleanup is triggered.
+	cacheMaxEntries = 10000
+	// cacheMaxScanPerCleanup limits iterations per cleanup call to avoid holding the lock too long.
+	cacheMaxScanPerCleanup = 500
+)
+
+// ---------------------------------------------------------------------------
 // QQ Bot intent bit flags
 // ---------------------------------------------------------------------------
 
@@ -135,11 +160,11 @@ type QQChannel struct {
 	maxProcessed   int
 
 	// msg_seq tracking per conversation for replies
-	msgSeqMap map[string]int
+	msgSeqMap map[string]msgSeqEntry
 	msgSeqMu  sync.Mutex
 
 	// chat type cache: chatID -> "c2c" | "group" | "guild"
-	chatTypeCache map[string]string
+	chatTypeCache map[string]chatTypeEntry
 	chatTypeMu    sync.RWMutex
 
 	// Quick disconnect detection
@@ -158,8 +183,8 @@ func NewQQChannel(cfg QQConfig, msgBus *bus.MessageBus) *QQChannel {
 		stopCh:        make(chan struct{}),
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
-		msgSeqMap:     make(map[string]int),
-		chatTypeCache: make(map[string]string),
+		msgSeqMap:     make(map[string]msgSeqEntry),
+		chatTypeCache: make(map[string]chatTypeEntry),
 	}
 }
 
@@ -931,6 +956,9 @@ var qqMdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 // qqMdLinkRe 匹配 markdown 链接语法 [name](path)，但不匹配图片 ![alt](path)
 var qqMdLinkRe = regexp.MustCompile(`(?:^|[^!])\[([^\]]+)\]\(([^)]+)\)`)
 
+// qqMentionRegex matches QQ @mention artifacts like <@!123456> or <@123456>
+var qqMentionRegex = regexp.MustCompile(`<@!?\d+>`)
+
 // ---------------------------------------------------------------------------
 // Send (outbound)
 // ---------------------------------------------------------------------------
@@ -1048,27 +1076,57 @@ func (q *QQChannel) sendGuildMessage(channelID, content string, metadata map[str
 
 // sendAutoDetect 自动检测消息类型并发送
 func (q *QQChannel) sendAutoDetect(chatID, content string, metadata map[string]string) (string, error) {
-	// If chatID looks like a channel_id (numeric), try guild first
-	// Otherwise try group, then c2c
-	// This is a best-effort heuristic
 	log.WithField("chat_id", chatID).Warn("QQ: unknown chat type, attempting auto-detect")
 
-	// Try group first (most common)
-	msgID, err := q.sendGroupMessage(chatID, content, metadata)
-	if err == nil {
-		return msgID, nil
-	}
-	log.WithError(err).Debug("QQ: group send failed, trying guild")
+	const maxAttempts = 3
 
-	// Try guild
-	msgID, err = q.sendGuildMessage(chatID, content, metadata)
-	if err == nil {
-		return msgID, nil
+	// Try cached type first
+	if cached := q.inferChatType(chatID); cached != "" {
+		var id string
+		var err error
+		switch cached {
+		case "group":
+			id, err = q.sendGroupMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached group send failed, trying other types")
+		case "guild":
+			id, err = q.sendGuildMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached guild send failed, trying other types")
+		case "c2c":
+			id, err = q.sendC2CMessage(chatID, content, metadata)
+			if err == nil {
+				return id, nil
+			}
+			log.WithError(err).Debug("QQ: cached c2c send failed, trying other types")
+		}
+		_ = id
 	}
-	log.WithError(err).Debug("QQ: guild send failed, trying c2c")
 
-	// Try c2c
-	return q.sendC2CMessage(chatID, content, metadata)
+	// Try all types with attempt limit
+	attempts := 0
+	for _, tryFn := range []func() (string, error){
+		func() (string, error) { return q.sendGroupMessage(chatID, content, metadata) },
+		func() (string, error) { return q.sendGuildMessage(chatID, content, metadata) },
+		func() (string, error) { return q.sendC2CMessage(chatID, content, metadata) },
+	} {
+		id, err := tryFn()
+		if err == nil {
+			return id, nil
+		}
+		attempts++
+		if attempts >= maxAttempts {
+			break
+		}
+		log.WithError(err).Debug("QQ: auto-detect send attempt failed")
+		_ = id
+	}
+
+	return "", fmt.Errorf("qq: all auto-detect attempts failed for chat_id=%s", chatID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,13 +1572,25 @@ func (q *QQChannel) nextMsgSeq(msgID string) int {
 	q.msgSeqMu.Lock()
 	defer q.msgSeqMu.Unlock()
 
-	q.msgSeqMap[msgID]++
-	seq := q.msgSeqMap[msgID]
+	entry := q.msgSeqMap[msgID]
+	entry.seq++
+	entry.lastUsed = time.Now()
+	q.msgSeqMap[msgID] = entry
+	seq := entry.seq
 
-	// Prevent unbounded growth: clean up old entries if map is too large
-	if len(q.msgSeqMap) > 10000 {
-		q.msgSeqMap = make(map[string]int)
-		q.msgSeqMap[msgID] = seq
+	// Prevent unbounded growth: evict entries not used recently
+	if len(q.msgSeqMap) > cacheMaxEntries {
+		cutoff := time.Now().Add(-cacheExpiry)
+		scanned := 0
+		for k, v := range q.msgSeqMap {
+			if v.lastUsed.Before(cutoff) {
+				delete(q.msgSeqMap, k)
+			}
+			scanned++
+			if scanned >= cacheMaxScanPerCleanup {
+				break
+			}
+		}
 	}
 
 	return seq
@@ -1534,11 +1604,21 @@ func (q *QQChannel) nextMsgSeq(msgID string) int {
 func (q *QQChannel) cacheChatType(chatID, chatType string) {
 	q.chatTypeMu.Lock()
 	defer q.chatTypeMu.Unlock()
-	q.chatTypeCache[chatID] = chatType
+	q.chatTypeCache[chatID] = chatTypeEntry{chatType: chatType, lastUsed: time.Now()}
 
-	// 防止无限增长
-	if len(q.chatTypeCache) > 10000 {
-		q.chatTypeCache = map[string]string{chatID: chatType}
+	// 防止无限增长：淘汰过期条目
+	if len(q.chatTypeCache) > cacheMaxEntries {
+		cutoff := time.Now().Add(-cacheExpiry)
+		scanned := 0
+		for k, v := range q.chatTypeCache {
+			if v.lastUsed.Before(cutoff) {
+				delete(q.chatTypeCache, k)
+			}
+			scanned++
+			if scanned >= cacheMaxScanPerCleanup {
+				break
+			}
+		}
 	}
 }
 
@@ -1546,7 +1626,10 @@ func (q *QQChannel) cacheChatType(chatID, chatType string) {
 func (q *QQChannel) inferChatType(chatID string) string {
 	q.chatTypeMu.RLock()
 	defer q.chatTypeMu.RUnlock()
-	return q.chatTypeCache[chatID]
+	if entry, ok := q.chatTypeCache[chatID]; ok {
+		return entry.chatType
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
@@ -1629,32 +1712,7 @@ func formatAttachments(attachments []qqAttachment) string {
 // stripQQMention 去除 QQ @mention 标记
 // QQ messages may contain <@!botid> or similar mention artifacts
 func stripQQMention(content string) string {
-	// Remove <@!xxx> patterns (guild @mentions)
-	result := content
-	for {
-		start := strings.Index(result, "<@!")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], ">")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + result[start+end+1:]
-	}
-	// Also remove <@xxx> patterns
-	for {
-		start := strings.Index(result, "<@")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], ">")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + result[start+end+1:]
-	}
-	return strings.TrimSpace(result)
+	return strings.TrimSpace(qqMentionRegex.ReplaceAllString(content, ""))
 }
 
 // parseTimestamp 解析 QQ 消息时间戳

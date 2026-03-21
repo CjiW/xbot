@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"xbot/llm"
 	"xbot/tools"
@@ -187,7 +188,8 @@ func (t *SearchWikiTool) searchWiki(ctx *tools.ToolContext, accessToken, query, 
 	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
 	httpReq.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	wikiHTTPClient := &http.Client{Timeout: 30 * time.Second}
+	httpResp, err := wikiHTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("call wiki search API: %w", err)
 	}

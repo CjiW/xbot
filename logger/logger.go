@@ -131,6 +131,10 @@ func (drf *dailyRotateFile) rotateLocked() error {
 
 // 全局日志文件写入器（用于 Close）
 var globalRotateFile *dailyRotateFile
+var globalRotateFileMu sync.Mutex // 保护 globalRotateFile 的并发写入（C-11）
+
+// cleanupStopCh 用于通知 cleanupOldLogs goroutine 停止
+var cleanupStopCh chan struct{}
 
 // Setup 设置日志系统（文件输出 + 按日轮转 + 自动清理）
 func Setup(cfg SetupConfig) error {
@@ -161,36 +165,55 @@ func Setup(cfg SetupConfig) error {
 
 		// 同时输出到文件和标准输出（方便 docker logs 查看）
 		log.SetOutput(io.MultiWriter(os.Stdout, drf))
+		globalRotateFileMu.Lock()
 		globalRotateFile = drf
+		globalRotateFileMu.Unlock()
 
 		// 启动后台清理旧日志
 		maxAge := cfg.MaxAge
 		if maxAge <= 0 {
 			maxAge = 7 // 默认保留 7 天
 		}
-		go cleanupOldLogs(logDir, maxAge)
+		cleanupStopCh = make(chan struct{})
+		go cleanupOldLogs(logDir, maxAge, cleanupStopCh)
 	}
 
 	return nil
 }
 
-// Close 关闭日志系统（刷新缓冲区，关闭文件）
+// Close 关闭日志系统（刷新缓冲区，关闭文件，停止后台清理）
 func Close() {
-	if globalRotateFile != nil {
-		_ = globalRotateFile.Close()
+	// 停止后台清理 goroutine
+	if cleanupStopCh != nil {
+		close(cleanupStopCh)
+		cleanupStopCh = nil
+	}
+
+	globalRotateFileMu.Lock()
+	drf := globalRotateFile
+	globalRotateFile = nil
+	globalRotateFileMu.Unlock()
+	if drf != nil {
+		_ = drf.Close()
 	}
 }
 
 // cleanupOldLogs 清理过期的日志文件
-func cleanupOldLogs(dir string, maxAge int) {
+// stopCh 收到信号后 goroutine 会在下一个 tick 退出
+func cleanupOldLogs(dir string, maxAge int, stopCh <-chan struct{}) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 
 	// 启动时执行一次
 	doCleanup(dir, maxAge)
 
-	for range ticker.C {
-		doCleanup(dir, maxAge)
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			doCleanup(dir, maxAge)
+		}
 	}
 }
 

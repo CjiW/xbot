@@ -2,6 +2,8 @@ package channel
 
 import (
 	"fmt"
+	"sync"
+
 	"xbot/bus"
 	log "xbot/logger"
 )
@@ -11,6 +13,7 @@ type Dispatcher struct {
 	channels map[string]Channel
 	bus      *bus.MessageBus
 	done     chan struct{}
+	mu       sync.RWMutex
 }
 
 // NewDispatcher 创建分发器
@@ -24,7 +27,9 @@ func NewDispatcher(msgBus *bus.MessageBus) *Dispatcher {
 
 // Register 注册渠道
 func (d *Dispatcher) Register(ch Channel) {
+	d.mu.Lock()
 	d.channels[ch.Name()] = ch
+	d.mu.Unlock()
 	log.WithField("channel", ch.Name()).Info("Channel registered")
 }
 
@@ -36,7 +41,9 @@ func (d *Dispatcher) Run() {
 		case <-d.done:
 			return
 		case msg := <-d.bus.Outbound:
+			d.mu.RLock()
 			ch, ok := d.channels[msg.Channel]
+			d.mu.RUnlock()
 			if !ok {
 				log.WithField("channel", msg.Channel).Warn("Unknown channel, dropping message")
 				continue
@@ -51,14 +58,18 @@ func (d *Dispatcher) Run() {
 // Stop 停止分发器
 func (d *Dispatcher) Stop() {
 	close(d.done)
+	d.mu.RLock()
 	for _, ch := range d.channels {
 		ch.Stop()
 	}
+	d.mu.RUnlock()
 }
 
 // SendDirect 同步发送消息到指定渠道，返回平台消息 ID
 func (d *Dispatcher) SendDirect(msg bus.OutboundMessage) (string, error) {
+	d.mu.RLock()
 	ch, ok := d.channels[msg.Channel]
+	d.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("unknown channel: %s", msg.Channel)
 	}
@@ -67,15 +78,19 @@ func (d *Dispatcher) SendDirect(msg bus.OutboundMessage) (string, error) {
 
 // GetChannel 获取渠道
 func (d *Dispatcher) GetChannel(name string) (Channel, bool) {
+	d.mu.RLock()
 	ch, ok := d.channels[name]
+	d.mu.RUnlock()
 	return ch, ok
 }
 
 // EnabledChannels 返回已注册的渠道列表
 func (d *Dispatcher) EnabledChannels() []string {
+	d.mu.RLock()
 	names := make([]string, 0, len(d.channels))
 	for name := range d.channels {
 		names = append(names, name)
 	}
+	d.mu.RUnlock()
 	return names
 }

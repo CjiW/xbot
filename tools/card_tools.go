@@ -9,6 +9,8 @@ import (
 )
 
 // cardToolNames lists dynamically registered card tool names for cleanup.
+// MAINTENANCE NOTE: When adding a new card tool, you MUST add its name here.
+// TODO: Consider auto-collecting via tool registry to avoid manual sync.
 var cardToolNames = []string{"card_add_content", "card_add_interactive", "card_add_container", "card_preview", "card_send"}
 
 // ensureCardToolsRegistered registers the dynamic card tools if not already present.

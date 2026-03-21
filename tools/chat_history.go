@@ -33,15 +33,19 @@ type ChatMessage struct {
 }
 
 // NewChatHistoryStore 创建聊天历史存储
+// maxSize 每个群组保留的最大消息数（<=0 时默认 200）
 func NewChatHistoryStore(maxSize int) *ChatHistoryStore {
 	if maxSize <= 0 {
-		maxSize = 20 // 默认保留最近 20 条
+		maxSize = 200 // 默认保留最近 200 条，防止长期运行 OOM
 	}
 	return &ChatHistoryStore{
 		history: make(map[string]*ChatHistory),
 		maxSize: maxSize,
 	}
 }
+
+// defaultMaxChannels 全局最大 channel 数，防止 history map 无限增长
+const defaultMaxChannels = 10000
 
 // Add 添加一条消息到历史
 func (s *ChatHistoryStore) Add(channel, chatID, senderID, content string) {
@@ -51,6 +55,10 @@ func (s *ChatHistoryStore) Add(channel, chatID, senderID, content string) {
 	key := s.makeKey(channel, chatID)
 	hist, exists := s.history[key]
 	if !exists {
+		// 防止 map 无限增长：超过上限时清理最旧的 channel
+		if len(s.history) >= defaultMaxChannels {
+			s.evictOldestLocked()
+		}
 		hist = &ChatHistory{
 			messages:   make([]ChatMessage, 0, s.maxSize),
 			maxSize:    s.maxSize,
@@ -72,6 +80,21 @@ func (s *ChatHistoryStore) Add(channel, chatID, senderID, content string) {
 	if len(hist.messages) > hist.maxSize {
 		// 保留最新的 maxSize 条消息
 		hist.messages = hist.messages[len(hist.messages)-hist.maxSize:]
+	}
+}
+
+// evictOldestLocked 清理最旧的 channel（调用方需持有写锁）
+func (s *ChatHistoryStore) evictOldestLocked() {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, h := range s.history {
+		if oldestKey == "" || h.lastUpdate.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = h.lastUpdate
+		}
+	}
+	if oldestKey != "" {
+		delete(s.history, oldestKey)
 	}
 }
 

@@ -16,6 +16,11 @@ func SanitizeWorkspaceKey(raw string) string {
 	if trimmed == "" {
 		return "anonymous"
 	}
+	// 限制最大长度，防止超长输入导致路径过长或 hash DoS
+	const maxKeyLength = 256
+	if len(trimmed) > maxKeyLength {
+		trimmed = trimmed[:maxKeyLength]
+	}
 	sanitized := nonSafeSegment.ReplaceAllString(trimmed, "_")
 	sanitized = strings.Trim(sanitized, "._-")
 	if sanitized == "" {

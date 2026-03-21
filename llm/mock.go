@@ -60,7 +60,7 @@ func (m *MockLLM) ListModels() []string {
 func (m *MockLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	var sb strings.Builder
 	for _, msg := range messages {
-		if msg.Content != "" && msg.Role != "tool" && msg.Role != "system" {
+		if msg.Content != "" {
 			if sb.Len() > 0 {
 				sb.WriteString("\n")
 			}

@@ -112,6 +112,7 @@ type MultiTenantSession struct {
 	shutdownCancel        context.CancelFunc
 	toolIndexFingerprints map[int64]string          // per-tenant catalog fingerprint (guarded by mu)
 	toolIndexPrevNames    map[int64]map[string]bool // per-tenant previous tool name set (guarded by mu)
+	onSessionEvict        func(sessionKey string)   // 会话被清理时的回调（用于 Registry 清理 sessionActivated/sessionRound）
 }
 
 // NewMultiTenant creates a new multi-tenant session manager
@@ -564,28 +565,55 @@ func (m *MultiTenantSession) StopCleanupRoutine() {
 	})
 }
 
+// SetOnSessionEvict 设置会话被清理时的回调（用于 Registry 清理 sessionActivated/sessionRound）
+func (m *MultiTenantSession) SetOnSessionEvict(cb func(sessionKey string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onSessionEvict = cb
+}
+
 // cleanupInactiveResources 清理不活跃的资源（MCP 连接和会话缓存）
 func (m *MultiTenantSession) cleanupInactiveResources() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	now := time.Now()
 	var sessionsToDelete []string
 
-	// 清理每个会话的不活跃 MCP 连接
+	// 收集需要清理的会话（持锁期间只做轻量操作，不执行 I/O）
 	for key, sess := range m.tenantCache {
-		lastActive := sess.CleanupInactiveMCPs()
+		// 使用 lastActive 字段判断是否超时（避免在锁内调用 CleanupInactiveMCPs 的 I/O）
+		lastActive := sess.LastActive()
 		if now.Sub(lastActive) > m.sessionCacheTimeout {
 			sessionsToDelete = append(sessionsToDelete, key)
 		}
 	}
 
-	// 删除超时的会话
+	// 收集要关闭的会话并从缓存中移除（持锁期间只做轻量操作）
+	type sessionToClose struct {
+		key  string
+		sess *TenantSession
+	}
+	var toClose []sessionToClose
 	for _, key := range sessionsToDelete {
 		if sess, ok := m.tenantCache[key]; ok {
-			sess.Close() // 关闭 MCP 连接
+			toClose = append(toClose, sessionToClose{key: key, sess: sess})
 			delete(m.tenantCache, key)
-			log.WithField("session", key).Info("Removed session from cache due to inactivity")
+		}
+	}
+
+	// 获取回调并释放锁
+	onEvict := m.onSessionEvict
+	m.mu.Unlock()
+
+	// 释放锁后执行所有 I/O 操作（关闭 MCP 连接）和回调
+	for _, item := range toClose {
+		// CleanupInactiveMCPs 和 Close 都包含 I/O，在锁外执行
+		item.sess.CleanupInactiveMCPs()
+		item.sess.Close()
+		log.WithField("session", item.key).Info("Removed session from cache due to inactivity")
+		// 通知 Registry 清理该会话的激活状态
+		if onEvict != nil {
+			onEvict(item.key)
 		}
 	}
 }

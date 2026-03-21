@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xbot/bus"
@@ -65,15 +66,16 @@ type FeishuChannel struct {
 	msgBus    *bus.MessageBus
 	client    *lark.Client
 	wsClient  *larkws.Client
-	running   bool
+	running   atomic.Bool
 	mu        sync.Mutex
 	botOpenID string
-	botName   string // 机器人名称，用于引用消息中标识自己
+	botName   atomic.Value // 机器人名称，用于引用消息中标识自己（存储 string）
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}
 	processedOrder []string
 	maxProcessed   int
+	processedMu    sync.Mutex // 专门保护 processedIDs 和 processedOrder
 
 	// OpenID -> 用户姓名缓存
 	userNameCache map[string]string
@@ -141,9 +143,7 @@ func (f *FeishuChannel) Start() error {
 		return fmt.Errorf("feishu app_id and app_secret are required")
 	}
 
-	f.mu.Lock()
-	f.running = true
-	f.mu.Unlock()
+	f.running.Store(true)
 
 	// 创建 Lark 客户端（用于发送消息）
 	f.client = lark.NewClient(f.config.AppID, f.config.AppSecret,
@@ -182,9 +182,11 @@ func (f *FeishuChannel) Start() error {
 
 // Stop 停止飞书渠道
 func (f *FeishuChannel) Stop() {
+	if !f.running.CompareAndSwap(true, false) {
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.running = false
 	log.Info("Feishu bot stopped")
 }
 
@@ -197,11 +199,10 @@ func (f *FeishuChannel) getUserName(openID string) string {
 
 	// Bot open_id 通常以 "cli_" 开头，返回机器人名称
 	if strings.HasPrefix(openID, "cli_") {
-		f.mu.Lock()
-		botName := f.botName
-		f.mu.Unlock()
-		if botName != "" {
-			return botName
+		if v := f.botName.Load(); v != nil {
+			if name := v.(string); name != "" {
+				return name
+			}
 		}
 		return "Bot"
 	}
@@ -723,7 +724,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	l := log.WithField("request_id", requestID)
 
 	f.mu.Lock()
-	if !f.running {
+	if !f.running.Load() {
 		f.mu.Unlock()
 		return nil
 	}
@@ -731,6 +732,12 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 
 	msg := event.Event.Message
 	sender := event.Event.Sender
+
+	// B-04: nil guard — 飞书 SDK 可能传入 MessageId == nil
+	if msg.MessageId == nil || *msg.MessageId == "" {
+		l.Warn("Feishu: received message with nil or empty MessageId, skipping")
+		return nil
+	}
 
 	// 调试日志：确认收到消息事件（记录所有消息，包括未@的）
 	l.WithFields(log.Fields{
@@ -972,8 +979,8 @@ func (f *FeishuChannel) refreshBotOpenID(ctx context.Context) error {
 
 	f.mu.Lock()
 	f.botOpenID = strings.TrimSpace(resp.Bot.OpenID)
-	f.botName = strings.TrimSpace(resp.Bot.Name)
 	f.mu.Unlock()
+	f.botName.Store(strings.TrimSpace(resp.Bot.Name))
 
 	log.WithFields(log.Fields{
 		"bot_open_id": resp.Bot.OpenID,
@@ -1076,6 +1083,19 @@ func isAtAllMention(mention *larkim.MentionEvent) bool {
 func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 	// 在渠道收到卡片交互的第一时间生成 requestID
 	requestID := log.NewRequestID()
+
+	// S-01: 权限检查 — 防止 AllowFrom 白名单外的用户通过卡片回调绕过权限向消息总线发送消息
+	// 对比 onMessage 函数有 isAllowed(senderID) 检查，此处需同步添加
+	{
+		var senderID string
+		if event.Event != nil && event.Event.Operator != nil {
+			senderID = event.Event.Operator.OpenID
+		}
+		if !f.isAllowed(senderID) {
+			log.WithField("sender_id", senderID).Warn("Card action denied: sender not in AllowFrom whitelist")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
+	}
 
 	if event.Event == nil || event.Event.Action == nil {
 		log.Warn("Card action event is missing data")
@@ -1387,11 +1407,8 @@ func formatMapString(m map[string]string) string {
 	if len(m) == 0 {
 		return ""
 	}
-	var parts []string
-	for k, v := range m {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
-	}
-	return strings.Join(parts, ", ")
+	data, _ := json.Marshal(m)
+	return string(data)
 }
 
 // feishuMsg is a common interface for extracting message fields from both
@@ -1527,6 +1544,9 @@ func (f *FeishuChannel) parseContent(msg feishuMsg) string {
 }
 
 // extractPostText 提取富文本内容
+// Design note: messageId is threaded through parseContent → extractPostText → extractFromLang
+// so that embedded images/videos in the post can include message_id in their XML tags.
+// This enables the agent to call feishu_download_file with the correct message_id later.
 func (f *FeishuChannel) extractPostText(contentJSON map[string]any, messageId string) string {
 	// 尝试直接格式
 	if result := f.extractFromLang(contentJSON, messageId); result != "" {
@@ -1818,8 +1838,8 @@ func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV
 
 // isDuplicate 检查消息是否重复
 func (f *FeishuChannel) isDuplicate(messageID string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.processedMu.Lock()
+	defer f.processedMu.Unlock()
 
 	if _, exists := f.processedIDs[messageID]; exists {
 		return true
@@ -1833,6 +1853,12 @@ func (f *FeishuChannel) isDuplicate(messageID string) bool {
 		oldest := f.processedOrder[0]
 		f.processedOrder = f.processedOrder[1:]
 		delete(f.processedIDs, oldest)
+	}
+	// 防止底层数组无限增长：当容量超过阈值时收缩
+	if cap(f.processedOrder) > f.maxProcessed*10 {
+		trimmed := make([]string, len(f.processedOrder))
+		copy(trimmed, f.processedOrder)
+		f.processedOrder = trimmed
 	}
 	return false
 }
@@ -1855,6 +1881,12 @@ var mdTableSepRe = regexp.MustCompile(`^\|[\s:]*-+[\s:]*(\|[\s:]*-+[\s:]*)+\|?\s
 
 // limitMarkdownTables 限制 markdown 内容中的表格数量。
 // 超出 maxTables 的表格会被转成代码块（保留可读性但不触发飞书 table 渲染）。
+//
+// 表格检测逻辑：
+//   - 以 separator 行（|---|---|）作为表格起始标记
+//   - separator 前紧邻的 pipe 行（|）视为 header 行
+//   - 表格以 separator 开头（无 header）是合法的 markdown 边界情况，
+//     此时 header 行包裹逻辑被自然跳过（prev 不是 pipe 行）
 func limitMarkdownTables(content string, maxTables int) string {
 	lines := strings.Split(content, "\n")
 	tableCount := 0

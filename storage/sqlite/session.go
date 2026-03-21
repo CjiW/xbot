@@ -8,6 +8,7 @@ import (
 
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/storage/internal"
 )
 
 // SessionService handles session message operations
@@ -46,7 +47,7 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 		tenantID, msg.Role, msg.Content,
 		msg.ToolCallID, msg.ToolName, msg.ToolArguments,
 		toolCallsJSON, msg.Detail,
-		ts.Format("2006-01-02 15:04:05"),
+		ts.Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("insert session message: %w", err)
@@ -58,32 +59,29 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 
-	// First get total count
-	var total int
-	err := conn.QueryRow("SELECT COUNT(*) FROM session_messages WHERE tenant_id = ?", tenantID).Scan(&total)
-	if err != nil {
-		return nil, fmt.Errorf("count messages: %w", err)
-	}
-
-	// Calculate offset (get last 'limit' messages)
-	offset := total - limit
-	if offset < 0 {
-		offset = 0
-	}
-
 	rows, err := conn.Query(`
 		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 		FROM session_messages
 		WHERE tenant_id = ?
-		ORDER BY id ASC
-		LIMIT -1 OFFSET ?
-	`, tenantID, offset)
+		ORDER BY id DESC
+		LIMIT ?
+	`, tenantID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query session history: %w", err)
 	}
 	defer rows.Close()
 
-	return s.scanMessages(rows)
+	messages, err := s.scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse to maintain chronological order (oldest first)
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
 }
 
 // GetAllMessages retrieves all messages for a tenant
@@ -155,7 +153,7 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 			}
 		}
 
-		msg.Timestamp = parseTimestamp(createdAt)
+		msg.Timestamp = internal.ParseTimestamp(createdAt)
 
 		messages = append(messages, msg)
 	}
@@ -163,22 +161,4 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 		return nil, fmt.Errorf("iterate messages: %w", err)
 	}
 	return messages, nil
-}
-
-// parseTimestamp parses a timestamp string from SQLite. New rows are stored in
-// local wall-clock format "2006-01-02 15:04:05". Legacy "...Z" timestamps from
-// older SQLite driver versions are treated as local wall-clock values to avoid
-// timezone shifts.
-func parseTimestamp(s string) time.Time {
-	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.ParseInLocation("2006-01-02T15:04:05Z", s, time.Local); err == nil {
-		return t
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.Local()
-	}
-
-	return time.Time{}
 }

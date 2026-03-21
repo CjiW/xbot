@@ -148,7 +148,7 @@ func TestFormStr(t *testing.T) {
 func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		ContextModeGet: func() string { return "phase2" },
+		ContextModeGet: func() string { return "phase1" },
 	})
 
 	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "general")
@@ -170,8 +170,8 @@ func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 		t.Error("general tab should have context mode select dropdown")
 	}
 
-	if !strings.Contains(cardJSON(card), "渐进压缩") {
-		t.Error("should show current mode label '渐进压缩' for phase2")
+	if !strings.Contains(cardJSON(card), "双视图压缩") {
+		t.Error("should show current mode label '双视图压缩' for phase1")
 	}
 }
 
@@ -202,7 +202,7 @@ func TestHandleSettingsAction_ContextMode(t *testing.T) {
 
 	actionData := map[string]any{
 		"action_data":     `{"action":"settings_context_mode"}`,
-		"selected_option": "phase2",
+		"selected_option": "phase1",
 	}
 	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
 	if err != nil {
@@ -211,8 +211,8 @@ func TestHandleSettingsAction_ContextMode(t *testing.T) {
 	if card == nil {
 		t.Fatal("expected non-nil card")
 	}
-	if setMode != "phase2" {
-		t.Errorf("expected mode=phase2, got %q", setMode)
+	if setMode != "phase1" {
+		t.Errorf("expected mode=phase1, got %q", setMode)
 	}
 }
 

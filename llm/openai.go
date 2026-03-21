@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	logrus "xbot/logger"
@@ -16,8 +17,9 @@ import (
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
 	client       *openai.Client
-	models       []string // 可用模型列表
-	defaultModel string   // 默认模型
+	mu           sync.RWMutex // 保护 models 和 defaultModel 的并发读写（C-12）
+	models       []string     // 可用模型列表
+	defaultModel string       // 默认模型
 }
 
 // OpenAIConfig OpenAI 配置
@@ -47,7 +49,9 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		logrus.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
 		// API 获取失败，使用默认模型作为回退
 		if cfg.DefaultModel != "" {
+			o.mu.Lock()
 			o.models = []string{cfg.DefaultModel}
+			o.mu.Unlock()
 			logrus.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
 		}
 	}
@@ -57,6 +61,8 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 
 // ListModels 获取可用模型列表
 func (o *OpenAILLM) ListModels() []string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	result := make([]string, len(o.models))
 	copy(result, o.models)
 	return result
@@ -64,6 +70,8 @@ func (o *OpenAILLM) ListModels() []string {
 
 // GetDefaultModel 获取默认模型
 func (o *OpenAILLM) GetDefaultModel() string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	if o.defaultModel != "" {
 		return o.defaultModel
 	}
@@ -95,16 +103,18 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	}
 
 	// 更新模型列表
+	o.mu.Lock()
 	o.models = models
-
-	// 如果没有设置默认模型，使用第一个模型
 	if o.defaultModel == "" && len(o.models) > 0 {
 		o.defaultModel = o.models[0]
 	}
+	modelCount := len(o.models)
+	defaultModel := o.defaultModel
+	o.mu.Unlock()
 
 	logrus.WithFields(logrus.Fields{
-		"model_count":   len(o.models),
-		"default_model": o.defaultModel,
+		"model_count":   modelCount,
+		"default_model": defaultModel,
 	}).Info("[LLM] Models loaded from OpenAI API")
 
 	return nil
@@ -235,10 +245,14 @@ func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam
 		properties := make(map[string]any)
 		required := make([]string, 0)
 		for _, p := range tool.Parameters() {
-			properties[p.Name] = map[string]any{
+			prop := map[string]any{
 				"type":        p.Type,
 				"description": p.Description,
 			}
+			if p.Items != nil {
+				prop["items"] = p.Items
+			}
+			properties[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}
@@ -301,6 +315,7 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// 显式禁用 thinking
 		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
 	default:
+		logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode, attempting JSON parse")
 		// 尝试解析为 JSON 对象（高级用法）
 		// 支持两种格式：
 		// 1. 完整 thinking 参数: {"type": "enabled", "clear_thinking": false}
@@ -317,7 +332,14 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 						opts = append(opts, option.WithJSONSet(key, value))
 					}
 				}
+			} else {
+				logrus.WithFields(logrus.Fields{
+					"thinking_mode": thinkingMode,
+					"error":         err.Error(),
+				}).Warn("[LLM] Failed to parse thinking mode as JSON, ignoring")
 			}
+		} else {
+			logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode is not valid JSON, ignoring")
 		}
 	}
 

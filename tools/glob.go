@@ -20,6 +20,9 @@ import (
 //   - **/test/*.go    → ("", "-path '*/test/*.go'")        // 递归
 //   - src/**/test/*.go→ ("src", "-path '*/test/*.go'")     // 递归
 func globToFindArgs(pattern string) (searchBase string, args string) {
+	// filepath.ToSlash 将 Windows 反斜杠 \ 转换为正斜杠 /，
+	// 确保跨平台 glob pattern 在 Linux 沙箱中正确工作。
+	// 例如 "src\*.go" 会被规范化为 "src/*.go"。
 	pattern = strings.Trim(pattern, "/")
 	pattern = filepath.ToSlash(pattern)
 	if pattern == "" {
@@ -40,11 +43,11 @@ func globToFindArgs(pattern string) (searchBase string, args string) {
 	if doubleStarIdx == -1 {
 		// 无 **：简单匹配，-maxdepth 1 限定不递归
 		if len(segments) == 1 {
-			return "", fmt.Sprintf("-maxdepth 1 -name '%s'", segments[0])
+			return "", fmt.Sprintf("-maxdepth 1 -name '%s'", shellEscape(segments[0]))
 		}
 		base := strings.Join(segments[:len(segments)-1], "/")
 		name := segments[len(segments)-1]
-		return base, fmt.Sprintf("-maxdepth 1 -name '%s'", name)
+		return base, fmt.Sprintf("-maxdepth 1 -name '%s'", shellEscape(name))
 	}
 
 	// 有 **：
@@ -56,12 +59,12 @@ func globToFindArgs(pattern string) (searchBase string, args string) {
 	}
 
 	if len(suffixSegments) == 1 {
-		return prefix, fmt.Sprintf("-name '%s'", suffixSegments[0])
+		return prefix, fmt.Sprintf("-name '%s'", shellEscape(suffixSegments[0]))
 	}
 
 	// 多个后缀 segment：用 -path
 	pathPattern := "*/" + strings.Join(suffixSegments, "/")
-	return prefix, fmt.Sprintf("-path '%s'", pathPattern)
+	return prefix, fmt.Sprintf("-path '%s'", shellEscape(pathPattern))
 }
 
 // GlobTool 文件模式匹配搜索工具

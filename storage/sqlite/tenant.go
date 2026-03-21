@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -18,53 +17,52 @@ func NewTenantService(db *DB) *TenantService {
 	return &TenantService{db: db}
 }
 
-// GetOrCreateTenantID retrieves a tenant ID by (channel, chat_id), creating it if it doesn't exist
+// GetOrCreateTenantID retrieves a tenant ID by (channel, chat_id), creating it if it doesn't exist.
+// Uses INSERT OR IGNORE within a transaction to avoid TOCTOU race conditions.
+// The UNIQUE(channel, chat_id) constraint on the tenants table guarantees uniqueness.
 func (s *TenantService) GetOrCreateTenantID(channel, chatID string) (int64, error) {
 	conn := s.db.Conn()
 
-	// Try to find existing tenant
+	tx, err := conn.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	// INSERT OR IGNORE: if the row already exists (UNIQUE constraint), it is silently skipped.
+	_, err = tx.Exec(
+		"INSERT OR IGNORE INTO tenants (channel, chat_id, created_at, last_active_at) VALUES (?, ?, ?, ?)",
+		channel, chatID, now, now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert or ignore tenant: %w", err)
+	}
+
+	// SELECT the tenant ID (works for both newly inserted and pre-existing rows).
 	var tenantID int64
-	err := conn.QueryRow(
+	err = tx.QueryRow(
 		"SELECT id FROM tenants WHERE channel = ? AND chat_id = ?",
 		channel, chatID,
 	).Scan(&tenantID)
-
-	if err == nil {
-		// Found existing tenant, update last_active_at
-		if _, err := conn.Exec(
-			"UPDATE tenants SET last_active_at = ? WHERE id = ?",
-			time.Now(), tenantID,
-		); err != nil {
-			log.WithError(err).Warn("Failed to update tenant last_active_at")
-		}
-		return tenantID, nil
-	}
-
-	if err != sql.ErrNoRows {
-		return 0, fmt.Errorf("query tenant: %w", err)
-	}
-
-	// Create new tenant
-	result, err := conn.Exec(
-		"INSERT INTO tenants (channel, chat_id, created_at, last_active_at) VALUES (?, ?, ?, ?)",
-		channel, chatID, time.Now(), time.Now(),
-	)
 	if err != nil {
-		return 0, fmt.Errorf("insert tenant: %w", err)
+		return 0, fmt.Errorf("select tenant: %w", err)
 	}
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("get last insert id: %w", err)
+	// Always update last_active_at to reflect current usage.
+	if _, err := tx.Exec(
+		"UPDATE tenants SET last_active_at = ? WHERE id = ?",
+		now, tenantID,
+	); err != nil {
+		log.WithError(err).Warn("Failed to update tenant last_active_at")
 	}
 
-	log.WithFields(log.Fields{
-		"tenant_id": id,
-		"channel":   channel,
-		"chat_id":   chatID,
-	}).Info("New tenant created")
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
 
-	return id, nil
+	return tenantID, nil
 }
 
 // GetTenantInfo retrieves tenant information by ID

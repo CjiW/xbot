@@ -7,23 +7,40 @@ import (
 	"html"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
 )
 
+// sendFuncHolder wraps a send function for safe storage in atomic.Value.
+type sendFuncHolder struct {
+	fn func(channel, chatID, content string) error
+}
+
 // Server is a lightweight HTTP server for OAuth callbacks.
 type Server struct {
-	mu       sync.Mutex
-	config   Config
-	server   *http.Server
-	mgr      *Manager
-	SendFunc func(channel, chatID, content string) error // Function to send messages back to chat
+	mu          sync.Mutex
+	config      Config
+	server      *http.Server
+	mgr         *Manager
+	sendFuncVal atomic.Value // stores sendFuncHolder
+}
+
+// SetSendFunc atomically sets the function used to send messages back to chat.
+func (s *Server) SetSendFunc(fn func(channel, chatID, content string) error) {
+	s.sendFuncVal.Store(sendFuncHolder{fn: fn})
+}
+
+// getSendFunc atomically retrieves the send function (never nil after NewServer).
+func (s *Server) getSendFunc() func(channel, chatID, content string) error {
+	return s.sendFuncVal.Load().(sendFuncHolder).fn
 }
 
 // Config contains the OAuth server configuration.
 type Config struct {
 	Enable  bool   // Whether to enable the OAuth server
+	Host    string // Host to listen on (default 127.0.0.1, safer than 0.0.0.0)
 	Port    int    // Port to listen on (default 8081, can reuse pprof port)
 	BaseURL string // Public base URL for callbacks (e.g., https://your-domain.com)
 }
@@ -33,10 +50,17 @@ func NewServer(cfg Config, mgr *Manager) *Server {
 	if cfg.Port == 0 {
 		cfg.Port = 8081
 	}
-	return &Server{
+	if cfg.Host == "" {
+		cfg.Host = "127.0.0.1" // 默认绑定 localhost，避免暴露到所有网络接口
+	}
+	s := &Server{
 		config: cfg,
 		mgr:    mgr,
 	}
+	s.sendFuncVal.Store(sendFuncHolder{fn: func(channel, chatID, content string) error {
+		return nil // no-op default, prevents nil function call
+	}})
+	return s
 }
 
 // Start starts the OAuth HTTP server if enabled.
@@ -58,7 +82,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/oauth/health", s.handleHealth)
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf("0.0.0.0:%d", s.config.Port),
+		Addr:         fmt.Sprintf("%s:%d", s.config.Host, s.config.Port),
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -71,6 +95,7 @@ func (s *Server) Start() error {
 	}()
 
 	log.WithFields(log.Fields{
+		"host":    s.config.Host,
 		"port":    s.config.Port,
 		"baseURL": s.config.BaseURL,
 	}).Info("OAuth server started")
@@ -103,6 +128,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	state := query.Get("state")
 	code := query.Get("code")
+
+	if len(state) > 256 {
+		s.renderError(w, "Invalid callback", "state parameter too long")
+		return
+	}
+	if len(code) > 4096 {
+		s.renderError(w, "Invalid callback", "code parameter too long")
+		return
+	}
 	errorMsg := query.Get("error")
 
 	log.WithFields(log.Fields{
@@ -151,9 +185,9 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	s.renderSuccess(w, provider)
 
 	// Send success message back to the chat
-	if s.SendFunc != nil {
+	if fn := s.getSendFunc(); fn != nil {
 		successMsg := "✅ 授权成功！现在可以继续之前的操作了。"
-		if err := s.SendFunc(flow.Channel, flow.ChatID, successMsg); err != nil {
+		if err := fn(flow.Channel, flow.ChatID, successMsg); err != nil {
 			log.WithError(err).Error("Failed to send OAuth success message")
 		}
 	}
@@ -163,8 +197,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "ok",
-		"providers": s.mgr.ListProviders(),
+		"status": "ok",
 	})
 }
 

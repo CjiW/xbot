@@ -104,7 +104,7 @@ func (a *Agent) handleContextMode(ctx context.Context, msg bus.InboundMessage, m
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
 			ChatID:  msg.ChatID,
-			Content: "无效模式。可选: phase1, phase2, none, default",
+			Content: "无效模式。可选: phase1, none, default",
 		}, nil
 	}
 

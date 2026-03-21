@@ -143,9 +143,14 @@ type ToolParam struct {
 	Items       *ToolParamItems `json:"items,omitempty"` // For array types
 }
 
-// ToolParamItems 定义数组类型的元素类型
+// ToolParamItems 定义数组类型的元素类型（支持完整 JSON Schema 子结构）
 type ToolParamItems struct {
-	Type string `json:"type"`
+	Type                 string          `json:"type"`
+	Properties           map[string]any  `json:"properties,omitempty"`
+	Required             []string        `json:"required,omitempty"`
+	Items                *ToolParamItems `json:"items,omitempty"`
+	Description          string          `json:"description,omitempty"`
+	AdditionalProperties any             `json:"additionalProperties,omitempty"`
 }
 
 // ToolDefinition 工具定义接口（用于 LLM 调用）

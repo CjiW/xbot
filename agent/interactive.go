@@ -29,7 +29,7 @@ type interactiveAgent struct {
 const interactiveSessionTTL = 30 * time.Minute
 
 // cleanupExpiredSessions 清理所有过期的 interactive SubAgent 会话。
-// 调用方不需要持有 interactiveMu 锁（如果需要请在外部加锁）。
+// sync.Map 本身并发安全，调用方不需要持有任何额外的锁。
 func (a *Agent) cleanupExpiredSessions() {
 	now := time.Now()
 	a.interactiveSubAgents.Range(func(k, v interface{}) bool {
@@ -64,10 +64,9 @@ func interactiveKey(channel, chatID, roleName string) string {
 // SpawnInteractiveSession 创建一个新的 interactive SubAgent 会话并执行首次任务。
 // 如果同名 role 的 session 已存在，返回 error。
 //
-// 锁策略：interactiveMu 仅保护 interactiveSubAgents map 的检查/创建/替换操作，
-// Run() 执行前必须释放锁，否则嵌套 interactive SubAgent（如太子→尚书令）
-// 会在同一 goroutine 中递归获取同一把互斥锁导致死锁。
-// 使用占位符模式：在锁内 Store 一个最小占位符，锁外 Run() 完成后替换为完整数据。
+// 锁策略：interactiveSubAgents 使用 sync.Map，本身并发安全，无需额外互斥锁。
+// 使用 LoadOrStore 实现原子的 check-and-store，避免 spawn 竞态。
+// 使用占位符模式：Store 一个最小占位符，Run() 完成后替换为完整数据。
 // 任何错误路径都必须清理占位符，避免 session 卡死。
 func (a *Agent) SpawnInteractiveSession(
 	ctx context.Context,
@@ -78,19 +77,17 @@ func (a *Agent) SpawnInteractiveSession(
 
 	key := interactiveKey(originChannel, originChatID, roleName)
 
-	// --- 阶段 1：锁内检查 map + 创建占位符 ---
-	a.interactiveMu.Lock()
+	// --- 阶段 1：原子 check-and-store ---
+	// 先清理过期 session（sync.Map 并发安全，不需要额外锁）
 	a.cleanupExpiredSessions()
-	if _, loaded := a.interactiveSubAgents.Load(key); loaded {
-		a.interactiveMu.Unlock()
+
+	// 原子 check-and-store：如果 key 已存在，直接返回
+	placeholder := &interactiveAgent{roleName: roleName, lastUsed: time.Now()}
+	if _, loaded := a.interactiveSubAgents.LoadOrStore(key, placeholder); loaded {
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
 		}, nil
 	}
-	// 存储占位符，防止并发 spawn 同一 role
-	placeholder := &interactiveAgent{roleName: roleName, lastUsed: time.Now()}
-	a.interactiveSubAgents.Store(key, placeholder)
-	a.interactiveMu.Unlock()
 
 	// --- 阶段 2：锁外构建 config（不需要锁） ---
 	parentCtx := a.buildParentToolContext(ctx, originChannel, originChatID, originSender, msg)

@@ -145,7 +145,7 @@ func (t *CoreMemoryReplaceTool) Execute(ctx *ToolContext, input string) (*ToolRe
 	}
 
 	if !strings.Contains(current, args.OldText) {
-		return NewResult(fmt.Sprintf("old_text not found in %s block. Current content:\n%s", args.Block, current)), nil
+		return NewErrorResult(fmt.Sprintf("old_text not found in %s block. No changes made.", args.Block)), nil
 	}
 
 	newContent := strings.Replace(current, args.OldText, args.NewText, 1)
@@ -202,6 +202,12 @@ func (t *RethinkTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 
 	if !isValidBlock(args.Block) {
 		return NewResult("Invalid block name. Must be: persona, human, or working_context"), nil
+	}
+
+	// Enforce max content length (100KB) to prevent excessive memory usage
+	const maxRethinkContentLen = 100 * 1024
+	if len(args.NewContent) > maxRethinkContentLen {
+		return NewResult(fmt.Sprintf("new_content exceeds maximum length of %d bytes (got %d bytes)", maxRethinkContentLen, len(args.NewContent))), nil
 	}
 
 	coreSvc := ctx.CoreMemory

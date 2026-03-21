@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"xbot/llm"
 	log "xbot/logger"
 )
+
+// validIDPattern validates that message_id and file_key only contain safe characters.
+var validIDPattern = regexp.MustCompile(`^[\w.\-]+$`)
 
 // DownloadFileTool downloads files/images sent by users in chat.
 // Currently supports: feishu (via Message Resource API).
@@ -69,6 +73,12 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 	if params.FileKey == "" {
 		return nil, fmt.Errorf("file_key is required")
 	}
+	if !validIDPattern.MatchString(params.MessageID) {
+		return nil, fmt.Errorf("invalid message_id format")
+	}
+	if !validIDPattern.MatchString(params.FileKey) {
+		return nil, fmt.Errorf("invalid file_key format")
+	}
 	if params.OutputPath == "" {
 		return nil, fmt.Errorf("output_path is required")
 	}
@@ -92,6 +102,9 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		return nil, fmt.Errorf("file download not supported for channel: %s", ctx.Channel)
 	}
 }
+
+// maxDownloadSize is the maximum allowed download size (100MB).
+const maxDownloadSize = 100 * 1024 * 1024
 
 // downloadFeishu downloads a file/image from Feishu via Message Resource API.
 func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPath, displayPath string) (*ToolResult, error) {
@@ -131,9 +144,13 @@ func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPa
 	}
 	defer outFile.Close()
 
-	written, err := io.Copy(outFile, resp.Body)
+	limitedReader := io.LimitReader(resp.Body, maxDownloadSize)
+	written, err := io.Copy(outFile, limitedReader)
 	if err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
+	}
+	if written >= maxDownloadSize {
+		return nil, fmt.Errorf("downloaded file exceeds maximum allowed size (100MB)")
 	}
 
 	log.WithFields(log.Fields{

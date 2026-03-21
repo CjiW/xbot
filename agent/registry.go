@@ -418,8 +418,10 @@ func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 	return ""
 }
 
+// markInstalled records the installation source and timestamp for a skill.
+// TODO: 持久化安装信息到本地数据库，用于后续版本管理和自动更新。
 func (rm *RegistryManager) markInstalled(skillDir, installedFrom string, installedAt int64) {
-	// Placeholder for writing install metadata.
+	// TODO: write install metadata to DB (installedFrom, installedAt)
 }
 
 func copyDir(src, dst string) error {
@@ -434,8 +436,23 @@ func copyDir(src, dst string) error {
 		}
 		targetPath := filepath.Join(dst, relPath)
 
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+
+		// Handle symbolic links: create symlink instead of copying content.
+		// WalkDir follows symlinks, so we must detect them via Lstat.
+		if fi.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, targetPath)
+		}
+
 		if d.IsDir() {
-			return os.MkdirAll(targetPath, 0o755)
+			return os.MkdirAll(targetPath, fi.Mode())
 		}
 
 		data, err := os.ReadFile(path)
@@ -443,6 +460,6 @@ func copyDir(src, dst string) error {
 			return err
 		}
 
-		return os.WriteFile(targetPath, data, 0o644)
+		return os.WriteFile(targetPath, data, fi.Mode())
 	})
 }

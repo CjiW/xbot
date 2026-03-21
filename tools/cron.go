@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -59,8 +58,8 @@ type cronParams struct {
 }
 
 func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var p cronParams
-	if err := json.Unmarshal([]byte(input), &p); err != nil {
+	p, err := parseToolArgs[cronParams](input)
+	if err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
@@ -71,7 +70,7 @@ func (t *CronTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 
 	switch p.Action {
 	case "add":
-		return t.addJob(ctx, p)
+		return t.addJob(ctx, *p)
 	case "list":
 		return t.listJobs(senderID)
 	case "remove":
@@ -93,6 +92,9 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 	hasAt := p.At != ""
 	count := 0
 	if hasCron {
+		if err := cron.ValidateCronExpr(p.CronExpr); err != nil {
+			return nil, fmt.Errorf("invalid cron expression: %w", err)
+		}
 		count++
 	}
 	if hasInterval {
@@ -102,6 +104,15 @@ func (t *CronTool) addJob(ctx *ToolContext, p cronParams) (*ToolResult, error) {
 		count++
 	}
 	if hasAt {
+		// Validate ISO datetime format (e.g., "2026-02-12T10:30:00" or "2026-02-12T10:30:00Z")
+		_, parseErr := time.Parse(time.RFC3339, p.At)
+		if parseErr != nil {
+			// Also try without timezone for common LLM outputs like "2026-02-12T10:30:00"
+			_, parseErr2 := time.Parse("2006-01-02T15:04:05", p.At)
+			if parseErr2 != nil {
+				return nil, fmt.Errorf("invalid 'at' datetime format %q: must be ISO 8601 (e.g. '2026-02-12T10:30:00' or '2026-02-12T10:30:00Z'): %w", p.At, parseErr)
+			}
+		}
 		count++
 	}
 	if count == 0 {

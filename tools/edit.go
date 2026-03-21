@@ -465,7 +465,14 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		newLines := make([]string, 0, len(lines)-1)
 		newLines = append(newLines, lines[:idx]...)
 		newLines = append(newLines, lines[idx+1:]...)
-		return strings.Join(newLines, "\n"), fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
+		result := strings.Join(newLines, "\n")
+		// 修复 Bug2：保留尾部换行符。
+		// strings.Split("hello\n", "\n") 产生 ["hello", ""]，删除最后一行（空串）后
+		// Join 结果为 "hello"，丢失了原始的尾部 \n。此处检测并补回。
+		if strings.HasSuffix(content, "\n") && !strings.HasSuffix(result, "\n") && len(result) > 0 {
+			result += "\n"
+		}
+		return result, fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
 
 	default:
 		return "", "", fmt.Errorf("unknown action: %s (supported: insert_before, insert_after, replace, delete)", params.Action)

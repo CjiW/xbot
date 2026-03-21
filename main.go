@@ -386,7 +386,8 @@ func main() {
 	}
 
 	// 等待退出信号
-	<-sigCh
+	sig := <-sigCh
+	log.WithField("signal", sig.String()).Warn("Received shutdown signal")
 	fmt.Println("\nShutting down...")
 
 	// 先取消 context，让 agent.Run() 退出（其 defer 会清理 cron 和 cleanup routine）

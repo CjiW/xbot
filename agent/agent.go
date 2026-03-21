@@ -40,7 +40,8 @@ type consolidateRequest struct {
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
 func assertNoSystemPersist(m llm.ChatMessage) {
 	if m.Role == "system" {
-		log.WithField("message", m).Fatal("assert: must not persist system message to session")
+		log.WithField("message", m).Error("ASSERT: must not persist system message to session")
+		panic("assert: must not persist system message to session")
 	}
 }
 

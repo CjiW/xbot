@@ -124,6 +124,9 @@ type RunConfig struct {
 	// MaskStore Observation Masking 存储（nil = 不启用）
 	MaskStore *ObservationMaskStore
 
+	// ContextEditor Context Editing 编辑器（nil = 不启用）
+	ContextEditor *ContextEditor
+
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 }
@@ -202,6 +205,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 
 	messages := cfg.Messages
+
+	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
+	if cfg.ContextEditor != nil {
+		cfg.ContextEditor.SetMessages(messages)
+	}
+
 	var toolsUsed []string
 	var waitingUser bool
 	var progressLines []string

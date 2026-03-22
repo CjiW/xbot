@@ -137,6 +137,9 @@ func (a *Agent) buildMainRunConfig(
 	// MaskStore — Observation Masking
 	cfg.MaskStore = a.maskStore
 
+	// ContextEditor — Context Editing（精确编辑上下文）
+	cfg.ContextEditor = a.contextEditor
+
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {
 		cfg.TodoManager = a.todoManager

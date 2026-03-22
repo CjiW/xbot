@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // LoadAgentRoles 从目录加载所有 agent 定义文件（*.md）
@@ -178,11 +179,11 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 		}
 	}
 
-	// 校验 name 格式
+	// 校验 name 格式：允许 Unicode 字母（含中文）、数字、连字符、下划线
 	if name != "" {
 		for _, c := range name {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' {
-				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid agent name %q: only letters, digits, hyphens and underscores are allowed", name)
+			if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '-' && c != '_' {
+				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid agent name %q: only letters (including CJK), digits, hyphens and underscores are allowed", name)
 			}
 		}
 	}

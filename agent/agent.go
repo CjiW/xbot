@@ -421,6 +421,11 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	cardBuilder := tools.NewCardBuilder()
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
+	// Sandbox cleanup tool: 仅 docker 模式下注册
+	if cfg.SandboxMode == "" || cfg.SandboxMode == "docker" {
+		registry.Register(&tools.SandboxCleanupTool{})
+	}
+
 	return skillStore, agentStore, chatHistory, registry, cardBuilder
 }
 

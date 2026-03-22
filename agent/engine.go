@@ -61,6 +61,11 @@ type RunConfig struct {
 	// SessionKey 工具激活的 session key（为空时从 Channel+ChatID 生成）
 	SessionKey string
 
+	// RootSessionKey 顶层 Agent 的 session key。
+	// SubAgent 场景下指向主 Agent 的 session key，用于 offload_recall 等需要访问父 session 数据的场景。
+	// 主 Agent 场景下为空（与 SessionKey 相同）。
+	RootSessionKey string
+
 	// ProgressNotifier 进度通知回调（nil = 不通知）
 	ProgressNotifier func(lines []string)
 
@@ -1109,14 +1114,15 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 // 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	tc := &tools.ToolContext{
-		Ctx:          ctx,
-		AgentID:      cfg.AgentID,
-		Channel:      cfg.Channel,
-		ChatID:       cfg.ChatID,
-		SenderID:     cfg.SenderID,
-		OriginUserID: cfg.OriginUserID,
-		SenderName:   cfg.SenderName,
-		SendFunc:     cfg.SendFunc,
+		Ctx:            ctx,
+		AgentID:        cfg.AgentID,
+		Channel:        cfg.Channel,
+		ChatID:         cfg.ChatID,
+		SenderID:       cfg.SenderID,
+		OriginUserID:   cfg.OriginUserID,
+		SenderName:     cfg.SenderName,
+		SendFunc:       cfg.SendFunc,
+		RootSessionKey: cfg.RootSessionKey,
 
 		// 工作区 & 沙箱
 		WorkingDir:          cfg.WorkingDir,

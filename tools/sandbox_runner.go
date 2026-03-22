@@ -576,17 +576,15 @@ func (s *dockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 		s.saveAndRemove(containerName, userID)
 	}
 
-	// 容器已存在但未运行，尝试启动（先校验 mount 再决定是否复用）
+	// 容器已存在但未运行，直接尝试启动（mount 在创建时已设好，停止不会变）
 	if s.containerExists(containerName) {
-		if s.verifyWorkspaceMount(containerName, workspace) {
-			if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
-				log.Infof("Started existing Docker container %s", containerName)
-				shell := s.detectShell(containerName)
-				s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
-				return containerName, shell, nil
-			}
+		if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
+			log.Infof("Started existing Docker container %s", containerName)
+			shell := s.detectShell(containerName)
+			s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+			return containerName, shell, nil
 		}
-		log.Warnf("Container %s has stale workspace mount or failed to start, will recreate", containerName)
+		log.Warnf("Container %s failed to start, will recreate", containerName)
 		s.saveAndRemove(containerName, userID)
 	}
 

@@ -326,6 +326,14 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 避免工具激活、OffloadStore、MaskStore 等按 sessionKey 索引的数据污染。
 	cfg.SessionKey = subAgentID
 
+	// RootSessionKey：记录顶层 Agent（主 Agent）的 session key，
+	// 用于 offload_recall 等需要访问父 session 数据的场景（如 SubAgent 回忆父 Agent 的 offload 数据）。
+	rootKey := parentCtx.RootSessionKey
+	if rootKey == "" {
+		rootKey = parentCtx.Channel + ":" + parentCtx.ChatID
+	}
+	cfg.RootSessionKey = rootKey
+
 	// === Context Mask 统一机制：注入 6 个缺失字段 ===
 	// SubAgent 与主 Agent 共享同一 Run() 循环，context mask（offload/mask/context-edit）
 	// 依赖这些字段才能正确触发。之前缺失导致 SubAgent 上下文压缩/遮罩永不生效。

@@ -314,10 +314,9 @@ func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
 		cleanupLabel,
 		"",
 		map[string]any{
-			"tag":         "button",
-			"text":        map[string]any{"tag": "plain_text", "content": "💾 执行持久化"},
-			"type":        "default",
-			"action_type": "form_submit",
+			"tag":  "button",
+			"text": map[string]any{"tag": "plain_text", "content": "💾 执行持久化"},
+			"type": "default",
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_sandbox_cleanup",

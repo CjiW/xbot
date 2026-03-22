@@ -216,26 +216,15 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 }
 
 // Recall 按 ID 召回已 offload 的完整工具结果。
-func (s *OffloadStore) Recall(sessionKey, id string) (string, error) {
-	// 先从内存索引中查找，确认 ID 属于该 session
-	idx := s.getOrCreateIndex(sessionKey)
-	idx.mu.RLock()
-	var found bool
-	for _, e := range idx.entries {
-		if e.ID == id {
-			found = true
-			break
-		}
-	}
-	idx.mu.RUnlock()
 
-	if !found {
+func (s *OffloadStore) Recall(sessionKey, id string) (string, error) {
+	sessionDir := s.getSessionDir(sessionKey)
+	fp := s.offloadFilePath(sessionDir, id)
+	if _, err := os.Stat(fp); err != nil {
 		return "", fmt.Errorf("offload ID %s not found in session %s", id, sessionKey)
 	}
 
 	// 读取文件
-	sessionDir := s.getSessionDir(sessionKey)
-	fp := s.offloadFilePath(sessionDir, id)
 	data, err := os.ReadFile(fp)
 	if err != nil {
 		return "", fmt.Errorf("read offload file: %w", err)

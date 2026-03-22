@@ -49,6 +49,11 @@ type ToolContext struct {
 	RecallTimeRange vectordb.RecallTimeRangeFunc // 时间范围会话历史搜索
 	ToolIndexer     memory.ToolIndexer           // 工具索引服务（Letta 模式下可用）
 
+	// RootSessionKey 顶层 Agent 的 session key。
+	// SubAgent 场景下指向主 Agent 的 session（offload 文件存放在该 session 目录下），
+	// 主 Agent 场景下为空（与 SessionKey 相同）。
+	RootSessionKey string
+
 	// PWD 工具优化：当前工作目录（可变，从 session 读取）
 	CurrentDir    string           // 当前工作目录（优先级高于 WorkspaceRoot）
 	SetCurrentDir func(dir string) // 更新 session 中的 cwd

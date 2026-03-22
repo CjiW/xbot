@@ -145,6 +145,9 @@ func (a *Agent) buildMainRunConfig(
 	// ContextEditor — Context Editing（精确编辑上下文）
 	cfg.ContextEditor = a.contextEditor
 
+	// RecallTracker — 摘要精化追踪器
+	cfg.RecallTracker = a.recallTracker
+
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {
 		cfg.TodoManager = a.todoManager

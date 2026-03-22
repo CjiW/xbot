@@ -88,8 +88,10 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 
 		case msg.Role == "tool":
 			if strings.HasPrefix(msg.Content, "📂 [offload:") {
-				// 保留 offload 摘要完整，不截断
-				pendingToolSummary.WriteString(msg.Content + "\n")
+				// BUG FIX: offload 摘要不再完整保留（可能很大），截断到 800 rune。
+				// 保留 offload ID 和摘要前缀即可，详细内容可通过 offload_recall 获取。
+				offloadContent := truncateRunes(msg.Content, 800)
+				pendingToolSummary.WriteString(offloadContent + "\n")
 			} else {
 				toolContent := truncateRunes(msg.Content, 200)
 				fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
@@ -423,6 +425,37 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "...[truncated]"
 }
 
+// shortenSummary 进一步缩短 LLM 摘要，确保总 token 降到目标以下。
+// 策略：按比例缩短，保留前 80% 内容（最新信息在最后，但 taskStatePrompt 引导 LLM
+// 把最近信息放在前面），如果还不够就激进缩短到 500 rune。
+func shortenSummary(compressed string, originalTokens, currentTokens, currentMaxRunes int) string {
+	// 目标：总 token 降到 original 的 70%
+	targetTokens := int(float64(originalTokens) * 0.7)
+	// 估算摘要部分占多少 token（粗估：非 tail 部分）
+	summaryEstimate := currentTokens - int(float64(originalTokens)*0.5) // tail 大约占 50%
+	if summaryEstimate <= 0 {
+		summaryEstimate = currentTokens / 3
+	}
+
+	// 需要缩减的比例
+	reductionNeeded := summaryEstimate
+	if currentTokens > 0 {
+		reductionNeeded = currentTokens - targetTokens
+	}
+
+	runes := []rune(compressed)
+	newMaxRunes := len(runes) - reductionNeeded*2 // 粗估 token/rune 比
+
+	if newMaxRunes < 300 {
+		newMaxRunes = 300
+	}
+	if newMaxRunes >= len(runes) {
+		return compressed // 已经够短了
+	}
+
+	return string(runes[:newMaxRunes]) + "\n\n[...further condensed]"
+}
+
 // compressMessages 使用 LLM 压缩对话历史（独立函数，不依赖 Agent receiver）。
 // 不使用 fingerprint 体系，直接压缩。
 func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
@@ -495,7 +528,13 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 	}
 
 	// 第四步：构建压缩 prompt
+	// BUG FIX: 之前每条消息截断到 2000 rune 但消息数不限，导致 prompt 可能非常长，
+	// LLM 压缩后摘要比原文还长（压缩无效）。
+	// 新策略：计算 toCompress 总 token 预估，动态调整每条消息截断长度。
 	var historyText strings.Builder
+	totalRunes := 0
+	maxHistoryRunes := 16000 // 控制压缩 prompt 总长度，确保 LLM 有足够余量生成摘要
+
 	for _, msg := range toCompress {
 		role := strings.ToUpper(msg.Role)
 		content := msg.Content
@@ -506,22 +545,54 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 			}
 			content += fmt.Sprintf(" [called tools: %s]", strings.Join(toolNames, ", "))
 		}
-		if len([]rune(content)) > 2000 {
-			content = string([]rune(content)[:2000]) + "..."
+		runes := []rune(content)
+		msgLine := fmt.Sprintf("[%s] %s\n\n", role, content)
+
+		// 动态截断：剩余预算不足时缩短
+		remaining := maxHistoryRunes - totalRunes
+		if remaining <= 0 {
+			break // 预算用完，停止添加
 		}
-		fmt.Fprintf(&historyText, "[%s] %s\n\n", role, content)
+		if len(runes) > 2000 {
+			runes = runes[:2000]
+			msgLine = fmt.Sprintf("[%s] %s...\n\n", role, string(runes))
+		}
+		msgRunes := len([]rune(msgLine))
+		if msgRunes > remaining {
+			// 截断整条到剩余预算
+			truncated := string([]rune(msgLine)[:remaining])
+			historyText.WriteString(truncated)
+			break
+		}
+		historyText.WriteString(msgLine)
+		totalRunes += msgRunes
 	}
 
-	compressionPrompt := taskStatePrompt + `
+	// 计算目标摘要长度：确保压缩后比原文短
+	originalTokens, _ := llm.CountMessagesTokens(messages, model)
+	// 摘要目标 = original 的 30%（至少 500，最多 5000 rune）
+	targetSummaryRunes := int(float64(originalTokens) * 0.3 * 1.5) // tokens → runes 粗估
+	if targetSummaryRunes < 500 {
+		targetSummaryRunes = 500
+	}
+	if targetSummaryRunes > 5000 {
+		targetSummaryRunes = 5000
+	}
+
+	compressionPrompt := taskStatePrompt + fmt.Sprintf(`
+
+## IMPORTANT: Output Length Constraint
+Your compressed output MUST be at most %d characters. Be extremely concise.
+Prioritize: errors, file paths, current state, pending tasks. Drop verbose details.
 
 ## Conversation History (to compress)
-` + historyText.String() + `
+`, targetSummaryRunes) + historyText.String() + `
 
-Output the compressed content directly, preserving as much context as possible.`
+Output the compressed content directly.`
 
 	// 第五步：调用 LLM 压缩
 	resp, err := client.Generate(ctx, model, []llm.ChatMessage{
-		llm.NewSystemMessage("You are a context compression expert."),
+		llm.NewSystemMessage("You are a context compression expert. You MUST keep your output concise and under the specified length limit."),
 		llm.NewUserMessage(compressionPrompt),
 	}, nil, "")
 	if err != nil {
@@ -529,6 +600,16 @@ Output the compressed content directly, preserving as much context as possible.`
 	}
 
 	compressed := llm.StripThinkBlocks(resp.Content)
+
+	// BUG FIX: 对 LLM 摘要做硬截断，防止 LLM 返回超长摘要导致压缩无效。
+	compressedRunes := []rune(compressed)
+	if len(compressedRunes) > targetSummaryRunes {
+		compressed = string(compressedRunes[:targetSummaryRunes]) + "\n\n[...compressed, older details omitted]"
+		log.Ctx(ctx).WithFields(map[string]interface{}{
+			"compressed_runes":     len(compressedRunes),
+			"target_summary_runes": targetSummaryRunes,
+		}).Warn("compressMessages: LLM output exceeded target, hard-truncated")
+	}
 
 	// 第六步：构建压缩后的消息结构
 	if len(systemMsgs) > 1 {
@@ -544,13 +625,12 @@ Output the compressed content directly, preserving as much context as possible.`
 	llmView = append(llmView, summaryMsg)
 	llmView = append(llmView, thinnedTail...)
 
-	// BUG FIX: 最低缩减保证。
-	// 如果 LLM compress + thinTail 后缩减不到 20%，说明 tail 中的 tool 消息过大。
-	// 此时做激进截断：将 thinnedTail 中的旧 tool 组进一步压缩到 100 字符。
-	originalTokens, _ := llm.CountMessagesTokens(messages, model)
+	// BUG FIX: ineffective 检测 + aggressiveThinTail 升级。
+	// 如果 LLM compress + thinTail 后缩减不到 20%，对 tail 做更激进截断。
+	// 不再用 mechanicalTruncate（会丢信息），而是只对 tail 部分加大力度。
 	resultTokens, _ := llm.CountMessagesTokens(llmView, model)
 	minTarget := int(float64(originalTokens) * 0.8) // 至少缩减 20%
-	if resultTokens > minTarget && minTarget > 0 {
+	if resultTokens > minTarget && minTarget > 0 && tailStart < len(messages) {
 		aggressiveTail := aggressiveThinTail(messages[tailStart:], 1, activeFiles)
 		llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(aggressiveTail))
 		llmView = append(llmView, systemMsgs...)
@@ -563,6 +643,20 @@ Output the compressed content directly, preserving as much context as possible.`
 			"aggressive_tokens": aggressiveTokens,
 			"min_target":        minTarget,
 		}).Info("Phase 1 compress: normal result insufficient, using aggressive thinning")
+
+		// 如果 aggressiveThinTail 后仍然无效，对 summaryMsg 进一步缩短
+		if aggressiveTokens > minTarget {
+			shorterCompressed := shortenSummary(compressed, originalTokens, aggressiveTokens, targetSummaryRunes)
+			summaryMsg = llm.NewUserMessage("[Previous conversation context]\n\n" + shorterCompressed)
+			llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(aggressiveTail))
+			llmView = append(llmView, systemMsgs...)
+			llmView = append(llmView, summaryMsg)
+			llmView = append(llmView, aggressiveTail...)
+			finalTokens, _ := llm.CountMessagesTokens(llmView, model)
+			log.Ctx(ctx).WithFields(map[string]interface{}{
+				"final_tokens": finalTokens,
+			}).Info("Phase 1 compress: shortened summary after aggressive still insufficient")
+		}
 	}
 
 	// Session View: 压缩摘要 + 尾部对话摘要（纯 user/assistant）

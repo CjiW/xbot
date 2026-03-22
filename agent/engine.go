@@ -124,8 +124,14 @@ type RunConfig struct {
 	// MaskStore Observation Masking 存储（nil = 不启用）
 	MaskStore *ObservationMaskStore
 
+	// ContextEditor Context Editing 编辑器（nil = 不启用）
+	ContextEditor *ContextEditor
+
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
+
+	// RecallTracker 摘要精化追踪器（nil = 不启用，仅主 Agent）
+	RecallTracker *RecallTracker
 }
 
 // TodoManagerProvider 提供 TODO 状态查询
@@ -202,11 +208,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 
 	messages := cfg.Messages
+
+	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
+	if cfg.ContextEditor != nil {
+		cfg.ContextEditor.SetMessages(messages)
+	}
+
 	var toolsUsed []string
 	var waitingUser bool
 	var progressLines []string
 	var lastContent string // 用于 LLM 错误时的降级返回
 	var iteration int      // 当前迭代次数（maybeCompress 闭包内需要访问）
+
+	// 本轮对话的本地计数器（循环结束后一次性提交到 GlobalMetrics）
+	localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens := 0, 0, 0, 0, 0
+
+	// 确保 Run() 退出时总是记录对话指标
+	defer GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
 
 	// --- 结构化进度状态 ---
 	var structuredProgress *StructuredProgress
@@ -290,6 +308,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
 				if count > 0 {
 					messages = masked
+					GlobalMetrics.MaskingEvents.Add(1)
+					GlobalMetrics.MaskedItems.Add(int64(count))
 					if autoNotify {
 						progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
 						notifyProgress("")
@@ -336,6 +356,28 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"new_tokens": newTokenCount,
 		}).Info("Auto context compression completed")
+
+		// 记录压缩指标
+		GlobalMetrics.CompressEvents.Add(1)
+		GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))
+		GlobalMetrics.CompressTokensOut.Add(int64(newTokenCount))
+
+		// 摘要精化检查：压缩后评估是否需要补充高频召回信息
+		if cfg.RecallTracker != nil && cfg.RecallTracker.ShouldRefine(iteration) {
+			refinePrompt := cfg.RecallTracker.GenerateRefinePrompt()
+			if refinePrompt != "" {
+				// 将精化提示注入到压缩后的摘要中（追加到最后一条 assistant 消息）
+				for j := len(messages) - 1; j >= 0; j-- {
+					if messages[j].Role == "assistant" {
+						messages[j].Content += "\n\n" + refinePrompt
+						break
+					}
+				}
+				cfg.RecallTracker.MarkRefine(iteration)
+				GlobalMetrics.SummaryRefines.Add(1)
+				log.Ctx(ctx).Info("Summary refine prompt injected after compression")
+			}
+		}
 
 		// BUG FIX: 记录压缩迭代号 + 有效性检测。
 		// 之前从未调用 RecordCompress，导致 Cooldown.ShouldTrigger 永远返回 true，
@@ -428,6 +470,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 	for i := 0; i < maxIter; i++ {
 		iteration = i
+		localIterCount++
 		// 更新结构化进度
 		if structuredProgress != nil {
 			structuredProgress.Iteration = i
@@ -474,6 +517,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 		llmCancel()
 
+		// 记录 LLM 调用指标
+		GlobalMetrics.TotalLLMCalls.Add(1)
+		localLLMCalls++
+		if response != nil {
+			GlobalMetrics.TotalInputTokens.Add(response.Usage.PromptTokens)
+			GlobalMetrics.TotalOutputTokens.Add(response.Usage.CompletionTokens)
+			localInputTokens += int(response.Usage.PromptTokens)
+			localOutputTokens += int(response.Usage.CompletionTokens)
+		}
+
 		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
 			// 输入超限时强制压缩上下文后重试
 			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")
@@ -516,12 +569,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					retryCancel()
+					// 重试也要记录 LLM 调用指标
+					GlobalMetrics.TotalLLMCalls.Add(1)
+					localLLMCalls++
+					if response != nil {
+						GlobalMetrics.TotalInputTokens.Add(response.Usage.PromptTokens)
+						GlobalMetrics.TotalOutputTokens.Add(response.Usage.CompletionTokens)
+						localInputTokens += int(response.Usage.PromptTokens)
+						localOutputTokens += int(response.Usage.CompletionTokens)
+					}
 				}
 			}
 
 		}
 
 		if err != nil {
+			// 记录 LLM 错误（排除 context cancel 和 input-too-long 重试路径）
+			if ctx.Err() == nil && !llm.IsInputTooLongError(err) {
+				GlobalMetrics.TotalLLMErrors.Add(1)
+			}
 			if ctx.Err() != nil {
 				return buildOutput(&bus.OutboundMessage{
 					Channel:   cfg.Channel,
@@ -599,6 +665,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		progressStartIdx := len(progressLines)
 		for _, tc := range response.ToolCalls {
 			toolsUsed = append(toolsUsed, tc.Name)
+			localToolCalls++
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if autoNotify {
 				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
@@ -669,6 +736,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if execErr != nil {
+				GlobalMetrics.TotalToolErrors.Add(1)
 				log.Ctx(ctx).WithFields(log.Fields{
 					"tool":    tc.Name,
 					"elapsed": elapsed.Round(time.Millisecond),
@@ -684,6 +752,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				execResults[entry.index].llmContent = buildToolMessageContent(result)
 
 				if result.IsError {
+					GlobalMetrics.TotalToolErrors.Add(1)
 					execResults[entry.index].llmContent = fmt.Sprintf("Error: %s\n\nDo NOT retry the same command. Analyze the error, fix the root cause, then try a different approach.", execResults[entry.index].llmContent)
 				}
 
@@ -760,6 +829,29 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, structuredProgress.ActiveTools...)
 			structuredProgress.ActiveTools = nil
 		}
+
+		// 计数 recall 工具调用（offload_recall / recall_masked）并通知 RecallTracker
+		for idx2, tc := range response.ToolCalls {
+			r := execResults[idx2]
+			if r.err != nil {
+				continue
+			}
+			switch tc.Name {
+			case "offload_recall":
+				GlobalMetrics.OffloadedRecalls.Add(1)
+				if cfg.RecallTracker != nil && r.result != nil {
+					cfg.RecallTracker.RecordRecall(tc.ID, "offload", r.result.Summary)
+				}
+			case "recall_masked":
+				GlobalMetrics.MaskedRecalls.Add(1)
+				if cfg.RecallTracker != nil && r.result != nil {
+					cfg.RecallTracker.RecordRecall(tc.ID, "masked", r.result.Summary)
+				}
+			case "context_edit":
+				GlobalMetrics.ContextEditEvents.Add(1)
+			}
+		}
+
 		// 按原始顺序处理结果
 		for idx, tc := range response.ToolCalls {
 			r := execResults[idx]
@@ -778,6 +870,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(sessionKey, tc.Name, tc.Arguments, offloadContent)
 				if wasOffloaded {
 					content = offloaded.Summary
+					GlobalMetrics.OffloadEvents.Add(1)
+					GlobalMetrics.OffloadedItems.Add(1)
 					log.Ctx(ctx).WithFields(log.Fields{
 						"tool":         tc.Name,
 						"offload_id":   offloaded.ID,
@@ -1075,10 +1169,11 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	} else if cfg.InitialCWD != "" {
 		// SubAgent 继承父 Agent 的 CWD（无 session 时使用 InitialCWD）
 		tc.CurrentDir = cfg.InitialCWD
-		// SubAgent 无 session，但仍需允许 Cd 工具更新 CurrentDir（仅当轮有效）
-		// 旧代码此处不设 SetCurrentDir，导致 Cd.executeInSandbox/executeLocal
-		// 中 `if ctx.SetCurrentDir != nil` 检查失败，CurrentDir 永远不更新。
+		// SubAgent 无 session，通过更新 cfg.InitialCWD 使 Cd 在后续 buildToolContext 调用中持久化。
+		// 旧代码只设置 tc.CurrentDir，但 buildToolContext 每次工具调用都会重建 tc，
+		// 导致 Cd 的目录变更丢失。注意：RunConfig 是值类型，闭包捕获的是指针。
 		tc.SetCurrentDir = func(dir string) {
+			cfg.InitialCWD = dir
 			tc.CurrentDir = dir
 		}
 	}

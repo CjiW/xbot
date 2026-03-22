@@ -294,6 +294,9 @@ func main() {
 			RegistryDelete: func(entryType, name, senderID string) error {
 				return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
 			},
+			MetricsGet: func() string {
+				return agent.GlobalMetrics.Snapshot().FormatMarkdown()
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

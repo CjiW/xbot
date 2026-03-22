@@ -123,7 +123,12 @@ func (a *Agent) buildMainRunConfig(
 
 	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
 	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
-		smart.(*phase1Manager).SetTriggerProvider(a.getTriggerProvider(sessionKey))
+		pm := smart.(*phase1Manager)
+		pm.SetTriggerProvider(a.getTriggerProvider(sessionKey))
+		// 话题分区：启用时注入 TopicDetector 到压缩流程
+		if a.enableTopicIsolation {
+			pm.SetTopicDetector(a.topicDetector)
+		}
 	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
@@ -136,6 +141,12 @@ func (a *Agent) buildMainRunConfig(
 
 	// MaskStore — Observation Masking
 	cfg.MaskStore = a.maskStore
+
+	// ContextEditor — Context Editing（精确编辑上下文）
+	cfg.ContextEditor = a.contextEditor
+
+	// RecallTracker — 摘要精化追踪器
+	cfg.RecallTracker = a.recallTracker
 
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {

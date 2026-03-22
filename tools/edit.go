@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"strings"
 	"xbot/llm"
-
-	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // EditTool 文件编辑工具
@@ -215,7 +213,7 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 		return nil, err
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
-	diff := generateUnifiedDiff("", content, path)
+	diff := generateChangeSummary("", content, path)
 	return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -238,7 +236,7 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 		return nil, err
 	}
 
-	diff := generateUnifiedDiff(oldContent, newContent, path)
+	diff := generateChangeSummary(oldContent, newContent, path)
 	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -265,7 +263,7 @@ func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, a
 		return nil, err
 	}
 
-	diff := generateUnifiedDiff(oldContent, newContent, path)
+	diff := generateChangeSummary(oldContent, newContent, path)
 	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -292,7 +290,7 @@ func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacem
 		return nil, err
 	}
 
-	diff := generateUnifiedDiff(oldContent, newContent, path)
+	diff := generateChangeSummary(oldContent, newContent, path)
 	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -318,7 +316,7 @@ func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content strin
 		return nil, err
 	}
 
-	diff := generateUnifiedDiff(oldContent, newContent, path)
+	diff := generateChangeSummary(oldContent, newContent, path)
 	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -335,7 +333,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 		if err != nil {
 			return nil, err
 		}
-		diff := generateUnifiedDiff("", params.Content, filePath)
+		diff := generateChangeSummary("", params.Content, filePath)
 		return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 	}
 
@@ -371,7 +369,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	diff := generateUnifiedDiff(oldContent, newContent, filePath)
+	diff := generateChangeSummary(oldContent, newContent, filePath)
 	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
@@ -579,138 +577,67 @@ func Truncate(s string, maxLen int) string {
 	return string(runes[:maxLen-3]) + "..."
 }
 
-// generateUnifiedDiff 使用 go-diff 库生成 unified diff 格式的差异
-func generateUnifiedDiff(oldContent, newContent, filePath string) string {
-	dmp := diffmatchpatch.New()
+// generateChangeSummary 生成简单的变更摘要（哪几行变了），不依赖外部 diff 库
+func generateChangeSummary(oldContent, newContent, filePath string) string {
+	oldLines := strings.Split(oldContent, "\n")
+	newLines := strings.Split(newContent, "\n")
 
-	// 按行进行 diff
-	a, b, c := dmp.DiffLinesToChars(oldContent, newContent)
-	diffs := dmp.DiffMain(a, b, false)
-	diffs = dmp.DiffCharsToLines(diffs, c)
-	diffs = dmp.DiffCleanupSemantic(diffs)
+	maxLen := len(oldLines)
+	if len(newLines) > maxLen {
+		maxLen = len(newLines)
+	}
 
-	if len(diffs) == 0 || (len(diffs) == 1 && diffs[0].Type == diffmatchpatch.DiffEqual) {
+	if maxLen == 0 {
+		return ""
+	}
+
+	// 找出所有变更行号（1-based）
+	type change struct {
+		oldLine, newLine int
+		op               byte // ' ', '-', '+'
+		text             string
+	}
+	var changes []change
+
+	for i := 0; i < maxLen; i++ {
+		oldL := ""
+		newL := ""
+		if i < len(oldLines) {
+			oldL = oldLines[i]
+		}
+		if i < len(newLines) {
+			newL = newLines[i]
+		}
+
+		if oldL == newL {
+			continue
+		}
+
+		if i < len(oldLines) && i < len(newLines) {
+			// 行存在但内容不同 → 替换
+			changes = append(changes, change{oldLine: i + 1, newLine: i + 1, op: '-', text: oldL})
+			changes = append(changes, change{oldLine: i + 1, newLine: i + 1, op: '+', text: newL})
+		} else if i < len(oldLines) {
+			// 只在旧文件中存在 → 删除
+			changes = append(changes, change{oldLine: i + 1, op: '-', text: oldL})
+		} else {
+			// 只在新文件中存在 → 新增
+			changes = append(changes, change{newLine: i + 1, op: '+', text: newL})
+		}
+	}
+
+	if len(changes) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "--- a/%s\n", filePath)
-	fmt.Fprintf(&sb, "+++ b/%s\n", filePath)
-
-	// 将 diffs 转换为带行号的 hunks
-	contextLines := 3
-	type line struct {
-		op   diffmatchpatch.Operation
-		text string
-	}
-
-	// 展平所有 diff 为行
-	var allLines []line
-	for _, d := range diffs {
-		text := d.Text
-		// 拆分成行
-		lines := strings.Split(text, "\n")
-		// 如果最后一个元素是空字符串（trailing newline），去掉
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		for _, l := range lines {
-			allLines = append(allLines, line{op: d.Type, text: l})
-		}
-	}
-
-	// 找出变更行的索引
-	type hunkRange struct{ start, end int }
-	var changeRanges []hunkRange
-	inChange := false
-	changeStart := 0
-	for i, l := range allLines {
-		if l.op != diffmatchpatch.DiffEqual {
-			if !inChange {
-				inChange = true
-				changeStart = i
-			}
+	sb.WriteString("Changes in " + filePath + ":\n")
+	for _, c := range changes {
+		if c.op == '-' {
+			fmt.Fprintf(&sb, "  L%d - %s\n", c.oldLine, Truncate(c.text, 120))
 		} else {
-			if inChange {
-				changeRanges = append(changeRanges, hunkRange{changeStart, i})
-				inChange = false
-			}
+			fmt.Fprintf(&sb, "  L%d + %s\n", c.newLine, c.text)
 		}
 	}
-	if inChange {
-		changeRanges = append(changeRanges, hunkRange{changeStart, len(allLines)})
-	}
-
-	if len(changeRanges) == 0 {
-		return ""
-	}
-
-	// 合并相邻的 change ranges（间距 <= 2*contextLines）
-	var merged []hunkRange
-	cur := changeRanges[0]
-	for i := 1; i < len(changeRanges); i++ {
-		if changeRanges[i].start-cur.end <= 2*contextLines {
-			cur.end = changeRanges[i].end
-		} else {
-			merged = append(merged, cur)
-			cur = changeRanges[i]
-		}
-	}
-	merged = append(merged, cur)
-
-	// 为每个合并后的 range 生成 hunk
-	for _, mr := range merged {
-		hStart := mr.start - contextLines
-		if hStart < 0 {
-			hStart = 0
-		}
-		hEnd := mr.end + contextLines
-		if hEnd > len(allLines) {
-			hEnd = len(allLines)
-		}
-
-		// 计算 old/new 行号
-		oldLine := 1
-		newLine := 1
-		for i := 0; i < hStart; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				oldLine++
-				newLine++
-			case diffmatchpatch.DiffDelete:
-				oldLine++
-			case diffmatchpatch.DiffInsert:
-				newLine++
-			}
-		}
-
-		// 计算 hunk 中 old/new 的行数
-		oldCount, newCount := 0, 0
-		for i := hStart; i < hEnd; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				oldCount++
-				newCount++
-			case diffmatchpatch.DiffDelete:
-				oldCount++
-			case diffmatchpatch.DiffInsert:
-				newCount++
-			}
-		}
-
-		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", oldLine, oldCount, newLine, newCount)
-
-		for i := hStart; i < hEnd; i++ {
-			switch allLines[i].op {
-			case diffmatchpatch.DiffEqual:
-				sb.WriteString(" " + allLines[i].text + "\n")
-			case diffmatchpatch.DiffDelete:
-				sb.WriteString("-" + allLines[i].text + "\n")
-			case diffmatchpatch.DiffInsert:
-				sb.WriteString("+" + allLines[i].text + "\n")
-			}
-		}
-	}
-
 	return sb.String()
 }

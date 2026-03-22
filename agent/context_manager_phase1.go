@@ -11,8 +11,9 @@ import (
 // 压缩流程：LLM 摘要（不带 fingerprint）+ ineffective 检测。
 // mechanicalTruncate 保留但不再自动调用（会截断丢信息），compressMessages 内部保证缩减效果。
 type phase1Manager struct {
-	config   *ContextManagerConfig
-	provider *TriggerInfoProvider
+	config        *ContextManagerConfig
+	provider      *TriggerInfoProvider
+	topicDetector *TopicDetector
 }
 
 func newPhase1Manager(cfg *ContextManagerConfig) *phase1Manager {
@@ -25,6 +26,11 @@ func newPhase1Manager(cfg *ContextManagerConfig) *phase1Manager {
 // TriggerProvider 返回 TriggerInfoProvider（SmartCompressor 接口）。
 func (m *phase1Manager) TriggerProvider() *TriggerInfoProvider {
 	return m.provider
+}
+
+// SetTopicDetector 设置话题分区检测器，启用后压缩将按话题分区操作。
+func (m *phase1Manager) SetTopicDetector(td *TopicDetector) {
+	m.topicDetector = td
 }
 
 // SetTriggerProvider 设置触发信息提供者（由 Agent 在构建 RunConfig 时注入）。
@@ -72,7 +78,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 	}).Info("Phase 1 compress: starting")
 
 	// 步骤1：LLM 压缩（不带 fingerprint）
-	result, err := compressMessages(ctx, messages, client, model)
+	result, err := compressMessages(ctx, messages, client, model, m.topicDetector)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Phase 1 compress: LLM compression failed")
 		return nil, err
@@ -104,7 +110,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 
 // ManualCompress 手动压缩（/compress 命令使用）。
 func (m *phase1Manager) ManualCompress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compressMessages(ctx, messages, client, model)
+	return compressMessages(ctx, messages, client, model, m.topicDetector)
 }
 
 func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats {

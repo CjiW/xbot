@@ -20,7 +20,7 @@ var contextModeLabels = map[string]string{
 // BuildSettingsCard constructs an interactive Feishu card JSON for settings.
 func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string) (map[string]any, error) {
 	switch tab {
-	case "general", "model", "market":
+	case "general", "model", "market", "metrics":
 	default:
 		tab = "general"
 	}
@@ -37,6 +37,8 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 		elements = append(elements, f.buildModelTabContent(ctx, senderID)...)
 	case "market":
 		elements = append(elements, f.buildMarketTabContent(ctx, senderID)...)
+	case "metrics":
+		elements = append(elements, f.buildMetricsTabContent()...)
 	}
 
 	card := map[string]any{
@@ -210,6 +212,7 @@ func buildTabButtons(currentTab string) []map[string]any {
 		{"general", "🎯 通用"},
 		{"model", "🤖 模型"},
 		{"market", "📦 市场"},
+		{"metrics", "📊 指标"},
 	}
 
 	var buttons []map[string]any
@@ -748,4 +751,29 @@ func formStr(actionData map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// buildMetricsTabContent builds the metrics dashboard tab.
+func (f *FeishuChannel) buildMetricsTabContent() []map[string]any {
+	var elements []map[string]any
+
+	if f.settingsCallbacks.MetricsGet == nil {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "_指标功能未启用_",
+		})
+		return elements
+	}
+
+	metricsText := f.settingsCallbacks.MetricsGet()
+	if metricsText == "" {
+		metricsText = "暂无指标数据"
+	}
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": metricsText,
+	})
+
+	return elements
 }

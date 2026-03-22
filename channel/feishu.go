@@ -58,6 +58,9 @@ type SettingsCallbacks struct {
 	RegistryPublish   func(entryType, name, senderID string) error
 	RegistryUnpublish func(entryType, name, senderID string) error
 	RegistryDelete    func(entryType, name, senderID string) error
+
+	// MetricsGet 获取当前运行指标（用于设置页展示）
+	MetricsGet func() string
 }
 
 // FeishuChannel 飞书渠道实现

@@ -250,6 +250,12 @@ type Agent struct {
 	// maskStore manages observation masking storage
 	maskStore *ObservationMaskStore
 
+	// contextEditor 管理上下文编辑（Context Editing 工具）
+	contextEditor *ContextEditor
+
+	// recallTracker 摘要精化追踪器（主 Agent 全局共享）
+	recallTracker *RecallTracker
+
 	// todoManager 管理当前会话的 TODO 列表
 	todoManager *tools.TodoManager
 
@@ -539,6 +545,15 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	if maskStore != nil {
 		registry.RegisterCore(&tools.RecallMaskedTool{Store: maskStore})
 	}
+
+	// 初始化 ContextEditor（Context Editing 工具 — 精确编辑上下文）
+	editStore := NewContextEditStore(100)
+	contextEditor := NewContextEditor(editStore)
+	a.contextEditor = contextEditor
+	registry.RegisterCore(&tools.ContextEditTool{Handler: contextEditor})
+
+	// 初始化 RecallTracker（摘要精化追踪器）
+	a.recallTracker = NewRecallTracker()
 
 	// 初始化并注册 TODO 管理工具
 	todoMgr := tools.NewTodoManager()

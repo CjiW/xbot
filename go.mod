@@ -17,7 +17,6 @@ require (
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/philippgille/chromem-go v0.7.0
-	github.com/sergi/go-diff v1.4.0
 	github.com/tiktoken-go/tokenizer v0.7.0
 	modernc.org/sqlite v1.46.1
 )

@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// TestDockerShutdownFlow tests the optimized shutdown flow (stop → commit → rm)
+// TestDockerShutdownFlow tests the optimized shutdown flow (stop → export/import → rm)
 // This test verifies that:
-// 1. Container changes are committed before removal
-// 2. Stop is called before commit (optimized flow)
-// 3. Container is properly removed after commit
+// 1. Container changes are exported before removal
+// 2. Stop is called before export (optimized flow)
+// 3. Container is properly removed after export
 func TestDockerShutdownFlow(t *testing.T) {
 	skipIfNoDocker(t)
 
@@ -50,7 +50,7 @@ func TestDockerShutdownFlow(t *testing.T) {
 	}
 	t.Logf("✓ File created: /tmp/testfile")
 
-	// Close sandbox (should use stop → commit → rm flow)
+	// Close sandbox (should use stop → export/import → rm flow)
 	start := time.Now()
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
@@ -62,7 +62,7 @@ func TestDockerShutdownFlow(t *testing.T) {
 	if err := exec.Command("docker", "image", "inspect", userImage).Run(); err != nil {
 		t.Errorf("Image %s was not created", userImage)
 	} else {
-		t.Logf("✓ Container committed to image: %s", userImage)
+		t.Logf("✓ Container exported to image: %s", userImage)
 	}
 
 	// Verify container was removed (use 'docker container inspect' to avoid matching images)
@@ -100,8 +100,8 @@ func TestDockerShutdownFlow(t *testing.T) {
 	s2.Close()
 }
 
-// TestDockerCommitOnlyIfDirty tests that commit only happens when there are changes
-func TestDockerCommitOnlyIfDirty(t *testing.T) {
+// TestDockerExportOnlyIfDirty tests that export only happens when there are changes
+func TestDockerExportOnlyIfDirty(t *testing.T) {
 	skipIfNoDocker(t)
 
 	ws := t.TempDir()
@@ -129,7 +129,7 @@ func TestDockerCommitOnlyIfDirty(t *testing.T) {
 		t.Fatalf("Failed to close sandbox: %v", err)
 	}
 
-	// Note: We don't strictly verify "no commit" because Docker container startup
+	// Note: We don't strictly verify "no export" because Docker container startup
 	// may create temporary files that trigger diff detection. The important thing
 	// is that the shutdown flow completes successfully.
 	// If image was created, just clean it up
@@ -137,7 +137,7 @@ func TestDockerCommitOnlyIfDirty(t *testing.T) {
 		t.Logf("ℹ Image %s was created (container had filesystem changes during startup)", userImage)
 		exec.Command("docker", "rmi", "-f", userImage).Run()
 	} else {
-		t.Logf("✓ No commit for unchanged container (expected)")
+		t.Logf("✓ No export for unchanged container (expected)")
 	}
 }
 

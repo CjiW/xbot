@@ -120,3 +120,47 @@ You are a capable agent.
 		t.Errorf("SystemPrompt = %q", role.SystemPrompt)
 	}
 }
+
+func TestParseFrontmatter_ChineseName(t *testing.T) {
+	fm := `name: 中书省
+description: "规划决策中枢"
+capabilities:
+  memory: true
+  spawn_agent: true`
+
+	name, desc, _, caps, err := parseFrontmatter(fm)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "中书省" {
+		t.Errorf("name = %q, want %q", name, "中书省")
+	}
+	if desc != "规划决策中枢" {
+		t.Errorf("description = %q", desc)
+	}
+	if !caps.Memory || !caps.SpawnAgent {
+		t.Errorf("expected Memory=true, SpawnAgent=true, got %+v", caps)
+	}
+}
+
+func TestParseFrontmatter_MixedName(t *testing.T) {
+	fm := `name: 工部-dev_01
+description: "Mixed CJK and ASCII name"`
+
+	name, _, _, _, err := parseFrontmatter(fm)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "工部-dev_01" {
+		t.Errorf("name = %q, want %q", name, "工部-dev_01")
+	}
+}
+
+func TestParseFrontmatter_InvalidNameWithSpaces(t *testing.T) {
+	fm := `name: 中书 省`
+
+	_, _, _, _, err := parseFrontmatter(fm)
+	if err == nil {
+		t.Fatal("expected error for name with spaces, got nil")
+	}
+}

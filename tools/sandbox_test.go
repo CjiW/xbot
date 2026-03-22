@@ -134,4 +134,3 @@ func newDockerSandbox(image string) *dockerSandbox {
 		containers: make(map[string]*dockerContainer),
 	}
 }
-

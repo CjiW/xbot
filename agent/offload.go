@@ -145,6 +145,13 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 		return OffloadedResult{}, false
 	}
 
+	// Never offload recall-type tools — their results are already retrieved content
+	// and offloading them would create infinite recursion (offload → recall → offload → ...)
+	switch toolName {
+	case "offload_recall", "recall_masked":
+		return OffloadedResult{}, false
+	}
+
 	// 检查是否超过阈值
 	tokenSize := estimateTokenSize(result, s.config.Model)
 	byteSize := len(result)

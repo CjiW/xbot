@@ -202,6 +202,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		sessionKey = cfg.Channel + ":" + cfg.ChatID
 	}
 
+	// offloadSessionKey: SubAgent 的 offload 数据存放在顶层 Agent 的 session 目录下，
+	// 与 offload_recall 的 RootSessionKey 保持一致，避免 SubAgent 存了找不到。
+	offloadSessionKey := sessionKey
+	if cfg.RootSessionKey != "" {
+		offloadSessionKey = cfg.RootSessionKey
+	}
+
 	toolExecutor := cfg.ToolExecutor
 	if toolExecutor == nil {
 		toolExecutor = defaultToolExecutor(&cfg)
@@ -882,7 +889,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary
 				}
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(sessionKey, tc.Name, tc.Arguments, offloadContent)
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(offloadSessionKey, tc.Name, tc.Arguments, offloadContent)
 				if wasOffloaded {
 					content = offloaded.Summary
 					GlobalMetrics.OffloadEvents.Add(1)
@@ -925,13 +932,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
 		if cfg.OffloadStore != nil {
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(sessionKey, cfg.WorkingDir)
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkingDir)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),
 					"stale_ids":   staleIDs,
 				}).Info("Stale offloads detected and invalidated")
-				messages = cfg.OffloadStore.PurgeStaleMessages(sessionKey, messages)
+				messages = cfg.OffloadStore.PurgeStaleMessages(offloadSessionKey, messages)
 			}
 		}
 

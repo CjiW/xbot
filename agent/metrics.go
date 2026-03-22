@@ -149,51 +149,51 @@ func (s MetricsSnapshot) FormatMarkdown() string {
 
 	// 运行时长
 	sb.WriteString("📊 **运行指标**\n──────────────\n")
-	sb.WriteString(fmt.Sprintf("⏱️ 运行时长：%s\n", formatDuration(s.UptimeSeconds)))
-	sb.WriteString(fmt.Sprintf("💬 对话次数：%d\n", s.TotalConversations))
+	fmt.Fprintf(&sb, "⏱️ 运行时长：%s\n", formatDuration(s.UptimeSeconds))
+	fmt.Fprintf(&sb, "💬 对话次数：%d\n", s.TotalConversations)
 
 	if s.TotalConversations > 0 {
 		avgIter := float64(s.TotalIterations) / float64(s.TotalConversations)
-		sb.WriteString(fmt.Sprintf("🔄 Agent 迭代：%d（平均 %.1f 次/对话）\n", s.TotalIterations, avgIter))
+		fmt.Fprintf(&sb, "🔄 Agent 迭代：%d（平均 %.1f 次/对话）\n", s.TotalIterations, avgIter)
 	} else {
-		sb.WriteString(fmt.Sprintf("🔄 Agent 迭代：%d\n", s.TotalIterations))
+		fmt.Fprintf(&sb, "🔄 Agent 迭代：%d\n", s.TotalIterations)
 	}
 
-	sb.WriteString(fmt.Sprintf("🛠️ 工具调用：%d | ❌ 错误：%d\n", s.TotalToolCalls, s.TotalToolErrors))
+	fmt.Fprintf(&sb, "🛠️ 工具调用：%d | ❌ 错误：%d\n", s.TotalToolCalls, s.TotalToolErrors)
 
-	sb.WriteString(fmt.Sprintf("🤖 LLM 调用：%d", s.TotalLLMCalls))
+	fmt.Fprintf(&sb, "🤖 LLM 调用：%d", s.TotalLLMCalls)
 	if s.TotalInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf(" | 输入 %s | 输出 %s",
+		fmt.Fprintf(&sb, " | 输入 %s | 输出 %s",
 			formatTokens(s.TotalInputTokens),
-			formatTokens(s.TotalOutputTokens)))
+			formatTokens(s.TotalOutputTokens))
 	}
 	sb.WriteString("\n")
 
 	// 上下文管理
 	sb.WriteString("\n📦 **上下文管理**\n──────────────\n")
-	sb.WriteString(fmt.Sprintf("🎭 Masking：触发 %d 次 | 遮蔽 %d 条\n", s.MaskingEvents, s.MaskedItems))
-	sb.WriteString(fmt.Sprintf("💾 Offload：触发 %d 次 | 落盘 %d 条 | 召回 %d 次\n",
-		s.OffloadEvents, s.OffloadedItems, s.OffloadedRecalls))
+	fmt.Fprintf(&sb, "🎭 Masking：触发 %d 次 | 遮蔽 %d 条\n", s.MaskingEvents, s.MaskedItems)
+	fmt.Fprintf(&sb, "💾 Offload：触发 %d 次 | 落盘 %d 条 | 召回 %d 次\n",
+		s.OffloadEvents, s.OffloadedItems, s.OffloadedRecalls)
 
 	if s.CompressEvents > 0 {
 		ratio := s.CompressRatio * 100
-		sb.WriteString(fmt.Sprintf("🧹 压缩：触发 %d 次 | 总压缩比 %.0f%%（%s → %s tokens）\n",
+		fmt.Fprintf(&sb, "🧹 压缩：触发 %d 次 | 总压缩比 %.0f%%（%s → %s tokens）\n",
 			s.CompressEvents, ratio,
 			formatTokens(s.CompressTokensIn),
-			formatTokens(s.CompressTokensOut)))
+			formatTokens(s.CompressTokensOut))
 	} else {
-		sb.WriteString(fmt.Sprintf("🧹 压缩：触发 %d 次\n", s.CompressEvents))
+		fmt.Fprintf(&sb, "🧹 压缩：触发 %d 次\n", s.CompressEvents)
 	}
 
-	sb.WriteString(fmt.Sprintf("✂️ Context Edit：%d 次\n", s.ContextEditEvents))
-	sb.WriteString(fmt.Sprintf("🔍 摘要精化：%d 次\n", s.SummaryRefines))
+	fmt.Fprintf(&sb, "✂️ Context Edit：%d 次\n", s.ContextEditEvents)
+	fmt.Fprintf(&sb, "🔍 摘要精化：%d 次\n", s.SummaryRefines)
 
 	totalEvictions := s.MaskedItems + s.OffloadedItems
 	totalRecalls := s.OffloadedRecalls + s.MaskedRecalls
 	if totalEvictions > 0 {
 		recallRate := float64(totalRecalls) / float64(totalEvictions) * 100
-		sb.WriteString(fmt.Sprintf("📉 总回调率：%.1f%%（%d recalls / %d 遮蔽+落盘）\n",
-			recallRate, totalRecalls, totalEvictions))
+		fmt.Fprintf(&sb, "📉 总回调率：%.1f%%（%d recalls / %d 遮蔽+落盘）\n",
+			recallRate, totalRecalls, totalEvictions)
 	}
 
 	return sb.String()

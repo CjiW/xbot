@@ -69,6 +69,28 @@ type MetricsSnapshot struct {
 	AvgTokensPerIter float64 // 平均每次迭代输入 token 数
 	CompressRatio    float64 // 总体压缩比 (out/in)
 	RecallRate       float64 // 回调率 (recalls / offloads+maskings)
+
+	// 压缩效率
+	AvgTokensSavedPerCompress float64 // 每次压缩平均节省 token
+	TokenSavingRate           float64 // token 节省率 (saved/in)
+
+	// 记忆质量
+	OffloadRecallRate float64 // offload 回调率
+	MaskedRecallRate  float64 // masked 回调率
+	SummaryRefineRate float64 // 摘要精化率 = SummaryRefines / CompressEvents
+	ContextEditRate   float64 // 上下文编辑率 = ContextEditEvents / TotalConversations
+
+	// 任务完成效果
+	ToolSuccessRate     float64 // 工具成功率
+	LLMSuccessRate      float64 // LLM 成功率
+	AvgToolCallsPerConv float64 // 每对话平均工具调用数
+
+	// 成本效率
+	AvgTokensPerConv float64 // 每对话平均 token（输入+输出）
+	OutputInputRatio float64 // 输出/输入比
+
+	// 四层防御效能
+	CombinedSavingRate float64 // 四层联合保存率 = 总节省 / 总输入
 }
 
 // GlobalMetrics 全局指标单例。
@@ -143,60 +165,182 @@ func (m *AgentMetrics) Snapshot() MetricsSnapshot {
 		s.RecallRate = float64(totalRecalls) / float64(totalEvictions)
 	}
 
+	// 压缩效率
+	if s.CompressEvents > 0 {
+		s.AvgTokensSavedPerCompress = float64(s.CompressTokensIn-s.CompressTokensOut) / float64(s.CompressEvents)
+	}
+	if s.CompressTokensIn > 0 {
+		s.TokenSavingRate = float64(s.CompressTokensIn-s.CompressTokensOut) / float64(s.CompressTokensIn)
+	}
+
+	// 记忆质量
+	if s.OffloadedItems > 0 {
+		s.OffloadRecallRate = float64(s.OffloadedRecalls) / float64(s.OffloadedItems)
+	}
+	if s.MaskedItems > 0 {
+		s.MaskedRecallRate = float64(s.MaskedRecalls) / float64(s.MaskedItems)
+	}
+	if s.CompressEvents > 0 {
+		s.SummaryRefineRate = float64(s.SummaryRefines) / float64(s.CompressEvents)
+	}
+	if s.TotalConversations > 0 {
+		s.ContextEditRate = float64(s.ContextEditEvents) / float64(s.TotalConversations)
+	}
+
+	// 任务完成效果
+	if s.TotalToolCalls > 0 {
+		s.ToolSuccessRate = float64(s.TotalToolCalls-s.TotalToolErrors) / float64(s.TotalToolCalls)
+	}
+	if s.TotalLLMCalls > 0 {
+		s.LLMSuccessRate = float64(s.TotalLLMCalls-s.TotalLLMErrors) / float64(s.TotalLLMCalls)
+	}
+	if s.TotalConversations > 0 {
+		s.AvgToolCallsPerConv = float64(s.TotalToolCalls) / float64(s.TotalConversations)
+	}
+
+	// 成本效率
+	if s.TotalConversations > 0 {
+		s.AvgTokensPerConv = float64(s.TotalInputTokens+s.TotalOutputTokens) / float64(s.TotalConversations)
+	}
+	if s.TotalInputTokens > 0 {
+		s.OutputInputRatio = float64(s.TotalOutputTokens) / float64(s.TotalInputTokens)
+	}
+
+	// 四层防御效能
+	if s.TotalInputTokens > 0 {
+		s.CombinedSavingRate = float64(s.CompressTokensIn-s.CompressTokensOut) / float64(s.TotalInputTokens)
+	}
+
 	return s
 }
 
 // FormatMarkdown 将 MetricsSnapshot 格式化为飞书 markdown 卡片文本。
+// 按能力维度分组为四段：运行概览、任务执行效果、记忆质量、压缩效率、四层防御效能。
 func (s MetricsSnapshot) FormatMarkdown() string {
 	var sb strings.Builder
 
-	// 运行时长
-	sb.WriteString("📊 **运行指标**\n──────────────\n")
-	fmt.Fprintf(&sb, "⏱️ 运行时长：%s\n", formatDuration(s.UptimeSeconds))
-	fmt.Fprintf(&sb, "💬 对话次数：%d\n", s.TotalConversations)
+	hasOverview := s.TotalConversations > 0 || s.TotalIterations > 0 || s.TotalToolCalls > 0
+	hasMemory := s.MaskedItems > 0 || s.OffloadedItems > 0 || s.ContextEditEvents > 0 || s.CompressEvents > 0
+	hasCompress := s.CompressEvents > 0
+	hasDefense := s.MaskedItems > 0 || s.OffloadedItems > 0 || s.CompressTokensIn > 0
 
+	// ── 运行概览 ──
+	sb.WriteString("⏱️ **运行概览**\n──────────────\n")
+	if hasOverview {
+		fmt.Fprintf(&sb, "⏱️ 运行时长：%s\n", formatDuration(s.UptimeSeconds))
+		fmt.Fprintf(&sb, "💬 对话：%d 次", s.TotalConversations)
+		if s.TotalConversations > 0 {
+			avgIter := float64(s.TotalIterations) / float64(s.TotalConversations)
+			fmt.Fprintf(&sb, " | 🔄 平均迭代：%.1f 次/对话", avgIter)
+		}
+		sb.WriteString("\n")
+
+		fmt.Fprintf(&sb, "🛠️ 工具调用：%d", s.TotalToolCalls)
+		if s.TotalToolCalls > 0 {
+			fmt.Fprintf(&sb, "（成功率 %.1f%%）", s.ToolSuccessRate*100)
+		}
+		fmt.Fprintf(&sb, " | 🤖 LLM：%d", s.TotalLLMCalls)
+		if s.TotalLLMCalls > 0 {
+			fmt.Fprintf(&sb, "（成功率 %.1f%%）", s.LLMSuccessRate*100)
+		}
+		sb.WriteString("\n")
+
+		if s.TotalConversations > 0 {
+			fmt.Fprintf(&sb, "💰 平均成本：%s tokens/对话", formatTokens(int64(s.AvgTokensPerConv)))
+			if s.TotalInputTokens > 0 {
+				fmt.Fprintf(&sb, " | 输出/输入比：%.1f%%", s.OutputInputRatio*100)
+			}
+			sb.WriteString("\n")
+		}
+	} else {
+		sb.WriteString("暂无数据\n")
+	}
+
+	// ── 任务执行效果 ──
+	sb.WriteString("\n🎯 **任务执行效果**\n──────────────\n")
 	if s.TotalConversations > 0 {
 		avgIter := float64(s.TotalIterations) / float64(s.TotalConversations)
-		fmt.Fprintf(&sb, "🔄 Agent 迭代：%d（平均 %.1f 次/对话）\n", s.TotalIterations, avgIter)
+		fmt.Fprintf(&sb, "📊 平均迭代：%.1f 次/对话\n", avgIter)
+
+		if s.TotalToolCalls > 0 {
+			fmt.Fprintf(&sb, "🛠️ 工具成功率：%.1f%%（%d 调用 / %d 错误）\n",
+				s.ToolSuccessRate*100, s.TotalToolCalls, s.TotalToolErrors)
+		} else {
+			sb.WriteString("🛠️ 工具成功率：N/A（无调用）\n")
+		}
+
+		if s.TotalLLMCalls > 0 {
+			fmt.Fprintf(&sb, "🤖 LLM 成功率：%.1f%%（%d 调用 / %d 错误）\n",
+				s.LLMSuccessRate*100, s.TotalLLMCalls, s.TotalLLMErrors)
+		} else {
+			sb.WriteString("🤖 LLM 成功率：N/A（无调用）\n")
+		}
+
+		fmt.Fprintf(&sb, "🔧 每对话工具：%.1f 次\n", s.AvgToolCallsPerConv)
 	} else {
-		fmt.Fprintf(&sb, "🔄 Agent 迭代：%d\n", s.TotalIterations)
+		sb.WriteString("暂无数据\n")
 	}
 
-	fmt.Fprintf(&sb, "🛠️ 工具调用：%d | ❌ 错误：%d\n", s.TotalToolCalls, s.TotalToolErrors)
-
-	fmt.Fprintf(&sb, "🤖 LLM 调用：%d", s.TotalLLMCalls)
-	if s.TotalInputTokens > 0 {
-		fmt.Fprintf(&sb, " | 输入 %s | 输出 %s",
-			formatTokens(s.TotalInputTokens),
-			formatTokens(s.TotalOutputTokens))
-	}
-	sb.WriteString("\n")
-
-	// 上下文管理
-	sb.WriteString("\n📦 **上下文管理**\n──────────────\n")
-	fmt.Fprintf(&sb, "🎭 Masking：触发 %d 次 | 遮蔽 %d 条\n", s.MaskingEvents, s.MaskedItems)
-	fmt.Fprintf(&sb, "💾 Offload：触发 %d 次 | 落盘 %d 条 | 召回 %d 次\n",
-		s.OffloadEvents, s.OffloadedItems, s.OffloadedRecalls)
-
-	if s.CompressEvents > 0 {
-		ratio := s.CompressRatio * 100
-		fmt.Fprintf(&sb, "🧹 压缩：触发 %d 次 | 总压缩比 %.0f%%（%s → %s tokens）\n",
-			s.CompressEvents, ratio,
-			formatTokens(s.CompressTokensIn),
-			formatTokens(s.CompressTokensOut))
+	// ── 记忆质量 ──
+	sb.WriteString("\n🧠 **记忆质量**\n──────────────\n")
+	if hasMemory {
+		if s.MaskedItems > 0 {
+			fmt.Fprintf(&sb, "🎭 Masking 回调率：%.1f%%（%d / %d）\n",
+				s.MaskedRecallRate*100, s.MaskedRecalls, s.MaskedItems)
+		}
+		if s.OffloadedItems > 0 {
+			fmt.Fprintf(&sb, "💾 Offload 回调率：%.1f%%（%d / %d）\n",
+				s.OffloadRecallRate*100, s.OffloadedRecalls, s.OffloadedItems)
+		}
+		totalEvictions := s.MaskedItems + s.OffloadedItems
+		totalRecalls := s.OffloadedRecalls + s.MaskedRecalls
+		if totalEvictions > 0 {
+			fmt.Fprintf(&sb, "📉 总回调率：%.1f%%（%d / %d）\n",
+				s.RecallRate*100, totalRecalls, totalEvictions)
+		}
+		if s.TotalConversations > 0 {
+			fmt.Fprintf(&sb, "✂️ 上下文编辑率：%.1f%%（%d / %d 对话）\n",
+				s.ContextEditRate*100, s.ContextEditEvents, s.TotalConversations)
+		}
+		if s.CompressEvents > 0 {
+			fmt.Fprintf(&sb, "🔍 摘要精化率：%.1f%%（%d / %d 压缩）← 精化率高说明压缩摘要质量差\n",
+				s.SummaryRefineRate*100, s.SummaryRefines, s.CompressEvents)
+		}
 	} else {
-		fmt.Fprintf(&sb, "🧹 压缩：触发 %d 次\n", s.CompressEvents)
+		sb.WriteString("暂无数据\n")
 	}
 
-	fmt.Fprintf(&sb, "✂️ Context Edit：%d 次\n", s.ContextEditEvents)
-	fmt.Fprintf(&sb, "🔍 摘要精化：%d 次\n", s.SummaryRefines)
+	// ── 压缩效率 ──
+	sb.WriteString("\n📦 **压缩效率**\n──────────────\n")
+	if hasCompress {
+		saved := s.CompressTokensIn - s.CompressTokensOut
+		fmt.Fprintf(&sb, "🧹 压缩：%d 次 | 节省 %s tokens（节省率 %.1f%%）\n",
+			s.CompressEvents, formatTokens(saved), s.TokenSavingRate*100)
+		fmt.Fprintf(&sb, "📊 每次平均节省：%s tokens\n",
+			formatTokens(int64(s.AvgTokensSavedPerCompress)))
+		fmt.Fprintf(&sb, "📐 输出/输入比：%.1f%%\n", s.CompressRatio*100)
+	} else {
+		sb.WriteString("暂无数据\n")
+	}
 
-	totalEvictions := s.MaskedItems + s.OffloadedItems
-	totalRecalls := s.OffloadedRecalls + s.MaskedRecalls
-	if totalEvictions > 0 {
-		recallRate := float64(totalRecalls) / float64(totalEvictions) * 100
-		fmt.Fprintf(&sb, "📉 总回调率：%.1f%%（%d recalls / %d 遮蔽+落盘）\n",
-			recallRate, totalRecalls, totalEvictions)
+	// ── 四层防御效能 ──
+	sb.WriteString("\n🛡️ **四层防御效能**\n──────────────\n")
+	if hasDefense {
+		fmt.Fprintf(&sb, "🎭 Masking：遮蔽 %d 条（免费压缩）\n", s.MaskedItems)
+		fmt.Fprintf(&sb, "💾 Offload：落盘 %d 条（磁盘保存）\n", s.OffloadedItems)
+		if s.CompressTokensIn > 0 {
+			saved := s.CompressTokensIn - s.CompressTokensOut
+			fmt.Fprintf(&sb, "🧹 压缩：节省 %s tokens（节省率 %.1f%%）\n",
+				formatTokens(saved), s.TokenSavingRate*100)
+		} else {
+			sb.WriteString("🧹 压缩：无数据\n")
+		}
+		fmt.Fprintf(&sb, "📈 联合保存率：%.1f%%（节省 %s / 总输入 %s）\n",
+			s.CombinedSavingRate*100,
+			formatTokens(s.CompressTokensIn-s.CompressTokensOut),
+			formatTokens(s.TotalInputTokens))
+	} else {
+		sb.WriteString("暂无数据\n")
 	}
 
 	return sb.String()

@@ -128,8 +128,10 @@ type Sandbox interface {
 	Close() error
 	// CloseForUser 关闭并清理指定用户的沙箱资源（仅 stop）
 	CloseForUser(userID string) error
-	// PostExec 命令执行后异步触发 export+import 持久化（dirty check）
-	PostExec(userID string)
+	// IsExporting 检查该用户是否正在进行 export+import（用于引擎层排队阻塞）
+	IsExporting(userID string) bool
+	// ExportAndImport 同步执行 export+import 持久化（由 settings 触发）
+	ExportAndImport(userID string) error
 }
 
 // NoneSandbox 无沙箱模式，直接执行
@@ -137,9 +139,10 @@ type NoneSandbox struct{}
 
 func (s *NoneSandbox) Name() string { return "none" }
 
-func (s *NoneSandbox) Close() error                     { return nil }
-func (s *NoneSandbox) CloseForUser(userID string) error { return nil }
-func (s *NoneSandbox) PostExec(userID string)           {}
+func (s *NoneSandbox) Close() error                        { return nil }
+func (s *NoneSandbox) CloseForUser(userID string) error    { return nil }
+func (s *NoneSandbox) IsExporting(userID string) bool      { return false }
+func (s *NoneSandbox) ExportAndImport(userID string) error { return nil }
 
 func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -155,7 +158,7 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 
 // dockerSandbox Docker 沙箱实现
 // 容器生命周期：Close 时仅 stop（不 rm），下次直接 start 复用。
-// export+import 仅在命令执行产生文件系统变更时触发，确保用户环境持久化。
+// export+import 仅在用户主动触发 cleanup 时执行（由 settings 中的 sandbox_cleanup 控制）。
 // 始终使用 export+import（而非 docker commit），避免镜像层累积迅速耗尽磁盘空间。
 type dockerSandbox struct {
 	image            string // 基础镜像
@@ -163,6 +166,7 @@ type dockerSandbox struct {
 	containerWorkDir string // DinD: 容器内 WORK_DIR 的路径（空则不翻译）
 	mu               sync.Mutex
 	containers       map[string]*dockerContainer // userID -> container
+	exportingUsers   map[string]bool             // userID -> 正在 export+import 中
 }
 
 type dockerContainer struct {
@@ -174,7 +178,6 @@ type dockerContainer struct {
 func (s *dockerSandbox) Name() string { return "docker" }
 
 // Close 关闭所有 Docker 容器（仅 stop，不 rm 也不 export/import）。
-// export/import 仅在命令执行时触发（见 Wrap），Close 只负责快速停止。
 // 容器保留在磁盘上，下次 getOrCreateContainer 时直接 docker start 复用。
 func (s *dockerSandbox) Close() error {
 	s.mu.Lock()
@@ -197,7 +200,6 @@ func (s *dockerSandbox) Close() error {
 }
 
 // CloseForUser 关闭指定用户的容器（仅 stop，不 rm 也不 export/import）。
-// export/import 仅在命令执行时触发，CloseForUser 只负责快速停止（空闲超时卸载）。
 // 容器保留在磁盘上，下次直接 docker start 复用。
 func (s *dockerSandbox) CloseForUser(userID string) error {
 	s.mu.Lock()
@@ -217,28 +219,48 @@ func (s *dockerSandbox) CloseForUser(userID string) error {
 	return nil
 }
 
-// PostExec 命令执行后异步触发 export+import 持久化（仅在有文件系统变更时）。
-// 异步执行，不阻塞命令返回。export+import 可能耗时数十秒（大型 FS），
-// 但对用户透明——下次 getOrCreateContainer 会直接 docker start 复用现有容器。
-func (s *dockerSandbox) PostExec(userID string) {
+// IsExporting 检查该用户是否正在进行 export+import（用于引擎层排队阻塞）
+func (s *dockerSandbox) IsExporting(userID string) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.exportingUsers == nil {
+		return false
+	}
+	return s.exportingUsers[userID]
+}
+
+// ExportAndImport 同步执行 export+import 持久化（由 settings 中的 cleanup 触发）。
+// 调用期间 IsExporting(userID) 返回 true，引擎层会阻塞该用户的后续请求。
+func (s *dockerSandbox) ExportAndImport(userID string) error {
+	s.mu.Lock()
+	if s.exportingUsers == nil {
+		s.exportingUsers = make(map[string]bool)
+	}
+	if s.exportingUsers[userID] {
+		s.mu.Unlock()
+		return fmt.Errorf("export already in progress for user %s", userID)
+	}
+	s.exportingUsers[userID] = true
 	c, ok := s.containers[userID]
 	if !ok || !c.started {
+		s.exportingUsers[userID] = false
 		s.mu.Unlock()
-		return
+		return fmt.Errorf("no active container for user %s", userID)
 	}
 	containerName := c.name
 	s.mu.Unlock()
 
-	go func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		// 再次检查容器是否仍然存在且已启动（可能已被 Close 停止）
-		if current, ok := s.containers[userID]; !ok || !current.started {
-			return
-		}
-		s.exportImportIfDirty(containerName, userID)
-	}()
+	log.Infof("Starting export+import for user %s (container %s)", userID, containerName)
+
+	// 调用 exportImportIfDirty（不持有锁，因为内部不获取锁）
+	s.exportImportIfDirty(containerName, userID)
+
+	s.mu.Lock()
+	s.exportingUsers[userID] = false
+	s.mu.Unlock()
+
+	log.Infof("Export+import completed for user %s", userID)
+	return nil
 }
 
 // cleanupStaleTmpFiles 清理上次异常退出残留的 export 临时文件。
@@ -289,7 +311,7 @@ func pruneDockerResources() {
 
 // exportImportIfDirty 仅在容器有文件系统变更时，用 export+import 持久化为单层镜像。
 // 始终使用 export+import（而非 docker commit），确保镜像永远只有一层，避免磁盘空间膨胀。
-// 调用方必须持有 s.mu 锁。
+// 注意：此方法不获取 s.mu 锁，调用方需确保不在持锁状态下调用。
 func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping export for system container %s (userID=%q)", containerName, userID)
@@ -381,7 +403,7 @@ func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 }
 
 // exportImportFallback 降级方案：export 到临时文件再 import（兼容 DinD 等管道不工作的场景）。
-// 调用方必须持有 s.mu 锁。
+// 不获取 s.mu 锁。
 func (s *dockerSandbox) exportImportFallback(containerName, userImage string, changes []string) {
 	tmpFile, err := os.CreateTemp("", "xbot-export-*.tar")
 	if err != nil {

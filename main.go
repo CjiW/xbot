@@ -297,6 +297,14 @@ func main() {
 			MetricsGet: func() string {
 				return agent.GlobalMetrics.Snapshot().FormatMarkdown()
 			},
+			SandboxCleanupTrigger: func(senderID string) error {
+				sb := tools.GetSandbox()
+				return sb.ExportAndImport(senderID)
+			},
+			SandboxIsExporting: func(senderID string) bool {
+				sb := tools.GetSandbox()
+				return sb.IsExporting(senderID)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

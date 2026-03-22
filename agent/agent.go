@@ -421,11 +421,6 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	cardBuilder := tools.NewCardBuilder()
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
-	// Sandbox cleanup tool: 仅 docker 模式下注册
-	if cfg.SandboxMode == "" || cfg.SandboxMode == "docker" {
-		registry.Register(&tools.SandboxCleanupTool{})
-	}
-
 	return skillStore, agentStore, chatHistory, registry, cardBuilder
 }
 
@@ -1116,6 +1111,14 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 				a.chatCancelCh.Delete(cancelKey)
 				<-sem // 释放槽位
 			}()
+
+			// 沙箱正在 export+import 时，拒绝该用户所有请求
+			if sb := tools.GetSandbox(); sb.IsExporting(msg.SenderID) {
+				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID}).Info("Request rejected: sandbox export in progress")
+				a.sendMessage(msg.Channel, msg.ChatID, "⏳ 沙箱正在持久化中，请稍后再试...")
+				return
+			}
+
 			response, err = a.processMessage(reqCtx, msg)
 			// 在 defer 执行前检查是否被取消（processMessage 过程中用户可能 /cancel）
 			if reqCtx.Err() == context.Canceled {

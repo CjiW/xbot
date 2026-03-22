@@ -13,17 +13,17 @@ import (
 // RecallTracker 跟踪 LLM 的 recall 行为，检测摘要遗漏。
 // 当同一内容被召回 ≥3 次时，说明压缩摘要遗漏了关键信息，需要精化回写。
 type RecallTracker struct {
-	mu           sync.Mutex
-	recallCounts map[string]int   // contentHash → recall count
-	hotItems     []RecallHotItem  // 高频召回项（按次数排序）
-	maxHotItems  int              // 最多保留 50 个
-	lastRefineIter atomic.Int32   // 上次精化时的迭代号（atomic 保证并发安全）
+	mu             sync.Mutex
+	recallCounts   map[string]int  // contentHash → recall count
+	hotItems       []RecallHotItem // 高频召回项（按次数排序）
+	maxHotItems    int             // 最多保留 50 个
+	lastRefineIter atomic.Int32    // 上次精化时的迭代号（atomic 保证并发安全）
 }
 
 // RecallHotItem 表示一个高频召回的 item。
 type RecallHotItem struct {
 	Hash      string
-	Content   string    // 截断到 200 chars 的内容摘要
+	Content   string // 截断到 200 chars 的内容摘要
 	Count     int
 	FirstSeen time.Time
 	LastSeen  time.Time

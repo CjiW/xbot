@@ -555,7 +555,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 初始化 RecallTracker（摘要精化追踪器）
 	a.recallTracker = NewRecallTracker()
 
-
 	// 初始化并注册 TODO 管理工具
 	todoMgr := tools.NewTodoManager()
 	a.todoManager = todoMgr

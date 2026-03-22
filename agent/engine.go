@@ -527,7 +527,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}
 
-
 		if err != nil && llm.IsInputTooLongError(err) && len(messages) > 3 {
 			// 输入超限时强制压缩上下文后重试
 			log.Ctx(ctx).WithError(err).Warn("Input too long for LLM, forcing context compression and retrying")

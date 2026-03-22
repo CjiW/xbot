@@ -140,7 +140,7 @@ func TestFormatMarkdown(t *testing.T) {
 	md := s.FormatMarkdown()
 
 	// 验证关键字段
- checks := []string{
+	checks := []string{
 		"📊",
 		"3h 25m",
 		"42",

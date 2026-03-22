@@ -136,13 +136,25 @@ func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolR
 	// 将用户输入的路径转换为容器内路径
 	sandboxPath := params.Path
 	if !strings.HasPrefix(params.Path, sandboxBase+"/") && !strings.HasPrefix(params.Path, "/") {
-		sandboxPath = sandboxBase + "/" + params.Path
+		// 相对路径，优先使用 CurrentDir（Cd 工具优化）
+		if ctx != nil && ctx.CurrentDir != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+			if err == nil {
+				sandboxPath = sandboxBase + "/" + filepath.Join(rel, params.Path)
+			} else {
+				sandboxPath = sandboxBase + "/" + params.Path
+			}
+		} else {
+			sandboxPath = sandboxBase + "/" + params.Path
+		}
 	} else if strings.HasPrefix(params.Path, sandboxBase+"/") {
 		sandboxPath = params.Path
-	} else if strings.HasPrefix(params.Path, "/") && ctx.WorkspaceRoot != "" {
-		rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			sandboxPath = sandboxBase + "/" + rel
+	} else if strings.HasPrefix(params.Path, "/") {
+		if ctx.WorkspaceRoot != "" {
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
+			if err == nil && !strings.HasPrefix(rel, "..") {
+				sandboxPath = sandboxBase + "/" + rel
+			}
 		}
 	}
 

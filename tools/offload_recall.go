@@ -72,8 +72,12 @@ func (t *OffloadRecallTool) Execute(ctx *ToolContext, args string) (*ToolResult,
 		params.Limit = offloadMaxLimit
 	}
 
-	// 构建 sessionKey
-	sessionKey := ctx.Channel + ":" + ctx.ChatID
+	// 构建 sessionKey：offload 数据存放在顶层 Agent 的 session 目录下
+	// SubAgent 自身的 sessionKey 是独立的（如 agent:main/code-reviewer），需要用 RootSessionKey 定位父 session
+	sessionKey := ctx.RootSessionKey
+	if sessionKey == "" {
+		sessionKey = ctx.Channel + ":" + ctx.ChatID
+	}
 	if sessionKey == ":" {
 		sessionKey = ""
 	}

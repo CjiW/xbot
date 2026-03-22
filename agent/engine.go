@@ -185,7 +185,7 @@ type RunOutput struct {
 //
 // 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
-//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=nil, ...
+//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
 func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
@@ -471,6 +471,19 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		err        error
 		elapsed    time.Duration
 	}
+
+	// --- 动态上下文注入器（CWD 变化检测）---
+	// 主 Agent 通过 session.GetCurrentDir() 获取实时 CWD，
+	// SubAgent 使用 cfg.InitialCWD（SubAgent 不支持 Cd，CWD 不变）。
+	dynamicInjector := NewDynamicContextInjector(func() string {
+		if cfg.Session != nil {
+			if dir := cfg.Session.GetCurrentDir(); dir != "" {
+				return dir
+			}
+		}
+		return cfg.InitialCWD
+	})
+
 	for i := 0; i < maxIter; i++ {
 		iteration = i
 		localIterCount++
@@ -916,6 +929,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				messages = cfg.OffloadStore.PurgeStaleMessages(sessionKey, messages)
 			}
 		}
+
+		// --- Dynamic Context 注入（CWD 变化检测）---
+		// 在 sys_reminder 之前注入：dynamic-context 描述事实性环境变化，sys_reminder 描述行为引导
+		dynamicInjector.InjectIfNeeded(messages)
 
 		// --- System Reminder 注入 ---
 		if len(response.ToolCalls) > 0 {

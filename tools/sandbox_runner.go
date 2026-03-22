@@ -40,8 +40,13 @@ var globalSandbox Sandbox
 var sandboxInitOnce sync.Once
 
 // InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
+// 启动时自动清理上次残留的临时文件和悬空 Docker 资源。
 func InitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
 	sandboxInitOnce.Do(func() {
+		if sandboxCfg.Mode == "docker" {
+			cleanupStaleTmpFiles()
+			pruneDockerResources()
+		}
 		globalSandbox = NewSandbox(sandboxCfg, workDir)
 		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
 	})
@@ -191,6 +196,50 @@ func (s *dockerSandbox) CloseForUser(userID string) error {
 	delete(s.containers, userID)
 	return nil
 }
+
+// cleanupStaleTmpFiles 清理上次异常退出残留的 export 临时文件。
+// 进程被 OOM kill 或系统重启时，defer os.Remove 不会执行，tar 文件会残留在 /tmp。
+func cleanupStaleTmpFiles() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "xbot-export-*.tar"))
+	if err != nil {
+		return
+	}
+	for _, f := range matches {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		// 只清理超过 10 分钟的文件（避免误删正在使用的）
+		if time.Since(info.ModTime()) > 10*time.Minute {
+			if err := os.Remove(f); err == nil {
+				log.Infof("Cleaned up stale tmp file: %s (%.1f MB)", f, float64(info.Size())/(1024*1024))
+			}
+		}
+	}
+}
+
+// pruneDockerResources 清理悬空 Docker 资源（停止的容器、悬空镜像）。
+// 启动时执行一次，防止上次异常退出遗留的僵尸容器和镜像占用磁盘。
+func pruneDockerResources() {
+	// 清理已停止的 xbot 容器
+	if out, err := dockerExec(dockerCmdTimeout, "container", "ls", "-a", "-q", "--filter", "name=xbot-", "--filter", "status=exited"); err == nil {
+		containers := strings.TrimSpace(string(out))
+		if containers != "" {
+			for _, id := range strings.Split(containers, "\n") {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					dockerRun(dockerCmdTimeout, "rm", "-f", id)
+				}
+			}
+			log.Infof("Pruned stopped xbot containers")
+		}
+	}
+	// 清理悬空镜像
+	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err == nil {
+		log.Debugf("Docker image prune: %s", strings.TrimSpace(string(out)))
+	}
+}
+
 
 // exportImportIfDirty 仅在容器有文件系统变更时，用 export+import 持久化为单层镜像。
 // 始终使用 export+import（而非 docker commit），确保镜像永远只有一层，避免磁盘空间膨胀。

@@ -38,7 +38,10 @@ func TestExportImportAlwaysSingleLayer(t *testing.T) {
 			t.Fatalf("Round %d: command failed: %v, output: %s", i, err, string(out))
 		}
 
-		// Close triggers export+import
+		// ExportAndImport on running container, then Close
+		if err := s.ExportAndImport(userID); err != nil {
+			t.Fatalf("Round %d: ExportAndImport failed: %v", i, err)
+		}
 		if err := s.Close(); err != nil {
 			t.Fatalf("Round %d: Close failed: %v", i, err)
 		}
@@ -110,12 +113,13 @@ func TestExportImportPreservesMetadata(t *testing.T) {
 		t.Fatalf("Command failed: %v, output: %s", err, string(out))
 	}
 
-	// Close triggers export+import
+	// ExportAndImport on running container, then Close
+	if err := s.ExportAndImport(userID); err != nil {
+		t.Fatalf("ExportAndImport failed: %v", err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
-
-	// Check that WORKDIR is preserved
 	out, err := exec.Command("docker", "image", "inspect", "-f",
 		"{{.Config.WorkingDir}}", userImage).CombinedOutput()
 	if err != nil {
@@ -172,7 +176,12 @@ func TestExportImportNoChangesSkipped(t *testing.T) {
 		t.Fatalf("GetShell failed: %v", err)
 	}
 
-	// Close — should skip export since no meaningful changes
+	// ExportAndImport on running container (may skip if no changes), then Close
+	if err := s.ExportAndImport(userID); err != nil {
+		t.Fatalf("ExportAndImport failed: %v", err)
+	}
+
+	// Close stops container
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}

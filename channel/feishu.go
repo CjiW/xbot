@@ -61,6 +61,11 @@ type SettingsCallbacks struct {
 
 	// MetricsGet 获取当前运行指标（用于设置页展示）
 	MetricsGet func() string
+
+	// SandboxCleanupTrigger 触发沙箱 export+import 持久化（阻塞直到完成）
+	SandboxCleanupTrigger func(senderID string) error
+	// SandboxIsExporting 检查用户是否正在进行 export+import
+	SandboxIsExporting func(senderID string) bool
 }
 
 // FeishuChannel 飞书渠道实现
@@ -1949,7 +1954,15 @@ func limitMarkdownTables(content string, maxTables int) string {
 
 // feishuSettingsSchema returns the settings definitions for Feishu channel.
 func feishuSettingsSchema() []SettingDefinition {
-	return nil
+	return []SettingDefinition{
+		{
+			Key:         "sandbox_cleanup",
+			Label:       "沙箱持久化",
+			Description: "将当前沙箱文件系统变更保存为镜像（export+import）。执行期间会阻塞你的所有请求。",
+			Type:        SettingTypeToggle,
+			Category:    "沙箱",
+		},
+	}
 }
 
 // SettingsSchema returns the settings definitions for Feishu channel.

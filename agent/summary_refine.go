@@ -152,12 +152,7 @@ func (t *RecallTracker) ShouldRefine(currentIteration int) bool {
 		return false
 	}
 
-	hotItems := t.GetHotItems(refineThreshold)
-	if len(hotItems) == 0 {
-		return false
-	}
-
-	return true
+	return len(t.GetHotItems(refineThreshold)) != 0
 }
 
 // MarkRefine 标记一次精化已完成（更新冷却计数器）。

@@ -1450,3 +1450,47 @@ func (h *toolsMockHook) postCallCount() int {
 	defer h.mu.Unlock()
 	return h.postCalls
 }
+
+// TestBuildToolContext_SubAgentCdPersists verifies that Cd tool's directory change
+// persists across subsequent buildToolContext calls for SubAgent (no session).
+// This was a bug: buildToolContext is called per tool execution, and the old closure
+// only set tc.CurrentDir on the old ToolContext, which was discarded after each call.
+func TestBuildToolContext_SubAgentCdPersists(t *testing.T) {
+	// Simulate SubAgent: no Session, InitialCWD set
+	cfg := &RunConfig{
+		AgentID:    "main/code-reviewer",
+		Channel:    "feishu",
+		ChatID:     "oc_xxx",
+		SenderID:   "ou_xxx",
+		WorkingDir: "/work",
+		InitialCWD: "/work",
+		Tools:      tools.NewRegistry(),
+	}
+
+	// First buildToolContext — simulates Cd call
+	tc1 := buildToolContext(context.Background(), cfg)
+	if tc1.CurrentDir != "/work" {
+		t.Fatalf("initial CurrentDir = %q, want /work", tc1.CurrentDir)
+	}
+
+	// Simulate Cd tool calling SetCurrentDir
+	if tc1.SetCurrentDir == nil {
+		t.Fatal("SetCurrentDir should not be nil for SubAgent with InitialCWD")
+	}
+	tc1.SetCurrentDir("/work/project/src")
+
+	// Second buildToolContext — simulates next tool call (e.g., Read)
+	tc2 := buildToolContext(context.Background(), cfg)
+
+	// BUG: before the fix, this was "/work" because the closure only updated
+	// the old tc1.CurrentDir, not cfg.InitialCWD which buildToolContext re-reads.
+	if tc2.CurrentDir != "/work/project/src" {
+		t.Errorf("CurrentDir after Cd = %q, want /work/project/src (Cd change was lost)", tc2.CurrentDir)
+	}
+
+	// Third call — verify it persists across multiple calls
+	tc3 := buildToolContext(context.Background(), cfg)
+	if tc3.CurrentDir != "/work/project/src" {
+		t.Errorf("CurrentDir on third call = %q, want /work/project/src", tc3.CurrentDir)
+	}
+}

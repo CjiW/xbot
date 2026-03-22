@@ -1169,10 +1169,11 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	} else if cfg.InitialCWD != "" {
 		// SubAgent 继承父 Agent 的 CWD（无 session 时使用 InitialCWD）
 		tc.CurrentDir = cfg.InitialCWD
-		// SubAgent 无 session，但仍需允许 Cd 工具更新 CurrentDir（仅当轮有效）
-		// 旧代码此处不设 SetCurrentDir，导致 Cd.executeInSandbox/executeLocal
-		// 中 `if ctx.SetCurrentDir != nil` 检查失败，CurrentDir 永远不更新。
+		// SubAgent 无 session，通过更新 cfg.InitialCWD 使 Cd 在后续 buildToolContext 调用中持久化。
+		// 旧代码只设置 tc.CurrentDir，但 buildToolContext 每次工具调用都会重建 tc，
+		// 导致 Cd 的目录变更丢失。注意：RunConfig 是值类型，闭包捕获的是指针。
 		tc.SetCurrentDir = func(dir string) {
+			cfg.InitialCWD = dir
 			tc.CurrentDir = dir
 		}
 	}

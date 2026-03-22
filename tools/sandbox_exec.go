@@ -57,6 +57,9 @@ func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, err
 		return output, fmt.Errorf("sandbox command failed: %w, output: %s", err, output)
 	}
 
+	// 命令执行完毕后，异步触发 export+import 持久化文件系统变更
+	sandbox.PostExec(sandboxUserID)
+
 	return strings.TrimSpace(stdout.String()), nil
 }
 

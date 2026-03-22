@@ -126,8 +126,10 @@ type Sandbox interface {
 	Name() string
 	// Close 关闭并清理沙箱资源
 	Close() error
-	// CloseForUser 关闭并清理指定用户的沙箱资源（stop → exportImport → rm）
+	// CloseForUser 关闭并清理指定用户的沙箱资源（仅 stop）
 	CloseForUser(userID string) error
+	// PostExec 命令执行后异步触发 export+import 持久化（dirty check）
+	PostExec(userID string)
 }
 
 // NoneSandbox 无沙箱模式，直接执行
@@ -137,6 +139,7 @@ func (s *NoneSandbox) Name() string { return "none" }
 
 func (s *NoneSandbox) Close() error                     { return nil }
 func (s *NoneSandbox) CloseForUser(userID string) error { return nil }
+func (s *NoneSandbox) PostExec(userID string)           {}
 
 func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	if runtime.GOOS == "windows" {
@@ -151,8 +154,8 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 }
 
 // dockerSandbox Docker 沙箱实现
-// 使用 docker export+import 持久化用户环境：Close 时将容器导出为 tar 再导入为单层镜像，
-// 下次创建容器时优先使用该镜像，从而完整保留 apt install 等所有变更。
+// 容器生命周期：Close 时仅 stop（不 rm），下次直接 start 复用。
+// export+import 仅在命令执行产生文件系统变更时触发，确保用户环境持久化。
 // 始终使用 export+import（而非 docker commit），避免镜像层累积迅速耗尽磁盘空间。
 type dockerSandbox struct {
 	image            string // 基础镜像
@@ -170,51 +173,32 @@ type dockerContainer struct {
 
 func (s *dockerSandbox) Name() string { return "docker" }
 
-// Close 关闭并清理所有 Docker 容器
-// 优化流程：每个容器单独 stop → exportImport → rm
-// 先 stop 让容器停止，再 export+import 持久化，最后 rm
+// Close 关闭所有 Docker 容器（仅 stop，不 rm 也不 export/import）。
+// export/import 仅在命令执行时触发（见 Wrap），Close 只负责快速停止。
+// 容器保留在磁盘上，下次 getOrCreateContainer 时直接 docker start 复用。
 func (s *dockerSandbox) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 每个容器单独处理：stop → exportImport → rm
 	for userID, c := range s.containers {
 		if !c.started {
 			continue
 		}
-
-		// 1. 先 stop（1秒足够，workspace 是 bind mount 不会丢数据）
 		if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
 			log.WithError(err).Warnf("Failed to stop container %s", c.name)
-			// stop 失败，尝试直接 force remove
-			if rmErr := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); rmErr != nil {
-				log.WithError(rmErr).Warnf("Failed to force remove container %s after stop failure", c.name)
-			} else {
-				log.Infof("Force removed Docker container %s (stop failed)", c.name)
-				delete(s.containers, userID)
-				continue
-			}
+			dockerRun(dockerCmdTimeout, "rm", "-f", c.name)
+			delete(s.containers, userID)
 		} else {
+			c.started = false
 			log.Infof("Stopped Docker container %s", c.name)
 		}
-
-		// 2. 容器停止后 export+import 持久化
-		s.exportImportIfDirty(c.name, userID)
-
-		// 3. 最后 rm
-		if err := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); err != nil {
-			log.WithError(err).Warnf("Failed to remove container %s", c.name)
-		} else {
-			log.Infof("Removed Docker container %s", c.name)
-		}
 	}
-
-	s.containers = make(map[string]*dockerContainer)
 	return nil
 }
 
-// CloseForUser 关闭并清理指定用户的 Docker 容器（stop → exportImport → rm）。
-// 仅清理单个用户的沙箱，不影响其他用户。用于空闲超时自动卸载。
+// CloseForUser 关闭指定用户的容器（仅 stop，不 rm 也不 export/import）。
+// export/import 仅在命令执行时触发，CloseForUser 只负责快速停止（空闲超时卸载）。
+// 容器保留在磁盘上，下次直接 docker start 复用。
 func (s *dockerSandbox) CloseForUser(userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -224,25 +208,37 @@ func (s *dockerSandbox) CloseForUser(userID string) error {
 		return nil
 	}
 
-	// 1. 先 stop（1秒足够，workspace 是 bind mount 不会丢数据）
 	if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", c.name); err != nil {
 		log.WithError(err).Warnf("Failed to stop container %s for idle cleanup", c.name)
 	} else {
+		c.started = false
 		log.Infof("Stopped Docker container %s (idle cleanup for user %s)", c.name, userID)
 	}
-
-	// 2. 容器停止后 export+import 持久化
-	s.exportImportIfDirty(c.name, userID)
-
-	// 3. 最后 rm
-	if err := dockerRun(dockerCmdTimeout, "rm", "-f", c.name); err != nil {
-		log.WithError(err).Warnf("Failed to remove container %s for idle cleanup", c.name)
-	} else {
-		log.Infof("Removed Docker container %s (idle cleanup for user %s)", c.name, userID)
-	}
-
-	delete(s.containers, userID)
 	return nil
+}
+
+// PostExec 命令执行后异步触发 export+import 持久化（仅在有文件系统变更时）。
+// 异步执行，不阻塞命令返回。export+import 可能耗时数十秒（大型 FS），
+// 但对用户透明——下次 getOrCreateContainer 会直接 docker start 复用现有容器。
+func (s *dockerSandbox) PostExec(userID string) {
+	s.mu.Lock()
+	c, ok := s.containers[userID]
+	if !ok || !c.started {
+		s.mu.Unlock()
+		return
+	}
+	containerName := c.name
+	s.mu.Unlock()
+
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// 再次检查容器是否仍然存在且已启动（可能已被 Close 停止）
+		if current, ok := s.containers[userID]; !ok || !current.started {
+			return
+		}
+		s.exportImportIfDirty(containerName, userID)
+	}()
 }
 
 // cleanupStaleTmpFiles 清理上次异常退出残留的 export 临时文件。

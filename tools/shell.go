@@ -156,6 +156,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	err = cmd.Run()
 
+	// 命令执行完毕后，异步触发 export+import 持久化文件系统变更
+	if toolCtx != nil && toolCtx.SandboxEnabled {
+		sandbox.PostExec(userID)
+	}
+
 	// 沙箱模式：检测 export 命令并持久化环境变量
 	var envPersisted bool
 	if toolCtx != nil && toolCtx.SandboxEnabled {

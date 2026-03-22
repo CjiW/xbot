@@ -284,22 +284,10 @@ func cleanupStaleTmpFiles() {
 	}
 }
 
-// pruneDockerResources 清理悬空 Docker 资源（停止的容器、悬空镜像）。
-// 启动时执行一次，防止上次异常退出遗留的僵尸容器和镜像占用磁盘。
+// pruneDockerResources 清理悬空 Docker 镜像。
+// 启动时执行一次，防止上次异常退出遗留的悬空镜像占用磁盘。
+// 注意：不清理已停止的容器，容器生命周期由使用者控制。
 func pruneDockerResources() {
-	// 清理已停止的 xbot 容器
-	if out, err := dockerExec(dockerCmdTimeout, "container", "ls", "-a", "-q", "--filter", "name=xbot-", "--filter", "status=exited"); err == nil {
-		containers := strings.TrimSpace(string(out))
-		if containers != "" {
-			for _, id := range strings.Split(containers, "\n") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					dockerRun(dockerCmdTimeout, "rm", "-f", id)
-				}
-			}
-			log.Infof("Pruned stopped xbot containers")
-		}
-	}
 	// 清理悬空镜像（<none>:<none>），这些是异常退出时未被 rmi 的旧镜像
 	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err == nil {
 		log.Debugf("Docker image prune: %s", strings.TrimSpace(string(out)))

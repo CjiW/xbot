@@ -28,9 +28,9 @@ func TestRecordConversation(t *testing.T) {
 	if m.TotalToolCalls.Load() != 10 {
 		t.Errorf("expected 10 tool calls, got %d", m.TotalToolCalls.Load())
 	}
-	// TotalLLMCalls 不再由 RecordConversation 累加（在 engine.go LLM 调用处直接计数）
-	if m.TotalLLMCalls.Load() != 0 {
-		t.Errorf("expected 0 LLM calls (not counted in RecordConversation), got %d", m.TotalLLMCalls.Load())
+	// TotalLLMCalls 由 RecordConversation 统一计数
+	if m.TotalLLMCalls.Load() != 4 {
+		t.Errorf("expected 4 LLM calls, got %d", m.TotalLLMCalls.Load())
 	}
 	if m.TotalInputTokens.Load() != 2000 {
 		t.Errorf("expected 2000 input tokens, got %d", m.TotalInputTokens.Load())
@@ -236,17 +236,17 @@ func TestMetricsAtomicConcurrency(t *testing.T) {
 		<-done
 	}
 
-	// RecordConversation 每次加 1 conversations + 1 iterations + 1 tool calls
+	// RecordConversation 每次加 1 conversations + 1 iterations + 1 tool calls + 1 llm calls
 	// 直接 Add 每次加 1 conversations + 1 tool calls + 1 llm calls + 1 compress
-	// 总计: conversations = 200, iterations = 100, tool calls = 200, llm calls = 100, compress = 100
+	// 总计: conversations = 200, iterations = 100, tool calls = 200, llm calls = 200, compress = 100
 	if m.TotalConversations.Load() != 200 {
 		t.Errorf("expected 200 conversations, got %d", m.TotalConversations.Load())
 	}
 	if m.TotalIterations.Load() != 100 {
 		t.Errorf("expected 100 iterations, got %d", m.TotalIterations.Load())
 	}
-	if m.TotalLLMCalls.Load() != 100 {
-		t.Errorf("expected 100 LLM calls (direct Add only), got %d", m.TotalLLMCalls.Load())
+	if m.TotalLLMCalls.Load() != 200 {
+		t.Errorf("expected 200 LLM calls (100 direct + 100 via RecordConversation), got %d", m.TotalLLMCalls.Load())
 	}
 }
 

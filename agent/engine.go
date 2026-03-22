@@ -121,6 +121,9 @@ type RunConfig struct {
 	// OffloadStore Layer 1 offload store（nil = 不启用）
 	OffloadStore *OffloadStore
 
+	// MaskStore Observation Masking 存储（nil = 不启用）
+	MaskStore *ObservationMaskStore
+
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 }
@@ -270,6 +273,31 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
+
+		// --- Layer 0: Observation Masking ---
+		// 在压缩之前先遮蔽旧的 tool result，减少上下文体积。
+		if cfg.MaskStore != nil {
+			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
+			totalTokens := msgTokens + toolTokens
+
+			maxTokens := 100000
+			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
+				maxTokens = cfg.ContextManagerConfig.MaxContextTokens
+			}
+
+			maskingThreshold := float64(maxTokens) * 0.4
+			if float64(totalTokens) > maskingThreshold {
+				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
+				if count > 0 {
+					messages = masked
+					if autoNotify {
+						progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
+						notifyProgress("")
+					}
+					log.Ctx(ctx).WithField("masked_count", count).Info("Observation masking triggered")
+				}
+			}
+		}
 
 		// Phase 2: SmartCompressor 智能触发（动态阈值+冷却）
 		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil && cfg.ContextManagerConfig != nil {

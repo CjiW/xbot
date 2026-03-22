@@ -134,6 +134,9 @@ func (a *Agent) buildMainRunConfig(
 	// OffloadStore — Layer 1 offload
 	cfg.OffloadStore = a.offloadStore
 
+	// MaskStore — Observation Masking
+	cfg.MaskStore = a.maskStore
+
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {
 		cfg.TodoManager = a.todoManager

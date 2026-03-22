@@ -682,3 +682,95 @@ func TestGrepTool_AltPatternMatchesBoth(t *testing.T) {
 		t.Errorf("should not contain 'nothing here', got: %s", result.Summary)
 	}
 }
+
+func TestGrepTool_SingleFilePath(t *testing.T) {
+	// Regression test: path pointing to a file (not directory) should search that file.
+	// Previously, GrepTool returned "path is not a directory" error for file paths.
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	content := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, World!")
+}
+
+func helper() string {
+	return "helper result"
+}
+`
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &GrepTool{}
+
+	// Test 1: search single file by path
+	t.Run("basic pattern on file", func(t *testing.T) {
+		input, _ := json.Marshal(map[string]any{
+			"pattern": "func main",
+			"path":    filePath,
+		})
+		result, err := tool.Execute(nil, string(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result.Summary, "func main") {
+			t.Errorf("expected 'func main' in results, got: %s", result.Summary)
+		}
+	})
+
+	// Test 2: alternation pattern on file
+	t.Run("alternation pattern on file", func(t *testing.T) {
+		input, _ := json.Marshal(map[string]any{
+			"pattern": "func main|func helper",
+			"path":    filePath,
+		})
+		result, err := tool.Execute(nil, string(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result.Summary, "func main") {
+			t.Errorf("expected 'func main' in results, got: %s", result.Summary)
+		}
+		if !strings.Contains(result.Summary, "func helper") {
+			t.Errorf("expected 'func helper' in results, got: %s", result.Summary)
+		}
+	})
+
+	// Test 3: no match returns "No matches found"
+	t.Run("no match on file", func(t *testing.T) {
+		input, _ := json.Marshal(map[string]any{
+			"pattern": "nonexistent_pattern_xyz",
+			"path":    filePath,
+		})
+		result, err := tool.Execute(nil, string(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result.Summary, "No matches found") {
+			t.Errorf("expected 'No matches found', got: %s", result.Summary)
+		}
+	})
+
+	// Test 4: context_lines works on single file
+	t.Run("context lines on file", func(t *testing.T) {
+		input, _ := json.Marshal(map[string]any{
+			"pattern":       "func helper",
+			"path":          filePath,
+			"context_lines": 1,
+		})
+		result, err := tool.Execute(nil, string(input))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result.Summary, "func helper") {
+			t.Errorf("expected 'func helper' in results, got: %s", result.Summary)
+		}
+		// Context line should include surrounding lines
+		if !strings.Contains(result.Summary, "return \"helper result\"") {
+			t.Errorf("expected context line with 'return' in results, got: %s", result.Summary)
+		}
+	})
+}

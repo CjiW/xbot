@@ -247,6 +247,9 @@ type Agent struct {
 	// OffloadStore manages large tool result offload to disk (Phase 2: Layer 1)
 	offloadStore *OffloadStore
 
+	// maskStore manages observation masking storage
+	maskStore *ObservationMaskStore
+
 	// todoManager 管理当前会话的 TODO 列表
 	todoManager *tools.TodoManager
 
@@ -522,10 +525,19 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	})
 	go a.offloadStore.CleanStale()
 
+	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
+	maskStore := NewObservationMaskStore(200)
+	a.maskStore = maskStore
+
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {
 		recallTool := &tools.OffloadRecallTool{Store: a.offloadStore}
 		registry.RegisterCore(recallTool)
+	}
+
+	// 注册 recall_masked 工具（需要 MaskStore 依赖注入）
+	if maskStore != nil {
+		registry.RegisterCore(&tools.RecallMaskedTool{Store: maskStore})
 	}
 
 	// 初始化并注册 TODO 管理工具

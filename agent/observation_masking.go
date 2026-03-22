@@ -21,20 +21,31 @@ type MaskedObservation struct {
 	MessageIdx int       `json:"message_idx"` // 在 messages slice 中的原始位置
 }
 
+const (
+	defaultMaxEntries = 200       // 默认最大条数
+	defaultMaxChars   = 2_000_000 // 默认最大存储字符数（~2MB）
+)
+
 // ObservationMaskStore 管理 observation masking 的存储和召回。
 // 零成本压缩策略：遮蔽旧 tool result，不发给 LLM，但完整保留可通过工具召回。
+// 双重容量限制：maxSize（条数）+ maxChars（总字符数），任一超限则淘汰最旧条目。
 type ObservationMaskStore struct {
-	mu      sync.RWMutex
-	entries []MaskedObservation // 按 mask 顺序存储
-	maxSize int                 // 最大存储条数（默认 200）
+	mu         sync.RWMutex
+	entries    []MaskedObservation // 按 mask 顺序存储
+	maxSize    int                 // 最大存储条数
+	maxChars   int                 // 最大存储总字符数
+	totalChars int                 // 当前总字符数
 }
 
 // NewObservationMaskStore 创建 ObservationMaskStore。
 func NewObservationMaskStore(maxSize int) *ObservationMaskStore {
 	if maxSize <= 0 {
-		maxSize = 200
+		maxSize = defaultMaxEntries
 	}
-	return &ObservationMaskStore{maxSize: maxSize}
+	return &ObservationMaskStore{
+		maxSize:  maxSize,
+		maxChars: defaultMaxChars,
+	}
 }
 
 // generateMaskID 生成 mask ID: "mk_" + 8位随机 hex。
@@ -59,11 +70,15 @@ func (s *ObservationMaskStore) Mask(toolName, arguments, content string, message
 	}
 
 	s.mu.Lock()
-	// 超过上限时淘汰最旧的
-	if len(s.entries) >= s.maxSize {
+	// 双重容量限制：超条数或超字符数时，淘汰最旧条目
+	contentLen := len([]rune(content))
+	for len(s.entries) >= s.maxSize || (s.totalChars+contentLen > s.maxChars && len(s.entries) > 0) {
+		evicted := s.entries[0]
+		s.totalChars -= len([]rune(evicted.Content))
 		s.entries = s.entries[1:]
 	}
 	s.entries = append(s.entries, entry)
+	s.totalChars += contentLen
 	s.mu.Unlock()
 
 	// 生成占位符
@@ -112,6 +127,7 @@ func (s *ObservationMaskStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = nil
+	s.totalChars = 0
 }
 
 // --- tools.MaskedRecallStore 接口实现 ---

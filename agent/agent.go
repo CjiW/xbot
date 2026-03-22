@@ -40,7 +40,8 @@ type consolidateRequest struct {
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
 func assertNoSystemPersist(m llm.ChatMessage) {
 	if m.Role == "system" {
-		log.WithField("message", m).Fatal("assert: must not persist system message to session")
+		log.WithField("message", m).Error("ASSERT: must not persist system message to session")
+		panic("assert: must not persist system message to session")
 	}
 }
 
@@ -311,15 +312,26 @@ func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {
 		return ""
 	}
-	b, err := json.Marshal(result)
-	if err != nil {
-		return strings.TrimSpace(result.Summary)
+	// 将 Summary + Detail + Tips 组合为纯文本，避免 JSON 序列化转义换行符。
+	// 旧方案用 json.Marshal(result) 导致 Detail 中的 diff 换行被编码为 \n，
+	// LLM 看到的是不可读的文本块而非格式化的 diff。
+	var sb strings.Builder
+	if result.Summary != "" {
+		sb.WriteString(result.Summary)
 	}
-	content := string(b)
+	if result.Detail != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(result.Detail)
+	}
 	if result.Tips != "" {
-		content += "\n\n[Tips] " + result.Tips
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(result.Tips)
 	}
-	return content
+	return sb.String()
 }
 
 // Config Agent 配置

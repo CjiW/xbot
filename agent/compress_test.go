@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -196,5 +197,85 @@ func TestTruncateRunes(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("truncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 		}
+	}
+}
+
+// TestThinTail_ActiveFilesNoLongerSkips verifies the BUG FIX:
+// activeFiles 保护的组现在做轻量截断（而非完全跳过）。
+// 旧逻辑：涉及活跃文件的组被 continue 跳过，编程会话中几乎所有组都涉及活跃文件 → 完全无效。
+func TestThinTail_ActiveFilesNoLongerSkips(t *testing.T) {
+	// 5 个工具组，每个操作 agent/compress.go（活跃文件）
+	// keepGroups=1 → 应截断前 4 组
+	activeFiles := []ActiveFile{{Path: "agent/compress.go", LastSeenIter: 0}}
+
+	tail := make([]llm.ChatMessage, 0, 10) // 5 assistant + 5 tool = 10
+	for i := 0; i < 5; i++ {
+		longContent := strings.Repeat("x", 2000)
+		tail = append(tail, makeAssistantWithToolCalls(longContent, llm.ToolCall{
+			Name: "Read", Arguments: `{"path":"agent/compress.go"}`,
+		}))
+		tail = append(tail, llm.NewToolMessage("Read", "", "", fmt.Sprintf("tool result %d", i)))
+	}
+
+	result := thinTail(tail, 1, activeFiles)
+
+	// 前 4 组应该被截断（不再完全跳过）
+	// 组 0: assistant idx=0, tool idx=1
+	// 组 1: assistant idx=2, tool idx=3
+	// 组 2: assistant idx=4, tool idx=5
+	// 组 3: assistant idx=6, tool idx=7
+	// 组 4: 完整保留 (keepGroups=1)
+	for i := 0; i < 4; i++ {
+		asstIdx := i * 2
+		toolIdx := i*2 + 1
+		// assistant content 应被截断到 activeContentMax (800)
+		if len([]rune(result[asstIdx].Content)) > 820 {
+			t.Errorf("active group %d: assistant content not truncated, got %d runes", i, len([]rune(result[asstIdx].Content)))
+		}
+		// tool content 应被截断到 activeContentMax (800)
+		if len([]rune(result[toolIdx].Content)) > 820 {
+			t.Errorf("active group %d: tool content not truncated, got %d runes", i, len([]rune(result[toolIdx].Content)))
+		}
+	}
+
+	// 最后 1 组应该完整保留
+	lastAsst := result[8]
+	if len([]rune(lastAsst.Content)) != 2000 {
+		t.Errorf("last kept group assistant: expected 2000 runes, got %d", len([]rune(lastAsst.Content)))
+	}
+	lastTool := result[9]
+	if lastTool.Content != "tool result 4" {
+		t.Errorf("last kept group tool: expected full content, got %q", lastTool.Content)
+	}
+}
+
+// TestAggressiveThinTail_ActiveFilesNoLongerSkips same fix for aggressiveThinTail.
+func TestAggressiveThinTail_ActiveFilesNoLongerSkips(t *testing.T) {
+	activeFiles := []ActiveFile{{Path: "agent/engine.go", LastSeenIter: 0}}
+
+	tail := make([]llm.ChatMessage, 0, 10)
+	for i := 0; i < 5; i++ {
+		longContent := strings.Repeat("y", 2000)
+		tail = append(tail, makeAssistantWithToolCalls(longContent, llm.ToolCall{
+			Name: "Edit", Arguments: `{"path":"agent/engine.go"}`,
+		}))
+		tail = append(tail, llm.NewToolMessage("Edit", "", "", fmt.Sprintf("result %d", i)))
+	}
+
+	result := aggressiveThinTail(tail, 1, activeFiles)
+
+	// 前 4 组应被截断（active 组：200 chars；non-active 组：100 chars）
+	for i := 0; i < 4; i++ {
+		toolIdx := i*2 + 1
+		// active 组 tool content 应截断到 activeContentMax (200)
+		if len([]rune(result[toolIdx].Content)) > 210 {
+			t.Errorf("active group %d: tool content not truncated, got %d runes", i, len([]rune(result[toolIdx].Content)))
+		}
+	}
+
+	// 最后 1 组应完整保留
+	lastAsst := result[8]
+	if len([]rune(lastAsst.Content)) != 2000 {
+		t.Errorf("last kept group: expected 2000 runes, got %d", len([]rune(lastAsst.Content)))
 	}
 }

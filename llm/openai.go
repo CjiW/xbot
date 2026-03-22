@@ -315,19 +315,13 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// 显式禁用 thinking
 		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
 	default:
-		logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode, attempting JSON parse")
-		// 尝试解析为 JSON 对象（高级用法）
-		// 支持两种格式：
-		// 1. 完整 thinking 参数: {"type": "enabled", "clear_thinking": false}
-		// 2. 直接设置字段: {"budget_tokens": 10000}
+		// JSON 格式的 thinking 参数
 		if len(thinkingMode) > 0 && thinkingMode[0] == '{' {
 			var customParams map[string]any
 			if err := json.Unmarshal([]byte(thinkingMode), &customParams); err == nil {
-				// 如果包含 type 字段，说明是完整的 thinking 参数
 				if _, hasType := customParams["type"]; hasType {
 					opts = append(opts, option.WithJSONSet("thinking", customParams))
 				} else {
-					// 否则直接设置字段（如 budget_tokens）
 					for key, value := range customParams {
 						opts = append(opts, option.WithJSONSet(key, value))
 					}

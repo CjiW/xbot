@@ -597,6 +597,11 @@ Output the compressed content directly.`
 	if err != nil {
 		return nil, fmt.Errorf("LLM compress failed: %w", err)
 	}
+	GlobalMetrics.TotalLLMCalls.Add(1)
+	if resp != nil {
+		GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
+		GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
+	}
 
 	compressed := llm.StripThinkBlocks(resp.Content)
 
@@ -623,6 +628,11 @@ Output at most %d characters.
 		if err != nil {
 			log.Ctx(ctx).WithError(err).Warn("compressMessages: re-compress failed, keeping original LLM output")
 		} else {
+			GlobalMetrics.TotalLLMCalls.Add(1)
+			if resp2 != nil {
+				GlobalMetrics.TotalInputTokens.Add(resp2.Usage.PromptTokens)
+				GlobalMetrics.TotalOutputTokens.Add(resp2.Usage.CompletionTokens)
+			}
 			recompressed := llm.StripThinkBlocks(resp2.Content)
 			reRunes := []rune(recompressed)
 			if len(reRunes) < len(compressedRunes) {
@@ -688,6 +698,11 @@ Drop everything else. Be ruthlessly concise.
 			if err != nil {
 				log.Ctx(ctx).WithError(err).Warn("compressMessages: summary re-compress failed, keeping current")
 			} else {
+				GlobalMetrics.TotalLLMCalls.Add(1)
+				if resp3 != nil {
+					GlobalMetrics.TotalInputTokens.Add(resp3.Usage.PromptTokens)
+					GlobalMetrics.TotalOutputTokens.Add(resp3.Usage.CompletionTokens)
+				}
 				recompressed := llm.StripThinkBlocks(resp3.Content)
 				if len([]rune(recompressed)) < len([]rune(compressed)) {
 					compressed = recompressed

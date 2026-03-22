@@ -517,12 +517,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 		llmCancel()
 
-		// 记录 LLM 调用指标
-		GlobalMetrics.TotalLLMCalls.Add(1)
+		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
 		if response != nil {
-			GlobalMetrics.TotalInputTokens.Add(response.Usage.PromptTokens)
-			GlobalMetrics.TotalOutputTokens.Add(response.Usage.CompletionTokens)
 			localInputTokens += int(response.Usage.PromptTokens)
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}
@@ -569,12 +566,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					retryCancel()
-					// 重试也要记录 LLM 调用指标
-					GlobalMetrics.TotalLLMCalls.Add(1)
+					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
 					if response != nil {
-						GlobalMetrics.TotalInputTokens.Add(response.Usage.PromptTokens)
-						GlobalMetrics.TotalOutputTokens.Add(response.Usage.CompletionTokens)
 						localInputTokens += int(response.Usage.PromptTokens)
 						localOutputTokens += int(response.Usage.CompletionTokens)
 					}
@@ -930,7 +924,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if cfg.TodoManager != nil && sessionKey != "" {
 				todoSummary = cfg.TodoManager.GetTodoSummary(sessionKey)
 			}
-			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary)
+			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID)
 			if reminder != "" && len(messages) > 0 {
 				lastIdx := len(messages) - 1
 				messages[lastIdx].Content += "\n\n" + reminder

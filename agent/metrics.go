@@ -81,10 +81,13 @@ func init() {
 }
 
 // RecordConversation 记录一次对话完成。
+// llmCalls 参数作为兜底校验：如果 engine.go 中的直接计数遗漏了某些路径，
+// RecordConversation 仍能通过此参数补齐。
 func (m *AgentMetrics) RecordConversation(iterations, toolCalls, llmCalls, inputTokens, outputTokens int) {
 	m.TotalConversations.Add(1)
 	m.TotalIterations.Add(int64(iterations))
 	m.TotalToolCalls.Add(int64(toolCalls))
+	m.TotalLLMCalls.Add(int64(llmCalls))
 	m.TotalInputTokens.Add(int64(inputTokens))
 	m.TotalOutputTokens.Add(int64(outputTokens))
 }

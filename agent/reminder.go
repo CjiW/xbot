@@ -7,16 +7,21 @@ import (
 )
 
 // BuildSystemReminder 构建系统提醒，追加到 tool message content 末尾。
-func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string) string {
+// agentID 为 "main" 时是主 Agent，否则为 SubAgent。
+func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string, agentID string) string {
 	if len(messages) == 0 {
 		return ""
 	}
 
-	// 1. 提取用户原始需求：第一条 user message（去掉时间戳和引导文本）
-	var userGoal string
+	isSubAgent := agentID != "main"
+
+	// 1. 提取任务目标：第一条 user message（去掉时间戳和引导文本）
+	//   - 主 Agent：用户原始需求
+	//   - SubAgent：父 Agent 分配的任务命令
+	var taskGoal string
 	for _, msg := range messages {
 		if msg.Role == "user" && msg.Content != "" {
-			userGoal = extractUserGoal(msg.Content)
+			taskGoal = extractUserGoal(msg.Content)
 			break
 		}
 	}
@@ -32,8 +37,12 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	// 3. 构建提醒
 	var parts []string
 
-	if userGoal != "" {
-		parts = append(parts, fmt.Sprintf("用户原始需求: %s", userGoal))
+	if taskGoal != "" {
+		if isSubAgent {
+			parts = append(parts, fmt.Sprintf("执行任务: %s", taskGoal))
+		} else {
+			parts = append(parts, fmt.Sprintf("用户原始需求: %s", taskGoal))
+		}
 	}
 
 	parts = append(parts, fmt.Sprintf("已完成 %d 次工具调用", toolCount))

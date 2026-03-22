@@ -427,7 +427,7 @@ func truncateRunes(s string, maxLen int) string {
 
 // compressMessages 使用 LLM 压缩对话历史（独立函数，不依赖 Agent receiver）。
 // 不使用 fingerprint 体系，直接压缩。
-func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
+func compressMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string, topicDetector *TopicDetector) (*CompressResult, error) {
 	// 第一步：找到尾部安全切割点
 	tailStart := len(messages) // 默认不保留任何尾部消息
 	for i := len(messages) - 1; i >= 1; i-- {
@@ -494,6 +494,36 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 			LLMView:     llmView,
 			SessionView: tailSummary,
 		}, nil
+	}
+
+	// 第三步（话题分区）：Topic-Aware 压缩
+	// 如果 topicDetector 可用且检测到多个话题分区，只压缩历史话题，保留当前话题原文。
+	// 这避免了"当前正在工作的文件内容被摘要丢失"的问题。
+	var currentTopicMsgs []llm.ChatMessage
+	if topicDetector != nil && len(toCompress) >= DefaultMinHistory {
+		segments, detectErr := topicDetector.Detect(toCompress)
+		if detectErr != nil {
+			log.Ctx(ctx).WithError(detectErr).Warn("compressMessages: topic detection failed, falling back to standard compress")
+		} else if len(segments) > 1 {
+			// 找到当前话题（最后一个 IsCurrent=true 的分区）
+			var historicalMsgs []llm.ChatMessage
+			for _, seg := range segments {
+				segMsgs := toCompress[seg.StartIdx:seg.EndIdx]
+				if seg.IsCurrent {
+					currentTopicMsgs = segMsgs
+				} else {
+					historicalMsgs = append(historicalMsgs, segMsgs...)
+				}
+			}
+			if len(historicalMsgs) > 0 {
+				log.Ctx(ctx).WithFields(map[string]interface{}{
+					"total_segments":      len(segments),
+					"historical_messages": len(historicalMsgs),
+					"current_topic_msgs":  len(currentTopicMsgs),
+				}).Info("compressMessages: topic-aware mode, compressing historical topics only")
+				toCompress = historicalMsgs
+			}
+		}
 	}
 
 	// 第四步：构建压缩 prompt
@@ -609,10 +639,12 @@ Output at most %d characters.
 	}
 	summaryMsg := llm.NewUserMessage("[Previous conversation context]\n\n" + compressed)
 
-	// LLM View: system + 压缩摘要 + thinnedTail（含 tool 消息）
-	llmView := make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(thinnedTail))
+	// LLM View: system + 压缩摘要 + [当前话题原文] + thinnedTail（含 tool 消息）
+	llmViewCap := len(systemMsgs) + 1 + len(currentTopicMsgs) + len(thinnedTail)
+	llmView := make([]llm.ChatMessage, 0, llmViewCap)
 	llmView = append(llmView, systemMsgs...)
 	llmView = append(llmView, summaryMsg)
+	llmView = append(llmView, currentTopicMsgs...) // 话题分区：当前话题保留原文
 	llmView = append(llmView, thinnedTail...)
 
 	// BUG FIX: ineffective 检测 + aggressiveThinTail 升级。

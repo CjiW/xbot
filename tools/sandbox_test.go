@@ -80,7 +80,7 @@ func TestDockerSandboxEnvVariables(t *testing.T) {
 	s.Close()
 }
 
-func TestDockerSandboxCommitPersistence(t *testing.T) {
+func TestDockerSandboxExportPersistence(t *testing.T) {
 	skipIfNoDocker(t)
 
 	ws, err := os.MkdirTemp("", "sandbox-test-*")
@@ -89,7 +89,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 	}
 	defer os.RemoveAll(ws)
 
-	userID := "test-commit"
+	userID := "test-export"
 	userImage := userImageName(userID)
 
 	defer func() {
@@ -97,7 +97,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 		exec.Command("docker", "rmi", userImage).Run()
 	}()
 
-	// 第一轮：创建文件并 Close（触发 commit）
+	// 第一轮：创建文件并 Close（触发 export+import）
 	s1 := newDockerSandbox("node:20-slim")
 	cmd, args, err := s1.Wrap("sh", []string{"-c", "echo persist > /workspace/testfile"}, nil, ws, userID)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 	}
 	s1.Close()
 
-	// 第二轮：用新 sandbox 实例（模拟重启），应自动使用 committed 镜像
+	// 第二轮：用新 sandbox 实例（模拟重启），应自动使用 export+import 镜像
 	s2 := newDockerSandbox("node:20-slim")
 	cmd, args, err = s2.Wrap("cat", []string{"/workspace/testfile"}, nil, ws, userID)
 	if err != nil {
@@ -122,7 +122,7 @@ func TestDockerSandboxCommitPersistence(t *testing.T) {
 	}
 
 	if !strings.Contains(string(output), "persist") {
-		t.Errorf("Data not persisted across commit, got: %s", string(output))
+		t.Errorf("Data not persisted across export, got: %s", string(output))
 	}
 
 	s2.Close()
@@ -135,10 +135,3 @@ func newDockerSandbox(image string) *dockerSandbox {
 	}
 }
 
-func newDockerSandboxWithThreshold(image string, threshold int) *dockerSandbox {
-	return &dockerSandbox{
-		image:                 image,
-		containers:            make(map[string]*dockerContainer),
-		commitSquashThreshold: threshold,
-	}
-}

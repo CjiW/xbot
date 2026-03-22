@@ -44,7 +44,6 @@ type SandboxConfig struct {
 	Mode                  string        // 沙箱模式: "none", "docker"
 	DockerImage           string        // Docker 镜像（如 "ubuntu:22.04"）
 	HostWorkDir           string        // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
-	CommitSquashThreshold int           // commit 达到此阈值时，用 export+import 扁平化镜像（默认 5，设为 0 禁用）
 	IdleTimeout           time.Duration // 用户空闲超时，超时后自动卸载沙箱（默认 30min，设为 0 禁用）
 }
 
@@ -250,7 +249,6 @@ func Load() *Config {
 			Mode:                  getEnvOrDefault("SANDBOX_MODE", "docker"),
 			DockerImage:           getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
 			HostWorkDir:           getEnvOrDefault("HOST_WORK_DIR", ""),
-			CommitSquashThreshold: getEnvIntOrDefault("SANDBOX_COMMIT_SQUASH_THRESHOLD", 5),
 			IdleTimeout:           time.Duration(getEnvIntOrDefault("SANDBOX_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,
 		},
 		StartupNotify: StartupNotifyConfig{

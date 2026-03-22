@@ -246,6 +246,9 @@ type Agent struct {
 	// OffloadStore manages large tool result offload to disk (Phase 2: Layer 1)
 	offloadStore *OffloadStore
 
+	// todoManager 管理当前会话的 TODO 列表
+	todoManager *tools.TodoManager
+
 	// TopicDetector for topic partition isolation (Phase 2.5, disabled by default)
 	topicDetector        *TopicDetector
 	enableTopicIsolation bool
@@ -312,7 +315,11 @@ func buildToolMessageContent(result *tools.ToolResult) string {
 	if err != nil {
 		return strings.TrimSpace(result.Summary)
 	}
-	return string(b)
+	content := string(b)
+	if result.Tips != "" {
+		content += "\n\n[Tips] " + result.Tips
+	}
+	return content
 }
 
 // Config Agent 配置
@@ -508,6 +515,12 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		recallTool := &tools.OffloadRecallTool{Store: a.offloadStore}
 		registry.RegisterCore(recallTool)
 	}
+
+	// 初始化并注册 TODO 管理工具
+	todoMgr := tools.NewTodoManager()
+	a.todoManager = todoMgr
+	registry.RegisterCore(&tools.TodoWriteTool{Manager: todoMgr})
+	registry.RegisterCore(&tools.TodoListTool{Manager: todoMgr})
 
 	// Initialize SharedSkillRegistry
 	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())

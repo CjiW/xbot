@@ -134,6 +134,11 @@ func (a *Agent) buildMainRunConfig(
 	// OffloadStore — Layer 1 offload
 	cfg.OffloadStore = a.offloadStore
 
+	// TodoManager — TODO 状态查询
+	if a.todoManager != nil {
+		cfg.TodoManager = a.todoManager
+	}
+
 	// InteractiveCallbacks — interactive SubAgent 支持
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,

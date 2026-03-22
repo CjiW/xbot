@@ -204,7 +204,7 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
 	diff := generateUnifiedDiff("", content, path)
-	return &ToolResult{Summary: summary, Detail: diff}, nil
+	return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
@@ -227,7 +227,7 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff}, nil
+	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
@@ -254,7 +254,7 @@ func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, a
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff}, nil
+	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool) (*ToolResult, error) {
@@ -281,7 +281,7 @@ func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacem
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff}, nil
+	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
@@ -307,7 +307,7 @@ func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content strin
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff}, nil
+	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 // executeLocal 在本地执行编辑操作（非沙箱模式）
@@ -324,7 +324,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 			return nil, err
 		}
 		diff := generateUnifiedDiff("", params.Content, filePath)
-		return &ToolResult{Summary: summary, Detail: diff}, nil
+		return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 	}
 
 	// 读取文件内容
@@ -360,7 +360,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 	}
 
 	diff := generateUnifiedDiff(oldContent, newContent, filePath)
-	return &ToolResult{Summary: result, Detail: diff}, nil
+	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 // doCreate 创建新文件

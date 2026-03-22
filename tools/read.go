@@ -122,7 +122,7 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 		return nil, fmt.Errorf("failed to read file in sandbox: %v, output: %s", err, output)
 	}
 
-	return NewResult(output), nil
+	return NewResultWithTips(output, "如需修改此文件，优先使用 Edit 工具。"), nil
 }
 
 // executeLocal 在本地读取文件
@@ -138,7 +138,7 @@ func (t *ReadTool) executeLocal(ctx *ToolContext, filePath string) (*ToolResult,
 				if err != nil {
 					return nil, fmt.Errorf("failed to read file: %w", err)
 				}
-				return NewResult(string(content)), nil
+				return NewResultWithTips(string(content), "如需修改此文件，优先使用 Edit 工具。"), nil
 			}
 		}
 	}
@@ -153,5 +153,5 @@ func (t *ReadTool) executeLocal(ctx *ToolContext, filePath string) (*ToolResult,
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	return NewResult(string(content)), nil
+	return NewResultWithTips(string(content), "如需修改此文件，优先使用 Edit 工具。"), nil
 }

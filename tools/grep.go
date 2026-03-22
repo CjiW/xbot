@@ -324,12 +324,12 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		if output != "" && !strings.Contains(output, "No matches found") {
 			// 有输出但 err != nil → 很可能是 SIGPIPE，正常返回结果
 		} else {
-			return NewResult("No matches found."), nil
+			return NewResultWithTips("No matches found.", "尝试换一个关键词，或检查路径/正则是否正确。"), nil
 		}
 	}
 
 	if output == "" {
-		return NewResult("No matches found."), nil
+		return NewResultWithTips("No matches found.", "尝试换一个关键词，或检查路径/正则是否正确。"), nil
 	}
 
 	// 解析 grep 输出并格式化
@@ -374,11 +374,11 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 	}
 
 	if matchCount == 0 {
-		return NewResult("No matches found."), nil
+		return NewResultWithTips("No matches found.", "尝试换一个关键词，或检查路径/正则是否正确。"), nil
 	}
 
 	fmt.Fprintf(&sb, "\n(Found %d match(es))", matchCount)
-	return NewResult(sb.String()), nil
+	return NewResultWithTips(sb.String(), "使用 Read 查看具体匹配行的完整上下文。"), nil
 }
 
 // searchFile searches a single file for the pattern and returns matches with optional context lines.
@@ -584,7 +584,7 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 	}
 
 	if len(matches) == 0 {
-		return NewResult("No matches found."), nil
+		return NewResultWithTips("No matches found.", "尝试换一个关键词，或检查路径/正则是否正确。"), nil
 	}
 
 	// Format output
@@ -611,5 +611,5 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 		fmt.Fprintf(&sb, "\n(Results truncated. Showing first %d matches.)\n", maxGrepMatches)
 	}
 
-	return NewResult(sb.String()), nil
+	return NewResultWithTips(sb.String(), "使用 Read 查看具体匹配行的完整上下文。"), nil
 }

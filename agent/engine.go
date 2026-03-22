@@ -924,7 +924,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if cfg.TodoManager != nil && sessionKey != "" {
 				todoSummary = cfg.TodoManager.GetTodoSummary(sessionKey)
 			}
-			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary)
+			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID)
 			if reminder != "" && len(messages) > 0 {
 				lastIdx := len(messages) - 1
 				messages[lastIdx].Content += "\n\n" + reminder

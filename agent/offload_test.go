@@ -128,16 +128,12 @@ func TestRecall_WrongSession(t *testing.T) {
 	originalContent := strings.Repeat("y", 5000)
 	offloaded, _ := store.MaybeOffload("session1", "Read", `{"path":"a.go"}`, originalContent)
 
-	// Try to recall from a different session
-	// Note: OffloadStore has a cross-session fallback (findOffloadInAllSessions),
-	// so even with a wrong sessionKey, the file can still be found on disk.
-	// This fallback exists as a safety net for SubAgent scenarios.
-	content, err := store.Recall("session2", offloaded.ID)
-	if err != nil {
-		t.Errorf("expected cross-session fallback to find the offload: %v", err)
-	}
-	if content != originalContent {
-		t.Error("content mismatch")
+	// Try to recall from a different session — should fail.
+	// Cross-session search was removed for security: no user should be able to
+	// read another user's offload data.
+	_, err := store.Recall("session2", offloaded.ID)
+	if err == nil {
+		t.Error("expected error when recalling from wrong session")
 	}
 }
 

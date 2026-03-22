@@ -217,48 +217,14 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 
 // Recall 按 ID 召回已 offload 的完整工具结果。
 
-// findOffloadInAllSessions 在所有 session 目录中搜索指定 offload ID 的文件。
-// 场景：SubAgent 继承了主 Agent 的对话历史，但 SubAgent 有自己的 sessionKey，
-// offload 文件存在父 session 目录下，SubAgent 用自己的 sessionKey 找不到。
-func (s *OffloadStore) findOffloadInAllSessions(id string) (string, bool) {
-	entries, err := os.ReadDir(s.config.StoreDir)
-	if err != nil {
-		return "", false
-	}
-	targetFilename := id + ".json"
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dir := filepath.Join(s.config.StoreDir, entry.Name())
-		fp := filepath.Join(dir, targetFilename)
-		if _, err := os.Stat(fp); err == nil {
-			log.WithField("id", id).
-				WithField("expected_session", entry.Name()).
-				Debug("OffloadStore: found offload in cross-session directory")
-			return dir, true
-		}
-	}
-	return "", false
-}
-
 func (s *OffloadStore) Recall(sessionKey, id string) (string, error) {
-	// 确定存放 offload 文件的 session 目录。
-	// 默认用当前 sessionKey，如果找不到则跨 session 搜索
-	// （场景：SubAgent 继承了主 Agent 的对话历史，但 sessionKey 不同）。
 	sessionDir := s.getSessionDir(sessionKey)
-	if _, err := os.Stat(s.offloadFilePath(sessionDir, id)); err != nil {
-		// 当前 session 目录下找不到，跨 session 搜索。
-		// 场景：SubAgent 继承了主 Agent 的对话历史，但 sessionKey 不同。
-		if foundDir, ok := s.findOffloadInAllSessions(id); ok {
-			sessionDir = foundDir
-		} else {
-			return "", fmt.Errorf("offload ID %s not found in session %s", id, sessionKey)
-		}
+	fp := s.offloadFilePath(sessionDir, id)
+	if _, err := os.Stat(fp); err != nil {
+		return "", fmt.Errorf("offload ID %s not found in session %s", id, sessionKey)
 	}
 
 	// 读取文件
-	fp := s.offloadFilePath(sessionDir, id)
 	data, err := os.ReadFile(fp)
 	if err != nil {
 		return "", fmt.Errorf("read offload file: %w", err)

@@ -178,7 +178,7 @@ func (a *Agent) buildCronRunConfig(
 }
 
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
-// SubAgent 使用独立工具集、无 session、无压缩、无进度通知。
+// SubAgent 使用独立工具集、无 session、有压缩（独立 ContextManager）、无进度通知。
 // Phase 2: SubAgent 通过 RunConfig 继承父 Agent 的工作区配置，
 // 使用统一的 defaultToolExecutor + buildToolContext 构建 ToolContext。
 func (a *Agent) buildSubAgentRunConfig(
@@ -322,6 +322,30 @@ func (a *Agent) buildSubAgentRunConfig(
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
 	}
 
+	// 独立 sessionKey：使用 subAgentID 确保与父 Agent 隔离，
+	// 避免工具激活、OffloadStore、MaskStore 等按 sessionKey 索引的数据污染。
+	cfg.SessionKey = subAgentID
+
+	// === Context Mask 统一机制：注入 6 个缺失字段 ===
+	// SubAgent 与主 Agent 共享同一 Run() 循环，context mask（offload/mask/context-edit）
+	// 依赖这些字段才能正确触发。之前缺失导致 SubAgent 上下文压缩/遮罩永不生效。
+
+	// 1. ContextManager：创建独立实例（不共享父 Agent 的触发器，避免计数交叉）
+	//    从 caps.Memory 条件中移出，所有 SubAgent 都需要压缩能力。
+	if a.contextManagerConfig != nil {
+		cfg.ContextManager = newPhase1Manager(a.contextManagerConfig)
+		cfg.ContextManagerConfig = a.contextManagerConfig
+	}
+
+	// 2. OffloadStore：共享父 Agent 实例（按 sessionKey 隔离，完全安全）
+	cfg.OffloadStore = a.offloadStore
+
+	// 3. MaskStore：共享父 Agent 实例（通过随机 ID 查找，容量共享但 SubAgent 生命周期短影响可忽略）
+	cfg.MaskStore = a.maskStore
+
+	// 4. ContextEditor：创建独立实例（每个 Agent 需要自己的 messages 引用和编辑历史）
+	cfg.ContextEditor = NewContextEditor(NewContextEditStore(100))
+
 	// Capability: send_message — 允许 SubAgent 向 IM 渠道发送消息
 	if caps.SendMessage {
 		cfg.SendFunc = a.sendMessage
@@ -347,8 +371,6 @@ func (a *Agent) buildSubAgentRunConfig(
 				messages[0].Content += "\n\n" + recallText
 			}
 
-			// 注入 ContextManager（SubAgent 共享主 Agent 的 ContextManager）
-			cfg.ContextManager = a.GetContextManager()
 		}
 	} else {
 		// 无 memory 能力时，移除记忆工具，避免 SubAgent 尝试调用后失败

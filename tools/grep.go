@@ -274,6 +274,15 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 	if path != "" {
 		if path == sandboxBase || strings.HasPrefix(path, sandboxBase+"/") {
 			searchDir = path
+		} else if ctx != nil && ctx.WorkspaceRoot != "" && strings.HasPrefix(path, ctx.WorkspaceRoot+"/") {
+			// path 是宿主机绝对路径（如 /workspace/xbot/agent/engine.go），
+			// 需要转为沙箱内的相对路径（sandboxBase + /xbot/agent/engine.go）
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, path)
+			if err == nil {
+				searchDir = sandboxBase + "/" + rel
+			} else {
+				searchDir = sandboxBase + "/" + path
+			}
 		} else {
 			searchDir = sandboxBase + "/" + path
 		}
@@ -506,81 +515,91 @@ func (t *GrepTool) executeLocal(ctx *ToolContext, pattern, path, include string,
 
 	info, err := os.Stat(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("base directory does not exist: %s", baseDir)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("path is not a directory: %s", baseDir)
+		return nil, fmt.Errorf("path does not exist: %s", baseDir)
 	}
 
-	// Expand brace patterns in include (e.g., "*.{go,ts}" -> ["*.go", "*.ts"])
-	var includePatterns []string
-	if include != "" {
-		includePatterns = expandBracePattern(include)
-	}
-
-	// Walk the directory and search files
+	// Support single file path: if path points to a file, search it directly
 	var matches []grepMatch
 	truncated := false
 
-	err = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil // skip inaccessible files
+	if !info.IsDir() {
+		// Single file mode
+		if info.Size() > maxGrepFileSize {
+			return nil, fmt.Errorf("file too large (>%d bytes): %s", maxGrepFileSize, baseDir)
+		}
+		fileMatches, err := searchFile(baseDir, re, contextLines)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search file: %w", err)
+		}
+		matches = fileMatches
+	} else {
+		// Expand brace patterns in include (e.g., "*.{go,ts}" -> ["*.go", "*.ts"])
+		var includePatterns []string
+		if include != "" {
+			includePatterns = expandBracePattern(include)
 		}
 
-		// Skip hidden directories
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-
-		// Skip node_modules
-		if d.IsDir() && d.Name() == "node_modules" {
-			return filepath.SkipDir
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		// Apply include filter
-		if len(includePatterns) > 0 {
-			matched := false
-			for _, p := range includePatterns {
-				if m, _ := filepath.Match(p, d.Name()); m {
-					matched = true
-					break
-				}
+		// Walk the directory and search files
+		err = filepath.WalkDir(baseDir, func(walkPath string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil // skip inaccessible files
 			}
-			if !matched {
+
+			// Skip hidden directories
+			if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+
+			// Skip node_modules
+			if d.IsDir() && d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+
+			if d.IsDir() {
 				return nil
 			}
-		}
 
-		// Skip large files
-		fileInfo, err := d.Info()
-		if err != nil {
+			// Apply include filter
+			if len(includePatterns) > 0 {
+				matched := false
+				for _, p := range includePatterns {
+					if m, _ := filepath.Match(p, d.Name()); m {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					return nil
+				}
+			}
+
+			// Skip large files
+			fileInfo, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			if fileInfo.Size() > maxGrepFileSize {
+				return nil
+			}
+
+			// Search file
+			fileMatches, err := searchFile(walkPath, re, contextLines)
+			if err != nil {
+				return nil // skip files that can't be read
+			}
+
+			matches = append(matches, fileMatches...)
+			if len(matches) >= maxGrepMatches {
+				truncated = true
+				matches = matches[:maxGrepMatches]
+				return filepath.SkipAll
+			}
+
 			return nil
-		}
-		if fileInfo.Size() > maxGrepFileSize {
-			return nil
-		}
-
-		// Search file
-		fileMatches, err := searchFile(path, re, contextLines)
+		})
 		if err != nil {
-			return nil // skip files that can't be read
+			return nil, fmt.Errorf("search failed: %w", err)
 		}
-
-		matches = append(matches, fileMatches...)
-		if len(matches) >= maxGrepMatches {
-			truncated = true
-			matches = matches[:maxGrepMatches]
-			return filepath.SkipAll
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
 	if len(matches) == 0 {

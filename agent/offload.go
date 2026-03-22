@@ -333,41 +333,6 @@ func (s *OffloadStore) persistIndex(sessionDir string, idx *offloadIndex) {
 	}
 }
 
-// loadIndexFromDisk 从磁盘加载 session 索引到内存。
-// 当内存索引中未找到某个 offload ID 时（进程重启后），尝试从磁盘恢复。
-func (s *OffloadStore) loadIndexFromDisk(sessionKey string) {
-	sessionDir := s.getSessionDir(sessionKey)
-	fp := s.indexFilePath(sessionDir)
-
-	data, err := os.ReadFile(fp)
-	if err != nil {
-		return // 索引文件不存在或读取失败，静默返回
-	}
-
-	var entries []OffloadedResult
-	if err := json.Unmarshal(data, &entries); err != nil {
-		log.WithError(err).WithField("session", sessionKey).Warn("OffloadStore: failed to unmarshal disk index")
-		return
-	}
-
-	idx := s.getOrCreateIndex(sessionKey)
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-
-	// 合并：只添加内存中不存在的条目
-	existing := make(map[string]bool, len(idx.entries))
-	for _, e := range idx.entries {
-		existing[e.ID] = true
-	}
-	for _, e := range entries {
-		if !existing[e.ID] {
-			idx.entries = append(idx.entries, e)
-		}
-	}
-
-	log.WithField("session", sessionKey).WithField("loaded", len(entries)).Debug("OffloadStore: loaded index from disk")
-}
-
 // InvalidateStaleReads checks all Read offloads in a session and marks stale ones.
 // Returns IDs of newly-staled entries (previously not stale).
 // workDir is used to resolve relative paths.

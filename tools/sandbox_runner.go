@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -33,6 +34,41 @@ func dockerRun(timeout time.Duration, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "docker", args...).Run()
+}
+
+// dockerPipelineExportImport pipes docker export stdout into docker import stdin,
+// avoiding a large intermediate tar file on disk. Falls back to temp-file approach on error.
+func dockerPipelineExportImport(ctx context.Context, containerName string, importArgs []string) ([]byte, error) {
+	exportCmd := exec.CommandContext(ctx, "docker", "export", containerName)
+	importCmd := exec.CommandContext(ctx, "docker", importArgs...)
+
+	importCmd.Stdin, _ = exportCmd.StdoutPipe()
+	importCmd.Stderr = nil // will be captured via CombinedOutput on importCmd
+
+	var importOut bytes.Buffer
+	importCmd.Stdout = &importOut
+	importCmd.Stderr = &importOut
+
+	if err := exportCmd.Start(); err != nil {
+		return nil, fmt.Errorf("start export: %w", err)
+	}
+	if err := importCmd.Start(); err != nil {
+		exportCmd.Process.Kill()
+		exportCmd.Wait()
+		return nil, fmt.Errorf("start import: %w", err)
+	}
+
+	exportErr := exportCmd.Wait()
+	importErr := importCmd.Wait()
+
+	out := importOut.Bytes()
+	if exportErr != nil {
+		return out, fmt.Errorf("export: %w", exportErr)
+	}
+	if importErr != nil {
+		return out, fmt.Errorf("import: %w", importErr)
+	}
+	return out, nil
 }
 
 // 全局沙箱实例
@@ -289,38 +325,31 @@ func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 		}
 	}
 
-	// 2. export 容器文件系统到临时 tar
-	tmpFile, err := os.CreateTemp("", "xbot-export-*.tar")
-	if err != nil {
-		log.WithError(err).Warnf("Failed to create temp file for export")
-		return
-	}
-	tmpTar := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpTar)
-
-	if out, err := dockerExec(dockerSlowTimeout, "export", "-o", tmpTar, containerName); err != nil {
-		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
-		return
-	}
-
-	// 3. 记录旧镜像 ID（用于后续清理）
+	// 2. 记录旧镜像 ID（用于后续清理）
 	var oldImageID string
 	if out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
 		oldImageID = strings.TrimSpace(string(out))
 	}
 
-	// 4. import 为单层镜像，用 --change 恢复元数据
+	// 3. 管道化 export → import：docker export stdout 直接流入 docker import stdin，
+	//    避免写入大临时文件（典型 2GB FS 省掉一次完整磁盘写入）。
+	//    降级到临时文件方式（DinD 某些场景管道可能失败）。
 	importArgs := []string{"import"}
 	for _, c := range changes {
 		importArgs = append(importArgs, "--change", c)
 	}
-	importArgs = append(importArgs, tmpTar, userImage)
-	if out, err := dockerExec(dockerSlowTimeout, importArgs...); err != nil {
-		log.WithError(err).Warnf("Failed to import image %s: %s", userImage, strings.TrimSpace(string(out)))
+	importArgs = append(importArgs, "-", userImage) // "-" 表示从 stdin 读取
+
+	ctx, cancel := context.WithTimeout(context.Background(), dockerSlowTimeout)
+	out, err := dockerPipelineExportImport(ctx, containerName, importArgs)
+	cancel()
+	if err != nil {
+		log.WithError(err).Warnf("Pipeline export failed for container %s, falling back to temp file: %s",
+			containerName, strings.TrimSpace(string(out)))
+		s.exportImportFallback(containerName, userImage, changes)
 		return
 	}
-	log.WithField("changes", len(changes)).Infof("Exported container %s to single-layer image %s", containerName, userImage)
+	log.WithField("changes", len(changes)).Infof("Pipeline exported container %s to single-layer image %s", containerName, userImage)
 
 	// 5. 删除旧镜像（如果 ID 不同，说明 import 生成了新镜像）
 	if oldImageID != "" {
@@ -338,6 +367,55 @@ func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 
 	// 6. 不做全局 image prune，避免误删用户安装的开发环境镜像
 	// 旧镜像已在第 5 步通过 rmi oldImageID 精确清理
+}
+
+// exportImportFallback 降级方案：export 到临时文件再 import（兼容 DinD 等管道不工作的场景）。
+// 调用方必须持有 s.mu 锁。
+func (s *dockerSandbox) exportImportFallback(containerName, userImage string, changes []string) {
+	tmpFile, err := os.CreateTemp("", "xbot-export-*.tar")
+	if err != nil {
+		log.WithError(err).Warnf("Failed to create temp file for export fallback")
+		return
+	}
+	tmpTar := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpTar)
+
+	if out, err := dockerExec(dockerSlowTimeout, "export", "-o", tmpTar, containerName); err != nil {
+		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
+		return
+	}
+
+	// 记录旧镜像 ID
+	var oldImageID string
+	if out, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
+		oldImageID = strings.TrimSpace(string(out))
+	}
+
+	importArgs := []string{"import"}
+	for _, c := range changes {
+		importArgs = append(importArgs, "--change", c)
+	}
+	importArgs = append(importArgs, tmpTar, userImage)
+	if out, err := dockerExec(dockerSlowTimeout, importArgs...); err != nil {
+		log.WithError(err).Warnf("Failed to import image %s: %s", userImage, strings.TrimSpace(string(out)))
+		return
+	}
+	log.WithField("changes", len(changes)).Infof("Fallback exported container %s to single-layer image %s", containerName, userImage)
+
+	// 删除旧镜像
+	if oldImageID != "" {
+		if newOut, err := dockerExec(dockerCmdTimeout, "image", "inspect", "-f", "{{.Id}}", userImage); err == nil {
+			newImageID := strings.TrimSpace(string(newOut))
+			if newImageID != oldImageID {
+				if err := dockerRun(dockerCmdTimeout, "rmi", oldImageID); err != nil {
+					log.WithError(err).Debugf("Failed to remove old image %s (may still be referenced)", oldImageID[:12])
+				} else {
+					log.Infof("Removed old image %s", oldImageID[:12])
+				}
+			}
+		}
+	}
 }
 
 // parseJSONStringArray parses a JSON string array like ["foo","bar"] into a Go slice.

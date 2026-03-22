@@ -224,7 +224,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens := 0, 0, 0, 0, 0
 
 	// 确保 Run() 退出时总是记录对话指标
-	defer GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
+	// 使用闭包 defer 延迟求值，避免 defer 声明时计数器仍为 0
+	defer func() {
+		GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
+	}()
 
 	// --- 结构化进度状态 ---
 	var structuredProgress *StructuredProgress

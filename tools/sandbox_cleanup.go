@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	log "xbot/logger"
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 // SandboxCleanupTool 压缩用户沙箱镜像：stop → export → import → restart
@@ -81,14 +81,14 @@ func (s *dockerSandbox) compact(userID string) (string, error) {
 	if oldSize == "" {
 		oldSize = dockerImageSize(s.image)
 	}
-	report.WriteString(fmt.Sprintf("Container: %s\n", containerName))
-	report.WriteString(fmt.Sprintf("Image before: %s (%s)\n", userImage, oldSize))
+	fmt.Fprintf(&report, "Container: %s\n", containerName)
+	fmt.Fprintf(&report, "Image before: %s (%s)\n", userImage, oldSize)
 
 	// 1. Stop 容器
 	log.Infof("[compact] Stopping container %s", containerName)
 	report.WriteString("Step 1: stop container... ")
 	if err := dockerRun(dockerCmdTimeout, "stop", "-t", "1", containerName); err != nil {
-		report.WriteString(fmt.Sprintf("FAILED: %v\n", err))
+		fmt.Fprintf(&report, "FAILED: %v\n", err)
 		return report.String(), fmt.Errorf("failed to stop container: %w", err)
 	}
 	report.WriteString("OK\n")
@@ -104,7 +104,7 @@ func (s *dockerSandbox) compact(userID string) (string, error) {
 	report.WriteString("Step 3: remove old container... ")
 	if err := dockerRun(dockerCmdTimeout, "rm", "-f", containerName); err != nil {
 		log.WithError(err).Warnf("[compact] Failed to remove container %s", containerName)
-		report.WriteString(fmt.Sprintf("WARN: %v\n", err))
+		fmt.Fprintf(&report, "WARN: %v\n", err)
 	} else {
 		report.WriteString("OK\n")
 	}
@@ -114,7 +114,7 @@ func (s *dockerSandbox) compact(userID string) (string, error) {
 
 	// 5. 获取压缩后的镜像大小
 	newSize := dockerImageSize(userImage)
-	report.WriteString(fmt.Sprintf("Image after: %s (%s)\n", userImage, newSize))
+	fmt.Fprintf(&report, "Image after: %s (%s)\n", userImage, newSize)
 
 	// 6. 清理残留 tmp 文件
 	cleanupStaleTmpFiles()

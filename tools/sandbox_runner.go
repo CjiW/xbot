@@ -240,7 +240,6 @@ func pruneDockerResources() {
 	}
 }
 
-
 // exportImportIfDirty 仅在容器有文件系统变更时，用 export+import 持久化为单层镜像。
 // 始终使用 export+import（而非 docker commit），确保镜像永远只有一层，避免磁盘空间膨胀。
 // 调用方必须持有 s.mu 锁。
@@ -658,7 +657,7 @@ func NewSandbox(sandboxCfg config.SandboxConfig, workDir string) Sandbox {
 		return &NoneSandbox{}
 	case "docker":
 		s := &dockerSandbox{
-			image:                 sandboxCfg.DockerImage,
+			image: sandboxCfg.DockerImage,
 		}
 		s.detectDinD(sandboxCfg, workDir)
 		return s

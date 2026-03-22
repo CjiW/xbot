@@ -22,16 +22,28 @@ const (
 	dockerSlowTimeout = 120 * time.Second // 慢操作（export/import）超时
 )
 
-// dockerExec runs a docker command with a timeout, returning combined output.
+// dockerExec runs a docker command with a timeout (0 = no timeout), returning combined output.
 func dockerExec(timeout time.Duration, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	defer cancel()
 	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 }
 
-// dockerRun runs a docker command with a timeout, returning only error.
+// dockerRun runs a docker command with a timeout (0 = no timeout), returning only error.
 func dockerRun(timeout time.Duration, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	defer cancel()
 	return exec.CommandContext(ctx, "docker", args...).Run()
 }
@@ -270,10 +282,13 @@ func pruneDockerResources() {
 			log.Infof("Pruned stopped xbot containers")
 		}
 	}
-	// 清理悬空镜像
+	// 清理悬空镜像（<none>:<none>），这些是异常退出时未被 rmi 的旧镜像
 	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err == nil {
 		log.Debugf("Docker image prune: %s", strings.TrimSpace(string(out)))
 	}
+	// 二次清理：确保所有悬空镜像都被删除
+	// docker image prune 可能因镜像被容器引用而遗漏，再执行一次 builder prune
+	dockerRun(dockerCmdTimeout, "image", "prune", "-f", "--filter", "until=168h")
 }
 
 // exportImportIfDirty 仅在容器有文件系统变更时，用 export+import 持久化为单层镜像。
@@ -340,7 +355,7 @@ func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 	}
 	importArgs = append(importArgs, "-", userImage) // "-" 表示从 stdin 读取
 
-	ctx, cancel := context.WithTimeout(context.Background(), dockerSlowTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	out, err := dockerPipelineExportImport(ctx, containerName, importArgs)
 	cancel()
 	if err != nil {
@@ -381,7 +396,7 @@ func (s *dockerSandbox) exportImportFallback(containerName, userImage string, ch
 	tmpFile.Close()
 	defer os.Remove(tmpTar)
 
-	if out, err := dockerExec(dockerSlowTimeout, "export", "-o", tmpTar, containerName); err != nil {
+	if out, err := dockerExec(0, "export", "-o", tmpTar, containerName); err != nil {
 		log.WithError(err).Warnf("Failed to export container %s: %s", containerName, strings.TrimSpace(string(out)))
 		return
 	}
@@ -397,7 +412,7 @@ func (s *dockerSandbox) exportImportFallback(containerName, userImage string, ch
 		importArgs = append(importArgs, "--change", c)
 	}
 	importArgs = append(importArgs, tmpTar, userImage)
-	if out, err := dockerExec(dockerSlowTimeout, importArgs...); err != nil {
+	if out, err := dockerExec(0, importArgs...); err != nil {
 		log.WithError(err).Warnf("Failed to import image %s: %s", userImage, strings.TrimSpace(string(out)))
 		return
 	}

@@ -337,12 +337,8 @@ func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 		}
 	}
 
-	// 6. 清理 dangling images
-	if out, err := dockerExec(dockerCmdTimeout, "image", "prune", "-f"); err != nil {
-		log.WithError(err).Debugf("Failed to prune dangling images")
-	} else if strings.Contains(string(out), "Total") {
-		log.Debugf("Pruned dangling images: %s", strings.TrimSpace(string(out)))
-	}
+	// 6. 不做全局 image prune，避免误删用户安装的开发环境镜像
+	// 旧镜像已在第 5 步通过 rmi oldImageID 精确清理
 }
 
 // parseJSONStringArray parses a JSON string array like ["foo","bar"] into a Go slice.

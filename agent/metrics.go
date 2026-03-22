@@ -14,11 +14,11 @@ type AgentMetrics struct {
 
 	// === 对话指标 ===
 	TotalConversations atomic.Int64 // 总对话数（每个用户消息算一次）
-	TotalIterations   atomic.Int64 // 总 Agent 迭代数
-	TotalToolCalls    atomic.Int64 // 总工具调用数
-	TotalLLMCalls     atomic.Int64 // 总 LLM API 调用数
-	TotalInputTokens  atomic.Int64 // 总输入 token 数
-	TotalOutputTokens atomic.Int64 // 总输出 token 数
+	TotalIterations    atomic.Int64 // 总 Agent 迭代数
+	TotalToolCalls     atomic.Int64 // 总工具调用数
+	TotalLLMCalls      atomic.Int64 // 总 LLM API 调用数
+	TotalInputTokens   atomic.Int64 // 总输入 token 数
+	TotalOutputTokens  atomic.Int64 // 总输出 token 数
 
 	// === 上下文管理指标（核心 — 衡量四层防御效果） ===
 	MaskingEvents     atomic.Int64 // Observation Masking 触发次数
@@ -40,7 +40,7 @@ type AgentMetrics struct {
 
 // MetricsSnapshot 指标快照（用于 Settings 展示）。
 type MetricsSnapshot struct {
-	UptimeSeconds int64
+	UptimeSeconds      int64
 	TotalConversations int64
 	TotalIterations    int64
 	TotalToolCalls     int64
@@ -49,21 +49,21 @@ type MetricsSnapshot struct {
 	TotalOutputTokens  int64
 
 	// 上下文管理
-	MaskingEvents      int64
-	MaskedItems        int64
-	OffloadEvents      int64
-	OffloadedItems     int64
-	OffloadedRecalls   int64
-	MaskedRecalls      int64
-	CompressEvents     int64
-	CompressTokensIn   int64
-	CompressTokensOut  int64
-	ContextEditEvents  int64
-	SummaryRefines     int64
+	MaskingEvents     int64
+	MaskedItems       int64
+	OffloadEvents     int64
+	OffloadedItems    int64
+	OffloadedRecalls  int64
+	MaskedRecalls     int64
+	CompressEvents    int64
+	CompressTokensIn  int64
+	CompressTokensOut int64
+	ContextEditEvents int64
+	SummaryRefines    int64
 
 	// 效率
-	TotalToolErrors    int64
-	TotalLLMErrors     int64
+	TotalToolErrors int64
+	TotalLLMErrors  int64
 
 	// 计算指标
 	AvgTokensPerIter float64 // 平均每次迭代输入 token 数

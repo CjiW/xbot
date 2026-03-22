@@ -134,34 +134,57 @@ func TestFormatMarkdown(t *testing.T) {
 		ContextEditEvents:  3,
 		SummaryRefines:     2,
 		TotalToolErrors:    8,
-		CompressRatio:      0.667,
+		TotalLLMErrors:     0,
+
+		// 计算指标（模拟 Snapshot() 的计算结果）
+		AvgTokensPerIter:          float64(2_100_000) / float64(186),
+		CompressRatio:             0.667,
+		RecallRate:                25.0 / 70.0,
+		AvgTokensSavedPerCompress: float64(2_100_000-1_400_000) / 6,
+		TokenSavingRate:           float64(2_100_000-1_400_000) / float64(2_100_000),
+		OffloadRecallRate:         15.0 / 23.0,
+		MaskedRecallRate:          10.0 / 47.0,
+		SummaryRefineRate:         2.0 / 6.0,
+		ContextEditRate:           3.0 / 42.0,
+		ToolSuccessRate:           float64(312-8) / float64(312),
+		LLMSuccessRate:            1.0,
+		AvgToolCallsPerConv:       312.0 / 42.0,
+		AvgTokensPerConv:          float64(2_100_000+180_000) / 42.0,
+		OutputInputRatio:          float64(180_000) / float64(2_100_000),
+		CombinedSavingRate:        float64(2_100_000-1_400_000) / float64(2_100_000),
 	}
 
 	md := s.FormatMarkdown()
 
-	// 验证关键字段
+	// 验证五段式能力维度分组标题
 	checks := []string{
-		"📊",
+		"⏱️ **运行概览**",
+		"🎯 **任务执行效果**",
+		"🧠 **记忆质量**",
+		"📦 **压缩效率**",
+		"🛡️ **四层防御效能**",
 		"3h 25m",
-		"42",
-		"186",
-		"312",
-		"198",
-		"2.1M",
-		"180.0K",
-		"12",
-		"47",
-		"8",
-		"23",
-		"15",
-		"6",
-		"3",
-		"2",
+		"42 次",
+		"97.4%",
+		"100.0%",
 		"回调率",
+		"精化率高说明压缩摘要质量差",
+		"联合保存率",
 	}
 	for _, check := range checks {
 		if !strings.Contains(md, check) {
 			t.Errorf("markdown missing %q", check)
+		}
+	}
+
+	// 验证不应出现旧格式的内容
+	oldChecks := []string{
+		"📊 **运行指标**",
+		"📦 **上下文管理**",
+	}
+	for _, check := range oldChecks {
+		if strings.Contains(md, check) {
+			t.Errorf("markdown should NOT contain old format %q", check)
 		}
 	}
 }
@@ -170,8 +193,22 @@ func TestFormatMarkdown_ZeroValues(t *testing.T) {
 	s := MetricsSnapshot{}
 	md := s.FormatMarkdown()
 
-	if !strings.Contains(md, "0") {
-		t.Error("zero-value markdown should contain zeros")
+	// 零值时应显示"暂无数据"而非 panic
+	if !strings.Contains(md, "暂无数据") {
+		t.Error("zero-value markdown should contain '暂无数据'")
+	}
+	// 五个段落标题都应存在
+	sections := []string{
+		"⏱️ **运行概览**",
+		"🎯 **任务执行效果**",
+		"🧠 **记忆质量**",
+		"📦 **压缩效率**",
+		"🛡️ **四层防御效能**",
+	}
+	for _, sec := range sections {
+		if !strings.Contains(md, sec) {
+			t.Errorf("zero-value markdown should contain section %q", sec)
+		}
 	}
 	// 不应 panic
 }
@@ -253,4 +290,152 @@ func TestMetricsAtomicConcurrency(t *testing.T) {
 // testTime 返回一个固定的测试时间
 func testTime() time.Time {
 	return time.Now()
+}
+
+// TestSnapshot_NewComputedMetrics 测试所有新增计算字段的正确性。
+func TestSnapshot_NewComputedMetrics(t *testing.T) {
+	m := &AgentMetrics{StartTime: testTime()}
+
+	// 1 conversation: 10 iters, 20 tools, 8 llm, 5000 in, 1000 out
+	m.RecordConversation(10, 20, 8, 5000, 1000)
+	m.CompressEvents.Add(3)
+	m.CompressTokensIn.Add(10000)
+	m.CompressTokensOut.Add(6000)
+	m.MaskedItems.Add(47)
+	m.MaskedRecalls.Add(10)
+	m.OffloadedItems.Add(23)
+	m.OffloadedRecalls.Add(15)
+	m.ContextEditEvents.Add(3)
+	m.SummaryRefines.Add(2)
+	m.TotalToolErrors.Add(8)
+	m.TotalLLMErrors.Add(0)
+
+	s := m.Snapshot()
+
+	// AvgTokensSavedPerCompress = (10000 - 6000) / 3 = 1333.33
+	if s.AvgTokensSavedPerCompress < 1333 || s.AvgTokensSavedPerCompress > 1334 {
+		t.Errorf("expected AvgTokensSavedPerCompress ~1333.33, got %.2f", s.AvgTokensSavedPerCompress)
+	}
+
+	// TokenSavingRate = (10000 - 6000) / 10000 = 0.4
+	if s.TokenSavingRate != 0.4 {
+		t.Errorf("expected TokenSavingRate 0.4, got %.4f", s.TokenSavingRate)
+	}
+
+	// OffloadRecallRate = 15 / 23 = 0.6522
+	if s.OffloadRecallRate < 0.65 || s.OffloadRecallRate > 0.66 {
+		t.Errorf("expected OffloadRecallRate ~0.652, got %.4f", s.OffloadRecallRate)
+	}
+
+	// MaskedRecallRate = 10 / 47 = 0.2128
+	if s.MaskedRecallRate < 0.21 || s.MaskedRecallRate > 0.22 {
+		t.Errorf("expected MaskedRecallRate ~0.213, got %.4f", s.MaskedRecallRate)
+	}
+
+	// SummaryRefineRate = 2 / 3 = 0.6667
+	if s.SummaryRefineRate < 0.66 || s.SummaryRefineRate > 0.67 {
+		t.Errorf("expected SummaryRefineRate ~0.667, got %.4f", s.SummaryRefineRate)
+	}
+
+	// ContextEditRate = 3 / 1 = 3.0
+	if s.ContextEditRate != 3.0 {
+		t.Errorf("expected ContextEditRate 3.0, got %.1f", s.ContextEditRate)
+	}
+
+	// ToolSuccessRate = (20 - 8) / 20 = 0.6
+	if s.ToolSuccessRate != 0.6 {
+		t.Errorf("expected ToolSuccessRate 0.6, got %.4f", s.ToolSuccessRate)
+	}
+
+	// LLMSuccessRate = (8 - 0) / 8 = 1.0
+	if s.LLMSuccessRate != 1.0 {
+		t.Errorf("expected LLMSuccessRate 1.0, got %.4f", s.LLMSuccessRate)
+	}
+
+	// AvgToolCallsPerConv = 20 / 1 = 20.0
+	if s.AvgToolCallsPerConv != 20.0 {
+		t.Errorf("expected AvgToolCallsPerConv 20.0, got %.1f", s.AvgToolCallsPerConv)
+	}
+
+	// AvgTokensPerConv = (5000 + 1000) / 1 = 6000.0
+	if s.AvgTokensPerConv != 6000.0 {
+		t.Errorf("expected AvgTokensPerConv 6000.0, got %.1f", s.AvgTokensPerConv)
+	}
+
+	// OutputInputRatio = 1000 / 5000 = 0.2
+	if s.OutputInputRatio != 0.2 {
+		t.Errorf("expected OutputInputRatio 0.2, got %.4f", s.OutputInputRatio)
+	}
+
+	// CombinedSavingRate = (10000 - 6000) / 5000 = 0.8
+	if s.CombinedSavingRate != 0.8 {
+		t.Errorf("expected CombinedSavingRate 0.8, got %.4f", s.CombinedSavingRate)
+	}
+}
+
+// TestSnapshot_DivisionByZero 测试除数为 0 时所有比率字段保持零值。
+func TestSnapshot_DivisionByZero(t *testing.T) {
+	m := &AgentMetrics{StartTime: testTime()}
+	// 不调用 RecordConversation，所有计数器为 0
+	s := m.Snapshot()
+
+	// 所有比率字段应为零值
+	rateFields := []struct {
+		name  string
+		value float64
+	}{
+		{"AvgTokensPerIter", s.AvgTokensPerIter},
+		{"CompressRatio", s.CompressRatio},
+		{"RecallRate", s.RecallRate},
+		{"AvgTokensSavedPerCompress", s.AvgTokensSavedPerCompress},
+		{"TokenSavingRate", s.TokenSavingRate},
+		{"OffloadRecallRate", s.OffloadRecallRate},
+		{"MaskedRecallRate", s.MaskedRecallRate},
+		{"SummaryRefineRate", s.SummaryRefineRate},
+		{"ContextEditRate", s.ContextEditRate},
+		{"ToolSuccessRate", s.ToolSuccessRate},
+		{"LLMSuccessRate", s.LLMSuccessRate},
+		{"AvgToolCallsPerConv", s.AvgToolCallsPerConv},
+		{"AvgTokensPerConv", s.AvgTokensPerConv},
+		{"OutputInputRatio", s.OutputInputRatio},
+		{"CombinedSavingRate", s.CombinedSavingRate},
+	}
+	for _, f := range rateFields {
+		if f.value != 0 {
+			t.Errorf("expected %s = 0 on zero input, got %.4f", f.name, f.value)
+		}
+	}
+}
+
+// TestSnapshot_PartialZeroDenominators 测试部分分母为零时的混合场景。
+func TestSnapshot_PartialZeroDenominators(t *testing.T) {
+	m := &AgentMetrics{StartTime: testTime()}
+
+	// 有对话和 token，但压缩事件为 0
+	m.RecordConversation(10, 20, 8, 5000, 1000)
+	m.CompressTokensIn.Add(10000)
+	m.CompressTokensOut.Add(6000)
+	// CompressEvents = 0
+
+	s := m.Snapshot()
+
+	// CompressEvents = 0 → AvgTokensSavedPerCompress = 0
+	if s.AvgTokensSavedPerCompress != 0 {
+		t.Errorf("expected 0 when CompressEvents=0, got %.4f", s.AvgTokensSavedPerCompress)
+	}
+
+	// CompressTokensIn > 0 → TokenSavingRate = 0.4
+	if s.TokenSavingRate != 0.4 {
+		t.Errorf("expected TokenSavingRate 0.4, got %.4f", s.TokenSavingRate)
+	}
+
+	// TotalInputTokens > 0 → CombinedSavingRate = (10000-6000)/5000 = 0.8
+	if s.CombinedSavingRate != 0.8 {
+		t.Errorf("expected CombinedSavingRate 0.8, got %.4f", s.CombinedSavingRate)
+	}
+
+	// 无 mask/offload → OffloadRecallRate = 0, MaskedRecallRate = 0
+	if s.OffloadRecallRate != 0 || s.MaskedRecallRate != 0 {
+		t.Error("expected recall rates = 0 when no items evicted")
+	}
 }

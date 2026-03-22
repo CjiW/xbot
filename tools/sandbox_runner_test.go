@@ -7,11 +7,8 @@ import (
 	"time"
 )
 
-// TestDockerShutdownFlow tests the optimized shutdown flow (stop → export/import → rm)
-// This test verifies that:
-// 1. Container changes are exported before removal
-// 2. Stop is called before export (optimized flow)
-// 3. Container is properly removed after export
+// TestDockerShutdownFlow tests that Close stops the container and
+// ExportAndImport persists changes to an image for reuse.
 func TestDockerShutdownFlow(t *testing.T) {
 	skipIfNoDocker(t)
 
@@ -25,7 +22,7 @@ func TestDockerShutdownFlow(t *testing.T) {
 		exec.Command("docker", "rmi", "-f", userImage).Run()
 	}()
 
-	// Create sandbox and make changes (lightweight operation)
+	// Create sandbox and make changes
 	s := newDockerSandbox("ubuntu:22.04")
 	cmd, args, err := s.Wrap("sh", []string{"-c", "echo testdata > /tmp/testfile"}, nil, ws, userID)
 	if err != nil {
@@ -50,36 +47,30 @@ func TestDockerShutdownFlow(t *testing.T) {
 	}
 	t.Logf("✓ File created: /tmp/testfile")
 
-	// Close sandbox (should use stop → export/import → rm flow)
-	start := time.Now()
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
+	// Export and import while container is still running
+	if err := s.ExportAndImport(userID); err != nil {
+		t.Fatalf("ExportAndImport failed: %v", err)
 	}
-	elapsed := time.Since(start)
-	t.Logf("✓ Shutdown completed in %v", elapsed)
+	t.Logf("✓ ExportAndImport completed")
 
 	// Verify image was created
 	if err := exec.Command("docker", "image", "inspect", userImage).Run(); err != nil {
-		t.Errorf("Image %s was not created", userImage)
-	} else {
-		t.Logf("✓ Container exported to image: %s", userImage)
+		t.Fatalf("Image %s was not created after ExportAndImport", userImage)
 	}
+	t.Logf("✓ Image exported: %s", userImage)
 
-	// Verify container was removed (use 'docker container inspect' to avoid matching images)
+	// Close sandbox (stop only, container preserved)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	t.Logf("✓ Close completed")
+
+	// Verify container still exists after Close (stop-only behavior)
 	containerName := "xbot-" + userID
-	var containerRemoved bool
-	for i := 0; i < 10; i++ {
-		if err := exec.Command("docker", "container", "inspect", containerName).Run(); err != nil {
-			containerRemoved = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := exec.Command("docker", "container", "inspect", containerName).Run(); err != nil {
+		t.Fatalf("Container %s was removed after Close (expected preserved)", containerName)
 	}
-	if !containerRemoved {
-		t.Errorf("Container %s still exists after Close()", containerName)
-	} else {
-		t.Logf("✓ Container removed: %s", containerName)
-	}
+	t.Logf("✓ Container preserved after Close: %s", containerName)
 
 	// Verify persistence: create new sandbox and check if file still exists
 	s2 := newDockerSandbox("ubuntu:22.04")

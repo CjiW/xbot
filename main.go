@@ -297,6 +297,14 @@ func main() {
 			MetricsGet: func() string {
 				return agent.GlobalMetrics.Snapshot().FormatMarkdown()
 			},
+			SandboxCleanupTrigger: func(senderID string) error {
+				sb := tools.GetSandbox()
+				return sb.ExportAndImport(senderID)
+			},
+			SandboxIsExporting: func(senderID string) bool {
+				sb := tools.GetSandbox()
+				return sb.IsExporting(senderID)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者
@@ -402,18 +410,10 @@ func main() {
 	}
 
 	// 关闭沙箱（清理 Docker 容器等资源）
-	// export/import 可能耗时较长，给 120 秒超时保护
-	sandbox := tools.GetSandbox()
-	if sandbox != nil {
-		sandboxDone := make(chan error, 1)
-		go func() { sandboxDone <- sandbox.Close() }()
-		select {
-		case err := <-sandboxDone:
-			if err != nil {
-				log.WithError(err).Warn("Sandbox close error")
-			}
-		case <-time.After(120 * time.Second):
-			log.Warn("Sandbox close timed out after 120s, forcing exit")
+	// export/import 可能耗时较长（大容器数分钟），不设超时，必须等待完成。
+	if sandbox := tools.GetSandbox(); sandbox != nil {
+		if err := sandbox.Close(); err != nil {
+			log.WithError(err).Warn("Sandbox close error")
 		}
 	}
 

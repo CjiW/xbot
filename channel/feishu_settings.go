@@ -197,6 +197,18 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
 
+	case "settings_sandbox_cleanup":
+		if f.settingsCallbacks.SandboxCleanupTrigger == nil {
+			return nil, fmt.Errorf("沙箱持久化功能未启用")
+		}
+		if f.settingsCallbacks.SandboxIsExporting != nil && f.settingsCallbacks.SandboxIsExporting(senderID) {
+			return nil, fmt.Errorf("沙箱正在持久化中，请稍候")
+		}
+		if err := f.settingsCallbacks.SandboxCleanupTrigger(senderID); err != nil {
+			return nil, fmt.Errorf("沙箱持久化失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -289,6 +301,33 @@ func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
 		"content": "**双视图**：摘要+尾部原文 · **渐进**：渐进式智能压缩 · **禁用**：不自动压缩",
+	})
+
+	// Sandbox cleanup section
+	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**沙箱管理**",
+	})
+	cleanupLabel := "持久化沙箱环境（export + import）"
+	elements = append(elements, buildSettingRow(
+		cleanupLabel,
+		"",
+		map[string]any{
+			"tag":         "button",
+			"text":        map[string]any{"tag": "plain_text", "content": "💾 执行持久化"},
+			"type":        "default",
+			"action_type": "form_submit",
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_sandbox_cleanup",
+				}),
+			},
+		},
+	))
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "将当前沙箱文件系统导出为镜像，用于持久保存。执行期间该用户所有请求将被拒绝。",
 	})
 
 	return elements

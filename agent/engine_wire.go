@@ -17,16 +17,31 @@ import (
 	"xbot/tools"
 )
 
+// applyUserMaxContext 如果用户在 Settings 中设置了 max_context，
+// 创建一个新的 ContextManagerConfig 副本并覆盖 MaxContextTokens，
+// 避免污染 Agent 级别的原始配置（含 sync.RWMutex）。
+func applyUserMaxContext(base *ContextManagerConfig, userMaxCtx int) *ContextManagerConfig {
+	if userMaxCtx <= 0 || base == nil {
+		return base
+	}
+	return &ContextManagerConfig{
+		MaxContextTokens:     userMaxCtx,
+		CompressionThreshold: base.CompressionThreshold,
+		DefaultMode:          base.DefaultMode,
+	}
+}
+
 // buildBaseRunConfig 构建主 Agent（main/cron）共用的基础 RunConfig。
 // 包含 LLM、身份、工作区、工具执行器、循环控制、HookChain 等公共字段。
+// 返回 (RunConfig, userMaxContext) — userMaxContext 为用户在 Settings 中设置的值，0 表示未设置。
 func (a *Agent) buildBaseRunConfig(
 	channel, chatID, senderID string,
 	messages []llm.ChatMessage,
 	senderName string,
-) RunConfig {
+) (RunConfig, int) {
 	sessionKey := channel + ":" + chatID
 
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
 
 	return RunConfig{
 		// 必需
@@ -85,7 +100,7 @@ func (a *Agent) buildBaseRunConfig(
 
 		// HookChain — inherit from Agent
 		HookChain: a.hookChain,
-	}
+	}, userMaxCtx
 }
 
 // buildMainRunConfig 为主 Agent 构建完整的 RunConfig。
@@ -100,7 +115,7 @@ func (a *Agent) buildMainRunConfig(
 	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
 	sessionKey := channel + ":" + chatID
 
-	cfg := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName)
+	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName)
 
 	// 主 Agent 特有字段
 	cfg.Session = tenantSession
@@ -119,7 +134,7 @@ func (a *Agent) buildMainRunConfig(
 
 	// 注入 ContextManager
 	cfg.ContextManager = a.GetContextManager()
-	cfg.ContextManagerConfig = a.contextManagerConfig
+	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
 
 	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
 	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
@@ -174,7 +189,8 @@ func (a *Agent) buildCronRunConfig(
 ) RunConfig {
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 
-	return a.buildBaseRunConfig(channel, chatID, senderID, messages, "")
+	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, messages, "")
+	return cfg
 }
 
 // buildSubAgentRunConfig 为 SubAgent 构建 RunConfig。
@@ -287,7 +303,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	subAgentID := parentAgentID + "/" + roleName
 
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
-	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(originUserID)
+	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
 	cfg := RunConfig{
 		LLMClient:    llmClient,
@@ -341,8 +357,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	// 1. ContextManager：创建独立实例（不共享父 Agent 的触发器，避免计数交叉）
 	//    从 caps.Memory 条件中移出，所有 SubAgent 都需要压缩能力。
 	if a.contextManagerConfig != nil {
-		cfg.ContextManager = newPhase1Manager(a.contextManagerConfig)
-		cfg.ContextManagerConfig = a.contextManagerConfig
+		cmCfg := applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
+		cfg.ContextManager = newPhase1Manager(cmCfg)
+		cfg.ContextManagerConfig = cmCfg
 	}
 
 	// 2. OffloadStore：共享父 Agent 实例（按 sessionKey 隔离，完全安全）

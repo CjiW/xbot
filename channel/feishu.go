@@ -44,6 +44,10 @@ type SettingsCallbacks struct {
 	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool) // user config (no key)
 	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error    // create/update config
 	LLMDelete    func(senderID string) error                                      // revert to global
+	// LLMGetMaxContext 获取用户当前 max_context 设置（0 = 使用默认值）
+	LLMGetMaxContext func(senderID string) int
+	// LLMSetMaxContext 设置用户 max_context
+	LLMSetMaxContext func(senderID string, maxContext int) error
 
 	ContextModeGet func() string
 	ContextModeSet func(mode string) error

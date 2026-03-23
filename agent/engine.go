@@ -1233,24 +1233,21 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.SetCurrentDir = func(dir string) {
 			cfg.Session.SetCurrentDir(dir)
 		}
-	} else if cfg.InitialCWD != "" {
-		// SubAgent 继承父 Agent 的 CWD（无 session 时使用 InitialCWD）
-		// 父 Agent 的 CurrentDir 可能是宿主机路径（如 /data/xbot/users/xxx/workspace/src），
-		// 但在沙箱模式下需要转换为容器内路径（如 /workspace/src），
-		// 否则 Cd tool 的 test -d 会在沙箱容器内找不到目录。
+	} else {
+		// No session — use InitialCWD for CWD persistence (SubAgent or sessionless mode).
+		// SetCurrentDir must ALWAYS be set so Cd can persist CWD even when InitialCWD
+		// starts empty (e.g., parent Agent never Cd'd before spawning SubAgent).
 		cwd := cfg.InitialCWD
-		if cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
+		if cwd != "" && cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
 			if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
 				cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
 			}
 		}
-		tc.CurrentDir = cwd
-		// SubAgent 无 session，通过更新 cfg.InitialCWD 使 Cd 在后续 buildToolContext 调用中持久化。
-		// 旧代码只设置 tc.CurrentDir，但 buildToolContext 每次工具调用都会重建 tc，
-		// 导致 Cd 的目录变更丢失。注意：RunConfig 是值类型，闭包捕获的是指针。
+		if cwd != "" {
+			tc.CurrentDir = cwd
+		}
 		tc.SetCurrentDir = func(dir string) {
 			cfg.InitialCWD = dir
-			tc.CurrentDir = dir
 		}
 	}
 

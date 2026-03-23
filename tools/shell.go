@@ -90,10 +90,13 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	execDir := ""
 	userID := ""
+	workspaceRoot := ""
+	execDir := ""
+	sandboxMode := false
 	if toolCtx != nil {
-		// 优先使用 CurrentDir（PWD 工具优化）
+		workspaceRoot = toolCtx.WorkspaceRoot
+		sandboxMode = toolCtx.SandboxEnabled
 		if toolCtx.CurrentDir != "" {
 			execDir = toolCtx.CurrentDir
 		} else if toolCtx.WorkspaceRoot != "" {
@@ -107,18 +110,24 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		}
 	}
 
+	// 沙箱模式：workspace 必须用宿主机路径（用于 bind mount / 容器查找），
+	// 不能用容器内路径（CurrentDir），否则会导致容器 mount 校验失败并重建。
+	sandboxWorkspace := workspaceRoot
+	if sandboxWorkspace == "" {
+		sandboxWorkspace = execDir
+	}
+
 	// 使用全局沙箱实例
 	sandbox := GetSandbox()
 
 	// 获取容器默认 shell 并使用 login shell 执行命令
-	// 这样可以自动加载 /etc/profile, ~/.bashrc 等配置文件
-	shell, err := sandbox.GetShell(userID, execDir)
+	shell, err := sandbox.GetShell(userID, sandboxWorkspace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shell: %w", err)
 	}
 
 	// 使用 login shell 自动加载环境配置
-	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, execDir, userID)
+	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, sandboxWorkspace, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +140,9 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		"timeout": timeout,
 	}).Debug("Shell command executing")
 
-	if execDir != "" {
+	// 非沙箱模式：设置宿主机执行目录。
+	// 沙箱模式不设置 cmd.Dir — execDir 是容器内路径，宿主机上不存在。
+	if !sandboxMode && execDir != "" {
 		cmd.Dir = execDir
 	}
 

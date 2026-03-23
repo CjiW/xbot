@@ -385,6 +385,7 @@ func (t *headerInjectorTransport) RoundTrip(req *http.Request) (*http.Response, 
 // newHeaderInjectorClient creates an http.Client that injects custom headers into every request.
 func newHeaderInjectorClient(headers map[string]string) *http.Client {
 	return &http.Client{
+		Timeout: 30 * time.Second,
 		Transport: &headerInjectorTransport{
 			base:    http.DefaultTransport,
 			headers: headers,

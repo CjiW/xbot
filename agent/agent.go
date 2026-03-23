@@ -469,6 +469,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	registry.SetSessionMCPManagerProvider(multiSession)
 
 	// 异步索引全局 MCP 工具（在后台进行，不阻塞启动）
+	// TODO: replace time.Sleep with proper event/channel-based synchronization
 	go func() {
 		// 等待 MCP 配置加载完成
 		time.Sleep(2 * time.Second)

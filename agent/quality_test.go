@@ -203,3 +203,88 @@ func TestExtractDialogueFromTail_RegularToolTruncated(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractDialogueFromTail_OffloadIDStripped(t *testing.T) {
+	// Realistic offload marker with an ID that should be stripped
+	offloadContent := "📂 [offload:ol_abc12345] Read(/workspace/agent/engine.go)\nPackage: agent\nImports: fmt, os\nfunc Run(...) {...}"
+	tail := []llm.ChatMessage{
+		llm.NewUserMessage("do work"),
+		makeAssistantWithToolCalls("reading", llm.ToolCall{ID: "1", Name: "Read", Arguments: `{"path":"engine.go"}`}),
+		llm.NewToolMessage("Read", "1", `{"path":"engine.go"}`, offloadContent),
+		llm.NewAssistantMessage("done"),
+	}
+
+	result := extractDialogueFromTail(tail)
+
+	for _, msg := range result {
+		if strings.Contains(msg.Content, "ol_abc12345") {
+			t.Error("offload ID should be stripped from session view")
+		}
+		// Summary text should be preserved
+		if strings.Contains(msg.Content, "Read(/workspace/agent/engine.go)") {
+			return // OK
+		}
+	}
+	t.Error("summary text should be preserved after stripping offload ID")
+}
+
+func TestExtractDialogueFromTail_MaskedMarkerStripped(t *testing.T) {
+	maskedContent := "📂 [masked:mk_deadbeef] Shell(cat /etc/hosts) — 500 chars — 结果已遮蔽，使用 recall_masked 可查看完整内容"
+	tail := []llm.ChatMessage{
+		llm.NewUserMessage("do work"),
+		makeAssistantWithToolCalls("checking", llm.ToolCall{ID: "1", Name: "Shell", Arguments: `{}`}),
+		llm.NewToolMessage("Shell", "1", `{}`, maskedContent),
+		llm.NewAssistantMessage("done"),
+	}
+
+	result := extractDialogueFromTail(tail)
+
+	for _, msg := range result {
+		if strings.Contains(msg.Content, "mk_deadbeef") {
+			t.Error("mask ID should be stripped from session view")
+		}
+	}
+	// Should contain some info about the tool call
+	found := false
+	for _, msg := range result {
+		if strings.Contains(msg.Content, "Shell(cat /etc/hosts)") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("tool call info should be preserved in stripped mask summary")
+	}
+}
+
+func TestStripRecallID(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantID   bool
+		wantText string
+	}{
+		{
+			name:     "offload marker",
+			input:    "📂 [offload:ol_abc12345] Read(/path)\nsummary",
+			wantText: "📂 Read(/path)\nsummary",
+		},
+		{
+			name:     "masked marker",
+			input:    "📂 [masked:mk_deadbeef] Shell(ls) — 500 chars",
+			wantText: "📂 Shell(ls) — 500 chars",
+		},
+		{
+			name:     "no closing bracket with space",
+			input:    "📂 [offload:no-space-after-bracket]",
+			wantText: "📂 [offload:no-space-after-bracket]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripRecallID(tt.input)
+			if got != tt.wantText {
+				t.Errorf("stripRecallID(%q) = %q, want %q", tt.input, got, tt.wantText)
+			}
+		})
+	}
+}

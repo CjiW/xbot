@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,8 +213,8 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 				// 保留 assistant 消息（推理过程），但 strip think blocks 节省 token
 				msg.Content = llm.StripThinkBlocks(msg.Content)
 			case "tool":
-				// 遮蔽 tool result
-				if msg.Content != "" && msg.Content != "null" {
+				// 跳过已遮蔽的 tool result：防止 re-mask 导致 MaskStore 条目膨胀和淘汰
+				if msg.Content != "" && msg.Content != "null" && !strings.HasPrefix(msg.Content, "📂 [masked:") {
 					_, placeholder := store.Mask(
 						msg.ToolName,
 						msg.ToolArguments,

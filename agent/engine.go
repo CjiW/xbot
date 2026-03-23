@@ -465,6 +465,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.Memory != nil {
 			out.Messages = messages
 		}
+		// Clean offload data after conversation turn completes.
+		// Only for the top-level agent (RootSessionKey == "") — SubAgents share
+		// the parent's offload namespace and must not delete it while parent runs.
+		if cfg.OffloadStore != nil && cfg.RootSessionKey == "" {
+			cfg.OffloadStore.CleanSession(offloadSessionKey)
+		}
 		return out
 	}
 
@@ -889,7 +895,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary
 				}
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(offloadSessionKey, tc.Name, tc.Arguments, offloadContent)
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
 				if wasOffloaded {
 					content = offloaded.Summary
 					GlobalMetrics.OffloadEvents.Add(1)

@@ -75,10 +75,10 @@ type SettingsCallbacks struct {
 	// SandboxIsExporting 检查用户是否正在进行 export+import
 	SandboxIsExporting func(senderID string) bool
 
-	// LLMGetConcurrency 获取用户 LLM 并发上限 (globalMax, personalMax)
-	LLMGetConcurrency func(senderID string) (int, int)
-	// LLMSetConcurrency 设置用户 LLM 并发上限
-	LLMSetConcurrency func(senderID string, global, personal int) error
+	// LLMGetPersonalConcurrency 获取用户个人 LLM 并发上限
+	LLMGetPersonalConcurrency func(senderID string) int
+	// LLMSetPersonalConcurrency 设置用户个人 LLM 并发上限
+	LLMSetPersonalConcurrency func(senderID string, personal int) error
 }
 
 // FeishuChannel 飞书渠道实现

@@ -751,22 +751,19 @@ func TestBuildSettingsCard_NilCallbacks(t *testing.T) {
 
 func TestHandleSettingsAction_SetConcurrency(t *testing.T) {
 	f := newTestFeishuChannel()
-	var gotGlobal, gotPersonal int
+	var gotPersonal int
 	var gotSenderID string
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMGetConcurrency: func(senderID string) (int, int) { return 5, 3 },
-		LLMSetConcurrency: func(senderID string, global, personal int) error {
+		LLMSetPersonalConcurrency: func(senderID string, personal int) error {
 			gotSenderID = senderID
-			gotGlobal = global
 			gotPersonal = personal
 			return nil
 		},
 	})
 
-	// Test setting global concurrency
 	card, err := f.HandleSettingsAction(context.Background(), map[string]any{
-		"action_data":     `{"action":"settings_set_concurrency","setting":"global"}`,
-		"selected_option": "8",
+		"action_data":     `{"action":"settings_set_concurrency"}`,
+		"selected_option": "5",
 	}, "user1", "chat1", "msg1")
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -777,31 +774,8 @@ func TestHandleSettingsAction_SetConcurrency(t *testing.T) {
 	if gotSenderID != "user1" {
 		t.Errorf("expected senderID=user1, got %q", gotSenderID)
 	}
-	if gotGlobal != 8 {
-		t.Errorf("expected global=8, got %d", gotGlobal)
-	}
-	if gotPersonal != 3 {
-		t.Errorf("expected personal=3 (unchanged), got %d", gotPersonal)
-	}
-
-	// Test setting personal concurrency
-	card, err = f.HandleSettingsAction(context.Background(), map[string]any{
-		"action_data":     `{"action":"settings_set_concurrency","setting":"personal"}`,
-		"selected_option": "5",
-	}, "user1", "chat1", "msg1")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if card == nil {
-		t.Fatal("expected non-nil card")
-	}
 	if gotPersonal != 5 {
 		t.Errorf("expected personal=5, got %d", gotPersonal)
-	}
-	// global stays at whatever LLMGetConcurrency returns (mock returns fixed 5)
-	// After personal update: curGlobal=5 (from mock), curPersonal=5
-	if gotGlobal != 5 {
-		t.Errorf("expected global=5 (from mock), got %d", gotGlobal)
 	}
 }
 
@@ -809,17 +783,9 @@ func TestHandleSettingsAction_SetConcurrency_Error(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{})
 
-	// Missing setting parameter
+	// Missing conc and selected_option
 	_, err := f.HandleSettingsAction(context.Background(), map[string]any{
 		"action_data": `{"action":"settings_set_concurrency"}`,
-	}, "user1", "chat1", "msg1")
-	if err == nil {
-		t.Error("expected error for missing setting parameter")
-	}
-
-	// Missing conc and selected_option
-	_, err = f.HandleSettingsAction(context.Background(), map[string]any{
-		"action_data": `{"action":"settings_set_concurrency","setting":"global"}`,
 	}, "user1", "chat1", "msg1")
 	if err == nil {
 		t.Error("expected error for missing conc value")
@@ -835,8 +801,8 @@ func TestBuildSettingsCard_ModelTab_WithConcurrency(t *testing.T) {
 		LLMList: func(senderID string) ([]string, string) {
 			return []string{"gpt-4", "gpt-4o"}, "gpt-4"
 		},
-		LLMGetConcurrency: func(senderID string) (int, int) {
-			return 8, 5
+		LLMGetPersonalConcurrency: func(senderID string) int {
+			return 5
 		},
 	})
 
@@ -846,32 +812,23 @@ func TestBuildSettingsCard_ModelTab_WithConcurrency(t *testing.T) {
 	}
 
 	s := cardJSON(card)
-	if !strings.Contains(s, "并发限制") {
-		t.Error("model tab should contain concurrency section header")
+	if !strings.Contains(s, "个人 LLM 并发限制") {
+		t.Error("model tab should contain personal concurrency section header")
 	}
-	if !strings.Contains(s, "公共 LLM 并发") {
-		t.Error("model tab should contain global concurrency label")
-	}
-	if !strings.Contains(s, "个人 LLM 并发") {
-		t.Error("model tab should contain personal concurrency label")
+	if !strings.Contains(s, "并发上限") {
+		t.Error("model tab should contain concurrency label")
 	}
 
-	// Verify concurrency select dropdowns are present
+	// Verify concurrency select dropdown is present
 	selects := collectSelectsFromCard(card)
-	hasGlobalConc := false
-	hasPersonalConc := false
+	hasConc := false
 	for _, ad := range selects {
-		if strings.Contains(ad, "settings_set_concurrency") && strings.Contains(ad, `"setting":"global"`) {
-			hasGlobalConc = true
-		}
-		if strings.Contains(ad, "settings_set_concurrency") && strings.Contains(ad, `"setting":"personal"`) {
-			hasPersonalConc = true
+		if strings.Contains(ad, "settings_set_concurrency") {
+			hasConc = true
+			break
 		}
 	}
-	if !hasGlobalConc {
-		t.Error("model tab should have global concurrency select dropdown")
-	}
-	if !hasPersonalConc {
-		t.Error("model tab should have personal concurrency select dropdown")
+	if !hasConc {
+		t.Error("model tab should have concurrency select dropdown")
 	}
 }

@@ -761,14 +761,14 @@ func (a *Agent) DeleteUserLLM(senderID string) error {
 	return nil
 }
 
-// GetLLMConcurrency 获取用户 LLM 并发上限配置。
-func (a *Agent) GetLLMConcurrency(senderID string) (int, int) {
+// GetLLMConcurrency 获取用户个人 LLM 并发上限配置。
+func (a *Agent) GetLLMConcurrency(senderID string) int {
 	return a.llmFactory.GetLLMConcurrency(senderID)
 }
 
-// SetLLMConcurrency 设置用户 LLM 并发上限配置。
-func (a *Agent) SetLLMConcurrency(senderID string, global, personal int) error {
-	return a.llmFactory.SetLLMConcurrency(senderID, global, personal)
+// SetLLMConcurrency 设置用户个人 LLM 并发上限配置。
+func (a *Agent) SetLLMConcurrency(senderID string, personal int) error {
+	return a.llmFactory.SetLLMConcurrency(senderID, personal)
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）

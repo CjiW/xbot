@@ -183,34 +183,25 @@ func (f *LLMFactory) LLMSemaphoreManager() *llm.LLMSemaphoreManager {
 	return f.llmSemManager
 }
 
-// GetLLMConcurrency 读取用户配置的 LLM 并发上限。
-// 返回 (globalMaxConcurrent, personalMaxConcurrent)。
-// 未配置时使用默认值 (5, 3)。
-func (f *LLMFactory) GetLLMConcurrency(senderID string) (int, int) {
+// GetLLMConcurrency 读取用户配置的个人 LLM 并发上限。
+// 未配置时使用默认值 DefaultLLMConcurrencyPersonal。
+func (f *LLMFactory) GetLLMConcurrency(senderID string) int {
 	if f.settingsSvc == nil {
-		return llm.DefaultLLMConcurrency, llm.DefaultLLMConcurrencyPersonal
+		return llm.DefaultLLMConcurrencyPersonal
 	}
 	settings, err := f.settingsSvc.GetSettings("feishu", senderID)
 	if err != nil || settings == nil {
-		return llm.DefaultLLMConcurrency, llm.DefaultLLMConcurrencyPersonal
+		return llm.DefaultLLMConcurrencyPersonal
 	}
-	global := parseOrDefault(settings["llm_max_concurrent"], llm.DefaultLLMConcurrency)
-	personal := parseOrDefault(settings["llm_max_concurrent_personal"], llm.DefaultLLMConcurrencyPersonal)
-	return global, personal
+	return parseOrDefault(settings["llm_max_concurrent_personal"], llm.DefaultLLMConcurrencyPersonal)
 }
 
-// SetLLMConcurrency 设置用户的 LLM 并发上限配置。
-func (f *LLMFactory) SetLLMConcurrency(senderID string, global, personal int) error {
+// SetLLMConcurrency 设置用户的个人 LLM 并发上限配置。
+func (f *LLMFactory) SetLLMConcurrency(senderID string, personal int) error {
 	if f.settingsSvc == nil {
 		return fmt.Errorf("settings service not available")
 	}
-	if err := f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent", fmt.Sprintf("%d", global)); err != nil {
-		return fmt.Errorf("set llm_max_concurrent: %w", err)
-	}
-	if err := f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent_personal", fmt.Sprintf("%d", personal)); err != nil {
-		return fmt.Errorf("set llm_max_concurrent_personal: %w", err)
-	}
-	return nil
+	return f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent_personal", fmt.Sprintf("%d", personal))
 }
 
 // parseOrDefault 解析字符串为 int，失败时返回默认值。
@@ -238,8 +229,8 @@ func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func() func() {
 		llmKey = "personal"
 	}
 	return func() func() {
-		globalCap, personalCap := f.GetLLMConcurrency(senderID)
-		cap := globalCap
+		personalCap := f.GetLLMConcurrency(senderID)
+		cap := llm.DefaultLLMConcurrency
 		if llmKey == "personal" {
 			cap = personalCap
 		}

@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,8 +26,8 @@ type AgentMetrics struct {
 	MaskedItems       atomic.Int64 // 被遮蔽的 tool result 数量
 	OffloadEvents     atomic.Int64 // Offload 触发次数
 	OffloadedItems    atomic.Int64 // 被落盘的 tool result 数量
-	OffloadedRecalls  atomic.Int64 // offload_recall 被调用次数
-	MaskedRecalls     atomic.Int64 // recall_masked 被调用次数
+	OffloadedRecalls  atomic.Int64 // offload_recall 唯一 ID 回调次数（去重）
+	MaskedRecalls     atomic.Int64 // recall_masked 唯一 ID 回调次数（去重）
 	CompressEvents    atomic.Int64 // 上下文压缩触发次数
 	CompressTokensIn  atomic.Int64 // 压缩前 token 总量
 	CompressTokensOut atomic.Int64 // 压缩后 token 总量
@@ -36,6 +37,30 @@ type AgentMetrics struct {
 	// === 效率指标 ===
 	TotalToolErrors atomic.Int64 // 工具执行错误次数
 	TotalLLMErrors  atomic.Int64 // LLM 调用错误次数
+
+	// === 去重追踪（回调率基于唯一 item 计算） ===
+	recalledOffloadIDs sync.Map // string -> struct{}，已回调的唯一 offload ID
+	recalledMaskedIDs  sync.Map // string -> struct{}，已回调的唯一 mask ID
+}
+
+// RecordOffloadRecall 记录一次 offload_recall 调用（去重：同一 ID 只计一次）。
+// 返回 true 表示首次回调。
+func (m *AgentMetrics) RecordOffloadRecall(id string) bool {
+	if _, loaded := m.recalledOffloadIDs.LoadOrStore(id, struct{}{}); loaded {
+		return false
+	}
+	m.OffloadedRecalls.Add(1)
+	return true
+}
+
+// RecordMaskedRecall 记录一次 recall_masked 调用（去重：同一 ID 只计一次）。
+// 返回 true 表示首次回调。
+func (m *AgentMetrics) RecordMaskedRecall(id string) bool {
+	if _, loaded := m.recalledMaskedIDs.LoadOrStore(id, struct{}{}); loaded {
+		return false
+	}
+	m.MaskedRecalls.Add(1)
+	return true
 }
 
 // MetricsSnapshot 指标快照（用于 Settings 展示）。

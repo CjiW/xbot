@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -866,12 +867,28 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 			switch tc.Name {
 			case "offload_recall":
-				GlobalMetrics.OffloadedRecalls.Add(1)
+				// 从参数中提取 offload ID 用于去重计数
+				var args struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal([]byte(tc.Arguments), &args) == nil && args.ID != "" {
+					GlobalMetrics.RecordOffloadRecall(args.ID)
+				} else {
+					GlobalMetrics.OffloadedRecalls.Add(1) // fallback: 无法解析时仍然计数
+				}
 				if cfg.RecallTracker != nil && r.result != nil {
 					cfg.RecallTracker.RecordRecall(tc.ID, "offload", r.result.Summary)
 				}
 			case "recall_masked":
-				GlobalMetrics.MaskedRecalls.Add(1)
+				// 从参数中提取 mask ID 用于去重计数
+				var args struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal([]byte(tc.Arguments), &args) == nil && args.ID != "" {
+					GlobalMetrics.RecordMaskedRecall(args.ID)
+				} else {
+					GlobalMetrics.MaskedRecalls.Add(1) // fallback
+				}
 				if cfg.RecallTracker != nil && r.result != nil {
 					cfg.RecallTracker.RecordRecall(tc.ID, "masked", r.result.Summary)
 				}

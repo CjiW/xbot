@@ -66,15 +66,15 @@ func (a *Agent) buildBaseRunConfig(
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		SandboxEnabled:   a.sandboxMode == "docker",
+		PreferredSandbox: a.sandboxMode,
 
 		// 循环控制
 		MaxIterations: a.maxIterations,
@@ -329,7 +329,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
 		WorkspaceRoot:    parentCtx.WorkspaceRoot,
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   parentCtx.SandboxWorkDir,
 		ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
 		SkillsDirs:       parentCtx.SkillsDirs,
 		AgentsDir:        parentCtx.AgentsDir,
@@ -460,15 +460,15 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    wsRoot,
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		SandboxEnabled:   a.sandboxMode == "docker",
+		PreferredSandbox: a.sandboxMode,
 
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,

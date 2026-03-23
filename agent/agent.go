@@ -1652,6 +1652,16 @@ func (a *Agent) RegisterTool(tool tools.Tool) {
 	log.WithField("tool", tool.Name()).Info("Tool registered")
 }
 
+// sandboxWorkDir returns the sandbox working directory path.
+// In docker mode, this is "/workspace" (the container-internal mount point).
+// In none mode, this is empty (no sandbox path mapping needed).
+func (a *Agent) sandboxWorkDir() string {
+	if a.sandboxMode == "docker" {
+		return "/workspace"
+	}
+	return ""
+}
+
 func (a *Agent) RegisterCoreTool(tool tools.Tool) {
 	a.tools.RegisterCore(tool)
 	log.WithField("tool", tool.Name()).Info("Tool registered")

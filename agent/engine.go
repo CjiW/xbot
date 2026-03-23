@@ -274,6 +274,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// 使用闭包 defer 延迟求值，避免 defer 声明时计数器仍为 0
 	defer func() {
 		GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
+		GlobalMetrics.ClearRecallTracking()
 	}()
 
 	// --- 结构化进度状态 ---
@@ -342,11 +343,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 
+		// cachedMsgTokens 缓存 messages 的 token 数，避免在同一轮 maybeCompress 内重复计算。
+		// 值为 0 表示缓存失效（messages 已变更），需要重新计算。
+		var cachedMsgTokens int
+
 		// --- Layer 0: Observation Masking ---
 		// 在压缩之前先遮蔽旧的 tool result，减少上下文体积。
 		if cfg.MaskStore != nil {
-			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-			totalTokens := msgTokens + toolTokens
+			cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
+			totalTokens := cachedMsgTokens + toolTokens
 
 			maxTokens := 100000
 			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
@@ -358,6 +363,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
 				if count > 0 {
 					messages = syncMessages(masked)
+					cachedMsgTokens = 0 // messages 已变更，缓存失效
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
 					if autoNotify {
@@ -382,8 +388,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		if autoNotify {
-			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", msgTokens+toolTokens))
+			if cachedMsgTokens == 0 {
+				cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
+			}
+			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", cachedMsgTokens+toolTokens))
 			notifyProgress("")
 		}
 
@@ -395,7 +403,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			return
 		}
 
-		oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
+		oldTokenCount := cachedMsgTokens
+		if oldTokenCount == 0 {
+			oldTokenCount, _ = llm.CountMessagesTokens(messages, cfg.Model)
+		}
 		messages = syncMessages(result.LLMView)
 
 		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)

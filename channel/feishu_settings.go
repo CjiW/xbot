@@ -132,6 +132,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if err != nil {
 			return nil, fmt.Errorf("invalid max_context: %v", err)
 		}
+		if maxCtx < 1000 || maxCtx > 2000000 {
+			return nil, fmt.Errorf("max_context must be between 1000 and 2000000, got %d", maxCtx)
+		}
 		if f.settingsCallbacks.LLMSetMaxContext != nil {
 			if err := f.settingsCallbacks.LLMSetMaxContext(senderID, maxCtx); err != nil {
 				return nil, fmt.Errorf("设置 max_context 失败: %v", err)

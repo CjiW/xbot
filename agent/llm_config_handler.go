@@ -270,6 +270,9 @@ func (a *Agent) GetUserMaxContext(senderID string) int {
 
 // SetUserMaxContext updates the user's max_context setting and invalidates cached LLM client.
 func (a *Agent) SetUserMaxContext(senderID string, maxContext int) error {
+	if maxContext < 1000 || maxContext > 2000000 {
+		return fmt.Errorf("max_context must be between 1000 and 2000000, got %d", maxContext)
+	}
 	cfg, err := a.llmConfigSvc.GetConfig(senderID)
 	if err != nil {
 		return fmt.Errorf("get config: %w", err)

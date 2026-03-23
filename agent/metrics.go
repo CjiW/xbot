@@ -63,6 +63,18 @@ func (m *AgentMetrics) RecordMaskedRecall(id string) bool {
 	return true
 }
 
+// ClearRecallTracking 清理回调追踪数据（对话结束时调用）。
+func (m *AgentMetrics) ClearRecallTracking() {
+	m.recalledOffloadIDs.Range(func(key, _ any) bool {
+		m.recalledOffloadIDs.Delete(key)
+		return true
+	})
+	m.recalledMaskedIDs.Range(func(key, _ any) bool {
+		m.recalledMaskedIDs.Delete(key)
+		return true
+	})
+}
+
 // MetricsSnapshot 指标快照（用于 Settings 展示）。
 type MetricsSnapshot struct {
 	UptimeSeconds      int64

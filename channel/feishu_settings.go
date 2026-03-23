@@ -139,6 +139,39 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_set_concurrency":
+		setting := parsed["setting"]
+		concStr := parsed["conc"]
+		if concStr == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				concStr = opt
+			}
+		}
+		if concStr == "" || setting == "" {
+			return nil, fmt.Errorf("missing conc or setting")
+		}
+		conc, err := strconv.Atoi(concStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid conc: %v", err)
+		}
+		if f.settingsCallbacks.LLMSetConcurrency != nil {
+			// Read current values, only update the target field
+			curGlobal, curPersonal := 5, 3
+			if f.settingsCallbacks.LLMGetConcurrency != nil {
+				curGlobal, curPersonal = f.settingsCallbacks.LLMGetConcurrency(senderID)
+			}
+			switch setting {
+			case "global":
+				curGlobal = conc
+			case "personal":
+				curPersonal = conc
+			}
+			if err := f.settingsCallbacks.LLMSetConcurrency(senderID, curGlobal, curPersonal); err != nil {
+				return nil, fmt.Errorf("设置并发数失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_set_llm":
 		provider := formStr(actionData, "provider")
 		baseURL := formStr(actionData, "base_url")
@@ -534,6 +567,62 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_context",
+				}),
+			},
+		},
+	))
+
+	// LLM concurrency settings
+	globalConc, personalConc := 5, 3 // defaults
+	if f.settingsCallbacks.LLMGetConcurrency != nil {
+		globalConc, personalConc = f.settingsCallbacks.LLMGetConcurrency(senderID)
+	}
+
+	concOptions := []map[string]any{
+		{"text": map[string]any{"tag": "plain_text", "content": "1"}, "value": "1"},
+		{"text": map[string]any{"tag": "plain_text", "content": "2"}, "value": "2"},
+		{"text": map[string]any{"tag": "plain_text", "content": "3"}, "value": "3"},
+		{"text": map[string]any{"tag": "plain_text", "content": "5"}, "value": "5"},
+		{"text": map[string]any{"tag": "plain_text", "content": "8"}, "value": "8"},
+		{"text": map[string]any{"tag": "plain_text", "content": "10"}, "value": "10"},
+		{"text": map[string]any{"tag": "plain_text", "content": "不限"}, "value": "0"},
+	}
+
+	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**并发限制**",
+	})
+	elements = append(elements, buildSettingRow(
+		"公共 LLM 并发",
+		fmt.Sprintf("%d", globalConc),
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_llm_conc_global",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择并发数..."},
+			"initial_option": fmt.Sprintf("%d", globalConc),
+			"options":        concOptions,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action":  "settings_set_concurrency",
+					"setting": "global",
+				}),
+			},
+		},
+	))
+	elements = append(elements, buildSettingRow(
+		"个人 LLM 并发",
+		fmt.Sprintf("%d", personalConc),
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_llm_conc_personal",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择并发数..."},
+			"initial_option": fmt.Sprintf("%d", personalConc),
+			"options":        concOptions,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action":  "settings_set_concurrency",
+					"setting": "personal",
 				}),
 			},
 		},

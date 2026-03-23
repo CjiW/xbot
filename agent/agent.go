@@ -570,6 +570,11 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// Initialize UserSettingsService and SettingsService
 	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
 	a.settingsSvc = NewSettingsService(userSettingsSvc)
+
+	// Initialize LLMSemaphoreManager and inject dependencies
+	llmSemMgr := llm.NewLLMSemaphoreManager()
+	a.llmFactory.SetLLMSemaphoreManager(llmSemMgr)
+	a.llmFactory.SetSettingsService(a.settingsSvc)
 }
 
 // New 创建 Agent
@@ -754,6 +759,16 @@ func (a *Agent) DeleteUserLLM(senderID string) error {
 	a.llmFactory.Invalidate(senderID)
 	a.llmFactory.InvalidateCustomLLMCache(senderID)
 	return nil
+}
+
+// GetLLMConcurrency 获取用户 LLM 并发上限配置。
+func (a *Agent) GetLLMConcurrency(senderID string) (int, int) {
+	return a.llmFactory.GetLLMConcurrency(senderID)
+}
+
+// SetLLMConcurrency 设置用户 LLM 并发上限配置。
+func (a *Agent) SetLLMConcurrency(senderID string, global, personal int) error {
+	return a.llmFactory.SetLLMConcurrency(senderID, global, personal)
 }
 
 // SetDirectSend 注入同步发送函数（绕过 bus，用于消息更新跟踪）

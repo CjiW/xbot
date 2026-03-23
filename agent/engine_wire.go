@@ -43,6 +43,10 @@ func (a *Agent) buildBaseRunConfig(
 
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(senderID)
 
+	// LLM 并发限流回调（per-tenant）
+	llmSemAcquire := a.llmFactory.LLMSemAcquireForUser(senderID)
+	subAgentSem := a.llmFactory.SubAgentSemAcquireForUser(senderID)
+
 	return RunConfig{
 		// 必需
 		LLMClient:    llmClient,
@@ -100,6 +104,11 @@ func (a *Agent) buildBaseRunConfig(
 
 		// HookChain — inherit from Agent
 		HookChain: a.hookChain,
+
+		// LLM 并发限流回调（per-tenant）
+		LLMSemAcquire:             llmSemAcquire,
+		EnableConcurrentSubAgents: true,
+		SubAgentSem:               subAgentSem,
 	}, userMaxCtx
 }
 

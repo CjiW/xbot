@@ -184,6 +184,20 @@ type RunOutput struct {
 	Messages []llm.ChatMessage
 }
 
+// readArgsHasOffsetOrLimit checks whether a Read tool call's JSON arguments contain
+// offset > 0 or max_lines > 0. Used to skip offloading when the LLM intentionally
+// narrowed the read range — offloading would replace actual content with a summary.
+func readArgsHasOffsetOrLimit(argsJSON string) bool {
+	var args struct {
+		Offset   int `json:"offset"`
+		MaxLines int `json:"max_lines"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return false
+	}
+	return args.Offset > 0 || args.MaxLines > 0
+}
+
 // Run 统一的 Agent 循环。
 //
 // 输入：RunConfig（从 InboundMessage 构建）
@@ -907,7 +921,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// so summarizeRead can correctly split multi-line file content.
 			// Skip offload_recall to prevent recursive offloading: its result would exceed
 			// the threshold and get offloaded again, creating an infinite loop.
-			if cfg.OffloadStore != nil && r.err == nil && tc.Name != "offload_recall" {
+			// Skip Read with offset > 0: the LLM intentionally narrowed the result,
+			// offloading would replace actual content with a summary, defeating the purpose.
+			skipOffload := tc.Name == "offload_recall"
+			if tc.Name == "Read" && readArgsHasOffsetOrLimit(tc.Arguments) {
+				skipOffload = true
+			}
+			if cfg.OffloadStore != nil && r.err == nil && !skipOffload {
 				offloadContent := content // default fallback
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary

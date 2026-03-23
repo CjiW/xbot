@@ -317,6 +317,12 @@ func main() {
 				sb := tools.GetSandbox()
 				return sb.IsExporting(senderID)
 			},
+			LLMGetConcurrency: func(senderID string) (int, int) {
+				return agentLoop.GetLLMConcurrency(senderID)
+			},
+			LLMSetConcurrency: func(senderID string, global, personal int) error {
+				return agentLoop.SetLLMConcurrency(senderID, global, personal)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

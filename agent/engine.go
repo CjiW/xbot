@@ -138,6 +138,21 @@ type RunConfig struct {
 
 	// RecallTracker 摘要精化追踪器（nil = 不启用，仅主 Agent）
 	RecallTracker *RecallTracker
+
+	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
+	// concurrency slot. Returns a release function that must be called after
+	// the LLM call completes. If nil, no concurrency limiting is applied.
+	LLMSemAcquire func() func()
+
+	// EnableConcurrentSubAgents enables parallel execution of SubAgent tool calls.
+	// When true, multiple SubAgent calls in the same iteration run concurrently,
+	// bounded by SubAgentSem. Default false (backward compatible: sequential).
+	EnableConcurrentSubAgents bool
+
+	// SubAgentSem acquires a per-tenant semaphore slot for SubAgent execution.
+	// It blocks until a slot is available and returns a release function.
+	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
+	SubAgentSem func() func()
 }
 
 // TodoManagerProvider 提供 TODO 状态查询
@@ -554,7 +569,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 使用会话特定的工具定义
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 
-		// LLM 调用（可选超时）
+		// LLM 调用（可选超时 + per-tenant 并发限流）
 		var llmCtx context.Context
 		var llmCancel context.CancelFunc
 		if cfg.LLMTimeout > 0 {
@@ -563,7 +578,19 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			llmCtx, llmCancel = retryNotifyCtx, func() {}
 		}
 
+		// Acquire per-tenant LLM concurrency slot (if configured)
+		var releaseLLMSem func()
+		if cfg.LLMSemAcquire != nil {
+			releaseLLMSem = cfg.LLMSemAcquire()
+		}
+
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
+
+		// Release LLM concurrency slot (unconditionally, even on error)
+		if releaseLLMSem != nil {
+			releaseLLMSem()
+		}
+
 		llmCancel()
 
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
@@ -732,7 +759,33 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 		}
 
-		// execOne 执行单个工具并记录结果
+		// execOne 执行单个工具并记录结果。
+		// 并发安全说明：execResults、progressLines、structuredProgress.ActiveTools
+		// 的写入均按 entry.index 隔离到不同的 slice 元素，Go 中对不同 index 的并发写是安全的。
+
+		// executeSubAgentOps 并发执行 SubAgent tool calls，受可选的 SubAgentSem 约束。
+		executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func() func(), doAutoNotify bool, np func(string)) {
+			var wg sync.WaitGroup
+			for _, entry := range ops {
+				wg.Add(1)
+				go func(e toolCallEntry) {
+					defer wg.Done()
+					var release func()
+					if subAgentSem != nil {
+						release = subAgentSem()
+					}
+					execFn(e)
+					if release != nil {
+						release()
+					}
+				}(entry)
+			}
+			wg.Wait()
+			if doAutoNotify {
+				np("")
+			}
+		}
+
 		execOne := func(entry toolCallEntry) {
 			tc := entry.tc
 			argPreview := tc.Arguments
@@ -820,14 +873,21 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// 读写分离并行执行
 		if cfg.EnableReadWriteSplit {
-			var readOps, writeOps []toolCallEntry
+			var readOps, writeOps, subAgentOps []toolCallEntry
 			for idx, tc := range response.ToolCalls {
 				entry := toolCallEntry{iteration: i, index: idx, tc: tc}
-				if readOnlyTools[tc.Name] {
+				if tc.Name == "SubAgent" && cfg.EnableConcurrentSubAgents {
+					subAgentOps = append(subAgentOps, entry)
+				} else if readOnlyTools[tc.Name] {
 					readOps = append(readOps, entry)
 				} else {
 					writeOps = append(writeOps, entry)
 				}
+			}
+
+			// Phase 0: SubAgent 并发执行（受 SubAgentSem 约束）
+			if len(subAgentOps) > 0 {
+				executeSubAgentOps(subAgentOps, execOne, cfg.SubAgentSem, autoNotify, notifyProgress)
 			}
 
 			// Phase 1: 只读操作并行执行
@@ -857,8 +917,32 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					notifyProgress("")
 				}
 			}
+		} else if cfg.EnableConcurrentSubAgents {
+			// SubAgent 并发执行（无读写分离时）
+			var subAgentOps, otherOps []toolCallEntry
+			for idx, tc := range response.ToolCalls {
+				entry := toolCallEntry{iteration: i, index: idx, tc: tc}
+				if tc.Name == "SubAgent" {
+					subAgentOps = append(subAgentOps, entry)
+				} else {
+					otherOps = append(otherOps, entry)
+				}
+			}
+
+			// SubAgent 并发执行
+			if len(subAgentOps) > 0 {
+				executeSubAgentOps(subAgentOps, execOne, cfg.SubAgentSem, autoNotify, notifyProgress)
+			}
+
+			// 其他操作串行执行
+			for _, entry := range otherOps {
+				execOne(entry)
+				if autoNotify {
+					notifyProgress("")
+				}
+			}
 		} else {
-			// 全部串行执行
+			// 全部串行执行（默认，向后兼容）
 			for idx, tc := range response.ToolCalls {
 				execOne(toolCallEntry{iteration: i, index: idx, tc: tc})
 				if autoNotify {

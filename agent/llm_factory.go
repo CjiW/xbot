@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"sync"
 
 	"xbot/llm"
@@ -10,8 +12,12 @@ import (
 // LLMFactory 管理用户自定义 LLM 客户端的创建和缓存
 type LLMFactory struct {
 	configSvc    *sqlite.UserLLMConfigService
+	settingsSvc  *SettingsService // 用于读写用户并发配置
 	defaultLLM   llm.LLM
 	defaultModel string
+
+	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
+	llmSemManager *llm.LLMSemaphoreManager
 
 	// 缓存用户的 LLM 客户端
 	mu            sync.RWMutex
@@ -159,4 +165,110 @@ func (f *LLMFactory) InvalidateAll() {
 	f.maxContexts = make(map[string]int)
 	f.thinkingModes = make(map[string]string)
 	f.mu.Unlock()
+}
+
+// SetSettingsService 注入 SettingsService（用于读写用户并发配置）。
+// 必须在 Agent 初始化后调用，因为 SettingsService 创建依赖于 Agent。
+func (f *LLMFactory) SetSettingsService(svc *SettingsService) {
+	f.settingsSvc = svc
+}
+
+// SetLLMSemaphoreManager 注入 LLMSemaphoreManager。
+func (f *LLMFactory) SetLLMSemaphoreManager(mgr *llm.LLMSemaphoreManager) {
+	f.llmSemManager = mgr
+}
+
+// LLMSemaphoreManager 返回 LLMSemaphoreManager 实例。
+func (f *LLMFactory) LLMSemaphoreManager() *llm.LLMSemaphoreManager {
+	return f.llmSemManager
+}
+
+// GetLLMConcurrency 读取用户配置的 LLM 并发上限。
+// 返回 (globalMaxConcurrent, personalMaxConcurrent)。
+// 未配置时使用默认值 (5, 3)。
+func (f *LLMFactory) GetLLMConcurrency(senderID string) (int, int) {
+	if f.settingsSvc == nil {
+		return llm.DefaultLLMConcurrency, llm.DefaultLLMConcurrencyPersonal
+	}
+	settings, err := f.settingsSvc.GetSettings("feishu", senderID)
+	if err != nil || settings == nil {
+		return llm.DefaultLLMConcurrency, llm.DefaultLLMConcurrencyPersonal
+	}
+	global := parseOrDefault(settings["llm_max_concurrent"], llm.DefaultLLMConcurrency)
+	personal := parseOrDefault(settings["llm_max_concurrent_personal"], llm.DefaultLLMConcurrencyPersonal)
+	return global, personal
+}
+
+// SetLLMConcurrency 设置用户的 LLM 并发上限配置。
+func (f *LLMFactory) SetLLMConcurrency(senderID string, global, personal int) error {
+	if f.settingsSvc == nil {
+		return fmt.Errorf("settings service not available")
+	}
+	if err := f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent", fmt.Sprintf("%d", global)); err != nil {
+		return fmt.Errorf("set llm_max_concurrent: %w", err)
+	}
+	if err := f.settingsSvc.SetSetting("feishu", senderID, "llm_max_concurrent_personal", fmt.Sprintf("%d", personal)); err != nil {
+		return fmt.Errorf("set llm_max_concurrent_personal: %w", err)
+	}
+	return nil
+}
+
+// parseOrDefault 解析字符串为 int，失败时返回默认值。
+func parseOrDefault(s string, defaultVal int) int {
+	if s == "" {
+		return defaultVal
+	}
+	var v int
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil || v <= 0 {
+		return defaultVal
+	}
+	return v
+}
+
+// LLMSemAcquireForUser returns an LLMSemAcquire callback for the given user.
+// It determines whether the user uses a personal or global LLM and reads
+// the corresponding concurrency setting.
+// Returns nil if no semaphore manager is configured.
+func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func() func() {
+	if f.llmSemManager == nil {
+		return nil
+	}
+	llmKey := "global"
+	if f.HasCustomLLM(senderID) {
+		llmKey = "personal"
+	}
+	return func() func() {
+		globalCap, personalCap := f.GetLLMConcurrency(senderID)
+		cap := globalCap
+		if llmKey == "personal" {
+			cap = personalCap
+		}
+		return f.llmSemManager.Acquire(context.Background(), senderID, llmKey, func() int { return cap })
+	}
+}
+
+// SubAgentSemAcquireForUser returns a SubAgentSem callback for the given user.
+// SubAgent concurrency is bounded by a separate semaphore (llmKey="subagent").
+// Returns nil if no semaphore manager is configured.
+func (f *LLMFactory) SubAgentSemAcquireForUser(senderID string) func() func() {
+	if f.llmSemManager == nil {
+		return nil
+	}
+	return func() func() {
+		// Default max concurrent SubAgents: 3
+		cap := parseOrDefault(f.getSetting(senderID, "subagent_max_concurrent"), 3)
+		return f.llmSemManager.Acquire(context.Background(), senderID, "subagent", func() int { return cap })
+	}
+}
+
+// getSetting reads a single user setting. Returns "" on any error.
+func (f *LLMFactory) getSetting(senderID, key string) string {
+	if f.settingsSvc == nil {
+		return ""
+	}
+	settings, err := f.settingsSvc.GetSettings("feishu", senderID)
+	if err != nil || settings == nil {
+		return ""
+	}
+	return settings[key]
 }

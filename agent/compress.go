@@ -57,7 +57,7 @@ What is being worked on right now. Include:
 2. PRESERVE ALL error messages verbatim
 3. PRESERVE all function signatures from active files
 4. Include specific details (variable names, line numbers, code snippets)
-5. If 📂 [offload:...] markers exist, preserve them verbatim
+5. If 📂 [offload:...] markers exist, preserve the SUMMARY text but STRIP the offload ID (ol_xxx) — the data cannot be recalled later
 6. Prioritize RECENT information over old history
 7. This is NOT a summary — it's a task state document for continuing work`
 
@@ -88,10 +88,15 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 
 		case msg.Role == "tool":
 			if strings.HasPrefix(msg.Content, "📂 [offload:") {
-				// BUG FIX: offload 摘要不再完整保留（可能很大），截断到 800 rune。
-				// 保留 offload ID 和摘要前缀即可，详细内容可通过 offload_recall 获取。
-				offloadContent := truncateRunes(msg.Content, 800)
-				pendingToolSummary.WriteString(offloadContent + "\n")
+				// Strip offload ID to prevent stale recall in future turns
+				// (offload data is cleaned between turns by CleanSession).
+				// Keep summary text: "📂 [offload:ol_xxx] Read(...)\nsummary" → "📂 Read(...)\nsummary"
+				stripped := stripRecallID(msg.Content)
+				pendingToolSummary.WriteString(truncateRunes(stripped, 800) + "\n")
+			} else if strings.HasPrefix(msg.Content, "📂 [masked:") {
+				// Strip mask ID — MaskStore is in-memory and doesn't survive across turns.
+				stripped := stripRecallID(msg.Content)
+				fmt.Fprintf(&pendingToolSummary, "  → %s\n", truncateRunes(stripped, 200))
 			} else {
 				toolContent := truncateRunes(msg.Content, 200)
 				fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
@@ -100,6 +105,16 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 	}
 	flushPending(&result, &pendingToolSummary)
 	return result
+}
+
+// stripRecallID removes the offload/mask ID from a marker, keeping the rest.
+// "📂 [offload:ol_xxx] Read(...)\nsummary"  → "📂 Read(...)\nsummary"
+// "📂 [masked:mk_xxx] Shell(cat) — 500 chars — ..."  → "📂 Shell(cat) — 500 chars — ..."
+func stripRecallID(content string) string {
+	if idx := strings.Index(content, "] "); idx >= 0 {
+		return "📂 " + content[idx+2:]
+	}
+	return content
 }
 
 // flushPending 将累积的 tool 执行摘要作为 assistant 消息添加到结果

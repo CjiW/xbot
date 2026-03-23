@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"xbot/llm"
@@ -227,5 +228,38 @@ func TestMaskOldToolResults_NoToolMessages(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Fatal("should return same length")
+	}
+}
+
+func TestMaskOldToolResults_AlreadyMaskedSkipped(t *testing.T) {
+	store := NewObservationMaskStore(100)
+	messages := []llm.ChatMessage{
+		// Group 1: already-masked tool result — should NOT be re-masked
+		{Role: "assistant", Content: "checking", ToolCalls: []llm.ToolCall{{ID: "tc1", Name: "Shell"}}},
+		{Role: "tool", Content: "📂 [masked:mk_old12345] Shell(ls) — 500 chars — 结果已遮蔽", ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{"command":"ls"}`},
+		// Group 2: normal tool result
+		{Role: "assistant", Content: "again", ToolCalls: []llm.ToolCall{{ID: "tc2", Name: "Read"}}},
+		{Role: "tool", Content: "file content", ToolName: "Read", ToolCallID: "tc2", ToolArguments: `{"path":"test.go"}`},
+		// Group 3 (kept): recent tool result
+		{Role: "assistant", Content: "final", ToolCalls: []llm.ToolCall{{ID: "tc3", Name: "Grep"}}},
+		{Role: "tool", Content: "grep results", ToolName: "Grep", ToolCallID: "tc3", ToolArguments: `{}`},
+	}
+
+	result, count := MaskOldToolResults(messages, store, 1)
+	// Only group 2's tool result should be masked; group 1 is already masked and skipped
+	if count != 1 {
+		t.Fatalf("expected 1 masked (skip already-masked), got %d", count)
+	}
+	// Group 1's tool result should be unchanged (not re-masked)
+	if !strings.HasPrefix(result[1].Content, "📂 [masked:mk_old12345]") {
+		t.Errorf("already-masked content was re-masked: %s", result[1].Content)
+	}
+	// Group 2's tool result should be newly masked
+	if !strings.HasPrefix(result[3].Content, "📂 [masked:mk_") {
+		t.Errorf("expected group 2 to be masked, got: %s", result[3].Content)
+	}
+	// Store should have exactly 1 entry (not 2)
+	if store.Size() != 1 {
+		t.Errorf("expected 1 store entry, got %d", store.Size())
 	}
 }

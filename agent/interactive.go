@@ -301,14 +301,16 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 	// 根据 sandboxMode 决定沙箱配置
 	sandboxEnabled := a.sandboxMode == "docker"
 	sandboxWorkDir := "/workspace"
+	wsRoot := workspaceRoot
 	if !sandboxEnabled {
 		sandboxWorkDir = workspaceRoot
+		wsRoot = a.workDir // none 模式下放宽 path guard 到 workDir
 	}
 
 	return &tools.ToolContext{
 		Ctx:                 ctx,
 		WorkingDir:          a.workDir,
-		WorkspaceRoot:       workspaceRoot,
+		WorkspaceRoot:       wsRoot,
 		SandboxWorkDir:      sandboxWorkDir,
 		ReadOnlyRoots:       a.globalSkillDirs,
 		SkillsDirs:          a.globalSkillDirs,

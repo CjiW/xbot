@@ -31,8 +31,10 @@ func (a *Agent) buildBaseRunConfig(
 	// 根据 sandboxMode 决定沙箱配置，none 模式下使用实际路径
 	sandboxEnabled := a.sandboxMode == "docker"
 	sandboxWorkDir := "/workspace"
+	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 	if !sandboxEnabled {
-		sandboxWorkDir = tools.UserWorkspaceRoot(a.workDir, senderID)
+		sandboxWorkDir = wsRoot
+		wsRoot = a.workDir // none 模式下放宽 path guard 到 workDir，允许访问同级项目
 	}
 
 	return RunConfig{
@@ -53,7 +55,7 @@ func (a *Agent) buildBaseRunConfig(
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		WorkspaceRoot:    wsRoot,
 		SandboxWorkDir:   sandboxWorkDir,
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
@@ -434,6 +436,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	sandboxWorkDir := "/workspace"
 	if !sandboxEnabled {
 		sandboxWorkDir = wsRoot
+		wsRoot = a.workDir // none 模式下放宽 path guard 到 workDir
 	}
 
 	cfg := &RunConfig{

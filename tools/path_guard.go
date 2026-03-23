@@ -188,12 +188,13 @@ func HostToSandboxPath(ctx *ToolContext, hostPath string) string {
 }
 
 // sandboxBaseDir 返回沙箱内的工作目录前缀。
-// 优先使用 ctx.SandboxWorkDir，兜底为 "/workspace"。
+// 返回 ctx.SandboxWorkDir（docker 模式下通常为 "/workspace"）。
+// 返回空字符串表示无沙箱路径约束（none 模式），调用方应跳过路径校验。
 func sandboxBaseDir(ctx *ToolContext) string {
-	if ctx != nil && ctx.SandboxWorkDir != "" {
+	if ctx != nil {
 		return ctx.SandboxWorkDir
 	}
-	return "/workspace"
+	return ""
 }
 
 // resolveSandboxCWD 将 CurrentDir 解析为沙箱内的绝对路径。

@@ -77,9 +77,10 @@ func TestSandboxBaseDir(t *testing.T) {
 		ctx  *ToolContext
 		want string
 	}{
-		{"nil ctx", nil, "/workspace"},
-		{"empty SandboxWorkDir", &ToolContext{SandboxWorkDir: ""}, "/workspace"},
+		{"nil ctx", nil, ""},
+		{"empty SandboxWorkDir (none mode)", &ToolContext{SandboxWorkDir: ""}, ""},
 		{"custom SandboxWorkDir", &ToolContext{SandboxWorkDir: "/data/ws"}, "/data/ws"},
+		{"docker default", &ToolContext{SandboxWorkDir: "/workspace"}, "/workspace"},
 	}
 
 	for _, tt := range tests {

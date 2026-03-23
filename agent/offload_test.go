@@ -783,3 +783,28 @@ func TestInvalidateStaleReads_SandboxNestedPath(t *testing.T) {
 		t.Errorf("expected 1 stale for nested path, got %v", staleIDs)
 	}
 }
+
+func TestReadArgsHasOffsetOrLimit(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want bool
+	}{
+		{"no offset/limit", `{"path":"file.go"}`, false},
+		{"offset zero", `{"path":"file.go","offset":0}`, false},
+		{"max_lines zero", `{"path":"file.go","max_lines":0}`, false},
+		{"offset > 0", `{"path":"file.go","offset":10}`, true},
+		{"max_lines > 0", `{"path":"file.go","max_lines":50}`, true},
+		{"both set", `{"path":"file.go","offset":10,"max_lines":50}`, true},
+		{"invalid json", `{invalid}`, false},
+		{"empty", ``, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := readArgsHasOffsetOrLimit(tt.args)
+			if got != tt.want {
+				t.Errorf("readArgsHasOffsetOrLimit(%q) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}

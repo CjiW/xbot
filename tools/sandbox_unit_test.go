@@ -306,3 +306,122 @@ func TestEditTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
 		t.Errorf("Edit path = %q, want %q", resolved, expected)
 	}
 }
+
+// ============================================================================
+// applyLineLimit tests (offset + max_lines)
+// ============================================================================
+
+func TestApplyLineLimit_OffsetOnly(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 0, 3)
+	// maxLines=0 (no limit), offset=3 → start from line 3
+	// Note: trailing newline from Split+Join
+	expected := "line3\nline4\nline5\n"
+	if result.Summary != expected {
+		t.Errorf("offset=3: got %q, want %q", result.Summary, expected)
+	}
+}
+
+func TestApplyLineLimit_OffsetAndMaxLines(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10"
+	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 2, 3)
+	// maxLines=2, offset=3 → lines 3-4
+	if !strings.Contains(result.Summary, "line3") {
+		t.Errorf("expected line3 in result, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "line4") {
+		t.Errorf("expected line4 in result, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "line5") {
+		t.Errorf("should not contain line5 (max_lines=2), got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "truncated") {
+		t.Errorf("expected truncation notice, got: %s", result.Summary)
+	}
+}
+
+func TestApplyLineLimit_OffsetBeyondFile(t *testing.T) {
+	// offset=10 on 3-line file → should return hint message (no panic)
+	content := "line1\nline2\nline3"
+	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 0, 10)
+	if !strings.Contains(result.Summary, "exceeds") {
+		t.Errorf("expected exceeds hint for offset beyond file, got: %s", result.Summary)
+	}
+}
+
+func TestApplyLineLimit_MaxLinesOnly(t *testing.T) {
+	// maxLines only (no offset) — backward compatible
+	content := "line1\nline2\nline3\nline4\nline5"
+	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 2, 0)
+	if !strings.Contains(result.Summary, "line1") {
+		t.Errorf("expected line1, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "line2") {
+		t.Errorf("expected line2, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "line3") {
+		t.Errorf("should not contain line3 (max_lines=2), got: %s", result.Summary)
+	}
+}
+
+func TestApplyLineLimit_NilResult(t *testing.T) {
+	result := applyLineLimit(nil, 10, 5)
+	if result != nil {
+		t.Error("nil result should remain nil")
+	}
+}
+
+func TestApplyLineLimit_NoOffsetNoMaxLines(t *testing.T) {
+	content := "line1\nline2\nline3"
+	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 0, 0)
+	if result.Summary != content {
+		t.Errorf("no offset/max_lines: got %q, want %q", result.Summary, content)
+	}
+}
+
+func TestReadTool_OffsetParameter(t *testing.T) {
+	ws, err := os.MkdirTemp("", "test-read-offset-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(ws)
+
+	content := strings.Join([]string{"line1", "line2", "line3", "line4", "line5"}, "\n")
+	os.WriteFile(filepath.Join(ws, "test.txt"), []byte(content), 0644)
+
+	ctx := &ToolContext{
+		Ctx:            context.Background(),
+		WorkspaceRoot:  ws,
+		SandboxWorkDir: "/workspace",
+		SandboxEnabled: false,
+	}
+
+	tool := &ReadTool{}
+
+	// Test offset only
+	result, err := tool.Execute(ctx, `{"path": "test.txt", "offset": 3}`)
+	if err != nil {
+		t.Fatalf("Read with offset failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "line3") {
+		t.Errorf("expected line3 with offset=3, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "line2") {
+		t.Errorf("should not contain line2 with offset=3, got: %s", result.Summary)
+	}
+
+	// Test offset + max_lines
+	result, err = tool.Execute(ctx, `{"path": "test.txt", "offset": 2, "max_lines": 2}`)
+	if err != nil {
+		t.Fatalf("Read with offset+max_lines failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "line2") {
+		t.Errorf("expected line2, got: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "line3") {
+		t.Errorf("expected line3, got: %s", result.Summary)
+	}
+	if strings.Contains(result.Summary, "line4") {
+		t.Errorf("should not contain line4 (max_lines=2), got: %s", result.Summary)
+	}
+}

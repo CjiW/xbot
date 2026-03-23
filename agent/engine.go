@@ -972,7 +972,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 在 sys_reminder 之前注入：dynamic-context 描述事实性环境变化，sys_reminder 描述行为引导
 		dynamicInjector.InjectIfNeeded(messages)
 
-		// --- System Reminder 注入 ---
+		// --- System Reminder 注入（含双阶段 context_edit 提示）---
 		if len(response.ToolCalls) > 0 {
 			var roundToolNames []string
 			for _, tc2 := range response.ToolCalls {
@@ -982,7 +982,21 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if cfg.TodoManager != nil && sessionKey != "" {
 				todoSummary = cfg.TodoManager.GetTodoSummary(sessionKey)
 			}
-			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID)
+
+			// 计算当前 token 使用量，用于 context_edit 双阶段提示
+			var reminderCtx *ReminderContext
+			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
+				toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
+				toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
+				msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
+				reminderCtx = &ReminderContext{
+					MaxContextTokens: cfg.ContextManagerConfig.MaxContextTokens,
+					UsedTokens:       msgTokens,
+					ToolDefTokens:    toolTokens,
+				}
+			}
+
+			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID, reminderCtx)
 			if reminder != "" && len(messages) > 0 {
 				lastIdx := len(messages) - 1
 				messages[lastIdx].Content += "\n\n" + reminder

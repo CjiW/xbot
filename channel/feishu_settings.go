@@ -140,15 +140,14 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
 	case "settings_set_concurrency":
-		setting := parsed["setting"]
 		concStr := parsed["conc"]
 		if concStr == "" {
 			if opt, ok := actionData["selected_option"].(string); ok {
 				concStr = opt
 			}
 		}
-		if concStr == "" || setting == "" {
-			return nil, fmt.Errorf("missing conc or setting")
+		if concStr == "" {
+			return nil, fmt.Errorf("missing conc")
 		}
 		conc, err := strconv.Atoi(concStr)
 		if err != nil {
@@ -157,19 +156,8 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if conc < 1 || conc > 20 {
 			return nil, fmt.Errorf("concurrency must be between 1 and 20, got %d", conc)
 		}
-		if f.settingsCallbacks.LLMSetConcurrency != nil {
-			// Read current values, only update the target field
-			curGlobal, curPersonal := 5, 3
-			if f.settingsCallbacks.LLMGetConcurrency != nil {
-				curGlobal, curPersonal = f.settingsCallbacks.LLMGetConcurrency(senderID)
-			}
-			switch setting {
-			case "global":
-				curGlobal = conc
-			case "personal":
-				curPersonal = conc
-			}
-			if err := f.settingsCallbacks.LLMSetConcurrency(senderID, curGlobal, curPersonal); err != nil {
+		if f.settingsCallbacks.LLMSetPersonalConcurrency != nil {
+			if err := f.settingsCallbacks.LLMSetPersonalConcurrency(senderID, conc); err != nil {
 				return nil, fmt.Errorf("设置并发数失败: %v", err)
 			}
 		}
@@ -608,10 +596,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 		},
 	))
 
-	// LLM concurrency settings
-	globalConc, personalConc := 5, 3 // defaults
-	if f.settingsCallbacks.LLMGetConcurrency != nil {
-		globalConc, personalConc = f.settingsCallbacks.LLMGetConcurrency(senderID)
+	// LLM concurrency settings (personal only)
+	personalConc := 3 // default
+	if f.settingsCallbacks.LLMGetPersonalConcurrency != nil {
+		personalConc = f.settingsCallbacks.LLMGetPersonalConcurrency(senderID)
 	}
 
 	concOptions := []map[string]any{
@@ -627,27 +615,10 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**并发限制**",
+		"content": "**个人 LLM 并发限制**",
 	})
 	elements = append(elements, buildSettingRow(
-		"公共 LLM 并发",
-		fmt.Sprintf("%d", globalConc),
-		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_llm_conc_global",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择并发数..."},
-			"initial_option": fmt.Sprintf("%d", globalConc),
-			"options":        concOptions,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action":  "settings_set_concurrency",
-					"setting": "global",
-				}),
-			},
-		},
-	))
-	elements = append(elements, buildSettingRow(
-		"个人 LLM 并发",
+		"并发上限",
 		fmt.Sprintf("%d", personalConc),
 		map[string]any{
 			"tag":            "select_static",
@@ -657,8 +628,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			"options":        concOptions,
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
-					"action":  "settings_set_concurrency",
-					"setting": "personal",
+					"action": "settings_set_concurrency",
 				}),
 			},
 		},

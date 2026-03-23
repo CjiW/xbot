@@ -317,11 +317,11 @@ func main() {
 				sb := tools.GetSandbox()
 				return sb.IsExporting(senderID)
 			},
-			LLMGetConcurrency: func(senderID string) (int, int) {
+			LLMGetPersonalConcurrency: func(senderID string) int {
 				return agentLoop.GetLLMConcurrency(senderID)
 			},
-			LLMSetConcurrency: func(senderID string, global, personal int) error {
-				return agentLoop.SetLLMConcurrency(senderID, global, personal)
+			LLMSetPersonalConcurrency: func(senderID string, personal int) error {
+				return agentLoop.SetLLMConcurrency(senderID, personal)
 			},
 		})
 

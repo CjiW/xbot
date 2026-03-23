@@ -108,14 +108,23 @@ func (a *Agent) SpawnInteractiveSession(
 		rn := roleName
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				cb(rn, lines[0])
+				// 只取最后一行，避免多行进度破坏父 Agent blockquote
+				last := lines[len(lines)-1]
+				if idx := strings.LastIndex(last, "\n"); idx >= 0 {
+					last = last[idx+1:]
+				}
+				cb(rn, last)
 			}
 		}
 	} else if originChannel != "" && originChatID != "" {
 		rn := roleName // 闭包捕获
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				prefixed := "📋 subagent: [" + rn + "] " + lines[0] + "\n"
+				last := lines[len(lines)-1]
+				if idx := strings.LastIndex(last, "\n"); idx >= 0 {
+					last = last[idx+1:]
+				}
+				prefixed := "📋 subagent: [" + rn + "] " + last + "\n"
 				_ = a.sendMessage(originChannel, originChatID, prefixed)
 			}
 		}

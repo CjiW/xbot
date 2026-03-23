@@ -850,6 +850,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					pi := progressStartIdx + entry.index
 					if pi < len(progressLines) {
 						execCtx = WithSubAgentProgress(ctx, func(roleName, line string) {
+							// 只取最后一行，避免多行内容破坏飞书 markdown blockquote
+							if idx := strings.LastIndex(line, "\n"); idx >= 0 {
+								line = line[idx+1:]
+							}
 							progressMu.Lock()
 							progressLines[pi] = fmt.Sprintf("> 🔄 SubAgent [%s]: %s", roleName, line)
 							notifyProgress("")

@@ -252,9 +252,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	messages := cfg.Messages
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
-	if cfg.ContextEditor != nil {
-		cfg.ContextEditor.SetMessages(messages)
+	// syncMessages 闭包：每次 messages 被重赋值后调用，保持 ContextEditor 引用同步
+	syncMessages := func(newMessages []llm.ChatMessage) []llm.ChatMessage {
+		if cfg.ContextEditor != nil {
+			cfg.ContextEditor.SetMessages(newMessages)
+		}
+		return newMessages
 	}
+	messages = syncMessages(messages)
 
 	var toolsUsed []string
 	var waitingUser bool
@@ -352,7 +357,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if float64(totalTokens) > maskingThreshold {
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
 				if count > 0 {
-					messages = masked
+					messages = syncMessages(masked)
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
 					if autoNotify {
@@ -391,7 +396,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
-		messages = result.LLMView
+		messages = syncMessages(result.LLMView)
 
 		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 		if autoNotify {
@@ -614,7 +619,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 				} else {
-					messages = result.LLMView
+					messages = syncMessages(result.LLMView)
 					if autoNotify {
 						newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
@@ -727,7 +732,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			ReasoningContent: response.ReasoningContent, // DeepSeek/OpenAI reasoning 模型的思维链
 			ToolCalls:        response.ToolCalls,
 		}
-		messages = append(messages, assistantMsg)
+		messages = syncMessages(append(messages, assistantMsg))
 
 		// --- 工具执行 ---
 
@@ -1059,7 +1064,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if r.result != nil && r.result.Detail != "" {
 				toolMsg.Detail = r.result.Detail
 			}
-			messages = append(messages, toolMsg)
+			messages = syncMessages(append(messages, toolMsg))
 		}
 
 		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
@@ -1073,7 +1078,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					"stale_count": len(staleIDs),
 					"stale_ids":   staleIDs,
 				}).Info("Stale offloads detected and invalidated")
-				messages = cfg.OffloadStore.PurgeStaleMessages(offloadSessionKey, messages)
+				messages = syncMessages(cfg.OffloadStore.PurgeStaleMessages(offloadSessionKey, messages))
 			}
 		}
 

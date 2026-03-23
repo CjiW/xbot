@@ -611,8 +611,11 @@ func TestIntegration_ContextEdit_DeleteMessage(t *testing.T) {
 	}
 
 	// Check that the message was deleted (replaced with placeholder)
+	// Use out.Messages (Run's internal messages) instead of external messages,
+	// because Run() may reallocate the slice via append, causing ContextEditor
+	// to modify a different slice than the external one.
 	found := false
-	for _, m := range messages {
+	for _, m := range out.Messages {
 		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "deleted") {
 			found = true
 			break
@@ -679,9 +682,9 @@ func TestIntegration_ContextEdit_TruncateMessage(t *testing.T) {
 		t.Fatalf("Run() failed: %v", out.Error)
 	}
 
-	// Check truncation happened
+	// Check truncation happened (use out.Messages, not external messages)
 	found := false
-	for _, m := range messages {
+	for _, m := range out.Messages {
 		if strings.Contains(m.Content, "[context edited:") && strings.Contains(m.Content, "truncated") {
 			found = true
 			break
@@ -746,12 +749,21 @@ func TestIntegration_ContextEdit_ReplaceMessage(t *testing.T) {
 		t.Fatalf("Run() failed: %v", out.Error)
 	}
 
-	// Check that replacement happened
-	if !strings.Contains(messages[2].Content, "red cat") {
-		t.Errorf("expected 'red cat' in message, got: %s", messages[2].Content[:min(100, len(messages[2].Content))])
+	// Check that replacement happened (use out.Messages, not external messages)
+	// Find the assistant message with the original content (index 2 in original, but
+	// Run() appends assistant+tool messages, so we search by content)
+	replaced := false
+	for _, m := range out.Messages {
+		if strings.Contains(m.Content, "red cat") {
+			replaced = true
+			if strings.Contains(m.Content, "brown fox") {
+				t.Error("expected 'brown fox' to be replaced")
+			}
+			break
+		}
 	}
-	if strings.Contains(messages[2].Content, "brown fox") {
-		t.Error("expected 'brown fox' to be replaced")
+	if !replaced {
+		t.Error("expected 'red cat' in some message after replacement")
 	}
 }
 

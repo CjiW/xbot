@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -58,6 +59,43 @@ const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key
 注意: API Key 会被加密存储，查询时只显示前4位。`
 
 // handleSetLLM handles /set-llm command to set user's LLM configuration
+// parseSetLLMArgs splits args by spaces but respects JSON brace nesting and quoted strings.
+// e.g. `provider=openai thinking_mode={"type": "enabled", "budget_tokens": 10000}` correctly
+// produces ["provider=openai", `thinking_mode={"type": "enabled", "budget_tokens": 10000}`].
+func parseSetLLMArgs(args string) []string {
+	var parts []string
+	var current strings.Builder
+	depth := 0
+	inQuote := false
+	for i := 0; i < len(args); i++ {
+		ch := args[i]
+		if ch == '"' && (i == 0 || args[i-1] != '\\') {
+			inQuote = !inQuote
+		}
+		if !inQuote {
+			if ch == '{' {
+				depth++
+			}
+			if ch == '}' && depth > 0 {
+				depth--
+			}
+			if ch == ' ' && depth == 0 {
+				if current.Len() > 0 {
+					parts = append(parts, current.String())
+					current.Reset()
+				}
+				continue
+			}
+		}
+		current.WriteByte(ch)
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
+}
+
+
 func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	// Security: warn in group chat to avoid exposing API key
 	if msg.ChatType == "group" {
@@ -85,7 +123,7 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 		SenderID: msg.SenderID,
 	}
 
-	parts := strings.Fields(args)
+	parts := parseSetLLMArgs(args)
 	parseErrors := false
 	for _, part := range parts {
 		kv := strings.SplitN(part, "=", 2)
@@ -114,8 +152,16 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			}
 		case "thinking_mode":
 			// 支持: enabled, disabled, adaptive, 自定义 JSON 字符串
-			if value == "enabled" || value == "disabled" || value == "adaptive" || (len(value) > 0 && value[0] == '{') {
+			if value == "enabled" || value == "disabled" || value == "adaptive" {
 				cfg.ThinkingMode = value
+			} else if len(value) > 0 && value[0] == '{' {
+				// 校验 JSON 合法性
+				var js json.RawMessage
+				if json.Unmarshal([]byte(value), &js) == nil {
+					cfg.ThinkingMode = value
+				} else {
+					parseErrors = true
+				}
 			} else {
 				cfg.ThinkingMode = "" // 空/无效值表示不发送参数
 			}

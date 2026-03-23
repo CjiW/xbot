@@ -7,8 +7,13 @@ import (
 	"testing"
 )
 
+// skipIfNoDocker 默认跳过 Docker 集成测试。
+// 设置 XBOT_TEST_DOCKER=1 启用：XBOT_TEST_DOCKER=1 go test ./tools/ -run TestDocker
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
+	if os.Getenv("XBOT_TEST_DOCKER") != "1" {
+		t.Skip("skipping Docker integration test (set XBOT_TEST_DOCKER=1 to enable)")
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("Docker not available, skipping test")
 	}

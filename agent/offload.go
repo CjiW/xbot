@@ -145,6 +145,13 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 		return OffloadedResult{}, false
 	}
 
+	// Never offload recall-type tools — their results are already retrieved content
+	// and offloading them would create infinite recursion (offload → recall → offload → ...)
+	switch toolName {
+	case "offload_recall", "recall_masked":
+		return OffloadedResult{}, false
+	}
+
 	// 检查是否超过阈值
 	tokenSize := estimateTokenSize(result, s.config.Model)
 	byteSize := len(result)
@@ -301,8 +308,10 @@ func (s *OffloadStore) persistIndex(sessionDir string, idx *offloadIndex) {
 
 // InvalidateStaleReads checks all Read offloads in a session and marks stale ones.
 // Returns IDs of newly-staled entries (previously not stale).
-// workDir is used to resolve relative paths.
-func (s *OffloadStore) InvalidateStaleReads(sessionKey, workDir string) []string {
+// workspaceRoot is the host-side workspace root (e.g. /data/users/ou_xxx/workspace).
+// sandboxWorkDir is the sandbox-side workspace root (e.g. /workspace).
+// os.ReadFile runs in the xbot host process, so sandbox paths must be converted to host paths.
+func (s *OffloadStore) InvalidateStaleReads(sessionKey, workspaceRoot, sandboxWorkDir string) []string {
 	idx := s.getOrCreateIndex(sessionKey)
 	idx.mu.Lock()
 
@@ -315,13 +324,20 @@ func (s *OffloadStore) InvalidateStaleReads(sessionKey, workDir string) []string
 			continue
 		}
 
-		// Resolve the file path relative to workDir
+		// Resolve ReadPath (which is from LLM's perspective, i.e. sandbox paths) to host path.
 		resolvedPath := e.ReadPath
-		if !filepath.IsAbs(resolvedPath) && workDir != "" {
-			resolvedPath = filepath.Join(workDir, resolvedPath)
+
+		// Convert sandbox absolute path → host path
+		if sandboxWorkDir != "" && workspaceRoot != "" && strings.HasPrefix(resolvedPath, sandboxWorkDir) {
+			resolvedPath = workspaceRoot + resolvedPath[len(sandboxWorkDir):]
 		}
 
-		// Read current file content
+		// Resolve relative paths against workspaceRoot (host)
+		if !filepath.IsAbs(resolvedPath) && workspaceRoot != "" {
+			resolvedPath = filepath.Join(workspaceRoot, resolvedPath)
+		}
+
+		// Read current file content (runs in xbot host process)
 		currentData, err := os.ReadFile(resolvedPath)
 		if err != nil {
 			if os.IsNotExist(err) {

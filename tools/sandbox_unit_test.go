@@ -178,3 +178,131 @@ func TestEditTool_LocalMode(t *testing.T) {
 
 	_ = result // suppress unused warning
 }
+
+// ============================================================================
+// Sandbox CWD 路径解析回归测试
+// LOCKED: 验证 Cd 设置沙箱路径后，Read/Edit/Glob/Grep 正确基于 CWD 解析相对路径。
+// 这组测试锁定 issue d05d3ec 的修复行为：Cd 存储沙箱路径，所有工具直接使用。
+// DO NOT MODIFY without understanding the sandbox CWD convention.
+// ============================================================================
+
+// TestReadTool_SandboxCWD_Regression 验证 Cd 到沙箱子目录后 Read 相对路径正确解析。
+// 背景：Cd 将 CurrentDir 设为沙箱路径（如 /workspace/xbot），Read 必须基于该路径解析
+// 而非回退到 sandboxBase (/workspace)。
+func TestReadTool_SandboxCWD_Regression(t *testing.T) {
+	// 创建模拟工作区：ws/xbot/go.mod
+	ws := t.TempDir()
+	subDir := filepath.Join(ws, "xbot")
+	os.MkdirAll(subDir, 0o755)
+	os.WriteFile(filepath.Join(subDir, "go.mod"), []byte("module xbot"), 0o644)
+
+	ctx := &ToolContext{
+		Ctx:            context.Background(),
+		WorkspaceRoot:  ws,
+		SandboxWorkDir: "/workspace",
+		SandboxEnabled: false, // 本地模式测试路径逻辑
+		CurrentDir:     filepath.Join(ws, "xbot"),
+	}
+
+	tool := &ReadTool{}
+	result, err := tool.Execute(ctx, `{"path": "go.mod"}`)
+	if err != nil {
+		t.Fatalf("Read with CWD failed: %v", err)
+	}
+	if !strings.Contains(result.Summary, "module xbot") {
+		t.Errorf("Read did not resolve relative path from CWD, got: %s", result.Summary)
+	}
+}
+
+// TestReadTool_SandboxCWD_SandboxPath_Regression 验证 CurrentDir 为沙箱路径时
+// executeInSandbox 的相对路径解析。此测试直接调用 resolveSandboxCWD 逻辑。
+func TestReadTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
+	sandboxBase := "/workspace"
+	ctx := &ToolContext{
+		CurrentDir:    "/workspace/xbot",          // Cd 设置的沙箱路径
+		WorkspaceRoot: "/data/users/ou/workspace", // 宿主机路径
+	}
+
+	// 模拟 Read.executeInSandbox 的相对路径解析逻辑
+	filePath := "go.mod"
+	sandboxCWD := resolveSandboxCWD(ctx, sandboxBase)
+	if sandboxCWD == "" {
+		t.Fatal("resolveSandboxCWD returned empty for sandbox CurrentDir")
+	}
+
+	resolved := filepath.Join(sandboxCWD, filePath)
+	expected := "/workspace/xbot/go.mod"
+	if resolved != expected {
+		t.Errorf("sandbox path resolution = %q, want %q", resolved, expected)
+	}
+}
+
+// TestGlobTool_SandboxCWD_Regression 验证 Cd 后 Glob 的搜索目录正确设置。
+func TestGlobTool_SandboxCWD_Regression(t *testing.T) {
+	sandboxBase := "/workspace"
+
+	// 场景 1：CurrentDir 是沙箱路径
+	ctx := &ToolContext{
+		CurrentDir:    "/workspace/xbot",
+		WorkspaceRoot: "/data/users/ou/workspace",
+	}
+	cwd := resolveSandboxCWD(ctx, sandboxBase)
+	if cwd != "/workspace/xbot" {
+		t.Errorf("Glob CWD with sandbox path = %q, want /workspace/xbot", cwd)
+	}
+
+	// 场景 2：CurrentDir 是宿主机路径（兼容旧行为）
+	ctx2 := &ToolContext{
+		CurrentDir:    "/data/users/ou/workspace/src",
+		WorkspaceRoot: "/data/users/ou/workspace",
+	}
+	cwd2 := resolveSandboxCWD(ctx2, sandboxBase)
+	if cwd2 != "/workspace/src" {
+		t.Errorf("Glob CWD with host path = %q, want /workspace/src", cwd2)
+	}
+
+	// 场景 3：无 CurrentDir → 返回空（工具应 fallback 到 sandboxBase）
+	ctx3 := &ToolContext{
+		CurrentDir:    "",
+		WorkspaceRoot: "/data/users/ou/workspace",
+	}
+	cwd3 := resolveSandboxCWD(ctx3, sandboxBase)
+	if cwd3 != "" {
+		t.Errorf("Glob CWD with empty CurrentDir = %q, want empty", cwd3)
+	}
+}
+
+// TestGrepTool_SandboxCWD_Regression 验证 Cd 后 Grep 的搜索目录正确设置。
+func TestGrepTool_SandboxCWD_Regression(t *testing.T) {
+	sandboxBase := "/workspace"
+	ctx := &ToolContext{
+		CurrentDir:    "/workspace/xbot/agent",
+		WorkspaceRoot: "/data/users/ou/workspace",
+	}
+
+	cwd := resolveSandboxCWD(ctx, sandboxBase)
+	if cwd != "/workspace/xbot/agent" {
+		t.Errorf("Grep CWD = %q, want /workspace/xbot/agent", cwd)
+	}
+}
+
+// TestEditTool_SandboxCWD_SandboxPath_Regression 验证 Cd 后 Edit 的路径解析。
+func TestEditTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
+	sandboxBase := "/workspace"
+	ctx := &ToolContext{
+		CurrentDir:    "/workspace/myproject",
+		WorkspaceRoot: "/data/users/ou/workspace",
+	}
+
+	filePath := "src/main.go"
+	sandboxCWD := resolveSandboxCWD(ctx, sandboxBase)
+	if sandboxCWD == "" {
+		t.Fatal("resolveSandboxCWD returned empty")
+	}
+
+	resolved := filepath.Join(sandboxCWD, filePath)
+	expected := "/workspace/myproject/src/main.go"
+	if resolved != expected {
+		t.Errorf("Edit path = %q, want %q", resolved, expected)
+	}
+}

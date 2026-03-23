@@ -196,6 +196,31 @@ func sandboxBaseDir(ctx *ToolContext) string {
 	return "/workspace"
 }
 
+// resolveSandboxCWD 将 CurrentDir 解析为沙箱内的绝对路径。
+// 支持两种格式：
+//   - 沙箱路径（如 /workspace/src）→ 直接返回
+//   - 宿主机路径（如 /data/users/ou_xxx/workspace/src）→ 转换为沙箱路径
+//
+// 返回空字符串表示无法解析（CurrentDir 为空或不在已知根目录下）。
+func resolveSandboxCWD(ctx *ToolContext, sandboxBase string) string {
+	if ctx == nil || ctx.CurrentDir == "" {
+		return ""
+	}
+	if ctx.CurrentDir == sandboxBase || strings.HasPrefix(ctx.CurrentDir, sandboxBase+"/") {
+		return ctx.CurrentDir
+	}
+	if ctx.WorkspaceRoot != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
+		rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+		if err == nil {
+			if rel == "." {
+				return sandboxBase
+			}
+			return filepath.Join(sandboxBase, rel)
+		}
+	}
+	return ""
+}
+
 // shellEscape 对字符串进行 shell 单引号转义，防止命令注入。
 // 将字符串中的单引号替换为 '\”（结束单引号、转义单引号、开始新单引号）。
 func shellEscape(s string) string {

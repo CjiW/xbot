@@ -87,27 +87,17 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 
 	// 将用户输入的路径转换为容器内路径
 	sandboxPath := filePath
-	if !strings.HasPrefix(filePath, sandboxBase+"/") && !strings.HasPrefix(filePath, "/") {
-		// 相对路径，优先使用 CurrentDir（PWD 工具优化）
-		if ctx != nil && ctx.CurrentDir != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
-			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
-			if err == nil {
-				// 从 CurrentDir 解析相对路径
-				sandboxPath = sandboxBase + "/" + filepath.Join(rel, filePath)
-			} else {
-				// fallback 到 sandboxBase
-				sandboxPath = sandboxBase + "/" + filePath
-			}
+	if !strings.HasPrefix(filePath, sandboxBase+"/") && filePath != sandboxBase && !strings.HasPrefix(filePath, "/") {
+		// 相对路径：优先基于 CurrentDir（Cd 后的沙箱路径），否则 sandboxBase
+		if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
+			sandboxPath = filepath.Join(sandboxCWD, filePath)
 		} else {
-			// 相对路径，假设相对于 sandboxBase
 			sandboxPath = sandboxBase + "/" + filePath
 		}
-	} else if strings.HasPrefix(filePath, sandboxBase+"/") {
+	} else if strings.HasPrefix(filePath, sandboxBase+"/") || filePath == sandboxBase {
 		sandboxPath = filePath
 	} else if strings.HasPrefix(filePath, "/") {
-		// 绝对路径，检查是否在 workspace 内
 		if ctx.WorkspaceRoot != "" {
-			// 尝试转换为容器内路径
 			rel, err := filepath.Rel(ctx.WorkspaceRoot, filePath)
 			if err == nil && !strings.HasPrefix(rel, "..") {
 				sandboxPath = sandboxBase + "/" + rel

@@ -482,7 +482,7 @@ func TestInvalidateStaleReads_NoChange(t *testing.T) {
 	}
 
 	// File unchanged → no stale
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 0 {
 		t.Errorf("expected 0 stale IDs, got %v", staleIDs)
 	}
@@ -505,7 +505,7 @@ func TestInvalidateStaleReads_FileModified(t *testing.T) {
 	newContent := strings.Repeat("modified content\n", 500)
 	os.WriteFile(filePath, []byte(newContent), 0o644)
 
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 1 {
 		t.Fatalf("expected 1 stale ID, got %v", staleIDs)
 	}
@@ -530,7 +530,7 @@ func TestInvalidateStaleReads_FileDeleted(t *testing.T) {
 	// Delete the file
 	os.Remove(filePath)
 
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 1 {
 		t.Fatalf("expected 1 stale ID, got %v", staleIDs)
 	}
@@ -555,7 +555,7 @@ func TestInvalidateStaleReads_NonReadTool(t *testing.T) {
 	}
 
 	// Should not be marked stale
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 0 {
 		t.Errorf("expected 0 stale IDs for non-Read tool, got %v", staleIDs)
 	}
@@ -574,7 +574,7 @@ func TestPurgeStaleMessages(t *testing.T) {
 
 	// Modify file to make it stale
 	os.WriteFile(filePath, []byte("modified\n"), 0o644)
-	store.InvalidateStaleReads("stale:test", dir)
+	store.InvalidateStaleReads("stale:test", dir, "")
 
 	// Build messages with a tool message containing the offload marker
 	originalContent := fmt.Sprintf("📂 [offload:%s] Read(...) summary here", offloaded.ID)
@@ -641,13 +641,13 @@ func TestInvalidateStaleReads_AlreadyStale(t *testing.T) {
 
 	// Modify file and invalidate → first time should return the ID
 	os.WriteFile(filePath, []byte("changed\n"), 0o644)
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 1 {
 		t.Fatalf("expected 1 stale ID on first call, got %v", staleIDs)
 	}
 
 	// Second call → already stale, should not return again
-	staleIDs2 := store.InvalidateStaleReads("stale:test", dir)
+	staleIDs2 := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs2) != 0 {
 		t.Errorf("expected 0 stale IDs on second call (already stale), got %v", staleIDs2)
 	}
@@ -669,12 +669,117 @@ func TestInvalidateStaleReads_RelativePath(t *testing.T) {
 	// Modify the file
 	os.WriteFile(filePath, []byte("modified relative\n"), 0o644)
 
-	// Invalidate with workDir = dir should resolve the relative path
-	staleIDs := store.InvalidateStaleReads("stale:test", dir)
+	// Invalidate with workspaceRoot = dir should resolve the relative path
+	staleIDs := store.InvalidateStaleReads("stale:test", dir, "")
 	if len(staleIDs) != 1 {
 		t.Fatalf("expected 1 stale ID with relative path, got %v", staleIDs)
 	}
 	if staleIDs[0] != offloaded.ID {
 		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
+	}
+}
+
+// ============================================================================
+// InvalidateStaleReads sandbox 路径转换回归测试
+// LOCKED: 验证 ReadPath 为沙箱格式时正确转换为宿主机路径做 os.ReadFile。
+// 这是 stale 误报的根因修复：LLM 传沙箱路径，os.ReadFile 需要宿主机路径。
+// DO NOT MODIFY without understanding the sandbox↔host path convention.
+// ============================================================================
+
+func TestInvalidateStaleReads_SandboxPathConversion(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	// 模拟 sandbox 场景：
+	// - workspaceRoot (宿主机) = tmpdir
+	// - sandboxWorkDir = /workspace
+	// - ReadPath 存的是沙箱路径 /workspace/main.go
+	hostDir := t.TempDir()
+	hostFile := filepath.Join(hostDir, "main.go")
+	content := strings.Repeat("package main\n", 500)
+	os.WriteFile(hostFile, []byte(content), 0o644)
+
+	// 用沙箱路径做 ReadPath（模拟 LLM 传入的路径）
+	sandboxPath := "/workspace/main.go"
+	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
+	offloaded, ok := store.MaybeOffload("stale:sandbox", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+	if offloaded.ReadPath != sandboxPath {
+		t.Fatalf("ReadPath = %q, want %q", offloaded.ReadPath, sandboxPath)
+	}
+
+	// 文件未改 → 不应 stale（验证沙箱→宿主机路径转换正确）
+	staleIDs := store.InvalidateStaleReads("stale:sandbox", hostDir, "/workspace")
+	if len(staleIDs) != 0 {
+		t.Errorf("expected 0 stale (file unchanged), got %v", staleIDs)
+	}
+
+	// 修改文件 → 应检测到 stale
+	os.WriteFile(hostFile, []byte("modified\n"), 0o644)
+	staleIDs = store.InvalidateStaleReads("stale:sandbox", hostDir, "/workspace")
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale after modification, got %v", staleIDs)
+	}
+	if staleIDs[0] != offloaded.ID {
+		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
+	}
+}
+
+func TestInvalidateStaleReads_SandboxPathDeleted(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	hostDir := t.TempDir()
+	hostFile := filepath.Join(hostDir, "temp.go")
+	content := strings.Repeat("temp content\n", 500)
+	os.WriteFile(hostFile, []byte(content), 0o644)
+
+	sandboxPath := "/workspace/temp.go"
+	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
+	offloaded, ok := store.MaybeOffload("stale:sandbox-del", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+
+	os.Remove(hostFile)
+
+	staleIDs := store.InvalidateStaleReads("stale:sandbox-del", hostDir, "/workspace")
+	if len(staleIDs) != 1 {
+		t.Fatalf("expected 1 stale after deletion, got %v", staleIDs)
+	}
+	if staleIDs[0] != offloaded.ID {
+		t.Errorf("stale ID = %q, want %q", staleIDs[0], offloaded.ID)
+	}
+}
+
+func TestInvalidateStaleReads_SandboxNestedPath(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	hostDir := t.TempDir()
+	subDir := filepath.Join(hostDir, "agent")
+	os.MkdirAll(subDir, 0o755)
+	hostFile := filepath.Join(subDir, "engine.go")
+	content := strings.Repeat("func Run() {}\n", 500)
+	os.WriteFile(hostFile, []byte(content), 0o644)
+
+	// LLM 传入 /workspace/agent/engine.go
+	sandboxPath := "/workspace/agent/engine.go"
+	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
+	_, ok := store.MaybeOffload("stale:nested", "Read", args, content)
+	if !ok {
+		t.Fatal("expected offload to succeed")
+	}
+
+	// 未修改 → 不 stale
+	staleIDs := store.InvalidateStaleReads("stale:nested", hostDir, "/workspace")
+	if len(staleIDs) != 0 {
+		t.Errorf("expected 0 stale for nested path, got %v", staleIDs)
+	}
+
+	// 修改 → stale
+	os.WriteFile(hostFile, []byte("changed\n"), 0o644)
+	staleIDs = store.InvalidateStaleReads("stale:nested", hostDir, "/workspace")
+	if len(staleIDs) != 1 {
+		t.Errorf("expected 1 stale for nested path, got %v", staleIDs)
 	}
 }

@@ -286,15 +286,8 @@ func (t *GrepTool) executeInSandbox(ctx *ToolContext, pattern, path, include str
 		} else {
 			searchDir = sandboxBase + "/" + path
 		}
-	} else if ctx != nil && ctx.CurrentDir != "" {
-		// 使用 CurrentDir（PWD 工具优化）
-		// CurrentDir 是宿主机路径，需要转换为容器内路径
-		if strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
-			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
-			if err == nil {
-				searchDir = sandboxBase + "/" + rel
-			}
-		}
+	} else if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
+		searchDir = sandboxCWD
 	}
 
 	// 将 Go RE2 pattern 转换为 POSIX ERE pattern（grep -E 兼容）

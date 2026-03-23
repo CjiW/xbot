@@ -8,10 +8,6 @@ import (
 	"xbot/llm"
 )
 
-// DefaultMaxReadLines: no default truncation — offload handles large results.
-// Only applies when the user explicitly passes max_lines > 0.
-const DefaultMaxReadLines = 0
-
 // ReadTool 读取文件工具
 type ReadTool struct{}
 
@@ -23,6 +19,7 @@ func (t *ReadTool) Description() string {
 	return `Read a file and return its content.
 Parameters (JSON):
   - path: string, the file path to read (relative to working directory or absolute)
+  - max_lines: number, maximum lines to return (0 or omit = no limit)
 Example: {"path": "hello.txt"}`
 }
 

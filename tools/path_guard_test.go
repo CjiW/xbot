@@ -232,6 +232,68 @@ func TestSandboxToHostPath_EdgeCases(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// resolveSandboxCWD 回归测试
+// LOCKED: 这些测试锁定 Cd→Read/Edit/Glob/Grep 路径解析的核心行为。
+// 修改前请确保理解 sandbox 路径约定（Cd 存沙箱路径，工具直接使用）。
+// DO NOT MODIFY without understanding the sandbox CWD convention.
+// ============================================================================
+
+func TestResolveSandboxCWD(t *testing.T) {
+	sandboxBase := "/workspace"
+
+	tests := []struct {
+		name string
+		ctx  *ToolContext
+		want string
+	}{
+		{
+			name: "nil ctx returns empty",
+			ctx:  nil,
+			want: "",
+		},
+		{
+			name: "empty CurrentDir returns empty",
+			ctx:  &ToolContext{CurrentDir: "", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "",
+		},
+		{
+			name: "sandbox path passed through directly",
+			ctx:  &ToolContext{CurrentDir: "/workspace/xbot", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "/workspace/xbot",
+		},
+		{
+			name: "sandbox root passed through",
+			ctx:  &ToolContext{CurrentDir: "/workspace", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "/workspace",
+		},
+		{
+			name: "host path converted to sandbox path",
+			ctx:  &ToolContext{CurrentDir: "/data/users/ou_xxx/workspace/src", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "/workspace/src",
+		},
+		{
+			name: "host root converted to sandbox root",
+			ctx:  &ToolContext{CurrentDir: "/data/users/ou_xxx/workspace", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "/workspace",
+		},
+		{
+			name: "unrecognized path returns empty",
+			ctx:  &ToolContext{CurrentDir: "/some/random/path", WorkspaceRoot: "/data/users/ou_xxx/workspace"},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveSandboxCWD(tt.ctx, sandboxBase)
+			if got != tt.want {
+				t.Errorf("resolveSandboxCWD() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSandboxHostPathRoundTrip(t *testing.T) {
 	ctx := &ToolContext{
 		SandboxEnabled: true,

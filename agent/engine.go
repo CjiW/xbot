@@ -932,13 +932,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
 		if cfg.OffloadStore != nil {
-			// Use SandboxWorkDir (container path) for stale detection when sandbox is enabled,
-			// because os.ReadFile runs inside the container where host WorkingDir doesn't exist.
-			staleWorkDir := cfg.WorkingDir
-			if cfg.SandboxEnabled && cfg.SandboxWorkDir != "" {
-				staleWorkDir = cfg.SandboxWorkDir
-			}
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, staleWorkDir)
+			// ReadPath from LLM is in sandbox format (e.g. /workspace/src/main.go).
+			// os.ReadFile runs in xbot host process, so we pass both workspaceRoot and
+			// sandboxWorkDir to convert sandbox→host paths before reading.
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),

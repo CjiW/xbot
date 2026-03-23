@@ -102,8 +102,16 @@ func (a *Agent) SpawnInteractiveSession(
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true)
 
-	// SubAgent 进度上报：通过父 Agent 的消息通道实时反馈给用户
-	if originChannel != "" && originChatID != "" {
+	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
+	// 否则 fallback 到直接发送消息（非并行场景）。
+	if cb, ok := SubAgentProgressFromContext(ctx); ok {
+		rn := roleName
+		cfg.ProgressNotifier = func(lines []string) {
+			if len(lines) > 0 {
+				cb(rn, lines[0])
+			}
+		}
+	} else if originChannel != "" && originChatID != "" {
 		rn := roleName // 闭包捕获
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {

@@ -127,13 +127,8 @@ func (t *GlobTool) executeInSandbox(ctx *ToolContext, pattern, path string) (*To
 		} else {
 			searchDir = sandboxBase + "/" + path
 		}
-	} else if ctx != nil && ctx.CurrentDir != "" {
-		// 使用 CurrentDir（PWD 工具优化）
-		// CurrentDir 是宿主机路径，需要转换为容器内路径
-		if strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
-			rel, _ := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
-			searchDir = sandboxBase + "/" + rel
-		}
+	} else if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
+		searchDir = sandboxCWD
 	}
 
 	// 合并 globToFindArgs 的子目录前缀

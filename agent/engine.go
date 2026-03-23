@@ -932,7 +932,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
 		if cfg.OffloadStore != nil {
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkingDir)
+			// ReadPath from LLM is in sandbox format (e.g. /workspace/src/main.go).
+			// os.ReadFile runs in xbot host process, so we pass both workspaceRoot and
+			// sandboxWorkDir to convert sandbox→host paths before reading.
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),
@@ -1195,7 +1198,16 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		}
 	} else if cfg.InitialCWD != "" {
 		// SubAgent 继承父 Agent 的 CWD（无 session 时使用 InitialCWD）
-		tc.CurrentDir = cfg.InitialCWD
+		// 父 Agent 的 CurrentDir 可能是宿主机路径（如 /data/xbot/users/xxx/workspace/src），
+		// 但在沙箱模式下需要转换为容器内路径（如 /workspace/src），
+		// 否则 Cd tool 的 test -d 会在沙箱容器内找不到目录。
+		cwd := cfg.InitialCWD
+		if cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
+			if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
+				cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
+			}
+		}
+		tc.CurrentDir = cwd
 		// SubAgent 无 session，通过更新 cfg.InitialCWD 使 Cd 在后续 buildToolContext 调用中持久化。
 		// 旧代码只设置 tc.CurrentDir，但 buildToolContext 每次工具调用都会重建 tc，
 		// 导致 Cd 的目录变更丢失。注意：RunConfig 是值类型，闭包捕获的是指针。

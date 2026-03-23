@@ -8,9 +8,9 @@ import (
 	"xbot/llm"
 )
 
-// DefaultMaxReadLines is the default maximum lines returned by the Read tool.
-// Users can override via the max_lines parameter.
-const DefaultMaxReadLines = 500
+// DefaultMaxReadLines: no default truncation — offload handles large results.
+// Only applies when the user explicitly passes max_lines > 0.
+const DefaultMaxReadLines = 0
 
 // ReadTool 读取文件工具
 type ReadTool struct{}
@@ -29,7 +29,7 @@ Example: {"path": "hello.txt"}`
 func (t *ReadTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "path", Type: "string", Description: "The file path to read", Required: true},
-		{Name: "max_lines", Type: "integer", Description: "Maximum lines to return (default 500, 0 = no limit)"},
+		{Name: "max_lines", Type: "integer", Description: "Maximum lines to return (0 or omit = no limit)"},
 	}
 }
 
@@ -64,12 +64,11 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 }
 
 // applyLineLimit truncates the tool result to maxLines lines.
+// Only truncates when maxLines > 0 (explicitly requested by user).
+// Large results without explicit truncation are handled by the offload system.
 func applyLineLimit(result *ToolResult, maxLines int) *ToolResult {
-	if result == nil {
+	if result == nil || maxLines <= 0 {
 		return result
-	}
-	if maxLines <= 0 {
-		maxLines = DefaultMaxReadLines
 	}
 	lines := strings.Split(result.Summary, "\n")
 	if len(lines) <= maxLines {

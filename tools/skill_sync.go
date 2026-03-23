@@ -40,6 +40,13 @@ func EnsureSynced(ctx *ToolContext) {
 	}
 
 	globalSkillSyncer.mu.Lock()
+	// Evict stale entries (older than 24h) to prevent unbounded map growth
+	now := time.Now()
+	for k, v := range globalSkillSyncer.synced {
+		if now.Sub(v) > 24*time.Hour {
+			delete(globalSkillSyncer.synced, k)
+		}
+	}
 	if last, ok := globalSkillSyncer.synced[syncUserID]; ok && time.Since(last) < 5*time.Minute {
 		globalSkillSyncer.mu.Unlock()
 		return

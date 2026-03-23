@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 	"xbot/llm"
 	log "xbot/logger"
 )
@@ -106,6 +107,16 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 // maxDownloadSize is the maximum allowed download size (100MB).
 const maxDownloadSize = 100 * 1024 * 1024
 
+// downloadHTTPClient is a dedicated HTTP client with timeout for file downloads.
+var downloadHTTPClient = &http.Client{
+	Timeout: 60 * time.Second,
+}
+
+// tokenHTTPClient is a dedicated HTTP client with timeout for token requests.
+var tokenHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
+
 // downloadFeishu downloads a file/image from Feishu via Message Resource API.
 func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPath, displayPath string) (*ToolResult, error) {
 	token, err := t.getFeishuTenantToken()
@@ -122,7 +133,7 @@ func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPa
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := downloadHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download request failed: %w", err)
 	}
@@ -176,7 +187,7 @@ func (t *DownloadFileTool) getFeishuTenantToken() (string, error) {
 		"app_secret": appSecret,
 	})
 
-	resp, err := http.Post(
+	resp, err := tokenHTTPClient.Post(
 		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
 		"application/json; charset=utf-8",
 		bytes.NewReader(reqBody),

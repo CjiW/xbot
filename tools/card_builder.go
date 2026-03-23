@@ -11,9 +11,13 @@ import (
 
 // CardBuilder manages card building sessions. Singleton shared across all tools.
 type CardBuilder struct {
-	mu           sync.RWMutex
-	sessions     map[string]*CardSession
-	counter      atomic.Int64
+	mu       sync.RWMutex
+	sessions map[string]*CardSession
+	counter  atomic.Int64
+
+	// TODO(sync.Map-cleanup): 以下 sync.Map（descriptions, expectedInteractions, elementOptions）
+	// 主要在 RemoveSession 时清理，但 activeCards（chat_id -> card_id）无法自动清理。
+	// 长期方案：替换为带 TTL 的 LRU cache（如 github.com/hashicorp/golang-lru/v2/expirable），
 	descriptions sync.Map // card_id -> description string (persists after session removal for callback context)
 
 	// expectedInteractions stores which interaction types a card expects (persists after session removal)
@@ -85,11 +89,15 @@ func (b *CardBuilder) GetSession(id string) (*CardSession, bool) {
 	return s, ok
 }
 
-// RemoveSession removes a session.
+// RemoveSession removes a session and cleans up associated sync.Map entries.
 func (b *CardBuilder) RemoveSession(id string) {
 	b.mu.Lock()
 	delete(b.sessions, id)
 	b.mu.Unlock()
+	// Clean up associated sync.Map entries to mitigate memory growth.
+	b.descriptions.Delete(id)
+	b.expectedInteractions.Delete(id)
+	b.elementOptions.Delete(id)
 }
 
 // ActiveCount returns number of active sessions.

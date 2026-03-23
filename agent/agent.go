@@ -1896,7 +1896,13 @@ func formatToolProgress(name string, args string) string {
 	case "Cron":
 		summary = fmt.Sprintf("Cron: %s", get(m, "action"))
 	case "SubAgent":
-		summary = fmt.Sprintf("SubAgent: %s", get(m, "task"))
+		role := get(m, "role")
+		task := get(m, "task")
+		if role != "" {
+			summary = truncate(fmt.Sprintf("SubAgent [%s]: %s", role, task), maxLen)
+		} else {
+			summary = fmt.Sprintf("SubAgent: %s", task)
+		}
 	case "DownloadFile":
 		summary = fmt.Sprintf("DownloadFile: %s", get(m, "output_path"))
 	case "ChatHistory":

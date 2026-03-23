@@ -764,8 +764,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 的写入均按 entry.index 隔离到不同的 slice 元素，Go 中对不同 index 的并发写是安全的。
 
 		// executeSubAgentOps 并发执行 SubAgent tool calls，受可选的 SubAgentSem 约束。
+		// 每个子 Agent 完成后立即更新进度 patch，而非等全部完成。
 		executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func() func(), doAutoNotify bool, np func(string)) {
 			var wg sync.WaitGroup
+			var mu sync.Mutex // 保护 np 调用的串行化（patch 同一条消息）
 			for _, entry := range ops {
 				wg.Add(1)
 				go func(e toolCallEntry) {
@@ -778,12 +780,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					if release != nil {
 						release()
 					}
+					// 每个 SubAgent 完成后立即 patch 进度
+					if doAutoNotify {
+						mu.Lock()
+						np("")
+						mu.Unlock()
+					}
 				}(entry)
 			}
 			wg.Wait()
-			if doAutoNotify {
-				np("")
-			}
 		}
 
 		execOne := func(entry toolCallEntry) {

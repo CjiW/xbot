@@ -95,7 +95,6 @@ func parseSetLLMArgs(args string) []string {
 	return parts
 }
 
-
 func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	// Security: warn in group chat to avoid exposing API key
 	if msg.ChatType == "group" {

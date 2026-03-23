@@ -273,6 +273,12 @@ func main() {
 			LLMSetMaxContext: func(senderID string, maxContext int) error {
 				return agentLoop.SetUserMaxContext(senderID, maxContext)
 			},
+			LLMGetThinkingMode: func(senderID string) string {
+				return agentLoop.GetUserThinkingMode(senderID)
+			},
+			LLMSetThinkingMode: func(senderID string, mode string) error {
+				return agentLoop.SetUserThinkingMode(senderID, mode)
+			},
 			ContextModeGet: func() string {
 				return agentLoop.GetContextMode()
 			},

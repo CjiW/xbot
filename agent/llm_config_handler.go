@@ -239,6 +239,35 @@ func (a *Agent) SetUserMaxContext(senderID string, maxContext int) error {
 	return nil
 }
 
+// GetUserThinkingMode returns the user's thinking_mode setting ("" = auto).
+func (a *Agent) GetUserThinkingMode(senderID string) string {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.ThinkingMode
+}
+
+// SetUserThinkingMode updates the user's thinking_mode setting and invalidates cached LLM client.
+func (a *Agent) SetUserThinkingMode(senderID string, mode string) error {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil {
+		return fmt.Errorf("get config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("当前未配置自定义 LLM，请先通过 /set-llm 设置")
+	}
+	if mode == "auto" {
+		mode = ""
+	}
+	cfg.ThinkingMode = mode
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	a.llmFactory.Invalidate(senderID)
+	return nil
+}
+
 // maskAPIKey masks API key, showing only first 4 characters
 func maskAPIKey(key string) string {
 	if len(key) <= 4 {

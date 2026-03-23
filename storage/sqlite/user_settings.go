@@ -17,6 +17,9 @@ func NewUserSettingsService(db *DB) *UserSettingsService {
 
 // Get retrieves all settings for a given channel and sender.
 func (s *UserSettingsService) Get(channel, senderID string) (map[string]string, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("user settings store: database not initialized")
+	}
 	rows, err := s.db.Conn().Query(
 		"SELECT key, value FROM user_settings WHERE channel = ? AND sender_id = ?",
 		channel, senderID,
@@ -39,6 +42,9 @@ func (s *UserSettingsService) Get(channel, senderID string) (map[string]string, 
 
 // Set creates or updates a single setting.
 func (s *UserSettingsService) Set(channel, senderID, key, value string) error {
+	if s.db == nil {
+		return fmt.Errorf("user settings store: database not initialized")
+	}
 	now := time.Now().UnixMilli()
 	_, err := s.db.Conn().Exec(
 		`INSERT INTO user_settings (channel, sender_id, key, value, updated_at)
@@ -54,6 +60,9 @@ func (s *UserSettingsService) Set(channel, senderID, key, value string) error {
 
 // Delete removes a single setting.
 func (s *UserSettingsService) Delete(channel, senderID, key string) error {
+	if s.db == nil {
+		return fmt.Errorf("user settings store: database not initialized")
+	}
 	_, err := s.db.Conn().Exec(
 		"DELETE FROM user_settings WHERE channel = ? AND sender_id = ? AND key = ?",
 		channel, senderID, key,

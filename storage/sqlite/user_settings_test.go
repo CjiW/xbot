@@ -100,3 +100,26 @@ func TestUserSettingsDifferentSenders(t *testing.T) {
 		t.Errorf("settings should be per-user: user1=%q user2=%q", s1["style"], s2["style"])
 	}
 }
+func TestUserSettingsNilDB(t *testing.T) {
+	// Regression test: UserSettingsService with nil DB should return error, not panic.
+	// This can happen if the service is created before DB is initialized (e.g. SubAgent path).
+	svc := &UserSettingsService{db: nil}
+
+	// Get should return error, not panic
+	_, err := svc.Get("feishu", "user1")
+	if err == nil {
+		t.Fatal("expected error from Get with nil db")
+	}
+
+	// Set should return error, not panic
+	err = svc.Set("feishu", "user1", "key", "value")
+	if err == nil {
+		t.Fatal("expected error from Set with nil db")
+	}
+
+	// Delete should return error, not panic
+	err = svc.Delete("feishu", "user1", "key")
+	if err == nil {
+		t.Fatal("expected error from Delete with nil db")
+	}
+}

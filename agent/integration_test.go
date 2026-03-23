@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -493,6 +494,15 @@ func TestIntegration_Offload_RecallAfterOffload(t *testing.T) {
 // Context Edit Integration Tests
 // ============================================================================
 
+// parseToolArgs parses JSON tool call arguments into a map.
+func parseToolArgs(args string) map[string]interface{} {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return map[string]interface{}{}
+	}
+	return m
+}
+
 func TestIntegration_ContextEdit_ListMessages(t *testing.T) {
 	env := newIntegrationTestEnv(t)
 	editStore := NewContextEditStore(100)
@@ -525,26 +535,12 @@ func TestIntegration_ContextEdit_ListMessages(t *testing.T) {
 	cfg.ContextEditor = editor
 	cfg.ToolExecutor = func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		if tc.Name == "context_edit" {
-			var params map[string]interface{}
-			// Parse action from arguments
-			action := "list"
-			if strings.Contains(tc.Arguments, `"action"`) {
-				// Simple JSON parse for action field
-				parts := strings.Split(tc.Arguments, `"action"`)
-				if len(parts) > 1 {
-					valPart := parts[1]
-					// Extract value between quotes
-					start := strings.Index(valPart, `"`)
-					if start >= 0 {
-						end := strings.Index(valPart[start+1:], `"`)
-						if end >= 0 {
-							action = valPart[start+1 : start+1+end]
-						}
-					}
-				}
+			args := parseToolArgs(tc.Arguments)
+			action, _ := args["action"].(string)
+			if action == "" {
+				action = "list" // default
 			}
-			params = map[string]interface{}{"action": action}
-			result, err := editor.HandleRequest(action, params)
+			result, err := editor.HandleRequest(action, args)
 			if err != nil {
 				return tools.NewResult(fmt.Sprintf("error: %v", err)), nil
 			}
@@ -594,35 +590,12 @@ func TestIntegration_ContextEdit_DeleteMessage(t *testing.T) {
 	cfg.ContextEditor = editor
 	cfg.ToolExecutor = func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		if tc.Name == "context_edit" {
-			var params map[string]interface{}
-			// Extract action and message_idx from JSON args
-			action := "delete"
-			msgIdx := 0
-			if strings.Contains(tc.Arguments, `"action"`) {
-				parts := strings.Split(tc.Arguments, `"action"`)
-				if len(parts) > 1 {
-					valPart := parts[1]
-					start := strings.Index(valPart, `"`)
-					if start >= 0 {
-						end := strings.Index(valPart[start+1:], `"`)
-						if end >= 0 {
-							action = valPart[start+1 : start+1+end]
-						}
-					}
-				}
+			args := parseToolArgs(tc.Arguments)
+			action, _ := args["action"].(string)
+			if action == "" {
+				action = "delete" // default
 			}
-			if strings.Contains(tc.Arguments, `"message_idx"`) {
-				parts := strings.Split(tc.Arguments, `"message_idx"`)
-				if len(parts) > 1 {
-					// Find the number after :
-					numStr := strings.TrimSpace(parts[1])
-					numStr = strings.TrimPrefix(numStr, ":")
-					numStr = strings.TrimSpace(numStr)
-					fmt.Sscanf(numStr, "%d", &msgIdx)
-				}
-			}
-			params = map[string]interface{}{"action": action, "message_idx": float64(msgIdx)}
-			result, err := editor.HandleRequest(action, params)
+			result, err := editor.HandleRequest(action, args)
 			if err != nil {
 				return tools.NewResult(fmt.Sprintf("error: %v", err)), nil
 			}
@@ -686,37 +659,12 @@ func TestIntegration_ContextEdit_TruncateMessage(t *testing.T) {
 	cfg.ContextEditor = editor
 	cfg.ToolExecutor = func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		if tc.Name == "context_edit" {
-			action := "truncate"
-			msgIdx := 1
-			maxChars := 200
-			if strings.Contains(tc.Arguments, `"action"`) {
-				parts := strings.Split(tc.Arguments, `"action"`)
-				if len(parts) > 1 {
-					valPart := parts[1]
-					start := strings.Index(valPart, `"`)
-					if start >= 0 {
-						end := strings.Index(valPart[start+1:], `"`)
-						if end >= 0 {
-							action = valPart[start+1 : start+1+end]
-						}
-					}
-				}
+			args := parseToolArgs(tc.Arguments)
+			action, _ := args["action"].(string)
+			if action == "" {
+				action = "truncate" // default
 			}
-			if strings.Contains(tc.Arguments, `"max_chars"`) {
-				parts := strings.Split(tc.Arguments, `"max_chars"`)
-				if len(parts) > 1 {
-					numStr := strings.TrimSpace(parts[1])
-					numStr = strings.TrimPrefix(numStr, ":")
-					numStr = strings.TrimSpace(numStr)
-					fmt.Sscanf(numStr, "%d", &maxChars)
-				}
-			}
-			params := map[string]interface{}{
-				"action":      action,
-				"message_idx": float64(msgIdx),
-				"max_chars":   float64(maxChars),
-			}
-			result, err := editor.HandleRequest(action, params)
+			result, err := editor.HandleRequest(action, args)
 			if err != nil {
 				return tools.NewResult(fmt.Sprintf("error: %v", err)), nil
 			}
@@ -778,46 +726,12 @@ func TestIntegration_ContextEdit_ReplaceMessage(t *testing.T) {
 	cfg.ContextEditor = editor
 	cfg.ToolExecutor = func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		if tc.Name == "context_edit" {
-			action := "replace"
-			msgIdx := 1
-			oldText := "brown fox"
-			newText := "red cat"
-
-			// Simple JSON field extraction
-			if strings.Contains(tc.Arguments, `"old_text"`) {
-				parts := strings.Split(tc.Arguments, `"old_text"`)
-				if len(parts) > 1 {
-					valPart := parts[1]
-					start := strings.Index(valPart, `"`)
-					if start >= 0 {
-						end := strings.Index(valPart[start+1:], `"`)
-						if end >= 0 {
-							oldText = valPart[start+1 : start+1+end]
-						}
-					}
-				}
+			args := parseToolArgs(tc.Arguments)
+			action, _ := args["action"].(string)
+			if action == "" {
+				action = "replace" // default
 			}
-			if strings.Contains(tc.Arguments, `"new_text"`) {
-				parts := strings.Split(tc.Arguments, `"new_text"`)
-				if len(parts) > 1 {
-					valPart := parts[1]
-					start := strings.Index(valPart, `"`)
-					if start >= 0 {
-						end := strings.Index(valPart[start+1:], `"`)
-						if end >= 0 {
-							newText = valPart[start+1 : start+1+end]
-						}
-					}
-				}
-			}
-
-			params := map[string]interface{}{
-				"action":      action,
-				"message_idx": float64(msgIdx),
-				"old_text":    oldText,
-				"new_text":    newText,
-			}
-			result, err := editor.HandleRequest(action, params)
+			result, err := editor.HandleRequest(action, args)
 			if err != nil {
 				return tools.NewResult(fmt.Sprintf("error: %v", err)), nil
 			}

@@ -344,6 +344,9 @@ func (a *Agent) buildSubAgentRunConfig(
 		LLMTimeout:    a.subAgentLLMTimeout,
 		ToolTimeout:   2 * time.Minute,
 
+		// LLM 并发限流：继承父 Agent 的 per-tenant 信号量
+		LLMSemAcquire: a.llmFactory.LLMSemAcquireForUser(originUserID),
+
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
 	}
 

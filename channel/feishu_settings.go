@@ -154,6 +154,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if err != nil {
 			return nil, fmt.Errorf("invalid conc: %v", err)
 		}
+		if conc < 1 || conc > 20 {
+			return nil, fmt.Errorf("concurrency must be between 1 and 20, got %d", conc)
+		}
 		if f.settingsCallbacks.LLMSetConcurrency != nil {
 			// Read current values, only update the target field
 			curGlobal, curPersonal := 5, 3

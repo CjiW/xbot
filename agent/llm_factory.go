@@ -250,15 +250,14 @@ func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func() func() {
 // SubAgentSemAcquireForUser returns a SubAgentSem callback for the given user.
 // SubAgent concurrency is bounded by a separate semaphore (llmKey="subagent").
 // Returns nil if no semaphore manager is configured.
-func (f *LLMFactory) SubAgentSemAcquireForUser(senderID string) func() (acquire func(), release func()) {
+func (f *LLMFactory) SubAgentSemAcquireForUser(senderID string) func() func() {
 	if f.llmSemManager == nil {
 		return nil
 	}
-	return func() (func(), func()) {
+	return func() func() {
 		// Default max concurrent SubAgents: 3
 		cap := parseOrDefault(f.getSetting(senderID, "subagent_max_concurrent"), 3)
-		release := f.llmSemManager.Acquire(context.Background(), senderID, "subagent", func() int { return cap })
-		return func() {}, release
+		return f.llmSemManager.Acquire(context.Background(), senderID, "subagent", func() int { return cap })
 	}
 }
 

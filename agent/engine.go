@@ -149,10 +149,10 @@ type RunConfig struct {
 	// bounded by SubAgentSem. Default false (backward compatible: sequential).
 	EnableConcurrentSubAgents bool
 
-	// SubAgentSem is a per-tenant semaphore for limiting concurrent SubAgent executions.
+	// SubAgentSem acquires a per-tenant semaphore slot for SubAgent execution.
+	// It blocks until a slot is available and returns a release function.
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
-	// Returns (acquire, release) functions.
-	SubAgentSem func() (acquire func(), release func())
+	SubAgentSem func() func()
 }
 
 // TodoManagerProvider 提供 TODO 状态查询
@@ -564,17 +564,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			llmCtx, llmCancel = retryNotifyCtx, func() {}
 		}
 
+		// Acquire per-tenant LLM concurrency slot (if configured)
+		var releaseLLMSem func()
+		if cfg.LLMSemAcquire != nil {
+			releaseLLMSem = cfg.LLMSemAcquire()
+		}
+
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 
-		// Acquire per-tenant LLM concurrency slot (if configured)		var releaseLLMSem func()		if cfg.LLMSemAcquire != nil {			releaseLLMSem = cfg.LLMSemAcquire()		}
+		// Release LLM concurrency slot (unconditionally, even on error)
+		if releaseLLMSem != nil {
+			releaseLLMSem()
+		}
+
 		llmCancel()
 
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
 		if response != nil {
 			localInputTokens += int(response.Usage.PromptTokens)
-
-			// Release LLM concurrency slot		if releaseLLMSem != nil {			releaseLLMSem()		}
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}
 
@@ -737,28 +745,24 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			}
 		}
 
-		// execOne 执行单个工具并记录结果
+		// execOne 执行单个工具并记录结果。
+		// 并发安全说明：execResults、progressLines、structuredProgress.ActiveTools
+		// 的写入均按 entry.index 隔离到不同的 slice 元素，Go 中对不同 index 的并发写是安全的。
 
 		// executeSubAgentOps 并发执行 SubAgent tool calls，受可选的 SubAgentSem 约束。
-		executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func() (func(), func()), doAutoNotify bool, np func(string)) {
-			const maxParallelSubAgents = 8
+		executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func() func(), doAutoNotify bool, np func(string)) {
 			var wg sync.WaitGroup
-			sem := make(chan struct{}, maxParallelSubAgents)
 			for _, entry := range ops {
 				wg.Add(1)
-				sem <- struct{}{}
 				go func(e toolCallEntry) {
 					defer wg.Done()
-					defer func() { <-sem }()
-					var releaseSem func()
+					var release func()
 					if subAgentSem != nil {
-						acquire, release := subAgentSem()
-						acquire()
-						releaseSem = release
+						release = subAgentSem()
 					}
 					execFn(e)
-					if releaseSem != nil {
-						releaseSem()
+					if release != nil {
+						release()
 					}
 				}(entry)
 			}

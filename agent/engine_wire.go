@@ -28,6 +28,13 @@ func (a *Agent) buildBaseRunConfig(
 
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(senderID)
 
+	// 根据 sandboxMode 决定沙箱配置，none 模式下使用实际路径
+	sandboxEnabled := a.sandboxMode == "docker"
+	sandboxWorkDir := "/workspace"
+	if !sandboxEnabled {
+		sandboxWorkDir = tools.UserWorkspaceRoot(a.workDir, senderID)
+	}
+
 	return RunConfig{
 		// 必需
 		LLMClient:    llmClient,
@@ -47,15 +54,15 @@ func (a *Agent) buildBaseRunConfig(
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   sandboxWorkDir,
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		SandboxEnabled:   sandboxEnabled,
+		PreferredSandbox: a.sandboxMode,
 
 		// 循环控制
 		MaxIterations: a.maxIterations,
@@ -222,6 +229,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	// 构建 SubAgent 的 system prompt：通用模板 + 角色专有能力描述
+	// none 模式下 SandboxWorkDir 等于实际路径，docker 模式下为 /workspace
 	workDir := parentCtx.SandboxWorkDir
 	if workDir == "" {
 		workDir = parentCtx.WorkspaceRoot
@@ -304,7 +312,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
 		WorkspaceRoot:    parentCtx.WorkspaceRoot,
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   parentCtx.SandboxWorkDir,
 		ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
 		SkillsDirs:       parentCtx.SkillsDirs,
 		AgentsDir:        parentCtx.AgentsDir,
@@ -420,6 +428,14 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
 	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+
+	// 根据 sandboxMode 决定沙箱配置
+	sandboxEnabled := a.sandboxMode == "docker"
+	sandboxWorkDir := "/workspace"
+	if !sandboxEnabled {
+		sandboxWorkDir = wsRoot
+	}
+
 	cfg := &RunConfig{
 		AgentID:      "main",
 		Channel:      channel,
@@ -431,15 +447,15 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    wsRoot,
-		SandboxWorkDir:   "/workspace",
+		SandboxWorkDir:   sandboxWorkDir,
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   true,
-		PreferredSandbox: "docker",
+		SandboxEnabled:   sandboxEnabled,
+		PreferredSandbox: a.sandboxMode,
 
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,

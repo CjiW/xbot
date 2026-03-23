@@ -298,19 +298,26 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
 	_ = os.MkdirAll(workspaceRoot, 0o755)
 
+	// 根据 sandboxMode 决定沙箱配置
+	sandboxEnabled := a.sandboxMode == "docker"
+	sandboxWorkDir := "/workspace"
+	if !sandboxEnabled {
+		sandboxWorkDir = workspaceRoot
+	}
+
 	return &tools.ToolContext{
 		Ctx:                 ctx,
 		WorkingDir:          a.workDir,
 		WorkspaceRoot:       workspaceRoot,
-		SandboxWorkDir:      "/workspace",
+		SandboxWorkDir:      sandboxWorkDir,
 		ReadOnlyRoots:       a.globalSkillDirs,
 		SkillsDirs:          a.globalSkillDirs,
 		AgentsDir:           a.agentsDir,
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:             a.workDir,
-		SandboxEnabled:      true,
-		PreferredSandbox:    "docker",
+		SandboxEnabled:      sandboxEnabled,
+		PreferredSandbox:    a.sandboxMode,
 		AgentID:             msg.ParentAgentID,
 		Channel:             channel,
 		ChatID:              chatID,

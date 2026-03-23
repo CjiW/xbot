@@ -140,7 +140,9 @@ func estimateTokenSize(text string, model string) int {
 // MaybeOffload 检测 tool result 是否超过阈值，超过则 offload 到磁盘。
 // 返回 (OffloadedResult, true) 表示已 offload，content 应替换为 result.Summary。
 // 返回 (zero, false) 表示无需 offload。
-func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (OffloadedResult, bool) {
+// workspaceRoot/sandboxWorkDir 用于 Read 工具：将 ReadPath 解析为宿主机路径后
+// 读取原始文件内容计算 ContentHash，确保与 InvalidateStaleReads 的比较一致。
+func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result, workspaceRoot, sandboxWorkDir string) (OffloadedResult, bool) {
 	if result == "" {
 		return OffloadedResult{}, false
 	}
@@ -203,11 +205,16 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result string) (
 		Summary:   summaryContent,
 	}
 
-	// For Read tool: compute content hash and extract resolved file path
+	// For Read tool: resolve path to host filesystem and hash the raw file content.
+	// This ensures ContentHash matches what InvalidateStaleReads computes,
+	// avoiding false stale when the tool result is truncated by applyLineLimit.
 	if toolName == "Read" {
-		entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(result)))
 		if readPath := extractJSONStringField(args, "path"); readPath != "" {
 			entry.ReadPath = readPath
+			hostPath := resolveReadPathToHost(readPath, workspaceRoot, sandboxWorkDir)
+			if rawData, err := os.ReadFile(hostPath); err == nil {
+				entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256(rawData))
+			}
 		}
 	}
 
@@ -306,6 +313,19 @@ func (s *OffloadStore) persistIndex(sessionDir string, idx *offloadIndex) {
 	}
 }
 
+// resolveReadPathToHost converts a ReadPath (from LLM args, either sandbox absolute
+// or relative) to a host filesystem path so os.ReadFile can access it.
+func resolveReadPathToHost(readPath, workspaceRoot, sandboxWorkDir string) string {
+	resolved := readPath
+	if sandboxWorkDir != "" && workspaceRoot != "" && strings.HasPrefix(resolved, sandboxWorkDir) {
+		resolved = workspaceRoot + resolved[len(sandboxWorkDir):]
+	}
+	if !filepath.IsAbs(resolved) && workspaceRoot != "" {
+		resolved = filepath.Join(workspaceRoot, resolved)
+	}
+	return resolved
+}
+
 // InvalidateStaleReads checks all Read offloads in a session and marks stale ones.
 // Returns IDs of newly-staled entries (previously not stale).
 // workspaceRoot is the host-side workspace root (e.g. /data/users/ou_xxx/workspace).
@@ -324,32 +344,18 @@ func (s *OffloadStore) InvalidateStaleReads(sessionKey, workspaceRoot, sandboxWo
 			continue
 		}
 
-		// Resolve ReadPath (which is from LLM's perspective, i.e. sandbox paths) to host path.
-		resolvedPath := e.ReadPath
-
-		// Convert sandbox absolute path → host path
-		if sandboxWorkDir != "" && workspaceRoot != "" && strings.HasPrefix(resolvedPath, sandboxWorkDir) {
-			resolvedPath = workspaceRoot + resolvedPath[len(sandboxWorkDir):]
-		}
-
-		// Resolve relative paths against workspaceRoot (host)
-		if !filepath.IsAbs(resolvedPath) && workspaceRoot != "" {
-			resolvedPath = filepath.Join(workspaceRoot, resolvedPath)
-		}
+		resolvedPath := resolveReadPathToHost(e.ReadPath, workspaceRoot, sandboxWorkDir)
 
 		// Read current file content (runs in xbot host process)
 		currentData, err := os.ReadFile(resolvedPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// File deleted → stale
 				e.Stale = true
 				newlyStale = append(newlyStale, e.ID)
 			}
-			// Other read errors → skip (don't mark as stale)
 			continue
 		}
 
-		// Compare hash
 		currentHash := fmt.Sprintf("%x", sha256.Sum256(currentData))
 		if currentHash != e.ContentHash {
 			e.Stale = true

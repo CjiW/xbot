@@ -38,7 +38,7 @@ func TestMaybeOffload_SmallResult(t *testing.T) {
 	})
 
 	smallResult := strings.Repeat("hello", 100) // ~500 bytes, well under threshold
-	_, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"file.go"}`, smallResult)
+	_, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"file.go"}`, smallResult, "", "")
 	if wasOffloaded {
 		t.Error("small result should not be offloaded")
 	}
@@ -53,7 +53,7 @@ func TestMaybeOffload_LargeResult(t *testing.T) {
 	})
 
 	largeResult := strings.Repeat("a", 10000)
-	offloaded, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"bigfile.go"}`, largeResult)
+	offloaded, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"bigfile.go"}`, largeResult, "", "")
 	if !wasOffloaded {
 		t.Fatal("large result should be offloaded")
 	}
@@ -78,7 +78,7 @@ func TestMaybeOffload_EmptyResult(t *testing.T) {
 	dir := t.TempDir()
 	store := NewOffloadStore(OffloadConfig{StoreDir: dir})
 
-	_, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"file.go"}`, "")
+	_, wasOffloaded := store.MaybeOffload("test:session", "Read", `{"path":"file.go"}`, "", "", "")
 	if wasOffloaded {
 		t.Error("empty result should not be offloaded")
 	}
@@ -93,7 +93,7 @@ func TestRecall(t *testing.T) {
 	})
 
 	originalContent := "this is the original large content: " + strings.Repeat("x", 5000)
-	offloaded, wasOffloaded := store.MaybeOffload("test:session", "Shell", `{"command":"ls -la"}`, originalContent)
+	offloaded, wasOffloaded := store.MaybeOffload("test:session", "Shell", `{"command":"ls -la"}`, originalContent, "", "")
 	if !wasOffloaded {
 		t.Fatal("should be offloaded")
 	}
@@ -126,7 +126,7 @@ func TestRecall_WrongSession(t *testing.T) {
 	})
 
 	originalContent := strings.Repeat("y", 5000)
-	offloaded, _ := store.MaybeOffload("session1", "Read", `{"path":"a.go"}`, originalContent)
+	offloaded, _ := store.MaybeOffload("session1", "Read", `{"path":"a.go"}`, originalContent, "", "")
 
 	// Try to recall from a different session — should fail.
 	// Cross-session search was removed for security: no user should be able to
@@ -145,7 +145,7 @@ func TestCleanSession(t *testing.T) {
 		MaxResultBytes:  10240,
 	})
 
-	offloaded, _ := store.MaybeOffload("test:clean", "Read", `{"path":"file.go"}`, strings.Repeat("z", 5000))
+	offloaded, _ := store.MaybeOffload("test:clean", "Read", `{"path":"file.go"}`, strings.Repeat("z", 5000), "", "")
 	sessionDir := store.getSessionDir("test:clean")
 
 	// Verify files exist
@@ -347,8 +347,8 @@ func TestOffloadStore_PersistAndLoadIndex(t *testing.T) {
 	})
 
 	// Create multiple offloads
-	offloaded1, _ := store.MaybeOffload("test:index", "Read", `{"path":"a.go"}`, strings.Repeat("a", 5000))
-	offloaded2, _ := store.MaybeOffload("test:index", "Shell", `{"command":"ls"}`, strings.Repeat("b", 5000))
+	offloaded1, _ := store.MaybeOffload("test:index", "Read", `{"path":"a.go"}`, strings.Repeat("a", 5000), "", "")
+	offloaded2, _ := store.MaybeOffload("test:index", "Shell", `{"command":"ls"}`, strings.Repeat("b", 5000), "", "")
 
 	// Verify index file exists and contains both entries
 	sessionDir := store.getSessionDir("test:index")
@@ -470,7 +470,7 @@ func TestInvalidateStaleReads_NoChange(t *testing.T) {
 	os.WriteFile(filePath, []byte(content), 0o644)
 
 	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
-	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content, "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -496,7 +496,7 @@ func TestInvalidateStaleReads_FileModified(t *testing.T) {
 	os.WriteFile(filePath, []byte(content), 0o644)
 
 	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
-	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content, "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -522,7 +522,7 @@ func TestInvalidateStaleReads_FileDeleted(t *testing.T) {
 	os.WriteFile(filePath, []byte(content), 0o644)
 
 	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
-	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content)
+	offloaded, ok := store.MaybeOffload("stale:test", "Read", args, content, "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -544,7 +544,7 @@ func TestInvalidateStaleReads_NonReadTool(t *testing.T) {
 
 	// Create a Shell offload (no ContentHash/ReadPath)
 	shellContent := strings.Repeat("shell output\n", 500)
-	offloaded, ok := store.MaybeOffload("stale:test", "Shell", `{}`, shellContent)
+	offloaded, ok := store.MaybeOffload("stale:test", "Shell", `{}`, shellContent, "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -570,7 +570,7 @@ func TestPurgeStaleMessages(t *testing.T) {
 	os.WriteFile(filePath, []byte(content), 0o644)
 
 	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
-	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content)
+	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content, "", "")
 
 	// Modify file to make it stale
 	os.WriteFile(filePath, []byte("modified\n"), 0o644)
@@ -637,7 +637,7 @@ func TestInvalidateStaleReads_AlreadyStale(t *testing.T) {
 	os.WriteFile(filePath, []byte(content), 0o644)
 
 	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
-	_, _ = store.MaybeOffload("stale:test", "Read", args, content)
+	_, _ = store.MaybeOffload("stale:test", "Read", args, content, "", "")
 
 	// Modify file and invalidate → first time should return the ID
 	os.WriteFile(filePath, []byte("changed\n"), 0o644)
@@ -664,7 +664,7 @@ func TestInvalidateStaleReads_RelativePath(t *testing.T) {
 	// Use relative path in args
 	relPath := "relfile.go"
 	args := fmt.Sprintf(`{"path":"%s"}`, relPath)
-	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content)
+	offloaded, _ := store.MaybeOffload("stale:test", "Read", args, content, dir, "")
 
 	// Modify the file
 	os.WriteFile(filePath, []byte("modified relative\n"), 0o644)
@@ -701,7 +701,7 @@ func TestInvalidateStaleReads_SandboxPathConversion(t *testing.T) {
 	// 用沙箱路径做 ReadPath（模拟 LLM 传入的路径）
 	sandboxPath := "/workspace/main.go"
 	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
-	offloaded, ok := store.MaybeOffload("stale:sandbox", "Read", args, content)
+	offloaded, ok := store.MaybeOffload("stale:sandbox", "Read", args, content, hostDir, "/workspace")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -736,7 +736,7 @@ func TestInvalidateStaleReads_SandboxPathDeleted(t *testing.T) {
 
 	sandboxPath := "/workspace/temp.go"
 	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
-	offloaded, ok := store.MaybeOffload("stale:sandbox-del", "Read", args, content)
+	offloaded, ok := store.MaybeOffload("stale:sandbox-del", "Read", args, content, hostDir, "/workspace")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}
@@ -765,7 +765,7 @@ func TestInvalidateStaleReads_SandboxNestedPath(t *testing.T) {
 	// LLM 传入 /workspace/agent/engine.go
 	sandboxPath := "/workspace/agent/engine.go"
 	args := fmt.Sprintf(`{"path":"%s"}`, sandboxPath)
-	_, ok := store.MaybeOffload("stale:nested", "Read", args, content)
+	_, ok := store.MaybeOffload("stale:nested", "Read", args, content, hostDir, "/workspace")
 	if !ok {
 		t.Fatal("expected offload to succeed")
 	}

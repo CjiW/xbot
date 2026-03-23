@@ -89,7 +89,8 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 	sandboxPath := filePath
 	if !strings.HasPrefix(filePath, sandboxBase+"/") && filePath != sandboxBase && !strings.HasPrefix(filePath, "/") {
 		// 相对路径：优先基于 CurrentDir（Cd 后的沙箱路径），否则 sandboxBase
-		if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
+		sandboxCWD := resolveSandboxCWD(ctx, sandboxBase)
+		if sandboxCWD != "" {
 			sandboxPath = filepath.Join(sandboxCWD, filePath)
 		} else {
 			sandboxPath = sandboxBase + "/" + filePath

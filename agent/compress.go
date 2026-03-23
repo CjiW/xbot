@@ -407,10 +407,11 @@ func aggressiveThinTail(tail []llm.ChatMessage, keepGroups int, activeFiles []Ac
 			msg := result[j]
 			switch msg.Role {
 			case "assistant":
-				msg.Content = ""
 				if isActive {
-					// active 组保留部分 content（而非完全清空）
+					// active 组保留部分 content（strip think blocks 后截断）
 					msg.Content = truncateRunes(llm.StripThinkBlocks(msg.Content), contentMax)
+				} else {
+					msg.Content = ""
 				}
 				if len(msg.ToolCalls) > 0 {
 					tcs := make([]llm.ToolCall, len(msg.ToolCalls))

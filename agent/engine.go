@@ -597,8 +597,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		localLLMCalls++
 		if response != nil {
 			localInputTokens += int(response.Usage.PromptTokens)
-
-			// Release LLM concurrency slot		if releaseLLMSem != nil {			releaseLLMSem()		}
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}
 

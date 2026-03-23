@@ -19,6 +19,24 @@ import (
 	log "xbot/logger"
 )
 
+// SubAgentProgressCallback is the type for SubAgent progress callback.
+// It is injected via context to allow parallel SubAgents to update parent
+// progress lines without conflicting with each other.
+type SubAgentProgressCallback func(roleName, line string)
+
+type subAgentProgressKey struct{}
+
+// SubAgentProgressFromContext extracts the SubAgent progress callback from context.
+func SubAgentProgressFromContext(ctx context.Context) (SubAgentProgressCallback, bool) {
+	cb, ok := ctx.Value(subAgentProgressKey{}).(SubAgentProgressCallback)
+	return cb, ok
+}
+
+// WithSubAgentProgress returns a new context with the SubAgent progress callback.
+func WithSubAgentProgress(ctx context.Context, cb SubAgentProgressCallback) context.Context {
+	return context.WithValue(ctx, subAgentProgressKey{}, cb)
+}
+
 // RunConfig 统一的 Agent 运行配置。
 // 主 Agent 和 SubAgent 使用同一个 Run() 方法，差异通过配置注入。
 type RunConfig struct {
@@ -259,8 +277,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	var toolsUsed []string
 	var waitingUser bool
 	var progressLines []string
-	var lastContent string // 用于 LLM 错误时的降级返回
-	var iteration int      // 当前迭代次数（maybeCompress 闭包内需要访问）
+	var progressMu sync.Mutex // 保护 progressLines 的并发读写 + notifyProgress 的串行化
+	var lastContent string    // 用于 LLM 错误时的降级返回
+	var iteration int         // 当前迭代次数（maybeCompress 闭包内需要访问）
 
 	// 本轮对话的本地计数器（循环结束后一次性提交到 GlobalMetrics）
 	localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens := 0, 0, 0, 0, 0
@@ -809,6 +828,19 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			var cancel context.CancelFunc
 			if tc.Name == "SubAgent" {
 				execCtx = ctx
+				// 为并行 SubAgent 注入进度回调：子 Agent 通过此回调更新父 Agent 的占位行，
+				// 避免多个子 Agent 直接 patch 同一条消息导致互相覆盖。
+				if autoNotify {
+					pi := progressStartIdx + entry.index
+					if pi < len(progressLines) {
+						execCtx = WithSubAgentProgress(ctx, func(roleName, line string) {
+							progressMu.Lock()
+							progressLines[pi] = fmt.Sprintf("> 🔄 SubAgent [%s]: %s", roleName, line)
+							notifyProgress("")
+							progressMu.Unlock()
+						})
+					}
+				}
 				cancel = func() {}
 			} else {
 				execCtx, cancel = context.WithTimeout(ctx, toolTimeout)

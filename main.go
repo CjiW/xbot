@@ -267,6 +267,12 @@ func main() {
 			LLMDelete: func(senderID string) error {
 				return agentLoop.DeleteUserLLM(senderID)
 			},
+			LLMGetMaxContext: func(senderID string) int {
+				return agentLoop.GetUserMaxContext(senderID)
+			},
+			LLMSetMaxContext: func(senderID string, maxContext int) error {
+				return agentLoop.SetUserMaxContext(senderID, maxContext)
+			},
 			ContextModeGet: func() string {
 				return agentLoop.GetContextMode()
 			},

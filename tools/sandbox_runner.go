@@ -498,10 +498,13 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 	if err != nil {
 		return "", nil, err
 	}
-	if err := os.MkdirAll(ws, 0o755); err != nil {
+	// In DinD mode, MkdirAll must operate on the host path (not container path)
+	// to match the bind mount used in getOrCreateContainer.
+	hostPath := s.toHostPath(ws)
+	if err := os.MkdirAll(hostPath, 0o755); err != nil {
 		return "", nil, err
 	}
-	_ = os.MkdirAll(filepath.Join(ws, ".tmp"), 0o755)
+	_ = os.MkdirAll(filepath.Join(hostPath, ".tmp"), 0o755)
 
 	containerName, _, err := s.getOrCreateContainer(userID, ws)
 	if err != nil {

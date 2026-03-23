@@ -213,6 +213,32 @@ func (a *Agent) handleGetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 	}, nil
 }
 
+// GetUserMaxContext returns the user's max_context setting (0 = use default).
+func (a *Agent) GetUserMaxContext(senderID string) int {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.MaxContext
+}
+
+// SetUserMaxContext updates the user's max_context setting and invalidates cached LLM client.
+func (a *Agent) SetUserMaxContext(senderID string, maxContext int) error {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil {
+		return fmt.Errorf("get config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("当前未配置自定义 LLM，请先通过 /set-llm 设置")
+	}
+	cfg.MaxContext = maxContext
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	a.llmFactory.Invalidate(senderID)
+	return nil
+}
+
 // maskAPIKey masks API key, showing only first 4 characters
 func maskAPIKey(key string) string {
 	if len(key) <= 4 {

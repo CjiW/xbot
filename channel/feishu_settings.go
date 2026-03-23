@@ -118,6 +118,27 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_set_max_context":
+		maxCtxStr := parsed["max_context"]
+		if maxCtxStr == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				maxCtxStr = opt
+			}
+		}
+		if maxCtxStr == "" {
+			return nil, fmt.Errorf("missing max_context")
+		}
+		maxCtx, err := strconv.Atoi(maxCtxStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max_context: %v", err)
+		}
+		if f.settingsCallbacks.LLMSetMaxContext != nil {
+			if err := f.settingsCallbacks.LLMSetMaxContext(senderID, maxCtx); err != nil {
+				return nil, fmt.Errorf("设置 max_context 失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_set_llm":
 		provider := formStr(actionData, "provider")
 		baseURL := formStr(actionData, "base_url")
@@ -482,6 +503,41 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			"content": fmt.Sprintf("当前模型：**%s**", currentModel),
 		})
 	}
+
+	// Max context setting
+	currentMaxContext := 0
+	maxContextDisplay := "默认"
+	if f.settingsCallbacks.LLMGetMaxContext != nil {
+		currentMaxContext = f.settingsCallbacks.LLMGetMaxContext(senderID)
+	}
+	if currentMaxContext > 0 {
+		maxContextDisplay = fmt.Sprintf("%d", currentMaxContext)
+	}
+
+	maxContextOptions := []map[string]any{
+		{"text": map[string]any{"tag": "plain_text", "content": "默认"}, "value": "0"},
+		{"text": map[string]any{"tag": "plain_text", "content": "8,000"}, "value": "8000"},
+		{"text": map[string]any{"tag": "plain_text", "content": "32,000"}, "value": "32000"},
+		{"text": map[string]any{"tag": "plain_text", "content": "65,000"}, "value": "65000"},
+		{"text": map[string]any{"tag": "plain_text", "content": "100,000"}, "value": "100000"},
+		{"text": map[string]any{"tag": "plain_text", "content": "200,000"}, "value": "200000"},
+	}
+	elements = append(elements, buildSettingRow(
+		"最大上下文",
+		maxContextDisplay,
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_max_context_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择上下文长度..."},
+			"initial_option": fmt.Sprintf("%d", currentMaxContext),
+			"options":        maxContextOptions,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_set_max_context",
+				}),
+			},
+		},
+	))
 
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{

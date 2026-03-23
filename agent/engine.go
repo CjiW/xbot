@@ -270,9 +270,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	messages := cfg.Messages
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
-	if cfg.ContextEditor != nil {
-		cfg.ContextEditor.SetMessages(messages)
+	// syncMessages 闭包：每次 messages 被重赋值后调用，保持 ContextEditor 引用同步
+	syncMessages := func(newMessages []llm.ChatMessage) []llm.ChatMessage {
+		if cfg.ContextEditor != nil {
+			cfg.ContextEditor.SetMessages(newMessages)
+		}
+		return newMessages
 	}
+	messages = syncMessages(messages)
 
 	var toolsUsed []string
 	var waitingUser bool
@@ -288,6 +293,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// 使用闭包 defer 延迟求值，避免 defer 声明时计数器仍为 0
 	defer func() {
 		GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
+		GlobalMetrics.ClearRecallTracking()
 	}()
 
 	// --- 结构化进度状态 ---
@@ -356,11 +362,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 
+		// cachedMsgTokens 缓存 messages 的 token 数，避免在同一轮 maybeCompress 内重复计算。
+		// 值为 0 表示缓存失效（messages 已变更），需要重新计算。
+		var cachedMsgTokens int
+
 		// --- Layer 0: Observation Masking ---
 		// 在压缩之前先遮蔽旧的 tool result，减少上下文体积。
 		if cfg.MaskStore != nil {
-			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-			totalTokens := msgTokens + toolTokens
+			cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
+			totalTokens := cachedMsgTokens + toolTokens
 
 			maxTokens := 100000
 			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
@@ -371,7 +381,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if float64(totalTokens) > maskingThreshold {
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
 				if count > 0 {
-					messages = masked
+					messages = syncMessages(masked)
+					cachedMsgTokens = 0 // messages 已变更，缓存失效
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
 					if autoNotify {
@@ -396,8 +407,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		if autoNotify {
-			msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", msgTokens+toolTokens))
+			if cachedMsgTokens == 0 {
+				cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
+			}
+			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", cachedMsgTokens+toolTokens))
 			notifyProgress("")
 		}
 
@@ -409,8 +422,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			return
 		}
 
-		oldTokenCount, _ := llm.CountMessagesTokens(messages, cfg.Model)
-		messages = result.LLMView
+		oldTokenCount := cachedMsgTokens
+		if oldTokenCount == 0 {
+			oldTokenCount, _ = llm.CountMessagesTokens(messages, cfg.Model)
+		}
+		messages = syncMessages(result.LLMView)
 
 		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 		if autoNotify {
@@ -633,7 +649,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 				} else {
-					messages = result.LLMView
+					messages = syncMessages(result.LLMView)
 					if autoNotify {
 						newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
@@ -746,7 +762,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			ReasoningContent: response.ReasoningContent, // DeepSeek/OpenAI reasoning 模型的思维链
 			ToolCalls:        response.ToolCalls,
 		}
-		messages = append(messages, assistantMsg)
+		messages = syncMessages(append(messages, assistantMsg))
 
 		// --- 工具执行 ---
 
@@ -1091,7 +1107,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			if r.result != nil && r.result.Detail != "" {
 				toolMsg.Detail = r.result.Detail
 			}
-			messages = append(messages, toolMsg)
+			messages = syncMessages(append(messages, toolMsg))
 		}
 
 		// Layer 1 Offload: invalidate stale Read offloads after any tool execution
@@ -1105,7 +1121,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					"stale_count": len(staleIDs),
 					"stale_ids":   staleIDs,
 				}).Info("Stale offloads detected and invalidated")
-				messages = cfg.OffloadStore.PurgeStaleMessages(offloadSessionKey, messages)
+				messages = syncMessages(cfg.OffloadStore.PurgeStaleMessages(offloadSessionKey, messages))
 			}
 		}
 

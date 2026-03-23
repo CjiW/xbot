@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -202,7 +204,10 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		}
 
 		// 构建详细的错误信息，包含 exit code 和 stderr
-		exitCode := cmd.ProcessState.ExitCode()
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
 		stderrStr := strings.TrimSpace(stderr.String())
 
 		var errMsg string
@@ -286,8 +291,13 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	}
 	newContent := strings.Join(lines, "\n")
 
-	// 写入文件
-	writeCmd := fmt.Sprintf("cat > ~/.xbot_env << 'XBOT_ENV_EOF'\n%s\nXBOT_ENV_EOF", newContent)
+	// 写入文件（使用随机 heredoc 标记防止注入）
+	randBytes := make([]byte, 16)
+	if _, err := rand.Read(randBytes); err != nil {
+		return false
+	}
+	heredocTag := "XBOT_ENV_" + hex.EncodeToString(randBytes)
+	writeCmd := fmt.Sprintf("cat > ~/.xbot_env << '%s'\n%s\n%s", heredocTag, newContent, heredocTag)
 	if _, err := RunInSandboxWithShell(toolCtx, writeCmd); err != nil {
 		return false
 	}

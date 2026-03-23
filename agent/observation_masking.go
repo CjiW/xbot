@@ -71,16 +71,24 @@ func (s *ObservationMaskStore) Mask(toolName, arguments, content string, message
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	// 双重容量限制：超条数或超字符数时，淘汰最旧条目
 	contentLen := len([]rune(content))
+	evictedCount := 0
 	for len(s.entries) >= s.maxSize || (s.totalChars+contentLen > s.maxChars && len(s.entries) > 0) {
 		evicted := s.entries[0]
 		s.totalChars -= len([]rune(evicted.Content))
 		s.entries = s.entries[1:]
+		evictedCount++
+	}
+	// 重新分配 slice，释放被淘汰条目占用的底层数组内存
+	if evictedCount > 0 {
+		newEntries := make([]MaskedObservation, len(s.entries))
+		copy(newEntries, s.entries)
+		s.entries = newEntries
 	}
 	s.entries = append(s.entries, entry)
 	s.totalChars += contentLen
-	s.mu.Unlock()
 
 	// 生成占位符
 	argsPreview := arguments

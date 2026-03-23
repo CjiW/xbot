@@ -208,8 +208,7 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 		return nil, err
 	}
 	summary := fmt.Sprintf("File created successfully: %s", path)
-	diff := generateChangeSummary("", content, path)
-	return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: summary, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool) (*ToolResult, error) {
@@ -231,8 +230,7 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 		return nil, err
 	}
 
-	diff := generateChangeSummary(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
@@ -258,8 +256,7 @@ func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, a
 		return nil, err
 	}
 
-	diff := generateChangeSummary(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool) (*ToolResult, error) {
@@ -285,8 +282,7 @@ func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacem
 		return nil, err
 	}
 
-	diff := generateChangeSummary(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
@@ -311,8 +307,7 @@ func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content strin
 		return nil, err
 	}
 
-	diff := generateChangeSummary(oldContent, newContent, path)
-	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 // executeLocal 在本地执行编辑操作（非沙箱模式）
@@ -328,8 +323,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 		if err != nil {
 			return nil, err
 		}
-		diff := generateChangeSummary("", params.Content, filePath)
-		return &ToolResult{Summary: summary, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+		return &ToolResult{Summary: summary, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 	}
 
 	// 读取文件内容
@@ -364,8 +358,7 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
-	diff := generateChangeSummary(oldContent, newContent, filePath)
-	return &ToolResult{Summary: result, Detail: diff, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
 // doCreate 创建新文件
@@ -570,69 +563,4 @@ func Truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen-3]) + "..."
-}
-
-// generateChangeSummary 生成简单的变更摘要（哪几行变了），不依赖外部 diff 库
-func generateChangeSummary(oldContent, newContent, filePath string) string {
-	oldLines := strings.Split(oldContent, "\n")
-	newLines := strings.Split(newContent, "\n")
-
-	maxLen := len(oldLines)
-	if len(newLines) > maxLen {
-		maxLen = len(newLines)
-	}
-
-	if maxLen == 0 {
-		return ""
-	}
-
-	// 找出所有变更行号（1-based）
-	type change struct {
-		oldLine, newLine int
-		op               byte // ' ', '-', '+'
-		text             string
-	}
-	var changes []change
-
-	for i := 0; i < maxLen; i++ {
-		oldL := ""
-		newL := ""
-		if i < len(oldLines) {
-			oldL = oldLines[i]
-		}
-		if i < len(newLines) {
-			newL = newLines[i]
-		}
-
-		if oldL == newL {
-			continue
-		}
-
-		if i < len(oldLines) && i < len(newLines) {
-			// 行存在但内容不同 → 替换
-			changes = append(changes, change{oldLine: i + 1, newLine: i + 1, op: '-', text: oldL})
-			changes = append(changes, change{oldLine: i + 1, newLine: i + 1, op: '+', text: newL})
-		} else if i < len(oldLines) {
-			// 只在旧文件中存在 → 删除
-			changes = append(changes, change{oldLine: i + 1, op: '-', text: oldL})
-		} else {
-			// 只在新文件中存在 → 新增
-			changes = append(changes, change{newLine: i + 1, op: '+', text: newL})
-		}
-	}
-
-	if len(changes) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Changes in " + filePath + ":\n")
-	for _, c := range changes {
-		if c.op == '-' {
-			fmt.Fprintf(&sb, "  L%d - %s\n", c.oldLine, Truncate(c.text, 120))
-		} else {
-			fmt.Fprintf(&sb, "  L%d + %s\n", c.newLine, c.text)
-		}
-	}
-	return sb.String()
 }

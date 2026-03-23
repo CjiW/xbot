@@ -144,12 +144,35 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		baseURL := formStr(actionData, "base_url")
 		apiKey := formStr(actionData, "api_key")
 		model := formStr(actionData, "model")
+		thinkingMode := formStr(actionData, "thinking_mode")
 		if provider == "" || baseURL == "" || apiKey == "" {
 			return nil, fmt.Errorf("请填写完整配置")
 		}
 		if f.settingsCallbacks.LLMSetConfig != nil {
 			if err := f.settingsCallbacks.LLMSetConfig(senderID, provider, baseURL, apiKey, model); err != nil {
 				return nil, fmt.Errorf("保存失败: %v", err)
+			}
+		}
+		if thinkingMode != "" && f.settingsCallbacks.LLMSetThinkingMode != nil {
+			if err := f.settingsCallbacks.LLMSetThinkingMode(senderID, thinkingMode); err != nil {
+				log.WithError(err).Warn("HandleSettingsAction: failed to set thinking_mode")
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
+	case "settings_set_thinking_mode":
+		mode := parsed["mode"]
+		if mode == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				mode = opt
+			}
+		}
+		if mode == "" {
+			return nil, fmt.Errorf("missing mode")
+		}
+		if f.settingsCallbacks.LLMSetThinkingMode != nil {
+			if err := f.settingsCallbacks.LLMSetThinkingMode(senderID, mode); err != nil {
+				return nil, fmt.Errorf("设置思考模式失败: %v", err)
 			}
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
@@ -426,7 +449,17 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				},
 			},
 			{
+				"tag":  "select_static",
+				"name": "thinking_mode",
+				"placeholder": map[string]any{
+					"tag":     "plain_text",
+					"content": "思考模式（可选）",
+				},
+				"options": thinkingModeOptions(),
+			},
+			{
 				"tag":         "button",
+				"name":        "llm_submit",
 				"text":        map[string]any{"tag": "plain_text", "content": "保存配置"},
 				"type":        "primary",
 				"action_type": "form_submit",
@@ -534,6 +567,33 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_context",
+				}),
+			},
+		},
+	))
+
+	// Thinking mode setting
+	currentThinkingMode := ""
+	thinkingModeDisplay := "auto"
+	if f.settingsCallbacks.LLMGetThinkingMode != nil {
+		currentThinkingMode = f.settingsCallbacks.LLMGetThinkingMode(senderID)
+	}
+	if currentThinkingMode != "" {
+		thinkingModeDisplay = thinkingModeLabel(currentThinkingMode)
+	}
+
+	elements = append(elements, buildSettingRow(
+		"思考模式",
+		thinkingModeDisplay,
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_thinking_mode_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择思考模式..."},
+			"initial_option": currentThinkingMode,
+			"options":        thinkingModeOptions(),
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_set_thinking_mode",
 				}),
 			},
 		},
@@ -807,6 +867,31 @@ func wrapButtonsInColumns(buttons []map[string]any) map[string]any {
 				},
 			},
 		},
+	}
+}
+
+// --- Thinking mode helpers ---
+
+var thinkingModeLabelMap = map[string]string{
+	"":         "auto（自动）",
+	"enabled":  "enabled（开启）",
+	"disabled": "disabled（关闭）",
+	"adaptive": "adaptive（自适应）",
+}
+
+func thinkingModeLabel(mode string) string {
+	if l, ok := thinkingModeLabelMap[mode]; ok {
+		return l
+	}
+	return mode
+}
+
+func thinkingModeOptions() []map[string]any {
+	return []map[string]any{
+		{"text": map[string]any{"tag": "plain_text", "content": "auto（自动）"}, "value": "auto"},
+		{"text": map[string]any{"tag": "plain_text", "content": "enabled（开启）"}, "value": "enabled"},
+		{"text": map[string]any{"tag": "plain_text", "content": "disabled（关闭）"}, "value": "disabled"},
+		{"text": map[string]any{"tag": "plain_text", "content": "adaptive（自适应）"}, "value": "adaptive"},
 	}
 }
 

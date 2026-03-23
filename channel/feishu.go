@@ -48,6 +48,10 @@ type SettingsCallbacks struct {
 	LLMGetMaxContext func(senderID string) int
 	// LLMSetMaxContext 设置用户 max_context
 	LLMSetMaxContext func(senderID string, maxContext int) error
+	// LLMGetThinkingMode 获取用户当前 thinking_mode（"" = auto）
+	LLMGetThinkingMode func(senderID string) string
+	// LLMSetThinkingMode 设置用户 thinking_mode
+	LLMSetThinkingMode func(senderID string, mode string) error
 
 	ContextModeGet func() string
 	ContextModeSet func(mode string) error

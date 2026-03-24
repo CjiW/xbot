@@ -81,8 +81,8 @@ type EditParams struct {
 	Replacement string `json:"replacement"`
 	Position    string `json:"position"`
 	ReplaceAll  bool   `json:"replace_all"`
-	StartLine   int    `json:"start_line"`  // Optional: restrict replace/regex search start line (1-based, inclusive)
-	EndLine     int    `json:"end_line"`    // Optional: restrict replace/regex search end line (1-based, inclusive)
+	StartLine   int    `json:"start_line"` // Optional: restrict replace/regex search start line (1-based, inclusive)
+	EndLine     int    `json:"end_line"`   // Optional: restrict replace/regex search end line (1-based, inclusive)
 }
 
 func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -397,8 +397,8 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 	totalLines := len(lines)
 
 	// Default values
-	start := 1         // 1-based inclusive
-	end := totalLines  // 1-based inclusive
+	start := 1        // 1-based inclusive
+	end := totalLines // 1-based inclusive
 
 	if startLine > 0 {
 		start = startLine

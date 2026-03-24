@@ -95,6 +95,7 @@ func flattenLines(lines []string) []string {
 }
 
 // progressTruncate 截断字符串到最大 rune 数，超出部分用 "…" 省略（紧凑版）。
+// 会自动闭合截断位置处的 Markdown 行内语法标记（`、**、*、[text](、~~）。
 func progressTruncate(s string, maxRunes int) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
@@ -103,7 +104,68 @@ func progressTruncate(s string, maxRunes int) string {
 	if maxRunes <= 1 {
 		return "…"
 	}
-	return string(runes[:maxRunes-1]) + "…"
+	truncated := string(runes[:maxRunes-1])
+	return truncated + "…" + closeMarkdown(truncated)
+}
+
+// closeMarkdown 扫描字符串中的 Markdown 行内语法，返回需要追加的闭合后缀。
+// 使用简易状态机追踪未闭合的标记：backtick、**、*、~~、[。
+func closeMarkdown(s string) string {
+	var (
+		inCode     bool // 在行内代码中（`...`）
+		boldOpen   bool // ** 未闭合
+		italicOpen bool // * 未闭合
+		strikeOpen bool // ~~ 未闭合
+		linkOpen   bool // [ 未闭合
+	)
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if inCode {
+			if r == '`' {
+				inCode = false
+			}
+			continue
+		}
+		switch r {
+		case '`':
+			inCode = true
+		case '*':
+			// 向前看：连续两个 * 是粗体
+			if i+1 < len(runes) && runes[i+1] == '*' {
+				boldOpen = !boldOpen
+				i++ // 跳过第二个 *
+			} else {
+				italicOpen = !italicOpen
+			}
+		case '~':
+			if i+1 < len(runes) && runes[i+1] == '~' {
+				strikeOpen = !strikeOpen
+				i++ // 跳过第二个 ~
+			}
+		case '[':
+			linkOpen = true
+		case ']':
+			linkOpen = false
+		}
+	}
+	var buf strings.Builder
+	if inCode {
+		buf.WriteByte('`')
+	}
+	if boldOpen {
+		buf.WriteString("**")
+	}
+	if italicOpen {
+		buf.WriteByte('*')
+	}
+	if linkOpen {
+		buf.WriteString("](…)")
+	}
+	if strikeOpen {
+		buf.WriteString("~~")
+	}
+	return buf.String()
 }
 
 // extractRoleName 从 Path 末尾提取角色名（去掉路径中的 / 部分）。

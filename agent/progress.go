@@ -480,21 +480,24 @@ func renderChildrenTree(children []childAgentStatus, baseIndent string, currentD
 //
 // 输出格式示例：
 //
-//	> 🔄 crown-prince: 💭 思考中...                    （叶子节点，单行）
-//	> 🔄 crown-prince: ⏳ Shell(go test) ...           （工具执行，单行）
-//	> ✅ crown-prince                                   （完成，单行）
+//	> 🔄 crown-prince: 💭 思考中...                    （直接子Agent，无缩进）
+//	> 🔄 crown-prince: ⏳ Shell(go test) ...           （工具执行）
+//	> ✅ crown-prince                                   （完成）
 //	> 🔄 crown-prince: 调度中                           （有子Agent，多行）
-//	> 　🔄 中书: 💭 思考中                               ├── 子Agent 1
-//	> 　🔄 尚书: 分派两部                                ├── 子Agent 2
-//	> 　　🔄 工部: ⚡ Shell(ls)                          │   └── 孙Agent
-//	> 　　✅ 刑部:                                       │   └── 孙Agent
+//	> 　🔄 尚书: 分派两部                                ├── 子Agent（depth=3）
+//	> 　　🔄 工部: ⚡ Shell(ls)                          │   └── 孙Agent（depth=4）
 func formatSubAgentProgress(detail SubAgentProgressDetail) string {
 	const maxContentRunes = 50
 
 	flat := flattenLines(detail.Lines)
 	ownLine, children := extractOwnAndChildProgress(flat)
 	roleName := extractRoleName(detail.Path)
-	indent := strings.Repeat("　", detail.Depth)
+	// depth=2 表示直接子 Agent（无需缩进），每深一层加一个全角空格
+	indentDepth := detail.Depth - 2
+	if indentDepth < 0 {
+		indentDepth = 0
+	}
+	indent := strings.Repeat("　", indentDepth)
 
 	// 1. 完成状态：无内容也无子 Agent
 	if ownLine == "" && len(children) == 0 {

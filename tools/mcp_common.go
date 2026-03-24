@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,7 +64,9 @@ var sharedMCPClient = mcp.NewClient(&mcp.Implementation{
 // instead of leaking the host's full PATH.
 const safeDefaultPATH = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
-// BuildStdioEnv 构建 stdio 模式的环境变量列表，使用安全 PATH（不泄漏宿主机 PATH）
+// BuildStdioEnv builds the env list from MCP config.
+// PATH is built from .xbot/bin (if exists) + user-configured PATH (if any).
+// buildMinimalExecEnv will merge this with the login shell's PATH.
 func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	var envList []string
 	for k, v := range cfg.Env {
@@ -74,49 +78,154 @@ func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 		pathParts = append(pathParts, binDir)
 		log.WithField("bin_dir", binDir).Debug("Added .xbot/bin to MCP server PATH")
 	}
-	pathParts = append(pathParts, safeDefaultPATH)
-	envList = append(envList, fmt.Sprintf("PATH=%s", strings.Join(pathParts, ":")))
+	if len(pathParts) > 0 {
+		envList = append(envList, fmt.Sprintf("PATH=%s", strings.Join(pathParts, ":")))
+	}
 
 	return envList
 }
 
-// buildMinimalExecEnv constructs a minimal env for the exec.Command that launches
-// the MCP server (or docker exec). Only safe, non-secret vars are forwarded from
-// the host; everything the MCP process actually needs comes from envList (which
-// contains mcp.json "env" fields + sanitised PATH).
+// secretKeyPrefixes are environment variable name prefixes that must never be forwarded
+// to MCP server child processes (secrets, credentials, tokens).
+var secretKeyPrefixes = []string{
+	"LLM_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "DEEPSEEK_",
+	"FEISHU_", "QQ_", "DINGTALK_",
+	"AWS_", "AZURE_", "GOOGLE_",
+	"GITHUB_TOKEN", "GITLAB_TOKEN",
+	"SLACK_", "DISCORD_", "TELEGRAM_",
+	"DATABASE_URL", "REDIS_URL", "MONGO_",
+}
+
+func isSecretKey(key string) bool {
+	for _, prefix := range secretKeyPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildMinimalExecEnv constructs the environment for MCP server processes.
+// It uses a login shell (bash -l) to capture the full user environment (PATH, GOPATH,
+// GOROOT, etc.), then filters out secret keys and merges MCP-configured env vars.
+// For PATH specifically, MCP-configured PATH entries are prepended to the login shell PATH
+// so that .xbot/bin and user overrides take priority without losing the full shell PATH.
 func buildMinimalExecEnv(envList []string) []string {
-	safeKeys := []string{
-		"HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP",
-		"DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONFIG",
-		"XDG_RUNTIME_DIR",
-	}
+	// 1. Capture full environment from login shell
+	loginEnv := getLoginShellEnv()
 
-	env := make([]string, 0, len(safeKeys)+len(envList)+1)
-
-	// Forward safe host vars needed by docker/system
-	for _, key := range safeKeys {
-		if val := os.Getenv(key); val != "" {
-			env = append(env, fmt.Sprintf("%s=%s", key, val))
+	// 2. Build base env from login shell, filtering out secrets
+	envMap := make(map[string]string, len(loginEnv)+len(envList))
+	for _, e := range loginEnv {
+		if idx := strings.IndexByte(e, '='); idx > 0 {
+			key := e[:idx]
+			if !isSecretKey(key) {
+				envMap[key] = e[idx+1:]
+			}
 		}
 	}
 
-	// The docker binary needs PATH to be located; provide a safe default
-	// if envList doesn't already contain one.
-	hasPath := false
+	// 3. Merge MCP-configured env vars.
+	// For PATH: prepend MCP PATH to login shell PATH (deduped).
+	// For others: MCP value overrides login shell value.
+	var mcpPATHParts []string
 	for _, e := range envList {
-		if strings.HasPrefix(e, "PATH=") {
-			hasPath = true
-			break
+		if idx := strings.IndexByte(e, '='); idx > 0 {
+			key := e[:idx]
+			val := e[idx+1:]
+			if isSecretKey(key) {
+				continue // never forward secrets
+			}
+			if key == "PATH" {
+				// Collect MCP PATH parts; will be prepended later
+				mcpPATHParts = append(mcpPATHParts, strings.Split(val, ":")...)
+			} else {
+				envMap[key] = val
+			}
 		}
 	}
-	if !hasPath {
-		env = append(env, "PATH="+safeDefaultPATH)
+
+	// 4. Build final env list with merged PATH
+	env := make([]string, 0, len(envMap)+1)
+
+	// Collect login shell PATH parts
+	var loginPATHParts []string
+	if loginPATH, ok := envMap["PATH"]; ok {
+		loginPATHParts = strings.Split(loginPATH, ":")
+		delete(envMap, "PATH") // will be re-added with merged value
 	}
 
-	// Append MCP-configured env (overrides any same-name safe var above)
-	env = append(env, envList...)
+	// Merge PATH: MCP parts first (highest priority), then login shell parts (deduped)
+	seen := make(map[string]bool)
+	var mergedParts []string
+	for _, part := range mcpPATHParts {
+		if part != "" && !seen[part] {
+			mergedParts = append(mergedParts, part)
+			seen[part] = true
+		}
+	}
+	for _, part := range loginPATHParts {
+		if part != "" && !seen[part] {
+			mergedParts = append(mergedParts, part)
+			seen[part] = true
+		}
+	}
+	if len(mergedParts) == 0 {
+		mergedParts = []string{safeDefaultPATH}
+	}
+	env = append(env, "PATH="+strings.Join(mergedParts, ":"))
+
+	// Add remaining env vars (sorted for determinism)
+	for k, v := range envMap {
+		env = append(env, k+"="+v)
+	}
+
 	return env
 }
+
+// getLoginShellEnv runs `bash -l -c 'env -0'` to capture the full environment
+// from a login shell. Returns empty slice on failure (caller will use fallback).
+func getLoginShellEnv() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "bash", "-l", "-c", "env -0")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = nil // discard stderr (shell startup noise)
+
+	if err := cmd.Run(); err != nil {
+		log.WithError(err).Warn("Failed to capture login shell env for MCP, using safe defaults")
+		return nil
+	}
+
+	// Parse null-delimited output
+	output := stdout.Bytes()
+	if len(output) == 0 {
+		return nil
+	}
+
+	var env []string
+	for len(output) > 0 {
+		idx := bytes.IndexByte(output, 0)
+		if idx < 0 {
+			idx = len(output)
+		}
+		line := string(output[:idx])
+		if idx2 := strings.IndexByte(line, '='); idx2 > 0 {
+			env = append(env, line)
+		}
+		if idx >= len(output) {
+			break
+		}
+		output = output[idx+1:]
+	}
+
+	sort.Strings(env)
+	return env
+}
+
+// resolveXbotBinDir 从 configPath 推断 .xbot/bin 目录（存在才返回）
 
 // resolveXbotBinDir 从 configPath 推断 .xbot/bin 目录（存在才返回）
 func resolveXbotBinDir(configPath string) string {
@@ -171,7 +280,7 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 		TerminateDuration: 5 * time.Second,
 	}
 
-	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
@@ -238,7 +347,7 @@ type MCPInitResult struct {
 // InitializeMCPClient lists tools and extracts server instructions from an already-connected session.
 // With the official SDK, Connect() auto-initializes; this function collects the results.
 func InitializeMCPClient(ctx context.Context, session *mcp.ClientSession) (*MCPInitResult, error) {
-	connectCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var tools []*mcp.Tool

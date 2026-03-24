@@ -98,7 +98,6 @@ func applyLineLimit(result *ToolResult, maxLines, offset int) *ToolResult {
 		if startIdx >= totalLines {
 			// offset beyond file end — return empty with a hint
 			result.Summary = fmt.Sprintf("(offset %d exceeds file length %d — file has no content from this line)", offset, totalLines)
-			result.Detail = result.Summary
 			return result
 		}
 		lines = lines[startIdx:]
@@ -120,7 +119,6 @@ func applyLineLimit(result *ToolResult, maxLines, offset int) *ToolResult {
 	}
 
 	result.Summary = strings.Join(numbered, "\n") + truncatedMsg
-	result.Detail = result.Summary
 	return result
 }
 

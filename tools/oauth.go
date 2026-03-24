@@ -23,7 +23,8 @@ func (t *OAuthTool) Name() string {
 func (t *OAuthTool) Description() string {
 	return "Send an OAuth authorization card to the user. " +
 		"Use this when an operation requires OAuth authorization from a provider. " +
-		"IMPORTANT: Do NOT specify scopes unless absolutely necessary - the default scopes cover all common operations."
+		"IMPORTANT: Do NOT specify scopes unless absolutely necessary - the default scopes cover all common operations." +
+		"IMPORTANT: Use it only when you have strong reason to believe that the user needs to authorize the tool(do not use it when errcode is 404)."
 }
 
 // Parameters returns the tool parameters.

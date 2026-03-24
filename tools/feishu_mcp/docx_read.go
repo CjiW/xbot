@@ -67,7 +67,7 @@ func (t *DocxGetContentTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "document_id",
 			Type:        "string",
-			Description: "Document ID (e.g., doxcnXXXXX)",
+			Description: "Document ID",
 			Required:    true,
 		},
 	}
@@ -111,7 +111,7 @@ func (t *DocxGetContentTool) Execute(ctx *tools.ToolContext, input string) (*too
 
 	return tools.NewResultWithTips(
 		fmt.Sprintf("Document content:\n\n%s", markdown),
-		"Some special nodes e.g. mermaid graph may disappear in markdown. You can use `feishu_docx_get_block` to get detailed block content for those nodes.",
+		"Some special nodes e.g. mermaid graph may disappear in markdown. You can use `feishu_docx_list_blocks` to list all blocks and find the ones you want to get.",
 	), nil
 }
 

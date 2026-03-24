@@ -385,7 +385,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"💭 思考中..."},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: 💭 思考中...",
 		},
@@ -394,7 +394,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"⏳ Shell(ls) ..."},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: ⏳ Shell(ls) ...",
 		},
@@ -403,7 +403,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{""},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> ✅ crown-prince",
 		},
@@ -412,7 +412,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: nil,
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> ✅ crown-prince",
 		},
@@ -421,7 +421,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  nil,
 				Lines: []string{"some progress"},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 : some progress",
 		},
@@ -430,7 +430,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  nil,
 				Lines: nil,
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> ✅ ",
 		},
@@ -439,7 +439,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"simple-role"},
 				Lines: []string{"working"},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 simple-role: working",
 		},
@@ -449,7 +449,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"💭 思考中...", "⏳ Shell(ls) ...", "⏳ Shell(go test) ..."},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: ⏳ Shell(go test) ...",
 		},
@@ -458,7 +458,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"【奏报】圣旨：启动三层测试\n判定：🟢 直接执行\n→ 尚书省"},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: → 尚书省",
 		},
@@ -467,35 +467,35 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"> > ⏳ Shell(go test) ..."},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> ✅ crown-prince",
 		},
 		// === 深度缩进 ===
 		{
-			name: "depth 1 multi line with indent",
+			name: "depth 3 multi line with indent",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
 				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
-				Depth: 1,
+				Depth: 3,
 			},
 			want: "> 　🔄 ministry-works: ⏳ Shell(go test) ...",
 		},
 		{
-			name: "depth 1 completed",
+			name: "depth 3 completed",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
 				Lines: []string{""},
-				Depth: 1,
+				Depth: 3,
 			},
 			want: "> 　✅ ministry-works",
 		},
 		{
-			name: "depth 2 multi line",
+			name: "depth 4 multi line",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"a/b", "a/b/c", "a/b/c/d"},
 				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
-				Depth: 2,
+				Depth: 4,
 			},
 			want: "> 　　🔄 d: ✅ Shell(go test) (1.2s)",
 		},
@@ -510,7 +510,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"├─ ✅ 刑部:",
 					"├─ 🔄 礼部: 💭 思考中",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: → 尚书省并发派发三部\n" +
 				"> 　🔄 工部: ⏳ Shell(go version)\n" +
@@ -527,7 +527,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"├─ ✅ 刑部:",
 					"├─ ✅ 礼部:",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 department-state: 三部任务已分派完毕\n" +
 				"> 　✅ 工部:\n" +
@@ -542,7 +542,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"├─ 🔄 工部: ⏳ Shell(ls)",
 					"├─ ✅ 刑部:",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 department-state:\n" +
 				"> 　🔄 工部: ⏳ Shell(ls)\n" +
@@ -558,7 +558,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"├─ ❌ 刑部: Error: test failed",
 					"├─ 🔄 礼部: ⏳ running",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 department-state: 三部执行中\n" +
 				"> 　✅ 工部:\n" +
@@ -575,7 +575,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"> 🔄 department-state: ⏳ SubAgent [ministry-works]...",
 					"> 🔄 department-state: ⏳ SubAgent [ministry-justice]...",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: → 尚书省并发派发三部\n" +
 				"> 　🔄 department-state: ⏳ SubAgent [ministry-works]...\n" +
@@ -591,7 +591,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"> ✅ ministry-justice:",
 					"> ✅ ministry-rites:",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 department-state: 三部全部完成\n" +
 				"> 　✅ ministry-works:\n" +
@@ -608,7 +608,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"> ✅ ministry-justice: ✅ Shell(go version) (4.66s)",
 					"> 🔄 ministry-rites: 💭 思考中...",
 				},
-				Depth: 1,
+				Depth: 3,
 			},
 			want: "> 　🔄 department-state: 分派三部并行执行\n" +
 				"> 　　🔄 ministry-works: ⏳ Shell(go version) ...\n" +
@@ -624,7 +624,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"臣即刻将任务派发给尚书省",
 					"> ⏳ SubAgent [department-state]: 【尚书省·接旨】三层并发测试",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: 臣即刻将任务派发给尚书省\n" +
 				"> 　⏳ department-state: 【尚书省·接旨】三层并发测试",
@@ -639,7 +639,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"> ⏳ Shell(ls -la)",
 					"> 📦 压缩中...",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: 分析任务中",
 		},
@@ -654,7 +654,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"> ⏳ SubAgent [ministry-rites]: 礼部",
 					"> 💭 思考中...",
 				},
-				Depth: 1,
+				Depth: 3,
 			},
 			want: "> 　🔄 department-state: 分派三部\n" +
 				"> 　　⏳ ministry-works: 工部\n" +
@@ -670,7 +670,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"【奏报】判定：🟢 直接执行 → 尚书省\n理由：明确的调度测试任务\n臣这就调度尚书省",
 					"> 🔄 department-state: → 🔄 工部(⏳ls) · ✅ 刑部",
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: 臣这就调度尚书省\n" +
 				"> 　🔄 department-state: → 🔄 工部(⏳ls) · ✅ 刑部",
@@ -686,7 +686,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 					"├─ 🔄 工部: ⏳ ls", // 树状行 → 子Agent
 					"├─ ✅ 刑部:",      // 树状行 → 子Agent
 				},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince:\n" +
 				"> 　🔄 工部: ⏳ ls\n" +
@@ -698,7 +698,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"这是一段非常非常非常非常非常非常非常非常非常非常长的进度文本用来测试截断功能是否正常工作"},
-				Depth: 0,
+				Depth: 2,
 			},
 			want: "> 🔄 crown-prince: 这是一段非常非常非常非常非常非常非常非常非常非常长的进度文本用来测试截断功能是否正常工作",
 		},
@@ -720,17 +720,17 @@ func TestFormatSubAgentProgress_LeafIsSingleLine(t *testing.T) {
 		{
 			Path:  []string{"main/crown-prince"},
 			Lines: []string{"💭 thinking", "⏳ Shell(ls)", "done"},
-			Depth: 0,
+			Depth: 2,
 		},
 		{
 			Path:  []string{"main/crown-prince"},
 			Lines: nil,
-			Depth: 0,
+			Depth: 2,
 		},
 		{
 			Path:  []string{"a", "a/b"},
 			Lines: []string{"working"},
-			Depth: 1,
+			Depth: 3,
 		},
 	}
 	for i, detail := range leafDetails {
@@ -752,7 +752,7 @@ func TestFormatSubAgentProgress_TreeAllLinesQuoted(t *testing.T) {
 				"├─ 🔄 工部: ⏳ Shell(go version)",
 				"├─ ✅ 刑部:",
 			},
-			Depth: 0,
+			Depth: 2,
 		},
 		{
 			Path: []string{"main/department-state"},
@@ -760,7 +760,7 @@ func TestFormatSubAgentProgress_TreeAllLinesQuoted(t *testing.T) {
 				"> 🔄 ministry-works: ⏳ Shell(go version)",
 				"> ✅ ministry-justice:",
 			},
-			Depth: 1,
+			Depth: 3,
 		},
 	}
 	for i, detail := range treeDetails {
@@ -777,13 +777,13 @@ func TestFormatSubAgentProgress_TreeAllLinesQuoted(t *testing.T) {
 
 func TestFormatSubAgentProgress_StartsWithQuote(t *testing.T) {
 	testDetails := []SubAgentProgressDetail{
-		{Path: []string{"a"}, Lines: []string{"x"}, Depth: 0},
-		{Path: []string{"a"}, Lines: nil, Depth: 0},
-		{Path: []string{"a", "a/b"}, Lines: []string{"y"}, Depth: 1},
+		{Path: []string{"a"}, Lines: []string{"x"}, Depth: 2},
+		{Path: []string{"a"}, Lines: nil, Depth: 2},
+		{Path: []string{"a", "a/b"}, Lines: []string{"y"}, Depth: 3},
 		{
 			Path: []string{"a"}, Lines: []string{
 				"own", "> 🔄 child: desc",
-			}, Depth: 0,
+			}, Depth: 2,
 		},
 	}
 	for i, detail := range testDetails {
@@ -814,12 +814,12 @@ func TestFormatSubAgentProgress_ThreeLayerScenario(t *testing.T) {
 				"> 　✅ ministry-justice:",
 				"> 　🔄 ministry-rites: 💭 思考中...",
 			},
-			Depth: 1,
+			Depth: 3,
 		}
 		got := formatSubAgentProgress(detail)
 		// 验证: 多行树、带缩进、包含三个子Agent状态
 		if !strings.Contains(got, "　") {
-			t.Errorf("should have fullwidth indent for depth=1: %q", got)
+			t.Errorf("should have fullwidth indent for depth=3: %q", got)
 		}
 		for _, agent := range []string{"ministry-works", "ministry-justice", "ministry-rites"} {
 			if !strings.Contains(got, agent) {
@@ -842,7 +842,7 @@ func TestFormatSubAgentProgress_ThreeLayerScenario(t *testing.T) {
 				"【奏报】判定：🟢 直接执行 → 尚书省",
 				"> 🔄 department-state: 分派三部并行执行 → 🔄 ministry-works(⏳ Shell(go…) · ✅ ministry-justice · 🔄 ministry-rites(💭)",
 			},
-			Depth: 0,
+			Depth: 2,
 		}
 		got := formatSubAgentProgress(detail)
 		if !strings.Contains(got, "department-state") {
@@ -863,7 +863,7 @@ func TestFormatSubAgentProgress_ThreeLayerScenario(t *testing.T) {
 				"> 　✅ ministry-justice:",
 				"> 　✅ ministry-rites:",
 			},
-			Depth: 1,
+			Depth: 3,
 		}
 		got := formatSubAgentProgress(detail)
 		for _, agent := range []string{"ministry-works", "ministry-justice", "ministry-rites"} {
@@ -1061,7 +1061,7 @@ func TestFormatSubAgentProgress_FullTreeScenario(t *testing.T) {
 			"> 　🔄 工部: ⚡ Shell(ls)",
 			"> 　✅ 刑部:",
 		},
-		Depth: 0,
+		Depth: 2,
 	}
 	got := formatSubAgentProgress(detail)
 

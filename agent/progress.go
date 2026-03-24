@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -438,6 +439,31 @@ func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) st
 //   - "> ⏳ SubAgent [...]" 占位行 → 子 Agent 初始状态（解析为 childAgentStatus）
 //   - 其他 "> " 前缀行（如 "> 💭 思考中..."、工具结果穿透等）→ 过滤掉
 //   - 其他非空前缀行 → 当前 Agent 自身进度
+//
+// isToolCompletionLine 检查是否为工具完成行（如 "✅ Shell: go version (508ms)"）。
+// 与子 Agent 完成行（如 "✅ ministry-works: 执行完成"）的区别是：工具完成行以耗时结尾。
+func isToolCompletionLine(line string) bool {
+	// 清理引用前缀
+	for strings.HasPrefix(line, "> ") {
+		line = strings.TrimPrefix(line, "> ")
+	}
+	line = strings.TrimLeft(line, "　 \t")
+	// 工具完成行特征：以 ) 结尾（耗时格式如 (508ms)、(1.2s)）
+	if !strings.HasSuffix(line, ")") {
+		return false
+	}
+	// 检查包含 (数字 时间单位) 模式
+	if idx := strings.LastIndex(line, "("); idx > 0 {
+		suffix := line[idx:]
+		if reToolDuration.MatchString(suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+var reToolDuration = regexp.MustCompile(`^\(\d+(?:\.\d+)?(?:ms|s)\)$`)
+
 func extractOwnAndChildProgress(flat []string) (string, []childAgentStatus) {
 	var ownLines []string
 	var indexed []indexedChild
@@ -445,6 +471,14 @@ func extractOwnAndChildProgress(flat []string) (string, []childAgentStatus) {
 	for _, line := range flat {
 		if isSubAgentLine(line) {
 			depth := countFullWidthIndent(line)
+			if depth == 0 {
+				// 无缩进的行需要区分：
+				// 1. 当前 Agent 的工具完成行（如 "✅ Shell: cmd (508ms)"）→ 跳过
+				// 2. 子 Agent 占位行（如 "⏳ SubAgent [role]..."）→ 保留
+				if isToolCompletionLine(line) {
+					continue
+				}
+			}
 			if child, ok := parseSubAgentLine(line); ok {
 				indexed = append(indexed, indexedChild{depth: depth, child: child})
 			}

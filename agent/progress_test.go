@@ -41,6 +41,7 @@ func TestProgressTruncate(t *testing.T) {
 		maxRunes int
 		want     string
 	}{
+		// 基本截断
 		{"hello", 10, "hello"},
 		{"hello", 5, "hello"},
 		{"hello", 4, "hel…"},
@@ -49,6 +50,41 @@ func TestProgressTruncate(t *testing.T) {
 		{"hello", 0, "…"},
 		{"你好世界", 4, "你好世界"},
 		{"你好世界", 3, "你好…"},
+
+		// 行内代码闭合
+		{"`hello world` end", 12, "`hello worl…`"}, // 截在代码内，闭合 backtick
+		{"`hi` done", 10, "`hi` done"},             // 不截断
+		{"`a` `b` `c`", 8, "`a` `b`…"},             // 截在第3个代码开头，闭合
+
+		// 粗体闭合
+		{"**hello** world", 10, "**hello**…"},   // 已闭合的粗体+空格被截，无未闭合
+		{"**hello** world", 8, "**hello…**"},    // 截在粗体内，闭合
+		{"**bold text here**", 8, "**bold …**"}, // 截在粗体内
+
+		// 斜体闭合
+		{"*hello* world", 10, "*hello* w…"}, // 已闭合
+		{"*hello* world", 7, "*hello…*"},    // 截在斜体内，闭合
+		{"*italic text*", 8, "*italic…*"},   // 截在斜体内，闭合
+
+		// 链接闭合（链接 []() 内部不做特殊处理，仅 [ 需要 ](…) 闭合）
+		{"[link](https://example.com) end", 15, "[link](https:/…"}, // 截在URL中间
+
+		// 删除线闭合
+		{"~~hello~~ world", 10, "~~hello~~…"}, // 已闭合
+		{"~~hello~~ world", 8, "~~hello…~~"},  // 截在删除线内
+
+		// 混合场景
+		{"`code` and **bold**", 12, "`code` and …"},   // 截在 ** 之前
+		{"**bold** and *italic*", 12, "**bold** an…"}, // 截在 *italic* 之前
+		{"normal `code end", 12, "normal `cod…`"},     // 截在代码内
+
+		// 无需闭合
+		{"plain text here", 8, "plain t…"},
+		{"already **closed** ok", 21, "already **closed** ok"},
+
+		// 边界：截断在标记中间
+		{"hello**world", 10, "hello**wo…**"}, // 截在粗体内
+		{"hello*world", 9, "hello*wo…*"},     // 截在斜体内
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s_%d", tt.s, tt.maxRunes), func(t *testing.T) {

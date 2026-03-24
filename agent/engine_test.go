@@ -1494,3 +1494,74 @@ func TestBuildToolContext_SubAgentCdPersists(t *testing.T) {
 		t.Errorf("CurrentDir on third call = %q, want /work/project/src", tc3.CurrentDir)
 	}
 }
+
+// TestRun_LLMSemaphore_NoLeakAcrossIterations verifies that the per-tenant LLM
+// semaphore is released after each LLM call, not deferred to Run() exit.
+// Before the fix, defer inside the for-loop caused slots to accumulate, deadlocking
+// after <capacity> iterations.
+func TestRun_LLMSemaphore_NoLeakAcrossIterations(t *testing.T) {
+	const semCapacity = 2
+	const toolIterations = 5 // more iterations than semaphore capacity
+
+	// Build mock LLM responses: toolIterations rounds of tool calls + final text reply
+	var responses []llm.LLMResponse
+	for i := 0; i < toolIterations; i++ {
+		responses = append(responses, llm.LLMResponse{
+			FinishReason: llm.FinishReasonToolCalls,
+			ToolCalls: []llm.ToolCall{{
+				ID:        fmt.Sprintf("call_%d", i),
+				Name:      "Echo",
+				Arguments: fmt.Sprintf(`{"msg":"iter%d"}`, i),
+			}},
+		})
+	}
+	responses = append(responses, llm.LLMResponse{Content: "done"})
+
+	mock := &mockLLM{responses: responses}
+
+	sem := make(chan struct{}, semCapacity)
+	var acquireCount atomic.Int32
+
+	semAcquire := func() func() {
+		acquireCount.Add(1)
+		sem <- struct{}{}
+		return func() { <-sem }
+	}
+
+	echoTool := &mockTool{
+		name:   "Echo",
+		result: &tools.ToolResult{Summary: "ok"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	out := Run(ctx, RunConfig{
+		LLMClient:     mock,
+		Model:         "test-model",
+		Tools:         newTestRegistry(echoTool),
+		Messages:      baseMessages(),
+		AgentID:       "main",
+		Channel:       "test",
+		ChatID:        "chat1",
+		LLMSemAcquire: semAcquire,
+	})
+
+	if ctx.Err() != nil {
+		t.Fatal("Run deadlocked on LLM semaphore (timed out)")
+	}
+	if out.Error != nil {
+		t.Fatalf("unexpected error: %v", out.Error)
+	}
+	if out.Content != "done" {
+		t.Errorf("content = %q, want %q", out.Content, "done")
+	}
+	total := int(acquireCount.Load())
+	if total != toolIterations+1 {
+		t.Errorf("semaphore acquired %d times, want %d", total, toolIterations+1)
+	}
+	// Verify semaphore is fully released
+	if len(sem) != 0 {
+		t.Errorf("semaphore has %d slots still held, want 0", len(sem))
+	}
+}

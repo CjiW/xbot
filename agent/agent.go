@@ -956,6 +956,16 @@ func (a *Agent) NormalizeSenderID(senderID string) string {
 	return senderID
 }
 
+// workspaceRoot returns the workspace root for the given sender.
+// In single-user mode, returns workDir directly (no per-user subdirectory),
+// skipping directory permission checks that are unnecessary for single-user deployments.
+func (a *Agent) workspaceRoot(senderID string) string {
+	if a.singleUser {
+		return a.workDir
+	}
+	return tools.UserWorkspaceRoot(a.workDir, senderID)
+}
+
 // isGroupChat 判断是否为群聊
 // 使用消息的 ChatType 字段：p2p 为私聊，group 为群聊
 func (a *Agent) isGroupChat(msg bus.InboundMessage) bool {
@@ -1352,7 +1362,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	workspaceRoot := a.workspaceRoot(senderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to create cron user workspace")
 	}
@@ -1398,7 +1408,7 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := a.workspaceRoot(msg.SenderID)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}

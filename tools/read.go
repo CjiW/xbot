@@ -159,23 +159,25 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 
 // executeLocal 在本地读取文件
 func (t *ReadTool) executeLocal(ctx *ToolContext, filePath string) (*ToolResult, error) {
-	// 如果是相对路径且 CurrentDir 存在，先尝试从 CurrentDir 解析。
-	// 若在 CurrentDir 中未找到，有意 fallthrough 到 WorkspaceRoot 解析——
+	// ResolveReadPath 内部已支持 CurrentDir 优先解析。
+	// 若 CurrentDir 下文件不存在，fallthrough 到 WorkspaceRoot 解析——
 	// 这使得 agent cd 到子目录后仍能读取 workspace root 下的文件。
-	if ctx != nil && ctx.CurrentDir != "" && !filepath.IsAbs(filePath) {
-		absPath := filepath.Join(ctx.CurrentDir, filePath)
-		if resolved, err := ResolveReadPath(ctx, absPath); err == nil {
-			if _, statErr := os.Stat(resolved); statErr == nil {
-				content, err := os.ReadFile(resolved)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read file: %w", err)
+	resolvedPath, err := ResolveReadPath(ctx, filePath)
+	if err == nil {
+		if _, statErr := os.Stat(resolvedPath); statErr != nil && ctx != nil && ctx.CurrentDir != "" && !filepath.IsAbs(filePath) {
+			// CurrentDir 下找不到，尝试从 workspace root 解析
+			root, rootErr := resolveScopedBase(ctx)
+			if rootErr == nil {
+				rootPath := filepath.Join(root, filePath)
+				if fallback, fbErr := ResolveReadPath(ctx, rootPath); fbErr == nil {
+					if _, fbStatErr := os.Stat(fallback); fbStatErr == nil {
+						resolvedPath = fallback
+						err = nil
+					}
 				}
-				return NewResultWithTips(string(content), "如需修改此文件，优先使用 Edit 工具。"), nil
 			}
 		}
 	}
-
-	resolvedPath, err := ResolveReadPath(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}

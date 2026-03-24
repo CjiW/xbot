@@ -65,7 +65,7 @@ func (a *Agent) buildBaseRunConfig(
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
-		WorkspaceRoot:    tools.UserWorkspaceRoot(a.workDir, senderID),
+		WorkspaceRoot:    a.workspaceRoot(senderID),
 		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
@@ -447,7 +447,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
-	wsRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	wsRoot := a.workspaceRoot(senderID)
 	cfg := &RunConfig{
 		AgentID:      "main",
 		Channel:      channel,

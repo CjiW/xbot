@@ -114,20 +114,30 @@ func (m *phase1Manager) ManualCompress(ctx context.Context, messages []llm.ChatM
 }
 
 func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats {
-	msgTokens, err := llm.CountMessagesTokens(messages, model)
+	roleTokens, err := llm.CountMessagesTokensByRole(messages, model)
 	if err != nil {
-		msgTokens = 0
+		// Fallback: use total count if per-role fails
+		msgTokens, _ := llm.CountMessagesTokens(messages, model)
+		roleTokens = llm.RoleTokenCount{System: msgTokens}
 	}
-	tokenCount := msgTokens + toolTokens
+	totalTokens := roleTokens.System + roleTokens.User + roleTokens.Assistant + roleTokens.Tool + toolTokens
 	threshold := int(float64(m.config.MaxContextTokens) * m.config.CompressionThreshold)
 
-	return &ContextStats{
-		SystemTokens: msgTokens, // 简化：不单独计算 system token
-		TotalTokens:  tokenCount,
-		MaxTokens:    m.config.MaxContextTokens,
-		Threshold:    threshold,
-		Mode:         ContextModePhase1,
+	stats := &ContextStats{
+		SystemTokens:      roleTokens.System,
+		UserTokens:        roleTokens.User,
+		AssistantTokens:   roleTokens.Assistant,
+		ToolMsgTokens:     roleTokens.Tool,
+		ToolDefTokens:     toolTokens,
+		TotalTokens:       totalTokens,
+		MaxTokens:         m.config.MaxContextTokens,
+		Threshold:         threshold,
+		Mode:              ContextModePhase1,
+		IsRuntimeOverride: m.config.RuntimeMode() != "",
+		DefaultMode:       m.config.DefaultMode,
 	}
+
+	return stats
 }
 
 func (m *phase1Manager) SessionHook() SessionCompressHook { return nil }

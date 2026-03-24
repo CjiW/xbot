@@ -341,10 +341,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		InitialCWD:       parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
 		MaxIterations: 100,
-		// SubAgent 不设独立超时，LLMTimeout/ToolTimeout 设 0，
-		// 子 Agent 直接使用父 context 携带的 deadline
-		LLMTimeout:  0,
-		ToolTimeout: 0,
+		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline
 
 		// LLM 并发限流：继承父 Agent 的 per-tenant 信号量
 		LLMSemAcquire: a.llmFactory.LLMSemAcquireForUser(originUserID),

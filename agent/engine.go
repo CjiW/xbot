@@ -121,9 +121,6 @@ type RunConfig struct {
 	// SubAgent 使用 nil（defaultToolExecutor 从 cfg.Tools 查找并执行）。
 	ToolExecutor func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error)
 
-	// LLMTimeout 单次 LLM 调用超时（0 = 不设超时）
-	LLMTimeout time.Duration
-
 	// ToolTimeout 单个工具调用超时（0 = 使用默认 120s）
 	ToolTimeout time.Duration
 
@@ -603,14 +600,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 使用会话特定的工具定义
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 
-		// LLM 调用（可选超时 + per-tenant 并发限流）
-		var llmCtx context.Context
-		var llmCancel context.CancelFunc
-		if cfg.LLMTimeout > 0 {
-			llmCtx, llmCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-		} else {
-			llmCtx, llmCancel = retryNotifyCtx, func() {}
-		}
+		// LLM 调用（per-tenant 并发限流）
+		// 注意：不在 engine 层设置 per-request 超时，由 RetryLLM.perAttemptCtx 管理。
+		// engine 层的 context.WithTimeout 会导致 parent deadline 与 retry 冲突：
+		// 第一次请求耗尽超时后，parent deadline 已过期，后续重试被立即取消。
 
 		// Acquire per-tenant LLM concurrency slot (if configured).
 		// Release after Generate (and potential retry) completes — NOT via defer,
@@ -621,9 +614,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			releaseLLMSem = cfg.LLMSemAcquire()
 		}
 
-		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-
-		llmCancel()
+		response, err := cfg.LLMClient.Generate(retryNotifyCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
@@ -667,15 +658,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						}
 					}
 					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
-					var retryCtx context.Context
-					var retryCancel context.CancelFunc
-					if cfg.LLMTimeout > 0 {
-						retryCtx, retryCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-					} else {
-						retryCtx, retryCancel = retryNotifyCtx, func() {}
-					}
-					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-					retryCancel()
+					response, err = cfg.LLMClient.Generate(retryNotifyCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
 					if response != nil {

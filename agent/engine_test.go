@@ -528,26 +528,6 @@ func TestRun_OAuthHandler(t *testing.T) {
 	}
 }
 
-func TestRun_LLMTimeout(t *testing.T) {
-	slowLLM := &mockLLM{
-		responses: []llm.LLMResponse{}, // will fail
-	}
-
-	out := Run(context.Background(), RunConfig{
-		LLMClient:  slowLLM,
-		Model:      "test",
-		Tools:      newTestRegistry(),
-		Messages:   baseMessages(),
-		AgentID:    "main",
-		LLMTimeout: 1 * time.Millisecond, // very short timeout
-	})
-
-	// Should get an error (either timeout or no responses)
-	if out.Error == nil && out.Content == "" {
-		t.Error("expected error or content for LLM timeout")
-	}
-}
-
 func TestRun_SystemMessageAssert(t *testing.T) {
 	mock := &mockLLM{
 		responses: []llm.LLMResponse{

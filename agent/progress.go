@@ -68,3 +68,11 @@ type TokenUsageSnapshot struct {
 	TotalTokens      int64
 	CacheHitTokens   int64
 }
+
+// SubAgentProgressDetail 携带层级信息的 SubAgent 进度回调参数。
+// 用于递归 SubAgent 场景，让深层子 Agent 的进度能穿透到最顶层。
+type SubAgentProgressDetail struct {
+	Path  []string // 调用链: ["工部", "ministry-works/audit"]
+	Line  string   // 进度内容（单行，已清理换行）
+	Depth int      // 嵌套深度（0 = 直接子 Agent）
+}

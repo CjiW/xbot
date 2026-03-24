@@ -20,9 +20,8 @@ import (
 )
 
 // SubAgentProgressCallback is the type for SubAgent progress callback.
-// It is injected via context to allow parallel SubAgents to update parent
-// progress lines without conflicting with each other.
-type SubAgentProgressCallback func(roleName, line string)
+// It carries depth information for recursive SubAgent progress penetration.
+type SubAgentProgressCallback func(detail SubAgentProgressDetail)
 
 type subAgentProgressKey struct{}
 
@@ -857,13 +856,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if autoNotify {
 					pi := progressStartIdx + entry.index
 					if pi < len(progressLines) {
-						execCtx = WithSubAgentProgress(execCtx, func(roleName, line string) {
-							// 只取最后一行，避免多行内容破坏飞书 markdown blockquote
-							if idx := strings.LastIndex(line, "\n"); idx >= 0 {
-								line = line[idx+1:]
+						execCtx = WithSubAgentProgress(execCtx, func(detail SubAgentProgressDetail) {
+							// 树形缩进：全角空格（飞书不忽略）+ box-drawing 连接符
+							indent := strings.Repeat("　", detail.Depth)
+							connector := "├─"
+							icon := "🔄"
+							if detail.Line == "" {
+								icon = "✅"
 							}
 							progressMu.Lock()
-							progressLines[pi] = fmt.Sprintf("> 🔄 SubAgent [%s]: %s", roleName, line)
+							progressLines[pi] = fmt.Sprintf("> %s%s %s [%s]: %s", indent, connector, icon, CallChainFromContext(ctx).Current(), detail.Line)
 							notifyProgress("")
 							progressMu.Unlock()
 						})

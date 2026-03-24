@@ -266,7 +266,11 @@ func (r *RetryLLM) ListModels() []string {
 	return r.inner.ListModels()
 }
 
-// GenerateStream 仅在获取 channel 时重试，流开始后不重试
+// GenerateStream 仅在获取 channel 时重试，流开始后不重试。
+// 注意：不使用 perAttemptCtx，因为 GenerateStream 是异步的（启动 goroutine 后立即返回），
+// perAttemptCtx 的 defer cancel() 会在 goroutine 仍在运行时过早取消上下文，
+// 导致 processStream 检测到 context canceled 并发送 EventError。
+// 流的超时/取消由调用方（generateResponse → CollectStream）通过 ctx 管理。
 func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error) {
 	release := r.acquire(ctx)
 	defer release()
@@ -277,8 +281,6 @@ func (r *RetryLLM) GenerateStream(ctx context.Context, model string, messages []
 	return retry.NewWithData[<-chan StreamEvent](
 		r.retryOptions(ctx, "Retrying stream connection")...,
 	).Do(func() (<-chan StreamEvent, error) {
-		attemptCtx, cancel := r.perAttemptCtx(ctx)
-		defer cancel()
-		return streaming.GenerateStream(attemptCtx, model, messages, tools, thinkingMode)
+		return streaming.GenerateStream(ctx, model, messages, tools, thinkingMode)
 	})
 }

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,7 +160,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> ├─ ✅ crown-prince",
 		},
 		{
-			name: "multi line tree format",
+			name: "multi line - takes last own line",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"💭 思考中...", "⏳ Shell(ls) ...", "⏳ Shell(go test) ..."},
@@ -167,16 +169,41 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...",
 		},
 		{
-			name: "multi line with quote prefix - takes last non-empty",
+			name: "filters sub-agent tree lines from quote-prefixed content",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Lines: []string{"> 💭 思考中...", "> ⏳ Shell(ls) ..."},
+				Lines: []string{"> ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ..."},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince: ⏳ Shell(ls) ...",
+			// All lines are > -prefixed (from child SubAgent), so nothing remains → completed
+			want: "> ├─ ✅ crown-prince",
 		},
 		{
-			name: "depth 1 multi line - takes last non-empty",
+			name: "filters nested tree lines, keeps own progress",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"【奏报】判定：🟢 直接执行", "> ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ..."},
+				Depth: 0,
+			},
+			// "> "-prefixed lines are filtered; own line "【奏报】判定：🟢 直接执行" remains
+			want: "> ├─ 🔄 crown-prince: 【奏报】判定：🟢 直接执行",
+		},
+		{
+			name: "real 3-layer scenario: crown-prince with child tree lines",
+			detail: SubAgentProgressDetail{
+				Path: []string{"main/crown-prince"},
+				Lines: []string{
+					"【奏报】 -  圣旨：启动三层 SubAgent 并发测试\n-  判定：🟢 直接执行 → 尚书省 (department-state)\n-  理由：明确的调度测试任务，指令清晰，直接分发执行\n臣这就调度尚书省，令其并发派发三部执行。",
+					"> ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: 💭 思考中...\n> ├─ 🔄 department-state: ✅ SubAgent [ministry-works]: done (4.66s)\n> ├─ 🔄 department-state: ⏳ SubAgent [ministry-justice]: 💭 思考中...",
+				},
+				Depth: 0,
+			},
+			// Multi-line own content: last own line is "臣这就调度尚书省，令其并发派发三部执行。"
+			// The second element is all > -prefixed → filtered
+			want: "> ├─ 🔄 crown-prince: 臣这就调度尚书省，令其并发派发三部执行。",
+		},
+		{
+			name: "depth 1 - own progress only",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
 				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
@@ -194,7 +221,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> 　├─ ✅ ministry-works",
 		},
 		{
-			name: "depth 2 multi line - takes last non-empty",
+			name: "depth 2 own progress",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/department-state", "main/crown-prince/department-state/ministry-justice"},
 				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
@@ -221,58 +248,34 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> ├─ ✅ ",
 		},
 		{
-			name: "double quote prefix cleanup",
+			name: "double quote prefix on own content",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"> > ⏳ Shell(go test) ..."},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...",
+			// "> "-prefixed lines are filtered
+			want: "> ├─ ✅ crown-prince",
 		},
 		{
-			name: "nested subagent progress with depth 1 - single line",
+			name: "filters tree-line characters (│) in content",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
-				Lines: []string{"> ├─ 🔄 ministry-works: 💭 审计中..."},
+				Lines: []string{"> ├─ 🔄 ministry-works: 💭 审计中...", "│  more tree content"},
 				Depth: 1,
 			},
-			want: "> 　├─ 🔄 ministry-rites: ├─ 🔄 ministry-works: 💭 审计中...",
+			// All lines filtered (first is > -prefixed, second has │)
+			want: "> 　├─ ✅ ministry-rites",
 		},
 		{
-			name: "nested subagent progress - takes last non-empty line",
-			detail: SubAgentProgressDetail{
-				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
-				Lines: []string{"> ├─ 🔄 ministry-works:", "> │  💭 审计中..."},
-				Depth: 1,
-			},
-			want: "> 　├─ 🔄 ministry-rites: │  💭 审计中...",
-		},
-		{
-			name: "multiline content in single Lines element - takes last line",
+			name: "mixed own and sub-agent lines - keeps own",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Lines: []string{"【奏报】 -  圣旨：启动三层 SubAgent 并发测试\n-  判定：🟢 直接执行 → 尚书省\n-  理由：明确的调度测试任务\n臣这就调度尚书省"},
+				Lines: []string{"调度三部执行", "> ├─ 🔄 department-state: ⏳ SubAgent ...", "⏳ SubAgent(ministry-works): done"},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince: 臣这就调度尚书省",
-		},
-		{
-			name: "multiline content with quote prefix in single Lines element",
-			detail: SubAgentProgressDetail{
-				Path:  []string{"main/crown-prince"},
-				Lines: []string{"> 【奏报】 -  圣旨：启动三层并发测试\n-  判定：🟢 直接执行\n> ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ..."},
-				Depth: 0,
-			},
-			want: "> ├─ 🔄 crown-prince: ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ...",
-		},
-		{
-			name: "multiline content with trailing subagent lines - picks latest subagent",
-			detail: SubAgentProgressDetail{
-				Path:  []string{"main/crown-prince"},
-				Lines: []string{"【奏报】 -  圣旨...\n-  判定：🟢 直接执行\n臣这就调度尚书省\n> ├─ ✅ SubAgent [ministry-works]: (4.66s)\n> ├─ 🔄 department-state: ⏳ SubAgent [ministry-justice]: ..."},
-				Depth: 0,
-			},
-			want: "> ├─ 🔄 crown-prince: ├─ 🔄 department-state: ⏳ SubAgent [ministry-justice]: ...",
+			// "调度三部执行" (own), "> ├─..." (filtered), "⏳ SubAgent...: done" (own)
+			want: "> ├─ 🔄 crown-prince: ⏳ SubAgent(ministry-works): done",
 		},
 		{
 			name: "path without slash uses full string as role",
@@ -282,6 +285,15 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				Depth: 0,
 			},
 			want: "> ├─ 🔄 simple-role: working",
+		},
+		{
+			name: "long content is truncated",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{strings.Repeat("这是一段非常长的进度内容用来测试截断功能是否正常工作", 10)},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: " + truncateProgress(strings.Repeat("这是一段非常长的进度内容用来测试截断功能是否正常工作", 10), 80),
 		},
 	}
 
@@ -343,6 +355,109 @@ func TestFlattenLines(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Errorf("flattenLines()[%d] = %q, want %q", i, got[i], tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestIsSubAgentTreeLine(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"├─ 🔄 ministry-works: 💭 审计中...", true},
+		{"└─ ✅ ministry-works", true},
+		{"│  💭 思考中...", true},
+		{"> ├─ 🔄 department-state: ⏳ ...", true},
+		{"> > ├─ 🔄 nested: ...", true},
+		{"💭 思考中...", false},
+		{"⏳ Shell(ls) ...", false},
+		{"【奏报】调度三部执行", false},
+		{"✅ Shell(go test) (1.2s)", false},
+		{"", false},
+		{"> 💭 思考中...", false}, // quote prefix but no tree chars after cleaning
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isSubAgentTreeLine(tt.input)
+			if got != tt.want {
+				t.Errorf("isSubAgentTreeLine(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractOwnProgress(t *testing.T) {
+	tests := []struct {
+		name string
+		flat []string
+		want string
+	}{
+		{
+			name: "simple own lines",
+			flat: []string{"💭 思考中...", "⏳ Shell(go test) ..."},
+			want: "⏳ Shell(go test) ...",
+		},
+		{
+			name: "filters quote-prefixed lines",
+			flat: []string{"> ├─ 🔄 child: ...", "> │  more ..."},
+			want: "",
+		},
+		{
+			name: "keeps own, filters child quote lines",
+			flat: []string{"调度三部", "> ├─ 🔄 child: ...", "执行完毕"},
+			want: "执行完毕",
+		},
+		{
+			name: "filters tree-line characters",
+			flat: []string{"│  some tree", "├─ 🔄 role: content"},
+			want: "",
+		},
+		{
+			name: "mixed content with tree chars and own",
+			flat: []string{"【奏报】判定", "│  tree line", "⏳ Shell(ls) ..."},
+			want: "⏳ Shell(ls) ...",
+		},
+		{
+			name: "nil input",
+			flat: nil,
+			want: "",
+		},
+		{
+			name: "all empty",
+			flat: []string{"", "> ", ""},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractOwnProgress(tt.flat)
+			if got != tt.want {
+				t.Errorf("extractOwnProgress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateProgress(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"short", 10, "short"},
+		{"exactly 5", 5, "ex..."},
+		{"exactly 6", 6, "exa..."},
+		{"too long content here", 10, "too lon..."},
+		{"中文字符串测试很长很长很长", 10, "中文字符串测试..."},
+		{"emoji 🎉🎊🎈 content", 10, "emoji 🎉..."},
+	}
+	for _, tt := range tests {
+		name := fmt.Sprintf("%s_len%d", string([]rune(tt.input)[:min(5, len([]rune(tt.input)))]), tt.maxLen)
+		t.Run(name, func(t *testing.T) {
+			got := truncateProgress(tt.input, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("truncateProgress(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}

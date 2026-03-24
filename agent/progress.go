@@ -102,27 +102,75 @@ func flattenLines(lines []string) []string {
 	return result
 }
 
+// isSubAgentTreeLine 检查一行是否是子 Agent 的树状格式行（如 "├─ 🔄 ministry-works: ..."）。
+// 这些行来自子 Agent 进度穿透，应被过滤掉，只显示当前 Agent 自身的状态。
+func isSubAgentTreeLine(line string) bool {
+	// 跳过引用前缀
+	for strings.HasPrefix(line, "> ") {
+		line = strings.TrimPrefix(line, "> ")
+	}
+	line = strings.TrimSpace(line)
+	// 子 Agent 树状行的特征：以 ├─ 或 └─ 开头（全角或半角）
+	return strings.HasPrefix(line, "├─") || strings.HasPrefix(line, "└─") ||
+		strings.HasPrefix(line, "├─") || strings.HasPrefix(line, "└─") ||
+		strings.HasPrefix(line, "│")
+}
+
+// extractOwnProgress 从展平后的行中提取当前 Agent 自身的进度（过滤掉子 Agent 穿透的行）。
+// 规则：
+//  1. 跳过以 "> " 开头的行（这些是飞书引用格式，属于子 Agent 的进度行）
+//  2. 跳过包含树状格式字符（├─└─│）的行（子 Agent 的进度穿透）
+//  3. 从剩余行中取最后一非空行作为当前 Agent 的状态
+func extractOwnProgress(flat []string) string {
+	var own []string
+	for _, line := range flat {
+		// 跳过引用前缀行（子 Agent 的进度行会带 > 前缀）
+		if strings.HasPrefix(line, "> ") {
+			continue
+		}
+		// 跳过子 Agent 树状行
+		if isSubAgentTreeLine(line) {
+			continue
+		}
+		cleaned := strings.TrimSpace(line)
+		if cleaned != "" {
+			own = append(own, cleaned)
+		}
+	}
+	if len(own) == 0 {
+		return ""
+	}
+	return own[len(own)-1]
+}
+
+// truncateProgress 截断进度文本到最大长度，超出部分用 "..." 省略。
+func truncateProgress(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-3]) + "..."
+}
+
 // formatSubAgentProgress 格式化 SubAgent 进度为单行文本。
 // 每个 SubAgent 在父 Agent 的 progressLines 中只占一行，避免多行破坏飞书引用块格式。
-// 对于嵌套 SubAgent 穿透上来的多行进度，只取最后一非空行显示。
+// 对于嵌套 SubAgent 穿透上来的进度，只取当前 Agent 自身的最新状态（过滤子 Agent 的树状行）。
 //
 // 输出格式示例：
 //
-//	> ├─ 🔄 crown-prince: 💭 思考中...          （单行：内容跟在角色名后）
-//	> ├─ 🔄 crown-prince: ⏳ Shell(go test) ... （多行输入：只取最新一行）
-//	> ├─ ✅ crown-prince                        （完成：简洁无内容）
-//	> 　├─ 🔄 ministry-works: ⏳ Shell(ls) ...  （depth=1：全角空格缩进）
+//	> ├─ 🔄 crown-prince: 💭 思考中...                    （单行：内容跟在角色名后）
+//	> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...           （工具执行）
+//	> ├─ 🔄 crown-prince: 【奏报】调度三部执行...          （模型输出截断）
+//	> ├─ ✅ crown-prince                                  （完成：简洁无内容）
+//	> 　├─ 🔄 ministry-works: ⏳ Shell(ls) ...            （depth=1：全角空格缩进）
 func formatSubAgentProgress(detail SubAgentProgressDetail) string {
-	// 展平并清理每行中的引用前缀，取最后一非空行作为当前状态
+	const maxContentLen = 80 // 进度内容最大字符数
+
+	// 展平所有行
 	flat := flattenLines(detail.Lines)
-	var lastLine string
-	for i := len(flat) - 1; i >= 0; i-- {
-		cleaned := cleanQuotePrefix(flat[i])
-		if cleaned != "" {
-			lastLine = cleaned
-			break
-		}
-	}
+
+	// 提取当前 Agent 自身的进度（过滤子 Agent 穿透的行）
+	lastLine := extractOwnProgress(flat)
 
 	// 全角空格缩进（飞书不忽略全角空格）
 	indent := strings.Repeat("　", detail.Depth)
@@ -142,6 +190,9 @@ func formatSubAgentProgress(detail SubAgentProgressDetail) string {
 	if lastLine == "" {
 		return fmt.Sprintf("> %s├─ ✅ %s", indent, roleName)
 	}
+
+	// 截断过长的内容
+	lastLine = truncateProgress(lastLine, maxContentLen)
 
 	return fmt.Sprintf("> %s├─ 🔄 %s: %s", indent, roleName, lastLine)
 }

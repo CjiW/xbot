@@ -234,6 +234,21 @@ func readArgsHasOffsetOrLimit(argsJSON string) bool {
 //
 // 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
+
+// generateResponse calls the LLM using streaming if available, falling back to Generate().
+// This avoids blocking on the full response — streaming allows incremental data processing.
+func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
+	if streaming, ok := client.(llm.StreamingLLM); ok {
+		eventCh, streamErr := streaming.GenerateStream(ctx, model, messages, tools, thinkingMode)
+		if streamErr != nil {
+			return nil, streamErr
+		}
+		return llm.CollectStream(ctx, eventCh)
+	}
+	return client.Generate(ctx, model, messages, tools, thinkingMode)
+}
+
+
 //   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
 func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
@@ -614,7 +629,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			releaseLLMSem = cfg.LLMSemAcquire()
 		}
 
-		response, err := cfg.LLMClient.Generate(retryNotifyCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
+		response, err := generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
@@ -658,7 +673,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						}
 					}
 					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
-					response, err = cfg.LLMClient.Generate(retryNotifyCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
+					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
 					if response != nil {

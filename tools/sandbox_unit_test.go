@@ -315,8 +315,8 @@ func TestApplyLineLimit_OffsetOnly(t *testing.T) {
 	content := "line1\nline2\nline3\nline4\nline5\n"
 	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 0, 3)
 	// maxLines=0 (no limit), offset=3 → start from line 3
-	// Note: trailing newline from Split+Join
-	expected := "line3\nline4\nline5\n"
+	// Lines are now prefixed with line numbers
+	expected := "3\tline3\n4\tline4\n5\tline5\n6\t"
 	if result.Summary != expected {
 		t.Errorf("offset=3: got %q, want %q", result.Summary, expected)
 	}
@@ -374,8 +374,10 @@ func TestApplyLineLimit_NilResult(t *testing.T) {
 func TestApplyLineLimit_NoOffsetNoMaxLines(t *testing.T) {
 	content := "line1\nline2\nline3"
 	result := applyLineLimit(&ToolResult{Summary: content, Detail: content}, 0, 0)
-	if result.Summary != content {
-		t.Errorf("no offset/max_lines: got %q, want %q", result.Summary, content)
+	// Lines are now prefixed with line numbers even without offset/maxLines
+	expected := "1\tline1\n2\tline2\n3\tline3"
+	if result.Summary != expected {
+		t.Errorf("no offset/max_lines: got %q, want %q", result.Summary, expected)
 	}
 }
 

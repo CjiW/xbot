@@ -21,6 +21,7 @@ func (t *ReadTool) Name() string {
 
 func (t *ReadTool) Description() string {
 	return `Read a file and return its content.
+Each output line is prefixed with its line number (1-based), useful for Edit tool's line mode.
 Parameters (JSON):
   - path: string, the file path to read (relative to working directory or absolute)
   - max_lines: number, maximum lines to return (0 or omit = no limit)
@@ -76,14 +77,19 @@ func applyLineLimit(result *ToolResult, maxLines, offset int) *ToolResult {
 	if result == nil {
 		return result
 	}
-	if maxLines <= 0 && offset <= 0 {
+	if result.Summary == "" {
 		return result
 	}
+
 	lines := strings.Split(result.Summary, "\n")
 	totalLines := len(lines)
 
+	// Determine the starting line number (1-based) before slicing
+	startLineNum := 1
+
 	// Apply offset (1-based): offset=N means skip first N-1 lines
 	if offset > 0 {
+		startLineNum = offset
 		// Convert to 0-based: if offset=10, we want lines[9:]
 		startIdx := offset - 1
 		if startIdx < 0 {
@@ -99,15 +105,25 @@ func applyLineLimit(result *ToolResult, maxLines, offset int) *ToolResult {
 	}
 
 	// Apply maxLines truncation
+	var truncatedMsg string
 	if maxLines > 0 && len(lines) > maxLines {
-		result.Summary = strings.Join(lines[:maxLines], "\n") +
-			fmt.Sprintf("\n\n... [truncated: showing %d of %d lines, use max_lines parameter to see more]", maxLines, totalLines)
-	} else {
-		result.Summary = strings.Join(lines, "\n")
+		lines = lines[:maxLines]
+		truncatedMsg = fmt.Sprintf("\n\n... [truncated: showing %d of %d lines, use max_lines parameter to see more]", maxLines, totalLines)
 	}
+
+	// Add line numbers to each line
+	maxLineNum := startLineNum + len(lines) - 1
+	width := len(fmt.Sprintf("%d", maxLineNum))
+	numbered := make([]string, len(lines))
+	for i, line := range lines {
+		numbered[i] = fmt.Sprintf("%*d\t%s", width, startLineNum+i, line)
+	}
+
+	result.Summary = strings.Join(numbered, "\n") + truncatedMsg
 	result.Detail = result.Summary
 	return result
 }
+
 
 // executeInSandbox 在沙箱容器内执行 cat 命令
 func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolResult, error) {

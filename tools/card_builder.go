@@ -15,10 +15,9 @@ type CardBuilder struct {
 	sessions map[string]*CardSession
 	counter  atomic.Int64
 
-	// TODO(sync.Map-cleanup): 以下 sync.Map（descriptions, expectedInteractions, elementOptions）
-	// 主要在 RemoveSession 时清理，但 activeCards（chat_id -> card_id）无法自动清理。
-	// 长期方案：替换为带 TTL 的 LRU cache（如 github.com/hashicorp/golang-lru/v2/expirable），
-	descriptions sync.Map // card_id -> description string (persists after session removal for callback context)
+	// descriptions: card_id -> description string, 在 RemoveSession 时清理（activeCards 除外）
+	// activeCards 无法自动清理，但 chat_id 数量有限，内存影响可控
+	descriptions sync.Map
 
 	// expectedInteractions stores which interaction types a card expects (persists after session removal)
 	expectedInteractions sync.Map // card_id -> []string

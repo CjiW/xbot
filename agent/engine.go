@@ -671,7 +671,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 							}
 						}
 					}
-					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
 					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++

@@ -251,18 +251,48 @@ func resolveXbotBinDir(configPath string) string {
 	return ""
 }
 
+// shellQuoteCmd 将 command + args 转为 shell 安全的单行字符串（用单引号包裹）
+func shellQuoteCmd(command string, args []string) string {
+	quote := func(s string) string {
+		return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+	}
+	parts := []string{quote(command)}
+	for _, a := range args {
+		parts = append(parts, quote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
 // ConnectStdioServer 连接 stdio 模式的 MCP Server（公共函数）
 // Returns a ClientSession (auto-initialized) and the session itself for closing.
 func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, workspaceRoot, userID, serverName string) (*mcp.ClientSession, error) {
 	envList := BuildStdioEnv(cfg, configPath)
 
 	sandbox := GetSandbox()
-	cmd, args, err := sandbox.Wrap(cfg.Command, cfg.Args, envList, workspaceRoot, userID)
-	if err != nil {
-		return nil, err
+
+	// 在 Docker 沙箱中，用 login shell 包裹命令以加载完整 PATH（与 Shell 工具一致）
+	// 避免 MCP 进程因缺少 PATH 而找不到依赖（如 gopls-mcp 找不到 gopls）
+	var execCmd *exec.Cmd
+	if sandbox.Name() != "none" {
+		shell, err := sandbox.GetShell(userID, workspaceRoot)
+		if err != nil {
+			return nil, fmt.Errorf("get shell for MCP: %w", err)
+		}
+		// 用 login shell 包裹：shell -l -c "exec cmd arg1 arg2 ..."
+		shellCmd := "exec " + shellQuoteCmd(cfg.Command, cfg.Args)
+		wrappedCmd, wrappedArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", shellCmd}, envList, workspaceRoot, userID)
+		if err != nil {
+			return nil, err
+		}
+		execCmd = exec.Command(wrappedCmd, wrappedArgs...)
+	} else {
+		wrappedCmd, wrappedArgs, err := sandbox.Wrap(cfg.Command, cfg.Args, envList, workspaceRoot, userID)
+		if err != nil {
+			return nil, err
+		}
+		execCmd = exec.Command(wrappedCmd, wrappedArgs...)
 	}
 
-	execCmd := exec.Command(cmd, args...)
 	// Build a minimal safe environment instead of passing os.Environ() which
 	// would leak host secrets (LLM_API_KEY, FEISHU_APP_SECRET, etc.).
 	execCmd.Env = buildMinimalExecEnv(envList)

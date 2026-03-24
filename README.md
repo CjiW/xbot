@@ -16,6 +16,9 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **SubAgent** — Delegate tasks to sub-agents with predefined roles
 - **Hot-reload prompts** — System prompts as Go templates
 - **KV-Cache optimized** — Context ordering maximizes LLM cache hits
+- **Encryption** — AES-256-GCM encryption for stored API keys and OAuth tokens
+- **Cron scheduling** — Scheduled tasks via cron expressions and one-shot `at` syntax
+- **Context management** — Auto-compression, topic isolation, configurable token limits
 
 ## Architecture
 
@@ -38,9 +41,15 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry and implementations
 - **memory/** — Memory providers (flat/letta)
+- **config/** — Configuration loading from environment variables / `.env`
+- **cron/** — Scheduled task scheduler
+- **crypto/** — AES-256-GCM encryption for API keys and OAuth tokens
+- **logger/** — Structured logging with file rotation
+- **oauth/** — OAuth 2.0 framework
+- **pprof/** — Optional pprof debug endpoint
 - **session/** — Multi-tenant session management
 - **storage/** — SQLite persistence (sessions, memory, tenants)
-- **oauth/** — OAuth 2.0 framework
+- **version/** — Build version info
 
 ## Quick Start
 
@@ -63,11 +72,13 @@ make dev
 ```bash
 make dev      # Run in development mode
 make build    # Build binary
+make run      # Build and run
 make test     # Run tests with race detection
 make fmt      # Format code
 make lint     # Run golangci-lint
 make ci       # lint → build → test
-make clean-db # Clear .xbot data
+make clean    # Remove binary and coverage output
+make clean-memory # Clear .xbot data
 ```
 
 ## Configuration
@@ -79,7 +90,7 @@ All config via environment variables or `.env`:
 | `LLM_PROVIDER` | LLM provider (`openai`/`anthropic`) | `openai` |
 | `LLM_BASE_URL` | API URL | — |
 | `LLM_API_KEY` | API key | — |
-| `LLM_MODEL` | Model name | `deepseek-chat` |
+| `LLM_MODEL` | Model name | `gpt-4o` |
 | `MEMORY_PROVIDER` | Memory (`flat`/`letta`) | `flat` |
 | `LLM_EMBEDDING_*` | Embedding API for Letta | — |
 | `FEISHU_ENABLED` | Enable Feishu | `false` |
@@ -87,8 +98,19 @@ All config via environment variables or `.env`:
 | `FEISHU_APP_SECRET` | Feishu app secret | — |
 | `QQ_ENABLED` | Enable QQ | `false` |
 | `WORK_DIR` | Working directory | `.` |
-| `PROMPT_FILE` | Custom prompt template | — |
+| `PROMPT_FILE` | Custom prompt template | `prompt.md` |
+| `SINGLE_USER` | Single-user mode | `false` |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
+| `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
+| `OAUTH_PORT` | OAuth server port | `8081` |
+| `XBOT_ENCRYPTION_KEY` | AES-256-GCM key (base64 32 bytes) for API keys/tokens | — |
+| `SANDBOX_MODE` | Sandbox mode (`docker`/`none`) | `docker` |
+| `AGENT_MAX_ITERATIONS` | Max tool-call iterations | `100` |
+| `AGENT_MAX_CONCURRENCY` | Max concurrent LLM calls | `3` |
+| `AGENT_MEMORY_WINDOW` | Memory consolidation trigger | `50` |
+| `AGENT_MAX_CONTEXT_TOKENS` | Max context tokens | `100000` |
+| `PPROF_ENABLE` | Enable pprof debug endpoint | `false` |
+| `TAVILY_API_KEY` | Tavily web search API key | — |
 
 ## Memory System
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SubAgent 递归进度穿透**: 深层嵌套 SubAgent 进度以 tree-style 缩进格式展示在飞书消息中，支持并发子 Agent 内联摘要 (#292, #294, #295, #296, #299)
+- **Read 行号输出**: Read 工具每行输出前添加行号前缀，方便配合 Edit 精确定位 (#293)
+- **Edit 行范围限定**: replace/regex 模式新增 `start_line`/`end_line` 参数，限定替换搜索范围 (#293)
+- **`/context info` 角色分类**: 按 system/user/assistant/tool 角色分类统计 token (#306)
+
+### Fixed
+
+- **LLM 信号量泄漏**: 每次 LLM 调用后立即释放信号量槽，防止多轮迭代后死锁 (#291)
+- **Read 输出重复**: 修复 Summary 和 Detail 双重拼接导致文件内容输出两遍的回归 (#297)
+- **Edit/Read 路径解析**: 支持 Cd 设置的 CurrentDir，修复 Cd 切换目录后 Edit 仍在旧目录操作 (#305)
+- **Shell 沙箱模式 Cd**: Shell 工具在 Docker 沙箱模式下正确跟随 Cd 设置的工作目录 (#312)
+- **DownloadFile 沙箱路径**: 修复沙箱模式下文件写入路径未做 sandbox→host 转换 (#301)
+- **GenerateStream 上下文取消**: 修复消息排队时 perAttemptCtx 过早取消导致 "context canceled" 错误 (#307)
+- **SubAgent 进度工具行误判**: 工具完成行不再被误识别为子 Agent 行导致多余缩进 (#309)
+- **SubAgent 进度缩进偏移**: 直接子 Agent 缩进深度修正（depth-2 公式） (#303)
+- **SubAgent 进度多行泄漏**: 多行内容 flatten 后取最后一行，避免破坏飞书引用块格式 (#295, #296)
+- **进度截断 Markdown 闭合**: 截断长文本时自动闭合未关闭的行内代码、粗体、斜体等标记 (#308)
+- **MCP stdio PATH 丢失**: 合并 login shell PATH 而非覆盖，保留 Go 工具链等环境变量 (#310)
+- **MCP stdio Docker 沙箱**: Docker 模式下 MCP stdio 使用 login shell 执行，与 Shell 工具统一环境 (#311)
+
+---
+
+## [0.9.0] - 2026-03-23 (PR #290)
+
 ### Security
 
 - **S-01**: Add `isAllowed()` permission check in `onCardAction` to prevent unauthorized card callback messages from bypassing the AllowFrom whitelist (`channel/feishu.go`)

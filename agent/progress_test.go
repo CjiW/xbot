@@ -117,78 +117,96 @@ func TestProgressEvent_NilStructured(t *testing.T) {
 
 func TestFormatSubAgentProgress(t *testing.T) {
 	tests := []struct {
-		name string
+		name   string
 		detail SubAgentProgressDetail
-		want string
+		want   string
 	}{
 		{
-			name: "depth 0 thinking",
+			name: "single line thinking",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Line:  "💭 思考中...",
+				Lines: []string{"💭 思考中..."},
 				Depth: 0,
 			},
 			want: "> ├─ 🔄 crown-prince: 💭 思考中...",
 		},
 		{
-			name: "depth 0 tool progress",
+			name: "single line tool progress",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Line:  "⏳ Shell(ls) ...",
+				Lines: []string{"⏳ Shell(ls) ..."},
 				Depth: 0,
 			},
 			want: "> ├─ 🔄 crown-prince: ⏳ Shell(ls) ...",
 		},
 		{
-			name: "depth 0 completed",
+			name: "completed (empty lines)",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Line:  "",
+				Lines: []string{""},
 				Depth: 0,
 			},
 			want: "> ├─ ✅ crown-prince",
 		},
 		{
-			name: "depth 1 with quote prefix (nested SubAgent)",
+			name: "completed (nil lines)",
 			detail: SubAgentProgressDetail{
-				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
-				Line:  "> ⏳ SubAgent [ministry-works]: 执行审计任务",
-				Depth: 1,
+				Path:  []string{"main/crown-prince"},
+				Lines: nil,
+				Depth: 0,
 			},
-			want: "> 　├─ 🔄 ministry-rites: ⏳ SubAgent [ministry-works]: 执行审计任务",
+			want: "> ├─ ✅ crown-prince",
 		},
 		{
-			name: "depth 1 double quote prefix",
+			name: "multi line tree format",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"💭 思考中...", "⏳ Shell(ls) ...", "⏳ Shell(go test) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...\n> │  ⏳ Shell(go test) ...",
+		},
+		{
+			name: "multi line with quote prefix cleanup",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"> 💭 思考中...", "> ⏳ Shell(ls) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...",
+		},
+		{
+			name: "depth 1 multi line",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
-				Line:  "> > ⏳ Shell(go test) ...",
+				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
 				Depth: 1,
 			},
-			want: "> 　├─ 🔄 ministry-works: ⏳ Shell(go test) ...",
+			want: "> 　├─ 🔄 ministry-works:\n> 　│  💭 审计中...\n> 　│  ⏳ Shell(go test) ...",
 		},
 		{
 			name: "depth 1 completed",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
-				Line:  "",
+				Lines: []string{""},
 				Depth: 1,
 			},
 			want: "> 　├─ ✅ ministry-works",
 		},
 		{
-			name: "depth 2 nested thinking",
+			name: "depth 2 multi line",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/department-state", "main/crown-prince/department-state/ministry-justice"},
-				Line:  "💭 思考中...",
+				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
 				Depth: 2,
 			},
-			want: "> 　　├─ 🔄 ministry-justice: 💭 思考中...",
+			want: "> 　　├─ 🔄 ministry-justice:\n> 　　│  💭 运行测试...\n> 　　│  ✅ Shell(go test) (1.2s)",
 		},
 		{
 			name: "empty path with content",
 			detail: SubAgentProgressDetail{
 				Path:  nil,
-				Line:  "some progress",
+				Lines: []string{"some progress"},
 				Depth: 0,
 			},
 			want: "> ├─ 🔄 : some progress",
@@ -197,34 +215,43 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			name: "empty path completed",
 			detail: SubAgentProgressDetail{
 				Path:  nil,
-				Line:  "",
+				Lines: nil,
 				Depth: 0,
 			},
 			want: "> ├─ ✅ ",
 		},
 		{
-			name: "line with leading/trailing spaces",
+			name: "double quote prefix cleanup",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
-				Line:  "  💭 thinking...  ",
+				Lines: []string{"> > ⏳ Shell(go test) ..."},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince: 💭 thinking...",
+			want: "> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...",
 		},
 		{
-			name: "line with only quote prefix and spaces",
+			name: "nested subagent progress with depth 1 - single line",
 			detail: SubAgentProgressDetail{
-				Path:  []string{"main/crown-prince"},
-				Line:  ">   ",
-				Depth: 0,
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
+				Lines: []string{"> ├─ 🔄 ministry-works: 💭 审计中..."},
+				Depth: 1,
 			},
-			want: "> ├─ ✅ crown-prince",
+			want: "> 　├─ 🔄 ministry-rites: ├─ 🔄 ministry-works: 💭 审计中...",
+		},
+		{
+			name: "nested subagent progress with depth 1 - multi line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
+				Lines: []string{"> ├─ 🔄 ministry-works:", "> │  💭 审计中..."},
+				Depth: 1,
+			},
+			want: "> 　├─ 🔄 ministry-rites:\n> 　│  ├─ 🔄 ministry-works:\n> 　│  │  💭 审计中...",
 		},
 		{
 			name: "path without slash uses full string as role",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"simple-role"},
-				Line:  "working",
+				Lines: []string{"working"},
 				Depth: 0,
 			},
 			want: "> ├─ 🔄 simple-role: working",
@@ -236,6 +263,29 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			got := formatSubAgentProgress(tt.detail)
 			if got != tt.want {
 				t.Errorf("formatSubAgentProgress() =\n  got: %q\n  want: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanQuotePrefix(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"no prefix", "no prefix"},
+		{"> single prefix", "single prefix"},
+		{"> > double prefix", "double prefix"},
+		{"> > > triple prefix", "triple prefix"},
+		{">   leading spaces", "leading spaces"},
+		{"> ", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := cleanQuotePrefix(tt.input)
+			if got != tt.want {
+				t.Errorf("cleanQuotePrefix(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

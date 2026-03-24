@@ -248,8 +248,7 @@ func generateResponse(ctx context.Context, client llm.LLM, model string, message
 	return client.Generate(ctx, model, messages, tools, thinkingMode)
 }
 
-
-//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
+// - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
 func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {

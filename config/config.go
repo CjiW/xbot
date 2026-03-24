@@ -132,10 +132,10 @@ type AgentConfig struct {
 	TopicSimilarityThreshold float64 // 话题相似度阈值（默认 0.3）
 
 	// LLM 重试配置
-	LLMRetryAttempts  int           // LLM 重试次数（默认 5）
-	LLMRetryDelay     time.Duration // 初始重试延迟（默认 1s）
-	LLMRetryMaxDelay  time.Duration // 最大重试延迟（默认 30s）
-	LLMRetryTimeout   time.Duration // 单次 LLM 调用超时（默认 120s）
+	LLMRetryAttempts int           // LLM 重试次数（默认 5）
+	LLMRetryDelay    time.Duration // 初始重试延迟（默认 1s）
+	LLMRetryMaxDelay time.Duration // 最大重试延迟（默认 30s）
+	LLMRetryTimeout  time.Duration // 单次 LLM 调用超时（默认 120s）
 }
 
 // ServerConfig 服务器配置

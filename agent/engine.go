@@ -335,11 +335,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if extra != "" {
 			lines = append(append([]string{}, progressLines...), extra)
 		}
+		// 展平多行 entry（树状进度格式会在单个 progressLines 槽中包含 \n）
+		var flatLines []string
+		for _, line := range lines {
+			flatLines = append(flatLines, strings.Split(line, "\n")...)
+		}
 		// 在非引用行和引用行之间插入空行，避免飞书 markdown 渲染粘连
 		var buf strings.Builder
-		for i, line := range lines {
+		for i, line := range flatLines {
 			if i > 0 {
-				prev := lines[i-1]
+				prev := flatLines[i-1]
 				prevIsQuote := strings.HasPrefix(prev, "> ")
 				currIsQuote := strings.HasPrefix(line, "> ")
 				if prevIsQuote != currIsQuote {
@@ -347,7 +352,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 			}
 			buf.WriteString(line)
-			if i < len(lines)-1 {
+			if i < len(flatLines)-1 {
 				buf.WriteByte('\n')
 			}
 		}

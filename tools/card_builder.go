@@ -15,8 +15,8 @@ type CardBuilder struct {
 	sessions map[string]*CardSession
 	counter  atomic.Int64
 
-	// descriptions: card_id -> description string, 在 RemoveSession 时清理（activeCards 除外）
-	// activeCards 无法自动清理，但 chat_id 数量有限，内存影响可控
+	// descriptions: card_id -> description string, 在 RemoveSession 时清理
+	// waiting cards 的 metadata 在 callback 后通过 CleanupCard 清理
 	descriptions sync.Map
 
 	// expectedInteractions stores which interaction types a card expects (persists after session removal)
@@ -25,6 +25,8 @@ type CardBuilder struct {
 	activeCards sync.Map // chat_id -> card_id
 	// elementOptions stores card_id -> map[elementName]optionsDescription for callback context
 	elementOptions sync.Map // card_id -> map[string]string
+	// waitingCards tracks cards waiting for user callback, with creation time for TTL cleanup
+	waitingCards sync.Map // card_id -> time.Time
 }
 
 // NewCardBuilder creates a CardBuilder instance.
@@ -97,6 +99,35 @@ func (b *CardBuilder) RemoveSession(id string) {
 	b.descriptions.Delete(id)
 	b.expectedInteractions.Delete(id)
 	b.elementOptions.Delete(id)
+}
+
+// MarkCardWaiting marks a card as waiting for user callback.
+// The card metadata will be preserved until CleanupCard is called or TTL expires.
+func (b *CardBuilder) MarkCardWaiting(cardID string) {
+	b.waitingCards.Store(cardID, time.Now())
+}
+
+// CleanupCard removes all metadata for a card (session + sync.Map entries + waiting state).
+// Should be called after card callback is processed.
+func (b *CardBuilder) CleanupCard(cardID string) {
+	b.waitingCards.Delete(cardID)
+	b.RemoveSession(cardID)
+}
+
+// CleanupExpiredWaitingCards removes waiting cards that exceeded the given TTL.
+// Returns the number of cards cleaned.
+func (b *CardBuilder) CleanupExpiredWaitingCards(ttl time.Duration) int {
+	now := time.Now()
+	var cleaned int
+	b.waitingCards.Range(func(key, value any) bool {
+		if t, ok := value.(time.Time); ok && now.Sub(t) > ttl {
+			cardID := key.(string)
+			b.CleanupCard(cardID)
+			cleaned++
+		}
+		return true
+	})
+	return cleaned
 }
 
 // ActiveCount returns number of active sessions.

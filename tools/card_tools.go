@@ -679,15 +679,18 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		t.builder.SaveActiveCard(session.ChatID, session.ID)
 	}
 
+	waiting := strings.EqualFold(args.WaitResponse, "true")
+	if waiting {
+		// Don't remove session or metadata — callback needs Description/ExpectedInteractions
+		t.builder.MarkCardWaiting(args.CardID)
+		return NewResultWithUserResponse(fmt.Sprintf("Card %s sent successfully. Waiting for user interaction...", args.CardID)), nil
+	}
+
+	// Not waiting — clean up everything now
 	t.builder.RemoveSession(args.CardID)
 
 	if ctx.Registry != nil {
 		unregisterCardToolsIfIdle(ctx.Registry, t.builder)
-	}
-
-	waiting := strings.EqualFold(args.WaitResponse, "true")
-	if waiting {
-		return NewResultWithUserResponse(fmt.Sprintf("Card %s sent successfully. Waiting for user interaction...", args.CardID)), nil
 	}
 
 	return NewResult(fmt.Sprintf("Card %s sent successfully.", args.CardID)), nil

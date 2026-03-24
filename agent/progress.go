@@ -87,31 +87,25 @@ func cleanQuotePrefix(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// formatSubAgentProgress 格式化 SubAgent 进度，生成树形缩进的多行文本。
-// detail.Lines 中的每一行都会带树形连接符缩进显示。
+// formatSubAgentProgress 格式化 SubAgent 进度为单行文本。
+// 每个 SubAgent 在父 Agent 的 progressLines 中只占一行，避免多行破坏飞书引用块格式。
+// 对于嵌套 SubAgent 穿透上来的多行进度，只取最后一非空行显示。
 //
-// 输出格式示例（单行）：
+// 输出格式示例：
 //
-//	> ├─ 🔄 crown-prince: 💭 思考中...
-//
-// 输出格式示例（多行）：
-//
-//	> ├─ 🔄 crown-prince:
-//	> │  💭 思考中...
-//	> │  ⏳ Shell(ls) ...
-//	> │  ⏳ Shell(go test) ...
-//
-// 输出格式示例（嵌套 depth=1）：
-//
-//	> 　├─ 🔄 ministry-works:
-//	> 　│  💭 思考中...
-//	> 　│  ├─ ✅ sub-task-1
+//	> ├─ 🔄 crown-prince: 💭 思考中...          （单行：内容跟在角色名后）
+//	> ├─ 🔄 crown-prince: ⏳ Shell(go test) ... （多行输入：只取最新一行）
+//	> ├─ ✅ crown-prince                        （完成：简洁无内容）
+//	> 　├─ 🔄 ministry-works: ⏳ Shell(ls) ...  （depth=1：全角空格缩进）
 func formatSubAgentProgress(detail SubAgentProgressDetail) string {
-	// 清理每行中的引用前缀
-	var cleaned []string
-	for _, l := range detail.Lines {
-		l = cleanQuotePrefix(l)
-		cleaned = append(cleaned, l)
+	// 清理每行中的引用前缀，取最后一非空行作为当前状态
+	var lastLine string
+	for i := len(detail.Lines) - 1; i >= 0; i-- {
+		cleaned := cleanQuotePrefix(detail.Lines[i])
+		if cleaned != "" {
+			lastLine = cleaned
+			break
+		}
 	}
 
 	// 全角空格缩进（飞书不忽略全角空格）
@@ -128,31 +122,10 @@ func formatSubAgentProgress(detail SubAgentProgressDetail) string {
 		}
 	}
 
-	// 确定状态图标
-	icon := "🔄"
-	if len(cleaned) == 0 || (len(cleaned) == 1 && cleaned[0] == "") {
-		// 空行表示子 Agent 完成
+	// 空内容表示子 Agent 完成
+	if lastLine == "" {
 		return fmt.Sprintf("> %s├─ ✅ %s", indent, roleName)
 	}
 
-	var buf strings.Builder
-	for i, line := range cleaned {
-		if i == 0 {
-			// 第一行：角色头
-			if len(cleaned) == 1 {
-				// 单行：内容直接跟在角色名后面
-				fmt.Fprintf(&buf, "> %s├─ %s %s: %s", indent, icon, roleName, line)
-			} else {
-				// 多行：角色名单独一行，内容也输出
-				fmt.Fprintf(&buf, "> %s├─ %s %s:", indent, icon, roleName)
-				if line != "" {
-					fmt.Fprintf(&buf, "\n> %s│  %s", indent, line)
-				}
-			}
-		} else {
-			// 后续行：用 │ 连接线缩进
-			fmt.Fprintf(&buf, "\n> %s│  %s", indent, line)
-		}
-	}
-	return buf.String()
+	return fmt.Sprintf("> %s├─ 🔄 %s: %s", indent, roleName, lastLine)
 }

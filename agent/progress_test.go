@@ -164,25 +164,25 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				Lines: []string{"💭 思考中...", "⏳ Shell(ls) ...", "⏳ Shell(go test) ..."},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...\n> │  ⏳ Shell(go test) ...",
+			want: "> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...",
 		},
 		{
-			name: "multi line with quote prefix cleanup",
+			name: "multi line with quote prefix - takes last non-empty",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince"},
 				Lines: []string{"> 💭 思考中...", "> ⏳ Shell(ls) ..."},
 				Depth: 0,
 			},
-			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...",
+			want: "> ├─ 🔄 crown-prince: ⏳ Shell(ls) ...",
 		},
 		{
-			name: "depth 1 multi line",
+			name: "depth 1 multi line - takes last non-empty",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
 				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
 				Depth: 1,
 			},
-			want: "> 　├─ 🔄 ministry-works:\n> 　│  💭 审计中...\n> 　│  ⏳ Shell(go test) ...",
+			want: "> 　├─ 🔄 ministry-works: ⏳ Shell(go test) ...",
 		},
 		{
 			name: "depth 1 completed",
@@ -194,13 +194,13 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> 　├─ ✅ ministry-works",
 		},
 		{
-			name: "depth 2 multi line",
+			name: "depth 2 multi line - takes last non-empty",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/department-state", "main/crown-prince/department-state/ministry-justice"},
 				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
 				Depth: 2,
 			},
-			want: "> 　　├─ 🔄 ministry-justice:\n> 　　│  💭 运行测试...\n> 　　│  ✅ Shell(go test) (1.2s)",
+			want: "> 　　├─ 🔄 ministry-justice: ✅ Shell(go test) (1.2s)",
 		},
 		{
 			name: "empty path with content",
@@ -239,13 +239,13 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> 　├─ 🔄 ministry-rites: ├─ 🔄 ministry-works: 💭 审计中...",
 		},
 		{
-			name: "nested subagent progress with depth 1 - multi line",
+			name: "nested subagent progress - takes last non-empty line",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
 				Lines: []string{"> ├─ 🔄 ministry-works:", "> │  💭 审计中..."},
 				Depth: 1,
 			},
-			want: "> 　├─ 🔄 ministry-rites:\n> 　│  ├─ 🔄 ministry-works:\n> 　│  │  💭 审计中...",
+			want: "> 　├─ 🔄 ministry-rites: │  💭 审计中...",
 		},
 		{
 			name: "path without slash uses full string as role",

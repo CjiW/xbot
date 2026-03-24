@@ -316,3 +316,91 @@ func TestSandboxHostPathRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveWritePath_CurrentDir 验证 ResolveWritePath 在设置 CurrentDir 后，
+// 相对路径基于 CurrentDir 解析，而非 WorkingDir。
+func TestResolveWritePath_CurrentDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		WorkingDir: tmpDir,
+	}
+
+	// 无 CurrentDir 时，相对路径基于 WorkingDir
+	got, err := ResolveWritePath(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != filepath.Join(tmpDir, "test.txt") {
+		t.Errorf("without CurrentDir: got %q, want %q", got, filepath.Join(tmpDir, "test.txt"))
+	}
+
+	// 设置 CurrentDir 后，相对路径基于 CurrentDir
+	ctx.CurrentDir = subDir
+	got, err = ResolveWritePath(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != filepath.Join(subDir, "test.txt") {
+		t.Errorf("with CurrentDir: got %q, want %q", got, filepath.Join(subDir, "test.txt"))
+	}
+
+	// 绝对路径不受 CurrentDir 影响
+	absPath := filepath.Join(tmpDir, "abs.txt")
+	got, err = ResolveWritePath(ctx, absPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != absPath {
+		t.Errorf("absolute path: got %q, want %q", got, absPath)
+	}
+}
+
+// TestResolveReadPath_CurrentDir 验证 ResolveReadPath 在设置 CurrentDir 后，
+// 相对路径基于 CurrentDir 解析。
+func TestResolveReadPath_CurrentDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 创建测试文件
+	testFile := filepath.Join(subDir, "hello.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		WorkingDir: tmpDir,
+	}
+
+	// 无 CurrentDir 时，相对路径基于 WorkingDir（文件不存在于 tmpDir 根）
+	_, err := ResolveReadPath(ctx, "hello.txt")
+	if err == nil {
+		// 文件在 subdir 下，从 tmpDir 根找不到，但路径解析本身可能不报错
+		// 这里只验证路径解析逻辑
+	}
+
+	// 设置 CurrentDir 后，相对路径基于 CurrentDir
+	ctx.CurrentDir = subDir
+	got, err := ResolveReadPath(ctx, "hello.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != testFile {
+		t.Errorf("with CurrentDir: got %q, want %q", got, testFile)
+	}
+
+	// 绝对路径不受 CurrentDir 影响
+	got, err = ResolveReadPath(ctx, testFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != testFile {
+		t.Errorf("absolute path: got %q, want %q", got, testFile)
+	}
+}

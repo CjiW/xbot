@@ -60,7 +60,12 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 
 	candidate := inputPath
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
+		// 优先使用 CurrentDir（Cd 设置的当前目录），否则 fallback 到 root
+		if ctx != nil && ctx.CurrentDir != "" {
+			candidate = filepath.Join(ctx.CurrentDir, candidate)
+		} else {
+			candidate = filepath.Join(root, candidate)
+		}
 	}
 	candidate, err = cleanAbsPath(candidate)
 	if err != nil {
@@ -110,7 +115,12 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 
 	candidate := inputPath
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
+		// 优先使用 CurrentDir（Cd 设置的当前目录），否则 fallback 到 root
+		if ctx != nil && ctx.CurrentDir != "" {
+			candidate = filepath.Join(ctx.CurrentDir, candidate)
+		} else {
+			candidate = filepath.Join(root, candidate)
+		}
 	}
 	candidate, err = cleanAbsPath(candidate)
 	if err != nil {

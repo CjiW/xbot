@@ -129,8 +129,8 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, fmt.Errorf("file type %q is not allowed for upload", mimeType)
 	}
 
-	// Read file content
-	fileContent, err := io.ReadAll(file)
+	// Read file content (limited to 100MB to prevent OOM)
+	fileContent, err := io.ReadAll(io.LimitReader(file, 100*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
 	}

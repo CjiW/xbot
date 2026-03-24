@@ -252,9 +252,24 @@ func (a *Agent) SendToInteractiveSession(
 		return out.OutboundMessage, nil
 	}
 
-	// 追加新的对话消息（SubAgent 不启用 Memory，out.Messages 可能为空）
+	// 追加新的对话消息到 ia.messages
+	// 注意：Interactive SubAgent 的 cfg.Memory 为 nil，所以 out.Messages 可能为空。
+	// 但 Run() 内部 messages 切片（局部变量）仍然包含了完整对话历史，
+	// 不过 out.Messages 未被填充。我们需要从 Run() 的行为来推断新增消息。
+	//
+	// 策略：如果 out.Messages 非空，直接用差集；否则根据 Run 的行为手动构建。
 	if len(out.Messages) > preLen {
 		ia.messages = append(ia.messages, out.Messages[preLen:]...)
+	} else {
+		// out.Messages 为空（无 Memory），从 Run 的输出消息推断新增内容。
+		// Run() 会向 messages append assistant + tool messages。
+		// 我们需要重建：preLen 之前的消息已经在 ia.messages 中，
+		// 新增的消息是 assistant reply 和所有 tool call 的结果。
+		//
+		// 安全做法：将 out.OutboundMessage.Content 转为 assistant message 追加。
+		if out.Content != "" {
+			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
+		}
 	}
 
 	log.WithFields(log.Fields{

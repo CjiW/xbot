@@ -617,14 +617,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		var releaseLLMSem func()
 		if cfg.LLMSemAcquire != nil {
 			releaseLLMSem = cfg.LLMSemAcquire()
+			defer releaseLLMSem()
 		}
 
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-
-		// Release LLM concurrency slot (unconditionally, even on error)
-		if releaseLLMSem != nil {
-			releaseLLMSem()
-		}
 
 		llmCancel()
 
@@ -657,7 +653,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 					// 持久化压缩结果到 session（使用 SessionView，不含 tool 消息）
 					if cfg.Session != nil {
-						if clearErr := cfg.Session.Clear(); clearErr == nil {
+						if clearErr := cfg.Session.Clear(); clearErr != nil {
+							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for force compression, skipping persistence")
+						} else {
 							for _, msg := range result.SessionView {
 								assertNoSystemPersist(msg)
 								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
@@ -810,11 +808,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					var release func()
 					if subAgentSem != nil {
 						release = subAgentSem()
+						defer release() // defer 保证 panic 时也能释放信号量
 					}
 					execFn(e)
-					if release != nil {
-						release()
-					}
 					// 每个 SubAgent 完成后立即 patch 进度
 					if doAutoNotify {
 						mu.Lock()
@@ -839,17 +835,22 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				"call_idx":  entry.index,
 			}).Debugf("Tool call: %s(%s)", tc.Name, argPreview)
 
-			// 工具执行加超时（SubAgent 工具不加超时）
+			// 工具执行加超时（SubAgent 工具使用独立的长超时）
 			var execCtx context.Context
 			var cancel context.CancelFunc
 			if tc.Name == "SubAgent" {
-				execCtx = ctx
+				// SubAgent 使用独立超时（默认 10 分钟），避免无限阻塞
+				subAgentTimeout := 10 * time.Minute
+				if cfg.LLMTimeout > 0 && cfg.LLMTimeout < subAgentTimeout {
+					subAgentTimeout = cfg.LLMTimeout * 3 // 至少 3 倍 LLM 超时
+				}
+				execCtx, cancel = context.WithTimeout(ctx, subAgentTimeout)
 				// 为并行 SubAgent 注入进度回调：子 Agent 通过此回调更新父 Agent 的占位行，
 				// 避免多个子 Agent 直接 patch 同一条消息导致互相覆盖。
 				if autoNotify {
 					pi := progressStartIdx + entry.index
 					if pi < len(progressLines) {
-						execCtx = WithSubAgentProgress(ctx, func(roleName, line string) {
+						execCtx = WithSubAgentProgress(execCtx, func(roleName, line string) {
 							// 只取最后一行，避免多行内容破坏飞书 markdown blockquote
 							if idx := strings.LastIndex(line, "\n"); idx >= 0 {
 								line = line[idx+1:]
@@ -861,7 +862,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						})
 					}
 				}
-				cancel = func() {}
 			} else {
 				execCtx, cancel = context.WithTimeout(ctx, toolTimeout)
 			}

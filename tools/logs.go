@@ -230,25 +230,41 @@ func (t *LogsTool) readLastLines(path string, n int) ([]string, error) {
 	}
 	defer f.Close()
 
-	// 收集所有行
-	var lines []string
+	// 使用固定大小的环形缓冲区，只保留最后 N 行，避免大文件 OOM
+	type ringBuffer struct {
+		data  []string
+		pos   int
+		count int
+		size  int
+	}
+	buf := make([]string, n)
+	rb := &ringBuffer{data: buf, size: n}
+
 	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024) // 支持 1MB 的行
+	scanBuf := make([]byte, 0, 64*1024)
+	scanner.Buffer(scanBuf, 1024*1024) // 支持 1MB 的行
 
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		rb.data[rb.pos] = scanner.Text()
+		rb.pos = (rb.pos + 1) % rb.size
+		if rb.count < rb.size {
+			rb.count++
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 
-	// 返回最后 N 行
-	if len(lines) <= n {
-		return lines, nil
+	// 从环形缓冲区中提取行（按原始顺序）
+	result := make([]string, rb.count)
+	if rb.count < rb.size {
+		copy(result, rb.data[:rb.count])
+	} else {
+		copy(result, rb.data[rb.pos:])
+		copy(result[rb.size-rb.pos:], rb.data[:rb.pos])
 	}
-	return lines[len(lines)-n:], nil
+	return result, nil
 }
 
 // matchLevel 检查日志行是否匹配指定级别

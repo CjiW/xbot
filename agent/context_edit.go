@@ -101,9 +101,9 @@ func (e *ContextEditor) SetMessages(messages []llm.ChatMessage) {
 
 // HandleRequest 处理 context_edit 请求，直接修改 messages slice。
 func (e *ContextEditor) HandleRequest(action string, params map[string]interface{}) (string, error) {
-	e.mu.RLock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	msgs := e.messages
-	e.mu.RUnlock()
 
 	if msgs == nil {
 		return "", fmt.Errorf("messages not available (editor not initialized)")

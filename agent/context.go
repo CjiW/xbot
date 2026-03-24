@@ -51,7 +51,13 @@ func (pl *PromptLoader) load() {
 	}
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
-	pl.tmpl = template.Must(template.New("system").Parse(defaultSystemPrompt))
+	if t, err := template.New("system").Parse(defaultSystemPrompt); err != nil {
+		// Default prompt is a compile-time constant; this should never fail.
+		// Panic to allow upper-level recovery.
+		panic(fmt.Sprintf("Failed to parse default system prompt template: %v", err))
+	} else {
+		pl.tmpl = t
+	}
 	pl.lastMod = time.Time{}
 }
 

@@ -87,6 +87,21 @@ func cleanQuotePrefix(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// flattenLines 将 Lines 展平为实际行（按 \n 分割）。
+// 因为 notifyProgress 会将 progressLines join 成单个字符串作为 Lines[0]，
+// 导致 Lines 的每个元素可能包含 \n，需要拆分后才能正确取到"最后一行"。
+func flattenLines(lines []string) []string {
+	var result []string
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		// 按 \n 拆分，每个子行单独处理
+		result = append(result, strings.Split(line, "\n")...)
+	}
+	return result
+}
+
 // formatSubAgentProgress 格式化 SubAgent 进度为单行文本。
 // 每个 SubAgent 在父 Agent 的 progressLines 中只占一行，避免多行破坏飞书引用块格式。
 // 对于嵌套 SubAgent 穿透上来的多行进度，只取最后一非空行显示。
@@ -98,10 +113,11 @@ func cleanQuotePrefix(s string) string {
 //	> ├─ ✅ crown-prince                        （完成：简洁无内容）
 //	> 　├─ 🔄 ministry-works: ⏳ Shell(ls) ...  （depth=1：全角空格缩进）
 func formatSubAgentProgress(detail SubAgentProgressDetail) string {
-	// 清理每行中的引用前缀，取最后一非空行作为当前状态
+	// 展平并清理每行中的引用前缀，取最后一非空行作为当前状态
+	flat := flattenLines(detail.Lines)
 	var lastLine string
-	for i := len(detail.Lines) - 1; i >= 0; i-- {
-		cleaned := cleanQuotePrefix(detail.Lines[i])
+	for i := len(flat) - 1; i >= 0; i-- {
+		cleaned := cleanQuotePrefix(flat[i])
 		if cleaned != "" {
 			lastLine = cleaned
 			break

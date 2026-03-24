@@ -248,6 +248,33 @@ func TestFormatSubAgentProgress(t *testing.T) {
 			want: "> 　├─ 🔄 ministry-rites: │  💭 审计中...",
 		},
 		{
+			name: "multiline content in single Lines element - takes last line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"【奏报】 -  圣旨：启动三层 SubAgent 并发测试\n-  判定：🟢 直接执行 → 尚书省\n-  理由：明确的调度测试任务\n臣这就调度尚书省"},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: 臣这就调度尚书省",
+		},
+		{
+			name: "multiline content with quote prefix in single Lines element",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"> 【奏报】 -  圣旨：启动三层并发测试\n-  判定：🟢 直接执行\n> ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: ├─ 🔄 department-state: ⏳ SubAgent [ministry-works]: ...",
+		},
+		{
+			name: "multiline content with trailing subagent lines - picks latest subagent",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"【奏报】 -  圣旨...\n-  判定：🟢 直接执行\n臣这就调度尚书省\n> ├─ ✅ SubAgent [ministry-works]: (4.66s)\n> ├─ 🔄 department-state: ⏳ SubAgent [ministry-justice]: ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: ├─ 🔄 department-state: ⏳ SubAgent [ministry-justice]: ...",
+		},
+		{
 			name: "path without slash uses full string as role",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"simple-role"},
@@ -286,6 +313,36 @@ func TestCleanQuotePrefix(t *testing.T) {
 			got := cleanQuotePrefix(tt.input)
 			if got != tt.want {
 				t.Errorf("cleanQuotePrefix(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFlattenLines(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{name: "nil input", lines: nil, want: nil},
+		{name: "empty input", lines: []string{}, want: nil},
+		{name: "skip empty strings", lines: []string{"", "hello", ""}, want: []string{"hello"}},
+		{name: "single line no newline", lines: []string{"hello"}, want: []string{"hello"}},
+		{name: "multiline in single element", lines: []string{"line1\nline2\nline3"}, want: []string{"line1", "line2", "line3"}},
+		{name: "multiple elements with newlines", lines: []string{"a\nb", "c\nd"}, want: []string{"a", "b", "c", "d"}},
+		{name: "trailing newline", lines: []string{"hello\n"}, want: []string{"hello", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := flattenLines(tt.lines)
+			if len(got) != len(tt.want) {
+				t.Errorf("flattenLines() len = %d, want %d\ngot:  %v\nwant: %v", len(got), len(tt.want), got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("flattenLines()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}

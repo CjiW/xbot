@@ -347,7 +347,7 @@ func TestExtractOwnAndChildProgress(t *testing.T) {
 			"", 2, "工部",
 		},
 		{
-			"quoted child lines (actual runtime format)",
+			"quoted child lines (actual runtime format, with indent)",
 			[]string{"> 🔄 ministry-works: ⏳ Shell(go version)", "> ✅ ministry-justice:"},
 			"", 2, "ministry-works",
 		},
@@ -357,7 +357,7 @@ func TestExtractOwnAndChildProgress(t *testing.T) {
 			"分派三部", 2, "工部",
 		},
 		{
-			"own + quoted children (actual runtime format)",
+			"own + quoted children (actual runtime format, with indent)",
 			[]string{"分派三部并行执行", "> 🔄 ministry-works: ⏳ Shell(go version)", "> ✅ ministry-justice:"},
 			"分派三部并行执行", 2, "ministry-works",
 		},
@@ -388,6 +388,25 @@ func TestExtractOwnAndChildProgress(t *testing.T) {
 				"> 🔄 department-state: 分派三部",
 			},
 			"→ 尚书省", 1, "department-state",
+		},
+		{
+			"tool completion lines ignored (no indent, looks like sub-agent but is tool)",
+			[]string{
+				"调度中",
+				"> ✅ Shell: go version (508ms)",
+				"> ✅ Read: /workspace/xbot/agent/progress.go (120ms)",
+			},
+			"调度中", 0, "",
+		},
+		{
+			"tool lines ignored, real child agents with indent preserved",
+			[]string{
+				"分派中",
+				"> ✅ Shell: go version (508ms)",
+				"> 🔄 department-state: 分派三部",
+				"> 　　🔄 工部: ⏳ Shell(ls)",
+			},
+			"分派中", 1, "department-state",
 		},
 	}
 	for _, tt := range tests {
@@ -640,9 +659,9 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				Path: []string{"main/department-state"},
 				Lines: []string{
 					"分派三部并行执行",
-					"> 🔄 ministry-works: ⏳ Shell(go version) ...",
-					"> ✅ ministry-justice: ✅ Shell(go version) (4.66s)",
-					"> 🔄 ministry-rites: 💭 思考中...",
+					"> 　🔄 ministry-works: ⏳ Shell(go version) ...",
+					"> 　✅ ministry-justice: ✅ Shell(go version) (4.66s)",
+					"> 　🔄 ministry-rites: 💭 思考中...",
 				},
 				Depth: 3,
 			},
@@ -1061,10 +1080,10 @@ func TestExtractOwnAndChildProgress_Nested(t *testing.T) {
 	t.Run("two-level nesting from runtime format", func(t *testing.T) {
 		flat := flattenLines([]string{
 			"调度中",
-			"> 🔄 中书: 💭 思考中",
-			"> 🔄 尚书: 分派两部",
-			"> 　🔄 工部: ⚡ Shell(ls)",
-			"> 　✅ 刑部:",
+			"> 　🔄 中书: 💭 思考中",
+			"> 　🔄 尚书: 分派两部",
+			"> 　　🔄 工部: ⚡ Shell(ls)",
+			"> 　　✅ 刑部:",
 		})
 		own, children := extractOwnAndChildProgress(flat)
 		if own != "调度中" {
@@ -1086,16 +1105,17 @@ func TestExtractOwnAndChildProgress_Nested(t *testing.T) {
 }
 
 func TestFormatSubAgentProgress_FullTreeScenario(t *testing.T) {
+	// 子 Agent 穿透行带有全角空格缩进（renderChildrenTree 的 childIndent）
 	// 模拟完整三层场景: 主Agent → 太子 → 中书(leaf) + 尚书 → 工部 + 刑部
 	// 太子的进度文本（从太子的 notifyProgress 输出）
 	detail := SubAgentProgressDetail{
 		Path: []string{"main/crown-prince"},
 		Lines: []string{
 			"臣调度尚书省",
-			"> 🔄 中书: 💭 思考中",
-			"> 🔄 尚书: 分派两部",
-			"> 　🔄 工部: ⚡ Shell(ls)",
-			"> 　✅ 刑部:",
+			"> 　🔄 中书: 💭 思考中",
+			"> 　🔄 尚书: 分派两部",
+			"> 　　🔄 工部: ⚡ Shell(ls)",
+			"> 　　✅ 刑部:",
 		},
 		Depth: 2,
 	}

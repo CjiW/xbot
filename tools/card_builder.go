@@ -11,10 +11,13 @@ import (
 
 // CardBuilder manages card building sessions. Singleton shared across all tools.
 type CardBuilder struct {
-	mu           sync.RWMutex
-	sessions     map[string]*CardSession
-	counter      atomic.Int64
-	descriptions sync.Map // card_id -> description string (persists after session removal for callback context)
+	mu       sync.RWMutex
+	sessions map[string]*CardSession
+	counter  atomic.Int64
+
+	// descriptions: card_id -> description string, 在 RemoveSession 时清理（activeCards 除外）
+	// activeCards 无法自动清理，但 chat_id 数量有限，内存影响可控
+	descriptions sync.Map
 
 	// expectedInteractions stores which interaction types a card expects (persists after session removal)
 	expectedInteractions sync.Map // card_id -> []string
@@ -85,11 +88,15 @@ func (b *CardBuilder) GetSession(id string) (*CardSession, bool) {
 	return s, ok
 }
 
-// RemoveSession removes a session.
+// RemoveSession removes a session and cleans up associated sync.Map entries.
 func (b *CardBuilder) RemoveSession(id string) {
 	b.mu.Lock()
 	delete(b.sessions, id)
 	b.mu.Unlock()
+	// Clean up associated sync.Map entries to mitigate memory growth.
+	b.descriptions.Delete(id)
+	b.expectedInteractions.Delete(id)
+	b.elementOptions.Delete(id)
 }
 
 // ActiveCount returns number of active sessions.

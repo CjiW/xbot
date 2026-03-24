@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,8 +20,8 @@ import (
 
 // FetchTool 网页获取工具
 type FetchTool struct {
-	httpClient *http.Client
-	tokenizer  tokenizer.Codec
+	// Note: httpClient removed — each request now creates a fresh transport with DNS rebinding protection.
+	tokenizer tokenizer.Codec
 }
 
 // NewFetchTool 创建 FetchTool
@@ -32,16 +33,6 @@ func NewFetchTool() *FetchTool {
 	}
 
 	return &FetchTool{
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				// 限制最多 5 次重定向
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		},
 		tokenizer: enc,
 	}
 }
@@ -150,6 +141,7 @@ func (t *FetchTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 }
 
 // fetchURL 获取 URL 内容
+// 使用自定义 dialer 防止 DNS rebinding：在 TCP 连接建立时验证目标 IP 不是内网地址。
 func (t *FetchTool) fetchURL(ctx *ToolContext, targetURL string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx.Ctx, "GET", targetURL, nil)
 	if err != nil {
@@ -162,7 +154,60 @@ func (t *FetchTool) fetchURL(ctx *ToolContext, targetURL string) (*http.Response
 	// 不发送 Authorization header
 	req.Header.Del("Authorization")
 
-	return t.httpClient.Do(req)
+	// 创建自定义 Transport，在拨号时验证 IP 不是内网地址（防止 DNS rebinding TOCTOU）
+	safeTransport := &http.Transport{
+		DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+			}
+			// 解析 IP，验证不是内网地址
+			ips, err := net.DefaultResolver.LookupIPAddr(dialCtx, host)
+			if err != nil {
+				return nil, fmt.Errorf("DNS lookup failed for %q: %w", host, err)
+			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("no IP addresses found for %q", host)
+			}
+			// 选取第一个 IPv4 或 IPv6 地址
+			chosenIP := ips[0].IP
+			for _, ipAddr := range ips {
+				if v4 := ipAddr.IP.To4(); v4 != nil {
+					chosenIP = v4
+					break
+				}
+			}
+			if isPrivateIPRaw(chosenIP) {
+				return nil, fmt.Errorf("DNS rebinding protection: %q resolves to private IP %s", host, chosenIP)
+			}
+			dialer := &net.Dialer{}
+			return dialer.DialContext(dialCtx, network, net.JoinHostPort(chosenIP.String(), port))
+		},
+	}
+
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: safeTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			// 重定向时也验证目标不是内网
+			host := req.URL.Hostname()
+			ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+			if err != nil {
+				return fmt.Errorf("redirect DNS lookup failed for %s: %w", host, err)
+			}
+			for _, ipAddr := range ips {
+				if isPrivateIPRaw(ipAddr.IP) {
+					return fmt.Errorf("redirect to private IP %s blocked (DNS rebinding protection)", ipAddr.IP)
+				}
+			}
+			return nil
+		},
+	}
+
+	return client.Do(req)
 }
 
 // validateURL 验证 URL 安全性

@@ -54,7 +54,11 @@ func dockerPipelineExportImport(ctx context.Context, containerName string, impor
 	exportCmd := exec.CommandContext(ctx, "docker", "export", containerName)
 	importCmd := exec.CommandContext(ctx, "docker", importArgs...)
 
-	importCmd.Stdin, _ = exportCmd.StdoutPipe()
+	pipe, err := exportCmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	importCmd.Stdin = pipe
 	importCmd.Stderr = nil // will be captured via CombinedOutput on importCmd
 
 	var importOut bytes.Buffer
@@ -84,7 +88,10 @@ func dockerPipelineExportImport(ctx context.Context, containerName string, impor
 }
 
 // 全局沙箱实例
-var globalSandbox Sandbox
+var (
+	globalSandbox   Sandbox
+	globalSandboxMu sync.RWMutex // 保护 globalSandbox 的并发读写
+)
 var sandboxInitOnce sync.Once
 
 // InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
@@ -105,14 +112,21 @@ func GetSandbox() Sandbox {
 	sandboxInitOnce.Do(func() {
 		// Fallback: 如果 InitSandbox 未被调用（例如测试场景），使用 NoneSandbox
 		log.Warn("GetSandbox called before InitSandbox, falling back to NoneSandbox")
+		globalSandboxMu.Lock()
 		globalSandbox = &NoneSandbox{}
+		globalSandboxMu.Unlock()
 	})
-	return globalSandbox
+	globalSandboxMu.RLock()
+	s := globalSandbox
+	globalSandboxMu.RUnlock()
+	return s
 }
 
 // SetSandbox 设置全局沙箱实例（用于测试）
 func SetSandbox(s Sandbox) {
+	globalSandboxMu.Lock()
 	globalSandbox = s
+	globalSandboxMu.Unlock()
 }
 
 // Sandbox 沙箱接口
@@ -303,6 +317,12 @@ func pruneDockerResources() {
 func (s *dockerSandbox) exportImportIfDirty(containerName, userID string) {
 	if userID == "" || strings.HasPrefix(userID, "__") {
 		log.Debugf("Skipping export for system container %s (userID=%q)", containerName, userID)
+		return
+	}
+
+	// 验证容器仍然存在且在运行（防止锁释放后被 CloseForUser 关闭导致操作无效容器）
+	if err := dockerRun(dockerCmdTimeout, "container", "inspect", containerName); err != nil {
+		log.WithError(err).Warnf("Container %s no longer exists, skipping export", containerName)
 		return
 	}
 

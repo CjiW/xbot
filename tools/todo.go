@@ -19,14 +19,16 @@ type TodoItem struct {
 
 // TodoManager 内存级 TODO 管理（非持久化）
 type TodoManager struct {
-	mu    sync.RWMutex
-	todos map[string][]TodoItem // sessionKey -> todos
+	mu         sync.RWMutex
+	todos      map[string][]TodoItem // sessionKey -> todos
+	maxEntries int                   // 最大条目数，超过时淘汰最早的
 }
 
 // NewTodoManager 创建 TODO 管理器
 func NewTodoManager() *TodoManager {
 	return &TodoManager{
-		todos: make(map[string][]TodoItem),
+		todos:      make(map[string][]TodoItem),
+		maxEntries: 10000, // 默认最多保留 10000 个 session 的 TODO
 	}
 }
 
@@ -37,6 +39,18 @@ func (m *TodoManager) SetTodos(sessionKey string, items []TodoItem) {
 	if len(items) == 0 {
 		delete(m.todos, sessionKey)
 		return
+	}
+	// 防止 map 无限增长：超过上限时清理最旧的一半条目
+	if m.maxEntries > 0 && len(m.todos) >= m.maxEntries {
+		count := 0
+		target := len(m.todos) / 2
+		for k := range m.todos {
+			delete(m.todos, k)
+			count++
+			if count >= target {
+				break
+			}
+		}
 	}
 	m.todos[sessionKey] = items
 }

@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -17,7 +16,7 @@ type RecallTracker struct {
 	recallCounts   map[string]int  // contentHash → recall count
 	hotItems       []RecallHotItem // 高频召回项（按次数排序）
 	maxHotItems    int             // 最多保留 50 个
-	lastRefineIter atomic.Int32    // 上次精化时的迭代号（atomic 保证并发安全）
+	lastRefineIter int             // 上次精化时的迭代号（受 mu 保护）
 }
 
 // RecallHotItem 表示一个高频召回的 item。
@@ -147,12 +146,18 @@ func (t *RecallTracker) ShouldRefine(currentIteration int) bool {
 	if t == nil {
 		return false
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	// 冷却期内不触发
-	if currentIteration-int(t.lastRefineIter.Load()) < refineCooldownIterations {
+	if currentIteration-t.lastRefineIter < refineCooldownIterations {
 		return false
 	}
-
-	return len(t.GetHotItems(refineThreshold)) != 0
+	for _, item := range t.hotItems {
+		if item.Count >= refineThreshold {
+			return true
+		}
+	}
+	return false
 }
 
 // MarkRefine 标记一次精化已完成（更新冷却计数器）。
@@ -162,7 +167,7 @@ func (t *RecallTracker) MarkRefine(currentIteration int) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.lastRefineIter.Store(int32(currentIteration))
+	t.lastRefineIter = currentIteration
 	// 清零已精化项的计数（避免重复触发）
 	for i := range t.hotItems {
 		if t.hotItems[i].Count >= refineThreshold {

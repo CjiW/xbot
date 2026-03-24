@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"xbot/llm"
 	"xbot/tools"
@@ -94,7 +95,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download request failed: %w", err)
 	}
@@ -116,7 +117,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 	}
 	defer outFile.Close()
 
-	written, err := io.Copy(outFile, resp.Body)
+	written, err := io.Copy(outFile, io.LimitReader(resp.Body, 100*1024*1024)) // 100MB limit
 	if err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
@@ -149,7 +150,7 @@ func (t *DownloadFileTool) getTenantToken() (string, error) {
 		"app_secret": appSecret,
 	})
 
-	resp, err := http.Post(
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Post(
 		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
 		"application/json; charset=utf-8",
 		bytes.NewReader(reqBody),

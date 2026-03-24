@@ -468,12 +468,8 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
 
-	// 异步索引全局 MCP 工具（在后台进行，不阻塞启动）
-	go func() {
-		// 等待 MCP 配置加载完成
-		time.Sleep(2 * time.Second)
-		indexGlobalMCPTools(registry, multiSession, mcpConfigPath)
-	}()
+	// 同步索引全局 MCP 工具（确保工具从第一条消息起就可用）
+	indexGlobalMCPTools(registry, multiSession, mcpConfigPath)
 
 	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
 	memoryProvider := cfg.MemoryProvider

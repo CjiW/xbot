@@ -357,7 +357,9 @@ func (sm *SessionMCPManager) loadConfig() (*MCPConfig, error) {
 	if sm.globalConfigPath != "" {
 		if data, err := os.ReadFile(sm.globalConfigPath); err == nil {
 			var cfg MCPConfig
-			if err := json.Unmarshal(data, &cfg); err == nil {
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				log.Errorf("Failed to parse global MCP configuration JSON: path=%s, error=%v", sm.globalConfigPath, err)
+			} else {
 				for name, server := range cfg.MCPServers {
 					merged.MCPServers[name] = server
 				}
@@ -456,6 +458,11 @@ func (t *SessionMCPRemoteTool) mcpServerName() string {
 func (t *SessionMCPRemoteTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	if t.sessionMCPMgr != nil {
 		t.sessionMCPMgr.MarkActive(t.serverName)
+	}
+
+	// 检查 session 是否仍然有效（可能已被 Close/Invalidate 关闭）
+	if t.session == nil {
+		return nil, fmt.Errorf("MCP session for server %q has been closed", t.serverName)
 	}
 
 	args := map[string]any{}

@@ -150,7 +150,7 @@ func TestShouldRefine(t *testing.T) {
 	}
 
 	// 冷却期内 → false
-	tracker.lastRefineIter.Store(10)
+	tracker.lastRefineIter = 10
 	if tracker.ShouldRefine(5) {
 		t.Error("expected ShouldRefine=false during cooldown")
 	}

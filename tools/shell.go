@@ -128,8 +128,18 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		return nil, fmt.Errorf("failed to get shell: %w", err)
 	}
 
+	// 沙箱模式：将 Cd 设置的目录注入命令前缀，使 Shell 工具也受 Cd 影响。
+	// Wrap 的 -w 参数硬编码为 /workspace（容器创建时确定，不可改），
+	// 所以通过 cd <dir> && 前缀在容器内切换到 Cd 设置的目录。
+	// 仅在 CurrentDir 有值时注入（沙箱模式下 CurrentDir 保证是容器内路径，
+	// 而 WorkspaceRoot/WorkingDir 是宿主机路径，不能直接在容器内使用）。
+	shellCmd := params.Command
+	if sandboxMode && toolCtx.CurrentDir != "" {
+		shellCmd = fmt.Sprintf("cd %s && %s", shellEscape(toolCtx.CurrentDir), params.Command)
+	}
+
 	// 使用 login shell 自动加载环境配置
-	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", params.Command}, nil, sandboxWorkspace, userID)
+	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", shellCmd}, nil, sandboxWorkspace, userID)
 	if err != nil {
 		return nil, err
 	}

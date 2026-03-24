@@ -126,9 +126,6 @@ type AgentConfig struct {
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
-	// SubAgent 超时控制
-	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
-
 	// 话题分区隔离
 	EnableTopicIsolation     bool    // 是否启用话题分区隔离（默认 false）
 	TopicMinSegmentSize      int     // 最小话题片段大小（默认 3）
@@ -231,7 +228,6 @@ func Load() *Config {
 			CompressionThreshold:     getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
 			ContextMode:              getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
 			MaxSubAgentDepth:         getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
-			SubAgentLLMTimeout:       getEnvDurationOrDefault("SUBAGENT_LLM_TIMEOUT", 3*time.Minute),
 			EnableTopicIsolation:     getEnvBoolOrDefault("AGENT_ENABLE_TOPIC_ISOLATION", false),
 			TopicMinSegmentSize:      getEnvIntOrDefault("AGENT_TOPIC_MIN_SEGMENT_SIZE", 3),
 			TopicSimilarityThreshold: getEnvFloatOrDefault("AGENT_TOPIC_SIMILARITY_THRESHOLD", 0.3),

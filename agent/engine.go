@@ -845,12 +845,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			var execCtx context.Context
 			var cancel context.CancelFunc
 			if tc.Name == "SubAgent" {
-				// SubAgent 使用独立超时（默认 10 分钟），避免无限阻塞
-				subAgentTimeout := 10 * time.Minute
-				if cfg.LLMTimeout > 0 && cfg.LLMTimeout < subAgentTimeout {
-					subAgentTimeout = cfg.LLMTimeout * 3 // 至少 3 倍 LLM 超时
-				}
-				execCtx, cancel = context.WithTimeout(ctx, subAgentTimeout)
+				// SubAgent 不设独立超时，直接使用父 Agent 的 context（ctx 已携带主 session 的 deadline）
+				execCtx, cancel = ctx, func() {}
 				// 为并行 SubAgent 注入进度回调：子 Agent 通过此回调更新父 Agent 的占位行，
 				// 避免多个子 Agent 直接 patch 同一条消息导致互相覆盖。
 				if autoNotify {

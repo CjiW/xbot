@@ -143,7 +143,6 @@ func main() {
 		CompressionThreshold:     cfg.Agent.CompressionThreshold,
 		ContextMode:              agent.ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:         cfg.Agent.MaxSubAgentDepth,
-		SubAgentLLMTimeout:       cfg.Agent.SubAgentLLMTimeout,
 		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
 		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
 		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,

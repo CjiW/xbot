@@ -118,19 +118,85 @@ func extractRoleName(path []string) string {
 	return last
 }
 
+// --- 缩进测量与树构建 ---
+
+// countFullWidthIndent 计算一行（去掉 "> " 前缀后）的全角空格缩进层数。
+// 用于从扁平文本行重建子 Agent 层级树。
+func countFullWidthIndent(line string) int {
+	for strings.HasPrefix(line, "> ") {
+		line = strings.TrimPrefix(line, "> ")
+	}
+	count := 0
+	for _, r := range line {
+		switch r {
+		case '　':
+			count++
+		case ' ', '\t', '│', '├', '└', '─':
+			continue
+		default:
+			return count
+		}
+	}
+	return count
+}
+
+// indexedChild 带缩进深度的 childAgentStatus，用于 buildChildTree。
+type indexedChild struct {
+	depth int
+	child childAgentStatus
+}
+
+// buildChildTree 根据缩进深度将扁平列表重建为嵌套树。
+// 最小缩进层的 item 视为直接子节点，更深的 item 递归归属到前一个浅层节点。
+func buildChildTree(items []indexedChild) []childAgentStatus {
+	if len(items) == 0 {
+		return nil
+	}
+
+	minDepth := items[0].depth
+	for _, it := range items[1:] {
+		if it.depth < minDepth {
+			minDepth = it.depth
+		}
+	}
+
+	var result []childAgentStatus
+	for i := 0; i < len(items); {
+		if items[i].depth == minDepth {
+			child := items[i].child
+			j := i + 1
+			var sub []indexedChild
+			for j < len(items) && items[j].depth > minDepth {
+				sub = append(sub, items[j])
+				j++
+			}
+			if len(sub) > 0 {
+				child.Children = buildChildTree(sub)
+			}
+			result = append(result, child)
+			i = j
+		} else {
+			i++
+		}
+	}
+	return result
+}
+
 // --- 子 Agent 行识别与解析 ---
 
 // childAgentStatus 表示从子 Agent 行中解析出的状态。
 type childAgentStatus struct {
-	Role   string // 角色名
-	Status string // "🔄" / "✅" / "❌" / "⏳"
-	Desc   string // 简短描述
+	Role     string             // 角色名
+	Status   string             // "🔄" / "✅" / "❌" / "⏳"
+	Desc     string             // 简短描述
+	Children []childAgentStatus // 嵌套子 Agent（由 buildChildTree 构建）
 }
 
 // isSubAgentLine 检查一行是否是子 Agent 的进度行。
-// 支持两种格式：
+// 支持三种格式：
 //  1. 树状格式（测试用/穿透场景）：  "├─ 🔄 role: desc" / "└─ ✅ role:"
 //  2. 引用格式（实际运行时子 Agent 穿透上来的格式化行）："> 🔄 role: desc" / "> 　✅ role"
+//  3. 占位行格式（子 Agent 初始占位）："> ⏳ SubAgent [role]..."
 func isSubAgentLine(line string) bool {
 	// 清理引用前缀
 	for strings.HasPrefix(line, "> ") {
@@ -143,6 +209,11 @@ func isSubAgentLine(line string) bool {
 
 	// 树状格式：├─ / └─ / │ 开头
 	if strings.HasPrefix(line, "├─") || strings.HasPrefix(line, "└─") || strings.HasPrefix(line, "│") {
+		return true
+	}
+
+	// 占位行格式：⏳ SubAgent [...]...
+	if strings.HasPrefix(line, "⏳ SubAgent") {
 		return true
 	}
 
@@ -164,9 +235,10 @@ func isStatusEmojiLine(line string) bool {
 }
 
 // parseSubAgentLine 解析子 Agent 进度行，提取角色名和状态。
-// 支持两种输入格式：
+// 支持三种输入格式：
 //  1. 树状格式: "├─ 🔄 ministry-works: ⏳ Shell(ls) ..."
 //  2. 引用格式: "🔄 ministry-works: ⏳ Shell(ls) ..." 或 "　🔄 ministry-works: ⏳ Shell(ls)"
+//  3. 占位行格式: "⏳ SubAgent [ministry-works]..."
 func parseSubAgentLine(line string) (childAgentStatus, bool) {
 	// 清理引用前缀
 	for strings.HasPrefix(line, "> ") {
@@ -191,6 +263,12 @@ func parseSubAgentLine(line string) (childAgentStatus, bool) {
 	}
 	line = strings.TrimSpace(line)
 
+	// ⏳ 也可能是状态前缀（占位行 "⏳ SubAgent [role]: task"）
+	if status == "🔄" && strings.HasPrefix(line, "⏳ ") {
+		line = strings.TrimPrefix(line, "⏳ ")
+		status = "⏳"
+	}
+
 	// 提取角色名（第一个冒号之前的部分）
 	colonIdx := strings.Index(line, ":")
 	if colonIdx <= 0 {
@@ -204,6 +282,11 @@ func parseSubAgentLine(line string) (childAgentStatus, bool) {
 		return childAgentStatus{}, false
 	}
 
+	// 清理角色名：如果格式为 "SubAgent [actual-role]"，提取实际角色名
+	if strings.HasPrefix(role, "SubAgent [") && strings.HasSuffix(role, "]") {
+		role = role[10 : len(role)-1]
+	}
+
 	return childAgentStatus{Role: role, Status: status, Desc: desc}, true
 }
 
@@ -214,7 +297,7 @@ func parseSubAgentLine(line string) (childAgentStatus, bool) {
 //
 //	"🔄 工部(⏳ go version) · ✅ 刑部 · 🔄 礼部(💭)"
 //	"✅ 工部 · ✅ 刑部 · ✅ 礼部"
-//	"🔄×3 ⏳×2"  （超过 6 个时只显示统计）
+//	"🔄×3 ⏳×2"  （超过 6 个时只显示状态统计）
 func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) string {
 	if len(children) == 0 {
 		return ""
@@ -230,6 +313,11 @@ func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) st
 		// 太多了，只统计状态
 		running, done, failed, pending := 0, 0, 0, 0
 		for _, c := range children {
+			// 无角色名的进度状态行计入 running
+			if c.Role == "" {
+				running++
+				continue
+			}
 			switch c.Status {
 			case "✅":
 				done++
@@ -259,6 +347,11 @@ func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) st
 
 	var parts []string
 	for _, c := range children {
+		if c.Role == "" {
+			// 无角色名的进度状态行（如 "💭 思考中..."）
+			parts = append(parts, c.Desc)
+			continue
+		}
 		if c.Desc != "" {
 			shortDesc := progressTruncate(c.Desc, descMax)
 			parts = append(parts, fmt.Sprintf("%s %s(%s)", c.Status, c.Role, shortDesc))
@@ -274,24 +367,28 @@ func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) st
 // extractOwnAndChildProgress 从展平后的行中分离当前 Agent 自身进度和子 Agent 进度。
 // 返回 (ownLastLine, childStatuses)。
 //
+// 子 Agent 行按全角空格缩进深度重建为嵌套树（Children 字段），
+// 从而在父级渲染时保留层级关系。
+//
 // 分离规则：
 //   - "> " 前缀 + 状态 emoji + 冒号 → 子 Agent 穿透的格式化输出（解析为 childAgentStatus）
 //   - ├─ / └─ 树状行 → 子 Agent 穿透的树状行（解析为 childAgentStatus）
-//   - "> " 前缀但不是子 Agent 格式 → 更深层的穿透行（过滤掉）
+//   - "> ⏳ SubAgent [...]" 占位行 → 子 Agent 初始状态（解析为 childAgentStatus）
+//   - 其他 "> " 前缀行（如 "> 💭 思考中..."、工具结果穿透等）→ 过滤掉
 //   - 其他非空前缀行 → 当前 Agent 自身进度
 func extractOwnAndChildProgress(flat []string) (string, []childAgentStatus) {
 	var ownLines []string
-	var children []childAgentStatus
+	var indexed []indexedChild
 
 	for _, line := range flat {
 		if isSubAgentLine(line) {
+			depth := countFullWidthIndent(line)
 			if child, ok := parseSubAgentLine(line); ok {
-				children = append(children, child)
+				indexed = append(indexed, indexedChild{depth: depth, child: child})
 			}
 			continue
 		}
 		if strings.HasPrefix(line, "> ") {
-			// 引用前缀行但不是子 Agent 格式 → 更深层穿透，过滤掉
 			continue
 		}
 		cleaned := strings.TrimSpace(line)
@@ -305,44 +402,98 @@ func extractOwnAndChildProgress(flat []string) (string, []childAgentStatus) {
 		ownLast = ownLines[len(ownLines)-1]
 	}
 
-	return ownLast, children
+	return ownLast, buildChildTree(indexed)
+}
+
+// --- 树状渲染 ---
+
+const (
+	treeChildDescMax  = 40 // 树子节点描述最大 rune 数
+	treeStatsLimit    = 6  // 超过此数量的子 Agent 退化为统计摘要
+	treeInlineSummMax = 60 // 内联摘要最大 rune 数
+	treeMaxDepth      = 2  // 树状渲染最大递归深度
+)
+
+// renderChildrenTree 将子 Agent 列表渲染为多行缩进文本。
+// 每行以 "> " 开头（飞书引用块兼容），用全角空格 "　" 表示层级（wrap-safe）。
+// 不使用树状连线字符（├─/└─/│），避免飞书自动换行后视觉结构破碎。
+//
+// 输出示例（baseIndent=""，currentDepth=0）：
+//
+//	> 　🔄 中书: 💭 思考中
+//	> 　🔄 尚书: 分派两部
+//	> 　　🔄 工部: ⚡ Shell(ls)
+//	> 　　✅ 刑部:
+func renderChildrenTree(children []childAgentStatus, baseIndent string, currentDepth int) []string {
+	if len(children) == 0 {
+		return nil
+	}
+
+	childIndent := baseIndent + "　"
+
+	// 子 Agent 过多 → 单行统计摘要
+	if len(children) > treeStatsLimit {
+		summary := formatChildAgentsSummary(children, treeInlineSummMax)
+		return []string{fmt.Sprintf("> %s%s", childIndent, summary)}
+	}
+
+	var lines []string
+	for _, c := range children {
+		if len(c.Children) > 0 && currentDepth < treeMaxDepth {
+			// 有子节点且未超深度限制：递归展开
+			if c.Desc != "" {
+				lines = append(lines, fmt.Sprintf("> %s%s %s: %s", childIndent, c.Status, c.Role, progressTruncate(c.Desc, 30)))
+			} else {
+				lines = append(lines, fmt.Sprintf("> %s%s %s:", childIndent, c.Status, c.Role))
+			}
+			lines = append(lines, renderChildrenTree(c.Children, childIndent, currentDepth+1)...)
+		} else if len(c.Children) > 0 {
+			// 超深度限制：子节点内联摘要
+			summary := formatChildAgentsSummary(c.Children, treeInlineSummMax)
+			if c.Desc != "" {
+				lines = append(lines, fmt.Sprintf("> %s%s %s: %s %s", childIndent, c.Status, c.Role, progressTruncate(c.Desc, 20), summary))
+			} else {
+				lines = append(lines, fmt.Sprintf("> %s%s %s: %s", childIndent, c.Status, c.Role, summary))
+			}
+		} else {
+			// 叶子节点
+			if c.Desc != "" {
+				lines = append(lines, fmt.Sprintf("> %s%s %s: %s", childIndent, c.Status, c.Role, progressTruncate(c.Desc, treeChildDescMax)))
+			} else {
+				lines = append(lines, fmt.Sprintf("> %s%s %s:", childIndent, c.Status, c.Role))
+			}
+		}
+	}
+	return lines
 }
 
 // --- 主格式化函数 ---
 
-// formatSubAgentProgress 格式化 SubAgent 进度为单行文本。
-// 每个 SubAgent 在父 Agent 的 progressLines 中只占一个槽（一行），
-// 但这一行会优雅地展示它自身状态及其并发子 Agent 的状态摘要。
+// formatSubAgentProgress 格式化 SubAgent 进度为文本。
+// 每个 SubAgent 在父 Agent 的 progressLines 中占一个槽，
+// 无子 Agent 时输出单行，有子 Agent 时输出多行缩进树（wrap-safe）。
 //
 // 设计目标：
 //   - 用户能清楚看明白：几个 Agent、嵌套几层、在干什么、哪些并发
-//   - 输出始终是单行（不破坏飞书引用块格式）
-//   - 以 "> " 开头（飞书引用块格式）
+//   - 所有行以 "> " 开头（飞书引用块格式）
+//   - 用全角空格做缩进层级（飞书不折叠，不依赖垂直对齐）
 //
 // 输出格式示例：
 //
-//	> 🔄 crown-prince: 💭 思考中...                                     （自身状态）
-//	> 🔄 crown-prince: ⏳ Shell(go test) ...                            （工具执行）
-//	> 🔄 crown-prince: → 🔄 工部(⏳ ls) · ✅ 刑部 · 🔄 礼部(💭)         （子Agent并发摘要）
-//	> 　🔄 department-state: 分派三部 → ✅ 工部 · ✅ 刑部 · ✅ 礼部       （带缩进）
-//	> ✅ crown-prince                                                      （完成）
+//	> 🔄 crown-prince: 💭 思考中...                    （叶子节点，单行）
+//	> 🔄 crown-prince: ⏳ Shell(go test) ...           （工具执行，单行）
+//	> ✅ crown-prince                                   （完成，单行）
+//	> 🔄 crown-prince: 调度中                           （有子Agent，多行）
+//	> 　🔄 中书: 💭 思考中                               ├── 子Agent 1
+//	> 　🔄 尚书: 分派两部                                ├── 子Agent 2
+//	> 　　🔄 工部: ⚡ Shell(ls)                          │   └── 孙Agent
+//	> 　　✅ 刑部:                                       │   └── 孙Agent
 func formatSubAgentProgress(detail SubAgentProgressDetail) string {
-	const (
-		maxContentRunes = 50  // 自身进度内容最大字符数
-		maxChildRunes   = 80  // 子Agent摘要最大字符数
-		maxTotalRunes   = 120 // 单行总最大字符数（不含前缀）
-	)
+	const maxContentRunes = 50
 
-	// 展平所有行
 	flat := flattenLines(detail.Lines)
-
-	// 分离自身进度和子 Agent 进度
 	ownLine, children := extractOwnAndChildProgress(flat)
-
-	// 提取角色名
 	roleName := extractRoleName(detail.Path)
-
-	// 全角空格缩进（飞书不忽略全角空格）
 	indent := strings.Repeat("　", detail.Depth)
 
 	// 1. 完成状态：无内容也无子 Agent
@@ -350,31 +501,19 @@ func formatSubAgentProgress(detail SubAgentProgressDetail) string {
 		return fmt.Sprintf("> %s✅ %s", indent, roleName)
 	}
 
-	// 2. 只有子 Agent 进度（当前 Agent 没有自身输出，但子 Agent 有状态）
-	if ownLine == "" && len(children) > 0 {
-		summary := formatChildAgentsSummary(children, maxChildRunes)
-		return fmt.Sprintf("> %s🔄 %s: %s", indent, roleName, summary)
-	}
-
-	// 3. 只有自身进度（叶子节点）
-	if len(children) == 0 {
-		ownLine = progressTruncate(ownLine, maxContentRunes)
-		return fmt.Sprintf("> %s🔄 %s: %s", indent, roleName, ownLine)
-	}
-
-	// 4. 自身进度 + 子 Agent 摘要
-	summary := formatChildAgentsSummary(children, maxChildRunes)
-	// 截断自身内容，为子 Agent 摘要留空间
-	availableForOwn := maxContentRunes
-	if len([]rune(summary)) > 30 {
-		availableForOwn = maxContentRunes - 15
-		if availableForOwn < 15 {
-			availableForOwn = 15
+	// 2. 有子 Agent → 多行缩进树
+	if len(children) > 0 {
+		var rootLine string
+		if ownLine != "" {
+			rootLine = fmt.Sprintf("> %s🔄 %s: %s", indent, roleName, progressTruncate(ownLine, maxContentRunes))
+		} else {
+			rootLine = fmt.Sprintf("> %s🔄 %s:", indent, roleName)
 		}
+		childLines := renderChildrenTree(children, indent, 0)
+		return strings.Join(append([]string{rootLine}, childLines...), "\n")
 	}
-	ownLine = progressTruncate(ownLine, availableForOwn)
 
-	line := fmt.Sprintf("%s → %s", ownLine, summary)
-	line = progressTruncate(line, maxTotalRunes)
-	return fmt.Sprintf("> %s🔄 %s: %s", indent, roleName, line)
+	// 3. 叶子节点（无子 Agent）→ 单行
+	ownLine = progressTruncate(ownLine, maxContentRunes)
+	return fmt.Sprintf("> %s🔄 %s: %s", indent, roleName, ownLine)
 }

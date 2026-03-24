@@ -20,7 +20,11 @@ func (s *UserSettingsService) Get(channel, senderID string) (map[string]string, 
 	if s.db == nil {
 		return nil, fmt.Errorf("user settings store: database not initialized")
 	}
-	rows, err := s.db.Conn().Query(
+	conn := s.db.Conn()
+	if conn == nil {
+		return nil, fmt.Errorf("user settings store: database connection closed")
+	}
+	rows, err := conn.Query(
 		"SELECT key, value FROM user_settings WHERE channel = ? AND sender_id = ?",
 		channel, senderID,
 	)
@@ -45,8 +49,12 @@ func (s *UserSettingsService) Set(channel, senderID, key, value string) error {
 	if s.db == nil {
 		return fmt.Errorf("user settings store: database not initialized")
 	}
+	conn := s.db.Conn()
+	if conn == nil {
+		return fmt.Errorf("user settings store: database connection closed")
+	}
 	now := time.Now().UnixMilli()
-	_, err := s.db.Conn().Exec(
+	_, err := conn.Exec(
 		`INSERT INTO user_settings (channel, sender_id, key, value, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(channel, sender_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,

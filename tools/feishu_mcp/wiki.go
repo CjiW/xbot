@@ -193,7 +193,7 @@ type WikiGetNodeTool struct {
 func (t *WikiGetNodeTool) Name() string { return "feishu_wiki_get_node" }
 
 func (t *WikiGetNodeTool) Description() string {
-	return "Get Wiki node details and content. The token must be a node_token from other Feishu API responses (e.g., feishu_wiki_search_nodes returns node_token field). Token prefixes: wikcn (wiki), doxcn (docx), basc (bitable), shtcn (sheet), ndtbn (mindnote), pptcn (slides), filcn (file). Do NOT use URL tokens or numeric IDs."
+	return "Get Wiki node details and content."
 }
 
 func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
@@ -201,7 +201,7 @@ func (t *WikiGetNodeTool) Parameters() []llm.ToolParam {
 		{
 			Name:        "token",
 			Type:        "string",
-			Description: "node_token from other Feishu API responses (NOT URL token). Prefixes: wikcnXXX (wiki), doxcnXXX (docx), bascXXX (bitable), shtcnXXX (sheet), ndtbnXXX (mindnote), pptcnXXX (slides), filcnXXX (file). Get this from feishu_wiki_search_nodes results.",
+			Description: "node_token from other Feishu API responses (or URL path token).",
 			Required:    true,
 		},
 		{

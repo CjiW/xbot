@@ -87,18 +87,21 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		params.Type = "file"
 	}
 
-	// Resolve output path
+	// Resolve output path (sandbox-aware)
 	outputPath, err := ResolveWritePath(ctx, params.OutputPath)
 	if err != nil {
 		return nil, err
 	}
 
+	// Built-in tools run on host; translate sandbox path → host path
+	hostPath := SandboxToHostPath(ctx, outputPath)
+
 	// For return value: show sandbox-visible path instead of host path
-	displayPath := HostToSandboxPath(ctx, outputPath)
+	displayPath := HostToSandboxPath(ctx, hostPath)
 
 	switch ctx.Channel {
 	case "feishu":
-		return t.downloadFeishu(params.MessageID, params.FileKey, params.Type, outputPath, displayPath)
+		return t.downloadFeishu(params.MessageID, params.FileKey, params.Type, hostPath, displayPath)
 	default:
 		return nil, fmt.Errorf("file download not supported for channel: %s", ctx.Channel)
 	}

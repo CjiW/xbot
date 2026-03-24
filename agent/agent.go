@@ -417,6 +417,11 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	cardBuilder := tools.NewCardBuilder()
 	registry.Register(tools.NewCardCreateTool(cardBuilder))
 
+	// Clean up expired waiting cards from previous runs (TTL: 24h)
+	if n := cardBuilder.CleanupExpiredWaitingCards(24 * time.Hour); n > 0 {
+		log.WithField("count", n).Info("Cleaned up expired waiting cards")
+	}
+
 	return skillStore, agentStore, chatHistory, registry, cardBuilder
 }
 

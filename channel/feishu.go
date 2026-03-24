@@ -132,8 +132,8 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 		"05_channel_feishu": `## 飞书渠道规则
 - 不要在群聊中 @ 所有人
 - 飞书 markdown 支持有限：不支持复杂表格、嵌套列表、HTML标签
-- 使用 card_create 构建交互式卡片，提升信息密度
-- 可以使用飞书表情符号增强表达
+- 信息不足时先确认再行动，优先用 card_create 收集信息
+- 使用飞书表情符号增强表达
 
 ## 飞书文件操作
 - 用户发送的文件/图片会在消息中标记为 <file .../> 或 <image .../> 标签
@@ -142,6 +142,8 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 - feishu_upload_file 是上传到用户云盘，不是直接发送消息
 
 ## 飞书卡片交互
+- 需要用户选择或输入时，用 card_create（按钮、下拉框、表单），设置 wait_response=true
+- **多个问题用表单（form + input/select）一次性收集，不要拆成多个独立卡片**
 - card_create 创建卡片后，card_add_content/card_add_interactive 等工具自动可用
 - 设置 wait_response=true 可等待用户交互
 - feishu_send_card 可直接发送 JSON 卡片`,

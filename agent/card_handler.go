@@ -24,6 +24,9 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		summary = desc + "\nUser interaction:\n" + summary
 	}
 
+	// Cleanup card metadata after callback is processed
+	defer a.cardBuilder.CleanupCard(cardID)
+
 	// 复用 buildPrompt，替换 Content 为卡片摘要
 	cardMsg := msg
 	cardMsg.Content = summary

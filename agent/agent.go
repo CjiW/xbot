@@ -955,6 +955,7 @@ func (a *Agent) NormalizeSenderID(senderID string) string {
 	}
 	return senderID
 }
+
 // workspaceRoot returns the workspace root for the given sender.
 // In single-user mode, returns workDir directly (no per-user subdirectory),
 // skipping directory permission checks that are unnecessary for single-user deployments.
@@ -964,7 +965,6 @@ func (a *Agent) workspaceRoot(senderID string) string {
 	}
 	return tools.UserWorkspaceRoot(a.workDir, senderID)
 }
-
 
 // isGroupChat 判断是否为群聊
 // 使用消息的 ChatType 字段：p2p 为私聊，group 为群聊

@@ -201,8 +201,7 @@ type Agent struct {
 	contextManager       ContextManager
 
 	// SubAgent 深度控制
-	maxSubAgentDepth   int
-	subAgentLLMTimeout time.Duration
+	maxSubAgentDepth int
 
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
@@ -384,9 +383,6 @@ type Config struct {
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
-
-	// SubAgent 超时控制
-	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
 
 	// 话题分区隔离（Phase 2.5，默认关闭）
 	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
@@ -612,9 +608,6 @@ func New(cfg Config) *Agent {
 	if cfg.MaxSubAgentDepth <= 0 {
 		cfg.MaxSubAgentDepth = 6
 	}
-	if cfg.SubAgentLLMTimeout <= 0 {
-		cfg.SubAgentLLMTimeout = 3 * time.Minute
-	}
 
 	// 2. 初始化存储和注册表
 	skillStore, agentStore, chatHistory, registry, cardBuilder := initStores(cfg)
@@ -646,7 +639,6 @@ func New(cfg Config) *Agent {
 		singleUser:         cfg.SingleUser,
 		globalSkillDirs:    resolveGlobalSkillsDirs(cfg.SkillsDir),
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
-		subAgentLLMTimeout: cfg.SubAgentLLMTimeout,
 		agentsDir:          filepath.Join(cfg.WorkDir, ".xbot", "agents"),
 		consolidateCh:      make(chan consolidateRequest, 64),
 		consolidateStopCh:  make(chan struct{}),

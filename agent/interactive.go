@@ -104,16 +104,22 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
+	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。
 	if cb, ok := SubAgentProgressFromContext(ctx); ok {
 		rn := roleName
+		myDepth := cc.Depth() + 1
+		myPath := cc.Spawn(rn).Chain
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				// 只取最后一行，避免多行进度破坏父 Agent blockquote
 				last := lines[len(lines)-1]
 				if idx := strings.LastIndex(last, "\n"); idx >= 0 {
 					last = last[idx+1:]
 				}
-				cb(rn, last)
+				cb(SubAgentProgressDetail{
+					Path:  myPath,
+					Line:  last,
+					Depth: myDepth,
+				})
 			}
 		}
 	} else if originChannel != "" && originChatID != "" {
@@ -128,6 +134,19 @@ func (a *Agent) SpawnInteractiveSession(
 				_ = a.sendMessage(originChannel, originChatID, prefixed)
 			}
 		}
+	}
+
+	// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
+	if cb, ok := SubAgentProgressFromContext(ctx); ok {
+		myDepth := cc.Depth() + 1
+		myPath := cc.Spawn(roleName).Chain
+		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+			detail.Depth = myDepth + detail.Depth
+			if len(detail.Path) == 0 {
+				detail.Path = myPath
+			}
+			cb(detail)
+		})
 	}
 
 	// --- 阶段 3：锁外执行 Run（嵌套 spawn 不会死锁） ---

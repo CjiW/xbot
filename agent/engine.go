@@ -20,9 +20,8 @@ import (
 )
 
 // SubAgentProgressCallback is the type for SubAgent progress callback.
-// It is injected via context to allow parallel SubAgents to update parent
-// progress lines without conflicting with each other.
-type SubAgentProgressCallback func(roleName, line string)
+// It carries depth information for recursive SubAgent progress penetration.
+type SubAgentProgressCallback func(detail SubAgentProgressDetail)
 
 type subAgentProgressKey struct{}
 
@@ -121,9 +120,6 @@ type RunConfig struct {
 	// 主 Agent 注入带 session MCP、激活检查、Letta memory 的完整版本；
 	// SubAgent 使用 nil（defaultToolExecutor 从 cfg.Tools 查找并执行）。
 	ToolExecutor func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error)
-
-	// LLMTimeout 单次 LLM 调用超时（0 = 不设超时）
-	LLMTimeout time.Duration
 
 	// ToolTimeout 单个工具调用超时（0 = 使用默认 120s）
 	ToolTimeout time.Duration
@@ -238,7 +234,21 @@ func readArgsHasOffsetOrLimit(argsJSON string) bool {
 //
 // 主 Agent 和 SubAgent 使用同一个 Run()，差异通过 RunConfig 注入：
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
-//   - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
+
+// generateResponse calls the LLM using streaming if available, falling back to Generate().
+// This avoids blocking on the full response — streaming allows incremental data processing.
+func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
+	if streaming, ok := client.(llm.StreamingLLM); ok {
+		eventCh, streamErr := streaming.GenerateStream(ctx, model, messages, tools, thinkingMode)
+		if streamErr != nil {
+			return nil, streamErr
+		}
+		return llm.CollectStream(ctx, eventCh)
+	}
+	return client.Generate(ctx, model, messages, tools, thinkingMode)
+}
+
+// - SubAgent: ToolExecutor=simpleExecutor, ProgressNotifier=nil, ContextManager=independent_phase1, ...
 func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
@@ -604,14 +614,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 使用会话特定的工具定义
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 
-		// LLM 调用（可选超时 + per-tenant 并发限流）
-		var llmCtx context.Context
-		var llmCancel context.CancelFunc
-		if cfg.LLMTimeout > 0 {
-			llmCtx, llmCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-		} else {
-			llmCtx, llmCancel = retryNotifyCtx, func() {}
-		}
+		// LLM 调用（per-tenant 并发限流）
+		// 注意：不在 engine 层设置 per-request 超时，由 RetryLLM.perAttemptCtx 管理。
+		// engine 层的 context.WithTimeout 会导致 parent deadline 与 retry 冲突：
+		// 第一次请求耗尽超时后，parent deadline 已过期，后续重试被立即取消。
 
 		// Acquire per-tenant LLM concurrency slot (if configured).
 		// Release after Generate (and potential retry) completes — NOT via defer,
@@ -622,9 +628,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			releaseLLMSem = cfg.LLMSemAcquire()
 		}
 
-		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-
-		llmCancel()
+		response, err := generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
@@ -668,15 +672,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						}
 					}
 					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
-					var retryCtx context.Context
-					var retryCancel context.CancelFunc
-					if cfg.LLMTimeout > 0 {
-						retryCtx, retryCancel = context.WithTimeout(retryNotifyCtx, cfg.LLMTimeout)
-					} else {
-						retryCtx, retryCancel = retryNotifyCtx, func() {}
-					}
-					response, err = cfg.LLMClient.Generate(retryCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-					retryCancel()
+					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
 					if response != nil {
@@ -846,24 +842,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			var execCtx context.Context
 			var cancel context.CancelFunc
 			if tc.Name == "SubAgent" {
-				// SubAgent 使用独立超时（默认 10 分钟），避免无限阻塞
-				subAgentTimeout := 10 * time.Minute
-				if cfg.LLMTimeout > 0 && cfg.LLMTimeout < subAgentTimeout {
-					subAgentTimeout = cfg.LLMTimeout * 3 // 至少 3 倍 LLM 超时
-				}
-				execCtx, cancel = context.WithTimeout(ctx, subAgentTimeout)
+				// SubAgent 不设独立超时，直接使用父 Agent 的 context（ctx 已携带主 session 的 deadline）
+				execCtx, cancel = ctx, func() {}
 				// 为并行 SubAgent 注入进度回调：子 Agent 通过此回调更新父 Agent 的占位行，
 				// 避免多个子 Agent 直接 patch 同一条消息导致互相覆盖。
 				if autoNotify {
 					pi := progressStartIdx + entry.index
 					if pi < len(progressLines) {
-						execCtx = WithSubAgentProgress(execCtx, func(roleName, line string) {
-							// 只取最后一行，避免多行内容破坏飞书 markdown blockquote
-							if idx := strings.LastIndex(line, "\n"); idx >= 0 {
-								line = line[idx+1:]
+						execCtx = WithSubAgentProgress(execCtx, func(detail SubAgentProgressDetail) {
+							// 树形缩进：全角空格（飞书不忽略）+ box-drawing 连接符
+							indent := strings.Repeat("　", detail.Depth)
+							connector := "├─"
+							icon := "🔄"
+							if detail.Line == "" {
+								icon = "✅"
 							}
 							progressMu.Lock()
-							progressLines[pi] = fmt.Sprintf("> 🔄 SubAgent [%s]: %s", roleName, line)
+							progressLines[pi] = fmt.Sprintf("> %s%s %s [%s]: %s", indent, connector, icon, CallChainFromContext(ctx).Current(), detail.Line)
 							notifyProgress("")
 							progressMu.Unlock()
 						})

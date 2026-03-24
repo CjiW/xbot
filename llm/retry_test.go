@@ -317,6 +317,9 @@ func TestDefaultRetryConfig(t *testing.T) {
 	if cfg.MaxDelay != 30*time.Second {
 		t.Errorf("MaxDelay = %v, want 30s", cfg.MaxDelay)
 	}
+	if cfg.Timeout != 120*time.Second {
+		t.Errorf("Timeout = %v, want 120s", cfg.Timeout)
+	}
 }
 
 // ---------------------------------------------------------------------------

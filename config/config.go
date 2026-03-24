@@ -126,9 +126,6 @@ type AgentConfig struct {
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
-	// SubAgent 超时控制
-	SubAgentLLMTimeout time.Duration // SubAgent 单次 LLM 调用超时（默认 3 分钟）
-
 	// 话题分区隔离
 	EnableTopicIsolation     bool    // 是否启用话题分区隔离（默认 false）
 	TopicMinSegmentSize      int     // 最小话题片段大小（默认 3）
@@ -138,6 +135,7 @@ type AgentConfig struct {
 	LLMRetryAttempts int           // LLM 重试次数（默认 5）
 	LLMRetryDelay    time.Duration // 初始重试延迟（默认 1s）
 	LLMRetryMaxDelay time.Duration // 最大重试延迟（默认 30s）
+	LLMRetryTimeout  time.Duration // 单次 LLM 调用超时（默认 120s）
 }
 
 // ServerConfig 服务器配置
@@ -231,13 +229,13 @@ func Load() *Config {
 			CompressionThreshold:     getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
 			ContextMode:              getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
 			MaxSubAgentDepth:         getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
-			SubAgentLLMTimeout:       getEnvDurationOrDefault("SUBAGENT_LLM_TIMEOUT", 3*time.Minute),
 			EnableTopicIsolation:     getEnvBoolOrDefault("AGENT_ENABLE_TOPIC_ISOLATION", false),
 			TopicMinSegmentSize:      getEnvIntOrDefault("AGENT_TOPIC_MIN_SEGMENT_SIZE", 3),
 			TopicSimilarityThreshold: getEnvFloatOrDefault("AGENT_TOPIC_SIMILARITY_THRESHOLD", 0.3),
 			LLMRetryAttempts:         getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
 			LLMRetryDelay:            getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
 			LLMRetryMaxDelay:         getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
+			LLMRetryTimeout:          getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),

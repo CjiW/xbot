@@ -45,6 +45,7 @@ func DefaultRetryConfig() RetryConfig {
 		Attempts: 5,
 		Delay:    1 * time.Second,
 		MaxDelay: 30 * time.Second,
+		Timeout:  120 * time.Second, // 单次 LLM 调用超时，确保每次重试有独立窗口
 	}
 }
 

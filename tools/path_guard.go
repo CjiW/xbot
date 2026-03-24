@@ -37,6 +37,10 @@ func resolveScopedBase(ctx *ToolContext) (string, error) {
 	return absRoot, nil
 }
 
+// ResolveWritePath 将 inputPath 解析为绝对路径，并校验其在 workspace 写入范围内。
+//
+// 相对路径解析优先级：CurrentDir（Cd 设置）> WorkspaceRoot/WorkingDir。
+// 绝对路径直接校验，不受 CurrentDir 影响。
 func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("path is required")
@@ -60,7 +64,12 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 
 	candidate := inputPath
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
+		// 优先使用 CurrentDir（Cd 设置的当前目录），否则 fallback 到 root
+		if ctx != nil && ctx.CurrentDir != "" {
+			candidate = filepath.Join(ctx.CurrentDir, candidate)
+		} else {
+			candidate = filepath.Join(root, candidate)
+		}
 	}
 	candidate, err = cleanAbsPath(candidate)
 	if err != nil {
@@ -87,6 +96,11 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 	return candidate, nil
 }
 
+// ResolveReadPath 将 inputPath 解析为绝对路径，并校验其在允许的读取范围内。
+//
+// 相对路径解析优先级：CurrentDir（Cd 设置）> WorkspaceRoot/WorkingDir。
+// 绝对路径直接校验，不受 CurrentDir 影响。
+// 允许读取范围包括 workspace root 及 ReadOnlyRoots 中列出的目录。
 func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("path is required")
@@ -110,7 +124,12 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 
 	candidate := inputPath
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(root, candidate)
+		// 优先使用 CurrentDir（Cd 设置的当前目录），否则 fallback 到 root
+		if ctx != nil && ctx.CurrentDir != "" {
+			candidate = filepath.Join(ctx.CurrentDir, candidate)
+		} else {
+			candidate = filepath.Join(root, candidate)
+		}
 	}
 	candidate, err = cleanAbsPath(candidate)
 	if err != nil {

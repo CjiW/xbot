@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -314,5 +315,170 @@ func TestSandboxHostPathRoundTrip(t *testing.T) {
 		if roundTrip != sandboxPath {
 			t.Errorf("round trip failed: %q → %q → %q", sandboxPath, hostPath, roundTrip)
 		}
+	}
+}
+
+// TestResolveWritePath_CurrentDir 验证 ResolveWritePath 在设置 CurrentDir 后，
+// 相对路径基于 CurrentDir 解析，而非 WorkingDir。
+func TestResolveWritePath_CurrentDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		WorkingDir: tmpDir,
+	}
+
+	// 无 CurrentDir 时，相对路径基于 WorkingDir
+	got, err := ResolveWritePath(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != filepath.Join(tmpDir, "test.txt") {
+		t.Errorf("without CurrentDir: got %q, want %q", got, filepath.Join(tmpDir, "test.txt"))
+	}
+
+	// 设置 CurrentDir 后，相对路径基于 CurrentDir
+	ctx.CurrentDir = subDir
+	got, err = ResolveWritePath(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != filepath.Join(subDir, "test.txt") {
+		t.Errorf("with CurrentDir: got %q, want %q", got, filepath.Join(subDir, "test.txt"))
+	}
+
+	// 绝对路径不受 CurrentDir 影响
+	absPath := filepath.Join(tmpDir, "abs.txt")
+	got, err = ResolveWritePath(ctx, absPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != absPath {
+		t.Errorf("absolute path: got %q, want %q", got, absPath)
+	}
+}
+
+// TestResolveReadPath_CurrentDir 验证 ResolveReadPath 在设置 CurrentDir 后，
+// 相对路径基于 CurrentDir 解析。
+func TestResolveReadPath_CurrentDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 创建测试文件
+	testFile := filepath.Join(subDir, "hello.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		WorkingDir: tmpDir,
+	}
+
+	// 无 CurrentDir 时，相对路径基于 WorkingDir
+	got, err := ResolveReadPath(ctx, "hello.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != filepath.Join(tmpDir, "hello.txt") {
+		t.Errorf("without CurrentDir: got %q, want %q", got, filepath.Join(tmpDir, "hello.txt"))
+	}
+
+	// 设置 CurrentDir 后，相对路径基于 CurrentDir
+	ctx.CurrentDir = subDir
+	got, err = ResolveReadPath(ctx, "hello.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != testFile {
+		t.Errorf("with CurrentDir: got %q, want %q", got, testFile)
+	}
+
+	// 绝对路径不受 CurrentDir 影响
+	got, err = ResolveReadPath(ctx, testFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != testFile {
+		t.Errorf("absolute path: got %q, want %q", got, testFile)
+	}
+}
+
+// TestResolveWritePath_CurrentDir_EscapeWorkspace 验证 CurrentDir 在 workspace 外时，
+// 写入操作被 isWithinRoot 正确拦截。
+func TestResolveWritePath_CurrentDir_EscapeWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+
+	ctx := &ToolContext{
+		WorkspaceRoot: workspace,
+		CurrentDir:    outsideDir,
+	}
+
+	// CurrentDir 在 workspace 外，相对路径写入应被拒绝
+	_, err := ResolveWritePath(ctx, "evil.txt")
+	if err == nil {
+		t.Fatal("expected error when CurrentDir is outside workspace, got nil")
+	}
+
+	// 路径穿越也应被拒绝
+	ctx.CurrentDir = filepath.Join(workspace, "sub")
+	os.MkdirAll(ctx.CurrentDir, 0755)
+	_, err = ResolveWritePath(ctx, "../../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+}
+
+// TestResolveReadPath_CurrentDir_EscapeWorkspace 验证 CurrentDir 在 workspace 外时，
+// 读取操作被正确拦截。
+func TestResolveReadPath_CurrentDir_EscapeWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+
+	ctx := &ToolContext{
+		WorkspaceRoot: workspace,
+		CurrentDir:    outsideDir,
+	}
+
+	// CurrentDir 在 workspace 外，相对路径读取应被拒绝
+	_, err := ResolveReadPath(ctx, "secret.txt")
+	if err == nil {
+		t.Fatal("expected error when CurrentDir is outside workspace, got nil")
+	}
+}
+
+// TestReadTool_Fallthrough_CurrentDir 验证 cd 到子目录后，
+// 仍能通过 fallthrough 读取 workspace root 下的文件。
+func TestReadTool_Fallthrough_CurrentDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 在 workspace root 创建文件（不在 subdir 中）
+	rootFile := filepath.Join(tmpDir, "root.txt")
+	if err := os.WriteFile(rootFile, []byte("root content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &ReadTool{}
+	ctx := &ToolContext{
+		WorkingDir: tmpDir,
+		CurrentDir: subDir,
+	}
+
+	// cd 到 subdir 后，读取 root.txt 应该 fallthrough 到 workspace root
+	result, err := tool.Execute(ctx, `{"path": "root.txt"}`)
+	if err != nil {
+		t.Fatalf("expected fallthrough to workspace root, got error: %v", err)
+	}
+	if !strings.Contains(result.Summary, "root content") {
+		t.Errorf("expected 'root content' in result, got: %s", result.Summary)
 	}
 }

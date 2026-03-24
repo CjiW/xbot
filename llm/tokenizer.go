@@ -146,6 +146,70 @@ func CountTokens(text string, model string) (int, error) {
 	return len(ids), nil
 }
 
+// RoleTokenCount 按角色分类的 token 统计结果
+type RoleTokenCount struct {
+	System    int
+	User      int
+	Assistant int
+	Tool      int
+}
+
+// CountMessagesTokensByRole counts tokens for a list of messages, broken down by role.
+func CountMessagesTokensByRole(messages []ChatMessage, model string) (RoleTokenCount, error) {
+	var result RoleTokenCount
+
+	// Approximate token overhead per message (role + formatting)
+	overheadPerMessage := 4
+
+	for _, msg := range messages {
+		var contentTokens int
+		var toolCallTokens int
+
+		// Count content tokens
+		if msg.Content != "" {
+			count, err := CountTokens(msg.Content, model)
+			if err != nil {
+				return result, err
+			}
+			contentTokens = count
+		}
+
+		// Count tool call tokens if present (assistant messages with tool calls)
+		for _, tc := range msg.ToolCalls {
+			toolCallTokens += overheadPerMessage // per tool call overhead
+			if tc.Name != "" {
+				count, err := CountTokens(tc.Name, model)
+				if err != nil {
+					return result, err
+				}
+				toolCallTokens += count
+			}
+			if tc.Arguments != "" {
+				count, err := CountTokens(tc.Arguments, model)
+				if err != nil {
+					return result, err
+				}
+				toolCallTokens += count
+			}
+		}
+
+		totalForMsg := overheadPerMessage + contentTokens + toolCallTokens
+
+		switch msg.Role {
+		case "system":
+			result.System += totalForMsg
+		case "user":
+			result.User += totalForMsg
+		case "assistant":
+			result.Assistant += totalForMsg
+		case "tool":
+			result.Tool += totalForMsg
+		}
+	}
+
+	return result, nil
+}
+
 // CountMessagesTokens counts the total tokens for a list of messages.
 // This is more accurate than simple text counting as it accounts for role formatting.
 func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {

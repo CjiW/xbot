@@ -342,7 +342,7 @@ func (a *Agent) UnloadInteractiveSession(
 // buildParentToolContext 从 InboundMessage 构建 SubAgent 需要的 parent ToolContext。
 // 与 spawnSubAgent 中的 parentCtx 构建保持一致。
 func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, senderID string, msg bus.InboundMessage) *tools.ToolContext {
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, senderID)
+	workspaceRoot := a.workspaceRoot(senderID)
 	_ = os.MkdirAll(workspaceRoot, 0o755)
 
 	return &tools.ToolContext{

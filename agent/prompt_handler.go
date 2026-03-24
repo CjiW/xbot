@@ -11,7 +11,6 @@ import (
 	log "xbot/logger"
 	"xbot/memory"
 	"xbot/session"
-	"xbot/tools"
 )
 
 // handlePromptQuery 构建完整提示词并写入文件发送给用户（dryrun，不调用 LLM）
@@ -59,7 +58,7 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
 
 	// 写入文件并发送
-	workspaceRoot := tools.UserWorkspaceRoot(a.workDir, msg.SenderID)
+	workspaceRoot := a.workspaceRoot(msg.SenderID)
 	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
 	if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
 		return nil, fmt.Errorf("write prompt file: %w", err)

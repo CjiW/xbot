@@ -103,6 +103,11 @@ func TestIsSubAgentLine(t *testing.T) {
 		// 带全角缩进（子 Agent 格式化输出）
 		{"　🔄 ministry-works: ⏳ Shell(ls)", true},
 		{"　✅ ministry-justice:", true},
+		// SubAgent 占位行格式
+		{"> ⏳ SubAgent [ministry-works]: ...", true},
+		{"> ⏳ SubAgent [department-state]: ...", true},
+		{"⏳ SubAgent [test-role]: ...", true},
+
 		// 不是子 Agent 行
 		{"> 💭 思考中...", false},           // 引用前缀但无冒号
 		{"> ⏳ Shell(ls) ...", false},    // 引用前缀但无冒号
@@ -163,6 +168,10 @@ func TestParseSubAgentLine(t *testing.T) {
 		{"└─ ✅ 刑部:", true, "刑部", "✅", ""},
 		{"│ 🔄 工部: running", true, "工部", "🔄", "running"},
 		// 引用格式
+		// 占位行格式
+		{"> ⏳ SubAgent [ministry-works]: ...", true, "ministry-works", "⏳", "..."},
+		{"⏳ SubAgent [department-state]: some desc", true, "department-state", "⏳", "some desc"},
+
 		{"> 🔄 crown-prince: 💭 思考中...", true, "crown-prince", "🔄", "💭 思考中..."},
 		{"> ✅ ministry-works:", true, "ministry-works", "✅", ""},
 		{"> 　🔄 department-state: 分派三部", true, "department-state", "🔄", "分派三部"},
@@ -322,14 +331,14 @@ func TestExtractOwnAndChildProgress(t *testing.T) {
 				"三部执行中",
 				"> 🔄 ministry-works: ⏳ Shell(go version)",
 				"> ✅ ministry-justice:",
-				"> 💭 思考中...", // deep quote, not child format → filtered
+				"> 💭 思考中...", // emoji status line → kept as child (no role)
 			},
-			"三部执行中", 2, "ministry-works",
+			"三部执行中", 3, "ministry-works", // 💭 thinking also counted as child
 		},
 		{
-			"quoted non-child filtered",
+			"quoted progress status kept as children",
 			[]string{"> 💭 思考中...", "> ⏳ Shell(ls)"},
-			"", 0, "",
+			"", 2, "", // two progress status children (no role)
 		},
 		{
 			"multiline own content",
@@ -464,13 +473,13 @@ func TestFormatSubAgentProgress(t *testing.T) {
 		},
 		// === 深度缩进 ===
 		{
-			name: "depth 1 multi line",
+			name: "depth 1 multi line - no indent (depth-1=0)",
 			detail: SubAgentProgressDetail{
 				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
 				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
 				Depth: 1,
 			},
-			want: "> 　🔄 ministry-works: ⏳ Shell(go test) ...",
+			want: "> 🔄 ministry-works: ⏳ Shell(go test) ...",
 		},
 		{
 			name: "depth 1 completed",
@@ -479,7 +488,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				Lines: []string{""},
 				Depth: 1,
 			},
-			want: "> 　✅ ministry-works",
+			want: "> ✅ ministry-works",
 		},
 		{
 			name: "depth 2 multi line",
@@ -488,7 +497,7 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
 				Depth: 2,
 			},
-			want: "> 　　🔄 d: ✅ Shell(go test) (1.2s)",
+			want: "> 　🔄 d: ✅ Shell(go test) (1.2s)",
 		},
 		// === 子 Agent 并发摘要（树状行格式）===
 		{
@@ -585,8 +594,51 @@ func TestFormatSubAgentProgress(t *testing.T) {
 				},
 				Depth: 1,
 			},
-			want: "> 　🔄 department-state: 分派三部并行执行 → 🔄 ministry-works(⏳ Shell(go version)…) · ✅ ministry-justice(✅ Shell(go version)…",
+			want: "> 🔄 department-state: 分派三部并行执行 → 🔄 ministry-works(⏳ Shell(go version)…) · ✅ ministry-justice(✅ Shell(go version)…",
 		},
+		// === 实际运行时场景：SubAgent 占位行 + emoji 状态行 ===
+		{
+			name: "SubAgent placeholder lines recognized as children",
+			detail: SubAgentProgressDetail{
+				Path: []string{"main/crown-prince"},
+				Lines: []string{
+					"臣即刻将任务派发给尚书省",
+					"> ⏳ SubAgent [department-state]: 【尚书省·接旨】三层并发测试",
+				},
+				Depth: 0,
+			},
+			want: "> 🔄 crown-prince: 臣即刻将任务派发给尚书省 → ⏳ department-state(【尚书省·接旨】三层并发测试)",
+		},
+		{
+			name: "SubAgent placeholder with progress status lines",
+			detail: SubAgentProgressDetail{
+				Path: []string{"main/crown-prince"},
+				Lines: []string{
+					"分析任务中",
+					"> 💭 思考中...",
+					"> ⏳ Shell(ls -la)",
+					"> 📦 压缩中...",
+				},
+				Depth: 0,
+			},
+			want: "> 🔄 crown-prince: 分析任务中 → 💭 思考中... · ⏳ Shell(ls -la) · 📦 压缩中...",
+		},
+		{
+			name: "mixed: own text + SubAgent placeholders + emoji status",
+			detail: SubAgentProgressDetail{
+				Path: []string{"main/department-state"},
+				Lines: []string{
+					"分派三部",
+					"> ⏳ SubAgent [ministry-works]: 工部",
+					"> ⏳ SubAgent [ministry-justice]: 刑部",
+					"> ⏳ SubAgent [ministry-rites]: 礼部",
+					"> 💭 思考中...",
+				},
+				Depth: 1,
+			},
+			want: "> 🔄 department-state: 分派三部 → ⏳ ministry-works(工部) · ⏳ ministry-justice(刑部) · ⏳ ministry-rites(礼部) · 💭 思考中...",
+		},
+		// === 太子多层穿透场景 ===
 		{
 			name: "太子多层穿透 - 有子Agent (quoted format)",
 			detail: SubAgentProgressDetail{
@@ -601,18 +653,18 @@ func TestFormatSubAgentProgress(t *testing.T) {
 		},
 		// === 混合引用前缀 + 树状行 ===
 		{
-			name: "quoted lines filtered, own + tree kept",
+			name: "quoted lines kept as children, own + tree kept",
 			detail: SubAgentProgressDetail{
 				Path: []string{"main/crown-prince"},
 				Lines: []string{
-					"> 💭 思考中...",    // 引用前缀行但不是子 Agent → 过滤
-					"> ⏳ Shell(ls)", // 引用前缀行但不是子 Agent → 过滤
+					"> 💭 思考中...",    // emoji status line → kept as child
+					"> ⏳ Shell(ls)", // emoji status line → kept as child
 					"├─ 🔄 工部: ⏳ ls", // 树状行 → 子Agent
 					"├─ ✅ 刑部:",      // 树状行 → 子Agent
 				},
 				Depth: 0,
 			},
-			want: "> 🔄 crown-prince: 🔄 工部(⏳ ls) · ✅ 刑部",
+			want: "> 🔄 crown-prince: 💭 思考中... · ⏳ Shell(ls) · 🔄 工部(⏳ ls) · ✅ 刑部",
 		},
 		// === 长文本截断 ===
 		{
@@ -725,8 +777,8 @@ func TestFormatSubAgentProgress_ThreeLayerScenario(t *testing.T) {
 		if strings.Contains(got, "\n") {
 			t.Errorf("should be single line: %q", got)
 		}
-		if !strings.Contains(got, "　") {
-			t.Errorf("should have fullwidth indent for depth=1: %q", got)
+		if strings.Contains(got, "　") {
+			t.Errorf("should NOT have fullwidth indent for depth=1 (indentDepth=0): %q", got)
 		}
 		if !strings.Contains(got, "ministry-works") || !strings.Contains(got, "ministry-justice") || !strings.Contains(got, "ministry-rites") {
 			t.Errorf("should contain all three child agents: %q", got)

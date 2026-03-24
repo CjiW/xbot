@@ -613,11 +613,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			llmCtx, llmCancel = retryNotifyCtx, func() {}
 		}
 
-		// Acquire per-tenant LLM concurrency slot (if configured)
+		// Acquire per-tenant LLM concurrency slot (if configured).
+		// Release after Generate (and potential retry) completes — NOT via defer,
+		// because defer binds to Run() and would leak slots across loop iterations,
+		// causing deadlock after <capacity> iterations.
 		var releaseLLMSem func()
 		if cfg.LLMSemAcquire != nil {
 			releaseLLMSem = cfg.LLMSemAcquire()
-			defer releaseLLMSem()
 		}
 
 		response, err := cfg.LLMClient.Generate(llmCtx, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
@@ -684,6 +686,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 			}
 
+		}
+
+		// Release per-tenant LLM semaphore after Generate (+ optional retry) completes.
+		if releaseLLMSem != nil {
+			releaseLLMSem()
 		}
 
 		if err != nil {

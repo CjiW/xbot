@@ -111,13 +111,9 @@ func (a *Agent) SpawnInteractiveSession(
 		myPath := cc.Spawn(rn).Chain
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				last := lines[len(lines)-1]
-				if idx := strings.LastIndex(last, "\n"); idx >= 0 {
-					last = last[idx+1:]
-				}
 				cb(SubAgentProgressDetail{
 					Path:  myPath,
-					Line:  last,
+					Lines: lines,
 					Depth: myDepth,
 				})
 			}

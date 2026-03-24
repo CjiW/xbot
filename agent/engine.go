@@ -671,7 +671,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 							}
 						}
 					}
-					// 重试 LLM 调用（使用 retryNotifyCtx 以保留重试通知回调）
 					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
@@ -850,15 +849,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					pi := progressStartIdx + entry.index
 					if pi < len(progressLines) {
 						execCtx = WithSubAgentProgress(execCtx, func(detail SubAgentProgressDetail) {
-							// 树形缩进：全角空格（飞书不忽略）+ box-drawing 连接符
-							indent := strings.Repeat("　", detail.Depth)
-							connector := "├─"
-							icon := "🔄"
-							if detail.Line == "" {
-								icon = "✅"
-							}
 							progressMu.Lock()
-							progressLines[pi] = fmt.Sprintf("> %s%s %s [%s]: %s", indent, connector, icon, CallChainFromContext(ctx).Current(), detail.Line)
+							progressLines[pi] = formatSubAgentProgress(detail)
 							notifyProgress("")
 							progressMu.Unlock()
 						})

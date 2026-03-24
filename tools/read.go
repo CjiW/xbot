@@ -124,7 +124,6 @@ func applyLineLimit(result *ToolResult, maxLines, offset int) *ToolResult {
 	return result
 }
 
-
 // executeInSandbox 在沙箱容器内执行 cat 命令
 func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolResult, error) {
 	sandboxBase := sandboxBaseDir(ctx)

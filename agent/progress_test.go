@@ -114,3 +114,179 @@ func TestProgressEvent_NilStructured(t *testing.T) {
 		t.Errorf("expected 1 line, got %d", len(event.Lines))
 	}
 }
+
+func TestFormatSubAgentProgress(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail SubAgentProgressDetail
+		want   string
+	}{
+		{
+			name: "single line thinking",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"💭 思考中..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: 💭 思考中...",
+		},
+		{
+			name: "single line tool progress",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"⏳ Shell(ls) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: ⏳ Shell(ls) ...",
+		},
+		{
+			name: "completed (empty lines)",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{""},
+				Depth: 0,
+			},
+			want: "> ├─ ✅ crown-prince",
+		},
+		{
+			name: "completed (nil lines)",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: nil,
+				Depth: 0,
+			},
+			want: "> ├─ ✅ crown-prince",
+		},
+		{
+			name: "multi line tree format",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"💭 思考中...", "⏳ Shell(ls) ...", "⏳ Shell(go test) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...\n> │  ⏳ Shell(go test) ...",
+		},
+		{
+			name: "multi line with quote prefix cleanup",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"> 💭 思考中...", "> ⏳ Shell(ls) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince:\n> │  💭 思考中...\n> │  ⏳ Shell(ls) ...",
+		},
+		{
+			name: "depth 1 multi line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
+				Lines: []string{"💭 审计中...", "⏳ Shell(go test) ..."},
+				Depth: 1,
+			},
+			want: "> 　├─ 🔄 ministry-works:\n> 　│  💭 审计中...\n> 　│  ⏳ Shell(go test) ...",
+		},
+		{
+			name: "depth 1 completed",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-works"},
+				Lines: []string{""},
+				Depth: 1,
+			},
+			want: "> 　├─ ✅ ministry-works",
+		},
+		{
+			name: "depth 2 multi line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/department-state", "main/crown-prince/department-state/ministry-justice"},
+				Lines: []string{"💭 运行测试...", "✅ Shell(go test) (1.2s)"},
+				Depth: 2,
+			},
+			want: "> 　　├─ 🔄 ministry-justice:\n> 　　│  💭 运行测试...\n> 　　│  ✅ Shell(go test) (1.2s)",
+		},
+		{
+			name: "empty path with content",
+			detail: SubAgentProgressDetail{
+				Path:  nil,
+				Lines: []string{"some progress"},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 : some progress",
+		},
+		{
+			name: "empty path completed",
+			detail: SubAgentProgressDetail{
+				Path:  nil,
+				Lines: nil,
+				Depth: 0,
+			},
+			want: "> ├─ ✅ ",
+		},
+		{
+			name: "double quote prefix cleanup",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince"},
+				Lines: []string{"> > ⏳ Shell(go test) ..."},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 crown-prince: ⏳ Shell(go test) ...",
+		},
+		{
+			name: "nested subagent progress with depth 1 - single line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
+				Lines: []string{"> ├─ 🔄 ministry-works: 💭 审计中..."},
+				Depth: 1,
+			},
+			want: "> 　├─ 🔄 ministry-rites: ├─ 🔄 ministry-works: 💭 审计中...",
+		},
+		{
+			name: "nested subagent progress with depth 1 - multi line",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"main/crown-prince", "main/crown-prince/ministry-rites"},
+				Lines: []string{"> ├─ 🔄 ministry-works:", "> │  💭 审计中..."},
+				Depth: 1,
+			},
+			want: "> 　├─ 🔄 ministry-rites:\n> 　│  ├─ 🔄 ministry-works:\n> 　│  │  💭 审计中...",
+		},
+		{
+			name: "path without slash uses full string as role",
+			detail: SubAgentProgressDetail{
+				Path:  []string{"simple-role"},
+				Lines: []string{"working"},
+				Depth: 0,
+			},
+			want: "> ├─ 🔄 simple-role: working",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatSubAgentProgress(tt.detail)
+			if got != tt.want {
+				t.Errorf("formatSubAgentProgress() =\n  got: %q\n  want: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanQuotePrefix(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"no prefix", "no prefix"},
+		{"> single prefix", "single prefix"},
+		{"> > double prefix", "double prefix"},
+		{"> > > triple prefix", "triple prefix"},
+		{">   leading spaces", "leading spaces"},
+		{"> ", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := cleanQuotePrefix(tt.input)
+			if got != tt.want {
+				t.Errorf("cleanQuotePrefix(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

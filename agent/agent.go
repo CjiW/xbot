@@ -1210,6 +1210,79 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 }
 
 // processMessage 处理单条入站消息
+
+// summarizeEngineMessages uses the LLM to generate a concise summary of the engine's
+// work during a conversation turn. This summary is persisted to the session so that
+// the next turn has context about what happened (tools used, intermediate results,
+// decisions made) without needing to store the full raw messages.
+//
+// Returns the summary text, or empty string if summarization is skipped or fails.
+func (a *Agent) summarizeEngineMessages(ctx context.Context, senderID string, engineMessages []llm.ChatMessage) string {
+	if len(engineMessages) == 0 {
+		return ""
+	}
+
+	// Format engine messages into a compact text representation
+	var sb strings.Builder
+	for _, msg := range engineMessages {
+		switch msg.Role {
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				sb.WriteString("[Assistant] 调用工具:\n")
+				for _, tc := range msg.ToolCalls {
+					sb.WriteString(fmt.Sprintf("  - %s(%s)\n", tc.Name, truncateStr(tc.Arguments, 200)))
+				}
+			} else if msg.Content != "" {
+				sb.WriteString(fmt.Sprintf("[Assistant] %s\n", truncateStr(msg.Content, 300)))
+			}
+		case "tool":
+			sb.WriteString(fmt.Sprintf("[Tool结果] %s\n", truncateStr(msg.Content, 300)))
+		}
+	}
+
+	workLog := sb.String()
+	if len(workLog) > 8000 {
+		workLog = workLog[:8000] + "\n... (已截断)"
+	}
+
+	summaryPrompt := []llm.ChatMessage{
+		llm.NewSystemMessage("你是一个助手工作日志总结器。请简洁地总结以下助手的工作过程，包括：\n" +
+			"1. 执行了哪些关键操作（读取了哪些文件、调用了哪些工具）\n" +
+			"2. 得到了什么重要结论或中间结果\n" +
+			"3. 最终完成了什么工作\n\n" +
+			"要求：\n" +
+			"- 用简洁的要点列出，不超过 10 行\n" +
+			"- 保留关键信息（文件路径、函数名、关键数值）\n" +
+			"- 用中文回答"),
+		llm.NewUserMessage(fmt.Sprintf("请总结以下工作日志：\n\n%s", workLog)),
+	}
+
+	llmClient, model, _, _ := a.llmFactory.GetLLM(senderID)
+	if llmClient == nil || model == "" {
+		log.Ctx(ctx).Warn("Cannot summarize engine messages: LLM client or model unavailable")
+		return ""
+	}
+
+	resp, err := llmClient.Generate(ctx, model, summaryPrompt, nil, "")
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to generate engine message summary")
+		return ""
+	}
+	if resp == nil || resp.Content == "" {
+		return ""
+	}
+
+	return resp.Content
+}
+
+// truncateStr truncates a string to maxLen characters, appending "..." if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bus.OutboundMessage, error) {
 	// 使用消息携带的 requestID（在渠道收到消息时生成），如果没有则生成新的
 	reqID := msg.RequestID
@@ -1311,6 +1384,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		if err := tenantSession.AddMessage(userMsg); err != nil {
 			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 		}
+		// Persist engine-produced messages (assistant + tool) so the next
+		// turn has full context of what happened before waiting.
+		for _, em := range out.EngineMessages {
+			assertNoSystemPersist(em)
+			if err := tenantSession.AddMessage(em); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save engine message during waiting")
+			}
+		}
 		return nil, nil
 	}
 
@@ -1347,6 +1428,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	if err := tenantSession.AddMessage(userMsg); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 	}
+
+	// Generate and persist a summary of the engine's work (tool calls, intermediate results).
+	// This gives the next conversation turn context about what happened, without storing
+	// the full raw messages which would be very token-expensive.
+	if summary := a.summarizeEngineMessages(ctx, msg.SenderID, out.EngineMessages); summary != "" {
+		summaryMsg := llm.NewAssistantMessage("[工作总结] " + summary)
+		if err := tenantSession.AddMessage(summaryMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save engine summary message")
+		}
+	}
+
 	assistantMsg := llm.NewAssistantMessage(finalContent)
 	if len(toolsUsed) > 0 {
 		_ = toolsUsed

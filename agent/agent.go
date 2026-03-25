@@ -1543,17 +1543,32 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 		return
 	}
 
+	// 获取所有消息用于整理
+	messages, err := tenantSession.GetMessages()
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Error("Failed to get messages for consolidation")
+		return
+	}
+	if len(messages) == 0 {
+		log.Ctx(ctx).Debug("No messages to consolidate")
+		return
+	}
+
 	mem := tenantSession.Memory()
 	llmClient, model, _, _ := a.llmFactory.GetLLM(req.senderID)
 
-	result, _ := mem.Memorize(ctx, memory.MemorizeInput{
-		Messages:         nil, // 由 Memorize 内部从 session 获取
+	result, err := mem.Memorize(ctx, memory.MemorizeInput{
+		Messages:         messages,
 		LastConsolidated: lastConsolidated,
 		LLMClient:        llmClient,
 		Model:            model,
 		ArchiveAll:       false,
 		MemoryWindow:     a.memoryWindow,
 	})
+	if err != nil {
+		log.Ctx(ctx).WithError(err).WithField("tenant", tenantKey).Warn("Auto memory consolidation failed")
+		return
+	}
 	if result.OK {
 		if err := tenantSession.SetLastConsolidated(result.NewLastConsolidated); err != nil {
 			log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")

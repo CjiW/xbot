@@ -122,7 +122,8 @@ func TestDoLineEdit_SingleLineNoNewline(t *testing.T) {
 
 func TestDoLineEdit_SingleLineWithNewline(t *testing.T) {
 	tool := newEditTool()
-	// "hello\n" → lines = ["hello", ""], totalLines=2
+	// "hello\n" → splitLines → lines=["hello"], hasTrailingNL=true, totalLines=1
+	// This matches what the Read tool shows (1 line).
 
 	t.Run("replace line 1", func(t *testing.T) {
 		params := EditParams{LineNumber: 1, Action: "replace", Content: "NEW"}
@@ -135,14 +136,14 @@ func TestDoLineEdit_SingleLineWithNewline(t *testing.T) {
 		}
 	})
 
-	t.Run("replace line 2 (empty trailing line)", func(t *testing.T) {
+	t.Run("line 2 exceeds total lines (no phantom line)", func(t *testing.T) {
 		params := EditParams{LineNumber: 2, Action: "replace", Content: "NEW"}
-		result, _, err := tool.doLineEdit("hello\n", params)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		_, _, err := tool.doLineEdit("hello\n", params)
+		if err == nil {
+			t.Fatal("expected error: line 2 should exceed total lines 1")
 		}
-		if result != "hello\nNEW" {
-			t.Errorf("got %q, want %q", result, "hello\nNEW")
+		if !strings.Contains(err.Error(), "exceeds total lines") {
+			t.Errorf("error should mention 'exceeds total lines', got: %v", err)
 		}
 	})
 
@@ -152,52 +153,37 @@ func TestDoLineEdit_SingleLineWithNewline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:0]=[] + lines[1:]=[""] → [""] → ""
 		if result != "" {
 			t.Errorf("got %q, want empty string", result)
 		}
 	})
 
-	t.Run("delete line 2", func(t *testing.T) {
-		params := EditParams{LineNumber: 2, Action: "delete"}
+	t.Run("insert_before line 1", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "insert_before", Content: "NEW"}
 		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// After Bug2 fix: deleting the empty trailing line preserves the trailing \n
-		if result != "hello\n" {
-			t.Errorf("got %q, want %q", result, "hello\n")
+		if result != "NEW\nhello\n" {
+			t.Errorf("got %q, want %q", result, "NEW\nhello\n")
 		}
 	})
 
-	t.Run("insert_before line 2", func(t *testing.T) {
-		params := EditParams{LineNumber: 2, Action: "insert_before", Content: "NEW"}
+	t.Run("insert_after line 1", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "insert_after", Content: "NEW"}
 		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:1]=["hello"] + ["NEW"] + lines[1:]=[""] → ["hello","NEW",""] → "hello\nNEW\n"
 		if result != "hello\nNEW\n" {
 			t.Errorf("got %q, want %q", result, "hello\nNEW\n")
-		}
-	})
-
-	t.Run("insert_after line 2", func(t *testing.T) {
-		params := EditParams{LineNumber: 2, Action: "insert_after", Content: "NEW"}
-		result, _, err := tool.doLineEdit("hello\n", params)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// lines[:2]=["hello",""] + ["NEW"] + lines[2:]=[] → ["hello","","NEW"] → "hello\n\nNEW"
-		if result != "hello\n\nNEW" {
-			t.Errorf("got %q, want %q", result, "hello\n\nNEW")
 		}
 	})
 }
 
 func TestDoLineEdit_FirstAndLastLine(t *testing.T) {
 	tool := newEditTool()
-	// "aaa\nbbb\nccc\n" → lines=["aaa","bbb","ccc",""], totalLines=4
+	// "aaa\nbbb\nccc\n" → splitLines → lines=["aaa","bbb","ccc"], hasTrailingNL=true, totalLines=3
 
 	const content = "aaa\nbbb\nccc\n"
 
@@ -207,8 +193,9 @@ func TestDoLineEdit_FirstAndLastLine(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.HasPrefix(result, "FIRST\naaa") {
-			t.Errorf("expected content to start with %q, got %q", "FIRST\naaa", result)
+		expected := "FIRST\naaa\nbbb\nccc\n"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
 		}
 	})
 
@@ -224,29 +211,38 @@ func TestDoLineEdit_FirstAndLastLine(t *testing.T) {
 		}
 	})
 
-	t.Run("insert_before last line (line 4, empty trailing)", func(t *testing.T) {
-		params := EditParams{LineNumber: 4, Action: "insert_before", Content: "BEFORE4"}
+	t.Run("insert_before last line (line 3)", func(t *testing.T) {
+		params := EditParams{LineNumber: 3, Action: "insert_before", Content: "BEFORE3"}
 		result, _, err := tool.doLineEdit(content, params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:3]=["aaa","bbb","ccc"] + ["BEFORE4"] + lines[3:]=[""] → "aaa\nbbb\nccc\nBEFORE4\n"
-		expected := "aaa\nbbb\nccc\nBEFORE4\n"
+		expected := "aaa\nbbb\nBEFORE3\nccc\n"
 		if result != expected {
 			t.Errorf("got %q, want %q", result, expected)
 		}
 	})
 
-	t.Run("insert_after last line (line 4)", func(t *testing.T) {
-		params := EditParams{LineNumber: 4, Action: "insert_after", Content: "AFTER4"}
+	t.Run("insert_after last line (line 3)", func(t *testing.T) {
+		params := EditParams{LineNumber: 3, Action: "insert_after", Content: "AFTER3"}
 		result, _, err := tool.doLineEdit(content, params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:4]=["aaa","bbb","ccc",""] + ["AFTER4"] + lines[4:]=[] → "aaa\nbbb\nccc\n\nAFTER4"
-		expected := "aaa\nbbb\nccc\n\nAFTER4"
+		expected := "aaa\nbbb\nccc\nAFTER3\n"
 		if result != expected {
 			t.Errorf("got %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("line 4 exceeds total lines (no phantom line)", func(t *testing.T) {
+		params := EditParams{LineNumber: 4, Action: "insert_before", Content: "X"}
+		_, _, err := tool.doLineEdit(content, params)
+		if err == nil {
+			t.Fatal("expected error: line 4 should exceed total lines 3")
+		}
+		if !strings.Contains(err.Error(), "exceeds total lines") {
+			t.Errorf("error should mention 'exceeds total lines', got: %v", err)
 		}
 	})
 
@@ -256,12 +252,13 @@ func TestDoLineEdit_FirstAndLastLine(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.HasPrefix(result, "NEW\nbbb") {
-			t.Errorf("expected content to start with %q, got %q", "NEW\nbbb", result)
+		expected := "NEW\nbbb\nccc\n"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
 		}
 	})
 
-	t.Run("replace last content line (line 3)", func(t *testing.T) {
+	t.Run("replace last line (line 3)", func(t *testing.T) {
 		params := EditParams{LineNumber: 3, Action: "replace", Content: "NEW"}
 		result, _, err := tool.doLineEdit(content, params)
 		if err != nil {
@@ -279,20 +276,18 @@ func TestDoLineEdit_FirstAndLastLine(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// After Bug2 fix: original "aaa\nbbb\nccc\n" → delete line 1 → "bbb\nccc\n" (trailing \n preserved)
 		expected := "bbb\nccc\n"
 		if result != expected {
 			t.Errorf("got %q, want %q", result, expected)
 		}
 	})
 
-	t.Run("delete last content line (line 3)", func(t *testing.T) {
+	t.Run("delete last line (line 3)", func(t *testing.T) {
 		params := EditParams{LineNumber: 3, Action: "delete"}
 		result, _, err := tool.doLineEdit(content, params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:2]=["aaa","bbb"] + lines[3:]=[""] → ["aaa","bbb",""] → "aaa\nbbb\n"
 		expected := "aaa\nbbb\n"
 		if result != expected {
 			t.Errorf("got %q, want %q", result, expected)
@@ -337,8 +332,8 @@ func TestDoLineEdit_InvalidLineNumber(t *testing.T) {
 	})
 
 	t.Run("exceeds by exactly 1", func(t *testing.T) {
-		// "hello\n" has 2 lines (["hello", ""]), line 3 should fail
-		params := EditParams{LineNumber: 3, Action: "delete"}
+		// "hello\n" → splitLines → ["hello"], totalLines=1, line 2 should fail
+		params := EditParams{LineNumber: 2, Action: "delete"}
 		_, _, err := tool.doLineEdit("hello\n", params)
 		if err == nil {
 			t.Fatal("expected error")
@@ -935,8 +930,8 @@ func TestDoInsert_InvalidPosition(t *testing.T) {
 
 func TestDoInsert_PositionExceedsLines(t *testing.T) {
 	tool := newEditTool()
-	// "hello\n" has 2 lines. Position "3" → lineNum=3, doLineEdit will reject
-	params := EditParams{Position: "3", Content: "NEW"}
+	// "hello\n" → splitLines → ["hello"], totalLines=1. Position "2" should fail.
+	params := EditParams{Position: "2", Content: "NEW"}
 	_, _, err := tool.doInsert("hello\n", params, "/test/file.txt")
 	if err == nil {
 		t.Fatal("expected error for position exceeding total lines")
@@ -1010,92 +1005,104 @@ func TestDoInsert_Bug1_InconsistentTrailingNewline(t *testing.T) {
 	})
 }
 
-func TestDoLineEdit_Bug2_DeleteLastEmptyLine(t *testing.T) {
+func TestDoLineEdit_TrailingNewlinePreserved(t *testing.T) {
 	tool := newEditTool()
 
-	// Bug 2: "hello\n" has 2 lines: ["hello", ""]. Deleting line 2 removes the empty string.
-	// Result: ["hello"] joined = "hello" (trailing \n is lost).
-	// This is because strings.Split("hello\n", "\n") produces ["hello", ""].
+	// With splitLines fix, trailing newline is tracked separately and always preserved.
+	// "hello\n" → lines=["hello"], hasTrailingNL=true, totalLines=1
+	// No more phantom empty line to confuse line numbering.
 
-	t.Run("delete trailing empty line preserves newline", func(t *testing.T) {
-		params := EditParams{LineNumber: 2, Action: "delete"}
-		result, _, err := tool.doLineEdit("hello\n", params)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// After Bug2 fix: trailing \n is preserved
-		if result != "hello\n" {
-			t.Errorf("got %q, want %q", result, "hello\n")
-		}
-	})
-
-	t.Run("delete last non-empty line preserves structure", func(t *testing.T) {
+	t.Run("delete only line preserves nothing (empty result)", func(t *testing.T) {
 		params := EditParams{LineNumber: 1, Action: "delete"}
 		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines[:0]=[] + lines[1:]=[""] → [""] → ""
-		// Bug2 fix: len(result)==0, so no trailing \n added (correct - empty file)
 		if result != "" {
 			t.Errorf("got %q, want empty string", result)
 		}
 	})
 
-	t.Run("multi-line file preserves trailing newline when last line deleted", func(t *testing.T) {
-		// "aaa\nbbb\n" → lines=["aaa","bbb",""], totalLines=3
-		// Delete line 3 (the empty string after trailing \n)
-		params := EditParams{LineNumber: 3, Action: "delete"}
+	t.Run("replace preserves trailing newline", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "replace", Content: "NEW"}
+		result, _, err := tool.doLineEdit("hello\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "NEW\n" {
+			t.Errorf("got %q, want %q", result, "NEW\n")
+		}
+	})
+
+	t.Run("multi-line delete preserves trailing newline", func(t *testing.T) {
+		// "aaa\nbbb\n" → lines=["aaa","bbb"], hasTrailingNL=true, totalLines=2
+		params := EditParams{LineNumber: 2, Action: "delete"}
 		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// After Bug2 fix: trailing \n is preserved
-		if result != "aaa\nbbb\n" {
-			t.Errorf("got %q, want %q", result, "aaa\nbbb\n")
+		if result != "aaa\n" {
+			t.Errorf("got %q, want %q", result, "aaa\n")
+		}
+	})
+
+	t.Run("insert_after last line preserves trailing newline", func(t *testing.T) {
+		// "aaa\nbbb\n" → lines=["aaa","bbb"], insert after line 2
+		params := EditParams{LineNumber: 2, Action: "insert_after", Content: "NEW"}
+		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := "aaa\nbbb\nNEW\n"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("no trailing newline stays without", func(t *testing.T) {
+		// "aaa\nbbb" → lines=["aaa","bbb"], hasTrailingNL=false
+		params := EditParams{LineNumber: 2, Action: "delete"}
+		result, _, err := tool.doLineEdit("aaa\nbbb", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "aaa" {
+			t.Errorf("got %q, want %q", result, "aaa")
 		}
 	})
 }
 
-func TestDoInsert_Bug3_InsertAfterLastLine(t *testing.T) {
+func TestDoInsert_InsertAfterLastLine(t *testing.T) {
 	tool := newEditTool()
 	const filePath = "/test/file.txt"
 
-	// Bug 3: doInsert with numeric position sets action="insert_after" and delegates to doLineEdit.
-	// For "hello\n" (totalLines=2), position="2" sets line=2, action=insert_after.
-	// idx=1, lines[:2]=["hello",""], append "NEW", lines[2:]=[] → ["hello","","NEW"] → "hello\n\nNEW"
-	// This is arguably correct (inserting after the last line which is empty).
-	// But position="3" will fail with "exceeds total lines 2".
+	// With splitLines fix: "hello\n" → lines=["hello"], totalLines=1
+	// position="1" inserts after the only line, preserving trailing newline.
 
-	t.Run("position=2 on 2-line file works", func(t *testing.T) {
-		params := EditParams{Position: "2", Content: "NEW"}
+	t.Run("position=1 on file with trailing newline", func(t *testing.T) {
+		params := EditParams{Position: "1", Content: "NEW"}
 		result, _, err := tool.doInsert("hello\n", params, filePath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// lines=["hello",""], insert_after line 2: lines[:2]=["hello",""] + ["NEW"] + [] → "hello\n\nNEW"
-		expected := "hello\n\nNEW"
+		expected := "hello\nNEW\n"
 		if result != expected {
 			t.Errorf("got %q, want %q", result, expected)
 		}
-		t.Logf("Note: inserting after line 2 of 'hello\\n' produces double newline: %q", result)
 	})
 
-	t.Run("position=3 on 2-line file fails", func(t *testing.T) {
-		params := EditParams{Position: "3", Content: "NEW"}
+	t.Run("position=2 on 1-line file fails", func(t *testing.T) {
+		params := EditParams{Position: "2", Content: "NEW"}
 		_, _, err := tool.doInsert("hello\n", params, filePath)
 		if err == nil {
-			t.Fatal("expected error for position=3 on 2-line file")
+			t.Fatal("expected error for position=2 on 1-line file")
 		}
 		if !strings.Contains(err.Error(), "exceeds total lines") {
 			t.Errorf("error should mention 'exceeds total lines', got: %v", err)
 		}
-		t.Logf("BUG: User cannot use position='3' to append after the last content line of a 2-line file (includes trailing empty line from \\n)")
 	})
 
 	t.Run("position=1 on single-line-no-newline file", func(t *testing.T) {
-		// "hello" → lines=["hello"], totalLines=1
-		// insert_after line 1: lines[:1]=["hello"] + ["NEW"] + [] → "hello\nNEW"
 		params := EditParams{Position: "1", Content: "NEW"}
 		result, _, err := tool.doInsert("hello", params, filePath)
 		if err != nil {
@@ -1103,6 +1110,19 @@ func TestDoInsert_Bug3_InsertAfterLastLine(t *testing.T) {
 		}
 		if result != "hello\nNEW" {
 			t.Errorf("got %q, want %q", result, "hello\nNEW")
+		}
+	})
+
+	t.Run("position=2 on multi-line file", func(t *testing.T) {
+		// "aaa\nbbb\n" → lines=["aaa","bbb"], totalLines=2
+		params := EditParams{Position: "2", Content: "NEW"}
+		result, _, err := tool.doInsert("aaa\nbbb\n", params, filePath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := "aaa\nbbb\nNEW\n"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
 		}
 	})
 }

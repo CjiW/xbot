@@ -19,52 +19,54 @@ func (t *EditTool) Name() string {
 }
 
 func (t *EditTool) Description() string {
-	return `Edit a file with various modes: create file, replace text, edit lines, or use regex.
+	return `Edit a file. Choose ONE mode and supply its required parameters.
 
 Modes:
-1. "create" - Create a new file with specified content
-   Parameters: path, content
-   
-2. "replace" - Find and replace exact text (supports start_line/end_line to restrict search range)
-   Parameters: path, old_string, new_string, replace_all (optional, default false), start_line (optional), end_line (optional)
-   
-3. "line" - Edit specific lines
-   Parameters: path, line_number, action ("insert_before", "insert_after", "replace", "delete"), content (for insert/replace)
-   
-4. "regex" - Replace using regular expression (supports start_line/end_line to restrict search range)
-   Parameters: path, pattern, replacement, replace_all (optional, default false), start_line (optional), end_line (optional)
+1. "create" — Create a new file.
+   Required: path, content
 
-5. "insert" - Insert content at specific position
-   Parameters: path, position ("start", "end", or line number), content
+2. "replace" — Find and replace exact text.
+   Required: path, old_string, new_string
+   Optional: replace_all (default false), start_line, end_line
 
-Note: path can be relative to working directory or absolute.
+3. "line" — Edit a specific line by number.
+   Required: path, line_number, action ("insert_before"|"insert_after"|"replace"|"delete")
+   Required for insert/replace actions: content
+
+4. "regex" — Replace using regular expression (RE2 syntax).
+   Required: path, pattern, replacement
+   Optional: replace_all (default false), start_line, end_line
+
+5. "insert" — Insert content at a position.
+   Required: path, position ("start"|"end"|line number), content
+
+IMPORTANT: "replace" mode uses old_string/new_string (NOT content). "regex" mode uses pattern/replacement (NOT content).
 
 Examples:
-- Create file: {"mode": "create", "path": "hello.txt", "content": "Hello, World!"}
-- Replace text: {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar"}
-- Replace all: {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar", "replace_all": true}
-- Insert line: {"mode": "line", "path": "main.go", "line_number": 10, "action": "insert_after", "content": "// new comment"}
-- Delete line: {"mode": "line", "path": "main.go", "line_number": 5, "action": "delete"}
-- Regex replace: {"mode": "regex", "path": "main.go", "pattern": "func\\s+(\\w+)", "replacement": "function $1"}
-- Append to file: {"mode": "insert", "path": "log.txt", "position": "end", "content": "new log entry\n"}
-- Replace in range: {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar", "start_line": 10, "end_line": 20}`
+- {"mode": "create", "path": "hello.txt", "content": "Hello!"}
+- {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar"}
+- {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar", "replace_all": true, "start_line": 10, "end_line": 20}
+- {"mode": "line", "path": "main.go", "line_number": 10, "action": "insert_after", "content": "// comment"}
+- {"mode": "line", "path": "main.go", "line_number": 5, "action": "delete"}
+- {"mode": "regex", "path": "main.go", "pattern": "v\\d+\\.\\d+", "replacement": "v2.0"}
+- {"mode": "insert", "path": "log.txt", "position": "end", "content": "new entry\n"}`
 }
 
 func (t *EditTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
-		{Name: "path", Type: "string", Description: "The file path to edit or create", Required: true},
+		{Name: "path", Type: "string", Description: "File path (relative to working directory or absolute)", Required: true},
 		{Name: "mode", Type: "string", Description: "Edit mode: create, replace, line, regex, or insert", Required: true},
-		{Name: "content", Type: "string", Description: "Content for create/insert/replace operations", Required: false},
-		{Name: "old_string", Type: "string", Description: "Text to find (for replace mode)", Required: false},
-		{Name: "new_string", Type: "string", Description: "Replacement text (for replace mode)", Required: false},
-		{Name: "line_number", Type: "integer", Description: "Line number to edit (for line mode, 1-based)", Required: false},
-		{Name: "action", Type: "string", Description: "Line action: insert_before, insert_after, replace, delete", Required: false},
-		{Name: "pattern", Type: "string", Description: "Regex pattern (for regex mode)", Required: false},
-		{Name: "replacement", Type: "string", Description: "Replacement string (for regex mode)", Required: false},
-		{Name: "position", Type: "string", Description: "Insert position: start, end, or line number (for insert mode)", Required: false},
-		{Name: "replace_all", Type: "boolean", Description: "Replace all occurrences (default: false)", Required: false},
-		{Name: "start_line", Type: "integer", Description: "For replace/regex mode: restrict search to lines starting from this line (1-based, inclusive)", Required: false},
-		{Name: "end_line", Type: "integer", Description: "For replace/regex mode: restrict search to lines ending at this line (1-based, inclusive)", Required: false},
+		{Name: "content", Type: "string", Description: "Content for create/insert/line modes (NOT used by replace or regex mode)", Required: false},
+		{Name: "old_string", Type: "string", Description: "Exact text to find (replace mode only)", Required: false},
+		{Name: "new_string", Type: "string", Description: "Text to replace old_string with (replace mode only)", Required: false},
+		{Name: "line_number", Type: "integer", Description: "1-based line number (line mode only)", Required: false},
+		{Name: "action", Type: "string", Description: "Line action: insert_before, insert_after, replace, delete (line mode only)", Required: false},
+		{Name: "pattern", Type: "string", Description: "RE2 regex pattern (regex mode only)", Required: false},
+		{Name: "replacement", Type: "string", Description: "Replacement string, supports $1/$2 captures (regex mode only)", Required: false},
+		{Name: "position", Type: "string", Description: "Insert position: start, end, or line number (insert mode only)", Required: false},
+		{Name: "replace_all", Type: "boolean", Description: "Replace all occurrences, default false (replace/regex modes)", Required: false},
+		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive (replace/regex modes)", Required: false},
+		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive (replace/regex modes)", Required: false},
 	}
 }
 
@@ -102,9 +104,7 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	// 根据不同 mode 检查必要字段非空
 	switch params.Mode {
 	case "create":
-		if params.Path == "" {
-			return nil, fmt.Errorf("path is required for create mode")
-		}
+		// path already validated above
 	case "replace":
 		if params.OldString == "" {
 			return nil, fmt.Errorf("old_string is required for replace mode")
@@ -386,6 +386,51 @@ func (t *EditTool) doCreate(filePath string, params EditParams) (string, error) 
 	return fmt.Sprintf("File created successfully: %s", filePath), nil
 }
 
+// splitLines splits content into lines, correctly handling trailing newline.
+// Returns real lines (without the phantom empty element caused by trailing \n)
+// and whether the content originally ended with a newline.
+// This ensures line numbering matches what the Read tool displays.
+func splitLines(content string) ([]string, bool) {
+	lines := strings.Split(content, "\n")
+	hasTrailingNL := len(lines) > 1 && lines[len(lines)-1] == ""
+	if hasTrailingNL {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, hasTrailingNL
+}
+
+// joinWithTrailing joins lines with \n and appends trailing newline if the original had one.
+func joinWithTrailing(lines []string, hasTrailingNL bool) string {
+	result := strings.Join(lines, "\n")
+	if hasTrailingNL && len(lines) > 0 {
+		result += "\n"
+	}
+	return result
+}
+
+// suggestMatch tries to find similar text when exact match fails.
+// Helps the LLM identify whitespace/indentation mismatches.
+func suggestMatch(content, searchStr string) string {
+	var firstLine string
+	for _, l := range strings.Split(searchStr, "\n") {
+		if t := strings.TrimSpace(l); t != "" && len(t) >= 3 {
+			firstLine = t
+			break
+		}
+	}
+	if firstLine == "" {
+		return ""
+	}
+	lines, _ := splitLines(content)
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, firstLine) {
+			return fmt.Sprintf("\nHint: line %d has similar text (possible whitespace mismatch): %q", i+1, Truncate(trimmed, 100))
+		}
+	}
+	return ""
+}
+
 // splitContentByLineRange splits content into prefix, target range, and suffix based on start_line/end_line.
 // Returns (prefix, rangeText, suffix, error). When both start_line and end_line are 0, rangeText equals the full content.
 func splitContentByLineRange(content string, startLine, endLine int) (string, string, string, error) {
@@ -393,12 +438,11 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 		return "", content, "", nil
 	}
 
-	lines := strings.Split(content, "\n")
+	lines, hasTrailingNL := splitLines(content)
 	totalLines := len(lines)
 
-	// Default values
-	start := 1        // 1-based inclusive
-	end := totalLines // 1-based inclusive
+	start := 1
+	end := totalLines
 
 	if startLine > 0 {
 		start = startLine
@@ -407,7 +451,6 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 		end = endLine
 	}
 
-	// Validate bounds
 	if start > totalLines {
 		return "", "", "", fmt.Errorf("start_line %d exceeds total lines %d", start, totalLines)
 	}
@@ -418,9 +461,8 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 		return "", "", "", fmt.Errorf("start_line %d is greater than end_line %d", start, end)
 	}
 
-	// Convert to 0-based indices
 	startIdx := start - 1
-	endIdx := end // exclusive (end line is inclusive, so slice up to end)
+	endIdx := end
 
 	prefix := ""
 	if startIdx > 0 {
@@ -432,6 +474,9 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 	suffix := ""
 	if endIdx < totalLines {
 		suffix = "\n" + strings.Join(lines[endIdx:], "\n")
+	}
+	if hasTrailingNL {
+		suffix += "\n"
 	}
 
 	return prefix, rangeText, suffix, nil
@@ -452,6 +497,7 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 	// 检查是否存在要替换的文本
 	count := strings.Count(rangeText, params.OldString)
 	if count == 0 {
+		hint := suggestMatch(rangeText, params.OldString)
 		if params.StartLine > 0 || params.EndLine > 0 {
 			effStart := params.StartLine
 			if effStart <= 0 {
@@ -459,11 +505,12 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 			}
 			effEnd := params.EndLine
 			if effEnd <= 0 {
-				effEnd = len(strings.Split(content, "\n"))
+				lines, _ := splitLines(content)
+				effEnd = len(lines)
 			}
-			return "", "", fmt.Errorf("text not found in lines %d-%d: %q", effStart, effEnd, params.OldString)
+			return "", "", fmt.Errorf("text not found in lines %d-%d: %q%s", effStart, effEnd, params.OldString, hint)
 		}
-		return "", "", fmt.Errorf("text not found: %q", params.OldString)
+		return "", "", fmt.Errorf("text not found: %q%s", params.OldString, hint)
 	}
 
 	var newRangeText string
@@ -496,15 +543,14 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		return "", "", fmt.Errorf("action is required for line mode")
 	}
 
-	lines := strings.Split(content, "\n")
+	lines, hasTrailingNL := splitLines(content)
 	totalLines := len(lines)
 
-	// 验证行号
 	if params.LineNumber > totalLines {
 		return "", "", fmt.Errorf("line_number %d exceeds total lines %d", params.LineNumber, totalLines)
 	}
 
-	idx := params.LineNumber - 1 // 转换为 0-based 索引
+	idx := params.LineNumber - 1
 
 	switch params.Action {
 	case "insert_before":
@@ -515,7 +561,7 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		newLines = append(newLines, lines[:idx]...)
 		newLines = append(newLines, params.Content)
 		newLines = append(newLines, lines[idx:]...)
-		return strings.Join(newLines, "\n"), fmt.Sprintf("Inserted line before line %d", params.LineNumber), nil
+		return joinWithTrailing(newLines, hasTrailingNL), fmt.Sprintf("Inserted line before line %d", params.LineNumber), nil
 
 	case "insert_after":
 		if params.Content == "" {
@@ -525,7 +571,7 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		newLines = append(newLines, lines[:idx+1]...)
 		newLines = append(newLines, params.Content)
 		newLines = append(newLines, lines[idx+1:]...)
-		return strings.Join(newLines, "\n"), fmt.Sprintf("Inserted line after line %d", params.LineNumber), nil
+		return joinWithTrailing(newLines, hasTrailingNL), fmt.Sprintf("Inserted line after line %d", params.LineNumber), nil
 
 	case "replace":
 		if params.Content == "" {
@@ -533,21 +579,14 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		}
 		oldLine := lines[idx]
 		lines[idx] = params.Content
-		return strings.Join(lines, "\n"), fmt.Sprintf("Replaced line %d: %q -> %q", params.LineNumber, Truncate(oldLine, 50), Truncate(params.Content, 50)), nil
+		return joinWithTrailing(lines, hasTrailingNL), fmt.Sprintf("Replaced line %d: %q -> %q", params.LineNumber, Truncate(oldLine, 50), Truncate(params.Content, 50)), nil
 
 	case "delete":
 		oldLine := lines[idx]
 		newLines := make([]string, 0, len(lines)-1)
 		newLines = append(newLines, lines[:idx]...)
 		newLines = append(newLines, lines[idx+1:]...)
-		result := strings.Join(newLines, "\n")
-		// 修复 Bug2：保留尾部换行符。
-		// strings.Split("hello\n", "\n") 产生 ["hello", ""]，删除最后一行（空串）后
-		// Join 结果为 "hello"，丢失了原始的尾部 \n。此处检测并补回。
-		if strings.HasSuffix(content, "\n") && !strings.HasSuffix(result, "\n") && len(result) > 0 {
-			result += "\n"
-		}
-		return result, fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
+		return joinWithTrailing(newLines, hasTrailingNL), fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
 
 	default:
 		return "", "", fmt.Errorf("unknown action: %s (supported: insert_before, insert_after, replace, delete)", params.Action)
@@ -629,6 +668,9 @@ func (t *EditTool) doInsert(content string, params EditParams, filePath string) 
 
 	switch params.Position {
 	case "start":
+		if len(content) > 0 && len(params.Content) > 0 && !strings.HasSuffix(params.Content, "\n") {
+			return params.Content + "\n" + content, fmt.Sprintf("Inserted content at the start of %s", filePath), nil
+		}
 		return params.Content + content, fmt.Sprintf("Inserted content at the start of %s", filePath), nil
 
 	case "end":

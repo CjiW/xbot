@@ -179,6 +179,68 @@ func TestBuildButton(t *testing.T) {
 	}
 }
 
+func TestEnsureFormSubmitButtons_MarksActionType(t *testing.T) {
+	b := NewCardBuilder()
+	s := b.CreateSession("test_card", "chat1", nil)
+	s.Header = map[string]any{"title": map[string]any{"tag": "plain_text", "content": "Test"}}
+	form := &CardElement{
+		ID:  "form_1",
+		Tag: "form",
+		Properties: map[string]any{
+			"name": "my_form",
+		},
+		Children: []*CardElement{
+			{
+				ID:  "btn_1",
+				Tag: "button",
+				Properties: map[string]any{
+					"text": map[string]any{"tag": "plain_text", "content": "提交"},
+					"type": "primary",
+					"name": "btn_1",
+				},
+			},
+		},
+	}
+	s.Elements = append(s.Elements, form)
+	s.ensureFormSubmitButtons()
+
+	// The existing button should now have action_type=form_submit
+	btn := form.Children[0]
+	if btn.Properties["action_type"] != "form_submit" {
+		t.Errorf("expected action_type='form_submit', got '%v'", btn.Properties["action_type"])
+	}
+}
+
+func TestEnsureFormSubmitButtons_AutoInjects(t *testing.T) {
+	b := NewCardBuilder()
+	s := b.CreateSession("test_card", "chat1", nil)
+	s.Header = map[string]any{"title": map[string]any{"tag": "plain_text", "content": "Test"}}
+	form := &CardElement{
+		ID:  "form_1",
+		Tag: "form",
+		Properties: map[string]any{
+			"name": "my_form",
+		},
+		Children: []*CardElement{
+			{ID: "input_1", Tag: "input", Properties: map[string]any{"name": "field1"}},
+		},
+	}
+	s.Elements = append(s.Elements, form)
+	s.ensureFormSubmitButtons()
+
+	// Should auto-inject a submit button
+	if len(form.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(form.Children))
+	}
+	autoBtn := form.Children[1]
+	if autoBtn.Tag != "button" {
+		t.Errorf("expected auto-injected button, got '%s'", autoBtn.Tag)
+	}
+	if autoBtn.Properties["action_type"] != "form_submit" {
+		t.Errorf("expected action_type='form_submit' on auto-injected button, got '%v'", autoBtn.Properties["action_type"])
+	}
+}
+
 func TestBuildInput(t *testing.T) {
 	elem := BuildInput("field1", map[string]any{"label": "Name", "placeholder": "Enter name"})
 	if elem.Tag != "input" {

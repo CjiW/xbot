@@ -3,12 +3,14 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,47 +129,6 @@ func SetSandbox(s Sandbox) {
 	globalSandboxMu.Lock()
 	globalSandbox = s
 	globalSandboxMu.Unlock()
-}
-
-// Sandbox 沙箱接口
-type Sandbox interface {
-	// Wrap 将命令包装到沙箱执行，返回可直接用于 exec.Command 的 command 与 args
-	// env 参数指定要传递到沙箱的环境变量（格式：KEY=VALUE）
-	Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error)
-	// GetShell 获取用户在沙箱中的默认 shell（如 /bin/bash）
-	GetShell(userID string, workspace string) (string, error)
-	// Name 返回沙箱名称
-	Name() string
-	// Close 关闭并清理沙箱资源
-	Close() error
-	// CloseForUser 关闭并清理指定用户的沙箱资源（仅 stop）
-	CloseForUser(userID string) error
-	// IsExporting 检查该用户是否正在进行 export+import（用于引擎层排队阻塞）
-	IsExporting(userID string) bool
-	// ExportAndImport 同步执行 export+import 持久化（由 settings 触发）
-	ExportAndImport(userID string) error
-}
-
-// NoneSandbox 无沙箱模式，直接执行
-type NoneSandbox struct{}
-
-func (s *NoneSandbox) Name() string { return "none" }
-
-func (s *NoneSandbox) Close() error                        { return nil }
-func (s *NoneSandbox) CloseForUser(userID string) error    { return nil }
-func (s *NoneSandbox) IsExporting(userID string) bool      { return false }
-func (s *NoneSandbox) ExportAndImport(userID string) error { return nil }
-
-func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil, fmt.Errorf("command execution is disabled on Windows")
-	}
-	return command, args, nil
-}
-
-func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) {
-	// 返回系统默认 shell
-	return "/bin/bash", nil
 }
 
 // dockerSandbox Docker 沙箱实现
@@ -544,6 +505,219 @@ func (s *dockerSandbox) Wrap(command string, args []string, env []string, worksp
 	dockerArgs = append(dockerArgs, args...)
 
 	return "docker", dockerArgs, nil
+}
+
+// dockerExecInContainer runs a command inside a Docker container, returning combined output.
+func (s *dockerSandbox) dockerExecInContainer(ctx context.Context, userID, workspace string, timeout time.Duration, args ...string) ([]byte, error) {
+	containerName, _, err := s.getOrCreateContainer(userID, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	dockerArgs := []string{"exec", "-i"}
+	dockerArgs = append(dockerArgs, containerName)
+	dockerArgs = append(dockerArgs, args...)
+
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		return stderr.Bytes(), err
+	}
+	return stdout.Bytes(), nil
+}
+
+func (s *dockerSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
+	containerName, _, err := s.getOrCreateContainer(spec.UserID, spec.Workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	dockerArgs := []string{"exec", "-i"}
+	if spec.Dir != "" {
+		dockerArgs = append(dockerArgs, "-w", spec.Dir)
+	}
+	for _, e := range spec.Env {
+		dockerArgs = append(dockerArgs, "-e", e)
+	}
+	dockerArgs = append(dockerArgs, containerName)
+
+	if spec.Shell {
+		dockerArgs = append(dockerArgs, "sh", "-c", spec.Command)
+	} else {
+		dockerArgs = append(dockerArgs, spec.Command)
+		dockerArgs = append(dockerArgs, spec.Args...)
+	}
+
+	cmdCtx := ctx
+	var cancel context.CancelFunc
+	if spec.Timeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "docker", dockerArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if spec.Stdin != "" {
+		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
+	}
+
+	err = cmd.Run()
+	result := &ExecResult{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+	}
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else if cmdCtx.Err() == context.DeadlineExceeded {
+			result.ExitCode = -1
+			result.TimedOut = true
+		} else {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (s *dockerSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
+	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
+		"sh", "-c", fmt.Sprintf("base64 '%s'", path))
+	if err != nil {
+		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot open") {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("docker exec cat: %w: %s", err, string(out))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode: %w", err)
+	}
+	if int64(len(decoded)) > MaxSandboxFileSize {
+		return nil, fmt.Errorf("file exceeds maximum size of %d bytes", MaxSandboxFileSize)
+	}
+	return decoded, nil
+}
+
+func (s *dockerSandbox) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
+	if int64(len(data)) > MaxSandboxFileSize {
+		return fmt.Errorf("data exceeds maximum size of %d bytes", MaxSandboxFileSize)
+	}
+	dir := filepath.Dir(path)
+	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", dir); err != nil {
+		return fmt.Errorf("docker exec mkdir -p: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	script := fmt.Sprintf("echo '%s' | base64 -d > '%s' && chmod %o '%s'", encoded, path, uint32(perm), path)
+	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerSlowTimeout, "sh", "-c", script); err != nil {
+		return fmt.Errorf("docker exec write: %w", err)
+	}
+	return nil
+}
+
+func (s *dockerSandbox) Stat(ctx context.Context, path string, userID string) (*SandboxFileInfo, error) {
+	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
+		"stat", "--format", "%s|%a|%Y|%F", path)
+	if err != nil {
+		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot stat") {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("docker exec stat: %w: %s", err, string(out))
+	}
+
+	parts := strings.Split(strings.TrimSpace(string(out)), "|")
+	if len(parts) != 4 {
+		return nil, fmt.Errorf("unexpected stat output format: %q", string(out))
+	}
+
+	size, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse size: %w", err)
+	}
+
+	mode, err := strconv.ParseUint(parts[1], 8, 32)
+	if err != nil {
+		return nil, fmt.Errorf("parse mode: %w", err)
+	}
+
+	modTime, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse mtime: %w", err)
+	}
+
+	isDir := parts[3] == "directory"
+	name := filepath.Base(path)
+	return &SandboxFileInfo{
+		Name:    name,
+		Size:    size,
+		Mode:    os.FileMode(mode),
+		ModTime: time.Unix(modTime, 0),
+		IsDir:   isDir,
+	}, nil
+}
+
+func (s *dockerSandbox) ReadDir(ctx context.Context, path string, userID string) ([]DirEntry, error) {
+	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
+		"ls", "-1p", path)
+	if err != nil {
+		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot access") {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("docker exec ls: %w: %s", err, string(out))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var entries []DirEntry
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		isDir := strings.HasSuffix(line, "/")
+		name := strings.TrimSuffix(line, "/")
+		if name == "" {
+			continue
+		}
+		entries = append(entries, DirEntry{
+			Name:  name,
+			IsDir: isDir,
+		})
+	}
+	return entries, nil
+}
+
+func (s *dockerSandbox) MkdirAll(ctx context.Context, path string, perm os.FileMode, userID string) error {
+	_, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm)), path)
+	if err != nil {
+		return fmt.Errorf("docker exec mkdir -p: %w", err)
+	}
+	return nil
+}
+
+func (s *dockerSandbox) Remove(ctx context.Context, path string, userID string) error {
+	_, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "rm", path)
+	if err != nil {
+		return fmt.Errorf("docker exec rm: %w", err)
+	}
+	return nil
+}
+
+func (s *dockerSandbox) RemoveAll(ctx context.Context, path string, userID string) error {
+	_, err := s.dockerExecInContainer(ctx, userID, "", dockerSlowTimeout, "rm", "-rf", path)
+	if err != nil {
+		return fmt.Errorf("docker exec rm -rf: %w", err)
+	}
+	return nil
 }
 
 // getOrCreateContainer 获取或创建用户的 Docker 容器

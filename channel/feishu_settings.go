@@ -242,7 +242,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 				log.WithError(err).Warnf("HandleSettingsAction: failed to install %s/%d", entryType, entryID)
 			}
 		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
 	case "settings_publish":
 		entryType := parsed["entry_type"]
@@ -255,7 +255,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 				log.WithError(err).Warnf("HandleSettingsAction: failed to publish %s/%s", entryType, name)
 			}
 		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
 	case "settings_unpublish":
 		entryType := parsed["entry_type"]
@@ -268,7 +268,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 				log.WithError(err).Warnf("HandleSettingsAction: failed to unpublish %s/%s", entryType, name)
 			}
 		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
 	case "settings_delete_item":
 		entryType := parsed["entry_type"]
@@ -281,7 +281,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 				log.WithError(err).Warnf("HandleSettingsAction: failed to delete %s/%s", entryType, name)
 			}
 		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "market")
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
 	case "settings_sandbox_cleanup":
 		if f.settingsCallbacks.SandboxCleanupTrigger == nil {
@@ -296,16 +296,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
 	case "settings_market_page":
-		mySkillPage, _ := strconv.Atoi(parsed["my_skill_page"])
-		myAgentPage, _ := strconv.Atoi(parsed["my_agent_page"])
-		skillPage, _ := strconv.Atoi(parsed["skill_page"])
-		agentPage, _ := strconv.Atoi(parsed["agent_page"])
-		return f.BuildSettingsCard(ctx, senderID, chatID, "market", SettingsCardOpts{
-			MySkillPage:     mySkillPage,
-			MyAgentPage:     myAgentPage,
-			SkillMarketPage: skillPage,
-			AgentMarketPage: agentPage,
-		})
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
@@ -787,13 +778,13 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string, p
 		name := strings.TrimPrefix(item, prefix)
 		if publishedNames[name] {
 			rows = append(rows, buildItemRow(name, "✅ 已分享",
-				actionBtn("📤 下架", "settings_unpublish", entryType, name),
-				actionBtn("🗑️", "settings_delete_item", entryType, name),
+				actionBtn("📤 下架", "settings_unpublish", entryType, name, pageState),
+				actionBtn("🗑️", "settings_delete_item", entryType, name, pageState),
 			))
 		} else {
 			rows = append(rows, buildItemRow(name, "",
-				actionBtn("📤 分享", "settings_publish", entryType, name),
-				actionBtn("🗑️", "settings_delete_item", entryType, name),
+				actionBtn("📤 分享", "settings_publish", entryType, name, pageState),
+				actionBtn("🗑️", "settings_delete_item", entryType, name, pageState),
 			))
 		}
 	}
@@ -808,7 +799,7 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string, p
 		}
 		if !found && e.Sharing == "public" {
 			rows = append(rows, buildItemRow(e.Name, "✅ 已分享（本地已删除）",
-				actionBtn("📤 下架", "settings_unpublish", entryType, e.Name),
+				actionBtn("📤 下架", "settings_unpublish", entryType, e.Name, pageState),
 			))
 		}
 	}
@@ -843,18 +834,22 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string, p
 	return elements
 }
 
-func actionBtn(text, action, entryType, name string) map[string]any {
+func actionBtn(text, action, entryType, name string, pageState map[string]int) map[string]any {
+	data := map[string]string{
+		"action":     action,
+		"entry_type": entryType,
+		"name":       name,
+	}
+	for k, v := range pageState {
+		data[k] = fmt.Sprintf("%d", v)
+	}
 	return map[string]any{
 		"tag":  "button",
 		"text": map[string]any{"tag": "plain_text", "content": text},
 		"type": "default",
 		"size": "small",
 		"value": map[string]string{
-			"action_data": mustMapToJSON(map[string]string{
-				"action":     action,
-				"entry_type": entryType,
-				"name":       name,
-			}),
+			"action_data": mustMapToJSON(data),
 		},
 	}
 }
@@ -927,6 +922,14 @@ func (f *FeishuChannel) buildMarketSection(entryType, title string, page int, pa
 		if entry.Description != "" {
 			desc = fmt.Sprintf("%s - %s", entry.Name, entry.Description)
 		}
+		data := map[string]string{
+			"action":     "settings_install",
+			"entry_type": entryType,
+			"entry_id":   fmt.Sprintf("%d", entry.ID),
+		}
+		for k, v := range pageState {
+			data[k] = fmt.Sprintf("%d", v)
+		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
@@ -936,11 +939,7 @@ func (f *FeishuChannel) buildMarketSection(entryType, title string, page int, pa
 			"type": "default",
 			"size": "small",
 			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action":     "settings_install",
-					"entry_type": entryType,
-					"entry_id":   fmt.Sprintf("%d", entry.ID),
-				}),
+				"action_data": mustMapToJSON(data),
 			},
 		})
 	}
@@ -1053,6 +1052,19 @@ func copyPageState(m map[string]int) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+func parsePageOpts(parsed map[string]string) SettingsCardOpts {
+	mySkillPage, _ := strconv.Atoi(parsed["my_skill_page"])
+	myAgentPage, _ := strconv.Atoi(parsed["my_agent_page"])
+	skillPage, _ := strconv.Atoi(parsed["skill_page"])
+	agentPage, _ := strconv.Atoi(parsed["agent_page"])
+	return SettingsCardOpts{
+		MySkillPage:     mySkillPage,
+		MyAgentPage:     myAgentPage,
+		SkillMarketPage: skillPage,
+		AgentMarketPage: agentPage,
+	}
 }
 
 // --- Layout helpers ---

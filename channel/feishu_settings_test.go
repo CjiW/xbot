@@ -836,6 +836,67 @@ func TestHandleSettingsAction_MyItemsPage(t *testing.T) {
 	}
 }
 
+func TestHandleSettingsAction_PreservesPageState(t *testing.T) {
+	allSkills := make([]sqlite.SharedEntry, 12)
+	for i := range allSkills {
+		allSkills[i] = sqlite.SharedEntry{ID: int64(i + 1), Type: "skill", Name: fmt.Sprintf("skill-%d", i+1)}
+	}
+
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			if entryType == "skill" {
+				if offset >= len(allSkills) {
+					return nil, nil
+				}
+				end := offset + limit
+				if end > len(allSkills) {
+					end = len(allSkills)
+				}
+				return allSkills[offset:end], nil
+			}
+			return nil, nil
+		},
+		RegistryInstall:   func(entryType string, id int64, senderID string) error { return nil },
+		RegistryPublish:   func(entryType, name, senderID string) error { return nil },
+		RegistryUnpublish: func(entryType, name, senderID string) error { return nil },
+		RegistryDelete:    func(entryType, name, senderID string) error { return nil },
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	pageFields := `"my_skill_page":"0","my_agent_page":"0","skill_page":"1","agent_page":"0"`
+
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{"install preserves page", `{"action":"settings_install","entry_type":"skill","entry_id":"6",` + pageFields + `}`},
+		{"publish preserves page", `{"action":"settings_publish","entry_type":"skill","name":"foo",` + pageFields + `}`},
+		{"unpublish preserves page", `{"action":"settings_unpublish","entry_type":"skill","name":"foo",` + pageFields + `}`},
+		{"delete preserves page", `{"action":"settings_delete_item","entry_type":"skill","name":"foo",` + pageFields + `}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			card, err := f.HandleSettingsAction(context.Background(), map[string]any{
+				"action_data": tt.action,
+			}, "user1", "chat1", "msg1")
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			s := cardJSON(card)
+			if !strings.Contains(s, "skill-6") {
+				t.Error("should be on skill market page 2 (showing skill-6)")
+			}
+			if strings.Contains(s, `"📥 skill-5"`) {
+				t.Error("should NOT show skill-5 (that's page 1)")
+			}
+		})
+	}
+}
+
 func TestHandleSettingsAction_Install(t *testing.T) {
 	f := newTestFeishuChannel()
 	var installedType string

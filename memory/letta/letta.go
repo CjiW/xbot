@@ -165,13 +165,18 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 			if msg.Content == "" {
 				continue
 			}
-			content := msg.Content
 			remaining := maxQueryLen - queryBuilder.Len()
-			if remaining <= 0 {
+			if remaining <= 1 {
 				break
 			}
+			remaining-- // reserve 1 byte for trailing space
+			content := msg.Content
 			if len(content) > remaining {
-				content = content[:remaining]
+				runes := []rune(content)
+				for len(string(runes)) > remaining {
+					runes = runes[:len(runes)-1]
+				}
+				content = string(runes)
 			}
 			queryBuilder.WriteString(content)
 			queryBuilder.WriteString(" ")

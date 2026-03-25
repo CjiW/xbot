@@ -213,6 +213,9 @@ func main() {
 		log.WithField("admin_chat_id", adminChatID).Info("Logs tool registered (admin only)")
 	}
 
+	// 所有工具注册完成，索引全局工具（用于 search_tools 语义搜索）
+	agentLoop.IndexGlobalTools()
+
 	// 创建消息分发器
 	disp := channel.NewDispatcher(msgBus)
 

@@ -318,8 +318,10 @@ func deduplicateNamesInTree(elem *CardElement, used map[string]int) {
 	}
 }
 
-// ensureFormSubmitButtons checks all form containers and auto-injects a submit
-// button if none exists. Feishu requires at least one button inside every form container.
+// ensureFormSubmitButtons checks all form containers: auto-injects a submit
+// button if none exists, and marks all buttons inside forms with action_type=form_submit.
+// Feishu requires action_type="form_submit" on buttons inside form containers to
+// recognize them as submit buttons. Buttons outside forms must NOT have action_type.
 func (s *CardSession) ensureFormSubmitButtons() {
 	for _, elem := range s.Elements {
 		ensureSubmitInTree(elem, s.ID)
@@ -327,23 +329,44 @@ func (s *CardSession) ensureFormSubmitButtons() {
 }
 
 func ensureSubmitInTree(elem *CardElement, sessionID string) {
-	if elem.Tag == "form" && !hasSubmitButton(elem) {
-		formName, _ := elem.Properties["name"].(string)
-		submitID := fmt.Sprintf("%s_submit_auto", elem.ID)
-		submit := &CardElement{
-			ID:  submitID,
-			Tag: "button",
-			Properties: map[string]any{
-				"text":  map[string]any{"tag": "plain_text", "content": "提交"},
-				"type":  "primary",
-				"name":  submitID,
-				"value": map[string]any{"card_id": sessionID, "form_name": formName},
-			},
+	if elem.Tag == "form" {
+		// Mark all existing buttons inside this form as submit buttons
+		markButtonsAsSubmit(elem)
+		// Auto-inject a submit button if none exists
+		if !hasSubmitButton(elem) {
+			formName, _ := elem.Properties["name"].(string)
+			submitID := fmt.Sprintf("%s_submit_auto", elem.ID)
+			submit := &CardElement{
+				ID:  submitID,
+				Tag: "button",
+				Properties: map[string]any{
+					"text":        map[string]any{"tag": "plain_text", "content": "提交"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"name":        submitID,
+					"value":       map[string]any{"card_id": sessionID, "form_name": formName},
+				},
+			}
+			elem.Children = append(elem.Children, submit)
 		}
-		elem.Children = append(elem.Children, submit)
+		return
 	}
 	for _, child := range elem.Children {
 		ensureSubmitInTree(child, sessionID)
+	}
+}
+
+// markButtonsAsSubmit recursively sets action_type=form_submit on all buttons
+// inside a form container.
+func markButtonsAsSubmit(form *CardElement) {
+	for _, child := range form.Children {
+		if child.Tag == "button" {
+			child.Properties["action_type"] = "form_submit"
+		}
+		// Don't recurse into nested forms — they handle their own buttons
+		if child.Tag != "form" {
+			markButtonsAsSubmit(child)
+		}
 	}
 }
 

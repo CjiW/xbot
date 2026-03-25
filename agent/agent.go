@@ -87,25 +87,37 @@ func resolveGlobalSkillsDirs(legacySkillsDir string) []string {
 	return []string{abs}
 }
 
-// indexGlobalMCPTools indexes global MCP tools and built-in tool groups for search
-func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTenantSession, globalMCPConfigPath string) {
+// metaTools are tools that manage/search other tools — not useful to index.
+var metaTools = map[string]bool{
+	"search_tools": true,
+	"load_tools":   true,
+	"manage_tools": true,
+}
+
+// IndexGlobalTools indexes all global tools for semantic search:
+// built-in registry tools, tool groups, and global MCP servers.
+// Call after all tools are registered. Uses full-replace semantics
+// so stale entries from removed tools are automatically cleaned up.
+func (a *Agent) IndexGlobalTools() {
+	registry := a.tools
+	multiSession := a.multiSession
+	globalMCPConfigPath := resolveDataPath(a.workDir, "mcp.json")
+
 	ctx := context.Background()
 	var toolEntries []memory.ToolIndexEntry
+	indexed := make(map[string]bool) // track indexed tool names to avoid duplicates
 
-	// 1. Index built-in tool groups (like Feishu) - use each tool's own description
+	// 1. Index built-in tool groups (like Feishu tools)
 	toolGroups := registry.GetToolGroups()
 	for _, group := range toolGroups {
 		for _, toolName := range group.ToolNames {
-			// Get the actual tool to get its description and channel support
 			tool, ok := registry.Get(toolName)
 			desc := fmt.Sprintf("Built-in tool group: %s", group.Name)
 			var channels []string
 			if ok {
-				toolDesc := tool.Description()
-				if toolDesc != "" {
+				if toolDesc := tool.Description(); toolDesc != "" {
 					desc = fmt.Sprintf("Tool: %s. %s", toolName, toolDesc)
 				}
-				// Get supported channels
 				if cp, ok := tool.(tools.ChannelProvider); ok {
 					channels = cp.SupportedChannels()
 				}
@@ -113,49 +125,62 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 			if group.Instructions != "" {
 				desc = fmt.Sprintf("%s. %s", desc, group.Instructions)
 			}
-			// Store the name as-is (already has correct format like feishu_search_wiki)
 			toolEntries = append(toolEntries, memory.ToolIndexEntry{
-				Name:        toolName, // This is the loadable name
+				Name:        toolName,
 				ServerName:  group.Name,
 				Source:      "global",
 				Description: desc,
 				Channels:    channels,
 			})
+			indexed[toolName] = true
 		}
 	}
 
-	// 2. Index global MCP servers
-	// Create a dummy MCP manager to load global MCP servers
+	// 2. Index all registry tools not already covered by tool groups
+	for _, tool := range registry.List() {
+		name := tool.Name()
+		if indexed[name] || metaTools[name] {
+			continue
+		}
+		var channels []string
+		if cp, ok := tool.(tools.ChannelProvider); ok {
+			channels = cp.SupportedChannels()
+		}
+		toolEntries = append(toolEntries, memory.ToolIndexEntry{
+			Name:        name,
+			ServerName:  "builtin",
+			Source:      "global",
+			Description: tool.Description(),
+			Channels:    channels,
+		})
+		indexed[name] = true
+	}
+
+	// 3. Index global MCP servers
 	dummySessionKey := "indexing:dummy"
 	mcpMgr := tools.NewSessionMCPManager(
 		dummySessionKey,
-		"__system__",        // system userID (avoids invalid Docker image name "xbot-:latest")
-		globalMCPConfigPath, // global config (read-only)
-		"",                  // no user config
-		"",                  // no workspace root needed
-		30*time.Minute,      // inactivity timeout (won't matter)
+		"__system__",
+		globalMCPConfigPath,
+		"", "", 30*time.Minute,
 	)
 	if mcpMgr != nil {
-		// Trigger MCP connection to get the catalog (this connects to servers)
 		catalog := mcpMgr.GetCatalog()
 		for _, entry := range catalog {
 			for _, toolName := range entry.ToolNames {
-				// MCP tools need mcp_{server}_{toolName} format
 				fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)
 				desc := fmt.Sprintf("MCP server: %s. Tool: %s", entry.Name, toolName)
 				if entry.Instructions != "" {
 					desc = fmt.Sprintf("%s. %s", desc, entry.Instructions)
 				}
-
 				toolEntries = append(toolEntries, memory.ToolIndexEntry{
-					Name:        fullName, // This is the loadable name with mcp_ prefix
+					Name:        fullName,
 					ServerName:  entry.Name,
 					Source:      "global",
 					Description: desc,
 				})
 			}
 		}
-		// Close MCP manager to prevent resource leak
 		mcpMgr.Close()
 	}
 
@@ -164,13 +189,12 @@ func indexGlobalMCPTools(registry *tools.Registry, multiSession *session.MultiTe
 		return
 	}
 
-	// Index for tenant 0 (special global tenant ID)
 	if err := multiSession.IndexToolsForTenant(ctx, 0, toolEntries); err != nil {
 		log.WithError(err).Warn("Failed to index global tools")
 		return
 	}
 
-	log.WithField("count", len(toolEntries)).Infof("Indexed %d global tools (MCP + built-in)", len(toolEntries))
+	log.WithField("count", len(toolEntries)).Infof("Indexed %d global tools (registry + tool groups + MCP)", len(toolEntries))
 }
 
 // Agent 核心 Agent 引擎
@@ -413,9 +437,10 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
 	registry.RegisterCore(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
 
-	// Card Builder MCP: 仅注册 card_create（渐进上下文披露）
 	cardBuilder := tools.NewCardBuilder()
-	registry.Register(tools.NewCardCreateTool(cardBuilder))
+	for _, t := range tools.NewCardTools(cardBuilder) {
+		registry.Register(t)
+	}
 
 	// Clean up expired waiting cards from previous runs (TTL: 24h)
 	if n := cardBuilder.CleanupExpiredWaitingCards(24 * time.Hour); n > 0 {
@@ -469,8 +494,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 设置会话 MCP 管理器提供者
 	registry.SetSessionMCPManagerProvider(multiSession)
 
-	// 同步索引全局 MCP 工具（确保工具从第一条消息起就可用）
-	indexGlobalMCPTools(registry, multiSession, mcpConfigPath)
+	// 全局工具索引通过 IndexGlobalTools() 在所有工具注册完成后调用
 
 	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
 	memoryProvider := cfg.MemoryProvider

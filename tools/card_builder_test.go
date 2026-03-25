@@ -540,19 +540,54 @@ func TestCardAddInteractiveTool_Button(t *testing.T) {
 func TestCardAddInteractiveTool_SelectStatic(t *testing.T) {
 	b := NewCardBuilder()
 	s := b.CreateSession("test", "chat1", nil)
+
+	// Create a form container first (select_static must be inside a form)
+	containerTool := &CardAddContainerTool{builder: b}
+	ctx := &ToolContext{}
+	formInput := `{"card_id":"` + s.ID + `","type":"form","properties":"{\"name\":\"test_form\"}"}`
+	formResult, err := containerTool.Execute(ctx, formInput)
+	if err != nil {
+		t.Fatalf("Create form failed: %v", err)
+	}
+	// Extract form container ID from result
+	parts := strings.SplitN(formResult.Summary, "id: ", 2)
+	if len(parts) < 2 {
+		t.Fatal("expected form ID in result")
+	}
+	formID := strings.SplitN(parts[1], ",", 2)[0]
+
+	// Add select_static inside the form
+	tool := &CardAddInteractiveTool{builder: b}
+	input := `{"card_id":"` + s.ID + `","type":"select_static","name":"color","options":"[\"Red\",\"Blue\",\"Green\"]","parent_id":"` + formID + `"}`
+	_, err = tool.Execute(ctx, input)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	// Element should be inside the form container, not at root
+	if len(s.Elements) != 1 {
+		t.Errorf("expected 1 root element (form), got %d", len(s.Elements))
+	}
+	if s.Elements[0].Tag != "form" {
+		t.Errorf("expected root tag 'form', got '%s'", s.Elements[0].Tag)
+	}
+	if len(s.Elements[0].Children) != 1 { // select_static (submit button injected at BuildJSON time)
+		t.Errorf("expected 1 child in form, got %d", len(s.Elements[0].Children))
+	}
+}
+
+func TestCardAddInteractiveTool_SelectStatic_OutsideForm(t *testing.T) {
+	b := NewCardBuilder()
+	s := b.CreateSession("test", "chat1", nil)
 	tool := &CardAddInteractiveTool{builder: b}
 
 	ctx := &ToolContext{}
 	input := `{"card_id":"` + s.ID + `","type":"select_static","name":"color","options":"[\"Red\",\"Blue\",\"Green\"]"}`
 	_, err := tool.Execute(ctx, input)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
+	if err == nil {
+		t.Fatal("expected error when adding select_static outside form")
 	}
-	if len(s.Elements) != 1 {
-		t.Fatal("expected 1 element")
-	}
-	if s.Elements[0].Tag != "select_static" {
-		t.Errorf("expected tag 'select_static', got '%s'", s.Elements[0].Tag)
+	if !strings.Contains(err.Error(), "MUST be placed inside a form container") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

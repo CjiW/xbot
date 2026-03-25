@@ -1128,9 +1128,21 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 	action := event.Event.Action
 
 	// 解析用户操作数据
+	// 飞书回调中 action.Value 和 action.FormValue 可能同时存在（form_submit 场景）：
+	// - action.Value: 按钮的 value 字段（包含 card_id 等元数据）
+	// - action.FormValue: 表单中所有字段的值（用户填写的数据）
+	// 需要合并两者：以 Value 为基础，再覆盖 FormValue 的字段
 	var actionData map[string]any
 	if action.Value != nil {
-		actionData = action.Value
+		actionData = make(map[string]any, len(action.Value)+len(action.FormValue))
+		for k, v := range action.Value {
+			actionData[k] = v
+		}
+		if action.FormValue != nil {
+			for k, v := range action.FormValue {
+				actionData[k] = v
+			}
+		}
 	} else if action.FormValue != nil {
 		actionData = action.FormValue
 	}
@@ -1173,14 +1185,17 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 	cardID := ""
 	if id, ok := actionData["card_id"].(string); ok {
 		cardID = id
+		delete(actionData, "card_id") // 清理元数据，避免泄露到 agent
 	} else if messageID != "" {
 		if id, ok := f.cardMsgIDs.Load(messageID); ok {
 			cardID = id.(string)
 		}
 	}
 	if cardID == "" {
-		log.WithField("action_value", actionData).Warn("Missing card_id in card action")
-		return &callback.CardActionTriggerResponse{}, nil
+		// 没有 card_id：说明卡片是由 feishu_send_card 等外部工具发送的原始卡片，
+		// 没有 CardBuilder 的 card_id 注入。将回调数据作为通用卡片交互转发给 agent，
+		// 而不是直接丢弃。
+		return f.handleGenericCardAction(actionData, action, chatID, senderID, messageID, requestID)
 	}
 
 	return f.handleCardBuilderAction(cardID, actionData, action, chatID, senderID, messageID, requestID)
@@ -1390,6 +1405,78 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		Metadata: map[string]string{
 			"card_response": "true",
 			"card_id":       cardID,
+			"action_name":   actionName,
+			"response_data": formatMapString(responseData),
+		},
+	}
+
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{
+			Type:    "success",
+			Content: "已收到，正在处理...",
+		},
+	}, nil
+}
+
+// handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. feishu_send_card).
+// These cards don't have a card_id, so we forward the action data as a generic card interaction
+// to the agent instead of silently dropping the callback.
+func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID, requestID string) (*callback.CardActionTriggerResponse, error) {
+	// Determine action type
+	actionName := action.Tag
+	if actionName == "" {
+		actionName = "unknown"
+	}
+
+	// Collect response data from actionData (already merged Value + FormValue)
+	responseData := make(map[string]string)
+	for k, v := range actionData {
+		if k == "card_id" || k == "form_name" {
+			continue // skip internal metadata
+		}
+		switch val := v.(type) {
+		case string:
+			responseData[k] = val
+		default:
+			data, _ := json.Marshal(val)
+			responseData[k] = string(data)
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"action_name": actionName,
+		"chat_id":     chatID,
+		"sender_id":   senderID,
+		"data":        responseData,
+	}).Info("Generic card action triggered (no card_id)")
+
+	// For form_submit, patch the card to "submitted" state to prevent double-submit
+	if (actionName == "form_submit" || len(action.FormValue) > 0) && messageID != "" {
+		submittedCard := f.buildCard("✅ 已提交，正在处理...")
+		if cardJSON, err := json.Marshal(submittedCard); err == nil {
+			if err := f.patchMessage(messageID, cardJSON); err != nil {
+				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
+			}
+		}
+	}
+
+	// Build message content for agent
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[Card Action: generic] %s", actionName)
+	for k, v := range responseData {
+		fmt.Fprintf(&sb, "\n- %s: %s", k, v)
+	}
+
+	f.msgBus.Inbound <- bus.InboundMessage{
+		Channel:    f.Name(),
+		SenderID:   senderID,
+		SenderName: f.getUserName(senderID),
+		ChatID:     chatID,
+		Content:    sb.String(),
+		Time:       time.Now(),
+		RequestID:  requestID,
+		Metadata: map[string]string{
+			"card_response": "true",
 			"action_name":   actionName,
 			"response_data": formatMapString(responseData),
 		},

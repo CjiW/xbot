@@ -339,6 +339,10 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		if cardID != "" && msgID != "" {
 			f.cardMsgIDs.Store(msgID, cardID)
 		}
+		// Cache card JSON for callback responses (prevent Feishu from restoring card)
+		if cardID != "" && f.cardBuilder != nil {
+			f.cardBuilder.StoreCardJSON(cardID, []byte(cardJSON))
+		}
 		return msgID, nil
 	}
 
@@ -1269,6 +1273,24 @@ func (f *FeishuChannel) handleSettingsCardAction(ctx context.Context, actionData
 	}, nil
 }
 
+// buildKeepCardResponse returns a callback response that keeps the card unchanged.
+// Without a Card field, Feishu restores the card to its original template state.
+func (f *FeishuChannel) buildKeepCardResponse(cardID string) *callback.CardActionTriggerResponse {
+	resp := &callback.CardActionTriggerResponse{}
+	if f.cardBuilder != nil && cardID != "" {
+		if cardJSON, ok := f.cardBuilder.GetCardJSON(cardID); ok {
+			var cardData map[string]any
+			if json.Unmarshal(cardJSON, &cardData) == nil {
+				resp.Card = &callback.Card{
+					Type: "raw",
+					Data: cardData,
+				}
+			}
+		}
+	}
+	return resp
+}
+
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
 // Button clicks, form submissions, and standalone select interactions are forwarded to the agent.
 func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID, requestID string) (*callback.CardActionTriggerResponse, error) {
@@ -1353,7 +1375,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				"tag":     actionName,
 				"name":    action.Name,
 			}).Debug("Ignoring in-form select interaction (will be collected on form submit)")
-			return &callback.CardActionTriggerResponse{}, nil
+			return f.buildKeepCardResponse(cardID), nil
 		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
@@ -1361,7 +1383,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				"tag":     actionName,
 				"name":    action.Name,
 			}).Debug("Ignoring select interaction (not expected for this card)")
-			return &callback.CardActionTriggerResponse{}, nil
+			return f.buildKeepCardResponse(cardID), nil
 		}
 
 		// Extract selection from action.Value
@@ -1398,7 +1420,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				"tag":     actionName,
 				"name":    action.Name,
 			}).Debug("Ignoring in-form interaction (will be collected on form submit)")
-			return &callback.CardActionTriggerResponse{}, nil
+			return f.buildKeepCardResponse(cardID), nil
 		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
@@ -1406,7 +1428,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				"tag":     actionName,
 				"name":    action.Name,
 			}).Debug("Ignoring interactive element (not expected for this card)")
-			return &callback.CardActionTriggerResponse{}, nil
+			return f.buildKeepCardResponse(cardID), nil
 		}
 
 		elementName := action.Name
@@ -1438,7 +1460,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			"tag":     actionName,
 			"name":    action.Name,
 		}).Debug("Ignoring unknown card interaction type")
-		return &callback.CardActionTriggerResponse{}, nil
+		return f.buildKeepCardResponse(cardID), nil
 	}
 
 	log.WithFields(log.Fields{

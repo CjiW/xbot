@@ -1449,13 +1449,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		"data":        responseData,
 	}).Info("Card builder action triggered")
 
-	// 表单提交后，patch 卡片为"已提交"状态（防止重复提交）
-	if actionName == "form_submit" && messageID != "" {
+	// 表单提交后，在回调响应中返回"已提交"卡片（防止重复提交）
+	// 注意：飞书卡片回调机制中，回调响应不带 Card 字段时卡片会恢复到原始状态，
+	// 所以必须通过回调响应的 Card 字段来更新卡片内容，而不是用 PATCH API。
+	var submittedCardResponse *callback.Card
+	if actionName == "form_submit" {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
-		if cardJSON, err := json.Marshal(submittedCard); err == nil {
-			if err := f.patchMessage(messageID, cardJSON); err != nil {
-				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
-			}
+		submittedCardResponse = &callback.Card{
+			Type: "raw",
+			Data: submittedCard,
 		}
 		// Clear active card since user interacted with it
 		if f.cardBuilder != nil && chatID != "" {
@@ -1485,12 +1487,16 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		},
 	}
 
-	return &callback.CardActionTriggerResponse{
+	resp := &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{
 			Type:    "success",
 			Content: "已收到，正在处理...",
 		},
-	}, nil
+	}
+	if submittedCardResponse != nil {
+		resp.Card = submittedCardResponse
+	}
+	return resp, nil
 }
 
 // handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. raw JSON cards).
@@ -1534,12 +1540,16 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 	}).Info("Generic card action triggered (no card_id)")
 
 	isFormSubmit := actionName == "form_submit" || (actionName == "button" && len(action.FormValue) > 0)
-	if isFormSubmit && messageID != "" {
+
+	// 表单提交后，在回调响应中返回"已提交"卡片（防止重复提交）
+	// 注意：飞书卡片回调机制中，回调响应不带 Card 字段时卡片会恢复到原始状态，
+	// 所以必须通过回调响应的 Card 字段来更新卡片内容，而不是用 PATCH API。
+	var submittedCardResponse *callback.Card
+	if isFormSubmit {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
-		if cardJSON, err := json.Marshal(submittedCard); err == nil {
-			if err := f.patchMessage(messageID, cardJSON); err != nil {
-				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
-			}
+		submittedCardResponse = &callback.Card{
+			Type: "raw",
+			Data: submittedCard,
 		}
 	}
 
@@ -1565,12 +1575,16 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		},
 	}
 
-	return &callback.CardActionTriggerResponse{
+	resp := &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{
 			Type:    "success",
 			Content: "已收到，正在处理...",
 		},
-	}, nil
+	}
+	if submittedCardResponse != nil {
+		resp.Card = submittedCardResponse
+	}
+	return resp, nil
 }
 
 // getExpectedInteractions returns the expected interaction types for a card.

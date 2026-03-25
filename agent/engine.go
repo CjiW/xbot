@@ -550,16 +550,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.Memory != nil {
 			out.Messages = messages
 		}
-		
-			// Always capture engine-produced messages (assistant + tool).
-			// Used by processMessage to persist context when WaitingUser is true
-			// (e.g., card_send with wait_response), so the next turn has full context.
-			if len(messages) > initialMsgCount {
-				engineMsgs := make([]llm.ChatMessage, len(messages)-initialMsgCount)
-				copy(engineMsgs, messages[initialMsgCount:])
-				out.EngineMessages = engineMsgs
-			}
-			// Clean offload data after conversation turn completes.
+
+		// Always capture engine-produced messages (assistant + tool).
+		// Used by processMessage to persist context when WaitingUser is true
+		// (e.g., card_send with wait_response), so the next turn has full context.
+		if len(messages) > initialMsgCount {
+			engineMsgs := make([]llm.ChatMessage, len(messages)-initialMsgCount)
+			copy(engineMsgs, messages[initialMsgCount:])
+			out.EngineMessages = engineMsgs
+		}
+		// Clean offload data after conversation turn completes.
 		// Only for the top-level agent (RootSessionKey == "") — SubAgents share
 		// the parent's offload namespace and must not delete it while parent runs.
 		if cfg.OffloadStore != nil && cfg.RootSessionKey == "" {

@@ -699,13 +699,14 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		}
 	}
 
-	// Track active card for skip handling
-	if session.ChatID != "" {
-		t.builder.SaveActiveCard(session.ChatID, session.ID)
-	}
-
 	waiting := strings.EqualFold(args.WaitResponse, "true")
 	if waiting {
+		// Only track active card when waiting for user response (form cards).
+		// Non-form cards (pure markdown/buttons without wait_response) should behave
+		// like regular messages and should NOT be patched when user replies with text.
+		if session.ChatID != "" {
+			t.builder.SaveActiveCard(session.ChatID, session.ID)
+		}
 		// Don't remove session or metadata — callback needs Description/ExpectedInteractions
 		t.builder.MarkCardWaiting(args.CardID)
 		return NewResultWithUserResponse(fmt.Sprintf("Card %s sent successfully. Waiting for user interaction...", args.CardID)), nil

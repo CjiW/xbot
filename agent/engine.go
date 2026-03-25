@@ -211,6 +211,10 @@ type RunOutput struct {
 	// Messages contains the full conversation messages from the Run loop.
 	// Only populated when Memory is set in RunConfig (used for memorize after exit).
 	Messages []llm.ChatMessage
+	// EngineMessages contains assistant+tool messages produced during the Run loop.
+	// These are the messages appended to the original cfg.Messages during execution.
+	// Used by processMessage to persist context when WaitingUser is true.
+	EngineMessages []llm.ChatMessage
 }
 
 // readArgsHasOffsetOrLimit checks whether a Read tool call's JSON arguments contain
@@ -278,6 +282,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 
 	messages := cfg.Messages
+	initialMsgCount := len(messages)
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
 	// syncMessages 闭包：每次 messages 被重赋值后调用，保持 ContextEditor 引用同步
@@ -545,7 +550,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.Memory != nil {
 			out.Messages = messages
 		}
-		// Clean offload data after conversation turn completes.
+		
+			// Always capture engine-produced messages (assistant + tool).
+			// Used by processMessage to persist context when WaitingUser is true
+			// (e.g., card_send with wait_response), so the next turn has full context.
+			if len(messages) > initialMsgCount {
+				engineMsgs := make([]llm.ChatMessage, len(messages)-initialMsgCount)
+				copy(engineMsgs, messages[initialMsgCount:])
+				out.EngineMessages = engineMsgs
+			}
+			// Clean offload data after conversation turn completes.
 		// Only for the top-level agent (RootSessionKey == "") — SubAgents share
 		// the parent's offload namespace and must not delete it while parent runs.
 		if cfg.OffloadStore != nil && cfg.RootSessionKey == "" {

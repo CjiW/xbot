@@ -1311,6 +1311,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		if err := tenantSession.AddMessage(userMsg); err != nil {
 			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
 		}
+		// Persist engine-produced messages (assistant + tool) so the next
+		// turn has full context of what happened before waiting.
+		for _, em := range out.EngineMessages {
+			assertNoSystemPersist(em)
+			if err := tenantSession.AddMessage(em); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save engine message during waiting")
+			}
+		}
 		return nil, nil
 	}
 

@@ -8,35 +8,20 @@ import (
 	"xbot/llm"
 )
 
-// cardToolNames lists dynamically registered card tool names for cleanup.
-// MAINTENANCE NOTE: When adding a new card tool, you MUST add its name here.
-// TODO: Consider auto-collecting via tool registry to avoid manual sync.
-var cardToolNames = []string{"card_add_content", "card_add_interactive", "card_add_container", "card_preview", "card_send"}
-
-// ensureCardToolsRegistered registers the dynamic card tools if not already present.
-func ensureCardToolsRegistered(registry *Registry, builder *CardBuilder) {
-	if _, ok := registry.Get("card_send"); ok {
-		return
-	}
-	registry.Register(&CardAddContentTool{builder: builder})
-	registry.Register(&CardAddInteractiveTool{builder: builder})
-	registry.Register(&CardAddContainerTool{builder: builder})
-	registry.Register(&CardPreviewTool{builder: builder})
-	registry.Register(&CardSendTool{builder: builder})
-}
-
-// unregisterCardToolsIfIdle removes dynamic card tools when no sessions remain.
-func unregisterCardToolsIfIdle(registry *Registry, builder *CardBuilder) {
-	if builder.ActiveCount() > 0 {
-		return
-	}
-	for _, name := range cardToolNames {
-		registry.Unregister(name)
+// NewCardTools returns all card-related tools for startup registration.
+func NewCardTools(builder *CardBuilder) []Tool {
+	return []Tool{
+		&CardCreateTool{builder: builder},
+		&CardAddContentTool{builder: builder},
+		&CardAddInteractiveTool{builder: builder},
+		&CardAddContainerTool{builder: builder},
+		&CardPreviewTool{builder: builder},
+		&CardSendTool{builder: builder},
 	}
 }
 
 // ============================================================
-// 1. card_create — always registered
+// 1. card_create
 // ============================================================
 
 type CardCreateTool struct {
@@ -50,7 +35,7 @@ func NewCardCreateTool(builder *CardBuilder) *CardCreateTool {
 func (t *CardCreateTool) Name() string { return "card_create" }
 
 func (t *CardCreateTool) Description() string {
-	return `Create a new Feishu interactive card. Returns a card_id for subsequent card_add_* calls. After calling this tool, card_add_content, card_add_interactive, card_add_container, card_preview, and card_send tools become available.`
+	return `Create a new Feishu interactive card. Returns a card_id for subsequent card_add_*, card_preview, and card_send calls.`
 }
 
 func (t *CardCreateTool) Parameters() []llm.ToolParam {
@@ -75,10 +60,6 @@ func (t *CardCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 
 	session := t.builder.CreateSession(ctx.Channel, ctx.ChatID, ctx.SendFunc)
 	session.SetHeader(args.Title, args.Subtitle, args.Template)
-
-	if ctx.Registry != nil {
-		ensureCardToolsRegistered(ctx.Registry, t.builder)
-	}
 
 	return NewResult(fmt.Sprintf(`Card created: %s
 
@@ -686,12 +667,7 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return NewResultWithUserResponse(fmt.Sprintf("Card %s sent successfully. Waiting for user interaction...", args.CardID)), nil
 	}
 
-	// Not waiting — clean up everything now
 	t.builder.RemoveSession(args.CardID)
-
-	if ctx.Registry != nil {
-		unregisterCardToolsIfIdle(ctx.Registry, t.builder)
-	}
 
 	return NewResult(fmt.Sprintf("Card %s sent successfully.", args.CardID)), nil
 }

@@ -1278,9 +1278,8 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	// Check if this interaction type is expected for this card
 	expectedInteractions := f.getExpectedInteractions(cardID)
 
-	switch {
-	case actionName == "form_submit" || len(action.FormValue) > 0:
-		// Extract form fields from FormValue (form submission data)
+	switch actionName {
+	case "form_submit":
 		for key, value := range action.FormValue {
 			if key == "card_id" {
 				continue
@@ -1311,7 +1310,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		}
 		actionName = "form_submit"
 
-	case actionName == "button":
+	case "button":
 		// If button also has FormValue (shouldn't reach here due to case above, but safety check)
 		if len(action.FormValue) > 0 {
 			for key, value := range action.FormValue {
@@ -1347,8 +1346,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			}
 		}
 
-	case actionName == "select_static", actionName == "multi_select_static":
-		// Only handle if this card expects standalone select interactions
+	case "select_static", "multi_select_static":
+		if len(action.FormValue) > 0 {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring in-form select interaction (will be collected on form submit)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
 				"card_id": cardID,
@@ -1385,8 +1391,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			f.cardBuilder.ClearActiveCard(chatID)
 		}
 
-	case actionName == "overflow", actionName == "checker", actionName == "select_img":
-		// Handle other interactive elements if expected
+	case "overflow", "checker", "select_img":
+		if len(action.FormValue) > 0 {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring in-form interaction (will be collected on form submit)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
 				"card_id": cardID,
@@ -1490,11 +1503,19 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		actionName = "unknown"
 	}
 
-	// Collect response data from actionData (already merged Value + FormValue)
+	// Ignore in-form intermediate interactions (only form_submit or button-in-form should trigger)
+	if actionName != "form_submit" && actionName != "button" && len(action.FormValue) > 0 {
+		log.WithFields(log.Fields{
+			"tag":  actionName,
+			"name": action.Name,
+		}).Debug("Ignoring in-form interaction for generic card (will be collected on form submit)")
+		return &callback.CardActionTriggerResponse{}, nil
+	}
+
 	responseData := make(map[string]string)
 	for k, v := range actionData {
 		if k == "card_id" || k == "form_name" {
-			continue // skip internal metadata
+			continue
 		}
 		switch val := v.(type) {
 		case string:
@@ -1512,8 +1533,8 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		"data":        responseData,
 	}).Info("Generic card action triggered (no card_id)")
 
-	// For form_submit, patch the card to "submitted" state to prevent double-submit
-	if (actionName == "form_submit" || actionName == "button" && len(action.FormValue) > 0 || len(action.FormValue) > 0) && messageID != "" {
+	isFormSubmit := actionName == "form_submit" || (actionName == "button" && len(action.FormValue) > 0)
+	if isFormSubmit && messageID != "" {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
 		if cardJSON, err := json.Marshal(submittedCard); err == nil {
 			if err := f.patchMessage(messageID, cardJSON); err != nil {

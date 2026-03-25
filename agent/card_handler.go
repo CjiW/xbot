@@ -35,10 +35,7 @@ func (a *Agent) handleCardResponse(ctx context.Context, msg bus.InboundMessage, 
 		return nil, err
 	}
 
-	// 运行 Agent 循环（统一 Run）
-	// card callback 不需要进度通知：用户已经看到"已提交"状态，
-	// 额外的进度消息会干扰体验（导致闪烁）。
-	cardCfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, false)
+	cardCfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, true)
 	cardOut := Run(ctx, cardCfg)
 	if cardOut.Error != nil {
 		return nil, cardOut.Error

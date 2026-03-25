@@ -1230,13 +1230,13 @@ func (a *Agent) summarizeEngineMessages(ctx context.Context, senderID string, en
 			if len(msg.ToolCalls) > 0 {
 				sb.WriteString("[Assistant] 调用工具:\n")
 				for _, tc := range msg.ToolCalls {
-					sb.WriteString(fmt.Sprintf("  - %s(%s)\n", tc.Name, truncateStr(tc.Arguments, 200)))
+					fmt.Fprintf(&sb, "  - %s(%s)\n", tc.Name, truncateStr(tc.Arguments, 200))
 				}
 			} else if msg.Content != "" {
-				sb.WriteString(fmt.Sprintf("[Assistant] %s\n", truncateStr(msg.Content, 300)))
+				fmt.Fprintf(&sb, "[Assistant] %s\n", truncateStr(msg.Content, 300))
 			}
 		case "tool":
-			sb.WriteString(fmt.Sprintf("[Tool结果] %s\n", truncateStr(msg.Content, 300)))
+			fmt.Fprintf(&sb, "[Tool结果] %s\n", truncateStr(msg.Content, 300))
 		}
 	}
 

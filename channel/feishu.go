@@ -145,8 +145,7 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 - 需要用户选择或输入时，用 card_create（按钮、下拉框、表单），设置 wait_response=true
 - **多个问题用表单（form + input/select）一次性收集，不要拆成多个独立卡片**
 - card_create 创建卡片后，card_add_content/card_add_interactive 等工具自动可用
-- 设置 wait_response=true 可等待用户交互
-- feishu_send_card 可直接发送 JSON 卡片`,
+- 设置 wait_response=true 可等待用户交互`,
 	}
 }
 
@@ -1192,7 +1191,7 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		}
 	}
 	if cardID == "" {
-		// 没有 card_id：说明卡片是由 feishu_send_card 等外部工具发送的原始卡片，
+		// 没有 card_id：说明卡片是由外部工具发送的原始卡片，
 		// 没有 CardBuilder 的 card_id 注入。将回调数据作为通用卡片交互转发给 agent，
 		// 而不是直接丢弃。
 		return f.handleGenericCardAction(actionData, action, chatID, senderID, messageID, requestID)
@@ -1254,6 +1253,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 
 	switch {
 	case actionName == "form_submit" || len(action.FormValue) > 0:
+		// Extract form fields from FormValue (form submission data)
 		for key, value := range action.FormValue {
 			if key == "card_id" {
 				continue
@@ -1266,14 +1266,49 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				responseData[key] = string(data)
 			}
 		}
+		// Also merge any actionData (from Value), FormValue takes precedence
+		for k, v := range actionData {
+			if k == "card_id" {
+				continue
+			}
+			if _, exists := responseData[k]; exists {
+				continue // FormValue data takes precedence
+			}
+			switch val := v.(type) {
+			case string:
+				responseData[k] = val
+			default:
+				data, _ := json.Marshal(val)
+				responseData[k] = string(data)
+			}
+		}
 		actionName = "form_submit"
 
 	case actionName == "button":
+		// If button also has FormValue (shouldn't reach here due to case above, but safety check)
+		if len(action.FormValue) > 0 {
+			for key, value := range action.FormValue {
+				if key == "card_id" {
+					continue
+				}
+				switch v := value.(type) {
+				case string:
+					responseData[key] = v
+				default:
+					data, _ := json.Marshal(v)
+					responseData[key] = string(data)
+				}
+			}
+			actionName = "form_submit"
+		}
 		if action.Name != "" {
 			responseData["name"] = action.Name
 		}
 		for k, v := range actionData {
 			if k == "card_id" {
+				continue
+			}
+			if _, exists := responseData[k]; exists {
 				continue
 			}
 			switch val := v.(type) {
@@ -1418,7 +1453,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	}, nil
 }
 
-// handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. feishu_send_card).
+// handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. raw JSON cards).
 // These cards don't have a card_id, so we forward the action data as a generic card interaction
 // to the agent instead of silently dropping the callback.
 func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID, requestID string) (*callback.CardActionTriggerResponse, error) {
@@ -1451,7 +1486,7 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 	}).Info("Generic card action triggered (no card_id)")
 
 	// For form_submit, patch the card to "submitted" state to prevent double-submit
-	if (actionName == "form_submit" || len(action.FormValue) > 0) && messageID != "" {
+	if (actionName == "form_submit" || actionName == "button" && len(action.FormValue) > 0 || len(action.FormValue) > 0) && messageID != "" {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
 		if cardJSON, err := json.Marshal(submittedCard); err == nil {
 			if err := f.patchMessage(messageID, cardJSON); err != nil {

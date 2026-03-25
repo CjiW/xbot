@@ -593,8 +593,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 		maybeCompress()
 
-		if autoNotify && i > 0 {
-			notifyProgress("> 💭 思考中...")
+		if autoNotify {
+			if i == 0 {
+				notifyProgress("💭")
+			} else {
+				notifyProgress("> 💭 思考中...")
+			}
 		}
 
 		// assert: 发给 LLM 的消息必须恰好一条 system

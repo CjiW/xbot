@@ -159,15 +159,22 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	var existingMemories []ExistingMemory
 	if m.archivalSvc != nil && len(oldMessages) > 0 {
 		// Build a query from the messages to consolidate
+		const maxQueryLen = 500
 		var queryBuilder strings.Builder
 		for _, msg := range oldMessages {
-			if msg.Content != "" {
-				queryBuilder.WriteString(msg.Content)
-				queryBuilder.WriteString(" ")
+			if msg.Content == "" {
+				continue
 			}
-			if queryBuilder.Len() > 500 {
+			content := msg.Content
+			remaining := maxQueryLen - queryBuilder.Len()
+			if remaining <= 0 {
 				break
 			}
+			if len(content) > remaining {
+				content = content[:remaining]
+			}
+			queryBuilder.WriteString(content)
+			queryBuilder.WriteString(" ")
 		}
 		query := queryBuilder.String()
 		if query != "" {

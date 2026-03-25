@@ -428,6 +428,11 @@ func (s *ArchivalService) Search(ctx context.Context, tenantID int64, query stri
 		limit = count
 	}
 
+	query, err = ensureContentFits(ctx, s.embeddingLimitConfig, query, "archival-search")
+	if err != nil {
+		return nil, fmt.Errorf("fit query: %w", err)
+	}
+
 	results, err := coll.Query(ctx, query, limit, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("query archival: %w", err)
@@ -485,6 +490,11 @@ func (s *ArchivalService) SearchByDocumentContains(ctx context.Context, tenantID
 	}
 	if limit > count {
 		limit = count
+	}
+
+	contains, err = ensureContentFits(ctx, s.embeddingLimitConfig, contains, "archival-contains-search")
+	if err != nil {
+		return nil, fmt.Errorf("fit query: %w", err)
 	}
 
 	// chromem-go whereDocument: $contains does substring matching on document content
@@ -611,6 +621,11 @@ func (s *ToolIndexService) SearchTools(ctx context.Context, tenantID int64, quer
 	if limit > count {
 		limit = count
 	}
+	query, err = ensureContentFits(ctx, s.embeddingLimitConfig, query, "tool-search")
+	if err != nil {
+		return nil, fmt.Errorf("fit query: %w", err)
+	}
+
 	results, err := coll.Query(ctx, query, limit, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("query tools: %w", err)

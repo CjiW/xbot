@@ -12,13 +12,28 @@ import (
 
 const settingsCardActionPrefix = "settings_"
 
+const marketPageSize = 5
+
+// SettingsCardOpts carries optional state for building the settings card (e.g. pagination).
+type SettingsCardOpts struct {
+	MySkillPage     int
+	MyAgentPage     int
+	SkillMarketPage int
+	AgentMarketPage int
+}
+
 var contextModeLabels = map[string]string{
 	"phase1": "双视图压缩",
 	"none":   "禁用压缩",
 }
 
 // BuildSettingsCard constructs an interactive Feishu card JSON for settings.
-func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string) (map[string]any, error) {
+func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string, opts ...SettingsCardOpts) (map[string]any, error) {
+	var o SettingsCardOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
 	switch tab {
 	case "general", "model", "market", "metrics":
 	default:
@@ -36,7 +51,7 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 	case "model":
 		elements = append(elements, f.buildModelTabContent(ctx, senderID)...)
 	case "market":
-		elements = append(elements, f.buildMarketTabContent(ctx, senderID)...)
+		elements = append(elements, f.buildMarketTabContent(ctx, senderID, o)...)
 	case "metrics":
 		elements = append(elements, f.buildMetricsTabContent()...)
 	}
@@ -279,6 +294,18 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 			return nil, fmt.Errorf("沙箱持久化失败: %v", err)
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
+	case "settings_market_page":
+		mySkillPage, _ := strconv.Atoi(parsed["my_skill_page"])
+		myAgentPage, _ := strconv.Atoi(parsed["my_agent_page"])
+		skillPage, _ := strconv.Atoi(parsed["skill_page"])
+		agentPage, _ := strconv.Atoi(parsed["agent_page"])
+		return f.BuildSettingsCard(ctx, senderID, chatID, "market", SettingsCardOpts{
+			MySkillPage:     mySkillPage,
+			MyAgentPage:     myAgentPage,
+			SkillMarketPage: skillPage,
+			AgentMarketPage: agentPage,
+		})
 
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
@@ -683,14 +710,34 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 }
 
 // buildMarketTabContent builds the market browsing tab with my items + marketplace.
-func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID string) []map[string]any {
+func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID string, o SettingsCardOpts) []map[string]any {
 	var elements []map[string]any
+
+	if o.MySkillPage < 0 {
+		o.MySkillPage = 0
+	}
+	if o.MyAgentPage < 0 {
+		o.MyAgentPage = 0
+	}
+	if o.SkillMarketPage < 0 {
+		o.SkillMarketPage = 0
+	}
+	if o.AgentMarketPage < 0 {
+		o.AgentMarketPage = 0
+	}
+
+	pageState := map[string]int{
+		"my_skill_page": o.MySkillPage,
+		"my_agent_page": o.MyAgentPage,
+		"skill_page":    o.SkillMarketPage,
+		"agent_page":    o.AgentMarketPage,
+	}
 
 	// "我的" section
 	if f.settingsCallbacks.RegistryListMy != nil {
-		elements = append(elements, f.buildMyItemsSection(senderID, "skill", "技能")...)
+		elements = append(elements, f.buildMyItemsSection(senderID, "skill", "技能", o.MySkillPage, pageState)...)
 		elements = append(elements, map[string]any{"tag": "hr"})
-		elements = append(elements, f.buildMyItemsSection(senderID, "agent", "代理")...)
+		elements = append(elements, f.buildMyItemsSection(senderID, "agent", "代理", o.MyAgentPage, pageState)...)
 		elements = append(elements, map[string]any{"tag": "hr"})
 	}
 
@@ -704,15 +751,15 @@ func (f *FeishuChannel) buildMarketTabContent(ctx context.Context, senderID stri
 		return elements
 	}
 
-	elements = append(elements, f.buildMarketSection("skill", "技能市场")...)
+	elements = append(elements, f.buildMarketSection("skill", "技能市场", o.SkillMarketPage, pageState)...)
 	elements = append(elements, map[string]any{"tag": "hr"})
-	elements = append(elements, f.buildMarketSection("agent", "代理市场")...)
+	elements = append(elements, f.buildMarketSection("agent", "代理市场", o.AgentMarketPage, pageState)...)
 
 	log.WithField("element_count", len(elements)).Info("buildMarketTabContent completed")
 	return elements
 }
 
-func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) []map[string]any {
+func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string, page int, pageState map[string]int) []map[string]any {
 	var elements []map[string]any
 
 	elements = append(elements, map[string]any{
@@ -733,32 +780,24 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) [
 	}
 
 	prefix := entryType + ":"
-	if len(local) == 0 && len(published) == 0 {
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": fmt.Sprintf("_暂无%s_", label),
-		})
-		return elements
-	}
 
+	// Build the full list of item rows.
+	var rows []map[string]any
 	for _, item := range local {
 		name := strings.TrimPrefix(item, prefix)
 		if publishedNames[name] {
-			// Already shared: show unpublish + delete
-			elements = append(elements, buildItemRow(name, "✅ 已分享",
+			rows = append(rows, buildItemRow(name, "✅ 已分享",
 				actionBtn("📤 下架", "settings_unpublish", entryType, name),
 				actionBtn("🗑️", "settings_delete_item", entryType, name),
 			))
 		} else {
-			// Not shared: show share + delete
-			elements = append(elements, buildItemRow(name, "",
+			rows = append(rows, buildItemRow(name, "",
 				actionBtn("📤 分享", "settings_publish", entryType, name),
 				actionBtn("🗑️", "settings_delete_item", entryType, name),
 			))
 		}
 	}
 
-	// Published items that are no longer local (edge case: deleted locally but still in registry)
 	for _, e := range published {
 		found := false
 		for _, item := range local {
@@ -768,10 +807,37 @@ func (f *FeishuChannel) buildMyItemsSection(senderID, entryType, label string) [
 			}
 		}
 		if !found && e.Sharing == "public" {
-			elements = append(elements, buildItemRow(e.Name, "✅ 已分享（本地已删除）",
+			rows = append(rows, buildItemRow(e.Name, "✅ 已分享（本地已删除）",
 				actionBtn("📤 下架", "settings_unpublish", entryType, e.Name),
 			))
 		}
+	}
+
+	if len(rows) == 0 {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("_暂无%s_", label),
+		})
+		return elements
+	}
+
+	// Paginate.
+	start := page * marketPageSize
+	if start >= len(rows) {
+		start = 0
+		page = 0
+	}
+	end := start + marketPageSize
+	hasNext := end < len(rows)
+	if end > len(rows) {
+		end = len(rows)
+	}
+	elements = append(elements, rows[start:end]...)
+
+	pageKey := "my_" + entryType + "_page"
+	hasPrev := page > 0
+	if hasPrev || hasNext {
+		elements = append(elements, buildMarketPagination(page, hasPrev, hasNext, pageKey, pageState))
 	}
 
 	return elements
@@ -828,7 +894,7 @@ func buildItemRow(name, status string, buttons ...map[string]any) map[string]any
 	}
 }
 
-func (f *FeishuChannel) buildMarketSection(entryType, title string) []map[string]any {
+func (f *FeishuChannel) buildMarketSection(entryType, title string, page int, pageState map[string]int) []map[string]any {
 	var elements []map[string]any
 
 	elements = append(elements, map[string]any{
@@ -836,17 +902,23 @@ func (f *FeishuChannel) buildMarketSection(entryType, title string) []map[string
 		"content": fmt.Sprintf("**🏪 %s**", title),
 	})
 
-	entries, err := f.settingsCallbacks.RegistryBrowse(entryType, 10, 0)
+	offset := page * marketPageSize
+	entries, err := f.settingsCallbacks.RegistryBrowse(entryType, marketPageSize+1, offset)
 	if err != nil {
 		log.WithError(err).Warnf("buildMarketSection: Browse failed for %s", entryType)
 	}
 
-	if len(entries) == 0 {
+	if len(entries) == 0 && page == 0 {
 		elements = append(elements, map[string]any{
 			"tag":     "markdown",
 			"content": "_暂无公开内容_",
 		})
 		return elements
+	}
+
+	hasNext := len(entries) > marketPageSize
+	if hasNext {
+		entries = entries[:marketPageSize]
 	}
 
 	var buttons []map[string]any
@@ -872,9 +944,115 @@ func (f *FeishuChannel) buildMarketSection(entryType, title string) []map[string
 			},
 		})
 	}
-	elements = append(elements, wrapButtonsInColumns(buttons))
+	if len(buttons) > 0 {
+		elements = append(elements, wrapButtonsInColumns(buttons))
+	}
+
+	pageKey := entryType + "_page"
+	hasPrev := page > 0
+	if hasPrev || hasNext {
+		elements = append(elements, buildMarketPagination(page, hasPrev, hasNext, pageKey, pageState))
+	}
 
 	return elements
+}
+
+// buildMarketPagination builds the prev/next pagination row for a market section.
+func buildMarketPagination(page int, hasPrev, hasNext bool, pageKey string, pageState map[string]int) map[string]any {
+	var cols []map[string]any
+
+	if hasPrev {
+		prevState := copyPageState(pageState)
+		prevState[pageKey] = page - 1
+		cols = append(cols, map[string]any{
+			"tag":            "column",
+			"width":          "weighted",
+			"weight":         1,
+			"vertical_align": "center",
+			"elements": []map[string]any{
+				{
+					"tag":      "interactive_container",
+					"elements": []map[string]any{marketPageBtn("⬅️ 上一页", prevState)},
+				},
+			},
+		})
+	} else {
+		cols = append(cols, map[string]any{
+			"tag":    "column",
+			"width":  "weighted",
+			"weight": 1,
+			"elements": []map[string]any{
+				{"tag": "markdown", "content": " "},
+			},
+		})
+	}
+
+	cols = append(cols, map[string]any{
+		"tag":            "column",
+		"width":          "weighted",
+		"weight":         1,
+		"vertical_align": "center",
+		"elements": []map[string]any{
+			{"tag": "markdown", "content": fmt.Sprintf("第 %d 页", page+1), "text_align": "center"},
+		},
+	})
+
+	if hasNext {
+		nextState := copyPageState(pageState)
+		nextState[pageKey] = page + 1
+		cols = append(cols, map[string]any{
+			"tag":            "column",
+			"width":          "weighted",
+			"weight":         1,
+			"vertical_align": "center",
+			"elements": []map[string]any{
+				{
+					"tag":      "interactive_container",
+					"elements": []map[string]any{marketPageBtn("➡️ 下一页", nextState)},
+				},
+			},
+		})
+	} else {
+		cols = append(cols, map[string]any{
+			"tag":    "column",
+			"width":  "weighted",
+			"weight": 1,
+			"elements": []map[string]any{
+				{"tag": "markdown", "content": " "},
+			},
+		})
+	}
+
+	return map[string]any{
+		"tag":                "column_set",
+		"flex_mode":          "none",
+		"horizontal_spacing": "default",
+		"columns":            cols,
+	}
+}
+
+func marketPageBtn(text string, pageState map[string]int) map[string]any {
+	data := map[string]string{"action": "settings_market_page"}
+	for k, v := range pageState {
+		data[k] = fmt.Sprintf("%d", v)
+	}
+	return map[string]any{
+		"tag":  "button",
+		"text": map[string]any{"tag": "plain_text", "content": text},
+		"type": "default",
+		"size": "small",
+		"value": map[string]string{
+			"action_data": mustMapToJSON(data),
+		},
+	}
+}
+
+func copyPageState(m map[string]int) map[string]int {
+	out := make(map[string]int, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // --- Layout helpers ---

@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -523,6 +524,315 @@ func TestBuildSettingsCard_MarketTab_PublishedItem(t *testing.T) {
 	}
 	if !strings.Contains(s, "settings_unpublish") {
 		t.Error("published items should have unpublish button")
+	}
+}
+
+func TestBuildSettingsCard_MarketTab_Pagination(t *testing.T) {
+	allSkills := make([]sqlite.SharedEntry, 12)
+	for i := range allSkills {
+		allSkills[i] = sqlite.SharedEntry{ID: int64(i + 1), Type: "skill", Name: fmt.Sprintf("skill-%d", i+1)}
+	}
+	allAgents := make([]sqlite.SharedEntry, 3)
+	for i := range allAgents {
+		allAgents[i] = sqlite.SharedEntry{ID: int64(100 + i), Type: "agent", Name: fmt.Sprintf("agent-%d", i+1)}
+	}
+
+	browseFn := func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+		var src []sqlite.SharedEntry
+		if entryType == "skill" {
+			src = allSkills
+		} else {
+			src = allAgents
+		}
+		if offset >= len(src) {
+			return nil, nil
+		}
+		end := offset + limit
+		if end > len(src) {
+			end = len(src)
+		}
+		return src[offset:end], nil
+	}
+
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: browseFn,
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	t.Run("first page shows next only", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "skill-1") {
+			t.Error("first page should contain skill-1")
+		}
+		if !strings.Contains(s, "skill-5") {
+			t.Error("first page should contain skill-5")
+		}
+		if strings.Contains(s, "skill-6") {
+			t.Error("first page should NOT contain skill-6")
+		}
+		if strings.Contains(s, "上一页") {
+			t.Error("first page should NOT have prev button")
+		}
+		if !strings.Contains(s, "下一页") {
+			t.Error("first page should have next button for skills")
+		}
+		if !strings.Contains(s, "第 1 页") {
+			t.Error("first page should show page number")
+		}
+	})
+
+	t.Run("middle page shows both prev and next", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market", SettingsCardOpts{
+			SkillMarketPage: 1,
+		})
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "skill-6") {
+			t.Error("page 2 should contain skill-6")
+		}
+		if !strings.Contains(s, "skill-10") {
+			t.Error("page 2 should contain skill-10")
+		}
+		if strings.Contains(s, "skill-5\"") {
+			t.Error("page 2 should NOT contain skill-5 install button")
+		}
+		if !strings.Contains(s, "上一页") {
+			t.Error("middle page should have prev button")
+		}
+		if !strings.Contains(s, "下一页") {
+			t.Error("middle page should have next button")
+		}
+		if !strings.Contains(s, "第 2 页") {
+			t.Error("should show page 2")
+		}
+	})
+
+	t.Run("last page shows prev only", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market", SettingsCardOpts{
+			SkillMarketPage: 2,
+		})
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "skill-11") {
+			t.Error("last page should contain skill-11")
+		}
+		if !strings.Contains(s, "skill-12") {
+			t.Error("last page should contain skill-12")
+		}
+		if strings.Contains(s, "skill-10\"") {
+			t.Error("last page should NOT contain skill-10 install button")
+		}
+		if !strings.Contains(s, "第 3 页") {
+			t.Error("should show page 3")
+		}
+	})
+
+	t.Run("agents section fits on one page with no pagination", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "agent-1") {
+			t.Error("should show all agents")
+		}
+		if !strings.Contains(s, "agent-3") {
+			t.Error("should show all agents")
+		}
+	})
+}
+
+func TestHandleSettingsAction_MarketPage(t *testing.T) {
+	f := newTestFeishuChannel()
+	skills := make([]sqlite.SharedEntry, 8)
+	for i := range skills {
+		skills[i] = sqlite.SharedEntry{ID: int64(i + 1), Type: "skill", Name: fmt.Sprintf("skill-%d", i+1)}
+	}
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			if entryType == "skill" {
+				if offset >= len(skills) {
+					return nil, nil
+				}
+				end := offset + limit
+				if end > len(skills) {
+					end = len(skills)
+				}
+				return skills[offset:end], nil
+			}
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return nil, nil, nil
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_market_page","skill_page":"1","agent_page":"0"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	s := cardJSON(card)
+	if !strings.Contains(s, "skill-6") {
+		t.Error("page 2 should contain skill-6")
+	}
+	if strings.Contains(s, "skill-5\"") {
+		t.Error("page 2 should NOT contain skill-5 install button")
+	}
+}
+
+func TestBuildSettingsCard_MyItemsPagination(t *testing.T) {
+	localSkills := make([]string, 8)
+	for i := range localSkills {
+		localSkills[i] = fmt.Sprintf("skill:my-skill-%d", i+1)
+	}
+
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			if entryType == "skill" {
+				return nil, localSkills, nil
+			}
+			return nil, nil, nil
+		},
+	})
+
+	t.Run("first page shows first 5 items with next", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "my-skill-1") {
+			t.Error("first page should contain my-skill-1")
+		}
+		if !strings.Contains(s, "my-skill-5") {
+			t.Error("first page should contain my-skill-5")
+		}
+		if strings.Contains(s, "my-skill-6") {
+			t.Error("first page should NOT contain my-skill-6")
+		}
+		if !strings.Contains(s, "下一页") {
+			t.Error("should have next button")
+		}
+	})
+
+	t.Run("second page shows remaining items with prev", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market", SettingsCardOpts{
+			MySkillPage: 1,
+		})
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "my-skill-6") {
+			t.Error("second page should contain my-skill-6")
+		}
+		if !strings.Contains(s, "my-skill-8") {
+			t.Error("second page should contain my-skill-8")
+		}
+		if strings.Contains(s, "my-skill-5\"") {
+			t.Error("second page should NOT contain my-skill-5 buttons")
+		}
+		if !strings.Contains(s, "上一页") {
+			t.Error("should have prev button")
+		}
+	})
+
+	t.Run("pagination preserves page state across sections", func(t *testing.T) {
+		card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "market", SettingsCardOpts{
+			MySkillPage: 1,
+		})
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "my_skill_page") {
+			t.Error("pagination buttons should carry my_skill_page state")
+		}
+	})
+
+	t.Run("few items no pagination", func(t *testing.T) {
+		f2 := newTestFeishuChannel()
+		f2.SetSettingsCallbacks(SettingsCallbacks{
+			RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+				return nil, nil
+			},
+			RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+				if entryType == "skill" {
+					return nil, []string{"skill:only-one"}, nil
+				}
+				return nil, nil, nil
+			},
+		})
+		card, err := f2.BuildSettingsCard(context.Background(), "user1", "chat1", "market")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		s := cardJSON(card)
+		if !strings.Contains(s, "only-one") {
+			t.Error("should show the single item")
+		}
+		if strings.Contains(s, "上一页") || strings.Contains(s, "下一页") {
+			t.Error("single item should have no pagination")
+		}
+	})
+}
+
+func TestHandleSettingsAction_MyItemsPage(t *testing.T) {
+	localSkills := make([]string, 8)
+	for i := range localSkills {
+		localSkills[i] = fmt.Sprintf("skill:my-skill-%d", i+1)
+	}
+
+	f := newTestFeishuChannel()
+	f.SetSettingsCallbacks(SettingsCallbacks{
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return nil, nil
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			if entryType == "skill" {
+				return nil, localSkills, nil
+			}
+			return nil, nil, nil
+		},
+	})
+
+	actionData := map[string]any{
+		"action_data": `{"action":"settings_market_page","my_skill_page":"1","my_agent_page":"0","skill_page":"0","agent_page":"0"}`,
+	}
+	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected card")
+	}
+	s := cardJSON(card)
+	if !strings.Contains(s, "my-skill-6") {
+		t.Error("page 2 should contain my-skill-6")
+	}
+	if strings.Contains(s, "my-skill-5\"") {
+		t.Error("page 2 should NOT contain my-skill-5 buttons")
 	}
 }
 

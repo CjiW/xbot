@@ -169,7 +169,6 @@ func main() {
 		agentLoop.RegisterTool(&feishu_mcp.BitableRecordTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.BitableListTool{MCP: feishuMCP})
 		agentLoop.RegisterTool(&feishu_mcp.BatchCreateAppTableRecordTool{MCP: feishuMCP})
-		agentLoop.RegisterTool(&feishu_mcp.SendCardTool{MCP: feishuMCP})
 
 		// Wiki tools
 		agentLoop.RegisterTool(&feishu_mcp.WikiListSpacesTool{MCP: feishuMCP})

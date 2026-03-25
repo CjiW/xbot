@@ -132,7 +132,7 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 		"05_channel_feishu": `## 飞书渠道规则
 - 不要在群聊中 @ 所有人
 - 飞书 markdown 支持有限：不支持复杂表格、嵌套列表、HTML标签
-- 信息不足时先确认再行动，优先用 card_create 收集信息
+- 信息不足时先确认再行动，优先用卡片交互收集信息
 - 使用飞书表情符号增强表达
 
 ## 飞书文件操作
@@ -142,11 +142,12 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 - feishu_upload_file 是上传到用户云盘，不是直接发送消息
 
 ## 飞书卡片交互
-- 需要用户选择或输入时，用 card_create（按钮、下拉框、表单），设置 wait_response=true
-- **多个问题用表单（form + input/select）一次性收集，不要拆成多个独立卡片**
+- **发送卡片**：用 card_send 工具（飞书 MCP 中的 card_create / card_send）
+- **表单**：需要用户输入时用表单（form + input/select），多个字段一次性收集
+- **表单字段必须有 id**：每个 input/select 必须设置 id 属性，否则提交后无法获取数据
+- card_send 后 agent 进入等待状态，用户提交表单后 agent 自动恢复处理
 - card_create 创建卡片后，card_add_content/card_add_interactive 等工具自动可用
-- 设置 wait_response=true 可等待用户交互
-- feishu_send_card 可直接发送 JSON 卡片`,
+- 设置 wait_response=true 可等待用户交互`,
 	}
 }
 
@@ -309,9 +310,10 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		}
 
 		var msgID string
+		// 尝试 patch 进度消息为卡片内容（同类型消息可直接替换）
 		if updateMsgID != "" {
 			if err := f.patchMessage(updateMsgID, []byte(cardJSON)); err != nil {
-				log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: card patch failed, falling back to create")
+				log.WithError(err).WithField("message_id", updateMsgID).Warn("Feishu: card patch failed (likely cross-type), creating new message")
 			} else {
 				msgID = updateMsgID
 			}
@@ -325,6 +327,12 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 			}
 			if err != nil {
 				return "", err
+			}
+			// 卡片创建为新消息后，删除旧的进度消息避免刷屏
+			if updateMsgID != "" {
+				if delErr := f.deleteMessage(updateMsgID); delErr != nil {
+					log.WithError(delErr).WithField("message_id", updateMsgID).Warn("Feishu: failed to delete progress message after card send")
+				}
 			}
 		}
 
@@ -546,6 +554,24 @@ func (f *FeishuChannel) patchMessage(messageID string, cardJSON []byte) error {
 	}
 
 	log.WithField("message_id", messageID).Debug("Feishu message patched")
+	return nil
+}
+
+// deleteMessage 撤回/删除单条消息（用于卡片发送后清理进度消息）
+func (f *FeishuChannel) deleteMessage(messageID string) error {
+	req := larkim.NewDeleteMessageReqBuilder().
+		MessageId(messageID).
+		Build()
+
+	resp, err := f.client.Im.Message.Delete(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("delete feishu message: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu delete API error: code=%d, msg=%s detail: %s", resp.Code, resp.Msg, resp.ErrorResp())
+	}
+
+	log.WithField("message_id", messageID).Debug("Feishu message deleted")
 	return nil
 }
 
@@ -1192,7 +1218,7 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		}
 	}
 	if cardID == "" {
-		// 没有 card_id：说明卡片是由 feishu_send_card 等外部工具发送的原始卡片，
+		// 没有 card_id：说明卡片是由外部工具发送的原始卡片，
 		// 没有 CardBuilder 的 card_id 注入。将回调数据作为通用卡片交互转发给 agent，
 		// 而不是直接丢弃。
 		return f.handleGenericCardAction(actionData, action, chatID, senderID, messageID, requestID)
@@ -1254,6 +1280,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 
 	switch {
 	case actionName == "form_submit" || len(action.FormValue) > 0:
+		// Extract form fields from FormValue (form submission data)
 		for key, value := range action.FormValue {
 			if key == "card_id" {
 				continue
@@ -1266,14 +1293,49 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 				responseData[key] = string(data)
 			}
 		}
+		// Also merge any actionData (from Value), FormValue takes precedence
+		for k, v := range actionData {
+			if k == "card_id" {
+				continue
+			}
+			if _, exists := responseData[k]; exists {
+				continue // FormValue data takes precedence
+			}
+			switch val := v.(type) {
+			case string:
+				responseData[k] = val
+			default:
+				data, _ := json.Marshal(val)
+				responseData[k] = string(data)
+			}
+		}
 		actionName = "form_submit"
 
 	case actionName == "button":
+		// If button also has FormValue (shouldn't reach here due to case above, but safety check)
+		if len(action.FormValue) > 0 {
+			for key, value := range action.FormValue {
+				if key == "card_id" {
+					continue
+				}
+				switch v := value.(type) {
+				case string:
+					responseData[key] = v
+				default:
+					data, _ := json.Marshal(v)
+					responseData[key] = string(data)
+				}
+			}
+			actionName = "form_submit"
+		}
 		if action.Name != "" {
 			responseData["name"] = action.Name
 		}
 		for k, v := range actionData {
 			if k == "card_id" {
+				continue
+			}
+			if _, exists := responseData[k]; exists {
 				continue
 			}
 			switch val := v.(type) {
@@ -1418,7 +1480,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	}, nil
 }
 
-// handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. feishu_send_card).
+// handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. raw JSON cards).
 // These cards don't have a card_id, so we forward the action data as a generic card interaction
 // to the agent instead of silently dropping the callback.
 func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID, requestID string) (*callback.CardActionTriggerResponse, error) {
@@ -1451,7 +1513,7 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 	}).Info("Generic card action triggered (no card_id)")
 
 	// For form_submit, patch the card to "submitted" state to prevent double-submit
-	if (actionName == "form_submit" || len(action.FormValue) > 0) && messageID != "" {
+	if (actionName == "form_submit" || actionName == "button" && len(action.FormValue) > 0 || len(action.FormValue) > 0) && messageID != "" {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
 		if cardJSON, err := json.Marshal(submittedCard); err == nil {
 			if err := f.patchMessage(messageID, cardJSON); err != nil {

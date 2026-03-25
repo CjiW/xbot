@@ -319,8 +319,7 @@ func deduplicateNamesInTree(elem *CardElement, used map[string]int) {
 }
 
 // ensureFormSubmitButtons checks all form containers and auto-injects a submit
-// button if none exists. Feishu requires at least one button with
-// action_type=form_submit inside every form container.
+// button if none exists. Feishu requires at least one button inside every form container.
 func (s *CardSession) ensureFormSubmitButtons() {
 	for _, elem := range s.Elements {
 		ensureSubmitInTree(elem, s.ID)
@@ -335,11 +334,10 @@ func ensureSubmitInTree(elem *CardElement, sessionID string) {
 			ID:  submitID,
 			Tag: "button",
 			Properties: map[string]any{
-				"text":        map[string]any{"tag": "plain_text", "content": "提交"},
-				"type":        "primary",
-				"action_type": "form_submit",
-				"name":        submitID,
-				"value":       map[string]any{"card_id": sessionID, "form_name": formName},
+				"text":  map[string]any{"tag": "plain_text", "content": "提交"},
+				"type":  "primary",
+				"name":  submitID,
+				"value": map[string]any{"card_id": sessionID, "form_name": formName},
 			},
 		}
 		elem.Children = append(elem.Children, submit)
@@ -350,12 +348,10 @@ func ensureSubmitInTree(elem *CardElement, sessionID string) {
 }
 
 func hasSubmitButton(elem *CardElement) bool {
-	if elem.Tag == "button" {
-		if at, ok := elem.Properties["action_type"].(string); ok && at == "form_submit" {
+	for _, child := range elem.Children {
+		if child.Tag == "button" {
 			return true
 		}
-	}
-	for _, child := range elem.Children {
 		if hasSubmitButton(child) {
 			return true
 		}
@@ -410,8 +406,8 @@ func (s *CardSession) CollectExpectedInteractions() {
 		case "button":
 			// Buttons are always handled
 			interactions["button"] = true
-			// Check if this is a form submit button
-			if at, ok := elem.Properties["action_type"].(string); ok && at == "form_submit" {
+			// If inside a form, this button triggers form submission
+			if insideForm {
 				interactions["form_submit"] = true
 			}
 
@@ -522,12 +518,7 @@ func describeElement(sb *strings.Builder, e *CardElement, depth int) {
 			label, _ = t["content"].(string)
 		}
 		name, _ := e.Properties["name"].(string)
-		action, _ := e.Properties["action_type"].(string)
-		if action != "" {
-			fmt.Fprintf(sb, "%s- Button \"%s\" name=%s action=%s\n", indent, label, name, action)
-		} else {
-			fmt.Fprintf(sb, "%s- Button \"%s\" name=%s\n", indent, label, name)
-		}
+		fmt.Fprintf(sb, "%s- Button \"%s\" name=%s\n", indent, label, name)
 	case "input":
 		name, _ := e.Properties["name"].(string)
 		desc := ""
@@ -793,9 +784,6 @@ func BuildButton(text, btnType string, props map[string]any) *CardElement {
 	}
 	if name, ok := props["name"].(string); ok && name != "" {
 		p["name"] = name
-	}
-	if actionType, ok := props["action_type"].(string); ok && actionType != "" {
-		p["action_type"] = actionType
 	}
 	if confirm, ok := props["confirm"]; ok {
 		p["confirm"] = confirm

@@ -1,8 +1,8 @@
 # Remote Sandbox 重构方案
 
-> **版本**: V2 (门下省审核通过)
+> **版本**: V3 (IO 全景与文件传输方案补充，门下省审核通过)
 > **分支**: `refactor/sandbox-tool-provider` (base: master `5661ab7`)
-> **审核**: brainstorm 6 轮讨论 + 门下省 2 轮审核
+> **审核**: brainstorm 11 轮讨论 + 门下省 3 轮审核
 
 ## 1. 目标
 
@@ -461,6 +461,9 @@ SANDBOX_REMOTE_LISTEN=:8090
 |------|------|
 | `tools/shell.go` | exec.CommandContext → Sandbox.Exec；persistEnvFromCommand；Cd 注入 → spec.Dir |
 | `tools/edit.go` | 删除 base64 hack → Sandbox.ReadFile/WriteFile |
+| `tools/download.go` | os.Create+io.Copy → Sandbox.WriteFile |
+| `tools/feishu_mcp/download.go` | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile |
+| `tools/feishu_mcp/file.go` | SendFileTool 改内存上传；UploadFileTool → Sandbox.ReadFile |
 
 ### 中改
 
@@ -572,7 +575,7 @@ SANDBOX_REMOTE_LISTEN=:8090
 
 ## 10. 设计评审记录
 
-### Brainstorm（6 轮）
+### Brainstorm（11 轮）
 
 1. **核心架构选型**：Exec Provider vs Tool Provider → Exec Provider
 2. **Wrap vs Exec**：Wrap 返回 exec.Cmd 不可远程化 → Exec 统一
@@ -580,9 +583,169 @@ SANDBOX_REMOTE_LISTEN=:8090
 4. **Glob/Grep 双路径**：不强制统一，保留策略分发
 5. **path_guard remote 模式**：方案 B 纯字符串校验
 6. **最终确认**：Exec-only + MCP Transport 工厂
+7. **IO 全景梳理**：识别 7 处需穿越 Sandbox 的 IO + 6 处 server 本地 IO
+8. **文件传输双通道**：WebSocket base64（≤4MB）+ Runner HTTP API（>4MB）
+9. **offload hash 退化**：确认 remote 模式下自动退化，无需改动代码
+10. **SendFileTool 改造**：`__FEISHU_FILE__::hostPath` 协议在 remote 模式下不工作 → 工具层内存上传
+11. **V3 最终确认**：IO 全景 + 文件传输方案 + 文件变更清单更新
 
-### 门下省审核（2 轮）
+### 门下省审核（3 轮）
 
 **V1 驳回**：遗漏 Wrap 语义、管理方法、bang_command/mcp_common/agent.go/main.go、ShellTool 特殊逻辑
 
 **V2 通过**：所有问题已修正
+
+**V3 通过**：IO 全景与文件传输方案补充，文件变更清单更新（download.go、feishu_mcp/）
+
+
+## 11. IO 全景与文件传输方案（V3 补充）
+
+> V2 方案聚焦 Exec/ReadFile/WriteFile 接口设计，但未系统梳理所有涉及文件 IO 的工具。本章补充 IO 全景分析、大文件传输双通道方案、offload 退化策略。
+
+### 11.1 IO 操作全景
+
+#### A. 需要穿越 Sandbox 的 IO（7 处）
+
+| 工具 | 操作 | 文件位置 | 改造方案 | 大小限制 |
+|------|------|----------|----------|----------|
+| EditTool | 读/写文件 | edit.go:177-199 | sandboxReadFile/sandboxWriteFile → Sandbox.ReadFile/WriteFile | < 4MB（源码） |
+| ReadTool | 读文件 | read.go:126-151 | executeInSandbox(cat -n) → Sandbox.ReadFile + 服务端加行号 | < 4MB |
+| DownloadFileTool | 下载飞书文件到 workspace | download.go:91-107 | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile | ≤100MB |
+| feishu_mcp/DownloadFileTool | 同上 | feishu_mcp/download.go:79-114 | 同上 | ≤100MB |
+| SendFileTool | 从 workspace 读文件发送飞书 | feishu_mcp/file.go:361-405 | os.Stat+hostPath协议 → Sandbox.ReadFile + 内存上传 | ≤100MB |
+| UploadFileTool | 上传文件到飞书云盘 | feishu_mcp/file.go:55-134 | os.Open+io.ReadAll → Sandbox.ReadFile | ≤100MB |
+| offload.go hash | 读文件计算 hash | offload.go:214-215 | 保留现有代码不改动，remote 模式自动退化为无 stale 检测 | N/A |
+
+#### B. 不需要穿越的 IO（server 本地，不改）
+
+| 位置 | 操作 | 原因 |
+|------|------|------|
+| agent/skills.go, agent/agents.go | 读 skill/agent 定义 | server 本地资源 |
+| agent/offload.go:170,188 | 写/读 offload 索引 | server 本地状态 |
+| agent/bang_command.go:169 | 写 bang 命令输出 | server 本地日志 |
+| agent/context.go:66,71 | 读 prompt 文件 | server 本地文件 |
+| agent/engine.go, prompt_handler.go | 写 prompt 文件 | server 本地文件 |
+| config/* | 读配置 | server 本地配置 |
+
+### 11.2 Sandbox 接口（不变）
+
+保持 V2 接口定义不变：
+
+```go
+type Sandbox interface {
+    Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error)
+    ReadFile(ctx context.Context, path string, userID string) ([]byte, error)
+    WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error
+    GetShell(userID string, workspace string) (string, error)
+    Name() string
+    Close() error
+    CloseForUser(userID string) error
+    IsExporting(userID string) bool
+    ExportAndImport(userID string) error
+}
+```
+
+### 11.3 Remote 实现内部双通道
+
+RemoteSandbox 的 ReadFile/WriteFile 内部自动选择传输通道，对调用方完全透明：
+
+| 通道 | 适用场景 | 大小阈值 | 实现方式 |
+|------|----------|----------|----------|
+| **WebSocket + base64** | EditTool/ReadTool 等工具内 IO | ≤ 4MB | 现有 protocol `read_file`/`write_file` 消息 |
+| **Runner HTTP API** | DownloadFileTool/UploadFileTool/SendFileTool | > 4MB | 新增 HTTP multipart/form-data 上传 + 二进制下载 |
+
+```go
+func (s *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]byte, error) {
+    rc, err := s.getRunner(userID)
+    if err != nil {
+        return nil, err
+    }
+
+    // 小文件：走 WebSocket
+    // 大文件：走 HTTP（runner 暴露 HTTP 端口，通过 rc.httpAddr 访问）
+    // 内部自动选择，调用方无感知
+}
+```
+
+### 11.4 Runner HTTP API
+
+Runner 在 WebSocket 连接建立后，同时监听一个本地 HTTP 端口，供 server 通过 HTTP 上传/下载大文件：
+
+```
+POST /api/v1/files/upload   multipart/form-data → 写入 runner 本地文件
+GET  /api/v1/files/download?path=xxx             → 下载 runner 本地文件（binary stream）
+```
+
+**认证**：复用 WebSocket token，HTTP header `Authorization: Bearer <token>`
+
+**path 安全校验**：限制在 workspace 目录内（复用 path_guard 逻辑，Phase 7 安全加固阶段实现）
+
+**Runner HTTP 地址发现**：runner 在 WebSocket `auth` 消息中上报 HTTP 端口，server 通过 runnerConn 缓存。
+
+```json
+→ {"type":"auth","token":"xxx","workspace":"/home/user/project","runner_id":"runner-1","http_port":8091}
+← {"type":"auth_ok","user_id":"user-123"}
+```
+
+### 11.5 offload hash 退化方案
+
+remote 模式下 offload hash 自动退化，**代码不改动**：
+
+1. `offload.go:214-215` 中 `os.ReadFile(hostPath)` 在 remote 模式下失败（文件在 runner 本地，server 无访问权限）
+2. `ContentHash = ""` → `InvalidateStaleReads` 调用时跳过（`offload.go:343` 已有守卫：`if hash == "" { continue }`）
+3. 行为正确退化：remote 模式下不检测 stale reads，功能不受影响
+
+**后续恢复路径**（非必须，优先级低）：
+- `RunConfig` 注入 `Sandbox` 引用 / `FileReadFunc` 闭包
+- offload hash 计算通过 `Sandbox.ReadFile` 获取文件内容
+
+### 11.6 SendFileTool 改造细节
+
+**当前问题**：`__FEISHU_FILE__::hostPath` 协议 — SendFileTool 将文件路径写入 protocol message，channel handler 在 server 端读 `hostPath` 再发送飞书。remote 模式下 server 读不到用户文件（文件在 runner 本地）。
+
+**改造方案**：
+
+1. SendFileTool 通过 `Sandbox.ReadFile` 将文件读到 server 内存（`[]byte`）
+2. 直接在工具层用飞书 API 上传文件（不走 protocol message 中转）
+3. 需要 `ToolContext` 新增 `Sandbox` 引用（用于工具层调用 ReadFile）
+
+```go
+// 改造前（protocol message 中转）
+content := fmt.Sprintf("__FEISHU_FILE__::%s", hostPath)
+
+// 改造后（工具层内存上传）
+data, err := toolCtx.Sandbox.ReadFile(ctx, filePath, toolCtx.UserID)
+if err != nil {
+    return nil, err
+}
+// 直接调用飞书 API 上传 data
+uploadResult, err := toolCtx.FeishuClient.UploadFile(ctx, data, filename)
+```
+
+### 11.7 文件变更清单更新
+
+V3 新增/修改的文件变更（补充 §7）：
+
+**新增**：
+
+| 文件 | 说明 |
+|------|------|
+| `runner/http_server.go` | Runner HTTP 文件传输服务（upload/download 端点） |
+
+**大改（新增到 §7 大改列表）**：
+
+| 文件 | 说明 |
+|------|------|
+| `tools/download.go` | os.Create+io.Copy → Sandbox.WriteFile |
+| `tools/feishu_mcp/download.go` | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile |
+| `tools/feishu_mcp/file.go` | SendFileTool 改内存上传（不走 hostPath 协议）；UploadFileTool → Sandbox.ReadFile |
+
+**中改（新增到 §7 中改列表）**：
+
+| 文件 | 说明 |
+|------|------|
+| `tools/remote_sandbox.go` | ReadFile/WriteFile 增加双通道自动选择逻辑（≤4MB WebSocket, >4MB HTTP） |
+| `tools/interface.go` | ToolContext 新增 Sandbox 引用字段（供 SendFileTool 使用） |
+| `runner/client.go` | auth 消息增加 http_port 上报 |
+| `runner/handler.go` | 新增 HTTP 文件上传/下载处理 |
+| `runner/protocol.go` | auth 消息增加 HttpPort 字段 |

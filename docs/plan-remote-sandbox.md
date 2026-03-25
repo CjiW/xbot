@@ -1,751 +1,950 @@
-# Remote Sandbox 重构方案
+# Remote Sandbox 方案 V4
 
-> **版本**: V3 (IO 全景与文件传输方案补充，门下省审核通过)
-> **分支**: `refactor/sandbox-tool-provider` (base: master `5661ab7`)
-> **审核**: brainstorm 11 轮讨论 + 门下省 3 轮审核
+> 最后更新：2026-03-26
+> 状态：中书省 brainstorm 6 轮 + 门下省 2 轮审核
+> 分支：`refactor/sandbox-tool-provider`
+> 前置方案：V3（已废弃）
 
-## 1. 目标
+---
 
-彻底重构 Sandbox 接口，消除工具双路径（local/sandbox）的历史债务，新增 remote 模式（用户本地 runner + WebSocket 通信）。
+## 1. 背景与动机
 
-### 核心原则
+### 1.1 V3 方案的致命缺陷
 
-- **统一接口**：none/docker/remote 三种模式实现同一 Sandbox 接口
-- **不惧重写**：历史债务直接干掉，不做渐进兼容
-- **零新依赖**：复用已有 `gorilla/websocket v1.5.0`
-- **Exec 替代 Wrap**：所有命令执行通过 `Sandbox.Exec()`，不返回 `exec.Cmd`
+V3 方案设计了 Sandbox 接口（Exec/ReadFile/WriteFile），但在以下方面存在根本性问题：
 
-## 2. 架构设计
+1. **Offload 退化**：remote 模式下 offload hash 计算"自动退化"（`os.ReadFile` 失败 → 跳过 stale 检测），这是偷懒不是设计
+2. **配置路径错误**：个人 skill/agent 路径用了 `.xbot/skills` 和 `.xbot/agents`，实际应为 `/workspace/skills` 和 `/workspace/agents`
+3. **Remote 语义不清**：没有明确 "remote = 所有东西跑在用户本机，server 只是 WebSocket 协调器"
 
-### 2.1 核心类型
+### 1.2 V4 硬约束（不可违反）
 
-```go
-// tools/exec.go
+| # | 约束 | 说明 |
+|---|------|------|
+| H1 | Offload 不可退化 | hash 计算、内容读写必须全部通过 Sandbox.ReadFile/WriteFile 完成 |
+| H2 | 配置路径 `/workspace/skills` + `/workspace/agents` | 不是 `.xbot/skills` / `.xbot/agents` |
+| H3 | Remote = 用户本机 | ShellTool、ReadFile/WriteFile、skill/agent、offload、MCP stdio 全在用户本机 |
+| H4 | 彻底重构（方案 A） | 不渐进迁移，直接重写，不怕重写历史文件 |
 
-type ExecSpec struct {
-    Command   string        // 程序路径（Shell=true 时为 shell 脚本）
-    Args      []string      // 参数（Shell=true 时忽略）
-    Shell     bool          // true = 用 login shell 执行 Command
-    Dir       string        // 工作目录
-    Env       []string      // 额外环境变量（KEY=VALUE）
-    Stdin     string        // 标准输入
-    Timeout   time.Duration // 超时（0=默认 120s）
-    Workspace string        // 宿主机工作区路径
-    UserID    string        // 用户标识
-}
+---
 
-type ExecResult struct {
-    Stdout   string
-    Stderr   string
-    ExitCode int
-    TimedOut bool
-}
+## 2. 架构总览
+
+### 2.1 核心原则
+
+```
+Remote Sandbox 的本质：
+  Server = WebSocket 协调器（不接触用户文件）
+  Runner = 用户本机代理（执行所有文件 I/O 和命令）
+  Sandbox 接口 = 统一抽象（所有模式共享同一套 API）
 ```
 
-### 2.2 Sandbox 接口
+### 2.2 三种模式对比
+
+| 维度 | none | docker | remote (V4) |
+|------|------|--------|-------------|
+| Shell 执行 | `os/exec` | `docker exec` | WebSocket → Runner `os/exec` |
+| 文件读写 | `os.ReadFile` | `docker exec cat/tee` | WebSocket/HTTP → Runner `os.ReadFile` |
+| Skill/Agent 发现 | 本地 `/workspace/skills` | 容器内 `/workspace/skills` | 用户本机 `/workspace/skills` |
+| Offload hash | `os.ReadFile` | `docker exec cat` | Sandbox.ReadFile（穿越到用户本机） |
+| MCP stdio | 本地启动 | 容器内启动 | 用户本机启动 |
+| Server 是否接触用户文件 | ✅ 直接读写 | ✅ 通过 docker API | ❌ 不接触，只做 WebSocket 协调 |
+| ReadOnlyRoots | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+
+### 2.3 关键设计决策
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D1 | 单一 Sandbox 接口（不拆 FileIO） | FileIO 永远由 Sandbox 提供，拆分增加复杂度但收益不大 |
+| D2 | Sandbox.ReadFile/WriteFile 要求绝对路径 | 相对路径解析依赖 session 级 Cwd，Sandbox 是多 session 共享 |
+| D3 | Offload JSON 存 server 端（os.*），hash 走 Sandbox | offload 是 agent 内部状态，消费者在 server 端 |
+| D4 | OffloadStore.MaybeOffload 接收 Sandbox 参数（方案 X2） | 显式依赖，OffloadStore 保持纯数据存储 |
+| D5 | Skill 发现用 Server 缓存 + TTL 5min + 主动失效 | 简单可靠，避免 runner 侧 file watch 的跨平台复杂度 |
+| D6 | skill_sync.go 在 remote 模式下跳过 | 全局 skill 由 SkillStore 在 server 端注入 system prompt |
+| D7 | 废除 `__FEISHU_FILE__::` 协议 | 工具层直接 Sandbox.ReadFile + Feishu API 上传 |
+| D8 | 删除 SandboxToHostPath / HostToSandboxPath | 路径语义统一为 sandbox 路径，转换是 Sandbox 实现内部细节 |
+| D9 | Glob/Grep 统一走 Sandbox.Exec（删除 executeLocal） | 消除双路径分歧，Sandbox.Exec 在 none 模式下就是 os/exec |
+| D10 | Sandbox.WriteFile 不自动 MkdirAll | 遵循最小意外原则，显式调用 Sandbox.MkdirAll |
+| D11 | copyDir 跨 Sandbox 时展开 symlink | Sandbox 无 Symlink 方法，skill/agent 不应依赖 symlink 语义 |
+| D12 | filepath.WalkDir 用递归 ReadDir 替代 | Sandbox 接口没有 Walk 方法 |
+
+---
+
+## 3. Sandbox 接口定义
+
+### 3.1 核心接口
 
 ```go
-// tools/sandbox.go
+package tools
 
+// MaxSandboxFileSize is the maximum file size for ReadFile/WriteFile (500MB).
+const MaxSandboxFileSize = 500 * 1024 * 1024
+
+// ExecSpec defines the parameters for a sandbox command execution.
+type ExecSpec struct {
+    Command   string        // executable or shell command
+    Args      []string      // arguments (ignored when Shell=true)
+    Shell     bool          // use shell for execution (sh -c)
+    Dir       string        // working directory (absolute path in sandbox)
+    Env       []string      // environment variables
+    Stdin     string        // stdin input
+    Timeout   time.Duration // execution timeout
+    Workspace string        // workspace root (for sandbox setup)
+    UserID    string        // user identity (for sandbox routing)
+}
+
+// ExecResult holds the result of a sandbox command execution.
+type ExecResult struct {
+    Stdout   string // standard output
+    Stderr   string // standard error
+    ExitCode int    // exit code (-1 if timed out)
+    TimedOut bool   // whether execution timed out
+}
+
+// SandboxFileInfo is the sandbox equivalent of os.FileInfo.
+// Does NOT include Sys() — cross-process metadata is meaningless.
+type SandboxFileInfo struct {
+    Name    string      // base name
+    Size    int64       // length in bytes
+    Mode    os.FileMode // file mode bits
+    ModTime time.Time   // modification time
+    IsDir   bool        // is directory
+}
+
+// DirEntry represents a directory entry from ReadDir.
+type DirEntry struct {
+    Name  string
+    IsDir bool
+    Size  int64
+}
+
+// Sandbox defines the unified interface for all sandbox modes.
+// All file path parameters must be absolute paths in sandbox format.
+// Path conversion (sandbox↔host) is an internal concern of each implementation.
 type Sandbox interface {
-    // === 执行能力 ===
+    // === Command Execution ===
     Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error)
+
+    // === File I/O ===
+    // ReadFile reads the entire file at path. Path must be absolute.
+    // Returns os.ErrNotExist if file does not exist.
     ReadFile(ctx context.Context, path string, userID string) ([]byte, error)
+
+    // WriteFile writes data to path. Path must be absolute.
+    // Does NOT auto-create parent directories — call MkdirAll first.
     WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error
 
-    // === Shell ===
+    // Stat returns file info. Path must be absolute.
+    // Returns os.ErrNotExist if file does not exist.
+    Stat(ctx context.Context, path string, userID string) (*SandboxFileInfo, error)
+
+    // ReadDir lists directory entries. Path must be absolute.
+    ReadDir(ctx context.Context, path string, userID string) ([]DirEntry, error)
+
+    // MkdirAll creates directory tree. Path must be absolute.
+    MkdirAll(ctx context.Context, path string, perm os.FileMode, userID string) error
+
+    // Remove removes a file. Path must be absolute.
+    Remove(ctx context.Context, path string, userID string) error
+
+    // RemoveAll removes a directory tree. Path must be absolute.
+    RemoveAll(ctx context.Context, path string, userID string) error
+
+    // === Shell Configuration ===
+    // GetShell returns the preferred shell command for the user/workspace.
     GetShell(userID string, workspace string) (string, error)
 
-    // === 管理 ===
+    // === Lifecycle ===
     Name() string
     Close() error
     CloseForUser(userID string) error
+
+    // === Export/Import (docker-specific) ===
     IsExporting(userID string) bool
     ExportAndImport(userID string) error
 }
 ```
 
-### 2.3 与旧接口的关键区别
+### 3.2 三种实现
 
-| 旧接口 | 新接口 | 变化原因 |
-|--------|--------|----------|
-| `Wrap() → (cmdName, cmdArgs, err)` | `Exec(spec) → (result, err)` | Wrap 返回 cmdName+args 让调用方构建 exec.Cmd，remote 模式无法在本地构建 exec.Cmd |
-| `RunInSandbox*()` 全局函数 | `Sandbox.Exec()` | 消除 4 处重复的进程管理代码 |
-| EditTool base64 hack | `Sandbox.ReadFile/WriteFile` | 消除 `echo '<base64>' \| base64 -d > file` 的 hack |
-| `SandboxEnabled` bool | `SandboxMode` string | 支持三种模式的无歧义区分 |
-
-### 2.4 MCP Transport 独立工厂
-
-MCP SDK 核心接口不依赖 `exec.Cmd`：
 ```go
-type Transport interface {
-    Connect(ctx context.Context) (Connection, error)
+// NoneSandbox — all operations are direct os.* calls
+type NoneSandbox struct { /* no state */ }
+
+// DockerSandbox — all operations go through docker exec / docker cp
+type DockerSandbox struct {
+    client    *client.Client
+    image     string
+    containers sync.Map // userID → containerID
+}
+
+// RemoteSandbox — all operations go through WebSocket or HTTP to Runner
+type RemoteSandbox struct {
+    connections sync.Map // userID → *runnerConnection
+    wsServer    *ws.Server
+    httpServer  *http.Server
 }
 ```
 
-MCP 连接不经过 Sandbox 接口，走独立工厂：
-```go
-func NewMCPTransport(ctx context.Context, cfg MCPServerConfig, sandboxMode, userID, workspace string) (mcp.Transport, error) {
-    switch sandboxMode {
-    case "none":   return buildLocalTransport(...)
-    case "docker": return buildDockerTransport(...)
-    case "remote": return buildRemoteTransport(...)  // WebSocketTransport
-    }
-}
+### 3.3 路径语义
+
+```
+Sandbox 路径 = 绝对路径，以 SandboxWorkDir 为前缀
+
+示例（SandboxWorkDir = /workspace）：
+  /workspace/src/main.go      ← 绝对路径，所有模式通用
+  /workspace/skills/my-skill/ ← skill 目录
+  /workspace/agents/my-agent.md ← agent 文件
 ```
 
-Remote 模式下，runner 侧启动 MCP 进程，通过 WebSocket 双向转发 JSON-RPC。
+| 模式 | Sandbox 路径 → 实际文件系统 |
+|------|--------------------------|
+| none | `/workspace/src/main.go` → 宿主机 `/workspace/src/main.go`（或 SandboxWorkDir 对应目录） |
+| docker | `/workspace/src/main.go` → 容器内 `/workspace/src/main.go`（DockerSandbox 内部转换为宿主机路径） |
+| remote | `/workspace/src/main.go` → 用户本机 `/workspace/src/main.go`（通过 WebSocket/HTTP 传输给 Runner） |
 
-### 2.5 设计决策记录
+---
 
-| 决策点 | 选择 | 否决方案 |
-|--------|------|----------|
-| Exec vs Wrap | Exec | Wrap 返回 exec.Cmd，remote 无法实现 |
-| Spawn + Process 接口 | 不搞 | MCP SDK 已有 Transport 抽象，Spawn 是重复造轮子 |
-| Glob/Grep 双路径 | 保持策略分发 | local 用 Go 实现，sandbox 用 shell，不强制统一为 Exec |
-| path_guard remote 模式 | 方案 B 纯字符串校验 | runner 由用户自己运行，信任边界不同于 docker |
-| SandboxEnabled bool | 改为 SandboxMode string | 消除 PreferredSandbox 冗余，支持三种模式 |
+## 4. RemoteSandbox 详细设计
 
-## 3. Sandbox 实现
+### 4.1 架构
 
-### 3.1 NoneSandbox
-
-```go
-func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
-    // 构建命令
-    args := spec.Args
-    if spec.Shell {
-        shell, _ := s.GetShell(spec.UserID, spec.Workspace)
-        args = []string{shell, "-l", "-c", spec.Command}
-    }
-    if len(args) == 0 {
-        return nil, fmt.Errorf("no command specified")
-    }
-
-    execCtx, cancel := context.WithTimeout(ctx, effectiveTimeout(spec.Timeout))
-    defer cancel()
-
-    cmd := exec.CommandContext(execCtx, args[0], args[1:]...)
-    cmd.Dir = spec.Dir
-    cmd.Env = spec.Env  // 可选：合并 os.Environ()
-    if spec.Stdin != "" {
-        cmd.Stdin = strings.NewReader(spec.Stdin)
-    }
-
-    // 进程组管理（从 shell_unix.go 迁入）
-    setProcessAttrs(cmd)
-    cmd.Cancel = func() error { killProcess(cmd); return nil }
-    cmd.WaitDelay = 5 * time.Second
-
-    var stdout, stderr bytes.Buffer
-    cmd.Stdout = &stdout
-    cmd.Stderr = &stderr
-    err := cmd.Run()
-
-    return &ExecResult{
-        Stdout:   stdout.String(),
-        Stderr:   stderr.String(),
-        ExitCode: exitCode(cmd),
-        TimedOut: execCtx.Err() == context.DeadlineExceeded,
-    }, err
-}
-
-func (s *NoneSandbox) ReadFile(_ context.Context, path, _ string) ([]byte, error) {
-    return os.ReadFile(path)
-}
-
-func (s *NoneSandbox) WriteFile(_ context.Context, path string, data []byte, perm os.FileMode, _ string) error {
-    os.MkdirAll(filepath.Dir(path), 0o755)
-    return os.WriteFile(path, data, perm)
-}
+```
+┌─────────────────────────────────────────────────────┐
+│                    xbot Server                       │
+│                                                     │
+│  ┌──────────┐    WebSocket     ┌──────────────────┐ │
+│  │  Agent   │◄───────────────►│ RemoteSandbox    │ │
+│  │  Engine  │    (text/binary) │ (Sandbox impl)   │ │
+│  └──────────┘                  └──────┬───────────┘ │
+│                                       │             │
+│  ┌──────────┐    HTTP API      ┌──────┴───────────┐ │
+│  │ Feishu   │◄───────────────►│ Runner HTTP      │ │
+│  │ Upload   │    (multipart)   │ Server           │ │
+│  └──────────┘                  └──────────────────┘ │
+└─────────────────────────────────────────────────────┘
+                                        │
+                              WebSocket / HTTP
+                                        │
+┌─────────────────────────────────────────────────────┐
+│                User's Machine (Runner)              │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Runner CLI (main.go)                       │    │
+│  │  ├── WebSocket client → Server              │    │
+│  │  ├── HTTP server (file upload/download)     │    │
+│  │  ├── Exec handler → os/exec                 │    │
+│  │  ├── ReadFile handler → os.ReadFile         │    │
+│  │  ├── WriteFile handler → os.WriteFile       │    │
+│  │  ├── Stat handler → os.Stat                 │    │
+│  │  ├── ReadDir handler → os.ReadDir           │    │
+│  │  ├── MkdirAll handler → os.MkdirAll         │    │
+│  │  ├── Remove/RemoveAll → os.Remove/os.RemoveAll│   │
+│  │  └── Path guard → validate path safety       │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  /workspace/          ← user's workspace            │
+│  /workspace/skills/   ← user skills                 │
+│  /workspace/agents/   ← user agents                 │
+└─────────────────────────────────────────────────────┘
 ```
 
-### 3.2 DockerSandbox
+### 4.2 双通道文件传输
+
+RemoteSandbox 内部对大文件使用 HTTP 通道，对调用方完全透明。
+
+```
+ReadFile  ≤4MB  → WebSocket: {type:"read_file", path:"...", user_id:"..."}
+ReadFile  >4MB  → HTTP GET   http://runner:PORT/api/v1/files?path=...&user_id=...
+
+WriteFile ≤4MB  → WebSocket: {type:"write_file", path:"...", data:"<base64>", perm:0644, user_id:"..."}
+WriteFile >4MB  → HTTP POST  http://runner:PORT/api/v1/files (multipart)
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| HTTP 阈值 | 4MB | 超过此大小走 HTTP 通道 |
+| 最大文件大小 | 500MB | 超过直接报错，防止 OOM |
+
+**实现细节**：
+- RemoteSandbox.ReadFile/WriteFile 内部判断 `len(data) > 4*1024*1024`
+- WebSocket 消息用 base64 编码（二进制 WebSocket 帧在某些代理下不安全）
+- HTTP 通道用 multipart/form-data（支持流式传输）
+- Runner HTTP Server 监听 `127.0.0.1:{随机端口}`（启动时上报给 Server）
+
+### 4.3 WebSocket 协议
+
+```json
+// Server → Runner (request)
+{"id":"req_001","type":"exec","command":"ls","args":["-la"],"shell":true,"dir":"/workspace","env":[],"stdin":"","timeout":30,"user_id":"ou_xxx"}
+{"id":"req_002","type":"read_file","path":"/workspace/src/main.go","user_id":"ou_xxx"}
+{"id":"req_003","type":"write_file","path":"/workspace/src/main.go","data":"<base64>","perm":384,"user_id":"ou_xxx"}
+{"id":"req_004","type":"stat","path":"/workspace/src/main.go","user_id":"ou_xxx"}
+{"id":"req_005","type":"read_dir","path":"/workspace/skills","user_id":"ou_xxx"}
+{"id":"req_006","type":"mkdir_all","path":"/workspace/skills/new","perm":493,"user_id":"ou_xxx"}
+{"id":"req_007","type":"remove","path":"/workspace/skills/old","user_id":"ou_xxx"}
+{"id":"req_008","type":"remove_all","path":"/workspace/skills/old-dir","user_id":"ou_xxx"}
+
+// Runner → Server (response)
+{"id":"req_001","type":"exec_result","stdout":"...","stderr":"...","exit_code":0,"timed_out":false}
+{"id":"req_002","type":"file_content","data":"<base64>"}
+{"id":"req_002","type":"error","message":"file not found","code":"ENOENT"}
+{"id":"req_004","type":"file_info","name":"main.go","size":1234,"mode":420,"mod_time":"2026-03-26T00:00:00Z","is_dir":false}
+{"id":"req_005","type":"dir_entries","entries":[{"name":"my-skill","is_dir":true,"size":4096},{"name":"readme.md","is_dir":false,"size":256}]}
+```
+
+### 4.4 Runner 设计
+
+```
+runner/
+├── main.go              # CLI entry point
+├── client.go            # WebSocket client (connects to server)
+├── handler.go           # Request handlers (exec, read_file, etc.)
+├── server.go            # HTTP server (large file transfer)
+├── pathguard.go         # Path safety validation
+├── auth.go              # Authentication (token-based)
+└── go.mod
+```
+
+**Runner CLI 用法**：
+```bash
+xbot-runner --server ws://server:8080/ws --token <auth-token> --workspace /workspace
+```
+
+**Path Guard**：
+- Runner 侧执行路径安全检查
+- 拒绝路径逃逸：`/workspace/../../etc/passwd` → 拒绝
+- 只允许访问 workspace 目录及其子目录
+- 使用 `filepath.Clean` + `strings.HasPrefix` 验证
+
+---
+
+## 5. os.* 调用全景分类
+
+### 5.1 必须改走 Sandbox（涉及用户文件）
+
+#### 5.1.1 Offload hash 计算（2 处）
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `agent/offload.go` | 215 | `os.ReadFile(hostPath)` — hash 计算 | `Sandbox.ReadFile(ctx, readPath, userID)` |
+| `agent/offload.go` | 350 | `os.ReadFile(resolvedPath)` — InvalidateStaleReads | `Sandbox.ReadFile(ctx, readPath, userID)` |
+
+**注意**：offload JSON 自身的存储（行 188,237,242,311）保持 os.* 不变——offload JSON 是 server 内部状态。
+
+#### 5.1.2 文件工具（Read/Edit/Glob/Grep）
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `tools/read.go` | 185 | `os.ReadFile` | `Sandbox.ReadFile` |
+| `tools/edit.go` | 337 | `os.ReadFile` | `Sandbox.ReadFile` |
+| `tools/edit.go` | 376 | `os.MkdirAll(dir, 0755)` — 创建新文件前 | `Sandbox.MkdirAll` |
+| `tools/edit.go` | 382 | `os.WriteFile` — doCreate | `Sandbox.WriteFile` |
+| `tools/edit.go` | 364 | `os.WriteFile` — doReplace | `Sandbox.WriteFile` |
+| `tools/glob.go` | 198,217,259 | `os.Stat`/`filepath.Glob`/`filepath.WalkDir` | **删除 executeLocal，统一走 Sandbox.Exec** |
+| `tools/grep.go` | 388,509,536 | `os.Open`/`os.Stat`/`filepath.WalkDir` | **删除 executeLocal，统一走 Sandbox.Exec** |
+| `tools/cd.go` | 263 | `os.ReadDir(dir)` — buildDirectoryTree | `Sandbox.ReadDir` |
+
+#### 5.1.3 Skill/Agent 发现与加载
+
+| 文件 | 行号 | 操作 | 数据域 | 改为 |
+|------|------|------|--------|------|
+| `agent/skills.go` | 53 | `os.ReadDir(dir)` — 扫描 skill 目录 | 用户 skill `/workspace/skills` | `Sandbox.ReadDir`（通过缓存层） |
+| `agent/skills.go` | 67 | `os.Stat(skillFile)` — 检查 SKILL.md | 用户 skill | `Sandbox.Stat`（通过缓存层） |
+| `agent/skills.go` | 120 | `os.ReadFile(target)` — 读 SKILL.md | 用户 skill | `Sandbox.ReadFile`（通过缓存层） |
+| `agent/skills.go` | 153 | `os.ReadFile(path)` — 全局 skill | 全局 skill（server 目录） | **不改**，os.* |
+| `agent/agents.go` | 41 | `os.Stat(dir)` — 检查 agents 目录 | 用户 agent `/workspace/agents` | `Sandbox.Stat`（通过缓存层） |
+| `tools/skill.go` | 94 | `os.Stat(dir)` — 检查 skill 目录 | 用户 skill | `Sandbox.Stat` |
+| `tools/skill.go` | 101 | `os.ReadDir(c.hostRoot)` — resolveSkill 扫描 | 用户 skill | `Sandbox.ReadDir` |
+| `tools/skill.go` | 120 | `os.ReadFile(target)` — 加载 SKILL.md | 用户 skill | `Sandbox.ReadFile` |
+| `tools/skill.go` | 136 | `filepath.Walk(hostDir, ...)` — doListFiles | 用户 skill | **递归 Sandbox.ReadDir**（见 5.1.8） |
+| `tools/subagent_loader.go` | 14 | `os.ReadDir(dir)` — LoadAgentRoles 扫描 | 用户 agent 目录时 | `Sandbox.ReadDir`（用户目录分支） |
+| `tools/subagent_loader.go` | 37 | `os.ReadFile` — 加载 agent .md | 用户 agent | `Sandbox.ReadFile` |
+| `tools/subagent_roles.go` | 58 | `os.Stat(dir)` — 检查 agent 目录 | 用户 agent | `Sandbox.Stat` |
+
+**注意**：`tools/skill.go` 的 `resolveSkill` 同时处理全局和用户目录，需区分：全局目录用 os.ReadDir，用户目录用 Sandbox.ReadDir。`tools/subagent_loader.go` 的 `LoadAgentRoles` 同理。
+
+#### 5.1.4 Registry install/uninstall/publish（用户 workspace 端）
+
+**install（cache → 用户 workspace）**：
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `agent/registry.go` | 159 | `os.Stat(destDir)` — 检查已安装 | `Sandbox.Stat` |
+| `agent/registry.go` | 164 | `copyDir(src, dst)` — 递归复制含 symlink | **拆分为 server 读 + Sandbox 写**（见 6.3） |
+| `agent/registry.go` | 180 | `os.MkdirAll(agentsDir, 0o755)` — installAgent | `Sandbox.MkdirAll` |
+| `agent/registry.go` | 196 | `os.Stat(destFile)` — 检查已安装 | `Sandbox.Stat` |
+| `agent/registry.go` | 200 | `os.ReadFile(srcPath)` — 读 cache | **不改**（server 端读 cache） |
+| `agent/registry.go` | 204 | `os.WriteFile(destFile, data)` — 写到用户目录 | `Sandbox.WriteFile` |
+| `agent/registry.go` | 230-234 | `os.Stat` + `os.RemoveAll` — uninstallSkill | `Sandbox.Stat` + `Sandbox.RemoveAll` |
+| `agent/registry.go` | 243-248 | `os.Stat` + `os.Remove` — uninstallAgent | `Sandbox.Stat` + `Sandbox.Remove` |
+
+**publish（用户 workspace → server cache）**：
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `agent/registry.go` | 70 | `snapshotDirToCache(skillDir, cacheDir)` — skillDir 在用户本机 | **源端走 Sandbox 递归 ReadFile，目标端 os.WriteFile**（见 6.3） |
+| `agent/registry.go` | 55-72 | `publishSkill` — findSkillDirForUser 找用户 skill | 用户目录分支 os.Stat → Sandbox.Stat（见下） |
+| `agent/registry.go` | 88-95 | `publishAgent` — findAgentFile 找用户 agent | 用户目录分支 os.Stat → Sandbox.Stat（见下） |
+
+**search/List（扫描用户 workspace 下的 skill/agent）**：
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `agent/registry.go` | 304-316 | `scanSkillDir(dir)` — `os.ReadDir` | `Sandbox.ReadDir`（当 dir 是用户目录时） |
+| `agent/registry.go` | 325 | `scanAgentDir(dir)` — `os.ReadDir` | `Sandbox.ReadDir`（当 dir 是用户目录时） |
+| `agent/registry.go` | 389-396 | `findSkillDirForUser` — `os.Stat` | `Sandbox.Stat`（用户目录分支） |
+| `agent/registry.go` | 406-414 | `findAgentFile` — `os.Stat` | `Sandbox.Stat`（用户目录分支） |
+
+#### 5.1.5 Feishu 文件操作
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `tools/download.go` | 151 | `os.MkdirAll(filepath.Dir(outputPath), 0755)` | `Sandbox.MkdirAll` |
+| `tools/download.go` | 152+ | `os.Create` + `io.Copy` | `Sandbox.WriteFile` |
+| `tools/feishu_mcp/download.go` | 79,82 | `os.MkdirAll` + `os.Create` + `io.Copy` | `Sandbox.MkdirAll` + `Sandbox.WriteFile` |
+| `tools/feishu_mcp/file.go` | 77 | `os.Open` | `Sandbox.ReadFile` |
+| `tools/feishu_mcp/file.go` | 386 | `os.Stat`（检查文件大小） | `Sandbox.Stat` |
+| `tools/feishu_mcp/file.go` | 391+ | `__FEISHU_FILE__::hostPath` 协议 | **废除**，改为 Sandbox.ReadFile + Feishu API 直接上传 |
+
+#### 5.1.6 Agent 层写操作
+
+| 文件 | 行号 | 操作 | 改为 |
+|------|------|------|------|
+| `agent/bang_command.go` | 49 | `os.MkdirAll(workspaceRoot, 0o755)` — 创建用户工作目录 | `Sandbox.MkdirAll` |
+| `agent/bang_command.go` | 169 | `os.WriteFile` — 写 bang 输出 | `Sandbox.WriteFile` |
+| `agent/prompt_handler.go` | 63 | `os.WriteFile` — 写 prompt 文件 | `Sandbox.WriteFile` |
+
+#### 5.1.7 用户工作目录创建
+
+以下 5 处 `os.MkdirAll(workspaceRoot)` 在消息处理入口处创建用户工作目录。remote 模式下 workspaceRoot 指向用户本机，必须走 Sandbox：
+
+| 文件 | 行号 | 场景 | 改为 |
+|------|------|------|------|
+| `agent/agent.go` | 1395 | cron 回调创建用户工作目录 | `Sandbox.MkdirAll` |
+| `agent/agent.go` | 1441 | 正常消息处理创建用户工作目录 | `Sandbox.MkdirAll` |
+| `agent/bang_command.go` | 49 | bang 命令创建工作目录 | `Sandbox.MkdirAll`（同 5.1.6） |
+| `agent/interactive.go` | 346 | SubAgent 构建父 ToolContext | `Sandbox.MkdirAll` |
+| `agent/engine_wire.go` | 534 | wire 层确保用户工作目录 | `Sandbox.MkdirAll` |
+
+**实现方式**：Agent 持有 Sandbox 引用，在 workspaceRoot 创建处统一调用 `Sandbox.MkdirAll(ctx, workspaceRoot, 0o755, senderID)`。
+
+#### 5.1.8 filepath.WalkDir 替代方案
+
+`tools/skill.go:136` 的 `doListFiles` 和 `agent/registry.go:427` 的 `copyDir`/`snapshotDirToCache` 使用 `filepath.WalkDir` 递归遍历目录。Sandbox 接口没有 Walk 方法，需要替代方案：
+
+**递归 ReadDir 工具函数**：
 
 ```go
-func (s *dockerSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
-    container, err := s.getOrCreateContainer(spec.UserID, spec.Workspace)
-    if err != nil {
-        return nil, err
-    }
-
-    // 构建 docker exec 参数
-    dockerArgs := []string{"exec", "-i"}
-    if spec.Dir != "" {
-        dockerArgs = append(dockerArgs, "-w", spec.Dir)
-    }
-    for _, e := range spec.Env {
-        dockerArgs = append(dockerArgs, "-e", e)
-    }
-    dockerArgs = append(dockerArgs, container.name)
-
-    if spec.Shell {
-        shell, _ := s.GetShell(spec.UserID, spec.Workspace)
-        dockerArgs = append(dockerArgs, shell, "-l", "-c", spec.Command)
-    } else {
-        dockerArgs = append(dockerArgs, spec.Args...)
-    }
-
-    // 通过宿主机 exec.CommandContext 执行 docker 命令
-    execCtx, cancel := context.WithTimeout(ctx, effectiveTimeout(spec.Timeout))
-    defer cancel()
-
-    cmd := exec.CommandContext(execCtx, "docker", dockerArgs...)
-    if spec.Stdin != "" {
-        cmd.Stdin = strings.NewReader(spec.Stdin)
-    }
-    setProcessAttrs(cmd)
-    cmd.Cancel = func() error { killProcess(cmd); return nil }
-    cmd.WaitDelay = 5 * time.Second
-
-    var stdout, stderr bytes.Buffer
-    cmd.Stdout = &stdout
-    cmd.Stderr = &stderr
-    err = cmd.Run()
-
-    return &ExecResult{...}, err
+// WalkSandboxDir 递归遍历 Sandbox 目录，等价于 filepath.WalkDir。
+// fn 回调接收相对路径和 DirEntry。只回调文件（跳过目录本身）。
+func WalkSandboxDir(ctx context.Context, sb Sandbox, root, userID string, fn func(relPath string, entry DirEntry) error) error {
+    return walkSandboxDir(ctx, sb, root, "", userID, fn)
 }
 
-func (s *dockerSandbox) ReadFile(_ context.Context, path, userID string) ([]byte, error) {
-    container, _, err := s.getOrCreateContainer(userID, "")
+func walkSandboxDir(ctx context.Context, sb Sandbox, dir, relBase, userID string, fn func(string, DirEntry) error) error {
+    entries, err := sb.ReadDir(ctx, dir, userID)
     if err != nil {
-        return nil, err
+        return err // 目录不存在 → 返回错误
     }
-    // docker exec cat 读取文件
-    out, err := exec.Command("docker", "exec", container.name, "cat", path).Output()
-    return out, err
-}
-
-func (s *dockerSandbox) WriteFile(_ context.Context, path string, data []byte, perm os.FileMode, userID string) error {
-    container, _, err := s.getOrCreateContainer(userID, "")
-    if err != nil {
-        return err
-    }
-    // docker exec -i cat > file（替代 base64 hack）
-    cmd := exec.Command("docker", "exec", "-i", container.name,
-        "sh", "-c", fmt.Sprintf("cat > '%s' && chmod %o '%s'", shellEscape(path), perm))
-    cmd.Stdin = bytes.NewReader(data)
-    out, err := cmd.CombinedOutput()
-    if err != nil {
-        return fmt.Errorf("docker write: %w, output: %s", err, string(out))
+    for _, e := range entries {
+        relPath := filepath.Join(relBase, e.Name)
+        if e.IsDir {
+            if err := walkSandboxDir(ctx, sb, filepath.Join(dir, e.Name), relPath, userID, fn); err != nil {
+                return err
+            }
+        } else {
+            if err := fn(relPath, e); err != nil {
+                return err
+            }
+        }
     }
     return nil
 }
 ```
 
-**DockerSandbox.WriteFile 关键改进**：当前用 `echo '<base64>' | base64 -d > file`（edit.go:187-196），新方案用 `docker exec -i cat > file` + stdin 管道直接写入 bytes。消除 base64 编解码开销和 shell 转义问题。
+#### 5.1.9 Symlink 处理策略
 
-### 3.3 RemoteSandbox
+当前 `copyDir`（registry.go:427）使用 `os.Lstat` + `os.Readlink` + `os.Symlink` 处理符号链接。Sandbox 接口没有 Symlink 方法。
 
-```go
-type RemoteSandbox struct {
-    tokens     []string
-    listenAddr string
-    mu         sync.Mutex
-    runners    map[string]*runnerConn  // userID → active runner
-}
+**策略：copyDir 跨 Sandbox 复制时展开 symlink（follow symlinks）**
 
-type runnerConn struct {
-    conn      *websocket.Conn
-    mu        sync.Mutex
-    pending   map[string]chan *ExecResult  // requestID → response channel
-    processes map[string]*spawnedProcess   // requestID → MCP process
-}
+- **publish**（用户本机 → server cache）：使用 `WalkSandboxDir` + `Sandbox.ReadFile` 读取目标内容（自动 follow symlink）
+- **install**（server cache → 用户本机）：使用 `os.WalkDir` + `os.ReadFile` 读 cache，`Sandbox.WriteFile` 写目标（递归创建目录，不创建 symlink）
+- **结果**：所有 symlink 被展平为普通文件。这是可接受的——skill/agent 内部不应依赖 symlink 语义
 
-func (s *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
-    rc, err := s.getRunner(spec.UserID)
-    if err != nil {
-        return nil, err
-    }
-
-    reqID := uuid.New().String()
-    msg := protocol.Message{
-        ID:     reqID,
-        Type:   "exec",
-        Params: json.RawMessage(marshalExecParams(spec)),
-    }
-
-    ch := make(chan *ExecResult, 1)
-    rc.registerPending(reqID, ch)
-    defer rc.unregisterPending(reqID)
-
-    if err := rc.conn.WriteJSON(msg); err != nil {
-        return nil, fmt.Errorf("websocket write: %w", err)
-    }
-
-    select {
-    case result := <-ch:
-        return result, nil
-    case <-ctx.Done():
-        return nil, ctx.Err()
-    }
-}
-
-func (s *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]byte, error) {
-    // 通过 WebSocket 发送 read_file 请求
-    result, err := s.sendRequest(ctx, userID, "read_file", map[string]string{"path": path})
-    if err != nil {
-        return nil, err
-    }
-    return base64.StdEncoding.DecodeString(result.ContentBase64)
-}
-
-func (s *RemoteSandbox) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
-    _, err := s.sendRequest(ctx, userID, "write_file", map[string]interface{}{
-        "path":          path,
-        "content_base64": base64.StdEncoding.EncodeToString(data),
-        "mode":          int(perm),
-    })
-    return err
-}
-```
-
-## 4. WebSocket 协议
-
-### 4.1 认证
-
-```json
-→ {"type":"auth","token":"xxx","workspace":"/home/user/project","runner_id":"runner-1"}
-← {"type":"auth_ok","user_id":"user-123"}
-```
-
-### 4.2 exec
-
-```json
-→ {"id":"req-1","type":"exec","params":{"args":["/bin/sh","-l","-c","ls -la"],"dir":"/workspace","env":[],"stdin":"","timeout":120}}
-← {"id":"req-1","type":"result","data":{"stdout":"...","stderr":"","exit_code":0,"timed_out":false}}
-```
-
-### 4.3 read_file / write_file
-
-```json
-→ {"id":"req-2","type":"read_file","params":{"path":"/workspace/file.go"}}
-← {"id":"req-2","type":"result","data":{"content_base64":"...","error":null}}
-
-→ {"id":"req-3","type":"write_file","params":{"path":"/workspace/file.go","content_base64":"...","mode":420}}
-← {"id":"req-3","type":"result","data":{"error":null}}
-```
-
-文件内容 base64 编码（ReadFile 返回 `[]byte`，二进制文件也走这个路径）。
-
-### 4.4 spawn（MCP Transport 内部使用）
-
-```json
-→ {"id":"mcp-1","type":"spawn","params":{"command":"npx","args":["-y","gopls-mcp"],"dir":"/workspace","env":[]}}
-← {"id":"mcp-1","type":"data","data":"<JSON-RPC text>","stream":"stdout"}
-← {"id":"mcp-1","type":"exit","data":0}
-→ {"id":"mcp-1","type":"kill"}
-```
-
-数据直接传输字符串（MCP 协议是文本 JSON-RPC，不需要 base64）。
-
-### 4.5 心跳
-
-```json
-→ {"type":"ping"}
-← {"type":"pong"}
-```
-
-间隔 30s。超过 3 次未响应则断开重连。
-
-## 5. 工具改造
-
-### 5.1 ShellTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| 命令执行 | `sandbox.Wrap()` + `exec.CommandContext()` + setProcessAttrs/killProcess/WaitDelay | `sandbox.Exec(ExecSpec{Shell:true, Command:cmd, Dir:...})` |
-| persistEnvFromCommand | 3× `RunInSandboxWithShell` | 3× `sandbox.Exec(ExecSpec{Shell:true, Command:...})` |
-| Cd 注入 | `cd <dir> && <cmd>` 前缀拼接 | `spec.Dir = toolCtx.CurrentDir`（DockerSandbox.Exec 用 `-w` 参数） |
-
-**消除代码**：`exec.CommandContext` 调用（~40行）、setProcessAttrs/killProcess 直接调用。
-
-### 5.2 ReadTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| sandbox 读取 | `RunInSandboxWithShell("cat -n " + path)` | `sandbox.ReadFile(ctx, path, userID)`，服务端添加行号 |
-
-**消除代码**：`executeInSandbox` 方法（~30行）。
-
-### 5.3 EditTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| sandbox 读文件 | `sandboxReadFile` = `RunInSandboxRaw("cat " + path)` | `sandbox.ReadFile()` |
-| sandbox 写文件 | `sandboxWriteFile` = base64 编码 + `echo '<base64>' \| base64 -d > file` | `sandbox.WriteFile()` |
-| sandbox 新建文件 | `sandboxWriteNewFile` = base64 编码 + mkdir + 写入 | `sandbox.WriteFile()`（WriteFile 内部 MkdirAll） |
-
-**消除代码**：`sandboxReadFile`/`sandboxWriteFile`/`sandboxWriteNewFile`（~32行 base64 hack）。
-
-### 5.4 GlobTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| sandbox 执行 | `RunInSandboxWithShell("find ...")` | `sandbox.Exec(ExecSpec{Args:["find", ...]})` |
-| local 执行 | 纯 Go 实现（`filepath.WalkDir` + glob 匹配） | **保留不变** |
-
-### 5.5 GrepTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| sandbox 执行 | `RunInSandboxRaw("grep ...")` | `sandbox.Exec(ExecSpec{Args:["grep", ...]})` |
-| local 执行 | 纯 Go 实现（`searchFile` + `convertGoRE2ToERE`） | **保留不变** |
-
-### 5.6 CdTool
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| sandbox 目录检测 | `executeInSandbox` = `RunInSandboxWithShell("ls ...")` | `sandbox.Exec(ExecSpec{Args:[shell, "-c", "ls ..."]})` |
-| buildDirectoryTree | `RunInSandboxWithShell("ls ...")` | `sandbox.Exec(...)` |
-| detectProjectContext | `RunInSandboxWithShell(...)` | `sandbox.Exec(...)` |
-
-### 5.7 bang_command.go
-
-| 改动点 | 当前 | 改造后 |
-|--------|------|--------|
-| 命令执行 | `sandbox.GetShell()` + `sandbox.Wrap()` + `exec.CommandContext()` + setProcessAttrs/killProcess/WaitDelay | `sandbox.Exec(ExecSpec{Shell:true, Command:cmd, Dir:workspaceRoot, Timeout:120s, Workspace:workspaceRoot, UserID:senderID})` |
-
-**消除代码**：整个 `executeBangCommand` 方法从 50 行缩减到 ~10 行。
-
-## 6. 配置变更
-
-```go
-// config/config.go
-
-type SandboxConfig struct {
-    Mode           string        // "none", "docker", "remote"
-    DockerImage    string        // Docker 模式镜像
-    HostWorkDir    string        // DinD 宿主机路径
-    IdleTimeout    time.Duration // 空闲超时
-
-    // === 新增：Remote 模式 ===
-    RemoteTokens   []string // 允许的 runner token
-    RemoteListen   string   // WebSocket 监听地址（如 ":8090"）
-}
-```
-
-环境变量：
-```bash
-SANDBOX_MODE=remote
-SANDBOX_REMOTE_TOKENS=token1,token2
-SANDBOX_REMOTE_LISTEN=:8090
-```
-
-## 7. 文件变更清单
-
-### 新增
-
-| 文件 | 行数 | 说明 |
-|------|------|------|
-| `tools/exec.go` | ~60 | ExecSpec, ExecResult |
-| `tools/sandbox.go` | ~40 | 新 Sandbox 接口 |
-| `tools/remote_sandbox.go` | ~350 | RemoteSandbox + WebSocket server |
-| `tools/remote_sandbox_test.go` | ~250 | 单元测试 |
-| `tools/mcp_transport.go` | ~150 | MCP Transport 工厂 + WebSocketTransport |
-| `runner/main.go` | ~100 | Runner CLI |
-| `runner/config.go` | ~50 | Runner 配置 |
-| `runner/client.go` | ~200 | WebSocket 客户端 |
-| `runner/handler.go` | ~250 | 请求处理器 |
-| `runner/protocol.go` | ~100 | 协议消息类型 |
-
-### 重写
-
-| 文件 | 说明 |
-|------|------|
-| `tools/sandbox_runner.go` | NoneSandbox/DockerSandbox 实现新接口；删除 Wrap 方法 |
-
-### 大改
-
-| 文件 | 说明 |
-|------|------|
-| `tools/shell.go` | exec.CommandContext → Sandbox.Exec；persistEnvFromCommand；Cd 注入 → spec.Dir |
-| `tools/edit.go` | 删除 base64 hack → Sandbox.ReadFile/WriteFile |
-| `tools/download.go` | os.Create+io.Copy → Sandbox.WriteFile |
-| `tools/feishu_mcp/download.go` | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile |
-| `tools/feishu_mcp/file.go` | SendFileTool 改内存上传；UploadFileTool → Sandbox.ReadFile |
-
-### 中改
-
-| 文件 | 说明 |
-|------|------|
-| `tools/read.go` | sandbox 分支 → Sandbox.ReadFile |
-| `tools/glob.go` | sandbox shell → Sandbox.Exec（保留 local Go 实现） |
-| `tools/grep.go` | sandbox shell → Sandbox.Exec（保留 local Go 实现） |
-| `tools/cd.go` | executeInSandbox → Sandbox.Exec |
-| `tools/mcp_common.go` | sandbox.Wrap → MCP Transport 工厂 |
-| `tools/path_guard.go` | 新增 remote 路径校验 |
-| `tools/interface.go` | ToolContext: SandboxEnabled bool → SandboxMode string |
-| `tools/skill.go` | sandboxBaseDir 适配 remote |
-| `tools/download.go` | SandboxToHostPath 适配 remote |
-| `agent/bang_command.go` | Wrap → Sandbox.Exec |
-| `agent/agent.go` | SandboxEnabled → SandboxMode |
-| `config/config.go` | SandboxConfig 增加 Remote 字段 |
-| `main.go` | SandboxMode 替换；配置适配 |
-
-### 删除
-
-| 文件 | 说明 |
-|------|------|
-| `tools/sandbox_exec.go` (163行) | RunInSandbox 系列全部被 Sandbox.Exec 替代 |
-
-### 测试修改
-
-| 文件 | 说明 |
-|------|------|
-| `tools/sandbox_unit_test.go` (429行) | 适配 SandboxMode |
-| 其他测试文件 | SandboxEnabled → SandboxMode |
-
-### 不动
+### 5.2 保持 server 本地（不改）
 
 | 文件 | 原因 |
 |------|------|
-| `tools/shell_unix.go` / `shell_windows.go` | setProcessAttrs/killProcess 移入 NoneSandbox.Exec 内部 |
-| `tools/shell_env.go` | parseEnvFileLines/parseExportStatements 保留 |
+| `agent/offload.go:188,237,242,311` | offload JSON 自身存储（server 内部状态） |
+| `agent/context.go:66,71,94` | server prompt 模板（`.xbot/prompts/`） |
+| `agent/skills.go:153` | 全局 skill 定义（server 目录） |
+| `agent/registry.go:144,185,356,370,374` | server 缓存（`.xbot/registry/`） |
+| `agent/registry.go:200` | 读 server cache（publish/install 的源端读 cache） |
+| `config/*` | server 配置 |
+| `storage/*` | 数据库迁移和操作 |
+| `logger/*` | 日志系统 |
+| `channel/*` | channel handler 本地文件 |
+| `tools/manage_tools.go:265` | MCP 配置读取（server 本地） |
+| `tools/session_mcp.go:358,377` | MCP 配置读取（server 本地） |
+| `tools/mcp_common.go:248,499` | MCP bin 目录检查（server 本地） |
+| `tools/logs.go:126` | 日志目录扫描（`.xbot/logs/`，server 内部） |
 
-## 8. 实施阶段
+### 5.3 Remote 模式下跳过
 
-### Phase 1：接口定义 + NoneSandbox
+| 文件 | 原因 |
+|------|------|
+| `tools/skill_sync.go` | 全局 skill 同步到 workspace → remote 不需要（server 端直接注入 system prompt） |
 
-1. 新建 `tools/exec.go`（ExecSpec, ExecResult）
-2. 新建 `tools/sandbox.go`（Sandbox 接口）
-3. `tools/sandbox_runner.go`：NoneSandbox 实现新接口（Exec/ReadFile/WriteFile）
-4. 保留旧接口过渡（Sandbox 旧方法共存）
+### 5.4 删除
 
-**验收**：`go build` 通过，现有测试通过
+| 文件 | 原因 |
+|------|------|
+| `tools/workspace_scope.go` 中的 `SandboxToHostPath`/`HostToSandboxPath` | 路径语义统一为 sandbox 路径，转换是 Sandbox 实现内部细节 |
+| `tools/glob.go` 中的 `executeLocal` | 统一走 Sandbox.Exec |
+| `tools/grep.go` 中的 `executeLocal` | 统一走 Sandbox.Exec |
+| `tools/feishu_mcp/file.go` 中的 `__FEISHU_FILE__::` 协议 | 工具层直接读+上传 |
 
-### Phase 2：工具改造（全部 6 个）
+---
 
-1. ShellTool → Sandbox.Exec（含 persistEnvFromCommand 3 处）
-2. ReadTool → Sandbox.ReadFile
-3. EditTool → Sandbox.ReadFile/WriteFile（删除 base64 hack）
-4. GlobTool → Sandbox.Exec（sandbox 部分）
-5. GrepTool → Sandbox.Exec（sandbox 部分）
-6. CdTool → Sandbox.Exec
+## 6. 关键子系统改造
 
-**验收**：none 模式下所有工具测试通过
+### 6.1 Offload 穿越 Sandbox
 
-### Phase 3：DockerSandbox + 删除旧代码
+**问题**：OffloadStore 当前用 `os.ReadFile` 计算 hash 和检测 stale，remote 模式下文件在用户本机。
 
-1. DockerSandbox 实现新接口
-2. 删除旧 Wrap 方法和 `tools/sandbox_exec.go`
-3. 删除 SandboxEnabled → SandboxMode 过渡
-
-**验收**：docker 模式下所有测试通过
-
-### Phase 4：bang_command + MCP Transport 工厂
-
-1. bang_command.go → Sandbox.Exec
-2. mcp_common.go → NewMCPTransport 工厂
-3. main.go / agent.go → SandboxMode
-
-**验收**：`go test ./...` 全绿
-
-### Phase 5：RemoteSandbox 服务端
-
-1. `tools/remote_sandbox.go`（WebSocket server）
-2. `tools/mcp_transport.go`（WebSocketTransport）
-3. `config/config.go` Remote 配置
-4. 单元测试
-
-**验收**：`SANDBOX_MODE=remote` 启动成功
-
-### Phase 6：Runner CLI
-
-1. `runner/` 完整实现
-2. 端到端测试
-
-**验收**：runner 连接 + agent 执行命令
-
-### Phase 7：收尾
-
-1. path_guard.go remote 适配
-2. 文档更新
-3. 安全加固（非 TLS 告警、token 审计日志）
-
-## 9. 风险与缓解
-
-| 风险 | 严重度 | 缓解 |
-|------|--------|------|
-| SandboxMode 替换 176 处引用 | 中 | 分步：先加字段并存，逐步替换，最后删旧字段 |
-| DockerSandbox WriteFile stdin 管道 | 低 | V1 够用，大文件后续优化为 docker cp |
-| WebSocket 长连接不稳定 | 中 | 心跳 30s + 自动重连 + 指数退避 |
-| Runner 断连时命令执行中 | 低 | Exec 返回 runner 不可用错误 |
-| path_guard remote 安全性 | 低 | 方案 B 纯字符串校验，信任 runner |
-
-## 10. 设计评审记录
-
-### Brainstorm（11 轮）
-
-1. **核心架构选型**：Exec Provider vs Tool Provider → Exec Provider
-2. **Wrap vs Exec**：Wrap 返回 exec.Cmd 不可远程化 → Exec 统一
-3. **Spawn + Process**：试图替代 exec.Cmd → MCP SDK 已有 Transport 抽象，否决
-4. **Glob/Grep 双路径**：不强制统一，保留策略分发
-5. **path_guard remote 模式**：方案 B 纯字符串校验
-6. **最终确认**：Exec-only + MCP Transport 工厂
-7. **IO 全景梳理**：识别 7 处需穿越 Sandbox 的 IO + 6 处 server 本地 IO
-8. **文件传输双通道**：WebSocket base64（≤4MB）+ Runner HTTP API（>4MB）
-9. **offload hash 退化**：确认 remote 模式下自动退化，无需改动代码
-10. **SendFileTool 改造**：`__FEISHU_FILE__::hostPath` 协议在 remote 模式下不工作 → 工具层内存上传
-11. **V3 最终确认**：IO 全景 + 文件传输方案 + 文件变更清单更新
-
-### 门下省审核（3 轮）
-
-**V1 驳回**：遗漏 Wrap 语义、管理方法、bang_command/mcp_common/agent.go/main.go、ShellTool 特殊逻辑
-
-**V2 通过**：所有问题已修正
-
-**V3 通过**：IO 全景与文件传输方案补充，文件变更清单更新（download.go、feishu_mcp/）
-
-
-## 11. IO 全景与文件传输方案（V3 补充）
-
-> V2 方案聚焦 Exec/ReadFile/WriteFile 接口设计，但未系统梳理所有涉及文件 IO 的工具。本章补充 IO 全景分析、大文件传输双通道方案、offload 退化策略。
-
-### 11.1 IO 操作全景
-
-#### A. 需要穿越 Sandbox 的 IO（7 处）
-
-| 工具 | 操作 | 文件位置 | 改造方案 | 大小限制 |
-|------|------|----------|----------|----------|
-| EditTool | 读/写文件 | edit.go:177-199 | sandboxReadFile/sandboxWriteFile → Sandbox.ReadFile/WriteFile | < 4MB（源码） |
-| ReadTool | 读文件 | read.go:126-151 | executeInSandbox(cat -n) → Sandbox.ReadFile + 服务端加行号 | < 4MB |
-| DownloadFileTool | 下载飞书文件到 workspace | download.go:91-107 | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile | ≤100MB |
-| feishu_mcp/DownloadFileTool | 同上 | feishu_mcp/download.go:79-114 | 同上 | ≤100MB |
-| SendFileTool | 从 workspace 读文件发送飞书 | feishu_mcp/file.go:361-405 | os.Stat+hostPath协议 → Sandbox.ReadFile + 内存上传 | ≤100MB |
-| UploadFileTool | 上传文件到飞书云盘 | feishu_mcp/file.go:55-134 | os.Open+io.ReadAll → Sandbox.ReadFile | ≤100MB |
-| offload.go hash | 读文件计算 hash | offload.go:214-215 | 保留现有代码不改动，remote 模式自动退化为无 stale 检测 | N/A |
-
-#### B. 不需要穿越的 IO（server 本地，不改）
-
-| 位置 | 操作 | 原因 |
-|------|------|------|
-| agent/skills.go, agent/agents.go | 读 skill/agent 定义 | server 本地资源 |
-| agent/offload.go:170,188 | 写/读 offload 索引 | server 本地状态 |
-| agent/bang_command.go:169 | 写 bang 命令输出 | server 本地日志 |
-| agent/context.go:66,71 | 读 prompt 文件 | server 本地文件 |
-| agent/engine.go, prompt_handler.go | 写 prompt 文件 | server 本地文件 |
-| config/* | 读配置 | server 本地配置 |
-
-### 11.2 Sandbox 接口（不变）
-
-保持 V2 接口定义不变：
+**方案**：
 
 ```go
-type Sandbox interface {
-    Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error)
-    ReadFile(ctx context.Context, path string, userID string) ([]byte, error)
-    WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error
-    GetShell(userID string, workspace string) (string, error)
-    Name() string
-    Close() error
-    CloseForUser(userID string) error
-    IsExporting(userID string) bool
-    ExportAndImport(userID string) error
+// OffloadStore 不持有 Sandbox — 通过参数传入（方案 X2）
+type OffloadStore struct {
+    config   OffloadConfig
+    sessions sync.Map
+}
+
+// MaybeOffload: 新签名
+func (s *OffloadStore) MaybeOffload(
+    ctx context.Context,
+    sessionKey, toolName, args, result string,
+    resolvedReadPath string,  // 由 engine.go 预解析的绝对路径
+    fs tools.Sandbox,         // Sandbox 实例
+) (OffloadedResult, bool)
+
+// InvalidateStaleReads: 新签名
+func (s *OffloadStore) InvalidateStaleReads(
+    ctx context.Context,
+    sessionKey string,
+    fs tools.Sandbox,
+) []string
+```
+
+**engine.go 调用改造**：
+
+```go
+// engine.go (改造后)
+resolvedReadPath := ""
+if tc.Name == "Read" {
+    if p := extractJSONStringField(tc.Arguments, "path"); p != "" {
+        cwd := cfg.Session.GetCurrentDir()
+        if cwd == "" {
+            cwd = cfg.SandboxWorkDir
+        }
+        if filepath.IsAbs(p) {
+            resolvedReadPath = p
+        } else {
+            resolvedReadPath = filepath.Join(cwd, p)
+        }
+    }
+}
+offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(
+    ctx, offloadSessionKey, tc.Name, tc.Arguments, offloadContent,
+    resolvedReadPath, cfg.Sandbox,
+)
+```
+
+**offload.go 内部改造**：
+
+```go
+// 新代码：hash 计算
+if resolvedReadPath != "" && fs != nil {
+    if rawData, err := fs.ReadFile(ctx, resolvedReadPath, userID); err == nil {
+        entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256(rawData))
+    }
+    // hash 失败 → 不设置 ContentHash → stale 检测不生效
+    // 这是正确行为：文件不可读时无法判断是否 stale
 }
 ```
 
-### 11.3 Remote 实现内部双通道
+### 6.2 Skill/Agent 发现
 
-RemoteSandbox 的 ReadFile/WriteFile 内部自动选择传输通道，对调用方完全透明：
+**问题**：remote 模式下用户 skill/agent 在用户本机 `/workspace/skills` 和 `/workspace/agents`。
 
-| 通道 | 适用场景 | 大小阈值 | 实现方式 |
-|------|----------|----------|----------|
-| **WebSocket + base64** | EditTool/ReadTool 等工具内 IO | ≤ 4MB | 现有 protocol `read_file`/`write_file` 消息 |
-| **Runner HTTP API** | DownloadFileTool/UploadFileTool/SendFileTool | > 4MB | 新增 HTTP multipart/form-data 上传 + 二进制下载 |
+**方案**：SkillStore 缓存 + TTL
 
 ```go
-func (s *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]byte, error) {
-    rc, err := s.getRunner(userID)
-    if err != nil {
-        return nil, err
+type SkillStore struct {
+    workDir    string
+    globalDirs []string
+    sandbox    tools.Sandbox
+    catalog    *skillCatalog
+    catalogTime time.Time
+    mu         sync.RWMutex
+}
+
+func (s *SkillStore) GetCatalog(ctx context.Context, senderID string) string {
+    s.mu.RLock()
+    if s.catalog != nil && time.Since(s.catalogTime) < 5*time.Minute {
+        cat := s.catalog
+        s.mu.RUnlock()
+        return cat.render(senderID)
+    }
+    s.mu.RUnlock()
+    return s.refreshCatalog(ctx, senderID)
+}
+
+func (s *SkillStore) refreshCatalog(ctx context.Context, senderID string) string {
+    var entries []skillEntry
+
+    // 1. 全局 skill → server 本地 os.ReadDir + os.ReadFile
+    for _, dir := range s.globalDirs {
+        entries = append(entries, s.scanGlobalSkills(dir)...)
     }
 
-    // 小文件：走 WebSocket
-    // 大文件：走 HTTP（runner 暴露 HTTP 端口，通过 rc.httpAddr 访问）
-    // 内部自动选择，调用方无感知
+    // 2. 用户 skill → Sandbox.ReadDir + Sandbox.ReadFile
+    if s.sandbox != nil {
+        userSkillsDir := "/workspace/skills"
+        if dirEntries, err := s.sandbox.ReadDir(ctx, userSkillsDir, senderID); err == nil {
+            for _, de := range dirEntries {
+                if de.IsDir {
+                    entry := s.readSkillDefViaSandbox(ctx, filepath.Join(userSkillsDir, de.Name), senderID)
+                    entries = append(entries, entry)
+                }
+            }
+        }
+    }
+
+    s.mu.Lock()
+    s.catalog = buildCatalog(entries)
+    s.catalogTime = time.Now()
+    s.mu.Unlock()
+
+    return s.catalog.render(senderID)
+}
+
+func (s *SkillStore) InvalidateCache() {
+    s.mu.Lock()
+    s.catalog = nil
+    s.mu.Unlock()
 }
 ```
 
-### 11.4 Runner HTTP API
+### 6.3 Registry install/uninstall/publish
 
-Runner 在 WebSocket 连接建立后，同时监听一个本地 HTTP 端口，供 server 通过 HTTP 上传/下载大文件：
+**问题**：install 从 server cache 复制到用户 workspace，publish 从用户 workspace 复制到 server cache，uninstall 从用户 workspace 删除。涉及跨 Sandbox 文件复制。
 
-```
-POST /api/v1/files/upload   multipart/form-data → 写入 runner 本地文件
-GET  /api/v1/files/download?path=xxx             → 下载 runner 本地文件（binary stream）
-```
-
-**认证**：复用 WebSocket token，HTTP header `Authorization: Bearer <token>`
-
-**path 安全校验**：限制在 workspace 目录内（复用 path_guard 逻辑，Phase 7 安全加固阶段实现）
-
-**Runner HTTP 地址发现**：runner 在 WebSocket `auth` 消息中上报 HTTP 端口，server 通过 runnerConn 缓存。
-
-```json
-→ {"type":"auth","token":"xxx","workspace":"/home/user/project","runner_id":"runner-1","http_port":8091}
-← {"type":"auth_ok","user_id":"user-123"}
-```
-
-### 11.5 offload hash 退化方案
-
-remote 模式下 offload hash 自动退化，**代码不改动**：
-
-1. `offload.go:214-215` 中 `os.ReadFile(hostPath)` 在 remote 模式下失败（文件在 runner 本地，server 无访问权限）
-2. `ContentHash = ""` → `InvalidateStaleReads` 调用时跳过（`offload.go:343` 已有守卫：`if hash == "" { continue }`）
-3. 行为正确退化：remote 模式下不检测 stale reads，功能不受影响
-
-**后续恢复路径**（非必须，优先级低）：
-- `RunConfig` 注入 `Sandbox` 引用 / `FileReadFunc` 闭包
-- offload hash 计算通过 `Sandbox.ReadFile` 获取文件内容
-
-### 11.6 SendFileTool 改造细节
-
-**当前问题**：`__FEISHU_FILE__::hostPath` 协议 — SendFileTool 将文件路径写入 protocol message，channel handler 在 server 端读 `hostPath` 再发送飞书。remote 模式下 server 读不到用户文件（文件在 runner 本地）。
-
-**改造方案**：
-
-1. SendFileTool 通过 `Sandbox.ReadFile` 将文件读到 server 内存（`[]byte`）
-2. 直接在工具层用飞书 API 上传文件（不走 protocol message 中转）
-3. 需要 `ToolContext` 新增 `Sandbox` 引用（用于工具层调用 ReadFile）
+**方案**：RegistryManager 接收 Sandbox 引用。
 
 ```go
-// 改造前（protocol message 中转）
-content := fmt.Sprintf("__FEISHU_FILE__::%s", hostPath)
-
-// 改造后（工具层内存上传）
-data, err := toolCtx.Sandbox.ReadFile(ctx, filePath, toolCtx.UserID)
-if err != nil {
-    return nil, err
+type RegistryManager struct {
+    workDir     string
+    sharedStore *sqlite.SharedStore
+    sandbox     tools.Sandbox  // 新增
 }
-// 直接调用飞书 API 上传 data
-uploadResult, err := toolCtx.FeishuClient.UploadFile(ctx, data, filename)
 ```
 
-### 11.7 文件变更清单更新
+**installSkill — server cache (os.*) → user workspace (Sandbox.*)**：
 
-V3 新增/修改的文件变更（补充 §7）：
+```go
+func (rm *RegistryManager) installSkill(ctx context.Context, entry *sqlite.SharedEntry, senderID string) error {
+    destDir := filepath.Join("/workspace/skills", entry.Name)
 
-**新增**：
+    // 检查目标：Sandbox
+    if _, err := rm.sandbox.Stat(ctx, destDir, senderID); err == nil {
+        return fmt.Errorf("skill %q already installed", entry.Name)
+    }
 
-| 文件 | 说明 |
-|------|------|
-| `runner/http_server.go` | Runner HTTP 文件传输服务（upload/download 端点） |
+    // 读源：server cache (os.WalkDir 递归读)
+    var files []struct{ RelPath string; Data []byte }
+    err := filepath.WalkDir(entry.SourcePath, func(path string, d fs.DirEntry, err error) error {
+        if err != nil { return err }
+        if d.IsDir() { return nil }
+        rel, _ := filepath.Rel(entry.SourcePath, path)
+        data, err := os.ReadFile(path) // follow symlink automatically
+        if err != nil { return err }
+        files = append(files, struct{ RelPath string; Data []byte }{rel, data})
+        return nil
+    })
+    if err != nil { return fmt.Errorf("read cache: %w", err) }
 
-**大改（新增到 §7 大改列表）**：
+    // 写目标：Sandbox（递归创建目录 + 写文件）
+    for _, f := range files {
+        dstPath := filepath.Join(destDir, f.RelPath)
+        if err := rm.sandbox.MkdirAll(ctx, filepath.Dir(dstPath), 0o755, senderID); err != nil {
+            return fmt.Errorf("mkdir: %w", err)
+        }
+        if err := rm.sandbox.WriteFile(ctx, dstPath, f.Data, 0o644, senderID); err != nil {
+            return fmt.Errorf("write: %w", err)
+        }
+    }
+    return nil
+}
+```
 
-| 文件 | 说明 |
-|------|------|
-| `tools/download.go` | os.Create+io.Copy → Sandbox.WriteFile |
-| `tools/feishu_mcp/download.go` | os.MkdirAll+os.Create+io.Copy → Sandbox.WriteFile |
-| `tools/feishu_mcp/file.go` | SendFileTool 改内存上传（不走 hostPath 协议）；UploadFileTool → Sandbox.ReadFile |
+**publishSkill — user workspace (Sandbox.*) → server cache (os.*)**：
 
-**中改（新增到 §7 中改列表）**：
+```go
+func (rm *RegistryManager) publishSkill(ctx context.Context, name, author string) error {
+    skillDir := rm.findSkillDirForUser(ctx, name, author)
+    if skillDir == "" {
+        return fmt.Errorf("skill %q not found", name)
+    }
 
-| 文件 | 说明 |
-|------|------|
-| `tools/remote_sandbox.go` | ReadFile/WriteFile 增加双通道自动选择逻辑（≤4MB WebSocket, >4MB HTTP） |
-| `tools/interface.go` | ToolContext 新增 Sandbox 引用字段（供 SendFileTool 使用） |
-| `runner/client.go` | auth 消息增加 http_port 上报 |
-| `runner/handler.go` | 新增 HTTP 文件上传/下载处理 |
-| `runner/protocol.go` | auth 消息增加 HttpPort 字段 |
+    cacheDir := rm.registryCacheDir("skill", name)
+
+    // 读源：Sandbox 递归读（WalkSandboxDir）
+    var files []struct{ RelPath string; Data []byte }
+    err := WalkSandboxDir(ctx, rm.sandbox, skillDir, author, func(relPath string, entry DirEntry) error {
+        fullPath := filepath.Join(skillDir, relPath)
+        data, err := rm.sandbox.ReadFile(ctx, fullPath, author)
+        if err != nil { return err }
+        files = append(files, struct{ RelPath string; Data []byte }{relPath, data})
+        return nil
+    })
+    if err != nil { return fmt.Errorf("read skill: %w", err) }
+
+    // 写目标：server cache (os.*)
+    if err := os.RemoveAll(cacheDir); err != nil && !os.IsNotExist(err) {
+        return fmt.Errorf("clean cache: %w", err)
+    }
+    for _, f := range files {
+        dstPath := filepath.Join(cacheDir, f.RelPath)
+        if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+            return fmt.Errorf("mkdir cache: %w", err)
+        }
+        if err := os.WriteFile(dstPath, f.Data, 0o644); err != nil {
+            return fmt.Errorf("write cache: %w", err)
+        }
+    }
+    // ... publish to shared store
+}
+```
+
+**findSkillDirForUser — 用户目录分支走 Sandbox**：
+
+```go
+func (rm *RegistryManager) findSkillDirForUser(ctx context.Context, name, senderID string) string {
+    // 先查全局（server 本地）
+    if dir := rm.findSkillDir(name); dir != "" {
+        return dir
+    }
+    // 再查用户目录（Sandbox）
+    if senderID != "" && rm.sandbox != nil {
+        path := filepath.Join("/workspace/skills", name)
+        if _, err := rm.sandbox.Stat(ctx, filepath.Join(path, "SKILL.md"), senderID); err == nil {
+            return path
+        }
+    }
+    return ""
+}
+```
+
+### 6.4 Feishu 文件操作
+
+**方案**：废除 `__FEISHU_FILE__::` 协议，工具层直接读+上传。
+
+```go
+// DownloadFile (Feishu → 用户本机)
+func downloadAndSave(ctx context.Context, sandbox tools.Sandbox, userID, filePath string, feishuData []byte) error {
+    if err := sandbox.MkdirAll(ctx, filepath.Dir(filePath), 0o755, userID); err != nil {
+        return err
+    }
+    return sandbox.WriteFile(ctx, filePath, feishuData, 0o644, userID)
+}
+
+// UploadFile/SendFile (用户本机 → Feishu)
+func uploadFile(ctx context.Context, sandbox tools.Sandbox, userID, filePath string) (string, error) {
+    data, err := sandbox.ReadFile(ctx, filePath, userID)
+    if err != nil { return "", err }
+    return feishuClient.UploadFile(data, filepath.Base(filePath))
+}
+```
+
+**双跳不可避免**：server ↔ Feishu 是第一跳（需要 token），server ↔ Runner 是第二跳（Sandbox API）。这是 remote 模式的固有代价。
+
+### 6.5 RunConfig/ToolContext 改造
+
+```go
+type RunConfig struct {
+    // ... 现有字段 ...
+    Sandbox    tools.Sandbox  // Sandbox 实例引用
+    SandboxMode string        // "none", "docker", "remote"（配置时决策）
+}
+
+type ToolContext struct {
+    // ... 现有字段 ...
+    Sandbox tools.Sandbox  // V4 新增
+    // SandboxMode 不加 — 用 Sandbox.Name() 代替
+}
+```
+
+### 6.6 SubAgent CWD 处理
+
+```go
+// 旧代码：所有模式都做 workspaceRoot → sandboxWorkDir 转换
+if cwd != "" && cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
+    if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
+        cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
+    }
+}
+
+// 新代码：remote 模式下跳过转换
+// 原因：remote 模式下 CWD 由 Cd 工具设置，已经是 sandbox 格式的绝对路径（/workspace/...）。
+// Cd 工具在所有模式下统一使用 Sandbox.Stat 验证路径，返回的路径已经是 sandbox 路径。
+// docker 模式仍需转换：docker 模式下 Cd 工具返回的是 host 路径（因为 path_guard 基于 WorkspaceRoot）。
+if cwd != "" && cfg.SandboxMode != "remote" && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
+    if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
+        cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
+    }
+}
+```
+
+### 6.7 Glob/Grep 统一
+
+**删除 `executeLocal`，所有模式走 `Sandbox.Exec`**：
+
+```go
+// 旧代码
+func (t *GlobTool) Execute(ctx *ToolContext, args ...) {
+    if ctx.SandboxEnabled { return t.executeInSandbox(ctx, args) }
+    return t.executeLocal(ctx, args)
+}
+
+// 新代码
+func (t *GlobTool) Execute(ctx *ToolContext, args ...) {
+    return t.executeViaSandbox(ctx, args)
+}
+```
+
+### 6.8 EditTool 统一
+
+```go
+// 旧代码：base64 hack
+func sandboxWriteFile(ctx *ToolContext, path, content string) {
+    encoded := base64.StdEncoding.EncodeToString([]byte(content))
+    executeInSandboxRaw(ctx, fmt.Sprintf("mkdir -p %s", dir))
+    executeInSandboxRaw(ctx, fmt.Sprintf("echo '%s' | base64 -d > %s", encoded, path))
+}
+
+// 新代码
+func sandboxWriteFile(ctx context.Context, sandbox tools.Sandbox, userID, path string, data []byte, perm os.FileMode) error {
+    dir := filepath.Dir(path)
+    if err := sandbox.MkdirAll(ctx, dir, 0o755, userID); err != nil {
+        return err
+    }
+    return sandbox.WriteFile(ctx, path, data, perm, userID)
+}
+```
+
+---
+
+## 7. 实施计划
+
+### Phase 1：Sandbox 接口 + None 实现 + workspaceRoot 创建改造
+
+1. 定义 `Sandbox` 接口和所有类型
+2. 实现 `NoneSandbox`（所有方法直接调 os.*）
+3. `RunConfig`/`ToolContext` 加 `Sandbox` + `SandboxMode`
+4. `main.go` 初始化 Sandbox 并注入 Agent
+5. **改造 5 处 workspaceRoot 创建**（5.1.7）→ `Sandbox.MkdirAll`
+
+**目标**：不破坏现有功能，建立新抽象层。workspaceRoot 创建统一走 Sandbox。
+
+### Phase 2：EditTool/ReadTool 统一走 Sandbox
+
+1. `tools/edit.go`：删除 base64 hack，改用 Sandbox.ReadFile/WriteFile
+2. `tools/read.go`：os.ReadFile → Sandbox.ReadFile
+3. ToolContext 传递 Sandbox 引用
+
+### Phase 3：Glob/Grep 统一
+
+1. 删除 `executeLocal` 函数
+2. 所有模式走 `Sandbox.Exec`（`find`/`grep` 命令）
+3. `tools/cd.go:263` buildDirectoryTree → Sandbox.ReadDir
+
+### Phase 4：Offload 穿越 Sandbox
+
+1. 修改 MaybeOffload/InvalidateStaleReads 签名
+2. engine.go 解析 Read 路径并传入绝对路径
+3. offload hash 计算走 Sandbox.ReadFile
+
+### Phase 5：Skill/Agent 发现改造
+
+1. SkillStore 加缓存 + TTL
+2. AgentStore 同理
+3. registry install/uninstall/publish 穿越 Sandbox（含 findSkillDirForUser/findAgentFile）
+4. scanSkillDir/scanAgentDir 穿越 Sandbox
+5. skill_sync.go 加 remote 模式跳过守卫
+6. tools/skill.go resolveSkill/doListFiles 穿越 Sandbox
+7. subagent_loader.go LoadAgentRoles 穿越 Sandbox
+
+### Phase 6：Feishu/Download/Agent 写操作改造
+
+1. 废除 `__FEISHU_FILE__::` 协议
+2. download.go/feishu_mcp/download.go → Sandbox.MkdirAll + Sandbox.WriteFile
+3. feishu_mcp/file.go → Sandbox.ReadFile + Feishu API
+4. bang_command.go/prompt_handler.go → Sandbox.WriteFile
+5. 删除 SandboxToHostPath/HostToSandboxPath
+
+### Phase 7：DockerSandbox 实现
+
+1. 基于 docker exec 实现所有 Sandbox 方法
+2. 文件操作：`docker exec cat`/`docker exec -i tee`
+3. 目录操作：`docker exec mkdir`/`docker exec rm`
+
+### Phase 8：RemoteSandbox + Runner 实现
+
+1. WebSocket server + client
+2. Runner CLI（main.go + handler.go）
+3. 双通道文件传输
+4. Path guard
+5. Runner HTTP Server
+
+### Phase 9：清理
+
+1. 删除旧 Wrap 方法
+2. 删除 executeLocal 函数
+3. 删除 `__FEISHU_FILE__::` 协议
+4. `.xbot` 路径引用加注释标记
+5. 测试覆盖
+
+**Phase 依赖关系**：
+```
+Phase 1 → Phase 2/3 (可并行) → Phase 4 (依赖 2) → Phase 5/6 (可并行) → Phase 7/8 (可并行) → Phase 9
+```
+
+---
+
+## 8. Brainstorm 共识清单（19 条）
+
+| # | 条目 | 决策 |
+|---|------|------|
+| 1 | Sandbox 接口方法 | Exec + ReadFile + WriteFile + Stat + ReadDir + MkdirAll + Remove + RemoveAll |
+| 2 | ReadFile/WriteFile 路径要求 | 绝对路径，内部处理 sandbox→host 转换 |
+| 3 | Offload JSON 存储 | 存 server（os.*），hash 走 Sandbox.ReadFile |
+| 4 | OffloadStore 依赖注入 | 接收 Sandbox 参数（方案 X2） |
+| 5 | readPath 解析 | engine.go 用 cfg.Session.GetCurrentDir() 解析，传绝对路径 |
+| 6 | Skill 发现机制 | Server 缓存 + TTL 5min + 主动失效 |
+| 7 | skill_sync.go | remote 模式跳过 |
+| 8 | MCP 配置 | 不动，server 本地 |
+| 9 | 路径转换函数 | 删除 SandboxToHostPath/HostToSandboxPath |
+| 10 | EditTool | 统一走 Sandbox.ReadFile/WriteFile |
+| 11 | bang_command/prompt_handler | 传 Sandbox 引用，走 Sandbox.WriteFile |
+| 12 | Feishu 文件操作 | 废除 `__FEISHU_FILE__::` 协议 |
+| 13 | ReadOnlyRoots | remote 模式不支持 |
+| 14 | 大文件传输 | 一次性 []byte，≤4MB WebSocket，>4MB HTTP |
+| 15 | SandboxFileInfo | 替代 os.FileInfo，不含 Sys() |
+| 16 | RunConfig | 加 Sandbox + SandboxMode |
+| 17 | ToolContext | 加 Sandbox（不加 SandboxMode，用 Sandbox.Name()） |
+| 18 | Glob/Grep | 删除 executeLocal，统一走 Sandbox.Exec |
+| 19 | MkdirAll | Sandbox 接口增加 MkdirAll 方法 |

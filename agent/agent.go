@@ -160,7 +160,7 @@ func (a *Agent) IndexGlobalTools() {
 	dummySessionKey := "indexing:dummy"
 	mcpMgr := tools.NewSessionMCPManager(
 		dummySessionKey,
-		"__system__",
+		"system0",
 		globalMCPConfigPath,
 		"", "", 30*time.Minute,
 	)

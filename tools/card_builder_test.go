@@ -179,6 +179,68 @@ func TestBuildButton(t *testing.T) {
 	}
 }
 
+func TestEnsureFormSubmitButtons_MarksActionType(t *testing.T) {
+	b := NewCardBuilder()
+	s := b.CreateSession("test_card", "chat1", nil)
+	s.Header = map[string]any{"title": map[string]any{"tag": "plain_text", "content": "Test"}}
+	form := &CardElement{
+		ID:  "form_1",
+		Tag: "form",
+		Properties: map[string]any{
+			"name": "my_form",
+		},
+		Children: []*CardElement{
+			{
+				ID:  "btn_1",
+				Tag: "button",
+				Properties: map[string]any{
+					"text": map[string]any{"tag": "plain_text", "content": "提交"},
+					"type": "primary",
+					"name": "btn_1",
+				},
+			},
+		},
+	}
+	s.Elements = append(s.Elements, form)
+	s.ensureFormSubmitButtons()
+
+	// The existing button should now have action_type=form_submit
+	btn := form.Children[0]
+	if btn.Properties["action_type"] != "form_submit" {
+		t.Errorf("expected action_type='form_submit', got '%v'", btn.Properties["action_type"])
+	}
+}
+
+func TestEnsureFormSubmitButtons_AutoInjects(t *testing.T) {
+	b := NewCardBuilder()
+	s := b.CreateSession("test_card", "chat1", nil)
+	s.Header = map[string]any{"title": map[string]any{"tag": "plain_text", "content": "Test"}}
+	form := &CardElement{
+		ID:  "form_1",
+		Tag: "form",
+		Properties: map[string]any{
+			"name": "my_form",
+		},
+		Children: []*CardElement{
+			{ID: "input_1", Tag: "input", Properties: map[string]any{"name": "field1"}},
+		},
+	}
+	s.Elements = append(s.Elements, form)
+	s.ensureFormSubmitButtons()
+
+	// Should auto-inject a submit button
+	if len(form.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(form.Children))
+	}
+	autoBtn := form.Children[1]
+	if autoBtn.Tag != "button" {
+		t.Errorf("expected auto-injected button, got '%s'", autoBtn.Tag)
+	}
+	if autoBtn.Properties["action_type"] != "form_submit" {
+		t.Errorf("expected action_type='form_submit' on auto-injected button, got '%v'", autoBtn.Properties["action_type"])
+	}
+}
+
 func TestBuildInput(t *testing.T) {
 	elem := BuildInput("field1", map[string]any{"label": "Name", "placeholder": "Enter name"})
 	if elem.Tag != "input" {
@@ -380,68 +442,33 @@ func TestAddElementToNonexistentParent(t *testing.T) {
 	}
 }
 
-func TestDynamicToolRegistration(t *testing.T) {
+func TestNewCardTools(t *testing.T) {
 	b := NewCardBuilder()
 	registry := NewRegistry()
 
-	// Initially no card tools
-	_, ok := registry.Get("card_send")
-	if ok {
-		t.Fatal("card_send should not be registered initially")
+	for _, tool := range NewCardTools(b) {
+		registry.Register(tool)
 	}
 
-	ensureCardToolsRegistered(registry, b)
-
-	// Now all tools should be registered
-	for _, name := range cardToolNames {
-		_, ok := registry.Get(name)
-		if !ok {
+	expectedTools := []string{"card_create", "card_add_content", "card_add_interactive", "card_add_container", "card_preview", "card_send"}
+	for _, name := range expectedTools {
+		if _, ok := registry.Get(name); !ok {
 			t.Errorf("tool '%s' should be registered", name)
 		}
-	}
-
-	// Calling again should not panic (idempotent)
-	ensureCardToolsRegistered(registry, b)
-
-	// With no active sessions, unregister should remove them
-	unregisterCardToolsIfIdle(registry, b)
-
-	for _, name := range cardToolNames {
-		_, ok := registry.Get(name)
-		if ok {
-			t.Errorf("tool '%s' should be unregistered when idle", name)
-		}
-	}
-
-	// With active session, should not unregister
-	ensureCardToolsRegistered(registry, b)
-	b.CreateSession("test", "chat1", nil)
-
-	unregisterCardToolsIfIdle(registry, b)
-	_, ok = registry.Get("card_send")
-	if !ok {
-		t.Error("card_send should remain registered when sessions are active")
 	}
 }
 
 func TestCardCreateTool(t *testing.T) {
 	b := NewCardBuilder()
-	registry := NewRegistry()
 	tool := NewCardCreateTool(b)
 
-	ctx := &ToolContext{Registry: registry, Channel: "test", ChatID: "chat1"}
+	ctx := &ToolContext{Channel: "test", ChatID: "chat1"}
 	result, err := tool.Execute(ctx, `{"title":"Report","template":"blue"}`)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	if !strings.Contains(result.Summary, "card_") {
 		t.Error("expected card_id in result")
-	}
-
-	// Dynamic tools should be registered
-	_, ok := registry.Get("card_send")
-	if !ok {
-		t.Error("card_send should be registered after card_create")
 	}
 }
 
@@ -583,10 +610,8 @@ func TestCardSendTool(t *testing.T) {
 	}
 
 	tool := &CardSendTool{builder: b}
-	registry := NewRegistry()
-	ensureCardToolsRegistered(registry, b)
 
-	ctx := &ToolContext{Registry: registry}
+	ctx := &ToolContext{}
 	result, err := tool.Execute(ctx, `{"card_id":"`+s.ID+`"}`)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -618,12 +643,6 @@ func TestCardSendTool(t *testing.T) {
 	_, ok := b.GetSession(s.ID)
 	if ok {
 		t.Error("session should be removed after send")
-	}
-
-	// Dynamic tools should be unregistered (no active sessions)
-	_, ok = registry.Get("card_send")
-	if ok {
-		t.Error("card_send should be unregistered after last session sent")
 	}
 }
 

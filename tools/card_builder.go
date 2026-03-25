@@ -27,6 +27,10 @@ type CardBuilder struct {
 	elementOptions sync.Map // card_id -> map[string]string
 	// waitingCards tracks cards waiting for user callback, with creation time for TTL cleanup
 	waitingCards sync.Map // card_id -> time.Time
+	// cardJSONCache caches the raw card JSON for each cardID, used to return
+	// the current card in callback responses (preventing Feishu from restoring
+	// the card to its original template state). Cleaned up in RemoveSession.
+	cardJSONCache sync.Map // card_id -> []byte
 }
 
 // NewCardBuilder creates a CardBuilder instance.
@@ -99,6 +103,7 @@ func (b *CardBuilder) RemoveSession(id string) {
 	b.descriptions.Delete(id)
 	b.expectedInteractions.Delete(id)
 	b.elementOptions.Delete(id)
+	b.cardJSONCache.Delete(id)
 }
 
 // MarkCardWaiting marks a card as waiting for user callback.
@@ -205,6 +210,22 @@ func (b *CardBuilder) GetAllElementOptions(cardID string) map[string]string {
 		}
 	}
 	return nil
+}
+
+// StoreCardJSON caches the raw card JSON for a cardID.
+// Used to return the current card state in callback responses.
+func (b *CardBuilder) StoreCardJSON(cardID string, cardJSON []byte) {
+	b.cardJSONCache.Store(cardID, cardJSON)
+}
+
+// GetCardJSON retrieves the cached raw card JSON for a cardID.
+func (b *CardBuilder) GetCardJSON(cardID string) ([]byte, bool) {
+	if v, ok := b.cardJSONCache.Load(cardID); ok {
+		if data, ok := v.([]byte); ok {
+			return data, true
+		}
+	}
+	return nil, false
 }
 
 // ---------- CardSession methods ----------

@@ -238,23 +238,42 @@ type CardAddInteractiveTool struct {
 
 func (t *CardAddInteractiveTool) Name() string { return "card_add_interactive" }
 
+// formRequiredTypes are interactive types that MUST be placed inside a form container.
+// Placing them outside a form causes each interaction to trigger individual callbacks,
+// which leads to Feishu restoring the card to its original template state (since the
+// callback response may not include a Card field for non-form interactions).
+var formRequiredTypes = map[string]bool{
+	"input":               true,
+	"select_static":       true,
+	"multi_select_static": true,
+	"select_person":       true,
+	"multi_select_person": true,
+	"date_picker":         true,
+	"picker_time":         true,
+	"picker_datetime":     true,
+	"checker":             true,
+	"select_img":          true,
+}
+
 func (t *CardAddInteractiveTool) Description() string {
 	return `Add an interactive component to a card.
 
 Supported types:
 - button: Params: text (required), properties: {button_type (primary/danger/default), url, name, confirm: {title,text}, size, value}
   IMPORTANT: For form submit, add a button INSIDE a form container. Buttons inside forms automatically trigger form submission with all input/select values.
-- input: Params: name (required), properties: {label, placeholder, default_value, max_length, rows}
-- select_static: Single select. Params: name (required), options (JSON array, required). Options format: ["Label1","Label2"] or [{"text":"Label","value":"val"}]. properties: {placeholder, initial_option}
-- multi_select_static: Multi select. Same as select_static. properties: {placeholder, initial_options}
-- select_person: Person picker single. Params: name (required). properties: {placeholder}
-- multi_select_person: Person picker multi. Params: name (required). properties: {placeholder}
-- date_picker: Params: name (required). properties: {placeholder, initial_date}
-- picker_time: Params: name (required). properties: {placeholder, initial_time}
-- picker_datetime: Params: name (required). properties: {placeholder, initial_datetime}
+- input: Params: name (required), properties: {label, placeholder, default_value, max_length, rows} — MUST be inside a form container
+- select_static: Single select. Params: name (required), options (JSON array, required). Options format: ["Label1","Label2"] or [{"text":"Label","value":"val"}]. properties: {placeholder, initial_option} — MUST be inside a form container
+- multi_select_static: Multi select. Same as select_static. properties: {placeholder, initial_options} — MUST be inside a form container
+- select_person: Person picker single. Params: name (required). properties: {placeholder} — MUST be inside a form container
+- multi_select_person: Person picker multi. Params: name (required). properties: {placeholder} — MUST be inside a form container
+- date_picker: Params: name (required). properties: {placeholder, initial_date} — MUST be inside a form container
+- picker_time: Params: name (required). properties: {placeholder, initial_time} — MUST be inside a form container
+- picker_datetime: Params: name (required). properties: {placeholder, initial_datetime} — MUST be inside a form container
 - overflow: Folded button group. Params: name (required), options (JSON array of {text,value}).
-- checker: Checkbox/task. Params: name (required), text (required). properties: {checked, overall}
-- select_img: Image picker. Params: name (required), options (JSON array of {img_key,value}).`
+- checker: Checkbox/task. Params: name (required), text (required). properties: {checked, overall} — MUST be inside a form container
+- select_img: Image picker. Params: name (required), options (JSON array of {img_key,value}) — MUST be inside a form container
+
+IMPORTANT: input, select_*, person picker, date/time picker, checker, and select_img MUST be placed inside a form container (use card_add_container type=form first, then set parent_id to the form's ID). If you need to collect information from the user, always use a form. If no user input is needed, use pure markdown cards with buttons only.`
 }
 
 func (t *CardAddInteractiveTool) Parameters() []llm.ToolParam {
@@ -297,8 +316,33 @@ func (t *CardAddInteractiveTool) Execute(ctx *ToolContext, input string) (*ToolR
 		return nil, err
 	}
 
-	var elem *CardElement
 	typeName := args.Type
+
+	// Enforce: form-required interactive types must be inside a form container.
+	// Placing them at root level causes per-interaction callbacks that don't
+	// return a Card field, causing Feishu to restore the card to original state.
+	if formRequiredTypes[typeName] {
+		if args.ParentID == "" {
+			return nil, fmt.Errorf(
+				"type '%s' MUST be placed inside a form container. "+
+					"First create a form with card_add_container(type='form'), "+
+					"then use the returned container ID as parent_id. "+
+					"If you need to collect user input, always use a form. "+
+					"If no input is needed, use pure markdown cards with buttons only",
+				typeName,
+			)
+		}
+		if parent, ok := session.Containers[args.ParentID]; !ok || parent.Tag != "form" {
+			return nil, fmt.Errorf(
+				"type '%s' must be inside a form container, but parent_id '%s' is not a form. "+
+					"First create a form with card_add_container(type='form'), "+
+					"then use the returned form ID as parent_id",
+				typeName, args.ParentID,
+			)
+		}
+	}
+
+	var elem *CardElement
 	elemID := session.NextElementID(typeName)
 
 	switch typeName {

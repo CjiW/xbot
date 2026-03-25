@@ -1278,9 +1278,8 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 	// Check if this interaction type is expected for this card
 	expectedInteractions := f.getExpectedInteractions(cardID)
 
-	switch {
-	case actionName == "form_submit" || len(action.FormValue) > 0:
-		// Extract form fields from FormValue (form submission data)
+	switch actionName {
+	case "form_submit":
 		for key, value := range action.FormValue {
 			if key == "card_id" {
 				continue
@@ -1311,7 +1310,7 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		}
 		actionName = "form_submit"
 
-	case actionName == "button":
+	case "button":
 		// If button also has FormValue (shouldn't reach here due to case above, but safety check)
 		if len(action.FormValue) > 0 {
 			for key, value := range action.FormValue {
@@ -1347,8 +1346,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			}
 		}
 
-	case actionName == "select_static", actionName == "multi_select_static":
-		// Only handle if this card expects standalone select interactions
+	case "select_static", "multi_select_static":
+		if len(action.FormValue) > 0 {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring in-form select interaction (will be collected on form submit)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
 				"card_id": cardID,
@@ -1385,8 +1391,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 			f.cardBuilder.ClearActiveCard(chatID)
 		}
 
-	case actionName == "overflow", actionName == "checker", actionName == "select_img":
-		// Handle other interactive elements if expected
+	case "overflow", "checker", "select_img":
+		if len(action.FormValue) > 0 {
+			log.WithFields(log.Fields{
+				"card_id": cardID,
+				"tag":     actionName,
+				"name":    action.Name,
+			}).Debug("Ignoring in-form interaction (will be collected on form submit)")
+			return &callback.CardActionTriggerResponse{}, nil
+		}
 		if !f.isExpectedInteraction(expectedInteractions, actionName) {
 			log.WithFields(log.Fields{
 				"card_id": cardID,
@@ -1436,13 +1449,15 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		"data":        responseData,
 	}).Info("Card builder action triggered")
 
-	// 表单提交后，patch 卡片为"已提交"状态（防止重复提交）
-	if actionName == "form_submit" && messageID != "" {
+	// 表单提交后，在回调响应中返回"已提交"卡片（防止重复提交）
+	// 注意：飞书卡片回调机制中，回调响应不带 Card 字段时卡片会恢复到原始状态，
+	// 所以必须通过回调响应的 Card 字段来更新卡片内容，而不是用 PATCH API。
+	var submittedCardResponse *callback.Card
+	if actionName == "form_submit" {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
-		if cardJSON, err := json.Marshal(submittedCard); err == nil {
-			if err := f.patchMessage(messageID, cardJSON); err != nil {
-				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
-			}
+		submittedCardResponse = &callback.Card{
+			Type: "raw",
+			Data: submittedCard,
 		}
 		// Clear active card since user interacted with it
 		if f.cardBuilder != nil && chatID != "" {
@@ -1472,12 +1487,16 @@ func (f *FeishuChannel) handleCardBuilderAction(cardID string, actionData map[st
 		},
 	}
 
-	return &callback.CardActionTriggerResponse{
+	resp := &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{
 			Type:    "success",
 			Content: "已收到，正在处理...",
 		},
-	}, nil
+	}
+	if submittedCardResponse != nil {
+		resp.Card = submittedCardResponse
+	}
+	return resp, nil
 }
 
 // handleGenericCardAction handles card actions from non-CardBuilder cards (e.g. raw JSON cards).
@@ -1490,11 +1509,19 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		actionName = "unknown"
 	}
 
-	// Collect response data from actionData (already merged Value + FormValue)
+	// Ignore in-form intermediate interactions (only form_submit or button-in-form should trigger)
+	if actionName != "form_submit" && actionName != "button" && len(action.FormValue) > 0 {
+		log.WithFields(log.Fields{
+			"tag":  actionName,
+			"name": action.Name,
+		}).Debug("Ignoring in-form interaction for generic card (will be collected on form submit)")
+		return &callback.CardActionTriggerResponse{}, nil
+	}
+
 	responseData := make(map[string]string)
 	for k, v := range actionData {
 		if k == "card_id" || k == "form_name" {
-			continue // skip internal metadata
+			continue
 		}
 		switch val := v.(type) {
 		case string:
@@ -1512,13 +1539,17 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		"data":        responseData,
 	}).Info("Generic card action triggered (no card_id)")
 
-	// For form_submit, patch the card to "submitted" state to prevent double-submit
-	if (actionName == "form_submit" || actionName == "button" && len(action.FormValue) > 0 || len(action.FormValue) > 0) && messageID != "" {
+	isFormSubmit := actionName == "form_submit" || (actionName == "button" && len(action.FormValue) > 0)
+
+	// 表单提交后，在回调响应中返回"已提交"卡片（防止重复提交）
+	// 注意：飞书卡片回调机制中，回调响应不带 Card 字段时卡片会恢复到原始状态，
+	// 所以必须通过回调响应的 Card 字段来更新卡片内容，而不是用 PATCH API。
+	var submittedCardResponse *callback.Card
+	if isFormSubmit {
 		submittedCard := f.buildCard("✅ 已提交，正在处理...")
-		if cardJSON, err := json.Marshal(submittedCard); err == nil {
-			if err := f.patchMessage(messageID, cardJSON); err != nil {
-				log.WithError(err).WithField("message_id", messageID).Warn("Feishu: failed to disable form after submit")
-			}
+		submittedCardResponse = &callback.Card{
+			Type: "raw",
+			Data: submittedCard,
 		}
 	}
 
@@ -1544,12 +1575,16 @@ func (f *FeishuChannel) handleGenericCardAction(actionData map[string]any, actio
 		},
 	}
 
-	return &callback.CardActionTriggerResponse{
+	resp := &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{
 			Type:    "success",
 			Content: "已收到，正在处理...",
 		},
-	}, nil
+	}
+	if submittedCardResponse != nil {
+		resp.Card = submittedCardResponse
+	}
+	return resp, nil
 }
 
 // getExpectedInteractions returns the expected interaction types for a card.

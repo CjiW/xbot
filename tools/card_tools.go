@@ -8,35 +8,20 @@ import (
 	"xbot/llm"
 )
 
-// cardToolNames lists dynamically registered card tool names for cleanup.
-// MAINTENANCE NOTE: When adding a new card tool, you MUST add its name here.
-// TODO: Consider auto-collecting via tool registry to avoid manual sync.
-var cardToolNames = []string{"card_add_content", "card_add_interactive", "card_add_container", "card_preview", "card_send"}
-
-// ensureCardToolsRegistered registers the dynamic card tools if not already present.
-func ensureCardToolsRegistered(registry *Registry, builder *CardBuilder) {
-	if _, ok := registry.Get("card_send"); ok {
-		return
-	}
-	registry.Register(&CardAddContentTool{builder: builder})
-	registry.Register(&CardAddInteractiveTool{builder: builder})
-	registry.Register(&CardAddContainerTool{builder: builder})
-	registry.Register(&CardPreviewTool{builder: builder})
-	registry.Register(&CardSendTool{builder: builder})
-}
-
-// unregisterCardToolsIfIdle removes dynamic card tools when no sessions remain.
-func unregisterCardToolsIfIdle(registry *Registry, builder *CardBuilder) {
-	if builder.ActiveCount() > 0 {
-		return
-	}
-	for _, name := range cardToolNames {
-		registry.Unregister(name)
+// NewCardTools returns all card-related tools for startup registration.
+func NewCardTools(builder *CardBuilder) []Tool {
+	return []Tool{
+		&CardCreateTool{builder: builder},
+		&CardAddContentTool{builder: builder},
+		&CardAddInteractiveTool{builder: builder},
+		&CardAddContainerTool{builder: builder},
+		&CardPreviewTool{builder: builder},
+		&CardSendTool{builder: builder},
 	}
 }
 
 // ============================================================
-// 1. card_create — always registered
+// 1. card_create
 // ============================================================
 
 type CardCreateTool struct {
@@ -50,7 +35,7 @@ func NewCardCreateTool(builder *CardBuilder) *CardCreateTool {
 func (t *CardCreateTool) Name() string { return "card_create" }
 
 func (t *CardCreateTool) Description() string {
-	return `Create a new Feishu interactive card. Returns a card_id for subsequent card_add_* calls. After calling this tool, card_add_content, card_add_interactive, card_add_container, card_preview, and card_send tools become available.`
+	return `Create a new Feishu interactive card. Returns a card_id for subsequent card_add_*, card_preview, and card_send calls.`
 }
 
 func (t *CardCreateTool) Parameters() []llm.ToolParam {
@@ -75,10 +60,6 @@ func (t *CardCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 
 	session := t.builder.CreateSession(ctx.Channel, ctx.ChatID, ctx.SendFunc)
 	session.SetHeader(args.Title, args.Subtitle, args.Template)
-
-	if ctx.Registry != nil {
-		ensureCardToolsRegistered(ctx.Registry, t.builder)
-	}
 
 	return NewResult(fmt.Sprintf(`Card created: %s
 
@@ -261,8 +242,8 @@ func (t *CardAddInteractiveTool) Description() string {
 	return `Add an interactive component to a card.
 
 Supported types:
-- button: Params: text (required), properties: {button_type (primary/danger/default), url, name, action_type, confirm: {title,text}, size, value}
-  IMPORTANT: For form submit buttons, you MUST set properties.action_type="form_submit" to collect form data. Without this, button clicks will NOT include input/select values.
+- button: Params: text (required), properties: {button_type (primary/danger/default), url, name, confirm: {title,text}, size, value}
+  IMPORTANT: For form submit, add a button INSIDE a form container. Buttons inside forms automatically trigger form submission with all input/select values.
 - input: Params: name (required), properties: {label, placeholder, default_value, max_length, rows}
 - select_static: Single select. Params: name (required), options (JSON array, required). Options format: ["Label1","Label2"] or [{"text":"Label","value":"val"}]. properties: {placeholder, initial_option}
 - multi_select_static: Multi select. Same as select_static. properties: {placeholder, initial_options}
@@ -464,7 +445,7 @@ func (t *CardAddContainerTool) Description() string {
 
 Supported types:
 - column_set: Multi-column layout. properties: {column_count (required, int), flex_mode, background_style, horizontal_spacing, column_widths (array of weight ints), column_vertical_aligns (array of "top"/"center"/"bottom")}. Returns column IDs for each column.
-- form: Form container. properties: {name (required)}. Add inputs/selects inside, then add a submit button INSIDE the form with properties.action_type="form_submit". WITHOUT this property, form data will NOT be submitted when the button is clicked.
+- form: Form container. properties: {name (required)}. Add inputs/selects inside, then add a submit button INSIDE the form. Buttons inside forms automatically trigger form submission. WITHOUT placing the button inside the form, form data will NOT be submitted when the button is clicked.
 - collapsible_panel: Foldable section. properties: {title (required), expanded (bool)}
 - interactive_container: Clickable container. properties: {width, height, background_style, has_border, corner_radius, padding, behaviors}
 
@@ -544,7 +525,7 @@ func (t *CardAddContainerTool) Execute(ctx *ToolContext, input string) (*ToolRes
 		}
 		session.RegisterContainer(elem)
 
-		return NewResult(fmt.Sprintf("Added form container (id: %s, name: %s) to card %s.\nAdd input/select components with parent_id=%s, then add a button with action_type=form_submit.",
+		return NewResult(fmt.Sprintf("Added form container (id: %s, name: %s) to card %s.\nAdd input/select components with parent_id=%s, then add a submit button inside the form.",
 			elem.ID, name, args.CardID, elem.ID)), nil
 
 	case "collapsible_panel":
@@ -686,12 +667,7 @@ func (t *CardSendTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return NewResultWithUserResponse(fmt.Sprintf("Card %s sent successfully. Waiting for user interaction...", args.CardID)), nil
 	}
 
-	// Not waiting — clean up everything now
 	t.builder.RemoveSession(args.CardID)
-
-	if ctx.Registry != nil {
-		unregisterCardToolsIfIdle(ctx.Registry, t.builder)
-	}
 
 	return NewResult(fmt.Sprintf("Card %s sent successfully.", args.CardID)), nil
 }

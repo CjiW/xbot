@@ -1687,17 +1687,15 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
-	isCard := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
 		msg.Metadata = make(map[string]string)
 
-		// Cards should always create new messages, not patch existing ones
-		// This avoids schema version conflicts (schemaV2 card vs schemaV1 message)
-		if !isCard {
-			if existingID, ok := a.sessionMsgIDs.Load(key); ok {
-				msg.Metadata["update_message_id"] = existingID.(string)
-			}
+		// Always include update_message_id for patch support.
+		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,
+		// it falls back to creating a new message and deleting the old progress message.
+		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
+			msg.Metadata["update_message_id"] = existingID.(string)
 		}
 
 		if replyTo, ok := a.sessionReplyTo.Load(key); ok {

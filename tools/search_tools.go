@@ -171,6 +171,14 @@ func (t *SearchToolsTool) executeFallback(ctx *ToolContext, query string, topK i
 		}
 	}
 
+	// Collect built-in tools from registry (e.g. card_create, card_send, shell, etc.)
+	if ctx.Registry != nil {
+		for _, tool := range ctx.Registry.List() {
+			allTools = append(allTools, tool.Name())
+			toolDescriptions = append(toolDescriptions, tool.Description())
+		}
+	}
+
 	// Collect MCP tools
 	for _, entry := range mcpCatalog {
 		for _, toolName := range entry.ToolNames {

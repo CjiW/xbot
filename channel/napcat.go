@@ -265,7 +265,20 @@ type obImageData struct {
 
 // obAtData @消息段数据
 type obAtData struct {
-	QQ string `json:"qq"`
+	QQ any `json:"qq"`
+}
+
+// formatQQ 将 obAtData.QQ(any) 格式化为字符串
+// NapCat 可能发送 string 或 float64 类型的 QQ 号
+func formatQQ(qq any) string {
+	switch v := qq.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatInt(int64(v), 10)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // obMediaData 通用媒体消息段数据（record/video/file）
@@ -517,11 +530,12 @@ func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) 
 			var data obAtData
 			if err := json.Unmarshal(seg.Data, &data); err == nil {
 				// 检测 @bot 自己或 @all
-				if data.QQ == selfIDStr || data.QQ == "all" {
+				qqStr := formatQQ(data.QQ)
+				if qqStr == selfIDStr || qqStr == "all" {
 					mentionedBot = true
 					continue
 				}
-				textParts = append(textParts, fmt.Sprintf("@%s", data.QQ))
+				textParts = append(textParts, fmt.Sprintf("@%s", qqStr))
 			}
 
 		case "reply":
@@ -630,6 +644,22 @@ func (n *NapCatChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}
 }
 
+// mediaTypeFromURL 从 URL/路径扩展名推断 OneBot 媒体消息段类型
+func mediaTypeFromURL(url string) string {
+	switch {
+	case strings.HasSuffix(strings.ToLower(url), ".mp3"),
+		strings.HasSuffix(strings.ToLower(url), ".wav"),
+		strings.HasSuffix(strings.ToLower(url), ".silk"),
+		strings.HasSuffix(strings.ToLower(url), ".amr"):
+		return "record"
+	case strings.HasSuffix(strings.ToLower(url), ".mp4"),
+		strings.HasSuffix(strings.ToLower(url), ".avi"):
+		return "video"
+	default:
+		return "image"
+	}
+}
+
 // buildOutboundMessage 构建出站消息内容
 // 如果只有文本，返回纯文本字符串；如果有媒体，返回消息段数组
 func (n *NapCatChannel) buildOutboundMessage(content string, media []string) any {
@@ -651,10 +681,9 @@ func (n *NapCatChannel) buildOutboundMessage(content string, media []string) any
 	}
 
 	// 添加媒体段
-	// TODO: detect media type from URL extension (record/video/file) instead of always using image
 	for _, url := range media {
 		segments = append(segments, map[string]any{
-			"type": "image",
+			"type": mediaTypeFromURL(url),
 			"data": map[string]string{
 				"file": url,
 			},
@@ -740,7 +769,6 @@ func (n *NapCatChannel) callAPI(action string, params any) (*obAPIResponse, erro
 			return &resp, fmt.Errorf("api error: status=%s retcode=%d", resp.Status, resp.RetCode)
 		}
 		return &resp, nil
-
 	case <-time.After(30 * time.Second):
 		n.pendingMu.Lock()
 		delete(n.pending, echo)
@@ -748,6 +776,9 @@ func (n *NapCatChannel) callAPI(action string, params any) (*obAPIResponse, erro
 		return nil, fmt.Errorf("api call %s timed out", action)
 
 	case <-n.stopCh:
+		n.pendingMu.Lock()
+		delete(n.pending, echo)
+		n.pendingMu.Unlock()
 		return nil, fmt.Errorf("channel stopped")
 	}
 }
@@ -882,7 +913,7 @@ func (n *NapCatChannel) isQuickDisconnectLoop() bool {
 	}
 
 	// Reset after detection to avoid repeated triggers
-	n.disconnectTimes = nil
+	n.disconnectTimes = make([]time.Time, 0, 10)
 	return true
 }
 

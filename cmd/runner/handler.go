@@ -1,23 +1,21 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"syscall"
 	"time"
 )
 
+// executor is the global executor, initialized in main.go.
+var executor Executor
+
 // handleRequest dispatches an incoming request to the appropriate handler.
-func handleRequest(msg RunnerMessage, workspace string) *RunnerMessage {
-	resp := dispatch(msg, workspace)
+func handleRequest(msg RunnerMessage) *RunnerMessage {
+	resp := dispatch(msg)
 
 	if resp.Type == ProtoError {
 		var e ErrorResponse
@@ -31,30 +29,30 @@ func handleRequest(msg RunnerMessage, workspace string) *RunnerMessage {
 	return resp
 }
 
-func dispatch(msg RunnerMessage, workspace string) *RunnerMessage {
+func dispatch(msg RunnerMessage) *RunnerMessage {
 	switch msg.Type {
 	case "exec":
-		return handleExec(msg, workspace)
+		return handleExec(msg)
 	case "read_file":
-		return handleReadFile(msg, workspace)
+		return handleReadFile(msg)
 	case "write_file":
-		return handleWriteFile(msg, workspace)
+		return handleWriteFile(msg)
 	case "stat":
-		return handleStat(msg, workspace)
+		return handleStat(msg)
 	case "read_dir":
-		return handleReadDir(msg, workspace)
+		return handleReadDir(msg)
 	case "mkdir_all":
-		return handleMkdirAll(msg, workspace)
+		return handleMkdirAll(msg)
 	case "remove":
-		return handleRemove(msg, workspace)
+		return handleRemove(msg)
 	case "remove_all":
-		return handleRemoveAll(msg, workspace)
+		return handleRemoveAll(msg)
 	default:
 		return makeError(msg.ID, "EINVAL", fmt.Sprintf("unknown request type: %s", msg.Type))
 	}
 }
 
-func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleExec(msg RunnerMessage) *RunnerMessage {
 	var req ExecRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", "invalid exec request: "+err.Error())
@@ -67,91 +65,47 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	var cmd *exec.Cmd
-	if req.Shell {
-		cmd = exec.CommandContext(ctx, "sh", "-c", req.Command)
-		if verboseLog {
-			log.Printf("  exec shell: %s  (dir=%s, timeout=%v)", req.Command, req.Dir, timeout)
-		}
-	} else {
-		args := req.Args
-		if len(args) == 0 {
-			return makeError(msg.ID, "EINVAL", "non-shell exec requires Args to be set explicitly")
-		}
-		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
-		if verboseLog {
-			log.Printf("  exec: %s  (dir=%s, timeout=%v)", strings.Join(args, " "), req.Dir, timeout)
-		}
+	spec := ExecSpec{
+		Command: req.Command,
+		Args:    req.Args,
+		Shell:   req.Shell,
+		Dir:     req.Dir,
+		Env:     req.Env,
+		Stdin:   req.Stdin,
+		Timeout: timeout,
 	}
-	if cmd == nil {
-		return makeError(msg.ID, "EINVAL", "no command specified")
-	}
-	// Create a new process group so we can kill all children on timeout.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if req.Dir != "" {
-		if err := validatePath(req.Dir, workspace); err != nil {
+
+	// pathguard 检查工作目录
+	if spec.Dir != "" {
+		if err := validatePath(spec.Dir); err != nil {
 			return makeError(msg.ID, "EPERM", err.Error())
 		}
-		cmd.Dir = filepath.Clean(req.Dir)
-	} else {
-		cmd.Dir = workspace
-	}
-	if len(req.Env) > 0 {
-		cmd.Env = append(os.Environ(), req.Env...)
-	}
-	if req.Stdin != "" {
-		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	start := time.Now()
-	err := cmd.Run()
-	elapsed := time.Since(start)
-
-	exitCode := 0
-	timedOut := false
-
-	if ctx.Err() == context.DeadlineExceeded {
-		timedOut = true
-		exitCode = -1
-		// Kill the entire process group to prevent child process leaks.
-		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		log.Printf("  exec timed out after %v: %s", elapsed, req.Command)
-	} else if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				exitCode = status.ExitStatus()
-			}
-		} else {
-			return makeError(msg.ID, "EIO", "exec error: "+err.Error())
-		}
+	result, err := executor.Exec(ctx, spec)
+	if err != nil {
+		return makeError(msg.ID, "EIO", "exec error: "+err.Error())
 	}
 
-	log.Printf("  exec done in %v  exit=%d  stdout=%dB  stderr=%dB", elapsed, exitCode, stdout.Len(), stderr.Len())
-
+	log.Printf("  exec done  exit=%d  stdout=%dB  stderr=%dB", result.ExitCode, len(result.Stdout), len(result.Stderr))
 	return makeResponse(msg.ID, "exec_result", ExecResultResponse{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		TimedOut: timedOut,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		ExitCode: result.ExitCode,
+		TimedOut: result.TimedOut,
 	})
 }
 
-func handleReadFile(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleReadFile(msg RunnerMessage) *RunnerMessage {
 	var req ReadFileRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	data, err := os.ReadFile(path)
+	data, err := executor.ReadFile(path)
 	if err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
@@ -163,12 +117,12 @@ func handleReadFile(msg RunnerMessage, workspace string) *RunnerMessage {
 	})
 }
 
-func handleWriteFile(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleWriteFile(msg RunnerMessage) *RunnerMessage {
 	var req WriteFileRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
@@ -176,7 +130,7 @@ func handleWriteFile(msg RunnerMessage, workspace string) *RunnerMessage {
 	if err != nil {
 		return makeError(msg.ID, "EINVAL", "invalid base64: "+err.Error())
 	}
-	if err := os.WriteFile(path, data, os.FileMode(req.Perm)); err != nil {
+	if err := executor.WriteFile(path, data, os.FileMode(req.Perm)); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	if verboseLog {
@@ -185,52 +139,47 @@ func handleWriteFile(msg RunnerMessage, workspace string) *RunnerMessage {
 	return makeOK(msg.ID)
 }
 
-func handleStat(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleStat(msg RunnerMessage) *RunnerMessage {
 	var req StatRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	info, err := os.Stat(path)
+	info, err := executor.Stat(path)
 	if err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	return makeResponse(msg.ID, "file_info", StatResponse{
-		Name:    info.Name(),
-		Size:    info.Size(),
-		Mode:    uint32(info.Mode()),
-		ModTime: info.ModTime().Format(time.RFC3339),
-		IsDir:   info.IsDir(),
+		Name:    info.Name,
+		Size:    info.Size,
+		Mode:    uint32(info.Mode),
+		ModTime: info.ModTime.Format(time.RFC3339),
+		IsDir:   info.IsDir,
 	})
 }
 
-func handleReadDir(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleReadDir(msg RunnerMessage) *RunnerMessage {
 	var req ReadDirRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	entries, err := os.ReadDir(path)
+	entries, err := executor.ReadDir(path)
 	if err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	resp := DirEntriesResponse{Entries: make([]DirEntryResponse, 0, len(entries))}
 	for _, e := range entries {
-		info, ierr := e.Info()
-		var size int64
-		if ierr == nil {
-			size = info.Size()
-		}
 		resp.Entries = append(resp.Entries, DirEntryResponse{
-			Name:  e.Name(),
-			IsDir: e.IsDir(),
-			Size:  size,
+			Name:  e.Name,
+			IsDir: e.IsDir,
+			Size:  e.Size,
 		})
 	}
 	if verboseLog {
@@ -239,16 +188,16 @@ func handleReadDir(msg RunnerMessage, workspace string) *RunnerMessage {
 	return makeResponse(msg.ID, "dir_entries", resp)
 }
 
-func handleMkdirAll(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleMkdirAll(msg RunnerMessage) *RunnerMessage {
 	var req PathRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	if err := os.MkdirAll(path, os.FileMode(req.Perm)); err != nil {
+	if err := executor.MkdirAll(path, os.FileMode(req.Perm)); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	if verboseLog {
@@ -257,16 +206,16 @@ func handleMkdirAll(msg RunnerMessage, workspace string) *RunnerMessage {
 	return makeOK(msg.ID)
 }
 
-func handleRemove(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleRemove(msg RunnerMessage) *RunnerMessage {
 	var req PathRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	if err := os.Remove(path); err != nil {
+	if err := executor.Remove(path); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	if verboseLog {
@@ -275,16 +224,16 @@ func handleRemove(msg RunnerMessage, workspace string) *RunnerMessage {
 	return makeOK(msg.ID)
 }
 
-func handleRemoveAll(msg RunnerMessage, workspace string) *RunnerMessage {
+func handleRemoveAll(msg RunnerMessage) *RunnerMessage {
 	var req PathRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return makeError(msg.ID, "EINVAL", err.Error())
 	}
-	path, err := safePath(req.Path, workspace)
+	path, err := safePath(req.Path)
 	if err != nil {
 		return makeError(msg.ID, "EPERM", err.Error())
 	}
-	if err := os.RemoveAll(path); err != nil {
+	if err := executor.RemoveAll(path); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
 	if verboseLog {

@@ -56,9 +56,15 @@ func (a *Agent) cleanupExpiredSessions() {
 }
 
 // interactiveKey 生成 interactive session 在 map 中的 key。
-// 使用 channel:chatID/roleName 保证同一个 chat + role 只有一个 session。
-func interactiveKey(channel, chatID, roleName string) string {
-	return channel + ":" + chatID + "/" + roleName
+// 使用 channel:chatID/roleName[:instance] 保证同一个 chat + role + instance 只有一个 session。
+// instance 为空时，行为与旧版一致（向后兼容）。
+// 设置 instance 后，同一个 role 可以创建多个独立的 interactive session。
+func interactiveKey(channel, chatID, roleName, instance string) string {
+	key := channel + ":" + chatID + "/" + roleName
+	if instance != "" {
+		key += ":" + instance
+	}
+	return key
 }
 
 // SpawnInteractiveSession 创建一个新的 interactive SubAgent 会话并执行首次任务。
@@ -74,8 +80,9 @@ func (a *Agent) SpawnInteractiveSession(
 	msg bus.InboundMessage,
 ) (*bus.OutboundMessage, error) {
 	originChannel, originChatID, originSender := resolveOriginIDs(msg)
+	instance := msg.Metadata["instance_id"]
 
-	key := interactiveKey(originChannel, originChatID, roleName)
+	key := interactiveKey(originChannel, originChatID, roleName, instance)
 
 	// --- 阶段 1：原子 check-and-store ---
 	// 先清理过期 session（sync.Map 并发安全，不需要额外锁）
@@ -192,8 +199,9 @@ func (a *Agent) SendToInteractiveSession(
 	msg bus.InboundMessage,
 ) (*bus.OutboundMessage, error) {
 	originChannel, originChatID, _ := resolveOriginIDs(msg)
+	instance := msg.Metadata["instance_id"]
 
-	key := interactiveKey(originChannel, originChatID, roleName)
+	key := interactiveKey(originChannel, originChatID, roleName, instance)
 
 	val, ok := a.interactiveSubAgents.Load(key)
 	if !ok {
@@ -297,12 +305,14 @@ func (a *Agent) SendToInteractiveSession(
 }
 
 // UnloadInteractiveSession 结束 interactive session：巩固记忆并清理。
+// instance 为空时行为与旧版一致（向后兼容）。
 func (a *Agent) UnloadInteractiveSession(
 	ctx context.Context,
 	roleName string,
 	channel, chatID string,
+	instance string,
 ) error {
-	key := interactiveKey(channel, chatID, roleName)
+	key := interactiveKey(channel, chatID, roleName, instance)
 
 	val, ok := a.interactiveSubAgents.Load(key)
 	if !ok {
@@ -369,7 +379,8 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 	}
 }
 
-// GetActiveInteractiveRoles 返回当前 session 下所有活跃的 interactive SubAgent role 名。
+// GetActiveInteractiveRoles 返回当前 session 下所有活跃的 interactive SubAgent role 名（含 instance 标识）。
+// 返回格式："roleName" 或 "roleName:instance"。
 func (a *Agent) GetActiveInteractiveRoles(channel, chatID string) []string {
 	var roles []string
 	prefix := channel + ":" + chatID + "/"
@@ -388,14 +399,19 @@ func (a *Agent) GetActiveInteractiveRoles(channel, chatID string) []string {
 
 // CleanupInteractiveSessions 清理指定 session 下所有 interactive sessions。
 func (a *Agent) CleanupInteractiveSessions(ctx context.Context, channel, chatID string) {
-	roles := a.GetActiveInteractiveRoles(channel, chatID)
-	for _, role := range roles {
-		_ = a.UnloadInteractiveSession(ctx, role, channel, chatID)
+	keysToClean := a.GetActiveInteractiveRoles(channel, chatID)
+	for _, key := range keysToClean {
+		// key 格式: "roleName" 或 "roleName:instance"
+		role, instance, hasInstance := strings.Cut(key, ":")
+		if !hasInstance {
+			instance = ""
+		}
+		_ = a.UnloadInteractiveSession(ctx, role, channel, chatID, instance)
 	}
-	if len(roles) > 0 {
+	if len(keysToClean) > 0 {
 		log.WithFields(log.Fields{
 			"session": channel + ":" + chatID,
-			"roles":   roles,
+			"roles":   keysToClean,
 		}).Info("Cleaned up all interactive sessions")
 	}
 }

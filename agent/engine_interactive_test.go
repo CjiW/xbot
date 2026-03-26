@@ -26,7 +26,7 @@ func TestSpawnAgentAdapter_InteractiveSpawn_NilCallback(t *testing.T) {
 		SenderID: "ou_456",
 		ChatID:   "oc_123",
 		Channel:  "feishu",
-	}, "task", "reviewer", "You are a reviewer", nil, tools.SubAgentCapabilities{})
+	}, "task", "reviewer", "You are a reviewer", nil, tools.SubAgentCapabilities{}, "")
 	if err == nil {
 		t.Fatal("expected error when interactive callbacks are nil")
 	}
@@ -41,7 +41,7 @@ func TestSpawnAgentAdapter_InteractiveSend_NilCallback(t *testing.T) {
 	}
 	_, err := adapter.SendInteractive(&tools.ToolContext{
 		Ctx: context.Background(),
-	}, "task", "reviewer", "", nil, tools.SubAgentCapabilities{})
+	}, "task", "reviewer", "", nil, tools.SubAgentCapabilities{}, "")
 	if err == nil {
 		t.Fatal("expected error when interactive callbacks are nil")
 	}
@@ -53,7 +53,7 @@ func TestSpawnAgentAdapter_InteractiveUnload_NilCallback(t *testing.T) {
 	}
 	err := adapter.UnloadInteractive(&tools.ToolContext{
 		Ctx: context.Background(),
-	}, "reviewer")
+	}, "reviewer", "")
 	if err == nil {
 		t.Fatal("expected error when interactive callbacks are nil")
 	}
@@ -80,7 +80,7 @@ func TestSpawnAgentAdapter_InteractiveSpawn_Success(t *testing.T) {
 		SenderID: "ou_456",
 		Channel:  "feishu",
 		ChatID:   "oc_123",
-	}, "review my code", "reviewer", "You are a code reviewer", nil, tools.SubAgentCapabilities{})
+	}, "review my code", "reviewer", "You are a code reviewer", nil, tools.SubAgentCapabilities{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSpawnAgentAdapter_InteractiveSend_Success(t *testing.T) {
 		SenderID: "ou_456",
 		Channel:  "feishu",
 		ChatID:   "oc_123",
-	}, "fix this bug", "writer", "", nil, tools.SubAgentCapabilities{})
+	}, "fix this bug", "writer", "", nil, tools.SubAgentCapabilities{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestSpawnAgentAdapter_InteractiveSend_Success(t *testing.T) {
 func TestSpawnAgentAdapter_InteractiveUnload_Success(t *testing.T) {
 	unloaded := false
 	adapter := &spawnAgentAdapter{
-		interactiveUnloadFn: func(ctx context.Context, roleName string) error {
+		interactiveUnloadFn: func(ctx context.Context, roleName, instance string) error {
 			unloaded = true
 			return nil
 		},
@@ -129,7 +129,7 @@ func TestSpawnAgentAdapter_InteractiveUnload_Success(t *testing.T) {
 
 	err := adapter.UnloadInteractive(&tools.ToolContext{
 		Ctx: context.Background(),
-	}, "reviewer")
+	}, "reviewer", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSpawnAgentAdapter_InteractiveUnload_Success(t *testing.T) {
 
 func TestSpawnAgentAdapter_InteractiveUnload_Error(t *testing.T) {
 	adapter := &spawnAgentAdapter{
-		interactiveUnloadFn: func(ctx context.Context, roleName string) error {
+		interactiveUnloadFn: func(ctx context.Context, roleName, instance string) error {
 			return fmt.Errorf("no such session")
 		},
 		parentID: "main",
@@ -148,7 +148,7 @@ func TestSpawnAgentAdapter_InteractiveUnload_Error(t *testing.T) {
 
 	err := adapter.UnloadInteractive(&tools.ToolContext{
 		Ctx: context.Background(),
-	}, "reviewer")
+	}, "reviewer", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -171,7 +171,7 @@ func TestSpawnAgentAdapter_BuildMsg_Interactive(t *testing.T) {
 		SenderName: "Test User",
 		Channel:    "feishu",
 		ChatID:     "oc_abc",
-	}, "do something", "reviewer", "You are reviewer", []string{"Read", "Grep"}, tools.SubAgentCapabilities{Memory: true}, true)
+	}, "do something", "reviewer", "You are reviewer", []string{"Read", "Grep"}, tools.SubAgentCapabilities{Memory: true}, true, "")
 
 	// Check interactive flag in metadata
 	if msg.Metadata["interactive"] != "true" {
@@ -192,6 +192,36 @@ func TestSpawnAgentAdapter_BuildMsg_Interactive(t *testing.T) {
 	if len(msg.AllowedTools) != 2 {
 		t.Errorf("AllowedTools = %v, want 2 items", msg.AllowedTools)
 	}
+	// instance should not be set when empty
+	if _, ok := msg.Metadata["instance_id"]; ok {
+		t.Error("instance_id should not be set in metadata when instance is empty")
+	}
+}
+
+func TestSpawnAgentAdapter_BuildMsg_WithInstance(t *testing.T) {
+	adapter := &spawnAgentAdapter{
+		parentID: "main",
+		channel:  "feishu",
+		chatID:   "oc_abc",
+		senderID: "ou_xyz",
+	}
+
+	msg := adapter.buildMsg(&tools.ToolContext{
+		Ctx:        context.Background(),
+		SenderID:   "ou_xyz",
+		SenderName: "Test User",
+		Channel:    "feishu",
+		ChatID:     "oc_abc",
+	}, "do something", "brainstorm", "You are brainstorm agent", nil, tools.SubAgentCapabilities{}, true, "architect")
+
+	// Check interactive flag in metadata
+	if msg.Metadata["interactive"] != "true" {
+		t.Errorf("metadata[interactive] = %q, want %q", msg.Metadata["interactive"], "true")
+	}
+	// Check instance_id in metadata
+	if msg.Metadata["instance_id"] != "architect" {
+		t.Errorf("metadata[instance_id] = %q, want %q", msg.Metadata["instance_id"], "architect")
+	}
 }
 
 func TestSpawnAgentAdapter_BuildMsg_NonInteractive(t *testing.T) {
@@ -205,7 +235,7 @@ func TestSpawnAgentAdapter_BuildMsg_NonInteractive(t *testing.T) {
 	msg := adapter.buildMsg(&tools.ToolContext{
 		Ctx:      context.Background(),
 		SenderID: "ou_xyz",
-	}, "do something", "reviewer", "", nil, tools.SubAgentCapabilities{}, false)
+	}, "do something", "reviewer", "", nil, tools.SubAgentCapabilities{}, false, "")
 
 	if msg.Metadata["interactive"] == "true" {
 		t.Error("interactive flag should not be set for non-interactive mode")

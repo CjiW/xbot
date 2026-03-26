@@ -182,8 +182,8 @@ func (a *Agent) buildMainRunConfig(
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,
 		SendFn:  a.SendToInteractiveSession,
-		UnloadFn: func(ctx context.Context, roleName string) error {
-			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID)
+		UnloadFn: func(ctx context.Context, roleName, instance string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID, instance)
 		},
 	}
 
@@ -438,8 +438,8 @@ func (a *Agent) buildSubAgentRunConfig(
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,
 		SendFn:  a.SendToInteractiveSession,
-		UnloadFn: func(ctx context.Context, roleName string) error {
-			return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID)
+		UnloadFn: func(ctx context.Context, roleName, instance string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID, instance)
 		},
 	}
 
@@ -488,8 +488,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
 		SpawnFn: a.SpawnInteractiveSession,
 		SendFn:  a.SendToInteractiveSession,
-		UnloadFn: func(ctx context.Context, roleName string) error {
-			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID)
+		UnloadFn: func(ctx context.Context, roleName, instance string) error {
+			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID, instance)
 		},
 	}
 

@@ -25,66 +25,67 @@ Modes:
 1. "create" — Create a new file.
    Required: path, content
 
-2. "replace" — Find and replace exact text.
+2. "replace" — Find and replace text (exact or regex).
    Required: path, old_string, new_string
-   Optional: replace_all (default false), start_line, end_line
+   Optional: replace_all (default false), start_line, end_line, regex (default false)
+   When regex=true, old_string is treated as RE2 pattern, new_string supports $1/$2 captures.
 
-3. "line" — Edit a specific line by number.
+3. "line" — Edit specific line(s) by number.
    Required: path, line_number, action ("insert_before"|"insert_after"|"replace"|"delete")
    Required for insert/replace actions: content
+   Optional: count (default 1, how many consecutive lines to replace or delete)
+   Position "start"/"end" is also supported via action.
 
-4. "regex" — Replace using regular expression (RE2 syntax).
-   Required: path, pattern, replacement
-   Optional: replace_all (default false), start_line, end_line
-
-5. "insert" — Insert content at a position.
-   Required: path, position ("start"|"end"|line number), content
-
-IMPORTANT: "replace" mode uses old_string/new_string (NOT content). "regex" mode uses pattern/replacement (NOT content).
+⚠️ Common mistakes (avoid these!):
+- line mode: line_number is 1-based. delete only removes 1 line — set count to delete multiple.
+- replace mode: uses old_string/new_string, NOT content. Regex mode uses pattern/replacement (deprecated, use regex flag).
+- To replace ALL occurrences, you MUST set replace_all=true. Without it, only the first match is replaced.
+- start_line and end_line restrict the search range (1-based, inclusive). They do NOT select lines for replacement.
 
 Examples:
 - {"mode": "create", "path": "hello.txt", "content": "Hello!"}
 - {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar"}
 - {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar", "replace_all": true, "start_line": 10, "end_line": 20}
+- {"mode": "replace", "path": "main.go", "old_string": "v\\d+\\.\\d+", "new_string": "v2.0", "regex": true}
 - {"mode": "line", "path": "main.go", "line_number": 10, "action": "insert_after", "content": "// comment"}
 - {"mode": "line", "path": "main.go", "line_number": 5, "action": "delete"}
-- {"mode": "regex", "path": "main.go", "pattern": "v\\d+\\.\\d+", "replacement": "v2.0"}
-- {"mode": "insert", "path": "log.txt", "position": "end", "content": "new entry\n"}`
+- {"mode": "line", "path": "main.go", "line_number": 3, "action": "delete", "count": 3}
+- {"mode": "line", "path": "log.txt", "action": "insert", "position": "end", "content": "new entry\n"}`
 }
 
 func (t *EditTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "path", Type: "string", Description: "File path (relative to working directory or absolute)", Required: true},
-		{Name: "mode", Type: "string", Description: "Edit mode: create, replace, line, regex, or insert", Required: true},
-		{Name: "content", Type: "string", Description: "Content for create/insert/line modes (NOT used by replace or regex mode)", Required: false},
-		{Name: "old_string", Type: "string", Description: "Exact text to find (replace mode only)", Required: false},
-		{Name: "new_string", Type: "string", Description: "Text to replace old_string with (replace mode only)", Required: false},
+		{Name: "mode", Type: "string", Description: "Edit mode: create, replace, or line", Required: true},
+		{Name: "content", Type: "string", Description: "Content for create/line modes (NOT used by replace mode)", Required: false},
+		{Name: "old_string", Type: "string", Description: "Exact text to find (replace mode). When regex=true, treated as RE2 pattern.", Required: false},
+		{Name: "new_string", Type: "string", Description: "Text to replace old_string with (replace mode). Supports $1/$2 when regex=true.", Required: false},
 		{Name: "line_number", Type: "integer", Description: "1-based line number (line mode only)", Required: false},
 		{Name: "action", Type: "string", Description: "Line action: insert_before, insert_after, replace, delete (line mode only)", Required: false},
-		{Name: "pattern", Type: "string", Description: "RE2 regex pattern (regex mode only)", Required: false},
-		{Name: "replacement", Type: "string", Description: "Replacement string, supports $1/$2 captures (regex mode only)", Required: false},
-		{Name: "position", Type: "string", Description: "Insert position: start, end, or line number (insert mode only)", Required: false},
-		{Name: "replace_all", Type: "boolean", Description: "Replace all occurrences, default false (replace/regex modes)", Required: false},
-		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive (replace/regex modes)", Required: false},
-		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive (replace/regex modes)", Required: false},
+		{Name: "position", Type: "string", Description: "Insert position: start or end (line mode, alternative to line_number)", Required: false},
+		{Name: "replace_all", Type: "boolean", Description: "Replace all occurrences, default false (replace mode)", Required: false},
+		{Name: "regex", Type: "boolean", Description: "Use RE2 regex matching in replace mode, default false", Required: false},
+		{Name: "count", Type: "integer", Description: "Number of consecutive lines to replace or delete, default 1 (line mode)", Required: false},
+		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive (replace mode)", Required: false},
+		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive (replace mode)", Required: false},
 	}
 }
 
 // EditParams 编辑参数
 type EditParams struct {
-	Path        string `json:"path"`
-	Mode        string `json:"mode"`
-	OldString   string `json:"old_string"`
-	NewString   string `json:"new_string"`
-	LineNumber  int    `json:"line_number"`
-	Action      string `json:"action"`
-	Content     string `json:"content"`
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
-	Position    string `json:"position"`
-	ReplaceAll  bool   `json:"replace_all"`
-	StartLine   int    `json:"start_line"` // Optional: restrict replace/regex search start line (1-based, inclusive)
-	EndLine     int    `json:"end_line"`   // Optional: restrict replace/regex search end line (1-based, inclusive)
+	Path       string `json:"path"`
+	Mode       string `json:"mode"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	LineNumber int    `json:"line_number"`
+	Action     string `json:"action"`
+	Content    string `json:"content"`
+	Position   string `json:"position"`
+	ReplaceAll bool   `json:"replace_all"`
+	Regex      bool   `json:"regex"`
+	Count      int    `json:"count"`
+	StartLine  int    `json:"start_line"` // Optional: restrict replace search start line (1-based, inclusive)
+	EndLine    int    `json:"end_line"`   // Optional: restrict replace search end line (1-based, inclusive)
 }
 
 func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -101,30 +102,23 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 		return nil, fmt.Errorf("mode is required")
 	}
 
-	// 根据不同 mode 检查必要字段非空
+	// --- Backward compatibility: map deprecated modes ---
 	switch params.Mode {
-	case "create":
-		// path already validated above
-	case "replace":
-		if params.OldString == "" {
-			return nil, fmt.Errorf("old_string is required for replace mode")
-		}
 	case "regex":
-		if params.Pattern == "" {
-			return nil, fmt.Errorf("pattern is required for regex mode")
-		}
-	case "line":
-		if params.Action == "" {
-			return nil, fmt.Errorf("action is required for line mode")
-		}
+		params.Mode = "replace"
+		params.Regex = true
 	case "insert":
-		if params.Position == "" {
-			return nil, fmt.Errorf("position is required for insert mode")
-		}
+		params.Mode = "line"
+		params.Action = "insert"
+	}
+
+	// Validate parameters
+	if err := t.validateParams(params); err != nil {
+		return nil, err
 	}
 
 	// 沙箱模式
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	if shouldUseSandbox(ctx) {
 		return t.executeInSandbox(ctx, params)
 	}
 
@@ -132,45 +126,87 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	return t.executeLocal(ctx, params)
 }
 
+// validateParams checks for contradictory parameter combinations and returns clear error messages.
+func (t *EditTool) validateParams(params EditParams) error {
+	switch params.Mode {
+	case "create":
+		// No contradictions possible for create
+	case "replace":
+		if params.OldString == "" {
+			return fmt.Errorf("old_string is required for replace mode")
+		}
+		if params.LineNumber > 0 {
+			return fmt.Errorf("line_number is not used in replace mode — use start_line/end_line to restrict the search range")
+		}
+		if params.Action != "" {
+			return fmt.Errorf("action is not used in replace mode — it is only for line mode")
+		}
+		if params.Count > 0 {
+			return fmt.Errorf("count is not used in replace mode — it is only for line mode (delete/replace actions)")
+		}
+	case "line":
+		if params.Action == "" {
+			return fmt.Errorf("action is required for line mode")
+		}
+		if params.OldString != "" {
+			return fmt.Errorf("old_string is not used in line mode — use content for insert/replace, or omit for delete")
+		}
+		if params.NewString != "" {
+			return fmt.Errorf("new_string is not used in line mode — use content for insert/replace")
+		}
+		if params.Regex {
+			return fmt.Errorf("regex is not used in line mode — use replace mode with regex=true instead")
+		}
+		if params.StartLine > 0 || params.EndLine > 0 {
+			return fmt.Errorf("start_line/end_line are not used in line mode — they are for replace mode")
+		}
+		if params.Action == "insert" && params.Position == "" {
+			return fmt.Errorf("position is required when action=insert (use 'start' or 'end')")
+		}
+		if params.Action == "insert" && params.LineNumber > 0 && params.Position != "" {
+			return fmt.Errorf("specify either line_number or position, not both — use line_number for insert_before/insert_after, or position for start/end")
+		}
+	default:
+		return fmt.Errorf("unknown mode: %q (supported: create, replace, line)", params.Mode)
+	}
+	return nil
+}
+
 // executeInSandbox 在沙箱内执行编辑操作
 func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
-	sandboxBase := sandboxBaseDir(ctx)
+	sandboxPath := t.resolveSandboxPath(ctx, params.Path)
 
-	// 将用户输入的路径转换为容器内路径
-	sandboxPath := params.Path
-	if !strings.HasPrefix(params.Path, sandboxBase+"/") && params.Path != sandboxBase && !strings.HasPrefix(params.Path, "/") {
-		// 相对路径：优先基于 CurrentDir（Cd 后的沙箱路径），否则 sandboxBase
-		if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
-			sandboxPath = filepath.Join(sandboxCWD, params.Path)
-		} else {
-			sandboxPath = sandboxBase + "/" + params.Path
-		}
-	} else if strings.HasPrefix(params.Path, sandboxBase+"/") || params.Path == sandboxBase {
-		sandboxPath = params.Path
-	} else if strings.HasPrefix(params.Path, "/") {
-		if ctx.WorkspaceRoot != "" {
-			rel, err := filepath.Rel(ctx.WorkspaceRoot, params.Path)
-			if err == nil && !strings.HasPrefix(rel, "..") {
-				sandboxPath = sandboxBase + "/" + rel
-			}
-		}
-	}
-
-	// 根据不同模式执行
 	switch params.Mode {
 	case "create":
 		return t.sandboxCreate(ctx, sandboxPath, params.Content)
 	case "replace":
-		return t.sandboxReplace(ctx, sandboxPath, params.OldString, params.NewString, params.ReplaceAll, params.StartLine, params.EndLine)
+		return t.sandboxReplace(ctx, sandboxPath, params)
 	case "line":
-		return t.sandboxLineEdit(ctx, sandboxPath, params.LineNumber, params.Action, params.Content)
-	case "regex":
-		return t.sandboxRegexReplace(ctx, sandboxPath, params.Pattern, params.Replacement, params.ReplaceAll, params.StartLine, params.EndLine)
-	case "insert":
-		return t.sandboxInsert(ctx, sandboxPath, params.Position, params.Content)
+		return t.sandboxLineEdit(ctx, sandboxPath, params)
 	default:
-		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
+		return nil, fmt.Errorf("unknown mode: %q (supported: create, replace, line)", params.Mode)
 	}
+}
+
+// resolveSandboxPath 将用户输入的路径转换为容器内路径
+func (t *EditTool) resolveSandboxPath(ctx *ToolContext, userPath string) string {
+	sandboxBase := sandboxBaseDir(ctx)
+
+	if !strings.HasPrefix(userPath, sandboxBase+"/") && userPath != sandboxBase && !strings.HasPrefix(userPath, "/") {
+		if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
+			return filepath.Join(sandboxCWD, userPath)
+		}
+		return sandboxBase + "/" + userPath
+	} else if strings.HasPrefix(userPath, sandboxBase+"/") || userPath == sandboxBase {
+		return userPath
+	} else if strings.HasPrefix(userPath, "/") {
+		if ctx.WorkspaceRoot != "" {
+			if rel, err := filepath.Rel(ctx.WorkspaceRoot, userPath); err == nil && !strings.HasPrefix(rel, "..") {
+				return sandboxBase + "/" + rel
+			}
+		}
+	}
+	return userPath
 }
 
 // sandboxReadFile 通过 cat 读取沙箱内文件内容（保留原始内容，不做 TrimSpace）
@@ -216,7 +252,7 @@ func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolR
 	return &ToolResult{Summary: summary, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
-func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string, replaceAll bool, startLine, endLine int) (*ToolResult, error) {
+func (t *EditTool) sandboxReplace(ctx *ToolContext, path string, params EditParams) (*ToolResult, error) {
 	// 读取文件内容（保留原始内容含 trailing newline）
 	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
@@ -224,7 +260,6 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 	}
 
 	// 复用 doReplace 逻辑（纯 Go，无 shell 转义问题）
-	params := EditParams{OldString: oldStr, NewString: newStr, ReplaceAll: replaceAll, StartLine: startLine, EndLine: endLine}
 	newContent, result, err := t.doReplace(oldContent, params, path)
 	if err != nil {
 		return nil, err
@@ -238,73 +273,15 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path, oldStr, newStr string,
 	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
-func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, lineNum int, action, content string) (*ToolResult, error) {
+func (t *EditTool) sandboxLineEdit(ctx *ToolContext, path string, params EditParams) (*ToolResult, error) {
 	// 读取文件内容
 	oldContent, err := sandboxReadFile(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 
-	// 构造 EditParams 复用纯 Go 的 doLineEdit 逻辑
-	params := EditParams{
-		LineNumber: lineNum,
-		Action:     action,
-		Content:    content,
-	}
+	// 复用纯 Go 的 doLineEdit 逻辑
 	newContent, result, err := t.doLineEdit(oldContent, params)
-	if err != nil {
-		return nil, err
-	}
-
-	// 写回文件
-	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
-		return nil, err
-	}
-
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
-}
-
-func (t *EditTool) sandboxRegexReplace(ctx *ToolContext, path, pattern, replacement string, replaceAll bool, startLine, endLine int) (*ToolResult, error) {
-	// 读取文件内容
-	oldContent, err := sandboxReadFile(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	// 构造 EditParams 复用纯 Go 的 doRegexReplace 逻辑
-	params := EditParams{
-		Pattern:     pattern,
-		Replacement: replacement,
-		ReplaceAll:  replaceAll,
-		StartLine:   startLine,
-		EndLine:     endLine,
-	}
-	newContent, result, err := t.doRegexReplace(oldContent, params, path)
-	if err != nil {
-		return nil, err
-	}
-
-	// 写回文件
-	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
-		return nil, err
-	}
-
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
-}
-
-func (t *EditTool) sandboxInsert(ctx *ToolContext, path, position, content string) (*ToolResult, error) {
-	// 读取文件内容
-	oldContent, err := sandboxReadFile(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-
-	// 构造 EditParams 复用纯 Go 的 doInsert 逻辑
-	params := EditParams{
-		Position: position,
-		Content:  content,
-	}
-	newContent, result, err := t.doInsert(oldContent, params, path)
 	if err != nil {
 		return nil, err
 	}
@@ -348,12 +325,8 @@ func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResul
 		newContent, result, err = t.doReplace(oldContent, params, filePath)
 	case "line":
 		newContent, result, err = t.doLineEdit(oldContent, params)
-	case "regex":
-		newContent, result, err = t.doRegexReplace(oldContent, params, filePath)
-	case "insert":
-		newContent, result, err = t.doInsert(oldContent, params, filePath)
 	default:
-		return nil, fmt.Errorf("unknown mode: %s (supported: create, replace, line, regex, insert)", params.Mode)
+		return nil, fmt.Errorf("unknown mode: %q (supported: create, replace, line)", params.Mode)
 	}
 
 	if err != nil {
@@ -482,7 +455,7 @@ func splitContentByLineRange(content string, startLine, endLine int) (string, st
 	return prefix, rangeText, suffix, nil
 }
 
-// doReplace 执行文本替换
+// doReplace 执行文本替换（支持精确匹配和正则匹配）
 func (t *EditTool) doReplace(content string, params EditParams, filePath string) (string, string, error) {
 	if params.OldString == "" {
 		return "", "", fmt.Errorf("old_string is required for replace mode")
@@ -492,6 +465,10 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 	prefix, rangeText, suffix, err := splitContentByLineRange(content, params.StartLine, params.EndLine)
 	if err != nil {
 		return "", "", err
+	}
+
+	if params.Regex {
+		return t.doRegexReplaceIn(prefix, rangeText, suffix, params, filePath, content)
 	}
 
 	// 检查是否存在要替换的文本
@@ -533,10 +510,61 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 	return newContent, fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", replacedCount, filePath), nil
 }
 
-// doLineEdit 执行行编辑
+// doRegexReplaceIn 执行正则替换（内部函数，由 doReplace 在 regex=true 时调用）
+// SECURITY NOTE: Go's regexp package uses RE2 engine which guarantees O(n) time complexity
+// for all operations, preventing ReDoS attacks.
+func (t *EditTool) doRegexReplaceIn(prefix, rangeText, suffix string, params EditParams, filePath, fullContent string) (string, string, error) {
+	re, err := regexp.Compile(params.OldString)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	matches := re.FindAllString(rangeText, -1)
+	if len(matches) == 0 {
+		if params.StartLine > 0 || params.EndLine > 0 {
+			effStart := params.StartLine
+			if effStart <= 0 {
+				effStart = 1
+			}
+			effEnd := params.EndLine
+			if effEnd <= 0 {
+				effEnd = len(strings.Split(fullContent, "\n"))
+			}
+			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.OldString)
+		}
+		return "", "", fmt.Errorf("no match found for pattern: %s", params.OldString)
+	}
+
+	var newRangeText string
+	var replacedCount int
+
+	if params.ReplaceAll {
+		newRangeText = re.ReplaceAllString(rangeText, params.NewString)
+		replacedCount = len(matches)
+	} else {
+		newRangeText = re.ReplaceAllStringFunc(rangeText, func(m string) string {
+			if replacedCount == 0 {
+				replacedCount++
+				return re.ReplaceAllString(m, params.NewString)
+			}
+			return m
+		})
+	}
+
+	newContent := prefix + newRangeText + suffix
+
+	if len(matches) > 1 && !params.ReplaceAll {
+		return newContent, fmt.Sprintf("Replaced 1 of %d matches. Use replace_all=true to replace all.", len(matches)), nil
+	}
+
+	return newContent, fmt.Sprintf("Successfully replaced %d match(es) in %s", replacedCount, filePath), nil
+}
+
+// doLineEdit 执行行编辑（支持 count 批量操作和 position 定位）
 func (t *EditTool) doLineEdit(content string, params EditParams) (string, string, error) {
-	if params.LineNumber <= 0 {
-		return "", "", fmt.Errorf("line_number must be positive (1-based)")
+	// Handle action="insert" with position (formerly "insert" mode)
+	if params.Action == "insert" {
+		return t.doPositionInsert(content, params)
 	}
 
 	if params.Action == "" {
@@ -545,6 +573,16 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 
 	lines, hasTrailingNL := splitLines(content)
 	totalLines := len(lines)
+
+	// Default count to 1
+	count := params.Count
+	if count <= 0 {
+		count = 1
+	}
+
+	if params.LineNumber <= 0 {
+		return "", "", fmt.Errorf("line_number must be positive (1-based)")
+	}
 
 	if params.LineNumber > totalLines {
 		return "", "", fmt.Errorf("line_number %d exceeds total lines %d", params.LineNumber, totalLines)
@@ -577,120 +615,58 @@ func (t *EditTool) doLineEdit(content string, params EditParams) (string, string
 		if params.Content == "" {
 			return "", "", fmt.Errorf("content is required for replace action")
 		}
-		oldLine := lines[idx]
+		if idx+count > totalLines {
+			return "", "", fmt.Errorf("line_number %d + count %d exceeds total lines %d", params.LineNumber, count, totalLines)
+		}
+		oldLines := make([]string, count)
+		copy(oldLines, lines[idx:idx+count])
 		lines[idx] = params.Content
-		return joinWithTrailing(lines, hasTrailingNL), fmt.Sprintf("Replaced line %d: %q -> %q", params.LineNumber, Truncate(oldLine, 50), Truncate(params.Content, 50)), nil
+		newLines := make([]string, 0, len(lines)-count+1)
+		newLines = append(newLines, lines[:idx+1]...)
+		newLines = append(newLines, lines[idx+count:]...)
+		return joinWithTrailing(newLines, hasTrailingNL),
+			fmt.Sprintf("Replaced %d line(s) at line %d: %q -> %q", count, params.LineNumber, Truncate(strings.Join(oldLines, "\n"), 50), Truncate(params.Content, 50)), nil
 
 	case "delete":
-		oldLine := lines[idx]
-		newLines := make([]string, 0, len(lines)-1)
+		if idx+count > totalLines {
+			return "", "", fmt.Errorf("line_number %d + count %d exceeds total lines %d", params.LineNumber, count, totalLines)
+		}
+		deletedLines := make([]string, count)
+		copy(deletedLines, lines[idx:idx+count])
+		newLines := make([]string, 0, len(lines)-count)
 		newLines = append(newLines, lines[:idx]...)
-		newLines = append(newLines, lines[idx+1:]...)
-		return joinWithTrailing(newLines, hasTrailingNL), fmt.Sprintf("Deleted line %d: %q", params.LineNumber, Truncate(oldLine, 50)), nil
+		newLines = append(newLines, lines[idx+count:]...)
+		return joinWithTrailing(newLines, hasTrailingNL),
+			fmt.Sprintf("Deleted %d line(s) at line %d: %q", count, params.LineNumber, Truncate(strings.Join(deletedLines, "\n"), 80)), nil
 
 	default:
-		return "", "", fmt.Errorf("unknown action: %s (supported: insert_before, insert_after, replace, delete)", params.Action)
+		return "", "", fmt.Errorf("unknown action: %q (supported: insert_before, insert_after, replace, delete)", params.Action)
 	}
 }
 
-// doRegexReplace 执行正则替换
-// SECURITY NOTE: Go's regexp package uses RE2 engine which guarantees O(n) time complexity
-// for all operations, preventing ReDoS (Regular Expression Denial of Service) attacks.
-// No explicit step limit is needed because RE2's design fundamentally avoids exponential
-// backtracking found in PCRE/Perl-style engines.
-func (t *EditTool) doRegexReplace(content string, params EditParams, filePath string) (string, string, error) {
-	if params.Pattern == "" {
-		return "", "", fmt.Errorf("pattern is required for regex mode")
-	}
-
-	re, err := regexp.Compile(params.Pattern)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid regex pattern: %w", err)
-	}
-
-	// Split content by line range if start_line/end_line specified
-	prefix, rangeText, suffix, err := splitContentByLineRange(content, params.StartLine, params.EndLine)
-	if err != nil {
-		return "", "", err
-	}
-
-	// 统计匹配数量
-	matches := re.FindAllString(rangeText, -1)
-	if len(matches) == 0 {
-		if params.StartLine > 0 || params.EndLine > 0 {
-			effStart := params.StartLine
-			if effStart <= 0 {
-				effStart = 1
-			}
-			effEnd := params.EndLine
-			if effEnd <= 0 {
-				effEnd = len(strings.Split(content, "\n"))
-			}
-			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.Pattern)
-		}
-		return "", "", fmt.Errorf("no match found for pattern: %s", params.Pattern)
-	}
-
-	var newRangeText string
-	var replacedCount int
-
-	if params.ReplaceAll {
-		newRangeText = re.ReplaceAllString(rangeText, params.Replacement)
-		replacedCount = len(matches)
-	} else {
-		newRangeText = re.ReplaceAllStringFunc(rangeText, func(m string) string {
-			if replacedCount == 0 {
-				replacedCount++
-				return re.ReplaceAllString(m, params.Replacement)
-			}
-			return m
-		})
-	}
-
-	newContent := prefix + newRangeText + suffix
-
-	if len(matches) > 1 && !params.ReplaceAll {
-		return newContent, fmt.Sprintf("Replaced 1 of %d matches. Use replace_all=true to replace all.", len(matches)), nil
-	}
-
-	return newContent, fmt.Sprintf("Successfully replaced %d match(es) in %s", replacedCount, filePath), nil
-}
-
-// doInsert 执行插入操作
-func (t *EditTool) doInsert(content string, params EditParams, filePath string) (string, string, error) {
+// doPositionInsert handles position-based insertion (formerly "insert" mode).
+// action must be "insert", position must be "start" or "end".
+func (t *EditTool) doPositionInsert(content string, params EditParams) (string, string, error) {
 	if params.Content == "" {
-		return "", "", fmt.Errorf("content is required for insert mode")
-	}
-
-	if params.Position == "" {
-		return "", "", fmt.Errorf("position is required for insert mode")
+		return "", "", fmt.Errorf("content is required for insert action")
 	}
 
 	switch params.Position {
 	case "start":
 		if len(content) > 0 && len(params.Content) > 0 && !strings.HasSuffix(params.Content, "\n") {
-			return params.Content + "\n" + content, fmt.Sprintf("Inserted content at the start of %s", filePath), nil
+			return params.Content + "\n" + content, "Inserted content at the start", nil
 		}
-		return params.Content + content, fmt.Sprintf("Inserted content at the start of %s", filePath), nil
+		return params.Content + content, "Inserted content at the start", nil
 
 	case "end":
 		// 确保末尾有换行符
 		if len(content) > 0 && content[len(content)-1] != '\n' {
 			content += "\n"
 		}
-		return content + params.Content, fmt.Sprintf("Inserted content at the end of %s", filePath), nil
+		return content + params.Content, "Inserted content at the end", nil
 
 	default:
-		// 尝试解析为行号
-		var lineNum int
-		if _, err := fmt.Sscanf(params.Position, "%d", &lineNum); err != nil {
-			return "", "", fmt.Errorf("invalid position: %s (use 'start', 'end', or a line number)", params.Position)
-		}
-
-		// 使用行编辑逻辑
-		params.LineNumber = lineNum
-		params.Action = "insert_after"
-		return t.doLineEdit(content, params)
+		return "", "", fmt.Errorf("invalid position: %q (use 'start' or 'end', or use action=insert_before/insert_after with line_number)", params.Position)
 	}
 }
 

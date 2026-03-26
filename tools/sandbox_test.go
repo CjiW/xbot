@@ -133,8 +133,8 @@ func TestDockerSandboxExportPersistence(t *testing.T) {
 	s2.Close()
 }
 
-func newDockerSandbox(image string) *dockerSandbox {
-	return &dockerSandbox{
+func newDockerSandbox(image string) *DockerSandbox {
+	return &DockerSandbox{
 		image:      image,
 		containers: make(map[string]*dockerContainer),
 	}

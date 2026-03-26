@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	log "xbot/logger"
 	"xbot/tools"
@@ -15,13 +18,23 @@ import (
 // Skills are loaded on-demand by the LLM using the Read tool (OpenClaw-style progressive disclosure).
 // Skill creation/deletion is done via Edit/Shell tools — no dedicated Skill tool needed.
 type SkillStore struct {
-	globalDirs []string // 全局只读 skills 根目录
-	workDir    string   // 用于派生用户私有 skills 目录
+	globalDirs []string      // 全局只读 skills 根目录
+	workDir    string        // 用于派生用户私有 skills 目录
+	sandbox    tools.Sandbox // Sandbox 实例（nil 表示无沙箱）
+	// per-user TTL cache (5 minutes). Uses map to support concurrent multi-user access
+	// without cache thrashing (each user's cache is independent).
+	mu         sync.RWMutex
+	cache      map[string][]SkillInfo // key=userID, value=skills list
+	cacheTimes map[string]time.Time   // key=userID, value=last refresh time
 }
 
 // NewSkillStore creates a SkillStore
-func NewSkillStore(workDir string, globalDirs []string) *SkillStore {
-	return &SkillStore{workDir: workDir, globalDirs: globalDirs}
+func NewSkillStore(workDir string, globalDirs []string, sandbox tools.Sandbox) *SkillStore {
+	return &SkillStore{
+		workDir:    workDir,
+		globalDirs: globalDirs,
+		sandbox:    sandbox,
+	}
 }
 
 // SkillInfo holds basic skill metadata parsed from SKILL.md frontmatter
@@ -38,18 +51,43 @@ type SkillInfo struct {
 	InstalledAt   int64  `json:"installed_at,omitempty"`
 }
 
-// ListSkills scans the skills directory and returns all discovered skills
-func (s *SkillStore) ListSkills(senderID string) ([]SkillInfo, error) {
-	sources := make([]string, 0, len(s.globalDirs)+1)
-	sources = append(sources, s.globalDirs...)
-	if senderID != "" {
-		sources = append(sources, tools.UserSkillsRoot(s.workDir, senderID))
+// userSkillsDir 返回用户 skill 目录路径（沙箱感知）
+func (s *SkillStore) userSkillsDir(senderID string) string {
+	if s.sandbox != nil && s.sandbox.Name() != "none" {
+		return filepath.Join(s.sandbox.Workspace(senderID), "skills")
 	}
+	return tools.UserSkillsRoot(s.workDir, senderID)
+}
 
+// isUserSkillsSandboxed 返回用户 skills 目录是否在沙箱内
+func (s *SkillStore) isUserSkillsSandboxed() bool {
+	return s.sandbox != nil && s.sandbox.Name() != "none"
+}
+
+// ListSkills scans the skills directory and returns all discovered skills
+func (s *SkillStore) ListSkills(ctx context.Context, senderID string) ([]SkillInfo, error) {
+	// Check per-user cache
+	s.mu.RLock()
+	if s.cache != nil {
+		if cached, ok := s.cache[senderID]; ok {
+			if cacheTime, ok := s.cacheTimes[senderID]; ok && time.Since(cacheTime) < 5*time.Minute {
+				s.mu.RUnlock()
+				return cached, nil
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	return s.refreshSkills(ctx, senderID)
+}
+
+// refreshSkills 扫描目录并更新缓存
+func (s *SkillStore) refreshSkills(ctx context.Context, senderID string) ([]SkillInfo, error) {
 	merged := make(map[string]SkillInfo)
 	orderedNames := make([]string, 0)
 
-	for _, dir := range sources {
+	// 扫描全局目录（始终用 os.*）
+	for _, dir := range s.globalDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -68,7 +106,12 @@ func (s *SkillStore) ListSkills(senderID string) ([]SkillInfo, error) {
 				continue
 			}
 
-			name, description := parseSkillFrontmatter(skillFile)
+			data, err := os.ReadFile(skillFile)
+			if err != nil {
+				continue
+			}
+
+			name, description := parseSkillFrontmatter(data)
 			if name == "" {
 				name = e.Name()
 			}
@@ -84,18 +127,32 @@ func (s *SkillStore) ListSkills(senderID string) ([]SkillInfo, error) {
 		}
 	}
 
+	// 扫描用户目录（沙箱感知）
+	s.scanUserSkills(ctx, senderID, merged, &orderedNames)
+
 	sort.Strings(orderedNames)
 	skills := make([]SkillInfo, 0, len(orderedNames))
 	for _, name := range orderedNames {
 		skills = append(skills, merged[name])
 	}
+
+	// 更新缓存
+	s.mu.Lock()
+	if s.cache == nil {
+		s.cache = make(map[string][]SkillInfo)
+		s.cacheTimes = make(map[string]time.Time)
+	}
+	s.cache[senderID] = skills
+	s.cacheTimes[senderID] = time.Now()
+	s.mu.Unlock()
+
 	return skills, nil
 }
 
 // GetSkillsCatalog returns a formatted catalog of all available skills for the system prompt.
 // The LLM uses the Read tool to load a skill's SKILL.md when the task matches its description.
-func (s *SkillStore) GetSkillsCatalog(senderID string) string {
-	skills, err := s.ListSkills(senderID)
+func (s *SkillStore) GetSkillsCatalog(ctx context.Context, senderID string) string {
+	skills, err := s.ListSkills(ctx, senderID)
 	if err != nil {
 		log.WithError(err).Warn("Failed to list skills for catalog")
 		return ""
@@ -115,12 +172,81 @@ func (s *SkillStore) GetSkillsCatalog(senderID string) string {
 	return sb.String()
 }
 
-// parseSkillFrontmatter extracts name and description from a SKILL.md YAML frontmatter
-func parseSkillFrontmatter(path string) (name, description string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", ""
+// InvalidateCache clears the skill cache for all users, forcing a rescan on the next ListSkills call.
+func (s *SkillStore) InvalidateCache() {
+	s.mu.Lock()
+	s.cache = nil
+	s.cacheTimes = nil
+	s.mu.Unlock()
+}
+
+// scanUserSkills scans the user's private skills directory (sandbox-aware) and appends results to merged/orderedNames.
+// Returns early (without error) if the user directory doesn't exist — missing directory is not an error.
+func (s *SkillStore) scanUserSkills(ctx context.Context, senderID string, merged map[string]SkillInfo, orderedNames *[]string) {
+	if senderID == "" {
+		return
 	}
+	userDir := s.userSkillsDir(senderID)
+
+	if s.isUserSkillsSandboxed() {
+		entries, err := s.sandbox.ReadDir(ctx, userDir, senderID)
+		if err != nil {
+			return // directory doesn't exist or unreadable — not an error
+		}
+		for _, e := range entries {
+			if !e.IsDir {
+				continue
+			}
+			skillDir := filepath.Join(userDir, e.Name)
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			if _, err := s.sandbox.Stat(ctx, skillFile, senderID); err != nil {
+				continue
+			}
+			data, err := s.sandbox.ReadFile(ctx, skillFile, senderID)
+			if err != nil {
+				continue
+			}
+			name, description := parseSkillFrontmatter(data)
+			if name == "" {
+				name = e.Name
+			}
+			if _, exists := merged[name]; !exists {
+				*orderedNames = append(*orderedNames, name)
+			}
+			merged[name] = SkillInfo{Name: name, Description: description, Path: skillDir}
+		}
+	} else {
+		entries, err := os.ReadDir(userDir)
+		if err != nil {
+			return // directory doesn't exist or unreadable — not an error
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			skillDir := filepath.Join(userDir, e.Name())
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			if _, err := os.Stat(skillFile); err != nil {
+				continue
+			}
+			data, err := os.ReadFile(skillFile)
+			if err != nil {
+				continue
+			}
+			name, description := parseSkillFrontmatter(data)
+			if name == "" {
+				name = e.Name()
+			}
+			if _, exists := merged[name]; !exists {
+				*orderedNames = append(*orderedNames, name)
+			}
+			merged[name] = SkillInfo{Name: name, Description: description, Path: skillDir}
+		}
+	}
+}
+
+// parseSkillFrontmatter extracts name and description from SKILL.md YAML frontmatter data.
+func parseSkillFrontmatter(data []byte) (name, description string) {
 	content := string(data)
 
 	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
@@ -145,21 +271,10 @@ func parseSkillFrontmatter(path string) (name, description string) {
 	return name, description
 }
 
-// parseSkillFrontmatterV2 parses SKILL.md YAML frontmatter from a skill directory.
+// parseSkillFrontmatterV2 parses SKILL.md YAML frontmatter from data bytes.
 // It extracts name, description, sharing, author, and tags fields.
 // On parse failure, it falls back to the directory name with sharing="private".
-func parseSkillFrontmatterV2(skillDir string) SkillInfo {
-	skillFile := filepath.Join(skillDir, "SKILL.md")
-	data, err := os.ReadFile(skillFile)
-	if err != nil {
-		dirName := filepath.Base(skillDir)
-		return SkillInfo{
-			Name:    dirName,
-			Path:    skillDir,
-			Sharing: "private",
-		}
-	}
-
+func parseSkillFrontmatterV2(data []byte, skillDir string) SkillInfo {
 	content := string(data)
 	info := SkillInfo{
 		Path:    skillDir,

@@ -76,6 +76,7 @@ func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	pathParts := []string{}
 	if binDir := resolveXbotBinDir(configPath); binDir != "" {
 		pathParts = append(pathParts, binDir)
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		log.WithField("bin_dir", binDir).Debug("Added .xbot/bin to MCP server PATH")
 	}
 	if len(pathParts) > 0 {
@@ -237,10 +238,12 @@ func resolveXbotBinDir(configPath string) string {
 
 	// 如果 configPath 在 .xbot/ 目录下，bin 目录就在同一级
 	var binDir string
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if strings.HasSuffix(dir, string(filepath.Separator)+".xbot") || filepath.Base(dir) == ".xbot" {
 		binDir = filepath.Join(dir, "bin")
 	} else {
 		// configPath 在 workDir 根目录，如 /workdir/mcp.json
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		binDir = filepath.Join(dir, ".xbot", "bin")
 	}
 
@@ -273,24 +276,29 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 	// 在 Docker 沙箱中，用 login shell 包裹命令以加载完整 PATH（与 Shell 工具一致）
 	// 避免 MCP 进程因缺少 PATH 而找不到依赖（如 gopls-mcp 找不到 gopls）
 	var execCmd *exec.Cmd
-	if sandbox.Name() != "none" {
+	switch sandbox.Name() {
+	case "docker":
+		// Docker 模式：使用 DockerSandbox 的 Wrap 方法（需要 docker exec -i 的长连接）
 		shell, err := sandbox.GetShell(userID, workspaceRoot)
 		if err != nil {
 			return nil, fmt.Errorf("get shell for MCP: %w", err)
 		}
 		// 用 login shell 包裹：shell -l -c "exec cmd arg1 arg2 ..."
 		shellCmd := "exec " + shellQuoteCmd(cfg.Command, cfg.Args)
-		wrappedCmd, wrappedArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", shellCmd}, envList, workspaceRoot, userID)
-		if err != nil {
-			return nil, err
+		if ds, ok := sandbox.(*DockerSandbox); ok {
+			cmdName, cmdArgs, err := ds.Wrap(shell, []string{"-l", "-c", shellCmd}, envList, workspaceRoot, userID)
+			if err != nil {
+				return nil, err
+			}
+			execCmd = exec.Command(cmdName, cmdArgs...)
+		} else {
+			return nil, fmt.Errorf("MCP stdio not supported in %s mode", sandbox.Name())
 		}
-		execCmd = exec.Command(wrappedCmd, wrappedArgs...)
-	} else {
-		wrappedCmd, wrappedArgs, err := sandbox.Wrap(cfg.Command, cfg.Args, envList, workspaceRoot, userID)
-		if err != nil {
-			return nil, err
-		}
-		execCmd = exec.Command(wrappedCmd, wrappedArgs...)
+	case "remote":
+		return nil, fmt.Errorf("MCP stdio servers not supported in remote sandbox mode")
+	default:
+		// None 模式：直接本地执行
+		execCmd = exec.Command(cfg.Command, cfg.Args...)
 	}
 
 	// Build a minimal safe environment instead of passing os.Environ() which

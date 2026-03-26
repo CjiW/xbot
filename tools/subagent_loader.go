@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,32 @@ func LoadAgentRoles(dir string) ([]SubAgentRole, error) {
 		}
 		path := filepath.Join(dir, entry.Name())
 		role, err := ParseAgentFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("parse agent file %s: %w", path, err)
+		}
+		roles = append(roles, role)
+	}
+	return roles, nil
+}
+
+// LoadAgentRolesSandbox loads agent roles from a directory using Sandbox for file access.
+func LoadAgentRolesSandbox(ctx context.Context, dir string, sb Sandbox, userID string) ([]SubAgentRole, error) {
+	entries, err := sb.ReadDir(ctx, dir, userID)
+	if err != nil {
+		return nil, fmt.Errorf("read agents dir %s: %w", dir, err)
+	}
+	var roles []SubAgentRole
+	for _, entry := range entries {
+		if entry.IsDir || !strings.HasSuffix(entry.Name, ".md") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name)
+		data, err := sb.ReadFile(ctx, path, userID)
+		if err != nil {
+			return nil, fmt.Errorf("read agent file %s: %w", path, err)
+		}
+		fallbackName := strings.TrimSuffix(entry.Name, ".md")
+		role, err := ParseAgentFileContent(data, fallbackName)
 		if err != nil {
 			return nil, fmt.Errorf("parse agent file %s: %w", path, err)
 		}
@@ -60,6 +87,30 @@ func ParseAgentFile(path string) (SubAgentRole, error) {
 
 	// 默认允许 spawn_agent，除非 frontmatter 中显式设置 spawn_agent: false
 	// （已在 parseFrontmatter 中处理）
+	return SubAgentRole{
+		Name:         name,
+		Description:  description,
+		SystemPrompt: strings.TrimSpace(body),
+		AllowedTools: allowedTools,
+		Capabilities: caps,
+	}, nil
+}
+
+// ParseAgentFileContent parses agent definition from content bytes.
+// fallbackName is used when frontmatter has no name field (e.g., filename without .md).
+func ParseAgentFileContent(data []byte, fallbackName string) (SubAgentRole, error) {
+	content := string(data)
+	frontmatter, body, err := splitFrontmatter(content)
+	if err != nil {
+		return SubAgentRole{}, fmt.Errorf("invalid frontmatter: %w", err)
+	}
+	name, description, allowedTools, caps, err := parseFrontmatter(frontmatter)
+	if err != nil {
+		return SubAgentRole{}, fmt.Errorf("parse frontmatter: %w", err)
+	}
+	if name == "" {
+		name = fallbackName
+	}
 	return SubAgentRole{
 		Name:         name,
 		Description:  description,

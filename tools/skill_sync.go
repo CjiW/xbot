@@ -30,6 +30,20 @@ func EnsureSynced(ctx *ToolContext) {
 		return
 	}
 
+	// V4: remote 模式下委托给 RemoteSandbox.EnsureSynced
+	if ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		if syncer, ok := ctx.Sandbox.(SandboxSyncer); ok {
+			syncUserID := ctx.OriginUserID
+			if syncUserID == "" {
+				syncUserID = ctx.SenderID
+			}
+			if syncUserID != "" {
+				syncer.EnsureSynced(ctx.Ctx, syncUserID)
+			}
+		}
+		return
+	}
+
 	// 使用 OriginUserID 作为同步键（基于原始用户隔离）
 	syncUserID := ctx.OriginUserID
 	if syncUserID == "" {

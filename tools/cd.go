@@ -44,7 +44,12 @@ func (t *CdTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 		return nil, fmt.Errorf("path is required")
 	}
 
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	// V4: use Sandbox API for directory operations (works for docker + remote)
+	if shouldUseSandbox(ctx) {
+		return t.executeWithSandboxAPI(ctx, params.Path)
+	}
+	// Legacy: docker sandbox mode using shell commands
+	if shouldUseSandbox(ctx) {
 		return t.executeInSandbox(ctx, params.Path)
 	}
 
@@ -105,6 +110,7 @@ var knownMarkers = []projectMarker{
 	{file: ".env", typ: "", desc: "Environment file"},
 	{file: ".env.example", typ: "", desc: "Environment example"},
 	{file: ".env.local", typ: "", desc: "Local environment"},
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	{file: ".xbot/", typ: "xbot", desc: "xbot project config"},
 }
 
@@ -172,6 +178,7 @@ func sandboxMarkerChecks() []string {
 	var checks []string
 	for _, m := range knownMarkers {
 		// Skip .xbot/ — in sandbox it's a directory, not a file marker
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		if m.file == ".xbot/" {
 			continue
 		}
@@ -362,8 +369,64 @@ func buildDirectoryTreeInSandbox(ctx *ToolContext, dir string) string {
 }
 
 // isKnownDotFile returns true for dot files that should be shown in the tree.
+// buildDirectoryTreeSandboxAPI builds a directory tree using Sandbox.ReadDir API (V4).
+// Used when shouldUseSandbox(ctx) is true — avoids shell commands, works for remote sandbox.
+func buildDirectoryTreeSandboxAPI(ctx *ToolContext, dir string) string {
+	entries, err := ctx.Sandbox.ReadDir(ctx.Ctx, dir, ctx.OriginUserID)
+	if err != nil {
+		return ""
+	}
+
+	type dirEntry struct {
+		name  string
+		isDir bool
+		size  int64
+	}
+
+	var items []dirEntry
+	for _, e := range entries {
+		name := e.Name
+		if strings.HasPrefix(name, ".") && !isKnownDotFile(name) {
+			continue
+		}
+		items = append(items, dirEntry{name: name, isDir: e.IsDir, size: e.Size})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].isDir != items[j].isDir {
+			return items[i].isDir
+		}
+		return items[i].name < items[j].name
+	})
+
+	maxEntries := 30
+	if len(items) > maxEntries {
+		items = items[:maxEntries]
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📂 Directory structure:\n")
+
+	for _, item := range items {
+		var prefix, suffix string
+		if item.isDir {
+			prefix = "   📁 "
+			suffix = "/"
+		} else {
+			prefix = "   📄 "
+			if item.size > 0 {
+				suffix = fmt.Sprintf(" (%s)", formatSize(item.size))
+			}
+		}
+		fmt.Fprintf(&sb, "%s%s%s\n", prefix, item.name, suffix)
+	}
+
+	return sb.String()
+}
+
 func isKnownDotFile(name string) bool {
 	known := map[string]bool{
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		".xbot":          true,
 		".git":           true,
 		".github":        true,
@@ -442,8 +505,8 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 		if isWithinRoot(target, realRoot) {
 			allowed = true
 		}
-		if !allowed && ctx.ReadOnlyRoots != nil {
-			for _, ro := range ctx.ReadOnlyRoots {
+		if !allowed && len(ctx.SandboxReadOnlyRoots) > 0 {
+			for _, ro := range ctx.SandboxReadOnlyRoots {
 				if ro == "" {
 					continue
 				}
@@ -492,7 +555,7 @@ func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, er
 			// CurrentDir in sandbox mode stores sandbox paths (e.g. /workspace/src)
 			base = ctx.CurrentDir
 		} else {
-			base = ctx.SandboxWorkDir
+			base = sandboxBaseDir(ctx)
 		}
 		if base != "" {
 			target = filepath.Join(base, target)
@@ -506,12 +569,11 @@ func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, er
 	sandboxBase := sandboxBaseDir(ctx)
 	if sandboxBase != "" && !isWithinRoot(target, sandboxBase) {
 		allowed := false
-		for _, ro := range ctx.ReadOnlyRoots {
+		for _, ro := range ctx.SandboxReadOnlyRoots {
 			if ro == "" {
 				continue
 			}
-			sandboxRO := HostToSandboxPath(ctx, ro)
-			if isWithinRoot(target, sandboxRO) {
+			if isWithinRoot(target, ro) {
 				allowed = true
 				break
 			}
@@ -542,6 +604,71 @@ func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, er
 	fmt.Fprintf(&sb, "Changed directory to %s\n\n", target)
 	sb.WriteString(projectCtx)
 	sb.WriteString(dirTree)
+
+	if projectCtx != "" {
+		fmt.Fprintf(&sb, "\n💡 提示：如果这是你经常工作的项目，可以用 archival_memory_insert 将项目信息存入知识库（包含路径 %s 和项目特征），下次对话可直接查询。\n", target)
+	}
+
+	return NewResult(sb.String()), nil
+}
+
+// executeWithSandboxAPI changes directory using Sandbox API (V4 approach).
+func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResult, error) {
+	target := dir
+	if !filepath.IsAbs(target) {
+		base := ""
+		if ctx.CurrentDir != "" {
+			base = ctx.CurrentDir
+		} else {
+			base = sandboxBaseDir(ctx)
+		}
+		if base != "" {
+			target = filepath.Join(base, target)
+		}
+	}
+	target = filepath.Clean(target)
+
+	// Verify directory exists in sandbox
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
+	}
+	if _, err := ctx.Sandbox.Stat(ctx.Ctx, target, userID); err != nil {
+		return nil, fmt.Errorf("directory not found: %s", dir)
+	}
+
+	// Validate target is within sandbox workspace or allowed roots
+	sandboxBase := sandboxBaseDir(ctx)
+	if sandboxBase != "" && !isWithinRoot(target, sandboxBase) {
+		allowed := false
+		for _, ro := range ctx.SandboxReadOnlyRoots {
+			if ro == "" {
+				continue
+			}
+			if isWithinRoot(target, ro) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("directory is outside allowed workspace: %s", dir)
+		}
+	}
+
+	if ctx.SetCurrentDir != nil {
+		ctx.CurrentDir = target
+		ctx.SetCurrentDir(target)
+	}
+
+	log.WithField("dir", target).Debug("Working directory changed (Sandbox API)")
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Changed directory to %s\n\n", target)
+
+	// Project detection using Sandbox
+	projectCtx := detectProjectContextInSandbox(ctx, target)
+	sb.WriteString(projectCtx)
+	sb.WriteString(buildDirectoryTreeSandboxAPI(ctx, target))
 
 	if projectCtx != "" {
 		fmt.Fprintf(&sb, "\n💡 提示：如果这是你经常工作的项目，可以用 archival_memory_insert 将项目信息存入知识库（包含路径 %s 和项目特征），下次对话可直接查询。\n", target)

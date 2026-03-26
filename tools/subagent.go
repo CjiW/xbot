@@ -91,18 +91,35 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	// Ensure global agents are synced to workspace
 	EnsureSynced(ctx)
 
-	var userAgentDirs []string
 	originUserID := ctx.OriginUserID
 	if originUserID == "" {
 		originUserID = ctx.SenderID // fallback：兼容旧数据
 	}
-	if originUserID != "" && ctx.WorkingDir != "" {
-		userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
+
+	var userAgentDirs []string
+	var roleSb Sandbox
+	var roleUserID string
+	if shouldUseSandbox(ctx) {
+		roleSb = ctx.Sandbox
+		roleUserID = ctx.OriginUserID
+		if roleUserID == "" {
+			roleUserID = ctx.SenderID
+		}
+		// Remote sandbox: agents were synced to runner's workspace/agents/ by syncToRunner.
+		// Use runner workspace paths instead of server-local paths.
+		if sbDir := sandboxBaseDir(ctx); sbDir != "" {
+			userAgentDirs = append(userAgentDirs, filepath.Join(sbDir, "agents"))
+		}
+	} else {
+		// Local / docker mode: use server-local paths
+		if originUserID != "" && ctx.WorkingDir != "" {
+			userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
+		}
+		if ctx.WorkspaceRoot != "" {
+			userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
+		}
 	}
-	if ctx.WorkspaceRoot != "" {
-		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
-	}
-	role, ok := GetSubAgentRole(params.Role, userAgentDirs...)
+	role, ok := GetSubAgentRoleSandbox(ctx.Ctx, params.Role, roleSb, roleUserID, userAgentDirs...)
 	if !ok {
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}

@@ -25,6 +25,7 @@ func TestLogsToolDescription(t *testing.T) {
 	if !strings.Contains(desc, "read") {
 		t.Error("description should mention 'read' action")
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if !strings.Contains(desc, ".xbot/logs") {
 		t.Error("description should mention log directory")
 	}
@@ -55,6 +56,7 @@ func TestLogsToolPermission(t *testing.T) {
 
 	t.Run("allows_admin_session", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -111,6 +113,7 @@ func TestLogsToolPermission(t *testing.T) {
 func TestLogsToolListAction(t *testing.T) {
 	t.Run("lists_log_files", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -150,6 +153,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 	t.Run("handles_empty_directory", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -193,6 +197,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 	t.Run("ignores_non_log_files", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -227,6 +232,7 @@ func TestLogsToolListAction(t *testing.T) {
 
 	t.Run("files_sorted_by_date_descending", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -271,6 +277,7 @@ func TestLogsToolListAction(t *testing.T) {
 func TestLogsToolReadAction(t *testing.T) {
 	t.Run("reads_latest_log_file", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -298,6 +305,7 @@ func TestLogsToolReadAction(t *testing.T) {
 
 	t.Run("reads_specific_log_file", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -324,6 +332,7 @@ func TestLogsToolReadAction(t *testing.T) {
 
 	t.Run("filters_by_level", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -358,6 +367,7 @@ time="2026-03-20T10:03:00Z" level=error msg="another error"
 
 	t.Run("filters_by_grep", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -392,6 +402,7 @@ plain text line
 
 	t.Run("limits_lines", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -424,6 +435,7 @@ plain text line
 
 	t.Run("default_lines_100", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -455,6 +467,7 @@ plain text line
 
 	t.Run("error_no_log_files", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -474,6 +487,7 @@ plain text line
 
 	t.Run("handles_json_format_logs", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)
@@ -503,6 +517,7 @@ plain text line
 
 	t.Run("combines_level_and_grep_filters", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			t.Fatal(err)

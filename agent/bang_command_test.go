@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,7 +96,8 @@ func TestWriteBangOutputFile(t *testing.T) {
 	command := "find / -type f"
 	output := strings.Repeat("line\n", 1000)
 
-	filePath, err := writeBangOutputFile(tmpDir, command, output, nil)
+	a := &Agent{} // no sandbox, uses os.WriteFile directly
+	filePath, err := a.writeBangOutputFile(context.Background(), tmpDir, command, output, nil, "test-user")
 	if err != nil {
 		t.Fatalf("writeBangOutputFile() error = %v", err)
 	}
@@ -136,7 +138,8 @@ func TestWriteBangOutputFileWithError(t *testing.T) {
 	output := "cat: missing: No such file or directory"
 	execErr := fmt.Errorf("exit status 1")
 
-	filePath, err := writeBangOutputFile(tmpDir, command, output, execErr)
+	a := &Agent{} // no sandbox, uses os.WriteFile directly
+	filePath, err := a.writeBangOutputFile(context.Background(), tmpDir, command, output, execErr, "test-user")
 	if err != nil {
 		t.Fatalf("writeBangOutputFile() error = %v", err)
 	}

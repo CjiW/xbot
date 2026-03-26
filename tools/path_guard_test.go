@@ -79,9 +79,9 @@ func TestSandboxBaseDir(t *testing.T) {
 		want string
 	}{
 		{"nil ctx", nil, ""},
-		{"empty SandboxWorkDir (none mode)", &ToolContext{SandboxWorkDir: ""}, ""},
-		{"custom SandboxWorkDir", &ToolContext{SandboxWorkDir: "/data/ws"}, "/data/ws"},
-		{"docker default", &ToolContext{SandboxWorkDir: "/workspace"}, "/workspace"},
+		{"none sandbox", &ToolContext{Sandbox: &mockSandbox{name: "none", workspace: ""}}, ""},
+		{"custom sandbox workspace", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/data/ws"}}, "/data/ws"},
+		{"docker default", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/workspace"}}, "/workspace"},
 	}
 
 	for _, tt := range tests {
@@ -127,7 +127,7 @@ func TestResolveReadPath_SandboxPathConversion(t *testing.T) {
 
 	ctx := &ToolContext{
 		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
-		SandboxWorkDir: sandboxDir,
+		Sandbox:        &mockSandbox{name: "docker", workspace: sandboxDir},
 		SandboxEnabled: true,
 	}
 
@@ -156,7 +156,7 @@ func TestResolveWritePath_SandboxPathConversion(t *testing.T) {
 
 	ctx := &ToolContext{
 		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
-		SandboxWorkDir: sandboxDir,
+		Sandbox:        &mockSandbox{name: "docker", workspace: sandboxDir},
 		SandboxEnabled: true,
 	}
 
@@ -166,71 +166,6 @@ func TestResolveWritePath_SandboxPathConversion(t *testing.T) {
 	}
 	if !isWithinRoot(got, sandboxDir) {
 		t.Fatalf("expected resolved path under sandbox dir, got: %s", got)
-	}
-}
-
-func TestSandboxToHostPath_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name string
-		ctx  *ToolContext
-		in   string
-		want string
-	}{
-		{
-			name: "nil ctx returns input",
-			ctx:  nil,
-			in:   "/data/.xbot/users/ou_xxx/workspace/foo.go",
-			want: "/data/.xbot/users/ou_xxx/workspace/foo.go",
-		},
-		{
-			name: "host to sandbox path translation",
-			ctx: &ToolContext{
-				SandboxEnabled: true,
-				SandboxWorkDir: "/workspace",
-				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
-			},
-			in:   "/data/.xbot/users/ou_xxx/workspace/foo.go",
-			want: "/workspace/foo.go",
-		},
-		{
-			name: "host to sandbox nested path",
-			ctx: &ToolContext{
-				SandboxEnabled: true,
-				SandboxWorkDir: "/workspace",
-				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
-			},
-			in:   "/data/.xbot/users/ou_xxx/workspace/deep/nested/dir/file.txt",
-			want: "/workspace/deep/nested/dir/file.txt",
-		},
-		{
-			name: "host root only",
-			ctx: &ToolContext{
-				SandboxEnabled: true,
-				SandboxWorkDir: "/workspace",
-				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
-			},
-			in:   "/data/.xbot/users/ou_xxx/workspace",
-			want: "/workspace",
-		},
-		{
-			name: "outside workspace prefix returns input",
-			ctx: &ToolContext{
-				SandboxEnabled: true,
-				SandboxWorkDir: "/workspace",
-				WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
-			},
-			in:   "/etc/passwd",
-			want: "/etc/passwd",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := HostToSandboxPath(tt.ctx, tt.in)
-			if got != tt.want {
-				t.Errorf("HostToSandboxPath(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -293,28 +228,6 @@ func TestResolveSandboxCWD(t *testing.T) {
 				t.Errorf("resolveSandboxCWD() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestSandboxHostPathRoundTrip(t *testing.T) {
-	ctx := &ToolContext{
-		SandboxEnabled: true,
-		SandboxWorkDir: "/workspace",
-		WorkspaceRoot:  "/data/.xbot/users/ou_xxx/workspace",
-	}
-
-	paths := []string{
-		"/workspace/foo.go",
-		"/workspace/deep/nested/file.txt",
-		"/workspace/readme.md",
-	}
-
-	for _, sandboxPath := range paths {
-		hostPath := SandboxToHostPath(ctx, sandboxPath)
-		roundTrip := HostToSandboxPath(ctx, hostPath)
-		if roundTrip != sandboxPath {
-			t.Errorf("round trip failed: %q → %q → %q", sandboxPath, hostPath, roundTrip)
-		}
 	}
 }
 

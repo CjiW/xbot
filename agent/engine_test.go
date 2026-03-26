@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,40 @@ import (
 	"xbot/llm"
 	"xbot/tools"
 )
+
+// mockSandbox is a test double for the Sandbox interface.
+type mockSandbox struct {
+	name      string
+	workspace string
+}
+
+func (m *mockSandbox) Name() string              { return m.name }
+func (m *mockSandbox) Workspace(_ string) string { return m.workspace }
+func (m *mockSandbox) Exec(_ context.Context, _ tools.ExecSpec) (*tools.ExecResult, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockSandbox) ReadFile(_ context.Context, _ string, _ string) ([]byte, error) {
+	return nil, os.ErrNotExist
+}
+func (m *mockSandbox) WriteFile(_ context.Context, _ string, _ []byte, _ os.FileMode, _ string) error {
+	return nil
+}
+func (m *mockSandbox) Stat(_ context.Context, _ string, _ string) (*tools.SandboxFileInfo, error) {
+	return nil, os.ErrNotExist
+}
+func (m *mockSandbox) ReadDir(_ context.Context, _ string, _ string) ([]tools.DirEntry, error) {
+	return nil, os.ErrNotExist
+}
+func (m *mockSandbox) MkdirAll(_ context.Context, _ string, _ os.FileMode, _ string) error {
+	return nil
+}
+func (m *mockSandbox) Remove(_ context.Context, _ string, _ string) error    { return os.ErrNotExist }
+func (m *mockSandbox) RemoveAll(_ context.Context, _ string, _ string) error { return nil }
+func (m *mockSandbox) GetShell(_ string, _ string) (string, error)           { return "/bin/bash", nil }
+func (m *mockSandbox) Close() error                                          { return nil }
+func (m *mockSandbox) CloseForUser(_ string) error                           { return nil }
+func (m *mockSandbox) IsExporting(_ string) bool                             { return false }
+func (m *mockSandbox) ExportAndImport(_ string) error                        { return nil }
 
 // --- Mock LLM ---
 
@@ -644,11 +679,14 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 		SenderID:  "ou_test",
 
 		// Workspace fields (simulating SubAgent inheriting from parent)
-		WorkingDir:       "/work",
-		WorkspaceRoot:    "/work/users/ou_test",
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
-		SkillsDirs:       []string{"/work/.xbot/skills"},
+		WorkingDir:    "/work",
+		WorkspaceRoot: "/work/users/ou_test",
+		Sandbox:       &mockSandbox{name: "docker", workspace: "/workspace"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		ReadOnlyRoots: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		SkillsDirs: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		AgentsDir:        "/work/.xbot/agents",
 		MCPConfigPath:    "/work/users/ou_test/mcp.json",
 		GlobalMCPConfig:  "/work/mcp.json",
@@ -671,8 +709,8 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 	if capturedCtx.WorkspaceRoot != "/work/users/ou_test" {
 		t.Errorf("WorkspaceRoot = %q", capturedCtx.WorkspaceRoot)
 	}
-	if capturedCtx.SandboxWorkDir != "/workspace" {
-		t.Errorf("SandboxWorkDir = %q", capturedCtx.SandboxWorkDir)
+	if capturedCtx.Sandbox == nil || capturedCtx.Sandbox.Workspace("test-user") != "/workspace" {
+		t.Errorf("Sandbox.Workspace(\"test-user\") = %q", capturedCtx.Sandbox.Workspace("test-user"))
 	}
 	if !capturedCtx.SandboxEnabled {
 		t.Error("SandboxEnabled should be true")
@@ -680,9 +718,11 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 	if capturedCtx.PreferredSandbox != "docker" {
 		t.Errorf("PreferredSandbox = %q", capturedCtx.PreferredSandbox)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(capturedCtx.SkillsDirs) != 1 || capturedCtx.SkillsDirs[0] != "/work/.xbot/skills" {
 		t.Errorf("SkillsDirs = %v", capturedCtx.SkillsDirs)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if capturedCtx.AgentsDir != "/work/.xbot/agents" {
 		t.Errorf("AgentsDir = %q", capturedCtx.AgentsDir)
 	}
@@ -1065,11 +1105,14 @@ func TestBuildToolContext(t *testing.T) {
 		},
 
 		// 工作区 & 沙箱
-		WorkingDir:       "/work",
-		WorkspaceRoot:    "/work/users/ou_xxx",
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
-		SkillsDirs:       []string{"/work/.xbot/skills"},
+		WorkingDir:    "/work",
+		WorkspaceRoot: "/work/users/ou_xxx",
+		Sandbox:       &mockSandbox{name: "docker", workspace: "/workspace"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		ReadOnlyRoots: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		SkillsDirs: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		AgentsDir:        "/work/.xbot/agents",
 		MCPConfigPath:    "/work/users/ou_xxx/mcp.json",
 		GlobalMCPConfig:  "/work/mcp.json",
@@ -1100,15 +1143,18 @@ func TestBuildToolContext(t *testing.T) {
 	if tc.WorkspaceRoot != "/work/users/ou_xxx" {
 		t.Errorf("WorkspaceRoot = %q", tc.WorkspaceRoot)
 	}
-	if tc.SandboxWorkDir != "/workspace" {
-		t.Errorf("SandboxWorkDir = %q", tc.SandboxWorkDir)
+	if tc.Sandbox == nil || tc.Sandbox.Workspace("test-user") != "/workspace" {
+		t.Errorf("Sandbox.Workspace(\"test-user\") = %q", tc.Sandbox.Workspace("test-user"))
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(tc.ReadOnlyRoots) != 1 || tc.ReadOnlyRoots[0] != "/work/.xbot/skills" {
 		t.Errorf("ReadOnlyRoots = %v", tc.ReadOnlyRoots)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(tc.SkillsDirs) != 1 || tc.SkillsDirs[0] != "/work/.xbot/skills" {
 		t.Errorf("SkillsDirs = %v", tc.SkillsDirs)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if tc.AgentsDir != "/work/.xbot/agents" {
 		t.Errorf("AgentsDir = %q", tc.AgentsDir)
 	}

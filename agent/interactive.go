@@ -343,21 +343,23 @@ func (a *Agent) UnloadInteractiveSession(
 // 与 spawnSubAgent 中的 parentCtx 构建保持一致。
 func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, senderID string, msg bus.InboundMessage) *tools.ToolContext {
 	workspaceRoot := a.workspaceRoot(senderID)
-	_ = os.MkdirAll(workspaceRoot, 0o755)
+	if a.sandbox == nil || a.sandbox.Name() != "remote" {
+		_ = os.MkdirAll(workspaceRoot, 0o755)
+	}
 
 	return &tools.ToolContext{
 		Ctx:                 ctx,
 		WorkingDir:          a.workDir,
 		WorkspaceRoot:       workspaceRoot,
-		SandboxWorkDir:      a.sandboxWorkDir(),
 		ReadOnlyRoots:       a.globalSkillDirs,
 		SkillsDirs:          a.globalSkillDirs,
 		AgentsDir:           a.agentsDir,
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:             a.workDir,
-		SandboxEnabled:      a.sandboxMode == "docker",
+		SandboxEnabled:      a.sandboxMode != "none",
 		PreferredSandbox:    a.sandboxMode,
+		Sandbox:             a.sandbox,
 		AgentID:             msg.ParentAgentID,
 		Channel:             channel,
 		ChatID:              chatID,

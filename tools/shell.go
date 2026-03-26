@@ -1,13 +1,11 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -36,7 +34,9 @@ Example: {"command": "ls -la"}
 
 Environment Variables:
 - Commands run in a login shell (detected from container's /etc/passwd), which automatically sources /etc/profile, ~/.bash_profile, ~/.bashrc, etc.
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Use "export VAR=value" to set environment variables (auto-persisted to ~/.xbot_env)
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Or write directly: echo 'export PATH=$PATH:/new/path' >> ~/.xbot_env`
 }
 
@@ -89,16 +89,12 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	if toolCtx != nil && toolCtx.Ctx != nil {
 		parentCtx = toolCtx.Ctx
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	defer cancel()
 
 	userID := ""
 	workspaceRoot := ""
 	execDir := ""
-	sandboxMode := false
 	if toolCtx != nil {
 		workspaceRoot = toolCtx.WorkspaceRoot
-		sandboxMode = toolCtx.SandboxEnabled
 		if toolCtx.CurrentDir != "" {
 			execDir = toolCtx.CurrentDir
 		} else if toolCtx.WorkspaceRoot != "" {
@@ -128,23 +124,8 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		return nil, fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	// 沙箱模式：将 Cd 设置的目录注入命令前缀，使 Shell 工具也受 Cd 影响。
-	// Wrap 的 -w 参数硬编码为 /workspace（容器创建时确定，不可改），
-	// 所以通过 cd <dir> && 前缀在容器内切换到 Cd 设置的目录。
-	// 仅在 CurrentDir 有值时注入（沙箱模式下 CurrentDir 保证是容器内路径，
-	// 而 WorkspaceRoot/WorkingDir 是宿主机路径，不能直接在容器内使用）。
+	// 构建登录 shell 命令
 	shellCmd := params.Command
-	if sandboxMode && toolCtx.CurrentDir != "" {
-		shellCmd = fmt.Sprintf("cd %s && %s", shellEscape(toolCtx.CurrentDir), params.Command)
-	}
-
-	// 使用 login shell 自动加载环境配置
-	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", shellCmd}, nil, sandboxWorkspace, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 
 	// 审计日志：记录每次 shell 执行
 	log.WithFields(log.Fields{
@@ -152,97 +133,113 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		"timeout": timeout,
 	}).Debug("Shell command executing")
 
-	// 非沙箱模式：设置宿主机执行目录。
-	// 沙箱模式不设置 cmd.Dir — execDir 是容器内路径，宿主机上不存在。
-	if !sandboxMode && execDir != "" {
-		cmd.Dir = execDir
+	var result *ExecResult
+
+	switch sandbox.Name() {
+	case "docker":
+		// Docker 模式：将 Cd 设置的目录作为 -w 参数传递
+		dir := ""
+		if toolCtx != nil && toolCtx.CurrentDir != "" {
+			dir = toolCtx.CurrentDir // 容器内路径
+		} else if toolCtx != nil && toolCtx.Sandbox != nil && toolCtx.Sandbox.Name() != "none" {
+			dir = toolCtx.Sandbox.Workspace(toolCtx.OriginUserID)
+		}
+		result, err = sandbox.Exec(parentCtx, ExecSpec{
+			Command:   shell,
+			Args:      []string{shell, "-l", "-c", shellCmd},
+			Shell:     false,
+			Dir:       dir,
+			Timeout:   timeout,
+			Workspace: sandboxWorkspace,
+			UserID:    userID,
+		})
+
+	case "remote":
+		// Remote 模式：使用 runner 的 workspace 作为工作目录
+		remoteDir := ""
+		if rs, ok := sandbox.(*RemoteSandbox); ok {
+			remoteDir = rs.Workspace(userID)
+		}
+		result, err = sandbox.Exec(parentCtx, ExecSpec{
+			Command: shell,
+			Args:    []string{shell, "-l", "-c", shellCmd},
+			Shell:   false,
+			Dir:     remoteDir,
+			Timeout: timeout,
+			UserID:  userID,
+		})
+
+	default:
+		// None 模式：本地执行
+		result, err = sandbox.Exec(parentCtx, ExecSpec{
+			Command: shell,
+			Args:    []string{shell, "-l", "-c", shellCmd},
+			Shell:   false,
+			Dir:     execDir,
+			Timeout: timeout,
+			UserID:  userID,
+		})
 	}
 
-	// 关闭 stdin 防止交互式命令阻塞
-	cmd.Stdin = nil
-
-	// 使用平台特定的进程属性设置
-	setProcessAttrs(cmd)
-
-	// 设置 Cancel 回调：context 超时/取消时 kill 整个进程组（而非仅主进程）
-	// 默认 exec.CommandContext 只 kill 主进程，在 docker exec / Setpgid 场景下子进程会残留导致 Wait 卡住
-	cmd.Cancel = func() error {
-		killProcess(cmd)
-		return nil
+	if err != nil {
+		// Sandbox-level error (connection lost, container not found, etc.)
+		return nil, fmt.Errorf("sandbox exec: %w", err)
 	}
-	// WaitDelay：Cancel 后最多等 5 秒让 I/O drain，然后强制关闭 pipe 使 Wait 返回
-	cmd.WaitDelay = 5 * time.Second
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-
-	// 沙箱模式：检测 export 命令并持久化环境变量
+	// 检测 export 命令并持久化环境变量（docker + remote）
 	var envPersisted bool
-	if toolCtx != nil && toolCtx.SandboxEnabled {
+	sandboxName := sandbox.Name()
+	if toolCtx != nil && (toolCtx.SandboxEnabled || sandboxName == "remote") {
 		envPersisted = t.persistEnvFromCommand(toolCtx, params.Command)
 	}
 
 	// 合并输出
 	var resultBuilder strings.Builder
-	if stdout.Len() > 0 {
-		resultBuilder.Write(stdout.Bytes())
+	if result.Stdout != "" {
+		resultBuilder.WriteString(result.Stdout)
 	}
-	if stderr.Len() > 0 {
+	if result.Stderr != "" {
 		if resultBuilder.Len() > 0 {
 			resultBuilder.WriteString("\n")
 		}
 		resultBuilder.WriteString("[stderr] ")
-		resultBuilder.Write(stderr.Bytes())
+		resultBuilder.WriteString(result.Stderr)
 	}
-	result := strings.TrimSpace(resultBuilder.String())
+	output := strings.TrimSpace(resultBuilder.String())
 
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
-			timeoutErr := fmt.Sprintf("[TIMEOUT after %s] Command timed out", timeout)
-			if result != "" {
-				timeoutErr = fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, result)
-			}
-			log.Ctx(ctx).WithFields(log.Fields{
-				"command": params.Command,
-				"timeout": timeout,
-				"output":  result,
-			}).Warn("Shell command timed out")
-			return NewErrorResult(timeoutErr), nil
+	if result.TimedOut {
+		timeoutErr := fmt.Sprintf("[TIMEOUT after %s] Command timed out", timeout)
+		if output != "" {
+			timeoutErr = fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, output)
 		}
+		log.WithFields(log.Fields{
+			"command": params.Command,
+			"timeout": timeout,
+			"output":  output,
+		}).Warn("Shell command timed out")
+		return NewErrorResult(timeoutErr), nil
+	}
 
-		// 构建详细的错误信息，包含 exit code 和 stderr
-		exitCode := -1
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
-		}
-		stderrStr := strings.TrimSpace(stderr.String())
-
+	if result.ExitCode != 0 {
 		var errMsg string
-		if result != "" {
-			// 有输出时保持原格式
-			errMsg = fmt.Sprintf("[EXIT %d] %s\n%s", exitCode, params.Command, result)
-		} else if stderrStr != "" {
-			// 无标准输出但有 stderr 时，显示 stderr
-			errMsg = fmt.Sprintf("[EXIT %d] %s\n[stderr] %s", exitCode, params.Command, stderrStr)
+		if output != "" {
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n%s", result.ExitCode, params.Command, output)
+		} else if result.Stderr != "" {
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n[stderr] %s", result.ExitCode, params.Command, result.Stderr)
 		} else {
-			// 无任何输出时，显示命令和 exit code
-			errMsg = fmt.Sprintf("[EXIT %d] %s (no output)", exitCode, params.Command)
+			errMsg = fmt.Sprintf("[EXIT %d] %s (no output)", result.ExitCode, params.Command)
 		}
 
-		// 打印错误日志，方便排查问题
-		log.Ctx(ctx).WithFields(log.Fields{
+		log.WithFields(log.Fields{
 			"command":  params.Command,
-			"exitCode": exitCode,
-			"stderr":   stderrStr,
+			"exitCode": result.ExitCode,
+			"stderr":   result.Stderr,
 		}).Warn("Shell command failed")
 
 		return NewErrorResult(errMsg), nil
 	}
 
-	if result == "" {
+	if output == "" {
 		if envPersisted {
 			return NewResult("Command executed successfully. Environment variables persisted to ~/.xbot_env"), nil
 		}
@@ -250,10 +247,10 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	if envPersisted {
-		result += "\n[Environment variables persisted to ~/.xbot_env]"
+		output += "\n[Environment variables persisted to ~/.xbot_env]"
 	}
 
-	res := NewResult(result)
+	res := NewResult(output)
 	if tip := detectCdTip(params.Command); tip != "" {
 		res = res.WithTips(tip)
 	}
@@ -276,6 +273,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 
 	// 读取现有的 ~/.xbot_env
 	existing := ""
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	readCmd := "cat ~/.xbot_env 2>/dev/null || true"
 	if output, err := RunInSandboxWithShell(toolCtx, readCmd); err == nil {
 		existing = output
@@ -297,7 +295,9 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	lines = append(lines, "# Auto-generated by xbot - DO NOT EDIT MANUALLY")
 	lines = append(lines, "# This file is sourced by ~/.bashrc")
 	for k, v := range envMap {
-		lines = append(lines, fmt.Sprintf("export %s=%s", k, v))
+		// Escape values for safe shell sourcing — prevent command injection via $(...), backticks, etc.
+		sanitized := shellEscapeValue(v)
+		lines = append(lines, fmt.Sprintf("export %s=%s", k, sanitized))
 	}
 	newContent := strings.Join(lines, "\n")
 
@@ -307,6 +307,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 		return false
 	}
 	heredocTag := "XBOT_ENV_" + hex.EncodeToString(randBytes)
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	writeCmd := fmt.Sprintf("cat > ~/.xbot_env << '%s'\n%s\n%s", heredocTag, newContent, heredocTag)
 	if _, err := RunInSandboxWithShell(toolCtx, writeCmd); err != nil {
 		return false
@@ -317,7 +318,9 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	// 但 [ -z "$PS1" ] && return 会阻止非交互模式执行后续内容，
 	// 所以 source 语句必须插在 early return 之前。
 	ensureBashrcCmd := `# Remove existing source block (including adjacent blank lines)
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 if grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     sed -i '/# Source xbot environment variables/,/source ~\/\.xbot_env/d' ~/.bashrc
     # Clean up consecutive blank lines left by deletion
     sed -i '/^$/{ N; /^\n$/d; }' ~/.bashrc
@@ -325,8 +328,11 @@ fi
 
 # Insert before PS1 guard if present, otherwise append to end (fallback for Alpine etc.)
 if grep -q '\[ -z "\$PS1" \]' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' ~/.bashrc
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 elif ! grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> ~/.bashrc
 fi`
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
@@ -387,4 +393,26 @@ func checkDangerousCommand(cmd string) (bool, string) {
 	}
 
 	return false, ""
+}
+
+// shellEscapeValue escapes a value for safe inclusion in a shell variable assignment.
+// Prevents command injection via $(...), backticks, \n, etc. when the value is
+// later sourced by bash (e.g., from ~/.xbot_env).
+func shellEscapeValue(v string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, ch := range v {
+		switch ch {
+		case '\'':
+			b.WriteString("'\\''")
+		case '\n':
+			// Newlines in single-quoted strings break the export statement;
+			// replace with literal \n (two chars: backslash + n).
+			b.WriteString("'\\n'")
+		default:
+			b.WriteRune(ch)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }

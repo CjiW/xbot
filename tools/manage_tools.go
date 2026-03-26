@@ -251,6 +251,7 @@ func (t *ManageTools) resolveUserMCPConfigPath(ctx *ToolContext) string {
 	if ctx != nil && ctx.MCPConfigPath != "" {
 		return ctx.MCPConfigPath
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return filepath.Join(t.workDir, ".xbot", "users", "anonymous", "mcp.json")
 }
 

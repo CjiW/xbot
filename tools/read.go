@@ -53,7 +53,7 @@ func (t *ReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	// 沙箱模式：在容器内执行 cat 命令
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	if shouldUseSandbox(ctx) {
 		result, err := t.executeInSandbox(ctx, params.Path)
 		if err != nil {
 			return nil, err

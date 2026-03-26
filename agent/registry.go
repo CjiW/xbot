@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -19,16 +21,43 @@ type RegistryManager struct {
 	agentStore  *AgentStore
 	sharedStore *sqlite.SharedSkillRegistry
 	workDir     string
+	sandbox     tools.Sandbox
 }
 
 // NewRegistryManager creates a new RegistryManager.
-func NewRegistryManager(store *SkillStore, agentStore *AgentStore, sharedStore *sqlite.SharedSkillRegistry, workDir string) *RegistryManager {
+func NewRegistryManager(store *SkillStore, agentStore *AgentStore, sharedStore *sqlite.SharedSkillRegistry, workDir string, sandbox tools.Sandbox) *RegistryManager {
 	return &RegistryManager{
 		store:       store,
 		agentStore:  agentStore,
 		sharedStore: sharedStore,
 		workDir:     workDir,
+		sandbox:     sandbox,
 	}
+}
+
+// useSandbox 判断是否应使用 Sandbox 访问用户文件。
+func (rm *RegistryManager) useSandbox() bool {
+	return rm.sandbox != nil && rm.sandbox.Name() != "none"
+}
+
+// sandboxCtx returns a context with a 30-second timeout for sandbox I/O operations.
+// This prevents indefinite blocking when the Runner is disconnected in remote mode.
+func (rm *RegistryManager) sandboxCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+func (rm *RegistryManager) userSkillsDir(senderID string) string {
+	if rm.useSandbox() {
+		return filepath.Join(rm.sandbox.Workspace(senderID), "skills")
+	}
+	return tools.UserSkillsRoot(rm.workDir, senderID)
+}
+
+func (rm *RegistryManager) userAgentsDir(senderID string) string {
+	if rm.useSandbox() {
+		return filepath.Join(rm.sandbox.Workspace(senderID), "agents")
+	}
+	return tools.UserAgentsRoot(rm.workDir, senderID)
 }
 
 // Publish publishes a skill or agent to the shared registry.
@@ -58,7 +87,21 @@ func (rm *RegistryManager) publishSkill(name, author string) error {
 		return fmt.Errorf("skill %q not found", name)
 	}
 
-	info := parseSkillFrontmatterV2(skillDir)
+	// Read SKILL.md — sandbox-aware
+	var data []byte
+	var err error
+	if rm.useSandbox() {
+		// skillDir is a sandbox path when sandboxed
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		data, err = rm.sandbox.ReadFile(ctx, filepath.Join(skillDir, "SKILL.md"), author)
+	} else {
+		data, err = os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	}
+	if err != nil {
+		return fmt.Errorf("read SKILL.md: %w", err)
+	}
+	info := parseSkillFrontmatterV2(data, skillDir)
 	if info.Author != "" && info.Author != author {
 		return fmt.Errorf("skill %q is owned by %q, cannot publish as %q", name, info.Author, author)
 	}
@@ -67,8 +110,14 @@ func (rm *RegistryManager) publishSkill(name, author string) error {
 	}
 
 	cacheDir := rm.registryCacheDir("skill", info.Name)
-	if err := rm.snapshotDirToCache(skillDir, cacheDir); err != nil {
-		return fmt.Errorf("snapshot skill: %w", err)
+	if rm.useSandbox() {
+		if err := rm.snapshotDirFromSandbox(skillDir, cacheDir, author); err != nil {
+			return fmt.Errorf("snapshot skill: %w", err)
+		}
+	} else {
+		if err := rm.snapshotDirToCache(skillDir, cacheDir); err != nil {
+			return fmt.Errorf("snapshot skill: %w", err)
+		}
 	}
 
 	entry := &sqlite.SharedEntry{
@@ -91,14 +140,32 @@ func (rm *RegistryManager) publishAgent(name, author string) error {
 		return fmt.Errorf("agent %q not found", name)
 	}
 
-	role, err := tools.ParseAgentFile(agentFile)
+	var role tools.SubAgentRole
+	var err error
+	if rm.useSandbox() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		data, ferr := rm.sandbox.ReadFile(ctx, agentFile, author)
+		if ferr != nil {
+			return fmt.Errorf("read agent file: %w", ferr)
+		}
+		role, err = tools.ParseAgentFileContent(data, name)
+	} else {
+		role, err = tools.ParseAgentFile(agentFile)
+	}
 	if err != nil {
 		return fmt.Errorf("parse agent %q: %v", name, err)
 	}
 
 	cacheDir := rm.registryCacheDir("agent", role.Name)
-	if err := rm.snapshotFileToCache(agentFile, cacheDir); err != nil {
-		return fmt.Errorf("snapshot agent: %w", err)
+	if rm.useSandbox() {
+		if err := rm.snapshotFileFromSandbox(agentFile, cacheDir, author); err != nil {
+			return fmt.Errorf("snapshot agent: %w", err)
+		}
+	} else {
+		if err := rm.snapshotFileToCache(agentFile, cacheDir); err != nil {
+			return fmt.Errorf("snapshot agent: %w", err)
+		}
 	}
 
 	entry := &sqlite.SharedEntry{
@@ -156,13 +223,24 @@ func (rm *RegistryManager) Install(entryType string, id int64, senderID string) 
 }
 
 func (rm *RegistryManager) installSkill(entry *sqlite.SharedEntry, senderID string) error {
-	destDir := filepath.Join(tools.UserSkillsRoot(rm.workDir, senderID), entry.Name)
-	if _, err := os.Stat(destDir); err == nil {
-		return fmt.Errorf("skill %q already installed", entry.Name)
-	}
+	destDir := filepath.Join(rm.userSkillsDir(senderID), entry.Name)
 
-	if err := copyDir(entry.SourcePath, destDir); err != nil {
-		return fmt.Errorf("copy skill: %w", err)
+	if rm.useSandbox() {
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
+		if _, err := rm.sandbox.Stat(ctx, destDir, senderID); err == nil {
+			return fmt.Errorf("skill %q already installed", entry.Name)
+		}
+		if err := rm.copyDirToSandbox(ctx, entry.SourcePath, destDir, senderID); err != nil {
+			return fmt.Errorf("copy skill: %w", err)
+		}
+	} else {
+		if _, err := os.Stat(destDir); err == nil {
+			return fmt.Errorf("skill %q already installed", entry.Name)
+		}
+		if err := copyDir(entry.SourcePath, destDir); err != nil {
+			return fmt.Errorf("copy skill: %w", err)
+		}
 	}
 
 	rm.markInstalled(destDir, fmt.Sprintf("registry:%d", entry.ID), time.Now().UnixMilli())
@@ -176,35 +254,65 @@ func (rm *RegistryManager) installSkill(entry *sqlite.SharedEntry, senderID stri
 
 // installAgent copies all .md files from cache dir into user's agents dir.
 func (rm *RegistryManager) installAgent(entry *sqlite.SharedEntry, senderID string) error {
-	agentsDir := tools.UserAgentsRoot(rm.workDir, senderID)
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return fmt.Errorf("create agents dir: %w", err)
-	}
-
-	// Cache dir contains the .md file(s); copy them to user's agents dir
-	srcEntries, err := os.ReadDir(entry.SourcePath)
-	if err != nil {
-		return fmt.Errorf("read cache: %w", err)
-	}
+	agentsDir := rm.userAgentsDir(senderID)
 
 	installed := 0
-	for _, ent := range srcEntries {
-		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
-			continue
+	if rm.useSandbox() {
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
+		if err := rm.sandbox.MkdirAll(ctx, agentsDir, 0o755, senderID); err != nil {
+			return fmt.Errorf("create agents dir: %w", err)
 		}
-		destFile := filepath.Join(agentsDir, ent.Name())
-		if _, err := os.Stat(destFile); err == nil {
-			return fmt.Errorf("agent %q already installed", strings.TrimSuffix(ent.Name(), ".md"))
+		// Read from server cache (os.*)
+		srcEntries, err := os.ReadDir(entry.SourcePath)
+		if err != nil {
+			return fmt.Errorf("read cache: %w", err)
+		}
+		for _, ent := range srcEntries {
+			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
+				continue
+			}
+			destFile := filepath.Join(agentsDir, ent.Name())
+			if _, err := rm.sandbox.Stat(ctx, destFile, senderID); err == nil {
+				return fmt.Errorf("agent %q already installed", strings.TrimSuffix(ent.Name(), ".md"))
+			}
+			data, err := os.ReadFile(filepath.Join(entry.SourcePath, ent.Name()))
+			if err != nil {
+				return fmt.Errorf("read agent file: %w", err)
+			}
+			if err := rm.sandbox.WriteFile(ctx, destFile, data, 0o644, senderID); err != nil {
+				return fmt.Errorf("write agent file: %w", err)
+			}
+			installed++
+		}
+	} else {
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			return fmt.Errorf("create agents dir: %w", err)
+		}
+		// Cache dir contains the .md file(s); copy them to user's agents dir
+		srcEntries, err := os.ReadDir(entry.SourcePath)
+		if err != nil {
+			return fmt.Errorf("read cache: %w", err)
 		}
 
-		data, err := os.ReadFile(filepath.Join(entry.SourcePath, ent.Name()))
-		if err != nil {
-			return fmt.Errorf("read agent file: %w", err)
+		for _, ent := range srcEntries {
+			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
+				continue
+			}
+			destFile := filepath.Join(agentsDir, ent.Name())
+			if _, err := os.Stat(destFile); err == nil {
+				return fmt.Errorf("agent %q already installed", strings.TrimSuffix(ent.Name(), ".md"))
+			}
+
+			data, err := os.ReadFile(filepath.Join(entry.SourcePath, ent.Name()))
+			if err != nil {
+				return fmt.Errorf("read agent file: %w", err)
+			}
+			if err := os.WriteFile(destFile, data, 0o644); err != nil {
+				return fmt.Errorf("write agent file: %w", err)
+			}
+			installed++
 		}
-		if err := os.WriteFile(destFile, data, 0o644); err != nil {
-			return fmt.Errorf("write agent file: %w", err)
-		}
-		installed++
 	}
 
 	log.WithFields(log.Fields{
@@ -227,12 +335,24 @@ func (rm *RegistryManager) Uninstall(entryType, name, senderID string) error {
 }
 
 func (rm *RegistryManager) uninstallSkill(name, senderID string) error {
-	dir := filepath.Join(tools.UserSkillsRoot(rm.workDir, senderID), name)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("skill %q is not installed", name)
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove skill: %w", err)
+	dir := filepath.Join(rm.userSkillsDir(senderID), name)
+
+	if rm.useSandbox() {
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
+		if _, err := rm.sandbox.Stat(ctx, dir, senderID); errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("skill %q is not installed", name)
+		}
+		if err := rm.sandbox.RemoveAll(ctx, dir, senderID); err != nil {
+			return fmt.Errorf("remove skill: %w", err)
+		}
+	} else {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("skill %q is not installed", name)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove skill: %w", err)
+		}
 	}
 	log.WithFields(log.Fields{"type": "skill", "name": name, "sender": senderID}).Info("Uninstalled")
 	return nil
@@ -240,13 +360,25 @@ func (rm *RegistryManager) uninstallSkill(name, senderID string) error {
 
 // uninstallAgent removes the agent's .md file from user's agents dir.
 func (rm *RegistryManager) uninstallAgent(name, senderID string) error {
-	agentsDir := tools.UserAgentsRoot(rm.workDir, senderID)
+	agentsDir := rm.userAgentsDir(senderID)
 	mdFile := filepath.Join(agentsDir, name+".md")
-	if _, err := os.Stat(mdFile); os.IsNotExist(err) {
-		return fmt.Errorf("agent %q is not installed", name)
-	}
-	if err := os.Remove(mdFile); err != nil {
-		return fmt.Errorf("remove agent: %w", err)
+
+	if rm.useSandbox() {
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
+		if _, err := rm.sandbox.Stat(ctx, mdFile, senderID); errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("agent %q is not installed", name)
+		}
+		if err := rm.sandbox.Remove(ctx, mdFile, senderID); err != nil {
+			return fmt.Errorf("remove agent: %w", err)
+		}
+	} else {
+		if _, err := os.Stat(mdFile); os.IsNotExist(err) {
+			return fmt.Errorf("agent %q is not installed", name)
+		}
+		if err := os.Remove(mdFile); err != nil {
+			return fmt.Errorf("remove agent: %w", err)
+		}
 	}
 	log.WithFields(log.Fields{"type": "agent", "name": name, "sender": senderID}).Info("Uninstalled")
 	return nil
@@ -285,7 +417,12 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 		for _, dir := range rm.store.globalDirs {
 			scanSkillDir(dir, &local, seen)
 		}
-		scanSkillDir(tools.UserSkillsRoot(rm.workDir, senderID), &local, seen)
+		userSkillsDir := rm.userSkillsDir(senderID)
+		if rm.useSandbox() {
+			scanSkillDirSandbox(rm.sandbox, userSkillsDir, senderID, &local, seen)
+		} else {
+			scanSkillDir(userSkillsDir, &local, seen)
+		}
 	}
 
 	// Agents: each agent is a .md FILE in the agents directory
@@ -293,7 +430,12 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 		if rm.agentStore != nil && rm.agentStore.globalDir != "" {
 			scanAgentDir(rm.agentStore.globalDir, &local, seen)
 		}
-		scanAgentDir(tools.UserAgentsRoot(rm.workDir, senderID), &local, seen)
+		userAgentsDir := rm.userAgentsDir(senderID)
+		if rm.useSandbox() {
+			scanAgentDirSandbox(rm.sandbox, userAgentsDir, senderID, &local, seen)
+		} else {
+			scanAgentDir(userAgentsDir, &local, seen)
+		}
 	}
 
 	return published, local, nil
@@ -340,6 +482,51 @@ func scanAgentDir(dir string, out *[]string, seen map[string]bool) {
 	}
 }
 
+// scanSkillDirSandbox scans for skill directories using Sandbox.
+func scanSkillDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entries, err := sb.ReadDir(ctx, dir, userID)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if !ent.IsDir {
+			continue
+		}
+		key := "skill:" + ent.Name
+		if seen[key] {
+			continue
+		}
+		if _, err := sb.Stat(ctx, dir+"/"+ent.Name+"/SKILL.md", userID); err == nil {
+			seen[key] = true
+			*out = append(*out, key)
+		}
+	}
+}
+
+// scanAgentDirSandbox scans for agent .md files using Sandbox.
+func scanAgentDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entries, err := sb.ReadDir(ctx, dir, userID)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if ent.IsDir || !strings.HasSuffix(ent.Name, ".md") {
+			continue
+		}
+		name := strings.TrimSuffix(ent.Name, ".md")
+		key := "agent:" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		*out = append(*out, key)
+	}
+}
+
 // Browse lists public entries in the marketplace.
 func (rm *RegistryManager) Browse(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 	return rm.sharedStore.ListShared(entryType, limit, offset)
@@ -348,6 +535,7 @@ func (rm *RegistryManager) Browse(entryType string, limit, offset int) ([]sqlite
 // --- registry cache ---
 
 func (rm *RegistryManager) registryCacheDir(entryType, name string) string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return filepath.Join(rm.workDir, ".xbot", "registry", entryType, name)
 }
 
@@ -391,9 +579,17 @@ func (rm *RegistryManager) findSkillDirForUser(name, senderID string) string {
 		return dir
 	}
 	if senderID != "" {
-		path := filepath.Join(tools.UserSkillsRoot(rm.workDir, senderID), name)
-		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
-			return path
+		path := filepath.Join(rm.userSkillsDir(senderID), name)
+		if rm.useSandbox() {
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
+			if _, err := rm.sandbox.Stat(ctx, filepath.Join(path, "SKILL.md"), senderID); err == nil {
+				return path
+			}
+		} else {
+			if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
+				return path
+			}
 		}
 	}
 	return ""
@@ -410,9 +606,17 @@ func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 	}
 	// Search user-private agents dir
 	if senderID != "" {
-		path := filepath.Join(tools.UserAgentsRoot(rm.workDir, senderID), name+".md")
-		if _, err := os.Stat(path); err == nil {
-			return path
+		path := filepath.Join(rm.userAgentsDir(senderID), name+".md")
+		if rm.useSandbox() {
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
+			if _, err := rm.sandbox.Stat(ctx, path, senderID); err == nil {
+				return path
+			}
+		} else {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
 		}
 	}
 	return ""
@@ -422,6 +626,79 @@ func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 // TODO: 持久化安装信息到本地数据库，用于后续版本管理和自动更新。
 func (rm *RegistryManager) markInstalled(skillDir, installedFrom string, installedAt int64) {
 	// TODO: write install metadata to DB (installedFrom, installedAt)
+}
+
+// copyDirToSandbox copies a local directory (server cache) to a sandbox directory (user workspace).
+// Source: os.*, Target: Sandbox.*
+func (rm *RegistryManager) copyDirToSandbox(ctx context.Context, src, dst, userID string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, relPath)
+
+		fi, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			return rm.sandbox.MkdirAll(ctx, targetPath, fi.Mode(), userID)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return rm.sandbox.WriteFile(ctx, targetPath, data, fi.Mode(), userID)
+	})
+}
+
+// copyDirFromSandbox copies a sandbox directory (user workspace) to a local directory (server cache).
+// Source: Sandbox.*, Target: os.*
+func (rm *RegistryManager) copyDirFromSandbox(ctx context.Context, src, dst, userID string) error {
+	return tools.WalkSandboxDir(ctx, rm.sandbox, src, userID, func(relPath string, entry tools.DirEntry) error {
+		targetPath := filepath.Join(dst, relPath)
+		data, err := rm.sandbox.ReadFile(ctx, filepath.Join(src, relPath), userID)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, 0o644)
+	})
+}
+
+// snapshotDirFromSandbox copies a sandbox directory into cache (Sandbox → os).
+func (rm *RegistryManager) snapshotDirFromSandbox(src, cacheDir, userID string) error {
+	if err := os.RemoveAll(cacheDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clean cache: %w", err)
+	}
+	ctx, cancel := rm.sandboxCtx()
+	defer cancel()
+	return rm.copyDirFromSandbox(ctx, src, cacheDir, userID)
+}
+
+// snapshotFileFromSandbox copies a single file from sandbox into cache.
+func (rm *RegistryManager) snapshotFileFromSandbox(srcFile, cacheDir, userID string) error {
+	if err := os.RemoveAll(cacheDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clean cache: %w", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	ctx, cancel := rm.sandboxCtx()
+	defer cancel()
+	data, err := rm.sandbox.ReadFile(ctx, srcFile, userID)
+	if err != nil {
+		return fmt.Errorf("read source: %w", err)
+	}
+	return os.WriteFile(filepath.Join(cacheDir, filepath.Base(srcFile)), data, 0o644)
 }
 
 func copyDir(src, dst string) error {

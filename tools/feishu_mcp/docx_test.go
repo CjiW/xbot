@@ -31,6 +31,7 @@ func TestDocxWrite(t *testing.T) {
 
 	// Create a mock MCP for testing
 
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	sotrage, err := oauth.NewSQLiteStorage(".xbot/oauth_tokens.db")
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)

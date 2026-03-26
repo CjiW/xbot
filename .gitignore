@@ -72,3 +72,7 @@ cron.json
 .claude/settings.local.json
 .tmp
 .npm
+runner
+*.service
+xbot-runner
+xbot

@@ -60,6 +60,7 @@ func formatErrorForUser(err error) string {
 // 读取时：优先新路径，不存在则回退旧路径
 // 写入时：始终使用新路径
 func resolveDataPath(workDir, filename string) string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(workDir, ".xbot")
 	newPath := filepath.Join(xbotDir, filename)
 	oldPath := filepath.Join(workDir, filename)
@@ -213,6 +214,7 @@ type Agent struct {
 	pipeline           *MessagePipeline // 消息构建管道（持有实例，支持运行时动态增删中间件）
 	cronPipeline       *MessagePipeline // Cron 专用消息构建管道
 	sandboxMode        string           // "none" or "docker"
+	sandbox            tools.Sandbox    // Sandbox 实例引用（V4 新增）
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
 	singleUser         bool             // 单用户模式
 	maxConcurrency     int              // 最大并发会话处理数
@@ -371,15 +373,16 @@ type Config struct {
 	Bus            *bus.MessageBus
 	LLM            llm.LLM
 	Model          string
-	MaxIterations  int    // 单次对话最大工具调用迭代次数
-	MaxConcurrency int    // 最大并发会话处理数（默认 3）
-	MemoryWindow   int    // 上下文窗口大小（保留的历史消息数）
-	DBPath         string // SQLite 数据库路径（空则使用默认路径）
-	SkillsDir      string // Skills 目录
-	WorkDir        string // 工作目录（所有文件相对此目录）
-	PromptFile     string // 系统提示词模板文件路径（空则使用内置默认值）
-	SingleUser     bool   // 单用户模式：所有消息的 SenderID 归一化为 "default"
-	SandboxMode    string // 沙箱模式: "none" 或 "docker"（默认 "docker"）
+	MaxIterations  int           // 单次对话最大工具调用迭代次数
+	MaxConcurrency int           // 最大并发会话处理数（默认 3）
+	MemoryWindow   int           // 上下文窗口大小（保留的历史消息数）
+	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
+	SkillsDir      string        // Skills 目录
+	WorkDir        string        // 工作目录（所有文件相对此目录）
+	PromptFile     string        // 系统提示词模板文件路径（空则使用内置默认值）
+	SingleUser     bool          // 单用户模式：所有消息的 SenderID 归一化为 "default"
+	SandboxMode    string        // 沙箱模式: "none" 或 "docker"（默认 "docker"）
+	Sandbox        tools.Sandbox // Sandbox 实例引用（V4 新增）
 
 	SandboxIdleTimeout time.Duration // 沙箱空闲超时（0 禁用）
 
@@ -417,13 +420,15 @@ type Config struct {
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
 func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, *tools.Registry, *tools.CardBuilder) {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
-	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs)
 
+	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox)
+
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
-	agentStore := NewAgentStore(cfg.WorkDir, agentsDir)
+	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox)
 
 	registry := tools.DefaultRegistry()
 
@@ -543,6 +548,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.contextManager = NewContextManager(a.contextManagerConfig)
 
 	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
 	a.offloadStore = NewOffloadStore(OffloadConfig{
 		StoreDir:        offloadDir,
@@ -551,6 +557,11 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		CleanupAgeDays:  7,
 	})
 	go a.offloadStore.CleanStale()
+
+	// Inject sandbox into OffloadStore for remote mode file hash computation
+	if a.sandbox != nil {
+		a.offloadStore.SetSandbox(a.sandbox)
+	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	maskStore := NewObservationMaskStore(200)
@@ -586,7 +597,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())
 
 	// Initialize RegistryManager
-	a.registryManager = NewRegistryManager(a.skills, a.agents, sharedRegistry, cfg.WorkDir)
+	a.registryManager = NewRegistryManager(a.skills, a.agents, sharedRegistry, cfg.WorkDir, cfg.Sandbox)
 
 	// Initialize UserSettingsService and SettingsService
 	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
@@ -614,9 +625,11 @@ func New(cfg Config) *Agent {
 		cfg.WorkDir = "."
 	}
 	if cfg.SkillsDir == "" {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		cfg.SkillsDir = filepath.Join(cfg.WorkDir, ".xbot", "skills")
 	}
 	if cfg.DBPath == "" {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
 	}
 	if cfg.MCPInactivityTimeout == 0 {
@@ -664,14 +677,16 @@ func New(cfg Config) *Agent {
 		workDir:            cfg.WorkDir,
 		promptLoader:       NewPromptLoader(cfg.PromptFile),
 		sandboxMode:        sandboxMode,
+		sandbox:            cfg.Sandbox,
 		sandboxIdleTimeout: cfg.SandboxIdleTimeout,
 		singleUser:         cfg.SingleUser,
 		globalSkillDirs:    resolveGlobalSkillsDirs(cfg.SkillsDir),
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
-		agentsDir:          filepath.Join(cfg.WorkDir, ".xbot", "agents"),
-		consolidateCh:      make(chan consolidateRequest, 64),
-		consolidateStopCh:  make(chan struct{}),
-		consolidating:      make(map[string]bool),
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		agentsDir:         filepath.Join(cfg.WorkDir, ".xbot", "agents"),
+		consolidateCh:     make(chan consolidateRequest, 64),
+		consolidateStopCh: make(chan struct{}),
+		consolidating:     make(map[string]bool),
 
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),
@@ -993,6 +1008,18 @@ func (a *Agent) workspaceRoot(senderID string) string {
 		return a.workDir
 	}
 	return tools.UserWorkspaceRoot(a.workDir, senderID)
+}
+
+// ensureWorkspace ensures the workspace directory exists (sandbox-aware).
+// Skipped for remote sandbox — the runner manages its own filesystem.
+func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
+	if a.sandbox != nil && a.sandbox.Name() == "remote" {
+		return nil
+	}
+	if a.sandbox != nil {
+		return a.sandbox.MkdirAll(ctx, dir, 0o755, senderID)
+	}
+	return os.MkdirAll(dir, 0o755)
 }
 
 // isGroupChat 判断是否为群聊
@@ -1484,7 +1511,7 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 	// 使用创建者的工作区路径
 	senderID := msg.SenderID
 	workspaceRoot := a.workspaceRoot(senderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+	if err := a.ensureWorkspace(ctx, workspaceRoot, senderID); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to create cron user workspace")
 	}
 
@@ -1530,7 +1557,7 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		history = nil
 	}
 	workspaceRoot := a.workspaceRoot(msg.SenderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
@@ -1546,6 +1573,10 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	promptWorkDir := a.workDir
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
+	} else if a.sandbox != nil && a.sandbox.Name() == "remote" && msg.SenderID != "" {
+		if ws := a.sandbox.Workspace(msg.SenderID); ws != "" {
+			promptWorkDir = ws
+		}
 	}
 
 	mc := NewMessageContext(
@@ -1566,8 +1597,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		mc.CWD = promptWorkDir
 	}
 
-	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(msg.SenderID))
-	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(msg.SenderID))
+	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(ctx, msg.SenderID))
+	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(ctx, msg.SenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
 
 	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
@@ -1784,16 +1815,6 @@ func summarizeRetryError(err error) string {
 func (a *Agent) RegisterTool(tool tools.Tool) {
 	a.tools.Register(tool)
 	log.WithField("tool", tool.Name()).Info("Tool registered")
-}
-
-// sandboxWorkDir returns the sandbox working directory path.
-// In docker mode, this is "/workspace" (the container-internal mount point).
-// In none mode, this is empty (no sandbox path mapping needed).
-func (a *Agent) sandboxWorkDir() string {
-	if a.sandboxMode == "docker" {
-		return "/workspace"
-	}
-	return ""
 }
 
 func (a *Agent) RegisterCoreTool(tool tools.Tool) {

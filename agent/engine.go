@@ -57,16 +57,17 @@ type RunConfig struct {
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）
 	WorkspaceRoot    string   // 用户可读写工作区根目录（宿主机路径）
-	SandboxWorkDir   string   // 沙箱内工作目录（如 /workspace）
 	ReadOnlyRoots    []string // 额外只读目录
 	SkillsDirs       []string // 全局 skill 目录列表
 	AgentsDir        string
-	MCPConfigPath    string // 用户 MCP 配置路径
-	GlobalMCPConfig  string // 全局 MCP 配置路径（只读）
-	DataDir          string // 数据持久化目录
-	SandboxEnabled   bool   // 是否启用命令沙箱
-	PreferredSandbox string // 沙箱类型（docker 优先）
-	InitialCWD       string // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
+	MCPConfigPath    string        // 用户 MCP 配置路径
+	GlobalMCPConfig  string        // 全局 MCP 配置路径（只读）
+	DataDir          string        // 数据持久化目录
+	SandboxEnabled   bool          // 是否启用命令沙箱
+	PreferredSandbox string        // 沙箱类型（docker 优先）
+	Sandbox          tools.Sandbox // Sandbox 实例引用（V4 新增）
+	SandboxMode      string        // 实际沙箱模式："none", "docker", "remote"
+	InitialCWD       string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
 	MaxIterations int // 0 = 使用默认值 100
@@ -1089,7 +1090,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary
 				}
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, "", cfg.OriginUserID)
 				if wasOffloaded {
 					content = offloaded.Summary
 					GlobalMetrics.OffloadEvents.Add(1)
@@ -1135,7 +1136,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// ReadPath from LLM is in sandbox format (e.g. /workspace/src/main.go).
 			// os.ReadFile runs in xbot host process, so we pass both workspaceRoot and
 			// sandboxWorkDir to convert sandbox→host paths before reading.
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(ctx, offloadSessionKey, cfg.WorkspaceRoot, "", cfg.OriginUserID)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),
@@ -1334,6 +1335,23 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	}
 }
 
+// sandboxReadOnlyRoots 将 host 路径的 ReadOnlyRoots 转换为 sandbox 路径。
+// 仅在 sandboxWorkDir 非空且与 WorkspaceRoot 不同时进行转换。
+func sandboxReadOnlyRoots(hostRoots []string, sandboxWorkDir, workspaceRoot string) []string {
+	if sandboxWorkDir == "" || sandboxWorkDir == workspaceRoot {
+		return hostRoots
+	}
+	result := make([]string, 0, len(hostRoots))
+	for _, ro := range hostRoots {
+		if strings.HasPrefix(ro, workspaceRoot) {
+			result = append(result, sandboxWorkDir+strings.TrimPrefix(ro, workspaceRoot))
+		} else {
+			result = append(result, ro)
+		}
+	}
+	return result
+}
+
 // buildToolContext 统一构建 ToolContext。
 // 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
@@ -1349,17 +1367,18 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		RootSessionKey: cfg.RootSessionKey,
 
 		// 工作区 & 沙箱
-		WorkingDir:          cfg.WorkingDir,
-		WorkspaceRoot:       cfg.WorkspaceRoot,
-		SandboxWorkDir:      cfg.SandboxWorkDir,
-		ReadOnlyRoots:       cfg.ReadOnlyRoots,
-		SkillsDirs:          cfg.SkillsDirs,
-		AgentsDir:           cfg.AgentsDir,
-		MCPConfigPath:       cfg.MCPConfigPath,
-		GlobalMCPConfigPath: cfg.GlobalMCPConfig,
-		SandboxEnabled:      cfg.SandboxEnabled,
-		PreferredSandbox:    cfg.PreferredSandbox,
-		DataDir:             cfg.DataDir,
+		WorkingDir:           cfg.WorkingDir,
+		WorkspaceRoot:        cfg.WorkspaceRoot,
+		ReadOnlyRoots:        cfg.ReadOnlyRoots,
+		SandboxReadOnlyRoots: sandboxReadOnlyRoots(cfg.ReadOnlyRoots, "", cfg.WorkspaceRoot),
+		SkillsDirs:           cfg.SkillsDirs,
+		AgentsDir:            cfg.AgentsDir,
+		MCPConfigPath:        cfg.MCPConfigPath,
+		GlobalMCPConfigPath:  cfg.GlobalMCPConfig,
+		SandboxEnabled:       cfg.SandboxEnabled,
+		PreferredSandbox:     cfg.PreferredSandbox,
+		Sandbox:              cfg.Sandbox,
+		DataDir:              cfg.DataDir,
 
 		// 注入入站消息
 		InjectInbound: cfg.InjectInbound,
@@ -1415,9 +1434,10 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		// SetCurrentDir must ALWAYS be set so Cd can persist CWD even when InitialCWD
 		// starts empty (e.g., parent Agent never Cd'd before spawning SubAgent).
 		cwd := cfg.InitialCWD
-		if cwd != "" && cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
-			if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
-				cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
+		if cwd != "" && cfg.Sandbox != nil && cfg.Sandbox.Name() != "none" && cfg.WorkspaceRoot != "" {
+			sandboxWS := cfg.Sandbox.Workspace(cfg.OriginUserID)
+			if sandboxWS != "" && strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
+				cwd = sandboxWS + cwd[len(cfg.WorkspaceRoot):]
 			}
 		}
 		if cwd != "" {

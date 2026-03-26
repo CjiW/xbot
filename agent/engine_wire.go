@@ -66,15 +66,16 @@ func (a *Agent) buildBaseRunConfig(
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    a.workspaceRoot(senderID),
-		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode == "docker",
+		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
+		Sandbox:          a.sandbox,
+		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
 		MaxIterations: a.maxIterations,
@@ -247,9 +248,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	// 构建 SubAgent 的 system prompt：通用模板 + 角色专有能力描述
-	workDir := parentCtx.SandboxWorkDir
-	if workDir == "" {
-		workDir = parentCtx.WorkspaceRoot
+	workDir := parentCtx.WorkspaceRoot
+	if parentCtx.Sandbox != nil && parentCtx.Sandbox.Name() != "none" {
+		workDir = parentCtx.Sandbox.Workspace(parentCtx.OriginUserID)
 	}
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
@@ -282,7 +283,7 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	// 注入可用 agent 目录（只在 spawn_agent=true 时注入）
 	if caps.SpawnAgent {
-		if agentsCatalog := a.agents.GetAgentsCatalog(parentCtx.SenderID); agentsCatalog != "" {
+		if agentsCatalog := a.agents.GetAgentsCatalog(ctx, parentCtx.SenderID); agentsCatalog != "" {
 			sysPrompt += "\n" + agentsCatalog
 		}
 	}
@@ -292,7 +293,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	if originUserID == "" {
 		originUserID = parentCtx.SenderID
 	}
-	if skillsCatalog := a.skills.GetSkillsCatalog(originUserID); skillsCatalog != "" {
+	if skillsCatalog := a.skills.GetSkillsCatalog(ctx, originUserID); skillsCatalog != "" {
 		sysPrompt += "\n" + skillsCatalog
 	}
 
@@ -329,16 +330,22 @@ func (a *Agent) buildSubAgentRunConfig(
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
 		WorkspaceRoot:    parentCtx.WorkspaceRoot,
-		SandboxWorkDir:   parentCtx.SandboxWorkDir,
 		ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
 		SkillsDirs:       parentCtx.SkillsDirs,
 		AgentsDir:        parentCtx.AgentsDir,
 		MCPConfigPath:    parentCtx.MCPConfigPath,
 		GlobalMCPConfig:  parentCtx.GlobalMCPConfigPath,
 		DataDir:          parentCtx.DataDir,
-		SandboxEnabled:   parentCtx.SandboxEnabled,
+		SandboxEnabled:   parentCtx.Sandbox != nil && parentCtx.Sandbox.Name() != "none",
 		PreferredSandbox: parentCtx.PreferredSandbox,
-		InitialCWD:       parentCtx.CurrentDir, // 继承父 Agent 的 CWD
+		Sandbox:          parentCtx.Sandbox,
+		SandboxMode: func() string {
+			if parentCtx.Sandbox != nil {
+				return parentCtx.Sandbox.Name()
+			}
+			return "none"
+		}(),
+		InitialCWD: parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
 		MaxIterations: 100,
 		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline
@@ -459,15 +466,16 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    wsRoot,
-		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode == "docker",
+		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
+		Sandbox:          a.sandbox,
+		SandboxMode:      a.sandboxMode,
 
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,
@@ -530,9 +538,11 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		// 3. 刷新工具最后使用 round，延长激活有效期
 		a.tools.TouchTool(sessionKey, tc.Name)
 
-		// 4. 确保用户工作目录存在
-		if err := os.MkdirAll(wsRoot, 0o755); err != nil {
-			return nil, fmt.Errorf("create user workspace: %w", err)
+		// 4. 确保用户工作目录存在（remote 模式跳过，runner 自行管理文件系统）
+		if a.sandbox == nil || a.sandbox.Name() != "remote" {
+			if err := os.MkdirAll(wsRoot, 0o755); err != nil {
+				return nil, fmt.Errorf("create user workspace: %w", err)
+			}
 		}
 
 		// 5. Run pre-tool hooks

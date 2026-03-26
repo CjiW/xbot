@@ -346,64 +346,6 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return msgID, nil
 	}
 
-	// 文件发送协议：__FEISHU_FILE__::file_path 或 __FEISHU_FILE__::image::file_path
-	if strings.HasPrefix(msg.Content, "__FEISHU_FILE__::") {
-		payload := strings.TrimPrefix(msg.Content, "__FEISHU_FILE__::")
-		msgType := "file"
-		filePath := payload
-		if strings.HasPrefix(payload, "image::") {
-			msgType = "image"
-			filePath = strings.TrimPrefix(payload, "image::")
-		}
-
-		if _, err := os.Stat(filePath); err != nil {
-			return "", fmt.Errorf("file not found: %s", filePath)
-		}
-
-		switch msgType {
-		case "image":
-			imageKey, err := f.uploadImage(filePath)
-			if err != nil {
-				return "", fmt.Errorf("upload image: %w", err)
-			}
-			imgContent, _ := json.Marshal(map[string]string{"image_key": imageKey})
-
-			receiveIDType := "chat_id"
-			if !strings.HasPrefix(msg.ChatID, "oc_") {
-				receiveIDType = "open_id"
-			}
-
-			req := larkim.NewCreateMessageReqBuilder().
-				ReceiveIdType(receiveIDType).
-				Body(larkim.NewCreateMessageReqBodyBuilder().
-					ReceiveId(msg.ChatID).
-					MsgType("image").
-					Content(string(imgContent)).
-					Build()).
-				Build()
-			resp, err := f.client.Im.Message.Create(context.Background(), req)
-			if err != nil {
-				return "", fmt.Errorf("send image message: %w", err)
-			}
-			if !resp.Success() {
-				return "", fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
-			}
-			var sentMsgID string
-			if resp.Data != nil && resp.Data.MessageId != nil {
-				sentMsgID = *resp.Data.MessageId
-			}
-			log.WithFields(log.Fields{"chat_id": msg.ChatID, "image_key": imageKey, "message_id": sentMsgID}).Debug("Feishu image sent via __FEISHU_FILE__ protocol")
-			return sentMsgID, nil
-
-		default: // file
-			if err := f.sendFile(msg.ChatID, filePath); err != nil {
-				return "", err
-			}
-			log.WithFields(log.Fields{"chat_id": msg.ChatID, "file_path": filePath}).Debug("Feishu file sent via __FEISHU_FILE__ protocol")
-			return "", nil
-		}
-	}
-
 	originalLen := len(msg.Content)
 	log.WithFields(log.Fields{
 		"chat_id":     msg.ChatID,

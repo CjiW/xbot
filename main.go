@@ -55,6 +55,7 @@ func main() {
 
 	// 创建 Agent
 	workDir = cfg.Agent.WorkDir
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(workDir, ".xbot")
 	dbPath := filepath.Join(xbotDir, "xbot.db")
 
@@ -130,6 +131,7 @@ func main() {
 		PromptFile:               cfg.Agent.PromptFile,
 		SingleUser:               cfg.Agent.SingleUser,
 		SandboxMode:              cfg.Sandbox.Mode,
+		Sandbox:                  tools.GetSandbox(),
 		MemoryProvider:           cfg.Agent.MemoryProvider,
 		EmbeddingProvider:        cfg.Embedding.Provider,
 		EmbeddingBaseURL:         embBaseURL,

@@ -403,6 +403,13 @@ func (s *DockerSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, e
 }
 
 func (s *DockerSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
+	// Pre-check file size to avoid base64-encoding large files unnecessarily.
+	// DockerSandbox.Stat is a lightweight "stat" call (no data transfer).
+	if info, err := s.Stat(ctx, path, userID); err == nil {
+		if info.Size > MaxSandboxFileSize {
+			return nil, fmt.Errorf("file exceeds maximum size of %d bytes (actual: %d)", MaxSandboxFileSize, info.Size)
+		}
+	}
 	// Pass path as a separate argument to base64 (not via shell), avoiding shell injection.
 	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
 		"base64", path)

@@ -2,7 +2,6 @@ package feishu_mcp
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -119,10 +118,12 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		if userID == "" {
 			userID = ctx.SenderID
 		}
-		if err := ctx.Sandbox.MkdirAll(context.Background(), filepath.Dir(outputPath), 0o755, userID); err != nil {
+		sandboxCtx, sandboxCancel := tools.SandboxCtx()
+		defer sandboxCancel()
+		if err := ctx.Sandbox.MkdirAll(sandboxCtx, filepath.Dir(outputPath), 0o755, userID); err != nil {
 			return nil, fmt.Errorf("create output directory: %w", err)
 		}
-		if err := ctx.Sandbox.WriteFile(context.Background(), outputPath, data, 0o644, userID); err != nil {
+		if err := ctx.Sandbox.WriteFile(sandboxCtx, outputPath, data, 0o644, userID); err != nil {
 			return nil, fmt.Errorf("write file: %w", err)
 		}
 	} else {

@@ -22,11 +22,11 @@ type SkillStore struct {
 	workDir        string        // 用于派生用户私有 skills 目录
 	sandbox        tools.Sandbox // Sandbox 实例（nil 表示无沙箱）
 	sandboxWorkDir string        // 沙箱内工作目录（"/workspace" for docker/remote, "" for none）
-	// 简易 TTL 缓存（5 分钟）
-	mu        sync.RWMutex
-	cache     []SkillInfo
-	cacheUser string
-	cacheTime time.Time
+	// per-user TTL cache (5 minutes). Uses map to support concurrent multi-user access
+	// without cache thrashing (each user's cache is independent).
+	mu         sync.RWMutex
+	cache      map[string][]SkillInfo // key=userID, value=skills list
+	cacheTimes map[string]time.Time   // key=userID, value=last refresh time
 }
 
 // NewSkillStore creates a SkillStore
@@ -68,12 +68,15 @@ func (s *SkillStore) isUserSkillsSandboxed() bool {
 
 // ListSkills scans the skills directory and returns all discovered skills
 func (s *SkillStore) ListSkills(ctx context.Context, senderID string) ([]SkillInfo, error) {
-	// 检查缓存
+	// Check per-user cache
 	s.mu.RLock()
-	if s.cache != nil && s.cacheUser == senderID && time.Since(s.cacheTime) < 5*time.Minute {
-		cached := s.cache
-		s.mu.RUnlock()
-		return cached, nil
+	if s.cache != nil {
+		if cached, ok := s.cache[senderID]; ok {
+			if cacheTime, ok := s.cacheTimes[senderID]; ok && time.Since(cacheTime) < 5*time.Minute {
+				s.mu.RUnlock()
+				return cached, nil
+			}
+		}
 	}
 	s.mu.RUnlock()
 
@@ -127,89 +130,8 @@ func (s *SkillStore) refreshSkills(ctx context.Context, senderID string) ([]Skil
 	}
 
 	// 扫描用户目录（沙箱感知）
-	if senderID != "" {
-		userDir := s.userSkillsDir(senderID)
+	s.scanUserSkills(ctx, senderID, merged, &orderedNames)
 
-		if s.isUserSkillsSandboxed() {
-			// Sandbox 模式：使用 Sandbox 方法
-			entries, err := s.sandbox.ReadDir(ctx, userDir, senderID)
-			if err != nil {
-				// 目录不存在不算错误
-				goto done
-			}
-
-			for _, e := range entries {
-				if !e.IsDir {
-					continue
-				}
-				skillDir := filepath.Join(userDir, e.Name)
-				skillFile := filepath.Join(skillDir, "SKILL.md")
-				if _, err := s.sandbox.Stat(ctx, skillFile, senderID); err != nil {
-					continue
-				}
-
-				data, err := s.sandbox.ReadFile(ctx, skillFile, senderID)
-				if err != nil {
-					continue
-				}
-
-				name, description := parseSkillFrontmatter(data)
-				if name == "" {
-					name = e.Name
-				}
-
-				if _, exists := merged[name]; !exists {
-					orderedNames = append(orderedNames, name)
-				}
-				merged[name] = SkillInfo{
-					Name:        name,
-					Description: description,
-					Path:        skillDir,
-				}
-			}
-		} else {
-			// 非 Sandbox 模式：使用 os.*
-			entries, err := os.ReadDir(userDir)
-			if err != nil {
-				if os.IsNotExist(err) {
-					goto done
-				}
-				return nil, err
-			}
-
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				skillDir := filepath.Join(userDir, e.Name())
-				skillFile := filepath.Join(skillDir, "SKILL.md")
-				if _, err := os.Stat(skillFile); err != nil {
-					continue
-				}
-
-				data, err := os.ReadFile(skillFile)
-				if err != nil {
-					continue
-				}
-
-				name, description := parseSkillFrontmatter(data)
-				if name == "" {
-					name = e.Name()
-				}
-
-				if _, exists := merged[name]; !exists {
-					orderedNames = append(orderedNames, name)
-				}
-				merged[name] = SkillInfo{
-					Name:        name,
-					Description: description,
-					Path:        skillDir,
-				}
-			}
-		}
-	}
-
-done:
 	sort.Strings(orderedNames)
 	skills := make([]SkillInfo, 0, len(orderedNames))
 	for _, name := range orderedNames {
@@ -218,9 +140,12 @@ done:
 
 	// 更新缓存
 	s.mu.Lock()
-	s.cache = skills
-	s.cacheUser = senderID
-	s.cacheTime = time.Now()
+	if s.cache == nil {
+		s.cache = make(map[string][]SkillInfo)
+		s.cacheTimes = make(map[string]time.Time)
+	}
+	s.cache[senderID] = skills
+	s.cacheTimes[senderID] = time.Now()
 	s.mu.Unlock()
 
 	return skills, nil
@@ -249,11 +174,77 @@ func (s *SkillStore) GetSkillsCatalog(ctx context.Context, senderID string) stri
 	return sb.String()
 }
 
-// InvalidateCache clears the skill cache, forcing a rescan on the next ListSkills call.
+// InvalidateCache clears the skill cache for all users, forcing a rescan on the next ListSkills call.
 func (s *SkillStore) InvalidateCache() {
 	s.mu.Lock()
 	s.cache = nil
+	s.cacheTimes = nil
 	s.mu.Unlock()
+}
+
+// scanUserSkills scans the user's private skills directory (sandbox-aware) and appends results to merged/orderedNames.
+// Returns early (without error) if the user directory doesn't exist — missing directory is not an error.
+func (s *SkillStore) scanUserSkills(ctx context.Context, senderID string, merged map[string]SkillInfo, orderedNames *[]string) {
+	if senderID == "" {
+		return
+	}
+	userDir := s.userSkillsDir(senderID)
+
+	if s.isUserSkillsSandboxed() {
+		entries, err := s.sandbox.ReadDir(ctx, userDir, senderID)
+		if err != nil {
+			return // directory doesn't exist or unreadable — not an error
+		}
+		for _, e := range entries {
+			if !e.IsDir {
+				continue
+			}
+			skillDir := filepath.Join(userDir, e.Name)
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			if _, err := s.sandbox.Stat(ctx, skillFile, senderID); err != nil {
+				continue
+			}
+			data, err := s.sandbox.ReadFile(ctx, skillFile, senderID)
+			if err != nil {
+				continue
+			}
+			name, description := parseSkillFrontmatter(data)
+			if name == "" {
+				name = e.Name
+			}
+			if _, exists := merged[name]; !exists {
+				*orderedNames = append(*orderedNames, name)
+			}
+			merged[name] = SkillInfo{Name: name, Description: description, Path: skillDir}
+		}
+	} else {
+		entries, err := os.ReadDir(userDir)
+		if err != nil {
+			return // directory doesn't exist or unreadable — not an error
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			skillDir := filepath.Join(userDir, e.Name())
+			skillFile := filepath.Join(skillDir, "SKILL.md")
+			if _, err := os.Stat(skillFile); err != nil {
+				continue
+			}
+			data, err := os.ReadFile(skillFile)
+			if err != nil {
+				continue
+			}
+			name, description := parseSkillFrontmatter(data)
+			if name == "" {
+				name = e.Name()
+			}
+			if _, exists := merged[name]; !exists {
+				*orderedNames = append(*orderedNames, name)
+			}
+			merged[name] = SkillInfo{Name: name, Description: description, Path: skillDir}
+		}
+	}
 }
 
 // parseSkillFrontmatter extracts name and description from SKILL.md YAML frontmatter data.

@@ -9,6 +9,13 @@ import (
 // MaxSandboxFileSize is the maximum file size for ReadFile/WriteFile (500MB).
 const MaxSandboxFileSize = 500 * 1024 * 1024
 
+// SandboxCtx returns a context with a 30-second timeout for sandbox I/O operations.
+// The returned cancel function should be deferred to avoid resource leaks.
+// This is used for single sandbox calls where no caller context is available.
+func SandboxCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
 // ExecSpec defines the parameters for a sandbox command execution.
 type ExecSpec struct {
 	Command   string        // executable or shell command
@@ -111,7 +118,12 @@ func walkSandboxDir(ctx context.Context, sb Sandbox, dir, relBase, userID string
 		return err
 	}
 	for _, e := range entries {
-		relPath := relBase + "/" + e.Name
+		var relPath string
+		if relBase == "" {
+			relPath = e.Name
+		} else {
+			relPath = relBase + "/" + e.Name
+		}
 		if e.IsDir {
 			if err := walkSandboxDir(ctx, sb, dir+"/"+e.Name, relPath, userID, fn); err != nil {
 				return err

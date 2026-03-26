@@ -42,6 +42,12 @@ func (rm *RegistryManager) useSandbox() bool {
 	return rm.sandbox != nil && rm.sandboxWorkDir != ""
 }
 
+// sandboxCtx returns a context with a 30-second timeout for sandbox I/O operations.
+// This prevents indefinite blocking when the Runner is disconnected in remote mode.
+func (rm *RegistryManager) sandboxCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
 func (rm *RegistryManager) userSkillsDir(senderID string) string {
 	if rm.useSandbox() {
 		return filepath.Join(rm.sandboxWorkDir, "skills")
@@ -88,7 +94,8 @@ func (rm *RegistryManager) publishSkill(name, author string) error {
 	var err error
 	if rm.useSandbox() {
 		// skillDir is a sandbox path when sandboxed
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		data, err = rm.sandbox.ReadFile(ctx, filepath.Join(skillDir, "SKILL.md"), author)
 	} else {
 		data, err = os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
@@ -138,7 +145,8 @@ func (rm *RegistryManager) publishAgent(name, author string) error {
 	var role tools.SubAgentRole
 	var err error
 	if rm.useSandbox() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		data, ferr := rm.sandbox.ReadFile(ctx, agentFile, author)
 		if ferr != nil {
 			return fmt.Errorf("read agent file: %w", ferr)
@@ -220,7 +228,8 @@ func (rm *RegistryManager) installSkill(entry *sqlite.SharedEntry, senderID stri
 	destDir := filepath.Join(rm.userSkillsDir(senderID), entry.Name)
 
 	if rm.useSandbox() {
-		ctx := context.Background()
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
 		if _, err := rm.sandbox.Stat(ctx, destDir, senderID); err == nil {
 			return fmt.Errorf("skill %q already installed", entry.Name)
 		}
@@ -251,7 +260,8 @@ func (rm *RegistryManager) installAgent(entry *sqlite.SharedEntry, senderID stri
 
 	installed := 0
 	if rm.useSandbox() {
-		ctx := context.Background()
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
 		if err := rm.sandbox.MkdirAll(ctx, agentsDir, 0o755, senderID); err != nil {
 			return fmt.Errorf("create agents dir: %w", err)
 		}
@@ -330,7 +340,8 @@ func (rm *RegistryManager) uninstallSkill(name, senderID string) error {
 	dir := filepath.Join(rm.userSkillsDir(senderID), name)
 
 	if rm.useSandbox() {
-		ctx := context.Background()
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
 		if _, err := rm.sandbox.Stat(ctx, dir, senderID); errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("skill %q is not installed", name)
 		}
@@ -355,7 +366,8 @@ func (rm *RegistryManager) uninstallAgent(name, senderID string) error {
 	mdFile := filepath.Join(agentsDir, name+".md")
 
 	if rm.useSandbox() {
-		ctx := context.Background()
+		ctx, cancel := rm.sandboxCtx()
+		defer cancel()
 		if _, err := rm.sandbox.Stat(ctx, mdFile, senderID); errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("agent %q is not installed", name)
 		}
@@ -474,7 +486,8 @@ func scanAgentDir(dir string, out *[]string, seen map[string]bool) {
 
 // scanSkillDirSandbox scans for skill directories using Sandbox.
 func scanSkillDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	entries, err := sb.ReadDir(ctx, dir, userID)
 	if err != nil {
 		return
@@ -496,7 +509,8 @@ func scanSkillDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, se
 
 // scanAgentDirSandbox scans for agent .md files using Sandbox.
 func scanAgentDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	entries, err := sb.ReadDir(ctx, dir, userID)
 	if err != nil {
 		return
@@ -569,7 +583,8 @@ func (rm *RegistryManager) findSkillDirForUser(name, senderID string) string {
 	if senderID != "" {
 		path := filepath.Join(rm.userSkillsDir(senderID), name)
 		if rm.useSandbox() {
-			ctx := context.Background()
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
 			if _, err := rm.sandbox.Stat(ctx, filepath.Join(path, "SKILL.md"), senderID); err == nil {
 				return path
 			}
@@ -595,7 +610,8 @@ func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 	if senderID != "" {
 		path := filepath.Join(rm.userAgentsDir(senderID), name+".md")
 		if rm.useSandbox() {
-			ctx := context.Background()
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
 			if _, err := rm.sandbox.Stat(ctx, path, senderID); err == nil {
 				return path
 			}
@@ -665,7 +681,8 @@ func (rm *RegistryManager) snapshotDirFromSandbox(src, cacheDir, userID string) 
 	if err := os.RemoveAll(cacheDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("clean cache: %w", err)
 	}
-	ctx := context.Background()
+	ctx, cancel := rm.sandboxCtx()
+	defer cancel()
 	return rm.copyDirFromSandbox(ctx, src, cacheDir, userID)
 }
 
@@ -677,7 +694,8 @@ func (rm *RegistryManager) snapshotFileFromSandbox(srcFile, cacheDir, userID str
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
-	ctx := context.Background()
+	ctx, cancel := rm.sandboxCtx()
+	defer cancel()
 	data, err := rm.sandbox.ReadFile(ctx, srcFile, userID)
 	if err != nil {
 		return fmt.Errorf("read source: %w", err)

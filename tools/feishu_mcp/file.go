@@ -83,7 +83,9 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		if userID == "" {
 			userID = ctx.SenderID
 		}
-		data, err = ctx.Sandbox.ReadFile(context.Background(), resolvedPath, userID)
+		sandboxCtx, sandboxCancel := tools.SandboxCtx()
+		defer sandboxCancel()
+		data, err = ctx.Sandbox.ReadFile(sandboxCtx, resolvedPath, userID)
 	} else {
 		data, err = os.ReadFile(resolvedPath)
 	}
@@ -387,7 +389,9 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		userID = ctx.SenderID
 	}
 	if ctx.Sandbox != nil && ctx.SandboxWorkDir != "" {
-		data, err = ctx.Sandbox.ReadFile(context.Background(), resolvedPath, userID)
+		sandboxCtx, sandboxCancel := tools.SandboxCtx()
+		defer sandboxCancel()
+		data, err = ctx.Sandbox.ReadFile(sandboxCtx, resolvedPath, userID)
 	} else {
 		data, err = os.ReadFile(resolvedPath)
 	}

@@ -111,7 +111,7 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request, workspace string) 
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, r.Body); err != nil {
+	if _, err := io.Copy(f, io.LimitReader(r.Body, 500*1024*1024)); err != nil {
 		http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

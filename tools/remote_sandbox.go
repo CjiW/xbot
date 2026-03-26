@@ -202,7 +202,9 @@ func (rs *RemoteSandbox) sendRequest(ctx context.Context, rc *runnerConnection, 
 // generateID generates a unique request ID.
 func generateID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("req_%d", time.Now().UnixNano())
+	}
 	return fmt.Sprintf("req_%x", b)
 }
 

@@ -4,7 +4,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 
 ## Features
 
-- **Multi-channel** — Message bus architecture with Feishu (WebSocket) and QQ (WebSocket) support
+- **Multi-channel** — Message bus architecture with Feishu (WebSocket), QQ (WebSocket), and NapCat (OneBot 11) support
 - **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download
 - **Feishu integration** — Interactive cards, doc/wiki/bitable access, file upload
 - **Skills system** — OpenClaw-style progressive skill loading
@@ -30,13 +30,17 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
                                    │       │
 ┌─────────┐                        │       │────▶ Tools
 │   QQ    │                        │       │
+└─────────┘                        │       │
+                                   │       │
+┌─────────┐                        │       │
+│ NapCat  │                        │       │
 └─────────┘                        └───────┘
 ```
 
 ### Core Components
 
 - **bus/** — Inbound/Outbound message channels
-- **channel/** — IM channels (feishu, qq), dispatcher
+- **channel/** — IM channels (feishu, qq, napcat), dispatcher
 - **agent/** — Agent loop: LLM → tool calls → response
 - **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry and implementations
@@ -50,6 +54,8 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **session/** — Multi-tenant session management
 - **storage/** — SQLite persistence (sessions, memory, tenants)
 - **version/** — Build version info
+- **cmd/** — Subcommands (e.g., sandbox runner)
+- **internal/** — Internal packages (runner protocol)
 - **docs/** — Design documents and architecture notes
 - **scripts/** — Development helper scripts
 
@@ -98,6 +104,7 @@ All config via environment variables or `.env`:
 | `LLM_RETRY_ATTEMPTS` | Retry count on LLM failure | `5` |
 | `LLM_RETRY_DELAY` | Initial retry delay | `1s` |
 | `LLM_RETRY_MAX_DELAY` | Max retry delay | `30s` |
+| `LLM_RETRY_TIMEOUT` | Single LLM call timeout | `120s` |
 
 ### Agent
 
@@ -111,8 +118,9 @@ All config via environment variables or `.env`:
 | `AGENT_COMPRESSION_THRESHOLD` | Token ratio to trigger compression | `0.7` |
 | `AGENT_CONTEXT_MODE` | Context management mode | — |
 | `AGENT_ENABLE_TOPIC_ISOLATION` | Enable topic partition isolation (experimental) | `false` |
+| `AGENT_TOPIC_MIN_SEGMENT_SIZE` | Min topic segment size | `3` |
+| `AGENT_TOPIC_SIMILARITY_THRESHOLD` | Topic similarity threshold | `0.3` |
 | `MAX_SUBAGENT_DEPTH` | SubAgent max nesting depth | `6` |
-| `SUBAGENT_LLM_TIMEOUT` | SubAgent single LLM call timeout | `3m` |
 
 ### Memory
 
@@ -140,6 +148,10 @@ All config via environment variables or `.env`:
 | `QQ_APP_ID` | QQ app ID | — |
 | `QQ_CLIENT_SECRET` | QQ client secret | — |
 | `QQ_ALLOW_FROM` | Allowed QQ openid list (comma-separated) | — |
+| `NAPCAT_ENABLED` | Enable NapCat (OneBot 11) | `false` |
+| `NAPCAT_WS_URL` | NapCat WebSocket URL | `ws://localhost:3001` |
+| `NAPCAT_TOKEN` | NapCat auth token | — |
+| `NAPCAT_ALLOW_FROM` | Allowed QQ number whitelist (comma-separated) | — |
 
 ### Infrastructure
 
@@ -148,9 +160,12 @@ All config via environment variables or `.env`:
 | `WORK_DIR` | Working directory | `.` |
 | `PROMPT_FILE` | Custom prompt template | `prompt.md` |
 | `SINGLE_USER` | Single-user mode | `false` |
-| `SANDBOX_MODE` | Sandbox mode (`docker`/`none`) | `docker` |
+| `SANDBOX_MODE` | Sandbox mode (`docker`/`remote`/`none`) | `docker` |
 | `SANDBOX_DOCKER_IMAGE` | Docker sandbox image | `ubuntu:22.04` |
 | `SANDBOX_IDLE_TIMEOUT_MINUTES` | Sandbox idle timeout (0 to disable) | `30` |
+| `HOST_WORK_DIR` | DinD host work dir override (auto-detected) | — |
+| `SANDBOX_WS_PORT` | Remote sandbox WebSocket port | `8080` |
+| `SANDBOX_AUTH_TOKEN` | Sandbox runner auth token | — |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
 | `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
 | `OAUTH_PORT` | OAuth server port | `8081` |
@@ -170,6 +185,8 @@ All config via environment variables or `.env`:
 | `LOG_FORMAT` | Log format | `json` |
 | `SERVER_HOST` | HTTP server bind address | `0.0.0.0` |
 | `SERVER_PORT` | HTTP server port | `8080` |
+| `SERVER_READ_TIMEOUT` | HTTP read timeout (seconds) | `30` |
+| `SERVER_WRITE_TIMEOUT` | HTTP write timeout (seconds) | `120` |
 
 ## Memory System
 
@@ -235,7 +252,7 @@ Delegate tasks to sub-agents:
 SubAgent(task="...", role="code-reviewer")
 ```
 
-Predefined roles: `code-reviewer`, `explorer`, `tester`
+Predefined roles: `code-reviewer`, `explorer`, `tester`, `brainstorm`
 
 Role definitions are stored in `.xbot/agents/`.
 

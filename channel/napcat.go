@@ -78,6 +78,9 @@ type NapCatChannel struct {
 
 	// Bot 自身 QQ 号（从事件中获取）
 	selfID atomic.Int64
+
+	// 聊天类型缓存（chatID → "group"/"private"）
+	chatTypeCache sync.Map
 }
 
 // NewNapCatChannel 创建 NapCat 渠道
@@ -230,7 +233,7 @@ type obEvent struct {
 	Sender        obSender        `json:"sender"`
 
 	// API 响应字段
-	Status  string          `json:"status"`
+	Status  json.RawMessage `json:"status"`
 	RetCode int             `json:"retcode"`
 	Data    json.RawMessage `json:"data"`
 	Echo    string          `json:"echo"`
@@ -329,7 +332,7 @@ func (n *NapCatChannel) handleEvent(data []byte) error {
 		log.WithField("sub_type", event.SubType).Debug("NapCat: request event (ignored)")
 	default:
 		// 可能是纯 API 响应（status 字段存在但无 post_type）
-		if event.Status != "" {
+		if len(event.Status) > 0 {
 			// 无 echo 的 API 响应，忽略
 			return nil
 		}
@@ -453,6 +456,9 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 			"self_id":    fmt.Sprintf("%d", event.SelfID),
 		},
 	}
+
+	// 缓存 chatID 对应的聊天类型，供 Send 方法使用
+	n.chatTypeCache.Store(chatID, chatType)
 
 	n.msgBus.Inbound <- inbound
 	return nil
@@ -580,6 +586,12 @@ func (n *NapCatChannel) Send(msg bus.OutboundMessage) (string, error) {
 	if msg.Metadata != nil {
 		chatType = msg.Metadata["chat_type"]
 	}
+	// 从缓存推断聊天类型
+	if chatType == "" {
+		if cached, ok := n.chatTypeCache.Load(msg.ChatID); ok {
+			chatType = cached.(string)
+		}
+	}
 
 	// 构建消息内容（消息段数组）
 	message := n.buildOutboundMessage(msg.Content, msg.Media)
@@ -601,8 +613,8 @@ func (n *NapCatChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return n.sendPrivateMsg(userID, message)
 
 	default:
-		// 默认尝试用 send_msg 自动判断
-		// 先尝试解析为数字
+		// 无法确定聊天类型，默认尝试私聊
+		log.WithField("chat_id", msg.ChatID).Warn("NapCat: unknown chat type, defaulting to private")
 		id, err := strconv.ParseInt(msg.ChatID, 10, 64)
 		if err != nil {
 			return "", fmt.Errorf("napcat: invalid chat_id %q: %w", msg.ChatID, err)

@@ -44,7 +44,7 @@ func connectToServer(serverURL, userID, authToken, workspace string) (*websocket
 }
 
 // runReadLoop reads messages from the server and dispatches to handlers.
-func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}, writeMu *sync.Mutex) {
+func runReadLoop(conn *websocket.Conn, done chan struct{}, writeMu *sync.Mutex) {
 	defer close(done)
 	for {
 		_, message, err := conn.ReadMessage()
@@ -67,7 +67,7 @@ func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}, wri
 			log.Printf("→ %s [id=%s]", msg.Type, msg.ID)
 		}
 
-		resp := handleRequest(msg, workspace)
+		resp := handleRequest(msg)
 		data, _ := json.Marshal(resp)
 		writeMu.Lock()
 		err = conn.WriteMessage(websocket.TextMessage, data)

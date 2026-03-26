@@ -24,6 +24,13 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 }
 
 func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
+	// Apply timeout to context before creating the command (avoid duplicate cmd creation).
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
 	var cmd *exec.Cmd
 	if spec.Shell {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
@@ -34,8 +41,10 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	if spec.Dir != "" {
 		cmd.Dir = spec.Dir
 	}
+	// When spec.Env is set, append to os.Environ() to inherit host environment variables,
+	// consistent with the runner's behavior (append(os.Environ(), req.Env...)).
 	if len(spec.Env) > 0 {
-		cmd.Env = spec.Env
+		cmd.Env = append(os.Environ(), spec.Env...)
 	}
 	if spec.Stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
@@ -44,24 +53,6 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-
-	if spec.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
-		defer cancel()
-		cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args...)
-		if spec.Dir != "" {
-			cmd.Dir = spec.Dir
-		}
-		if len(spec.Env) > 0 {
-			cmd.Env = spec.Env
-		}
-		if spec.Stdin != "" {
-			cmd.Stdin = bytes.NewBufferString(spec.Stdin)
-		}
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
 
 	err := cmd.Run()
 

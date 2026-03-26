@@ -70,6 +70,7 @@ func TestWorkspaceRoot_MultiUser(t *testing.T) {
 
 	// Multi-user mode: returns per-user workspace directory
 	got := a.workspaceRoot("ou_abc123")
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	want := "/work/.xbot/users/ou_abc123/workspace"
 	if got != want {
 		t.Errorf("workspaceRoot(%q) = %q, want %q", "ou_abc123", got, want)

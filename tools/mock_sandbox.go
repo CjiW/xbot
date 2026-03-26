@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -31,35 +33,22 @@ func (m *MockSandbox) SetDir(path string) {
 	defer m.mu.Unlock()
 	m.Dirs[path] = true
 	// Ensure parent dirs exist
-	for p := parentDir(path); p != "/" && p != "." && p != ""; p = parentDir(p) {
+	for p := filepath.Dir(path); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
 		if !m.Dirs[p] {
 			m.Dirs[p] = true
 		}
 	}
 }
 
-func parentDir(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			if i == 0 {
-				return "/"
-			}
-			return path[:i]
-		}
-	}
-	return "."
-}
-
-// SetFile writes content to a virtual file (create intermediate dirs automatically).
 func (m *MockSandbox) SetFile(path string, content []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Files[path] = content
 	// Ensure parent dir exists
-	dir := parentDir(path)
+	dir := filepath.Dir(path)
 	if dir != "." {
 		m.Dirs[dir] = true
-		for p := parentDir(dir); p != "/" && p != "." && p != ""; p = parentDir(p) {
+		for p := filepath.Dir(dir); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
 			if !m.Dirs[p] {
 				m.Dirs[p] = true
 			}
@@ -113,7 +102,7 @@ func (m *MockSandbox) Stat(ctx context.Context, path string, userID string) (*Sa
 	// Check if it's a directory
 	if m.Dirs[path] {
 		return &SandboxFileInfo{
-			Name:  baseName(path),
+			Name:  filepath.Base(path),
 			Mode:  os.ModeDir | 0o755,
 			IsDir: true,
 		}, nil
@@ -126,19 +115,10 @@ func (m *MockSandbox) Stat(ctx context.Context, path string, userID string) (*Sa
 	}
 
 	return &SandboxFileInfo{
-		Name: baseName(path),
+		Name: filepath.Base(path),
 		Size: int64(len(data)),
 		Mode: 0o644,
 	}, nil
-}
-
-func baseName(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[i+1:]
-		}
-	}
-	return path
 }
 
 func (m *MockSandbox) ReadDir(ctx context.Context, path string, userID string) ([]DirEntry, error) {
@@ -164,7 +144,7 @@ func (m *MockSandbox) ReadDir(ctx context.Context, path string, userID string) (
 		if hasDirPrefix(dirPath, prefix) {
 			// Get the immediate child name
 			rest := dirPath[len(prefix):]
-			if idx := indexSlash(rest); idx >= 0 {
+			if idx := strings.Index(rest, "/"); idx >= 0 {
 				name := rest[:idx]
 				if !containsEntry(entries, name, true) {
 					entries = append(entries, DirEntry{Name: name, IsDir: true})
@@ -181,7 +161,7 @@ func (m *MockSandbox) ReadDir(ctx context.Context, path string, userID string) (
 	for filePath := range m.Files {
 		if hasDirPrefix(filePath, prefix) {
 			rest := filePath[len(prefix):]
-			if idx := indexSlash(rest); idx >= 0 {
+			if idx := strings.Index(rest, "/"); idx >= 0 {
 				name := rest[:idx]
 				// This is a file in a subdirectory, add subdirectory if not already
 				if !containsEntry(entries, name, true) {
@@ -202,20 +182,7 @@ func (m *MockSandbox) ReadDir(ctx context.Context, path string, userID string) (
 }
 
 func hasDirPrefix(path, prefix string) bool {
-	return startsWith(path, prefix)
-}
-
-func startsWith(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func indexSlash(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' {
-			return i
-		}
-	}
-	return -1
+	return strings.HasPrefix(path, prefix)
 }
 
 func containsEntry(entries []DirEntry, name string, isDir bool) bool {
@@ -232,7 +199,7 @@ func (m *MockSandbox) MkdirAll(ctx context.Context, path string, perm os.FileMod
 	defer m.mu.Unlock()
 	m.Dirs[path] = true
 	// Create intermediate dirs
-	for p := parentDir(path); p != "/" && p != "." && p != ""; p = parentDir(p) {
+	for p := filepath.Dir(path); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
 		if !m.Dirs[p] {
 			m.Dirs[p] = true
 		}
@@ -254,12 +221,12 @@ func (m *MockSandbox) Remove(ctx context.Context, path string, userID string) er
 			prefix += "/"
 		}
 		for p := range m.Files {
-			if startsWith(p, prefix) {
+			if strings.HasPrefix(p, prefix) {
 				return os.ErrNotExist // not empty, Remove can't remove non-empty dir
 			}
 		}
 		for p := range m.Dirs {
-			if p != path && startsWith(p, prefix) {
+			if p != path && strings.HasPrefix(p, prefix) {
 				return os.ErrNotExist
 			}
 		}
@@ -279,14 +246,14 @@ func (m *MockSandbox) RemoveAll(ctx context.Context, path string, userID string)
 
 	// Remove all files under path
 	for p := range m.Files {
-		if p == path || startsWith(p, prefix) {
+		if p == path || strings.HasPrefix(p, prefix) {
 			delete(m.Files, p)
 		}
 	}
 
 	// Remove all dirs under path
 	for p := range m.Dirs {
-		if p == path || startsWith(p, prefix) {
+		if p == path || strings.HasPrefix(p, prefix) {
 			delete(m.Dirs, p)
 		}
 	}

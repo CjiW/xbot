@@ -52,6 +52,7 @@ func MigrateFromFileStorage(workDir, dbPath string) error {
 	log.WithField("tenant_id", tenantID).Info("CLI tenant ready for migration")
 
 	// Migrate session messages
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	sessionPath := filepath.Join(workDir, ".xbot", "session.jsonl")
 	if err := migrateSessionMessages(sessionPath, tenantID, sessionSvc); err != nil {
 		return fmt.Errorf("migrate session messages: %w", err)
@@ -194,6 +195,7 @@ func ShouldMigrate(workDir, dbPath string) bool {
 	}
 
 	// Check if any legacy files exist
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	sessionPath := filepath.Join(workDir, ".xbot", "session.jsonl")
 	memoryPath := filepath.Join(workDir, "MEMORY.md")
 	historyPath := filepath.Join(workDir, "HISTORY.md")

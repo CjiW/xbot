@@ -110,6 +110,7 @@ var knownMarkers = []projectMarker{
 	{file: ".env", typ: "", desc: "Environment file"},
 	{file: ".env.example", typ: "", desc: "Environment example"},
 	{file: ".env.local", typ: "", desc: "Local environment"},
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	{file: ".xbot/", typ: "xbot", desc: "xbot project config"},
 }
 
@@ -177,6 +178,7 @@ func sandboxMarkerChecks() []string {
 	var checks []string
 	for _, m := range knownMarkers {
 		// Skip .xbot/ — in sandbox it's a directory, not a file marker
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		if m.file == ".xbot/" {
 			continue
 		}
@@ -424,6 +426,7 @@ func buildDirectoryTreeSandboxAPI(ctx *ToolContext, dir string) string {
 
 func isKnownDotFile(name string) bool {
 	known := map[string]bool{
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		".xbot":          true,
 		".git":           true,
 		".github":        true,

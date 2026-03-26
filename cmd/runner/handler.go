@@ -57,7 +57,9 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	} else {
 		args := req.Args
 		if len(args) == 0 {
-			args = strings.Fields(req.Command)
+			// Non-shell mode requires explicit Args; strings.Fields doesn't handle quotes.
+			// Return an error instead of producing incorrect argument splitting.
+			return makeError(msg.ID, "EINVAL", "non-shell exec requires Args to be set explicitly")
 		}
 		if len(args) > 0 {
 			cmd = exec.CommandContext(ctx, args[0], args[1:]...)

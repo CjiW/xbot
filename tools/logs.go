@@ -15,6 +15,7 @@ import (
 
 // LogsSubDir is the subdirectory relative to DataDir where logs are stored.
 // Can be overridden via config if needed.
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 const LogsSubDir = ".xbot/logs"
 
 // LogsTool 读取 xbot 日志文件的工具（仅管理员可用）
@@ -34,6 +35,7 @@ func (t *LogsTool) Name() string {
 }
 
 func (t *LogsTool) Description() string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return `Read xbot log files from .xbot/logs directory.
 Parameters (JSON):
   - action: string, "list" (list log files) or "read" (read log content)

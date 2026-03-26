@@ -1078,7 +1078,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary
 				}
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, cfg.SandboxWorkDir, cfg.OriginUserID)
 				if wasOffloaded {
 					content = offloaded.Summary
 					GlobalMetrics.OffloadEvents.Add(1)
@@ -1124,7 +1124,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// ReadPath from LLM is in sandbox format (e.g. /workspace/src/main.go).
 			// os.ReadFile runs in xbot host process, so we pass both workspaceRoot and
 			// sandboxWorkDir to convert sandbox→host paths before reading.
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir)
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(ctx, offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir, cfg.OriginUserID)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),

@@ -60,6 +60,7 @@ func formatErrorForUser(err error) string {
 // 读取时：优先新路径，不存在则回退旧路径
 // 写入时：始终使用新路径
 func resolveDataPath(workDir, filename string) string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(workDir, ".xbot")
 	newPath := filepath.Join(xbotDir, filename)
 	oldPath := filepath.Join(workDir, filename)
@@ -427,6 +428,7 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox, sandboxWorkDir)
 
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
@@ -551,6 +553,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.contextManager = NewContextManager(a.contextManagerConfig)
 
 	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
 	a.offloadStore = NewOffloadStore(OffloadConfig{
 		StoreDir:        offloadDir,
@@ -559,6 +562,11 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		CleanupAgeDays:  7,
 	})
 	go a.offloadStore.CleanStale()
+
+	// Inject sandbox into OffloadStore for remote mode file hash computation
+	if a.sandbox != nil {
+		a.offloadStore.SetSandbox(a.sandbox)
+	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	maskStore := NewObservationMaskStore(200)
@@ -626,9 +634,11 @@ func New(cfg Config) *Agent {
 		cfg.WorkDir = "."
 	}
 	if cfg.SkillsDir == "" {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		cfg.SkillsDir = filepath.Join(cfg.WorkDir, ".xbot", "skills")
 	}
 	if cfg.DBPath == "" {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		cfg.DBPath = filepath.Join(cfg.WorkDir, ".xbot", "xbot.db")
 	}
 	if cfg.MCPInactivityTimeout == 0 {
@@ -681,10 +691,11 @@ func New(cfg Config) *Agent {
 		singleUser:         cfg.SingleUser,
 		globalSkillDirs:    resolveGlobalSkillsDirs(cfg.SkillsDir),
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
-		agentsDir:          filepath.Join(cfg.WorkDir, ".xbot", "agents"),
-		consolidateCh:      make(chan consolidateRequest, 64),
-		consolidateStopCh:  make(chan struct{}),
-		consolidating:      make(map[string]bool),
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		agentsDir:         filepath.Join(cfg.WorkDir, ".xbot", "agents"),
+		consolidateCh:     make(chan consolidateRequest, 64),
+		consolidateStopCh: make(chan struct{}),
+		consolidating:     make(map[string]bool),
 
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),

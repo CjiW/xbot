@@ -644,11 +644,14 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 		SenderID:  "ou_test",
 
 		// Workspace fields (simulating SubAgent inheriting from parent)
-		WorkingDir:       "/work",
-		WorkspaceRoot:    "/work/users/ou_test",
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
-		SkillsDirs:       []string{"/work/.xbot/skills"},
+		WorkingDir:     "/work",
+		WorkspaceRoot:  "/work/users/ou_test",
+		SandboxWorkDir: "/workspace",
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		ReadOnlyRoots: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		SkillsDirs: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		AgentsDir:        "/work/.xbot/agents",
 		MCPConfigPath:    "/work/users/ou_test/mcp.json",
 		GlobalMCPConfig:  "/work/mcp.json",
@@ -680,9 +683,11 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 	if capturedCtx.PreferredSandbox != "docker" {
 		t.Errorf("PreferredSandbox = %q", capturedCtx.PreferredSandbox)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(capturedCtx.SkillsDirs) != 1 || capturedCtx.SkillsDirs[0] != "/work/.xbot/skills" {
 		t.Errorf("SkillsDirs = %v", capturedCtx.SkillsDirs)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if capturedCtx.AgentsDir != "/work/.xbot/agents" {
 		t.Errorf("AgentsDir = %q", capturedCtx.AgentsDir)
 	}
@@ -1065,11 +1070,14 @@ func TestBuildToolContext(t *testing.T) {
 		},
 
 		// 工作区 & 沙箱
-		WorkingDir:       "/work",
-		WorkspaceRoot:    "/work/users/ou_xxx",
-		SandboxWorkDir:   "/workspace",
-		ReadOnlyRoots:    []string{"/work/.xbot/skills"},
-		SkillsDirs:       []string{"/work/.xbot/skills"},
+		WorkingDir:     "/work",
+		WorkspaceRoot:  "/work/users/ou_xxx",
+		SandboxWorkDir: "/workspace",
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		ReadOnlyRoots: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+		SkillsDirs: []string{"/work/.xbot/skills"},
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		AgentsDir:        "/work/.xbot/agents",
 		MCPConfigPath:    "/work/users/ou_xxx/mcp.json",
 		GlobalMCPConfig:  "/work/mcp.json",
@@ -1103,12 +1111,15 @@ func TestBuildToolContext(t *testing.T) {
 	if tc.SandboxWorkDir != "/workspace" {
 		t.Errorf("SandboxWorkDir = %q", tc.SandboxWorkDir)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(tc.ReadOnlyRoots) != 1 || tc.ReadOnlyRoots[0] != "/work/.xbot/skills" {
 		t.Errorf("ReadOnlyRoots = %v", tc.ReadOnlyRoots)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if len(tc.SkillsDirs) != 1 || tc.SkillsDirs[0] != "/work/.xbot/skills" {
 		t.Errorf("SkillsDirs = %v", tc.SkillsDirs)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if tc.AgentsDir != "/work/.xbot/agents" {
 		t.Errorf("AgentsDir = %q", tc.AgentsDir)
 	}

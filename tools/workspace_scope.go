@@ -31,6 +31,7 @@ func SanitizeWorkspaceKey(raw string) string {
 
 // UserRoot 返回用户根目录：{workDir}/.xbot/users/{sender}
 func UserRoot(workDir, senderID string) string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return filepath.Join(workDir, ".xbot", "users", SanitizeWorkspaceKey(senderID))
 }
 

@@ -36,7 +36,9 @@ Example: {"command": "ls -la"}
 
 Environment Variables:
 - Commands run in a login shell (detected from container's /etc/passwd), which automatically sources /etc/profile, ~/.bash_profile, ~/.bashrc, etc.
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Use "export VAR=value" to set environment variables (auto-persisted to ~/.xbot_env)
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Or write directly: echo 'export PATH=$PATH:/new/path' >> ~/.xbot_env`
 }
 
@@ -244,12 +246,14 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	if result == "" {
 		if envPersisted {
+			// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 			return NewResult("Command executed successfully. Environment variables persisted to ~/.xbot_env"), nil
 		}
 		return NewResult("Command executed successfully (no output)"), nil
 	}
 
 	if envPersisted {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		result += "\n[Environment variables persisted to ~/.xbot_env]"
 	}
 
@@ -276,6 +280,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 
 	// 读取现有的 ~/.xbot_env
 	existing := ""
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	readCmd := "cat ~/.xbot_env 2>/dev/null || true"
 	if output, err := RunInSandboxWithShell(toolCtx, readCmd); err == nil {
 		existing = output
@@ -307,6 +312,7 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 		return false
 	}
 	heredocTag := "XBOT_ENV_" + hex.EncodeToString(randBytes)
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	writeCmd := fmt.Sprintf("cat > ~/.xbot_env << '%s'\n%s\n%s", heredocTag, newContent, heredocTag)
 	if _, err := RunInSandboxWithShell(toolCtx, writeCmd); err != nil {
 		return false
@@ -317,7 +323,9 @@ func (t *ShellTool) persistEnvFromCommand(toolCtx *ToolContext, command string) 
 	// 但 [ -z "$PS1" ] && return 会阻止非交互模式执行后续内容，
 	// 所以 source 语句必须插在 early return 之前。
 	ensureBashrcCmd := `# Remove existing source block (including adjacent blank lines)
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 if grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     sed -i '/# Source xbot environment variables/,/source ~\/\.xbot_env/d' ~/.bashrc
     # Clean up consecutive blank lines left by deletion
     sed -i '/^$/{ N; /^\n$/d; }' ~/.bashrc
@@ -325,8 +333,11 @@ fi
 
 # Insert before PS1 guard if present, otherwise append to end (fallback for Alpine etc.)
 if grep -q '\[ -z "\$PS1" \]' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' ~/.bashrc
+// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 elif ! grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
+    // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
     echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> ~/.bashrc
 fi`
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"xbot/llm"
+	"xbot/tools"
 
 	log "xbot/logger"
 )
@@ -71,7 +73,8 @@ type offloadFile struct {
 // OffloadStore 管理大 tool result 的 offload 和召回。
 type OffloadStore struct {
 	config   OffloadConfig
-	sessions sync.Map // map[sessionKey]*offloadIndex
+	sessions sync.Map      // map[sessionKey]*offloadIndex
+	sandbox  tools.Sandbox // optional sandbox for file hash computation (remote mode)
 }
 
 // NewOffloadStore 创建 OffloadStore 实例，使用默认值填充零值字段。
@@ -92,6 +95,12 @@ func NewOffloadStore(config OffloadConfig) *OffloadStore {
 		config.Model = "gpt-4o"
 	}
 	return &OffloadStore{config: config}
+}
+
+// SetSandbox sets the sandbox for file hash computation (used in remote mode
+// where os.ReadFile cannot access user's machine files).
+func (s *OffloadStore) SetSandbox(sb tools.Sandbox) {
+	s.sandbox = sb
 }
 
 // generateID 生成 offload 短 ID: "ol_" + 8位随机 hex。
@@ -142,7 +151,8 @@ func estimateTokenSize(text string, model string) int {
 // 返回 (zero, false) 表示无需 offload。
 // workspaceRoot/sandboxWorkDir 用于 Read 工具：将 ReadPath 解析为宿主机路径后
 // 读取原始文件内容计算 ContentHash，确保与 InvalidateStaleReads 的比较一致。
-func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result, workspaceRoot, sandboxWorkDir string) (OffloadedResult, bool) {
+// sandbox 用于 remote 模式下穿越沙箱读取文件计算哈希。
+func (s *OffloadStore) MaybeOffload(ctx context.Context, sessionKey, toolName, args, result, workspaceRoot, sandboxWorkDir string, userID string) (OffloadedResult, bool) {
 	if result == "" {
 		return OffloadedResult{}, false
 	}
@@ -205,7 +215,25 @@ func (s *OffloadStore) MaybeOffload(sessionKey, toolName, args, result, workspac
 		Summary:   summaryContent,
 	}
 
-	// For Read tool: resolve path to host filesystem and hash the raw file content.
+	// For Read tool: resolve path and hash the raw file content.
+	// In remote mode, use sandbox to read file; in local mode, resolve to host path.
+	// This ensures ContentHash matches what InvalidateStaleReads computes,
+	// avoiding false stale when the tool result is truncated by applyLineLimit.
+	if toolName == "Read" {
+		if readPath := extractJSONStringField(args, "path"); readPath != "" {
+			entry.ReadPath = readPath
+			if s.sandbox != nil {
+				if rawData, err := s.sandbox.ReadFile(ctx, readPath, userID); err == nil {
+					entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256(rawData))
+				}
+			} else {
+				hostPath := resolveReadPathToHost(readPath, workspaceRoot, sandboxWorkDir)
+				if rawData, err := os.ReadFile(hostPath); err == nil {
+					entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256(rawData))
+				}
+			}
+		}
+	}
 	// This ensures ContentHash matches what InvalidateStaleReads computes,
 	// avoiding false stale when the tool result is truncated by applyLineLimit.
 	if toolName == "Read" {
@@ -330,8 +358,8 @@ func resolveReadPathToHost(readPath, workspaceRoot, sandboxWorkDir string) strin
 // Returns IDs of newly-staled entries (previously not stale).
 // workspaceRoot is the host-side workspace root (e.g. /data/users/ou_xxx/workspace).
 // sandboxWorkDir is the sandbox-side workspace root (e.g. /workspace).
-// os.ReadFile runs in the xbot host process, so sandbox paths must be converted to host paths.
-func (s *OffloadStore) InvalidateStaleReads(sessionKey, workspaceRoot, sandboxWorkDir string) []string {
+// Uses sandbox.ReadFile in remote mode, os.ReadFile in local mode.
+func (s *OffloadStore) InvalidateStaleReads(ctx context.Context, sessionKey, workspaceRoot, sandboxWorkDir string, userID string) []string {
 	idx := s.getOrCreateIndex(sessionKey)
 	idx.mu.Lock()
 
@@ -344,10 +372,17 @@ func (s *OffloadStore) InvalidateStaleReads(sessionKey, workspaceRoot, sandboxWo
 			continue
 		}
 
-		resolvedPath := resolveReadPathToHost(e.ReadPath, workspaceRoot, sandboxWorkDir)
+		var currentData []byte
+		var err error
 
-		// Read current file content (runs in xbot host process)
-		currentData, err := os.ReadFile(resolvedPath)
+		if s.sandbox != nil {
+			// Remote mode: read via sandbox (user's machine)
+			currentData, err = s.sandbox.ReadFile(ctx, e.ReadPath, userID)
+		} else {
+			// Local mode: resolve to host path and read directly
+			resolvedPath := resolveReadPathToHost(e.ReadPath, workspaceRoot, sandboxWorkDir)
+			currentData, err = os.ReadFile(resolvedPath)
+		}
 		if err != nil {
 			if os.IsNotExist(err) {
 				e.Stale = true

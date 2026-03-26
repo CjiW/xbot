@@ -11,6 +11,7 @@ import (
 func TestSetupLogger(t *testing.T) {
 	t.Run("creates_log_directory", func(t *testing.T) {
 		tmpDir := t.TempDir()
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(tmpDir, ".xbot", "logs")
 
 		cfg := SetupConfig{

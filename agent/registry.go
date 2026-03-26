@@ -523,6 +523,7 @@ func (rm *RegistryManager) Browse(entryType string, limit, offset int) ([]sqlite
 // --- registry cache ---
 
 func (rm *RegistryManager) registryCacheDir(entryType, name string) string {
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return filepath.Join(rm.workDir, ".xbot", "registry", entryType, name)
 }
 

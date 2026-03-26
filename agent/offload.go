@@ -234,17 +234,6 @@ func (s *OffloadStore) MaybeOffload(ctx context.Context, sessionKey, toolName, a
 			}
 		}
 	}
-	// This ensures ContentHash matches what InvalidateStaleReads computes,
-	// avoiding false stale when the tool result is truncated by applyLineLimit.
-	if toolName == "Read" {
-		if readPath := extractJSONStringField(args, "path"); readPath != "" {
-			entry.ReadPath = readPath
-			hostPath := resolveReadPathToHost(readPath, workspaceRoot, sandboxWorkDir)
-			if rawData, err := os.ReadFile(hostPath); err == nil {
-				entry.ContentHash = fmt.Sprintf("%x", sha256.Sum256(rawData))
-			}
-		}
-	}
 
 	idx := s.getOrCreateIndex(sessionKey)
 	idx.mu.Lock()

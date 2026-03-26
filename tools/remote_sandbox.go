@@ -43,12 +43,7 @@ type RemoteSandbox struct {
 	addr        string
 	pendingMu   sync.Mutex
 	pending     map[string]chan *RunnerMessage // request ID → response channel
-}
-
-var upgrader = websocket.Upgrader{
-	// WARNING: In production, set AllowedOrigins in RemoteSandboxConfig to restrict origins.
-	// When empty, all origins are accepted (development mode).
-	CheckOrigin: func(r *http.Request) bool { return true },
+	upgrader    websocket.Upgrader             // per-instance upgrader with origin check
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
@@ -56,10 +51,30 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
 	if cfg.Addr == "" {
 		cfg.Addr = "0.0.0.0:8080"
 	}
+
+	// Build per-instance upgrader with origin validation.
+	var checkOrigin func(r *http.Request) bool
+	if len(cfg.AllowedOrigins) == 0 {
+		// No origins configured — allow all (development mode).
+		checkOrigin = func(r *http.Request) bool { return true }
+	} else {
+		allowedSet := make(map[string]struct{}, len(cfg.AllowedOrigins))
+		for _, o := range cfg.AllowedOrigins {
+			allowedSet[o] = struct{}{}
+		}
+		checkOrigin = func(r *http.Request) bool {
+			_, ok := allowedSet[r.Header.Get("Origin")]
+			return ok
+		}
+	}
+
 	rs := &RemoteSandbox{
 		authToken: cfg.AuthToken,
 		addr:      cfg.Addr,
 		pending:   make(map[string]chan *RunnerMessage),
+		upgrader: websocket.Upgrader{
+			CheckOrigin: checkOrigin,
+		},
 	}
 
 	mux := http.NewServeMux()
@@ -82,7 +97,7 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
 
 // handleWebSocket handles incoming WebSocket connections from runners.
 func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := rs.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.WithError(err).Error("WebSocket upgrade failed")
 		return

@@ -8,16 +8,18 @@ import (
 
 func TestInteractiveKey(t *testing.T) {
 	tests := []struct {
-		channel, chatID, roleName, want string
+		channel, chatID, roleName, instance, want string
 	}{
-		{"feishu", "oc_xxx", "code-reviewer", "feishu:oc_xxx/code-reviewer"},
-		{"cli", "direct", "writer", "cli:direct/writer"},
-		{"", "", "test", ":/test"},
+		{"feishu", "oc_xxx", "code-reviewer", "", "feishu:oc_xxx/code-reviewer"},
+		{"cli", "direct", "writer", "", "cli:direct/writer"},
+		{"", "", "test", "", ":/test"},
+		{"feishu", "oc_xxx", "brainstorm", "1", "feishu:oc_xxx/brainstorm:1"},
+		{"feishu", "oc_xxx", "brainstorm", "architect", "feishu:oc_xxx/brainstorm:architect"},
 	}
 	for _, tt := range tests {
-		got := interactiveKey(tt.channel, tt.chatID, tt.roleName)
+		got := interactiveKey(tt.channel, tt.chatID, tt.roleName, tt.instance)
 		if got != tt.want {
-			t.Errorf("interactiveKey(%q, %q, %q) = %q, want %q", tt.channel, tt.chatID, tt.roleName, got, tt.want)
+			t.Errorf("interactiveKey(%q, %q, %q, %q) = %q, want %q", tt.channel, tt.chatID, tt.roleName, tt.instance, got, tt.want)
 		}
 	}
 }

@@ -179,7 +179,7 @@ type TodoManagerProvider interface {
 type InteractiveCallbacks struct {
 	SpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
 	SendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	UnloadFn func(ctx context.Context, roleName string) error
+	UnloadFn func(ctx context.Context, roleName, instance string) error
 }
 
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
@@ -1247,12 +1247,12 @@ type spawnAgentAdapter struct {
 	// Interactive mode callbacks (nil = interactive not supported)
 	interactiveSpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
 	interactiveSendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	interactiveUnloadFn func(ctx context.Context, roleName string) error
+	interactiveUnloadFn func(ctx context.Context, roleName, instance string) error
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
 func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false)
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false, "")
 	out, err := a.spawnFn(parentCtx.Ctx, msg)
 	if err != nil {
 		return "", err
@@ -1264,11 +1264,11 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 }
 
 // SpawnInteractive 实现 InteractiveSubAgentManager.SpawnInteractive。
-func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance string) (string, error) {
 	if a.interactiveSpawnFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance)
 	out, err := a.interactiveSpawnFn(parentCtx.Ctx, roleName, msg)
 	if err != nil {
 		return "", err
@@ -1280,11 +1280,11 @@ func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task,
 }
 
 // SendInteractive 实现 InteractiveSubAgentManager.SendInteractive。
-func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities) (string, error) {
+func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance string) (string, error) {
 	if a.interactiveSendFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true)
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance)
 	out, err := a.interactiveSendFn(parentCtx.Ctx, roleName, msg)
 	if err != nil {
 		return "", err
@@ -1296,15 +1296,15 @@ func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, 
 }
 
 // UnloadInteractive 实现 InteractiveSubAgentManager.UnloadInteractive。
-func (a *spawnAgentAdapter) UnloadInteractive(parentCtx *tools.ToolContext, roleName string) error {
+func (a *spawnAgentAdapter) UnloadInteractive(parentCtx *tools.ToolContext, roleName, instance string) error {
 	if a.interactiveUnloadFn == nil {
 		return fmt.Errorf("interactive mode not supported")
 	}
-	return a.interactiveUnloadFn(parentCtx.Ctx, roleName)
+	return a.interactiveUnloadFn(parentCtx.Ctx, roleName, instance)
 }
 
 // buildMsg 构造 SubAgent InboundMessage。
-func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool) bus.InboundMessage {
+func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool, instance string) bus.InboundMessage {
 	metadata := map[string]string{
 		"origin_channel": a.channel,
 		"origin_chat_id": a.chatID,
@@ -1312,6 +1312,9 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	}
 	if interactive {
 		metadata["interactive"] = "true"
+	}
+	if instance != "" {
+		metadata["instance_id"] = instance
 	}
 
 	return bus.InboundMessage{

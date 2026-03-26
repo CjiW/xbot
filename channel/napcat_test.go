@@ -12,7 +12,7 @@ import (
 func TestNapCatParseMessageSegments_TextOnly(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"text","data":{"text":"hello world"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "hello world" {
 		t.Errorf("expected 'hello world', got %q", content)
 	}
@@ -24,7 +24,7 @@ func TestNapCatParseMessageSegments_TextOnly(t *testing.T) {
 func TestNapCatParseMessageSegments_Image(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"image","data":{"file":"abc.jpg","url":"https://example.com/abc.jpg"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
 	}
@@ -36,7 +36,7 @@ func TestNapCatParseMessageSegments_Image(t *testing.T) {
 func TestNapCatParseMessageSegments_ImageFallbackToFile(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"image","data":{"file":"file:///tmp/abc.jpg","url":""}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
 	}
@@ -47,45 +47,54 @@ func TestNapCatParseMessageSegments_ImageFallbackToFile(t *testing.T) {
 
 func TestNapCatParseMessageSegments_AtBot(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
-	// selfID = 123456, @bot should be filtered
+	// selfID = 123456, @bot should be filtered and mentionedBot=true
 	segments := `[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":" hello"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 123456)
+	content, media, mentionedBot := ch.parseMessageSegments(json.RawMessage(segments), 123456)
 	if content != "hello" {
 		t.Errorf("expected 'hello' (at-bot filtered), got %q", content)
 	}
 	if len(media) != 0 {
 		t.Errorf("expected no media, got %v", media)
 	}
+	if !mentionedBot {
+		t.Error("expected mentionedBot=true when @bot")
+	}
 }
 
 func TestNapCatParseMessageSegments_AtOther(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"at","data":{"qq":"999999"}},{"type":"text","data":{"text":" hello"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 123456)
+	content, media, mentionedBot := ch.parseMessageSegments(json.RawMessage(segments), 123456)
 	if content != "@999999 hello" {
 		t.Errorf("expected '@999999 hello', got %q", content)
 	}
 	if len(media) != 0 {
 		t.Errorf("expected no media, got %v", media)
 	}
+	if mentionedBot {
+		t.Error("expected mentionedBot=false when @other")
+	}
 }
 
 func TestNapCatParseMessageSegments_AtAll(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"at","data":{"qq":"all"}},{"type":"text","data":{"text":" hello"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 123456)
+	content, media, mentionedBot := ch.parseMessageSegments(json.RawMessage(segments), 123456)
 	if content != "hello" {
 		t.Errorf("expected 'hello' (at-all filtered), got %q", content)
 	}
 	if len(media) != 0 {
 		t.Errorf("expected no media, got %v", media)
 	}
+	if !mentionedBot {
+		t.Error("expected mentionedBot=true when @all")
+	}
 }
 
 func TestNapCatParseMessageSegments_Reply(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"reply","data":{"id":"12345"}},{"type":"text","data":{"text":"reply content"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "reply content" {
 		t.Errorf("expected 'reply content', got %q", content)
 	}
@@ -103,7 +112,7 @@ func TestNapCatParseMessageSegments_Mixed(t *testing.T) {
 		{"type":"image","data":{"file":"abc.jpg","url":"https://example.com/img.jpg"}},
 		{"type":"face","data":{"id":"178"}}
 	]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 123456)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 123456)
 	if content != "看看这个图" {
 		t.Errorf("expected '看看这个图', got %q", content)
 	}
@@ -115,7 +124,7 @@ func TestNapCatParseMessageSegments_Mixed(t *testing.T) {
 func TestNapCatParseMessageSegments_StringFormat(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	// messagePostFormat=string 时，message 是字符串
-	content, media := ch.parseMessageSegments(json.RawMessage(`"hello string format"`), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(`"hello string format"`), 0)
 	if content != "hello string format" {
 		t.Errorf("expected 'hello string format', got %q", content)
 	}
@@ -126,7 +135,7 @@ func TestNapCatParseMessageSegments_StringFormat(t *testing.T) {
 
 func TestNapCatParseMessageSegments_Empty(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
-	content, media := ch.parseMessageSegments(nil, 0)
+	content, media, _ := ch.parseMessageSegments(nil, 0)
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
 	}
@@ -138,7 +147,7 @@ func TestNapCatParseMessageSegments_Empty(t *testing.T) {
 func TestNapCatParseMessageSegments_Record(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"record","data":{"file":"voice.amr","url":"https://example.com/voice.amr"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
 	}
@@ -150,7 +159,7 @@ func TestNapCatParseMessageSegments_Record(t *testing.T) {
 func TestNapCatParseMessageSegments_Video(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{}, nil)
 	segments := `[{"type":"video","data":{"file":"video.mp4","url":"https://example.com/video.mp4"}}]`
-	content, media := ch.parseMessageSegments(json.RawMessage(segments), 0)
+	content, media, _ := ch.parseMessageSegments(json.RawMessage(segments), 0)
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
 	}

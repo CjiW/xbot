@@ -399,7 +399,13 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 	}
 
 	// 解析消息段
-	content, media := n.parseMessageSegments(event.Message, event.SelfID)
+	content, media, mentionedBot := n.parseMessageSegments(event.Message, event.SelfID)
+
+	// 群消息必须 @bot 才处理，私聊消息直接处理
+	if event.MessageType == "group" && !mentionedBot {
+		log.WithField("group_id", event.GroupID).Debug("NapCat: group message without @bot, skipping")
+		return nil
+	}
 
 	// 如果消息为空（可能全是表情或 @bot），跳过
 	if content == "" && len(media) == 0 {
@@ -468,11 +474,11 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 // Message segment parsing
 // ---------------------------------------------------------------------------
 
-// parseMessageSegments 解析 OneBot 11 消息段数组，返回文本内容和媒体 URL 列表
+// parseMessageSegments 解析 OneBot 11 消息段数组，返回文本内容、媒体 URL 列表和是否 @bot
 // selfID 用于过滤群消息中 @bot 的消息段
-func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) (string, []string) {
+func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) (string, []string, bool) {
 	if len(raw) == 0 {
-		return "", nil
+		return "", nil, false
 	}
 
 	var segments []obMessageSegment
@@ -480,15 +486,16 @@ func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) 
 		// 可能是字符串格式的消息（messagePostFormat=string），直接返回
 		var s string
 		if err2 := json.Unmarshal(raw, &s); err2 == nil {
-			return s, nil
+			return s, nil, false
 		}
 		log.WithError(err).Debug("NapCat: failed to parse message segments")
-		return "", nil
+		return "", nil, false
 	}
 
 	var textParts []string
 	var media []string
 	selfIDStr := fmt.Sprintf("%d", selfID)
+	mentionedBot := false
 
 	for _, seg := range segments {
 		switch seg.Type {
@@ -513,8 +520,9 @@ func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) 
 		case "at":
 			var data obAtData
 			if err := json.Unmarshal(seg.Data, &data); err == nil {
-				// 过滤 @bot 自己
+				// 检测 @bot 自己或 @all
 				if data.QQ == selfIDStr || data.QQ == "all" {
+					mentionedBot = true
 					continue
 				}
 				textParts = append(textParts, fmt.Sprintf("@%s", data.QQ))
@@ -569,7 +577,7 @@ func (n *NapCatChannel) parseMessageSegments(raw json.RawMessage, selfID int64) 
 	}
 
 	text := strings.TrimSpace(strings.Join(textParts, ""))
-	return text, media
+	return text, media, mentionedBot
 }
 
 // ---------------------------------------------------------------------------

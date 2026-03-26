@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -57,7 +58,7 @@ func sendRegistration(conn *websocket.Conn, userID, authToken, httpAddr string) 
 }
 
 // runReadLoop reads messages from the server and dispatches to handlers.
-func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}) {
+func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}, writeMu *sync.Mutex) {
 	defer close(done)
 	for {
 		_, message, err := conn.ReadMessage()
@@ -74,7 +75,10 @@ func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}) {
 
 		resp := handleRequest(msg, workspace)
 		data, _ := json.Marshal(resp)
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		writeMu.Lock()
+		err = conn.WriteMessage(websocket.TextMessage, data)
+		writeMu.Unlock()
+		if err != nil {
 			log.Printf("Write error: %v", err)
 			return
 		}
@@ -82,13 +86,15 @@ func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}) {
 }
 
 // runHeartbeat sends periodic ping messages to keep the connection alive.
-func runHeartbeat(conn *websocket.Conn, stop chan struct{}) {
+func runHeartbeat(conn *websocket.Conn, stop chan struct{}, writeMu *sync.Mutex) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
+			writeMu.Lock()
 			conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+			writeMu.Unlock()
 		case <-stop:
 			return
 		}

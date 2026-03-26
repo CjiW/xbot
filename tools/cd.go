@@ -505,7 +505,7 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 		if isWithinRoot(target, realRoot) {
 			allowed = true
 		}
-		if !allowed && ctx.ReadOnlyRoots != nil {
+		if !allowed && len(ctx.SandboxReadOnlyRoots) > 0 {
 			for _, ro := range ctx.SandboxReadOnlyRoots {
 				if ro == "" {
 					continue

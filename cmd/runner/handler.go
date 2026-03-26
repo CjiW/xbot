@@ -66,6 +66,8 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	if cmd == nil {
 		return makeError(msg.ID, "EINVAL", "no command specified")
 	}
+	// Create a new process group so we can kill all children on timeout.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if req.Dir != "" {
 		if err := validatePath(req.Dir, workspace); err != nil {
 			return makeError(msg.ID, "EPERM", err.Error())
@@ -90,9 +92,9 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	if ctx.Err() == context.DeadlineExceeded {
 		timedOut = true
 		exitCode = -1
-		// Kill the process
+		// Kill the entire process group to prevent child process leaks.
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 	} else if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

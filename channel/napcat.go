@@ -457,9 +457,10 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 		}(),
 		RequestID:  requestID,
 		Metadata: map[string]string{
-			"message_id": messageID,
-			"chat_type":  chatType,
-			"self_id":    fmt.Sprintf("%d", event.SelfID),
+			"message_id":  messageID,
+			"chat_type":   chatType,
+			"self_id":     fmt.Sprintf("%d", event.SelfID),
+			"reply_policy": "optional", // QQ 不支持 patch，禁用 ACK 和进度通知
 		},
 	}
 
@@ -590,11 +591,8 @@ func (n *NapCatChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return "", nil
 	}
 
-	// QQ 不支持 patch（原地更新消息），跳过进度更新，只发最终回复。
-	// 当 update_message_id 存在时，说明是对已有消息的更新（进度通知），直接忽略。
-	if msg.Metadata != nil && msg.Metadata["update_message_id"] != "" {
-		return msg.Metadata["update_message_id"], nil
-	}
+	// QQ 不支持 patch（原地更新消息），直接发送新消息。
+	// reply_policy=optional 已禁用 ACK 和进度通知，此处只会收到最终回复。
 
 	chatType := ""
 	if msg.Metadata != nil {

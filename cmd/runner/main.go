@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/gorilla/websocket"
@@ -83,13 +84,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// WebSocket write mutex — gorilla/websocket requires single concurrent writer.
+	var writeMu sync.Mutex
+
 	// Start heartbeat
 	stopHeartbeat := make(chan struct{})
-	go runHeartbeat(conn, stopHeartbeat)
+	go runHeartbeat(conn, stopHeartbeat, &writeMu)
 
 	// Start read loop
 	done := make(chan struct{})
-	go runReadLoop(conn, *flagWorkspace, done)
+	go runReadLoop(conn, *flagWorkspace, done, &writeMu)
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
@@ -97,8 +101,10 @@ func main() {
 	<-sigCh
 	fmt.Println("\nShutting down...")
 	close(stopHeartbeat)
+	writeMu.Lock()
 	conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"disconnect"}`))
 	conn.Close()
+	writeMu.Unlock()
 }
 
 // detectLocalIP returns the first non-loopback local IP address.
@@ -114,6 +120,3 @@ func detectLocalIP() string {
 	}
 	return "127.0.0.1"
 }
-
-// Ensure websocket import is used (suppress unused import error).
-var _ = websocket.TextMessage

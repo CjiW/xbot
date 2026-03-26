@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,7 +79,7 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", rs.handleWebSocket)
+	mux.HandleFunc("/ws/", rs.handleWebSocket)
 
 	rs.wsServer = &http.Server{
 		Addr:    cfg.Addr,
@@ -96,7 +97,16 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
 }
 
 // handleWebSocket handles incoming WebSocket connections from runners.
+// The URL path must be /ws/{userID} — the userID is bound to this connection,
+// preventing a token-holder from registering as a different user.
 func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Extract userID from URL path: /ws/{userID}
+	pathUserID := strings.TrimPrefix(r.URL.Path, "/ws/")
+	if pathUserID == "" || pathUserID == r.URL.Path {
+		http.Error(w, "user ID required in URL path (/ws/{userID})", http.StatusBadRequest)
+		return
+	}
+
 	conn, err := rs.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.WithError(err).Error("WebSocket upgrade failed")
@@ -132,6 +142,14 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 	if reg.UserID == "" {
 		log.Warn("Runner registration missing user_id")
+		return
+	}
+	// S6: Bind token to userID — the URL path determines identity, not the claim.
+	if reg.UserID != pathUserID {
+		log.WithFields(log.Fields{
+			"path_user_id": pathUserID,
+			"claimed_id":   reg.UserID,
+		}).Warn("Runner userID mismatch (potential impersonation)")
 		return
 	}
 

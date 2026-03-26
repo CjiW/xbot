@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,28 +28,37 @@ type RemoteSandboxConfig struct {
 	AllowedOrigins []string // Allowed WebSocket origins (empty = allow all, for development)
 }
 
+// RemoteSandboxSyncConfig holds directories to sync to runners on registration.
+type RemoteSandboxSyncConfig struct {
+	GlobalSkillDirs []string // Global skill directories (server-side)
+	AgentsDir       string   // Global agents directory (server-side)
+}
+
 // runnerConnection represents a connected xbot-runner instance.
 type runnerConnection struct {
 	mu       sync.Mutex
 	wsConn   *websocket.Conn
 	httpAddr string // Runner's HTTP address (e.g., "http://192.168.1.1:12345")
 	userID   string
+	workspace string // Runner's workspace root directory
 }
 
 // RemoteSandbox implements the Sandbox interface via WebSocket communication
 // with xbot-runner instances running on users' machines.
 type RemoteSandbox struct {
-	connections sync.Map // userID → *runnerConnection
-	wsServer    *http.Server
-	authToken   string
-	addr        string
-	pendingMu   sync.Mutex
-	pending     map[string]chan *RunnerMessage // request ID → response channel
-	upgrader    websocket.Upgrader             // per-instance upgrader with origin check
+	connections    sync.Map // userID → *runnerConnection
+	wsServer       *http.Server
+	authToken      string
+	addr           string
+	pendingMu      sync.Mutex
+	pending        map[string]chan *RunnerMessage // request ID → response channel
+	upgrader       websocket.Upgrader             // per-instance upgrader with origin check
+	globalSkillDirs []string                      // global skill dirs to sync to runner on registration
+	agentsDir       string                        // global agents dir to sync to runner on registration
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
-func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
+func NewRemoteSandbox(cfg RemoteSandboxConfig, syncCfg RemoteSandboxSyncConfig) (*RemoteSandbox, error) {
 	if cfg.Addr == "" {
 		cfg.Addr = "0.0.0.0:8080"
 	}
@@ -70,12 +80,14 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig) (*RemoteSandbox, error) {
 	}
 
 	rs := &RemoteSandbox{
-		authToken: cfg.AuthToken,
-		addr:      cfg.Addr,
-		pending:   make(map[string]chan *RunnerMessage),
+		authToken:       cfg.AuthToken,
+		addr:            cfg.Addr,
+		pending:         make(map[string]chan *RunnerMessage),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkOrigin,
 		},
+		globalSkillDirs: syncCfg.GlobalSkillDirs,
+		agentsDir:       syncCfg.AgentsDir,
 	}
 
 	mux := http.NewServeMux()
@@ -157,12 +169,16 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		wsConn:   conn,
 		httpAddr: reg.HTTPAddr,
 		userID:   reg.UserID,
+		workspace: reg.Workspace,
 	}
 	rs.connections.Store(reg.UserID, rc)
 	log.WithFields(log.Fields{
 		"user_id":   reg.UserID,
 		"http_addr": reg.HTTPAddr,
 	}).Info("Runner connected")
+
+	// Sync global skills and agents to the runner in the background
+	go rs.syncToRunner(reg.UserID, reg.Workspace)
 
 	// Keep reading messages (responses and heartbeats)
 	for {
@@ -248,6 +264,16 @@ func generateID() string {
 
 func (rs *RemoteSandbox) Name() string { return "remote" }
 
+// Workspace returns the runner's workspace root directory for the given user.
+// Returns empty string if the runner is not connected or hasn't reported a workspace.
+func (rs *RemoteSandbox) Workspace(userID string) string {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return ""
+	}
+	return rc.workspace
+}
+
 func (rs *RemoteSandbox) Close() error {
 	return rs.wsServer.Close()
 }
@@ -267,12 +293,6 @@ func (rs *RemoteSandbox) IsExporting(_ string) bool            { return false }
 func (rs *RemoteSandbox) ExportAndImport(_ string) error       { return nil }
 func (rs *RemoteSandbox) GetShell(_, _ string) (string, error) { return "/bin/sh", nil }
 
-func (rs *RemoteSandbox) Wrap(command string, args []string, env []string, workspace, userID string) (string, []string, error) {
-	// Remote mode doesn't use Wrap — commands are sent via Exec
-	_ = env
-	_ = workspace
-	return command, args, nil
-}
 
 func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 	rc, err := rs.getRunner(spec.UserID)
@@ -554,4 +574,116 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 		return fmt.Errorf("remove_all: %s", e.Message)
 	}
 	return nil
+}
+
+// === Runner sync (server → runner file sync on registration) ===
+
+// syncToRunner syncs global skills and agents from the server to the runner.
+// Runs in a background goroutine; errors are logged but not fatal.
+func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
+	if workspace == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Sync each global skill directory
+	for _, skillDir := range rs.globalSkillDirs {
+		dstDir := filepath.Join(workspace, "skills")
+		rs.syncDirToRunner(ctx, userID, workspace, skillDir, dstDir)
+	}
+
+	// Sync global agents
+	if rs.agentsDir != "" {
+		dstDir := filepath.Join(workspace, "agents")
+		rs.syncAgentsToRunner(ctx, userID, workspace, rs.agentsDir, dstDir)
+	}
+
+	log.WithFields(log.Fields{
+		"user_id":   userID,
+		"workspace": workspace,
+	}).Info("Runner sync completed")
+}
+
+// syncDirToRunner recursively syncs a skill directory tree from the server to the runner.
+// Each skill is a subdirectory; only directories containing SKILL.md are synced.
+func (rs *RemoteSandbox) syncDirToRunner(ctx context.Context, userID, workspace, srcDir, dstSubdir string) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.WithError(err).WithField("dir", srcDir).Warn("syncToRunner: failed to read source dir")
+		return
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		skillDir := filepath.Join(srcDir, e.Name())
+		skillFile := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue // not a valid skill (no SKILL.md)
+		}
+		dstDir := filepath.Join(dstSubdir, e.Name())
+		rs.syncTreeToRunner(ctx, userID, skillDir, dstDir)
+	}
+}
+
+// syncAgentsToRunner syncs .md agent files from the server's agents dir to the runner.
+func (rs *RemoteSandbox) syncAgentsToRunner(ctx context.Context, userID, workspace, srcDir, dstSubdir string) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.WithError(err).WithField("dir", srcDir).Warn("syncToRunner: failed to read agents dir")
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, e.Name())
+		dstPath := filepath.Join(dstSubdir, e.Name())
+		rs.syncFileToRunner(ctx, userID, srcPath, dstPath)
+	}
+}
+
+// syncTreeToRunner recursively syncs a directory from the server to the runner.
+func (rs *RemoteSandbox) syncTreeToRunner(ctx context.Context, userID, srcDir, dstDir string) {
+	if err := rs.MkdirAll(ctx, dstDir, 0o755, userID); err != nil {
+		log.WithError(err).WithFields(log.Fields{"src": srcDir, "dst": dstDir}).Warn("syncTree: mkdir failed")
+		return
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		log.WithError(err).WithField("dir", srcDir).Warn("syncTree: read failed")
+		return
+	}
+
+	for _, e := range entries {
+		srcPath := filepath.Join(srcDir, e.Name())
+		dstPath := filepath.Join(dstDir, e.Name())
+		if e.IsDir() {
+			rs.syncTreeToRunner(ctx, userID, srcPath, dstPath)
+		} else {
+			rs.syncFileToRunner(ctx, userID, srcPath, dstPath)
+		}
+	}
+}
+
+// syncFileToRunner reads a local file and writes it to the runner.
+func (rs *RemoteSandbox) syncFileToRunner(ctx context.Context, userID, srcPath, dstPath string) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		log.WithError(err).WithField("file", srcPath).Warn("syncFile: read failed")
+		return
+	}
+	if err := rs.WriteFile(ctx, dstPath, data, 0o644, userID); err != nil {
+		log.WithError(err).WithFields(log.Fields{"src": srcPath, "dst": dstPath}).Warn("syncFile: write failed")
+	}
 }

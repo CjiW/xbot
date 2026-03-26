@@ -17,29 +17,27 @@ import (
 
 // RegistryManager manages skill/agent publishing, installation, and discovery.
 type RegistryManager struct {
-	store          *SkillStore
-	agentStore     *AgentStore
-	sharedStore    *sqlite.SharedSkillRegistry
-	workDir        string
-	sandbox        tools.Sandbox
-	sandboxWorkDir string // "/workspace" for docker/remote, "" for none
+	store       *SkillStore
+	agentStore  *AgentStore
+	sharedStore *sqlite.SharedSkillRegistry
+	workDir     string
+	sandbox     tools.Sandbox
 }
 
 // NewRegistryManager creates a new RegistryManager.
-func NewRegistryManager(store *SkillStore, agentStore *AgentStore, sharedStore *sqlite.SharedSkillRegistry, workDir string, sandbox tools.Sandbox, sandboxWorkDir string) *RegistryManager {
+func NewRegistryManager(store *SkillStore, agentStore *AgentStore, sharedStore *sqlite.SharedSkillRegistry, workDir string, sandbox tools.Sandbox) *RegistryManager {
 	return &RegistryManager{
-		store:          store,
-		agentStore:     agentStore,
-		sharedStore:    sharedStore,
-		workDir:        workDir,
-		sandbox:        sandbox,
-		sandboxWorkDir: sandboxWorkDir,
+		store:       store,
+		agentStore:  agentStore,
+		sharedStore: sharedStore,
+		workDir:     workDir,
+		sandbox:     sandbox,
 	}
 }
 
 // useSandbox 判断是否应使用 Sandbox 访问用户文件。
 func (rm *RegistryManager) useSandbox() bool {
-	return rm.sandbox != nil && rm.sandboxWorkDir != ""
+	return rm.sandbox != nil && rm.sandbox.Name() != "none"
 }
 
 // sandboxCtx returns a context with a 30-second timeout for sandbox I/O operations.
@@ -50,14 +48,14 @@ func (rm *RegistryManager) sandboxCtx() (context.Context, context.CancelFunc) {
 
 func (rm *RegistryManager) userSkillsDir(senderID string) string {
 	if rm.useSandbox() {
-		return filepath.Join(rm.sandboxWorkDir, "skills")
+		return filepath.Join(rm.sandbox.Workspace(senderID), "skills")
 	}
 	return tools.UserSkillsRoot(rm.workDir, senderID)
 }
 
 func (rm *RegistryManager) userAgentsDir(senderID string) string {
 	if rm.useSandbox() {
-		return filepath.Join(rm.sandboxWorkDir, "agents")
+		return filepath.Join(rm.sandbox.Workspace(senderID), "agents")
 	}
 	return tools.UserAgentsRoot(rm.workDir, senderID)
 }

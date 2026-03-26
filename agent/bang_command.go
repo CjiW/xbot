@@ -1,11 +1,9 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,7 +75,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 }
 
 // executeBangCommand runs the command in the user's sandbox (or locally if sandbox is disabled).
-// Both paths use login shell (bash -l -c) via the sandbox infrastructure for consistent behavior.
+// Both paths use login shell (bash -l -c) via Sandbox.Exec for consistent behavior.
 func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, senderID string) (string, error) {
 	execCtx, cancel := context.WithTimeout(ctx, bangDefaultTimeout)
 	defer cancel()
@@ -90,45 +88,51 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	// Use login shell (-l) to auto-source /etc/profile, ~/.bashrc, ~/.xbot_env, etc.
-	cmdName, cmdArgs, err := sandbox.Wrap(shell, []string{"-l", "-c", command}, nil, workspaceRoot, senderID)
+	// Determine working directory based on sandbox mode
+	var dir string
+	switch sandbox.Name() {
+	case "docker":
+		dir = "/workspace"
+	case "remote":
+		// Don't set dir -- runner defaults to its workspace
+	default:
+		dir = workspaceRoot
+	}
+
+	spec := tools.ExecSpec{
+		Command: shell,
+		Args:    []string{shell, "-l", "-c", command},
+		Shell:   false,
+		Dir:     dir,
+		Timeout: bangDefaultTimeout,
+		UserID:  senderID,
+	}
+	if sandbox.Name() == "docker" {
+		spec.Workspace = workspaceRoot
+	}
+
+	result, err := sandbox.Exec(execCtx, spec)
 	if err != nil {
-		return "", fmt.Errorf("wrap command: %w", err)
+		return "", err
 	}
 
-	cmd := exec.CommandContext(execCtx, cmdName, cmdArgs...)
-	cmd.Dir = workspaceRoot
-	cmd.Stdin = nil
-
-	// 使用平台特定的进程属性设置（Setpgid），超时时可以杀掉整棵进程树
-	tools.SetProcessAttrs(cmd)
-	// Cancel 回调：context 超时/取消时 kill 整个进程组
-	cmd.Cancel = func() error {
-		tools.KillProcess(cmd)
-		return nil
+	var buf strings.Builder
+	if result.Stdout != "" {
+		buf.WriteString(result.Stdout)
 	}
-	// WaitDelay：Cancel 后最多等 5 秒让 I/O drain，然后强制关闭 pipe 使 Wait 返回
-	cmd.WaitDelay = 5 * time.Second
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-
-	var result strings.Builder
-	if stdout.Len() > 0 {
-		result.Write(stdout.Bytes())
-	}
-	if stderr.Len() > 0 {
-		if result.Len() > 0 {
-			result.WriteString("\n")
+	if result.Stderr != "" {
+		if buf.Len() > 0 {
+			buf.WriteString("\n")
 		}
-		result.WriteString("[stderr] ")
-		result.Write(stderr.Bytes())
+		buf.WriteString("[stderr] ")
+		buf.WriteString(result.Stderr)
 	}
 
-	return strings.TrimSpace(result.String()), runErr
+	output := strings.TrimSpace(buf.String())
+	if result.ExitCode != 0 && result.ExitCode != -1 {
+		return output, fmt.Errorf("exit code %d", result.ExitCode)
+	}
+	return output, nil
 }
 
 // formatBangOutput formats the command output for inline display.

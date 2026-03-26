@@ -834,10 +834,16 @@ func NewSandbox(sandboxCfg config.SandboxConfig, workDir string) Sandbox {
 		if wsPort == 0 {
 			wsPort = 8080
 		}
+		// Compute sync dirs: global skills dir and agents dir under .xbot/
+		xbotDir := filepath.Join(workDir, ".xbot")
+		syncCfg := RemoteSandboxSyncConfig{
+			GlobalSkillDirs: []string{filepath.Join(xbotDir, "skills")},
+			AgentsDir:       filepath.Join(xbotDir, "agents"),
+		}
 		rs, err := NewRemoteSandbox(RemoteSandboxConfig{
 			Addr:      fmt.Sprintf("0.0.0.0:%d", wsPort),
 			AuthToken: sandboxCfg.AuthToken,
-		})
+		}, syncCfg)
 		if err != nil {
 			log.WithError(err).Errorf("Failed to start remote sandbox server: %v", err)
 			return &NoneSandbox{}

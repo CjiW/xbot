@@ -66,14 +66,13 @@ func (a *Agent) buildBaseRunConfig(
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    a.workspaceRoot(senderID),
-		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode == "docker",
+		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
 		Sandbox:          a.sandbox,
 		SandboxMode:      a.sandboxMode,
@@ -249,9 +248,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	// 构建 SubAgent 的 system prompt：通用模板 + 角色专有能力描述
-	workDir := parentCtx.SandboxWorkDir
-	if workDir == "" {
-		workDir = parentCtx.WorkspaceRoot
+	workDir := parentCtx.WorkspaceRoot
+	if parentCtx.Sandbox != nil && parentCtx.Sandbox.Name() != "none" {
+		workDir = parentCtx.Sandbox.Workspace(parentCtx.OriginUserID)
 	}
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 
@@ -331,14 +330,13 @@ func (a *Agent) buildSubAgentRunConfig(
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
 		WorkspaceRoot:    parentCtx.WorkspaceRoot,
-		SandboxWorkDir:   parentCtx.SandboxWorkDir,
 		ReadOnlyRoots:    parentCtx.ReadOnlyRoots,
 		SkillsDirs:       parentCtx.SkillsDirs,
 		AgentsDir:        parentCtx.AgentsDir,
 		MCPConfigPath:    parentCtx.MCPConfigPath,
 		GlobalMCPConfig:  parentCtx.GlobalMCPConfigPath,
 		DataDir:          parentCtx.DataDir,
-		SandboxEnabled:   parentCtx.SandboxEnabled,
+		SandboxEnabled:   parentCtx.Sandbox != nil && parentCtx.Sandbox.Name() != "none",
 		PreferredSandbox: parentCtx.PreferredSandbox,
 		Sandbox:          parentCtx.Sandbox,
 		SandboxMode: func() string {
@@ -468,14 +466,13 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 
 		WorkingDir:       a.workDir,
 		WorkspaceRoot:    wsRoot,
-		SandboxWorkDir:   a.sandboxWorkDir(),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode == "docker",
+		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
 		Sandbox:          a.sandbox,
 		SandboxMode:      a.sandboxMode,

@@ -112,7 +112,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 	}
 
 	// Write to output path (sandbox-aware)
-	useSandbox := ctx != nil && ctx.Sandbox != nil && ctx.SandboxWorkDir != ""
+	useSandbox := tools.ShouldUseSandbox(ctx)
 	if useSandbox {
 		userID := ctx.OriginUserID
 		if userID == "" {

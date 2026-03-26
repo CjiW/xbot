@@ -49,7 +49,7 @@ func (t *CdTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 		return t.executeWithSandboxAPI(ctx, params.Path)
 	}
 	// Legacy: docker sandbox mode using shell commands
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	if shouldUseSandbox(ctx) {
 		return t.executeInSandbox(ctx, params.Path)
 	}
 
@@ -555,7 +555,7 @@ func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, er
 			// CurrentDir in sandbox mode stores sandbox paths (e.g. /workspace/src)
 			base = ctx.CurrentDir
 		} else {
-			base = ctx.SandboxWorkDir
+			base = sandboxBaseDir(ctx)
 		}
 		if base != "" {
 			target = filepath.Join(base, target)
@@ -620,7 +620,7 @@ func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResul
 		if ctx.CurrentDir != "" {
 			base = ctx.CurrentDir
 		} else {
-			base = ctx.SandboxWorkDir
+			base = sandboxBaseDir(ctx)
 		}
 		if base != "" {
 			target = filepath.Join(base, target)
@@ -638,7 +638,7 @@ func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResul
 	}
 
 	// Validate target is within sandbox workspace or allowed roots
-	sandboxBase := ctx.SandboxWorkDir
+	sandboxBase := sandboxBaseDir(ctx)
 	if sandboxBase != "" && !isWithinRoot(target, sandboxBase) {
 		allowed := false
 		for _, ro := range ctx.SandboxReadOnlyRoots {

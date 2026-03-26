@@ -89,7 +89,7 @@ func (t *GrepTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	// 沙箱模式：在容器内执行 grep 命令
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	if shouldUseSandbox(ctx) {
 		return t.executeInSandbox(ctx, params.Pattern, params.Path, params.Include, params.IgnoreCase, params.ContextLines)
 	}
 

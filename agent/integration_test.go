@@ -77,7 +77,7 @@ func (env *integrationTestEnv) buildRunConfig(messages []llm.ChatMessage) RunCon
 		SenderName:           "Test User",
 		WorkingDir:           env.tmpDir,
 		WorkspaceRoot:        env.tmpDir,
-		SandboxWorkDir:       env.tmpDir,
+		Sandbox:              &mockSandbox{name: "docker", workspace: env.tmpDir},
 		MaskStore:            env.maskStore,
 		OffloadStore:         env.offloadStore,
 		ContextManagerConfig: env.cmConfig,

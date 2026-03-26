@@ -20,7 +20,6 @@ type ToolContext struct {
 	Ctx                     context.Context // 可取消的上下文，用于响应 stop 信号
 	WorkingDir              string          // Agent 的工作目录
 	WorkspaceRoot           string          // 当前用户可读写工作区根目录（宿主机路径）
-	SandboxWorkDir          string          // 沙箱内工作目录（如 Docker 为 /workspace，非沙箱时与 WorkspaceRoot 相同）
 	ReadOnlyRoots           []string        // 当前用户额外可读目录（只读）
 	SandboxReadOnlyRoots    []string        // 当前用户额外可读目录（sandbox 路径，预转换）
 	SkillsDirs              []string        // 全局 skill 目录列表（宿主机路径，同步源）

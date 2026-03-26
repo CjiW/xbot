@@ -2,11 +2,34 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mockSandbox is a test double for the Sandbox interface.
+type mockSandbox struct {
+	name      string
+	workspace string
+}
+
+func (m *mockSandbox) Name() string                                               { return m.name }
+func (m *mockSandbox) Workspace(_ string) string                                 { return m.workspace }
+func (m *mockSandbox) Exec(_ context.Context, _ ExecSpec) (*ExecResult, error)  { return nil, fmt.Errorf("not implemented") }
+func (m *mockSandbox) ReadFile(_ context.Context, _ string, _ string) ([]byte, error) { return nil, os.ErrNotExist }
+func (m *mockSandbox) WriteFile(_ context.Context, _ string, _ []byte, _ os.FileMode, _ string) error { return nil }
+func (m *mockSandbox) Stat(_ context.Context, _ string, _ string) (*SandboxFileInfo, error) { return nil, os.ErrNotExist }
+func (m *mockSandbox) ReadDir(_ context.Context, _ string, _ string) ([]DirEntry, error) { return nil, os.ErrNotExist }
+func (m *mockSandbox) MkdirAll(_ context.Context, _ string, _ os.FileMode, _ string) error { return nil }
+func (m *mockSandbox) Remove(_ context.Context, _ string, _ string) error { return os.ErrNotExist }
+func (m *mockSandbox) RemoveAll(_ context.Context, _ string, _ string) error { return nil }
+func (m *mockSandbox) GetShell(_ string, _ string) (string, error) { return "/bin/bash", nil }
+func (m *mockSandbox) Close() error                     { return nil }
+func (m *mockSandbox) CloseForUser(_ string) error     { return nil }
+func (m *mockSandbox) IsExporting(_ string) bool        { return false }
+func (m *mockSandbox) ExportAndImport(_ string) error   { return nil }
 
 func TestGlobTool_SandboxPathConstruction(t *testing.T) {
 	// 测试 glob 在沙箱模式下构建的命令
@@ -22,7 +45,7 @@ func TestGlobTool_SandboxPathConstruction(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:      &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false, // 禁用真实沙箱，只测试路径转换
 	}
 
@@ -49,7 +72,7 @@ func TestReadTool_PathTranslation(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:      &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false,
 	}
 
@@ -78,7 +101,7 @@ func TestGrepTool_PathTranslation(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:      &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false,
 	}
 
@@ -107,7 +130,7 @@ func TestEditTool_LocalMode(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:      &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false,
 	}
 
@@ -146,7 +169,7 @@ func TestReadTool_SandboxCWD_Regression(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:        &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false, // 本地模式测试路径逻辑
 		CurrentDir:     filepath.Join(ws, "xbot"),
 	}
@@ -341,7 +364,7 @@ func TestReadTool_OffsetParameter(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		SandboxWorkDir: "/workspace",
+		Sandbox:      &mockSandbox{name: "none", workspace: ""},
 		SandboxEnabled: false,
 	}
 

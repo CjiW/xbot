@@ -104,7 +104,7 @@ func (t *GlobTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	}
 
 	// 沙箱模式：在容器内执行 find 命令
-	if ctx != nil && ctx.SandboxEnabled && ctx.WorkspaceRoot != "" {
+	if shouldUseSandbox(ctx) {
 		return t.executeInSandbox(ctx, params.Pattern, params.Path)
 	}
 

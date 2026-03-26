@@ -89,8 +89,8 @@ func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (skillDir, displ
 	var bases []string
 	if sandboxed {
 		bases = []string{
-			filepath.Join(ctx.SandboxWorkDir, "skills"),
-			filepath.Join(ctx.SandboxWorkDir, ".skills"),
+			filepath.Join(sandboxBaseDir(ctx), "skills"),
+			filepath.Join(sandboxBaseDir(ctx), ".skills"),
 		}
 	} else {
 		bases = []string{

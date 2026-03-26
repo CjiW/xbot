@@ -1,5 +1,7 @@
 # xbot 上下文管理改进：设计文档
 
+> ⚠️ **演进说明（2026-03-27）**：本文档描述的 Phase 1 设计核心原则「执行视图隔离 — Tool call/result 仅在 Run() 内存中存在」已在后续重构（commit `45d6078`）中被调整。当前实现改为直接持久化 engine 产生的 assistant + tool 消息到 session，以确保下一轮对话拥有完整上下文。本文档作为历史设计参考保留。
+
 > 中书省拟 | 2026-03-19
 > 状态：待陛下审核
 > 前置文档：《调研报告》context-management-research.md

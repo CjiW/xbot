@@ -125,19 +125,10 @@ func (a *Agent) SpawnInteractiveSession(
 				})
 			}
 		}
-	} else if originChannel != "" && originChatID != "" {
-		rn := roleName // 闭包捕获
-		cfg.ProgressNotifier = func(lines []string) {
-			if len(lines) > 0 {
-				last := lines[len(lines)-1]
-				if idx := strings.LastIndex(last, "\n"); idx >= 0 {
-					last = last[idx+1:]
-				}
-				prefixed := "📋 subagent: [" + rn + "] " + last + "\n"
-				_ = a.sendMessage(originChannel, originChatID, prefixed)
-			}
-		}
 	}
+	// 注意：无父引擎进度上下文时不使用 fallback sendMessage。
+	// 多个交互式 agent 共享 sessionMsgIDs（key=channel:chatID）会导致
+	// 后一个 agent 的进度 patch 到前一个 agent 的消息上（进度树串扰）。
 
 	// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
 	if cb, ok := SubAgentProgressFromContext(ctx); ok {
@@ -218,54 +209,79 @@ func (a *Agent) SendToInteractiveSession(
 		}, nil
 	}
 
+	// --- 阶段 1：锁内准备配置（读取 ia 数据）---
 	ia.mu.Lock()
-	defer ia.mu.Unlock()
 
-	// 防护：占位符尚未被替换为完整数据（SpawnInteractiveSession 正在执行 Run()）。
-	// 这在正常流程中不会发生（spawn 返回后才能 send），但防御性检查避免 panic。
 	if ia.cfg == nil {
+		ia.mu.Unlock()
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q is still initializing, please try again later", roleName),
 		}, nil
 	}
 
-	// 更新最后访问时间
 	ia.lastUsed = time.Now()
 
-	// 复用存储的 RunConfig 模板，只更新 Messages 和刷新 LLM 配置。
-	// 不重建工具集、记忆系统、system prompt 等，保持 session 一致性。
-	// 注意：此处为浅拷贝，slice 字段（Messages, ReadOnlyRoots, SkillsDirs 等）
-	// 与 ia.cfg 共享底层数组。当前安全因 mutex 保护且拷贝后仅做非 slice 字段覆盖，
-	// 但如果需要修改 slice 内容，必须先深拷贝。
-	cfg := *ia.cfg // copy
-	// 使用 OriginUserID 获取 LLM 配置（SubAgent 应继承原始用户的配置）
+	cfg := *ia.cfg // 浅拷贝 RunConfig 模板
 	originUserID := cfg.OriginUserID
 	if originUserID == "" {
-		originUserID = cfg.SenderID // fallback：兼容旧数据
+		originUserID = cfg.SenderID
 	}
 	llmClient, model, _, thinkingMode := a.llmFactory.GetLLM(originUserID)
 	cfg.LLMClient = llmClient
 	cfg.Model = model
 	cfg.ThinkingMode = thinkingMode
 
-	// 重建消息：[system_prompt, 历史对话, 新的 user task]
 	var newMessages []llm.ChatMessage
-	newMessages = append(newMessages, ia.systemPrompt)                 // spawn 时的 system prompt
-	newMessages = append(newMessages, ia.messages...)                  // 累积的对话历史
-	newMessages = append(newMessages, llm.NewUserMessage(msg.Content)) // 新任务
+	newMessages = append(newMessages, ia.systemPrompt)
+	newMessages = append(newMessages, ia.messages...)
+	newMessages = append(newMessages, llm.NewUserMessage(msg.Content))
 	cfg.Messages = newMessages
 
-	// 传递 CallChain
+	ia.mu.Unlock()
+
+	// --- 阶段 2：锁外构建上下文和执行 ---
+	// BUG FIX: 不能在持有 ia.mu 期间调用 Run()。
+	// Run() 内部如果生成嵌套交互式 agent（SubAgent 工具 → SpawnInteractiveSession），
+	// 新 agent 的 cleanupExpiredSessions() 会遍历所有 session 并尝试获取 ia.mu → 死锁。
 	cc := CallChainFromContext(ctx)
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
 
-	// 记录新增消息的起点
-	preLen := len(cfg.Messages)
+	// BUG FIX: 必须使用当前 ctx 重建 ProgressNotifier 和进度穿透回调。
+	// ia.cfg 中存储的是 spawn 期间的旧闭包，捕获的 SubAgentProgressFromContext(ctx)
+	// 指向 spawn 时的 pi。send 期间子代理进度会通过旧闭包上报到旧 pi → 进度树串扰。
+	if cb, ok := SubAgentProgressFromContext(ctx); ok {
+		myDepth := cc.Depth() + 1
+		myPath := cc.Spawn(roleName).Chain
+		cfg.ProgressNotifier = func(lines []string) {
+			if len(lines) > 0 {
+				cb(SubAgentProgressDetail{
+					Path:  myPath,
+					Lines: lines,
+					Depth: myDepth,
+				})
+			}
+		}
+		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+			detail.Depth = myDepth + detail.Depth
+			if len(detail.Path) == 0 {
+				detail.Path = myPath
+			}
+			cb(detail)
+		})
+	} else {
+		// fallback：无父引擎进度上下文时，禁用直接 sendMessage 进度通知，
+		// 避免多个交互式 agent 竞争同一个 sessionMsgIDs 导致进度树串扰。
+		cfg.ProgressNotifier = nil
+	}
 
-	// 执行
+	preLen := len(cfg.Messages)
 	out := Run(subCtx, cfg)
+
+	// --- 阶段 3：锁内写回结果 ---
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
 	if out.Error != nil {
-		// BUG FIX: 在 Content 中附加错误标注，确保主 Agent LLM 能识别异常状态
 		content := out.Content
 		if content == "" {
 			content = "⚠️ Interactive SubAgent 执行失败。"
@@ -275,31 +291,15 @@ func (a *Agent) SendToInteractiveSession(
 		return out.OutboundMessage, nil
 	}
 
-	// 追加新的对话消息到 ia.messages
-	// 注意：Interactive SubAgent 的 cfg.Memory 为 nil，所以 out.Messages 可能为空。
-	// 但 Run() 内部 messages 切片（局部变量）仍然包含了完整对话历史，
-	// 不过 out.Messages 未被填充。我们需要从 Run() 的行为来推断新增消息。
-	//
-	// 策略：如果 out.Messages 非空，直接用差集；否则根据 Run 的行为手动构建。
+	// 追加新增对话消息到 ia.messages
 	if len(out.Messages) > preLen {
 		ia.messages = append(ia.messages, out.Messages[preLen:]...)
 	} else {
-		// out.Messages 为空（无 Memory），从 Run 的输出消息推断新增内容。
-		// Run() 会向 messages append assistant + tool messages。
-		// 我们需要重建：preLen 之前的消息已经在 ia.messages 中，
-		// 新增的消息是 assistant reply 和所有 tool call 的结果。
-		//
-		// 安全做法：将 out.OutboundMessage.Content 转为 assistant message 追加。
+		// out.Messages 为空（无 Memory），从 Run 输出推断
 		if out.Content != "" {
 			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 		}
 	}
-
-	log.WithFields(log.Fields{
-		"role":       roleName,
-		"new_msgs":   len(out.Messages) - preLen,
-		"total_msgs": len(ia.messages),
-	}).Info("Interactive session: sent message")
 
 	return out.OutboundMessage, nil
 }

@@ -590,6 +590,12 @@ func (n *NapCatChannel) Send(msg bus.OutboundMessage) (string, error) {
 		return "", nil
 	}
 
+	// QQ 不支持 patch（原地更新消息），跳过进度更新，只发最终回复。
+	// 当 update_message_id 存在时，说明是对已有消息的更新（进度通知），直接忽略。
+	if msg.Metadata != nil && msg.Metadata["update_message_id"] != "" {
+		return msg.Metadata["update_message_id"], nil
+	}
+
 	chatType := ""
 	if msg.Metadata != nil {
 		chatType = msg.Metadata["chat_type"]

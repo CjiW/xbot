@@ -56,10 +56,10 @@ type NapCatChannel struct {
 	msgBus *bus.MessageBus
 
 	// WebSocket
-	conn    *websocket.Conn
-	connMu  sync.Mutex
-	stopCh  chan struct{}
-	running atomic.Bool
+	conn     *websocket.Conn
+	connMu   sync.Mutex
+	stopCh   chan struct{}
+	running  atomic.Bool
 	stopOnce sync.Once
 
 	// API 请求-响应匹配
@@ -268,11 +268,6 @@ type obAtData struct {
 	QQ string `json:"qq"`
 }
 
-// obReplyData 回复消息段数据
-type obReplyData struct {
-	ID string `json:"id"`
-}
-
 // obMediaData 通用媒体消息段数据（record/video/file）
 type obMediaData struct {
 	File string `json:"file"`
@@ -449,17 +444,17 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 		ChatType:   xbotChatType,
 		Content:    content,
 		Media:      media,
-		Time:       func() time.Time {
+		Time: func() time.Time {
 			if event.Time == 0 {
 				return time.Now()
 			}
 			return time.Unix(event.Time, 0)
 		}(),
-		RequestID:  requestID,
+		RequestID: requestID,
 		Metadata: map[string]string{
-			"message_id":  messageID,
-			"chat_type":   chatType,
-			"self_id":     fmt.Sprintf("%d", event.SelfID),
+			"message_id":   messageID,
+			"chat_type":    chatType,
+			"self_id":      fmt.Sprintf("%d", event.SelfID),
 			"reply_policy": "optional", // QQ 不支持 patch，禁用 ACK 和进度通知
 		},
 	}

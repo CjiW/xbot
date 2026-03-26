@@ -87,8 +87,8 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig, syncCfg RemoteSandboxSyncConfig) 
 		},
 		globalSkillDirs: syncCfg.GlobalSkillDirs,
 		agentsDir:       syncCfg.AgentsDir,
-			synced:          make(map[string]bool),
-			syncing:         make(map[string]bool),
+		synced:          make(map[string]bool),
+		syncing:         make(map[string]bool),
 	}
 
 	mux := http.NewServeMux()
@@ -598,7 +598,6 @@ func (rs *RemoteSandbox) EnsureSynced(ctx context.Context, userID string) {
 	log.WithField("user_id", userID).Info("EnsureSynced: triggering on-demand sync")
 	go rs.syncToRunner(userID, rc.workspace)
 }
-
 
 // syncDirToRunner recursively syncs a skill directory tree from the server to the runner.
 // Each skill is a subdirectory; only directories containing SKILL.md are synced.

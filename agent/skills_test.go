@@ -35,7 +35,7 @@ func TestSkillStore_GlobalAndPrivateCatalog(t *testing.T) {
 	writeSkill(t, globalDir, "global-tool", "global-tool", "global skill")
 	writeSkill(t, privateDir, "private-tool", "private-tool", "private skill")
 
-	store := NewSkillStore(workDir, []string{globalDir}, nil, "")
+	store := NewSkillStore(workDir, []string{globalDir}, nil)
 	catalog := store.GetSkillsCatalog(context.Background(), "user-1")
 
 	if !strings.Contains(catalog, "<name>global-tool</name>") {
@@ -58,7 +58,7 @@ func TestSkillStore_PrivateOverrideGlobal(t *testing.T) {
 	writeSkill(t, globalDir, "dup", "dup", "global dup")
 	writeSkill(t, privateDir, "dup", "dup", "private dup")
 
-	store := NewSkillStore(workDir, []string{globalDir}, nil, "")
+	store := NewSkillStore(workDir, []string{globalDir}, nil)
 	catalog := store.GetSkillsCatalog(context.Background(), "user-1")
 
 	if strings.Count(catalog, "<name>dup</name>") != 1 {

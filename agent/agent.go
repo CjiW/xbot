@@ -421,19 +421,14 @@ type Config struct {
 func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, *tools.Registry, *tools.CardBuilder) {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
 
-	sandboxWorkDir := ""
-	if cfg.SandboxMode == "docker" || cfg.SandboxMode == "remote" {
-		sandboxWorkDir = "/workspace"
-	}
-
-	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox, sandboxWorkDir)
+	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox)
 
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
-	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox, sandboxWorkDir)
+	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox)
 
 	registry := tools.DefaultRegistry()
 
@@ -602,11 +597,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	sharedRegistry := sqlite.NewSharedSkillRegistry(multiSession.DB())
 
 	// Initialize RegistryManager
-	sandboxWorkDir := ""
-	if cfg.SandboxMode == "docker" || cfg.SandboxMode == "remote" {
-		sandboxWorkDir = "/workspace"
-	}
-	a.registryManager = NewRegistryManager(a.skills, a.agents, sharedRegistry, cfg.WorkDir, cfg.Sandbox, sandboxWorkDir)
+	a.registryManager = NewRegistryManager(a.skills, a.agents, sharedRegistry, cfg.WorkDir, cfg.Sandbox)
 
 	// Initialize UserSettingsService and SettingsService
 	userSettingsSvc := sqlite.NewUserSettingsService(multiSession.DB())
@@ -1486,6 +1477,10 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	promptWorkDir := a.workDir
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
+	} else if a.sandbox != nil && a.sandbox.Name() == "remote" && msg.SenderID != "" {
+		if ws := a.sandbox.Workspace(msg.SenderID); ws != "" {
+			promptWorkDir = ws
+		}
 	}
 
 	mc := NewMessageContext(
@@ -1724,16 +1719,6 @@ func summarizeRetryError(err error) string {
 func (a *Agent) RegisterTool(tool tools.Tool) {
 	a.tools.Register(tool)
 	log.WithField("tool", tool.Name()).Info("Tool registered")
-}
-
-// sandboxWorkDir returns the sandbox working directory path.
-// In docker mode, this is "/workspace" (the container-internal mount point).
-// In none mode, this is empty (no sandbox path mapping needed).
-func (a *Agent) sandboxWorkDir() string {
-	if a.sandboxMode == "docker" {
-		return "/workspace"
-	}
-	return ""
 }
 
 func (a *Agent) RegisterCoreTool(tool tools.Tool) {

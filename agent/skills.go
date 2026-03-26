@@ -21,7 +21,6 @@ type SkillStore struct {
 	globalDirs     []string      // 全局只读 skills 根目录
 	workDir        string        // 用于派生用户私有 skills 目录
 	sandbox        tools.Sandbox // Sandbox 实例（nil 表示无沙箱）
-	sandboxWorkDir string        // 沙箱内工作目录（"/workspace" for docker/remote, "" for none）
 	// per-user TTL cache (5 minutes). Uses map to support concurrent multi-user access
 	// without cache thrashing (each user's cache is independent).
 	mu         sync.RWMutex
@@ -30,12 +29,11 @@ type SkillStore struct {
 }
 
 // NewSkillStore creates a SkillStore
-func NewSkillStore(workDir string, globalDirs []string, sandbox tools.Sandbox, sandboxWorkDir string) *SkillStore {
+func NewSkillStore(workDir string, globalDirs []string, sandbox tools.Sandbox) *SkillStore {
 	return &SkillStore{
-		workDir:        workDir,
-		globalDirs:     globalDirs,
-		sandbox:        sandbox,
-		sandboxWorkDir: sandboxWorkDir,
+		workDir:    workDir,
+		globalDirs: globalDirs,
+		sandbox:    sandbox,
 	}
 }
 
@@ -55,15 +53,15 @@ type SkillInfo struct {
 
 // userSkillsDir 返回用户 skill 目录路径（沙箱感知）
 func (s *SkillStore) userSkillsDir(senderID string) string {
-	if s.sandbox != nil && s.sandboxWorkDir != "" {
-		return filepath.Join(s.sandboxWorkDir, "skills")
+	if s.sandbox != nil && s.sandbox.Name() != "none" {
+		return filepath.Join(s.sandbox.Workspace(senderID), "skills")
 	}
 	return tools.UserSkillsRoot(s.workDir, senderID)
 }
 
 // isUserSkillsSandboxed 返回用户 skills 目录是否在沙箱内
 func (s *SkillStore) isUserSkillsSandboxed() bool {
-	return s.sandbox != nil && s.sandboxWorkDir != ""
+	return s.sandbox != nil && s.sandbox.Name() != "none"
 }
 
 // ListSkills scans the skills directory and returns all discovered skills

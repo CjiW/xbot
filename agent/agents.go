@@ -14,21 +14,20 @@ import (
 
 // AgentStore scans agent directories and generates a catalog for the system prompt.
 type AgentStore struct {
-	globalDir      string
-	workDir        string
-	sandbox        tools.Sandbox
-	sandboxWorkDir string
+	globalDir string
+	workDir   string
+	sandbox   tools.Sandbox
 }
 
 // NewAgentStore creates an AgentStore
-func NewAgentStore(workDir string, globalDir string, sandbox tools.Sandbox, sandboxWorkDir string) *AgentStore {
-	return &AgentStore{workDir: workDir, globalDir: globalDir, sandbox: sandbox, sandboxWorkDir: sandboxWorkDir}
+func NewAgentStore(workDir string, globalDir string, sandbox tools.Sandbox) *AgentStore {
+	return &AgentStore{workDir: workDir, globalDir: globalDir, sandbox: sandbox}
 }
 
 // userAgentsDir 返回用户 agent 目录路径（沙箱感知）
 func (s *AgentStore) userAgentsDir(senderID string) string {
-	if s.sandbox != nil && s.sandboxWorkDir != "" {
-		return filepath.Join(s.sandboxWorkDir, "agents")
+	if s.sandbox != nil && s.sandbox.Name() != "none" {
+		return filepath.Join(s.sandbox.Workspace(senderID), "agents")
 	}
 	return tools.UserAgentsRoot(s.workDir, senderID)
 }
@@ -51,7 +50,7 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 
 	for i, dir := range sources {
 		// Sandbox-aware existence check: use sandbox.Stat for sandbox paths, os.Stat for host paths.
-		if i == 0 || (s.sandbox == nil || s.sandboxWorkDir == "") {
+		if i == 0 || (s.sandbox == nil || s.sandbox.Name() == "none") {
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
 				continue
 			}
@@ -64,7 +63,7 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 		// Sandbox-aware loading for user directories
 		var roles []tools.SubAgentRole
 		var err error
-		if i == 0 || (s.sandbox == nil || s.sandboxWorkDir == "") {
+		if i == 0 || (s.sandbox == nil || s.sandbox.Name() == "none") {
 			roles, err = tools.LoadAgentRoles(dir)
 		} else {
 			roles, err = tools.LoadAgentRolesSandbox(ctx, dir, s.sandbox, senderID)

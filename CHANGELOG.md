@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MCP stdio PATH 丢失**: 合并 login shell PATH 而非覆盖，保留 Go 工具链等环境变量 (#310)
 - **MCP stdio Docker 沙箱**: Docker 模式下 MCP stdio 使用 login shell 执行，与 Shell 工具统一环境 (#311)
 
+### Changed
+
+- **Engine 消息持久化重构**: 移除 LLM 总结方式 (`summarizeEngineMessages`)，改为直接持久化 engine 产生的 assistant + tool 消息到 session，确保下一轮对话拥有完整上下文而非摘要。净减 73 行代码（+6/-79）(`agent/agent.go`)
+
 ---
 
 ## [0.9.0] - 2026-03-23 (PR #290)

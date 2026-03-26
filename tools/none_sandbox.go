@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 )
 
 // NoneSandbox implements Sandbox with direct os.* calls (no containerization).
 type NoneSandbox struct{}
 
 func (s *NoneSandbox) Name() string { return "none" }
+func (s *NoneSandbox) Workspace(_ string) string { return "" }
 
 func (s *NoneSandbox) Close() error                        { return nil }
 func (s *NoneSandbox) CloseForUser(userID string) error    { return nil }
@@ -139,9 +139,4 @@ func (s *NoneSandbox) RemoveAll(ctx context.Context, path string, userID string)
 	return os.RemoveAll(path)
 }
 
-func (s *NoneSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil, fmt.Errorf("command execution is disabled on Windows")
-	}
-	return command, args, nil
-}
+

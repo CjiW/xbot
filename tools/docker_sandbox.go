@@ -39,6 +39,9 @@ type dockerContainer struct {
 
 func (s *DockerSandbox) Name() string { return "docker" }
 
+// Workspace returns the sandbox workspace root directory for the given user.
+func (s *DockerSandbox) Workspace(_ string) string { return "/workspace" }
+
 // Close 关闭所有 Docker 容器（仅 stop，不 rm 也不 export/import）。
 // 容器保留在磁盘上，下次 getOrCreateContainer 时直接 docker start 复用。
 func (s *DockerSandbox) Close() error {

@@ -92,6 +92,7 @@ type Sandbox interface {
 
 	// === Lifecycle ===
 	Name() string
+	Workspace(userID string) string
 	Close() error
 	CloseForUser(userID string) error
 
@@ -99,11 +100,6 @@ type Sandbox interface {
 	IsExporting(userID string) bool
 	ExportAndImport(userID string) error
 
-	// === Command Wrapping (used by ShellTool, MCP, sandbox_exec) ===
-	// Wrap 将命令包装到沙箱执行，返回可直接用于 exec.Command 的 command 与 args
-	// env 参数指定要传递到沙箱的环境变量（格式：KEY=VALUE）
-	// TODO: migrate all Wrap call sites to use Exec, then remove this method
-	Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error)
 }
 
 // WalkSandboxDir recursively walks a sandbox directory, equivalent to filepath.WalkDir.

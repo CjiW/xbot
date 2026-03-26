@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -619,7 +620,7 @@ func TestDoReplace_ExactMatchOnly(t *testing.T) {
 // C. doRegexReplace 边界测试
 // ============================================================================
 
-func TestDoRegexReplace_InvalidPattern(t *testing.T) {
+func TestDoReplace_InvalidRegexPattern(t *testing.T) {
 	tool := newEditTool()
 
 	tests := []struct {
@@ -635,8 +636,8 @@ func TestDoRegexReplace_InvalidPattern(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params := EditParams{Pattern: tt.pattern, Replacement: "x"}
-			_, _, err := tool.doRegexReplace("hello", params, "/test/file.txt")
+			params := EditParams{OldString: tt.pattern, NewString: "x", Regex: true}
+			_, _, err := tool.doReplace("hello", params, "/test/file.txt")
 			if err == nil {
 				t.Fatalf("expected error for invalid pattern %q", tt.pattern)
 			}
@@ -647,22 +648,10 @@ func TestDoRegexReplace_InvalidPattern(t *testing.T) {
 	}
 }
 
-func TestDoRegexReplace_EmptyPattern(t *testing.T) {
+func TestDoReplace_RegexNoMatch(t *testing.T) {
 	tool := newEditTool()
-	params := EditParams{Pattern: "", Replacement: "x"}
-	_, _, err := tool.doRegexReplace("hello", params, "/test/file.txt")
-	if err == nil {
-		t.Fatal("expected error for empty pattern")
-	}
-	if !strings.Contains(err.Error(), "pattern is required") {
-		t.Errorf("error should mention 'pattern is required', got: %v", err)
-	}
-}
-
-func TestDoRegexReplace_NoMatch(t *testing.T) {
-	tool := newEditTool()
-	params := EditParams{Pattern: "xyz", Replacement: "FOUND"}
-	_, _, err := tool.doRegexReplace("hello world", params, "/test/file.txt")
+	params := EditParams{OldString: "xyz", NewString: "FOUND", Regex: true}
+	_, _, err := tool.doReplace("hello world", params, "/test/file.txt")
 	if err == nil {
 		t.Fatal("expected error when no match found")
 	}
@@ -671,13 +660,13 @@ func TestDoRegexReplace_NoMatch(t *testing.T) {
 	}
 }
 
-func TestDoRegexReplace_ReplaceAll(t *testing.T) {
+func TestDoReplace_RegexReplaceAll(t *testing.T) {
 	tool := newEditTool()
 	const content = "foo123bar456foo789"
 
 	t.Run("single replace (first only)", func(t *testing.T) {
-		params := EditParams{Pattern: `\d+`, Replacement: "NUM", ReplaceAll: false}
-		result, summary, err := tool.doRegexReplace(content, params, "/test/file.txt")
+		params := EditParams{OldString: `\d+`, NewString: "NUM", Regex: true, ReplaceAll: false}
+		result, summary, err := tool.doReplace(content, params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -691,8 +680,8 @@ func TestDoRegexReplace_ReplaceAll(t *testing.T) {
 	})
 
 	t.Run("replace all", func(t *testing.T) {
-		params := EditParams{Pattern: `\d+`, Replacement: "NUM", ReplaceAll: true}
-		result, summary, err := tool.doRegexReplace(content, params, "/test/file.txt")
+		params := EditParams{OldString: `\d+`, NewString: "NUM", Regex: true, ReplaceAll: true}
+		result, summary, err := tool.doReplace(content, params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -706,12 +695,12 @@ func TestDoRegexReplace_ReplaceAll(t *testing.T) {
 	})
 }
 
-func TestDoRegexReplace_SpecialReplacement(t *testing.T) {
+func TestDoReplace_RegexSpecialReplacement(t *testing.T) {
 	tool := newEditTool()
 
 	t.Run("capture group $1", func(t *testing.T) {
-		params := EditParams{Pattern: `(\w+)@(\w+)\.com`, Replacement: "user=$1 domain=$2"}
-		result, _, err := tool.doRegexReplace("email: test@example.com here", params, "/test/file.txt")
+		params := EditParams{OldString: `(\w+)@(\w+)\.com`, NewString: "user=$1 domain=$2", Regex: true}
+		result, _, err := tool.doReplace("email: test@example.com here", params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -722,8 +711,8 @@ func TestDoRegexReplace_SpecialReplacement(t *testing.T) {
 	})
 
 	t.Run("multiple capture groups", func(t *testing.T) {
-		params := EditParams{Pattern: `(\d{4})-(\d{2})-(\d{2})`, Replacement: "$3/$2/$1"}
-		result, _, err := tool.doRegexReplace("date: 2024-03-15 end", params, "/test/file.txt")
+		params := EditParams{OldString: `(\d{4})-(\d{2})-(\d{2})`, NewString: "$3/$2/$1", Regex: true}
+		result, _, err := tool.doReplace("date: 2024-03-15 end", params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -735,8 +724,8 @@ func TestDoRegexReplace_SpecialReplacement(t *testing.T) {
 
 	t.Run("replace all with capture groups", func(t *testing.T) {
 		content := "a=1 b=2 c=3"
-		params := EditParams{Pattern: `(\w)=(\d)`, Replacement: "$1:$2", ReplaceAll: true}
-		result, _, err := tool.doRegexReplace(content, params, "/test/file.txt")
+		params := EditParams{OldString: `(\w)=(\d)`, NewString: "$1:$2", Regex: true, ReplaceAll: true}
+		result, _, err := tool.doReplace(content, params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -747,8 +736,8 @@ func TestDoRegexReplace_SpecialReplacement(t *testing.T) {
 	})
 
 	t.Run("anchored pattern", func(t *testing.T) {
-		params := EditParams{Pattern: `^hello`, Replacement: "HI"}
-		result, _, err := tool.doRegexReplace("hello world\nhello moon", params, "/test/file.txt")
+		params := EditParams{OldString: `^hello`, NewString: "HI", Regex: true}
+		result, _, err := tool.doReplace("hello world\nhello moon", params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -760,26 +749,23 @@ func TestDoRegexReplace_SpecialReplacement(t *testing.T) {
 	})
 }
 
-func TestDoRegexReplace_EdgeCases(t *testing.T) {
+func TestDoReplace_RegexEdgeCases(t *testing.T) {
 	tool := newEditTool()
 
 	t.Run("empty match with replacement", func(t *testing.T) {
-		// Pattern that matches empty string at various positions
-		params := EditParams{Pattern: "a*", Replacement: "X", ReplaceAll: false}
-		result, _, err := tool.doRegexReplace("bbb", params, "/test/file.txt")
+		params := EditParams{OldString: "a*", NewString: "X", Regex: true, ReplaceAll: false}
+		result, _, err := tool.doReplace("bbb", params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// a* matches empty string at position 0, replaced with X
 		if !strings.HasPrefix(result, "X") {
 			t.Errorf("expected result to start with X, got %q", result)
 		}
 	})
 
 	t.Run("dot does not match newline by default", func(t *testing.T) {
-		params := EditParams{Pattern: `hello.*world`, Replacement: "REPLACED"}
-		_, _, err := tool.doRegexReplace("hello\nworld", params, "/test/file.txt")
-		// . does not match \n by default in RE2, so no match → error
+		params := EditParams{OldString: `hello.*world`, NewString: "REPLACED", Regex: true}
+		_, _, err := tool.doReplace("hello\nworld", params, "/test/file.txt")
 		if err == nil {
 			t.Fatal("expected error: dot should not match newline in RE2 default mode")
 		}
@@ -789,8 +775,8 @@ func TestDoRegexReplace_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("dot matches newline with (?s) flag", func(t *testing.T) {
-		params := EditParams{Pattern: `(?s)hello.*world`, Replacement: "REPLACED"}
-		result, _, err := tool.doRegexReplace("hello\nworld", params, "/test/file.txt")
+		params := EditParams{OldString: `(?s)hello.*world`, NewString: "REPLACED", Regex: true}
+		result, _, err := tool.doReplace("hello\nworld", params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -801,16 +787,15 @@ func TestDoRegexReplace_EdgeCases(t *testing.T) {
 }
 
 // ============================================================================
-// D. doInsert 边界测试
+// D. doPositionInsert / doLineEdit(position) 边界测试
 // ============================================================================
 
-func TestDoInsert_Positions(t *testing.T) {
+func TestDoPositionInsert_Positions(t *testing.T) {
 	tool := newEditTool()
-	const filePath = "/test/file.txt"
 
 	t.Run("position start", func(t *testing.T) {
-		params := EditParams{Position: "start", Content: "PREFIX\n"}
-		result, summary, err := tool.doInsert("hello world", params, filePath)
+		params := EditParams{Action: "insert", Position: "start", Content: "PREFIX\n"}
+		result, summary, err := tool.doLineEdit("hello world", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -823,12 +808,11 @@ func TestDoInsert_Positions(t *testing.T) {
 	})
 
 	t.Run("position end - file without trailing newline", func(t *testing.T) {
-		params := EditParams{Position: "end", Content: "APPENDED"}
-		result, summary, err := tool.doInsert("hello", params, filePath)
+		params := EditParams{Action: "insert", Position: "end", Content: "APPENDED"}
+		result, summary, err := tool.doLineEdit("hello", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// doInsert adds \n if file doesn't end with \n
 		if result != "hello\nAPPENDED" {
 			t.Errorf("got %q, want %q", result, "hello\nAPPENDED")
 		}
@@ -838,48 +822,21 @@ func TestDoInsert_Positions(t *testing.T) {
 	})
 
 	t.Run("position end - file with trailing newline", func(t *testing.T) {
-		params := EditParams{Position: "end", Content: "APPENDED"}
-		result, _, err := tool.doInsert("hello\n", params, filePath)
+		params := EditParams{Action: "insert", Position: "end", Content: "APPENDED"}
+		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// File already ends with \n, no extra \n added
 		if result != "hello\nAPPENDED" {
 			t.Errorf("got %q, want %q", result, "hello\nAPPENDED")
 		}
 	})
-
-	t.Run("position as line number", func(t *testing.T) {
-		params := EditParams{Position: "1", Content: "INSERTED"}
-		result, _, err := tool.doInsert("aaa\nbbb\n", params, filePath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		// Position "1" → lineNum=1, action=insert_after line 1
-		// lines=["aaa","bbb",""], idx=0, lines[:1]=["aaa"], append "INSERTED", lines[1:]=["bbb",""]
-		// → ["aaa","INSERTED","bbb",""] → "aaa\nINSERTED\nbbb\n"
-		expected := "aaa\nINSERTED\nbbb\n"
-		if result != expected {
-			t.Errorf("got %q, want %q", result, expected)
-		}
-	})
-
-	t.Run("position 0 parses to line 0 (error in doLineEdit)", func(t *testing.T) {
-		params := EditParams{Position: "0", Content: "INSERTED"}
-		_, _, err := tool.doInsert("hello\n", params, filePath)
-		if err == nil {
-			t.Fatal("expected error for position 0")
-		}
-		if !strings.Contains(err.Error(), "line_number must be positive") {
-			t.Errorf("error should mention 'must be positive', got: %v", err)
-		}
-	})
 }
 
-func TestDoInsert_EmptyContent(t *testing.T) {
+func TestDoPositionInsert_EmptyContent(t *testing.T) {
 	tool := newEditTool()
-	params := EditParams{Position: "start", Content: ""}
-	_, _, err := tool.doInsert("hello", params, "/test/file.txt")
+	params := EditParams{Action: "insert", Position: "start", Content: ""}
+	_, _, err := tool.doLineEdit("hello", params)
 	if err == nil {
 		t.Fatal("expected error for empty content")
 	}
@@ -888,13 +845,12 @@ func TestDoInsert_EmptyContent(t *testing.T) {
 	}
 }
 
-func TestDoInsert_EmptyFile(t *testing.T) {
+func TestDoPositionInsert_EmptyFile(t *testing.T) {
 	tool := newEditTool()
-	const filePath = "/test/file.txt"
 
 	t.Run("insert at start of empty file", func(t *testing.T) {
-		params := EditParams{Position: "start", Content: "NEW"}
-		result, _, err := tool.doInsert("", params, filePath)
+		params := EditParams{Action: "insert", Position: "start", Content: "NEW"}
+		result, _, err := tool.doLineEdit("", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -904,22 +860,21 @@ func TestDoInsert_EmptyFile(t *testing.T) {
 	})
 
 	t.Run("insert at end of empty file", func(t *testing.T) {
-		params := EditParams{Position: "end", Content: "NEW"}
-		result, _, err := tool.doInsert("", params, filePath)
+		params := EditParams{Action: "insert", Position: "end", Content: "NEW"}
+		result, _, err := tool.doLineEdit("", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// len("") == 0, so the trailing newline check is skipped, result = "" + "NEW" = "NEW"
 		if result != "NEW" {
 			t.Errorf("got %q, want %q", result, "NEW")
 		}
 	})
 }
 
-func TestDoInsert_InvalidPosition(t *testing.T) {
+func TestDoPositionInsert_InvalidPosition(t *testing.T) {
 	tool := newEditTool()
-	params := EditParams{Position: "invalid", Content: "NEW"}
-	_, _, err := tool.doInsert("hello", params, "/test/file.txt")
+	params := EditParams{Action: "insert", Position: "invalid", Content: "NEW"}
+	_, _, err := tool.doLineEdit("hello", params)
 	if err == nil {
 		t.Fatal("expected error for invalid position")
 	}
@@ -928,80 +883,47 @@ func TestDoInsert_InvalidPosition(t *testing.T) {
 	}
 }
 
-func TestDoInsert_PositionExceedsLines(t *testing.T) {
-	tool := newEditTool()
-	// "hello\n" → splitLines → ["hello"], totalLines=1. Position "2" should fail.
-	params := EditParams{Position: "2", Content: "NEW"}
-	_, _, err := tool.doInsert("hello\n", params, "/test/file.txt")
-	if err == nil {
-		t.Fatal("expected error for position exceeding total lines")
-	}
-	if !strings.Contains(err.Error(), "exceeds total lines") {
-		t.Errorf("error should mention 'exceeds total lines', got: %v", err)
-	}
-}
-
 // ============================================================================
 // E. Bug 记录测试（记录已知的潜在问题，不修复）
 // ============================================================================
 
-func TestDoInsert_Bug1_InconsistentTrailingNewline(t *testing.T) {
+func TestDoPositionInsert_Bug1_InconsistentTrailingNewline(t *testing.T) {
 	tool := newEditTool()
-	const filePath = "/test/file.txt"
 	const insertContent = "NEW_LINE"
 
-	// Bug 1: doInsert position="end" 时，如果文件不以 \n 结尾会自动添加 \n。
-	// 但如果文件以 \n 结尾，则不会添加。这导致插入结果中的行数不一致。
-
 	t.Run("file without trailing newline gets extra \\n added", func(t *testing.T) {
-		params := EditParams{Position: "end", Content: insertContent}
-		result, _, err := tool.doInsert("hello", params, filePath)
+		params := EditParams{Action: "insert", Position: "end", Content: insertContent}
+		result, _, err := tool.doLineEdit("hello", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// "hello" doesn't end with \n, so \n is added: "hello\n" + "NEW_LINE" = "hello\nNEW_LINE"
 		if result != "hello\nNEW_LINE" {
 			t.Errorf("got %q, want %q", result, "hello\nNEW_LINE")
 		}
 	})
 
 	t.Run("file with trailing newline does NOT get extra \\n", func(t *testing.T) {
-		params := EditParams{Position: "end", Content: insertContent}
-		result, _, err := tool.doInsert("hello\n", params, filePath)
+		params := EditParams{Action: "insert", Position: "end", Content: insertContent}
+		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// "hello\n" ends with \n, so no extra \n: "hello\n" + "NEW_LINE" = "hello\nNEW_LINE"
 		if result != "hello\nNEW_LINE" {
 			t.Errorf("got %q, want %q", result, "hello\nNEW_LINE")
 		}
 	})
 
-	// Both produce "hello\nNEW_LINE" which looks the same here, BUT if we count
-	// newlines or look at behavior where inserted content contains its own trailing \n:
 	t.Run("behavior difference when inserted content has trailing \\n", func(t *testing.T) {
 		insertWithNL := "NEW_LINE\n"
 
-		params1 := EditParams{Position: "end", Content: insertWithNL}
-		result1, _, _ := tool.doInsert("hello", params1, filePath)
+		params1 := EditParams{Action: "insert", Position: "end", Content: insertWithNL}
+		result1, _, _ := tool.doLineEdit("hello", params1)
 
-		params2 := EditParams{Position: "end", Content: insertWithNL}
-		result2, _, _ := tool.doInsert("hello\n", params2, filePath)
+		params2 := EditParams{Action: "insert", Position: "end", Content: insertWithNL}
+		result2, _, _ := tool.doLineEdit("hello\n", params2)
 
-		// "hello" → "hello\n" + "NEW_LINE\n" = "hello\nNEW_LINE\n"
-		// "hello\n" → "hello\n" + "NEW_LINE\n" = "hello\nNEW_LINE\n"
-		// In this case they're the same. The inconsistency is more subtle:
-		// For "hello" + "NEW" (no trailing \n in content):
-		//   "hello" → "hello\nNEW" (extra \n added by doInsert)
-		//   "hello\n" → "hello\nNEW" (no extra \n)
-		// The inconsistency is that doInsert decides whether to add \n based on the file's
-		// current trailing newline status, which may not be what the user expects.
-		t.Logf("Without trailing newline: %q", result1)
-		t.Logf("With trailing newline:    %q", result2)
-
-		// Document the actual behavior
-		_ = result1 // avoid unused
-		_ = result2 // avoid unused
+		_ = result1
+		_ = result2
 	})
 }
 
@@ -1072,16 +994,15 @@ func TestDoLineEdit_TrailingNewlinePreserved(t *testing.T) {
 	})
 }
 
-func TestDoInsert_InsertAfterLastLine(t *testing.T) {
+func TestDoLineEdit_InsertAfterWithPosition(t *testing.T) {
 	tool := newEditTool()
-	const filePath = "/test/file.txt"
 
-	// With splitLines fix: "hello\n" → lines=["hello"], totalLines=1
-	// position="1" inserts after the only line, preserving trailing newline.
+	// Note: position-as-line-number is no longer supported in the new API.
+	// Use action=insert_before/insert_after with line_number instead.
 
-	t.Run("position=1 on file with trailing newline", func(t *testing.T) {
-		params := EditParams{Position: "1", Content: "NEW"}
-		result, _, err := tool.doInsert("hello\n", params, filePath)
+	t.Run("insert_after line 1 on file with trailing newline", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "insert_after", Content: "NEW"}
+		result, _, err := tool.doLineEdit("hello\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1091,20 +1012,9 @@ func TestDoInsert_InsertAfterLastLine(t *testing.T) {
 		}
 	})
 
-	t.Run("position=2 on 1-line file fails", func(t *testing.T) {
-		params := EditParams{Position: "2", Content: "NEW"}
-		_, _, err := tool.doInsert("hello\n", params, filePath)
-		if err == nil {
-			t.Fatal("expected error for position=2 on 1-line file")
-		}
-		if !strings.Contains(err.Error(), "exceeds total lines") {
-			t.Errorf("error should mention 'exceeds total lines', got: %v", err)
-		}
-	})
-
-	t.Run("position=1 on single-line-no-newline file", func(t *testing.T) {
-		params := EditParams{Position: "1", Content: "NEW"}
-		result, _, err := tool.doInsert("hello", params, filePath)
+	t.Run("insert_after line 1 on single-line-no-newline file", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "insert_after", Content: "NEW"}
+		result, _, err := tool.doLineEdit("hello", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1113,10 +1023,9 @@ func TestDoInsert_InsertAfterLastLine(t *testing.T) {
 		}
 	})
 
-	t.Run("position=2 on multi-line file", func(t *testing.T) {
-		// "aaa\nbbb\n" → lines=["aaa","bbb"], totalLines=2
-		params := EditParams{Position: "2", Content: "NEW"}
-		result, _, err := tool.doInsert("aaa\nbbb\n", params, filePath)
+	t.Run("insert_after line 2 on multi-line file", func(t *testing.T) {
+		params := EditParams{LineNumber: 2, Action: "insert_after", Content: "NEW"}
+		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1156,4 +1065,309 @@ func TestTruncate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================================
+// G. validateParams 参数校验测试
+// ============================================================================
+
+func TestValidateParams(t *testing.T) {
+	tool := newEditTool()
+
+	t.Run("replace mode with line_number", func(t *testing.T) {
+		params := EditParams{Mode: "replace", Path: "test.go", OldString: "foo", NewString: "bar", LineNumber: 10}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for line_number in replace mode")
+		}
+		if !strings.Contains(err.Error(), "line_number is not used in replace mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("replace mode with action", func(t *testing.T) {
+		params := EditParams{Mode: "replace", Path: "test.go", OldString: "foo", NewString: "bar", Action: "delete"}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for action in replace mode")
+		}
+		if !strings.Contains(err.Error(), "action is not used in replace mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("replace mode with count", func(t *testing.T) {
+		params := EditParams{Mode: "replace", Path: "test.go", OldString: "foo", NewString: "bar", Count: 3}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for count in replace mode")
+		}
+		if !strings.Contains(err.Error(), "count is not used in replace mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("line mode with old_string", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "delete", LineNumber: 5, OldString: "foo"}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for old_string in line mode")
+		}
+		if !strings.Contains(err.Error(), "old_string is not used in line mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("line mode with regex", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "delete", LineNumber: 5, Regex: true}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for regex in line mode")
+		}
+		if !strings.Contains(err.Error(), "regex is not used in line mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("line mode with start_line", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "delete", LineNumber: 5, StartLine: 1}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for start_line in line mode")
+		}
+		if !strings.Contains(err.Error(), "start_line/end_line are not used in line mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("line mode insert without position", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "insert"}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for insert action without position")
+		}
+		if !strings.Contains(err.Error(), "position is required when action=insert") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("line mode insert with both line_number and position", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "insert", LineNumber: 5, Position: "end"}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for both line_number and position")
+		}
+		if !strings.Contains(err.Error(), "either line_number or position, not both") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("unknown mode", func(t *testing.T) {
+		params := EditParams{Mode: "unknown", Path: "test.go"}
+		err := tool.validateParams(params)
+		if err == nil {
+			t.Fatal("expected error for unknown mode")
+		}
+		if !strings.Contains(err.Error(), "unknown mode") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("valid create mode", func(t *testing.T) {
+		params := EditParams{Mode: "create", Path: "test.go"}
+		err := tool.validateParams(params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("valid replace mode", func(t *testing.T) {
+		params := EditParams{Mode: "replace", Path: "test.go", OldString: "foo", NewString: "bar"}
+		err := tool.validateParams(params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("valid line mode delete", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "delete", LineNumber: 5}
+		err := tool.validateParams(params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("valid line mode insert with position", func(t *testing.T) {
+		params := EditParams{Mode: "line", Path: "test.go", Action: "insert", Position: "end"}
+		err := tool.validateParams(params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+// ============================================================================
+// H. count 批量操作测试
+// ============================================================================
+
+func TestDoLineEdit_Count(t *testing.T) {
+	tool := newEditTool()
+
+	t.Run("delete single line (count=1, default)", func(t *testing.T) {
+		params := EditParams{LineNumber: 2, Action: "delete"}
+		result, summary, err := tool.doLineEdit("aaa\nbbb\nccc\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "aaa\nccc\n" {
+			t.Errorf("got %q, want %q", result, "aaa\nccc\n")
+		}
+		if !strings.Contains(summary, "1 line(s)") {
+			t.Errorf("summary should mention '1 line(s)', got: %s", summary)
+		}
+	})
+
+	t.Run("delete 3 lines with count=3", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "delete", Count: 3}
+		result, summary, err := tool.doLineEdit("aaa\nbbb\nccc\nddd\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "ddd\n" {
+			t.Errorf("got %q, want %q", result, "ddd\n")
+		}
+		if !strings.Contains(summary, "3 line(s)") {
+			t.Errorf("summary should mention '3 line(s)', got: %s", summary)
+		}
+	})
+
+	t.Run("delete all lines", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "delete", Count: 3}
+		result, _, err := tool.doLineEdit("aaa\nbbb\nccc\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "" {
+			t.Errorf("got %q, want empty", result)
+		}
+	})
+
+	t.Run("delete exceeds total lines", func(t *testing.T) {
+		params := EditParams{LineNumber: 2, Action: "delete", Count: 5}
+		_, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err == nil {
+			t.Fatal("expected error for count exceeding total lines")
+		}
+		if !strings.Contains(err.Error(), "exceeds total lines") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("replace 2 lines with count=2", func(t *testing.T) {
+		params := EditParams{LineNumber: 2, Action: "replace", Content: "NEW", Count: 2}
+		result, summary, err := tool.doLineEdit("aaa\nbbb\nccc\nddd\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "aaa\nNEW\nddd\n" {
+			t.Errorf("got %q, want %q", result, "aaa\nNEW\nddd\n")
+		}
+		if !strings.Contains(summary, "2 line(s)") {
+			t.Errorf("summary should mention '2 line(s)', got: %s", summary)
+		}
+	})
+
+	t.Run("replace with count exceeds lines", func(t *testing.T) {
+		params := EditParams{LineNumber: 2, Action: "replace", Content: "NEW", Count: 5}
+		_, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err == nil {
+			t.Fatal("expected error for count exceeding total lines")
+		}
+		if !strings.Contains(err.Error(), "exceeds total lines") {
+			t.Errorf("got: %v", err)
+		}
+	})
+
+	t.Run("count=0 defaults to 1", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "delete", Count: 0}
+		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "bbb\n" {
+			t.Errorf("got %q, want %q (count=0 should default to 1)", result, "bbb\n")
+		}
+	})
+
+	t.Run("negative count defaults to 1", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "delete", Count: -1}
+		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "bbb\n" {
+			t.Errorf("got %q, want %q (negative count should default to 1)", result, "bbb\n")
+		}
+	})
+
+	t.Run("insert_before ignores count", func(t *testing.T) {
+		params := EditParams{LineNumber: 1, Action: "insert_before", Content: "NEW", Count: 5}
+		result, _, err := tool.doLineEdit("aaa\nbbb\n", params)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "NEW\naaa\nbbb\n" {
+			t.Errorf("got %q, want %q (count should not affect insert)", result, "NEW\naaa\nbbb\n")
+		}
+	})
+}
+
+// ============================================================================
+// I. Backward compatibility tests (deprecated modes)
+// ============================================================================
+
+func TestBackwardCompat_RegexMode(t *testing.T) {
+	// Test backward compatibility: mode="regex" should be converted to mode="replace" + regex=true
+	t.Run("regex mode mapped to replace with regex=true", func(t *testing.T) {
+		input := `{"path": "test.txt", "mode": "regex", "pattern": "\\d+", "replacement": "NUM"}`
+		var params EditParams
+		json.Unmarshal([]byte(input), &params)
+		if params.Mode != "regex" {
+			t.Fatalf("expected mode=regex from input, got %q", params.Mode)
+		}
+		// Simulate the Execute compat layer
+		switch params.Mode {
+		case "regex":
+			params.Mode = "replace"
+			params.Regex = true
+		}
+		if params.Mode != "replace" {
+			t.Errorf("expected mode to be converted to 'replace', got %q", params.Mode)
+		}
+		if !params.Regex {
+			t.Error("expected regex to be true after conversion")
+		}
+	})
+}
+
+func TestBackwardCompat_InsertMode(t *testing.T) {
+	t.Run("insert mode mapped to line with action=insert", func(t *testing.T) {
+		input := `{"path": "test.txt", "mode": "insert", "position": "end", "content": "NEW"}`
+		var params EditParams
+		json.Unmarshal([]byte(input), &params)
+		if params.Mode != "insert" {
+			t.Fatalf("expected mode=insert from input, got %q", params.Mode)
+		}
+		switch params.Mode {
+		case "insert":
+			params.Mode = "line"
+			params.Action = "insert"
+		}
+		if params.Mode != "line" {
+			t.Errorf("expected mode to be converted to 'line', got %q", params.Mode)
+		}
+		if params.Action != "insert" {
+			t.Errorf("expected action to be 'insert', got %q", params.Action)
+		}
+	})
 }

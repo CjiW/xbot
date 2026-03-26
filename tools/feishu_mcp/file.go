@@ -397,7 +397,7 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 
 	client := t.MCP.LarkClient()
 	if client == nil {
-		return nil, fmt.Errorf("Feishu client not available")
+		return nil, fmt.Errorf("feishu client not available")
 	}
 
 	fileName := filepath.Base(resolvedPath)

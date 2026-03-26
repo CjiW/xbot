@@ -456,7 +456,7 @@ func (rs *RemoteSandbox) ReadDir(ctx context.Context, path, userID string) ([]Di
 	}
 	entries := make([]DirEntry, len(de.Entries))
 	for i, e := range de.Entries {
-		entries[i] = DirEntry{Name: e.Name, IsDir: e.IsDir, Size: e.Size}
+		entries[i] = DirEntry{Name: e.Name, IsDir: e.IsDir, Size: e.Size} //nolint:staticcheck
 	}
 	return entries, nil
 }

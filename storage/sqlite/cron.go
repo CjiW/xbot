@@ -228,6 +228,7 @@ func (s *CronService) MigrateFromJSON(dataDir string) error {
 	}
 
 	// Try new path first, then old path
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	newPath := filepath.Join(dataDir, ".xbot", "cron.json")
 	oldPath := filepath.Join(dataDir, "cron.json")
 

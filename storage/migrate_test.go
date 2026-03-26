@@ -28,8 +28,10 @@ func TestShouldMigrate(t *testing.T) {
 
 	// With session.jsonl but no database - migration needed
 	withSession := t.TempDir()
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(withSession, ".xbot")
 	if err := os.MkdirAll(xbotDir, 0o755); err != nil {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		t.Fatalf("Failed to create .xbot directory: %v", err)
 	}
 	sessionPath := filepath.Join(xbotDir, "session.jsonl")
@@ -47,6 +49,7 @@ func TestShouldMigrate(t *testing.T) {
 	if err := os.WriteFile(memoryPath, []byte("# Memory"), 0o644); err != nil {
 		t.Fatalf("Failed to create MEMORY.md: %v", err)
 	}
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	dbPath = filepath.Join(withMemory, ".xbot", "xbot.db")
 	if !ShouldMigrate(withMemory, dbPath) {
 		t.Error("Expected migration needed when MEMORY.md exists")
@@ -55,8 +58,10 @@ func TestShouldMigrate(t *testing.T) {
 
 func TestMigrateFromFileStorage(t *testing.T) {
 	workDir := t.TempDir()
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(workDir, ".xbot")
 	if err := os.MkdirAll(xbotDir, 0o755); err != nil {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		t.Fatalf("Failed to create .xbot directory: %v", err)
 	}
 
@@ -118,8 +123,10 @@ func TestMigrateFromFileStorage(t *testing.T) {
 
 func TestMigrateFromFileStorage_NoLegacyFiles(t *testing.T) {
 	workDir := t.TempDir()
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	xbotDir := filepath.Join(workDir, ".xbot")
 	if err := os.MkdirAll(xbotDir, 0o755); err != nil {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		t.Fatalf("Failed to create .xbot directory: %v", err)
 	}
 

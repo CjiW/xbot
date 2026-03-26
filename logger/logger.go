@@ -157,6 +157,7 @@ func Setup(cfg SetupConfig) error {
 
 	// 如果指定了工作目录，启用文件输出
 	if cfg.WorkDir != "" {
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		logDir := filepath.Join(cfg.WorkDir, ".xbot", "logs")
 		drf, err := newDailyRotateFile(logDir, "xbot")
 		if err != nil {

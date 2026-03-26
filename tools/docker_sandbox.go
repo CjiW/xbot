@@ -403,13 +403,14 @@ func (s *DockerSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, e
 }
 
 func (s *DockerSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
+	// Pass path as a separate argument to base64 (not via shell), avoiding shell injection.
 	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
-		"sh", "-c", fmt.Sprintf("base64 '%s'", path))
+		"base64", path)
 	if err != nil {
 		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot open") {
 			return nil, os.ErrNotExist
 		}
-		return nil, fmt.Errorf("docker exec cat: %w: %s", err, string(out))
+		return nil, fmt.Errorf("docker exec base64: %w: %s", err, string(out))
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 	if err != nil {

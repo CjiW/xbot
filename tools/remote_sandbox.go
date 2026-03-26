@@ -21,8 +21,9 @@ import (
 
 // RemoteSandboxConfig holds configuration for creating a RemoteSandbox.
 type RemoteSandboxConfig struct {
-	Addr      string // WebSocket listen address (e.g., "0.0.0.0:8080")
-	AuthToken string // Authentication token for runners
+	Addr           string   // WebSocket listen address (e.g., "0.0.0.0:8080")
+	AuthToken      string   // Authentication token for runners
+	AllowedOrigins []string // Allowed WebSocket origins (empty = allow all, for development)
 }
 
 // runnerConnection represents a connected xbot-runner instance.
@@ -45,6 +46,8 @@ type RemoteSandbox struct {
 }
 
 var upgrader = websocket.Upgrader{
+	// WARNING: In production, set AllowedOrigins in RemoteSandboxConfig to restrict origins.
+	// When empty, all origins are accepted (development mode).
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 

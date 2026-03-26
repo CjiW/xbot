@@ -76,6 +76,7 @@ func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	pathParts := []string{}
 	if binDir := resolveXbotBinDir(configPath); binDir != "" {
 		pathParts = append(pathParts, binDir)
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		log.WithField("bin_dir", binDir).Debug("Added .xbot/bin to MCP server PATH")
 	}
 	if len(pathParts) > 0 {
@@ -237,10 +238,12 @@ func resolveXbotBinDir(configPath string) string {
 
 	// 如果 configPath 在 .xbot/ 目录下，bin 目录就在同一级
 	var binDir string
+	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	if strings.HasSuffix(dir, string(filepath.Separator)+".xbot") || filepath.Base(dir) == ".xbot" {
 		binDir = filepath.Join(dir, "bin")
 	} else {
 		// configPath 在 workDir 根目录，如 /workdir/mcp.json
+		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		binDir = filepath.Join(dir, ".xbot", "bin")
 	}
 

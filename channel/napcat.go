@@ -360,7 +360,11 @@ func (n *NapCatChannel) handleAPIResponse(echo string, data []byte) {
 	n.pendingMu.Unlock()
 
 	if ok {
-		ch <- json.RawMessage(data)
+		select {
+		case ch <- json.RawMessage(data):
+		default:
+			// channel 可能已满或已关闭，丢弃响应
+		}
 	}
 }
 
@@ -771,13 +775,19 @@ func (n *NapCatChannel) callAPI(action string, params any) (*obAPIResponse, erro
 		return &resp, nil
 	case <-time.After(30 * time.Second):
 		n.pendingMu.Lock()
-		delete(n.pending, echo)
+		if ch, ok := n.pending[echo]; ok {
+			close(ch)
+			delete(n.pending, echo)
+		}
 		n.pendingMu.Unlock()
 		return nil, fmt.Errorf("api call %s timed out", action)
 
 	case <-n.stopCh:
 		n.pendingMu.Lock()
-		delete(n.pending, echo)
+		if ch, ok := n.pending[echo]; ok {
+			close(ch)
+			delete(n.pending, echo)
+		}
 		n.pendingMu.Unlock()
 		return nil, fmt.Errorf("channel stopped")
 	}

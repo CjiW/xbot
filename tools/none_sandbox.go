@@ -76,10 +76,20 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 }
 
 func (s *NoneSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > MaxSandboxFileSize {
+		return nil, fmt.Errorf("file exceeds maximum size of %d bytes (actual: %d)", MaxSandboxFileSize, info.Size())
+	}
 	return os.ReadFile(path)
 }
 
 func (s *NoneSandbox) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
+	if int64(len(data)) > MaxSandboxFileSize {
+		return fmt.Errorf("data exceeds maximum size of %d bytes", MaxSandboxFileSize)
+	}
 	return os.WriteFile(path, data, perm)
 }
 

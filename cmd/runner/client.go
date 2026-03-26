@@ -22,14 +22,18 @@ func connectToServer(serverURL, userID, authToken string) (*websocket.Conn, erro
 		return nil, fmt.Errorf("dial server: %w", err)
 	}
 
-	// Send registration
-	reg := RegisterRequest{
+	// Send registration wrapped in RunnerMessage envelope.
+	// Server expects RunnerMessage{Type: "register", Body: <RegisterRequest JSON>}.
+	regBody, _ := json.Marshal(RegisterRequest{
 		UserID:    userID,
 		AuthToken: authToken,
-		// HTTPAddr will be set after HTTP server starts
-	}
-	regData, _ := json.Marshal(reg)
-	if err := conn.WriteMessage(websocket.TextMessage, regData); err != nil {
+	})
+	regMsg, _ := json.Marshal(RunnerMessage{
+		Type:   "register",
+		UserID: userID,
+		Body:   regBody,
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, regMsg); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("send registration: %w", err)
 	}
@@ -39,13 +43,17 @@ func connectToServer(serverURL, userID, authToken string) (*websocket.Conn, erro
 
 // sendRegistration sends an updated registration message (with HTTP address).
 func sendRegistration(conn *websocket.Conn, userID, authToken, httpAddr string) error {
-	reg := RegisterRequest{
+	regBody, _ := json.Marshal(RegisterRequest{
 		UserID:    userID,
 		HTTPAddr:  httpAddr,
 		AuthToken: authToken,
-	}
-	data, _ := json.Marshal(reg)
-	return conn.WriteMessage(websocket.TextMessage, data)
+	})
+	msg, _ := json.Marshal(RunnerMessage{
+		Type:   "register",
+		UserID: userID,
+		Body:   regBody,
+	})
+	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
 // runReadLoop reads messages from the server and dispatches to handlers.

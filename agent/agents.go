@@ -50,8 +50,15 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 	var orderedNames []string
 
 	for i, dir := range sources {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
+		// Sandbox-aware existence check: use sandbox.Stat for sandbox paths, os.Stat for host paths.
+		if i == 0 || (s.sandbox == nil || s.sandboxWorkDir == "") {
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				continue
+			}
+		} else {
+			if _, err := s.sandbox.Stat(ctx, dir, senderID); err != nil {
+				continue
+			}
 		}
 
 		// Sandbox-aware loading for user directories

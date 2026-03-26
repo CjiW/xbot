@@ -411,7 +411,8 @@ func (s *DockerSandbox) ReadFile(ctx context.Context, path string, userID string
 		}
 	}
 	// Pass path as a separate argument to base64 (not via shell), avoiding shell injection.
-	out, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout,
+	// Use dockerSlowTimeout for large files that may take longer to transfer.
+	out, err := s.dockerExecInContainer(ctx, userID, "", dockerSlowTimeout,
 		"base64", path)
 	if err != nil {
 		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot open") {
@@ -468,10 +469,10 @@ func (s *DockerSandbox) WriteFile(ctx context.Context, path string, data []byte,
 	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", dir); err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}
-	// Write raw data via stdin to tee (path passed as direct argument, no shell interpolation).
-	// tee is a standalone binary that writes stdin to the named file — no shell involved.
+	// Write raw data via stdin to "cat > path" (redirect to file, stdout discarded by docker exec).
+	// path is shell-escaped to prevent injection, shell used only for the redirect operator.
 	if _, err := s.dockerExecWithStdin(ctx, userID, "", dockerSlowTimeout, data,
-		"tee", path); err != nil {
+		"sh", "-c", fmt.Sprintf("cat > '%s'", shellEscape(path))); err != nil {
 		return fmt.Errorf("docker exec write: %w", err)
 	}
 	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "chmod", fmt.Sprintf("%o", uint32(perm)), path); err != nil {
@@ -579,7 +580,6 @@ func (s *DockerSandbox) RemoveAll(ctx context.Context, path string, userID strin
 // 返回容器名称和检测到的用户默认 shell
 func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containerName, shell string, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.containers == nil {
 		s.containers = make(map[string]*dockerContainer)
@@ -587,40 +587,52 @@ func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 
 	// Validate userID to prevent command injection via Docker container/image names
 	if err := validateUserID(userID); err != nil {
+		s.mu.Unlock()
 		return "", "", err
 	}
 
 	if c, ok := s.containers[userID]; ok && c.started {
-		return c.name, c.shell, nil
+		containerName = c.name
+		shell = c.shell
+		s.mu.Unlock()
+		return containerName, shell, nil
 	}
 
 	containerName = fmt.Sprintf("xbot-%s", userID)
 
-	// 检查容器是否已在运行
+	// Check if container is already running (under lock — only state checks).
 	checkOutput, checkErr := dockerExec(dockerCmdTimeout, "inspect", "-f", "{{.State.Running}}", containerName)
 	if checkErr == nil && strings.Contains(string(checkOutput), "true") {
 		if s.verifyWorkspaceMount(containerName, workspace) {
-			shell := s.detectShell(containerName)
+			// detectShell does docker exec — release lock first to avoid blocking other users.
+			s.mu.Unlock()
+			shell = s.detectShell(containerName)
+			s.mu.Lock()
 			s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+			s.mu.Unlock()
 			return containerName, shell, nil
 		}
 		log.Warnf("Container %s has stale workspace mount, will recreate", containerName)
 		s.saveAndRemove(containerName, userID)
 	}
 
-	// 容器已存在但未运行，直接尝试启动（mount 在创建时已设好，停止不会变）
+	// Container exists but not running, try to start it.
 	if s.containerExists(containerName) {
 		if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
 			log.Infof("Started existing Docker container %s", containerName)
-			shell := s.detectShell(containerName)
+			// detectShell does docker exec — release lock first.
+			s.mu.Unlock()
+			shell = s.detectShell(containerName)
+			s.mu.Lock()
 			s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+			s.mu.Unlock()
 			return containerName, shell, nil
 		}
 		log.Warnf("Container %s failed to start, will recreate", containerName)
 		s.saveAndRemove(containerName, userID)
 	}
 
-	// 容器不存在，选择镜像：优先用户专属镜像，否则基础镜像
+	// Container does not exist — choose image: prefer user-specific image, otherwise base.
 	image := s.image
 	userImage := userImageName(userID)
 	if err := dockerRun(dockerCmdTimeout, "image", "inspect", userImage); err == nil {
@@ -642,14 +654,21 @@ func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 
 	log.Infof("Creating Docker container %s with image %s (mount %s → /workspace)", containerName, image, hostPath)
 
+	// Release lock before docker run (network I/O) and detectShell (network I/O).
+	// Re-acquire only to update the containers map.
+	s.mu.Unlock()
+
 	output, err := dockerExec(dockerCmdTimeout, runArgs...)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create container: %w, output: %s", err, string(output))
 	}
 
-	// 检测用户的默认 shell
+	// Detect user's default shell (docker exec — network I/O, must be outside lock).
 	shell = s.detectShell(containerName)
+
+	s.mu.Lock()
 	s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+	s.mu.Unlock()
 	log.Infof("Docker container %s created successfully with shell %s", containerName, shell)
 
 	return containerName, shell, nil

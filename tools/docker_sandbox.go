@@ -422,6 +422,37 @@ func (s *DockerSandbox) ReadFile(ctx context.Context, path string, userID string
 	return decoded, nil
 }
 
+// dockerExecWithStdin runs a command inside a container and writes stdinData to the process's stdin.
+// This avoids shell injection when piping data into commands like "base64 -d > path".
+func (s *DockerSandbox) dockerExecWithStdin(ctx context.Context, userID, workspace string, timeout time.Duration, stdinData []byte, args ...string) ([]byte, error) {
+	containerName, _, err := s.getOrCreateContainer(userID, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	dockerArgs := []string{"exec", "-i"}
+	dockerArgs = append(dockerArgs, containerName)
+	dockerArgs = append(dockerArgs, args...)
+
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = bytes.NewReader(stdinData)
+
+	err = cmd.Run()
+	if err != nil {
+		return stderr.Bytes(), err
+	}
+	return stdout.Bytes(), nil
+}
+
 func (s *DockerSandbox) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
 	if int64(len(data)) > MaxSandboxFileSize {
 		return fmt.Errorf("data exceeds maximum size of %d bytes", MaxSandboxFileSize)
@@ -430,10 +461,14 @@ func (s *DockerSandbox) WriteFile(ctx context.Context, path string, data []byte,
 	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", dir); err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	script := fmt.Sprintf("echo '%s' | base64 -d > '%s' && chmod %o '%s'", encoded, path, uint32(perm), path)
-	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerSlowTimeout, "sh", "-c", script); err != nil {
+	// Write raw data via stdin to tee (path passed as direct argument, no shell interpolation).
+	// tee is a standalone binary that writes stdin to the named file — no shell involved.
+	if _, err := s.dockerExecWithStdin(ctx, userID, "", dockerSlowTimeout, data,
+		"tee", path); err != nil {
 		return fmt.Errorf("docker exec write: %w", err)
+	}
+	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "chmod", fmt.Sprintf("%o", uint32(perm)), path); err != nil {
+		return fmt.Errorf("docker exec chmod: %w", err)
 	}
 	return nil
 }

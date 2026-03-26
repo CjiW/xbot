@@ -61,9 +61,7 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 			// Return an error instead of producing incorrect argument splitting.
 			return makeError(msg.ID, "EINVAL", "non-shell exec requires Args to be set explicitly")
 		}
-		if len(args) > 0 {
-			cmd = exec.CommandContext(ctx, args[0], args[1:]...)
-		}
+		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	}
 	if cmd == nil {
 		return makeError(msg.ID, "EINVAL", "no command specified")

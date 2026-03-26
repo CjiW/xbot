@@ -170,16 +170,13 @@ func (a *Agent) writeBangOutputFile(ctx context.Context, workspaceRoot, command,
 		if err := a.sandbox.MkdirAll(ctx, workspaceRoot, 0o755, senderID); err != nil {
 			return "", err
 		}
-	} else {
-		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-			return "", err
-		}
-	}
-	if a.sandbox != nil {
 		if err := a.sandbox.WriteFile(ctx, filePath, []byte(buf.String()), 0o644, senderID); err != nil {
 			return "", err
 		}
 	} else {
+		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+			return "", err
+		}
 		if err := os.WriteFile(filePath, []byte(buf.String()), 0o644); err != nil {
 			return "", err
 		}

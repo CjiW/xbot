@@ -12,11 +12,12 @@ import (
 type InteractiveSubAgentManager interface {
 	SubAgentManager
 	// SpawnInteractive 创建/复用 interactive SubAgent session 并执行任务。
-	SpawnInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities) (string, error)
+	// instance 为空时行为与旧版一致；设置 instance 后同一 role 可创建多个独立 session。
+	SpawnInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance string) (string, error)
 	// SendInteractive 向已有的 interactive session 发送消息。
-	SendInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities) (string, error)
+	SendInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance string) (string, error)
 	// UnloadInteractive 结束 interactive session（巩固记忆 + 清理）。
-	UnloadInteractive(ctx *ToolContext, roleName string) error
+	UnloadInteractive(ctx *ToolContext, roleName, instance string) error
 }
 
 type SubAgentTool struct{}
@@ -46,6 +47,7 @@ Parameters (JSON):
   - role: string (required), the predefined role name
   - interactive: bool (optional), create/reuse interactive session
   - action: string (optional), "send" or "unload" for interactive session control
+  - instance: string (optional), instance ID for parallel interactive sessions with the same role
 
 Available roles are listed in the <available_agents> section of the system prompt.`
 }
@@ -56,6 +58,7 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 		{Name: "role", Type: "string", Description: "Predefined role name (e.g. code-reviewer)", Required: true},
 		{Name: "interactive", Type: "boolean", Description: "Create or reuse an interactive session for multi-turn conversation"},
 		{Name: "action", Type: "string", Description: `Interactive session action: "send" (send message to existing session) or "unload" (end session and memorize)`},
+		{Name: "instance", Type: "string", Description: "Instance ID for parallel interactive sessions with the same role (e.g. \"brainstorm-1\", \"brainstorm-2\"). When set, multiple sessions of the same role can coexist."},
 	}
 }
 
@@ -65,6 +68,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		Role        string `json:"role"`
 		Interactive bool   `json:"interactive"`
 		Action      string `json:"action"`
+		Instance    string `json:"instance"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -137,7 +141,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 
 		switch params.Action {
 		case "unload":
-			if err := im.UnloadInteractive(ctx, params.Role); err != nil {
+			if err := im.UnloadInteractive(ctx, params.Role, params.Instance); err != nil {
 				return nil, err
 			}
 			return NewResult(fmt.Sprintf("Interactive session for role %q unloaded successfully.", params.Role)), nil
@@ -146,7 +150,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			if params.Task == "" {
 				return nil, fmt.Errorf("task is required for action=\"send\"")
 			}
-			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities)
+			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance)
 			if err != nil {
 				return nil, fmt.Errorf("interactive send failed: %w", err)
 			}
@@ -154,7 +158,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 
 		default:
 			// action="" + interactive=true → spawn/reuse
-			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities)
+			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance)
 			if err != nil {
 				return nil, fmt.Errorf("interactive spawn failed: %w", err)
 			}

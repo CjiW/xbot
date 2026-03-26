@@ -55,6 +55,14 @@ type QQConfig struct {
 	AllowFrom    []string // 允许的 openid 列表（空则允许所有）
 }
 
+// NapCatConfig NapCat (OneBot 11) 渠道配置
+type NapCatConfig struct {
+	Enabled   bool
+	WSUrl     string   // NapCat WebSocket URL, e.g. "ws://localhost:3001"
+	Token     string   // 鉴权 token（可选）
+	AllowFrom []string // 允许的 QQ 号白名单（空则允许所有）
+}
+
 // EmbeddingConfig Embedding 配置
 type EmbeddingConfig struct {
 	Provider  string // Embedding 提供者: "openai"(默认) 或 "ollama"
@@ -84,6 +92,7 @@ type Config struct {
 	PProf         PProfConfig
 	Feishu        FeishuConfig
 	QQ            QQConfig
+	NapCat        NapCatConfig
 	Agent         AgentConfig
 	OAuth         OAuthConfig
 	Sandbox       SandboxConfig
@@ -196,6 +205,12 @@ func Load() *Config {
 			AppID:        getEnvOrDefault("QQ_APP_ID", ""),
 			ClientSecret: getEnvOrDefault("QQ_CLIENT_SECRET", ""),
 			AllowFrom:    splitEnv("QQ_ALLOW_FROM"),
+		},
+		NapCat: NapCatConfig{
+			Enabled:   getEnvBoolOrDefault("NAPCAT_ENABLED", false),
+			WSUrl:     getEnvOrDefault("NAPCAT_WS_URL", "ws://localhost:3001"),
+			Token:     getEnvOrDefault("NAPCAT_TOKEN", ""),
+			AllowFrom: splitEnv("NAPCAT_ALLOW_FROM"),
 		},
 		Feishu: FeishuConfig{
 			Enabled:           getEnvBoolOrDefault("FEISHU_ENABLED", false),

@@ -243,6 +243,16 @@ func main() {
 		disp.Register(qqCh)
 	}
 
+	// 注册 NapCat (OneBot 11) 渠道
+	if cfg.NapCat.Enabled {
+		napcatCh := channel.NewNapCatChannel(channel.NapCatConfig{
+			WSUrl:     cfg.NapCat.WSUrl,
+			Token:     cfg.NapCat.Token,
+			AllowFrom: cfg.NapCat.AllowFrom,
+		}, msgBus)
+		disp.Register(napcatCh)
+	}
+
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
 	agentLoop.SetChannelFinder(disp.GetChannel)

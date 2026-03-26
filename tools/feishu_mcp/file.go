@@ -2,19 +2,22 @@ package feishu_mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"xbot/llm"
+	log "xbot/logger"
 	"xbot/tools"
 
+	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	drivev1 "github.com/larksuite/oapi-sdk-go/v3/service/drive/v1"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 // UploadFileTool uploads a file to the user's cloud space.
@@ -73,28 +76,27 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Built-in tools run on host; translate sandbox path → host path
-	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
-
-	// Open the file (using host-visible path)
-	file, err := os.Open(hostPath)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+	// Read file via Sandbox
+	var data []byte
+	if ctx.Sandbox != nil && ctx.SandboxWorkDir != "" {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		data, err = ctx.Sandbox.ReadFile(context.Background(), resolvedPath, userID)
+	} else {
+		data, err = os.ReadFile(resolvedPath)
 	}
-	defer file.Close()
-
-	// Get file info
-	fileInfo, err := file.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("get file info: %w", err)
+		return nil, fmt.Errorf("read file: %w", err)
 	}
 
 	// Determine file name and size
 	fileName := args.FileName
 	if fileName == "" {
-		fileName = filepath.Base(hostPath)
+		fileName = filepath.Base(resolvedPath)
 	}
-	fileSize := int(fileInfo.Size())
+	fileSize := len(data)
 
 	// Detect MIME type
 	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
@@ -129,10 +131,9 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 		return nil, fmt.Errorf("file type %q is not allowed for upload", mimeType)
 	}
 
-	// Read file content (limited to 100MB to prevent OOM)
-	fileContent, err := io.ReadAll(io.LimitReader(file, 100*1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
+	// Validate data size (limited to 100MB to prevent OOM)
+	if len(data) > 100*1024*1024 {
+		return nil, fmt.Errorf("file size exceeds 100MB limit")
 	}
 
 	// Prepare upload request body
@@ -146,7 +147,7 @@ func (t *UploadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.T
 	}
 
 	body := bodyBuilder.
-		File(bytes.NewReader(fileContent)).
+		File(bytes.NewReader(data)).
 		Build()
 
 	req := drivev1.NewUploadAllMediaReqBuilder().
@@ -334,7 +335,7 @@ func (t *AddPermissionTool) Execute(ctx *tools.ToolContext, input string) (*tool
 }
 
 // SendFileTool sends a file or image directly to the current Feishu chat.
-// Uses the __FEISHU_FILE__:: protocol to bridge to the channel layer.
+// Reads file via Sandbox and uploads directly via Feishu API.
 type SendFileTool struct {
 	FeishuToolBase
 	MCP *FeishuMCP
@@ -373,34 +374,151 @@ func (t *SendFileTool) Execute(ctx *tools.ToolContext, input string) (*tools.Too
 		args.Type = "file"
 	}
 
-	// Resolve path with sandbox path guard (returns container-visible path)
+	// Resolve path
 	resolvedPath, err := tools.ResolveReadPath(ctx, args.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
 	}
 
-	// Built-in tools run on host; translate sandbox path → host path
-	hostPath := tools.SandboxToHostPath(ctx, resolvedPath)
-
-	// Verify file exists (using host-visible path)
-	if _, err := os.Stat(hostPath); err != nil {
-		return nil, fmt.Errorf("file not found: %s", args.FilePath)
+	// Read file via Sandbox
+	var data []byte
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
+	}
+	if ctx.Sandbox != nil && ctx.SandboxWorkDir != "" {
+		data, err = ctx.Sandbox.ReadFile(context.Background(), resolvedPath, userID)
+	} else {
+		data, err = os.ReadFile(resolvedPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
 	}
 
-	// Build protocol message with host path (feishu channel runs on host)
-	protocolMsg := "__FEISHU_FILE__::" + args.Type + "::" + hostPath
-	if args.Type == "file" {
-		protocolMsg = "__FEISHU_FILE__::" + hostPath
+	client := t.MCP.LarkClient()
+	if client == nil {
+		return nil, fmt.Errorf("Feishu client not available")
 	}
 
-	if ctx.SendFunc == nil {
-		return nil, fmt.Errorf("send function not available (not in a Feishu chat)")
+	fileName := filepath.Base(resolvedPath)
+	chatID := ctx.ChatID
+	if chatID == "" {
+		return nil, fmt.Errorf("not in a chat context")
 	}
 
-	if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, protocolMsg); err != nil {
-		return nil, fmt.Errorf("send file: %w", err)
+	receiveIDType := "chat_id"
+	if !strings.HasPrefix(chatID, "oc_") {
+		receiveIDType = "open_id"
 	}
 
-	displayPath := tools.HostToSandboxPath(ctx, hostPath)
-	return tools.NewResult(fmt.Sprintf("File sent: %s (type: %s)", displayPath, args.Type)), nil
+	switch args.Type {
+	case "image":
+		imageKey, err := t.uploadImage(client, data)
+		if err != nil {
+			return nil, fmt.Errorf("upload image: %w", err)
+		}
+		imgContent, _ := json.Marshal(map[string]string{"image_key": imageKey})
+		req := larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType(receiveIDType).
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(chatID).
+				MsgType("image").
+				Content(string(imgContent)).
+				Build()).
+			Build()
+		resp, err := client.Im.Message.Create(context.Background(), req)
+		if err != nil {
+			return nil, fmt.Errorf("send image message: %w", err)
+		}
+		if !resp.Success() {
+			return nil, fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		}
+		log.WithFields(log.Fields{"chat_id": chatID, "image_key": imageKey}).Info("Image sent via direct API")
+
+	default: // file
+		fileKey, err := t.uploadFile(client, data, fileName)
+		if err != nil {
+			return nil, fmt.Errorf("upload file: %w", err)
+		}
+		fileContent, _ := json.Marshal(map[string]string{"file_key": fileKey, "file_name": fileName})
+		req := larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType(receiveIDType).
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(chatID).
+				MsgType("file").
+				Content(string(fileContent)).
+				Build()).
+			Build()
+		resp, err := client.Im.Message.Create(context.Background(), req)
+		if err != nil {
+			return nil, fmt.Errorf("send file message: %w", err)
+		}
+		if !resp.Success() {
+			return nil, fmt.Errorf("feishu API error: code=%d, msg=%s", resp.Code, resp.Msg)
+		}
+		log.WithFields(log.Fields{"chat_id": chatID, "file_key": fileKey}).Info("File sent via direct API")
+	}
+
+	return tools.NewResult(fmt.Sprintf("File sent: %s (type: %s, size: %d bytes)", fileName, args.Type, len(data))), nil
 }
+
+// uploadImage uploads an image to Feishu, returns image_key.
+func (t *SendFileTool) uploadImage(client *lark.Client, data []byte) (string, error) {
+	req := larkim.NewCreateImageReqBuilder().
+		Body(&larkim.CreateImageReqBody{
+			ImageType: ptrString("message"),
+			Image:     bytes.NewReader(data),
+		}).
+		Build()
+	resp, err := client.Im.Image.Create(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("upload image API: %w", err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("upload image error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+	return *resp.Data.ImageKey, nil
+}
+
+// uploadFile uploads a file to Feishu, returns file_key.
+func (t *SendFileTool) uploadFile(client *lark.Client, data []byte, fileName string) (string, error) {
+	fileType := detectFileType(fileName)
+	req := larkim.NewCreateFileReqBuilder().
+		Body(&larkim.CreateFileReqBody{
+			FileType: &fileType,
+			FileName: &fileName,
+			File:     bytes.NewReader(data),
+		}).
+		Build()
+	resp, err := client.Im.File.Create(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("upload file API: %w", err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("upload file error: code=%d, msg=%s", resp.Code, resp.Msg)
+	}
+	return *resp.Data.FileKey, nil
+}
+
+// detectFileType detects Feishu file type from extension.
+func detectFileType(fileName string) string {
+	ext := strings.ToLower(filepath.Ext(fileName))
+	switch ext {
+	case ".mp4":
+		return "mp4"
+	case ".pdf":
+		return "pdf"
+	case ".doc", ".docx":
+		return "doc"
+	case ".xls", ".xlsx":
+		return "xls"
+	case ".ppt", ".pptx":
+		return "ppt"
+	case ".opus":
+		return "opus"
+	default:
+		return "stream"
+	}
+}
+
+func ptrString(s string) *string { return &s }

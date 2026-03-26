@@ -2,6 +2,7 @@ package feishu_mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,11 +76,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, err
 	}
 
-	// Built-in tools run on host; translate sandbox path → host path
-	hostPath := tools.SandboxToHostPath(ctx, outputPath)
-
-	// For display: show sandbox-visible path
-	displayPath := tools.HostToSandboxPath(ctx, hostPath)
+	displayPath := outputPath
 
 	token, err := t.getTenantToken()
 	if err != nil {
@@ -106,30 +103,45 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 		return nil, fmt.Errorf("feishu API error: HTTP %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// Ensure output directory exists
-	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
-		return nil, fmt.Errorf("create output directory: %w", err)
+	// Read response body
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 100*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(data) >= 100*1024*1024 {
+		return nil, fmt.Errorf("downloaded file exceeds maximum size (100MB)")
 	}
 
-	outFile, err := os.Create(hostPath)
-	if err != nil {
-		return nil, fmt.Errorf("create output file: %w", err)
-	}
-	defer outFile.Close()
-
-	written, err := io.Copy(outFile, io.LimitReader(resp.Body, 100*1024*1024)) // 100MB limit
-	if err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	// Write to output path (sandbox-aware)
+	useSandbox := ctx != nil && ctx.Sandbox != nil && ctx.SandboxWorkDir != ""
+	if useSandbox {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		if err := ctx.Sandbox.MkdirAll(context.Background(), filepath.Dir(outputPath), 0o755, userID); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := ctx.Sandbox.WriteFile(context.Background(), outputPath, data, 0o644, userID); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
 	}
 
 	log.WithFields(log.Fields{
 		"message_id":  args.MessageID,
 		"file_key":    args.FileKey,
 		"output_path": outputPath,
-		"size":        written,
+		"size":        len(data),
 	}).Info("File downloaded from Feishu via MCP tool")
 
-	return tools.NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, written)), nil
+	return tools.NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, len(data))), nil
 }
 
 // getTenantToken obtains a tenant_access_token using app credentials from environment.

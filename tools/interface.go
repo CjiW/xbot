@@ -22,12 +22,14 @@ type ToolContext struct {
 	WorkspaceRoot           string          // 当前用户可读写工作区根目录（宿主机路径）
 	SandboxWorkDir          string          // 沙箱内工作目录（如 Docker 为 /workspace，非沙箱时与 WorkspaceRoot 相同）
 	ReadOnlyRoots           []string        // 当前用户额外可读目录（只读）
+	SandboxReadOnlyRoots    []string        // 当前用户额外可读目录（sandbox 路径，预转换）
 	SkillsDirs              []string        // 全局 skill 目录列表（宿主机路径，同步源）
 	AgentsDir               string
 	MCPConfigPath           string                                          // 当前用户 MCP 配置路径
 	GlobalMCPConfigPath     string                                          // 全局 MCP 配置路径（只读）
 	SandboxEnabled          bool                                            // 是否启用命令沙箱
 	PreferredSandbox        string                                          // 沙箱优先级（docker 优先）
+	Sandbox                 Sandbox                                         // V4 新增：统一 Sandbox 接口实例
 	AgentID                 string                                          // 当前 Agent 的 ID
 	Manager                 SubAgentManager                                 // Agent 管理器引用（用于创建 SubAgent）
 	DataDir                 string                                          // 数据持久化目录

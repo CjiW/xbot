@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -12,21 +14,31 @@ import (
 
 // AgentStore scans agent directories and generates a catalog for the system prompt.
 type AgentStore struct {
-	globalDir string
-	workDir   string
+	globalDir      string
+	workDir        string
+	sandbox        tools.Sandbox
+	sandboxWorkDir string
 }
 
 // NewAgentStore creates an AgentStore
-func NewAgentStore(workDir string, globalDir string) *AgentStore {
-	return &AgentStore{workDir: workDir, globalDir: globalDir}
+func NewAgentStore(workDir string, globalDir string, sandbox tools.Sandbox, sandboxWorkDir string) *AgentStore {
+	return &AgentStore{workDir: workDir, globalDir: globalDir, sandbox: sandbox, sandboxWorkDir: sandboxWorkDir}
+}
+
+// userAgentsDir 返回用户 agent 目录路径（沙箱感知）
+func (s *AgentStore) userAgentsDir(senderID string) string {
+	if s.sandbox != nil && s.sandboxWorkDir != "" {
+		return filepath.Join(s.sandboxWorkDir, "agents")
+	}
+	return tools.UserAgentsRoot(s.workDir, senderID)
 }
 
 // GetAgentsCatalog returns a formatted catalog of all available agents for the system prompt.
 // Scans global agents first, then user-private agents; same-name agents are overridden by user version.
-func (s *AgentStore) GetAgentsCatalog(senderID string) string {
+func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) string {
 	sources := []string{s.globalDir}
 	if senderID != "" {
-		sources = append(sources, tools.UserAgentsRoot(s.workDir, senderID))
+		sources = append(sources, s.userAgentsDir(senderID))
 	}
 
 	type agentInfo struct {
@@ -37,12 +49,19 @@ func (s *AgentStore) GetAgentsCatalog(senderID string) string {
 	merged := make(map[string]agentInfo)
 	var orderedNames []string
 
-	for _, dir := range sources {
+	for i, dir := range sources {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
 
-		roles, err := tools.LoadAgentRoles(dir)
+		// Sandbox-aware loading for user directories
+		var roles []tools.SubAgentRole
+		var err error
+		if i == 0 || (s.sandbox == nil || s.sandboxWorkDir == "") {
+			roles, err = tools.LoadAgentRoles(dir)
+		} else {
+			roles, err = tools.LoadAgentRolesSandbox(ctx, dir, s.sandbox, senderID)
+		}
 		if err != nil {
 			log.WithError(err).Warn("Failed to load agent roles for catalog")
 			continue

@@ -46,6 +46,11 @@ func (m *FeishuMCP) SetLarkClient(client *lark.Client) {
 	m.larkClient = client
 }
 
+// LarkClient returns the underlying lark.Client for direct API calls.
+func (m *FeishuMCP) LarkClient() *lark.Client {
+	return m.larkClient
+}
+
 // Client wraps a Lark client with user access token and tenant domain.
 type Client struct {
 	lark         *lark.Client

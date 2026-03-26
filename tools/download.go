@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,15 +94,11 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		return nil, err
 	}
 
-	// Built-in tools run on host; translate sandbox path → host path
-	hostPath := SandboxToHostPath(ctx, outputPath)
-
-	// For return value: show sandbox-visible path instead of host path
-	displayPath := HostToSandboxPath(ctx, hostPath)
+	displayPath := outputPath
 
 	switch ctx.Channel {
 	case "feishu":
-		return t.downloadFeishu(params.MessageID, params.FileKey, params.Type, hostPath, displayPath)
+		return t.downloadFeishu(ctx, params.MessageID, params.FileKey, params.Type, outputPath, displayPath)
 	default:
 		return nil, fmt.Errorf("file download not supported for channel: %s", ctx.Channel)
 	}
@@ -121,7 +118,7 @@ var tokenHTTPClient = &http.Client{
 }
 
 // downloadFeishu downloads a file/image from Feishu via Message Resource API.
-func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPath, displayPath string) (*ToolResult, error) {
+func (t *DownloadFileTool) downloadFeishu(ctx *ToolContext, messageID, fileKey, fileType, outputPath, displayPath string) (*ToolResult, error) {
 	token, err := t.getFeishuTenantToken()
 	if err != nil {
 		return nil, fmt.Errorf("get tenant token: %w", err)
@@ -147,34 +144,44 @@ func (t *DownloadFileTool) downloadFeishu(messageID, fileKey, fileType, outputPa
 		return nil, fmt.Errorf("feishu API error: HTTP %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// Ensure output directory exists
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-		return nil, fmt.Errorf("create output directory: %w", err)
-	}
-
-	outFile, err := os.Create(outputPath)
+	// Read response body
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
 	if err != nil {
-		return nil, fmt.Errorf("create output file: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
-	defer outFile.Close()
-
-	limitedReader := io.LimitReader(resp.Body, maxDownloadSize)
-	written, err := io.Copy(outFile, limitedReader)
-	if err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
-	}
-	if written >= maxDownloadSize {
+	if len(data) >= maxDownloadSize {
 		return nil, fmt.Errorf("downloaded file exceeds maximum allowed size (100MB)")
+	}
+
+	// Write to output path (sandbox-aware)
+	if shouldUseSandbox(ctx) {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		if err := ctx.Sandbox.MkdirAll(context.Background(), filepath.Dir(outputPath), 0o755, userID); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := ctx.Sandbox.WriteFile(context.Background(), outputPath, data, 0o644, userID); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
 	}
 
 	log.WithFields(log.Fields{
 		"message_id":  messageID,
 		"file_key":    fileKey,
 		"output_path": outputPath,
-		"size":        written,
+		"size":        len(data),
 	}).Info("File downloaded from Feishu")
 
-	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, written)), nil
+	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, len(data))), nil
 }
 
 // getFeishuTenantToken obtains a tenant_access_token using app credentials from environment.

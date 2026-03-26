@@ -67,57 +67,106 @@ func (t *SkillTool) Execute(ctx *ToolContext, input string) (*ToolResult, error)
 
 	switch params.Action {
 	case "load":
-		return t.doLoad(hostDir, containerBase, params.File)
+		return t.doLoad(ctx, hostDir, containerBase, params.File)
 	case "list_files":
-		return t.doListFiles(hostDir, containerBase)
+		return t.doListFiles(ctx, hostDir, containerBase)
 	default:
 		return nil, fmt.Errorf("unknown action %q, expected load or list_files", params.Action)
 	}
 }
 
-// resolveSkill finds the skill's host-side directory and returns the container-side base path.
-// Search order: user private (workspace/skills/) > global synced (workspace/.skills/)
+// resolveSkill finds the skill directory and returns the display base path.
+// In sandbox mode, uses Sandbox API for file access.
+// In os mode, uses local filesystem.
 // Returns ("", "") if not found.
-func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (hostDir, containerBase string) {
-	type candidate struct {
-		hostRoot      string
-		containerRoot string
-	}
-	sandboxBase := sandboxBaseDir(ctx)
-	candidates := []candidate{
-		{filepath.Join(ctx.WorkspaceRoot, "skills"), filepath.Join(sandboxBase, "skills")},
-		{filepath.Join(ctx.WorkspaceRoot, ".skills"), filepath.Join(sandboxBase, ".skills")},
+func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (skillDir, displayBase string) {
+	sandboxed := shouldUseSandbox(ctx)
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
 	}
 
-	for _, c := range candidates {
-		dir := filepath.Join(c.hostRoot, name)
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			return dir, filepath.Join(c.containerRoot, name)
+	var bases []string
+	if sandboxed {
+		bases = []string{
+			filepath.Join(ctx.SandboxWorkDir, "skills"),
+			filepath.Join(ctx.SandboxWorkDir, ".skills"),
+		}
+	} else {
+		bases = []string{
+			filepath.Join(ctx.WorkspaceRoot, "skills"),
+			filepath.Join(ctx.WorkspaceRoot, ".skills"),
+		}
+	}
+
+	// Direct match
+	for _, base := range bases {
+		dir := filepath.Join(base, name)
+		if sandboxed {
+			if info, err := ctx.Sandbox.Stat(ctx.Ctx, dir, userID); err == nil && info.IsDir {
+				return dir, dir
+			}
+		} else {
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				return dir, dir
+			}
 		}
 	}
 
 	// Fallback: scan for matching frontmatter name
-	for _, c := range candidates {
-		entries, err := os.ReadDir(c.hostRoot)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
+	for _, base := range bases {
+		if sandboxed {
+			entries, err := ctx.Sandbox.ReadDir(ctx.Ctx, base, userID)
+			if err != nil {
 				continue
 			}
-			skillFile := filepath.Join(c.hostRoot, e.Name(), "SKILL.md")
-			if fmName, _ := parseSkillName(skillFile); fmName == name {
-				return filepath.Join(c.hostRoot, e.Name()), filepath.Join(c.containerRoot, e.Name())
+			for _, e := range entries {
+				if !e.IsDir {
+					continue
+				}
+				skillFile := filepath.Join(base, e.Name, "SKILL.md")
+				data, ferr := ctx.Sandbox.ReadFile(ctx.Ctx, skillFile, userID)
+				if ferr != nil {
+					continue
+				}
+				if parseSkillNameFromData(data) == name {
+					found := filepath.Join(base, e.Name)
+					return found, found
+				}
+			}
+		} else {
+			entries, err := os.ReadDir(base)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				skillFile := filepath.Join(base, e.Name(), "SKILL.md")
+				if fmName, _ := parseSkillName(skillFile); fmName == name {
+					found := filepath.Join(base, e.Name())
+					return found, found
+				}
 			}
 		}
 	}
 	return "", ""
 }
 
-func (t *SkillTool) doLoad(hostDir, containerBase, file string) (*ToolResult, error) {
-	target := filepath.Join(hostDir, file)
-	data, err := os.ReadFile(target)
+func (t *SkillTool) doLoad(ctx *ToolContext, skillDir, displayBase, file string) (*ToolResult, error) {
+	target := filepath.Join(skillDir, file)
+	var data []byte
+	var err error
+	if shouldUseSandbox(ctx) {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		data, err = ctx.Sandbox.ReadFile(ctx.Ctx, target, userID)
+	} else {
+		data, err = os.ReadFile(target)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("file %q not readable in skill: %w", file, err)
 	}
@@ -131,31 +180,52 @@ func (t *SkillTool) doLoad(hostDir, containerBase, file string) (*ToolResult, er
 	return NewResult(content), nil
 }
 
-func (t *SkillTool) doListFiles(hostDir, containerBase string) (*ToolResult, error) {
+func (t *SkillTool) doListFiles(ctx *ToolContext, skillDir, displayBase string) (*ToolResult, error) {
 	var files []string
-	err := filepath.Walk(hostDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	if shouldUseSandbox(ctx) {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		err := WalkSandboxDir(ctx.Ctx, ctx.Sandbox, skillDir, userID, func(relPath string, entry DirEntry) error {
+			files = append(files, filepath.Join(displayBase, relPath))
+			if len(files) >= MaxSkillSearchResults {
+				return fmt.Errorf("skill has too many files, showing first %d", MaxSkillSearchResults)
+			}
 			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, _ := filepath.Rel(hostDir, path)
-		containerPath := filepath.Join(containerBase, rel)
-		files = append(files, containerPath)
-		if len(files) >= MaxSkillSearchResults {
-			return fmt.Errorf("skill has too many files, showing first %d", MaxSkillSearchResults)
-		}
-		return nil
-	})
-	if err != nil {
-		// If err is our sentinel about too many files, still return the results
-		if len(files) > 0 {
+		})
+		if err != nil && len(files) > 0 {
 			result := strings.Join(files, "\n")
 			result += fmt.Sprintf("\n\n... [truncated: showing %d of potentially more files]", len(files))
 			return NewResult(result), nil
 		}
-		return nil, fmt.Errorf("listing skill files: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("listing skill files: %w", err)
+		}
+	} else {
+		err := filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(skillDir, path)
+			containerPath := filepath.Join(displayBase, rel)
+			files = append(files, containerPath)
+			if len(files) >= MaxSkillSearchResults {
+				return fmt.Errorf("skill has too many files, showing first %d", MaxSkillSearchResults)
+			}
+			return nil
+		})
+		if err != nil && len(files) > 0 {
+			result := strings.Join(files, "\n")
+			result += fmt.Sprintf("\n\n... [truncated: showing %d of potentially more files]", len(files))
+			return NewResult(result), nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing skill files: %w", err)
+		}
 	}
 	if len(files) == 0 {
 		return NewResult("No files found in skill directory."), nil
@@ -186,4 +256,26 @@ func parseSkillName(path string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// parseSkillNameFromData extracts just the name field from SKILL.md content bytes.
+// Does not read from filesystem — used when content is already loaded via Sandbox.
+func parseSkillNameFromData(data []byte) string {
+	content := string(data)
+	if !strings.HasPrefix(strings.TrimSpace(content), "---") {
+		return ""
+	}
+	trimmed := strings.TrimSpace(content)
+	rest := trimmed[3:]
+	endIdx := strings.Index(rest, "\n---")
+	if endIdx < 0 {
+		return ""
+	}
+	for _, line := range strings.Split(rest[:endIdx], "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+		}
+	}
+	return ""
 }

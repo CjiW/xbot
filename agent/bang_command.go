@@ -46,7 +46,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 	}).Info("Bang command")
 
 	workspaceRoot := a.workspaceRoot(msg.SenderID)
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 
@@ -57,7 +57,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 
 	// If output is too long, write to a .md file and send as file link
 	if len([]rune(content)) > bangOutputMaxLen {
-		filePath, err := writeBangOutputFile(workspaceRoot, command, output, exitErr)
+		filePath, err := a.writeBangOutputFile(ctx, workspaceRoot, command, output, exitErr, msg.SenderID)
 		if err != nil {
 			log.WithError(err).Warn("Failed to write bang output file, sending truncated")
 			// Truncate and send inline
@@ -151,7 +151,7 @@ func formatBangOutput(command, output string, execErr error) string {
 }
 
 // writeBangOutputFile writes long output to a .md file and returns the file path.
-func writeBangOutputFile(workspaceRoot, command, output string, execErr error) (string, error) {
+func (a *Agent) writeBangOutputFile(ctx context.Context, workspaceRoot, command, output string, execErr error, senderID string) (string, error) {
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "# Command: `%s`\n\n", command)
 
@@ -166,8 +166,23 @@ func writeBangOutputFile(workspaceRoot, command, output string, execErr error) (
 	fileName := fmt.Sprintf("cmd-output-%d.md", time.Now().UnixMilli())
 	filePath := filepath.Join(workspaceRoot, fileName)
 
-	if err := os.WriteFile(filePath, []byte(buf.String()), 0o644); err != nil {
-		return "", err
+	if a.sandbox != nil {
+		if err := a.sandbox.MkdirAll(ctx, workspaceRoot, 0o755, senderID); err != nil {
+			return "", err
+		}
+	} else {
+		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+			return "", err
+		}
+	}
+	if a.sandbox != nil {
+		if err := a.sandbox.WriteFile(ctx, filePath, []byte(buf.String()), 0o644, senderID); err != nil {
+			return "", err
+		}
+	} else {
+		if err := os.WriteFile(filePath, []byte(buf.String()), 0o644); err != nil {
+			return "", err
+		}
 	}
 
 	return filePath, nil

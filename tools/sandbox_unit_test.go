@@ -8,59 +8,6 @@ import (
 	"testing"
 )
 
-func TestSandboxToHostPath(t *testing.T) {
-	tests := []struct {
-		name        string
-		sandboxPath string
-		workspace   string
-		want        string
-	}{
-		{
-			name:        "simple file",
-			sandboxPath: "/workspace/main.go",
-			workspace:   "/home/user/data",
-			want:        "/home/user/data/main.go",
-		},
-		{
-			name:        "nested path",
-			sandboxPath: "/workspace/src/util.go",
-			workspace:   "/home/user/data",
-			want:        "/home/user/data/src/util.go",
-		},
-		{
-			name:        "root workspace",
-			sandboxPath: "/workspace",
-			workspace:   "/home/user/data",
-			want:        "/home/user/data",
-		},
-		{
-			name:        "outside workspace returns original",
-			sandboxPath: "/etc/passwd",
-			workspace:   "/home/user/data",
-			want:        "/etc/passwd",
-		},
-		{
-			name:        "relative path",
-			sandboxPath: "main.go",
-			workspace:   "/home/user/data",
-			want:        "main.go",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := &ToolContext{
-				SandboxEnabled: true,
-				WorkspaceRoot:  tt.workspace,
-				SandboxWorkDir: "/workspace",
-			}
-			got := SandboxToHostPath(ctx, tt.sandboxPath)
-			if got != tt.want {
-				t.Errorf("SandboxToHostPath(%q) = %q, want %q", tt.sandboxPath, got, tt.want)
-			}
-		})
-	}
-}
 func TestGlobTool_SandboxPathConstruction(t *testing.T) {
 	// 测试 glob 在沙箱模式下构建的命令
 	ws, err := os.MkdirTemp("", "test-glob-*")

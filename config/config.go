@@ -41,10 +41,12 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode        string        // 沙箱模式: "none", "docker"
+	Mode        string        // 沙箱模式: "none", "docker", "remote"
 	DockerImage string        // Docker 镜像（如 "ubuntu:22.04"）
 	HostWorkDir string        // DinD 手动覆盖：宿主机上对应 WORK_DIR 的真实路径（通常自动检测，仅在检测失败时设置）
 	IdleTimeout time.Duration // 用户空闲超时，超时后自动卸载沙箱（默认 30min，设为 0 禁用）
+	WSPort      int           // WebSocket 监听端口（remote 模式，默认 8080）
+	AuthToken   string        // Runner 认证 token
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -248,6 +250,8 @@ func Load() *Config {
 			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
 			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
 			IdleTimeout: time.Duration(getEnvIntOrDefault("SANDBOX_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,
+			WSPort:      getEnvIntOrDefault("SANDBOX_WS_PORT", 8080),
+			AuthToken:   getEnvOrDefault("SANDBOX_AUTH_TOKEN", ""),
 		},
 		StartupNotify: StartupNotifyConfig{
 			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),

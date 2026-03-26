@@ -130,6 +130,7 @@ func main() {
 		PromptFile:               cfg.Agent.PromptFile,
 		SingleUser:               cfg.Agent.SingleUser,
 		SandboxMode:              cfg.Sandbox.Mode,
+		Sandbox:                  tools.GetSandbox(),
 		MemoryProvider:           cfg.Agent.MemoryProvider,
 		EmbeddingProvider:        cfg.Embedding.Provider,
 		EmbeddingBaseURL:         embBaseURL,

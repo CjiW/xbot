@@ -75,6 +75,8 @@ func (a *Agent) buildBaseRunConfig(
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode == "docker",
 		PreferredSandbox: a.sandboxMode,
+		Sandbox:          a.sandbox,
+		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
 		MaxIterations: a.maxIterations,
@@ -282,7 +284,7 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	// 注入可用 agent 目录（只在 spawn_agent=true 时注入）
 	if caps.SpawnAgent {
-		if agentsCatalog := a.agents.GetAgentsCatalog(parentCtx.SenderID); agentsCatalog != "" {
+		if agentsCatalog := a.agents.GetAgentsCatalog(ctx, parentCtx.SenderID); agentsCatalog != "" {
 			sysPrompt += "\n" + agentsCatalog
 		}
 	}
@@ -292,7 +294,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	if originUserID == "" {
 		originUserID = parentCtx.SenderID
 	}
-	if skillsCatalog := a.skills.GetSkillsCatalog(originUserID); skillsCatalog != "" {
+	if skillsCatalog := a.skills.GetSkillsCatalog(ctx, originUserID); skillsCatalog != "" {
 		sysPrompt += "\n" + skillsCatalog
 	}
 
@@ -338,7 +340,14 @@ func (a *Agent) buildSubAgentRunConfig(
 		DataDir:          parentCtx.DataDir,
 		SandboxEnabled:   parentCtx.SandboxEnabled,
 		PreferredSandbox: parentCtx.PreferredSandbox,
-		InitialCWD:       parentCtx.CurrentDir, // 继承父 Agent 的 CWD
+		Sandbox:          parentCtx.Sandbox,
+		SandboxMode: func() string {
+			if parentCtx.Sandbox != nil {
+				return parentCtx.Sandbox.Name()
+			}
+			return "none"
+		}(),
+		InitialCWD: parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
 		MaxIterations: 100,
 		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline
@@ -468,6 +477,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode == "docker",
 		PreferredSandbox: a.sandboxMode,
+		Sandbox:          a.sandbox,
+		SandboxMode:      a.sandboxMode,
 
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,

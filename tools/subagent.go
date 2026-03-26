@@ -102,7 +102,16 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	if ctx.WorkspaceRoot != "" {
 		userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
 	}
-	role, ok := GetSubAgentRole(params.Role, userAgentDirs...)
+	var roleSb Sandbox
+	var roleUserID string
+	if shouldUseSandbox(ctx) {
+		roleSb = ctx.Sandbox
+		roleUserID = ctx.OriginUserID
+		if roleUserID == "" {
+			roleUserID = ctx.SenderID
+		}
+	}
+	role, ok := GetSubAgentRoleSandbox(ctx.Ctx, params.Role, roleSb, roleUserID, userAgentDirs...)
 	if !ok {
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}

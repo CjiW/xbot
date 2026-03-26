@@ -59,9 +59,18 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 
 	// 写入文件并发送
 	workspaceRoot := a.workspaceRoot(msg.SenderID)
+	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
+		return nil, fmt.Errorf("create user workspace: %w", err)
+	}
 	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
-	if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
-		return nil, fmt.Errorf("write prompt file: %w", err)
+	if a.sandbox != nil {
+		if err := a.sandbox.WriteFile(ctx, promptFile, []byte(buf.String()), 0o644, msg.SenderID); err != nil {
+			return nil, fmt.Errorf("write prompt file: %w", err)
+		}
+	} else {
+		if err := os.WriteFile(promptFile, []byte(buf.String()), 0o644); err != nil {
+			return nil, fmt.Errorf("write prompt file: %w", err)
+		}
 	}
 
 	return &bus.OutboundMessage{

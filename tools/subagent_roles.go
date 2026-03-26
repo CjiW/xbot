@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -90,6 +91,49 @@ func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool)
 	}
 
 	// 再搜索全局目录
+	if agentsDir == "" {
+		return nil, false
+	}
+	roles, err := LoadAgentRoles(agentsDir)
+	if err != nil {
+		log.WithError(err).Warn("Failed to load agent roles")
+		return nil, false
+	}
+	for i := range roles {
+		if roles[i].Name == name {
+			return &roles[i], true
+		}
+	}
+	return nil, false
+}
+
+// GetSubAgentRoleSandbox is the sandbox-aware version of GetSubAgentRole.
+// User agent directories are accessed via Sandbox when sb is non-nil.
+func GetSubAgentRoleSandbox(ctx context.Context, name string, sb Sandbox, userID string, userAgentDirs ...string) (*SubAgentRole, bool) {
+	// Search user private directories
+	for _, dir := range userAgentDirs {
+		if dir == "" {
+			continue
+		}
+		var roles []SubAgentRole
+		var err error
+		if sb != nil {
+			roles, err = LoadAgentRolesSandbox(ctx, dir, sb, userID)
+		} else {
+			roles, err = LoadAgentRoles(dir)
+		}
+		if err != nil {
+			log.WithField("dir", dir).WithError(err).Warn("Failed to load user agent roles, skipping directory")
+			continue
+		}
+		for i := range roles {
+			if roles[i].Name == name {
+				return &roles[i], true
+			}
+		}
+	}
+
+	// Search global directory (always os.*)
 	if agentsDir == "" {
 		return nil, false
 	}

@@ -30,6 +30,11 @@ func EnsureSynced(ctx *ToolContext) {
 		return
 	}
 
+	// V4: remote 模式下跳过全局 skill 同步（skill 由 remote sandbox 管理）
+	if ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		return
+	}
+
 	// 使用 OriginUserID 作为同步键（基于原始用户隔离）
 	syncUserID := ctx.OriginUserID
 	if syncUserID == "" {

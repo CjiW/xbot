@@ -30,8 +30,17 @@ func EnsureSynced(ctx *ToolContext) {
 		return
 	}
 
-	// V4: remote 模式下跳过全局 skill 同步（skill 由 remote sandbox 管理）
+	// V4: remote 模式下委托给 RemoteSandbox.EnsureSynced
 	if ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		if syncer, ok := ctx.Sandbox.(SandboxSyncer); ok {
+			syncUserID := ctx.OriginUserID
+			if syncUserID == "" {
+				syncUserID = ctx.SenderID
+			}
+			if syncUserID != "" {
+				syncer.EnsureSynced(ctx.Ctx, syncUserID)
+			}
+		}
 		return
 	}
 

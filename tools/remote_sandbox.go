@@ -51,6 +51,9 @@ type RemoteSandbox struct {
 	upgrader        websocket.Upgrader             // per-instance upgrader with origin check
 	globalSkillDirs []string                       // global skill dirs to sync to runner on registration
 	agentsDir       string                         // global agents dir to sync to runner on registration
+	syncMu          sync.Mutex
+	synced          map[string]bool // userID → whether initial sync has completed
+	syncing         map[string]bool // userID → sync in progress (prevent concurrent syncs)
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
@@ -84,6 +87,8 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig, syncCfg RemoteSandboxSyncConfig) 
 		},
 		globalSkillDirs: syncCfg.GlobalSkillDirs,
 		agentsDir:       syncCfg.AgentsDir,
+			synced:          make(map[string]bool),
+			syncing:         make(map[string]bool),
 	}
 
 	mux := http.NewServeMux()
@@ -517,6 +522,11 @@ func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 		log.WithField("user_id", userID).Warn("syncToRunner: workspace is empty, skipping sync")
 		return
 	}
+
+	rs.syncMu.Lock()
+	rs.syncing[userID] = true
+	rs.syncMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -543,7 +553,52 @@ func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 		"user_id":   userID,
 		"workspace": workspace,
 	}).Info("Runner sync completed")
+
+	// Mark sync as completed (even if some dirs failed, we don't retry individual failures)
+	rs.syncMu.Lock()
+	rs.synced[userID] = true
+	rs.syncing[userID] = false
+	rs.syncMu.Unlock()
 }
+
+// EnsureSynced implements SandboxSyncer interface.
+// If the runner hasn't been synced yet (or sync failed), triggers a sync.
+// This is called from EnsureSynced(ctx) in skill_sync.go.
+func (rs *RemoteSandbox) EnsureSynced(ctx context.Context, userID string) {
+	rs.syncMu.Lock()
+	if rs.synced[userID] {
+		rs.syncMu.Unlock()
+		return
+	}
+	// If sync is already in progress, wait for it
+	if rs.syncing[userID] {
+		rs.syncMu.Unlock()
+		// Poll every 500ms, up to 30s
+		for i := 0; i < 60; i++ {
+			time.Sleep(500 * time.Millisecond)
+			rs.syncMu.Lock()
+			if rs.synced[userID] {
+				rs.syncMu.Unlock()
+				return
+			}
+			rs.syncMu.Unlock()
+		}
+		log.WithField("user_id", userID).Warn("EnsureSynced: timed out waiting for in-progress sync")
+		return
+	}
+	rs.syncMu.Unlock()
+
+	// Get runner workspace
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		log.WithError(err).WithField("user_id", userID).Debug("EnsureSynced: no runner connected, skipping sync")
+		return
+	}
+
+	log.WithField("user_id", userID).Info("EnsureSynced: triggering on-demand sync")
+	go rs.syncToRunner(userID, rc.workspace)
+}
+
 
 // syncDirToRunner recursively syncs a skill directory tree from the server to the runner.
 // Each skill is a subdirectory; only directories containing SKILL.md are synced.

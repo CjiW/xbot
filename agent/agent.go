@@ -1011,7 +1011,11 @@ func (a *Agent) workspaceRoot(senderID string) string {
 }
 
 // ensureWorkspace ensures the workspace directory exists (sandbox-aware).
+// Skipped for remote sandbox — the runner manages its own filesystem.
 func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
+	if a.sandbox != nil && a.sandbox.Name() == "remote" {
+		return nil
+	}
 	if a.sandbox != nil {
 		return a.sandbox.MkdirAll(ctx, dir, 0o755, senderID)
 	}

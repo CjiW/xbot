@@ -343,7 +343,9 @@ func (a *Agent) UnloadInteractiveSession(
 // 与 spawnSubAgent 中的 parentCtx 构建保持一致。
 func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, senderID string, msg bus.InboundMessage) *tools.ToolContext {
 	workspaceRoot := a.workspaceRoot(senderID)
-	_ = os.MkdirAll(workspaceRoot, 0o755)
+	if a.sandbox == nil || a.sandbox.Name() != "remote" {
+		_ = os.MkdirAll(workspaceRoot, 0o755)
+	}
 
 	return &tools.ToolContext{
 		Ctx:                 ctx,

@@ -35,7 +35,10 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	if spec.Shell {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
 	} else {
-		cmd = exec.CommandContext(ctx, spec.Command, spec.Args...)
+		if len(spec.Args) == 0 {
+			return nil, fmt.Errorf("non-shell exec requires Args to be set")
+			}
+			cmd = exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
 	}
 
 	if spec.Dir != "" {

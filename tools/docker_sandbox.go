@@ -368,7 +368,6 @@ func (s *DockerSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, e
 	if spec.Shell {
 		dockerArgs = append(dockerArgs, "sh", "-c", spec.Command)
 	} else {
-		dockerArgs = append(dockerArgs, spec.Command)
 		dockerArgs = append(dockerArgs, spec.Args...)
 	}
 

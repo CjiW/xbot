@@ -50,6 +50,8 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **session/** — Multi-tenant session management
 - **storage/** — SQLite persistence (sessions, memory, tenants)
 - **version/** — Build version info
+- **docs/** — Design documents and architecture notes
+- **scripts/** — Development helper scripts
 
 ## Quick Start
 
@@ -85,32 +87,89 @@ make clean-memory # Clear .xbot data
 
 All config via environment variables or `.env`:
 
+### LLM
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LLM_PROVIDER` | LLM provider (`openai`/`anthropic`) | `openai` |
 | `LLM_BASE_URL` | API URL | — |
 | `LLM_API_KEY` | API key | — |
 | `LLM_MODEL` | Model name | `gpt-4o` |
-| `MEMORY_PROVIDER` | Memory (`flat`/`letta`) | `flat` |
-| `LLM_EMBEDDING_*` | Embedding API for Letta | — |
-| `FEISHU_ENABLED` | Enable Feishu | `false` |
-| `FEISHU_APP_ID` | Feishu app ID | — |
-| `FEISHU_APP_SECRET` | Feishu app secret | — |
-| `QQ_ENABLED` | Enable QQ | `false` |
-| `WORK_DIR` | Working directory | `.` |
-| `PROMPT_FILE` | Custom prompt template | `prompt.md` |
-| `SINGLE_USER` | Single-user mode | `false` |
-| `OAUTH_ENABLE` | Enable OAuth | `false` |
-| `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
-| `OAUTH_PORT` | OAuth server port | `8081` |
-| `XBOT_ENCRYPTION_KEY` | AES-256-GCM key (base64 32 bytes) for API keys/tokens | — |
-| `SANDBOX_MODE` | Sandbox mode (`docker`/`none`) | `docker` |
+| `LLM_RETRY_ATTEMPTS` | Retry count on LLM failure | `5` |
+| `LLM_RETRY_DELAY` | Initial retry delay | `1s` |
+| `LLM_RETRY_MAX_DELAY` | Max retry delay | `30s` |
+
+### Agent
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `AGENT_MAX_ITERATIONS` | Max tool-call iterations | `100` |
 | `AGENT_MAX_CONCURRENCY` | Max concurrent LLM calls | `3` |
 | `AGENT_MEMORY_WINDOW` | Memory consolidation trigger | `50` |
 | `AGENT_MAX_CONTEXT_TOKENS` | Max context tokens | `100000` |
-| `PPROF_ENABLE` | Enable pprof debug endpoint | `false` |
+| `AGENT_ENABLE_AUTO_COMPRESS` | Enable auto context compression | `true` |
+| `AGENT_COMPRESSION_THRESHOLD` | Token ratio to trigger compression | `0.7` |
+| `AGENT_CONTEXT_MODE` | Context management mode | — |
+| `AGENT_ENABLE_TOPIC_ISOLATION` | Enable topic partition isolation (experimental) | `false` |
+| `MAX_SUBAGENT_DEPTH` | SubAgent max nesting depth | `6` |
+| `SUBAGENT_LLM_TIMEOUT` | SubAgent single LLM call timeout | `3m` |
+
+### Memory
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MEMORY_PROVIDER` | Memory (`flat`/`letta`) | `flat` |
+| `LLM_EMBEDDING_PROVIDER` | Embedding provider (`openai`/`ollama`) | — |
+| `LLM_EMBEDDING_BASE_URL` | Embedding API URL | — |
+| `LLM_EMBEDDING_API_KEY` | Embedding API key | — |
+| `LLM_EMBEDDING_MODEL` | Embedding model name | — |
+| `LLM_EMBEDDING_MAX_TOKENS` | Embedding model max tokens | `2048` |
+
+### Channels
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `FEISHU_ENABLED` | Enable Feishu | `false` |
+| `FEISHU_APP_ID` | Feishu app ID | — |
+| `FEISHU_APP_SECRET` | Feishu app secret | — |
+| `FEISHU_ENCRYPT_KEY` | Feishu event encryption key | — |
+| `FEISHU_VERIFICATION_TOKEN` | Feishu verification token | — |
+| `FEISHU_ALLOW_FROM` | Allowed user open_id list (comma-separated) | — |
+| `FEISHU_DOMAIN` | Feishu domain for doc links | — |
+| `QQ_ENABLED` | Enable QQ | `false` |
+| `QQ_APP_ID` | QQ app ID | — |
+| `QQ_CLIENT_SECRET` | QQ client secret | — |
+| `QQ_ALLOW_FROM` | Allowed QQ openid list (comma-separated) | — |
+
+### Infrastructure
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WORK_DIR` | Working directory | `.` |
+| `PROMPT_FILE` | Custom prompt template | `prompt.md` |
+| `SINGLE_USER` | Single-user mode | `false` |
+| `SANDBOX_MODE` | Sandbox mode (`docker`/`none`) | `docker` |
+| `SANDBOX_DOCKER_IMAGE` | Docker sandbox image | `ubuntu:22.04` |
+| `SANDBOX_IDLE_TIMEOUT_MINUTES` | Sandbox idle timeout (0 to disable) | `30` |
+| `OAUTH_ENABLE` | Enable OAuth | `false` |
+| `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
+| `OAUTH_PORT` | OAuth server port | `8081` |
+| `OAUTH_BASE_URL` | OAuth callback base URL (public HTTPS) | — |
+| `XBOT_ENCRYPTION_KEY` | AES-256-GCM key (base64 32 bytes) | — |
 | `TAVILY_API_KEY` | Tavily web search API key | — |
+| `MCP_INACTIVITY_TIMEOUT` | MCP idle timeout | `30m` |
+| `MCP_CLEANUP_INTERVAL` | MCP cleanup scan interval | `5m` |
+| `SESSION_CACHE_TIMEOUT` | Session cache timeout | `24h` |
+| `STARTUP_NOTIFY_CHANNEL` | Auto-notify channel on startup | — |
+| `STARTUP_NOTIFY_CHAT_ID` | Auto-notify chat ID on startup | — |
+| `ADMIN_CHAT_ID` | Admin chat ID for sensitive ops | — |
+| `PPROF_ENABLE` | Enable pprof debug endpoint | `false` |
+| `PPROF_HOST` | pprof bind host | `localhost` |
+| `PPROF_PORT` | pprof port | `6060` |
+| `LOG_LEVEL` | Log level | `info` |
+| `LOG_FORMAT` | Log format | `json` |
+| `SERVER_HOST` | HTTP server bind address | `0.0.0.0` |
+| `SERVER_PORT` | HTTP server port | `8080` |
 
 ## Memory System
 
@@ -137,13 +196,15 @@ Auto-consolidation triggers at `AGENT_MEMORY_WINDOW` (default 50 messages).
 Skills use OpenClaw-style progressive loading:
 
 ```
-.claude/skills/
+.xbot/skills/
 └── my-skill/
     ├── SKILL.md          # Required: name + description
     ├── scripts/          # Optional
     ├── references/      # Optional
     └── assets/          # Optional
 ```
+
+Users can also install/publish shared skills via `/publish`, `/browse`, `/install`, `/uninstall`, and `/my` commands.
 
 ## MCP Support
 
@@ -174,7 +235,9 @@ Delegate tasks to sub-agents:
 SubAgent(task="...", role="code-reviewer")
 ```
 
-Predefined roles: `code-reviewer`
+Predefined roles: `code-reviewer`, `explorer`, `tester`
+
+Role definitions are stored in `.xbot/agents/`.
 
 ## Commands
 
@@ -183,7 +246,25 @@ Predefined roles: `code-reviewer`
 | `/new` | Archive memory and reset session |
 | `/version` | Show version |
 | `/help` | Show help |
-| `/prompt` | Show current prompt (dry run without calling LLM) |
+| `/prompt <query>` | Preview full prompt (dry run without calling LLM) |
+| `/set-llm` | Set custom LLM API (per-user) |
+| `/unset-llm` | Clear custom LLM configuration |
+| `/llm` | Show current LLM configuration |
+| `/models` | List available models from current API |
+| `/set-model <model>` | Set the model to use |
+| `/compress` | Manually trigger context compression |
+| `/context info` | Show token usage statistics |
+| `/context mode` | View/switch compression mode |
+| `/cancel` | Cancel the current processing request |
+| `!<command>` | Quick execute command (skip LLM, run directly in sandbox) |
+| `/publish` | Publish a skill to the shared marketplace |
+| `/unpublish` | Remove a published skill |
+| `/browse` | Browse available shared skills |
+| `/install` | Install a shared skill |
+| `/uninstall` | Uninstall a skill |
+| `/my` | List your installed/published skills |
+| `/settings` | User settings |
+| `/menu` | Show interactive menu |
 
 ## Deployment
 

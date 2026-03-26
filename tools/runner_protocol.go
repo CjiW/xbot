@@ -50,8 +50,5 @@ var ProtoErrorCodes = runnerproto.ProtoErrorCodes
 // ProtoErrorCode converts a Go error to a protocol error code.
 var ProtoErrorCode = runnerproto.ProtoErrorCode
 
-// wsFileThreshold is the size above which file transfer uses HTTP instead of WebSocket.
-const wsFileThreshold = runnerproto.WsFileThreshold
-
 // defaultRequestTimeout is the default timeout for non-exec operations.
 const defaultRequestTimeout = runnerproto.DefaultRequestTimeout

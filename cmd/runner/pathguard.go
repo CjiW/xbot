@@ -6,9 +6,17 @@ import (
 	"strings"
 )
 
+// fullControl disables all path restrictions when enabled via --full-control flag.
+var fullControl bool
+
 // validatePath checks that path is within workspace and returns a cleaned absolute path.
 // It resolves symlinks (filepath.EvalSymlinks) to prevent symlink-based path traversal.
+// When fullControl is true, all path checks are skipped.
 func validatePath(path, workspace string) error {
+	if fullControl {
+		return nil
+	}
+
 	// Clean the path first and make it absolute relative to workspace.
 	cleaned := filepath.Clean(path)
 	if !filepath.IsAbs(cleaned) {
@@ -26,16 +34,20 @@ func validatePath(path, workspace string) error {
 	if !strings.HasPrefix(real, workspace) {
 		return fmt.Errorf("path %q (resolved to %q) escapes workspace %q", path, real, workspace)
 	}
-	if real == workspace {
-		return fmt.Errorf("path cannot be the workspace root itself")
-	}
 	return nil
 }
 
 // safePath returns a cleaned, validated absolute path.
-// The returned path is always workspace-relative and safe from traversal attacks
-// (e.g., ../../etc/passwd is rejected by validatePath before reaching here).
+// When fullControl is true, returns the cleaned path without any restrictions.
 func safePath(path, workspace string) (string, error) {
+	if fullControl {
+		cleaned := filepath.Clean(path)
+		if !filepath.IsAbs(cleaned) {
+			cleaned = filepath.Join(workspace, cleaned)
+		}
+		return cleaned, nil
+	}
+
 	if err := validatePath(path, workspace); err != nil {
 		return "", err
 	}

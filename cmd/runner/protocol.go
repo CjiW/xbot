@@ -65,5 +65,4 @@ func protoErrorCode(err error) string {
 	return runnerproto.ProtoErrorCode(err)
 }
 
-const WsFileThreshold = runnerproto.WsFileThreshold
 const DefaultRequestTimeout = runnerproto.DefaultRequestTimeout

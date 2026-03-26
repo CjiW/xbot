@@ -22,10 +22,14 @@ type mockSandbox struct {
 	workspace string
 }
 
-func (m *mockSandbox) Name() string                                                         { return m.name }
-func (m *mockSandbox) Workspace(_ string) string                                           { return m.workspace }
-func (m *mockSandbox) Exec(_ context.Context, _ tools.ExecSpec) (*tools.ExecResult, error)  { return nil, fmt.Errorf("not implemented") }
-func (m *mockSandbox) ReadFile(_ context.Context, _ string, _ string) ([]byte, error)       { return nil, os.ErrNotExist }
+func (m *mockSandbox) Name() string              { return m.name }
+func (m *mockSandbox) Workspace(_ string) string { return m.workspace }
+func (m *mockSandbox) Exec(_ context.Context, _ tools.ExecSpec) (*tools.ExecResult, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockSandbox) ReadFile(_ context.Context, _ string, _ string) ([]byte, error) {
+	return nil, os.ErrNotExist
+}
 func (m *mockSandbox) WriteFile(_ context.Context, _ string, _ []byte, _ os.FileMode, _ string) error {
 	return nil
 }
@@ -35,14 +39,16 @@ func (m *mockSandbox) Stat(_ context.Context, _ string, _ string) (*tools.Sandbo
 func (m *mockSandbox) ReadDir(_ context.Context, _ string, _ string) ([]tools.DirEntry, error) {
 	return nil, os.ErrNotExist
 }
-func (m *mockSandbox) MkdirAll(_ context.Context, _ string, _ os.FileMode, _ string) error { return nil }
-func (m *mockSandbox) Remove(_ context.Context, _ string, _ string) error                  { return os.ErrNotExist }
-func (m *mockSandbox) RemoveAll(_ context.Context, _ string, _ string) error               { return nil }
-func (m *mockSandbox) GetShell(_ string, _ string) (string, error)                         { return "/bin/bash", nil }
-func (m *mockSandbox) Close() error                                                        { return nil }
-func (m *mockSandbox) CloseForUser(_ string) error                                         { return nil }
-func (m *mockSandbox) IsExporting(_ string) bool                                            { return false }
-func (m *mockSandbox) ExportAndImport(_ string) error                                       { return nil }
+func (m *mockSandbox) MkdirAll(_ context.Context, _ string, _ os.FileMode, _ string) error {
+	return nil
+}
+func (m *mockSandbox) Remove(_ context.Context, _ string, _ string) error    { return os.ErrNotExist }
+func (m *mockSandbox) RemoveAll(_ context.Context, _ string, _ string) error { return nil }
+func (m *mockSandbox) GetShell(_ string, _ string) (string, error)           { return "/bin/bash", nil }
+func (m *mockSandbox) Close() error                                          { return nil }
+func (m *mockSandbox) CloseForUser(_ string) error                           { return nil }
+func (m *mockSandbox) IsExporting(_ string) bool                             { return false }
+func (m *mockSandbox) ExportAndImport(_ string) error                        { return nil }
 
 // --- Mock LLM ---
 
@@ -673,9 +679,9 @@ func TestRun_DefaultToolExecutor_InheritsWorkspace(t *testing.T) {
 		SenderID:  "ou_test",
 
 		// Workspace fields (simulating SubAgent inheriting from parent)
-		WorkingDir:     "/work",
-		WorkspaceRoot:  "/work/users/ou_test",
-		Sandbox:      &mockSandbox{name: "docker", workspace: "/workspace"},
+		WorkingDir:    "/work",
+		WorkspaceRoot: "/work/users/ou_test",
+		Sandbox:       &mockSandbox{name: "docker", workspace: "/workspace"},
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		ReadOnlyRoots: []string{"/work/.xbot/skills"},
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
@@ -1099,9 +1105,9 @@ func TestBuildToolContext(t *testing.T) {
 		},
 
 		// 工作区 & 沙箱
-		WorkingDir:     "/work",
-		WorkspaceRoot:  "/work/users/ou_xxx",
-		Sandbox:      &mockSandbox{name: "docker", workspace: "/workspace"},
+		WorkingDir:    "/work",
+		WorkspaceRoot: "/work/users/ou_xxx",
+		Sandbox:       &mockSandbox{name: "docker", workspace: "/workspace"},
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		ReadOnlyRoots: []string{"/work/.xbot/skills"},
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox

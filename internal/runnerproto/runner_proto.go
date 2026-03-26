@@ -45,8 +45,8 @@ type RunnerMessage struct {
 // RegisterRequest is sent by the runner on first connection.
 type RegisterRequest struct {
 	UserID    string `json:"user_id"`
-	HTTPAddr  string `json:"http_addr"`
 	AuthToken string `json:"auth_token"`
+	Workspace string `json:"workspace,omitempty"` // Runner's workspace root directory
 }
 
 // ExecRequest requests command execution on the runner.
@@ -167,9 +167,6 @@ func MakeError(id string, code, message string) *RunnerMessage {
 func MakeOK(id string) *RunnerMessage {
 	return &RunnerMessage{ID: id, Type: ProtoOK}
 }
-
-// WsFileThreshold is the size above which file transfer uses HTTP instead of WebSocket.
-const WsFileThreshold = 4 * 1024 * 1024 // 4MB
 
 // DefaultRequestTimeout is the default timeout for non-exec operations.
 const DefaultRequestTimeout = 30 * time.Second

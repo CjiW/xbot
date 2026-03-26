@@ -11,7 +11,7 @@ import (
 // NoneSandbox implements Sandbox with direct os.* calls (no containerization).
 type NoneSandbox struct{}
 
-func (s *NoneSandbox) Name() string { return "none" }
+func (s *NoneSandbox) Name() string              { return "none" }
 func (s *NoneSandbox) Workspace(_ string) string { return "" }
 
 func (s *NoneSandbox) Close() error                        { return nil }
@@ -138,5 +138,3 @@ func (s *NoneSandbox) Remove(ctx context.Context, path string, userID string) er
 func (s *NoneSandbox) RemoveAll(ctx context.Context, path string, userID string) error {
 	return os.RemoveAll(path)
 }
-
-

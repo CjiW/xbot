@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,21 @@ import (
 
 // handleRequest dispatches an incoming request to the appropriate handler.
 func handleRequest(msg RunnerMessage, workspace string) *RunnerMessage {
+	resp := dispatch(msg, workspace)
+
+	if resp.Type == ProtoError {
+		var e ErrorResponse
+		if json.Unmarshal(resp.Body, &e) == nil {
+			log.Printf("← %s [id=%s] error: %s — %s", msg.Type, msg.ID, e.Code, e.Message)
+		}
+	} else if verboseLog {
+		log.Printf("← %s [id=%s] ok", msg.Type, msg.ID)
+	}
+
+	return resp
+}
+
+func dispatch(msg RunnerMessage, workspace string) *RunnerMessage {
 	switch msg.Type {
 	case "exec":
 		return handleExec(msg, workspace)
@@ -54,14 +70,18 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	var cmd *exec.Cmd
 	if req.Shell {
 		cmd = exec.CommandContext(ctx, "sh", "-c", req.Command)
+		if verboseLog {
+			log.Printf("  exec shell: %s  (dir=%s, timeout=%v)", req.Command, req.Dir, timeout)
+		}
 	} else {
 		args := req.Args
 		if len(args) == 0 {
-			// Non-shell mode requires explicit Args; strings.Fields doesn't handle quotes.
-			// Return an error instead of producing incorrect argument splitting.
 			return makeError(msg.ID, "EINVAL", "non-shell exec requires Args to be set explicitly")
 		}
 		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+		if verboseLog {
+			log.Printf("  exec: %s  (dir=%s, timeout=%v)", strings.Join(args, " "), req.Dir, timeout)
+		}
 	}
 	if cmd == nil {
 		return makeError(msg.ID, "EINVAL", "no command specified")
@@ -73,6 +93,8 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 			return makeError(msg.ID, "EPERM", err.Error())
 		}
 		cmd.Dir = filepath.Clean(req.Dir)
+	} else {
+		cmd.Dir = workspace
 	}
 	if len(req.Env) > 0 {
 		cmd.Env = append(os.Environ(), req.Env...)
@@ -85,7 +107,10 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start)
+
 	exitCode := 0
 	timedOut := false
 
@@ -96,6 +121,7 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 		if cmd.Process != nil {
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
+		log.Printf("  exec timed out after %v: %s", elapsed, req.Command)
 	} else if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -105,6 +131,8 @@ func handleExec(msg RunnerMessage, workspace string) *RunnerMessage {
 			return makeError(msg.ID, "EIO", "exec error: "+err.Error())
 		}
 	}
+
+	log.Printf("  exec done in %v  exit=%d  stdout=%dB  stderr=%dB", elapsed, exitCode, stdout.Len(), stderr.Len())
 
 	return makeResponse(msg.ID, "exec_result", ExecResultResponse{
 		Stdout:   stdout.String(),
@@ -127,6 +155,9 @@ func handleReadFile(msg RunnerMessage, workspace string) *RunnerMessage {
 	if err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
+	if verboseLog {
+		log.Printf("  read_file %s (%d bytes)", req.Path, len(data))
+	}
 	return makeResponse(msg.ID, "file_content", FileContentResponse{
 		Data: base64.StdEncoding.EncodeToString(data),
 	})
@@ -147,6 +178,9 @@ func handleWriteFile(msg RunnerMessage, workspace string) *RunnerMessage {
 	}
 	if err := os.WriteFile(path, data, os.FileMode(req.Perm)); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
+	}
+	if verboseLog {
+		log.Printf("  write_file %s (%d bytes)", req.Path, len(data))
 	}
 	return makeOK(msg.ID)
 }
@@ -199,6 +233,9 @@ func handleReadDir(msg RunnerMessage, workspace string) *RunnerMessage {
 			Size:  size,
 		})
 	}
+	if verboseLog {
+		log.Printf("  read_dir %s (%d entries)", req.Path, len(resp.Entries))
+	}
 	return makeResponse(msg.ID, "dir_entries", resp)
 }
 
@@ -213,6 +250,9 @@ func handleMkdirAll(msg RunnerMessage, workspace string) *RunnerMessage {
 	}
 	if err := os.MkdirAll(path, os.FileMode(req.Perm)); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
+	}
+	if verboseLog {
+		log.Printf("  mkdir_all %s", req.Path)
 	}
 	return makeOK(msg.ID)
 }
@@ -229,6 +269,9 @@ func handleRemove(msg RunnerMessage, workspace string) *RunnerMessage {
 	if err := os.Remove(path); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
 	}
+	if verboseLog {
+		log.Printf("  remove %s", req.Path)
+	}
 	return makeOK(msg.ID)
 }
 
@@ -243,6 +286,9 @@ func handleRemoveAll(msg RunnerMessage, workspace string) *RunnerMessage {
 	}
 	if err := os.RemoveAll(path); err != nil {
 		return makeError(msg.ID, protoErrorCode(err), err.Error())
+	}
+	if verboseLog {
+		log.Printf("  remove_all %s", req.Path)
 	}
 	return makeOK(msg.ID)
 }

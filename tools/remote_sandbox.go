@@ -1,15 +1,12 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,25 +33,24 @@ type RemoteSandboxSyncConfig struct {
 
 // runnerConnection represents a connected xbot-runner instance.
 type runnerConnection struct {
-	mu       sync.Mutex
-	wsConn   *websocket.Conn
-	httpAddr string // Runner's HTTP address (e.g., "http://192.168.1.1:12345")
-	userID   string
+	mu        sync.Mutex
+	wsConn    *websocket.Conn
+	userID    string
 	workspace string // Runner's workspace root directory
 }
 
 // RemoteSandbox implements the Sandbox interface via WebSocket communication
 // with xbot-runner instances running on users' machines.
 type RemoteSandbox struct {
-	connections    sync.Map // userID → *runnerConnection
-	wsServer       *http.Server
-	authToken      string
-	addr           string
-	pendingMu      sync.Mutex
-	pending        map[string]chan *RunnerMessage // request ID → response channel
-	upgrader       websocket.Upgrader             // per-instance upgrader with origin check
-	globalSkillDirs []string                      // global skill dirs to sync to runner on registration
-	agentsDir       string                        // global agents dir to sync to runner on registration
+	connections     sync.Map // userID → *runnerConnection
+	wsServer        *http.Server
+	authToken       string
+	addr            string
+	pendingMu       sync.Mutex
+	pending         map[string]chan *RunnerMessage // request ID → response channel
+	upgrader        websocket.Upgrader             // per-instance upgrader with origin check
+	globalSkillDirs []string                       // global skill dirs to sync to runner on registration
+	agentsDir       string                         // global agents dir to sync to runner on registration
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
@@ -80,9 +76,9 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig, syncCfg RemoteSandboxSyncConfig) 
 	}
 
 	rs := &RemoteSandbox{
-		authToken:       cfg.AuthToken,
-		addr:            cfg.Addr,
-		pending:         make(map[string]chan *RunnerMessage),
+		authToken: cfg.AuthToken,
+		addr:      cfg.Addr,
+		pending:   make(map[string]chan *RunnerMessage),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkOrigin,
 		},
@@ -166,15 +162,14 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 
 	rc := &runnerConnection{
-		wsConn:   conn,
-		httpAddr: reg.HTTPAddr,
-		userID:   reg.UserID,
+		wsConn:    conn,
+		userID:    reg.UserID,
 		workspace: reg.Workspace,
 	}
 	rs.connections.Store(reg.UserID, rc)
 	log.WithFields(log.Fields{
 		"user_id":   reg.UserID,
-		"http_addr": reg.HTTPAddr,
+		"workspace": reg.Workspace,
 	}).Info("Runner connected")
 
 	// Sync global skills and agents to the runner in the background
@@ -293,7 +288,6 @@ func (rs *RemoteSandbox) IsExporting(_ string) bool            { return false }
 func (rs *RemoteSandbox) ExportAndImport(_ string) error       { return nil }
 func (rs *RemoteSandbox) GetShell(_, _ string) (string, error) { return "/bin/sh", nil }
 
-
 func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 	rc, err := rs.getRunner(spec.UserID)
 	if err != nil {
@@ -352,18 +346,6 @@ func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]b
 		return nil, err
 	}
 
-	// Stat first to check size for HTTP fallback
-	statResp, err := rs.Stat(ctx, path, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Large file → HTTP
-	if statResp.Size > wsFileThreshold {
-		return rs.readFileHTTP(ctx, rc, path, userID)
-	}
-
-	// Small file → WebSocket
 	reqBody, _ := json.Marshal(ReadFileRequest{Path: path})
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoReadFile, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
@@ -385,41 +367,12 @@ func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]b
 	return base64.StdEncoding.DecodeString(fc.Data)
 }
 
-// readFileHTTP downloads a large file via HTTP from the runner.
-func (rs *RemoteSandbox) readFileHTTP(ctx context.Context, rc *runnerConnection, path, userID string) ([]byte, error) {
-	reqURL := fmt.Sprintf("%s/api/v1/files?path=%s&user_id=%s&token=%s",
-		rc.httpAddr, url.PathEscape(path), userID, rs.authToken)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create HTTP request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, os.ErrNotExist
-		}
-		return nil, fmt.Errorf("HTTP download failed (%d): %s", resp.StatusCode, string(body))
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, MaxSandboxFileSize))
-}
-
 func (rs *RemoteSandbox) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
 	rc, err := rs.getRunner(userID)
 	if err != nil {
 		return err
 	}
 
-	// Large file → HTTP
-	if len(data) > wsFileThreshold {
-		return rs.writeFileHTTP(ctx, rc, path, data, userID)
-	}
-
-	// Small file → WebSocket (base64)
 	reqBody, _ := json.Marshal(WriteFileRequest{
 		Path: path,
 		Data: base64.StdEncoding.EncodeToString(data),
@@ -434,27 +387,6 @@ func (rs *RemoteSandbox) WriteFile(ctx context.Context, path string, data []byte
 		var e ErrorResponse
 		json.Unmarshal(resp.Body, &e)
 		return fmt.Errorf("write file: %s", e.Message)
-	}
-	return nil
-}
-
-// writeFileHTTP uploads a large file via HTTP to the runner.
-func (rs *RemoteSandbox) writeFileHTTP(ctx context.Context, rc *runnerConnection, path string, data []byte, userID string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/files?path=%s&user_id=%s&token=%s",
-		rc.httpAddr, url.PathEscape(path), userID, rs.authToken)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("create HTTP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("HTTP upload: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("HTTP upload failed (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -582,10 +514,18 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 // Runs in a background goroutine; errors are logged but not fatal.
 func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 	if workspace == "" {
+		log.WithField("user_id", userID).Warn("syncToRunner: workspace is empty, skipping sync")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	log.WithFields(log.Fields{
+		"user_id":           userID,
+		"workspace":         workspace,
+		"global_skill_dirs": rs.globalSkillDirs,
+		"agents_dir":        rs.agentsDir,
+	}).Info("syncToRunner: starting sync")
 
 	// Sync each global skill directory
 	for _, skillDir := range rs.globalSkillDirs {

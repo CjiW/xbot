@@ -12,22 +12,22 @@ import (
 )
 
 // connectToServer establishes WebSocket connection and sends registration.
-func connectToServer(serverURL, userID, authToken string) (*websocket.Conn, error) {
+func connectToServer(serverURL, userID, authToken, workspace string) (*websocket.Conn, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse server URL: %w", err)
 	}
 
+	log.Printf("Dialing server %s ...", u.String())
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial server: %w", err)
 	}
 
-	// Send registration wrapped in RunnerMessage envelope.
-	// Server expects RunnerMessage{Type: "register", Body: <RegisterRequest JSON>}.
 	regBody, _ := json.Marshal(RegisterRequest{
 		UserID:    userID,
 		AuthToken: authToken,
+		Workspace: workspace,
 	})
 	regMsg, _ := json.Marshal(RunnerMessage{
 		Type:   "register",
@@ -39,22 +39,8 @@ func connectToServer(serverURL, userID, authToken string) (*websocket.Conn, erro
 		return nil, fmt.Errorf("send registration: %w", err)
 	}
 
+	log.Printf("Registration sent  user=%s  workspace=%s", userID, workspace)
 	return conn, nil
-}
-
-// sendRegistration sends an updated registration message (with HTTP address).
-func sendRegistration(conn *websocket.Conn, userID, authToken, httpAddr string) error {
-	regBody, _ := json.Marshal(RegisterRequest{
-		UserID:    userID,
-		HTTPAddr:  httpAddr,
-		AuthToken: authToken,
-	})
-	msg, _ := json.Marshal(RunnerMessage{
-		Type:   "register",
-		UserID: userID,
-		Body:   regBody,
-	})
-	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
 // runReadLoop reads messages from the server and dispatches to handlers.
@@ -63,14 +49,22 @@ func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}, wri
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("Read error: %v", err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("WebSocket read error: %v", err)
+			} else {
+				log.Printf("WebSocket closed: %v", err)
+			}
 			return
 		}
 
 		var msg RunnerMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("Invalid message: %v", err)
+			log.Printf("Invalid message from server: %v", err)
 			continue
+		}
+
+		if verboseLog {
+			log.Printf("→ %s [id=%s]", msg.Type, msg.ID)
 		}
 
 		resp := handleRequest(msg, workspace)
@@ -79,7 +73,7 @@ func runReadLoop(conn *websocket.Conn, workspace string, done chan struct{}, wri
 		err = conn.WriteMessage(websocket.TextMessage, data)
 		writeMu.Unlock()
 		if err != nil {
-			log.Printf("Write error: %v", err)
+			log.Printf("WebSocket write error: %v", err)
 			return
 		}
 	}

@@ -99,7 +99,6 @@ type Sandbox interface {
 	// === Export/Import (docker-specific) ===
 	IsExporting(userID string) bool
 	ExportAndImport(userID string) error
-
 }
 
 // WalkSandboxDir recursively walks a sandbox directory, equivalent to filepath.WalkDir.

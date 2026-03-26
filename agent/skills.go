@@ -18,9 +18,9 @@ import (
 // Skills are loaded on-demand by the LLM using the Read tool (OpenClaw-style progressive disclosure).
 // Skill creation/deletion is done via Edit/Shell tools — no dedicated Skill tool needed.
 type SkillStore struct {
-	globalDirs     []string      // 全局只读 skills 根目录
-	workDir        string        // 用于派生用户私有 skills 目录
-	sandbox        tools.Sandbox // Sandbox 实例（nil 表示无沙箱）
+	globalDirs []string      // 全局只读 skills 根目录
+	workDir    string        // 用于派生用户私有 skills 目录
+	sandbox    tools.Sandbox // Sandbox 实例（nil 表示无沙箱）
 	// per-user TTL cache (5 minutes). Uses map to support concurrent multi-user access
 	// without cache thrashing (each user's cache is independent).
 	mu         sync.RWMutex

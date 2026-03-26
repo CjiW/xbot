@@ -57,7 +57,6 @@ type RunConfig struct {
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）
 	WorkspaceRoot    string   // 用户可读写工作区根目录（宿主机路径）
-	SandboxWorkDir   string   // 沙箱内工作目录（如 /workspace）
 	ReadOnlyRoots    []string // 额外只读目录
 	SkillsDirs       []string // 全局 skill 目录列表
 	AgentsDir        string
@@ -1078,7 +1077,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if r.result != nil && r.result.Summary != "" {
 					offloadContent = r.result.Summary
 				}
-				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, cfg.SandboxWorkDir, cfg.OriginUserID)
+				offloaded, wasOffloaded := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, tc.Name, tc.Arguments, offloadContent, cfg.WorkspaceRoot, "", cfg.OriginUserID)
 				if wasOffloaded {
 					content = offloaded.Summary
 					GlobalMetrics.OffloadEvents.Add(1)
@@ -1124,7 +1123,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// ReadPath from LLM is in sandbox format (e.g. /workspace/src/main.go).
 			// os.ReadFile runs in xbot host process, so we pass both workspaceRoot and
 			// sandboxWorkDir to convert sandbox→host paths before reading.
-			staleIDs := cfg.OffloadStore.InvalidateStaleReads(ctx, offloadSessionKey, cfg.WorkspaceRoot, cfg.SandboxWorkDir, cfg.OriginUserID)
+			staleIDs := cfg.OffloadStore.InvalidateStaleReads(ctx, offloadSessionKey, cfg.WorkspaceRoot, "", cfg.OriginUserID)
 			if len(staleIDs) > 0 {
 				log.Ctx(ctx).WithFields(log.Fields{
 					"stale_count": len(staleIDs),
@@ -1324,7 +1323,7 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 }
 
 // sandboxReadOnlyRoots 将 host 路径的 ReadOnlyRoots 转换为 sandbox 路径。
-// 仅在 SandboxWorkDir 非空且与 WorkspaceRoot 不同时进行转换。
+// 仅在 sandboxWorkDir 非空且与 WorkspaceRoot 不同时进行转换。
 func sandboxReadOnlyRoots(hostRoots []string, sandboxWorkDir, workspaceRoot string) []string {
 	if sandboxWorkDir == "" || sandboxWorkDir == workspaceRoot {
 		return hostRoots
@@ -1357,9 +1356,8 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		// 工作区 & 沙箱
 		WorkingDir:           cfg.WorkingDir,
 		WorkspaceRoot:        cfg.WorkspaceRoot,
-		SandboxWorkDir:       cfg.SandboxWorkDir,
 		ReadOnlyRoots:        cfg.ReadOnlyRoots,
-		SandboxReadOnlyRoots: sandboxReadOnlyRoots(cfg.ReadOnlyRoots, cfg.SandboxWorkDir, cfg.WorkspaceRoot),
+		SandboxReadOnlyRoots: sandboxReadOnlyRoots(cfg.ReadOnlyRoots, "", cfg.WorkspaceRoot),
 		SkillsDirs:           cfg.SkillsDirs,
 		AgentsDir:            cfg.AgentsDir,
 		MCPConfigPath:        cfg.MCPConfigPath,
@@ -1423,9 +1421,10 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		// SetCurrentDir must ALWAYS be set so Cd can persist CWD even when InitialCWD
 		// starts empty (e.g., parent Agent never Cd'd before spawning SubAgent).
 		cwd := cfg.InitialCWD
-		if cwd != "" && cfg.SandboxEnabled && cfg.WorkspaceRoot != "" && cfg.SandboxWorkDir != "" {
-			if strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
-				cwd = cfg.SandboxWorkDir + cwd[len(cfg.WorkspaceRoot):]
+		if cwd != "" && cfg.Sandbox != nil && cfg.Sandbox.Name() != "none" && cfg.WorkspaceRoot != "" {
+			sandboxWS := cfg.Sandbox.Workspace(cfg.OriginUserID)
+			if sandboxWS != "" && strings.HasPrefix(cwd, cfg.WorkspaceRoot) {
+				cwd = sandboxWS + cwd[len(cfg.WorkspaceRoot):]
 			}
 		}
 		if cwd != "" {

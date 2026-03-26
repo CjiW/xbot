@@ -79,9 +79,9 @@ func TestSandboxBaseDir(t *testing.T) {
 		want string
 	}{
 		{"nil ctx", nil, ""},
-		{"empty SandboxWorkDir (none mode)", &ToolContext{SandboxWorkDir: ""}, ""},
-		{"custom SandboxWorkDir", &ToolContext{SandboxWorkDir: "/data/ws"}, "/data/ws"},
-		{"docker default", &ToolContext{SandboxWorkDir: "/workspace"}, "/workspace"},
+		{"none sandbox", &ToolContext{Sandbox: &mockSandbox{name: "none", workspace: ""}}, ""},
+		{"custom sandbox workspace", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/data/ws"}}, "/data/ws"},
+		{"docker default", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/workspace"}}, "/workspace"},
 	}
 
 	for _, tt := range tests {
@@ -127,7 +127,7 @@ func TestResolveReadPath_SandboxPathConversion(t *testing.T) {
 
 	ctx := &ToolContext{
 		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
-		SandboxWorkDir: sandboxDir,
+		Sandbox:        &mockSandbox{name: "docker", workspace: sandboxDir},
 		SandboxEnabled: true,
 	}
 
@@ -156,7 +156,7 @@ func TestResolveWritePath_SandboxPathConversion(t *testing.T) {
 
 	ctx := &ToolContext{
 		WorkspaceRoot:  filepath.Join(root, "host-workspace"),
-		SandboxWorkDir: sandboxDir,
+		Sandbox:        &mockSandbox{name: "docker", workspace: sandboxDir},
 		SandboxEnabled: true,
 	}
 

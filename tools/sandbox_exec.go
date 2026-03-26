@@ -1,163 +1,181 @@
 package tools
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 )
 
-// RunInSandbox 在沙箱容器内执行命令并返回输出
-// 当未启用沙箱时返回错误
+// RunInSandbox 在沙箱内执行命令并返回输出。
+// 当沙箱为 none 模式时返回错误。
 func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, error) {
-	if ctx == nil || !ctx.SandboxEnabled {
+	sandbox := GetSandbox()
+	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
 
-	workspaceRoot := ctx.WorkspaceRoot
-	if workspaceRoot == "" {
-		return "", fmt.Errorf("workspace root not set")
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
 	}
 
-	// 使用 OriginUserID 作为沙箱用户标识（基于原始用户隔离）
-	sandboxUserID := ctx.OriginUserID
-	if sandboxUserID == "" {
-		sandboxUserID = ctx.SenderID // fallback：兼容旧数据
+	spec := ExecSpec{
+		Command: command,
+		Args:    append([]string{command}, args...),
+		Shell:   false,
+		Timeout: 30 * time.Second,
+		UserID:  userID,
 	}
-	sandbox := GetSandbox()
-	cmdName, cmdArgs, err := sandbox.Wrap(command, args, nil, workspaceRoot, sandboxUserID)
+	setSandboxDir(ctx, sandbox, &spec)
+
+	result, err := sandbox.Exec(ctx.Ctx, spec)
 	if err != nil {
-		return "", fmt.Errorf("wrap command for sandbox: %w", err)
+		return "", err
 	}
-
-	cmd := exec.CommandContext(ctx.Ctx, cmdName, cmdArgs...)
-	cmd.Dir = workspaceRoot
-	cmd.Stdin = nil
-
-	// 使用平台特定的进程属性设置（Setpgid），超时时可以杀掉整棵进程树
-	setProcessAttrs(cmd)
-	// Cancel 回调：context 超时/取消时 kill 整个进程组
-	cmd.Cancel = func() error {
-		killProcess(cmd)
-		return nil
-	}
-	// WaitDelay：Cancel 后最多等 5 秒让 I/O drain，然后强制关闭 pipe 使 Wait 返回
-	cmd.WaitDelay = 5 * time.Second
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		output := stdout.String()
-		if stderr.Len() > 0 {
-			output += "\n[stderr] " + stderr.String()
-		}
-		return output, fmt.Errorf("sandbox command failed: %w, output: %s", err, output)
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
+	return formatExecResult(result), nil
 }
 
-// RunInSandboxWithShell 在沙箱容器内执行 shell 命令并返回输出
-// 使用 login shell 自动加载环境变量配置文件
+// RunInSandboxWithShell 在沙箱内执行 shell 命令并返回输出。
+// 使用 login shell 自动加载环境变量配置文件。
 func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
-	if ctx == nil || !ctx.SandboxEnabled {
+	sandbox := GetSandbox()
+	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
 
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
+	}
+
+	// 获取默认 shell
 	workspaceRoot := ctx.WorkspaceRoot
 	if workspaceRoot == "" {
-		return "", fmt.Errorf("workspace root not set")
+		workspaceRoot = ctx.WorkingDir
 	}
-
-	// 使用 OriginUserID 作为沙箱用户标识（基于原始用户隔离）
-	sandboxUserID := ctx.OriginUserID
-	if sandboxUserID == "" {
-		sandboxUserID = ctx.SenderID // fallback：兼容旧数据
-	}
-	sandbox := GetSandbox()
-
-	// 获取容器默认 shell 并使用 login shell 执行命令
-	shell, err := sandbox.GetShell(sandboxUserID, workspaceRoot)
+	shell, err := sandbox.GetShell(userID, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	// 使用 login shell 自动加载环境配置
-	return RunInSandbox(ctx, shell, "-l", "-c", shellCmd)
+	spec := ExecSpec{
+		Command: shell,
+		Args:    []string{shell, "-l", "-c", shellCmd},
+		Shell:   false,
+		Timeout: 30 * time.Second,
+		UserID:  userID,
+	}
+	setSandboxDir(ctx, sandbox, &spec)
+
+	result, err := sandbox.Exec(ctx.Ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	return formatExecResult(result), nil
 }
 
-// RunInSandboxRaw 在沙箱容器内执行命令并返回原始输出（不做 TrimSpace）
-// 适用于需要保留文件原始内容的场景（如 cat 读取文件）
+// RunInSandboxRaw 在沙箱内执行命令并返回原始输出（不做 TrimSpace）。
+// 适用于需要保留文件原始内容的场景（如 cat 读取文件）。
 func RunInSandboxRaw(ctx *ToolContext, command string, args ...string) (string, error) {
-	if ctx == nil || !ctx.SandboxEnabled {
+	sandbox := GetSandbox()
+	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
 
-	workspaceRoot := ctx.WorkspaceRoot
-	if workspaceRoot == "" {
-		return "", fmt.Errorf("workspace root not set")
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
 	}
 
-	sandboxUserID := ctx.OriginUserID
-	if sandboxUserID == "" {
-		sandboxUserID = ctx.SenderID
+	spec := ExecSpec{
+		Command: command,
+		Args:    append([]string{command}, args...),
+		Shell:   false,
+		Timeout: 30 * time.Second,
+		UserID:  userID,
 	}
-	sandbox := GetSandbox()
-	cmdName, cmdArgs, err := sandbox.Wrap(command, args, nil, workspaceRoot, sandboxUserID)
+	setSandboxDir(ctx, sandbox, &spec)
+
+	result, err := sandbox.Exec(ctx.Ctx, spec)
 	if err != nil {
-		return "", fmt.Errorf("wrap command for sandbox: %w", err)
+		return "", err
 	}
-
-	cmd := exec.CommandContext(ctx.Ctx, cmdName, cmdArgs...)
-	cmd.Dir = workspaceRoot
-	cmd.Stdin = nil
-
-	setProcessAttrs(cmd)
-	cmd.Cancel = func() error {
-		killProcess(cmd)
-		return nil
-	}
-	cmd.WaitDelay = 5 * time.Second
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		output := stdout.String()
-		if stderr.Len() > 0 {
-			output += "\n[stderr] " + stderr.String()
-		}
-		return output, fmt.Errorf("sandbox command failed: %w, output: %s", err, output)
-	}
-
-	return stdout.String(), nil
+	return formatExecResultRaw(result), nil
 }
 
-// RunInSandboxRawWithShell 在沙箱容器内执行 shell 命令并返回原始输出（不做 TrimSpace）
+// RunInSandboxRawWithShell 在沙箱内执行 shell 命令并返回原始输出（不做 TrimSpace）。
 func RunInSandboxRawWithShell(ctx *ToolContext, shellCmd string) (string, error) {
-	if ctx == nil || !ctx.SandboxEnabled {
+	sandbox := GetSandbox()
+	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
+	}
+
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
 	}
 
 	workspaceRoot := ctx.WorkspaceRoot
 	if workspaceRoot == "" {
-		return "", fmt.Errorf("workspace root not set")
+		workspaceRoot = ctx.WorkingDir
 	}
-
-	sandboxUserID := ctx.OriginUserID
-	if sandboxUserID == "" {
-		sandboxUserID = ctx.SenderID
-	}
-	sandbox := GetSandbox()
-
-	shell, err := sandbox.GetShell(sandboxUserID, workspaceRoot)
+	shell, err := sandbox.GetShell(userID, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	return RunInSandboxRaw(ctx, shell, "-l", "-c", shellCmd)
+	spec := ExecSpec{
+		Command: shell,
+		Args:    []string{shell, "-l", "-c", shellCmd},
+		Shell:   false,
+		Timeout: 30 * time.Second,
+		UserID:  userID,
+	}
+	setSandboxDir(ctx, sandbox, &spec)
+
+	result, err := sandbox.Exec(ctx.Ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	return formatExecResultRaw(result), nil
+}
+
+// setSandboxDir 根据 sandbox 模式设置 ExecSpec 的 Dir 和 Workspace 字段。
+func setSandboxDir(ctx *ToolContext, sandbox Sandbox, spec *ExecSpec) {
+	switch sandbox.Name() {
+	case "docker":
+		spec.Workspace = ctx.WorkspaceRoot
+		spec.Dir = ctx.Sandbox.Workspace(ctx.OriginUserID)
+	case "remote":
+		// 不设 Dir — runner 默认使用其 workspace
+	case "none":
+		spec.Dir = ctx.WorkspaceRoot
+	}
+}
+
+// formatExecResult 格式化 ExecResult 为 TrimSpace 后的字符串。
+// 非零退出码时返回 error。
+func formatExecResult(result *ExecResult) string {
+	output := strings.TrimSpace(result.Stdout)
+	if result.Stderr != "" {
+		if output != "" {
+			output += "\n[stderr] " + result.Stderr
+		} else {
+			output = "[stderr] " + result.Stderr
+		}
+	}
+	return output
+}
+
+// formatExecResultRaw 格式化 ExecResult 为原始字符串（不做 TrimSpace）。
+func formatExecResultRaw(result *ExecResult) string {
+	output := result.Stdout
+	if result.Stderr != "" {
+		if output != "" {
+			output += "\n[stderr] " + result.Stderr
+		} else {
+			output = "[stderr] " + result.Stderr
+		}
+	}
+	return output
 }

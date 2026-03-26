@@ -11,9 +11,8 @@ func defaultWorkspaceRoot(ctx *ToolContext) string {
 	if ctx == nil {
 		return ""
 	}
-	// 沙箱模式下，xbot 运行在容器内，应以容器内可见的 SandboxWorkDir 为校验根
-	if ctx.SandboxEnabled && ctx.SandboxWorkDir != "" {
-		return ctx.SandboxWorkDir
+	if ctx.Sandbox != nil && ctx.Sandbox.Name() != "none" {
+		return ctx.Sandbox.Workspace(ctx.OriginUserID)
 	}
 	if ctx.WorkspaceRoot != "" {
 		return ctx.WorkspaceRoot
@@ -165,19 +164,24 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 }
 
 // sandboxBaseDir 返回沙箱内的工作目录前缀。
-// 返回 ctx.SandboxWorkDir（docker 模式下通常为 "/workspace"）。
+// 返回 Sandbox.Workspace(userID)（docker 模式下通常为 "/workspace"）。
 // 返回空字符串表示无沙箱路径约束（none 模式），调用方应跳过路径校验。
 func sandboxBaseDir(ctx *ToolContext) string {
-	if ctx != nil {
-		return ctx.SandboxWorkDir
+	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() != "none" {
+		return ctx.Sandbox.Workspace(ctx.OriginUserID)
 	}
 	return ""
 }
 
-// shouldUseSandbox 判断是否应使用 Sandbox 访问文件系统。
-// 仅在 Sandbox 可用且非 none 模式（SandboxWorkDir != ""）时返回 true。
+// ShouldUseSandbox 判断是否应使用 Sandbox 访问文件系统。
+// 仅在 Sandbox 可用且非 none 模式时返回 true。
+func ShouldUseSandbox(ctx *ToolContext) bool {
+	return ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() != "none"
+}
+
+// shouldUseSandbox is the unexported alias used within the tools package.
 func shouldUseSandbox(ctx *ToolContext) bool {
-	return ctx != nil && ctx.Sandbox != nil && ctx.SandboxWorkDir != ""
+	return ShouldUseSandbox(ctx)
 }
 
 // resolveSandboxCWD 将 CurrentDir 解析为沙箱内的绝对路径。

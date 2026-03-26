@@ -131,6 +131,7 @@ func walkSandboxDir(ctx context.Context, sb Sandbox, dir, relBase, userID string
 	}
 	return nil
 }
+
 // SandboxSyncer is an optional interface that Sandbox implementations can implement
 // to support on-demand sync of global skills/agents (e.g., remote sandbox).
 type SandboxSyncer interface {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,8 +219,9 @@ type WsToolProgress struct {
 }
 
 type wsClientMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Type    string   `json:"type"`
+	Content string   `json:"content"`
+	FileIDs []string `json:"file_ids,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +431,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	senderID := "web:" + strconv.Itoa(si.userID)
+	senderID := "web-" + strconv.Itoa(si.userID)
 
 	client := &Client{
 		conn:   conn,
@@ -549,6 +551,13 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		}
 
 		// Send to message bus
+		var mediaPaths []string
+		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
+			for _, fid := range msg.FileIDs {
+				// Files are stored at {uploadDir}/web/{fileID}
+				mediaPaths = append(mediaPaths, filepath.Join(wc.uploadDir, "web", fid))
+			}
+		}
 		wc.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "web",
 			SenderID:   c.userID,
@@ -556,6 +565,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			ChatID:     chatID,
 			ChatType:   "p2p",
 			Content:    msg.Content,
+			Media:      mediaPaths,
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			From:       bus.NewIMAddress("web", c.userID),

@@ -41,7 +41,7 @@ export default function TiptapEditor({ onSend, disabled, connected }: TiptapEdit
     content: '',
     editorProps: {
       attributes: {
-        class: 'tiptap-editor prose prose-invert prose-sm max-w-none focus:outline-none',
+        class: 'tiptap-editor max-w-none focus:outline-none',
       },
       handleKeyDown: (_view, event) => {
         if (event.key === 'Enter' && !event.shiftKey) {

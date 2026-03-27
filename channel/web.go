@@ -7,8 +7,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +21,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Frontend static files are embedded via web_embed.go (variable webDistFS)
+// Frontend static files are served from an external directory (set via SetStaticDir).
+// No go:embed — frontend is deployed independently.
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -226,8 +227,8 @@ type WebChannel struct {
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 
-	// Static files (embedded)
-	staticFS fs.FS
+	// Static files (external directory)
+	staticDir string
 }
 
 type sessionInfo struct {
@@ -248,9 +249,9 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 	}
 }
 
-// SetStaticFS sets the embedded filesystem for serving the frontend
-func (wc *WebChannel) SetStaticFS(f fs.FS) {
-	wc.staticFS = f
+// SetStaticDir sets the directory for serving frontend static files.
+func (wc *WebChannel) SetStaticDir(dir string) {
+	wc.staticDir = dir
 }
 
 func (wc *WebChannel) Name() string { return "web" }
@@ -275,7 +276,7 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 
 	// Static files
-	if wc.staticFS != nil {
+	if wc.staticDir != "" {
 		mux.HandleFunc("/", wc.handleStatic)
 	}
 
@@ -494,29 +495,27 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 // ---------------------------------------------------------------------------
 
 func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
-	if wc.staticFS == nil {
+	if wc.staticDir == "" {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Try to serve the file
 	path := r.URL.Path
 	if path == "/" {
 		path = "/index.html"
 	}
 
 	// Try exact path
-	f, err := wc.staticFS.Open(strings.TrimPrefix(path, "/"))
-	if err == nil {
-		f.Close()
-		http.FileServer(http.FS(wc.staticFS)).ServeHTTP(w, r)
+	fullPath := wc.staticDir + strings.TrimPrefix(path, "/")
+	if _, err := os.Stat(fullPath); err == nil {
+		http.FileServer(http.Dir(wc.staticDir)).ServeHTTP(w, r)
 		return
 	}
 
 	// SPA fallback: serve index.html for non-file paths
 	if !strings.Contains(path, ".") {
 		r.URL.Path = "/"
-		http.FileServer(http.FS(wc.staticFS)).ServeHTTP(w, r)
+		http.FileServer(http.Dir(wc.staticDir)).ServeHTTP(w, r)
 		return
 	}
 

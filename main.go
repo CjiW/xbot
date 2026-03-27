@@ -276,7 +276,10 @@ func main() {
 				Port: cfg.Web.Port,
 				DB:   webDB,
 			}, msgBus)
-			webCh.SetStaticFS(WebStaticFS())
+			if cfg.Web.StaticDir != "" {
+				webCh.SetStaticDir(cfg.Web.StaticDir)
+			}
+			disp.Register(webCh)
 			disp.Register(webCh)
 		} else {
 			log.Warn("Web channel enabled but no database available, skipping")

@@ -74,7 +74,9 @@ export default function TiptapEditor({ onSend, disabled, connected }: TiptapEdit
 
   return (
     <div className="tiptap-wrapper">
-      <EditorContent editor={editor} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <EditorContent editor={editor} />
+      </div>
       <button
         onClick={handleSend}
         disabled={!connected || !editor?.isEditable || !editor.getText().trim()}

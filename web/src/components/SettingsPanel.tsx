@@ -89,7 +89,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
   const [fontSize, setFontSize] = useState<FontSize>(() => lsGet('font_size', DEFAULT_SETTINGS.font_size))
   const [nickname, setNickname] = useState<string>(() => lsGet('nickname', DEFAULT_SETTINGS.nickname))
   const [language, setLanguage] = useState<Language>(() => lsGet('language', DEFAULT_SETTINGS.language))
-  const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
 
   // Load settings from server on mount
@@ -100,7 +99,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
       setFontSize(s.font_size)
       setNickname(s.nickname)
       setLanguage(s.language)
-      setLoaded(true)
     })
   }, [open])
 

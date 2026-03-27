@@ -22,11 +22,6 @@ type SettingsCardOpts struct {
 	AgentMarketPage int
 }
 
-var contextModeLabels = map[string]string{
-	"phase1": "双视图压缩",
-	"none":   "禁用压缩",
-}
-
 // BuildSettingsCard constructs an interactive Feishu card JSON for settings.
 func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string, opts ...SettingsCardOpts) (map[string]any, error) {
 	var o SettingsCardOpts
@@ -47,7 +42,7 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 
 	switch tab {
 	case "general":
-		elements = append(elements, f.buildGeneralTabContent()...)
+		elements = append(elements, f.buildGeneralTabContent(senderID)...)
 	case "model":
 		elements = append(elements, f.buildModelTabContent(ctx, senderID)...)
 	case "market":
@@ -98,23 +93,6 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	switch action {
 	case "settings_tab":
 		return f.BuildSettingsCard(ctx, senderID, chatID, parsed["tab"])
-
-	case "settings_context_mode":
-		mode := parsed["mode"]
-		if mode == "" {
-			if opt, ok := actionData["selected_option"].(string); ok {
-				mode = opt
-			}
-		}
-		if mode == "" {
-			return nil, fmt.Errorf("missing mode")
-		}
-		if f.settingsCallbacks.ContextModeSet != nil {
-			if err := f.settingsCallbacks.ContextModeSet(mode); err != nil {
-				return nil, fmt.Errorf("切换失败: %v", err)
-			}
-		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
 	case "settings_set_model":
 		model := parsed["model"]
@@ -341,58 +319,29 @@ func buildTabButtons(currentTab string) []map[string]any {
 	return []map[string]any{wrapButtonsInColumns(buttons)}
 }
 
-func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
+func (f *FeishuChannel) buildGeneralTabContent(senderID string) []map[string]any {
 	var elements []map[string]any
 
-	currentMode := "phase1"
-	if f.settingsCallbacks.ContextModeGet != nil {
-		currentMode = f.settingsCallbacks.ContextModeGet()
-	}
-
-	modeLabel := contextModeLabels[currentMode]
-	if modeLabel == "" {
-		modeLabel = currentMode
-	}
-
-	var modeOptions []map[string]any
-	for _, m := range []struct{ value, label string }{
-		{"phase1", "双视图压缩"},
-		{"none", "禁用压缩"},
-	} {
-		modeOptions = append(modeOptions, map[string]any{
-			"text":  map[string]any{"tag": "plain_text", "content": m.label},
-			"value": m.value,
-		})
-	}
-
+	// Remote Runner section
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**上下文管理**",
+		"content": "**远程 Runner**",
 	})
+	if f.settingsCallbacks.RunnerConnectCmdGet != nil {
+		connectCmd := f.settingsCallbacks.RunnerConnectCmdGet(senderID)
+		if connectCmd != "" {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("在本地机器上运行以下命令连接远程沙箱：\n```\n%s\n```", connectCmd),
+			})
+		} else {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "远程 Runner 功能未启用，请设置 `SANDBOX_PUBLIC_URL`。",
+			})
+		}
+	}
 
-	elements = append(elements, buildSettingRow(
-		"压缩模式",
-		modeLabel,
-		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_context_mode",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模式..."},
-			"initial_option": currentMode,
-			"options":        modeOptions,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_context_mode",
-				}),
-			},
-		},
-	))
-
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": "**双视图**：摘要+尾部原文 · **渐进**：渐进式智能压缩 · **禁用**：不自动压缩",
-	})
-
-	// Sandbox cleanup section
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",

@@ -79,6 +79,9 @@ type SettingsCallbacks struct {
 	LLMGetPersonalConcurrency func(senderID string) int
 	// LLMSetPersonalConcurrency 设置用户个人 LLM 并发上限
 	LLMSetPersonalConcurrency func(senderID string, personal int) error
+
+	// RunnerConnectCmdGet 返回远程 Runner 连接命令（空字符串表示未启用）
+	RunnerConnectCmdGet func(senderID string) string
 }
 
 // FeishuChannel 飞书渠道实现

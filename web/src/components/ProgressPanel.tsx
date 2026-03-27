@@ -92,14 +92,14 @@ export default function ProgressPanel({ progress, loading }: ProgressPanelProps)
         </div>
 
         {/* Tool list */}
-        {(progress.active_tools.length > 0 || progress.completed_tools.length > 0) && (
+        {((progress.active_tools?.length ?? 0) > 0 || (progress.completed_tools?.length ?? 0) > 0) && (
           <div className="py-1 divide-y divide-slate-700/30">
             {/* Active tools first */}
-            {progress.active_tools.map((tool) => (
+            {(progress.active_tools ?? []).map((tool) => (
               <ToolItem key={tool.name} tool={tool} />
             ))}
             {/* Completed tools */}
-            {progress.completed_tools.map((tool) => (
+            {(progress.completed_tools ?? []).map((tool) => (
               <ToolItem key={tool.name} tool={tool} />
             ))}
           </div>

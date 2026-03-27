@@ -280,7 +280,6 @@ func main() {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
 			}
 			disp.Register(webCh)
-			disp.Register(webCh)
 		} else {
 			log.Warn("Web channel enabled but no database available, skipping")
 		}

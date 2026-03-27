@@ -1,8 +1,10 @@
 package channel
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -82,4 +84,87 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages})
+}
+
+// ---------------------------------------------------------------------------
+// Settings API
+// ---------------------------------------------------------------------------
+
+type settingsResponse struct {
+	OK       bool              `json:"ok"`
+	Settings map[string]string `json:"settings,omitempty"`
+	Error    string            `json:"error,omitempty"`
+}
+
+type updateSettingsRequest struct {
+	Settings map[string]string `json:"settings"`
+}
+
+// handleSettings handles GET/PUT /api/settings
+func (wc *WebChannel) handleSettings(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, settingsResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		wc.handleGetSettings(w, r, senderID)
+	case http.MethodPut:
+		wc.handleUpdateSettings(w, r, senderID)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGetSettings returns all settings for the current user
+func (wc *WebChannel) handleGetSettings(w http.ResponseWriter, r *http.Request, senderID string) {
+	rows, err := wc.db.Query(
+		"SELECT key, value FROM user_settings WHERE channel = 'web' AND sender_id = ?", senderID,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, settingsResponse{OK: false, Error: "query failed"})
+		return
+	}
+	defer rows.Close()
+
+	settings := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			continue
+		}
+		settings[k] = v
+	}
+
+	writeJSON(w, http.StatusOK, settingsResponse{OK: true, Settings: settings})
+}
+
+// handleUpdateSettings upserts settings for the current user
+func (wc *WebChannel) handleUpdateSettings(w http.ResponseWriter, r *http.Request, senderID string) {
+	var req updateSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, settingsResponse{OK: false, Error: "invalid request body"})
+		return
+	}
+
+	if len(req.Settings) == 0 {
+		writeJSON(w, http.StatusBadRequest, settingsResponse{OK: false, Error: "no settings provided"})
+		return
+	}
+
+	now := time.Now().Unix()
+	for k, v := range req.Settings {
+		_, err := wc.db.Exec(
+			"INSERT OR REPLACE INTO user_settings (channel, sender_id, key, value, updated_at) VALUES ('web', ?, ?, ?, ?)",
+			senderID, k, v, now,
+		)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, settingsResponse{OK: false, Error: "update failed"})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, settingsResponse{OK: true})
 }

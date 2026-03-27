@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import ProgressPanel from './components/ProgressPanel'
 import type { WsProgressPayload } from './components/ProgressPanel'
+import AssistantTurn from './components/AssistantTurn'
 import TiptapEditor from './components/TiptapEditor'
-import { getCodeBlockProps } from './components/CodeBlock'
 import SettingsPanel from './components/SettingsPanel'
 import FileUpload, { uploadFile, usePasteUpload, type PendingFile } from './components/FileUpload'
 
@@ -19,13 +17,37 @@ interface Message {
   ts?: number
 }
 
-const codeBlockComponents = getCodeBlockProps()
-
 function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+// --- Turn-based message grouping (Codex style) ---
+type Turn =
+  | { type: 'user'; message: Message }
+  | { type: 'assistant'; messages: Message[] }
+
+function groupMessagesIntoTurns(messages: Message[]): Turn[] {
+  const turns: Turn[] = []
+  let currentAssistant: Message[] = []
+
+  for (const msg of messages) {
+    if (msg.type === 'user') {
+      if (currentAssistant.length > 0) {
+        turns.push({ type: 'assistant', messages: currentAssistant })
+        currentAssistant = []
+      }
+      turns.push({ type: 'user', message: msg })
+    } else {
+      currentAssistant.push(msg)
+    }
+  }
+  if (currentAssistant.length > 0) {
+    turns.push({ type: 'assistant', messages: currentAssistant })
+  }
+  return turns
 }
 
 function formatFileSize(bytes: number): string {
@@ -44,6 +66,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [dragActive, setDragActive] = useState(false)
+  const [nickname, setNickname] = useState<string>(() => localStorage.getItem('xbot-nickname') || '')
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -304,7 +327,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700">
         <div className="flex items-center gap-3">
-          <h1 className="text-lg font-bold text-white">🤖 xbot</h1>
+          <h1 className="text-lg font-bold text-white">🤖 xbot{nickname ? ` · ${nickname}` : ''}</h1>
           <span className={`text-xs px-2 py-0.5 rounded-full ${
             connected
               ? 'bg-green-900/50 text-green-400'
@@ -357,40 +380,40 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           </div>
         )}
 
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'} msg-fade-in`}
-          >
-            <div
-              className={`max-w-[80%] rounded-xl px-4 py-3 ${
-                msg.type === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 text-slate-200 border border-slate-700'
-              }`}
-            >
-              {msg.type !== 'user' ? (
-                <div className="markdown-body">
-                  <Markdown components={codeBlockComponents} remarkPlugins={[remarkGfm]}>
-                    {msg.content}
-                  </Markdown>
+        {(() => {
+          const turns = groupMessagesIntoTurns(messages)
+          return turns.map((turn, i) => {
+            if (turn.type === 'user') {
+              return (
+                <div key={turn.message.id} className="flex justify-end msg-fade-in">
+                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white">
+                    <p className="whitespace-pre-wrap">{turn.message.content}</p>
+                    {turn.message.ts && (
+                      <div className="text-xs mt-1 text-right text-blue-200/50">
+                        {formatTime(turn.message.ts)}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <p className="whitespace-pre-wrap">{msg.content}</p>
-              )}
-              {msg.ts && (
-                <div className={`text-xs mt-1 text-right ${
-                  msg.type === 'user' ? 'text-blue-200/50' : 'text-slate-500'
-                }`}>
-                  {formatTime(msg.ts)}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+              )
+            }
+            // Assistant turn — last one gets progress & loading
+            const isLatestTurn = i === turns.length - 1
+            return (
+              <AssistantTurn
+                key={turn.messages[0].id}
+                messages={turn.messages}
+                progress={isLatestTurn ? progress : null}
+                loading={isLatestTurn && loading}
+              />
+            )
+          })
+        })()}
 
-        {/* Progress panel */}
-        {(progress || loading) && <ProgressPanel progress={progress} loading={loading} />}
+        {/* Standalone progress only when no messages yet */}
+        {messages.length === 0 && (progress || loading) && (
+          <ProgressPanel progress={progress} loading={loading} />
+        )}
 
         <div ref={messagesEndRef} />
       </div>
@@ -449,7 +472,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       </div>
 
       {/* Settings panel */}
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onNicknameChange={(n) => setNickname(n)}
+      />
     </div>
   )
 }

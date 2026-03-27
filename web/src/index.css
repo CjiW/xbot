@@ -495,6 +495,66 @@ body {
   color: #e2e8f0;
 }
 
+.settings-section {
+  background: #0f172a;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.settings-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.settings-input:focus {
+  border-color: #3b82f6;
+}
+
+.settings-input::placeholder {
+  color: #475569;
+}
+
+[data-theme="light"] .settings-section {
+  background: #e2e8f0;
+}
+
+[data-theme="light"] .settings-section-title {
+  color: #64748b;
+}
+
+[data-theme="light"] .settings-input {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+[data-theme="light"] .settings-input::placeholder {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .settings-input:focus {
+  border-color: #3b82f6;
+}
+
 @keyframes settings-slide-in {
   from {
     transform: translateX(100%);
@@ -625,4 +685,130 @@ body {
 /* Font size variable (set by Settings) */
 body, .markdown-body, .tiptap-wrapper .tiptap p {
   font-size: var(--xbot-font-size, 16px);
+}
+
+/* ========================================================================== */
+/* Assistant Turn (Codex-style)                                                */
+/* ========================================================================== */
+
+.assistant-turn-container {
+  max-width: 80%;
+  width: 100%;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.assistant-turn-section {
+  border-bottom: 1px solid #334155;
+}
+
+.assistant-turn-section:last-child {
+  border-bottom: none;
+}
+
+.assistant-turn-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.assistant-turn-section-header:hover {
+  background: rgba(51, 65, 85, 0.5);
+}
+
+.assistant-turn-chevron {
+  font-size: 10px;
+  color: #64748b;
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+.assistant-turn-chevron-open {
+  transform: rotate(90deg);
+}
+
+.assistant-turn-section-body {
+  padding: 4px 12px 10px 12px;
+  animation: assistant-section-expand 0.15s ease-out;
+}
+
+.assistant-turn-content {
+  padding: 12px 16px;
+}
+
+.assistant-turn-live-phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #334155;
+}
+
+.assistant-turn-loading {
+  padding: 12px 16px;
+}
+
+.assistant-turn-streaming-indicator {
+  padding: 0 16px 8px 16px;
+}
+
+.assistant-turn-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: #60a5fa;
+  animation: cursor-blink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes assistant-section-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 500px;
+  }
+}
+
+/* Light theme overrides for assistant turn */
+[data-theme="light"] .assistant-turn-container {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+[data-theme="light"] .assistant-turn-section {
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="light"] .assistant-turn-section-header {
+  color: #0f172a;
+}
+
+[data-theme="light"] .assistant-turn-section-header:hover {
+  background: rgba(241, 245, 249, 0.8);
+}
+
+[data-theme="light"] .assistant-turn-live-phase {
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="light"] .assistant-turn-cursor {
+  background: #2563eb;
 }

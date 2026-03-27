@@ -934,8 +934,13 @@ body, .markdown-body, .tiptap-wrapper .tiptap p {
 }
 
 .assistant-turn-section-body {
-  padding: 4px 12px 10px 12px;
+  padding: 6px 16px 12px 16px;
   animation: assistant-section-expand 0.15s ease-out;
+}
+
+.thinking-section .assistant-turn-section-body {
+  padding-left: 20px;
+  padding-bottom: 14px;
 }
 
 .assistant-turn-content {

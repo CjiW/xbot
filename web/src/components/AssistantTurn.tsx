@@ -170,8 +170,8 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
       <div className="assistant-turn-container">
         {/* Collapsible: Thinking section */}
         {thinkingMsgs.length > 0 && (
-          <CollapsibleSection icon="💭" title="思考过程" badge={thinkingMsgs.length}>
-            <div className="space-y-2">
+          <CollapsibleSection icon="💭" title="思考过程" badge={thinkingMsgs.length} className="thinking-section">
+            <div className="space-y-2 pl-1">
               {thinkingMsgs.map((msg) => (
                 <div key={msg.id} className="text-sm text-slate-400 italic">
                   <Markdown components={codeBlockComponents} remarkPlugins={[remarkGfm]}>

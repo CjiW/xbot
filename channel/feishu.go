@@ -90,6 +90,14 @@ type SettingsCallbacks struct {
 	RunnerTokenGenerate func(senderID, mode, dockerImage, workspace string) (string, error)
 	// RunnerTokenRevoke revokes the user's current token.
 	RunnerTokenRevoke func(senderID string) error
+
+	// FeishuWebLink links a Feishu user to a web account (creates web user if needed).
+	// Returns the web username on success.
+	FeishuWebLink func(feishuUserID, username, password string) (string, error)
+	// FeishuWebGetLinked returns the linked web username and whether linked.
+	FeishuWebGetLinked func(feishuUserID string) (string, bool)
+	// FeishuWebUnlink removes the Feishu-Web account link.
+	FeishuWebUnlink func(feishuUserID string) error
 }
 
 // FeishuChannel 飞书渠道实现

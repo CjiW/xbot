@@ -273,10 +273,11 @@ func main() {
 		}
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
-				Host:         cfg.Web.Host,
-				Port:         cfg.Web.Port,
-				DB:           webDB,
-				MemoryWindow: cfg.Agent.MemoryWindow,
+				Host:             cfg.Web.Host,
+				Port:             cfg.Web.Port,
+				DB:               webDB,
+				MemoryWindow:     cfg.Agent.MemoryWindow,
+				FeishuLinkSecret: cfg.Feishu.AppSecret,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
@@ -498,6 +499,27 @@ func main() {
 				}
 				tools.NewRunnerTokenStore(db).Revoke(senderID)
 				return nil
+			},
+			FeishuWebLink: func(feishuUserID, username, password string) (string, error) {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return "", fmt.Errorf("web linking not enabled")
+				}
+				return channel.FeishuLinkUser(db, feishuUserID, username, password)
+			},
+			FeishuWebGetLinked: func(feishuUserID string) (string, bool) {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return "", false
+				}
+				return channel.FeishuGetLinkedUser(db, feishuUserID)
+			},
+			FeishuWebUnlink: func(feishuUserID string) error {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return fmt.Errorf("web linking not enabled")
+				}
+				return channel.FeishuUnlinkUser(db, feishuUserID)
 			},
 		})
 

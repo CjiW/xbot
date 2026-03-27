@@ -45,10 +45,11 @@ const (
 
 // WebChannelConfig Web 渠道配置（channel 包内部使用）
 type WebChannelConfig struct {
-	Host         string
-	Port         int
-	DB           *sql.DB // SQLite DB handle for user management and history
-	MemoryWindow int
+	Host             string
+	Port             int
+	DB               *sql.DB // SQLite DB handle for user management and history
+	MemoryWindow     int
+	FeishuLinkSecret string // admin token for /api/auth/feishu-link endpoint
 }
 
 // WebCallbacks holds callback functions for Web channel API endpoints.
@@ -359,6 +360,8 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/auth/register", wc.handleRegister)
 	mux.HandleFunc("/api/auth/login", wc.handleLogin)
 	mux.HandleFunc("/api/auth/logout", wc.handleLogout)
+	mux.HandleFunc("/api/auth/feishu-link", wc.handleFeishuLink)
+	mux.HandleFunc("/api/auth/feishu-login", wc.handleFeishuLogin)
 
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))

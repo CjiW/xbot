@@ -10,9 +10,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type historyResponse struct {
-	OK       bool         `json:"ok"`
-	Messages []histMsg    `json:"messages,omitempty"`
-	Error    string       `json:"error,omitempty"`
+	OK       bool      `json:"ok"`
+	Messages []histMsg `json:"messages,omitempty"`
+	Error    string    `json:"error,omitempty"`
 }
 
 type histMsg struct {

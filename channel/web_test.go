@@ -288,11 +288,15 @@ func TestWebSocketChat(t *testing.T) {
 
 	// Register + Login
 	regResp, err := http.Post(server.URL+"/api/auth/register", "application/json", strings.NewReader(`{"username":"chatuser","password":"pw"}`))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	regResp.Body.Close()
 
 	loginResp, err := http.Post(server.URL+"/api/auth/login", "application/json", strings.NewReader(`{"username":"chatuser","password":"pw"}`))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	loginResp.Body.Close()
 
 	var sessionCookie *http.Cookie
@@ -338,7 +342,9 @@ func TestSendToWebSocket(t *testing.T) {
 	regResp, _ := http.Post(server.URL+"/api/auth/register", "application/json", strings.NewReader(`{"username":"recv","password":"pw"}`))
 	regResp.Body.Close()
 	loginResp, err := http.Post(server.URL+"/api/auth/login", "application/json", strings.NewReader(`{"username":"recv","password":"pw"}`))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	loginResp.Body.Close()
 
 	var sessionCookie *http.Cookie
@@ -352,9 +358,9 @@ func TestSendToWebSocket(t *testing.T) {
 
 	// Send a message to the client
 	msgID, err := wc.Send(bus.OutboundMessage{
-		Channel:  "web",
-		ChatID:   "web:1", // approximate
-		Content:  "Hello from agent!",
+		Channel: "web",
+		ChatID:  "web:1", // approximate
+		Content: "Hello from agent!",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -551,9 +557,9 @@ func TestConcurrentSends(t *testing.T) {
 			done := make(chan string, 1)
 			go func() {
 				id, _ := wc.Send(bus.OutboundMessage{
-					Channel:  "web",
-					ChatID:   "web:1",
-					Content:  "concurrent msg",
+					Channel: "web",
+					ChatID:  "web:1",
+					Content: "concurrent msg",
 				})
 				done <- id
 			}()

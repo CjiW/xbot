@@ -285,6 +285,9 @@ func main() {
 					execDir, _ := os.Executable()
 					webCh.SetUploadDir(filepath.Join(filepath.Dir(execDir), "workspace", "uploads"))
 				}
+				// Set workDir so uploaded files can be copied into sandbox-accessible paths
+				webCh.SetWorkDir(workDir)
+
 			}
 			disp.Register(webCh)
 		} else {

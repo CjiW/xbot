@@ -55,11 +55,11 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query session messages
+	// Query session messages (exclude tool messages from history)
 	rows, err := wc.db.Query(`
 		SELECT role, content, created_at
 		FROM session_messages
-		WHERE tenant_id = ?
+		WHERE tenant_id = ? AND role != 'tool'
 		ORDER BY id DESC
 		LIMIT ?
 	`, tenantID, limit)

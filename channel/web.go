@@ -258,6 +258,9 @@ type WebChannel struct {
 
 	// File uploads directory
 	uploadDir string
+
+	// Working directory (workspace) — used to copy uploaded files into sandbox-accessible path
+	workDir string
 }
 
 type sessionInfo struct {
@@ -286,6 +289,11 @@ func (wc *WebChannel) SetStaticDir(dir string) {
 // SetUploadDir sets the directory for file uploads.
 func (wc *WebChannel) SetUploadDir(dir string) {
 	wc.uploadDir = dir
+}
+
+// SetWorkDir sets the working directory for sandbox file access.
+func (wc *WebChannel) SetWorkDir(dir string) {
+	wc.workDir = dir
 }
 
 func (wc *WebChannel) Name() string { return "web" }
@@ -566,19 +574,36 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		content := msg.Content
 		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
 			for _, fid := range msg.FileIDs {
-				filePath := filepath.Join(wc.uploadDir, "web", fid)
-				mediaPaths = append(mediaPaths, filePath)
+				uploadPath := filepath.Join(wc.uploadDir, "web", fid)
+				mediaPaths = append(mediaPaths, uploadPath)
 
-				// For image files, embed as base64 in content so LLM can see them
 				ext := strings.ToLower(filepath.Ext(fid))
 				if isImageExt(ext) {
-					if data, err := os.ReadFile(filePath); err == nil {
-						mime := mime.TypeByExtension(ext)
-						if mime == "" {
-							mime = http.DetectContentType(data)
+					// For image files, embed as base64 in content so LLM can see them
+					if data, err := os.ReadFile(uploadPath); err == nil {
+						mimeType := mime.TypeByExtension(ext)
+						if mimeType == "" {
+							mimeType = http.DetectContentType(data)
 						}
 						b64 := base64.StdEncoding.EncodeToString(data)
-						content += fmt.Sprintf("\n\n![uploaded image](data:%s;base64,%s)", mime, b64)
+						content += fmt.Sprintf("\n\n![uploaded image](data:%s;base64,%s)", mimeType, b64)
+					}
+				} else {
+					// For non-image files, copy to workspace so LLM tools can access them,
+					// and inject attachment info into the content so LLM knows about them.
+					sandboxPath := filepath.Join(wc.workDir, "uploads", fid)
+					if wc.workDir != "" {
+						if err := os.MkdirAll(filepath.Dir(sandboxPath), 0755); err == nil {
+							if err := copyFile(uploadPath, sandboxPath); err == nil {
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, sandboxPath)
+							} else {
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (原始上传路径)", fid, uploadPath)
+							}
+						} else {
+							content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, uploadPath)
+						}
+					} else {
+						content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, uploadPath)
 					}
 				}
 			}

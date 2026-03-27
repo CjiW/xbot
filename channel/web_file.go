@@ -21,6 +21,15 @@ const (
 	maxFileSize = 10 << 20 // 10MB
 )
 
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
 // handleFileUpload handles POST /api/files/upload
 func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	// Limit request body size

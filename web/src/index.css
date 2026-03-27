@@ -48,7 +48,7 @@ body {
 }
 .markdown-body pre code {
   background: transparent;
-  padding: 12px 16px;
+  padding: 0; /* padding is on <pre> via inline style, not on <code> */
 }
 .markdown-body ul, .markdown-body ol {
   padding-left: 1.5em;
@@ -339,6 +339,7 @@ body {
 }
 [data-theme="light"] .markdown-body pre code {
   background: transparent;
+  padding: 0;
 }
 [data-theme="light"] .markdown-body blockquote {
   border-left-color: #cbd5e1;

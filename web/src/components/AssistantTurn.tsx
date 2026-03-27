@@ -15,6 +15,8 @@ interface AssistantTurnProps {
   messages: Message[]
   progress: WsProgressPayload | null
   loading: boolean
+  // Saved progress from a completed response (for showing intermediate process collapsed)
+  savedProgress?: WsProgressPayload | null
 }
 
 const codeBlockComponents = getCodeBlockProps()
@@ -99,7 +101,7 @@ function isThinkingContent(content: string): boolean {
   return false
 }
 
-export default function AssistantTurn({ messages, progress, loading }: AssistantTurnProps) {
+export default function AssistantTurn({ messages, progress, loading, savedProgress }: AssistantTurnProps) {
   // Classify messages
   const thinkingMsgs: Message[] = []
   const textMsgs: Message[] = []
@@ -112,20 +114,21 @@ export default function AssistantTurn({ messages, progress, loading }: Assistant
     }
   }
 
-  // Gather tool info from progress
-  const hasActiveTools = (progress?.active_tools?.length ?? 0) > 0
+  // Use live progress when loading, fall back to savedProgress for completed turns
+  const effectiveProgress = loading ? progress : (savedProgress ?? null)
+  const hasActiveTools = loading && (progress?.active_tools?.length ?? 0) > 0
   const allTools: WsToolProgress[] = [
-    ...(progress?.completed_tools ?? []),
-    ...(progress?.active_tools ?? []),
+    ...(effectiveProgress?.completed_tools ?? []),
+    ...(loading ? (progress?.active_tools ?? []) : []),
   ]
   const totalToolCount = allTools.length
 
   // Determine phase display
-  const phaseIcon = progress?.phase === 'thinking' ? '💭'
-    : progress?.phase === 'tool_exec' ? '⚡'
-    : progress?.phase === 'compressing' ? '📦'
-    : progress?.phase === 'retrying' ? '🔄'
-    : progress?.phase === 'done' ? '✅'
+  const phaseIcon = effectiveProgress?.phase === 'thinking' ? '💭'
+    : effectiveProgress?.phase === 'tool_exec' ? '⚡'
+    : effectiveProgress?.phase === 'compressing' ? '📦'
+    : effectiveProgress?.phase === 'retrying' ? '🔄'
+    : effectiveProgress?.phase === 'done' ? '✅'
     : null
 
   return (

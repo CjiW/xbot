@@ -15,6 +15,8 @@ interface Message {
   type: 'user' | 'assistant' | 'system'
   content: string
   ts?: number
+  // Saved progress snapshot when this message was finalized (for showing intermediate process)
+  savedProgress?: WsProgressPayload | null
 }
 
 function formatTime(ts: number): string {
@@ -104,7 +106,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.messages) {
-          const hist: Message[] = data.messages.map((m: { role: string; content: string }, i: number) => ({
+          const hist: Message[] = data.messages
+            .filter((m: { role: string }) => m.role !== 'tool')
+            .map((m: { role: string; content: string }, i: number) => ({
             id: `hist-${i}`,
             type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
             content: m.content,
@@ -175,6 +179,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           case 'text':
           case 'card': {
             // Final message — clear progress, add to messages
+            // Save a snapshot of the current progress so intermediate process
+            // can be shown (collapsed) after the response completes
+            const progressSnapshot = progress && (progress.completed_tools?.length || progress.active_tools?.length)
+              ? { ...progress } as WsProgressPayload
+              : null
             setProgress(null)
             setLoading(false)
             const msg: Message = {
@@ -182,6 +191,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               type: data.type === 'card' ? 'system' : 'assistant',
               content: data.content,
               ts: data.ts,
+              savedProgress: progressSnapshot,
             }
             setMessages((prev) => [...prev, msg])
             break
@@ -397,14 +407,17 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 </div>
               )
             }
-            // Assistant turn — last one gets progress & loading
+            // Assistant turn — last one gets live progress & loading
+            // Completed turns use savedProgress from the message
             const isLatestTurn = i === turns.length - 1
+            const turnSavedProgress = isLatestTurn ? null : (turn.messages[turn.messages.length - 1]?.savedProgress ?? null)
             return (
               <AssistantTurn
                 key={turn.messages[0].id}
                 messages={turn.messages}
                 progress={isLatestTurn ? progress : null}
                 loading={isLatestTurn && loading}
+                savedProgress={turnSavedProgress}
               />
             )
           })

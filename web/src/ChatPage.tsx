@@ -50,6 +50,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const reconnectDelayRef = useRef(1000)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const serverStopped = useRef(false)
 
   // --- Scroll management ---
   const scrollToBottom = useCallback(() => {
@@ -102,6 +103,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     ws.onopen = () => {
       setConnected(true)
       setReconnecting(false)
+      serverStopped.current = false
       reconnectDelayRef.current = 1000
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
@@ -109,8 +111,16 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       setConnected(false)
+
+      // Normal closure (1000) or going away (1001) = server shutdown, don't reconnect
+      if (e.code === 1000 || e.code === 1001) {
+        serverStopped.current = true
+        setReconnecting(false)
+        return
+      }
+
       setReconnecting(true)
 
       // Exponential backoff reconnect
@@ -322,7 +332,12 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         </div>
       </header>
 
-      {/* Reconnecting banner */}
+      {/* Disconnected / Reconnecting banner */}
+      {!connected && serverStopped.current && (
+        <div className="bg-red-900/40 border-b border-red-800/50 px-4 py-2 text-center text-sm text-red-400">
+          ⛔ 服务已断开，请刷新页面重新连接
+        </div>
+      )}
       {reconnecting && !connected && (
         <div className="bg-yellow-900/40 border-b border-yellow-800/50 px-4 py-2 text-center text-sm text-yellow-400">
           ⚠️ 连接断开，正在尝试重连...

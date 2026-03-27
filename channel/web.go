@@ -369,6 +369,13 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/market", wc.authMiddleware(wc.handleMarket))
 	mux.HandleFunc("/api/market/install", wc.authMiddleware(wc.handleMarketInstall))
 	mux.HandleFunc("/api/market/uninstall", wc.authMiddleware(wc.handleMarketUninstall))
+	mux.HandleFunc("/api/market/my", wc.authMiddleware(wc.handleMarketMy))
+	mux.HandleFunc("/api/market/publish", wc.authMiddleware(wc.handleMarketPublish))
+	mux.HandleFunc("/api/market/unpublish", wc.authMiddleware(wc.handleMarketUnpublish))
+
+	// LLM Config API
+	mux.HandleFunc("/api/llm-config", wc.authMiddleware(wc.handleLLMConfig))
+	mux.HandleFunc("/api/llm-config/model", wc.authMiddleware(wc.handleLLMModelSet))
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))

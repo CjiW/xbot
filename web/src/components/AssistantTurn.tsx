@@ -88,11 +88,14 @@ function CollapsibleSection({
  */
 function isThinkingContent(content: string): boolean {
   const trimmed = content.trim()
+  // Only match explicit thinking markers — NOT regular assistant text
   if (trimmed.startsWith('💭')) return true
   if (trimmed.startsWith('<think')) return true
+  if (trimmed.startsWith('<thinking')) return true
   if (trimmed.startsWith('【思考】')) return true
-  // Long first-person reasoning patterns (common in AI thinking)
-  if (/^(Let me|Let's|I need to|I'll|I should|Let's think)/i.test(trimmed)) return true
+  // Must have substantial thinking content (>10 chars) after the marker
+  // to avoid false positives on short 💭 prefixes
+  if (trimmed.startsWith('💭') && trimmed.length > 12) return true
   return false
 }
 
@@ -111,7 +114,6 @@ export default function AssistantTurn({ messages, progress, loading }: Assistant
 
   // Gather tool info from progress
   const hasActiveTools = (progress?.active_tools?.length ?? 0) > 0
-  const hasCompletedTools = (progress?.completed_tools?.length ?? 0) > 0
   const allTools: WsToolProgress[] = [
     ...(progress?.completed_tools ?? []),
     ...(progress?.active_tools ?? []),

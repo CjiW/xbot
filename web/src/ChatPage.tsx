@@ -62,7 +62,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<WsProgressPayload | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
-  const [reconnecting, setReconnecting] = useState(false)
+  const [reconnecting, setReconnecting] = useState(true) // true = initial connecting state
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [dragActive, setDragActive] = useState(false)
@@ -335,7 +335,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 ? 'bg-yellow-900/50 text-yellow-400'
                 : 'bg-red-900/50 text-red-400'
           }`}>
-            {connected ? '● Connected' : reconnecting ? '◐ Reconnecting...' : '○ Disconnected'}
+            {connected ? '● Connected' : reconnecting ? '◐ Connecting...' : '○ Disconnected'}
           </span>
         </div>
         <div className="flex items-center gap-2">

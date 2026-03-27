@@ -5,8 +5,10 @@ package channel
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -561,10 +563,24 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 		// Send to message bus
 		var mediaPaths []string
+		content := msg.Content
 		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
 			for _, fid := range msg.FileIDs {
-				// Files are stored at {uploadDir}/web/{fileID}
-				mediaPaths = append(mediaPaths, filepath.Join(wc.uploadDir, "web", fid))
+				filePath := filepath.Join(wc.uploadDir, "web", fid)
+				mediaPaths = append(mediaPaths, filePath)
+
+				// For image files, embed as base64 in content so LLM can see them
+				ext := strings.ToLower(filepath.Ext(fid))
+				if isImageExt(ext) {
+					if data, err := os.ReadFile(filePath); err == nil {
+						mime := mime.TypeByExtension(ext)
+						if mime == "" {
+							mime = http.DetectContentType(data)
+						}
+						b64 := base64.StdEncoding.EncodeToString(data)
+						content += fmt.Sprintf("\n\n![uploaded image](data:%s;base64,%s)", mime, b64)
+					}
+				}
 			}
 		}
 		wc.msgBus.Inbound <- bus.InboundMessage{
@@ -573,7 +589,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			SenderName: si.username,
 			ChatID:     chatID,
 			ChatType:   "p2p",
-			Content:    msg.Content,
+			Content:    content,
 			Media:      mediaPaths,
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
@@ -703,4 +719,13 @@ func (wc *WebChannel) sessionCleanup() {
 			wc.sessionsMu.Unlock()
 		}
 	}
+}
+
+// isImageExt returns true if the file extension is a common image format.
+func isImageExt(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".tif":
+		return true
+	}
+	return false
 }

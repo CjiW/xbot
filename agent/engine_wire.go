@@ -135,7 +135,12 @@ func (a *Agent) buildMainRunConfig(
 	cfg.OAuthHandler = a.buildOAuthHandler(channel, chatID, senderID, sessionKey)
 
 	// 进度通知
-	if autoNotify {
+	// Web 渠道始终启用结构化进度，但不发送文本进度消息
+	if channel == "web" {
+		// Web: no-op notifier — structured progress goes via ProgressEventHandler
+		// Setting ProgressNotifier to non-nil enables autoNotify in engine.Run()
+		cfg.ProgressNotifier = func(lines []string) {}
+	} else if autoNotify {
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
 				_ = a.sendMessage(channel, chatID, lines[0])

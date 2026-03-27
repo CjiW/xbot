@@ -300,9 +300,9 @@ func (wc *WebChannel) Start() error {
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 
-		// File API
-		mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
-		mux.HandleFunc("/api/files/", wc.authMiddleware(wc.handleFileDownload))
+	// File API
+	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
+	mux.HandleFunc("/api/files/", wc.authMiddleware(wc.handleFileDownload))
 
 	// Static files
 	if wc.staticDir != "" {

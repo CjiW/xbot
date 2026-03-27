@@ -25,8 +25,6 @@ interface UserSettings {
   llm_model: string
   llm_api_key: string
   llm_base_url: string
-  // Runner settings
-  runner_token: string
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -37,7 +35,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   llm_model: '',
   llm_api_key: '',
   llm_base_url: '',
-  runner_token: '',
 }
 
 // localStorage fallback keys
@@ -72,7 +69,6 @@ async function fetchSettings(): Promise<UserSettings> {
         llm_model: data.settings.llm_model || '',
         llm_api_key: data.settings.llm_api_key || '',
         llm_base_url: data.settings.llm_base_url || '',
-        runner_token: data.settings.runner_token || '',
       }
     }
   } catch {
@@ -86,7 +82,6 @@ async function fetchSettings(): Promise<UserSettings> {
     llm_model: lsGet('llm_model', DEFAULT_SETTINGS.llm_model),
     llm_api_key: DEFAULT_SETTINGS.llm_api_key,
     llm_base_url: lsGet('llm_base_url', DEFAULT_SETTINGS.llm_base_url),
-    runner_token: DEFAULT_SETTINGS.runner_token,
   }
 }
 
@@ -106,6 +101,16 @@ async function saveSettings(settings: Partial<UserSettings>): Promise<boolean> {
 
 type TabId = 'appearance' | 'llm' | 'runner' | 'market'
 
+interface MarketEntry {
+  id: number
+  type: string
+  name: string
+  description: string
+  author: string
+  created_at: string
+  installed: boolean
+}
+
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'appearance', label: '外观', icon: '🎨' },
   { id: 'llm', label: 'LLM', icon: '🧠' },
@@ -122,8 +127,12 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
   const [llmModel, setLlmModel] = useState(DEFAULT_SETTINGS.llm_model)
   const [llmApiKey, setLlmApiKey] = useState(DEFAULT_SETTINGS.llm_api_key)
   const [llmBaseUrl, setLlmBaseUrl] = useState(DEFAULT_SETTINGS.llm_base_url)
-  const [runnerToken, setRunnerToken] = useState(DEFAULT_SETTINGS.runner_token)
+  const [runnerCommand, setRunnerCommand] = useState('')
+  const [tokenActionloading, setTokenActionLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [marketType, setMarketType] = useState<'agent' | 'skill'>('agent')
+  const [marketEntries, setMarketEntries] = useState<MarketEntry[]>([])
+  const [marketLoading, setMarketLoading] = useState(false)
 
   // Load settings from server on mount
   useEffect(() => {
@@ -160,11 +169,102 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
     lsSet('language', language)
   }, [language])
 
+  // Fetch runner token command when runner tab is opened
+  useEffect(() => {
+    if (!open || activeTab !== 'runner') return
+    setTokenActionLoading(true)
+    fetch('/api/runner/token')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) setRunnerCommand(data.command || '')
+      })
+      .catch(() => {})
+      .finally(() => setTokenActionLoading(false))
+  }, [open, activeTab])
+
+  const handleGenerateToken = useCallback(async () => {
+    setTokenActionLoading(true)
+    try {
+      const resp = await fetch('/api/runner/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'native', docker_image: '', workspace: '' }),
+      })
+      const data = await resp.json()
+      if (data.ok) setRunnerCommand(data.command || '')
+    } catch {}
+    setTokenActionLoading(false)
+  }, [])
+
+  const handleRegenerateToken = useCallback(async () => {
+    setTokenActionLoading(true)
+    try {
+      const resp = await fetch('/api/runner/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'native', docker_image: '', workspace: '' }),
+      })
+      const data = await resp.json()
+      if (data.ok) setRunnerCommand(data.command || '')
+    } catch {}
+    setTokenActionLoading(false)
+  }, [])
+
+  const handleRevokeToken = useCallback(async () => {
+    setTokenActionLoading(true)
+    try {
+      const resp = await fetch('/api/runner/token', { method: 'DELETE' })
+      const data = await resp.json()
+      if (data.ok) setRunnerCommand('')
+    } catch {}
+    setTokenActionLoading(false)
+  }, [])
+
   const handleSave = useCallback(async (updates: Partial<UserSettings>) => {
     setSaving(true)
     await saveSettings(updates)
     setSaving(false)
   }, [])
+
+  // Market functions
+  const loadMarket = useCallback(async () => {
+    setMarketLoading(true)
+    try {
+      const resp = await fetch(`/api/market?type=${marketType}&limit=50`)
+      const data = await resp.json()
+      if (data.ok) setMarketEntries(data.entries || [])
+    } catch {}
+    setMarketLoading(false)
+  }, [marketType])
+
+  const handleInstall = useCallback(async (entry: MarketEntry) => {
+    try {
+      const resp = await fetch('/api/market/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: entry.type, id: entry.id }),
+      })
+      const data = await resp.json()
+      if (data.ok) loadMarket()
+    } catch {}
+  }, [loadMarket])
+
+  const handleUninstall = useCallback(async (entry: MarketEntry) => {
+    try {
+      const resp = await fetch('/api/market/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: entry.type, name: entry.name }),
+      })
+      const data = await resp.json()
+      if (data.ok) loadMarket()
+    } catch {}
+  }, [loadMarket])
+
+  // Load market when tab is opened
+  useEffect(() => {
+    if (open && activeTab === 'market') loadMarket()
+  }, [open, activeTab, loadMarket])
 
   // Close on Escape
   useEffect(() => {
@@ -359,38 +459,109 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
           <div className={sectionClass}>
             <div className={sectionTitleClass}>🖥️ Remote Runner</div>
             <p className="text-xs text-slate-500 mb-3">
-              配置远程 Runner 的认证 Token。设置后，工具将在远程沙箱中执行。
+              远程沙箱允许工具命令在你的本地机器或 Docker 容器中执行。
             </p>
-
-            <div className="settings-item">
-              <label className="settings-label">Runner Token</label>
-              <input
-                type="password"
-                className="settings-input"
-                placeholder="输入 Runner Token..."
-                value={runnerToken}
-                onChange={(e) => setRunnerToken(e.target.value)}
-                onBlur={() => handleSave({ runner_token: runnerToken })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-              />
-              <p className="text-xs text-slate-600 mt-1">⚠️ Token 仅存储在服务端</p>
-            </div>
+            {tokenActionloading ? (
+              <div className="text-center py-4 text-slate-500 text-sm">加载中...</div>
+            ) : runnerCommand ? (
+              <>
+                <div className="settings-item">
+                  <label className="settings-label">连接命令</label>
+                  <div className="relative">
+                    <code className="settings-code-block">{runnerCommand}</code>
+                    <button
+                      className="settings-copy-btn"
+                      onClick={() => navigator.clipboard.writeText(runnerCommand)}
+                      title="复制"
+                    >📋</button>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    className="settings-action-btn settings-action-danger"
+                    onClick={handleRegenerateToken}
+                    disabled={tokenActionloading}
+                  >
+                    🔄 重新生成
+                  </button>
+                  <button
+                    className="settings-action-btn settings-action-danger"
+                    onClick={handleRevokeToken}
+                    disabled={tokenActionloading}
+                  >
+                    🗑️ 撤销 Token
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-slate-400 text-sm">尚未配置远程 Runner</p>
+                <button
+                  className="settings-action-btn mt-3"
+                  onClick={handleGenerateToken}
+                  disabled={tokenActionloading}
+                >
+                  ✨ 生成 Token
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {/* ── Agent 市场 ── */}
         {activeTab === 'market' && (
           <div className={sectionClass}>
-            <div className={sectionTitleClass}>🏪 Agent 市场 Agent Market</div>
-            <div className="text-center py-8 text-slate-500">
-              <p className="text-3xl mb-3">🏗️</p>
-              <p className="text-sm">Agent 市场正在建设中...</p>
-              <p className="text-xs mt-1 text-slate-600">
-                即将支持浏览、安装和管理自定义 Agent 角色
-              </p>
+            <div className={sectionTitleClass}>🏪 Agent 市场</div>
+            <div className="market-tab-bar">
+              <button
+                className={`market-tab ${marketType === 'agent' ? 'active' : ''}`}
+                onClick={() => { setMarketType('agent'); }}
+              >
+                🤖 Agent
+              </button>
+              <button
+                className={`market-tab ${marketType === 'skill' ? 'active' : ''}`}
+                onClick={() => { setMarketType('skill'); }}
+              >
+                🛠️ Skill
+              </button>
             </div>
+            {marketLoading ? (
+              <div className="text-center py-8 text-slate-500">
+                <div className="market-spinner" />
+                <p className="text-xs mt-2">加载中...</p>
+              </div>
+            ) : marketEntries.length === 0 ? (
+              <div className="text-center py-8 text-slate-500">
+                <p className="text-3xl mb-3">📭</p>
+                <p className="text-sm">暂无可用条目</p>
+              </div>
+            ) : (
+              <div className="market-entry-list">
+                {marketEntries.map(entry => (
+                  <div key={entry.id} className="market-entry">
+                    <div className="market-entry-header">
+                      <div className="market-entry-info">
+                        <span className="market-entry-name">{entry.name}</span>
+                        <span className="market-entry-author">by {entry.author}</span>
+                      </div>
+                      {entry.installed ? (
+                        <button className="market-uninstall-btn" onClick={() => handleUninstall(entry)}>
+                          卸载
+                        </button>
+                      ) : (
+                        <button className="market-install-btn" onClick={() => handleInstall(entry)}>
+                          安装
+                        </button>
+                      )}
+                    </div>
+                    {entry.description && (
+                      <p className="market-entry-desc">{entry.description}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

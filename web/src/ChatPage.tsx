@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import ProgressPanel from './components/ProgressPanel'
-import type { WsProgressPayload } from './components/ProgressPanel'
+import type { WsProgressPayload, WsToolProgress } from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
 import TiptapEditor from './components/TiptapEditor'
 import SettingsPanel from './components/SettingsPanel'
@@ -76,6 +76,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const reconnectDelayRef = useRef(1000)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverStopped = useRef(false)
+
+  // Accumulate completed_tools across iterations so the final snapshot preserves all tools.
+  // The engine resets CompletedTools each iteration, so the last progress_structured
+  // before a text/card may have an empty list — we need the accumulated view.
+  const accumulatedToolsRef = useRef<Map<string, WsToolProgress>>(new Map())
 
   // --- Scroll management ---
   const scrollToBottom = useCallback(() => {
@@ -171,21 +176,34 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
 
           case 'progress_structured':
-            // Structured progress — update progress panel
+            // Structured progress — update progress panel and accumulate completed_tools
             setProgress(data.progress)
             setLoading(true)
+            // Merge completed_tools into accumulated ref (deduplicate by name)
+            if (data.progress?.completed_tools) {
+              for (const tool of data.progress.completed_tools) {
+                const key = tool.name
+                accumulatedToolsRef.current.set(key, tool)
+              }
+            }
             break
 
           case 'text':
           case 'card': {
             // Final message — clear progress, add to messages
-            // Save a snapshot of the current progress so intermediate process
-            // can be shown (collapsed) after the response completes
-            const progressSnapshot = progress && (progress.completed_tools?.length || progress.active_tools?.length)
-              ? { ...progress } as WsProgressPayload
+            // Build snapshot from accumulated completed_tools (preserves tools across iterations)
+            const accumulated = Array.from(accumulatedToolsRef.current.values())
+            const activeTools = progress?.active_tools ?? []
+            const progressSnapshot = (accumulated.length || activeTools.length)
+              ? {
+                  ...progress,
+                  completed_tools: accumulated,
+                  active_tools: [],
+                } as WsProgressPayload
               : null
             setProgress(null)
             setLoading(false)
+            accumulatedToolsRef.current.clear()
             const msg: Message = {
               id: data.id || `ws-${Date.now()}`,
               type: data.type === 'card' ? 'system' : 'assistant',
@@ -243,6 +261,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     setProgress(null)
     setLoading(true)
     setAutoScroll(true)
+    accumulatedToolsRef.current.clear()
 
     const payload: { type: string; content: string; file_ids?: string[] } = {
       type: 'message',
@@ -408,9 +427,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               )
             }
             // Assistant turn — last one gets live progress & loading
-            // Completed turns use savedProgress from the message
+            // All turns use savedProgress from the last message in the turn;
+            // when loading=true, live progress prop naturally overrides in AssistantTurn
             const isLatestTurn = i === turns.length - 1
-            const turnSavedProgress = isLatestTurn ? null : (turn.messages[turn.messages.length - 1]?.savedProgress ?? null)
+            const turnSavedProgress = turn.messages[turn.messages.length - 1]?.savedProgress ?? null
             return (
               <AssistantTurn
                 key={turn.messages[0].id}

@@ -19,6 +19,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/storage/sqlite"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -47,6 +48,37 @@ type WebChannelConfig struct {
 	Host string
 	Port int
 	DB   *sql.DB // SQLite DB handle for user management and history
+}
+
+// WebCallbacks holds callback functions for Web channel API endpoints.
+// Injected from main to decouple channel from agent/tools packages.
+type WebCallbacks struct {
+	// RunnerTokenGet returns the runner connect command for the user ("" if none).
+	RunnerTokenGet func(senderID string) string
+	// RunnerTokenGenerate generates a new per-user token and returns the connect command.
+	RunnerTokenGenerate func(senderID, mode, dockerImage, workspace string) (string, error)
+	// RunnerTokenRevoke revokes the user's current token.
+	RunnerTokenRevoke func(senderID string) error
+	// RegistryBrowse lists available agents/skills in the marketplace.
+	RegistryBrowse func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
+	// RegistryInstall installs a shared entry for the user.
+	RegistryInstall func(entryType string, id int64, senderID string) error
+	// RegistryListMy lists the user's installed entries.
+	RegistryListMy func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error)
+	// RegistryUnpublish removes a user's published entry.
+	RegistryUnpublish func(entryType, name, senderID string) error
+	// RegistryUninstall removes a user-installed entry.
+	RegistryUninstall func(entryType, name, senderID string) error
+	// LLMList returns available models and current model.
+	LLMList func(senderID string) ([]string, string)
+	// LLMSet switches the user's model.
+	LLMSet func(senderID, model string) error
+	// LLMGetConfig returns user's LLM config (provider, baseURL, model, ok).
+	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool)
+	// LLMSetConfig sets user's personal LLM config.
+	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
+	// LLMDelete reverts user to global LLM config.
+	LLMDelete func(senderID string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +274,9 @@ type WebChannel struct {
 	hub    *Hub
 	server *http.Server
 
+	// Callbacks from main
+	callbacks WebCallbacks
+
 	// Auth
 	sessions   map[string]sessionInfo // token → sessionInfo
 	sessionsMu sync.RWMutex
@@ -296,6 +331,11 @@ func (wc *WebChannel) SetWorkDir(dir string) {
 	wc.workDir = dir
 }
 
+// SetCallbacks injects callback functions from main for API endpoints.
+func (wc *WebChannel) SetCallbacks(cb WebCallbacks) {
+	wc.callbacks = cb
+}
+
 func (wc *WebChannel) Name() string { return "web" }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +357,12 @@ func (wc *WebChannel) Start() error {
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 	mux.HandleFunc("/api/settings", wc.authMiddleware(wc.handleSettings))
+	mux.HandleFunc("/api/runner/token", wc.authMiddleware(wc.handleRunnerToken))
+
+	// Market API
+	mux.HandleFunc("/api/market", wc.authMiddleware(wc.handleMarket))
+	mux.HandleFunc("/api/market/install", wc.authMiddleware(wc.handleMarketInstall))
+	mux.HandleFunc("/api/market/uninstall", wc.authMiddleware(wc.handleMarketUninstall))
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))

@@ -38,6 +38,7 @@ type runnerConnection struct {
 	wsConn    *websocket.Conn
 	userID    string
 	workspace string
+	shell     string         // runner's default shell (e.g. /bin/bash)
 	sendCh    chan sendEntry // buffered channel for serialized writes
 	done      chan struct{}  // closed when writePump exits
 }
@@ -199,10 +200,15 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	shell := reg.Shell
+	if shell == "" {
+		shell = "/bin/sh"
+	}
 	rc := &runnerConnection{
 		wsConn:    conn,
 		userID:    reg.UserID,
 		workspace: reg.Workspace,
+		shell:     shell,
 		sendCh:    make(chan sendEntry, 64),
 		done:      make(chan struct{}),
 	}
@@ -393,9 +399,15 @@ func (rs *RemoteSandbox) CloseForUser(userID string) error {
 	return nil
 }
 
-func (rs *RemoteSandbox) IsExporting(_ string) bool            { return false }
-func (rs *RemoteSandbox) ExportAndImport(_ string) error       { return nil }
-func (rs *RemoteSandbox) GetShell(_, _ string) (string, error) { return "/bin/sh", nil }
+func (rs *RemoteSandbox) IsExporting(_ string) bool      { return false }
+func (rs *RemoteSandbox) ExportAndImport(_ string) error { return nil }
+func (rs *RemoteSandbox) GetShell(userID string, _ string) (string, error) {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return "/bin/sh", nil
+	}
+	return rc.shell, nil
+}
 
 func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 	rc, err := rs.getRunner(spec.UserID)

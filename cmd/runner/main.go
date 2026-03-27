@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -139,4 +140,27 @@ func backoff(attempt int) time.Duration {
 	}
 	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
 	return delay + jitter
+}
+
+// detectShell finds the best available shell.
+// Docker mode: queries /etc/passwd inside the container (same as DockerSandbox.detectShell).
+// Native mode: checks host filesystem.
+func detectShell() string {
+	if dockerMode {
+		out, err := exec.Command("docker", "exec", "-i", executor.(*dockerExecutor).containerName,
+			"sh", "-c", "grep '^root:' /etc/passwd | cut -d: -f7").Output()
+		if err == nil {
+			shell := strings.TrimSpace(string(out))
+			if shell != "" {
+				return shell
+			}
+		}
+	}
+	// Fallback: check host or default
+	for _, candidate := range []string{"/bin/bash", "/usr/bin/bash", "/bin/sh"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "/bin/sh"
 }

@@ -46,6 +46,7 @@ func connectToServer(serverURL, userID, authToken, workspace string) (*websocket
 		UserID:    userID,
 		AuthToken: authToken,
 		Workspace: workspace,
+		Shell:     detectShell(),
 	})
 	regMsg, _ := json.Marshal(RunnerMessage{
 		Type:   "register",

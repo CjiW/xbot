@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 // EditTool 文件编辑工具
@@ -110,6 +111,16 @@ func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) 
 	case "insert":
 		params.Mode = "line"
 		params.Action = "insert"
+	}
+
+	// --- Auto-correct: LLM sometimes puts replacement content in "content" ---
+	if params.Mode == "replace" && params.NewString == "" && params.Content != "" {
+		params.NewString = params.Content
+		params.Content = ""
+		log.WithFields(log.Fields{
+			"old_string_preview": Truncate(params.OldString, 80),
+			"new_string_len":     len([]rune(params.NewString)),
+		}).Info("Edit tool: auto-corrected content→new_string for replace mode")
 	}
 
 	// Validate parameters

@@ -43,13 +43,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 		"command": tools.Truncate(command, 80),
 	}).Info("Bang command")
 
-	workspaceRoot := a.workspaceRoot(msg.SenderID)
-	// For remote users, use the runner's workspace path
-	if a.isRemoteUser(msg.SenderID) {
-		if ws := a.remoteWorkspace(msg.SenderID); ws != "" {
-			workspaceRoot = ws
-		}
-	}
+	workspaceRoot := a.sandboxWorkspace(msg.SenderID)
 	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
@@ -82,6 +76,7 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 
 // executeBangCommand runs the command in the user's sandbox (or locally if sandbox is disabled).
 // Both paths use login shell (bash -l -c) via Sandbox.Exec for consistent behavior.
+// workspaceRoot is the sandbox-internal path for file operations.
 func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, senderID string) (string, error) {
 	execCtx, cancel := context.WithTimeout(ctx, bangDefaultTimeout)
 	defer cancel()
@@ -117,8 +112,9 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		Timeout: bangDefaultTimeout,
 		UserID:  senderID,
 	}
+	// For docker mount validation, Workspace must be the host path.
 	if sandbox.Name() == "docker" {
-		spec.Workspace = workspaceRoot
+		spec.Workspace = a.workspaceRoot(senderID)
 	}
 
 	result, err := sandbox.Exec(execCtx, spec)

@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"os"
-	"sync"
 
 	"xbot/config"
 	log "xbot/logger"
@@ -21,8 +20,6 @@ import (
 // Cross-mode failover (docker ↔ remote) is intentionally NOT supported
 // because the two have completely different filesystems.
 type SandboxRouter struct {
-	mu sync.RWMutex
-
 	docker *DockerSandbox
 	remote *RemoteSandbox
 	none   *NoneSandbox
@@ -40,7 +37,9 @@ func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxR
 	}
 
 	// Initialize docker sandbox if configured
-	if sandboxCfg.Mode == "docker" || sandboxCfg.RemoteMode != "" {
+	// Docker is enabled when Mode=="docker", or when RemoteMode is set and Mode is not "none".
+	// Mode=="none" + RemoteMode=="remote" means remote-only, no docker.
+	if sandboxCfg.Mode == "docker" || (sandboxCfg.RemoteMode != "" && sandboxCfg.Mode != "none") {
 		cleanupStaleTmpFiles()
 		pruneDockerResources()
 		r.docker = NewDockerSandbox(sandboxCfg, workDir)
@@ -87,8 +86,6 @@ func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxR
 // Name returns the default sandbox mode name.
 // For per-user resolution, use SandboxForUser(userID).Name().
 func (r *SandboxRouter) Name() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	return r.defaultMode
 }
 
@@ -101,9 +98,6 @@ func (r *SandboxRouter) Name() string {
 //   - Docker → if docker sandbox exists (fallback)
 //   - None → if neither is available
 func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	if userID != "" && r.remote != nil {
 		if r.remote.HasUser(userID) {
 			return r.remote
@@ -205,7 +199,6 @@ func (r *SandboxRouter) ExportAndImport(userID string) error {
 }
 
 // resolve returns the per-user sandbox instance.
-// Must be called with at least RLock held.
 func (r *SandboxRouter) resolve(userID string) Sandbox {
 	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
 		return r.remote

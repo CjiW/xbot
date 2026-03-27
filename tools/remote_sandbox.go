@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -175,7 +176,7 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	authenticated := (rs.tokenStore != nil && rs.tokenStore.Validate(reg.AuthToken, reg.UserID)) ||
-		(rs.authToken != "" && reg.AuthToken == rs.authToken)
+		(rs.authToken != "" && subtle.ConstantTimeCompare([]byte(reg.AuthToken), []byte(rs.authToken)) == 1)
 	if !authenticated {
 		log.WithFields(log.Fields{
 			"user_id":    reg.UserID,

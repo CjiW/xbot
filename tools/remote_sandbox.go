@@ -20,9 +20,10 @@ import (
 
 // RemoteSandboxConfig holds configuration for creating a RemoteSandbox.
 type RemoteSandboxConfig struct {
-	Addr           string   // WebSocket listen address (e.g., "0.0.0.0:8080")
-	AuthToken      string   // Authentication token for runners
-	AllowedOrigins []string // Allowed WebSocket origins (empty = allow all, for development)
+	Addr           string            // WebSocket listen address (e.g., "0.0.0.0:8080")
+	AuthToken      string            // Authentication token for runners
+	AllowedOrigins []string          // Allowed WebSocket origins (empty = allow all, for development)
+	TokenStore     *RunnerTokenStore // Per-user token store (optional, for per-user tokens)
 }
 
 // RemoteSandboxSyncConfig holds directories to sync to runners on registration.
@@ -32,11 +33,19 @@ type RemoteSandboxSyncConfig struct {
 }
 
 // runnerConnection represents a connected xbot-runner instance.
+// All writes to the WebSocket go through sendCh, consumed by writePump.
 type runnerConnection struct {
-	mu        sync.Mutex
 	wsConn    *websocket.Conn
 	userID    string
-	workspace string // Runner's workspace root directory
+	workspace string
+	sendCh    chan sendEntry // buffered channel for serialized writes
+	done      chan struct{}  // closed when writePump exits
+}
+
+// sendEntry represents a write to be sent by writePump.
+type sendEntry struct {
+	data []byte // TextMessage payload (nil for control-only entries)
+	err  chan error
 }
 
 // RemoteSandbox implements the Sandbox interface via WebSocket communication
@@ -46,6 +55,7 @@ type RemoteSandbox struct {
 	wsServer        *http.Server
 	authToken       string
 	addr            string
+	tokenStore      *RunnerTokenStore
 	pendingMu       sync.Mutex
 	pending         map[string]chan *RunnerMessage // request ID → response channel
 	upgrader        websocket.Upgrader             // per-instance upgrader with origin check
@@ -79,9 +89,10 @@ func NewRemoteSandbox(cfg RemoteSandboxConfig, syncCfg RemoteSandboxSyncConfig) 
 	}
 
 	rs := &RemoteSandbox{
-		authToken: cfg.AuthToken,
-		addr:      cfg.Addr,
-		pending:   make(map[string]chan *RunnerMessage),
+		authToken:  cfg.AuthToken,
+		addr:       cfg.Addr,
+		tokenStore: cfg.TokenStore,
+		pending:    make(map[string]chan *RunnerMessage),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkOrigin,
 		},
@@ -125,7 +136,20 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		log.WithError(err).Error("WebSocket upgrade failed")
 		return
 	}
-	defer conn.Close()
+
+	// Set up ping/pong keep-alive.
+	const (
+		pongWait   = 60 * time.Second
+		pingPeriod = 30 * time.Second
+		writeWait  = 10 * time.Second
+	)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	// Reset read deadline when we receive a pong (response to our pings).
+	// Do NOT set SetPingHandler — the default auto-replies pong to the runner's pings.
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 
 	// Read registration message
 	_, raw, err := conn.ReadMessage()
@@ -149,12 +173,20 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		log.WithError(err).Error("Invalid registration body")
 		return
 	}
-	if reg.AuthToken != rs.authToken {
-		log.WithField("user_id", reg.UserID).Warn("Runner authentication failed")
+	authenticated := (rs.tokenStore != nil && rs.tokenStore.Validate(reg.AuthToken, reg.UserID)) ||
+		(rs.authToken != "" && reg.AuthToken == rs.authToken)
+	if !authenticated {
+		log.WithFields(log.Fields{
+			"user_id":    reg.UserID,
+			"has_store":  rs.tokenStore != nil,
+			"has_global": rs.authToken != "",
+		}).Warn("Runner authentication failed")
+		rs.sendRegisterError(conn, "AUTH_FAILED", "authentication failed")
 		return
 	}
 	if reg.UserID == "" {
 		log.Warn("Runner registration missing user_id")
+		rs.sendRegisterError(conn, "INVALID", "missing user_id")
 		return
 	}
 	// S6: Bind token to userID — the URL path determines identity, not the claim.
@@ -163,6 +195,7 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 			"path_user_id": pathUserID,
 			"claimed_id":   reg.UserID,
 		}).Warn("Runner userID mismatch (potential impersonation)")
+		rs.sendRegisterError(conn, "FORBIDDEN", "user_id mismatch")
 		return
 	}
 
@@ -170,12 +203,24 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		wsConn:    conn,
 		userID:    reg.UserID,
 		workspace: reg.Workspace,
+		sendCh:    make(chan sendEntry, 64),
+		done:      make(chan struct{}),
 	}
 	rs.connections.Store(reg.UserID, rc)
+	defer conn.Close()
+
+	// Send registration acknowledgment
+	okBody, _ := json.Marshal(map[string]string{"status": "ok"})
+	okMsg, _ := json.Marshal(RunnerMessage{Type: "register_ok", Body: okBody})
+	conn.WriteMessage(websocket.TextMessage, okMsg)
+
 	log.WithFields(log.Fields{
 		"user_id":   reg.UserID,
 		"workspace": reg.Workspace,
 	}).Info("Runner connected")
+
+	// Single writer goroutine: handles both request writes and ping heartbeats.
+	go rs.writePump(rc, pingPeriod, writeWait)
 
 	// Sync global skills and agents to the runner in the background
 	go rs.syncToRunner(reg.UserID, reg.Workspace)
@@ -241,10 +286,17 @@ func (rs *RemoteSandbox) sendRequest(ctx context.Context, rc *runnerConnection, 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	rc.mu.Lock()
-	err = rc.wsConn.WriteMessage(websocket.TextMessage, data)
-	rc.mu.Unlock()
-	if err != nil {
+	// Send through the single writer goroutine.
+	errCh := make(chan error, 1)
+	select {
+	case rc.sendCh <- sendEntry{data: data, err: errCh}:
+	case <-rc.done:
+		return nil, fmt.Errorf("runner disconnected")
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	if err = <-errCh; err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 
@@ -256,6 +308,46 @@ func (rs *RemoteSandbox) sendRequest(ctx context.Context, rc *runnerConnection, 
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("request %s timed out after %v", msg.ID, timeout)
 	}
+}
+
+// writePump is the single writer goroutine for a runner connection.
+// It consumes entries from rc.sendCh (text messages from sendRequest) and sends
+// periodic pings to detect dead connections.
+func (rs *RemoteSandbox) writePump(rc *runnerConnection, pingPeriod, writeWait time.Duration) {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		rc.wsConn.Close()
+		close(rc.done)
+	}()
+
+	for {
+		select {
+		case entry := <-rc.sendCh:
+			if entry.data != nil {
+				err := rc.wsConn.WriteMessage(websocket.TextMessage, entry.data)
+				if entry.err != nil {
+					entry.err <- err
+				}
+				if err != nil {
+					return
+				}
+			}
+		case <-ticker.C:
+			if err := rc.wsConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
+				log.WithError(err).WithField("user_id", rc.userID).Debug("Ping to runner failed")
+				return
+			}
+		}
+	}
+}
+
+// sendRegisterError sends a registration error to the runner and closes the connection.
+func (rs *RemoteSandbox) sendRegisterError(conn *websocket.Conn, code, message string) {
+	errBody, _ := json.Marshal(ErrorResponse{Code: code, Message: message})
+	errMsg, _ := json.Marshal(RunnerMessage{Type: "error", Body: errBody})
+	conn.WriteMessage(websocket.TextMessage, errMsg)
+	conn.Close()
 }
 
 // generateID generates a unique request ID.
@@ -270,6 +362,11 @@ func generateID() string {
 // === Sandbox Interface Implementation ===
 
 func (rs *RemoteSandbox) Name() string { return "remote" }
+
+// SetTokenStore sets or replaces the token store.
+func (rs *RemoteSandbox) SetTokenStore(store *RunnerTokenStore) {
+	rs.tokenStore = store
+}
 
 // Workspace returns the runner's workspace root directory for the given user.
 // Returns empty string if the runner is not connected or hasn't reported a workspace.

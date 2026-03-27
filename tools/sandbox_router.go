@@ -180,20 +180,10 @@ func (r *SandboxRouter) Close() error {
 }
 
 // CloseForUser closes sandbox resources for a specific user across all backends.
+// Remote sandbox connections are not closed — runners should be persistent.
 func (r *SandboxRouter) CloseForUser(userID string) error {
-	var errs []error
 	if r.docker != nil {
-		if err := r.docker.CloseForUser(userID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if r.remote != nil {
-		if err := r.remote.CloseForUser(userID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return errs[0]
+		return r.docker.CloseForUser(userID)
 	}
 	return nil
 }

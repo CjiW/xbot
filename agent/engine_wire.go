@@ -455,6 +455,15 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
 	wsRoot := a.workspaceRoot(senderID)
+	isRemote := a.isRemoteUser(senderID)
+	// For remote users, leave WorkspaceRoot/WorkingDir empty — the runner
+	// manages its own filesystem. Keep SkillsDirs/AgentsDir as host paths
+	// for server-side sync (EnsureSynced reads global skills from host).
+	var workspaceRoot, workingDir string
+	if !isRemote {
+		workspaceRoot = wsRoot
+		workingDir = a.workDir
+	}
 	cfg := &RunConfig{
 		AgentID:      "main",
 		Channel:      channel,
@@ -464,8 +473,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		SenderName:   senderName,
 		SendFunc:     a.sendMessage,
 
-		WorkingDir:       a.workDir,
-		WorkspaceRoot:    wsRoot,
+		WorkingDir:       workingDir,
+		WorkspaceRoot:    workspaceRoot,
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
@@ -538,7 +547,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		a.tools.TouchTool(sessionKey, tc.Name)
 
 		// 4. 确保用户工作目录存在（remote 模式跳过，runner 自行管理文件系统）
-		if a.sandbox == nil || a.sandbox.Name() != "remote" {
+		if !a.isRemoteUser(senderID) {
 			if err := os.MkdirAll(wsRoot, 0o755); err != nil {
 				return nil, fmt.Errorf("create user workspace: %w", err)
 			}

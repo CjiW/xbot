@@ -11,6 +11,11 @@ func defaultWorkspaceRoot(ctx *ToolContext) string {
 	if ctx == nil {
 		return ""
 	}
+	// Remote sandbox: the runner handles its own path enforcement.
+	// The server doesn't have the runner's filesystem, so skip checks.
+	if ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		return ""
+	}
 	if ctx.Sandbox != nil && ctx.Sandbox.Name() != "none" {
 		return ctx.Sandbox.Workspace(ctx.OriginUserID)
 	}
@@ -43,6 +48,18 @@ func resolveScopedBase(ctx *ToolContext) (string, error) {
 func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 	if inputPath == "" {
 		return "", fmt.Errorf("path is required")
+	}
+
+	// Remote sandbox: the runner handles its own path enforcement.
+	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		if filepath.IsAbs(inputPath) {
+			return cleanAbsPath(inputPath)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+		return cleanAbsPath(filepath.Join(cwd, inputPath))
 	}
 
 	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0 && !ctx.SandboxEnabled) {
@@ -105,6 +122,18 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
+	// Remote sandbox: the runner handles its own path enforcement.
+	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+		if filepath.IsAbs(inputPath) {
+			return cleanAbsPath(inputPath)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+		return cleanAbsPath(filepath.Join(cwd, inputPath))
+	}
+
 	if ctx == nil || (ctx.WorkspaceRoot == "" && ctx.WorkingDir == "" && len(ctx.ReadOnlyRoots) == 0 && !ctx.SandboxEnabled) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
@@ -164,7 +193,7 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 }
 
 // sandboxBaseDir 返回沙箱内的工作目录前缀。
-// 返回 Sandbox.Workspace(userID)（docker 模式下通常为 "/workspace"）。
+// 返回 Sandbox.Workspace(userID)（docker 模式下通常为 "/workspace"，remote 模式为 runner workspace）。
 // 返回空字符串表示无沙箱路径约束（none 模式），调用方应跳过路径校验。
 func sandboxBaseDir(ctx *ToolContext) string {
 	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() != "none" {

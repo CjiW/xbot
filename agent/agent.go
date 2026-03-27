@@ -1010,10 +1010,38 @@ func (a *Agent) workspaceRoot(senderID string) string {
 	return tools.UserWorkspaceRoot(a.workDir, senderID)
 }
 
+// isRemoteUser checks whether the given user routes to a remote sandbox.
+// Uses SandboxResolver for per-user routing instead of checking Name() on the
+// global SandboxRouter (which returns "router", not "remote").
+func (a *Agent) isRemoteUser(userID string) bool {
+	if a.sandbox == nil {
+		return false
+	}
+	if resolver, ok := a.sandbox.(tools.SandboxResolver); ok {
+		return resolver.SandboxForUser(userID).Name() == "remote"
+	}
+	return a.sandbox.Name() == "remote"
+}
+
+// remoteWorkspace returns the remote runner's workspace for the given user.
+// Returns "" if the user is not on a remote sandbox or has no active connection.
+func (a *Agent) remoteWorkspace(userID string) string {
+	if a.sandbox == nil {
+		return ""
+	}
+	if resolver, ok := a.sandbox.(tools.SandboxResolver); ok {
+		return resolver.SandboxForUser(userID).Workspace(userID)
+	}
+	if a.sandbox.Name() == "remote" {
+		return a.sandbox.Workspace(userID)
+	}
+	return ""
+}
+
 // ensureWorkspace ensures the workspace directory exists (sandbox-aware).
 // Skipped for remote sandbox — the runner manages its own filesystem.
 func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
-	if a.sandbox != nil && a.sandbox.Name() == "remote" {
+	if a.isRemoteUser(senderID) {
 		return nil
 	}
 	if a.sandbox != nil {
@@ -1222,16 +1250,19 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		// 更新最后活跃的 senderID
 		lastSenderID = msg.SenderID
 
-		// 处理完成后，如果启用了 idle timeout，设置 timer
+		// 处理完成后，如果启用了 idle timeout 且用户有 docker 沙箱，设置 timer
+		// Remote sandbox 连接应保持常驻，不做 idle 清理
 		if a.sandboxIdleTimeout > 0 && lastSenderID != "" {
-			idleTimer = time.AfterFunc(a.sandboxIdleTimeout, func() {
-				sb := tools.GetSandbox()
-				if err := sb.CloseForUser(lastSenderID); err != nil {
-					log.WithError(err).Warnf("Idle sandbox cleanup failed for user %s", lastSenderID)
-				} else {
-					log.Infof("Idle sandbox cleaned up for user %s (timeout: %s)", lastSenderID, a.sandboxIdleTimeout)
-				}
-			})
+			// Skip idle cleanup for remote sandbox — the runner connection should be persistent
+			if !a.isRemoteUser(lastSenderID) {
+				idleTimer = time.AfterFunc(a.sandboxIdleTimeout, func() {
+					if err := a.sandbox.CloseForUser(lastSenderID); err != nil {
+						log.WithError(err).Warnf("Idle sandbox cleanup failed for user %s", lastSenderID)
+					} else {
+						log.Infof("Idle sandbox cleaned up for user %s (timeout: %s)", lastSenderID, a.sandboxIdleTimeout)
+					}
+				})
+			}
 		}
 	}
 }
@@ -1500,10 +1531,8 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	promptWorkDir := a.workDir
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
-	} else if a.sandbox != nil && a.sandbox.Name() == "remote" && msg.SenderID != "" {
-		if ws := a.sandbox.Workspace(msg.SenderID); ws != "" {
-			promptWorkDir = ws
-		}
+	} else if ws := a.remoteWorkspace(msg.SenderID); ws != "" {
+		promptWorkDir = ws
 	}
 
 	mc := NewMessageContext(

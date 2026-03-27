@@ -61,55 +61,44 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 
-	// Use a generous upper bound to ensure we get at least `limit` non-tool messages.
-	// Tool messages are interspersed between user/assistant messages and count toward
-	// the total, so we fetch limit * 3 to have enough headroom.
-	upperBound := limit * 3
-	if upperBound < 100 {
-		upperBound = 100
+	// Find the boundary: the Nth user message from the end (0-indexed offset = limit - 1).
+	// This way the window is measured in user-message turns, not raw row count,
+	// so multi-iteration assistant messages don't squeeze out real conversation history.
+	var boundaryID sql.NullInt64
+	err := conn.QueryRow(`
+		SELECT id FROM session_messages
+		WHERE tenant_id = ? AND role = 'user'
+		ORDER BY id DESC
+		LIMIT 1 OFFSET ?
+	`, tenantID, limit-1).Scan(&boundaryID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("query history boundary: %w", err)
 	}
 
-	rows, err := conn.Query(`
-		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
-		FROM session_messages
-		WHERE tenant_id = ?
-		ORDER BY id DESC
-		LIMIT ?
-	`, tenantID, upperBound)
+	var rows *sql.Rows
+	if boundaryID.Valid {
+		// Fetch all messages from the boundary user message onwards
+		rows, err = conn.Query(`
+			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
+			FROM session_messages
+			WHERE tenant_id = ? AND id >= ?
+			ORDER BY id ASC
+		`, tenantID, boundaryID.Int64)
+	} else {
+		// Fewer than `limit` user messages exist, return all
+		rows, err = conn.Query(`
+			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
+			FROM session_messages
+			WHERE tenant_id = ?
+			ORDER BY id ASC
+		`, tenantID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query session history: %w", err)
 	}
 	defer rows.Close()
 
-	messages, err := s.scanMessages(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	// Reverse to chronological order (oldest first)
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-
-	// Trim from the beginning to keep at most `limit` user/assistant messages.
-	// Walk from the end to find the cut point where we have exactly `limit`
-	// non-tool messages in the tail.
-	nonToolCount := 0
-	cutIdx := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != "tool" {
-			nonToolCount++
-			if nonToolCount == limit {
-				cutIdx = i
-				break
-			}
-		}
-	}
-	if cutIdx > 0 {
-		messages = messages[cutIdx:]
-	}
-
-	return messages, nil
+	return s.scanMessages(rows)
 }
 
 // GetAllMessages retrieves all messages for a tenant
@@ -156,6 +145,52 @@ func (s *SessionService) Clear(tenantID int64) error {
 		"messages":  rows,
 	}).Debug("Session messages cleared")
 	return nil
+}
+
+// PurgeOldMessages deletes messages older than the most recent `keepCount` messages for a tenant.
+// This is used after compression to remove messages that have already been summarized.
+func (s *SessionService) PurgeOldMessages(tenantID int64, keepCount int) (int64, error) {
+	if keepCount <= 0 {
+		return 0, nil
+	}
+	conn := s.db.Conn()
+
+	// Find the ID of the message at position `keepCount` from the end (i.e., the oldest message to keep).
+	// Messages with ID < cutoff will be deleted.
+	var cutoffID sql.NullInt64
+	err := conn.QueryRow(`
+		SELECT id FROM session_messages
+		WHERE tenant_id = ?
+		ORDER BY id DESC
+		LIMIT 1
+		OFFSET ?
+	`, tenantID, keepCount).Scan(&cutoffID)
+	if err == sql.ErrNoRows {
+		// Fewer messages than keepCount, nothing to purge
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("find purge cutoff: %w", err)
+	}
+
+	if !cutoffID.Valid {
+		return 0, nil
+	}
+
+	result, err := conn.Exec("DELETE FROM session_messages WHERE tenant_id = ? AND id < ?", tenantID, cutoffID.Int64)
+	if err != nil {
+		return 0, fmt.Errorf("purge old messages: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows > 0 {
+		log.WithFields(log.Fields{
+			"tenant_id": tenantID,
+			"purged":    rows,
+			"kept":      keepCount,
+			"cutoff_id": cutoffID.Int64,
+		}).Info("Purged old messages after compression")
+	}
+	return rows, nil
 }
 
 // scanMessages scans message rows from a query result

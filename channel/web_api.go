@@ -1,9 +1,11 @@
 package channel
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,12 +20,14 @@ type historyResponse struct {
 }
 
 type histMsg struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at,omitempty"`
+	Role      string  `json:"role"`
+	Content   string  `json:"content"`
+	CreatedAt string  `json:"created_at,omitempty"`
+	ToolCalls *string `json:"tool_calls,omitempty"`
+	Detail    *string `json:"detail,omitempty"` // iteration history JSON for assistant messages
 }
 
-// handleHistory handles GET /api/history?limit=50
+// handleHistory handles GET /api/history
 func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -34,14 +38,6 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if senderID == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
-	}
-
-	// Parse limit
-	limit := 50
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
 	}
 
 	// Find tenant ID for this web user
@@ -55,14 +51,41 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query session messages (exclude tool messages from history)
-	rows, err := wc.db.Query(`
-		SELECT role, content, created_at
-		FROM session_messages
-		WHERE tenant_id = ? AND role != 'tool'
-		ORDER BY id DESC
-		LIMIT ?
-	`, tenantID, limit)
+	// Count user messages as the history window.
+	// Find the id of the N-th most recent user message, then fetch all displayable
+	// messages from that point onward.
+	limit := wc.config.MemoryWindow
+	if limit <= 0 {
+		limit = 50
+	}
+	var boundaryID sql.NullInt64
+	err = wc.db.QueryRow(`
+			SELECT id FROM session_messages
+			WHERE tenant_id = ? AND role = 'user'
+			ORDER BY id DESC
+			LIMIT 1 OFFSET ?
+		`, tenantID, limit).Scan(&boundaryID)
+	if err != nil && err != sql.ErrNoRows {
+		writeJSON(w, http.StatusInternalServerError, historyResponse{OK: false, Error: "query failed"})
+		return
+	}
+
+	var rows *sql.Rows
+	if boundaryID.Valid {
+		rows, err = wc.db.Query(`
+				SELECT role, content, created_at, tool_calls, detail
+				FROM session_messages
+				WHERE tenant_id = ? AND id >= ? AND role IN ('user', 'assistant')
+				ORDER BY id ASC
+			`, tenantID, boundaryID.Int64)
+	} else {
+		rows, err = wc.db.Query(`
+				SELECT role, content, created_at, tool_calls, detail
+				FROM session_messages
+				WHERE tenant_id = ? AND role IN ('user', 'assistant')
+				ORDER BY id ASC
+			`, tenantID)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, historyResponse{OK: false, Error: "query failed"})
 		return
@@ -72,15 +95,17 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	var messages []histMsg
 	for rows.Next() {
 		var m histMsg
-		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var toolCalls, detail sql.NullString
+		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail); err != nil {
 			continue
 		}
+		if toolCalls.Valid {
+			m.ToolCalls = &toolCalls.String
+		}
+		if detail.Valid {
+			m.Detail = &detail.String
+		}
 		messages = append(messages, m)
-	}
-
-	// Reverse to chronological order
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
 	}
 
 	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages})
@@ -374,6 +399,153 @@ func (wc *WebChannel) handleMarketInstall(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, marketResponse{OK: true})
 }
 
+// ---------------------------------------------------------------------------
+// LLM Config API
+// ---------------------------------------------------------------------------
+
+type llmConfigResponse struct {
+	OK       bool     `json:"ok"`
+	Provider string   `json:"provider,omitempty"`
+	BaseURL  string   `json:"base_url,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	Models   []string `json:"models,omitempty"`
+	Error    string   `json:"error,omitempty"`
+}
+
+type llmConfigSetRequest struct {
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+}
+
+type llmModelSetRequest struct {
+	Model string `json:"model"`
+}
+
+// handleLLMConfig handles GET/POST/DELETE /api/llm-config
+func (wc *WebChannel) handleLLMConfig(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, llmConfigResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		wc.handleLLMConfigGet(w, senderID)
+	case http.MethodPost:
+		wc.handleLLMConfigSet(w, r, senderID)
+	case http.MethodDelete:
+		wc.handleLLMConfigDelete(w, senderID)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (wc *WebChannel) handleLLMConfigGet(w http.ResponseWriter, senderID string) {
+	if wc.callbacks.LLMGetConfig == nil {
+		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+		return
+	}
+
+	provider, baseURL, model, ok := wc.callbacks.LLMGetConfig(senderID)
+	if !ok {
+		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+		return
+	}
+
+	// Also fetch available models if a list callback exists
+	var models []string
+	if wc.callbacks.LLMList != nil {
+		var currentModel string
+		models, currentModel = wc.callbacks.LLMList(senderID)
+		if currentModel != "" {
+			model = currentModel
+		}
+	}
+
+	resp := llmConfigResponse{
+		OK:       true,
+		Provider: provider,
+		BaseURL:  baseURL,
+		Model:    model,
+		Models:   models,
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (wc *WebChannel) handleLLMConfigSet(w http.ResponseWriter, r *http.Request, senderID string) {
+	if wc.callbacks.LLMSetConfig == nil {
+		writeJSON(w, http.StatusServiceUnavailable, llmConfigResponse{OK: false, Error: "not configured"})
+		return
+	}
+
+	var req llmConfigSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "invalid request body"})
+		return
+	}
+
+	if req.Provider == "" || req.BaseURL == "" || req.APIKey == "" {
+		writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "provider, base_url, api_key are required"})
+		return
+	}
+
+	if err := wc.callbacks.LLMSetConfig(senderID, req.Provider, req.BaseURL, req.APIKey, req.Model); err != nil {
+		writeJSON(w, http.StatusInternalServerError, llmConfigResponse{OK: false, Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+}
+
+func (wc *WebChannel) handleLLMConfigDelete(w http.ResponseWriter, senderID string) {
+	if wc.callbacks.LLMDelete == nil {
+		writeJSON(w, http.StatusServiceUnavailable, llmConfigResponse{OK: false, Error: "not configured"})
+		return
+	}
+
+	if err := wc.callbacks.LLMDelete(senderID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, llmConfigResponse{OK: false, Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+}
+
+// handleLLMModelSet handles POST /api/llm-config/model (switch model only)
+func (wc *WebChannel) handleLLMModelSet(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, llmConfigResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	if wc.callbacks.LLMSet == nil {
+		writeJSON(w, http.StatusServiceUnavailable, llmConfigResponse{OK: false, Error: "not configured"})
+		return
+	}
+
+	var req llmModelSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "invalid request body"})
+		return
+	}
+
+	if req.Model == "" {
+		writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "model is required"})
+		return
+	}
+
+	if err := wc.callbacks.LLMSet(senderID, req.Model); err != nil {
+		writeJSON(w, http.StatusInternalServerError, llmConfigResponse{OK: false, Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+}
+
 // handleMarketUninstall handles POST /api/market/uninstall
 func (wc *WebChannel) handleMarketUninstall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -399,6 +571,169 @@ func (wc *WebChannel) handleMarketUninstall(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := wc.callbacks.RegistryUninstall(req.Type, req.Name, senderID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, marketResponse{OK: false, Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, marketResponse{OK: true})
+}
+
+// ---------------------------------------------------------------------------
+// /api/market/my — list user's own agents/skills with publish status
+// ---------------------------------------------------------------------------
+
+type myMarketEntry struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+	Published   bool   `json:"published"`
+}
+
+type myMarketResponse struct {
+	OK      bool            `json:"ok"`
+	Entries []myMarketEntry `json:"entries,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// handleMarketMy handles GET /api/market/my?type=skill
+func (wc *WebChannel) handleMarketMy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, myMarketResponse{OK: false, Error: "method not allowed"})
+		return
+	}
+
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, myMarketResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	if wc.callbacks.RegistryListMy == nil {
+		writeJSON(w, http.StatusOK, myMarketResponse{OK: true, Entries: nil})
+		return
+	}
+
+	entryType := r.URL.Query().Get("type")
+	published, local, err := wc.callbacks.RegistryListMy(senderID, entryType)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, myMarketResponse{OK: false, Error: "list failed"})
+		return
+	}
+
+	// Build published name set for lookup
+	publishedSet := make(map[string]string) // name -> description
+	for _, pe := range published {
+		publishedSet[pe.Name] = pe.Description
+	}
+
+	result := make([]myMarketEntry, 0)
+	for _, key := range local {
+		// key format: "skill:name" or "agent:name"
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		typ, name := parts[0], parts[1]
+
+		entry := myMarketEntry{
+			Name: name,
+			Type: typ,
+		}
+		if desc, ok := publishedSet[name]; ok {
+			entry.Published = true
+			entry.Description = desc
+		}
+		result = append(result, entry)
+	}
+
+	writeJSON(w, http.StatusOK, myMarketResponse{OK: true, Entries: result})
+}
+
+// ---------------------------------------------------------------------------
+// /api/market/publish — publish user's skill/agent to marketplace
+// ---------------------------------------------------------------------------
+
+type marketPublishRequest struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+// handleMarketPublish handles POST /api/market/publish
+func (wc *WebChannel) handleMarketPublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, marketResponse{OK: false, Error: "method not allowed"})
+		return
+	}
+
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, marketResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	if wc.callbacks.RegistryPublish == nil {
+		writeJSON(w, http.StatusServiceUnavailable, marketResponse{OK: false, Error: "registry not configured"})
+		return
+	}
+
+	var req marketPublishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, marketResponse{OK: false, Error: "invalid request body"})
+		return
+	}
+
+	if req.Type == "" || req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, marketResponse{OK: false, Error: "type and name are required"})
+		return
+	}
+
+	if err := wc.callbacks.RegistryPublish(req.Type, req.Name, senderID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, marketResponse{OK: false, Error: err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, marketResponse{OK: true})
+}
+
+// ---------------------------------------------------------------------------
+// /api/market/unpublish — unpublish user's skill/agent from marketplace
+// ---------------------------------------------------------------------------
+
+type marketUnpublishRequest struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+// handleMarketUnpublish handles POST /api/market/unpublish
+func (wc *WebChannel) handleMarketUnpublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, marketResponse{OK: false, Error: "method not allowed"})
+		return
+	}
+
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, marketResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	if wc.callbacks.RegistryUnpublish == nil {
+		writeJSON(w, http.StatusServiceUnavailable, marketResponse{OK: false, Error: "registry not configured"})
+		return
+	}
+
+	var req marketUnpublishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, marketResponse{OK: false, Error: "invalid request body"})
+		return
+	}
+
+	if req.Type == "" || req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, marketResponse{OK: false, Error: "type and name are required"})
+		return
+	}
+
+	if err := wc.callbacks.RegistryUnpublish(req.Type, req.Name, senderID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, marketResponse{OK: false, Error: err.Error()})
 		return
 	}

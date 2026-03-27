@@ -146,6 +146,8 @@ type AgentConfig struct {
 	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7，即 70% 时触发）
 
+	PurgeOldMessages bool // 压缩后清理超出 MemoryWindow 的旧消息（默认 false）
+
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
@@ -261,10 +263,12 @@ func Load() *Config {
 			EnableTopicIsolation:     getEnvBoolOrDefault("AGENT_ENABLE_TOPIC_ISOLATION", false),
 			TopicMinSegmentSize:      getEnvIntOrDefault("AGENT_TOPIC_MIN_SEGMENT_SIZE", 3),
 			TopicSimilarityThreshold: getEnvFloatOrDefault("AGENT_TOPIC_SIMILARITY_THRESHOLD", 0.3),
-			LLMRetryAttempts:         getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
-			LLMRetryDelay:            getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
-			LLMRetryMaxDelay:         getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
-			LLMRetryTimeout:          getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
+			PurgeOldMessages:         getEnvBoolOrDefault("AGENT_PURGE_OLD_MESSAGES", false),
+
+			LLMRetryAttempts: getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
+			LLMRetryDelay:    getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
+			LLMRetryMaxDelay: getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
+			LLMRetryTimeout:  getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),

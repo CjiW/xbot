@@ -45,9 +45,10 @@ const (
 
 // WebChannelConfig Web 渠道配置（channel 包内部使用）
 type WebChannelConfig struct {
-	Host string
-	Port int
-	DB   *sql.DB // SQLite DB handle for user management and history
+	Host         string
+	Port         int
+	DB           *sql.DB // SQLite DB handle for user management and history
+	MemoryWindow int
 }
 
 // WebCallbacks holds callback functions for Web channel API endpoints.
@@ -79,6 +80,10 @@ type WebCallbacks struct {
 	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
 	// LLMDelete reverts user to global LLM config.
 	LLMDelete func(senderID string) error
+	// NormalizeSenderID normalizes sender ID for single-user mode.
+	NormalizeSenderID func(senderID string) string
+	// RegistryPublish publishes a user's agent/skill to the marketplace.
+	RegistryPublish func(entryType, name, senderID string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +252,7 @@ type WsProgressPayload struct {
 	Iteration      int              `json:"iteration,omitempty"`
 	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
 	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
+	Thinking       string           `json:"thinking,omitempty"`
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -451,7 +457,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 }
 
 // SendProgress 发送结构化进度事件到 Web 客户端（非阻塞）。
-// 调用方应通过 goroutine 包裹以避免阻塞 engine 循环。
+// 内部通过 hub 的缓冲通道发送，保持调用路径轻量。
 func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 	if payload == nil {
 		return
@@ -494,6 +500,9 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	senderID := "web-" + strconv.Itoa(si.userID)
+	if wc.callbacks.NormalizeSenderID != nil {
+		senderID = wc.callbacks.NormalizeSenderID(senderID)
+	}
 
 	client := &Client{
 		conn:   conn,

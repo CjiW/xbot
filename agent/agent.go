@@ -200,11 +200,13 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus                *bus.MessageBus
-	multiSession       *session.MultiTenantSession // Multi-tenant session manager
-	tools              *tools.Registry
-	maxIterations      int
-	memoryWindow       int
+	bus              *bus.MessageBus
+	multiSession     *session.MultiTenantSession // Multi-tenant session manager
+	tools            *tools.Registry
+	maxIterations    int
+	memoryWindow     int
+	purgeOldMessages bool
+
 	skills             *SkillStore
 	agents             *AgentStore
 	chatHistory        *tools.ChatHistoryStore // 聊天历史缓存
@@ -415,9 +417,14 @@ type Config struct {
 	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
 	TopicMinSegmentSize      int     `json:"topic_min_segment_size"`     // 最小话题片段大小（默认 3）
 	TopicSimilarityThreshold float64 `json:"topic_similarity_threshold"` // 话题相似度阈值（默认 0.3）
+
+	// 压缩后清理旧消息
+	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
+
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
+
 func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, *tools.Registry, *tools.CardBuilder) {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
 
@@ -664,12 +671,14 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:                cfg.Bus,
-		multiSession:       multiSession,
-		tools:              registry,
-		maxIterations:      cfg.MaxIterations,
-		maxConcurrency:     cfg.MaxConcurrency,
-		memoryWindow:       cfg.MemoryWindow,
+		bus:              cfg.Bus,
+		multiSession:     multiSession,
+		tools:            registry,
+		maxIterations:    cfg.MaxIterations,
+		maxConcurrency:   cfg.MaxConcurrency,
+		memoryWindow:     cfg.MemoryWindow,
+		purgeOldMessages: cfg.PurgeOldMessages,
+
 		skills:             skillStore,
 		agents:             agentStore,
 		chatHistory:        chatHistory,
@@ -1464,6 +1473,12 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	assistantMsg := llm.NewAssistantMessage(finalContent)
+	// Attach iteration history as JSON detail for UI display (not included in LLM context).
+	if len(out.IterationHistory) > 0 {
+		if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+			assistantMsg.Detail = string(jsonBytes)
+		}
+	}
 	if len(toolsUsed) > 0 {
 		_ = toolsUsed
 	}
@@ -1472,7 +1487,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 通过 sendMessage 发送最终回复（复用 session 内的消息更新跟踪）
-	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
+	sendMeta := map[string]string{}
+	if assistantMsg.Detail != "" {
+		sendMeta["progress_history"] = assistantMsg.Detail
+	}
+	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent, sendMeta); err != nil {
 		log.Ctx(ctx).WithError(err).Error("Failed to send final response via sendMessage")
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -1819,7 +1838,7 @@ func (a *Agent) RegisterCoreTool(tool tools.Tool) {
 
 // 首次发送创建新消息（如有入站 message_id 则回复该消息），后续发送 Patch 更新同一条消息。
 // 工具发送最终回复（如飞书卡片）时同样 Patch 更新，但标记 session 为"已完成"，后续调用自动跳过。
-func (a *Agent) sendMessage(channel, chatID, content string) error {
+func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[string]string) error {
 	key := channel + ":" + chatID
 
 	// 工具已发送最终回复 → 跳过后续所有消息（进度更新、LLM 最终回复等）
@@ -1832,11 +1851,16 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		ChatID:  chatID,
 		Content: content,
 	}
+	if len(metadata) > 0 && metadata[0] != nil {
+		msg.Metadata = metadata[0]
+	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
-		msg.Metadata = make(map[string]string)
+		if msg.Metadata == nil {
+			msg.Metadata = make(map[string]string)
+		}
 
 		// Always include update_message_id for patch support.
 		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,

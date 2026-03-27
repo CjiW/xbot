@@ -24,23 +24,23 @@ type ToolContext struct {
 	SandboxReadOnlyRoots    []string        // 当前用户额外可读目录（sandbox 路径，预转换）
 	SkillsDirs              []string        // 全局 skill 目录列表（宿主机路径，同步源）
 	AgentsDir               string
-	MCPConfigPath           string                                          // 当前用户 MCP 配置路径
-	GlobalMCPConfigPath     string                                          // 全局 MCP 配置路径（只读）
-	SandboxEnabled          bool                                            // 是否启用命令沙箱
-	PreferredSandbox        string                                          // 沙箱优先级（docker 优先）
-	Sandbox                 Sandbox                                         // V4 新增：统一 Sandbox 接口实例
-	AgentID                 string                                          // 当前 Agent 的 ID
-	Manager                 SubAgentManager                                 // Agent 管理器引用（用于创建 SubAgent）
-	DataDir                 string                                          // 数据持久化目录
-	Channel                 string                                          // 当前消息来源渠道
-	ChatID                  string                                          // 当前消息来源会话
-	SenderID                string                                          // 直接调用者 ID（SubAgent 场景下为父 Agent ID，主 Agent 场景下等于 OriginUserID）
-	OriginUserID            string                                          // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等需要原始用户的场景）
-	SenderName              string                                          // 当前消息发送者姓名
-	SendFunc                func(channel, chatID, content string) error     // 向 IM 渠道发送消息（不经过 Agent），返回错误
-	InjectInbound           func(channel, chatID, senderID, content string) // 注入入站消息，触发 Agent 完整处理循环
-	Registry                *Registry                                       // 工具注册表引用（用于动态注册工具）
-	InvalidateAllSessionMCP func()                                          // 使所有会话的 MCP 连接失效
+	MCPConfigPath           string                                                                     // 当前用户 MCP 配置路径
+	GlobalMCPConfigPath     string                                                                     // 全局 MCP 配置路径（只读）
+	SandboxEnabled          bool                                                                       // 是否启用命令沙箱
+	PreferredSandbox        string                                                                     // 沙箱优先级（docker 优先）
+	Sandbox                 Sandbox                                                                    // V4 新增：统一 Sandbox 接口实例
+	AgentID                 string                                                                     // 当前 Agent 的 ID
+	Manager                 SubAgentManager                                                            // Agent 管理器引用（用于创建 SubAgent）
+	DataDir                 string                                                                     // 数据持久化目录
+	Channel                 string                                                                     // 当前消息来源渠道
+	ChatID                  string                                                                     // 当前消息来源会话
+	SenderID                string                                                                     // 直接调用者 ID（SubAgent 场景下为父 Agent ID，主 Agent 场景下等于 OriginUserID）
+	OriginUserID            string                                                                     // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等需要原始用户的场景）
+	SenderName              string                                                                     // 当前消息发送者姓名
+	SendFunc                func(channel, chatID, content string, metadata ...map[string]string) error // 向 IM 渠道发送消息（不经过 Agent），返回错误
+	InjectInbound           func(channel, chatID, senderID, content string)                            // 注入入站消息，触发 Agent 完整处理循环
+	Registry                *Registry                                                                  // 工具注册表引用（用于动态注册工具）
+	InvalidateAllSessionMCP func()                                                                     // 使所有会话的 MCP 连接失效
 
 	// Letta memory fields (nil when memory provider is not letta)
 	TenantID        int64                        // 当前租户 ID

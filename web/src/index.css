@@ -32,7 +32,8 @@ body {
 .markdown-body h1 { font-size: 1.5em; font-weight: 700; margin: 0.5em 0; }
 .markdown-body h2 { font-size: 1.3em; font-weight: 600; margin: 0.5em 0; }
 .markdown-body h3 { font-size: 1.1em; font-weight: 600; margin: 0.5em 0; }
-.markdown-body p { margin: 0.4em 0; }
+.markdown-body h4 { font-size: 1em; font-weight: 600; margin: 0.5em 0; }
+.markdown-body p { margin: 0.4em 0; line-height: 1.65; }
 .markdown-body code {
   background: #1e293b;
   padding: 2px 6px;
@@ -48,12 +49,14 @@ body {
 }
 .markdown-body pre code {
   background: transparent;
-  padding: 0; /* padding is on <pre> via inline style, not on <code> */
+  padding: 0;
 }
 .markdown-body ul, .markdown-body ol {
   padding-left: 1.5em;
   margin: 0.3em 0;
 }
+.markdown-body li { margin: 0.2em 0; line-height: 1.6; }
+.markdown-body li > ul, .markdown-body li > ol { margin: 0.1em 0; }
 .markdown-body blockquote {
   border-left: 3px solid #475569;
   padding-left: 12px;
@@ -63,6 +66,62 @@ body {
 .markdown-body a {
   color: #60a5fa;
   text-decoration: underline;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid #334155;
+  margin: 1em 0;
+}
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 0.5em 0;
+}
+
+/* Markdown table styling */
+.markdown-body .table-wrapper {
+  overflow-x: auto;
+  margin: 0.6em 0;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0;
+  font-size: 0.92em;
+}
+.markdown-body thead th {
+  background: #1e293b;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 14px;
+  border: 1px solid #334155;
+  white-space: nowrap;
+}
+.markdown-body tbody td {
+  padding: 7px 14px;
+  border: 1px solid #334155;
+  vertical-align: top;
+}
+.markdown-body tbody tr:hover {
+  background: #1e293b55;
+}
+.markdown-body tbody tr:nth-child(even) {
+  background: #0f172a88;
+}
+
+/* Mermaid diagram container */
+.markdown-body .mermaid-wrapper {
+  background: #1e293b;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 0.6em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.markdown-body .mermaid-wrapper svg {
+  max-width: 100%;
+  height: auto;
 }
 
 /* ========================================================================== */
@@ -1095,6 +1154,65 @@ body, .markdown-body, .tiptap-wrapper .tiptap p {
   background: rgba(127, 29, 29, 0.4);
 }
 
+/* Sub tab bar */
+.market-sub-tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.2);
+  padding-bottom: 0;
+}
+
+.market-sub-tab {
+  padding: 6px 16px;
+  font-size: 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.market-sub-tab.active {
+  border-bottom-color: #3b82f6;
+  color: #93c5fd;
+}
+
+/* Entry status badges */
+.market-entry-status {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+}
+
+.market-entry-status.published {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.market-entry-status.unpublished {
+  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.15);
+}
+
+/* Unpublish button */
+.market-unpublish-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.market-unpublish-btn:hover {
+  background: rgba(245, 158, 11, 0.3);
+}
+
 /* Light theme market overrides */
 [data-theme="light"] .market-tab {
   border-color: #cbd5e1;
@@ -1152,4 +1270,34 @@ body, .markdown-body, .tiptap-wrapper .tiptap p {
 
 [data-theme="light"] .market-uninstall-btn:hover {
   background: rgba(254, 202, 202, 0.6);
+}
+
+[data-theme="light"] .market-sub-tab {
+  color: #64748b;
+  border-bottom-color: transparent;
+}
+
+[data-theme="light"] .market-sub-tab.active {
+  border-bottom-color: #3b82f6;
+  color: #1e293b;
+}
+
+[data-theme="light"] .market-entry-status.published {
+  color: #059669;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+[data-theme="light"] .market-entry-status.unpublished {
+  color: #94a3b8;
+  background: rgba(100, 116, 139, 0.1);
+}
+
+[data-theme="light"] .market-unpublish-btn {
+  border-color: #fcd34d;
+  background: rgba(254, 243, 199, 0.5);
+  color: #b45309;
+}
+
+[data-theme="light"] .market-unpublish-btn:hover {
+  background: rgba(254, 243, 199, 0.8);
 }

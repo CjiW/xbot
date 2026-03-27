@@ -1014,17 +1014,29 @@ func (a *Agent) workspaceRoot(senderID string) string {
 // Uses SandboxResolver for per-user routing instead of checking Name() on the
 // global SandboxRouter (which returns "router", not "remote").
 func (a *Agent) isRemoteUser(userID string) bool {
+	return a.sandboxNameForUser(userID) == "remote"
+}
+
+// isDockerUser checks whether the given user routes to a docker sandbox.
+func (a *Agent) isDockerUser(userID string) bool {
+	return a.sandboxNameForUser(userID) == "docker"
+}
+
+// sandboxNameForUser resolves the sandbox name for a given user.
+func (a *Agent) sandboxNameForUser(userID string) string {
 	if a.sandbox == nil {
-		return false
+		return ""
 	}
 	if resolver, ok := a.sandbox.(tools.SandboxResolver); ok {
-		return resolver.SandboxForUser(userID).Name() == "remote"
+		return resolver.SandboxForUser(userID).Name()
 	}
-	return a.sandbox.Name() == "remote"
+	return a.sandbox.Name()
 }
 
 // remoteWorkspace returns the remote runner's workspace for the given user.
 // Returns "" if the user is not on a remote sandbox or has no active connection.
+//
+// Deprecated: use sandboxWorkspace instead for all sandbox file operations.
 func (a *Agent) remoteWorkspace(userID string) string {
 	if a.sandbox == nil {
 		return ""
@@ -1038,10 +1050,37 @@ func (a *Agent) remoteWorkspace(userID string) string {
 	return ""
 }
 
+// sandboxWorkspace returns the correct workspace path for sandbox file operations.
+// For docker mode: returns "/workspace" (the container-internal mount point).
+// For remote mode: returns the runner's registered workspace.
+// For none/local mode: returns the host-side user workspace root.
+func (a *Agent) sandboxWorkspace(userID string) string {
+	if a.sandbox == nil {
+		return a.workspaceRoot(userID)
+	}
+	sb := a.sandbox
+	if resolver, ok := sb.(tools.SandboxResolver); ok {
+		sb = resolver.SandboxForUser(userID)
+	}
+	switch sb.Name() {
+	case "docker":
+		return sb.Workspace(userID) // "/workspace"
+	case "remote":
+		return sb.Workspace(userID) // runner's workspace
+	default:
+		return a.workspaceRoot(userID)
+	}
+}
+
 // ensureWorkspace ensures the workspace directory exists (sandbox-aware).
-// Skipped for remote sandbox — the runner manages its own filesystem.
+// Skipped for remote and docker sandboxes — they manage their own filesystems.
 func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
 	if a.isRemoteUser(senderID) {
+		return nil
+	}
+	// For docker mode, the workspace is inside the container (/workspace);
+	// don't create host-side directories — the container manages its own FS.
+	if a.isDockerUser(senderID) {
 		return nil
 	}
 	if a.sandbox != nil {

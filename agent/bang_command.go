@@ -81,6 +81,10 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 	defer cancel()
 
 	sandbox := tools.GetSandbox()
+	// Resolve per-user sandbox for correct Name() routing
+	if resolver, ok := sandbox.(tools.SandboxResolver); ok {
+		sandbox = resolver.SandboxForUser(senderID)
+	}
 
 	// Get the container/system default shell
 	shell, err := sandbox.GetShell(senderID, workspaceRoot)

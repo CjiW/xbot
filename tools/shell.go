@@ -115,8 +115,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		sandboxWorkspace = execDir
 	}
 
-	// 使用全局沙箱实例
-	sandbox := GetSandbox()
+	// 使用 ToolContext 中的沙箱实例（由 SandboxRouter 按用户路由注入）
+	sandbox := toolCtx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 
 	// 获取容器默认 shell 并使用 login shell 执行命令
 	shell, err := sandbox.GetShell(userID, sandboxWorkspace)

@@ -74,7 +74,7 @@ func (a *Agent) buildBaseRunConfig(
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
-		Sandbox:          a.sandbox,
+		Sandbox:          resolveSandbox(a.sandbox, senderID),
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
@@ -474,9 +474,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
-		Sandbox:          a.sandbox,
+		Sandbox:          resolveSandbox(a.sandbox, senderID),
 		SandboxMode:      a.sandboxMode,
-
 		InjectInbound: a.injectInbound,
 		Tools:         a.tools,
 	}

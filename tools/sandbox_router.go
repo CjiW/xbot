@@ -1,0 +1,240 @@
+package tools
+
+import (
+	"context"
+	"os"
+	"sync"
+
+	"xbot/config"
+	log "xbot/logger"
+)
+
+// SandboxRouter implements Sandbox interface and routes per-user to either
+// DockerSandbox, RemoteSandbox, or NoneSandbox based on user state.
+//
+// Routing rules:
+//   - If the user has an active RemoteSandbox connection → remote
+//   - Otherwise → docker (if enabled)
+//   - Fallback → none
+//
+// The same user always routes to the same sandbox type within a session.
+// Cross-mode failover (docker ↔ remote) is intentionally NOT supported
+// because the two have completely different filesystems.
+type SandboxRouter struct {
+	mu sync.RWMutex
+
+	docker *DockerSandbox
+	remote *RemoteSandbox
+	none   *NoneSandbox
+
+	// defaultMode is used when SandboxForUser can't determine per-user routing.
+	// "docker" if docker is enabled, "remote" if remote is enabled, "none" otherwise.
+	defaultMode string
+}
+
+// NewSandboxRouter creates a router that holds both docker and remote sandbox instances.
+// Either (or both) may be nil — the router falls back gracefully.
+func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxRouter {
+	r := &SandboxRouter{
+		none: &NoneSandbox{},
+	}
+
+	// Initialize docker sandbox if configured
+	if sandboxCfg.Mode == "docker" || sandboxCfg.RemoteMode != "" {
+		cleanupStaleTmpFiles()
+		pruneDockerResources()
+		r.docker = NewDockerSandbox(sandboxCfg, workDir)
+	}
+
+	// Initialize remote sandbox if configured
+	if sandboxCfg.RemoteMode != "" || sandboxCfg.Mode == "remote" {
+		wsPort := sandboxCfg.WSPort
+		if wsPort == 0 {
+			wsPort = 8080
+		}
+		xbotDir := workDir + "/.xbot"
+		syncCfg := RemoteSandboxSyncConfig{
+			GlobalSkillDirs: []string{xbotDir + "/skills"},
+			AgentsDir:       xbotDir + "/agents",
+		}
+		rs, err := NewRemoteSandbox(RemoteSandboxConfig{
+			Addr:      "0.0.0.0:" + itoa(wsPort),
+			AuthToken: sandboxCfg.AuthToken,
+		}, syncCfg)
+		if err != nil {
+			log.WithError(err).Error("Failed to start remote sandbox, falling back")
+		} else {
+			r.remote = rs
+		}
+	}
+
+	// Determine default mode for Name() and fallback routing
+	switch {
+	case r.remote != nil:
+		r.defaultMode = "remote"
+	case r.docker != nil:
+		r.defaultMode = "docker"
+	default:
+		r.defaultMode = "none"
+	}
+
+	log.Infof("SandboxRouter initialized: default=%s, docker=%v, remote=%v",
+		r.defaultMode, r.docker != nil, r.remote != nil)
+
+	return r
+}
+
+// Name returns the default sandbox mode name.
+// For per-user resolution, use SandboxForUser(userID).Name().
+func (r *SandboxRouter) Name() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.defaultMode
+}
+
+// SandboxForUser returns the user-specific sandbox instance.
+// This is the key method for per-user routing — buildToolContext uses it
+// to inject the correct sandbox into ToolContext.Sandbox.
+//
+// Routing:
+//   - Remote user → if remote sandbox exists and has active connection for this user
+//   - Docker → if docker sandbox exists (fallback)
+//   - None → if neither is available
+func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if userID != "" && r.remote != nil {
+		if r.remote.HasUser(userID) {
+			return r.remote
+		}
+	}
+	if r.docker != nil {
+		return r.docker
+	}
+	return r.none
+}
+
+// Ensure SandboxRouter implements SandboxResolver
+var _ SandboxResolver = (*SandboxRouter)(nil)
+
+// --- Sandbox interface delegation ---
+
+func (r *SandboxRouter) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
+	return r.resolve(spec.UserID).Exec(ctx, spec)
+}
+
+func (r *SandboxRouter) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
+	return r.resolve(userID).ReadFile(ctx, path, userID)
+}
+
+func (r *SandboxRouter) WriteFile(ctx context.Context, path string, data []byte, perm os.FileMode, userID string) error {
+	return r.resolve(userID).WriteFile(ctx, path, data, perm, userID)
+}
+
+func (r *SandboxRouter) Stat(ctx context.Context, path string, userID string) (*SandboxFileInfo, error) {
+	return r.resolve(userID).Stat(ctx, path, userID)
+}
+
+func (r *SandboxRouter) ReadDir(ctx context.Context, path string, userID string) ([]DirEntry, error) {
+	return r.resolve(userID).ReadDir(ctx, path, userID)
+}
+
+func (r *SandboxRouter) MkdirAll(ctx context.Context, path string, perm os.FileMode, userID string) error {
+	return r.resolve(userID).MkdirAll(ctx, path, perm, userID)
+}
+
+func (r *SandboxRouter) Remove(ctx context.Context, path string, userID string) error {
+	return r.resolve(userID).Remove(ctx, path, userID)
+}
+
+func (r *SandboxRouter) RemoveAll(ctx context.Context, path string, userID string) error {
+	return r.resolve(userID).RemoveAll(ctx, path, userID)
+}
+
+func (r *SandboxRouter) GetShell(userID string, workspace string) (string, error) {
+	return r.resolve(userID).GetShell(userID, workspace)
+}
+
+func (r *SandboxRouter) Workspace(userID string) string {
+	return r.resolve(userID).Workspace(userID)
+}
+
+// Close closes all sandbox instances (docker containers, remote connections).
+func (r *SandboxRouter) Close() error {
+	var errs []error
+	if r.docker != nil {
+		if err := r.docker.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if r.remote != nil {
+		if err := r.remote.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errs[0] // Return first error
+	}
+	return nil
+}
+
+// CloseForUser closes sandbox resources for a specific user across all backends.
+func (r *SandboxRouter) CloseForUser(userID string) error {
+	var errs []error
+	if r.docker != nil {
+		if err := r.docker.CloseForUser(userID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if r.remote != nil {
+		if err := r.remote.CloseForUser(userID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+// IsExporting checks if docker sandbox is exporting for this user.
+func (r *SandboxRouter) IsExporting(userID string) bool {
+	if r.docker != nil {
+		return r.docker.IsExporting(userID)
+	}
+	return false
+}
+
+// ExportAndImport triggers export+import on the docker sandbox.
+func (r *SandboxRouter) ExportAndImport(userID string) error {
+	if r.docker != nil {
+		return r.docker.ExportAndImport(userID)
+	}
+	return nil
+}
+
+// resolve returns the per-user sandbox instance.
+// Must be called with at least RLock held.
+func (r *SandboxRouter) resolve(userID string) Sandbox {
+	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
+		return r.remote
+	}
+	if r.docker != nil {
+		return r.docker
+	}
+	return r.none
+}
+
+// itoa converts int to string without importing strconv.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	s := ""
+	for i > 0 {
+		s = string('0'+byte(i%10)) + s
+		i /= 10
+	}
+	return s
+}

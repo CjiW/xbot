@@ -95,14 +95,25 @@ var sandboxInitOnce sync.Once
 
 // InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
 // 启动时自动清理上次残留的临时文件和悬空 Docker 资源。
+//
+// When RemoteMode is set (non-empty), both docker and remote sandbox instances
+// are created and wrapped in a SandboxRouter for per-user routing.
+// Otherwise, falls back to the legacy single-sandbox behavior.
 func InitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
 	sandboxInitOnce.Do(func() {
-		if sandboxCfg.Mode == "docker" {
-			cleanupStaleTmpFiles()
-			pruneDockerResources()
+		if sandboxCfg.RemoteMode != "" {
+			// Dual-mode: create SandboxRouter with both docker and remote
+			globalSandbox = NewSandboxRouter(sandboxCfg, workDir)
+			log.Infof("Sandbox initialized: %s (router)", globalSandbox.Name())
+		} else {
+			// Legacy single-mode
+			if sandboxCfg.Mode == "docker" {
+				cleanupStaleTmpFiles()
+				pruneDockerResources()
+			}
+			globalSandbox = NewSandbox(sandboxCfg, workDir)
+			log.Infof("Sandbox initialized: %s", globalSandbox.Name())
 		}
-		globalSandbox = NewSandbox(sandboxCfg, workDir)
-		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
 	})
 }
 

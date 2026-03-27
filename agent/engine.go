@@ -1357,6 +1357,18 @@ func sandboxReadOnlyRoots(hostRoots []string, sandboxWorkDir, workspaceRoot stri
 
 // buildToolContext 统一构建 ToolContext。
 // 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
+// resolveSandbox resolves the per-user sandbox instance if the global sandbox
+// implements SandboxResolver (e.g., SandboxRouter). Falls back to the global instance.
+func resolveSandbox(sandbox tools.Sandbox, userID string) tools.Sandbox {
+	if sandbox == nil {
+		return nil
+	}
+	if resolver, ok := sandbox.(tools.SandboxResolver); ok {
+		return resolver.SandboxForUser(userID)
+	}
+	return sandbox
+}
+
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	tc := &tools.ToolContext{
 		Ctx:            ctx,
@@ -1380,7 +1392,7 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		GlobalMCPConfigPath:  cfg.GlobalMCPConfig,
 		SandboxEnabled:       cfg.SandboxEnabled,
 		PreferredSandbox:     cfg.PreferredSandbox,
-		Sandbox:              cfg.Sandbox,
+		Sandbox:              resolveSandbox(cfg.Sandbox, cfg.SenderID),
 		DataDir:              cfg.DataDir,
 
 		// 注入入站消息

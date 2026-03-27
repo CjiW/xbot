@@ -369,7 +369,7 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		DataDir:             a.workDir,
 		SandboxEnabled:      a.sandboxMode != "none",
 		PreferredSandbox:    a.sandboxMode,
-		Sandbox:             a.sandbox,
+		Sandbox:             resolveSandbox(a.sandbox, senderID),
 		AgentID:             msg.ParentAgentID,
 		Channel:             channel,
 		ChatID:              chatID,

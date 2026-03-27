@@ -9,7 +9,10 @@ import (
 // RunInSandbox 在沙箱内执行命令并返回输出。
 // 当沙箱为 none 模式时返回错误。
 func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, error) {
-	sandbox := GetSandbox()
+	sandbox := ctx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
@@ -38,7 +41,10 @@ func RunInSandbox(ctx *ToolContext, command string, args ...string) (string, err
 // RunInSandboxWithShell 在沙箱内执行 shell 命令并返回输出。
 // 使用 login shell 自动加载环境变量配置文件。
 func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
-	sandbox := GetSandbox()
+	sandbox := ctx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
@@ -77,7 +83,10 @@ func RunInSandboxWithShell(ctx *ToolContext, shellCmd string) (string, error) {
 // RunInSandboxRaw 在沙箱内执行命令并返回原始输出（不做 TrimSpace）。
 // 适用于需要保留文件原始内容的场景（如 cat 读取文件）。
 func RunInSandboxRaw(ctx *ToolContext, command string, args ...string) (string, error) {
-	sandbox := GetSandbox()
+	sandbox := ctx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}
@@ -105,7 +114,10 @@ func RunInSandboxRaw(ctx *ToolContext, command string, args ...string) (string, 
 
 // RunInSandboxRawWithShell 在沙箱内执行 shell 命令并返回原始输出（不做 TrimSpace）。
 func RunInSandboxRawWithShell(ctx *ToolContext, shellCmd string) (string, error) {
-	sandbox := GetSandbox()
+	sandbox := ctx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 	if ctx == nil || sandbox.Name() == "none" {
 		return "", fmt.Errorf("sandbox not enabled")
 	}

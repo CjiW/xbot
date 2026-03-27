@@ -216,6 +216,13 @@ func (rs *RemoteSandbox) getRunner(userID string) (*runnerConnection, error) {
 	return val.(*runnerConnection), nil
 }
 
+// HasUser reports whether the given user has an active runner connection.
+// Used by SandboxRouter for per-user routing decisions.
+func (rs *RemoteSandbox) HasUser(userID string) bool {
+	_, ok := rs.connections.Load(userID)
+	return ok
+}
+
 // sendRequest sends a request to the runner and waits for a response.
 func (rs *RemoteSandbox) sendRequest(ctx context.Context, rc *runnerConnection, msg *RunnerMessage, timeout time.Duration) (*RunnerMessage, error) {
 	rs.pendingMu.Lock()

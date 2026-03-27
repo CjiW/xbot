@@ -822,7 +822,7 @@ func NewDockerSandbox(sandboxCfg config.SandboxConfig, workDir string) *DockerSa
 }
 
 // NewSandbox 创建沙箱实例（backward compatible）
-func NewSandbox(sandboxCfg config.SandboxConfig, workDir string) Sandbox {
+func NewSandbox(sandboxCfg config.SandboxConfig, workDir string, tokenStore *RunnerTokenStore) Sandbox {
 	switch sandboxCfg.Mode {
 	case "none":
 		return &NoneSandbox{}
@@ -840,8 +840,9 @@ func NewSandbox(sandboxCfg config.SandboxConfig, workDir string) Sandbox {
 			AgentsDir:       filepath.Join(xbotDir, "agents"),
 		}
 		rs, err := NewRemoteSandbox(RemoteSandboxConfig{
-			Addr:      fmt.Sprintf("0.0.0.0:%d", wsPort),
-			AuthToken: sandboxCfg.AuthToken,
+			Addr:       fmt.Sprintf("0.0.0.0:%d", wsPort),
+			AuthToken:  sandboxCfg.AuthToken,
+			TokenStore: tokenStore,
 		}, syncCfg)
 		if err != nil {
 			log.WithError(err).Errorf("Failed to start remote sandbox server: %v", err)

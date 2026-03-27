@@ -218,6 +218,14 @@ func main() {
 	// 所有工具注册完成，索引全局工具（用于 search_tools 语义搜索）
 	agentLoop.IndexGlobalTools()
 
+	// 设置 runner token 持久化（复用同一个 DB 文件）
+	tokenDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")
+	} else {
+		tools.SetRunnerTokenDB(tokenDB.Conn())
+	}
+
 	// 创建消息分发器
 	disp := channel.NewDispatcher(msgBus)
 
@@ -336,6 +344,52 @@ func main() {
 			},
 			LLMSetPersonalConcurrency: func(senderID string, personal int) error {
 				return agentLoop.SetLLMConcurrency(senderID, personal)
+			},
+			RunnerConnectCmdGet: func(senderID string) string {
+				token := cfg.Sandbox.AuthToken
+				if token == "" {
+					return ""
+				}
+				pubURL := cfg.Sandbox.PublicURL
+				if pubURL == "" {
+					// Fallback: use the xbot server address directly.
+					pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
+				}
+				return fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
+			},
+			RunnerTokenGet: func(senderID string) string {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return ""
+				}
+				entry := tools.NewRunnerTokenStore(db).Get(senderID)
+				if entry == nil {
+					return ""
+				}
+				return buildRunnerConnectCmd(cfg, entry)
+			},
+			RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return "", fmt.Errorf("remote sandbox not configured")
+				}
+				entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+					Mode:        mode,
+					DockerImage: dockerImage,
+					Workspace:   workspace,
+				})
+				if entry == nil {
+					return "", fmt.Errorf("failed to generate token")
+				}
+				return buildRunnerConnectCmd(cfg, entry), nil
+			},
+			RunnerTokenRevoke: func(senderID string) error {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return fmt.Errorf("remote sandbox not configured")
+				}
+				tools.NewRunnerTokenStore(db).Revoke(senderID)
+				return nil
 			},
 		})
 
@@ -467,6 +521,13 @@ func main() {
 		}
 	}
 
+	// 关闭 runner token 数据库连接
+	if tokenDB != nil {
+		if err := tokenDB.Close(); err != nil {
+			log.WithError(err).Warn("Token DB close error")
+		}
+	}
+
 	disp.Stop()
 	log.Info("xbot stopped")
 }
@@ -570,4 +631,23 @@ func (a *feishuPromptAdapter) ChannelPromptName() string {
 
 func (a *feishuPromptAdapter) ChannelSystemParts(ctx context.Context, chatID, senderID string) map[string]string {
 	return a.ch.ChannelSystemParts(ctx, chatID, senderID)
+}
+
+// buildRunnerConnectCmd constructs the xbot-runner CLI command from a token entry.
+func buildRunnerConnectCmd(cfg *config.Config, entry *tools.RunnerTokenEntry) string {
+	pubURL := cfg.Sandbox.PublicURL
+	if pubURL == "" {
+		pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
+	}
+	cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, entry.UserID, entry.Token)
+	if entry.Settings.Mode == "docker" {
+		cmd += " --mode docker"
+		if entry.Settings.DockerImage != "" {
+			cmd += fmt.Sprintf(" --docker-image %s", entry.Settings.DockerImage)
+		}
+	}
+	if entry.Settings.Workspace != "" && entry.Settings.Workspace != "/workspace" {
+		cmd += fmt.Sprintf(" --workspace %s", entry.Settings.Workspace)
+	}
+	return cmd
 }

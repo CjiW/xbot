@@ -1357,7 +1357,34 @@ func sandboxReadOnlyRoots(hostRoots []string, sandboxWorkDir, workspaceRoot stri
 
 // buildToolContext 统一构建 ToolContext。
 // 从 RunConfig 中提取所有字段，主 Agent 和 SubAgent 使用同一个构建路径。
+// resolveSandbox resolves the per-user sandbox instance if the global sandbox
+// implements SandboxResolver (e.g., SandboxRouter). Falls back to the global instance.
+func resolveSandbox(sandbox tools.Sandbox, userID string) tools.Sandbox {
+	if sandbox == nil {
+		return nil
+	}
+	if resolver, ok := sandbox.(tools.SandboxResolver); ok {
+		return resolver.SandboxForUser(userID)
+	}
+	return sandbox
+}
+
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
+	// Resolve per-user sandbox BEFORE building ToolContext.
+	// For remote users, the resolved sandbox is RemoteSandbox (Name() == "remote").
+	resolvedSandbox := resolveSandbox(cfg.Sandbox, cfg.SenderID)
+	isRemote := resolvedSandbox != nil && resolvedSandbox.Name() == "remote"
+
+	// For remote users, leave WorkspaceRoot/WorkingDir empty — the runner
+	// manages its own filesystem. Host paths must not leak into ToolContext
+	// for remote users (they cause server-side directory creation and
+	// confuse path resolution).
+	var workspaceRoot, workingDir string
+	if !isRemote {
+		workspaceRoot = cfg.WorkspaceRoot
+		workingDir = cfg.WorkingDir
+	}
+
 	tc := &tools.ToolContext{
 		Ctx:            ctx,
 		AgentID:        cfg.AgentID,
@@ -1370,17 +1397,17 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		RootSessionKey: cfg.RootSessionKey,
 
 		// 工作区 & 沙箱
-		WorkingDir:           cfg.WorkingDir,
-		WorkspaceRoot:        cfg.WorkspaceRoot,
+		WorkingDir:           workingDir,
+		WorkspaceRoot:        workspaceRoot,
 		ReadOnlyRoots:        cfg.ReadOnlyRoots,
-		SandboxReadOnlyRoots: sandboxReadOnlyRoots(cfg.ReadOnlyRoots, "", cfg.WorkspaceRoot),
+		SandboxReadOnlyRoots: sandboxReadOnlyRoots(cfg.ReadOnlyRoots, "", workspaceRoot),
 		SkillsDirs:           cfg.SkillsDirs,
 		AgentsDir:            cfg.AgentsDir,
 		MCPConfigPath:        cfg.MCPConfigPath,
 		GlobalMCPConfigPath:  cfg.GlobalMCPConfig,
 		SandboxEnabled:       cfg.SandboxEnabled,
 		PreferredSandbox:     cfg.PreferredSandbox,
-		Sandbox:              cfg.Sandbox,
+		Sandbox:              resolvedSandbox,
 		DataDir:              cfg.DataDir,
 
 		// 注入入站消息

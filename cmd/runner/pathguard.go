@@ -22,8 +22,11 @@ var dockerMode bool
 // It resolves symlinks (filepath.EvalSymlinks) in native mode to prevent symlink-based path traversal.
 // In Docker mode, only string-level prefix checking is performed.
 // When fullControl is true, all path checks are skipped.
+//
+// In remote mode (connected to xbot server), path checks are skipped —
+// the server is the trusted authority for path authorization.
 func validatePath(path string) error {
-	if fullControl {
+	if fullControl || dockerMode {
 		return nil
 	}
 

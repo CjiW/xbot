@@ -79,6 +79,17 @@ type SettingsCallbacks struct {
 	LLMGetPersonalConcurrency func(senderID string) int
 	// LLMSetPersonalConcurrency 设置用户个人 LLM 并发上限
 	LLMSetPersonalConcurrency func(senderID string, personal int) error
+
+	// RunnerConnectCmdGet 返回远程 Runner 连接命令（空字符串表示未启用）
+	// Deprecated: replaced by per-user token callbacks below.
+	RunnerConnectCmdGet func(senderID string) string
+
+	// RunnerTokenGet returns the runner connect command for the user's current token ("" if none).
+	RunnerTokenGet func(senderID string) string
+	// RunnerTokenGenerate generates a new per-user token and returns the connect command.
+	RunnerTokenGenerate func(senderID, mode, dockerImage, workspace string) (string, error)
+	// RunnerTokenRevoke revokes the user's current token.
+	RunnerTokenRevoke func(senderID string) error
 }
 
 // FeishuChannel 飞书渠道实现

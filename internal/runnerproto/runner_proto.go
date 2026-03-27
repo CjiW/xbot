@@ -47,6 +47,7 @@ type RegisterRequest struct {
 	UserID    string `json:"user_id"`
 	AuthToken string `json:"auth_token"`
 	Workspace string `json:"workspace,omitempty"` // Runner's workspace root directory
+	Shell     string `json:"shell,omitempty"`     // Runner's default shell path (e.g. /bin/bash)
 }
 
 // ExecRequest requests command execution on the runner.

@@ -38,16 +38,16 @@ Persistent multi-turn session. Create once, send multiple messages, unload when 
 
 | Call | Behavior |
 |------|----------|
-| SubAgent(task, role, interactive=true) | Create or reuse an interactive session |
-| SubAgent(task, role, action="send") | Send a new message to an existing session |
-| SubAgent(task, role, action="unload") | End session + memorize |
+| SubAgent(task, role, interactive=true, instance="...") | Create or reuse an interactive session (instance is required) |
+| SubAgent(task, role, action="send", instance="...") | Send a new message to an existing session |
+| SubAgent(task, role, action="unload", instance="...") | End session + memorize |
 
 Parameters (JSON):
   - task: string (required), the task description
   - role: string (required), the predefined role name
+  - instance: string (required), unique instance ID for parallel same-role sessions (e.g. "review-1", "review-2")
   - interactive: bool (optional), create/reuse interactive session
   - action: string (optional), "send" or "unload" for interactive session control
-  - instance: string (optional), instance ID for parallel interactive sessions with the same role
 
 Available roles are listed in the <available_agents> section of the system prompt.`
 }
@@ -56,9 +56,9 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "task", Type: "string", Description: "The task description for the sub-agent to execute", Required: true},
 		{Name: "role", Type: "string", Description: "Predefined role name (e.g. code-reviewer)", Required: true},
+		{Name: "instance", Type: "string", Description: `Unique instance ID (required). Use distinct values to run multiple sub-agents of the same role in parallel, e.g. "review-1", "review-2".`},
 		{Name: "interactive", Type: "boolean", Description: "Create or reuse an interactive session for multi-turn conversation"},
 		{Name: "action", Type: "string", Description: `Interactive session action: "send" (send message to existing session) or "unload" (end session and memorize)`},
-		{Name: "instance", Type: "string", Description: "Instance ID for parallel interactive sessions with the same role (e.g. \"brainstorm-1\", \"brainstorm-2\"). When set, multiple sessions of the same role can coexist."},
 	}
 }
 
@@ -85,6 +85,10 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 
 	if params.Role == "" {
 		return nil, fmt.Errorf("role is required, see <available_agents> in system prompt")
+	}
+
+	if params.Instance == "" {
+		return nil, fmt.Errorf("instance is required — provide a unique ID (e.g. \"task-1\") to identify this session. Use different instance values to run multiple sub-agents of the same role in parallel")
 	}
 
 	// 检查 ctx 是否为 nil，避免后续访问 panic

@@ -289,6 +289,54 @@ func main() {
 				webCh.SetWorkDir(workDir)
 
 			}
+			webCh.SetCallbacks(channel.WebCallbacks{
+				RunnerTokenGet: func(senderID string) string {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return ""
+					}
+					entry := tools.NewRunnerTokenStore(db).Get(senderID)
+					if entry == nil {
+						return ""
+					}
+					return buildRunnerConnectCmd(cfg, entry)
+				},
+				RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return "", fmt.Errorf("remote sandbox not configured")
+					}
+					entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+						Mode:        mode,
+						DockerImage: dockerImage,
+						Workspace:   workspace,
+					})
+					if entry == nil {
+						return "", fmt.Errorf("failed to generate token")
+					}
+					return buildRunnerConnectCmd(cfg, entry), nil
+				},
+				RunnerTokenRevoke: func(senderID string) error {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return fmt.Errorf("remote sandbox not configured")
+					}
+					tools.NewRunnerTokenStore(db).Revoke(senderID)
+					return nil
+				},
+				RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+					return agentLoop.RegistryManager().Browse(entryType, limit, offset)
+				},
+				RegistryInstall: func(entryType string, id int64, senderID string) error {
+					return agentLoop.RegistryManager().Install(entryType, id, senderID)
+				},
+				RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+					return agentLoop.RegistryManager().ListMy(senderID, entryType)
+				},
+				RegistryUninstall: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
+				},
+			})
 			disp.Register(webCh)
 		} else {
 			log.Warn("Web channel enabled but no database available, skipping")

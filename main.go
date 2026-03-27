@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
@@ -261,6 +262,25 @@ func main() {
 			AllowFrom: cfg.NapCat.AllowFrom,
 		}, msgBus)
 		disp.Register(napcatCh)
+	}
+
+	// 注册 Web 渠道
+	if cfg.Web.Enable {
+		var webDB *sql.DB
+		if tokenDB != nil {
+			webDB = tokenDB.Conn()
+		}
+		if webDB != nil {
+			webCh := channel.NewWebChannel(channel.WebChannelConfig{
+				Host: cfg.Web.Host,
+				Port: cfg.Web.Port,
+				DB:   webDB,
+			}, msgBus)
+			webCh.SetStaticFS(WebStaticFS())
+			disp.Register(webCh)
+		} else {
+			log.Warn("Web channel enabled but no database available, skipping")
+		}
 	}
 
 	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id

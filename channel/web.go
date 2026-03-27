@@ -561,7 +561,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			continue
 
 		case "message":
-			if msg.Content == "" {
+			if msg.Content == "" && len(msg.FileIDs) == 0 {
 				continue
 			}
 
@@ -607,7 +607,13 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 					}
 				}
 			}
+		} else if len(msg.FileIDs) > 0 && wc.uploadDir == "" {
+			log.Warn("Web channel received file_ids but uploadDir is not configured")
+			for _, fid := range msg.FileIDs {
+				content += fmt.Sprintf("\n\n📎 [附件: %s]", fid)
+			}
 		}
+
 		wc.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "web",
 			SenderID:   c.userID,
@@ -620,6 +626,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			From:       bus.NewIMAddress("web", c.userID),
 			To:         bus.NewIMAddress("web", chatID),
+			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
 		}
 	}
 }

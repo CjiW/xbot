@@ -807,8 +807,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 更新结构化进度：进入工具执行阶段
 		if structuredProgress != nil {
 			structuredProgress.Phase = PhaseToolExec
-			// Reset completed tools for each iteration to avoid accumulation
-			structuredProgress.CompletedTools = nil
 			structuredProgress.ActiveTools = make([]ToolProgress, len(response.ToolCalls))
 			for j, tc := range response.ToolCalls {
 				structuredProgress.ActiveTools[j] = ToolProgress{

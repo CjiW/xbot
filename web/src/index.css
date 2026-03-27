@@ -40,15 +40,15 @@ body {
   font-size: 0.9em;
 }
 .markdown-body pre {
-  background: #1e293b;
-  padding: 12px;
+  background: #0d1117;
+  padding: 0;
   border-radius: 8px;
   overflow-x: auto;
   margin: 0.5em 0;
 }
 .markdown-body pre code {
   background: transparent;
-  padding: 0;
+  padding: 12px 16px;
 }
 .markdown-body ul, .markdown-body ol {
   padding-left: 1.5em;
@@ -63,4 +63,566 @@ body {
 .markdown-body a {
   color: #60a5fa;
   text-decoration: underline;
+}
+
+/* ========================================================================== */
+/* Tiptap Editor Styles                                                       */
+/* ========================================================================== */
+
+.tiptap-wrapper {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  background: #334155;
+  border: 1px solid #475569;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.tiptap-wrapper:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+/* Editor area */
+.tiptap-wrapper .tiptap {
+  flex: 1;
+  min-height: 24px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 10px 14px;
+}
+
+.tiptap-wrapper .tiptap > *:first-child {
+  margin-top: 0;
+}
+
+.tiptap-wrapper .tiptap > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Placeholder */
+.tiptap-wrapper .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #64748b;
+  pointer-events: none;
+  height: 0;
+  font-style: normal;
+}
+
+/* Paragraph in editor */
+.tiptap-wrapper .tiptap p {
+  margin: 0.25em 0;
+  color: #f1f5f9;
+  font-size: 0.9em;
+  line-height: 1.5;
+}
+
+/* Code in editor */
+.tiptap-wrapper .tiptap code {
+  background: #1e293b;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: #93c5fd;
+}
+
+/* Preformatted / code blocks in editor */
+.tiptap-wrapper .tiptap pre {
+  background: #0f172a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.85em;
+  overflow-x: auto;
+}
+
+/* Task list in editor */
+.tiptap-wrapper .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.tiptap-wrapper .tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tiptap-wrapper .tiptap ul[data-type="taskList"] li label input[type="checkbox"] {
+  accent-color: #3b82f6;
+  margin-top: 3px;
+}
+
+/* Send button inside tiptap wrapper */
+.tiptap-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-height: 40px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: 0 12px 12px 0;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.tiptap-send-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.tiptap-send-btn:disabled {
+  background: #475569;
+  color: #64748b;
+  cursor: not-allowed;
+}
+
+/* Cancel button */
+.cancel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-height: 44px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.cancel-btn:hover {
+  background: #b91c1c;
+}
+
+/* ========================================================================== */
+/* Progress Panel Animations                                                   */
+/* ========================================================================== */
+
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    border-color: rgba(59, 130, 246, 0.7);
+  }
+}
+
+.progress-panel-active {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes tool-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.tool-pulse {
+  animation: tool-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.progress-fade-in {
+  animation: progress-fade-in 0.2s ease-out;
+}
+
+/* ========================================================================== */
+/* Message Animations                                                         */
+/* ========================================================================== */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.msg-fade-in {
+  animation: fade-in-up 0.2s ease-out;
+}
+
+/* ========================================================================== */
+/* Scroll to bottom button                                                    */
+/* ========================================================================== */
+
+.scroll-to-bottom-btn {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 41, 59, 0.9);
+  color: #93c5fd;
+  border: 1px solid #475569;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 50;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.scroll-to-bottom-btn:hover {
+  background: rgba(51, 65, 85, 0.95);
+  border-color: #3b82f6;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+}
+
+/* ========================================================================== */
+/* Light Theme Override                                                        */
+/* ========================================================================== */
+
+[data-theme="light"] {
+  --xbot-bg-primary: #f8fafc;
+  --xbot-bg-secondary: #e2e8f0;
+  --xbot-bg-header: #ffffff;
+  --xbot-bg-message-user: #2563eb;
+  --xbot-bg-message-assistant: #ffffff;
+  --xbot-text-primary: #0f172a;
+  --xbot-text-secondary: #475569;
+  --xbot-text-muted: #94a3b8;
+  --xbot-border: #cbd5e1;
+}
+
+[data-theme="light"] body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+[data-theme="light"] .bg-slate-900 { background: #f8fafc !important; }
+[data-theme="light"] .bg-slate-800 { background: #ffffff !important; }
+[data-theme="light"] .bg-slate-700 { background: #e2e8f0 !important; }
+[data-theme="light"] .border-slate-700 { border-color: #cbd5e1 !important; }
+[data-theme="light"] .border-slate-600 { border-color: #cbd5e1 !important; }
+[data-theme="light"] .text-white { color: #0f172a !important; }
+[data-theme="light"] .text-slate-200 { color: #334155 !important; }
+[data-theme="light"] .text-slate-400 { color: #64748b !important; }
+[data-theme="light"] .text-slate-500 { color: #94a3b8 !important; }
+
+[data-theme="light"] .bg-blue-600 { background: #2563eb !important; color: #fff !important; }
+
+[data-theme="light"] .markdown-body code {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+[data-theme="light"] .markdown-body pre {
+  background: #f1f5f9;
+}
+[data-theme="light"] .markdown-body pre code {
+  background: transparent;
+}
+[data-theme="light"] .markdown-body blockquote {
+  border-left-color: #cbd5e1;
+  color: #64748b;
+}
+[data-theme="light"] .markdown-body a {
+  color: #2563eb;
+}
+
+[data-theme="light"] .tiptap-wrapper {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .tiptap-wrapper:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+[data-theme="light"] .tiptap-wrapper .tiptap p {
+  color: #0f172a;
+}
+[data-theme="light"] .tiptap-wrapper .tiptap code {
+  background: #f1f5f9;
+  color: #1e40af;
+}
+[data-theme="light"] .tiptap-wrapper .tiptap pre {
+  background: #f1f5f9;
+}
+[data-theme="light"] .tiptap-wrapper .tiptap p.is-editor-empty:first-child::before {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .cancel-btn {
+  background: #dc2626;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+[data-theme="light"] .scroll-to-bottom-btn {
+  background: rgba(241, 245, 249, 0.95);
+  color: #2563eb;
+  border-color: #cbd5e1;
+}
+[data-theme="light"] .scroll-to-bottom-btn:hover {
+  border-color: #2563eb;
+}
+
+[data-theme="light"] .settings-panel {
+  background: #ffffff;
+  border-left-color: #cbd5e1;
+}
+
+[data-theme="light"] .settings-select {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+[data-theme="light"] .file-upload-btn {
+  background: #e2e8f0;
+  color: #475569;
+}
+[data-theme="light"] .file-upload-btn:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+[data-theme="light"] .file-tag {
+  background: #e2e8f0;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+[data-theme="light"] .drag-active .tiptap-wrapper {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.05);
+}
+
+/* ========================================================================== */
+/* Settings Panel                                                             */
+/* ========================================================================== */
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  animation: settings-fade-in 0.2s ease-out;
+}
+
+.settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100%;
+  background: #1e293b;
+  border-left: 1px solid #334155;
+  padding: 24px;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: settings-slide-in 0.25s ease-out;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+.settings-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-label {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.settings-select {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.settings-select:focus {
+  border-color: #3b82f6;
+}
+
+.settings-close-btn {
+  margin-top: auto;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.settings-close-btn:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+@keyframes settings-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes settings-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ========================================================================== */
+/* File Upload                                                                */
+/* ========================================================================== */
+
+.file-upload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-height: 40px;
+  background: #334155;
+  color: #94a3b8;
+  border: 1px solid #475569;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.file-upload-btn:hover:not(:disabled) {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.file-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.file-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid #334155;
+  font-size: 13px;
+  max-width: 200px;
+}
+
+.file-tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tag-remove {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.file-tag-remove:hover {
+  color: #ef4444;
+}
+
+/* Drag active state */
+.drag-active .tiptap-wrapper {
+  border-color: #3b82f6 !important;
+  border-style: dashed !important;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+/* Toast notification */
+.file-upload-toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #dc2626;
+  color: white;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: toast-in 0.2s ease-out;
+}
+
+.file-upload-toast-hide {
+  animation: toast-out 0.3s ease-out forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+}
+
+/* Font size variable (set by Settings) */
+body, .markdown-body, .tiptap-wrapper .tiptap p {
+  font-size: var(--xbot-font-size, 16px);
 }

@@ -1,0 +1,210 @@
+import { useState, type CSSProperties } from 'react'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import go from 'highlight.js/lib/languages/go'
+import python from 'highlight.js/lib/languages/python'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import yaml from 'highlight.js/lib/languages/yaml'
+import css from 'highlight.js/lib/languages/css'
+import xml from 'highlight.js/lib/languages/xml'
+import markdown from 'highlight.js/lib/languages/markdown'
+import sql from 'highlight.js/lib/languages/sql'
+import rust from 'highlight.js/lib/languages/rust'
+import java from 'highlight.js/lib/languages/java'
+import cpp from 'highlight.js/lib/languages/cpp'
+import diff from 'highlight.js/lib/languages/diff'
+import 'highlight.js/styles/github-dark.css'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('py', python)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('yml', yaml)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('svg', xml)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('md', markdown)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('rust', rust)
+hljs.registerLanguage('rs', rust)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('c', cpp)
+hljs.registerLanguage('diff', diff)
+
+const containerStyle: CSSProperties = {
+  position: 'relative',
+  borderRadius: '8px',
+  overflow: 'hidden',
+  margin: '0.5em 0',
+}
+
+const headerStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: '4px 12px',
+  background: '#161b22',
+  fontSize: '12px',
+  color: '#8b949e',
+}
+
+const codeStyle: CSSProperties = {
+  padding: '12px 16px',
+  overflowX: 'auto',
+  margin: 0,
+  background: '#0d1117',
+}
+
+const copyBtnStyle: CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#8b949e',
+  cursor: 'pointer',
+  padding: '2px 6px',
+  borderRadius: '4px',
+  fontSize: '12px',
+  lineHeight: '1.5',
+}
+
+interface CodeBlockProps {
+  className?: string
+  children?: string
+}
+
+function CodeBlock({ className, children }: CodeBlockProps) {
+  const [copied, setCopied] = useState(false)
+
+  const codeText = typeof children === 'string' ? children.trim() : String(children ?? '')
+
+  // Extract language from className (react-markdown passes "language-xxx")
+  const langMatch = className?.match(/language-(\w+)/)
+  const lang = langMatch ? langMatch[1] : ''
+
+  let highlighted = codeText
+  try {
+    if (lang && hljs.getLanguage(lang)) {
+      highlighted = hljs.highlight(codeText, { language: lang }).value
+    } else {
+      highlighted = hljs.highlightAuto(codeText).value
+    }
+  } catch {
+    highlighted = codeText
+  }
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(codeText)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea')
+      ta.value = codeText
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  return (
+    <div style={containerStyle}>
+      <div style={headerStyle}>
+        <span>{lang || 'code'}</span>
+        <button onClick={handleCopy} style={copyBtnStyle}>
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre style={codeStyle}>
+        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+      </pre>
+    </div>
+  )
+}
+
+// Check if a React node tree contains a checkbox element
+function containsCheckbox(children: React.ReactNode): boolean {
+  if (!children) return false
+  if (Array.isArray(children)) return children.some(containsCheckbox)
+  if (typeof children === 'object' && children !== null && 'type' in children) {
+    const child = children as { type: string | symbol; props?: Record<string, unknown> }
+    if (child.type === 'input') return true
+    const childProps = (children as React.ReactElement).props
+    if (childProps && typeof childProps === 'object' && 'children' in childProps) {
+      return containsCheckbox(childProps.children as React.ReactNode)
+    }
+  }
+  return false
+}
+
+// Returns components for react-markdown's components prop
+export function getCodeBlockProps() {
+  return {
+    code(props: { className?: string; children?: React.ReactNode; inline?: boolean }) {
+      // Inline code (no className or in a span)
+      if (!props.className && typeof props.children === 'string' && !props.children.includes('\n')) {
+        return (
+          <code style={{ background: '#1e293b', padding: '2px 6px', borderRadius: '4px', fontSize: '0.9em' }}>
+            {props.children}
+          </code>
+        )
+      }
+      return <CodeBlock className={props.className}>{String(props.children ?? '')}</CodeBlock>
+    },
+    checkbox(props: { checked?: boolean }) {
+      return (
+        <input
+          type="checkbox"
+          disabled
+          checked={!!props.checked}
+          style={{ margin: '0 6px 0 0', accentColor: '#3b82f6', cursor: 'default', pointerEvents: 'none' }}
+        />
+      )
+    },
+    li(props: { children?: React.ReactNode; className?: string }) {
+      const hasCheckbox = containsCheckbox(props.children)
+
+      if (hasCheckbox) {
+        return (
+          <li style={{ display: 'flex', alignItems: 'flex-start', gap: 0 }}>
+            {props.children}
+          </li>
+        )
+      }
+
+      // react-markdown checkbox plugin uses className "task-list-item checked" for [x]
+      if (props.className && /task-list-item/.test(props.className)) {
+        return (
+          <li
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              listStyle: 'none',
+              marginLeft: '-1.5em',
+            }}
+            className={props.className}
+          >
+            {props.children}
+          </li>
+        )
+      }
+
+      return <li>{props.children}</li>
+    },
+  }
+}

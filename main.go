@@ -278,6 +278,13 @@ func main() {
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
+			// Default upload dir: workspace/uploads relative to executable
+				if cfg.Web.UploadDir != "" {
+					webCh.SetUploadDir(cfg.Web.UploadDir)
+				} else {
+					execDir, _ := os.Executable()
+					webCh.SetUploadDir(filepath.Join(filepath.Dir(execDir), "workspace", "uploads"))
+				}
 			}
 			disp.Register(webCh)
 		} else {

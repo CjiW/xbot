@@ -51,10 +51,10 @@ type WebChannelConfig struct {
 
 // Hub 管理所有 WebSocket 连接
 type Hub struct {
-	mu         sync.RWMutex
-	clients    map[string]*Client // senderID → Client
-	offline    map[string]*ringBuffer // senderID → offline message buffer
-	offMu      sync.Mutex
+	mu      sync.RWMutex
+	clients map[string]*Client     // senderID → Client
+	offline map[string]*ringBuffer // senderID → offline message buffer
+	offMu   sync.Mutex
 }
 
 func newHub() *Hub {
@@ -152,10 +152,10 @@ type Client struct {
 // ---------------------------------------------------------------------------
 
 type ringBuffer struct {
-	buf  []wsMessage
-	size int
-	head int
- tail int
+	buf   []wsMessage
+	size  int
+	head  int
+	tail  int
 	count int
 }
 

@@ -59,6 +59,12 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 
 	// 写入文件并发送
 	workspaceRoot := a.workspaceRoot(msg.SenderID)
+	// For remote users, use the runner's workspace path instead of host path
+	if a.isRemoteUser(msg.SenderID) {
+		if ws := a.remoteWorkspace(msg.SenderID); ws != "" {
+			workspaceRoot = ws
+		}
+	}
 	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}

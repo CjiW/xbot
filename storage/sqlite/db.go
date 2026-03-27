@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 14
+const schemaVersion = 15
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -200,7 +200,16 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (14);
+INSERT INTO schema_version (version) VALUES (15);
+
+CREATE TABLE runner_tokens (
+    user_id     TEXT PRIMARY KEY,
+    token       TEXT NOT NULL,
+    mode        TEXT NOT NULL DEFAULT 'native',
+    docker_image TEXT NOT NULL DEFAULT '',
+    workspace   TEXT NOT NULL DEFAULT '/workspace',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE shared_registry (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -704,6 +713,26 @@ UPDATE schema_version SET version = 13;
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v14 (added UNIQUE constraint to shared_registry)")
+	}
+
+	if from < 15 {
+		migration := `
+CREATE TABLE IF NOT EXISTS runner_tokens (
+    user_id     TEXT PRIMARY KEY,
+    token       TEXT NOT NULL,
+    mode        TEXT NOT NULL DEFAULT 'native',
+    docker_image TEXT NOT NULL DEFAULT '',
+    workspace   TEXT NOT NULL DEFAULT '/workspace',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v14->v15: %w", err)
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 15"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v15 (added runner_tokens)")
 	}
 
 	return nil

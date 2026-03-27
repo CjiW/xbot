@@ -276,6 +276,33 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_market_page":
 		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
+	case "settings_generate_token":
+		if f.settingsCallbacks.RunnerTokenGenerate == nil {
+			return nil, fmt.Errorf("per-user runner token 功能未启用")
+		}
+		mode := formStr(actionData, "runner_mode")
+		dockerImage := formStr(actionData, "runner_docker_image")
+		workspace := formStr(actionData, "runner_workspace")
+		if mode == "" {
+			mode = "native"
+		}
+		if workspace == "" {
+			workspace = "/workspace"
+		}
+		if _, err := f.settingsCallbacks.RunnerTokenGenerate(senderID, mode, dockerImage, workspace); err != nil {
+			return nil, fmt.Errorf("生成 token 失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
+	case "settings_revoke_token":
+		if f.settingsCallbacks.RunnerTokenRevoke == nil {
+			return nil, fmt.Errorf("per-user runner token 功能未启用")
+		}
+		if err := f.settingsCallbacks.RunnerTokenRevoke(senderID); err != nil {
+			return nil, fmt.Errorf("撤销 token 失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -327,7 +354,97 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string) []map[string]any
 		"tag":     "markdown",
 		"content": "**远程 Runner**",
 	})
-	if f.settingsCallbacks.RunnerConnectCmdGet != nil {
+
+	if f.settingsCallbacks.RunnerTokenGet != nil {
+		connectCmd := f.settingsCallbacks.RunnerTokenGet(senderID)
+		if connectCmd != "" {
+			// Has token — show command + regenerate + revoke buttons
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("在本地机器上运行以下命令连接远程沙箱：\n```\n%s\n```", connectCmd),
+			})
+			elements = append(elements, wrapButtonsInColumns([]map[string]any{
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "🔄 重新生成"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_generate_token",
+						}),
+					},
+				},
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "🗑️ 撤销"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_revoke_token",
+						}),
+					},
+				},
+			}))
+		} else {
+			// No token — show generation form
+			formElements := []map[string]any{
+				{
+					"tag":  "select_static",
+					"name": "runner_mode",
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "Runner 模式",
+					},
+					"options": []map[string]any{
+						{"text": map[string]any{"tag": "plain_text", "content": "native（直接执行）"}, "value": "native"},
+						{"text": map[string]any{"tag": "plain_text", "content": "docker（容器隔离）"}, "value": "docker"},
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "runner_docker_image",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "Docker 镜像（docker 模式可选）",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "xbot-sandbox:latest",
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "runner_workspace",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "工作目录",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "/workspace",
+					},
+				},
+				{
+					"tag":         "button",
+					"name":        "token_submit",
+					"text":        map[string]any{"tag": "plain_text", "content": "生成连接命令"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_generate_token",
+						}),
+					},
+				},
+			}
+			elements = append(elements, map[string]any{
+				"tag":      "form",
+				"name":     "runner_token_form",
+				"elements": formElements,
+			})
+		}
+	} else if f.settingsCallbacks.RunnerConnectCmdGet != nil {
+		// Fallback to legacy callback
 		connectCmd := f.settingsCallbacks.RunnerConnectCmdGet(senderID)
 		if connectCmd != "" {
 			elements = append(elements, map[string]any{
@@ -337,7 +454,7 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string) []map[string]any
 		} else {
 			elements = append(elements, map[string]any{
 				"tag":     "markdown",
-				"content": "远程 Runner 功能未启用，请设置 `SANDBOX_PUBLIC_URL`。",
+				"content": "远程 Runner 功能未启用，请设置 `SANDBOX_AUTH_TOKEN`。",
 			})
 		}
 	}

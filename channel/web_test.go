@@ -325,8 +325,8 @@ func TestWebSocketChat(t *testing.T) {
 		if msg.SenderName != "chatuser" {
 			t.Errorf("expected sender 'chatuser', got '%s'", msg.SenderName)
 		}
-		if !strings.HasPrefix(msg.SenderID, "web:") {
-			t.Errorf("expected senderID to start with 'web:', got '%s'", msg.SenderID)
+		if !strings.HasPrefix(msg.SenderID, "web-") {
+			t.Errorf("expected senderID to start with 'web-', got '%s'", msg.SenderID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for inbound message")
@@ -359,7 +359,7 @@ func TestSendToWebSocket(t *testing.T) {
 	// Send a message to the client
 	msgID, err := wc.Send(bus.OutboundMessage{
 		Channel: "web",
-		ChatID:  "web:1", // approximate
+		ChatID:  "web-1", // matches senderID format
 		Content: "Hello from agent!",
 	})
 	if err != nil {
@@ -485,7 +485,7 @@ func TestRingBuffer(t *testing.T) {
 func TestHubOfflineBuffering(t *testing.T) {
 	hub := newHub()
 
-	senderID := "web:1"
+	senderID := "web-1"
 	msg := wsMessage{Content: "offline msg"}
 
 	// Send to offline user → should be buffered
@@ -558,7 +558,7 @@ func TestConcurrentSends(t *testing.T) {
 			go func() {
 				id, _ := wc.Send(bus.OutboundMessage{
 					Channel: "web",
-					ChatID:  "web:1",
+					ChatID:  "web-1",
 					Content: "concurrent msg",
 				})
 				done <- id

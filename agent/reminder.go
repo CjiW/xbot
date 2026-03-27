@@ -95,6 +95,24 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	return "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
 }
 
+// stripSystemReminder removes the <system-reminder>...</system-reminder> block
+// and any preceding blank line from a message's content.
+func stripSystemReminder(content string) string {
+	start := strings.Index(content, "\n\n<system-reminder>")
+	if start == -1 {
+		start = strings.Index(content, "<system-reminder>")
+		if start == -1 {
+			return content
+		}
+		return content[:start] + content[start+len("<system-reminder>"):]
+	}
+	end := strings.Index(content[start:], "</system-reminder>")
+	if end == -1 {
+		return content[:start]
+	}
+	return content[:start] + content[start+end+len("</system-reminder>"):]
+}
+
 // extractUserGoal 从 user message 中提取实际用户需求（去掉时间戳和系统引导文本）。
 func extractUserGoal(content string) string {
 	lines := strings.Split(content, "\n")

@@ -1151,7 +1151,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		dynamicInjector.InjectIfNeeded(messages)
 
 		// --- System Reminder 注入（含双阶段 context_edit 提示）---
+		// 只在最后一个 tool message 上追加，每轮迭代前先 strip 旧 reminder 避免重复。
 		if len(response.ToolCalls) > 0 {
+			// Strip previous reminder from earlier messages to avoid accumulation
+			for idx := len(messages) - 2; idx >= 0; idx-- {
+				if strings.Contains(messages[idx].Content, "<system-reminder>") {
+					messages[idx].Content = stripSystemReminder(messages[idx].Content)
+					break
+				}
+			}
+
 			var roundToolNames []string
 			for _, tc2 := range response.ToolCalls {
 				roundToolNames = append(roundToolNames, tc2.Name)

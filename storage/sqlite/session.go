@@ -55,9 +55,19 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 	return nil
 }
 
-// GetHistory retrieves the most recent messages for a tenant
+// GetHistory retrieves the most recent messages for a tenant.
+// limit specifies the minimum number of user/assistant messages to return.
+// Tool messages between them are included to maintain context continuity.
 func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
+
+	// Use a generous upper bound to ensure we get at least `limit` non-tool messages.
+	// Tool messages are interspersed between user/assistant messages and count toward
+	// the total, so we fetch limit * 3 to have enough headroom.
+	upperBound := limit * 3
+	if upperBound < 100 {
+		upperBound = 100
+	}
 
 	rows, err := conn.Query(`
 		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
@@ -65,7 +75,7 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 		WHERE tenant_id = ?
 		ORDER BY id DESC
 		LIMIT ?
-	`, tenantID, limit)
+	`, tenantID, upperBound)
 	if err != nil {
 		return nil, fmt.Errorf("query session history: %w", err)
 	}
@@ -76,9 +86,27 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 		return nil, err
 	}
 
-	// Reverse to maintain chronological order (oldest first)
+	// Reverse to chronological order (oldest first)
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	// Trim from the beginning to keep at most `limit` user/assistant messages.
+	// Walk from the end to find the cut point where we have exactly `limit`
+	// non-tool messages in the tail.
+	nonToolCount := 0
+	cutIdx := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "tool" {
+			nonToolCount++
+			if nonToolCount == limit {
+				cutIdx = i
+				break
+			}
+		}
+	}
+	if cutIdx > 0 {
+		messages = messages[cutIdx:]
 	}
 
 	return messages, nil

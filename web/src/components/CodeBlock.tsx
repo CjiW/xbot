@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import hljs from 'highlight.js/lib/core'
+import { MermaidBlock } from './MermaidBlock'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
 import go from 'highlight.js/lib/languages/go'
@@ -156,15 +157,25 @@ function containsCheckbox(children: React.ReactNode): boolean {
 export function getCodeBlockProps() {
   return {
     code(props: { className?: string; children?: React.ReactNode; inline?: boolean }) {
+      const lang = props.className?.replace('language-', '')
+      const codeStr = String(props.children ?? '')
+
       // Inline code (no className or in a span)
-      if (!props.className && typeof props.children === 'string' && !props.children.includes('\n')) {
+      if (!lang && !codeStr.includes('\n')) {
         return (
           <code style={{ background: '#1e293b', padding: '2px 6px', borderRadius: '4px', fontSize: '0.9em' }}>
             {props.children}
           </code>
         )
       }
-      return <CodeBlock className={props.className}>{String(props.children ?? '')}</CodeBlock>
+
+      // Mermaid diagram — render as SVG instead of code block
+      if (lang === 'mermaid') {
+        // Dynamic import to avoid loading mermaid bundle unless needed
+        return <MermaidBlock code={codeStr} />
+      }
+
+      return <CodeBlock className={props.className}>{codeStr}</CodeBlock>
     },
     checkbox(props: { checked?: boolean }) {
       return (
@@ -205,6 +216,9 @@ export function getCodeBlockProps() {
       }
 
       return <li>{props.children}</li>
+    },
+    table(props: { children?: React.ReactNode }) {
+      return <div className="table-wrapper"><table>{props.children}</table></div>
     },
   }
 }

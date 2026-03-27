@@ -66,6 +66,12 @@ func (s *TenantSession) Clear() error {
 	return s.sessionSvc.Clear(s.tenantID)
 }
 
+// PurgeOldMessages deletes messages older than the most recent `keepCount` messages.
+// Returns the number of messages deleted.
+func (s *TenantSession) PurgeOldMessages(keepCount int) (int64, error) {
+	return s.sessionSvc.PurgeOldMessages(s.tenantID, keepCount)
+}
+
 // Memory returns the memory provider for this tenant
 func (s *TenantSession) Memory() memory.MemoryProvider {
 	return s.memory

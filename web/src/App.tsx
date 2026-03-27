@@ -7,7 +7,7 @@ function App() {
 
   useEffect(() => {
     // Check if already logged in by trying to fetch history
-    fetch('/api/history?limit=1')
+    fetch('/api/history')
       .then((r) => {
         setAuthed(r.ok)
       })

@@ -1,10 +1,40 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import ProgressPanel from './components/ProgressPanel'
-import type { WsProgressPayload, WsToolProgress } from './components/ProgressPanel'
+import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
 import TiptapEditor from './components/TiptapEditor'
 import SettingsPanel from './components/SettingsPanel'
 import FileUpload, { uploadFile, usePasteUpload, type PendingFile } from './components/FileUpload'
+
+// --- Lazy rendering: only render when element enters viewport ---
+// --- Lazy rendering wrapper: only renders children when element enters viewport ---
+function LazyTurn({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const container = el.parentElement
+    // Skip IntersectionObserver for small message lists — overhead not worth it
+    if ((container?.children.length ?? 0) < 30) {
+      setVisible(true)
+      return
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect() } },
+      { rootMargin: '300px 0px' }  // pre-render slightly before entering viewport
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref}>
+      {visible ? children : <div className="h-6" />}
+    </div>
+  )
+}
 
 interface ChatPageProps {
   onLogout: () => void
@@ -17,6 +47,77 @@ interface Message {
   ts?: number
   // Saved progress snapshot when this message was finalized (for showing intermediate process)
   savedProgress?: WsProgressPayload | null
+  // Full iteration history (persisted across refreshes)
+  iterationHistory?: IterationSnapshot[] | null
+}
+
+function normalizeIterationHistory(input: unknown): IterationSnapshot[] {
+  if (!Array.isArray(input) || input.length === 0) return []
+
+  const toNumber = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
+
+  const normalized: IterationSnapshot[] = []
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue
+    const snap = raw as Record<string, unknown>
+
+    const iteration = toNumber(snap.iteration ?? snap.Iteration)
+    if (iteration == null) continue
+
+    const thinkingRaw = snap.thinking ?? snap.Thinking
+    const thinking = typeof thinkingRaw === 'string' ? thinkingRaw : undefined
+
+    const rawTools = Array.isArray(snap.tools) ? snap.tools : (Array.isArray(snap.Tools) ? snap.Tools : [])
+    const tools = rawTools
+      .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
+      .map((t) => {
+        const name = typeof (t.name ?? t.Name) === 'string' ? String(t.name ?? t.Name) : ''
+        const label = typeof (t.label ?? t.Label) === 'string' ? String(t.label ?? t.Label) : undefined
+        const status = typeof (t.status ?? t.Status) === 'string' ? String(t.status ?? t.Status) : 'done'
+
+        const elapsedMsLower = toNumber(t.elapsed_ms)
+        const elapsedNsLegacy = toNumber(t.Elapsed)
+        const elapsedMs = elapsedMsLower ?? (elapsedNsLegacy != null ? Math.round(elapsedNsLegacy / 1_000_000) : undefined)
+
+        return {
+          name,
+          label,
+          status,
+          elapsed_ms: elapsedMs,
+        }
+      })
+
+    normalized.push({
+      iteration,
+      thinking,
+      tools,
+    })
+  }
+
+  const byIteration = new Map<number, IterationSnapshot>()
+  for (const snap of normalized) {
+    if (typeof snap?.iteration !== 'number') continue
+    byIteration.set(snap.iteration, {
+      iteration: snap.iteration,
+      thinking: snap.thinking,
+      tools: Array.isArray(snap.tools) ? snap.tools : [],
+    })
+  }
+
+  const sorted = Array.from(byIteration.values()).sort((a, b) => a.iteration - b.iteration)
+  const seenThinking = new Set<string>()
+
+  return sorted.map((snap) => {
+    const thinking = (snap.thinking || '').trim()
+    const dedupedThinking = thinking && !seenThinking.has(thinking) ? snap.thinking : undefined
+    if (thinking && !seenThinking.has(thinking)) {
+      seenThinking.add(thinking)
+    }
+    return {
+      ...snap,
+      thinking: dedupedThinking,
+    }
+  })
 }
 
 function formatTime(ts: number): string {
@@ -63,6 +164,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<WsProgressPayload | null>(null)
+  const [liveIterations, setLiveIterations] = useState<IterationSnapshot[]>([])
+  const prevIterationRef = useRef<number>(-1)
+  const progressRef = useRef<WsProgressPayload | null>(null) // sync ref to avoid stale closures
   const [autoScroll, setAutoScroll] = useState(true)
   const [reconnecting, setReconnecting] = useState(true) // true = initial connecting state
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -77,10 +181,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverStopped = useRef(false)
 
-  // Accumulate completed_tools across iterations so the final snapshot preserves all tools.
-  // The engine resets CompletedTools each iteration, so the last progress_structured
-  // before a text/card may have an empty list — we need the accumulated view.
-  const accumulatedToolsRef = useRef<Map<string, WsToolProgress>>(new Map())
 
   // --- Scroll management ---
   const scrollToBottom = useCallback(() => {
@@ -107,17 +207,35 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
   // --- Load history on mount ---
   useEffect(() => {
-    fetch('/api/history?limit=50')
+    fetch('/api/history')
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.messages) {
           const hist: Message[] = data.messages
-            .filter((m: { role: string }) => m.role !== 'tool')
-            .map((m: { role: string; content: string }, i: number) => ({
-            id: `hist-${i}`,
-            type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
-            content: m.content,
-          }))
+            .filter((m: { role: string; tool_calls?: string; detail?: string }) => {
+              if (m.role === 'tool') return false
+              // Skip intermediate assistant(tool_calls) messages that have no detail.
+              // These were saved for LLM context continuity; the final assistant message's
+              // detail field contains the full iteration history that covers these.
+              if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
+              return true
+            })
+            .map((m: { role: string; content: string; detail?: string }, i: number) => {
+              const msg: Message = {
+                id: `hist-${i}`,
+                type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
+                content: m.content,
+              }
+              // Parse iteration history from detail field
+              if (m.detail) {
+                try {
+                  msg.iterationHistory = normalizeIterationHistory(JSON.parse(m.detail))
+                } catch {
+                  // ignore parse errors
+                }
+              }
+              return msg
+            })
           setMessages(hist)
           setTimeout(scrollToBottom, 100)
         }
@@ -176,40 +294,144 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
 
           case 'progress_structured':
-            // Structured progress — update progress panel and accumulate completed_tools
-            setProgress(data.progress)
-            setLoading(true)
-            // Merge completed_tools into accumulated ref (deduplicate by name)
-            if (data.progress?.completed_tools) {
-              for (const tool of data.progress.completed_tools) {
-                const key = tool.name
-                accumulatedToolsRef.current.set(key, tool)
+            // Structured progress — accumulate completed iterations, update current
+            {
+              let p: WsProgressPayload = data.progress
+              const prevIter = prevIterationRef.current
+              const prevProgress = progressRef.current
+
+              // Guard against same-iteration regressions: some events may carry
+              // empty thinking/completed_tools and would otherwise erase visible state.
+              if (prevProgress && p.iteration === prevProgress.iteration) {
+                const nextThinking = (p.thinking || '').trim()
+                const prevThinking = (prevProgress.thinking || '').trim()
+                p = {
+                  ...p,
+                  thinking: nextThinking.length > 0 ? p.thinking : prevProgress.thinking,
+                  completed_tools: (p.completed_tools?.length ?? 0) > 0
+                    ? p.completed_tools
+                    : (prevProgress.completed_tools ?? []),
+                }
+                if (nextThinking.length === 0 && prevThinking.length > 0) {
+                  p.thinking = prevProgress.thinking
+                }
               }
+
+              // When iteration advances, snapshot the previous iteration and append
+              if (prevIter >= 0 && p.iteration > prevIter && prevProgress) {
+                const allTools = [
+                  ...(prevProgress.completed_tools ?? []),
+                  ...(prevProgress.active_tools ?? []),
+                ].map(t => ({
+                  name: t.name,
+                  label: t.label,
+                  status: t.status,
+                  elapsed_ms: t.elapsed_ms,
+                }))
+                setLiveIterations(prev => {
+                  const merged = normalizeIterationHistory([
+                    ...prev,
+                    {
+                      iteration: prevIter,
+                      thinking: prevProgress.thinking,
+                      tools: allTools,
+                    },
+                  ])
+                  return merged
+                })
+              }
+
+              // Frontend safety net: if backend event for iteration N already carries
+              // completed_tools of iteration N-1, persist that snapshot immediately.
+              if (p.iteration > 0 && (p.completed_tools?.length ?? 0) > 0) {
+                const inferredPrev = p.iteration - 1
+                setLiveIterations(prev => {
+                  const hasPrev = prev.some((s) => s.iteration === inferredPrev)
+                  if (hasPrev) return prev
+                  return normalizeIterationHistory([
+                    ...prev,
+                    {
+                      iteration: inferredPrev,
+                      tools: (p.completed_tools ?? []).map((t) => ({
+                        name: t.name,
+                        label: t.label,
+                        status: t.status,
+                        elapsed_ms: t.elapsed_ms,
+                      })),
+                    },
+                  ])
+                })
+              }
+
+              prevIterationRef.current = p.iteration
+              progressRef.current = p
+              setProgress(p)
             }
+            setLoading(true)
             break
 
           case 'text':
           case 'card': {
-            // Final message — clear progress, add to messages
-            // Build snapshot from accumulated completed_tools (preserves tools across iterations)
-            const accumulated = Array.from(accumulatedToolsRef.current.values())
-            const activeTools = progress?.active_tools ?? []
-            const progressSnapshot = (accumulated.length || activeTools.length)
+            // Final message — snapshot current iteration + all completed iterations
+            const progressSnap = progressRef.current
               ? {
-                  ...progress,
-                  completed_tools: accumulated,
+                  ...progressRef.current,
                   active_tools: [],
                 } as WsProgressPayload
               : null
+
+            // Build current iteration snapshot
+            const currentSnap = progressSnap ? (() => {
+              const allTools = [
+                ...(progressSnap.completed_tools ?? []),
+              ].map(t => ({
+                name: t.name,
+                label: t.label,
+                status: t.status,
+                elapsed_ms: t.elapsed_ms,
+              }))
+              return {
+                iteration: prevIterationRef.current,
+                thinking: progressSnap.thinking,
+                tools: allTools,
+              }
+            })() : null
+
+            // Combine local snapshots first.
+            let localHistory: IterationSnapshot[] = []
+            setLiveIterations(prev => {
+              localHistory = [...prev]
+              if (currentSnap) localHistory.push(currentSnap)
+              return []
+            })
+
+            localHistory = normalizeIterationHistory(localHistory)
+
+            // Prefer backend-provided history so current view matches refreshed history.
+            let finalHistory = localHistory
+            if (data.progress_history) {
+              try {
+                const serverHistory = normalizeIterationHistory(JSON.parse(data.progress_history))
+                if (serverHistory.length > 0) {
+                  finalHistory = serverHistory
+                }
+              } catch {
+                // keep local snapshots
+              }
+            }
+
             setProgress(null)
+            prevIterationRef.current = -1
+            progressRef.current = null
             setLoading(false)
-            accumulatedToolsRef.current.clear()
+
             const msg: Message = {
               id: data.id || `ws-${Date.now()}`,
               type: data.type === 'card' ? 'system' : 'assistant',
               content: data.content,
               ts: data.ts,
-              savedProgress: progressSnapshot,
+              savedProgress: progressSnap,
+              iterationHistory: finalHistory.length > 0 ? finalHistory : undefined,
             }
             setMessages((prev) => [...prev, msg])
             break
@@ -217,6 +439,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
           case 'file': {
             setProgress(null)
+            setLiveIterations([])
+            prevIterationRef.current = -1
+            progressRef.current = null
             setLoading(false)
             const fileMsg: Message = {
               id: data.id || `file-${Date.now()}`,
@@ -259,9 +484,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     }
     setMessages((prev) => [...prev, userMsg])
     setProgress(null)
+    setLiveIterations([])
+    prevIterationRef.current = -1
+    progressRef.current = null
     setLoading(true)
     setAutoScroll(true)
-    accumulatedToolsRef.current.clear()
 
     const payload: { type: string; content: string; file_ids?: string[] } = {
       type: 'message',
@@ -283,6 +510,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     wsRef.current.send(JSON.stringify({ type: 'cancel' }))
     setLoading(false)
     setProgress(null)
+    setLiveIterations([])
+    prevIterationRef.current = -1
   }, [])
 
   // --- Logout ---
@@ -400,7 +629,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       <div
         ref={messagesContainerRef}
         onScroll={handleContainerScroll}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-4"
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-4 chat-messages"
       >
         {messages.length === 0 && !loading && (
           <div className="text-center text-slate-500 mt-20">
@@ -412,9 +641,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         {(() => {
           const turns = groupMessagesIntoTurns(messages)
           return turns.map((turn, i) => {
+            const isLatestTurn = i === turns.length - 1
             if (turn.type === 'user') {
-              return (
-                <div key={turn.message.id} className="flex justify-end msg-fade-in">
+              const content = (
+                <div className="flex justify-end msg-fade-in">
                   <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white">
                     <p className="whitespace-pre-wrap">{turn.message.content}</p>
                     {turn.message.ts && (
@@ -425,27 +655,34 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                   </div>
                 </div>
               )
+              // Latest turn always renders; older turns lazy-load
+              return isLatestTurn ? (
+                <div key={turn.message.id}>{content}</div>
+              ) : (
+                <LazyTurn key={turn.message.id}>{content}</LazyTurn>
+              )
             }
             // Assistant turn — last one gets live progress & loading
-            // All turns use savedProgress from the last message in the turn;
-            // when loading=true, live progress prop naturally overrides in AssistantTurn
-            const isLatestTurn = i === turns.length - 1
             const turnSavedProgress = turn.messages[turn.messages.length - 1]?.savedProgress ?? null
-            return (
+            const assistantContent = (
               <AssistantTurn
                 key={turn.messages[0].id}
                 messages={turn.messages}
                 progress={isLatestTurn ? progress : null}
+                liveIterations={isLatestTurn ? liveIterations : undefined}
                 loading={isLatestTurn && loading}
                 savedProgress={turnSavedProgress}
               />
             )
+            return isLatestTurn ? assistantContent : (
+              <LazyTurn key={turn.messages[0].id}>{assistantContent}</LazyTurn>
+            )
           })
         })()}
 
-        {/* Standalone progress only when no messages yet */}
-        {messages.length === 0 && (progress || loading) && (
-          <ProgressPanel progress={progress} loading={loading} />
+        {/* Standalone progress when no assistant turn exists yet (e.g. right after user sends a message) */}
+        {messages.length > 0 && messages[messages.length - 1].type === 'user' && (progress || loading) && (
+          <ProgressPanel progress={progress} liveIterations={liveIterations} loading={loading} />
         )}
 
         <div ref={messagesEndRef} />

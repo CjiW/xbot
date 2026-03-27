@@ -185,8 +185,12 @@ func (wc *WebChannel) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		// Store senderID in context for handler use
-		ctx := contextWithSenderID(r.Context(), "web-"+strconv.Itoa(si.userID))
+		// Store senderID in context for handler use (normalize for single-user mode)
+		senderID := "web-" + strconv.Itoa(si.userID)
+		if wc.callbacks.NormalizeSenderID != nil {
+			senderID = wc.callbacks.NormalizeSenderID(senderID)
+		}
+		ctx := contextWithSenderID(r.Context(), senderID)
 		next(w, r.WithContext(ctx))
 	}
 }

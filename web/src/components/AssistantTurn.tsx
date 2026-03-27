@@ -1,23 +1,35 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getCodeBlockProps } from './CodeBlock'
-import type { WsProgressPayload, WsToolProgress } from './ProgressPanel'
+import type { WsProgressPayload, IterationSnapshot, WsToolProgress } from './ProgressPanel'
+import { CompletedIteration } from './ProgressPanel'
 
 interface Message {
   id: string
   type: 'user' | 'assistant' | 'system'
   content: string
   ts?: number
+  iterationHistory?: IterationSnapshot[] | null
 }
+
+
+// Memoized thinking display — only re-renders when content actually changes
+const ThinkingBlock = memo(({ content }: { content: string }) => (
+  <div className="px-3 py-2 text-xs text-slate-400 italic whitespace-pre-wrap break-words">
+    {content}
+  </div>
+))
 
 interface AssistantTurnProps {
   messages: Message[]
   progress: WsProgressPayload | null
+  liveIterations?: IterationSnapshot[]
   loading: boolean
   // Saved progress from a completed response (for showing intermediate process collapsed)
   savedProgress?: WsProgressPayload | null
 }
+
 
 const codeBlockComponents = getCodeBlockProps()
 
@@ -101,7 +113,7 @@ function isThinkingContent(content: string): boolean {
   return false
 }
 
-export default function AssistantTurn({ messages, progress, loading, savedProgress }: AssistantTurnProps) {
+export default function AssistantTurn({ messages, progress, liveIterations, loading, savedProgress }: AssistantTurnProps) {
   // Classify messages
   const thinkingMsgs: Message[] = []
   const textMsgs: Message[] = []
@@ -117,10 +129,10 @@ export default function AssistantTurn({ messages, progress, loading, savedProgre
   // Use live progress when loading, fall back to savedProgress for completed turns
   const effectiveProgress = loading ? progress : (savedProgress ?? null)
   const hasActiveTools = loading && (progress?.active_tools?.length ?? 0) > 0
-  const allTools: WsToolProgress[] = [
-    ...(effectiveProgress?.completed_tools ?? []),
+  const allTools = effectiveProgress ? [
+    ...(effectiveProgress.completed_tools ?? []),
     ...(loading ? (progress?.active_tools ?? []) : []),
-  ]
+  ] : []
   const totalToolCount = allTools.length
 
   // Determine phase display
@@ -130,6 +142,28 @@ export default function AssistantTurn({ messages, progress, loading, savedProgre
     : effectiveProgress?.phase === 'retrying' ? '🔄'
     : effectiveProgress?.phase === 'done' ? '✅'
     : null
+
+  const baseLiveIterations = liveIterations ?? []
+  let displayLiveIterations = baseLiveIterations
+  if (progress && progress.iteration > 0 && (progress.completed_tools?.length ?? 0) > 0) {
+    const prevIteration = progress.iteration - 1
+    const hasPrev = baseLiveIterations.some((s) => s.iteration === prevIteration)
+    if (!hasPrev) {
+      displayLiveIterations = [...baseLiveIterations, {
+        iteration: prevIteration,
+        tools: (progress.completed_tools ?? []).map((t) => ({
+          name: t.name,
+          label: t.label,
+          status: t.status,
+          elapsed_ms: t.elapsed_ms,
+        })),
+      }].sort((a, b) => a.iteration - b.iteration)
+    }
+  }
+
+  const currentThinking = (progress?.thinking || '').trim()
+  const seenThinkings = new Set(displayLiveIterations.map(s => (s.thinking || '').trim()).filter(Boolean))
+  const shouldShowCurrentThinking = currentThinking.length > 0 && !seenThinkings.has(currentThinking)
 
   return (
     <div className="flex justify-start msg-fade-in">
@@ -149,8 +183,47 @@ export default function AssistantTurn({ messages, progress, loading, savedProgre
           </CollapsibleSection>
         )}
 
+        {/* Live completed iterations (during loading) */}
+        {loading && (displayLiveIterations.length ?? 0) > 0 && (
+          <CollapsibleSection
+            icon="📋"
+            title="迭代过程"
+            badge={displayLiveIterations.length}
+            defaultOpen={true}
+          >
+            <div className="divide-y divide-slate-700/30">
+              {displayLiveIterations.map(snap => (
+                <div key={snap.iteration} className="px-3 py-2">
+                  <div className="text-[11px] text-slate-600/90 font-mono mb-1">
+                    #{snap.iteration}
+                  </div>
+                  {snap.thinking && (
+                    <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">
+                      {snap.thinking}
+                    </div>
+                  )}
+                  <div className="space-y-0.5">
+                    {snap.tools.map((tool, i) => (
+                      <div key={`${snap.iteration}-${i}`} className="flex items-center gap-2 px-2 py-1 text-sm">
+                        <span>{tool.status === 'error' ? '❌' : '✅'}</span>
+                        <span className="font-mono text-xs text-slate-400 flex-1 truncate">
+                          {tool.label || tool.name}
+                        </span>
+                        {tool.elapsed_ms != null && tool.elapsed_ms > 0 && (
+                          <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        )}
+
         {/* Collapsible: Tool calls section (from completed progress or live) */}
-        {totalToolCount > 0 && (
+        {/* Hidden when iterationHistory exists — iteration history already shows all tools */}
+        {totalToolCount > 0 && !messages[0]?.iterationHistory && (
           <CollapsibleSection
             icon="⚡"
             title="工具调用"
@@ -165,17 +238,46 @@ export default function AssistantTurn({ messages, progress, loading, savedProgre
           </CollapsibleSection>
         )}
 
-        {/* Live progress indicator (when still loading and no tools yet) */}
-        {loading && totalToolCount === 0 && phaseIcon && (
-          <div className="assistant-turn-live-phase">
-            <span className={progress?.phase !== 'done' ? 'tool-pulse' : ''}>{phaseIcon}</span>
-            <span className="text-xs text-slate-400">
-              {progress?.phase === 'thinking' ? '思考中...'
-                : progress?.phase === 'compressing' ? '压缩上下文...'
-                : progress?.phase === 'retrying' ? '重试中...'
-                : '处理中...'}
-            </span>
+        {/* Live progress — current iteration thinking + active tools (only during loading) */}
+        {loading && progress && progress.phase !== 'done' && (
+          <div className="mb-2 rounded border border-slate-700/30 overflow-hidden">
+            <div className="px-3 pt-2 text-[11px] text-slate-600/90 font-mono text-right">
+              #{progress.iteration}
+            </div>
+            {shouldShowCurrentThinking && (
+              <ThinkingBlock content={progress.thinking} />
+            )}
+            {(progress.active_tools?.length ?? 0) > 0 && (
+              <div className="divide-y divide-slate-700/30">
+                {progress.active_tools!.map((tool, i) => (
+                  <div key={`active-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                    <span className="tool-pulse text-xs">⏳</span>
+                    <span className="font-mono text-xs text-blue-300 flex-1 truncate">
+                      {tool.label || tool.name}
+                    </span>
+                    {tool.elapsed_ms > 0 && (
+                      <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+        )}
+
+        {/* Collapsible: Iteration history (from saved snapshots) */}
+        {!loading && messages[0]?.iterationHistory && messages[0].iterationHistory.length > 0 && (
+          <CollapsibleSection
+            icon="📋"
+            title="迭代过程"
+            badge={messages[0].iterationHistory!.length}
+          >
+            <div className="divide-y divide-slate-700/30">
+              {messages[0].iterationHistory!.map((snap) => (
+                <CompletedIteration key={snap.iteration} snap={snap} />
+              ))}
+            </div>
+          </CollapsibleSection>
         )}
 
         {/* Main text content — always visible */}

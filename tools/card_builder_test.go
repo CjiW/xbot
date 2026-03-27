@@ -639,7 +639,7 @@ func TestCardSendTool(t *testing.T) {
 	s.AddElement("", md)
 
 	var sentContent string
-	s.SendFunc = func(ch, chatID, content string) error {
+	s.SendFunc = func(ch, chatID, content string, _ ...map[string]string) error {
 		sentContent = content
 		return nil
 	}
@@ -687,7 +687,7 @@ func TestCardSendTool_WaitResponse(t *testing.T) {
 	md := BuildMarkdown("test", nil)
 	md.ID = "test_md"
 	s.AddElement("", md)
-	s.SendFunc = func(ch, chatID, content string) error { return nil }
+	s.SendFunc = func(ch, chatID, content string, _ ...map[string]string) error { return nil }
 
 	tool := &CardSendTool{builder: b}
 	ctx := &ToolContext{}
@@ -801,7 +801,7 @@ func TestFullCardBuildFlow(t *testing.T) {
 	// Step 7: Send
 	var sentJSON string
 	session, _ := b.GetSession(cardID)
-	session.SendFunc = func(ch, chatID, content string) error {
+	session.SendFunc = func(ch, chatID, content string, _ ...map[string]string) error {
 		sentJSON = content
 		return nil
 	}

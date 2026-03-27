@@ -160,6 +160,7 @@ func (a *Agent) buildMainRunConfig(
 					payload := &channelpkg.WsProgressPayload{
 						Phase:     string(s.Phase),
 						Iteration: s.Iteration,
+						Thinking:  s.ThinkingContent,
 					}
 					for _, t := range s.ActiveTools {
 						payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
@@ -177,8 +178,8 @@ func (a *Agent) buildMainRunConfig(
 							Elapsed: t.Elapsed.Milliseconds(),
 						})
 					}
-					// Non-blocking: wrap in goroutine to avoid blocking engine loop
-					go wc.SendProgress(chatID, payload)
+					// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
+					wc.SendProgress(chatID, payload)
 				}
 			}
 		}

@@ -21,10 +21,6 @@ interface UserSettings {
   font_size: FontSize
   nickname: string
   language: Language
-  // LLM settings
-  llm_model: string
-  llm_api_key: string
-  llm_base_url: string
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -32,9 +28,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   font_size: 'medium',
   nickname: '',
   language: 'zh-CN',
-  llm_model: '',
-  llm_api_key: '',
-  llm_base_url: '',
 }
 
 // localStorage fallback keys
@@ -43,8 +36,6 @@ const LS_KEYS: Record<string, string> = {
   font_size: 'xbot-font-size',
   nickname: 'xbot-nickname',
   language: 'xbot-language',
-  llm_model: 'xbot-llm-model',
-  llm_base_url: 'xbot-llm-base-url',
 }
 
 function lsGet<K extends keyof UserSettings>(key: K, fallback: UserSettings[K]): UserSettings[K] {
@@ -66,9 +57,6 @@ async function fetchSettings(): Promise<UserSettings> {
         font_size: (data.settings.font_size as FontSize) || lsGet('font_size', DEFAULT_SETTINGS.font_size),
         nickname: data.settings.nickname || lsGet('nickname', DEFAULT_SETTINGS.nickname),
         language: (data.settings.language as Language) || lsGet('language', DEFAULT_SETTINGS.language),
-        llm_model: data.settings.llm_model || '',
-        llm_api_key: data.settings.llm_api_key || '',
-        llm_base_url: data.settings.llm_base_url || '',
       }
     }
   } catch {
@@ -79,9 +67,6 @@ async function fetchSettings(): Promise<UserSettings> {
     font_size: lsGet('font_size', DEFAULT_SETTINGS.font_size),
     nickname: lsGet('nickname', DEFAULT_SETTINGS.nickname),
     language: lsGet('language', DEFAULT_SETTINGS.language),
-    llm_model: lsGet('llm_model', DEFAULT_SETTINGS.llm_model),
-    llm_api_key: DEFAULT_SETTINGS.llm_api_key,
-    llm_base_url: lsGet('llm_base_url', DEFAULT_SETTINGS.llm_base_url),
   }
 }
 
@@ -111,11 +96,32 @@ interface MarketEntry {
   installed: boolean
 }
 
+interface MyMarketEntry {
+  name: string
+  type: string
+  description: string
+  published: boolean
+}
+
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'appearance', label: '外观', icon: '🎨' },
   { id: 'llm', label: 'LLM', icon: '🧠' },
   { id: 'runner', label: 'Runner', icon: '🖥️' },
   { id: 'market', label: '市场', icon: '🏪' },
+]
+
+// ── LLM Config types ──
+
+interface LLMConfig {
+  provider: string
+  base_url: string
+  model: string
+  models: string[]
+}
+
+const PROVIDER_OPTIONS = [
+  { value: 'openai', label: 'OpenAI (GPT / o-series)' },
+  { value: 'anthropic', label: 'Anthropic (Claude)' },
 ]
 
 export default function SettingsPanel({ open, onClose, onNicknameChange }: SettingsPanelProps) {
@@ -124,15 +130,25 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
   const [fontSize, setFontSize] = useState<FontSize>(() => lsGet('font_size', DEFAULT_SETTINGS.font_size))
   const [nickname, setNickname] = useState<string>(() => lsGet('nickname', DEFAULT_SETTINGS.nickname))
   const [language, setLanguage] = useState<Language>(() => lsGet('language', DEFAULT_SETTINGS.language))
-  const [llmModel, setLlmModel] = useState(DEFAULT_SETTINGS.llm_model)
-  const [llmApiKey, setLlmApiKey] = useState(DEFAULT_SETTINGS.llm_api_key)
-  const [llmBaseUrl, setLlmBaseUrl] = useState(DEFAULT_SETTINGS.llm_base_url)
   const [runnerCommand, setRunnerCommand] = useState('')
   const [tokenActionloading, setTokenActionLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [marketType, setMarketType] = useState<'agent' | 'skill'>('agent')
+  const [marketSubTab, setMarketSubTab] = useState<'browse' | 'mine'>('browse')
   const [marketEntries, setMarketEntries] = useState<MarketEntry[]>([])
+  const [myMarketEntries, setMyMarketEntries] = useState<MyMarketEntry[]>([])
   const [marketLoading, setMarketLoading] = useState(false)
+
+  // LLM config state
+  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null)
+  const [llmConfigLoading, setLlmConfigLoading] = useState(false)
+  const [llmSaving, setLlmSaving] = useState(false)
+  // Add form state (for new config)
+  const [llmFormProvider, setLlmFormProvider] = useState('openai')
+  const [llmFormBaseUrl, setLlmFormBaseUrl] = useState('')
+  const [llmFormApiKey, setLlmFormApiKey] = useState('')
+  const [llmFormModel, setLlmFormModel] = useState('')
+  const [llmError, setLlmError] = useState('')
 
   // Load settings from server on mount
   useEffect(() => {
@@ -142,8 +158,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
       setFontSize(s.font_size)
       setNickname(s.nickname)
       setLanguage(s.language)
-      setLlmModel(s.llm_model)
-      setLlmBaseUrl(s.llm_base_url)
     })
   }, [open])
 
@@ -181,6 +195,33 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
       .catch(() => {})
       .finally(() => setTokenActionLoading(false))
   }, [open, activeTab])
+
+  // Fetch LLM config when tab is opened
+  const fetchLLMConfig = useCallback(async () => {
+    setLlmConfigLoading(true)
+    setLlmError('')
+    try {
+      const resp = await fetch('/api/llm-config')
+      const data = await resp.json()
+      if (data.ok && data.provider) {
+        setLlmConfig({
+          provider: data.provider,
+          base_url: data.base_url,
+          model: data.model,
+          models: data.models || [],
+        })
+      } else {
+        setLlmConfig(null)
+      }
+    } catch {
+      setLlmError('获取配置失败')
+    }
+    setLlmConfigLoading(false)
+  }, [])
+
+  useEffect(() => {
+    if (open && activeTab === 'llm') fetchLLMConfig()
+  }, [open, activeTab, fetchLLMConfig])
 
   const handleGenerateToken = useCallback(async () => {
     setTokenActionLoading(true)
@@ -226,6 +267,83 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
     setSaving(false)
   }, [])
 
+  // LLM config actions
+  const handleLLMAdd = useCallback(async () => {
+    if (!llmFormBaseUrl.trim() || !llmFormApiKey.trim()) {
+      setLlmError('Base URL 和 API Key 为必填项')
+      return
+    }
+    setLlmSaving(true)
+    setLlmError('')
+    try {
+      const resp = await fetch('/api/llm-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: llmFormProvider,
+          base_url: llmFormBaseUrl.trim(),
+          api_key: llmFormApiKey.trim(),
+          model: llmFormModel.trim(),
+        }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setLlmFormBaseUrl('')
+        setLlmFormApiKey('')
+        setLlmFormModel('')
+        await fetchLLMConfig()
+      } else {
+        setLlmError(data.error || '保存失败')
+      }
+    } catch {
+      setLlmError('网络错误')
+    }
+    setLlmSaving(false)
+  }, [llmFormProvider, llmFormBaseUrl, llmFormApiKey, llmFormModel, fetchLLMConfig])
+
+  const handleLLMSetModel = useCallback(async (model: string) => {
+    setLlmSaving(true)
+    setLlmError('')
+    try {
+      const resp = await fetch('/api/llm-config/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        await fetchLLMConfig()
+      } else {
+        setLlmError(data.error || '切换模型失败')
+      }
+    } catch {
+      setLlmError('网络错误')
+    }
+    setLlmSaving(false)
+  }, [fetchLLMConfig])
+
+  const handleLLMDelete = useCallback(async () => {
+    if (!confirm('确认删除个人 LLM 配置？删除后将恢复使用系统默认模型。')) return
+    setLlmSaving(true)
+    setLlmError('')
+    try {
+      const resp = await fetch('/api/llm-config', { method: 'DELETE' })
+      const data = await resp.json()
+      if (data.ok) {
+        setLlmConfig(null)
+        // Clear form too
+        setLlmFormBaseUrl('')
+        setLlmFormApiKey('')
+        setLlmFormModel('')
+      } else {
+        setLlmError(data.error || '删除失败')
+      }
+    } catch {
+      setLlmError('网络错误')
+    }
+    setLlmSaving(false)
+  }, [])
+
   // Market functions
   const loadMarket = useCallback(async () => {
     setMarketLoading(true)
@@ -261,10 +379,55 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
     } catch {}
   }, [loadMarket])
 
+  const loadMyMarket = useCallback(async () => {
+    setMarketLoading(true)
+    try {
+      const resp = await fetch(`/api/market/my?type=${marketType}`)
+      const data = await resp.json()
+      if (data.ok) setMyMarketEntries(data.entries || [])
+    } catch {}
+    setMarketLoading(false)
+  }, [marketType])
+
+  const handlePublish = useCallback(async (entry: MyMarketEntry) => {
+    try {
+      const resp = await fetch('/api/market/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: entry.type, name: entry.name }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setMyMarketEntries(prev => prev.map(e =>
+          e.name === entry.name && e.type === entry.type ? { ...e, published: true } : e
+        ))
+      }
+    } catch {}
+  }, [])
+
+  const handleUnpublish = useCallback(async (entry: MyMarketEntry) => {
+    try {
+      const resp = await fetch('/api/market/unpublish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: entry.type, name: entry.name }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setMyMarketEntries(prev => prev.map(e =>
+          e.name === entry.name && e.type === entry.type ? { ...e, published: false } : e
+        ))
+      }
+    } catch {}
+  }, [])
+
   // Load market when tab is opened
   useEffect(() => {
-    if (open && activeTab === 'market') loadMarket()
-  }, [open, activeTab, loadMarket])
+    if (open && activeTab === 'market') {
+      if (marketSubTab === 'browse') loadMarket()
+      else loadMyMarket()
+    }
+  }, [open, activeTab, marketSubTab, loadMarket, loadMyMarket])
 
   // Close on Escape
   useEffect(() => {
@@ -280,6 +443,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
 
   const sectionClass = 'settings-section'
   const sectionTitleClass = 'settings-section-title'
+
+  const providerLabel = PROVIDER_OPTIONS.find(p => p.value === llmConfig?.provider)?.label || llmConfig?.provider
 
   return (
     <>
@@ -395,62 +560,122 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
         {/* ── LLM 设置 ── */}
         {activeTab === 'llm' && (
           <div className={sectionClass}>
-            <div className={sectionTitleClass}>🧠 个人 LLM Personal LLM</div>
-            <p className="text-xs text-slate-500 mb-3">
-              配置个人 LLM 服务。设置后，你的请求将使用你自己的模型而非默认配置。
-            </p>
+            <div className={sectionTitleClass}>🧠 个人 LLM 配置</div>
 
-            <div className="settings-item">
-              <label className="settings-label">模型 Model</label>
-              <input
-                type="text"
-                className="settings-input"
-                placeholder="例如: gpt-4o, claude-sonnet-4-20250514"
-                value={llmModel}
-                onChange={(e) => setLlmModel(e.target.value)}
-                onBlur={() => {
-                  lsSet('llm_model', llmModel)
-                  handleSave({ llm_model: llmModel, llm_base_url: llmBaseUrl })
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-              />
-            </div>
+            {llmConfigLoading ? (
+              <div className="text-center py-6 text-slate-500 text-sm">加载中...</div>
+            ) : llmConfig ? (
+              /* ── 已有配置：显示当前配置 + 模型切换 + 删除 ── */
+              <>
+                <div className="text-xs text-slate-400 mb-3">
+                  当前使用个人模型。可切换模型或删除配置以恢复系统默认。
+                </div>
 
-            <div className="settings-item">
-              <label className="settings-label">API Base URL</label>
-              <input
-                type="text"
-                className="settings-input"
-                placeholder="例如: https://api.openai.com/v1"
-                value={llmBaseUrl}
-                onChange={(e) => setLlmBaseUrl(e.target.value)}
-                onBlur={() => {
-                  lsSet('llm_base_url', llmBaseUrl)
-                  handleSave({ llm_model: llmModel, llm_base_url: llmBaseUrl })
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-              />
-            </div>
+                <div className="settings-item">
+                  <label className="settings-label">提供商 Provider</label>
+                  <div className="text-sm text-slate-300">{providerLabel}</div>
+                </div>
 
-            <div className="settings-item">
-              <label className="settings-label">API Key</label>
-              <input
-                type="password"
-                className="settings-input"
-                placeholder="sk-..."
-                value={llmApiKey}
-                onChange={(e) => setLlmApiKey(e.target.value)}
-                onBlur={() => handleSave({ llm_api_key: llmApiKey })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                }}
-              />
-              <p className="text-xs text-slate-600 mt-1">⚠️ API Key 仅存储在服务端，不会返回到前端</p>
-            </div>
+                <div className="settings-item">
+                  <label className="settings-label">Base URL</label>
+                  <div className="text-sm text-slate-400 font-mono break-all">{llmConfig.base_url}</div>
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">当前模型 Model</label>
+                  {llmConfig.models.length > 0 ? (
+                    <select
+                      className="settings-select"
+                      value={llmConfig.model}
+                      onChange={(e) => handleLLMSetModel(e.target.value)}
+                      disabled={llmSaving}
+                    >
+                      {llmConfig.models.map(m => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="text-sm text-slate-300">{llmConfig.model || '默认'}</div>
+                  )}
+                </div>
+
+                {llmError && <p className="text-xs text-red-400 mt-1 mb-2">{llmError}</p>}
+
+                <div className="flex gap-2 mt-3">
+                  <button
+                    className="settings-action-btn settings-action-danger"
+                    onClick={handleLLMDelete}
+                    disabled={llmSaving}
+                  >
+                    🗑️ 删除配置
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ── 无配置：新增表单 ── */
+              <>
+                <div className="text-xs text-slate-400 mb-3">
+                  当前使用系统默认模型。配置个人 LLM 后可自由选择模型。
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">提供商 Provider</label>
+                  <select
+                    className="settings-select"
+                    value={llmFormProvider}
+                    onChange={(e) => setLlmFormProvider(e.target.value)}
+                  >
+                    {PROVIDER_OPTIONS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">Base URL *</label>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    placeholder="例如: https://api.openai.com/v1"
+                    value={llmFormBaseUrl}
+                    onChange={(e) => setLlmFormBaseUrl(e.target.value)}
+                  />
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">API Key *</label>
+                  <input
+                    type="password"
+                    className="settings-input"
+                    placeholder="sk-..."
+                    value={llmFormApiKey}
+                    onChange={(e) => setLlmFormApiKey(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-600 mt-1">⚠️ API Key 仅存储在服务端，不会返回到前端</p>
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">模型 Model</label>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    placeholder="例如: gpt-4o, claude-sonnet-4-20250514（可选，默认用提供商推荐模型）"
+                    value={llmFormModel}
+                    onChange={(e) => setLlmFormModel(e.target.value)}
+                  />
+                </div>
+
+                {llmError && <p className="text-xs text-red-400 mt-1 mb-2">{llmError}</p>}
+
+                <button
+                  className="settings-action-btn w-full mt-2"
+                  onClick={handleLLMAdd}
+                  disabled={llmSaving}
+                >
+                  {llmSaving ? '保存中...' : '💾 保存配置'}
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -515,52 +740,111 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
             <div className="market-tab-bar">
               <button
                 className={`market-tab ${marketType === 'agent' ? 'active' : ''}`}
-                onClick={() => { setMarketType('agent'); }}
+                onClick={() => { setMarketType('agent'); setMarketSubTab('browse'); }}
               >
                 🤖 Agent
               </button>
               <button
                 className={`market-tab ${marketType === 'skill' ? 'active' : ''}`}
-                onClick={() => { setMarketType('skill'); }}
+                onClick={() => { setMarketType('skill'); setMarketSubTab('browse'); }}
               >
                 🛠️ Skill
               </button>
             </div>
-            {marketLoading ? (
-              <div className="text-center py-8 text-slate-500">
-                <div className="market-spinner" />
-                <p className="text-xs mt-2">加载中...</p>
-              </div>
-            ) : marketEntries.length === 0 ? (
-              <div className="text-center py-8 text-slate-500">
-                <p className="text-3xl mb-3">📭</p>
-                <p className="text-sm">暂无可用条目</p>
-              </div>
-            ) : (
-              <div className="market-entry-list">
-                {marketEntries.map(entry => (
-                  <div key={entry.id} className="market-entry">
-                    <div className="market-entry-header">
-                      <div className="market-entry-info">
-                        <span className="market-entry-name">{entry.name}</span>
-                        <span className="market-entry-author">by {entry.author}</span>
+            {/* Sub tabs: browse / mine */}
+            <div className="market-sub-tab-bar">
+              <button
+                className={`market-tab market-sub-tab ${marketSubTab === 'browse' ? 'active' : ''}`}
+                onClick={() => setMarketSubTab('browse')}
+              >
+                📦 市场
+              </button>
+              <button
+                className={`market-tab market-sub-tab ${marketSubTab === 'mine' ? 'active' : ''}`}
+                onClick={() => setMarketSubTab('mine')}
+              >
+                📋 我的
+              </button>
+            </div>
+
+            {marketSubTab === 'browse' && (
+              marketLoading ? (
+                <div className="text-center py-8 text-slate-500">
+                  <div className="market-spinner" />
+                  <p className="text-xs mt-2">加载中...</p>
+                </div>
+              ) : marketEntries.length === 0 ? (
+                <div className="text-center py-8 text-slate-500">
+                  <p className="text-3xl mb-3">📭</p>
+                  <p className="text-sm">暂无可用条目</p>
+                </div>
+              ) : (
+                <div className="market-entry-list">
+                  {marketEntries.map(entry => (
+                    <div key={entry.id} className="market-entry">
+                      <div className="market-entry-header">
+                        <div className="market-entry-info">
+                          <span className="market-entry-name">{entry.name}</span>
+                          <span className="market-entry-author">by {entry.author}</span>
+                        </div>
+                        {entry.installed ? (
+                          <button className="market-uninstall-btn" onClick={() => handleUninstall(entry)}>
+                            卸载
+                          </button>
+                        ) : (
+                          <button className="market-install-btn" onClick={() => handleInstall(entry)}>
+                            安装
+                          </button>
+                        )}
                       </div>
-                      {entry.installed ? (
-                        <button className="market-uninstall-btn" onClick={() => handleUninstall(entry)}>
-                          卸载
-                        </button>
-                      ) : (
-                        <button className="market-install-btn" onClick={() => handleInstall(entry)}>
-                          安装
-                        </button>
+                      {entry.description && (
+                        <p className="market-entry-desc">{entry.description}</p>
                       )}
                     </div>
-                    {entry.description && (
-                      <p className="market-entry-desc">{entry.description}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {marketSubTab === 'mine' && (
+              marketLoading ? (
+                <div className="text-center py-8 text-slate-500">
+                  <div className="market-spinner" />
+                  <p className="text-xs mt-2">加载中...</p>
+                </div>
+              ) : myMarketEntries.length === 0 ? (
+                <div className="text-center py-8 text-slate-500">
+                  <p className="text-3xl mb-3">📭</p>
+                  <p className="text-sm">暂无自己的{marketType === 'skill' ? ' Skill' : ' Agent'}</p>
+                </div>
+              ) : (
+                <div className="market-entry-list">
+                  {myMarketEntries.map(entry => (
+                    <div key={entry.name} className="market-entry">
+                      <div className="market-entry-header">
+                        <div className="market-entry-info">
+                          <span className="market-entry-name">{entry.name}</span>
+                          <span className={`market-entry-status ${entry.published ? 'published' : 'unpublished'}`}>
+                            {entry.published ? '✅ 已上架' : '⚪ 未上架'}
+                          </span>
+                        </div>
+                        {entry.published ? (
+                          <button className="market-unpublish-btn" onClick={() => handleUnpublish(entry)}>
+                            下架
+                          </button>
+                        ) : (
+                          <button className="market-install-btn" onClick={() => handlePublish(entry)}>
+                            上架
+                          </button>
+                        )}
+                      </div>
+                      {entry.description && (
+                        <p className="market-entry-desc">{entry.description}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
             )}
           </div>
         )}

@@ -150,6 +150,7 @@ func main() {
 		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
 		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
 		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,
+		PurgeOldMessages:         cfg.Agent.PurgeOldMessages,
 		SandboxIdleTimeout:       cfg.Sandbox.IdleTimeout,
 	})
 
@@ -272,9 +273,10 @@ func main() {
 		}
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
-				Host: cfg.Web.Host,
-				Port: cfg.Web.Port,
-				DB:   webDB,
+				Host:         cfg.Web.Host,
+				Port:         cfg.Web.Port,
+				DB:           webDB,
+				MemoryWindow: cfg.Agent.MemoryWindow,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
@@ -333,8 +335,34 @@ func main() {
 				RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
 					return agentLoop.RegistryManager().ListMy(senderID, entryType)
 				},
+				RegistryPublish: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Publish(entryType, name, senderID)
+				},
+				RegistryUnpublish: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Unpublish(entryType, name, senderID)
+				},
+
 				RegistryUninstall: func(entryType, name, senderID string) error {
 					return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
+				},
+				LLMList: func(senderID string) ([]string, string) {
+					llmClient, currentModel, _, _ := agentLoop.LLMFactory().GetLLM(senderID)
+					return llmClient.ListModels(), currentModel
+				},
+				LLMSet: func(senderID, model string) error {
+					return agentLoop.SetUserModel(senderID, model)
+				},
+				LLMGetConfig: func(senderID string) (string, string, string, bool) {
+					return agentLoop.GetUserLLMConfig(senderID)
+				},
+				LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+					return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+				},
+				LLMDelete: func(senderID string) error {
+					return agentLoop.DeleteUserLLM(senderID)
+				},
+				NormalizeSenderID: func(senderID string) string {
+					return agentLoop.NormalizeSenderID(senderID)
 				},
 			})
 			disp.Register(webCh)

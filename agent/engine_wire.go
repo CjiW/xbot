@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	channelpkg "xbot/channel"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
@@ -138,6 +139,42 @@ func (a *Agent) buildMainRunConfig(
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
 				_ = a.sendMessage(channel, chatID, lines[0])
+			}
+		}
+	}
+
+	// 结构化进度事件推送（仅 web 渠道）
+	if channel == "web" && a.channelFinder != nil {
+		if ch, ok := a.channelFinder("web"); ok {
+			if wc, ok := ch.(*channelpkg.WebChannel); ok {
+				cfg.ProgressEventHandler = func(event *ProgressEvent) {
+					if event == nil || event.Structured == nil {
+						return
+					}
+					s := event.Structured
+					payload := &channelpkg.WsProgressPayload{
+						Phase:     string(s.Phase),
+						Iteration: s.Iteration,
+					}
+					for _, t := range s.ActiveTools {
+						payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+							Name:    t.Name,
+							Label:   t.Label,
+							Status:  string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(),
+						})
+					}
+					for _, t := range s.CompletedTools {
+						payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+							Name:    t.Name,
+							Label:   t.Label,
+							Status:  string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(),
+						})
+					}
+					// Non-blocking: wrap in goroutine to avoid blocking engine loop
+					go wc.SendProgress(chatID, payload)
+				}
 			}
 		}
 	}

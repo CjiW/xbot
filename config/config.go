@@ -93,6 +93,7 @@ type WebConfig struct {
 	Host      string // 监听地址（默认 0.0.0.0）
 	Port      int    // 监听端口（默认 8082）
 	StaticDir string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
+	UploadDir string // 文件上传目录（可选，默认 workspace/uploads）
 }
 
 // Config 应用配置

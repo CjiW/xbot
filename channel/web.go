@@ -194,10 +194,27 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type    string `json:"type"`              // "text", "progress", "card"
-	ID      string `json:"id,omitempty"`      // UUID
-	Content string `json:"content,omitempty"` // message content
-	TS      int64  `json:"ts,omitempty"`      // timestamp
+	Type     string             `json:"type"`               // "text", "progress", "card", "progress_structured"
+	ID       string             `json:"id,omitempty"`       // UUID
+	Content  string             `json:"content,omitempty"`  // message content
+	TS       int64              `json:"ts,omitempty"`       // timestamp
+	Progress *WsProgressPayload `json:"progress,omitempty"` // structured progress data
+}
+
+// WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
+type WsProgressPayload struct {
+	Phase          string           `json:"phase,omitempty"`
+	Iteration      int              `json:"iteration,omitempty"`
+	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
+	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
+}
+
+// WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
+type WsToolProgress struct {
+	Name    string `json:"name,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
 }
 
 type wsClientMessage struct {
@@ -229,6 +246,9 @@ type WebChannel struct {
 
 	// Static files (external directory)
 	staticDir string
+
+	// File uploads directory
+	uploadDir string
 }
 
 type sessionInfo struct {
@@ -254,6 +274,11 @@ func (wc *WebChannel) SetStaticDir(dir string) {
 	wc.staticDir = dir
 }
 
+// SetUploadDir sets the directory for file uploads.
+func (wc *WebChannel) SetUploadDir(dir string) {
+	wc.uploadDir = dir
+}
+
 func (wc *WebChannel) Name() string { return "web" }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +299,10 @@ func (wc *WebChannel) Start() error {
 
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
+
+		// File API
+		mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
+		mux.HandleFunc("/api/files/", wc.authMiddleware(wc.handleFileDownload))
 
 	// Static files
 	if wc.staticDir != "" {
@@ -355,6 +384,24 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}
 
 	return msgID, nil
+}
+
+// SendProgress 发送结构化进度事件到 Web 客户端（非阻塞）。
+// 调用方应通过 goroutine 包裹以避免阻塞 engine 循环。
+func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
+	if payload == nil {
+		return
+	}
+
+	wsMsg := wsMessage{
+		Type:     "progress_structured",
+		TS:       time.Now().Unix(),
+		Progress: payload,
+	}
+
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, progress event buffered")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +517,34 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			continue
 		}
 
-		if msg.Type != "message" || msg.Content == "" {
+		// Handle message type (default to "message" for backward compatibility)
+		if msg.Type == "" {
+			msg.Type = "message"
+		}
+
+		switch msg.Type {
+		case "cancel":
+			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus
+			wc.msgBus.Inbound <- bus.InboundMessage{
+				Channel:    "web",
+				SenderID:   c.userID,
+				SenderName: si.username,
+				ChatID:     chatID,
+				ChatType:   "p2p",
+				Content:    "/cancel",
+				Time:       time.Now(),
+				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				From:       bus.NewIMAddress("web", c.userID),
+				To:         bus.NewIMAddress("web", chatID),
+			}
+			continue
+
+		case "message":
+			if msg.Content == "" {
+				continue
+			}
+
+		default:
 			continue
 		}
 

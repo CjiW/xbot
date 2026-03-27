@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+body {
+  margin: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Markdown content styling */
+.markdown-body h1 { font-size: 1.5em; font-weight: 700; margin: 0.5em 0; }
+.markdown-body h2 { font-size: 1.3em; font-weight: 600; margin: 0.5em 0; }
+.markdown-body h3 { font-size: 1.1em; font-weight: 600; margin: 0.5em 0; }
+.markdown-body p { margin: 0.4em 0; }
+.markdown-body code {
+  background: #1e293b;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.markdown-body pre {
+  background: #1e293b;
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 1.5em;
+  margin: 0.3em 0;
+}
+.markdown-body blockquote {
+  border-left: 3px solid #475569;
+  padding-left: 12px;
+  color: #94a3b8;
+  margin: 0.5em 0;
+}
+.markdown-body a {
+  color: #60a5fa;
+  text-decoration: underline;
+}

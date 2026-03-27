@@ -87,6 +87,14 @@ type AdminConfig struct {
 	ChatID string // 管理员会话 ID（用于 Logs 工具等敏感操作的权限控制）
 }
 
+// WebConfig Web 渠道配置
+type WebConfig struct {
+	Enable    bool   // 是否启用 Web 渠道
+	Host      string // 监听地址（默认 0.0.0.0）
+	Port      int    // 监听端口（默认 8082）
+	StaticDir string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
+}
+
 // Config 应用配置
 type Config struct {
 	Server        ServerConfig
@@ -102,6 +110,7 @@ type Config struct {
 	Sandbox       SandboxConfig
 	StartupNotify StartupNotifyConfig
 	Admin         AdminConfig
+	Web           WebConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -279,7 +288,14 @@ func Load() *Config {
 		Admin: AdminConfig{
 			ChatID: getAdminChatID(),
 		},
+		Web: WebConfig{
+			Enable:    getEnvBoolOrDefault("WEB_ENABLED", false),
+			Host:      getEnvOrDefault("WEB_HOST", "0.0.0.0"),
+			Port:      getEnvIntOrDefault("WEB_PORT", 8082),
+			StaticDir: getEnvOrDefault("WEB_STATIC_DIR", ""),
+		},
 	}
+
 }
 
 // getEnvOrDefault 获取环境变量，如果不存在则返回默认值

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 15
+const schemaVersion = 16
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -200,7 +200,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (15);
+INSERT INTO schema_version (version) VALUES (16);
 
 CREATE TABLE runner_tokens (
     user_id     TEXT PRIMARY KEY,
@@ -226,6 +226,13 @@ CREATE TABLE shared_registry (
 );
 CREATE INDEX idx_shared_type_sharing ON shared_registry(type, sharing);
 CREATE INDEX idx_shared_author ON shared_registry(author);
+
+CREATE TABLE web_users (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL UNIQUE,
+    password   TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE user_settings (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,7 +285,7 @@ func (db *DB) migrateSchema(from int) error {
 	conn := db.Conn()
 
 	// Warn on unexpected version numbers.
-	// The migration sequence is: 1→2→3→4→5→6→8→9→10→11→12→13→14 (v7 never existed).
+	// The migration sequence is: 1→2→3→4→5→6→8→9→10→11→12→13→14→15→16 (v7 never existed).
 	// If the stored version is an impossible value (e.g., 7 or > schemaVersion),
 	// log a warning to aid debugging, but still proceed with applicable migrations.
 	if from == 7 {
@@ -733,6 +740,24 @@ CREATE TABLE IF NOT EXISTS runner_tokens (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v15 (added runner_tokens)")
+	}
+
+	if from < 16 {
+		migration := `
+CREATE TABLE IF NOT EXISTS web_users (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL UNIQUE,
+    password   TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v15->v16: %w", err)
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 16"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v16 (added web_users)")
 	}
 
 	return nil

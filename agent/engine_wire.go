@@ -476,8 +476,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		PreferredSandbox: a.sandboxMode,
 		Sandbox:          resolveSandbox(a.sandbox, senderID),
 		SandboxMode:      a.sandboxMode,
-		InjectInbound: a.injectInbound,
-		Tools:         a.tools,
+		InjectInbound:    a.injectInbound,
+		Tools:            a.tools,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {

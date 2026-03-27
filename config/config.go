@@ -263,7 +263,7 @@ func Load() *Config {
 		},
 		Sandbox: SandboxConfig{
 			Mode:        getEnvOrDefault("SANDBOX_MODE", "docker"),
-				RemoteMode:  getEnvOrDefault("SANDBOX_REMOTE_MODE", ""),
+			RemoteMode:  getEnvOrDefault("SANDBOX_REMOTE_MODE", ""),
 			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
 			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
 			IdleTimeout: time.Duration(getEnvIntOrDefault("SANDBOX_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,

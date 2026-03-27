@@ -337,6 +337,14 @@ func main() {
 			LLMSetPersonalConcurrency: func(senderID string, personal int) error {
 				return agentLoop.SetLLMConcurrency(senderID, personal)
 			},
+			RunnerConnectCmdGet: func(senderID string) string {
+				pubURL := cfg.Sandbox.PublicURL
+				if pubURL == "" {
+					return ""
+				}
+				token := cfg.Sandbox.AuthToken
+				return fmt.Sprintf("./xbot-runner --server %s/%s --token %s", pubURL, senderID, token)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

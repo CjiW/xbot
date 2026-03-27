@@ -48,6 +48,7 @@ type SandboxConfig struct {
 	IdleTimeout time.Duration // 用户空闲超时，超时后自动卸载沙箱（默认 30min，设为 0 禁用）
 	WSPort      int           // WebSocket 监听端口（remote 模式，默认 8080）
 	AuthToken   string        // Runner 认证 token
+	PublicURL   string        // 对外访问地址（用于生成 Runner 连接命令，如 "ws://example.com:8080"）
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -269,6 +270,7 @@ func Load() *Config {
 			IdleTimeout: time.Duration(getEnvIntOrDefault("SANDBOX_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,
 			WSPort:      getEnvIntOrDefault("SANDBOX_WS_PORT", 8080),
 			AuthToken:   getEnvOrDefault("SANDBOX_AUTH_TOKEN", ""),
+			PublicURL:   getEnvOrDefault("SANDBOX_PUBLIC_URL", ""),
 		},
 		StartupNotify: StartupNotifyConfig{
 			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),

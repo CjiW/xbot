@@ -149,7 +149,9 @@ func TestFormStr(t *testing.T) {
 func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		ContextModeGet: func() string { return "phase1" },
+		RunnerConnectCmdGet: func(senderID string) string {
+			return "./xbot-runner --server ws://example.com:8080/" + senderID + " --token secret"
+		},
 	})
 
 	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "general")
@@ -160,26 +162,23 @@ func TestBuildSettingsCard_GeneralTab(t *testing.T) {
 		t.Errorf("expected schema=2.0")
 	}
 
-	selects := collectSelectsFromCard(card)
-	hasContextMode := false
-	for _, ad := range selects {
-		if strings.Contains(ad, "settings_context_mode") {
-			hasContextMode = true
-		}
+	if !strings.Contains(cardJSON(card), "远程 Runner") {
+		t.Error("general tab should have remote runner section")
 	}
-	if !hasContextMode {
-		t.Error("general tab should have context mode select dropdown")
+	if !strings.Contains(cardJSON(card), "xbot-runner") {
+		t.Error("should show runner connect command")
 	}
-
-	if !strings.Contains(cardJSON(card), "双视图压缩") {
-		t.Error("should show current mode label '双视图压缩' for phase1")
+	if !strings.Contains(cardJSON(card), "user1") {
+		t.Error("should include senderID in connect command")
 	}
 }
 
 func TestBuildSettingsCard_DefaultsToGeneral(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		ContextModeGet: func() string { return "phase1" },
+		RunnerConnectCmdGet: func(senderID string) string {
+			return "./xbot-runner --server ws://example.com:8080/" + senderID + " --token secret"
+		},
 	})
 
 	for _, tab := range []string{"", "unknown", "basic"} {
@@ -187,60 +186,11 @@ func TestBuildSettingsCard_DefaultsToGeneral(t *testing.T) {
 		if err != nil {
 			t.Fatalf("tab=%q error: %v", tab, err)
 		}
-		if !strings.Contains(cardJSON(card), "上下文管理") {
+		if !strings.Contains(cardJSON(card), "远程 Runner") {
 			t.Errorf("tab=%q should default to general tab", tab)
 		}
 	}
 }
-
-func TestHandleSettingsAction_ContextMode(t *testing.T) {
-	f := newTestFeishuChannel()
-	var setMode string
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		ContextModeGet: func() string { return "phase1" },
-		ContextModeSet: func(mode string) error { setMode = mode; return nil },
-	})
-
-	actionData := map[string]any{
-		"action_data":     `{"action":"settings_context_mode"}`,
-		"selected_option": "phase1",
-	}
-	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if card == nil {
-		t.Fatal("expected non-nil card")
-	}
-	if setMode != "phase1" {
-		t.Errorf("expected mode=phase1, got %q", setMode)
-	}
-}
-
-func TestHandleSettingsAction_ContextMode_Inline(t *testing.T) {
-	f := newTestFeishuChannel()
-	var setMode string
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		ContextModeGet: func() string { return "phase1" },
-		ContextModeSet: func(mode string) error { setMode = mode; return nil },
-	})
-
-	actionData := map[string]any{
-		"action_data": `{"action":"settings_context_mode","mode":"none"}`,
-	}
-	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if card == nil {
-		t.Fatal("expected non-nil card")
-	}
-	if setMode != "none" {
-		t.Errorf("expected mode=none, got %q", setMode)
-	}
-}
-
-// --- Model tab ---
 
 func TestBuildSettingsCard_ModelTab_NoCustomLLM(t *testing.T) {
 	f := newTestFeishuChannel()

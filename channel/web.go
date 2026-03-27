@@ -127,10 +127,14 @@ func (h *Hub) sendToClient(senderID string, msg wsMessage) bool {
 	return false
 }
 
+func (c *Client) closeDone() {
+	c.closeOnce.Do(func() { close(c.done) })
+}
+
 func (h *Hub) stopAll() {
 	h.mu.Lock()
 	for id, c := range h.clients {
-		close(c.done)
+		c.closeDone()
 		delete(h.clients, id)
 	}
 	h.mu.Unlock()
@@ -142,11 +146,12 @@ func (h *Hub) stopAll() {
 
 // Client represents a single WebSocket client
 type Client struct {
-	conn   *websocket.Conn
-	sendCh chan wsMessage
-	done   chan struct{}
-	hub    *Hub
-	userID string
+	conn      *websocket.Conn
+	sendCh    chan wsMessage
+	done      chan struct{}
+	closeOnce sync.Once
+	hub       *Hub
+	userID    string
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +485,9 @@ func (wc *WebChannel) writePump(c *Client) {
 				return
 			}
 		case <-c.done:
+			// Server shutdown — send close frame with GoingAway status
+			c.conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
 			return
 		}
 	}
@@ -488,7 +496,7 @@ func (wc *WebChannel) writePump(c *Client) {
 func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	defer func() {
 		c.conn.Close()
-		close(c.done)
+		c.closeDone()
 		wc.hub.removeClient(c.userID, c)
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()

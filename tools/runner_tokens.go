@@ -2,6 +2,7 @@ package tools
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"time"
@@ -39,7 +40,10 @@ func NewRunnerTokenStore(db *sql.DB) *RunnerTokenStore {
 // Returns the new entry.
 func (s *RunnerTokenStore) Generate(userID string, settings RunnerTokenSettings) *RunnerTokenEntry {
 	b := make([]byte, 32)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.WithError(err).Error("Failed to generate random token bytes")
+		return nil
+	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 
 	now := time.Now().UTC()
@@ -75,7 +79,7 @@ func (s *RunnerTokenStore) Validate(token, userID string) bool {
 	if err != nil {
 		return false
 	}
-	return storedToken == token
+	return subtle.ConstantTimeCompare([]byte(storedToken), []byte(token)) == 1
 }
 
 // Get returns the current token entry for a user, or nil if none exists.

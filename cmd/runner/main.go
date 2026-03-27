@@ -125,6 +125,9 @@ func runSession(serverURL, userID, authToken, workspace string) error {
 	go writePump(conn, writeCh, stopWrite, writeDone)
 	runReadLoop(conn, writeCh, writeDone)
 
+	// Signal writePump to exit immediately.
+	close(stopWrite)
+
 	return fmt.Errorf("read loop exited")
 }
 

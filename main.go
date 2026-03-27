@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
@@ -220,10 +219,11 @@ func main() {
 	agentLoop.IndexGlobalTools()
 
 	// 设置 runner token 持久化（复用同一个 DB 文件）
-	if tokenDB, err := sql.Open("sqlite", dbPath); err == nil {
-		tokenDB.SetMaxOpenConns(1)
-		tokenDB.SetMaxIdleConns(1)
-		tools.SetRunnerTokenDB(tokenDB)
+	tokenDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")
+	} else {
+		tools.SetRunnerTokenDB(tokenDB.Conn())
 	}
 
 	// 创建消息分发器
@@ -518,6 +518,13 @@ func main() {
 	if sharedDB != nil {
 		if err := sharedDB.Close(); err != nil {
 			log.WithError(err).Warn("OAuth shared DB close error")
+		}
+	}
+
+	// 关闭 runner token 数据库连接
+	if tokenDB != nil {
+		if err := tokenDB.Close(); err != nil {
+			log.WithError(err).Warn("Token DB close error")
 		}
 	}
 

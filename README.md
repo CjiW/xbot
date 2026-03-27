@@ -98,7 +98,7 @@ All config via environment variables or `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LLM_PROVIDER` | LLM provider (`openai`/`anthropic`) | `openai` |
-| `LLM_BASE_URL` | API URL | — |
+| `LLM_BASE_URL` | API URL | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API key | — |
 | `LLM_MODEL` | Model name | `gpt-4o` |
 | `LLM_RETRY_ATTEMPTS` | Retry count on LLM failure | `5` |
@@ -161,11 +161,13 @@ All config via environment variables or `.env`:
 | `PROMPT_FILE` | Custom prompt template | `prompt.md` |
 | `SINGLE_USER` | Single-user mode | `false` |
 | `SANDBOX_MODE` | Sandbox mode (`docker`/`remote`/`none`) | `docker` |
+| `SANDBOX_REMOTE_MODE` | Enable remote sandbox alongside docker (`remote`) | — |
 | `SANDBOX_DOCKER_IMAGE` | Docker sandbox image | `ubuntu:22.04` |
 | `SANDBOX_IDLE_TIMEOUT_MINUTES` | Sandbox idle timeout (0 to disable) | `30` |
 | `HOST_WORK_DIR` | DinD host work dir override (auto-detected) | — |
 | `SANDBOX_WS_PORT` | Remote sandbox WebSocket port | `8080` |
 | `SANDBOX_AUTH_TOKEN` | Sandbox runner auth token | — |
+| `SANDBOX_PUBLIC_URL` | Public URL for runner connections (e.g., `ws://example.com:8080`) | — |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
 | `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
 | `OAUTH_PORT` | OAuth server port | `8081` |

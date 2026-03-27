@@ -115,8 +115,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		sandboxWorkspace = execDir
 	}
 
-	// 使用全局沙箱实例
-	sandbox := GetSandbox()
+	// 使用 ToolContext 中的沙箱实例（由 SandboxRouter 按用户路由注入）
+	sandbox := toolCtx.Sandbox
+	if sandbox == nil {
+		sandbox = GetSandbox()
+	}
 
 	// 获取容器默认 shell 并使用 login shell 执行命令
 	shell, err := sandbox.GetShell(userID, sandboxWorkspace)
@@ -329,11 +332,11 @@ fi
 # Insert before PS1 guard if present, otherwise append to end (fallback for Alpine etc.)
 if grep -q '\[ -z "\$PS1" \]' ~/.bashrc 2>/dev/null; then
     // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' ~/.bashrc
+    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env\n' ~/.bashrc
 // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 elif ! grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
     // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> ~/.bashrc
+    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env' >> ~/.bashrc
 fi`
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
 

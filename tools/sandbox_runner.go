@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,21 +89,33 @@ func dockerPipelineExportImport(ctx context.Context, containerName string, impor
 
 // 全局沙箱实例
 var (
-	globalSandbox   Sandbox
-	globalSandboxMu sync.RWMutex // 保护 globalSandbox 的并发读写
+	globalSandbox       Sandbox
+	globalSandboxMu     sync.RWMutex // 保护 globalSandbox 的并发读写
+	globalRunnerTokenDB *sql.DB
 )
 var sandboxInitOnce sync.Once
 
 // InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
 // 启动时自动清理上次残留的临时文件和悬空 Docker 资源。
+//
+// When RemoteMode is set (non-empty), both docker and remote sandbox instances
+// are created and wrapped in a SandboxRouter for per-user routing.
+// Otherwise, falls back to the legacy single-sandbox behavior.
 func InitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
 	sandboxInitOnce.Do(func() {
-		if sandboxCfg.Mode == "docker" {
-			cleanupStaleTmpFiles()
-			pruneDockerResources()
+		if sandboxCfg.RemoteMode != "" {
+			// Dual-mode: create SandboxRouter with both docker and remote
+			globalSandbox = NewSandboxRouter(sandboxCfg, workDir)
+			log.Infof("Sandbox initialized: %s (router)", globalSandbox.Name())
+		} else {
+			// Legacy single-mode
+			if sandboxCfg.Mode == "docker" {
+				cleanupStaleTmpFiles()
+				pruneDockerResources()
+			}
+			globalSandbox = NewSandbox(sandboxCfg, workDir, nil)
+			log.Infof("Sandbox initialized: %s", globalSandbox.Name())
 		}
-		globalSandbox = NewSandbox(sandboxCfg, workDir)
-		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
 	})
 }
 
@@ -126,6 +139,28 @@ func SetSandbox(s Sandbox) {
 	globalSandboxMu.Lock()
 	globalSandbox = s
 	globalSandboxMu.Unlock()
+}
+
+// SetRunnerTokenDB sets the DB connection used for per-user runner token persistence.
+// Must be called before any runner connections are authenticated.
+func SetRunnerTokenDB(db *sql.DB) {
+	globalSandboxMu.Lock()
+	defer globalSandboxMu.Unlock()
+	globalRunnerTokenDB = db
+	store := NewRunnerTokenStore(db)
+	switch sb := globalSandbox.(type) {
+	case *SandboxRouter:
+		if sb.remote != nil {
+			sb.remote.SetTokenStore(store)
+		}
+	case *RemoteSandbox:
+		sb.SetTokenStore(store)
+	}
+}
+
+// GetRunnerTokenDB returns the DB connection for runner tokens.
+func GetRunnerTokenDB() *sql.DB {
+	return globalRunnerTokenDB
 }
 
 // cleanupStaleTmpFiles 清理上次异常退出残留的 export 临时文件。

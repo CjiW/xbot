@@ -139,3 +139,20 @@ type SandboxSyncer interface {
 	// for the given user, and triggers sync if not. Safe to call repeatedly.
 	EnsureSynced(ctx context.Context, userID string)
 }
+
+// SandboxResolver is an optional interface that a multi-sandbox implementation
+// (e.g., SandboxRouter) can implement to resolve per-user sandbox instances.
+// buildToolContext uses this to inject the user-specific sandbox into ToolContext.Sandbox,
+// so that downstream code (shell, sandbox_exec, etc.) sees the correct Name(), Workspace(), etc.
+type SandboxResolver interface {
+	// SandboxForUser returns the user-specific Sandbox instance.
+	// Falls back to the default sandbox if userID is empty or unknown.
+	SandboxForUser(userID string) Sandbox
+}
+
+// SandboxExporter is an optional interface for docker-specific export/import operations.
+// Not all sandbox modes support export/import (e.g., remote, none return no-op).
+type SandboxExporter interface {
+	IsExporting(userID string) bool
+	ExportAndImport(userID string) error
+}

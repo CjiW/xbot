@@ -82,6 +82,7 @@ func TestSandboxBaseDir(t *testing.T) {
 		{"none sandbox", &ToolContext{Sandbox: &mockSandbox{name: "none", workspace: ""}}, ""},
 		{"custom sandbox workspace", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/data/ws"}}, "/data/ws"},
 		{"docker default", &ToolContext{Sandbox: &mockSandbox{name: "docker", workspace: "/workspace"}}, "/workspace"},
+		{"remote sandbox", &ToolContext{Sandbox: &mockSandbox{name: "remote", workspace: "/home/user/workspace"}}, "/home/user/workspace"},
 	}
 
 	for _, tt := range tests {

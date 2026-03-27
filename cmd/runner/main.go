@@ -2,14 +2,15 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"math/rand"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
-
-	"github.com/gorilla/websocket"
+	"time"
 )
 
 var (
@@ -24,6 +25,12 @@ var (
 )
 
 var verboseLog bool
+
+const (
+	baseDelay  = 1 * time.Second
+	maxDelay   = 60 * time.Second
+	maxRetries = 0 // 0 = infinite retries
+)
 
 func main() {
 	flag.Parse()
@@ -49,7 +56,6 @@ func main() {
 		log.Fatal("--user-id is required (or embed in server URL)")
 	}
 
-	// 1. 创建 executor
 	var err error
 	if *flagMode == "docker" {
 		log.Printf("Docker mode: image=%s, workspace=%s", *flagDockerImage, *flagWorkspace)
@@ -70,41 +76,94 @@ func main() {
 		}
 	}()
 
-	// 2. 注册时发送的 workspace：始终是宿主机路径（服务端需要知道实际路径）
-	registerWorkspace := *flagWorkspace
+	registerWorkspace := execWorkspace
 
 	log.Printf("Starting xbot-runner  mode=%s server=%s  user=%s  workspace=%s  full-control=%v", *flagMode, *flagServer, userID, registerWorkspace, *flagFullControl)
 
-	// Connect to WebSocket server
 	serverURL := *flagServer
 	if !strings.Contains(serverURL, "://") {
 		serverURL = "ws://" + serverURL
 	}
 
-	conn, err := connectToServer(serverURL, userID, *flagToken, registerWorkspace)
-	if err != nil {
-		log.Fatalf("Failed to connect to server: %v", err)
-	}
-	defer conn.Close()
-	log.Printf("Connected to server, registered as user=%s", userID)
-
-	var writeMu sync.Mutex
-
-	stopHeartbeat := make(chan struct{})
-	go runHeartbeat(conn, stopHeartbeat, &writeMu)
-
-	done := make(chan struct{})
-	go runReadLoop(conn, done, &writeMu)
-
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Printf("Received signal %v, shutting down...", sig)
-	close(stopHeartbeat)
-	writeMu.Lock()
-	conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"disconnect"}`))
-	conn.Close()
-	writeMu.Unlock()
-	<-done
-	log.Printf("Shutdown complete")
+	go func() {
+		<-sigCh
+		log.Printf("Received shutdown signal, stopping...")
+		os.Exit(0)
+	}()
+
+	attempt := 0
+	for {
+		err := runSession(serverURL, userID, *flagToken, registerWorkspace)
+		if err == nil {
+			return
+		}
+		attempt++
+		if maxRetries > 0 && attempt >= maxRetries {
+			log.Fatalf("Max reconnect attempts (%d) reached, giving up", maxRetries)
+		}
+		delay := backoff(attempt)
+		log.Printf("Connection lost: %v  — reconnecting in %v (attempt %d)", err, delay, attempt)
+		time.Sleep(delay)
+	}
+}
+
+// runSession connects to the server and runs read/write loops.
+// Returns an error when the connection is lost (triggers reconnect).
+func runSession(serverURL, userID, authToken, workspace string) error {
+	conn, err := connectToServer(serverURL, userID, authToken, workspace)
+	if err != nil {
+		return err
+	}
+	log.Printf("Connected to server, registered as user=%s", userID)
+
+	writeCh := make(chan writeMsg, 64)
+	stopWrite := make(chan struct{})
+	writeDone := make(chan struct{})
+
+	go writePump(conn, writeCh, stopWrite, writeDone)
+	runReadLoop(conn, writeCh, writeDone)
+
+	// Signal writePump to exit immediately.
+	close(stopWrite)
+
+	return fmt.Errorf("read loop exited")
+}
+
+// backoff returns an exponential backoff delay with jitter.
+func backoff(attempt int) time.Duration {
+	delay := baseDelay
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+			break
+		}
+	}
+	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
+	return delay + jitter
+}
+
+// detectShell finds the best available shell.
+// Docker mode: queries /etc/passwd inside the container (same as DockerSandbox.detectShell).
+// Native mode: checks host filesystem.
+func detectShell() string {
+	if dockerMode {
+		out, err := exec.Command("docker", "exec", "-i", executor.(*dockerExecutor).containerName,
+			"sh", "-c", "grep '^root:' /etc/passwd | cut -d: -f7").Output()
+		if err == nil {
+			shell := strings.TrimSpace(string(out))
+			if shell != "" {
+				return shell
+			}
+		}
+	}
+	// Fallback: check host or default
+	for _, candidate := range []string{"/bin/bash", "/usr/bin/bash", "/bin/sh"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "/bin/sh"
 }

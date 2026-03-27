@@ -22,11 +22,6 @@ type SettingsCardOpts struct {
 	AgentMarketPage int
 }
 
-var contextModeLabels = map[string]string{
-	"phase1": "双视图压缩",
-	"none":   "禁用压缩",
-}
-
 // BuildSettingsCard constructs an interactive Feishu card JSON for settings.
 func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID, tab string, opts ...SettingsCardOpts) (map[string]any, error) {
 	var o SettingsCardOpts
@@ -47,7 +42,7 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 
 	switch tab {
 	case "general":
-		elements = append(elements, f.buildGeneralTabContent()...)
+		elements = append(elements, f.buildGeneralTabContent(senderID)...)
 	case "model":
 		elements = append(elements, f.buildModelTabContent(ctx, senderID)...)
 	case "market":
@@ -98,23 +93,6 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	switch action {
 	case "settings_tab":
 		return f.BuildSettingsCard(ctx, senderID, chatID, parsed["tab"])
-
-	case "settings_context_mode":
-		mode := parsed["mode"]
-		if mode == "" {
-			if opt, ok := actionData["selected_option"].(string); ok {
-				mode = opt
-			}
-		}
-		if mode == "" {
-			return nil, fmt.Errorf("missing mode")
-		}
-		if f.settingsCallbacks.ContextModeSet != nil {
-			if err := f.settingsCallbacks.ContextModeSet(mode); err != nil {
-				return nil, fmt.Errorf("切换失败: %v", err)
-			}
-		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
 	case "settings_set_model":
 		model := parsed["model"]
@@ -298,6 +276,33 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	case "settings_market_page":
 		return f.BuildSettingsCard(ctx, senderID, chatID, "market", parsePageOpts(parsed))
 
+	case "settings_generate_token":
+		if f.settingsCallbacks.RunnerTokenGenerate == nil {
+			return nil, fmt.Errorf("per-user runner token 功能未启用")
+		}
+		mode := formStr(actionData, "runner_mode")
+		dockerImage := formStr(actionData, "runner_docker_image")
+		workspace := formStr(actionData, "runner_workspace")
+		if mode == "" {
+			mode = "native"
+		}
+		if workspace == "" {
+			workspace = "/workspace"
+		}
+		if _, err := f.settingsCallbacks.RunnerTokenGenerate(senderID, mode, dockerImage, workspace); err != nil {
+			return nil, fmt.Errorf("生成 token 失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
+	case "settings_revoke_token":
+		if f.settingsCallbacks.RunnerTokenRevoke == nil {
+			return nil, fmt.Errorf("per-user runner token 功能未启用")
+		}
+		if err := f.settingsCallbacks.RunnerTokenRevoke(senderID); err != nil {
+			return nil, fmt.Errorf("撤销 token 失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -341,58 +346,119 @@ func buildTabButtons(currentTab string) []map[string]any {
 	return []map[string]any{wrapButtonsInColumns(buttons)}
 }
 
-func (f *FeishuChannel) buildGeneralTabContent() []map[string]any {
+func (f *FeishuChannel) buildGeneralTabContent(senderID string) []map[string]any {
 	var elements []map[string]any
 
-	currentMode := "phase1"
-	if f.settingsCallbacks.ContextModeGet != nil {
-		currentMode = f.settingsCallbacks.ContextModeGet()
-	}
-
-	modeLabel := contextModeLabels[currentMode]
-	if modeLabel == "" {
-		modeLabel = currentMode
-	}
-
-	var modeOptions []map[string]any
-	for _, m := range []struct{ value, label string }{
-		{"phase1", "双视图压缩"},
-		{"none", "禁用压缩"},
-	} {
-		modeOptions = append(modeOptions, map[string]any{
-			"text":  map[string]any{"tag": "plain_text", "content": m.label},
-			"value": m.value,
-		})
-	}
-
+	// Remote Runner section
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",
-		"content": "**上下文管理**",
+		"content": "**远程 Runner**",
 	})
 
-	elements = append(elements, buildSettingRow(
-		"压缩模式",
-		modeLabel,
-		map[string]any{
-			"tag":            "select_static",
-			"name":           "settings_context_mode",
-			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模式..."},
-			"initial_option": currentMode,
-			"options":        modeOptions,
-			"value": map[string]string{
-				"action_data": mustMapToJSON(map[string]string{
-					"action": "settings_context_mode",
-				}),
-			},
-		},
-	))
+	if f.settingsCallbacks.RunnerTokenGet != nil {
+		connectCmd := f.settingsCallbacks.RunnerTokenGet(senderID)
+		if connectCmd != "" {
+			// Has token — show command + regenerate + revoke buttons
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("在本地机器上运行以下命令连接远程沙箱：\n```\n%s\n```", connectCmd),
+			})
+			elements = append(elements, wrapButtonsInColumns([]map[string]any{
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "🔄 重新生成"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_generate_token",
+						}),
+					},
+				},
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "🗑️ 撤销"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_revoke_token",
+						}),
+					},
+				},
+			}))
+		} else {
+			// No token — show generation form
+			formElements := []map[string]any{
+				{
+					"tag":  "select_static",
+					"name": "runner_mode",
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "Runner 模式",
+					},
+					"options": []map[string]any{
+						{"text": map[string]any{"tag": "plain_text", "content": "native（直接执行）"}, "value": "native"},
+						{"text": map[string]any{"tag": "plain_text", "content": "docker（容器隔离）"}, "value": "docker"},
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "runner_docker_image",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "Docker 镜像（docker 模式可选）",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "xbot-sandbox:latest",
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "runner_workspace",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "工作目录",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "/workspace",
+					},
+				},
+				{
+					"tag":         "button",
+					"name":        "token_submit",
+					"text":        map[string]any{"tag": "plain_text", "content": "生成连接命令"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_generate_token",
+						}),
+					},
+				},
+			}
+			elements = append(elements, map[string]any{
+				"tag":      "form",
+				"name":     "runner_token_form",
+				"elements": formElements,
+			})
+		}
+	} else if f.settingsCallbacks.RunnerConnectCmdGet != nil {
+		// Fallback to legacy callback
+		connectCmd := f.settingsCallbacks.RunnerConnectCmdGet(senderID)
+		if connectCmd != "" {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("在本地机器上运行以下命令连接远程沙箱：\n```\n%s\n```", connectCmd),
+			})
+		} else {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "远程 Runner 功能未启用，请设置 `SANDBOX_AUTH_TOKEN`。",
+			})
+		}
+	}
 
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": "**双视图**：摘要+尾部原文 · **渐进**：渐进式智能压缩 · **禁用**：不自动压缩",
-	})
-
-	// Sandbox cleanup section
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{
 		"tag":     "markdown",

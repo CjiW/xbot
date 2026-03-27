@@ -332,11 +332,11 @@ fi
 # Insert before PS1 guard if present, otherwise append to end (fallback for Alpine etc.)
 if grep -q '\[ -z "\$PS1" \]' ~/.bashrc 2>/dev/null; then
     // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env\n' ~/.bashrc
+    sed -i '/^\s*\[ -z "\$PS1" \]/i # Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env\n' ~/.bashrc
 // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 elif ! grep -q 'source ~/.xbot_env' ~/.bashrc 2>/dev/null; then
     // NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] \&\& source ~/.xbot_env' >> ~/.bashrc
+    echo -e '\n# Source xbot environment variables\n[ -f ~/.xbot_env ] && source ~/.xbot_env' >> ~/.bashrc
 fi`
 	RunInSandboxWithShell(toolCtx, ensureBashrcCmd)
 

@@ -132,6 +132,22 @@ func (s *SessionService) GetMessagesCount(tenantID int64) (int, error) {
 	return count, nil
 }
 
+// GetUserMessageCount returns the number of user-role messages for a tenant.
+// Used by consolidation logic to count conversation turns, not raw message rows
+// (which include tool calls, assistant iterations, etc.).
+func (s *SessionService) GetUserMessageCount(tenantID int64) (int, error) {
+	conn := s.db.Conn()
+	var count int
+	err := conn.QueryRow(
+		"SELECT COUNT(*) FROM session_messages WHERE tenant_id = ? AND role = 'user'",
+		tenantID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count user messages: %w", err)
+	}
+	return count, nil
+}
+
 // Clear removes all messages for a tenant
 func (s *SessionService) Clear(tenantID int64) error {
 	conn := s.db.Conn()

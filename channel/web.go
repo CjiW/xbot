@@ -414,7 +414,7 @@ func (wc *WebChannel) Start() error {
 	addr := fmt.Sprintf("%s:%d", wc.config.Host, wc.config.Port)
 	wc.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      securityHeadersMiddleware(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -767,6 +767,30 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 }
 
 // ---------------------------------------------------------------------------
+// Security headers middleware
+// ---------------------------------------------------------------------------
+
+// securityHeadersMiddleware wraps an http.Handler with security response headers.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
+				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+				"font-src 'self' https://fonts.gstatic.com; "+
+				"img-src 'self' data: blob:; "+
+				"connect-src 'self' ws: wss:; "+
+				"frame-ancestors 'none'",
+		)
+		next.ServeHTTP(w, r)
+	})
+}
+
+
+// ---------------------------------------------------------------------------
 // Static file handler
 // ---------------------------------------------------------------------------
 
@@ -781,9 +805,28 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
+	// Clean path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	absPath := filepath.Join(wc.staticDir, cleanPath)
+
+	// Ensure the resolved path is within the static directory
+	absStaticDir, err := filepath.Abs(wc.staticDir)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	absResolved, err := filepath.Abs(absPath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(absResolved, absStaticDir+string(os.PathSeparator)) && absResolved != absStaticDir {
+		http.NotFound(w, r)
+		return
+	}
+
 	// Try exact path
-	fullPath := filepath.Join(wc.staticDir, path)
-	if _, err := os.Stat(fullPath); err == nil {
+	if _, err := os.Stat(absResolved); err == nil {
 		http.FileServer(http.Dir(wc.staticDir)).ServeHTTP(w, r)
 		return
 	}

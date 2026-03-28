@@ -110,6 +110,12 @@ func (e *ContextEditor) HandleRequest(action string, params map[string]interface
 		return "", fmt.Errorf("messages not available (editor not initialized)")
 	}
 
+	// Audit log for context edits
+	log.WithFields(log.Fields{
+		"action": action,
+		"params": params,
+	}).Info("Context edit request")
+
 	switch ContextEditAction(action) {
 	case ContextEditList:
 		return listMessagesByTurn(msgs), nil

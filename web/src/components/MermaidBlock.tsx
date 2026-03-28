@@ -12,7 +12,7 @@ async function getMermaid() {
     mermaidInstance.initialize({
       startOnLoad: false,
       theme: 'dark',
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: 'ui-sans-serif, system-ui, sans-serif',
       themeVariables: {
         primaryColor: '#6366f1',

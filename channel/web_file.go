@@ -59,8 +59,38 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate MIME type — block dangerous file types
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	detectedMIME := http.DetectContentType(data)
+	allowedExtensions := map[string]bool{
+		".txt": true, ".md": true, ".csv": true, ".json": true, ".xml": true, ".yaml": true, ".yml": true,
+		".log": true, ".py": true, ".js": true, ".ts": true, ".go": true, ".rs": true, ".java": true,
+		".c": true, ".cpp": true, ".h": true, ".sh": true, ".bash": true, ".zsh": true,
+		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true,
+		".pdf": true, ".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".ppt": true, ".pptx": true,
+		".zip": true, ".tar": true, ".gz": true, ".7z": true, ".rar": true,
+		".mp3": true, ".mp4": true, ".wav": true, ".webm": true, ".ogg": true,
+		".toml": true, ".cfg": true, ".ini": true, ".env": true, ".sql": true,
+	}
+	blockedMIMEs := map[string]bool{
+		"text/html":               true,
+		"application/xhtml+xml":   true,
+		"application/x-httpd-php": true,
+	}
+	if !allowedExtensions[ext] {
+		http.Error(w, "file type not allowed", http.StatusBadRequest)
+		return
+	}
+	if blockedMIMEs[detectedMIME] {
+		log.WithFields(log.Fields{
+			"filename":  header.Filename,
+			"mime_type": detectedMIME,
+		}).Warn("Blocked file upload with dangerous MIME type")
+		http.Error(w, "file type not allowed", http.StatusBadRequest)
+		return
+	}
+
 	// Generate unique ID with extension
-	ext := filepath.Ext(header.Filename)
 	fileID := uuid.New().String() + ext
 
 	// Ensure upload directory exists
@@ -99,12 +129,29 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 func (wc *WebChannel) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 	// Extract file ID from path: /api/files/{id}
 	fileID := strings.TrimPrefix(r.URL.Path, "/api/files/")
-	if fileID == "" || strings.Contains(fileID, "/") {
+	if fileID == "" || strings.ContainsAny(fileID, "/\\") || strings.Contains(fileID, "..") {
 		http.Error(w, "invalid file id", http.StatusBadRequest)
 		return
 	}
 
-	filePath := filepath.Join(wc.uploadDir, "web", fileID)
+	// Clean and validate path to prevent traversal
+	filePath := filepath.Join(wc.uploadDir, "web", filepath.Base(fileID))
+
+	// Ensure the resolved path is within the upload directory
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
+	absUploadDir, err := filepath.Abs(filepath.Join(wc.uploadDir, "web"))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !strings.HasPrefix(absPath, absUploadDir+string(os.PathSeparator)) {
+		http.Error(w, "invalid file id", http.StatusBadRequest)
+		return
+	}
 
 	// Stat to check existence and get size
 	info, err := os.Stat(filePath)

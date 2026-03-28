@@ -1,9 +1,19 @@
 import { useEffect, useState, useCallback } from 'react'
 
+interface PresetCommand {
+  id: string
+  label: string
+  icon: string
+  content: string
+  fill?: boolean
+  sort: number
+}
+
 interface SettingsPanelProps {
   open: boolean
   onClose: () => void
   onNicknameChange?: (nickname: string) => void
+  onPresetsChange?: (presets: PresetCommand[]) => void
 }
 
 type Theme = 'dark' | 'light'
@@ -84,7 +94,7 @@ async function saveSettings(settings: Partial<UserSettings>): Promise<boolean> {
   }
 }
 
-type TabId = 'appearance' | 'llm' | 'runner' | 'market'
+type TabId = 'appearance' | 'presets' | 'llm' | 'runner' | 'market'
 
 interface MarketEntry {
   id: number
@@ -105,6 +115,7 @@ interface MyMarketEntry {
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'appearance', label: '外观', icon: '🎨' },
+  { id: 'presets', label: '快捷指令', icon: '⚡' },
   { id: 'llm', label: 'LLM', icon: '🧠' },
   { id: 'runner', label: 'Runner', icon: '🖥️' },
   { id: 'market', label: '市场', icon: '🏪' },
@@ -124,7 +135,7 @@ const PROVIDER_OPTIONS = [
   { value: 'anthropic', label: 'Anthropic (Claude)' },
 ]
 
-export default function SettingsPanel({ open, onClose, onNicknameChange }: SettingsPanelProps) {
+export default function SettingsPanel({ open, onClose, onNicknameChange, onPresetsChange }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('appearance')
   const [theme, setTheme] = useState<Theme>(() => lsGet('theme', DEFAULT_SETTINGS.theme))
   const [fontSize, setFontSize] = useState<FontSize>(() => lsGet('font_size', DEFAULT_SETTINGS.font_size))
@@ -138,6 +149,11 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
   const [marketEntries, setMarketEntries] = useState<MarketEntry[]>([])
   const [myMarketEntries, setMyMarketEntries] = useState<MyMarketEntry[]>([])
   const [marketLoading, setMarketLoading] = useState(false)
+
+  // Preset commands state
+  const [presetList, setPresetList] = useState<PresetCommand[]>([])
+  const [editingPreset, setEditingPreset] = useState<PresetCommand | null>(null)
+  const [presetSaving, setPresetSaving] = useState(false)
 
   // LLM config state
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null)
@@ -159,6 +175,18 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
       setNickname(s.nickname)
       setLanguage(s.language)
     })
+    // Load presets
+    fetch('/api/settings')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok && data.settings?.preset_commands) {
+          try {
+            const parsed = JSON.parse(data.settings.preset_commands)
+            if (Array.isArray(parsed)) setPresetList(parsed)
+          } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {})
   }, [open])
 
   // Apply theme
@@ -266,6 +294,58 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
     await saveSettings(updates)
     setSaving(false)
   }, [])
+
+  // Preset commands CRUD
+  const savePresets = useCallback(async (list: PresetCommand[]) => {
+    setPresetSaving(true)
+    const sorted = [...list].sort((a, b) => a.sort - b.sort)
+    const ok = await saveSettings({ preset_commands: JSON.stringify(sorted) } as Record<string, string>)
+    if (ok) {
+      setPresetList(sorted)
+      onPresetsChange?.(sorted)
+    }
+    setPresetSaving(false)
+    return ok
+  }, [onPresetsChange])
+
+  const handlePresetAdd = useCallback(() => {
+    setEditingPreset({
+      id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+      label: '',
+      icon: '⚡',
+      content: '',
+      fill: false,
+      sort: presetList.length,
+    })
+  }, [presetList.length])
+
+  const handlePresetSave = useCallback(async (preset: PresetCommand) => {
+    const exists = presetList.find(p => p.id === preset.id)
+    const newList = exists
+      ? presetList.map(p => p.id === preset.id ? preset : p)
+      : [...presetList, preset]
+    await savePresets(newList)
+    setEditingPreset(null)
+  }, [presetList, savePresets])
+
+  const handlePresetDelete = useCallback(async (id: string) => {
+    const newList = presetList
+      .filter(p => p.id !== id)
+      .map((p, i) => ({ ...p, sort: i }))
+    await savePresets(newList)
+  }, [presetList, savePresets])
+
+  const handlePresetMove = useCallback(async (id: string, direction: 'up' | 'down') => {
+    const sorted = [...presetList].sort((a, b) => a.sort - b.sort)
+    const idx = sorted.findIndex(p => p.id === id)
+    if (idx < 0) return
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= sorted.length) return
+    const temp = sorted[idx].sort
+    sorted[idx] = { ...sorted[idx], sort: sorted[swapIdx].sort }
+    sorted[swapIdx] = { ...sorted[swapIdx], sort: temp }
+    await savePresets(sorted)
+  }, [presetList, savePresets])
 
   // LLM config actions
   const handleLLMAdd = useCallback(async () => {
@@ -554,6 +634,138 @@ export default function SettingsPanel({ open, onClose, onNicknameChange }: Setti
                 <option value="en">English</option>
               </select>
             </div>
+          </div>
+        )}
+
+        {/* ── 快捷指令 ── */}
+        {activeTab === 'presets' && (
+          <div className={sectionClass}>
+            <div className={sectionTitleClass}>⚡ 快捷指令 Preset Commands</div>
+            <p className="text-xs text-slate-500 mb-3">
+              配置常用指令，在聊天输入框上方快速触发。最多 20 条。
+            </p>
+
+            {editingPreset ? (
+              /* ── 编辑/新增表单 ── */
+              <div className="preset-edit-form">
+                <div className="settings-item">
+                  <label className="settings-label">图标 Icon</label>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    style={{ width: '60px' }}
+                    maxLength={4}
+                    value={editingPreset.icon}
+                    onChange={(e) => setEditingPreset({ ...editingPreset, icon: e.target.value })}
+                  />
+                </div>
+                <div className="settings-item">
+                  <label className="settings-label">名称 Label *</label>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    placeholder="例如：代码审查"
+                    maxLength={20}
+                    value={editingPreset.label}
+                    onChange={(e) => setEditingPreset({ ...editingPreset, label: e.target.value })}
+                  />
+                </div>
+                <div className="settings-item">
+                  <label className="settings-label">内容 Content *</label>
+                  <textarea
+                    className="settings-input"
+                    style={{ minHeight: '80px', resize: 'vertical' }}
+                    placeholder="点击后发送的内容..."
+                    maxLength={2000}
+                    value={editingPreset.content}
+                    onChange={(e) => setEditingPreset({ ...editingPreset, content: e.target.value })}
+                  />
+                  <p className="text-xs text-slate-600 mt-1">{editingPreset.content.length}/2000</p>
+                </div>
+                <div className="settings-item">
+                  <label className="settings-label flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={editingPreset.fill ?? false}
+                      onChange={(e) => setEditingPreset({ ...editingPreset, fill: e.target.checked })}
+                    />
+                    填充模式（填入输入框而非直接发送）
+                  </label>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    className="settings-action-btn"
+                    onClick={() => handlePresetSave(editingPreset)}
+                    disabled={!editingPreset.label.trim() || !editingPreset.content.trim() || presetSaving}
+                  >
+                    {presetSaving ? '保存中...' : '💾 保存'}
+                  </button>
+                  <button
+                    className="settings-action-btn settings-action-danger"
+                    onClick={() => setEditingPreset(null)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── 列表视图 ── */
+              <>
+                {presetList.length === 0 ? (
+                  <div className="text-center py-6 text-slate-500">
+                    <p className="text-2xl mb-2">📭</p>
+                    <p className="text-sm">暂无快捷指令</p>
+                  </div>
+                ) : (
+                  <div className="preset-list">
+                    {[...presetList].sort((a, b) => a.sort - b.sort).map((p) => (
+                      <div key={p.id} className="preset-item">
+                        <div className="preset-item-main">
+                          <span className="preset-item-icon">{p.icon || '⚡'}</span>
+                          <div className="preset-item-info">
+                            <span className="preset-item-label">{p.label}</span>
+                            <span className="preset-item-content">{p.content.length > 40 ? p.content.slice(0, 40) + '...' : p.content}</span>
+                          </div>
+                        </div>
+                        <div className="preset-item-actions">
+                          <button
+                            className="preset-action-btn"
+                            onClick={() => handlePresetMove(p.id, 'up')}
+                            title="上移"
+                            disabled={presetSaving}
+                          >↑</button>
+                          <button
+                            className="preset-action-btn"
+                            onClick={() => handlePresetMove(p.id, 'down')}
+                            title="下移"
+                            disabled={presetSaving}
+                          >↓</button>
+                          <button
+                            className="preset-action-btn"
+                            onClick={() => setEditingPreset({ ...p })}
+                            title="编辑"
+                            disabled={presetSaving}
+                          >✏️</button>
+                          <button
+                            className="preset-action-btn preset-action-delete"
+                            onClick={() => handlePresetDelete(p.id)}
+                            title="删除"
+                            disabled={presetSaving}
+                          >🗑️</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  className="settings-action-btn w-full mt-3"
+                  onClick={handlePresetAdd}
+                  disabled={presetList.length >= 20 || presetSaving}
+                >
+                  ➕ 新增指令 {presetList.length > 0 ? `(${presetList.length}/20)` : ''}
+                </button>
+              </>
+            )}
           </div>
         )}
 

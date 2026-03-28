@@ -10,9 +10,16 @@ import (
 
 // CoreMemoryService handles core memory block CRUD operations.
 type CoreMemoryService struct {
-	db           *DB
-	migrateOnce  sync.Once
-	migrateError error
+	db               *DB
+	migrateOnce      sync.Once
+	migrateError     error
+	personaIsolation bool // if true, persona blocks don't fallback to tenantID=0
+}
+
+// SetPersonaIsolation controls whether persona blocks fallback to tenantID=0.
+// When true, each tenant must maintain its own persona independently.
+func (s *CoreMemoryService) SetPersonaIsolation(enabled bool) {
+	s.personaIsolation = enabled
 }
 
 // NewCoreMemoryService creates a new core memory service.
@@ -178,7 +185,8 @@ func (s *CoreMemoryService) GetBlock(tenantID int64, blockName string, userID st
 	// data into tenantID=0; new code reads from the actual tenantID and
 	// would otherwise see empty persona (either ErrNoRows or empty content
 	// from InitBlocks' INSERT OR IGNORE).
-	if content == "" && blockName == "persona" && effectiveTenantID != 0 {
+	// When personaIsolation is enabled, skip fallback — each tenant has its own persona.
+	if content == "" && blockName == "persona" && effectiveTenantID != 0 && !s.personaIsolation {
 		var fbContent string
 		var fbLimit int
 		fbErr := conn.QueryRow(
@@ -258,7 +266,8 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 	}
 	// Fallback: if persona empty/missing at current tenantID, try tenantID=0
 	// (handles legacy v1 migration that merged persona into tenantID=0)
-	if blocks["persona"] == "" && tenantID != 0 {
+	// When personaIsolation is enabled, skip fallback — each tenant has its own persona.
+	if blocks["persona"] == "" && tenantID != 0 && !s.personaIsolation {
 		var fallbackContent string
 		fbErr := conn.QueryRow(
 			"SELECT content FROM core_memory_blocks WHERE tenant_id = 0 AND block_name = 'persona' AND user_id = ''",

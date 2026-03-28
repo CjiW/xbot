@@ -259,7 +259,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   }, [scrollToBottom])
 
   // --- WebSocket connection with reconnect ---
-  const connectWSRef = useRef<() => void>(() => {})
   const connectWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`

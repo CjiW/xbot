@@ -25,6 +25,7 @@ type SandboxRouter struct {
 	docker *DockerSandbox
 	remote *RemoteSandbox
 	none   *NoneSandbox
+	denied *DeniedSandbox
 
 	// defaultMode is used when SandboxForUser can't determine per-user routing.
 	// "docker" if docker is enabled, "remote" if remote is enabled, "none" otherwise.
@@ -35,7 +36,8 @@ type SandboxRouter struct {
 // Either (or both) may be nil — the router falls back gracefully.
 func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxRouter {
 	r := &SandboxRouter{
-		none: &NoneSandbox{},
+		none:   &NoneSandbox{},
+		denied: &DeniedSandbox{},
 	}
 
 	// Initialize docker sandbox if configured
@@ -118,8 +120,8 @@ func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
 			}
 		}
 		if !webServerRunner {
-			// User must have their own remote runner
-			return r.none
+			// User must have their own remote runner — return DeniedSandbox to block ALL access
+			return r.denied
 		}
 		// Explicitly enabled: allow fallback to server sandbox (docker)
 	}
@@ -233,7 +235,7 @@ func (r *SandboxRouter) resolve(userID string) Sandbox {
 			}
 		}
 		if !webServerRunner {
-			return r.none
+			return r.denied
 		}
 	}
 	if r.docker != nil {

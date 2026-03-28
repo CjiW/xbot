@@ -15,11 +15,11 @@ import (
 type ContextEditAction string
 
 const (
-	ContextEditDelete    ContextEditAction = "delete"
+	ContextEditDelete     ContextEditAction = "delete"
 	ContextEditDeleteTurn ContextEditAction = "delete_turn"
-	ContextEditTruncate  ContextEditAction = "truncate"
-	ContextEditReplace   ContextEditAction = "replace"
-	ContextEditList      ContextEditAction = "list"
+	ContextEditTruncate   ContextEditAction = "truncate"
+	ContextEditReplace    ContextEditAction = "replace"
+	ContextEditList       ContextEditAction = "list"
 )
 
 // ContextEditRequest 是 context_edit 工具的请求参数。
@@ -272,13 +272,13 @@ func userVisibleIndex(messages []llm.ChatMessage, visibleIdx int) int {
 
 // conversationTurn 代表一轮对话（一条 user 消息 + 所有关联的 assistant/tool 消息）。
 type conversationTurn struct {
-	TurnIdx      int   // 轮次编号（0-based，用户可见）
-	StartSliceIdx int  // messages slice 中的起始索引
-	EndSliceIdx   int  // messages slice 中的结束索引（inclusive）
-	UserSliceIdx  int  // user 消息在 slice 中的索引
-	MsgCount      int  // 该轮次包含的消息数量
-	ToolCount     int  // tool 消息数量
-	TotalChars    int  // 总字符数
+	TurnIdx       int    // 轮次编号（0-based，用户可见）
+	StartSliceIdx int    // messages slice 中的起始索引
+	EndSliceIdx   int    // messages slice 中的结束索引（inclusive）
+	UserSliceIdx  int    // user 消息在 slice 中的索引
+	MsgCount      int    // 该轮次包含的消息数量
+	ToolCount     int    // tool 消息数量
+	TotalChars    int    // 总字符数
 	UserPreview   string // user 消息预览
 }
 
@@ -423,11 +423,11 @@ func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string
 	}
 
 	log.WithFields(map[string]interface{}{
-		"action":      "delete_turn",
-		"turn_idx":    idx,
-		"msg_count":   deletedMsgCount,
-		"tool_count":  t.ToolCount,
-		"reason":      reason,
+		"action":     "delete_turn",
+		"turn_idx":   idx,
+		"msg_count":  deletedMsgCount,
+		"tool_count": t.ToolCount,
+		"reason":     reason,
 	}).Info("Context edit: deleted turn")
 
 	return fmt.Sprintf("✅ Deleted turn %d (%d messages, %d tool calls, %d total chars) — %s",

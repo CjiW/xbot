@@ -250,12 +250,12 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type             string             `json:"type"`                          // "text", "progress", "card", "progress_structured"
-	ID               string             `json:"id,omitempty"`                  // UUID
-	Content          string             `json:"content,omitempty"`             // message content
-	TS               int64              `json:"ts,omitempty"`                  // timestamp
-	Progress         *WsProgressPayload `json:"progress,omitempty"`            // structured progress data
-	ProgressHistory  string             `json:"progress_history,omitempty"`    // JSON-encoded iteration history for completed turns
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured"
+	ID              string             `json:"id,omitempty"`               // UUID
+	Content         string             `json:"content,omitempty"`          // message content
+	TS              int64              `json:"ts,omitempty"`               // timestamp
+	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
+	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
 }
 
 // WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
@@ -733,6 +733,9 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			metadata["feishu_user_id"] = si.feishuUserID
 		}
 
+		// Eagerly save user message so history API can return it during processing.
+		_ = eagerSaveUserMsg(wc.db, c.userID, content)
+
 		wc.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "web",
 			SenderID:   c.userID,
@@ -879,4 +882,30 @@ func isImageExt(ext string) bool {
 		return true
 	}
 	return false
+}
+
+// eagerSaveUserMsg persists a user message to session_messages immediately
+// so that a page-refresh can recover it while the backend is still processing.
+func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
+	var tenantID int64
+	if err := db.QueryRow(
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", userID,
+	).Scan(&tenantID); err != nil {
+		return err
+	}
+	// Avoid duplicate: check if the last message for this tenant is already
+	// an identical user message (saved by a previous eager call or engine).
+	var cnt int
+	_ = db.QueryRow(
+		"SELECT COUNT(*) FROM session_messages WHERE tenant_id = ? AND role = 'user' AND content = ? ORDER BY id DESC LIMIT 1",
+		tenantID, content,
+	).Scan(&cnt)
+	if cnt > 0 {
+		return nil
+	}
+	_, err := db.Exec(
+		"INSERT INTO session_messages (tenant_id, role, content) VALUES (?, 'user', ?)",
+		tenantID, content,
+	)
+	return err
 }

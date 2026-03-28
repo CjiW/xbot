@@ -302,7 +302,7 @@ func Load() *Config {
 			StaticDir:        getEnvOrDefault("WEB_STATIC_DIR", ""),
 			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
 			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
-				InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
+			InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
 		},
 	}
 

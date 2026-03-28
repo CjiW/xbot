@@ -293,13 +293,15 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
       setReconnecting(true)
 
-      // Exponential backoff reconnect
+      // Exponential backoff reconnect with jitter
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
       }
+      const jitter = Math.random() * 0.5 + 0.5 // 0.5x - 1.0x random factor
+      const delay = Math.round(reconnectDelayRef.current * jitter)
       reconnectTimerRef.current = setTimeout(() => {
         connectWS()
-      }, reconnectDelayRef.current)
+      }, delay)
       reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000)
     }
 

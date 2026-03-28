@@ -1030,11 +1030,6 @@ func (a *Agent) isRemoteUser(userID string) bool {
 	return a.sandboxNameForUser(userID) == "remote"
 }
 
-// isDockerUser checks whether the given user routes to a docker sandbox.
-func (a *Agent) isDockerUser(userID string) bool {
-	return a.sandboxNameForUser(userID) == "docker"
-}
-
 // sandboxNameForUser resolves the sandbox name for a given user.
 func (a *Agent) sandboxNameForUser(userID string) string {
 	if a.sandbox == nil {
@@ -1086,14 +1081,11 @@ func (a *Agent) sandboxWorkspace(userID string) string {
 }
 
 // ensureWorkspace ensures the workspace directory exists (sandbox-aware).
-// Skipped for remote and docker sandboxes — they manage their own filesystems.
+// Skipped for remote, docker, and denied sandboxes — they manage their own filesystems
+// or don't need host-side directories.
 func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
-	if a.isRemoteUser(senderID) {
-		return nil
-	}
-	// For docker mode, the workspace is inside the container (/workspace);
-	// don't create host-side directories — the container manages its own FS.
-	if a.isDockerUser(senderID) {
+	name := a.sandboxNameForUser(senderID)
+	if name == "remote" || name == "docker" || name == "denied" || name == "none" {
 		return nil
 	}
 	if a.sandbox != nil {

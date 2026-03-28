@@ -221,6 +221,9 @@ func (wc *WebChannel) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			senderID = wc.callbacks.NormalizeSenderID(senderID)
 		}
 		ctx := contextWithSenderID(r.Context(), senderID)
+		if si.feishuUserID != "" {
+			ctx = contextWithFeishuUserID(ctx, si.feishuUserID)
+		}
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -433,7 +436,10 @@ func (wc *WebChannel) handleFeishuLogin(w http.ResponseWriter, r *http.Request) 
 
 type contextKey string
 
-const senderIDKey contextKey = "sender_id"
+const (
+	senderIDKey     contextKey = "sender_id"
+	feishuUserIDKey contextKey = "feishu_user_id"
+)
 
 func contextWithSenderID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, senderIDKey, id)
@@ -441,6 +447,17 @@ func contextWithSenderID(ctx context.Context, id string) context.Context {
 
 func senderIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(senderIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
+func contextWithFeishuUserID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, feishuUserIDKey, id)
+}
+
+func feishuUserIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(feishuUserIDKey).(string); ok {
 		return id
 	}
 	return ""

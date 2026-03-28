@@ -224,6 +224,18 @@ func (r *SandboxRouter) resolve(userID string) Sandbox {
 	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
 		return r.remote
 	}
+	// Pure web user without remote runner — denied by default (same logic as SandboxForUser)
+	if strings.HasPrefix(userID, "web-") {
+		webServerRunner := false
+		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
+			if b, err := strconv.ParseBool(v); err == nil {
+				webServerRunner = b
+			}
+		}
+		if !webServerRunner {
+			return r.none
+		}
+	}
 	if r.docker != nil {
 		return r.docker
 	}

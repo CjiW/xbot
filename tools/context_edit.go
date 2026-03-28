@@ -29,23 +29,26 @@ This is a surgical context management tool — unlike compression (which summari
 context_edit lets you precisely remove or modify specific content to reclaim context space.
 
 Actions:
-- "list": List all non-system messages with their index, role, and size (no other params needed)
-- "delete": Replace a message's content with a placeholder (frees all tokens from that message)
+- "list": List conversation grouped by turns (user message + associated iterations/tools). No other params needed.
+- "delete_turn": Delete an entire conversation turn (user msg + all iterations + all tool results). Most efficient for reclaiming context.
+- "delete": Replace a single message's content with a placeholder (frees tokens from that message)
 - "truncate": Keep only the first N characters of a message's content
 - "replace": Find and replace specific text within a message (supports regex: prefix with "regex:")
 
 Safety rules:
 - Cannot edit system messages
+- Cannot delete the last (current) turn
 - Cannot edit the last 3 messages (protected to prevent losing current context)
 - Always provide a reason for the edit
 
-Use "list" first to see available messages and their indices.`
+Use "list" first to see conversation turns and their sizes. Prefer "delete_turn" for bulk cleanup.`
 }
 
 func (t *ContextEditTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
-		{Name: "action", Type: "string", Description: "Action: \"list\" (show all messages), \"delete\", \"truncate\", or \"replace\"", Required: true},
-		{Name: "message_idx", Type: "integer", Description: "Index of the message to edit (from \"list\" output, 0-based). Not needed for \"list\".", Required: false},
+		{Name: "action", Type: "string", Description: `Action: "list" (show turns), "delete_turn" (delete entire turn), "delete", "truncate", or "replace"`, Required: true},
+		{Name: "turn_idx", Type: "integer", Description: "Turn index for \"delete_turn\" action (from \"list\" output, 0-based)", Required: false},
+		{Name: "message_idx", Type: "integer", Description: "Message index for delete/truncate/replace actions (from \"list\" output, 0-based). Not needed for \"list\" or \"delete_turn\".", Required: false},
 		{Name: "max_chars", Type: "integer", Description: "For \"truncate\" action: number of characters to keep (default: 200)", Required: false},
 		{Name: "old_text", Type: "string", Description: "For \"replace\" action: text to find. Prefix with \"regex:\" for regex matching.", Required: false},
 		{Name: "new_text", Type: "string", Description: "For \"replace\" action: replacement text (empty = delete matched text)", Required: false},

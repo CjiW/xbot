@@ -81,10 +81,19 @@ type WebCallbacks struct {
 	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
 	// LLMDelete reverts user to global LLM config.
 	LLMDelete func(senderID string) error
+	// LLMGetMaxContext returns the user's max context tokens setting.
+	LLMGetMaxContext func(senderID string) int
+	// LLMSetMaxContext sets the user's max context tokens setting.
+	LLMSetMaxContext func(senderID string, maxContext int) error
+
 	// NormalizeSenderID normalizes sender ID for single-user mode.
 	NormalizeSenderID func(senderID string) string
 	// RegistryPublish publishes a user's agent/skill to the marketplace.
 	RegistryPublish func(entryType, name, senderID string) error
+	// SandboxWriteFile writes file data to the user's sandbox at the given path.
+	// Returns (sandboxInternalPath, error). sandboxInternalPath is the path inside
+	// the sandbox (e.g., /workspace/uploads/file.txt). Returns ("", nil) if no sandbox available.
+	SandboxWriteFile func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (sandboxPath string, err error)
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +119,8 @@ func (h *Hub) addClient(senderID string, c *Client) {
 	h.mu.Lock()
 	// Close existing connection for same user
 	if old, ok := h.clients[senderID]; ok {
-		close(old.done)
+		old.closeDone()
+
 	}
 	h.clients[senderID] = c
 	h.mu.Unlock()
@@ -240,11 +250,12 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type     string             `json:"type"`               // "text", "progress", "card", "progress_structured"
-	ID       string             `json:"id,omitempty"`       // UUID
-	Content  string             `json:"content,omitempty"`  // message content
-	TS       int64              `json:"ts,omitempty"`       // timestamp
-	Progress *WsProgressPayload `json:"progress,omitempty"` // structured progress data
+	Type             string             `json:"type"`                          // "text", "progress", "card", "progress_structured"
+	ID               string             `json:"id,omitempty"`                  // UUID
+	Content          string             `json:"content,omitempty"`             // message content
+	TS               int64              `json:"ts,omitempty"`                  // timestamp
+	Progress         *WsProgressPayload `json:"progress,omitempty"`            // structured progress data
+	ProgressHistory  string             `json:"progress_history,omitempty"`    // JSON-encoded iteration history for completed turns
 }
 
 // WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
@@ -265,9 +276,10 @@ type WsToolProgress struct {
 }
 
 type wsClientMessage struct {
-	Type    string   `json:"type"`
-	Content string   `json:"content"`
-	FileIDs []string `json:"file_ids,omitempty"`
+	Type      string   `json:"type"`
+	Content   string   `json:"content"`
+	FileIDs   []string `json:"file_ids,omitempty"`
+	FileNames []string `json:"file_names,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -306,9 +318,10 @@ type WebChannel struct {
 }
 
 type sessionInfo struct {
-	userID   int
-	username string
-	expires  time.Time
+	userID       int
+	username     string
+	feishuUserID string // non-empty when logged in via Feishu identity
+	expires      time.Time
 }
 
 // NewWebChannel 创建 Web 渠道
@@ -385,6 +398,7 @@ func (wc *WebChannel) Start() error {
 	// LLM Config API
 	mux.HandleFunc("/api/llm-config", wc.authMiddleware(wc.handleLLMConfig))
 	mux.HandleFunc("/api/llm-config/model", wc.authMiddleware(wc.handleLLMModelSet))
+	mux.HandleFunc("/api/llm-max-context", wc.authMiddleware(wc.handleLLMMaxContext))
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
@@ -457,10 +471,11 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}
 
 	wsMsg := wsMessage{
-		Type:    msgType,
-		ID:      msgID,
-		Content: content,
-		TS:      time.Now().Unix(),
+		Type:            msgType,
+		ID:              msgID,
+		Content:         content,
+		TS:              time.Now().Unix(),
+		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
 	// Send via hub (non-blocking: writes to buffered channel)
@@ -644,9 +659,15 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		var mediaPaths []string
 		content := msg.Content
 		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
-			for _, fid := range msg.FileIDs {
+			for i, fid := range msg.FileIDs {
 				uploadPath := filepath.Join(wc.uploadDir, "web", fid)
 				mediaPaths = append(mediaPaths, uploadPath)
+
+				// Use original file name if provided, fallback to fid
+				displayName := fid
+				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
+					displayName = filepath.Base(msg.FileNames[i]) // sanitize: prevent path traversal
+				}
 
 				ext := strings.ToLower(filepath.Ext(fid))
 				if isImageExt(ext) {
@@ -660,22 +681,44 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 						content += fmt.Sprintf("\n\n![uploaded image](data:%s;base64,%s)", mimeType, b64)
 					}
 				} else {
-					// For non-image files, copy to workspace so LLM tools can access them,
-					// and inject attachment info into the content so LLM knows about them.
-					sandboxPath := filepath.Join(wc.workDir, "uploads", fid)
-					if wc.workDir != "" {
-						if err := os.MkdirAll(filepath.Dir(sandboxPath), 0755); err == nil {
-							if err := copyFile(uploadPath, sandboxPath); err == nil {
-								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, sandboxPath)
+					// For non-image files, write to user's sandbox so tools can access them.
+					// Try remote sandbox first (via callback), then fall back to local workDir copy.
+					fileData, readErr := os.ReadFile(uploadPath)
+					if readErr != nil {
+						content += fmt.Sprintf("\n\n📎 [附件: %s] (读取文件失败)", displayName)
+						continue
+					}
+					sandboxRelPath := "uploads/" + displayName
+					written := false
+					// Try remote/server sandbox via callback
+					if wc.callbacks.SandboxWriteFile != nil {
+						if sandboxPath, err := wc.callbacks.SandboxWriteFile(c.userID, sandboxRelPath, fileData, 0644); err == nil && sandboxPath != "" {
+							content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: %s/%s", displayName, sandboxPath, displayName)
+							written = true
+						} else if err != nil {
+							log.WithError(err).WithField("file", displayName).Warn("Failed to write file to sandbox via callback")
+						}
+					}
+					// Fallback: local workDir copy (for docker sandbox)
+					if !written && wc.workDir != "" {
+						userWsDir := filepath.Join(wc.workDir, ".xbot", "users", c.userID, "workspace")
+						sandboxFileDir := filepath.Join(userWsDir, "uploads")
+						sandboxFilePath := filepath.Join(sandboxFileDir, displayName)
+						if err := os.MkdirAll(sandboxFileDir, 0755); err == nil {
+							if err := copyFile(uploadPath, sandboxFilePath); err == nil {
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: /workspace/uploads/%s", displayName, displayName)
+								written = true
 							} else {
-								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (原始上传路径)", fid, uploadPath)
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (复制到工作目录失败)", displayName, uploadPath)
 							}
 						} else {
-							content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, uploadPath)
+							content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (创建目录失败)", displayName, uploadPath)
 						}
-					} else {
-						content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", fid, uploadPath)
 					}
+					if !written {
+						content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", displayName, uploadPath)
+					}
+
 				}
 			}
 		} else if len(msg.FileIDs) > 0 && wc.uploadDir == "" {
@@ -683,6 +726,11 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			for _, fid := range msg.FileIDs {
 				content += fmt.Sprintf("\n\n📎 [附件: %s]", fid)
 			}
+		}
+
+		metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
+		if si.feishuUserID != "" {
+			metadata["feishu_user_id"] = si.feishuUserID
 		}
 
 		wc.msgBus.Inbound <- bus.InboundMessage{
@@ -697,7 +745,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			From:       bus.NewIMAddress("web", c.userID),
 			To:         bus.NewIMAddress("web", chatID),
-			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
+			Metadata:   metadata,
 		}
 	}
 }

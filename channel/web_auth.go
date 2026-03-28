@@ -382,9 +382,10 @@ func (wc *WebChannel) handleFeishuLogin(w http.ResponseWriter, r *http.Request) 
 	token := strings.ReplaceAll(uuid.New().String(), "-", "")
 	wc.sessionsMu.Lock()
 	wc.sessions[token] = sessionInfo{
-		userID:   id,
-		username: username,
-		expires:  time.Now().Add(webSessionMaxAge),
+		userID:       id,
+		username:     username,
+		feishuUserID: req.FeishuUserID,
+		expires:      time.Now().Add(webSessionMaxAge),
 	}
 	wc.sessionsMu.Unlock()
 

@@ -2,8 +2,8 @@ import { useState, memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getCodeBlockProps } from './CodeBlock'
-import type { WsProgressPayload, IterationSnapshot, WsToolProgress } from './ProgressPanel'
-import { CompletedIteration } from './ProgressPanel'
+import type { WsProgressPayload, IterationSnapshot } from './ProgressPanel'
+import { CompletedIteration, BouncingDots } from './ProgressPanel'
 
 interface Message {
   id: string
@@ -36,21 +36,6 @@ const codeBlockComponents = getCodeBlockProps()
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
-}
-
-function ToolItem({ tool }: { tool: WsToolProgress }) {
-  const isRunning = tool.status === 'running'
-  const icon = isRunning ? '⚡' : tool.status === 'done' ? '✅' : '❌'
-
-  return (
-    <div className={`flex items-center gap-2 px-3 py-1.5 text-sm ${isRunning ? 'text-blue-300' : 'text-slate-400'}`}>
-      <span className={isRunning ? 'tool-pulse' : ''}>{icon}</span>
-      <span className="font-mono text-xs flex-1 truncate">{tool.label || tool.name}</span>
-      {tool.elapsed_ms > 0 && (
-        <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
-      )}
-    </div>
-  )
 }
 
 /** Collapsible section with a header bar */
@@ -128,12 +113,9 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
 
   // Use live progress when loading, fall back to savedProgress for completed turns
   const effectiveProgress = loading ? progress : (savedProgress ?? null)
-  const hasActiveTools = loading && (progress?.active_tools?.length ?? 0) > 0
-  const allTools = effectiveProgress ? [
-    ...(effectiveProgress.completed_tools ?? []),
-    ...(loading ? (progress?.active_tools ?? []) : []),
-  ] : []
-  const totalToolCount = allTools.length
+  const hasTools = effectiveProgress
+    ? (effectiveProgress.completed_tools?.length ?? 0) + (loading ? (progress?.active_tools?.length ?? 0) : 0) > 0
+    : false
 
   // Determine phase display
   const phaseIcon = effectiveProgress?.phase === 'thinking' ? '💭'
@@ -221,59 +203,64 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
           </CollapsibleSection>
         )}
 
-        {/* Collapsible: Tool calls section (from completed progress or live) */}
-        {/* Hidden when iterationHistory exists — iteration history already shows all tools */}
-        {totalToolCount > 0 && !messages[0]?.iterationHistory && (
-          <CollapsibleSection
-            icon="⚡"
-            title="工具调用"
-            badge={totalToolCount}
-            defaultOpen={loading && hasActiveTools}
-          >
-            <div className="divide-y divide-slate-700/30">
-              {allTools.map((tool, i) => (
-                <ToolItem key={`${tool.name}-${i}`} tool={tool} />
-              ))}
-            </div>
-          </CollapsibleSection>
-        )}
 
-        {/* Live progress — current iteration thinking + active tools (only during loading) */}
+
+        {/* Live progress — current iteration (only during loading) */}
         {loading && progress && progress.phase !== 'done' && (
           <div className="mb-2 rounded border border-slate-700/30 overflow-hidden">
-            <div className="px-3 pt-2 text-[11px] text-slate-600/90 font-mono text-right">
-              #{progress.iteration}
-            </div>
-            {shouldShowCurrentThinking && (
-              <ThinkingBlock content={progress.thinking} />
-            )}
-            {(progress.active_tools?.length ?? 0) > 0 && (
-              <div className="divide-y divide-slate-700/30">
-                {progress.active_tools!.map((tool, i) => (
-                  <div key={`active-${i}`} className="flex items-center gap-2 px-3 py-1.5 text-sm">
-                    <span className="tool-pulse text-xs">⏳</span>
-                    <span className="font-mono text-xs text-blue-300 flex-1 truncate">
-                      {tool.label || tool.name}
-                    </span>
-                    {tool.elapsed_ms > 0 && (
-                      <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
-                    )}
-                  </div>
-                ))}
+            <div className="px-3 py-2">
+              <div className="text-[11px] text-slate-600/90 font-mono mb-1">
+                #{progress.iteration}
               </div>
-            )}
+              {shouldShowCurrentThinking && (
+                <ThinkingBlock content={progress.thinking} />
+              )}
+              {(progress.active_tools?.length ?? 0) > 0 ? (
+                <div className="space-y-0.5">
+                  {progress.active_tools!.map((tool, i) => (
+                    <div key={`active-${i}`} className="flex items-center gap-2 px-2 py-1 text-sm">
+                      <span className="tool-pulse">⏳</span>
+                      <span className="font-mono text-xs text-slate-400 flex-1 truncate">
+                        {tool.label || tool.name}
+                      </span>
+                      {tool.elapsed_ms > 0 && (
+                        <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : !shouldShowCurrentThinking ? (
+                <div className="flex items-center gap-2 px-2 py-1">
+                  <BouncingDots />
+                  <span className="text-xs text-slate-500 italic">
+                    {progress.phase === 'thinking' ? '思考中...' : progress.phase === 'tool_exec' ? '执行工具...' : '处理中...'}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
 
+        {/* Loading but no progress yet — show animated placeholder */}
+        {loading && (!progress || progress.phase === 'done') && (
+          <div className="mb-2 rounded border border-slate-700/30 overflow-hidden">
+            <div className="px-3 py-2">
+              <BouncingDots text="准备中..." />
+            </div>
+          </div>
+        )}
+
+
+
         {/* Collapsible: Iteration history (from saved snapshots) */}
-        {!loading && messages[0]?.iterationHistory && messages[0].iterationHistory.length > 0 && (
+        {!loading && messages.length > 0 && messages[messages.length - 1]?.iterationHistory && messages[messages.length - 1].iterationHistory!.length > 0 && (
           <CollapsibleSection
             icon="📋"
             title="迭代过程"
-            badge={messages[0].iterationHistory!.length}
+            badge={messages[messages.length - 1].iterationHistory!.length}
           >
             <div className="divide-y divide-slate-700/30">
-              {messages[0].iterationHistory!.map((snap) => (
+              {messages[messages.length - 1].iterationHistory!.map((snap) => (
                 <CompletedIteration key={snap.iteration} snap={snap} />
               ))}
             </div>
@@ -293,8 +280,8 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
           </div>
         )}
 
-        {/* Loading pulse when no content yet */}
-        {loading && textMsgs.length === 0 && totalToolCount === 0 && !phaseIcon && (
+        {/* Loading pulse when no content yet and no iteration/progress placeholders */}
+        {loading && textMsgs.length === 0 && !hasTools && !phaseIcon && !progress && (
           <div className="assistant-turn-loading">
             <div className="flex gap-1">
               <span className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />

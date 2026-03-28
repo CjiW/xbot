@@ -154,7 +154,9 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null)
   const [llmConfigLoading, setLlmConfigLoading] = useState(false)
   const [llmSaving, setLlmSaving] = useState(false)
-  // Add form state (for new config)
+  const [llmMaxContext, setLlmMaxContext] = useState<number>(0)
+  const [llmMaxContextSaving, setLlmMaxContextSaving] = useState(false)
+
   const [llmFormProvider, setLlmFormProvider] = useState('openai')
   const [llmFormBaseUrl, setLlmFormBaseUrl] = useState('')
   const [llmFormApiKey, setLlmFormApiKey] = useState('')
@@ -221,13 +223,14 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     try {
       const resp = await fetch('/api/llm-config')
       const data = await resp.json()
-      if (data.ok && data.provider) {
+      if (data.ok) {
         setLlmConfig({
           provider: data.provider,
           base_url: data.base_url,
           model: data.model,
           models: data.models || [],
         })
+        setLlmMaxContext(data.max_context || 0)
       } else {
         setLlmConfig(null)
       }
@@ -414,6 +417,26 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     }
     setLlmSaving(false)
   }, [])
+
+  const handleLLMMaxContextSave = useCallback(async () => {
+    setLlmMaxContextSaving(true)
+    setLlmError('')
+    try {
+      const resp = await fetch('/api/llm-max-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_context: llmMaxContext }),
+      })
+      const data = await resp.json()
+      if (!data.ok) {
+        setLlmError(data.error || '保存失败')
+      }
+    } catch {
+      setLlmError('网络错误')
+    }
+    setLlmMaxContextSaving(false)
+  }, [llmMaxContext])
+
 
   // Market functions
   const loadMarket = useCallback(async () => {
@@ -813,6 +836,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                     🗑️ 删除配置
                   </button>
                 </div>
+
               </>
             ) : (
               /* ── 无配置：新增表单 ── */
@@ -879,6 +903,35 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                 </button>
               </>
             )}
+
+            {/* ── Max Context 设置（独立于 LLM 配置） ── */}
+            {!llmConfigLoading && (
+              <div className="settings-item mt-4 border-t border-slate-700/30 pt-4">
+                <label className="settings-label">最大上下文 Max Context</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    className="settings-input flex-1"
+                    min={0}
+                    step={1000}
+                    value={llmMaxContext || 0}
+                    onChange={(e) => setLlmMaxContext(parseInt(e.target.value) || 0)}
+                    placeholder="0 = 使用系统默认"
+                  />
+                  <button
+                    className="settings-action-btn"
+                    onClick={handleLLMMaxContextSave}
+                    disabled={llmMaxContextSaving}
+                  >
+                    {llmMaxContextSaving ? '⏳' : '💾'} 保存
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Token 数量，0 表示使用系统默认值。值越大，可用的对话上下文越长，但消耗的 Token 越多。
+                </div>
+              </div>
+            )}
+
           </div>
         )}
 

@@ -6,7 +6,7 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { Markdown } from 'tiptap-markdown'
 import { common, createLowlight } from 'lowlight'
-import { useEffect, useImperativeHandle, forwardRef } from 'react'
+import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react'
 
 const lowlight = createLowlight(common)
 
@@ -25,13 +25,17 @@ export interface TiptapEditorHandle {
 
 const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
   function TiptapEditor({ onSend, disabled, connected }, ref) {
+  const [hasContent, setHasContent] = useState(false)
+  const connectedRef = useRef(connected)
+  useEffect(() => { connectedRef.current = connected }, [connected])
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         codeBlock: false,
       }),
       Placeholder.configure({
-        placeholder: connected ? '输入消息...' : '连接中...',
+        placeholder: () => connectedRef.current ? '输入消息...' : '连接中...',
       }),
       CodeBlockLowlight.configure({
         lowlight,
@@ -42,6 +46,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       }),
       Markdown.configure({
         html: false,
+        breaks: true,
         transformPastedText: true,
         transformCopiedText: true,
       }),
@@ -62,6 +67,9 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     },
     editable: !disabled,
     immediatelyRender: false,
+    onUpdate: ({ editor: ed }) => {
+      setHasContent(ed.getText().trim().length > 0)
+    },
   })
 
   useEffect(() => {
@@ -90,6 +98,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     if (!md.trim()) return
     onSend(md)
     editor.commands.clearContent()
+    setHasContent(false)
     editor.commands.focus()
   }
 
@@ -100,7 +109,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
       </div>
       <button
         onClick={handleSend}
-        disabled={!connected || !editor?.isEditable || !editor.getText().trim()}
+        disabled={!connected || disabled || !hasContent}
         className="tiptap-send-btn"
         title="发送"
       >

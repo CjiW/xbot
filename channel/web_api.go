@@ -684,22 +684,13 @@ func (wc *WebChannel) handleMarketMy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entryType := r.URL.Query().Get("type")
-
-	// Primary: use senderID. If linked to Feishu account, also search with Feishu senderID.
 	published, local, err := wc.callbacks.RegistryListMy(senderID, entryType)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, myMarketResponse{OK: false, Error: "list failed"})
 		return
 	}
 
-	// Also search with linked Feishu user ID (web user shares Feishu container/workspace)
-	if feishuUID := feishuUserIDFromContext(r.Context()); feishuUID != "" && feishuUID != senderID {
-		pub2, local2, err2 := wc.callbacks.RegistryListMy(feishuUID, entryType)
-		if err2 == nil {
-			published = append(published, pub2...)
-			local = append(local, local2...)
-		}
-	}
+	// Build published name set for lookup (only public entries count as published)
 	publishedSet := make(map[string]string) // name -> description
 	for _, pe := range published {
 		if pe.Sharing == "public" {

@@ -220,10 +220,12 @@ func (wc *WebChannel) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if wc.callbacks.NormalizeSenderID != nil {
 			senderID = wc.callbacks.NormalizeSenderID(senderID)
 		}
-		ctx := contextWithSenderID(r.Context(), senderID)
+		// If linked to Feishu account, use Feishu identity for all operations.
+		// This ensures web users share session/persona/workspace/skills/agents with their Feishu account.
 		if si.feishuUserID != "" {
-			ctx = contextWithFeishuUserID(ctx, si.feishuUserID)
+			senderID = si.feishuUserID
 		}
+		ctx := contextWithSenderID(r.Context(), senderID)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -436,10 +438,7 @@ func (wc *WebChannel) handleFeishuLogin(w http.ResponseWriter, r *http.Request) 
 
 type contextKey string
 
-const (
-	senderIDKey     contextKey = "sender_id"
-	feishuUserIDKey contextKey = "feishu_user_id"
-)
+const senderIDKey contextKey = "sender_id"
 
 func contextWithSenderID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, senderIDKey, id)
@@ -447,17 +446,6 @@ func contextWithSenderID(ctx context.Context, id string) context.Context {
 
 func senderIDFromContext(ctx context.Context) string {
 	if id, ok := ctx.Value(senderIDKey).(string); ok {
-		return id
-	}
-	return ""
-}
-
-func contextWithFeishuUserID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, feishuUserIDKey, id)
-}
-
-func feishuUserIDFromContext(ctx context.Context) string {
-	if id, ok := ctx.Value(feishuUserIDKey).(string); ok {
 		return id
 	}
 	return ""

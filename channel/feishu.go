@@ -875,8 +875,7 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		}
 	}
 
-
-		if mentionScope == "at_all_optional" {
+	if mentionScope == "at_all_optional" {
 		content = "[群聊 @所有人 消息：按相关性决定是否需要回复；不相关可不回复]\n" + content
 	}
 
@@ -886,10 +885,10 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		replyTo = senderID
 	}
 
-		// Admin command: !webadd <username> — create web user
-		if handled := f.handleAdminCommand(content, replyTo, senderID, messageID); handled {
-			return nil
-		}
+	// Admin command: !webadd <username> — create web user
+	if handled := f.handleAdminCommand(content, replyTo, senderID, messageID); handled {
+		return nil
+	}
 
 	// 检查是否有活跃的卡片会话，用户发送文本消息时跳过卡片
 	if msgType == "text" && f.cardBuilder != nil {

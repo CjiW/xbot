@@ -217,6 +217,9 @@ export function getCodeBlockProps() {
 
       return <li>{props.children}</li>
     },
+    a(props: { href?: string; children?: React.ReactNode }) {
+      return <a href={props.href} target="_blank" rel="noopener noreferrer">{props.children}</a>
+    },
     table(props: { children?: React.ReactNode }) {
       return <div className="table-wrapper"><table>{props.children}</table></div>
     },

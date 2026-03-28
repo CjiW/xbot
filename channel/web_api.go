@@ -425,6 +425,7 @@ func (wc *WebChannel) handleMarketInstall(w http.ResponseWriter, r *http.Request
 
 type llmConfigResponse struct {
 	OK         bool     `json:"ok"`
+	IsGlobal   bool     `json:"is_global,omitempty"`
 	Provider   string   `json:"provider,omitempty"`
 	BaseURL    string   `json:"base_url,omitempty"`
 	Model      string   `json:"model,omitempty"`
@@ -475,10 +476,6 @@ func (wc *WebChannel) handleLLMConfigGet(w http.ResponseWriter, senderID string)
 	}
 
 	provider, baseURL, model, ok := wc.callbacks.LLMGetConfig(senderID)
-	if !ok {
-		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
-		return
-	}
 
 	// Also fetch available models if a list callback exists
 	var models []string
@@ -492,6 +489,7 @@ func (wc *WebChannel) handleLLMConfigGet(w http.ResponseWriter, senderID string)
 
 	resp := llmConfigResponse{
 		OK:       true,
+		IsGlobal: !ok,
 		Provider: provider,
 		BaseURL:  baseURL,
 		Model:    model,

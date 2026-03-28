@@ -109,9 +109,9 @@ func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
 		}
 	}
 
-	// Pure web user without remote runner
+	// Pure web user without remote runner — denied by default
 	if strings.HasPrefix(userID, "web-") {
-		webServerRunner := true
+		webServerRunner := false
 		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
 			if b, err := strconv.ParseBool(v); err == nil {
 				webServerRunner = b
@@ -121,7 +121,7 @@ func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
 			// User must have their own remote runner
 			return r.none
 		}
-		// Allow fallback to server sandbox (docker)
+		// Explicitly enabled: allow fallback to server sandbox (docker)
 	}
 
 	if r.docker != nil {

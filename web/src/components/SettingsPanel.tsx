@@ -123,6 +123,7 @@ interface LLMConfig {
   base_url: string
   model: string
   models: string[]
+  is_global: boolean
 }
 
 const PROVIDER_OPTIONS = [
@@ -229,6 +230,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           base_url: data.base_url,
           model: data.model,
           models: data.models || [],
+          is_global: !!data.is_global,
         })
         setLlmMaxContext(data.max_context || 0)
       } else {
@@ -404,7 +406,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       const resp = await fetch('/api/llm-config', { method: 'DELETE' })
       const data = await resp.json()
       if (data.ok) {
-        setLlmConfig(null)
+        await fetchLLMConfig()
         // Clear form too
         setLlmFormBaseUrl('')
         setLlmFormApiKey('')
@@ -790,8 +792,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
 
             {llmConfigLoading ? (
               <div className="text-center py-6 text-slate-500 text-sm">加载中...</div>
-            ) : llmConfig ? (
-              /* ── 已有配置：显示当前配置 + 模型切换 + 删除 ── */
+            ) : llmConfig && !llmConfig.is_global ? (
+              /* ── 个人配置：显示当前配置 + 模型切换 + 删除 ── */
               <>
                 <div className="text-xs text-slate-400 mb-3">
                   当前使用个人模型。可切换模型或删除配置以恢复系统默认。
@@ -837,6 +839,29 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                   </button>
                 </div>
 
+              </>
+            ) : llmConfig && llmConfig.is_global ? (
+              /* ── 全局配置：显示当前模型 + 添加配置入口 ── */
+              <>
+                <div className="text-xs text-slate-400 mb-3">
+                  当前使用系统全局模型。配置个人 LLM 后可自由选择模型。
+                </div>
+
+                {llmConfig.model && (
+                  <div className="settings-item">
+                    <label className="settings-label">当前模型 Model</label>
+                    <div className="text-sm text-slate-300">{llmConfig.model}</div>
+                  </div>
+                )}
+
+                {llmError && <p className="text-xs text-red-400 mt-1 mb-2">{llmError}</p>}
+
+                <button
+                  className="settings-action-btn w-full mt-2"
+                  onClick={() => setLlmConfig(null)}
+                >
+                  ➕ 添加配置
+                </button>
               </>
             ) : (
               /* ── 无配置：新增表单 ── */

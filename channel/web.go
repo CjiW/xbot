@@ -735,6 +735,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 		// Eagerly save user message so history API can return it during processing.
 		_ = eagerSaveUserMsg(wc.db, c.userID, content)
+		metadata["user_msg_eager_saved"] = "true"
 
 		wc.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "web",

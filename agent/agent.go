@@ -1411,12 +1411,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			userMsg := llm.NewUserMessage(msg.Content)
+			if !msg.Time.IsZero() {
+				userMsg.Timestamp = msg.Time
+			}
+			if err := tenantSession.AddMessage(userMsg); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+			}
 		}
 		// Persist engine-produced messages (assistant + tool) so the next
 		// turn has full context of what happened before waiting.
@@ -1439,12 +1441,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			userMsg := llm.NewUserMessage(msg.Content)
+			if !msg.Time.IsZero() {
+				userMsg.Timestamp = msg.Time
+			}
+			if err := tenantSession.AddMessage(userMsg); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+			}
 		}
 		log.Ctx(ctx).WithFields(log.Fields{
 			"channel":      msg.Channel,
@@ -1455,12 +1459,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	userMsg := llm.NewUserMessage(msg.Content)
-	if !msg.Time.IsZero() {
-		userMsg.Timestamp = msg.Time
-	}
-	if err := tenantSession.AddMessage(userMsg); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+	if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		userMsg := llm.NewUserMessage(msg.Content)
+		if !msg.Time.IsZero() {
+			userMsg.Timestamp = msg.Time
+		}
+		if err := tenantSession.AddMessage(userMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		}
 	}
 
 	// Persist engine-produced messages (assistant + tool) for context continuity.

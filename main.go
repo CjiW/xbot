@@ -266,9 +266,10 @@ func main() {
 		disp.Register(napcatCh)
 	}
 
+	var webDB *sql.DB
+
 	// 注册 Web 渠道
 	if cfg.Web.Enable {
-		var webDB *sql.DB
 		if tokenDB != nil {
 			webDB = tokenDB.Conn()
 		}
@@ -279,6 +280,7 @@ func main() {
 				DB:               webDB,
 				MemoryWindow:     cfg.Agent.MemoryWindow,
 				FeishuLinkSecret: cfg.Feishu.AppSecret,
+				InviteOnly:       cfg.Web.InviteOnly,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
@@ -417,6 +419,14 @@ func main() {
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())
+
+		// 传递 admin chatID 和 web DB（用于 admin 命令如 !webadd）
+		if adminChatID != "" {
+			feishuCh.SetAdminChatID(adminChatID)
+		}
+		if webDB != nil {
+			feishuCh.SetWebDB(webDB)
+		}
 
 		// 注入设置卡片回调（让飞书渠道能访问 Agent 的 LLM/Registry/Settings 功能）
 		feishuCh.SetSettingsCallbacks(channel.SettingsCallbacks{

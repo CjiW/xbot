@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 interface LoginPageProps {
   onLogin: () => void
@@ -12,6 +12,14 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [feishuUserId, setFeishuUserId] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [inviteOnly, setInviteOnly] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/auth/config')
+      .then(r => r.json())
+      .then(data => { if (data.invite_only) setInviteOnly(true) })
+      .catch(() => {})
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -163,7 +171,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             {loading ? '...' : showFeishu ? '飞书登录' : isRegister ? '注册' : '登录'}
           </button>
 
-          {!showFeishu && (
+          {!showFeishu && !inviteOnly && (
             <div className="mt-4 text-center">
               <button
                 type="button"

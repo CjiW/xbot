@@ -89,11 +89,12 @@ type AdminConfig struct {
 
 // WebConfig Web 渠道配置
 type WebConfig struct {
-	Enable    bool   // 是否启用 Web 渠道
-	Host      string // 监听地址（默认 0.0.0.0）
-	Port      int    // 监听端口（默认 8082）
-	StaticDir string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
-	UploadDir string // 文件上传目录（可选，默认 workspace/uploads）
+	Enable           bool   // 是否启用 Web 渠道
+	Host             string // 监听地址（默认 0.0.0.0）
+	Port             int    // 监听端口（默认 8082）
+	StaticDir        string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
+	UploadDir        string // 文件上传目录（可选，默认 workspace/uploads）
+	PersonaIsolation bool   // 启用后每个 web 用户使用独立 persona，不回退到全局 persona
 }
 
 // Config 应用配置
@@ -294,11 +295,12 @@ func Load() *Config {
 			ChatID: getAdminChatID(),
 		},
 		Web: WebConfig{
-			Enable:    getEnvBoolOrDefault("WEB_ENABLED", false),
-			Host:      getEnvOrDefault("WEB_HOST", "0.0.0.0"),
-			Port:      getEnvIntOrDefault("WEB_PORT", 8082),
-			StaticDir: getEnvOrDefault("WEB_STATIC_DIR", ""),
-			UploadDir: getEnvOrDefault("WEB_UPLOAD_DIR", ""),
+			Enable:           getEnvBoolOrDefault("WEB_ENABLED", false),
+			Host:             getEnvOrDefault("WEB_HOST", "0.0.0.0"),
+			Port:             getEnvIntOrDefault("WEB_PORT", 8082),
+			StaticDir:        getEnvOrDefault("WEB_STATIC_DIR", ""),
+			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
+			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
 		},
 	}
 

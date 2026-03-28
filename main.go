@@ -149,6 +149,7 @@ func main() {
 		MaxSubAgentDepth:         cfg.Agent.MaxSubAgentDepth,
 		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
 		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
+		PersonaIsolation:         cfg.Web.PersonaIsolation,
 		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,
 		PurgeOldMessages:         cfg.Agent.PurgeOldMessages,
 		SandboxIdleTimeout:       cfg.Sandbox.IdleTimeout,

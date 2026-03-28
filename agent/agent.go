@@ -405,6 +405,9 @@ type Config struct {
 	// 默认 ""，由 resolveContextMode 决定
 	ContextMode ContextMode
 
+	// Persona isolation: each web user has independent persona (no fallback to global)
+	PersonaIsolation bool
+
 	// 旧压缩配置（保留用于初始化 ContextManagerConfig，向后兼容 main.go 传参）
 	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7）
@@ -474,6 +477,7 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 		session.WithCleanupInterval(cfg.MCPCleanupInterval),
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
 		session.WithMemoryProvider(memoryProvider),
+		session.WithPersonaIsolation(cfg.PersonaIsolation),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
 			Provider:   cfg.EmbeddingProvider,
 			BaseURL:    cfg.EmbeddingBaseURL,

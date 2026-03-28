@@ -51,6 +51,13 @@ func WithMemoryProvider(provider string) MultiTenantOption {
 	}
 }
 
+// WithPersonaIsolation enables per-tenant persona isolation (no fallback to tenantID=0).
+func WithPersonaIsolation(enabled bool) MultiTenantOption {
+	return func(m *MultiTenantSession) {
+		m.coreSvc.SetPersonaIsolation(enabled)
+	}
+}
+
 // WithArchivalService 设置向量归档服务（Letta 模式下使用）
 // 如果不设置，会在 NewMultiTenant 中根据 EmbeddingConfig 自动创建
 func WithArchivalService(svc *vectordb.ArchivalService) MultiTenantOption {

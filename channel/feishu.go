@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -102,14 +103,16 @@ type SettingsCallbacks struct {
 
 // FeishuChannel 飞书渠道实现
 type FeishuChannel struct {
-	config    FeishuConfig
-	msgBus    *bus.MessageBus
-	client    *lark.Client
-	wsClient  *larkws.Client
-	running   atomic.Bool
-	mu        sync.Mutex
-	botOpenID string
-	botName   atomic.Value // 机器人名称，用于引用消息中标识自己（存储 string）
+	config      FeishuConfig
+	msgBus      *bus.MessageBus
+	client      *lark.Client
+	wsClient    *larkws.Client
+	running     atomic.Bool
+	mu          sync.Mutex
+	botOpenID   string
+	botName     atomic.Value // 机器人名称，用于引用消息中标识自己（存储 string）
+	adminChatID string       // admin 会话 ID（用于权限控制）
+	webDB       *sql.DB      // web 用户数据库（用于 admin 创建用户命令）
 
 	// 消息去重缓存
 	processedIDs   map[string]struct{}
@@ -178,6 +181,16 @@ func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
 // SetSettingsCallbacks injects settings card callbacks from Agent.
 func (f *FeishuChannel) SetSettingsCallbacks(cb SettingsCallbacks) {
 	f.settingsCallbacks = cb
+}
+
+// SetAdminChatID sets the admin chat ID for admin-only commands.
+func (f *FeishuChannel) SetAdminChatID(chatID string) {
+	f.adminChatID = chatID
+}
+
+// SetWebDB sets the web user database for admin user creation commands.
+func (f *FeishuChannel) SetWebDB(db *sql.DB) {
+	f.webDB = db
 }
 
 // Start 启动飞书 WebSocket 长连接
@@ -862,7 +875,8 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		}
 	}
 
-	if mentionScope == "at_all_optional" {
+
+		if mentionScope == "at_all_optional" {
 		content = "[群聊 @所有人 消息：按相关性决定是否需要回复；不相关可不回复]\n" + content
 	}
 
@@ -871,6 +885,11 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 	if chatType != "group" {
 		replyTo = senderID
 	}
+
+		// Admin command: !webadd <username> — create web user
+		if handled := f.handleAdminCommand(content, replyTo, senderID, messageID); handled {
+			return nil
+		}
 
 	// 检查是否有活跃的卡片会话，用户发送文本消息时跳过卡片
 	if msgType == "text" && f.cardBuilder != nil {
@@ -2027,6 +2046,83 @@ func (f *FeishuChannel) getHistoryMsgById(currentMsgEV *larkim.P2MessageReceiveV
 }
 
 // isDuplicate 检查消息是否重复
+// handleAdminCommand handles admin-only commands (e.g., !webadd).
+// Returns true if the message was an admin command and was handled.
+func (f *FeishuChannel) handleAdminCommand(content, replyTo, senderID, messageID string) bool {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "!") {
+		return false
+	}
+
+	// Only admin can run these commands
+	if f.adminChatID == "" || replyTo != f.adminChatID {
+		return false
+	}
+
+	// Parse command: !webadd <username>
+	parts := strings.Fields(content)
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "!webadd":
+		if len(parts) < 2 {
+			f.sendTextReply(replyTo, messageID, "⚠️ 用法: !webadd <用户名>")
+			return true
+		}
+		username := parts[1]
+		if f.webDB == nil {
+			f.sendTextReply(replyTo, messageID, "❌ Web 用户数据库未配置")
+			return true
+		}
+		createdName, password, err := CreateWebUser(f.webDB, username)
+		if err != nil {
+			f.sendTextReply(replyTo, messageID, fmt.Sprintf("❌ 创建用户失败: %s", err))
+			return true
+		}
+		msg := fmt.Sprintf("✅ Web 用户创建成功\n用户名: %s\n密码: %s\n\n⚠️ 请妥善保管密码，此消息仅发送一次", createdName, password)
+		f.sendTextReply(replyTo, messageID, msg)
+		return true
+	}
+
+	return false
+}
+
+// sendTextReply sends a plain text reply message via Feishu.
+func (f *FeishuChannel) sendTextReply(chatID, parentID, text string) {
+	if f.client == nil {
+		return
+	}
+	contentJSON, _ := json.Marshal(map[string]string{"text": text})
+
+	var err error
+	if parentID != "" {
+		// Reply to a specific message
+		req := larkim.NewReplyMessageReqBuilder().
+			MessageId(parentID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				MsgType("text").
+				Content(string(contentJSON)).
+				Build()).
+			Build()
+		_, err = f.client.Im.Message.Reply(context.Background(), req)
+	} else {
+		// Send new message
+		req := larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType("chat_id").
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(chatID).
+				MsgType("text").
+				Content(string(contentJSON)).
+				Build()).
+			Build()
+		_, err = f.client.Im.Message.Create(context.Background(), req)
+	}
+
+	if err != nil {
+		log.WithError(err).WithField("chat_id", chatID).Warn("Feishu: failed to send text reply")
+	}
+}
+
 func (f *FeishuChannel) isDuplicate(messageID string) bool {
 	f.processedMu.Lock()
 	defer f.processedMu.Unlock()

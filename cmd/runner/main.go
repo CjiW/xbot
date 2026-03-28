@@ -21,7 +21,7 @@ var (
 	flagFullControl = flag.Bool("full-control", false, "Disable path restrictions (allow access to any file)")
 	flagVerbose     = flag.Bool("v", false, "Verbose logging (log all requests)")
 	flagMode        = flag.String("mode", "native", "Runner mode: native or docker")
-	flagDockerImage = flag.String("docker-image", "xbot-sandbox:latest", "Docker image (docker mode)")
+	flagDockerImage = flag.String("docker-image", "ubuntu:22.04", "Docker image (docker mode)")
 )
 
 var verboseLog bool

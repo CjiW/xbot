@@ -142,7 +142,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [saving, setSaving] = useState(false)
   const [runnerMode, setRunnerMode] = useState<string>(() => localStorage.getItem('runner_mode') || 'native')
   const [runnerWorkspace, setRunnerWorkspace] = useState<string>(() => localStorage.getItem('runner_workspace') || '~/xbot-workspace')
-  const [runnerDockerImage, setRunnerDockerImage] = useState<string>(() => localStorage.getItem('runner_docker_image') || 'ubuntu:latest')
+  const [runnerDockerImage, setRunnerDockerImage] = useState<string>(() => localStorage.getItem('runner_docker_image') || 'ubuntu:22.04')
   // When runner settings change and there's an existing command, auto-regenerate
   const regenerateWithSettings = useCallback(async (mode: string, workspace: string, dockerImage: string) => {
     if (!runnerCommand) return
@@ -1069,7 +1069,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                       className="settings-input"
                       value={runnerDockerImage}
                       onChange={e => handleDockerImageChange(e.target.value)}
-                      placeholder="ubuntu:latest"
+                      placeholder="ubuntu:22.04"
                     />
                     <div className="text-[11px] text-slate-500 mt-1">
                       Runner 使用的 Docker 镜像，需要有 shell 环境。

@@ -46,6 +46,11 @@ func (s *TenantSession) Len() (int, error) {
 	return s.sessionSvc.GetMessagesCount(s.tenantID)
 }
 
+// UserMessageCount returns the number of user-role messages (conversation turns).
+func (s *TenantSession) UserMessageCount() (int, error) {
+	return s.sessionSvc.GetUserMessageCount(s.tenantID)
+}
+
 // LastConsolidated returns the last consolidated message index
 func (s *TenantSession) LastConsolidated() int {
 	lastConsolidated, err := s.memorySvc.GetState(context.Background(), s.tenantID)

@@ -1692,20 +1692,18 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 	}
 
 	// 验证是否仍需整理（可能已被其他路径整理过）
-	length, err := tenantSession.Len()
+	currentUserMsgCount, err := tenantSession.UserMessageCount()
 	if err != nil {
-		log.Ctx(ctx).WithError(err).Error("Failed to get session length for consolidation")
+		log.Ctx(ctx).WithError(err).Error("Failed to get user message count for consolidation")
 		return
 	}
-	lastConsolidated := tenantSession.LastConsolidated()
-	currentUnconsolidated := length - lastConsolidated
 
-	// 如果当前未整理数小于触发时的数量，说明已被其他路径整理过
-	if currentUnconsolidated < req.unconsolidated {
+	// 如果当前 user 消息数小于触发时的数量，说明已被其他路径整理过
+	if currentUserMsgCount < req.unconsolidated {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"tenant":                 tenantKey,
-			"current_unconsolidated": currentUnconsolidated,
-			"trigger_unconsolidated": req.unconsolidated,
+			"current_user_msg_count": currentUserMsgCount,
+			"trigger_user_msg_count": req.unconsolidated,
 		}).Debug("Consolidation already done by another path, skipping")
 		return
 	}
@@ -1721,6 +1719,7 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 		return
 	}
 
+	lastConsolidated := tenantSession.LastConsolidated()
 	mem := tenantSession.Memory()
 	llmClient, model, _, _ := a.llmFactory.GetLLM(req.senderID)
 
@@ -1749,15 +1748,16 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 
 func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
-	length, err := tenantSession.Len()
+
+	// Use user-message count (not total rows) to measure conversation turns.
+	// Tool calls, assistant iterations etc. should not inflate the count.
+	userMsgCount, err := tenantSession.UserMessageCount()
 	if err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to get session length for consolidation check")
+		log.Ctx(ctx).WithError(err).Warn("Failed to get user message count for consolidation check")
 		return
 	}
 
-	lastConsolidated := tenantSession.LastConsolidated()
-	unconsolidated := length - lastConsolidated
-	if unconsolidated < a.memoryWindow {
+	if userMsgCount < a.memoryWindow {
 		return
 	}
 
@@ -1775,7 +1775,7 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 		channel:        tenantSession.Channel(),
 		chatID:         tenantSession.ChatID(),
 		senderID:       senderID,
-		unconsolidated: unconsolidated,
+		unconsolidated: userMsgCount,
 	}:
 		// 发送成功，标记为正在整理
 		a.consolidating[tenantKey] = true

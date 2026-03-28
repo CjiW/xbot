@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -71,11 +72,9 @@ func CreateWebUser(db *sql.DB, username string) (string, string, error) {
 	if username == "" || len(username) > 64 {
 		return "", "", fmt.Errorf("invalid username (must be 1-64 chars)")
 	}
-
-	// Check uniqueness
-	var existingID int
-	if err := db.QueryRow("SELECT id FROM web_users WHERE username = ?", username).Scan(&existingID); err == nil {
-		return "", "", fmt.Errorf("username %q already exists", username)
+	// Only allow alphanumeric, underscore, hyphen, dot
+	if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(username) {
+		return "", "", fmt.Errorf("username can only contain letters, digits, underscores, hyphens, and dots")
 	}
 
 	// Generate strong password
@@ -559,6 +558,10 @@ func senderIDFromContext(ctx context.Context) string {
 // handleAuthConfig handles GET /api/auth/config
 // Returns public auth configuration (e.g., invite-only mode).
 func (wc *WebChannel) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"invite_only": wc.config.InviteOnly,
 	})

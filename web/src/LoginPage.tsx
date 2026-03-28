@@ -12,7 +12,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [feishuUserId, setFeishuUserId] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [inviteOnly, setInviteOnly] = useState(false)
+  const [inviteOnly, setInviteOnly] = useState(true)
 
   useEffect(() => {
     fetch('/api/auth/config')

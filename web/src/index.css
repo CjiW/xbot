@@ -602,8 +602,7 @@ body {
 }
 [data-theme="light"] .xbot-codeblock-pre {
   background: #edeae5;
-  border: 1px solid #d1cdc7;
-  border-top: none;
+  /* border removed — parent .xbot-codeblock already has border */
 }
 [data-theme="light"] .xbot-codeblock {
   border: 1px solid #d1cdc7;

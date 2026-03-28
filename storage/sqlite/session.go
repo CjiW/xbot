@@ -198,18 +198,31 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 	var messages []llm.ChatMessage
 	for rows.Next() {
 		var msg llm.ChatMessage
-		var toolCallsJSON sql.NullString
+		var toolCallsJSON, detailJSON sql.NullString
+		var toolCallID, toolName, toolArguments sql.NullString
 		var createdAt string
 
 		err := rows.Scan(
 			&msg.Role, &msg.Content,
-			&msg.ToolCallID, &msg.ToolName, &msg.ToolArguments,
-			&toolCallsJSON, &msg.Detail, &createdAt,
+			&toolCallID, &toolName, &toolArguments,
+			&toolCallsJSON, &detailJSON, &createdAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
+		if toolCallID.Valid {
+			msg.ToolCallID = toolCallID.String
+		}
+		if toolName.Valid {
+			msg.ToolName = toolName.String
+		}
+		if toolArguments.Valid {
+			msg.ToolArguments = toolArguments.String
+		}
+		if detailJSON.Valid {
+			msg.Detail = detailJSON.String
+		}
 		if toolCallsJSON.Valid {
 			if err := json.Unmarshal([]byte(toolCallsJSON.String), &msg.ToolCalls); err != nil {
 				log.WithError(err).Warn("Failed to unmarshal tool_calls, skipping")

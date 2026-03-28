@@ -300,7 +300,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
 
   const handlePresetAdd = useCallback(() => {
     setEditingPreset({
-      id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+      id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
       label: '',
       icon: '⚡',
       content: '',

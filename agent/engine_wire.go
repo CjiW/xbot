@@ -193,6 +193,8 @@ func (a *Agent) buildMainRunConfig(
 					// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 					wc.SendProgress(chatID, payload)
 				}
+			} else {
+				log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
 			}
 		}
 	}

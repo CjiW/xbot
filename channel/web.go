@@ -904,19 +904,13 @@ func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
 	).Scan(&tenantID); err != nil {
 		return err
 	}
-	// Avoid duplicate: check if the last message for this tenant is already
-	// an identical user message (saved by a previous eager call or engine).
-	var cnt int
-	_ = db.QueryRow(
-		"SELECT COUNT(*) FROM session_messages WHERE tenant_id = ? AND role = 'user' AND content = ? ORDER BY id DESC LIMIT 1",
-		tenantID, content,
-	).Scan(&cnt)
-	if cnt > 0 {
-		return nil
-	}
-	_, err := db.Exec(
-		"INSERT INTO session_messages (tenant_id, role, content) VALUES (?, 'user', ?)",
-		tenantID, content,
-	)
+	// Use INSERT ... WHERE NOT EXISTS to avoid duplicate in race condition
+	_, err := db.Exec(`INSERT INTO session_messages (tenant_id, role, content)
+		SELECT ?, 'user', ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM session_messages
+			WHERE tenant_id = ? AND role = 'user' AND content = ?
+			ORDER BY id DESC LIMIT 1
+		)`, tenantID, content, tenantID, content)
 	return err
 }

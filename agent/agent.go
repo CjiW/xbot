@@ -31,10 +31,10 @@ var ErrLLMGenerate = errors.New("LLM generate failed")
 // consolidateRequest 记忆整理请求
 // 传递 key 而非 session 引用，避免排队期间 session 被修改或失效
 type consolidateRequest struct {
-	channel        string
-	chatID         string
-	senderID       string
-	unconsolidated int // 触发时的未整理消息数，用于 worker 中验证
+	channel      string
+	chatID       string
+	senderID     string
+	userMsgCount int // 触发时的用户消息数，用于 worker 中验证
 }
 
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
@@ -1258,6 +1258,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			if sb := tools.GetSandbox(); sb.IsExporting(sbUID) {
 				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID, "sandbox_user": sbUID}).Info("Request rejected: sandbox export in progress")
 				a.sendMessage(msg.Channel, msg.ChatID, "⏳ 沙箱正在持久化中，请稍后再试...")
+				return
 			}
 
 			response, err = a.processMessage(reqCtx, msg)
@@ -1401,7 +1402,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, out.Error
 	}
 	finalContent := out.Content
-	toolsUsed := out.ToolsUsed
 	waitingUser := out.WaitingUser
 
 	// 如果工具正在等待用户响应，不生成回复消息
@@ -1480,9 +1480,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
 			assistantMsg.Detail = string(jsonBytes)
 		}
-	}
-	if len(toolsUsed) > 0 {
-		_ = toolsUsed
 	}
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
@@ -1696,11 +1693,11 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 	}
 
 	// 如果当前 user 消息数小于触发时的数量，说明已被其他路径整理过
-	if currentUserMsgCount < req.unconsolidated {
+	if currentUserMsgCount < req.userMsgCount {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"tenant":                 tenantKey,
 			"current_user_msg_count": currentUserMsgCount,
-			"trigger_user_msg_count": req.unconsolidated,
+			"trigger_user_msg_count": req.userMsgCount,
 		}).Debug("Consolidation already done by another path, skipping")
 		return
 	}
@@ -1769,10 +1766,10 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 	// 立即尝试发送，失败则跳过（简化锁逻辑，避免阻塞）
 	select {
 	case a.consolidateCh <- consolidateRequest{
-		channel:        tenantSession.Channel(),
-		chatID:         tenantSession.ChatID(),
-		senderID:       senderID,
-		unconsolidated: userMsgCount,
+		channel:      tenantSession.Channel(),
+		chatID:       tenantSession.ChatID(),
+		senderID:     senderID,
+		userMsgCount: userMsgCount,
 	}:
 		// 发送成功，标记为正在整理
 		a.consolidating[tenantKey] = true

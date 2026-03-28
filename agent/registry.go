@@ -40,6 +40,45 @@ func (rm *RegistryManager) useSandbox() bool {
 	return rm.sandbox != nil && rm.sandbox.Name() != "none"
 }
 
+// isDockerSandbox returns true if the sandbox is Docker (syncs to .skills/.agents).
+func (rm *RegistryManager) isDockerSandbox() bool {
+	return rm.sandbox != nil && rm.sandbox.Name() == "docker"
+}
+
+// globalSyncedSkillsDir returns the directory where global skills are synced inside the sandbox.
+// Docker syncs to workspace/.skills (see skill_sync.go); remote syncs to workspace/skills.
+func (rm *RegistryManager) globalSyncedSkillsDir(senderID string) string {
+	if !rm.useSandbox() {
+		return ""
+	}
+	ws := rm.sandbox.Workspace(senderID)
+	if ws == "" {
+		return ""
+	}
+	if rm.isDockerSandbox() {
+		return filepath.Join(ws, ".skills")
+	}
+	// Remote sandbox: synced to workspace/skills (same as userSkillsDir)
+	return filepath.Join(ws, "skills")
+}
+
+// globalSyncedAgentsDir returns the directory where global agents are synced inside the sandbox.
+// Docker syncs to workspace/.agents; remote syncs to workspace/agents.
+func (rm *RegistryManager) globalSyncedAgentsDir(senderID string) string {
+	if !rm.useSandbox() {
+		return ""
+	}
+	ws := rm.sandbox.Workspace(senderID)
+	if ws == "" {
+		return ""
+	}
+	if rm.isDockerSandbox() {
+		return filepath.Join(ws, ".agents")
+	}
+	// Remote sandbox: synced to workspace/agents (same as userAgentsDir)
+	return filepath.Join(ws, "agents")
+}
+
 // sandboxCtx returns a context with a 30-second timeout for sandbox I/O operations.
 // This prevents indefinite blocking when the Runner is disconnected in remote mode.
 func (rm *RegistryManager) sandboxCtx() (context.Context, context.CancelFunc) {
@@ -417,11 +456,19 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 		for _, dir := range rm.store.globalDirs {
 			scanSkillDir(dir, &local, seen)
 		}
-		// Scan user-private skills: always use host path directly.
-		// In sandbox mode the container may not be running or may have empty workspace,
-		// so we read from the host filesystem directly.
-		hostSkillsDir := tools.UserSkillsRoot(rm.workDir, senderID)
-		scanSkillDir(hostSkillsDir, &local, seen)
+		// In Docker sandbox, global skills are synced to workspace/.skills (not workspace/skills).
+		// We must scan the synced directory in addition to user-private directory.
+		if rm.isDockerSandbox() {
+			if syncedDir := rm.globalSyncedSkillsDir(senderID); syncedDir != "" {
+				scanSkillDirSandbox(rm.sandbox, syncedDir, senderID, &local, seen)
+			}
+		}
+		userSkillsDir := rm.userSkillsDir(senderID)
+		if rm.useSandbox() {
+			scanSkillDirSandbox(rm.sandbox, userSkillsDir, senderID, &local, seen)
+		} else {
+			scanSkillDir(userSkillsDir, &local, seen)
+		}
 	}
 
 	// Agents: each agent is a .md FILE in the agents directory
@@ -429,9 +476,18 @@ func (rm *RegistryManager) ListMy(senderID string, entryType string) (published 
 		if rm.agentStore != nil && rm.agentStore.globalDir != "" {
 			scanAgentDir(rm.agentStore.globalDir, &local, seen)
 		}
-		// Scan user-private agents: always use host path directly.
-		hostAgentsDir := tools.UserAgentsRoot(rm.workDir, senderID)
-		scanAgentDir(hostAgentsDir, &local, seen)
+		// In Docker sandbox, global agents are synced to workspace/.agents (not workspace/agents).
+		if rm.isDockerSandbox() {
+			if syncedDir := rm.globalSyncedAgentsDir(senderID); syncedDir != "" {
+				scanAgentDirSandbox(rm.sandbox, syncedDir, senderID, &local, seen)
+			}
+		}
+		userAgentsDir := rm.userAgentsDir(senderID)
+		if rm.useSandbox() {
+			scanAgentDirSandbox(rm.sandbox, userAgentsDir, senderID, &local, seen)
+		} else {
+			scanAgentDir(userAgentsDir, &local, seen)
+		}
 	}
 
 	return published, local, nil
@@ -469,6 +525,51 @@ func scanAgentDir(dir string, out *[]string, seen map[string]bool) {
 			continue
 		}
 		name := strings.TrimSuffix(ent.Name(), ".md")
+		key := "agent:" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		*out = append(*out, key)
+	}
+}
+
+// scanSkillDirSandbox scans for skill directories using Sandbox.
+func scanSkillDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entries, err := sb.ReadDir(ctx, dir, userID)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if !ent.IsDir {
+			continue
+		}
+		key := "skill:" + ent.Name
+		if seen[key] {
+			continue
+		}
+		if _, err := sb.Stat(ctx, dir+"/"+ent.Name+"/SKILL.md", userID); err == nil {
+			seen[key] = true
+			*out = append(*out, key)
+		}
+	}
+}
+
+// scanAgentDirSandbox scans for agent .md files using Sandbox.
+func scanAgentDirSandbox(sb tools.Sandbox, dir, userID string, out *[]string, seen map[string]bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entries, err := sb.ReadDir(ctx, dir, userID)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		if ent.IsDir || !strings.HasSuffix(ent.Name, ".md") {
+			continue
+		}
+		name := strings.TrimSuffix(ent.Name, ".md")
 		key := "agent:" + name
 		if seen[key] {
 			continue
@@ -530,16 +631,33 @@ func (rm *RegistryManager) findSkillDirForUser(name, senderID string) string {
 		return dir
 	}
 	if senderID != "" {
-		// Always check host path directly for user-private skills.
-		hostDir := filepath.Join(tools.UserSkillsRoot(rm.workDir, senderID), name)
-		if _, err := os.Stat(filepath.Join(hostDir, "SKILL.md")); err == nil {
-			return hostDir
+		// In Docker sandbox, also check workspace/.skills where global skills are synced.
+		if rm.isDockerSandbox() {
+			if syncedDir := rm.globalSyncedSkillsDir(senderID); syncedDir != "" {
+				path := filepath.Join(syncedDir, name)
+				ctx, cancel := rm.sandboxCtx()
+				defer cancel()
+				if _, err := rm.sandbox.Stat(ctx, filepath.Join(path, "SKILL.md"), senderID); err == nil {
+					return path
+				}
+			}
+		}
+		path := filepath.Join(rm.userSkillsDir(senderID), name)
+		if rm.useSandbox() {
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
+			if _, err := rm.sandbox.Stat(ctx, filepath.Join(path, "SKILL.md"), senderID); err == nil {
+				return path
+			}
+		} else {
+			if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
+				return path
+			}
 		}
 	}
 	return ""
 }
 
-// findAgentFile finds the .md file for a named agent across global + user dirs.
 func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 	// Search global agents dir
 	if rm.agentStore != nil && rm.agentStore.globalDir != "" {
@@ -548,11 +666,30 @@ func (rm *RegistryManager) findAgentFile(name, senderID string) string {
 			return path
 		}
 	}
-	// Search user-private agents dir: always use host path directly.
+	// Search user-private agents dir
 	if senderID != "" {
-		hostPath := filepath.Join(tools.UserAgentsRoot(rm.workDir, senderID), name+".md")
-		if _, err := os.Stat(hostPath); err == nil {
-			return hostPath
+		// In Docker sandbox, also check workspace/.agents where global agents are synced.
+		if rm.isDockerSandbox() {
+			if syncedDir := rm.globalSyncedAgentsDir(senderID); syncedDir != "" {
+				path := filepath.Join(syncedDir, name+".md")
+				ctx, cancel := rm.sandboxCtx()
+				defer cancel()
+				if _, err := rm.sandbox.Stat(ctx, path, senderID); err == nil {
+					return path
+				}
+			}
+		}
+		path := filepath.Join(rm.userAgentsDir(senderID), name+".md")
+		if rm.useSandbox() {
+			ctx, cancel := rm.sandboxCtx()
+			defer cancel()
+			if _, err := rm.sandbox.Stat(ctx, path, senderID); err == nil {
+				return path
+			}
+		} else {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
 		}
 	}
 	return ""

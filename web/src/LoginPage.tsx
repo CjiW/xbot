@@ -1,14 +1,12 @@
 import { useState } from 'react'
 
-type LoginMode = 'password' | 'feishu'
-
 interface LoginPageProps {
   onLogin: () => void
 }
 
 export default function LoginPage({ onLogin }: LoginPageProps) {
-  const [mode, setMode] = useState<LoginMode>('password')
   const [isRegister, setIsRegister] = useState(false)
+  const [showFeishu, setShowFeishu] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [feishuUserId, setFeishuUserId] = useState('')
@@ -21,7 +19,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
     setLoading(true)
 
     try {
-      if (mode === 'feishu') {
+      if (showFeishu) {
         const res = await fetch('/api/auth/feishu-login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -29,7 +27,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         })
         const data = await res.json()
         if (!data.ok) {
-          setError(data.message || 'Feishu login failed')
+          setError(data.message || '飞书登录失败')
           return
         }
         onLogin()
@@ -46,7 +44,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
       const data = await res.json()
 
       if (!data.ok) {
-        setError(data.message || 'Operation failed')
+        setError(data.message || '操作失败')
         return
       }
 
@@ -59,7 +57,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         })
         const loginData = await loginRes.json()
         if (!loginData.ok) {
-          setError('Registered but login failed, please login manually')
+          setError('注册成功但登录失败，请手动登录')
           setIsRegister(false)
           return
         }
@@ -67,7 +65,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
       onLogin()
     } catch {
-      setError('Network error')
+      setError('网络错误')
     } finally {
       setLoading(false)
     }
@@ -85,30 +83,8 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           onSubmit={handleSubmit}
           className="bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-700"
         >
-          {/* Mode tabs */}
-          <div className="flex mb-5 bg-slate-900/50 rounded-lg p-1">
-            <button
-              type="button"
-              onClick={() => { setMode('password'); setError('') }}
-              className={`flex-1 text-sm py-1.5 rounded-md transition-colors ${
-                mode === 'password' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-300'
-              }`}
-            >
-              密码登录
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('feishu'); setError('') }}
-              className={`flex-1 text-sm py-1.5 rounded-md transition-colors flex items-center justify-center gap-1.5 ${
-                mode === 'feishu' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-300'
-              }`}
-            >
-              飞书登录
-            </button>
-          </div>
-
           <h2 className="text-lg font-semibold text-white mb-4">
-            {mode === 'feishu' ? '飞书账号登录' : isRegister ? 'Create Account' : 'Sign In'}
+            {showFeishu ? '飞书账号登录' : isRegister ? '创建账号' : '登录'}
           </h2>
 
           {error && (
@@ -117,7 +93,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             </div>
           )}
 
-          {mode === 'feishu' ? (
+          {showFeishu ? (
             <>
               <div className="mb-4">
                 <label className="block text-sm text-slate-300 mb-1">飞书用户 ID</label>
@@ -152,26 +128,26 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           ) : (
             <>
               <div className="mb-4">
-                <label className="block text-sm text-slate-300 mb-1">Username</label>
+                <label className="block text-sm text-slate-300 mb-1">用户名</label>
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  placeholder="Enter username"
+                  placeholder="输入用户名"
                   required
                   maxLength={64}
                 />
               </div>
 
               <div className="mb-6">
-                <label className="block text-sm text-slate-300 mb-1">Password</label>
+                <label className="block text-sm text-slate-300 mb-1">密码</label>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                  placeholder="Enter password"
+                  placeholder="输入密码"
                   required
                   maxLength={128}
                 />
@@ -184,20 +160,41 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white font-medium py-2 rounded-lg transition-colors"
           >
-            {loading ? '...' : mode === 'feishu' ? '飞书登录' : isRegister ? 'Register' : 'Sign In'}
+            {loading ? '...' : showFeishu ? '飞书登录' : isRegister ? '注册' : '登录'}
           </button>
 
-          {mode === 'password' && (
+          {!showFeishu && (
             <div className="mt-4 text-center">
               <button
                 type="button"
                 onClick={() => { setIsRegister(!isRegister); setError('') }}
                 className="text-sm text-blue-400 hover:text-blue-300"
               >
-                {isRegister ? 'Already have an account? Sign in' : "Don't have an account? Register"}
+                {isRegister ? '已有账号？登录' : '没有账号？注册'}
               </button>
             </div>
           )}
+
+          {/* 飞书登录入口：降级为底部链接 */}
+          <div className="mt-4 text-center">
+            {showFeishu ? (
+              <button
+                type="button"
+                onClick={() => { setShowFeishu(false); setError('') }}
+                className="text-xs text-slate-500 hover:text-slate-400"
+              >
+                ← 返回账号密码登录
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setShowFeishu(true); setError('') }}
+                className="text-xs text-slate-500 hover:text-slate-400"
+              >
+                通过飞书用户 ID 登录 →
+              </button>
+            )}
+          </div>
         </form>
       </div>
     </div>

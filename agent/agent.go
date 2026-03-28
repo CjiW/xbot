@@ -1258,10 +1258,10 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			}()
 
 			// 沙箱正在 export+import 时，拒绝该用户所有请求
-			if sb := tools.GetSandbox(); sb.IsExporting(msg.SenderID) {
-				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID}).Info("Request rejected: sandbox export in progress")
+			sbUID := sandboxUserID(msg)
+			if sb := tools.GetSandbox(); sb.IsExporting(sbUID) {
+				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID, "sandbox_user": sbUID}).Info("Request rejected: sandbox export in progress")
 				a.sendMessage(msg.Channel, msg.ChatID, "⏳ 沙箱正在持久化中，请稍后再试...")
-				return
 			}
 
 			response, err = a.processMessage(reqCtx, msg)
@@ -1578,8 +1578,9 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := a.workspaceRoot(msg.SenderID)
-	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
+	sbUID := sandboxUserID(msg)
+	workspaceRoot := a.workspaceRoot(sbUID)
+	if err := a.ensureWorkspace(ctx, workspaceRoot, sbUID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)

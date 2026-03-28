@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	log "xbot/logger"
+
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -130,6 +132,11 @@ func (wc *WebChannel) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-detect Feishu identity: look up linked feishu user ID
 	feishuUID := FeishuGetLinkedUserID(wc.db, id)
+	log.WithFields(log.Fields{
+		"username":    req.Username,
+		"user_id":     id,
+		"feishu_user": feishuUID,
+	}).Info("Password login — feishu link check")
 
 	// Create session
 	token := strings.ReplaceAll(uuid.New().String(), "-", "")

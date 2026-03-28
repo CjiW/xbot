@@ -58,13 +58,14 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 	fmt.Fprintf(&buf, "\n--- Total messages: %d ---\n", len(messages))
 
 	// 写入文件并发送
-	workspaceRoot := a.sandboxWorkspace(msg.SenderID)
-	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
+	sbUID := sandboxUserID(msg)
+	workspaceRoot := a.sandboxWorkspace(sbUID)
+	if err := a.ensureWorkspace(ctx, workspaceRoot, sbUID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 	promptFile := filepath.Join(workspaceRoot, "prompt-dryrun.md")
 	if a.sandbox != nil {
-		if err := a.sandbox.WriteFile(ctx, promptFile, []byte(buf.String()), 0o644, msg.SenderID); err != nil {
+		if err := a.sandbox.WriteFile(ctx, promptFile, []byte(buf.String()), 0o644, sbUID); err != nil {
 			return nil, fmt.Errorf("write prompt file: %w", err)
 		}
 	} else {

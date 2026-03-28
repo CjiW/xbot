@@ -325,17 +325,23 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 
 // SetStaticDir sets the directory for serving frontend static files.
 func (wc *WebChannel) SetStaticDir(dir string) {
-	wc.staticDir = dir
+	if dir != "" {
+		wc.staticDir = filepath.Clean(dir)
+	}
 }
 
 // SetUploadDir sets the directory for file uploads.
 func (wc *WebChannel) SetUploadDir(dir string) {
-	wc.uploadDir = dir
+	if dir != "" {
+		wc.uploadDir = filepath.Clean(dir)
+	}
 }
 
 // SetWorkDir sets the working directory for sandbox file access.
 func (wc *WebChannel) SetWorkDir(dir string) {
-	wc.workDir = dir
+	if dir != "" {
+		wc.workDir = filepath.Clean(dir)
+	}
 }
 
 // SetCallbacks injects callback functions from main for API endpoints.
@@ -712,7 +718,7 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try exact path
-	fullPath := wc.staticDir + strings.TrimPrefix(path, "/")
+	fullPath := filepath.Join(wc.staticDir, path)
 	if _, err := os.Stat(fullPath); err == nil {
 		http.FileServer(http.Dir(wc.staticDir)).ServeHTTP(w, r)
 		return

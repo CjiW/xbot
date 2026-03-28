@@ -298,6 +298,7 @@ func Load() *Config {
 			Host:      getEnvOrDefault("WEB_HOST", "0.0.0.0"),
 			Port:      getEnvIntOrDefault("WEB_PORT", 8082),
 			StaticDir: getEnvOrDefault("WEB_STATIC_DIR", ""),
+			UploadDir: getEnvOrDefault("WEB_UPLOAD_DIR", ""),
 		},
 	}
 

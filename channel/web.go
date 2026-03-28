@@ -534,6 +534,12 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	if wc.callbacks.NormalizeSenderID != nil {
 		senderID = wc.callbacks.NormalizeSenderID(senderID)
 	}
+	// If linked to Feishu account, use Feishu identity directly.
+	// This makes the web user share the same session/persona/workspace/skills/agents
+	// as their Feishu account — effectively the same user.
+	if si.feishuUserID != "" {
+		senderID = si.feishuUserID
+	}
 
 	client := &Client{
 		conn:   conn,

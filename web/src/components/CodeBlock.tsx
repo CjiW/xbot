@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useState } from 'react'
 import hljs from 'highlight.js/lib/core'
 import { MermaidBlock } from './MermaidBlock'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -45,41 +45,6 @@ hljs.registerLanguage('cpp', cpp)
 hljs.registerLanguage('c', cpp)
 hljs.registerLanguage('diff', diff)
 
-const containerStyle: CSSProperties = {
-  position: 'relative',
-  borderRadius: '8px',
-  overflow: 'hidden',
-  margin: '0.5em 0',
-}
-
-const headerStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '4px 12px',
-  background: '#161b22',
-  fontSize: '12px',
-  color: '#8b949e',
-}
-
-const codeStyle: CSSProperties = {
-  padding: '12px 16px',
-  overflowX: 'auto',
-  margin: 0,
-  background: '#0d1117',
-}
-
-const copyBtnStyle: CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: '#8b949e',
-  cursor: 'pointer',
-  padding: '2px 6px',
-  borderRadius: '4px',
-  fontSize: '12px',
-  lineHeight: '1.5',
-}
-
 interface CodeBlockProps {
   className?: string
   children?: string
@@ -124,14 +89,14 @@ function CodeBlock({ className, children }: CodeBlockProps) {
   }
 
   return (
-    <div style={containerStyle}>
-      <div style={headerStyle}>
+    <div className="xbot-codeblock">
+      <div className="xbot-codeblock-header">
         <span>{lang || 'code'}</span>
-        <button onClick={handleCopy} style={copyBtnStyle}>
+        <button onClick={handleCopy} className="xbot-codeblock-copy">
           {copied ? '✓ Copied' : 'Copy'}
         </button>
       </div>
-      <pre style={codeStyle}>
+      <pre className="xbot-codeblock-pre">
         <code dangerouslySetInnerHTML={{ __html: highlighted }} />
       </pre>
     </div>
@@ -163,7 +128,7 @@ export function getCodeBlockProps() {
       // Inline code (no className or in a span)
       if (!lang && !codeStr.includes('\n')) {
         return (
-          <code style={{ background: '#1e293b', padding: '2px 6px', borderRadius: '4px', fontSize: '0.9em' }}>
+          <code className="xbot-inline-code">
             {props.children}
           </code>
         )

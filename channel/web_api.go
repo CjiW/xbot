@@ -424,12 +424,13 @@ func (wc *WebChannel) handleMarketInstall(w http.ResponseWriter, r *http.Request
 // ---------------------------------------------------------------------------
 
 type llmConfigResponse struct {
-	OK       bool     `json:"ok"`
-	Provider string   `json:"provider,omitempty"`
-	BaseURL  string   `json:"base_url,omitempty"`
-	Model    string   `json:"model,omitempty"`
-	Models   []string `json:"models,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	OK         bool     `json:"ok"`
+	Provider   string   `json:"provider,omitempty"`
+	BaseURL    string   `json:"base_url,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Models     []string `json:"models,omitempty"`
+	MaxContext int      `json:"max_context,omitempty"`
+	Error      string   `json:"error,omitempty"`
 }
 
 type llmConfigSetRequest struct {
@@ -441,6 +442,10 @@ type llmConfigSetRequest struct {
 
 type llmModelSetRequest struct {
 	Model string `json:"model"`
+}
+
+type llmMaxContextRequest struct {
+	MaxContext int `json:"max_context"`
 }
 
 // handleLLMConfig handles GET/POST/DELETE /api/llm-config
@@ -492,7 +497,12 @@ func (wc *WebChannel) handleLLMConfigGet(w http.ResponseWriter, senderID string)
 		Model:    model,
 		Models:   models,
 	}
+	// Also fetch max context if callback exists
+	if wc.callbacks.LLMGetMaxContext != nil {
+		resp.MaxContext = wc.callbacks.LLMGetMaxContext(senderID)
+	}
 	writeJSON(w, http.StatusOK, resp)
+
 }
 
 func (wc *WebChannel) handleLLMConfigSet(w http.ResponseWriter, r *http.Request, senderID string) {
@@ -532,6 +542,48 @@ func (wc *WebChannel) handleLLMConfigDelete(w http.ResponseWriter, senderID stri
 	}
 
 	writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+}
+
+// handleLLMMaxContext handles GET/POST /api/llm-max-context
+func (wc *WebChannel) handleLLMMaxContext(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, llmConfigResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if wc.callbacks.LLMGetMaxContext == nil {
+			writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+			return
+		}
+		maxCtx := wc.callbacks.LLMGetMaxContext(senderID)
+		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true, MaxContext: maxCtx})
+
+	case http.MethodPost:
+		if wc.callbacks.LLMSetMaxContext == nil {
+			writeJSON(w, http.StatusServiceUnavailable, llmConfigResponse{OK: false, Error: "not configured"})
+			return
+		}
+		var req llmMaxContextRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "invalid request body"})
+			return
+		}
+		if req.MaxContext < 0 {
+			writeJSON(w, http.StatusBadRequest, llmConfigResponse{OK: false, Error: "max_context must be >= 0"})
+			return
+		}
+		if err := wc.callbacks.LLMSetMaxContext(senderID, req.MaxContext); err != nil {
+			writeJSON(w, http.StatusInternalServerError, llmConfigResponse{OK: false, Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleLLMModelSet handles POST /api/llm-config/model (switch model only)
@@ -640,10 +692,12 @@ func (wc *WebChannel) handleMarketMy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build published name set for lookup
+	// Build published name set for lookup (only public entries count as published)
 	publishedSet := make(map[string]string) // name -> description
 	for _, pe := range published {
-		publishedSet[pe.Name] = pe.Description
+		if pe.Sharing == "public" {
+			publishedSet[pe.Name] = pe.Description
+		}
 	}
 
 	result := make([]myMarketEntry, 0)

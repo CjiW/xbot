@@ -56,13 +56,20 @@ func TestUserVisibleIndex(t *testing.T) {
 
 func TestListMessages(t *testing.T) {
 	msgs := makeTestMessages()
-	result := listMessages(msgs)
+	result := listMessagesByTurn(msgs)
 	if result == "" {
-		t.Error("listMessages returned empty string")
+		t.Error("listMessagesByTurn returned empty string")
 	}
-	// Should contain message indices and content previews
-	if !containsStr(result, "Message List") {
-		t.Error("listMessages should contain 'Message List' header")
+	// Should contain turn-based header
+	if !containsStr(result, "Conversation Turns") {
+		t.Error("listMessagesByTurn should contain 'Conversation Turns' header")
+	}
+	// Should contain "Turn 0" and "Turn 1" (two user messages)
+	if !containsStr(result, "Turn 0") {
+		t.Error("listMessagesByTurn should contain 'Turn 0'")
+	}
+	if !containsStr(result, "Turn 1") {
+		t.Error("listMessagesByTurn should contain 'Turn 1'")
 	}
 }
 
@@ -355,4 +362,155 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestIdentifyTurns(t *testing.T) {
+	msgs := makeTestMessages()
+	turns := identifyTurns(msgs)
+
+	// Should have 2 turns (2 user messages)
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(turns))
+	}
+
+	// Turn 0: user(1) + assistant(2) + tool(3) + assistant(4) + tool(5) + assistant(6) = 6 messages
+	t0 := turns[0]
+	if t0.TurnIdx != 0 {
+		t.Errorf("Turn 0: expected TurnIdx=0, got %d", t0.TurnIdx)
+	}
+	if t0.StartSliceIdx != 1 {
+		t.Errorf("Turn 0: expected StartSliceIdx=1, got %d", t0.StartSliceIdx)
+	}
+	if t0.EndSliceIdx != 6 {
+		t.Errorf("Turn 0: expected EndSliceIdx=6, got %d", t0.EndSliceIdx)
+	}
+	if t0.MsgCount != 6 {
+		t.Errorf("Turn 0: expected MsgCount=6, got %d", t0.MsgCount)
+	}
+	if t0.ToolCount != 2 {
+		t.Errorf("Turn 0: expected ToolCount=2, got %d", t0.ToolCount)
+	}
+
+	// Turn 1: user(7) + assistant(8) = 2 messages
+	t1 := turns[1]
+	if t1.TurnIdx != 1 {
+		t.Errorf("Turn 1: expected TurnIdx=1, got %d", t1.TurnIdx)
+	}
+	if t1.StartSliceIdx != 7 {
+		t.Errorf("Turn 1: expected StartSliceIdx=7, got %d", t1.StartSliceIdx)
+	}
+	if t1.EndSliceIdx != 8 {
+		t.Errorf("Turn 1: expected EndSliceIdx=8, got %d", t1.EndSliceIdx)
+	}
+	if t1.MsgCount != 2 {
+		t.Errorf("Turn 1: expected MsgCount=2, got %d", t1.MsgCount)
+	}
+	if t1.ToolCount != 0 {
+		t.Errorf("Turn 1: expected ToolCount=0, got %d", t1.ToolCount)
+	}
+}
+
+func TestIdentifyTurns_NoUserMessages(t *testing.T) {
+	msgs := []llm.ChatMessage{
+		{Role: "system", Content: "system prompt"},
+	}
+	turns := identifyTurns(msgs)
+	if len(turns) != 0 {
+		t.Errorf("expected 0 turns for system-only messages, got %d", len(turns))
+	}
+}
+
+func TestContextEditor_DeleteTurn(t *testing.T) {
+	store := NewContextEditStore(10)
+	editor := NewContextEditor(store)
+	msgs := makeTestMessages()
+	editor.SetMessages(msgs)
+
+	// Delete turn 0 (user msg at idx 0 through assistant at idx 6 in visible, slice 1-6)
+	result, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+		"turn_idx": float64(0),
+		"reason":   "old conversation",
+	})
+	if err != nil {
+		t.Fatalf("HandleRequest(delete_turn) error: %v", err)
+	}
+	if !containsStr(result, "Deleted turn 0") {
+		t.Errorf("expected 'Deleted turn 0' in result, got: %s", result)
+	}
+
+	// Verify all messages in turn 0 are replaced
+	for i := 1; i <= 6; i++ {
+		if !containsStr(msgs[i].Content, "[context edited:") {
+			t.Errorf("message slice idx %d (role=%s) should be replaced, got: %s", i, msgs[i].Role, msgs[i].Content[:min(80, len(msgs[i].Content))])
+		}
+		// ToolCalls should be cleared for assistant messages
+		if msgs[i].Role == "assistant" && len(msgs[i].ToolCalls) > 0 {
+			t.Errorf("message slice idx %d: ToolCalls should be nil", i)
+		}
+	}
+
+	// Verify turn 1 (last turn, protected) is NOT modified
+	if containsStr(msgs[7].Content, "[context edited:") {
+		t.Error("turn 1 user message should not be modified")
+	}
+	if containsStr(msgs[8].Content, "[context edited:") {
+		t.Error("turn 1 assistant message should not be modified")
+	}
+
+	// Verify history
+	history := store.History()
+	if len(history) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(history))
+	}
+	if history[0].Action != ContextEditDeleteTurn {
+		t.Errorf("expected delete_turn action, got %s", history[0].Action)
+	}
+}
+
+func TestContextEditor_DeleteTurnLastProtected(t *testing.T) {
+	store := NewContextEditStore(10)
+	editor := NewContextEditor(store)
+	msgs := makeTestMessages()
+	editor.SetMessages(msgs)
+
+	// Try to delete last turn (turn 1) — should fail
+	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+		"turn_idx": float64(1),
+		"reason":   "should fail",
+	})
+	if err == nil {
+		t.Error("expected error: cannot delete last turn")
+	}
+	if !containsStr(err.Error(), "protected") {
+		t.Errorf("expected 'protected' in error, got: %s", err.Error())
+	}
+}
+
+func TestContextEditor_DeleteTurnOutOfRange(t *testing.T) {
+	store := NewContextEditStore(10)
+	editor := NewContextEditor(store)
+	msgs := makeTestMessages()
+	editor.SetMessages(msgs)
+
+	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+		"turn_idx": float64(99),
+		"reason":   "out of range",
+	})
+	if err == nil {
+		t.Error("expected error: out of range")
+	}
+}
+
+func TestContextEditor_DeleteTurnMissingIdx(t *testing.T) {
+	store := NewContextEditStore(10)
+	editor := NewContextEditor(store)
+	msgs := makeTestMessages()
+	editor.SetMessages(msgs)
+
+	_, err := editor.HandleRequest("delete_turn", map[string]interface{}{
+		"reason": "missing turn_idx",
+	})
+	if err == nil {
+		t.Error("expected error: turn_idx is required")
+	}
 }

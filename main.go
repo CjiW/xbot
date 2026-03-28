@@ -362,8 +362,45 @@ func main() {
 				LLMDelete: func(senderID string) error {
 					return agentLoop.DeleteUserLLM(senderID)
 				},
+				LLMGetMaxContext: func(senderID string) int {
+					return agentLoop.GetUserMaxContext(senderID)
+				},
+				LLMSetMaxContext: func(senderID string, maxContext int) error {
+					return agentLoop.SetUserMaxContext(senderID, maxContext)
+				},
+
 				NormalizeSenderID: func(senderID string) string {
 					return agentLoop.NormalizeSenderID(senderID)
+				},
+				SandboxWriteFile: func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (string, error) {
+					sandbox := tools.GetSandbox()
+					if sandbox == nil {
+						return "", fmt.Errorf("no sandbox available")
+					}
+					// Resolve per-user sandbox (e.g., remote runner vs docker)
+					resolver, ok := sandbox.(tools.SandboxResolver)
+					if !ok {
+						return "", fmt.Errorf("sandbox does not support per-user resolution")
+					}
+					userSbx := resolver.SandboxForUser(senderID)
+					if userSbx == nil || userSbx.Name() == "none" {
+						return "", fmt.Errorf("no sandbox available for user %s", senderID)
+					}
+					// Build absolute path inside sandbox (e.g., /workspace/uploads/file.txt)
+					ws := userSbx.Workspace(senderID)
+					absPath := filepath.Join(ws, sandboxRelPath)
+					// Ensure parent directory exists
+					dir := filepath.Dir(absPath)
+					if err := userSbx.MkdirAll(context.Background(), dir, 0755, senderID); err != nil {
+						log.WithError(err).Warn("Failed to create directory in sandbox")
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := userSbx.WriteFile(ctx, absPath, data, perm, senderID); err != nil {
+						return "", err
+					}
+					// Return the workspace path prefix so the caller can build the display path
+					return ws, nil
 				},
 			})
 			disp.Register(webCh)

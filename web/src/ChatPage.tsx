@@ -2,8 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import type { TiptapEditorHandle } from './components/TiptapEditor'
 import type { PresetCommand } from './types'
 import ProgressPanel from './components/ProgressPanel'
-import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
+
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
+
+
 import TiptapEditor from './components/TiptapEditor'
 import SettingsPanel from './components/SettingsPanel'
 import FileUpload, { uploadFile, usePasteUpload, type PendingFile } from './components/FileUpload'
@@ -494,12 +499,13 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     setLoading(true)
     setAutoScroll(true)
 
-    const payload: { type: string; content: string; file_ids?: string[] } = {
+    const payload: { type: string; content: string; file_ids?: string[]; file_names?: string[] } = {
       type: 'message',
       content,
     }
     if (pendingFiles.length > 0) {
       payload.file_ids = pendingFiles.map((f) => f.id)
+      payload.file_names = pendingFiles.map((f) => f.name)
       setPendingFiles([])
     }
 
@@ -670,19 +676,19 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           return turns.map((turn, i) => {
             const isLatestTurn = i === turns.length - 1
             if (turn.type === 'user') {
-              const content = (
-                <div className="flex justify-end msg-fade-in">
-                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white">
-                    <p className="whitespace-pre-wrap">{turn.message.content}</p>
-                    {turn.message.ts && (
-                      <div className="text-xs mt-1 text-right text-blue-200/50">
-                        {formatTime(turn.message.ts)}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-              // Latest turn always renders; older turns lazy-load
+	              const content = (
+	                <div className="flex justify-end msg-fade-in">
+	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
+	                    <Markdown remarkPlugins={[remarkGfm]}>{turn.message.content}</Markdown>
+	                    {turn.message.ts && (
+	                      <div className="text-xs mt-1 text-right text-blue-200/50">
+	                        {formatTime(turn.message.ts)}
+	                      </div>
+	                    )}
+	                  </div>
+	                </div>
+	              )
+
               return isLatestTurn ? (
                 <div key={turn.message.id}>{content}</div>
               ) : (

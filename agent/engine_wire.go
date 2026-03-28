@@ -128,6 +128,9 @@ func (a *Agent) buildMainRunConfig(
 
 	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName)
 
+	// 飞书身份登录 web 时，用飞书用户 ID 路由 runner
+	cfg.FeishuUserID = msg.Metadata["feishu_user_id"]
+
 	// 主 Agent 特有字段
 	cfg.Session = tenantSession
 

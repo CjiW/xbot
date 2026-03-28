@@ -53,6 +53,7 @@ type RunConfig struct {
 	SenderID     string // 直接调用者 ID（SubAgent 场景下为父 Agent ID）
 	OriginUserID string // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等）
 	SenderName   string
+	FeishuUserID string // 非空表示通过飞书身份登录 web（用于 runner 路由）
 
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）
@@ -1430,7 +1431,13 @@ func resolveSandbox(sandbox tools.Sandbox, userID string) tools.Sandbox {
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	// Resolve per-user sandbox BEFORE building ToolContext.
 	// For remote users, the resolved sandbox is RemoteSandbox (Name() == "remote").
-	resolvedSandbox := resolveSandbox(cfg.Sandbox, cfg.SenderID)
+	// If FeishuUserID is set (web login via Feishu identity), use it for routing
+	// so the user gets the same runner as on the Feishu side.
+	sandboxUserID := cfg.SenderID
+	if cfg.FeishuUserID != "" {
+		sandboxUserID = cfg.FeishuUserID
+	}
+	resolvedSandbox := resolveSandbox(cfg.Sandbox, sandboxUserID)
 	isRemote := resolvedSandbox != nil && resolvedSandbox.Name() == "remote"
 
 	// For remote users, leave WorkspaceRoot/WorkingDir empty — the runner

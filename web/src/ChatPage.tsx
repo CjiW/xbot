@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import type { TiptapEditorHandle } from './components/TiptapEditor'
 import ProgressPanel from './components/ProgressPanel'
 import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
@@ -159,6 +160,15 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+interface PresetCommand {
+  id: string
+  label: string
+  icon: string
+  content: string
+  fill?: boolean
+  sort: number
+}
+
 export default function ChatPage({ onLogout }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [connected, setConnected] = useState(false)
@@ -173,6 +183,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [dragActive, setDragActive] = useState(false)
   const [nickname, setNickname] = useState<string>(() => localStorage.getItem('xbot-nickname') || '')
+  const editorRef = useRef<TiptapEditorHandle>(null)
+  const [presets, setPresets] = useState<PresetCommand[]>([])
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -514,6 +526,30 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     prevIterationRef.current = -1
   }, [])
 
+  // --- Preset commands ---
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok && data.settings?.preset_commands) {
+          try {
+            const parsed = JSON.parse(data.settings.preset_commands)
+            if (Array.isArray(parsed)) setPresets(parsed)
+          } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const handlePresetClick = useCallback((preset: PresetCommand) => {
+    if (preset.fill) {
+      editorRef.current?.setContent(preset.content)
+      editorRef.current?.focus()
+    } else {
+      handleSend(preset.content)
+    }
+  }, [handleSend])
+
   // --- Logout ---
   const handleLogout = async () => {
     if (reconnectTimerRef.current) {
@@ -698,6 +734,25 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         </button>
       )}
 
+      {/* Preset commands bar */}
+      {presets.length > 0 && (
+        <div className="preset-bar">
+          {presets
+            .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+            .map((p) => (
+              <button
+                key={p.id}
+                className="preset-chip"
+                onClick={() => handlePresetClick(p)}
+                disabled={loading || !connected}
+                title={p.content.length > 50 ? p.content.slice(0, 50) + '...' : p.content}
+              >
+                {p.icon || '⚡'} {p.label}
+              </button>
+            ))}
+        </div>
+      )}
+
       {/* Input area */}
       <div className="px-4 py-3 bg-slate-800 border-t border-slate-700">
         <div className="flex items-end gap-3 max-w-4xl mx-auto">
@@ -720,6 +775,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               </div>
             )}
             <TiptapEditor
+              ref={editorRef}
               onSend={handleSend}
               disabled={loading}
               connected={connected}
@@ -746,6 +802,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onNicknameChange={(n) => setNickname(n)}
+        onPresetsChange={setPresets}
       />
     </div>
   )

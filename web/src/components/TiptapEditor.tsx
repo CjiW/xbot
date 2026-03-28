@@ -6,7 +6,7 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { Markdown } from 'tiptap-markdown'
 import { common, createLowlight } from 'lowlight'
-import { useEffect } from 'react'
+import { useEffect, useImperativeHandle, forwardRef } from 'react'
 
 const lowlight = createLowlight(common)
 
@@ -16,11 +16,19 @@ interface TiptapEditorProps {
   connected: boolean
 }
 
-export default function TiptapEditor({ onSend, disabled, connected }: TiptapEditorProps) {
+export interface TiptapEditorHandle {
+  /** Set editor content (markdown string) and focus at end */
+  setContent: (md: string) => void
+  /** Focus the editor */
+  focus: () => void
+}
+
+const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
+  function TiptapEditor({ onSend, disabled, connected }, ref) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        codeBlock: false, // We use CodeBlockLowlight instead
+        codeBlock: false,
       }),
       Placeholder.configure({
         placeholder: connected ? '输入消息...' : '连接中...',
@@ -62,6 +70,19 @@ export default function TiptapEditor({ onSend, disabled, connected }: TiptapEdit
     }
   }, [editor, disabled, connected])
 
+  // Expose setContent and focus to parent via ref
+  useImperativeHandle(ref, () => ({
+    setContent: (md: string) => {
+      if (!editor) return
+      editor.commands.setContent(md)
+      // Move cursor to end
+      editor.commands.focus('end')
+    },
+    focus: () => {
+      editor?.commands.focus()
+    },
+  }), [editor])
+
   const handleSend = () => {
     if (!editor) return
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,4 +108,6 @@ export default function TiptapEditor({ onSend, disabled, connected }: TiptapEdit
       </button>
     </div>
   )
-}
+})
+
+export default TiptapEditor

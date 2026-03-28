@@ -2,9 +2,11 @@ package channel
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +17,99 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// strongPasswordChars defines the character sets for password generation.
+var strongPasswordChars = []string{
+	"abcdefghijklmnopqrstuvwxyz",
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	"0123456789",
+	"!@#$%^&*-_=+?",
+}
+
+// GenerateStrongPassword generates a cryptographically secure random password.
+func GenerateStrongPassword(length int) (string, error) {
+	if length < 12 {
+		length = 16
+	}
+	allChars := strings.Join(strongPasswordChars, "")
+
+	var password strings.Builder
+	// Ensure at least one character from each set
+	for _, set := range strongPasswordChars {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(set))))
+		if err != nil {
+			return "", err
+		}
+		password.WriteByte(set[n.Int64()])
+	}
+	// Fill remaining length
+	remaining := length - len(strongPasswordChars)
+	for i := 0; i < remaining; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(allChars))))
+		if err != nil {
+			return "", err
+		}
+		password.WriteByte(allChars[n.Int64()])
+	}
+
+	// Shuffle using Fisher-Yates
+	result := []byte(password.String())
+	for i := len(result) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return "", err
+		}
+		result[i], result[j.Int64()] = result[j.Int64()], result[i]
+	}
+	return string(result), nil
+}
+
+// CreateWebUser creates a new web user with auto-generated strong password.
+// Returns (username, plaintextPassword, error).
+func CreateWebUser(db *sql.DB, username string) (string, string, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || len(username) > 64 {
+		return "", "", fmt.Errorf("invalid username (must be 1-64 chars)")
+	}
+
+	// Check uniqueness
+	var existingID int
+	if err := db.QueryRow("SELECT id FROM web_users WHERE username = ?", username).Scan(&existingID); err == nil {
+		return "", "", fmt.Errorf("username %q already exists", username)
+	}
+
+	// Generate strong password
+	password, err := GenerateStrongPassword(16)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate password: %w", err)
+	}
+
+	// Hash password
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Insert user
+	result, err := db.Exec(
+		"INSERT INTO web_users (username, password) VALUES (?, ?)",
+		username, string(hash),
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return "", "", fmt.Errorf("username %q already exists", username)
+		}
+		return "", "", fmt.Errorf("failed to create user: %w", err)
+	}
+
+	id, _ := result.LastInsertId()
+	log.WithFields(log.Fields{
+		"user_id":  id,
+		"username": username,
+	}).Info("Web user created by admin")
+
+	return username, password, nil
+}
 
 // ---------------------------------------------------------------------------
 // Auth handlers
@@ -57,6 +152,12 @@ type feishuLinkResponse struct {
 func (wc *WebChannel) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Invite-only mode: reject self-registration
+	if wc.config.InviteOnly {
+		writeJSON(w, http.StatusForbidden, authResponse{OK: false, Message: "registration is invite-only, please contact admin"})
 		return
 	}
 
@@ -454,6 +555,14 @@ func senderIDFromContext(ctx context.Context) string {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// handleAuthConfig handles GET /api/auth/config
+// Returns public auth configuration (e.g., invite-only mode).
+func (wc *WebChannel) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"invite_only": wc.config.InviteOnly,
+	})
+}
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

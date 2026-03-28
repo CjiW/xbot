@@ -95,6 +95,7 @@ type WebConfig struct {
 	StaticDir        string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
 	UploadDir        string // 文件上传目录（可选，默认 workspace/uploads）
 	PersonaIsolation bool   // 启用后每个 web 用户使用独立 persona，不回退到全局 persona
+	InviteOnly       bool   // 启用后禁止自主注册，新账号只能由 admin 通过飞书命令创建
 }
 
 // Config 应用配置
@@ -301,6 +302,7 @@ func Load() *Config {
 			StaticDir:        getEnvOrDefault("WEB_STATIC_DIR", ""),
 			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
 			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
+				InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
 		},
 	}
 

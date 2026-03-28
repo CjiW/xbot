@@ -50,6 +50,7 @@ type WebChannelConfig struct {
 	DB               *sql.DB // SQLite DB handle for user management and history
 	MemoryWindow     int
 	FeishuLinkSecret string // admin token for /api/auth/feishu-link endpoint
+	InviteOnly       bool   // 禁止自主注册，新账号只能由 admin 创建
 }
 
 // WebCallbacks holds callback functions for Web channel API endpoints.
@@ -381,6 +382,7 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/auth/logout", wc.handleLogout)
 	mux.HandleFunc("/api/auth/feishu-link", wc.handleFeishuLink)
 	mux.HandleFunc("/api/auth/feishu-login", wc.handleFeishuLogin)
+	mux.HandleFunc("/api/auth/config", wc.handleAuthConfig)
 
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))

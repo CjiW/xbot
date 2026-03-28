@@ -25,8 +25,9 @@ function LazyTurn({ children }: { children: React.ReactNode }) {
     const container = el.parentElement
     // Skip IntersectionObserver for small message lists — overhead not worth it
     if ((container?.children.length ?? 0) < 30) {
-      setVisible(true)
-      return
+      // Use microtask to avoid synchronous setState in effect
+      const raf = requestAnimationFrame(() => setVisible(true))
+      return () => cancelAnimationFrame(raf)
     }
     const observer = new IntersectionObserver(
       ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect() } },
@@ -246,6 +247,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               return msg
             })
           setMessages(hist)
+          // If the last message is from the user, the backend is still processing.
+          // Set loading so the progress panel shows up once WS delivers events.
+          if (hist.length > 0 && hist[hist.length - 1].type === 'user') {
+            setLoading(true)
+          }
           setTimeout(scrollToBottom, 100)
         }
       })
@@ -253,6 +259,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   }, [scrollToBottom])
 
   // --- WebSocket connection with reconnect ---
+  const connectWSRef = useRef<() => void>(() => {})
   const connectWS = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`

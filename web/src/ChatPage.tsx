@@ -190,6 +190,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const reconnectDelayRef = useRef(1000)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverStopped = useRef(false)
+  const intentionalClose = useRef(false)
 
 
   // --- Scroll management ---
@@ -269,6 +270,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       setConnected(true)
       setReconnecting(false)
       serverStopped.current = false
+      intentionalClose.current = false
       reconnectDelayRef.current = 1000
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
@@ -280,8 +282,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       setConnected(false)
 
       // Normal closure (1000) or going away (1001) = server shutdown, don't reconnect
+      // Skip if this is an intentional close (logout / component unmount)
       if (e.code === 1000 || e.code === 1001) {
-        serverStopped.current = true
+        if (!intentionalClose.current) {
+          serverStopped.current = true
+        }
         setReconnecting(false)
         return
       }
@@ -483,6 +488,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
       }
+      intentionalClose.current = true
       wsRef.current?.close()
     }
   }, [connectWS])
@@ -558,6 +564,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
     }
+    intentionalClose.current = true
     await fetch('/api/auth/logout', { method: 'POST' })
     wsRef.current?.close()
     onLogout()

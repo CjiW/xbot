@@ -128,13 +128,17 @@ func (wc *WebChannel) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-detect Feishu identity: look up linked feishu user ID
+	feishuUID := FeishuGetLinkedUserID(wc.db, id)
+
 	// Create session
 	token := strings.ReplaceAll(uuid.New().String(), "-", "")
 	wc.sessionsMu.Lock()
 	wc.sessions[token] = sessionInfo{
-		userID:   id,
-		username: strings.TrimSpace(req.Username),
-		expires:  time.Now().Add(webSessionMaxAge),
+		userID:       id,
+		username:     strings.TrimSpace(req.Username),
+		feishuUserID: feishuUID,
+		expires:      time.Now().Add(webSessionMaxAge),
 	}
 	wc.sessionsMu.Unlock()
 
@@ -278,6 +282,20 @@ func FeishuLinkUser(db *sql.DB, feishuUserID, username, password string) (string
 	)
 
 	return username, nil
+}
+
+// FeishuGetLinkedUserID returns the Feishu user ID linked to a web user ID.
+// Returns empty string if no link exists.
+func FeishuGetLinkedUserID(db *sql.DB, webUserID int) string {
+	var feishuUID string
+	err := db.QueryRow(
+		`SELECT sender_id FROM user_settings WHERE channel = 'feishu' AND key = 'web_user_id' AND value = ?`,
+		strconv.Itoa(webUserID),
+	).Scan(&feishuUID)
+	if err != nil {
+		return ""
+	}
+	return feishuUID
 }
 
 // FeishuGetLinkedUser returns the linked web username for a Feishu user.

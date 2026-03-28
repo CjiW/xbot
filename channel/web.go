@@ -736,7 +736,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		// Eagerly save user message so history API can return it during processing.
 		// Skip bang commands (! prefix) — they should never be persisted.
 		trimmed := strings.TrimSpace(content)
-		if !(len(trimmed) > 1 && trimmed[0] == '!') {
+		if len(trimmed) <= 1 || trimmed[0] != '!' {
 			_ = eagerSaveUserMsg(wc.db, c.userID, content)
 			metadata["user_msg_eager_saved"] = "true"
 		}

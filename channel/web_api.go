@@ -3,6 +3,7 @@ package channel
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -177,6 +178,18 @@ func (wc *WebChannel) handleUpdateSettings(w http.ResponseWriter, r *http.Reques
 	if len(req.Settings) == 0 {
 		writeJSON(w, http.StatusBadRequest, settingsResponse{OK: false, Error: "no settings provided"})
 		return
+	}
+
+	// Validate value sizes (prevent storing excessively large values, e.g. preset_commands JSON)
+	const maxSettingValueLen = 32768 // 32KB per setting value
+	for k, v := range req.Settings {
+		if len(v) > maxSettingValueLen {
+			writeJSON(w, http.StatusBadRequest, settingsResponse{
+				OK:    false,
+				Error: fmt.Sprintf("setting %q value too large (max %d bytes)", k, maxSettingValueLen),
+			})
+			return
+		}
 	}
 
 	now := time.Now().Unix()

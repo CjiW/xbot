@@ -180,7 +180,14 @@ func (wc *WebChannel) handleUpdateSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Validate value sizes (prevent storing excessively large values, e.g. preset_commands JSON)
+	// Validate request size
+	const maxSettingKeys = 20
+	if len(req.Settings) > maxSettingKeys {
+		writeJSON(w, http.StatusBadRequest, settingsResponse{
+			OK: false, Error: fmt.Sprintf("too many settings (max %d)", maxSettingKeys),
+		})
+		return
+	}
 	const maxSettingValueLen = 32768 // 32KB per setting value
 	for k, v := range req.Settings {
 		if len(v) > maxSettingValueLen {

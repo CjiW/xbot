@@ -1,13 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 
-interface PresetCommand {
-  id: string
-  label: string
-  icon: string
-  content: string
-  fill?: boolean
-  sort: number
-}
+import type { PresetCommand } from '../types'
 
 interface SettingsPanelProps {
   open: boolean
@@ -31,6 +24,7 @@ interface UserSettings {
   font_size: FontSize
   nickname: string
   language: Language
+  preset_commands?: string
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -67,6 +61,7 @@ async function fetchSettings(): Promise<UserSettings> {
         font_size: (data.settings.font_size as FontSize) || lsGet('font_size', DEFAULT_SETTINGS.font_size),
         nickname: data.settings.nickname || lsGet('nickname', DEFAULT_SETTINGS.nickname),
         language: (data.settings.language as Language) || lsGet('language', DEFAULT_SETTINGS.language),
+        preset_commands: data.settings.preset_commands,
       }
     }
   } catch {
@@ -174,19 +169,14 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       setFontSize(s.font_size)
       setNickname(s.nickname)
       setLanguage(s.language)
+      // Load presets from the same response
+      if (s.preset_commands) {
+        try {
+          const parsed = JSON.parse(s.preset_commands)
+          if (Array.isArray(parsed)) setPresetList(parsed)
+        } catch { /* ignore */ }
+      }
     })
-    // Load presets
-    fetch('/api/settings')
-      .then(r => r.json())
-      .then(data => {
-        if (data.ok && data.settings?.preset_commands) {
-          try {
-            const parsed = JSON.parse(data.settings.preset_commands)
-            if (Array.isArray(parsed)) setPresetList(parsed)
-          } catch { /* ignore */ }
-        }
-      })
-      .catch(() => {})
   }, [open])
 
   // Apply theme
@@ -299,7 +289,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const savePresets = useCallback(async (list: PresetCommand[]) => {
     setPresetSaving(true)
     const sorted = [...list].sort((a, b) => a.sort - b.sort)
-    const ok = await saveSettings({ preset_commands: JSON.stringify(sorted) } as Record<string, string>)
+    const ok = await saveSettings({ preset_commands: JSON.stringify(sorted) })
     if (ok) {
       setPresetList(sorted)
       onPresetsChange?.(sorted)
@@ -324,11 +314,12 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     const newList = exists
       ? presetList.map(p => p.id === preset.id ? preset : p)
       : [...presetList, preset]
-    await savePresets(newList)
-    setEditingPreset(null)
+    const ok = await savePresets(newList)
+    if (ok) setEditingPreset(null)
   }, [presetList, savePresets])
 
   const handlePresetDelete = useCallback(async (id: string) => {
+    if (!confirm('确认删除此快捷指令？')) return
     const newList = presetList
       .filter(p => p.id !== id)
       .map((p, i) => ({ ...p, sort: i }))

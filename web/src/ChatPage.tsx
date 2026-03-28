@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { TiptapEditorHandle } from './components/TiptapEditor'
+import type { PresetCommand } from './types'
 import ProgressPanel from './components/ProgressPanel'
 import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
 import AssistantTurn from './components/AssistantTurn'
@@ -158,15 +159,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
-
-interface PresetCommand {
-  id: string
-  label: string
-  icon: string
-  content: string
-  fill?: boolean
-  sort: number
 }
 
 export default function ChatPage({ onLogout }: ChatPageProps) {
@@ -544,7 +536,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const handlePresetClick = useCallback((preset: PresetCommand) => {
     if (preset.fill) {
       editorRef.current?.setContent(preset.content)
-      editorRef.current?.focus()
     } else {
       handleSend(preset.content)
     }
@@ -737,7 +728,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       {/* Preset commands bar */}
       {presets.length > 0 && (
         <div className="preset-bar">
-          {presets
+          {[...presets]
             .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
             .map((p) => (
               <button

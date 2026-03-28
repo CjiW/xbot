@@ -675,6 +675,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           const turns = groupMessagesIntoTurns(messages)
           return turns.map((turn, i) => {
             const isLatestTurn = i === turns.length - 1
+            // Only bind live progress to the latest assistant turn if we are
+            // actively processing a request. After a page refresh the last
+            // historical assistant turn would otherwise steal the progress.
+            const isActive = loading || progress !== null
             if (turn.type === 'user') {
 	              const content = (
 	                <div className="flex justify-end msg-fade-in">
@@ -701,9 +705,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               <AssistantTurn
                 key={turn.messages[0].id}
                 messages={turn.messages}
-                progress={isLatestTurn ? progress : null}
-                liveIterations={isLatestTurn ? liveIterations : undefined}
-                loading={isLatestTurn && loading}
+                progress={isLatestTurn && isActive ? progress : null}
+                liveIterations={isLatestTurn && isActive ? liveIterations : undefined}
+                loading={isLatestTurn && isActive && loading}
                 savedProgress={turnSavedProgress}
               />
             )

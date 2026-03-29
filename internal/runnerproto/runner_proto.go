@@ -14,14 +14,15 @@ import (
 
 // Request types (Server → Runner)
 const (
-	ProtoExec      = "exec"
-	ProtoReadFile  = "read_file"
-	ProtoWriteFile = "write_file"
-	ProtoStat      = "stat"
-	ProtoReadDir   = "read_dir"
-	ProtoMkdirAll  = "mkdir_all"
-	ProtoRemove    = "remove"
-	ProtoRemoveAll = "remove_all"
+	ProtoExec         = "exec"
+	ProtoReadFile     = "read_file"
+	ProtoWriteFile    = "write_file"
+	ProtoStat         = "stat"
+	ProtoReadDir      = "read_dir"
+	ProtoMkdirAll     = "mkdir_all"
+	ProtoRemove       = "remove"
+	ProtoRemoveAll    = "remove_all"
+	ProtoDownloadFile = "download_file"
 )
 
 // Response types (Runner → Server)
@@ -121,6 +122,17 @@ type DirEntriesResponse struct {
 type PathRequest struct {
 	Path string `json:"path"`
 	Perm int    `json:"perm,omitempty"`
+}
+
+// DownloadFileRequest requests the runner to download a file from a URL.
+type DownloadFileRequest struct {
+	URL        string `json:"url"`         // URL to download from
+	OutputPath string `json:"output_path"` // absolute path to save the file
+}
+
+// DownloadFileResponse contains the download result.
+type DownloadFileResponse struct {
+	Size int64 `json:"size"` // downloaded file size in bytes
 }
 
 // ErrorResponse is a generic error response.

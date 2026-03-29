@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,12 @@ import (
 type nativeExecutor struct {
 	workspace string
 }
+
+// maxDownloadSize is the maximum file size for download operations (100MB).
+const maxDownloadSize = 100 * 1024 * 1024
+
+// httpClient is a dedicated HTTP client for download operations.
+var httpClient = &http.Client{Timeout: 0} // use context timeout instead
 
 func newNativeExecutor(workspace string) *nativeExecutor {
 	return &nativeExecutor{workspace: workspace}
@@ -148,6 +156,42 @@ func (e *nativeExecutor) Remove(path string) error {
 
 func (e *nativeExecutor) RemoveAll(path string) error {
 	return os.RemoveAll(path)
+}
+
+func (e *nativeExecutor) DownloadFile(ctx context.Context, url, outputPath string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("create request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("download request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	dir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, fmt.Errorf("create dir: %w", err)
+	}
+
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return 0, fmt.Errorf("create file: %w", err)
+	}
+	defer f.Close()
+
+	written, err := io.Copy(f, io.LimitReader(resp.Body, maxDownloadSize))
+	if err != nil {
+		return 0, fmt.Errorf("write file: %w", err)
+	}
+	if written >= maxDownloadSize {
+		return 0, fmt.Errorf("file exceeds maximum size (%d bytes)", maxDownloadSize)
+	}
+	return written, nil
 }
 
 // joinArgs joins command args for logging.

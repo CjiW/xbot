@@ -4,12 +4,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+
+	log "xbot/logger"
 )
 
 // NoneSandbox implements Sandbox with direct os.* calls (no containerization).
 type NoneSandbox struct{}
+
+// maxNoneDownloadSize is the maximum download size for NoneSandbox (100MB).
+const maxNoneDownloadSize = 100 * 1024 * 1024
+
+// noneDownloadHTTPClient is a dedicated HTTP client for NoneSandbox downloads.
+var noneDownloadHTTPClient = &http.Client{Timeout: 0} // use context timeout
 
 func (s *NoneSandbox) Name() string              { return "none" }
 func (s *NoneSandbox) Workspace(_ string) string { return "" }
@@ -140,4 +151,41 @@ func (s *NoneSandbox) Remove(ctx context.Context, path string, userID string) er
 
 func (s *NoneSandbox) RemoveAll(ctx context.Context, path string, userID string) error {
 	return os.RemoveAll(path)
+}
+
+func (s *NoneSandbox) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	resp, err := noneDownloadHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return fmt.Errorf("create dir: %w", err)
+	}
+
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer f.Close()
+
+	written, err := io.Copy(f, io.LimitReader(resp.Body, maxNoneDownloadSize))
+	if err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+	if written >= maxNoneDownloadSize {
+		return fmt.Errorf("downloaded file exceeds maximum size (%d bytes)", maxNoneDownloadSize)
+	}
+
+	log.WithFields(log.Fields{"url": url, "output_path": outputPath, "size": written}).Info("File downloaded (none sandbox)")
+	return nil
 }

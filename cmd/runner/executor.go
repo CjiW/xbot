@@ -20,6 +20,9 @@ type Executor interface {
 	Remove(path string) error
 	RemoveAll(path string) error
 
+	// 端侧下载
+	DownloadFile(ctx context.Context, url, outputPath string) (int64, error)
+
 	// 生命周期
 	Close() error
 }

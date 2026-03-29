@@ -131,7 +131,7 @@ type RunnerInfo struct {
 
 // CreateRunner creates a new named runner for the user, generates a token.
 // Returns the token and the xbot-runner connect command fragment.
-func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) (token, command string, err error) {
+func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage, workspace string) (token, command string, err error) {
 	if name == "" {
 		return "", "", fmt.Errorf("runner name is required")
 	}
@@ -157,28 +157,30 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) 
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-		INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
-		VALUES (?, ?, ?, ?, ?, '', ?)
-		ON CONFLICT(user_id, name) DO UPDATE SET
-			token = excluded.token,
-			mode = excluded.mode,
-			docker_image = excluded.docker_image,
-			created_at = excluded.created_at
-	`, userID, name, token, mode, dockerImage, now)
+			INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(user_id, name) DO UPDATE SET
+				token = excluded.token,
+				mode = excluded.mode,
+				docker_image = excluded.docker_image,
+				workspace = excluded.workspace,
+				created_at = excluded.created_at
+		`, userID, name, token, mode, dockerImage, workspace, now)
 	if err != nil {
 		return "", "", fmt.Errorf("insert runner: %w", err)
 	}
 
 	// Also upsert into runner_tokens for backward compatibility.
 	_, err = tx.Exec(`
-		INSERT INTO runner_tokens (user_id, token, mode, docker_image, workspace, created_at)
-		VALUES (?, ?, ?, ?, '', ?)
-		ON CONFLICT(user_id) DO UPDATE SET
-			token = excluded.token,
-			mode = excluded.mode,
-			docker_image = excluded.docker_image,
-			created_at = excluded.created_at
-	`, userID, token, mode, dockerImage, now)
+			INSERT INTO runner_tokens (user_id, token, mode, docker_image, workspace, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(user_id) DO UPDATE SET
+				token = excluded.token,
+				mode = excluded.mode,
+				docker_image = excluded.docker_image,
+				workspace = excluded.workspace,
+				created_at = excluded.created_at
+		`, userID, token, mode, dockerImage, workspace, now)
 	if err != nil {
 		return "", "", fmt.Errorf("upsert runner_tokens: %w", err)
 	}

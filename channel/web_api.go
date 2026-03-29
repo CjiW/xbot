@@ -307,6 +307,7 @@ type runnerCreateRequest struct {
 	Name        string `json:"name"`
 	Mode        string `json:"mode"`
 	DockerImage string `json:"docker_image"`
+	Workspace   string `json:"workspace"`
 }
 
 type runnerActiveResponse struct {
@@ -316,9 +317,10 @@ type runnerActiveResponse struct {
 }
 
 type runnerCommandResponse struct {
-	OK      bool   `json:"ok"`
-	Command string `json:"command"`
-	Error   string `json:"error,omitempty"`
+	OK      bool              `json:"ok"`
+	Command string            `json:"command,omitempty"`
+	Runner  *tools.RunnerInfo `json:"runner,omitempty"`
+	Error   string            `json:"error,omitempty"`
 }
 
 // handleRunners handles GET /api/runners (list) and POST /api/runners (create).
@@ -355,14 +357,21 @@ func (wc *WebChannel) handleRunners(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, runnerCommandResponse{OK: false, Error: "name is required"})
 			return
 		}
-		cmd, err := wc.callbacks.RunnerCreate(senderID, req.Name, req.Mode, req.DockerImage)
+		cmd, err := wc.callbacks.RunnerCreate(senderID, req.Name, req.Mode, req.DockerImage, req.Workspace)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, runnerCommandResponse{OK: false, Error: err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, runnerCommandResponse{OK: true, Command: cmd})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSON(w, http.StatusOK, runnerCommandResponse{
+			OK:      true,
+			Command: cmd,
+			Runner: &tools.RunnerInfo{
+				Name:        req.Name,
+				Mode:        req.Mode,
+				DockerImage: req.DockerImage,
+				Workspace:   req.Workspace,
+			},
+		})
 	}
 }
 

@@ -32,6 +32,7 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
   const [formName, setFormName] = useState('')
   const [formMode, setFormMode] = useState<'native' | 'docker'>('native')
   const [formDockerImage, setFormDockerImage] = useState('ubuntu:22.04')
+  const [formWorkspace, setFormWorkspace] = useState('')
 
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -78,7 +79,11 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
     const wsBase = serverUrl
       ? serverUrl.replace(/^http/, 'ws')
       : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-    return `./xbot-runner --server ${wsBase}/ws/web-0 --token ${runner.token}`
+    let cmd = `./xbot-runner --server ${wsBase}/ws/web-0 --token ${runner.token}`
+    if (runner.mode === 'docker' && runner.docker_image) {
+      cmd += ` --mode docker --docker-image ${runner.docker_image}`
+    }
+    return cmd
   }, [serverUrl])
 
   // Set active
@@ -125,9 +130,15 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
     if (!formName.trim()) return
     setActionLoading(true)
     try {
-      const body: Record<string, string> = { name: formName.trim() }
+      const body: Record<string, string> = {
+        name: formName.trim(),
+        mode: formMode,
+      }
       if (formMode === 'docker' && formDockerImage.trim()) {
         body.docker_image = formDockerImage.trim()
+      }
+      if (formWorkspace.trim()) {
+        body.workspace = formWorkspace.trim()
       }
       const resp = await fetch('/api/runners', {
         method: 'POST',
@@ -135,16 +146,18 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
         body: JSON.stringify(body),
       })
       const data = await resp.json()
-      if (data.ok && data.runner) {
-        setRunners(prev => [...prev, data.runner])
+      if (data.ok) {
+        // Re-fetch the full runner list to get accurate info (online status, workspace, etc.)
+        await fetchRunners()
         setShowAddForm(false)
         setFormName('')
         setFormMode('native')
         setFormDockerImage('ubuntu:22.04')
+        setFormWorkspace('')
       }
     } catch {}
     setActionLoading(false)
-  }, [formName, formMode, formDockerImage])
+  }, [formName, formMode, formDockerImage, formWorkspace, fetchRunners])
 
   // Format mode label
   const modeLabel = (mode: string) => {
@@ -319,6 +332,17 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
               />
             </div>
           )}
+          <div className="settings-item">
+            <label className="settings-label">工作目录</label>
+            <input
+              type="text"
+              className="settings-input"
+              placeholder="例如：/home/user/project（留空则由 Runner 自动设定）"
+              value={formWorkspace}
+              onChange={e => setFormWorkspace(e.target.value)}
+            />
+            <span className="text-xs text-slate-500 mt-1 block">Runner 连接后将使用此目录作为工作区</span>
+          </div>
           <div className="flex gap-2 mt-3">
             <button
               className="settings-action-btn"

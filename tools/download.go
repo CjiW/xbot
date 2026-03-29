@@ -114,7 +114,41 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 }
 
 // downloadFromURL downloads a file from a URL (used for web/OSS files).
+// When a sandbox is active, delegates the download to the sandbox (runner-side download)
+// to avoid routing large files through the server.
 func (t *DownloadFileTool) downloadFromURL(ctx *ToolContext, fileURL, outputPath, displayPath string) (*ToolResult, error) {
+	if shouldUseSandbox(ctx) {
+		return t.downloadFromURLViaSandbox(ctx, fileURL, outputPath, displayPath)
+	}
+	return t.downloadFromURLDirect(ctx, fileURL, outputPath, displayPath)
+}
+
+// downloadFromURLViaSandbox delegates the download to the sandbox (runner/container).
+// The sandbox downloads the file directly, avoiding the server as a proxy.
+func (t *DownloadFileTool) downloadFromURLViaSandbox(ctx *ToolContext, fileURL, outputPath, displayPath string) (*ToolResult, error) {
+	userID := ctx.OriginUserID
+	if userID == "" {
+		userID = ctx.SenderID
+	}
+	sandboxCtx, sandboxCancel := SandboxCtx()
+	defer sandboxCancel()
+
+	if err := ctx.Sandbox.DownloadFile(sandboxCtx, fileURL, outputPath, userID); err != nil {
+		return nil, fmt.Errorf("sandbox download: %w", err)
+	}
+
+	log.WithFields(log.Fields{
+		"url":         fileURL,
+		"output_path": outputPath,
+		"user_id":     userID,
+		"mode":        "sandbox",
+	}).Info("File downloaded from URL (via sandbox)")
+
+	return NewResult(fmt.Sprintf("Downloaded: %s (sandbox-side)", displayPath)), nil
+}
+
+// downloadFromURLDirect downloads a file on the server side (no sandbox).
+func (t *DownloadFileTool) downloadFromURLDirect(ctx *ToolContext, fileURL, outputPath, displayPath string) (*ToolResult, error) {
 	req, err := http.NewRequest("GET", fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -140,33 +174,18 @@ func (t *DownloadFileTool) downloadFromURL(ctx *ToolContext, fileURL, outputPath
 		return nil, fmt.Errorf("downloaded file exceeds maximum allowed size (100MB)")
 	}
 
-	// Write to output path (sandbox-aware)
-	if shouldUseSandbox(ctx) {
-		userID := ctx.OriginUserID
-		if userID == "" {
-			userID = ctx.SenderID
-		}
-		sandboxCtx, sandboxCancel := SandboxCtx()
-		defer sandboxCancel()
-		if err := ctx.Sandbox.MkdirAll(sandboxCtx, filepath.Dir(outputPath), 0o755, userID); err != nil {
-			return nil, fmt.Errorf("create output directory: %w", err)
-		}
-		if err := ctx.Sandbox.WriteFile(sandboxCtx, outputPath, data, 0o644, userID); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
-		}
-	} else {
-		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return nil, fmt.Errorf("create output directory: %w", err)
-		}
-		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
-		}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create output directory: %w", err)
+	}
+	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
 	}
 
 	log.WithFields(log.Fields{
 		"url":         fileURL,
 		"output_path": outputPath,
 		"size":        len(data),
+		"mode":        "direct",
 	}).Info("File downloaded from URL")
 
 	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, len(data))), nil

@@ -86,6 +86,12 @@ type Sandbox interface {
 	// RemoveAll removes a directory tree. Path must be absolute.
 	RemoveAll(ctx context.Context, path string, userID string) error
 
+	// DownloadFile downloads a file from the given URL and saves it to outputPath.
+	// For RemoteSandbox, the runner downloads directly (avoids server as proxy).
+	// For DockerSandbox, the container downloads directly.
+	// Path must be absolute.
+	DownloadFile(ctx context.Context, url, outputPath string, userID string) error
+
 	// === Shell Configuration ===
 	// GetShell returns the preferred shell command for the user/workspace.
 	GetShell(userID string, workspace string) (string, error)

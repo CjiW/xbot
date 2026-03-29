@@ -261,6 +261,14 @@ func (m *MockSandbox) RemoveAll(ctx context.Context, path string, userID string)
 	return nil
 }
 
+func (m *MockSandbox) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Files[outputPath] = []byte("mock-download")
+	m.Dirs[filepath.Dir(outputPath)] = true
+	return nil
+}
+
 // Wrap is a legacy method for compatibility.
 func (m *MockSandbox) Wrap(command string, args []string, env []string, workspace string, userID string) (string, []string, error) {
 	return command, args, nil

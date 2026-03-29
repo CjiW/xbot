@@ -61,3 +61,7 @@ func (s *DeniedSandbox) Remove(ctx context.Context, path string, userID string) 
 func (s *DeniedSandbox) RemoveAll(ctx context.Context, path string, userID string) error {
 	return fmt.Errorf("%s", sandboxDeniedMsg)
 }
+
+func (s *DeniedSandbox) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	return fmt.Errorf("%s", sandboxDeniedMsg)
+}

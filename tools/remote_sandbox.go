@@ -761,6 +761,29 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 	return nil
 }
 
+func (rs *RemoteSandbox) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return err
+	}
+	reqBody, _ := json.Marshal(DownloadFileRequest{
+		URL:        url,
+		OutputPath: outputPath,
+	})
+	msg := &RunnerMessage{ID: generateID(), Type: ProtoDownloadFile, UserID: userID, Body: reqBody}
+	// 5-minute timeout for downloads
+	resp, err := rs.sendRequest(ctx, rc, msg, 5*time.Minute)
+	if err != nil {
+		return err
+	}
+	if resp.Type == ProtoError {
+		var e ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return fmt.Errorf("download_file: %s", e.Message)
+	}
+	return nil
+}
+
 // === Runner sync (server → runner file sync on registration) ===
 
 // syncToRunner syncs global skills and agents from the server to the runner.

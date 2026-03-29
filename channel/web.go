@@ -788,11 +788,11 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 				ext := strings.ToLower(filepath.Ext(displayName))
 				if isImageExt(ext) {
-					// For images, use markdown image syntax with signed URL
-					content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![%s](%s)", displayName, fileSize, displayName, downloadURL)
+					// For images, embed <image> tag with url for DownloadFile + markdown for viewing
+					content += fmt.Sprintf("\n\n<image url=\"%s\" name=\"%s\" size=\"%d\" />\n![%s](%s)", downloadURL, displayName, fileSize, displayName, downloadURL)
 				} else {
-					// For non-image files, provide download URL for download_file tool
-					content += fmt.Sprintf("\n\n📎 [用户上传文件: %s (%d bytes)] (访问URL: %s)", displayName, fileSize, downloadURL)
+					// For non-image files, use <file> tag with url so DownloadFile uses URL mode
+					content += fmt.Sprintf("\n\n<file name=\"%s\" url=\"%s\" size=\"%d\" />", displayName, downloadURL, fileSize)
 				}
 			}
 		}

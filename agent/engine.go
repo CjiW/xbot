@@ -53,6 +53,7 @@ type RunConfig struct {
 	SenderID     string // 直接调用者 ID（SubAgent 场景下为父 Agent ID）
 	OriginUserID string // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等）
 	SenderName   string
+	FeishuUserID string // 非空表示通过飞书身份登录 web（用于 runner 路由）
 
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）
@@ -98,7 +99,7 @@ type RunConfig struct {
 	ContextManagerConfig *ContextManagerConfig
 
 	// SendFunc 向 IM 渠道发送消息（nil = 不能发消息）
-	SendFunc func(channel, chatID, content string) error
+	SendFunc func(channel, chatID, content string, metadata ...map[string]string) error
 
 	// InjectInbound 注入入站消息，触发 Agent 完整处理循环（nil = 不支持）
 	InjectInbound func(channel, chatID, senderID, content string)
@@ -216,6 +217,23 @@ type RunOutput struct {
 	// These are the messages appended to the original cfg.Messages during execution.
 	// Used by processMessage to persist context when WaitingUser is true.
 	EngineMessages []llm.ChatMessage
+	// IterationHistory contains snapshots of completed iterations for UI display.
+	IterationHistory []IterationSnapshot
+}
+
+// IterationSnapshot captures the tool summary of a completed iteration.
+type IterationSnapshot struct {
+	Iteration int                     `json:"iteration"`
+	Thinking  string                  `json:"thinking,omitempty"`
+	Tools     []IterationToolSnapshot `json:"tools"`
+}
+
+// IterationToolSnapshot captures a single tool's execution result within an iteration.
+type IterationToolSnapshot struct {
+	Name      string `json:"name"`
+	Label     string `json:"label,omitempty"`
+	Status    string `json:"status"` // done | error
+	ElapsedMS int64  `json:"elapsed_ms,omitempty"`
 }
 
 // readArgsHasOffsetOrLimit checks whether a Read tool call's JSON arguments contain
@@ -314,6 +332,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// --- 结构化进度状态 ---
 	var structuredProgress *StructuredProgress
+	var iterationSnapshots []IterationSnapshot
 	if cfg.ProgressEventHandler != nil {
 		structuredProgress = &StructuredProgress{
 			Phase:          PhaseThinking,
@@ -331,6 +350,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 
 	autoNotify := cfg.ProgressNotifier != nil
+	batchProgressByIteration := cfg.Channel == "web"
 
 	// --- 进度通知 ---
 	notifyProgress := func(extra string) {
@@ -558,6 +578,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			engineMsgs := make([]llm.ChatMessage, len(messages)-initialMsgCount)
 			copy(engineMsgs, messages[initialMsgCount:])
 			out.EngineMessages = engineMsgs
+		}
+		// Capture iteration history snapshots for UI display.
+		if len(iterationSnapshots) > 0 {
+			out.IterationHistory = iterationSnapshots
 		}
 		// Clean offload data after conversation turn completes.
 		// Only for the top-level agent (RootSessionKey == "") — SubAgents share
@@ -799,7 +823,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				progressLines = append(progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
 			}
 		}
-		if autoNotify {
+		if autoNotify && !batchProgressByIteration {
 			notifyProgress("")
 		}
 
@@ -808,6 +832,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if structuredProgress != nil {
 			structuredProgress.Phase = PhaseToolExec
 			structuredProgress.ActiveTools = make([]ToolProgress, len(response.ToolCalls))
+			// Reset completed tools per iteration to avoid unbounded accumulation.
+			structuredProgress.CompletedTools = nil
+			// Frontend tracks max completed_tools via ref for turn persistence.
 			for j, tc := range response.ToolCalls {
 				structuredProgress.ActiveTools[j] = ToolProgress{
 					Name:   tc.Name,
@@ -815,6 +842,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					Status: ToolPending,
 				}
 			}
+		}
+		if autoNotify && batchProgressByIteration {
+			notifyProgress("")
 		}
 
 		// execOne 执行单个工具并记录结果。
@@ -837,7 +867,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 					execFn(e)
 					// 每个 SubAgent 完成后立即 patch 进度
-					if doAutoNotify {
+					if doAutoNotify && !batchProgressByIteration {
 						mu.Lock()
 						np("")
 						mu.Unlock()
@@ -979,7 +1009,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}(entry)
 				}
 				wg.Wait()
-				if autoNotify {
+				if autoNotify && !batchProgressByIteration {
 					notifyProgress("")
 				}
 			}
@@ -987,7 +1017,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// Phase 2: 写操作串行执行
 			for _, entry := range writeOps {
 				execOne(entry)
-				if autoNotify {
+				if autoNotify && !batchProgressByIteration {
 					notifyProgress("")
 				}
 			}
@@ -1011,7 +1041,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// 其他操作串行执行
 			for _, entry := range otherOps {
 				execOne(entry)
-				if autoNotify {
+				if autoNotify && !batchProgressByIteration {
 					notifyProgress("")
 				}
 			}
@@ -1019,7 +1049,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// 全部串行执行（默认，向后兼容）
 			for idx, tc := range response.ToolCalls {
 				execOne(toolCallEntry{iteration: i, index: idx, tc: tc})
-				if autoNotify {
+				if autoNotify && !batchProgressByIteration {
 					notifyProgress("")
 				}
 			}
@@ -1029,6 +1059,26 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if structuredProgress != nil {
 			structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, structuredProgress.ActiveTools...)
 			structuredProgress.ActiveTools = nil
+		}
+		// Snapshot completed iteration for IterationHistory
+		if structuredProgress != nil && len(structuredProgress.CompletedTools) > 0 {
+			snap := IterationSnapshot{
+				Iteration: i,
+				Thinking:  structuredProgress.ThinkingContent,
+				Tools:     make([]IterationToolSnapshot, len(structuredProgress.CompletedTools)),
+			}
+			for j, t := range structuredProgress.CompletedTools {
+				snap.Tools[j] = IterationToolSnapshot{
+					Name:      t.Name,
+					Label:     t.Label,
+					Status:    string(t.Status),
+					ElapsedMS: t.Elapsed.Milliseconds(),
+				}
+			}
+			iterationSnapshots = append(iterationSnapshots, snap)
+		}
+		if autoNotify && batchProgressByIteration {
+			notifyProgress("")
 		}
 
 		// 计数 recall 工具调用（offload_recall / recall_masked）并通知 RecallTracker
@@ -1381,7 +1431,13 @@ func resolveSandbox(sandbox tools.Sandbox, userID string) tools.Sandbox {
 func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	// Resolve per-user sandbox BEFORE building ToolContext.
 	// For remote users, the resolved sandbox is RemoteSandbox (Name() == "remote").
-	resolvedSandbox := resolveSandbox(cfg.Sandbox, cfg.SenderID)
+	// If FeishuUserID is set (web login via Feishu identity), use it for routing
+	// so the user gets the same runner as on the Feishu side.
+	sandboxUserID := cfg.SenderID
+	if cfg.FeishuUserID != "" {
+		sandboxUserID = cfg.FeishuUserID
+	}
+	resolvedSandbox := resolveSandbox(cfg.Sandbox, sandboxUserID)
 	isRemote := resolvedSandbox != nil && resolvedSandbox.Name() == "remote"
 
 	// For remote users, leave WorkspaceRoot/WorkingDir empty — the runner

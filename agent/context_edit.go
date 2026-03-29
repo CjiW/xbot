@@ -15,10 +15,11 @@ import (
 type ContextEditAction string
 
 const (
-	ContextEditDelete   ContextEditAction = "delete"
-	ContextEditTruncate ContextEditAction = "truncate"
-	ContextEditReplace  ContextEditAction = "replace"
-	ContextEditList     ContextEditAction = "list"
+	ContextEditDelete     ContextEditAction = "delete"
+	ContextEditDeleteTurn ContextEditAction = "delete_turn"
+	ContextEditTruncate   ContextEditAction = "truncate"
+	ContextEditReplace    ContextEditAction = "replace"
+	ContextEditList       ContextEditAction = "list"
 )
 
 // ContextEditRequest 是 context_edit 工具的请求参数。
@@ -109,13 +110,21 @@ func (e *ContextEditor) HandleRequest(action string, params map[string]interface
 		return "", fmt.Errorf("messages not available (editor not initialized)")
 	}
 
+	// Audit log for context edits
+	log.WithFields(log.Fields{
+		"action": action,
+		"params": params,
+	}).Info("Context edit request")
+
 	switch ContextEditAction(action) {
 	case ContextEditList:
-		return listMessages(msgs), nil
+		return listMessagesByTurn(msgs), nil
+	case ContextEditDeleteTurn:
+		return e.deleteTurn(msgs, params)
 	case ContextEditDelete, ContextEditTruncate, ContextEditReplace:
 		return e.applyEdit(msgs, action, params)
 	default:
-		return "", fmt.Errorf("unknown action: %s (valid: list, delete, truncate, replace)", action)
+		return "", fmt.Errorf("unknown action: %s (valid: list, delete, delete_turn, truncate, replace)", action)
 	}
 }
 
@@ -267,53 +276,166 @@ func userVisibleIndex(messages []llm.ChatMessage, visibleIdx int) int {
 	return -1
 }
 
-// listMessages 生成消息列表摘要。
-func listMessages(messages []llm.ChatMessage) string {
-	var sb strings.Builder
-	sb.WriteString("📋 Message List (non-system messages):\n\n")
+// conversationTurn 代表一轮对话（一条 user 消息 + 所有关联的 assistant/tool 消息）。
+type conversationTurn struct {
+	TurnIdx       int    // 轮次编号（0-based，用户可见）
+	StartSliceIdx int    // messages slice 中的起始索引
+	EndSliceIdx   int    // messages slice 中的结束索引（inclusive）
+	UserSliceIdx  int    // user 消息在 slice 中的索引
+	MsgCount      int    // 该轮次包含的消息数量
+	ToolCount     int    // tool 消息数量
+	TotalChars    int    // 总字符数
+	UserPreview   string // user 消息预览
+}
 
-	visibleIdx := 0
-	for _, m := range messages {
+// identifyTurns 将 messages slice 按对话轮次分组。
+// 一轮从一条 user 消息开始，到下一条 user 消息之前结束。
+// system 消息不属于任何轮次。
+func identifyTurns(messages []llm.ChatMessage) []conversationTurn {
+	var turns []conversationTurn
+	currentTurn := -1 // 当前轮次索引
+
+	for i, m := range messages {
 		if m.Role == "system" {
 			continue
 		}
 
-		content := m.Content
-		if m.Role == "tool" {
-			content = fmt.Sprintf("[%s]", m.ToolName)
-			if m.ToolArguments != "" {
-				args := m.ToolArguments
-				if len([]rune(args)) > 60 {
-					args = string([]rune(args)[:60]) + "..."
-				}
-				content += fmt.Sprintf("(%s)", args)
+		if m.Role == "user" {
+			// 结束上一轮
+			if currentTurn >= 0 {
+				t := &turns[currentTurn]
+				t.EndSliceIdx = i - 1
+				t.MsgCount = i - t.StartSliceIdx
+			}
+			// 开始新一轮
+			currentTurn = len(turns)
+			preview := m.Content
+			if len([]rune(preview)) > 80 {
+				preview = string([]rune(preview)[:80]) + "..."
+			}
+			turns = append(turns, conversationTurn{
+				TurnIdx:       currentTurn,
+				StartSliceIdx: i,
+				UserSliceIdx:  i,
+				UserPreview:   preview,
+			})
+		}
+
+		// 累计当前轮次的统计
+		if currentTurn >= 0 {
+			t := &turns[currentTurn]
+			t.TotalChars += len([]rune(m.Content))
+			if m.Role == "tool" {
+				t.ToolCount++
 			}
 		}
-
-		preview := content
-		if len([]rune(preview)) > 80 {
-			preview = string([]rune(preview)[:80]) + "..."
-		}
-		charCount := len([]rune(m.Content))
-
-		icon := "💬"
-		switch m.Role {
-		case "user":
-			icon = "👤"
-		case "assistant":
-			if len(m.ToolCalls) > 0 {
-				icon = "🔧"
-			} else {
-				icon = "🤖"
-			}
-		case "tool":
-			icon = "📦"
-		}
-
-		fmt.Fprintf(&sb, "%d. %s [%s] (%d chars) %s\n", visibleIdx, icon, m.Role, charCount, preview)
-		visibleIdx++
 	}
 
-	fmt.Fprintf(&sb, "\nTotal: %d messages. Use context_edit to delete/truncate/replace.", visibleIdx)
+	// 结束最后一轮
+	if currentTurn >= 0 && len(turns) > 0 {
+		t := &turns[currentTurn]
+		t.EndSliceIdx = len(messages) - 1
+		t.MsgCount = t.EndSliceIdx - t.StartSliceIdx + 1
+	}
+
+	return turns
+}
+
+// listMessagesByTurn 按对话轮次生成消息列表摘要。
+func listMessagesByTurn(messages []llm.ChatMessage) string {
+	turns := identifyTurns(messages)
+
+	var sb strings.Builder
+	sb.WriteString("📋 Conversation Turns:\n\n")
+
+	if len(turns) == 0 {
+		sb.WriteString("(no conversation turns found)\n")
+		return sb.String()
+	}
+
+	totalMsgs := 0
+	for _, t := range turns {
+		totalMsgs += t.MsgCount
+
+		fmt.Fprintf(&sb, "Turn %d: 👤 user (%d chars)", t.TurnIdx, len([]rune(messages[t.UserSliceIdx].Content)))
+		if t.UserPreview != "" {
+			fmt.Fprintf(&sb, " \"%s\"", t.UserPreview)
+		}
+		sb.WriteString("\n")
+
+		// 统计 assistant 消息数（含 tool call 的迭代轮次）
+		assistantCount := 0
+		for i := t.StartSliceIdx; i <= t.EndSliceIdx; i++ {
+			if messages[i].Role == "assistant" {
+				assistantCount++
+			}
+		}
+
+		fmt.Fprintf(&sb, "  └─ %d messages: %d iterations, %d tool calls, %d total chars\n",
+			t.MsgCount, assistantCount, t.ToolCount, t.TotalChars)
+	}
+
+	fmt.Fprintf(&sb, "\nTotal: %d turns, %d messages. Use delete_turn to remove entire turns, or use message-level actions (delete/truncate/replace) for fine-grained edits.", len(turns), totalMsgs)
 	return sb.String()
+}
+
+// deleteTurn 删除整个对话轮次（user 消息 + 所有关联的 assistant/tool 消息）。
+func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string]interface{}) (string, error) {
+	turnIdx, ok := params["turn_idx"].(float64)
+	if !ok {
+		return "", fmt.Errorf("turn_idx is required for delete_turn action")
+	}
+
+	turns := identifyTurns(messages)
+	idx := int(turnIdx)
+	if idx < 0 || idx >= len(turns) {
+		return "", fmt.Errorf("turn index %d out of range (valid: 0-%d)", idx, len(turns)-1)
+	}
+
+	// 安全检查：不允许删除最后一轮（当前对话）
+	if idx == len(turns)-1 {
+		return "", fmt.Errorf("cannot delete the current (last) turn — it is protected")
+	}
+
+	t := turns[idx]
+	reason := "not specified"
+	if v, ok := params["reason"].(string); ok && v != "" {
+		reason = v
+	}
+
+	// 替换该轮次所有消息的 content 为 placeholder
+	placeholder := fmt.Sprintf("[context edited: deleted turn %d (%d messages, %d tool calls) — %s — %s]",
+		idx, t.MsgCount, t.ToolCount, reason, time.Now().Format("15:04:05"))
+
+	deletedMsgCount := 0
+	for i := t.StartSliceIdx; i <= t.EndSliceIdx; i++ {
+		messages[i].Content = placeholder
+		messages[i].ToolCalls = nil
+		messages[i].ToolName = ""
+		messages[i].ToolArguments = ""
+		deletedMsgCount++
+	}
+
+	if e.Store != nil {
+		e.Store.Record(ContextEditResult{
+			Action:     ContextEditDeleteTurn,
+			MessageIdx: idx,
+			Role:       "turn",
+			Reason:     reason,
+			Before:     fmt.Sprintf("%d msgs", t.MsgCount),
+			After:      "0 chars",
+			EditedAt:   time.Now(),
+		})
+	}
+
+	log.WithFields(map[string]interface{}{
+		"action":     "delete_turn",
+		"turn_idx":   idx,
+		"msg_count":  deletedMsgCount,
+		"tool_count": t.ToolCount,
+		"reason":     reason,
+	}).Info("Context edit: deleted turn")
+
+	return fmt.Sprintf("✅ Deleted turn %d (%d messages, %d tool calls, %d total chars) — %s",
+		idx, deletedMsgCount, t.ToolCount, t.TotalChars, reason), nil
 }

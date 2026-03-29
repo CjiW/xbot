@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"os"
+	"strconv"
+	"strings"
 
 	"xbot/config"
 	log "xbot/logger"
@@ -23,6 +25,7 @@ type SandboxRouter struct {
 	docker *DockerSandbox
 	remote *RemoteSandbox
 	none   *NoneSandbox
+	denied *DeniedSandbox
 
 	// defaultMode is used when SandboxForUser can't determine per-user routing.
 	// "docker" if docker is enabled, "remote" if remote is enabled, "none" otherwise.
@@ -33,7 +36,8 @@ type SandboxRouter struct {
 // Either (or both) may be nil — the router falls back gracefully.
 func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxRouter {
 	r := &SandboxRouter{
-		none: &NoneSandbox{},
+		none:   &NoneSandbox{},
+		denied: &DeniedSandbox{},
 	}
 
 	// Initialize docker sandbox if configured
@@ -94,15 +98,34 @@ func (r *SandboxRouter) Name() string {
 // to inject the correct sandbox into ToolContext.Sandbox.
 //
 // Routing:
-//   - Remote user → if remote sandbox exists and has active connection for this user
-//   - Docker → if docker sandbox exists (fallback)
-//   - None → if neither is available
+//   - If user has a connected remote runner → use it
+//   - If user is a pure web user (senderID starts with "web-"):
+//     — WEB_USER_SERVER_RUNNER=true (default): fallback to docker
+//     — WEB_USER_SERVER_RUNNER=false: no fallback (remote only)
+//   - Otherwise → docker fallback
 func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
+	// Check remote runner first
 	if userID != "" && r.remote != nil {
 		if r.remote.HasUser(userID) {
 			return r.remote
 		}
 	}
+
+	// Pure web user without remote runner — denied by default
+	if strings.HasPrefix(userID, "web-") {
+		webServerRunner := false
+		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
+			if b, err := strconv.ParseBool(v); err == nil {
+				webServerRunner = b
+			}
+		}
+		if !webServerRunner {
+			// User must have their own remote runner — return DeniedSandbox to block ALL access
+			return r.denied
+		}
+		// Explicitly enabled: allow fallback to server sandbox (docker)
+	}
+
 	if r.docker != nil {
 		return r.docker
 	}
@@ -202,6 +225,18 @@ func (r *SandboxRouter) ExportAndImport(userID string) error {
 func (r *SandboxRouter) resolve(userID string) Sandbox {
 	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
 		return r.remote
+	}
+	// Pure web user without remote runner — denied by default (same logic as SandboxForUser)
+	if strings.HasPrefix(userID, "web-") {
+		webServerRunner := false
+		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
+			if b, err := strconv.ParseBool(v); err == nil {
+				webServerRunner = b
+			}
+		}
+		if !webServerRunner {
+			return r.denied
+		}
 	}
 	if r.docker != nil {
 		return r.docker

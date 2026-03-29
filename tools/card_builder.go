@@ -49,7 +49,7 @@ type CardSession struct {
 	Containers map[string]*CardElement // id -> container element for parent_id lookup
 	Channel    string
 	ChatID     string
-	SendFunc   func(channel, chatID, content string) error
+	SendFunc   func(channel, chatID, content string, metadata ...map[string]string) error
 	CreatedAt  time.Time
 
 	// ExpectedInteractions tracks which interaction types this card should handle
@@ -69,7 +69,7 @@ type CardElement struct {
 // Note: expired session cleanup is triggered lazily when CreateSession is called,
 // not on a background timer. This is acceptable because card sessions are short-lived
 // (users build cards interactively) and stale sessions consume minimal memory.
-func (b *CardBuilder) CreateSession(channel, chatID string, sendFunc func(string, string, string) error) *CardSession {
+func (b *CardBuilder) CreateSession(channel, chatID string, sendFunc func(string, string, string, ...map[string]string) error) *CardSession {
 	id := fmt.Sprintf("card_%d", b.counter.Add(1))
 	s := &CardSession{
 		ID:         id,

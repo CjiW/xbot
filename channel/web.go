@@ -5,10 +5,13 @@ package channel
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +19,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/storage/sqlite"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -41,9 +45,56 @@ const (
 
 // WebChannelConfig Web 渠道配置（channel 包内部使用）
 type WebChannelConfig struct {
-	Host string
-	Port int
-	DB   *sql.DB // SQLite DB handle for user management and history
+	Host             string
+	Port             int
+	DB               *sql.DB // SQLite DB handle for user management and history
+	MemoryWindow     int
+	FeishuLinkSecret string // admin token for /api/auth/feishu-link endpoint
+	InviteOnly       bool   // 禁止自主注册，新账号只能由 admin 创建
+}
+
+// WebCallbacks holds callback functions for Web channel API endpoints.
+// Injected from main to decouple channel from agent/tools packages.
+type WebCallbacks struct {
+	// RunnerTokenGet returns the runner connect command for the user ("" if none).
+	RunnerTokenGet func(senderID string) string
+	// RunnerTokenGenerate generates a new per-user token and returns the connect command.
+	RunnerTokenGenerate func(senderID, mode, dockerImage, workspace string) (string, error)
+	// RunnerTokenRevoke revokes the user's current token.
+	RunnerTokenRevoke func(senderID string) error
+	// RegistryBrowse lists available agents/skills in the marketplace.
+	RegistryBrowse func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
+	// RegistryInstall installs a shared entry for the user.
+	RegistryInstall func(entryType string, id int64, senderID string) error
+	// RegistryListMy lists the user's installed entries.
+	RegistryListMy func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error)
+	// RegistryUnpublish removes a user's published entry.
+	RegistryUnpublish func(entryType, name, senderID string) error
+	// RegistryUninstall removes a user-installed entry.
+	RegistryUninstall func(entryType, name, senderID string) error
+	// LLMList returns available models and current model.
+	LLMList func(senderID string) ([]string, string)
+	// LLMSet switches the user's model.
+	LLMSet func(senderID, model string) error
+	// LLMGetConfig returns user's LLM config (provider, baseURL, model, ok).
+	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool)
+	// LLMSetConfig sets user's personal LLM config.
+	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
+	// LLMDelete reverts user to global LLM config.
+	LLMDelete func(senderID string) error
+	// LLMGetMaxContext returns the user's max context tokens setting.
+	LLMGetMaxContext func(senderID string) int
+	// LLMSetMaxContext sets the user's max context tokens setting.
+	LLMSetMaxContext func(senderID string, maxContext int) error
+
+	// NormalizeSenderID normalizes sender ID for single-user mode.
+	NormalizeSenderID func(senderID string) string
+	// RegistryPublish publishes a user's agent/skill to the marketplace.
+	RegistryPublish func(entryType, name, senderID string) error
+	// SandboxWriteFile writes file data to the user's sandbox at the given path.
+	// Returns (sandboxInternalPath, error). sandboxInternalPath is the path inside
+	// the sandbox (e.g., /workspace/uploads/file.txt). Returns ("", nil) if no sandbox available.
+	SandboxWriteFile func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (sandboxPath string, err error)
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +120,8 @@ func (h *Hub) addClient(senderID string, c *Client) {
 	h.mu.Lock()
 	// Close existing connection for same user
 	if old, ok := h.clients[senderID]; ok {
-		close(old.done)
+		old.closeDone()
+
 	}
 	h.clients[senderID] = c
 	h.mu.Unlock()
@@ -126,10 +178,14 @@ func (h *Hub) sendToClient(senderID string, msg wsMessage) bool {
 	return false
 }
 
+func (c *Client) closeDone() {
+	c.closeOnce.Do(func() { close(c.done) })
+}
+
 func (h *Hub) stopAll() {
 	h.mu.Lock()
 	for id, c := range h.clients {
-		close(c.done)
+		c.closeDone()
 		delete(h.clients, id)
 	}
 	h.mu.Unlock()
@@ -141,11 +197,12 @@ func (h *Hub) stopAll() {
 
 // Client represents a single WebSocket client
 type Client struct {
-	conn   *websocket.Conn
-	sendCh chan wsMessage
-	done   chan struct{}
-	hub    *Hub
-	userID string
+	conn      *websocket.Conn
+	sendCh    chan wsMessage
+	done      chan struct{}
+	closeOnce sync.Once
+	hub       *Hub
+	userID    string
 }
 
 // ---------------------------------------------------------------------------
@@ -194,15 +251,37 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type    string `json:"type"`              // "text", "progress", "card"
-	ID      string `json:"id,omitempty"`      // UUID
-	Content string `json:"content,omitempty"` // message content
-	TS      int64  `json:"ts,omitempty"`      // timestamp
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo"
+	ID              string             `json:"id,omitempty"`               // UUID
+	Content         string             `json:"content,omitempty"`          // message content
+	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
+	TS              int64              `json:"ts,omitempty"`               // timestamp
+	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
+	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
+}
+
+// WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
+type WsProgressPayload struct {
+	Phase          string           `json:"phase,omitempty"`
+	Iteration      int              `json:"iteration,omitempty"`
+	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
+	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
+	Thinking       string           `json:"thinking,omitempty"`
+}
+
+// WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
+type WsToolProgress struct {
+	Name    string `json:"name,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
 }
 
 type wsClientMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Type      string   `json:"type"`
+	Content   string   `json:"content"`
+	FileIDs   []string `json:"file_ids,omitempty"`
+	FileNames []string `json:"file_names,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +294,9 @@ type WebChannel struct {
 	msgBus *bus.MessageBus
 	hub    *Hub
 	server *http.Server
+
+	// Callbacks from main
+	callbacks WebCallbacks
 
 	// Auth
 	sessions   map[string]sessionInfo // token → sessionInfo
@@ -229,12 +311,19 @@ type WebChannel struct {
 
 	// Static files (external directory)
 	staticDir string
+
+	// File uploads directory
+	uploadDir string
+
+	// Working directory (workspace) — used to copy uploaded files into sandbox-accessible path
+	workDir string
 }
 
 type sessionInfo struct {
-	userID   int
-	username string
-	expires  time.Time
+	userID       int
+	username     string
+	feishuUserID string // non-empty when logged in via Feishu identity
+	expires      time.Time
 }
 
 // NewWebChannel 创建 Web 渠道
@@ -251,7 +340,28 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 
 // SetStaticDir sets the directory for serving frontend static files.
 func (wc *WebChannel) SetStaticDir(dir string) {
-	wc.staticDir = dir
+	if dir != "" {
+		wc.staticDir = filepath.Clean(dir)
+	}
+}
+
+// SetUploadDir sets the directory for file uploads.
+func (wc *WebChannel) SetUploadDir(dir string) {
+	if dir != "" {
+		wc.uploadDir = filepath.Clean(dir)
+	}
+}
+
+// SetWorkDir sets the working directory for sandbox file access.
+func (wc *WebChannel) SetWorkDir(dir string) {
+	if dir != "" {
+		wc.workDir = filepath.Clean(dir)
+	}
+}
+
+// SetCallbacks injects callback functions from main for API endpoints.
+func (wc *WebChannel) SetCallbacks(cb WebCallbacks) {
+	wc.callbacks = cb
 }
 
 func (wc *WebChannel) Name() string { return "web" }
@@ -271,9 +381,31 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/auth/register", wc.handleRegister)
 	mux.HandleFunc("/api/auth/login", wc.handleLogin)
 	mux.HandleFunc("/api/auth/logout", wc.handleLogout)
+	mux.HandleFunc("/api/auth/feishu-link", wc.handleFeishuLink)
+	mux.HandleFunc("/api/auth/feishu-login", wc.handleFeishuLogin)
+	mux.HandleFunc("/api/auth/config", wc.handleAuthConfig)
 
 	// REST API
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
+	mux.HandleFunc("/api/settings", wc.authMiddleware(wc.handleSettings))
+	mux.HandleFunc("/api/runner/token", wc.authMiddleware(wc.handleRunnerToken))
+
+	// Market API
+	mux.HandleFunc("/api/market", wc.authMiddleware(wc.handleMarket))
+	mux.HandleFunc("/api/market/install", wc.authMiddleware(wc.handleMarketInstall))
+	mux.HandleFunc("/api/market/uninstall", wc.authMiddleware(wc.handleMarketUninstall))
+	mux.HandleFunc("/api/market/my", wc.authMiddleware(wc.handleMarketMy))
+	mux.HandleFunc("/api/market/publish", wc.authMiddleware(wc.handleMarketPublish))
+	mux.HandleFunc("/api/market/unpublish", wc.authMiddleware(wc.handleMarketUnpublish))
+
+	// LLM Config API
+	mux.HandleFunc("/api/llm-config", wc.authMiddleware(wc.handleLLMConfig))
+	mux.HandleFunc("/api/llm-config/model", wc.authMiddleware(wc.handleLLMModelSet))
+	mux.HandleFunc("/api/llm-max-context", wc.authMiddleware(wc.handleLLMMaxContext))
+
+	// File API
+	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
+	mux.HandleFunc("/api/files/", wc.authMiddleware(wc.handleFileDownload))
 
 	// Static files
 	if wc.staticDir != "" {
@@ -283,7 +415,7 @@ func (wc *WebChannel) Start() error {
 	addr := fmt.Sprintf("%s:%d", wc.config.Host, wc.config.Port)
 	wc.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      securityHeadersMiddleware(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -342,10 +474,11 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}
 
 	wsMsg := wsMessage{
-		Type:    msgType,
-		ID:      msgID,
-		Content: content,
-		TS:      time.Now().Unix(),
+		Type:            msgType,
+		ID:              msgID,
+		Content:         content,
+		TS:              time.Now().Unix(),
+		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
 	// Send via hub (non-blocking: writes to buffered channel)
@@ -355,6 +488,24 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	}
 
 	return msgID, nil
+}
+
+// SendProgress 发送结构化进度事件到 Web 客户端（非阻塞）。
+// 内部通过 hub 的缓冲通道发送，保持调用路径轻量。
+func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
+	if payload == nil {
+		return
+	}
+
+	wsMsg := wsMessage{
+		Type:     "progress_structured",
+		TS:       time.Now().Unix(),
+		Progress: payload,
+	}
+
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, progress event buffered")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +533,16 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	senderID := "web:" + strconv.Itoa(si.userID)
+	senderID := "web-" + strconv.Itoa(si.userID)
+	if wc.callbacks.NormalizeSenderID != nil {
+		senderID = wc.callbacks.NormalizeSenderID(senderID)
+	}
+	// If linked to Feishu account, use Feishu identity directly.
+	// This makes the web user share the same session/persona/workspace/skills/agents
+	// as their Feishu account — effectively the same user.
+	if si.feishuUserID != "" {
+		senderID = si.feishuUserID
+	}
 
 	client := &Client{
 		conn:   conn,
@@ -431,6 +591,9 @@ func (wc *WebChannel) writePump(c *Client) {
 				return
 			}
 		case <-c.done:
+			// Server shutdown — send close frame with GoingAway status
+			c.conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
 			return
 		}
 	}
@@ -439,7 +602,7 @@ func (wc *WebChannel) writePump(c *Client) {
 func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	defer func() {
 		c.conn.Close()
-		close(c.done)
+		c.closeDone()
 		wc.hub.removeClient(c.userID, c)
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()
@@ -470,24 +633,175 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			continue
 		}
 
-		if msg.Type != "message" || msg.Content == "" {
+		// Handle message type (default to "message" for backward compatibility)
+		if msg.Type == "" {
+			msg.Type = "message"
+		}
+
+		switch msg.Type {
+		case "cancel":
+			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus
+			wc.msgBus.Inbound <- bus.InboundMessage{
+				Channel:    "web",
+				SenderID:   c.userID,
+				SenderName: si.username,
+				ChatID:     chatID,
+				ChatType:   "p2p",
+				Content:    "/cancel",
+				Time:       time.Now(),
+				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				From:       bus.NewIMAddress("web", c.userID),
+				To:         bus.NewIMAddress("web", chatID),
+			}
+			continue
+
+		case "message":
+			if msg.Content == "" && len(msg.FileIDs) == 0 {
+				continue
+			}
+
+		default:
 			continue
 		}
 
 		// Send to message bus
+		var mediaPaths []string
+		originalContent := msg.Content // keep original text for user_echo matching
+		content := msg.Content
+		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
+			for i, fid := range msg.FileIDs {
+				uploadPath := filepath.Join(wc.uploadDir, "web", fid)
+				mediaPaths = append(mediaPaths, uploadPath)
+
+				// Use original file name if provided, fallback to fid
+				displayName := fid
+				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
+					displayName = filepath.Base(msg.FileNames[i]) // sanitize: prevent path traversal
+				}
+
+				ext := strings.ToLower(filepath.Ext(fid))
+				if isImageExt(ext) {
+					// For image files, embed as base64 in content so LLM can see them
+					if data, err := os.ReadFile(uploadPath); err == nil {
+						mimeType := mime.TypeByExtension(ext)
+						if mimeType == "" {
+							mimeType = http.DetectContentType(data)
+						}
+						b64 := base64.StdEncoding.EncodeToString(data)
+						content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
+					}
+				} else {
+					// For non-image files, write to user's sandbox so tools can access them.
+					// Try remote sandbox first (via callback), then fall back to local workDir copy.
+					fileData, readErr := os.ReadFile(uploadPath)
+					if readErr != nil {
+						content += fmt.Sprintf("\n\n📎 [附件: %s] (读取文件失败)", displayName)
+						continue
+					}
+					sandboxRelPath := "uploads/" + displayName
+					written := false
+					// Try remote/server sandbox via callback
+					if wc.callbacks.SandboxWriteFile != nil {
+						if sandboxPath, err := wc.callbacks.SandboxWriteFile(c.userID, sandboxRelPath, fileData, 0644); err == nil && sandboxPath != "" {
+							content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: %s/%s", displayName, sandboxPath, displayName)
+							written = true
+						} else if err != nil {
+							log.WithError(err).WithField("file", displayName).Warn("Failed to write file to sandbox via callback")
+						}
+					}
+					// Fallback: local workDir copy (for docker sandbox)
+					if !written && wc.workDir != "" {
+						userWsDir := filepath.Join(wc.workDir, ".xbot", "users", c.userID, "workspace")
+						sandboxFileDir := filepath.Join(userWsDir, "uploads")
+						sandboxFilePath := filepath.Join(sandboxFileDir, displayName)
+						if err := os.MkdirAll(sandboxFileDir, 0755); err == nil {
+							if err := copyFile(uploadPath, sandboxFilePath); err == nil {
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: /workspace/uploads/%s", displayName, displayName)
+								written = true
+							} else {
+								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (复制到工作目录失败)", displayName, uploadPath)
+							}
+						} else {
+							content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (创建目录失败)", displayName, uploadPath)
+						}
+					}
+					if !written {
+						content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", displayName, uploadPath)
+					}
+
+				}
+			}
+		} else if len(msg.FileIDs) > 0 && wc.uploadDir == "" {
+			log.Warn("Web channel received file_ids but uploadDir is not configured")
+			for _, fid := range msg.FileIDs {
+				content += fmt.Sprintf("\n\n📎 [附件: %s]", fid)
+			}
+		}
+
+		metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
+		if si.feishuUserID != "" {
+			metadata["feishu_user_id"] = si.feishuUserID
+		}
+
+		// Echo back complete user message (with file info) so frontend can update optimistic message
+		if content != originalContent && len(msg.FileIDs) > 0 {
+			echoMsg := wsMessage{
+				Type:            "user_echo",
+				Content:         content,
+				OriginalContent: originalContent,
+				TS:              time.Now().Unix(),
+			}
+			wc.hub.sendToClient(chatID, echoMsg)
+		}
+
+		// Eagerly save user message so history API can return it during processing.
+		// Skip bang commands (! prefix) — they should never be persisted.
+		// Eagerly save user message so history API can return it during processing.
+		// Skip bang commands (! prefix) — they should never be persisted.
+		trimmed := strings.TrimSpace(content)
+		if len(trimmed) <= 1 || trimmed[0] != '!' {
+			_ = eagerSaveUserMsg(wc.db, c.userID, content)
+			metadata["user_msg_eager_saved"] = "true"
+		}
+
 		wc.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "web",
 			SenderID:   c.userID,
 			SenderName: si.username,
 			ChatID:     chatID,
 			ChatType:   "p2p",
-			Content:    msg.Content,
+			Content:    content,
+			Media:      mediaPaths,
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			From:       bus.NewIMAddress("web", c.userID),
 			To:         bus.NewIMAddress("web", chatID),
+			Metadata:   metadata,
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Security headers middleware
+// ---------------------------------------------------------------------------
+
+// securityHeadersMiddleware wraps an http.Handler with security response headers.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
+				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+				"font-src 'self' https://fonts.gstatic.com; "+
+				"img-src 'self' data: blob:; "+
+				"connect-src 'self' ws: wss:; "+
+				"frame-ancestors 'none'",
+		)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -505,9 +819,28 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 		path = "/index.html"
 	}
 
+	// Clean path to prevent directory traversal
+	cleanPath := filepath.Clean(path)
+	absPath := filepath.Join(wc.staticDir, cleanPath)
+
+	// Ensure the resolved path is within the static directory
+	absStaticDir, err := filepath.Abs(wc.staticDir)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	absResolved, err := filepath.Abs(absPath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(absResolved, absStaticDir+string(os.PathSeparator)) && absResolved != absStaticDir {
+		http.NotFound(w, r)
+		return
+	}
+
 	// Try exact path
-	fullPath := wc.staticDir + strings.TrimPrefix(path, "/")
-	if _, err := os.Stat(fullPath); err == nil {
+	if _, err := os.Stat(absResolved); err == nil {
 		http.FileServer(http.Dir(wc.staticDir)).ServeHTTP(w, r)
 		return
 	}
@@ -610,4 +943,33 @@ func (wc *WebChannel) sessionCleanup() {
 			wc.sessionsMu.Unlock()
 		}
 	}
+}
+
+// isImageExt returns true if the file extension is a common image format.
+func isImageExt(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".tif":
+		return true
+	}
+	return false
+}
+
+// eagerSaveUserMsg persists a user message to session_messages immediately
+// so that a page-refresh can recover it while the backend is still processing.
+func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
+	var tenantID int64
+	if err := db.QueryRow(
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", userID,
+	).Scan(&tenantID); err != nil {
+		return err
+	}
+	// Use INSERT ... WHERE NOT EXISTS to avoid duplicate in race condition
+	_, err := db.Exec(`INSERT INTO session_messages (tenant_id, role, content)
+		SELECT ?, 'user', ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM session_messages
+			WHERE tenant_id = ? AND role = 'user' AND content = ?
+			ORDER BY id DESC LIMIT 1
+		)`, tenantID, content, tenantID, content)
+	return err
 }

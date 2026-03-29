@@ -31,10 +31,10 @@ var ErrLLMGenerate = errors.New("LLM generate failed")
 // consolidateRequest 记忆整理请求
 // 传递 key 而非 session 引用，避免排队期间 session 被修改或失效
 type consolidateRequest struct {
-	channel        string
-	chatID         string
-	senderID       string
-	unconsolidated int // 触发时的未整理消息数，用于 worker 中验证
+	channel      string
+	chatID       string
+	senderID     string
+	userMsgCount int // 触发时的用户消息数，用于 worker 中验证
 }
 
 // assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
@@ -200,11 +200,13 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus                *bus.MessageBus
-	multiSession       *session.MultiTenantSession // Multi-tenant session manager
-	tools              *tools.Registry
-	maxIterations      int
-	memoryWindow       int
+	bus              *bus.MessageBus
+	multiSession     *session.MultiTenantSession // Multi-tenant session manager
+	tools            *tools.Registry
+	maxIterations    int
+	memoryWindow     int
+	purgeOldMessages bool
+
 	skills             *SkillStore
 	agents             *AgentStore
 	chatHistory        *tools.ChatHistoryStore // 聊天历史缓存
@@ -403,6 +405,9 @@ type Config struct {
 	// 默认 ""，由 resolveContextMode 决定
 	ContextMode ContextMode
 
+	// Persona isolation: each web user has independent persona (no fallback to global)
+	PersonaIsolation bool
+
 	// 旧压缩配置（保留用于初始化 ContextManagerConfig，向后兼容 main.go 传参）
 	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7）
@@ -415,9 +420,14 @@ type Config struct {
 	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
 	TopicMinSegmentSize      int     `json:"topic_min_segment_size"`     // 最小话题片段大小（默认 3）
 	TopicSimilarityThreshold float64 `json:"topic_similarity_threshold"` // 话题相似度阈值（默认 0.3）
+
+	// 压缩后清理旧消息
+	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
+
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
+
 func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, *tools.Registry, *tools.CardBuilder) {
 	globalSkillDirs := resolveGlobalSkillsDirs(cfg.SkillsDir)
 
@@ -467,6 +477,7 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 		session.WithCleanupInterval(cfg.MCPCleanupInterval),
 		session.WithSessionCacheTimeout(cfg.SessionCacheTimeout),
 		session.WithMemoryProvider(memoryProvider),
+		session.WithPersonaIsolation(cfg.PersonaIsolation),
 		session.WithEmbeddingConfig(session.EmbeddingConfig{
 			Provider:   cfg.EmbeddingProvider,
 			BaseURL:    cfg.EmbeddingBaseURL,
@@ -664,12 +675,14 @@ func New(cfg Config) *Agent {
 	}
 
 	agent := &Agent{
-		bus:                cfg.Bus,
-		multiSession:       multiSession,
-		tools:              registry,
-		maxIterations:      cfg.MaxIterations,
-		maxConcurrency:     cfg.MaxConcurrency,
-		memoryWindow:       cfg.MemoryWindow,
+		bus:              cfg.Bus,
+		multiSession:     multiSession,
+		tools:            registry,
+		maxIterations:    cfg.MaxIterations,
+		maxConcurrency:   cfg.MaxConcurrency,
+		memoryWindow:     cfg.MemoryWindow,
+		purgeOldMessages: cfg.PurgeOldMessages,
+
 		skills:             skillStore,
 		agents:             agentStore,
 		chatHistory:        chatHistory,
@@ -1017,11 +1030,6 @@ func (a *Agent) isRemoteUser(userID string) bool {
 	return a.sandboxNameForUser(userID) == "remote"
 }
 
-// isDockerUser checks whether the given user routes to a docker sandbox.
-func (a *Agent) isDockerUser(userID string) bool {
-	return a.sandboxNameForUser(userID) == "docker"
-}
-
 // sandboxNameForUser resolves the sandbox name for a given user.
 func (a *Agent) sandboxNameForUser(userID string) string {
 	if a.sandbox == nil {
@@ -1073,14 +1081,11 @@ func (a *Agent) sandboxWorkspace(userID string) string {
 }
 
 // ensureWorkspace ensures the workspace directory exists (sandbox-aware).
-// Skipped for remote and docker sandboxes — they manage their own filesystems.
+// Skipped for remote, docker, and denied sandboxes — they manage their own filesystems
+// or don't need host-side directories.
 func (a *Agent) ensureWorkspace(ctx context.Context, dir, senderID string) error {
-	if a.isRemoteUser(senderID) {
-		return nil
-	}
-	// For docker mode, the workspace is inside the container (/workspace);
-	// don't create host-side directories — the container manages its own FS.
-	if a.isDockerUser(senderID) {
+	name := a.sandboxNameForUser(senderID)
+	if name == "remote" || name == "docker" || name == "denied" || name == "none" {
 		return nil
 	}
 	if a.sandbox != nil {
@@ -1249,8 +1254,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			}()
 
 			// 沙箱正在 export+import 时，拒绝该用户所有请求
-			if sb := tools.GetSandbox(); sb.IsExporting(msg.SenderID) {
-				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID}).Info("Request rejected: sandbox export in progress")
+			sbUID := sandboxUserID(msg)
+			if sb := tools.GetSandbox(); sb.IsExporting(sbUID) {
+				log.WithFields(log.Fields{"request_id": msg.RequestID, "sender": msg.SenderID, "sandbox_user": sbUID}).Info("Request rejected: sandbox export in progress")
 				a.sendMessage(msg.Channel, msg.ChatID, "⏳ 沙箱正在持久化中，请稍后再试...")
 				return
 			}
@@ -1396,18 +1402,19 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, out.Error
 	}
 	finalContent := out.Content
-	toolsUsed := out.ToolsUsed
 	waitingUser := out.WaitingUser
 
 	// 如果工具正在等待用户响应，不生成回复消息
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			userMsg := llm.NewUserMessage(msg.Content)
+			if !msg.Time.IsZero() {
+				userMsg.Timestamp = msg.Time
+			}
+			if err := tenantSession.AddMessage(userMsg); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+			}
 		}
 		// Persist engine-produced messages (assistant + tool) so the next
 		// turn has full context of what happened before waiting.
@@ -1430,12 +1437,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			userMsg := llm.NewUserMessage(msg.Content)
+			if !msg.Time.IsZero() {
+				userMsg.Timestamp = msg.Time
+			}
+			if err := tenantSession.AddMessage(userMsg); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+			}
 		}
 		log.Ctx(ctx).WithFields(log.Fields{
 			"channel":      msg.Channel,
@@ -1446,12 +1455,14 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	userMsg := llm.NewUserMessage(msg.Content)
-	if !msg.Time.IsZero() {
-		userMsg.Timestamp = msg.Time
-	}
-	if err := tenantSession.AddMessage(userMsg); err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+	if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		userMsg := llm.NewUserMessage(msg.Content)
+		if !msg.Time.IsZero() {
+			userMsg.Timestamp = msg.Time
+		}
+		if err := tenantSession.AddMessage(userMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
+		}
 	}
 
 	// Persist engine-produced messages (assistant + tool) for context continuity.
@@ -1464,15 +1475,22 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	assistantMsg := llm.NewAssistantMessage(finalContent)
-	if len(toolsUsed) > 0 {
-		_ = toolsUsed
+	// Attach iteration history as JSON detail for UI display (not included in LLM context).
+	if len(out.IterationHistory) > 0 {
+		if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+			assistantMsg.Detail = string(jsonBytes)
+		}
 	}
 	if err := tenantSession.AddMessage(assistantMsg); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to save assistant message")
 	}
 
 	// 通过 sendMessage 发送最终回复（复用 session 内的消息更新跟踪）
-	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent); err != nil {
+	sendMeta := map[string]string{}
+	if assistantMsg.Detail != "" {
+		sendMeta["progress_history"] = assistantMsg.Detail
+	}
+	if err := a.sendMessage(msg.Channel, msg.ChatID, finalContent, sendMeta); err != nil {
 		log.Ctx(ctx).WithError(err).Error("Failed to send final response via sendMessage")
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -1553,8 +1571,9 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil
 	}
-	workspaceRoot := a.workspaceRoot(msg.SenderID)
-	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
+	sbUID := sandboxUserID(msg)
+	workspaceRoot := a.workspaceRoot(sbUID)
+	if err := a.ensureWorkspace(ctx, workspaceRoot, sbUID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 	newTools, err := a.multiSession.ConfigureSessionMCP(msg.Channel, msg.ChatID, msg.SenderID, a.workDir)
@@ -1667,20 +1686,18 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 	}
 
 	// 验证是否仍需整理（可能已被其他路径整理过）
-	length, err := tenantSession.Len()
+	currentUserMsgCount, err := tenantSession.UserMessageCount()
 	if err != nil {
-		log.Ctx(ctx).WithError(err).Error("Failed to get session length for consolidation")
+		log.Ctx(ctx).WithError(err).Error("Failed to get user message count for consolidation")
 		return
 	}
-	lastConsolidated := tenantSession.LastConsolidated()
-	currentUnconsolidated := length - lastConsolidated
 
-	// 如果当前未整理数小于触发时的数量，说明已被其他路径整理过
-	if currentUnconsolidated < req.unconsolidated {
+	// 如果当前 user 消息数小于触发时的数量，说明已被其他路径整理过
+	if currentUserMsgCount < req.userMsgCount {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"tenant":                 tenantKey,
-			"current_unconsolidated": currentUnconsolidated,
-			"trigger_unconsolidated": req.unconsolidated,
+			"current_user_msg_count": currentUserMsgCount,
+			"trigger_user_msg_count": req.userMsgCount,
 		}).Debug("Consolidation already done by another path, skipping")
 		return
 	}
@@ -1696,6 +1713,7 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 		return
 	}
 
+	lastConsolidated := tenantSession.LastConsolidated()
 	mem := tenantSession.Memory()
 	llmClient, model, _, _ := a.llmFactory.GetLLM(req.senderID)
 
@@ -1724,15 +1742,16 @@ func (a *Agent) doConsolidate(ctx context.Context, req consolidateRequest) {
 
 func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.TenantSession, senderID string) {
 	tenantKey := tenantSession.Channel() + ":" + tenantSession.ChatID()
-	length, err := tenantSession.Len()
+
+	// Use user-message count (not total rows) to measure conversation turns.
+	// Tool calls, assistant iterations etc. should not inflate the count.
+	userMsgCount, err := tenantSession.UserMessageCount()
 	if err != nil {
-		log.Ctx(ctx).WithError(err).Warn("Failed to get session length for consolidation check")
+		log.Ctx(ctx).WithError(err).Warn("Failed to get user message count for consolidation check")
 		return
 	}
 
-	lastConsolidated := tenantSession.LastConsolidated()
-	unconsolidated := length - lastConsolidated
-	if unconsolidated < a.memoryWindow {
+	if userMsgCount < a.memoryWindow {
 		return
 	}
 
@@ -1747,10 +1766,10 @@ func (a *Agent) maybeConsolidate(ctx context.Context, tenantSession *session.Ten
 	// 立即尝试发送，失败则跳过（简化锁逻辑，避免阻塞）
 	select {
 	case a.consolidateCh <- consolidateRequest{
-		channel:        tenantSession.Channel(),
-		chatID:         tenantSession.ChatID(),
-		senderID:       senderID,
-		unconsolidated: unconsolidated,
+		channel:      tenantSession.Channel(),
+		chatID:       tenantSession.ChatID(),
+		senderID:     senderID,
+		userMsgCount: userMsgCount,
 	}:
 		// 发送成功，标记为正在整理
 		a.consolidating[tenantKey] = true
@@ -1819,7 +1838,7 @@ func (a *Agent) RegisterCoreTool(tool tools.Tool) {
 
 // 首次发送创建新消息（如有入站 message_id 则回复该消息），后续发送 Patch 更新同一条消息。
 // 工具发送最终回复（如飞书卡片）时同样 Patch 更新，但标记 session 为"已完成"，后续调用自动跳过。
-func (a *Agent) sendMessage(channel, chatID, content string) error {
+func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[string]string) error {
 	key := channel + ":" + chatID
 
 	// 工具已发送最终回复 → 跳过后续所有消息（进度更新、LLM 最终回复等）
@@ -1832,11 +1851,16 @@ func (a *Agent) sendMessage(channel, chatID, content string) error {
 		ChatID:  chatID,
 		Content: content,
 	}
+	if len(metadata) > 0 && metadata[0] != nil {
+		msg.Metadata = metadata[0]
+	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
 	if a.directSend != nil {
-		msg.Metadata = make(map[string]string)
+		if msg.Metadata == nil {
+			msg.Metadata = make(map[string]string)
+		}
 
 		// Always include update_message_id for patch support.
 		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,

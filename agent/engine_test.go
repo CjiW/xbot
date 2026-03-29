@@ -1093,7 +1093,7 @@ func TestBuildToolContext(t *testing.T) {
 		ChatID:     "oc_xxx",
 		SenderID:   "ou_xxx",
 		SenderName: "Test",
-		SendFunc: func(ch, cid, content string) error {
+		SendFunc: func(ch, cid, content string, _ ...map[string]string) error {
 			return nil
 		},
 		InjectInbound: func(ch, cid, sid, content string) {

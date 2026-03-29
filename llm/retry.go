@@ -176,7 +176,15 @@ func isRateLimitError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, ": 429 ")
+	// OpenAI SDK: `POST "URL": 429 Too Many Requests`
+	if strings.Contains(msg, ": 429 ") {
+		return true
+	}
+	// Anthropic SDK: `anthropic API error: status=429, body=...`
+	if strings.Contains(msg, "status=429") {
+		return true
+	}
+	return false
 }
 
 // retryOptions 构建通用重试选项

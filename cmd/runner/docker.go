@@ -18,6 +18,7 @@ import (
 const (
 	dockerCmdTimeout  = 30 * time.Second
 	dockerSlowTimeout = 120 * time.Second
+	dockerPullTimeout = 5 * time.Minute
 
 	// MaxSandboxFileSize is the maximum file size for read/write operations (500MB).
 	MaxSandboxFileSize int64 = 500 * 1024 * 1024
@@ -74,9 +75,17 @@ func (de *dockerExecutor) getOrCreateContainer() error {
 	}
 
 	// 3. 容器不存在 → create
-	//    优先预检镜像是否存在本地，不存在则直接报错（不尝试 pull，避免挂起）
+	//    预检镜像，不存在则自动 pull
 	if out, err := de.dockerExec("image", "inspect", de.image); err != nil {
-		return fmt.Errorf("docker image %q not found locally (please pull first): %s", de.image, strings.TrimSpace(string(out)))
+		log.Printf("Docker image %q not found locally, pulling...", de.image)
+		ctx, cancel := context.WithTimeout(context.Background(), dockerPullTimeout)
+		pullOut, pullErr := exec.CommandContext(ctx, "docker", "image", "pull", de.image).CombinedOutput()
+		cancel()
+		if pullErr != nil {
+			return fmt.Errorf("docker pull %q failed: %w, output: %s", de.image, pullErr, strings.TrimSpace(string(pullOut)))
+		}
+		_ = out // suppress unused warning
+		log.Printf("Docker image %q pulled successfully", de.image)
 	}
 
 	args := []string{

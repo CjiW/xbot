@@ -61,7 +61,7 @@ func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxR
 			AgentsDir:       xbotDir + "/agents",
 		}
 		rs, err := NewRemoteSandbox(RemoteSandboxConfig{
-			Addr:      "0.0.0.0:" + itoa(wsPort),
+			Addr:      "0.0.0.0:" + strconv.Itoa(wsPort),
 			AuthToken: sandboxCfg.AuthToken,
 		}, syncCfg)
 		if err != nil {
@@ -242,17 +242,4 @@ func (r *SandboxRouter) resolve(userID string) Sandbox {
 		return r.docker
 	}
 	return r.none
-}
-
-// itoa converts int to string without importing strconv.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	s := ""
-	for i > 0 {
-		s = string('0'+byte(i%10)) + s
-		i /= 10
-	}
-	return s
 }

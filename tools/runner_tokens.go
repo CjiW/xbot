@@ -149,7 +149,14 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) 
 	token = base64.RawURLEncoding.EncodeToString(b)
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = s.db.Exec(`
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
 		INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
 		VALUES (?, ?, ?, ?, ?, '', ?)
 		ON CONFLICT(user_id, name) DO UPDATE SET
@@ -163,7 +170,7 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) 
 	}
 
 	// Also upsert into runner_tokens for backward compatibility.
-	_, _ = s.db.Exec(`
+	_, err = tx.Exec(`
 		INSERT INTO runner_tokens (user_id, token, mode, docker_image, workspace, created_at)
 		VALUES (?, ?, ?, ?, '', ?)
 		ON CONFLICT(user_id) DO UPDATE SET
@@ -171,8 +178,16 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) 
 			mode = excluded.mode,
 			docker_image = excluded.docker_image,
 			created_at = excluded.created_at
-	`, userID, token, mode, now)
+	`, userID, token, mode, dockerImage, now)
+	if err != nil {
+		return "", "", fmt.Errorf("upsert runner_tokens: %w", err)
+	}
 
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("commit tx: %w", err)
+	}
+
+	// If this is the user's first runner, set it as active.
 	// If this is the user's first runner, set it as active.
 	var count int
 	s.db.QueryRow("SELECT COUNT(*) FROM runners WHERE user_id = ?", userID).Scan(&count)

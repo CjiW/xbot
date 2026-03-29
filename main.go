@@ -367,6 +367,12 @@ func main() {
 					if db == nil {
 						return fmt.Errorf("runner management not configured")
 					}
+					// Disconnect runner if online
+					if sb := tools.GetSandbox(); sb != nil {
+						if rs, ok := sb.(*tools.RemoteSandbox); ok {
+							rs.DisconnectRunner(senderID, name)
+						}
+					}
 					return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
 				},
 				RunnerGetActive: func(senderID string) (string, error) {

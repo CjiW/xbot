@@ -295,33 +295,33 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	// Sync global skills and agents to the runner in the background
 	go rs.syncToRunner(reg.UserID, reg.Workspace)
 
-		// Keep reading messages (responses and heartbeats)
-		for {
-			_, raw, err := conn.ReadMessage()
-			if err != nil {
-				log.WithError(err).WithFields(log.Fields{
-					"user_id":     reg.UserID,
-					"runner_name": runnerName,
-				}).Debug("Runner disconnected")
-				return
-			}
-			// Handle response: find pending request and deliver
-			var resp RunnerMessage
-			if err := json.Unmarshal(raw, &resp); err != nil {
-				continue
-			}
-			if resp.ID != "" {
-				rs.pendingMu.Lock()
-				if ch, ok := rs.pending[resp.ID]; ok {
-					select {
-					case ch <- &resp:
-					default:
-					}
-					delete(rs.pending, resp.ID)
-				}
-				rs.pendingMu.Unlock()
-			}
+	// Keep reading messages (responses and heartbeats)
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"user_id":     reg.UserID,
+				"runner_name": runnerName,
+			}).Debug("Runner disconnected")
+			return
 		}
+		// Handle response: find pending request and deliver
+		var resp RunnerMessage
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			continue
+		}
+		if resp.ID != "" {
+			rs.pendingMu.Lock()
+			if ch, ok := rs.pending[resp.ID]; ok {
+				select {
+				case ch <- &resp:
+				default:
+				}
+				delete(rs.pending, resp.ID)
+			}
+			rs.pendingMu.Unlock()
+		}
+	}
 
 }
 

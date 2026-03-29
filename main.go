@@ -330,59 +330,59 @@ func main() {
 					tools.NewRunnerTokenStore(db).Revoke(senderID)
 					return nil
 				},
-					RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-						db := tools.GetRunnerTokenDB()
-						if db == nil {
-							return nil, fmt.Errorf("runner management not configured")
-						}
-						store := tools.NewRunnerTokenStore(db)
-						runners, err := store.ListRunners(senderID)
-						if err != nil {
-							return nil, err
-						}
-						return runners, nil
-					},
-					RunnerCreate: func(senderID, name, mode, dockerImage string) (string, error) {
-						db := tools.GetRunnerTokenDB()
-						if db == nil {
-							return "", fmt.Errorf("runner management not configured")
-						}
-						store := tools.NewRunnerTokenStore(db)
-						token, _, err := store.CreateRunner(senderID, name, mode, dockerImage)
-						if err != nil {
-							return "", err
-						}
-						pubURL := cfg.Sandbox.PublicURL
-						if pubURL == "" {
-							pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-						}
-						cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
-						if mode == "docker" && dockerImage != "" {
-							cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
-						}
-						return cmd, nil
-					},
-					RunnerDelete: func(senderID, name string) error {
-						db := tools.GetRunnerTokenDB()
-						if db == nil {
-							return fmt.Errorf("runner management not configured")
-						}
-						return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
-					},
-					RunnerGetActive: func(senderID string) (string, error) {
-						db := tools.GetRunnerTokenDB()
-						if db == nil {
-							return "", fmt.Errorf("runner management not configured")
-						}
-						return tools.NewRunnerTokenStore(db).GetActiveRunner(senderID)
-					},
-					RunnerSetActive: func(senderID, name string) error {
-						db := tools.GetRunnerTokenDB()
-						if db == nil {
-							return fmt.Errorf("runner management not configured")
-						}
-						return tools.NewRunnerTokenStore(db).SetActiveRunner(senderID, name)
-					},
+				RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return nil, fmt.Errorf("runner management not configured")
+					}
+					store := tools.NewRunnerTokenStore(db)
+					runners, err := store.ListRunners(senderID)
+					if err != nil {
+						return nil, err
+					}
+					return runners, nil
+				},
+				RunnerCreate: func(senderID, name, mode, dockerImage string) (string, error) {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return "", fmt.Errorf("runner management not configured")
+					}
+					store := tools.NewRunnerTokenStore(db)
+					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage)
+					if err != nil {
+						return "", err
+					}
+					pubURL := cfg.Sandbox.PublicURL
+					if pubURL == "" {
+						pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
+					}
+					cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
+					if mode == "docker" && dockerImage != "" {
+						cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
+					}
+					return cmd, nil
+				},
+				RunnerDelete: func(senderID, name string) error {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return fmt.Errorf("runner management not configured")
+					}
+					return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
+				},
+				RunnerGetActive: func(senderID string) (string, error) {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return "", fmt.Errorf("runner management not configured")
+					}
+					return tools.NewRunnerTokenStore(db).GetActiveRunner(senderID)
+				},
+				RunnerSetActive: func(senderID, name string) error {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return fmt.Errorf("runner management not configured")
+					}
+					return tools.NewRunnerTokenStore(db).SetActiveRunner(senderID, name)
+				},
 
 				RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 					return agentLoop.RegistryManager().Browse(entryType, limit, offset)

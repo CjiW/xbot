@@ -206,7 +206,8 @@ func main() {
 		log.Info("OAuth and Feishu MCP tools registered")
 	}
 
-	// 注册需要配置注入的工具（非 core，飞书专属）
+	// 注册 DownloadFile 工具（支持 Web/OSS 和飞书两种来源）
+	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
 
@@ -293,6 +294,26 @@ func main() {
 				}
 				// Set workDir so uploaded files can be copied into sandbox-accessible paths
 				webCh.SetWorkDir(workDir)
+				// Set OSS provider for file storage
+				if cfg.OSS.Provider == "qiniu" {
+					ossProvider, err := channel.NewOSSProvider(
+						cfg.OSS.Provider,
+						"",
+						channel.QiniuConfig{
+							AccessKey: cfg.OSS.QiniuAccessKey,
+							SecretKey: cfg.OSS.QiniuSecretKey,
+							Bucket:    cfg.OSS.QiniuBucket,
+							Domain:    cfg.OSS.QiniuDomain,
+							Region:    cfg.OSS.QiniuRegion,
+						},
+					)
+					if err != nil {
+						log.WithError(err).Error("Failed to create Qiniu OSS provider, falling back to local")
+					} else {
+						webCh.SetOSSProvider(ossProvider)
+						log.Info("OSS provider configured: qiniu")
+					}
+				}
 
 			}
 			webCh.SetCallbacks(channel.WebCallbacks{

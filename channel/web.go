@@ -289,10 +289,13 @@ type WsToolProgress struct {
 }
 
 type wsClientMessage struct {
-	Type      string   `json:"type"`
-	Content   string   `json:"content"`
-	FileIDs   []string `json:"file_ids,omitempty"`
-	FileNames []string `json:"file_names,omitempty"`
+	Type       string   `json:"type"`
+	Content    string   `json:"content"`
+	FileIDs    []string `json:"file_ids,omitempty"`
+	FileNames  []string `json:"file_names,omitempty"`
+	FileSizes  []int64  `json:"file_sizes,omitempty"`
+	UploadKeys []string `json:"upload_keys,omitempty"` // OSS upload keys (for qiniu mode)
+	FileMimes  []string `json:"file_mimes,omitempty"`  // MIME types
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +331,9 @@ type WebChannel struct {
 
 	// Working directory (workspace) — used to copy uploaded files into sandbox-accessible path
 	workDir string
+
+	// OSS provider for file storage (local or qiniu)
+	ossProvider OSSProvider
 }
 
 type sessionInfo struct {
@@ -368,6 +374,11 @@ func (wc *WebChannel) SetWorkDir(dir string) {
 	if dir != "" {
 		wc.workDir = filepath.Clean(dir)
 	}
+}
+
+// SetOSSProvider sets the OSS provider for file storage.
+func (wc *WebChannel) SetOSSProvider(p OSSProvider) {
+	wc.ossProvider = p
 }
 
 // SetCallbacks injects callback functions from main for API endpoints.
@@ -672,7 +683,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			continue
 
 		case "message":
-			if msg.Content == "" && len(msg.FileIDs) == 0 {
+			if msg.Content == "" && len(msg.FileIDs) == 0 && len(msg.UploadKeys) == 0 {
 				continue
 			}
 
@@ -754,13 +765,44 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			}
 		}
 
+		// Handle OSS upload_keys (qiniu mode): files already uploaded to cloud by frontend
+		if len(msg.UploadKeys) > 0 && wc.ossProvider != nil {
+			for i, key := range msg.UploadKeys {
+				displayName := key
+				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
+					displayName = filepath.Base(msg.FileNames[i])
+				}
+				var fileSize int64
+				if i < len(msg.FileSizes) {
+					fileSize = msg.FileSizes[i]
+				}
+
+				// Get signed download URL
+				downloadURL, err := wc.ossProvider.GetDownloadURL(key)
+				if err != nil {
+					log.WithError(err).WithField("key", key).Warn("Failed to get download URL for OSS file")
+					content += fmt.Sprintf("\n\n📎 [用户上传文件: %s] (获取下载链接失败)", displayName)
+					continue
+				}
+
+				ext := strings.ToLower(filepath.Ext(displayName))
+				if isImageExt(ext) {
+					// For images, use markdown image syntax with signed URL
+					content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![%s](%s)", displayName, fileSize, displayName, downloadURL)
+				} else {
+					// For non-image files, provide download URL for download_file tool
+					content += fmt.Sprintf("\n\n📎 [用户上传文件: %s (%d bytes)] (访问URL: %s)", displayName, fileSize, downloadURL)
+				}
+			}
+		}
+
 		metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
 		if si.feishuUserID != "" {
 			metadata["feishu_user_id"] = si.feishuUserID
 		}
 
 		// Echo back complete user message (with file info) so frontend can update optimistic message
-		if content != originalContent && len(msg.FileIDs) > 0 {
+		if content != originalContent && (len(msg.FileIDs) > 0 || len(msg.UploadKeys) > 0) {
 			echoMsg := wsMessage{
 				Type:            "user_echo",
 				Content:         content,

@@ -83,6 +83,9 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
     if (runner.mode === 'docker' && runner.docker_image) {
       cmd += ` --mode docker --docker-image ${runner.docker_image}`
     }
+    if (runner.workspace) {
+      cmd += ` --workspace ${runner.workspace}`
+    }
     return cmd
   }, [serverUrl])
 

@@ -20,6 +20,7 @@ import (
 	"xbot/bus"
 	log "xbot/logger"
 	"xbot/storage/sqlite"
+	"xbot/tools"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -62,6 +63,16 @@ type WebCallbacks struct {
 	RunnerTokenGenerate func(senderID, mode, dockerImage, workspace string) (string, error)
 	// RunnerTokenRevoke revokes the user's current token.
 	RunnerTokenRevoke func(senderID string) error
+	// RunnerList lists all runners for a user with online status.
+	RunnerList func(senderID string) ([]tools.RunnerInfo, error)
+	// RunnerCreate creates a new named runner and returns the connect command.
+	RunnerCreate func(senderID, name, mode, dockerImage string) (string, error)
+	// RunnerDelete deletes a named runner.
+	RunnerDelete func(senderID, name string) error
+	// RunnerGetActive returns the active runner name for the user.
+	RunnerGetActive func(senderID string) (string, error)
+	// RunnerSetActive sets the active runner for the user.
+	RunnerSetActive func(senderID, name string) error
 	// RegistryBrowse lists available agents/skills in the marketplace.
 	RegistryBrowse func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error)
 	// RegistryInstall installs a shared entry for the user.
@@ -389,6 +400,11 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 	mux.HandleFunc("/api/settings", wc.authMiddleware(wc.handleSettings))
 	mux.HandleFunc("/api/runner/token", wc.authMiddleware(wc.handleRunnerToken))
+
+	// Multi-runner API
+	mux.HandleFunc("/api/runners", wc.authMiddleware(wc.handleRunners))
+	mux.HandleFunc("/api/runners/active", wc.authMiddleware(wc.handleRunnerActive))
+	mux.HandleFunc("/api/runners/", wc.authMiddleware(wc.handleRunnerByName))
 
 	// Market API
 	mux.HandleFunc("/api/market", wc.authMiddleware(wc.handleMarket))

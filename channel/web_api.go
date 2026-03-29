@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"xbot/tools"
 )
 
 // ---------------------------------------------------------------------------
@@ -289,6 +291,154 @@ func (wc *WebChannel) handleRunnerTokenRevoke(w http.ResponseWriter, senderID st
 		return
 	}
 	writeJSON(w, http.StatusOK, runnerTokenResponse{OK: true})
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Runner API
+// ---------------------------------------------------------------------------
+
+type runnersListResponse struct {
+	OK      bool               `json:"ok"`
+	Runners []tools.RunnerInfo `json:"runners,omitempty"`
+	Error   string             `json:"error,omitempty"`
+}
+
+type runnerCreateRequest struct {
+	Name        string `json:"name"`
+	Mode        string `json:"mode"`
+	DockerImage string `json:"docker_image"`
+}
+
+type runnerActiveResponse struct {
+	OK    bool   `json:"ok"`
+	Name  string `json:"name"`
+	Error string `json:"error,omitempty"`
+}
+
+type runnerCommandResponse struct {
+	OK      bool   `json:"ok"`
+	Command string `json:"command"`
+	Error   string `json:"error,omitempty"`
+}
+
+// handleRunners handles GET /api/runners (list) and POST /api/runners (create).
+func (wc *WebChannel) handleRunners(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, runnersListResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if wc.callbacks.RunnerList == nil {
+			writeJSON(w, http.StatusOK, runnersListResponse{OK: true})
+			return
+		}
+		runners, err := wc.callbacks.RunnerList(senderID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, runnersListResponse{OK: false, Error: "list failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, runnersListResponse{OK: true, Runners: runners})
+	case http.MethodPost:
+		if wc.callbacks.RunnerCreate == nil {
+			writeJSON(w, http.StatusServiceUnavailable, runnerCommandResponse{OK: false, Error: "runner management not configured"})
+			return
+		}
+		var req runnerCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, runnerCommandResponse{OK: false, Error: "invalid request body"})
+			return
+		}
+		if req.Name == "" {
+			writeJSON(w, http.StatusBadRequest, runnerCommandResponse{OK: false, Error: "name is required"})
+			return
+		}
+		cmd, err := wc.callbacks.RunnerCreate(senderID, req.Name, req.Mode, req.DockerImage)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, runnerCommandResponse{OK: false, Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, runnerCommandResponse{OK: true, Command: cmd})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleRunnerActive handles GET /api/runners/active (get) and PUT /api/runners/active (set).
+func (wc *WebChannel) handleRunnerActive(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, runnerActiveResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if wc.callbacks.RunnerGetActive == nil {
+			writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: ""})
+			return
+		}
+		name, err := wc.callbacks.RunnerGetActive(senderID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: ""})
+			return
+		}
+		writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: name})
+	case http.MethodPut:
+		if wc.callbacks.RunnerSetActive == nil {
+			writeJSON(w, http.StatusServiceUnavailable, runnerActiveResponse{OK: false, Error: "runner management not configured"})
+			return
+		}
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+			writeJSON(w, http.StatusBadRequest, runnerActiveResponse{OK: false, Error: "name is required"})
+			return
+		}
+		if err := wc.callbacks.RunnerSetActive(senderID, req.Name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, runnerActiveResponse{OK: false, Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: req.Name})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleRunnerByName handles DELETE /api/runners/{name}.
+func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, runnerActiveResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	// Extract runner name from URL: /api/runners/{name}
+	name := strings.TrimPrefix(r.URL.Path, "/api/runners/")
+	name = strings.TrimSuffix(name, "/")
+	// Reject paths that look like other endpoints
+	if name == "active" || name == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		if wc.callbacks.RunnerDelete == nil {
+			writeJSON(w, http.StatusServiceUnavailable, runnerActiveResponse{OK: false, Error: "runner management not configured"})
+			return
+		}
+		if err := wc.callbacks.RunnerDelete(senderID, name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, runnerActiveResponse{OK: false, Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true})
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // ---------------------------------------------------------------------------

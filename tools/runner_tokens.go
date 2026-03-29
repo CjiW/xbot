@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"time"
 
 	log "xbot/logger"
@@ -111,4 +112,173 @@ func (s *RunnerTokenStore) Revoke(userID string) {
 	if err != nil {
 		log.WithError(err).Error("Failed to revoke runner token")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-runner support (runners table)
+// ---------------------------------------------------------------------------
+
+// RunnerInfo describes a single runner belonging to a user.
+type RunnerInfo struct {
+	Name        string `json:"name"`
+	Token       string `json:"token,omitempty"`
+	Mode        string `json:"mode"`
+	DockerImage string `json:"docker_image"`
+	Workspace   string `json:"workspace"`
+	CreatedAt   string `json:"created_at"`
+	Online      bool   `json:"online"`
+}
+
+// CreateRunner creates a new named runner for the user, generates a token.
+// Returns the token and the xbot-runner connect command fragment.
+func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage string) (token, command string, err error) {
+	if name == "" {
+		return "", "", fmt.Errorf("runner name is required")
+	}
+	if mode == "" {
+		mode = "native"
+	}
+	if dockerImage == "" {
+		dockerImage = "ubuntu:22.04"
+	}
+
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate token: %w", err)
+	}
+	token = base64.RawURLEncoding.EncodeToString(b)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
+		VALUES (?, ?, ?, ?, ?, '', ?)
+		ON CONFLICT(user_id, name) DO UPDATE SET
+			token = excluded.token,
+			mode = excluded.mode,
+			docker_image = excluded.docker_image,
+			created_at = excluded.created_at
+	`, userID, name, token, mode, dockerImage, now)
+	if err != nil {
+		return "", "", fmt.Errorf("insert runner: %w", err)
+	}
+
+	// Also upsert into runner_tokens for backward compatibility.
+	_, err = tx.Exec(`
+		INSERT INTO runner_tokens (user_id, token, mode, docker_image, workspace, created_at)
+		VALUES (?, ?, ?, ?, '', ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			token = excluded.token,
+			mode = excluded.mode,
+			docker_image = excluded.docker_image,
+			created_at = excluded.created_at
+	`, userID, token, mode, dockerImage, now)
+	if err != nil {
+		return "", "", fmt.Errorf("upsert runner_tokens: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("commit tx: %w", err)
+	}
+
+	// If this is the user's first runner, set it as active.
+	// If this is the user's first runner, set it as active.
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM runners WHERE user_id = ?", userID).Scan(&count)
+	if count <= 1 {
+		s.SetActiveRunner(userID, name)
+	}
+
+	return token, token, nil
+}
+
+// ListRunners returns all runners for a user.
+func (s *RunnerTokenStore) ListRunners(userID string) ([]RunnerInfo, error) {
+	rows, err := s.db.Query(
+		"SELECT name, token, mode, docker_image, COALESCE(workspace,''), COALESCE(created_at,'') FROM runners WHERE user_id = ? ORDER BY created_at",
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list runners: %w", err)
+	}
+	defer rows.Close()
+
+	var runners []RunnerInfo
+	for rows.Next() {
+		var r RunnerInfo
+		if err := rows.Scan(&r.Name, &r.Token, &r.Mode, &r.DockerImage, &r.Workspace, &r.CreatedAt); err != nil {
+			continue
+		}
+		runners = append(runners, r)
+	}
+	return runners, nil
+}
+
+// DeleteRunner removes a runner by name.
+func (s *RunnerTokenStore) DeleteRunner(userID, name string) error {
+	_, err := s.db.Exec("DELETE FROM runners WHERE user_id = ? AND name = ?", userID, name)
+	if err != nil {
+		return fmt.Errorf("delete runner: %w", err)
+	}
+	return nil
+}
+
+// GetActiveRunner returns the name of the active runner for a user.
+func (s *RunnerTokenStore) GetActiveRunner(userID string) (string, error) {
+	var value string
+	err := s.db.QueryRow(
+		"SELECT value FROM user_settings WHERE channel = 'web' AND sender_id = ? AND key = 'active_runner'",
+		userID,
+	).Scan(&value)
+	if err != nil {
+		// Fallback: return first runner name if any exist.
+		var name string
+		if err2 := s.db.QueryRow("SELECT name FROM runners WHERE user_id = ? ORDER BY created_at LIMIT 1", userID).Scan(&name); err2 != nil {
+			return "", fmt.Errorf("no active runner")
+		}
+		return name, nil
+	}
+	return value, nil
+}
+
+// SetActiveRunner sets the active runner for a user.
+func (s *RunnerTokenStore) SetActiveRunner(userID, name string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO user_settings (channel, sender_id, key, value, updated_at)
+		VALUES ('web', ?, 'active_runner', ?, ?)
+	`, userID, name, now)
+	if err != nil {
+		return fmt.Errorf("set active runner: %w", err)
+	}
+	return nil
+}
+
+// FindByToken looks up a runner by token and returns the userID and runnerName.
+func (s *RunnerTokenStore) FindByToken(token string) (userID, runnerName string, err error) {
+	err = s.db.QueryRow(
+		"SELECT user_id, name FROM runners WHERE token = ?", token,
+	).Scan(&userID, &runnerName)
+	if err != nil {
+		return "", "", fmt.Errorf("runner not found for token")
+	}
+	return userID, runnerName, nil
+}
+
+// FindByTokenInRunnerTokens looks up the legacy runner_tokens table by token.
+// Returns userID or empty string if not found.
+func (s *RunnerTokenStore) FindByTokenInRunnerTokens(token string) (userID string) {
+	err := s.db.QueryRow(
+		"SELECT user_id FROM runner_tokens WHERE token = ?", token,
+	).Scan(&userID)
+	if err != nil {
+		return ""
+	}
+	return userID
 }

@@ -716,7 +716,17 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 							mimeType = http.DetectContentType(data)
 						}
 						b64 := base64.StdEncoding.EncodeToString(data)
-						content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
+						// Also write to sandbox so agent can save/process the image via file path
+						sandboxRelPath := "uploads/" + displayName
+						if wc.callbacks.SandboxWriteFile != nil {
+							if sandboxPath, writeErr := wc.callbacks.SandboxWriteFile(c.userID, sandboxRelPath, data, 0644); writeErr == nil && sandboxPath != "" {
+								content += fmt.Sprintf("\n\n<image name=\"%s\" path=\"%s/%s\" size=\"%d\" />\n![uploaded image](data:%s;base64,%s)", displayName, sandboxPath, displayName, len(data), mimeType, b64)
+							} else {
+								content += fmt.Sprintf("\n\n<image name=\"%s\" size=\"%d\" />\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
+							}
+						} else {
+							content += fmt.Sprintf("\n\n<image name=\"%s\" size=\"%d\" />\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
+						}
 					}
 				} else {
 					// For non-image files, write to user's sandbox so tools can access them.

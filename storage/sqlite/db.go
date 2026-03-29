@@ -819,5 +819,4 @@ CREATE TABLE IF NOT EXISTS runners (
 	}
 
 	return nil
-	return nil
 }

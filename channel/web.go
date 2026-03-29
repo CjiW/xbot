@@ -66,7 +66,7 @@ type WebCallbacks struct {
 	// RunnerList lists all runners for a user with online status.
 	RunnerList func(senderID string) ([]tools.RunnerInfo, error)
 	// RunnerCreate creates a new named runner and returns the connect command.
-	RunnerCreate func(senderID, name, mode, dockerImage string) (string, error)
+	RunnerCreate func(senderID, name, mode, dockerImage, workspace string) (string, error)
 	// RunnerDelete deletes a named runner.
 	RunnerDelete func(senderID, name string) error
 	// RunnerGetActive returns the active runner name for the user.

@@ -363,13 +363,13 @@ func main() {
 					}
 					return runners, nil
 				},
-				RunnerCreate: func(senderID, name, mode, dockerImage string) (string, error) {
+				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
 					db := tools.GetRunnerTokenDB()
 					if db == nil {
 						return "", fmt.Errorf("runner management not configured")
 					}
 					store := tools.NewRunnerTokenStore(db)
-					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage)
+					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace)
 					if err != nil {
 						return "", err
 					}

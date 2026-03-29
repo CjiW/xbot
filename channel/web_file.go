@@ -88,6 +88,13 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Local storage mode — uploadDir is required
+	if wc.uploadDir == "" {
+		log.Error("File upload rejected: uploadDir is not configured and no cloud OSS provider available")
+		http.Error(w, "file storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Local storage mode
 	fileID := uuid.New().String() + ext
 

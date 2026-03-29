@@ -770,9 +770,30 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				}
 			}
 		} else if len(msg.FileIDs) > 0 && wc.uploadDir == "" {
-			log.Warn("Web channel received file_ids but uploadDir is not configured")
-			for _, fid := range msg.FileIDs {
-				content += fmt.Sprintf("\n\n📎 [附件: %s]", fid)
+			// uploadDir not configured — try to serve files via OSS signed URL if available
+			for i, fid := range msg.FileIDs {
+				displayName := fid
+				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
+					displayName = filepath.Base(msg.FileNames[i])
+				}
+				if wc.ossProvider != nil {
+					// Try to get a signed download URL via OSS
+					downloadURL, err := wc.ossProvider.GetDownloadURL(fid)
+					if err == nil && downloadURL != "" {
+						ext := strings.ToLower(filepath.Ext(displayName))
+						if isImageExt(ext) {
+							content += fmt.Sprintf("\n\n<image url=\"%s\" name=\"%s\" />\n![%s](%s)", downloadURL, displayName, displayName, downloadURL)
+						} else {
+							content += fmt.Sprintf("\n\n<file name=\"%s\" url=\"%s\" />", displayName, downloadURL)
+						}
+					} else {
+						log.WithError(err).WithField("fid", fid).Warn("Failed to get OSS URL for file_id fallback")
+						content += fmt.Sprintf("\n\n📎 [附件: %s] (下载失败：无法获取文件链接)", displayName)
+					}
+				} else {
+					log.Warn("Web channel received file_ids but uploadDir and OSS are not configured")
+					content += fmt.Sprintf("\n\n📎 [附件: %s] (下载失败：未配置存储)", displayName)
+				}
 			}
 		}
 

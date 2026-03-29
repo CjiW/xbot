@@ -92,6 +92,17 @@ type SettingsCallbacks struct {
 	// RunnerTokenRevoke revokes the user's current token.
 	RunnerTokenRevoke func(senderID string) error
 
+	// RunnerList lists all runners for a user with online status.
+	RunnerList func(senderID string) ([]tools.RunnerInfo, error)
+	// RunnerCreate creates a new named runner and returns the connect command.
+	RunnerCreate func(senderID, name, mode, dockerImage, workspace string) (string, error)
+	// RunnerDelete deletes a named runner.
+	RunnerDelete func(senderID, name string) error
+	// RunnerGetActive returns the active runner name for the user.
+	RunnerGetActive func(senderID string) (string, error)
+	// RunnerSetActive sets the active runner for the user.
+	RunnerSetActive func(senderID, name string) error
+
 	// FeishuWebLink links a Feishu user to a web account (creates web user if needed).
 	// Returns the web username on success.
 	FeishuWebLink func(feishuUserID, username, password string) (string, error)

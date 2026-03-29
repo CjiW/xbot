@@ -177,7 +177,6 @@ All config via environment variables or `.env`:
 | `SANDBOX_WS_PORT` | Remote sandbox WebSocket port | `8080` |
 | `SANDBOX_AUTH_TOKEN` | Sandbox runner auth token | — |
 | `SANDBOX_PUBLIC_URL` | Public URL for runner connections (e.g., `ws://example.com:8080`) | — |
-| `SANDBOX_REMOTE_MODE` | Enable remote sandbox alongside docker | — |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
 | `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
 | `OAUTH_PORT` | OAuth server port | `8081` |

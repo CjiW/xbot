@@ -4,6 +4,7 @@ package channel
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -62,26 +63,11 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	// Validate MIME type — block dangerous file types
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	detectedMIME := http.DetectContentType(data)
-	allowedExtensions := map[string]bool{
-		".txt": true, ".md": true, ".csv": true, ".json": true, ".xml": true, ".yaml": true, ".yml": true,
-		".log": true, ".py": true, ".js": true, ".ts": true, ".go": true, ".rs": true, ".java": true,
-		".c": true, ".cpp": true, ".h": true, ".sh": true, ".bash": true, ".zsh": true,
-		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true,
-		".pdf": true, ".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".ppt": true, ".pptx": true,
-		".zip": true, ".tar": true, ".gz": true, ".7z": true, ".rar": true,
-		".mp3": true, ".mp4": true, ".wav": true, ".webm": true, ".ogg": true,
-		".toml": true, ".cfg": true, ".ini": true, ".env": true, ".sql": true,
-	}
-	blockedMIMEs := map[string]bool{
-		"text/html":               true,
-		"application/xhtml+xml":   true,
-		"application/x-httpd-php": true,
-	}
-	if !allowedExtensions[ext] {
+	if !isAllowedExtension(ext) {
 		http.Error(w, "file type not allowed", http.StatusBadRequest)
 		return
 	}
-	if blockedMIMEs[detectedMIME] {
+	if isBlockedMIME(detectedMIME) {
 		log.WithFields(log.Fields{
 			"filename":  header.Filename,
 			"mime_type": detectedMIME,
@@ -90,7 +76,19 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate unique ID with extension
+	// Detect MIME type
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		mimeType = http.DetectContentType(data)
+	}
+
+	// Check if cloud OSS provider is configured
+	if wc.ossProvider != nil && wc.ossProvider.Name() != "local" {
+		wc.handleCloudUpload(w, r, header.Filename, ext, data, mimeType)
+		return
+	}
+
+	// Local storage mode
 	fileID := uuid.New().String() + ext
 
 	// Ensure upload directory exists
@@ -109,12 +107,6 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect MIME type
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		mimeType = http.DetectContentType(data)
-	}
-
 	// JSON response
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":      true,
@@ -123,6 +115,69 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		"size":    len(data),
 		"mime":    mimeType,
 	})
+}
+
+// handleCloudUpload uploads a file to cloud OSS (e.g., Qiniu) and returns the upload key.
+func (wc *WebChannel) handleCloudUpload(w http.ResponseWriter, r *http.Request, filename, ext string, data []byte, mimeType string) {
+	// Get user ID for the object key
+	userID := "anonymous"
+	if si := wc.validateSession(r); si != nil {
+		userID = fmt.Sprintf("%d", si.userID)
+	}
+
+	// Generate object key
+	key := fmt.Sprintf("uploads/%s/%s%s", userID, uuid.New().String(), ext)
+
+	// Upload to cloud OSS
+	if err := wc.ossProvider.Upload(key, data); err != nil {
+		log.WithError(err).WithFields(log.Fields{
+			"key":      key,
+			"filename": filename,
+		}).Error("Failed to upload file to cloud OSS")
+		http.Error(w, "failed to upload to cloud storage", http.StatusInternalServerError)
+		return
+	}
+
+	log.WithFields(log.Fields{
+		"key":      key,
+		"filename": filename,
+		"size":     len(data),
+		"provider": wc.ossProvider.Name(),
+	}).Info("File uploaded to cloud OSS")
+
+	// JSON response — return upload_key so frontend can reference it when sending messages
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"upload_key": key,
+		"name":       filename,
+		"size":       len(data),
+		"mime":       mimeType,
+	})
+}
+
+// isAllowedExtension checks if the file extension is in the allowed list.
+func isAllowedExtension(ext string) bool {
+	allowed := map[string]bool{
+		".txt": true, ".md": true, ".csv": true, ".json": true, ".xml": true, ".yaml": true, ".yml": true,
+		".log": true, ".py": true, ".js": true, ".ts": true, ".go": true, ".rs": true, ".java": true,
+		".c": true, ".cpp": true, ".h": true, ".sh": true, ".bash": true, ".zsh": true,
+		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true,
+		".pdf": true, ".doc": true, ".docx": true, ".xls": true, ".xlsx": true, ".ppt": true, ".pptx": true,
+		".zip": true, ".tar": true, ".gz": true, ".7z": true, ".rar": true,
+		".mp3": true, ".mp4": true, ".wav": true, ".webm": true, ".ogg": true,
+		".toml": true, ".cfg": true, ".ini": true, ".env": true, ".sql": true,
+	}
+	return allowed[ext]
+}
+
+// isBlockedMIME checks if the MIME type is blocked.
+func isBlockedMIME(mimeType string) bool {
+	blocked := map[string]bool{
+		"text/html":               true,
+		"application/xhtml+xml":   true,
+		"application/x-httpd-php": true,
+	}
+	return blocked[mimeType]
 }
 
 // handleFileDownload handles GET /api/files/{id}

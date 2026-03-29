@@ -15,22 +15,28 @@ func TestDownloadFileTool_ParameterValidation(t *testing.T) {
 		errSub  string
 	}{
 		{
-			name:    "missing message_id",
-			input:   map[string]string{"file_key": "fk", "output_path": "out.pdf"},
-			wantErr: true,
-			errSub:  "message_id is required",
-		},
-		{
-			name:    "missing file_key",
-			input:   map[string]string{"message_id": "om_123", "output_path": "out.pdf"},
-			wantErr: true,
-			errSub:  "file_key is required",
-		},
-		{
 			name:    "missing output_path",
-			input:   map[string]string{"message_id": "om_123", "file_key": "fk"},
+			input:   map[string]string{"url": "https://example.com/file.pdf"},
 			wantErr: true,
 			errSub:  "output_path is required",
+		},
+		{
+			name:    "missing url and feishu params",
+			input:   map[string]string{"output_path": "out.pdf"},
+			wantErr: true,
+			errSub:  "must provide url",
+		},
+		{
+			name:    "only message_id without file_key",
+			input:   map[string]string{"message_id": "om_123", "output_path": "out.pdf"},
+			wantErr: true,
+			errSub:  "must provide url",
+		},
+		{
+			name:    "only file_key without message_id",
+			input:   map[string]string{"file_key": "fk", "output_path": "out.pdf"},
+			wantErr: true,
+			errSub:  "must provide url",
 		},
 		{
 			name:    "invalid message_id chars",
@@ -45,7 +51,7 @@ func TestDownloadFileTool_ParameterValidation(t *testing.T) {
 			errSub:  "invalid file_key",
 		},
 		{
-			name:    "valid params but no feishu channel",
+			name:    "valid feishu params but no feishu channel",
 			input:   map[string]string{"message_id": "om_123", "file_key": "file_v3_abc", "output_path": "out.pdf"},
 			wantErr: true,
 			errSub:  "not supported for channel",

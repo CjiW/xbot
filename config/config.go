@@ -87,6 +87,16 @@ type AdminConfig struct {
 	ChatID string // 管理员会话 ID（用于 Logs 工具等敏感操作的权限控制）
 }
 
+// OSSConfig 对象存储配置
+type OSSConfig struct {
+	Provider       string // 存储提供者: "local" (默认) 或 "qiniu"
+	QiniuAccessKey string // 七牛 AccessKey
+	QiniuSecretKey string // 七牛 SecretKey
+	QiniuBucket    string // 七牛空间名
+	QiniuDomain    string // 七牛 CDN 域名 (e.g., "https://cdn.example.com")
+	QiniuRegion    string // 七牛区域 (e.g., "z0" 华东, 默认 "z0")
+}
+
 // WebConfig Web 渠道配置
 type WebConfig struct {
 	Enable           bool   // 是否启用 Web 渠道
@@ -114,6 +124,7 @@ type Config struct {
 	StartupNotify StartupNotifyConfig
 	Admin         AdminConfig
 	Web           WebConfig
+	OSS           OSSConfig
 }
 
 // FeishuConfig 飞书渠道配置
@@ -303,6 +314,14 @@ func Load() *Config {
 			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
 			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
 			InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
+		},
+		OSS: OSSConfig{
+			Provider:       getEnvOrDefault("OSS_PROVIDER", "local"),
+			QiniuAccessKey: getEnvOrDefault("OSS_QINIU_ACCESS_KEY", ""),
+			QiniuSecretKey: getEnvOrDefault("OSS_QINIU_SECRET_KEY", ""),
+			QiniuBucket:    getEnvOrDefault("OSS_QINIU_BUCKET", ""),
+			QiniuDomain:    getEnvOrDefault("OSS_QINIU_DOMAIN", ""),
+			QiniuRegion:    getEnvOrDefault("OSS_QINIU_REGION", "z0"),
 		},
 	}
 

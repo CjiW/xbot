@@ -34,7 +34,7 @@ func newDockerRouter() *SandboxRouter {
 func newRemoteRouter(connectedUsers ...string) *SandboxRouter {
 	rs := &RemoteSandbox{}
 	for _, uid := range connectedUsers {
-		rs.connections.Store(uid, &runnerConnection{})
+		rs.connections.Store(uid, &userRunnersEntry{runners: map[string]*runnerConnection{"default": {}}})
 	}
 	return &SandboxRouter{
 		remote:      rs,
@@ -47,7 +47,7 @@ func newRemoteRouter(connectedUsers ...string) *SandboxRouter {
 func newFullRouter(connectedUsers ...string) *SandboxRouter {
 	rs := &RemoteSandbox{}
 	for _, uid := range connectedUsers {
-		rs.connections.Store(uid, &runnerConnection{})
+		rs.connections.Store(uid, &userRunnersEntry{runners: map[string]*runnerConnection{"default": {}}})
 	}
 	return &SandboxRouter{
 		docker:      &DockerSandbox{},
@@ -181,7 +181,7 @@ func TestSandboxForUser_RemoteConnectionTracking(t *testing.T) {
 	}
 
 	// 模拟 userA 连接
-	rs.connections.Store("userA", &runnerConnection{})
+	rs.connections.Store("userA", &userRunnersEntry{runners: map[string]*runnerConnection{"default": {}}})
 
 	// userA 已连接 → remote
 	sb = r.SandboxForUser("userA")
@@ -443,8 +443,8 @@ func TestSandboxRouter_Exec_EmptyUserID(t *testing.T) {
 func TestSandboxRouter_MultipleUsers_IndependentRouting(t *testing.T) {
 	// 多用户独立路由：验证每个用户路由到正确的后端
 	rs := &RemoteSandbox{}
-	rs.connections.Store("alice", &runnerConnection{})
-	rs.connections.Store("charlie", &runnerConnection{})
+	rs.connections.Store("alice", &userRunnersEntry{runners: map[string]*runnerConnection{"default": {}}})
+	rs.connections.Store("charlie", &userRunnersEntry{runners: map[string]*runnerConnection{"default": {}}})
 
 	r := &SandboxRouter{
 		docker:      &DockerSandbox{},

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 
 import type { PresetCommand } from '../types'
+import RunnerPanel from './RunnerPanel'
 
 interface SettingsPanelProps {
   open: boolean
@@ -137,49 +138,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [fontSize, setFontSize] = useState<FontSize>(() => lsGet('font_size', DEFAULT_SETTINGS.font_size))
   const [nickname, setNickname] = useState<string>(() => lsGet('nickname', DEFAULT_SETTINGS.nickname))
   const [language, setLanguage] = useState<Language>(() => lsGet('language', DEFAULT_SETTINGS.language))
-  const [runnerCommand, setRunnerCommand] = useState('')
-  const [tokenActionloading, setTokenActionLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [runnerMode, setRunnerMode] = useState<string>(() => localStorage.getItem('runner_mode') || 'native')
-  const [runnerWorkspace, setRunnerWorkspace] = useState<string>(() => localStorage.getItem('runner_workspace') || '~/xbot-workspace')
-  const [runnerDockerImage, setRunnerDockerImage] = useState<string>(() => localStorage.getItem('runner_docker_image') || 'ubuntu:22.04')
-  // When runner settings change and there's an existing command, auto-regenerate
-  const regenerateWithSettings = useCallback(async (mode: string, workspace: string, dockerImage: string) => {
-    if (!runnerCommand) return
-    setTokenActionLoading(true)
-    try {
-      const resp = await fetch('/api/runner/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          docker_image: mode === 'docker' ? dockerImage : '',
-          workspace,
-        }),
-      })
-      const data = await resp.json()
-      if (data.ok) setRunnerCommand(data.command || '')
-    } catch {}
-    setTokenActionLoading(false)
-  }, [runnerCommand])
-
-  const handleModeChange = useCallback((mode: string) => {
-    setRunnerMode(mode)
-    localStorage.setItem('runner_mode', mode)
-    regenerateWithSettings(mode, runnerWorkspace, runnerDockerImage)
-  }, [runnerWorkspace, runnerDockerImage, regenerateWithSettings])
-
-  const handleWorkspaceChange = useCallback((ws: string) => {
-    setRunnerWorkspace(ws)
-    localStorage.setItem('runner_workspace', ws)
-    regenerateWithSettings(runnerMode, ws, runnerDockerImage)
-  }, [runnerMode, runnerDockerImage, regenerateWithSettings])
-
-  const handleDockerImageChange = useCallback((img: string) => {
-    setRunnerDockerImage(img)
-    localStorage.setItem('runner_docker_image', img)
-    regenerateWithSettings(runnerMode, runnerWorkspace, img)
-  }, [runnerMode, runnerWorkspace, regenerateWithSettings])
 
   const [marketType, setMarketType] = useState<'agent' | 'skill'>('agent')
   const [marketSubTab, setMarketSubTab] = useState<'browse' | 'mine'>('browse')
@@ -245,19 +204,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     lsSet('language', language)
   }, [language])
 
-  // Fetch runner token command when runner tab is opened
-  useEffect(() => {
-    if (!open || activeTab !== 'runner') return
-    setTokenActionLoading(true)
-    fetch('/api/runner/token')
-      .then(r => r.json())
-      .then(data => {
-        if (data.ok) setRunnerCommand(data.command || '')
-      })
-      .catch(() => {})
-      .finally(() => setTokenActionLoading(false))
-  }, [open, activeTab])
-
   // Fetch LLM config when tab is opened
   const fetchLLMConfig = useCallback(async () => {
     setLlmConfigLoading(true)
@@ -286,52 +232,6 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   useEffect(() => {
     if (open && activeTab === 'llm') fetchLLMConfig()
   }, [open, activeTab, fetchLLMConfig])
-
-  const handleGenerateToken = useCallback(async () => {
-    setTokenActionLoading(true)
-    try {
-      const resp = await fetch('/api/runner/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: runnerMode,
-          docker_image: runnerMode === 'docker' ? runnerDockerImage : '',
-          workspace: runnerWorkspace,
-        }),
-      })
-      const data = await resp.json()
-      if (data.ok) setRunnerCommand(data.command || '')
-    } catch {}
-    setTokenActionLoading(false)
-  }, [])
-
-  const handleRegenerateToken = useCallback(async () => {
-    setTokenActionLoading(true)
-    try {
-      const resp = await fetch('/api/runner/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: runnerMode,
-          docker_image: runnerMode === 'docker' ? runnerDockerImage : '',
-          workspace: runnerWorkspace,
-        }),
-      })
-      const data = await resp.json()
-      if (data.ok) setRunnerCommand(data.command || '')
-    } catch {}
-    setTokenActionLoading(false)
-  }, [])
-
-  const handleRevokeToken = useCallback(async () => {
-    setTokenActionLoading(true)
-    try {
-      const resp = await fetch('/api/runner/token', { method: 'DELETE' })
-      const data = await resp.json()
-      if (data.ok) setRunnerCommand('')
-    } catch {}
-    setTokenActionLoading(false)
-  }, [])
 
   const handleSave = useCallback(async (updates: Partial<UserSettings>) => {
     setSaving(true)
@@ -1010,125 +910,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
         )}
 
         {/* ── Runner 设置 ── */}
-        {activeTab === 'runner' && (
-          <div className={sectionClass}>
-            <div className={sectionTitleClass}>🖥️ Remote Runner</div>
-            <p className="text-xs text-slate-500 mb-3">
-              远程沙箱允许工具命令在你的本地机器或 Docker 容器中执行。
-            </p>
-
-            {/* Runner 配置选项 — 生成 token 后隐藏，改参数会自动重新生成 */}
-            {!runnerCommand && (
-              <>
-                <div className="settings-item">
-                  <label className="settings-label">运行模式</label>
-                  <div className="flex gap-2 mt-1">
-                    {[
-                      { value: 'native', label: '🖥️ 原生 (Native)' },
-                      { value: 'docker', label: '🐳 Docker' },
-                    ].map(opt => (
-                      <button
-                        key={opt.value}
-                        className={`flex-1 px-3 py-2 rounded-lg text-sm border transition-colors ${
-                          runnerMode === opt.value
-                            ? 'bg-blue-500/20 border-blue-500/50 text-blue-400'
-                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
-                        }`}
-                        onClick={() => handleModeChange(opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="text-[11px] text-slate-500 mt-1">
-                    {runnerMode === 'native'
-                      ? '直接在你的机器上执行命令，适合开发环境。'
-                      : '在 Docker 容器中执行命令，提供更好的隔离性。'}
-                  </div>
-                </div>
-
-                <div className="settings-item">
-                  <label className="settings-label">工作目录</label>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={runnerWorkspace}
-                    onChange={e => handleWorkspaceChange(e.target.value)}
-                    placeholder="~/xbot-workspace"
-                  />
-                  <div className="text-[11px] text-slate-500 mt-1">
-                    Runner 在你机器上的工作目录，用于存放代码和文件。
-                  </div>
-                </div>
-
-                {runnerMode === 'docker' && (
-                  <div className="settings-item">
-                    <label className="settings-label">Docker 镜像</label>
-                    <input
-                      type="text"
-                      className="settings-input"
-                      value={runnerDockerImage}
-                      onChange={e => handleDockerImageChange(e.target.value)}
-                      placeholder="ubuntu:22.04"
-                    />
-                    <div className="text-[11px] text-slate-500 mt-1">
-                      Runner 使用的 Docker 镜像，需要有 shell 环境。
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Token 操作 */}
-            <div className="border-t border-slate-700/50 mt-4 pt-4">
-              <div className="text-xs text-slate-400 mb-2 font-medium">连接凭据</div>
-              {tokenActionloading ? (
-                <div className="text-center py-4 text-slate-500 text-sm">加载中...</div>
-              ) : runnerCommand ? (
-                <>
-                  <div className="settings-item">
-                    <label className="settings-label">连接命令</label>
-                    <div className="relative">
-                      <code className="settings-code-block">{runnerCommand}</code>
-                      <button
-                        className="settings-copy-btn"
-                        onClick={() => navigator.clipboard.writeText(runnerCommand)}
-                        title="复制"
-                      >📋</button>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 mt-3">
-                    <button
-                      className="settings-action-btn settings-action-danger"
-                      onClick={handleRegenerateToken}
-                      disabled={tokenActionloading}
-                    >
-                      🔄 重新生成
-                    </button>
-                    <button
-                      className="settings-action-btn settings-action-danger"
-                      onClick={handleRevokeToken}
-                      disabled={tokenActionloading}
-                    >
-                      🗑️ 撤销 Token
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="text-center py-4">
-                  <p className="text-slate-400 text-sm">尚未配置远程 Runner</p>
-                  <button
-                    className="settings-action-btn mt-3"
-                    onClick={handleGenerateToken}
-                    disabled={tokenActionloading}
-                  >
-                    ✨ 生成 Token
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        {activeTab === 'runner' && <RunnerPanel />}
 
         {/* ── Agent 市场 ── */}
         {activeTab === 'market' && (

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 16
+const schemaVersion = 17
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -200,7 +200,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (16);
+INSERT INTO schema_version (version) VALUES (17);
 
 CREATE TABLE runner_tokens (
     user_id     TEXT PRIMARY KEY,
@@ -209,6 +209,18 @@ CREATE TABLE runner_tokens (
     docker_image TEXT NOT NULL DEFAULT '',
     workspace   TEXT NOT NULL DEFAULT '/workspace',
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE runners (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT    NOT NULL,
+    name         TEXT    NOT NULL,
+    token        TEXT    NOT NULL UNIQUE,
+    mode         TEXT    NOT NULL DEFAULT 'native',
+    docker_image TEXT    NOT NULL DEFAULT 'ubuntu:22.04',
+    workspace    TEXT    NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, name)
 );
 
 CREATE TABLE shared_registry (
@@ -758,6 +770,52 @@ CREATE TABLE IF NOT EXISTS web_users (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v16 (added web_users)")
+	}
+	if from < 17 {
+		// v17: Add runners table for multi-runner support.
+		// Migrate existing runner_tokens data into runners table (one runner per user, name="default").
+		migration := `
+CREATE TABLE IF NOT EXISTS runners (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT    NOT NULL,
+    name         TEXT    NOT NULL,
+    token        TEXT    NOT NULL UNIQUE,
+    mode         TEXT    NOT NULL DEFAULT 'native',
+    docker_image TEXT    NOT NULL DEFAULT 'ubuntu:22.04',
+    workspace    TEXT    NOT NULL DEFAULT '',
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, name)
+);
+`
+		if _, err := conn.Exec(migration); err != nil {
+			return fmt.Errorf("migrate v16->v17: %w", err)
+		}
+
+		// Migrate existing runner_tokens entries into runners table.
+		// Each existing user gets a runner named "default".
+		_, err := conn.Exec(`
+			INSERT OR IGNORE INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
+			SELECT user_id, 'default', token, mode, docker_image, workspace, created_at
+			FROM runner_tokens
+		`)
+		if err != nil {
+			log.WithError(err).Warn("Failed to migrate runner_tokens to runners table")
+		}
+
+		// Set active runner for existing users.
+		_, err = conn.Exec(`
+			INSERT OR IGNORE INTO user_settings (channel, sender_id, key, value, updated_at)
+			SELECT 'web', user_id, 'active_runner', 'default', CAST(strftime('%s','now') AS INTEGER)
+			FROM runner_tokens
+		`)
+		if err != nil {
+			log.WithError(err).Warn("Failed to set active_runner for migrated users")
+		}
+
+		if _, err := conn.Exec("UPDATE schema_version SET version = 17"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v17 (added runners table, migrated runner_tokens)")
 	}
 
 	return nil

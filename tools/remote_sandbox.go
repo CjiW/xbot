@@ -36,12 +36,20 @@ type RemoteSandboxSyncConfig struct {
 // runnerConnection represents a connected xbot-runner instance.
 // All writes to the WebSocket go through sendCh, consumed by writePump.
 type runnerConnection struct {
-	wsConn    *websocket.Conn
-	userID    string
-	workspace string
-	shell     string         // runner's default shell (e.g. /bin/bash)
-	sendCh    chan sendEntry // buffered channel for serialized writes
-	done      chan struct{}  // closed when writePump exits
+	wsConn     *websocket.Conn
+	userID     string
+	runnerName string // runner name from DB
+	workspace  string
+	shell      string         // runner's default shell (e.g. /bin/bash)
+	sendCh     chan sendEntry // buffered channel for serialized writes
+	done       chan struct{}  // closed when writePump exits
+}
+
+// userRunnersEntry holds all runner connections for a single user.
+type userRunnersEntry struct {
+	mu      sync.RWMutex
+	runners map[string]*runnerConnection // runnerName → conn
+	active  string                       // currently active runnerName
 }
 
 // sendEntry represents a write to be sent by writePump.
@@ -53,7 +61,7 @@ type sendEntry struct {
 // RemoteSandbox implements the Sandbox interface via WebSocket communication
 // with xbot-runner instances running on users' machines.
 type RemoteSandbox struct {
-	connections     sync.Map // userID → *runnerConnection
+	connections     sync.Map // userID → *userRunnersEntry
 	wsServer        *http.Server
 	authToken       string
 	addr            string
@@ -205,16 +213,70 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	rc := &runnerConnection{
-		wsConn:    conn,
-		userID:    reg.UserID,
-		workspace: reg.Workspace,
-		shell:     shell,
-		sendCh:    make(chan sendEntry, 64),
-		done:      make(chan struct{}),
+
+	// Look up runner name from token.
+	runnerName := ""
+	if rs.tokenStore != nil {
+		if uid, rname, err := rs.tokenStore.FindByToken(reg.AuthToken); err == nil && uid == reg.UserID {
+			runnerName = rname
+		} else {
+			// Fallback: check legacy runner_tokens table for backward compat.
+			uid := rs.tokenStore.FindByTokenInRunnerTokens(reg.AuthToken)
+			if uid == reg.UserID {
+				// Legacy token: use "default" as name.
+				runnerName = "default"
+			}
+		}
 	}
-	rs.connections.Store(reg.UserID, rc)
-	defer conn.Close()
+	if runnerName == "" {
+		runnerName = "default"
+	}
+
+	rc := &runnerConnection{
+		wsConn:     conn,
+		userID:     reg.UserID,
+		runnerName: runnerName,
+		workspace:  reg.Workspace,
+		shell:      shell,
+		sendCh:     make(chan sendEntry, 64),
+		done:       make(chan struct{}),
+	}
+
+	// Register connection in userRunnersEntry.
+	newEntry := &userRunnersEntry{
+		runners: map[string]*runnerConnection{runnerName: rc},
+		active:  runnerName,
+	}
+	actual, loaded := rs.connections.LoadOrStore(reg.UserID, newEntry)
+	entry := actual.(*userRunnersEntry)
+	if loaded {
+		entry.mu.Lock()
+		entry.runners[runnerName] = rc
+		if entry.active == "" {
+			entry.active = runnerName
+		}
+		entry.mu.Unlock()
+	}
+
+	defer func() {
+		// On disconnect, remove this runner from the entry.
+		entry.mu.Lock()
+		delete(entry.runners, runnerName)
+		// If the disconnected runner was active, fallback to first available.
+		if entry.active == runnerName {
+			for name := range entry.runners {
+				entry.active = name
+				break
+			}
+			if entry.active == "" {
+				// No runners left — remove entry entirely.
+				entry.mu.Unlock()
+				rs.connections.Delete(reg.UserID)
+				return
+			}
+		}
+		entry.mu.Unlock()
+	}()
 
 	// Send registration acknowledgment
 	okBody, _ := json.Marshal(map[string]string{"status": "ok"})
@@ -222,8 +284,9 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	conn.WriteMessage(websocket.TextMessage, okMsg)
 
 	log.WithFields(log.Fields{
-		"user_id":   reg.UserID,
-		"workspace": reg.Workspace,
+		"user_id":     reg.UserID,
+		"runner_name": runnerName,
+		"workspace":   reg.Workspace,
 	}).Info("Runner connected")
 
 	// Single writer goroutine: handles both request writes and ping heartbeats.
@@ -236,8 +299,10 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
-			log.WithError(err).WithField("user_id", reg.UserID).Debug("Runner disconnected")
-			rs.connections.Delete(reg.UserID)
+			log.WithError(err).WithFields(log.Fields{
+				"user_id":     reg.UserID,
+				"runner_name": runnerName,
+			}).Debug("Runner disconnected")
 			return
 		}
 		// Handle response: find pending request and deliver
@@ -251,27 +316,58 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 				select {
 				case ch <- &resp:
 				default:
+					log.WithField("request_id", resp.ID).Warn("Runner: pending channel full, response dropped")
 				}
 				delete(rs.pending, resp.ID)
 			}
 			rs.pendingMu.Unlock()
 		}
 	}
+
 }
 
-// getRunner returns the connection for a user, or an error.
+// getRunner returns the active connection for a user, or an error.
 func (rs *RemoteSandbox) getRunner(userID string) (*runnerConnection, error) {
 	val, ok := rs.connections.Load(userID)
 	if !ok {
 		return nil, fmt.Errorf("no runner connected for user %q", userID)
 	}
-	return val.(*runnerConnection), nil
+	entry := val.(*userRunnersEntry)
+	entry.mu.RLock()
+	defer entry.mu.RUnlock()
+	if entry.active == "" || len(entry.runners) == 0 {
+		return nil, fmt.Errorf("no active runner for user %q", userID)
+	}
+	rc, ok := entry.runners[entry.active]
+	if !ok {
+		return nil, fmt.Errorf("active runner %q not connected for user %q", entry.active, userID)
+	}
+	return rc, nil
 }
 
-// HasUser reports whether the given user has an active runner connection.
+// HasUser reports whether the given user has any active runner connection.
 // Used by SandboxRouter for per-user routing decisions.
 func (rs *RemoteSandbox) HasUser(userID string) bool {
-	_, ok := rs.connections.Load(userID)
+	val, ok := rs.connections.Load(userID)
+	if !ok {
+		return false
+	}
+	entry := val.(*userRunnersEntry)
+	entry.mu.RLock()
+	defer entry.mu.RUnlock()
+	return len(entry.runners) > 0
+}
+
+// IsRunnerOnline reports whether a specific named runner is connected for the user.
+func (rs *RemoteSandbox) IsRunnerOnline(userID, runnerName string) bool {
+	val, ok := rs.connections.Load(userID)
+	if !ok {
+		return false
+	}
+	entry := val.(*userRunnersEntry)
+	entry.mu.RLock()
+	defer entry.mu.RUnlock()
+	_, ok = entry.runners[runnerName]
 	return ok
 }
 
@@ -394,10 +490,45 @@ func (rs *RemoteSandbox) CloseForUser(userID string) error {
 	if !ok {
 		return nil
 	}
-	rc := val.(*runnerConnection)
-	rc.wsConn.Close()
+	entry := val.(*userRunnersEntry)
+	entry.mu.Lock()
+	for _, rc := range entry.runners {
+		rc.wsConn.Close()
+	}
+	entry.runners = make(map[string]*runnerConnection)
+	entry.active = ""
+	entry.mu.Unlock()
 	rs.connections.Delete(userID)
 	return nil
+}
+
+// DisconnectRunner closes a specific runner connection by name.
+func (rs *RemoteSandbox) DisconnectRunner(userID, runnerName string) bool {
+	val, ok := rs.connections.Load(userID)
+	if !ok {
+		return false
+	}
+	entry := val.(*userRunnersEntry)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	rc, ok := entry.runners[runnerName]
+	if !ok {
+		return false
+	}
+	rc.wsConn.Close()
+	delete(entry.runners, runnerName)
+	// If active was this runner, fallback to first available
+	if entry.active == runnerName {
+		entry.active = ""
+		for name := range entry.runners {
+			entry.active = name
+			break
+		}
+	}
+	if len(entry.runners) == 0 {
+		rs.connections.Delete(userID)
+	}
+	return true
 }
 
 func (rs *RemoteSandbox) IsExporting(_ string) bool      { return false }

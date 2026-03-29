@@ -219,7 +219,6 @@ func (t *EditTool) sandboxReplace(ctx *ToolContext, path string, params EditPara
 	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
 }
 
-
 // executeLocal 在本地执行编辑操作（非沙箱模式）
 func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResult, error) {
 	filePath, err := ResolveWritePath(ctx, params.Path)
@@ -274,74 +273,29 @@ func (t *EditTool) doCreate(filePath string, params EditParams) (string, error) 
 	return fmt.Sprintf("File created successfully: %s", filePath), nil
 }
 
-// splitLines splits content into lines, correctly handling trailing newline.
-// Returns real lines (without the phantom empty element caused by trailing \n)
-// and whether the content originally ended with a newline.
-// This ensures line numbering matches what the Read tool displays.
-func splitLines(content string) ([]string, bool) {
+// splitContentByLineRange splits content by line range for replace operations.
+// Returns prefix (before range), rangeText (within range), suffix (after range), and error.
+// When start=0 and end=0, returns the entire content as rangeText (no line restriction).
+func splitContentByLineRange(content string, start, end int) (string, string, string, error) {
+	// Inline splitLines logic: split content and handle trailing newline
 	lines := strings.Split(content, "\n")
 	hasTrailingNL := len(lines) > 1 && lines[len(lines)-1] == ""
 	if hasTrailingNL {
 		lines = lines[:len(lines)-1]
 	}
-	return lines, hasTrailingNL
-}
-
-// joinWithTrailing joins lines with \n and appends trailing newline if the original had one.
-func joinWithTrailing(lines []string, hasTrailingNL bool) string {
-	result := strings.Join(lines, "\n")
-	if hasTrailingNL && len(lines) > 0 {
-		result += "\n"
-	}
-	return result
-}
-
-// suggestMatch tries to find similar text when exact match fails.
-// Helps the LLM identify whitespace/indentation mismatches.
-func suggestMatch(content, searchStr string) string {
-	var firstLine string
-	for _, l := range strings.Split(searchStr, "\n") {
-		if t := strings.TrimSpace(l); t != "" && len(t) >= 3 {
-			firstLine = t
-			break
-		}
-	}
-	if firstLine == "" {
-		return ""
-	}
-	lines, _ := splitLines(content)
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, firstLine) {
-			return fmt.Sprintf("\nHint: line %d has similar text (possible whitespace mismatch): %q", i+1, Truncate(trimmed, 100))
-		}
-	}
-	return ""
-}
-
-// splitContentByLineRange splits content into prefix, target range, and suffix based on start_line/end_line.
-// Returns (prefix, rangeText, suffix, error). When both start_line and end_line are 0, rangeText equals the full content.
-func splitContentByLineRange(content string, startLine, endLine int) (string, string, string, error) {
-	if startLine <= 0 && endLine <= 0 {
-		return "", content, "", nil
-	}
-
-	lines, hasTrailingNL := splitLines(content)
 	totalLines := len(lines)
 
-	start := 1
-	end := totalLines
+	// Handle default case: no line range specified
+	if start == 0 && end == 0 {
+		rangeText := content
+		if hasTrailingNL && len(lines) > 0 {
+			rangeText = strings.Join(lines, "\n")
+		} else if len(lines) == 1 {
+			rangeText = lines[0]
+		}
+		return "", rangeText, "", nil
+	}
 
-	if startLine > 0 {
-		start = startLine
-	}
-	if endLine > 0 {
-		end = endLine
-	}
-
-	if start > totalLines {
-		return "", "", "", fmt.Errorf("start_line %d exceeds total lines %d", start, totalLines)
-	}
 	if end > totalLines {
 		return "", "", "", fmt.Errorf("end_line %d exceeds total lines %d", end, totalLines)
 	}
@@ -399,10 +353,15 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 				effStart = 1
 			}
 			effEnd := params.EndLine
-			if effEnd <= 0 {
-				lines, _ := splitLines(content)
-				effEnd = len(lines)
-			}
+				if effEnd <= 0 {
+					// Inline splitLines: count lines correctly handling trailing newline
+					lines := strings.Split(content, "\n")
+					if len(lines) > 0 && lines[len(lines)-1] == "" {
+						effEnd = len(lines) - 1
+					} else {
+						effEnd = len(lines)
+					}
+				}
 			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.OldString)
 		}
 		return "", "", fmt.Errorf("no match found for pattern: %s", params.OldString)

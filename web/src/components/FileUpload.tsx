@@ -74,8 +74,9 @@ export function uploadFile(file: File): Promise<PendingFile & { ok: boolean; err
           resolve({ ok: false, id: '', name: file.name, size: file.size, error: '上传响应异常' })
         }
       })
-      .catch((err: any) => {
-        resolve({ ok: false, id: '', name: file.name, size: file.size, error: err.message })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        resolve({ ok: false, id: '', name: file.name, size: file.size, error: msg })
       })
   })
 }

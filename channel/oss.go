@@ -136,16 +136,9 @@ func (p *QiniuProvider) Upload(key string, data []byte) error {
 }
 
 func (p *QiniuProvider) GetDownloadURL(key string) (string, error) {
-	// Use public URL for public buckets.
-	// For private buckets, use MakePrivateURL with signed deadline.
 	deadline := time.Now().Add(time.Hour).Unix()
-	publicURL := storage.MakePublicURL(p.domain, key)
-	// Always sign the URL so it works for both public and private buckets.
 	signedURL := storage.MakePrivateURL(p.mac, p.domain, key, deadline)
-	log.WithFields(log.Fields{
-		"key":    key,
-		"public": publicURL,
-	}).Debug("Generated Qiniu download URL")
+	log.WithField("key", key).Debug("Generated Qiniu download URL")
 	return signedURL, nil
 }
 

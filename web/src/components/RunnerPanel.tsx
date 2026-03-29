@@ -14,11 +14,13 @@ interface RunnerInfo {
 
 interface RunnerPanelProps {
   serverUrl?: string
+  wsUrl?: string
+  senderId?: string
 }
 
 // ── Component ──
 
-export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
+export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelProps) {
   const [runners, setRunners] = useState<RunnerInfo[]>([])
   const [activeRunner, setActiveRunner] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -27,6 +29,9 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
   const [menuOpen, setMenuOpen] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  // Server-provided connection info (fetched from backend)
+  const [serverWsUrl, setServerWsUrl] = useState<string>(wsUrl || '')
+  const [serverSenderId, setServerSenderId] = useState<string>(senderId || '')
 
   // Add form state
   const [formName, setFormName] = useState('')
@@ -55,6 +60,9 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
       const data = await resp.json()
       if (data.ok) {
         setRunners(data.runners || [])
+        // Store server-provided connection info
+        if (data.ws_url) setServerWsUrl(data.ws_url)
+        if (data.sender_id) setServerSenderId(data.sender_id)
         // Also get active runner
         const activeResp = await fetch('/api/runners/active')
         const activeData = await activeResp.json()
@@ -76,10 +84,17 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
 
   // Build connect command for a runner
   const buildCommand = useCallback((runner: RunnerInfo) => {
-    const wsBase = serverUrl
-      ? serverUrl.replace(/^http/, 'ws')
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-    let cmd = `./xbot-runner --server ${wsBase}/ws/web-0 --token ${runner.token}`
+    // Prefer server-provided ws_url, fall back to deriving from serverUrl or window.location
+    let wsBase = serverWsUrl
+    if (!wsBase && serverUrl) {
+      wsBase = serverUrl.replace(/^http/, 'ws')
+    }
+    if (!wsBase) {
+      wsBase = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+    }
+    // Use server-provided sender_id (e.g. "web-1"), not hardcoded "web-0"
+    const sid = serverSenderId || 'web-0'
+    let cmd = `./xbot-runner --server ${wsBase}/ws/${sid} --token ${runner.token}`
     if (runner.mode === 'docker' && runner.docker_image) {
       cmd += ` --mode docker --docker-image ${runner.docker_image}`
     }
@@ -87,7 +102,7 @@ export default function RunnerPanel({ serverUrl }: RunnerPanelProps) {
       cmd += ` --workspace ${runner.workspace}`
     }
     return cmd
-  }, [serverUrl])
+  }, [serverWsUrl, serverUrl, serverSenderId])
 
   // Set active
   const handleSetActive = useCallback(async (name: string) => {

@@ -1,13 +1,16 @@
 import { useRef, useState } from 'react'
 
 export interface PendingFile {
-  id: string        // file_id from server
+  id: string        // file_id from server (local mode) or upload_key (qiniu mode)
   name: string
   size: number
+  mime?: string
+  uploadKey?: string  // OSS upload key (qiniu mode only)
+  isOSS?: boolean     // true if uploaded to cloud OSS
 }
 
 interface FileUploadProps {
-  onUpload: (fileId: string, name: string) => void
+  onUpload: (file: PendingFile) => void
   onRemove: (fileId: string) => void
   disabled: boolean
 }
@@ -29,10 +32,10 @@ function showToast(message: string) {
   }, 3000)
 }
 
-export function uploadFile(file: File): Promise<{ ok: boolean; file_id: string; name: string; error?: string }> {
+export function uploadFile(file: File): Promise<PendingFile & { ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     if (file.size > MAX_FILE_SIZE) {
-      resolve({ ok: false, file_id: '', name: file.name, error: '文件超过 10MB 限制' })
+      resolve({ ok: false, id: '', name: file.name, size: file.size, error: '文件超过 10MB 限制' })
       return
     }
 
@@ -42,20 +45,43 @@ export function uploadFile(file: File): Promise<{ ok: boolean; file_id: string; 
     fetch('/api/files/upload', { method: 'POST', body: formData })
       .then((r) => r.json())
       .then((data) => {
-        if (data.ok && data.file_id) {
-          resolve({ ok: true, file_id: data.file_id, name: data.name })
+        if (!data.ok) {
+          resolve({ ok: false, id: '', name: file.name, size: file.size, error: data.error || '上传失败' })
+          return
+        }
+
+        // Cloud OSS mode: backend returns upload_key after uploading to cloud
+        if (data.upload_key) {
+          resolve({
+            ok: true,
+            id: data.upload_key,
+            name: data.name || file.name,
+            size: data.size || file.size,
+            mime: data.mime,
+            uploadKey: data.upload_key,
+            isOSS: true,
+          })
+        } else if (data.file_id) {
+          // Local mode: backend returns file_id
+          resolve({
+            ok: true,
+            id: data.file_id,
+            name: data.name || file.name,
+            size: data.size || file.size,
+            mime: data.mime,
+          })
         } else {
-          resolve({ ok: false, file_id: '', name: file.name, error: data.error || '上传失败' })
+          resolve({ ok: false, id: '', name: file.name, size: file.size, error: '上传响应异常' })
         }
       })
-      .catch((err) => {
-        resolve({ ok: false, file_id: '', name: file.name, error: err.message })
+      .catch((err: any) => {
+        resolve({ ok: false, id: '', name: file.name, size: file.size, error: err.message })
       })
   })
 }
 
 // Hook to handle files from paste events
-export function usePasteUpload(onUpload: (fileId: string, name: string) => void, disabled: boolean) {
+export function usePasteUpload(onUpload: (file: PendingFile) => void, disabled: boolean) {
   const handlePaste = async (e: React.ClipboardEvent | ClipboardEvent) => {
     if (disabled) return
     const clipboardEvent = e as ClipboardEvent
@@ -69,7 +95,7 @@ export function usePasteUpload(onUpload: (fileId: string, name: string) => void,
     e.preventDefault()
     const result = await uploadFile(imageFile)
     if (result.ok) {
-      onUpload(result.file_id, result.name)
+      onUpload({ id: result.id, name: result.name, size: result.size, mime: result.mime, uploadKey: result.uploadKey, isOSS: result.isOSS })
     } else {
       showToast(result.error || '上传失败')
     }
@@ -88,7 +114,7 @@ export default function FileUpload({ onUpload, disabled }: Omit<FileUploadProps,
     for (const file of Array.from(files)) {
       const result = await uploadFile(file)
       if (result.ok) {
-        onUpload(result.file_id, result.name)
+        onUpload({ id: result.id, name: result.name, size: result.size, mime: result.mime, uploadKey: result.uploadKey, isOSS: result.isOSS })
       } else {
         showToast(result.error || '上传失败')
       }

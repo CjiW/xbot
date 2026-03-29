@@ -525,13 +525,25 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     setLoading(true)
     setAutoScroll(true)
 
-    const payload: { type: string; content: string; file_ids?: string[]; file_names?: string[] } = {
+    const payload: { type: string; content: string; file_ids?: string[]; file_names?: string[]; file_sizes?: number[]; upload_keys?: string[]; file_mimes?: string[] } = {
       type: 'message',
       content,
     }
     if (pendingFiles.length > 0) {
-      payload.file_ids = pendingFiles.map((f) => f.id)
-      payload.file_names = pendingFiles.map((f) => f.name)
+      // Separate local files from OSS files
+      const localFiles = pendingFiles.filter((f) => !f.isOSS)
+      const ossFiles = pendingFiles.filter((f) => f.isOSS)
+
+      if (localFiles.length > 0) {
+        payload.file_ids = localFiles.map((f) => f.id)
+        payload.file_names = localFiles.map((f) => f.name)
+      }
+      if (ossFiles.length > 0) {
+        payload.upload_keys = ossFiles.map((f) => f.uploadKey!)
+        payload.file_names = [...(payload.file_names || []), ...ossFiles.map((f) => f.name)]
+        payload.file_sizes = [...(payload.file_sizes || []), ...ossFiles.map((f) => f.size)]
+        payload.file_mimes = [...(payload.file_mimes || []), ...ossFiles.map((f) => f.mime || '')]
+      }
       setPendingFiles([])
     }
 
@@ -585,8 +597,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   }
 
   // --- File upload handlers ---
-  const handleFileUploaded = useCallback((fileId: string, name: string) => {
-    setPendingFiles((prev) => [...prev, { id: fileId, name, size: 0 }])
+  const handleFileUploaded = useCallback((file: PendingFile) => {
+    setPendingFiles((prev) => [...prev, file])
   }, [])
 
   const handleFileRemove = useCallback((fileId: string) => {
@@ -617,7 +629,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     for (const file of Array.from(files)) {
       const result = await uploadFile(file)
       if (result.ok) {
-        handleFileUploaded(result.file_id, result.name)
+        handleFileUploaded({ id: result.id, name: result.name, size: result.size, mime: result.mime, uploadKey: result.uploadKey, isOSS: result.isOSS })
       } else {
         // Show toast
         const toast = document.createElement('div')

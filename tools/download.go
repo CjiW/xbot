@@ -18,7 +18,7 @@ import (
 var validIDPattern = regexp.MustCompile(`^[\w.\-]+$`)
 
 // DownloadFileTool downloads files/images sent by users in chat.
-// Currently supports: feishu (via Message Resource API).
+// Supports: feishu (via Message Resource API) and web/OSS (via URL).
 type DownloadFileTool struct {
 	appID     string
 	appSecret string
@@ -37,28 +37,34 @@ func (t *DownloadFileTool) Name() string {
 }
 
 func (t *DownloadFileTool) Description() string {
-	return `Download files/images sent by users in Feishu chat.
-Activate when: (1) user sends a file <file .../> or image <image .../> in chat, (2) user asks to download/save a file from the conversation. The message content will contain file_key/image_key as XML attributes.
+	return `Download files/images sent by users in chat.
+Supports two sources:
+  1. Web/OSS files: use "url" parameter to download from a signed URL
+  2. Feishu files: use "message_id" and "file_key" parameters
+Activate when: user sends a file in chat and you need to save it locally for processing, or user asks to download/save a file from the conversation.
 Parameters (JSON):
-  - message_id: string, the Feishu message ID containing the resource (from XML tag attribute)
-  - file_key: string, the file_key or image_key to download (from XML tag attribute)
+  - url: string, the file URL to download (for web/OSS files, from "访问URL:" in message content)
   - output_path: string, where to save the file (relative to working directory or absolute)
-  - type: string, optional, "file" (default) or "image"
-Example: {"message_id": "om_xxx", "file_key": "file_v3_xxx", "output_path": "downloads/report.pdf"}
-Example: {"message_id": "om_xxx", "file_key": "img_v3_xxx", "output_path": "downloads/photo.png", "type": "image"}`
+  - message_id: string, the Feishu message ID (for Feishu files only)
+  - file_key: string, the file_key or image_key (for Feishu files only)
+  - type: string, optional, "file" (default) or "image" (for Feishu files only)
+Example (web): {"url": "https://cdn.example.com/uploads/web-1/xxx.jpg?token=xxx", "output_path": "downloads/photo.jpg"}
+Example (feishu): {"message_id": "om_xxx", "file_key": "file_v3_xxx", "output_path": "downloads/report.pdf"}`
 }
 
 func (t *DownloadFileTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
-		{Name: "message_id", Type: "string", Description: "The Feishu message ID containing the resource", Required: true},
-		{Name: "file_key", Type: "string", Description: "The file_key or image_key to download", Required: true},
+		{Name: "url", Type: "string", Description: "The file URL to download (for web/OSS files)", Required: false},
 		{Name: "output_path", Type: "string", Description: "Where to save the file (relative to working directory or absolute)", Required: true},
-		{Name: "type", Type: "string", Description: "Resource type: \"file\" (default) or \"image\"", Required: false},
+		{Name: "message_id", Type: "string", Description: "The Feishu message ID (for Feishu files only)", Required: false},
+		{Name: "file_key", Type: "string", Description: "The file_key or image_key (for Feishu files only)", Required: false},
+		{Name: "type", Type: "string", Description: "Resource type: \"file\" (default) or \"image\" (Feishu only)", Required: false},
 	}
 }
 
 func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 	params, err := parseToolArgs[struct {
+		URL        string `json:"url"`
 		MessageID  string `json:"message_id"`
 		FileKey    string `json:"file_key"`
 		OutputPath string `json:"output_path"`
@@ -68,23 +74,8 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	if params.MessageID == "" {
-		return nil, fmt.Errorf("message_id is required")
-	}
-	if params.FileKey == "" {
-		return nil, fmt.Errorf("file_key is required")
-	}
-	if !validIDPattern.MatchString(params.MessageID) {
-		return nil, fmt.Errorf("invalid message_id format")
-	}
-	if !validIDPattern.MatchString(params.FileKey) {
-		return nil, fmt.Errorf("invalid file_key format")
-	}
 	if params.OutputPath == "" {
 		return nil, fmt.Errorf("output_path is required")
-	}
-	if params.Type == "" {
-		params.Type = "file"
 	}
 
 	// Resolve output path (sandbox-aware)
@@ -95,12 +86,90 @@ func (t *DownloadFileTool) Execute(ctx *ToolContext, input string) (*ToolResult,
 
 	displayPath := outputPath
 
-	switch ctx.Channel {
-	case "feishu":
-		return t.downloadFeishu(ctx, params.MessageID, params.FileKey, params.Type, outputPath, displayPath)
-	default:
-		return nil, fmt.Errorf("file download not supported for channel: %s", ctx.Channel)
+	// Auto-detect source: URL takes priority
+	if params.URL != "" {
+		return t.downloadFromURL(ctx, params.URL, outputPath, displayPath)
 	}
+
+	// Feishu fallback
+	if params.MessageID != "" && params.FileKey != "" {
+		if !validIDPattern.MatchString(params.MessageID) {
+			return nil, fmt.Errorf("invalid message_id format")
+		}
+		if !validIDPattern.MatchString(params.FileKey) {
+			return nil, fmt.Errorf("invalid file_key format")
+		}
+		if params.Type == "" {
+			params.Type = "file"
+		}
+		switch ctx.Channel {
+		case "feishu":
+			return t.downloadFeishu(ctx, params.MessageID, params.FileKey, params.Type, outputPath, displayPath)
+		default:
+			return nil, fmt.Errorf("feishu file download not supported for channel: %s", ctx.Channel)
+		}
+	}
+
+	return nil, fmt.Errorf("must provide url (for web/OSS files) or both message_id and file_key (for Feishu files)")
+}
+
+// downloadFromURL downloads a file from a URL (used for web/OSS files).
+func (t *DownloadFileTool) downloadFromURL(ctx *ToolContext, fileURL, outputPath, displayPath string) (*ToolResult, error) {
+	req, err := http.NewRequest("GET", fileURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := downloadHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("download failed: HTTP %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	// Read response body
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(data) >= maxDownloadSize {
+		return nil, fmt.Errorf("downloaded file exceeds maximum allowed size (100MB)")
+	}
+
+	// Write to output path (sandbox-aware)
+	if shouldUseSandbox(ctx) {
+		userID := ctx.OriginUserID
+		if userID == "" {
+			userID = ctx.SenderID
+		}
+		sandboxCtx, sandboxCancel := SandboxCtx()
+		defer sandboxCancel()
+		if err := ctx.Sandbox.MkdirAll(sandboxCtx, filepath.Dir(outputPath), 0o755, userID); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := ctx.Sandbox.WriteFile(sandboxCtx, outputPath, data, 0o644, userID); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
+		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"url":         fileURL,
+		"output_path": outputPath,
+		"size":        len(data),
+	}).Info("File downloaded from URL")
+
+	return NewResult(fmt.Sprintf("Downloaded: %s (%d bytes)", displayPath, len(data))), nil
 }
 
 // maxDownloadSize is the maximum allowed download size (100MB).

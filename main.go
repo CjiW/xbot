@@ -381,6 +381,9 @@ func main() {
 					if mode == "docker" && dockerImage != "" {
 						cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
 					}
+					if workspace != "" {
+						cmd += fmt.Sprintf(" --workspace %s", workspace)
+					}
 					return cmd, nil
 				},
 				RunnerDelete: func(senderID, name string) error {

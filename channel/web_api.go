@@ -298,9 +298,11 @@ func (wc *WebChannel) handleRunnerTokenRevoke(w http.ResponseWriter, senderID st
 // ---------------------------------------------------------------------------
 
 type runnersListResponse struct {
-	OK      bool               `json:"ok"`
-	Runners []tools.RunnerInfo `json:"runners,omitempty"`
-	Error   string             `json:"error,omitempty"`
+	OK       bool               `json:"ok"`
+	Runners  []tools.RunnerInfo `json:"runners,omitempty"`
+	WsURL    string             `json:"ws_url,omitempty"`
+	SenderID string             `json:"sender_id,omitempty"`
+	Error    string             `json:"error,omitempty"`
 }
 
 type runnerCreateRequest struct {
@@ -342,7 +344,12 @@ func (wc *WebChannel) handleRunners(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, runnersListResponse{OK: false, Error: "list failed"})
 			return
 		}
-		writeJSON(w, http.StatusOK, runnersListResponse{OK: true, Runners: runners})
+		writeJSON(w, http.StatusOK, runnersListResponse{
+			OK:       true,
+			Runners:  runners,
+			WsURL:    wc.config.PublicURL,
+			SenderID: senderID,
+		})
 	case http.MethodPost:
 		if wc.callbacks.RunnerCreate == nil {
 			writeJSON(w, http.StatusServiceUnavailable, runnerCommandResponse{OK: false, Error: "runner management not configured"})

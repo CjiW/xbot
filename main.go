@@ -282,6 +282,7 @@ func main() {
 				MemoryWindow:     cfg.Agent.MemoryWindow,
 				FeishuLinkSecret: cfg.Feishu.AppSecret,
 				InviteOnly:       cfg.Web.InviteOnly,
+				PublicURL:        cfg.Sandbox.PublicURL,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)

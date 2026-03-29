@@ -40,7 +40,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 ### Core Components
 
 - **bus/** — Inbound/Outbound message channels
-- **channel/** — IM channels (feishu, qq, napcat), dispatcher
+- **channel/** — IM channels (feishu, qq, napcat, web), dispatcher
 - **agent/** — Agent loop: LLM → tool calls → response
 - **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry and implementations
@@ -56,6 +56,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **version/** — Build version info
 - **cmd/** — Subcommands (e.g., sandbox runner)
 - **internal/** — Internal packages (runner protocol)
+- **web/** — Web frontend (Vue 3 + TypeScript)
 - **docs/** — Design documents and architecture notes
 - **scripts/** — Development helper scripts
 
@@ -120,6 +121,7 @@ All config via environment variables or `.env`:
 | `AGENT_ENABLE_TOPIC_ISOLATION` | Enable topic partition isolation (experimental) | `false` |
 | `AGENT_TOPIC_MIN_SEGMENT_SIZE` | Min topic segment size | `3` |
 | `AGENT_TOPIC_SIMILARITY_THRESHOLD` | Topic similarity threshold | `0.3` |
+| `AGENT_PURGE_OLD_MESSAGES` | Purge old messages after compression | `false` |
 | `MAX_SUBAGENT_DEPTH` | SubAgent max nesting depth | `6` |
 
 ### Memory
@@ -152,6 +154,13 @@ All config via environment variables or `.env`:
 | `NAPCAT_WS_URL` | NapCat WebSocket URL | `ws://localhost:3001` |
 | `NAPCAT_TOKEN` | NapCat auth token | — |
 | `NAPCAT_ALLOW_FROM` | Allowed QQ number whitelist (comma-separated) | — |
+| `WEB_ENABLED` | Enable Web channel | `false` |
+| `WEB_HOST` | Web channel bind address | `0.0.0.0` |
+| `WEB_PORT` | Web channel port | `8082` |
+| `WEB_STATIC_DIR` | Frontend static files directory | — |
+| `WEB_UPLOAD_DIR` | File upload directory | — |
+| `WEB_PERSONA_ISOLATION` | Enable persona isolation per web user | `false` |
+| `WEB_INVITE_ONLY` | Enable invite-only mode (admin creates users) | `false` |
 
 ### Infrastructure
 
@@ -168,6 +177,7 @@ All config via environment variables or `.env`:
 | `SANDBOX_WS_PORT` | Remote sandbox WebSocket port | `8080` |
 | `SANDBOX_AUTH_TOKEN` | Sandbox runner auth token | — |
 | `SANDBOX_PUBLIC_URL` | Public URL for runner connections (e.g., `ws://example.com:8080`) | — |
+| `SANDBOX_REMOTE_MODE` | Enable remote sandbox alongside docker | — |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
 | `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
 | `OAUTH_PORT` | OAuth server port | `8081` |

@@ -688,7 +688,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 							mimeType = http.DetectContentType(data)
 						}
 						b64 := base64.StdEncoding.EncodeToString(data)
-						content += fmt.Sprintf("\n\n![uploaded image](data:%s;base64,%s)", mimeType, b64)
+						content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
 					}
 				} else {
 					// For non-image files, write to user's sandbox so tools can access them.

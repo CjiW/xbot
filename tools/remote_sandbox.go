@@ -316,6 +316,7 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 				select {
 				case ch <- &resp:
 				default:
+					log.WithField("request_id", resp.ID).Warn("Runner: pending channel full, response dropped")
 				}
 				delete(rs.pending, resp.ID)
 			}
@@ -499,6 +500,35 @@ func (rs *RemoteSandbox) CloseForUser(userID string) error {
 	entry.mu.Unlock()
 	rs.connections.Delete(userID)
 	return nil
+}
+
+// DisconnectRunner closes a specific runner connection by name.
+func (rs *RemoteSandbox) DisconnectRunner(userID, runnerName string) bool {
+	val, ok := rs.connections.Load(userID)
+	if !ok {
+		return false
+	}
+	entry := val.(*userRunnersEntry)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	rc, ok := entry.runners[runnerName]
+	if !ok {
+		return false
+	}
+	rc.wsConn.Close()
+	delete(entry.runners, runnerName)
+	// If active was this runner, fallback to first available
+	if entry.active == runnerName {
+		entry.active = ""
+		for name := range entry.runners {
+			entry.active = name
+			break
+		}
+	}
+	if len(entry.runners) == 0 {
+		rs.connections.Delete(userID)
+	}
+	return true
 }
 
 func (rs *RemoteSandbox) IsExporting(_ string) bool      { return false }

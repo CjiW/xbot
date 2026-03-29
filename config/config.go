@@ -89,10 +89,13 @@ type AdminConfig struct {
 
 // WebConfig Web 渠道配置
 type WebConfig struct {
-	Enable    bool   // 是否启用 Web 渠道
-	Host      string // 监听地址（默认 0.0.0.0）
-	Port      int    // 监听端口（默认 8082）
-	StaticDir string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
+	Enable           bool   // 是否启用 Web 渠道
+	Host             string // 监听地址（默认 0.0.0.0）
+	Port             int    // 监听端口（默认 8082）
+	StaticDir        string // 前端静态文件目录（可选，为空则不提供前端页面，独立部署时设置）
+	UploadDir        string // 文件上传目录（可选，默认 workspace/uploads）
+	PersonaIsolation bool   // 启用后每个 web 用户使用独立 persona，不回退到全局 persona
+	InviteOnly       bool   // 启用后禁止自主注册，新账号只能由 admin 通过飞书命令创建
 }
 
 // Config 应用配置
@@ -144,6 +147,8 @@ type AgentConfig struct {
 	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true）
 	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7，即 70% 时触发）
+
+	PurgeOldMessages bool // 压缩后清理超出 MemoryWindow 的旧消息（默认 false）
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
@@ -260,10 +265,12 @@ func Load() *Config {
 			EnableTopicIsolation:     getEnvBoolOrDefault("AGENT_ENABLE_TOPIC_ISOLATION", false),
 			TopicMinSegmentSize:      getEnvIntOrDefault("AGENT_TOPIC_MIN_SEGMENT_SIZE", 3),
 			TopicSimilarityThreshold: getEnvFloatOrDefault("AGENT_TOPIC_SIMILARITY_THRESHOLD", 0.3),
-			LLMRetryAttempts:         getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
-			LLMRetryDelay:            getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
-			LLMRetryMaxDelay:         getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
-			LLMRetryTimeout:          getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
+			PurgeOldMessages:         getEnvBoolOrDefault("AGENT_PURGE_OLD_MESSAGES", false),
+
+			LLMRetryAttempts: getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
+			LLMRetryDelay:    getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
+			LLMRetryMaxDelay: getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
+			LLMRetryTimeout:  getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
 		},
 		OAuth: OAuthConfig{
 			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
@@ -289,10 +296,13 @@ func Load() *Config {
 			ChatID: getAdminChatID(),
 		},
 		Web: WebConfig{
-			Enable:    getEnvBoolOrDefault("WEB_ENABLED", false),
-			Host:      getEnvOrDefault("WEB_HOST", "0.0.0.0"),
-			Port:      getEnvIntOrDefault("WEB_PORT", 8082),
-			StaticDir: getEnvOrDefault("WEB_STATIC_DIR", ""),
+			Enable:           getEnvBoolOrDefault("WEB_ENABLED", false),
+			Host:             getEnvOrDefault("WEB_HOST", "0.0.0.0"),
+			Port:             getEnvIntOrDefault("WEB_PORT", 8082),
+			StaticDir:        getEnvOrDefault("WEB_STATIC_DIR", ""),
+			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
+			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
+			InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
 		},
 	}
 

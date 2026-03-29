@@ -46,6 +46,11 @@ func (s *TenantSession) Len() (int, error) {
 	return s.sessionSvc.GetMessagesCount(s.tenantID)
 }
 
+// UserMessageCount returns the number of user-role messages (conversation turns).
+func (s *TenantSession) UserMessageCount() (int, error) {
+	return s.sessionSvc.GetUserMessageCount(s.tenantID)
+}
+
 // LastConsolidated returns the last consolidated message index
 func (s *TenantSession) LastConsolidated() int {
 	lastConsolidated, err := s.memorySvc.GetState(context.Background(), s.tenantID)
@@ -64,6 +69,12 @@ func (s *TenantSession) SetLastConsolidated(n int) error {
 // Clear removes all messages from this tenant's session
 func (s *TenantSession) Clear() error {
 	return s.sessionSvc.Clear(s.tenantID)
+}
+
+// PurgeOldMessages deletes messages older than the most recent `keepCount` messages.
+// Returns the number of messages deleted.
+func (s *TenantSession) PurgeOldMessages(keepCount int) (int64, error) {
+	return s.sessionSvc.PurgeOldMessages(s.tenantID, keepCount)
 }
 
 // Memory returns the memory provider for this tenant

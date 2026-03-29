@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,7 +189,31 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 		case "system":
 			result = append(result, openai.SystemMessage(msg.Content))
 		case "user":
-			result = append(result, openai.UserMessage(msg.Content))
+			// Check for embedded images (data: URLs in markdown image syntax)
+			parts := parseEmbeddedImages(msg.Content)
+			if len(parts) > 1 {
+				// Multi-part message with images
+				var contentParts []openai.ChatCompletionContentPartUnionParam
+				for _, p := range parts {
+					switch p.Type {
+					case "text":
+						contentParts = append(contentParts, openai.TextContentPart(p.Text))
+					case "image":
+						contentParts = append(contentParts, openai.ImageContentPart(
+							openai.ChatCompletionContentPartImageImageURLParam{URL: p.URL},
+						))
+					}
+				}
+				result = append(result, openai.ChatCompletionMessageParamUnion{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Content: openai.ChatCompletionUserMessageParamContentUnion{
+							OfArrayOfContentParts: contentParts,
+						},
+					},
+				})
+			} else {
+				result = append(result, openai.UserMessage(msg.Content))
+			}
 		case "assistant":
 			// 如果有 reasoning_content，使用原始 JSON 构建消息
 			if msg.ReasoningContent != "" {
@@ -236,6 +262,58 @@ func buildToolCallsParamForJSON(toolCalls []ToolCall) []map[string]any {
 		})
 	}
 	return result
+}
+
+// embeddedImageRe matches markdown image syntax with data: URLs: ![alt](data:...)
+var embeddedImageRe = regexp.MustCompile(`!\[([^\]]*)\]\((data:[^)]+)\)`)
+
+// imageContentPart represents a parsed content segment (text or image).
+type imageContentPart struct {
+	Type string // "text" or "image"
+	Text string // for text parts
+	URL  string // for image parts
+}
+
+// parseEmbeddedImages splits content containing embedded data-URL images into parts.
+// Returns a single text part if no images found.
+func parseEmbeddedImages(content string) []imageContentPart {
+	if !strings.Contains(content, "data:") {
+		return []imageContentPart{{Type: "text", Text: content}}
+	}
+
+	locs := embeddedImageRe.FindAllStringSubmatchIndex(content, -1)
+	if len(locs) == 0 {
+		return []imageContentPart{{Type: "text", Text: content}}
+	}
+
+	var parts []imageContentPart
+	lastIdx := 0
+	for _, loc := range locs {
+		// loc[0:2] = full match, loc[2:4] = alt text group, loc[4:6] = URL group
+		// Add text before this image
+		if loc[0] > lastIdx {
+			text := strings.TrimSpace(content[lastIdx:loc[0]])
+			if text != "" {
+				parts = append(parts, imageContentPart{Type: "text", Text: text})
+			}
+		}
+		// Add the image part
+		url := content[loc[4]:loc[5]]
+		parts = append(parts, imageContentPart{Type: "image", URL: url})
+		lastIdx = loc[1]
+	}
+	// Add remaining text after last image
+	if lastIdx < len(content) {
+		text := strings.TrimSpace(content[lastIdx:])
+		if text != "" {
+			parts = append(parts, imageContentPart{Type: "text", Text: text})
+		}
+	}
+
+	if len(parts) == 0 {
+		return []imageContentPart{{Type: "text", Text: content}}
+	}
+	return parts
 }
 
 // toOpenAITools 将工具转换为 OpenAI 格式

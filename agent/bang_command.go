@@ -34,28 +34,40 @@ func isBangCommand(content string) (string, bool) {
 	return "", false
 }
 
+// sandboxUserID resolves the effective sandbox user ID from an inbound message.
+// If the message has a feishu_user_id metadata (web user with linked feishu identity),
+// use that so the user gets the same runner/workspace as on the Feishu side.
+func sandboxUserID(msg bus.InboundMessage) string {
+	if fid := msg.Metadata["feishu_user_id"]; fid != "" {
+		return fid
+	}
+	return msg.SenderID
+}
+
 // handleBangCommand executes a quick shell command (triggered by `!` prefix)
 // and returns the result directly, bypassing LLM.
 func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, command string) (*bus.OutboundMessage, error) {
+	sbUID := sandboxUserID(msg)
 	log.WithFields(log.Fields{
-		"channel": msg.Channel,
-		"sender":  msg.SenderID,
-		"command": tools.Truncate(command, 80),
+		"channel":      msg.Channel,
+		"sender":       msg.SenderID,
+		"sandbox_user": sbUID,
+		"command":      tools.Truncate(command, 80),
 	}).Info("Bang command")
 
-	workspaceRoot := a.sandboxWorkspace(msg.SenderID)
-	if err := a.ensureWorkspace(ctx, workspaceRoot, msg.SenderID); err != nil {
+	workspaceRoot := a.sandboxWorkspace(sbUID)
+	if err := a.ensureWorkspace(ctx, workspaceRoot, sbUID); err != nil {
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 
-	output, exitErr := a.executeBangCommand(ctx, command, workspaceRoot, msg.SenderID)
+	output, exitErr := a.executeBangCommand(ctx, command, workspaceRoot, sbUID)
 
 	// Format result
 	content := formatBangOutput(command, output, exitErr)
 
 	// If output is too long, write to a .md file and send as file link
 	if len([]rune(content)) > bangOutputMaxLen {
-		filePath, err := a.writeBangOutputFile(ctx, workspaceRoot, command, output, exitErr, msg.SenderID)
+		filePath, err := a.writeBangOutputFile(ctx, workspaceRoot, command, output, exitErr, sbUID)
 		if err != nil {
 			log.WithError(err).Warn("Failed to write bang output file, sending truncated")
 			// Truncate and send inline

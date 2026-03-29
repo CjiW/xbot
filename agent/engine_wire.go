@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	channelpkg "xbot/channel"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
@@ -38,6 +39,7 @@ func (a *Agent) buildBaseRunConfig(
 	channel, chatID, senderID string,
 	messages []llm.ChatMessage,
 	senderName string,
+	sandboxUserID string,
 ) (RunConfig, int) {
 	sessionKey := channel + ":" + chatID
 
@@ -59,22 +61,22 @@ func (a *Agent) buildBaseRunConfig(
 		AgentID:      "main",
 		Channel:      channel,
 		ChatID:       chatID,
-		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
-		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
+		SenderID:     senderID,      // 主 Agent: 直接调用者 = 原始用户（用于消息路由）
+		OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
 		SenderName:   senderName,
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
-		WorkspaceRoot:    a.workspaceRoot(senderID),
+		WorkspaceRoot:    a.workspaceRoot(sandboxUserID),
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
-		Sandbox:          resolveSandbox(a.sandbox, senderID),
+		Sandbox:          resolveSandbox(a.sandbox, sandboxUserID),
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
@@ -88,7 +90,7 @@ func (a *Agent) buildBaseRunConfig(
 		InjectInbound: a.injectInbound,
 
 		// 工具执行
-		ToolExecutor: a.buildToolExecutor(channel, chatID, senderID, senderName),
+		ToolExecutor: a.buildToolExecutor(channel, chatID, senderID, senderName, sandboxUserID),
 		ToolTimeout:  120 * time.Second,
 
 		// 读写分离（主 Agent 始终启用）
@@ -125,7 +127,18 @@ func (a *Agent) buildMainRunConfig(
 	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
 	sessionKey := channel + ":" + chatID
 
-	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName)
+	// 飞书身份登录 web 时，用飞书用户 ID 作为沙箱用户 ID，
+	// 确保 web 端与飞书端共用同一个 Docker 容器和工作区。
+	feishuUserID := msg.Metadata["feishu_user_id"]
+	sandboxUserID := senderID
+	if feishuUserID != "" {
+		sandboxUserID = feishuUserID
+	}
+
+	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName, sandboxUserID)
+
+	// 保留 FeishuUserID 供 buildToolContext 等处使用
+	cfg.FeishuUserID = feishuUserID
 
 	// 主 Agent 特有字段
 	cfg.Session = tenantSession
@@ -134,10 +147,54 @@ func (a *Agent) buildMainRunConfig(
 	cfg.OAuthHandler = a.buildOAuthHandler(channel, chatID, senderID, sessionKey)
 
 	// 进度通知
-	if autoNotify {
+	// Web 渠道始终启用结构化进度，但不发送文本进度消息
+	if channel == "web" {
+		// Web: no-op notifier — structured progress goes via ProgressEventHandler
+		// Setting ProgressNotifier to non-nil enables autoNotify in engine.Run()
+		cfg.ProgressNotifier = func(lines []string) {}
+	} else if autoNotify {
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
 				_ = a.sendMessage(channel, chatID, lines[0])
+			}
+		}
+	}
+
+	// 结构化进度事件推送（仅 web 渠道）
+	if channel == "web" && a.channelFinder != nil {
+		if ch, ok := a.channelFinder("web"); ok {
+			if wc, ok := ch.(*channelpkg.WebChannel); ok {
+				cfg.ProgressEventHandler = func(event *ProgressEvent) {
+					if event == nil || event.Structured == nil {
+						return
+					}
+					s := event.Structured
+					payload := &channelpkg.WsProgressPayload{
+						Phase:     string(s.Phase),
+						Iteration: s.Iteration,
+						Thinking:  s.ThinkingContent,
+					}
+					for _, t := range s.ActiveTools {
+						payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+							Name:    t.Name,
+							Label:   t.Label,
+							Status:  string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(),
+						})
+					}
+					for _, t := range s.CompletedTools {
+						payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+							Name:    t.Name,
+							Label:   t.Label,
+							Status:  string(t.Status),
+							Elapsed: t.Elapsed.Milliseconds(),
+						})
+					}
+					// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
+					wc.SendProgress(chatID, payload)
+				}
+			} else {
+				log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
 			}
 		}
 	}
@@ -199,7 +256,7 @@ func (a *Agent) buildCronRunConfig(
 ) RunConfig {
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 
-	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, messages, "")
+	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, messages, "", senderID)
 	return cfg
 }
 
@@ -449,13 +506,13 @@ func (a *Agent) buildSubAgentRunConfig(
 // buildToolExecutor 构建主 Agent 的工具执行器。
 // 包含 session MCP 查找、激活检查、工具使用追踪等完整逻辑。
 // 这是主 Agent 和 Cron 使用的执行器，SubAgent 使用 defaultToolExecutor。
-func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandboxUserID string) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 	sessionKey := channel + ":" + chatID
 
 	// Pre-build RunConfig outside closure to avoid reallocating on every tool call.
 	// Only ctx (from the caller) changes per-call; all config fields are stable.
-	wsRoot := a.workspaceRoot(senderID)
-	isRemote := a.isRemoteUser(senderID)
+	wsRoot := a.workspaceRoot(sandboxUserID)
+	isRemote := a.isRemoteUser(sandboxUserID)
 	// For remote users, leave WorkspaceRoot/WorkingDir empty — the runner
 	// manages its own filesystem. Keep SkillsDirs/AgentsDir as host paths
 	// for server-side sync (EnsureSynced reads global skills from host).
@@ -468,8 +525,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		AgentID:      "main",
 		Channel:      channel,
 		ChatID:       chatID,
-		SenderID:     senderID, // 主 Agent: 直接调用者 = 原始用户
-		OriginUserID: senderID, // 主 Agent: 原始用户 = 发送者
+		SenderID:     senderID,      // 主 Agent: 直接调用者（用于消息路由）
+		OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
 		SenderName:   senderName,
 		SendFunc:     a.sendMessage,
 
@@ -478,12 +535,12 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName string) 
 		ReadOnlyRoots:    a.globalSkillDirs,
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, senderID),
+		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
 		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
-		Sandbox:          resolveSandbox(a.sandbox, senderID),
+		Sandbox:          resolveSandbox(a.sandbox, sandboxUserID),
 		SandboxMode:      a.sandboxMode,
 		InjectInbound:    a.injectInbound,
 		Tools:            a.tools,

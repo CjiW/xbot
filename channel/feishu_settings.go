@@ -303,6 +303,29 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
+	case "settings_feishu_web_link":
+		username := formStr(actionData, "web_username")
+		password := formStr(actionData, "web_password")
+		if username == "" || password == "" {
+			return nil, fmt.Errorf("请填写用户名和密码")
+		}
+		if f.settingsCallbacks.FeishuWebLink == nil {
+			return nil, fmt.Errorf("web linking not enabled")
+		}
+		if _, err := f.settingsCallbacks.FeishuWebLink(senderID, username, password); err != nil {
+			return nil, fmt.Errorf("关联失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
+	case "settings_feishu_web_unlink":
+		if f.settingsCallbacks.FeishuWebUnlink == nil {
+			return nil, fmt.Errorf("web linking not enabled")
+		}
+		if err := f.settingsCallbacks.FeishuWebUnlink(senderID); err != nil {
+			return nil, fmt.Errorf("取消关联失败: %v", err)
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -483,6 +506,83 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string) []map[string]any
 		"tag":     "markdown",
 		"content": "将当前沙箱文件系统导出为镜像，用于持久保存。执行期间该用户所有请求将被拒绝。",
 	})
+
+	// Web credential section
+	if f.settingsCallbacks.FeishuWebGetLinked != nil {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "**🔑 Web 端登录凭证**",
+		})
+
+		webUsername, linked := f.settingsCallbacks.FeishuWebGetLinked(senderID)
+		if linked {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("已关联 Web 账号：**%s** ✅", webUsername),
+			})
+			elements = append(elements, wrapButtonsInColumns([]map[string]any{
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "🔓 取消关联"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_feishu_web_unlink",
+						}),
+					},
+				},
+			}))
+		} else {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "尚未关联 Web 账号。设置用户名和密码后，可在 Web 端使用相同身份登录。",
+			})
+			formElements := []map[string]any{
+				{
+					"tag":  "input",
+					"name": "web_username",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "Web 用户名",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "输入用户名",
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "web_password",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "Web 密码",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "输入密码",
+					},
+				},
+				{
+					"tag":         "button",
+					"name":        "web_link_submit",
+					"text":        map[string]any{"tag": "plain_text", "content": "关联 Web 账号"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_feishu_web_link",
+						}),
+					},
+				},
+			}
+			elements = append(elements, map[string]any{
+				"tag":      "form",
+				"name":     "web_link_form",
+				"elements": formElements,
+			})
+		}
+	}
 
 	return elements
 }

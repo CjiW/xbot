@@ -149,7 +149,9 @@ func main() {
 		MaxSubAgentDepth:         cfg.Agent.MaxSubAgentDepth,
 		EnableTopicIsolation:     cfg.Agent.EnableTopicIsolation,
 		TopicMinSegmentSize:      cfg.Agent.TopicMinSegmentSize,
+		PersonaIsolation:         cfg.Web.PersonaIsolation,
 		TopicSimilarityThreshold: cfg.Agent.TopicSimilarityThreshold,
+		PurgeOldMessages:         cfg.Agent.PurgeOldMessages,
 		SandboxIdleTimeout:       cfg.Sandbox.IdleTimeout,
 	})
 
@@ -204,8 +206,8 @@ func main() {
 		log.Info("OAuth and Feishu MCP tools registered")
 	}
 
-	// 注册需要配置注入的核心工具
-	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
+	// 注册需要配置注入的工具（非 core，飞书专属）
+	agentLoop.RegisterTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
 
 	// 注册 Logs 工具（仅管理员可用）
@@ -264,21 +266,146 @@ func main() {
 		disp.Register(napcatCh)
 	}
 
+	var webDB *sql.DB
+
 	// 注册 Web 渠道
 	if cfg.Web.Enable {
-		var webDB *sql.DB
 		if tokenDB != nil {
 			webDB = tokenDB.Conn()
 		}
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
-				Host: cfg.Web.Host,
-				Port: cfg.Web.Port,
-				DB:   webDB,
+				Host:             cfg.Web.Host,
+				Port:             cfg.Web.Port,
+				DB:               webDB,
+				MemoryWindow:     cfg.Agent.MemoryWindow,
+				FeishuLinkSecret: cfg.Feishu.AppSecret,
+				InviteOnly:       cfg.Web.InviteOnly,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
+				// Default upload dir: workspace/uploads relative to executable
+				if cfg.Web.UploadDir != "" {
+					webCh.SetUploadDir(cfg.Web.UploadDir)
+				} else {
+					execDir, _ := os.Executable()
+					webCh.SetUploadDir(filepath.Join(filepath.Dir(execDir), "workspace", "uploads"))
+				}
+				// Set workDir so uploaded files can be copied into sandbox-accessible paths
+				webCh.SetWorkDir(workDir)
+
 			}
+			webCh.SetCallbacks(channel.WebCallbacks{
+				RunnerTokenGet: func(senderID string) string {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return ""
+					}
+					entry := tools.NewRunnerTokenStore(db).Get(senderID)
+					if entry == nil {
+						return ""
+					}
+					return buildRunnerConnectCmd(cfg, entry)
+				},
+				RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return "", fmt.Errorf("remote sandbox not configured")
+					}
+					entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+						Mode:        mode,
+						DockerImage: dockerImage,
+						Workspace:   workspace,
+					})
+					if entry == nil {
+						return "", fmt.Errorf("failed to generate token")
+					}
+					return buildRunnerConnectCmd(cfg, entry), nil
+				},
+				RunnerTokenRevoke: func(senderID string) error {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return fmt.Errorf("remote sandbox not configured")
+					}
+					tools.NewRunnerTokenStore(db).Revoke(senderID)
+					return nil
+				},
+				RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+					return agentLoop.RegistryManager().Browse(entryType, limit, offset)
+				},
+				RegistryInstall: func(entryType string, id int64, senderID string) error {
+					return agentLoop.RegistryManager().Install(entryType, id, senderID)
+				},
+				RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+					return agentLoop.RegistryManager().ListMy(senderID, entryType)
+				},
+				RegistryPublish: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Publish(entryType, name, senderID)
+				},
+				RegistryUnpublish: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Unpublish(entryType, name, senderID)
+				},
+
+				RegistryUninstall: func(entryType, name, senderID string) error {
+					return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
+				},
+				LLMList: func(senderID string) ([]string, string) {
+					llmClient, currentModel, _, _ := agentLoop.LLMFactory().GetLLM(senderID)
+					return llmClient.ListModels(), currentModel
+				},
+				LLMSet: func(senderID, model string) error {
+					return agentLoop.SetUserModel(senderID, model)
+				},
+				LLMGetConfig: func(senderID string) (string, string, string, bool) {
+					return agentLoop.GetUserLLMConfig(senderID)
+				},
+				LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+					return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+				},
+				LLMDelete: func(senderID string) error {
+					return agentLoop.DeleteUserLLM(senderID)
+				},
+				LLMGetMaxContext: func(senderID string) int {
+					return agentLoop.GetUserMaxContext(senderID)
+				},
+				LLMSetMaxContext: func(senderID string, maxContext int) error {
+					return agentLoop.SetUserMaxContext(senderID, maxContext)
+				},
+
+				NormalizeSenderID: func(senderID string) string {
+					return agentLoop.NormalizeSenderID(senderID)
+				},
+				SandboxWriteFile: func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (string, error) {
+					sandbox := tools.GetSandbox()
+					if sandbox == nil {
+						return "", fmt.Errorf("no sandbox available")
+					}
+					// Resolve per-user sandbox (e.g., remote runner vs docker)
+					resolver, ok := sandbox.(tools.SandboxResolver)
+					if !ok {
+						return "", fmt.Errorf("sandbox does not support per-user resolution")
+					}
+					userSbx := resolver.SandboxForUser(senderID)
+					if userSbx == nil || userSbx.Name() == "none" {
+						return "", fmt.Errorf("no sandbox available for user %s", senderID)
+					}
+					// Build absolute path inside sandbox (e.g., /workspace/uploads/file.txt)
+					ws := userSbx.Workspace(senderID)
+					absPath := filepath.Join(ws, sandboxRelPath)
+					// Ensure parent directory exists
+					dir := filepath.Dir(absPath)
+					if err := userSbx.MkdirAll(context.Background(), dir, 0755, senderID); err != nil {
+						log.WithError(err).Warn("Failed to create directory in sandbox")
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := userSbx.WriteFile(ctx, absPath, data, perm, senderID); err != nil {
+						return "", err
+					}
+					// Return the workspace path prefix so the caller can build the display path
+					return ws, nil
+				},
+			})
 			disp.Register(webCh)
 		} else {
 			log.Warn("Web channel enabled but no database available, skipping")
@@ -292,6 +419,14 @@ func main() {
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {
 		feishuCh.SetCardBuilder(agentLoop.GetCardBuilder())
+
+		// 传递 admin chatID 和 web DB（用于 admin 命令如 !webadd）
+		if adminChatID != "" {
+			feishuCh.SetAdminChatID(adminChatID)
+		}
+		if webDB != nil {
+			feishuCh.SetWebDB(webDB)
+		}
 
 		// 注入设置卡片回调（让飞书渠道能访问 Agent 的 LLM/Registry/Settings 功能）
 		feishuCh.SetSettingsCallbacks(channel.SettingsCallbacks{
@@ -412,6 +547,27 @@ func main() {
 				}
 				tools.NewRunnerTokenStore(db).Revoke(senderID)
 				return nil
+			},
+			FeishuWebLink: func(feishuUserID, username, password string) (string, error) {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return "", fmt.Errorf("web linking not enabled")
+				}
+				return channel.FeishuLinkUser(db, feishuUserID, username, password)
+			},
+			FeishuWebGetLinked: func(feishuUserID string) (string, bool) {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return "", false
+				}
+				return channel.FeishuGetLinkedUser(db, feishuUserID)
+			},
+			FeishuWebUnlink: func(feishuUserID string) error {
+				db := tools.GetRunnerTokenDB()
+				if db == nil {
+					return fmt.Errorf("web linking not enabled")
+				}
+				return channel.FeishuUnlinkUser(db, feishuUserID)
 			},
 		})
 

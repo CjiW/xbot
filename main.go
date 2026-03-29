@@ -206,8 +206,8 @@ func main() {
 		log.Info("OAuth and Feishu MCP tools registered")
 	}
 
-	// 注册需要配置注入的核心工具
-	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
+	// 注册需要配置注入的工具（非 core，飞书专属）
+	agentLoop.RegisterTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
 
 	// 注册 Logs 工具（仅管理员可用）

@@ -475,6 +475,18 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
           }
 
+          case 'user_echo': {
+            // Update optimistic user message with complete content (including file info)
+            if (data.original_content) {
+              setMessages((prev) => prev.map((m) =>
+                m.type === 'user' && m.content === data.original_content
+                  ? { ...m, content: data.content }
+                  : m
+              ))
+            }
+            break
+          }
+
           default:
             break
         }

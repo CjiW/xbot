@@ -251,9 +251,10 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured"
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo"
 	ID              string             `json:"id,omitempty"`               // UUID
 	Content         string             `json:"content,omitempty"`          // message content
+	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
 	TS              int64              `json:"ts,omitempty"`               // timestamp
 	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
 	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
@@ -665,6 +666,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 		// Send to message bus
 		var mediaPaths []string
+		originalContent := msg.Content // keep original text for user_echo matching
 		content := msg.Content
 		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
 			for i, fid := range msg.FileIDs {
@@ -741,6 +743,19 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			metadata["feishu_user_id"] = si.feishuUserID
 		}
 
+		// Echo back complete user message (with file info) so frontend can update optimistic message
+		if content != originalContent && len(msg.FileIDs) > 0 {
+			echoMsg := wsMessage{
+				Type:            "user_echo",
+				Content:         content,
+				OriginalContent: originalContent,
+				TS:              time.Now().Unix(),
+			}
+			wc.hub.sendToClient(chatID, echoMsg)
+		}
+
+		// Eagerly save user message so history API can return it during processing.
+		// Skip bang commands (! prefix) — they should never be persisted.
 		// Eagerly save user message so history API can return it during processing.
 		// Skip bang commands (! prefix) — they should never be persisted.
 		trimmed := strings.TrimSpace(content)

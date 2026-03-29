@@ -577,6 +577,21 @@ func (s *DockerSandbox) RemoveAll(ctx context.Context, path string, userID strin
 	return nil
 }
 
+func (s *DockerSandbox) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	// Create parent directory inside the container
+	dir := filepath.Dir(outputPath)
+	if _, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", dir); err != nil {
+		return fmt.Errorf("docker exec mkdir -p: %w", err)
+	}
+	// Use curl inside the container to download directly
+	out, err := s.dockerExecInContainer(ctx, userID, "", dockerSlowTimeout, "curl", "-fsSL", "-o", outputPath, url)
+	if err != nil {
+		return fmt.Errorf("docker exec curl: %w: %s", err, string(out))
+	}
+	log.WithFields(log.Fields{"url": url, "output_path": outputPath, "user_id": userID}).Info("File downloaded (docker sandbox)")
+	return nil
+}
+
 // getOrCreateContainer 获取或创建用户的 Docker 容器
 // 优先使用用户专属镜像（由 export+import 生成），不存在则用基础镜像
 // 返回容器名称和检测到的用户默认 shell

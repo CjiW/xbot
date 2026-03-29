@@ -169,6 +169,10 @@ func (r *SandboxRouter) RemoveAll(ctx context.Context, path string, userID strin
 	return r.resolve(userID).RemoveAll(ctx, path, userID)
 }
 
+func (r *SandboxRouter) DownloadFile(ctx context.Context, url, outputPath, userID string) error {
+	return r.resolve(userID).DownloadFile(ctx, url, outputPath, userID)
+}
+
 func (r *SandboxRouter) GetShell(userID string, workspace string) (string, error) {
 	return r.resolve(userID).GetShell(userID, workspace)
 }

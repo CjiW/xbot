@@ -44,11 +44,14 @@ func (m *mockSandbox) MkdirAll(_ context.Context, _ string, _ os.FileMode, _ str
 }
 func (m *mockSandbox) Remove(_ context.Context, _ string, _ string) error    { return os.ErrNotExist }
 func (m *mockSandbox) RemoveAll(_ context.Context, _ string, _ string) error { return nil }
-func (m *mockSandbox) GetShell(_ string, _ string) (string, error)           { return "/bin/bash", nil }
-func (m *mockSandbox) Close() error                                          { return nil }
-func (m *mockSandbox) CloseForUser(_ string) error                           { return nil }
-func (m *mockSandbox) IsExporting(_ string) bool                             { return false }
-func (m *mockSandbox) ExportAndImport(_ string) error                        { return nil }
+func (m *mockSandbox) DownloadFile(_ context.Context, _ string, _ string, _ string) error {
+	return nil
+}
+func (m *mockSandbox) GetShell(_ string, _ string) (string, error) { return "/bin/bash", nil }
+func (m *mockSandbox) Close() error                                { return nil }
+func (m *mockSandbox) CloseForUser(_ string) error                 { return nil }
+func (m *mockSandbox) IsExporting(_ string) bool                   { return false }
+func (m *mockSandbox) ExportAndImport(_ string) error              { return nil }
 
 // --- Mock LLM ---
 

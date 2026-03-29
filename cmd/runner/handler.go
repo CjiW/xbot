@@ -47,6 +47,8 @@ func dispatch(msg RunnerMessage) *RunnerMessage {
 		return handleRemove(msg)
 	case "remove_all":
 		return handleRemoveAll(msg)
+	case "download_file":
+		return handleDownloadFile(msg)
 	default:
 		return makeError(msg.ID, "EINVAL", fmt.Sprintf("unknown request type: %s", msg.Type))
 	}
@@ -240,4 +242,27 @@ func handleRemoveAll(msg RunnerMessage) *RunnerMessage {
 		log.Printf("  remove_all %s", req.Path)
 	}
 	return makeOK(msg.ID)
+}
+
+func handleDownloadFile(msg RunnerMessage) *RunnerMessage {
+	var req DownloadFileRequest
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return makeError(msg.ID, "EINVAL", err.Error())
+	}
+	path, err := safePath(req.OutputPath)
+	if err != nil {
+		return makeError(msg.ID, "EPERM", err.Error())
+	}
+
+	// 5-minute timeout for downloads
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	size, err := executor.DownloadFile(ctx, req.URL, path)
+	if err != nil {
+		return makeError(msg.ID, "EIO", "download failed: "+err.Error())
+	}
+
+	log.Printf("  download_file %s → %s (%d bytes)", req.URL, req.OutputPath, size)
+	return makeResponse(msg.ID, ProtoOK, DownloadFileResponse{Size: size})
 }

@@ -10,14 +10,15 @@ import (
 // === WebSocket Protocol Constants ===
 
 const (
-	ProtoExec      = runnerproto.ProtoExec
-	ProtoReadFile  = runnerproto.ProtoReadFile
-	ProtoWriteFile = runnerproto.ProtoWriteFile
-	ProtoStat      = runnerproto.ProtoStat
-	ProtoReadDir   = runnerproto.ProtoReadDir
-	ProtoMkdirAll  = runnerproto.ProtoMkdirAll
-	ProtoRemove    = runnerproto.ProtoRemove
-	ProtoRemoveAll = runnerproto.ProtoRemoveAll
+	ProtoExec         = runnerproto.ProtoExec
+	ProtoReadFile     = runnerproto.ProtoReadFile
+	ProtoWriteFile    = runnerproto.ProtoWriteFile
+	ProtoStat         = runnerproto.ProtoStat
+	ProtoReadDir      = runnerproto.ProtoReadDir
+	ProtoMkdirAll     = runnerproto.ProtoMkdirAll
+	ProtoRemove       = runnerproto.ProtoRemove
+	ProtoRemoveAll    = runnerproto.ProtoRemoveAll
+	ProtoDownloadFile = runnerproto.ProtoDownloadFile
 
 	ProtoExecResult  = runnerproto.ProtoExecResult
 	ProtoFileContent = runnerproto.ProtoFileContent
@@ -42,6 +43,8 @@ type ReadDirRequest = runnerproto.ReadDirRequest
 type DirEntryResponse = runnerproto.DirEntryResponse
 type DirEntriesResponse = runnerproto.DirEntriesResponse
 type PathRequest = runnerproto.PathRequest
+type DownloadFileRequest = runnerproto.DownloadFileRequest
+type DownloadFileResponse = runnerproto.DownloadFileResponse
 type ErrorResponse = runnerproto.ErrorResponse
 
 // ProtoErrorCodes maps protocol error codes to Go errors.

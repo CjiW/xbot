@@ -365,3 +365,32 @@ func (de *dockerExecutor) RemoveAll(path string) error {
 	}
 	return nil
 }
+
+func (de *dockerExecutor) DownloadFile(ctx context.Context, url, outputPath string) (int64, error) {
+	// Use curl inside the container to download directly.
+	// curl is available in most docker images; if not, wget is tried as fallback.
+	dir := filepath.Dir(outputPath)
+	if _, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", dir); err != nil {
+		return 0, fmt.Errorf("docker exec mkdir -p: %w", err)
+	}
+
+	// Try curl first (supports more features like -L for redirects, --max-filesize)
+	_, err := de.dockerExecSlow("exec", "-i", de.containerName, "curl", "-fsSL", "-o", outputPath, url)
+	if err != nil {
+		// Fallback to wget
+		if _, wgetErr := de.dockerExecSlow("exec", "-i", de.containerName, "wget", "-q", "-O", outputPath, url); wgetErr != nil {
+			return 0, fmt.Errorf("docker exec download (curl/wget): %w", err)
+		}
+	}
+
+	// Get file size
+	statOut, err := de.dockerExec("exec", "-i", de.containerName, "stat", "--format", "%s", outputPath)
+	if err != nil {
+		return 0, fmt.Errorf("docker exec stat: %w", err)
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(statOut)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse file size: %w", err)
+	}
+	return size, nil
+}

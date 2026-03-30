@@ -428,13 +428,35 @@ func FeishuGetLinkedUser(db *sql.DB, feishuUserID string) (string, bool) {
 	return username, true
 }
 
-// FeishuUnlinkUser removes the Feishu-Web account link.
+// FeishuUnlinkUser removes the Feishu-Web account link and deletes the web user account.
 func FeishuUnlinkUser(db *sql.DB, feishuUserID string) error {
-	_, err := db.Exec(
+	var webUserIDStr string
+	err := db.QueryRow(
+		`SELECT value FROM user_settings WHERE channel = 'feishu' AND sender_id = ? AND key = 'web_user_id'`,
+		feishuUserID,
+	).Scan(&webUserIDStr)
+	if err != nil {
+		return fmt.Errorf("no linked web account")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
 		`DELETE FROM user_settings WHERE channel = 'feishu' AND sender_id = ? AND key = 'web_user_id'`,
 		feishuUserID,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("failed to remove link: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM web_users WHERE id = ?`, webUserIDStr); err != nil {
+		return fmt.Errorf("failed to delete web account: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // handleFeishuLink handles POST /api/auth/feishu-link

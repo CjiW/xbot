@@ -763,6 +763,84 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string, o SettingsCardOp
 		elements = append(elements, map[string]any{"tag": "hr"})
 	}
 
+	// ── Feishu ↔ Web Account Linking Section ──
+	if f.settingsCallbacks.FeishuWebGetLinked != nil {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "**🔗 Web 账户关联**",
+		})
+
+		linkedUser, linked := f.settingsCallbacks.FeishuWebGetLinked(senderID)
+		if linked {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("已关联 Web 账户：**%s**", linkedUser),
+			})
+			elements = append(elements, wrapButtonsInColumns([]map[string]any{
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "取消关联"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_feishu_web_unlink",
+						}),
+					},
+				},
+			}))
+		} else {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "关联 Web 账户后，可使用飞书身份登录 Web 端。",
+			})
+			formWebLink := []map[string]any{
+				{
+					"tag":  "input",
+					"name": "web_username",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "用户名",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "输入 Web 用户名",
+					},
+				},
+				{
+					"tag":  "input",
+					"name": "web_password",
+					"label": map[string]any{
+						"tag":     "plain_text",
+						"content": "密码",
+					},
+					"placeholder": map[string]any{
+						"tag":     "plain_text",
+						"content": "输入密码",
+					},
+				},
+				{
+					"tag":         "button",
+					"name":        "web_link_submit",
+					"text":        map[string]any{"tag": "plain_text", "content": "关联账户"},
+					"type":        "primary",
+					"action_type": "form_submit",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_feishu_web_link",
+						}),
+					},
+				},
+			}
+			elements = append(elements, map[string]any{
+				"tag":      "form",
+				"name":     "feishu_web_link_form",
+				"elements": formWebLink,
+			})
+		}
+
+		elements = append(elements, map[string]any{"tag": "hr"})
+	}
+
 	return elements
 }
 

@@ -353,15 +353,15 @@ func (t *EditTool) doReplace(content string, params EditParams, filePath string)
 				effStart = 1
 			}
 			effEnd := params.EndLine
-				if effEnd <= 0 {
-					// Inline splitLines: count lines correctly handling trailing newline
-					lines := strings.Split(content, "\n")
-					if len(lines) > 0 && lines[len(lines)-1] == "" {
-						effEnd = len(lines) - 1
-					} else {
-						effEnd = len(lines)
-					}
+			if effEnd <= 0 {
+				// Inline splitLines: count lines correctly handling trailing newline
+				lines := strings.Split(content, "\n")
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					effEnd = len(lines) - 1
+				} else {
+					effEnd = len(lines)
 				}
+			}
 			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.OldString)
 		}
 		return "", "", fmt.Errorf("no match found for pattern: %s", params.OldString)

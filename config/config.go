@@ -164,11 +164,6 @@ type AgentConfig struct {
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
-	// 话题分区隔离
-	EnableTopicIsolation     bool    // 是否启用话题分区隔离（默认 false）
-	TopicMinSegmentSize      int     // 最小话题片段大小（默认 3）
-	TopicSimilarityThreshold float64 // 话题相似度阈值（默认 0.3）
-
 	// LLM 重试配置
 	LLMRetryAttempts int           // LLM 重试次数（默认 5）
 	LLMRetryDelay    time.Duration // 初始重试延迟（默认 1s）
@@ -258,25 +253,22 @@ func Load() *Config {
 			MaxTokens: getEnvIntOrDefault("LLM_EMBEDDING_MAX_TOKENS", 2048),
 		},
 		Agent: AgentConfig{
-			MaxIterations:            getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 100),
-			MaxConcurrency:           getEnvIntOrDefault("AGENT_MAX_CONCURRENCY", 3),
-			MemoryWindow:             getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
-			MemoryProvider:           getEnvOrDefault("MEMORY_PROVIDER", "flat"),
-			WorkDir:                  getEnvOrDefault("WORK_DIR", "."),
-			PromptFile:               getEnvOrDefault("PROMPT_FILE", "prompt.md"),
-			SingleUser:               getEnvBoolOrDefault("SINGLE_USER", false),
-			MCPInactivityTimeout:     getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
-			MCPCleanupInterval:       getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
-			SessionCacheTimeout:      getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
-			EnableAutoCompress:       getEnvBoolOrDefault("AGENT_ENABLE_AUTO_COMPRESS", true),
-			MaxContextTokens:         getEnvIntOrDefault("AGENT_MAX_CONTEXT_TOKENS", 100000),
-			CompressionThreshold:     getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
-			ContextMode:              getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
-			MaxSubAgentDepth:         getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
-			EnableTopicIsolation:     getEnvBoolOrDefault("AGENT_ENABLE_TOPIC_ISOLATION", false),
-			TopicMinSegmentSize:      getEnvIntOrDefault("AGENT_TOPIC_MIN_SEGMENT_SIZE", 3),
-			TopicSimilarityThreshold: getEnvFloatOrDefault("AGENT_TOPIC_SIMILARITY_THRESHOLD", 0.3),
-			PurgeOldMessages:         getEnvBoolOrDefault("AGENT_PURGE_OLD_MESSAGES", false),
+			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 100),
+			MaxConcurrency:       getEnvIntOrDefault("AGENT_MAX_CONCURRENCY", 3),
+			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
+			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
+			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
+			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
+			SingleUser:           getEnvBoolOrDefault("SINGLE_USER", false),
+			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
+			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
+			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
+			EnableAutoCompress:   getEnvBoolOrDefault("AGENT_ENABLE_AUTO_COMPRESS", true),
+			MaxContextTokens:     getEnvIntOrDefault("AGENT_MAX_CONTEXT_TOKENS", 100000),
+			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
+			ContextMode:          getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
+			MaxSubAgentDepth:     getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
+			PurgeOldMessages:     getEnvBoolOrDefault("AGENT_PURGE_OLD_MESSAGES", false),
 
 			LLMRetryAttempts: getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
 			LLMRetryDelay:    getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),

@@ -23,11 +23,12 @@ type historyResponse struct {
 }
 
 type histMsg struct {
-	Role      string  `json:"role"`
-	Content   string  `json:"content"`
-	CreatedAt string  `json:"created_at,omitempty"`
-	ToolCalls *string `json:"tool_calls,omitempty"`
-	Detail    *string `json:"detail,omitempty"` // iteration history JSON for assistant messages
+	Role        string  `json:"role"`
+	Content     string  `json:"content"`
+	CreatedAt   string  `json:"created_at,omitempty"`
+	ToolCalls   *string `json:"tool_calls,omitempty"`
+	Detail      *string `json:"detail,omitempty"`       // iteration history JSON for assistant messages
+	DisplayOnly bool    `json:"display_only,omitempty"` // true for cron results (not part of LLM context)
 }
 
 // handleHistory handles GET /api/history
@@ -76,14 +77,14 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	var rows *sql.Rows
 	if boundaryID.Valid {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail
+				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND id >= ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
 			`, tenantID, boundaryID.Int64)
 	} else {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail
+				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
@@ -99,7 +100,8 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m histMsg
 		var toolCalls, detail sql.NullString
-		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail); err != nil {
+		var displayOnly int
+		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail, &displayOnly); err != nil {
 			continue
 		}
 		if toolCalls.Valid {
@@ -108,6 +110,7 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 		if detail.Valid {
 			m.Detail = &detail.String
 		}
+		m.DisplayOnly = displayOnly == 1
 		messages = append(messages, m)
 	}
 

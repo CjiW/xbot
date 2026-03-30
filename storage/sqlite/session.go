@@ -107,7 +107,13 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 }
 
 // GetAllMessages retrieves all non-display-only messages for a tenant.
-// Used by memory consolidation — display_only messages (cron results) are excluded.
+// Used by memory consolidation and context building.
+//
+// Design decision: display_only messages (e.g. cron task results) are intentionally
+// excluded because they are produced by an independent agent loop with no shared
+// conversation context. Including them in consolidation would inject unrelated content
+// into the user's long-term memory summary. If future features need to retrieve cron
+// execution history, a dedicated query (without the display_only filter) should be added.
 func (s *SessionService) GetAllMessages(tenantID int64) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`

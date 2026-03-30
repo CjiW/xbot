@@ -206,7 +206,7 @@ func TestRun_MultiToolCallLoop(t *testing.T) {
 			{
 				FinishReason: llm.FinishReasonToolCalls,
 				ToolCalls: []llm.ToolCall{
-					{ID: "tc2", Name: "Edit", Arguments: `{"path":"a.go"}`},
+					{ID: "tc2", Name: "FileReplace", Arguments: `{"path":"a.go"}`},
 				},
 			},
 			{Content: "Done editing."},
@@ -447,7 +447,7 @@ func TestRun_ReadWriteSplit(t *testing.T) {
 				ToolCalls: []llm.ToolCall{
 					{ID: "tc1", Name: "Read", Arguments: `{"path":"a.go"}`},
 					{ID: "tc2", Name: "Read", Arguments: `{"path":"b.go"}`},
-					{ID: "tc3", Name: "Edit", Arguments: `{"path":"c.go"}`},
+					{ID: "tc3", Name: "FileReplace", Arguments: `{"path":"c.go"}`},
 				},
 			},
 			{Content: "Done."},
@@ -475,12 +475,12 @@ func TestRun_ReadWriteSplit(t *testing.T) {
 	// Edit should come after both Reads
 	editIdx := -1
 	for i, name := range execOrder {
-		if name == "Edit" {
+		if name == "FileReplace" {
 			editIdx = i
 		}
 	}
 	if editIdx < 2 {
-		t.Errorf("Edit executed at index %d, expected after reads. Order: %v", editIdx, execOrder)
+		t.Errorf("FileReplace executed at index %d, expected after reads. Order: %v", editIdx, execOrder)
 	}
 }
 

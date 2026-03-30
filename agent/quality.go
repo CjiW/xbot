@@ -277,7 +277,7 @@ func extractPathsFromToolArgs(toolName, argsJSON string) []string {
 
 	var paths []string
 	switch toolName {
-	case "Read", "Edit", "Write":
+	case "Read", "FileCreate", "FileReplace", "Write":
 		if p, ok := args["path"].(string); ok && p != "" {
 			paths = append(paths, p)
 		}

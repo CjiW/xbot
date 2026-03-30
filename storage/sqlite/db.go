@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 17
+const schemaVersion = 18
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -132,6 +132,7 @@ CREATE TABLE session_messages (
     tool_arguments TEXT,
     tool_calls TEXT,
     detail TEXT,
+    display_only INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 );
@@ -200,7 +201,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (17);
+INSERT INTO schema_version (version) VALUES (18);
 
 CREATE TABLE runner_tokens (
     user_id     TEXT PRIMARY KEY,
@@ -816,6 +817,21 @@ CREATE TABLE IF NOT EXISTS runners (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v17 (added runners table, migrated runner_tokens)")
+	}
+
+	if from < 18 {
+		var count int
+		err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('session_messages') WHERE name = 'display_only'").Scan(&count)
+		if err == nil && count == 0 {
+			_, err = conn.Exec("ALTER TABLE session_messages ADD COLUMN display_only INTEGER DEFAULT 0")
+			if err != nil {
+				return fmt.Errorf("migrate v17->v18: %w", err)
+			}
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 18"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v18 (added display_only to session_messages)")
 	}
 
 	return nil

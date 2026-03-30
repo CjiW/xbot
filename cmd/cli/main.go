@@ -1,0 +1,201 @@
+// xbot CLI entry point
+// Standalone terminal-based chat interface
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"xbot/agent"
+	"xbot/bus"
+	"xbot/channel"
+	"xbot/config"
+	"xbot/llm"
+	log "xbot/logger"
+	"xbot/storage"
+	"xbot/storage/sqlite"
+	"xbot/tools"
+	"xbot/version"
+)
+
+func main() {
+	// 打印版本信息
+	fmt.Printf("xbot CLI %s\n", version.Version)
+	fmt.Println("Starting...")
+
+	// 加载配置
+	cfg := config.Load()
+
+	// 配置日志
+	workDir := cfg.Agent.WorkDir
+	if err := setupLogger(cfg.Log, workDir); err != nil {
+		log.WithError(err).Fatal("Failed to setup logger")
+	}
+	defer log.Close()
+
+	// 创建 LLM 客户端
+	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
+		Attempts: uint(cfg.Agent.LLMRetryAttempts),
+		Delay:    cfg.Agent.LLMRetryDelay,
+		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
+		Timeout:  cfg.Agent.LLMRetryTimeout,
+	})
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create LLM client")
+	}
+	log.WithFields(log.Fields{
+		"provider": cfg.LLM.Provider,
+		"model":    cfg.LLM.Model,
+	}).Info("LLM client created")
+
+	// 创建消息总线
+	msgBus := bus.NewMessageBus()
+
+	// 准备数据库路径
+	xbotDir := filepath.Join(workDir, ".xbot")
+	dbPath := filepath.Join(xbotDir, "xbot.db")
+
+	// 数据迁移（如果需要）
+	if err := storage.MigrateIfNeeded(context.Background(), workDir, dbPath); err != nil {
+		log.WithError(err).Fatal("Failed to migrate data to SQLite")
+	}
+
+	// 设置 runner token 数据库
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")
+	} else {
+		tools.SetRunnerTokenDB(db.Conn())
+	}
+
+	// 嵌入向量配置
+	embBaseURL := cfg.Embedding.BaseURL
+	if embBaseURL == "" {
+		embBaseURL = cfg.LLM.BaseURL
+	}
+	embAPIKey := cfg.Embedding.APIKey
+	if embAPIKey == "" {
+		embAPIKey = cfg.LLM.APIKey
+	}
+
+	// 初始化沙箱
+	tools.InitSandbox(cfg.Sandbox, workDir)
+
+	// 创建 Agent
+	agentLoop := agent.New(agent.Config{
+		Bus:                  msgBus,
+		LLM:                  llmClient,
+		Model:                cfg.LLM.Model,
+		MaxIterations:        cfg.Agent.MaxIterations,
+		MaxConcurrency:       cfg.Agent.MaxConcurrency,
+		MemoryWindow:         cfg.Agent.MemoryWindow,
+		DBPath:               dbPath,
+		SkillsDir:            filepath.Join(xbotDir, "skills"),
+		WorkDir:              workDir,
+		PromptFile:           cfg.Agent.PromptFile,
+		SingleUser:           true, // CLI 模式强制单用户
+		SandboxMode:          cfg.Sandbox.Mode,
+		Sandbox:              tools.GetSandbox(),
+		MemoryProvider:       cfg.Agent.MemoryProvider,
+		EmbeddingProvider:    cfg.Embedding.Provider,
+		EmbeddingBaseURL:     embBaseURL,
+		EmbeddingAPIKey:      embAPIKey,
+		EmbeddingModel:       cfg.Embedding.Model,
+		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
+		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
+		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
+		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
+		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		MaxContextTokens:     cfg.Agent.MaxContextTokens,
+		CompressionThreshold: cfg.Agent.CompressionThreshold,
+		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
+		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
+	})
+
+	// 索引全局工具
+	agentLoop.IndexGlobalTools()
+
+	// 创建消息分发器
+	disp := channel.NewDispatcher(msgBus)
+
+	// 创建并注册 CLI 渠道
+	cliCh := channel.NewCLIChannel(channel.CLIChannelConfig{}, msgBus)
+	disp.Register(cliCh)
+
+	// 启动 Agent（需要 context）
+	ctx, cancel := context.WithCancel(context.Background())
+	go agentLoop.Run(ctx)
+
+	// 启动分发器（处理 outbound 消息）
+	go disp.Run()
+
+	// 处理信号 - 优雅退出
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// CLI 退出时清理
+	go func() {
+		sig := <-sigCh
+		fmt.Printf("\n收到信号 %v，正在关闭...\n", sig)
+		
+		// 1. 停止 CLI 渠道（触发 Bubble Tea 退出）
+		cliCh.Stop()
+		
+		// 2. 取消 Agent context
+		cancel()
+		
+		// 3. 停止分发器
+		disp.Stop()
+		
+		// 4. 关闭数据库
+		if db != nil {
+			db.Close()
+		}
+		
+		log.Info("CLI shutdown complete")
+	}()
+
+	// 启动 CLI（阻塞）
+	if err := cliCh.Start(); err != nil {
+		log.WithError(err).Fatal("CLI channel error")
+	}
+}
+
+// setupLogger 配置日志（简化版，只输出到文件）
+func setupLogger(cfg config.LogConfig, workDir string) error {
+	// CLI 模式：日志只输出到文件，不干扰终端
+	return log.Setup(log.SetupConfig{
+		Level:   cfg.Level,
+		Format:  cfg.Format,
+		WorkDir: workDir,
+		MaxAge:  7,
+	})
+}
+
+// createLLM 根据配置创建 LLM 客户端（带重试、指数退避和随机抖动）
+func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) {
+	var inner llm.LLM
+	switch cfg.Provider {
+	case "openai":
+		inner = llm.NewOpenAILLM(llm.OpenAIConfig{
+			BaseURL:      cfg.BaseURL,
+			APIKey:       cfg.APIKey,
+			DefaultModel: cfg.Model,
+		})
+	case "anthropic":
+		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
+			BaseURL:      cfg.BaseURL,
+			APIKey:       cfg.APIKey,
+			DefaultModel: cfg.Model,
+		})
+	default:
+		return nil, fmt.Errorf("unknown LLM provider: %s", cfg.Provider)
+	}
+
+	return llm.NewRetryLLM(inner, retryCfg), nil
+}

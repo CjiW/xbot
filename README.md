@@ -320,3 +320,31 @@ Note: Requires Docker installed on host for sandbox execution.
 ## License
 
 MIT
+
+## CLI Channel
+
+xbot 提供终端交互界面 (TUI)，适合本地开发调试：
+
+```bash
+# 开发模式
+go run ./cmd/cli
+
+# 编译运行
+go build -o xbot-cli ./cmd/cli && ./xbot-cli
+```
+
+### 快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Enter` | 发送消息 |
+| `Esc` | 退出 |
+
+### 功能特性
+
+- **流式输出** — 实时显示 AI 回复
+- **Markdown 渲染** — 代码高亮、表格、列表
+- **进度显示** — 工具执行状态、子 Agent 状态
+- **美观界面** — 消息气泡、时间戳、状态栏
+
+详细文档参见 [docs/cli-channel.md](docs/cli-channel.md)。

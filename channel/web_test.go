@@ -433,12 +433,12 @@ func TestConvertFeishuCard(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var result string
 			if strings.HasPrefix(tt.input, "__FEISHU_CARD__") {
-				result = convertFeishuCard(tt.input)
+				result = ConvertFeishuCard(tt.input)
 			} else {
 				result = tt.input
 			}
 			if !strings.Contains(result, tt.want) {
-				t.Errorf("convertFeishuCard() = %q, want to contain %q", result, tt.want)
+				t.Errorf("ConvertFeishuCard() = %q, want to contain %q", result, tt.want)
 			}
 		})
 	}

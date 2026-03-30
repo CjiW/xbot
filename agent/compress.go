@@ -468,7 +468,7 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 	var thinnedTail []llm.ChatMessage
 	activeFiles := ExtractActiveFiles(messages, 3)
 	if tailStart < len(messages) {
-		thinnedTail = thinTail(messages[tailStart:], 1, activeFiles)
+		thinnedTail = thinTail(messages[tailStart:], 3, activeFiles)
 	}
 
 	// 第三步：分离消息
@@ -499,7 +499,7 @@ func compressMessages(ctx context.Context, messages []llm.ChatMessage, client ll
 		minTarget := int(float64(originalTokens) * 0.8)
 		if resultTokens > minTarget && minTarget > 0 && tailStart < len(messages) {
 			// 升级为 aggressive thinning
-			aggressiveTail := aggressiveThinTail(messages[tailStart:], 1, activeFiles)
+			aggressiveTail := aggressiveThinTail(messages[tailStart:], 3, activeFiles)
 			llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+len(aggressiveTail))
 			llmView = append(llmView, systemMsgs...)
 			llmView = append(llmView, aggressiveTail...)
@@ -679,7 +679,7 @@ Output at most %d characters.
 	resultTokens, _ := llm.CountMessagesTokens(llmView, model)
 	minTarget := int(float64(originalTokens) * 0.8) // 至少缩减 20%
 	if resultTokens > minTarget && minTarget > 0 && tailStart < len(messages) {
-		aggressiveTail := aggressiveThinTail(messages[tailStart:], 1, activeFiles)
+		aggressiveTail := aggressiveThinTail(messages[tailStart:], 3, activeFiles)
 		llmView = make([]llm.ChatMessage, 0, len(systemMsgs)+1+len(aggressiveTail))
 		llmView = append(llmView, systemMsgs...)
 		llmView = append(llmView, summaryMsg)

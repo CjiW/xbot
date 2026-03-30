@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -175,13 +176,31 @@ func (s *ObservationMaskStore) ListMasked() []map[string]interface{} {
 	return result
 }
 
+// calculateKeepGroups 根据 token 用量动态计算保留的 tool group 数量。
+// 上下文越充裕，保留越多；上下文紧张时才减少。
+func calculateKeepGroups(totalTokens, maxTokens int) int {
+	ratio := float64(totalTokens) / float64(maxTokens)
+	switch {
+	case ratio <= 0.70:
+		return 12
+	case ratio <= 0.80:
+		return 8
+	case ratio <= 0.90:
+		return 5
+	default:
+		return 3
+	}
+}
+
 // MaskOldToolResults 遮蔽 messages 中较旧的 tool result，返回修改后的 messages slice。
 //
 // 策略：
 //   - 保留最近的 keepGroups 个完整 tool group
-//   - 更早的 tool result 被遮蔽：完整内容存入 store，替换为占位符
-//   - assistant(tool_calls) 消息保留（推理过程），只遮蔽 tool result
-//   - stripThinkBlocks 应用于被遮蔽组的 assistant content
+//   - 活跃文件相关的 tool group 不遮蔽（即使超过 keepGroups）
+//   - 短内容（<300 chars）不遮蔽
+//   - 连续纯工具组（assistant 无思考文本）折叠为一对消息
+//   - 按 token 收益排序遮蔽（内容最长的优先）
+//   - assistant 消息的思考内容保留（不 strip think blocks）
 //
 // 返回：修改后的 messages（新 slice），实际遮蔽数量。
 func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore, keepGroups int) ([]llm.ChatMessage, int) {
@@ -189,7 +208,6 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 		keepGroups = 3
 	}
 
-	// 导入避免循环
 	type toolGroup struct{ start, end int }
 
 	var groups []toolGroup
@@ -208,40 +226,197 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 		return messages, 0
 	}
 
+	// 提取活跃文件（最近 3 轮工具调用涉及的文件路径）
+	activeFiles := ExtractActiveFiles(messages, 3)
+	activePaths := make(map[string]bool)
+	for _, af := range activeFiles {
+		activePaths[af.Path] = true
+	}
+
+	// 收集可 mask 的候选组，排除活跃文件组
+	type maskCandidate struct {
+		groupIdx int
+		grp      toolGroup
+		chars    int // group 中所有 tool result 的总字符数
+	}
+	var candidates []maskCandidate
+
+	for g := range maskCount {
+		grp := groups[g]
+
+		// 检查是否涉及活跃文件
+		if isGroupActiveFile(messages, grp, activePaths) {
+			continue
+		}
+
+		// 计算该 group 中可 mask 的 tool result 总字符数
+		chars := 0
+		allShort := true
+		for j := grp.start; j <= grp.end; j++ {
+			if messages[j].Role == "tool" {
+				content := messages[j].Content
+				// 跳过已遮蔽的
+				if content == "" || content == "null" || strings.HasPrefix(content, "📂 [masked:") {
+					continue
+				}
+				runeLen := len([]rune(content))
+				if runeLen >= 300 {
+					allShort = false
+					chars += runeLen
+				}
+			}
+		}
+		// 所有 tool result 都太短，不 mask
+		if allShort {
+			continue
+		}
+
+		candidates = append(candidates, maskCandidate{groupIdx: g, grp: grp, chars: chars})
+	}
+
+	if len(candidates) == 0 {
+		return messages, 0
+	}
+
+	// 按 token 收益排序：字符数最多的优先 mask
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].chars > candidates[j].chars
+	})
+
 	result := make([]llm.ChatMessage, len(messages))
 	copy(result, messages)
 
 	maskedTotal := 0
-	for g := range maskCount {
-		grp := groups[g]
-		for j := grp.start; j <= grp.end; j++ {
-			msg := result[j]
-			switch msg.Role {
-			case "assistant":
-				// 保留 assistant 消息（推理过程），但 strip think blocks 节省 token
-				msg.Content = llm.StripThinkBlocks(msg.Content)
-			case "tool":
-				// 跳过已遮蔽的 tool result：防止 re-mask 导致 MaskStore 条目膨胀和淘汰
-				if msg.Content != "" && msg.Content != "null" && !strings.HasPrefix(msg.Content, "📂 [masked:") {
-					_, placeholder := store.Mask(
-						msg.ToolName,
-						msg.ToolArguments,
-						msg.Content,
-						j,
-					)
-					msg.Content = placeholder
-					maskedTotal++
+
+	for _, cand := range candidates {
+		grp := cand.grp
+
+		// 判断该组是否为"纯工具组"（assistant 无思考文本，只有 tool_calls）
+		assistantMsg := messages[grp.start]
+		isPureToolGroup := strings.TrimSpace(llm.StripThinkBlocks(assistantMsg.Content)) == ""
+
+		if isPureToolGroup {
+			// 连续纯工具组折叠：收集该组的所有 tool result，折叠为一对消息
+			maskedTotal += foldPureToolGroup(result, grp, store)
+		} else {
+			// 有思考内容的 assistant 组：独立 mask tool results，保留 assistant 完整内容
+			for j := grp.start; j <= grp.end; j++ {
+				msg := result[j]
+				if msg.Role == "tool" {
+					content := msg.Content
+					if content != "" && content != "null" && !strings.HasPrefix(content, "📂 [masked:") {
+						runeLen := len([]rune(content))
+						if runeLen < 300 {
+							continue // 短内容不 mask
+						}
+						_, placeholder := store.Mask(msg.ToolName, msg.ToolArguments, msg.Content, j)
+						msg.Content = placeholder
+						maskedTotal++
+					}
 				}
+				// assistant 消息：保留完整内容（不 strip think blocks）
+				result[j] = msg
 			}
-			result[j] = msg
 		}
 	}
 
 	log.WithFields(map[string]interface{}{
-		"masked_count": maskedTotal,
-		"kept_groups":  keepGroups,
-		"total_groups": len(groups),
+		"masked_count":  maskedTotal,
+		"kept_groups":   keepGroups,
+		"total_groups":  len(groups),
+		"candidates":    len(candidates),
+		"active_groups": maskCount - len(candidates),
 	}).Info("Observation masking: masked old tool results")
 
 	return result, maskedTotal
+}
+
+// isGroupActiveFile 检查 tool group 是否涉及活跃文件。
+func isGroupActiveFile(messages []llm.ChatMessage, grp struct{ start, end int }, activePaths map[string]bool) bool {
+	for j := grp.start; j <= grp.end; j++ {
+		msg := messages[j]
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ToolCalls {
+				paths := extractPathsFromToolArgs(tc.Name, tc.Arguments)
+				for _, p := range paths {
+					if activePaths[p] {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// foldPureToolGroup 将一个纯工具组折叠为一对 assistant+tool 消息。
+// 所有 tool result 存入 MaskStore，assistant 和第一条 tool 被替换为折叠摘要。
+// 返回实际 mask 的 tool result 数量。
+func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, store *ObservationMaskStore) int {
+	// 收集所有 tool call 名称和参数
+	var callSummaries []string
+	maskedCount := 0
+	var batchIDs []string
+
+	for j := grp.start; j <= grp.end; j++ {
+		msg := result[j]
+		if msg.Role == "assistant" {
+			for _, tc := range msg.ToolCalls {
+				argsPreview := tc.Arguments
+				if len([]rune(argsPreview)) > 60 {
+					argsPreview = string([]rune(argsPreview)[:60]) + "..."
+				}
+				callSummaries = append(callSummaries, fmt.Sprintf("%s(%s)", tc.Name, argsPreview))
+			}
+		} else if msg.Role == "tool" {
+			content := msg.Content
+			if content == "" || content == "null" || strings.HasPrefix(content, "📂 [masked:") {
+				continue
+			}
+			// 短内容不 mask
+			if len([]rune(content)) < 300 {
+				continue
+			}
+			entry, _ := store.Mask(msg.ToolName, msg.ToolArguments, msg.Content, j)
+			batchIDs = append(batchIDs, entry.ID)
+			maskedCount++
+		}
+	}
+
+	if maskedCount == 0 {
+		return 0
+	}
+
+	// 折叠 assistant：替换为单行摘要
+	summary := fmt.Sprintf("📂 [batch: %d tool calls folded] %s", maskedCount, strings.Join(callSummaries, ", "))
+	result[grp.start] = llm.ChatMessage{
+		Role:    "assistant",
+		Content: summary,
+	}
+
+	// 折叠 tool results：第一条 tool 替换为 batch 占位符，其余清空
+	batchPlaceholder := fmt.Sprintf("📂 [batch-masked: %d results] IDs: %s — recall_masked <id> to view", maskedCount, strings.Join(batchIDs, ", "))
+	firstTool := true
+	for j := grp.start + 1; j <= grp.end; j++ {
+		msg := result[j]
+		if msg.Role == "tool" {
+			content := msg.Content
+			if content == "" || content == "null" || strings.HasPrefix(content, "📂 [masked:") {
+				continue
+			}
+			if len([]rune(content)) < 300 {
+				continue
+			}
+			if firstTool {
+				msg.Content = batchPlaceholder
+				result[j] = msg
+				firstTool = false
+			} else {
+				msg.Content = "" // 清空后续 tool result
+				result[j] = msg
+			}
+		}
+	}
+
+	return maskedCount
 }

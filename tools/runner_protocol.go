@@ -26,6 +26,12 @@ const (
 	ProtoDirEntries  = runnerproto.ProtoDirEntries
 	ProtoError       = runnerproto.ProtoError
 	ProtoOK          = runnerproto.ProtoOK
+
+	ProtoStdioStart = runnerproto.ProtoStdioStart
+	ProtoStdioWrite = runnerproto.ProtoStdioWrite
+	ProtoStdioClose = runnerproto.ProtoStdioClose
+	ProtoStdioData  = runnerproto.ProtoStdioData
+	ProtoStdioExit  = runnerproto.ProtoStdioExit
 )
 
 // === WebSocket Protocol Types ===
@@ -46,6 +52,13 @@ type PathRequest = runnerproto.PathRequest
 type DownloadFileRequest = runnerproto.DownloadFileRequest
 type DownloadFileResponse = runnerproto.DownloadFileResponse
 type ErrorResponse = runnerproto.ErrorResponse
+
+type StdioStartRequest = runnerproto.StdioStartRequest
+type StdioStartResponse = runnerproto.StdioStartResponse
+type StdioWriteRequest = runnerproto.StdioWriteRequest
+type StdioCloseRequest = runnerproto.StdioCloseRequest
+type StdioDataMessage = runnerproto.StdioDataMessage
+type StdioExitMessage = runnerproto.StdioExitMessage
 
 // ProtoErrorCodes maps protocol error codes to Go errors.
 var ProtoErrorCodes = runnerproto.ProtoErrorCodes

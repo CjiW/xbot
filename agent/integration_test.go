@@ -118,7 +118,7 @@ func buildToolCallResult(toolName, args, result string) []llm.ChatMessage {
 func countMasked(messages []llm.ChatMessage) int {
 	count := 0
 	for _, m := range messages {
-		if strings.Contains(m.Content, "📂 [masked:") {
+		if strings.Contains(m.Content, "📂 [masked:") || strings.Contains(m.Content, "📂 [batch-masked:") {
 			count++
 		}
 	}
@@ -190,8 +190,8 @@ func (mc *mockCompressor) SessionHook() SessionCompressHook { return nil }
 
 func TestIntegration_Masking_TriggeredAtThreshold(t *testing.T) {
 	env := newIntegrationTestEnv(t)
-	// Set low maxContextTokens so masking triggers at 40% = 2000 tokens
-	env.cmConfig.MaxContextTokens = 5000
+	// Set low maxContextTokens so masking triggers at 60% = 600 tokens
+	env.cmConfig.MaxContextTokens = 1000
 
 	// Build messages with multiple tool call/result pairs to exceed threshold
 	messages := []llm.ChatMessage{
@@ -201,7 +201,7 @@ func TestIntegration_Masking_TriggeredAtThreshold(t *testing.T) {
 	// Add 5 tool call rounds with large results (~800 tokens each)
 	for i := 0; i < 5; i++ {
 		largeText := generateLargeText(800)
-		messages = append(messages, buildToolCallResult("Read", fmt.Sprintf(`{"path":"file%d.go"}`, i), largeText)...)
+		messages = append(messages, buildToolCallResult("Shell", fmt.Sprintf(`{"command":"cat file%d.go"}`, i), largeText)...)
 	}
 	messages = append(messages, llm.NewUserMessage("Now summarize all files."))
 
@@ -274,14 +274,14 @@ func TestIntegration_Masking_CapacityEviction(t *testing.T) {
 	// Small mask store: only 3 entries max
 	env.maskStore = NewObservationMaskStore(3)
 
-	// Build 5 tool call rounds
+	// Build 5 tool call rounds using Shell (no file paths for active file protection)
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage("You are a test agent."),
-		llm.NewUserMessage("Read files."),
+		llm.NewUserMessage("Run commands."),
 	}
 	for i := 0; i < 5; i++ {
 		largeText := generateLargeText(500)
-		messages = append(messages, buildToolCallResult("Read", fmt.Sprintf(`{"path":"file%d.go"}`, i), largeText)...)
+		messages = append(messages, buildToolCallResult("Shell", fmt.Sprintf(`{"command":"echo %d"}`, i), largeText)...)
 	}
 
 	// First: run MaskOldToolResults directly to test capacity eviction
@@ -874,14 +874,14 @@ func TestIntegration_MaxContext_CustomThreshold(t *testing.T) {
 	// Test A: Low MaxContextTokens → masking should trigger
 	t.Run("low_threshold_triggers_masking", func(t *testing.T) {
 		env := newIntegrationTestEnv(t)
-		env.cmConfig.MaxContextTokens = 3000 // very low: 40% = 1200 tokens
+		env.cmConfig.MaxContextTokens = 500 // very low: 60% = 300 tokens
 
 		messages := []llm.ChatMessage{
 			llm.NewSystemMessage("You are a test agent."),
 		}
-		// Add 4 tool rounds with ~500 tokens each = ~2000 tokens total
+		// Add 4 tool rounds with ~500 tokens each using Shell (no active file paths)
 		for i := 0; i < 4; i++ {
-			messages = append(messages, buildToolCallResult("Read", fmt.Sprintf(`{"path":"f%d.go"}`, i), generateLargeText(500))...)
+			messages = append(messages, buildToolCallResult("Shell", fmt.Sprintf(`{"command":"echo %d"}`, i), generateLargeText(500))...)
 		}
 		messages = append(messages, llm.NewUserMessage("summarize"))
 

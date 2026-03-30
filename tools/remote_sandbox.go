@@ -74,6 +74,8 @@ type RemoteSandbox struct {
 	syncMu          sync.Mutex
 	synced          map[string]bool // userID → whether initial sync has completed
 	syncing         map[string]bool // userID → sync in progress (prevent concurrent syncs)
+	stdioMu         sync.Mutex
+	stdioStreams    map[string]*stdioStream // streamID → active stdio stream
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
@@ -295,7 +297,7 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	// Sync global skills and agents to the runner in the background
 	go rs.syncToRunner(reg.UserID, reg.Workspace)
 
-	// Keep reading messages (responses and heartbeats)
+	// Keep reading messages (responses, heartbeats, and stdio push messages)
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -305,9 +307,12 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 			}).Debug("Runner disconnected")
 			return
 		}
-		// Handle response: find pending request and deliver
 		var resp RunnerMessage
 		if err := json.Unmarshal(raw, &resp); err != nil {
+			continue
+		}
+		// Handle stdio push messages (stdio_data, stdio_exit) before request matching.
+		if rs.handleStdioPush(&resp) {
 			continue
 		}
 		if resp.ID != "" {
@@ -411,6 +416,21 @@ func (rs *RemoteSandbox) sendRequest(ctx context.Context, rc *runnerConnection, 
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("request %s timed out after %v", msg.ID, timeout)
 	}
+}
+
+// sendOnly sends a message to the runner without waiting for a response.
+func (rs *RemoteSandbox) sendOnly(rc *runnerConnection, msg *RunnerMessage) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	errCh := make(chan error, 1)
+	select {
+	case rc.sendCh <- sendEntry{data: data, err: errCh}:
+	case <-rc.done:
+		return fmt.Errorf("runner disconnected")
+	}
+	return <-errCh
 }
 
 // writePump is the single writer goroutine for a runner connection.

@@ -122,11 +122,18 @@ func runSession(serverURL, userID, authToken, workspace string) error {
 	stopWrite := make(chan struct{})
 	writeDone := make(chan struct{})
 
+	// Expose write channel to stdio handlers for push messages.
+	sessionWriteCh = writeCh
+	sessionWriteDone = writeDone
+
 	go writePump(conn, writeCh, stopWrite, writeDone)
 	runReadLoop(conn, writeCh, writeDone)
 
 	// Signal writePump to exit immediately.
 	close(stopWrite)
+
+	// Kill any active stdio processes on disconnect.
+	cleanupStdioProcs()
 
 	return fmt.Errorf("read loop exited")
 }

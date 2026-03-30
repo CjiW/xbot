@@ -64,6 +64,17 @@ var sharedMCPClient = mcp.NewClient(&mcp.Implementation{
 // instead of leaking the host's full PATH.
 const safeDefaultPATH = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
+// npmQuietEnv suppresses npm/npx diagnostic output (audit warnings, fund
+// messages, update notices) that would otherwise contaminate the JSON-RPC
+// stdio channel and cause parse errors.
+var npmQuietEnv = []string{
+	"NPM_CONFIG_UPDATE_NOTIFIER=false",
+	"NPM_CONFIG_AUDIT=false",
+	"NPM_CONFIG_FUND=false",
+	"NPM_CONFIG_LOGLEVEL=error",
+	"NO_UPDATE_NOTIFIER=1",
+}
+
 // BuildStdioEnv builds the env list from MCP config.
 // PATH is built from .xbot/bin (if exists) + user-configured PATH (if any).
 // buildMinimalExecEnv will merge this with the login shell's PATH.
@@ -72,6 +83,9 @@ func BuildStdioEnv(cfg MCPServerConfig, configPath string) []string {
 	for k, v := range cfg.Env {
 		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
 	}
+
+	// Suppress npm/npx diagnostic output to prevent stdout contamination.
+	envList = append(envList, npmQuietEnv...)
 
 	pathParts := []string{}
 	if binDir := resolveXbotBinDir(configPath); binDir != "" {
@@ -273,17 +287,18 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 
 	sandbox := GetSandbox()
 
-	// 在 Docker 沙箱中，用 login shell 包裹命令以加载完整 PATH（与 Shell 工具一致）
-	// 避免 MCP 进程因缺少 PATH 而找不到依赖（如 gopls-mcp 找不到 gopls）
+	// Resolve per-user sandbox if using a router.
+	if resolver, ok := sandbox.(SandboxResolver); ok && userID != "" {
+		sandbox = resolver.SandboxForUser(userID)
+	}
+
 	var execCmd *exec.Cmd
 	switch sandbox.Name() {
 	case "docker":
-		// Docker 模式：使用 DockerSandbox 的 Wrap 方法（需要 docker exec -i 的长连接）
 		shell, err := sandbox.GetShell(userID, workspaceRoot)
 		if err != nil {
 			return nil, fmt.Errorf("get shell for MCP: %w", err)
 		}
-		// 用 login shell 包裹：shell -l -c "exec cmd arg1 arg2 ..."
 		shellCmd := "exec " + shellQuoteCmd(cfg.Command, cfg.Args)
 		if ds, ok := sandbox.(*DockerSandbox); ok {
 			cmdName, cmdArgs, err := ds.Wrap(shell, []string{"-l", "-c", shellCmd}, envList, workspaceRoot, userID)
@@ -295,7 +310,27 @@ func ConnectStdioServer(ctx context.Context, cfg MCPServerConfig, configPath, wo
 			return nil, fmt.Errorf("MCP stdio not supported in %s mode", sandbox.Name())
 		}
 	case "remote":
-		return nil, fmt.Errorf("MCP stdio servers not supported in remote sandbox mode")
+		rs, ok := sandbox.(*RemoteSandbox)
+		if !ok {
+			return nil, fmt.Errorf("remote sandbox type assertion failed")
+		}
+		transport := &RemoteStdioTransport{
+			Sandbox:    rs,
+			UserID:     userID,
+			StreamID:   generateID(),
+			Command:    cfg.Command,
+			Args:       cfg.Args,
+			Env:        envList,
+			Dir:        "",
+			ServerName: serverName,
+		}
+		connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		session, err := sharedMCPClient.Connect(connectCtx, transport, nil)
+		if err != nil {
+			return nil, fmt.Errorf("connect remote stdio: %w", err)
+		}
+		return session, nil
 	default:
 		// None 模式：直接本地执行
 		execCmd = exec.Command(cfg.Command, cfg.Args...)

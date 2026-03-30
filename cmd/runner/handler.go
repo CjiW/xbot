@@ -49,8 +49,20 @@ func dispatch(msg RunnerMessage) *RunnerMessage {
 		return handleRemoveAll(msg)
 	case "download_file":
 		return handleDownloadFile(msg)
+	case ProtoStdioStart:
+		return handleStdioStart(msg)
+	case ProtoStdioClose:
+		return handleStdioClose(msg)
 	default:
 		return makeError(msg.ID, "EINVAL", fmt.Sprintf("unknown request type: %s", msg.Type))
+	}
+}
+
+// dispatchFireAndForget handles messages that don't produce a response.
+func dispatchFireAndForget(msg RunnerMessage) {
+	switch msg.Type {
+	case ProtoStdioWrite:
+		handleStdioWrite(msg)
 	}
 }
 

@@ -35,10 +35,14 @@ func connectToServer(serverURL, userID, authToken, workspace string) (*websocket
 		return nil, fmt.Errorf("dial server: %w", err)
 	}
 
-	// Set up pong handler — resets read deadline on each pong from server.
+	// Reset read deadline whenever we receive any heartbeat from the server.
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
+	})
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
 	})
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 
@@ -120,7 +124,8 @@ func writePump(conn *websocket.Conn, writeCh <-chan writeMsg, stop <-chan struct
 }
 
 // runReadLoop reads messages from the server and dispatches to handlers.
-// Responses are sent via writeCh to the single writer goroutine.
+// Requests are handled asynchronously so the read loop can keep processing
+// WebSocket control frames (ping/pong) during long-running operations.
 func runReadLoop(conn *websocket.Conn, writeCh chan<- writeMsg, writeDone <-chan struct{}) {
 	for {
 		_, message, err := conn.ReadMessage()
@@ -143,12 +148,19 @@ func runReadLoop(conn *websocket.Conn, writeCh chan<- writeMsg, writeDone <-chan
 			log.Printf("→ %s [id=%s]", msg.Type, msg.ID)
 		}
 
-		resp := handleRequest(msg)
-		data, _ := json.Marshal(resp)
-		select {
-		case writeCh <- writeMsg{data: data}:
-		case <-writeDone:
-			return
+		// Fire-and-forget messages (no response expected).
+		if msg.Type == ProtoStdioWrite {
+			go dispatchFireAndForget(msg)
+			continue
 		}
+
+		go func() {
+			resp := handleRequest(msg)
+			data, _ := json.Marshal(resp)
+			select {
+			case writeCh <- writeMsg{data: data}:
+			case <-writeDone:
+			}
+		}()
 	}
 }

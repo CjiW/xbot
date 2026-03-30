@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -191,8 +192,17 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 
 		toolIdxSvc, err := vectordb.NewToolIndexService(toolIndexDir, embFunc, embOpts...)
 		if err != nil {
-			log.WithError(err).Error("Failed to initialize tool index service, tool search will be unavailable")
-		} else {
+			log.WithError(err).Warn("Tool index DB corrupted, removing and recreating")
+			if removeErr := os.RemoveAll(toolIndexDir); removeErr != nil {
+				log.WithError(removeErr).Error("Failed to remove corrupted tool index directory")
+			} else {
+				toolIdxSvc, err = vectordb.NewToolIndexService(toolIndexDir, embFunc, embOpts...)
+				if err != nil {
+					log.WithError(err).Error("Failed to initialize tool index service after recreation, tool search will be unavailable")
+				}
+			}
+		}
+		if toolIdxSvc != nil {
 			m.toolIndexSvc = toolIdxSvc
 		}
 	}

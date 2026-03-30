@@ -403,19 +403,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		cachedMsgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
 		totalTokens := cachedMsgTokens + toolTokens
 
-		maxTokens := 100000
-		if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
+		maxTokens := 0
+		if cfg.ContextManagerConfig != nil {
 			maxTokens = cfg.ContextManagerConfig.MaxContextTokens
+		}
+		if maxTokens <= 0 {
+			return
 		}
 
 		// Check compaction first (before masking), using simple threshold.
-		// Cooldown prevents rapid repeated compaction after ineffective runs.
+		// Use maxTokens from cfg.ContextManagerConfig (respects per-user override)
+		// instead of cm.ShouldCompress (which uses the global Agent-level config).
 		var cooldown *CompressCooldown
 		if pm, ok := cm.(*phase1Manager); ok {
 			cooldown = pm.Cooldown()
 		}
 
-		needCompress := cm.ShouldCompress(messages, cfg.Model, toolTokens)
+		needCompress := len(messages) > 3 && shouldCompact(totalTokens, maxTokens)
 		if needCompress && cooldown != nil && !cooldown.ShouldTrigger(iteration) {
 			needCompress = false
 		}

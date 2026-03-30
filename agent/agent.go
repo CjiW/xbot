@@ -1508,7 +1508,16 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 		finalContent = "定时任务已执行，但无输出内容。"
 	}
 
-	// 注意：不保存到会话历史
+	// 如果工具已发送最终回复（如卡片），跳过后续文本回复
+	if _, sent := a.sessionFinalSent.Load(key); sent {
+		log.Ctx(ctx).Info("Cron: tool already sent final reply (card), skipping text reply")
+		a.persistCronMessages(ctx, msg, finalContent)
+		return nil, nil
+	}
+
+	// 持久化 cron 消息到 session（web 端用户下次进入可见）
+	a.persistCronMessages(ctx, msg, finalContent)
+
 	// 保留原始消息 ID 以支持回复模式
 	metadata := make(map[string]string)
 	if msg.Metadata != nil {
@@ -1521,6 +1530,36 @@ func (a *Agent) processCronMessage(ctx context.Context, msg bus.InboundMessage) 
 		Content:  finalContent,
 		Metadata: metadata,
 	}, nil
+}
+
+// persistCronMessages 将 cron 消息持久化到 session，使 web 端用户下次进入时可见。
+// 对于非 web 渠道（如飞书），消息已通过 IM 平台持久化，无需额外保存。
+func (a *Agent) persistCronMessages(ctx context.Context, msg bus.InboundMessage, assistantContent string) {
+	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to get session for cron message persistence")
+		return
+	}
+
+	cronUserMsg := llm.NewUserMessage("[定时任务] " + msg.Content)
+	cronUserMsg.Timestamp = msg.Time
+	cronUserMsg.DisplayOnly = true
+	if err := tenantSession.AddMessage(cronUserMsg); err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Failed to persist cron user message")
+	}
+
+	if assistantContent != "" {
+		cronAssistantMsg := llm.NewAssistantMessage(assistantContent)
+		cronAssistantMsg.DisplayOnly = true
+		if err := tenantSession.AddMessage(cronAssistantMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to persist cron assistant message")
+		}
+	}
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"channel": msg.Channel,
+		"chat_id": msg.ChatID,
+	}).Debug("Cron messages persisted to session")
 }
 
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。

@@ -39,14 +39,19 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 		ts = time.Now()
 	}
 
+	displayOnly := 0
+	if msg.DisplayOnly {
+		displayOnly = 1
+	}
+
 	_, err := conn.Exec(`
 		INSERT INTO session_messages
-		(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, display_only, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		tenantID, msg.Role, msg.Content,
 		msg.ToolCallID, msg.ToolName, msg.ToolArguments,
-		toolCallsJSON, msg.Detail,
+		toolCallsJSON, msg.Detail, displayOnly,
 		ts.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -58,16 +63,18 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 // GetHistory retrieves the most recent messages for a tenant.
 // limit specifies the minimum number of user/assistant messages to return.
 // Tool messages between them are included to maintain context continuity.
+// display_only messages (e.g. cron results) are excluded from LLM context.
 func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 
 	// Find the boundary: the Nth user message from the end (0-indexed offset = limit - 1).
 	// This way the window is measured in user-message turns, not raw row count,
 	// so multi-iteration assistant messages don't squeeze out real conversation history.
+	// Exclude display_only messages from boundary calculation.
 	var boundaryID sql.NullInt64
 	err := conn.QueryRow(`
 		SELECT id FROM session_messages
-		WHERE tenant_id = ? AND role = 'user'
+		WHERE tenant_id = ? AND role = 'user' AND COALESCE(display_only, 0) = 0
 		ORDER BY id DESC
 		LIMIT 1 OFFSET ?
 	`, tenantID, limit-1).Scan(&boundaryID)
@@ -77,19 +84,17 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 
 	var rows *sql.Rows
 	if boundaryID.Valid {
-		// Fetch all messages from the boundary user message onwards
 		rows, err = conn.Query(`
 			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 			FROM session_messages
-			WHERE tenant_id = ? AND id >= ?
+			WHERE tenant_id = ? AND id >= ? AND COALESCE(display_only, 0) = 0
 			ORDER BY id ASC
 		`, tenantID, boundaryID.Int64)
 	} else {
-		// Fewer than `limit` user messages exist, return all
 		rows, err = conn.Query(`
 			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 			FROM session_messages
-			WHERE tenant_id = ?
+			WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
 			ORDER BY id ASC
 		`, tenantID)
 	}
@@ -101,13 +106,14 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 	return s.scanMessages(rows)
 }
 
-// GetAllMessages retrieves all messages for a tenant
+// GetAllMessages retrieves all non-display-only messages for a tenant.
+// Used by memory consolidation — display_only messages (cron results) are excluded.
 func (s *SessionService) GetAllMessages(tenantID int64) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
 		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
 		FROM session_messages
-		WHERE tenant_id = ?
+		WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
 		ORDER BY id ASC
 	`, tenantID)
 	if err != nil {
@@ -135,11 +141,12 @@ func (s *SessionService) GetMessagesCount(tenantID int64) (int, error) {
 // GetUserMessageCount returns the number of user-role messages for a tenant.
 // Used by consolidation logic to count conversation turns, not raw message rows
 // (which include tool calls, assistant iterations, etc.).
+// Excludes display_only messages (cron results).
 func (s *SessionService) GetUserMessageCount(tenantID int64) (int, error) {
 	conn := s.db.Conn()
 	var count int
 	err := conn.QueryRow(
-		"SELECT COUNT(*) FROM session_messages WHERE tenant_id = ? AND role = 'user'",
+		"SELECT COUNT(*) FROM session_messages WHERE tenant_id = ? AND role = 'user' AND COALESCE(display_only, 0) = 0",
 		tenantID,
 	).Scan(&count)
 	if err != nil {

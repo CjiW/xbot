@@ -9,133 +9,212 @@ import (
 	"regexp"
 	"strings"
 	"xbot/llm"
-	log "xbot/logger"
 )
 
-// EditTool 文件编辑工具
-type EditTool struct{}
+// ============================================================================
+// FileCreateTool — 创建新文件（2 params: path, content）
+// ============================================================================
 
-func (t *EditTool) Name() string {
-	return "Edit"
+// FileCreateTool 创建新文件工具
+type FileCreateTool struct{}
+
+func (t *FileCreateTool) Name() string {
+	return "FileCreate"
 }
 
-func (t *EditTool) Description() string {
-	return `Edit a file. Choose ONE mode and supply its required parameters.
-
-Modes:
-1. "create" — Create a new file.
-   Required: path, content
-
-2. "replace" — Find and replace text using RE2 regex.
-   Required: path, old_string, new_string
-   Optional: start_line, end_line (restrict search range, 1-based inclusive)
-   Note: old_string is always treated as RE2 regex pattern. For literal text, escape special chars: . * + ? [ ] ( ) { } | ^ $ \
-   new_string supports $1/$2 captures for regex groups.
-
-⚠️ Common mistakes (avoid these!):
-- replace mode uses old_string/new_string, NOT content.
-- To replace literal "v1.0", escape the dot: "v1\\.0"
-- start_line and end_line restrict the search range. They do NOT select lines for replacement.
+func (t *FileCreateTool) Description() string {
+	return `Create a new file.
+Required: path, content
+Creates the file (and parent directories if needed). Returns error if file already exists.
 
 Examples:
-- {"mode": "create", "path": "hello.txt", "content": "Hello!"}
-- {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar"}
-- {"mode": "replace", "path": "main.go", "old_string": "v\\d+\\.\\d+", "new_string": "v2.0"}
-- {"mode": "replace", "path": "main.go", "old_string": "foo", "new_string": "bar", "start_line": 10, "end_line": 20}`
+- {"path": "hello.txt", "content": "Hello!"}
+- {"path": "src/main.go", "content": "package main\n\nfunc main() {}"}`
 }
 
-func (t *EditTool) Parameters() []llm.ToolParam {
+func (t *FileCreateTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
-		{Name: "path", Type: "string", Description: "File path (relative to working directory or absolute)", Required: true},
-		{Name: "mode", Type: "string", Description: "Edit mode: create or replace", Required: true},
-		{Name: "content", Type: "string", Description: "Content for create mode (NOT used by replace mode)", Required: false},
-		{Name: "old_string", Type: "string", Description: "RE2 regex pattern to find (replace mode). For literal text, escape special chars: . * + ? [ ] ( ) { } | ^ $ \\", Required: false},
-		{Name: "new_string", Type: "string", Description: "Text to replace old_string with (replace mode). Supports $1/$2 for regex captures.", Required: false},
-		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive (replace mode)", Required: false},
-		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive (replace mode)", Required: false},
+		{Name: "path", Type: "string", Description: "File path to create (relative to working directory or absolute)", Required: true},
+		{Name: "content", Type: "string", Description: "Content to write to the new file", Required: true},
 	}
 }
 
-// EditParams 编辑参数
-type EditParams struct {
-	Path      string `json:"path"`
-	Mode      string `json:"mode"`
-	OldString string `json:"old_string"`
-	NewString string `json:"new_string"`
-	Content   string `json:"content"`
-	StartLine int    `json:"start_line"` // Optional: restrict replace search start line (1-based, inclusive)
-	EndLine   int    `json:"end_line"`   // Optional: restrict replace search end line (1-based, inclusive)
+type FileCreateParams struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
-func (t *EditTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	var params EditParams
+func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
+	var params FileCreateParams
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
-
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
 	}
 
-	if params.Mode == "" {
-		return nil, fmt.Errorf("mode is required")
-	}
-
-	// --- Auto-correct: LLM sometimes puts replacement content in "content" ---
-	if params.Mode == "replace" && params.NewString == "" && params.Content != "" {
-		params.NewString = params.Content
-		params.Content = ""
-		log.WithFields(log.Fields{
-			"old_string_preview": Truncate(params.OldString, 80),
-			"new_string_len":     len([]rune(params.NewString)),
-		}).Info("Edit tool: auto-corrected content→new_string for replace mode")
-	}
-
-	// Validate parameters
-	if err := t.validateParams(params); err != nil {
-		return nil, err
-	}
-
-	// 沙箱模式
 	if shouldUseSandbox(ctx) {
-		return t.executeInSandbox(ctx, params)
+		sandboxPath := resolveSandboxPath(ctx, params.Path)
+		return t.sandboxCreate(ctx, sandboxPath, params.Content)
 	}
-
-	// 非沙箱模式
 	return t.executeLocal(ctx, params)
 }
 
-// validateParams checks for contradictory parameter combinations and returns clear error messages.
-func (t *EditTool) validateParams(params EditParams) error {
-	switch params.Mode {
-	case "create":
-		// No contradictions possible for create
-	case "replace":
-		if params.OldString == "" {
-			return fmt.Errorf("old_string is required for replace mode")
+func (t *FileCreateTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
+	if err := sandboxWriteNewFile(ctx, path, content); err != nil {
+		return nil, err
+	}
+	summary := fmt.Sprintf("File created successfully: %s", path)
+	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
+}
+
+func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams) (*ToolResult, error) {
+	filePath, err := ResolveWritePath(ctx, params.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if file already exists
+	if _, err := os.Stat(filePath); err == nil {
+		return nil, fmt.Errorf("file already exists: %s (use FileReplace to modify existing files)", filePath)
+	}
+
+	// Create parent directories if needed
+	dir := filepath.Dir(filePath)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create directory: %w", err)
 		}
-	default:
-		return fmt.Errorf("unknown mode: %q (supported: create, replace)", params.Mode)
 	}
-	return nil
+
+	if err := os.WriteFile(filePath, []byte(params.Content), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	summary := fmt.Sprintf("File created successfully: %s", filePath)
+	return &ToolResult{Summary: summary, Tips: "文件已创建。建议用 Read 验证内容。"}, nil
 }
 
-// executeInSandbox 在沙箱内执行编辑操作
-func (t *EditTool) executeInSandbox(ctx *ToolContext, params EditParams) (*ToolResult, error) {
-	sandboxPath := t.resolveSandboxPath(ctx, params.Path)
+// ============================================================================
+// FileReplaceTool — 查找替换文件内容（7 params）
+// ============================================================================
 
-	switch params.Mode {
-	case "create":
-		return t.sandboxCreate(ctx, sandboxPath, params.Content)
-	case "replace":
-		return t.sandboxReplace(ctx, sandboxPath, params)
-	default:
-		return nil, fmt.Errorf("unknown mode: %q (supported: create, replace)", params.Mode)
+// FileReplaceTool 文件替换工具
+type FileReplaceTool struct{}
+
+func (t *FileReplaceTool) Name() string {
+	return "FileReplace"
+}
+
+func (t *FileReplaceTool) Description() string {
+	return `Find and replace text in a file.
+Required: path, old_string, new_string
+Optional: replace_all (default false), regex (default false), start_line, end_line
+
+Default behavior: exact string match, replaces first occurrence only.
+When regex=true, old_string is treated as RE2 pattern, new_string supports $1/$2 captures.
+When replace_all=true, replaces all occurrences.
+
+⚠️ Common mistakes (avoid these!):
+- old_string should be unique in the file to avoid replacing the wrong occurrence.
+- To restrict replacement to a specific range, use start_line and end_line.
+- start_line and end_line restrict the search range. They do NOT select lines for replacement.
+
+Examples:
+- {"path": "main.go", "old_string": "foo", "new_string": "bar"}
+- {"path": "main.go", "old_string": "oldName", "new_string": "newName", "replace_all": true}
+- {"path": "main.go", "old_string": "v\\d+\\.\\d+", "new_string": "v2.0", "regex": true}
+- {"path": "main.go", "old_string": "foo", "new_string": "bar", "start_line": 10, "end_line": 20}`
+}
+
+func (t *FileReplaceTool) Parameters() []llm.ToolParam {
+	return []llm.ToolParam{
+		{Name: "path", Type: "string", Description: "File path (relative to working directory or absolute)", Required: true},
+		{Name: "old_string", Type: "string", Description: "Text to find (exact match by default). When regex=true, treated as RE2 pattern.", Required: true},
+		{Name: "new_string", Type: "string", Description: "Replacement text. Supports $1/$2 captures when regex=true.", Required: true},
+		{Name: "replace_all", Type: "boolean", Description: "Replace all occurrences (default false, replaces first only)", Required: false},
+		{Name: "regex", Type: "boolean", Description: "Use RE2 regex matching (default false, exact match)", Required: false},
+		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive", Required: false},
+		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive", Required: false},
 	}
 }
+
+type FileReplaceParams struct {
+	Path       string `json:"path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all"`
+	Regex      bool   `json:"regex"`
+	StartLine  int    `json:"start_line"`
+	EndLine    int    `json:"end_line"`
+}
+
+func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
+	var params FileReplaceParams
+	if err := json.Unmarshal([]byte(input), &params); err != nil {
+		return nil, fmt.Errorf("invalid parameters: %w", err)
+	}
+	if params.Path == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if params.OldString == "" {
+		return nil, fmt.Errorf("old_string is required")
+	}
+
+	if shouldUseSandbox(ctx) {
+		sandboxPath := resolveSandboxPath(ctx, params.Path)
+		return t.executeInSandbox(ctx, sandboxPath, params)
+	}
+	return t.executeLocal(ctx, params)
+}
+
+func (t *FileReplaceTool) executeInSandbox(ctx *ToolContext, path string, params FileReplaceParams) (*ToolResult, error) {
+	oldContent, err := sandboxReadFile(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	newContent, result, err := doReplace(oldContent, params, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
+		return nil, err
+	}
+
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+}
+
+func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParams) (*ToolResult, error) {
+	filePath, err := ResolveWritePath(ctx, params.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	newContent, result, err := doReplace(string(content), params, filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+}
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
 
 // resolveSandboxPath 将用户输入的路径转换为容器内路径
-func (t *EditTool) resolveSandboxPath(ctx *ToolContext, userPath string) string {
+func resolveSandboxPath(ctx *ToolContext, userPath string) string {
 	sandboxBase := sandboxBaseDir(ctx)
 
 	if !strings.HasPrefix(userPath, sandboxBase+"/") && userPath != sandboxBase && !strings.HasPrefix(userPath, "/") {
@@ -190,110 +269,131 @@ func sandboxWriteNewFile(ctx *ToolContext, path, content string) error {
 	return nil
 }
 
-func (t *EditTool) sandboxCreate(ctx *ToolContext, path, content string) (*ToolResult, error) {
-	if err := sandboxWriteNewFile(ctx, path, content); err != nil {
-		return nil, err
+// doReplace 执行文本替换（支持精确匹配和 RE2 正则匹配）
+// SECURITY NOTE: Go's regexp package uses RE2 engine which guarantees O(n) time complexity
+// for all operations, preventing ReDoS attacks.
+func doReplace(content string, params FileReplaceParams, filePath string) (string, string, error) {
+	if params.OldString == "" {
+		return "", "", fmt.Errorf("old_string is required")
 	}
-	summary := fmt.Sprintf("File created successfully: %s", path)
-	return &ToolResult{Summary: summary, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
-}
 
-func (t *EditTool) sandboxReplace(ctx *ToolContext, path string, params EditParams) (*ToolResult, error) {
-	// 读取文件内容（保留原始内容含 trailing newline）
-	oldContent, err := sandboxReadFile(ctx, path)
+	// Split content by line range if start_line/end_line specified
+	prefix, rangeText, suffix, err := splitContentByLineRange(content, params.StartLine, params.EndLine)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 
-	// 复用 doReplace 逻辑（纯 Go，无 shell 转义问题）
-	newContent, result, err := t.doReplace(oldContent, params, path)
-	if err != nil {
-		return nil, err
+	if params.Regex {
+		return doRegexReplace(prefix, rangeText, suffix, params, filePath, content)
 	}
 
-	// 写回文件（base64 编码，彻底避免 shell 转义）
-	if err := sandboxWriteFile(ctx, path, newContent); err != nil {
-		return nil, err
-	}
-
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
-}
-
-// executeLocal 在本地执行编辑操作（非沙箱模式）
-func (t *EditTool) executeLocal(ctx *ToolContext, params EditParams) (*ToolResult, error) {
-	filePath, err := ResolveWritePath(ctx, params.Path)
-	if err != nil {
-		return nil, err
-	}
-
-	// create 模式不需要读取现有文件
-	if params.Mode == "create" {
-		summary, err := t.doCreate(filePath, params)
-		if err != nil {
-			return nil, err
+	// Exact string match
+	count := strings.Count(rangeText, params.OldString)
+	if count == 0 {
+		hint := suggestMatch(rangeText, params.OldString)
+		if params.StartLine > 0 || params.EndLine > 0 {
+			effStart := params.StartLine
+			if effStart <= 0 {
+				effStart = 1
+			}
+			effEnd := params.EndLine
+			if effEnd <= 0 {
+				lines, _ := splitLines(content)
+				effEnd = len(lines)
+			}
+			return "", "", fmt.Errorf("text not found in lines %d-%d: %q%s", effStart, effEnd, params.OldString, hint)
 		}
-		return &ToolResult{Summary: summary, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+		return "", "", fmt.Errorf("text not found: %q%s", params.OldString, hint)
 	}
 
-	// 读取文件内容
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+	var newRangeText string
+	var replacedCount int
+
+	if params.ReplaceAll {
+		newRangeText = strings.ReplaceAll(rangeText, params.OldString, params.NewString)
+		replacedCount = count
+	} else {
+		newRangeText = strings.Replace(rangeText, params.OldString, params.NewString, 1)
+		replacedCount = 1
 	}
 
-	oldContent := string(content)
-	newContent, result, err := t.doReplace(oldContent, params, filePath)
-	if err != nil {
-		return nil, err
+	newContent := prefix + newRangeText + suffix
+
+	if count > 1 && !params.ReplaceAll {
+		return newContent, fmt.Sprintf("Replaced 1 of %d occurrences. Use replace_all=true to replace all.", count), nil
 	}
 
-	// 写入文件
-	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return &ToolResult{Summary: result, Tips: "修改已完成。建议用 Read 验证修改结果，确认文件内容正确。"}, nil
+	return newContent, fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", replacedCount, filePath), nil
 }
 
-// doCreate 创建新文件
-func (t *EditTool) doCreate(filePath string, params EditParams) (string, error) {
-	// Create parent directories if they don't exist
-	dir := filepath.Dir(filePath)
-	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create directory: %w", err)
+// doRegexReplace 执行正则替换（由 doReplace 在 regex=true 时调用）
+func doRegexReplace(prefix, rangeText, suffix string, params FileReplaceParams, filePath, fullContent string) (string, string, error) {
+	re, err := regexp.Compile(params.OldString)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	matches := re.FindAllString(rangeText, -1)
+	if len(matches) == 0 {
+		if params.StartLine > 0 || params.EndLine > 0 {
+			effStart := params.StartLine
+			if effStart <= 0 {
+				effStart = 1
+			}
+			effEnd := params.EndLine
+			if effEnd <= 0 {
+				lines, _ := splitLines(fullContent)
+				effEnd = len(lines)
+			}
+			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.OldString)
 		}
+		return "", "", fmt.Errorf("no match found for pattern: %s", params.OldString)
 	}
 
-	// Write file
-	if err := os.WriteFile(filePath, []byte(params.Content), 0644); err != nil {
-		return "", fmt.Errorf("failed to write file: %w", err)
+	var newRangeText string
+	var replacedCount int
+
+	if params.ReplaceAll {
+		newRangeText = re.ReplaceAllString(rangeText, params.NewString)
+		replacedCount = len(matches)
+	} else {
+		newRangeText = re.ReplaceAllStringFunc(rangeText, func(m string) string {
+			if replacedCount == 0 {
+				replacedCount++
+				return re.ReplaceAllString(m, params.NewString)
+			}
+			return m
+		})
 	}
 
-	return fmt.Sprintf("File created successfully: %s", filePath), nil
+	newContent := prefix + newRangeText + suffix
+
+	if len(matches) > 1 && !params.ReplaceAll {
+		return newContent, fmt.Sprintf("Replaced 1 of %d matches. Use replace_all=true to replace all.", len(matches)), nil
+	}
+
+	return newContent, fmt.Sprintf("Successfully replaced %d match(es) in %s", replacedCount, filePath), nil
+}
+
+// splitLines splits content into lines, correctly handling trailing newline.
+func splitLines(content string) ([]string, bool) {
+	lines := strings.Split(content, "\n")
+	hasTrailingNL := len(lines) > 1 && lines[len(lines)-1] == ""
+	if hasTrailingNL {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, hasTrailingNL
 }
 
 // splitContentByLineRange splits content by line range for replace operations.
 // Returns prefix (before range), rangeText (within range), suffix (after range), and error.
 // When start=0 and end=0, returns the entire content as rangeText (no line restriction).
 func splitContentByLineRange(content string, start, end int) (string, string, string, error) {
-	// Inline splitLines logic: split content and handle trailing newline
-	lines := strings.Split(content, "\n")
-	hasTrailingNL := len(lines) > 1 && lines[len(lines)-1] == ""
-	if hasTrailingNL {
-		lines = lines[:len(lines)-1]
-	}
+	lines, hasTrailingNL := splitLines(content)
 	totalLines := len(lines)
 
-	// Handle default case: no line range specified
-	if start == 0 && end == 0 {
-		rangeText := content
-		if hasTrailingNL && len(lines) > 0 {
-			rangeText = strings.Join(lines, "\n")
-		} else if len(lines) == 1 {
-			rangeText = lines[0]
-		}
-		return "", rangeText, "", nil
+	if start <= 0 && end <= 0 {
+		return "", content, "", nil
 	}
 
 	if end > totalLines {
@@ -324,66 +424,27 @@ func splitContentByLineRange(content string, start, end int) (string, string, st
 	return prefix, rangeText, suffix, nil
 }
 
-// doReplace 执行文本替换（使用 RE2 正则匹配）
-// SECURITY NOTE: Go's regexp package uses RE2 engine which guarantees O(n) time complexity
-// for all operations, preventing ReDoS attacks.
-func (t *EditTool) doReplace(content string, params EditParams, filePath string) (string, string, error) {
-	if params.OldString == "" {
-		return "", "", fmt.Errorf("old_string is required for replace mode")
-	}
-
-	// Split content by line range if start_line/end_line specified
-	prefix, rangeText, suffix, err := splitContentByLineRange(content, params.StartLine, params.EndLine)
-	if err != nil {
-		return "", "", err
-	}
-
-	// 编译正则表达式
-	re, err := regexp.Compile(params.OldString)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid regex pattern: %w", err)
-	}
-
-	// 查找匹配
-	matches := re.FindAllString(rangeText, -1)
-	if len(matches) == 0 {
-		if params.StartLine > 0 || params.EndLine > 0 {
-			effStart := params.StartLine
-			if effStart <= 0 {
-				effStart = 1
-			}
-			effEnd := params.EndLine
-			if effEnd <= 0 {
-				// Inline splitLines: count lines correctly handling trailing newline
-				lines := strings.Split(content, "\n")
-				if len(lines) > 0 && lines[len(lines)-1] == "" {
-					effEnd = len(lines) - 1
-				} else {
-					effEnd = len(lines)
-				}
-			}
-			return "", "", fmt.Errorf("no match found for pattern in lines %d-%d: %s", effStart, effEnd, params.OldString)
+// suggestMatch tries to find similar text when exact match fails.
+// Helps the LLM identify whitespace/indentation mismatches.
+func suggestMatch(content, searchStr string) string {
+	var firstLine string
+	for _, l := range strings.Split(searchStr, "\n") {
+		if t := strings.TrimSpace(l); t != "" && len(t) >= 3 {
+			firstLine = t
+			break
 		}
-		return "", "", fmt.Errorf("no match found for pattern: %s", params.OldString)
 	}
-
-	// 执行替换（始终替换第一个匹配）
-	replacedCount := 0
-	newRangeText := re.ReplaceAllStringFunc(rangeText, func(m string) string {
-		if replacedCount == 0 {
-			replacedCount++
-			return re.ReplaceAllString(m, params.NewString)
+	if firstLine == "" {
+		return ""
+	}
+	lines, _ := splitLines(content)
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, firstLine) {
+			return fmt.Sprintf("\nHint: line %d has similar text (possible whitespace mismatch): %q", i+1, Truncate(trimmed, 100))
 		}
-		return m
-	})
-
-	newContent := prefix + newRangeText + suffix
-
-	if len(matches) > 1 {
-		return newContent, fmt.Sprintf("Replaced 1 of %d matches for pattern: %s", len(matches), params.OldString), nil
 	}
-
-	return newContent, fmt.Sprintf("Successfully replaced match in %s", filePath), nil
+	return ""
 }
 
 // Truncate 截断字符串（公共函数，供多处使用）

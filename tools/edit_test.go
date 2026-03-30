@@ -1,43 +1,34 @@
 package tools
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // ============================================================================
-// Helper: create EditTool instance
-// ============================================================================
-
-func newEditTool() *EditTool {
-	return &EditTool{}
-}
-
-// ============================================================================
-// A. doLineEdit 边界测试
+// Helper
 // ============================================================================
 
 // ============================================================================
-// B. doReplace 边界测试
+// FileReplaceTool — doReplace tests
 // ============================================================================
 
 func TestDoReplace_NotFound(t *testing.T) {
-	tool := newEditTool()
-	params := EditParams{OldString: "not_found", NewString: "replacement"}
-	_, _, err := tool.doReplace("hello world", params, "/test/file.txt")
+	params := FileReplaceParams{OldString: "not_found", NewString: "replacement"}
+	_, _, err := doReplace("hello world", params, "/test/file.txt")
 	if err == nil {
 		t.Fatal("expected error when text not found")
 	}
-	// Error message changed: now uses "no match found for pattern" (regex mode)
-	if !strings.Contains(err.Error(), "no match found") {
-		t.Errorf("error should mention 'no match found', got: %v", err)
+	if !strings.Contains(err.Error(), "text not found") {
+		t.Errorf("error should mention 'text not found', got: %v", err)
 	}
 }
 
 func TestDoReplace_EmptyOldString(t *testing.T) {
-	tool := newEditTool()
-	params := EditParams{OldString: "", NewString: "something"}
-	_, _, err := tool.doReplace("hello world", params, "/test/file.txt")
+	params := FileReplaceParams{OldString: "", NewString: "something"}
+	_, _, err := doReplace("hello world", params, "/test/file.txt")
 	if err == nil {
 		t.Fatal("expected error for empty old_string")
 	}
@@ -46,12 +37,7 @@ func TestDoReplace_EmptyOldString(t *testing.T) {
 	}
 }
 
-// TestDoReplace_MultipleOccurrences - DELETED: ReplaceAll field removed
-// Edit tool now always replaces first match only
-
 func TestDoReplace_SpecialCharacters(t *testing.T) {
-	tool := newEditTool()
-
 	tests := []struct {
 		name     string
 		content  string
@@ -88,9 +74,9 @@ func TestDoReplace_SpecialCharacters(t *testing.T) {
 			expected: "Hello Earth World",
 		},
 		{
-			name:     "backslash (regex escaped)",
+			name:     "backslash (literal)",
 			content:  `path\to\file`,
-			oldStr:   `path\\to\\file`, // escape backslash for regex
+			oldStr:   `path\to\file`,
 			newStr:   "replaced",
 			expected: "replaced",
 		},
@@ -119,8 +105,8 @@ func TestDoReplace_SpecialCharacters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params := EditParams{OldString: tt.oldStr, NewString: tt.newStr}
-			result, _, err := tool.doReplace(tt.content, params, "/test/file.txt")
+			params := FileReplaceParams{OldString: tt.oldStr, NewString: tt.newStr}
+			result, _, err := doReplace(tt.content, params, "/test/file.txt")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -132,29 +118,25 @@ func TestDoReplace_SpecialCharacters(t *testing.T) {
 }
 
 func TestDoReplace_OldStringEqualsNewString(t *testing.T) {
-	tool := newEditTool()
 	const content = "hello world"
-	params := EditParams{OldString: "hello", NewString: "hello"}
-	result, summary, err := tool.doReplace(content, params, "/test/file.txt")
+	params := FileReplaceParams{OldString: "hello", NewString: "hello"}
+	result, summary, err := doReplace(content, params, "/test/file.txt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != content {
 		t.Errorf("content should be unchanged, got %q", result)
 	}
-	// Should still report success (summary format changed in simplified version)
 	if !strings.Contains(summary, "replaced") {
 		t.Errorf("summary should mention 'replaced', got: %s", summary)
 	}
 }
 
 func TestDoReplace_ExactMatchOnly(t *testing.T) {
-	tool := newEditTool()
-
-	t.Run("substring should not partially match", func(t *testing.T) {
+	t.Run("substring should partially match", func(t *testing.T) {
 		content := "foobar"
-		params := EditParams{OldString: "foo", NewString: "FOO"}
-		result, _, err := tool.doReplace(content, params, "/test/file.txt")
+		params := FileReplaceParams{OldString: "foo", NewString: "FOO"}
+		result, _, err := doReplace(content, params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -165,8 +147,8 @@ func TestDoReplace_ExactMatchOnly(t *testing.T) {
 
 	t.Run("case sensitive", func(t *testing.T) {
 		content := "Hello hello HELLO"
-		params := EditParams{OldString: "hello", NewString: "HI"}
-		result, _, err := tool.doReplace(content, params, "/test/file.txt")
+		params := FileReplaceParams{OldString: "hello", NewString: "HI"}
+		result, _, err := doReplace(content, params, "/test/file.txt")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -176,24 +158,201 @@ func TestDoReplace_ExactMatchOnly(t *testing.T) {
 	})
 }
 
-// ============================================================================
-// C. doRegexReplace 边界测试 - DELETED
-// All tests in this section used Regex and/or ReplaceAll fields which are removed.
-// Edit tool now always uses regex matching (built-in, no parameter needed).
-// ============================================================================
+func TestDoReplace_ReplaceAll(t *testing.T) {
+	content := "foo bar foo baz foo"
+	t.Run("single match (default)", func(t *testing.T) {
+		params := FileReplaceParams{OldString: "foo", NewString: "FOO", ReplaceAll: false}
+		result, summary, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "FOO bar foo baz foo" {
+			t.Errorf("got %q, want %q", result, "FOO bar foo baz foo")
+		}
+		if !strings.Contains(summary, "1 of 3") {
+			t.Errorf("summary should mention partial replacement, got: %s", summary)
+		}
+	})
+
+	t.Run("replace all", func(t *testing.T) {
+		params := FileReplaceParams{OldString: "foo", NewString: "FOO", ReplaceAll: true}
+		result, summary, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "FOO bar FOO baz FOO" {
+			t.Errorf("got %q, want %q", result, "FOO bar FOO baz FOO")
+		}
+		if !strings.Contains(summary, "3 occurrence") {
+			t.Errorf("summary should mention 3 occurrences, got: %s", summary)
+		}
+	})
+}
+
+func TestDoReplace_Regex(t *testing.T) {
+	content := "version 1.2.3 and version 4.5.6"
+
+	t.Run("regex match", func(t *testing.T) {
+		params := FileReplaceParams{OldString: `version \d+\.\d+\.\d+`, NewString: "VERSION_X", Regex: true}
+		result, _, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "VERSION_X and version 4.5.6" {
+			t.Errorf("got %q, want %q", result, "VERSION_X and version 4.5.6")
+		}
+	})
+
+	t.Run("regex with captures", func(t *testing.T) {
+		params := FileReplaceParams{OldString: `(\d+)\.(\d+)\.(\d+)`, NewString: "$1.$2.$3-patched", Regex: true, ReplaceAll: true}
+		result, _, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "version 1.2.3-patched and version 4.5.6-patched" {
+			t.Errorf("got %q, want %q", result, "version 1.2.3-patched and version 4.5.6-patched")
+		}
+	})
+
+	t.Run("regex special chars without flag are literal", func(t *testing.T) {
+		// Without regex=true, "v1.2" matches literally as substring of "v1.2.3"
+		params := FileReplaceParams{OldString: "v1.2", NewString: "V12", Regex: false}
+		result, _, err := doReplace("v1.2.3", params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Exact match: "v1.2" is found as substring
+		if result != "V12.3" {
+			t.Errorf("got %q, want %q", result, "V12.3")
+		}
+	})
+}
+
+func TestDoReplace_LineRange(t *testing.T) {
+	content := "line1\nline2\nfoo\nline4\nfoo\nline6"
+
+	t.Run("replace within range", func(t *testing.T) {
+		params := FileReplaceParams{OldString: "foo", NewString: "BAR", StartLine: 3, EndLine: 3}
+		result, _, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := "line1\nline2\nBAR\nline4\nfoo\nline6"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("replace all within range", func(t *testing.T) {
+		params := FileReplaceParams{OldString: "foo", NewString: "BAR", StartLine: 3, EndLine: 5, ReplaceAll: true}
+		result, _, err := doReplace(content, params, "/test/file.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := "line1\nline2\nBAR\nline4\nBAR\nline6"
+		if result != expected {
+			t.Errorf("got %q, want %q", result, expected)
+		}
+	})
+
+	t.Run("not found in range", func(t *testing.T) {
+		params := FileReplaceParams{OldString: "foo", NewString: "BAR", StartLine: 1, EndLine: 2}
+		_, _, err := doReplace(content, params, "/test/file.txt")
+		if err == nil {
+			t.Fatal("expected error when not found in range")
+		}
+		if !strings.Contains(err.Error(), "lines 1-2") {
+			t.Errorf("error should mention line range, got: %v", err)
+		}
+	})
+}
+
+func TestSuggestMatch(t *testing.T) {
+	content := "func main() {\n\tfmt.Println(\"hello\")\n}\n"
+	t.Run("finds similar line with case-insensitive check", func(t *testing.T) {
+		// suggestMatch does case-sensitive substring check on trimmed lines
+		hint := suggestMatch(content, "func main()")
+		if !strings.Contains(hint, "line 1") {
+			t.Errorf("hint should point to line 1, got: %s", hint)
+		}
+	})
+
+	t.Run("finds similar line with partial content", func(t *testing.T) {
+		hint := suggestMatch(content, "Println(\"hello\")")
+		if !strings.Contains(hint, "line 2") {
+			t.Errorf("hint should point to line 2, got: %s", hint)
+		}
+	})
+
+	t.Run("no hint for empty search", func(t *testing.T) {
+		hint := suggestMatch(content, "")
+		if hint != "" {
+			t.Errorf("expected empty hint, got: %s", hint)
+		}
+	})
+
+	t.Run("no hint when not similar enough", func(t *testing.T) {
+		hint := suggestMatch(content, "totally_unrelated_text_xyz")
+		if hint != "" {
+			t.Errorf("expected empty hint for unrelated text, got: %s", hint)
+		}
+	})
+}
 
 // ============================================================================
-// D. doPositionInsert / doLineEdit(position) 边界测试 - DELETED
-// These tests used doLineEdit function and Action/Position fields which are removed.
+// FileCreateTool — local mode test
 // ============================================================================
 
-// ============================================================================
-// E. Bug 记录测试 - DELETED
-// These tests used doLineEdit function which is removed.
-// ============================================================================
+func TestFileCreateTool_LocalMode(t *testing.T) {
+	ws, err := os.MkdirTemp("", "test-create-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(ws)
+
+	ctx := &ToolContext{
+		Ctx:            t.Context(),
+		WorkspaceRoot:  ws,
+		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		SandboxEnabled: false,
+	}
+
+	tool := &FileCreateTool{}
+	result, err := tool.Execute(ctx, `{"path": "hello.txt", "content": "Hello World"}`)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(filepath.Join(ws, "hello.txt"))
+	if string(content) != "Hello World" {
+		t.Errorf("got %q, want %q", string(content), "Hello World")
+	}
+	_ = result
+
+	t.Run("nested path creates directories", func(t *testing.T) {
+		_, err := tool.Execute(ctx, `{"path": "sub/dir/file.txt", "content": "nested"}`)
+		if err != nil {
+			t.Fatalf("nested create failed: %v", err)
+		}
+		content, _ := os.ReadFile(filepath.Join(ws, "sub/dir/file.txt"))
+		if string(content) != "nested" {
+			t.Errorf("got %q, want %q", string(content), "nested")
+		}
+	})
+
+	t.Run("existing file returns error", func(t *testing.T) {
+		_, err := tool.Execute(ctx, `{"path": "hello.txt", "content": "duplicate"}`)
+		if err == nil {
+			t.Fatal("expected error for existing file")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("error should mention 'already exists', got: %v", err)
+		}
+	})
+}
 
 // ============================================================================
-// F. Truncate 辅助函数测试
+// Truncate 辅助函数测试
 // ============================================================================
 
 func TestTruncate(t *testing.T) {
@@ -207,9 +366,9 @@ func TestTruncate(t *testing.T) {
 		{"exact length", "hello", 5, "hello"},
 		{"needs truncation", "hello world", 8, "hello..."},
 		{"empty string", "", 10, ""},
-		{"unicode characters", "你好世界", 3, "..."},    // 4 runes, maxLen=3, need to truncate to 0+"..."
-		{"unicode fits exactly", "你好世界", 4, "你好世界"}, // 4 runes, maxLen=4, fits exactly
-		{"unicode fits within", "你好世界", 5, "你好世界"},  // 4 runes, maxLen=5, fits (4<=5)
+		{"unicode characters", "你好世界", 3, "..."},
+		{"unicode fits exactly", "你好世界", 4, "你好世界"},
+		{"unicode fits within", "你好世界", 5, "你好世界"},
 		{"single rune", "x", 1, "x"},
 	}
 
@@ -222,19 +381,3 @@ func TestTruncate(t *testing.T) {
 		})
 	}
 }
-
-// ============================================================================
-// G. validateParams 参数校验测试 - DELETED
-// Most tests used LineNumber, Action, Count, Regex, Position fields which are removed.
-// Only create and replace modes remain, with simplified validation.
-// ============================================================================
-
-// ============================================================================
-// H. count 批量操作测试 - DELETED
-// Count field removed.
-// ============================================================================
-
-// ============================================================================
-// I. Backward compatibility tests - DELETED
-// Regex and insert modes removed, no backward compat needed.
-// ============================================================================

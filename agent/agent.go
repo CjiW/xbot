@@ -2006,14 +2006,10 @@ func formatToolProgress(name string, args string) string {
 		summary = fmt.Sprintf("Shell: %s", get(m, "command"))
 	case "Read":
 		summary = fmt.Sprintf("Read: %s", get(m, "path"))
-	case "Edit":
-		path := get(m, "path")
-		mode := get(m, "mode")
-		if mode != "" {
-			summary = fmt.Sprintf("Edit: %s (%s)", path, mode)
-		} else {
-			summary = fmt.Sprintf("Edit: %s", path)
-		}
+	case "FileCreate":
+		summary = fmt.Sprintf("FileCreate: %s", get(m, "path"))
+	case "FileReplace":
+		summary = fmt.Sprintf("FileReplace: %s", get(m, "path"))
 	case "Grep":
 		pattern := get(m, "pattern")
 		path := get(m, "path")

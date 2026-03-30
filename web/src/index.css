@@ -2176,3 +2176,141 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
 [data-theme="light"] .overflow-y-auto::-webkit-scrollbar-thumb:hover {
   background: #a8a29e;
 }
+
+/* ========================================================================== */
+/* SubAgent Tree Styles                                                       */
+/* ========================================================================== */
+
+@keyframes subagent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes subagent-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.subagent-pulse {
+  animation: subagent-pulse 1.5s ease-in-out infinite;
+  display: inline-block;
+}
+
+.subagent-spin {
+  animation: subagent-spin 2s linear infinite;
+  display: inline-block;
+}
+
+.subagent-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subagent-node {
+  position: relative;
+}
+
+.subagent-node-running {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 2px solid rgba(59, 130, 246, 0.4);
+}
+
+.subagent-node-pending {
+  background: rgba(148, 163, 184, 0.05);
+  border-left: 2px solid rgba(148, 163, 184, 0.3);
+}
+
+/* ========================================================================== */
+/* Attachment Card Styles                                                     */
+/* ========================================================================== */
+
+.attachment-card {
+  display: block;
+  margin: 8px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.attachment-card:hover {
+  transform: translateY(-1px);
+}
+
+.attachment-image {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  max-width: 280px;
+}
+
+.attachment-image:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.attachment-img {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  cursor: pointer;
+}
+
+.attachment-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  text-decoration: none;
+  color: white;
+  transition: background 0.15s ease;
+  max-width: 280px;
+}
+
+.attachment-file:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.attachment-file-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.attachment-file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.attachment-file-info .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-file-info span:last-child {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+}

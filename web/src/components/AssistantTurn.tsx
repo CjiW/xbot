@@ -3,7 +3,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getCodeBlockProps } from './CodeBlock'
 import type { WsProgressPayload, IterationSnapshot } from './ProgressPanel'
-import { CompletedIteration, BouncingDots } from './ProgressPanel'
+import { CompletedIteration, BouncingDots, SubAgentTree } from './ProgressPanel'
 
 interface Message {
   id: string
@@ -237,6 +237,12 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
                   </span>
                 </div>
               ) : null}
+              {/* SubAgent tree */}
+              {progress.sub_agents && progress.sub_agents.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-slate-700/30">
+                  <SubAgentTree agents={progress.sub_agents} />
+                </div>
+              )}
             </div>
           </div>
         )}

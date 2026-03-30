@@ -167,6 +167,118 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+// --- Attachment parsing & rendering ---
+
+interface ParsedAttachment {
+  type: 'image' | 'file'
+  name: string
+  url?: string
+  size?: number
+  raw: string
+}
+
+const reAttachment = /<(image|file)\s+([^>]*?)\/?>/gi
+
+function parseAttachments(content: string): { attachments: ParsedAttachment[]; cleanContent: string } {
+  const attachments: ParsedAttachment[] = []
+  let cleanContent = content
+
+  // Remove duplicate markdown image syntax that follows <image> tags
+  // (backend sends both XML and ![name](url))
+  cleanContent = cleanContent.replace(/(<image\s[^>]*?\/?>)\s*\n?!?\[[^\]]*\]\([^)]+\)/gi, '$1')
+
+  cleanContent = cleanContent.replace(reAttachment, (match, type, attrs) => {
+    const nameMatch = attrs.match(/(?:name|filename)="([^"]*)"/)
+    const urlMatch = attrs.match(/url="([^"]*)"/)
+    const sizeMatch = attrs.match(/size="(\d+)"/)
+    const name = nameMatch?.[1] || (type === 'image' ? '图片' : '文件')
+    const url = urlMatch?.[1]
+    const size = sizeMatch ? parseInt(sizeMatch[1], 10) : undefined
+    const idx = attachments.length
+    attachments.push({ type: type as 'image' | 'file', name, url, size, raw: match })
+    return `{{attachment-${idx}}}`
+  })
+
+  // Clean up empty lines left by removed tags
+  cleanContent = cleanContent.replace(/\n{2,}/g, '\n\n').trim()
+
+  return { attachments, cleanContent }
+}
+
+function AttachmentCard({ attachment }: { attachment: ParsedAttachment }) {
+  if (attachment.type === 'image' && attachment.url) {
+    return (
+      <div className="attachment-card attachment-image">
+        <img
+          src={attachment.url}
+          alt={attachment.name}
+          className="attachment-img"
+          loading="lazy"
+          onClick={() => window.open(attachment.url, '_blank')}
+        />
+        <div className="attachment-meta">
+          <span className="truncate">{attachment.name}</span>
+          {attachment.size != null && <span>{formatFileSize(attachment.size)}</span>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      href={attachment.url || '#'}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="attachment-card attachment-file"
+    >
+      <div className="attachment-file-icon">
+        {attachment.name.match(/\.(pdf)$/i) ? '📄' :
+         attachment.name.match(/\.(doc|docx)$/i) ? '📝' :
+         attachment.name.match(/\.(xls|xlsx|csv)$/i) ? '📊' :
+         attachment.name.match(/\.(zip|tar|gz|rar|7z)$/i) ? '📦' :
+         attachment.name.match(/\.(mp4|avi|mov|mkv)$/i) ? '🎬' :
+         attachment.name.match(/\.(mp3|wav|flac)$/i) ? '🎵' :
+         '📎'}
+      </div>
+      <div className="attachment-file-info">
+        <span className="truncate">{attachment.name}</span>
+        {attachment.size != null && <span>{formatFileSize(attachment.size)}</span>}
+      </div>
+    </a>
+  )
+}
+
+function UserMessageContent({ content }: { content: string }) {
+  const { attachments, cleanContent } = parseAttachments(content)
+
+  // If no attachments found, render as normal markdown
+  if (attachments.length === 0) {
+    return <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+  }
+
+  // Split clean content by attachment placeholders and render interleaved
+  const parts = cleanContent.split(/(\{\{attachment-\d+\}\})/)
+  const elements: React.ReactNode[] = []
+
+  for (const part of parts) {
+    const match = part.match(/^\{\{attachment-(\d+)\}\}$/)
+    if (match) {
+      const idx = parseInt(match[1], 10)
+      if (idx < attachments.length) {
+        elements.push(<AttachmentCard key={`att-${idx}`} attachment={attachments[idx]} />)
+      }
+    } else if (part.trim()) {
+      elements.push(
+        <Markdown key={`md-${elements.length}`} remarkPlugins={[remarkGfm]}>
+          {part}
+        </Markdown>
+      )
+    }
+  }
+
+  return <>{elements}</>
+}
+
 export default function ChatPage({ onLogout }: ChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [connected, setConnected] = useState(false)
@@ -722,7 +834,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 	              const content = (
 	                <div className="flex justify-end msg-fade-in">
 	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
-	                    <Markdown remarkPlugins={[remarkGfm]}>{turn.message.content}</Markdown>
+		                    <UserMessageContent content={turn.message.content} />
 	                    {turn.message.ts && (
 	                      <div className="text-xs mt-1 text-right text-blue-200/50">
 	                        {formatTime(turn.message.ts)}

@@ -427,6 +427,59 @@ func formatChildAgentsSummary(children []childAgentStatus, maxTotalRunes int) st
 	return progressTruncate(result, maxTotalRunes)
 }
 
+// ExtractSubAgentTree 从 ProgressEvent.Lines 中解析子 Agent 的层级树。
+// 返回一个扁平列表（每个元素可选 Children），供上层（如 web 渠道）序列化为 JSON。
+// 如果 Lines 中没有子 Agent 进度行，返回 nil。
+func ExtractSubAgentTree(lines []string) []SubAgentNode {
+	flat := flattenLines(lines)
+	_, children := extractOwnAndChildProgress(flat)
+	if len(children) == 0 {
+		return nil
+	}
+	return convertChildTree(children)
+}
+
+// SubAgentNode 可序列化的子 Agent 状态节点（供 channel 层使用）。
+type SubAgentNode struct {
+	Role     string         `json:"role"`
+	Status   string         `json:"status"` // "running" | "done" | "error" | "pending"
+	Desc     string         `json:"desc,omitempty"`
+	Children []SubAgentNode `json:"children,omitempty"`
+}
+
+// convertChildTree 将内部 childAgentStatus 转换为可序列化的 SubAgentNode。
+func convertChildTree(children []childAgentStatus) []SubAgentNode {
+	if len(children) == 0 {
+		return nil
+	}
+	result := make([]SubAgentNode, 0, len(children))
+	for _, c := range children {
+		node := SubAgentNode{
+			Role:   c.Role,
+			Status: emojiToStatus(c.Status),
+			Desc:   c.Desc,
+		}
+		if len(c.Children) > 0 {
+			node.Children = convertChildTree(c.Children)
+		}
+		result = append(result, node)
+	}
+	return result
+}
+
+func emojiToStatus(emoji string) string {
+	switch emoji {
+	case "✅":
+		return "done"
+	case "❌":
+		return "error"
+	case "⏳":
+		return "pending"
+	default:
+		return "running"
+	}
+}
+
 // extractOwnAndChildProgress 从展平后的行中分离当前 Agent 自身进度和子 Agent 进度。
 // 返回 (ownLastLine, childStatuses)。
 //

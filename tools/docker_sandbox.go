@@ -557,7 +557,7 @@ func (s *DockerSandbox) ReadDir(ctx context.Context, path string, userID string)
 }
 
 func (s *DockerSandbox) MkdirAll(ctx context.Context, path string, perm os.FileMode, userID string) error {
-	_, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm)), path)
+	_, err := s.dockerExecInContainer(ctx, userID, "", dockerCmdTimeout, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm.Perm())), path)
 	if err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}

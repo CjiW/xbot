@@ -1,8 +1,17 @@
+import { useState } from 'react'
+
 interface WsToolProgress {
   name: string
   label: string
   status: string
   elapsed_ms: number
+}
+
+export interface WsSubAgent {
+  role: string
+  status: 'running' | 'done' | 'error' | 'pending'
+  desc?: string
+  children?: WsSubAgent[]
 }
 
 interface WsProgressPayload {
@@ -11,6 +20,7 @@ interface WsProgressPayload {
   active_tools: WsToolProgress[]
   completed_tools: WsToolProgress[]
   thinking: string
+  sub_agents?: WsSubAgent[]
 }
 
 export interface IterationSnapshot {
@@ -35,6 +45,68 @@ interface ProgressPanelProps {
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+// --- SubAgent Tree Component ---
+
+function SubAgentIcon({ status }: { status: string }) {
+  switch (status) {
+    case 'done': return <span className="text-green-400">✅</span>
+    case 'error': return <span className="text-red-400">❌</span>
+    case 'pending': return <span className="subagent-pulse">⏳</span>
+    default: return <span className="subagent-spin">🔄</span>
+  }
+}
+
+function SubAgentNode({ node, depth = 0 }: { node: WsSubAgent; depth?: number }) {
+  const [expanded, setExpanded] = useState(true)
+  const hasChildren = node.children && node.children.length > 0
+  const isRunning = node.status === 'running'
+  const isPending = node.status === 'pending'
+
+  return (
+    <div className="subagent-node" style={{ marginLeft: depth > 0 ? '16px' : 0 }}>
+      <div
+        className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+          isRunning
+            ? 'subagent-node-running'
+            : isPending
+              ? 'subagent-node-pending'
+              : 'hover:bg-slate-700/30'
+        }`}
+        onClick={() => hasChildren && setExpanded(!expanded)}
+      >
+        <SubAgentIcon status={node.status} />
+        <span className="font-medium text-xs text-slate-200 flex-shrink-0">{node.role}</span>
+        {node.desc && (
+          <span className="text-[11px] text-slate-400 truncate flex-1">{node.desc}</span>
+        )}
+        {hasChildren && (
+          <span className={`text-slate-500 text-xs transition-transform ${expanded ? 'rotate-90' : ''}`}>
+            ▸
+          </span>
+        )}
+      </div>
+      {expanded && hasChildren && (
+        <div className="mt-0.5">
+          {node.children!.map((child, i) => (
+            <SubAgentNode key={`${child.role}-${i}`} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function SubAgentTree({ agents }: { agents: WsSubAgent[] }) {
+  if (!agents || agents.length === 0) return null
+  return (
+    <div className="subagent-tree">
+      {agents.map((agent, i) => (
+        <SubAgentNode key={`${agent.role}-${i}`} node={agent} />
+      ))}
+    </div>
+  )
 }
 
 export function BouncingDots({ text }: { text?: string }) {
@@ -165,6 +237,13 @@ export default function ProgressPanel({ progress, liveIterations, loading }: Pro
 
               {/* Catch-all: nothing matched above → show animated dots */}
               {!hasVisibleContent && <BouncingDots />}
+            </div>
+          )}
+
+          {/* SubAgent tree */}
+          {progress.sub_agents && progress.sub_agents.length > 0 && (
+            <div className="px-3 py-2 border-t border-slate-700/30">
+              <SubAgentTree agents={progress.sub_agents} />
             </div>
           )}
         </div>

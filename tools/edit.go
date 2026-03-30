@@ -290,6 +290,25 @@ func doReplace(content string, params FileReplaceParams, filePath string) (strin
 	// Exact string match
 	count := strings.Count(rangeText, params.OldString)
 	if count == 0 {
+		// Fuzzy whitespace fallback: try matching with leading/trailing whitespace stripped per line
+		if actualOld, adjustedNew, ok := fuzzyWhitespaceMatch(rangeText, params.OldString, params.NewString); ok {
+			actualCount := strings.Count(rangeText, actualOld)
+			var newRangeText string
+			var replacedCount int
+			if params.ReplaceAll {
+				newRangeText = strings.ReplaceAll(rangeText, actualOld, adjustedNew)
+				replacedCount = actualCount
+			} else {
+				newRangeText = strings.Replace(rangeText, actualOld, adjustedNew, 1)
+				replacedCount = 1
+			}
+			newContent := prefix + newRangeText + suffix
+			if actualCount > 1 && !params.ReplaceAll {
+				return newContent, fmt.Sprintf("Replaced 1 of %d occurrences (auto-corrected whitespace) in %s. Use replace_all=true to replace all.", actualCount, filePath), nil
+			}
+			return newContent, fmt.Sprintf("Successfully replaced %d occurrence(s) (auto-corrected whitespace) in %s", replacedCount, filePath), nil
+		}
+
 		hint := suggestMatch(rangeText, params.OldString)
 		if params.StartLine > 0 || params.EndLine > 0 {
 			effStart := params.StartLine
@@ -422,6 +441,104 @@ func splitContentByLineRange(content string, start, end int) (string, string, st
 	}
 
 	return prefix, rangeText, suffix, nil
+}
+
+// leadingWhitespace returns the leading whitespace prefix of s.
+func leadingWhitespace(s string) string {
+	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
+}
+
+// adjustIndentation adjusts newStr's indentation based on the difference
+// between oldLines (what the LLM sent) and actualLines (what the file has).
+// It detects the base indent from the first non-empty line pair and applies
+// the same prefix substitution to every line in newStr.
+func adjustIndentation(oldLines, actualLines []string, newStr string) string {
+	var oldBase, actualBase string
+	for i, line := range oldLines {
+		if strings.TrimSpace(line) != "" && i < len(actualLines) {
+			oldBase = leadingWhitespace(line)
+			actualBase = leadingWhitespace(actualLines[i])
+			break
+		}
+	}
+
+	if oldBase == actualBase {
+		return newStr
+	}
+
+	newLines := strings.Split(newStr, "\n")
+	for i, line := range newLines {
+		indent := leadingWhitespace(line)
+		rest := line[len(indent):]
+		level := 0
+		remaining := indent
+		for strings.HasPrefix(remaining, oldBase) {
+			level++
+			remaining = remaining[len(oldBase):]
+		}
+		if level > 0 {
+			newLines[i] = strings.Repeat(actualBase, level) + remaining + rest
+		}
+	}
+	return strings.Join(newLines, "\n")
+}
+
+// fuzzyWhitespaceMatch attempts whitespace-tolerant matching when exact match fails.
+// It strips leading+trailing whitespace per line and uses a sliding window to find
+// a unique match. Returns (actualOldString, adjustedNewString, true) on success.
+// Requires exactly 1 match; returns false on 0 or 2+ matches (ambiguous).
+func fuzzyWhitespaceMatch(content, oldStr, newStr string) (string, string, bool) {
+	oldLines := strings.Split(oldStr, "\n")
+	contentLines := strings.Split(content, "\n")
+
+	// Strip for comparison
+	strippedOld := make([]string, len(oldLines))
+	hasContent := false
+	for i, line := range oldLines {
+		strippedOld[i] = strings.TrimSpace(line)
+		if strippedOld[i] != "" {
+			hasContent = true
+		}
+	}
+	if !hasContent {
+		return "", "", false
+	}
+
+	windowSize := len(strippedOld)
+	if windowSize > len(contentLines) {
+		return "", "", false
+	}
+
+	// Sliding window search
+	var matchIdx int
+	matchCount := 0
+	for i := 0; i <= len(contentLines)-windowSize; i++ {
+		match := true
+		for j, stripped := range strippedOld {
+			if strings.TrimSpace(contentLines[i+j]) != stripped {
+				match = false
+				break
+			}
+		}
+		if match {
+			matchCount++
+			matchIdx = i
+			if matchCount > 1 {
+				return "", "", false
+			}
+		}
+	}
+
+	if matchCount != 1 {
+		return "", "", false
+	}
+
+	actualLines := contentLines[matchIdx : matchIdx+windowSize]
+	actualOld := strings.Join(actualLines, "\n")
+
+	adjustedNew := adjustIndentation(oldLines, actualLines, newStr)
+
+	return actualOld, adjustedNew, true
 }
 
 // suggestMatch tries to find similar text when exact match fails.

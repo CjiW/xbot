@@ -286,32 +286,30 @@ func main() {
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)
-				// Web file uploads go through cloud OSS only — no local storage
-				// Set workDir so uploaded files can be copied into sandbox-accessible paths
-				webCh.SetWorkDir(workDir)
-				webCh.SetWorkDir(workDir)
-				// Set OSS provider for file storage
-				if cfg.OSS.Provider == "qiniu" {
-					ossProvider, err := channel.NewOSSProvider(
-						cfg.OSS.Provider,
-						"",
-						channel.QiniuConfig{
-							AccessKey: cfg.OSS.QiniuAccessKey,
-							SecretKey: cfg.OSS.QiniuSecretKey,
-							Bucket:    cfg.OSS.QiniuBucket,
-							Domain:    cfg.OSS.QiniuDomain,
-							Region:    cfg.OSS.QiniuRegion,
-						},
-					)
-					if err != nil {
-						log.WithError(err).Error("Failed to create Qiniu OSS provider, falling back to local")
-					} else {
-						webCh.SetOSSProvider(ossProvider)
-						log.Info("OSS provider configured: qiniu")
-					}
-				}
-
 			}
+			// Web file uploads go through cloud OSS only — no local storage
+			webCh.SetWorkDir(workDir)
+			// Set OSS provider for file storage
+			if cfg.OSS.Provider == "qiniu" {
+				ossProvider, err := channel.NewOSSProvider(
+					cfg.OSS.Provider,
+					"",
+					channel.QiniuConfig{
+						AccessKey: cfg.OSS.QiniuAccessKey,
+						SecretKey: cfg.OSS.QiniuSecretKey,
+						Bucket:    cfg.OSS.QiniuBucket,
+						Domain:    cfg.OSS.QiniuDomain,
+						Region:    cfg.OSS.QiniuRegion,
+					},
+				)
+				if err != nil {
+					log.WithError(err).Error("Failed to create Qiniu OSS provider")
+				} else {
+					webCh.SetOSSProvider(ossProvider)
+					log.Info("OSS provider configured: qiniu")
+				}
+			}
+
 			webCh.SetCallbacks(channel.WebCallbacks{
 				RunnerTokenGet: func(senderID string) string {
 					db := tools.GetRunnerTokenDB()

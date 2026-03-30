@@ -107,6 +107,14 @@ func (r *SandboxRouter) DockerImage() string {
 	return r.docker.Image()
 }
 
+// IsRunnerOnline reports whether a specific named runner is connected for the user.
+func (r *SandboxRouter) IsRunnerOnline(userID, runnerName string) bool {
+	if r.remote == nil {
+		return false
+	}
+	return r.remote.IsRunnerOnline(userID, runnerName)
+}
+
 // SetTokenStore stores the runner token store for reading user active_runner preferences.
 func (r *SandboxRouter) SetTokenStore(store *RunnerTokenStore) {
 	r.tokenStore = store

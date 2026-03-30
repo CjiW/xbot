@@ -111,13 +111,21 @@ func (de *dockerExecutor) getOrCreateContainer() error {
 func (de *dockerExecutor) dockerExec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerCmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return out, nil
 }
 
 func (de *dockerExecutor) dockerExecSlow(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerSlowTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return out, nil
 }
 
 // dockerExecWithStdin 执行 docker 命令并通过 stdin 传入数据。
@@ -343,7 +351,7 @@ func (de *dockerExecutor) ReadDir(path string) ([]DirEntry, error) {
 }
 
 func (de *dockerExecutor) MkdirAll(path string, perm os.FileMode) error {
-	_, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm)), path)
+	_, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm.Perm())), path)
 	if err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}

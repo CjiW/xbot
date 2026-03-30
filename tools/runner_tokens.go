@@ -284,3 +284,36 @@ func (s *RunnerTokenStore) FindByTokenInRunnerTokens(token string) (userID strin
 	}
 	return userID
 }
+
+// ListAllRunners returns all runners for a user, including the built-in docker sandbox
+// (if available) prepended to the list. Online status is populated from RemoteSandbox.
+func ListAllRunners(senderID string) ([]RunnerInfo, error) {
+	db := GetRunnerTokenDB()
+	if db == nil {
+		return nil, fmt.Errorf("runner management not configured")
+	}
+	store := NewRunnerTokenStore(db)
+	runners, err := store.ListRunners(senderID)
+	if err != nil {
+		return nil, err
+	}
+	// Populate online status from RemoteSandbox
+	if sb := GetSandbox(); sb != nil {
+		if rs, ok := sb.(*RemoteSandbox); ok {
+			for i := range runners {
+				runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
+			}
+		}
+		// Inject built-in docker sandbox if available
+		if router, ok := sb.(*SandboxRouter); ok && router.HasDocker() {
+			dockerEntry := RunnerInfo{
+				Name:        BuiltinDockerRunnerName,
+				Mode:        "docker",
+				DockerImage: router.DockerImage(),
+				Online:      true,
+			}
+			runners = append([]RunnerInfo{dockerEntry}, runners...)
+		}
+	}
+	return runners, nil
+}

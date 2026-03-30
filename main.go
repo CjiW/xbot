@@ -342,38 +342,7 @@ func main() {
 					tools.NewRunnerTokenStore(db).Revoke(senderID)
 					return nil
 				},
-				RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return nil, fmt.Errorf("runner management not configured")
-					}
-					store := tools.NewRunnerTokenStore(db)
-					runners, err := store.ListRunners(senderID)
-					if err != nil {
-						return nil, err
-					}
-					// Populate online status from RemoteSandbox
-					if sb := tools.GetSandbox(); sb != nil {
-						if rs, ok := sb.(*tools.RemoteSandbox); ok {
-							for i := range runners {
-								runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
-							}
-						}
-					}
-					// Inject built-in docker sandbox if available
-					if sb := tools.GetSandbox(); sb != nil {
-						if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
-							dockerEntry := tools.RunnerInfo{
-								Name:        tools.BuiltinDockerRunnerName,
-								Mode:        "docker",
-								DockerImage: router.DockerImage(),
-								Online:      true,
-							}
-							runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
-						}
-					}
-					return runners, nil
-				},
+				RunnerList: tools.ListAllRunners,
 				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
 					db := tools.GetRunnerTokenDB()
 					if db == nil {
@@ -643,38 +612,7 @@ func main() {
 				tools.NewRunnerTokenStore(db).Revoke(senderID)
 				return nil
 			},
-			RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-				db := tools.GetRunnerTokenDB()
-				if db == nil {
-					return nil, fmt.Errorf("runner management not configured")
-				}
-				store := tools.NewRunnerTokenStore(db)
-				runners, err := store.ListRunners(senderID)
-				if err != nil {
-					return nil, err
-				}
-				// Populate online status from RemoteSandbox
-				if sb := tools.GetSandbox(); sb != nil {
-					if rs, ok := sb.(*tools.RemoteSandbox); ok {
-						for i := range runners {
-							runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
-						}
-					}
-					// Inject built-in docker sandbox if available
-					if sb := tools.GetSandbox(); sb != nil {
-						if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
-							dockerEntry := tools.RunnerInfo{
-								Name:        tools.BuiltinDockerRunnerName,
-								Mode:        "docker",
-								DockerImage: router.DockerImage(),
-								Online:      true,
-							}
-							runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
-						}
-					}
-				}
-				return runners, nil
-			},
+			RunnerList: tools.ListAllRunners,
 			RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
 				db := tools.GetRunnerTokenDB()
 				if db == nil {

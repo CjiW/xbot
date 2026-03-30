@@ -10,10 +10,11 @@ import (
 
 // MockSandbox is an in-memory Sandbox implementation for testing.
 type MockSandbox struct {
-	Files    map[string][]byte // path → content
-	Dirs     map[string]bool   // path → exists
-	ExecFunc func(ctx context.Context, spec ExecSpec) (*ExecResult, error)
-	NameVal  string
+	Files        map[string][]byte // path → content
+	Dirs         map[string]bool   // path → exists
+	ExecFunc     func(ctx context.Context, spec ExecSpec) (*ExecResult, error)
+	NameVal      string
+	WorkspaceVal string
 
 	mu sync.RWMutex
 }
@@ -58,6 +59,7 @@ func (m *MockSandbox) SetFile(path string, content []byte) {
 
 func (m *MockSandbox) Name() string { return m.NameVal }
 
+func (m *MockSandbox) Workspace(userID string) string      { return m.WorkspaceVal }
 func (m *MockSandbox) Close() error                        { return nil }
 func (m *MockSandbox) CloseForUser(userID string) error    { return nil }
 func (m *MockSandbox) IsExporting(userID string) bool      { return false }

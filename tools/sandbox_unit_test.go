@@ -130,9 +130,9 @@ func TestGrepTool_PathTranslation(t *testing.T) {
 	}
 }
 
-func TestEditTool_LocalMode(t *testing.T) {
-	// 测试 EditTool 的本地模式
-	ws, err := os.MkdirTemp("", "test-edit-*")
+func TestFileReplaceTool_LocalMode(t *testing.T) {
+	// 测试 FileReplaceTool 的本地模式
+	ws, err := os.MkdirTemp("", "test-replace-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +149,10 @@ func TestEditTool_LocalMode(t *testing.T) {
 		SandboxEnabled: false,
 	}
 
-	tool := &EditTool{}
-	result, err := tool.Execute(ctx, `{"mode": "replace", "path": "hello.txt", "old_string": "World", "new_string": "Universe"}`)
+	tool := &FileReplaceTool{}
+	result, err := tool.Execute(ctx, `{"path": "hello.txt", "old_string": "World", "new_string": "Universe"}`)
 	if err != nil {
-		t.Fatalf("Local edit failed: %v", err)
+		t.Fatalf("Local replace failed: %v", err)
 	}
 
 	// 验证修改成功
@@ -271,8 +271,8 @@ func TestGrepTool_SandboxCWD_Regression(t *testing.T) {
 	}
 }
 
-// TestEditTool_SandboxCWD_SandboxPath_Regression 验证 Cd 后 Edit 的路径解析。
-func TestEditTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
+// TestFileReplaceTool_SandboxCWD_SandboxPath_Regression 验证 Cd 后 FileReplace 的路径解析。
+func TestFileReplaceTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
 	sandboxBase := "/workspace"
 	ctx := &ToolContext{
 		CurrentDir:    "/workspace/myproject",

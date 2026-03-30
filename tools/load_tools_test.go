@@ -595,7 +595,7 @@ func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
 	defs := registry.AsDefinitions()
 
 	// Note: Cron, DownloadFile, WebSearch are now registered separately with dependency injection in main.go
-	coreExpected := []string{"load_tools", "Shell", "Glob", "Grep", "Read", "Edit", "SubAgent"}
+	coreExpected := []string{"load_tools", "Shell", "Glob", "Grep", "Read", "FileCreate", "FileReplace", "SubAgent"}
 	for _, name := range coreExpected {
 		if !hasToolDefinitionName(defs, name) {
 			t.Errorf("%s should always appear in definitions (core tool)", name)

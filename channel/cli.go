@@ -5,6 +5,7 @@ package channel
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,16 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"github.com/muesli/termenv"
 )
+
+func init() {
+	// Prevent termenv from querying terminal background color via OSC 11.
+	// Without this, termenv sends "\x1b]11;?\x1b\\" on first use, and the
+	// terminal's response (e.g. "]11;rgb:1e1e/1e1e/1e1e\") leaks into the
+	// textarea stdin and gets displayed as garbled text.
+	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
+}
 
 // ---------------------------------------------------------------------------
 // Constants

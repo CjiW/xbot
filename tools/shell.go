@@ -158,9 +158,11 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		})
 
 	case "remote":
-		// Remote 模式：使用 runner 的 workspace 作为工作目录
+		// Remote 模式：优先使用 Cd 设置的目录，否则使用 runner workspace
 		remoteDir := ""
-		if rs, ok := sandbox.(*RemoteSandbox); ok {
+		if toolCtx != nil && toolCtx.CurrentDir != "" {
+			remoteDir = toolCtx.CurrentDir
+		} else if rs, ok := sandbox.(*RemoteSandbox); ok {
 			remoteDir = rs.Workspace(userID)
 		}
 		result, err = sandbox.Exec(parentCtx, ExecSpec{

@@ -171,7 +171,10 @@ func setSandboxDir(ctx *ToolContext, sandbox Sandbox, spec *ExecSpec) {
 		spec.Workspace = ctx.WorkspaceRoot
 		spec.Dir = ctx.Sandbox.Workspace(ctx.OriginUserID)
 	case "remote":
-		// 不设 Dir — runner 默认使用其 workspace
+		// Remote: use Cd-set CurrentDir if available, otherwise runner defaults to its workspace
+		if ctx != nil && ctx.CurrentDir != "" {
+			spec.Dir = ctx.CurrentDir
+		}
 	case "none":
 		spec.Dir = ctx.WorkspaceRoot
 	}

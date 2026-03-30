@@ -190,6 +190,23 @@ func (a *Agent) buildMainRunConfig(
 							Elapsed: t.Elapsed.Milliseconds(),
 						})
 					}
+					// Parse sub-agent tree from progress lines
+					if len(event.Lines) > 0 {
+						subAgents := ExtractSubAgentTree(event.Lines)
+						if len(subAgents) > 0 {
+							wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+							for i, sa := range subAgents {
+								wsSubAgents[i] = channelpkg.WsSubAgent{
+									Role:     sa.Role,
+									Status:   sa.Status,
+									Desc:     sa.Desc,
+									Children: convertWsSubAgentTree(sa.Children),
+								}
+							}
+							payload.SubAgents = wsSubAgents
+						}
+					}
+
 					// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 					wc.SendProgress(chatID, payload)
 				}
@@ -925,4 +942,21 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}
 
 	return out.OutboundMessage, nil
+}
+
+// convertWsSubAgentTree 将 agent.SubAgentNode 转换为 channelpkg.WsSubAgent 树。
+func convertWsSubAgentTree(nodes []SubAgentNode) []channelpkg.WsSubAgent {
+	if len(nodes) == 0 {
+		return nil
+	}
+	result := make([]channelpkg.WsSubAgent, len(nodes))
+	for i, n := range nodes {
+		result[i] = channelpkg.WsSubAgent{
+			Role:     n.Role,
+			Status:   n.Status,
+			Desc:     n.Desc,
+			Children: convertWsSubAgentTree(n.Children),
+		}
+	}
+	return result
 }

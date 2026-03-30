@@ -277,6 +277,7 @@ type WsProgressPayload struct {
 	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
 	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
 	Thinking       string           `json:"thinking,omitempty"`
+	SubAgents      []WsSubAgent     `json:"sub_agents,omitempty"`
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -285,6 +286,14 @@ type WsToolProgress struct {
 	Label   string `json:"label,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
+}
+
+// WsSubAgent 子 Agent 的结构化进度状态。
+type WsSubAgent struct {
+	Role     string       `json:"role"`
+	Status   string       `json:"status"` // "running" | "done" | "error"
+	Desc     string       `json:"desc,omitempty"`
+	Children []WsSubAgent `json:"children,omitempty"`
 }
 
 type wsClientMessage struct {

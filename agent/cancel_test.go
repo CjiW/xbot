@@ -1,8 +1,14 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
+
+	"xbot/llm"
+	"xbot/tools"
 )
 
 func TestCancelNotRegisteredAsCommand(t *testing.T) {
@@ -88,4 +94,73 @@ func TestCancelKeyIncludesSenderID(t *testing.T) {
 	default:
 		t.Error("userA's cancel channel should have been signaled")
 	}
+}
+
+// TestRun_CancelPreservesEngineMessages verifies that when a Run is cancelled
+// after completing some iterations, EngineMessages contains the partial progress.
+func TestRun_CancelPreservesEngineMessages(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	mock := &mockLLM{
+		responses: []llm.LLMResponse{
+			{
+				Content:      "Let me check something...",
+				FinishReason: llm.FinishReasonToolCalls,
+				ToolCalls: []llm.ToolCall{
+					{ID: "tc1", Name: "Shell", Arguments: `{"command":"echo hello"}`},
+				},
+			},
+			// Second Generate will be cancelled
+		},
+	}
+
+	callCount := 0
+	out := Run(ctx, RunConfig{
+		LLMClient: mock,
+		Model:     "test",
+		Tools:     newTestRegistry(),
+		Messages:  baseMessages(),
+		AgentID:   "main",
+		ToolExecutor: func(execCtx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
+			callCount++
+			if callCount == 1 {
+				time.Sleep(50 * time.Millisecond)
+				cancel()
+			}
+			return tools.NewResult("tool output"), nil
+		},
+	})
+
+	if out.Error == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+	if !errors.Is(out.Error, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", out.Error)
+	}
+
+	if len(out.EngineMessages) == 0 {
+		t.Fatal("expected non-empty EngineMessages after cancel, got empty")
+	}
+
+	foundAssistant := false
+	foundToolResult := false
+	for _, em := range out.EngineMessages {
+		if em.Role == "assistant" && len(em.ToolCalls) > 0 {
+			foundAssistant = true
+			if em.ToolCalls[0].Name != "Shell" {
+				t.Errorf("expected Shell tool call, got %s", em.ToolCalls[0].Name)
+			}
+		}
+		if em.Role == "tool" {
+			foundToolResult = true
+		}
+	}
+	if !foundAssistant {
+		t.Error("expected assistant message with tool_calls in EngineMessages")
+	}
+	if !foundToolResult {
+		t.Error("expected tool result message in EngineMessages")
+	}
+
+	t.Logf("Cancel preserved %d engine messages (expected >= 2)", len(out.EngineMessages))
 }

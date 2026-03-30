@@ -1359,6 +1359,26 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	out := Run(ctx, cfg)
 	if out.Error != nil {
+		// When cancelled, save user message + partial engine progress to session
+		// so the next turn has context of what happened before cancellation.
+		if errors.Is(out.Error, context.Canceled) {
+			if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+				userMsg := llm.NewUserMessage(msg.Content)
+				if !msg.Time.IsZero() {
+					userMsg.Timestamp = msg.Time
+				}
+				if err := tenantSession.AddMessage(userMsg); err != nil {
+					log.Ctx(ctx).WithError(err).Warn("Failed to save user message on cancel")
+				}
+			}
+			for _, em := range out.EngineMessages {
+				assertNoSystemPersist(em)
+				if err := tenantSession.AddMessage(em); err != nil {
+					log.Ctx(ctx).WithError(err).Warn("Failed to save engine message on cancel")
+				}
+			}
+			log.Ctx(ctx).Infof("Cancelled: saved user msg + %d engine messages to session", len(out.EngineMessages))
+		}
 		return nil, out.Error
 	}
 	finalContent := out.Content

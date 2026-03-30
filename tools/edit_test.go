@@ -300,6 +300,221 @@ func TestSuggestMatch(t *testing.T) {
 }
 
 // ============================================================================
+// Fuzzy whitespace matching tests
+// ============================================================================
+
+func TestLeadingWhitespace(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"hello", ""},
+		{"\thello", "\t"},
+		{"\t\thello", "\t\t"},
+		{"    hello", "    "},
+		{"\t  hello", "\t  "},
+		{"", ""},
+		{" ", " "},
+	}
+	for _, tt := range tests {
+		got := leadingWhitespace(tt.input)
+		if got != tt.want {
+			t.Errorf("leadingWhitespace(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestAdjustIndentation(t *testing.T) {
+	t.Run("tab level shift (2 tabs -> 1 tab)", func(t *testing.T) {
+		oldLines := []string{"\t\tcase \"remote\":", "\t\t\tremoteDir := \"\""}
+		actualLines := []string{"\tcase \"remote\":", "\t\tremoteDir := \"\""}
+		newStr := "\t\tcase \"remote\":\n\t\t\tremoteDir := \"changed\""
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		want := "\tcase \"remote\":\n\t\tremoteDir := \"changed\""
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("tab to spaces", func(t *testing.T) {
+		oldLines := []string{"\tfunc foo() {", "\t\tx := 1"}
+		actualLines := []string{"    func foo() {", "        x := 1"}
+		newStr := "\tfunc foo() {\n\t\tx := 2\n\t}"
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		want := "    func foo() {\n        x := 2\n    }"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("spaces to tab", func(t *testing.T) {
+		oldLines := []string{"    return x", "    }"}
+		actualLines := []string{"\treturn x", "\t}"}
+		newStr := "    return y\n    }"
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		want := "\treturn y\n\t}"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no change needed", func(t *testing.T) {
+		oldLines := []string{"\tx := 1"}
+		actualLines := []string{"\tx := 1"}
+		newStr := "\tx := 2"
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		if got != newStr {
+			t.Errorf("got %q, want %q (unchanged)", got, newStr)
+		}
+	})
+
+	t.Run("new lines added by LLM also adjusted", func(t *testing.T) {
+		oldLines := []string{"\t\tx := 1"}
+		actualLines := []string{"\tx := 1"}
+		newStr := "\t\tx := 1\n\t\ty := 2\n\t\tz := 3"
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		want := "\tx := 1\n\ty := 2\n\tz := 3"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty lines preserved", func(t *testing.T) {
+		oldLines := []string{"\t\ta := 1", "", "\t\tb := 2"}
+		actualLines := []string{"\ta := 1", "", "\tb := 2"}
+		newStr := "\t\ta := 1\n\n\t\tb := 2"
+		got := adjustIndentation(oldLines, actualLines, newStr)
+		want := "\ta := 1\n\n\tb := 2"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+func TestFuzzyWhitespaceMatch_TabLevelMismatch(t *testing.T) {
+	// Simulates the real bug: LLM uses 2 tabs but file has 1 tab
+	content := "\tswitch x {\n\tcase \"remote\":\n\t\tremoteDir := \"\"\n\t\tfmt.Println(remoteDir)\n\tdefault:\n\t\tfmt.Println(\"other\")\n\t}"
+	oldStr := "\t\tcase \"remote\":\n\t\t\tremoteDir := \"\"\n\t\t\tfmt.Println(remoteDir)"
+	newStr := "\t\tcase \"remote\":\n\t\t\tremoteDir := \"changed\"\n\t\t\tfmt.Println(remoteDir)"
+
+	actualOld, adjustedNew, ok := fuzzyWhitespaceMatch(content, oldStr, newStr)
+	if !ok {
+		t.Fatal("expected fuzzy match to succeed")
+	}
+	wantActual := "\tcase \"remote\":\n\t\tremoteDir := \"\"\n\t\tfmt.Println(remoteDir)"
+	if actualOld != wantActual {
+		t.Errorf("actualOld:\ngot  %q\nwant %q", actualOld, wantActual)
+	}
+	wantNew := "\tcase \"remote\":\n\t\tremoteDir := \"changed\"\n\t\tfmt.Println(remoteDir)"
+	if adjustedNew != wantNew {
+		t.Errorf("adjustedNew:\ngot  %q\nwant %q", adjustedNew, wantNew)
+	}
+}
+
+func TestFuzzyWhitespaceMatch_TabVsSpace(t *testing.T) {
+	content := "    func foo() {\n        x := 1\n    }"
+	oldStr := "\tfunc foo() {\n\t\tx := 1\n\t}"
+	newStr := "\tfunc bar() {\n\t\tx := 2\n\t}"
+
+	actualOld, adjustedNew, ok := fuzzyWhitespaceMatch(content, oldStr, newStr)
+	if !ok {
+		t.Fatal("expected fuzzy match to succeed")
+	}
+	if actualOld != content {
+		t.Errorf("actualOld:\ngot  %q\nwant %q", actualOld, content)
+	}
+	wantNew := "    func bar() {\n        x := 2\n    }"
+	if adjustedNew != wantNew {
+		t.Errorf("adjustedNew:\ngot  %q\nwant %q", adjustedNew, wantNew)
+	}
+}
+
+func TestFuzzyWhitespaceMatch_NoMatch(t *testing.T) {
+	content := "\tcase \"docker\":\n\t\tfmt.Println(\"docker\")"
+	oldStr := "\t\tcase \"remote\":\n\t\t\tfmt.Println(\"remote\")"
+	_, _, ok := fuzzyWhitespaceMatch(content, oldStr, "replacement")
+	if ok {
+		t.Fatal("expected fuzzy match to fail when content differs")
+	}
+}
+
+func TestFuzzyWhitespaceMatch_AmbiguousMatch(t *testing.T) {
+	content := "\tx := 1\n\ty := 2\n\tx := 1\n\tz := 3"
+	oldStr := "\t\tx := 1"
+	_, _, ok := fuzzyWhitespaceMatch(content, oldStr, "replacement")
+	if ok {
+		t.Fatal("expected fuzzy match to fail with multiple matches")
+	}
+}
+
+func TestFuzzyWhitespaceMatch_AllWhitespaceOld(t *testing.T) {
+	content := "\t\n\t\n\tx := 1"
+	oldStr := "  \n  "
+	_, _, ok := fuzzyWhitespaceMatch(content, oldStr, "replacement")
+	if ok {
+		t.Fatal("expected fuzzy match to fail when old_string is all whitespace")
+	}
+}
+
+func TestDoReplace_FuzzyFallback(t *testing.T) {
+	// End-to-end: doReplace should auto-correct whitespace and succeed
+	content := "\tswitch x {\n\tcase \"a\":\n\t\tfmt.Println(\"a\")\n\tcase \"b\":\n\t\tfmt.Println(\"b\")\n\t}\n"
+	oldStr := "\t\tcase \"a\":\n\t\t\tfmt.Println(\"a\")"
+	newStr := "\t\tcase \"a\":\n\t\t\tfmt.Println(\"A\")"
+
+	result, summary, err := doReplace(content, FileReplaceParams{OldString: oldStr, NewString: newStr}, "/test/file.go")
+	if err != nil {
+		t.Fatalf("expected fuzzy fallback to succeed, got error: %v", err)
+	}
+	if !strings.Contains(summary, "auto-corrected whitespace") {
+		t.Errorf("summary should mention auto-correction, got: %s", summary)
+	}
+	expected := "\tswitch x {\n\tcase \"a\":\n\t\tfmt.Println(\"A\")\n\tcase \"b\":\n\t\tfmt.Println(\"b\")\n\t}\n"
+	if result != expected {
+		t.Errorf("result:\ngot  %q\nwant %q", result, expected)
+	}
+}
+
+func TestDoReplace_FuzzyFallbackWithLineRange(t *testing.T) {
+	content := "line1\n\tcase \"a\":\n\t\tx := 1\nline4\n"
+	oldStr := "\t\tcase \"a\":\n\t\t\tx := 1"
+	newStr := "\t\tcase \"a\":\n\t\t\tx := 2"
+
+	result, summary, err := doReplace(content, FileReplaceParams{
+		OldString: oldStr, NewString: newStr,
+		StartLine: 2, EndLine: 3,
+	}, "/test/file.go")
+	if err != nil {
+		t.Fatalf("expected fuzzy fallback with line range to succeed, got error: %v", err)
+	}
+	if !strings.Contains(summary, "auto-corrected") {
+		t.Errorf("summary should mention auto-correction, got: %s", summary)
+	}
+	expected := "line1\n\tcase \"a\":\n\t\tx := 2\nline4\n"
+	if result != expected {
+		t.Errorf("result:\ngot  %q\nwant %q", result, expected)
+	}
+}
+
+func TestDoReplace_FuzzyDoesNotOverrideExactMatch(t *testing.T) {
+	content := "\tcase \"a\":\n\t\tx := 1\n"
+	oldStr := "\tcase \"a\":\n\t\tx := 1"
+	newStr := "\tcase \"a\":\n\t\tx := 2"
+
+	result, summary, err := doReplace(content, FileReplaceParams{OldString: oldStr, NewString: newStr}, "/test/file.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(summary, "auto-corrected") {
+		t.Errorf("exact match should NOT mention auto-correction, got: %s", summary)
+	}
+	expected := "\tcase \"a\":\n\t\tx := 2\n"
+	if result != expected {
+		t.Errorf("result:\ngot  %q\nwant %q", result, expected)
+	}
+}
+
+// ============================================================================
 // FileCreateTool — local mode test
 // ============================================================================
 

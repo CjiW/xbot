@@ -297,22 +297,27 @@ func ListAllRunners(senderID string) ([]RunnerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Populate online status from RemoteSandbox
+	// Populate online status from RemoteSandbox or SandboxRouter
 	if sb := GetSandbox(); sb != nil {
-		if rs, ok := sb.(*RemoteSandbox); ok {
+		switch router := sb.(type) {
+		case *SandboxRouter:
 			for i := range runners {
-				runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
+				runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
 			}
-		}
-		// Inject built-in docker sandbox if available
-		if router, ok := sb.(*SandboxRouter); ok && router.HasDocker() {
-			dockerEntry := RunnerInfo{
-				Name:        BuiltinDockerRunnerName,
-				Mode:        "docker",
-				DockerImage: router.DockerImage(),
-				Online:      true,
+			// Inject built-in docker sandbox if available
+			if router.HasDocker() {
+				dockerEntry := RunnerInfo{
+					Name:        BuiltinDockerRunnerName,
+					Mode:        "docker",
+					DockerImage: router.DockerImage(),
+					Online:      true,
+				}
+				runners = append([]RunnerInfo{dockerEntry}, runners...)
 			}
-			runners = append([]RunnerInfo{dockerEntry}, runners...)
+		case *RemoteSandbox:
+			for i := range runners {
+				runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
+			}
 		}
 	}
 	return runners, nil

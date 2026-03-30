@@ -916,7 +916,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				execResults[entry.index].llmContent = execResults[entry.index].content
 
 				if autoNotify {
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					// SubAgent progress callback already wrote a meaningful progress tree via formatSubAgentProgress.
+					// Do not overwrite with tool-level ❌ — it loses the child agent tree and may misleadingly mark failure.
+					// Instead, mark the SubAgent progress as done (🔄 → ✅) while preserving the child agent tree.
+					if tc.Name == "SubAgent" {
+						progressLines[progressStartIdx+entry.index] = strings.Replace(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+					} else {
+						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+					}
 				}
 			} else {
 				execResults[entry.index].content = result.Summary
@@ -937,11 +945,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}).Debugf("Tool done: %s", resultPreview)
 
 				if autoNotify {
-					icon := "✅"
-					if result.IsError {
-						icon = "❌"
+					// SubAgent progress callback already wrote a meaningful progress tree.
+					// Mark SubAgent as done (🔄 → ✅) without overwriting the tree.
+					if tc.Name == "SubAgent" {
+						progressLines[progressStartIdx+entry.index] = strings.Replace(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+					} else {
+						icon := "✅"
+						if result.IsError {
+							icon = "❌"
+						}
+						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> %s %s (%s)", icon, toolLabel, elapsed.Round(time.Millisecond))
 					}
-					progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> %s %s (%s)", icon, toolLabel, elapsed.Round(time.Millisecond))
 				}
 			}
 		}

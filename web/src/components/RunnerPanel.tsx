@@ -1,5 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 
+// ── Constants ──
+const BUILTIN_DOCKER_NAME = '__docker__'
+
 // ── Types ──
 
 interface RunnerInfo {
@@ -246,7 +249,7 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
                   >
                     ⋯
                   </button>
-                  {menuOpen === runner.name && (
+                  {menuOpen === runner.name && runner.name !== BUILTIN_DOCKER_NAME && (
                     <div className="runner-menu" onClick={e => e.stopPropagation()}>
                       <button
                         className="runner-menu-item"
@@ -273,17 +276,20 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
 
               {/* Info line */}
               <div className="runner-card-info">
-                <span>{modeLabel(runner.mode)}</span>
-                {runner.docker_image && (
+                <span>{runner.name === BUILTIN_DOCKER_NAME ? '🐳 Docker Sandbox (内置)' : modeLabel(runner.mode)}</span>
+                {runner.name !== BUILTIN_DOCKER_NAME && runner.docker_image && (
                   <span className="runner-card-meta">· {runner.docker_image}</span>
+                )}
+                {runner.name === BUILTIN_DOCKER_NAME && (
+                  <span className="runner-card-meta">· {runner.docker_image || '内置环境'}</span>
                 )}
                 {runner.workspace && (
                   <span className="runner-card-meta">· {shortPath(runner.workspace)}</span>
                 )}
               </div>
 
-              {/* Connect command (shown for active or expanded) */}
-              {(activeRunner === runner.name || copied === runner.name) && (
+              {/* Connect command (shown for active or expanded, but not for builtin docker) */}
+              {(activeRunner === runner.name || copied === runner.name) && runner.name !== BUILTIN_DOCKER_NAME && (
                 <div className="runner-card-command">
                   <code className="runner-command-text">{buildCommand(runner)}</code>
                   <button

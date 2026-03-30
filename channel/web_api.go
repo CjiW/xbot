@@ -449,6 +449,10 @@ func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusServiceUnavailable, runnerActiveResponse{OK: false, Error: "runner management not configured"})
 			return
 		}
+		if name == tools.BuiltinDockerRunnerName {
+			writeJSON(w, http.StatusBadRequest, runnerActiveResponse{OK: false, Error: "built-in docker sandbox cannot be deleted"})
+			return
+		}
 		if err := wc.callbacks.RunnerDelete(senderID, name); err != nil {
 			writeJSON(w, http.StatusInternalServerError, runnerActiveResponse{OK: false, Error: err.Error()})
 			return

@@ -39,6 +39,9 @@ type dockerContainer struct {
 
 func (s *DockerSandbox) Name() string { return "docker" }
 
+// Image returns the configured docker image name.
+func (s *DockerSandbox) Image() string { return s.image }
+
 // Workspace returns the sandbox workspace root directory for the given user.
 func (s *DockerSandbox) Workspace(_ string) string { return "/workspace" }
 

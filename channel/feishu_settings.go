@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	log "xbot/logger"
+
+	"xbot/tools"
 )
 
 const settingsCardActionPrefix = "settings_"
@@ -336,6 +338,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if runnerName == "" {
 			return nil, fmt.Errorf("缺少 runner 名称")
 		}
+		if runnerName == tools.BuiltinDockerRunnerName {
+			return nil, fmt.Errorf("内置 Docker Sandbox 不可删除")
+		}
 		if err := f.settingsCallbacks.RunnerDelete(senderID, runnerName); err != nil {
 			return nil, fmt.Errorf("删除 runner 失败: %v", err)
 		}
@@ -467,13 +472,18 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string, o SettingsCardOp
 			}
 
 			for _, r := range runners {
-				statusIcon := "⚫"
-				if r.Online {
-					statusIcon = "🟢"
+				isBuiltin := r.Name == tools.BuiltinDockerRunnerName
+				statusIcon := "🟢"
+				if !r.Online {
+					statusIcon = "⚫"
 				}
 				activeTag := ""
 				if r.Name == activeName {
 					activeTag = " ← 活跃"
+				}
+				displayName := r.Name
+				if isBuiltin {
+					displayName = "Docker Sandbox (内置)"
 				}
 				modeTag := "原生"
 				if r.Mode == "docker" {
@@ -483,12 +493,15 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string, o SettingsCardOp
 				if r.Workspace != "" {
 					wsTag = fmt.Sprintf(" · %s", r.Workspace)
 				}
+				if isBuiltin && r.DockerImage != "" {
+					wsTag = fmt.Sprintf(" · %s", r.DockerImage)
+				}
 				elements = append(elements, map[string]any{
 					"tag":     "markdown",
-					"content": fmt.Sprintf("%s **%s**%s (%s%s)", statusIcon, r.Name, activeTag, modeTag, wsTag),
+					"content": fmt.Sprintf("%s **%s**%s (%s%s)", statusIcon, displayName, activeTag, modeTag, wsTag),
 				})
 
-				// Buttons: set active + delete (only if not the only runner or not active)
+				// Buttons: set active + delete (builtin docker cannot be deleted)
 				var btns []map[string]any
 				if r.Name != activeName {
 					btns = append(btns, map[string]any{
@@ -503,18 +516,22 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string, o SettingsCardOp
 						},
 					})
 				}
-				btns = append(btns, map[string]any{
-					"tag":  "button",
-					"text": map[string]any{"tag": "plain_text", "content": "🗑️ 删除"},
-					"type": "danger",
-					"value": map[string]string{
-						"action_data": mustMapToJSON(map[string]string{
-							"action":      "settings_runner_delete",
-							"runner_name": r.Name,
-						}),
-					},
-				})
-				elements = append(elements, wrapButtonsInColumns(btns))
+				if !isBuiltin {
+					btns = append(btns, map[string]any{
+						"tag":  "button",
+						"text": map[string]any{"tag": "plain_text", "content": "🗑️ 删除"},
+						"type": "danger",
+						"value": map[string]string{
+							"action_data": mustMapToJSON(map[string]string{
+								"action":      "settings_runner_delete",
+								"runner_name": r.Name,
+							}),
+						},
+					})
+				}
+				if len(btns) > 0 {
+					elements = append(elements, wrapButtonsInColumns(btns))
+				}
 			}
 		}
 

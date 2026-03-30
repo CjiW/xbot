@@ -150,6 +150,7 @@ func SetRunnerTokenDB(db *sql.DB) {
 	store := NewRunnerTokenStore(db)
 	switch sb := globalSandbox.(type) {
 	case *SandboxRouter:
+		sb.SetTokenStore(store)
 		if sb.remote != nil {
 			sb.remote.SetTokenStore(store)
 		}

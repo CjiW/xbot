@@ -360,6 +360,18 @@ func main() {
 							}
 						}
 					}
+					// Inject built-in docker sandbox if available
+					if sb := tools.GetSandbox(); sb != nil {
+						if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
+							dockerEntry := tools.RunnerInfo{
+								Name:        tools.BuiltinDockerRunnerName,
+								Mode:        "docker",
+								DockerImage: router.DockerImage(),
+								Online:      true,
+							}
+							runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
+						}
+					}
 					return runners, nil
 				},
 				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
@@ -646,6 +658,18 @@ func main() {
 					if rs, ok := sb.(*tools.RemoteSandbox); ok {
 						for i := range runners {
 							runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
+						}
+					}
+					// Inject built-in docker sandbox if available
+					if sb := tools.GetSandbox(); sb != nil {
+						if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
+							dockerEntry := tools.RunnerInfo{
+								Name:        tools.BuiltinDockerRunnerName,
+								Mode:        "docker",
+								DockerImage: router.DockerImage(),
+								Online:      true,
+							}
+							runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
 						}
 					}
 				}

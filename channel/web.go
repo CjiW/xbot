@@ -5,10 +5,8 @@ package channel
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -327,9 +325,6 @@ type WebChannel struct {
 	// Static files (external directory)
 	staticDir string
 
-	// File uploads directory
-	uploadDir string
-
 	// Working directory (workspace) — used to copy uploaded files into sandbox-accessible path
 	workDir string
 
@@ -360,13 +355,6 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 func (wc *WebChannel) SetStaticDir(dir string) {
 	if dir != "" {
 		wc.staticDir = filepath.Clean(dir)
-	}
-}
-
-// SetUploadDir sets the directory for file uploads.
-func (wc *WebChannel) SetUploadDir(dir string) {
-	if dir != "" {
-		wc.uploadDir = filepath.Clean(dir)
 	}
 }
 
@@ -433,7 +421,6 @@ func (wc *WebChannel) Start() error {
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
-	mux.HandleFunc("/api/files/", wc.authMiddleware(wc.handleFileDownload))
 
 	// Static files
 	if wc.staticDir != "" {
@@ -682,162 +669,87 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				To:         bus.NewIMAddress("web", chatID),
 			}
 			continue
-
 		case "message":
-			if msg.Content == "" && len(msg.FileIDs) == 0 && len(msg.UploadKeys) == 0 {
+			if msg.Content == "" && len(msg.UploadKeys) == 0 {
 				continue
 			}
 
-		default:
-			continue
-		}
+			var mediaPaths []string
+			originalContent := msg.Content
+			content := msg.Content
 
-		// Send to message bus
-		var mediaPaths []string
-		originalContent := msg.Content // keep original text for user_echo matching
-		content := msg.Content
-		if len(msg.FileIDs) > 0 && wc.uploadDir != "" {
-			for i, fid := range msg.FileIDs {
-				uploadPath := filepath.Join(wc.uploadDir, "web", fid)
-				mediaPaths = append(mediaPaths, uploadPath)
-
-				// Use original file name if provided, fallback to fid
-				displayName := fid
-				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
-					displayName = filepath.Base(msg.FileNames[i]) // sanitize: prevent path traversal
-				}
-
-				ext := strings.ToLower(filepath.Ext(fid))
-				if isImageExt(ext) {
-					// For image files, embed as base64 in content so LLM can see them
-					if data, err := os.ReadFile(uploadPath); err == nil {
-						mimeType := mime.TypeByExtension(ext)
-						if mimeType == "" {
-							mimeType = http.DetectContentType(data)
-						}
-						b64 := base64.StdEncoding.EncodeToString(data)
-						content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![uploaded image](data:%s;base64,%s)", displayName, len(data), mimeType, b64)
+			// Handle OSS upload_keys: files already uploaded to cloud by frontend
+			// Web uploads MUST go through OSS — local file storage is never allowed for security
+			if len(msg.UploadKeys) > 0 && wc.ossProvider != nil {
+				for i, key := range msg.UploadKeys {
+					displayName := key
+					if i < len(msg.FileNames) && msg.FileNames[i] != "" {
+						displayName = filepath.Base(msg.FileNames[i])
 					}
-				} else {
-					// For non-image files, write to user's sandbox so tools can access them.
-					// Try remote sandbox first (via callback), then fall back to local workDir copy.
-					fileData, readErr := os.ReadFile(uploadPath)
-					if readErr != nil {
-						content += fmt.Sprintf("\n\n📎 [附件: %s] (读取文件失败)", displayName)
+					var fileSize int64
+					if i < len(msg.FileSizes) {
+						fileSize = msg.FileSizes[i]
+					}
+
+					// Get signed download URL (private OSS requires signed URLs with TTL)
+					downloadURL, err := wc.ossProvider.GetDownloadURL(key)
+					if err != nil {
+						log.WithError(err).WithField("key", key).Warn("Failed to get download URL for OSS file")
+						content += fmt.Sprintf("\n\n📎 [用户上传文件: %s] (获取下载链接失败)", displayName)
 						continue
 					}
-					sandboxRelPath := "uploads/" + displayName
-					written := false
-					// Try remote/server sandbox via callback
-					if wc.callbacks.SandboxWriteFile != nil {
-						if sandboxPath, err := wc.callbacks.SandboxWriteFile(c.userID, sandboxRelPath, fileData, 0644); err == nil && sandboxPath != "" {
-							content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: %s/%s", displayName, sandboxPath, displayName)
-							written = true
-						} else if err != nil {
-							log.WithError(err).WithField("file", displayName).Warn("Failed to write file to sandbox via callback")
-						}
+
+					ext := strings.ToLower(filepath.Ext(displayName))
+					if isImageExt(ext) {
+						content += fmt.Sprintf("\n\n<image url=\"%s\" name=\"%s\" size=\"%d\" />\n![%s](%s)", downloadURL, displayName, fileSize, displayName, downloadURL)
+					} else {
+						content += fmt.Sprintf("\n\n<file name=\"%s\" url=\"%s\" size=\"%d\" />", displayName, downloadURL, fileSize)
 					}
-					// Fallback: local workDir copy (for docker sandbox)
-					if !written && wc.workDir != "" {
-						userWsDir := filepath.Join(wc.workDir, ".xbot", "users", c.userID, "workspace")
-						sandboxFileDir := filepath.Join(userWsDir, "uploads")
-						sandboxFilePath := filepath.Join(sandboxFileDir, displayName)
-						if err := os.MkdirAll(sandboxFileDir, 0755); err == nil {
-							if err := copyFile(uploadPath, sandboxFilePath); err == nil {
-								content += fmt.Sprintf("\n\n📎 [附件: %s] 已下载到沙箱工作目录，路径: /workspace/uploads/%s", displayName, displayName)
-								written = true
-							} else {
-								content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (复制到工作目录失败)", displayName, uploadPath)
-							}
-						} else {
-							content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s (创建目录失败)", displayName, uploadPath)
-						}
-					}
-					if !written {
-						content += fmt.Sprintf("\n\n📎 [附件: %s] 路径: %s", displayName, uploadPath)
-					}
-
 				}
 			}
-		} else if len(msg.FileIDs) > 0 && wc.uploadDir == "" {
-			log.Warn("Web channel received file_ids but uploadDir is not configured")
-			for _, fid := range msg.FileIDs {
-				content += fmt.Sprintf("\n\n📎 [附件: %s]", fid)
+
+			metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
+
+			if si.feishuUserID != "" {
+				metadata["feishu_user_id"] = si.feishuUserID
 			}
-		}
 
-		// Handle OSS upload_keys (qiniu mode): files already uploaded to cloud by frontend
-		if len(msg.UploadKeys) > 0 && wc.ossProvider != nil {
-			for i, key := range msg.UploadKeys {
-				displayName := key
-				if i < len(msg.FileNames) && msg.FileNames[i] != "" {
-					displayName = filepath.Base(msg.FileNames[i])
+			// Echo back complete user message (with file info) so frontend can update optimistic message
+			if content != originalContent && len(msg.UploadKeys) > 0 {
+				echoMsg := wsMessage{
+					Type:            "user_echo",
+					Content:         content,
+					OriginalContent: originalContent,
+					TS:              time.Now().Unix(),
 				}
-				var fileSize int64
-				if i < len(msg.FileSizes) {
-					fileSize = msg.FileSizes[i]
-				}
-
-				// Get signed download URL
-				downloadURL, err := wc.ossProvider.GetDownloadURL(key)
-				if err != nil {
-					log.WithError(err).WithField("key", key).Warn("Failed to get download URL for OSS file")
-					content += fmt.Sprintf("\n\n📎 [用户上传文件: %s] (获取下载链接失败)", displayName)
-					continue
-				}
-
-				ext := strings.ToLower(filepath.Ext(displayName))
-				if isImageExt(ext) {
-					// For images, use markdown image syntax with signed URL
-					content += fmt.Sprintf("\n\n📎 [用户上传图片: %s (%d bytes)]\n![%s](%s)", displayName, fileSize, displayName, downloadURL)
-				} else {
-					// For non-image files, provide download URL for download_file tool
-					content += fmt.Sprintf("\n\n📎 [用户上传文件: %s (%d bytes)] (访问URL: %s)", displayName, fileSize, downloadURL)
-				}
+				wc.hub.sendToClient(chatID, echoMsg)
 			}
-		}
 
-		metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
-		if si.feishuUserID != "" {
-			metadata["feishu_user_id"] = si.feishuUserID
-		}
-
-		// Echo back complete user message (with file info) so frontend can update optimistic message
-		if content != originalContent && (len(msg.FileIDs) > 0 || len(msg.UploadKeys) > 0) {
-			echoMsg := wsMessage{
-				Type:            "user_echo",
-				Content:         content,
-				OriginalContent: originalContent,
-				TS:              time.Now().Unix(),
+			// Eagerly save user message so history API can return it during processing.
+			// Skip bang commands (! prefix) — they should never be persisted.
+			trimmed := strings.TrimSpace(content)
+			if len(trimmed) <= 1 || trimmed[0] != '!' {
+				_ = eagerSaveUserMsg(wc.db, c.userID, content)
+				metadata["user_msg_eager_saved"] = "true"
 			}
-			wc.hub.sendToClient(chatID, echoMsg)
-		}
 
-		// Eagerly save user message so history API can return it during processing.
-		// Skip bang commands (! prefix) — they should never be persisted.
-		// Eagerly save user message so history API can return it during processing.
-		// Skip bang commands (! prefix) — they should never be persisted.
-		trimmed := strings.TrimSpace(content)
-		if len(trimmed) <= 1 || trimmed[0] != '!' {
-			_ = eagerSaveUserMsg(wc.db, c.userID, content)
-			metadata["user_msg_eager_saved"] = "true"
-		}
-
-		wc.msgBus.Inbound <- bus.InboundMessage{
-			Channel:    "web",
-			SenderID:   c.userID,
-			SenderName: si.username,
-			ChatID:     chatID,
-			ChatType:   "p2p",
-			Content:    content,
-			Media:      mediaPaths,
-			Time:       time.Now(),
-			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-			From:       bus.NewIMAddress("web", c.userID),
-			To:         bus.NewIMAddress("web", chatID),
-			Metadata:   metadata,
+			wc.msgBus.Inbound <- bus.InboundMessage{
+				Channel:    "web",
+				SenderID:   c.userID,
+				SenderName: si.username,
+				ChatID:     chatID,
+				ChatType:   "p2p",
+				Content:    content,
+				Media:      mediaPaths,
+				Time:       time.Now(),
+				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				From:       bus.NewIMAddress("web", c.userID),
+				To:         bus.NewIMAddress("web", chatID),
+				Metadata:   metadata,
+			}
 		}
 	}
+
 }
 
 // ---------------------------------------------------------------------------

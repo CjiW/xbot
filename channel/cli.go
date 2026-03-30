@@ -231,9 +231,9 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(80, 20)
 
-	// Markdown 渲染器（暗色主题适配终端）
+	// Markdown 渲染器（固定暗色主题，避免查询终端背景色导致 OSC 11 响应泄漏到 textarea）
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(78),
 	)
 
@@ -284,6 +284,9 @@ type cliTickMsg struct{}
 
 // Init 初始化
 func (m *cliModel) Init() tea.Cmd {
+	// 清空 textarea，吸收可能残留的终端 OSC 响应序列（如 ]11;rgb:...）
+	m.textarea.Reset()
+
 	return tea.Batch(
 		textarea.Blink, // 光标闪烁
 		tickCmd(),      // 启动定时器
@@ -383,9 +386,9 @@ func (m *cliModel) handleResize(width, height int) {
 
 	// 调整 Markdown 渲染器的换行宽度
 	if m.renderer != nil && width > 2 {
-		// 重新创建渲染器以适应新宽度
+		// 重新创建渲染器以适应新宽度（固定暗色主题，避免 OSC 查询）
 		m.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(width-6),
 		)
 	}

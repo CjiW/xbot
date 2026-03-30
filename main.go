@@ -342,26 +342,7 @@ func main() {
 					tools.NewRunnerTokenStore(db).Revoke(senderID)
 					return nil
 				},
-				RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return nil, fmt.Errorf("runner management not configured")
-					}
-					store := tools.NewRunnerTokenStore(db)
-					runners, err := store.ListRunners(senderID)
-					if err != nil {
-						return nil, err
-					}
-					// Populate online status from RemoteSandbox
-					if sb := tools.GetSandbox(); sb != nil {
-						if rs, ok := sb.(*tools.RemoteSandbox); ok {
-							for i := range runners {
-								runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
-							}
-						}
-					}
-					return runners, nil
-				},
+				RunnerList: tools.ListAllRunners,
 				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
 					db := tools.GetRunnerTokenDB()
 					if db == nil {
@@ -631,26 +612,7 @@ func main() {
 				tools.NewRunnerTokenStore(db).Revoke(senderID)
 				return nil
 			},
-			RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-				db := tools.GetRunnerTokenDB()
-				if db == nil {
-					return nil, fmt.Errorf("runner management not configured")
-				}
-				store := tools.NewRunnerTokenStore(db)
-				runners, err := store.ListRunners(senderID)
-				if err != nil {
-					return nil, err
-				}
-				// Populate online status from RemoteSandbox
-				if sb := tools.GetSandbox(); sb != nil {
-					if rs, ok := sb.(*tools.RemoteSandbox); ok {
-						for i := range runners {
-							runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
-						}
-					}
-				}
-				return runners, nil
-			},
+			RunnerList: tools.ListAllRunners,
 			RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
 				db := tools.GetRunnerTokenDB()
 				if db == nil {

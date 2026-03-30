@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 )
@@ -469,5 +470,137 @@ func TestSandboxRouter_MultipleUsers_IndependentRouting(t *testing.T) {
 		if sb.Name() != tt.expected {
 			t.Errorf("SandboxForUser(%q).Name() = %q, want %q", tt.user, sb.Name(), tt.expected)
 		}
+	}
+}
+
+// ============================================================================
+// SandboxForUser active_runner 偏好测试
+// 验证用户设置 active_runner=__docker__ 后，路由行为正确
+// ============================================================================
+
+// newTestDB 创建内存 SQLite DB 并初始化 user_settings 表
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE user_settings (
+			channel TEXT NOT NULL,
+			sender_id TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT,
+			updated_at INTEGER,
+			PRIMARY KEY (channel, sender_id, key)
+		);
+		CREATE INDEX idx_user_settings_sender ON user_settings(channel, sender_id);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestSandboxForUser_ActiveRunner_Docker(t *testing.T) {
+	// 用户设置 active_runner=__docker__，即使有 remote 连接也应走 docker
+	db := newTestDB(t)
+	store := NewRunnerTokenStore(db)
+	if err := store.SetActiveRunner("userA", BuiltinDockerRunnerName); err != nil {
+		t.Fatal(err)
+	}
+
+	// 创建同时有 docker + remote 的路由器，userA 有 remote 连接
+	r := newFullRouter("userA")
+	r.SetTokenStore(store)
+
+	sb := r.SandboxForUser("userA")
+	if sb.Name() != "docker" {
+		t.Errorf("SandboxForUser(userA) = %q, want %q (active_runner=__docker__ should override remote)", sb.Name(), "docker")
+	}
+}
+
+func TestSandboxForUser_ActiveRunner_Docker_ResolveConsistent(t *testing.T) {
+	// 验证 resolve() 和 SandboxForUser() 行为一致
+	db := newTestDB(t)
+	store := NewRunnerTokenStore(db)
+	if err := store.SetActiveRunner("userA", BuiltinDockerRunnerName); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newFullRouter("userA")
+	r.SetTokenStore(store)
+
+	sb1 := r.SandboxForUser("userA")
+	sb2 := r.resolve("userA")
+	if sb1.Name() != sb2.Name() {
+		t.Errorf("SandboxForUser()=%q != resolve()=%q (should be consistent)", sb1.Name(), sb2.Name())
+	}
+	if sb1.Name() != "docker" {
+		t.Errorf("resolve(userA) = %q, want %q", sb1.Name(), "docker")
+	}
+}
+
+func TestSandboxForUser_ActiveRunner_NotSet_Fallback(t *testing.T) {
+	// 用户未设置 active_runner，有 remote 连接 → 走 remote
+	db := newTestDB(t)
+	store := NewRunnerTokenStore(db)
+
+	r := newFullRouter("userA")
+	r.SetTokenStore(store)
+
+	sb := r.SandboxForUser("userA")
+	if sb.Name() != "remote" {
+		t.Errorf("SandboxForUser(userA) = %q, want %q (fallback to remote when active_runner not set)", sb.Name(), "remote")
+	}
+}
+
+func TestSandboxForUser_ActiveRunner_NonExistent_Fallback(t *testing.T) {
+	// 用户设置了不存在的 runner name → fallback 到 remote/docker
+	db := newTestDB(t)
+	store := NewRunnerTokenStore(db)
+	if err := store.SetActiveRunner("userA", "nonexistent-runner"); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newFullRouter("userA")
+	r.SetTokenStore(store)
+
+	sb := r.SandboxForUser("userA")
+	if sb.Name() != "remote" {
+		t.Errorf("SandboxForUser(userA) = %q, want %q (fallback when active_runner doesn't match)", sb.Name(), "remote")
+	}
+}
+
+func TestSandboxRouter_HasDocker(t *testing.T) {
+	rNone := newNoneRouter()
+	if rNone.HasDocker() {
+		t.Error("newNoneRouter().HasDocker() = true, want false")
+	}
+
+	rDocker := newDockerRouter()
+	if !rDocker.HasDocker() {
+		t.Error("newDockerRouter().HasDocker() = false, want true")
+	}
+
+	rFull := newFullRouter()
+	if !rFull.HasDocker() {
+		t.Error("newFullRouter().HasDocker() = false, want true")
+	}
+}
+
+func TestSandboxRouter_DockerImage(t *testing.T) {
+	r := &SandboxRouter{
+		docker: &DockerSandbox{image: "ubuntu:22.04"},
+		none:   &NoneSandbox{},
+	}
+	if img := r.DockerImage(); img != "ubuntu:22.04" {
+		t.Errorf("DockerImage() = %q, want %q", img, "ubuntu:22.04")
+	}
+
+	rNoDocker := newNoneRouter()
+	if img := rNoDocker.DockerImage(); img != "" {
+		t.Errorf("DockerImage() = %q, want empty", img)
 	}
 }

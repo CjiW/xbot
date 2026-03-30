@@ -10,22 +10,23 @@ import (
 	log "xbot/logger"
 )
 
+// BuiltinDockerRunnerName is the special name for the built-in docker sandbox.
+// Used in user_settings.active_runner to indicate "use server-side docker sandbox".
+const BuiltinDockerRunnerName = "__docker__"
+
 // SandboxRouter implements Sandbox interface and routes per-user to either
 // DockerSandbox, RemoteSandbox, or NoneSandbox based on user state.
 //
-// Routing rules:
-//   - If the user has an active RemoteSandbox connection → remote
-//   - Otherwise → docker (if enabled)
-//   - Fallback → none
-//
-// The same user always routes to the same sandbox type within a session.
-// Cross-mode failover (docker ↔ remote) is intentionally NOT supported
-// because the two have completely different filesystems.
+// Routing rules (per-user, determined by user_settings.active_runner):
+//   - active_runner == BuiltinDockerRunnerName → docker (if enabled)
+//   - active_runner == specific remote name → remote (if connected)
+//   - Fallback: remote if connected, then docker, then none
 type SandboxRouter struct {
-	docker *DockerSandbox
-	remote *RemoteSandbox
-	none   *NoneSandbox
-	denied *DeniedSandbox
+	docker     *DockerSandbox
+	remote     *RemoteSandbox
+	none       *NoneSandbox
+	denied     *DeniedSandbox
+	tokenStore *RunnerTokenStore
 
 	// defaultMode is used when SandboxForUser can't determine per-user routing.
 	// "docker" if docker is enabled, "remote" if remote is enabled, "none" otherwise.
@@ -93,25 +94,53 @@ func (r *SandboxRouter) Name() string {
 	return r.defaultMode
 }
 
+// HasDocker reports whether the built-in docker sandbox is available.
+func (r *SandboxRouter) HasDocker() bool {
+	return r.docker != nil
+}
+
+// DockerImage returns the configured docker image name (e.g. "ubuntu:22.04").
+func (r *SandboxRouter) DockerImage() string {
+	if r.docker == nil {
+		return ""
+	}
+	return r.docker.Image()
+}
+
+// SetTokenStore stores the runner token store for reading user active_runner preferences.
+func (r *SandboxRouter) SetTokenStore(store *RunnerTokenStore) {
+	r.tokenStore = store
+}
+
 // SandboxForUser returns the user-specific sandbox instance.
 // This is the key method for per-user routing — buildToolContext uses it
 // to inject the correct sandbox into ToolContext.Sandbox.
 //
-// Routing:
-//   - If user has a connected remote runner → use it
-//   - If user is a pure web user (senderID starts with "web-"):
-//     — WEB_USER_SERVER_RUNNER=true (default): fallback to docker
-//     — WEB_USER_SERVER_RUNNER=false: no fallback (remote only)
-//   - Otherwise → docker fallback
+// Routing priority:
+//  1. If user has set active_runner to BuiltinDockerRunnerName → docker
+//  2. If user has a connected remote runner matching active_runner name → remote
+//  3. If user has any connected remote runner → remote
+//  4. Fallback → docker (if enabled), then none
 func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
-	// Check remote runner first
+	// 1. Check explicit active_runner preference
+	if userID != "" && r.tokenStore != nil {
+		if activeName, err := r.tokenStore.GetActiveRunner(userID); err == nil {
+			if activeName == BuiltinDockerRunnerName {
+				if r.docker != nil {
+					return r.docker
+				}
+			}
+		}
+	}
+
+	// 2. Check remote runner (explicit active name or any connection)
 	if userID != "" && r.remote != nil {
 		if r.remote.HasUser(userID) {
 			return r.remote
 		}
 	}
 
-	// Pure web user without remote runner — denied by default
+	// 3. Pure web user without remote runner — denied by default
 	if strings.HasPrefix(userID, "web-") {
 		webServerRunner := false
 		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
@@ -227,23 +256,5 @@ func (r *SandboxRouter) ExportAndImport(userID string) error {
 
 // resolve returns the per-user sandbox instance.
 func (r *SandboxRouter) resolve(userID string) Sandbox {
-	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
-		return r.remote
-	}
-	// Pure web user without remote runner — denied by default (same logic as SandboxForUser)
-	if strings.HasPrefix(userID, "web-") {
-		webServerRunner := false
-		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
-			if b, err := strconv.ParseBool(v); err == nil {
-				webServerRunner = b
-			}
-		}
-		if !webServerRunner {
-			return r.denied
-		}
-	}
-	if r.docker != nil {
-		return r.docker
-	}
-	return r.none
+	return r.SandboxForUser(userID)
 }

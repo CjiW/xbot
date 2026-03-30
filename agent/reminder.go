@@ -6,20 +6,9 @@ import (
 	"xbot/llm"
 )
 
-// ReminderContext 提供构建系统提醒所需的上下文信息（token 预算等）。
-type ReminderContext struct {
-	// MaxContextTokens 最大上下文 token 数（0 = 不显示 context_edit 提示）
-	MaxContextTokens int
-	// UsedTokens 当前消息已用 token 数
-	UsedTokens int
-	// ToolDefTokens 工具定义占用的 token 数
-	ToolDefTokens int
-}
-
-// BuildSystemReminder 构建系统提醒，追加到 tool message content 末尾。
-// agentID 为 "main" 时是主 Agent，否则为 SubAgent。
-// rc 为可选的上下文信息（nil 或 MaxContextTokens==0 时不显示 context_edit 提示）。
-func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string, agentID string, rc *ReminderContext) string {
+// BuildSystemReminder builds a system reminder appended to the last tool message.
+// agentID "main" = main Agent, otherwise SubAgent.
+func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string, agentID string) string {
 	if len(messages) == 0 {
 		return ""
 	}
@@ -67,30 +56,6 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	parts = append(parts, "- 优先编辑已有文件，避免创建新文件")
 	parts = append(parts, "- 修改后运行测试验证")
 	parts = append(parts, "- 错误时先分析根因再修改")
-
-	// 4. 双阶段 context_edit 提示
-	// 根据上下文 token 使用率，引导 LLM 主动清理不再需要的中间过程。
-	// 阶段 1（弱提示）：40%-60% → 温和建议
-	// 阶段 2（警告）：>60% → 强烈建议，列出具体清理目标
-	if rc != nil && rc.MaxContextTokens > 0 {
-		totalTokens := rc.UsedTokens + rc.ToolDefTokens
-		if totalTokens > 0 && rc.MaxContextTokens > 0 {
-			ratio := float64(totalTokens) / float64(rc.MaxContextTokens)
-			if ratio >= 0.4 {
-				pct := int(ratio * 100)
-				if ratio >= 0.6 {
-					// 阶段 2：强烈警告
-					parts = append(parts, "⚠️ 上下文压力警告：请立即清理不再需要的中间数据")
-					parts = append(parts, fmt.Sprintf("- 当前上下文已占用 %d%%（%d / %d tokens）", pct, totalTokens, rc.MaxContextTokens))
-					parts = append(parts, "- 用 context_edit action=list 检查消息，对已完成的旧步骤用 delete 删除")
-					parts = append(parts, "- 对大段已读代码用 truncate 保留摘要即可，详细内容可通过 offload_recall 恢复")
-				} else {
-					// 阶段 1：温和建议
-					parts = append(parts, fmt.Sprintf("- 上下文已占用 %d%%，如已完成某些步骤，可用 context_edit 清理中间过程", pct))
-				}
-			}
-		}
-	}
 
 	return "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
 }

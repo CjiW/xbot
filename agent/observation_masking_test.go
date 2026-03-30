@@ -194,7 +194,7 @@ func TestMaskOldToolResults_WithThinkBlocks(t *testing.T) {
 	messages := []llm.ChatMessage{
 		// Group 1 — 应被遮蔽
 		{Role: "assistant", Content: "I need to think about this.\n<thinking>Reasoning about the approach</thinking>\nlet me check", ToolCalls: []llm.ToolCall{{ID: "tc1", Name: "Shell"}}},
-		{Role: "tool", Content: "output data", ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{}`},
+		{Role: "tool", Content: "output data that is long enough to exceed the 300 char threshold " + string(make([]byte, 500)), ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{}`},
 		// Group 2 — 保留
 		{Role: "assistant", Content: "checking again", ToolCalls: []llm.ToolCall{{ID: "tc2", Name: "Shell"}}},
 		{Role: "tool", Content: "recent output", ToolName: "Shell", ToolCallID: "tc2", ToolArguments: `{}`},
@@ -205,13 +205,9 @@ func TestMaskOldToolResults_WithThinkBlocks(t *testing.T) {
 		t.Fatalf("expected 1 masked, got %d", count)
 	}
 
-	// Think blocks 应被 strip
-	if result[0].Content == messages[0].Content {
-		t.Fatal("assistant content should have think blocks stripped")
-	}
-	stripped := llm.StripThinkBlocks(messages[0].Content)
-	if result[0].Content != stripped {
-		t.Fatalf("expected stripped content %q, got %q", stripped, result[0].Content)
+	// Think blocks 应被保留（不 strip）
+	if result[0].Content != messages[0].Content {
+		t.Fatalf("assistant content with think blocks should be preserved, got %q", result[0].Content)
 	}
 }
 
@@ -237,9 +233,9 @@ func TestMaskOldToolResults_AlreadyMaskedSkipped(t *testing.T) {
 		// Group 1: already-masked tool result — should NOT be re-masked
 		{Role: "assistant", Content: "checking", ToolCalls: []llm.ToolCall{{ID: "tc1", Name: "Shell"}}},
 		{Role: "tool", Content: "📂 [masked:mk_old12345] Shell(ls) — 500 chars — 结果已遮蔽", ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{"command":"ls"}`},
-		// Group 2: normal tool result
+		// Group 2: normal tool result (long enough to be masked)
 		{Role: "assistant", Content: "again", ToolCalls: []llm.ToolCall{{ID: "tc2", Name: "Read"}}},
-		{Role: "tool", Content: "file content", ToolName: "Read", ToolCallID: "tc2", ToolArguments: `{"path":"test.go"}`},
+		{Role: "tool", Content: "file content that is long enough to be masked " + string(make([]byte, 500)), ToolName: "Read", ToolCallID: "tc2", ToolArguments: `{"path":"test.go"}`},
 		// Group 3 (kept): recent tool result
 		{Role: "assistant", Content: "final", ToolCalls: []llm.ToolCall{{ID: "tc3", Name: "Grep"}}},
 		{Role: "tool", Content: "grep results", ToolName: "Grep", ToolCallID: "tc3", ToolArguments: `{}`},

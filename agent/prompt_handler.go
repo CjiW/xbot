@@ -131,10 +131,7 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 	// 清除记忆整理状态，取消正在进行的整理任务（多路径协调）
 	tenantKey := msg.Channel + ":" + msg.ChatID
 
-	// Phase 2: 清理智能触发状态
-	a.triggerProviders.Delete(tenantKey)
-
-	// Phase 2: 清理 offload 数据
+	// 清理 offload 数据
 	if a.offloadStore != nil {
 		a.offloadStore.CleanSession(tenantKey)
 	}

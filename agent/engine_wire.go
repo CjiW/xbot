@@ -203,16 +203,6 @@ func (a *Agent) buildMainRunConfig(
 	cfg.ContextManager = a.GetContextManager()
 	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
 
-	// Phase 2: 注入 TriggerProvider（跨 Run() 持久化）
-	if smart, ok := cfg.ContextManager.(SmartCompressor); ok {
-		pm := smart.(*phase1Manager)
-		pm.SetTriggerProvider(a.getTriggerProvider(sessionKey))
-		// 话题分区：启用时注入 TopicDetector 到压缩流程
-		if a.enableTopicIsolation {
-			pm.SetTopicDetector(a.topicDetector)
-		}
-	}
-
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
 		return a.spawnSubAgent(ctx, inMsg)
@@ -226,9 +216,6 @@ func (a *Agent) buildMainRunConfig(
 
 	// ContextEditor — Context Editing（精确编辑上下文）
 	cfg.ContextEditor = a.contextEditor
-
-	// RecallTracker — 摘要精化追踪器
-	cfg.RecallTracker = a.recallTracker
 
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {

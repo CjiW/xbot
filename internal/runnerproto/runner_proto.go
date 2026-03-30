@@ -35,6 +35,17 @@ const (
 	ProtoOK          = "ok"
 )
 
+// Stdio streaming protocol for remote MCP server support.
+// Allows the server to start a long-running process on the runner and
+// proxy its stdin/stdout over WebSocket.
+const (
+	ProtoStdioStart = "stdio_start" // Server → Runner: start process (request/response)
+	ProtoStdioWrite = "stdio_write" // Server → Runner: write to stdin (fire-and-forget)
+	ProtoStdioClose = "stdio_close" // Server → Runner: close stdin / stop process (request/response)
+	ProtoStdioData  = "stdio_data"  // Runner → Server: stdout data (push)
+	ProtoStdioExit  = "stdio_exit"  // Runner → Server: process exited (push)
+)
+
 // RunnerMessage is the envelope for all WebSocket messages.
 type RunnerMessage struct {
 	ID     string          `json:"id,omitempty"`
@@ -179,6 +190,46 @@ func MakeError(id string, code, message string) *RunnerMessage {
 // MakeOK creates an OK RunnerMessage.
 func MakeOK(id string) *RunnerMessage {
 	return &RunnerMessage{ID: id, Type: ProtoOK}
+}
+
+// Stdio streaming request/response types.
+
+// StdioStartRequest asks the runner to start a long-running process.
+type StdioStartRequest struct {
+	StreamID string   `json:"stream_id"`
+	Command  string   `json:"command"`
+	Args     []string `json:"args,omitempty"`
+	Env      []string `json:"env,omitempty"`
+	Dir      string   `json:"dir,omitempty"`
+}
+
+// StdioStartResponse confirms the process was started.
+type StdioStartResponse struct {
+	StreamID string `json:"stream_id"`
+}
+
+// StdioWriteRequest sends data to the process's stdin.
+type StdioWriteRequest struct {
+	StreamID string `json:"stream_id"`
+	Data     string `json:"data"` // base64-encoded
+}
+
+// StdioCloseRequest asks the runner to close stdin and/or kill the process.
+type StdioCloseRequest struct {
+	StreamID string `json:"stream_id"`
+}
+
+// StdioDataMessage carries stdout data from the process (runner → server push).
+type StdioDataMessage struct {
+	StreamID string `json:"stream_id"`
+	Data     string `json:"data"` // base64-encoded
+}
+
+// StdioExitMessage notifies the server that the process exited (runner → server push).
+type StdioExitMessage struct {
+	StreamID string `json:"stream_id"`
+	ExitCode int    `json:"exit_code"`
+	Error    string `json:"error,omitempty"`
 }
 
 // DefaultRequestTimeout is the default timeout for non-exec operations.

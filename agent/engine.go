@@ -152,9 +152,6 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
-	// RecallTracker 摘要精化追踪器（nil = 不启用，仅主 Agent）
-	RecallTracker *RecallTracker
-
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
@@ -403,27 +400,109 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 
-		// cachedMsgTokens 缓存 messages 的 token 数，避免在同一轮 maybeCompress 内重复计算。
-		// 值为 0 表示缓存失效（messages 已变更），需要重新计算。
-		var cachedMsgTokens int
+		cachedMsgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
+		totalTokens := cachedMsgTokens + toolTokens
 
-		// --- Layer 0: Observation Masking ---
-		// 在压缩之前先遮蔽旧的 tool result，减少上下文体积。
-		if cfg.MaskStore != nil {
-			cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
-			totalTokens := cachedMsgTokens + toolTokens
+		maxTokens := 100000
+		if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
+			maxTokens = cfg.ContextManagerConfig.MaxContextTokens
+		}
 
-			maxTokens := 100000
-			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
-				maxTokens = cfg.ContextManagerConfig.MaxContextTokens
+		// Check compaction first (before masking), using simple threshold.
+		// Cooldown prevents rapid repeated compaction after ineffective runs.
+		var cooldown *CompressCooldown
+		if pm, ok := cm.(*phase1Manager); ok {
+			cooldown = pm.Cooldown()
+		}
+
+		needCompress := cm.ShouldCompress(messages, cfg.Model, toolTokens)
+		if needCompress && cooldown != nil && !cooldown.ShouldTrigger(iteration) {
+			needCompress = false
+		}
+
+		if needCompress {
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", totalTokens))
+				notifyProgress("")
 			}
 
-			maskingThreshold := float64(maxTokens) * 0.4
+			log.Ctx(ctx).Info("Auto context compaction triggered")
+
+			result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
+			if compressErr != nil {
+				log.Ctx(ctx).WithError(compressErr).Warn("Auto context compaction failed")
+				return
+			}
+
+			oldTokenCount := cachedMsgTokens
+			messages = syncMessages(result.LLMView)
+
+			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				notifyProgress("")
+			}
+			log.Ctx(ctx).WithFields(log.Fields{
+				"new_tokens": newTokenCount,
+			}).Info("Auto context compaction completed")
+
+			GlobalMetrics.CompressEvents.Add(1)
+			GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))
+			GlobalMetrics.CompressTokensOut.Add(int64(newTokenCount))
+
+			// Record cooldown + effectiveness tracking
+			if cooldown != nil {
+				cooldown.RecordCompress(iteration)
+				if oldTokenCount > 0 {
+					reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
+					if reductionRate < 0.10 {
+						log.Ctx(ctx).WithFields(log.Fields{
+							"old_tokens": oldTokenCount,
+							"new_tokens": newTokenCount,
+							"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
+						}).Warn("Compaction ineffective (reduction < 10%), increasing cooldown")
+						cooldown.RecordIneffective()
+					} else {
+						cooldown.RecordEffective()
+					}
+				}
+			}
+
+			// Persist compaction result to session
+			if cfg.Session != nil {
+				if err := cfg.Session.Clear(); err != nil {
+					log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compaction, skipping persistence")
+				} else {
+					allOk := true
+					for _, msg := range result.SessionView {
+						assertNoSystemPersist(msg)
+						if err := cfg.Session.AddMessage(msg); err != nil {
+							log.Ctx(ctx).WithError(err).Error("Partial write during auto compaction, session may be corrupted")
+							allOk = false
+							break
+						}
+					}
+					if allOk {
+						log.Ctx(ctx).Info("Auto compaction persisted to session")
+						if hook := cm.SessionHook(); hook != nil {
+							hook.AfterPersist(ctx, cfg.Session, result)
+						}
+					} else {
+						log.Ctx(ctx).Warn("Auto compaction persistence failed, using in-memory result only")
+					}
+				}
+			}
+			return
+		}
+
+		// Layer 2: Observation masking (lightweight, no LLM call)
+		if cfg.MaskStore != nil {
+			maskingThreshold := float64(maxTokens) * 0.6
 			if float64(totalTokens) > maskingThreshold {
-				masked, count := MaskOldToolResults(messages, cfg.MaskStore, 3)
+				keepGroups := calculateKeepGroups(totalTokens, maxTokens)
+				masked, count := MaskOldToolResults(messages, cfg.MaskStore, keepGroups)
 				if count > 0 {
 					messages = syncMessages(masked)
-					cachedMsgTokens = 0 // messages 已变更，缓存失效
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
 					if autoNotify {
@@ -431,118 +510,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						notifyProgress("")
 					}
 					log.Ctx(ctx).WithField("masked_count", count).Info("Observation masking triggered")
-				}
-			}
-		}
-
-		// Phase 2: SmartCompressor 智能触发（动态阈值+冷却）
-		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil && cfg.ContextManagerConfig != nil {
-			provider := smart.TriggerProvider()
-			triggerInfo := BuildTriggerInfo(iteration, messages, toolsUsed, provider, cfg.ContextManagerConfig, cfg.Model)
-			if !smart.ShouldCompressDynamic(triggerInfo) {
-				return
-			}
-			// 智能触发命中，继续执行压缩...
-		} else if !cm.ShouldCompress(messages, cfg.Model, toolTokens) {
-			return
-		}
-
-		if autoNotify {
-			if cachedMsgTokens == 0 {
-				cachedMsgTokens, _ = llm.CountMessagesTokens(messages, cfg.Model)
-			}
-			progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", cachedMsgTokens+toolTokens))
-			notifyProgress("")
-		}
-
-		log.Ctx(ctx).Info("Auto context compression triggered via ContextManager")
-
-		result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
-		if compressErr != nil {
-			log.Ctx(ctx).WithError(compressErr).Warn("Auto context compression failed")
-			return
-		}
-
-		oldTokenCount := cachedMsgTokens
-		if oldTokenCount == 0 {
-			oldTokenCount, _ = llm.CountMessagesTokens(messages, cfg.Model)
-		}
-		messages = syncMessages(result.LLMView)
-
-		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
-		if autoNotify {
-			progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
-			notifyProgress("")
-		}
-		log.Ctx(ctx).WithFields(log.Fields{
-			"new_tokens": newTokenCount,
-		}).Info("Auto context compression completed")
-
-		// 记录压缩指标
-		GlobalMetrics.CompressEvents.Add(1)
-		GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))
-		GlobalMetrics.CompressTokensOut.Add(int64(newTokenCount))
-
-		// 摘要精化检查：压缩后评估是否需要补充高频召回信息
-		if cfg.RecallTracker != nil && cfg.RecallTracker.ShouldRefine(iteration) {
-			refinePrompt := cfg.RecallTracker.GenerateRefinePrompt()
-			if refinePrompt != "" {
-				// 将精化提示注入到压缩后的摘要中（追加到最后一条 assistant 消息）
-				for j := len(messages) - 1; j >= 0; j-- {
-					if messages[j].Role == "assistant" {
-						messages[j].Content += "\n\n" + refinePrompt
-						break
-					}
-				}
-				cfg.RecallTracker.MarkRefine(iteration)
-				GlobalMetrics.SummaryRefines.Add(1)
-				log.Ctx(ctx).Info("Summary refine prompt injected after compression")
-			}
-		}
-
-		// BUG FIX: 记录压缩迭代号 + 有效性检测。
-		// 之前从未调用 RecordCompress，导致 Cooldown.ShouldTrigger 永远返回 true，
-		// 每次迭代都触发压缩，压缩无效时形成死循环。
-		// 新增：缩减率 <10% 视为低效，连续 2 次低效后加大冷却期到 10 次迭代。
-		if smart, ok := cm.(SmartCompressor); ok && smart.TriggerProvider() != nil {
-			smart.TriggerProvider().Cooldown.RecordCompress(iteration)
-			if oldTokenCount > 0 {
-				reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
-				if reductionRate < 0.10 {
-					log.Ctx(ctx).WithFields(log.Fields{
-						"old_tokens": oldTokenCount,
-						"new_tokens": newTokenCount,
-						"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
-					}).Warn("Phase 2 compress: ineffective (reduction < 10%), increasing cooldown")
-					smart.TriggerProvider().Cooldown.RecordIneffective()
-				} else {
-					smart.TriggerProvider().Cooldown.RecordEffective()
-				}
-			}
-		}
-
-		// 持久化压缩结果到 session
-		if cfg.Session != nil {
-			if err := cfg.Session.Clear(); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to clear session for auto compression, skipping persistence")
-			} else {
-				allOk := true
-				for _, msg := range result.SessionView {
-					assertNoSystemPersist(msg)
-					if err := cfg.Session.AddMessage(msg); err != nil {
-						log.Ctx(ctx).WithError(err).Error("Partial write during auto compression, session may be corrupted")
-						allOk = false
-						break
-					}
-				}
-				if allOk {
-					log.Ctx(ctx).Info("Auto compression persisted to session")
-					// 调用 SessionHook（Phase 2 可能需要在此做额外操作，如更新话题分区索引）
-					if hook := cm.SessionHook(); hook != nil {
-						hook.AfterPersist(ctx, cfg.Session, result)
-					}
-				} else {
-					log.Ctx(ctx).Warn("Auto compression persistence failed, using in-memory result only")
 				}
 			}
 		}
@@ -1081,7 +1048,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			notifyProgress("")
 		}
 
-		// 计数 recall 工具调用（offload_recall / recall_masked）并通知 RecallTracker
+		// Count recall tool calls (offload_recall / recall_masked) for metrics
 		for idx2, tc := range response.ToolCalls {
 			r := execResults[idx2]
 			if r.err != nil {
@@ -1098,21 +1065,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				} else {
 					GlobalMetrics.OffloadedRecalls.Add(1) // fallback: 无法解析时仍然计数
 				}
-				if cfg.RecallTracker != nil && r.result != nil {
-					cfg.RecallTracker.RecordRecall(tc.ID, "offload", r.result.Summary)
-				}
 			case "recall_masked":
-				// 从参数中提取 mask ID 用于去重计数
 				var args struct {
 					ID string `json:"id"`
 				}
 				if json.Unmarshal([]byte(tc.Arguments), &args) == nil && args.ID != "" {
 					GlobalMetrics.RecordMaskedRecall(args.ID)
 				} else {
-					GlobalMetrics.MaskedRecalls.Add(1) // fallback
-				}
-				if cfg.RecallTracker != nil && r.result != nil {
-					cfg.RecallTracker.RecordRecall(tc.ID, "masked", r.result.Summary)
+					GlobalMetrics.MaskedRecalls.Add(1)
 				}
 			case "context_edit":
 				GlobalMetrics.ContextEditEvents.Add(1)
@@ -1220,20 +1180,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				todoSummary = cfg.TodoManager.GetTodoSummary(sessionKey)
 			}
 
-			// 计算当前 token 使用量，用于 context_edit 双阶段提示
-			var reminderCtx *ReminderContext
-			if cfg.ContextManagerConfig != nil && cfg.ContextManagerConfig.MaxContextTokens > 0 {
-				toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
-				toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
-				msgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-				reminderCtx = &ReminderContext{
-					MaxContextTokens: cfg.ContextManagerConfig.MaxContextTokens,
-					UsedTokens:       msgTokens,
-					ToolDefTokens:    toolTokens,
-				}
-			}
-
-			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID, reminderCtx)
+			reminder := BuildSystemReminder(messages, roundToolNames, todoSummary, cfg.AgentID)
 			if reminder != "" && len(messages) > 0 {
 				lastIdx := len(messages) - 1
 				messages[lastIdx].Content += "\n\n" + reminder

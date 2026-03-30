@@ -268,10 +268,7 @@ type Agent struct {
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
 
-	// Phase 2: 智能触发状态（按 sessionKey 索引）
-	triggerProviders sync.Map // map[string]*TriggerInfoProvider
-
-	// OffloadStore manages large tool result offload to disk (Phase 2: Layer 1)
+	// OffloadStore manages large tool result offload to disk
 	offloadStore *OffloadStore
 
 	// maskStore manages observation masking storage
@@ -280,15 +277,8 @@ type Agent struct {
 	// contextEditor 管理上下文编辑（Context Editing 工具）
 	contextEditor *ContextEditor
 
-	// recallTracker 摘要精化追踪器（主 Agent 全局共享）
-	recallTracker *RecallTracker
-
 	// todoManager 管理当前会话的 TODO 列表
 	todoManager *tools.TodoManager
-
-	// TopicDetector for topic partition isolation (Phase 2.5, disabled by default)
-	topicDetector        *TopicDetector
-	enableTopicIsolation bool
 
 	// channelPromptProviders channel 特化 prompt 提供者列表（由外部注入）
 	channelPromptProviders []ChannelPromptProvider
@@ -415,11 +405,6 @@ type Config struct {
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
-
-	// 话题分区隔离（Phase 2.5，默认关闭）
-	EnableTopicIsolation     bool    `json:"enable_topic_isolation"`     // 是否启用话题分区隔离（默认 false）
-	TopicMinSegmentSize      int     `json:"topic_min_segment_size"`     // 最小话题片段大小（默认 3）
-	TopicSimilarityThreshold float64 `json:"topic_similarity_threshold"` // 话题相似度阈值（默认 0.3）
 
 	// 压缩后清理旧消息
 	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
@@ -595,9 +580,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.contextEditor = contextEditor
 	registry.RegisterCore(&tools.ContextEditTool{Handler: contextEditor})
 
-	// 初始化 RecallTracker（摘要精化追踪器）
-	a.recallTracker = NewRecallTracker()
-
 	// 初始化并注册 TODO 管理工具
 	todoMgr := tools.NewTodoManager()
 	a.todoManager = todoMgr
@@ -705,18 +687,6 @@ func New(cfg Config) *Agent {
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
 		),
-
-		enableTopicIsolation: cfg.EnableTopicIsolation,
-		topicDetector: func() *TopicDetector {
-			d := NewTopicDetector()
-			if cfg.TopicMinSegmentSize > 0 {
-				d.MinSegmentSize = cfg.TopicMinSegmentSize
-			}
-			if cfg.TopicSimilarityThreshold > 0 {
-				d.CosineThreshold = cfg.TopicSimilarityThreshold
-			}
-			return &d
-		}(),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
@@ -832,16 +802,6 @@ func (a *Agent) SetChannelPromptProviders(providers ...ChannelPromptProvider) {
 // Callers can use this to add/remove hooks at runtime.
 func (a *Agent) ToolHookChain() *tools.HookChain {
 	return a.hookChain
-}
-
-// getTriggerProvider 获取或创建指定 session 的 TriggerInfoProvider。
-func (a *Agent) getTriggerProvider(sessionKey string) *TriggerInfoProvider {
-	if v, ok := a.triggerProviders.Load(sessionKey); ok {
-		return v.(*TriggerInfoProvider)
-	}
-	provider := NewTriggerInfoProvider()
-	actual, _ := a.triggerProviders.LoadOrStore(sessionKey, provider)
-	return actual.(*TriggerInfoProvider)
 }
 
 // GetCardBuilder returns the CardBuilder for card callback handling.

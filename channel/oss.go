@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	log "xbot/logger"
@@ -93,6 +94,13 @@ func NewQiniuProvider(accessKey, secretKey, bucket, domain, region string) (*Qin
 	}
 	if region == "" {
 		region = "z0"
+	}
+	domain = strings.TrimSpace(strings.TrimRight(domain, "/"))
+	// MakePrivateURL uses url.Parse on "domain/key"; without a scheme the result is not a valid
+	// absolute URL. curl and other clients then default to http:// on port 80, which often
+	// returns 401 in front of HTTPS-only CDN (e.g. openresty).
+	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
+		domain = "https://" + domain
 	}
 	return &QiniuProvider{
 		accessKey: accessKey,

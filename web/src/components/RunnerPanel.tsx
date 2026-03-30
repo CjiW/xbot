@@ -66,8 +66,8 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
         // Also get active runner
         const activeResp = await fetch('/api/runners/active')
         const activeData = await activeResp.json()
-        if (activeData.ok && activeData.runner) {
-          setActiveRunner(activeData.runner.name)
+        if (activeData.ok && activeData.name) {
+          setActiveRunner(activeData.name)
         } else {
           setActiveRunner(null)
         }

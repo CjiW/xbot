@@ -190,16 +190,18 @@ func (mc *mockCompressor) SessionHook() SessionCompressHook { return nil }
 
 func TestIntegration_Masking_TriggeredAtThreshold(t *testing.T) {
 	env := newIntegrationTestEnv(t)
-	// Set low maxContextTokens so masking triggers at 60% = 600 tokens
-	env.cmConfig.MaxContextTokens = 1000
+	// We need: (a) ratio > 0.60 to enter masking branch, (b) ratio < 0.75 to
+	// avoid compaction, and (c) enough tool groups to exceed keepGroups.
+	// 15 tool results × ~601 tokens each ≈ 9300 + overhead ≈ 9500 total.
+	// With maxTokens=14000: ratio≈0.68, keepGroups=12 (ratio<=0.70), mask 3 groups.
+	// 60%=8400 < 9500 (masking ✓), 75%=10500 > 9500 (no compaction ✓).
+	env.cmConfig.MaxContextTokens = 14000
 
-	// Build messages with multiple tool call/result pairs to exceed threshold
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage("You are a test agent."),
 		llm.NewUserMessage("Read these files for me."),
 	}
-	// Add 5 tool call rounds with large results (~800 tokens each)
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 15; i++ {
 		largeText := generateLargeText(800)
 		messages = append(messages, buildToolCallResult("Shell", fmt.Sprintf(`{"command":"cat file%d.go"}`, i), largeText)...)
 	}
@@ -773,15 +775,12 @@ func TestIntegration_ContextEdit_ReplaceMessage(t *testing.T) {
 
 func TestIntegration_Compress_TriggeredWhenOverThreshold(t *testing.T) {
 	env := newIntegrationTestEnv(t)
-	env.cmConfig.MaxContextTokens = 5000
-	env.cmConfig.CompressionThreshold = 0.7
+	// Use a low maxTokens so that the messages easily exceed the 75% threshold.
+	// 10 pairs × ~150 tokens each ≈ 3000 tokens total; 75% of 2000 = 1500.
+	env.cmConfig.MaxContextTokens = 2000
 
 	compressor := &mockCompressor{
-		shouldCompressFn: func(msgs []llm.ChatMessage, model string, toolTokens int) bool {
-			return true // always trigger
-		},
 		compressFn: func(ctx context.Context, msgs []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-			// Return a minimal compressed view
 			return &CompressResult{
 				LLMView: []llm.ChatMessage{
 					llm.NewSystemMessage("You are a test agent."),
@@ -794,7 +793,6 @@ func TestIntegration_Compress_TriggeredWhenOverThreshold(t *testing.T) {
 		},
 	}
 
-	// Build messages large enough to potentially trigger
 	messages := []llm.ChatMessage{
 		llm.NewSystemMessage("You are a test agent."),
 	}
@@ -818,12 +816,13 @@ func TestIntegration_Compress_TriggeredWhenOverThreshold(t *testing.T) {
 		t.Fatalf("Run() failed: %v", out.Error)
 	}
 
-	// Verify ShouldCompress was called
+	// Verify Compress was called (engine.go now uses shouldCompact() directly
+	// instead of cm.ShouldCompress, so check compressCalled)
 	compressor.mu.Lock()
-	called := compressor.shouldCompressCalled
+	called := compressor.compressCalled
 	compressor.mu.Unlock()
 	if called == 0 {
-		t.Error("expected ShouldCompress to be called")
+		t.Error("expected Compress to be called")
 	}
 }
 
@@ -871,16 +870,19 @@ func TestIntegration_Compress_NotTriggeredBelowThreshold(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_MaxContext_CustomThreshold(t *testing.T) {
-	// Test A: Low MaxContextTokens → masking should trigger
+	// Test A: MaxContextTokens set so tokens are between masking (60%) and
+	// compaction (75%) thresholds, with enough tool groups to exceed keepGroups.
+	// 15 groups × ~376 tokens each ≈ 5800 total. maxTokens=8500:
+	// 60%=5100 < 5800 (masking ✓), 75%=6375 > 5800 (no compaction ✓),
+	// ratio≈0.68 → keepGroups=12, mask 3 groups.
 	t.Run("low_threshold_triggers_masking", func(t *testing.T) {
 		env := newIntegrationTestEnv(t)
-		env.cmConfig.MaxContextTokens = 500 // very low: 60% = 300 tokens
+		env.cmConfig.MaxContextTokens = 8500
 
 		messages := []llm.ChatMessage{
 			llm.NewSystemMessage("You are a test agent."),
 		}
-		// Add 4 tool rounds with ~500 tokens each using Shell (no active file paths)
-		for i := 0; i < 4; i++ {
+		for i := 0; i < 15; i++ {
 			messages = append(messages, buildToolCallResult("Shell", fmt.Sprintf(`{"command":"echo %d"}`, i), generateLargeText(500))...)
 		}
 		messages = append(messages, llm.NewUserMessage("summarize"))

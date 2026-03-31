@@ -119,6 +119,9 @@ type OutboundMessage struct {
 	// === 元数据 ===
 	Metadata map[string]string // 附加元数据
 
+	// === 流式输出 ===
+	IsPartial bool // 是否为流式输出的部分消息（true=追加，false=完成）
+
 	// === Agent 间通信扩展 ===
 	ToolsUsed   []string // 使用过的工具列表（SubAgent 返回时携带）
 	WaitingUser bool     // 是否等待用户响应

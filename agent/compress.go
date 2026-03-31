@@ -202,6 +202,24 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}, nil
 }
 
+// formatCompactLine formats a single message for the compaction history text.
+func formatCompactLine(msg llm.ChatMessage) string {
+	role := strings.ToUpper(msg.Role)
+	content := msg.Content
+	if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+		var toolNames []string
+		for _, tc := range msg.ToolCalls {
+			toolNames = append(toolNames, tc.Name)
+		}
+		content += fmt.Sprintf(" [called tools: %s]", strings.Join(toolNames, ", "))
+	}
+	runes := []rune(content)
+	if len(runes) > 2000 {
+		content = string(runes[:2000]) + "..."
+	}
+	return fmt.Sprintf("[%s] %s\n\n", role, content)
+}
+
 // truncateRunes truncates a string to maxLen runes (multi-byte safe).
 func truncateRunes(s string, maxLen int) string {
 	runes := []rune(s)
@@ -218,7 +236,7 @@ func truncateRunes(s string, maxLen int) string {
 //  2. Separate system messages from the history before the cut point
 //  3. Send the pre-cut history to LLM with the structured compaction contract
 //  4. Build result: [system] + [compaction summary] + [continuation] + [tail messages]
-func compactMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
+func compactMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string, maxContextTokens int) (*CompressResult, error) {
 	// Step 1: find tail cut point — keep the last user message and everything after it
 	tailStart := len(messages)
 	for i := len(messages) - 1; i >= 1; i-- {
@@ -267,38 +285,51 @@ func compactMessages(ctx context.Context, messages []llm.ChatMessage, client llm
 		}, nil
 	}
 
-	// Step 3: build the history text for the compaction prompt
+	// Step 3: build the history text for the compaction prompt.
+	// Scan toCompress from the END (most recent) so that when the token
+	// budget is exhausted the oldest messages are dropped — not the most
+	// recent work context that the LLM needs to preserve in the summary.
+	//
+	// Budget: the compaction LLM call is a separate request. Its input is
+	//   [system_message] + [compaction_prompt + history_text] + output_tokens
+	// We reserve overhead for the system message, prompt template, and the
+	// LLM's output; the rest goes to history.
 	var historyText strings.Builder
-	totalRunes := 0
-	const maxHistoryRunes = 16000
 
-	for _, msg := range toCompress {
-		role := strings.ToUpper(msg.Role)
-		content := msg.Content
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			var toolNames []string
-			for _, tc := range msg.ToolCalls {
-				toolNames = append(toolNames, tc.Name)
-			}
-			content += fmt.Sprintf(" [called tools: %s]", strings.Join(toolNames, ", "))
-		}
-		runes := []rune(content)
-		if len(runes) > 2000 {
-			content = string(runes[:2000]) + "..."
-		}
-		msgLine := fmt.Sprintf("[%s] %s\n\n", role, content)
+	// Pre-compute per-message token counts for toCompress.
+	perMsgTokens := make([]int, len(toCompress))
+	totalCompressTokens := 0
+	for i, msg := range toCompress {
+		t, _ := llm.CountMessagesTokens([]llm.ChatMessage{msg}, model)
+		perMsgTokens[i] = t
+		totalCompressTokens += t
+	}
 
-		remaining := maxHistoryRunes - totalRunes
-		if remaining <= 0 {
+	// Overhead for the compaction call (system msg ~50t, prompt template ~300t,
+	// output budget ~1000t).  Use 1500 as a safe reserve.
+	const compactionOverhead = 1500
+	historyBudget := maxContextTokens - compactionOverhead
+	if historyBudget < 1000 {
+		historyBudget = 1000
+	}
+
+	// Scan backwards to find how many messages fit.
+	fitCount := 0
+	usedTokens := 0
+	for i := len(toCompress) - 1; i >= 0; i-- {
+		if usedTokens+perMsgTokens[i] > historyBudget {
 			break
 		}
-		msgRunes := len([]rune(msgLine))
-		if msgRunes > remaining {
-			historyText.WriteString(string([]rune(msgLine)[:remaining]))
-			break
-		}
-		historyText.WriteString(msgLine)
-		totalRunes += msgRunes
+		usedTokens += perMsgTokens[i]
+		fitCount++
+	}
+
+	omittedCount := len(toCompress) - fitCount
+	if omittedCount > 0 {
+		fmt.Fprintf(&historyText, "[Note: %d older messages omitted from compaction]\n\n", omittedCount)
+	}
+	for _, msg := range toCompress[omittedCount:] {
+		historyText.WriteString(formatCompactLine(msg))
 	}
 
 	// Compute target budget

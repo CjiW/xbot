@@ -599,6 +599,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.Iteration = i
 			structuredProgress.Phase = PhaseThinking
 			structuredProgress.ActiveTools = nil
+			structuredProgress.CompletedTools = nil
+			structuredProgress.ThinkingContent = ""
 		}
 		maybeCompress()
 
@@ -1045,6 +1047,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if structuredProgress != nil {
 			structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, structuredProgress.ActiveTools...)
 			structuredProgress.ActiveTools = nil
+		}
+		// 非 web 渠道（CLI）需要在 CompletedTools 填充后发一次事件，
+		// 否则 CLI 无法在迭代切换时快照已完成工具到迭代历史。
+		if autoNotify && !batchProgressByIteration && structuredProgress != nil {
+			notifyProgress("")
 		}
 		// Snapshot completed iteration for IterationHistory
 		if structuredProgress != nil && len(structuredProgress.CompletedTools) > 0 {

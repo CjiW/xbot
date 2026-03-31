@@ -262,7 +262,7 @@ func (r *SandboxRouter) ExportAndImport(userID string) error {
 	return nil
 }
 
-// resolve returns the per-user sandbox instance.
+// resolve returns the per-user sandbox instance (delegates to SandboxForUser).
 func (r *SandboxRouter) resolve(userID string) Sandbox {
 	return r.SandboxForUser(userID)
 }

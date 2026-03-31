@@ -1571,10 +1571,10 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// assistant 消息：左对齐，无气泡边框
 		if msg.isPartial {
 			label := streamingLabelStyle.Render("Assistant")
-			sb.WriteString(fmt.Sprintf("%s %s ...", timeStr, label))
+			fmt.Fprintf(&sb, "%s %s ...", timeStr, label)
 		} else {
 			label := assistantLabelStyle.Render("Assistant")
-			sb.WriteString(fmt.Sprintf("%s %s", timeStr, label))
+			fmt.Fprintf(&sb, "%s %s", timeStr, label)
 		}
 		sb.WriteString("\n")
 		// Agent 消息直接渲染（glamour 已处理 markdown）

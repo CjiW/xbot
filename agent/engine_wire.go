@@ -160,116 +160,116 @@ func (a *Agent) buildMainRunConfig(
 		}
 	}
 
-
-		// 结构化进度事件推送（web 和 cli 渠道）
-		if (channel == "web" || channel == "cli") && a.channelFinder != nil {
-			// CLI 渠道进度处理
-			if channel == "cli" {
-				if ch, ok := a.channelFinder("cli"); ok {
-					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-						cfg.ProgressEventHandler = func(event *ProgressEvent) {
-							if event == nil || event.Structured == nil {
-								return
-							}
-							s := event.Structured
-							payload := &channelpkg.CLIProgressPayload{
-								Phase:     string(s.Phase),
-								Iteration: s.Iteration,
-								Thinking:  s.ThinkingContent,
-							}
-							for _, t := range s.ActiveTools {
-								payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
-									Name:    t.Name,
-									Label:   t.Label,
-									Status:  string(t.Status),
-									Elapsed: t.Elapsed.Milliseconds(),
-								})
-							}
-							for _, t := range s.CompletedTools {
-								payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
-									Name:    t.Name,
-									Label:   t.Label,
-									Status:  string(t.Status),
-									Elapsed: t.Elapsed.Milliseconds(),
-								})
-							}
-							// Parse sub-agent tree from progress lines
-							if len(event.Lines) > 0 {
-								subAgents := ExtractSubAgentTree(event.Lines)
-								if len(subAgents) > 0 {
-									cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
-									for i, sa := range subAgents {
-										cliSubAgents[i] = channelpkg.CLISubAgent{
-											Role:     sa.Role,
-											Status:   sa.Status,
-											Desc:     sa.Desc,
-											Children: convertCLISubAgentTree(sa.Children),
-										}
-									}
-									payload.SubAgents = cliSubAgents
-								}
-							}
-							cc.SendProgress(chatID, payload)
+	// 结构化进度事件推送（web 和 cli 渠道）
+	if (channel == "web" || channel == "cli") && a.channelFinder != nil {
+		// CLI 渠道进度处理
+		switch channel {
+		case "cli":
+			if ch, ok := a.channelFinder("cli"); ok {
+				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+					cfg.ProgressEventHandler = func(event *ProgressEvent) {
+						if event == nil || event.Structured == nil {
+							return
 						}
-					} else {
-						log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
+						s := event.Structured
+						payload := &channelpkg.CLIProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						}
+						for _, t := range s.ActiveTools {
+							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
+								Name:    t.Name,
+								Label:   t.Label,
+								Status:  string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(),
+							})
+						}
+						for _, t := range s.CompletedTools {
+							payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
+								Name:    t.Name,
+								Label:   t.Label,
+								Status:  string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(),
+							})
+						}
+						// Parse sub-agent tree from progress lines
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								cliSubAgents := make([]channelpkg.CLISubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									cliSubAgents[i] = channelpkg.CLISubAgent{
+										Role:     sa.Role,
+										Status:   sa.Status,
+										Desc:     sa.Desc,
+										Children: convertCLISubAgentTree(sa.Children),
+									}
+								}
+								payload.SubAgents = cliSubAgents
+							}
+						}
+						cc.SendProgress(chatID, payload)
 					}
+				} else {
+					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
 				}
-			} else if channel == "web" {
-				if ch, ok := a.channelFinder("web"); ok {
-					if wc, ok := ch.(*channelpkg.WebChannel); ok {
-						cfg.ProgressEventHandler = func(event *ProgressEvent) {
-							if event == nil || event.Structured == nil {
-								return
-							}
-							s := event.Structured
-							payload := &channelpkg.WsProgressPayload{
-								Phase:     string(s.Phase),
-								Iteration: s.Iteration,
-								Thinking:  s.ThinkingContent,
-							}
-							for _, t := range s.ActiveTools {
-								payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
-									Name:    t.Name,
-									Label:   t.Label,
-									Status:  string(t.Status),
-									Elapsed: t.Elapsed.Milliseconds(),
-								})
-							}
-							for _, t := range s.CompletedTools {
-								payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
-									Name:    t.Name,
-									Label:   t.Label,
-									Status:  string(t.Status),
-									Elapsed: t.Elapsed.Milliseconds(),
-								})
-							}
-							// Parse sub-agent tree from progress lines
-							if len(event.Lines) > 0 {
-								subAgents := ExtractSubAgentTree(event.Lines)
-								if len(subAgents) > 0 {
-									wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
-									for i, sa := range subAgents {
-										wsSubAgents[i] = channelpkg.WsSubAgent{
-											Role:     sa.Role,
-											Status:   sa.Status,
-											Desc:     sa.Desc,
-											Children: convertWsSubAgentTree(sa.Children),
-										}
-									}
-									payload.SubAgents = wsSubAgents
-								}
-							}
-
-							// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
-							wc.SendProgress(chatID, payload)
+			}
+		case "web":
+			if ch, ok := a.channelFinder("web"); ok {
+				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					cfg.ProgressEventHandler = func(event *ProgressEvent) {
+						if event == nil || event.Structured == nil {
+							return
 						}
-					} else {
-						log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
+						s := event.Structured
+						payload := &channelpkg.WsProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						}
+						for _, t := range s.ActiveTools {
+							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+								Name:    t.Name,
+								Label:   t.Label,
+								Status:  string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(),
+							})
+						}
+						for _, t := range s.CompletedTools {
+							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+								Name:    t.Name,
+								Label:   t.Label,
+								Status:  string(t.Status),
+								Elapsed: t.Elapsed.Milliseconds(),
+							})
+						}
+						// Parse sub-agent tree from progress lines
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									wsSubAgents[i] = channelpkg.WsSubAgent{
+										Role:     sa.Role,
+										Status:   sa.Status,
+										Desc:     sa.Desc,
+										Children: convertWsSubAgentTree(sa.Children),
+									}
+								}
+								payload.SubAgents = wsSubAgents
+							}
+						}
+
+						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
+						wc.SendProgress(chatID, payload)
 					}
+				} else {
+					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
 				}
 			}
 		}
+	}
 
 	// 注入 ContextManager
 	cfg.ContextManager = a.GetContextManager()

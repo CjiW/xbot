@@ -1145,25 +1145,6 @@ func TestCLIModelSendMessageEmpty(t *testing.T) {
 // Helper Function Tests
 // ---------------------------------------------------------------------------
 
-func TestMaxInt(t *testing.T) {
-	tests := []struct {
-		a, b, want int
-	}{
-		{1, 2, 2},
-		{2, 1, 2},
-		{5, 5, 5},
-		{0, -1, 0},
-		{-5, -3, -3},
-	}
-
-	for _, tt := range tests {
-		got := maxInt(tt.a, tt.b)
-		if got != tt.want {
-			t.Errorf("maxInt(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
-		}
-	}
-}
-
 func TestTickCmd(t *testing.T) {
 	cmd := tickCmd()
 	if cmd == nil {

@@ -835,7 +835,6 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-
 // ---------------------------------------------------------------------------
 // Session cleanup
 // ---------------------------------------------------------------------------

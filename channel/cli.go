@@ -1,11 +1,21 @@
-// xbot CLI Channel implementation
-// A terminal-based chat interface using Bubble Tea TUI framework
+// Package channel provides the CLI (Command Line Interface) channel for xbot.
+//
+// It implements a terminal-based chat interface using the Bubble Tea TUI framework,
+// featuring:
+//   - Incremental streaming rendering (markdown + code blocks)
+//   - Tool call visualization with live status indicators
+//   - Built-in slash commands: /model, /models, /context, /new
+//   - Tab completion for commands and input history
+//   - Ctrl+K line deletion with confirmation
+//   - Non-interactive (pipe) mode with streaming output
+//   - Session restore via --new/--resume flags
 
 package channel
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +51,12 @@ const (
 	cliChannelName = "cli"
 	cliMsgBufSize  = 100
 )
+
+// cliCommands 已知命令列表（用于 Tab 补全，§8）
+var cliCommands = []string{
+	"/cancel", "/clear", "/compact", "/context", "/help",
+	"/model", "/models", "/new", "/quit",
+}
 
 // ---------------------------------------------------------------------------
 // CLI Progress Payload (for structured progress events)
@@ -78,7 +94,7 @@ type CLISubAgent struct {
 
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
-	// 可扩展配置项
+	WorkDir string // 工作目录（用于标题栏显示）
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +106,7 @@ type CLIChannel struct {
 	config  CLIChannelConfig
 	msgBus  *bus.MessageBus
 	msgChan chan bus.OutboundMessage // 接收 agent 回复的通道
+	workDir string                   // 工作目录
 
 	// Bubble Tea
 	program *tea.Program
@@ -105,6 +122,7 @@ func NewCLIChannel(cfg CLIChannelConfig, msgBus *bus.MessageBus) *CLIChannel {
 	return &CLIChannel{
 		config:  cfg,
 		msgBus:  msgBus,
+		workDir: cfg.WorkDir,
 		msgChan: make(chan bus.OutboundMessage, cliMsgBufSize),
 		stopCh:  make(chan struct{}),
 	}
@@ -122,6 +140,7 @@ func (c *CLIChannel) Start() error {
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
 	c.model.SetMsgBus(c.msgBus)
+	c.model.workDir = c.workDir
 
 	// 创建 Bubble Tea program
 	c.program = tea.NewProgram(c.model,
@@ -208,19 +227,49 @@ type cliModel struct {
 	height          int                   // 终端高度
 	typing          bool                  // agent 是否正在回复
 	msgBus          *bus.MessageBus       // 消息总线引用
-	inputReady      bool                  // 输入框是否准备好
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
 
 	// 进度信息
 	progress *CLIProgressPayload
+
+	// 工作目录（标题栏显示用）
+	workDir string
+
+	// Smart quit
+	pendingQuit bool // Ctrl+C during typing: cancel then quit
+	shouldQuit  bool // Flag to quit after current operation completes
+
+	// 输入就绪状态（agent 回复期间禁止发送）
+	inputReady bool
+
+	// --- §1 增量渲染 ---
+	renderCacheValid bool   // 全局缓存是否有效（resize 后置 false）
+	cachedHistory    string // 缓存的历史消息渲染结果（不含当前流式消息）
+
+	// --- §2 工具可视化 ---
+	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
+
+	// --- §8 Tab 补全 ---
+	completions []string // 当前补全候选项
+	compIdx     int      // 当前选中的补全索引
+
+	// --- §9 Ctrl+K 上下文编辑 ---
+	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
 }
 
 // cliMessage 单条消息
 type cliMessage struct {
-	role      string    // "user" 或 "assistant"
-	content   string    // 消息内容
-	timestamp time.Time //
-	isPartial bool      // 是否为流式部分消息
+	role      string
+	content   string
+	timestamp time.Time
+	isPartial bool
+	// --- §1 增量渲染 ---
+	rendered    string // 缓存的渲染结果（ANSI 字符串）
+	dirty       bool   // 是否需要重新渲染
+	renderWidth int    // 渲染时的终端宽度（用于 resize 失效检测）
+
+	// --- §2 工具可视化 ---
+	tools []CLIToolProgress // 仅 role=="tool_summary" 时有值，复用已有类型
 }
 
 // newCLIModel 创建 CLI model
@@ -260,9 +309,9 @@ func newCLIModel() *cliModel {
 		renderer:        renderer,
 		ready:           false,
 		typing:          false,
-		inputReady:      true,
 		streamingMsgIdx: -1,
 		progress:        nil,
+		inputReady:      true,
 	}
 }
 
@@ -310,11 +359,39 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds []tea.Cmd
 	)
 
+	// §8 Tab 补全：记录输入内容变化以重置补全状态
+	prevText := m.textarea.Value()
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC:
-			// Ctrl+C 退出
+			// Ctrl+C 智能中断
+			if m.typing {
+				// Agent 正在处理：发送取消请求，延迟退出
+				if m.msgBus != nil {
+					m.msgBus.Inbound <- bus.InboundMessage{
+						Channel:    cliChannelName,
+						SenderID:   cliSenderID,
+						ChatID:     cliChatID,
+						ChatType:   "p2p",
+						Content:    "/cancel",
+						SenderName: "CLI User",
+						Time:       time.Now(),
+						RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					}
+				}
+				m.pendingQuit = true
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "已发送取消请求，等待当前操作完成...",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+				return m, tea.Batch(cmds...)
+			}
+			// 非处理状态：直接退出
 			return m, tea.Quit
 
 		case tea.KeyEsc:
@@ -323,12 +400,64 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyEnter:
 			// Enter 发送消息
+			if !m.inputReady {
+				return m, nil
+			}
 			content := strings.TrimSpace(m.textarea.Value())
-			if content != "" && m.inputReady {
+			if content != "" {
 				m.sendMessage(content)
 				m.textarea.Reset()
 			}
 			return m, tea.Batch(cmds...)
+
+		case tea.KeyTab:
+			// §8 Tab 命令补全
+			m.handleTabComplete()
+			return m, nil
+
+		case tea.KeyCtrlK:
+			// §9 Ctrl+K 上下文编辑
+			if !m.typing && len(m.messages) > 0 {
+				m.confirmDelete = 2 // 默认删除 2 条
+				m.updateViewportContent()
+			}
+			return m, nil
+		}
+
+		// §9 Ctrl+K 确认模式：拦截字母和数字键
+		if m.confirmDelete > 0 {
+			switch msg.String() {
+			case "y", "Y":
+				// 确认删除
+				if m.confirmDelete > len(m.messages) {
+					m.confirmDelete = len(m.messages)
+				}
+				m.messages = m.messages[:len(m.messages)-m.confirmDelete]
+				m.confirmDelete = 0
+				m.renderCacheValid = false
+				m.cachedHistory = ""
+				m.updateViewportContent()
+				return m, nil
+			case "n", "N":
+				// 取消删除
+				m.confirmDelete = 0
+				m.updateViewportContent()
+				return m, nil
+			default:
+				// 检查数字键（调整删除数量）
+				if msg.Type == tea.KeyRunes {
+					runes := msg.Runes
+					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
+						m.confirmDelete = int(runes[0] - '0')
+						m.updateViewportContent()
+						return m, nil
+					}
+				}
+				// 其他键也取消（包括 Esc）
+				m.confirmDelete = 0
+				m.updateViewportContent()
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -340,13 +469,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAgentMessage(msg.msg)
 
 	case cliProgressMsg:
-		// 进度更新
+		// 进度更新（只改状态栏，不触发 viewport 重建）
 		m.progress = msg.payload
-		if msg.payload != nil && msg.payload.Phase == "done" {
-			// 进度完成，清除进度信息
-			m.progress = nil
+		if msg.payload != nil {
+			// §2 工具可视化：快照 CompletedTools 到独立字段（不依赖 m.progress 生命周期）
+			if len(msg.payload.CompletedTools) > 0 {
+				m.lastCompletedTools = append(
+					m.lastCompletedTools[:0], // 复用底层数组
+					msg.payload.CompletedTools...,
+				)
+			}
+			if msg.payload.Phase == "done" {
+				m.progress = nil
+			}
 		}
-		m.updateViewportContent()
 
 	case cliTickMsg:
 		// 定时刷新
@@ -366,6 +502,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 更新 textarea
 	m.textarea, cmd = m.textarea.Update(msg)
 	cmds = append(cmds, cmd)
+
+	// §8 Tab 补全：输入内容变化时重置补全状态
+	newVal := m.textarea.Value()
+	if newVal != prevText {
+		m.completions = nil
+		m.compIdx = 0
+	}
+
+	// 检查是否需要退出
+	if m.shouldQuit {
+		return m, tea.Quit
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -407,6 +555,12 @@ func (m *cliModel) handleResize(width, height int) {
 		m.ready = true
 	}
 
+	// §1 增量渲染：resize 后缓存全部失效
+	m.renderCacheValid = false
+	for i := range m.messages {
+		m.messages[i].dirty = true
+	}
+
 	// 更新内容
 	m.updateViewportContent()
 }
@@ -436,7 +590,7 @@ func (m *cliModel) View() string {
 	}
 
 	// ========== 样式定义 ==========
-	
+
 	// 标题栏样式：渐变紫蓝色背景
 	titleBarBg := lipgloss.NewStyle().
 		Background(lipgloss.Color("#4a4e69")).
@@ -448,18 +602,18 @@ func (m *cliModel) View() string {
 	titleText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#f2e9e4")).
 		Bold(true).
-		Render("🤖 xbot CLI")
+		Render(m.titleText())
 
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#c9ada7")).
 		Faint(true).
-		Render("Enter 发送 | Ctrl+C 退出")
+		Render("Enter 发送 | /help 帮助 | Ctrl+C 退出")
 
 	titleBar := titleBarBg.Render(
 		lipgloss.JoinHorizontal(
 			lipgloss.Center,
 			titleText,
-			strings.Repeat(" ", maxInt(0, m.width-lipgloss.Width(titleText)-lipgloss.Width(helpText)-4)),
+			strings.Repeat(" ", max(0, m.width-lipgloss.Width(titleText)-lipgloss.Width(helpText)-4)),
 			helpText,
 		),
 	)
@@ -499,8 +653,32 @@ func (m *cliModel) View() string {
 	toolStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#4dd0e1"))
 
-	// ========== 渲染各部分 ==========
-	
+		// ========== 渲染各部分 ==========
+	// 分隔线
+	separator := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3d5a80")).
+		Render(strings.Repeat("─", m.width))
+
+	// 输入区
+	input := inputBoxStyle.Render(inputArea)
+
+	// §9 Ctrl+K 确认模式提示
+	if m.confirmDelete > 0 {
+		warningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ffb74d")).
+			Bold(true).
+			Padding(0, 1)
+		warningText := warningStyle.Render(fmt.Sprintf("⚠ Ctrl+K: 删除最近 %d 条消息？(y/N, 数字调整数量)", m.confirmDelete))
+		return fmt.Sprintf(
+			"%s\n%s\n%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			separator,
+			warningText,
+			input,
+		)
+	}
+
 	// 进度状态栏
 	var status string
 	if m.typing || m.progress != nil {
@@ -509,14 +687,6 @@ func (m *cliModel) View() string {
 	} else {
 		status = readyStatusStyle.Render("✓ 就绪")
 	}
-
-	// 输入区
-	input := inputBoxStyle.Render(inputArea)
-
-	// 分隔线
-	separator := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#3d5a80")).
-		Render(strings.Repeat("─", m.width))
 
 	// 组装界面
 	return fmt.Sprintf(
@@ -527,6 +697,14 @@ func (m *cliModel) View() string {
 		status,
 		input,
 	)
+}
+
+// titleText 生成标题栏文字
+func (m *cliModel) titleText() string {
+	if m.workDir != "" {
+		return fmt.Sprintf("🤖 xbot CLI [%s]", filepath.Base(m.workDir))
+	}
+	return "🤖 xbot CLI"
 }
 
 // renderProgressStatus 渲染进度状态
@@ -556,7 +734,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 
 		// 显示迭代次数
 		if m.progress.Iteration > 0 {
-			sb.WriteString(fmt.Sprintf(" (迭代 %d)", m.progress.Iteration))
+			fmt.Fprintf(&sb, " (迭代 %d)", m.progress.Iteration)
 		}
 
 		// 显示活跃工具
@@ -588,9 +766,9 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 				case "error":
 					emoji = "❌"
 				}
-				sb.WriteString(fmt.Sprintf("  %s %s", emoji, sa.Role))
+				fmt.Fprintf(&sb, "  %s %s", emoji, sa.Role)
 				if sa.Desc != "" {
-					sb.WriteString(fmt.Sprintf(": %s", sa.Desc))
+					fmt.Fprintf(&sb, ": %s", sa.Desc)
 				}
 				sb.WriteString("\n")
 			}
@@ -606,13 +784,72 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 // Helper Methods
 // ---------------------------------------------------------------------------
 
+// handleTabComplete 处理 Tab 命令补全（§8）
+func (m *cliModel) handleTabComplete() {
+	input := strings.TrimSpace(m.textarea.Value())
+
+	// 只在输入以 / 开头时补全
+	if !strings.HasPrefix(input, "/") {
+		return
+	}
+
+	if len(m.completions) == 0 {
+		// 首次 Tab：计算匹配
+		for _, cmd := range cliCommands {
+			if strings.HasPrefix(cmd, input) {
+				m.completions = append(m.completions, cmd)
+			}
+		}
+		if len(m.completions) == 0 {
+			return
+		}
+		m.compIdx = 0
+	} else {
+		// 后续 Tab：循环选择
+		m.compIdx = (m.compIdx + 1) % len(m.completions)
+	}
+
+	m.textarea.SetValue(m.completions[m.compIdx] + " ")
+}
+
+// sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
+func (m *cliModel) sendToAgent(content string) {
+	m.messages = append(m.messages, cliMessage{
+		role:      "user",
+		content:   content,
+		timestamp: time.Now(),
+		dirty:     true,
+	})
+	if m.msgBus != nil {
+		m.msgBus.Inbound <- bus.InboundMessage{
+			Channel:    cliChannelName,
+			SenderID:   cliSenderID,
+			ChatID:     cliChatID,
+			ChatType:   "p2p",
+			Content:    content,
+			SenderName: "CLI User",
+			Time:       time.Now(),
+			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+		}
+		m.typing = true
+		m.inputReady = false
+	}
+}
+
 // sendMessage 发送用户消息
 func (m *cliModel) sendMessage(content string) {
+	content = strings.TrimSpace(content)
+	if strings.HasPrefix(content, "/") {
+		m.handleSlashCommand(content)
+		return
+	}
+
 	// 添加用户消息到历史
 	m.messages = append(m.messages, cliMessage{
 		role:      "user",
 		content:   content,
 		timestamp: time.Now(),
+		dirty:     true,
 	})
 
 	// 更新显示
@@ -631,8 +868,119 @@ func (m *cliModel) sendMessage(content string) {
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 		}
 		m.typing = true
-		m.inputReady = false // 禁用输入直到回复完成
+		m.inputReady = false
 	}
+}
+
+// handleSlashCommand 处理斜杠命令
+func (m *cliModel) handleSlashCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+	// 提取命令部分（去掉参数）
+	parts := strings.Fields(cmd)
+	command := ""
+	if len(parts) > 0 {
+		command = strings.ToLower(parts[0])
+	}
+
+	switch command {
+	// --- 本地命令 ---
+	case "/cancel":
+		if m.msgBus != nil {
+			m.msgBus.Inbound <- bus.InboundMessage{
+				Channel:    cliChannelName,
+				SenderID:   cliSenderID,
+				ChatID:     cliChatID,
+				ChatType:   "p2p",
+				Content:    "/cancel",
+				SenderName: "CLI User",
+				Time:       time.Now(),
+				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			}
+		}
+		m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "已发送取消请求",
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+
+	case "/clear":
+		m.messages = make([]cliMessage, 0, cliMsgBufSize)
+		m.renderCacheValid = false
+		m.cachedHistory = ""
+		m.updateViewportContent()
+
+	case "/quit":
+		m.shouldQuit = true
+
+	case "/help":
+		helpContent := `可用命令：
+  /cancel    - 取消当前正在执行的操作
+  /clear     - 清空聊天记录
+  /compact   - 压缩上下文（减少 token 使用）
+  /model     - 切换模型（用法: /model <模型名>）
+  /models    - 列出可用模型
+  /context   - 查看上下文信息
+  /new       - 开始新会话
+  /quit      - 退出 CLI
+  /help      - 显示此帮助信息`
+		m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   helpContent,
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+
+	case "/compact":
+		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
+		if m.msgBus != nil {
+			m.msgBus.Inbound <- bus.InboundMessage{
+				Channel:    cliChannelName,
+				SenderID:   cliSenderID,
+				ChatID:     cliChatID,
+				ChatType:   "p2p",
+				Content:    "/compact",
+				SenderName: "CLI User",
+				Time:       time.Now(),
+				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			}
+		}
+		m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "已发送上下文压缩请求",
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+
+	// --- 透传命令（发送到 agent） ---
+	case "/model":
+		// /model <name> → /set-model <name>
+		if len(parts) < 2 {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "用法: /model <模型名>\n使用 /models 查看可用模型",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+		} else {
+			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
+		}
+
+	case "/models":
+		m.sendToAgent("/models")
+
+	case "/context":
+		m.sendToAgent(cmd) // 直接透传，agent 层会解析
+
+	case "/new":
+		m.sendToAgent("/new")
+
+	default:
+		// 未知命令尝试透传到 agent（agent 层可能认识）
+		m.sendToAgent(cmd)
+	}
+
+	m.updateViewportContent()
 }
 
 // handleAgentMessage 处理 agent 回复
@@ -649,6 +997,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		if m.streamingMsgIdx >= 0 && m.streamingMsgIdx < len(m.messages) {
 			// 追加到现有流式消息
 			m.messages[m.streamingMsgIdx].content = content
+			m.messages[m.streamingMsgIdx].dirty = true
 		} else {
 			// 创建新的流式消息
 			m.streamingMsgIdx = len(m.messages)
@@ -657,6 +1006,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 				content:   content,
 				timestamp: time.Now(),
 				isPartial: true,
+				dirty:     true,
 			})
 		}
 	} else {
@@ -665,6 +1015,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			// 更新流式消息为完整消息
 			m.messages[m.streamingMsgIdx].content = content
 			m.messages[m.streamingMsgIdx].isPartial = false
+			m.messages[m.streamingMsgIdx].dirty = true
 		} else {
 			// 新增完整的 assistant 消息
 			m.messages = append(m.messages, cliMessage{
@@ -672,6 +1023,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 				content:   content,
 				timestamp: time.Now(),
 				isPartial: false,
+				dirty:     true,
 			})
 		}
 		// 重置流式状态
@@ -680,16 +1032,42 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.inputReady = true
 		// 清除进度信息
 		m.progress = nil
+
+		// §2 工具可视化：从独立快照生成工具摘要消息
+		if len(m.lastCompletedTools) > 0 {
+			toolMsg := cliMessage{
+				role:      "tool_summary",
+				content:   "",
+				timestamp: time.Now(),
+				tools:     append([]CLIToolProgress{}, m.lastCompletedTools...), // 复制
+				dirty:     true,
+			}
+			// 插入到当前 assistant 消息之前
+			insertIdx := len(m.messages) - 1
+			if insertIdx < 0 {
+				insertIdx = 0
+			}
+			m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
+			// 重置快照
+			m.lastCompletedTools = nil
+			// 由于插入了消息，缓存需要重建
+			m.renderCacheValid = false
+		}
+
+		// 检查是否需要在操作完成后退出
+		if m.pendingQuit {
+			m.shouldQuit = true
+		}
 	}
 
 	m.updateViewportContent()
 }
 
-// updateViewportContent 更新 viewport 显示内容
-func (m *cliModel) updateViewportContent() {
+// renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
+func (m *cliModel) renderMessage(msg *cliMessage) string {
 	var sb strings.Builder
 
-	// 计算气泡最大宽度（屏幕宽度的 75%）
+	// 计算气泡最大宽度
 	maxBubbleWidth := int(float64(m.width) * 0.75)
 	if maxBubbleWidth < 30 {
 		maxBubbleWidth = 30
@@ -698,7 +1076,7 @@ func (m *cliModel) updateViewportContent() {
 		maxBubbleWidth = 100
 	}
 
-	// 用户消息气泡样式：右对齐、蓝色背景、圆角边框
+	// 用户消息气泡样式
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#3d5a80")).
@@ -709,7 +1087,7 @@ func (m *cliModel) updateViewportContent() {
 		Width(maxBubbleWidth).
 		Align(lipgloss.Right)
 
-	// Agent 消息气泡样式：左对齐、绿色背景、圆角边框
+	// Agent 消息气泡样式
 	assistantBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#3d6b4f")).
@@ -720,7 +1098,7 @@ func (m *cliModel) updateViewportContent() {
 		Width(maxBubbleWidth).
 		Align(lipgloss.Left)
 
-	// 流式消息样式（橙色边框提示）
+	// 流式消息样式
 	streamingBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#ff9800")).
@@ -731,7 +1109,7 @@ func (m *cliModel) updateViewportContent() {
 		Width(maxBubbleWidth).
 		Align(lipgloss.Left)
 
-	// 时间戳样式：灰色、淡化效果
+	// 时间戳样式
 	timeStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888")).
 		Faint(true)
@@ -749,69 +1127,163 @@ func (m *cliModel) updateViewportContent() {
 		Foreground(lipgloss.Color("#ffb74d")).
 		Bold(true)
 
-	for _, msg := range m.messages {
-		var rendered string
-		var err error
+	// 系统消息样式
+	systemMsgStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Italic(true).
+		Width(m.width).
+		Align(lipgloss.Center)
 
-		// 渲染 Markdown（仅对 assistant 消息）
-		if msg.role == "assistant" {
-			rendered, err = m.renderer.Render(msg.content)
-			if err != nil {
-				rendered = msg.content // fallback to raw text
-			}
-			// 清理渲染后的多余空行
-			rendered = strings.TrimSpace(rendered)
-		} else {
+	// 渲染 Markdown（仅对 assistant 消息）
+	var rendered string
+	if msg.role == "assistant" {
+		var err error
+		rendered, err = m.renderer.Render(msg.content)
+		if err != nil {
 			rendered = msg.content
 		}
-
-		// 时间戳
-		timeStr := timeStyle.Render(msg.timestamp.Format("15:04:05"))
-
-		// 根据角色渲染气泡
-		if msg.role == "user" {
-			// 用户消息 - 右对齐
-			label := userLabelStyle.Render("👤 You")
-			header := lipgloss.NewStyle().
-				Width(m.width - 4).
-				Align(lipgloss.Right).
-				Render(fmt.Sprintf("%s %s", timeStr, label))
-
-			sb.WriteString(header)
-			sb.WriteString("\n")
-
-			// 用户气泡（右对齐）
-			bubble := userBubbleStyle.Render(rendered)
-			bubbleRight := lipgloss.NewStyle().
-				Width(m.width).
-				Align(lipgloss.Right).
-				Render(bubble)
-			sb.WriteString(bubbleRight)
-		} else {
-			// Agent 消息 - 左对齐
-			// Agent 消息 - 左对齐
-			var bubble string
-
-			if msg.isPartial {
-				label := streamingLabelStyle.Render("🤖 Assistant")
-				header := fmt.Sprintf("%s %s ⚡", timeStr, label)
-				sb.WriteString(header)
-				bubble = streamingBubbleStyle.Render(rendered)
-			} else {
-				label := assistantLabelStyle.Render("🤖 Assistant")
-				header := fmt.Sprintf("%s %s", timeStr, label)
-				sb.WriteString(header)
-				bubble = assistantBubbleStyle.Render(rendered)
-			}
-
-			sb.WriteString("\n")
-			sb.WriteString(bubble)
-		}
-
-		sb.WriteString("\n\n")
+		rendered = strings.TrimSpace(rendered)
+	} else {
+		rendered = msg.content
 	}
 
+	timeStr := timeStyle.Render(msg.timestamp.Format("15:04:05"))
+
+	switch msg.role {
+	case "tool_summary":
+		// §2 工具可视化：渲染工具调用摘要
+		toolSummaryStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#5c6bc0")).
+			Background(lipgloss.Color("#1a1a2e")).
+			Foreground(lipgloss.Color("#e0e0e0")).
+			Padding(0, 1).
+			Width(maxBubbleWidth).
+			Align(lipgloss.Left)
+
+		toolHeaderStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#4dd0e1")).
+			Bold(true)
+
+		toolItemStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#a5d6a7"))
+
+		var toolSb strings.Builder
+		toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("⚙ 工具调用 (%d)", len(msg.tools))))
+		toolSb.WriteString("\n")
+		for _, tool := range msg.tools {
+			label := tool.Label
+			if label == "" {
+				label = tool.Name
+			}
+			elapsed := ""
+			if tool.Elapsed > 0 {
+				elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+			}
+			toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  ✅ %s%s", label, elapsed)))
+			toolSb.WriteString("\n")
+		}
+		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
+	case "system":
+		sb.WriteString(systemMsgStyle.Render(msg.content))
+	case "user":
+		label := userLabelStyle.Render("👤 You")
+		header := lipgloss.NewStyle().
+			Width(m.width - 4).
+			Align(lipgloss.Right).
+			Render(fmt.Sprintf("%s %s", timeStr, label))
+		sb.WriteString(header)
+		sb.WriteString("\n")
+		bubble := userBubbleStyle.Render(rendered)
+		bubbleRight := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Right).
+			Render(bubble)
+		sb.WriteString(bubbleRight)
+	default:
+		// assistant 消息
+		var bubble string
+		if msg.isPartial {
+			label := streamingLabelStyle.Render("🤖 Assistant")
+			header := fmt.Sprintf("%s %s ⚡", timeStr, label)
+			sb.WriteString(header)
+			bubble = streamingBubbleStyle.Render(rendered)
+		} else {
+			label := assistantLabelStyle.Render("🤖 Assistant")
+			header := fmt.Sprintf("%s %s", timeStr, label)
+			sb.WriteString(header)
+			bubble = assistantBubbleStyle.Render(rendered)
+		}
+		sb.WriteString("\n")
+		sb.WriteString(bubble)
+	}
+
+	sb.WriteString("\n\n")
+	return sb.String()
+}
+
+// updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
+func (m *cliModel) updateViewportContent() {
+	// 快速路径：流式消息 + 缓存有效
+	if m.streamingMsgIdx >= 0 && m.renderCacheValid {
+		m.updateStreamingOnly()
+		return
+	}
+
+	// 慢速路径：全量重建
+	m.fullRebuild()
+}
+
+// updateStreamingOnly 只重新渲染当前流式消息（快速路径）
+func (m *cliModel) updateStreamingOnly() {
+	var sb strings.Builder
+	sb.WriteString(m.cachedHistory)
+
+	// 只渲染当前流式消息
+	msg := &m.messages[m.streamingMsgIdx]
+	msg.dirty = true
+	sb.WriteString(m.renderMessage(msg))
+
 	m.viewport.SetContent(sb.String())
+	m.viewport.GotoBottom()
+}
+
+// fullRebuild 全量重建渲染缓存（慢速路径）
+func (m *cliModel) fullRebuild() {
+	var historyBuf strings.Builder
+
+	// splitIdx 确保当前流式消息不进入 cachedHistory
+	splitIdx := len(m.messages)
+	if m.streamingMsgIdx >= 0 {
+		splitIdx = m.streamingMsgIdx
+	}
+
+	for i := range m.messages[:splitIdx] {
+		needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
+		if needsRender {
+			rendered := m.renderMessage(&m.messages[i])
+			m.messages[i].rendered = rendered
+			m.messages[i].dirty = false
+			m.messages[i].renderWidth = m.width
+		}
+		historyBuf.WriteString(m.messages[i].rendered)
+	}
+
+	m.cachedHistory = historyBuf.String()
+	m.renderCacheValid = true
+
+	// 拼接最终内容：历史 + 当前流式消息（如有）
+	var finalContent string
+	if m.streamingMsgIdx >= 0 {
+		var sb strings.Builder
+		sb.WriteString(m.cachedHistory)
+		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
+		finalContent = sb.String()
+	} else {
+		finalContent = m.cachedHistory
+	}
+
+	m.viewport.SetContent(finalContent)
 	m.viewport.GotoBottom()
 }
 
@@ -822,10 +1294,65 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-// maxInt 返回两个整数中的较大值
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+// ---------------------------------------------------------------------------
+// NonInteractiveChannel (非交互模式，单次执行)
+// ---------------------------------------------------------------------------
+
+// NonInteractiveChannel 非交互模式渠道，用于管道/参数模式。
+// 收到完整消息后打印到 stdout 并设置退出标志。
+type NonInteractiveChannel struct {
+	msgBus *bus.MessageBus
+	msgCh  chan bus.OutboundMessage
+	done   chan struct{}
 }
+
+// NewNonInteractiveChannel 创建非交互模式渠道
+func NewNonInteractiveChannel(msgBus *bus.MessageBus) *NonInteractiveChannel {
+	ch := &NonInteractiveChannel{
+		msgBus: msgBus,
+		msgCh:  make(chan bus.OutboundMessage, 64),
+		done:   make(chan struct{}),
+	}
+	// 启动消息接收 goroutine
+	go ch.run()
+	return ch
+}
+
+func (c *NonInteractiveChannel) run() {
+	var prevContent string
+	for msg := range c.msgCh {
+		content := msg.Content
+		if strings.HasPrefix(content, "__FEISHU_CARD__") {
+			content = ConvertFeishuCard(content)
+		}
+		if msg.IsPartial {
+			// 流式部分消息：只输出增量部分
+			if len(content) > len(prevContent) {
+				diff := content[len(prevContent):]
+				fmt.Print(diff)
+			}
+			prevContent = content
+		} else {
+			// 完整消息：输出剩余差异部分，然后换行
+			if len(content) > len(prevContent) {
+				diff := content[len(prevContent):]
+				fmt.Print(diff)
+			}
+			fmt.Println()
+			close(c.done)
+			return
+		}
+	}
+}
+
+func (c *NonInteractiveChannel) Name() string { return "cli" }
+func (c *NonInteractiveChannel) Start() error { return nil }
+func (c *NonInteractiveChannel) Stop()        {}
+func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
+	select {
+	case c.msgCh <- msg:
+	default:
+	}
+	return "", nil
+}
+func (c *NonInteractiveChannel) WaitDone() { <-c.done }

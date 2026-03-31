@@ -76,3 +76,4 @@ cron.json
 *.service
 /xbot-runner
 /xbot
+xbot-cli

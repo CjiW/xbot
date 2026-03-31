@@ -23,7 +23,6 @@ import (
 	"xbot/bus"
 	log "xbot/logger"
 
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -351,11 +350,79 @@ func (c *CLIChannel) handleOutbound() {
 // Bubble Tea Model
 // ---------------------------------------------------------------------------
 
+// animTicker 是一个简单的字符动画 ticker，不依赖 bubbles/spinner。
+type animTicker struct {
+	frames []string
+	frame  int
+	ticks  int64 // total ticks for phase-aware behavior
+	style  lipgloss.Style
+}
+
+func newAnimTicker(frames []string, color string) *animTicker {
+	return &animTicker{
+		frames: frames,
+		style:  lipgloss.NewStyle().Foreground(lipgloss.Color(color)),
+	}
+}
+
+func (t *animTicker) tick() {
+	t.ticks++
+	t.frame = (t.frame + 1) % len(t.frames)
+}
+
+func (t *animTicker) view() string {
+	return t.style.Render(t.frames[t.frame])
+}
+
+// viewFrames renders a frame from a given set using the ticker's current frame index.
+func (t *animTicker) viewFrames(frames []string) string {
+	idx := t.frame % len(frames)
+	return t.style.Render(frames[idx])
+}
+
+// Ticker frame presets
+var (
+	// dotFrames: smooth braille dot sweep — 24 frames for a fluid loop
+	dotFrames = []string{
+		"⠁", "⠃", "⠇", "⡇", "⣇", "⣧", "⣷", "⣿",
+		"⣾", "⣽", "⣻", "⢿", "⡿", "⠿", "⠟", "⠛",
+		"⠫", "⠭", "⠮", "⡮", "⡯", "⣯", "⣽", "⣾",
+	}
+	// arrowFrames: pulsing arrow — tool execution feel
+	arrowFrames = []string{"›", "▸", "▶", "▸", "›", "▸", "▶", "▸"}
+	// waveFrames: gentle sine wave — subagent feel
+	waveFrames = []string{"◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣"}
+	// orbitFrames: spinning orbit — processing feel
+	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
+)
+
+// thinkingVerbs — 类似 Claude Code 的随机动词
+var thinkingVerbs = []string{
+	"Thinking",
+	"Reasoning",
+	"Analyzing",
+	"Considering",
+	"Evaluating",
+	"Reflecting",
+	"Processing",
+	"Contemplating",
+}
+
+// pickVerb returns a deterministic verb based on tick count (changes every ~2s at 10 FPS).
+func pickVerb(ticks int64) string {
+	// Change verb every 20 ticks (2 seconds)
+	idx := (ticks / 20) % int64(len(thinkingVerbs))
+	return thinkingVerbs[idx]
+}
+
+// tickerTickMsg 是 ticker 定时 tick 消息
+type tickerTickMsg struct{}
+
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
 	viewport        viewport.Model        // 消息显示区
 	textarea        textarea.Model        // 用户输入区
-	spinner         spinner.Model         // 进度 spinner
+	ticker          *animTicker           // 进度动画 ticker
 	messages        []cliMessage          // 消息历史
 	renderer        *glamour.TermRenderer // Markdown 渲染器
 	ready           bool                  // 是否已初始化
@@ -418,7 +485,7 @@ type cliMessage struct {
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
 	ta := textarea.New()
-	ta.Placeholder = "Enter send · Ctrl+Enter newline · /help"
+	ta.Placeholder = "Enter send · Ctrl+J newline · /help"
 	ta.Focus()
 	ta.SetWidth(76)
 	ta.SetHeight(3)
@@ -444,15 +511,13 @@ func newCLIModel() *cliModel {
 
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
-	// Spinner
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d"))
+	// Ticker
+	tk := newAnimTicker(dotFrames, "#e0af68")
 
 	return &cliModel{
 		viewport:        vp,
 		textarea:        ta,
-		spinner:         s,
+		ticker:          tk,
 		messages:        make([]cliMessage, 0, cliMsgBufSize),
 		renderer:        renderer,
 		ready:           false,
@@ -489,13 +554,16 @@ type cliTickMsg struct{}
 // 终端对 Ctrl+Enter 没有统一标准，常见 raw sequences：
 //   - CSI u 协议: \x1b[13;5u   (kitty, Ghostty, Windows Terminal)
 //   - 旧格式:     \x1b[27;5;13~ (部分 xterm 变体)
+//
+// 注意：Bubble Tea 不识别这些序列，会作为 unknownCSISequenceMsg 传递，
+// 其 String() 格式为 "?CSI[49 51 59 53 117]?"（%+v 对 []byte 输出字节值数组）。
+// 因此需要同时匹配 KeyMsg 和 unknownCSISequenceMsg 的字符串表示。
 func isCtrlEnter(msg tea.Msg) bool {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok || key.Type != tea.KeyRunes {
-		return false
-	}
-	s := string(key.Runes)
-	return s == "\x1b[13;5u" || s == "\x1b[27;5;13~"
+	s := fmt.Sprintf("%v", msg)
+	// CSI u 协议: \x1b[13;5u → "?CSI[49 51 59 53 117]?" 或 KeyRunes "\x1b[13;5u"
+	// 旧格式:     \x1b[27;5;13~ → "?CSI[50 55 59 53 59 49 51 126]?" 或 KeyRunes "\x1b[27;5;13~"
+	return s == "?CSI[49 51 59 53 117]?" || s == "\x1b[13;5u" ||
+		s == "?CSI[50 55 59 53 59 49 51 126]?" || s == "\x1b[27;5;13~"
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +638,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())
+			}
+			// Kick off ticker chain when processing just started
+			if m.typing && !wasTyping {
+				cmds = append(cmds, tickerCmd())
 			}
 			return m, tea.Batch(cmds...)
 
@@ -670,18 +742,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 
-	case spinner.TickMsg:
-		// Spinner tick: advance frame and trigger viewport refresh
+	case tickerTickMsg:
+		// Ticker tick: advance frame and trigger viewport refresh
 		if m.typing || m.progress != nil {
-			m.spinner, cmd = m.spinner.Update(msg)
-			cmds = append(cmds, cmd)
+			m.ticker.tick()
+			cmds = append(cmds, tickerCmd())
 			m.updateViewportContent()
 		}
 	}
 
-	// Kick off spinner + tick chains when processing just started
+	// Kick off ticker + tick chains when processing just started
 	if m.typing && !wasTyping {
-		cmds = append(cmds, m.spinner.Tick, tickCmd())
+		cmds = append(cmds, tickerCmd(), tickCmd())
 	}
 
 	// 更新 viewport
@@ -762,7 +834,7 @@ func (m *cliModel) View() string {
 
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
-	titleRight := "Enter send | Ctrl+Enter newline | /help"
+	titleRight := "Enter send | Ctrl+J newline | /help"
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1
@@ -800,10 +872,10 @@ func (m *cliModel) View() string {
 	toolStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#4dd0e1"))
 
-		// ========== 渲染各部分 ==========
-	// 分隔线
+	// ========== 渲染各部分 ==========
+	// 分隔线：柔和的虚线
 	separator := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#3d5a80")).
+		Foreground(lipgloss.Color("#2a2a3a")).
 		Render(strings.Repeat("─", m.width))
 
 	// 输入区
@@ -832,7 +904,7 @@ func (m *cliModel) View() string {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
 	} else {
-		status = readyStatusStyle.Render("[ready]")
+		status = readyStatusStyle.Render("● ready")
 	}
 
 	// 组装界面
@@ -857,7 +929,7 @@ func (m *cliModel) titleText() string {
 // renderProgressStatus renders a compact one-line status for the status bar.
 func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style) string {
 	var sb strings.Builder
-	sb.WriteString(progressStyle.Render(m.spinner.View()))
+	sb.WriteString(progressStyle.Render(m.ticker.view()))
 	sb.WriteString(" ")
 
 	if m.progress != nil {
@@ -881,7 +953,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		if !hasActive {
 			switch m.progress.Phase {
 			case "thinking":
-				sb.WriteString(" · thinking")
+				sb.WriteString(" · " + pickVerb(m.ticker.ticks))
 			case "compressing":
 				sb.WriteString(" · compressing")
 			case "retrying":
@@ -893,7 +965,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 			}
 		}
 	} else {
-		sb.WriteString("processing...")
+		sb.WriteString(pickVerb(m.ticker.ticks) + "...")
 	}
 
 	// Total elapsed
@@ -1258,18 +1330,23 @@ func (m *cliModel) renderProgressBlock() string {
 		Foreground(lipgloss.Color("#888888")).
 		Faint(true)
 
+	indentGuide := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#333333"))
+
+	dimStyle := lipgloss.NewStyle().
+		Faint(true)
+
 	var sb strings.Builder
 
-	// Render completed iterations
+	// Render completed iterations (dimmed)
 	for _, snap := range m.iterationHistory {
-		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration)))
+		sb.WriteString(dimStyle.Render(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration))))
 		sb.WriteString("\n")
 		if snap.Thinking != "" {
 			// Collapse multi-line thinking text into a single line to avoid
 			// command output bleeding into subsequent progress lines.
 			text := truncateToWidth(strings.ReplaceAll(snap.Thinking, "\n", " "), innerWidth-4)
-			sb.WriteString("  ")
-			sb.WriteString(thinkingStyle.Render(text))
+			sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + thinkingStyle.Render(text)))
 			sb.WriteString("\n")
 		}
 		for _, tool := range snap.Tools {
@@ -1277,13 +1354,13 @@ func (m *cliModel) renderProgressBlock() string {
 			if label == "" {
 				label = tool.Name
 			}
-			style := toolDoneStyle
 			icon := "✓"
+			style := toolDoneStyle
 			if tool.Status == "error" {
-				style = toolErrorStyle
 				icon = "✗"
+				style = toolErrorStyle
 			}
-			line := fmt.Sprintf("  %s %s", icon, label)
+			line := fmt.Sprintf("  │ %s %s", icon, label)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -1291,7 +1368,7 @@ func (m *cliModel) renderProgressBlock() string {
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
-			sb.WriteString(style.Render(line))
+			sb.WriteString(dimStyle.Render(style.Render(line)))
 			sb.WriteString("\n")
 		}
 	}
@@ -1305,8 +1382,7 @@ func (m *cliModel) renderProgressBlock() string {
 			// Collapse multi-line thinking text into a single line to avoid
 			// command output bleeding into subsequent progress lines.
 			text := truncateToWidth(strings.ReplaceAll(m.progress.Thinking, "\n", " "), innerWidth-4)
-			sb.WriteString("  ")
-			sb.WriteString(thinkingStyle.Render(text))
+			sb.WriteString(indentGuide.Render("  │ ") + thinkingStyle.Render(text))
 			sb.WriteString("\n")
 		}
 
@@ -1322,7 +1398,7 @@ func (m *cliModel) renderProgressBlock() string {
 				style = toolErrorStyle
 				icon = "✗"
 			}
-			line := fmt.Sprintf("  %s %s", icon, label)
+			line := fmt.Sprintf("  │ %s %s", icon, label)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -1343,7 +1419,7 @@ func (m *cliModel) renderProgressBlock() string {
 			if label == "" {
 				label = tool.Name
 			}
-			line := fmt.Sprintf("  %s %s", m.spinner.View(), label)
+			line := fmt.Sprintf("  │ %s %s", m.ticker.viewFrames(arrowFrames), label)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -1361,15 +1437,18 @@ func (m *cliModel) renderProgressBlock() string {
 			switch m.progress.Phase {
 			case "thinking":
 				sb.WriteString("  ")
-				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " thinking..."))
+				sb.WriteString(m.ticker.view())
+				sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
 				sb.WriteString("\n")
 			case "compressing":
 				sb.WriteString("  ")
-				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " compressing context..."))
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
+				sb.WriteString(thinkingStyle.Render(" compressing..."))
 				sb.WriteString("\n")
 			case "retrying":
 				sb.WriteString("  ")
-				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " retrying..."))
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
+				sb.WriteString(thinkingStyle.Render(" retrying..."))
 				sb.WriteString("\n")
 			}
 		}
@@ -1381,7 +1460,8 @@ func (m *cliModel) renderProgressBlock() string {
 		}
 	} else if m.typing {
 		sb.WriteString("  ")
-		sb.WriteString(thinkingStyle.Render(m.spinner.View() + " processing..."))
+		sb.WriteString(m.ticker.viewFrames(orbitFrames))
+		sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
 		sb.WriteString("\n")
 	}
 
@@ -1416,7 +1496,7 @@ func (m *cliModel) renderProgressBlock() string {
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
 	indent := strings.Repeat("  ", depth)
 	for _, sa := range agents {
-		icon := m.spinner.View()
+		icon := m.ticker.viewFrames(waveFrames)
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d"))
 		switch sa.Status {
 		case "done":
@@ -1665,6 +1745,13 @@ func (m *cliModel) fullRebuild() {
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return cliTickMsg{}
+	})
+}
+
+// tickerCmd returns a cmd that sends tickerTickMsg at ~10 FPS.
+func tickerCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return tickerTickMsg{}
 	})
 }
 

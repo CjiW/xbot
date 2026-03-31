@@ -51,7 +51,13 @@ What was being worked on most recently and what should happen next.
 - Preserve ALL file paths from active operations
 - Preserve ALL error messages verbatim
 - Be concise — focus on facts, not narrative
-- If offload markers exist, preserve the summary text but strip the IDs`
+- If offload markers exist, preserve the summary text but strip the IDs
+
+## Memory Management (Optional)
+If this conversation reveals important new information worth remembering long-term:
+- Use the provided memory tools (core_memory_append, archival_memory_insert, etc.) to update memory
+- Use archival_memory_search to check for existing similar memories before inserting to avoid duplicates
+- This is OPTIONAL — if nothing important needs remembering, skip tool calls and just output the compaction summary`
 
 // continuationMessage is injected after compaction to tell the LLM to resume work.
 const continuationMessage = `This conversation was compacted from a longer session. The summary above covers earlier work. Continue from where you left off without re-asking the user any questions.`
@@ -159,7 +165,8 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
-	result, err := a.GetContextManager().ManualCompress(ctx, messages, llmClient, model)
+	cm := a.GetContextManager()
+	result, err := cm.ManualCompress(ctx, messages, llmClient, model)
 	if err != nil {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,
@@ -229,14 +236,23 @@ func truncateRunes(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "...[truncated]"
 }
 
-// compactMessages performs a single-pass structured compaction of conversation history.
+// compactMessages performs a structured compaction of conversation history.
 //
 // Flow:
 //  1. Find a safe cut point (last user message or plain assistant message)
 //  2. Separate system messages from the history before the cut point
-//  3. Send the pre-cut history to LLM with the structured compaction contract
-//  4. Build result: [system] + [compaction summary] + [continuation] + [tail messages]
-func compactMessages(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string, maxContextTokens int) (*CompressResult, error) {
+//  3. Build history text within token budget
+//  4. Multi-turn LLM call with optional memory tools
+//  5. Build result: [system] + [compaction summary] + [continuation] + [tail messages]
+func compactMessages(
+	ctx context.Context,
+	messages []llm.ChatMessage,
+	client llm.LLM,
+	model string,
+	maxContextTokens int,
+	memTools []llm.ToolDefinition,
+	memToolExec func(ctx context.Context, tc llm.ToolCall) (content string, err error),
+) (*CompressResult, error) {
 	// Step 1: find tail cut point — keep the last user message and everything after it
 	tailStart := len(messages)
 	for i := len(messages) - 1; i >= 1; i-- {
@@ -352,21 +368,48 @@ Your output MUST be at most %d characters. Be concise — facts over narrative.
 
 Output the structured working state directly.`
 
-	// Step 4: single LLM call for compaction
-	resp, err := client.Generate(ctx, model, []llm.ChatMessage{
+	// Step 4: multi-turn LLM call with optional memory tools
+	compactionMsgs := []llm.ChatMessage{
 		llm.NewSystemMessage("You are a context compaction expert. Create a structured working state for task continuation. Stay under the specified length limit."),
 		llm.NewUserMessage(prompt),
-	}, nil, "")
-	if err != nil {
-		return nil, fmt.Errorf("compaction failed: %w", err)
-	}
-	GlobalMetrics.TotalLLMCalls.Add(1)
-	if resp != nil {
-		GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
-		GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
 	}
 
-	compressed := llm.StripThinkBlocks(resp.Content)
+	var compressed string
+	maxToolRounds := 5
+	for round := 0; round <= maxToolRounds; round++ {
+		resp, err := client.Generate(ctx, model, compactionMsgs, memTools, "")
+		if err != nil {
+			return nil, fmt.Errorf("compaction failed: %w", err)
+		}
+		GlobalMetrics.TotalLLMCalls.Add(1)
+		if resp != nil {
+			GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
+			GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
+		}
+
+		if !resp.HasToolCalls() {
+			compressed = llm.StripThinkBlocks(resp.Content)
+			break
+		}
+
+		// Memory tool calls — execute and append results
+		assistantMsg := llm.ChatMessage{Role: "assistant", ToolCalls: resp.ToolCalls}
+		compactionMsgs = append(compactionMsgs, assistantMsg)
+		for _, tc := range resp.ToolCalls {
+			var resultContent string
+			if memToolExec != nil {
+				resultContent, _ = memToolExec(ctx, tc)
+			} else {
+				resultContent = "Error: memory tools not available"
+			}
+			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, resultContent)
+			compactionMsgs = append(compactionMsgs, toolMsg)
+		}
+	}
+
+	if compressed == "" {
+		compressed = "Error: compaction produced no output"
+	}
 
 	// Step 5: build compacted message structure
 	if len(systemMsgs) > 1 {

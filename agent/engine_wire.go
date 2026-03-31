@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -301,6 +302,138 @@ func (a *Agent) buildMainRunConfig(
 		UnloadFn: func(ctx context.Context, roleName, instance string) error {
 			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID, instance)
 		},
+	}
+
+	// Memory tools for compaction — allows the compaction LLM to archive
+	// important context into core/archival memory before it gets compacted away.
+	if extras := cfg.ToolContextExtras; extras != nil && extras.CoreMemory != nil {
+		cfg.MemoryToolDefs = []llm.ToolDefinition{
+			&tools.CoreMemoryAppendTool{},
+			&tools.CoreMemoryReplaceTool{},
+			&tools.RethinkTool{},
+			&tools.ArchivalMemoryInsertTool{},
+			&tools.ArchivalMemorySearchTool{},
+		}
+
+		// Capture variables for the execution closure.
+		tenantID := extras.TenantID
+		coreSvc := extras.CoreMemory
+		archivalSvc := extras.ArchivalMemory
+		memorySvc := extras.MemorySvc
+		memSenderID := senderID
+
+		cfg.MemoryToolExec = func(ctx context.Context, tc llm.ToolCall) (string, error) {
+			switch tc.Name {
+			case "core_memory_append":
+				var args struct {
+					Block   string `json:"block"`
+					Content string `json:"content"`
+				}
+				if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+					return fmt.Sprintf("parse arguments: %v", err), nil
+				}
+				if args.Block == "" || args.Content == "" {
+					return "Missing required fields: block, content", nil
+				}
+				current, _, err := coreSvc.GetBlock(tenantID, args.Block, memSenderID)
+				if err != nil {
+					return fmt.Sprintf("read block: %v", err), nil
+				}
+				newContent := args.Content
+				if current != "" {
+					newContent = current + "\n" + args.Content
+				}
+				if err := coreSvc.SetBlock(tenantID, args.Block, newContent, memSenderID); err != nil {
+					return fmt.Sprintf("update block: %v", err), nil
+				}
+				return fmt.Sprintf("Appended to %s block. New length: %d chars.", args.Block, len(newContent)), nil
+
+			case "core_memory_replace":
+				var args struct {
+					Block   string `json:"block"`
+					OldText string `json:"old_text"`
+					NewText string `json:"new_text"`
+				}
+				if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+					return fmt.Sprintf("parse arguments: %v", err), nil
+				}
+				current, _, err := coreSvc.GetBlock(tenantID, args.Block, memSenderID)
+				if err != nil {
+					return fmt.Sprintf("read block: %v", err), nil
+				}
+				if !strings.Contains(current, args.OldText) {
+					return fmt.Sprintf("old_text not found in %s block.", args.Block), nil
+				}
+				newContent := strings.Replace(current, args.OldText, args.NewText, 1)
+				if err := coreSvc.SetBlock(tenantID, args.Block, newContent, memSenderID); err != nil {
+					return fmt.Sprintf("update block: %v", err), nil
+				}
+				return fmt.Sprintf("Replaced in %s block. New length: %d chars.", args.Block, len(newContent)), nil
+
+			case "rethink":
+				var args struct {
+					Block      string `json:"block"`
+					NewContent string `json:"new_content"`
+					Reasoning  string `json:"reasoning"`
+				}
+				if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+					return fmt.Sprintf("parse arguments: %v", err), nil
+				}
+				if err := coreSvc.SetBlock(tenantID, args.Block, args.NewContent, memSenderID); err != nil {
+					return fmt.Sprintf("rewrite block: %v", err), nil
+				}
+				if memorySvc != nil {
+					entry := fmt.Sprintf("[rethink:%s] %s", args.Block, args.Reasoning)
+					_ = memorySvc.AppendHistory(ctx, tenantID, entry)
+				}
+				return fmt.Sprintf("Block %s rewritten (%d chars).", args.Block, len(args.NewContent)), nil
+
+			case "archival_memory_insert":
+				var args struct {
+					Content string `json:"content"`
+				}
+				if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+					return fmt.Sprintf("parse arguments: %v", err), nil
+				}
+				if args.Content == "" {
+					return "Content is empty.", nil
+				}
+				id, err := archivalSvc.Insert(ctx, tenantID, args.Content, time.Time{})
+				if err != nil {
+					return fmt.Sprintf("insert archival: %v", err), nil
+				}
+				return fmt.Sprintf("Archived (id=%s).", id), nil
+
+			case "archival_memory_search":
+				var args struct {
+					Query string `json:"query"`
+					Limit int    `json:"limit"`
+				}
+				if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+					return fmt.Sprintf("parse arguments: %v", err), nil
+				}
+				if args.Limit <= 0 {
+					args.Limit = 5
+				}
+				entries, err := archivalSvc.Search(ctx, tenantID, args.Query, args.Limit)
+				if err != nil {
+					return fmt.Sprintf("search failed: %v", err), nil
+				}
+				if len(entries) == 0 {
+					return "No results found.", nil
+				}
+				var sb strings.Builder
+				sb.WriteString("## Archival Memory Results\n")
+				for i, entry := range entries {
+					fmt.Fprintf(&sb, "%d. [id=%s, %s, sim=%.2f] %s\n",
+						i+1, entry.ID[:8], entry.CreatedAt.Format("2006-01-02 15:04"), entry.Similarity, entry.Content)
+				}
+				return sb.String(), nil
+
+			default:
+				return "Unknown tool: " + tc.Name, nil
+			}
+		}
 	}
 
 	return cfg

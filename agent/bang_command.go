@@ -99,8 +99,13 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		sandbox = resolver.SandboxForUser(senderID)
 	}
 
-	// Get the container/system default shell
-	shell, err := sandbox.GetShell(senderID, workspaceRoot)
+	// GetShell triggers Docker container management (create/start/verify mount),
+	// which requires the host-side workspace path, not the container-internal path.
+	hostWorkspace := workspaceRoot
+	if sandbox.Name() == "docker" {
+		hostWorkspace = a.workspaceRoot(senderID)
+	}
+	shell, err := sandbox.GetShell(senderID, hostWorkspace)
 	if err != nil {
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
@@ -124,9 +129,8 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		Timeout: bangDefaultTimeout,
 		UserID:  senderID,
 	}
-	// For docker mount validation, Workspace must be the host path.
 	if sandbox.Name() == "docker" {
-		spec.Workspace = a.workspaceRoot(senderID)
+		spec.Workspace = hostWorkspace
 	}
 
 	result, err := sandbox.Exec(execCtx, spec)

@@ -19,7 +19,8 @@ import (
 )
 
 // DockerSandbox Docker 沙箱实现
-// 容器生命周期：Close 时仅 stop（不 rm），下次直接 start 复用。
+// 容器生命周期：Close/CloseForUser 仅 stop（不 rm），下次直接 start 复用。
+// 内部逻辑（如 stale mount 重建、启动失败重建）只做 forceRemove，不做 export/import。
 // export+import 仅在用户主动触发 cleanup 时执行（由 settings 中的 sandbox_cleanup 控制）。
 // 始终使用 export+import（而非 docker commit），避免镜像层累积迅速耗尽磁盘空间。
 type DockerSandbox struct {
@@ -621,10 +622,11 @@ func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	containerName = fmt.Sprintf("xbot-%s", userID)
 
 	// Check if container is already running (under lock — only state checks).
+	// When workspace is empty (file operations like ReadFile/WriteFile don't have it),
+	// skip mount verification and reuse the running container as-is.
 	checkOutput, checkErr := dockerExec(dockerCmdTimeout, "inspect", "-f", "{{.State.Running}}", containerName)
 	if checkErr == nil && strings.Contains(string(checkOutput), "true") {
-		if s.verifyWorkspaceMount(containerName, workspace) {
-			// detectShell does docker exec — release lock first to avoid blocking other users.
+		if workspace == "" || s.verifyWorkspaceMount(containerName, workspace) {
 			s.mu.Unlock()
 			shell = s.detectShell(containerName)
 			s.mu.Lock()
@@ -633,23 +635,27 @@ func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 			return containerName, shell, nil
 		}
 		log.Warnf("Container %s has stale workspace mount, will recreate", containerName)
-		s.saveAndRemove(containerName, userID)
+		s.forceRemove(containerName)
 	}
 
-	// Container exists but not running, try to start it.
+	// Container exists but not running — verify mount (if workspace specified) then start.
 	if s.containerExists(containerName) {
-		if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
-			log.Infof("Started existing Docker container %s", containerName)
-			// detectShell does docker exec — release lock first.
-			s.mu.Unlock()
-			shell = s.detectShell(containerName)
-			s.mu.Lock()
-			s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
-			s.mu.Unlock()
-			return containerName, shell, nil
+		mountOK := workspace == "" || s.verifyWorkspaceMount(containerName, workspace)
+		if mountOK {
+			if startErr := dockerRun(dockerCmdTimeout, "start", containerName); startErr == nil {
+				log.Infof("Started existing Docker container %s", containerName)
+				s.mu.Unlock()
+				shell = s.detectShell(containerName)
+				s.mu.Lock()
+				s.containers[userID] = &dockerContainer{name: containerName, started: true, shell: shell}
+				s.mu.Unlock()
+				return containerName, shell, nil
+			}
+			log.Warnf("Container %s failed to start, will recreate", containerName)
+		} else {
+			log.Warnf("Stopped container %s has stale workspace mount, will recreate", containerName)
 		}
-		log.Warnf("Container %s failed to start, will recreate", containerName)
-		s.saveAndRemove(containerName, userID)
+		s.forceRemove(containerName)
 	}
 
 	// Container does not exist — choose image: prefer user-specific image, otherwise base.
@@ -658,6 +664,16 @@ func (s *DockerSandbox) getOrCreateContainer(userID, workspace string) (containe
 	if err := dockerRun(dockerCmdTimeout, "image", "inspect", userImage); err == nil {
 		image = userImage
 		log.Infof("Using user image %s for container %s", userImage, containerName)
+	}
+
+	if workspace == "" {
+		ws, wdErr := os.Getwd()
+		if wdErr != nil {
+			s.mu.Unlock()
+			return "", "", fmt.Errorf("workspace not specified and cannot determine cwd: %w", wdErr)
+		}
+		workspace, _ = filepath.Abs(ws)
+		log.Warnf("No workspace specified for new container %s, falling back to cwd: %s", containerName, workspace)
 	}
 
 	hostPath := s.toHostPath(workspace)
@@ -769,11 +785,9 @@ func (s *DockerSandbox) containerExists(containerName string) bool {
 	return dockerRun(dockerCmdTimeout, "inspect", "-f", "{{.Id}}", containerName) == nil
 }
 
-// saveAndRemove exports a container (preserving installed packages etc.) then stops and removes it.
-func (s *DockerSandbox) saveAndRemove(containerName, userID string) {
-	s.exportImportIfDirty(containerName, userID)
-
-	// Force-kill + remove in one step (most reliable for stale containers)
+// forceRemove force-removes a container without export/import.
+// Export/import only happens via explicit user request (ExportAndImport).
+func (s *DockerSandbox) forceRemove(containerName string) {
 	if out, err := dockerExec(dockerCmdTimeout, "rm", "-f", containerName); err != nil {
 		log.WithError(err).Warnf("Failed to force-remove container %s: %s", containerName, strings.TrimSpace(string(out)))
 	} else {

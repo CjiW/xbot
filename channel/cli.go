@@ -992,6 +992,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		content = ConvertFeishuCard(content)
 	}
 
+	// 处理飞书图片标签（终端无法渲染，替换为文本占位符）
+	content = stripImageTags(content)
+
 	if msg.IsPartial {
 		// 流式输出：追加到当前消息
 		if m.streamingMsgIdx >= 0 && m.streamingMsgIdx < len(m.messages) {
@@ -1325,6 +1328,7 @@ func (c *NonInteractiveChannel) run() {
 		if strings.HasPrefix(content, "__FEISHU_CARD__") {
 			content = ConvertFeishuCard(content)
 		}
+		content = stripImageTags(content)
 		if msg.IsPartial {
 			// 流式部分消息：只输出增量部分
 			if len(content) > len(prevContent) {

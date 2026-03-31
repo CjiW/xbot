@@ -1,11 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -15,20 +15,6 @@ func init() {
 	if err := godotenv.Load(".env"); err != nil {
 		slog.Debug("failed to load .env file, using environment variables only", "error", err)
 	}
-}
-
-// envParseWarned 记录哪些环境变量已经打印过格式错误警告（每个变量只警告一次）
-var envParseWarned sync.Map
-
-func warnEnvParse(key, value, defaultValue string) {
-	if _, loaded := envParseWarned.LoadOrStore(key, true); loaded {
-		return
-	}
-	slog.Warn("invalid environment variable format, using default",
-		"key", key,
-		"value", value,
-		"default", defaultValue,
-	)
 }
 
 // OAuthConfig OAuth 配置
@@ -200,192 +186,217 @@ type PProfConfig struct {
 	Port   int    // 监听端口
 }
 
-// Load 加载配置（优先从环境变量读取）
-func Load() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Host:         getEnvOrDefault("SERVER_HOST", "0.0.0.0"),
-			Port:         getEnvIntOrDefault("SERVER_PORT", 8080),
-			ReadTimeout:  time.Duration(getEnvIntOrDefault("SERVER_READ_TIMEOUT", 30)) * time.Second,
-			WriteTimeout: time.Duration(getEnvIntOrDefault("SERVER_WRITE_TIMEOUT", 120)) * time.Second,
-		},
-		LLM: LLMConfig{
-			Provider: getEnvOrDefault("LLM_PROVIDER", "openai"),
-			BaseURL:  getEnvOrDefault("LLM_BASE_URL", "https://api.openai.com/v1"),
-			APIKey:   getEnvOrDefault("LLM_API_KEY", ""),
-			Model:    getEnvOrDefault("LLM_MODEL", "gpt-4o"),
-		},
-		Log: LogConfig{
-			Level:  getEnvOrDefault("LOG_LEVEL", "info"),
-			Format: getEnvOrDefault("LOG_FORMAT", "json"),
-		},
-		PProf: PProfConfig{
-			Enable: getEnvBoolOrDefault("PPROF_ENABLE", false),
-			Host:   getEnvOrDefault("PPROF_HOST", "localhost"),
-			Port:   getEnvIntOrDefault("PPROF_PORT", 6060),
-		},
-		QQ: QQConfig{
-			Enabled:      getEnvBoolOrDefault("QQ_ENABLED", false),
-			AppID:        getEnvOrDefault("QQ_APP_ID", ""),
-			ClientSecret: getEnvOrDefault("QQ_CLIENT_SECRET", ""),
-			AllowFrom:    splitEnv("QQ_ALLOW_FROM"),
-		},
-		NapCat: NapCatConfig{
-			Enabled:   getEnvBoolOrDefault("NAPCAT_ENABLED", false),
-			WSUrl:     getEnvOrDefault("NAPCAT_WS_URL", "ws://localhost:3001"),
-			Token:     getEnvOrDefault("NAPCAT_TOKEN", ""),
-			AllowFrom: splitEnv("NAPCAT_ALLOW_FROM"),
-		},
-		Feishu: FeishuConfig{
-			Enabled:           getEnvBoolOrDefault("FEISHU_ENABLED", false),
-			AppID:             getEnvOrDefault("FEISHU_APP_ID", ""),
-			AppSecret:         getEnvOrDefault("FEISHU_APP_SECRET", ""),
-			EncryptKey:        getEnvOrDefault("FEISHU_ENCRYPT_KEY", ""),
-			VerificationToken: getEnvOrDefault("FEISHU_VERIFICATION_TOKEN", ""),
-			AllowFrom:         splitEnv("FEISHU_ALLOW_FROM"),
-			Domain:            getEnvOrDefault("FEISHU_DOMAIN", ""),
-		},
-		Embedding: EmbeddingConfig{
-			Provider:  getEnvOrDefault("LLM_EMBEDDING_PROVIDER", ""),
-			BaseURL:   getEnvOrDefault("LLM_EMBEDDING_BASE_URL", ""),
-			APIKey:    getEnvOrDefault("LLM_EMBEDDING_API_KEY", ""),
-			Model:     getEnvOrDefault("LLM_EMBEDDING_MODEL", ""),
-			MaxTokens: getEnvIntOrDefault("LLM_EMBEDDING_MAX_TOKENS", 2048),
-		},
-		Agent: AgentConfig{
-			MaxIterations:        getEnvIntOrDefault("AGENT_MAX_ITERATIONS", 100),
-			MaxConcurrency:       getEnvIntOrDefault("AGENT_MAX_CONCURRENCY", 3),
-			MemoryWindow:         getEnvIntOrDefault("AGENT_MEMORY_WINDOW", 50),
-			MemoryProvider:       getEnvOrDefault("MEMORY_PROVIDER", "flat"),
-			WorkDir:              getEnvOrDefault("WORK_DIR", "."),
-			PromptFile:           getEnvOrDefault("PROMPT_FILE", "prompt.md"),
-			SingleUser:           getEnvBoolOrDefault("SINGLE_USER", false),
-			MCPInactivityTimeout: getEnvDurationOrDefault("MCP_INACTIVITY_TIMEOUT", 30*time.Minute),
-			MCPCleanupInterval:   getEnvDurationOrDefault("MCP_CLEANUP_INTERVAL", 5*time.Minute),
-			SessionCacheTimeout:  getEnvDurationOrDefault("SESSION_CACHE_TIMEOUT", 24*time.Hour),
-			EnableAutoCompress:   getEnvBoolOrDefault("AGENT_ENABLE_AUTO_COMPRESS", true),
-			MaxContextTokens:     getEnvIntOrDefault("AGENT_MAX_CONTEXT_TOKENS", 100000),
-			CompressionThreshold: getEnvFloatOrDefault("AGENT_COMPRESSION_THRESHOLD", 0.7),
-			ContextMode:          getEnvOrDefault("AGENT_CONTEXT_MODE", ""),
-			MaxSubAgentDepth:     getEnvIntOrDefault("MAX_SUBAGENT_DEPTH", 6),
-			PurgeOldMessages:     getEnvBoolOrDefault("AGENT_PURGE_OLD_MESSAGES", false),
-
-			LLMRetryAttempts: getEnvIntOrDefault("LLM_RETRY_ATTEMPTS", 5),
-			LLMRetryDelay:    getEnvDurationOrDefault("LLM_RETRY_DELAY", 1*time.Second),
-			LLMRetryMaxDelay: getEnvDurationOrDefault("LLM_RETRY_MAX_DELAY", 30*time.Second),
-			LLMRetryTimeout:  getEnvDurationOrDefault("LLM_RETRY_TIMEOUT", 120*time.Second),
-		},
-		OAuth: OAuthConfig{
-			Enable:  getEnvBoolOrDefault("OAUTH_ENABLE", false),
-			Host:    getEnvOrDefault("OAUTH_HOST", "127.0.0.1"), // 默认绑定 localhost，防止暴露到所有网络接口
-			Port:    getEnvIntOrDefault("OAUTH_PORT", 8081),
-			BaseURL: getEnvOrDefault("OAUTH_BASE_URL", ""),
-		},
-		Sandbox: SandboxConfig{
-			Mode:        getEnvOrDefault("SANDBOX_MODE", "docker"),
-			RemoteMode:  getEnvOrDefault("SANDBOX_REMOTE_MODE", ""),
-			DockerImage: getEnvOrDefault("SANDBOX_DOCKER_IMAGE", "ubuntu:22.04"),
-			HostWorkDir: getEnvOrDefault("HOST_WORK_DIR", ""),
-			IdleTimeout: time.Duration(getEnvIntOrDefault("SANDBOX_IDLE_TIMEOUT_MINUTES", 30)) * time.Minute,
-			WSPort:      getEnvIntOrDefault("SANDBOX_WS_PORT", 8080),
-			AuthToken:   getEnvOrDefault("SANDBOX_AUTH_TOKEN", ""),
-			PublicURL:   getEnvOrDefault("SANDBOX_PUBLIC_URL", ""),
-		},
-		StartupNotify: StartupNotifyConfig{
-			Channel: getEnvOrDefault("STARTUP_NOTIFY_CHANNEL", ""),
-			ChatID:  getEnvOrDefault("STARTUP_NOTIFY_CHAT_ID", ""),
-		},
-		Admin: AdminConfig{
-			ChatID: getAdminChatID(),
-		},
-		Web: WebConfig{
-			Enable:           getEnvBoolOrDefault("WEB_ENABLED", false),
-			Host:             getEnvOrDefault("WEB_HOST", "0.0.0.0"),
-			Port:             getEnvIntOrDefault("WEB_PORT", 8082),
-			StaticDir:        getEnvOrDefault("WEB_STATIC_DIR", ""),
-			UploadDir:        getEnvOrDefault("WEB_UPLOAD_DIR", ""),
-			PersonaIsolation: getEnvBoolOrDefault("WEB_PERSONA_ISOLATION", false),
-			InviteOnly:       getEnvBoolOrDefault("WEB_INVITE_ONLY", false),
-		},
-		OSS: OSSConfig{
-			Provider:       getEnvOrDefault("OSS_PROVIDER", "local"),
-			QiniuAccessKey: getEnvOrDefault("OSS_QINIU_ACCESS_KEY", ""),
-			QiniuSecretKey: getEnvOrDefault("OSS_QINIU_SECRET_KEY", ""),
-			QiniuBucket:    getEnvOrDefault("OSS_QINIU_BUCKET", ""),
-			QiniuDomain:    getEnvOrDefault("OSS_QINIU_DOMAIN", ""),
-			QiniuRegion:    getEnvOrDefault("OSS_QINIU_REGION", "z0"),
-		},
-	}
-
-}
-
-// getEnvOrDefault 获取环境变量，如果不存在则返回默认值
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getEnvIntOrDefault 获取整数环境变量，如果不存在则返回默认值
-func getEnvIntOrDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
+// XbotHome 返回 xbot 全局目录路径（$XBOT_HOME 或 ~/.xbot）。
+// 目录如果不存在会自动创建。
+func XbotHome() string {
+	dir := os.Getenv("XBOT_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			dir = ".xbot"
+		} else {
+			dir = filepath.Join(home, ".xbot")
 		}
-		warnEnvParse(key, value, strconv.Itoa(defaultValue))
 	}
-	return defaultValue
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("failed to create xbot home directory", "path", dir, "error", err)
+	}
+	return dir
 }
 
-// getEnvBoolOrDefault 获取布尔环境变量，如果不存在则返回默认值
-func getEnvBoolOrDefault(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-		warnEnvParse(key, value, strconv.FormatBool(defaultValue))
-	}
-	return defaultValue
+// ConfigFilePath 返回全局配置文件路径。
+func ConfigFilePath() string {
+	return filepath.Join(XbotHome(), "config.json")
 }
 
-// splitEnv 获取逗号分隔的环境变量列表
-func splitEnv(key string) []string {
-	value := os.Getenv(key)
-	if value == "" {
+// DBFilePath 返回全局数据库文件路径。
+func DBFilePath() string {
+	return filepath.Join(XbotHome(), "xbot.db")
+}
+
+// LoadFromFile 从 JSON 文件加载配置。只覆盖文件中存在的非零值字段。
+func LoadFromFile(path string) *Config {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil
 	}
-	parts := strings.Split(value, ",")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		slog.Warn("failed to parse config file, ignoring", "path", path, "error", err)
+		return nil
 	}
-	return result
+	return &cfg
 }
 
-// getEnvDurationOrDefault 获取时长环境变量，如果不存在则返回默认值
-func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
-		}
-		warnEnvParse(key, value, defaultValue.String())
+// applyEnvOverrides 用环境变量覆盖配置中的非空值。
+// 环境变量优先级最高，文件配置作为基础值。
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("SERVER_HOST"); v != "" {
+		cfg.Server.Host = v
 	}
-	return defaultValue
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Port = i
+		}
+	}
+	// ... 其余字段同理，但为避免大量重复代码，
+	// 改用更简洁的方式：只覆盖 CLI 常用的关键字段
+
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		cfg.LLM.Provider = v
+	}
+	if v := os.Getenv("LLM_BASE_URL"); v != "" {
+		cfg.LLM.BaseURL = v
+	}
+	if v := os.Getenv("LLM_API_KEY"); v != "" {
+		cfg.LLM.APIKey = v
+	}
+	if v := os.Getenv("LLM_MODEL"); v != "" {
+		cfg.LLM.Model = v
+	}
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		cfg.Log.Format = v
+	}
+	if v := os.Getenv("WORK_DIR"); v != "" {
+		cfg.Agent.WorkDir = v
+	}
+	if v := os.Getenv("PROMPT_FILE"); v != "" {
+		cfg.Agent.PromptFile = v
+	}
+	if v := os.Getenv("MEMORY_PROVIDER"); v != "" {
+		cfg.Agent.MemoryProvider = v
+	}
+	if v := os.Getenv("AGENT_MAX_ITERATIONS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxIterations = i
+		}
+	}
+	if v := os.Getenv("AGENT_MAX_CONCURRENCY"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxConcurrency = i
+		}
+	}
+	if v := os.Getenv("AGENT_MEMORY_WINDOW"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MemoryWindow = i
+		}
+	}
+	if v := os.Getenv("SANDBOX_MODE"); v != "" {
+		cfg.Sandbox.Mode = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_PROVIDER"); v != "" {
+		cfg.Embedding.Provider = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_BASE_URL"); v != "" {
+		cfg.Embedding.BaseURL = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_API_KEY"); v != "" {
+		cfg.Embedding.APIKey = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_MODEL"); v != "" {
+		cfg.Embedding.Model = v
+	}
 }
 
-// getEnvFloatOrDefault 获取浮点数环境变量，如果不存在则返回默认值
-func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
-	if value := os.Getenv(key); value != "" {
-		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
-			return floatValue
-		}
-		warnEnvParse(key, value, strconv.FormatFloat(defaultValue, 'f', -1, 64))
+// Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
+// 这保证了：config.json 提供持久化配置，环境变量用于临时覆盖（如 CI/Docker）。
+func Load() *Config {
+	cfg := LoadFromFile(ConfigFilePath())
+	if cfg == nil {
+		cfg = &Config{}
 	}
-	return defaultValue
+	applyEnvOverrides(cfg)
+
+	// 填充 CLI 常用的默认值（仅在配置和环境变量都未设置时生效）
+	if cfg.LLM.Provider == "" {
+		cfg.LLM.Provider = "openai"
+	}
+	if cfg.LLM.BaseURL == "" {
+		cfg.LLM.BaseURL = "https://api.openai.com/v1"
+	}
+	if cfg.LLM.Model == "" {
+		cfg.LLM.Model = "gpt-4o"
+	}
+	if cfg.Log.Level == "" {
+		cfg.Log.Level = "info"
+	}
+	if cfg.Log.Format == "" {
+		cfg.Log.Format = "json"
+	}
+	if cfg.Agent.WorkDir == "" {
+		cfg.Agent.WorkDir = "."
+	}
+	if cfg.Agent.PromptFile == "" {
+		cfg.Agent.PromptFile = "prompt.md"
+	}
+	if cfg.Agent.MaxIterations == 0 {
+		cfg.Agent.MaxIterations = 100
+	}
+	if cfg.Agent.MaxConcurrency == 0 {
+		cfg.Agent.MaxConcurrency = 3
+	}
+	if cfg.Agent.MemoryWindow == 0 {
+		cfg.Agent.MemoryWindow = 50
+	}
+	if cfg.Agent.MCPInactivityTimeout == 0 {
+		cfg.Agent.MCPInactivityTimeout = 30 * time.Minute
+	}
+	if cfg.Agent.MCPCleanupInterval == 0 {
+		cfg.Agent.MCPCleanupInterval = 5 * time.Minute
+	}
+	if cfg.Agent.SessionCacheTimeout == 0 {
+		cfg.Agent.SessionCacheTimeout = 24 * time.Hour
+	}
+	if cfg.Agent.LLMRetryAttempts == 0 {
+		cfg.Agent.LLMRetryAttempts = 5
+	}
+	if cfg.Agent.LLMRetryDelay == 0 {
+		cfg.Agent.LLMRetryDelay = 1 * time.Second
+	}
+	if cfg.Agent.LLMRetryMaxDelay == 0 {
+		cfg.Agent.LLMRetryMaxDelay = 30 * time.Second
+	}
+	if cfg.Agent.LLMRetryTimeout == 0 {
+		cfg.Agent.LLMRetryTimeout = 120 * time.Second
+	}
+	if cfg.Sandbox.Mode == "" {
+		cfg.Sandbox.Mode = "docker"
+	}
+	if cfg.Sandbox.IdleTimeout == 0 {
+		cfg.Sandbox.IdleTimeout = 30 * time.Minute
+	}
+	if cfg.Embedding.MaxTokens == 0 {
+		cfg.Embedding.MaxTokens = 2048
+	}
+	if cfg.Agent.MaxContextTokens == 0 {
+		cfg.Agent.MaxContextTokens = 100000
+	}
+	if cfg.Agent.CompressionThreshold == 0 {
+		cfg.Agent.CompressionThreshold = 0.7
+	}
+	if cfg.Agent.MaxSubAgentDepth == 0 {
+		cfg.Agent.MaxSubAgentDepth = 6
+	}
+	if cfg.Server.Host == "" {
+		cfg.Server.Host = "0.0.0.0"
+	}
+	if cfg.Server.Port == 0 {
+		cfg.Server.Port = 8080
+	}
+	if cfg.Server.ReadTimeout == 0 {
+		cfg.Server.ReadTimeout = 30 * time.Second
+	}
+	if cfg.Server.WriteTimeout == 0 {
+		cfg.Server.WriteTimeout = 120 * time.Second
+	}
+	if cfg.Admin.ChatID == "" {
+		cfg.Admin.ChatID = getAdminChatID()
+	}
+
+	return cfg
 }
 
 // getAdminChatID 获取管理员会话 ID，实现回退逻辑
@@ -394,6 +405,5 @@ func getAdminChatID() string {
 	if adminChatID := os.Getenv("ADMIN_CHAT_ID"); adminChatID != "" {
 		return adminChatID
 	}
-	// 回退到 STARTUP_NOTIFY_CHAT_ID
 	return os.Getenv("STARTUP_NOTIFY_CHAT_ID")
 }

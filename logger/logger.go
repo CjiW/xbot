@@ -34,7 +34,8 @@ type TextFormatter = log.TextFormatter
 type SetupConfig struct {
 	Level      string // 日志级别：debug, info, warn, error
 	Format     string // 日志格式：text, json
-	WorkDir    string // 工作目录（日志文件存放位置）
+	WorkDir    string // 工作目录（日志文件存放位置，当 LogDir 为空时使用）
+	LogDir     string // 直接指定日志目录（优先于 WorkDir）
 	MaxAge     int    // 日志保留天数（默认 7 天）
 	MaxBackups int    // 保留的旧日志文件数量（默认 0，表示不限制）
 	FileOnly   bool   // true: only write to log file, suppress stdout (for TUI modes)
@@ -156,10 +157,12 @@ func Setup(cfg SetupConfig) error {
 		})
 	}
 
-	// 如果指定了工作目录，启用文件输出
-	if cfg.WorkDir != "" {
-		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-		logDir := filepath.Join(cfg.WorkDir, ".xbot", "logs")
+	// 如果指定了日志目录，启用文件输出
+	logDir := cfg.LogDir
+	if logDir == "" && cfg.WorkDir != "" {
+		logDir = filepath.Join(cfg.WorkDir, ".xbot", "logs")
+	}
+	if logDir != "" {
 		drf, err := newDailyRotateFile(logDir, "xbot")
 		if err != nil {
 			return fmt.Errorf("failed to create log rotator: %w", err)

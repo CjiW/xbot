@@ -878,8 +878,8 @@ func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	toolStyle := lipgloss.NewStyle()
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
-	if !strings.Contains(result, "thinking") {
-		t.Errorf("renderProgressStatus with nil progress should show thinking, got: %q", result)
+	if !strings.Contains(result, "processing") {
+		t.Errorf("renderProgressStatus with nil progress should show processing, got: %q", result)
 	}
 }
 
@@ -975,8 +975,8 @@ func TestCLIModelRenderProgressBlockThinking(t *testing.T) {
 	model.typingStartTime = time.Now()
 
 	result := model.renderProgressBlock()
-	if !strings.Contains(result, "thinking") {
-		t.Errorf("renderProgressBlock should show thinking, got: %q", result)
+	if !strings.Contains(result, "processing") {
+		t.Errorf("renderProgressBlock should show processing, got: %q", result)
 	}
 	if !strings.Contains(result, "Progress") {
 		t.Errorf("renderProgressBlock should show Progress header, got: %q", result)

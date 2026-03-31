@@ -51,7 +51,6 @@ func init() {
 
 const (
 	cliSenderID    = "cli_user"
-	cliChatID      = cliSenderID
 	cliChannelName = "cli"
 	cliMsgBufSize  = 100
 )
@@ -62,14 +61,12 @@ const (
 // atomic frame, eliminating flicker caused by partial repaints.
 // Terminals that don't support mode 2026 simply ignore the sequences.
 
-// maxBubbleWidth returns the content width used for message bubbles.
+// maxBubbleWidth returns the content width used for message rendering.
+// Full width minus small margins for readability.
 func maxBubbleWidth(termWidth int) int {
-	w := int(float64(termWidth) * 0.75)
+	w := termWidth - 2
 	if w < 30 {
 		w = 30
-	}
-	if w > 100 {
-		w = 100
 	}
 	return w
 }
@@ -189,6 +186,7 @@ type HistoryMessage struct {
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
 	WorkDir       string                           // 工作目录（用于标题栏显示）
+	ChatID        string                           // 会话 ID（按工作目录区分）
 	HistoryLoader func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
 }
 
@@ -252,6 +250,7 @@ func (c *CLIChannel) Start() error {
 	c.model = newCLIModel()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+	c.model.chatID = c.config.ChatID
 
 	// 加载历史消息（会话恢复）
 	if c.config.HistoryLoader != nil {
@@ -375,6 +374,9 @@ type cliModel struct {
 	// 工作目录（标题栏显示用）
 	workDir string
 
+	// 会话 ID（按工作目录区分）
+	chatID string
+
 	// Smart quit
 	shouldQuit bool // Flag to quit after current operation completes
 
@@ -416,7 +418,7 @@ type cliMessage struct {
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
 	ta := textarea.New()
-	ta.Placeholder = "Enter to send, /help for commands"
+	ta.Placeholder = "Enter send · Ctrl+Enter newline · /help"
 	ta.Focus()
 	ta.SetWidth(76)
 	ta.SetHeight(3)
@@ -434,6 +436,9 @@ func newCLIModel() *cliModel {
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
+
+	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
+	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 
 	vp := viewport.New(80, 20)
 
@@ -480,6 +485,19 @@ type cliProgressMsg struct {
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 
+// isCtrlEnter 检测 Ctrl+Enter 按键。
+// 终端对 Ctrl+Enter 没有统一标准，常见 raw sequences：
+//   - CSI u 协议: \x1b[13;5u   (kitty, Ghostty, Windows Terminal)
+//   - 旧格式:     \x1b[27;5;13~ (部分 xterm 变体)
+func isCtrlEnter(msg tea.Msg) bool {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok || key.Type != tea.KeyRunes {
+		return false
+	}
+	s := string(key.Runes)
+	return s == "\x1b[13;5u" || s == "\x1b[27;5;13~"
+}
+
 // ---------------------------------------------------------------------------
 // Bubble Tea Interface Implementation
 // ---------------------------------------------------------------------------
@@ -501,6 +519,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// Ctrl+Enter 换行（终端发送的 raw sequence 不统一，需手动检测）
+	if isCtrlEnter(msg) {
+		m.textarea.InsertString("\n")
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -511,7 +535,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.msgBus.Inbound <- bus.InboundMessage{
 						Channel:    cliChannelName,
 						SenderID:   cliSenderID,
-						ChatID:     cliChatID,
+						ChatID:     m.chatID,
 						ChatType:   "p2p",
 						Content:    "/cancel",
 						SenderName: "CLI User",
@@ -645,17 +669,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, tickCmd())
 			m.updateViewportContent()
 		}
+
+	case spinner.TickMsg:
+		// Spinner tick: advance frame and trigger viewport refresh
+		if m.typing || m.progress != nil {
+			m.spinner, cmd = m.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+			m.updateViewportContent()
+		}
 	}
 
-	// Kick off spinner + tick chains when typing just started
+	// Kick off spinner + tick chains when processing just started
 	if m.typing && !wasTyping {
 		cmds = append(cmds, m.spinner.Tick, tickCmd())
-	}
-
-	// 更新 spinner（仅在 typing 状态时）
-	if m.typing || m.progress != nil {
-		m.spinner, cmd = m.spinner.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	// 更新 viewport
@@ -701,10 +727,10 @@ func (m *cliModel) handleResize(width, height int) {
 	// textarea must match the content width exactly.
 	m.textarea.SetWidth(width - 4)
 
-	// Glamour word-wrap must match bubble content width so that lines
+	// Glamour word-wrap must match viewport width so that lines
 	// don't get re-wrapped by lipgloss (which would lose the margin).
-	if width > 2 {
-		m.renderer = newGlamourRenderer(maxBubbleWidth(width) - 2)
+	if width > 4 {
+		m.renderer = newGlamourRenderer(width - 4)
 	}
 
 	if !m.ready {
@@ -736,7 +762,7 @@ func (m *cliModel) View() string {
 
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
-	titleRight := "Enter send | /help | /exit"
+	titleRight := "Enter send | Ctrl+Enter newline | /help"
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1
@@ -838,8 +864,10 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		fmt.Fprintf(&sb, "#%d", m.progress.Iteration)
 
 		// Show first active tool name
+		hasActive := false
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status != "done" && tool.Status != "error" {
+				hasActive = true
 				label := tool.Label
 				if label == "" {
 					label = tool.Name
@@ -850,7 +878,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		}
 
 		// Phase hint when no active tool
-		if len(m.progress.ActiveTools) == 0 {
+		if !hasActive {
 			switch m.progress.Phase {
 			case "thinking":
 				sb.WriteString(" · thinking")
@@ -858,10 +886,14 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 				sb.WriteString(" · compressing")
 			case "retrying":
 				sb.WriteString(" · retrying")
+			default:
+				if len(m.progress.CompletedTools) > 0 {
+					sb.WriteString(" · done")
+				}
 			}
 		}
 	} else {
-		sb.WriteString("thinking...")
+		sb.WriteString("processing...")
 	}
 
 	// Total elapsed
@@ -918,7 +950,7 @@ func (m *cliModel) sendToAgent(content string) {
 		m.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    cliChannelName,
 			SenderID:   cliSenderID,
-			ChatID:     cliChatID,
+			ChatID:     m.chatID,
 			ChatType:   "p2p",
 			Content:    content,
 			SenderName: "CLI User",
@@ -956,7 +988,7 @@ func (m *cliModel) sendMessage(content string) {
 		m.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    cliChannelName,
 			SenderID:   cliSenderID,
-			ChatID:     cliChatID,
+			ChatID:     m.chatID,
 			ChatType:   "p2p",
 			Content:    content,
 			SenderName: "CLI User",
@@ -1003,7 +1035,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 			m.msgBus.Inbound <- bus.InboundMessage{
 				Channel:    cliChannelName,
 				SenderID:   cliSenderID,
-				ChatID:     cliChatID,
+				ChatID:     m.chatID,
 				ChatType:   "p2p",
 				Content:    "/cancel",
 				SenderName: "CLI User",
@@ -1054,7 +1086,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 			m.msgBus.Inbound <- bus.InboundMessage{
 				Channel:    cliChannelName,
 				SenderID:   cliSenderID,
-				ChatID:     cliChatID,
+				ChatID:     m.chatID,
 				ChatType:   "p2p",
 				Content:    "/compact",
 				SenderName: "CLI User",
@@ -1201,7 +1233,7 @@ func (m *cliModel) renderProgressBlock() string {
 		return ""
 	}
 
-	bubbleWidth := maxBubbleWidth(m.width)
+	bubbleWidth := m.width - 4
 	innerWidth := bubbleWidth - 4 // border(2) + padding(2)
 
 	// Styles
@@ -1349,7 +1381,7 @@ func (m *cliModel) renderProgressBlock() string {
 		}
 	} else if m.typing {
 		sb.WriteString("  ")
-		sb.WriteString(thinkingStyle.Render(m.spinner.View() + " thinking..."))
+		sb.WriteString(thinkingStyle.Render(m.spinner.View() + " processing..."))
 		sb.WriteString("\n")
 	}
 
@@ -1410,37 +1442,7 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 func (m *cliModel) renderMessage(msg *cliMessage) string {
 	var sb strings.Builder
 
-	bubbleWidth := maxBubbleWidth(m.width)
-
-	// 用户消息气泡样式（不设 Background，避免与内容 ANSI 冲突导致背景色不一致）
-	userBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#3d5a80")).
-		Foreground(lipgloss.Color("#e0e0e0")).
-		Padding(0, 1).
-		MarginLeft(2).
-		Width(bubbleWidth).
-		Align(lipgloss.Right)
-
-	// Agent 消息气泡样式
-	assistantBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#3d6b4f")).
-		Foreground(lipgloss.Color("#e0e0e0")).
-		Padding(0, 1).
-		MarginRight(2).
-		Width(bubbleWidth).
-		Align(lipgloss.Left)
-
-	// 流式消息样式
-	streamingBubbleStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#ff9800")).
-		Foreground(lipgloss.Color("#e0e0e0")).
-		Padding(0, 1).
-		MarginRight(2).
-		Width(bubbleWidth).
-		Align(lipgloss.Left)
+	contentWidth := m.width - 4 // 留边距
 
 	// 时间戳样式
 	timeStyle := lipgloss.NewStyle().
@@ -1490,7 +1492,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			BorderForeground(lipgloss.Color("#5c6bc0")).
 			Foreground(lipgloss.Color("#e0e0e0")).
 			Padding(0, 1).
-			Width(bubbleWidth).
+			Width(contentWidth).
 			Align(lipgloss.Left)
 
 		toolHeaderStyle := lipgloss.NewStyle().
@@ -1554,33 +1556,29 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	case "user":
 		label := userLabelStyle.Render("You")
 		header := lipgloss.NewStyle().
-			Width(m.width - 4).
+			Width(contentWidth).
 			Align(lipgloss.Right).
 			Render(fmt.Sprintf("%s %s", timeStr, label))
 		sb.WriteString(header)
 		sb.WriteString("\n")
-		bubble := userBubbleStyle.Render(rendered)
-		bubbleRight := lipgloss.NewStyle().
-			Width(m.width).
-			Align(lipgloss.Right).
-			Render(bubble)
-		sb.WriteString(bubbleRight)
+		// 用户消息：右对齐，左侧竖线指示器
+		userStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#e0e0e0")).
+			Width(contentWidth).
+			Align(lipgloss.Right)
+		sb.WriteString(userStyle.Render(rendered))
 	default:
-		// assistant 消息
-		var bubble string
+		// assistant 消息：左对齐，无气泡边框
 		if msg.isPartial {
 			label := streamingLabelStyle.Render("Assistant")
-			header := fmt.Sprintf("%s %s ...", timeStr, label)
-			sb.WriteString(header)
-			bubble = streamingBubbleStyle.Render(rendered)
+			sb.WriteString(fmt.Sprintf("%s %s ...", timeStr, label))
 		} else {
 			label := assistantLabelStyle.Render("Assistant")
-			header := fmt.Sprintf("%s %s", timeStr, label)
-			sb.WriteString(header)
-			bubble = assistantBubbleStyle.Render(rendered)
+			sb.WriteString(fmt.Sprintf("%s %s", timeStr, label))
 		}
 		sb.WriteString("\n")
-		sb.WriteString(bubble)
+		// Agent 消息直接渲染（glamour 已处理 markdown）
+		sb.WriteString(rendered)
 	}
 
 	sb.WriteString("\n\n")

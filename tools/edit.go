@@ -161,6 +161,11 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		return nil, fmt.Errorf("old_string is required")
 	}
 
+	// When only end_line is specified, default start_line to 1
+	if params.EndLine > 0 && params.StartLine <= 0 {
+		params.StartLine = 1
+	}
+
 	if shouldUseSandbox(ctx) {
 		sandboxPath := resolveSandboxPath(ctx, params.Path)
 		return t.executeInSandbox(ctx, sandboxPath, params)

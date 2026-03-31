@@ -71,3 +71,22 @@ func ConvertFeishuCard(content string) string {
 	}
 	return strings.TrimSpace(result.String())
 }
+
+// stripImageTags 将飞书图片标签替换为终端友好的文本占位符。
+// <image image_key="img_v3_..." /> → [图片]
+func stripImageTags(content string) string {
+	result := content
+	for {
+		start := strings.Index(result, "<image")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(result[start:], "/>")
+		if end == -1 {
+			result = result[:start] + "\n[图片]\n"
+			break
+		}
+		result = result[:start] + "\n[图片]\n" + result[start+end+2:]
+	}
+	return result
+}

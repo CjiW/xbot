@@ -1,15 +1,26 @@
 // xbot CLI entry point
 // Standalone terminal-based chat interface
+//
+// Usage:
+//   xbot-cli               恢复上次会话（默认）
+//   xbot-cli --resume      恢复会话并显示当前状态
+//   xbot-cli --new         开始新会话
+//   xbot-cli <prompt>      非交互模式执行单次 prompt
+//   xbot-cli -p <prompt>   非交互模式执行单次 prompt
+//   echo "hello" | xbot-cli  管道模式
 
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"xbot/agent"
 	"xbot/bus"
@@ -21,11 +32,59 @@ import (
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
+
+	"github.com/google/uuid"
+	"github.com/mattn/go-isatty"
 )
 
 func main() {
 	// 打印版本信息
 	fmt.Printf("xbot CLI %s\n", version.Version)
+
+	// 检测非交互模式
+	prompt := ""
+	// 解析命令行标志
+	resume := false
+	newSession := false
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--resume":
+			resume = true
+		case "--new":
+			newSession = true
+		case "-p":
+			if len(os.Args) > i+1 {
+				prompt = os.Args[i+1]
+			}
+		default:
+			if !strings.HasPrefix(os.Args[i], "-") {
+				prompt = os.Args[i]
+			}
+		}
+	}
+	if prompt == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.WithError(err).Fatal("Failed to read from stdin")
+		}
+		prompt = strings.TrimSpace(string(data))
+	}
+
+	// 如果是非交互模式，执行单次 prompt 并退出
+	if prompt != "" {
+		executeNonInteractive(prompt)
+		return
+	}
+
+	// 显示会话模式
+	if newSession {
+		fmt.Println("模式: 新会话 (--new)")
+	} else if resume {
+		fmt.Println("模式: 恢复会话 (--resume)")
+	} else {
+		fmt.Println("模式: 恢复上次会话 (默认，使用 --new 开始新会话)")
+	}
+
 	fmt.Println("Starting...")
 
 	// 加载配置
@@ -124,7 +183,9 @@ func main() {
 	disp := channel.NewDispatcher(msgBus)
 
 	// 创建并注册 CLI 渠道
-	cliCh := channel.NewCLIChannel(channel.CLIChannelConfig{}, msgBus)
+	cliCh := channel.NewCLIChannel(channel.CLIChannelConfig{
+		WorkDir: workDir,
+	}, msgBus)
 	disp.Register(cliCh)
 
 	// 启动 Agent（需要 context）
@@ -134,6 +195,33 @@ func main() {
 	// 启动分发器（处理 outbound 消息）
 	go disp.Run()
 
+	// §7 会话恢复：根据参数发送初始化命令
+	if newSession {
+		// --new 模式：发送 /new 清除上次会话
+		msgBus.Inbound <- bus.InboundMessage{
+			Channel:    "cli",
+			SenderID:   "cli_user",
+			ChatID:     "cli_user",
+			ChatType:   "p2p",
+			Content:    "/new",
+			SenderName: "CLI User",
+			Time:       time.Now(),
+			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+		}
+	} else if resume {
+		// --resume 模式：发送 /context info 显示当前会话状态
+		msgBus.Inbound <- bus.InboundMessage{
+			Channel:    "cli",
+			SenderID:   "cli_user",
+			ChatID:     "cli_user",
+			ChatType:   "p2p",
+			Content:    "/context info",
+			SenderName: "CLI User",
+			Time:       time.Now(),
+			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+		}
+	}
+
 	// 处理信号 - 优雅退出
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -142,21 +230,21 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		fmt.Printf("\n收到信号 %v，正在关闭...\n", sig)
-		
+
 		// 1. 停止 CLI 渠道（触发 Bubble Tea 退出）
 		cliCh.Stop()
-		
+
 		// 2. 取消 Agent context
 		cancel()
-		
+
 		// 3. 停止分发器
 		disp.Stop()
-		
+
 		// 4. 关闭数据库
 		if db != nil {
 			db.Close()
 		}
-		
+
 		log.Info("CLI shutdown complete")
 	}()
 
@@ -198,4 +286,118 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 	}
 
 	return llm.NewRetryLLM(inner, retryCfg), nil
+}
+
+// executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout
+func executeNonInteractive(prompt string) {
+	// 加载配置
+	cfg := config.Load()
+
+	// 配置日志
+	workDir := cfg.Agent.WorkDir
+	if err := setupLogger(cfg.Log, workDir); err != nil {
+		log.WithError(err).Fatal("Failed to setup logger")
+	}
+	defer log.Close()
+
+	// 创建 LLM 客户端
+	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
+		Attempts: uint(cfg.Agent.LLMRetryAttempts),
+		Delay:    cfg.Agent.LLMRetryDelay,
+		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
+		Timeout:  cfg.Agent.LLMRetryTimeout,
+	})
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create LLM client")
+	}
+
+	// 创建消息总线
+	msgBus := bus.NewMessageBus()
+
+	// 数据库
+	xbotDir := filepath.Join(workDir, ".xbot")
+	dbPath := filepath.Join(xbotDir, "xbot.db")
+	if err := storage.MigrateIfNeeded(context.Background(), workDir, dbPath); err != nil {
+		log.WithError(err).Fatal("Failed to migrate data to SQLite")
+	}
+
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")
+	} else {
+		tools.SetRunnerTokenDB(db.Conn())
+	}
+
+	embBaseURL := cfg.Embedding.BaseURL
+	if embBaseURL == "" {
+		embBaseURL = cfg.LLM.BaseURL
+	}
+	embAPIKey := cfg.Embedding.APIKey
+	if embAPIKey == "" {
+		embAPIKey = cfg.LLM.APIKey
+	}
+
+	tools.InitSandbox(cfg.Sandbox, workDir)
+
+	// 创建 Agent
+	agentLoop := agent.New(agent.Config{
+		Bus:                  msgBus,
+		LLM:                  llmClient,
+		Model:                cfg.LLM.Model,
+		MaxIterations:        cfg.Agent.MaxIterations,
+		MaxConcurrency:       cfg.Agent.MaxConcurrency,
+		MemoryWindow:         cfg.Agent.MemoryWindow,
+		DBPath:               dbPath,
+		SkillsDir:            filepath.Join(xbotDir, "skills"),
+		WorkDir:              workDir,
+		PromptFile:           cfg.Agent.PromptFile,
+		SingleUser:           true,
+		SandboxMode:          cfg.Sandbox.Mode,
+		Sandbox:              tools.GetSandbox(),
+		MemoryProvider:       cfg.Agent.MemoryProvider,
+		EmbeddingProvider:    cfg.Embedding.Provider,
+		EmbeddingBaseURL:     embBaseURL,
+		EmbeddingAPIKey:      embAPIKey,
+		EmbeddingModel:       cfg.Embedding.Model,
+		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
+		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
+		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
+		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
+		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		MaxContextTokens:     cfg.Agent.MaxContextTokens,
+		CompressionThreshold: cfg.Agent.CompressionThreshold,
+		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
+		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
+	})
+	agentLoop.IndexGlobalTools()
+
+	// 创建 NonInteractiveChannel 并注册
+	nonIntCh := channel.NewNonInteractiveChannel(msgBus)
+	disp := channel.NewDispatcher(msgBus)
+	disp.Register(nonIntCh)
+
+	// 启动 Agent
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agentLoop.Run(ctx)
+	go disp.Run()
+
+	// 发送 prompt
+	msgBus.Inbound <- bus.InboundMessage{
+		Channel:    "cli",
+		SenderID:   "cli_user",
+		ChatID:     "cli_user",
+		ChatType:   "p2p",
+		Content:    prompt,
+		SenderName: "CLI User",
+		Time:       time.Now(),
+		RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+	}
+
+	// 等待回复完成
+	nonIntCh.WaitDone()
+
+	if db != nil {
+		db.Close()
+	}
 }

@@ -107,6 +107,14 @@ func (r *SandboxRouter) DockerImage() string {
 	return r.docker.Image()
 }
 
+// IsRunnerOnline reports whether a specific named runner is connected for the user.
+func (r *SandboxRouter) IsRunnerOnline(userID, runnerName string) bool {
+	if r.remote == nil {
+		return false
+	}
+	return r.remote.IsRunnerOnline(userID, runnerName)
+}
+
 // SetTokenStore stores the runner token store for reading user active_runner preferences.
 func (r *SandboxRouter) SetTokenStore(store *RunnerTokenStore) {
 	r.tokenStore = store
@@ -256,23 +264,5 @@ func (r *SandboxRouter) ExportAndImport(userID string) error {
 
 // resolve returns the per-user sandbox instance (delegates to SandboxForUser).
 func (r *SandboxRouter) resolve(userID string) Sandbox {
-	if userID != "" && r.remote != nil && r.remote.HasUser(userID) {
-		return r.remote
-	}
-	// Pure web user without remote runner — denied by default (same logic as SandboxForUser)
-	if strings.HasPrefix(userID, "web-") {
-		webServerRunner := false
-		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
-			if b, err := strconv.ParseBool(v); err == nil {
-				webServerRunner = b
-			}
-		}
-		if !webServerRunner {
-			return r.denied
-		}
-	}
-	if r.docker != nil {
-		return r.docker
-	}
-	return r.none
+	return r.SandboxForUser(userID)
 }

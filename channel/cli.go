@@ -352,10 +352,10 @@ func (c *CLIChannel) handleOutbound() {
 
 // animTicker 是一个简单的字符动画 ticker，不依赖 bubbles/spinner。
 type animTicker struct {
-	frames  []string
-	frame   int
-	ticks   int64 // total ticks for phase-aware behavior
-	style   lipgloss.Style
+	frames []string
+	frame  int
+	ticks  int64 // total ticks for phase-aware behavior
+	style  lipgloss.Style
 }
 
 func newAnimTicker(frames []string, color string) *animTicker {
@@ -743,12 +743,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickerTickMsg:
-			// Ticker tick: advance frame and trigger viewport refresh
-			if m.typing || m.progress != nil {
-				m.ticker.tick()
-				cmds = append(cmds, tickerCmd())
-				m.updateViewportContent()
-			}
+		// Ticker tick: advance frame and trigger viewport refresh
+		if m.typing || m.progress != nil {
+			m.ticker.tick()
+			cmds = append(cmds, tickerCmd())
+			m.updateViewportContent()
+		}
 	}
 
 	// Kick off ticker + tick chains when processing just started
@@ -872,11 +872,11 @@ func (m *cliModel) View() string {
 	toolStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#4dd0e1"))
 
-		// ========== 渲染各部分 ==========
-		// 分隔线：柔和的虚线
-		separator := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#2a2a3a")).
-			Render(strings.Repeat("─", m.width))
+	// ========== 渲染各部分 ==========
+	// 分隔线：柔和的虚线
+	separator := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#2a2a3a")).
+		Render(strings.Repeat("─", m.width))
 
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
@@ -904,8 +904,8 @@ func (m *cliModel) View() string {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
 	} else {
-			status = readyStatusStyle.Render("● ready")
-		}
+		status = readyStatusStyle.Render("● ready")
+	}
 
 	// 组装界面
 	return fmt.Sprintf(
@@ -960,13 +960,13 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 				sb.WriteString(" · retrying")
 			default:
 				if len(m.progress.CompletedTools) > 0 {
-				sb.WriteString(" · done")
+					sb.WriteString(" · done")
 				}
 			}
 		}
-		} else {
+	} else {
 		sb.WriteString(pickVerb(m.ticker.ticks) + "...")
-		}
+	}
 
 	// Total elapsed
 	if !m.typingStartTime.IsZero() {
@@ -1338,7 +1338,7 @@ func (m *cliModel) renderProgressBlock() string {
 
 	var sb strings.Builder
 
-		// Render completed iterations (dimmed)
+	// Render completed iterations (dimmed)
 	for _, snap := range m.iterationHistory {
 		sb.WriteString(dimStyle.Render(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration))))
 		sb.WriteString("\n")
@@ -1423,7 +1423,7 @@ func (m *cliModel) renderProgressBlock() string {
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
-				pad = 1
+					pad = 1
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
@@ -1459,11 +1459,11 @@ func (m *cliModel) renderProgressBlock() string {
 			m.renderSubAgentTree(&sb, m.progress.SubAgents, 1)
 		}
 	} else if m.typing {
-				sb.WriteString("  ")
-				sb.WriteString(m.ticker.viewFrames(orbitFrames))
-				sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
-				sb.WriteString("\n")
-			}
+		sb.WriteString("  ")
+		sb.WriteString(m.ticker.viewFrames(orbitFrames))
+		sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
+		sb.WriteString("\n")
+	}
 
 	content := strings.TrimRight(sb.String(), "\n")
 	if content == "" {

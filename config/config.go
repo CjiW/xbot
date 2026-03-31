@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strconv"
@@ -14,6 +15,128 @@ import (
 func init() {
 	if err := godotenv.Load(".env"); err != nil {
 		slog.Debug("failed to load .env file, using environment variables only", "error", err)
+	}
+}
+
+// configPaths 定义配置文件搜索路径（按优先级）
+var configPaths = []string{
+	".xbot/config.json",
+}
+
+// LoadFromFile 从 JSON 文件加载配置
+func LoadFromFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := unmarshalConfigJSON(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// unmarshalConfigJSON 解析 JSON 配置，支持扁平 key 映射
+func unmarshalConfigJSON(data []byte, cfg *Config) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	// 支持两种格式：
+	// 1. 扁平格式：{"llm_provider": "openai", "llm_base_url": "..."}
+	// 2. 嵌套格式：{"llm": {"provider": "openai", "base_url": "..."}}
+	if _, ok := raw["llm"]; ok {
+		// 嵌套格式，标准 json.Unmarshal
+		return json.Unmarshal(data, cfg)
+	}
+	// 扁平格式，手动映射
+	if v, ok := raw["llm_provider"].(string); ok {
+		cfg.LLM.Provider = v
+	}
+	if v, ok := raw["llm_base_url"].(string); ok {
+		cfg.LLM.BaseURL = v
+	}
+	if v, ok := raw["llm_api_key"].(string); ok {
+		cfg.LLM.APIKey = v
+	}
+	if v, ok := raw["llm_model"].(string); ok {
+		cfg.LLM.Model = v
+	}
+	if v, ok := raw["log_level"].(string); ok {
+		cfg.Log.Level = v
+	}
+	if v, ok := raw["log_format"].(string); ok {
+		cfg.Log.Format = v
+	}
+	if v, ok := raw["work_dir"].(string); ok {
+		cfg.Agent.WorkDir = v
+	}
+	if v, ok := raw["prompt_file"].(string); ok {
+		cfg.Agent.PromptFile = v
+	}
+	return nil
+}
+
+// loadYAMLConfig 尝试从配置文件加载配置，找到第一个存在的文件
+func loadYAMLConfig() *Config {
+	for _, p := range configPaths {
+		if cfg, err := LoadFromFile(p); err == nil {
+			slog.Debug("loaded config from file", "path", p)
+			return cfg
+		}
+	}
+	return nil
+}
+
+// setEnvIfAbsent 仅在环境变量未设置时注入值（环境变量始终优先）
+func setEnvIfAbsent(key, value string) {
+	if os.Getenv(key) == "" && value != "" {
+		os.Setenv(key, value)
+	}
+}
+
+// injectEnvFromConfig 将 yaml 配置值注入环境变量（不覆盖已有环境变量）
+func injectEnvFromConfig(cfg *Config) {
+	// LLM
+	setEnvIfAbsent("LLM_PROVIDER", cfg.LLM.Provider)
+	setEnvIfAbsent("LLM_BASE_URL", cfg.LLM.BaseURL)
+	setEnvIfAbsent("LLM_API_KEY", cfg.LLM.APIKey)
+	setEnvIfAbsent("LLM_MODEL", cfg.LLM.Model)
+	// Log
+	setEnvIfAbsent("LOG_LEVEL", cfg.Log.Level)
+	setEnvIfAbsent("LOG_FORMAT", cfg.Log.Format)
+	// Agent
+	if cfg.Agent.MaxIterations > 0 {
+		setEnvIfAbsent("AGENT_MAX_ITERATIONS", strconv.Itoa(cfg.Agent.MaxIterations))
+	}
+	if cfg.Agent.MaxConcurrency > 0 {
+		setEnvIfAbsent("AGENT_MAX_CONCURRENCY", strconv.Itoa(cfg.Agent.MaxConcurrency))
+	}
+	if cfg.Agent.MemoryWindow > 0 {
+		setEnvIfAbsent("AGENT_MEMORY_WINDOW", strconv.Itoa(cfg.Agent.MemoryWindow))
+	}
+	if cfg.Agent.MaxContextTokens > 0 {
+		setEnvIfAbsent("AGENT_MAX_CONTEXT_TOKENS", strconv.Itoa(cfg.Agent.MaxContextTokens))
+	}
+	if cfg.Agent.CompressionThreshold > 0 {
+		setEnvIfAbsent("AGENT_COMPRESSION_THRESHOLD", strconv.FormatFloat(cfg.Agent.CompressionThreshold, 'f', 2, 64))
+	}
+	if cfg.Agent.MaxSubAgentDepth > 0 {
+		setEnvIfAbsent("MAX_SUBAGENT_DEPTH", strconv.Itoa(cfg.Agent.MaxSubAgentDepth))
+	}
+	if cfg.Agent.LLMRetryTimeout > 0 {
+		setEnvIfAbsent("LLM_RETRY_TIMEOUT", cfg.Agent.LLMRetryTimeout.String())
+	}
+	setEnvIfAbsent("WORK_DIR", cfg.Agent.WorkDir)
+	setEnvIfAbsent("PROMPT_FILE", cfg.Agent.PromptFile)
+	// Embedding
+	setEnvIfAbsent("LLM_EMBEDDING_PROVIDER", cfg.Embedding.Provider)
+	setEnvIfAbsent("LLM_EMBEDDING_BASE_URL", cfg.Embedding.BaseURL)
+	setEnvIfAbsent("LLM_EMBEDDING_API_KEY", cfg.Embedding.APIKey)
+	setEnvIfAbsent("LLM_EMBEDDING_MODEL", cfg.Embedding.Model)
+	// Server
+	if cfg.Server.Port > 0 {
+		setEnvIfAbsent("SERVER_PORT", strconv.Itoa(cfg.Server.Port))
 	}
 }
 
@@ -200,8 +323,12 @@ type PProfConfig struct {
 	Port   int    // 监听端口
 }
 
-// Load 加载配置（优先从环境变量读取）
+// Load 加载配置：先读 .xbot/config.json，再用环境变量覆盖
 func Load() *Config {
+	// 先加载 yaml 配置，将值注入环境变量（环境变量优先级更高）
+	if yamlCfg := loadYAMLConfig(); yamlCfg != nil {
+		injectEnvFromConfig(yamlCfg)
+	}
 	return &Config{
 		Server: ServerConfig{
 			Host:         getEnvOrDefault("SERVER_HOST", "0.0.0.0"),

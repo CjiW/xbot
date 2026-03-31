@@ -128,15 +128,12 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 		log.Ctx(ctx).WithError(err).Warn("Failed to reset last consolidated")
 	}
 
-	// 清除记忆整理状态，取消正在进行的整理任务（多路径协调）
 	tenantKey := msg.Channel + ":" + msg.ChatID
 
 	// 清理 offload 数据
 	if a.offloadStore != nil {
 		a.offloadStore.CleanSession(tenantKey)
 	}
-
-	a.clearConsolidationState(tenantKey)
 
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,

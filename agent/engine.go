@@ -129,6 +129,9 @@ type RunConfig struct {
 	// EnableReadWriteSplit 启用读写分离并行执行（默认 false = 全部串行）
 	EnableReadWriteSplit bool
 
+	// MemoryWindow 记忆整理窗口大小（消息数），用于上下文压缩时同步整理记忆
+	MemoryWindow int
+
 	// SessionFinalSentCallback 工具发送最终回复时的回调（如飞书卡片）。
 	// 返回 true 表示已发送最终回复，后续进度通知应停止。
 	SessionFinalSentCallback func() bool
@@ -425,16 +428,24 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		if needCompress {
+			// Update structured progress for CLI/web
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseCompressing
+			}
+
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", totalTokens))
+				progressLines = append(progressLines, "> 📦 正在压缩上下文并整理记忆...")
 				notifyProgress("")
 			}
 
-			log.Ctx(ctx).Info("Auto context compaction triggered")
+			log.Ctx(ctx).Info("Auto context compaction + memory consolidation triggered")
 
 			result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
 			if compressErr != nil {
 				log.Ctx(ctx).WithError(compressErr).Warn("Auto context compaction failed")
+				if structuredProgress != nil {
+					structuredProgress.Phase = PhaseThinking
+				}
 				return
 			}
 
@@ -442,13 +453,43 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			messages = syncMessages(result.LLMView)
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
+
+			// Memory consolidation: run during compression window
+			if cfg.Session != nil && cfg.MemoryWindow > 0 {
+				mem := cfg.Session.Memory()
+				if mem != nil {
+					lastConsolidated := cfg.Session.LastConsolidated()
+					consolidateResult, memErr := mem.Memorize(ctx, memory.MemorizeInput{
+						Messages:         result.SessionView,
+						LastConsolidated: lastConsolidated,
+						LLMClient:        cfg.LLMClient,
+						Model:            cfg.Model,
+						ArchiveAll:       false,
+						MemoryWindow:     cfg.MemoryWindow,
+					})
+					if memErr != nil {
+						log.Ctx(ctx).WithError(memErr).Warn("Memory consolidation during compaction failed (non-fatal)")
+					} else if consolidateResult.OK {
+						if err := cfg.Session.SetLastConsolidated(consolidateResult.NewLastConsolidated); err != nil {
+							log.Ctx(ctx).WithError(err).Warn("Failed to update last consolidated")
+						}
+						log.Ctx(ctx).Info("Memory consolidation completed alongside compaction")
+					}
+				}
+			}
+
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				progressLines = append(progressLines, fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
 				notifyProgress("")
 			}
 			log.Ctx(ctx).WithFields(log.Fields{
 				"new_tokens": newTokenCount,
-			}).Info("Auto context compaction completed")
+			}).Info("Auto context compaction + memory consolidation completed")
+
+			// Restore phase
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseThinking
+			}
 
 			GlobalMetrics.CompressEvents.Add(1)
 			GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))

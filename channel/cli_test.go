@@ -849,7 +849,7 @@ func TestCLIModelRenderProgressStatus(t *testing.T) {
 	}{
 		{"thinking", "Thinking"},
 		{"tool_exec", "#0"},
-		{"compressing", "compressing"},
+		{"compressing", "compressing + memory"},
 		{"retrying", "retrying"},
 		{"done", "#0"},
 		{"unknown", "#0"},

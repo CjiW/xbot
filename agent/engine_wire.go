@@ -96,6 +96,9 @@ func (a *Agent) buildBaseRunConfig(
 		// 读写分离（主 Agent 始终启用）
 		EnableReadWriteSplit: true,
 
+		// 记忆整理窗口（上下文压缩时同步整理记忆）
+		MemoryWindow: a.memoryWindow,
+
 		// SessionFinalSent 回调
 		SessionFinalSentCallback: func() bool {
 			_, sent := a.sessionFinalSent.Load(sessionKey)

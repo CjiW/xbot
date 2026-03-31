@@ -955,7 +955,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 			case "thinking":
 				sb.WriteString(" · " + pickVerb(m.ticker.ticks))
 			case "compressing":
-				sb.WriteString(" · compressing")
+				sb.WriteString(" · compressing + memory")
 			case "retrying":
 				sb.WriteString(" · retrying")
 			default:

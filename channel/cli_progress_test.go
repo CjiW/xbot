@@ -32,6 +32,13 @@ func assertCount(t *testing.T, label, haystack, needle string, expected int) {
 func countToolsInSummary(model *cliModel) int {
 	for _, msg := range model.messages {
 		if msg.role == "tool_summary" {
+			if len(msg.iterations) > 0 {
+				count := 0
+				for _, it := range msg.iterations {
+					count += len(it.Tools)
+				}
+				return count
+			}
 			return len(msg.tools)
 		}
 	}

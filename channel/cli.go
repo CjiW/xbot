@@ -61,17 +61,6 @@ const (
 // will batch all writes between the begin/end markers into a single
 // atomic frame, eliminating flicker caused by partial repaints.
 // Terminals that don't support mode 2026 simply ignore the sequences.
-//
-// Embedding *os.File ensures the term.File interface (Read, Write, Close, Fd)
-// is satisfied so Bubble Tea can detect terminal size via ioctl.
-type syncWriter struct{ *os.File }
-
-func (s *syncWriter) Write(p []byte) (n int, err error) {
-	_, _ = s.File.Write([]byte("\x1b[?2026h"))
-	n, err = s.File.Write(p)
-	_, _ = s.File.Write([]byte("\x1b[?2026l"))
-	return
-}
 
 // maxBubbleWidth returns the content width used for message bubbles.
 func maxBubbleWidth(termWidth int) int {
@@ -182,9 +171,25 @@ func formatElapsed(ms int64) string {
 // CLI Channel Config
 // ---------------------------------------------------------------------------
 
+// HistoryIteration 历史迭代快照（用于会话恢复的 tool_summary 渲染）
+type HistoryIteration struct {
+	Iteration int
+	Thinking  string
+	Tools     []CLIToolProgress
+}
+
+// HistoryMessage 历史消息（用于会话恢复）
+type HistoryMessage struct {
+	Role       string // "user", "assistant", "tool_summary", "system"
+	Content    string
+	Timestamp  time.Time
+	Iterations []HistoryIteration // 仅 role=="tool_summary" 时有值，按迭代顺序
+}
+
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
-	WorkDir string // 工作目录（用于标题栏显示）
+	WorkDir       string                           // 工作目录（用于标题栏显示）
+	HistoryLoader func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +252,32 @@ func (c *CLIChannel) Start() error {
 	c.model = newCLIModel()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+
+	// 加载历史消息（会话恢复）
+	if c.config.HistoryLoader != nil {
+		if history, err := c.config.HistoryLoader(); err == nil && len(history) > 0 {
+			for _, hm := range history {
+				cm := cliMessage{
+					role:      hm.Role,
+					content:   hm.Content,
+					timestamp: hm.Timestamp,
+					isPartial: false,
+					dirty:     true,
+				}
+				// 映射迭代快照
+				if len(hm.Iterations) > 0 {
+					cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
+					for i, hi := range hm.Iterations {
+						cm.iterations[i] = cliIterationSnapshot(hi)
+					}
+				}
+				c.model.messages = append(c.model.messages, cm)
+			}
+			log.WithField("count", len(history)).Info("Restored session history")
+		} else if err != nil {
+			log.WithError(err).Warn("Failed to load session history")
+		}
+	}
 
 	// 创建 Bubble Tea program
 	c.program = tea.NewProgram(c.model,
@@ -378,7 +409,8 @@ type cliMessage struct {
 	renderWidth int    // 渲染时的终端宽度（用于 resize 失效检测）
 
 	// --- §2 工具可视化 ---
-	tools []CLIToolProgress // 仅 role=="tool_summary" 时有值，复用已有类型
+	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
+	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 }
 
 // newCLIModel 创建 CLI model
@@ -1135,15 +1167,14 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			}
 		}
 
-		// §2 工具可视化：生成工具摘要消息（汇总所有迭代的工具）
-		allTools := m.collectAllTools()
-		if len(allTools) > 0 {
+		// §2 工具可视化：生成工具摘要消息（按迭代分组）
+		if len(m.iterationHistory) > 0 {
 			toolMsg := cliMessage{
-				role:      "tool_summary",
-				content:   "",
-				timestamp: time.Now(),
-				tools:     allTools,
-				dirty:     true,
+				role:       "tool_summary",
+				content:    "",
+				timestamp:  time.Now(),
+				iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+				dirty:      true,
 			}
 			insertIdx := len(m.messages) - 1
 			if insertIdx < 0 {
@@ -1202,7 +1233,9 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration)))
 		sb.WriteString("\n")
 		if snap.Thinking != "" {
-			text := truncateToWidth(snap.Thinking, innerWidth-4)
+			// Collapse multi-line thinking text into a single line to avoid
+			// command output bleeding into subsequent progress lines.
+			text := truncateToWidth(strings.ReplaceAll(snap.Thinking, "\n", " "), innerWidth-4)
 			sb.WriteString("  ")
 			sb.WriteString(thinkingStyle.Render(text))
 			sb.WriteString("\n")
@@ -1237,7 +1270,9 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString("\n")
 
 		if m.progress.Thinking != "" {
-			text := truncateToWidth(m.progress.Thinking, innerWidth-4)
+			// Collapse multi-line thinking text into a single line to avoid
+			// command output bleeding into subsequent progress lines.
+			text := truncateToWidth(strings.ReplaceAll(m.progress.Thinking, "\n", " "), innerWidth-4)
 			sb.WriteString("  ")
 			sb.WriteString(thinkingStyle.Render(text))
 			sb.WriteString("\n")
@@ -1449,7 +1484,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 	switch msg.role {
 	case "tool_summary":
-		// §2 工具可视化：渲染工具调用摘要
+		// §2 工具可视化：按迭代分组渲染 thinking + tools
 		toolSummaryStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#5c6bc0")).
@@ -1465,20 +1500,53 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		toolItemStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#a5d6a7"))
 
+		thinkingStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#90a4ae")).
+			Italic(true)
+
 		var toolSb strings.Builder
-		toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", len(msg.tools))))
-		toolSb.WriteString("\n")
-		for _, tool := range msg.tools {
-			label := tool.Label
-			if label == "" {
-				label = tool.Name
+
+		// 优先使用迭代分组（运行时 + 历史恢复），否则回退到扁平列表
+		if len(msg.iterations) > 0 {
+			totalTools := 0
+			for _, it := range msg.iterations {
+				totalTools += len(it.Tools)
 			}
-			elapsed := ""
-			if tool.Elapsed > 0 {
-				elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-			}
-			toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
+			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
 			toolSb.WriteString("\n")
+			for _, it := range msg.iterations {
+				if it.Thinking != "" {
+					toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
+					toolSb.WriteString("\n")
+				}
+				for _, tool := range it.Tools {
+					label := tool.Label
+					if label == "" {
+						label = tool.Name
+					}
+					elapsed := ""
+					if tool.Elapsed > 0 {
+						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+					}
+					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+					toolSb.WriteString("\n")
+				}
+			}
+		} else {
+			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", len(msg.tools))))
+			toolSb.WriteString("\n")
+			for _, tool := range msg.tools {
+				label := tool.Label
+				if label == "" {
+					label = tool.Name
+				}
+				elapsed := ""
+				if tool.Elapsed > 0 {
+					elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+				}
+				toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
+				toolSb.WriteString("\n")
+			}
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":

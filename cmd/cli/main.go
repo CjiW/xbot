@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -180,9 +181,98 @@ func main() {
 	disp := channel.NewDispatcher(msgBus)
 
 	// 创建并注册 CLI 渠道
-	cliCh := channel.NewCLIChannel(channel.CLIChannelConfig{
+	cliCfg := channel.CLIChannelConfig{
 		WorkDir: workDir,
-	}, msgBus)
+	}
+	// 设置历史消息加载器（会话恢复）
+	// 过滤中间迭代消息（含 tool_calls 的 assistant + tool），
+	// 只保留 user 消息 + tool_summary（从 Detail 重建）+ 最终 assistant 回复
+	if db != nil {
+		tenantSvc := sqlite.NewTenantService(db)
+		sessionSvc := sqlite.NewSessionService(db)
+		tenantID, err := tenantSvc.GetOrCreateTenantID("cli", "cli_user")
+		if err == nil {
+			cliCfg.HistoryLoader = func() ([]channel.HistoryMessage, error) {
+				msgs, err := sessionSvc.GetAllMessages(tenantID)
+				if err != nil {
+					return nil, err
+				}
+				var history []channel.HistoryMessage
+				for _, m := range msgs {
+					switch m.Role {
+					case "tool":
+						// 跳过 LLM 内部的 tool 消息
+						continue
+					case "assistant":
+						if m.Detail != "" {
+							// 最终 assistant 消息：Detail 包含 IterationHistory JSON
+							var snaps []agent.IterationSnapshot
+							if jsonErr := json.Unmarshal([]byte(m.Detail), &snaps); jsonErr == nil {
+								// 按迭代分组生成 tool_summary
+								iters := make([]channel.HistoryIteration, 0, len(snaps))
+								for _, snap := range snaps {
+									tools := make([]channel.CLIToolProgress, len(snap.Tools))
+									for i, t := range snap.Tools {
+										label := t.Label
+										if label == "" {
+											label = t.Name
+										}
+										tools[i] = channel.CLIToolProgress{
+											Name:    t.Name,
+											Label:   label,
+											Status:  t.Status,
+											Elapsed: t.ElapsedMS,
+										}
+									}
+									iters = append(iters, channel.HistoryIteration{
+										Iteration: snap.Iteration,
+										Thinking:  snap.Thinking,
+										Tools:     tools,
+									})
+								}
+								if len(iters) > 0 {
+									history = append(history, channel.HistoryMessage{
+										Role:       "tool_summary",
+										Timestamp:  m.Timestamp,
+										Iterations: iters,
+									})
+								}
+							}
+							// 最终 assistant 回复单独一条消息
+							if m.Content != "" {
+								history = append(history, channel.HistoryMessage{
+									Role:      "assistant",
+									Content:   m.Content,
+									Timestamp: m.Timestamp,
+								})
+							}
+						} else if len(m.ToolCalls) > 0 {
+							// 中间迭代 assistant 消息（有 tool_calls 但无 Detail），跳过
+							continue
+						} else if m.Content != "" {
+							// 无 Detail 也无 ToolCalls 的 assistant（防御性处理）
+							history = append(history, channel.HistoryMessage{
+								Role:      "assistant",
+								Content:   m.Content,
+								Timestamp: m.Timestamp,
+							})
+						}
+					default:
+						// user 消息等
+						if m.Content != "" {
+							history = append(history, channel.HistoryMessage{
+								Role:      m.Role,
+								Content:   m.Content,
+								Timestamp: m.Timestamp,
+							})
+						}
+					}
+				}
+				return history, nil
+			}
+		}
+	}
+	cliCh := channel.NewCLIChannel(cliCfg, msgBus)
 	disp.Register(cliCh)
 
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
@@ -206,19 +296,6 @@ func main() {
 			ChatID:     "cli_user",
 			ChatType:   "p2p",
 			Content:    "/new",
-			SenderName: "CLI User",
-			Time:       time.Now(),
-			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-			Metadata:   cliMeta,
-		}
-	} else {
-		// 默认模式 & --resume 模式：发送 /context info 显示当前会话状态
-		msgBus.Inbound <- bus.InboundMessage{
-			Channel:    "cli",
-			SenderID:   "cli_user",
-			ChatID:     "cli_user",
-			ChatType:   "p2p",
-			Content:    "/context info",
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),

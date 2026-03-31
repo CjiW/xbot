@@ -44,12 +44,11 @@ func main() {
 	// 检测非交互模式
 	prompt := ""
 	// 解析命令行标志
-	resume := false
 	newSession := false
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--resume":
-			resume = true
+			// 保留兼容性，行为与默认相同
 		case "--new":
 			newSession = true
 		case "-p":
@@ -79,10 +78,8 @@ func main() {
 	// 显示会话模式
 	if newSession {
 		fmt.Println("模式: 新会话 (--new)")
-	} else if resume {
-		fmt.Println("模式: 恢复会话 (--resume)")
 	} else {
-		fmt.Println("模式: 恢复上次会话 (默认，使用 --new 开始新会话)")
+		fmt.Println("模式: 恢复上次会话 (使用 --new 开始新会话)")
 	}
 
 	fmt.Println("Starting...")
@@ -188,6 +185,10 @@ func main() {
 	}, msgBus)
 	disp.Register(cliCh)
 
+	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
+	agentLoop.SetDirectSend(disp.SendDirect)
+	agentLoop.SetChannelFinder(disp.GetChannel)
+
 	// 启动 Agent（需要 context）
 	ctx, cancel := context.WithCancel(context.Background())
 	go agentLoop.Run(ctx)
@@ -196,6 +197,7 @@ func main() {
 	go disp.Run()
 
 	// §7 会话恢复：根据参数发送初始化命令
+	cliMeta := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
 	if newSession {
 		// --new 模式：发送 /new 清除上次会话
 		msgBus.Inbound <- bus.InboundMessage{
@@ -207,9 +209,10 @@ func main() {
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			Metadata:   cliMeta,
 		}
-	} else if resume {
-		// --resume 模式：发送 /context info 显示当前会话状态
+	} else {
+		// 默认模式 & --resume 模式：发送 /context info 显示当前会话状态
 		msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "cli",
 			SenderID:   "cli_user",
@@ -219,6 +222,7 @@ func main() {
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			Metadata:   cliMeta,
 		}
 	}
 
@@ -254,14 +258,14 @@ func main() {
 	}
 }
 
-// setupLogger 配置日志（简化版，只输出到文件）
+// setupLogger 配置日志（CLI 模式：仅文件输出，不干扰终端 TUI）
 func setupLogger(cfg config.LogConfig, workDir string) error {
-	// CLI 模式：日志只输出到文件，不干扰终端
 	return log.Setup(log.SetupConfig{
-		Level:   cfg.Level,
-		Format:  cfg.Format,
-		WorkDir: workDir,
-		MaxAge:  7,
+		Level:    cfg.Level,
+		Format:   cfg.Format,
+		WorkDir:  workDir,
+		MaxAge:   7,
+		FileOnly: true,
 	})
 }
 

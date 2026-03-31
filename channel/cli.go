@@ -30,14 +30,18 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 )
 
 func init() {
-	// Prevent termenv from querying terminal background color via OSC 11.
-	// Without this, termenv sends "\x1b]11;?\x1b\\" on first use, and the
-	// terminal's response (e.g. "]11;rgb:1e1e/1e1e/1e1e\") leaks into the
-	// textarea stdin and gets displayed as garbled text.
+	// Prevent termenv / lipgloss from querying terminal background color
+	// via OSC 11.  Pre-set dark background and TrueColor on the lipgloss
+	// default renderer so AdaptiveColor never triggers a lazy query.
+	// The termenv default output uses WithTTY(false) so no code path can
+	// accidentally send OSC sequences to the real terminal.
+	lipgloss.SetHasDarkBackground(true)
+	lipgloss.SetColorProfile(termenv.TrueColor)
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
 }
 
@@ -52,9 +56,75 @@ const (
 	cliMsgBufSize  = 100
 )
 
+// syncWriter wraps an *os.File with DEC Synchronized Output (mode 2026).
+// Terminals that support this (GNOME Terminal/VTE 0.68+, iTerm2, foot, etc.)
+// will batch all writes between the begin/end markers into a single
+// atomic frame, eliminating flicker caused by partial repaints.
+// Terminals that don't support mode 2026 simply ignore the sequences.
+//
+// Embedding *os.File ensures the term.File interface (Read, Write, Close, Fd)
+// is satisfied so Bubble Tea can detect terminal size via ioctl.
+type syncWriter struct{ *os.File }
+
+func (s *syncWriter) Write(p []byte) (n int, err error) {
+	_, _ = s.File.Write([]byte("\x1b[?2026h"))
+	n, err = s.File.Write(p)
+	_, _ = s.File.Write([]byte("\x1b[?2026l"))
+	return
+}
+
+// maxBubbleWidth returns the content width used for message bubbles.
+func maxBubbleWidth(termWidth int) int {
+	w := int(float64(termWidth) * 0.75)
+	if w < 30 {
+		w = 30
+	}
+	if w > 100 {
+		w = 100
+	}
+	return w
+}
+
+// truncateToWidth truncates s so its display width (accounting for wide CJK
+// characters) fits within maxWidth columns.  If truncated, "..." is appended.
+// This avoids slicing mid-UTF-8-byte which would corrupt terminal rendering.
+func truncateToWidth(s string, maxWidth int) string {
+	if runewidth.StringWidth(s) <= maxWidth {
+		return s
+	}
+	ellipsis := "..."
+	target := maxWidth - runewidth.StringWidth(ellipsis)
+	if target <= 0 {
+		return ellipsis[:maxWidth]
+	}
+	w := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > target {
+			return s[:i] + ellipsis
+		}
+		w += rw
+	}
+	return s
+}
+
+// newGlamourRenderer creates a glamour Markdown renderer with Document.Margin
+// set to 0 (the default dark style uses Margin=2 which misaligns when lipgloss
+// re-wraps lines inside a narrower bubble).
+func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
+	style := glamour.DarkStyleConfig
+	zero := uint(0)
+	style.Document.Margin = &zero
+	r, _ := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(wrapWidth),
+	)
+	return r
+}
+
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-	"/cancel", "/clear", "/compact", "/context", "/help",
+	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
 	"/model", "/models", "/new", "/quit",
 }
 
@@ -86,6 +156,26 @@ type CLISubAgent struct {
 	Status   string // "running" | "done" | "error"
 	Desc     string
 	Children []CLISubAgent
+}
+
+// cliIterationSnapshot captures a completed iteration for the progress panel.
+type cliIterationSnapshot struct {
+	Iteration int
+	Thinking  string
+	Tools     []CLIToolProgress
+}
+
+// formatElapsed formats milliseconds into a human-friendly duration string.
+func formatElapsed(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms < 60000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	mins := ms / 60000
+	secs := (ms % 60000) / 1000
+	return fmt.Sprintf("%dm%ds", mins, secs)
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +227,22 @@ func (c *CLIChannel) Name() string {
 func (c *CLIChannel) Start() error {
 	log.Info("CLI channel starting...")
 
+	// Capture the real stdout for bubbletea, then redirect os.Stdout and
+	// os.Stderr to /dev/null so that background goroutines (logger cleanup,
+	// third-party libs, stray fmt.Print, etc.) cannot write to the terminal
+	// and cause flickering or garbled output in the alt-screen TUI.
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	if devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+		os.Stdout = devNull
+		os.Stderr = devNull
+		defer func() {
+			os.Stdout = origStdout
+			os.Stderr = origStderr
+			_ = devNull.Close()
+		}()
+	}
+
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
 	c.model.SetMsgBus(c.msgBus)
@@ -144,8 +250,8 @@ func (c *CLIChannel) Start() error {
 
 	// 创建 Bubble Tea program
 	c.program = tea.NewProgram(c.model,
-		tea.WithAltScreen(),       // 使用备用屏幕缓冲区
-		tea.WithMouseCellMotion(), // 支持鼠标滚轮
+		tea.WithAltScreen(),
+		tea.WithOutput(origStdout),
 	)
 
 	// 启动 outbound 消息处理 goroutine
@@ -230,14 +336,16 @@ type cliModel struct {
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
 
 	// 进度信息
-	progress *CLIProgressPayload
+	progress          *CLIProgressPayload
+	iterationHistory  []cliIterationSnapshot // 已完成迭代快照
+	typingStartTime   time.Time              // 本次处理开始时间
+	lastSeenIteration int                    // 上次进度事件的迭代号
 
 	// 工作目录（标题栏显示用）
 	workDir string
 
 	// Smart quit
-	pendingQuit bool // Ctrl+C during typing: cancel then quit
-	shouldQuit  bool // Flag to quit after current operation completes
+	shouldQuit bool // Flag to quit after current operation completes
 
 	// 输入就绪状态（agent 回复期间禁止发送）
 	inputReady bool
@@ -245,6 +353,7 @@ type cliModel struct {
 	// --- §1 增量渲染 ---
 	renderCacheValid bool   // 全局缓存是否有效（resize 后置 false）
 	cachedHistory    string // 缓存的历史消息渲染结果（不含当前流式消息）
+	cachedMsgCount   int    // messages count when cache was built
 
 	// --- §2 工具可视化 ---
 	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
@@ -275,26 +384,28 @@ type cliMessage struct {
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
 	ta := textarea.New()
-	ta.Placeholder = "输入消息，Enter 发送..."
+	ta.Placeholder = "Enter to send, /help for commands"
 	ta.Focus()
-	ta.SetWidth(80)
+	ta.SetWidth(76)
 	ta.SetHeight(3)
-	ta.CharLimit = 0 // 无限制
-
-	// 样式 - 美化输入框
-	ta.Prompt = "┃ "
+	ta.CharLimit = 0
+	ta.Prompt = "> "
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(lipgloss.Color("#1a1a2e"))
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.Text = lipgloss.NewStyle()
 
 	vp := viewport.New(80, 20)
 
-	// Markdown 渲染器（固定暗色主题，避免查询终端背景色导致 OSC 11 响应泄漏到 textarea）
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(78),
-	)
+	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
 	// Spinner
 	s := spinner.New()
@@ -343,13 +454,7 @@ type cliTickMsg struct{}
 
 // Init 初始化
 func (m *cliModel) Init() tea.Cmd {
-	// 清空 textarea，吸收可能残留的终端 OSC 响应序列（如 ]11;rgb:...）
-	m.textarea.Reset()
-
-	return tea.Batch(
-		textarea.Blink, // 光标闪烁
-		tickCmd(),      // 启动定时器
-	)
+	return textarea.Blink
 }
 
 // Update 处理消息
@@ -362,13 +467,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// §8 Tab 补全：记录输入内容变化以重置补全状态
 	prevText := m.textarea.Value()
 
+	wasTyping := m.typing
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC:
-			// Ctrl+C 智能中断
+		case tea.KeyCtrlC, tea.KeyEsc:
+			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
 			if m.typing {
-				// Agent 正在处理：发送取消请求，延迟退出
 				if m.msgBus != nil {
 					m.msgBus.Inbound <- bus.InboundMessage{
 						Channel:    cliChannelName,
@@ -381,22 +487,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 					}
 				}
-				m.pendingQuit = true
 				m.messages = append(m.messages, cliMessage{
 					role:      "system",
-					content:   "已发送取消请求，等待当前操作完成...",
+					content:   "已发送取消请求",
 					timestamp: time.Now(),
 					dirty:     true,
 				})
 				m.updateViewportContent()
 				return m, tea.Batch(cmds...)
 			}
-			// 非处理状态：直接退出
-			return m, tea.Quit
-
-		case tea.KeyEsc:
-			// Esc 退出
-			return m, tea.Quit
+			// 非处理状态：清空输入
+			if m.textarea.Value() != "" {
+				m.textarea.Reset()
+			}
+			return m, nil
 
 		case tea.KeyEnter:
 			// Enter 发送消息
@@ -407,6 +511,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if content != "" {
 				m.sendMessage(content)
 				m.textarea.Reset()
+			}
+			if m.typing {
+				cmds = append(cmds, tickCmd())
 			}
 			return m, tea.Batch(cmds...)
 
@@ -469,13 +576,29 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAgentMessage(msg.msg)
 
 	case cliProgressMsg:
-		// 进度更新（只改状态栏，不触发 viewport 重建）
+		prev := m.progress
 		m.progress = msg.payload
 		if msg.payload != nil {
-			// §2 工具可视化：快照 CompletedTools 到独立字段（不依赖 m.progress 生命周期）
+			// Detect iteration change: snapshot previous iteration into history
+			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
+				if len(prev.CompletedTools) > 0 || prev.Thinking != "" {
+					snap := cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Thinking:  prev.Thinking,
+						Tools:     append([]CLIToolProgress{}, prev.CompletedTools...),
+					}
+					m.iterationHistory = append(m.iterationHistory, snap)
+				}
+				// Clear lastCompletedTools to prevent stale tools from being
+				// re-snapshotted when the final iteration is snapshotted in handleAgentMessage.
+				m.lastCompletedTools = m.lastCompletedTools[:0]
+			}
+			m.lastSeenIteration = msg.payload.Iteration
+
+			// §2 工具可视化：快照 CompletedTools 到独立字段
 			if len(msg.payload.CompletedTools) > 0 {
 				m.lastCompletedTools = append(
-					m.lastCompletedTools[:0], // 复用底层数组
+					m.lastCompletedTools[:0],
 					msg.payload.CompletedTools...,
 				)
 			}
@@ -483,10 +606,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.progress = nil
 			}
 		}
+		m.updateViewportContent()
 
 	case cliTickMsg:
-		// 定时刷新
-		cmds = append(cmds, tickCmd())
+		if m.typing || m.progress != nil {
+			cmds = append(cmds, tickCmd())
+			m.updateViewportContent()
+		}
+	}
+
+	// Kick off spinner + tick chains when typing just started
+	if m.typing && !wasTyping {
+		cmds = append(cmds, m.spinner.Tick, tickCmd())
 	}
 
 	// 更新 spinner（仅在 typing 状态时）
@@ -523,32 +654,25 @@ func (m *cliModel) handleResize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// 动态计算布局比例
-	headerHeight := 3
-	footerHeight := 5
-	progressHeight := 0
-	if m.progress != nil {
-		progressHeight = m.calculateProgressHeight()
-	}
-
-	// 调整 viewport 大小
-	viewportHeight := height - headerHeight - footerHeight - progressHeight
+	// Layout: titleBar(1) + viewport + separator(1) + status(1) + inputBox(5)
+	// inputBox = textarea(3) + border_top(1) + border_bottom(1) = 5
+	// Total non-viewport = 1 + 1 + 1 + 5 = 8
+	reservedLines := 8
+	viewportHeight := height - reservedLines
 	if viewportHeight < 5 {
-		viewportHeight = 5 // 最小高度
+		viewportHeight = 5
 	}
 	m.viewport.Width = width
 	m.viewport.Height = viewportHeight
 
-	// 调整 textarea 宽度
+	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
+	// textarea must match the content width exactly.
 	m.textarea.SetWidth(width - 4)
 
-	// 调整 Markdown 渲染器的换行宽度
-	if m.renderer != nil && width > 2 {
-		// 重新创建渲染器以适应新宽度（固定暗色主题，避免 OSC 查询）
-		m.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
-			glamour.WithWordWrap(width-6),
-		)
+	// Glamour word-wrap must match bubble content width so that lines
+	// don't get re-wrapped by lipgloss (which would lose the margin).
+	if width > 2 {
+		m.renderer = newGlamourRenderer(maxBubbleWidth(width) - 2)
 	}
 
 	if !m.ready {
@@ -565,22 +689,9 @@ func (m *cliModel) handleResize(width, height int) {
 	m.updateViewportContent()
 }
 
-// calculateProgressHeight 计算进度信息显示所需的行数
+// calculateProgressHeight returns 0 — progress is now rendered inside the viewport.
 func (m *cliModel) calculateProgressHeight() int {
-	if m.progress == nil {
-		return 0
-	}
-	height := 1 // 基础行
-	if len(m.progress.ActiveTools) > 0 {
-		height += len(m.progress.ActiveTools)
-	}
-	if len(m.progress.SubAgents) > 0 {
-		height += len(m.progress.SubAgents)
-	}
-	if m.progress.Thinking != "" {
-		height += 1
-	}
-	return height
+	return 0
 }
 
 // View 渲染界面
@@ -591,50 +702,28 @@ func (m *cliModel) View() string {
 
 	// ========== 样式定义 ==========
 
-	// 标题栏样式：渐变紫蓝色背景
-	titleBarBg := lipgloss.NewStyle().
+	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
+	titleLeft := m.titleText()
+	titleRight := "Enter send | /help | /exit"
+	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
+	if titlePad < 1 {
+		titlePad = 1
+	}
+	titleBar := lipgloss.NewStyle().
 		Background(lipgloss.Color("#4a4e69")).
 		Foreground(lipgloss.Color("#f2e9e4")).
 		Bold(true).
-		Padding(0, 2).
-		Width(m.width)
+		Width(m.width).
+		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
-	titleText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f2e9e4")).
-		Bold(true).
-		Render(m.titleText())
-
-	helpText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#c9ada7")).
-		Faint(true).
-		Render("Enter 发送 | /help 帮助 | Ctrl+C 退出")
-
-	titleBar := titleBarBg.Render(
-		lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			titleText,
-			strings.Repeat(" ", max(0, m.width-lipgloss.Width(titleText)-lipgloss.Width(helpText)-4)),
-			helpText,
-		),
-	)
-
-	// 输入框样式：圆角边框 + 图标
+	// 输入框样式：圆角边框，不设 Background（避免和 textarea ANSI 冲突导致颜色不填满）
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#5c6bc0")).
-		Background(lipgloss.Color("#1a1a2e")).
 		Padding(0, 1).
 		Width(m.width - 4)
 
-	inputIcon := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#64b5f6")).
-		Bold(true).
-		Render("💬 ")
-
-	inputArea := lipgloss.JoinVertical(
-		lipgloss.Left,
-		inputIcon+m.textarea.View(),
-	)
+	inputArea := m.textarea.View()
 
 	// 状态栏样式
 	readyStatusStyle := lipgloss.NewStyle().
@@ -668,7 +757,7 @@ func (m *cliModel) View() string {
 			Foreground(lipgloss.Color("#ffb74d")).
 			Bold(true).
 			Padding(0, 1)
-		warningText := warningStyle.Render(fmt.Sprintf("⚠ Ctrl+K: 删除最近 %d 条消息？(y/N, 数字调整数量)", m.confirmDelete))
+		warningText := warningStyle.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
 		return fmt.Sprintf(
 			"%s\n%s\n%s\n%s\n%s",
 			titleBar,
@@ -685,7 +774,7 @@ func (m *cliModel) View() string {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
 	} else {
-		status = readyStatusStyle.Render("✓ 就绪")
+		status = readyStatusStyle.Render("[ready]")
 	}
 
 	// 组装界面
@@ -699,82 +788,55 @@ func (m *cliModel) View() string {
 	)
 }
 
-// titleText 生成标题栏文字
+// titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
 func (m *cliModel) titleText() string {
 	if m.workDir != "" {
-		return fmt.Sprintf("🤖 xbot CLI [%s]", filepath.Base(m.workDir))
+		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
 	}
-	return "🤖 xbot CLI"
+	return " xbot CLI"
 }
 
-// renderProgressStatus 渲染进度状态
+// renderProgressStatus renders a compact one-line status for the status bar.
 func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style) string {
 	var sb strings.Builder
-
-	// Spinner + 基础状态
 	sb.WriteString(progressStyle.Render(m.spinner.View()))
 	sb.WriteString(" ")
 
 	if m.progress != nil {
-		// 显示阶段
-		switch m.progress.Phase {
-		case "thinking":
-			sb.WriteString("正在思考...")
-		case "tool_exec":
-			sb.WriteString("执行工具...")
-		case "compressing":
-			sb.WriteString("压缩上下文...")
-		case "retrying":
-			sb.WriteString("重试中...")
-		case "done":
-			sb.WriteString("完成")
-		default:
-			sb.WriteString("处理中...")
-		}
+		fmt.Fprintf(&sb, "#%d", m.progress.Iteration)
 
-		// 显示迭代次数
-		if m.progress.Iteration > 0 {
-			fmt.Fprintf(&sb, " (迭代 %d)", m.progress.Iteration)
-		}
-
-		// 显示活跃工具
-		if len(m.progress.ActiveTools) > 0 {
-			sb.WriteString("\n")
-			for _, tool := range m.progress.ActiveTools {
+		// Show first active tool name
+		for _, tool := range m.progress.ActiveTools {
+			if tool.Status != "done" && tool.Status != "error" {
 				label := tool.Label
 				if label == "" {
 					label = tool.Name
 				}
-				elapsed := ""
-				if tool.Elapsed > 0 {
-					elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-				}
-				sb.WriteString("  ")
-				sb.WriteString(toolStyle.Render(fmt.Sprintf("⚙ %s%s", label, elapsed)))
-				sb.WriteString("\n")
+				sb.WriteString(toolStyle.Render(" · " + label))
+				break
 			}
 		}
 
-		// 显示子 Agent 状态
-		if len(m.progress.SubAgents) > 0 {
-			sb.WriteString("\n")
-			for _, sa := range m.progress.SubAgents {
-				emoji := "🔄"
-				switch sa.Status {
-				case "done":
-					emoji = "✅"
-				case "error":
-					emoji = "❌"
-				}
-				fmt.Fprintf(&sb, "  %s %s", emoji, sa.Role)
-				if sa.Desc != "" {
-					fmt.Fprintf(&sb, ": %s", sa.Desc)
-				}
-				sb.WriteString("\n")
+		// Phase hint when no active tool
+		if len(m.progress.ActiveTools) == 0 {
+			switch m.progress.Phase {
+			case "thinking":
+				sb.WriteString(" · thinking")
+			case "compressing":
+				sb.WriteString(" · compressing")
+			case "retrying":
+				sb.WriteString(" · retrying")
 			}
 		}
 	} else {
-		sb.WriteString("正在思考...")
+		sb.WriteString("thinking...")
+	}
+
+	// Total elapsed
+	if !m.typingStartTime.IsZero() {
+		elapsed := time.Since(m.typingStartTime).Milliseconds()
+		sb.WriteString(" · ")
+		sb.WriteString(formatElapsed(elapsed))
 	}
 
 	return sb.String()
@@ -830,9 +892,11 @@ func (m *cliModel) sendToAgent(content string) {
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
 		}
 		m.typing = true
 		m.inputReady = false
+		m.resetProgressState()
 	}
 }
 
@@ -866,10 +930,28 @@ func (m *cliModel) sendMessage(content string) {
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
 		}
 		m.typing = true
 		m.inputReady = false
+		m.resetProgressState()
 	}
+}
+
+// resetProgressState resets iteration tracking for a new agent turn.
+func (m *cliModel) resetProgressState() {
+	m.iterationHistory = nil
+	m.lastSeenIteration = 0
+	m.typingStartTime = time.Now()
+}
+
+// collectAllTools gathers all tools from iteration history into a flat slice.
+func (m *cliModel) collectAllTools() []CLIToolProgress {
+	var all []CLIToolProgress
+	for _, snap := range m.iterationHistory {
+		all = append(all, snap.Tools...)
+	}
+	return all
 }
 
 // handleSlashCommand 处理斜杠命令
@@ -910,7 +992,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		m.cachedHistory = ""
 		m.updateViewportContent()
 
-	case "/quit":
+	case "/quit", "/exit":
 		m.shouldQuit = true
 
 	case "/help":
@@ -922,8 +1004,11 @@ func (m *cliModel) handleSlashCommand(cmd string) {
   /models    - 列出可用模型
   /context   - 查看上下文信息
   /new       - 开始新会话
-  /quit      - 退出 CLI
-  /help      - 显示此帮助信息`
+  /exit      - 退出 CLI
+  /help      - 显示此帮助信息
+
+快捷键：
+  Ctrl+C/Esc - 有迭代时中止，无迭代时清空输入`
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
 			content:   helpContent,
@@ -1033,80 +1118,293 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// 清除进度信息
 		m.progress = nil
 
-		// §2 工具可视化：从独立快照生成工具摘要消息
-		if len(m.lastCompletedTools) > 0 {
+		// Snapshot the final iteration before clearing
+		if m.lastSeenIteration >= 0 && len(m.lastCompletedTools) > 0 {
+			alreadySnapped := false
+			for _, s := range m.iterationHistory {
+				if s.Iteration == m.lastSeenIteration {
+					alreadySnapped = true
+					break
+				}
+			}
+			if !alreadySnapped {
+				m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
+					Iteration: m.lastSeenIteration,
+					Tools:     append([]CLIToolProgress{}, m.lastCompletedTools...),
+				})
+			}
+		}
+
+		// §2 工具可视化：生成工具摘要消息（汇总所有迭代的工具）
+		allTools := m.collectAllTools()
+		if len(allTools) > 0 {
 			toolMsg := cliMessage{
 				role:      "tool_summary",
 				content:   "",
 				timestamp: time.Now(),
-				tools:     append([]CLIToolProgress{}, m.lastCompletedTools...), // 复制
+				tools:     allTools,
 				dirty:     true,
 			}
-			// 插入到当前 assistant 消息之前
 			insertIdx := len(m.messages) - 1
 			if insertIdx < 0 {
 				insertIdx = 0
 			}
 			m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
-			// 重置快照
-			m.lastCompletedTools = nil
-			// 由于插入了消息，缓存需要重建
 			m.renderCacheValid = false
 		}
 
-		// 检查是否需要在操作完成后退出
-		if m.pendingQuit {
-			m.shouldQuit = true
-		}
+		// 重置迭代追踪状态
+		m.lastCompletedTools = nil
+		m.iterationHistory = nil
+		m.lastSeenIteration = 0
+		m.typingStartTime = time.Time{}
+
 	}
 
 	m.updateViewportContent()
+}
+
+// renderProgressBlock renders the iteration progress panel for the viewport.
+func (m *cliModel) renderProgressBlock() string {
+	if !m.typing && m.progress == nil {
+		return ""
+	}
+
+	bubbleWidth := maxBubbleWidth(m.width)
+	innerWidth := bubbleWidth - 4 // border(2) + padding(2)
+
+	// Styles
+	iterStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Bold(true)
+
+	thinkingStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Italic(true)
+
+	toolDoneStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#81c784"))
+
+	toolRunningStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffb74d"))
+
+	toolErrorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ef5350"))
+
+	elapsedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Faint(true)
+
+	var sb strings.Builder
+
+	// Render completed iterations
+	for _, snap := range m.iterationHistory {
+		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration)))
+		sb.WriteString("\n")
+		if snap.Thinking != "" {
+			text := truncateToWidth(snap.Thinking, innerWidth-4)
+			sb.WriteString("  ")
+			sb.WriteString(thinkingStyle.Render(text))
+			sb.WriteString("\n")
+		}
+		for _, tool := range snap.Tools {
+			label := tool.Label
+			if label == "" {
+				label = tool.Name
+			}
+			style := toolDoneStyle
+			icon := "✓"
+			if tool.Status == "error" {
+				style = toolErrorStyle
+				icon = "✗"
+			}
+			line := fmt.Sprintf("  %s %s", icon, label)
+			if tool.Elapsed > 0 {
+				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
+				if pad < 1 {
+					pad = 1
+				}
+				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
+			}
+			sb.WriteString(style.Render(line))
+			sb.WriteString("\n")
+		}
+	}
+
+	// Render current iteration
+	if m.progress != nil {
+		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", m.progress.Iteration)))
+		sb.WriteString("\n")
+
+		if m.progress.Thinking != "" {
+			text := truncateToWidth(m.progress.Thinking, innerWidth-4)
+			sb.WriteString("  ")
+			sb.WriteString(thinkingStyle.Render(text))
+			sb.WriteString("\n")
+		}
+
+		// Completed tools in current iteration
+		for _, tool := range m.progress.CompletedTools {
+			label := tool.Label
+			if label == "" {
+				label = tool.Name
+			}
+			style := toolDoneStyle
+			icon := "✓"
+			if tool.Status == "error" {
+				style = toolErrorStyle
+				icon = "✗"
+			}
+			line := fmt.Sprintf("  %s %s", icon, label)
+			if tool.Elapsed > 0 {
+				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
+				if pad < 1 {
+					pad = 1
+				}
+				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
+			}
+			sb.WriteString(style.Render(line))
+			sb.WriteString("\n")
+		}
+
+		// Active tools
+		for _, tool := range m.progress.ActiveTools {
+			if tool.Status == "done" || tool.Status == "error" {
+				continue
+			}
+			label := tool.Label
+			if label == "" {
+				label = tool.Name
+			}
+			line := fmt.Sprintf("  %s %s", m.spinner.View(), label)
+			if tool.Elapsed > 0 {
+				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
+				if pad < 1 {
+					pad = 1
+				}
+				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
+			}
+			sb.WriteString(toolRunningStyle.Render(line))
+			sb.WriteString("\n")
+		}
+
+		// Phase-specific fallback when no tools are shown
+		hasTools := len(m.progress.ActiveTools) > 0 || len(m.progress.CompletedTools) > 0
+		if !hasTools {
+			switch m.progress.Phase {
+			case "thinking":
+				sb.WriteString("  ")
+				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " thinking..."))
+				sb.WriteString("\n")
+			case "compressing":
+				sb.WriteString("  ")
+				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " compressing context..."))
+				sb.WriteString("\n")
+			case "retrying":
+				sb.WriteString("  ")
+				sb.WriteString(thinkingStyle.Render(m.spinner.View() + " retrying..."))
+				sb.WriteString("\n")
+			}
+		}
+
+		// SubAgent tree
+		if len(m.progress.SubAgents) > 0 {
+			sb.WriteString("\n")
+			m.renderSubAgentTree(&sb, m.progress.SubAgents, 1)
+		}
+	} else if m.typing {
+		sb.WriteString("  ")
+		sb.WriteString(thinkingStyle.Render(m.spinner.View() + " thinking..."))
+		sb.WriteString("\n")
+	}
+
+	content := strings.TrimRight(sb.String(), "\n")
+	if content == "" {
+		return ""
+	}
+
+	// Total elapsed
+	elapsed := ""
+	if !m.typingStartTime.IsZero() {
+		elapsed = " " + elapsedStyle.Render(formatElapsed(time.Since(m.typingStartTime).Milliseconds()))
+	}
+
+	// Header
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#5c6bc0")).
+		Bold(true)
+	header := headerStyle.Render("Progress") + elapsed
+
+	// Wrap in border
+	blockStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5c6bc0")).
+		Padding(0, 1).
+		Width(bubbleWidth)
+
+	return blockStyle.Render(header+"\n"+content) + "\n\n"
+}
+
+// renderSubAgentTree renders nested sub-agents with indentation.
+func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
+	indent := strings.Repeat("  ", depth)
+	for _, sa := range agents {
+		icon := m.spinner.View()
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d"))
+		switch sa.Status {
+		case "done":
+			icon = "✓"
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
+		case "error":
+			icon = "✗"
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef5350"))
+		}
+		line := fmt.Sprintf("%s%s %s", indent, icon, sa.Role)
+		if sa.Desc != "" {
+			line += ": " + sa.Desc
+		}
+		sb.WriteString(style.Render(line))
+		sb.WriteString("\n")
+		if len(sa.Children) > 0 {
+			m.renderSubAgentTree(sb, sa.Children, depth+1)
+		}
+	}
 }
 
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
 func (m *cliModel) renderMessage(msg *cliMessage) string {
 	var sb strings.Builder
 
-	// 计算气泡最大宽度
-	maxBubbleWidth := int(float64(m.width) * 0.75)
-	if maxBubbleWidth < 30 {
-		maxBubbleWidth = 30
-	}
-	if maxBubbleWidth > 100 {
-		maxBubbleWidth = 100
-	}
+	bubbleWidth := maxBubbleWidth(m.width)
 
-	// 用户消息气泡样式
+	// 用户消息气泡样式（不设 Background，避免与内容 ANSI 冲突导致背景色不一致）
 	userBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#3d5a80")).
-		Background(lipgloss.Color("#1e3a5f")).
-		Foreground(lipgloss.Color("#ffffff")).
+		Foreground(lipgloss.Color("#e0e0e0")).
 		Padding(0, 1).
 		MarginLeft(2).
-		Width(maxBubbleWidth).
+		Width(bubbleWidth).
 		Align(lipgloss.Right)
 
 	// Agent 消息气泡样式
 	assistantBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#3d6b4f")).
-		Background(lipgloss.Color("#1a3d2e")).
-		Foreground(lipgloss.Color("#ffffff")).
+		Foreground(lipgloss.Color("#e0e0e0")).
 		Padding(0, 1).
 		MarginRight(2).
-		Width(maxBubbleWidth).
+		Width(bubbleWidth).
 		Align(lipgloss.Left)
 
 	// 流式消息样式
 	streamingBubbleStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#ff9800")).
-		Background(lipgloss.Color("#2d2d2d")).
-		Foreground(lipgloss.Color("#ffffff")).
+		Foreground(lipgloss.Color("#e0e0e0")).
 		Padding(0, 1).
 		MarginRight(2).
-		Width(maxBubbleWidth).
+		Width(bubbleWidth).
 		Align(lipgloss.Left)
 
 	// 时间戳样式
@@ -1155,10 +1453,9 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		toolSummaryStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#5c6bc0")).
-			Background(lipgloss.Color("#1a1a2e")).
 			Foreground(lipgloss.Color("#e0e0e0")).
 			Padding(0, 1).
-			Width(maxBubbleWidth).
+			Width(bubbleWidth).
 			Align(lipgloss.Left)
 
 		toolHeaderStyle := lipgloss.NewStyle().
@@ -1169,7 +1466,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			Foreground(lipgloss.Color("#a5d6a7"))
 
 		var toolSb strings.Builder
-		toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("⚙ 工具调用 (%d)", len(msg.tools))))
+		toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", len(msg.tools))))
 		toolSb.WriteString("\n")
 		for _, tool := range msg.tools {
 			label := tool.Label
@@ -1180,14 +1477,14 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			if tool.Elapsed > 0 {
 				elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 			}
-			toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  ✅ %s%s", label, elapsed)))
+			toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
 			toolSb.WriteString("\n")
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
 		sb.WriteString(systemMsgStyle.Render(msg.content))
 	case "user":
-		label := userLabelStyle.Render("👤 You")
+		label := userLabelStyle.Render("You")
 		header := lipgloss.NewStyle().
 			Width(m.width - 4).
 			Align(lipgloss.Right).
@@ -1204,12 +1501,12 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// assistant 消息
 		var bubble string
 		if msg.isPartial {
-			label := streamingLabelStyle.Render("🤖 Assistant")
-			header := fmt.Sprintf("%s %s ⚡", timeStr, label)
+			label := streamingLabelStyle.Render("Assistant")
+			header := fmt.Sprintf("%s %s ...", timeStr, label)
 			sb.WriteString(header)
 			bubble = streamingBubbleStyle.Render(rendered)
 		} else {
-			label := assistantLabelStyle.Render("🤖 Assistant")
+			label := assistantLabelStyle.Render("Assistant")
 			header := fmt.Sprintf("%s %s", timeStr, label)
 			sb.WriteString(header)
 			bubble = assistantBubbleStyle.Render(rendered)
@@ -1230,6 +1527,16 @@ func (m *cliModel) updateViewportContent() {
 		return
 	}
 
+	// 快速路径：缓存有效 + 无流式消息 + 消息数未变，只刷新 progress block（tick 场景）
+	if m.renderCacheValid && m.streamingMsgIdx < 0 && m.cachedMsgCount == len(m.messages) {
+		var sb strings.Builder
+		sb.WriteString(m.cachedHistory)
+		sb.WriteString(m.renderProgressBlock())
+		m.viewport.SetContent(sb.String())
+		m.viewport.GotoBottom()
+		return
+	}
+
 	// 慢速路径：全量重建
 	m.fullRebuild()
 }
@@ -1243,6 +1550,9 @@ func (m *cliModel) updateStreamingOnly() {
 	msg := &m.messages[m.streamingMsgIdx]
 	msg.dirty = true
 	sb.WriteString(m.renderMessage(msg))
+
+	// Append progress block
+	sb.WriteString(m.renderProgressBlock())
 
 	m.viewport.SetContent(sb.String())
 	m.viewport.GotoBottom()
@@ -1271,19 +1581,17 @@ func (m *cliModel) fullRebuild() {
 
 	m.cachedHistory = historyBuf.String()
 	m.renderCacheValid = true
+	m.cachedMsgCount = len(m.messages)
 
-	// 拼接最终内容：历史 + 当前流式消息（如有）
-	var finalContent string
+	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block
+	var sb strings.Builder
+	sb.WriteString(m.cachedHistory)
 	if m.streamingMsgIdx >= 0 {
-		var sb strings.Builder
-		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
-		finalContent = sb.String()
-	} else {
-		finalContent = m.cachedHistory
 	}
+	sb.WriteString(m.renderProgressBlock())
 
-	m.viewport.SetContent(finalContent)
+	m.viewport.SetContent(sb.String())
 	m.viewport.GotoBottom()
 }
 

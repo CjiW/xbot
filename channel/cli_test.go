@@ -323,7 +323,7 @@ func TestCLIModelCalculateProgressHeight(t *testing.T) {
 		t.Errorf("calculateProgressHeight() with no progress = %d, want 0", h)
 	}
 
-	// With progress
+	// With progress — now always returns 0 (progress renders inside viewport)
 	model.progress = &CLIProgressPayload{
 		Phase: "tool_exec",
 		ActiveTools: []CLIToolProgress{
@@ -337,9 +337,8 @@ func TestCLIModelCalculateProgressHeight(t *testing.T) {
 	}
 
 	height := model.calculateProgressHeight()
-	// Base(1) + ActiveTools(2) + SubAgents(1) + Thinking(1) = 5
-	if height < 3 {
-		t.Errorf("calculateProgressHeight() = %d, want at least 3", height)
+	if height != 0 {
+		t.Errorf("calculateProgressHeight() = %d, want 0 (progress now renders in viewport)", height)
 	}
 }
 
@@ -353,8 +352,8 @@ func TestCLIModelCalculateProgressHeightOnlyActiveTools(t *testing.T) {
 	}
 
 	height := model.calculateProgressHeight()
-	if height < 2 {
-		t.Errorf("calculateProgressHeight() with active tools = %d, want at least 2", height)
+	if height != 0 {
+		t.Errorf("calculateProgressHeight() with active tools = %d, want 0", height)
 	}
 }
 
@@ -368,8 +367,8 @@ func TestCLIModelCalculateProgressHeightOnlySubAgents(t *testing.T) {
 	}
 
 	height := model.calculateProgressHeight()
-	if height < 2 {
-		t.Errorf("calculateProgressHeight() with subagents = %d, want at least 2", height)
+	if height != 0 {
+		t.Errorf("calculateProgressHeight() with subagents = %d, want 0", height)
 	}
 }
 
@@ -621,31 +620,61 @@ func TestCLIModelHandleAgentMessageMarkdownContent(t *testing.T) {
 // cliModel Update Tests
 // ---------------------------------------------------------------------------
 
-func TestCLIModelUpdateQuitOnCtrlC(t *testing.T) {
+func TestCLIModelUpdateCtrlCClearsInput(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.textarea.SetValue("some text")
 
-	// Simulate Ctrl+C
 	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
 	_, cmd := model.Update(keyMsg)
 
-	// Should return quit command
-	if cmd == nil {
-		t.Error("Update(CtrlC) should return quit command")
+	// When not typing, Ctrl+C clears input (no quit)
+	if cmd != nil {
+		t.Error("Update(CtrlC) when not typing should return nil cmd")
+	}
+	if model.textarea.Value() != "" {
+		t.Errorf("textarea should be empty after CtrlC, got %q", model.textarea.Value())
 	}
 }
 
-func TestCLIModelUpdateQuitOnEsc(t *testing.T) {
+func TestCLIModelUpdateEscClearsInput(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
+	model.textarea.SetValue("some text")
 
-	// Simulate Escape
 	keyMsg := tea.KeyMsg{Type: tea.KeyEsc}
 	_, cmd := model.Update(keyMsg)
 
-	// Should return quit command
-	if cmd == nil {
-		t.Error("Update(Esc) should return quit command")
+	// When not typing, Esc clears input (no quit)
+	if cmd != nil {
+		t.Error("Update(Esc) when not typing should return nil cmd")
+	}
+	if model.textarea.Value() != "" {
+		t.Errorf("textarea should be empty after Esc, got %q", model.textarea.Value())
+	}
+}
+
+func TestCLIModelUpdateCtrlCWhileTyping(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.msgBus = bus.NewMessageBus()
+
+	// Drain the inbound channel in background
+	go func() { <-model.msgBus.Inbound }()
+
+	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	_, _ = model.Update(keyMsg)
+
+	// Should add cancel system message
+	hasCancel := false
+	for _, msg := range model.messages {
+		if msg.role == "system" && strings.Contains(msg.content, "取消") {
+			hasCancel = true
+		}
+	}
+	if !hasCancel {
+		t.Error("CtrlC while typing should add cancel message")
 	}
 }
 
@@ -719,12 +748,18 @@ func TestCLIModelUpdateTickMsg(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
+	// Tick without typing/progress should NOT schedule another tick
 	tickMsg := cliTickMsg{}
 	_, cmd := model.Update(tickMsg)
+	// cmd may be non-nil due to spinner/viewport/textarea sub-updates, but
+	// the tick itself should not re-schedule. We just verify no panic.
+	_ = cmd
 
-	// Should return another tick command
-	if cmd == nil {
-		t.Error("Update(tickMsg) should return a command")
+	// Tick with typing active should schedule another tick
+	model.typing = true
+	_, cmd2 := model.Update(tickMsg)
+	if cmd2 == nil {
+		t.Error("Update(tickMsg) with typing=true should return a command")
 	}
 }
 
@@ -812,12 +847,12 @@ func TestCLIModelRenderProgressStatus(t *testing.T) {
 		phase    string
 		expected string
 	}{
-		{"thinking", "正在思考"},
-		{"tool_exec", "执行工具"},
-		{"compressing", "压缩上下文"},
-		{"retrying", "重试中"},
-		{"done", "完成"},
-		{"unknown", "处理中"},
+		{"thinking", "thinking"},
+		{"tool_exec", "#0"},
+		{"compressing", "compressing"},
+		{"retrying", "retrying"},
+		{"done", "#0"},
+		{"unknown", "#0"},
 	}
 
 	progressStyle := lipgloss.NewStyle()
@@ -843,7 +878,7 @@ func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	toolStyle := lipgloss.NewStyle()
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
-	if !strings.Contains(result, "正在思考") {
+	if !strings.Contains(result, "thinking") {
 		t.Errorf("renderProgressStatus with nil progress should show thinking, got: %q", result)
 	}
 }
@@ -860,7 +895,7 @@ func TestCLIModelRenderProgressStatusWithIteration(t *testing.T) {
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
 
-	if !strings.Contains(result, "迭代 5") {
+	if !strings.Contains(result, "#5") {
 		t.Errorf("renderProgressStatus should show iteration, got: %q", result)
 	}
 }
@@ -882,9 +917,6 @@ func TestCLIModelRenderProgressStatusWithActiveTools(t *testing.T) {
 	if !strings.Contains(result, "Reading file") {
 		t.Errorf("renderProgressStatus should show tool label, got: %q", result)
 	}
-	if !strings.Contains(result, "100ms") {
-		t.Errorf("renderProgressStatus should show elapsed time, got: %q", result)
-	}
 }
 
 func TestCLIModelRenderProgressStatusToolWithoutLabel(t *testing.T) {
@@ -901,99 +933,164 @@ func TestCLIModelRenderProgressStatusToolWithoutLabel(t *testing.T) {
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
 
-	// Should use name when label is empty
 	if !strings.Contains(result, "read") {
 		t.Errorf("renderProgressStatus should show tool name when label empty, got: %q", result)
 	}
 }
 
-func TestCLIModelRenderProgressStatusWithSubAgents(t *testing.T) {
+func TestCLIModelRenderProgressStatusWithElapsed(t *testing.T) {
 	model := newCLIModel()
+	model.progress = &CLIProgressPayload{Phase: "thinking"}
+	model.typingStartTime = time.Now().Add(-5 * time.Second)
+
+	progressStyle := lipgloss.NewStyle()
+	toolStyle := lipgloss.NewStyle()
+
+	result := model.renderProgressStatus(progressStyle, toolStyle)
+	if !strings.Contains(result, "s") {
+		t.Errorf("renderProgressStatus should show elapsed time, got: %q", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Progress Block (viewport) Rendering Tests
+// ---------------------------------------------------------------------------
+
+func TestCLIModelRenderProgressBlockEmpty(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = false
+	model.progress = nil
+
+	result := model.renderProgressBlock()
+	if result != "" {
+		t.Errorf("renderProgressBlock should be empty when not typing, got: %q", result)
+	}
+}
+
+func TestCLIModelRenderProgressBlockThinking(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+
+	result := model.renderProgressBlock()
+	if !strings.Contains(result, "thinking") {
+		t.Errorf("renderProgressBlock should show thinking, got: %q", result)
+	}
+	if !strings.Contains(result, "Progress") {
+		t.Errorf("renderProgressBlock should show Progress header, got: %q", result)
+	}
+}
+
+func TestCLIModelRenderProgressBlockWithTools(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
 	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
+		Phase:     "tool_exec",
+		Iteration: 1,
+		ActiveTools: []CLIToolProgress{
+			{Name: "read_file", Label: "Reading config.go", Status: "running", Elapsed: 1200},
+		},
+		CompletedTools: []CLIToolProgress{
+			{Name: "grep", Label: "Searching imports", Status: "done", Elapsed: 300},
+		},
+	}
+
+	result := model.renderProgressBlock()
+	if !strings.Contains(result, "Searching imports") {
+		t.Errorf("renderProgressBlock should show completed tool, got: %q", result)
+	}
+	if !strings.Contains(result, "Reading config.go") {
+		t.Errorf("renderProgressBlock should show active tool, got: %q", result)
+	}
+	if !strings.Contains(result, "#1") {
+		t.Errorf("renderProgressBlock should show iteration number, got: %q", result)
+	}
+}
+
+func TestCLIModelRenderProgressBlockWithIterationHistory(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+	model.iterationHistory = []cliIterationSnapshot{
+		{
+			Iteration: 0,
+			Thinking:  "Analyzing requirements",
+			Tools: []CLIToolProgress{
+				{Name: "read", Label: "Reading file", Status: "done", Elapsed: 500},
+			},
+		},
+	}
+	model.progress = &CLIProgressPayload{
+		Phase:     "thinking",
+		Iteration: 1,
+	}
+
+	result := model.renderProgressBlock()
+	if !strings.Contains(result, "#0") {
+		t.Errorf("renderProgressBlock should show completed iteration #0, got: %q", result)
+	}
+	if !strings.Contains(result, "#1") {
+		t.Errorf("renderProgressBlock should show current iteration #1, got: %q", result)
+	}
+	if !strings.Contains(result, "Reading file") {
+		t.Errorf("renderProgressBlock should show historical tool, got: %q", result)
+	}
+}
+
+func TestCLIModelRenderProgressBlockSubAgents(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+	model.progress = &CLIProgressPayload{
+		Phase:     "tool_exec",
+		Iteration: 0,
 		SubAgents: []CLISubAgent{
 			{Role: "code-reviewer", Status: "running", Desc: "Reviewing code"},
+			{Role: "test-runner", Status: "done", Desc: "Tests passed"},
 		},
 	}
 
-	progressStyle := lipgloss.NewStyle()
-	toolStyle := lipgloss.NewStyle()
-
-	result := model.renderProgressStatus(progressStyle, toolStyle)
-
+	result := model.renderProgressBlock()
 	if !strings.Contains(result, "code-reviewer") {
-		t.Errorf("renderProgressStatus should show subagent role, got: %q", result)
+		t.Errorf("renderProgressBlock should show subagent role, got: %q", result)
+	}
+	if !strings.Contains(result, "Reviewing code") {
+		t.Errorf("renderProgressBlock should show subagent desc, got: %q", result)
+	}
+	if !strings.Contains(result, "test-runner") {
+		t.Errorf("renderProgressBlock should show completed subagent, got: %q", result)
 	}
 }
 
-func TestCLIModelRenderProgressStatusSubAgentStatuses(t *testing.T) {
+func TestCLIModelRenderProgressBlockSubAgentChildren(t *testing.T) {
 	model := newCLIModel()
-
-	progressStyle := lipgloss.NewStyle()
-	toolStyle := lipgloss.NewStyle()
-
-	tests := []struct {
-		status   string
-		expected string
-	}{
-		{"running", "🔄"},
-		{"done", "✅"},
-		{"error", "❌"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
-			model.progress = &CLIProgressPayload{
-				Phase: "tool_exec",
-				SubAgents: []CLISubAgent{
-					{Role: "test", Status: tt.status},
-				},
-			}
-			result := model.renderProgressStatus(progressStyle, toolStyle)
-			if !strings.Contains(result, tt.expected) {
-				t.Errorf("renderProgressStatus with status %s should contain %s", tt.status, tt.expected)
-			}
-		})
-	}
-}
-
-func TestCLIModelRenderProgressStatusSubAgentWithDesc(t *testing.T) {
-	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
 	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		SubAgents: []CLISubAgent{
-			{Role: "reviewer", Status: "running", Desc: "Checking code quality"},
-		},
-	}
-
-	progressStyle := lipgloss.NewStyle()
-	toolStyle := lipgloss.NewStyle()
-
-	result := model.renderProgressStatus(progressStyle, toolStyle)
-
-	if !strings.Contains(result, "Checking code quality") {
-		t.Errorf("renderProgressStatus should show subagent desc, got: %q", result)
-	}
-}
-
-func TestCLIModelRenderProgressStatusSubAgentChildren(t *testing.T) {
-	model := newCLIModel()
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
+		Phase:     "tool_exec",
+		Iteration: 0,
 		SubAgents: []CLISubAgent{
 			{
-				Role:     "reviewer",
-				Status:   "running",
-				Children: []CLISubAgent{{Role: "child", Status: "done"}},
+				Role:   "reviewer",
+				Status: "running",
+				Children: []CLISubAgent{
+					{Role: "child", Status: "done"},
+				},
 			},
 		},
 	}
 
-	progressStyle := lipgloss.NewStyle()
-	toolStyle := lipgloss.NewStyle()
-
-	// Should not panic with children
-	_ = model.renderProgressStatus(progressStyle, toolStyle)
+	result := model.renderProgressBlock()
+	if !strings.Contains(result, "child") {
+		t.Errorf("renderProgressBlock should show child subagent, got: %q", result)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1336,112 @@ func TestCLISubAgentFields(t *testing.T) {
 	}
 	if subAgent.Status != "done" {
 		t.Errorf("Status = %q, want 'done'", subAgent.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// formatElapsed Tests
+// ---------------------------------------------------------------------------
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		ms       int64
+		expected string
+	}{
+		{0, "0ms"},
+		{50, "50ms"},
+		{999, "999ms"},
+		{1000, "1.0s"},
+		{1500, "1.5s"},
+		{12300, "12.3s"},
+		{59999, "60.0s"},
+		{60000, "1m0s"},
+		{90000, "1m30s"},
+		{125000, "2m5s"},
+	}
+	for _, tt := range tests {
+		got := formatElapsed(tt.ms)
+		if got != tt.expected {
+			t.Errorf("formatElapsed(%d) = %q, want %q", tt.ms, got, tt.expected)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Iteration History Accumulation Tests
+// ---------------------------------------------------------------------------
+
+func TestCLIModelIterationAccumulation(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+
+	// Iteration 0: thinking
+	prog0 := cliProgressMsg{payload: &CLIProgressPayload{
+		Phase:     "thinking",
+		Iteration: 0,
+	}}
+	model.Update(prog0)
+	if len(model.iterationHistory) != 0 {
+		t.Errorf("Expected 0 history entries, got %d", len(model.iterationHistory))
+	}
+
+	// Iteration 0: tool_exec with completed tools
+	prog0b := cliProgressMsg{payload: &CLIProgressPayload{
+		Phase:     "tool_exec",
+		Iteration: 0,
+		CompletedTools: []CLIToolProgress{
+			{Name: "read", Label: "Reading", Status: "done", Elapsed: 100},
+		},
+	}}
+	model.Update(prog0b)
+
+	// Iteration 1: thinking — should snapshot iteration 0
+	prog1 := cliProgressMsg{payload: &CLIProgressPayload{
+		Phase:     "thinking",
+		Iteration: 1,
+	}}
+	model.Update(prog1)
+	if len(model.iterationHistory) != 1 {
+		t.Fatalf("Expected 1 history entry after iteration change, got %d", len(model.iterationHistory))
+	}
+	if model.iterationHistory[0].Iteration != 0 {
+		t.Errorf("History[0].Iteration = %d, want 0", model.iterationHistory[0].Iteration)
+	}
+	if len(model.iterationHistory[0].Tools) != 1 {
+		t.Errorf("History[0].Tools count = %d, want 1", len(model.iterationHistory[0].Tools))
+	}
+}
+
+func TestCLIModelCollectAllTools(t *testing.T) {
+	model := newCLIModel()
+	model.iterationHistory = []cliIterationSnapshot{
+		{Iteration: 0, Tools: []CLIToolProgress{{Name: "a"}, {Name: "b"}}},
+		{Iteration: 1, Tools: []CLIToolProgress{{Name: "c"}}},
+	}
+	all := model.collectAllTools()
+	if len(all) != 3 {
+		t.Errorf("collectAllTools() = %d tools, want 3", len(all))
+	}
+}
+
+func TestCLIModelResetProgressState(t *testing.T) {
+	model := newCLIModel()
+	model.iterationHistory = []cliIterationSnapshot{{Iteration: 0}}
+	model.lastSeenIteration = 5
+	model.typingStartTime = time.Now().Add(-10 * time.Second)
+
+	model.resetProgressState()
+
+	if model.iterationHistory != nil {
+		t.Error("iterationHistory should be nil after reset")
+	}
+	if model.lastSeenIteration != 0 {
+		t.Errorf("lastSeenIteration = %d, want 0", model.lastSeenIteration)
+	}
+	if model.typingStartTime.IsZero() {
+		t.Error("typingStartTime should be set after reset")
 	}
 }
 

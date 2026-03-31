@@ -47,7 +47,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 		"max_tokens":      m.config.MaxContextTokens,
 	}).Info("Context compaction: starting")
 
-	result, err := compactMessages(ctx, messages, client, model)
+	result, err := compactMessages(ctx, messages, client, model, m.config.MaxContextTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 
 // ManualCompress handles /compress command.
 func (m *phase1Manager) ManualCompress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compactMessages(ctx, messages, client, model)
+	return compactMessages(ctx, messages, client, model, m.config.MaxContextTokens)
 }
 
 func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats {

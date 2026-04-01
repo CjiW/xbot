@@ -235,12 +235,18 @@ type CLIChannel struct {
 	configMu        sync.RWMutex    // protects config override fields
 	modelOverride   string          // user-overridden model from /settings panel
 	baseURLOverride string          // user-overridden base URL from /settings panel
+	modelLister     ModelLister     // provides available model names for combo
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.
 type SettingsService interface {
 	GetSettings(channelName, senderID string) (map[string]string, error)
 	SetSetting(channelName, senderID, key, value string) error
+}
+
+// ModelLister provides available model names for the settings combo box.
+type ModelLister interface {
+	ListModels() []string
 }
 
 // NewCLIChannel 创建 CLI 渠道
@@ -517,8 +523,10 @@ type cliModel struct {
 	panelCursor   int                            // settings panel: selected item index
 	panelEdit     bool                           // settings panel: editing current item
 	panelEditTA   textarea.Model                 // settings panel: inline editor
+	panelCombo    bool                           // settings panel: combo dropdown open
+	panelComboIdx int                            // settings panel: combo selected option index
 	panelQuestion string                         // askuser panel: the question text
-	panelAnswer   string                         // askuser panel: user's answer buffer
+	panelAnswerTA textarea.Model                 // askuser panel: answer editor (replaces raw string)
 	panelSchema   []SettingDefinition            // settings panel: schema copy
 	panelValues   map[string]string              // settings panel: current values
 	panelOnSubmit func(values map[string]string) // callback on settings submit
@@ -1411,6 +1419,20 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 						}
 					}
 				}
+				// Inject model list into combo options
+				if m.channel.modelLister != nil {
+					models := m.channel.modelLister.ListModels()
+					for i, s := range schema {
+						if s.Key == "llm_model" && len(models) > 0 {
+							opts := make([]SettingOption, len(models))
+							for j, m := range models {
+								opts[j] = SettingOption{Label: m, Value: m}
+							}
+							schema[i].Options = opts
+							break
+						}
+					}
+				}
 				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
 					// Persist to SettingsService
 					if m.channel.settingsSvc != nil {
@@ -2268,7 +2290,17 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 func (m *cliModel) openAskUserPanel(question string, onAnswer func(string), onCancel func()) {
 	m.panelMode = "askuser"
 	m.panelQuestion = question
-	m.panelAnswer = ""
+	ta := textarea.New()
+	ta.Placeholder = "Type your answer..."
+	ta.Prompt = "▸ "
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
+	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	ta.CharLimit = 0
+	ta.SetWidth(60)
+	ta.SetHeight(1)
+	ta.Focus()
+	m.panelAnswerTA = ta
 	m.panelOnAnswer = onAnswer
 	m.panelOnCancel = onCancel
 }
@@ -2277,6 +2309,7 @@ func (m *cliModel) openAskUserPanel(question string, onAnswer func(string), onCa
 func (m *cliModel) closePanel() {
 	m.panelMode = ""
 	m.panelEdit = false
+	m.panelCombo = false
 	m.panelSchema = nil
 	m.panelValues = nil
 	m.panelOnSubmit = nil
@@ -2322,6 +2355,45 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 			m.panelEditTA, cmd = m.panelEditTA.Update(msg)
 			return true, m, cmd
 		}
+	}
+
+	// Combo dropdown mode
+	if m.panelCombo {
+		if m.panelCursor < len(m.panelSchema) {
+			def := m.panelSchema[m.panelCursor]
+			opts := def.Options
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.panelCombo = false
+				return true, m, nil
+			case tea.KeyUp:
+				if m.panelComboIdx > 0 {
+					m.panelComboIdx--
+				}
+				return true, m, nil
+			case tea.KeyDown:
+				if m.panelComboIdx < len(opts)-1 {
+					m.panelComboIdx++
+				}
+				return true, m, nil
+			case tea.KeyEnter:
+				if m.panelComboIdx < len(opts) {
+					m.panelValues[def.Key] = opts[m.panelComboIdx].Value
+				}
+				m.panelCombo = false
+				return true, m, nil
+			case tea.KeyRunes, tea.KeySpace:
+				// Start typing to filter / enter custom value → switch to edit mode
+				m.panelCombo = false
+				m.panelEdit = true
+				m.panelEditTA.SetValue(m.panelValues[def.Key])
+				m.panelEditTA.CursorEnd()
+				var cmd tea.Cmd
+				m.panelEditTA, cmd = m.panelEditTA.Update(msg)
+				return true, m, cmd
+			}
+		}
+		return true, m, nil
 	}
 
 	// Navigation mode
@@ -2374,6 +2446,26 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 					m.panelValues[def.Key] = def.Options[0].Value
 				}
 				return true, m, nil
+			case SettingTypeCombo:
+				// Open combo dropdown if options available, otherwise edit
+				if len(def.Options) > 0 {
+					m.panelCombo = true
+					m.panelComboIdx = 0
+					// Pre-select current value if it matches an option
+					cur := m.panelValues[def.Key]
+					for i, opt := range def.Options {
+						if opt.Value == cur {
+							m.panelComboIdx = i
+							break
+						}
+					}
+					return true, m, nil
+				}
+				// No options: fall through to edit mode
+				m.panelEdit = true
+				m.panelEditTA.SetValue(m.panelValues[def.Key])
+				m.panelEditTA.CursorEnd()
+				return true, m, m.panelEditTA.Focus()
 			default:
 				// Enter edit mode for text/number/textarea
 				m.panelEdit = true
@@ -2390,7 +2482,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
-		answer := strings.TrimSpace(m.panelAnswer)
+		answer := strings.TrimSpace(m.panelAnswerTA.Value())
 		if answer != "" && m.panelOnAnswer != nil {
 			m.panelOnAnswer(answer)
 		}
@@ -2403,11 +2495,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		m.closePanel()
 		return true, m, nil
 	default:
-		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace || msg.Type == tea.KeyBackspace {
-			m.panelAnswer += msg.String()
-		}
+		// Delegate all key handling to textarea (cursor movement, backspace, etc.)
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
 	}
-	return true, m, nil
 }
 
 // viewPanel renders the active panel as a string.
@@ -2488,6 +2580,16 @@ func (m *cliModel) viewSettingsPanel() string {
 					break
 				}
 			}
+		case SettingTypeCombo:
+			// Show current value with dropdown hint
+			if cur == "" {
+				displayVal = descStyle.Render("(未设置)")
+			} else {
+				displayVal = valueStyle.Render(cur)
+			}
+			if len(def.Options) > 0 {
+				displayVal += descStyle.Render(" ▾")
+			}
 		default:
 			if cur == "" {
 				displayVal = descStyle.Render("(未设置)")
@@ -2510,6 +2612,31 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(m.panelEditTA.View())
 		sb.WriteString("\n")
 		sb.WriteString(descStyle.Render("  Enter 确认 · Esc 取消"))
+	} else if m.panelCombo && m.panelCursor < len(m.panelSchema) {
+		def := m.panelSchema[m.panelCursor]
+		sb.WriteString("\n")
+		comboTitle := cursorStyle.Render("  ▾ " + def.Label + ":")
+		sb.WriteString(comboTitle)
+		sb.WriteString("\n")
+		maxShow := 8
+		start := 0
+		if m.panelComboIdx >= maxShow {
+			start = m.panelComboIdx - maxShow + 1
+		}
+		end := start + maxShow
+		if end > len(def.Options) {
+			end = len(def.Options)
+		}
+		for j := start; j < end; j++ {
+			opt := def.Options[j]
+			if j == m.panelComboIdx {
+				sb.WriteString(cursorStyle.Render("  ▸ " + opt.Label))
+			} else {
+				sb.WriteString("    " + opt.Label)
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString(descStyle.Render("  ↑↓ 选择 · Enter 确认 · 输入自定义 · Esc 取消"))
 	} else {
 		sb.WriteString("\n")
 		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
@@ -2528,18 +2655,15 @@ func (m *cliModel) viewAskUserPanel() string {
 		Foreground(lipgloss.Color("#ffb74d")).
 		Bold(true)
 
-	answerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#e0e0e0"))
-
 	hintStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666"))
 
 	var sb strings.Builder
 	sb.WriteString(questionStyle.Render("❓ " + m.panelQuestion))
 	sb.WriteString("\n\n")
-	sb.WriteString(answerStyle.Render("▸ " + m.panelAnswer + "█"))
-	sb.WriteString("\n\n")
-	sb.WriteString(hintStyle.Render("  输入回复 · Enter 发送 · Esc 取消"))
+	sb.WriteString(m.panelAnswerTA.View())
+	sb.WriteString("\n")
+	sb.WriteString(hintStyle.Render("  Enter 发送 · Esc 取消"))
 
 	return boxStyle.Render(sb.String())
 }
@@ -2552,8 +2676,8 @@ func cliSettingsSchema() []SettingDefinition {
 		{
 			Key:         "llm_model",
 			Label:       "LLM 模型",
-			Description: "当前使用的 LLM 模型名称（如 gpt-4o, claude-sonnet-4-20250514）",
-			Type:        SettingTypeText,
+			Description: "选择或输入 LLM 模型名称",
+			Type:        SettingTypeCombo,
 			Category:    "LLM",
 		},
 		{
@@ -2612,6 +2736,11 @@ func (c *CLIChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (
 // SetSettingsService injects the settings service for the interactive panel.
 func (c *CLIChannel) SetSettingsService(svc SettingsService) {
 	c.settingsSvc = svc
+}
+
+// SetModelLister injects the model lister for combo settings.
+func (c *CLIChannel) SetModelLister(lister ModelLister) {
+	c.modelLister = lister
 }
 
 // UpdateConfig updates the live LLM configuration (model, base_url).

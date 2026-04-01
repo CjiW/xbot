@@ -183,6 +183,11 @@ func (f *LLMFactory) LLMSemaphoreManager() *llm.LLMSemaphoreManager {
 	return f.llmSemManager
 }
 
+// ListModels returns available model names from the default LLM client.
+func (f *LLMFactory) ListModels() []string {
+	return f.defaultLLM.ListModels()
+}
+
 // GetLLMConcurrency 读取用户配置的个人 LLM 并发上限。
 // 未配置时使用默认值 DefaultLLMConcurrencyPersonal。
 func (f *LLMFactory) GetLLMConcurrency(senderID string) int {

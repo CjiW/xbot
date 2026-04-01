@@ -448,6 +448,7 @@ func main() {
 		if ss := app.agentLoop.GetSettingsService(); ss != nil {
 			cliCh.SetSettingsService(ss)
 		}
+		cliCh.SetModelLister(app.agentLoop.LLMFactory())
 	}
 
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）

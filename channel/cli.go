@@ -593,6 +593,7 @@ func newCLIModel() *cliModel {
 	vp.KeyMap.PageDown.SetKeys("pgdown")
 	vp.KeyMap.HalfPageUp.SetKeys()
 	vp.KeyMap.HalfPageDown.SetKeys()
+	vp.MouseWheelDelta = 5
 
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 

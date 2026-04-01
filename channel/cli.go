@@ -591,10 +591,10 @@ func isCtrlEnter(msg tea.Msg) bool {
 }
 
 // isCtrlO 检测 Ctrl+O 按键（部分终端发送 CSI u 序列，Bubble Tea 无法识别）。
-// Ctrl+O = ASCII 15, CSI u 协议: \x1b[15;5u
+// Ctrl+O = ASCII 15, CSI u 协议: \x1b[15;5u → "?CSI[49 53 59 53 117]?"
 func isCtrlO(msg tea.Msg) bool {
 	s := fmt.Sprintf("%v", msg)
-	return s == "?CSI[27 91 49 53 59 53 117]?" || s == "\x1b[15;5u"
+	return s == "?CSI[49 53 59 53 117]?" || s == "\x1b[15;5u"
 }
 
 // ---------------------------------------------------------------------------
@@ -702,9 +702,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyCtrlO:
-		// §11 Ctrl+O 切换 tool summary 展开/折叠
-		// TODO: debug — 临时同时响应 Ctrl+L 测试，确认后移除 Ctrl+L
-		case tea.KeyCtrlL:
+			// §11 Ctrl+O 切换 tool summary 展开/折叠
 			m.toolSummaryExpanded = !m.toolSummaryExpanded
 			m.renderCacheValid = false
 			m.cachedHistory = ""

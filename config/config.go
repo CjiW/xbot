@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -111,6 +112,7 @@ type Config struct {
 	Admin         AdminConfig         `json:"admin"`
 	Web           WebConfig           `json:"web"`
 	OSS           OSSConfig           `json:"oss"`
+	TavilyAPIKey  string              `json:"tavily_api_key"`
 }
 
 // FeishuConfig 飞书渠道配置
@@ -138,8 +140,9 @@ type AgentConfig struct {
 	MCPCleanupInterval   time.Duration `json:"mcp_cleanup_interval"`
 	SessionCacheTimeout  time.Duration `json:"session_cache_timeout"`
 
-	ContextMode          string  `json:"context_mode"`
-	EnableAutoCompress   bool    `json:"enable_auto_compress"`
+	ContextMode string `json:"context_mode"`
+	// EnableAutoCompress 为 nil 表示 JSON 未写该字段，Load 后与未设置 AGENT_ENABLE_AUTO_COMPRESS 一致，默认启用压缩。
+	EnableAutoCompress   *bool   `json:"enable_auto_compress,omitempty"`
 	MaxContextTokens     int     `json:"max_context_tokens"`
 	CompressionThreshold float64 `json:"compression_threshold"`
 
@@ -224,8 +227,38 @@ func LoadFromFile(path string) *Config {
 	return &cfg
 }
 
-// applyEnvOverrides 用环境变量覆盖配置中的非空值。
-// 环境变量优先级最高，文件配置作为基础值。
+func splitCommaTrim(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func setDurationEnv(key string, dst *time.Duration) {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			*dst = d
+		}
+	}
+}
+
+func setSecondsEnv(key string, dst *time.Duration) {
+	if v := os.Getenv(key); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil {
+			*dst = time.Duration(sec) * time.Second
+		}
+	}
+}
+
+// applyEnvOverrides 用环境变量覆盖配置（与 README / .env.example 中的变量名一致，优先级高于 config.json）。
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -235,8 +268,8 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Server.Port = i
 		}
 	}
-	// ... 其余字段同理，但为避免大量重复代码，
-	// 改用更简洁的方式：只覆盖 CLI 常用的关键字段
+	setSecondsEnv("SERVER_READ_TIMEOUT", &cfg.Server.ReadTimeout)
+	setSecondsEnv("SERVER_WRITE_TIMEOUT", &cfg.Server.WriteTimeout)
 
 	if v := os.Getenv("LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
@@ -250,17 +283,50 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("LLM_MODEL"); v != "" {
 		cfg.LLM.Model = v
 	}
+	if v := os.Getenv("LLM_RETRY_ATTEMPTS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.LLMRetryAttempts = i
+		}
+	}
+	setDurationEnv("LLM_RETRY_DELAY", &cfg.Agent.LLMRetryDelay)
+	setDurationEnv("LLM_RETRY_MAX_DELAY", &cfg.Agent.LLMRetryMaxDelay)
+	setDurationEnv("LLM_RETRY_TIMEOUT", &cfg.Agent.LLMRetryTimeout)
+
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
 	if v := os.Getenv("LOG_FORMAT"); v != "" {
 		cfg.Log.Format = v
 	}
+
+	if v := os.Getenv("LLM_EMBEDDING_PROVIDER"); v != "" {
+		cfg.Embedding.Provider = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_BASE_URL"); v != "" {
+		cfg.Embedding.BaseURL = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_API_KEY"); v != "" {
+		cfg.Embedding.APIKey = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_MODEL"); v != "" {
+		cfg.Embedding.Model = v
+	}
+	if v := os.Getenv("LLM_EMBEDDING_MAX_TOKENS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Embedding.MaxTokens = i
+		}
+	}
+
 	if v := os.Getenv("WORK_DIR"); v != "" {
 		cfg.Agent.WorkDir = v
 	}
 	if v := os.Getenv("PROMPT_FILE"); v != "" {
 		cfg.Agent.PromptFile = v
+	}
+	if v := os.Getenv("SINGLE_USER"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Agent.SingleUser = b
+		}
 	}
 	if v := os.Getenv("MEMORY_PROVIDER"); v != "" {
 		cfg.Agent.MemoryProvider = v
@@ -280,21 +346,204 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Agent.MemoryWindow = i
 		}
 	}
+	setDurationEnv("MCP_INACTIVITY_TIMEOUT", &cfg.Agent.MCPInactivityTimeout)
+	setDurationEnv("MCP_CLEANUP_INTERVAL", &cfg.Agent.MCPCleanupInterval)
+	setDurationEnv("SESSION_CACHE_TIMEOUT", &cfg.Agent.SessionCacheTimeout)
+
+	if v := os.Getenv("AGENT_CONTEXT_MODE"); v != "" {
+		cfg.Agent.ContextMode = v
+	}
+	if v := os.Getenv("AGENT_ENABLE_AUTO_COMPRESS"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Agent.EnableAutoCompress = &b
+		}
+	}
+	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxContextTokens = i
+		}
+	}
+	if v := os.Getenv("AGENT_COMPRESSION_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Agent.CompressionThreshold = f
+		}
+	}
+	if v := os.Getenv("AGENT_PURGE_OLD_MESSAGES"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Agent.PurgeOldMessages = b
+		}
+	}
+	if v := os.Getenv("MAX_SUBAGENT_DEPTH"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxSubAgentDepth = i
+		}
+	}
+
 	if v := os.Getenv("SANDBOX_MODE"); v != "" {
 		cfg.Sandbox.Mode = v
 	}
-	if v := os.Getenv("LLM_EMBEDDING_PROVIDER"); v != "" {
-		cfg.Embedding.Provider = v
+	if v := os.Getenv("SANDBOX_REMOTE_MODE"); v != "" {
+		cfg.Sandbox.RemoteMode = v
 	}
-	if v := os.Getenv("LLM_EMBEDDING_BASE_URL"); v != "" {
-		cfg.Embedding.BaseURL = v
+	if v := os.Getenv("SANDBOX_DOCKER_IMAGE"); v != "" {
+		cfg.Sandbox.DockerImage = v
 	}
-	if v := os.Getenv("LLM_EMBEDDING_API_KEY"); v != "" {
-		cfg.Embedding.APIKey = v
+	if v := os.Getenv("HOST_WORK_DIR"); v != "" {
+		cfg.Sandbox.HostWorkDir = v
 	}
-	if v := os.Getenv("LLM_EMBEDDING_MODEL"); v != "" {
-		cfg.Embedding.Model = v
+	if v := os.Getenv("SANDBOX_IDLE_TIMEOUT_MINUTES"); v != "" {
+		if min, err := strconv.Atoi(v); err == nil {
+			cfg.Sandbox.IdleTimeout = time.Duration(min) * time.Minute
+		}
 	}
+	if v := os.Getenv("SANDBOX_WS_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Sandbox.WSPort = i
+		}
+	}
+	if v := os.Getenv("SANDBOX_AUTH_TOKEN"); v != "" {
+		cfg.Sandbox.AuthToken = v
+	}
+	if v := os.Getenv("SANDBOX_PUBLIC_URL"); v != "" {
+		cfg.Sandbox.PublicURL = v
+	}
+
+	if v := os.Getenv("FEISHU_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Feishu.Enabled = b
+		}
+	}
+	if v := os.Getenv("FEISHU_APP_ID"); v != "" {
+		cfg.Feishu.AppID = v
+	}
+	if v := os.Getenv("FEISHU_APP_SECRET"); v != "" {
+		cfg.Feishu.AppSecret = v
+	}
+	if v := os.Getenv("FEISHU_ENCRYPT_KEY"); v != "" {
+		cfg.Feishu.EncryptKey = v
+	}
+	if v := os.Getenv("FEISHU_VERIFICATION_TOKEN"); v != "" {
+		cfg.Feishu.VerificationToken = v
+	}
+	if v, ok := os.LookupEnv("FEISHU_ALLOW_FROM"); ok {
+		cfg.Feishu.AllowFrom = splitCommaTrim(v)
+	}
+	if v := os.Getenv("FEISHU_DOMAIN"); v != "" {
+		cfg.Feishu.Domain = v
+	}
+
+	if v := os.Getenv("QQ_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.QQ.Enabled = b
+		}
+	}
+	if v := os.Getenv("QQ_APP_ID"); v != "" {
+		cfg.QQ.AppID = v
+	}
+	if v := os.Getenv("QQ_CLIENT_SECRET"); v != "" {
+		cfg.QQ.ClientSecret = v
+	}
+	if v, ok := os.LookupEnv("QQ_ALLOW_FROM"); ok {
+		cfg.QQ.AllowFrom = splitCommaTrim(v)
+	}
+
+	if v := os.Getenv("NAPCAT_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.NapCat.Enabled = b
+		}
+	}
+	if v := os.Getenv("NAPCAT_WS_URL"); v != "" {
+		cfg.NapCat.WSUrl = v
+	}
+	if v := os.Getenv("NAPCAT_TOKEN"); v != "" {
+		cfg.NapCat.Token = v
+	}
+	if v, ok := os.LookupEnv("NAPCAT_ALLOW_FROM"); ok {
+		cfg.NapCat.AllowFrom = splitCommaTrim(v)
+	}
+
+	if v := os.Getenv("WEB_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Web.Enable = b
+		}
+	}
+	if v := os.Getenv("WEB_HOST"); v != "" {
+		cfg.Web.Host = v
+	}
+	if v := os.Getenv("WEB_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.Web.Port = i
+		}
+	}
+	if v := os.Getenv("WEB_STATIC_DIR"); v != "" {
+		cfg.Web.StaticDir = v
+	}
+	if v := os.Getenv("WEB_UPLOAD_DIR"); v != "" {
+		cfg.Web.UploadDir = v
+	}
+	if v := os.Getenv("WEB_PERSONA_ISOLATION"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Web.PersonaIsolation = b
+		}
+	}
+	if v := os.Getenv("WEB_INVITE_ONLY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Web.InviteOnly = b
+		}
+	}
+
+	if v := os.Getenv("OAUTH_ENABLE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.OAuth.Enable = b
+		}
+	}
+	if v := os.Getenv("OAUTH_HOST"); v != "" {
+		cfg.OAuth.Host = v
+	}
+	if v := os.Getenv("OAUTH_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.OAuth.Port = i
+		}
+	}
+	if v := os.Getenv("OAUTH_BASE_URL"); v != "" {
+		cfg.OAuth.BaseURL = v
+	}
+
+	if v := os.Getenv("PPROF_ENABLE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.PProf.Enable = b
+		}
+	}
+	if v := os.Getenv("PPROF_HOST"); v != "" {
+		cfg.PProf.Host = v
+	}
+	if v := os.Getenv("PPROF_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.PProf.Port = i
+		}
+	}
+
+	if v := os.Getenv("STARTUP_NOTIFY_CHANNEL"); v != "" {
+		cfg.StartupNotify.Channel = v
+	}
+	if v := os.Getenv("STARTUP_NOTIFY_CHAT_ID"); v != "" {
+		cfg.StartupNotify.ChatID = v
+	}
+	if v := os.Getenv("ADMIN_CHAT_ID"); v != "" {
+		cfg.Admin.ChatID = v
+	}
+
+	if v := os.Getenv("TAVILY_API_KEY"); v != "" {
+		cfg.TavilyAPIKey = v
+	}
+}
+
+// EffectiveEnableAutoCompress 返回是否启用自动压缩；config.json 省略该字段时与文档默认一致，为 true。
+func (a AgentConfig) EffectiveEnableAutoCompress() bool {
+	if a.EnableAutoCompress == nil {
+		return true
+	}
+	return *a.EnableAutoCompress
 }
 
 // Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
@@ -363,6 +612,36 @@ func Load() *Config {
 	}
 	if cfg.Sandbox.IdleTimeout == 0 {
 		cfg.Sandbox.IdleTimeout = 30 * time.Minute
+	}
+	if cfg.Sandbox.DockerImage == "" {
+		cfg.Sandbox.DockerImage = "ubuntu:22.04"
+	}
+	if cfg.Sandbox.WSPort == 0 {
+		cfg.Sandbox.WSPort = 8080
+	}
+	if cfg.Agent.MemoryProvider == "" {
+		cfg.Agent.MemoryProvider = "flat"
+	}
+	if cfg.OAuth.Host == "" {
+		cfg.OAuth.Host = "127.0.0.1"
+	}
+	if cfg.OAuth.Port == 0 {
+		cfg.OAuth.Port = 8081
+	}
+	if cfg.Web.Host == "" {
+		cfg.Web.Host = "0.0.0.0"
+	}
+	if cfg.Web.Port == 0 {
+		cfg.Web.Port = 8082
+	}
+	if cfg.NapCat.WSUrl == "" {
+		cfg.NapCat.WSUrl = "ws://localhost:3001"
+	}
+	if cfg.PProf.Host == "" {
+		cfg.PProf.Host = "localhost"
+	}
+	if cfg.PProf.Port == 0 {
+		cfg.PProf.Port = 6060
 	}
 	if cfg.Embedding.MaxTokens == 0 {
 		cfg.Embedding.MaxTokens = 2048

@@ -177,6 +177,7 @@ type RunConfig struct {
 // TodoManagerProvider 提供 TODO 状态查询
 type TodoManagerProvider interface {
 	GetTodoSummary(sessionKey string) string
+	GetTodoItems(sessionKey string) []TodoProgressItem
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -431,14 +432,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		if needCompress {
-			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩 + 记忆整理...", totalTokens))
-				notifyProgress("")
-			}
-
-			// Update structured progress to indicate compression
+			// Set phase to compressing for structured progress (CLI status bar + progress block)
 			if structuredProgress != nil {
 				structuredProgress.Phase = PhaseCompressing
+			}
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩 + 记忆整理...", totalTokens))
 				notifyProgress("")
 			}
 
@@ -453,6 +452,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
 			if compressErr != nil {
 				log.Ctx(ctx).WithError(compressErr).Warn("Auto context compaction failed")
+				// Restore phase even on failure
+				if structuredProgress != nil {
+					structuredProgress.Phase = PhaseThinking
+				}
 				return
 			}
 
@@ -461,15 +464,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				// Replace the "正在压缩" line with the completion line
+				for i := len(progressLines) - 1; i >= 0; i-- {
+					if strings.Contains(progressLines[i], "正在压缩") {
+						progressLines[i] = fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount)
+						break
+					}
+				}
 				notifyProgress("")
 			}
-
-			// Restore phase to thinking after compression
+			// Restore phase after compression completes
 			if structuredProgress != nil {
 				structuredProgress.Phase = PhaseThinking
-				notifyProgress("")
 			}
+
 			log.Ctx(ctx).WithFields(log.Fields{
 				"new_tokens": newTokenCount,
 			}).Info("Auto context compaction completed")
@@ -625,6 +633,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.ActiveTools = nil
 			structuredProgress.CompletedTools = nil
 			structuredProgress.ThinkingContent = ""
+		}
+		// Refresh TODO state for progress display
+		if structuredProgress != nil && cfg.TodoManager != nil && sessionKey != "" {
+			todos := cfg.TodoManager.GetTodoItems(sessionKey)
+			if len(todos) > 0 {
+				structuredProgress.Todos = make([]TodoProgressItem, len(todos))
+				copy(structuredProgress.Todos, todos)
+			} else {
+				structuredProgress.Todos = nil
+			}
 		}
 		maybeCompress()
 

@@ -125,6 +125,14 @@ type CLIProgressPayload struct {
 	CompletedTools []CLIToolProgress
 	Thinking       string
 	SubAgents      []CLISubAgent
+	Todos          []CLITodoItem
+}
+
+// CLITodoItem represents a TODO item for CLI display.
+type CLITodoItem struct {
+	ID   int
+	Text string
+	Done bool
 }
 
 // CLIToolProgress 单个工具的执行进度。
@@ -390,8 +398,8 @@ var (
 	}
 	// arrowFrames: pulsing arrow — tool execution feel
 	arrowFrames = []string{"›", "▸", "▶", "▸", "›", "▸", "▶", "▸"}
-	// waveFrames: gentle sine wave — subagent feel
-	waveFrames = []string{"◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣"}
+	// waveFrames: rotating crescent moon phases — subagent feel
+	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 )
@@ -464,6 +472,9 @@ type cliModel struct {
 
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
+
+	// --- §10 TODO 进度条 ---
+	todos []CLITodoItem // 从 progress 事件同步的 TODO 列表
 }
 
 // cliMessage 单条消息
@@ -716,6 +727,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev := m.progress
 		m.progress = msg.payload
 		if msg.payload != nil {
+			// Sync todo items from progress event
+			if len(msg.payload.Todos) > 0 {
+				m.todos = make([]CLITodoItem, len(msg.payload.Todos))
+				copy(m.todos, msg.payload.Todos)
+			} else {
+				m.todos = nil
+			}
 			// Detect iteration change: snapshot previous iteration into history
 			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
 				if len(prev.CompletedTools) > 0 || prev.Thinking != "" {
@@ -917,6 +935,18 @@ func (m *cliModel) View() string {
 	}
 
 	// 组装界面
+	todoBar := m.renderTodoBar()
+	if todoBar != "" {
+		return fmt.Sprintf(
+			"%s\n%s\n%s\n%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			separator,
+			status,
+			todoBar,
+			input,
+		)
+	}
 	return fmt.Sprintf(
 		"%s\n%s\n%s\n%s\n%s",
 		titleBar,
@@ -925,6 +955,74 @@ func (m *cliModel) View() string {
 		status,
 		input,
 	)
+}
+
+// renderTodoBar renders a compact TODO progress bar between status and input.
+// Returns empty string when no todos are active.
+func (m *cliModel) renderTodoBar() string {
+	if len(m.todos) == 0 {
+		return ""
+	}
+
+	done := 0
+	total := len(m.todos)
+	for _, item := range m.todos {
+		if item.Done {
+			done++
+		}
+	}
+
+	// All done — hide the bar
+	if done == total {
+		return ""
+	}
+
+	// Progress bar: filled portion
+	barWidth := 20
+	filled := 0
+	if total > 0 {
+		filled = done * barWidth / total
+	}
+
+	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
+	pendingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+	barFilledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#5c6bc0"))
+	barEmptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2a2a3a"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#90a4ae"))
+
+	barFilled := strings.Repeat("█", filled)
+	barEmpty := strings.Repeat("░", barWidth-filled)
+
+	var sb strings.Builder
+	// Header: TODO label + count + progress bar
+	sb.WriteString(labelStyle.Render(" TODO "))
+	fmt.Fprintf(&sb, "%d/%d ", done, total)
+	sb.WriteString(barFilledStyle.Render(barFilled))
+	sb.WriteString(barEmptyStyle.Render(barEmpty))
+	sb.WriteString("\n")
+	// Items
+	for i, item := range m.todos {
+		text := item.Text
+		if len(text) > 60 {
+			text = text[:59] + "…"
+		}
+		if item.Done {
+			sb.WriteString("  ")
+			sb.WriteString(doneStyle.Render("✓"))
+			sb.WriteString(" ")
+			sb.WriteString(pendingStyle.Render(text))
+		} else {
+			sb.WriteString("  ")
+			sb.WriteString(labelStyle.Render("○"))
+			sb.WriteString(" ")
+			sb.WriteString(pendingStyle.Render(text))
+		}
+		if i < len(m.todos)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }
 
 // titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
@@ -1260,7 +1358,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.streamingMsgIdx = -1
 		m.typing = false
 		m.inputReady = true
-		// 清除进度信息
+		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		m.progress = nil
 
 		// Snapshot the final iteration before clearing

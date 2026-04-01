@@ -122,13 +122,13 @@ func newCLIApp() *cliApp {
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
 		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
 		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
-		})
+	})
 	agentLoop.IndexGlobalTools()
 
 	return &cliApp{

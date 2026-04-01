@@ -62,6 +62,11 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	}
 	if spec.Stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
+	} else {
+		// Ensure stdin is never nil — prevents commands (e.g. sudo) from
+		// opening /dev/tty and blocking the terminal in none-sandbox mode.
+		// In docker/remote sandboxes the process is isolated so this isn't needed.
+		cmd.Stdin = bytes.NewReader(nil)
 	}
 
 	var stdout, stderr bytes.Buffer

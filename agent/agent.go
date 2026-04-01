@@ -395,7 +395,6 @@ type Config struct {
 
 	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
 	OffloadDir string
-
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。

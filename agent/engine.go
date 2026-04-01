@@ -177,6 +177,7 @@ type RunConfig struct {
 // TodoManagerProvider 提供 TODO 状态查询
 type TodoManagerProvider interface {
 	GetTodoSummary(sessionKey string) string
+	GetTodoItems(sessionKey string) []TodoProgressItem
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -318,6 +319,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	var toolsUsed []string
 	var waitingUser bool
+	var waitingQuestion string            // captured from tool result Summary for CLI panel
+	var waitingMetadata map[string]string // captured from tool result Metadata
 	var progressLines []string
 	var progressMu sync.Mutex // 保护 progressLines 的并发读写 + notifyProgress 的串行化
 	var lastContent string    // 用于 LLM 错误时的降级返回
@@ -431,14 +434,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		if needCompress {
-			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩 + 记忆整理...", totalTokens))
-				notifyProgress("")
-			}
-
-			// Update structured progress to indicate compression
+			// Set phase to compressing for structured progress (CLI status bar + progress block)
 			if structuredProgress != nil {
 				structuredProgress.Phase = PhaseCompressing
+			}
+			if autoNotify {
+				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩 + 记忆整理...", totalTokens))
 				notifyProgress("")
 			}
 
@@ -453,6 +454,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
 			if compressErr != nil {
 				log.Ctx(ctx).WithError(compressErr).Warn("Auto context compaction failed")
+				// Restore phase even on failure
+				if structuredProgress != nil {
+					structuredProgress.Phase = PhaseThinking
+				}
 				return
 			}
 
@@ -460,16 +465,21 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			messages = syncMessages(result.LLMView)
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
+			// Restore phase after compression completes
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseThinking
+			}
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				// Replace the "正在压缩" line with the completion line
+				for i := len(progressLines) - 1; i >= 0; i-- {
+					if strings.Contains(progressLines[i], "正在压缩") {
+						progressLines[i] = fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount)
+						break
+					}
+				}
 				notifyProgress("")
 			}
 
-			// Restore phase to thinking after compression
-			if structuredProgress != nil {
-				structuredProgress.Phase = PhaseThinking
-				notifyProgress("")
-			}
 			log.Ctx(ctx).WithFields(log.Fields{
 				"new_tokens": newTokenCount,
 			}).Info("Auto context compaction completed")
@@ -625,6 +635,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.ActiveTools = nil
 			structuredProgress.CompletedTools = nil
 			structuredProgress.ThinkingContent = ""
+		}
+		// Refresh TODO state for progress display
+		if structuredProgress != nil && cfg.TodoManager != nil && sessionKey != "" {
+			todos := cfg.TodoManager.GetTodoItems(sessionKey)
+			if len(todos) > 0 {
+				structuredProgress.Todos = make([]TodoProgressItem, len(todos))
+				copy(structuredProgress.Todos, todos)
+			} else {
+				structuredProgress.Todos = nil
+			}
 		}
 		maybeCompress()
 
@@ -834,9 +854,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// Frontend tracks max completed_tools via ref for turn persistence.
 			for j, tc := range response.ToolCalls {
 				structuredProgress.ActiveTools[j] = ToolProgress{
-					Name:   tc.Name,
-					Label:  formatToolProgress(tc.Name, tc.Arguments),
-					Status: ToolPending,
+					Name:      tc.Name,
+					Label:     formatToolProgress(tc.Name, tc.Arguments),
+					Status:    ToolPending,
+					Iteration: i,
 				}
 			}
 		}
@@ -944,10 +965,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if autoNotify {
 					// SubAgent progress callback already wrote a meaningful progress tree via formatSubAgentProgress.
 					// Do not overwrite with tool-level ❌ — it loses the child agent tree and may misleadingly mark failure.
-					// Instead, mark the SubAgent progress as done (🔄 → ✅) while preserving the child agent tree.
+					// Instead, mark ALL SubAgent progress lines as done (🔄 → ✅) while preserving the child agent tree.
 					if tc.Name == "SubAgent" {
-						progressLines[progressStartIdx+entry.index] = strings.Replace(
-							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+						progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅")
 					} else {
 						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					}
@@ -972,10 +993,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 				if autoNotify {
 					// SubAgent progress callback already wrote a meaningful progress tree.
-					// Mark SubAgent as done (🔄 → ✅) without overwriting the tree.
+					// Mark ALL SubAgent progress lines as done (🔄 → ✅) without overwriting the tree.
 					if tc.Name == "SubAgent" {
-						progressLines[progressStartIdx+entry.index] = strings.Replace(
-							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+						progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅")
 					} else {
 						icon := "✅"
 						if result.IsError {
@@ -1170,6 +1191,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					autoNotify = false
 					if r.result != nil && r.result.WaitingUser {
 						waitingUser = true
+						if waitingQuestion == "" && r.result.Summary != "" {
+							waitingQuestion = r.result.Summary
+						}
+						if len(r.result.Metadata) > 0 && waitingMetadata == nil {
+							waitingMetadata = make(map[string]string)
+							for k, v := range r.result.Metadata {
+								waitingMetadata[k] = v
+							}
+						}
 					}
 				}
 			}
@@ -1182,6 +1212,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			if r.result != nil && r.result.WaitingUser {
 				waitingUser = true
+				// Capture question for CLI interactive panel (e.g., AskUser tool)
+				if waitingQuestion == "" && r.result.Summary != "" {
+					waitingQuestion = r.result.Summary
+				}
+				if len(r.result.Metadata) > 0 && waitingMetadata == nil {
+					waitingMetadata = make(map[string]string)
+					for k, v := range r.result.Metadata {
+						waitingMetadata[k] = v
+					}
+				}
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
@@ -1240,12 +1280,22 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
-			return buildOutput(&bus.OutboundMessage{
+			outMsg := &bus.OutboundMessage{
 				Channel:     cfg.Channel,
 				ChatID:      cfg.ChatID,
 				ToolsUsed:   toolsUsed,
 				WaitingUser: true,
-			})
+			}
+			if waitingQuestion != "" || len(waitingMetadata) > 0 {
+				outMsg.Metadata = make(map[string]string)
+				if waitingQuestion != "" {
+					outMsg.Metadata["ask_question"] = waitingQuestion
+				}
+				for k, v := range waitingMetadata {
+					outMsg.Metadata[k] = v
+				}
+			}
+			return buildOutput(outMsg)
 		}
 	}
 

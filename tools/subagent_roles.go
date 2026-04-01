@@ -92,12 +92,13 @@ func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool)
 
 	// 再搜索全局目录
 	if agentsDir == "" {
-		return nil, false
+		// 全局目录不存在，尝试 embed fallback
+		return getEmbeddedAgentRole(name)
 	}
 	roles, err := LoadAgentRoles(agentsDir)
 	if err != nil {
 		log.WithError(err).Warn("Failed to load agent roles")
-		return nil, false
+		return getEmbeddedAgentRole(name)
 	}
 	for i := range roles {
 		if roles[i].Name == name {
@@ -105,6 +106,19 @@ func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool)
 		}
 	}
 	return nil, false
+}
+
+// getEmbeddedAgentRole 尝试从嵌入的 agent 定义中加载角色。
+func getEmbeddedAgentRole(name string) (*SubAgentRole, bool) {
+	data, err := ReadEmbeddedAgentFile(name)
+	if err != nil {
+		return nil, false
+	}
+	role, err := ParseAgentFileContent(data, name)
+	if err != nil || role.Name == "" {
+		return nil, false
+	}
+	return &role, true
 }
 
 // GetSubAgentRoleSandbox is the sandbox-aware version of GetSubAgentRole.
@@ -135,12 +149,13 @@ func GetSubAgentRoleSandbox(ctx context.Context, name string, sb Sandbox, userID
 
 	// Search global directory (always os.*)
 	if agentsDir == "" {
-		return nil, false
+		// 全局目录不存在，尝试 embed fallback
+		return getEmbeddedAgentRole(name)
 	}
 	roles, err := LoadAgentRoles(agentsDir)
 	if err != nil {
 		log.WithError(err).Warn("Failed to load agent roles")
-		return nil, false
+		return getEmbeddedAgentRole(name)
 	}
 	for i := range roles {
 		if roles[i].Name == name {

@@ -41,6 +41,17 @@ func resolveScopedBase(ctx *ToolContext) (string, error) {
 	return absRoot, nil
 }
 
+// isUnrestricted returns true when path restrictions should be skipped.
+// None sandbox: user has full filesystem access.
+// Remote sandbox: the runner handles its own path enforcement.
+func isUnrestricted(ctx *ToolContext) bool {
+	if ctx == nil || ctx.Sandbox == nil {
+		return false
+	}
+	name := ctx.Sandbox.Name()
+	return name == "none" || name == "remote"
+}
+
 // ResolveWritePath 将 inputPath 解析为绝对路径，并校验其在 workspace 写入范围内。
 //
 // 相对路径解析优先级：CurrentDir（Cd 设置）> WorkspaceRoot/WorkingDir。
@@ -50,8 +61,8 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	// Remote sandbox: the runner handles its own path enforcement.
-	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+	// Unrestricted mode (none/remote sandbox): skip path checks.
+	if isUnrestricted(ctx) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
@@ -122,8 +133,8 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		return "", fmt.Errorf("path is required")
 	}
 
-	// Remote sandbox: the runner handles its own path enforcement.
-	if ctx != nil && ctx.Sandbox != nil && ctx.Sandbox.Name() == "remote" {
+	// Unrestricted mode (none/remote sandbox): skip path checks.
+	if isUnrestricted(ctx) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}

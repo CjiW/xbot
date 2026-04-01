@@ -32,6 +32,7 @@ const (
 	SettingTypeSelect   SettingType = "select"
 	SettingTypeToggle   SettingType = "toggle"
 	SettingTypeTextarea SettingType = "textarea"
+	SettingTypeCombo    SettingType = "combo" // selectable text with options + free input
 )
 
 // SettingOption defines an option for select-type settings.
@@ -98,6 +99,17 @@ func BuildTextSettingsUI(schema []SettingDefinition, currentValues map[string]st
 					fmt.Fprintf(&sb, "`%s`", opt.Value)
 				}
 				sb.WriteString("\n")
+			}
+
+			if def.Type == SettingTypeCombo && len(def.Options) > 0 {
+				sb.WriteString("可选: ")
+				for i, opt := range def.Options {
+					if i > 0 {
+						sb.WriteString(", ")
+					}
+					fmt.Fprintf(&sb, "`%s`", opt.Value)
+				}
+				sb.WriteString("（也可输入自定义值）\n")
 			}
 
 			sb.WriteString("\n")

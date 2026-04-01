@@ -528,7 +528,7 @@ func TestFileCreateTool_LocalMode(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            t.Context(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false,
 	}
 

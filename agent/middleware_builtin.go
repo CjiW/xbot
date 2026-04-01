@@ -12,11 +12,12 @@ import (
 
 // SystemPromptMiddleware 注入基础系统提示词模板（prompt.md 渲染结果）
 type SystemPromptMiddleware struct {
-	loader *PromptLoader
+	loader         *PromptLoader
+	memoryProvider string
 }
 
-func NewSystemPromptMiddleware(loader *PromptLoader) *SystemPromptMiddleware {
-	return &SystemPromptMiddleware{loader: loader}
+func NewSystemPromptMiddleware(loader *PromptLoader, memoryProvider string) *SystemPromptMiddleware {
+	return &SystemPromptMiddleware{loader: loader, memoryProvider: memoryProvider}
 }
 
 func (m *SystemPromptMiddleware) Name() string  { return "system_prompt" }
@@ -24,9 +25,10 @@ func (m *SystemPromptMiddleware) Priority() int { return 0 }
 
 func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 	content := m.loader.Render(PromptData{
-		Channel: mc.Channel,
-		WorkDir: mc.WorkDir,
-		CWD:     mc.CWD,
+		Channel:        mc.Channel,
+		WorkDir:        mc.WorkDir,
+		CWD:            mc.CWD,
+		MemoryProvider: m.memoryProvider,
 	})
 	mc.SystemParts["00_base"] = content
 	return nil
@@ -121,19 +123,32 @@ func (m *SenderInfoMiddleware) Process(mc *MessageContext) error {
 
 // --- Priority 200-299: 用户消息处理 ---
 
-// systemGuideText 系统引导文本，提示 Agent 使用正确的工具搜索策略。
-const systemGuideText = `[系统引导] 在执行任何操作前，**必须**先用` + "`search_tools`" + `搜索工具库尝试寻找工具。
+// buildSystemGuideText 根据记忆模式生成系统引导文本。
+// letta 模式下包含 search_tools 引导，flat 模式下不包含。
+func buildSystemGuideText(memoryProvider string) string {
+	if memoryProvider == "letta" {
+		return `[系统引导] 在执行任何操作前，**必须**先用` + "`search_tools`" + `搜索工具库尝试寻找工具。
 - 搜索实时信息 → web_search（搜索引擎，不是浏览网页）
 - 浏览/获取网页内容 → Fetch
 - 如果需要查找或使用 skill，请使用 ` + "`Skill`" + ` 工具（不是 search_tools）
 - search_tools 仅用于搜索其他工具
 `
+	}
+	// flat 模式：不包含 search_tools 引导
+	return `[系统引导]
+- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）
+- 浏览/获取网页内容 → Fetch
+- 如果需要查找或使用 skill，请使用 ` + "`Skill`" + ` 工具
+`
+}
 
 // UserMessageMiddleware 构建最终的用户消息（注入时间戳、发送者标识、系统引导）
-type UserMessageMiddleware struct{}
+type UserMessageMiddleware struct {
+	memoryProvider string
+}
 
-func NewUserMessageMiddleware() *UserMessageMiddleware {
-	return &UserMessageMiddleware{}
+func NewUserMessageMiddleware(memoryProvider string) *UserMessageMiddleware {
+	return &UserMessageMiddleware{memoryProvider: memoryProvider}
 }
 
 func (m *UserMessageMiddleware) Name() string  { return "user_message" }
@@ -149,7 +164,8 @@ func (m *UserMessageMiddleware) Process(mc *MessageContext) error {
 		userMsg = fmt.Sprintf("[%s]\n%s", now, mc.UserContent)
 	}
 
-	userMsg = fmt.Sprintf("%s\n\n%s现在时间：%s\n", userMsg, systemGuideText, now)
+	guide := buildSystemGuideText(m.memoryProvider)
+	userMsg = fmt.Sprintf("%s\n\n%s现在时间：%s\n", userMsg, guide, now)
 
 	mc.UserMessage = userMsg
 	return nil

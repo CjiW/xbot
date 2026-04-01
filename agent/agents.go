@@ -33,13 +33,9 @@ func (s *AgentStore) userAgentsDir(senderID string) string {
 }
 
 // GetAgentsCatalog returns a formatted catalog of all available agents for the system prompt.
-// Scans global agents first, then user-private agents; same-name agents are overridden by user version.
+// Scans embedded agents first, then global agents, then user-private agents;
+// same-name agents are overridden by later sources (user > global > embedded).
 func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) string {
-	sources := []string{s.globalDir}
-	if senderID != "" {
-		sources = append(sources, s.userAgentsDir(senderID))
-	}
-
 	type agentInfo struct {
 		name string
 		role tools.SubAgentRole
@@ -48,8 +44,28 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 	merged := make(map[string]agentInfo)
 	var orderedNames []string
 
+	// 1. 扫描内置嵌入的 agents（优先级最低，外部同名 agent 会覆盖）
+	for _, name := range tools.ListEmbeddedAgents() {
+		data, err := tools.ReadEmbeddedAgentFile(name)
+		if err != nil {
+			continue
+		}
+		role, err := tools.ParseAgentFileContent(data, name)
+		if err != nil || role.Name == "" {
+			continue
+		}
+		orderedNames = append(orderedNames, role.Name)
+		merged[role.Name] = agentInfo{name: role.Name, role: role}
+	}
+
+	// 2. 扫描全局目录 + 用户目录
+	sources := []string{s.globalDir}
+	if senderID != "" {
+		sources = append(sources, s.userAgentsDir(senderID))
+	}
+
 	for i, dir := range sources {
-		// Sandbox-aware existence check: use sandbox.Stat for sandbox paths, os.Stat for host paths.
+		// Sandbox-aware existence check
 		if i == 0 || (s.sandbox == nil || s.sandbox.Name() == "none") {
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
 				continue
@@ -60,7 +76,6 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 			}
 		}
 
-		// Sandbox-aware loading for user directories
 		var roles []tools.SubAgentRole
 		var err error
 		if i == 0 || (s.sandbox == nil || s.sandbox.Name() == "none") {
@@ -93,6 +108,12 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 	var sb strings.Builder
 	sb.WriteString("# Available Agents (SubAgents)\n\n")
 	sb.WriteString("SubAgent 是拥有独立工具集和上下文的子代理，可委托专门任务并行处理。用 `SubAgent` 工具调用。\n\n")
+
+	// 注入实际目录路径，供 agent-creator 等参考
+	if s.globalDir != "" {
+		fmt.Fprintf(&sb, "**Agents 存储目录**: %s\n\n", s.globalDir)
+	}
+
 	sb.WriteString("<available_agents>\n")
 	for _, name := range orderedNames {
 		info := merged[name]

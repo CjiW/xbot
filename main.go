@@ -128,6 +128,7 @@ func main() {
 		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
+		AgentsDir:            filepath.Join(xbotDir, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		SingleUser:           cfg.Agent.SingleUser,
@@ -142,7 +143,7 @@ func main() {
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
 		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
@@ -206,7 +207,7 @@ func main() {
 	// 注册 DownloadFile 工具（支持 Web/OSS 和飞书两种来源）
 	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
-	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
+	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 
 	// 注册 Logs 工具（仅管理员可用）
 	adminChatID := cfg.Admin.ChatID

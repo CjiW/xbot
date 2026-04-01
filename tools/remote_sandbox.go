@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -834,10 +835,22 @@ func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 		rs.syncDirToRunner(ctx, userID, workspace, skillDir, dstDir)
 	}
 
+	// Sync embedded skills (skipped if external version already exists)
+	dstSkillsDir := filepath.Join(workspace, "skills")
+	for _, name := range ListEmbeddedSkills() {
+		rs.syncEmbeddedSkillToRunner(ctx, userID, workspace, name, dstSkillsDir)
+	}
+
 	// Sync global agents
 	if rs.agentsDir != "" {
 		dstDir := filepath.Join(workspace, "agents")
 		rs.syncAgentsToRunner(ctx, userID, workspace, rs.agentsDir, dstDir)
+	}
+
+	// Sync embedded agents (skipped if external version already exists)
+	dstAgentsDir := filepath.Join(workspace, "agents")
+	for _, name := range ListEmbeddedAgents() {
+		rs.syncEmbeddedAgentToRunner(ctx, userID, workspace, name, dstAgentsDir)
 	}
 
 	log.WithFields(log.Fields{
@@ -970,5 +983,57 @@ func (rs *RemoteSandbox) syncFileToRunner(ctx context.Context, userID, srcPath, 
 	}
 	if err := rs.WriteFile(ctx, dstPath, data, 0o644, userID); err != nil {
 		log.WithError(err).WithFields(log.Fields{"src": srcPath, "dst": dstPath}).Warn("syncFile: write failed")
+	}
+}
+
+// syncEmbeddedSkillToRunner syncs a single embedded skill to the runner.
+// Skips if the skill directory already exists on the runner.
+func (rs *RemoteSandbox) syncEmbeddedSkillToRunner(ctx context.Context, userID, workspace, skillName, dstSkillsDir string) {
+	dstDir := filepath.Join(dstSkillsDir, skillName)
+	// Check if already exists on runner
+	if _, err := rs.Stat(ctx, dstDir, userID); err == nil {
+		return // already exists
+	}
+	entries, err := fs.ReadDir(EmbeddedSkills, filepath.Join("embed_skills", skillName))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := ReadEmbeddedSkillFile(skillName, e.Name())
+		if err != nil {
+			continue
+		}
+		dstPath := filepath.Join(dstDir, e.Name())
+		if err := rs.MkdirAll(ctx, dstDir, 0o755, userID); err != nil {
+			log.WithError(err).Warn("syncEmbeddedSkill: mkdir failed")
+			return
+		}
+		if err := rs.WriteFile(ctx, dstPath, data, 0o644, userID); err != nil {
+			log.WithError(err).Warn("syncEmbeddedSkill: write failed")
+		}
+	}
+}
+
+// syncEmbeddedAgentToRunner syncs a single embedded agent to the runner.
+// Skips if the agent file already exists on the runner.
+func (rs *RemoteSandbox) syncEmbeddedAgentToRunner(ctx context.Context, userID, workspace, agentName, dstAgentsDir string) {
+	dstPath := filepath.Join(dstAgentsDir, agentName+".md")
+	// Check if already exists on runner
+	if _, err := rs.Stat(ctx, dstPath, userID); err == nil {
+		return // already exists
+	}
+	data, err := ReadEmbeddedAgentFile(agentName)
+	if err != nil {
+		return
+	}
+	if err := rs.MkdirAll(ctx, dstAgentsDir, 0o755, userID); err != nil {
+		log.WithError(err).Warn("syncEmbeddedAgent: mkdir failed")
+		return
+	}
+	if err := rs.WriteFile(ctx, dstPath, data, 0o644, userID); err != nil {
+		log.WithError(err).Warn("syncEmbeddedAgent: write failed")
 	}
 }

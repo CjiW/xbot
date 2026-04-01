@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +49,143 @@ type cliApp struct {
 	agentLoop *agent.Agent
 	workDir   string
 	xbotHome  string
+}
+
+// isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
+func isFirstRun() bool {
+	configPath := config.ConfigFilePath()
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return true
+	}
+	cfg := config.LoadFromFile(configPath)
+	if cfg == nil {
+		return true
+	}
+	return cfg.LLM.APIKey == ""
+}
+
+// promptInput 从 stdin 读取一行输入，支持默认值
+func promptInput(reader *bufio.Reader, prompt string, defaultVal string) string {
+	if defaultVal != "" {
+		fmt.Printf("%s [%s]: ", prompt, defaultVal)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return defaultVal
+	}
+	return input
+}
+
+// runSetup 引导用户完成首次配置
+func runSetup() {
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════╗")
+	fmt.Println("║            🚀 xbot CLI 首次配置引导              ║")
+	fmt.Println("╚══════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("xbot CLI 需要配置 LLM 服务才能工作。请提供以下信息：")
+	fmt.Println("（直接回车使用默认值，输入 q 退出）")
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Provider
+	fmt.Println("支持的 LLM 提供商：")
+	fmt.Println("  1. OpenAI (及兼容 API，如 DeepSeek、通义千问等)")
+	fmt.Println("  2. Anthropic (Claude)")
+	fmt.Println()
+	providerInput := promptInput(reader, "选择提供商 (1/2)", "1")
+	provider := "openai"
+	switch providerInput {
+	case "2":
+		provider = "anthropic"
+	case "q", "Q":
+		fmt.Println("已退出配置。你可以手动创建 ~/.xbot/config.json 或设置环境变量。")
+		os.Exit(0)
+	}
+
+	// API Key
+	apiKey := promptInput(reader, "API Key", "")
+	if apiKey == "" || apiKey == "q" {
+		fmt.Println("已退出配置。你可以手动创建 ~/.xbot/config.json 或设置环境变量。")
+		os.Exit(0)
+	}
+
+	// Base URL
+	defaultBaseURL := "https://api.openai.com/v1"
+	if provider == "anthropic" {
+		defaultBaseURL = "https://api.anthropic.com"
+	}
+	baseURL := promptInput(reader, "Base URL", defaultBaseURL)
+
+	// Model
+	defaultModel := "gpt-4o"
+	if provider == "anthropic" {
+		defaultModel = "claude-sonnet-4-20250514"
+	}
+	model := promptInput(reader, "模型名称", defaultModel)
+
+	// Sandbox mode
+	fmt.Println()
+	fmt.Println("沙箱模式：")
+	fmt.Println("  none   — 直接在宿主机执行（推荐 CLI 使用，无需 Docker）")
+	fmt.Println("  docker — 容器隔离（需要 Docker）")
+	fmt.Println()
+	sandboxInput := promptInput(reader, "选择沙箱模式", "none")
+	sandbox := sandboxInput
+	if sandbox != "none" && sandbox != "docker" {
+		sandbox = "none"
+	}
+
+	// Memory provider
+	fmt.Println()
+	fmt.Println("记忆模式：")
+	fmt.Println("  flat   — 全量注入，无需 embedding 服务（推荐 CLI 使用）")
+	fmt.Println("  letta  — 分层记忆，需要 embedding 服务（如 ollama）")
+	fmt.Println()
+	memoryInput := promptInput(reader, "选择记忆模式", "flat")
+	memory := memoryInput
+	if memory != "flat" && memory != "letta" {
+		memory = "flat"
+	}
+
+	// 构建配置
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			Provider: provider,
+			APIKey:   apiKey,
+			BaseURL:  baseURL,
+			Model:    model,
+		},
+		Sandbox: config.SandboxConfig{
+			Mode: sandbox,
+		},
+		Agent: config.AgentConfig{
+			MemoryProvider: memory,
+		},
+	}
+
+	configPath := config.ConfigFilePath()
+	if err := config.SaveToFile(configPath, cfg); err != nil {
+		fmt.Printf("❌ 保存配置失败: %v\n", err)
+		fmt.Println("你可以手动创建 ~/.xbot/config.json")
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Printf("✅ 配置已保存到 %s\n", configPath)
+	fmt.Println()
+	fmt.Println("配置概览：")
+	fmt.Printf("  提供商: %s\n", provider)
+	fmt.Printf("  模型:   %s\n", model)
+	fmt.Printf("  沙箱:   %s\n", sandbox)
+	fmt.Printf("  记忆:   %s\n", memory)
+	fmt.Println()
+	fmt.Println("你可以随时编辑配置文件或使用 /settings 命令修改配置。")
+	fmt.Println()
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
@@ -108,6 +247,7 @@ func newCLIApp() *cliApp {
 		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotHome, "skills"),
+		AgentsDir:            filepath.Join(xbotHome, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		SingleUser:           true,
@@ -122,11 +262,12 @@ func newCLIApp() *cliApp {
 		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
 		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
 		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EnableAutoCompress,
+		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
 		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
+		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
 	})
 	agentLoop.IndexGlobalTools()
 
@@ -179,6 +320,11 @@ func main() {
 		prompt = strings.TrimSpace(string(data))
 	}
 
+	// 首次运行检测（仅在交互模式下）
+	if prompt == "" && isFirstRun() {
+		runSetup()
+	}
+
 	// 非交互模式
 	if prompt != "" {
 		executeNonInteractive(prompt)
@@ -203,6 +349,98 @@ func main() {
 	cliCfg := channel.CLIChannelConfig{
 		WorkDir: app.workDir,
 		ChatID:  absWorkDir,
+		GetCurrentValues: func() map[string]string {
+			return map[string]string{
+				"llm_model":          app.cfg.LLM.Model,
+				"llm_base_url":       app.cfg.LLM.BaseURL,
+				"context_mode":       app.cfg.Agent.ContextMode,
+				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
+				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
+				"memory_window":      fmt.Sprintf("%d", app.cfg.Agent.MemoryWindow),
+				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"enable_auto_compress": func() string {
+					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
+						return "true"
+					}
+					return "false"
+				}(),
+				"theme": func() string {
+					// Read persisted theme from settings, default to dark
+					if app.agentLoop != nil {
+						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+								if t, ok := vals["theme"]; ok && t != "" {
+									return t
+								}
+							}
+						}
+					}
+					return "dark"
+				}(),
+			}
+		},
+		ApplySettings: func(values map[string]string) {
+			// Apply LLM settings
+			if v, ok := values["llm_model"]; ok && v != "" {
+				app.cfg.LLM.Model = v
+			}
+			if v, ok := values["llm_base_url"]; ok && v != "" {
+				app.cfg.LLM.BaseURL = v
+			}
+			// Apply Agent settings
+			if v, ok := values["context_mode"]; ok && v != "" {
+				app.cfg.Agent.ContextMode = v
+			}
+			if v, ok := values["max_iterations"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxIterations = n
+				}
+			}
+			if v, ok := values["max_concurrency"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxConcurrency = n
+				}
+			}
+			if v, ok := values["memory_window"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MemoryWindow = n
+				}
+			}
+			if v, ok := values["max_context_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					app.cfg.Agent.MaxContextTokens = n
+				}
+			}
+			if v, ok := values["enable_auto_compress"]; ok {
+				b := v == "true"
+				app.cfg.Agent.EnableAutoCompress = &b
+			}
+			// Persist to config.json
+			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+				log.Warnf("Failed to save config.json: %v", err)
+			}
+			// Update agent runtime state
+			if app.agentLoop != nil {
+				if v, ok := values["context_mode"]; ok && v != "" {
+					_ = app.agentLoop.SetContextMode(v)
+				}
+				if v, ok := values["max_iterations"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMaxIterations(n)
+					}
+				}
+				if v, ok := values["max_concurrency"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMaxConcurrency(n)
+					}
+				}
+				if v, ok := values["memory_window"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMemoryWindow(n)
+					}
+				}
+			}
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）
@@ -234,10 +472,11 @@ func main() {
 											label = t.Name
 										}
 										toolList[i] = channel.CLIToolProgress{
-											Name:    t.Name,
-											Label:   label,
-											Status:  t.Status,
-											Elapsed: t.ElapsedMS,
+											Name:      t.Name,
+											Label:     label,
+											Status:    t.Status,
+											Elapsed:   t.ElapsedMS,
+											Iteration: snap.Iteration,
 										}
 									}
 									iters = append(iters, channel.HistoryIteration{
@@ -287,6 +526,23 @@ func main() {
 
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
+
+	// Inject SettingsService for interactive /settings panel
+	if app.agentLoop != nil {
+		if ss := app.agentLoop.GetSettingsService(); ss != nil {
+			cliCh.SetSettingsService(ss)
+		}
+		cliCh.SetModelLister(app.agentLoop.LLMFactory())
+	}
+
+	// Apply saved theme at startup
+	if ss := app.agentLoop.GetSettingsService(); ss != nil {
+		if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+			if t, ok := vals["theme"]; ok && t != "" {
+				channel.ApplyTheme(t)
+			}
+		}
+	}
 
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
 	app.agentLoop.SetDirectSend(disp.SendDirect)

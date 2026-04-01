@@ -102,10 +102,10 @@ var sandboxInitOnce sync.Once
 // are created and wrapped in a SandboxRouter for per-user routing.
 // Otherwise, falls back to the legacy single-sandbox behavior.
 func InitSandbox(sandboxCfg config.SandboxConfig, webServerRunner bool, workDir string) {
-		sandboxInitOnce.Do(func() {
-			if sandboxCfg.RemoteMode != "" {
-				// Dual-mode: create SandboxRouter with both docker and remote
-				globalSandbox = NewSandboxRouter(sandboxCfg, webServerRunner, workDir)
+	sandboxInitOnce.Do(func() {
+		if sandboxCfg.RemoteMode != "" {
+			// Dual-mode: create SandboxRouter with both docker and remote
+			globalSandbox = NewSandboxRouter(sandboxCfg, webServerRunner, workDir)
 			log.Infof("Sandbox initialized: %s (router)", globalSandbox.Name())
 		} else {
 			// Legacy single-mode

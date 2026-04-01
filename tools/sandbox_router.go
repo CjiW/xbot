@@ -153,13 +153,13 @@ func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
 	}
 
 	// 3. Pure web user without remote runner — denied by default
-		if strings.HasPrefix(userID, "web-") {
-			if !r.webServerRunner {
-				// User must have their own remote runner — return DeniedSandbox to block ALL access
-				return r.denied
-			}
-			// Explicitly enabled: allow fallback to server sandbox (docker)
+	if strings.HasPrefix(userID, "web-") {
+		if !r.webServerRunner {
+			// User must have their own remote runner — return DeniedSandbox to block ALL access
+			return r.denied
 		}
+		// Explicitly enabled: allow fallback to server sandbox (docker)
+	}
 
 	if r.docker != nil {
 		return r.docker

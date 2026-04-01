@@ -590,6 +590,13 @@ func isCtrlEnter(msg tea.Msg) bool {
 		s == "?CSI[50 55 59 53 59 49 51 126]?" || s == "\x1b[27;5;13~"
 }
 
+// isCtrlO 检测 Ctrl+O 按键（部分终端发送 CSI u 序列，Bubble Tea 无法识别）。
+// Ctrl+O = ASCII 15, CSI u 协议: \x1b[15;5u
+func isCtrlO(msg tea.Msg) bool {
+	s := fmt.Sprintf("%v", msg)
+	return s == "?CSI[27 91 49 53 59 53 117]?" || s == "\x1b[15;5u"
+}
+
 // ---------------------------------------------------------------------------
 // Bubble Tea Interface Implementation
 // ---------------------------------------------------------------------------
@@ -614,6 +621,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Ctrl+Enter 换行（终端发送的 raw sequence 不统一，需手动检测）
 	if isCtrlEnter(msg) {
 		m.textarea.InsertString("\n")
+		return m, nil
+	}
+
+	// Ctrl+O 切换 tool summary 展开/折叠（同上，兼容 CSI u 协议）
+	if isCtrlO(msg) {
+		m.toolSummaryExpanded = !m.toolSummaryExpanded
+		m.renderCacheValid = false
+		m.cachedHistory = ""
+		m.updateViewportContent()
 		return m, nil
 	}
 
@@ -680,14 +696,6 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmDelete = 2 // 默认删除 2 条
 				m.updateViewportContent()
 			}
-			return m, nil
-
-		case tea.KeyCtrlO:
-			// §11 Ctrl+O 切换 tool summary 展开/折叠
-			m.toolSummaryExpanded = !m.toolSummaryExpanded
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			m.updateViewportContent()
 			return m, nil
 		}
 
@@ -856,6 +864,9 @@ func (m *cliModel) handleResize(width, height int) {
 
 	// 更新内容
 	m.updateViewportContent()
+
+	// Resize 后始终滚到底部（无论之前用户是否上滚）
+	m.viewport.GotoBottom()
 }
 
 // calculateProgressHeight returns 0 — progress is now rendered inside the viewport.

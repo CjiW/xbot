@@ -319,7 +319,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	var toolsUsed []string
 	var waitingUser bool
-	var waitingQuestion string // captured from tool result Summary for CLI panel
+	var waitingQuestion string            // captured from tool result Summary for CLI panel
+	var waitingMetadata map[string]string // captured from tool result Metadata
 	var progressLines []string
 	var progressMu sync.Mutex // 保护 progressLines 的并发读写 + notifyProgress 的串行化
 	var lastContent string    // 用于 LLM 错误时的降级返回
@@ -1190,6 +1191,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					autoNotify = false
 					if r.result != nil && r.result.WaitingUser {
 						waitingUser = true
+						if waitingQuestion == "" && r.result.Summary != "" {
+							waitingQuestion = r.result.Summary
+						}
+						if len(r.result.Metadata) > 0 && waitingMetadata == nil {
+							waitingMetadata = make(map[string]string)
+							for k, v := range r.result.Metadata {
+								waitingMetadata[k] = v
+							}
+						}
 					}
 				}
 			}
@@ -1205,6 +1215,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				// Capture question for CLI interactive panel (e.g., AskUser tool)
 				if waitingQuestion == "" && r.result.Summary != "" {
 					waitingQuestion = r.result.Summary
+				}
+				if len(r.result.Metadata) > 0 && waitingMetadata == nil {
+					waitingMetadata = make(map[string]string)
+					for k, v := range r.result.Metadata {
+						waitingMetadata[k] = v
+					}
 				}
 			}
 
@@ -1270,8 +1286,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				ToolsUsed:   toolsUsed,
 				WaitingUser: true,
 			}
-			if waitingQuestion != "" {
-				outMsg.Metadata = map[string]string{"ask_question": waitingQuestion}
+			if waitingQuestion != "" || len(waitingMetadata) > 0 {
+				outMsg.Metadata = make(map[string]string)
+				if waitingQuestion != "" {
+					outMsg.Metadata["ask_question"] = waitingQuestion
+				}
+				for k, v := range waitingMetadata {
+					outMsg.Metadata[k] = v
+				}
 			}
 			return buildOutput(outMsg)
 		}

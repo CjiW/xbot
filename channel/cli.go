@@ -14,6 +14,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -527,6 +528,8 @@ type cliModel struct {
 	panelComboIdx int                            // settings panel: combo selected option index
 	panelQuestion string                         // askuser panel: the question text
 	panelAnswerTA textarea.Model                 // askuser panel: answer editor (replaces raw string)
+	panelOptions  []string                       // askuser panel: optional choices for multiple-choice
+	panelOptIdx   int                            // askuser panel: selected option index (-1 = free input)
 	panelSchema   []SettingDefinition            // settings panel: schema copy
 	panelValues   map[string]string              // settings panel: current values
 	panelOnSubmit func(values map[string]string) // callback on settings submit
@@ -1585,8 +1588,12 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		if msg.WaitingUser {
 			// Extract question from Metadata (set by engine from tool result Summary)
 			question := ""
+			var options []string
 			if msg.Metadata != nil {
 				question = msg.Metadata["ask_question"]
+				if optsJSON := msg.Metadata["ask_options"]; optsJSON != "" {
+					_ = json.Unmarshal([]byte(optsJSON), &options)
+				}
 			}
 			// Fallback: search message history for ❓ (in case Metadata not set)
 			if question == "" {
@@ -1601,7 +1608,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			question = strings.TrimSpace(strings.TrimPrefix(question, "Asked user: "))
 			if question != "" {
 				m.updateViewportContent()
-				m.openAskUserPanel(question, func(answer string) {
+				m.openAskUserPanel(question, options, func(answer string) {
 					if m.msgBus != nil {
 						m.msgBus.Inbound <- bus.InboundMessage{
 							Channel:    cliChannelName,
@@ -2287,9 +2294,11 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 }
 
 // openAskUserPanel activates the ask-user panel overlay.
-func (m *cliModel) openAskUserPanel(question string, onAnswer func(string), onCancel func()) {
+func (m *cliModel) openAskUserPanel(question string, options []string, onAnswer func(string), onCancel func()) {
 	m.panelMode = "askuser"
 	m.panelQuestion = question
+	m.panelOptions = options
+	m.panelOptIdx = 0
 	ta := textarea.New()
 	ta.Placeholder = "Type your answer..."
 	ta.Prompt = "▸ "
@@ -2298,7 +2307,7 @@ func (m *cliModel) openAskUserPanel(question string, onAnswer func(string), onCa
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
 	ta.CharLimit = 0
 	ta.SetWidth(60)
-	ta.SetHeight(1)
+	ta.SetHeight(3)
 	ta.Focus()
 	m.panelAnswerTA = ta
 	m.panelOnAnswer = onAnswer
@@ -2510,6 +2519,54 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 }
 
 func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	// Multiple-choice mode: arrow keys to select, Enter to confirm, Tab to switch to free input
+	if len(m.panelOptions) > 0 {
+		switch msg.Type {
+		case tea.KeyEnter:
+			// Confirm selected option
+			if m.panelOptIdx >= 0 && m.panelOptIdx < len(m.panelOptions) {
+				answer := m.panelOptions[m.panelOptIdx]
+				if m.panelOnAnswer != nil {
+					m.panelOnAnswer(answer)
+				}
+			}
+			m.closePanel()
+			return true, m, nil
+		case tea.KeyEsc:
+			if m.panelOnCancel != nil {
+				m.panelOnCancel()
+			}
+			m.closePanel()
+			return true, m, nil
+		case tea.KeyUp:
+			if m.panelOptIdx > 0 {
+				m.panelOptIdx--
+			}
+			return true, m, nil
+		case tea.KeyDown:
+			if m.panelOptIdx < len(m.panelOptions)-1 {
+				m.panelOptIdx++
+			}
+			return true, m, nil
+		case tea.KeyTab:
+			// Switch to free input mode
+			m.panelOptIdx = -1
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
+		default:
+			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+				// Start typing → switch to free input mode
+				m.panelOptIdx = -1
+				var cmd tea.Cmd
+				m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+				return true, m, cmd
+			}
+			return true, m, nil
+		}
+	}
+
+	// Free input mode (no options, or user chose to type freely)
 	switch msg.Type {
 	case tea.KeyEnter:
 		answer := strings.TrimSpace(m.panelAnswerTA.Value())
@@ -2524,12 +2581,19 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		m.closePanel()
 		return true, m, nil
+	case tea.KeyTab:
+		// Switch back to selection mode if options available
+		if len(m.panelOptions) > 0 {
+			m.panelOptIdx = 0
+			return true, m, nil
+		}
 	default:
 		// Delegate all key handling to textarea (cursor movement, backspace, etc.)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
 	}
+	return true, m, nil
 }
 
 // viewPanel renders the active panel as a string.
@@ -2694,12 +2758,45 @@ func (m *cliModel) viewAskUserPanel() string {
 	hintStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666"))
 
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffb74d")).
+		Bold(true)
+
 	var sb strings.Builder
 	sb.WriteString(questionStyle.Render("❓ " + m.panelQuestion))
-	sb.WriteString("\n\n")
-	sb.WriteString(m.panelAnswerTA.View())
 	sb.WriteString("\n")
-	sb.WriteString(hintStyle.Render("  Enter 发送 · Esc 取消"))
+
+	// Multiple-choice options
+	if len(m.panelOptions) > 0 && m.panelOptIdx >= 0 {
+		sb.WriteString("\n")
+		for i, opt := range m.panelOptions {
+			if i == m.panelOptIdx {
+				sb.WriteString(cursorStyle.Render("  ▸ " + opt))
+			} else {
+				sb.WriteString("    " + opt)
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Text input (free input mode or when user types in choice mode)
+	if len(m.panelOptions) == 0 || m.panelOptIdx < 0 {
+		sb.WriteString("\n")
+		sb.WriteString(m.panelAnswerTA.View())
+		sb.WriteString("\n")
+	}
+
+	// Hints
+	if len(m.panelOptions) > 0 {
+		if m.panelOptIdx >= 0 {
+			sb.WriteString(hintStyle.Render("  ↑↓ 选择 · Enter 确认 · Tab/输入 自由回答 · Esc 取消"))
+		} else {
+			sb.WriteString(hintStyle.Render("  Enter 发送 · Tab 返回选择 · Esc 取消"))
+		}
+	} else {
+		sb.WriteString(hintStyle.Render("  Enter 发送 · Esc 取消"))
+	}
 
 	return boxStyle.Render(sb.String())
 }

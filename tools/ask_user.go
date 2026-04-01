@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,7 +16,7 @@ type AskUserTool struct{}
 func (t *AskUserTool) Name() string { return "AskUser" }
 
 func (t *AskUserTool) Description() string {
-	return "Ask the user a question and wait for their response. Use this when you need confirmation, clarification, or additional information from the user. Only available in CLI mode."
+	return "Ask the user a question and wait for their response. Use this when you need confirmation, clarification, or additional information from the user. Only available in CLI mode. Supports optional choices for multiple-choice questions."
 }
 
 func (t *AskUserTool) Parameters() []llm.ToolParam {
@@ -26,11 +27,18 @@ func (t *AskUserTool) Parameters() []llm.ToolParam {
 			Description: "The question to ask the user",
 			Required:    true,
 		},
+		{
+			Name:        "options",
+			Type:        "array",
+			Description: "Optional list of choices for multiple-choice questions. If provided, user can select from these options. Each option is a string.",
+			Required:    false,
+		},
 	}
 }
 
 type askUserArgs struct {
-	Question string `json:"question"`
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
 }
 
 func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -48,15 +56,30 @@ func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 	// CLI uses the interactive panel (reads from Metadata), so skip SendFunc
 	if ctx.Channel != "cli" {
 		if ctx.SendFunc != nil {
-			if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, "❓ "+question); err != nil {
+			msg := "❓ " + question
+			if len(args.Options) > 0 {
+				for i, opt := range args.Options {
+					msg += fmt.Sprintf("\n  %d. %s", i+1, opt)
+				}
+			}
+			if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, msg); err != nil {
 				return nil, fmt.Errorf("send question: %w", err)
 			}
 		}
 	}
 
-	// Return WaitingUser to pause the agent loop
-	// Summary is propagated to OutboundMessage.Metadata["ask_question"] for CLI panel
-	return NewResultWithUserResponse(fmt.Sprintf("Asked user: %s", question)), nil
+	// Build result with optional choices metadata
+	result := &ToolResult{
+		Summary:     fmt.Sprintf("Asked user: %s", question),
+		WaitingUser: true,
+	}
+	if len(args.Options) > 0 {
+		optsJSON, _ := json.Marshal(args.Options)
+		result.Metadata = map[string]string{
+			"ask_options": string(optsJSON),
+		}
+	}
+	return result, nil
 }
 
 // SupportedChannels implements ChannelProvider interface - CLI only

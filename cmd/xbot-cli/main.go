@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,6 +48,143 @@ type cliApp struct {
 	agentLoop *agent.Agent
 	workDir   string
 	xbotHome  string
+}
+
+// isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
+func isFirstRun() bool {
+	configPath := config.ConfigFilePath()
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return true
+	}
+	cfg := config.LoadFromFile(configPath)
+	if cfg == nil {
+		return true
+	}
+	return cfg.LLM.APIKey == ""
+}
+
+// promptInput 从 stdin 读取一行输入，支持默认值
+func promptInput(reader *bufio.Reader, prompt string, defaultVal string) string {
+	if defaultVal != "" {
+		fmt.Printf("%s [%s]: ", prompt, defaultVal)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return defaultVal
+	}
+	return input
+}
+
+// runSetup 引导用户完成首次配置
+func runSetup() {
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════╗")
+	fmt.Println("║            🚀 xbot CLI 首次配置引导              ║")
+	fmt.Println("╚══════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Println("xbot CLI 需要配置 LLM 服务才能工作。请提供以下信息：")
+	fmt.Println("（直接回车使用默认值，输入 q 退出）")
+	fmt.Println()
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// Provider
+	fmt.Println("支持的 LLM 提供商：")
+	fmt.Println("  1. OpenAI (及兼容 API，如 DeepSeek、通义千问等)")
+	fmt.Println("  2. Anthropic (Claude)")
+	fmt.Println()
+	providerInput := promptInput(reader, "选择提供商 (1/2)", "1")
+	provider := "openai"
+	switch providerInput {
+	case "2":
+		provider = "anthropic"
+	case "q", "Q":
+		fmt.Println("已退出配置。你可以手动创建 ~/.xbot/config.json 或设置环境变量。")
+		os.Exit(0)
+	}
+
+	// API Key
+	apiKey := promptInput(reader, "API Key", "")
+	if apiKey == "" || apiKey == "q" {
+		fmt.Println("已退出配置。你可以手动创建 ~/.xbot/config.json 或设置环境变量。")
+		os.Exit(0)
+	}
+
+	// Base URL
+	defaultBaseURL := "https://api.openai.com/v1"
+	if provider == "anthropic" {
+		defaultBaseURL = "https://api.anthropic.com"
+	}
+	baseURL := promptInput(reader, "Base URL", defaultBaseURL)
+
+	// Model
+	defaultModel := "gpt-4o"
+	if provider == "anthropic" {
+		defaultModel = "claude-sonnet-4-20250514"
+	}
+	model := promptInput(reader, "模型名称", defaultModel)
+
+	// Sandbox mode
+	fmt.Println()
+	fmt.Println("沙箱模式：")
+	fmt.Println("  none   — 直接在宿主机执行（推荐 CLI 使用，无需 Docker）")
+	fmt.Println("  docker — 容器隔离（需要 Docker）")
+	fmt.Println()
+	sandboxInput := promptInput(reader, "选择沙箱模式", "none")
+	sandbox := sandboxInput
+	if sandbox != "none" && sandbox != "docker" {
+		sandbox = "none"
+	}
+
+	// Memory provider
+	fmt.Println()
+	fmt.Println("记忆模式：")
+	fmt.Println("  flat   — 全量注入，无需 embedding 服务（推荐 CLI 使用）")
+	fmt.Println("  letta  — 分层记忆，需要 embedding 服务（如 ollama）")
+	fmt.Println()
+	memoryInput := promptInput(reader, "选择记忆模式", "flat")
+	memory := memoryInput
+	if memory != "flat" && memory != "letta" {
+		memory = "flat"
+	}
+
+	// 构建配置
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			Provider: provider,
+			APIKey:   apiKey,
+			BaseURL:  baseURL,
+			Model:    model,
+		},
+		Sandbox: config.SandboxConfig{
+			Mode: sandbox,
+		},
+		Agent: config.AgentConfig{
+			MemoryProvider: memory,
+		},
+	}
+
+	configPath := config.ConfigFilePath()
+	if err := config.SaveToFile(configPath, cfg); err != nil {
+		fmt.Printf("❌ 保存配置失败: %v\n", err)
+		fmt.Println("你可以手动创建 ~/.xbot/config.json")
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Printf("✅ 配置已保存到 %s\n", configPath)
+	fmt.Println()
+	fmt.Println("配置概览：")
+	fmt.Printf("  提供商: %s\n", provider)
+	fmt.Printf("  模型:   %s\n", model)
+	fmt.Printf("  沙箱:   %s\n", sandbox)
+	fmt.Printf("  记忆:   %s\n", memory)
+	fmt.Println()
+	fmt.Println("你可以随时编辑配置文件或使用 /settings 命令修改配置。")
+	fmt.Println()
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
@@ -179,6 +317,11 @@ func main() {
 			log.WithError(err).Fatal("Failed to read from stdin")
 		}
 		prompt = strings.TrimSpace(string(data))
+	}
+
+	// 首次运行检测（仅在交互模式下）
+	if prompt == "" && isFirstRun() {
+		runSetup()
 	}
 
 	// 非交互模式

@@ -700,6 +700,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlO:
 			// §11 Ctrl+O 切换 tool summary 展开/折叠
+			// TODO: debug — 临时同时响应 Ctrl+L 测试，确认后移除 Ctrl+L
+		case tea.KeyCtrlL:
 			m.toolSummaryExpanded = !m.toolSummaryExpanded
 			m.renderCacheValid = false
 			m.cachedHistory = ""

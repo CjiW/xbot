@@ -93,6 +93,12 @@ func (s *AgentStore) GetAgentsCatalog(ctx context.Context, senderID string) stri
 	var sb strings.Builder
 	sb.WriteString("# Available Agents (SubAgents)\n\n")
 	sb.WriteString("SubAgent 是拥有独立工具集和上下文的子代理，可委托专门任务并行处理。用 `SubAgent` 工具调用。\n\n")
+
+	// 注入实际目录路径，供 agent-creator 等参考
+	if s.globalDir != "" {
+		fmt.Fprintf(&sb, "**Agents 存储目录**: %s\n\n", s.globalDir)
+	}
+
 	sb.WriteString("<available_agents>\n")
 	for _, name := range orderedNames {
 		info := merged[name]

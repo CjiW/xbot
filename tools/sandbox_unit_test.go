@@ -60,7 +60,7 @@ func TestGlobTool_SandboxPathConstruction(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false, // 禁用真实沙箱，只测试路径转换
 	}
 
@@ -87,7 +87,7 @@ func TestReadTool_PathTranslation(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false,
 	}
 
@@ -116,7 +116,7 @@ func TestGrepTool_PathTranslation(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false,
 	}
 
@@ -145,7 +145,7 @@ func TestFileReplaceTool_LocalMode(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false,
 	}
 
@@ -184,7 +184,7 @@ func TestReadTool_SandboxCWD_Regression(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false, // 本地模式测试路径逻辑
 		CurrentDir:     filepath.Join(ws, "xbot"),
 	}
@@ -379,7 +379,7 @@ func TestReadTool_OffsetParameter(t *testing.T) {
 	ctx := &ToolContext{
 		Ctx:            context.Background(),
 		WorkspaceRoot:  ws,
-		Sandbox:        &mockSandbox{name: "none", workspace: ""},
+		Sandbox:        nil,
 		SandboxEnabled: false,
 	}
 

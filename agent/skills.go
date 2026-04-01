@@ -86,6 +86,26 @@ func (s *SkillStore) refreshSkills(ctx context.Context, senderID string) ([]Skil
 	merged := make(map[string]SkillInfo)
 	orderedNames := make([]string, 0)
 
+	// 扫描内置嵌入的 skills（优先级最低，外部同名 skill 会覆盖）
+	for _, name := range tools.ListEmbeddedSkills() {
+		data, err := tools.ReadEmbeddedSkillFile(name, "SKILL.md")
+		if err != nil {
+			continue
+		}
+		sName, sDesc := parseSkillFrontmatter(data)
+		if sName == "" {
+			sName = name
+		}
+		if _, exists := merged[sName]; !exists {
+			orderedNames = append(orderedNames, sName)
+		}
+		merged[sName] = SkillInfo{
+			Name:        sName,
+			Description: sDesc,
+			Path:        "embedded:" + name,
+		}
+	}
+
 	// 扫描全局目录（始终用 os.*）
 	for _, dir := range s.globalDirs {
 		entries, err := os.ReadDir(dir)

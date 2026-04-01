@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -88,6 +89,14 @@ func syncSkillsAndAgents(ctx *ToolContext) {
 	// Sync global agents directory
 	if ctx.AgentsDir != "" {
 		syncFlatDir(ctx.AgentsDir, targetAgentsDir)
+	}
+
+	// Sync embedded skills into target (skipped if external version already exists)
+	for _, name := range ListEmbeddedSkills() {
+		dstSkill := filepath.Join(targetSkillsDir, name)
+		if _, err := os.Stat(dstSkill); os.IsNotExist(err) {
+			syncEmbeddedDir(filepath.Join("embed_skills", name), dstSkill)
+		}
 	}
 }
 
@@ -202,4 +211,26 @@ func syncFile(src, dst string) {
 
 	// Preserve source modtime so future checks skip unchanged files
 	_ = os.Chtimes(dst, srcInfo.ModTime(), srcInfo.ModTime())
+}
+
+// syncEmbeddedDir copies files from embed.FS to a filesystem directory.
+func syncEmbeddedDir(embedDir, dstDir string) {
+	entries, err := fs.ReadDir(EmbeddedSkills, embedDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			syncEmbeddedDir(filepath.Join(embedDir, e.Name()), filepath.Join(dstDir, e.Name()))
+			continue
+		}
+		data, err := EmbeddedSkills.ReadFile(filepath.Join(embedDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if err := os.MkdirAll(dstDir, 0o755); err != nil {
+			continue
+		}
+		os.WriteFile(filepath.Join(dstDir, e.Name()), data, 0o644)
+	}
 }

@@ -153,10 +153,29 @@ func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (skillDir, displ
 			}
 		}
 	}
+	// Fallback: check embedded skills
+	if HasEmbeddedSkill(name) {
+		return "embedded:" + name, "embedded:" + name
+	}
 	return "", ""
 }
 
 func (t *SkillTool) doLoad(ctx *ToolContext, skillDir, displayBase, file string) (*ToolResult, error) {
+	// Check for embedded skill
+	if strings.HasPrefix(skillDir, "embedded:") {
+		embeddedName := strings.TrimPrefix(skillDir, "embedded:")
+		data, err := ReadEmbeddedSkillFile(embeddedName, file)
+		if err != nil {
+			return nil, fmt.Errorf("file %q not found in embedded skill %q", file, embeddedName)
+		}
+		content := string(data)
+		lines := strings.Split(content, "\n")
+		if len(lines) > skillLoadMaxLines {
+			content = strings.Join(lines[:skillLoadMaxLines], "\n")
+			content += fmt.Sprintf("\n\n[Truncated at %d lines. Use file parameter to read specific files, or list_files to see all available files.]", skillLoadMaxLines)
+		}
+		return NewResult(content), nil
+	}
 	target := filepath.Join(skillDir, file)
 	var data []byte
 	var err error
@@ -183,6 +202,18 @@ func (t *SkillTool) doLoad(ctx *ToolContext, skillDir, displayBase, file string)
 }
 
 func (t *SkillTool) doListFiles(ctx *ToolContext, skillDir, displayBase string) (*ToolResult, error) {
+	// Check for embedded skill
+	if strings.HasPrefix(skillDir, "embedded:") {
+		embeddedName := strings.TrimPrefix(skillDir, "embedded:")
+		files, err := ListEmbeddedSkillFiles(embeddedName)
+		if err != nil {
+			return nil, fmt.Errorf("listing embedded skill files: %w", err)
+		}
+		if len(files) == 0 {
+			return NewResult("No files found in embedded skill directory."), nil
+		}
+		return NewResult(strings.Join(files, "\n")), nil
+	}
 	var files []string
 	if shouldUseSandbox(ctx) {
 		userID := ctx.OriginUserID

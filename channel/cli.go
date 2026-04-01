@@ -13,6 +13,7 @@
 package channel
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2080,3 +2081,68 @@ func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
 	return "", nil
 }
 func (c *NonInteractiveChannel) WaitDone() { <-c.done }
+
+// --- SettingsCapability implementation for CLIChannel ---
+
+// cliSettingsSchema returns the settings definitions for CLI channel.
+func cliSettingsSchema() []SettingDefinition {
+	return []SettingDefinition{
+		{
+			Key:         "llm_model",
+			Label:       "LLM 模型",
+			Description: "当前使用的 LLM 模型名称（如 gpt-4o, claude-sonnet-4-20250514）",
+			Type:        SettingTypeText,
+			Category:    "LLM",
+		},
+		{
+			Key:         "llm_base_url",
+			Label:       "LLM Base URL",
+			Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
+			Type:        SettingTypeText,
+			Category:    "LLM",
+		},
+		{
+			Key:         "context_mode",
+			Label:       "上下文模式",
+			Description: "控制上下文管理策略",
+			Type:        SettingTypeSelect,
+			Category:    "Agent",
+			Options: []SettingOption{
+				{Label: "自动（默认）", Value: "auto"},
+				{Label: "手动压缩", Value: "manual"},
+				{Label: "不压缩", Value: "none"},
+			},
+			DefaultValue: "auto",
+		},
+		{
+			Key:         "max_iterations",
+			Label:       "最大迭代次数",
+			Description: "单次对话最大工具调用迭代次数（默认 100）",
+			Type:        SettingTypeNumber,
+			Category:    "Agent",
+		},
+		{
+			Key:         "theme",
+			Label:       "主题",
+			Description: "CLI 界面主题",
+			Type:        SettingTypeSelect,
+			Category:    "外观",
+			Options: []SettingOption{
+				{Label: "默认（深色）", Value: "dark"},
+				{Label: "浅色", Value: "light"},
+			},
+			DefaultValue: "dark",
+		},
+	}
+}
+
+// SettingsSchema returns the settings definitions for CLI channel.
+func (c *CLIChannel) SettingsSchema() []SettingDefinition {
+	return cliSettingsSchema()
+}
+
+// HandleSettingSubmit processes a setting value submission from the CLI channel.
+func (c *CLIChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (map[string]string, error) {
+	// CLI uses /settings set <key> <value> directly, this is for future interactive UI
+	return nil, fmt.Errorf("CLI uses /settings set <key> <value> command directly")
+}

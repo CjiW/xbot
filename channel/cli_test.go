@@ -1063,8 +1063,9 @@ func TestCLIModelRenderProgressBlockSubAgents(t *testing.T) {
 	if !strings.Contains(result, "Reviewing code") {
 		t.Errorf("renderProgressBlock should show subagent desc, got: %q", result)
 	}
-	if !strings.Contains(result, "test-runner") {
-		t.Errorf("renderProgressBlock should show completed subagent, got: %q", result)
+	// Done sub-agents should be hidden from progress panel
+	if strings.Contains(result, "test-runner") {
+		t.Errorf("renderProgressBlock should not show completed subagent, got: %q", result)
 	}
 }
 
@@ -1088,8 +1089,9 @@ func TestCLIModelRenderProgressBlockSubAgentChildren(t *testing.T) {
 	}
 
 	result := model.renderProgressBlock()
-	if !strings.Contains(result, "child") {
-		t.Errorf("renderProgressBlock should show child subagent, got: %q", result)
+	// Done child sub-agents should be hidden from progress panel
+	if strings.Contains(result, "child") {
+		t.Errorf("renderProgressBlock should not show completed child subagent, got: %q", result)
 	}
 }
 

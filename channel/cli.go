@@ -1657,15 +1657,18 @@ func (m *cliModel) renderProgressBlock() string {
 }
 
 // renderSubAgentTree renders nested sub-agents with indentation.
+// Only renders running/pending agents — completed ones are already captured
+// in the tool summary and shouldn't linger in the progress panel.
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
 	indent := strings.Repeat("  ", depth)
 	for _, sa := range agents {
+		// Skip completed sub-agents — their results are in the tool summary
+		if sa.Status == "done" {
+			continue
+		}
 		icon := m.ticker.viewFrames(waveFrames)
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d"))
 		switch sa.Status {
-		case "done":
-			icon = "✓"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
 		case "error":
 			icon = "✗"
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef5350"))

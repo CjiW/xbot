@@ -937,8 +937,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 更新 viewport（字符输入和上下键不传递给 viewport，鼠标滚轮手动处理增加速度）
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.Type == tea.KeyRunes || msg.Type == tea.KeyUp || msg.Type == tea.KeyDown {
-			// 跳过 viewport 更新
+		if msg.Type == tea.KeyRunes {
+			// 跳过 viewport 更新（字符输入不需要滚动）
 		} else {
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)

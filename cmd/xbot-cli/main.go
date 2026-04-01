@@ -348,6 +348,15 @@ func main() {
 	cliCfg := channel.CLIChannelConfig{
 		WorkDir: app.workDir,
 		ChatID:  absWorkDir,
+		GetCurrentValues: func() map[string]string {
+			return map[string]string{
+				"llm_model":      app.cfg.LLM.Model,
+				"llm_base_url":   app.cfg.LLM.BaseURL,
+				"context_mode":   app.cfg.Agent.ContextMode,
+				"max_iterations": fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
+				"theme":          "dark",
+			}
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

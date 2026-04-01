@@ -204,9 +204,10 @@ type HistoryMessage struct {
 
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
-	WorkDir       string                           // 工作目录（用于标题栏显示）
-	ChatID        string                           // 会话 ID（按工作目录区分）
-	HistoryLoader func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
+	WorkDir          string                           // 工作目录（用于标题栏显示）
+	ChatID           string                           // 会话 ID（按工作目录区分）
+	HistoryLoader    func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
+	GetCurrentValues func() map[string]string         // 获取当前配置值（用于 settings panel 初始值）
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,12 +1396,19 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 				})
 				m.updateViewportContent()
 			} else {
-				// Get current values from SettingsService
+				// Get current values: start from config, overlay with SettingsService
 				currentValues := make(map[string]string)
+				if m.channel.config.GetCurrentValues != nil {
+					for k, v := range m.channel.config.GetCurrentValues() {
+						currentValues[k] = v
+					}
+				}
 				if m.channel.settingsSvc != nil {
 					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID)
 					if err == nil {
-						currentValues = vals
+						for k, v := range vals {
+							currentValues[k] = v
+						}
 					}
 				}
 				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {

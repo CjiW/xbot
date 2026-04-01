@@ -1026,10 +1026,34 @@ func (m *cliModel) View() string {
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
-	// 输入框样式：圆角边框，不设 Background（避免和 textarea ANSI 冲突导致颜色不填满）
+	// 输入框样式：根据输入内容动态设置边框颜色
+	// ! 开头 → 红色，/ 开头 → 绿色
+	inputValue := strings.TrimSpace(m.textarea.Value())
+	borderColor := lipgloss.Color("#5c6bc0") // 默认蓝紫色
+	var completionsHint string
+
+	if strings.HasPrefix(inputValue, "!") {
+		borderColor = lipgloss.Color("#ef5350") // 红色
+	} else if strings.HasPrefix(inputValue, "/") {
+		borderColor = lipgloss.Color("#66bb6a") // 绿色
+		// 实时计算补全候选
+		var matches []string
+		for _, cmd := range cliCommands {
+			if strings.HasPrefix(cmd, inputValue) {
+				matches = append(matches, cmd)
+			}
+		}
+		if len(matches) > 0 {
+			hintStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#66bb6a")).
+				Padding(0, 1)
+			completionsHint = hintStyle.Render("[Tab] " + strings.Join(matches, " · "))
+		}
+	}
+
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5c6bc0")).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(m.width - 4)
 
@@ -1083,6 +1107,9 @@ func (m *cliModel) View() string {
 	if m.typing || m.progress != nil {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+	} else if completionsHint != "" {
+		// 显示补全候选提示
+		status = completionsHint
 	} else {
 		status = readyStatusStyle.Render("● ready")
 	}

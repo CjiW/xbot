@@ -1367,9 +1367,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	finalContent := out.Content
 	waitingUser := out.WaitingUser
 
-	// 如果工具正在等待用户响应，不生成回复消息
+	// 如果工具正在等待用户响应，发送 WaitingUser outbound 让渠道打开交互面板
 	if waitingUser {
-		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
+		log.Ctx(ctx).Info("Tool is waiting for user response, sending WaitingUser outbound")
 		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
 			userMsg := llm.NewUserMessage(msg.Content)
 			if !msg.Time.IsZero() {
@@ -1387,7 +1387,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 				log.Ctx(ctx).WithError(err).Warn("Failed to save engine message during waiting")
 			}
 		}
-		return nil, nil
+		// Send the WaitingUser outbound so CLI can open the ask-user panel.
+		// Content may be empty (no assistant reply yet), which is fine — the
+		// panel reads the question from Metadata["ask_question"].
+		waitOut := &bus.OutboundMessage{
+			Channel:     msg.Channel,
+			ChatID:      msg.ChatID,
+			Content:     finalContent,
+			WaitingUser: true,
+			Metadata:    out.Metadata,
+		}
+		return waitOut, nil
 	}
 
 	// 如果最终内容为空且不是 Optional reply 策略，向用户发送提示

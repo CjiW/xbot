@@ -475,6 +475,9 @@ type cliModel struct {
 
 	// --- §10 TODO 进度条 ---
 	todos []CLITodoItem // 从 progress 事件同步的 TODO 列表
+
+	// --- §11 Tool Summary 折叠 ---
+	toolSummaryExpanded bool // Ctrl+O 切换
 }
 
 // cliMessage 单条消息
@@ -676,6 +679,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmDelete = 2 // 默认删除 2 条
 				m.updateViewportContent()
 			}
+			return m, nil
+
+		case tea.KeyCtrlO:
+			// §11 Ctrl+O 切换 tool summary 展开/折叠
+			m.toolSummaryExpanded = !m.toolSummaryExpanded
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			m.updateViewportContent()
 			return m, nil
 		}
 
@@ -1693,22 +1704,55 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			Foreground(lipgloss.Color("#90a4ae")).
 			Italic(true)
 
-		var toolSb strings.Builder
+		hintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666"))
 
-		// 优先使用迭代分组（运行时 + 历史恢复），否则回退到扁平列表
+		// 统计总工具数和总耗时
+		totalTools := 0
+		totalMs := int64(0)
 		if len(msg.iterations) > 0 {
-			totalTools := 0
 			for _, it := range msg.iterations {
 				totalTools += len(it.Tools)
-			}
-			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
-			toolSb.WriteString("\n")
-			for _, it := range msg.iterations {
-				if it.Thinking != "" {
-					toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
-					toolSb.WriteString("\n")
-				}
 				for _, tool := range it.Tools {
+					totalMs += tool.Elapsed
+				}
+			}
+		} else {
+			totalTools = len(msg.tools)
+			for _, tool := range msg.tools {
+				totalMs += tool.Elapsed
+			}
+		}
+
+		var toolSb strings.Builder
+
+		if m.toolSummaryExpanded {
+			// 展开模式：完整渲染
+			if len(msg.iterations) > 0 {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
+				toolSb.WriteString("\n")
+				for _, it := range msg.iterations {
+					if it.Thinking != "" {
+						toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
+						toolSb.WriteString("\n")
+					}
+					for _, tool := range it.Tools {
+						label := tool.Label
+						if label == "" {
+							label = tool.Name
+						}
+						elapsed := ""
+						if tool.Elapsed > 0 {
+							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+						}
+						toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+						toolSb.WriteString("\n")
+					}
+				}
+			} else {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))
+				toolSb.WriteString("\n")
+				for _, tool := range msg.tools {
 					label := tool.Label
 					if label == "" {
 						label = tool.Name
@@ -1717,25 +1761,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 					if tool.Elapsed > 0 {
 						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 					}
-					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
 					toolSb.WriteString("\n")
 				}
 			}
 		} else {
-			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", len(msg.tools))))
-			toolSb.WriteString("\n")
-			for _, tool := range msg.tools {
-				label := tool.Label
-				if label == "" {
-					label = tool.Name
-				}
-				elapsed := ""
-				if tool.Elapsed > 0 {
-					elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-				}
-				toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
-				toolSb.WriteString("\n")
-			}
+			// 折叠模式：只显示统计摘要
+			elapsedStr := formatElapsed(totalMs)
+			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools %d calls · %s", totalTools, elapsedStr)))
+			toolSb.WriteString("  ")
+			toolSb.WriteString(hintStyle.Render("[Ctrl+O]"))
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
@@ -1786,7 +1821,9 @@ func (m *cliModel) updateViewportContent() {
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
 		m.viewport.SetContent(sb.String())
-		m.viewport.GotoBottom()
+		if m.viewport.AtBottom() {
+			m.viewport.GotoBottom()
+		}
 		return
 	}
 
@@ -1808,7 +1845,9 @@ func (m *cliModel) updateStreamingOnly() {
 	sb.WriteString(m.renderProgressBlock())
 
 	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	if m.viewport.AtBottom() {
+		m.viewport.GotoBottom()
+	}
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）
@@ -1845,7 +1884,9 @@ func (m *cliModel) fullRebuild() {
 	sb.WriteString(m.renderProgressBlock())
 
 	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	if m.viewport.AtBottom() {
+		m.viewport.GotoBottom()
+	}
 }
 
 // tickCmd 定时器命令

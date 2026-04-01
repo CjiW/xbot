@@ -463,6 +463,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			messages = syncMessages(result.LLMView)
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
+			// Restore phase after compression completes
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseThinking
+			}
 			if autoNotify {
 				// Replace the "正在压缩" line with the completion line
 				for i := len(progressLines) - 1; i >= 0; i-- {
@@ -472,10 +476,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 				}
 				notifyProgress("")
-			}
-			// Restore phase after compression completes
-			if structuredProgress != nil {
-				structuredProgress.Phase = PhaseThinking
 			}
 
 			log.Ctx(ctx).WithFields(log.Fields{

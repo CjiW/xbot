@@ -319,6 +319,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	var toolsUsed []string
 	var waitingUser bool
+	var waitingQuestion string // captured from tool result Summary for CLI panel
 	var progressLines []string
 	var progressMu sync.Mutex // 保护 progressLines 的并发读写 + notifyProgress 的串行化
 	var lastContent string    // 用于 LLM 错误时的降级返回
@@ -1201,6 +1202,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			if r.result != nil && r.result.WaitingUser {
 				waitingUser = true
+				// Capture question for CLI interactive panel (e.g., AskUser tool)
+				if waitingQuestion == "" && r.result.Summary != "" {
+					waitingQuestion = r.result.Summary
+				}
 			}
 
 			toolMsg := llm.NewToolMessage(tc.Name, tc.ID, tc.Arguments, content)
@@ -1259,12 +1264,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
-			return buildOutput(&bus.OutboundMessage{
+			outMsg := &bus.OutboundMessage{
 				Channel:     cfg.Channel,
 				ChatID:      cfg.ChatID,
 				ToolsUsed:   toolsUsed,
 				WaitingUser: true,
-			})
+			}
+			if waitingQuestion != "" {
+				outMsg.Metadata = map[string]string{"ask_question": waitingQuestion}
+			}
+			return buildOutput(outMsg)
 		}
 	}
 

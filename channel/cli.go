@@ -1561,17 +1561,22 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
-			// Extract question from the most recent "❓" message in history
-			// (AskUser tool sends question via SendFunc before returning WaitingUser)
-			var question string
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				if strings.HasPrefix(m.messages[i].content, "❓") {
-					question = strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
-					// Remove the plain-text question from history (panel replaces it)
-					m.messages = append(m.messages[:i], m.messages[i+1:]...)
-					break
+			// Extract question from Metadata (set by engine from tool result Summary)
+			question := ""
+			if msg.Metadata != nil {
+				question = msg.Metadata["ask_question"]
+			}
+			// Fallback: search message history for ❓ (in case Metadata not set)
+			if question == "" {
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if strings.HasPrefix(m.messages[i].content, "❓") {
+						question = strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
+						m.messages = append(m.messages[:i], m.messages[i+1:]...)
+						break
+					}
 				}
 			}
+			question = strings.TrimSpace(strings.TrimPrefix(question, "Asked user: "))
 			if question != "" {
 				m.updateViewportContent()
 				m.openAskUserPanel(question, func(answer string) {

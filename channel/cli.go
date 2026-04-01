@@ -627,6 +627,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// Home/End 跳顶部/底部
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "home":
+			m.viewport.GotoTop()
+			return m, nil
+		case "end":
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+	}
+
 	// Ctrl+Enter 换行（终端发送的 raw sequence 不统一，需手动检测）
 	if isCtrlEnter(msg) {
 		m.textarea.InsertString("\n")

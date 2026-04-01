@@ -593,7 +593,7 @@ func newCLIModel() *cliModel {
 	vp.KeyMap.PageDown.SetKeys("pgdown")
 	vp.KeyMap.HalfPageUp.SetKeys()
 	vp.KeyMap.HalfPageDown.SetKeys()
-	vp.MouseWheelDelta = 5
+	vp.MouseWheelDelta = 50
 
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
@@ -934,9 +934,40 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickerCmd(), tickCmd())
 	}
 
-	// 更新 viewport
-	m.viewport, cmd = m.viewport.Update(msg)
-	cmds = append(cmds, cmd)
+	// 更新 viewport（字符输入和上下键不传递给 viewport，鼠标滚轮手动处理增加速度）
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.Type == tea.KeyRunes || msg.Type == tea.KeyUp || msg.Type == tea.KeyDown {
+			// 跳过 viewport 更新
+		} else {
+			m.viewport, cmd = m.viewport.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	case tea.MouseMsg:
+		// 手动处理鼠标滚轮，增加滚动速度（每次滚动5行）
+		scrollSpeed := 5
+		switch msg.Action {
+		case tea.MouseActionPress:
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				newY := m.viewport.YOffset - scrollSpeed
+				if newY < 0 {
+					newY = 0
+				}
+				m.viewport.SetYOffset(newY)
+			case tea.MouseButtonWheelDown:
+				maxY := m.viewport.TotalLineCount() - m.viewport.Height
+				newY := m.viewport.YOffset + scrollSpeed
+				if newY > maxY {
+					newY = maxY
+				}
+				m.viewport.SetYOffset(newY)
+			}
+		}
+	default:
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	// 更新 textarea
 	m.textarea, cmd = m.textarea.Update(msg)

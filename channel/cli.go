@@ -521,20 +521,22 @@ type cliModel struct {
 	// --- §12 Interactive Panel ---
 	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
 	panelMode     string
-	panelCursor   int                            // settings panel: selected item index
-	panelEdit     bool                           // settings panel: editing current item
-	panelEditTA   textarea.Model                 // settings panel: inline editor
-	panelCombo    bool                           // settings panel: combo dropdown open
-	panelComboIdx int                            // settings panel: combo selected option index
-	panelQuestion string                         // askuser panel: the question text
-	panelAnswerTA textarea.Model                 // askuser panel: answer editor (replaces raw string)
-	panelOptions  []string                       // askuser panel: optional choices for multiple-choice
-	panelOptIdx   int                            // askuser panel: selected option index (-1 = free input)
-	panelSchema   []SettingDefinition            // settings panel: schema copy
-	panelValues   map[string]string              // settings panel: current values
-	panelOnSubmit func(values map[string]string) // callback on settings submit
-	panelOnAnswer func(answer string)            // callback on askuser answer
-	panelOnCancel func()                         // callback on cancel
+	panelCursor   int            // settings panel: selected item index
+	panelEdit     bool           // settings panel: editing current item
+	panelEditTA   textarea.Model // settings panel: inline editor
+	panelCombo    bool           // settings panel: combo dropdown open
+	panelComboIdx int            // settings panel: combo selected option index
+	// --- AskUser panel ---
+	panelItems    []askItem                       // askuser panel: question items
+	panelTab      int                             // askuser panel: current tab (question index)
+	panelOptSel   map[int]map[int]bool            // askuser panel: selected option indices per question
+	panelFreeMode map[int]bool                    // askuser panel: in free-input mode per question
+	panelAnswerTA textarea.Model                  // askuser panel: shared free-input editor
+	panelSchema   []SettingDefinition             // settings panel: schema copy
+	panelValues   map[string]string               // settings panel: current values
+	panelOnSubmit func(values map[string]string)  // callback on settings submit
+	panelOnAnswer func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
+	panelOnCancel func()                          // callback on cancel
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -653,6 +655,13 @@ func isCtrlEnter(msg tea.Msg) bool {
 func isCtrlO(msg tea.Msg) bool {
 	s := fmt.Sprintf("%v", msg)
 	return s == "?CSI[49 53 59 53 117]?" || s == "\x1b[15;5u"
+}
+
+// isCtrlJ detects Ctrl+J (newline). Ctrl+J = ASCII 10.
+// CSI u protocol: \x1b[10;5u → "?CSI[49 48 59 53 117]?"
+func isCtrlJ(msg tea.Msg) bool {
+	s := fmt.Sprintf("%v", msg)
+	return s == "?CSI[49 48 59 53 117]?" || s == "\x1b[10;5u"
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,7 +1595,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
-			// Extract question from Metadata (set by engine from tool result Summary)
+			// Extract question and options from Metadata
 			question := ""
 			var options []string
 			if msg.Metadata != nil {
@@ -1595,7 +1604,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					_ = json.Unmarshal([]byte(optsJSON), &options)
 				}
 			}
-			// Fallback: search message history for ❓ (in case Metadata not set)
+			// Fallback: search message history for ❓
 			if question == "" {
 				for i := len(m.messages) - 1; i >= 0; i-- {
 					if strings.HasPrefix(m.messages[i].content, "❓") {
@@ -1607,26 +1616,63 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			}
 			question = strings.TrimSpace(strings.TrimPrefix(question, "Asked user: "))
 			if question != "" {
+				// Build ask items (support multiple questions separated by \n\n)
+				items := m.buildAskItems(question, options)
 				m.updateViewportContent()
-				m.openAskUserPanel(question, options, func(answer string) {
+				m.openAskUserPanel(items, func(answers map[string]string) {
+					// Format answers as tool-call style message
+					var parts []string
+					for i, item := range items {
+						key := fmt.Sprintf("q%d", i)
+						ans := answers[key]
+						parts = append(parts, fmt.Sprintf("Q: %s\nA: %s", item.Question, ans))
+					}
+					content := strings.Join(parts, "\n\n")
+					// Send to agent
 					if m.msgBus != nil {
 						m.msgBus.Inbound <- bus.InboundMessage{
 							Channel:    cliChannelName,
 							SenderID:   cliSenderID,
 							ChatID:     m.chatID,
 							ChatType:   "p2p",
-							Content:    answer,
+							Content:    content,
 							SenderName: "CLI User",
 							Time:       time.Now(),
 							RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 						}
 					}
+					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{
-						role:      "user",
-						content:   answer,
+						role:       "tool_summary",
+						content:    "AskUser",
+						timestamp:  time.Now(),
+						dirty:      true,
+						iterations: nil,
+						tools: []CLIToolProgress{
+							{
+								Name:    "AskUser",
+								Label:   fmt.Sprintf("asked %d question(s)", len(items)),
+								Status:  "completed",
+								Elapsed: 0,
+							},
+						},
+					})
+					// Show answers as system message
+					var answerParts []string
+					for i, item := range items {
+						key := fmt.Sprintf("q%d", i)
+						ans := answers[key]
+						answerParts = append(answerParts, fmt.Sprintf("  %s → %s", item.Question, ans))
+					}
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   strings.Join(answerParts, "\n"),
 						timestamp: time.Now(),
 						dirty:     true,
 					})
+					m.typing = true
+					m.inputReady = false
+					m.resetProgressState()
 					m.updateViewportContent()
 				}, func() {
 					m.messages = append(m.messages, cliMessage{
@@ -2293,14 +2339,52 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.panelEditTA = ta
 }
 
+// askItem represents a single question in the AskUser panel.
+type askItem struct {
+	Question string   // the question text
+	Options  []string // choices (empty = free input only)
+	Answer   string   // user's answer (set on submit)
+	Other    string   // user's custom input when "Other" option selected
+}
+
+// buildAskItems creates askItem list from question and options.
+// Multiple questions in a single call are split by double newline.
+// Options with "..." prefix indicate a custom "Other" input.
+func (m *cliModel) buildAskItems(question string, options []string) []askItem {
+	// Check if question contains multiple questions (separated by double newline)
+	parts := strings.Split(question, "\n\n")
+	items := make([]askItem, 0, len(parts))
+	for _, q := range parts {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		// For multi-question, each gets the same options
+		// For single question, use the provided options directly
+		if len(parts) == 1 {
+			items = append(items, askItem{Question: q, Options: options})
+		} else {
+			items = append(items, askItem{Question: q, Options: options})
+		}
+	}
+	return items
+}
+
 // openAskUserPanel activates the ask-user panel overlay.
-func (m *cliModel) openAskUserPanel(question string, options []string, onAnswer func(string), onCancel func()) {
+func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
-	m.panelQuestion = question
-	m.panelOptions = options
-	m.panelOptIdx = 0
+	m.panelItems = items
+	m.panelTab = 0
+	m.panelOptSel = make(map[int]map[int]bool)
+	m.panelFreeMode = make(map[int]bool)
+	// For items with no options, start in free mode
+	for i, item := range items {
+		if len(item.Options) == 0 {
+			m.panelFreeMode[i] = true
+		}
+	}
 	ta := textarea.New()
-	ta.Placeholder = "Type your answer..."
+	ta.Placeholder = "输入回答..."
 	ta.Prompt = "▸ "
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
@@ -2322,8 +2406,10 @@ func (m *cliModel) closePanel() {
 	m.panelSchema = nil
 	m.panelValues = nil
 	m.panelOnSubmit = nil
-	m.panelOnAnswer = nil
-	m.panelOnCancel = nil
+	m.panelItems = nil
+	m.panelTab = 0
+	m.panelOptSel = nil
+	m.panelFreeMode = nil
 }
 
 // updatePanel handles key events when a panel is active.
@@ -2391,9 +2477,9 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				}
 				m.panelCombo = false
 				return true, m, nil
-			case tea.KeyRunes, tea.KeySpace:
-				// Start typing to filter / enter custom value → switch to edit mode
+			case tea.KeySpace:
 				m.panelCombo = false
+				// Start typing to filter / enter custom value → switch to edit mode
 				m.panelEdit = true
 				// Re-initialize textarea with proper styles for panel context
 				ta := textarea.New()
@@ -2519,59 +2605,19 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 }
 
 func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
-	// Multiple-choice mode: arrow keys to select, Enter to confirm, Tab to switch to free input
-	if len(m.panelOptions) > 0 {
-		switch msg.Type {
-		case tea.KeyEnter:
-			// Confirm selected option
-			if m.panelOptIdx >= 0 && m.panelOptIdx < len(m.panelOptions) {
-				answer := m.panelOptions[m.panelOptIdx]
-				if m.panelOnAnswer != nil {
-					m.panelOnAnswer(answer)
-				}
-			}
-			m.closePanel()
-			return true, m, nil
-		case tea.KeyEsc:
-			if m.panelOnCancel != nil {
-				m.panelOnCancel()
-			}
-			m.closePanel()
-			return true, m, nil
-		case tea.KeyUp:
-			if m.panelOptIdx > 0 {
-				m.panelOptIdx--
-			}
-			return true, m, nil
-		case tea.KeyDown:
-			if m.panelOptIdx < len(m.panelOptions)-1 {
-				m.panelOptIdx++
-			}
-			return true, m, nil
-		case tea.KeyTab:
-			// Switch to free input mode
-			m.panelOptIdx = -1
-			var cmd tea.Cmd
-			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-			return true, m, cmd
-		default:
-			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-				// Start typing → switch to free input mode
-				m.panelOptIdx = -1
-				var cmd tea.Cmd
-				m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-				return true, m, cmd
-			}
-			return true, m, nil
-		}
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return true, m, nil
 	}
+	item := &m.panelItems[m.panelTab]
+	isFree := m.panelFreeMode[m.panelTab]
+	hasOpts := len(item.Options) > 0
 
-	// Free input mode (no options, or user chose to type freely)
 	switch msg.Type {
-	case tea.KeyEnter:
-		answer := strings.TrimSpace(m.panelAnswerTA.Value())
-		if answer != "" && m.panelOnAnswer != nil {
-			m.panelOnAnswer(answer)
+	case tea.KeyCtrlS:
+		// Submit all answers
+		answers := m.collectAskAnswers()
+		if m.panelOnAnswer != nil {
+			m.panelOnAnswer(answers)
 		}
 		m.closePanel()
 		return true, m, nil
@@ -2581,19 +2627,165 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyTab:
-		// Switch back to selection mode if options available
-		if len(m.panelOptions) > 0 {
-			m.panelOptIdx = 0
+	case tea.KeyRight, tea.KeyTab:
+		// Next tab
+		if m.panelTab < len(m.panelItems)-1 {
+			m.saveCurrentFreeInput()
+			m.panelTab++
+			m.restoreFreeInput()
+		}
+		return true, m, nil
+	case tea.KeyShiftTab, tea.KeyLeft:
+		// Prev tab
+		if m.panelTab > 0 {
+			m.saveCurrentFreeInput()
+			m.panelTab--
+			m.restoreFreeInput()
+		}
+		return true, m, nil
+	case tea.KeyEnter:
+		if hasOpts && !isFree {
+			// In selection mode, Enter submits all (or could toggle, but Ctrl+S is submit)
+			// Enter in selection mode = submit all
+			answers := m.collectAskAnswers()
+			if m.panelOnAnswer != nil {
+				m.panelOnAnswer(answers)
+			}
+			m.closePanel()
 			return true, m, nil
 		}
+		// Free input mode: Ctrl+J for newline, plain Enter = submit all
+		if isFree {
+			answers := m.collectAskAnswers()
+			if m.panelOnAnswer != nil {
+				m.panelOnAnswer(answers)
+			}
+			m.closePanel()
+			return true, m, nil
+		}
+	case tea.KeyUp:
+		if hasOpts && !isFree && m.panelOptSel != nil {
+			sel := m.panelOptSel[m.panelTab]
+			// Find the highest selected or last option index to move cursor
+			maxIdx := len(item.Options) - 1
+			// Move selection highlight up
+			// For multi-select, we just track the last-interacted option
+			if sel != nil {
+				for i := maxIdx; i >= 0; i-- {
+					if sel[i] {
+						if i > 0 {
+							delete(sel, i)
+							sel[i-1] = true
+						}
+						break
+					}
+				}
+			}
+		}
+		return true, m, nil
+	case tea.KeyDown:
+		if hasOpts && !isFree && m.panelOptSel != nil {
+			sel := m.panelOptSel[m.panelTab]
+			maxIdx := len(item.Options) - 1
+			if sel != nil {
+				for i := 0; i <= maxIdx; i++ {
+					if sel[i] {
+						if i < maxIdx {
+							delete(sel, i)
+							sel[i+1] = true
+						}
+						break
+					}
+				}
+			}
+		}
+		return true, m, nil
+	case tea.KeyRunes:
+		if hasOpts && !isFree {
+			// Switch to free input mode
+			m.panelFreeMode[m.panelTab] = true
+			m.restoreFreeInput()
+		}
+		if m.panelFreeMode[m.panelTab] {
+			// Auto-expand textarea
+			m.autoExpandAskTA()
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
+		}
+		return true, m, nil
 	default:
-		// Delegate all key handling to textarea (cursor movement, backspace, etc.)
-		var cmd tea.Cmd
-		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-		return true, m, cmd
+		// Ctrl+J for newline in free input mode
+		if isCtrlJ(msg) && m.panelFreeMode[m.panelTab] {
+			m.panelAnswerTA.InsertString("\n")
+			m.autoExpandAskTA()
+			return true, m, nil
+		}
+		if m.panelFreeMode[m.panelTab] {
+			m.autoExpandAskTA()
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
+		}
 	}
 	return true, m, nil
+}
+
+// collectAskAnswers gathers answers from all questions.
+func (m *cliModel) collectAskAnswers() map[string]string {
+	answers := make(map[string]string)
+	for i, item := range m.panelItems {
+		key := fmt.Sprintf("q%d", i)
+		if m.panelFreeMode[i] {
+			// Save current textarea content for this tab
+			if i == m.panelTab {
+				answers[key] = strings.TrimSpace(m.panelAnswerTA.Value())
+			} else {
+				answers[key] = strings.TrimSpace(item.Other)
+			}
+		} else if sel, ok := m.panelOptSel[i]; ok && len(sel) > 0 {
+			// Collect selected options
+			var parts []string
+			for idx := range sel {
+				if idx < len(item.Options) {
+					parts = append(parts, item.Options[idx])
+				}
+			}
+			answers[key] = strings.Join(parts, ", ")
+		}
+	}
+	return answers
+}
+
+// saveCurrentFreeInput saves the textarea content for the current tab.
+func (m *cliModel) saveCurrentFreeInput() {
+	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) && m.panelFreeMode[m.panelTab] {
+		m.panelItems[m.panelTab].Other = m.panelAnswerTA.Value()
+	}
+}
+
+// restoreFreeInput restores textarea content for the current tab.
+func (m *cliModel) restoreFreeInput() {
+	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) && m.panelFreeMode[m.panelTab] {
+		m.panelAnswerTA.SetValue(m.panelItems[m.panelTab].Other)
+		m.panelAnswerTA.CursorEnd()
+		m.panelAnswerTA.Focus()
+		m.autoExpandAskTA()
+	}
+}
+
+// autoExpandAskTA adjusts textarea height based on content.
+func (m *cliModel) autoExpandAskTA() {
+	lines := strings.Count(m.panelAnswerTA.Value(), "\n") + 1
+	if lines < 2 {
+		lines = 2
+	}
+	if lines > 6 {
+		lines = 6
+	}
+	if m.panelAnswerTA.Height() != lines {
+		m.panelAnswerTA.SetHeight(lines)
+	}
 }
 
 // viewPanel renders the active panel as a string.
@@ -2758,45 +2950,85 @@ func (m *cliModel) viewAskUserPanel() string {
 	hintStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666"))
 
-	cursorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffb74d")).
+	activeTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#81c784")).
 		Bold(true)
 
-	var sb strings.Builder
-	sb.WriteString(questionStyle.Render("❓ " + m.panelQuestion))
-	sb.WriteString("\n")
+	inactiveTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888"))
 
-	// Multiple-choice options
-	if len(m.panelOptions) > 0 && m.panelOptIdx >= 0 {
-		sb.WriteString("\n")
-		for i, opt := range m.panelOptions {
-			if i == m.panelOptIdx {
-				sb.WriteString(cursorStyle.Render("  ▸ " + opt))
+	checkStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#64b5f6"))
+
+	var sb strings.Builder
+
+	// Tab bar (if multiple questions)
+	if len(m.panelItems) > 1 {
+		for i := range m.panelItems {
+			label := fmt.Sprintf(" %d ", i+1)
+			if i == m.panelTab {
+				sb.WriteString(activeTabStyle.Render(label))
 			} else {
-				sb.WriteString("    " + opt)
+				sb.WriteString(inactiveTabStyle.Render(label))
+			}
+			if i < len(m.panelItems)-1 {
+				sb.WriteString(inactiveTabStyle.Render("│"))
+			}
+		}
+		sb.WriteString("\n\n")
+	}
+
+	// Current question
+	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) {
+		item := m.panelItems[m.panelTab]
+		sb.WriteString(questionStyle.Render("❓ " + item.Question))
+		sb.WriteString("\n")
+
+		isFree := m.panelFreeMode[m.panelTab]
+		hasOpts := len(item.Options) > 0
+
+		if hasOpts && !isFree {
+			// Checkbox mode (multi-select)
+			sb.WriteString("\n")
+			sel := m.panelOptSel[m.panelTab]
+			for i, opt := range item.Options {
+				checked := sel != nil && sel[i]
+				if checked {
+					sb.WriteString(checkStyle.Render("  ☑ " + opt))
+				} else {
+					sb.WriteString("  ☐ " + opt)
+				}
+				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\n")
-	}
 
-	// Text input (free input mode or when user types in choice mode)
-	if len(m.panelOptions) == 0 || m.panelOptIdx < 0 {
-		sb.WriteString("\n")
-		sb.WriteString(m.panelAnswerTA.View())
-		sb.WriteString("\n")
+		if isFree || !hasOpts {
+			// Free input mode
+			sb.WriteString("\n")
+			sb.WriteString(m.panelAnswerTA.View())
+			sb.WriteString("\n")
+		}
 	}
 
 	// Hints
-	if len(m.panelOptions) > 0 {
-		if m.panelOptIdx >= 0 {
-			sb.WriteString(hintStyle.Render("  ↑↓ 选择 · Enter 确认 · Tab/输入 自由回答 · Esc 取消"))
-		} else {
-			sb.WriteString(hintStyle.Render("  Enter 发送 · Tab 返回选择 · Esc 取消"))
-		}
-	} else {
-		sb.WriteString(hintStyle.Render("  Enter 发送 · Esc 取消"))
+	sb.WriteString("\n")
+	hints := []string{}
+	if len(m.panelItems) > 1 {
+		hints = append(hints, "←→/Tab 切换问题")
 	}
+	hints = append(hints, "Enter 提交全部", "Esc 取消")
+	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
+		item := m.panelItems[m.panelTab]
+		if len(item.Options) > 0 {
+			if m.panelFreeMode[m.panelTab] {
+				hints = append(hints, "↑↓ 返回选择")
+			} else {
+				hints = append(hints, "空格 切换勾选", "输入 自由回答")
+			}
+		}
+	}
+	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return boxStyle.Render(sb.String())
 }

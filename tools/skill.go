@@ -89,15 +89,15 @@ func (t *SkillTool) resolveSkill(ctx *ToolContext, name string) (skillDir, displ
 	var bases []string
 	if sandboxed {
 		bases = []string{
-		filepath.Join(sandboxBaseDir(ctx), "skills"),
-		filepath.Join(sandboxBaseDir(ctx), ".skills"),
+			filepath.Join(sandboxBaseDir(ctx), "skills"),
+			filepath.Join(sandboxBaseDir(ctx), ".skills"),
 		}
 	} else {
 		// None sandbox: search global dirs first, then workspace-relative dirs
 		bases = append(bases, ctx.SkillsDirs...)
 		bases = append(bases,
-		filepath.Join(ctx.WorkspaceRoot, "skills"),
-		filepath.Join(ctx.WorkspaceRoot, ".skills"),
+			filepath.Join(ctx.WorkspaceRoot, "skills"),
+			filepath.Join(ctx.WorkspaceRoot, ".skills"),
 		)
 	}
 

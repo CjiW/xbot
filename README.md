@@ -326,11 +326,17 @@ MIT
 xbot 提供终端交互界面 (TUI)，适合本地开发调试：
 
 ```bash
-# 开发模式
-go run ./cmd/cli
+# 编译
+go build -o xbot-cli ./cmd/xbot-cli
 
-# 编译运行
-go build -o xbot-cli ./cmd/cli && ./xbot-cli
+# 首次运行会自动引导配置（provider、API key、模型等）
+./xbot-cli
+
+# 非交互模式
+./xbot-cli "hello"
+
+# 管道模式
+echo "explain this" | ./xbot-cli
 ```
 
 ### 快捷键
@@ -344,7 +350,35 @@ go build -o xbot-cli ./cmd/cli && ./xbot-cli
 
 - **流式输出** — 实时显示 AI 回复
 - **Markdown 渲染** — 代码高亮、表格、列表
-- **进度显示** — 工具执行状态、子 Agent 状态
+- **进度显示** — 工具执行状态、子 Agent 状态、迭代追踪
 - **美观界面** — 消息气泡、时间戳、状态栏
+- **首次引导** — 自动检测并引导配置 LLM 服务
+- **AskUser** — agent 可主动向用户提问并等待回复
+- **Settings** — 通过 `/settings` 命令可视化查看和修改配置
+- **内置 Skills/Agents** — skill-creator、agent-creator 等随二进制分发
+- **Flat Memory** — 默认记忆模式，无需 ollama/embedding 服务
+
+### 配置
+
+首次运行 `xbot-cli` 会自动引导配置。也可以手动编辑 `~/.xbot/config.json`：
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "api_key": "sk-xxx",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o"
+  },
+  "sandbox": {
+    "mode": "none"
+  },
+  "agent": {
+    "memory_provider": "flat"
+  }
+}
+```
+
+支持 OpenAI 兼容 API（DeepSeek、通义千问等），只需修改 `base_url`。
 
 详细文档参见 [docs/cli-channel.md](docs/cli-channel.md)。

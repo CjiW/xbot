@@ -21,29 +21,57 @@ CLI Channel 是 xbot 的内置渠道之一，允许用户直接在终端中与 A
 
 ## 安装与启动
 
-### 开发模式
+### 编译
 
 ```bash
 # 在 xbot 项目根目录执行
-go run ./cmd/cli
-```
-
-### 编译运行
-
-```bash
-# 编译
-go build -o xbot-cli ./cmd/cli
+go build -o xbot-cli ./cmd/xbot-cli
 
 # 运行
 ./xbot-cli
 ```
 
-### 通过 Makefile
+### 首次配置
+
+首次运行会自动进入配置引导：
+
+```
+╔══════════════════════════════════════════════════╗
+║            🚀 xbot CLI 首次配置引导              ║
+╚══════════════════════════════════════════════════╝
+
+支持的 LLM 提供商：
+  1. OpenAI (及兼容 API，如 DeepSeek、通义千问等)
+  2. Anthropic (Claude)
+
+选择提供商 (1/2) [1]:
+API Key: sk-xxx
+Base URL [https://api.openai.com/v1]:
+模型名称 [gpt-4o]:
+...
+```
+
+### 非交互模式
 
 ```bash
-# 开发模式（热重载）
-make dev-cli
+# 直接传入 prompt
+./xbot-cli "explain this code"
+
+# 管道模式
+echo "explain this" | ./xbot-cli
+
+# 单次执行模式
+./xbot-cli -p "your prompt here"
 ```
+
+### 命令行参数
+
+| 参数 | 说明 |
+|------|------|
+| （无参数） | 恢复上次会话 |
+| `--new` | 创建新会话 |
+| `-p "text"` | 单次执行模式 |
+| （直接文本） | 非交互模式 |
 
 ## 快捷键
 
@@ -176,16 +204,66 @@ def hello():
 
 ## 配置说明
 
-CLI Channel 目前使用默认配置，无需额外设置。
+CLI 使用 `~/.xbot/config.json` 管理配置，首次运行会自动引导创建。
 
-### 未来可扩展配置项
+### 配置文件示例
 
-```env
-# CLI 渠道配置（规划中）
-CLI_ENABLED=true
-CLI_THEME=dark          # dark | light
-CLI_MAX_HISTORY=1000    # 消息历史上限
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "api_key": "sk-xxx",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o"
+  },
+  "sandbox": {
+    "mode": "none"
+  },
+  "agent": {
+    "memory_provider": "flat"
+  }
+}
 ```
+
+### 配置项说明
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `llm.provider` | LLM 提供商：`openai` / `anthropic` | `openai` |
+| `llm.api_key` | API 密钥（也可用 `XBOT_LLM_API_KEY` 环境变量） | - |
+| `llm.base_url` | API 地址（兼容 OpenAI 格式的第三方服务） | `https://api.openai.com/v1` |
+| `llm.model` | 模型名称 | `gpt-4o` |
+| `sandbox.mode` | 沙箱模式：`none`（推荐 CLI）/ `docker` | `none` |
+| `agent.memory_provider` | 记忆模式：`flat`（无需 embedding）/ `letta` | `flat` |
+
+### 兼容第三方 API
+
+CLI 默认使用 OpenAI 格式，兼容所有 OpenAI 兼容 API：
+
+| 服务 | base_url | model |
+|------|----------|-------|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-max` |
+| Anthropic | `https://api.anthropic.com` | `claude-sonnet-4-20250514` |
+
+### /settings 命令
+
+在 CLI 中使用 `/settings` 命令查看和修改配置：
+
+```
+/settings              — 查看所有设置项
+/settings set <key> <value> — 修改设置
+```
+
+可配置项：`llm_model`、`llm_base_url`、`context_mode`、`max_iterations`、`theme`
+
+### 记忆模式
+
+| 模式 | 说明 | 依赖 |
+|------|------|------|
+| `flat` | 全量上下文注入，工具始终可用 | 无额外依赖（推荐） |
+| `letta` | 分层记忆，search tool + archival | 需要 embedding 服务 |
 
 ## 故障排查
 

@@ -732,6 +732,10 @@ func (a *Agent) SetContextMode(mode string) error {
 	return nil
 }
 
+func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
+func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
+func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
+
 // GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
 func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {
 	cfg, err := a.llmConfigSvc.GetConfig(senderID)
@@ -1324,7 +1328,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
-	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata)
+	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata) && msg.Channel != "cli"
 	replyPolicy := bus.InboundReplyPolicy(msg.Metadata)
 
 	// 立即发送随机确认回复
@@ -1338,6 +1342,27 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, err
 	}
 
+	// AskUser 回答不是新的 user message，而是替换 AskUser 的 tool result。
+	// 移除 Assemble 追加的 user message，用回答替换最后一个 tool message 的内容。
+	askUserAnswered := msg.Metadata != nil && msg.Metadata["ask_user_answered"] == "true"
+	if askUserAnswered {
+		// Remove last user message appended by Assemble
+		if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+			messages = messages[:len(messages)-1]
+		}
+		// Replace last tool message content with user's answer
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "tool" {
+				messages[i].Content = msg.Content
+				break
+			}
+		}
+		// Also update the stale tool result in session so future buildPrompt reads correct content
+		if err := tenantSession.ReplaceLastToolMessage(msg.Content); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to replace AskUser tool result in session")
+		}
+	}
+
 	// 运行 Agent 循环（统一 Run）
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	out := Run(ctx, cfg)
@@ -1345,7 +1370,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		// When cancelled, save user message + partial engine progress to session
 		// so the next turn has context of what happened before cancellation.
 		if errors.Is(out.Error, context.Canceled) {
-			if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 				userMsg := llm.NewUserMessage(msg.Content)
 				if !msg.Time.IsZero() {
 					userMsg.Timestamp = msg.Time
@@ -1370,7 +1395,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 如果工具正在等待用户响应，发送 WaitingUser outbound 让渠道打开交互面板
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, sending WaitingUser outbound")
-		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 			userMsg := llm.NewUserMessage(msg.Content)
 			if !msg.Time.IsZero() {
 				userMsg.Timestamp = msg.Time
@@ -1410,7 +1435,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 			userMsg := llm.NewUserMessage(msg.Content)
 			if !msg.Time.IsZero() {
 				userMsg.Timestamp = msg.Time
@@ -1428,7 +1453,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+	if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 		userMsg := llm.NewUserMessage(msg.Content)
 		if !msg.Time.IsZero() {
 			userMsg.Timestamp = msg.Time

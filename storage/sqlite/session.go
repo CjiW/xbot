@@ -60,6 +60,16 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 	return nil
 }
 
+// ReplaceLastToolMessage replaces the content of the most recent tool-role message.
+func (s *SessionService) ReplaceLastToolMessage(tenantID int64, content string) error {
+	conn := s.db.Conn()
+	_, err := conn.Exec(`
+		UPDATE session_messages SET content = ?
+		WHERE id = (SELECT id FROM session_messages WHERE tenant_id = ? AND role = 'tool' ORDER BY id DESC LIMIT 1)
+	`, content, tenantID)
+	return err
+}
+
 // GetHistory retrieves the most recent messages for a tenant.
 // limit specifies the minimum number of user/assistant messages to return.
 // Tool messages between them are included to maintain context continuity.

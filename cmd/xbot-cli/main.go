@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -350,11 +351,94 @@ func main() {
 		ChatID:  absWorkDir,
 		GetCurrentValues: func() map[string]string {
 			return map[string]string{
-				"llm_model":      app.cfg.LLM.Model,
-				"llm_base_url":   app.cfg.LLM.BaseURL,
-				"context_mode":   app.cfg.Agent.ContextMode,
-				"max_iterations": fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
-				"theme":          "dark",
+				"llm_model":          app.cfg.LLM.Model,
+				"llm_base_url":       app.cfg.LLM.BaseURL,
+				"context_mode":       app.cfg.Agent.ContextMode,
+				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
+				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
+				"memory_window":      fmt.Sprintf("%d", app.cfg.Agent.MemoryWindow),
+				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"enable_auto_compress": func() string {
+					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
+						return "true"
+					}
+					return "false"
+				}(),
+				"theme": func() string {
+					// Read persisted theme from settings, default to dark
+					if app.agentLoop != nil {
+						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+								if t, ok := vals["theme"]; ok && t != "" {
+									return t
+								}
+							}
+						}
+					}
+					return "dark"
+				}(),
+			}
+		},
+		ApplySettings: func(values map[string]string) {
+			// Apply LLM settings
+			if v, ok := values["llm_model"]; ok && v != "" {
+				app.cfg.LLM.Model = v
+			}
+			if v, ok := values["llm_base_url"]; ok && v != "" {
+				app.cfg.LLM.BaseURL = v
+			}
+			// Apply Agent settings
+			if v, ok := values["context_mode"]; ok && v != "" {
+				app.cfg.Agent.ContextMode = v
+			}
+			if v, ok := values["max_iterations"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxIterations = n
+				}
+			}
+			if v, ok := values["max_concurrency"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxConcurrency = n
+				}
+			}
+			if v, ok := values["memory_window"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MemoryWindow = n
+				}
+			}
+			if v, ok := values["max_context_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					app.cfg.Agent.MaxContextTokens = n
+				}
+			}
+			if v, ok := values["enable_auto_compress"]; ok {
+				b := v == "true"
+				app.cfg.Agent.EnableAutoCompress = &b
+			}
+			// Persist to config.json
+			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+				log.Warnf("Failed to save config.json: %v", err)
+			}
+			// Update agent runtime state
+			if app.agentLoop != nil {
+				if v, ok := values["context_mode"]; ok && v != "" {
+					_ = app.agentLoop.SetContextMode(v)
+				}
+				if v, ok := values["max_iterations"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMaxIterations(n)
+					}
+				}
+				if v, ok := values["max_concurrency"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMaxConcurrency(n)
+					}
+				}
+				if v, ok := values["memory_window"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.agentLoop.SetMemoryWindow(n)
+					}
+				}
 			}
 		},
 	}
@@ -449,6 +533,15 @@ func main() {
 			cliCh.SetSettingsService(ss)
 		}
 		cliCh.SetModelLister(app.agentLoop.LLMFactory())
+	}
+
+	// Apply saved theme at startup
+	if ss := app.agentLoop.GetSettingsService(); ss != nil {
+		if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+			if t, ok := vals["theme"]; ok && t != "" {
+				channel.ApplyTheme(t)
+			}
+		}
 	}
 
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）

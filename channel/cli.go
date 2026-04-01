@@ -1036,18 +1036,40 @@ func (m *cliModel) View() string {
 		borderColor = lipgloss.Color("#ef5350") // 红色
 	} else if strings.HasPrefix(inputValue, "/") {
 		borderColor = lipgloss.Color("#66bb6a") // 绿色
-		// 实时计算补全候选
-		var matches []string
-		for _, cmd := range cliCommands {
-			if strings.HasPrefix(cmd, inputValue) {
-				matches = append(matches, cmd)
+		// 补全候选提示：与 Tab 补全共享状态
+		if len(m.completions) > 0 {
+			// Tab 已激活：高亮当前选中项
+			parts := make([]string, len(m.completions))
+			for i, c := range m.completions {
+				if i == m.compIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).
+						Underline(true).
+						Foreground(lipgloss.Color("#a5d6a7")).
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color("#66bb6a")).
+						Render(c)
+				}
 			}
-		}
-		if len(matches) > 0 {
-			hintStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#66bb6a")).
-				Padding(0, 1)
-			completionsHint = hintStyle.Render("[Tab] " + strings.Join(matches, " · "))
+			completionsHint = lipgloss.NewStyle().
+				Padding(0, 1).
+				Render(strings.Join(parts, " · "))
+		} else {
+			// 尚未按 Tab：显示潜在匹配
+			var matches []string
+			for _, cmd := range cliCommands {
+				if strings.HasPrefix(cmd, inputValue) {
+					matches = append(matches, cmd)
+				}
+			}
+			if len(matches) > 0 {
+				completionsHint = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#66bb6a")).
+					Padding(0, 1).
+					Render("[Tab] " + strings.Join(matches, " · "))
+			}
 		}
 	}
 

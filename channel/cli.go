@@ -2386,10 +2386,20 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				// Start typing to filter / enter custom value → switch to edit mode
 				m.panelCombo = false
 				m.panelEdit = true
-				m.panelEditTA.SetValue(m.panelValues[def.Key])
-				m.panelEditTA.CursorEnd()
+				// Re-initialize textarea with proper styles for panel context
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
 				var cmd tea.Cmd
-				m.panelEditTA, cmd = m.panelEditTA.Update(msg)
+				m.panelEditTA, cmd = ta.Update(msg)
 				return true, m, cmd
 			}
 		}
@@ -2463,15 +2473,35 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				}
 				// No options: fall through to edit mode
 				m.panelEdit = true
-				m.panelEditTA.SetValue(m.panelValues[def.Key])
-				m.panelEditTA.CursorEnd()
-				return true, m, m.panelEditTA.Focus()
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
+				m.panelEditTA = ta
+				return true, m, nil
 			default:
-				// Enter edit mode for text/number/textarea
+				// Enter edit mode for text/number/textarea/combo(fallback)
 				m.panelEdit = true
-				m.panelEditTA.SetValue(m.panelValues[def.Key])
-				m.panelEditTA.CursorEnd()
-				return true, m, m.panelEditTA.Focus()
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
+				m.panelEditTA = ta
+				return true, m, nil
 			}
 		}
 		return true, m, nil
@@ -2629,10 +2659,16 @@ func (m *cliModel) viewSettingsPanel() string {
 		}
 		for j := start; j < end; j++ {
 			opt := def.Options[j]
+			label := opt.Label
+			// Truncate long model names to prevent box overflow
+			runes := []rune(label)
+			if len(runes) > 40 {
+				label = string(runes[:37]) + "..."
+			}
 			if j == m.panelComboIdx {
-				sb.WriteString(cursorStyle.Render("  ▸ " + opt.Label))
+				sb.WriteString(cursorStyle.Render("  ▸ " + label))
 			} else {
-				sb.WriteString("    " + opt.Label)
+				sb.WriteString("    " + label)
 			}
 			sb.WriteString("\n")
 		}

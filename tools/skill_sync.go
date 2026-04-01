@@ -53,6 +53,11 @@ func EnsureSynced(ctx *ToolContext) {
 		return
 	}
 
+	// None sandbox: global dirs are directly accessible, no sync needed.
+	if ctx.Sandbox != nil && ctx.Sandbox.Name() == "none" {
+		return
+	}
+
 	globalSkillSyncer.mu.Lock()
 	// Evict stale entries (older than 24h) to prevent unbounded map growth
 	now := time.Now()

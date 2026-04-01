@@ -700,6 +700,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sendMessage(content)
 				m.textarea.Reset()
 				m.viewport.GotoBottom()
+				m.todos = nil // 新消息时清除 TODO bar
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())
@@ -1031,10 +1032,8 @@ func (m *cliModel) renderTodoBar() string {
 		}
 	}
 
-	// All done — hide the bar
-	if done == total {
-		return ""
-	}
+	// All done — still show bar (cleared on next user message)
+	// if done == total { return "" }
 
 	// Progress bar: filled portion
 	barWidth := 20

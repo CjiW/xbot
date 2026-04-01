@@ -568,8 +568,8 @@ func TestUserMessageMiddleware(t *testing.T) {
 			t.Error("user message should contain original content")
 		}
 		if !strings.Contains(mc.UserMessage, "Skill") {
-				t.Error("user message should contain system guidance")
-			}
+			t.Error("user message should contain system guidance")
+		}
 	})
 
 	t.Run("without sender name", func(t *testing.T) {
@@ -687,8 +687,8 @@ func TestPipeline_FullIntegration(t *testing.T) {
 		t.Error("user message should contain original content")
 	}
 	if !strings.Contains(userMsg, "Skill") {
-			t.Error("user message should contain system guidance")
-		}
+		t.Error("user message should contain system guidance")
+	}
 }
 
 // --- Test Cron pipeline ---

@@ -963,10 +963,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				if autoNotify {
 					// SubAgent progress callback already wrote a meaningful progress tree via formatSubAgentProgress.
 					// Do not overwrite with tool-level ❌ — it loses the child agent tree and may misleadingly mark failure.
-					// Instead, mark the SubAgent progress as done (🔄 → ✅) while preserving the child agent tree.
+					// Instead, mark ALL SubAgent progress lines as done (🔄 → ✅) while preserving the child agent tree.
 					if tc.Name == "SubAgent" {
-						progressLines[progressStartIdx+entry.index] = strings.Replace(
-							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+						progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅")
 					} else {
 						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					}
@@ -991,10 +991,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 				if autoNotify {
 					// SubAgent progress callback already wrote a meaningful progress tree.
-					// Mark SubAgent as done (🔄 → ✅) without overwriting the tree.
+					// Mark ALL SubAgent progress lines as done (🔄 → ✅) without overwriting the tree.
 					if tc.Name == "SubAgent" {
-						progressLines[progressStartIdx+entry.index] = strings.Replace(
-							progressLines[progressStartIdx+entry.index], "🔄", "✅", 1)
+						progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
+							progressLines[progressStartIdx+entry.index], "🔄", "✅")
 					} else {
 						icon := "✅"
 						if result.IsError {

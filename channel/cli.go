@@ -2627,12 +2627,15 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 
 	switch msg.Type {
 	case tea.KeyCtrlS:
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		return true, m, nil
+			answers := m.collectAskAnswers()
+			if m.panelOnAnswer != nil {
+				m.panelOnAnswer(answers)
+			}
+			m.closePanel()
+			if m.typing {
+				return true, m, tea.Batch(tickerCmd(), tickCmd())
+			}
+			return true, m, nil
 	case tea.KeyEsc:
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
@@ -2654,49 +2657,63 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		return true, m, nil
 	case tea.KeyEnter:
-		if hasOpts && !isFree {
-			// In checkbox mode: toggle the cursor option, then submit
-			m.toggleOptAtCursor()
+			if hasOpts && !isFree {
+				cursor := m.panelOptCursor[m.panelTab]
+				if cursor == numOpts {
+					// Submit button: submit all answers
+					answers := m.collectAskAnswers()
+					if m.panelOnAnswer != nil {
+						m.panelOnAnswer(answers)
+					}
+					m.closePanel()
+					if m.typing {
+						return true, m, tea.Batch(tickerCmd(), tickCmd())
+					}
+					return true, m, nil
+				}
+				// On a regular option: just toggle (same as Space)
+				m.toggleOptAtCursor()
+				return true, m, nil
+			}
+			// Free input mode: submit all
 			answers := m.collectAskAnswers()
 			if m.panelOnAnswer != nil {
 				m.panelOnAnswer(answers)
 			}
 			m.closePanel()
-			return true, m, nil
-		}
-		// Free input mode: submit all
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		return true, m, nil
-	case tea.KeyUp:
-		if hasOpts && !isFree {
-			cursor := m.panelOptCursor[m.panelTab]
-			if cursor > 0 {
-				m.panelOptCursor[m.panelTab] = cursor - 1
+			if m.typing {
+				return true, m, tea.Batch(tickerCmd(), tickCmd())
 			}
 			return true, m, nil
-		}
-	case tea.KeyDown:
-		if hasOpts && !isFree {
-			cursor := m.panelOptCursor[m.panelTab]
-			if cursor < numOpts-1 {
-				m.panelOptCursor[m.panelTab] = cursor + 1
+		case tea.KeyUp:
+			if hasOpts && !isFree {
+				cursor := m.panelOptCursor[m.panelTab]
+				if cursor > 0 {
+					m.panelOptCursor[m.panelTab] = cursor - 1
+				}
+				return true, m, nil
 			}
-			return true, m, nil
-		}
-	case tea.KeySpace:
-		if hasOpts && !isFree {
-			// Toggle checkbox at cursor position
-			m.toggleOptAtCursor()
-			// Advance cursor down
-			cursor := m.panelOptCursor[m.panelTab]
-			if cursor < numOpts-1 {
-				m.panelOptCursor[m.panelTab] = cursor + 1
+		case tea.KeyDown:
+			if hasOpts && !isFree {
+				cursor := m.panelOptCursor[m.panelTab]
+				// Allow cursor to reach numOpts (Submit button)
+				if cursor < numOpts {
+					m.panelOptCursor[m.panelTab] = cursor + 1
+				}
+				return true, m, nil
 			}
-			return true, m, nil
+		case tea.KeySpace:
+			if hasOpts && !isFree {
+				cursor := m.panelOptCursor[m.panelTab]
+				if cursor < numOpts {
+					// Toggle checkbox at cursor position
+					m.toggleOptAtCursor()
+				}
+				// Advance cursor down (wrap at Submit button)
+				if cursor < numOpts {
+					m.panelOptCursor[m.panelTab] = cursor + 1
+				}
+				return true, m, nil
 		}
 		// Free mode: fall through to textarea
 		if isFree {
@@ -2979,6 +2996,10 @@ func (m *cliModel) viewAskUserPanel() string {
 		Foreground(lipgloss.Color("#ffb74d")).
 		Bold(true)
 
+	submitStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#81c784")).
+		Bold(true)
+
 	var sb strings.Builder
 
 	// Tab bar (if multiple questions)
@@ -3020,25 +3041,32 @@ func (m *cliModel) viewAskUserPanel() string {
 					box = "☐"
 				}
 				var prefix, line string
-				if i == cursor {
-					prefix = cursorStyle.Render("▸ ")
-					if checked {
-						line = checkStyle.Render(prefix + box + " " + opt)
-					} else {
-						line = prefix + box + " " + opt
+						if i == cursor {
+								prefix = cursorStyle.Render("▸ ")
+								if checked {
+									line = checkStyle.Render(prefix + box + " " + opt)
+								} else {
+									line = prefix + box + " " + opt
+								}
+						} else {
+								prefix = "  "
+								if checked {
+									line = checkStyle.Render(prefix + box + " " + opt)
+								} else {
+									line = prefix + box + " " + opt
+								}
+						}
+						sb.WriteString(line)
+						sb.WriteString("\n")
 					}
-				} else {
-					prefix = "  "
-					if checked {
-						line = checkStyle.Render(prefix + box + " " + opt)
+					// Submit button
+					submitLabel := "Submit →"
+					if cursor == len(item.Options) {
+						sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
 					} else {
-						line = prefix + box + " " + opt
+						sb.WriteString("  " + submitStyle.Render(submitLabel))
 					}
-				}
-				sb.WriteString(line)
-				sb.WriteString("\n")
-			}
-			sb.WriteString("\n")
+					sb.WriteString("\n\n")
 		}
 
 		if isFree || !hasOpts {
@@ -3062,7 +3090,7 @@ func (m *cliModel) viewAskUserPanel() string {
 			if m.panelFreeMode[m.panelTab] {
 				hints = append(hints, "↑↓ 返回选择")
 			} else {
-				hints = append(hints, "↑↓ 移动", "Space 勾选", "Enter 提交", "输入 自由回答")
+				hints = append(hints, "↑↓ 移动", "Space/Enter 勾选", "→ Submit 提交", "输入 自由回答")
 			}
 		}
 	}

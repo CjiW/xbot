@@ -409,6 +409,9 @@ type Config struct {
 	// 压缩后清理旧消息
 	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
 
+	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
+	OffloadDir string
+
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
@@ -545,7 +548,10 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 
 	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	offloadDir := cfg.OffloadDir
+	if offloadDir == "" {
+		offloadDir = filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	}
 	a.offloadStore = NewOffloadStore(OffloadConfig{
 		StoreDir:        offloadDir,
 		MaxResultTokens: 2000,

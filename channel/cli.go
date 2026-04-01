@@ -489,7 +489,8 @@ type cliModel struct {
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
 
 	// --- §10 TODO 进度条 ---
-	todos []CLITodoItem // 从 progress 事件同步的 TODO 列表
+	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表
+	todosDoneCleared bool          // 全完成后已被用户输入清除，阻止 progress 重填
 
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
@@ -702,10 +703,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
+				if m.allTodosDone() {
+					m.todos = nil
+					m.todosDoneCleared = true
+				}
 				m.sendMessage(content)
 				m.textarea.Reset()
 				m.viewport.GotoBottom()
-				m.todos = nil // 新消息时清除 TODO bar
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())
@@ -791,8 +795,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.payload != nil {
 			// Sync todo items from progress event
 			if len(msg.payload.Todos) > 0 {
-				m.todos = make([]CLITodoItem, len(msg.payload.Todos))
-				copy(m.todos, msg.payload.Todos)
+				allDone := true
+				for _, t := range msg.payload.Todos {
+					if !t.Done {
+						allDone = false
+						break
+					}
+				}
+				if m.todosDoneCleared && allDone {
+					// Already cleared by user input; don't re-accept stale all-done list
+				} else {
+					m.todos = make([]CLITodoItem, len(msg.payload.Todos))
+					copy(m.todos, msg.payload.Todos)
+					m.todosDoneCleared = false
+				}
 			} else {
 				m.todos = nil
 			}
@@ -1020,6 +1036,19 @@ func (m *cliModel) View() string {
 		status,
 		input,
 	)
+}
+
+// allTodosDone returns true when todos exist and every item is marked done.
+func (m *cliModel) allTodosDone() bool {
+	if len(m.todos) == 0 {
+		return false
+	}
+	for _, t := range m.todos {
+		if !t.Done {
+			return false
+		}
+	}
+	return true
 }
 
 // renderTodoBar renders a compact TODO progress bar between status and input.

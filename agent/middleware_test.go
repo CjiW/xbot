@@ -615,7 +615,7 @@ func TestPipeline_FullIntegration(t *testing.T) {
 	loader := NewPromptLoader("") // uses default template
 
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),
@@ -767,7 +767,7 @@ func TestNewCronMessageContext(t *testing.T) {
 func TestPipeline_DynamicUseRemove(t *testing.T) {
 	loader := NewPromptLoader("")
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
 		NewUserMessageMiddleware("flat"),
 	)
@@ -818,7 +818,7 @@ func TestFullPipeline_AllMiddlewares(t *testing.T) {
 	mem := &mockMemoryProvider{recallResult: "## Persona\nI am xbot"}
 
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),

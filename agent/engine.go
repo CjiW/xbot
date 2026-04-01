@@ -852,9 +852,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// Frontend tracks max completed_tools via ref for turn persistence.
 			for j, tc := range response.ToolCalls {
 				structuredProgress.ActiveTools[j] = ToolProgress{
-					Name:   tc.Name,
-					Label:  formatToolProgress(tc.Name, tc.Arguments),
-					Status: ToolPending,
+					Name:      tc.Name,
+					Label:     formatToolProgress(tc.Name, tc.Arguments),
+					Status:    ToolPending,
+					Iteration: i,
 				}
 			}
 		}

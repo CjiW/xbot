@@ -12,11 +12,12 @@ import (
 
 // SystemPromptMiddleware 注入基础系统提示词模板（prompt.md 渲染结果）
 type SystemPromptMiddleware struct {
-	loader *PromptLoader
+	loader         *PromptLoader
+	memoryProvider string
 }
 
-func NewSystemPromptMiddleware(loader *PromptLoader) *SystemPromptMiddleware {
-	return &SystemPromptMiddleware{loader: loader}
+func NewSystemPromptMiddleware(loader *PromptLoader, memoryProvider string) *SystemPromptMiddleware {
+	return &SystemPromptMiddleware{loader: loader, memoryProvider: memoryProvider}
 }
 
 func (m *SystemPromptMiddleware) Name() string  { return "system_prompt" }
@@ -24,9 +25,10 @@ func (m *SystemPromptMiddleware) Priority() int { return 0 }
 
 func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 	content := m.loader.Render(PromptData{
-		Channel: mc.Channel,
-		WorkDir: mc.WorkDir,
-		CWD:     mc.CWD,
+		Channel:        mc.Channel,
+		WorkDir:        mc.WorkDir,
+		CWD:            mc.CWD,
+		MemoryProvider: m.memoryProvider,
 	})
 	mc.SystemParts["00_base"] = content
 	return nil

@@ -38,12 +38,15 @@ import (
 )
 
 func init() {
-	lipgloss.SetHasDarkBackground(true) // 先设 dark，ApplyTheme 会动态调整
+	lipgloss.SetHasDarkBackground(true) // 所有配色方案都基于深色终端背景
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
 }
 
 // --- Theme system ---
+//
+// Theme = color scheme only. Terminal background is not controlled by xbot.
+// All schemes are designed for dark terminal backgrounds.
 type cliTheme struct {
 	// Text
 	TextPrimary   string // 主文本色
@@ -55,18 +58,16 @@ type cliTheme struct {
 	Error   string // 错误
 	Info    string // 信息/链接
 	// UI
-	Accent       string // 强调色（边框、焦点）
-	AccentAlt    string // 次要强调
-	BarFilled    string // 进度条填充
-	BarEmpty     string // 进度条空
-	Border       string // 边框
-	PanelBg      string // 面板背景
-	UserBubble   string // 用户消息气泡背景
-	SelectCursor string // 选中光标背景
+	Accent    string // 强调色（边框、焦点）
+	AccentAlt string // 次要强调
+	BarFilled string // 进度条填充
+	BarEmpty  string // 进度条空
+	Border    string // 边框
+	TitleText string // 标题栏文字（title bar foreground）
 }
 
 var (
-	themeDark = cliTheme{
+	themeMidnight = cliTheme{
 		TextPrimary:   "#e0e0e0",
 		TextSecondary: "#90a4ae",
 		TextMuted:     "#666666",
@@ -79,41 +80,115 @@ var (
 		BarFilled:     "#5c6bc0",
 		BarEmpty:      "#2a2a3a",
 		Border:        "#4a4e69",
-		PanelBg:       "",
-		UserBubble:    "#f2e9e4",
-		SelectCursor:  "",
+		TitleText:     "#f2e9e4",
 	}
-	themeLight = cliTheme{
-		TextPrimary:   "#1e293b",
-		TextSecondary: "#64748b",
-		TextMuted:     "#94a3b8",
-		Success:       "#15803d",
-		Warning:       "#b45309",
-		Error:         "#b91c1c",
-		Info:          "#1d4ed8",
-		Accent:        "#4338ca",
-		AccentAlt:     "#7e22ce",
-		BarFilled:     "#4338ca",
-		BarEmpty:      "#e2e8f0",
-		Border:        "#cbd5e1",
-		PanelBg:       "#f1f5f9",
-		UserBubble:    "#1e293b",
-		SelectCursor:  "#e0e7ff",
+	themeOcean = cliTheme{
+		TextPrimary:   "#e0f2f1",
+		TextSecondary: "#80cbc4",
+		TextMuted:     "#546e7a",
+		Success:       "#69f0ae",
+		Warning:       "#ffe082",
+		Error:         "#ff8a80",
+		Info:          "#80d8ff",
+		Accent:        "#00acc1",
+		AccentAlt:     "#80deea",
+		BarFilled:     "#00acc1",
+		BarEmpty:      "#1a2a3a",
+		Border:        "#37474f",
+		TitleText:     "#e0f7fa",
 	}
-	currentTheme = &themeDark
+	themeForest = cliTheme{
+		TextPrimary:   "#c8e6c9",
+		TextSecondary: "#81c784",
+		TextMuted:     "#5d6d5e",
+		Success:       "#a5d6a7",
+		Warning:       "#ffe082",
+		Error:         "#ef9a9a",
+		Info:          "#a5d6a7",
+		Accent:        "#66bb6a",
+		AccentAlt:     "#aed581",
+		BarFilled:     "#66bb6a",
+		BarEmpty:      "#1a2e1a",
+		Border:        "#2e4a2e",
+		TitleText:     "#e8f5e9",
+	}
+	themeSunset = cliTheme{
+		TextPrimary:   "#fff3e0",
+		TextSecondary: "#ffcc80",
+		TextMuted:     "#6d5d4b",
+		Success:       "#ffe082",
+		Warning:       "#ffab91",
+		Error:         "#ef5350",
+		Info:          "#ffe082",
+		Accent:        "#ff7043",
+		AccentAlt:     "#ffab91",
+		BarFilled:     "#ff7043",
+		BarEmpty:      "#2e2a1a",
+		Border:        "#4e3e2e",
+		TitleText:     "#fff8e1",
+	}
+	themeRose = cliTheme{
+		TextPrimary:   "#fce4ec",
+		TextSecondary: "#f48fb1",
+		TextMuted:     "#6d4b5b",
+		Success:       "#f8bbd0",
+		Warning:       "#ffab91",
+		Error:         "#ef5350",
+		Info:          "#f48fb1",
+		Accent:        "#ec407a",
+		AccentAlt:     "#ce93d8",
+		BarFilled:     "#ec407a",
+		BarEmpty:      "#2e1a2a",
+		Border:        "#4e2e3e",
+		TitleText:     "#fce4ec",
+	}
+	themeMono = cliTheme{
+		TextPrimary:   "#d0d0d0",
+		TextSecondary: "#888888",
+		TextMuted:     "#555555",
+		Success:       "#aaaaaa",
+		Warning:       "#cccccc",
+		Error:         "#ff6666",
+		Info:          "#aaaaaa",
+		Accent:        "#ffffff",
+		AccentAlt:     "#888888",
+		BarFilled:     "#ffffff",
+		BarEmpty:      "#333333",
+		Border:        "#555555",
+		TitleText:     "#ffffff",
+	}
+
+	themeRegistry = map[string]*cliTheme{
+		"midnight": &themeMidnight,
+		"ocean":    &themeOcean,
+		"forest":   &themeForest,
+		"sunset":   &themeSunset,
+		"rose":     &themeRose,
+		"mono":     &themeMono,
+	}
+
+	currentTheme = &themeMidnight
 )
 
-// ApplyTheme 切换当前主题。支持 "dark" 和 "light"。
-func ApplyTheme(themeName string) {
-	switch themeName {
-	case "light":
-		currentTheme = &themeLight
-		lipgloss.SetHasDarkBackground(false)
-	default:
-		currentTheme = &themeDark
-		lipgloss.SetHasDarkBackground(true)
+// ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
+// 无效名称回退到 midnight。
+func ApplyTheme(name string) {
+	if t, ok := themeRegistry[name]; ok {
+		currentTheme = t
+	} else {
+		currentTheme = &themeMidnight
 	}
 }
+
+// ThemeNames returns the list of available theme names.
+func ThemeNames() []string {
+	names := make([]string, 0, len(themeRegistry))
+	for name := range themeRegistry {
+		names = append(names, name)
+	}
+	return names
+}
+
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -168,10 +243,7 @@ func truncateToWidth(s string, maxWidth int) string {
 // set to 0 (the default dark style uses Margin=2 which misaligns when lipgloss
 // re-wraps lines inside a narrower bubble).
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
-	var style = glamour.DarkStyleConfig
-	if currentTheme == &themeLight {
-		style = glamour.LightStyleConfig
-	}
+	style := glamour.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
 	r, _ := glamour.NewTermRenderer(
@@ -1084,7 +1156,7 @@ func (m *cliModel) View() string {
 	}
 	titleBar := lipgloss.NewStyle().
 		Background(lipgloss.Color(currentTheme.Border)).
-		Foreground(lipgloss.Color(currentTheme.UserBubble)).
+		Foreground(lipgloss.Color(currentTheme.TitleText)).
 		Bold(true).
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
@@ -3319,15 +3391,19 @@ func cliSettingsSchema() []SettingDefinition {
 		},
 		{
 			Key:         "theme",
-			Label:       "主题",
-			Description: "CLI 界面主题",
+			Label:       "配色",
+			Description: "CLI 界面配色方案",
 			Type:        SettingTypeSelect,
 			Category:    "外观",
 			Options: []SettingOption{
-				{Label: "默认（深色）", Value: "dark"},
-				{Label: "浅色", Value: "light"},
+				{Label: "Midnight（默认）", Value: "midnight"},
+				{Label: "Ocean", Value: "ocean"},
+				{Label: "Forest", Value: "forest"},
+				{Label: "Sunset", Value: "sunset"},
+				{Label: "Rose", Value: "rose"},
+				{Label: "Mono", Value: "mono"},
 			},
-			DefaultValue: "dark",
+			DefaultValue: "midnight",
 		},
 	}
 }

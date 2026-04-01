@@ -414,8 +414,25 @@ Output the structured working state directly.`
 		}
 	}
 
+	// Fallback: if the LLM exhausted all tool rounds without producing text,
+	// send one final call WITHOUT tools to force a text summary.
 	if compressed == "" {
-		return nil, fmt.Errorf("compaction LLM produced no output after %d tool rounds", maxToolRounds)
+		log.Ctx(ctx).WithField("tool_rounds", maxToolRounds).Warn("Compaction exhausted tool rounds, forcing final summary without tools")
+		forceMsgs := append(compactionMsgs, llm.NewAssistantMessage("Memory operations complete. Now produce the compaction summary."))
+		resp, err := client.Generate(ctx, model, forceMsgs, nil, "")
+		if err != nil {
+			return nil, fmt.Errorf("compaction fallback failed: %w", err)
+		}
+		GlobalMetrics.TotalLLMCalls.Add(1)
+		if resp != nil {
+			GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
+			GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
+		}
+		compressed = llm.StripThinkBlocks(resp.Content)
+	}
+
+	if compressed == "" {
+		return nil, fmt.Errorf("compaction LLM produced no output even after fallback")
 	}
 
 	// Step 5: build compacted message structure

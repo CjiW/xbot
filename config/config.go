@@ -647,7 +647,7 @@ func Load() *Config {
 		cfg.Embedding.MaxTokens = 2048
 	}
 	if cfg.Agent.MaxContextTokens == 0 {
-		cfg.Agent.MaxContextTokens = 100000
+		cfg.Agent.MaxContextTokens = 200000
 	}
 	if cfg.Agent.CompressionThreshold == 0 {
 		cfg.Agent.CompressionThreshold = 0.7

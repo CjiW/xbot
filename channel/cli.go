@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"xbot/bus"
 	log "xbot/logger"
@@ -1014,8 +1015,8 @@ func (m *cliModel) renderTodoBar() string {
 	// Items
 	for i, item := range m.todos {
 		text := item.Text
-		if len(text) > 60 {
-			text = text[:59] + "…"
+		if utf8.RuneCountInString(text) > 60 {
+			text = string([]rune(text)[:59]) + "…"
 		}
 		if item.Done {
 			sb.WriteString("  ")

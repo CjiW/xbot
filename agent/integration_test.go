@@ -184,6 +184,10 @@ func (mc *mockCompressor) ContextInfo(msgs []llm.ChatMessage, model string, tool
 
 func (mc *mockCompressor) SessionHook() SessionCompressHook { return nil }
 
+func (mc *mockCompressor) SetMemoryTools(tools []llm.ToolDefinition, exec func(ctx context.Context, tc llm.ToolCall) (string, error)) {
+	// no-op for tests
+}
+
 // ============================================================================
 // Masking Integration Tests
 // ============================================================================

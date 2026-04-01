@@ -136,8 +136,6 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 		a.offloadStore.CleanSession(tenantKey)
 	}
 
-	a.clearConsolidationState(tenantKey)
-
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,

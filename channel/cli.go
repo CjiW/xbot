@@ -13,17 +13,21 @@
 package channel
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"xbot/bus"
 	log "xbot/logger"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -34,14 +38,81 @@ import (
 )
 
 func init() {
-	// Prevent termenv / lipgloss from querying terminal background color
-	// via OSC 11.  Pre-set dark background and TrueColor on the lipgloss
-	// default renderer so AdaptiveColor never triggers a lazy query.
-	// The termenv default output uses WithTTY(false) so no code path can
-	// accidentally send OSC sequences to the real terminal.
-	lipgloss.SetHasDarkBackground(true)
+	lipgloss.SetHasDarkBackground(true) // 先设 dark，ApplyTheme 会动态调整
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
+}
+
+// --- Theme system ---
+type cliTheme struct {
+	// Text
+	TextPrimary   string // 主文本色
+	TextSecondary string // 次要文本
+	TextMuted     string // 弱化文本/占位符
+	// Semantic
+	Success string // 成功/完成
+	Warning string // 警告/进行中
+	Error   string // 错误
+	Info    string // 信息/链接
+	// UI
+	Accent       string // 强调色（边框、焦点）
+	AccentAlt    string // 次要强调
+	BarFilled    string // 进度条填充
+	BarEmpty     string // 进度条空
+	Border       string // 边框
+	PanelBg      string // 面板背景
+	UserBubble   string // 用户消息气泡背景
+	SelectCursor string // 选中光标背景
+}
+
+var (
+	themeDark = cliTheme{
+		TextPrimary:   "#e0e0e0",
+		TextSecondary: "#90a4ae",
+		TextMuted:     "#666666",
+		Success:       "#81c784",
+		Warning:       "#ffb74d",
+		Error:         "#ef5350",
+		Info:          "#64b5f6",
+		Accent:        "#5c6bc0",
+		AccentAlt:     "#ce93d8",
+		BarFilled:     "#5c6bc0",
+		BarEmpty:      "#2a2a3a",
+		Border:        "#4a4e69",
+		PanelBg:       "",
+		UserBubble:    "#f2e9e4",
+		SelectCursor:  "",
+	}
+	themeLight = cliTheme{
+		TextPrimary:   "#1e293b",
+		TextSecondary: "#64748b",
+		TextMuted:     "#94a3b8",
+		Success:       "#15803d",
+		Warning:       "#b45309",
+		Error:         "#b91c1c",
+		Info:          "#1d4ed8",
+		Accent:        "#4338ca",
+		AccentAlt:     "#7e22ce",
+		BarFilled:     "#4338ca",
+		BarEmpty:      "#e2e8f0",
+		Border:        "#cbd5e1",
+		PanelBg:       "#f1f5f9",
+		UserBubble:    "#1e293b",
+		SelectCursor:  "#e0e7ff",
+	}
+	currentTheme = &themeDark
+)
+
+// ApplyTheme 切换当前主题。支持 "dark" 和 "light"。
+func ApplyTheme(themeName string) {
+	switch themeName {
+	case "light":
+		currentTheme = &themeLight
+		lipgloss.SetHasDarkBackground(false)
+	default:
+		currentTheme = &themeDark
+		lipgloss.SetHasDarkBackground(true)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +168,10 @@ func truncateToWidth(s string, maxWidth int) string {
 // set to 0 (the default dark style uses Margin=2 which misaligns when lipgloss
 // re-wraps lines inside a narrower bubble).
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
-	style := glamour.DarkStyleConfig
+	var style = glamour.DarkStyleConfig
+	if currentTheme == &themeLight {
+		style = glamour.LightStyleConfig
+	}
 	zero := uint(0)
 	style.Document.Margin = &zero
 	r, _ := glamour.NewTermRenderer(
@@ -125,14 +199,23 @@ type CLIProgressPayload struct {
 	CompletedTools []CLIToolProgress
 	Thinking       string
 	SubAgents      []CLISubAgent
+	Todos          []CLITodoItem
+}
+
+// CLITodoItem represents a TODO item for CLI display.
+type CLITodoItem struct {
+	ID   int
+	Text string
+	Done bool
 }
 
 // CLIToolProgress 单个工具的执行进度。
 type CLIToolProgress struct {
-	Name    string
-	Label   string
-	Status  string
-	Elapsed int64 // milliseconds
+	Name      string
+	Label     string
+	Status    string
+	Elapsed   int64 // milliseconds
+	Iteration int   // 所属迭代 ID
 }
 
 // CLISubAgent 子 Agent 的结构化进度状态。
@@ -184,9 +267,11 @@ type HistoryMessage struct {
 
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
-	WorkDir       string                           // 工作目录（用于标题栏显示）
-	ChatID        string                           // 会话 ID（按工作目录区分）
-	HistoryLoader func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
+	WorkDir          string                           // 工作目录（用于标题栏显示）
+	ChatID           string                           // 会话 ID（按工作目录区分）
+	HistoryLoader    func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
+	GetCurrentValues func() map[string]string         // 获取当前配置值（用于 settings panel 初始值）
+	ApplySettings    func(values map[string]string)   // 应用设置变更（写 config.json + 更新运行时状态）
 }
 
 // ---------------------------------------------------------------------------
@@ -201,12 +286,31 @@ type CLIChannel struct {
 	workDir string                   // 工作目录
 
 	// Bubble Tea
-	program *tea.Program
-	model   *cliModel
+	program   *tea.Program
+	programMu sync.Mutex // protects program field
+	model     *cliModel
 
 	// Lifecycle
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+
+	// Services (injected by Agent or main)
+	settingsSvc     SettingsService // interface for GetSettings/SetSetting
+	configMu        sync.RWMutex    // protects config override fields
+	modelOverride   string          // user-overridden model from /settings panel
+	baseURLOverride string          // user-overridden base URL from /settings panel
+	modelLister     ModelLister     // provides available model names for combo
+}
+
+// SettingsService is the interface needed by CLIChannel for settings panel.
+type SettingsService interface {
+	GetSettings(channelName, senderID string) (map[string]string, error)
+	SetSetting(channelName, senderID, key, value string) error
+}
+
+// ModelLister provides available model names for the settings combo box.
+type ModelLister interface {
+	ListModels() []string
 }
 
 // NewCLIChannel 创建 CLI 渠道
@@ -247,6 +351,7 @@ func (c *CLIChannel) Start() error {
 
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
+	c.model.channel = c
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID
@@ -278,10 +383,12 @@ func (c *CLIChannel) Start() error {
 	}
 
 	// 创建 Bubble Tea program
+	c.programMu.Lock()
 	c.program = tea.NewProgram(c.model,
 		tea.WithAltScreen(),
 		tea.WithOutput(origStdout),
 	)
+	c.programMu.Unlock()
 
 	// 启动 outbound 消息处理 goroutine
 	c.wg.Add(1)
@@ -301,9 +408,11 @@ func (c *CLIChannel) Start() error {
 func (c *CLIChannel) Stop() {
 	log.Info("CLI channel stopping...")
 	close(c.stopCh)
+	c.programMu.Lock()
 	if c.program != nil {
 		c.program.Quit()
 	}
+	c.programMu.Unlock()
 	c.wg.Wait()
 	log.Info("CLI channel stopped")
 }
@@ -390,8 +499,8 @@ var (
 	}
 	// arrowFrames: pulsing arrow — tool execution feel
 	arrowFrames = []string{"›", "▸", "▶", "▸", "›", "▸", "▶", "▸"}
-	// waveFrames: gentle sine wave — subagent feel
-	waveFrames = []string{"◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣", "◞", "◢", "◝", "◣"}
+	// waveFrames: rotating crescent moon phases — subagent feel
+	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 )
@@ -464,6 +573,36 @@ type cliModel struct {
 
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
+
+	// --- §10 TODO 进度条 ---
+	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表
+	todosDoneCleared bool          // 全完成后已被用户输入清除，阻止 progress 重填
+
+	// --- §11 Tool Summary 折叠 ---
+	toolSummaryExpanded bool // Ctrl+O 切换
+
+	// --- §12 Interactive Panel ---
+	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
+	panelMode     string
+	panelCursor   int            // settings panel: selected item index
+	panelEdit     bool           // settings panel: editing current item
+	panelEditTA   textarea.Model // settings panel: inline editor
+	panelCombo    bool           // settings panel: combo dropdown open
+	panelComboIdx int            // settings panel: combo selected option index
+	// --- AskUser panel ---
+	panelItems     []askItem                       // askuser panel: question items
+	panelTab       int                             // askuser panel: current tab (question index)
+	panelOptSel    map[int]map[int]bool            // askuser panel: selected option indices per question
+	panelOptCursor map[int]int                     // askuser panel: highlighted option index per question
+	panelAnswerTA  textarea.Model                  // askuser panel: free-input editor (no-options mode)
+	panelOtherTI   textinput.Model                 // askuser panel: single-line Other input
+	panelSchema    []SettingDefinition             // settings panel: schema copy
+	panelValues    map[string]string               // settings panel: current values
+	panelOnSubmit  func(values map[string]string)  // callback on settings submit
+	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
+	panelOnCancel  func()                          // callback on cancel
+
+	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 
 // cliMessage 单条消息
@@ -491,15 +630,15 @@ func newCLIModel() *cliModel {
 	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.Prompt = "> "
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
 	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
@@ -509,10 +648,19 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(80, 20)
 
+	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
+	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
+	vp.KeyMap.PageUp.SetKeys("pgup")
+	vp.KeyMap.PageDown.SetKeys("pgdown")
+	vp.KeyMap.HalfPageUp.SetKeys()
+	vp.KeyMap.HalfPageDown.SetKeys()
+
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
 	// Ticker
-	tk := newAnimTicker(dotFrames, "#e0af68")
+	tk := newAnimTicker(dotFrames, currentTheme.Warning)
 
 	return &cliModel{
 		viewport:        vp,
@@ -566,6 +714,20 @@ func isCtrlEnter(msg tea.Msg) bool {
 		s == "?CSI[50 55 59 53 59 49 51 126]?" || s == "\x1b[27;5;13~"
 }
 
+// isCtrlO 检测 Ctrl+O 按键（部分终端发送 CSI u 序列，Bubble Tea 无法识别）。
+// Ctrl+O = ASCII 15, CSI u 协议: \x1b[15;5u → "?CSI[49 53 59 53 117]?"
+func isCtrlO(msg tea.Msg) bool {
+	s := fmt.Sprintf("%v", msg)
+	return s == "?CSI[49 53 59 53 117]?" || s == "\x1b[15;5u"
+}
+
+// isCtrlJ detects Ctrl+J (newline). Ctrl+J = ASCII 10.
+// CSI u protocol: \x1b[10;5u → "?CSI[49 48 59 53 117]?"
+func isCtrlJ(msg tea.Msg) bool {
+	s := fmt.Sprintf("%v", msg)
+	return s == "?CSI[49 48 59 53 117]?" || s == "\x1b[10;5u" || s == "ctrl+j"
+}
+
 // ---------------------------------------------------------------------------
 // Bubble Tea Interface Implementation
 // ---------------------------------------------------------------------------
@@ -587,9 +749,41 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// §12 Panel mode: intercept all key events when panel is active
+	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
+		handled, newModel, cmd := m.updatePanel(key)
+		if handled {
+			return newModel, cmd
+		}
+	}
+
+	// Home/End 跳顶部/底部
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "home":
+			m.viewport.GotoTop()
+			return m, nil
+		case "end":
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+	}
+
 	// Ctrl+Enter 换行（终端发送的 raw sequence 不统一，需手动检测）
 	if isCtrlEnter(msg) {
 		m.textarea.InsertString("\n")
+		return m, nil
+	}
+
+	// Ctrl+O 切换 tool summary 展开/折叠（同上，兼容 CSI u 协议）
+	if isCtrlO(msg) {
+		m.toolSummaryExpanded = !m.toolSummaryExpanded
+		m.renderCacheValid = false
+		m.cachedHistory = ""
+		for i := range m.messages {
+			m.messages[i].dirty = true
+		}
+		m.updateViewportContent()
 		return m, nil
 	}
 
@@ -633,8 +827,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
+				if m.allTodosDone() {
+					m.todos = nil
+					m.todosDoneCleared = true
+				}
 				m.sendMessage(content)
 				m.textarea.Reset()
+				m.viewport.GotoBottom()
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())
@@ -656,6 +855,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmDelete = 2 // 默认删除 2 条
 				m.updateViewportContent()
 			}
+			return m, nil
+
+		case tea.KeyCtrlO:
+			// §11 Ctrl+O 切换 tool summary 展开/折叠
+			m.toolSummaryExpanded = !m.toolSummaryExpanded
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			for i := range m.messages {
+				m.messages[i].dirty = true
+			}
+			m.updateViewportContent()
 			return m, nil
 		}
 
@@ -707,13 +917,39 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prev := m.progress
 		m.progress = msg.payload
 		if msg.payload != nil {
+			// Sync todo items from progress event
+			if len(msg.payload.Todos) > 0 {
+				allDone := true
+				for _, t := range msg.payload.Todos {
+					if !t.Done {
+						allDone = false
+						break
+					}
+				}
+				if m.todosDoneCleared && allDone {
+					// Already cleared by user input; don't re-accept stale all-done list
+				} else {
+					m.todos = make([]CLITodoItem, len(msg.payload.Todos))
+					copy(m.todos, msg.payload.Todos)
+					m.todosDoneCleared = false
+				}
+			} else {
+				m.todos = nil
+			}
 			// Detect iteration change: snapshot previous iteration into history
 			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
-				if len(prev.CompletedTools) > 0 || prev.Thinking != "" {
+				// Filter CompletedTools by Iteration field for the previous iteration
+				var prevIterTools []CLIToolProgress
+				for _, t := range prev.CompletedTools {
+					if t.Iteration == m.lastSeenIteration {
+						prevIterTools = append(prevIterTools, t)
+					}
+				}
+				if len(prevIterTools) > 0 || prev.Thinking != "" {
 					snap := cliIterationSnapshot{
 						Iteration: m.lastSeenIteration,
 						Thinking:  prev.Thinking,
-						Tools:     append([]CLIToolProgress{}, prev.CompletedTools...),
+						Tools:     prevIterTools,
 					}
 					m.iterationHistory = append(m.iterationHistory, snap)
 				}
@@ -724,11 +960,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastSeenIteration = msg.payload.Iteration
 
 			// §2 工具可视化：快照 CompletedTools 到独立字段
+			// Only keep tools matching the current iteration to avoid cross-iteration leakage.
 			if len(msg.payload.CompletedTools) > 0 {
-				m.lastCompletedTools = append(
-					m.lastCompletedTools[:0],
-					msg.payload.CompletedTools...,
-				)
+				filtered := m.lastCompletedTools[:0]
+				for _, t := range msg.payload.CompletedTools {
+					if t.Iteration == msg.payload.Iteration {
+						filtered = append(filtered, t)
+					}
+				}
+				m.lastCompletedTools = filtered
 			}
 			if msg.payload.Phase == "done" {
 				m.progress = nil
@@ -817,6 +1057,9 @@ func (m *cliModel) handleResize(width, height int) {
 
 	// 更新内容
 	m.updateViewportContent()
+
+	// Resize 后始终滚到底部（无论之前用户是否上滚）
+	m.viewport.GotoBottom()
 }
 
 // calculateProgressHeight returns 0 — progress is now rendered inside the viewport.
@@ -840,8 +1083,8 @@ func (m *cliModel) View() string {
 		titlePad = 1
 	}
 	titleBar := lipgloss.NewStyle().
-		Background(lipgloss.Color("#4a4e69")).
-		Foreground(lipgloss.Color("#f2e9e4")).
+		Background(lipgloss.Color(currentTheme.Border)).
+		Foreground(lipgloss.Color(currentTheme.UserBubble)).
 		Bold(true).
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
@@ -849,7 +1092,7 @@ func (m *cliModel) View() string {
 	// 输入框样式：圆角边框，不设 Background（避免和 textarea ANSI 冲突导致颜色不填满）
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5c6bc0")).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
 		Padding(0, 1).
 		Width(m.width - 4)
 
@@ -857,25 +1100,25 @@ func (m *cliModel) View() string {
 
 	// 状态栏样式
 	readyStatusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#81c784")).
+		Foreground(lipgloss.Color(currentTheme.Success)).
 		Bold(true).
 		Padding(0, 1)
 
 	thinkingStatusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffb74d")).
+		Foreground(lipgloss.Color(currentTheme.Warning)).
 		Padding(0, 1)
 
 	// 进度样式
 	progressStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffb74d"))
+		Foreground(lipgloss.Color(currentTheme.Warning))
 
 	toolStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#4dd0e1"))
+		Foreground(lipgloss.Color(currentTheme.Info))
 
 	// ========== 渲染各部分 ==========
 	// 分隔线：柔和的虚线
 	separator := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#2a2a3a")).
+		Foreground(lipgloss.Color(currentTheme.BarEmpty)).
 		Render(strings.Repeat("─", m.width))
 
 	// 输入区
@@ -884,7 +1127,7 @@ func (m *cliModel) View() string {
 	// §9 Ctrl+K 确认模式提示
 	if m.confirmDelete > 0 {
 		warningStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ffb74d")).
+			Foreground(lipgloss.Color(currentTheme.Warning)).
 			Bold(true).
 			Padding(0, 1)
 		warningText := warningStyle.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
@@ -908,6 +1151,29 @@ func (m *cliModel) View() string {
 	}
 
 	// 组装界面
+	// §12 Panel mode: render panel overlay instead of normal input
+	if m.panelMode != "" {
+		panel := m.viewPanel()
+		return fmt.Sprintf(
+			"%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			panel,
+		)
+	}
+
+	todoBar := m.renderTodoBar()
+	if todoBar != "" {
+		return fmt.Sprintf(
+			"%s\n%s\n%s\n%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			separator,
+			status,
+			todoBar,
+			input,
+		)
+	}
 	return fmt.Sprintf(
 		"%s\n%s\n%s\n%s\n%s",
 		titleBar,
@@ -916,6 +1182,85 @@ func (m *cliModel) View() string {
 		status,
 		input,
 	)
+}
+
+// allTodosDone returns true when todos exist and every item is marked done.
+func (m *cliModel) allTodosDone() bool {
+	if len(m.todos) == 0 {
+		return false
+	}
+	for _, t := range m.todos {
+		if !t.Done {
+			return false
+		}
+	}
+	return true
+}
+
+// renderTodoBar renders a compact TODO progress bar between status and input.
+// Returns empty string when no todos are active.
+func (m *cliModel) renderTodoBar() string {
+	if len(m.todos) == 0 {
+		return ""
+	}
+
+	done := 0
+	total := len(m.todos)
+	for _, item := range m.todos {
+		if item.Done {
+			done++
+		}
+	}
+
+	// All done — still show bar (cleared on next user message)
+	// if done == total { return "" }
+
+	// Progress bar: filled portion
+	barWidth := 20
+	filled := 0
+	if total > 0 {
+		filled = done * barWidth / total
+	}
+
+	barFilled := strings.Repeat("█", filled)
+	barEmpty := strings.Repeat("░", barWidth-filled)
+
+	todoLabelSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextSecondary))
+	todoBarFilledSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.BarFilled))
+	todoBarEmptySt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.BarEmpty))
+	todoDoneSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success))
+	todoPendingSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+
+	var sb strings.Builder
+	// Header: TODO label + count + progress bar
+	sb.WriteString(todoLabelSt.Render(" TODO "))
+	fmt.Fprintf(&sb, "%d/%d ", done, total)
+	sb.WriteString(todoBarFilledSt.Render(barFilled))
+	sb.WriteString(todoBarEmptySt.Render(barEmpty))
+	sb.WriteString("\n")
+	// Items
+	for i, item := range m.todos {
+		text := item.Text
+		if utf8.RuneCountInString(text) > 60 {
+			text = string([]rune(text)[:59]) + "…"
+		}
+		if item.Done {
+			sb.WriteString("  ")
+			sb.WriteString(todoDoneSt.Render("✓"))
+			sb.WriteString(" ")
+			sb.WriteString(todoPendingSt.Render(text))
+		} else {
+			sb.WriteString("  ")
+			sb.WriteString(todoLabelSt.Render("○"))
+			sb.WriteString(" ")
+			sb.WriteString(todoPendingSt.Render(text))
+		}
+		if i < len(m.todos)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }
 
 // titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
@@ -1128,6 +1473,83 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		m.cachedHistory = ""
 		m.updateViewportContent()
 
+	case "/settings":
+		// Open interactive settings panel locally
+		if m.channel != nil {
+			schema := m.channel.SettingsSchema()
+			if len(schema) == 0 {
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "当前渠道没有可配置的设置项。",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			} else {
+				// Get current values: start from config, overlay with SettingsService
+				currentValues := make(map[string]string)
+				if m.channel.config.GetCurrentValues != nil {
+					for k, v := range m.channel.config.GetCurrentValues() {
+						currentValues[k] = v
+					}
+				}
+				if m.channel.settingsSvc != nil {
+					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID)
+					if err == nil {
+						for k, v := range vals {
+							currentValues[k] = v
+						}
+					}
+				}
+				// Inject model list into combo options
+				if m.channel.modelLister != nil {
+					models := m.channel.modelLister.ListModels()
+					for i, s := range schema {
+						if s.Key == "llm_model" && len(models) > 0 {
+							opts := make([]SettingOption, len(models))
+							for j, m := range models {
+								opts[j] = SettingOption{Label: m, Value: m}
+							}
+							schema[i].Options = opts
+							break
+						}
+					}
+				}
+				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
+					// Persist to SettingsService (SQLite)
+					if m.channel.settingsSvc != nil {
+						for k, v := range values {
+							_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, k, v)
+						}
+					}
+					// Apply settings: write config.json + update runtime state
+					if m.channel.config.ApplySettings != nil {
+						m.channel.config.ApplySettings(values)
+					}
+					// Apply theme immediately
+					if theme, ok := values["theme"]; ok {
+						ApplyTheme(theme)
+						// Rebuild glamour renderer with new theme
+						if m.width > 4 {
+							m.renderer = newGlamourRenderer(m.width - 4)
+						}
+						m.renderCacheValid = false
+					}
+					// Update live config overrides (model, base_url)
+					if model, ok := values["llm_model"]; ok && model != "" {
+						m.channel.UpdateConfig(model, values["llm_base_url"])
+					}
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   "✅ 设置已保存",
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				})
+			}
+		}
+
 	case "/quit", "/exit":
 		m.shouldQuit = true
 
@@ -1249,10 +1671,103 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 		// 重置流式状态
 		m.streamingMsgIdx = -1
-		m.typing = false
-		m.inputReady = true
-		// 清除进度信息
+		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		m.progress = nil
+
+		// §12 AskUser panel: detect WaitingUser and open interactive panel
+		if msg.WaitingUser {
+			// Extract question and options from Metadata
+			question := ""
+			var options []string
+			if msg.Metadata != nil {
+				question = msg.Metadata["ask_question"]
+				if optsJSON := msg.Metadata["ask_options"]; optsJSON != "" {
+					_ = json.Unmarshal([]byte(optsJSON), &options)
+				}
+			}
+			// Fallback: search message history for ❓
+			if question == "" {
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if strings.HasPrefix(m.messages[i].content, "❓") {
+						question = strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
+						m.messages = append(m.messages[:i], m.messages[i+1:]...)
+						break
+					}
+				}
+			}
+			question = strings.TrimSpace(strings.TrimPrefix(question, "Asked user: "))
+			if question != "" {
+				// Build ask items (support multiple questions separated by \n\n)
+				items := m.buildAskItems(question, options)
+				m.updateViewportContent()
+				m.openAskUserPanel(items, func(answers map[string]string) {
+					// Format answers as tool-call style message
+					var parts []string
+					for i, item := range items {
+						key := fmt.Sprintf("q%d", i)
+						ans := answers[key]
+						parts = append(parts, fmt.Sprintf("Q: %s\nA: %s", item.Question, ans))
+					}
+					content := strings.Join(parts, "\n\n")
+					// Send to agent as tool result replacement (not a new user message)
+					if m.msgBus != nil {
+						m.msgBus.Inbound <- bus.InboundMessage{
+							Channel:    cliChannelName,
+							SenderID:   cliSenderID,
+							ChatID:     m.chatID,
+							ChatType:   "p2p",
+							Content:    content,
+							SenderName: "CLI User",
+							Time:       time.Now(),
+							RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+							Metadata:   map[string]string{"ask_user_answered": "true"},
+						}
+					}
+					// Render as tool call style (not user message)
+					m.messages = append(m.messages, cliMessage{
+						role:       "tool_summary",
+						content:    "AskUser",
+						timestamp:  time.Now(),
+						dirty:      true,
+						iterations: nil,
+						tools: []CLIToolProgress{
+							{
+								Name:    "AskUser",
+								Label:   fmt.Sprintf("asked %d question(s)", len(items)),
+								Status:  "completed",
+								Elapsed: 0,
+							},
+						},
+					})
+					// Show answers as system message
+					var answerParts []string
+					for i, item := range items {
+						key := fmt.Sprintf("q%d", i)
+						ans := answers[key]
+						answerParts = append(answerParts, fmt.Sprintf("  %s → %s", item.Question, ans))
+					}
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   strings.Join(answerParts, "\n"),
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.typing = true
+					m.inputReady = false
+					m.resetProgressState()
+					m.updateViewportContent()
+				}, func() {
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   "已取消提问",
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				})
+				return
+			}
+		}
 
 		// Snapshot the final iteration before clearing
 		if m.lastSeenIteration >= 0 && len(m.lastCompletedTools) > 0 {
@@ -1264,10 +1779,19 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 				}
 			}
 			if !alreadySnapped {
-				m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-					Iteration: m.lastSeenIteration,
-					Tools:     append([]CLIToolProgress{}, m.lastCompletedTools...),
-				})
+				// Filter tools by Iteration field to ensure correct attribution
+				var finalTools []CLIToolProgress
+				for _, t := range m.lastCompletedTools {
+					if t.Iteration == m.lastSeenIteration {
+						finalTools = append(finalTools, t)
+					}
+				}
+				if len(finalTools) > 0 {
+					m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Tools:     finalTools,
+					})
+				}
 			}
 		}
 
@@ -1293,6 +1817,8 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.iterationHistory = nil
 		m.lastSeenIteration = 0
 		m.typingStartTime = time.Time{}
+		m.typing = false
+		m.inputReady = true
 
 	}
 
@@ -1310,28 +1836,28 @@ func (m *cliModel) renderProgressBlock() string {
 
 	// Styles
 	iterStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 		Bold(true)
 
 	thinkingStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 		Italic(true)
 
 	toolDoneStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#81c784"))
+		Foreground(lipgloss.Color(currentTheme.Success))
 
 	toolRunningStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffb74d"))
+		Foreground(lipgloss.Color(currentTheme.Warning))
 
 	toolErrorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ef5350"))
+		Foreground(lipgloss.Color(currentTheme.Error))
 
 	elapsedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 		Faint(true)
 
 	indentGuide := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#333333"))
+		Foreground(lipgloss.Color(currentTheme.TextPrimary))
 
 	dimStyle := lipgloss.NewStyle().
 		Faint(true)
@@ -1386,8 +1912,11 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Completed tools in current iteration
+		// Completed tools in current iteration — filter by Iteration field
 		for _, tool := range m.progress.CompletedTools {
+			if tool.Iteration != m.progress.Iteration {
+				continue
+			}
 			label := tool.Label
 			if label == "" {
 				label = tool.Name
@@ -1478,14 +2007,14 @@ func (m *cliModel) renderProgressBlock() string {
 
 	// Header
 	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#5c6bc0")).
+		Foreground(lipgloss.Color(currentTheme.Accent)).
 		Bold(true)
 	header := headerStyle.Render("Progress") + elapsed
 
 	// Wrap in border
 	blockStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#5c6bc0")).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
 		Padding(0, 1).
 		Width(bubbleWidth)
 
@@ -1493,18 +2022,21 @@ func (m *cliModel) renderProgressBlock() string {
 }
 
 // renderSubAgentTree renders nested sub-agents with indentation.
+// Only renders running/pending agents — completed ones are already captured
+// in the tool summary and shouldn't linger in the progress panel.
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
 	indent := strings.Repeat("  ", depth)
 	for _, sa := range agents {
+		// Skip completed sub-agents — their results are in the tool summary
+		if sa.Status == "done" {
+			continue
+		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffb74d"))
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 		switch sa.Status {
-		case "done":
-			icon = "✓"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
 		case "error":
 			icon = "✗"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef5350"))
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
 		}
 		line := fmt.Sprintf("%s%s %s", indent, icon, sa.Role)
 		if sa.Desc != "" {
@@ -1526,25 +2058,25 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 	// 时间戳样式
 	timeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 		Faint(true)
 
 	// 角色标签样式
 	userLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#64b5f6")).
+		Foreground(lipgloss.Color(currentTheme.Info)).
 		Bold(true)
 
 	assistantLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#81c784")).
+		Foreground(lipgloss.Color(currentTheme.Success)).
 		Bold(true)
 
 	streamingLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffb74d")).
+		Foreground(lipgloss.Color(currentTheme.Warning)).
 		Bold(true)
 
 	// 系统消息样式
 	systemMsgStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 		Italic(true).
 		Width(m.width).
 		Align(lipgloss.Center)
@@ -1569,39 +2101,72 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// §2 工具可视化：按迭代分组渲染 thinking + tools
 		toolSummaryStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#5c6bc0")).
-			Foreground(lipgloss.Color("#e0e0e0")).
+			BorderForeground(lipgloss.Color(currentTheme.Accent)).
+			Foreground(lipgloss.Color(currentTheme.TextPrimary)).
 			Padding(0, 1).
 			Width(contentWidth).
 			Align(lipgloss.Left)
 
 		toolHeaderStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4dd0e1")).
+			Foreground(lipgloss.Color(currentTheme.Info)).
 			Bold(true)
 
 		toolItemStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#a5d6a7"))
+			Foreground(lipgloss.Color(currentTheme.Success))
 
 		thinkingStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#90a4ae")).
+			Foreground(lipgloss.Color(currentTheme.TextSecondary)).
 			Italic(true)
+
+		hintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.TextMuted))
+
+		// 统计总工具数和总耗时
+		totalTools := 0
+		totalMs := int64(0)
+		if len(msg.iterations) > 0 {
+			for _, it := range msg.iterations {
+				totalTools += len(it.Tools)
+				for _, tool := range it.Tools {
+					totalMs += tool.Elapsed
+				}
+			}
+		} else {
+			totalTools = len(msg.tools)
+			for _, tool := range msg.tools {
+				totalMs += tool.Elapsed
+			}
+		}
 
 		var toolSb strings.Builder
 
-		// 优先使用迭代分组（运行时 + 历史恢复），否则回退到扁平列表
-		if len(msg.iterations) > 0 {
-			totalTools := 0
-			for _, it := range msg.iterations {
-				totalTools += len(it.Tools)
-			}
-			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
-			toolSb.WriteString("\n")
-			for _, it := range msg.iterations {
-				if it.Thinking != "" {
-					toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
-					toolSb.WriteString("\n")
+		if m.toolSummaryExpanded {
+			// 展开模式：完整渲染
+			if len(msg.iterations) > 0 {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
+				toolSb.WriteString("\n")
+				for _, it := range msg.iterations {
+					if it.Thinking != "" {
+						toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
+						toolSb.WriteString("\n")
+					}
+					for _, tool := range it.Tools {
+						label := tool.Label
+						if label == "" {
+							label = tool.Name
+						}
+						elapsed := ""
+						if tool.Elapsed > 0 {
+							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+						}
+						toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+						toolSb.WriteString("\n")
+					}
 				}
-				for _, tool := range it.Tools {
+			} else {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))
+				toolSb.WriteString("\n")
+				for _, tool := range msg.tools {
 					label := tool.Label
 					if label == "" {
 						label = tool.Name
@@ -1610,25 +2175,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 					if tool.Elapsed > 0 {
 						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 					}
-					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
 					toolSb.WriteString("\n")
 				}
 			}
 		} else {
-			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", len(msg.tools))))
-			toolSb.WriteString("\n")
-			for _, tool := range msg.tools {
-				label := tool.Label
-				if label == "" {
-					label = tool.Name
-				}
-				elapsed := ""
-				if tool.Elapsed > 0 {
-					elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-				}
-				toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
-				toolSb.WriteString("\n")
-			}
+			// 折叠模式：只显示统计摘要
+			elapsedStr := formatElapsed(totalMs)
+			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools %d calls · %s", totalTools, elapsedStr)))
+			toolSb.WriteString("  ")
+			toolSb.WriteString(hintStyle.Render("[Ctrl+O]"))
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
@@ -1641,11 +2197,23 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			Render(fmt.Sprintf("%s %s", timeStr, label))
 		sb.WriteString(header)
 		sb.WriteString("\n")
-		// 用户消息：右对齐，左侧竖线指示器
-		userStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#e0e0e0")).
-			Width(contentWidth).
-			Align(lipgloss.Right)
+		// 用户消息：右对齐气泡效果
+		// 计算内容最大行宽，整块右对齐而非每行拉伸
+		lines := strings.Split(rendered, "\n")
+		maxWidth := 0
+		for _, line := range lines {
+			w := lipgloss.Width(line)
+			if w > maxWidth {
+				maxWidth = w
+			}
+		}
+		maxBubble := contentWidth * 3 / 4
+		userStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+		if maxWidth <= maxBubble {
+			// 内容够窄，左填充实现气泡靠右
+			userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
+		}
+		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))
 	default:
 		// assistant 消息：左对齐，无气泡边框
@@ -1665,6 +2233,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	return sb.String()
 }
 
+// setViewportContent sets viewport content while preserving scroll position.
+// If the user was at the bottom before the update, keep them at the bottom.
+func (m *cliModel) setViewportContent(content string) {
+	atBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(content)
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
 func (m *cliModel) updateViewportContent() {
 	// 快速路径：流式消息 + 缓存有效
@@ -1678,8 +2256,7 @@ func (m *cliModel) updateViewportContent() {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
-		m.viewport.SetContent(sb.String())
-		m.viewport.GotoBottom()
+		m.setViewportContent(sb.String())
 		return
 	}
 
@@ -1700,8 +2277,7 @@ func (m *cliModel) updateStreamingOnly() {
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
 
-	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	m.setViewportContent(sb.String())
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）
@@ -1737,8 +2313,7 @@ func (m *cliModel) fullRebuild() {
 	}
 	sb.WriteString(m.renderProgressBlock())
 
-	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	m.setViewportContent(sb.String())
 }
 
 // tickCmd 定时器命令
@@ -1817,3 +2392,990 @@ func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
 	return "", nil
 }
 func (c *NonInteractiveChannel) WaitDone() { <-c.done }
+
+// --- §12 Interactive Panel ---
+
+// openSettingsPanel activates the settings panel overlay.
+func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[string]string, onSubmit func(map[string]string)) {
+	m.panelMode = "settings"
+	m.panelCursor = 0
+	m.panelEdit = false
+	m.panelSchema = make([]SettingDefinition, len(schema))
+	copy(m.panelSchema, schema)
+	m.panelValues = make(map[string]string, len(values))
+	for k, v := range values {
+		m.panelValues[k] = v
+	}
+	// Fill defaults
+	for _, def := range m.panelSchema {
+		if _, ok := m.panelValues[def.Key]; !ok && def.DefaultValue != "" {
+			m.panelValues[def.Key] = def.DefaultValue
+		}
+	}
+	m.panelOnSubmit = onSubmit
+	m.panelOnCancel = nil
+	// Pre-create textarea for editing
+	ta := textarea.New()
+	ta.Placeholder = "输入新值..."
+	ta.SetWidth(60)
+	ta.SetHeight(1)
+	ta.CharLimit = 200
+	m.panelEditTA = ta
+}
+
+// askItem represents a single question in the AskUser panel.
+type askItem struct {
+	Question string   // the question text
+	Options  []string // choices (empty = free input only)
+	Answer   string   // user's answer (set on submit)
+	Other    string   // user's custom input when "Other" option selected
+}
+
+// buildAskItems creates askItem list from question and options.
+// Multiple questions in a single call are split by double newline.
+// Options with "..." prefix indicate a custom "Other" input.
+func (m *cliModel) buildAskItems(question string, options []string) []askItem {
+	// Check if question contains multiple questions (separated by double newline)
+	parts := strings.Split(question, "\n\n")
+	items := make([]askItem, 0, len(parts))
+	for _, q := range parts {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		// For multi-question, each gets the same options
+		// For single question, use the provided options directly
+		if len(parts) == 1 {
+			items = append(items, askItem{Question: q, Options: options})
+		} else {
+			items = append(items, askItem{Question: q, Options: options})
+		}
+	}
+	return items
+}
+
+// openAskUserPanel activates the ask-user panel overlay.
+func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
+	m.panelMode = "askuser"
+	m.panelItems = items
+	m.panelTab = 0
+	m.panelOptSel = make(map[int]map[int]bool)
+	m.panelOptCursor = make(map[int]int)
+	ta := textarea.New()
+	ta.Placeholder = "Type your answer..."
+	ta.Prompt = "  "
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.Text = lipgloss.NewStyle()
+	ta.CharLimit = 0
+	ta.SetWidth(50)
+	ta.SetHeight(3)
+	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
+	ta.Focus()
+	m.panelAnswerTA = ta
+	// Initialize Other single-line input
+	ti := textinput.New()
+	ti.Placeholder = "Type here..."
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.Width = 40
+	ti.PromptStyle = lipgloss.NewStyle()
+	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ti.Focus()
+	m.panelOtherTI = ti
+	m.panelOnAnswer = onAnswer
+	m.panelOnCancel = onCancel
+}
+
+// closePanel deactivates any active panel.
+func (m *cliModel) closePanel() {
+	m.panelMode = ""
+	m.panelEdit = false
+	m.panelCombo = false
+	m.panelSchema = nil
+	m.panelValues = nil
+	m.panelOnSubmit = nil
+	m.panelItems = nil
+	m.panelTab = 0
+	m.panelOptSel = nil
+	m.panelOptCursor = nil
+}
+
+// updatePanel handles key events when a panel is active.
+// Returns (handled, newModel, cmd).
+func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelMode == "" {
+		return false, m, nil
+	}
+
+	switch m.panelMode {
+	case "settings":
+		return m.updateSettingsPanel(msg)
+	case "askuser":
+		return m.updateAskUserPanel(msg)
+	}
+	return false, m, nil
+}
+
+func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelEdit {
+		// Editing mode
+		switch msg.Type {
+		case tea.KeyEnter:
+			// Save value
+			newVal := strings.TrimSpace(m.panelEditTA.Value())
+			if m.panelCursor < len(m.panelSchema) {
+				key := m.panelSchema[m.panelCursor].Key
+				m.panelValues[key] = newVal
+			}
+			m.panelEdit = false
+			return true, m, nil
+		case tea.KeyEsc:
+			m.panelEdit = false
+			return true, m, nil
+		default:
+			// Delegate to textarea
+			var cmd tea.Cmd
+			m.panelEditTA, cmd = m.panelEditTA.Update(msg)
+			return true, m, cmd
+		}
+	}
+
+	// Combo dropdown mode
+	if m.panelCombo {
+		if m.panelCursor < len(m.panelSchema) {
+			def := m.panelSchema[m.panelCursor]
+			opts := def.Options
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.panelCombo = false
+				return true, m, nil
+			case tea.KeyUp:
+				if m.panelComboIdx > 0 {
+					m.panelComboIdx--
+				}
+				return true, m, nil
+			case tea.KeyDown:
+				if m.panelComboIdx < len(opts)-1 {
+					m.panelComboIdx++
+				}
+				return true, m, nil
+			case tea.KeyEnter:
+				if m.panelComboIdx < len(opts) {
+					m.panelValues[def.Key] = opts[m.panelComboIdx].Value
+				}
+				m.panelCombo = false
+				return true, m, nil
+			case tea.KeySpace:
+				m.panelCombo = false
+				// Start typing to filter / enter custom value → switch to edit mode
+				m.panelEdit = true
+				// Re-initialize textarea with proper styles for panel context
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
+				var cmd tea.Cmd
+				m.panelEditTA, cmd = ta.Update(msg)
+				return true, m, cmd
+			}
+		}
+		return true, m, nil
+	}
+
+	// Navigation mode
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyCtrlS:
+		// Submit all settings
+		if m.panelOnSubmit != nil {
+			m.panelOnSubmit(m.panelValues)
+		}
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyUp, tea.KeyShiftTab:
+		if m.panelCursor > 0 {
+			m.panelCursor--
+		}
+		return true, m, nil
+	case tea.KeyDown, tea.KeyTab:
+		if m.panelCursor < len(m.panelSchema)-1 {
+			m.panelCursor++
+		}
+		return true, m, nil
+	case tea.KeyEnter:
+		if m.panelCursor < len(m.panelSchema) {
+			def := m.panelSchema[m.panelCursor]
+			switch def.Type {
+			case SettingTypeToggle:
+				// Toggle on Enter
+				cur := m.panelValues[def.Key]
+				if cur == "true" {
+					m.panelValues[def.Key] = "false"
+				} else {
+					m.panelValues[def.Key] = "true"
+				}
+				return true, m, nil
+			case SettingTypeSelect:
+				// Cycle through options
+				cur := m.panelValues[def.Key]
+				found := false
+				for i, opt := range def.Options {
+					if opt.Value == cur && i < len(def.Options)-1 {
+						m.panelValues[def.Key] = def.Options[i+1].Value
+						found = true
+						break
+					}
+				}
+				if !found && len(def.Options) > 0 {
+					m.panelValues[def.Key] = def.Options[0].Value
+				}
+				return true, m, nil
+			case SettingTypeCombo:
+				// Open combo dropdown if options available, otherwise edit
+				if len(def.Options) > 0 {
+					m.panelCombo = true
+					m.panelComboIdx = 0
+					// Pre-select current value if it matches an option
+					cur := m.panelValues[def.Key]
+					for i, opt := range def.Options {
+						if opt.Value == cur {
+							m.panelComboIdx = i
+							break
+						}
+					}
+					return true, m, nil
+				}
+				// No options: fall through to edit mode
+				m.panelEdit = true
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
+				m.panelEditTA = ta
+				return true, m, nil
+			default:
+				// Enter edit mode for text/number/textarea/combo(fallback)
+				m.panelEdit = true
+				ta := textarea.New()
+				ta.Prompt = "  "
+				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.CharLimit = 0
+				ta.SetWidth(50)
+				ta.SetHeight(1)
+				ta.SetValue(m.panelValues[def.Key])
+				ta.CursorEnd()
+				ta.Focus()
+				m.panelEditTA = ta
+				return true, m, nil
+			}
+		}
+		return true, m, nil
+	}
+	return true, m, nil
+}
+
+func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return true, m, nil
+	}
+	item := &m.panelItems[m.panelTab]
+	numOpts := len(item.Options)
+	hasOpts := numOpts > 0
+	// Cursor: 0..numOpts-1 (checkbox), numOpts (Other input), numOpts+1 (Submit)
+	cursor := m.panelOptCursor[m.panelTab]
+	onOther := hasOpts && cursor == numOpts
+	onSubmit := hasOpts && cursor == numOpts+1
+
+	switch msg.Type {
+	case tea.KeyCtrlS:
+		answers := m.collectAskAnswers()
+		if m.panelOnAnswer != nil {
+			m.panelOnAnswer(answers)
+		}
+		m.closePanel()
+		if m.typing {
+			return true, m, tea.Batch(tickerCmd(), tickCmd())
+		}
+		return true, m, nil
+	case tea.KeyEsc:
+		if m.panelOnCancel != nil {
+			m.panelOnCancel()
+		}
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyRight, tea.KeyTab:
+		if len(m.panelItems) > 1 && m.panelTab < len(m.panelItems)-1 {
+			m.saveCurrentFreeInput()
+			m.panelTab++
+			m.restoreFreeInput()
+		}
+		return true, m, nil
+	case tea.KeyShiftTab, tea.KeyLeft:
+		if len(m.panelItems) > 1 && m.panelTab > 0 {
+			m.saveCurrentFreeInput()
+			m.panelTab--
+			m.restoreFreeInput()
+		}
+		return true, m, nil
+	case tea.KeyUp:
+		if hasOpts {
+			if onOther {
+				m.panelOptCursor[m.panelTab] = numOpts - 1
+				return true, m, nil
+			}
+			if cursor > 0 {
+				m.panelOptCursor[m.panelTab] = cursor - 1
+			}
+			return true, m, nil
+		}
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
+	case tea.KeyDown:
+		if hasOpts {
+			if onOther {
+				m.panelOptCursor[m.panelTab] = numOpts + 1
+				return true, m, nil
+			}
+			if cursor < numOpts+1 {
+				m.panelOptCursor[m.panelTab] = cursor + 1
+			}
+			return true, m, nil
+		}
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
+	case tea.KeyEnter:
+		if hasOpts {
+			if onSubmit {
+				answers := m.collectAskAnswers()
+				if m.panelOnAnswer != nil {
+					m.panelOnAnswer(answers)
+				}
+				m.closePanel()
+				if m.typing {
+					return true, m, tea.Batch(tickerCmd(), tickCmd())
+				}
+				return true, m, nil
+			}
+			// On checkbox: toggle; on Other: do nothing (let user type)
+			if !onOther {
+				m.toggleOptAtCursor()
+			}
+			return true, m, nil
+		}
+		answers := m.collectAskAnswers()
+		if m.panelOnAnswer != nil {
+			m.panelOnAnswer(answers)
+		}
+		m.closePanel()
+		if m.typing {
+			return true, m, tea.Batch(tickerCmd(), tickCmd())
+		}
+		return true, m, nil
+	case tea.KeySpace:
+		if hasOpts && !onOther {
+			if cursor < numOpts {
+				m.toggleOptAtCursor()
+			}
+			if cursor < numOpts+1 {
+				m.panelOptCursor[m.panelTab] = cursor + 1
+			}
+			return true, m, nil
+		}
+		// No options: fall through to textarea
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
+	case tea.KeyRunes:
+		if hasOpts && !onOther {
+			m.panelOptCursor[m.panelTab] = numOpts
+			m.restoreOtherInput()
+		}
+		if onOther {
+			var cmd tea.Cmd
+			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+			return true, m, cmd
+		}
+		if hasOpts {
+			// With options, all input goes through Other textinput
+			return true, m, nil
+		}
+		// No options: textarea
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
+	default:
+		if isCtrlJ(msg) {
+			if !hasOpts {
+				m.panelAnswerTA.InsertString("\n")
+				m.autoExpandAskTA()
+			}
+			return true, m, nil
+		}
+		if onOther {
+			var cmd tea.Cmd
+			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+			return true, m, cmd
+		}
+		if hasOpts {
+			return true, m, nil
+		}
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
+	}
+
+}
+
+// toggleOptAtCursor toggles the checkbox at the current cursor position.
+func (m *cliModel) toggleOptAtCursor() {
+	tab := m.panelTab
+	if m.panelOptSel[tab] == nil {
+		m.panelOptSel[tab] = make(map[int]bool)
+	}
+	cursor := m.panelOptCursor[tab]
+	m.panelOptSel[tab][cursor] = !m.panelOptSel[tab][cursor]
+}
+
+// collectAskAnswers gathers answers from all questions.
+func (m *cliModel) collectAskAnswers() map[string]string {
+	answers := make(map[string]string)
+	for i, item := range m.panelItems {
+		key := fmt.Sprintf("q%d", i)
+		hasOpts := len(item.Options) > 0
+		var parts []string
+		if hasOpts {
+			if sel, ok := m.panelOptSel[i]; ok && len(sel) > 0 {
+				for idx := range sel {
+					if idx < len(item.Options) {
+						parts = append(parts, item.Options[idx])
+					}
+				}
+			}
+			var otherText string
+			if i == m.panelTab {
+				otherText = strings.TrimSpace(m.panelOtherTI.Value())
+			} else {
+				otherText = strings.TrimSpace(item.Other)
+			}
+			if otherText != "" {
+				parts = append(parts, otherText)
+			}
+			answers[key] = strings.Join(parts, ", ")
+		} else {
+			if i == m.panelTab {
+				answers[key] = strings.TrimSpace(m.panelAnswerTA.Value())
+			} else {
+				answers[key] = strings.TrimSpace(item.Other)
+			}
+		}
+	}
+	return answers
+}
+
+// saveCurrentFreeInput saves textarea/textinput content for the current tab.
+func (m *cliModel) saveCurrentFreeInput() {
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return
+	}
+	item := &m.panelItems[m.panelTab]
+	if len(item.Options) > 0 {
+		item.Other = m.panelOtherTI.Value()
+	} else {
+		item.Other = m.panelAnswerTA.Value()
+	}
+}
+
+// restoreFreeInput restores textarea/textinput content for the current tab.
+func (m *cliModel) restoreFreeInput() {
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return
+	}
+	item := m.panelItems[m.panelTab]
+	if len(item.Options) > 0 {
+		m.panelOtherTI.SetValue(item.Other)
+		m.panelOtherTI.CursorEnd()
+	} else {
+		m.panelAnswerTA.SetValue(item.Other)
+		m.panelAnswerTA.CursorEnd()
+		m.autoExpandAskTA()
+	}
+}
+
+// restoreOtherInput restores the Other textinput for the current tab (options mode).
+func (m *cliModel) restoreOtherInput() {
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return
+	}
+	m.panelOtherTI.SetValue(m.panelItems[m.panelTab].Other)
+	m.panelOtherTI.CursorEnd()
+}
+
+// autoExpandAskTA adjusts textarea height based on content.
+func (m *cliModel) autoExpandAskTA() {
+	lines := strings.Count(m.panelAnswerTA.Value(), "\n") + 1
+	if lines < 2 {
+		lines = 2
+	}
+	if lines > 6 {
+		lines = 6
+	}
+	if m.panelAnswerTA.Height() != lines {
+		m.panelAnswerTA.SetHeight(lines)
+	}
+}
+
+// viewPanel renders the active panel as a string.
+func (m *cliModel) viewPanel() string {
+	switch m.panelMode {
+	case "settings":
+		return m.viewSettingsPanel()
+	case "askuser":
+		return m.viewAskUserPanel()
+	}
+	return ""
+}
+
+func (m *cliModel) viewSettingsPanel() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(1, 2)
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Success)).
+		Bold(true)
+
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Info))
+
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning)).
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
+		Faint(true)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted))
+
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render("⚙ Settings"))
+	sb.WriteString("\n\n")
+
+	// Group by category
+	lastCat := ""
+	for i, def := range m.panelSchema {
+		if def.Category != lastCat {
+			lastCat = def.Category
+			sb.WriteString("\n")
+			catStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.AccentAlt)).
+				Bold(true)
+			sb.WriteString(catStyle.Render("▸ " + lastCat))
+			sb.WriteString("\n")
+		}
+
+		cur := m.panelValues[def.Key]
+		var prefix string
+		if i == m.panelCursor && !m.panelEdit {
+			prefix = cursorStyle.Render("▸")
+		} else {
+			prefix = "  "
+		}
+
+		// Format value display
+		var displayVal string
+		switch def.Type {
+		case SettingTypeToggle:
+			if cur == "true" {
+				displayVal = valueStyle.Render("● ON ")
+			} else {
+				displayVal = valueStyle.Render("○ OFF")
+			}
+		case SettingTypeSelect:
+			// Find label for current value
+			displayVal = cur
+			for _, opt := range def.Options {
+				if opt.Value == cur {
+					displayVal = valueStyle.Render(opt.Label)
+					break
+				}
+			}
+		case SettingTypeCombo:
+			// Show current value with dropdown hint
+			if cur == "" {
+				displayVal = descStyle.Render("(未设置)")
+			} else {
+				displayVal = valueStyle.Render(cur)
+			}
+			if len(def.Options) > 0 {
+				displayVal += descStyle.Render(" ▾")
+			}
+		default:
+			if cur == "" {
+				displayVal = descStyle.Render("(未设置)")
+			} else {
+				displayVal = valueStyle.Render(cur)
+			}
+		}
+
+		line := fmt.Sprintf("%s %s: %s", prefix, def.Label, displayVal)
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	// Editing overlay
+	if m.panelEdit && m.panelCursor < len(m.panelSchema) {
+		def := m.panelSchema[m.panelCursor]
+		sb.WriteString("\n")
+		editLabel := cursorStyle.Render("  ✎ " + def.Label + ": ")
+		sb.WriteString(editLabel)
+		sb.WriteString(m.panelEditTA.View())
+		sb.WriteString("\n")
+		sb.WriteString(descStyle.Render("  Enter 确认 · Esc 取消"))
+	} else if m.panelCombo && m.panelCursor < len(m.panelSchema) {
+		def := m.panelSchema[m.panelCursor]
+		sb.WriteString("\n")
+		comboTitle := cursorStyle.Render("  ▾ " + def.Label + ":")
+		sb.WriteString(comboTitle)
+		sb.WriteString("\n")
+		maxShow := 8
+		start := 0
+		if m.panelComboIdx >= maxShow {
+			start = m.panelComboIdx - maxShow + 1
+		}
+		end := start + maxShow
+		if end > len(def.Options) {
+			end = len(def.Options)
+		}
+		for j := start; j < end; j++ {
+			opt := def.Options[j]
+			label := opt.Label
+			// Truncate long model names to prevent box overflow
+			runes := []rune(label)
+			if len(runes) > 40 {
+				label = string(runes[:37]) + "..."
+			}
+			if j == m.panelComboIdx {
+				sb.WriteString(cursorStyle.Render("  ▸ " + label))
+			} else {
+				sb.WriteString("    " + label)
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString(descStyle.Render("  ↑↓ 选择 · Enter 确认 · 输入自定义 · Esc 取消"))
+	} else {
+		sb.WriteString("\n")
+		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+func (m *cliModel) viewAskUserPanel() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(1, 2)
+
+	questionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning)).
+		Bold(true)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted))
+
+	activeTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Success)).
+		Bold(true)
+
+	inactiveTabStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary))
+
+	checkStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Info))
+
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning)).
+		Bold(true)
+
+	submitStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Success)).
+		Bold(true)
+
+	var sb strings.Builder
+
+	// Tab bar (if multiple questions)
+	if len(m.panelItems) > 1 {
+		for i := range m.panelItems {
+			label := fmt.Sprintf(" %d ", i+1)
+			if i == m.panelTab {
+				sb.WriteString(activeTabStyle.Render(label))
+			} else {
+				sb.WriteString(inactiveTabStyle.Render(label))
+			}
+			if i < len(m.panelItems)-1 {
+				sb.WriteString(inactiveTabStyle.Render("│"))
+			}
+		}
+		sb.WriteString("\n\n")
+	}
+
+	// Current question
+	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) {
+		item := m.panelItems[m.panelTab]
+		sb.WriteString(questionStyle.Render("❓ " + item.Question))
+		sb.WriteString("\n")
+
+		hasOpts := len(item.Options) > 0
+
+		if hasOpts {
+			sb.WriteString("\n")
+			sel := m.panelOptSel[m.panelTab]
+			cursor := m.panelOptCursor[m.panelTab]
+			numOpts := len(item.Options)
+
+			for i, opt := range item.Options {
+				checked := sel != nil && sel[i]
+				var box string
+				if checked {
+					box = "☑"
+				} else {
+					box = "☐"
+				}
+				var line string
+				if i == cursor {
+					prefix := cursorStyle.Render("▸ ")
+					if checked {
+						line = checkStyle.Render(prefix + box + " " + opt)
+					} else {
+						line = prefix + box + " " + opt
+					}
+				} else {
+					if checked {
+						line = checkStyle.Render("  " + box + " " + opt)
+					} else {
+						line = "  " + box + " " + opt
+					}
+				}
+				sb.WriteString(line)
+				sb.WriteString("\n")
+			}
+
+			// Other input (single-line)
+			otherLabel := "Other: "
+			if cursor == numOpts {
+				sb.WriteString(cursorStyle.Render("▸ ") + otherLabel)
+			} else {
+				sb.WriteString("  " + otherLabel)
+			}
+			sb.WriteString(m.panelOtherTI.View())
+			sb.WriteString("\n")
+
+			// Submit button
+			submitLabel := "Submit →"
+			if cursor == numOpts+1 {
+				sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
+			} else {
+				sb.WriteString("  " + submitStyle.Render(submitLabel))
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("\n")
+			sb.WriteString(m.panelAnswerTA.View())
+			sb.WriteString("\n")
+		}
+	}
+
+	// Hints
+	sb.WriteString("\n")
+	hints := []string{}
+	if len(m.panelItems) > 1 {
+		hints = append(hints, "←→/Tab 切换问题")
+	}
+	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
+		item := m.panelItems[m.panelTab]
+		if len(item.Options) > 0 {
+			hints = append(hints, "Space/Enter 勾选", "↓ Other 输入", "Enter 提交")
+		} else {
+			hints = append(hints, "Ctrl+J 换行")
+		}
+	}
+	hints = append(hints, "Esc 取消")
+	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
+
+	return boxStyle.Render(sb.String())
+}
+
+// --- SettingsCapability implementation for CLIChannel ---
+
+// cliSettingsSchema returns the settings definitions for CLI channel.
+func cliSettingsSchema() []SettingDefinition {
+	return []SettingDefinition{
+		{
+			Key:         "llm_model",
+			Label:       "LLM 模型",
+			Description: "选择或输入 LLM 模型名称",
+			Type:        SettingTypeCombo,
+			Category:    "LLM",
+		},
+		{
+			Key:         "llm_base_url",
+			Label:       "LLM Base URL",
+			Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
+			Type:        SettingTypeText,
+			Category:    "LLM",
+		},
+		{
+			Key:         "context_mode",
+			Label:       "上下文模式",
+			Description: "控制上下文管理策略",
+			Type:        SettingTypeSelect,
+			Category:    "Agent",
+			Options: []SettingOption{
+				{Label: "自动（默认）", Value: "auto"},
+				{Label: "手动压缩", Value: "manual"},
+				{Label: "不压缩", Value: "none"},
+			},
+			DefaultValue: "auto",
+		},
+		{
+			Key:         "max_iterations",
+			Label:       "最大迭代次数",
+			Description: "单次对话最大工具调用迭代次数（默认 100）",
+			Type:        SettingTypeNumber,
+			Category:    "Agent",
+		},
+		{
+			Key:         "max_concurrency",
+			Label:       "最大并发数",
+			Description: "同时处理的最大请求数（默认 3）",
+			Type:        SettingTypeNumber,
+			Category:    "Agent",
+		},
+		{
+			Key:         "memory_window",
+			Label:       "记忆窗口",
+			Description: "LLM 上下文中保留的最大历史消息数（默认 100）",
+			Type:        SettingTypeNumber,
+			Category:    "Agent",
+		},
+		{
+			Key:         "max_context_tokens",
+			Label:       "最大上下文 Token",
+			Description: "上下文最大 token 数（默认 0，表示不限制）",
+			Type:        SettingTypeNumber,
+			Category:    "Agent",
+		},
+		{
+			Key:         "enable_auto_compress",
+			Label:       "自动压缩",
+			Description: "上下文过长时自动压缩（默认开启）",
+			Type:        SettingTypeSelect,
+			Category:    "Agent",
+			Options: []SettingOption{
+				{Label: "开启", Value: "true"},
+				{Label: "关闭", Value: "false"},
+			},
+			DefaultValue: "true",
+		},
+		{
+			Key:         "theme",
+			Label:       "主题",
+			Description: "CLI 界面主题",
+			Type:        SettingTypeSelect,
+			Category:    "外观",
+			Options: []SettingOption{
+				{Label: "默认（深色）", Value: "dark"},
+				{Label: "浅色", Value: "light"},
+			},
+			DefaultValue: "dark",
+		},
+	}
+}
+
+// SettingsSchema returns the settings definitions for CLI channel.
+func (c *CLIChannel) SettingsSchema() []SettingDefinition {
+	return cliSettingsSchema()
+}
+
+// HandleSettingSubmit processes a setting value submission from the CLI channel.
+func (c *CLIChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (map[string]string, error) {
+	// CLI uses interactive panel, this is for programmatic access
+	return nil, fmt.Errorf("CLI uses interactive settings panel")
+}
+
+// SetSettingsService injects the settings service for the interactive panel.
+func (c *CLIChannel) SetSettingsService(svc SettingsService) {
+	c.settingsSvc = svc
+}
+
+// SetModelLister injects the model lister for combo settings.
+func (c *CLIChannel) SetModelLister(lister ModelLister) {
+	c.modelLister = lister
+}
+
+// UpdateConfig updates the live LLM configuration (model, base_url).
+// These overrides are picked up by the Agent on next message.
+func (c *CLIChannel) UpdateConfig(model, baseURL string) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	if model != "" {
+		c.modelOverride = model
+	}
+	if baseURL != "" {
+		c.baseURLOverride = baseURL
+	}
+}
+
+// GetModelOverride returns the user-overridden model name (empty if not set).
+func (c *CLIChannel) GetModelOverride() string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.modelOverride
+}
+
+// GetBaseURLOverride returns the user-overridden base URL (empty if not set).
+func (c *CLIChannel) GetBaseURLOverride() string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.baseURLOverride
+}

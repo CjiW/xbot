@@ -31,6 +31,7 @@ type StructuredProgress struct {
 	CompletedTools  []ToolProgress
 	ThinkingContent string
 	TokenUsage      *TokenUsageSnapshot
+	Todos           []TodoProgressItem
 }
 
 // ProgressPhase Agent 运行阶段。
@@ -62,6 +63,13 @@ const (
 	ToolDone    ToolStatus = "done"
 	ToolError   ToolStatus = "error"
 )
+
+// TodoProgressItem represents a single TODO item for progress display.
+type TodoProgressItem struct {
+	ID   int
+	Text string
+	Done bool
+}
 
 // TokenUsageSnapshot Token 用量快照。
 type TokenUsageSnapshot struct {

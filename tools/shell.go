@@ -389,6 +389,18 @@ func checkDangerousCommand(cmd string) (bool, string) {
 		}
 	}
 
+	// 检查裸 sudo（无 -S / -n / NOPASSWD）：在 none sandbox 下会打开 /dev/tty 导致终端卡死
+	// 允许的写法: echo pass | sudo -S ..., sudo -n ..., sudo --non-interactive, NOPASSWD 配置
+	// NOTE: Go regexp (RE2) 不支持 lookbehind/lookahead，用单词边界 + 代码逻辑代替
+	sudoRe := regexp.MustCompile(`\bsudo\b`)
+	if sudoRe.MatchString(cmd) {
+		hasSafeFlag := regexp.MustCompile(`\bsudo\s+(-[Sn]\b|--non-interactive\b)`).MatchString(cmd)
+		hasPipeOrNopasswd := strings.Contains(cmd, "|") || strings.Contains(cmd, "NOPASSWD")
+		if !hasSafeFlag && !hasPipeOrNopasswd {
+			return true, "bare sudo without -S/-n flag or password pipe will block the terminal (use \"echo password | sudo -S\" or configure NOPASSWD in /etc/sudoers)"
+		}
+	}
+
 	// 检查高危告警模式（仅日志记录，不拦截）
 	for _, wp := range warningPatterns {
 		if wp.MatchString(cmd) {

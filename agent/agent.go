@@ -318,6 +318,11 @@ func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
 	}
 }
 
+// GetSettingsService returns the agent's SettingsService (for CLI panel injection).
+func (a *Agent) GetSettingsService() *SettingsService {
+	return a.settingsSvc
+}
+
 func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {
 		return ""
@@ -354,6 +359,7 @@ type Config struct {
 	MemoryWindow   int           // 上下文窗口大小（保留的历史消息数）
 	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
 	SkillsDir      string        // Skills 目录
+	AgentsDir      string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
 	WorkDir        string        // 工作目录（所有文件相对此目录）
 	PromptFile     string        // 系统提示词模板文件路径（空则使用内置默认值）
 	SingleUser     bool          // 单用户模式：所有消息的 SenderID 归一化为 "default"
@@ -393,6 +399,8 @@ type Config struct {
 	// 压缩后清理旧消息
 	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
 
+	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
+	OffloadDir string
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
@@ -403,7 +411,10 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox)
 
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
+	agentsDir := cfg.AgentsDir
+	if agentsDir == "" {
+		agentsDir = filepath.Join(cfg.WorkDir, ".xbot", "agents")
+	}
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}
@@ -490,6 +501,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		for _, tool := range tools.LettaMemoryTools() {
 			registry.RegisterCore(tool)
 		}
+		registry.RegisterCore(&tools.SearchToolsTool{})
 		log.Info("Letta memory tools registered (core)")
 	}
 
@@ -498,7 +510,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	registerBuiltinCommands(a.commands)
 
 	// 初始化消息构建管道
-	a.initPipelines()
+	a.initPipelines(memoryProvider)
 
 	// 初始化 Cron 服务和调度器
 	cronSvc := sqlite.NewCronService(multiSession.DB())
@@ -529,7 +541,10 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 
 	// 初始化 OffloadStore（Phase 2: Layer 1 Offload）
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-	offloadDir := filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	offloadDir := cfg.OffloadDir
+	if offloadDir == "" {
+		offloadDir = filepath.Join(cfg.WorkDir, ".xbot", "offload_store")
+	}
 	a.offloadStore = NewOffloadStore(OffloadConfig{
 		StoreDir:        offloadDir,
 		MaxResultTokens: 2000,
@@ -716,6 +731,10 @@ func (a *Agent) SetContextMode(mode string) error {
 	a.SetContextManager(NewContextManager(cfg))
 	return nil
 }
+
+func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
+func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
+func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
 
 // GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
 func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {
@@ -1309,7 +1328,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return a.handleCardResponse(ctx, msg, tenantSession)
 	}
 
-	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata)
+	preReplyNotify := bus.ShouldPreReplyNotify(msg.Metadata) && msg.Channel != "cli"
 	replyPolicy := bus.InboundReplyPolicy(msg.Metadata)
 
 	// 立即发送随机确认回复
@@ -1323,6 +1342,27 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, err
 	}
 
+	// AskUser 回答不是新的 user message，而是替换 AskUser 的 tool result。
+	// 移除 Assemble 追加的 user message，用回答替换最后一个 tool message 的内容。
+	askUserAnswered := msg.Metadata != nil && msg.Metadata["ask_user_answered"] == "true"
+	if askUserAnswered {
+		// Remove last user message appended by Assemble
+		if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+			messages = messages[:len(messages)-1]
+		}
+		// Replace last tool message content with user's answer
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "tool" {
+				messages[i].Content = msg.Content
+				break
+			}
+		}
+		// Also update the stale tool result in session so future buildPrompt reads correct content
+		if err := tenantSession.ReplaceLastToolMessage(msg.Content); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to replace AskUser tool result in session")
+		}
+	}
+
 	// 运行 Agent 循环（统一 Run）
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	out := Run(ctx, cfg)
@@ -1330,7 +1370,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		// When cancelled, save user message + partial engine progress to session
 		// so the next turn has context of what happened before cancellation.
 		if errors.Is(out.Error, context.Canceled) {
-			if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+			if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 				userMsg := llm.NewUserMessage(msg.Content)
 				if !msg.Time.IsZero() {
 					userMsg.Timestamp = msg.Time
@@ -1352,10 +1392,10 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	finalContent := out.Content
 	waitingUser := out.WaitingUser
 
-	// 如果工具正在等待用户响应，不生成回复消息
+	// 如果工具正在等待用户响应，发送 WaitingUser outbound 让渠道打开交互面板
 	if waitingUser {
-		log.Ctx(ctx).Info("Tool is waiting for user response, skipping reply")
-		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		log.Ctx(ctx).Info("Tool is waiting for user response, sending WaitingUser outbound")
+		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 			userMsg := llm.NewUserMessage(msg.Content)
 			if !msg.Time.IsZero() {
 				userMsg.Timestamp = msg.Time
@@ -1372,7 +1412,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 				log.Ctx(ctx).WithError(err).Warn("Failed to save engine message during waiting")
 			}
 		}
-		return nil, nil
+		// Send the WaitingUser outbound so CLI can open the ask-user panel.
+		// Content may be empty (no assistant reply yet), which is fine — the
+		// panel reads the question from Metadata["ask_question"].
+		waitOut := &bus.OutboundMessage{
+			Channel:     msg.Channel,
+			ChatID:      msg.ChatID,
+			Content:     finalContent,
+			WaitingUser: true,
+			Metadata:    out.Metadata,
+		}
+		return waitOut, nil
 	}
 
 	// 如果最终内容为空且不是 Optional reply 策略，向用户发送提示
@@ -1385,7 +1435,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 			userMsg := llm.NewUserMessage(msg.Content)
 			if !msg.Time.IsZero() {
 				userMsg.Timestamp = msg.Time
@@ -1403,7 +1453,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 保存会话
-	if msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true" {
+	if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
 		userMsg := llm.NewUserMessage(msg.Content)
 		if !msg.Time.IsZero() {
 			userMsg.Timestamp = msg.Time

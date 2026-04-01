@@ -995,7 +995,7 @@ func TestCLIModelRenderProgressBlockWithTools(t *testing.T) {
 			{Name: "read_file", Label: "Reading config.go", Status: "running", Elapsed: 1200},
 		},
 		CompletedTools: []CLIToolProgress{
-			{Name: "grep", Label: "Searching imports", Status: "done", Elapsed: 300},
+			{Name: "grep", Label: "Searching imports", Status: "done", Elapsed: 300, Iteration: 1},
 		},
 	}
 
@@ -1063,8 +1063,9 @@ func TestCLIModelRenderProgressBlockSubAgents(t *testing.T) {
 	if !strings.Contains(result, "Reviewing code") {
 		t.Errorf("renderProgressBlock should show subagent desc, got: %q", result)
 	}
-	if !strings.Contains(result, "test-runner") {
-		t.Errorf("renderProgressBlock should show completed subagent, got: %q", result)
+	// Done sub-agents should be hidden from progress panel
+	if strings.Contains(result, "test-runner") {
+		t.Errorf("renderProgressBlock should not show completed subagent, got: %q", result)
 	}
 }
 
@@ -1088,8 +1089,9 @@ func TestCLIModelRenderProgressBlockSubAgentChildren(t *testing.T) {
 	}
 
 	result := model.renderProgressBlock()
-	if !strings.Contains(result, "child") {
-		t.Errorf("renderProgressBlock should show child subagent, got: %q", result)
+	// Done child sub-agents should be hidden from progress panel
+	if strings.Contains(result, "child") {
+		t.Errorf("renderProgressBlock should not show completed child subagent, got: %q", result)
 	}
 }
 

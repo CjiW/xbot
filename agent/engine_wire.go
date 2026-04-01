@@ -18,6 +18,24 @@ import (
 	"xbot/tools"
 )
 
+// todoManagerAdapter wraps tools.TodoManager to implement TodoManagerProvider.
+type todoManagerAdapter struct {
+	mgr *tools.TodoManager
+}
+
+func (a *todoManagerAdapter) GetTodoSummary(sessionKey string) string {
+	return a.mgr.GetTodoSummary(sessionKey)
+}
+
+func (a *todoManagerAdapter) GetTodoItems(sessionKey string) []TodoProgressItem {
+	items := a.mgr.GetTodos(sessionKey)
+	result := make([]TodoProgressItem, len(items))
+	for i, item := range items {
+		result[i] = TodoProgressItem{ID: item.ID, Text: item.Text, Done: item.Done}
+	}
+	return result
+}
+
 // applyUserMaxContext 如果用户在 Settings 中设置了 max_context，
 // 创建一个新的 ContextManagerConfig 副本并覆盖 MaxContextTokens，
 // 避免污染 Agent 级别的原始配置（含 sync.RWMutex）。
@@ -179,18 +197,20 @@ func (a *Agent) buildMainRunConfig(
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Iteration: t.Iteration,
 							})
 						}
 						for _, t := range s.CompletedTools {
 							payload.CompletedTools = append(payload.CompletedTools, channelpkg.CLIToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Iteration: t.Iteration,
 							})
 						}
 						// Parse sub-agent tree from progress lines
@@ -207,6 +227,17 @@ func (a *Agent) buildMainRunConfig(
 									}
 								}
 								payload.SubAgents = cliSubAgents
+							}
+						}
+						// Copy todo items for CLI display
+						if len(s.Todos) > 0 {
+							payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								payload.Todos[i] = channelpkg.CLITodoItem{
+									ID:   td.ID,
+									Text: td.Text,
+									Done: td.Done,
+								}
 							}
 						}
 						cc.SendProgress(chatID, payload)
@@ -291,7 +322,7 @@ func (a *Agent) buildMainRunConfig(
 
 	// TodoManager — TODO 状态查询
 	if a.todoManager != nil {
-		cfg.TodoManager = a.todoManager
+		cfg.TodoManager = &todoManagerAdapter{mgr: a.todoManager}
 	}
 
 	// InteractiveCallbacks — interactive SubAgent 支持

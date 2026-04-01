@@ -558,7 +558,7 @@ func TestUserMessageMiddleware(t *testing.T) {
 			UserContent: "hello world",
 			SenderName:  "Bob",
 		}
-		mw := NewUserMessageMiddleware()
+		mw := NewUserMessageMiddleware("flat")
 		_ = mw.Process(mc)
 
 		if !strings.Contains(mc.UserMessage, "Bob") {
@@ -567,7 +567,7 @@ func TestUserMessageMiddleware(t *testing.T) {
 		if !strings.Contains(mc.UserMessage, "hello world") {
 			t.Error("user message should contain original content")
 		}
-		if !strings.Contains(mc.UserMessage, "search_tools") {
+		if !strings.Contains(mc.UserMessage, "Skill") {
 			t.Error("user message should contain system guidance")
 		}
 	})
@@ -576,7 +576,7 @@ func TestUserMessageMiddleware(t *testing.T) {
 		mc := &MessageContext{
 			UserContent: "hello world",
 		}
-		mw := NewUserMessageMiddleware()
+		mw := NewUserMessageMiddleware("flat")
 		_ = mw.Process(mc)
 
 		if strings.Contains(mc.UserMessage, "[]") {
@@ -615,12 +615,12 @@ func TestPipeline_FullIntegration(t *testing.T) {
 	loader := NewPromptLoader("") // uses default template
 
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
-		NewUserMessageMiddleware(),
+		NewUserMessageMiddleware("flat"),
 	)
 
 	mc := &MessageContext{
@@ -686,7 +686,7 @@ func TestPipeline_FullIntegration(t *testing.T) {
 	if !strings.Contains(userMsg, "hello") {
 		t.Error("user message should contain original content")
 	}
-	if !strings.Contains(userMsg, "search_tools") {
+	if !strings.Contains(userMsg, "Skill") {
 		t.Error("user message should contain system guidance")
 	}
 }
@@ -767,9 +767,9 @@ func TestNewCronMessageContext(t *testing.T) {
 func TestPipeline_DynamicUseRemove(t *testing.T) {
 	loader := NewPromptLoader("")
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
-		NewUserMessageMiddleware(),
+		NewUserMessageMiddleware("flat"),
 	)
 
 	// Add a custom middleware
@@ -818,12 +818,12 @@ func TestFullPipeline_AllMiddlewares(t *testing.T) {
 	mem := &mockMemoryProvider{recallResult: "## Persona\nI am xbot"}
 
 	pipeline := NewMessagePipeline(
-		NewSystemPromptMiddleware(loader),
+		NewSystemPromptMiddleware(loader, "flat"),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
-		NewUserMessageMiddleware(),
+		NewUserMessageMiddleware("flat"),
 	)
 
 	mc := NewMessageContext(context.Background(), "hello", []llm.ChatMessage{llm.NewUserMessage("prev")}, "feishu", "/work", "TestUser", "", "")

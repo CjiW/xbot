@@ -527,16 +527,17 @@ type cliModel struct {
 	panelCombo    bool           // settings panel: combo dropdown open
 	panelComboIdx int            // settings panel: combo selected option index
 	// --- AskUser panel ---
-	panelItems    []askItem                       // askuser panel: question items
-	panelTab      int                             // askuser panel: current tab (question index)
-	panelOptSel   map[int]map[int]bool            // askuser panel: selected option indices per question
-	panelFreeMode map[int]bool                    // askuser panel: in free-input mode per question
-	panelAnswerTA textarea.Model                  // askuser panel: shared free-input editor
-	panelSchema   []SettingDefinition             // settings panel: schema copy
-	panelValues   map[string]string               // settings panel: current values
-	panelOnSubmit func(values map[string]string)  // callback on settings submit
-	panelOnAnswer func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
-	panelOnCancel func()                          // callback on cancel
+	panelItems     []askItem                       // askuser panel: question items
+	panelTab       int                             // askuser panel: current tab (question index)
+	panelOptSel    map[int]map[int]bool            // askuser panel: selected option indices per question
+	panelOptCursor map[int]int                     // askuser panel: highlighted option index per question
+	panelFreeMode  map[int]bool                    // askuser panel: in free-input mode per question
+	panelAnswerTA  textarea.Model                  // askuser panel: shared free-input editor
+	panelSchema    []SettingDefinition             // settings panel: schema copy
+	panelValues    map[string]string               // settings panel: current values
+	panelOnSubmit  func(values map[string]string)  // callback on settings submit
+	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
+	panelOnCancel  func()                          // callback on cancel
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -2376,6 +2377,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelItems = items
 	m.panelTab = 0
 	m.panelOptSel = make(map[int]map[int]bool)
+	m.panelOptCursor = make(map[int]int)
 	m.panelFreeMode = make(map[int]bool)
 	// For items with no options, start in free mode
 	for i, item := range items {
@@ -2384,13 +2386,22 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 		}
 	}
 	ta := textarea.New()
-	ta.Placeholder = "输入回答..."
-	ta.Prompt = "▸ "
+	ta.Placeholder = "Type your answer..."
+	ta.Prompt = "  "
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#64b5f6"))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.Text = lipgloss.NewStyle()
 	ta.CharLimit = 0
-	ta.SetWidth(60)
+	ta.SetWidth(50)
 	ta.SetHeight(3)
 	ta.Focus()
 	m.panelAnswerTA = ta
@@ -2409,6 +2420,7 @@ func (m *cliModel) closePanel() {
 	m.panelItems = nil
 	m.panelTab = 0
 	m.panelOptSel = nil
+	m.panelOptCursor = nil
 	m.panelFreeMode = nil
 }
 
@@ -2611,10 +2623,10 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	item := &m.panelItems[m.panelTab]
 	isFree := m.panelFreeMode[m.panelTab]
 	hasOpts := len(item.Options) > 0
+	numOpts := len(item.Options)
 
 	switch msg.Type {
 	case tea.KeyCtrlS:
-		// Submit all answers
 		answers := m.collectAskAnswers()
 		if m.panelOnAnswer != nil {
 			m.panelOnAnswer(answers)
@@ -2628,16 +2640,14 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		m.closePanel()
 		return true, m, nil
 	case tea.KeyRight, tea.KeyTab:
-		// Next tab
-		if m.panelTab < len(m.panelItems)-1 {
+		if len(m.panelItems) > 1 && m.panelTab < len(m.panelItems)-1 {
 			m.saveCurrentFreeInput()
 			m.panelTab++
 			m.restoreFreeInput()
 		}
 		return true, m, nil
 	case tea.KeyShiftTab, tea.KeyLeft:
-		// Prev tab
-		if m.panelTab > 0 {
+		if len(m.panelItems) > 1 && m.panelTab > 0 {
 			m.saveCurrentFreeInput()
 			m.panelTab--
 			m.restoreFreeInput()
@@ -2645,8 +2655,8 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		return true, m, nil
 	case tea.KeyEnter:
 		if hasOpts && !isFree {
-			// In selection mode, Enter submits all (or could toggle, but Ctrl+S is submit)
-			// Enter in selection mode = submit all
+			// In checkbox mode: toggle the cursor option, then submit
+			m.toggleOptAtCursor()
 			answers := m.collectAskAnswers()
 			if m.panelOnAnswer != nil {
 				m.panelOnAnswer(answers)
@@ -2654,50 +2664,46 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			m.closePanel()
 			return true, m, nil
 		}
-		// Free input mode: Ctrl+J for newline, plain Enter = submit all
-		if isFree {
-			answers := m.collectAskAnswers()
-			if m.panelOnAnswer != nil {
-				m.panelOnAnswer(answers)
-			}
-			m.closePanel()
-			return true, m, nil
+		// Free input mode: submit all
+		answers := m.collectAskAnswers()
+		if m.panelOnAnswer != nil {
+			m.panelOnAnswer(answers)
 		}
-	case tea.KeyUp:
-		if hasOpts && !isFree && m.panelOptSel != nil {
-			sel := m.panelOptSel[m.panelTab]
-			// Find the highest selected or last option index to move cursor
-			maxIdx := len(item.Options) - 1
-			// Move selection highlight up
-			// For multi-select, we just track the last-interacted option
-			if sel != nil {
-				for i := maxIdx; i >= 0; i-- {
-					if sel[i] {
-						if i > 0 {
-							delete(sel, i)
-							sel[i-1] = true
-						}
-						break
-					}
-				}
-			}
-		}
+		m.closePanel()
 		return true, m, nil
-	case tea.KeyDown:
-		if hasOpts && !isFree && m.panelOptSel != nil {
-			sel := m.panelOptSel[m.panelTab]
-			maxIdx := len(item.Options) - 1
-			if sel != nil {
-				for i := 0; i <= maxIdx; i++ {
-					if sel[i] {
-						if i < maxIdx {
-							delete(sel, i)
-							sel[i+1] = true
-						}
-						break
-					}
-				}
+	case tea.KeyUp:
+		if hasOpts && !isFree {
+			cursor := m.panelOptCursor[m.panelTab]
+			if cursor > 0 {
+				m.panelOptCursor[m.panelTab] = cursor - 1
 			}
+			return true, m, nil
+		}
+	case tea.KeyDown:
+		if hasOpts && !isFree {
+			cursor := m.panelOptCursor[m.panelTab]
+			if cursor < numOpts-1 {
+				m.panelOptCursor[m.panelTab] = cursor + 1
+			}
+			return true, m, nil
+		}
+	case tea.KeySpace:
+		if hasOpts && !isFree {
+			// Toggle checkbox at cursor position
+			m.toggleOptAtCursor()
+			// Advance cursor down
+			cursor := m.panelOptCursor[m.panelTab]
+			if cursor < numOpts-1 {
+				m.panelOptCursor[m.panelTab] = cursor + 1
+			}
+			return true, m, nil
+		}
+		// Free mode: fall through to textarea
+		if isFree {
+			m.autoExpandAskTA()
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
 		}
 		return true, m, nil
 	case tea.KeyRunes:
@@ -2707,7 +2713,6 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			m.restoreFreeInput()
 		}
 		if m.panelFreeMode[m.panelTab] {
-			// Auto-expand textarea
 			m.autoExpandAskTA()
 			var cmd tea.Cmd
 			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
@@ -2729,6 +2734,16 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 	}
 	return true, m, nil
+}
+
+// toggleOptAtCursor toggles the checkbox at the current cursor position.
+func (m *cliModel) toggleOptAtCursor() {
+	tab := m.panelTab
+	if m.panelOptSel[tab] == nil {
+		m.panelOptSel[tab] = make(map[int]bool)
+	}
+	cursor := m.panelOptCursor[tab]
+	m.panelOptSel[tab][cursor] = !m.panelOptSel[tab][cursor]
 }
 
 // collectAskAnswers gathers answers from all questions.
@@ -2960,6 +2975,10 @@ func (m *cliModel) viewAskUserPanel() string {
 	checkStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#64b5f6"))
 
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffb74d")).
+		Bold(true)
+
 	var sb strings.Builder
 
 	// Tab bar (if multiple questions)
@@ -2988,16 +3007,35 @@ func (m *cliModel) viewAskUserPanel() string {
 		hasOpts := len(item.Options) > 0
 
 		if hasOpts && !isFree {
-			// Checkbox mode (multi-select)
+			// Checkbox mode with cursor highlight
 			sb.WriteString("\n")
 			sel := m.panelOptSel[m.panelTab]
+			cursor := m.panelOptCursor[m.panelTab]
 			for i, opt := range item.Options {
 				checked := sel != nil && sel[i]
+				var box string
 				if checked {
-					sb.WriteString(checkStyle.Render("  ☑ " + opt))
+					box = "☑"
 				} else {
-					sb.WriteString("  ☐ " + opt)
+					box = "☐"
 				}
+				var prefix, line string
+				if i == cursor {
+					prefix = cursorStyle.Render("▸ ")
+					if checked {
+						line = checkStyle.Render(prefix + box + " " + opt)
+					} else {
+						line = prefix + box + " " + opt
+					}
+				} else {
+					prefix = "  "
+					if checked {
+						line = checkStyle.Render(prefix + box + " " + opt)
+					} else {
+						line = prefix + box + " " + opt
+					}
+				}
+				sb.WriteString(line)
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
@@ -3024,7 +3062,7 @@ func (m *cliModel) viewAskUserPanel() string {
 			if m.panelFreeMode[m.panelTab] {
 				hints = append(hints, "↑↓ 返回选择")
 			} else {
-				hints = append(hints, "空格 切换勾选", "输入 自由回答")
+				hints = append(hints, "↑↓ 移动", "Space 勾选", "Enter 提交", "输入 自由回答")
 			}
 		}
 	}

@@ -143,7 +143,7 @@ Current Time: %s
 
 // initPipelines 初始化 Agent 的消息构建管道。
 // 在 Agent 创建时调用一次，后续通过 pipeline.Use/Remove 动态调整。
-func (a *Agent) initPipelines() {
+func (a *Agent) initPipelines(memoryProvider string) {
 	promptWorkDir := a.workDir
 	if a.sandboxMode == "docker" {
 		promptWorkDir = "/workspace"
@@ -157,7 +157,7 @@ func (a *Agent) initPipelines() {
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
-		NewUserMessageMiddleware(),
+		NewUserMessageMiddleware(memoryProvider),
 	)
 
 	// Cron pipeline：用于定时任务（简洁，无记忆和技能）

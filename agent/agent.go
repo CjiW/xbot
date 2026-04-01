@@ -496,6 +496,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		for _, tool := range tools.LettaMemoryTools() {
 			registry.RegisterCore(tool)
 		}
+		registry.RegisterCore(&tools.SearchToolsTool{})
 		log.Info("Letta memory tools registered (core)")
 	}
 
@@ -504,7 +505,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	registerBuiltinCommands(a.commands)
 
 	// 初始化消息构建管道
-	a.initPipelines()
+	a.initPipelines(memoryProvider)
 
 	// 初始化 Cron 服务和调度器
 	cronSvc := sqlite.NewCronService(multiSession.DB())

@@ -1868,6 +1868,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	return sb.String()
 }
 
+// setViewportContent sets viewport content while preserving scroll position.
+// If the user was at the bottom before the update, keep them at the bottom.
+func (m *cliModel) setViewportContent(content string) {
+	atBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(content)
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
 func (m *cliModel) updateViewportContent() {
 	// 快速路径：流式消息 + 缓存有效
@@ -1881,11 +1891,7 @@ func (m *cliModel) updateViewportContent() {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
-		atBottom := m.viewport.AtBottom()
-		m.viewport.SetContent(sb.String())
-		if atBottom {
-			m.viewport.GotoBottom()
-		}
+		m.setViewportContent(sb.String())
 		return
 	}
 
@@ -1906,11 +1912,7 @@ func (m *cliModel) updateStreamingOnly() {
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
 
-	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(sb.String())
-	if atBottom {
-		m.viewport.GotoBottom()
-	}
+	m.setViewportContent(sb.String())
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）
@@ -1946,11 +1948,7 @@ func (m *cliModel) fullRebuild() {
 	}
 	sb.WriteString(m.renderProgressBlock())
 
-	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(sb.String())
-	if atBottom {
-		m.viewport.GotoBottom()
-	}
+	m.setViewportContent(sb.String())
 }
 
 // tickCmd 定时器命令

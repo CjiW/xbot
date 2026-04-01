@@ -9,8 +9,16 @@ import (
 
 // phase1Manager implements ContextManager using single-pass structured compaction.
 type phase1Manager struct {
-	config   *ContextManagerConfig
-	cooldown *CompressCooldown
+	config      *ContextManagerConfig
+	cooldown    *CompressCooldown
+	memTools    []llm.ToolDefinition
+	memToolExec func(ctx context.Context, tc llm.ToolCall) (content string, err error)
+}
+
+// SetMemoryTools injects memory tool definitions and executor for use during compaction.
+func (m *phase1Manager) SetMemoryTools(tools []llm.ToolDefinition, exec func(ctx context.Context, tc llm.ToolCall) (string, error)) {
+	m.memTools = tools
+	m.memToolExec = exec
 }
 
 func newPhase1Manager(cfg *ContextManagerConfig) *phase1Manager {
@@ -47,7 +55,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 		"max_tokens":      m.config.MaxContextTokens,
 	}).Info("Context compaction: starting")
 
-	result, err := compactMessages(ctx, messages, client, model, m.config.MaxContextTokens)
+	result, err := compactMessages(ctx, messages, client, model, m.config.MaxContextTokens, m.memTools, m.memToolExec)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +84,7 @@ func (m *phase1Manager) Compress(ctx context.Context, messages []llm.ChatMessage
 
 // ManualCompress handles /compress command.
 func (m *phase1Manager) ManualCompress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error) {
-	return compactMessages(ctx, messages, client, model, m.config.MaxContextTokens)
+	return compactMessages(ctx, messages, client, model, m.config.MaxContextTokens, m.memTools, m.memToolExec)
 }
 
 func (m *phase1Manager) ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats {

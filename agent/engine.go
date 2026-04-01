@@ -149,6 +149,12 @@ type RunConfig struct {
 	// ContextEditor Context Editing 编辑器（nil = 不启用）
 	ContextEditor *ContextEditor
 
+	// MemoryToolDefs 记忆工具定义列表（nil = 压缩时不使用记忆工具）
+	MemoryToolDefs []llm.ToolDefinition
+
+	// MemoryToolExec 记忆工具执行函数（nil = 压缩时不使用记忆工具）
+	MemoryToolExec func(ctx context.Context, tc llm.ToolCall) (content string, err error)
+
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
@@ -426,11 +432,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		if needCompress {
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩...", totalTokens))
+				progressLines = append(progressLines, fmt.Sprintf("> 📦 上下文过大 (%d tokens)，正在压缩 + 记忆整理...", totalTokens))
+				notifyProgress("")
+			}
+
+			// Update structured progress to indicate compression
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseCompressing
 				notifyProgress("")
 			}
 
 			log.Ctx(ctx).Info("Auto context compaction triggered")
+
+			// Inject memory tools for compaction (allows the LLM to archive
+			// important context before it gets compacted away).
+			if cfg.MemoryToolDefs != nil && cfg.MemoryToolExec != nil {
+				cm.SetMemoryTools(cfg.MemoryToolDefs, cfg.MemoryToolExec)
+			}
 
 			result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
 			if compressErr != nil {
@@ -443,7 +461,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 			if autoNotify {
-				progressLines = append(progressLines, fmt.Sprintf("> ✅ 上下文压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				progressLines = append(progressLines, fmt.Sprintf("> ✅ 压缩完成: %d → %d tokens", oldTokenCount, newTokenCount))
+				notifyProgress("")
+			}
+
+			// Restore phase to thinking after compression
+			if structuredProgress != nil {
+				structuredProgress.Phase = PhaseThinking
 				notifyProgress("")
 			}
 			log.Ctx(ctx).WithFields(log.Fields{

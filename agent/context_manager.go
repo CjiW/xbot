@@ -39,6 +39,7 @@ type ContextManager interface {
 	ManualCompress(ctx context.Context, messages []llm.ChatMessage, client llm.LLM, model string) (*CompressResult, error)
 	ContextInfo(messages []llm.ChatMessage, model string, toolTokens int) *ContextStats
 	SessionHook() SessionCompressHook
+	SetMemoryTools(tools []llm.ToolDefinition, exec func(ctx context.Context, tc llm.ToolCall) (string, error))
 }
 
 // ContextStats holds token usage statistics for /context info.
@@ -132,6 +133,10 @@ func (m *noopManager) ContextInfo(messages []llm.ChatMessage, model string, tool
 	stats := m.phase1.ContextInfo(messages, model, toolTokens)
 	stats.Mode = ContextModeNone
 	return stats
+}
+
+func (m *noopManager) SetMemoryTools(tools []llm.ToolDefinition, exec func(ctx context.Context, tc llm.ToolCall) (string, error)) {
+	m.phase1.SetMemoryTools(tools, exec)
 }
 
 // NewContextManager creates a ContextManager based on the effective mode.

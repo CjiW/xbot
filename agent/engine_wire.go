@@ -303,6 +303,14 @@ func (a *Agent) buildMainRunConfig(
 		},
 	}
 
+	// Memory tools for compaction — allows the compaction LLM to archive
+	// important context into core/archival memory before it gets compacted away.
+	// Uses the real tool registry instead of hand-written execution logic.
+	if defs, exec := a.buildMemoryToolSetup(channel, chatID); defs != nil {
+		cfg.MemoryToolDefs = defs
+		cfg.MemoryToolExec = exec
+	}
+
 	return cfg
 }
 
@@ -735,6 +743,53 @@ func (a *Agent) buildOAuthHandler(channel, chatID, senderID, sessionKey string) 
 		log.Ctx(ctx).WithError(oauthErr).Error("Failed to execute oauth_authorize tool")
 		return "OAuth authorization required. Please configure OAUTH_ENABLE=true and OAUTH_BASE_URL in your environment.", true
 	}
+}
+
+// buildMemoryToolSetup returns tool definitions and executor for memory tools during compaction.
+// Uses the real tool registry instead of hand-written execution logic,
+// ensuring tool behavior stays in sync with the main agent loop.
+// Returns (nil, nil) if memory tools are not available.
+func (a *Agent) buildMemoryToolSetup(channel, chatID string) ([]llm.ToolDefinition, func(ctx context.Context, tc llm.ToolCall) (string, error)) {
+	extras := a.buildToolContextExtras(channel, chatID)
+	if extras == nil || extras.CoreMemory == nil {
+		return nil, nil
+	}
+
+	memToolNames := []string{
+		"core_memory_append", "core_memory_replace", "rethink",
+		"archival_memory_insert", "archival_memory_search",
+	}
+	var defs []llm.ToolDefinition
+	for _, name := range memToolNames {
+		if t, ok := a.tools.Get(name); ok {
+			defs = append(defs, t)
+		}
+	}
+	if len(defs) == 0 {
+		return nil, nil
+	}
+
+	// Minimal RunConfig for building ToolContext — memory tools only need ToolContextExtras.
+	memCfg := &RunConfig{
+		Channel:           channel,
+		ChatID:            chatID,
+		ToolContextExtras: extras,
+	}
+
+	exec := func(ctx context.Context, tc llm.ToolCall) (string, error) {
+		tool, ok := a.tools.Get(tc.Name)
+		if !ok {
+			return "Unknown tool: " + tc.Name, nil
+		}
+		toolCtx := buildToolContext(ctx, memCfg)
+		result, err := tool.Execute(toolCtx, tc.Arguments)
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err), nil
+		}
+		return result.Summary, nil
+	}
+
+	return defs, exec
 }
 
 // buildToolContextExtras 构建 Letta 记忆相关的 ToolContext 扩展字段。

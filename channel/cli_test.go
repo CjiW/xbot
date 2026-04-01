@@ -995,7 +995,7 @@ func TestCLIModelRenderProgressBlockWithTools(t *testing.T) {
 			{Name: "read_file", Label: "Reading config.go", Status: "running", Elapsed: 1200},
 		},
 		CompletedTools: []CLIToolProgress{
-			{Name: "grep", Label: "Searching imports", Status: "done", Elapsed: 300},
+			{Name: "grep", Label: "Searching imports", Status: "done", Elapsed: 300, Iteration: 1},
 		},
 	}
 

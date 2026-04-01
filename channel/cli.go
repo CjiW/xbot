@@ -147,10 +147,11 @@ type CLITodoItem struct {
 
 // CLIToolProgress 单个工具的执行进度。
 type CLIToolProgress struct {
-	Name    string
-	Label   string
-	Status  string
-	Elapsed int64 // milliseconds
+	Name      string
+	Label     string
+	Status    string
+	Elapsed   int64 // milliseconds
+	Iteration int   // 所属迭代 ID
 }
 
 // CLISubAgent 子 Agent 的结构化进度状态。
@@ -814,11 +815,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Detect iteration change: snapshot previous iteration into history
 			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
-				if len(prev.CompletedTools) > 0 || prev.Thinking != "" {
+				// Filter CompletedTools by Iteration field for the previous iteration
+				var prevIterTools []CLIToolProgress
+				for _, t := range prev.CompletedTools {
+					if t.Iteration == m.lastSeenIteration {
+						prevIterTools = append(prevIterTools, t)
+					}
+				}
+				if len(prevIterTools) > 0 || prev.Thinking != "" {
 					snap := cliIterationSnapshot{
 						Iteration: m.lastSeenIteration,
 						Thinking:  prev.Thinking,
-						Tools:     append([]CLIToolProgress{}, prev.CompletedTools...),
+						Tools:     prevIterTools,
 					}
 					m.iterationHistory = append(m.iterationHistory, snap)
 				}
@@ -829,11 +837,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastSeenIteration = msg.payload.Iteration
 
 			// §2 工具可视化：快照 CompletedTools 到独立字段
+			// Only keep tools matching the current iteration to avoid cross-iteration leakage.
 			if len(msg.payload.CompletedTools) > 0 {
-				m.lastCompletedTools = append(
-					m.lastCompletedTools[:0],
-					msg.payload.CompletedTools...,
-				)
+				filtered := m.lastCompletedTools[:0]
+				for _, t := range msg.payload.CompletedTools {
+					if t.Iteration == msg.payload.Iteration {
+						filtered = append(filtered, t)
+					}
+				}
+				m.lastCompletedTools = filtered
 			}
 			if msg.payload.Phase == "done" {
 				m.progress = nil
@@ -1457,10 +1469,19 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 				}
 			}
 			if !alreadySnapped {
-				m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-					Iteration: m.lastSeenIteration,
-					Tools:     append([]CLIToolProgress{}, m.lastCompletedTools...),
-				})
+				// Filter tools by Iteration field to ensure correct attribution
+				var finalTools []CLIToolProgress
+				for _, t := range m.lastCompletedTools {
+					if t.Iteration == m.lastSeenIteration {
+						finalTools = append(finalTools, t)
+					}
+				}
+				if len(finalTools) > 0 {
+					m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Tools:     finalTools,
+					})
+				}
 			}
 		}
 
@@ -1579,8 +1600,11 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Completed tools in current iteration
+		// Completed tools in current iteration — filter by Iteration field
 		for _, tool := range m.progress.CompletedTools {
+			if tool.Iteration != m.progress.Iteration {
+				continue
+			}
 			label := tool.Label
 			if label == "" {
 				label = tool.Name

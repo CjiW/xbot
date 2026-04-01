@@ -236,10 +236,11 @@ func main() {
 											label = t.Name
 										}
 										toolList[i] = channel.CLIToolProgress{
-											Name:    t.Name,
-											Label:   label,
-											Status:  t.Status,
-											Elapsed: t.ElapsedMS,
+											Name:      t.Name,
+											Label:     label,
+											Status:    t.Status,
+											Elapsed:   t.ElapsedMS,
+											Iteration: snap.Iteration,
 										}
 									}
 									iters = append(iters, channel.HistoryIteration{

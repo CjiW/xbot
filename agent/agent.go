@@ -354,6 +354,7 @@ type Config struct {
 	MemoryWindow   int           // 上下文窗口大小（保留的历史消息数）
 	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
 	SkillsDir      string        // Skills 目录
+	AgentsDir      string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
 	WorkDir        string        // 工作目录（所有文件相对此目录）
 	PromptFile     string        // 系统提示词模板文件路径（空则使用内置默认值）
 	SingleUser     bool          // 单用户模式：所有消息的 SenderID 归一化为 "default"
@@ -405,7 +406,10 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	skillStore := NewSkillStore(cfg.WorkDir, globalSkillDirs, cfg.Sandbox)
 
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-	agentsDir := filepath.Join(cfg.WorkDir, ".xbot", "agents")
+	agentsDir := cfg.AgentsDir
+	if agentsDir == "" {
+		agentsDir = filepath.Join(cfg.WorkDir, ".xbot", "agents")
+	}
 	if err := tools.InitAgentRoles(agentsDir); err != nil {
 		log.WithError(err).Warn("Failed to load agent roles, SubAgent will have no predefined roles")
 	}

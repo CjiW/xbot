@@ -108,6 +108,7 @@ func newCLIApp() *cliApp {
 		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotHome, "skills"),
+		AgentsDir:            filepath.Join(xbotHome, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		SingleUser:           true,

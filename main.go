@@ -128,6 +128,7 @@ func main() {
 		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
+		AgentsDir:            filepath.Join(xbotDir, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		SingleUser:           cfg.Agent.SingleUser,

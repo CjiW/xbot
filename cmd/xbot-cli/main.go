@@ -434,6 +434,13 @@ func main() {
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
 
+	// Inject SettingsService for interactive /settings panel
+	if app.agentLoop != nil {
+		if ss := app.agentLoop.GetSettingsService(); ss != nil {
+			cliCh.SetSettingsService(ss)
+		}
+	}
+
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
 	app.agentLoop.SetDirectSend(disp.SendDirect)
 	app.agentLoop.SetChannelFinder(disp.GetChannel)

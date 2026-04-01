@@ -228,6 +228,18 @@ type CLIChannel struct {
 	// Lifecycle
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+
+	// Services (injected by Agent or main)
+	settingsSvc     SettingsService // interface for GetSettings/SetSetting
+	configMu        sync.RWMutex    // protects config override fields
+	modelOverride   string          // user-overridden model from /settings panel
+	baseURLOverride string          // user-overridden base URL from /settings panel
+}
+
+// SettingsService is the interface needed by CLIChannel for settings panel.
+type SettingsService interface {
+	GetSettings(channelName, senderID string) (map[string]string, error)
+	SetSetting(channelName, senderID, key, value string) error
 }
 
 // NewCLIChannel 创建 CLI 渠道
@@ -268,6 +280,7 @@ func (c *CLIChannel) Start() error {
 
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
+	c.model.channel = c
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID
@@ -496,6 +509,22 @@ type cliModel struct {
 
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
+
+	// --- §12 Interactive Panel ---
+	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
+	panelMode     string
+	panelCursor   int                            // settings panel: selected item index
+	panelEdit     bool                           // settings panel: editing current item
+	panelEditTA   textarea.Model                 // settings panel: inline editor
+	panelQuestion string                         // askuser panel: the question text
+	panelAnswer   string                         // askuser panel: user's answer buffer
+	panelSchema   []SettingDefinition            // settings panel: schema copy
+	panelValues   map[string]string              // settings panel: current values
+	panelOnSubmit func(values map[string]string) // callback on settings submit
+	panelOnAnswer func(answer string)            // callback on askuser answer
+	panelOnCancel func()                         // callback on cancel
+
+	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 
 // cliMessage 单条消息
@@ -634,6 +663,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevText := m.textarea.Value()
 
 	wasTyping := m.typing
+
+	// §12 Panel mode: intercept all key events when panel is active
+	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
+		handled, newModel, cmd := m.updatePanel(key)
+		if handled {
+			return newModel, cmd
+		}
+	}
 
 	// Home/End 跳顶部/底部
 	if key, ok := msg.(tea.KeyMsg); ok {
@@ -1029,6 +1066,17 @@ func (m *cliModel) View() string {
 	}
 
 	// 组装界面
+	// §12 Panel mode: render panel overlay instead of normal input
+	if m.panelMode != "" {
+		panel := m.viewPanel()
+		return fmt.Sprintf(
+			"%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			panel,
+		)
+	}
+
 	todoBar := m.renderTodoBar()
 	if todoBar != "" {
 		return fmt.Sprintf(
@@ -1334,6 +1382,49 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		m.cachedHistory = ""
 		m.updateViewportContent()
 
+	case "/settings":
+		// Open interactive settings panel locally
+		if m.channel != nil {
+			schema := m.channel.SettingsSchema()
+			if len(schema) == 0 {
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "当前渠道没有可配置的设置项。",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			} else {
+				// Get current values from SettingsService
+				currentValues := make(map[string]string)
+				if m.channel.settingsSvc != nil {
+					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID)
+					if err == nil {
+						currentValues = vals
+					}
+				}
+				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
+					// Persist to SettingsService
+					if m.channel.settingsSvc != nil {
+						for k, v := range values {
+							_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, k, v)
+						}
+					}
+					// Also update live config (model, base_url)
+					if model, ok := values["llm_model"]; ok && model != "" {
+						m.channel.UpdateConfig(model, values["llm_base_url"])
+					}
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   "✅ 设置已保存",
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				})
+			}
+		}
+
 	case "/quit", "/exit":
 		m.shouldQuit = true
 
@@ -1459,6 +1550,55 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.inputReady = true
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		m.progress = nil
+
+		// §12 AskUser panel: detect WaitingUser and open interactive panel
+		if msg.WaitingUser && strings.HasPrefix(content, "❓") {
+			question := strings.TrimPrefix(content, "❓ ")
+			question = strings.TrimSpace(question)
+			if question != "" {
+				// Add the question as a message first
+				m.messages = append(m.messages, cliMessage{
+					role:      "assistant",
+					content:   content,
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+				// Open the ask-user panel
+				m.openAskUserPanel(question, func(answer string) {
+					// Send answer as normal user message to agent
+					if m.msgBus != nil {
+						m.msgBus.Inbound <- bus.InboundMessage{
+							Channel:    cliChannelName,
+							SenderID:   cliSenderID,
+							ChatID:     m.chatID,
+							ChatType:   "p2p",
+							Content:    answer,
+							SenderName: "CLI User",
+							Time:       time.Now(),
+							RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+						}
+					}
+					m.messages = append(m.messages, cliMessage{
+						role:      "user",
+						content:   answer,
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				}, func() {
+					// Cancel: send empty to let agent continue
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   "已取消提问",
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				})
+				return
+			}
+		}
 
 		// Snapshot the final iteration before clearing
 		if m.lastSeenIteration >= 0 && len(m.lastCompletedTools) > 0 {
@@ -2082,6 +2222,316 @@ func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
 }
 func (c *NonInteractiveChannel) WaitDone() { <-c.done }
 
+// --- §12 Interactive Panel ---
+
+// openSettingsPanel activates the settings panel overlay.
+func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[string]string, onSubmit func(map[string]string)) {
+	m.panelMode = "settings"
+	m.panelCursor = 0
+	m.panelEdit = false
+	m.panelSchema = make([]SettingDefinition, len(schema))
+	copy(m.panelSchema, schema)
+	m.panelValues = make(map[string]string, len(values))
+	for k, v := range values {
+		m.panelValues[k] = v
+	}
+	// Fill defaults
+	for _, def := range m.panelSchema {
+		if _, ok := m.panelValues[def.Key]; !ok && def.DefaultValue != "" {
+			m.panelValues[def.Key] = def.DefaultValue
+		}
+	}
+	m.panelOnSubmit = onSubmit
+	m.panelOnCancel = nil
+	// Pre-create textarea for editing
+	ta := textarea.New()
+	ta.Placeholder = "输入新值..."
+	ta.SetWidth(60)
+	ta.SetHeight(1)
+	ta.CharLimit = 200
+	m.panelEditTA = ta
+}
+
+// openAskUserPanel activates the ask-user panel overlay.
+func (m *cliModel) openAskUserPanel(question string, onAnswer func(string), onCancel func()) {
+	m.panelMode = "askuser"
+	m.panelQuestion = question
+	m.panelAnswer = ""
+	m.panelOnAnswer = onAnswer
+	m.panelOnCancel = onCancel
+}
+
+// closePanel deactivates any active panel.
+func (m *cliModel) closePanel() {
+	m.panelMode = ""
+	m.panelEdit = false
+	m.panelSchema = nil
+	m.panelValues = nil
+	m.panelOnSubmit = nil
+	m.panelOnAnswer = nil
+	m.panelOnCancel = nil
+}
+
+// updatePanel handles key events when a panel is active.
+// Returns (handled, newModel, cmd).
+func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelMode == "" {
+		return false, m, nil
+	}
+
+	switch m.panelMode {
+	case "settings":
+		return m.updateSettingsPanel(msg)
+	case "askuser":
+		return m.updateAskUserPanel(msg)
+	}
+	return false, m, nil
+}
+
+func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelEdit {
+		// Editing mode
+		switch msg.Type {
+		case tea.KeyEnter:
+			// Save value
+			newVal := strings.TrimSpace(m.panelEditTA.Value())
+			if m.panelCursor < len(m.panelSchema) {
+				key := m.panelSchema[m.panelCursor].Key
+				m.panelValues[key] = newVal
+			}
+			m.panelEdit = false
+			return true, m, nil
+		case tea.KeyEsc:
+			m.panelEdit = false
+			return true, m, nil
+		default:
+			// Delegate to textarea
+			var cmd tea.Cmd
+			m.panelEditTA, cmd = m.panelEditTA.Update(msg)
+			return true, m, cmd
+		}
+	}
+
+	// Navigation mode
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyCtrlS:
+		// Submit all settings
+		if m.panelOnSubmit != nil {
+			m.panelOnSubmit(m.panelValues)
+		}
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyUp, tea.KeyShiftTab:
+		if m.panelCursor > 0 {
+			m.panelCursor--
+		}
+		return true, m, nil
+	case tea.KeyDown, tea.KeyTab:
+		if m.panelCursor < len(m.panelSchema)-1 {
+			m.panelCursor++
+		}
+		return true, m, nil
+	case tea.KeyEnter:
+		if m.panelCursor < len(m.panelSchema) {
+			def := m.panelSchema[m.panelCursor]
+			switch def.Type {
+			case SettingTypeToggle:
+				// Toggle on Enter
+				cur := m.panelValues[def.Key]
+				if cur == "true" {
+					m.panelValues[def.Key] = "false"
+				} else {
+					m.panelValues[def.Key] = "true"
+				}
+				return true, m, nil
+			case SettingTypeSelect:
+				// Cycle through options
+				cur := m.panelValues[def.Key]
+				found := false
+				for i, opt := range def.Options {
+					if opt.Value == cur && i < len(def.Options)-1 {
+						m.panelValues[def.Key] = def.Options[i+1].Value
+						found = true
+						break
+					}
+				}
+				if !found && len(def.Options) > 0 {
+					m.panelValues[def.Key] = def.Options[0].Value
+				}
+				return true, m, nil
+			default:
+				// Enter edit mode for text/number/textarea
+				m.panelEdit = true
+				m.panelEditTA.SetValue(m.panelValues[def.Key])
+				m.panelEditTA.CursorEnd()
+				return true, m, m.panelEditTA.Focus()
+			}
+		}
+		return true, m, nil
+	}
+	return true, m, nil
+}
+
+func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		answer := strings.TrimSpace(m.panelAnswer)
+		if answer != "" && m.panelOnAnswer != nil {
+			m.panelOnAnswer(answer)
+		}
+		m.closePanel()
+		return true, m, nil
+	case tea.KeyEsc:
+		if m.panelOnCancel != nil {
+			m.panelOnCancel()
+		}
+		m.closePanel()
+		return true, m, nil
+	default:
+		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace || msg.Type == tea.KeyBackspace {
+			m.panelAnswer += msg.String()
+		}
+	}
+	return true, m, nil
+}
+
+// viewPanel renders the active panel as a string.
+func (m *cliModel) viewPanel() string {
+	switch m.panelMode {
+	case "settings":
+		return m.viewSettingsPanel()
+	case "askuser":
+		return m.viewAskUserPanel()
+	}
+	return ""
+}
+
+func (m *cliModel) viewSettingsPanel() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5c6bc0")).
+		Padding(1, 2)
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#81c784")).
+		Bold(true)
+
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#64b5f6"))
+
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffb74d")).
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Faint(true)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666"))
+
+	var sb strings.Builder
+	sb.WriteString(headerStyle.Render("⚙ Settings"))
+	sb.WriteString("\n\n")
+
+	// Group by category
+	lastCat := ""
+	for i, def := range m.panelSchema {
+		if def.Category != lastCat {
+			lastCat = def.Category
+			sb.WriteString("\n")
+			catStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#ce93d8")).
+				Bold(true)
+			sb.WriteString(catStyle.Render("▸ " + lastCat))
+			sb.WriteString("\n")
+		}
+
+		cur := m.panelValues[def.Key]
+		var prefix string
+		if i == m.panelCursor && !m.panelEdit {
+			prefix = cursorStyle.Render("▸")
+		} else {
+			prefix = "  "
+		}
+
+		// Format value display
+		var displayVal string
+		switch def.Type {
+		case SettingTypeToggle:
+			if cur == "true" {
+				displayVal = valueStyle.Render("● ON ")
+			} else {
+				displayVal = valueStyle.Render("○ OFF")
+			}
+		case SettingTypeSelect:
+			// Find label for current value
+			displayVal = cur
+			for _, opt := range def.Options {
+				if opt.Value == cur {
+					displayVal = valueStyle.Render(opt.Label)
+					break
+				}
+			}
+		default:
+			if cur == "" {
+				displayVal = descStyle.Render("(未设置)")
+			} else {
+				displayVal = valueStyle.Render(cur)
+			}
+		}
+
+		line := fmt.Sprintf("%s %s: %s", prefix, def.Label, displayVal)
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	// Editing overlay
+	if m.panelEdit && m.panelCursor < len(m.panelSchema) {
+		def := m.panelSchema[m.panelCursor]
+		sb.WriteString("\n")
+		editLabel := cursorStyle.Render("  ✎ " + def.Label + ": ")
+		sb.WriteString(editLabel)
+		sb.WriteString(m.panelEditTA.View())
+		sb.WriteString("\n")
+		sb.WriteString(descStyle.Render("  Enter 确认 · Esc 取消"))
+	} else {
+		sb.WriteString("\n")
+		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+func (m *cliModel) viewAskUserPanel() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#5c6bc0")).
+		Padding(1, 2)
+
+	questionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#ffb74d")).
+		Bold(true)
+
+	answerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e0e0e0"))
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666"))
+
+	var sb strings.Builder
+	sb.WriteString(questionStyle.Render("❓ " + m.panelQuestion))
+	sb.WriteString("\n\n")
+	sb.WriteString(answerStyle.Render("▸ " + m.panelAnswer + "█"))
+	sb.WriteString("\n\n")
+	sb.WriteString(hintStyle.Render("  输入回复 · Enter 发送 · Esc 取消"))
+
+	return boxStyle.Render(sb.String())
+}
+
 // --- SettingsCapability implementation for CLIChannel ---
 
 // cliSettingsSchema returns the settings definitions for CLI channel.
@@ -2143,6 +2593,38 @@ func (c *CLIChannel) SettingsSchema() []SettingDefinition {
 
 // HandleSettingSubmit processes a setting value submission from the CLI channel.
 func (c *CLIChannel) HandleSettingSubmit(ctx context.Context, rawInput string) (map[string]string, error) {
-	// CLI uses /settings set <key> <value> directly, this is for future interactive UI
-	return nil, fmt.Errorf("CLI uses /settings set <key> <value> command directly")
+	// CLI uses interactive panel, this is for programmatic access
+	return nil, fmt.Errorf("CLI uses interactive settings panel")
+}
+
+// SetSettingsService injects the settings service for the interactive panel.
+func (c *CLIChannel) SetSettingsService(svc SettingsService) {
+	c.settingsSvc = svc
+}
+
+// UpdateConfig updates the live LLM configuration (model, base_url).
+// These overrides are picked up by the Agent on next message.
+func (c *CLIChannel) UpdateConfig(model, baseURL string) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	if model != "" {
+		c.modelOverride = model
+	}
+	if baseURL != "" {
+		c.baseURLOverride = baseURL
+	}
+}
+
+// GetModelOverride returns the user-overridden model name (empty if not set).
+func (c *CLIChannel) GetModelOverride() string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.modelOverride
+}
+
+// GetBaseURLOverride returns the user-overridden base URL (empty if not set).
+func (c *CLIChannel) GetBaseURLOverride() string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.baseURLOverride
 }

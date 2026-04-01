@@ -318,6 +318,11 @@ func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
 	}
 }
 
+// GetSettingsService returns the agent's SettingsService (for CLI panel injection).
+func (a *Agent) GetSettingsService() *SettingsService {
+	return a.settingsSvc
+}
+
 func buildToolMessageContent(result *tools.ToolResult) string {
 	if result == nil {
 		return ""

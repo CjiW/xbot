@@ -1822,18 +1822,13 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				maxWidth = w
 			}
 		}
-		// 限制气泡最大宽度为 contentWidth 的 75%
 		maxBubble := contentWidth * 3 / 4
-		if maxWidth > maxBubble {
-			maxWidth = maxBubble
+		userStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+		if maxWidth <= maxBubble {
+			// 内容够窄，左填充实现气泡靠右
+			userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
 		}
-		padding := contentWidth - maxWidth
-		if padding < 0 {
-			padding = 0
-		}
-		userStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#e0e0e0")).
-			PaddingLeft(padding)
+		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))
 	default:
 		// assistant 消息：左对齐，无气泡边框

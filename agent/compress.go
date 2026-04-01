@@ -166,6 +166,13 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	_ = a.sendMessage(msg.Channel, msg.ChatID, "🔄 开始压缩上下文...")
 
 	cm := a.GetContextManager()
+
+	// Inject memory tools so manual compaction can archive important context
+	// (same as the auto-compress path in engine.Run).
+	if defs, exec := a.buildMemoryToolSetup(msg.Channel, msg.ChatID); defs != nil {
+		cm.SetMemoryTools(defs, exec)
+	}
+
 	result, err := cm.ManualCompress(ctx, messages, llmClient, model)
 	if err != nil {
 		return &bus.OutboundMessage{
@@ -375,7 +382,7 @@ Output the structured working state directly.`
 	}
 
 	var compressed string
-	maxToolRounds := 5
+	maxToolRounds := 10
 	for round := 0; round <= maxToolRounds; round++ {
 		resp, err := client.Generate(ctx, model, compactionMsgs, memTools, "")
 		if err != nil {
@@ -408,7 +415,7 @@ Output the structured working state directly.`
 	}
 
 	if compressed == "" {
-		compressed = "Error: compaction produced no output"
+		return nil, fmt.Errorf("compaction LLM produced no output after %d tool rounds", maxToolRounds)
 	}
 
 	// Step 5: build compacted message structure

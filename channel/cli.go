@@ -219,8 +219,9 @@ type CLIChannel struct {
 	workDir string                   // 工作目录
 
 	// Bubble Tea
-	program *tea.Program
-	model   *cliModel
+	program   *tea.Program
+	programMu sync.Mutex // protects program field
+	model     *cliModel
 
 	// Lifecycle
 	stopCh chan struct{}
@@ -296,10 +297,12 @@ func (c *CLIChannel) Start() error {
 	}
 
 	// 创建 Bubble Tea program
+	c.programMu.Lock()
 	c.program = tea.NewProgram(c.model,
 		tea.WithAltScreen(),
 		tea.WithOutput(origStdout),
 	)
+	c.programMu.Unlock()
 
 	// 启动 outbound 消息处理 goroutine
 	c.wg.Add(1)
@@ -319,9 +322,11 @@ func (c *CLIChannel) Start() error {
 func (c *CLIChannel) Stop() {
 	log.Info("CLI channel stopping...")
 	close(c.stopCh)
+	c.programMu.Lock()
 	if c.program != nil {
 		c.program.Quit()
 	}
+	c.programMu.Unlock()
 	c.wg.Wait()
 	log.Info("CLI channel stopped")
 }

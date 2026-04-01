@@ -98,6 +98,19 @@ func syncSkillsAndAgents(ctx *ToolContext) {
 			syncEmbeddedDir(filepath.Join("embed_skills", name), dstSkill)
 		}
 	}
+
+	// Sync embedded agents into target (skipped if external version already exists)
+	os.MkdirAll(targetAgentsDir, 0755)
+	for _, name := range ListEmbeddedAgents() {
+		dstAgent := filepath.Join(targetAgentsDir, name+".md")
+		if _, err := os.Stat(dstAgent); os.IsNotExist(err) {
+			data, err := ReadEmbeddedAgentFile(name)
+			if err != nil {
+				continue
+			}
+			os.WriteFile(dstAgent, data, 0644)
+		}
+	}
 }
 
 // syncDir copies skill subdirectories (each skill is a dir with SKILL.md etc.)

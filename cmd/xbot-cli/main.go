@@ -127,7 +127,8 @@ func newCLIApp() *cliApp {
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
 		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
-	})
+		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
+		})
 	agentLoop.IndexGlobalTools()
 
 	return &cliApp{

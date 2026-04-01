@@ -509,6 +509,15 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(80, 20)
 
+	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
+	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
+	vp.KeyMap.PageUp.SetKeys("pgup")
+	vp.KeyMap.PageDown.SetKeys("pgdown")
+	vp.KeyMap.HalfPageUp.SetKeys()
+	vp.KeyMap.HalfPageDown.SetKeys()
+
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
 	// Ticker

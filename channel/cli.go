@@ -1560,21 +1560,21 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.progress = nil
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
-		if msg.WaitingUser && strings.HasPrefix(content, "❓") {
-			question := strings.TrimPrefix(content, "❓ ")
-			question = strings.TrimSpace(question)
+		if msg.WaitingUser {
+			// Extract question from the most recent "❓" message in history
+			// (AskUser tool sends question via SendFunc before returning WaitingUser)
+			var question string
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if strings.HasPrefix(m.messages[i].content, "❓") {
+					question = strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
+					// Remove the plain-text question from history (panel replaces it)
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					break
+				}
+			}
 			if question != "" {
-				// Add the question as a message first
-				m.messages = append(m.messages, cliMessage{
-					role:      "assistant",
-					content:   content,
-					timestamp: time.Now(),
-					dirty:     true,
-				})
 				m.updateViewportContent()
-				// Open the ask-user panel
 				m.openAskUserPanel(question, func(answer string) {
-					// Send answer as normal user message to agent
 					if m.msgBus != nil {
 						m.msgBus.Inbound <- bus.InboundMessage{
 							Channel:    cliChannelName,
@@ -1595,7 +1595,6 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					})
 					m.updateViewportContent()
 				}, func() {
-					// Cancel: send empty to let agent continue
 					m.messages = append(m.messages, cliMessage{
 						role:      "system",
 						content:   "已取消提问",

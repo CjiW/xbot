@@ -1812,11 +1812,28 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			Render(fmt.Sprintf("%s %s", timeStr, label))
 		sb.WriteString(header)
 		sb.WriteString("\n")
-		// 用户消息：右对齐，左侧竖线指示器
+		// 用户消息：右对齐气泡效果
+		// 计算内容最大行宽，整块右对齐而非每行拉伸
+		lines := strings.Split(rendered, "\n")
+		maxWidth := 0
+		for _, line := range lines {
+			w := lipgloss.Width(line)
+			if w > maxWidth {
+				maxWidth = w
+			}
+		}
+		// 限制气泡最大宽度为 contentWidth 的 75%
+		maxBubble := contentWidth * 3 / 4
+		if maxWidth > maxBubble {
+			maxWidth = maxBubble
+		}
+		padding := contentWidth - maxWidth
+		if padding < 0 {
+			padding = 0
+		}
 		userStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#e0e0e0")).
-			Width(contentWidth).
-			Align(lipgloss.Right)
+			PaddingLeft(padding)
 		sb.WriteString(userStyle.Render(rendered))
 	default:
 		// assistant 消息：左对齐，无气泡边框

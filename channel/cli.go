@@ -687,6 +687,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if content != "" {
 				m.sendMessage(content)
 				m.textarea.Reset()
+				m.viewport.GotoBottom()
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())

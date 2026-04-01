@@ -697,6 +697,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 			}
 			return m, nil
+
+		case tea.KeyCtrlO:
+			// §11 Ctrl+O 切换 tool summary 展开/折叠
+			m.toolSummaryExpanded = !m.toolSummaryExpanded
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			m.updateViewportContent()
+			return m, nil
 		}
 
 		// §9 Ctrl+K 确认模式：拦截字母和数字键
@@ -1832,8 +1840,9 @@ func (m *cliModel) updateViewportContent() {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
+		atBottom := m.viewport.AtBottom()
 		m.viewport.SetContent(sb.String())
-		if m.viewport.AtBottom() {
+		if atBottom {
 			m.viewport.GotoBottom()
 		}
 		return
@@ -1856,8 +1865,9 @@ func (m *cliModel) updateStreamingOnly() {
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
 
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(sb.String())
-	if m.viewport.AtBottom() {
+	if atBottom {
 		m.viewport.GotoBottom()
 	}
 }
@@ -1895,8 +1905,9 @@ func (m *cliModel) fullRebuild() {
 	}
 	sb.WriteString(m.renderProgressBlock())
 
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(sb.String())
-	if m.viewport.AtBottom() {
+	if atBottom {
 		m.viewport.GotoBottom()
 	}
 }

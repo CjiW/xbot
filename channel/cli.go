@@ -45,6 +45,15 @@ func init() {
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
 }
 
+// --- 包级 style 变量（避免每次渲染重复创建） ---
+var (
+	todoDoneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
+	todoPendingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
+	todoBarFilledSt  = lipgloss.NewStyle().Foreground(lipgloss.Color("#5c6bc0"))
+	todoBarEmptySt   = lipgloss.NewStyle().Foreground(lipgloss.Color("#2a2a3a"))
+	todoLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#90a4ae"))
+)
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -1021,21 +1030,15 @@ func (m *cliModel) renderTodoBar() string {
 		filled = done * barWidth / total
 	}
 
-	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#81c784"))
-	pendingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#e0e0e0"))
-	barFilledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#5c6bc0"))
-	barEmptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#2a2a3a"))
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#90a4ae"))
-
 	barFilled := strings.Repeat("█", filled)
 	barEmpty := strings.Repeat("░", barWidth-filled)
 
 	var sb strings.Builder
 	// Header: TODO label + count + progress bar
-	sb.WriteString(labelStyle.Render(" TODO "))
+	sb.WriteString(todoLabelStyle.Render(" TODO "))
 	fmt.Fprintf(&sb, "%d/%d ", done, total)
-	sb.WriteString(barFilledStyle.Render(barFilled))
-	sb.WriteString(barEmptyStyle.Render(barEmpty))
+	sb.WriteString(todoBarFilledSt.Render(barFilled))
+	sb.WriteString(todoBarEmptySt.Render(barEmpty))
 	sb.WriteString("\n")
 	// Items
 	for i, item := range m.todos {
@@ -1045,14 +1048,14 @@ func (m *cliModel) renderTodoBar() string {
 		}
 		if item.Done {
 			sb.WriteString("  ")
-			sb.WriteString(doneStyle.Render("✓"))
+			sb.WriteString(todoDoneStyle.Render("✓"))
 			sb.WriteString(" ")
-			sb.WriteString(pendingStyle.Render(text))
+			sb.WriteString(todoPendingStyle.Render(text))
 		} else {
 			sb.WriteString("  ")
-			sb.WriteString(labelStyle.Render("○"))
+			sb.WriteString(todoLabelStyle.Render("○"))
 			sb.WriteString(" ")
-			sb.WriteString(pendingStyle.Render(text))
+			sb.WriteString(todoPendingStyle.Render(text))
 		}
 		if i < len(m.todos)-1 {
 			sb.WriteString("\n")

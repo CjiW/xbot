@@ -5,17 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
-
-	"github.com/joho/godotenv"
 )
-
-func init() {
-	if err := godotenv.Load(".env"); err != nil {
-		slog.Debug("failed to load .env file, using environment variables only", "error", err)
-	}
-}
 
 // OAuthConfig OAuth 配置
 type OAuthConfig struct {
@@ -92,6 +83,12 @@ type WebConfig struct {
 	UploadDir        string `json:"upload_dir"`
 	PersonaIsolation bool   `json:"persona_isolation"`
 	InviteOnly       bool   `json:"invite_only"`
+	ServerRunner     bool   `json:"server_runner"`
+}
+
+// WebSearchConfig 网络搜索配置
+type WebSearchConfig struct {
+	APIKey string `json:"api_key"`
 }
 
 // Config 应用配置
@@ -110,7 +107,12 @@ type Config struct {
 	StartupNotify StartupNotifyConfig `json:"startup_notify"`
 	Admin         AdminConfig         `json:"admin"`
 	Web           WebConfig           `json:"web"`
+	WebSearch     WebSearchConfig     `json:"web_search"`
 	OSS           OSSConfig           `json:"oss"`
+
+	// EncryptionKey 用于加密存储敏感数据（如 OAuth token）。
+	// Base64 编码的 32 字节 AES key。留空则明文存储。
+	EncryptionKey string `json:"encryption_key"`
 }
 
 // FeishuConfig 飞书渠道配置
@@ -224,89 +226,15 @@ func LoadFromFile(path string) *Config {
 	return &cfg
 }
 
-// applyEnvOverrides 用环境变量覆盖配置中的非空值。
-// 环境变量优先级最高，文件配置作为基础值。
-func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("SERVER_HOST"); v != "" {
-		cfg.Server.Host = v
-	}
-	if v := os.Getenv("SERVER_PORT"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.Server.Port = i
-		}
-	}
-	// ... 其余字段同理，但为避免大量重复代码，
-	// 改用更简洁的方式：只覆盖 CLI 常用的关键字段
-
-	if v := os.Getenv("LLM_PROVIDER"); v != "" {
-		cfg.LLM.Provider = v
-	}
-	if v := os.Getenv("LLM_BASE_URL"); v != "" {
-		cfg.LLM.BaseURL = v
-	}
-	if v := os.Getenv("LLM_API_KEY"); v != "" {
-		cfg.LLM.APIKey = v
-	}
-	if v := os.Getenv("LLM_MODEL"); v != "" {
-		cfg.LLM.Model = v
-	}
-	if v := os.Getenv("LOG_LEVEL"); v != "" {
-		cfg.Log.Level = v
-	}
-	if v := os.Getenv("LOG_FORMAT"); v != "" {
-		cfg.Log.Format = v
-	}
-	if v := os.Getenv("WORK_DIR"); v != "" {
-		cfg.Agent.WorkDir = v
-	}
-	if v := os.Getenv("PROMPT_FILE"); v != "" {
-		cfg.Agent.PromptFile = v
-	}
-	if v := os.Getenv("MEMORY_PROVIDER"); v != "" {
-		cfg.Agent.MemoryProvider = v
-	}
-	if v := os.Getenv("AGENT_MAX_ITERATIONS"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.Agent.MaxIterations = i
-		}
-	}
-	if v := os.Getenv("AGENT_MAX_CONCURRENCY"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.Agent.MaxConcurrency = i
-		}
-	}
-	if v := os.Getenv("AGENT_MEMORY_WINDOW"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.Agent.MemoryWindow = i
-		}
-	}
-	if v := os.Getenv("SANDBOX_MODE"); v != "" {
-		cfg.Sandbox.Mode = v
-	}
-	if v := os.Getenv("LLM_EMBEDDING_PROVIDER"); v != "" {
-		cfg.Embedding.Provider = v
-	}
-	if v := os.Getenv("LLM_EMBEDDING_BASE_URL"); v != "" {
-		cfg.Embedding.BaseURL = v
-	}
-	if v := os.Getenv("LLM_EMBEDDING_API_KEY"); v != "" {
-		cfg.Embedding.APIKey = v
-	}
-	if v := os.Getenv("LLM_EMBEDDING_MODEL"); v != "" {
-		cfg.Embedding.Model = v
-	}
-}
-
-// Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
-// 这保证了：config.json 提供持久化配置，环境变量用于临时覆盖（如 CI/Docker）。
+// Load 从全局 config.json 加载配置，并填充默认值。
+// 配置来源只有 config.json，不再读取 .env 或环境变量（XBOT_HOME 除外）。
 func Load() *Config {
 	cfg := LoadFromFile(ConfigFilePath())
 	if cfg == nil {
 		cfg = &Config{}
 	}
-	applyEnvOverrides(cfg)
 
-	// 填充 CLI 常用的默认值（仅在配置和环境变量都未设置时生效）
+	// 填充默认值（仅在配置未设置时生效）
 	if cfg.LLM.Provider == "" {
 		cfg.LLM.Provider = "openai"
 	}
@@ -388,18 +316,6 @@ func Load() *Config {
 	if cfg.Server.WriteTimeout == 0 {
 		cfg.Server.WriteTimeout = 120 * time.Second
 	}
-	if cfg.Admin.ChatID == "" {
-		cfg.Admin.ChatID = getAdminChatID()
-	}
 
 	return cfg
-}
-
-// getAdminChatID 获取管理员会话 ID，实现回退逻辑
-// 优先读取 ADMIN_CHAT_ID，如果为空则回退到 STARTUP_NOTIFY_CHAT_ID
-func getAdminChatID() string {
-	if adminChatID := os.Getenv("ADMIN_CHAT_ID"); adminChatID != "" {
-		return adminChatID
-	}
-	return os.Getenv("STARTUP_NOTIFY_CHAT_ID")
 }

@@ -3,7 +3,6 @@ package crypto
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"os"
 	"sync"
 	"testing"
 )
@@ -24,8 +23,7 @@ func resetPackage() {
 
 func TestEncryptDecrypt(t *testing.T) {
 	resetPackage()
-	os.Setenv(envEncryptionKey, generateTestKey())
-	defer os.Unsetenv(envEncryptionKey)
+	InitFromConfig(generateTestKey())
 	defer resetPackage()
 
 	plaintext := "sk-abc123secret-api-key-456"
@@ -49,8 +47,7 @@ func TestEncryptDecrypt(t *testing.T) {
 
 func TestEncryptDecryptEmptyString(t *testing.T) {
 	resetPackage()
-	os.Setenv(envEncryptionKey, generateTestKey())
-	defer os.Unsetenv(envEncryptionKey)
+	InitFromConfig(generateTestKey())
 	defer resetPackage()
 
 	ciphertext, err := Encrypt("")
@@ -69,8 +66,7 @@ func TestEncryptDecryptEmptyString(t *testing.T) {
 
 func TestEncryptRandomNonce(t *testing.T) {
 	resetPackage()
-	os.Setenv(envEncryptionKey, generateTestKey())
-	defer os.Unsetenv(envEncryptionKey)
+	InitFromConfig(generateTestKey())
 	defer resetPackage()
 
 	plaintext := "same-plaintext-value"
@@ -104,8 +100,7 @@ func TestEncryptRandomNonce(t *testing.T) {
 
 func TestPassthroughWithoutKey(t *testing.T) {
 	resetPackage()
-	// Ensure no encryption key is set
-	os.Unsetenv(envEncryptionKey)
+	// No key configured — passthrough mode
 	defer resetPackage()
 
 	plaintext := "my-api-key-123"
@@ -131,7 +126,7 @@ func TestDecryptAfterKeyChange(t *testing.T) {
 	resetPackage()
 
 	key1 := generateTestKey()
-	os.Setenv(envEncryptionKey, key1)
+	InitFromConfig(key1)
 
 	plaintext := "secret-data"
 
@@ -143,8 +138,7 @@ func TestDecryptAfterKeyChange(t *testing.T) {
 	// Now switch to a different key
 	resetPackage()
 	key2 := generateTestKey()
-	os.Setenv(envEncryptionKey, key2)
-	defer os.Unsetenv(envEncryptionKey)
+	InitFromConfig(key2)
 	defer resetPackage()
 
 	_, err = Decrypt(ciphertext)

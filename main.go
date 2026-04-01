@@ -15,6 +15,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
+	"xbot/crypto"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/oauth"
@@ -28,6 +29,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// 初始化加密模块
+	crypto.InitFromConfig(cfg.EncryptionKey)
 
 	// 配置日志（支持文件输出 + 按日轮转）
 	workDir := cfg.Agent.WorkDir
@@ -117,7 +121,7 @@ func main() {
 	}
 
 	// 初始化沙箱
-	tools.InitSandbox(cfg.Sandbox, workDir)
+	tools.InitSandbox(cfg.Sandbox, cfg.Web.ServerRunner, workDir)
 
 	agentLoop := agent.New(agent.Config{
 		Bus:                  msgBus,
@@ -206,7 +210,7 @@ func main() {
 	// 注册 DownloadFile 工具（支持 Web/OSS 和飞书两种来源）
 	agentLoop.RegisterCoreTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
 	agentLoop.RegisterTool(tools.NewDownloadFileTool(cfg.Feishu.AppID, cfg.Feishu.AppSecret))
-	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(os.Getenv("TAVILY_API_KEY")))
+	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(cfg.WebSearch.APIKey))
 
 	// 注册 Logs 工具（仅管理员可用）
 	adminChatID := cfg.Admin.ChatID

@@ -8,10 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	log "xbot/logger"
+)
+
+const (
+	nonceSize = 12
+	keySize   = 32
 )
 
 var (
@@ -21,35 +25,28 @@ var (
 	keyOnce        sync.Once
 )
 
-const (
-	envEncryptionKey = "XBOT_ENCRYPTION_KEY"
-	nonceSize        = 12
-	keySize          = 32
-)
-
-// Init loads the encryption key from the XBOT_ENCRYPTION_KEY environment variable.
+// InitFromConfig loads the encryption key from the given base64-encoded key string.
 // It is safe to call multiple times; subsequent calls after the first are no-ops.
-func Init() {
-	keyOnce.Do(loadKey)
+func InitFromConfig(encodedKey string) {
+	keyOnce.Do(func() { loadKey(encodedKey) })
 }
 
-// loadKey reads and validates the encryption key from the environment.
-func loadKey() {
-	encoded := os.Getenv(envEncryptionKey)
-	if encoded == "" {
-		log.Warn("XBOT_ENCRYPTION_KEY is not set; API keys will be stored in plaintext. " +
+// loadKey reads and validates the encryption key from the given base64 string.
+func loadKey(encodedKey string) {
+	if encodedKey == "" {
+		log.Warn("encryption_key is not set; API keys will be stored in plaintext. " +
 			"Set a base64-encoded 32-byte key for encryption.")
 		return
 	}
 
-	key, err := base64.StdEncoding.DecodeString(encoded)
+	key, err := base64.StdEncoding.DecodeString(encodedKey)
 	if err != nil {
-		log.WithError(err).Error("XBOT_ENCRYPTION_KEY is not valid base64; API keys will be stored in plaintext")
+		log.WithError(err).Error("encryption_key is not valid base64; API keys will be stored in plaintext")
 		return
 	}
 	if len(key) != keySize {
 		log.WithField("actual_length", len(key)).Error(
-			fmt.Sprintf("XBOT_ENCRYPTION_KEY must decode to exactly %d bytes; API keys will be stored in plaintext", keySize))
+			fmt.Sprintf("encryption_key must decode to exactly %d bytes; API keys will be stored in plaintext", keySize))
 		return
 	}
 
@@ -72,7 +69,6 @@ func loadKey() {
 
 // isReady returns true if the encryption key has been loaded and is usable.
 func isReady() bool {
-	Init()
 	return encryptionAEAD != nil
 }
 

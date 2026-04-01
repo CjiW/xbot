@@ -97,7 +97,7 @@ func newCLIApp() *cliApp {
 		embAPIKey = cfg.LLM.APIKey
 	}
 
-	tools.InitSandbox(cfg.Sandbox, workDir)
+	tools.InitSandbox(cfg.Sandbox, cfg.Web.ServerRunner, workDir)
 
 	agentLoop := agent.New(agent.Config{
 		Bus:                  msgBus,

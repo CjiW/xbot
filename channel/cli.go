@@ -632,6 +632,7 @@ func newCLIModel() *cliModel {
 	ta.Prompt = "> "
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // 清除默认 AdaptiveColor 背景，避免 placeholder 背景色异常
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
@@ -640,7 +641,7 @@ func newCLIModel() *cliModel {
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle() // 同上，清除默认背景
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
 
 	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)

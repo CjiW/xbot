@@ -701,7 +701,6 @@ type cliModel struct {
 	fileCompletions []string // @ 文件路径补全候选项
 	fileCompIdx     int      // 当前选中的文件补全索引
 	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
-	attachedFiles   []string // 当前输入中 @ 引用的文件路径
 
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数

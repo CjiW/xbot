@@ -35,10 +35,7 @@ type UpdateInfo struct {
 // semverRegex matches semantic versioning patterns like v1.2.3, 1.2.3, v1.2.3-rc1, etc.
 var semverRegex = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
 
-// isDevBuild returns true if the version indicates a development build.
-func isDevBuild(v string) bool {
-	return v == "dev" || v == "unknown" || v == ""
-}
+
 
 // parseSemver extracts major, minor, patch from a version string.
 // Returns -1,-1,-1 if the string doesn't match semver.

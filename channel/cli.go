@@ -2220,8 +2220,10 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
 	if msg.role == "assistant" {
+		// Pre-process: render mermaid code blocks to ASCII art
+		preprocessed := renderMermaidBlocks(msg.content)
 		var err error
-		rendered, err = m.renderer.Render(msg.content)
+		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {
 			rendered = msg.content
 		}

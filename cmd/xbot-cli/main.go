@@ -401,6 +401,9 @@ func main() {
 			cliCh.SetSettingsService(ss)
 		}
 		cliCh.SetModelLister(app.agentLoop.LLMFactory())
+		// Inject BgTaskManager for background task display
+		bgSessionKey := "cli:" + cliCfg.ChatID
+		cliCh.SetBgTaskManager(app.agentLoop.BgTaskManager(), bgSessionKey)
 	}
 
 	// Apply saved theme at startup

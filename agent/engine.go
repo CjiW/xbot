@@ -172,6 +172,9 @@ type RunConfig struct {
 	// It blocks until a slot is available and returns a release function.
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
 	SubAgentSem func() func()
+
+	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
+	BgTaskManager *tools.BackgroundTaskManager
 }
 
 // TodoManagerProvider 提供 TODO 状态查询
@@ -1606,11 +1609,29 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		}
 	}
 
+	// 注入 BgTaskManager 后台任务管理器
+	if cfg.BgTaskManager != nil {
+		tc.BgTaskManager = cfg.BgTaskManager
+		sessionKey := cfg.SessionKey
+		if sessionKey == "" {
+		sessionKey = cfg.Channel + ":" + cfg.ChatID
+		}
+		tc.BgSessionKey = sessionKey
+
+		// Register completion callback: inject task result into conversation
+		if cfg.InjectInbound != nil {
+		cfg.BgTaskManager.OnComplete(sessionKey, func(task *tools.BackgroundTask) {
+			content := tools.FormatBgTaskCompletion(task)
+			cfg.InjectInbound(cfg.Channel, cfg.ChatID, cfg.SenderID, content)
+		})
+		}
+	}
+
 	// 注入 session cwd（PWD 工具优化）
 	if cfg.Session != nil {
 		tc.CurrentDir = cfg.Session.GetCurrentDir()
 		tc.SetCurrentDir = func(dir string) {
-			cfg.Session.SetCurrentDir(dir)
+		cfg.Session.SetCurrentDir(dir)
 		}
 	} else {
 		// No session — use InitialCWD for CWD persistence (SubAgent or sessionless mode).

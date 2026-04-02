@@ -27,6 +27,7 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/tools"
 	"xbot/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -551,6 +552,10 @@ type CLIChannel struct {
 	modelOverride   string          // user-overridden model from /settings panel
 	baseURLOverride string          // user-overridden base URL from /settings panel
 	modelLister     ModelLister     // provides available model names for combo
+
+	// Background tasks
+	bgTaskMgr    *tools.BackgroundTaskManager
+	bgSessionKey string
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.
@@ -606,6 +611,9 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID
+
+	// Setup bg task count callback
+	c.updateBgTaskCountFn()
 
 	// 加载历史消息（会话恢复）
 	if c.config.HistoryLoader != nil {
@@ -696,6 +704,26 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 		return
 	}
 	c.program.Send(cliProgressMsg{payload: payload})
+}
+
+// SetBgTaskManager configures the background task manager for status display.
+func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionKey string) {
+	c.bgTaskMgr = mgr
+	c.bgSessionKey = sessionKey
+	c.updateBgTaskCountFn()
+}
+
+// updateBgTaskCountFn updates the model's bg task count callback.
+func (c *CLIChannel) updateBgTaskCountFn() {
+	if c.model == nil {
+		return
+	}
+	if c.bgTaskMgr != nil && c.bgSessionKey != "" {
+		key := c.bgSessionKey
+		c.model.bgTaskCountFn = func() int {
+			return len(c.bgTaskMgr.ListRunning(key))
+		}
+	}
 }
 
 // CheckUpdateAsync starts a background goroutine to check for updates.
@@ -813,6 +841,8 @@ type cliModel struct {
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
 	newContentHint  bool                 // 有新内容但用户未在底部（显示 ↓ 提示）
 	tempStatus      string               // 临时状态提示（自动过期）
+	bgTaskCount    int                  // running background tasks (0 = no indicator)
+	bgTaskCountFn  func() int           // callback to get current bg task count (set by channel)
 
 	// 进度信息
 	progress          *CLIProgressPayload
@@ -1267,8 +1297,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleAgentMessage(msg.msg)
 
 	case cliProgressMsg:
-		prev := m.progress
-		m.progress = msg.payload
+			prev := m.progress
+			m.progress = msg.payload
+			// Update bg task count from callback
+			if m.bgTaskCountFn != nil {
+				m.bgTaskCount = m.bgTaskCountFn()
+			}
 		if msg.payload != nil {
 			// Sync todo items from progress event
 			if len(msg.payload.Todos) > 0 {
@@ -1744,6 +1778,16 @@ func (m *cliModel) View() string {
 				status += "  " + hint
 			} else {
 				status = hint
+			}
+		}
+		// Background task indicator
+		if m.bgTaskCount > 0 {
+			bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
+				fmt.Sprintf("[bg: %d task%s running]", m.bgTaskCount, func() string { if m.bgTaskCount > 1 { return "s" }; return "" }()))
+			if status != "" {
+				status += "  " + bgHint
+			} else {
+				status = bgHint
 			}
 		}
 
@@ -2382,6 +2426,39 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/new":
 		m.sendToAgent("/new")
+
+	case "/tasks":
+		// /tasks — show running background tasks
+		if m.bgTaskCountFn != nil {
+		count := m.bgTaskCountFn()
+		if count == 0 {
+			m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "No background tasks running.",
+			timestamp: time.Now(),
+			dirty:     true,
+			})
+		} else {
+			// Get full task list from channel
+			ch := m.channel
+			if ch.bgTaskMgr != nil {
+			tasks := tools.ListBgTasks(ch.bgTaskMgr, ch.bgSessionKey)
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   tasks,
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			}
+		}
+		} else {
+		m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "Background tasks not supported.",
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+		}
 
 	default:
 		// 未知命令尝试透传到 agent（agent 层可能认识）

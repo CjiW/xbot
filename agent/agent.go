@@ -275,6 +275,9 @@ type Agent struct {
 
 	// channelFinder looks up a channel instance by name (injected from main.go).
 	channelFinder func(name string) (channel.Channel, bool)
+
+	// bgTaskMgr manages background shell tasks (shared across all sessions)
+	bgTaskMgr *tools.BackgroundTaskManager
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -285,6 +288,9 @@ func (a *Agent) SetSettingsService(svc *SettingsService) { a.settingsSvc = svc }
 
 // LLMFactory returns the Agent's LLMFactory (for external injection of callbacks).
 func (a *Agent) LLMFactory() *LLMFactory { return a.llmFactory }
+
+// BgTaskManager returns the Agent's BackgroundTaskManager.
+func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMgr }
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
@@ -689,7 +695,8 @@ func New(cfg Config) *Agent {
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
 		),
-	}
+		bgTaskMgr: tools.NewBackgroundTaskManager(),
+		}
 
 	// 5. 初始化各类服务（修改 agent 指针）
 	initServices(agent, cfg, multiSession, registry)

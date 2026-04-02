@@ -27,30 +27,35 @@ func (t *ShellTool) Description() string {
 	return `Execute a command and return its output.
 The command will be executed in the agent's working directory.
 IMPORTANT: Commands are executed non-interactively with a timeout. Do NOT run interactive commands (e.g. vim, top, htop) or commands that require manual input. For commands that might prompt for input, use non-interactive flags (e.g. "apt-get -y", "yes |", "ssh -o BatchMode=yes"). For sudo, use NOPASSWD or "echo password | sudo -S".
+
+BACKGROUND MODE: Set "background": true to run long-running commands (dev servers, build processes) without blocking. Returns a task ID immediately. The agent continues working while the command runs in the background. When the command finishes, its output is automatically injected into the conversation. Use task_status to check progress, task_kill to terminate.
+
+AUTO-BACKGROUND: If a command times out, it is automatically converted to a background task so no work is lost. The agent receives the task ID and can continue.
+
 Parameters (JSON):
   - command: string, the command to execute
-  - timeout: number (optional), timeout in seconds (default: 120)
-Example: {"command": "ls -la"}
+  - timeout: number (optional), timeout in seconds (default: 120, max: 600)
+  - background: boolean (optional), run in background mode
 
 Environment Variables:
 - Commands run in a login shell (detected from container's /etc/passwd), which automatically sources /etc/profile, ~/.bash_profile, ~/.bashrc, etc.
-// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Use "export VAR=value" to set environment variables (auto-persisted to ~/.xbot_env)
-// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 - Or write directly: echo 'export PATH=$PATH:/new/path' >> ~/.xbot_env`
 }
 
 func (t *ShellTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "command", Type: "string", Description: "The command to execute", Required: true},
-		{Name: "timeout", Type: "number", Description: "Timeout in seconds (default: 120)", Required: false},
+		{Name: "timeout", Type: "number", Description: "Timeout in seconds (default: 120, max: 600)", Required: false},
+		{Name: "background", Type: "boolean", Description: "Run command in background (for long-running tasks like dev servers). Returns task ID immediately.", Required: false},
 	}
 }
 
 func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, error) {
 	var params struct {
-		Command string  `json:"command"`
-		Timeout float64 `json:"timeout"`
+		Command    string  `json:"command"`
+		Timeout    float64 `json:"timeout"`
+		Background bool    `json:"background"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -132,62 +137,115 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 
 	// 审计日志：记录每次 shell 执行
 	log.WithFields(log.Fields{
-		"command": params.Command,
-		"timeout": timeout,
+		"command":    params.Command,
+		"timeout":    timeout,
+		"background": params.Background,
 	}).Debug("Shell command executing")
 
-	var result *ExecResult
-
-	switch sandbox.Name() {
-	case "docker":
-		// Docker 模式：将 Cd 设置的目录作为 -w 参数传递
-		dir := ""
-		if toolCtx != nil && toolCtx.CurrentDir != "" {
-			dir = toolCtx.CurrentDir // 容器内路径
-		} else if toolCtx != nil && toolCtx.Sandbox != nil && toolCtx.Sandbox.Name() != "none" {
-			dir = toolCtx.Sandbox.Workspace(toolCtx.OriginUserID)
+	// Build ExecSpec based on sandbox mode
+	buildSpec := func() ExecSpec {
+		switch sandbox.Name() {
+		case "docker":
+			dir := ""
+			if toolCtx != nil && toolCtx.CurrentDir != "" {
+				dir = toolCtx.CurrentDir
+			} else if toolCtx != nil && toolCtx.Sandbox != nil && toolCtx.Sandbox.Name() != "none" {
+				dir = toolCtx.Sandbox.Workspace(toolCtx.OriginUserID)
+			}
+			return ExecSpec{
+				Command:   shell,
+				Args:      []string{shell, "-l", "-c", shellCmd},
+				Shell:     false,
+				Dir:       dir,
+				Timeout:   timeout,
+				Workspace: sandboxWorkspace,
+				UserID:    userID,
+			}
+		case "remote":
+			remoteDir := ""
+			if toolCtx != nil && toolCtx.CurrentDir != "" {
+				remoteDir = toolCtx.CurrentDir
+			} else if rs, ok := sandbox.(*RemoteSandbox); ok {
+				remoteDir = rs.Workspace(userID)
+			}
+			return ExecSpec{
+				Command: shell,
+				Args:    []string{shell, "-l", "-c", shellCmd},
+				Shell:   false,
+				Dir:     remoteDir,
+				Timeout: timeout,
+				UserID:  userID,
+			}
+		default:
+			return ExecSpec{
+				Command: shell,
+				Args:    []string{shell, "-l", "-c", shellCmd},
+				Shell:   false,
+				Dir:     execDir,
+				Timeout: timeout,
+				UserID:  userID,
+			}
 		}
-		result, err = sandbox.Exec(parentCtx, ExecSpec{
-			Command:   shell,
-			Args:      []string{shell, "-l", "-c", shellCmd},
-			Shell:     false,
-			Dir:       dir,
-			Timeout:   timeout,
-			Workspace: sandboxWorkspace,
-			UserID:    userID,
-		})
-
-	case "remote":
-		// Remote 模式：优先使用 Cd 设置的目录，否则使用 runner workspace
-		remoteDir := ""
-		if toolCtx != nil && toolCtx.CurrentDir != "" {
-			remoteDir = toolCtx.CurrentDir
-		} else if rs, ok := sandbox.(*RemoteSandbox); ok {
-			remoteDir = rs.Workspace(userID)
-		}
-		result, err = sandbox.Exec(parentCtx, ExecSpec{
-			Command: shell,
-			Args:    []string{shell, "-l", "-c", shellCmd},
-			Shell:   false,
-			Dir:     remoteDir,
-			Timeout: timeout,
-			UserID:  userID,
-		})
-
-	default:
-		// None 模式：本地执行
-		result, err = sandbox.Exec(parentCtx, ExecSpec{
-			Command: shell,
-			Args:    []string{shell, "-l", "-c", shellCmd},
-			Shell:   false,
-			Dir:     execDir,
-			Timeout: timeout,
-			UserID:  userID,
-		})
 	}
 
+	// Background mode: launch task in goroutine, return task ID immediately
+	if params.Background {
+		return t.executeBackground(toolCtx, shellCmd, sandbox, buildSpec)
+	}
+
+	// Foreground mode: synchronous execution with auto-promote on timeout
+	return t.executeForeground(toolCtx, shellCmd, sandbox, parentCtx, timeout, buildSpec)
+}
+
+// executeBackground launches a command as a background task.
+func (t *ShellTool) executeBackground(
+	toolCtx *ToolContext,
+	command string,
+	sandbox Sandbox,
+	buildSpec func() ExecSpec,
+) (*ToolResult, error) {
+	if toolCtx == nil || toolCtx.BgTaskManager == nil {
+		return nil, fmt.Errorf("background tasks not supported (BgTaskManager not configured)")
+	}
+
+	sessionKey := toolCtx.BgSessionKey
+	if sessionKey == "" {
+		sessionKey = toolCtx.Channel + ":" + toolCtx.ChatID
+	}
+
+	task := toolCtx.BgTaskManager.Start(sessionKey, command,
+		func(ctx context.Context, outputBuf func(string)) (int, error) {
+			spec := buildSpec()
+			spec.Timeout = 0 // no timeout for background
+			return sandboxExecAsync(ctx, sandbox, spec, outputBuf)
+		},
+	)
+
+	result := fmt.Sprintf(
+		"Background task started [id: %s]\nCommand: %s\n\n"+
+			"The task is running in the background. You can continue working.\n"+
+			"When it completes, the output will be automatically injected into the conversation.\n"+
+			"- Use task_status to check current progress\n"+
+			"- Use task_kill to terminate the task",
+		task.ID, task.Command,
+	)
+
+	return NewResultWithTips(result, fmt.Sprintf("Background task running: bg:%s", task.ID)), nil
+}
+
+// executeForeground runs a command synchronously. If it times out, auto-promotes
+// to a background task (like Claude Code) so no work is lost.
+func (t *ShellTool) executeForeground(
+	toolCtx *ToolContext,
+	command string,
+	sandbox Sandbox,
+	parentCtx context.Context,
+	timeout time.Duration,
+	buildSpec func() ExecSpec,
+) (*ToolResult, error) {
+	result, err := sandbox.Exec(parentCtx, buildSpec())
+
 	if err != nil {
-		// Sandbox-level error (connection lost, container not found, etc.)
 		return nil, fmt.Errorf("sandbox exec: %w", err)
 	}
 
@@ -195,7 +253,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	var envPersisted bool
 	sandboxName := sandbox.Name()
 	if toolCtx != nil && (toolCtx.SandboxEnabled || sandboxName == "remote") {
-		envPersisted = t.persistEnvFromCommand(toolCtx, params.Command)
+		envPersisted = t.persistEnvFromCommand(toolCtx, command)
 	}
 
 	// 合并输出
@@ -213,12 +271,49 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	output := strings.TrimSpace(resultBuilder.String())
 
 	if result.TimedOut {
+		// AUTO-PROMOTE: convert timed-out command to background task
+		if toolCtx != nil && toolCtx.BgTaskManager != nil {
+			sessionKey := toolCtx.BgSessionKey
+			if sessionKey == "" {
+				sessionKey = toolCtx.Channel + ":" + toolCtx.ChatID
+			}
+
+			partialOutput := output
+			task := toolCtx.BgTaskManager.Start(sessionKey, command,
+				func(ctx context.Context, outputBuf func(string)) (int, error) {
+					spec := buildSpec()
+					spec.Timeout = 0
+					if partialOutput != "" {
+						outputBuf(partialOutput + "\n\n--- [resumed after timeout] ---\n")
+					}
+					return sandboxExecAsync(ctx, sandbox, spec, outputBuf)
+				},
+			)
+
+			log.WithFields(log.Fields{
+				"command": command,
+				"timeout": timeout,
+				"task_id": task.ID,
+			}).Info("Timed-out command auto-promoted to background task")
+
+			timeoutMsg := fmt.Sprintf(
+				"[TIMEOUT after %s] Command timed out. Auto-promoted to background task [id: %s]\n"+
+					"Partial output before timeout:\n%s\n\n"+
+					"The command continues running in the background. Its output will be injected when done.\n"+
+					"- Use task_status to check progress\n"+
+					"- Use task_kill to terminate",
+				timeout, task.ID, output,
+			)
+			return NewResultWithTips(timeoutMsg, fmt.Sprintf("Auto-promoted to background: bg:%s", task.ID)), nil
+		}
+
+		// No BgTaskManager — fall back to old behavior
 		timeoutErr := fmt.Sprintf("[TIMEOUT after %s] Command timed out", timeout)
 		if output != "" {
 			timeoutErr = fmt.Sprintf("[TIMEOUT after %s] Partial output:\n%s", timeout, output)
 		}
 		log.WithFields(log.Fields{
-			"command": params.Command,
+			"command": command,
 			"timeout": timeout,
 			"output":  output,
 		}).Warn("Shell command timed out")
@@ -228,15 +323,15 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	if result.ExitCode != 0 {
 		var errMsg string
 		if output != "" {
-			errMsg = fmt.Sprintf("[EXIT %d] %s\n%s", result.ExitCode, params.Command, output)
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n%s", result.ExitCode, command, output)
 		} else if result.Stderr != "" {
-			errMsg = fmt.Sprintf("[EXIT %d] %s\n[stderr] %s", result.ExitCode, params.Command, result.Stderr)
+			errMsg = fmt.Sprintf("[EXIT %d] %s\n[stderr] %s", result.ExitCode, command, result.Stderr)
 		} else {
-			errMsg = fmt.Sprintf("[EXIT %d] %s (no output)", result.ExitCode, params.Command)
+			errMsg = fmt.Sprintf("[EXIT %d] %s (no output)", result.ExitCode, command)
 		}
 
 		log.WithFields(log.Fields{
-			"command":  params.Command,
+			"command":  command,
 			"exitCode": result.ExitCode,
 			"stderr":   result.Stderr,
 		}).Warn("Shell command failed")
@@ -256,10 +351,41 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	res := NewResult(output)
-	if tip := detectCdTip(params.Command); tip != "" {
+	if tip := detectCdTip(command); tip != "" {
 		res = res.WithTips(tip)
 	}
 	return res, nil
+}
+
+// sandboxExecAsync runs a sandbox command asynchronously, streaming output via outputBuf.
+func sandboxExecAsync(
+	ctx context.Context,
+	sandbox Sandbox,
+	spec ExecSpec,
+	outputBuf func(string),
+) (int, error) {
+	switch sandbox.Name() {
+	case "none":
+		return noneSandboxExecAsync(ctx, spec, outputBuf)
+	default:
+		// Docker/Remote: synchronous fallback (timeout=0 means no timeout)
+		result, err := sandbox.Exec(ctx, spec)
+		if outputBuf != nil && result != nil {
+			if result.Stdout != "" {
+				outputBuf(result.Stdout)
+			}
+			if result.Stderr != "" {
+				outputBuf("[stderr] " + result.Stderr)
+			}
+		}
+		if err != nil {
+			if result != nil {
+				return result.ExitCode, err
+			}
+			return -1, err
+		}
+		return result.ExitCode, nil
+	}
 }
 
 // persistEnvFromCommand 从命令中提取 export 语句并持久化到 ~/.xbot_env

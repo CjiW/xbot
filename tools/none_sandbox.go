@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"syscall"
 
 	log "xbot/logger"
 )
@@ -193,4 +195,83 @@ func (s *NoneSandbox) DownloadFile(ctx context.Context, url, outputPath, userID 
 
 	log.WithFields(log.Fields{"url": url, "output_path": outputPath, "size": written}).Info("File downloaded (none sandbox)")
 	return nil
+}
+
+// noneSandboxExecAsync runs a command asynchronously with streaming output.
+// Uses Setpgid to ensure all child processes are killed on context cancel.
+func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(string)) (int, error) {
+	var cmd *exec.Cmd
+	if spec.Shell {
+		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
+	} else {
+		if len(spec.Args) == 0 {
+			return -1, fmt.Errorf("non-shell exec requires Args to be set")
+		}
+		cmd = exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
+	}
+
+	if spec.Dir != "" {
+		cmd.Dir = spec.Dir
+	}
+	if len(spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), spec.Env...)
+	}
+	if spec.Stdin != "" {
+		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
+	} else {
+		cmd.Stdin = bytes.NewReader(nil)
+	}
+
+	// Setpgid: create new process group so kill kills all children
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Create pipes for streaming output
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return -1, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return -1, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return -1, fmt.Errorf("start command: %w", err)
+	}
+
+	// Stream stdout and stderr concurrently
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	stream := func(r io.Reader) {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := r.Read(buf)
+			if n > 0 && outputBuf != nil {
+				outputBuf(string(buf[:n]))
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}
+
+	go stream(stdoutPipe)
+	go stream(stderrPipe)
+
+	// Wait for completion
+	waitErr := cmd.Wait()
+	wg.Wait()
+
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
+		}
+		if ctx.Err() != nil {
+			return -1, ctx.Err()
+		}
+		return -1, waitErr
+	}
+	return 0, nil
 }

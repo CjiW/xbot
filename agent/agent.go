@@ -1844,16 +1844,25 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 		log.WithField("session_key", sessionKey).Warn("Bg task: invalid session key format")
 		return
 	}
-	channel, chatID := parts[0], parts[1]
+	channelName, chatID := parts[0], parts[1]
 
 	content := tools.FormatBgTaskCompletion(task)
 	log.WithFields(log.Fields{
 		"task_id": task.ID,
-		"channel": channel,
+		"channel": channelName,
 		"chat_id":  chatID,
 	}).Info("Bg task notification: injecting as user message")
 
-	a.injectInbound(channel, chatID, "system", content)
+	// Notify CLI to display the user message in the chat UI
+	if a.channelFinder != nil {
+		if ch, ok := a.channelFinder(channelName); ok {
+			if cliCh, ok := ch.(*channel.CLIChannel); ok {
+				cliCh.InjectUserMessage(content)
+			}
+		}
+	}
+
+	a.injectInbound(channelName, chatID, "system", content)
 }
 
 // buildBgNotificationRunConfig is no longer needed — idle bg notifications

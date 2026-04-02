@@ -1342,6 +1342,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			Name: "background_task_result",
 			}},
 			}
+			// Offload large bg task output (same as normal tool results)
+			if cfg.OffloadStore != nil {
+				if offloaded, ok := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, "background_task_result", "", bgContent, cfg.WorkspaceRoot, "", cfg.OriginUserID); ok {
+					bgContent = offloaded.Summary
+					GlobalMetrics.OffloadEvents.Add(1)
+					GlobalMetrics.OffloadedItems.Add(1)
+				}
+			}
 			bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
 			messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
 			log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")

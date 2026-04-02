@@ -713,6 +713,14 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
+// InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。
+// 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
+func (c *CLIChannel) InjectUserMessage(content string) {
+	if c.program != nil {
+		c.program.Send(cliInjectedUserMsg{content: content})
+	}
+}
+
 // updateBgTaskCountFn updates the model's bg task count callback.
 func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.model == nil {
@@ -1015,6 +1023,11 @@ type cliTickMsg struct{}
 
 // cliTempStatusClearMsg 临时状态提示自动清除
 type cliTempStatusClearMsg struct{}
+
+// cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）
+type cliInjectedUserMsg struct {
+	content string
+}
 
 // cliUpdateCheckMsg 更新检查结果消息
 type cliUpdateCheckMsg struct {
@@ -1441,6 +1454,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliTempStatusClearMsg:
 		m.tempStatus = ""
+
+	case cliInjectedUserMsg:
+		// Agent injected a user message (e.g. bg task completion notification).
+		// Display it identically to a manually typed user message.
+		m.messages = append(m.messages, cliMessage{
+			role:      "user",
+			content:   msg.content,
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+		// Refresh bg task count on injection
+		if m.bgTaskCountFn != nil {
+			m.bgTaskCount = m.bgTaskCountFn()
+		}
+		m.renderCacheValid = false
 
 	case cliUpdateCheckMsg:
 		m.checkingUpdate = false

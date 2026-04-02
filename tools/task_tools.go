@@ -187,7 +187,14 @@ func FormatBgTaskCompletion(task *BackgroundTask) string {
 	}
 
 	if task.Output != "" {
-		fmt.Fprintf(&sb, "\nOutput:\n%s", task.Output)
+		output := task.Output
+		// Truncate large output to avoid bloating context
+		const maxOutputLen = 2000
+		if len(output) > maxOutputLen {
+			fmt.Fprintf(&sb, "\nOutput (truncated, %d/%d chars):\n%s\n... [use offload_recall or check task output for full content]", maxOutputLen, len(output), output[:maxOutputLen])
+		} else {
+			fmt.Fprintf(&sb, "\nOutput:\n%s", output)
+		}
 	} else {
 		sb.WriteString("\n(no output)")
 	}

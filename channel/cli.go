@@ -288,8 +288,8 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-"/model", "/models", "/new", "/quit", "/settings", "/setup", "/update",
+	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
+	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/update",
 }
 
 // ---------------------------------------------------------------------------
@@ -735,8 +735,8 @@ type cliModel struct {
 	panelOnCancel  func()                          // callback on cancel
 
 	// --- §13 Update Check ---
-	updateNotice *version.UpdateInfo // nil=nothing, non-nil=show notice
-	checkingUpdate bool              // true while /update is in progress
+	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
+	checkingUpdate bool                // true while /update is in progress
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -960,33 +960,33 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyEnter:
-				// Enter 发送消息
-				if !m.inputReady {
-					return m, nil
+			// Enter 发送消息
+			if !m.inputReady {
+				return m, nil
+			}
+			// §8b @ 模式：Enter 进入目录或确认文件
+			if m.fileCompActive && len(m.fileCompletions) > 0 {
+				selected := m.fileCompletions[m.fileCompIdx]
+				input := m.textarea.Value()
+				_, prefix := detectAtPrefix(input)
+				atStart := len(input) - len(prefix) - 1
+				if isDir(selected) {
+					// 目录：进入下一层，手动触发 glob
+					newInput := input[:atStart] + "@" + selected + "/"
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.populateFileCompletions(selected + "/")
+				} else {
+					// 文件：加空格退出 @ 模式
+					newInput := input[:atStart] + "@" + selected + " "
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
 				}
-				// §8b @ 模式：Enter 进入目录或确认文件
-				if m.fileCompActive && len(m.fileCompletions) > 0 {
-					selected := m.fileCompletions[m.fileCompIdx]
-					input := m.textarea.Value()
-					_, prefix := detectAtPrefix(input)
-					atStart := len(input) - len(prefix) - 1
-					if isDir(selected) {
-											// 目录：进入下一层，手动触发 glob
-											newInput := input[:atStart] + "@" + selected + "/"
-											m.textarea.SetValue(newInput)
-											m.fileCompActive = false
-											m.populateFileCompletions(selected + "/")
-										} else {
-						// 文件：加空格退出 @ 模式
-						newInput := input[:atStart] + "@" + selected + " "
-						m.textarea.SetValue(newInput)
-						m.fileCompActive = false
-						m.fileCompletions = nil
-						m.fileCompIdx = 0
-					}
-					return m, nil
-				}
-				content := strings.TrimSpace(m.textarea.Value())
+				return m, nil
+			}
+			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
 				if m.allTodosDone() {
 					m.todos = nil
@@ -1163,28 +1163,28 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// Check progress.CompletedTools first (set by progressFinalizer)
 						for _, t := range msg.payload.CompletedTools {
 							if t.Iteration == m.lastSeenIteration {
-						finalTools = append(finalTools, t)
+								finalTools = append(finalTools, t)
 							}
 						}
 						// Also include any from lastCompletedTools (race safety)
 						for _, t := range m.lastCompletedTools {
 							if t.Iteration == m.lastSeenIteration {
-						dup := false
-						for _, existing := range finalTools {
-							if existing.Name == t.Name && existing.Label == t.Label {
-								dup = true
-								break
-							}
-						}
-						if !dup {
-							finalTools = append(finalTools, t)
-						}
+								dup := false
+								for _, existing := range finalTools {
+									if existing.Name == t.Name && existing.Label == t.Label {
+										dup = true
+										break
+									}
+								}
+								if !dup {
+									finalTools = append(finalTools, t)
+								}
 							}
 						}
 						if len(finalTools) > 0 {
 							m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-						Iteration: m.lastSeenIteration,
-						Tools:     finalTools,
+								Iteration: m.lastSeenIteration,
+								Tools:     finalTools,
 							})
 						}
 					}
@@ -1220,45 +1220,45 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case cliTickMsg:
-			if m.typing || m.progress != nil {
-				cmds = append(cmds, tickCmd())
-				m.updateViewportContent()
-			}
+		if m.typing || m.progress != nil {
+			cmds = append(cmds, tickCmd())
+			m.updateViewportContent()
+		}
 
-		case cliUpdateCheckMsg:
-			m.checkingUpdate = false
-			if msg.info != nil {
-				m.updateNotice = msg.info
-				if msg.info.HasUpdate {
-					content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   content,
-						timestamp: time.Now(),
-						dirty:     true,
-					})
-					m.updateViewportContent()
-				} else {
-					content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   content,
-						timestamp: time.Now(),
-						dirty:     true,
-					})
-					m.updateViewportContent()
-				}
-			} else {
+	case cliUpdateCheckMsg:
+		m.checkingUpdate = false
+		if msg.info != nil {
+			m.updateNotice = msg.info
+			if msg.info.HasUpdate {
+				content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
 				m.messages = append(m.messages, cliMessage{
 					role:      "system",
-					content:   "更新检查失败（网络超时或无法连接 GitHub API）",
+					content:   content,
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			} else {
+				content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   content,
 					timestamp: time.Now(),
 					dirty:     true,
 				})
 				m.updateViewportContent()
 			}
+		} else {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "更新检查失败（网络超时或无法连接 GitHub API）",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.updateViewportContent()
+		}
 
-		case tickerTickMsg:
+	case tickerTickMsg:
 		// Ticker tick: advance frame and trigger viewport refresh
 		if m.typing || m.progress != nil {
 			m.ticker.tick()
@@ -1281,19 +1281,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// §8 Tab 补全：输入内容变化时重置补全状态
-			newVal := m.textarea.Value()
-			if newVal != prevText {
-				m.completions = nil
-				m.compIdx = 0
-				m.fileCompActive = false
-				// 用户手动输入：根据当前 @ prefix 重新 glob
-				if ok, prefix := detectAtPrefix(newVal); ok {
-					m.populateFileCompletions(prefix)
-				} else {
-					m.fileCompletions = nil
-					m.fileCompIdx = 0
-				}
-			}
+	newVal := m.textarea.Value()
+	if newVal != prevText {
+		m.completions = nil
+		m.compIdx = 0
+		m.fileCompActive = false
+		// 用户手动输入：根据当前 @ prefix 重新 glob
+		if ok, prefix := detectAtPrefix(newVal); ok {
+			m.populateFileCompletions(prefix)
+		} else {
+			m.fileCompletions = nil
+			m.fileCompIdx = 0
+		}
+	}
 
 	// 检查是否需要退出
 	if m.shouldQuit {
@@ -1376,86 +1376,86 @@ func (m *cliModel) View() string {
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
-	// 输入框样式：根据输入内容动态设置边框颜色
-	// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
-		inputValue := strings.TrimSpace(m.textarea.Value())
-		borderColor := lipgloss.Color(currentTheme.Accent)
-		var completionsHint string
+		// 输入框样式：根据输入内容动态设置边框颜色
+		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
+	inputValue := strings.TrimSpace(m.textarea.Value())
+	borderColor := lipgloss.Color(currentTheme.Accent)
+	var completionsHint string
 
-		if strings.HasPrefix(inputValue, "!") {
-			borderColor = lipgloss.Color(currentTheme.Error)
-		} else if strings.HasPrefix(inputValue, "/") {
-			borderColor = lipgloss.Color(currentTheme.Success)
-			// 补全候选提示：与 Tab 补全共享状态
-			if len(m.completions) > 0 {
-				// Tab 已激活：高亮当前选中项
-				parts := make([]string, len(m.completions))
-				for i, c := range m.completions {
-					if i == m.compIdx {
-						parts[i] = lipgloss.NewStyle().
-							Bold(true).
-							Underline(true).
-							Foreground(lipgloss.Color(currentTheme.Success)).
-							Render(c)
-					} else {
-						parts[i] = lipgloss.NewStyle().
-							Foreground(lipgloss.Color(currentTheme.Success)).
-							Render(c)
-					}
-				}
-				completionsHint = lipgloss.NewStyle().
-					Padding(0, 1).
-					Render(strings.Join(parts, " · "))
-			} else {
-				// 尚未按 Tab：显示潜在匹配
-				var matches []string
-				for _, cmd := range cliCommands {
-					if strings.HasPrefix(cmd, inputValue) {
-						matches = append(matches, cmd)
-					}
-				}
-				if len(matches) > 0 {
-					completionsHint = lipgloss.NewStyle().
+	if strings.HasPrefix(inputValue, "!") {
+		borderColor = lipgloss.Color(currentTheme.Error)
+	} else if strings.HasPrefix(inputValue, "/") {
+		borderColor = lipgloss.Color(currentTheme.Success)
+		// 补全候选提示：与 Tab 补全共享状态
+		if len(m.completions) > 0 {
+			// Tab 已激活：高亮当前选中项
+			parts := make([]string, len(m.completions))
+			for i, c := range m.completions {
+				if i == m.compIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).
+						Underline(true).
 						Foreground(lipgloss.Color(currentTheme.Success)).
-						Padding(0, 1).
-						Render("[Tab] " + strings.Join(matches, " · "))
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Render(c)
 				}
+			}
+			completionsHint = lipgloss.NewStyle().
+				Padding(0, 1).
+				Render(strings.Join(parts, " · "))
+		} else {
+			// 尚未按 Tab：显示潜在匹配
+			var matches []string
+			for _, cmd := range cliCommands {
+				if strings.HasPrefix(cmd, inputValue) {
+					matches = append(matches, cmd)
+				}
+			}
+			if len(matches) > 0 {
+				completionsHint = lipgloss.NewStyle().
+					Foreground(lipgloss.Color(currentTheme.Success)).
+					Padding(0, 1).
+					Render("[Tab] " + strings.Join(matches, " · "))
 			}
 		}
+	}
 
-		// §8b @ 文件引用补全提示（只展示，不做 glob）
-			rawInput := m.textarea.Value()
-			if ok, _ := detectAtPrefix(rawInput); ok {
-				borderColor = lipgloss.Color(currentTheme.Info)
-				if len(m.fileCompletions) > 0 {
-					parts := make([]string, len(m.fileCompletions))
-					for i, c := range m.fileCompletions {
-						if isDir(c) {
-							c += "/"
-						}
-						if i == m.fileCompIdx {
-							parts[i] = lipgloss.NewStyle().
-								Bold(true).
-								Underline(true).
-								Foreground(lipgloss.Color(currentTheme.Info)).
-								Render(c)
-						} else {
-							parts[i] = lipgloss.NewStyle().
-								Foreground(lipgloss.Color(currentTheme.Info)).
-								Render(c)
-						}
-					}
-					completionsHint = lipgloss.NewStyle().
-						Padding(0, 1).
-						Render("[Tab] " + strings.Join(parts, " · "))
+	// §8b @ 文件引用补全提示（只展示，不做 glob）
+	rawInput := m.textarea.Value()
+	if ok, _ := detectAtPrefix(rawInput); ok {
+		borderColor = lipgloss.Color(currentTheme.Info)
+		if len(m.fileCompletions) > 0 {
+			parts := make([]string, len(m.fileCompletions))
+			for i, c := range m.fileCompletions {
+				if isDir(c) {
+					c += "/"
+				}
+				if i == m.fileCompIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).
+						Underline(true).
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
 				} else {
-					// 无匹配文件
-					completionsHint = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.TextMuted)).
-						Padding(0, 1).
-						Render("[Tab] 无匹配文件")
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
 				}
 			}
+			completionsHint = lipgloss.NewStyle().
+				Padding(0, 1).
+				Render("[Tab] " + strings.Join(parts, " · "))
+		} else {
+			// 无匹配文件
+			completionsHint = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.TextMuted)).
+				Padding(0, 1).
+				Render("[Tab] 无匹配文件")
+		}
+	}
 
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -2056,32 +2056,32 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		}
 
 	case "/setup":
-			m.openSetupPanel()
+		m.openSetupPanel()
 
-		case "/update":
-			if m.checkingUpdate {
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "正在检查更新...",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
-			} else {
-				m.checkingUpdate = true
-				m.updateNotice = nil
-				if m.channel != nil {
-					m.channel.CheckUpdateAsync()
-				}
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "正在检查更新...",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
-				m.updateViewportContent()
+	case "/update":
+		if m.checkingUpdate {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "正在检查更新...",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+		} else {
+			m.checkingUpdate = true
+			m.updateNotice = nil
+			if m.channel != nil {
+				m.channel.CheckUpdateAsync()
 			}
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "正在检查更新...",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.updateViewportContent()
+		}
 
-		case "/quit", "/exit":
+	case "/quit", "/exit":
 		m.shouldQuit = true
 
 	case "/help":
@@ -3477,26 +3477,26 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		return true, m, nil
 	case tea.KeySpace:
-			if hasOpts && !onOther {
-				if cursor < numOpts {
-					m.toggleOptAtCursor()
-				}
-				if cursor < numOpts+1 {
-					m.panelOptCursor[m.panelTab] = cursor + 1
-				}
-				return true, m, nil
+		if hasOpts && !onOther {
+			if cursor < numOpts {
+				m.toggleOptAtCursor()
 			}
-			if onOther {
-				// Other 输入框：空格传给 textinput
-				var cmd tea.Cmd
-				m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
-				return true, m, cmd
+			if cursor < numOpts+1 {
+				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
-			// No options: fall through to textarea
-			m.autoExpandAskTA()
+			return true, m, nil
+		}
+		if onOther {
+			// Other 输入框：空格传给 textinput
 			var cmd tea.Cmd
-			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
 			return true, m, cmd
+		}
+		// No options: fall through to textarea
+		m.autoExpandAskTA()
+		var cmd tea.Cmd
+		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+		return true, m, cmd
 	case tea.KeyRunes:
 		if hasOpts && !onOther {
 			m.panelOptCursor[m.panelTab] = numOpts

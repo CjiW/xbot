@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	githubAPIURL  = "https://api.github.com/repos/CjiW/xbot/releases/latest"
-	checkTimeout  = 10 * time.Second
+	githubAPIURL = "https://api.github.com/repos/CjiW/xbot/releases/latest"
+	checkTimeout = 10 * time.Second
 )
 
 // githubRelease represents the GitHub API response for a release.

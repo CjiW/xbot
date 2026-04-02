@@ -260,121 +260,121 @@ func main() {
 			}
 		},
 		ApplySettings: func(values map[string]string) {
-				// Apply LLM settings
-				if v, ok := values["llm_provider"]; ok && v != "" {
-					app.cfg.LLM.Provider = v
+			// Apply LLM settings
+			if v, ok := values["llm_provider"]; ok && v != "" {
+				app.cfg.LLM.Provider = v
+			}
+			if v, ok := values["llm_api_key"]; ok && v != "" {
+				app.cfg.LLM.APIKey = v
+			}
+			if v, ok := values["llm_model"]; ok && v != "" {
+				app.cfg.LLM.Model = v
+			}
+			if v, ok := values["llm_base_url"]; ok && v != "" {
+				app.cfg.LLM.BaseURL = v
+			}
+			// Apply Sandbox settings
+			if v, ok := values["sandbox_mode"]; ok && v != "" {
+				app.cfg.Sandbox.Mode = v
+			}
+			// Apply Agent settings
+			if v, ok := values["memory_provider"]; ok && v != "" {
+				app.cfg.Agent.MemoryProvider = v
+			}
+			if v, ok := values["tavily_api_key"]; ok {
+				app.cfg.TavilyAPIKey = v
+			}
+			if v, ok := values["context_mode"]; ok && v != "" {
+				app.cfg.Agent.ContextMode = v
+			}
+			if v, ok := values["max_iterations"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxIterations = n
 				}
-				if v, ok := values["llm_api_key"]; ok && v != "" {
-					app.cfg.LLM.APIKey = v
+			}
+			if v, ok := values["max_concurrency"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MaxConcurrency = n
 				}
-				if v, ok := values["llm_model"]; ok && v != "" {
-					app.cfg.LLM.Model = v
+			}
+			if v, ok := values["memory_window"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					app.cfg.Agent.MemoryWindow = n
 				}
-				if v, ok := values["llm_base_url"]; ok && v != "" {
-					app.cfg.LLM.BaseURL = v
+			}
+			if v, ok := values["max_context_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					app.cfg.Agent.MaxContextTokens = n
 				}
-				// Apply Sandbox settings
-				if v, ok := values["sandbox_mode"]; ok && v != "" {
-					app.cfg.Sandbox.Mode = v
+			}
+			if v, ok := values["enable_auto_compress"]; ok {
+				b := v == "true"
+				app.cfg.Agent.EnableAutoCompress = &b
+			}
+			// Persist to config.json
+			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+				log.Warnf("Failed to save config.json: %v", err)
+			}
+			// Persist theme to settings service (theme is CLI-specific, not in config.json)
+			if theme, ok := values["theme"]; ok && theme != "" && app.agentLoop != nil {
+				if ss := app.agentLoop.GetSettingsService(); ss != nil {
+					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
-				// Apply Agent settings
-				if v, ok := values["memory_provider"]; ok && v != "" {
-					app.cfg.Agent.MemoryProvider = v
+			}
+			// Rebuild LLM client and update agent runtime when LLM config changed
+			_, llmChanged := values["llm_provider"]
+			_, keyChanged := values["llm_api_key"]
+			_, modelChanged := values["llm_model"]
+			_, urlChanged := values["llm_base_url"]
+			if llmChanged || keyChanged || modelChanged || urlChanged {
+				if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
+					Attempts: 5,
+					Delay:    1 * time.Second,
+					MaxDelay: 30 * time.Second,
+				}); err == nil {
+					app.llmClient = newClient
+					if app.agentLoop != nil {
+						app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+					}
+				} else {
+					log.Warnf("Failed to rebuild LLM client: %v", err)
 				}
-				if v, ok := values["tavily_api_key"]; ok {
-					app.cfg.TavilyAPIKey = v
-				}
+			}
+			// Update agent runtime state
+			if app.agentLoop != nil {
 				if v, ok := values["context_mode"]; ok && v != "" {
-					app.cfg.Agent.ContextMode = v
+					_ = app.agentLoop.SetContextMode(v)
 				}
 				if v, ok := values["max_iterations"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.cfg.Agent.MaxIterations = n
+						app.agentLoop.SetMaxIterations(n)
 					}
 				}
 				if v, ok := values["max_concurrency"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.cfg.Agent.MaxConcurrency = n
+						app.agentLoop.SetMaxConcurrency(n)
 					}
 				}
 				if v, ok := values["memory_window"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.cfg.Agent.MemoryWindow = n
+						app.agentLoop.SetMemoryWindow(n)
 					}
 				}
 				if v, ok := values["max_context_tokens"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						app.cfg.Agent.MaxContextTokens = n
+						app.agentLoop.SetMaxContextTokens(n)
 					}
 				}
+				// enable_auto_compress maps to context_mode: true→auto, false→none
 				if v, ok := values["enable_auto_compress"]; ok {
-					b := v == "true"
-					app.cfg.Agent.EnableAutoCompress = &b
-				}
-				// Persist to config.json
-				if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
-					log.Warnf("Failed to save config.json: %v", err)
-				}
-				// Persist theme to settings service (theme is CLI-specific, not in config.json)
-				if theme, ok := values["theme"]; ok && theme != "" && app.agentLoop != nil {
-					if ss := app.agentLoop.GetSettingsService(); ss != nil {
-						_ = ss.SetSetting("cli", "cli_user", "theme", theme)
-					}
-				}
-				// Rebuild LLM client and update agent runtime when LLM config changed
-				_, llmChanged := values["llm_provider"]
-				_, keyChanged := values["llm_api_key"]
-				_, modelChanged := values["llm_model"]
-				_, urlChanged := values["llm_base_url"]
-				if llmChanged || keyChanged || modelChanged || urlChanged {
-					if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
-						Attempts: 5,
-						Delay:    1 * time.Second,
-						MaxDelay: 30 * time.Second,
-					}); err == nil {
-						app.llmClient = newClient
-						if app.agentLoop != nil {
-							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
-						}
+					if v == "true" {
+						_ = app.agentLoop.SetContextMode("auto")
 					} else {
-						log.Warnf("Failed to rebuild LLM client: %v", err)
+						_ = app.agentLoop.SetContextMode("none")
 					}
 				}
-				// Update agent runtime state
-				if app.agentLoop != nil {
-					if v, ok := values["context_mode"]; ok && v != "" {
-						_ = app.agentLoop.SetContextMode(v)
-					}
-					if v, ok := values["max_iterations"]; ok {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							app.agentLoop.SetMaxIterations(n)
-						}
-					}
-					if v, ok := values["max_concurrency"]; ok {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							app.agentLoop.SetMaxConcurrency(n)
-						}
-					}
-					if v, ok := values["memory_window"]; ok {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							app.agentLoop.SetMemoryWindow(n)
-						}
-					}
-					if v, ok := values["max_context_tokens"]; ok {
-						if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-							app.agentLoop.SetMaxContextTokens(n)
-						}
-					}
-					// enable_auto_compress maps to context_mode: true→auto, false→none
-					if v, ok := values["enable_auto_compress"]; ok {
-						if v == "true" {
-							_ = app.agentLoop.SetContextMode("auto")
-						} else {
-							_ = app.agentLoop.SetContextMode("none")
-						}
-					}
-				}
-			},
+			}
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

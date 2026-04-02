@@ -1287,24 +1287,24 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	ctx = letta.WithUserID(ctx, msg.SenderID)
 
 	preview := msg.Content
-		if r := []rune(preview); len(r) > 80 {
-			preview = string(r[:80]) + "..."
-		}
-		log.Ctx(ctx).WithFields(log.Fields{
-			"channel": msg.Channel,
-			"sender":  msg.SenderID,
-		}).Infof("Processing: %s", preview)
+	if r := []rune(preview); len(r) > 80 {
+		preview = string(r[:80]) + "..."
+	}
+	log.Ctx(ctx).WithFields(log.Fields{
+		"channel": msg.Channel,
+		"sender":  msg.SenderID,
+	}).Infof("Processing: %s", preview)
 
-		// 将 Media 文件引用附加到消息内容中
-		if len(msg.Media) > 0 {
-			var ref strings.Builder
-			ref.WriteString("\n\n[Attached files]")
-			for _, f := range msg.Media {
-				ref.WriteString("\n- ")
-				ref.WriteString(f)
-			}
-			msg.Content += ref.String()
+	// 将 Media 文件引用附加到消息内容中
+	if len(msg.Media) > 0 {
+		var ref strings.Builder
+		ref.WriteString("\n\n[Attached files]")
+		for _, f := range msg.Media {
+			ref.WriteString("\n- ")
+			ref.WriteString(f)
 		}
+		msg.Content += ref.String()
+	}
 
 	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
 	if msg.IsCron {

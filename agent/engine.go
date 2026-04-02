@@ -158,6 +158,11 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
+	// DrainBgNotifications is called between iterations to check for completed bg tasks.
+	// Returns tasks that should be injected as tool results into the current Run loop.
+	// Returns nil when no notifications are pending. Called on each iteration.
+	DrainBgNotifications func() []*tools.BackgroundTask
+
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
@@ -1321,12 +1326,31 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPersistedCount = len(messages)
 		}
 
-	// NOTE: BgNotifyCh is no longer used. The engine Run loop no longer directly
-	// consumes bg notifications. Instead, Agent.bgNotifyLoop buffers into bgRunPending,
-	// which is drained after Run() returns in processMessage. This avoids the race where
-	// notifications get stuck in an unbuffered channel with no consumer.
+	// NOTE: BgNotifyCh is no longer used. bgNotifyLoop buffers into Agent.bgRunPending.
+	// The Run loop drains pending notifications between iterations and injects them as
+	// synthetic tool results so the LLM processes them inline.
+	// After Run returns, any remaining pending notifications go through injectInbound (user message).
 
-	// 如果有任何工具标记为等待用户响应，则停止循环
+		// --- 注入后台任务完成通知（迭代中：tool result） ---
+			if cfg.DrainBgNotifications != nil {
+				pending := cfg.DrainBgNotifications()
+				for _, bgTask := range pending {
+					bgContent := tools.FormatBgTaskCompletion(bgTask)
+					bgAssistantMsg := llm.ChatMessage{
+						Role:    "assistant",
+						Content: "A background task has completed. Let me check the result.",
+						ToolCalls: []llm.ToolCall{{
+							ID:   "bg_" + bgTask.ID,
+							Name: "background_task_result",
+						}},
+					}
+					bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
+					messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
+					log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
+				}
+			}
+
+		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
 			outMsg := &bus.OutboundMessage{

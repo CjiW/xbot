@@ -1420,15 +1420,23 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
 	atomic.StoreInt32(&a.bgRunActive, 1)
+	// Wire drain callback so Run loop can inject bg task results as tool messages
+	cfg.DrainBgNotifications = func() []*tools.BackgroundTask {
+		a.bgRunPendingMu.Lock()
+		pending := a.bgRunPending
+		a.bgRunPending = nil
+		a.bgRunPendingMu.Unlock()
+		return pending
+	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
-	// Drain any bg notifications that arrived during Run.
-	// Process them in idle mode so they aren't lost.
+	// Drain any bg notifications that arrived after Run's last iteration.
+	// Process them as user messages (idle path).
 	a.bgRunPendingMu.Lock()
-	pending := a.bgRunPending
+	remaining := a.bgRunPending
 	a.bgRunPending = nil
 	a.bgRunPendingMu.Unlock()
-	for _, task := range pending {
+	for _, task := range remaining {
 		go a.processBgNotification(task)
 	}
 	if out.Error != nil {

@@ -923,6 +923,13 @@ type cliModel struct {
 	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
 	panelOnCancel  func()                          // callback on cancel
 
+	// --- Bg Tasks Panel ---
+	panelBgTasks      []*tools.BackgroundTask // cached task list
+	panelBgCursor     int                     // selected task index
+	panelBgViewing    bool                    // true = viewing log of selected task
+	panelBgScroll     int                     // log view scroll offset
+	panelBgLogLines   []string                // cached log lines for viewing
+
 	// --- §13 Update Check ---
 	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate bool                // true while /update is in progress
@@ -1216,7 +1223,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyEnter:
+			case tea.KeyUp:
+			// ↑ with bg tasks running + empty input → open bg tasks panel
+			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputReady {
+				m.openBgTasksPanel()
+				return m, nil
+			}
+
+			case tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
@@ -1819,12 +1833,12 @@ func (m *cliModel) View() string {
 	// Background task indicator
 	if m.bgTaskCount > 0 {
 		bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
-			fmt.Sprintf("[bg: %d task%s running]", m.bgTaskCount, func() string {
-				if m.bgTaskCount > 1 {
-					return "s"
-				}
-				return ""
-			}()))
+		fmt.Sprintf("[bg: %d task%s running — ↑ to manage]", m.bgTaskCount, func() string {
+			if m.bgTaskCount > 1 {
+			return "s"
+			}
+			return ""
+		}()))
 		if status != "" {
 			status += "  " + bgHint
 		} else {
@@ -3554,6 +3568,272 @@ func (m *cliModel) closePanel() {
 	m.panelTab = 0
 	m.panelOptSel = nil
 	m.panelOptCursor = nil
+	// Bg tasks panel cleanup
+	m.panelBgTasks = nil
+	m.panelBgViewing = false
+	m.panelBgScroll = 0
+	m.panelBgLogLines = nil
+}
+
+// openBgTasksPanel opens the background task management panel.
+func (m *cliModel) openBgTasksPanel() {
+	if m.channel == nil || m.channel.bgTaskMgr == nil {
+		return
+	}
+	m.panelMode = "bgtasks"
+	m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+	m.panelBgCursor = 0
+	m.panelBgViewing = false
+	m.panelBgScroll = 0
+	m.panelBgLogLines = nil
+	// Clamp cursor
+	if len(m.panelBgTasks) == 0 {
+		m.panelBgCursor = -1
+	} else if m.panelBgCursor >= len(m.panelBgTasks) {
+		m.panelBgCursor = len(m.panelBgTasks) - 1
+	}
+}
+
+// updateBgTasksPanel handles key events in the bg tasks panel.
+// Returns (handled, newModel, cmd).
+func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	// Refresh task list
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+	}
+
+	// Log viewing sub-mode
+	if m.panelBgViewing {
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.panelBgViewing = false
+			m.panelBgScroll = 0
+			m.panelBgLogLines = nil
+			return true, m, nil
+		case tea.KeyUp:
+			m.panelBgScroll -= 5
+			if m.panelBgScroll < 0 {
+				m.panelBgScroll = 0
+			}
+			return true, m, nil
+		case tea.KeyDown:
+			maxScroll := len(m.panelBgLogLines) - 20
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			m.panelBgScroll += 5
+			if m.panelBgScroll > maxScroll {
+				m.panelBgScroll = maxScroll
+			}
+			return true, m, nil
+		case tea.KeyPgUp:
+			m.panelBgScroll -= 18
+			if m.panelBgScroll < 0 {
+				m.panelBgScroll = 0
+			}
+			return true, m, nil
+		default:
+			// PgDn: bubbletea doesn't have a constant, match by string
+			if msg.String() == "pgdown" {
+				maxScroll := len(m.panelBgLogLines) - 20
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.panelBgScroll += 18
+				if m.panelBgScroll > maxScroll {
+					m.panelBgScroll = maxScroll
+				}
+				return true, m, nil
+			}
+		}
+		return true, m, nil
+	}
+
+	// Task list mode
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.closePanel()
+		if m.typing {
+			return true, m, tea.Batch(tickerCmd(), tickCmd())
+		}
+		return true, m, nil
+
+	case tea.KeyUp, tea.KeyCtrlK:
+		if m.panelBgCursor > 0 {
+			m.panelBgCursor--
+		}
+		return true, m, nil
+
+	case tea.KeyDown, tea.KeyCtrlJ:
+		if m.panelBgCursor < len(m.panelBgTasks)-1 {
+			m.panelBgCursor++
+		}
+		return true, m, nil
+
+	case tea.KeyEnter:
+		// View log of selected task
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			task := m.panelBgTasks[m.panelBgCursor]
+			// Output is written atomically by the task runner, safe to read
+			m.panelBgLogLines = splitLines(task.Output)
+			if len(m.panelBgLogLines) == 0 {
+				m.panelBgLogLines = []string{"(no output)"}
+			}
+			m.panelBgViewing = true
+			m.panelBgScroll = 0
+		}
+		return true, m, nil
+
+	case tea.KeyDelete, tea.KeyCtrlD:
+		// Kill selected running task
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			task := m.panelBgTasks[m.panelBgCursor]
+			if task.Status == tools.BgTaskRunning {
+				if m.channel != nil && m.channel.bgTaskMgr != nil {
+					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
+						m.tempStatus = fmt.Sprintf("Kill failed: %s", err)
+						return true, m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+							return cliTempStatusClearMsg{}
+						})
+					}
+					// Refresh list after kill
+					m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+					if m.panelBgCursor >= len(m.panelBgTasks) {
+						m.panelBgCursor = len(m.panelBgTasks) - 1
+					}
+					return true, m, nil
+				}
+			}
+		}
+		return true, m, nil
+	}
+
+	return true, m, nil
+}
+
+// viewBgTasksPanel renders the bg tasks panel.
+func (m *cliModel) viewBgTasksPanel() string {
+	if m.panelBgViewing {
+		return m.viewBgTaskLog()
+	}
+	return m.viewBgTaskList()
+}
+
+// viewBgTaskList renders the task list view.
+func (m *cliModel) viewBgTaskList() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(0, 1)
+
+	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render("Background Tasks")
+	help := lipgloss.NewStyle().Faint(true).Render("↑↓ navigate  Enter view log  Del kill  Esc close")
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	if len(m.panelBgTasks) == 0 {
+		sb.WriteString("\n  No background tasks.\n")
+	} else {
+		for i, task := range m.panelBgTasks {
+			elapsed := time.Since(task.StartedAt).Round(time.Second)
+			if task.FinishedAt != nil {
+				elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
+			}
+			statusIcon := "●"
+			statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)) // amber for running
+			if task.Status == tools.BgTaskDone {
+				if task.Error != "" || task.ExitCode != 0 {
+					statusIcon = "✗"
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error)) // red
+				} else {
+					statusIcon = "✓"
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success)) // green
+				}
+			}
+
+			prefix := "  "
+			if i == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
+
+			cmd := task.Command
+			if len(cmd) > 50 {
+				cmd = cmd[:47] + "..."
+			}
+
+			line := fmt.Sprintf("%s %s  %-8s %s  %s",
+				prefix,
+				statusStyle.Render(statusIcon),
+				task.ID,
+				formatElapsed(int64(elapsed.Milliseconds())),
+				cmd,
+			)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+// viewBgTaskLog renders the log viewer for a selected task.
+func (m *cliModel) viewBgTaskLog() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(0, 1)
+
+	var title string
+	if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+		task := m.panelBgTasks[m.panelBgCursor]
+		cmd := task.Command
+		if len(cmd) > 40 {
+			cmd = cmd[:37] + "..."
+		}
+		title = fmt.Sprintf("Log: %s — %s", task.ID, cmd)
+	}
+	help := lipgloss.NewStyle().Faint(true).Render("↑↓ scroll  Esc back")
+
+	maxLines := 18
+	start := m.panelBgScroll
+	if start > len(m.panelBgLogLines) {
+		start = len(m.panelBgLogLines)
+	}
+	end := start + maxLines
+	if end > len(m.panelBgLogLines) {
+		end = len(m.panelBgLogLines)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render(title))
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	for _, line := range m.panelBgLogLines[start:end] {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	if end < len(m.panelBgLogLines) {
+		sb.WriteString(lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("  ... %d more lines (↑↓ scroll)", len(m.panelBgLogLines)-end)))
+		sb.WriteString("\n")
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+// splitLines splits a string into lines, preserving trailing empty line.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 // updatePanel handles key events when a panel is active.
@@ -3568,6 +3848,8 @@ func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		return m.updateSettingsPanel(msg)
 	case "askuser":
 		return m.updateAskUserPanel(msg)
+	case "bgtasks":
+		return m.updateBgTasksPanel(msg)
 	}
 	return false, m, nil
 }
@@ -4021,6 +4303,8 @@ func (m *cliModel) viewPanel() string {
 		return m.viewSettingsPanel()
 	case "askuser":
 		return m.viewAskUserPanel()
+	case "bgtasks":
+		return m.viewBgTasksPanel()
 	}
 	return ""
 }

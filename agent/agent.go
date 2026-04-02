@@ -1385,28 +1385,34 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// 运行 Agent 循环（统一 Run）
+	// Eager-save user message BEFORE Run() so incrementally persisted assistant/tool
+	// messages appear after it in the DB. GetHistory uses user messages as turn boundaries.
+	if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
+		userMsg := llm.NewUserMessage(msg.Content)
+		if !msg.Time.IsZero() {
+			userMsg.Timestamp = msg.Time
+		}
+		if err := tenantSession.AddMessage(userMsg); err != nil {
+			log.Ctx(ctx).WithError(err).Warn("Failed to eager-save user message")
+		}
+	}
+
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	out := Run(ctx, cfg)
 	if out.Error != nil {
-		// When cancelled, save user message + partial engine progress to session
-		// so the next turn has context of what happened before cancellation.
+		// When cancelled, save any un-persisted engine messages from the
+		// interrupted iteration. User message and completed iterations are
+		// already persisted (eager-save + incremental persistence).
 		if errors.Is(out.Error, context.Canceled) {
-			if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
-				userMsg := llm.NewUserMessage(msg.Content)
-				if !msg.Time.IsZero() {
-					userMsg.Timestamp = msg.Time
-				}
-				if err := tenantSession.AddMessage(userMsg); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to save user message on cancel")
-				}
-			}
 			for _, em := range out.EngineMessages {
 				assertNoSystemPersist(em)
 				if err := tenantSession.AddMessage(em); err != nil {
 					log.Ctx(ctx).WithError(err).Warn("Failed to save engine message on cancel")
 				}
 			}
-			log.Ctx(ctx).Infof("Cancelled: saved user msg + %d engine messages to session", len(out.EngineMessages))
+			if len(out.EngineMessages) > 0 {
+				log.Ctx(ctx).Infof("Cancelled: persisted %d un-persisted engine messages", len(out.EngineMessages))
+			}
 		}
 		return nil, out.Error
 	}
@@ -1416,23 +1422,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	// 如果工具正在等待用户响应，发送 WaitingUser outbound 让渠道打开交互面板
 	if waitingUser {
 		log.Ctx(ctx).Info("Tool is waiting for user response, sending WaitingUser outbound")
-		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
-			userMsg := llm.NewUserMessage(msg.Content)
-			if !msg.Time.IsZero() {
-				userMsg.Timestamp = msg.Time
-			}
-			if err := tenantSession.AddMessage(userMsg); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-			}
-		}
-		// Persist engine-produced messages (assistant + tool) so the next
-		// turn has full context of what happened before waiting.
-		for _, em := range out.EngineMessages {
-			assertNoSystemPersist(em)
-			if err := tenantSession.AddMessage(em); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to save engine message during waiting")
-			}
-		}
+		// User message and engine messages already persisted (eager-save + incremental).
 		// Send the WaitingUser outbound so CLI can open the ask-user panel.
 		// Content may be empty (no assistant reply yet), which is fine — the
 		// panel reads the question from Metadata["ask_question"].
@@ -1456,15 +1446,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	if finalContent == "" && replyPolicy == bus.ReplyPolicyOptional {
-		if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
-			userMsg := llm.NewUserMessage(msg.Content)
-			if !msg.Time.IsZero() {
-				userMsg.Timestamp = msg.Time
-			}
-			if err := tenantSession.AddMessage(userMsg); err != nil {
-				log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-			}
-		}
+		// User message already eager-saved before Run().
 		log.Ctx(ctx).WithFields(log.Fields{
 			"channel":      msg.Channel,
 			"chat_id":      msg.ChatID,
@@ -1473,25 +1455,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, nil
 	}
 
-	// 保存会话
-	if !askUserAnswered && (msg.Metadata == nil || msg.Metadata["user_msg_eager_saved"] != "true") {
-		userMsg := llm.NewUserMessage(msg.Content)
-		if !msg.Time.IsZero() {
-			userMsg.Timestamp = msg.Time
-		}
-		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save user message")
-		}
-	}
-
-	// Persist engine-produced messages (assistant + tool) for context continuity.
-	// This ensures the next turn has full context of what happened, not just a summary.
-	for _, em := range out.EngineMessages {
-		assertNoSystemPersist(em)
-		if err := tenantSession.AddMessage(em); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to save engine message")
-		}
-	}
+	// User message already eager-saved before Run(). Engine messages already
+	// incrementally persisted. Only need to save the final assistant reply.
 
 	assistantMsg := llm.NewAssistantMessage(finalContent)
 	// Attach iteration history as JSON detail for UI display (not included in LLM context).

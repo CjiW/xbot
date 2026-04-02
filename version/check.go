@@ -55,11 +55,13 @@ func parseSemver(v string) (major, minor, patch int) {
 }
 
 // isNewer returns true if b is newer than a (semver comparison).
+// Falls back to string comparison if either version is not valid semver.
 func isNewer(a, b string) bool {
 	aMaj, aMin, aPat := parseSemver(a)
 	bMaj, bMin, bPat := parseSemver(b)
 	if aMaj < 0 || bMaj < 0 {
-		return false
+		// Can't compare as semver, just check if they're different
+		return a != b
 	}
 	if bMaj != aMaj {
 		return bMaj > aMaj
@@ -74,7 +76,8 @@ func isNewer(a, b string) bool {
 // with the local build version. Returns nil if the check fails or version is a
 // dev build (in which case the caller should silently ignore).
 func CheckUpdate(ctx context.Context) *UpdateInfo {
-	if isDevBuild(Version) {
+	// Skip if version is completely empty
+	if Version == "" {
 		return nil
 	}
 

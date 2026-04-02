@@ -924,11 +924,11 @@ type cliModel struct {
 	panelOnCancel  func()                          // callback on cancel
 
 	// --- Bg Tasks Panel ---
-	panelBgTasks      []*tools.BackgroundTask // cached task list
-	panelBgCursor     int                     // selected task index
-	panelBgViewing    bool                    // true = viewing log of selected task
-	panelBgScroll     int                     // log view scroll offset
-	panelBgLogLines   []string                // cached log lines for viewing
+	panelBgTasks    []*tools.BackgroundTask // cached task list
+	panelBgCursor   int                     // selected task index
+	panelBgViewing  bool                    // true = viewing log of selected task
+	panelBgScroll   int                     // log view scroll offset
+	panelBgLogLines []string                // cached log lines for viewing
 
 	// --- §13 Update Check ---
 	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
@@ -1223,14 +1223,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-			case tea.KeyUp:
+		case tea.KeyUp:
 			// ↑ with bg tasks running + empty input → open bg tasks panel
 			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputReady {
 				m.openBgTasksPanel()
 				return m, nil
 			}
 
-			case tea.KeyEnter:
+		case tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
@@ -1833,12 +1833,12 @@ func (m *cliModel) View() string {
 	// Background task indicator
 	if m.bgTaskCount > 0 {
 		bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
-		fmt.Sprintf("[bg: %d task%s running — ↑ to manage]", m.bgTaskCount, func() string {
-			if m.bgTaskCount > 1 {
-			return "s"
-			}
-			return ""
-		}()))
+			fmt.Sprintf("[bg: %d task%s running — ↑ to manage]", m.bgTaskCount, func() string {
+				if m.bgTaskCount > 1 {
+					return "s"
+				}
+				return ""
+			}()))
 		if status != "" {
 			status += "  " + bgHint
 		} else {

@@ -41,11 +41,11 @@ type BackgroundTask struct {
 	Error      string       `json:"error,omitempty"`
 
 	// Internal fields (not serialized to LLM)
-	sessionKey string             // session key for routing completion notifications
+	sessionKey string // session key for routing completion notifications
 	cancel     context.CancelFunc
-	mu         sync.Mutex         // protects Output for concurrent writes
-	killed     bool               // set by Kill() before cancel()
-	process    *os.Process        // live OS process (set by Adopt, nil for Start-based tasks)
+	mu         sync.Mutex  // protects Output for concurrent writes
+	killed     bool        // set by Kill() before cancel()
+	process    *os.Process // live OS process (set by Adopt, nil for Start-based tasks)
 }
 
 // BackgroundTaskManager manages background task lifecycle.
@@ -132,20 +132,20 @@ func (m *BackgroundTaskManager) Start(
 
 		exitCode, execErr := execFn(ctx, outputBuf)
 
-			now := time.Now()
+		now := time.Now()
 
-			// Read killed flag ONCE and keep it — do NOT reset it.
-			// Kill() sets killed=true then calls cancel(); resetting here
-			// would race with status determination.
-			task.mu.Lock()
-			wasKilled := task.killed
-			task.mu.Unlock()
+		// Read killed flag ONCE and keep it — do NOT reset it.
+		// Kill() sets killed=true then calls cancel(); resetting here
+		// would race with status determination.
+		task.mu.Lock()
+		wasKilled := task.killed
+		task.mu.Unlock()
 
-			task.FinishedAt = &now
-			task.ExitCode = exitCode
+		task.FinishedAt = &now
+		task.ExitCode = exitCode
 
-			if execErr != nil {
-				if wasKilled || ctx.Err() != nil {
+		if execErr != nil {
+			if wasKilled || ctx.Err() != nil {
 				task.Status = BgTaskKilled
 				task.Error = "killed by user"
 			} else {

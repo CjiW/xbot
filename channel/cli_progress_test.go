@@ -259,21 +259,21 @@ func TestCrossIterationToolsFiltered(t *testing.T) {
 	// Verify iteration attribution
 	for _, msg := range model.messages {
 		if msg.role == "tool_summary" {
-		for _, it := range msg.iterations {
-			if it.Iteration == 0 {
-			if len(it.Tools) != 1 || it.Tools[0].Name != "read" {
-				t.Errorf("Iter 0 should have 1 'read' tool, got %+v", it.Tools)
-			}
-			}
-			if it.Iteration == 1 {
-			if len(it.Tools) != 1 || it.Tools[0].Name != "edit" {
-				t.Errorf("Iter 1 should have 1 'edit' tool, got %+v", it.Tools)
-			}
+			for _, it := range msg.iterations {
+				if it.Iteration == 0 {
+					if len(it.Tools) != 1 || it.Tools[0].Name != "read" {
+						t.Errorf("Iter 0 should have 1 'read' tool, got %+v", it.Tools)
+					}
+				}
+				if it.Iteration == 1 {
+					if len(it.Tools) != 1 || it.Tools[0].Name != "edit" {
+						t.Errorf("Iter 1 should have 1 'edit' tool, got %+v", it.Tools)
+					}
+				}
 			}
 		}
-		}
 	}
-	}
+}
 
 // ==================== Background Task Injection ====================
 
@@ -289,15 +289,15 @@ func TestBgTaskInjectedUserMessage_ShowsAsUserMessage(t *testing.T) {
 	// Should have exactly 1 message with role "user"
 	userMsgCount := 0
 	for _, msg := range model.messages {
-	if msg.role == "user" {
-		userMsgCount++
-		if !strings.Contains(msg.content, "abc123") {
-		t.Error("user message should contain task ID")
+		if msg.role == "user" {
+			userMsgCount++
+			if !strings.Contains(msg.content, "abc123") {
+				t.Error("user message should contain task ID")
+			}
 		}
 	}
-	}
 	if userMsgCount != 1 {
-	t.Errorf("expected 1 user message, got %d", userMsgCount)
+		t.Errorf("expected 1 user message, got %d", userMsgCount)
 	}
 }
 
@@ -307,17 +307,17 @@ func TestBgTaskInjectedUserMessage_StartsSpinner(t *testing.T) {
 
 	// Before injection, not typing
 	if model.typing {
-	t.Error("should not be typing initially")
+		t.Error("should not be typing initially")
 	}
 
 	model.Update(cliInjectedUserMsg{content: "bg task done"})
 
 	// After injection, should be typing
 	if !model.typing {
-	t.Error("should be typing after bg injection")
+		t.Error("should be typing after bg injection")
 	}
 	if model.inputReady {
-	t.Error("input should not be ready during processing")
+		t.Error("input should not be ready during processing")
 	}
 }
 
@@ -327,18 +327,18 @@ func TestBgTaskInjectedUserMessage_RefreshesBgCount(t *testing.T) {
 
 	callCount := 0
 	model.bgTaskCountFn = func() int {
-	callCount++
-	return 2
+		callCount++
+		return 2
 	}
 
 	model.Update(cliInjectedUserMsg{content: "bg task done"})
 
 	// Should have called bgTaskCountFn
 	if callCount != 1 {
-	t.Errorf("bgTaskCountFn should be called once, got %d", callCount)
+		t.Errorf("bgTaskCountFn should be called once, got %d", callCount)
 	}
 	if model.bgTaskCount != 2 {
-	t.Errorf("bgTaskCount should be 2, got %d", model.bgTaskCount)
+		t.Errorf("bgTaskCount should be 2, got %d", model.bgTaskCount)
 	}
 }
 
@@ -413,4 +413,3 @@ func TestBgDrainCrossIterationDoesNotLeak(t *testing.T) {
 		t.Errorf("expected 2 tools in summary (one per iteration), got %d", tools)
 	}
 }
-

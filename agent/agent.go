@@ -1850,7 +1850,7 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 	log.WithFields(log.Fields{
 		"task_id": task.ID,
 		"channel": channelName,
-		"chat_id":  chatID,
+		"chat_id": chatID,
 	}).Info("Bg task notification: injecting as user message")
 
 	// Notify CLI to display the user message in the chat UI

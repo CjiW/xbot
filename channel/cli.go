@@ -684,6 +684,7 @@ type cliModel struct {
 	// --- §8b @ 文件引用补全 ---
 	fileCompletions []string // @ 文件路径补全候选项
 	fileCompIdx     int      // 当前选中的文件补全索引
+	fileCompActive  bool     // true = fileCompletions 由 Tab 设置，下次 Update 不要重置
 	attachedFiles   []string // 当前输入中 @ 引用的文件路径
 
 	// --- §9 Ctrl+K 上下文编辑 ---
@@ -1133,13 +1134,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// §8 Tab 补全：输入内容变化时重置补全状态
-		newVal := m.textarea.Value()
-		if newVal != prevText {
-			m.completions = nil
-			m.compIdx = 0
-			m.fileCompletions = nil
-			m.fileCompIdx = 0
-		}
+			newVal := m.textarea.Value()
+			if newVal != prevText {
+				m.completions = nil
+				m.compIdx = 0
+				if !m.fileCompActive {
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
+					// 用户手动输入：立即重新 glob
+					if ok, prefix := detectAtPrefix(newVal); ok {
+						m.populateFileCompletions(prefix)
+					}
+				}
+				m.fileCompActive = false
+			}
 
 	// 检查是否需要退出
 	if m.shouldQuit {
@@ -1654,8 +1662,10 @@ func (m *cliModel) handleFileTabComplete(input string, prefix string) {
 		selected += "/"
 	}
 	atStart := len(input) - len(prefix) - 1
-	newInput := input[:atStart] + "@" + selected + " "
+	// 不加空格，保持 @selected 状态以便连续 Tab 循环
+	newInput := input[:atStart] + "@" + selected
 	m.textarea.SetValue(newInput)
+	m.fileCompActive = true
 }
 
 func isDir(path string) bool {

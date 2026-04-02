@@ -3323,20 +3323,26 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		return true, m, nil
 	case tea.KeySpace:
-		if hasOpts && !onOther {
-			if cursor < numOpts {
-				m.toggleOptAtCursor()
+			if hasOpts && !onOther {
+				if cursor < numOpts {
+					m.toggleOptAtCursor()
+				}
+				if cursor < numOpts+1 {
+					m.panelOptCursor[m.panelTab] = cursor + 1
+				}
+				return true, m, nil
 			}
-			if cursor < numOpts+1 {
-				m.panelOptCursor[m.panelTab] = cursor + 1
+			if onOther {
+				// Other 输入框：空格传给 textinput
+				var cmd tea.Cmd
+				m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+				return true, m, cmd
 			}
-			return true, m, nil
-		}
-		// No options: fall through to textarea
-		m.autoExpandAskTA()
-		var cmd tea.Cmd
-		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-		return true, m, cmd
+			// No options: fall through to textarea
+			m.autoExpandAskTA()
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
 	case tea.KeyRunes:
 		if hasOpts && !onOther {
 			m.panelOptCursor[m.panelTab] = numOpts

@@ -1606,6 +1606,10 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 							m.renderer = newGlamourRenderer(m.width - 4)
 						}
 						m.renderCacheValid = false
+				// Mark all messages dirty so fullRebuild re-renders with new colors
+				for j := range m.messages {
+					m.messages[j].dirty = true
+				}
 					}
 					// Update live config overrides (model, base_url)
 					if model, ok := values["llm_model"]; ok && model != "" {

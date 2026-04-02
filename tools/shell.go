@@ -243,7 +243,13 @@ func (t *ShellTool) executeForeground(
 	timeout time.Duration,
 	buildSpec func() ExecSpec,
 ) (*ToolResult, error) {
-	result, err := sandbox.Exec(parentCtx, buildSpec())
+	// Build spec with KeepAlive for none-sandbox so timeout doesn't kill the process.
+	// The process can then be adopted by BgTaskManager on timeout.
+	spec := buildSpec()
+	if sandbox.Name() == "none" && toolCtx != nil && toolCtx.BgTaskManager != nil {
+		spec.KeepAlive = true
+	}
+	result, err := sandbox.Exec(parentCtx, spec)
 
 	if err != nil {
 		return nil, fmt.Errorf("sandbox exec: %w", err)
@@ -278,23 +284,37 @@ func (t *ShellTool) executeForeground(
 				sessionKey = toolCtx.Channel + ":" + toolCtx.ChatID
 			}
 
-			partialOutput := output
-			task := toolCtx.BgTaskManager.Start(sessionKey, command,
-				func(ctx context.Context, outputBuf func(string)) (int, error) {
-					spec := buildSpec()
-					spec.Timeout = 0
-					if partialOutput != "" {
-						outputBuf(partialOutput + "\n\n--- [resumed after timeout] ---\n")
-					}
-					return sandboxExecAsync(ctx, sandbox, spec, outputBuf)
-				},
-			)
+			var task *BackgroundTask
 
-			log.WithFields(log.Fields{
-				"command": command,
-				"timeout": timeout,
-				"task_id": task.ID,
-			}).Info("Timed-out command auto-promoted to background task")
+			// If the sandbox supports KeepAlive and returned a live process,
+			// adopt it (no re-execution) — the original process continues running.
+			if result.Process != nil {
+				partialOutput := output
+				task = toolCtx.BgTaskManager.Adopt(sessionKey, command, result.Process, partialOutput)
+				log.WithFields(log.Fields{
+					"command": command,
+					"timeout": timeout,
+					"task_id": task.ID,
+				}).Info("Timed-out command adopted as background task (no re-exec)")
+			} else {
+				// Sandbox doesn't support KeepAlive (docker/remote) — fall back to re-execution.
+				partialOutput := output
+				task = toolCtx.BgTaskManager.Start(sessionKey, command,
+					func(ctx context.Context, outputBuf func(string)) (int, error) {
+						spec := buildSpec()
+						spec.Timeout = 0
+						if partialOutput != "" {
+							outputBuf(partialOutput + "\n\n--- [restarted after timeout] ---\n")
+						}
+						return sandboxExecAsync(ctx, sandbox, spec, outputBuf)
+					},
+				)
+				log.WithFields(log.Fields{
+					"command": command,
+					"timeout": timeout,
+					"task_id": task.ID,
+				}).Info("Timed-out command auto-promoted to background task (re-exec)")
+			}
 
 			timeoutMsg := fmt.Sprintf(
 				"[TIMEOUT after %s] Command timed out. Auto-promoted to background task [id: %s]\n"+

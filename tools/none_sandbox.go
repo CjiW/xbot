@@ -71,6 +71,11 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 		cmd.Stdin = bytes.NewReader(nil)
 	}
 
+	// KeepAlive mode: use pipes so we can detach on timeout without killing the process.
+	if spec.KeepAlive {
+		return s.execKeepAlive(cmd, ctx)
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -94,6 +99,77 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	}
 
 	return result, nil
+}
+
+// execKeepAlive runs a command with streaming output via pipes.
+// On timeout, the process is NOT killed — it continues running and
+// the caller takes ownership via ExecResult.Process.
+func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, ctx context.Context) (*ExecResult, error) {
+	// Setpgid so we can kill the process group independently
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+
+	// Collect output from pipes
+	var stdoutBuf, stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	capture := func(dst *bytes.Buffer, r io.Reader) {
+		defer wg.Done()
+		io.Copy(dst, r)
+	}
+	go capture(&stdoutBuf, stdoutPipe)
+	go capture(&stderrBuf, stderrPipe)
+
+	// Wait for the command to finish or context to expire
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+		wg.Wait()
+	}()
+
+	select {
+	case waitErr := <-waitCh:
+		// Command finished normally
+		result := &ExecResult{
+			Stdout: stdoutBuf.String(),
+			Stderr: stderrBuf.String(),
+		}
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
+				result.ExitCode = exitErr.ExitCode()
+			} else {
+				result.ExitCode = -1
+			}
+		}
+		return result, nil
+
+	case <-ctx.Done():
+		// Timeout — do NOT kill the process. Return it to the caller.
+		// Detach from pipes so the goroutines finish, but leave the process running.
+		// Note: cmd.Wait() is still running in the background goroutine and will
+		// clean up when the process eventually exits.
+		result := &ExecResult{
+			Stdout:   stdoutBuf.String(),
+			Stderr:   stderrBuf.String(),
+			ExitCode: -1,
+			TimedOut: true,
+			Process:  cmd.Process,
+		}
+		return result, nil
+	}
 }
 
 func (s *NoneSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {

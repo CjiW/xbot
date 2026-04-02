@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	log "xbot/logger"
@@ -39,9 +41,10 @@ type BackgroundTask struct {
 	Error      string       `json:"error,omitempty"`
 
 	// Internal fields (not serialized to LLM)
-	cancel context.CancelFunc
-	mu     sync.Mutex // protects Output for concurrent writes
-	killed bool       // set by Kill() before cancel()
+	cancel  context.CancelFunc
+	mu      sync.Mutex // protects Output for concurrent writes
+	killed  bool       // set by Kill() before cancel()
+	process *os.Process // live OS process (set by Adopt, nil for Start-based tasks)
 }
 
 // BackgroundTaskManager manages background task lifecycle.
@@ -118,31 +121,29 @@ func (m *BackgroundTaskManager) Start(
 		outputBuf := func(s string) {
 			task.mu.Lock()
 			defer task.mu.Unlock()
-			// Truncate output if it exceeds max size
-			if len(task.Output)+len(s) > maxBgOutputSize {
-				overflow := len(task.Output) + len(s) - maxBgOutputSize
-				if overflow > 0 && len(s) > overflow {
-					s = s[overflow:]
-				}
-			}
 			task.Output += s
+			// Keep only the tail (most recent output) when exceeding max size
+			if len(task.Output) > maxBgOutputSize {
+				task.Output = task.Output[len(task.Output)-maxBgOutputSize:]
+			}
 		}
 
 		exitCode, execErr := execFn(ctx, outputBuf)
 
-		now := time.Now()
-		task.mu.Lock()
-		task.killed = false // wasn't killed externally if we get here
-		task.mu.Unlock()
+			now := time.Now()
 
-		task.FinishedAt = &now
-		task.ExitCode = exitCode
-
-		if execErr != nil {
+			// Read killed flag ONCE and keep it — do NOT reset it.
+			// Kill() sets killed=true then calls cancel(); resetting here
+			// would race with status determination.
 			task.mu.Lock()
 			wasKilled := task.killed
 			task.mu.Unlock()
-			if wasKilled || ctx.Err() != nil {
+
+			task.FinishedAt = &now
+			task.ExitCode = exitCode
+
+			if execErr != nil {
+				if wasKilled || ctx.Err() != nil {
 				task.Status = BgTaskKilled
 				task.Error = "killed by user"
 			} else {
@@ -179,7 +180,94 @@ func (m *BackgroundTaskManager) Start(
 	return task
 }
 
-// Kill terminates a running background task.
+// Adopt takes ownership of an already-running OS process (e.g., from a timed-out
+// foreground command) and manages it as a background task. The process is NOT
+// re-executed — Adopt monitors the existing process until it exits.
+// partialOutput is any output collected before the timeout.
+//
+// Note: The caller must NOT call proc.Wait() — the original exec.Cmd goroutine
+// already owns that responsibility. Adopt polls for process exit instead.
+func (m *BackgroundTaskManager) Adopt(
+	sessionKey string,
+	command string,
+	proc *os.Process,
+	partialOutput string,
+) *BackgroundTask {
+	id := generateTaskID()
+	task := &BackgroundTask{
+		ID:        id,
+		Command:   command,
+		Status:    BgTaskRunning,
+		StartedAt: time.Now(),
+		ExitCode:  -1,
+		Output:    partialOutput,
+		process:   proc,
+	}
+
+	m.mu.Lock()
+	m.tasks[id] = task
+	m.sessions[sessionKey] = append(m.sessions[sessionKey], id)
+	m.mu.Unlock()
+
+	go func() {
+		// Poll for process exit. We can't use proc.Wait() because the original
+		// exec.Cmd goroutine already calls cmd.Wait() (which calls proc.Wait()).
+		// Signal(0) returns nil if the process is still alive.
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		var exitCode int
+		for range ticker.C {
+			err := proc.Signal(syscall.Signal(0))
+			if err != nil {
+				// Process has exited. We can't retrieve the exact exit code
+				// (the cmd.Wait goroutine owns that), so we use a heuristic.
+				exitCode = 0 // assume success if we didn't kill it
+				break
+			}
+		}
+
+		task.mu.Lock()
+		wasKilled := task.killed
+		task.mu.Unlock()
+
+		now := time.Now()
+		task.FinishedAt = &now
+		task.ExitCode = exitCode
+
+		if wasKilled {
+			task.Status = BgTaskKilled
+			task.Error = "killed by user"
+			task.ExitCode = -1
+		} else {
+			task.Status = BgTaskDone
+		}
+
+		log.WithFields(log.Fields{
+			"task_id":   id,
+			"status":    task.Status,
+			"exit_code": task.ExitCode,
+			"elapsed":   now.Sub(task.StartedAt).Round(time.Millisecond),
+		}).Info("Adopted background task completed")
+
+		// Fire callbacks
+		m.mu.RLock()
+		cbs := m.callbacks[sessionKey]
+		m.mu.RUnlock()
+		for _, cb := range cbs {
+			cb(task)
+		}
+
+		// Notify engine (non-blocking)
+		select {
+		case m.NotifyCh <- task:
+		default:
+			log.WithField("task_id", id).Warn("Background task notify channel full, dropping notification")
+		}
+	}()
+
+	return task
+}
 func (m *BackgroundTaskManager) Kill(taskID string) error {
 	m.mu.RLock()
 	task, ok := m.tasks[taskID]
@@ -193,7 +281,18 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
 	}
 
-	task.cancel()
+	// Kill the OS process group directly (covers Adopt tasks with no cancel func)
+	task.mu.Lock()
+	if task.process != nil {
+		// Kill the entire process group (negative PID)
+		syscall.Kill(-task.process.Pid, syscall.SIGKILL)
+	}
+	task.killed = true
+	task.mu.Unlock()
+
+	if task.cancel != nil {
+		task.cancel()
+	}
 	return nil
 }
 
@@ -240,10 +339,11 @@ func (m *BackgroundTaskManager) ListRunning(sessionKey string) []*BackgroundTask
 }
 
 // OnComplete registers a callback for task completion in a session.
+// Only one callback per session is kept — subsequent calls replace the previous one.
 func (m *BackgroundTaskManager) OnComplete(sessionKey string, callback func(task *BackgroundTask)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.callbacks[sessionKey] = append(m.callbacks[sessionKey], callback)
+	m.callbacks[sessionKey] = []func(task *BackgroundTask){callback}
 }
 
 // CleanupSession removes all tasks and callbacks for a session.

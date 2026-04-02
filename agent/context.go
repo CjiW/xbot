@@ -13,7 +13,7 @@ import (
 	log "xbot/logger"
 )
 
-// defaultSystemPrompt 最小 fallback，仅在 prompt.md 文件不存在时使用。
+// defaultSystemPrompt 最小 fallback，仅在 embed 和文件都不存在时使用。
 const defaultSystemPrompt = `你是 xbot。渠道：{{.Channel}} | 工作目录：{{.WorkDir}} | 当前目录：{{.CWD}}
 `
 
@@ -41,20 +41,29 @@ func NewPromptLoader(filePath string) *PromptLoader {
 	return pl
 }
 
-// load 加载模板（从文件或内置默认值）
+// load 加载模板（从文件 → 内嵌默认 → 最小 fallback）
 func (pl *PromptLoader) load() {
 	if pl.filePath != "" {
 		if err := pl.loadFromFile(); err == nil {
 			return
 		} else {
-			log.WithError(err).WithField("path", pl.filePath).Warn("Failed to load prompt file, using default")
+			log.WithError(err).WithField("path", pl.filePath).Warn("Failed to load prompt file, trying embedded default")
 		}
 	}
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
+	// 优先使用嵌入的完整默认 prompt
+	if embeddedPrompt != "" {
+		if t, err := template.New("system").Parse(embeddedPrompt); err != nil {
+			log.WithError(err).Error("Failed to parse embedded prompt, using minimal fallback")
+		} else {
+			pl.tmpl = t
+			pl.lastMod = time.Time{}
+			return
+		}
+	}
+	// 最终 fallback
 	if t, err := template.New("system").Parse(defaultSystemPrompt); err != nil {
-		// Default prompt is a compile-time constant; this should never fail.
-		// Panic to allow upper-level recovery.
 		panic(fmt.Sprintf("Failed to parse default system prompt template: %v", err))
 	} else {
 		pl.tmpl = t

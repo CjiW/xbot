@@ -548,6 +548,9 @@ func main() {
 	app.agentLoop.SetDirectSend(disp.SendDirect)
 	app.agentLoop.SetChannelFinder(disp.GetChannel)
 
+	// 注入 CLI 渠道特化 prompt 提供者
+	app.agentLoop.SetChannelPromptProviders(&channel.CliPromptProvider{})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go app.agentLoop.Run(ctx)

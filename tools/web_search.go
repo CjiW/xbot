@@ -27,6 +27,11 @@ func NewWebSearchTool(apiKey string) *WebSearchTool {
 	}
 }
 
+// SetAPIKey updates the Tavily API key at runtime.
+func (t *WebSearchTool) SetAPIKey(key string) {
+	t.apiKey = key
+}
+
 func (t *WebSearchTool) Name() string {
 	return "WebSearch"
 }

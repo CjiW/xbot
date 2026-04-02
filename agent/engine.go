@@ -1353,21 +1353,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				lastPersistedCount = len(messages)
 			}
 
-			// Show in CLI progress as completed tool
-			if structuredProgress != nil {
-				var elapsed time.Duration
-				if bgTask.FinishedAt != nil {
-					elapsed = bgTask.FinishedAt.Sub(bgTask.StartedAt)
-				}
-				structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, ToolProgress{
-					Name:    "background_task_result",
-					Label:   fmt.Sprintf("bg:%s", bgTask.ID),
-					Status:  ToolDone,
-					Elapsed: elapsed,
-				})
-				if autoNotify {
+			// Append to progressLines so CLI shows the bg task completion
+			var elapsedStr string
+			if bgTask.FinishedAt != nil {
+				elapsedStr = bgTask.FinishedAt.Sub(bgTask.StartedAt).Truncate(time.Second).String()
+			}
+			progressLines = append(progressLines, fmt.Sprintf("✅ background_task_result (bg:%s) %s", bgTask.ID, elapsedStr))
+			if autoNotify {
 				notifyProgress("")
-				}
 			}
 			}
 		}

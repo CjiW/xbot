@@ -144,6 +144,7 @@ func newCLIApp() *cliApp {
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
 		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
 	})
+	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 	agentLoop.IndexGlobalTools()
 
 	return &cliApp{

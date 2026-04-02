@@ -958,10 +958,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlK:
 			// §9 Ctrl+K 上下文编辑
-			if !m.typing && len(m.messages) > 0 {
-				m.confirmDelete = 2 // 默认删除 2 条
-				m.updateViewportContent()
-			}
+				if !m.typing && len(m.messages) > 0 {
+					m.confirmDelete = 2 // 默认删除 2 条
+					m.renderCacheValid = false // 强制 fullRebuild 以渲染红线
+					m.updateViewportContent()
+				}
 			return m, nil
 
 		case tea.KeyCtrlO:
@@ -982,32 +983,35 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "y", "Y":
 				// 确认删除
 				if m.confirmDelete > len(m.messages) {
-					m.confirmDelete = len(m.messages)
-				}
-				m.messages = m.messages[:len(m.messages)-m.confirmDelete]
-				m.confirmDelete = 0
-				m.renderCacheValid = false
-				m.cachedHistory = ""
-				m.updateViewportContent()
-				return m, nil
-			case "n", "N":
-				// 取消删除
-				m.confirmDelete = 0
-				m.updateViewportContent()
-				return m, nil
+						m.confirmDelete = len(m.messages)
+					}
+					m.messages = m.messages[:len(m.messages)-m.confirmDelete]
+					m.confirmDelete = 0
+					m.renderCacheValid = false
+					m.cachedHistory = ""
+					m.updateViewportContent()
+					return m, nil
+				case "n", "N":
+					// 取消删除
+					m.confirmDelete = 0
+					m.renderCacheValid = false
+					m.updateViewportContent()
+					return m, nil
 			default:
 				// 检查数字键（调整删除数量）
 				if msg.Type == tea.KeyRunes {
 					runes := msg.Runes
 					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
-						m.confirmDelete = int(runes[0] - '0')
+								m.confirmDelete = int(runes[0] - '0')
+								m.renderCacheValid = false // 红线位置变了
+								m.updateViewportContent()
+								return m, nil
+							}
+						}
+						// 其他键也取消（包括 Esc）
+						m.confirmDelete = 0
+						m.renderCacheValid = false
 						m.updateViewportContent()
-						return m, nil
-					}
-				}
-				// 其他键也取消（包括 Esc）
-				m.confirmDelete = 0
-				m.updateViewportContent()
 				return m, nil
 			}
 		}

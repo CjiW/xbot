@@ -115,6 +115,20 @@ func (f *LLMFactory) InvalidateCustomLLMCache(senderID string) {
 	f.hasCustomLLMCache.Delete(senderID)
 }
 
+// SetDefaults 更新默认 LLM 客户端和模型名。
+// 用于 setup/settings 面板修改全局 LLM 配置后立即生效。
+func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.defaultLLM = newLLM
+	f.defaultModel = newModel
+	// 清除所有用户缓存，让后续 GetLLM 重新创建客户端
+	f.clients = make(map[string]llm.LLM)
+	f.models = make(map[string]string)
+	f.maxContexts = make(map[string]int)
+	f.thinkingModes = make(map[string]string)
+}
+
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	// 检查必要字段

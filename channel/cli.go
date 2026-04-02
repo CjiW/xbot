@@ -1163,7 +1163,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.info != nil {
 				m.updateNotice = msg.info
 				if msg.info.HasUpdate {
-					content := fmt.Sprintf("发现新版本: %s → %s\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
+					content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: cd /path/to/xbot && git pull && make build\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
 					m.messages = append(m.messages, cliMessage{
 						role:      "system",
 						content:   content,

@@ -1092,12 +1092,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
-	// 主题变更通知：重建 glamour 渲染器 + 失效缓存
+	// 主题变更通知：重建 glamour 渲染器 + 刷新所有静态绑定样式
 	select {
 	case <-themeChangeCh:
 		if m.width > 4 {
 			m.renderer = newGlamourRenderer(m.width - 4)
 		}
+		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
+		m.textarea.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+		m.textarea.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+		m.textarea.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		// 刷新 ticker 颜色
+		m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 		m.renderCacheValid = false
 		for i := range m.messages {
 			m.messages[i].dirty = true

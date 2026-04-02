@@ -3452,6 +3452,13 @@ func cliSetupSchema() []SettingDefinition {
 			DefaultValue: "gpt-4o",
 		},
 		{
+			Key:         "tavily_api_key",
+			Label:       "Tavily API Key",
+			Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
+			Type:        SettingTypeText,
+			Category:    "LLM",
+		},
+		{
 			Key:         "sandbox_mode",
 			Label:       "沙箱模式",
 			Description: "命令执行隔离方式",

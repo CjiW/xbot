@@ -231,6 +231,7 @@ func main() {
 				"llm_base_url":       app.cfg.LLM.BaseURL,
 				"sandbox_mode":       app.cfg.Sandbox.Mode,
 				"memory_provider":    app.cfg.Agent.MemoryProvider,
+				"tavily_api_key":     app.cfg.TavilyAPIKey,
 				"context_mode":       app.cfg.Agent.ContextMode,
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
@@ -278,6 +279,9 @@ func main() {
 			// Apply Agent settings
 			if v, ok := values["memory_provider"]; ok && v != "" {
 				app.cfg.Agent.MemoryProvider = v
+			}
+			if v, ok := values["tavily_api_key"]; ok {
+				app.cfg.TavilyAPIKey = v
 			}
 			if v, ok := values["context_mode"]; ok && v != "" {
 				app.cfg.Agent.ContextMode = v

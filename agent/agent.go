@@ -420,7 +420,13 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	}
 	agentStore := NewAgentStore(cfg.WorkDir, agentsDir, cfg.Sandbox)
 
-	registry := tools.DefaultRegistry()
+	// 确定记忆模式
+	memoryProvider := cfg.MemoryProvider
+	if memoryProvider == "" {
+		memoryProvider = "flat"
+	}
+
+	registry := tools.DefaultRegistry(memoryProvider)
 
 	// 创建聊天历史存储
 	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
@@ -481,6 +487,11 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 	contextMode := resolveContextMode(cfg)
 
+	memoryProvider := cfg.MemoryProvider
+	if memoryProvider == "" {
+		memoryProvider = "flat"
+	}
+
 	multiSession.SetMCPConfigPath(mcpConfigPath)
 
 	// 设置会话被清理时的回调，同步清理 Registry 中的 sessionActivated/sessionRound（C-09）
@@ -493,10 +504,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 全局工具索引通过 IndexGlobalTools() 在所有工具注册完成后调用
 
 	// 如果使用 Letta 记忆模式，注册记忆工具（核心工具，始终可用）
-	memoryProvider := cfg.MemoryProvider
-	if memoryProvider == "" {
-		memoryProvider = "flat"
-	}
 	if memoryProvider == "letta" {
 		for _, tool := range tools.LettaMemoryTools() {
 			registry.RegisterCore(tool)

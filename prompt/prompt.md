@@ -15,8 +15,7 @@
 - 不要说自己没有某能力，先用 `search_tools` 验证
 - 每轮对话开始前应 `search_tools` 搜索合适工具
 {{else}}
-- 核心工具（Shell, Read, Grep, Glob, FileCreate, FileReplace, Cd, Fetch, SubAgent, Skill, AskUser）始终可用
-- 其他工具需要用 `load_tools` 激活后才能使用
+- 所有工具均直接可用，无需额外激活
 {{end}}
 
 {{if eq .MemoryProvider "letta"}}

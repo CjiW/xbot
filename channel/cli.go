@@ -1021,6 +1021,15 @@ type splashTickMsg struct {
 // splashDoneMsg 启动画面结束消息
 type splashDoneMsg struct{}
 
+// cliToastMsg Toast 通知消息（自动浮现+消失）
+type cliToastMsg struct {
+	text string
+	icon string // "✓" | "✗" | "ℹ" 等
+}
+
+// cliToastClearMsg Toast 通知自动清除消息
+type cliToastClearMsg struct{}
+
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
 	viewport        viewport.Model        // 消息显示区
@@ -1124,6 +1133,11 @@ type cliModel struct {
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面
 	splashFrame int  // 当前 splash 动画帧索引
+
+	// --- §16 Toast 通知 ---
+	toast      string // 非空 = 显示 toast 通知
+	toastIcon  string // toast 图标（✓/✗/ℹ 等）
+	toastTimer bool   // true = toast 消除计时器已启动
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -1692,6 +1706,26 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.bgTaskCount = m.bgTaskCountFn()
 		}
 		m.renderCacheValid = false
+		// §16 触发 toast 通知（后台任务完成提示）
+		// 提取首行作为 toast 文本，避免内容过长
+		firstLine := msg.content
+		if idx := strings.Index(msg.content, "\n"); idx >= 0 {
+			firstLine = msg.content[:idx]
+		}
+		if len([]rune(firstLine)) > 50 {
+			firstLine = string([]rune(firstLine)[:47]) + "..."
+		}
+		// 检测是否为完成或失败消息
+		icon := "ℹ"
+		lower := strings.ToLower(firstLine)
+		if strings.Contains(lower, "done") || strings.Contains(lower, "completed") || strings.Contains(lower, "完成") {
+			icon = "✓"
+		} else if strings.Contains(lower, "error") || strings.Contains(lower, "failed") {
+			icon = "✗"
+		}
+		cmds = append(cmds, func() tea.Msg {
+			return cliToastMsg{text: firstLine, icon: icon}
+		})
 
 	case cliUpdateCheckMsg:
 		m.checkingUpdate = false
@@ -1733,6 +1767,43 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, tickerCmd())
 			m.updateViewportContent()
 		}
+
+	case splashTickMsg:
+		// §14 启动画面动画帧推进
+		m.splashFrame = msg.frame
+		if m.ready {
+			// 初始化完成（收到 WindowSizeMsg），结束 splash
+			m.splashDone = true
+			return m, nil
+		}
+		// 持续动画（最多 ~3 秒 = 37 帧）
+		if msg.frame >= 37 {
+			m.splashDone = true
+			return m, nil
+		}
+		cmds = append(cmds, m.splashTick(msg.frame))
+		return m, tea.Batch(cmds...)
+
+	case splashDoneMsg:
+		// §14 启动画面结束确认
+		m.splashDone = true
+
+	case cliToastMsg:
+		// §16 Toast 通知显示
+		m.toast = msg.text
+		m.toastIcon = msg.icon
+		if !m.toastTimer {
+			m.toastTimer = true
+			cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+				return cliToastClearMsg{}
+			}))
+		}
+
+	case cliToastClearMsg:
+		// §16 Toast 通知自动清除
+		m.toast = ""
+		m.toastIcon = ""
+		m.toastTimer = false
 	}
 
 	// Kick off ticker + tick chains when processing just started
@@ -1959,6 +2030,16 @@ func (m *cliModel) View() string {
 
 	inputArea := m.textarea.View()
 
+	// 多行输入行数指示（§17）：当输入超过 1 行时，右下角显示行数
+	lineCount := strings.Count(m.textarea.Value(), "\n") + 1
+	if lineCount > 1 && m.inputReady {
+		lineHint := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.TextMuted)).
+			Faint(true).
+			Render(fmt.Sprintf("Ln %d", lineCount))
+		inputArea += " " + lineHint + "\n"
+	}
+
 	// 状态栏样式
 	readyStatusStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.Success)).
@@ -2083,50 +2164,61 @@ func (m *cliModel) View() string {
 		}
 	}
 
+	// §16 Toast 通知渲染
+	toastStr := m.renderToast()
+
+	// 组装界面
 	// 组装界面
 	// §12 Panel mode: render panel overlay instead of normal input
 	if m.panelMode != "" {
 		panel := m.viewPanel()
+		// Panel 模式下也显示 footer 快捷键提示
+		panelFooter := m.renderFooter()
 		return fmt.Sprintf(
-			"%s\n%s\n%s",
+			"%s\n%s\n%s%s%s",
 			titleBar,
 			m.viewport.View(),
 			panel,
+			panelFooter,
+			toastStr,
 		)
 	}
 
 	todoBar := m.renderTodoBar()
 	if todoBar != "" {
 		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s\n%s",
+			"%s\n%s\n%s\n%s\n%s\n%s%s",
 			titleBar,
 			m.viewport.View(),
 			separator,
 			status,
 			todoBar,
 			input,
+			toastStr,
 		)
 	}
 	// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
 	footer := m.renderFooter()
 	if footer != "" {
 		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s\n%s",
+			"%s\n%s\n%s\n%s\n%s\n%s%s",
 			titleBar,
 			m.viewport.View(),
 			separator,
 			status,
 			footer,
 			input,
+			toastStr,
 		)
 	}
 	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s\n%s",
+		"%s\n%s\n%s\n%s\n%s%s",
 		titleBar,
 		m.viewport.View(),
 		separator,
 		status,
 		input,
+		toastStr,
 	)
 }
 
@@ -2395,6 +2487,38 @@ func padBetween(left, right string, width int) string {
 		return left + " " + right
 	}
 	return left + strings.Repeat(" ", width-w) + right
+}
+
+// renderToast 渲染底部 Toast 通知条（§16）。
+// Toast 用于短暂提示（如后台任务完成），3 秒后自动消失。
+// 浮在界面最底部，使用 Surface 背景与主题保持一致。
+func (m *cliModel) renderToast() string {
+	if m.toast == "" {
+		return ""
+	}
+
+	// 图标颜色：根据 icon 类型选择
+	iconColor := currentTheme.Success
+	switch m.toastIcon {
+	case "✗", "⚠":
+		iconColor = currentTheme.Error
+	case "ℹ":
+		iconColor = currentTheme.Info
+	}
+
+	iconSty := lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Bold(true)
+	textSty := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+
+	// 构建内容：图标 + 文本
+	toastContent := iconSty.Render(" "+m.toastIcon+" ") + " " + textSty.Render(m.toast)
+
+	// Surface 背景 + 全宽
+	toastStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(currentTheme.Surface)).
+		Width(m.width).
+		Padding(0, 1)
+
+	return "\n" + toastStyle.Render(toastContent)
 }
 
 // renderProgressStatus renders a compact one-line status for the status bar.
@@ -3800,7 +3924,7 @@ func (m *cliModel) renderDeleteBoundaryLine() string {
 	if w <= 0 {
 		w = 80
 	}
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
+	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
 	label := " ✂ delete below "
 	// label 的可见宽度（不含 ANSI 转义）
 	labelWidth := lipgloss.Width(redStyle.Bold(true).Render(label))

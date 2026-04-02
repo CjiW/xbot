@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -359,6 +360,71 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 		glamour.WithWordWrap(wrapWidth),
 	)
 	return r
+}
+
+// ---------------------------------------------------------------------------
+// 代码块渲染升级（第 4 轮）：lipgloss 边框 + 语言标签 + 深色背景
+// ---------------------------------------------------------------------------
+
+// codeBlockRe 匹配 markdown 代码块: ```lang\ncode\n```
+var codeBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_+-]*)\\s*\n(.*?)```")
+
+// renderCodeBlockInline 将代码块渲染为 lipgloss 边框包裹的精美样式。
+// 返回渲染后的 ANSI 字符串。
+func renderCodeBlockInline(lang, code string, maxWidth int) string {
+	// 语言标签
+	langLabel := lang
+	if langLabel == "" {
+		langLabel = "text"
+	}
+	langTag := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted)).
+		Render(" " + langLabel + " ")
+
+	// 代码内容：保持原始缩进，不添加额外前缀（glamour 已处理语法高亮）
+	// 限制最大宽度
+	lines := strings.Split(strings.TrimRight(code, "\n"), "\n")
+	contentWidth := maxWidth - 4 // border(2) + padding(2)
+	var codeLines []string
+	for _, line := range lines {
+		if lipgloss.Width(line) > contentWidth {
+			line = truncateRunes(line, contentWidth)
+		}
+		codeLines = append(codeLines, line)
+	}
+	codeContent := strings.Join(codeLines, "\n")
+
+	// 代码块容器：深色背景 + 圆角边框
+	blockStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Background(lipgloss.Color(currentTheme.Overlay)).
+		Padding(0, 1).
+		Width(maxWidth)
+
+	// 组装：语言标签行 + 代码内容
+	inner := langTag + "\n" + codeContent
+	return blockStyle.Render(inner)
+}
+
+// prettifyCodeBlocks 在 markdown 渲染前提取代码块并替换为 lipgloss 渲染版本。
+// 返回 (preprocessed markdown, nil) — glamour 不再处理代码块。
+// 如果输入不包含代码块，直接返回原文本。
+func prettifyCodeBlocks(markdown string, maxWidth int) string {
+	if maxWidth < 10 {
+		maxWidth = 76
+	}
+	return codeBlockRe.ReplaceAllStringFunc(markdown, func(match string) string {
+		sub := codeBlockRe.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		lang := sub[1]
+		code := sub[2]
+		rendered := renderCodeBlockInline(lang, code, maxWidth)
+		// 用 HTML 注释标记包裹，让 glamour 把它当普通文本透传
+		return "<!--CODEBLOCK_START-->\n" + rendered + "\n<!--CODEBLOCK_END-->"
+	})
 }
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
@@ -2041,6 +2107,19 @@ func (m *cliModel) View() string {
 			input,
 		)
 	}
+	// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
+	footer := m.renderFooter()
+	if footer != "" {
+		return fmt.Sprintf(
+			"%s\n%s\n%s\n%s\n%s\n%s",
+			titleBar,
+			m.viewport.View(),
+			separator,
+			status,
+			footer,
+			input,
+		)
+	}
 	return fmt.Sprintf(
 		"%s\n%s\n%s\n%s\n%s",
 		titleBar,
@@ -2760,28 +2839,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		m.shouldQuit = true
 
 	case "/help":
-		helpContent := `可用命令：
-  /cancel    - 取消当前正在执行的操作
-  /clear     - 清空聊天记录
-  /compact   - 压缩上下文（减少 token 使用）
-  /model     - 切换模型（用法: /model <模型名>）
-  /models    - 列出可用模型
-  /context   - 查看上下文信息
-  /new       - 开始新会话
-  /settings  - 打开设置面板
-  /setup     - 重新运行初始配置引导
-  /update    - 检查更新
-  /exit      - 退出 CLI
-  /help      - 显示此帮助信息
-
-快捷键：
-  Ctrl+C/Esc   - 有迭代时中止，无迭代时清空输入
-  Enter        - 发送消息
-  Ctrl+J       - 输入框内换行
-  Tab          - 命令/文件路径补全
-  Ctrl+O       - 展开/折叠工具详情
-  Ctrl+K       - 上下文删除
-  Home/End     - 跳到顶部/底部`
+		helpContent := m.renderHelpPanel()
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
 			content:   helpContent,
@@ -3223,12 +3281,18 @@ func (m *cliModel) renderProgressBlock() string {
 			if label == "" {
 				label = tool.Name
 			}
-			// 迷你进度条：7 阶段脉冲填充动画（6 格宽度）
-			barFrames := []string{"░░░░░░", "▒░░░░░", "▒▒░░░░", "▒▒▒░░░", "▒▒▒▒░░", "▒▒▒▒▒░", "▒▒▒▒▒▒"}
-			barIdx := int(m.ticker.ticks) % len(barFrames)
+			// 迷你进度条：braille 波浪流动动画（第 4 轮升级）
+			// 使用 braille 点阵创造流畅的波浪填充效果
+			waveBarFrames := []string{
+				"⠁⠁⠃⠃⠇⠇⠟⠟", "⠃⠃⠇⠇⠟⠟⠧⠧", "⠇⠇⠟⠟⠧⠧⡧⡧", "⠟⠟⠧⠧⡧⡧⣧⣧",
+				"⠧⠧⡧⡧⣧⣧⣿⣿", "⡧⡧⣧⣧⣿⣿⣿⣿", "⣧⣧⣿⣿⣿⣿⣿⣿", "⣿⣿⣿⣿⣿⣿⣿⣿",
+				"⣿⣿⣿⣿⣿⣿⣧⣧", "⣿⣿⣿⣿⣧⣧⡧⡧", "⣿⣿⣧⣧⡧⡧⠧⠧", "⣧⣧⡧⡧⠧⠧⠇⠇",
+				"⡧⡧⠧⠧⠇⠇⠃⠃", "⠧⠧⠇⠇⠃⠃⠁⠁", "⠇⠇⠃⠃⠁⠁⠁⠁",
+			}
+			barIdx := int(m.ticker.ticks) % len(waveBarFrames)
 			miniBar := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(currentTheme.Warning)).
-				Render(barFrames[barIdx])
+				Render(waveBarFrames[barIdx])
 			line := fmt.Sprintf("  │ %s %s  %s", m.ticker.viewFrames(arrowFrames), label, miniBar)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
@@ -3331,6 +3395,88 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 	}
 }
 
+// renderHelpPanel 渲染格式化的帮助面板（第 4 轮）。
+// 使用 lipgloss 边框 + 分组布局 + 状态图标，替代纯文本。
+func (m *cliModel) renderHelpPanel() string {
+	contentWidth := m.width - 4
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	// 样式定义
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Accent)).
+		Bold(true)
+	cmdStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Info)).
+		Bold(true).
+		Width(12)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary))
+	groupStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning)).
+		Bold(true)
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextPrimary)).
+		Bold(true).
+		Width(14)
+
+	// 帮助面板容器
+	panelStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Background(lipgloss.Color(currentTheme.Overlay)).
+		Padding(0, 1).
+		Width(contentWidth)
+
+	// 命令列表
+	commands := []struct{ cmd, desc string }{
+		{"/cancel", "取消当前操作"},
+		{"/clear", "清空聊天记录"},
+		{"/compact", "压缩上下文"},
+		{"/model", "切换模型"},
+		{"/models", "列出可用模型"},
+		{"/context", "查看上下文信息"},
+		{"/new", "开始新会话"},
+		{"/settings", "打开设置面板"},
+		{"/setup", "重新运行配置引导"},
+		{"/update", "检查更新"},
+		{"/help", "显示此帮助"},
+	}
+
+	// 快捷键列表
+	shortcuts := []struct{ key, desc string }{
+		{"Enter", "发送消息"},
+		{"Ctrl+C/Esc", "中止/清空"},
+		{"Ctrl+J", "输入框换行"},
+		{"Ctrl+K", "上下文删除"},
+		{"Ctrl+O", "展开/折叠工具"},
+		{"Tab", "命令/路径补全"},
+		{"Home/End", "跳到顶/底部"},
+		{"↑", "后台任务面板"},
+	}
+
+	var sb strings.Builder
+	sb.WriteString(titleStyle.Render("xbot Help"))
+	sb.WriteString("\n")
+
+	sb.WriteString(groupStyle.Render(" Commands "))
+	sb.WriteString("\n")
+	for _, c := range commands {
+		sb.WriteString("  " + cmdStyle.Render(c.cmd) + " " + descStyle.Render(c.desc))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(groupStyle.Render(" Shortcuts "))
+	sb.WriteString("\n")
+	for _, s := range shortcuts {
+		sb.WriteString("  " + keyStyle.Render(s.key) + " " + descStyle.Render(s.desc))
+		sb.WriteString("\n")
+	}
+
+	return panelStyle.Render(sb.String())
+}
+
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
 func (m *cliModel) renderMessage(msg *cliMessage) string {
 	var sb strings.Builder
@@ -3374,9 +3520,11 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
 	if msg.role == "assistant" {
-		// Pre-process: render mermaid code blocks to ASCII art
-		// Truncate to glamour wrap width to prevent wrapping.
-		preprocessed := renderMermaidBlocks(msg.content, m.width-4)
+		// Pre-process: 代码块升级渲染（第 4 轮）+ mermaid 图表
+		// 先渲染 mermaid 图表为 ASCII art
+		mermaidProcessed := renderMermaidBlocks(msg.content, m.width-4)
+		// 提取代码块并用 lipgloss 边框包裹（glamour 不再处理代码块）
+		preprocessed := prettifyCodeBlocks(mermaidProcessed, m.width-4)
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {
@@ -3391,21 +3539,29 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 	switch msg.role {
 	case "tool_summary":
-		// §2 工具可视化：按迭代分组渲染 thinking + tools
+		// §2 工具可视化升级（第 4 轮）：精致摘要卡片
+		// 使用 Overlay 背景 + 圆角边框，带状态图标和耗时右对齐
 		toolSummaryStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(currentTheme.Accent)).
+			Background(lipgloss.Color(currentTheme.Overlay)).
 			Foreground(lipgloss.Color(currentTheme.TextPrimary)).
 			Padding(0, 1).
 			Width(contentWidth).
 			Align(lipgloss.Left)
 
+		// 折叠模式标题：工具名 + 计数 + 耗时 + 状态图标
 		toolHeaderStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(currentTheme.Info)).
 			Bold(true)
 
+		// 工具条目：成功用绿色 ✓ + 工具名
 		toolItemStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(currentTheme.Success))
+
+		// 错误工具条目：红色 ✗
+		toolErrorItemStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.Error))
 
 		thinkingStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(currentTheme.TextSecondary)).
@@ -3452,7 +3608,14 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 						if tool.Elapsed > 0 {
 							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 						}
-						toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("    + %s%s", label, elapsed)))
+						// 根据工具状态选择图标和颜色
+						icon := "\u2713"
+						sty := toolItemStyle
+						if tool.Status == "error" {
+							icon = "\u2717"
+							sty = toolErrorItemStyle
+						}
+						toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
 						toolSb.WriteString("\n")
 					}
 				}
@@ -3468,14 +3631,58 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 					if tool.Elapsed > 0 {
 						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 					}
-					toolSb.WriteString(toolItemStyle.Render(fmt.Sprintf("  + %s%s", label, elapsed)))
+					icon := "\u2713"
+					sty := toolItemStyle
+					if tool.Status == "error" {
+						icon = "\u2717"
+						sty = toolErrorItemStyle
+					}
+					toolSb.WriteString(sty.Render(fmt.Sprintf("  %s %s%s", icon, label, elapsed)))
 					toolSb.WriteString("\n")
 				}
 			}
 		} else {
-			// 折叠模式：只显示统计摘要
+			// 折叠模式升级（第 4 轮）：统计摘要 + 成功/失败状态图标
 			elapsedStr := formatElapsed(totalMs)
+			// 统计成功/失败工具数
+			successCount, errorCount := 0, 0
+			if len(msg.iterations) > 0 {
+				for _, it := range msg.iterations {
+					for _, tool := range it.Tools {
+						if tool.Status == "error" {
+							errorCount++
+						} else {
+							successCount++
+						}
+					}
+				}
+			} else {
+				for _, tool := range msg.tools {
+					if tool.Status == "error" {
+						errorCount++
+					} else {
+						successCount++
+					}
+				}
+			}
+			// 状态摘要图标
+			var statusIcons string
+			if errorCount > 0 {
+				statusIcons = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error)).Render("✗") +
+					lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)).Render(fmt.Sprintf("%d", errorCount))
+			}
+			if successCount > 0 && errorCount > 0 {
+				statusIcons += " "
+			}
+			if successCount > 0 {
+				statusIcons += lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success)).Render("✓") +
+					lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)).Render(fmt.Sprintf("%d", successCount))
+			}
 			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools %d calls · %s", totalTools, elapsedStr)))
+			if statusIcons != "" {
+				toolSb.WriteString("  ")
+				toolSb.WriteString(statusIcons)
+			}
 			toolSb.WriteString("  ")
 			toolSb.WriteString(hintStyle.Render("[Ctrl+O]"))
 		}

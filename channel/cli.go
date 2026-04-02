@@ -957,17 +957,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyCtrlK:
-				// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
-				if !m.typing && len(m.messages) > 0 {
-					groups := visibleMsgGroupIndices(m.messages)
-					defaultDel := 2
-					if defaultDel > len(groups) {
-						defaultDel = len(groups)
-					}
-					m.confirmDelete = defaultDel
-					m.renderCacheValid = false
-					m.updateViewportContent()
+			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
+			if !m.typing && len(m.messages) > 0 {
+				groups := visibleMsgGroupIndices(m.messages)
+				defaultDel := 2
+				if defaultDel > len(groups) {
+					defaultDel = len(groups)
 				}
+				m.confirmDelete = defaultDel
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			}
 			return m, nil
 
 		case tea.KeyCtrlO:
@@ -983,46 +983,46 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// §9 Ctrl+K 确认模式：拦截字母和数字键
-						if m.confirmDelete > 0 {
-								groups := visibleMsgGroupIndices(m.messages)
-								switch msg.String() {
-								case "y", "Y":
-										// 确认删除：根据 group 索引截断
-										if m.confirmDelete > len(groups) {
-												m.confirmDelete = len(groups)
-										}
-										cutIdx := groups[len(groups)-m.confirmDelete]
-										m.messages = m.messages[:cutIdx]
-										m.confirmDelete = 0
-										m.renderCacheValid = false
-										m.cachedHistory = ""
-										m.updateViewportContent()
-										return m, nil
-								case "n", "N":
-										// 取消删除
-										m.confirmDelete = 0
-										m.renderCacheValid = false
-										m.updateViewportContent()
-										return m, nil
-								default:
-										// 检查数字键（调整删除数量）
-										if msg.Type == tea.KeyRunes {
-												runes := msg.Runes
-												if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
-														newDel := int(runes[0] - '0')
-														if newDel > len(groups) {
-																newDel = len(groups)
-														}
-														m.confirmDelete = newDel
-														m.renderCacheValid = false
-														m.updateViewportContent()
-														return m, nil
-												}
-										}
-										// 其他键也取消（包括 Esc）
-										m.confirmDelete = 0
-										m.renderCacheValid = false
-										m.updateViewportContent()
+		if m.confirmDelete > 0 {
+			groups := visibleMsgGroupIndices(m.messages)
+			switch msg.String() {
+			case "y", "Y":
+				// 确认删除：根据 group 索引截断
+				if m.confirmDelete > len(groups) {
+					m.confirmDelete = len(groups)
+				}
+				cutIdx := groups[len(groups)-m.confirmDelete]
+				m.messages = m.messages[:cutIdx]
+				m.confirmDelete = 0
+				m.renderCacheValid = false
+				m.cachedHistory = ""
+				m.updateViewportContent()
+				return m, nil
+			case "n", "N":
+				// 取消删除
+				m.confirmDelete = 0
+				m.renderCacheValid = false
+				m.updateViewportContent()
+				return m, nil
+			default:
+				// 检查数字键（调整删除数量）
+				if msg.Type == tea.KeyRunes {
+					runes := msg.Runes
+					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
+						newDel := int(runes[0] - '0')
+						if newDel > len(groups) {
+							newDel = len(groups)
+						}
+						m.confirmDelete = newDel
+						m.renderCacheValid = false
+						m.updateViewportContent()
+						return m, nil
+					}
+				}
+				// 其他键也取消（包括 Esc）
+				m.confirmDelete = 0
+				m.renderCacheValid = false
+				m.updateViewportContent()
 				return m, nil
 			}
 		}
@@ -1091,8 +1091,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.lastCompletedTools = filtered
-				}
-				if msg.payload.Phase == "done" {
+			}
+			if msg.payload.Phase == "done" {
 				m.progress = nil
 			}
 		}
@@ -1850,9 +1850,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			})
 		}
 		// 重置流式状态
-			m.streamingMsgIdx = -1
-			// 清除进度信息（保留 TODO，可跨 turn 存活）
-			m.progress = nil
+		m.streamingMsgIdx = -1
+		// 清除进度信息（保留 TODO，可跨 turn 存活）
+		m.progress = nil
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
@@ -2525,8 +2525,8 @@ func (m *cliModel) updateViewportContent() {
 	if m.renderCacheValid && m.streamingMsgIdx < 0 && m.cachedMsgCount == len(m.messages) {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
-			sb.WriteString(m.renderProgressBlock())
-			m.setViewportContent(sb.String())
+		sb.WriteString(m.renderProgressBlock())
+		m.setViewportContent(sb.String())
 		return
 	}
 
@@ -2561,48 +2561,48 @@ func (m *cliModel) fullRebuild() {
 	}
 
 	// §9 Ctrl+K 红线：根据可见消息组计算删除边界 slice 索引
-		var redLineInsertIdx = -1
-		if m.confirmDelete > 0 {
-			groups := visibleMsgGroupIndices(m.messages)
-			if m.confirmDelete <= len(groups) {
-				redLineInsertIdx = groups[len(groups)-m.confirmDelete] - 1
-			}
+	var redLineInsertIdx = -1
+	if m.confirmDelete > 0 {
+		groups := visibleMsgGroupIndices(m.messages)
+		if m.confirmDelete <= len(groups) {
+			redLineInsertIdx = groups[len(groups)-m.confirmDelete] - 1
 		}
+	}
 
-		for i := range m.messages[:splitIdx] {
-			needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
-			if needsRender {
-				rendered := m.renderMessage(&m.messages[i])
-				m.messages[i].rendered = rendered
-				m.messages[i].dirty = false
-				m.messages[i].renderWidth = m.width
-			}
-			historyBuf.WriteString(m.messages[i].rendered)
-			// §9 Ctrl+K 红线：在删除边界处插入红线指示器
-			if redLineInsertIdx >= 0 && i == redLineInsertIdx {
-				historyBuf.WriteString(m.renderDeleteBoundaryLine())
-			}
+	for i := range m.messages[:splitIdx] {
+		needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
+		if needsRender {
+			rendered := m.renderMessage(&m.messages[i])
+			m.messages[i].rendered = rendered
+			m.messages[i].dirty = false
+			m.messages[i].renderWidth = m.width
 		}
+		historyBuf.WriteString(m.messages[i].rendered)
+		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
+		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
+			historyBuf.WriteString(m.renderDeleteBoundaryLine())
+		}
+	}
 
 	m.cachedHistory = historyBuf.String()
 	m.renderCacheValid = true
 	m.cachedMsgCount = len(m.messages)
 
 	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block
-		var sb strings.Builder
-		sb.WriteString(m.cachedHistory)
-		if m.streamingMsgIdx >= 0 {
-			sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
-		}
-		sb.WriteString(m.renderProgressBlock())
-
-		m.setViewportContent(sb.String())
-
-		// §9 Ctrl+K 红线：自动滚动到红线位置
-		if m.confirmDelete > 0 {
-			m.scrollToDeleteLine(sb.String())
-		}
+	var sb strings.Builder
+	sb.WriteString(m.cachedHistory)
+	if m.streamingMsgIdx >= 0 {
+		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
 	}
+	sb.WriteString(m.renderProgressBlock())
+
+	m.setViewportContent(sb.String())
+
+	// §9 Ctrl+K 红线：自动滚动到红线位置
+	if m.confirmDelete > 0 {
+		m.scrollToDeleteLine(sb.String())
+	}
+}
 
 // tickCmd 定时器命令
 func tickCmd() tea.Cmd {

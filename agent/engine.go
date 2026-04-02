@@ -652,7 +652,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.ActiveTools = nil
 			structuredProgress.CompletedTools = nil
 			structuredProgress.ThinkingContent = ""
-			}
+		}
 		// Refresh TODO state for progress display
 		if structuredProgress != nil && cfg.TodoManager != nil && sessionKey != "" {
 			todos := cfg.TodoManager.GetTodoItems(sessionKey)
@@ -1163,7 +1163,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					GlobalMetrics.MaskedRecalls.Add(1)
 				}
 			case "context_edit":
-					GlobalMetrics.ContextEditEvents.Add(1)
+				GlobalMetrics.ContextEditEvents.Add(1)
 			}
 		}
 

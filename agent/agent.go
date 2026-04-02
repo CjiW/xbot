@@ -1982,9 +1982,9 @@ func formatToolProgress(name string, args string) string {
 	case "card_create":
 		title := get(m, "title")
 		if title != "" {
-		summary = fmt.Sprintf("card_create: %q", title)
+			summary = fmt.Sprintf("card_create: %q", title)
 		} else {
-		summary = "card_create"
+			summary = "card_create"
 		}
 	default:
 		// Unknown tools (including MCP tools): show first 60 chars of args

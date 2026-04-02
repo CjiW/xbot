@@ -255,7 +255,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings",
+	"/model", "/models", "/new", "/quit", "/settings", "/setup",
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +343,7 @@ type CLIChannelConfig struct {
 	HistoryLoader    func() ([]HistoryMessage, error) // 会话恢复：加载历史消息
 	GetCurrentValues func() map[string]string         // 获取当前配置值（用于 settings panel 初始值）
 	ApplySettings    func(values map[string]string)   // 应用设置变更（写 config.json + 更新运行时状态）
+	IsFirstRun       bool                             // 首次运行标志，TUI 启动时自动打开 setup panel
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +452,11 @@ func (c *CLIChannel) Start() error {
 		} else if err != nil {
 			log.WithError(err).Warn("Failed to load session history")
 		}
+	}
+
+	// 首次运行：打开 setup panel
+	if c.config.IsFirstRun {
+		c.model.openSetupPanel()
 	}
 
 	// 创建 Bubble Tea program
@@ -1672,6 +1678,9 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 			}
 		}
 
+	case "/setup":
+		m.openSetupPanel()
+
 	case "/quit", "/exit":
 		m.shouldQuit = true
 
@@ -1685,6 +1694,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
   /context   - 查看上下文信息
   /new       - 开始新会话
   /settings  - 打开设置面板
+  /setup     - 重新运行初始配置引导
   /exit      - 退出 CLI
   /help      - 显示此帮助信息
 
@@ -2549,6 +2559,47 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.panelEditTA = ta
 }
 
+// openSetupPanel opens the first-run setup wizard as a settings-style panel.
+func (m *cliModel) openSetupPanel() {
+	schema := cliSetupSchema()
+	values := make(map[string]string)
+	// Pre-fill defaults from schema
+	for _, def := range schema {
+		if def.DefaultValue != "" {
+			values[def.Key] = def.DefaultValue
+		}
+	}
+	// Pre-fill current values if available
+	if m.channel != nil && m.channel.config.GetCurrentValues != nil {
+		for k, v := range m.channel.config.GetCurrentValues() {
+			if v != "" {
+				values[k] = v
+			}
+		}
+	}
+	m.openSettingsPanel(schema, values, func(vals map[string]string) {
+		// Apply all settings including setup-only keys (provider, api_key, sandbox, memory)
+		if m.channel.config.ApplySettings != nil {
+			m.channel.config.ApplySettings(vals)
+		}
+		// Apply theme immediately
+		if theme, ok := vals["theme"]; ok && theme != "" {
+			ApplyTheme(theme)
+			if m.width > 4 {
+				m.renderer = newGlamourRenderer(m.width - 4)
+			}
+			m.renderCacheValid = false
+		}
+		m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。",
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+		m.updateViewportContent()
+	})
+}
+
 // askItem represents a single question in the AskUser panel.
 type askItem struct {
 	Question string   // the question text
@@ -3356,6 +3407,88 @@ func (m *cliModel) viewAskUserPanel() string {
 }
 
 // --- SettingsCapability implementation for CLIChannel ---
+
+// cliSetupSchema returns the settings definitions for the first-run setup wizard.
+// Covers core fields needed to get started; other settings available via /settings.
+func cliSetupSchema() []SettingDefinition {
+	return []SettingDefinition{
+		{
+			Key:         "llm_provider",
+			Label:       "LLM 提供商",
+			Description: "选择 LLM 服务提供商",
+			Type:        SettingTypeSelect,
+			Category:    "LLM",
+			Options: []SettingOption{
+				{Label: "OpenAI (及兼容 API)", Value: "openai"},
+				{Label: "Anthropic (Claude)", Value: "anthropic"},
+			},
+			DefaultValue: "openai",
+		},
+		{
+			Key:         "llm_api_key",
+			Label:       "API Key",
+			Description: "LLM 服务的 API Key（必填）",
+			Type:        SettingTypeText,
+			Category:    "LLM",
+		},
+		{
+			Key:          "llm_base_url",
+			Label:        "Base URL",
+			Description:  "LLM API 地址",
+			Type:         SettingTypeText,
+			Category:     "LLM",
+			DefaultValue: "https://api.openai.com/v1",
+		},
+		{
+			Key:          "llm_model",
+			Label:        "模型名称",
+			Description:  "选择或输入 LLM 模型名称",
+			Type:         SettingTypeText,
+			Category:     "LLM",
+			DefaultValue: "gpt-4o",
+		},
+		{
+			Key:         "sandbox_mode",
+			Label:       "沙箱模式",
+			Description: "命令执行隔离方式",
+			Type:        SettingTypeSelect,
+			Category:    "环境",
+			Options: []SettingOption{
+				{Label: "none — 直接执行（推荐）", Value: "none"},
+				{Label: "docker — 容器隔离", Value: "docker"},
+			},
+			DefaultValue: "none",
+		},
+		{
+			Key:         "memory_provider",
+			Label:       "记忆模式",
+			Description: "记忆系统实现方式",
+			Type:        SettingTypeSelect,
+			Category:    "环境",
+			Options: []SettingOption{
+				{Label: "flat — 全量注入（推荐）", Value: "flat"},
+				{Label: "letta — 分层记忆", Value: "letta"},
+			},
+			DefaultValue: "flat",
+		},
+		{
+			Key:         "theme",
+			Label:       "配色方案",
+			Description: "CLI 界面配色",
+			Type:        SettingTypeSelect,
+			Category:    "外观",
+			Options: []SettingOption{
+				{Label: "Midnight（默认）", Value: "midnight"},
+				{Label: "Ocean", Value: "ocean"},
+				{Label: "Forest", Value: "forest"},
+				{Label: "Sunset", Value: "sunset"},
+				{Label: "Rose", Value: "rose"},
+				{Label: "Mono", Value: "mono"},
+			},
+			DefaultValue: "midnight",
+		},
+	}
+}
 
 // cliSettingsSchema returns the settings definitions for CLI channel.
 func cliSettingsSchema() []SettingDefinition {

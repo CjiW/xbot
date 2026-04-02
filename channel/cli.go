@@ -2253,7 +2253,8 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	var rendered string
 	if msg.role == "assistant" {
 		// Pre-process: render mermaid code blocks to ASCII art
-		preprocessed := renderMermaidBlocks(msg.content)
+		// Truncate to glamour wrap width to prevent wrapping.
+		preprocessed := renderMermaidBlocks(msg.content, m.width-4)
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {

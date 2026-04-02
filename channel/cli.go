@@ -2462,11 +2462,13 @@ func (m *cliModel) renderTodoBar() string {
 	barFilled := strings.Repeat("█", filled)
 	barEmpty := strings.Repeat("░", barWidth-filled)
 
-	todoLabelSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextSecondary))
-	todoBarFilledSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.BarFilled))
-	todoBarEmptySt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.BarEmpty))
-	todoDoneSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success))
-	todoPendingSt := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	// §20
+	s := &m.styles
+	todoLabelSt := s.TodoLabel
+	todoBarFilledSt := s.TodoFilled
+	todoBarEmptySt := s.TodoEmpty
+	todoDoneSt := s.TodoDone
+	todoPendingSt := s.TodoPending
 
 	var sb strings.Builder
 	// Header: TODO label + count + progress bar
@@ -2531,22 +2533,11 @@ func (m *cliModel) renderSplash() string {
 		screenH = 10
 	}
 
-	// Logo 样式
-	logoStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Accent)).
-		Bold(true)
-
-	// 版本信息样式
-	versionStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary))
-
-	// 描述样式
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted))
-
-	// 加载动画样式
-	loadingStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning))
+	// §20 使用缓存样式
+	logoStyle := m.styles.Accent.Bold(true)
+	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextSecondary))
+	descStyle := m.styles.TextMutedSt
+	loadingStyle := m.styles.WarningSt
 
 	// 组装 splash 内容
 	var lines []string
@@ -2641,18 +2632,12 @@ func (m *cliModel) renderFooter() string {
 		return ""
 	}
 
-	// 用 Surface 背景渲染，与标题栏形成对称
+	// §20 使用缓存样式
 	footerText := strings.Join(hints, "  ")
-	// 右侧补充帮助提示
-	helpHint := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Render("/help")
+	helpHint := m.styles.TextMutedSt.Render("/help")
 	footerText = padBetween(footerText, helpHint, m.width)
 
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color(currentTheme.Surface)).
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Render(footerText)
+	return m.styles.Footer.Width(m.width).Render(footerText)
 }
 
 // ctrlKey 渲染 Ctrl+X 快捷键标签（灰色键帽 + 彩色描述）
@@ -2705,25 +2690,18 @@ func (m *cliModel) renderToast() string {
 		iconColor = currentTheme.Info
 	}
 
+	// §20 使用缓存样式（iconSty 需动态颜色，保留）
 	iconSty := lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Bold(true)
-	textSty := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	toastContent := iconSty.Render(" "+m.toastIcon+" ") + " " + m.styles.ToastText.Render(m.toast)
 
-	// 构建内容：图标 + 文本
-	toastContent := iconSty.Render(" "+m.toastIcon+" ") + " " + textSty.Render(m.toast)
-
-	// Surface 背景 + 全宽
-	toastStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(currentTheme.Surface)).
-		Width(m.width).
-		Padding(0, 1)
-
-	return "\n" + toastStyle.Render(toastContent)
+	return "\n" + m.styles.ToastBg.Render(toastContent)
 }
 
 // renderProgressStatus renders a compact one-line status for the status bar.
 func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style) string {
+	s := &m.styles // §20
 	var sb strings.Builder
-	sb.WriteString(progressStyle.Render(m.ticker.view()))
+	sb.WriteString(s.Progress.Render(m.ticker.view()))
 	sb.WriteString(" ")
 
 	if m.progress != nil {
@@ -2738,7 +2716,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 				if label == "" {
 					label = tool.Name
 				}
-				sb.WriteString(toolStyle.Render(" · " + label))
+				sb.WriteString(s.Tool.Render(" · " + label))
 				break
 			}
 		}
@@ -2772,11 +2750,9 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	// §18 Token 使用量显示
 	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
 		tu := m.progress.TokenUsage
-		tokenStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.TextMuted)).
-			Faint(true)
+		// §20 tokenStyle → s.TokenUsage
 		sb.WriteString(" · ")
-		sb.WriteString(tokenStyle.Render(formatTokenCount(tu)))
+		sb.WriteString(s.TokenUsage.Render(formatTokenCount(tu)))
 	}
 
 	return sb.String()
@@ -3518,33 +3494,16 @@ func (m *cliModel) renderProgressBlock() string {
 	bubbleWidth := m.width - 4
 	innerWidth := bubbleWidth - 4 // border(2) + padding(2)
 
-	// Styles
-	iterStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Bold(true)
-
-	thinkingStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Italic(true)
-
-	toolDoneStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success))
-
-	toolRunningStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning))
-
-	toolErrorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Error))
-
-	elapsedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Faint(true)
-
-	indentGuide := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextPrimary))
-
-	dimStyle := lipgloss.NewStyle().
-		Faint(true)
+	// §20 使用缓存样式
+	s := &m.styles
+	iterStyle := s.ProgressIter
+	thinkingStyle := s.ProgressThinking
+	toolDoneStyle := s.ProgressDone
+	toolRunningStyle := s.ProgressRunning
+	toolErrorStyle := s.ProgressError
+	elapsedStyle := s.ProgressElapsed
+	indentGuide := s.ProgressIndent
+	dimStyle := s.ProgressDim
 
 	var sb strings.Builder
 
@@ -3641,9 +3600,7 @@ func (m *cliModel) renderProgressBlock() string {
 				"⡧⡧⠧⠧⠇⠇⠃⠃", "⠧⠧⠇⠇⠃⠃⠁⠁", "⠇⠇⠃⠃⠁⠁⠁⠁",
 			}
 			barIdx := int(m.ticker.ticks) % len(waveBarFrames)
-			miniBar := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.Warning)).
-				Render(waveBarFrames[barIdx])
+			miniBar := s.WarningSt.Render(waveBarFrames[barIdx])
 			line := fmt.Sprintf("  │ %s %s  %s", m.ticker.viewFrames(arrowFrames), label, miniBar)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
@@ -3702,17 +3659,11 @@ func (m *cliModel) renderProgressBlock() string {
 	}
 
 	// Header
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Accent)).
-		Bold(true)
+	headerStyle := s.ProgressHeader
 	header := headerStyle.Render("Progress") + elapsed
 
 	// Wrap in border
-	blockStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Padding(0, 1).
-		Width(bubbleWidth)
+	blockStyle := s.ProgressBlock.Width(bubbleWidth)
 
 	return blockStyle.Render(header+"\n"+content) + "\n\n"
 }
@@ -3728,11 +3679,11 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 			continue
 		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
+		style := m.styles.ProgressRunning // §20
 		switch sa.Status {
 		case "error":
 			icon = "✗"
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
+			style = m.styles.ProgressError
 		}
 		line := fmt.Sprintf("%s%s %s", indent, icon, sa.Role)
 		if sa.Desc != "" {
@@ -3754,31 +3705,14 @@ func (m *cliModel) renderHelpPanel() string {
 		contentWidth = 40
 	}
 
-	// 样式定义
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Accent)).
-		Bold(true)
-	cmdStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Info)).
-		Bold(true).
-		Width(12)
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary))
-	groupStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true)
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-		Bold(true).
-		Width(14)
-
-	// 帮助面板容器
-	panelStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Background(lipgloss.Color(currentTheme.Overlay)).
-		Padding(0, 1).
-		Width(contentWidth)
+	// §20 使用缓存样式
+	s := &m.styles
+	titleStyle := s.HelpTitle
+	cmdStyle := s.HelpCmd
+	descStyle := s.HelpDesc
+	groupStyle := s.HelpGroup
+	keyStyle := s.HelpKey
+	panelStyle := s.HelpPanel.Width(contentWidth)
 
 	// 命令列表
 	commands := []struct{ cmd, desc string }{
@@ -3831,43 +3765,16 @@ func (m *cliModel) renderHelpPanel() string {
 
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
 func (m *cliModel) renderMessage(msg *cliMessage) string {
+	// §20 使用缓存样式
+	s := &m.styles
 	var sb strings.Builder
-
 	contentWidth := m.width - 4 // 留边距
-
-	// 时间戳样式
-	timeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Faint(true)
-
-	// 角色标签样式
-	userLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Info)).
-		Bold(true)
-
-	assistantLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success)).
-		Bold(true)
-
-	streamingLabelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true)
-
-	// 系统消息样式
-	systemMsgStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Italic(true).
-		Width(m.width).
-		Align(lipgloss.Center)
-
-	// 错误消息样式：红色边框 + ⚠ 图标 + 红色文字
-	errorMsgStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Error)).
-		Foreground(lipgloss.Color(currentTheme.Error)).
-		Bold(true).
-		Padding(0, 1).
-		Width(contentWidth)
+	timeStyle := s.Time
+	userLabelStyle := s.UserLabel
+	assistantLabelStyle := s.AssistLabel
+	streamingLabelStyle := s.StreamingLabel
+	systemMsgStyle := s.SystemMsg
+	errorMsgStyle := s.ErrorMsg
 
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
@@ -3891,37 +3798,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 	switch msg.role {
 	case "tool_summary":
-		// §2 工具可视化升级（第 4 轮）：精致摘要卡片
-		// 使用 Overlay 背景 + 圆角边框，带状态图标和耗时右对齐
-		toolSummaryStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(currentTheme.Accent)).
-			Background(lipgloss.Color(currentTheme.Overlay)).
-			Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-			Padding(0, 1).
-			Width(contentWidth).
-			Align(lipgloss.Left)
+		// §20 使用缓存样式
+		toolSummaryStyle := s.ToolSummary
+		toolHeaderStyle := s.ToolHeader
+		toolItemStyle := s.ToolItem
+		toolErrorItemStyle := s.ToolErrorItem
+		thinkingStyle := s.ToolThinking
+		hintStyle := s.ToolHint
 
-		// 折叠模式标题：工具名 + 计数 + 耗时 + 状态图标
-		toolHeaderStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.Info)).
-			Bold(true)
-
-		// 工具条目：成功用绿色 ✓ + 工具名
-		toolItemStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.Success))
-
-		// 错误工具条目：红色 ✗
-		toolErrorItemStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.Error))
-
-		thinkingStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-			Italic(true)
-
-		hintStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.TextMuted))
-
+		// 统计总工具数和总耗时
 		// 统计总工具数和总耗时
 		totalTools := 0
 		totalMs := int64(0)
@@ -4176,7 +4061,7 @@ func (m *cliModel) renderDeleteBoundaryLine() string {
 	if w <= 0 {
 		w = 80
 	}
-	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
+	redStyle := m.styles.ProgressError // §20
 	label := " ✂ delete below "
 	// label 的可见宽度（不含 ANSI 转义）
 	labelWidth := lipgloss.Width(redStyle.Bold(true).Render(label))
@@ -4703,34 +4588,21 @@ func (m *cliModel) viewBgTasksPanel() string {
 
 // viewBgTaskList renders the task list view.
 func (m *cliModel) viewBgTaskList() string {
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Padding(0, 1)
-
-	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render("Background Tasks")
-	help := lipgloss.NewStyle().Faint(true).Render("↑↓ navigate  Enter view log  Del kill  Esc close")
+	// §20 使用缓存样式
+	s := &m.styles
+	cursorStyle := s.PanelCursor
+	header := s.PanelHeader.Render("Background Tasks")
+	help := s.PanelDesc.Render("↑↓ navigate  Enter view log  Del kill  Esc close")
 
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString("  ")
 	sb.WriteString(help)
 	sb.WriteString("\n")
-	// 表头分割线
-	dividerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Border)).
-		Faint(true)
-	sb.WriteString(dividerStyle.Render("┈" + strings.Repeat("┈", 40)))
+	sb.WriteString(s.PanelDivider.Render("┈" + strings.Repeat("┈", 40)))
 
 	if len(m.panelBgTasks) == 0 {
-		// 空状态：居中弱化提示，比纯文字更精致
-		emptyStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.TextMuted)).
-			Faint(true).
-			Width(m.width - 8).
-			Align(lipgloss.Center)
-		sb.WriteString(emptyStyle.Render("No background tasks running"))
+		sb.WriteString(s.PanelEmpty.Render("No background tasks running"))
 	} else {
 		for i, task := range m.panelBgTasks {
 			elapsed := time.Since(task.StartedAt).Round(time.Second)
@@ -4738,14 +4610,14 @@ func (m *cliModel) viewBgTaskList() string {
 				elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 			}
 			statusIcon := "●"
-			statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)) // amber for running
+			statusStyle := s.ProgressRunning
 			if task.Status == tools.BgTaskDone {
 				if task.Error != "" || task.ExitCode != 0 {
 					statusIcon = "✗"
-					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error)) // red
+					statusStyle = s.ProgressError
 				} else {
 					statusIcon = "✓"
-					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success)) // green
+					statusStyle = s.ProgressDone
 				}
 			}
 
@@ -4771,15 +4643,13 @@ func (m *cliModel) viewBgTaskList() string {
 		}
 	}
 
-	return boxStyle.Render(sb.String())
+	return m.styles.PanelBox.Render(sb.String())
 }
 
 // viewBgTaskLog renders the log viewer for a selected task.
 func (m *cliModel) viewBgTaskLog() string {
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Padding(0, 1)
+	// §20 使用缓存样式
+	s := &m.styles
 
 	var title string
 	if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
@@ -4790,7 +4660,7 @@ func (m *cliModel) viewBgTaskLog() string {
 		}
 		title = fmt.Sprintf("Log: %s — %s", task.ID, cmd)
 	}
-	help := lipgloss.NewStyle().Faint(true).Render("↑↓ scroll  Esc back")
+	help := s.PanelDesc.Render("↑↓ scroll  Esc back")
 
 	maxLines := 18
 	start := m.panelBgScroll
@@ -4803,7 +4673,7 @@ func (m *cliModel) viewBgTaskLog() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render(title))
+	sb.WriteString(s.PanelHeader.Render(title))
 	sb.WriteString("  ")
 	sb.WriteString(help)
 	sb.WriteString("\n")
@@ -4814,11 +4684,11 @@ func (m *cliModel) viewBgTaskLog() string {
 	}
 
 	if end < len(m.panelBgLogLines) {
-		sb.WriteString(lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("  ... %d more lines (↑↓ scroll)", len(m.panelBgLogLines)-end)))
+		sb.WriteString(s.PanelDesc.Render(fmt.Sprintf("  ... %d more lines (↑↓ scroll)", len(m.panelBgLogLines)-end)))
 		sb.WriteString("\n")
 	}
 
-	return boxStyle.Render(sb.String())
+	return m.styles.PanelBox.Render(sb.String())
 }
 
 // splitLines splits a string into lines, preserving trailing empty line.
@@ -5303,10 +5173,6 @@ func (m *cliModel) viewPanel() string {
 }
 
 func (m *cliModel) viewSettingsPanel() string {
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Padding(1, 2)
 
 	headerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.Success)).
@@ -5448,14 +5314,10 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
 	}
 
-	return boxStyle.Render(sb.String())
+	return m.styles.PanelBox.Render(sb.String())
 }
 
 func (m *cliModel) viewAskUserPanel() string {
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Padding(1, 2)
 
 	questionStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.Warning)).
@@ -5583,7 +5445,7 @@ func (m *cliModel) viewAskUserPanel() string {
 	hints = append(hints, "Esc 取消")
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
-	return boxStyle.Render(sb.String())
+	return m.styles.PanelBox.Render(sb.String())
 }
 
 // --- SettingsCapability implementation for CLIChannel ---

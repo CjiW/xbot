@@ -1457,13 +1457,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliInjectedUserMsg:
 		// Agent injected a user message (e.g. bg task completion notification).
-		// Display it identically to a manually typed user message.
+		// Display it identically to a manually typed user message and start spinner.
 		m.messages = append(m.messages, cliMessage{
 			role:      "user",
 			content:   msg.content,
 			timestamp: time.Now(),
 			dirty:     true,
 		})
+		m.typing = true
+		m.inputReady = false
+		m.resetProgressState()
 		// Refresh bg task count on injection
 		if m.bgTaskCountFn != nil {
 			m.bgTaskCount = m.bgTaskCountFn()

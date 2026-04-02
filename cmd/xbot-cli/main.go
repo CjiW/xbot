@@ -255,7 +255,7 @@ func main() {
 							}
 						}
 					}
-					return "dark"
+					return "midnight"
 				}(),
 			}
 		},
@@ -315,6 +315,31 @@ func main() {
 			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
+			// Persist theme to settings service (theme is CLI-specific, not in config.json)
+			if theme, ok := values["theme"]; ok && theme != "" && app.agentLoop != nil {
+				if ss := app.agentLoop.GetSettingsService(); ss != nil {
+					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
+				}
+			}
+			// Rebuild LLM client and update agent runtime when LLM config changed
+			_, llmChanged := values["llm_provider"]
+			_, keyChanged := values["llm_api_key"]
+			_, modelChanged := values["llm_model"]
+			_, urlChanged := values["llm_base_url"]
+			if llmChanged || keyChanged || modelChanged || urlChanged {
+				if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
+					Attempts: 5,
+					Delay:    1 * time.Second,
+					MaxDelay: 30 * time.Second,
+				}); err == nil {
+					app.llmClient = newClient
+					if app.agentLoop != nil {
+						app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+					}
+				} else {
+					log.Warnf("Failed to rebuild LLM client: %v", err)
+				}
+			}
 			// Update agent runtime state
 			if app.agentLoop != nil {
 				if v, ok := values["context_mode"]; ok && v != "" {
@@ -333,6 +358,19 @@ func main() {
 				if v, ok := values["memory_window"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
 						app.agentLoop.SetMemoryWindow(n)
+					}
+				}
+				if v, ok := values["max_context_tokens"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+						app.agentLoop.SetMaxContextTokens(n)
+					}
+				}
+				// enable_auto_compress maps to context_mode: true→auto, false→none
+				if v, ok := values["enable_auto_compress"]; ok {
+					if v == "true" {
+						_ = app.agentLoop.SetContextMode("auto")
+					} else {
+						_ = app.agentLoop.SetContextMode("none")
 					}
 				}
 			}

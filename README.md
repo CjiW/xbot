@@ -331,13 +331,13 @@ xbot 提供终端交互界面 (TUI)，适合本地开发调试。
 
 ```bash
 # 安装最新版
-curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 
 # 安装指定版本
-VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 
 # 自定义安装路径（默认 /usr/local/bin）
-INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 ```
 
 ### 从源码编译

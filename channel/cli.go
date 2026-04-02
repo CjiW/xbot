@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -287,7 +289,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings", "/setup",
+	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/update",
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +505,9 @@ func (c *CLIChannel) Start() error {
 	c.wg.Add(1)
 	go c.handleOutbound()
 
+	// §13 异步检查更新（不阻塞 TUI 启动）
+	c.CheckUpdateAsync()
+
 	// 运行 Bubble Tea（阻塞）
 	if _, err := c.program.Run(); err != nil {
 		log.WithError(err).Error("CLI channel exited with error")
@@ -546,6 +551,18 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 		return
 	}
 	c.program.Send(cliProgressMsg{payload: payload})
+}
+
+// CheckUpdateAsync starts a background goroutine to check for updates.
+// The result is sent to the TUI via program.Send.
+func (c *CLIChannel) CheckUpdateAsync() {
+	if c.program == nil {
+		return
+	}
+	go func() {
+		info := version.CheckUpdate(context.Background())
+		c.program.Send(cliUpdateCheckMsg{info: info})
+	}()
 }
 
 // handleOutbound 处理从 agent 发来的消息
@@ -680,6 +697,11 @@ type cliModel struct {
 	completions []string // 当前补全候选项
 	compIdx     int      // 当前选中的补全索引
 
+	// --- §8b @ 文件引用补全 ---
+	fileCompletions []string // @ 文件路径补全候选项
+	fileCompIdx     int      // 当前选中的文件补全索引
+	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
+
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
 
@@ -710,6 +732,10 @@ type cliModel struct {
 	panelOnSubmit  func(values map[string]string)  // callback on settings submit
 	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
 	panelOnCancel  func()                          // callback on cancel
+
+	// --- §13 Update Check ---
+	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
+	checkingUpdate bool                // true while /update is in progress
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -804,6 +830,11 @@ type cliProgressMsg struct {
 
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
+
+// cliUpdateCheckMsg 更新检查结果消息
+type cliUpdateCheckMsg struct {
+	info *version.UpdateInfo
+}
 
 // isCtrlEnter 检测 Ctrl+Enter 按键。
 // 终端对 Ctrl+Enter 没有统一标准，常见 raw sequences：
@@ -930,6 +961,28 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
+				return m, nil
+			}
+			// §8b @ 模式：Enter 进入目录或确认文件
+			if m.fileCompActive && len(m.fileCompletions) > 0 {
+				selected := m.fileCompletions[m.fileCompIdx]
+				input := m.textarea.Value()
+				_, prefix := detectAtPrefix(input)
+				atStart := len(input) - len(prefix) - 1
+				if isDir(selected) {
+					// 目录：进入下一层，手动触发 glob
+					newInput := input[:atStart] + "@" + selected + "/"
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.populateFileCompletions(selected + "/")
+				} else {
+					// 文件：加空格退出 @ 模式
+					newInput := input[:atStart] + "@" + selected + " "
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
+				}
 				return m, nil
 			}
 			content := strings.TrimSpace(m.textarea.Value())
@@ -1093,7 +1146,74 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastCompletedTools = filtered
 			}
 			if msg.payload.Phase == "done" {
+				// Snapshot the final iteration before clearing progress.
+				// This handles the case where PhaseDone arrives before
+				// handleAgentMessage (e.g. agent error/cancel).
+				if m.lastSeenIteration >= 0 {
+					alreadySnapped := false
+					for _, s := range m.iterationHistory {
+						if s.Iteration == m.lastSeenIteration {
+							alreadySnapped = true
+							break
+						}
+					}
+					if !alreadySnapped {
+						var finalTools []CLIToolProgress
+						// Check progress.CompletedTools first (set by progressFinalizer)
+						for _, t := range msg.payload.CompletedTools {
+							if t.Iteration == m.lastSeenIteration {
+								finalTools = append(finalTools, t)
+							}
+						}
+						// Also include any from lastCompletedTools (race safety)
+						for _, t := range m.lastCompletedTools {
+							if t.Iteration == m.lastSeenIteration {
+								dup := false
+								for _, existing := range finalTools {
+									if existing.Name == t.Name && existing.Label == t.Label {
+										dup = true
+										break
+									}
+								}
+								if !dup {
+									finalTools = append(finalTools, t)
+								}
+							}
+						}
+						if len(finalTools) > 0 {
+							m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
+								Iteration: m.lastSeenIteration,
+								Tools:     finalTools,
+							})
+						}
+					}
+				}
+				// Generate tool_summary if we have iteration history and no
+				// handleAgentMessage will follow (agent error/cancel case).
+				if len(m.iterationHistory) > 0 {
+					toolMsg := cliMessage{
+						role:       "tool_summary",
+						content:    "",
+						timestamp:  time.Now(),
+						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+						dirty:      true,
+					}
+					insertIdx := len(m.messages) - 1
+					if insertIdx < 0 {
+						insertIdx = 0
+					}
+					m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
+					m.renderCacheValid = false
+				}
+				// Reset all iteration tracking state
+				m.lastCompletedTools = nil
+				m.iterationHistory = nil
+				m.lastSeenIteration = 0
+				m.typingStartTime = time.Time{}
+				m.todos = nil
+				m.todosDoneCleared = false
 				m.progress = nil
+				m.typing = false
 			}
 		}
 		m.updateViewportContent()
@@ -1101,6 +1221,39 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cliTickMsg:
 		if m.typing || m.progress != nil {
 			cmds = append(cmds, tickCmd())
+			m.updateViewportContent()
+		}
+
+	case cliUpdateCheckMsg:
+		m.checkingUpdate = false
+		if msg.info != nil {
+			m.updateNotice = msg.info
+			if msg.info.HasUpdate {
+				content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   content,
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			} else {
+				content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   content,
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			}
+		} else {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "更新检查失败（网络超时或无法连接 GitHub API）",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
 			m.updateViewportContent()
 		}
 
@@ -1131,6 +1284,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if newVal != prevText {
 		m.completions = nil
 		m.compIdx = 0
+		m.fileCompActive = false
+		// 用户手动输入：根据当前 @ prefix 重新 glob
+		if ok, prefix := detectAtPrefix(newVal); ok {
+			m.populateFileCompletions(prefix)
+		} else {
+			m.fileCompletions = nil
+			m.fileCompIdx = 0
+		}
 	}
 
 	// 检查是否需要退出
@@ -1200,6 +1361,9 @@ func (m *cliModel) View() string {
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
 	titleRight := "Enter send | Ctrl+J newline | /help"
+	if m.updateNotice != nil && m.updateNotice.HasUpdate {
+		titleRight = fmt.Sprintf("%s → %s available! | /update | /help", m.updateNotice.Current, m.updateNotice.Latest)
+	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1
@@ -1211,8 +1375,8 @@ func (m *cliModel) View() string {
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
-	// 输入框样式：根据输入内容动态设置边框颜色
-	// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
+		// 输入框样式：根据输入内容动态设置边框颜色
+		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
 	inputValue := strings.TrimSpace(m.textarea.Value())
 	borderColor := lipgloss.Color(currentTheme.Accent)
 	var completionsHint string
@@ -1255,6 +1419,40 @@ func (m *cliModel) View() string {
 					Padding(0, 1).
 					Render("[Tab] " + strings.Join(matches, " · "))
 			}
+		}
+	}
+
+	// §8b @ 文件引用补全提示（只展示，不做 glob）
+	rawInput := m.textarea.Value()
+	if ok, _ := detectAtPrefix(rawInput); ok {
+		borderColor = lipgloss.Color(currentTheme.Info)
+		if len(m.fileCompletions) > 0 {
+			parts := make([]string, len(m.fileCompletions))
+			for i, c := range m.fileCompletions {
+				if isDir(c) {
+					c += "/"
+				}
+				if i == m.fileCompIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).
+						Underline(true).
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
+				}
+			}
+			completionsHint = lipgloss.NewStyle().
+				Padding(0, 1).
+				Render("[Tab] " + strings.Join(parts, " · "))
+		} else {
+			// 无匹配文件
+			completionsHint = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.TextMuted)).
+				Padding(0, 1).
+				Render("[Tab] 无匹配文件")
 		}
 	}
 
@@ -1314,6 +1512,8 @@ func (m *cliModel) View() string {
 	if m.typing || m.progress != nil {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+	} else if m.checkingUpdate {
+		status = thinkingStatusStyle.Render("⟳ checking for updates...")
 	} else if completionsHint != "" {
 		// 显示补全候选提示
 		status = completionsHint
@@ -1498,19 +1698,26 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 // Helper Methods
 // ---------------------------------------------------------------------------
 
-// handleTabComplete 处理 Tab 命令补全（§8）
+// handleTabComplete 处理 Tab 补全（§8：/ 命令补全，§8b：@ 文件路径补全）
 func (m *cliModel) handleTabComplete() {
-	input := strings.TrimSpace(m.textarea.Value())
+	input := m.textarea.Value()
 
-	// 只在输入以 / 开头时补全
-	if !strings.HasPrefix(input, "/") {
+	// 检测 @ 文件引用补全（从输入末尾检测）
+	atOk, atPrefix := detectAtPrefix(input)
+	if atOk {
+		m.handleFileTabComplete(input, atPrefix)
+		return
+	}
+
+	// / 命令补全
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/") {
 		return
 	}
 
 	if len(m.completions) == 0 {
-		// 首次 Tab：计算匹配
 		for _, cmd := range cliCommands {
-			if strings.HasPrefix(cmd, input) {
+			if strings.HasPrefix(cmd, trimmed) {
 				m.completions = append(m.completions, cmd)
 			}
 		}
@@ -1519,11 +1726,97 @@ func (m *cliModel) handleTabComplete() {
 		}
 		m.compIdx = 0
 	} else {
-		// 后续 Tab：循环选择
 		m.compIdx = (m.compIdx + 1) % len(m.completions)
 	}
 
 	m.textarea.SetValue(m.completions[m.compIdx] + " ")
+}
+
+// detectAtPrefix 检测输入文本末尾是否有 @ 触发文件补全。
+// ok=true 表示检测到 @（即使后面无字符也应触发 glob）。
+// prefix 是 @ 之后到文本末尾的部分。
+func detectAtPrefix(input string) (ok bool, prefix string) {
+	if len(input) == 0 || input[len(input)-1] == ' ' {
+		return false, ""
+	}
+	i := len(input) - 1
+	for i >= 0 && input[i] != ' ' && input[i] != '@' {
+		i--
+	}
+	if i < 0 || input[i] != '@' {
+		return false, ""
+	}
+	if i > 0 && input[i-1] != ' ' {
+		return false, ""
+	}
+	return true, input[i+1:]
+}
+
+// populateFileCompletions 根据 prefix 执行 glob 搜索并填充 fileCompletions
+func (m *cliModel) populateFileCompletions(prefix string) {
+	pattern := prefix
+	if !strings.Contains(pattern, "*") {
+		if strings.HasSuffix(pattern, "/") {
+			pattern += "*"
+		} else {
+			pattern += "*"
+		}
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		m.fileCompletions = nil
+		m.fileCompIdx = 0
+		return
+	}
+	// 过滤隐藏文件（以 . 开头）
+	filtered := matches[:0]
+	for _, f := range matches {
+		base := filepath.Base(f)
+		if len(base) > 0 && base[0] != '.' {
+			filtered = append(filtered, f)
+		}
+	}
+	matches = filtered
+	sort.Slice(matches, func(i, j int) bool {
+		di, dj := isDir(matches[i]), isDir(matches[j])
+		if di != dj {
+			return di
+		}
+		return matches[i] < matches[j]
+	})
+	if len(matches) > 20 {
+		matches = matches[:20]
+	}
+	m.fileCompletions = matches
+	m.fileCompIdx = 0
+}
+
+// handleFileTabComplete 处理 @ 文件路径 Tab 补全
+func (m *cliModel) handleFileTabComplete(input string, prefix string) {
+	if !m.fileCompActive || len(m.fileCompletions) == 0 {
+		// 首次 Tab 或候选被清空：glob 并进入循环模式
+		m.populateFileCompletions(prefix)
+		if len(m.fileCompletions) == 0 {
+			return
+		}
+		m.fileCompActive = true
+	} else {
+		// 循环模式：切换到下一个候选
+		m.fileCompIdx = (m.fileCompIdx + 1) % len(m.fileCompletions)
+	}
+
+	selected := m.fileCompletions[m.fileCompIdx]
+	if isDir(selected) {
+		selected += "/"
+	}
+	atStart := len(input) - len(prefix) - 1
+	newInput := input[:atStart] + "@" + selected
+	m.textarea.SetValue(newInput)
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
@@ -1560,6 +1853,9 @@ func (m *cliModel) sendMessage(content string) {
 		return
 	}
 
+	// 解析 @ 文件引用，提取文件路径
+	media := parseFileReferences(content)
+
 	// 添加用户消息到历史
 	m.messages = append(m.messages, cliMessage{
 		role:      "user",
@@ -1573,21 +1869,54 @@ func (m *cliModel) sendMessage(content string) {
 
 	// 发送到消息总线
 	if m.msgBus != nil {
-		m.msgBus.Inbound <- bus.InboundMessage{
+		msg := bus.InboundMessage{
 			Channel:    cliChannelName,
 			SenderID:   cliSenderID,
 			ChatID:     m.chatID,
 			ChatType:   "p2p",
 			Content:    content,
+			Media:      media,
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
 		}
+		m.msgBus.Inbound <- msg
 		m.typing = true
 		m.inputReady = false
 		m.resetProgressState()
 	}
+}
+
+// parseFileReferences 从用户消息中提取 @path 文件引用。
+// 匹配 @ 后跟非空格字符的路径，验证文件存在后返回。
+func parseFileReferences(content string) []string {
+	var files []string
+	seen := make(map[string]bool)
+	for i := 0; i < len(content); i++ {
+		if content[i] == '@' {
+			// @ 必须在词首
+			if i > 0 && content[i-1] != ' ' {
+				continue
+			}
+			// 提取 @ 后的路径
+			j := i + 1
+			for j < len(content) && content[j] != ' ' {
+				j++
+			}
+			path := content[i+1 : j]
+			// 去掉末尾的 /
+			path = strings.TrimRight(path, "/")
+			if path != "" && !seen[path] {
+				if _, err := os.Stat(path); err == nil {
+					files = append(files, path)
+					seen[path] = true
+				}
+			}
+			i = j
+		}
+	}
+	return files
 }
 
 // resetProgressState resets iteration tracking for a new agent turn.
@@ -1728,22 +2057,46 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/setup":
 		m.openSetupPanel()
 
+	case "/update":
+		if m.checkingUpdate {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "正在检查更新...",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+		} else {
+			m.checkingUpdate = true
+			m.updateNotice = nil
+			if m.channel != nil {
+				m.channel.CheckUpdateAsync()
+			}
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "正在检查更新...",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.updateViewportContent()
+		}
+
 	case "/quit", "/exit":
 		m.shouldQuit = true
 
 	case "/help":
 		helpContent := `可用命令：
-  /cancel    - 取消当前正在执行的操作
-  /clear     - 清空聊天记录
-  /compact   - 压缩上下文（减少 token 使用）
-  /model     - 切换模型（用法: /model <模型名>）
-  /models    - 列出可用模型
-  /context   - 查看上下文信息
-  /new       - 开始新会话
-  /settings  - 打开设置面板
-  /setup     - 重新运行初始配置引导
-  /exit      - 退出 CLI
-  /help      - 显示此帮助信息
+		  /cancel    - 取消当前正在执行的操作
+		  /clear     - 清空聊天记录
+		  /compact   - 压缩上下文（减少 token 使用）
+		  /model     - 切换模型（用法: /model <模型名>）
+		  /models    - 列出可用模型
+		  /context   - 查看上下文信息
+		  /new       - 开始新会话
+		  /settings  - 打开设置面板
+		  /setup     - 重新运行初始配置引导
+		  /update    - 检查更新
+		  /exit      - 退出 CLI
+		  /help      - 显示此帮助信息
 
 快捷键：
   Ctrl+C/Esc - 有迭代时中止，无迭代时清空输入`
@@ -3132,6 +3485,12 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			}
 			return true, m, nil
 		}
+		if onOther {
+			// Other 输入框：空格传给 textinput
+			var cmd tea.Cmd
+			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+			return true, m, cmd
+		}
 		// No options: fall through to textarea
 		m.autoExpandAskTA()
 		var cmd tea.Cmd
@@ -3684,32 +4043,36 @@ func cliSettingsSchema() []SettingDefinition {
 			DefaultValue: "auto",
 		},
 		{
-			Key:         "max_iterations",
-			Label:       "最大迭代次数",
-			Description: "单次对话最大工具调用迭代次数（默认 100）",
-			Type:        SettingTypeNumber,
-			Category:    "Agent",
+			Key:          "max_iterations",
+			Label:        "最大迭代次数",
+			Description:  "单次对话最大工具调用迭代次数（默认 100）",
+			Type:         SettingTypeNumber,
+			Category:     "Agent",
+			DefaultValue: "100",
 		},
 		{
-			Key:         "max_concurrency",
-			Label:       "最大并发数",
-			Description: "同时处理的最大请求数（默认 3）",
-			Type:        SettingTypeNumber,
-			Category:    "Agent",
+			Key:          "max_concurrency",
+			Label:        "最大并发数",
+			Description:  "同时处理的最大请求数（默认 3）",
+			Type:         SettingTypeNumber,
+			Category:     "Agent",
+			DefaultValue: "3",
 		},
 		{
-			Key:         "memory_window",
-			Label:       "记忆窗口",
-			Description: "LLM 上下文中保留的最大历史消息数（默认 100）",
-			Type:        SettingTypeNumber,
-			Category:    "Agent",
+			Key:          "memory_window",
+			Label:        "记忆窗口",
+			Description:  "LLM 上下文中保留的最大历史消息数（默认 50）",
+			Type:         SettingTypeNumber,
+			Category:     "Agent",
+			DefaultValue: "50",
 		},
 		{
-			Key:         "max_context_tokens",
-			Label:       "最大上下文 Token",
-			Description: "上下文最大 token 数（默认 0，表示不限制）",
-			Type:        SettingTypeNumber,
-			Category:    "Agent",
+			Key:          "max_context_tokens",
+			Label:        "最大上下文 Token",
+			Description:  "上下文最大 token 数（默认 200000）",
+			Type:         SettingTypeNumber,
+			Category:     "Agent",
+			DefaultValue: "200000",
 		},
 		{
 			Key:         "enable_auto_compress",

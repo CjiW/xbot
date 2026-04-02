@@ -742,6 +742,9 @@ func (a *Agent) SetContextMode(mode string) error {
 func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
 func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
 func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
+func (a *Agent) SetMaxContextTokens(n int) {
+	a.contextManagerConfig.MaxContextTokens = n
+}
 
 // GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
 func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {
@@ -1291,6 +1294,17 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		"channel": msg.Channel,
 		"sender":  msg.SenderID,
 	}).Infof("Processing: %s", preview)
+
+	// 将 Media 文件引用附加到消息内容中
+	if len(msg.Media) > 0 {
+		var ref strings.Builder
+		ref.WriteString("\n\n[Attached files]")
+		for _, f := range msg.Media {
+			ref.WriteString("\n- ")
+			ref.WriteString(f)
+		}
+		msg.Content += ref.String()
+	}
 
 	// Cron 消息使用独立处理流程（不带历史上下文，不参与消息更新跟踪）
 	if msg.IsCron {

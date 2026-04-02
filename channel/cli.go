@@ -1140,7 +1140,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.compIdx = 0
 				m.fileCompletions = nil
 				m.fileCompIdx = 0
-				m.fileCompPrefix = ""
+				// 不重置 fileCompPrefix，让 view 通过 prefix 不匹配触发重新 glob
 			}
 
 	// 检查是否需要退出
@@ -1273,8 +1273,8 @@ func (m *cliModel) View() string {
 			atOk, atPrefix := detectAtPrefix(rawInput)
 			if atOk {
 				borderColor = lipgloss.Color(currentTheme.Info)
-				// prefix 变化时重新 glob
-				if atPrefix != m.fileCompPrefix {
+				// prefix 变化或候选为空时重新 glob
+				if atPrefix != m.fileCompPrefix || len(m.fileCompletions) == 0 {
 					m.populateFileCompletions(atPrefix)
 					m.fileCompPrefix = atPrefix
 				}
@@ -1644,7 +1644,7 @@ func (m *cliModel) populateFileCompletions(prefix string) {
 // handleFileTabComplete 处理 @ 文件路径 Tab 补全
 func (m *cliModel) handleFileTabComplete(input string, prefix string) {
 	if len(m.fileCompletions) == 0 || prefix != m.fileCompPrefix {
-		// prefix 变了，重新 glob
+		// prefix 变了或候选被清空，重新 glob
 		m.populateFileCompletions(prefix)
 		m.fileCompPrefix = prefix
 		if len(m.fileCompletions) == 0 {

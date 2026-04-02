@@ -4,11 +4,13 @@
 package channel
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"xbot/bus"
+	"xbot/llm"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1469,5 +1471,133 @@ func TestCLIChannelConfigEmpty(t *testing.T) {
 
 	if ch == nil {
 		t.Error("NewCLIChannel with empty config should not return nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ConvertMessagesToHistory tests
+// ---------------------------------------------------------------------------
+
+func makeDetail(iterations []iterSnapshot) string {
+	b, _ := json.Marshal(iterations)
+	return string(b)
+}
+
+func TestConvert_NormalCompletedTurn(t *testing.T) {
+	// A normal completed turn: user → assistant(tool_calls) → tool → assistant(Detail + content)
+	detail := makeDetail([]iterSnapshot{
+		{Iteration: 1, Thinking: "think1", Tools: []iterToolSnap{{Name: "Shell", Label: "Shell", Status: "done", ElapsedMS: 500}}},
+		{Iteration: 2, Thinking: "think2", Tools: []iterToolSnap{{Name: "Read", Label: "Read file", Status: "done", ElapsedMS: 200}}},
+	})
+	msgs := []llm.ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "Shell", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c1", ToolName: "Shell", ToolArguments: "{}"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c2", Name: "Read", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c2", ToolName: "Read", ToolArguments: "{}"},
+		{Role: "assistant", Content: "done!", Detail: detail},
+	}
+	history := ConvertMessagesToHistory(msgs)
+
+	// Should be: user, tool_summary(from Detail), assistant
+	if len(history) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(history), history)
+	}
+	assertRole(t, history[0], "user")
+	assertRole(t, history[1], "tool_summary")
+	assertRole(t, history[2], "assistant")
+
+	if history[1].Iterations == nil || len(history[1].Iterations) != 2 {
+		t.Fatalf("expected 2 iterations in tool_summary, got %d", len(history[1].Iterations))
+	}
+	// Should come from Detail (has elapsed data), not from pending (elapsed=0)
+	if history[1].Iterations[0].Tools[0].Elapsed != 500 {
+		t.Errorf("expected elapsed=500 from Detail, got %d", history[1].Iterations[0].Tools[0].Elapsed)
+	}
+}
+
+func TestConvert_CancelledTurn(t *testing.T) {
+	// Cancelled turn: user → assistant(tool_calls) → tool → assistant(tool_calls) → tool (no final assistant)
+	msgs := []llm.ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "Shell", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c1", ToolName: "Shell", ToolArguments: "{}"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c2", Name: "Read", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c2", ToolName: "Read", ToolArguments: "{}"},
+	}
+	history := ConvertMessagesToHistory(msgs)
+
+	// Should be: user, tool_summary (accumulated from both iterations)
+	if len(history) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(history), history)
+	}
+	assertRole(t, history[0], "user")
+	assertRole(t, history[1], "tool_summary")
+
+	if len(history[1].Iterations) != 2 {
+		t.Fatalf("expected 2 iterations, got %d", len(history[1].Iterations))
+	}
+	if history[1].Iterations[0].Tools[0].Name != "Shell" {
+		t.Errorf("expected Shell, got %s", history[1].Iterations[0].Tools[0].Name)
+	}
+	if history[1].Iterations[1].Tools[0].Name != "Read" {
+		t.Errorf("expected Read, got %s", history[1].Iterations[1].Tools[0].Name)
+	}
+}
+
+func TestConvert_MultipleTurns(t *testing.T) {
+	// Turn 1: completed normally. Turn 2: cancelled.
+	detail := makeDetail([]iterSnapshot{
+		{Iteration: 1, Tools: []iterToolSnap{{Name: "Shell", Status: "done", ElapsedMS: 100}}},
+	})
+	msgs := []llm.ChatMessage{
+		{Role: "user", Content: "turn1"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "Shell", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c1", ToolName: "Shell", ToolArguments: "{}"},
+		{Role: "assistant", Content: "done1", Detail: detail},
+		{Role: "user", Content: "turn2"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c2", Name: "Grep", Arguments: "{}"}}},
+		{Role: "tool", ToolCallID: "c2", ToolName: "Grep", ToolArguments: "{}"},
+	}
+	history := ConvertMessagesToHistory(msgs)
+
+	// Expected: user, tool_summary(Detail, 1 iter), assistant, user, tool_summary(pending, 1 iter)
+	if len(history) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %+v", len(history), history)
+	}
+	assertRole(t, history[0], "user")         // turn1 user
+	assertRole(t, history[1], "tool_summary") // turn1 completed
+	assertRole(t, history[2], "assistant")    // turn1 reply
+	assertRole(t, history[3], "user")         // turn2 user
+	assertRole(t, history[4], "tool_summary") // turn2 cancelled
+
+	// Turn 1 tool_summary should have elapsed=100 from Detail
+	if history[1].Iterations[0].Tools[0].Elapsed != 100 {
+		t.Errorf("turn1 expected elapsed=100, got %d", history[1].Iterations[0].Tools[0].Elapsed)
+	}
+	// Turn 2 tool_summary should have elapsed=0 from pending
+	if history[4].Iterations[0].Tools[0].Elapsed != 0 {
+		t.Errorf("turn2 expected elapsed=0, got %d", history[4].Iterations[0].Tools[0].Elapsed)
+	}
+}
+
+func TestConvert_NoToolCalls(t *testing.T) {
+	// Simple conversation without tool calls
+	msgs := []llm.ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi!"},
+	}
+	history := ConvertMessagesToHistory(msgs)
+	if len(history) != 2 {
+		t.Fatalf("expected 2, got %d", len(history))
+	}
+	assertRole(t, history[0], "user")
+	assertRole(t, history[1], "assistant")
+}
+
+func assertRole(t *testing.T, msg HistoryMessage, want string) {
+	t.Helper()
+	if msg.Role != want {
+		t.Errorf("expected role=%q, got %q", want, msg.Role)
 	}
 }

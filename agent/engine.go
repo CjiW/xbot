@@ -1340,10 +1340,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					break
 				}
 				bgContent := tools.FormatBgTaskCompletion(bgTask)
-				// 注入为 assistant + tool message 对，让 LLM 理解这是一个系统通知
+				// 注入为 assistant + tool message 对，明确告知 LLM 这是系统通知
 				bgAssistantMsg := llm.ChatMessage{
 					Role:    "assistant",
-					Content: fmt.Sprintf("[Background task notification: bg:%s]", bgTask.ID),
+					Content: "A background task has completed. Let me check the result.",
+					ToolCalls: []llm.ToolCall{{
+						ID:   "bg_" + bgTask.ID,
+						Name: "background_task_result",
+					}},
 				}
 				bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
 				messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))

@@ -170,12 +170,12 @@ func formatTask(task *BackgroundTask) string {
 }
 
 // FormatBgTaskCompletion formats a completed background task notification for injection.
-// This is used by the engine to inject the task result into the conversation.
+// This is used by the engine to inject the task result into the conversation as a tool message.
 func FormatBgTaskCompletion(task *BackgroundTask) string {
 	elapsed := task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[Background task completed: %s]\n", task.ID)
+	fmt.Fprintf(&sb, "[System Notification] Background task %s completed.\n", task.ID)
 	fmt.Fprintf(&sb, "Command: %s\n", task.Command)
 	fmt.Fprintf(&sb, "Status: %s | Elapsed: %s\n", task.Status, elapsed)
 

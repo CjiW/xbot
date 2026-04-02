@@ -1881,7 +1881,11 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 	bgContent := tools.FormatBgTaskCompletion(task)
 	bgAssistantMsg := llm.ChatMessage{
 		Role:    "assistant",
-		Content: fmt.Sprintf("[Background task notification: bg:%s]", task.ID),
+		Content: "A background task has completed. Let me check the result.",
+		ToolCalls: []llm.ToolCall{{
+			ID:   "bg_" + task.ID,
+			Name: "background_task_result",
+		}},
 	}
 	bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+task.ID, "", bgContent)
 	messages = append(messages, bgAssistantMsg, bgToolMsg)

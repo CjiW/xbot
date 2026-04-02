@@ -767,18 +767,32 @@ func (c *CLIChannel) handleOutbound() {
 // ---------------------------------------------------------------------------
 
 // animTicker 是一个简单的字符动画 ticker，不依赖 bubbles/spinner。
+// 支持双色呼吸效果：颜色在 Accent 和 AccentAlt 之间平滑过渡。
 type animTicker struct {
-	frames []string
-	frame  int
-	ticks  int64 // total ticks for phase-aware behavior
-	style  lipgloss.Style
+	frames   []string
+	frame    int
+	ticks    int64          // total ticks for phase-aware behavior
+	style    lipgloss.Style // 主色调
+	styleAlt lipgloss.Style // 备选色（呼吸效果用）
+	color    string         // 主色值（主题切换时重建样式用）
+	colorAlt string         // 备选色值
 }
 
 func newAnimTicker(frames []string, color string) *animTicker {
+	altColor := currentTheme.AccentAlt
 	return &animTicker{
-		frames: frames,
-		style:  lipgloss.NewStyle().Foreground(lipgloss.Color(color)),
+		frames:   frames,
+		style:    lipgloss.NewStyle().Foreground(lipgloss.Color(color)),
+		styleAlt: lipgloss.NewStyle().Foreground(lipgloss.Color(altColor)),
+		color:    color,
+		colorAlt: altColor,
 	}
+}
+
+// refreshStyles 在主题切换时重建 ticker 的颜色样式
+func (t *animTicker) refreshStyles() {
+	t.style = lipgloss.NewStyle().Foreground(lipgloss.Color(t.color))
+	t.styleAlt = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.AccentAlt))
 }
 
 func (t *animTicker) tick() {
@@ -786,14 +800,22 @@ func (t *animTicker) tick() {
 	t.frame = (t.frame + 1) % len(t.frames)
 }
 
+// view 渲染当前帧，带双色呼吸效果（每 10 tick 在两种颜色间切换）
 func (t *animTicker) view() string {
-	return t.style.Render(t.frames[t.frame])
+	if t.ticks%20 < 10 {
+		return t.style.Render(t.frames[t.frame])
+	}
+	return t.styleAlt.Render(t.frames[t.frame])
 }
 
 // viewFrames renders a frame from a given set using the ticker's current frame index.
+// 同样带呼吸效果。
 func (t *animTicker) viewFrames(frames []string) string {
 	idx := t.frame % len(frames)
-	return t.style.Render(frames[idx])
+	if t.ticks%20 < 10 {
+		return t.style.Render(frames[idx])
+	}
+	return t.styleAlt.Render(frames[idx])
 }
 
 // Ticker frame presets
@@ -810,6 +832,10 @@ var (
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
+	// neonFrames: neon diamond — 用于错误/重试状态，醒目的视觉提示
+	neonFrames = []string{"◇", "◆", "◆", "◇", "◇", "◆", "◆", "◇"}
+	// pulseFrames: expanding/contracting dots — 用于特殊状态（搜索、扫描等）
+	pulseFrames = []string{"·", "∙", "●", "∙", "·", "∙", "●", "∙"}
 )
 
 // thinkingVerbs — 类似 Claude Code 的随机动词
@@ -829,6 +855,25 @@ func pickVerb(ticks int64) string {
 	// Change verb every 20 ticks (2 seconds)
 	idx := (ticks / 20) % int64(len(thinkingVerbs))
 	return thinkingVerbs[idx]
+}
+
+// idlePlaceholders — 就绪态下轮换显示的输入提示，帮助用户发现隐藏功能。
+// 每 ~5 秒自动切换（通过 cliTickMsg 驱动）。
+var idlePlaceholders = []string{
+	"Enter send · Ctrl+J newline · /help",
+	"Type /model to switch model",
+	"Ctrl+K delete messages · Ctrl+O expand tools",
+	"@filepath to attach files",
+	"↑ open background tasks panel",
+	"Type /compact to compress context",
+	"Type /settings to configure",
+	"Type /new to start fresh session",
+}
+
+// pickIdlePlaceholder 根据时间返回轮换的 placeholder（每 5 秒切换）
+func pickIdlePlaceholder() string {
+	idx := int(time.Now().Unix()/5) % len(idlePlaceholders)
+	return idlePlaceholders[idx]
 }
 
 // tickerTickMsg 是 ticker 定时 tick 消息
@@ -1727,9 +1772,10 @@ func (m *cliModel) View() string {
 
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
-	titleRight := "Enter send | Ctrl+J newline | /help"
+	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
+	titleRight := "Enter send · Ctrl+J newline · /help"
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
-		titleRight = fmt.Sprintf("%s → %s available! | /update | /help", m.updateNotice.Current, m.updateNotice.Latest)
+		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
@@ -1773,10 +1819,14 @@ func (m *cliModel) View() string {
 		Foreground(lipgloss.Color(currentTheme.Info))
 
 	// ========== 渲染各部分 ==========
-	// 分隔线：柔和的虚线
+	// 分隔线：精致的点线交替图案，比纯虚线更有设计感
+	sepWidth := m.width
+	if sepWidth < 4 {
+		sepWidth = 4
+	}
 	separator := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.BarEmpty)).
-		Render(strings.Repeat("─", m.width))
+		Render("┈" + strings.Repeat("┈", sepWidth-2))
 
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
@@ -1798,12 +1848,12 @@ func (m *cliModel) View() string {
 		)
 	}
 
-	// 动态 placeholder：处理中 vs 就绪
+	// 动态 placeholder：处理中 vs 就绪（就绪态使用轮换提示）
 	if m.typing {
 		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
 		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	} else if m.textarea.Placeholder == "[Processing...] (Ctrl+C to cancel)" {
-		m.textarea.Placeholder = "Enter send · Ctrl+J newline · /help"
+	} else {
+		m.textarea.Placeholder = pickIdlePlaceholder()
 		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 	}
 
@@ -1818,7 +1868,28 @@ func (m *cliModel) View() string {
 		// 显示补全候选提示
 		status = completionsHint
 	} else {
-		status = readyStatusStyle.Render("● ready")
+		// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
+		readyParts := []string{"● ready"}
+		// 消息计数
+		msgCount := len(m.messages)
+		if msgCount > 0 {
+			readyParts = append(readyParts, fmt.Sprintf("%d msg%s", msgCount, func() string {
+				if msgCount > 1 {
+					return "s"
+				}
+				return ""
+			}()))
+		}
+		// 模型名称（如果用户通过 /settings 覆盖了）
+		if m.channel != nil {
+			m.channel.configMu.RLock()
+			modelName := m.channel.modelOverride
+			m.channel.configMu.RUnlock()
+			if modelName != "" {
+				readyParts = append(readyParts, modelName)
+			}
+		}
+		status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 	}
 	// 临时状态提示（自动过期）
 	if m.tempStatus != "" {
@@ -3125,6 +3196,14 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	case "system":
 		sb.WriteString(systemMsgStyle.Render(msg.content))
 	case "user":
+		// 用户消息上方：右侧柔和光点分隔，与 assistant 的左侧竖线形成对称
+		dotSep := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.BarEmpty)).
+			Width(contentWidth).
+			Align(lipgloss.Right).
+			Render("···")
+		sb.WriteString(dotSep)
+		sb.WriteString("\n")
 		label := userLabelStyle.Render("You")
 		header := lipgloss.NewStyle().
 			Width(contentWidth).
@@ -3151,13 +3230,18 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))
 	default:
-		// assistant 消息：左对齐，无气泡边框
+		// assistant 消息：左侧竖线引导 + 标签
+		guideColor := currentTheme.Accent
+		if msg.isPartial {
+			guideColor = currentTheme.Warning
+		}
+		guide := lipgloss.NewStyle().Foreground(lipgloss.Color(guideColor)).Render("│")
 		if msg.isPartial {
 			label := streamingLabelStyle.Render("Assistant")
-			fmt.Fprintf(&sb, "%s %s ...", timeStr, label)
+			fmt.Fprintf(&sb, "%s %s %s ...", guide, timeStr, label)
 		} else {
 			label := assistantLabelStyle.Render("Assistant")
-			fmt.Fprintf(&sb, "%s %s", timeStr, label)
+			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
 		// Agent 消息直接渲染（glamour 已处理 markdown）

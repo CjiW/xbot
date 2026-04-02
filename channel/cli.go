@@ -255,7 +255,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit",
+	"/model", "/models", "/new", "/quit", "/settings",
 }
 
 // ---------------------------------------------------------------------------
@@ -1684,6 +1684,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
   /models    - 列出可用模型
   /context   - 查看上下文信息
   /new       - 开始新会话
+  /settings  - 打开设置面板
   /exit      - 退出 CLI
   /help      - 显示此帮助信息
 

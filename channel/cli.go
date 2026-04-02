@@ -1158,10 +1158,56 @@ func (m *cliModel) View() string {
 		Width(m.width).
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
-	// 输入框样式：圆角边框，不设 Background（避免和 textarea ANSI 冲突导致颜色不填满）
+	// 输入框样式：根据输入内容动态设置边框颜色
+	// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
+	inputValue := strings.TrimSpace(m.textarea.Value())
+	borderColor := lipgloss.Color(currentTheme.Accent)
+	var completionsHint string
+
+	if strings.HasPrefix(inputValue, "!") {
+		borderColor = lipgloss.Color(currentTheme.Error)
+	} else if strings.HasPrefix(inputValue, "/") {
+		borderColor = lipgloss.Color(currentTheme.Success)
+		// 补全候选提示：与 Tab 补全共享状态
+		if len(m.completions) > 0 {
+			// Tab 已激活：高亮当前选中项
+			parts := make([]string, len(m.completions))
+			for i, c := range m.completions {
+				if i == m.compIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).
+						Underline(true).
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Render(c)
+				}
+			}
+			completionsHint = lipgloss.NewStyle().
+				Padding(0, 1).
+				Render(strings.Join(parts, " · "))
+		} else {
+			// 尚未按 Tab：显示潜在匹配
+			var matches []string
+			for _, cmd := range cliCommands {
+				if strings.HasPrefix(cmd, inputValue) {
+					matches = append(matches, cmd)
+				}
+			}
+			if len(matches) > 0 {
+				completionsHint = lipgloss.NewStyle().
+					Foreground(lipgloss.Color(currentTheme.Success)).
+					Padding(0, 1).
+					Render("[Tab] " + strings.Join(matches, " · "))
+			}
+		}
+	}
+
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(m.width - 4)
 
@@ -1215,6 +1261,9 @@ func (m *cliModel) View() string {
 	if m.typing || m.progress != nil {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+	} else if completionsHint != "" {
+		// 显示补全候选提示
+		status = completionsHint
 	} else {
 		status = readyStatusStyle.Render("● ready")
 	}

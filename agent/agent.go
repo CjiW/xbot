@@ -1982,34 +1982,9 @@ func formatToolProgress(name string, args string) string {
 	case "card_create":
 		title := get(m, "title")
 		if title != "" {
-			summary = fmt.Sprintf("card_create: %q", title)
+		summary = fmt.Sprintf("card_create: %q", title)
 		} else {
-			summary = "card_create"
-		}
-	case "context_edit":
-		action := get(m, "action")
-		reason := get(m, "reason")
-		switch action {
-		case "delete_turn":
-			turnIdx := get(m, "turn_idx")
-			summary = fmt.Sprintf("context_edit: delete_turn #%s", turnIdx)
-		case "delete":
-			idx := get(m, "message_idx")
-			summary = fmt.Sprintf("context_edit: delete msg #%s", idx)
-		case "truncate":
-			idx := get(m, "message_idx")
-			maxChars := get(m, "max_chars")
-			summary = fmt.Sprintf("context_edit: truncate msg #%s → %s chars", idx, maxChars)
-		case "replace":
-			idx := get(m, "message_idx")
-			summary = fmt.Sprintf("context_edit: replace in msg #%s", idx)
-		case "list":
-			summary = "context_edit: list turns"
-		default:
-			summary = fmt.Sprintf("context_edit: %s", action)
-		}
-		if reason != "" {
-			summary += fmt.Sprintf(" (%s)", truncate(reason, 30))
+		summary = "card_create"
 		}
 	default:
 		// Unknown tools (including MCP tools): show first 60 chars of args

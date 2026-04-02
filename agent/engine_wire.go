@@ -230,30 +230,17 @@ func (a *Agent) buildMainRunConfig(
 							}
 						}
 						// Copy todo items for CLI display
-						if len(s.Todos) > 0 {
-							payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
-							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.CLITodoItem{
-									ID:   td.ID,
-									Text: td.Text,
-									Done: td.Done,
+								if len(s.Todos) > 0 {
+									payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
+									for i, td := range s.Todos {
+										payload.Todos[i] = channelpkg.CLITodoItem{
+												ID:   td.ID,
+												Text: td.Text,
+												Done: td.Done,
+										}
+									}
 								}
-							}
-						}
-						// Copy context edit events for red line indicator
-						if len(s.ContextEdits) > 0 {
-							payload.ContextEdits = make([]channelpkg.CLIContextEdit, len(s.ContextEdits))
-							for i, ce := range s.ContextEdits {
-								payload.ContextEdits[i] = channelpkg.CLIContextEdit{
-									Action: ce.Action,
-									Idx:    ce.Idx,
-									Reason: ce.Reason,
-									Before: ce.Before,
-									Role:   ce.Role,
-								}
-							}
-						}
-						cc.SendProgress(chatID, payload)
+								cc.SendProgress(chatID, payload)
 					}
 				} else {
 					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")

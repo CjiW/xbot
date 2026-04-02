@@ -1429,6 +1429,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case cliTickMsg:
+		// Always refresh bg task count on tick so status bar updates immediately
+		// when a bg task completes (even when no progress event is coming)
+		if m.bgTaskCountFn != nil {
+			m.bgTaskCount = m.bgTaskCountFn()
+		}
 		if m.typing || m.progress != nil {
 			cmds = append(cmds, tickCmd())
 			m.updateViewportContent()

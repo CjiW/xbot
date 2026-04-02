@@ -379,13 +379,15 @@ func TestCLIModelViewNotReady(t *testing.T) {
 	model.ready = false
 
 	view := model.View()
-	if !strings.Contains(view, "初始化") {
-		t.Errorf("View() when not ready should show initializing message, got: %q", view)
+	// §14 splash 画面优先于 "初始化中..." 展示
+	if !strings.Contains(view, "xbot") && !strings.Contains(view, "初始化") {
+		t.Errorf("View() when not ready should show splash or initializing message, got: %q", view)
 	}
 }
 
 func TestCLIModelViewReady(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 
 	view := model.View()
@@ -397,6 +399,7 @@ func TestCLIModelViewReady(t *testing.T) {
 
 func TestCLIModelViewWithTyping(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 	model.typing = true
 
@@ -422,6 +425,7 @@ func TestCLIModelViewWithProgress(t *testing.T) {
 
 func TestCLIModelViewWithMessages(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 	model.messages = []cliMessage{
 		{role: "user", content: "Hello", timestamp: time.Now()},

@@ -68,6 +68,10 @@ type cliTheme struct {
 	BarEmpty  string // 进度条空
 	Border    string // 边框
 	TitleText string // 标题栏文字（title bar foreground）
+	// Surface（第 3 轮增强）
+	Surface  string // 标题栏/面板背景（比终端背景稍亮，营造"浮起"效果）
+	Overlay  string // 进度框/工具摘要背景（比 Surface 更亮，形成视觉层级）
+	Gradient string // 渐变辅助色（用于分隔线、提示条渐变等装饰元素）
 }
 
 var (
@@ -85,6 +89,9 @@ var (
 		BarEmpty:      "#2a2a3a",
 		Border:        "#4a4e69",
 		TitleText:     "#f2e9e4",
+		Surface:       "#2a2a3e",
+		Overlay:       "#353550",
+		Gradient:      "#3949ab",
 	}
 	themeOcean = cliTheme{
 		TextPrimary:   "#e0f2f1",
@@ -100,6 +107,9 @@ var (
 		BarEmpty:      "#1a2a3a",
 		Border:        "#37474f",
 		TitleText:     "#e0f7fa",
+		Surface:       "#1a2a3a",
+		Overlay:       "#1e3345",
+		Gradient:      "#00838f",
 	}
 	themeForest = cliTheme{
 		TextPrimary:   "#c8e6c9",
@@ -115,6 +125,9 @@ var (
 		BarEmpty:      "#1a2e1a",
 		Border:        "#2e4a2e",
 		TitleText:     "#e8f5e9",
+		Surface:       "#1a2e1a",
+		Overlay:       "#223a22",
+		Gradient:      "#388e3c",
 	}
 	themeSunset = cliTheme{
 		TextPrimary:   "#fff3e0",
@@ -130,6 +143,9 @@ var (
 		BarEmpty:      "#2e2a1a",
 		Border:        "#4e3e2e",
 		TitleText:     "#fff8e1",
+		Surface:       "#2e2a1a",
+		Overlay:       "#3a3020",
+		Gradient:      "#e64a19",
 	}
 	themeRose = cliTheme{
 		TextPrimary:   "#fce4ec",
@@ -145,6 +161,9 @@ var (
 		BarEmpty:      "#2e1a2a",
 		Border:        "#4e2e3e",
 		TitleText:     "#fce4ec",
+		Surface:       "#2e1a2a",
+		Overlay:       "#3a2035",
+		Gradient:      "#c2185b",
 	}
 	themeMono = cliTheme{
 		TextPrimary:   "#d0d0d0",
@@ -160,6 +179,9 @@ var (
 		BarEmpty:      "#333333",
 		Border:        "#555555",
 		TitleText:     "#ffffff",
+		Surface:       "#222222",
+		Overlay:       "#2a2a2a",
+		Gradient:      "#666666",
 	}
 
 	themeRegistry = map[string]*cliTheme{
@@ -876,6 +898,8 @@ var (
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
+	// splashFrames: loading bar animation — 启动画面进度条
+	splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 	// neonFrames: neon diamond — 用于错误/重试状态，醒目的视觉提示
 	neonFrames = []string{"◇", "◆", "◆", "◇", "◇", "◆", "◆", "◇"}
 	// pulseFrames: expanding/contracting dots — 用于特殊状态（搜索、扫描等）
@@ -922,6 +946,14 @@ func pickIdlePlaceholder() string {
 
 // tickerTickMsg 是 ticker 定时 tick 消息
 type tickerTickMsg struct{}
+
+// splashTickMsg 启动画面定时 tick 消息
+type splashTickMsg struct {
+	frame int // 当前帧索引
+}
+
+// splashDoneMsg 启动画面结束消息
+type splashDoneMsg struct{}
 
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
@@ -1022,6 +1054,10 @@ type cliModel struct {
 	// --- §13 Update Check ---
 	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate bool                // true while /update is in progress
+
+	// --- §14 Splash 画面 ---
+	splashDone  bool // true = splash 动画结束，进入正常界面
+	splashFrame int  // 当前 splash 动画帧索引
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
@@ -1164,9 +1200,16 @@ func isCtrlJ(msg tea.Msg) bool {
 // Bubble Tea Interface Implementation
 // ---------------------------------------------------------------------------
 
-// Init 初始化
+// Init 初始化 — 启动 splash 画面动画
 func (m *cliModel) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, m.splashTick(0))
+}
+
+// splashTick 生成启动画面动画的 tick 命令
+func (m *cliModel) splashTick(frame int) tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+		return splashTickMsg{frame: frame + 1}
+	})
 }
 
 // Update 处理消息
@@ -1670,10 +1713,10 @@ func (m *cliModel) handleResize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// Layout: titleBar(1) + viewport + separator(1) + status(1) + inputBox(5)
+	// Layout: titleBar(1) + viewport + separator(1) + status(1) + inputBox(5) + footer(1)
 	// inputBox = textarea(3) + border_top(1) + border_bottom(1) = 5
-	// Total non-viewport = 1 + 1 + 1 + 5 = 8
-	reservedLines := 8
+	// Total non-viewport = 1 + 1 + 1 + 5 + 1 = 9
+	reservedLines := 9
 	viewportHeight := height - reservedLines
 	if viewportHeight < 5 {
 		viewportHeight = 5
@@ -1808,6 +1851,11 @@ func (m *cliModel) calculateProgressHeight() int {
 
 // View 渲染界面
 func (m *cliModel) View() string {
+	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
+	if !m.splashDone {
+		return m.renderSplash()
+	}
+
 	if !m.ready {
 		return "\n  初始化中..."
 	}
@@ -2088,6 +2136,186 @@ func (m *cliModel) titleText() string {
 		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
 	}
 	return " xbot CLI"
+}
+
+// ---------------------------------------------------------------------------
+// §14 启动画面 (Splash Screen)
+// ---------------------------------------------------------------------------
+
+// xbotLogo — ASCII art logo（纯 ASCII，兼容所有终端）
+var xbotLogo = []string{
+	"  ╦ ╦╔═╗╔╗   ╔═╗╦ ╦╔═╗╦  ╦╔═╗╦  ╦",
+	"  ║║║║╣ ╠╩╗  ║  ╠═╣║╣ ║  ║║╣ ╚╗╔╝",
+	"  ╚╩╝╚═╝╚═╝  ╚═╝╩ ╩╚═╝╩═╝╩╚═╝ ╚╝",
+}
+
+// renderSplash 渲染启动画面 — 品牌 logo + 版本号 + 加载动画
+func (m *cliModel) renderSplash() string {
+	// 中心化计算
+	screenW := m.width
+	if screenW < 40 {
+		screenW = 40
+	}
+	screenH := m.height
+	if screenH < 10 {
+		screenH = 10
+	}
+
+	// Logo 样式
+	logoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Accent)).
+		Bold(true)
+
+	// 版本信息样式
+	versionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary))
+
+	// 描述样式
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted))
+
+	// 加载动画样式
+	loadingStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning))
+
+	// 组装 splash 内容
+	var lines []string
+	for _, line := range xbotLogo {
+		// 居中 logo
+		logoW := lipgloss.Width(logoStyle.Render(line))
+		pad := (screenW - logoW) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		lines = append(lines, strings.Repeat(" ", pad)+logoStyle.Render(line))
+	}
+
+	// 空行
+	lines = append(lines, "")
+
+	// 版本号居中
+	versionText := versionStyle.Render(fmt.Sprintf("xbot %s · %s", version.Version, version.Commit))
+	vW := lipgloss.Width(versionText)
+	vPad := (screenW - vW) / 2
+	if vPad < 0 {
+		vPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", vPad)+versionText)
+
+	// 描述居中
+	descText := descStyle.Render("AI-powered terminal agent")
+	dW := lipgloss.Width(descText)
+	dPad := (screenW - dW) / 2
+	if dPad < 0 {
+		dPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", dPad)+descText)
+
+	// 空行
+	lines = append(lines, "")
+
+	// 加载动画
+	frame := splashFrames[m.splashFrame%len(splashFrames)]
+	loadingText := loadingStyle.Render("  " + frame + "  initializing...")
+	lW := lipgloss.Width(loadingText)
+	lPad := (screenW - lW) / 2
+	if lPad < 0 {
+		lPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", lPad)+loadingText)
+
+	// 垂直居中
+	emptyLinesBefore := (screenH - len(lines)) / 2
+	if emptyLinesBefore < 2 {
+		emptyLinesBefore = 2
+	}
+
+	var sb strings.Builder
+	for i := 0; i < emptyLinesBefore; i++ {
+		sb.WriteString("\n")
+	}
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
+// §15 底部快捷键提示条 (Footer Bar)
+// ---------------------------------------------------------------------------
+
+// renderFooter 渲染底部快捷键提示条。
+// 根据当前状态动态显示最相关的快捷键，避免信息过载。
+func (m *cliModel) renderFooter() string {
+	// 收集当前上下文最相关的快捷键提示
+	var hints []string
+
+	if m.typing {
+		// 处理中：显示取消快捷键
+		hints = append(hints, ctrlKey("c", "cancel"))
+	} else {
+		// 就绪态：显示核心快捷键
+		if m.textarea.Value() == "" {
+			hints = append(hints, ctrlKey("k", "delete"), keyHint("/", "commands"), keyHint("tab", "complete"))
+			if m.bgTaskCount > 0 {
+				hints = append(hints, keyHint("↑", "bg tasks"))
+			}
+		} else {
+			hints = append(hints, ctrlKey("j", "newline"), keyHint("tab", "complete"), ctrlKey("k", "delete"))
+		}
+	}
+
+	if len(hints) == 0 {
+		return ""
+	}
+
+	// 用 Surface 背景渲染，与标题栏形成对称
+	footerText := strings.Join(hints, "  ")
+	// 右侧补充帮助提示
+	helpHint := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted)).
+		Render("/help")
+	footerText = padBetween(footerText, helpHint, m.width)
+
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(currentTheme.Surface)).
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
+		Render(footerText)
+}
+
+// ctrlKey 渲染 Ctrl+X 快捷键标签（灰色键帽 + 彩色描述）
+func ctrlKey(key string, desc string) string {
+	k := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted)).
+		Bold(true).
+		Render("Ctrl+" + key)
+	d := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
+		Render(desc)
+	return k + " " + d
+}
+
+// keyHint 渲染普通按键标签
+func keyHint(key, desc string) string {
+	k := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted)).
+		Bold(true).
+		Render(key)
+	d := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
+		Render(desc)
+	return k + " " + d
+}
+
+// padBetween 在左右文本之间填充空格，使总宽度达到 width
+func padBetween(left, right string, width int) string {
+	w := lipgloss.Width(left) + lipgloss.Width(right)
+	if w >= width {
+		return left + " " + right
+	}
+	return left + strings.Repeat(" ", width-w) + right
 }
 
 // renderProgressStatus renders a compact one-line status for the status bar.

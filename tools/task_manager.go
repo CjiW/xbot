@@ -29,19 +29,19 @@ const (
 
 // BackgroundTask represents a running or completed background task.
 type BackgroundTask struct {
-	ID         string        `json:"id"`
-	Command    string        `json:"command"`
-	Status     BgTaskStatus  `json:"status"`
-	StartedAt  time.Time     `json:"started_at"`
-	FinishedAt *time.Time    `json:"finished_at,omitempty"`
-	Output     string        `json:"output"`
-	ExitCode   int           `json:"exit_code"`
-	Error      string        `json:"error,omitempty"`
+	ID         string       `json:"id"`
+	Command    string       `json:"command"`
+	Status     BgTaskStatus `json:"status"`
+	StartedAt  time.Time    `json:"started_at"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
+	Output     string       `json:"output"`
+	ExitCode   int          `json:"exit_code"`
+	Error      string       `json:"error,omitempty"`
 
 	// Internal fields (not serialized to LLM)
-	cancel     context.CancelFunc
-	mu         sync.Mutex   // protects Output for concurrent writes
-	killed     bool         // set by Kill() before cancel()
+	cancel context.CancelFunc
+	mu     sync.Mutex // protects Output for concurrent writes
+	killed bool       // set by Kill() before cancel()
 }
 
 // BackgroundTaskManager manages background task lifecycle.

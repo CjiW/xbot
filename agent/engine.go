@@ -1614,16 +1614,16 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.BgTaskManager = cfg.BgTaskManager
 		sessionKey := cfg.SessionKey
 		if sessionKey == "" {
-		sessionKey = cfg.Channel + ":" + cfg.ChatID
+			sessionKey = cfg.Channel + ":" + cfg.ChatID
 		}
 		tc.BgSessionKey = sessionKey
 
 		// Register completion callback: inject task result into conversation
 		if cfg.InjectInbound != nil {
-		cfg.BgTaskManager.OnComplete(sessionKey, func(task *tools.BackgroundTask) {
-			content := tools.FormatBgTaskCompletion(task)
-			cfg.InjectInbound(cfg.Channel, cfg.ChatID, cfg.SenderID, content)
-		})
+			cfg.BgTaskManager.OnComplete(sessionKey, func(task *tools.BackgroundTask) {
+				content := tools.FormatBgTaskCompletion(task)
+				cfg.InjectInbound(cfg.Channel, cfg.ChatID, cfg.SenderID, content)
+			})
 		}
 	}
 
@@ -1631,7 +1631,7 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 	if cfg.Session != nil {
 		tc.CurrentDir = cfg.Session.GetCurrentDir()
 		tc.SetCurrentDir = func(dir string) {
-		cfg.Session.SetCurrentDir(dir)
+			cfg.Session.SetCurrentDir(dir)
 		}
 	} else {
 		// No session — use InitialCWD for CWD persistence (SubAgent or sessionless mode).

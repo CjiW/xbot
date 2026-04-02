@@ -6,15 +6,15 @@ import (
 	"strings"
 	"time"
 
-	log "xbot/logger"
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 // TaskStatusTool returns the current status of a background task.
 type TaskStatusTool struct{}
 
-func (t *TaskStatusTool) Name() string        { return "task_status" }
-func (t *TaskStatusTool) Required() bool      { return false }
+func (t *TaskStatusTool) Name() string   { return "task_status" }
+func (t *TaskStatusTool) Required() bool { return false }
 func (t *TaskStatusTool) Description() string {
 	return `Check the status of a background task. Shows task ID, command, status (running/done/error/killed), elapsed time, and a preview of the output.
 
@@ -51,8 +51,8 @@ func (t *TaskStatusTool) Execute(toolCtx *ToolContext, input string) (*ToolResul
 // TaskKillTool terminates a running background task.
 type TaskKillTool struct{}
 
-func (t *TaskKillTool) Name() string        { return "task_kill" }
-func (t *TaskKillTool) Required() bool      { return false }
+func (t *TaskKillTool) Name() string   { return "task_kill" }
+func (t *TaskKillTool) Required() bool { return false }
 func (t *TaskKillTool) Description() string {
 	return `Terminate a running background task. All child processes of the task will be killed.
 
@@ -89,8 +89,8 @@ func (t *TaskKillTool) Execute(toolCtx *ToolContext, input string) (*ToolResult,
 // TaskReadTool reads the full output of a completed (or running) background task.
 type TaskReadTool struct{}
 
-func (t *TaskReadTool) Name() string        { return "task_read" }
-func (t *TaskReadTool) Required() bool      { return false }
+func (t *TaskReadTool) Name() string   { return "task_read" }
+func (t *TaskReadTool) Required() bool { return false }
 func (t *TaskReadTool) Description() string {
 	return `Read the full output of a background task. Useful for reviewing the complete output of a completed task.
 
@@ -145,16 +145,16 @@ func formatTask(task *BackgroundTask) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Task: %s\n", task.ID))
-	sb.WriteString(fmt.Sprintf("Command: %s\n", task.Command))
-	sb.WriteString(fmt.Sprintf("Status: %s\n", task.Status))
-	sb.WriteString(fmt.Sprintf("Elapsed: %s\n", elapsed))
+	fmt.Fprintf(&sb, "Task: %s\n", task.ID)
+	fmt.Fprintf(&sb, "Command: %s\n", task.Command)
+	fmt.Fprintf(&sb, "Status: %s\n", task.Status)
+	fmt.Fprintf(&sb, "Elapsed: %s\n", elapsed)
 
 	if task.ExitCode >= 0 {
-		sb.WriteString(fmt.Sprintf("Exit Code: %d\n", task.ExitCode))
+		fmt.Fprintf(&sb, "Exit Code: %d\n", task.ExitCode)
 	}
 	if task.Error != "" {
-		sb.WriteString(fmt.Sprintf("Error: %s\n", task.Error))
+		fmt.Fprintf(&sb, "Error: %s\n", task.Error)
 	}
 
 	// Show last 500 chars of output as preview
@@ -163,7 +163,7 @@ func formatTask(task *BackgroundTask) string {
 		preview = "... " + preview[len(preview)-497:]
 	}
 	if preview != "" {
-		sb.WriteString(fmt.Sprintf("Output Preview:\n%s\n", preview))
+		fmt.Fprintf(&sb, "Output Preview:\n%s\n", preview)
 	}
 
 	return sb.String()
@@ -175,19 +175,19 @@ func FormatBgTaskCompletion(task *BackgroundTask) string {
 	elapsed := task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[Background task completed: %s]\n", task.ID))
-	sb.WriteString(fmt.Sprintf("Command: %s\n", task.Command))
-	sb.WriteString(fmt.Sprintf("Status: %s | Elapsed: %s\n", task.Status, elapsed))
+	fmt.Fprintf(&sb, "[Background task completed: %s]\n", task.ID)
+	fmt.Fprintf(&sb, "Command: %s\n", task.Command)
+	fmt.Fprintf(&sb, "Status: %s | Elapsed: %s\n", task.Status, elapsed)
 
 	if task.ExitCode >= 0 {
-		sb.WriteString(fmt.Sprintf("Exit Code: %d\n", task.ExitCode))
+		fmt.Fprintf(&sb, "Exit Code: %d\n", task.ExitCode)
 	}
 	if task.Error != "" {
-		sb.WriteString(fmt.Sprintf("Error: %s\n", task.Error))
+		fmt.Fprintf(&sb, "Error: %s\n", task.Error)
 	}
 
 	if task.Output != "" {
-		sb.WriteString(fmt.Sprintf("\nOutput:\n%s", task.Output))
+		fmt.Fprintf(&sb, "\nOutput:\n%s", task.Output)
 	} else {
 		sb.WriteString("\n(no output)")
 	}
@@ -207,14 +207,14 @@ func ListBgTasks(mgr *BackgroundTaskManager, sessionKey string) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Background tasks (%d):\n", len(tasks)))
+	fmt.Fprintf(&sb, "Background tasks (%d):\n", len(tasks))
 	for _, task := range tasks {
 		elapsed := time.Since(task.StartedAt).Round(time.Second)
 		if task.FinishedAt != nil {
 			elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 		}
-		sb.WriteString(fmt.Sprintf("  %s  %s  %s  %s  (%s)\n",
-			task.ID, task.Status, elapsed, task.Command, truncateStr(task.Command, 40)))
+		fmt.Fprintf(&sb, "  %s  %s  %s  %s  (%s)\n",
+			task.ID, task.Status, elapsed, task.Command, truncateStr(task.Command, 40))
 	}
 	return sb.String()
 }

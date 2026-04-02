@@ -696,7 +696,7 @@ func New(cfg Config) *Agent {
 			tools.NewTimingHook(),
 		),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
-		}
+	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
 	initServices(agent, cfg, multiSession, registry)

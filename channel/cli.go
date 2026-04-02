@@ -2590,9 +2590,13 @@ func (m *cliModel) openSetupPanel() {
 			}
 			m.renderCacheValid = false
 		}
+		msg := "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
+		if vals["memory_provider"] == "letta" {
+			msg += "\n\n⚠️ letta 记忆模式需要 embedding 服务：\n  1. 安装 Ollama: https://ollama.ai\n  2. 拉取 embedding 模型: `ollama pull nomic-embed-text`\n  3. 确保在配置或环境变量中设置了 embedding endpoint"
+		}
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
-			content:   "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。",
+			content:   msg,
 			timestamp: time.Now(),
 			dirty:     true,
 		})

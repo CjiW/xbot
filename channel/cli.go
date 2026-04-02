@@ -197,6 +197,143 @@ var (
 	currentTheme = &themeMidnight
 )
 
+// ---------------------------------------------------------------------------
+// §20 样式缓存系统 — 避免每帧重建 lipgloss.Style（第 7 轮重构）
+// ---------------------------------------------------------------------------
+// 每个 View() 调用创建 200+ 个 lipgloss.NewStyle() → 改为缓存，只在主题/resize 时重建。
+
+type cliStyles struct {
+	TitleBar         lipgloss.Style
+	TitleText        lipgloss.Style
+	ReadyStatus      lipgloss.Style
+	ThinkingSt       lipgloss.Style
+	Progress         lipgloss.Style
+	Tool             lipgloss.Style
+	Separator        lipgloss.Style
+	InputBox         lipgloss.Style
+	Time             lipgloss.Style
+	UserLabel        lipgloss.Style
+	AssistLabel      lipgloss.Style
+	StreamingLabel   lipgloss.Style
+	SystemMsg        lipgloss.Style
+	ErrorMsg         lipgloss.Style
+	ToolSummary      lipgloss.Style
+	ToolHeader       lipgloss.Style
+	ToolItem         lipgloss.Style
+	ToolErrorItem    lipgloss.Style
+	ToolThinking     lipgloss.Style
+	ToolHint         lipgloss.Style
+	ProgressHeader   lipgloss.Style
+	ProgressIter     lipgloss.Style
+	ProgressThinking lipgloss.Style
+	ProgressDone     lipgloss.Style
+	ProgressRunning  lipgloss.Style
+	ProgressError    lipgloss.Style
+	ProgressElapsed  lipgloss.Style
+	ProgressIndent   lipgloss.Style
+	ProgressDim      lipgloss.Style
+	ProgressBlock    lipgloss.Style
+	Accent           lipgloss.Style
+	TextMutedSt      lipgloss.Style
+	WarningSt        lipgloss.Style
+	InfoSt           lipgloss.Style
+	TokenUsage       lipgloss.Style
+	Footer           lipgloss.Style
+	ToastBg          lipgloss.Style
+	ToastText        lipgloss.Style
+	TodoLabel        lipgloss.Style
+	TodoFilled       lipgloss.Style
+	TodoEmpty        lipgloss.Style
+	TodoDone         lipgloss.Style
+	TodoPending      lipgloss.Style
+	PanelBox         lipgloss.Style
+	PanelHeader      lipgloss.Style
+	PanelCursor      lipgloss.Style
+	PanelDesc        lipgloss.Style
+	PanelHint        lipgloss.Style
+	PanelDivider     lipgloss.Style
+	PanelEmpty       lipgloss.Style
+	FileCompDir      lipgloss.Style
+	FileCompFile     lipgloss.Style
+	FileCompSel      lipgloss.Style
+	HelpTitle        lipgloss.Style
+	HelpCmd          lipgloss.Style
+	HelpDesc         lipgloss.Style
+	HelpGroup        lipgloss.Style
+	HelpKey          lipgloss.Style
+	HelpPanel        lipgloss.Style
+}
+
+func buildStyles(width int) cliStyles {
+	t := currentTheme
+	c := func(s string) lipgloss.Color { return lipgloss.Color(s) }
+	cw := width - 4
+	if cw < 10 {
+		cw = 10
+	}
+	return cliStyles{
+		TitleBar:         lipgloss.NewStyle().Background(c(t.Border)).Foreground(c(t.TitleText)).Bold(true).Width(width),
+		TitleText:        lipgloss.NewStyle(),
+		ReadyStatus:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true).Padding(0, 1),
+		ThinkingSt:       lipgloss.NewStyle().Foreground(c(t.Warning)).Padding(0, 1),
+		Progress:         lipgloss.NewStyle().Foreground(c(t.Warning)),
+		Tool:             lipgloss.NewStyle().Foreground(c(t.Info)),
+		Separator:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
+		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(width - 4),
+		Time:             lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		UserLabel:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		AssistLabel:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
+		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
+		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
+		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
+		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
+		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
+		ToolThinking:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
+		ToolHint:         lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		ProgressHeader:   lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
+		ProgressIter:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Bold(true),
+		ProgressThinking: lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
+		ProgressDone:     lipgloss.NewStyle().Foreground(c(t.Success)),
+		ProgressRunning:  lipgloss.NewStyle().Foreground(c(t.Warning)),
+		ProgressError:    lipgloss.NewStyle().Foreground(c(t.Error)),
+		ProgressElapsed:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		ProgressIndent:   lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		ProgressDim:      lipgloss.NewStyle().Faint(true),
+		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
+		Accent:           lipgloss.NewStyle().Foreground(c(t.Accent)),
+		TextMutedSt:      lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		WarningSt:        lipgloss.NewStyle().Foreground(c(t.Warning)),
+		InfoSt:           lipgloss.NewStyle().Foreground(c(t.Info)),
+		TokenUsage:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
+		Footer:           lipgloss.NewStyle().Background(c(t.Surface)).Foreground(c(t.TextSecondary)),
+		ToastBg:          lipgloss.NewStyle().Background(c(t.Surface)).Width(width).Padding(0, 1),
+		ToastText:        lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		TodoLabel:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		TodoFilled:       lipgloss.NewStyle().Foreground(c(t.BarFilled)),
+		TodoEmpty:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
+		TodoDone:         lipgloss.NewStyle().Foreground(c(t.Success)),
+		TodoPending:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
+		PanelHeader:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		PanelCursor:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		PanelDesc:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		PanelHint:        lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		PanelDivider:     lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
+		PanelEmpty:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Width(width - 8).Align(lipgloss.Center),
+		FileCompDir:      lipgloss.NewStyle().Foreground(c(t.Info)),
+		FileCompFile:     lipgloss.NewStyle().Foreground(c(t.Info)),
+		FileCompSel:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Underline(true),
+		HelpTitle:        lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
+		HelpCmd:          lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Width(12),
+		HelpDesc:         lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		HelpGroup:        lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		HelpKey:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
+		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Padding(0, 1).Width(cw),
+	}
+}
+
 // ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
 // 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
 var themeChangeCh = make(chan struct{}, 1)
@@ -1151,6 +1288,7 @@ type cliModel struct {
 	toastIcon  string // toast 图标（✓/✗/ℹ 等）
 	toastTimer bool   // true = toast 消除计时器已启动
 
+	styles  cliStyles
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 
@@ -1217,6 +1355,7 @@ func newCLIModel() *cliModel {
 		textarea:        ta,
 		ticker:          tk,
 		messages:        make([]cliMessage, 0, cliMsgBufSize),
+		styles:          buildStyles(80),
 		renderer:        renderer,
 		ready:           false,
 		typing:          false,
@@ -1320,12 +1459,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
-	// 主题变更通知：重建 glamour 渲染器 + 刷新所有静态绑定样式
+	// 主题变更通知：重建样式缓存 + glamour 渲染器
 	select {
 	case <-themeChangeCh:
 		if m.width > 4 {
 			m.renderer = newGlamourRenderer(m.width - 4)
 		}
+		// §20 重建样式缓存
+		m.styles = buildStyles(m.width)
 		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
 		m.textarea.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
 		m.textarea.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
@@ -1888,20 +2029,35 @@ func (m *cliModel) handleResize(width, height int) {
 	m.width = width
 	m.height = height
 
+	// §20 重建样式缓存
+	m.styles = buildStyles(width)
+
 	// Layout: titleBar(1) + viewport + separator(1) + status(1) + inputBox(5) + footer(1)
-	// inputBox = textarea(3) + border_top(1) + border_bottom(1) = 5
-	// Total non-viewport = 1 + 1 + 1 + 5 + 1 = 9
 	reservedLines := 9
+	// §20b 小终端适配：极小窗口下动态缩减布局
+	if height < 12 {
+		reservedLines = 7
+	}
+	if height < 8 {
+		reservedLines = 5
+	}
+	if height < 5 {
+		reservedLines = 4
+	}
 	viewportHeight := height - reservedLines
-	if viewportHeight < 5 {
-		viewportHeight = 5
+	if viewportHeight < 3 {
+		viewportHeight = 3
 	}
 	m.viewport.Width = width
 	m.viewport.Height = viewportHeight
 
 	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
 	// textarea must match the content width exactly.
-	m.textarea.SetWidth(width - 4)
+	iw := width - 4
+	if iw < 10 {
+		iw = 10
+	}
+	m.textarea.SetWidth(iw)
 
 	// Glamour word-wrap must match viewport width so that lines
 	// don't get re-wrapped by lipgloss (which would lose the margin).
@@ -1986,33 +2142,38 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 		return
 	}
 
-	// @ file reference
+	// §20c @ 文件引用补全（带目录/文件图标区分 + 截断）
 	rawInput := m.textarea.Value()
 	if ok, _ := detectAtPrefix(rawInput); ok {
 		borderColor = lipgloss.Color(currentTheme.Info)
 		if len(m.fileCompletions) > 0 {
 			parts := make([]string, len(m.fileCompletions))
 			for i, c := range m.fileCompletions {
-				if isDir(c) {
-					c += "/"
+				base := filepath.Base(c)
+				dir := isDir(c)
+				if dir {
+					base += "/"
 				}
+				// 截断过长文件名
+				if utf8.RuneCountInString(base) > 20 {
+					runes := []rune(base)
+					base = string(runes[:18]) + "…"
+				}
+				icon := "📄 "
+				if dir {
+					icon = "📁 "
+				}
+				display := icon + base
 				if i == m.fileCompIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
+					parts[i] = m.styles.FileCompSel.Render(display)
 				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
+					parts[i] = m.styles.FileCompFile.Render(display)
 				}
 			}
-			hint = lipgloss.NewStyle().Padding(0, 1).
+			hint = m.styles.TextMutedSt.Padding(0, 1).
 				Render("[Tab] " + strings.Join(parts, " · "))
 		} else {
-			hint = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.TextMuted)).
-				Padding(0, 1).
+			hint = m.styles.TextMutedSt.Padding(0, 1).
 				Render("[Tab] 无匹配文件")
 		}
 		return

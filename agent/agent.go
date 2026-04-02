@@ -742,6 +742,9 @@ func (a *Agent) SetContextMode(mode string) error {
 func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
 func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
 func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
+func (a *Agent) SetMaxContextTokens(n int) {
+	a.contextManagerConfig.MaxContextTokens = n
+}
 
 // GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
 func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {

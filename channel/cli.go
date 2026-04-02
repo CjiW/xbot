@@ -2245,16 +2245,12 @@ func (m *cliModel) View() string {
 		Bold(true).
 		Padding(0, 1)
 
-	thinkingStatusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Padding(0, 1)
+	// §20 使用缓存样式
+	thinkingStatusStyle := m.styles.ThinkingSt
 
-	// 进度样式
-	progressStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning))
-
-	toolStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Info))
+	// §20 进度样式 → 缓存
+	progressStyle := m.styles.Progress
+	toolStyle := m.styles.Tool
 
 	// ========== 渲染各部分 ==========
 	// 分隔线：精致的点线交替图案，比纯虚线更有设计感
@@ -5174,26 +5170,15 @@ func (m *cliModel) viewPanel() string {
 
 func (m *cliModel) viewSettingsPanel() string {
 
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success)).
-		Bold(true)
-
-	valueStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Info))
-
-	cursorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true)
-
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Faint(true)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted))
+	// §20 使用缓存样式
+	s := &m.styles
+	valueStyle := s.InfoSt
+	cursorStyle := s.PanelCursor
+	descStyle := s.PanelDesc
+	hintStyle := s.PanelHint
 
 	var sb strings.Builder
-	sb.WriteString(headerStyle.Render("⚙ Settings"))
+	sb.WriteString(s.PanelHeader.Render("⚙ Settings"))
 	sb.WriteString("\n")
 	// 表头下方精致分割线，区分标题与内容
 	dividerStyle := lipgloss.NewStyle().
@@ -5319,30 +5304,15 @@ func (m *cliModel) viewSettingsPanel() string {
 
 func (m *cliModel) viewAskUserPanel() string {
 
-	questionStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true)
-
-	hintStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted))
-
-	activeTabStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success)).
-		Bold(true)
-
-	inactiveTabStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary))
-
-	checkStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Info))
-
-	cursorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true)
-
-	submitStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success)).
-		Bold(true)
+	// §20 使用缓存样式
+	s := &m.styles
+	questionStyle := s.WarningSt.Bold(true)
+	hintStyle := s.PanelHint
+	activeTabStyle := s.PanelHeader
+	inactiveTabStyle := s.PanelDesc
+	checkStyle := s.ToolItem
+	cursorStyle := s.PanelCursor
+	submitStyle := s.TodoDone
 
 	var sb strings.Builder
 

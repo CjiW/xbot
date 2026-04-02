@@ -27,6 +27,7 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/tools"
 	"xbot/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -174,12 +175,19 @@ var (
 )
 
 // ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
-// 无效名称回退到 midnight。
+// 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
+var themeChangeCh = make(chan struct{}, 1)
+
 func ApplyTheme(name string) {
 	if t, ok := themeRegistry[name]; ok {
 		currentTheme = t
 	} else {
 		currentTheme = &themeMidnight
+	}
+	// Non-blocking send; if model is already processing a theme change, skip.
+	select {
+	case themeChangeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -544,6 +552,10 @@ type CLIChannel struct {
 	modelOverride   string          // user-overridden model from /settings panel
 	baseURLOverride string          // user-overridden base URL from /settings panel
 	modelLister     ModelLister     // provides available model names for combo
+
+	// Background tasks
+	bgTaskMgr    *tools.BackgroundTaskManager
+	bgSessionKey string
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.
@@ -599,6 +611,9 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID
+
+	// Setup bg task count callback
+	c.updateBgTaskCountFn()
 
 	// 加载历史消息（会话恢复）
 	if c.config.HistoryLoader != nil {
@@ -689,6 +704,34 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 		return
 	}
 	c.program.Send(cliProgressMsg{payload: payload})
+}
+
+// SetBgTaskManager configures the background task manager for status display.
+func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionKey string) {
+	c.bgTaskMgr = mgr
+	c.bgSessionKey = sessionKey
+	c.updateBgTaskCountFn()
+}
+
+// InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。
+// 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
+func (c *CLIChannel) InjectUserMessage(content string) {
+	if c.program != nil {
+		c.program.Send(cliInjectedUserMsg{content: content})
+	}
+}
+
+// updateBgTaskCountFn updates the model's bg task count callback.
+func (c *CLIChannel) updateBgTaskCountFn() {
+	if c.model == nil {
+		return
+	}
+	if c.bgTaskMgr != nil && c.bgSessionKey != "" {
+		key := c.bgSessionKey
+		c.model.bgTaskCountFn = func() int {
+			return len(c.bgTaskMgr.ListRunning(key))
+		}
+	}
 }
 
 // CheckUpdateAsync starts a background goroutine to check for updates.
@@ -804,6 +847,10 @@ type cliModel struct {
 	typing          bool                  // agent 是否正在回复
 	msgBus          *bus.MessageBus       // 消息总线引用
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
+	newContentHint  bool                  // 有新内容但用户未在底部（显示 ↓ 提示）
+	tempStatus      string                // 临时状态提示（自动过期）
+	bgTaskCount     int                   // running background tasks (0 = no indicator)
+	bgTaskCountFn   func() int            // callback to get current bg task count (set by channel)
 
 	// 进度信息
 	progress          *CLIProgressPayload
@@ -875,6 +922,13 @@ type cliModel struct {
 	panelOnSubmit  func(values map[string]string)  // callback on settings submit
 	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
 	panelOnCancel  func()                          // callback on cancel
+
+	// --- Bg Tasks Panel ---
+	panelBgTasks    []*tools.BackgroundTask // cached task list
+	panelBgCursor   int                     // selected task index
+	panelBgViewing  bool                    // true = viewing log of selected task
+	panelBgScroll   int                     // log view scroll offset
+	panelBgLogLines []string                // cached log lines for viewing
 
 	// --- §13 Update Check ---
 	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
@@ -974,6 +1028,14 @@ type cliProgressMsg struct {
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 
+// cliTempStatusClearMsg 临时状态提示自动清除
+type cliTempStatusClearMsg struct{}
+
+// cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）
+type cliInjectedUserMsg struct {
+	content string
+}
+
 // cliUpdateCheckMsg 更新检查结果消息
 type cliUpdateCheckMsg struct {
 	info *version.UpdateInfo
@@ -1030,6 +1092,26 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// 主题变更通知：重建 glamour 渲染器 + 刷新所有静态绑定样式
+	select {
+	case <-themeChangeCh:
+		if m.width > 4 {
+			m.renderer = newGlamourRenderer(m.width - 4)
+		}
+		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
+		m.textarea.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
+		m.textarea.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+		m.textarea.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		// 刷新 ticker 颜色
+		m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
+		m.renderCacheValid = false
+		for i := range m.messages {
+			m.messages[i].dirty = true
+		}
+		m.updateViewportContent()
+	default:
+	}
+
 	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
 		handled, newModel, cmd := m.updatePanel(key)
@@ -1046,6 +1128,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "end":
 			m.viewport.GotoBottom()
+			m.newContentHint = false
 			return m, nil
 		}
 	}
@@ -1056,7 +1139,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Ctrl+O 切换 tool summary 展开/折叠（同上，兼容 CSI u 协议）
+	// Ctrl+O 切换 tool summary 展开/折叠（CSI u 协议兼容层，kitty/Ghostty 等）
 	if isCtrlO(msg) {
 		m.toolSummaryExpanded = !m.toolSummaryExpanded
 		m.renderCacheValid = false
@@ -1070,115 +1153,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
-			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
-			if m.typing {
-				if m.msgBus != nil {
-					m.msgBus.Inbound <- bus.InboundMessage{
-						Channel:    cliChannelName,
-						SenderID:   cliSenderID,
-						ChatID:     m.chatID,
-						ChatType:   "p2p",
-						Content:    "/cancel",
-						SenderName: "CLI User",
-						Time:       time.Now(),
-						RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-					}
-				}
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "已发送取消请求",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
-				m.updateViewportContent()
-				return m, tea.Batch(cmds...)
-			}
-			// 非处理状态：清空输入
-			if m.textarea.Value() != "" {
-				m.textarea.Reset()
-			}
-			return m, nil
-
-		case tea.KeyEnter:
-			// Enter 发送消息
-			if !m.inputReady {
-				return m, nil
-			}
-			// §8b @ 模式：Enter 进入目录或确认文件
-			if m.fileCompActive && len(m.fileCompletions) > 0 {
-				selected := m.fileCompletions[m.fileCompIdx]
-				input := m.textarea.Value()
-				_, prefix := detectAtPrefix(input)
-				atStart := len(input) - len(prefix) - 1
-				if isDir(selected) {
-					// 目录：进入下一层，手动触发 glob
-					newInput := input[:atStart] + "@" + selected + "/"
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.populateFileCompletions(selected + "/")
-				} else {
-					// 文件：加空格退出 @ 模式
-					newInput := input[:atStart] + "@" + selected + " "
-					m.textarea.SetValue(newInput)
-					m.fileCompActive = false
-					m.fileCompletions = nil
-					m.fileCompIdx = 0
-				}
-				return m, nil
-			}
-			content := strings.TrimSpace(m.textarea.Value())
-			if content != "" {
-				if m.allTodosDone() {
-					m.todos = nil
-					m.todosDoneCleared = true
-				}
-				m.sendMessage(content)
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
-			}
-			if m.typing {
-				cmds = append(cmds, tickCmd())
-			}
-			// Kick off ticker chain when processing just started
-			if m.typing && !wasTyping {
-				cmds = append(cmds, tickerCmd())
-			}
-			return m, tea.Batch(cmds...)
-
-		case tea.KeyTab:
-			// §8 Tab 命令补全
-			m.handleTabComplete()
-			return m, nil
-
-		case tea.KeyCtrlK:
-			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
-			if !m.typing && len(m.messages) > 0 {
-				groups := visibleMsgGroupIndices(m.messages)
-				defaultDel := 2
-				if defaultDel > len(groups) {
-					defaultDel = len(groups)
-				}
-				m.confirmDelete = defaultDel
-				m.renderCacheValid = false
-				m.updateViewportContent()
-			}
-			return m, nil
-
-		case tea.KeyCtrlO:
-			// §11 Ctrl+O 切换 tool summary 展开/折叠
-			m.toolSummaryExpanded = !m.toolSummaryExpanded
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			for i := range m.messages {
-				m.messages[i].dirty = true
-			}
-			m.updateViewportContent()
-			return m, nil
-		}
-
-		// §9 Ctrl+K 确认模式：拦截字母和数字键
+		// §9 Ctrl+K 确认模式：必须在 switch msg.Type 之前拦截所有按键
 		if m.confirmDelete > 0 {
 			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
@@ -1223,6 +1198,129 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
+			if m.typing {
+				if m.msgBus != nil {
+					m.msgBus.Inbound <- bus.InboundMessage{
+						Channel:    cliChannelName,
+						SenderID:   cliSenderID,
+						ChatID:     m.chatID,
+						ChatType:   "p2p",
+						Content:    "/cancel",
+						SenderName: "CLI User",
+						Time:       time.Now(),
+						RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					}
+				}
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "已发送取消请求",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+				return m, tea.Batch(cmds...)
+			}
+			// 非处理状态：清空输入
+			if m.textarea.Value() != "" {
+				m.textarea.Reset()
+			}
+			return m, nil
+
+		case tea.KeyUp:
+			// ↑ with bg tasks running + empty input → open bg tasks panel
+			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputReady {
+				m.openBgTasksPanel()
+				return m, nil
+			}
+
+		case tea.KeyEnter:
+			// Enter 发送消息
+			if !m.inputReady {
+				if m.textarea.Value() != "" {
+					m.tempStatus = "... waiting for previous operation to complete..."
+					return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
+				}
+				return m, nil
+			}
+			// §8b @ 模式：Enter 进入目录或确认文件
+			if m.fileCompActive && len(m.fileCompletions) > 0 {
+				selected := m.fileCompletions[m.fileCompIdx]
+				input := m.textarea.Value()
+				_, prefix := detectAtPrefix(input)
+				atStart := len(input) - len(prefix) - 1
+				if isDir(selected) {
+					// 目录：进入下一层，手动触发 glob
+					newInput := input[:atStart] + "@" + selected + "/"
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.populateFileCompletions(selected + "/")
+				} else {
+					// 文件：加空格退出 @ 模式
+					newInput := input[:atStart] + "@" + selected + " "
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
+				}
+				return m, nil
+			}
+			content := strings.TrimSpace(m.textarea.Value())
+			if content != "" {
+				if m.allTodosDone() {
+					m.todos = nil
+					m.todosDoneCleared = true
+				}
+				m.sendMessage(content)
+				m.textarea.Reset()
+				m.viewport.GotoBottom()
+				m.newContentHint = false
+			}
+			if m.typing {
+				cmds = append(cmds, tickCmd())
+			}
+			// Kick off ticker chain when processing just started
+			if m.typing && !wasTyping {
+				cmds = append(cmds, tickerCmd())
+			}
+			return m, tea.Batch(cmds...)
+
+		case tea.KeyTab:
+			// §8 Tab 命令补全
+			m.handleTabComplete()
+			return m, nil
+
+		case tea.KeyCtrlK:
+			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
+			if !m.typing && len(m.messages) > 0 {
+				groups := visibleMsgGroupIndices(m.messages)
+				defaultDel := 2
+				if defaultDel > len(groups) {
+					defaultDel = len(groups)
+				}
+				m.confirmDelete = defaultDel
+				m.renderCacheValid = false
+				m.updateViewportContent()
+			} else if !m.typing {
+				m.tempStatus = "[!] no messages to delete"
+				return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
+			}
+			return m, nil
+
+		case tea.KeyCtrlO:
+			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
+			m.toolSummaryExpanded = !m.toolSummaryExpanded
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			for i := range m.messages {
+				m.messages[i].dirty = true
+			}
+			m.updateViewportContent()
+			return m, nil
+		} // end switch msg.Type
+
 	case tea.WindowSizeMsg:
 		// 窗口大小变化 - 动态调整布局
 		m.handleResize(msg.Width, msg.Height)
@@ -1234,6 +1332,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cliProgressMsg:
 		prev := m.progress
 		m.progress = msg.payload
+		// Update bg task count from callback
+		if m.bgTaskCountFn != nil {
+			m.bgTaskCount = m.bgTaskCountFn()
+		}
 		if msg.payload != nil {
 			// Sync todo items from progress event
 			if len(msg.payload.Todos) > 0 {
@@ -1292,7 +1394,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Snapshot the final iteration before clearing progress.
 				// This handles the case where PhaseDone arrives before
 				// handleAgentMessage (e.g. agent error/cancel).
-				if m.lastSeenIteration >= 0 {
+				// Skip if handleAgentMessage already processed (m.typing == false
+				// means the reply arrived and cleaned up iteration state).
+				if m.typing && m.lastSeenIteration >= 0 {
 					alreadySnapped := false
 					for _, s := range m.iterationHistory {
 						if s.Iteration == m.lastSeenIteration {
@@ -1330,23 +1434,23 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							})
 						}
 					}
-				}
-				// Generate tool_summary if we have iteration history.
-				// Append to end immediately so cancel/error cases (no handleAgentMessage)
-				// still display the summary. handleAgentMessage will relocate it before
-				// the assistant reply if one follows.
-				if len(m.iterationHistory) > 0 {
-					m.pendingToolSummary = &cliMessage{
-						role:       "tool_summary",
-						content:    "",
-						timestamp:  time.Now(),
-						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
-						dirty:      true,
+					// Generate tool_summary if we have iteration history.
+					// Append to end immediately so cancel/error cases (no handleAgentMessage)
+					// still display the summary. handleAgentMessage will relocate it before
+					// the assistant reply if one follows.
+					if len(m.iterationHistory) > 0 {
+						m.pendingToolSummary = &cliMessage{
+							role:       "tool_summary",
+							content:    "",
+							timestamp:  time.Now(),
+							iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+							dirty:      true,
+						}
+						m.messages = append(m.messages, *m.pendingToolSummary)
+						m.renderCacheValid = false
 					}
-					m.messages = append(m.messages, *m.pendingToolSummary)
-					m.renderCacheValid = false
 				}
-				// Reset all iteration tracking state
+				// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
 				m.lastCompletedTools = nil
 				m.iterationHistory = nil
 				m.lastSeenIteration = 0
@@ -1360,10 +1464,36 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case cliTickMsg:
+		// Always refresh bg task count on tick so status bar updates immediately
+		// when a bg task completes (even when no progress event is coming)
+		if m.bgTaskCountFn != nil {
+			m.bgTaskCount = m.bgTaskCountFn()
+		}
 		if m.typing || m.progress != nil {
 			cmds = append(cmds, tickCmd())
 			m.updateViewportContent()
 		}
+
+	case cliTempStatusClearMsg:
+		m.tempStatus = ""
+
+	case cliInjectedUserMsg:
+		// Agent injected a user message (e.g. bg task completion notification).
+		// Display it identically to a manually typed user message and start spinner.
+		m.messages = append(m.messages, cliMessage{
+			role:      "user",
+			content:   msg.content,
+			timestamp: time.Now(),
+			dirty:     true,
+		})
+		m.typing = true
+		m.inputReady = false
+		m.resetProgressState()
+		// Refresh bg task count on injection
+		if m.bgTaskCountFn != nil {
+			m.bgTaskCount = m.bgTaskCountFn()
+		}
+		m.renderCacheValid = false
 
 	case cliUpdateCheckMsg:
 		m.checkingUpdate = false
@@ -1427,11 +1557,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compIdx = 0
 		m.fileCompActive = false
 		// 用户手动输入：根据当前 @ prefix 重新 glob
-		if ok, prefix := detectAtPrefix(newVal); ok {
-			m.populateFileCompletions(prefix)
-		} else {
-			m.fileCompletions = nil
-			m.fileCompIdx = 0
+		// 但如果 fileCompActive（Tab 循环中），不重新 glob
+		if !m.fileCompActive {
+			if ok, prefix := detectAtPrefix(newVal); ok {
+				m.populateFileCompletions(prefix)
+			} else {
+				m.fileCompletions = nil
+				m.fileCompIdx = 0
+			}
 		}
 	}
 
@@ -1479,14 +1612,107 @@ func (m *cliModel) handleResize(width, height int) {
 		m.messages[i].dirty = true
 	}
 
-	// 更新内容
+	// 更新内容（保持用户滚动位置）
+	wasAtBottom := m.viewport.AtBottom()
 	m.updateViewportContent()
-
-	// Resize 后始终滚到底部（无论之前用户是否上滚）
-	m.viewport.GotoBottom()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // calculateProgressHeight returns 0 — progress is now rendered inside the viewport.
+
+// panelWidth returns a width suitable for panel textareas,
+// adapting to the current terminal width (with sensible bounds).
+func (m *cliModel) panelWidth(want int) int {
+	maxW := m.width - 8 // room for panel border + padding
+	if want > maxW {
+		return maxW
+	}
+	if want < 30 {
+		return 30
+	}
+	return want
+}
+
+// renderCompletionsHint returns the dynamic border color and completions hint string
+// based on the current input content (slash commands, @ file references, etc.).
+func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipgloss.Color, hint string) {
+	borderColor = lipgloss.Color(currentTheme.Accent)
+
+	if strings.HasPrefix(inputValue, "!") {
+		borderColor = lipgloss.Color(currentTheme.Error)
+		return
+	}
+
+	if strings.HasPrefix(inputValue, "/") {
+		borderColor = lipgloss.Color(currentTheme.Success)
+		if len(m.completions) > 0 {
+			parts := make([]string, len(m.completions))
+			for i, c := range m.completions {
+				if i == m.compIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).Underline(true).
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Render(c)
+				}
+			}
+			hint = lipgloss.NewStyle().Padding(0, 1).Render(strings.Join(parts, " · "))
+		} else {
+			var matches []string
+			for _, cmd := range cliCommands {
+				if strings.HasPrefix(cmd, inputValue) {
+					matches = append(matches, cmd)
+				}
+			}
+			if len(matches) > 0 {
+				hint = lipgloss.NewStyle().
+					Foreground(lipgloss.Color(currentTheme.Success)).
+					Padding(0, 1).
+					Render("[Tab] " + strings.Join(matches, " · "))
+			}
+		}
+		return
+	}
+
+	// @ file reference
+	rawInput := m.textarea.Value()
+	if ok, _ := detectAtPrefix(rawInput); ok {
+		borderColor = lipgloss.Color(currentTheme.Info)
+		if len(m.fileCompletions) > 0 {
+			parts := make([]string, len(m.fileCompletions))
+			for i, c := range m.fileCompletions {
+				if isDir(c) {
+					c += "/"
+				}
+				if i == m.fileCompIdx {
+					parts[i] = lipgloss.NewStyle().
+						Bold(true).Underline(true).
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
+				} else {
+					parts[i] = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Info)).
+						Render(c)
+				}
+			}
+			hint = lipgloss.NewStyle().Padding(0, 1).
+				Render("[Tab] " + strings.Join(parts, " · "))
+		} else {
+			hint = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.TextMuted)).
+				Padding(0, 1).
+				Render("[Tab] 无匹配文件")
+		}
+		return
+	}
+
+	return
+}
 func (m *cliModel) calculateProgressHeight() int {
 	return 0
 }
@@ -1519,83 +1745,7 @@ func (m *cliModel) View() string {
 		// 输入框样式：根据输入内容动态设置边框颜色
 		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
 	inputValue := strings.TrimSpace(m.textarea.Value())
-	borderColor := lipgloss.Color(currentTheme.Accent)
-	var completionsHint string
-
-	if strings.HasPrefix(inputValue, "!") {
-		borderColor = lipgloss.Color(currentTheme.Error)
-	} else if strings.HasPrefix(inputValue, "/") {
-		borderColor = lipgloss.Color(currentTheme.Success)
-		// 补全候选提示：与 Tab 补全共享状态
-		if len(m.completions) > 0 {
-			// Tab 已激活：高亮当前选中项
-			parts := make([]string, len(m.completions))
-			for i, c := range m.completions {
-				if i == m.compIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).
-						Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
-				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
-				}
-			}
-			completionsHint = lipgloss.NewStyle().
-				Padding(0, 1).
-				Render(strings.Join(parts, " · "))
-		} else {
-			// 尚未按 Tab：显示潜在匹配
-			var matches []string
-			for _, cmd := range cliCommands {
-				if strings.HasPrefix(cmd, inputValue) {
-					matches = append(matches, cmd)
-				}
-			}
-			if len(matches) > 0 {
-				completionsHint = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.Success)).
-					Padding(0, 1).
-					Render("[Tab] " + strings.Join(matches, " · "))
-			}
-		}
-	}
-
-	// §8b @ 文件引用补全提示（只展示，不做 glob）
-	rawInput := m.textarea.Value()
-	if ok, _ := detectAtPrefix(rawInput); ok {
-		borderColor = lipgloss.Color(currentTheme.Info)
-		if len(m.fileCompletions) > 0 {
-			parts := make([]string, len(m.fileCompletions))
-			for i, c := range m.fileCompletions {
-				if isDir(c) {
-					c += "/"
-				}
-				if i == m.fileCompIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).
-						Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
-				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
-				}
-			}
-			completionsHint = lipgloss.NewStyle().
-				Padding(0, 1).
-				Render("[Tab] " + strings.Join(parts, " · "))
-		} else {
-			// 无匹配文件
-			completionsHint = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.TextMuted)).
-				Padding(0, 1).
-				Render("[Tab] 无匹配文件")
-		}
-	}
+	borderColor, completionsHint := m.renderCompletionsHint(inputValue)
 
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1648,6 +1798,15 @@ func (m *cliModel) View() string {
 		)
 	}
 
+	// 动态 placeholder：处理中 vs 就绪
+	if m.typing {
+		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
+		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	} else if m.textarea.Placeholder == "[Processing...] (Ctrl+C to cancel)" {
+		m.textarea.Placeholder = "Enter send · Ctrl+J newline · /help"
+		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	}
+
 	// 进度状态栏
 	var status string
 	if m.typing || m.progress != nil {
@@ -1660,6 +1819,39 @@ func (m *cliModel) View() string {
 		status = completionsHint
 	} else {
 		status = readyStatusStyle.Render("● ready")
+	}
+	// 临时状态提示（自动过期）
+	if m.tempStatus != "" {
+		ts := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(m.tempStatus)
+		if status != "" {
+			status += "  " + ts
+		} else {
+			status = ts
+		}
+	}
+	// 新消息提示：用户上滚且有新内容时显示
+	if m.newContentHint {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info)).Render("↓ new content")
+		if status != "" {
+			status += "  " + hint
+		} else {
+			status = hint
+		}
+	}
+	// Background task indicator
+	if m.bgTaskCount > 0 {
+		bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
+			fmt.Sprintf("[bg: %d task%s running — ↑ to manage]", m.bgTaskCount, func() string {
+				if m.bgTaskCount > 1 {
+					return "s"
+				}
+				return ""
+			}()))
+		if status != "" {
+			status += "  " + bgHint
+		} else {
+			status = bgHint
+		}
 	}
 
 	// 组装界面
@@ -2226,21 +2418,27 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/help":
 		helpContent := `可用命令：
-		  /cancel    - 取消当前正在执行的操作
-		  /clear     - 清空聊天记录
-		  /compact   - 压缩上下文（减少 token 使用）
-		  /model     - 切换模型（用法: /model <模型名>）
-		  /models    - 列出可用模型
-		  /context   - 查看上下文信息
-		  /new       - 开始新会话
-		  /settings  - 打开设置面板
-		  /setup     - 重新运行初始配置引导
-		  /update    - 检查更新
-		  /exit      - 退出 CLI
-		  /help      - 显示此帮助信息
+  /cancel    - 取消当前正在执行的操作
+  /clear     - 清空聊天记录
+  /compact   - 压缩上下文（减少 token 使用）
+  /model     - 切换模型（用法: /model <模型名>）
+  /models    - 列出可用模型
+  /context   - 查看上下文信息
+  /new       - 开始新会话
+  /settings  - 打开设置面板
+  /setup     - 重新运行初始配置引导
+  /update    - 检查更新
+  /exit      - 退出 CLI
+  /help      - 显示此帮助信息
 
 快捷键：
-  Ctrl+C/Esc - 有迭代时中止，无迭代时清空输入`
+  Ctrl+C/Esc   - 有迭代时中止，无迭代时清空输入
+  Enter        - 发送消息
+  Ctrl+J       - 输入框内换行
+  Tab          - 命令/文件路径补全
+  Ctrl+O       - 展开/折叠工具详情
+  Ctrl+K       - 上下文删除
+  Home/End     - 跳到顶部/底部`
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
 			content:   helpContent,
@@ -2291,6 +2489,39 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/new":
 		m.sendToAgent("/new")
+
+	case "/tasks":
+		// /tasks — show running background tasks
+		if m.bgTaskCountFn != nil {
+			count := m.bgTaskCountFn()
+			if count == 0 {
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "No background tasks running.",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+			} else {
+				// Get full task list from channel
+				ch := m.channel
+				if ch.bgTaskMgr != nil {
+					tasks := tools.ListBgTasks(ch.bgTaskMgr, ch.bgSessionKey)
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   tasks,
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+				}
+			}
+		} else {
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "Background tasks not supported.",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+		}
 
 	default:
 		// 未知命令尝试透传到 agent（agent 层可能认识）
@@ -2440,6 +2671,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 						timestamp: time.Now(),
 						dirty:     true,
 					})
+					m.typing = false
+					m.inputReady = true
+					m.resetProgressState()
 					m.updateViewportContent()
 				})
 				return
@@ -2956,6 +3190,9 @@ func (m *cliModel) setViewportContent(content string) {
 	m.viewport.SetContent(content)
 	if atBottom {
 		m.viewport.GotoBottom()
+		m.newContentHint = false
+	} else {
+		m.newContentHint = true
 	}
 }
 
@@ -3220,7 +3457,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	// Pre-create textarea for editing
 	ta := textarea.New()
 	ta.Placeholder = "输入新值..."
-	ta.SetWidth(60)
+	ta.SetWidth(m.panelWidth(60))
 	ta.SetHeight(1)
 	ta.CharLimit = 200
 	m.panelEditTA = ta
@@ -3259,7 +3496,7 @@ func (m *cliModel) openSetupPanel() {
 		}
 		msg := "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
 		if vals["memory_provider"] == "letta" {
-			msg += "\n\n⚠️ letta 记忆模式需要 embedding 服务：\n  1. 安装 Ollama: https://ollama.ai\n  2. 拉取 embedding 模型: `ollama pull nomic-embed-text`\n  3. 确保在配置或环境变量中设置了 embedding endpoint"
+			msg += "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env"
 		}
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
@@ -3306,7 +3543,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
 	ta.CharLimit = 0
-	ta.SetWidth(50)
+	ta.SetWidth(m.panelWidth(50))
 	ta.SetHeight(3)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.Focus()
@@ -3316,7 +3553,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ti.Placeholder = "Type here..."
 	ti.Prompt = ""
 	ti.CharLimit = 200
-	ti.Width = 40
+	ti.Width = m.panelWidth(40)
 	ti.PromptStyle = lipgloss.NewStyle()
 	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
@@ -3339,6 +3576,272 @@ func (m *cliModel) closePanel() {
 	m.panelTab = 0
 	m.panelOptSel = nil
 	m.panelOptCursor = nil
+	// Bg tasks panel cleanup
+	m.panelBgTasks = nil
+	m.panelBgViewing = false
+	m.panelBgScroll = 0
+	m.panelBgLogLines = nil
+}
+
+// openBgTasksPanel opens the background task management panel.
+func (m *cliModel) openBgTasksPanel() {
+	if m.channel == nil || m.channel.bgTaskMgr == nil {
+		return
+	}
+	m.panelMode = "bgtasks"
+	m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+	m.panelBgCursor = 0
+	m.panelBgViewing = false
+	m.panelBgScroll = 0
+	m.panelBgLogLines = nil
+	// Clamp cursor
+	if len(m.panelBgTasks) == 0 {
+		m.panelBgCursor = -1
+	} else if m.panelBgCursor >= len(m.panelBgTasks) {
+		m.panelBgCursor = len(m.panelBgTasks) - 1
+	}
+}
+
+// updateBgTasksPanel handles key events in the bg tasks panel.
+// Returns (handled, newModel, cmd).
+func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+	// Refresh task list
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+	}
+
+	// Log viewing sub-mode
+	if m.panelBgViewing {
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.panelBgViewing = false
+			m.panelBgScroll = 0
+			m.panelBgLogLines = nil
+			return true, m, nil
+		case tea.KeyUp:
+			m.panelBgScroll -= 5
+			if m.panelBgScroll < 0 {
+				m.panelBgScroll = 0
+			}
+			return true, m, nil
+		case tea.KeyDown:
+			maxScroll := len(m.panelBgLogLines) - 20
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			m.panelBgScroll += 5
+			if m.panelBgScroll > maxScroll {
+				m.panelBgScroll = maxScroll
+			}
+			return true, m, nil
+		case tea.KeyPgUp:
+			m.panelBgScroll -= 18
+			if m.panelBgScroll < 0 {
+				m.panelBgScroll = 0
+			}
+			return true, m, nil
+		default:
+			// PgDn: bubbletea doesn't have a constant, match by string
+			if msg.String() == "pgdown" {
+				maxScroll := len(m.panelBgLogLines) - 20
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.panelBgScroll += 18
+				if m.panelBgScroll > maxScroll {
+					m.panelBgScroll = maxScroll
+				}
+				return true, m, nil
+			}
+		}
+		return true, m, nil
+	}
+
+	// Task list mode
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.closePanel()
+		if m.typing {
+			return true, m, tea.Batch(tickerCmd(), tickCmd())
+		}
+		return true, m, nil
+
+	case tea.KeyUp, tea.KeyCtrlK:
+		if m.panelBgCursor > 0 {
+			m.panelBgCursor--
+		}
+		return true, m, nil
+
+	case tea.KeyDown, tea.KeyCtrlJ:
+		if m.panelBgCursor < len(m.panelBgTasks)-1 {
+			m.panelBgCursor++
+		}
+		return true, m, nil
+
+	case tea.KeyEnter:
+		// View log of selected task
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			task := m.panelBgTasks[m.panelBgCursor]
+			// Output is written atomically by the task runner, safe to read
+			m.panelBgLogLines = splitLines(task.Output)
+			if len(m.panelBgLogLines) == 0 {
+				m.panelBgLogLines = []string{"(no output)"}
+			}
+			m.panelBgViewing = true
+			m.panelBgScroll = 0
+		}
+		return true, m, nil
+
+	case tea.KeyDelete, tea.KeyCtrlD:
+		// Kill selected running task
+		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			task := m.panelBgTasks[m.panelBgCursor]
+			if task.Status == tools.BgTaskRunning {
+				if m.channel != nil && m.channel.bgTaskMgr != nil {
+					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
+						m.tempStatus = fmt.Sprintf("Kill failed: %s", err)
+						return true, m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+							return cliTempStatusClearMsg{}
+						})
+					}
+					// Refresh list after kill
+					m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+					if m.panelBgCursor >= len(m.panelBgTasks) {
+						m.panelBgCursor = len(m.panelBgTasks) - 1
+					}
+					return true, m, nil
+				}
+			}
+		}
+		return true, m, nil
+	}
+
+	return true, m, nil
+}
+
+// viewBgTasksPanel renders the bg tasks panel.
+func (m *cliModel) viewBgTasksPanel() string {
+	if m.panelBgViewing {
+		return m.viewBgTaskLog()
+	}
+	return m.viewBgTaskList()
+}
+
+// viewBgTaskList renders the task list view.
+func (m *cliModel) viewBgTaskList() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(0, 1)
+
+	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render("Background Tasks")
+	help := lipgloss.NewStyle().Faint(true).Render("↑↓ navigate  Enter view log  Del kill  Esc close")
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	if len(m.panelBgTasks) == 0 {
+		sb.WriteString("\n  No background tasks.\n")
+	} else {
+		for i, task := range m.panelBgTasks {
+			elapsed := time.Since(task.StartedAt).Round(time.Second)
+			if task.FinishedAt != nil {
+				elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
+			}
+			statusIcon := "●"
+			statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)) // amber for running
+			if task.Status == tools.BgTaskDone {
+				if task.Error != "" || task.ExitCode != 0 {
+					statusIcon = "✗"
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error)) // red
+				} else {
+					statusIcon = "✓"
+					statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success)) // green
+				}
+			}
+
+			prefix := "  "
+			if i == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
+
+			cmd := task.Command
+			if len(cmd) > 50 {
+				cmd = cmd[:47] + "..."
+			}
+
+			line := fmt.Sprintf("%s %s  %-8s %s  %s",
+				prefix,
+				statusStyle.Render(statusIcon),
+				task.ID,
+				formatElapsed(int64(elapsed.Milliseconds())),
+				cmd,
+			)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+// viewBgTaskLog renders the log viewer for a selected task.
+func (m *cliModel) viewBgTaskLog() string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Accent)).
+		Padding(0, 1)
+
+	var title string
+	if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+		task := m.panelBgTasks[m.panelBgCursor]
+		cmd := task.Command
+		if len(cmd) > 40 {
+			cmd = cmd[:37] + "..."
+		}
+		title = fmt.Sprintf("Log: %s — %s", task.ID, cmd)
+	}
+	help := lipgloss.NewStyle().Faint(true).Render("↑↓ scroll  Esc back")
+
+	maxLines := 18
+	start := m.panelBgScroll
+	if start > len(m.panelBgLogLines) {
+		start = len(m.panelBgLogLines)
+	}
+	end := start + maxLines
+	if end > len(m.panelBgLogLines) {
+		end = len(m.panelBgLogLines)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Info)).Render(title))
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
+
+	for _, line := range m.panelBgLogLines[start:end] {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	if end < len(m.panelBgLogLines) {
+		sb.WriteString(lipgloss.NewStyle().Faint(true).Render(fmt.Sprintf("  ... %d more lines (↑↓ scroll)", len(m.panelBgLogLines)-end)))
+		sb.WriteString("\n")
+	}
+
+	return boxStyle.Render(sb.String())
+}
+
+// splitLines splits a string into lines, preserving trailing empty line.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 // updatePanel handles key events when a panel is active.
@@ -3353,6 +3856,8 @@ func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		return m.updateSettingsPanel(msg)
 	case "askuser":
 		return m.updateAskUserPanel(msg)
+	case "bgtasks":
+		return m.updateBgTasksPanel(msg)
 	}
 	return false, m, nil
 }
@@ -3418,7 +3923,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
@@ -3505,7 +4010,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
@@ -3522,7 +4027,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
@@ -3806,6 +4311,8 @@ func (m *cliModel) viewPanel() string {
 		return m.viewSettingsPanel()
 	case "askuser":
 		return m.viewAskUserPanel()
+	case "bgtasks":
+		return m.viewBgTasksPanel()
 	}
 	return ""
 }

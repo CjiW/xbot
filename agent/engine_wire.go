@@ -642,6 +642,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		SandboxMode:      a.sandboxMode,
 		InjectInbound:    a.injectInbound,
 		Tools:            a.tools,
+		BgTaskManager:    a.bgTaskMgr,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {

@@ -9,6 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	log "xbot/logger"
 )
@@ -36,29 +40,16 @@ func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) 
 
 func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 	// Apply timeout to context before creating the command (avoid duplicate cmd creation).
-	if spec.Timeout > 0 {
+	if spec.Timeout > 0 && !spec.KeepAlive {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
 		defer cancel()
 	}
 
-	var cmd *exec.Cmd
-	if spec.Shell {
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
-	} else {
-		if len(spec.Args) == 0 {
-			return nil, fmt.Errorf("non-shell exec requires Args to be set")
-		}
-		cmd = exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
-	}
-
-	if spec.Dir != "" {
-		cmd.Dir = spec.Dir
-	}
-	// When spec.Env is set, append to os.Environ() to inherit host environment variables,
-	// consistent with the runner's behavior (append(os.Environ(), req.Env...)).
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), spec.Env...)
+	// KeepAlive uses unmanaged cmd (exec.Command) so context cancel doesn't kill the process.
+	cmd, err := buildCmdFromSpec(ctx, spec, !spec.KeepAlive)
+	if err != nil {
+		return nil, err
 	}
 	if spec.Stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
@@ -69,11 +60,16 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 		cmd.Stdin = bytes.NewReader(nil)
 	}
 
+	// KeepAlive mode: use pipes so we can detach on timeout without killing the process.
+	if spec.KeepAlive {
+		return s.execKeepAlive(cmd, spec.Timeout)
+	}
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	result := &ExecResult{
 		Stdout: stdout.String(),
@@ -91,6 +87,98 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 		}
 	}
 
+	return result, nil
+}
+
+// execKeepAlive runs a command with streaming output via pipes.
+// On timeout, the process is NOT killed — it continues running and
+// the caller takes ownership via ExecResult.Process.
+func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, timeout time.Duration) (*ExecResult, error) {
+	// Setpgid so we can kill the process group independently
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdoutPipe, stderrPipe, err := setupPipes(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect output from pipes
+	var stdoutBuf, stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	capture := func(dst *bytes.Buffer, r io.Reader) {
+		defer wg.Done()
+		io.Copy(dst, r)
+	}
+	go capture(&stdoutBuf, stdoutPipe)
+	go capture(&stderrBuf, stderrPipe)
+
+	// Wait for the command to finish or timeout to expire
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+		wg.Wait()
+	}()
+
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case waitErr := <-waitCh:
+			// Command finished before timeout
+			result := &ExecResult{
+				Stdout:   stdoutBuf.String(),
+				Stderr:   stderrBuf.String(),
+				ExitCode: extractExitCode(waitErr),
+			}
+			return result, nil
+
+		case <-timer.C:
+			// Timeout — do NOT kill the process. Return it to the caller.
+			// cmd.Wait() is still running in the background goroutine.
+			// Capture goroutines continue writing to stdoutBuf/stderrBuf.
+			// OngoingOutput lets the caller (Adopt) read the final full output
+			// once the process exits and all capture goroutines complete.
+			exitCodeCh := make(chan int, 1)
+			go func() {
+				waitErr := <-waitCh // cmd.Wait() result (wg.Wait() already done)
+				exitCodeCh <- extractExitCode(waitErr)
+			}()
+			ongoingOutput := func() string {
+				var sb strings.Builder
+				if stdoutBuf.Len() > 0 {
+					sb.Write(stdoutBuf.Bytes())
+				}
+				if stderrBuf.Len() > 0 {
+					if sb.Len() > 0 {
+						sb.WriteByte('\n')
+					}
+					sb.Write(stderrBuf.Bytes())
+				}
+				return sb.String()
+			}
+			result := &ExecResult{
+				Stdout:        stdoutBuf.String(),
+				Stderr:        stderrBuf.String(),
+				ExitCode:      -1,
+				TimedOut:      true,
+				Process:       cmd.Process,
+				ExitCodeCh:    exitCodeCh,
+				OngoingOutput: ongoingOutput,
+			}
+			return result, nil
+		}
+	}
+
+	// No timeout — just wait for completion
+	waitErr := <-waitCh
+	result := &ExecResult{
+		Stdout:   stdoutBuf.String(),
+		Stderr:   stderrBuf.String(),
+		ExitCode: extractExitCode(waitErr),
+	}
 	return result, nil
 }
 
@@ -193,4 +281,114 @@ func (s *NoneSandbox) DownloadFile(ctx context.Context, url, outputPath, userID 
 
 	log.WithFields(log.Fields{"url": url, "output_path": outputPath, "size": written}).Info("File downloaded (none sandbox)")
 	return nil
+}
+
+// noneSandboxExecAsync runs a command asynchronously with streaming output.
+// Uses Setpgid to ensure all child processes are killed on context cancel.
+func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(string)) (int, error) {
+	cmd, err := buildCmdFromSpec(ctx, spec, true)
+	if err != nil {
+		return -1, err
+	}
+	if spec.Stdin != "" {
+		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
+	} else {
+		cmd.Stdin = bytes.NewReader(nil)
+	}
+
+	// Setpgid: create new process group so kill kills all children
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdoutPipe, stderrPipe, err := setupPipes(cmd)
+	if err != nil {
+		return -1, err
+	}
+
+	// Stream stdout and stderr concurrently
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	stream := func(r io.Reader) {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := r.Read(buf)
+			if n > 0 && outputBuf != nil {
+				outputBuf(string(buf[:n]))
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}
+
+	go stream(stdoutPipe)
+	go stream(stderrPipe)
+
+	// Wait for completion
+	exitCode := extractExitCode(cmd.Wait())
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		return exitCode, ctx.Err()
+	}
+	return exitCode, nil
+}
+
+// --- Shared helpers for command execution ---
+
+// buildCmdFromSpec creates an *exec.Cmd from an ExecSpec.
+// If managedCtx is true, uses exec.CommandContext (context cancel kills the process).
+// If false, uses exec.Command (caller manages process lifecycle manually, e.g. KeepAlive).
+func buildCmdFromSpec(ctx context.Context, spec ExecSpec, managedCtx bool) (*exec.Cmd, error) {
+	var cmd *exec.Cmd
+	if spec.Shell {
+		if managedCtx {
+			cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
+		} else {
+			cmd = exec.Command("/bin/sh", "-c", spec.Command)
+		}
+	} else {
+		if len(spec.Args) == 0 {
+			return nil, fmt.Errorf("non-shell exec requires Args to be set")
+		}
+		if managedCtx {
+			cmd = exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
+		} else {
+			cmd = exec.Command(spec.Args[0], spec.Args[1:]...)
+		}
+	}
+	if spec.Dir != "" {
+		cmd.Dir = spec.Dir
+	}
+	if len(spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), spec.Env...)
+	}
+	return cmd, nil
+}
+
+// setupPipes creates stdout and stderr pipes for a command, then starts it.
+func setupPipes(cmd *exec.Cmd) (stdoutPipe, stderrPipe io.ReadCloser, err error) {
+	stdoutPipe, err = cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err = cmd.StderrPipe()
+	if err != nil {
+		stdoutPipe.Close()
+		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	return stdoutPipe, stderrPipe, cmd.Start()
+}
+
+// extractExitCode returns the exit code from a cmd.Wait() error.
+// Returns 0 if waitErr is nil, the real exit code for ExitError, or -1 otherwise.
+func extractExitCode(waitErr error) int {
+	if waitErr == nil {
+		return 0
+	}
+	if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return -1
 }

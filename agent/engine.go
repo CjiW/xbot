@@ -158,6 +158,11 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
+	// DrainBgNotifications is called between iterations to check for completed bg tasks.
+	// Returns tasks that should be injected as tool results into the current Run loop.
+	// Returns nil when no notifications are pending. Called on each iteration.
+	DrainBgNotifications func() []*tools.BackgroundTask
+
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
@@ -172,6 +177,9 @@ type RunConfig struct {
 	// It blocks until a slot is available and returns a release function.
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
 	SubAgentSem func() func()
+
+	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
+	BgTaskManager *tools.BackgroundTaskManager
 }
 
 // TodoManagerProvider 提供 TODO 状态查询
@@ -1318,6 +1326,61 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPersistedCount = len(messages)
 		}
 
+		// --- 注入后台任务完成通知（迭代中：tool result） ---
+		// bgNotifyLoop buffers into Agent.bgRunPending, which Run loop drains here.
+		// Injected as assistant+tool message pair for LLM to process inline.
+		// Also persisted immediately and shown in CLI iteration via CompletedTools.
+		if cfg.DrainBgNotifications != nil {
+			pending := cfg.DrainBgNotifications()
+			for _, bgTask := range pending {
+				bgContent := tools.FormatBgTaskCompletion(bgTask)
+				bgAssistantMsg := llm.ChatMessage{
+					Role:    "assistant",
+					Content: "A background task has completed. Let me check the result.",
+					ToolCalls: []llm.ToolCall{{
+						ID:   "bg_" + bgTask.ID,
+						Name: "background_task_result",
+					}},
+				}
+				// Offload large bg task output (same as normal tool results)
+				if cfg.OffloadStore != nil {
+					if offloaded, ok := cfg.OffloadStore.MaybeOffload(ctx, offloadSessionKey, "background_task_result", "", bgContent, cfg.WorkspaceRoot, "", cfg.OriginUserID); ok {
+						bgContent = offloaded.Summary
+						GlobalMetrics.OffloadEvents.Add(1)
+						GlobalMetrics.OffloadedItems.Add(1)
+					}
+				}
+				bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
+				messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
+				log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
+
+				// Persist immediately (don't wait for next iteration's incremental persist)
+				if cfg.Session != nil {
+					_ = cfg.Session.AddMessage(bgAssistantMsg)
+					_ = cfg.Session.AddMessage(bgToolMsg)
+					lastPersistedCount = len(messages)
+				}
+
+				// Show as completed tool in current iteration so CLI renders it inline
+				if structuredProgress != nil {
+					var elapsed time.Duration
+					if bgTask.FinishedAt != nil {
+						elapsed = bgTask.FinishedAt.Sub(bgTask.StartedAt)
+					}
+					structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, ToolProgress{
+						Name:      "background_task_result",
+						Label:     fmt.Sprintf("bg:%s", bgTask.ID),
+						Status:    ToolDone,
+						Elapsed:   elapsed,
+						Iteration: i, // belongs to current iteration
+					})
+					if autoNotify {
+						notifyProgress("")
+					}
+				}
+			}
+		}
+
 		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
@@ -1604,6 +1667,18 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		if ext.InvalidateAllSessionMCP != nil {
 			tc.InvalidateAllSessionMCP = ext.InvalidateAllSessionMCP
 		}
+	}
+
+	// 注入 BgTaskManager 后台任务管理器
+	if cfg.BgTaskManager != nil {
+		tc.BgTaskManager = cfg.BgTaskManager
+		sessionKey := cfg.SessionKey
+		if sessionKey == "" {
+			sessionKey = cfg.Channel + ":" + cfg.ChatID
+		}
+		tc.BgSessionKey = sessionKey
+		// NOTE: OnComplete callback registration moved to Agent.bgNotifyLoop.
+		// Engine no longer registers callbacks per-buildToolContext call.
 	}
 
 	// 注入 session cwd（PWD 工具优化）

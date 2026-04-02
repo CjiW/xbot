@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xbot/bus"
@@ -275,6 +276,18 @@ type Agent struct {
 
 	// channelFinder looks up a channel instance by name (injected from main.go).
 	channelFinder func(name string) (channel.Channel, bool)
+
+	// bgTaskMgr manages background shell tasks (shared across all sessions)
+	bgTaskMgr *tools.BackgroundTaskManager
+
+	// bgRunActive is atomically set to 1 when a Run is active and consuming bg notifications,
+	// 0 when idle. Used by bgNotifyLoop to decide routing.
+	bgRunActive int32
+
+	// bgRunPending buffers bg task notifications that arrived during an active Run.
+	// The Run loop drains these between iterations.
+	bgRunPending   []*tools.BackgroundTask
+	bgRunPendingMu sync.Mutex
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -285,6 +298,9 @@ func (a *Agent) SetSettingsService(svc *SettingsService) { a.settingsSvc = svc }
 
 // LLMFactory returns the Agent's LLMFactory (for external injection of callbacks).
 func (a *Agent) LLMFactory() *LLMFactory { return a.llmFactory }
+
+// BgTaskManager returns the Agent's BackgroundTaskManager.
+func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMgr }
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
@@ -689,10 +705,14 @@ func New(cfg Config) *Agent {
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
 		),
+		bgTaskMgr: tools.NewBackgroundTaskManager(),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
 	initServices(agent, cfg, multiSession, registry)
+
+	// 6. 启动 bg task 通知路由 goroutine
+	go agent.bgNotifyLoop()
 
 	return agent
 }
@@ -835,6 +855,10 @@ func (a *Agent) Close() error {
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
 	if a.cronSch != nil {
 		a.cronSch.Stop()
+	}
+	// Close NotifyCh to unblock bgNotifyLoop goroutine
+	if a.bgTaskMgr != nil && a.bgTaskMgr.NotifyCh != nil {
+		close(a.bgTaskMgr.NotifyCh)
 	}
 	// 再关闭数据库连接
 	if a.multiSession != nil {
@@ -1398,7 +1422,27 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
+	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
+	atomic.StoreInt32(&a.bgRunActive, 1)
+	// Wire drain callback so Run loop can inject bg task results as tool messages
+	cfg.DrainBgNotifications = func() []*tools.BackgroundTask {
+		a.bgRunPendingMu.Lock()
+		pending := a.bgRunPending
+		a.bgRunPending = nil
+		a.bgRunPendingMu.Unlock()
+		return pending
+	}
 	out := Run(ctx, cfg)
+	atomic.StoreInt32(&a.bgRunActive, 0)
+	// Drain any bg notifications that arrived after Run's last iteration.
+	// Process them as user messages (idle path).
+	a.bgRunPendingMu.Lock()
+	remaining := a.bgRunPending
+	a.bgRunPending = nil
+	a.bgRunPendingMu.Unlock()
+	for _, task := range remaining {
+		go a.processBgNotification(task)
+	}
 	if out.Error != nil {
 		// When cancelled, save any un-persisted engine messages from the
 		// interrupted iteration. User message and completed iterations are
@@ -1763,10 +1807,70 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		ChatID:    chatID,
 		Content:   content,
 		Time:      time.Now(),
-		IsCron:    true,
+		IsCron:    false,
 		RequestID: log.NewRequestID(),
 	}
 }
+
+// bgNotifyLoop routes background task completion notifications from BgTaskManager.NotifyCh.
+// When a Run is active (bgRunActive=1), notifications are buffered in bgRunPending
+// for the Run loop to drain between iterations. When idle (bgRunActive=0),
+// notifications go directly to processBgNotification.
+func (a *Agent) bgNotifyLoop() {
+	for task := range a.bgTaskMgr.NotifyCh {
+		if atomic.LoadInt32(&a.bgRunActive) == 1 {
+			// Run is active — buffer for Run loop to drain
+			a.bgRunPendingMu.Lock()
+			a.bgRunPending = append(a.bgRunPending, task)
+			a.bgRunPendingMu.Unlock()
+			log.WithField("task_id", task.ID).Debug("Bg task notification buffered for active Run")
+		} else {
+			// Idle — process directly
+			log.WithField("task_id", task.ID).Info("Bg task notification: idle mode, processing directly")
+			go a.processBgNotification(task)
+		}
+	}
+}
+
+// processBgNotification handles a background task completion when no Run() is active.
+// Injects the task result as a user message via injectInbound, triggering the standard
+// processMessage → Assemble → Run pipeline. This matches Claude Code's behavior:
+// bg task completion = environment notification = user message to the LLM.
+func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
+	sessionKey := task.SessionKey()
+	if sessionKey == "" {
+		log.WithField("task_id", task.ID).Warn("Bg task notification: no session key, dropping")
+		return
+	}
+
+	parts := strings.SplitN(sessionKey, ":", 2)
+	if len(parts) != 2 {
+		log.WithField("session_key", sessionKey).Warn("Bg task: invalid session key format")
+		return
+	}
+	channelName, chatID := parts[0], parts[1]
+
+	content := tools.FormatBgTaskCompletion(task)
+	log.WithFields(log.Fields{
+		"task_id": task.ID,
+		"channel": channelName,
+		"chat_id": chatID,
+	}).Info("Bg task notification: injecting as user message")
+
+	// Notify CLI to display the user message in the chat UI
+	if a.channelFinder != nil {
+		if ch, ok := a.channelFinder(channelName); ok {
+			if cliCh, ok := ch.(*channel.CLIChannel); ok {
+				cliCh.InjectUserMessage(content)
+			}
+		}
+	}
+
+	a.injectInbound(channelName, chatID, "system", content)
+}
+
+// buildBgNotificationRunConfig is no longer needed — idle bg notifications
+// go through injectInbound → processMessage → buildMainRunConfig.
 
 // RunSubAgent 实现 tools.SubAgentManager 接口
 // 创建一个独立的子 Agent 循环来执行任务，子 Agent 拥有自己的工具集但不能再创建子 Agent

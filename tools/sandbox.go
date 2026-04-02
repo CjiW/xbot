@@ -27,14 +27,22 @@ type ExecSpec struct {
 	Timeout   time.Duration // execution timeout
 	Workspace string        // workspace root (for sandbox setup)
 	UserID    string        // user identity (for sandbox routing)
+
+	// KeepAlive indicates that on timeout, the process should NOT be killed.
+	// Instead, the caller takes ownership of the process via ExecResult.Process.
+	// Currently only supported by NoneSandbox.
+	KeepAlive bool
 }
 
 // ExecResult holds the result of a sandbox command execution.
 type ExecResult struct {
-	Stdout   string // standard output
-	Stderr   string // standard error
-	ExitCode int    // exit code (-1 if timed out)
-	TimedOut bool   // whether execution timed out
+	Stdout        string        // standard output
+	Stderr        string        // standard error
+	ExitCode      int           // exit code (-1 if timed out)
+	TimedOut      bool          // whether execution timed out
+	Process       *os.Process   // live process when KeepAlive=true and TimedOut=true (caller owns lifecycle)
+	ExitCodeCh    chan int      // optional: receives real exit code from cmd.Wait goroutine after timeout
+	OngoingOutput func() string // optional: reads accumulated output from capture goroutines (KeepAlive timeout only)
 }
 
 // SandboxFileInfo is the sandbox equivalent of os.FileInfo.

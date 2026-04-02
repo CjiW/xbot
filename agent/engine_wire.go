@@ -240,6 +240,15 @@ func (a *Agent) buildMainRunConfig(
 								}
 							}
 						}
+						// §18 传递 Token 使用量快照
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.CLITokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
 						cc.SendProgress(chatID, payload)
 					}
 				} else {

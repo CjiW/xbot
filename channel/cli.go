@@ -446,6 +446,15 @@ type CLIProgressPayload struct {
 	Thinking       string
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
+	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）
+}
+
+// CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）
+type CLITokenUsage struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CacheHitTokens   int64
 }
 
 // CLITodoItem represents a TODO item for CLI display.
@@ -996,7 +1005,7 @@ func pickVerb(ticks int64) string {
 var idlePlaceholders = []string{
 	"Enter send · Ctrl+J newline · /help",
 	"Type /model to switch model",
-	"Ctrl+K delete messages · Ctrl+O expand tools",
+	"Ctrl+K delete · Ctrl+O tools · Ctrl+E collapse",
 	"@filepath to attach files",
 	"↑ open background tasks panel",
 	"Type /compact to compress context",
@@ -1093,6 +1102,9 @@ type cliModel struct {
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
 
+	// --- §19 长消息折叠 ---
+	msgCollapsed map[int]bool // 折叠状态追踪（key=消息索引）
+
 	// --- §11b Pending Tool Summary ---
 	// PhaseDone may arrive before handleAgentMessage. Store the tool_summary
 	// here so handleAgentMessage can insert it at the correct position.
@@ -1156,6 +1168,9 @@ type cliMessage struct {
 	// --- §2 工具可视化 ---
 	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
+
+	// --- §19 消息折叠 ---
+	collapsed bool // 长消息是否折叠（仅对完成的 assistant 消息生效）
 }
 
 // newCLIModel 创建 CLI model
@@ -1208,6 +1223,7 @@ func newCLIModel() *cliModel {
 		streamingMsgIdx: -1,
 		progress:        nil,
 		inputReady:      true,
+		msgCollapsed:    make(map[int]bool),
 	}
 }
 
@@ -1531,6 +1547,28 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportContent()
 			return m, nil
+
+		case tea.KeyCtrlE:
+			// §19 Ctrl+E 切换最后一条 assistant 消息的折叠/展开
+			if !m.typing {
+				lastAssistant := -1
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].role == "assistant" && !m.messages[i].isPartial {
+						lastAssistant = i
+						break
+					}
+				}
+				if lastAssistant >= 0 {
+					m.messages[lastAssistant].collapsed = !m.messages[lastAssistant].collapsed
+					m.renderCacheValid = false
+					for i := range m.messages {
+						m.messages[i].dirty = true
+					}
+					m.updateViewportContent()
+				}
+			}
+			return m, nil
+
 		} // end switch msg.Type
 
 	case tea.WindowSizeMsg:
@@ -2570,7 +2608,35 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		sb.WriteString(formatElapsed(elapsed))
 	}
 
+	// §18 Token 使用量显示
+	if m.progress != nil && m.progress.TokenUsage != nil && m.progress.TokenUsage.TotalTokens > 0 {
+		tu := m.progress.TokenUsage
+		tokenStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.TextMuted)).
+			Faint(true)
+		sb.WriteString(" · ")
+		sb.WriteString(tokenStyle.Render(formatTokenCount(tu)))
+	}
+
 	return sb.String()
+}
+
+// formatTokenCount 格式化 Token 使用量为紧凑字符串
+func formatTokenCount(tu *CLITokenUsage) string {
+	if tu.TotalTokens < 1000 {
+		return fmt.Sprintf("tokens: %d", tu.TotalTokens)
+	}
+	parts := []string{}
+	if tu.PromptTokens > 0 {
+		parts = append(parts, fmt.Sprintf("↑%d", tu.PromptTokens))
+	}
+	if tu.CompletionTokens > 0 {
+		parts = append(parts, fmt.Sprintf("↓%d", tu.CompletionTokens))
+	}
+	if len(parts) > 0 {
+		return "tokens: " + strings.Join(parts, " ") + fmt.Sprintf(" = %d", tu.TotalTokens)
+	}
+	return fmt.Sprintf("tokens: %d", tu.TotalTokens)
 }
 
 // ---------------------------------------------------------------------------
@@ -3575,6 +3641,7 @@ func (m *cliModel) renderHelpPanel() string {
 		{"Ctrl+J", "输入框换行"},
 		{"Ctrl+K", "上下文删除"},
 		{"Ctrl+O", "展开/折叠工具"},
+		{"Ctrl+E", "折叠/展开消息"},
 		{"Tab", "命令/路径补全"},
 		{"Home/End", "跳到顶/底部"},
 		{"↑", "后台任务面板"},
@@ -3875,8 +3942,32 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
-		// Agent 消息直接渲染（glamour 已处理 markdown）
-		sb.WriteString(rendered)
+		// §19 长消息折叠：完成的 assistant 消息超过 15 行时自动折叠
+		// collapsed 字段区分"自动折叠"和"用户手动展开"
+		msgLines := strings.Count(rendered, "\n") + 1
+		if !msg.isPartial && msgLines > 15 && !msg.collapsed {
+			// 首次渲染长消息：自动折叠
+			msg.collapsed = true
+		}
+		if !msg.isPartial && msg.collapsed {
+			allLines := strings.Split(rendered, "\n")
+			visibleCount := 4
+			if visibleCount > len(allLines) {
+				visibleCount = len(allLines)
+			}
+			visible := strings.Join(allLines[:visibleCount], "\n")
+			collapseHint := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.TextMuted)).
+				Faint(true).
+				Render(fmt.Sprintf("  ── ▼ %d more lines (Ctrl+E to expand) ──", len(allLines)-visibleCount))
+			sb.WriteString(visible)
+			sb.WriteString("\n")
+			sb.WriteString(collapseHint)
+			sb.WriteString("\n")
+		} else {
+			// Agent 消息直接渲染（glamour 已处理 markdown）
+			sb.WriteString(rendered)
+		}
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
 		if msg.isPartial && rendered != "" {
 			streamCursor := lipgloss.NewStyle().

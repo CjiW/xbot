@@ -935,11 +935,32 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyEnter:
-			// Enter 发送消息
-			if !m.inputReady {
-				return m, nil
-			}
-			content := strings.TrimSpace(m.textarea.Value())
+				// Enter 发送消息
+				if !m.inputReady {
+					return m, nil
+				}
+				// §8b @ 模式：Enter 进入目录或确认文件
+				if m.fileCompActive && len(m.fileCompletions) > 0 {
+					selected := m.fileCompletions[m.fileCompIdx]
+					input := m.textarea.Value()
+					_, prefix := detectAtPrefix(input)
+					atStart := len(input) - len(prefix) - 1
+					if isDir(selected) {
+						// 目录：进入下一层，重新 glob
+						newInput := input[:atStart] + "@" + selected + "/"
+						m.textarea.SetValue(newInput)
+						m.fileCompActive = false // 退出循环，让 text-change 触发 glob
+					} else {
+						// 文件：加空格退出 @ 模式
+						newInput := input[:atStart] + "@" + selected + " "
+						m.textarea.SetValue(newInput)
+						m.fileCompActive = false
+						m.fileCompletions = nil
+						m.fileCompIdx = 0
+					}
+					return m, nil
+				}
+				content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
 				if m.allTodosDone() {
 					m.todos = nil

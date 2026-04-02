@@ -1181,6 +1181,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					})
 					m.updateViewportContent()
 				}
+			} else {
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "更新检查失败（网络超时或无法连接 GitHub API）",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
 			}
 
 		case tickerTickMsg:

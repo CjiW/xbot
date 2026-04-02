@@ -684,7 +684,7 @@ type cliModel struct {
 	// --- §8b @ 文件引用补全 ---
 	fileCompletions []string // @ 文件路径补全候选项
 	fileCompIdx     int      // 当前选中的文件补全索引
-	fileCompActive  bool     // true = fileCompletions 由 Tab 设置，下次 Update 不要重置
+	fileCompPrefix  string   // 当前 fileCompletions 对应的 glob 前缀，用于判断是否需要重新 glob
 	attachedFiles   []string // 当前输入中 @ 引用的文件路径
 
 	// --- §9 Ctrl+K 上下文编辑 ---
@@ -1138,15 +1138,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if newVal != prevText {
 				m.completions = nil
 				m.compIdx = 0
-				if !m.fileCompActive {
-					m.fileCompletions = nil
-					m.fileCompIdx = 0
-					// 用户手动输入：立即重新 glob
-					if ok, prefix := detectAtPrefix(newVal); ok {
-						m.populateFileCompletions(prefix)
-					}
-				}
-				m.fileCompActive = false
+				m.fileCompletions = nil
+				m.fileCompIdx = 0
+				m.fileCompPrefix = ""
 			}
 
 	// 检查是否需要退出
@@ -1279,9 +1273,10 @@ func (m *cliModel) View() string {
 			atOk, atPrefix := detectAtPrefix(rawInput)
 			if atOk {
 				borderColor = lipgloss.Color(currentTheme.Info)
-				// 立即触发 glob 填充候选（不等 Tab）
-				if len(m.fileCompletions) == 0 {
+				// prefix 变化时重新 glob
+				if atPrefix != m.fileCompPrefix {
 					m.populateFileCompletions(atPrefix)
+					m.fileCompPrefix = atPrefix
 				}
 				if len(m.fileCompletions) > 0 {
 					parts := make([]string, len(m.fileCompletions))
@@ -1648,12 +1643,15 @@ func (m *cliModel) populateFileCompletions(prefix string) {
 
 // handleFileTabComplete 处理 @ 文件路径 Tab 补全
 func (m *cliModel) handleFileTabComplete(input string, prefix string) {
-	if len(m.fileCompletions) == 0 {
+	if len(m.fileCompletions) == 0 || prefix != m.fileCompPrefix {
+		// prefix 变了，重新 glob
 		m.populateFileCompletions(prefix)
+		m.fileCompPrefix = prefix
 		if len(m.fileCompletions) == 0 {
 			return
 		}
 	} else {
+		// prefix 没变，循环
 		m.fileCompIdx = (m.fileCompIdx + 1) % len(m.fileCompletions)
 	}
 
@@ -1662,10 +1660,9 @@ func (m *cliModel) handleFileTabComplete(input string, prefix string) {
 		selected += "/"
 	}
 	atStart := len(input) - len(prefix) - 1
-	// 不加空格，保持 @selected 状态以便连续 Tab 循环
+	// 不加空格，保持 @path 状态以便连续 Tab 循环
 	newInput := input[:atStart] + "@" + selected
 	m.textarea.SetValue(newInput)
-	m.fileCompActive = true
 }
 
 func isDir(path string) bool {

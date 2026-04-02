@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -680,6 +681,11 @@ type cliModel struct {
 	completions []string // 当前补全候选项
 	compIdx     int      // 当前选中的补全索引
 
+	// --- §8b @ 文件引用补全 ---
+	fileCompletions []string // @ 文件路径补全候选项
+	fileCompIdx     int      // 当前选中的文件补全索引
+	attachedFiles   []string // 当前输入中 @ 引用的文件路径
+
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
 
@@ -1127,11 +1133,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// §8 Tab 补全：输入内容变化时重置补全状态
-	newVal := m.textarea.Value()
-	if newVal != prevText {
-		m.completions = nil
-		m.compIdx = 0
-	}
+		newVal := m.textarea.Value()
+		if newVal != prevText {
+			m.completions = nil
+			m.compIdx = 0
+			m.fileCompletions = nil
+			m.fileCompIdx = 0
+		}
 
 	// 检查是否需要退出
 	if m.shouldQuit {
@@ -1213,50 +1221,85 @@ func (m *cliModel) View() string {
 
 	// 输入框样式：根据输入内容动态设置边框颜色
 	// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
-	inputValue := strings.TrimSpace(m.textarea.Value())
-	borderColor := lipgloss.Color(currentTheme.Accent)
-	var completionsHint string
+		inputValue := strings.TrimSpace(m.textarea.Value())
+		borderColor := lipgloss.Color(currentTheme.Accent)
+		var completionsHint string
 
-	if strings.HasPrefix(inputValue, "!") {
-		borderColor = lipgloss.Color(currentTheme.Error)
-	} else if strings.HasPrefix(inputValue, "/") {
-		borderColor = lipgloss.Color(currentTheme.Success)
-		// 补全候选提示：与 Tab 补全共享状态
-		if len(m.completions) > 0 {
-			// Tab 已激活：高亮当前选中项
-			parts := make([]string, len(m.completions))
-			for i, c := range m.completions {
-				if i == m.compIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).
-						Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
-				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
+		if strings.HasPrefix(inputValue, "!") {
+			borderColor = lipgloss.Color(currentTheme.Error)
+		} else if strings.HasPrefix(inputValue, "/") {
+			borderColor = lipgloss.Color(currentTheme.Success)
+			// 补全候选提示：与 Tab 补全共享状态
+			if len(m.completions) > 0 {
+				// Tab 已激活：高亮当前选中项
+				parts := make([]string, len(m.completions))
+				for i, c := range m.completions {
+					if i == m.compIdx {
+						parts[i] = lipgloss.NewStyle().
+							Bold(true).
+							Underline(true).
+							Foreground(lipgloss.Color(currentTheme.Success)).
+							Render(c)
+					} else {
+						parts[i] = lipgloss.NewStyle().
+							Foreground(lipgloss.Color(currentTheme.Success)).
+							Render(c)
+					}
 				}
-			}
-			completionsHint = lipgloss.NewStyle().
-				Padding(0, 1).
-				Render(strings.Join(parts, " · "))
-		} else {
-			// 尚未按 Tab：显示潜在匹配
-			var matches []string
-			for _, cmd := range cliCommands {
-				if strings.HasPrefix(cmd, inputValue) {
-					matches = append(matches, cmd)
-				}
-			}
-			if len(matches) > 0 {
 				completionsHint = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.Success)).
 					Padding(0, 1).
-					Render("[Tab] " + strings.Join(matches, " · "))
+					Render(strings.Join(parts, " · "))
+			} else {
+				// 尚未按 Tab：显示潜在匹配
+				var matches []string
+				for _, cmd := range cliCommands {
+					if strings.HasPrefix(cmd, inputValue) {
+						matches = append(matches, cmd)
+					}
+				}
+				if len(matches) > 0 {
+					completionsHint = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.Success)).
+						Padding(0, 1).
+						Render("[Tab] " + strings.Join(matches, " · "))
+				}
 			}
 		}
-	}
+
+		// §8b @ 文件引用补全提示
+		rawInput := m.textarea.Value()
+			atPrefix := detectAtPrefix(rawInput)
+		if atPrefix != "" {
+			borderColor = lipgloss.Color(currentTheme.Info)
+			if len(m.fileCompletions) > 0 {
+				parts := make([]string, len(m.fileCompletions))
+				for i, c := range m.fileCompletions {
+					if isDir(c) {
+						c += "/"
+					}
+					if i == m.fileCompIdx {
+						parts[i] = lipgloss.NewStyle().
+							Bold(true).
+							Underline(true).
+							Foreground(lipgloss.Color(currentTheme.Info)).
+							Render(c)
+					} else {
+						parts[i] = lipgloss.NewStyle().
+							Foreground(lipgloss.Color(currentTheme.Info)).
+							Render(c)
+					}
+				}
+				completionsHint = lipgloss.NewStyle().
+					Padding(0, 1).
+					Render("[Tab] " + strings.Join(parts, " · "))
+			} else {
+				// 显示 @ 已激活提示
+				completionsHint = lipgloss.NewStyle().
+					Foreground(lipgloss.Color(currentTheme.Info)).
+					Padding(0, 1).
+					Render("[Tab] 文件路径补全: @" + atPrefix)
+			}
+		}
 
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1498,19 +1541,26 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 // Helper Methods
 // ---------------------------------------------------------------------------
 
-// handleTabComplete 处理 Tab 命令补全（§8）
+// handleTabComplete 处理 Tab 补全（§8：/ 命令补全，§8b：@ 文件路径补全）
 func (m *cliModel) handleTabComplete() {
-	input := strings.TrimSpace(m.textarea.Value())
+	input := m.textarea.Value()
 
-	// 只在输入以 / 开头时补全
-	if !strings.HasPrefix(input, "/") {
+	// 检测 @ 文件引用补全（从输入末尾检测）
+	atPrefix := detectAtPrefix(input)
+	if atPrefix != "" {
+		m.handleFileTabComplete(input, atPrefix)
+		return
+	}
+
+	// / 命令补全
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/") {
 		return
 	}
 
 	if len(m.completions) == 0 {
-		// 首次 Tab：计算匹配
 		for _, cmd := range cliCommands {
-			if strings.HasPrefix(cmd, input) {
+			if strings.HasPrefix(cmd, trimmed) {
 				m.completions = append(m.completions, cmd)
 			}
 		}
@@ -1519,11 +1569,74 @@ func (m *cliModel) handleTabComplete() {
 		}
 		m.compIdx = 0
 	} else {
-		// 后续 Tab：循环选择
 		m.compIdx = (m.compIdx + 1) % len(m.completions)
 	}
 
 	m.textarea.SetValue(m.completions[m.compIdx] + " ")
+}
+
+// detectAtPrefix 检测输入文本末尾是否有 @ 触发文件补全。
+// 返回 @ 之后到文本末尾的部分（不含 @），空表示未触发。
+func detectAtPrefix(input string) string {
+	if len(input) == 0 || input[len(input)-1] == ' ' {
+		return ""
+	}
+	i := len(input) - 1
+	for i >= 0 && input[i] != ' ' && input[i] != '@' {
+		i--
+	}
+	if i < 0 || input[i] != '@' {
+		return ""
+	}
+	if i > 0 && input[i-1] != ' ' {
+		return ""
+	}
+	return input[i+1:]
+}
+
+// handleFileTabComplete 处理 @ 文件路径 Tab 补全
+func (m *cliModel) handleFileTabComplete(input string, prefix string) {
+	if len(m.fileCompletions) == 0 {
+		pattern := prefix
+		if !strings.Contains(pattern, "*") {
+			if strings.HasSuffix(pattern, "/") {
+				pattern += "*"
+			} else {
+				pattern += "*"
+			}
+		}
+		matches, err := filepath.Glob(pattern)
+		if err != nil || len(matches) == 0 {
+			return
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			di, dj := isDir(matches[i]), isDir(matches[j])
+			if di != dj {
+				return di
+			}
+			return matches[i] < matches[j]
+		})
+		if len(matches) > 20 {
+			matches = matches[:20]
+		}
+		m.fileCompletions = matches
+		m.fileCompIdx = 0
+	} else {
+		m.fileCompIdx = (m.fileCompIdx + 1) % len(m.fileCompletions)
+	}
+
+	selected := m.fileCompletions[m.fileCompIdx]
+	if isDir(selected) {
+		selected += "/"
+	}
+	atStart := len(input) - len(prefix) - 1
+	newInput := input[:atStart] + "@" + selected + " "
+	m.textarea.SetValue(newInput)
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
@@ -1560,6 +1673,9 @@ func (m *cliModel) sendMessage(content string) {
 		return
 	}
 
+	// 解析 @ 文件引用，提取文件路径
+	media := parseFileReferences(content)
+
 	// 添加用户消息到历史
 	m.messages = append(m.messages, cliMessage{
 		role:      "user",
@@ -1573,21 +1689,54 @@ func (m *cliModel) sendMessage(content string) {
 
 	// 发送到消息总线
 	if m.msgBus != nil {
-		m.msgBus.Inbound <- bus.InboundMessage{
+		msg := bus.InboundMessage{
 			Channel:    cliChannelName,
 			SenderID:   cliSenderID,
 			ChatID:     m.chatID,
 			ChatType:   "p2p",
 			Content:    content,
+			Media:      media,
 			SenderName: "CLI User",
 			Time:       time.Now(),
 			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
 		}
+		m.msgBus.Inbound <- msg
 		m.typing = true
 		m.inputReady = false
 		m.resetProgressState()
 	}
+}
+
+// parseFileReferences 从用户消息中提取 @path 文件引用。
+// 匹配 @ 后跟非空格字符的路径，验证文件存在后返回。
+func parseFileReferences(content string) []string {
+	var files []string
+	seen := make(map[string]bool)
+	for i := 0; i < len(content); i++ {
+		if content[i] == '@' {
+			// @ 必须在词首
+			if i > 0 && content[i-1] != ' ' {
+				continue
+			}
+			// 提取 @ 后的路径
+			j := i + 1
+			for j < len(content) && content[j] != ' ' {
+				j++
+			}
+			path := content[i+1 : j]
+			// 去掉末尾的 /
+			path = strings.TrimRight(path, "/")
+			if path != "" && !seen[path] {
+				if _, err := os.Stat(path); err == nil {
+					files = append(files, path)
+					seen[path] = true
+				}
+			}
+			i = j
+		}
+	}
+	return files
 }
 
 // resetProgressState resets iteration tracking for a new agent turn.

@@ -1803,7 +1803,7 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		ChatID:    chatID,
 		Content:   content,
 		Time:      time.Now(),
-		IsCron:    true,
+		IsCron:    false,
 		RequestID: log.NewRequestID(),
 	}
 }

@@ -1329,18 +1329,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// --- 注入后台任务完成通知（迭代中：tool result） ---
 		// bgNotifyLoop buffers into Agent.bgRunPending, which Run loop drains here.
 		// Injected as assistant+tool message pair for LLM to process inline.
-		// Also persisted immediately and shown in CLI progress via CompletedTools.
+		// Also persisted immediately and shown in CLI iteration via CompletedTools.
 		if cfg.DrainBgNotifications != nil {
 			pending := cfg.DrainBgNotifications()
 			for _, bgTask := range pending {
 			bgContent := tools.FormatBgTaskCompletion(bgTask)
 			bgAssistantMsg := llm.ChatMessage{
-				Role:    "assistant",
-				Content: "A background task has completed. Let me check the result.",
-				ToolCalls: []llm.ToolCall{{
-				ID:   "bg_" + bgTask.ID,
-				Name: "background_task_result",
-				}},
+			Role:    "assistant",
+			Content: "A background task has completed. Let me check the result.",
+			ToolCalls: []llm.ToolCall{{
+			ID:   "bg_" + bgTask.ID,
+			Name: "background_task_result",
+			}},
 			}
 			bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
 			messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
@@ -1348,21 +1348,29 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 			// Persist immediately (don't wait for next iteration's incremental persist)
 			if cfg.Session != nil {
-				_ = cfg.Session.AddMessage(bgAssistantMsg)
-				_ = cfg.Session.AddMessage(bgToolMsg)
-				lastPersistedCount = len(messages)
+			_ = cfg.Session.AddMessage(bgAssistantMsg)
+			_ = cfg.Session.AddMessage(bgToolMsg)
+			lastPersistedCount = len(messages)
 			}
 
-			// Append to progressLines so CLI shows the bg task completion
-			var elapsedStr string
+			// Show as completed tool in current iteration so CLI renders it inline
+			if structuredProgress != nil {
+			var elapsed time.Duration
 			if bgTask.FinishedAt != nil {
-				elapsedStr = bgTask.FinishedAt.Sub(bgTask.StartedAt).Truncate(time.Second).String()
+				elapsed = bgTask.FinishedAt.Sub(bgTask.StartedAt)
 			}
-			progressLines = append(progressLines, fmt.Sprintf("✅ background_task_result (bg:%s) %s", bgTask.ID, elapsedStr))
+			structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, ToolProgress{
+				Name:      "background_task_result",
+				Label:     fmt.Sprintf("bg:%s", bgTask.ID),
+				Status:    ToolDone,
+				Elapsed:   elapsed,
+				Iteration: i, // belongs to current iteration
+			})
 			if autoNotify {
 				notifyProgress("")
 			}
 			}
+		}
 		}
 
 		// 如果有任何工具标记为等待用户响应，则停止循环

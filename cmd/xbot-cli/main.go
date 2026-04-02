@@ -13,7 +13,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -388,72 +387,7 @@ func main() {
 				if err != nil {
 					return nil, err
 				}
-				var history []channel.HistoryMessage
-				for _, m := range msgs {
-					switch m.Role {
-					case "tool":
-						continue
-					case "assistant":
-						if m.Detail != "" {
-							var snaps []agent.IterationSnapshot
-							if jsonErr := json.Unmarshal([]byte(m.Detail), &snaps); jsonErr == nil {
-								iters := make([]channel.HistoryIteration, 0, len(snaps))
-								for _, snap := range snaps {
-									toolList := make([]channel.CLIToolProgress, len(snap.Tools))
-									for i, t := range snap.Tools {
-										label := t.Label
-										if label == "" {
-											label = t.Name
-										}
-										toolList[i] = channel.CLIToolProgress{
-											Name:      t.Name,
-											Label:     label,
-											Status:    t.Status,
-											Elapsed:   t.ElapsedMS,
-											Iteration: snap.Iteration,
-										}
-									}
-									iters = append(iters, channel.HistoryIteration{
-										Iteration: snap.Iteration,
-										Thinking:  snap.Thinking,
-										Tools:     toolList,
-									})
-								}
-								if len(iters) > 0 {
-									history = append(history, channel.HistoryMessage{
-										Role:       "tool_summary",
-										Timestamp:  m.Timestamp,
-										Iterations: iters,
-									})
-								}
-							}
-							if m.Content != "" {
-								history = append(history, channel.HistoryMessage{
-									Role:      "assistant",
-									Content:   m.Content,
-									Timestamp: m.Timestamp,
-								})
-							}
-						} else if len(m.ToolCalls) > 0 {
-							continue
-						} else if m.Content != "" {
-							history = append(history, channel.HistoryMessage{
-								Role:      "assistant",
-								Content:   m.Content,
-								Timestamp: m.Timestamp,
-							})
-						}
-					default:
-						if m.Content != "" {
-							history = append(history, channel.HistoryMessage{
-								Role:      m.Role,
-								Content:   m.Content,
-								Timestamp: m.Timestamp,
-							})
-						}
-					}
-				}
-				return history, nil
+				return channel.ConvertMessagesToHistory(msgs), nil
 			}
 		}
 	}

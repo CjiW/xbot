@@ -306,6 +306,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	messages := cfg.Messages
 	initialMsgCount := len(messages)
+	lastPersistedCount := initialMsgCount
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
 	// syncMessages 闭包：每次 messages 被重赋值后调用，保持 ContextEditor 引用同步
@@ -603,11 +604,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			out.Messages = messages
 		}
 		// Always capture engine-produced messages (assistant + tool).
-		// Used by processMessage to persist context when WaitingUser is true
-		// (e.g., card_send with wait_response), so the next turn has full context.
-		if len(messages) > initialMsgCount {
-			engineMsgs := make([]llm.ChatMessage, len(messages)-initialMsgCount)
-			copy(engineMsgs, messages[initialMsgCount:])
+		// Only includes messages NOT yet incrementally persisted, so the cancel
+		// path in processMessage can save them without creating duplicates.
+		if len(messages) > lastPersistedCount {
+			engineMsgs := make([]llm.ChatMessage, len(messages)-lastPersistedCount)
+			copy(engineMsgs, messages[lastPersistedCount:])
 			out.EngineMessages = engineMsgs
 		}
 		// Capture iteration history snapshots for UI display.
@@ -1301,6 +1302,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				lastIdx := len(messages) - 1
 				messages[lastIdx].Content += "\n\n" + reminder
 			}
+		}
+
+		// --- 增量持久化：每轮迭代结束后立即将新消息写入 Session ---
+		// 确保中途终止（kill/SIGTERM）不会丢失已完成的迭代进度。
+		if cfg.Session != nil && len(messages) > lastPersistedCount {
+			for _, msg := range messages[lastPersistedCount:] {
+				if msg.Role == "system" {
+					continue // system 消息不持久化
+				}
+				if err := cfg.Session.AddMessage(msg); err != nil {
+					log.Ctx(ctx).WithError(err).Warn("Failed to incrementally persist engine message")
+				}
+			}
+			lastPersistedCount = len(messages)
 		}
 
 		// 如果有任何工具标记为等待用户响应，则停止循环

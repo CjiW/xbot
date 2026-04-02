@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"xbot/bus"
+	"xbot/llm"
 	log "xbot/logger"
 	"xbot/version"
 
@@ -370,6 +371,143 @@ type HistoryMessage struct {
 	Iterations []HistoryIteration // 仅 role=="tool_summary" 时有值，按迭代顺序
 }
 
+// iterSnapshot mirrors agent.IterationSnapshot for JSON unmarshaling Detail field.
+type iterSnapshot struct {
+	Iteration int            `json:"iteration"`
+	Thinking  string         `json:"thinking,omitempty"`
+	Tools     []iterToolSnap `json:"tools"`
+}
+
+type iterToolSnap struct {
+	Name      string `json:"name"`
+	Label     string `json:"label,omitempty"`
+	Status    string `json:"status"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+}
+
+// ConvertMessagesToHistory converts raw DB messages into HistoryMessages for CLI display.
+// It handles three scenarios:
+//  1. Normal completed turn: assistant with Detail → one tool_summary + assistant
+//  2. Cancelled/interrupted turn: intermediate assistant(ToolCalls) without Detail → pending tool_summary
+//  3. Mixed: some turns completed, last one cancelled
+func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
+	var history []HistoryMessage
+	var pendingIters []HistoryIteration
+	var curIterTools []CLIToolProgress
+	var curIterIdx int
+	var curIterThinking string
+
+	finishCurIter := func() {
+		if len(curIterTools) > 0 || curIterThinking != "" {
+			pendingIters = append(pendingIters, HistoryIteration{
+				Iteration: curIterIdx,
+				Thinking:  curIterThinking,
+				Tools:     curIterTools,
+			})
+		}
+		curIterTools = nil
+		curIterThinking = ""
+	}
+
+	flushPending := func() {
+		finishCurIter()
+		if len(pendingIters) > 0 {
+			history = append(history, HistoryMessage{
+				Role:       "tool_summary",
+				Iterations: pendingIters,
+			})
+			pendingIters = nil
+		}
+	}
+
+	for _, m := range msgs {
+		switch m.Role {
+		case "tool":
+			continue
+		case "assistant":
+			if m.Detail != "" {
+				// Detail has authoritative iteration history. Discard pending iters
+				// from intermediate assistant messages — they lack elapsed/label data.
+				finishCurIter()
+				pendingIters = nil
+
+				var snaps []iterSnapshot
+				if jsonErr := json.Unmarshal([]byte(m.Detail), &snaps); jsonErr == nil {
+					iters := make([]HistoryIteration, 0, len(snaps))
+					for _, snap := range snaps {
+						toolList := make([]CLIToolProgress, len(snap.Tools))
+						for i, t := range snap.Tools {
+							label := t.Label
+							if label == "" {
+								label = t.Name
+							}
+							toolList[i] = CLIToolProgress{
+								Name:      t.Name,
+								Label:     label,
+								Status:    t.Status,
+								Elapsed:   t.ElapsedMS,
+								Iteration: snap.Iteration,
+							}
+						}
+						iters = append(iters, HistoryIteration{
+							Iteration: snap.Iteration,
+							Thinking:  snap.Thinking,
+							Tools:     toolList,
+						})
+					}
+					if len(iters) > 0 {
+						history = append(history, HistoryMessage{
+							Role:       "tool_summary",
+							Timestamp:  m.Timestamp,
+							Iterations: iters,
+						})
+					}
+				}
+				if m.Content != "" {
+					history = append(history, HistoryMessage{
+						Role:      "assistant",
+						Content:   m.Content,
+						Timestamp: m.Timestamp,
+					})
+				}
+			} else if len(m.ToolCalls) > 0 {
+				// Intermediate assistant with tool_calls from incremental persistence.
+				// Accumulate into pending — don't flush yet.
+				finishCurIter()
+				curIterIdx++
+				curIterThinking = m.Content
+				for _, tc := range m.ToolCalls {
+					curIterTools = append(curIterTools, CLIToolProgress{
+						Name:      tc.Name,
+						Label:     tc.Name,
+						Status:    "done",
+						Elapsed:   0,
+						Iteration: curIterIdx,
+					})
+				}
+			} else if m.Content != "" {
+				flushPending()
+				history = append(history, HistoryMessage{
+					Role:      "assistant",
+					Content:   m.Content,
+					Timestamp: m.Timestamp,
+				})
+			}
+		default:
+			flushPending()
+			if m.Content != "" {
+				history = append(history, HistoryMessage{
+					Role:      m.Role,
+					Content:   m.Content,
+					Timestamp: m.Timestamp,
+				})
+			}
+		}
+	}
+	flushPending()
+	return history
+}
+
 // CLIChannelConfig CLI 渠道配置
 type CLIChannelConfig struct {
 	WorkDir          string                           // 工作目录（用于标题栏显示）
@@ -711,6 +849,11 @@ type cliModel struct {
 
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
+
+	// --- §11b Pending Tool Summary ---
+	// PhaseDone may arrive before handleAgentMessage. Store the tool_summary
+	// here so handleAgentMessage can insert it at the correct position.
+	pendingToolSummary *cliMessage
 
 	// --- §12 Interactive Panel ---
 	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
@@ -1188,21 +1331,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-				// Generate tool_summary if we have iteration history and no
-				// handleAgentMessage will follow (agent error/cancel case).
+				// Generate tool_summary if we have iteration history.
+				// Append to end immediately so cancel/error cases (no handleAgentMessage)
+				// still display the summary. handleAgentMessage will relocate it before
+				// the assistant reply if one follows.
 				if len(m.iterationHistory) > 0 {
-					toolMsg := cliMessage{
+					m.pendingToolSummary = &cliMessage{
 						role:       "tool_summary",
 						content:    "",
 						timestamp:  time.Now(),
 						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
 						dirty:      true,
 					}
-					insertIdx := len(m.messages) - 1
-					if insertIdx < 0 {
-						insertIdx = 0
-					}
-					m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
+					m.messages = append(m.messages, *m.pendingToolSummary)
 					m.renderCacheValid = false
 				}
 				// Reset all iteration tracking state
@@ -2331,20 +2472,41 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			}
 		}
 
-		// §2 工具可视化：生成工具摘要消息（按迭代分组）
+		// §2 工具可视化：在 assistant 消息之前插入 tool_summary
+		// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
+		// If PhaseDone already appended a placeholder, remove it first.
+		var toolSummaryIterations []cliIterationSnapshot
+		if m.pendingToolSummary != nil {
+			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
+			// Remove the placeholder that PhaseDone appended at the end
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].role == "tool_summary" && len(m.messages[i].iterations) > 0 &&
+					len(m.messages[i].iterations) == len(m.pendingToolSummary.iterations) {
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					break
+				}
+			}
+			m.pendingToolSummary = nil
+		}
 		if len(m.iterationHistory) > 0 {
+			toolSummaryIterations = append(toolSummaryIterations, m.iterationHistory...)
+		}
+		if len(toolSummaryIterations) > 0 {
 			toolMsg := cliMessage{
 				role:       "tool_summary",
 				content:    "",
 				timestamp:  time.Now(),
-				iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+				iterations: toolSummaryIterations,
 				dirty:      true,
 			}
-			insertIdx := len(m.messages) - 1
-			if insertIdx < 0 {
-				insertIdx = 0
+			// Find the assistant message we just added and insert before it
+			assistantIdx := len(m.messages) - 1
+			if assistantIdx >= 0 && m.messages[assistantIdx].role == "assistant" {
+				m.messages = append(m.messages[:assistantIdx], append([]cliMessage{toolMsg}, m.messages[assistantIdx:]...)...)
+			} else {
+				// Fallback: append at end
+				m.messages = append(m.messages, toolMsg)
 			}
-			m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
 			m.renderCacheValid = false
 		}
 

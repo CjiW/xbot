@@ -704,8 +704,10 @@ func newCLIModel() *cliModel {
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // no background — let terminal bg show through
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
 	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
@@ -2536,20 +2538,14 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ta.Placeholder = "Type your answer..."
 	ta.Prompt = "  "
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-		Background(lipgloss.Color("#1a1a2e"))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Background(lipgloss.Color("#1a1a2e"))
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
 	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
 	ta.CharLimit = 0
 	ta.SetWidth(50)
@@ -2660,12 +2656,9 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta := textarea.New()
 				ta.Prompt = "  "
 				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-					Background(lipgloss.Color("#1a1a2e"))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextMuted)).
-					Background(lipgloss.Color("#1a1a2e"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
 				ta.SetWidth(50)
 				ta.SetHeight(1)
@@ -2750,12 +2743,9 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta := textarea.New()
 				ta.Prompt = "  "
 				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-					Background(lipgloss.Color("#1a1a2e"))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextMuted)).
-					Background(lipgloss.Color("#1a1a2e"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
 				ta.SetWidth(50)
 				ta.SetHeight(1)
@@ -2770,12 +2760,9 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta := textarea.New()
 				ta.Prompt = "  "
 				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextPrimary)).
-					Background(lipgloss.Color("#1a1a2e"))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.TextMuted)).
-					Background(lipgloss.Color("#1a1a2e"))
+				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
 				ta.SetWidth(50)
 				ta.SetHeight(1)

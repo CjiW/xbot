@@ -53,8 +53,8 @@ func (pl *PromptLoader) load() {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	// 优先使用嵌入的完整默认 prompt
-	if embeddedPrompt != "" {
-		if t, err := template.New("system").Parse(embeddedPrompt); err != nil {
+	if ep := EmbeddedPrompt(); ep != "" {
+		if t, err := template.New("system").Parse(ep); err != nil {
 			log.WithError(err).Error("Failed to parse embedded prompt, using minimal fallback")
 		} else {
 			pl.tmpl = t

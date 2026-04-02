@@ -957,9 +957,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyCtrlK:
-			// §9 Ctrl+K 上下文编辑
+			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
 			if !m.typing && len(m.messages) > 0 {
-				m.confirmDelete = 2 // 默认删除 2 条
+				groups := visibleMsgGroupIndices(m.messages)
+				defaultDel := 2
+				if defaultDel > len(groups) {
+					defaultDel = len(groups)
+				}
+				m.confirmDelete = defaultDel
+				m.renderCacheValid = false
 				m.updateViewportContent()
 			}
 			return m, nil
@@ -978,13 +984,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// §9 Ctrl+K 确认模式：拦截字母和数字键
 		if m.confirmDelete > 0 {
+			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
 			case "y", "Y":
-				// 确认删除
-				if m.confirmDelete > len(m.messages) {
-					m.confirmDelete = len(m.messages)
+				// 确认删除：根据 group 索引截断
+				if m.confirmDelete > len(groups) {
+					m.confirmDelete = len(groups)
 				}
-				m.messages = m.messages[:len(m.messages)-m.confirmDelete]
+				cutIdx := groups[len(groups)-m.confirmDelete]
+				m.messages = m.messages[:cutIdx]
 				m.confirmDelete = 0
 				m.renderCacheValid = false
 				m.cachedHistory = ""
@@ -993,6 +1001,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n", "N":
 				// 取消删除
 				m.confirmDelete = 0
+				m.renderCacheValid = false
 				m.updateViewportContent()
 				return m, nil
 			default:
@@ -1000,13 +1009,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if msg.Type == tea.KeyRunes {
 					runes := msg.Runes
 					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
-						m.confirmDelete = int(runes[0] - '0')
+						newDel := int(runes[0] - '0')
+						if newDel > len(groups) {
+							newDel = len(groups)
+						}
+						m.confirmDelete = newDel
+						m.renderCacheValid = false
 						m.updateViewportContent()
 						return m, nil
 					}
 				}
 				// 其他键也取消（包括 Esc）
 				m.confirmDelete = 0
+				m.renderCacheValid = false
 				m.updateViewportContent()
 				return m, nil
 			}
@@ -2429,6 +2444,75 @@ func (m *cliModel) setViewportContent(content string) {
 	}
 }
 
+// renderDeleteBoundaryLine 渲染 Ctrl+K 删除边界红线。
+func (m *cliModel) renderDeleteBoundaryLine() string {
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+	redStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444"))
+	label := " ✂ delete below "
+	// label 的可见宽度（不含 ANSI 转义）
+	labelWidth := lipgloss.Width(redStyle.Bold(true).Render(label))
+	totalPad := w - labelWidth
+	if totalPad < 0 {
+		totalPad = 0
+	}
+	leftPad := totalPad / 2
+	rightPad := totalPad - leftPad
+	line := redStyle.Bold(true).Render(
+		strings.Repeat("━", leftPad) + label + strings.Repeat("━", rightPad),
+	)
+	return "\n" + line + "\n"
+}
+
+// visibleMsgGroupIndices 返回每个"可见消息组"的起始 slice 索引。
+// tool_summary 与前一条 assistant 消息合并为一组，不单独计数。
+func visibleMsgGroupIndices(messages []cliMessage) []int {
+	var groups []int
+	for i, msg := range messages {
+		if msg.role == "tool_summary" {
+			continue
+		}
+		groups = append(groups, i)
+	}
+	return groups
+}
+
+// scrollToDeleteLine 确保 Ctrl+K 红线在 viewport 可见区域内。
+func (m *cliModel) scrollToDeleteLine(content string) {
+	contentLines := strings.Split(content, "\n")
+	totalLines := len(contentLines)
+	vpHeight := m.viewport.Height
+	if vpHeight <= 0 {
+		return
+	}
+	// 找到红线行（包含 "✂ delete above" 的行）
+	redLineIdx := -1
+	for i, line := range contentLines {
+		if strings.Contains(line, "✂ delete below") {
+			redLineIdx = i
+			break
+		}
+	}
+	if redLineIdx < 0 {
+		return
+	}
+	// 将红线定位到视口中央偏上（留 3 行上方边距）
+	targetYOffset := redLineIdx - 3
+	if targetYOffset < 0 {
+		targetYOffset = 0
+	}
+	maxOffset := totalLines - vpHeight
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if targetYOffset > maxOffset {
+		targetYOffset = maxOffset
+	}
+	m.viewport.SetYOffset(targetYOffset)
+}
+
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
 func (m *cliModel) updateViewportContent() {
 	// 快速路径：流式消息 + 缓存有效
@@ -2476,6 +2560,15 @@ func (m *cliModel) fullRebuild() {
 		splitIdx = m.streamingMsgIdx
 	}
 
+	// §9 Ctrl+K 红线：根据可见消息组计算删除边界 slice 索引
+	var redLineInsertIdx = -1
+	if m.confirmDelete > 0 {
+		groups := visibleMsgGroupIndices(m.messages)
+		if m.confirmDelete <= len(groups) {
+			redLineInsertIdx = groups[len(groups)-m.confirmDelete] - 1
+		}
+	}
+
 	for i := range m.messages[:splitIdx] {
 		needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
 		if needsRender {
@@ -2485,6 +2578,10 @@ func (m *cliModel) fullRebuild() {
 			m.messages[i].renderWidth = m.width
 		}
 		historyBuf.WriteString(m.messages[i].rendered)
+		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
+		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
+			historyBuf.WriteString(m.renderDeleteBoundaryLine())
+		}
 	}
 
 	m.cachedHistory = historyBuf.String()
@@ -2500,6 +2597,11 @@ func (m *cliModel) fullRebuild() {
 	sb.WriteString(m.renderProgressBlock())
 
 	m.setViewportContent(sb.String())
+
+	// §9 Ctrl+K 红线：自动滚动到红线位置
+	if m.confirmDelete > 0 {
+		m.scrollToDeleteLine(sb.String())
+	}
 }
 
 // tickCmd 定时器命令

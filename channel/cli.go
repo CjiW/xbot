@@ -281,13 +281,57 @@ func truncateRunes(line string, maxW int) string {
 	return buf.String()
 }
 
-// newGlamourRenderer creates a glamour Markdown renderer with Document.Margin
-// set to 0 (the default dark style uses Margin=2 which misaligns when lipgloss
-// re-wraps lines inside a narrower bubble).
+// newGlamourRenderer creates a glamour Markdown renderer with custom styling.
+// - Document.Margin=0 to prevent misalignment inside lipgloss bubbles
+// - Code blocks: accent-colored prefix + keyword/string highlighting
+// - Inline code: subtle accent background for readability
+// - Headings: accent color for visual hierarchy
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	style := glamour.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
+
+	// 代码块：使用强调色前缀标记代码区域，语法高亮用主题色
+	style.CodeBlock.Margin = &zero
+	accentPrefix := "▌"
+	style.CodeBlock.Prefix = accentPrefix
+	// 语法高亮：关键字用强调色，字符串用成功色，注释用弱化色
+	accentColor := currentTheme.Accent
+	style.CodeBlock.Chroma.Keyword.Color = &accentColor
+	style.CodeBlock.Chroma.KeywordType.Color = &accentColor
+	style.CodeBlock.Chroma.KeywordReserved.Color = &accentColor
+	strColor := currentTheme.Success
+	style.CodeBlock.Chroma.LiteralString.Color = &strColor
+	infoColor := currentTheme.Info
+	style.CodeBlock.Chroma.NameFunction.Color = &infoColor
+	style.CodeBlock.Chroma.NameBuiltin.Color = &infoColor
+	mutedColor := currentTheme.TextSecondary
+	style.CodeBlock.Chroma.Comment.Color = &mutedColor
+	style.CodeBlock.Chroma.CommentPreproc.Color = &mutedColor
+
+	// 内联代码：强调色前缀，提升代码片段辨识度
+	style.Code.Prefix = accentPrefix
+	style.Code.Suffix = accentPrefix
+
+	// 标题：使用强调色建立视觉层次（H1/H2 大标题用强调色，H3 用 Info 色）
+	trueVal := true
+	style.H1.Color = &accentColor
+	style.H1.Bold = &trueVal
+	style.H2.Color = &accentColor
+	style.H2.Bold = &trueVal
+	style.H3.Color = &infoColor
+	style.H3.Bold = &trueVal
+
+	// 加粗文本：用主文本色增强对比度
+	textPrimary := currentTheme.TextPrimary
+	style.Strong.Color = &textPrimary
+	style.Strong.Bold = &trueVal
+
+	// 引用块：用次要文本色 + 竖线缩进
+	pipeToken := "│"
+	style.BlockQuote.IndentToken = &pipeToken
+	style.BlockQuote.Color = &mutedColor
+
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(wrapWidth),
@@ -2942,7 +2986,7 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Active tools
+		// Active tools — 带迷你脉冲进度条动画
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
@@ -2951,7 +2995,13 @@ func (m *cliModel) renderProgressBlock() string {
 			if label == "" {
 				label = tool.Name
 			}
-			line := fmt.Sprintf("  │ %s %s", m.ticker.viewFrames(arrowFrames), label)
+			// 迷你进度条：7 阶段脉冲填充动画（6 格宽度）
+			barFrames := []string{"░░░░░░", "▒░░░░░", "▒▒░░░░", "▒▒▒░░░", "▒▒▒▒░░", "▒▒▒▒▒░", "▒▒▒▒▒▒"}
+			barIdx := int(m.ticker.ticks) % len(barFrames)
+			miniBar := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.Warning)).
+				Render(barFrames[barIdx])
+			line := fmt.Sprintf("  │ %s %s  %s", m.ticker.viewFrames(arrowFrames), label, miniBar)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -3084,6 +3134,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		Width(m.width).
 		Align(lipgloss.Center)
 
+	// 错误消息样式：红色边框 + ⚠ 图标 + 红色文字
+	errorMsgStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Error)).
+		Foreground(lipgloss.Color(currentTheme.Error)).
+		Bold(true).
+		Padding(0, 1).
+		Width(contentWidth)
+
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
 	if msg.role == "assistant" {
@@ -3194,7 +3253,20 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
-		sb.WriteString(systemMsgStyle.Render(msg.content))
+		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
+		isError := false
+		lowerContent := strings.ToLower(msg.content)
+		for _, kw := range []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"} {
+			if strings.Contains(lowerContent, kw) {
+				isError = true
+				break
+			}
+		}
+		if isError {
+			sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
+		} else {
+			sb.WriteString(systemMsgStyle.Render(msg.content))
+		}
 	case "user":
 		// 用户消息上方：右侧柔和光点分隔，与 assistant 的左侧竖线形成对称
 		dotSep := lipgloss.NewStyle().
@@ -3246,6 +3318,13 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		sb.WriteString("\n")
 		// Agent 消息直接渲染（glamour 已处理 markdown）
 		sb.WriteString(rendered)
+		// 流式输出时追加闪烁光标，让用户感知"正在生成"
+		if msg.isPartial && rendered != "" {
+			streamCursor := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(currentTheme.Warning)).
+				Bold(true)
+			sb.WriteString(streamCursor.Render("▋"))
+		}
 	}
 
 	sb.WriteString("\n\n")
@@ -3827,9 +3906,20 @@ func (m *cliModel) viewBgTaskList() string {
 	sb.WriteString("  ")
 	sb.WriteString(help)
 	sb.WriteString("\n")
+	// 表头分割线
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Border)).
+		Faint(true)
+	sb.WriteString(dividerStyle.Render("┈" + strings.Repeat("┈", 40)))
 
 	if len(m.panelBgTasks) == 0 {
-		sb.WriteString("\n  No background tasks.\n")
+		// 空状态：居中弱化提示，比纯文字更精致
+		emptyStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(currentTheme.TextMuted)).
+			Faint(true).
+			Width(m.width - 8).
+			Align(lipgloss.Center)
+		sb.WriteString(emptyStyle.Render("No background tasks running"))
 	} else {
 		for i, task := range m.panelBgTasks {
 			elapsed := time.Since(task.StartedAt).Round(time.Second)
@@ -4427,7 +4517,12 @@ func (m *cliModel) viewSettingsPanel() string {
 
 	var sb strings.Builder
 	sb.WriteString(headerStyle.Render("⚙ Settings"))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
+	// 表头下方精致分割线，区分标题与内容
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Border)).
+		Faint(true)
+	sb.WriteString(dividerStyle.Render("┈" + strings.Repeat("┈", 30)))
 
 	// Group by category
 	lastCat := ""
@@ -4449,6 +4544,9 @@ func (m *cliModel) viewSettingsPanel() string {
 		} else {
 			prefix = "  "
 		}
+		// 选中项：添加微妙的强调色背景提升辨识度
+		selectedBgStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color(currentTheme.BarEmpty))
 
 		// Format value display
 		var displayVal string
@@ -4487,6 +4585,9 @@ func (m *cliModel) viewSettingsPanel() string {
 		}
 
 		line := fmt.Sprintf("%s %s: %s", prefix, def.Label, displayVal)
+		if i == m.panelCursor && !m.panelEdit {
+			line = selectedBgStyle.Width(m.width - 6).Render(line)
+		}
 		sb.WriteString(line)
 		sb.WriteString("\n")
 	}

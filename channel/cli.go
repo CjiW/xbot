@@ -506,6 +506,8 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // codeBlockRe 匹配 markdown 代码块: ```lang\ncode\n```
 var codeBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_+-]*)\\s*\n(.*?)```")
 
+var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`) // ANSI 转义序列匹配（§21 搜索用）
+
 // renderCodeBlockInline 将代码块渲染为 lipgloss 边框包裹的精美样式。
 // 返回渲染后的 ANSI 字符串。
 func renderCodeBlockInline(lang, code string, maxWidth int) string {
@@ -514,14 +516,40 @@ func renderCodeBlockInline(lang, code string, maxWidth int) string {
 	if langLabel == "" {
 		langLabel = "text"
 	}
+
+	// §8 代码块行数统计（用于右上角行数提示）
+	lines := strings.Split(strings.TrimRight(code, "\n"), "\n")
+	lineCount := len(lines)
+	if lineCount == 1 && lines[0] == "" {
+		lineCount = 0
+	}
+
+	// 右上角元数据提示：语言标签 + 行数，对齐显示
 	langTag := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.TextMuted)).
 		Render(" " + langLabel + " ")
+	copyHint := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.TextMuted)).
+		Faint(true).
+		Render(fmt.Sprintf("%d lines ", lineCount))
+
+	// 用空格填充使两个标签左右对齐（内容宽度 = maxWidth - 4）
+	metaWidth := maxWidth - 4
+	if metaWidth < 10 {
+		metaWidth = 10
+	}
+	metaLine := langTag
+	if hintWidth := lipgloss.Width(copyHint); hintWidth > 0 {
+		padWidth := metaWidth - lipgloss.Width(langTag) - hintWidth
+		if padWidth > 0 {
+			metaLine += strings.Repeat(" ", padWidth)
+		}
+		metaLine += copyHint
+	}
 
 	// 代码内容：保持原始缩进，不添加额外前缀（glamour 已处理语法高亮）
 	// 限制最大宽度
-	lines := strings.Split(strings.TrimRight(code, "\n"), "\n")
-	contentWidth := maxWidth - 4 // border(2) + padding(2)
+	contentWidth := metaWidth
 	var codeLines []string
 	for _, line := range lines {
 		if lipgloss.Width(line) > contentWidth {
@@ -539,8 +567,8 @@ func renderCodeBlockInline(lang, code string, maxWidth int) string {
 		Padding(0, 1).
 		Width(maxWidth)
 
-	// 组装：语言标签行 + 代码内容
-	inner := langTag + "\n" + codeContent
+	// 组装：元数据行（语言+行数）+ 代码内容
+	inner := metaLine + "\n" + codeContent
 	return blockStyle.Render(inner)
 }
 
@@ -567,7 +595,7 @@ func prettifyCodeBlocks(markdown string, maxWidth int) string {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/update",
+	"/model", "/models", "/new", "/quit", "/search", "/settings", "/setup", "/update",
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,14 +1195,24 @@ type splashTickMsg struct {
 // splashDoneMsg 启动画面结束消息
 type splashDoneMsg struct{}
 
-// cliToastMsg Toast 通知消息（自动浮现+消失）
+// cliToastItem 单条 Toast 通知数据
+type cliToastItem struct {
+	text string
+	icon string // "✓" | "✗" | "ℹ" 等
+}
+
+// cliToastMsg Toast 通知消息（入队显示，自动消失）
 type cliToastMsg struct {
 	text string
 	icon string // "✓" | "✗" | "ℹ" 等
 }
 
-// cliToastClearMsg Toast 通知自动清除消息
+// cliToastClearMsg Toast 通知自动清除消息（弹出队列头部）
 type cliToastClearMsg struct{}
+
+// §21 消息搜索相关类型
+type cliSearchNextMsg struct{} // n: 下一个匹配
+type cliSearchPrevMsg struct{} // N: 上一个匹配
 
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
@@ -1283,10 +1321,15 @@ type cliModel struct {
 	splashDone  bool // true = splash 动画结束，进入正常界面
 	splashFrame int  // 当前 splash 动画帧索引
 
-	// --- §16 Toast 通知 ---
-	toast      string // 非空 = 显示 toast 通知
-	toastIcon  string // toast 图标（✓/✗/ℹ 等）
-	toastTimer bool   // true = toast 消除计时器已启动
+	// --- §16 Toast 通知队列 ---
+	toasts     []cliToastItem // Toast 队列（头部=当前显示）
+	toastTimer bool           // true = toast 消除计时器已启动
+
+	// --- §21 消息搜索 /search ---
+	searchQuery    string // 搜索关键词
+	searchMatches  []int  // 匹配的消息索引列表
+	searchMatchIdx int    // 当前聚焦的匹配索引（-1=无）
+	searchActive   bool   // true=搜索模式激活
 
 	styles  cliStyles
 	channel *CLIChannel // back-reference to owning channel (set during Start)
@@ -1968,9 +2011,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.splashDone = true
 
 	case cliToastMsg:
-		// §16 Toast 通知显示
-		m.toast = msg.text
-		m.toastIcon = msg.icon
+		// §16 Toast 通知入队（最多保留 5 条，显示前 3 条）
+		if len(m.toasts) >= 5 {
+			m.toasts = m.toasts[len(m.toasts)-4:]
+		}
+		m.toasts = append(m.toasts, cliToastItem{text: msg.text, icon: msg.icon})
 		if !m.toastTimer {
 			m.toastTimer = true
 			cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
@@ -1979,10 +2024,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case cliToastClearMsg:
-		// §16 Toast 通知自动清除
-		m.toast = ""
-		m.toastIcon = ""
-		m.toastTimer = false
+		// §16 Toast 通知：弹出队列头部
+		if len(m.toasts) > 0 {
+			m.toasts = m.toasts[1:]
+		}
+		if len(m.toasts) > 0 {
+			cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+				return cliToastClearMsg{}
+			}))
+		} else {
+			m.toastTimer = false
+		}
 	}
 
 	// Kick off ticker + tick chains when processing just started
@@ -2669,28 +2721,49 @@ func padBetween(left, right string, width int) string {
 	return left + strings.Repeat(" ", width-w) + right
 }
 
-// renderToast 渲染底部 Toast 通知条（§16）。
-// Toast 用于短暂提示（如后台任务完成），3 秒后自动消失。
+// renderToast 渲染底部 Toast 通知堆叠（§16）。
+// 支持多条 toast 排队显示，最多同时渲染 3 条，3 秒轮换。
 // 浮在界面最底部，使用 Surface 背景与主题保持一致。
 func (m *cliModel) renderToast() string {
-	if m.toast == "" {
+	if len(m.toasts) == 0 {
 		return ""
 	}
 
-	// 图标颜色：根据 icon 类型选择
-	iconColor := currentTheme.Success
-	switch m.toastIcon {
-	case "✗", "⚠":
-		iconColor = currentTheme.Error
-	case "ℹ":
-		iconColor = currentTheme.Info
+	// 最多显示 3 条
+	showCount := len(m.toasts)
+	if showCount > 3 {
+		showCount = 3
 	}
 
-	// §20 使用缓存样式（iconSty 需动态颜色，保留）
-	iconSty := lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Bold(true)
-	toastContent := iconSty.Render(" "+m.toastIcon+" ") + " " + m.styles.ToastText.Render(m.toast)
+	var lines []string
+	for i := 0; i < showCount; i++ {
+		item := m.toasts[i]
 
-	return "\n" + m.styles.ToastBg.Render(toastContent)
+		// 图标颜色：根据 icon 类型选择
+		iconColor := currentTheme.Success
+		switch item.icon {
+		case "✗", "⚠":
+			iconColor = currentTheme.Error
+		case "ℹ":
+			iconColor = currentTheme.Info
+		}
+
+		// 越靠后越透明（营造层级感）
+		faintFactor := i // 0=最新最亮, 1=稍暗, 2=最暗
+		iconSty := lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Bold(true)
+		if faintFactor > 0 {
+			iconSty = iconSty.Faint(true)
+		}
+		textSty := m.styles.ToastText
+		if faintFactor > 0 {
+			textSty = textSty.Faint(true)
+		}
+
+		toastContent := iconSty.Render(" "+item.icon+" ") + " " + textSty.Render(item.text)
+		lines = append(lines, m.styles.ToastBg.Render(toastContent))
+	}
+
+	return "\n" + strings.Join(lines, "\n")
 }
 
 // renderProgressStatus renders a compact one-line status for the status bar.
@@ -3759,6 +3832,151 @@ func (m *cliModel) renderHelpPanel() string {
 	return panelStyle.Render(sb.String())
 }
 
+// ---------------------------------------------------------------------------
+// §21 消息搜索 /search — 在消息历史中搜索关键词，高亮匹配，n/N 跳转
+// ---------------------------------------------------------------------------
+
+// executeSearch 执行搜索并跳转到第一个匹配
+func (m *cliModel) executeSearch(query string) {
+	m.searchQuery = query
+	m.searchMatches = nil
+	m.searchMatchIdx = -1
+	m.searchActive = true
+
+	lowerQuery := strings.ToLower(query)
+	for i, msg := range m.messages {
+		// 跳过 tool_summary（纯 UI 元素）和 system 消息中的纯格式内容
+		if msg.role == "tool_summary" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(msg.content), lowerQuery) ||
+			strings.Contains(strings.ToLower(msg.role), lowerQuery) {
+			m.searchMatches = append(m.searchMatches, i)
+		}
+	}
+
+	if len(m.searchMatches) > 0 {
+		m.searchMatchIdx = 0
+		m.scrollToSearchMatch()
+	} else {
+		// 未找到，短暂提示后自动退出
+		m.tempStatus = fmt.Sprintf("[search] “%s” 未找到匹配", query)
+		m.searchActive = false
+		m.searchQuery = ""
+		m.searchMatches = nil
+	}
+
+	// 标记所有消息 dirty，使搜索高亮能渲染
+	m.renderCacheValid = false
+	for j := range m.messages {
+		m.messages[j].dirty = true
+	}
+	m.updateViewportContent()
+}
+
+// scrollToSearchMatch 滚动 viewport 到当前匹配的消息
+func (m *cliModel) scrollToSearchMatch() {
+	if m.searchMatchIdx < 0 || m.searchMatchIdx >= len(m.searchMatches) {
+		return
+	}
+	msgIdx := m.searchMatches[m.searchMatchIdx]
+	// 计算目标消息在渲染内容中的大致行号
+	// 简化方案：全量重建后根据消息索引估算行偏移
+	linesBefore := 0
+	for i := 0; i < msgIdx && i < len(m.messages); i++ {
+		rendered := m.messages[i].rendered
+		if rendered == "" {
+			m.messages[i].dirty = true
+			rendered = m.renderMessage(&m.messages[i])
+			m.messages[i].rendered = rendered
+			m.messages[i].dirty = false
+			m.messages[i].renderWidth = m.width
+		}
+		// 计算渲染后的行数（去掉 ANSI 转义码后按换行计数）
+		linesBefore += strings.Count(stripANSI(rendered), "\n") + 1
+	}
+	m.viewport.SetYOffset(linesBefore)
+	m.viewport.GotoTop()
+}
+
+// stripANSI 移除 ANSI 转义序列，用于行数计算
+func stripANSI(s string) string {
+	return ansiEscapeRe.ReplaceAllString(s, "")
+}
+
+// highlightSearchMatch 在文本中高亮搜索关键词
+func highlightSearchMatch(text string, query string) string {
+	if query == "" {
+		return text
+	}
+
+	// 检查文本是否包含搜索词（纯文本部分，不含 ANSI）
+	plainText := stripANSI(text)
+	lowerText := strings.ToLower(plainText)
+	lowerQuery := strings.ToLower(query)
+
+	idx := strings.Index(lowerText, lowerQuery)
+	if idx < 0 {
+		return text
+	}
+
+	// 将纯文本索引映射回原始文本索引（考虑 ANSI 转义码偏移）
+	ansiOffset := mapANSIIndex(text, idx)
+	matchEnd := mapANSIIndex(text, idx+len(query))
+
+	if ansiOffset < 0 || matchEnd < 0 || matchEnd > len(text) {
+		return text
+	}
+
+	// 高亮样式
+	hlStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(currentTheme.Warning)).
+		Bold(true).
+		Background(lipgloss.Color(currentTheme.Surface))
+
+	before := text[:ansiOffset]
+	match := text[ansiOffset:matchEnd]
+	after := text[matchEnd:]
+
+	return before + hlStyle.Render(match) + after
+}
+
+// mapANSIIndex 将纯文本索引映射回含 ANSI 转义的原始文本索引。
+// 纯文本索引 = 去掉所有 ANSI 转义序列后的字符位置。
+func mapANSIIndex(s string, plainIdx int) int {
+	plainPos := 0
+	i := 0
+	for i < len(s) && plainPos <= plainIdx {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			// CSI 序列：\x1b[ ... 终止字母
+			i += 2 // 跳过 ESC [
+			for i < len(s) && !((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z')) {
+				i++
+			}
+			if i < len(s) {
+				i++ // 跳过终止字母
+			}
+			continue
+		}
+		if plainPos == plainIdx {
+			return i
+		}
+		plainPos++
+		i++
+	}
+	return -1
+}
+
+// searchStatusHint 返回搜索状态栏提示文本
+func (m *cliModel) searchStatusHint() string {
+	if !m.searchActive || len(m.searchMatches) == 0 {
+		return ""
+	}
+	total := len(m.searchMatches)
+	current := m.searchMatchIdx + 1
+	return fmt.Sprintf("[search] “%s” %d/%d  n\u2193 N\u2191 Esc\u9000\u51fa", m.searchQuery, current, total)
+}
+
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
 func (m *cliModel) renderMessage(msg *cliMessage) string {
 	// §20 使用缓存样式
@@ -3788,6 +4006,11 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		rendered = strings.TrimSpace(rendered)
 	} else {
 		rendered = msg.content
+	}
+
+	// §21 搜索高亮：对匹配消息的内容高亮关键词
+	if m.searchActive && m.searchQuery != "" && msg.role != "tool_summary" {
+		rendered = highlightSearchMatch(rendered, m.searchQuery)
 	}
 
 	timeStr := timeStyle.Render(msg.timestamp.Format("15:04:05"))
@@ -5155,17 +5378,66 @@ func (m *cliModel) autoExpandAskTA() {
 	}
 }
 
+// panelMaxHeight 根据 viewport 高度计算 panel 可用最大行数。
+// Panel 不能超过 viewport 高度，否则内容溢出到标题栏区域。
+func (m *cliModel) panelMaxHeight() int {
+	// viewport.Height 已经减去了 titleBar(1) + separator(1) + status(1) + inputBox(~5) + footer(1)
+	// panel 需要留 2 行给 footer+toast，实际可用 = viewportHeight - 1 (panel border)
+	maxH := m.viewport.Height - 1
+	if maxH < 8 {
+		maxH = 8 // 最小高度保证
+	}
+	return maxH
+}
+
+// clampPanelContent 根据 maxHeight 裁剪 panel 内容行。
+// 保留头部和底部提示，中间部分可裁剪并显示 "... N more ..."。
+func clampPanelContent(content string, maxHeight int) string {
+	if maxHeight <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	// 去掉末尾可能的空行
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= maxHeight {
+		return strings.Join(lines, "\n")
+	}
+	// 保留前 4 行（标题+表头）和最后 2 行（操作提示）
+	headerLines := 4
+	footerLines := 2
+	if headerLines+footerLines >= maxHeight {
+		// 极端情况：只保留头部和尾部各一半
+		headerLines = maxHeight / 2
+		footerLines = maxHeight - headerLines
+	}
+	kept := headerLines + footerLines
+	omitted := len(lines) - kept
+	result := make([]string, 0, maxHeight+1)
+	result = append(result, lines[:headerLines]...)
+	moreHint := fmt.Sprintf("  ... %d lines omitted (narrow terminal) ...", omitted)
+	result = append(result, moreHint)
+	result = append(result, lines[len(lines)-footerLines:]...)
+	return strings.Join(result, "\n")
+}
+
 // viewPanel renders the active panel as a string.
 func (m *cliModel) viewPanel() string {
+	var raw string
 	switch m.panelMode {
 	case "settings":
-		return m.viewSettingsPanel()
+		raw = m.viewSettingsPanel()
 	case "askuser":
-		return m.viewAskUserPanel()
+		raw = m.viewAskUserPanel()
 	case "bgtasks":
-		return m.viewBgTasksPanel()
+		raw = m.viewBgTasksPanel()
+	default:
+		return ""
 	}
-	return ""
+	// §8 Panel 小终端适配：根据可用高度裁剪内容
+	maxH := m.panelMaxHeight()
+	return clampPanelContent(raw, maxH)
 }
 
 func (m *cliModel) viewSettingsPanel() string {

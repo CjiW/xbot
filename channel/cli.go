@@ -1296,7 +1296,7 @@ func (m *cliModel) View() string {
 	titleLeft := m.titleText()
 	titleRight := "Enter send | Ctrl+J newline | /help"
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
-		titleRight = fmt.Sprintf("v%s → v%s available! | /update | /help", m.updateNotice.Current, m.updateNotice.Latest)
+		titleRight = fmt.Sprintf("%s → %s available! | /update | /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {

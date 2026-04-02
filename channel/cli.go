@@ -2407,14 +2407,17 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 // If the user was at the bottom before the update, keep them at the bottom.
 // Lines wider than the viewport are truncated to prevent layout breakage.
 func (m *cliModel) setViewportContent(content string) {
-	// Truncate lines that exceed viewport width to prevent layout corruption.
-	// This handles mermaid diagrams, wide tables, and any other over-wide content.
 	if m.width > 0 {
 		lines := strings.Split(content, "\n")
 		for i, line := range lines {
+			// Strip trailing whitespace first — mermaid-ascii and wide tables
+			// pad lines with spaces that inflate lipgloss.Width() far beyond
+			// the actual visible content, causing premature truncation.
+			line = strings.TrimRight(line, " \t")
 			if lipgloss.Width(line) > m.width {
-				lines[i] = truncateRunes(line, m.width)
+				line = truncateRunes(line, m.width)
 			}
+			lines[i] = line
 		}
 		content = strings.Join(lines, "\n")
 	}

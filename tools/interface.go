@@ -58,6 +58,11 @@ type ToolContext struct {
 	// PWD 工具优化：当前工作目录（可变，从 session 读取）
 	CurrentDir    string           // 当前工作目录（优先级高于 WorkspaceRoot）
 	SetCurrentDir func(dir string) // 更新 session 中的 cwd
+
+	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
+	BgTaskManager *BackgroundTaskManager
+	// SessionKey for task scoping (set by engine, not via RunConfig)
+	BgSessionKey string
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -595,6 +600,9 @@ func DefaultRegistry(memoryProvider string) *Registry {
 	r.RegisterCore(&FileReplaceTool{})
 	r.RegisterCore(&SubAgentTool{})
 	r.RegisterCore(&SkillTool{})
+	r.RegisterCore(&TaskStatusTool{})
+	r.RegisterCore(&TaskKillTool{})
+	r.RegisterCore(&TaskReadTool{})
 	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
 	// DownloadFileTool 和 WebSearchTool 需要凭证注入，在 main.go 中注册
 	// WebSearch: always available (requires TAVILY_API_KEY)

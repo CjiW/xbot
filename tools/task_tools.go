@@ -230,8 +230,8 @@ func ListBgTasks(mgr *BackgroundTaskManager, sessionKey string) string {
 		if task.FinishedAt != nil {
 			elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 		}
-		fmt.Fprintf(&sb, "  %s  %s  %s  %s  (%s)\n",
-			task.ID, task.Status, elapsed, task.Command, truncateStr(task.Command, 40))
+		fmt.Fprintf(&sb, "  %s  %s  %s  %s  (exit %d)\n",
+			task.ID, task.Status, elapsed, truncateStr(task.Command, 50), task.ExitCode)
 	}
 	return sb.String()
 }

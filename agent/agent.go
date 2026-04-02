@@ -856,6 +856,10 @@ func (a *Agent) Close() error {
 	if a.cronSch != nil {
 		a.cronSch.Stop()
 	}
+	// Close NotifyCh to unblock bgNotifyLoop goroutine
+	if a.bgTaskMgr != nil && a.bgTaskMgr.NotifyCh != nil {
+		close(a.bgTaskMgr.NotifyCh)
+	}
 	// 再关闭数据库连接
 	if a.multiSession != nil {
 		if err := a.multiSession.Close(); err != nil {

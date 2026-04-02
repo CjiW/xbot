@@ -46,6 +46,7 @@ type BackgroundTask struct {
 	mu         sync.Mutex  // protects Output for concurrent writes
 	killed     bool        // set by Kill() before cancel()
 	process    *os.Process // live OS process (set by Adopt, nil for Start-based tasks)
+	exitCodeCh chan int    // optional: receives real exit code from cmd.Wait goroutine (Adopt only)
 }
 
 // BackgroundTaskManager manages background task lifecycle.
@@ -187,23 +188,25 @@ func (m *BackgroundTaskManager) Start(
 // re-executed — Adopt monitors the existing process until it exits.
 // partialOutput is any output collected before the timeout.
 //
-// Note: The caller must NOT call proc.Wait() — the original exec.Cmd goroutine
-// already owns that responsibility. Adopt polls for process exit instead.
+// exitCodeCh optionally receives the real exit code from the original cmd.Wait()
+// goroutine. If provided, Adopt uses it instead of the Signal(0) heuristic.
 func (m *BackgroundTaskManager) Adopt(
 	sessionKey string,
 	command string,
 	proc *os.Process,
 	partialOutput string,
+	exitCodeCh chan int,
 ) *BackgroundTask {
 	id := generateTaskID()
 	task := &BackgroundTask{
-		ID:        id,
-		Command:   command,
-		Status:    BgTaskRunning,
-		StartedAt: time.Now(),
-		ExitCode:  -1,
-		Output:    partialOutput,
-		process:   proc,
+		ID:         id,
+		Command:    command,
+		Status:     BgTaskRunning,
+		StartedAt:  time.Now(),
+		ExitCode:   -1,
+		Output:     partialOutput,
+		process:    proc,
+		exitCodeCh: exitCodeCh,
 	}
 
 	m.mu.Lock()
@@ -212,20 +215,43 @@ func (m *BackgroundTaskManager) Adopt(
 	m.mu.Unlock()
 
 	go func() {
-		// Poll for process exit. We can't use proc.Wait() because the original
-		// exec.Cmd goroutine already calls cmd.Wait() (which calls proc.Wait()).
-		// Signal(0) returns nil if the process is still alive.
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
 		var exitCode int
-		for range ticker.C {
-			err := proc.Signal(syscall.Signal(0))
-			if err != nil {
-				// Process has exited. We can't retrieve the exact exit code
-				// (the cmd.Wait goroutine owns that), so we use a heuristic.
-				exitCode = 0 // assume success if we didn't kill it
-				break
+
+		if exitCodeCh != nil {
+			// Prefer real exit code from cmd.Wait goroutine.
+			// Wait for either the exit code channel or process death via Signal(0).
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+
+			select {
+			case code := <-exitCodeCh:
+				exitCode = code
+			case <-ticker.C:
+				// Poll fallback: channel might never fire if cmd.Wait already returned
+				for {
+					if err := proc.Signal(syscall.Signal(0)); err != nil {
+						// Process dead, try non-blocking read from channel
+						select {
+						case code := <-exitCodeCh:
+							exitCode = code
+						default:
+							exitCode = 0 // heuristic fallback
+						}
+						break
+					}
+					<-ticker.C
+				}
+			}
+		} else {
+			// No channel provided — use Signal(0) polling heuristic.
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if err := proc.Signal(syscall.Signal(0)); err != nil {
+					exitCode = 0
+					break
+				}
 			}
 		}
 

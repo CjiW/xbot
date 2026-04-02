@@ -158,15 +158,26 @@ func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, ctx context.Context) (*ExecRe
 
 	case <-ctx.Done():
 		// Timeout — do NOT kill the process. Return it to the caller.
-		// Detach from pipes so the goroutines finish, but leave the process running.
-		// Note: cmd.Wait() is still running in the background goroutine and will
-		// clean up when the process eventually exits.
+		// cmd.Wait() is still running in the background goroutine.
+		// Provide an exitCodeCh so the caller (Adopt) can get the real exit code.
+		exitCodeCh := make(chan int, 1)
+		go func() {
+			waitErr := <-waitCh // cmd.Wait() result
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
+				exitCodeCh <- exitErr.ExitCode()
+			} else if waitErr != nil {
+				exitCodeCh <- -1
+			} else {
+				exitCodeCh <- 0
+			}
+		}()
 		result := &ExecResult{
-			Stdout:   stdoutBuf.String(),
-			Stderr:   stderrBuf.String(),
-			ExitCode: -1,
-			TimedOut: true,
-			Process:  cmd.Process,
+			Stdout:     stdoutBuf.String(),
+			Stderr:     stderrBuf.String(),
+			ExitCode:   -1,
+			TimedOut:   true,
+			Process:    cmd.Process,
+			ExitCodeCh: exitCodeCh,
 		}
 		return result, nil
 	}

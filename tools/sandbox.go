@@ -36,11 +36,12 @@ type ExecSpec struct {
 
 // ExecResult holds the result of a sandbox command execution.
 type ExecResult struct {
-	Stdout   string      // standard output
-	Stderr   string      // standard error
-	ExitCode int         // exit code (-1 if timed out)
-	TimedOut bool        // whether execution timed out
-	Process  *os.Process // live process when KeepAlive=true and TimedOut=true (caller owns lifecycle)
+	Stdout     string      // standard output
+	Stderr     string      // standard error
+	ExitCode   int         // exit code (-1 if timed out)
+	TimedOut   bool        // whether execution timed out
+	Process    *os.Process // live process when KeepAlive=true and TimedOut=true (caller owns lifecycle)
+	ExitCodeCh chan int    // optional: receives real exit code from cmd.Wait goroutine after timeout
 }
 
 // SandboxFileInfo is the sandbox equivalent of os.FileInfo.

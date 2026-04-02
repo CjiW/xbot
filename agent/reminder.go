@@ -97,7 +97,7 @@ func extractUserGoal(content string) string {
 			continue
 		}
 		// 跳过系统引导文本块
-		if strings.Contains(trimmed, "[系统引导]") || strings.Contains(trimmed, "WebSearch") || strings.Contains(trimmed, "Fetch") || strings.Contains(trimmed, "Skill") || strings.Contains(trimmed, "现在时间") {
+		if strings.Contains(trimmed, "[系统引导]") || strings.Contains(trimmed, "search_tools") || strings.Contains(trimmed, "WebSearch") || strings.Contains(trimmed, "Fetch") || strings.Contains(trimmed, "Skill") || strings.Contains(trimmed, "现在时间") {
 			inGuide = true
 			continue
 		}

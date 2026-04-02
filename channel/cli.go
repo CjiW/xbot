@@ -26,6 +26,7 @@ import (
 
 	"xbot/bus"
 	log "xbot/logger"
+	"xbot/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -287,8 +288,8 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
-	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings", "/setup",
+"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
+"/model", "/models", "/new", "/quit", "/settings", "/setup", "/update",
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +505,9 @@ func (c *CLIChannel) Start() error {
 	c.wg.Add(1)
 	go c.handleOutbound()
 
+	// §13 异步检查更新（不阻塞 TUI 启动）
+	c.CheckUpdateAsync()
+
 	// 运行 Bubble Tea（阻塞）
 	if _, err := c.program.Run(); err != nil {
 		log.WithError(err).Error("CLI channel exited with error")
@@ -547,6 +551,18 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 		return
 	}
 	c.program.Send(cliProgressMsg{payload: payload})
+}
+
+// CheckUpdateAsync starts a background goroutine to check for updates.
+// The result is sent to the TUI via program.Send.
+func (c *CLIChannel) CheckUpdateAsync() {
+	if c.program == nil {
+		return
+	}
+	go func() {
+		info := version.CheckUpdate(context.Background())
+		c.program.Send(cliUpdateCheckMsg{info: info})
+	}()
 }
 
 // handleOutbound 处理从 agent 发来的消息
@@ -718,6 +734,10 @@ type cliModel struct {
 	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
 	panelOnCancel  func()                          // callback on cancel
 
+	// --- §13 Update Check ---
+	updateNotice *version.UpdateInfo // nil=nothing, non-nil=show notice
+	checkingUpdate bool              // true while /update is in progress
+
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 
@@ -811,6 +831,11 @@ type cliProgressMsg struct {
 
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
+
+// cliUpdateCheckMsg 更新检查结果消息
+type cliUpdateCheckMsg struct {
+	info *version.UpdateInfo
+}
 
 // isCtrlEnter 检测 Ctrl+Enter 按键。
 // 终端对 Ctrl+Enter 没有统一标准，常见 raw sequences：
@@ -1128,12 +1153,37 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case cliTickMsg:
-		if m.typing || m.progress != nil {
-			cmds = append(cmds, tickCmd())
-			m.updateViewportContent()
-		}
+			if m.typing || m.progress != nil {
+				cmds = append(cmds, tickCmd())
+				m.updateViewportContent()
+			}
 
-	case tickerTickMsg:
+		case cliUpdateCheckMsg:
+			m.checkingUpdate = false
+			if msg.info != nil {
+				m.updateNotice = msg.info
+				if msg.info.HasUpdate {
+					content := fmt.Sprintf("发现新版本: %s → %s\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   content,
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				} else {
+					content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
+					m.messages = append(m.messages, cliMessage{
+						role:      "system",
+						content:   content,
+						timestamp: time.Now(),
+						dirty:     true,
+					})
+					m.updateViewportContent()
+				}
+			}
+
+		case tickerTickMsg:
 		// Ticker tick: advance frame and trigger viewport refresh
 		if m.typing || m.progress != nil {
 			m.ticker.tick()
@@ -1237,6 +1287,9 @@ func (m *cliModel) View() string {
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
 	titleRight := "Enter send | Ctrl+J newline | /help"
+	if m.updateNotice != nil && m.updateNotice.HasUpdate {
+		titleRight = fmt.Sprintf("v%s → v%s available! | /update | /help", m.updateNotice.Current, m.updateNotice.Latest)
+	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1
@@ -1385,6 +1438,8 @@ func (m *cliModel) View() string {
 	if m.typing || m.progress != nil {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+	} else if m.checkingUpdate {
+		status = thinkingStatusStyle.Render("⟳ checking for updates...")
 	} else if completionsHint != "" {
 		// 显示补全候选提示
 		status = completionsHint
@@ -1926,24 +1981,48 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		}
 
 	case "/setup":
-		m.openSetupPanel()
+			m.openSetupPanel()
 
-	case "/quit", "/exit":
+		case "/update":
+			if m.checkingUpdate {
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "正在检查更新...",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+			} else {
+				m.checkingUpdate = true
+				m.updateNotice = nil
+				if m.channel != nil {
+					m.channel.CheckUpdateAsync()
+				}
+				m.messages = append(m.messages, cliMessage{
+					role:      "system",
+					content:   "正在检查更新...",
+					timestamp: time.Now(),
+					dirty:     true,
+				})
+				m.updateViewportContent()
+			}
+
+		case "/quit", "/exit":
 		m.shouldQuit = true
 
 	case "/help":
 		helpContent := `可用命令：
-  /cancel    - 取消当前正在执行的操作
-  /clear     - 清空聊天记录
-  /compact   - 压缩上下文（减少 token 使用）
-  /model     - 切换模型（用法: /model <模型名>）
-  /models    - 列出可用模型
-  /context   - 查看上下文信息
-  /new       - 开始新会话
-  /settings  - 打开设置面板
-  /setup     - 重新运行初始配置引导
-  /exit      - 退出 CLI
-  /help      - 显示此帮助信息
+		  /cancel    - 取消当前正在执行的操作
+		  /clear     - 清空聊天记录
+		  /compact   - 压缩上下文（减少 token 使用）
+		  /model     - 切换模型（用法: /model <模型名>）
+		  /models    - 列出可用模型
+		  /context   - 查看上下文信息
+		  /new       - 开始新会话
+		  /settings  - 打开设置面板
+		  /setup     - 重新运行初始配置引导
+		  /update    - 检查更新
+		  /exit      - 退出 CLI
+		  /help      - 显示此帮助信息
 
 快捷键：
   Ctrl+C/Esc - 有迭代时中止，无迭代时清空输入`

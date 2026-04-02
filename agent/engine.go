@@ -339,6 +339,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// --- 结构化进度状态 ---
 	var structuredProgress *StructuredProgress
 	var iterationSnapshots []IterationSnapshot
+	var progressFinalizer func() // set up after autoNotify/copyLines are available
 	if cfg.ProgressEventHandler != nil {
 		structuredProgress = &StructuredProgress{
 			Phase:          PhaseThinking,
@@ -357,6 +358,22 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	autoNotify := cfg.ProgressNotifier != nil
 	batchProgressByIteration := cfg.Channel == "web"
+
+	// 确保 Run() 退出时总是发送 PhaseDone 事件，防止 CLI 进度卡在 spinner
+	if structuredProgress != nil {
+		progressFinalizer = func() {
+			structuredProgress.Phase = PhaseDone
+			structuredProgress.ActiveTools = nil
+			if autoNotify && cfg.ProgressEventHandler != nil {
+				cfg.ProgressEventHandler(&ProgressEvent{
+					Lines:      copyLines(progressLines),
+					Structured: structuredProgress,
+					Timestamp:  time.Now(),
+				})
+			}
+		}
+		defer progressFinalizer()
+	}
 
 	// --- 进度通知 ---
 	notifyProgress := func(extra string) {
@@ -922,8 +939,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						execCtx = WithSubAgentProgress(execCtx, func(detail SubAgentProgressDetail) {
 							progressMu.Lock()
 							progressLines[pi] = formatSubAgentProgress(detail)
-							notifyProgress("")
 							progressMu.Unlock()
+							notifyProgress("") // read progressLines outside lock (notifyProgress has its own snapshot)
 						})
 					}
 				}

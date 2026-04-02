@@ -1147,7 +1147,74 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastCompletedTools = filtered
 			}
 			if msg.payload.Phase == "done" {
+				// Snapshot the final iteration before clearing progress.
+				// This handles the case where PhaseDone arrives before
+				// handleAgentMessage (e.g. agent error/cancel).
+				if m.lastSeenIteration >= 0 {
+					alreadySnapped := false
+					for _, s := range m.iterationHistory {
+						if s.Iteration == m.lastSeenIteration {
+							alreadySnapped = true
+							break
+						}
+					}
+					if !alreadySnapped {
+						var finalTools []CLIToolProgress
+						// Check progress.CompletedTools first (set by progressFinalizer)
+						for _, t := range msg.payload.CompletedTools {
+							if t.Iteration == m.lastSeenIteration {
+						finalTools = append(finalTools, t)
+							}
+						}
+						// Also include any from lastCompletedTools (race safety)
+						for _, t := range m.lastCompletedTools {
+							if t.Iteration == m.lastSeenIteration {
+						dup := false
+						for _, existing := range finalTools {
+							if existing.Name == t.Name && existing.Label == t.Label {
+								dup = true
+								break
+							}
+						}
+						if !dup {
+							finalTools = append(finalTools, t)
+						}
+							}
+						}
+						if len(finalTools) > 0 {
+							m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Tools:     finalTools,
+							})
+						}
+					}
+				}
+				// Generate tool_summary if we have iteration history and no
+				// handleAgentMessage will follow (agent error/cancel case).
+				if len(m.iterationHistory) > 0 {
+					toolMsg := cliMessage{
+						role:       "tool_summary",
+						content:    "",
+						timestamp:  time.Now(),
+						iterations: append([]cliIterationSnapshot{}, m.iterationHistory...),
+						dirty:      true,
+					}
+					insertIdx := len(m.messages) - 1
+					if insertIdx < 0 {
+						insertIdx = 0
+					}
+					m.messages = append(m.messages[:insertIdx], append([]cliMessage{toolMsg}, m.messages[insertIdx:]...)...)
+					m.renderCacheValid = false
+				}
+				// Reset all iteration tracking state
+				m.lastCompletedTools = nil
+				m.iterationHistory = nil
+				m.lastSeenIteration = 0
+				m.typingStartTime = time.Time{}
+				m.todos = nil
+				m.todosDoneCleared = false
 				m.progress = nil
+				m.typing = false
 			}
 		}
 		m.updateViewportContent()

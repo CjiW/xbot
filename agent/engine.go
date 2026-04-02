@@ -361,18 +361,27 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// 确保 Run() 退出时总是发送 PhaseDone 事件，防止 CLI 进度卡在 spinner
 	if structuredProgress != nil {
-		progressFinalizer = func() {
-			structuredProgress.Phase = PhaseDone
-			structuredProgress.ActiveTools = nil
-			if autoNotify && cfg.ProgressEventHandler != nil {
-				cfg.ProgressEventHandler(&ProgressEvent{
-					Lines:      copyLines(progressLines),
-					Structured: structuredProgress,
-					Timestamp:  time.Now(),
-				})
+			progressFinalizer = func() {
+				// Migrate any completed/errored tools from ActiveTools to CompletedTools
+				// so they are preserved even on abnormal exit.
+				if len(structuredProgress.ActiveTools) > 0 {
+					for _, t := range structuredProgress.ActiveTools {
+						if t.Status == ToolDone || t.Status == ToolError {
+							structuredProgress.CompletedTools = append(structuredProgress.CompletedTools, t)
+						}
+					}
+					structuredProgress.ActiveTools = nil
+				}
+				structuredProgress.Phase = PhaseDone
+				if autoNotify && cfg.ProgressEventHandler != nil {
+					cfg.ProgressEventHandler(&ProgressEvent{
+						Lines:      copyLines(progressLines),
+						Structured: structuredProgress,
+						Timestamp:  time.Now(),
+					})
+				}
 			}
-		}
-		defer progressFinalizer()
+			defer progressFinalizer()
 	}
 
 	// --- 进度通知 ---

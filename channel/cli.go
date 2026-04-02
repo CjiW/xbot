@@ -238,6 +238,38 @@ func truncateToWidth(s string, maxWidth int) string {
 	return s
 }
 
+// truncateRunes truncates a line to maxW display columns, preserving ANSI escape
+// sequences and handling wide runes correctly. Uses runewidth for display width.
+func truncateRunes(line string, maxW int) string {
+	if lipgloss.Width(line) <= maxW {
+		return line
+	}
+	var buf strings.Builder
+	w := 0
+	inEscape := false
+	for _, r := range line {
+		if r == '\x1b' {
+			inEscape = true
+			buf.WriteRune(r)
+			continue
+		}
+		if inEscape {
+			buf.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxW {
+			break
+		}
+		buf.WriteRune(r)
+		w += rw
+	}
+	return buf.String()
+}
+
 // newGlamourRenderer creates a glamour Markdown renderer with Document.Margin
 // set to 0 (the default dark style uses Margin=2 which misaligns when lipgloss
 // re-wraps lines inside a narrower bubble).
@@ -2373,7 +2405,19 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 // setViewportContent sets viewport content while preserving scroll position.
 // If the user was at the bottom before the update, keep them at the bottom.
+// Lines wider than the viewport are truncated to prevent layout breakage.
 func (m *cliModel) setViewportContent(content string) {
+	// Truncate lines that exceed viewport width to prevent layout corruption.
+	// This handles mermaid diagrams, wide tables, and any other over-wide content.
+	if m.width > 0 {
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			if lipgloss.Width(line) > m.width {
+				lines[i] = truncateRunes(line, m.width)
+			}
+		}
+		content = strings.Join(lines, "\n")
+	}
 	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(content)
 	if atBottom {

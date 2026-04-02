@@ -174,12 +174,19 @@ var (
 )
 
 // ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
-// 无效名称回退到 midnight。
+// 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
+var themeChangeCh = make(chan struct{}, 1)
+
 func ApplyTheme(name string) {
 	if t, ok := themeRegistry[name]; ok {
 		currentTheme = t
 	} else {
 		currentTheme = &themeMidnight
+	}
+	// Non-blocking send; if model is already processing a theme change, skip.
+	select {
+	case themeChangeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -804,6 +811,8 @@ type cliModel struct {
 	typing          bool                  // agent 是否正在回复
 	msgBus          *bus.MessageBus       // 消息总线引用
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
+	newContentHint  bool                 // 有新内容但用户未在底部（显示 ↓ 提示）
+	tempStatus      string               // 临时状态提示（自动过期）
 
 	// 进度信息
 	progress          *CLIProgressPayload
@@ -974,6 +983,9 @@ type cliProgressMsg struct {
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 
+// cliTempStatusClearMsg 临时状态提示自动清除
+type cliTempStatusClearMsg struct{}
+
 // cliUpdateCheckMsg 更新检查结果消息
 type cliUpdateCheckMsg struct {
 	info *version.UpdateInfo
@@ -1030,6 +1042,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// 主题变更通知：重建 glamour 渲染器 + 失效缓存
+	select {
+	case <-themeChangeCh:
+		if m.width > 4 {
+		m.renderer = newGlamourRenderer(m.width - 4)
+		}
+		m.renderCacheValid = false
+		for i := range m.messages {
+		m.messages[i].dirty = true
+		}
+		m.updateViewportContent()
+	default:
+	}
+
 	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
 		handled, newModel, cmd := m.updatePanel(key)
@@ -1045,8 +1071,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 			return m, nil
 		case "end":
-			m.viewport.GotoBottom()
-			return m, nil
+				m.viewport.GotoBottom()
+				m.newContentHint = false
+				return m, nil
 		}
 	}
 
@@ -1056,13 +1083,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Ctrl+O 切换 tool summary 展开/折叠（同上，兼容 CSI u 协议）
+	// Ctrl+O 切换 tool summary 展开/折叠（CSI u 协议兼容层，kitty/Ghostty 等）
 	if isCtrlO(msg) {
 		m.toolSummaryExpanded = !m.toolSummaryExpanded
 		m.renderCacheValid = false
 		m.cachedHistory = ""
 		for i := range m.messages {
-			m.messages[i].dirty = true
+		m.messages[i].dirty = true
 		}
 		m.updateViewportContent()
 		return m, nil
@@ -1070,6 +1097,51 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// §9 Ctrl+K 确认模式：必须在 switch msg.Type 之前拦截所有按键
+		if m.confirmDelete > 0 {
+		groups := visibleMsgGroupIndices(m.messages)
+		switch msg.String() {
+		case "y", "Y":
+			// 确认删除：根据 group 索引截断
+			if m.confirmDelete > len(groups) {
+			m.confirmDelete = len(groups)
+			}
+			cutIdx := groups[len(groups)-m.confirmDelete]
+			m.messages = m.messages[:cutIdx]
+			m.confirmDelete = 0
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			m.updateViewportContent()
+			return m, nil
+		case "n", "N":
+			// 取消删除
+			m.confirmDelete = 0
+			m.renderCacheValid = false
+			m.updateViewportContent()
+			return m, nil
+		default:
+			// 检查数字键（调整删除数量）
+			if msg.Type == tea.KeyRunes {
+			runes := msg.Runes
+			if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
+				newDel := int(runes[0] - '0')
+				if newDel > len(groups) {
+				newDel = len(groups)
+				}
+				m.confirmDelete = newDel
+				m.renderCacheValid = false
+				m.updateViewportContent()
+				return m, nil
+			}
+			}
+			// 其他键也取消（包括 Esc）
+			m.confirmDelete = 0
+			m.renderCacheValid = false
+			m.updateViewportContent()
+			return m, nil
+		}
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
@@ -1104,6 +1176,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
+				if m.textarea.Value() != "" {
+					m.tempStatus = "... waiting for previous operation to complete..."
+					return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
+				}
 				return m, nil
 			}
 			// §8b @ 模式：Enter 进入目录或确认文件
@@ -1135,8 +1211,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.todosDoneCleared = true
 				}
 				m.sendMessage(content)
-				m.textarea.Reset()
-				m.viewport.GotoBottom()
+					m.textarea.Reset()
+					m.viewport.GotoBottom()
+					m.newContentHint = false
 			}
 			if m.typing {
 				cmds = append(cmds, tickCmd())
@@ -1158,16 +1235,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				groups := visibleMsgGroupIndices(m.messages)
 				defaultDel := 2
 				if defaultDel > len(groups) {
-					defaultDel = len(groups)
+				defaultDel = len(groups)
 				}
 				m.confirmDelete = defaultDel
 				m.renderCacheValid = false
 				m.updateViewportContent()
+			} else if !m.typing {
+				m.tempStatus = "[!] no messages to delete"
+				return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
 			}
 			return m, nil
 
 		case tea.KeyCtrlO:
-			// §11 Ctrl+O 切换 tool summary 展开/折叠
+			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 			m.toolSummaryExpanded = !m.toolSummaryExpanded
 			m.renderCacheValid = false
 			m.cachedHistory = ""
@@ -1176,54 +1256,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportContent()
 			return m, nil
-		}
+		} // end switch msg.Type
 
-		// §9 Ctrl+K 确认模式：拦截字母和数字键
-		if m.confirmDelete > 0 {
-			groups := visibleMsgGroupIndices(m.messages)
-			switch msg.String() {
-			case "y", "Y":
-				// 确认删除：根据 group 索引截断
-				if m.confirmDelete > len(groups) {
-					m.confirmDelete = len(groups)
-				}
-				cutIdx := groups[len(groups)-m.confirmDelete]
-				m.messages = m.messages[:cutIdx]
-				m.confirmDelete = 0
-				m.renderCacheValid = false
-				m.cachedHistory = ""
-				m.updateViewportContent()
-				return m, nil
-			case "n", "N":
-				// 取消删除
-				m.confirmDelete = 0
-				m.renderCacheValid = false
-				m.updateViewportContent()
-				return m, nil
-			default:
-				// 检查数字键（调整删除数量）
-				if msg.Type == tea.KeyRunes {
-					runes := msg.Runes
-					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
-						newDel := int(runes[0] - '0')
-						if newDel > len(groups) {
-							newDel = len(groups)
-						}
-						m.confirmDelete = newDel
-						m.renderCacheValid = false
-						m.updateViewportContent()
-						return m, nil
-					}
-				}
-				// 其他键也取消（包括 Esc）
-				m.confirmDelete = 0
-				m.renderCacheValid = false
-				m.updateViewportContent()
-				return m, nil
-			}
-		}
-
-	case tea.WindowSizeMsg:
+		case tea.WindowSizeMsg:
 		// 窗口大小变化 - 动态调整布局
 		m.handleResize(msg.Width, msg.Height)
 
@@ -1361,9 +1396,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliTickMsg:
 		if m.typing || m.progress != nil {
-			cmds = append(cmds, tickCmd())
-			m.updateViewportContent()
+		cmds = append(cmds, tickCmd())
+		m.updateViewportContent()
 		}
+
+	case cliTempStatusClearMsg:
+		m.tempStatus = ""
 
 	case cliUpdateCheckMsg:
 		m.checkingUpdate = false
@@ -1427,11 +1465,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compIdx = 0
 		m.fileCompActive = false
 		// 用户手动输入：根据当前 @ prefix 重新 glob
-		if ok, prefix := detectAtPrefix(newVal); ok {
-			m.populateFileCompletions(prefix)
-		} else {
-			m.fileCompletions = nil
-			m.fileCompIdx = 0
+		// 但如果 fileCompActive（Tab 循环中），不重新 glob
+		if !m.fileCompActive {
+			if ok, prefix := detectAtPrefix(newVal); ok {
+				m.populateFileCompletions(prefix)
+			} else {
+				m.fileCompletions = nil
+				m.fileCompIdx = 0
+			}
 		}
 	}
 
@@ -1479,14 +1520,107 @@ func (m *cliModel) handleResize(width, height int) {
 		m.messages[i].dirty = true
 	}
 
-	// 更新内容
+	// 更新内容（保持用户滚动位置）
+	wasAtBottom := m.viewport.AtBottom()
 	m.updateViewportContent()
-
-	// Resize 后始终滚到底部（无论之前用户是否上滚）
-	m.viewport.GotoBottom()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // calculateProgressHeight returns 0 — progress is now rendered inside the viewport.
+
+// panelWidth returns a width suitable for panel textareas,
+// adapting to the current terminal width (with sensible bounds).
+func (m *cliModel) panelWidth(want int) int {
+	maxW := m.width - 8 // room for panel border + padding
+	if want > maxW {
+		return maxW
+	}
+	if want < 30 {
+		return 30
+	}
+	return want
+}
+
+// renderCompletionsHint returns the dynamic border color and completions hint string
+// based on the current input content (slash commands, @ file references, etc.).
+func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipgloss.Color, hint string) {
+borderColor = lipgloss.Color(currentTheme.Accent)
+
+if strings.HasPrefix(inputValue, "!") {
+borderColor = lipgloss.Color(currentTheme.Error)
+return
+}
+
+if strings.HasPrefix(inputValue, "/") {
+borderColor = lipgloss.Color(currentTheme.Success)
+if len(m.completions) > 0 {
+parts := make([]string, len(m.completions))
+for i, c := range m.completions {
+if i == m.compIdx {
+parts[i] = lipgloss.NewStyle().
+Bold(true).Underline(true).
+Foreground(lipgloss.Color(currentTheme.Success)).
+Render(c)
+} else {
+parts[i] = lipgloss.NewStyle().
+Foreground(lipgloss.Color(currentTheme.Success)).
+Render(c)
+}
+}
+hint = lipgloss.NewStyle().Padding(0, 1).Render(strings.Join(parts, " · "))
+} else {
+var matches []string
+for _, cmd := range cliCommands {
+if strings.HasPrefix(cmd, inputValue) {
+matches = append(matches, cmd)
+}
+}
+if len(matches) > 0 {
+hint = lipgloss.NewStyle().
+Foreground(lipgloss.Color(currentTheme.Success)).
+Padding(0, 1).
+Render("[Tab] " + strings.Join(matches, " · "))
+}
+}
+return
+}
+
+// @ file reference
+rawInput := m.textarea.Value()
+if ok, _ := detectAtPrefix(rawInput); ok {
+borderColor = lipgloss.Color(currentTheme.Info)
+if len(m.fileCompletions) > 0 {
+parts := make([]string, len(m.fileCompletions))
+for i, c := range m.fileCompletions {
+if isDir(c) {
+c += "/"
+}
+if i == m.fileCompIdx {
+parts[i] = lipgloss.NewStyle().
+Bold(true).Underline(true).
+Foreground(lipgloss.Color(currentTheme.Info)).
+Render(c)
+} else {
+parts[i] = lipgloss.NewStyle().
+Foreground(lipgloss.Color(currentTheme.Info)).
+Render(c)
+}
+}
+hint = lipgloss.NewStyle().Padding(0, 1).
+Render("[Tab] " + strings.Join(parts, " · "))
+} else {
+hint = lipgloss.NewStyle().
+Foreground(lipgloss.Color(currentTheme.TextMuted)).
+Padding(0, 1).
+Render("[Tab] 无匹配文件")
+}
+return
+}
+
+return
+}
 func (m *cliModel) calculateProgressHeight() int {
 	return 0
 }
@@ -1519,83 +1653,7 @@ func (m *cliModel) View() string {
 		// 输入框样式：根据输入内容动态设置边框颜色
 		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
 	inputValue := strings.TrimSpace(m.textarea.Value())
-	borderColor := lipgloss.Color(currentTheme.Accent)
-	var completionsHint string
-
-	if strings.HasPrefix(inputValue, "!") {
-		borderColor = lipgloss.Color(currentTheme.Error)
-	} else if strings.HasPrefix(inputValue, "/") {
-		borderColor = lipgloss.Color(currentTheme.Success)
-		// 补全候选提示：与 Tab 补全共享状态
-		if len(m.completions) > 0 {
-			// Tab 已激活：高亮当前选中项
-			parts := make([]string, len(m.completions))
-			for i, c := range m.completions {
-				if i == m.compIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).
-						Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
-				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
-				}
-			}
-			completionsHint = lipgloss.NewStyle().
-				Padding(0, 1).
-				Render(strings.Join(parts, " · "))
-		} else {
-			// 尚未按 Tab：显示潜在匹配
-			var matches []string
-			for _, cmd := range cliCommands {
-				if strings.HasPrefix(cmd, inputValue) {
-					matches = append(matches, cmd)
-				}
-			}
-			if len(matches) > 0 {
-				completionsHint = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.Success)).
-					Padding(0, 1).
-					Render("[Tab] " + strings.Join(matches, " · "))
-			}
-		}
-	}
-
-	// §8b @ 文件引用补全提示（只展示，不做 glob）
-	rawInput := m.textarea.Value()
-	if ok, _ := detectAtPrefix(rawInput); ok {
-		borderColor = lipgloss.Color(currentTheme.Info)
-		if len(m.fileCompletions) > 0 {
-			parts := make([]string, len(m.fileCompletions))
-			for i, c := range m.fileCompletions {
-				if isDir(c) {
-					c += "/"
-				}
-				if i == m.fileCompIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).
-						Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
-				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Info)).
-						Render(c)
-				}
-			}
-			completionsHint = lipgloss.NewStyle().
-				Padding(0, 1).
-				Render("[Tab] " + strings.Join(parts, " · "))
-		} else {
-			// 无匹配文件
-			completionsHint = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.TextMuted)).
-				Padding(0, 1).
-				Render("[Tab] 无匹配文件")
-		}
-	}
+	borderColor, completionsHint := m.renderCompletionsHint(inputValue)
 
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1648,6 +1706,15 @@ func (m *cliModel) View() string {
 		)
 	}
 
+	// 动态 placeholder：处理中 vs 就绪
+	if m.typing {
+		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
+		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	} else if m.textarea.Placeholder == "[Processing...] (Ctrl+C to cancel)" {
+		m.textarea.Placeholder = "Enter send · Ctrl+J newline · /help"
+		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	}
+
 	// 进度状态栏
 	var status string
 	if m.typing || m.progress != nil {
@@ -1659,8 +1726,26 @@ func (m *cliModel) View() string {
 		// 显示补全候选提示
 		status = completionsHint
 	} else {
-		status = readyStatusStyle.Render("● ready")
-	}
+			status = readyStatusStyle.Render("● ready")
+		}
+		// 临时状态提示（自动过期）
+		if m.tempStatus != "" {
+			ts := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(m.tempStatus)
+			if status != "" {
+				status += "  " + ts
+			} else {
+				status = ts
+			}
+		}
+		// 新消息提示：用户上滚且有新内容时显示
+		if m.newContentHint {
+			hint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info)).Render("↓ new content")
+			if status != "" {
+				status += "  " + hint
+			} else {
+				status = hint
+			}
+		}
 
 	// 组装界面
 	// §12 Panel mode: render panel overlay instead of normal input
@@ -2226,21 +2311,27 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/help":
 		helpContent := `可用命令：
-		  /cancel    - 取消当前正在执行的操作
-		  /clear     - 清空聊天记录
-		  /compact   - 压缩上下文（减少 token 使用）
-		  /model     - 切换模型（用法: /model <模型名>）
-		  /models    - 列出可用模型
-		  /context   - 查看上下文信息
-		  /new       - 开始新会话
-		  /settings  - 打开设置面板
-		  /setup     - 重新运行初始配置引导
-		  /update    - 检查更新
-		  /exit      - 退出 CLI
-		  /help      - 显示此帮助信息
+  /cancel    - 取消当前正在执行的操作
+  /clear     - 清空聊天记录
+  /compact   - 压缩上下文（减少 token 使用）
+  /model     - 切换模型（用法: /model <模型名>）
+  /models    - 列出可用模型
+  /context   - 查看上下文信息
+  /new       - 开始新会话
+  /settings  - 打开设置面板
+  /setup     - 重新运行初始配置引导
+  /update    - 检查更新
+  /exit      - 退出 CLI
+  /help      - 显示此帮助信息
 
 快捷键：
-  Ctrl+C/Esc - 有迭代时中止，无迭代时清空输入`
+  Ctrl+C/Esc   - 有迭代时中止，无迭代时清空输入
+  Enter        - 发送消息
+  Ctrl+J       - 输入框内换行
+  Tab          - 命令/文件路径补全
+  Ctrl+O       - 展开/折叠工具详情
+  Ctrl+K       - 上下文删除
+  Home/End     - 跳到顶部/底部`
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
 			content:   helpContent,
@@ -2440,6 +2531,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 						timestamp: time.Now(),
 						dirty:     true,
 					})
+					m.typing = false
+					m.inputReady = true
+					m.resetProgressState()
 					m.updateViewportContent()
 				})
 				return
@@ -2956,6 +3050,9 @@ func (m *cliModel) setViewportContent(content string) {
 	m.viewport.SetContent(content)
 	if atBottom {
 		m.viewport.GotoBottom()
+		m.newContentHint = false
+	} else {
+		m.newContentHint = true
 	}
 }
 
@@ -3220,7 +3317,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	// Pre-create textarea for editing
 	ta := textarea.New()
 	ta.Placeholder = "输入新值..."
-	ta.SetWidth(60)
+	ta.SetWidth(m.panelWidth(60))
 	ta.SetHeight(1)
 	ta.CharLimit = 200
 	m.panelEditTA = ta
@@ -3259,7 +3356,7 @@ func (m *cliModel) openSetupPanel() {
 		}
 		msg := "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
 		if vals["memory_provider"] == "letta" {
-			msg += "\n\n⚠️ letta 记忆模式需要 embedding 服务：\n  1. 安装 Ollama: https://ollama.ai\n  2. 拉取 embedding 模型: `ollama pull nomic-embed-text`\n  3. 确保在配置或环境变量中设置了 embedding endpoint"
+			msg += "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env"
 		}
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
@@ -3306,7 +3403,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 	ta.BlurredStyle.Text = lipgloss.NewStyle()
 	ta.CharLimit = 0
-	ta.SetWidth(50)
+	ta.SetWidth(m.panelWidth(50))
 	ta.SetHeight(3)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	ta.Focus()
@@ -3316,7 +3413,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ti.Placeholder = "Type here..."
 	ti.Prompt = ""
 	ti.CharLimit = 200
-	ti.Width = 40
+	ti.Width = m.panelWidth(40)
 	ti.PromptStyle = lipgloss.NewStyle()
 	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
@@ -3418,7 +3515,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
@@ -3505,7 +3602,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
@@ -3522,7 +3619,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
 				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 				ta.CharLimit = 0
-				ta.SetWidth(50)
+				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()

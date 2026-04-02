@@ -35,8 +35,6 @@ type UpdateInfo struct {
 // semverRegex matches semantic versioning patterns like v1.2.3, 1.2.3, v1.2.3-rc1, etc.
 var semverRegex = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
 
-
-
 // parseSemver extracts major, minor, patch from a version string.
 // Returns -1,-1,-1 if the string doesn't match semver.
 func parseSemver(v string) (major, minor, patch int) {

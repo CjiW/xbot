@@ -46,7 +46,7 @@ func TestFormatBgTaskCompletion_WithError(t *testing.T) {
 	task := &BackgroundTask{
 		ID:         "err1",
 		Command:    "false",
-		Status:     BgTaskDone, // failed tasks also use BgTaskDone + Error field
+		Status:     BgTaskError,
 		StartedAt:  now,
 		FinishedAt: &finished,
 		ExitCode:   1,
@@ -56,6 +56,9 @@ func TestFormatBgTaskCompletion_WithError(t *testing.T) {
 
 	result := FormatBgTaskCompletion(task)
 
+	if !strings.Contains(result, "failed") {
+		t.Error("should say 'failed' for error status")
+	}
 	if !strings.Contains(result, "Error: exit status 1") {
 		t.Error("missing error")
 	}
@@ -122,28 +125,62 @@ func TestFormatBgTaskCompletion_SmallOutputNotTruncated(t *testing.T) {
 	}
 }
 
-func TestFormatBgTaskCompletion_NegativeExitCode(t *testing.T) {
-	// Killed processes may have -1 exit code
+func TestFormatBgTaskCompletion_Killed(t *testing.T) {
 	now := time.Now()
 	finished := now.Add(1 * time.Second)
 	task := &BackgroundTask{
 		ID:         "kill1",
 		Command:    "sleep 999",
-		Status:     BgTaskDone,
+		Status:     BgTaskKilled,
 		StartedAt:  now,
 		FinishedAt: &finished,
 		ExitCode:   -1,
-		Error:      "signal: killed",
+		Error:      "killed by user",
 		Output:     "",
 	}
 
 	result := FormatBgTaskCompletion(task)
 
-	// Negative exit code should not print "Exit Code: -1"
-	if strings.Contains(result, "Exit Code: -1") {
-		t.Error("should not show negative exit code")
+	if !strings.Contains(result, "killed by user") {
+		t.Error("should say 'killed by user'")
 	}
-	if !strings.Contains(result, "signal: killed") {
-		t.Error("missing error")
+	if !strings.Contains(result, "Exit Code: -1") {
+		t.Error("should show negative exit code for killed tasks")
+	}
+	if !strings.Contains(result, "Status: killed") {
+		t.Error("should show killed status")
+	}
+}
+
+func TestFormatBgTaskCompletion_AlwaysShowsExitCode(t *testing.T) {
+	now := time.Now()
+	finished := now.Add(1 * time.Second)
+	task := &BackgroundTask{
+		ID:         "ok1",
+		Command:    "echo hi",
+		Status:     BgTaskDone,
+		StartedAt:  now,
+		FinishedAt: &finished,
+		ExitCode:   0,
+		Output:     "hi\n",
+	}
+
+	result := FormatBgTaskCompletion(task)
+
+	if !strings.Contains(result, "Exit Code: 0") {
+		t.Error("should always show exit code, even for success")
+	}
+}
+
+func TestFormatBgTaskCompletion_NilFinishedAt(t *testing.T) {
+	task := &BackgroundTask{
+		ID:        "still",
+		Command:   "sleep 999",
+		Status:    BgTaskRunning,
+		StartedAt: time.Now(),
+	}
+	result := FormatBgTaskCompletion(task)
+	if result != "" {
+		t.Errorf("should return empty string for task without FinishedAt, got: %q", result)
 	}
 }

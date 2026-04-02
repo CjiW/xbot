@@ -301,6 +301,9 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 // SessionKey returns the session key this task belongs to.
 func (t *BackgroundTask) SessionKey() string { return t.sessionKey }
 
+// IsKilled returns true if the task was killed by the user.
+func (t *BackgroundTask) IsKilled() bool { return t.killed }
+
 // Status returns the current state of a task.
 func (m *BackgroundTaskManager) Status(taskID string) (*BackgroundTask, error) {
 	m.mu.RLock()

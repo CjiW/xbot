@@ -172,16 +172,26 @@ func formatTask(task *BackgroundTask) string {
 // FormatBgTaskCompletion formats a completed background task notification for injection.
 // This is used by the engine to inject the task result into the conversation as a tool message.
 func FormatBgTaskCompletion(task *BackgroundTask) string {
+	if task.FinishedAt == nil {
+		return ""
+	}
 	elapsed := task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[System Notification] Background task %s completed.\n", task.ID)
+	switch task.Status {
+	case BgTaskKilled:
+		fmt.Fprintf(&sb, "[System Notification] Background task %s killed by user.\n", task.ID)
+	case BgTaskError:
+		fmt.Fprintf(&sb, "[System Notification] Background task %s failed.\n", task.ID)
+	default:
+		fmt.Fprintf(&sb, "[System Notification] Background task %s completed.\n", task.ID)
+	}
 	fmt.Fprintf(&sb, "Command: %s\n", task.Command)
 	fmt.Fprintf(&sb, "Status: %s | Elapsed: %s\n", task.Status, elapsed)
 
-	if task.ExitCode >= 0 {
-		fmt.Fprintf(&sb, "Exit Code: %d\n", task.ExitCode)
-	}
+	// Always show exit code (including -1 for killed, non-zero for errors)
+	fmt.Fprintf(&sb, "Exit Code: %d\n", task.ExitCode)
+
 	if task.Error != "" {
 		fmt.Fprintf(&sb, "Error: %s\n", task.Error)
 	}

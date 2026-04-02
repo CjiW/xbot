@@ -46,7 +46,7 @@ resolve_version() {
     local tag
     tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
     if [ -z "$tag" ]; then
-        error "Failed to determine latest version. Set VERSION env var explicitly, e.g.: VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash"
+        error "Failed to determine latest version. Set VERSION env var explicitly, e.g.: VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/${REPO}/master/scripts/install.sh | bash"
     fi
     echo "$tag"
 }

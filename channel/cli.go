@@ -684,7 +684,7 @@ type cliModel struct {
 	// --- §8b @ 文件引用补全 ---
 	fileCompletions []string // @ 文件路径补全候选项
 	fileCompIdx     int      // 当前选中的文件补全索引
-	fileCompPrefix  string   // 当前 fileCompletions 对应的 glob 前缀，用于判断是否需要重新 glob
+	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
 	attachedFiles   []string // 当前输入中 @ 引用的文件路径
 
 	// --- §9 Ctrl+K 上下文编辑 ---
@@ -1138,9 +1138,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if newVal != prevText {
 				m.completions = nil
 				m.compIdx = 0
-				m.fileCompletions = nil
-				m.fileCompIdx = 0
-				// 不重置 fileCompPrefix，让 view 通过 prefix 不匹配触发重新 glob
+				m.fileCompActive = false
+				// 用户手动输入：根据当前 @ prefix 重新 glob
+				if ok, prefix := detectAtPrefix(newVal); ok {
+					m.populateFileCompletions(prefix)
+				} else {
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
+				}
 			}
 
 	// 检查是否需要退出
@@ -1268,16 +1273,10 @@ func (m *cliModel) View() string {
 			}
 		}
 
-		// §8b @ 文件引用补全提示
+		// §8b @ 文件引用补全提示（只展示，不做 glob）
 			rawInput := m.textarea.Value()
-			atOk, atPrefix := detectAtPrefix(rawInput)
-			if atOk {
+			if ok, _ := detectAtPrefix(rawInput); ok {
 				borderColor = lipgloss.Color(currentTheme.Info)
-				// prefix 变化或候选为空时重新 glob
-				if atPrefix != m.fileCompPrefix || len(m.fileCompletions) == 0 {
-					m.populateFileCompletions(atPrefix)
-					m.fileCompPrefix = atPrefix
-				}
 				if len(m.fileCompletions) > 0 {
 					parts := make([]string, len(m.fileCompletions))
 					for i, c := range m.fileCompletions {
@@ -1643,15 +1642,15 @@ func (m *cliModel) populateFileCompletions(prefix string) {
 
 // handleFileTabComplete 处理 @ 文件路径 Tab 补全
 func (m *cliModel) handleFileTabComplete(input string, prefix string) {
-	if len(m.fileCompletions) == 0 || prefix != m.fileCompPrefix {
-		// prefix 变了或候选被清空，重新 glob
+	if !m.fileCompActive || len(m.fileCompletions) == 0 {
+		// 首次 Tab 或候选被清空：glob 并进入循环模式
 		m.populateFileCompletions(prefix)
-		m.fileCompPrefix = prefix
 		if len(m.fileCompletions) == 0 {
 			return
 		}
+		m.fileCompActive = true
 	} else {
-		// prefix 没变，循环
+		// 循环模式：切换到下一个候选
 		m.fileCompIdx = (m.fileCompIdx + 1) % len(m.fileCompletions)
 	}
 
@@ -1660,7 +1659,6 @@ func (m *cliModel) handleFileTabComplete(input string, prefix string) {
 		selected += "/"
 	}
 	atStart := len(input) - len(prefix) - 1
-	// 不加空格，保持 @path 状态以便连续 Tab 循环
 	newInput := input[:atStart] + "@" + selected
 	m.textarea.SetValue(newInput)
 }

@@ -946,11 +946,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_, prefix := detectAtPrefix(input)
 					atStart := len(input) - len(prefix) - 1
 					if isDir(selected) {
-						// 目录：进入下一层，重新 glob
-						newInput := input[:atStart] + "@" + selected + "/"
-						m.textarea.SetValue(newInput)
-						m.fileCompActive = false // 退出循环，让 text-change 触发 glob
-					} else {
+											// 目录：进入下一层，手动触发 glob
+											newInput := input[:atStart] + "@" + selected + "/"
+											m.textarea.SetValue(newInput)
+											m.fileCompActive = false
+											m.populateFileCompletions(selected + "/")
+										} else {
 						// 文件：加空格退出 @ 模式
 						newInput := input[:atStart] + "@" + selected + " "
 						m.textarea.SetValue(newInput)

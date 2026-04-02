@@ -493,7 +493,7 @@ func TestRegistry_GetBuiltinToolNames(t *testing.T) {
 }
 
 func TestDefaultRegistry_ContainsLoadMCPToolsUsage(t *testing.T) {
-	registry := DefaultRegistry()
+	registry := DefaultRegistry("letta")
 	tool, ok := registry.Get("load_tools")
 	if !ok {
 		t.Error("DefaultRegistry should contain load_tools tool")
@@ -591,7 +591,7 @@ func TestRegistry_AsDefinitionsForSession_ActivatedGlobalMCPToolHasFullParams(t 
 }
 
 func TestDefaultRegistry_CoreToolsAlwaysInDefinitions(t *testing.T) {
-	registry := DefaultRegistry()
+	registry := DefaultRegistry("letta")
 	defs := registry.AsDefinitions()
 
 	// Note: Cron, DownloadFile, WebSearch are now registered separately with dependency injection in main.go

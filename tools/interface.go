@@ -132,6 +132,7 @@ type Registry struct {
 	maxIdleRounds    int64                       // 连续多少轮未使用后自动失效
 	sessionMCPMgr    SessionMCPManagerProvider   // 会话MCP管理器提供者
 	globalMCPCatalog []MCPServerCatalogEntry     // 全局 MCP Server 目录（由 MCPManager.RegisterTools 设置）
+	flatMode         bool                        // flat memory 模式：所有工具均为核心，无需 load_tools
 }
 
 // NewRegistry 创建工具注册表
@@ -145,11 +146,23 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register 注册工具（非核心，需通过 load_tools 激活后才出现在 tool definitions 中）
+// SetFlatMode 设置 flat memory 模式。
+// flat 模式下所有工具均为核心工具，无需 load_tools 激活，永不过期。
+func (r *Registry) SetFlatMode(flat bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.flatMode = flat
+}
+
+// Register 注册工具（非核心，需通过 load_tools 激活后才出现在 tool definitions 中）。
+// flat 模式下等同于 RegisterCore。
 func (r *Registry) Register(tool Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.globalTools[tool.Name()] = tool
+	if r.flatMode {
+		r.coreTools[tool.Name()] = true
+	}
 }
 
 // RegisterCore 注册核心工具（始终出现在 tool definitions 中，无需激活）
@@ -565,10 +578,14 @@ func (r *Registry) GetToolSchemasForChannel(sessionKey string, toolNames []strin
 
 // DefaultRegistry 创建包含默认工具的注册表
 // 核心工具（RegisterCore）始终在 tool definitions 中；其余需通过 load_tools 激活。
+// flat 模式下所有工具均为核心工具，不注册 LoadToolsTool。
 // 注意：CronTool 需要依赖注入，不在默认注册表中，需单独注册
-func DefaultRegistry() *Registry {
+func DefaultRegistry(memoryProvider string) *Registry {
 	r := NewRegistry()
-	// 核心工具：基础文件/系统操作 + 工具加载器，始终可用
+	if memoryProvider == "flat" {
+		r.SetFlatMode(true)
+	}
+	// 核心工具：基础文件/系统操作，始终可用
 	r.RegisterCore(&ShellTool{})
 	r.RegisterCore(&CdTool{})
 	r.RegisterCore(&GlobTool{})
@@ -576,7 +593,6 @@ func DefaultRegistry() *Registry {
 	r.RegisterCore(&ReadTool{})
 	r.RegisterCore(&FileCreateTool{})
 	r.RegisterCore(&FileReplaceTool{})
-	r.RegisterCore(&LoadToolsTool{})
 	r.RegisterCore(&SubAgentTool{})
 	r.RegisterCore(&SkillTool{})
 	// CronTool 需要依赖注入，需在 agent 初始化后单独注册
@@ -584,5 +600,9 @@ func DefaultRegistry() *Registry {
 	// WebSearch: always available (requires TAVILY_API_KEY)
 	r.RegisterCore(NewFetchTool())
 	r.RegisterCore(&AskUserTool{})
+	// LoadToolsTool 仅在 letta 模式下注册（flat 模式所有工具直接可用）
+	if memoryProvider != "flat" {
+		r.RegisterCore(&LoadToolsTool{})
+	}
 	return r
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xbot/bus"
@@ -279,9 +280,14 @@ type Agent struct {
 	// bgTaskMgr manages background shell tasks (shared across all sessions)
 	bgTaskMgr *tools.BackgroundTaskManager
 
-	// bgRunCh routes bg task completion notifications to an active Run() call.
-	// Set by buildMainRunConfig when a Run is active; cleared after Run returns.
-	bgRunCh chan *tools.BackgroundTask
+	// bgRunActive is atomically set to 1 when a Run is active and consuming bg notifications,
+	// 0 when idle. Used by bgNotifyLoop to decide routing.
+	bgRunActive int32
+
+	// bgRunPending buffers bg task notifications that arrived during an active Run.
+	// The Run loop drains these between iterations.
+	bgRunPending   []*tools.BackgroundTask
+	bgRunPendingMu sync.Mutex
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -700,7 +706,6 @@ func New(cfg Config) *Agent {
 			tools.NewTimingHook(),
 		),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
-		bgRunCh:   make(chan *tools.BackgroundTask, 16),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
@@ -1413,22 +1418,19 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
-	// Enable bg task notification injection into this Run loop.
-	// bgNotifyLoop will non-block send to bgRunCh; Run loop non-block drains between iterations.
-	cfg.BgNotifyCh = a.bgRunCh
+	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
+	atomic.StoreInt32(&a.bgRunActive, 1)
 	out := Run(ctx, cfg)
-	// Drain any remaining bg notifications that arrived after Run's last drain.
+	atomic.StoreInt32(&a.bgRunActive, 0)
+	// Drain any bg notifications that arrived during Run.
 	// Process them in idle mode so they aren't lost.
-	func() {
-		for {
-			select {
-			case task := <-a.bgRunCh:
-				go a.processBgNotification(task)
-			default:
-				return
-			}
-		}
-	}()
+	a.bgRunPendingMu.Lock()
+	pending := a.bgRunPending
+	a.bgRunPending = nil
+	a.bgRunPendingMu.Unlock()
+	for _, task := range pending {
+		go a.processBgNotification(task)
+	}
 	if out.Error != nil {
 		// When cancelled, save any un-persisted engine messages from the
 		// interrupted iteration. User message and completed iterations are
@@ -1798,18 +1800,22 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	}
 }
 
-// bgNotifyLoop routes background task completion notifications from BgTaskManager.NotifyCh
-// to either the active Run() loop (via bgRunCh) or the idle handler (processBgNotification).
+// bgNotifyLoop routes background task completion notifications from BgTaskManager.NotifyCh.
+// When a Run is active (bgRunActive=1), notifications are buffered in bgRunPending
+// for the Run loop to drain between iterations. When idle (bgRunActive=0),
+// notifications go directly to processBgNotification.
 func (a *Agent) bgNotifyLoop() {
 	for task := range a.bgTaskMgr.NotifyCh {
-		select {
-		case a.bgRunCh <- task:
-			// Active Run loop will consume it between iterations
-			log.WithField("task_id", task.ID).Info("Bg task notification routed to active Run")
-		default:
-			// No active Run consuming bgRunCh — handle in idle mode
+		if atomic.LoadInt32(&a.bgRunActive) == 1 {
+			// Run is active — buffer for Run loop to drain
+			a.bgRunPendingMu.Lock()
+			a.bgRunPending = append(a.bgRunPending, task)
+			a.bgRunPendingMu.Unlock()
+			log.WithField("task_id", task.ID).Debug("Bg task notification buffered for active Run")
+		} else {
+			// Idle — process directly
 			log.WithField("task_id", task.ID).Info("Bg task notification: idle mode, processing directly")
-			a.processBgNotification(task)
+			go a.processBgNotification(task)
 		}
 	}
 }

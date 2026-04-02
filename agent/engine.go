@@ -158,12 +158,6 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
-	// BgNotifyCh receives background task completion notifications during Run().
-	// When non-nil, the Run loop checks this channel between iterations and
-	// injects completed task results as synthetic tool messages, so the LLM
-	// processes them inline rather than as a separate user message.
-	BgNotifyCh <-chan *tools.BackgroundTask
-
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
@@ -1327,38 +1321,12 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPersistedCount = len(messages)
 		}
 
-		// --- 注入后台任务完成通知 ---
-		// 非阻塞 select BgNotifyCh，将已完成的 bg task 以 tool message 形式注入
-		// LLM 在下一次迭代中看到这些结果，自然决定后续动作
-		if cfg.BgNotifyCh != nil {
-			drainBgNotifications := true
-			for drainBgNotifications {
-				select {
-				case bgTask, ok := <-cfg.BgNotifyCh:
-				if !ok {
-					drainBgNotifications = false
-					break
-				}
-				bgContent := tools.FormatBgTaskCompletion(bgTask)
-				// 注入为 assistant + tool message 对，明确告知 LLM 这是系统通知
-				bgAssistantMsg := llm.ChatMessage{
-					Role:    "assistant",
-					Content: "A background task has completed. Let me check the result.",
-					ToolCalls: []llm.ToolCall{{
-						ID:   "bg_" + bgTask.ID,
-						Name: "background_task_result",
-					}},
-				}
-				bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
-				messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
-				log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
-				default:
-				drainBgNotifications = false
-				}
-			}
-		}
+	// NOTE: BgNotifyCh is no longer used. The engine Run loop no longer directly
+	// consumes bg notifications. Instead, Agent.bgNotifyLoop buffers into bgRunPending,
+	// which is drained after Run() returns in processMessage. This avoids the race where
+	// notifications get stuck in an unbuffered channel with no consumer.
 
-		// 如果有任何工具标记为等待用户响应，则停止循环
+	// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
 			outMsg := &bus.OutboundMessage{

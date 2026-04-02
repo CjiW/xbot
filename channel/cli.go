@@ -1268,8 +1268,8 @@ func (m *cliModel) View() string {
 
 		// §8b @ 文件引用补全提示
 			rawInput := m.textarea.Value()
-			atPrefix := detectAtPrefix(rawInput)
-			if atPrefix != "" {
+			atOk, atPrefix := detectAtPrefix(rawInput)
+			if atOk {
 				borderColor = lipgloss.Color(currentTheme.Info)
 				// 立即触发 glob 填充候选（不等 Tab）
 				if len(m.fileCompletions) == 0 {
@@ -1550,8 +1550,8 @@ func (m *cliModel) handleTabComplete() {
 	input := m.textarea.Value()
 
 	// 检测 @ 文件引用补全（从输入末尾检测）
-	atPrefix := detectAtPrefix(input)
-	if atPrefix != "" {
+	atOk, atPrefix := detectAtPrefix(input)
+	if atOk {
 		m.handleFileTabComplete(input, atPrefix)
 		return
 	}
@@ -1580,22 +1580,23 @@ func (m *cliModel) handleTabComplete() {
 }
 
 // detectAtPrefix 检测输入文本末尾是否有 @ 触发文件补全。
-// 返回 @ 之后到文本末尾的部分（不含 @），空表示未触发。
-func detectAtPrefix(input string) string {
+// ok=true 表示检测到 @（即使后面无字符也应触发 glob）。
+// prefix 是 @ 之后到文本末尾的部分。
+func detectAtPrefix(input string) (ok bool, prefix string) {
 	if len(input) == 0 || input[len(input)-1] == ' ' {
-		return ""
+		return false, ""
 	}
 	i := len(input) - 1
 	for i >= 0 && input[i] != ' ' && input[i] != '@' {
 		i--
 	}
 	if i < 0 || input[i] != '@' {
-		return ""
+		return false, ""
 	}
 	if i > 0 && input[i-1] != ' ' {
-		return ""
+		return false, ""
 	}
-	return input[i+1:]
+	return true, input[i+1:]
 }
 
 // populateFileCompletions 根据 prefix 执行 glob 搜索并填充 fileCompletions
@@ -1614,6 +1615,15 @@ func (m *cliModel) populateFileCompletions(prefix string) {
 		m.fileCompIdx = 0
 		return
 	}
+	// 过滤隐藏文件（以 . 开头）
+	filtered := matches[:0]
+	for _, f := range matches {
+		base := filepath.Base(f)
+		if len(base) > 0 && base[0] != '.' {
+			filtered = append(filtered, f)
+		}
+	}
+	matches = filtered
 	sort.Slice(matches, func(i, j int) bool {
 		di, dj := isDir(matches[i]), isDir(matches[j])
 		if di != dj {

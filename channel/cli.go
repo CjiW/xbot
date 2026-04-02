@@ -1799,29 +1799,32 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
-			// Extract question and options from Metadata
-			question := ""
-			var options []string
+			var items []askItem
 			if msg.Metadata != nil {
-				question = msg.Metadata["ask_question"]
-				if optsJSON := msg.Metadata["ask_options"]; optsJSON != "" {
-					_ = json.Unmarshal([]byte(optsJSON), &options)
+				if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+					// Multi-question mode: parse questions array
+					var qs []askQItem
+					if json.Unmarshal([]byte(qJSON), &qs) == nil {
+						for _, q := range qs {
+							items = append(items, askItem{Question: q.Question, Options: q.Options})
+						}
+					}
 				}
 			}
-			// Fallback: search message history for ❓
-			if question == "" {
+			// Fallback: search message history for ❓ (legacy single-question format)
+			if len(items) == 0 {
 				for i := len(m.messages) - 1; i >= 0; i-- {
 					if strings.HasPrefix(m.messages[i].content, "❓") {
-						question = strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
+						question := strings.TrimSpace(strings.TrimPrefix(m.messages[i].content, "❓"))
 						m.messages = append(m.messages[:i], m.messages[i+1:]...)
+						if question != "" {
+							items = append(items, askItem{Question: question})
+						}
 						break
 					}
 				}
 			}
-			question = strings.TrimSpace(strings.TrimPrefix(question, "Asked user: "))
-			if question != "" {
-				// Build ask items (support multiple questions separated by \n\n)
-				items := m.buildAskItems(question, options)
+			if len(items) > 0 {
 				m.updateViewportContent()
 				m.openAskUserPanel(items, func(answers map[string]string) {
 					// Format answers as tool-call style message
@@ -2554,27 +2557,10 @@ type askItem struct {
 	Other    string   // user's custom input when "Other" option selected
 }
 
-// buildAskItems creates askItem list from question and options.
-// Multiple questions in a single call are split by double newline.
-// Options with "..." prefix indicate a custom "Other" input.
-func (m *cliModel) buildAskItems(question string, options []string) []askItem {
-	// Check if question contains multiple questions (separated by double newline)
-	parts := strings.Split(question, "\n\n")
-	items := make([]askItem, 0, len(parts))
-	for _, q := range parts {
-		q = strings.TrimSpace(q)
-		if q == "" {
-			continue
-		}
-		// For multi-question, each gets the same options
-		// For single question, use the provided options directly
-		if len(parts) == 1 {
-			items = append(items, askItem{Question: q, Options: options})
-		} else {
-			items = append(items, askItem{Question: q, Options: options})
-		}
-	}
-	return items
+// askQItem is the JSON structure for questions metadata from the AskUser tool.
+type askQItem struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
 }
 
 // openAskUserPanel activates the ask-user panel overlay.

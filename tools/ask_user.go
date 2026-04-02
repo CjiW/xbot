@@ -3,7 +3,6 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"xbot/llm"
 )
@@ -22,21 +21,19 @@ func (t *AskUserTool) Description() string {
 func (t *AskUserTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{
-			Name:        "question",
-			Type:        "string",
-			Description: "The question to ask the user",
-			Required:    true,
-		},
-		{
-			Name:        "options",
+			Name:        "questions",
 			Type:        "array",
-			Description: "Optional list of choices for multiple-choice questions. If provided, user can select from these options. Each option is a string.",
-			Required:    false,
+			Description: `Array of questions to ask the user. Each item is an object with "question" (string, required, supports multi-line) and "options" (array of strings, optional) fields. Example: [{"question":"Choose a theme","options":["dark","light"]},{"question":"Any other preferences?"}]`,
+			Required:    true,
 		},
 	}
 }
 
 type askUserArgs struct {
+	Questions []askQItem `json:"questions"`
+}
+
+type askQItem struct {
 	Question string   `json:"question"`
 	Options  []string `json:"options,omitempty"`
 }
@@ -47,20 +44,24 @@ func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 		return nil, fmt.Errorf("parse arguments: %w", err)
 	}
 
-	question := strings.TrimSpace(args.Question)
-	if question == "" {
-		return nil, fmt.Errorf("question parameter is required")
+	if len(args.Questions) == 0 {
+		return nil, fmt.Errorf("questions parameter is required")
 	}
 
-	// Send the question via SendFunc for non-CLI channels
-	// CLI uses the interactive panel (reads from Metadata), so skip SendFunc
-	if ctx.Channel != "cli" {
-		if ctx.SendFunc != nil {
-			msg := "❓ " + question
-			if len(args.Options) > 0 {
-				for i, opt := range args.Options {
-					msg += fmt.Sprintf("\n  %d. %s", i+1, opt)
-				}
+	qJSON, _ := json.Marshal(args.Questions)
+	metadata := map[string]string{
+		"ask_questions": string(qJSON),
+	}
+
+	// Send via SendFunc for non-CLI channels
+	if ctx.Channel != "cli" && ctx.SendFunc != nil {
+		for i, q := range args.Questions {
+			msg := fmt.Sprintf("❓ %s", q.Question)
+			for j, opt := range q.Options {
+				msg += fmt.Sprintf("\n  %d. %s", j+1, opt)
+			}
+			if i < len(args.Questions)-1 {
+				msg += "\n"
 			}
 			if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, msg); err != nil {
 				return nil, fmt.Errorf("send question: %w", err)
@@ -68,18 +69,11 @@ func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 		}
 	}
 
-	// Build result with optional choices metadata
-	result := &ToolResult{
-		Summary:     fmt.Sprintf("Asked user: %s", question),
+	return &ToolResult{
+		Summary:     fmt.Sprintf("Asked %d question(s)", len(args.Questions)),
 		WaitingUser: true,
-	}
-	if len(args.Options) > 0 {
-		optsJSON, _ := json.Marshal(args.Options)
-		result.Metadata = map[string]string{
-			"ask_options": string(optsJSON),
-		}
-	}
-	return result, nil
+		Metadata:    metadata,
+	}, nil
 }
 
 // SupportedChannels implements ChannelProvider interface - CLI only

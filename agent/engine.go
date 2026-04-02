@@ -158,6 +158,12 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
+	// BgNotifyCh receives background task completion notifications during Run().
+	// When non-nil, the Run loop checks this channel between iterations and
+	// injects completed task results as synthetic tool messages, so the LLM
+	// processes them inline rather than as a separate user message.
+	BgNotifyCh <-chan *tools.BackgroundTask
+
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
@@ -1321,6 +1327,33 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPersistedCount = len(messages)
 		}
 
+		// --- 注入后台任务完成通知 ---
+		// 非阻塞 select BgNotifyCh，将已完成的 bg task 以 tool message 形式注入
+		// LLM 在下一次迭代中看到这些结果，自然决定后续动作
+		if cfg.BgNotifyCh != nil {
+			drainBgNotifications := true
+			for drainBgNotifications {
+				select {
+				case bgTask, ok := <-cfg.BgNotifyCh:
+				if !ok {
+					drainBgNotifications = false
+					break
+				}
+				bgContent := tools.FormatBgTaskCompletion(bgTask)
+				// 注入为 assistant + tool message 对，让 LLM 理解这是一个系统通知
+				bgAssistantMsg := llm.ChatMessage{
+					Role:    "assistant",
+					Content: fmt.Sprintf("[Background task notification: bg:%s]", bgTask.ID),
+				}
+				bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
+				messages = syncMessages(append(messages, bgAssistantMsg, bgToolMsg))
+				log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
+				default:
+				drainBgNotifications = false
+				}
+			}
+		}
+
 		// 如果有任何工具标记为等待用户响应，则停止循环
 		if waitingUser {
 			log.Ctx(ctx).Info("Tool is waiting for user response, ending loop without additional reply")
@@ -1617,14 +1650,8 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 			sessionKey = cfg.Channel + ":" + cfg.ChatID
 		}
 		tc.BgSessionKey = sessionKey
-
-		// Register completion callback: inject task result into conversation
-		if cfg.InjectInbound != nil {
-			cfg.BgTaskManager.OnComplete(sessionKey, func(task *tools.BackgroundTask) {
-				content := tools.FormatBgTaskCompletion(task)
-				cfg.InjectInbound(cfg.Channel, cfg.ChatID, cfg.SenderID, content)
-			})
-		}
+		// NOTE: OnComplete callback registration moved to Agent.bgNotifyLoop.
+		// Engine no longer registers callbacks per-buildToolContext call.
 	}
 
 	// 注入 session cwd（PWD 工具优化）

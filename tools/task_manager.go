@@ -41,10 +41,11 @@ type BackgroundTask struct {
 	Error      string       `json:"error,omitempty"`
 
 	// Internal fields (not serialized to LLM)
-	cancel  context.CancelFunc
-	mu      sync.Mutex // protects Output for concurrent writes
-	killed  bool       // set by Kill() before cancel()
-	process *os.Process // live OS process (set by Adopt, nil for Start-based tasks)
+	sessionKey string             // session key for routing completion notifications
+	cancel     context.CancelFunc
+	mu         sync.Mutex         // protects Output for concurrent writes
+	killed     bool               // set by Kill() before cancel()
+	process    *os.Process        // live OS process (set by Adopt, nil for Start-based tasks)
 }
 
 // BackgroundTaskManager manages background task lifecycle.
@@ -89,11 +90,12 @@ func (m *BackgroundTaskManager) Start(
 ) *BackgroundTask {
 	id := generateTaskID()
 	task := &BackgroundTask{
-		ID:        id,
-		Command:   command,
-		Status:    BgTaskRunning,
-		StartedAt: time.Now(),
-		ExitCode:  -1,
+		ID:         id,
+		Command:    command,
+		Status:     BgTaskRunning,
+		StartedAt:  time.Now(),
+		ExitCode:   -1,
+		sessionKey: sessionKey,
 	}
 
 	// Safety timeout context (24h max lifetime)
@@ -295,6 +297,9 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 	}
 	return nil
 }
+
+// SessionKey returns the session key this task belongs to.
+func (t *BackgroundTask) SessionKey() string { return t.sessionKey }
 
 // Status returns the current state of a task.
 func (m *BackgroundTaskManager) Status(taskID string) (*BackgroundTask, error) {

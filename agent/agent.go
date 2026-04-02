@@ -278,6 +278,10 @@ type Agent struct {
 
 	// bgTaskMgr manages background shell tasks (shared across all sessions)
 	bgTaskMgr *tools.BackgroundTaskManager
+
+	// bgRunCh routes bg task completion notifications to an active Run() call.
+	// Set by buildMainRunConfig when a Run is active; cleared after Run returns.
+	bgRunCh chan *tools.BackgroundTask
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -696,10 +700,14 @@ func New(cfg Config) *Agent {
 			tools.NewTimingHook(),
 		),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
+		bgRunCh:   make(chan *tools.BackgroundTask, 16),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）
 	initServices(agent, cfg, multiSession, registry)
+
+	// 6. 启动 bg task 通知路由 goroutine
+	go agent.bgNotifyLoop()
 
 	return agent
 }
@@ -1405,7 +1413,22 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
+	// Enable bg task notification injection into this Run loop.
+	// bgNotifyLoop will non-block send to bgRunCh; Run loop non-block drains between iterations.
+	cfg.BgNotifyCh = a.bgRunCh
 	out := Run(ctx, cfg)
+	// Drain any remaining bg notifications that arrived after Run's last drain.
+	// Process them in idle mode so they aren't lost.
+	func() {
+		for {
+			select {
+			case task := <-a.bgRunCh:
+				go a.processBgNotification(task)
+			default:
+				return
+			}
+		}
+	}()
 	if out.Error != nil {
 		// When cancelled, save any un-persisted engine messages from the
 		// interrupted iteration. User message and completed iterations are
@@ -1773,6 +1796,144 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		IsCron:    true,
 		RequestID: log.NewRequestID(),
 	}
+}
+
+// bgNotifyLoop routes background task completion notifications from BgTaskManager.NotifyCh
+// to either the active Run() loop (via bgRunCh) or the idle handler (processBgNotification).
+func (a *Agent) bgNotifyLoop() {
+	for task := range a.bgTaskMgr.NotifyCh {
+		select {
+		case a.bgRunCh <- task:
+			// Active Run loop will consume it between iterations
+			log.WithField("task_id", task.ID).Info("Bg task notification routed to active Run")
+		default:
+			// No active Run consuming bgRunCh — handle in idle mode
+			log.WithField("task_id", task.ID).Info("Bg task notification: idle mode, processing directly")
+			a.processBgNotification(task)
+		}
+	}
+}
+
+// processBgNotification handles a background task completion when no Run() is active.
+// It loads the session, appends the task result as a tool message (not a user message),
+// and starts a new Run() cycle to let the LLM process it.
+// Progress is displayed in the foreground (CLI/web) via the same pipeline.
+func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
+	sessionKey := task.SessionKey()
+	if sessionKey == "" {
+		log.WithField("task_id", task.ID).Warn("Bg task notification: no session key, dropping")
+		return
+	}
+
+	// Parse channel:chatID from sessionKey
+	parts := strings.SplitN(sessionKey, ":", 2)
+	if len(parts) != 2 {
+		log.WithField("session_key", sessionKey).Warn("Bg task: invalid session key format")
+		return
+	}
+	channel, chatID := parts[0], parts[1]
+
+	ctx := context.Background()
+	ctx = log.WithRequestID(ctx, log.NewRequestID())
+
+	log.Ctx(ctx).WithFields(log.Fields{
+		"task_id":      task.ID,
+		"channel":      channel,
+		"chat_id":      chatID,
+		"task_status":  task.Status,
+	}).Info("Processing bg task notification (idle mode)")
+
+	// Get session
+	tenantSession, err := a.multiSession.GetOrCreateSession(channel, chatID)
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Bg task: failed to get session")
+		return
+	}
+
+	// Build a synthetic InboundMessage for buildPrompt
+	syntheticMsg := bus.InboundMessage{
+		Channel:   channel,
+		ChatID:    chatID,
+		SenderID:  "system",
+		Content:   "",
+		Time:      time.Now(),
+		Metadata:  map[string]string{"bg_notification": "true"},
+	}
+
+	// Clear session tracking (like processMessage does)
+	key := channel + ":" + chatID
+	a.sessionMsgIDs.Delete(key)
+	a.sessionFinalSent.Delete(key)
+
+	// Build messages via pipeline (system prompt + history + memory)
+	messages, err := a.buildPrompt(ctx, syntheticMsg, tenantSession)
+	if err != nil {
+		log.Ctx(ctx).WithError(err).Warn("Bg task: failed to build prompt")
+		return
+	}
+
+	// Remove the empty user message that buildPrompt appended
+	if len(messages) > 0 && messages[len(messages)-1].Role == "user" && messages[len(messages)-1].Content == "" {
+		messages = messages[:len(messages)-1]
+	}
+
+	// Append bg task result as a synthetic tool message (NOT a user message)
+	bgContent := tools.FormatBgTaskCompletion(task)
+	bgAssistantMsg := llm.ChatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("[Background task notification: bg:%s]", task.ID),
+	}
+	bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+task.ID, "", bgContent)
+	messages = append(messages, bgAssistantMsg, bgToolMsg)
+
+	// Persist the bg notification to session
+	_ = tenantSession.AddMessage(bgAssistantMsg)
+	_ = tenantSession.AddMessage(bgToolMsg)
+
+	// Build RunConfig (with progress display)
+	cfg := a.buildBgNotificationRunConfig(ctx, channel, chatID, messages, tenantSession)
+	out := Run(ctx, cfg)
+	if out.Error != nil {
+		log.Ctx(ctx).WithError(out.Error).Warn("Bg task notification Run failed")
+		return
+	}
+
+	// Persist + send the LLM response
+	if out.Content != "" {
+		assistantMsg := llm.NewAssistantMessage(out.Content)
+		if len(out.IterationHistory) > 0 {
+			if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+				assistantMsg.Detail = string(jsonBytes)
+			}
+		}
+		_ = tenantSession.AddMessage(assistantMsg)
+
+		// Send response via channel
+		sendMeta := map[string]string{}
+		if assistantMsg.Detail != "" {
+			sendMeta["progress_history"] = assistantMsg.Detail
+		}
+		_ = a.sendMessage(channel, chatID, out.Content, sendMeta)
+	}
+}
+
+// buildBgNotificationRunConfig builds a RunConfig for processing a bg task notification.
+// Reuses buildMainRunConfig to get full progress/display support.
+func (a *Agent) buildBgNotificationRunConfig(
+	ctx context.Context,
+	channel, chatID string,
+	messages []llm.ChatMessage,
+	tenantSession *session.TenantSession,
+) RunConfig {
+	syntheticMsg := bus.InboundMessage{
+		Channel:   channel,
+		ChatID:    chatID,
+		SenderID:  "system",
+		Content:   "",
+		Time:      time.Now(),
+		Metadata:  map[string]string{"bg_notification": "true"},
+	}
+	return a.buildMainRunConfig(ctx, syntheticMsg, messages, tenantSession, false)
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口

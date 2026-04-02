@@ -240,6 +240,19 @@ func (a *Agent) buildMainRunConfig(
 								}
 							}
 						}
+						// Copy context edit events for red line indicator
+						if len(s.ContextEdits) > 0 {
+							payload.ContextEdits = make([]channelpkg.CLIContextEdit, len(s.ContextEdits))
+							for i, ce := range s.ContextEdits {
+								payload.ContextEdits[i] = channelpkg.CLIContextEdit{
+									Action: ce.Action,
+									Idx:    ce.Idx,
+									Reason: ce.Reason,
+									Before: ce.Before,
+									Role:   ce.Role,
+								}
+							}
+						}
 						cc.SendProgress(chatID, payload)
 					}
 				} else {

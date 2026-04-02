@@ -652,6 +652,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			structuredProgress.ActiveTools = nil
 			structuredProgress.CompletedTools = nil
 			structuredProgress.ThinkingContent = ""
+			structuredProgress.ContextEdits = nil
 		}
 		// Refresh TODO state for progress display
 		if structuredProgress != nil && cfg.TodoManager != nil && sessionKey != "" {
@@ -1164,6 +1165,37 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 			case "context_edit":
 				GlobalMetrics.ContextEditEvents.Add(1)
+				// 解析 context_edit 参数，提取编辑信息传递给 CLI 渲染红线
+				if structuredProgress != nil {
+					var ceArgs struct {
+						Action  string `json:"action"`
+						TurnIdx int    `json:"turn_idx"`
+						MsgIdx  int    `json:"message_idx"`
+						Reason  string `json:"reason"`
+					}
+					if json.Unmarshal([]byte(tc.Arguments), &ceArgs) == nil {
+						switch ceArgs.Action {
+						case "list":
+							// list 操作不需要红线
+						default:
+							ce := ContextEditProgress{
+								Action: ceArgs.Action,
+								Reason: ceArgs.Reason,
+							}
+							if ceArgs.Action == "delete_turn" {
+								ce.Idx = ceArgs.TurnIdx
+								ce.Role = "turn"
+							} else {
+								ce.Idx = ceArgs.MsgIdx
+								ce.Role = "message"
+							}
+							if r := execResults[idx2]; r.err == nil && r.result != nil {
+								ce.Before = r.result.Summary
+							}
+							structuredProgress.ContextEdits = append(structuredProgress.ContextEdits, ce)
+						}
+					}
+				}
 			}
 		}
 

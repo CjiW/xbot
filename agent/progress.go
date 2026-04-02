@@ -32,6 +32,17 @@ type StructuredProgress struct {
 	ThinkingContent string
 	TokenUsage      *TokenUsageSnapshot
 	Todos           []TodoProgressItem
+	ContextEdits    []ContextEditProgress
+}
+
+// ContextEditProgress 携带 context_edit 的编辑信息，用于 CLI 渲染红线指示器。
+type ContextEditProgress struct {
+	Action string `json:"action"`
+	Idx    int    `json:"idx"` // message_idx or turn_idx
+	Reason string `json:"reason"`
+	Before string `json:"before"` // e.g. "1234 chars"
+	After  string `json:"after"`  // e.g. "0 chars"
+	Role   string `json:"role"`   // "user", "assistant", "turn"
 }
 
 // ProgressPhase Agent 运行阶段。

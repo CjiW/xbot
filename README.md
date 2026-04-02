@@ -323,7 +323,24 @@ MIT
 
 ## CLI Channel
 
-xbot 提供终端交互界面 (TUI)，适合本地开发调试：
+xbot 提供终端交互界面 (TUI)，适合本地开发调试。
+
+> **平台支持**：目前仅支持 Linux 和 macOS（amd64 / arm64）
+
+### 一键安装
+
+```bash
+# 安装最新版
+curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+
+# 安装指定版本
+VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+
+# 自定义安装路径（默认 /usr/local/bin）
+INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/main/scripts/install.sh | bash
+```
+
+### 从源码编译
 
 ```bash
 # 编译

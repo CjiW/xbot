@@ -303,6 +303,16 @@ type CLIProgressPayload struct {
 	Thinking       string
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
+	ContextEdits   []CLIContextEdit
+}
+
+// CLIContextEdit 携带 context_edit 的编辑信息，用于渲染红线指示器。
+type CLIContextEdit struct {
+	Action string `json:"action"`
+	Idx    int    `json:"idx"`
+	Reason string `json:"reason"`
+	Before string `json:"before"`
+	Role   string `json:"role"`
 }
 
 // CLITodoItem represents a TODO item for CLI display.
@@ -682,6 +692,11 @@ type cliModel struct {
 
 	// --- §9 Ctrl+K 上下文编辑 ---
 	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
+
+	// --- §11 context_edit 红线指示器 ---
+	contextEditLine    string // 红线渲染内容（空表示无红线）
+	contextEditScroll  bool   // 是否需要滚动到红线位置
+	lastContextEditSeq int    // 上次处理过的 context edit 序列号（去重）
 
 	// --- §10 TODO 进度条 ---
 	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表
@@ -1076,6 +1091,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.lastCompletedTools = filtered
+			}
+			// §11 context_edit 红线指示器：收到 context edit 事件时生成红线
+			if len(msg.payload.ContextEdits) > 0 {
+				// 用迭代号+编辑数作为去重 key，避免同一批编辑重复渲染红线
+				seq := msg.payload.Iteration*100 + len(msg.payload.ContextEdits)
+				if seq != m.lastContextEditSeq {
+					m.lastContextEditSeq = seq
+					m.contextEditLine = m.renderContextEditRedLine(msg.payload.ContextEdits)
+					m.contextEditScroll = true
+					m.renderCacheValid = false // 强制全量重建以插入红线
+				}
 			}
 			if msg.payload.Phase == "done" {
 				m.progress = nil
@@ -1838,6 +1864,10 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.streamingMsgIdx = -1
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		m.progress = nil
+		// §11 清除 context_edit 红线（agent 回复完成，红线不再需要）
+		m.contextEditLine = ""
+		m.contextEditScroll = false
+		m.lastContextEditSeq = 0
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {
@@ -1991,6 +2021,68 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 	}
 
 	m.updateViewportContent()
+}
+
+// renderContextEditRedLine 渲染 context_edit 红线指示器。
+// 红线显示编辑摘要，用醒目的红色横线标出删除位置。
+func (m *cliModel) renderContextEditRedLine(edits []CLIContextEdit) string {
+	if len(edits) == 0 {
+		return ""
+	}
+
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+
+	redStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF4444"))
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888"))
+
+	var sb strings.Builder
+
+	for i, edit := range edits {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+
+		// 构建摘要标签
+		actionLabel := edit.Action
+		switch edit.Action {
+		case "delete_turn":
+			actionLabel = "deleted turn"
+		case "delete":
+			actionLabel = "deleted msg"
+		case "truncate":
+			actionLabel = "truncated msg"
+		case "replace":
+			actionLabel = "replaced in msg"
+		}
+
+		idxLabel := fmt.Sprintf("#%d", edit.Idx)
+		if edit.Role == "turn" {
+			idxLabel = fmt.Sprintf("turn #%d", edit.Idx)
+		}
+
+		// 红色横线
+		line := redStyle.Render("━━━┫ ") +
+			redStyle.Bold(true).Render(fmt.Sprintf("✂ %s %s", actionLabel, idxLabel))
+		if edit.Reason != "" {
+			// 截断过长的 reason
+			reasonRunes := []rune(edit.Reason)
+			if len(reasonRunes) > 40 {
+				reasonRunes = reasonRunes[:37]
+				edit.Reason = string(reasonRunes) + "..."
+			}
+			line += dimStyle.Render(" — " + edit.Reason)
+		}
+		line += " " + redStyle.Render("┣"+strings.Repeat("━", max(0, w-lipgloss.Width(line)-2)))
+		sb.WriteString(line)
+	}
+
+	return sb.String()
 }
 
 // renderProgressBlock renders the iteration progress panel for the viewport.
@@ -2429,6 +2521,43 @@ func (m *cliModel) setViewportContent(content string) {
 	}
 }
 
+// scrollToContextEditLine 确保 context_edit 红线在 viewport 可见区域内。
+// 红线位于 cachedHistory 末尾，策略是让红线出现在视口顶部附近（留 2 行边距）。
+func (m *cliModel) scrollToContextEditLine(content string) {
+	contentLines := strings.Split(content, "\n")
+	totalLines := len(contentLines)
+	viewportHeight := m.viewport.Height
+	if viewportHeight <= 0 {
+		return
+	}
+
+	// 找到红线行（包含 "✂" 的行）
+	redLineIdx := -1
+	for i, line := range contentLines {
+		if strings.Contains(line, "✂") {
+			redLineIdx = i
+			break
+		}
+	}
+	if redLineIdx < 0 {
+		return
+	}
+
+	// 将红线定位到视口顶部偏移 2 行的位置
+	targetYOffset := redLineIdx - 2
+	if targetYOffset < 0 {
+		targetYOffset = 0
+	}
+	maxOffset := totalLines - viewportHeight
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if targetYOffset > maxOffset {
+		targetYOffset = maxOffset
+	}
+	m.viewport.SetYOffset(targetYOffset)
+}
+
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
 func (m *cliModel) updateViewportContent() {
 	// 快速路径：流式消息 + 缓存有效
@@ -2441,6 +2570,12 @@ func (m *cliModel) updateViewportContent() {
 	if m.renderCacheValid && m.streamingMsgIdx < 0 && m.cachedMsgCount == len(m.messages) {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
+		// §11 context_edit 红线指示器
+		if m.contextEditLine != "" {
+			sb.WriteString("\n")
+			sb.WriteString(m.contextEditLine)
+			sb.WriteString("\n")
+		}
 		sb.WriteString(m.renderProgressBlock())
 		m.setViewportContent(sb.String())
 		return
@@ -2459,6 +2594,13 @@ func (m *cliModel) updateStreamingOnly() {
 	msg := &m.messages[m.streamingMsgIdx]
 	msg.dirty = true
 	sb.WriteString(m.renderMessage(msg))
+
+	// §11 context_edit 红线指示器
+	if m.contextEditLine != "" {
+		sb.WriteString("\n")
+		sb.WriteString(m.contextEditLine)
+		sb.WriteString("\n")
+	}
 
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
@@ -2491,15 +2633,27 @@ func (m *cliModel) fullRebuild() {
 	m.renderCacheValid = true
 	m.cachedMsgCount = len(m.messages)
 
-	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block
+	// 拼接最终内容：历史 + 当前流式消息（如有） + 红线 + progress block
 	var sb strings.Builder
 	sb.WriteString(m.cachedHistory)
 	if m.streamingMsgIdx >= 0 {
 		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
 	}
+	// §11 context_edit 红线指示器：在历史消息和进度块之间插入红线
+	if m.contextEditLine != "" {
+		sb.WriteString("\n")
+		sb.WriteString(m.contextEditLine)
+		sb.WriteString("\n")
+	}
 	sb.WriteString(m.renderProgressBlock())
 
 	m.setViewportContent(sb.String())
+
+	// §11 红线出现后自动滚动到红线位置
+	if m.contextEditScroll && m.contextEditLine != "" {
+		m.scrollToContextEditLine(sb.String())
+		m.contextEditScroll = false
+	}
 }
 
 // tickCmd 定时器命令

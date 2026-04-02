@@ -1267,39 +1267,43 @@ func (m *cliModel) View() string {
 		}
 
 		// §8b @ 文件引用补全提示
-		rawInput := m.textarea.Value()
+			rawInput := m.textarea.Value()
 			atPrefix := detectAtPrefix(rawInput)
-		if atPrefix != "" {
-			borderColor = lipgloss.Color(currentTheme.Info)
-			if len(m.fileCompletions) > 0 {
-				parts := make([]string, len(m.fileCompletions))
-				for i, c := range m.fileCompletions {
-					if isDir(c) {
-						c += "/"
-					}
-					if i == m.fileCompIdx {
-						parts[i] = lipgloss.NewStyle().
-							Bold(true).
-							Underline(true).
-							Foreground(lipgloss.Color(currentTheme.Info)).
-							Render(c)
-					} else {
-						parts[i] = lipgloss.NewStyle().
-							Foreground(lipgloss.Color(currentTheme.Info)).
-							Render(c)
-					}
+			if atPrefix != "" {
+				borderColor = lipgloss.Color(currentTheme.Info)
+				// 立即触发 glob 填充候选（不等 Tab）
+				if len(m.fileCompletions) == 0 {
+					m.populateFileCompletions(atPrefix)
 				}
-				completionsHint = lipgloss.NewStyle().
-					Padding(0, 1).
-					Render("[Tab] " + strings.Join(parts, " · "))
-			} else {
-				// 显示 @ 已激活提示
-				completionsHint = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.Info)).
-					Padding(0, 1).
-					Render("[Tab] 文件路径补全: @" + atPrefix)
+				if len(m.fileCompletions) > 0 {
+					parts := make([]string, len(m.fileCompletions))
+					for i, c := range m.fileCompletions {
+						if isDir(c) {
+							c += "/"
+						}
+						if i == m.fileCompIdx {
+							parts[i] = lipgloss.NewStyle().
+								Bold(true).
+								Underline(true).
+								Foreground(lipgloss.Color(currentTheme.Info)).
+								Render(c)
+						} else {
+							parts[i] = lipgloss.NewStyle().
+								Foreground(lipgloss.Color(currentTheme.Info)).
+								Render(c)
+						}
+					}
+					completionsHint = lipgloss.NewStyle().
+						Padding(0, 1).
+						Render("[Tab] " + strings.Join(parts, " · "))
+				} else {
+					// 无匹配文件
+					completionsHint = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(currentTheme.TextMuted)).
+						Padding(0, 1).
+						Render("[Tab] 无匹配文件")
+				}
 			}
-		}
 
 	inputBoxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1594,33 +1598,43 @@ func detectAtPrefix(input string) string {
 	return input[i+1:]
 }
 
+// populateFileCompletions 根据 prefix 执行 glob 搜索并填充 fileCompletions
+func (m *cliModel) populateFileCompletions(prefix string) {
+	pattern := prefix
+	if !strings.Contains(pattern, "*") {
+		if strings.HasSuffix(pattern, "/") {
+			pattern += "*"
+		} else {
+			pattern += "*"
+		}
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		m.fileCompletions = nil
+		m.fileCompIdx = 0
+		return
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		di, dj := isDir(matches[i]), isDir(matches[j])
+		if di != dj {
+			return di
+		}
+		return matches[i] < matches[j]
+	})
+	if len(matches) > 20 {
+		matches = matches[:20]
+	}
+	m.fileCompletions = matches
+	m.fileCompIdx = 0
+}
+
 // handleFileTabComplete 处理 @ 文件路径 Tab 补全
 func (m *cliModel) handleFileTabComplete(input string, prefix string) {
 	if len(m.fileCompletions) == 0 {
-		pattern := prefix
-		if !strings.Contains(pattern, "*") {
-			if strings.HasSuffix(pattern, "/") {
-				pattern += "*"
-			} else {
-				pattern += "*"
-			}
-		}
-		matches, err := filepath.Glob(pattern)
-		if err != nil || len(matches) == 0 {
+		m.populateFileCompletions(prefix)
+		if len(m.fileCompletions) == 0 {
 			return
 		}
-		sort.Slice(matches, func(i, j int) bool {
-			di, dj := isDir(matches[i]), isDir(matches[j])
-			if di != dj {
-				return di
-			}
-			return matches[i] < matches[j]
-		})
-		if len(matches) > 20 {
-			matches = matches[:20]
-		}
-		m.fileCompletions = matches
-		m.fileCompIdx = 0
 	} else {
 		m.fileCompIdx = (m.fileCompIdx + 1) % len(m.fileCompletions)
 	}

@@ -259,18 +259,158 @@ func TestCrossIterationToolsFiltered(t *testing.T) {
 	// Verify iteration attribution
 	for _, msg := range model.messages {
 		if msg.role == "tool_summary" {
-			for _, it := range msg.iterations {
-				if it.Iteration == 0 {
-					if len(it.Tools) != 1 || it.Tools[0].Name != "read" {
-						t.Errorf("Iter 0 should have 1 'read' tool, got %+v", it.Tools)
-					}
-				}
-				if it.Iteration == 1 {
-					if len(it.Tools) != 1 || it.Tools[0].Name != "edit" {
-						t.Errorf("Iter 1 should have 1 'edit' tool, got %+v", it.Tools)
-					}
-				}
+		for _, it := range msg.iterations {
+			if it.Iteration == 0 {
+			if len(it.Tools) != 1 || it.Tools[0].Name != "read" {
+				t.Errorf("Iter 0 should have 1 'read' tool, got %+v", it.Tools)
+			}
+			}
+			if it.Iteration == 1 {
+			if len(it.Tools) != 1 || it.Tools[0].Name != "edit" {
+				t.Errorf("Iter 1 should have 1 'edit' tool, got %+v", it.Tools)
+			}
 			}
 		}
+		}
+	}
+	}
+
+// ==================== Background Task Injection ====================
+
+func TestBgTaskInjectedUserMessage_ShowsAsUserMessage(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	content := "[System Notification] Background task abc123 completed.\nCommand: sleep 30\nStatus: done | Elapsed: 30s\nExit Code: 0\n\nOutput:\nok"
+
+	// Simulate InjectUserMessage
+	model.Update(cliInjectedUserMsg{content: content})
+
+	// Should have exactly 1 message with role "user"
+	userMsgCount := 0
+	for _, msg := range model.messages {
+	if msg.role == "user" {
+		userMsgCount++
+		if !strings.Contains(msg.content, "abc123") {
+		t.Error("user message should contain task ID")
+		}
+	}
+	}
+	if userMsgCount != 1 {
+	t.Errorf("expected 1 user message, got %d", userMsgCount)
 	}
 }
+
+func TestBgTaskInjectedUserMessage_StartsSpinner(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	// Before injection, not typing
+	if model.typing {
+	t.Error("should not be typing initially")
+	}
+
+	model.Update(cliInjectedUserMsg{content: "bg task done"})
+
+	// After injection, should be typing
+	if !model.typing {
+	t.Error("should be typing after bg injection")
+	}
+	if model.inputReady {
+	t.Error("input should not be ready during processing")
+	}
+}
+
+func TestBgTaskInjectedUserMessage_RefreshesBgCount(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	callCount := 0
+	model.bgTaskCountFn = func() int {
+	callCount++
+	return 2
+	}
+
+	model.Update(cliInjectedUserMsg{content: "bg task done"})
+
+	// Should have called bgTaskCountFn
+	if callCount != 1 {
+	t.Errorf("bgTaskCountFn should be called once, got %d", callCount)
+	}
+	if model.bgTaskCount != 2 {
+	t.Errorf("bgTaskCount should be 2, got %d", model.bgTaskCount)
+	}
+}
+
+func TestBgDrainCompletedTool_AppearsInIteration(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+
+	// Iter 0: normal tool + bg drain tool in same iteration
+	sendProgress(model, &CLIProgressPayload{
+		Phase: "tool_exec", Iteration: 0, Thinking: "working",
+		CompletedTools: []CLIToolProgress{
+			{Name: "read", Label: "Read file", Status: "done", Elapsed: 100, Iteration: 0},
+			{Name: "background_task_result", Label: "bg:abc123", Status: "done", Elapsed: 30000, Iteration: 0},
+		},
+	})
+
+	block := model.renderProgressBlock()
+
+	// Both tools should appear in current iteration view
+	if !strings.Contains(block, "Read file") {
+		t.Error("normal tool should appear in iteration")
+	}
+	if !strings.Contains(block, "bg:abc123") {
+		t.Error("bg tool should appear in iteration")
+	}
+
+	// Final done — snapshot into summary
+	sendDone(model, "all done")
+
+	if tools := countToolsInSummary(model); tools != 2 {
+		t.Errorf("expected 2 tools in summary, got %d", tools)
+	}
+}
+
+func TestBgDrainCrossIterationDoesNotLeak(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.typing = true
+	model.typingStartTime = time.Now()
+
+	// Iter 0: bg tool
+	sendProgress(model, &CLIProgressPayload{
+		Phase: "tool_exec", Iteration: 0, Thinking: "working",
+		CompletedTools: []CLIToolProgress{
+			{Name: "background_task_result", Label: "bg:old", Status: "done", Elapsed: 1000, Iteration: 0},
+		},
+	})
+
+	block0 := model.renderProgressBlock()
+	// At iter 0, bg:old should appear once
+	assertCount(t, "bg:old at iter 0", block0, "bg:old", 1)
+
+	// Iter 1: bg tool — iter 0 tool should be in history (dimmed), not duplicated in current
+	sendProgress(model, &CLIProgressPayload{
+		Phase: "tool_exec", Iteration: 1, Thinking: "working",
+		CompletedTools: []CLIToolProgress{
+			{Name: "background_task_result", Label: "bg:new", Status: "done", Elapsed: 2000, Iteration: 1},
+		},
+	})
+
+	block1 := model.renderProgressBlock()
+	// bg:old appears once in history (dimmed), bg:new appears once in current iteration
+	assertCount(t, "bg:old in history", block1, "bg:old", 1)
+	assertCount(t, "bg:new in current", block1, "bg:new", 1)
+
+	// Final done — snapshot both iterations into summary
+	sendDone(model, "done")
+
+	if tools := countToolsInSummary(model); tools != 2 {
+		t.Errorf("expected 2 tools in summary (one per iteration), got %d", tools)
+	}
+}
+

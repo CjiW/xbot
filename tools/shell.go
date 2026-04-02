@@ -290,7 +290,11 @@ func (t *ShellTool) executeForeground(
 			// adopt it (no re-execution) — the original process continues running.
 			if result.Process != nil {
 				partialOutput := output
-				task = toolCtx.BgTaskManager.Adopt(sessionKey, command, result.Process, partialOutput, result.ExitCodeCh)
+				var ongoingFn func() string
+				if result.OngoingOutput != nil {
+					ongoingFn = result.OngoingOutput
+				}
+				task = toolCtx.BgTaskManager.Adopt(sessionKey, command, result.Process, partialOutput, result.ExitCodeCh, ongoingFn)
 				log.WithFields(log.Fields{
 					"command": command,
 					"timeout": timeout,

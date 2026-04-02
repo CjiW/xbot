@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -137,19 +138,35 @@ func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, timeout time.Duration) (*Exec
 		case <-timer.C:
 			// Timeout — do NOT kill the process. Return it to the caller.
 			// cmd.Wait() is still running in the background goroutine.
-			// Provide an exitCodeCh so the caller (Adopt) can get the real exit code.
+			// Capture goroutines continue writing to stdoutBuf/stderrBuf.
+			// OngoingOutput lets the caller (Adopt) read the final full output
+			// once the process exits and all capture goroutines complete.
 			exitCodeCh := make(chan int, 1)
 			go func() {
-				waitErr := <-waitCh // cmd.Wait() result
+				waitErr := <-waitCh // cmd.Wait() result (wg.Wait() already done)
 				exitCodeCh <- extractExitCode(waitErr)
 			}()
+			ongoingOutput := func() string {
+				var sb strings.Builder
+				if stdoutBuf.Len() > 0 {
+					sb.Write(stdoutBuf.Bytes())
+				}
+				if stderrBuf.Len() > 0 {
+					if sb.Len() > 0 {
+						sb.WriteByte('\n')
+					}
+					sb.Write(stderrBuf.Bytes())
+				}
+				return sb.String()
+			}
 			result := &ExecResult{
-				Stdout:     stdoutBuf.String(),
-				Stderr:     stderrBuf.String(),
-				ExitCode:   -1,
-				TimedOut:   true,
-				Process:    cmd.Process,
-				ExitCodeCh: exitCodeCh,
+				Stdout:        stdoutBuf.String(),
+				Stderr:        stderrBuf.String(),
+				ExitCode:      -1,
+				TimedOut:      true,
+				Process:       cmd.Process,
+				ExitCodeCh:    exitCodeCh,
+				OngoingOutput: ongoingOutput,
 			}
 			return result, nil
 		}

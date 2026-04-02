@@ -190,12 +190,16 @@ func (m *BackgroundTaskManager) Start(
 //
 // exitCodeCh optionally receives the real exit code from the original cmd.Wait()
 // goroutine. If provided, Adopt uses it instead of the Signal(0) heuristic.
+//
+// ongoingOutput optionally reads the final full output from capture goroutines.
+// Called after the process exits and all capture goroutines have completed.
 func (m *BackgroundTaskManager) Adopt(
 	sessionKey string,
 	command string,
 	proc *os.Process,
 	partialOutput string,
 	exitCodeCh chan int,
+	ongoingOutput func() string,
 ) *BackgroundTask {
 	id := generateTaskID()
 	task := &BackgroundTask{
@@ -258,6 +262,15 @@ func (m *BackgroundTaskManager) Adopt(
 		task.mu.Lock()
 		wasKilled := task.killed
 		task.mu.Unlock()
+
+		// Capture final output from capture goroutines if available.
+		// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
+		// so all capture goroutines have finished writing.
+		if ongoingOutput != nil {
+			task.mu.Lock()
+			task.Output = ongoingOutput()
+			task.mu.Unlock()
+		}
 
 		now := time.Now()
 		task.FinishedAt = &now

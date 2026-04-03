@@ -528,30 +528,27 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// - Local estimation only for tool result messages appended after the assistant message
 		// This minimizes reliance on the local tokenizer (which misses reasoning_content, etc.)
 		totalTokens := int64(0)
-		if lastPromptTokens > 0 && (lastMsgCountAtLLMCall > 0 || restoredFromDB) {
+		if lastPromptTokens > 0 && lastMsgCountAtLLMCall > 0 {
 			totalTokens = lastPromptTokens + lastCompletionTokens
-			if !restoredFromDB && len(messages) > lastMsgCountAtLLMCall+1 {
-				// Normal mid-Run: estimate only new tool messages appended after LLM call
+			// Estimate only new tool messages appended after the LLM call
+			// (skip assistant msg at lastMsgCountAtLLMCall, its tokens are
+			// exactly covered by lastCompletionTokens)
+			if len(messages) > lastMsgCountAtLLMCall+1 {
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+				log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
 				} else {
-					totalTokens += int64(deltaTokens)
+				totalTokens += int64(deltaTokens)
 				}
 			}
-			if restoredFromDB && len(messages) > 3 {
-				// Cross-Run recovery: lastMsgCountAtLLMCall is unknown,
-				// so do a full local estimation as delta on top of the restored base.
-				// This is still better than pure local estimation because the base
-				// (system prompt + early messages) uses the authoritative API value.
-				cachedMsgTokens, msgErr := llm.CountMessagesTokens(messages, cfg.Model)
-				if msgErr != nil {
-				log.Ctx(ctx).WithError(msgErr).Warn("maybeCompress: failed to count msg tokens after restore")
-				} else {
-				totalTokens = int64(cachedMsgTokens)
-				}
-			}
+		} else if restoredFromDB && lastPromptTokens > 0 {
+			// Cross-Run recovery: lastMsgCountAtLLMCall is unknown (reset each Run),
+			// so we can't do delta estimation. Use the restored API values as a lower
+			// bound — they reflect the exact size at the end of the previous Run.
+			// Messages may have grown since then (tool results added), making this
+			// an underestimate, but it's safer than an overestimate (missed compression).
+			totalTokens = lastPromptTokens + lastCompletionTokens
 		} else {
 			// No API value yet (first iteration) OR cross-Run recovery where
 			// lastMsgCountAtLLMCall is unknown (reset to 0 each Run).

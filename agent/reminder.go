@@ -8,7 +8,7 @@ import (
 )
 
 // systemReminderRe is pre-compiled for stripSystemReminder (called in hot loops).
-var systemReminderRe = regexp.MustCompile(`\n?\n?`)
+var systemReminderRe = regexp.MustCompile(`\n?\n?<system-reminder>[\s\S]*?</system-reminder>`)
 
 // BuildSystemReminder builds a system reminder appended to the last tool message.
 // agentID "main" = main Agent, otherwise SubAgent.

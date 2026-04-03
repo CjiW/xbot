@@ -300,6 +300,11 @@ type cliStyles struct {
 	TIText           lipgloss.Style
 	TICursor         lipgloss.Style
 	TIPlaceholder    lipgloss.Style
+	// --- key hints (footer) ---
+	KeyLabelSt       lipgloss.Style
+	KeyDescSt        lipgloss.Style
+	// --- search highlight ---
+	SearchHighlightSt lipgloss.Style
 }
 
 func buildStyles(width int) cliStyles {
@@ -407,7 +412,12 @@ func buildStyles(width int) cliStyles {
 		TIText:           lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
 		TICursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
 		TIPlaceholder:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
-		}
+		// --- key hints (footer) ---
+		KeyLabelSt:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
+		KeyDescSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		// --- search highlight ---
+		SearchHighlightSt: lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Background(c(t.Surface)),
+	}
 }
 
 // applyTAStyles 将缓存样式应用到 textarea 组件
@@ -2528,25 +2538,25 @@ func (m *cliModel) renderFooter() string {
 		switch m.panelMode {
 		case "bgtasks":
 			if m.panelBgViewing {
-				hints = append(hints, keyHint("PgUp/PgDn", "scroll"), keyHint("Esc", "back"))
+				hints = append(hints, m.keyHint("PgUp/PgDn", "scroll"), m.keyHint("Esc", "back"))
 			} else {
-				hints = append(hints, keyHint("↑↓", "navigate"), keyHint("Enter", "log"), keyHint("Del", "kill"), keyHint("Esc", "close"))
+				hints = append(hints, m.keyHint("↑↓", "navigate"), m.keyHint("Enter", "log"), m.keyHint("Del", "kill"), m.keyHint("Esc", "close"))
 			}
 		default:
-			hints = append(hints, keyHint("↑↓", "navigate"), keyHint("Enter", "select"), keyHint("Esc", "close"))
+			hints = append(hints, m.keyHint("↑↓", "navigate"), m.keyHint("Enter", "select"), m.keyHint("Esc", "close"))
 		}
 	} else if m.typing {
 		// 处理中：显示取消快捷键
-		hints = append(hints, ctrlKey("c", "cancel"))
+		hints = append(hints, m.ctrlKey("c", "cancel"))
 	} else {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
-			hints = append(hints, ctrlKey("k", "delete"), keyHint("/", "commands"), keyHint("tab", "complete"))
+			hints = append(hints, m.ctrlKey("k", "delete"), m.keyHint("/", "commands"), m.keyHint("tab", "complete"))
 			if m.bgTaskCount > 0 {
-				hints = append(hints, keyHint("^", "bg tasks"))
+				hints = append(hints, m.keyHint("^", "bg tasks"))
 			}
 		} else {
-			hints = append(hints, ctrlKey("j", "newline"), keyHint("tab", "complete"), ctrlKey("k", "delete"))
+			hints = append(hints, m.ctrlKey("j", "newline"), m.keyHint("tab", "complete"), m.ctrlKey("k", "delete"))
 		}
 	}
 
@@ -2563,26 +2573,16 @@ func (m *cliModel) renderFooter() string {
 }
 
 // ctrlKey 渲染 Ctrl+X 快捷键标签（灰色键帽 + 彩色描述）
-func ctrlKey(key string, desc string) string {
-	k := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Bold(true).
-		Render("Ctrl+" + key)
-	d := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Render(desc)
+func (m *cliModel) ctrlKey(key string, desc string) string {
+	k := m.styles.KeyLabelSt.Render("Ctrl+" + key)
+	d := m.styles.KeyDescSt.Render(desc)
 	return k + " " + d
 }
 
 // keyHint 渲染普通按键标签
-func keyHint(key, desc string) string {
-	k := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Bold(true).
-		Render(key)
-	d := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextSecondary)).
-		Render(desc)
+func (m *cliModel) keyHint(key, desc string) string {
+	k := m.styles.KeyLabelSt.Render(key)
+	d := m.styles.KeyDescSt.Render(desc)
 	return k + " " + d
 }
 
@@ -3694,7 +3694,7 @@ func stripANSI(s string) string {
 }
 
 // highlightSearchMatch 在文本中高亮搜索关键词
-func highlightSearchMatch(text string, query string) string {
+func highlightSearchMatch(text string, query string, hlStyle lipgloss.Style) string {
 	if query == "" {
 		return text
 	}
@@ -3716,12 +3716,6 @@ func highlightSearchMatch(text string, query string) string {
 	if ansiOffset < 0 || matchEnd < 0 || matchEnd > len(text) {
 		return text
 	}
-
-	// 高亮样式（搜索非每帧热路径，直接构建）
-	hlStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Warning)).
-		Bold(true).
-		Background(lipgloss.Color(currentTheme.Surface))
 
 	before := text[:ansiOffset]
 	match := text[ansiOffset:matchEnd]
@@ -3767,6 +3761,22 @@ func (m *cliModel) searchStatusHint() string {
 }
 
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
+// toolDisplayInfo 从工具进度条目中提取显示用的 label、状态图标和样式。
+func toolDisplayInfo(tool CLIToolProgress, okStyle, errStyle lipgloss.Style) (label, icon string, sty lipgloss.Style) {
+	if tool.Label == "" {
+		label = tool.Name
+	} else {
+		label = tool.Label
+	}
+	icon = "✓"
+	sty = okStyle
+	if tool.Status == "error" {
+		icon = "✗"
+		sty = errStyle
+	}
+	return
+}
+
 func (m *cliModel) renderMessage(msg *cliMessage) string {
 	// §20 使用缓存样式
 	s := &m.styles
@@ -3797,7 +3807,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 
 	// §21 搜索高亮：对匹配消息的内容高亮关键词
 	if m.searchActive && m.searchQuery != "" && msg.role != "tool_summary" {
-		rendered = highlightSearchMatch(rendered, m.searchQuery)
+		rendered = highlightSearchMatch(rendered, m.searchQuery, m.styles.SearchHighlightSt)
 	}
 
 	timeStr := timeStyle.Render(msg.timestamp.Format("15:04:05"))
@@ -3843,46 +3853,27 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 						toolSb.WriteString("\n")
 					}
 					for _, tool := range it.Tools {
-						label := tool.Label
-						if label == "" {
-							label = tool.Name
+							label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
+							elapsed := ""
+							if tool.Elapsed > 0 {
+								elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+							}
+							toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
+							toolSb.WriteString("\n")
 						}
-						elapsed := ""
-						if tool.Elapsed > 0 {
-							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-						}
-						// 根据工具状态选择图标和颜色
-						icon := "\u2713"
-						sty := toolItemStyle
-						if tool.Status == "error" {
-							icon = "\u2717"
-							sty = toolErrorItemStyle
-						}
-						toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
-						toolSb.WriteString("\n")
-					}
 				}
 			} else {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))
 				toolSb.WriteString("\n")
 				for _, tool := range msg.tools {
-					label := tool.Label
-					if label == "" {
-						label = tool.Name
+						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
+						elapsed := ""
+						if tool.Elapsed > 0 {
+							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+						}
+						toolSb.WriteString(sty.Render(fmt.Sprintf("  %s %s%s", icon, label, elapsed)))
+						toolSb.WriteString("\n")
 					}
-					elapsed := ""
-					if tool.Elapsed > 0 {
-						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-					}
-					icon := "\u2713"
-					sty := toolItemStyle
-					if tool.Status == "error" {
-						icon = "\u2717"
-						sty = toolErrorItemStyle
-					}
-					toolSb.WriteString(sty.Render(fmt.Sprintf("  %s %s%s", icon, label, elapsed)))
-					toolSb.WriteString("\n")
-				}
 			}
 		} else {
 			// 折叠模式升级（第 4 轮）：统计摘要 + 成功/失败状态图标

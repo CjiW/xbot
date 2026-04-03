@@ -2,23 +2,24 @@ package channel
 
 import (
 	"fmt"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"path/filepath"
 	"strings"
+	tea "charm.land/bubbletea/v2"
 	"time"
 	"unicode/utf8"
 	"xbot/version"
 )
 
 // View 渲染界面
-func (m *cliModel) View() string {
+func (m *cliModel) View() tea.View {
 	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
 	if !m.splashDone {
-		return m.renderSplash()
+		return m.altView(m.renderSplash())
 	}
 
 	if !m.ready {
-		return "\n  " + m.locale.SplashLoading
+		return m.altView("\n  " + m.locale.SplashLoading)
 	}
 
 	// ========== 样式定义 ==========
@@ -64,23 +65,24 @@ func (m *cliModel) View() string {
 	// §9 Ctrl+K 确认模式提示
 	if m.confirmDelete > 0 {
 		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
-		return fmt.Sprintf(
+		return m.altView(fmt.Sprintf(
 			"%s\n%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
 			warningText,
 			input,
-		)
+		))
 	}
 
 	// 动态 placeholder：处理中 vs 就绪（就绪态使用轮换提示）
 	if m.typing {
 		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
-		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	} else {
 		m.textarea.Placeholder = m.pickIdlePlaceholder()
-		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	}
+	st := m.textarea.Styles()
+	st.Blurred.Placeholder = m.styles.PlaceholderSt
+	m.textarea.SetStyles(st)
 
 	// 进度状态栏
 	var status string
@@ -159,49 +161,54 @@ func (m *cliModel) View() string {
 		panel := m.viewPanel()
 		// Panel 模式下也显示 footer 快捷键提示
 		panelFooter := m.renderFooter()
-		return fmt.Sprintf(
+		return m.altView(fmt.Sprintf(
 			"%s\n%s\n%s%s%s",
 			titleBar,
 			m.viewport.View(),
 			panel,
 			panelFooter,
 			toastStr,
-		)
+		))
 	}
 
 	todoBar := m.renderTodoBar()
-	if todoBar != "" {
-		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s%s",
+		if todoBar != "" {
+			return m.altView(fmt.Sprintf(
+				"%s\n%s\n%s\n%s\n%s%s",
+				titleBar,
+				m.viewport.View(),
+				status,
+				todoBar,
+				input,
+				toastStr,
+			))
+		}
+		// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
+		footer := m.renderFooter()
+		if footer != "" {
+			return m.altView(fmt.Sprintf(
+				"%s\n%s\n%s\n%s\n%s%s",
+				titleBar,
+				m.viewport.View(),
+				status,
+				footer,
+				input,
+				toastStr,
+			))
+		}
+		return m.altView(fmt.Sprintf(
+			"%s\n%s\n%s\n%s%s",
 			titleBar,
 			m.viewport.View(),
 			status,
-			todoBar,
 			input,
 			toastStr,
-		)
+		))
 	}
-	// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
-	footer := m.renderFooter()
-	if footer != "" {
-		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s%s",
-			titleBar,
-			m.viewport.View(),
-			status,
-			footer,
-			input,
-			toastStr,
-		)
-	}
-	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s%s",
-		titleBar,
-		m.viewport.View(),
-		status,
-		input,
-		toastStr,
-	)
+
+// altView creates a tea.View with alt screen enabled.
+func (m *cliModel) altView(content string) tea.View {
+	return tea.View{Content: content, AltScreen: true}
 }
 
 // allTodosDone returns true when todos exist and every item is marked done.

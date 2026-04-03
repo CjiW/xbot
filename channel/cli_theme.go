@@ -1,15 +1,13 @@
 package channel
 
 import (
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/termenv"
 	"os"
 )
 
 func init() {
-	lipgloss.SetHasDarkBackground(true) // 所有配色方案都基于深色终端背景
-	lipgloss.SetColorProfile(termenv.TrueColor)
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
 }
 
@@ -311,7 +309,7 @@ type cliStyles struct {
 
 func buildStyles(width int) cliStyles {
 	t := currentTheme
-	c := func(s string) lipgloss.Color { return lipgloss.Color(s) }
+	c := lipgloss.Color
 	cw := width - 4
 	if cw < 10 {
 		cw = 10
@@ -422,16 +420,18 @@ func buildStyles(width int) cliStyles {
 
 // applyTAStyles 将缓存样式应用到 textarea 组件
 func applyTAStyles(ta *textarea.Model, s *cliStyles) {
-	ta.Cursor.Style = s.TACursor
-	ta.FocusedStyle.Base = s.TABase
-	ta.FocusedStyle.Placeholder = s.TAPlaceholder
-	ta.FocusedStyle.CursorLine = s.TACursorLine
-	ta.FocusedStyle.LineNumber = s.TALineNumber
-	ta.FocusedStyle.EndOfBuffer = s.TAEndOfBuffer
-	ta.BlurredStyle.CursorLine = s.TABlurredCursor
-	ta.BlurredStyle.LineNumber = s.TABlurredLineNum
-	ta.BlurredStyle.EndOfBuffer = s.TABlurredEOB
-	ta.BlurredStyle.Text = s.TABlurredText
+	st := ta.Styles()
+	st.Cursor.Color = s.TACursor.GetForeground()
+	st.Focused.Base = s.TABase
+	st.Focused.Placeholder = s.TAPlaceholder
+	st.Focused.CursorLine = s.TACursorLine
+	st.Focused.LineNumber = s.TALineNumber
+	st.Focused.EndOfBuffer = s.TAEndOfBuffer
+	st.Blurred.CursorLine = s.TABlurredCursor
+	st.Blurred.LineNumber = s.TABlurredLineNum
+	st.Blurred.EndOfBuffer = s.TABlurredEOB
+	st.Blurred.Text = s.TABlurredText
+	ta.SetStyles(st)
 }
 
 // newPanelTextArea creates a configured textarea for panel editing.

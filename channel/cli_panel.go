@@ -3,9 +3,9 @@ package channel
 import (
 	"context"
 	"fmt"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"strings"
 	"time"
 	"xbot/tools"
@@ -120,14 +120,17 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelAnswerTA = ta
 	// Initialize Other single-line input
 	ti := textinput.New()
-	ti.Placeholder = "Type here..."
-	ti.Prompt = ""
-	ti.CharLimit = 200
-	ti.Width = m.panelWidth(40)
-	ti.PromptStyle = m.styles.TIPrompt
-	ti.TextStyle = m.styles.TIText
-	ti.Cursor.Style = m.styles.TICursor
-	ti.PlaceholderStyle = m.styles.TIPlaceholder
+		ti.Placeholder = "Type here..."
+		ti.Prompt = ""
+		ti.CharLimit = 200
+		ti.SetWidth(m.panelWidth(40))
+		s := ti.Styles()
+		s.Blurred.Prompt = m.styles.TIPrompt
+		s.Blurred.Text = m.styles.TIText
+		s.Cursor.Color = m.styles.TICursor.GetForeground()
+		s.Blurred.Placeholder = m.styles.TIPlaceholder
+		s.Focused = s.Blurred
+		ti.SetStyles(s)
 	ti.Focus()
 	m.panelOtherTI = ti
 	m.panelOnAnswer = onAnswer
@@ -174,95 +177,94 @@ func (m *cliModel) openBgTasksPanel() {
 
 // updateBgTasksPanel handles key events in the bg tasks panel.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// Refresh task list
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
 		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	}
 
 	// Log viewing sub-mode
-	if m.panelBgViewing {
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
-			m.panelBgViewing = false
-			m.panelBgScroll = 0
-			m.panelBgLogLines = nil
-			return true, m, nil
-		case tea.KeyUp:
-			m.panelBgScroll -= 5
-			if m.panelBgScroll < 0 {
+		if m.panelBgViewing {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.panelBgViewing = false
 				m.panelBgScroll = 0
-			}
-			return true, m, nil
-		case tea.KeyDown:
-			maxScroll := len(m.panelBgLogLines) - 20
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			m.panelBgScroll += 5
-			if m.panelBgScroll > maxScroll {
-				m.panelBgScroll = maxScroll
-			}
-			return true, m, nil
-		case tea.KeyPgUp:
-			m.panelBgScroll -= 18
-			if m.panelBgScroll < 0 {
-				m.panelBgScroll = 0
-			}
-			return true, m, nil
-		default:
-			// PgDn: bubbletea doesn't have a constant, match by string
-			if msg.String() == "pgdown" {
+				m.panelBgLogLines = nil
+				return true, m, nil
+			case "up":
+				m.panelBgScroll -= 5
+				if m.panelBgScroll < 0 {
+					m.panelBgScroll = 0
+				}
+				return true, m, nil
+			case "down":
 				maxScroll := len(m.panelBgLogLines) - 20
 				if maxScroll < 0 {
 					maxScroll = 0
 				}
-				m.panelBgScroll += 18
+				m.panelBgScroll += 5
 				if m.panelBgScroll > maxScroll {
 					m.panelBgScroll = maxScroll
 				}
 				return true, m, nil
+			case "pgup":
+				m.panelBgScroll -= 18
+				if m.panelBgScroll < 0 {
+					m.panelBgScroll = 0
+				}
+				return true, m, nil
+			default:
+				if msg.String() == "pgdown" {
+					maxScroll := len(m.panelBgLogLines) - 20
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					m.panelBgScroll += 18
+					if m.panelBgScroll > maxScroll {
+						m.panelBgScroll = maxScroll
+					}
+					return true, m, nil
+				}
 			}
+			return true, m, nil
 		}
-		return true, m, nil
-	}
 
-	// Task list mode
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
-
-	case tea.KeyUp, tea.KeyCtrlK:
-		if m.panelBgCursor > 0 {
-			m.panelBgCursor--
-		}
-		return true, m, nil
-
-	case tea.KeyDown, tea.KeyCtrlJ:
-		if m.panelBgCursor < len(m.panelBgTasks)-1 {
-			m.panelBgCursor++
-		}
-		return true, m, nil
-
-	case tea.KeyEnter:
-		// View log of selected task
-		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
-			task := m.panelBgTasks[m.panelBgCursor]
-			// Output is written atomically by the task runner, safe to read
-			m.panelBgLogLines = splitLines(task.Output)
-			if len(m.panelBgLogLines) == 0 {
-				m.panelBgLogLines = []string{"(no output)"}
+		// Task list mode
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			m.closePanel()
+			if m.typing {
+				return true, m, tea.Batch(tickerCmd(), tickCmd())
 			}
-			m.panelBgViewing = true
-			m.panelBgScroll = 0
-		}
+			return true, m, nil
+
+		case "up", "ctrl+k":
+			if m.panelBgCursor > 0 {
+				m.panelBgCursor--
+			}
+			return true, m, nil
+
+		case "down", "ctrl+j":
+			if m.panelBgCursor < len(m.panelBgTasks)-1 {
+				m.panelBgCursor++
+			}
+			return true, m, nil
+
+		case "enter":
+			// View log of selected task
+			if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+				task := m.panelBgTasks[m.panelBgCursor]
+				// Output is written atomically by the task runner, safe to read
+				m.panelBgLogLines = splitLines(task.Output)
+				if len(m.panelBgLogLines) == 0 {
+					m.panelBgLogLines = []string{"(no output)"}
+				}
+				m.panelBgViewing = true
+				m.panelBgScroll = 0
+			}
 		return true, m, nil
 
-	case tea.KeyDelete, tea.KeyCtrlD:
+	case "delete", "ctrl+d":
 		// Kill selected running task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
@@ -411,7 +413,7 @@ func splitLines(s string) []string {
 
 // updatePanel handles key events when a panel is active.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelMode == "" {
 		return false, m, nil
 	}
@@ -427,22 +429,22 @@ func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	return false, m, nil
 }
 
-func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelEdit {
 		// Editing mode
-		switch msg.Type {
-		case tea.KeyEnter:
-			// Save value
-			newVal := strings.TrimSpace(m.panelEditTA.Value())
-			if m.panelCursor < len(m.panelSchema) {
-				key := m.panelSchema[m.panelCursor].Key
-				m.panelValues[key] = newVal
-			}
-			m.panelEdit = false
-			return true, m, nil
-		case tea.KeyEsc:
-			m.panelEdit = false
-			return true, m, nil
+		switch msg.String() {
+			case "enter":
+				// Save value
+				newVal := strings.TrimSpace(m.panelEditTA.Value())
+				if m.panelCursor < len(m.panelSchema) {
+					key := m.panelSchema[m.panelCursor].Key
+					m.panelValues[key] = newVal
+				}
+				m.panelEdit = false
+				return true, m, nil
+			case "esc":
+				m.panelEdit = false
+				return true, m, nil
 		default:
 			// Delegate to textarea
 			var cmd tea.Cmd
@@ -456,62 +458,62 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			opts := def.Options
-			switch msg.Type {
-			case tea.KeyEsc:
-				m.panelCombo = false
-				return true, m, nil
-			case tea.KeyUp:
-				if m.panelComboIdx > 0 {
-					m.panelComboIdx--
-				}
-				return true, m, nil
-			case tea.KeyDown:
-				if m.panelComboIdx < len(opts)-1 {
-					m.panelComboIdx++
-				}
-				return true, m, nil
-			case tea.KeyEnter:
-				if m.panelComboIdx < len(opts) {
-					m.panelValues[def.Key] = opts[m.panelComboIdx].Value
-				}
-				m.panelCombo = false
-				return true, m, nil
-			case tea.KeySpace:
-				m.panelCombo = false
-				// Start typing to filter / enter custom value → switch to edit mode
-				m.panelEdit = true
-				ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
-				var cmd tea.Cmd
-				m.panelEditTA, cmd = ta.Update(msg)
-				return true, m, cmd
+			switch msg.String() {
+				case "esc":
+					m.panelCombo = false
+					return true, m, nil
+				case "up":
+					if m.panelComboIdx > 0 {
+						m.panelComboIdx--
+					}
+					return true, m, nil
+				case "down":
+					if m.panelComboIdx < len(opts)-1 {
+						m.panelComboIdx++
+					}
+					return true, m, nil
+				case "enter":
+					if m.panelComboIdx < len(opts) {
+						m.panelValues[def.Key] = opts[m.panelComboIdx].Value
+					}
+					m.panelCombo = false
+					return true, m, nil
+				case " ":
+					m.panelCombo = false
+					// Start typing to filter / enter custom value → switch to edit mode
+					m.panelEdit = true
+					ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
+					var cmd tea.Cmd
+					m.panelEditTA, cmd = ta.Update(msg)
+					return true, m, cmd
 			}
 		}
 		return true, m, nil
 	}
 
 	// Navigation mode
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.closePanel()
-		return true, m, nil
-	case tea.KeyCtrlS:
-		// Submit all settings
-		if m.panelOnSubmit != nil {
-			m.panelOnSubmit(m.panelValues)
-		}
-		m.closePanel()
-		return true, m, nil
-	case tea.KeyUp, tea.KeyShiftTab:
-		if m.panelCursor > 0 {
-			m.panelCursor--
-		}
-		return true, m, nil
-	case tea.KeyDown, tea.KeyTab:
-		if m.panelCursor < len(m.panelSchema)-1 {
-			m.panelCursor++
-		}
-		return true, m, nil
-	case tea.KeyEnter:
+		switch msg.String() {
+		case "esc":
+			m.closePanel()
+			return true, m, nil
+		case "ctrl+s":
+			// Submit all settings
+			if m.panelOnSubmit != nil {
+				m.panelOnSubmit(m.panelValues)
+			}
+			m.closePanel()
+			return true, m, nil
+		case "up", "shift+tab":
+			if m.panelCursor > 0 {
+				m.panelCursor--
+			}
+			return true, m, nil
+		case "down", "tab":
+			if m.panelCursor < len(m.panelSchema)-1 {
+				m.panelCursor++
+			}
+			return true, m, nil
+		case "enter":
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			switch def.Type {
@@ -568,7 +570,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 	return true, m, nil
 }
 
-func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
 		return true, m, nil
 	}
@@ -580,8 +582,8 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	onOther := hasOpts && cursor == numOpts
 	onSubmit := hasOpts && cursor == numOpts+1
 
-	switch msg.Type {
-	case tea.KeyCtrlS:
+	switch msg.String() {
+	case "ctrl+s":
 		answers := m.collectAskAnswers()
 		if m.panelOnAnswer != nil {
 			m.panelOnAnswer(answers)
@@ -591,27 +593,27 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeyEsc:
+	case "esc":
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyRight, tea.KeyTab:
+	case "right", "tab":
 		if len(m.panelItems) > 1 && m.panelTab < len(m.panelItems)-1 {
 			m.saveCurrentFreeInput()
 			m.panelTab++
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyShiftTab, tea.KeyLeft:
+	case "shift+tab", "left":
 		if len(m.panelItems) > 1 && m.panelTab > 0 {
 			m.saveCurrentFreeInput()
 			m.panelTab--
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyUp:
+	case "up":
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
@@ -626,7 +628,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyDown:
+	case "down":
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts + 1
@@ -641,7 +643,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyEnter:
+	case "enter":
 		if hasOpts {
 			if onSubmit {
 				answers := m.collectAskAnswers()
@@ -669,7 +671,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeySpace:
+	case " ":
 		if hasOpts && !onOther {
 			if cursor < numOpts {
 				m.toggleOptAtCursor()
@@ -690,48 +692,50 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyRunes:
-		if hasOpts && !onOther {
-			m.panelOptCursor[m.panelTab] = numOpts
-			m.restoreOtherInput()
-		}
-		if onOther {
-			var cmd tea.Cmd
-			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
-			return true, m, cmd
-		}
-		if hasOpts {
-			// With options, all input goes through Other textinput
-			return true, m, nil
-		}
-		// No options: textarea
-		m.autoExpandAskTA()
-		var cmd tea.Cmd
-		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-		return true, m, cmd
 	default:
-		if isCtrlJ(msg) {
+		// Printable character input (replaces tea.KeyRunes)
+		if len(msg.Text) > 0 {
+			if hasOpts && !onOther {
+				m.panelOptCursor[m.panelTab] = numOpts
+				m.restoreOtherInput()
+			}
+			if onOther {
+				var cmd tea.Cmd
+				m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+				return true, m, cmd
+			}
+			if hasOpts {
+				// With options, all input goes through Other textinput
+				return true, m, nil
+			}
+			// No options: textarea
+			m.autoExpandAskTA()
+			var cmd tea.Cmd
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
+			return true, m, cmd
+			}
+			// Ctrl+J for newline in textarea
+			if msg.String() == "ctrl+j" {
 			if !hasOpts {
 				m.panelAnswerTA.InsertString("\n")
 				m.autoExpandAskTA()
 			}
 			return true, m, nil
-		}
-		if onOther {
+			}
+			if onOther {
+				var cmd tea.Cmd
+				m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+				return true, m, cmd
+			}
+			if hasOpts {
+				return true, m, nil
+			}
+			m.autoExpandAskTA()
 			var cmd tea.Cmd
-			m.panelOtherTI, cmd = m.panelOtherTI.Update(msg)
+			m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 			return true, m, cmd
-		}
-		if hasOpts {
-			return true, m, nil
-		}
-		m.autoExpandAskTA()
-		var cmd tea.Cmd
-		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
-		return true, m, cmd
+		} // end switch msg.String()
 	}
-
-}
 
 // toggleOptAtCursor toggles the checkbox at the current cursor position.
 func (m *cliModel) toggleOptAtCursor() {
@@ -836,7 +840,7 @@ func (m *cliModel) autoExpandAskTA() {
 func (m *cliModel) panelMaxHeight() int {
 	// viewport.Height 已经减去了 titleBar(1) + separator(1) + status(1) + inputBox(~5) + footer(1)
 	// panel 需要留 2 行给 footer+toast，实际可用 = viewportHeight - 1 (panel border)
-	maxH := m.viewport.Height - 1
+	maxH := m.viewport.Height() - 1
 	if maxH < 8 {
 		maxH = 8 // 最小高度保证
 	}

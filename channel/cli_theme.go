@@ -431,6 +431,7 @@ func applyTAStyles(ta *textarea.Model, s *cliStyles) {
 	st.Blurred.LineNumber = s.TABlurredLineNum
 	st.Blurred.EndOfBuffer = s.TABlurredEOB
 	st.Blurred.Text = s.TABlurredText
+	st.Blurred.Placeholder = s.PlaceholderSt
 	ta.SetStyles(st)
 }
 

@@ -80,9 +80,6 @@ func (m *cliModel) View() tea.View {
 	} else {
 		m.textarea.Placeholder = m.pickIdlePlaceholder()
 	}
-	st := m.textarea.Styles()
-	st.Blurred.Placeholder = m.styles.PlaceholderSt
-	m.textarea.SetStyles(st)
 
 	// 进度状态栏
 	var status string

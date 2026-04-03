@@ -2936,10 +2936,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	switch command {
 	// --- 本地命令 ---
 	case "/cancel":
-		if m.msgBus != nil {
-		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
-		}
-		m.appendSystem("已发送取消请求")
+		m.sendCancel()
 
 	case "/clear":
 		m.messages = make([]cliMessage, 0, cliMsgBufSize)
@@ -3044,7 +3041,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
 		if m.msgBus != nil {
-				m.msgBus.Inbound <- m.newInbound("/compact", nil)
+		m.msgBus.Inbound <- m.newInbound("/compact", nil)
 			}
 
 	// --- 透传命令（发送到 agent） ---

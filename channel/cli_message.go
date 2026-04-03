@@ -13,6 +13,7 @@ import (
 	"time"
 	"xbot/bus"
 	"xbot/tools"
+	"xbot/version"
 )
 
 // ---------------------------------------------------------------------------
@@ -192,20 +193,17 @@ func (m *cliModel) sendToAgent(content string) {
 	}
 }
 
-// sendMessage 发送用户消息
-func (m *cliModel) sendMessage(content string) {
+// sendMessage 发送用户消息，返回可能需要执行的 tea.Cmd（如彩蛋动画 tick）。
+func (m *cliModel) sendMessage(content string) tea.Cmd {
 	content = strings.TrimSpace(content)
 	if strings.HasPrefix(content, "/") {
-		m.handleSlashCommand(content)
-		return
+		return m.handleSlashCommand(content)
 	}
 
 	// 🥚 彩蛋 #3: The Answer is 42 检测
-	if isAnswer42(content) {
-		cmd := m.activateEasterEgg(easterEggAnswer42, 5*time.Second)
-		// 仍然作为用户消息发送给 agent（但彩蛋覆盖层会先显示）
-		_ = cmd
-	}
+		if isAnswer42(content) {
+			_ = m.activateEasterEgg(easterEggAnswer42)
+		}
 
 	// 解析 @ 文件引用，提取文件路径
 	media := parseFileReferences(content)
@@ -233,6 +231,7 @@ func (m *cliModel) sendMessage(content string) {
 		m.inputReady = false
 		m.resetProgressState()
 	}
+	return nil
 }
 
 // parseFileReferences 从用户消息中提取 @path 文件引用。
@@ -283,7 +282,7 @@ func (m *cliModel) collectAllTools() []CLIToolProgress {
 }
 
 // handleSlashCommand 处理斜杠命令
-func (m *cliModel) handleSlashCommand(cmd string) {
+func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	cmd = strings.TrimSpace(cmd)
 	// 提取命令部分（去掉参数）
 	parts := strings.Fields(cmd)
@@ -293,13 +292,9 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	}
 
 	// 🥚 彩蛋命令优先检测（隐藏命令不注册到 cliCommands）
-	if m.handleEasterEggCommand(cmd) {
-		// /version 需要同时显示正常版本号 + 可能的彩蛋
-		if command == "/version" {
-			m.checkVersionOCD()
+		if handled, cmd := m.handleEasterEggCommand(cmd); handled {
+			return cmd
 		}
-		return
-	}
 
 	switch command {
 	// --- 本地命令 ---
@@ -455,11 +450,22 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		}
 
 	default:
-		// 未知命令尝试透传到 agent（agent 层可能认识）
-		m.sendToAgent(cmd)
+			// 🥚 彩蛋 #7: /version 三连检测
+			if command == "/version" {
+				if m.recordVersionHit() {
+						art := fmt.Sprintf(versionAchievementArt, version.Version)
+						_ = m.activateEasterEgg(easterEggVersion)
+						m.easterEggCustom = art
+						m.updateViewportContent()
+						return nil
+				}
+			}
+			// 未知命令尝试透传到 agent（agent 层可能认识）
+			m.sendToAgent(cmd)
 	}
 
 	m.updateViewportContent()
+	return nil
 }
 
 // handleAgentMessage 处理 agent 回复

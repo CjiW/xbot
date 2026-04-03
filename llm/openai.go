@@ -447,9 +447,6 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	startTime := time.Now()
 	params := o.buildParams(model, messages, tools)
 
-	data, _ := params.MarshalJSON()
-	logrus.Ctx(ctx).Debugf("[LLM] Request params: %s", string(data))
-
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
@@ -474,11 +471,6 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		PromptTokens:     completion.Usage.PromptTokens,
 		CompletionTokens: completion.Usage.CompletionTokens,
 		TotalTokens:      completion.Usage.TotalTokens,
-	}
-
-	// Debug: dump full completion response as JSON for inspection
-	if completionRaw, err := json.Marshal(completion); err == nil {
-		logrus.Ctx(ctx).WithField("raw_completion", string(completionRaw)).Debug("[LLM] Raw completion response")
 	}
 
 	if len(completion.Choices) > 0 {
@@ -540,19 +532,6 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 
 	startTime := time.Now()
 	params := o.buildParams(model, messages, tools)
-
-	data, _ := params.MarshalJSON()
-	logrus.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
-
-	// Debug: 打印请求关键信息（token 数大时帮助排查空响应）
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
-		"provider":    "openai",
-		"model":       model,
-		"msg_count":   len(messages),
-		"tools_count": len(tools),
-		"thinking":    thinkingMode,
-		"param_bytes": len(data),
-	}).Debug("[LLM] Stream request summary")
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)

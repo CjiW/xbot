@@ -815,6 +815,10 @@ func init() {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
 			},
 			{
+				Key: "max_context_tokens", Label: "最大コンテキストトークン", Description: "コンテキストの最大トークン数（デフォルト 200000）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
+			},
+			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{

@@ -808,9 +808,11 @@ func (m *cliModel) restoreFreeInput() {
 	if len(item.Options) > 0 {
 		m.panelOtherTI.SetValue(item.Other)
 		m.panelOtherTI.CursorEnd()
+		m.panelOtherTI.Focus()
 	} else {
 		m.panelAnswerTA.SetValue(item.Other)
 		m.panelAnswerTA.CursorEnd()
+		m.panelAnswerTA.Focus()
 		m.autoExpandAskTA()
 	}
 }

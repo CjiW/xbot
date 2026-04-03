@@ -75,6 +75,27 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return newModel, cmd
 		}
 	}
+	// §12b Panel mode: intercept paste events — PasteMsg is not KeyPressMsg,
+	// so it bypasses the above panel interceptor and would be captured by the
+	// main textarea below. Forward it to the panel's internal textarea instead.
+	if paste, ok := msg.(tea.PasteMsg); ok && m.panelMode != "" {
+		var cmd tea.Cmd
+		switch m.panelMode {
+		case "askuser":
+			// Check if current tab has options (use textinput) or free input (use textarea)
+			if m.panelTab >= 0 && m.panelTab < len(m.panelItems) && len(m.panelItems[m.panelTab].Options) > 0 {
+				m.panelOtherTI, cmd = m.panelOtherTI.Update(paste)
+			} else {
+				m.autoExpandAskTA()
+				m.panelAnswerTA, cmd = m.panelAnswerTA.Update(paste)
+			}
+		case "settings":
+			if m.panelEdit {
+				m.panelEditTA, cmd = m.panelEditTA.Update(paste)
+			}
+		}
+		return m, cmd
+	}
 
 	// Home/End 跳顶部/底部
 	if key, ok := msg.(tea.KeyPressMsg); ok {
@@ -207,9 +228,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
 				if m.allTodosDone() {
-					m.todos = nil
-					m.todosDoneCleared = true
-				}
+						m.todos = nil
+						m.todosDoneCleared = true
+						m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+					}
 				m.sendMessage(content)
 				m.textarea.Reset()
 				m.autoExpandInput()
@@ -289,12 +311,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Already cleared by user input; don't re-accept stale all-done list
 				} else {
 					m.todos = make([]CLITodoItem, len(msg.payload.Todos))
-					copy(m.todos, msg.payload.Todos)
-					m.todosDoneCleared = false
-				}
-			} else {
-				m.todos = nil
-			}
+							copy(m.todos, msg.payload.Todos)
+							m.todosDoneCleared = false
+							m.relayoutViewport() // TODO 行数可能变化，重新计算 viewport 高度
+						}
+					} else {
+						prevTodoCount := len(m.todos)
+						m.todos = nil
+						if prevTodoCount > 0 {
+							m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+						}
+					}
 			// Detect iteration change: snapshot previous iteration into history
 			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
 				// Filter CompletedTools by Iteration field for the previous iteration
@@ -395,8 +422,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastSeenIteration = 0
 				m.typingStartTime = time.Time{}
 				m.todos = nil
-				m.todosDoneCleared = false
-				m.progress = nil
+					m.todosDoneCleared = false
+					m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+					m.progress = nil
 				m.typing = false
 			}
 		}
@@ -646,7 +674,12 @@ func (m *cliModel) layoutViewportHeight() int {
 
 	// 正常模式
 	taBorder := 2 // top + bottom border
-	reservedLines := fixedLines + taBorder + m.textarea.Height()
+	// 计算 todoBar 占用的行数：标题行(1) + 每个 todo item 一行
+	todoLines := 0
+	if len(m.todos) > 0 {
+		todoLines = 1 + len(m.todos)
+	}
+	reservedLines := fixedLines + taBorder + m.textarea.Height() + todoLines
 	// §20b 小终端适配：极小窗口下动态缩减布局
 	if height < 12 {
 		reservedLines = fixedLines + taBorder + 2 // min textarea

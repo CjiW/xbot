@@ -469,7 +469,8 @@ func expandBracePattern(pattern string) []string {
 				// Found matching closing brace
 				prefix := pattern[:openIdx]
 				suffix := pattern[i+1:]
-				alternatives := strings.Split(pattern[openIdx+1:i], ",")
+				// Split alternatives respecting nested brace depth
+				alternatives := splitBraceAlternatives(pattern[openIdx+1 : i])
 				var results []string
 				for _, alt := range alternatives {
 					alt = strings.TrimSpace(alt)
@@ -481,6 +482,26 @@ func expandBracePattern(pattern string) []string {
 		}
 	}
 	return []string{pattern}
+}
+
+// splitBraceAlternatives splits a brace content string by commas,
+// respecting nested brace depth. E.g. "go,{ts,tsx}" → ["go", "{ts,tsx}"].
+func splitBraceAlternatives(s string) []string {
+	var parts []string
+	start := 0
+	depth := 0
+	for i, ch := range s {
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+		} else if ch == ',' && depth == 0 {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
 }
 
 // executeLocal 在本地执行 grep 搜索（非沙箱模式）

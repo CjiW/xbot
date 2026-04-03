@@ -403,9 +403,17 @@ func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(str
 	go stream(stdoutPipe)
 	go stream(stderrPipe)
 
-	// Wait for completion
-	exitCode := extractExitCode(cmd.Wait())
+	// Wait for process exit. Use cmd.Process.Wait() instead of cmd.Wait()
+	// because cmd.Wait() blocks until all IO copying completes. If login shell
+	// profile sourcing spawns background children that inherit pipe FDs,
+	// io.Copy never gets EOF and cmd.Wait() hangs forever.
+	state, _ := cmd.Process.Wait()
+	// Close pipe read ends to unblock stream goroutines
+	stdoutPipe.Close()
+	stderrPipe.Close()
 	wg.Wait()
+
+	exitCode := extractExitCodeFromState(state)
 
 	if ctx.Err() != nil {
 		return exitCode, ctx.Err()

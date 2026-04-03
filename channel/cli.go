@@ -236,8 +236,11 @@ func (c *CLIChannel) handleOutbound() {
 		case <-c.stopCh:
 			return
 		case msg := <-c.msgChan:
-			if c.program != nil {
-				c.program.Send(cliOutboundMsg{msg: msg})
+			c.programMu.Lock()
+			p := c.program
+			c.programMu.Unlock()
+			if p != nil {
+				p.Send(cliOutboundMsg{msg: msg})
 			}
 		}
 	}

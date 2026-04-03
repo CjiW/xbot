@@ -44,13 +44,9 @@ func (t *CdTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
 		return nil, fmt.Errorf("path is required")
 	}
 
-	// V4: use Sandbox API for directory operations (works for docker + remote)
+	// Use Sandbox API for directory operations (docker + remote sandboxes)
 	if shouldUseSandbox(ctx) {
 		return t.executeWithSandboxAPI(ctx, params.Path)
-	}
-	// Legacy: docker sandbox mode using shell commands
-	if shouldUseSandbox(ctx) {
-		return t.executeInSandbox(ctx, params.Path)
 	}
 
 	return t.executeLocal(ctx, params.Path)
@@ -323,55 +319,9 @@ func buildDirectoryTree(dir string) string {
 	return sb.String()
 }
 
-// buildDirectoryTreeInSandbox builds a directory tree by running commands inside the sandbox.
-func buildDirectoryTreeInSandbox(ctx *ToolContext, dir string) string {
-	cmd := fmt.Sprintf("cd '%s' && ls -1a --group-directories-first 2>/dev/null || ls -1a", strings.ReplaceAll(dir, "'", "'\\''"))
-	output, err := RunInSandboxWithShell(ctx, cmd)
-	if err != nil {
-		return ""
-	}
-
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-
-	var items []string
-	seen := make(map[string]bool)
-	for _, name := range lines {
-		name = strings.TrimSpace(name)
-		if name == "" || name == "." || name == ".." {
-			continue
-		}
-		if strings.HasPrefix(name, ".") && !isKnownDotFile(name) {
-			continue
-		}
-		if !seen[name] {
-			seen[name] = true
-			items = append(items, name)
-		}
-		if len(items) >= 30 {
-			break
-		}
-	}
-
-	if len(items) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📂 Directory structure:\n")
-	for _, name := range items {
-		fmt.Fprintf(&sb, "   %s\n", name)
-	}
-
-	return sb.String()
-}
-
-// isKnownDotFile returns true for dot files that should be shown in the tree.
-// buildDirectoryTreeSandboxAPI builds a directory tree using Sandbox.ReadDir API (V4).
-// Used when shouldUseSandbox(ctx) is true — avoids shell commands, works for remote sandbox.
+// buildDirectoryTreeSandboxAPI builds a directory tree using Sandbox.ReadDir API.
 func buildDirectoryTreeSandboxAPI(ctx *ToolContext, dir string) string {
+
 	entries, err := ctx.Sandbox.ReadDir(ctx.Ctx, dir, ctx.OriginUserID)
 	if err != nil {
 		return ""
@@ -548,74 +498,7 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 	return NewResult(sb.String()), nil
 }
 
-func (t *CdTool) executeInSandbox(ctx *ToolContext, dir string) (*ToolResult, error) {
-	// Resolve relative paths against CurrentDir in sandbox.
-	// CurrentDir in sandbox mode stores sandbox-internal paths (e.g. /workspace/src).
-	target := dir
-	if !filepath.IsAbs(target) {
-		base := ""
-		if ctx.CurrentDir != "" {
-			// CurrentDir in sandbox mode stores sandbox paths (e.g. /workspace/src)
-			base = ctx.CurrentDir
-		} else {
-			base = sandboxBaseDir(ctx)
-		}
-		if base != "" {
-			target = filepath.Join(base, target)
-		}
-	}
-	target = filepath.Clean(target)
-
-	// Defense-in-depth: verify target is within sandbox workspace or allowed read-only roots.
-	// In docker mode the container provides isolation, but this check prevents escapes
-	// if the sandbox implementation has bugs or if mode is misconfigured.
-	sandboxBase := sandboxBaseDir(ctx)
-	if sandboxBase != "" && !isWithinRoot(target, sandboxBase) {
-		allowed := false
-		for _, ro := range ctx.SandboxReadOnlyRoots {
-			if ro == "" {
-				continue
-			}
-			if isWithinRoot(target, ro) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return nil, fmt.Errorf("directory is outside allowed workspace: %s", dir)
-		}
-	}
-
-	// Verify directory exists inside the sandbox
-	cmd := fmt.Sprintf("test -d '%s' && echo ok", strings.ReplaceAll(target, "'", "'\\''"))
-	output, err := RunInSandboxWithShell(ctx, cmd)
-	if err != nil || strings.TrimSpace(output) != "ok" {
-		return nil, fmt.Errorf("directory not found in sandbox: %s", dir)
-	}
-
-	if ctx.SetCurrentDir != nil {
-		ctx.CurrentDir = target
-		ctx.SetCurrentDir(target)
-	}
-
-	log.WithField("dir", target).Debug("Working directory changed")
-
-	projectCtx := detectProjectContextInSandbox(ctx, target)
-	dirTree := buildDirectoryTreeInSandbox(ctx, target)
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Changed directory to %s\n\n", target)
-	sb.WriteString(projectCtx)
-	sb.WriteString(dirTree)
-
-	if projectCtx != "" {
-		fmt.Fprintf(&sb, "\n💡 提示：如果这是你经常工作的项目，可以用 archival_memory_insert 将项目信息存入知识库（包含路径 %s 和项目特征），下次对话可直接查询。\n", target)
-	}
-
-	return NewResult(sb.String()), nil
-}
-
-// executeWithSandboxAPI changes directory using Sandbox API (V4 approach).
+// executeWithSandboxAPI changes directory using Sandbox API.
 func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResult, error) {
 	target := dir
 	if !filepath.IsAbs(target) {

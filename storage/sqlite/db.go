@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 18
+const schemaVersion = 20
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -93,7 +93,11 @@ func (db *DB) initSchema() error {
 	var tableName string
 	err := conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'").Scan(&tableName)
 	if err == sql.ErrNoRows {
-		return db.createSchema()
+		if err := db.createSchema(); err != nil {
+			return err
+		}
+		// createSchema only creates v2 base; run full migration chain
+		return db.migrateSchema(2)
 	}
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
@@ -832,6 +836,32 @@ CREATE TABLE IF NOT EXISTS runners (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v18 (added display_only to session_messages)")
+	}
+
+	if from < 19 {
+		svc := NewUserTokenUsageService(db)
+		if err := svc.createTable(conn); err != nil {
+			return fmt.Errorf("migrate v18->v19: %w", err)
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 19"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v19 (added user_token_usage)")
+	}
+
+	if from < 20 {
+		// Add token tracking fields to tenant_state for persisting API token counts across restarts.
+		// Used by maybeCompress to avoid falling back to imprecise local estimation.
+		if _, err := conn.Exec("ALTER TABLE tenant_state ADD COLUMN last_prompt_tokens INTEGER DEFAULT 0"); err != nil {
+			return fmt.Errorf("migrate v19->v20: %w", err)
+		}
+		if _, err := conn.Exec("ALTER TABLE tenant_state ADD COLUMN last_completion_tokens INTEGER DEFAULT 0"); err != nil {
+			return fmt.Errorf("migrate v19->v20: %w", err)
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 20"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v20 (added token tracking to tenant_state)")
 	}
 
 	return nil

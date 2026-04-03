@@ -150,6 +150,10 @@ func formatTask(task *BackgroundTask) string {
 	fmt.Fprintf(&sb, "Status: %s\n", task.Status)
 	fmt.Fprintf(&sb, "Elapsed: %s\n", elapsed)
 
+	if task.Status == BgTaskRunning {
+		fmt.Fprintf(&sb, "\nTip: Task is still running. Consider using sleep to wait before checking again instead of polling task_status repeatedly.\n")
+	}
+
 	if task.ExitCode >= 0 {
 		fmt.Fprintf(&sb, "Exit Code: %d\n", task.ExitCode)
 	}

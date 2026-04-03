@@ -168,6 +168,11 @@ type RunConfig struct {
 	// the LLM call completes. If nil, no concurrency limiting is applied.
 	LLMSemAcquire func() func()
 
+	// RecordUserTokenUsage is called at the end of Run() to persist per-user
+	// token usage (inputTokens, outputTokens, conversationCount, llmCallCount).
+	// If nil, per-user tracking is skipped.
+	RecordUserTokenUsage func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int)
+
 	// EnableConcurrentSubAgents enables parallel execution of SubAgent tool calls.
 	// When true, multiple SubAgent calls in the same iteration run concurrently,
 	// bounded by SubAgentSem. Default false (backward compatible: sequential).
@@ -178,14 +183,25 @@ type RunConfig struct {
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
 	SubAgentSem func() func()
 
+	// LastPromptTokens is the prompt_tokens from the previous Run()'s last LLM call.
+	// Restored from agent state or DB to avoid starting from 0 after restart.
+	LastPromptTokens int64
+	// LastCompletionTokens is the completion_tokens from the previous Run()'s last LLM call.
+	LastCompletionTokens int64
+	// SaveTokenState persists token counts after Run() completes.
+	// Called with the final promptTokens and completionTokens values.
+	// If nil, token counts are only kept in memory (lost on restart).
+	SaveTokenState func(promptTokens, completionTokens int64)
+
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
 }
 
-// TodoManagerProvider 提供 TODO 状态查询
+// TodoManagerProvider 提供 TODO 状态查询和清理
 type TodoManagerProvider interface {
 	GetTodoSummary(sessionKey string) string
 	GetTodoItems(sessionKey string) []TodoProgressItem
+	ClearTodos(sessionKey string)
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -231,6 +247,11 @@ type RunOutput struct {
 	EngineMessages []llm.ChatMessage
 	// IterationHistory contains snapshots of completed iterations for UI display.
 	IterationHistory []IterationSnapshot
+	// LastPromptTokens is the prompt_tokens from the last LLM API call.
+	// This is the authoritative token count for the full input (messages + tool defs).
+	LastPromptTokens int64
+	// LastCompletionTokens is the completion_tokens from the last LLM API call.
+	LastCompletionTokens int64
 }
 
 // IterationSnapshot captures the tool summary of a completed iteration.
@@ -295,6 +316,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		sessionKey = cfg.Channel + ":" + cfg.ChatID
 	}
 
+	// 当 LLM 生成最终回复后（无 tool_calls），检查 TODO 是否全部完成，若完成则清空
+	defer func() {
+		if cfg.TodoManager != nil && sessionKey != "" {
+			items := cfg.TodoManager.GetTodoItems(sessionKey)
+			if len(items) > 0 {
+				allDone := true
+				for _, item := range items {
+					if !item.Done {
+						allDone = false
+						break
+					}
+				}
+				if allDone {
+					cfg.TodoManager.ClearTodos(sessionKey)
+				}
+			}
+		}
+	}()
+
 	// offloadSessionKey: SubAgent 的 offload 数据存放在顶层 Agent 的 session 目录下，
 	// 与 offload_recall 的 RootSessionKey 保持一致，避免 SubAgent 存了找不到。
 	offloadSessionKey := sessionKey
@@ -316,6 +356,32 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	initialMsgCount := len(messages)
 	lastPersistedCount := initialMsgCount
 
+	// 清理历史消息中残留的 system-reminder（修复前持久化的旧数据）。
+	// system-reminder 仅用于 LLM 上下文引导，不应作为 content 的一部分存在。
+	// 先 copy slice 避免修改原始 cfg.Messages 的底层数组。
+	messages = copyMessages(messages)
+	for i := range messages {
+		if messages[i].Role != "system" && strings.Contains(messages[i].Content, "<system-reminder>") {
+			messages[i].Content = stripSystemReminder(messages[i].Content)
+		}
+	}
+
+	var lastPromptTokens int64     // 上一次 LLM 返回的精确 prompt token 数
+	var lastCompletionTokens int64 // 上一次 LLM 返回的精确 completion token 数
+	var lastMsgCountAtLLMCall int  // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
+	var restoredFromDB bool        // 是否从 DB 恢复了 token 计数（用于 maybeCompress 判断）
+	var hadLLMCall bool            // 本轮 Run 是否成功调用过 LLM（用于 SaveTokenState 判断）
+
+	// 从持久化状态恢复 token 计数，避免重启后从 0 开始（退化为本地估算）
+	if cfg.LastPromptTokens > 0 {
+		lastPromptTokens = cfg.LastPromptTokens
+		lastCompletionTokens = cfg.LastCompletionTokens
+		restoredFromDB = true
+	}
+	var compressAttempts int // 压缩尝试计数器（防止压缩循环）
+	var lastCompressIter int // 上一次成功压缩时的 compressAttempts 值
+	var disableCompressRetry bool
+
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
 	// syncMessages 闭包：每次 messages 被重赋值后调用，保持 ContextEditor 引用同步
 	syncMessages := func(newMessages []llm.ChatMessage) []llm.ChatMessage {
@@ -333,7 +399,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	var progressLines []string
 	var progressMu sync.Mutex // 保护 progressLines 的并发读写 + notifyProgress 的串行化
 	var lastContent string    // 用于 LLM 错误时的降级返回
-	var iteration int         // 当前迭代次数（maybeCompress 闭包内需要访问）
 
 	// 本轮对话的本地计数器（循环结束后一次性提交到 GlobalMetrics）
 	localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens := 0, 0, 0, 0, 0
@@ -342,6 +407,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	// 使用闭包 defer 延迟求值，避免 defer 声明时计数器仍为 0
 	defer func() {
 		GlobalMetrics.RecordConversation(localIterCount, localToolCalls, localLLMCalls, localInputTokens, localOutputTokens)
+		if cfg.RecordUserTokenUsage != nil && cfg.OriginUserID != "" {
+			cfg.RecordUserTokenUsage(cfg.OriginUserID, localInputTokens, localOutputTokens, 1, localLLMCalls)
+		}
 		GlobalMetrics.ClearRecallTracking()
 	}()
 
@@ -436,37 +504,80 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// --- 自动压缩 ---
 	maybeCompress := func() {
+		compressAttempts++
 		cm := cfg.ContextManager
 		if cm == nil || len(messages) <= 3 {
 			return
 		}
-
-		toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
-		toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
-
-		cachedMsgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
-		totalTokens := cachedMsgTokens + toolTokens
 
 		maxTokens := 0
 		if cfg.ContextManagerConfig != nil {
 			maxTokens = cfg.ContextManagerConfig.MaxContextTokens
 		}
 		if maxTokens <= 0 {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"last_prompt_tokens": lastPromptTokens,
+				"msg_count":          len(messages),
+			}).Info("maybeCompress skipped: maxTokens=0")
 			return
 		}
 
-		// Check compaction first (before masking), using simple threshold.
-		// Use maxTokens from cfg.ContextManagerConfig (respects per-user override)
-		// instead of cm.ShouldCompress (which uses the global Agent-level config).
-		var cooldown *CompressCooldown
-		if pm, ok := cm.(*phase1Manager); ok {
-			cooldown = pm.Cooldown()
+		// Token estimation strategy:
+		// - API prompt_tokens (exact) covers messages[0..lastMsgCount] + tool defs
+		// - API completion_tokens (exact) covers the assistant message content/reasoning/tool_calls
+		// - Local estimation only for tool result messages appended after the assistant message
+		// This minimizes reliance on the local tokenizer (which misses reasoning_content, etc.)
+		totalTokens := int64(0)
+		if lastPromptTokens > 0 && lastMsgCountAtLLMCall > 0 {
+			totalTokens = lastPromptTokens + lastCompletionTokens
+			// Estimate only new tool messages appended after the LLM call
+			// (skip assistant msg at lastMsgCountAtLLMCall, its tokens are
+			// exactly covered by lastCompletionTokens)
+			if len(messages) > lastMsgCountAtLLMCall+1 {
+				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
+				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
+				if deltaErr != nil {
+					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+				} else {
+					totalTokens += int64(deltaTokens)
+				}
+			}
+		} else if restoredFromDB && lastPromptTokens > 0 {
+			// Cross-Run recovery: lastMsgCountAtLLMCall is unknown (reset each Run),
+			// so we can't do delta estimation. Use the restored API values as a lower
+			// bound — they reflect the exact size at the end of the previous Run.
+			// Messages may have grown since then (tool results added), making this
+			// an underestimate, but it's safer than an overestimate (missed compression).
+			totalTokens = lastPromptTokens + lastCompletionTokens
+		} else {
+			// No API value yet (first iteration) OR cross-Run recovery where
+			// lastMsgCountAtLLMCall is unknown (reset to 0 each Run).
+			// Fall back to full local estimation to avoid missing delta messages.
+			toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
+			toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
+			cachedMsgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
+			totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
 		}
 
-		needCompress := len(messages) > 3 && shouldCompact(totalTokens, maxTokens)
-		if needCompress && cooldown != nil && !cooldown.ShouldTrigger(iteration) {
-			needCompress = false
-		}
+		needCompress := len(messages) > 3 && shouldCompact(int(totalTokens), maxTokens) && (lastCompressIter == 0 || compressAttempts-lastCompressIter >= 5)
+		log.Ctx(ctx).WithFields(log.Fields{
+			"total_tokens":       totalTokens,
+			"max_tokens":         maxTokens,
+			"threshold":          int(float64(maxTokens) * 0.75),
+			"msg_count":          len(messages),
+			"need":               needCompress,
+			"base_prompt_tokens": lastPromptTokens,
+			"completion_tokens":  lastCompletionTokens,
+			"source": func() string {
+				if lastPromptTokens == 0 || lastMsgCountAtLLMCall == 0 {
+					return "local"
+				}
+				if len(messages) > lastMsgCountAtLLMCall+1 {
+					return "api+completion+tool_delta"
+				}
+				return "api+completion"
+			}(),
+		}).Info("maybeCompress check")
 
 		if needCompress {
 			// Set phase to compressing for structured progress (CLI status bar + progress block)
@@ -496,8 +607,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				return
 			}
 
-			oldTokenCount := cachedMsgTokens
+			oldTokenCount := int(totalTokens)
 			messages = syncMessages(result.LLMView)
+			// Reset token tracking: compressed messages are completely different
+			lastPromptTokens = 0
+			lastCompletionTokens = 0
+			lastMsgCountAtLLMCall = len(messages)
+			lastCompressIter = compressAttempts
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 			// Restore phase after compression completes
@@ -523,21 +639,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			GlobalMetrics.CompressTokensIn.Add(int64(oldTokenCount))
 			GlobalMetrics.CompressTokensOut.Add(int64(newTokenCount))
 
-			// Record cooldown + effectiveness tracking
-			if cooldown != nil {
-				cooldown.RecordCompress(iteration)
-				if oldTokenCount > 0 {
-					reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
-					if reductionRate < 0.10 {
-						log.Ctx(ctx).WithFields(log.Fields{
-							"old_tokens": oldTokenCount,
-							"new_tokens": newTokenCount,
-							"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
-						}).Warn("Compaction ineffective (reduction < 10%), increasing cooldown")
-						cooldown.RecordIneffective()
-					} else {
-						cooldown.RecordEffective()
-					}
+			// Record effectiveness for logging
+			if oldTokenCount > 0 {
+				reductionRate := 1.0 - float64(newTokenCount)/float64(oldTokenCount)
+				if reductionRate < 0.10 {
+					log.Ctx(ctx).WithFields(log.Fields{
+						"old_tokens": oldTokenCount,
+						"new_tokens": newTokenCount,
+						"reduction":  fmt.Sprintf("%.1f%%", reductionRate*100),
+					}).Warn("Compaction ineffective (reduction < 10%)")
 				}
 			}
 
@@ -572,12 +682,13 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.MaskStore != nil {
 			maskingThreshold := float64(maxTokens) * 0.6
 			if float64(totalTokens) > maskingThreshold {
-				keepGroups := calculateKeepGroups(totalTokens, maxTokens)
+				keepGroups := calculateKeepGroups(int(totalTokens), maxTokens)
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, keepGroups)
 				if count > 0 {
 					messages = syncMessages(masked)
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
+
 					if autoNotify {
 						progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
 						notifyProgress("")
@@ -629,6 +740,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if cfg.OffloadStore != nil && cfg.RootSessionKey == "" {
 			cfg.OffloadStore.CleanSession(offloadSessionKey)
 		}
+		out.LastPromptTokens = lastPromptTokens
+		out.LastCompletionTokens = lastCompletionTokens
+		// 持久化 token 计数到 DB，重启后恢复。
+		// 仅在本轮 Run 确实调用了 LLM 且得到新值后才持久化，
+		// 避免异常退出时用恢复的旧值 + 0 覆盖 DB。
+		if cfg.SaveTokenState != nil && hadLLMCall && lastPromptTokens > 0 {
+			cfg.SaveTokenState(lastPromptTokens, lastCompletionTokens)
+		}
 		return out
 	}
 
@@ -661,7 +780,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	})
 
 	for i := 0; i < maxIter; i++ {
-		iteration = i
 		localIterCount++
 		// 更新结构化进度
 		if structuredProgress != nil {
@@ -732,6 +850,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// 记录 LLM 调用指标（通过 local 变量，最终由 RecordConversation 统一入库）
 		localLLMCalls++
 		if response != nil {
+			lastPromptTokens = response.Usage.PromptTokens
+			lastCompletionTokens = response.Usage.CompletionTokens
+			lastMsgCountAtLLMCall = len(messages)
+			hadLLMCall = true
 			localInputTokens += int(response.Usage.PromptTokens)
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}
@@ -751,6 +873,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 				} else {
 					messages = syncMessages(result.LLMView)
+					// Reset token tracking: compressed messages are completely different
+					lastPromptTokens = 0
+					lastCompletionTokens = 0
+					lastMsgCountAtLLMCall = len(messages)
 					if autoNotify {
 						newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 						progressLines = append(progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
@@ -774,6 +900,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					// 重试也要记录 LLM 调用指标（通过 local 变量）
 					localLLMCalls++
 					if response != nil {
+						lastPromptTokens = response.Usage.PromptTokens
+						lastCompletionTokens = response.Usage.CompletionTokens
+						lastMsgCountAtLLMCall = len(messages)
+						hadLLMCall = true
 						localInputTokens += int(response.Usage.PromptTokens)
 						localOutputTokens += int(response.Usage.CompletionTokens)
 					}
@@ -831,6 +961,48 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		cleanContent := llm.StripThinkBlocks(response.Content)
 
 		if !response.HasToolCalls() {
+			// 模型返回 context_window_exceeded：实际 token 超过模型上下文窗口，
+			// 强制压缩后重试（我们的 token 计数可能低于实际值）。
+			if response.FinishReason == llm.FinishReasonContextWindowExceeded {
+				log.Ctx(ctx).WithFields(log.Fields{
+					"msg_count":          len(messages),
+					"last_prompt_tokens": lastPromptTokens,
+					"finish_reason":      response.FinishReason,
+				}).Warn("Model context window exceeded, forcing compression and retry")
+				cm := cfg.ContextManager
+				if cm != nil && !disableCompressRetry {
+					disableCompressRetry = true // 只重试一次，防止死循环
+					if cfg.MemoryToolDefs != nil && cfg.MemoryToolExec != nil {
+						cm.SetMemoryTools(cfg.MemoryToolDefs, cfg.MemoryToolExec)
+					}
+					result, compressErr := cm.Compress(ctx, messages, cfg.LLMClient, cfg.Model)
+					if compressErr != nil {
+						log.Ctx(ctx).WithError(compressErr).Warn("Forced compression failed after context_window_exceeded")
+					} else {
+						messages = syncMessages(result.LLMView)
+						// Reset token tracking: compressed messages are completely different
+						lastPromptTokens = 0
+						lastCompletionTokens = 0
+						lastMsgCountAtLLMCall = len(messages)
+						if cfg.Session != nil {
+							_ = cfg.Session.Clear()
+							for _, msg := range result.SessionView {
+								assertNoSystemPersist(msg)
+								_ = cfg.Session.AddMessage(msg)
+							}
+						}
+						log.Ctx(ctx).Info("Forced compression completed after context_window_exceeded, retrying")
+						continue
+					}
+				}
+				// 压缩不可用或失败，返回错误提示
+				return buildOutput(&bus.OutboundMessage{
+					Channel:   cfg.Channel,
+					ChatID:    cfg.ChatID,
+					Content:   "⚠️ Context window exceeded. Use /new to start a new conversation.",
+					ToolsUsed: toolsUsed,
+				})
+			}
 			return buildOutput(&bus.OutboundMessage{
 				Channel:     cfg.Channel,
 				ChatID:      cfg.ChatID,
@@ -998,12 +1170,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				execResults[entry.index].llmContent = execResults[entry.index].content
 
 				if autoNotify {
-					// SubAgent progress callback already wrote a meaningful progress tree via formatSubAgentProgress.
-					// Do not overwrite with tool-level ❌ — it loses the child agent tree and may misleadingly mark failure.
-					// Instead, mark ALL SubAgent progress lines as done (🔄 → ✅) while preserving the child agent tree.
 					if tc.Name == "SubAgent" {
-						progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
-							progressLines[progressStartIdx+entry.index], "🔄", "✅")
+						line := progressLines[progressStartIdx+entry.index]
+						if strings.Contains(line, "🔄") {
+							// Progress callback fired — mark tree as failed while preserving structure
+							progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(line, "🔄", "❌")
+						} else {
+							// Progress callback never fired (e.g. immediate validation error like missing instance)
+							// Replace the ⏳ placeholder with a clear ❌ completion line
+							progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
+						}
 					} else {
 						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					}
@@ -1314,12 +1490,18 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		// --- 增量持久化：每轮迭代结束后立即将新消息写入 Session ---
 		// 确保中途终止（kill/SIGTERM）不会丢失已完成的迭代进度。
+		// 注意：system-reminder 仅用于 LLM 上下文引导，不应持久化到 SQLite。
+		// 持久化前 strip 掉 reminder，避免 N 轮迭代累积 N 个 ~600B 的 reminder 占用 context。
 		if cfg.Session != nil && len(messages) > lastPersistedCount {
 			for _, msg := range messages[lastPersistedCount:] {
 				if msg.Role == "system" {
 					continue // system 消息不持久化
 				}
-				if err := cfg.Session.AddMessage(msg); err != nil {
+				persistMsg := msg
+				if strings.Contains(persistMsg.Content, "<system-reminder>") {
+					persistMsg.Content = stripSystemReminder(persistMsg.Content)
+				}
+				if err := cfg.Session.AddMessage(persistMsg); err != nil {
 					log.Ctx(ctx).WithError(err).Warn("Failed to incrementally persist engine message")
 				}
 			}

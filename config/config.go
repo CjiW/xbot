@@ -131,7 +131,6 @@ type FeishuConfig struct {
 type AgentConfig struct {
 	MaxIterations  int    `json:"max_iterations"`
 	MaxConcurrency int    `json:"max_concurrency"`
-	MemoryWindow   int    `json:"memory_window"`
 	MemoryProvider string `json:"memory_provider"`
 	WorkDir        string `json:"work_dir"`
 	PromptFile     string `json:"prompt_file"`
@@ -353,11 +352,6 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("AGENT_MAX_CONCURRENCY"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			cfg.Agent.MaxConcurrency = i
-		}
-	}
-	if v := os.Getenv("AGENT_MEMORY_WINDOW"); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			cfg.Agent.MemoryWindow = i
 		}
 	}
 	setDurationEnv("MCP_INACTIVITY_TIMEOUT", &cfg.Agent.MCPInactivityTimeout)
@@ -596,9 +590,6 @@ func Load() *Config {
 	}
 	if cfg.Agent.MaxConcurrency == 0 {
 		cfg.Agent.MaxConcurrency = 3
-	}
-	if cfg.Agent.MemoryWindow == 0 {
-		cfg.Agent.MemoryWindow = 50
 	}
 	if cfg.Agent.MCPInactivityTimeout == 0 {
 		cfg.Agent.MCPInactivityTimeout = 30 * time.Minute

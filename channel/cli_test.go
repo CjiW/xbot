@@ -5,6 +5,7 @@ package channel
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,9 +13,16 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
+
+// isTerminal returns true if stdout is connected to a terminal.
+// bubbletea requires a real TTY; tests that call ch.Start() must skip in non-TTY.
+func isTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
 
 // ---------------------------------------------------------------------------
 // CLIChannel Basic Tests
@@ -30,9 +38,9 @@ func TestCLIChannelName(t *testing.T) {
 }
 
 func TestCLIChannelStartStop(t *testing.T) {
-	// Skip in CI/headless environment - requires TTY
-	if testing.Short() {
-		t.Skip("Skipping in short mode - requires TTY")
+	// Skip if not a real terminal — bubbletea.Start() blocks without TTY
+	if !isTerminal() {
+		t.Skip("Skipping - requires TTY")
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -312,65 +320,8 @@ func TestCLIModelHandleResizeWithProgress(t *testing.T) {
 
 	model.handleResize(80, 30)
 
-	if model.viewport.Height <= 0 {
+	if model.viewport.Height() <= 0 {
 		t.Error("viewport height should be positive")
-	}
-}
-
-func TestCLIModelCalculateProgressHeight(t *testing.T) {
-	model := newCLIModel()
-
-	// No progress
-	if h := model.calculateProgressHeight(); h != 0 {
-		t.Errorf("calculateProgressHeight() with no progress = %d, want 0", h)
-	}
-
-	// With progress — now always returns 0 (progress renders inside viewport)
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "Reading file"},
-			{Name: "grep", Label: "Searching"},
-		},
-		SubAgents: []CLISubAgent{
-			{Role: "reviewer", Status: "running"},
-		},
-		Thinking: "Analyzing code...",
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() = %d, want 0 (progress now renders in viewport)", height)
-	}
-}
-
-func TestCLIModelCalculateProgressHeightOnlyActiveTools(t *testing.T) {
-	model := newCLIModel()
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "Reading file"},
-		},
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() with active tools = %d, want 0", height)
-	}
-}
-
-func TestCLIModelCalculateProgressHeightOnlySubAgents(t *testing.T) {
-	model := newCLIModel()
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		SubAgents: []CLISubAgent{
-			{Role: "reviewer", Status: "done"},
-		},
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() with subagents = %d, want 0", height)
 	}
 }
 
@@ -379,29 +330,32 @@ func TestCLIModelViewNotReady(t *testing.T) {
 	model.ready = false
 
 	view := model.View()
-	if !strings.Contains(view, "初始化") {
-		t.Errorf("View() when not ready should show initializing message, got: %q", view)
+	viewStr := view.Content
+	// §14 splash 画面优先于 "初始化中..." 展示
+	if !strings.Contains(viewStr, "xbot") && !strings.Contains(viewStr, "初始化") {
+		t.Errorf("View() when not ready should show splash or initializing message, got: %q", viewStr)
 	}
 }
 
 func TestCLIModelViewReady(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 
 	view := model.View()
-	// Should contain title and UI elements
-	if view == "" {
+	if view.Content == "" {
 		t.Error("View() returned empty string")
 	}
 }
 
 func TestCLIModelViewWithTyping(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 	model.typing = true
 
 	view := model.View()
-	if view == "" {
+	if view.Content == "" {
 		t.Error("View() returned empty string")
 	}
 }
@@ -415,13 +369,14 @@ func TestCLIModelViewWithProgress(t *testing.T) {
 	}
 
 	view := model.View()
-	if view == "" {
+	if view.Content == "" {
 		t.Error("View() returned empty string")
 	}
 }
 
 func TestCLIModelViewWithMessages(t *testing.T) {
 	model := newCLIModel()
+	model.splashDone = true
 	model.handleResize(80, 24)
 	model.messages = []cliMessage{
 		{role: "user", content: "Hello", timestamp: time.Now()},
@@ -429,7 +384,7 @@ func TestCLIModelViewWithMessages(t *testing.T) {
 	}
 
 	view := model.View()
-	if view == "" {
+	if view.Content == "" {
 		t.Error("View() returned empty string")
 	}
 }
@@ -586,6 +541,10 @@ func TestCLIModelHandleAgentMessageEmptyContent(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
+	// Simulate active progress state
+	model.progress = &CLIProgressPayload{Phase: "thinking"}
+	model.typing = true
+
 	msg := bus.OutboundMessage{
 		Content:   "",
 		IsPartial: false,
@@ -593,11 +552,15 @@ func TestCLIModelHandleAgentMessageEmptyContent(t *testing.T) {
 
 	model.handleAgentMessage(msg)
 
-	if len(model.messages) != 1 {
-		t.Fatalf("Expected 1 message, got %d", len(model.messages))
+	// Empty content with no tools/waiting: should clear progress, not add message
+	if len(model.messages) != 0 {
+		t.Fatalf("Expected 0 messages, got %d", len(model.messages))
 	}
-	if model.messages[0].content != "" {
-		t.Errorf("Message content should be empty, got: %q", model.messages[0].content)
+	if model.progress != nil {
+		t.Error("Expected progress to be cleared")
+	}
+	if model.typing {
+		t.Error("Expected typing to be cleared")
 	}
 }
 
@@ -627,7 +590,7 @@ func TestCLIModelUpdateCtrlCClearsInput(t *testing.T) {
 	model.handleResize(80, 24)
 	model.textarea.SetValue("some text")
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	keyMsg := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	_, cmd := model.Update(keyMsg)
 
 	// When not typing, Ctrl+C clears input (no quit)
@@ -644,7 +607,7 @@ func TestCLIModelUpdateEscClearsInput(t *testing.T) {
 	model.handleResize(80, 24)
 	model.textarea.SetValue("some text")
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyEsc}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEsc}
 	_, cmd := model.Update(keyMsg)
 
 	// When not typing, Esc clears input (no quit)
@@ -665,7 +628,7 @@ func TestCLIModelUpdateCtrlCWhileTyping(t *testing.T) {
 	// Drain the inbound channel in background
 	go func() { <-model.msgBus.Inbound }()
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	keyMsg := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	_, _ = model.Update(keyMsg)
 
 	// Should add cancel system message
@@ -793,7 +756,7 @@ func TestCLIModelUpdateEnterKeyWithContent(t *testing.T) {
 	model.textarea.SetValue("Hello world")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// Message should be added
@@ -811,7 +774,7 @@ func TestCLIModelUpdateEnterKeyEmptyContent(t *testing.T) {
 	model.textarea.SetValue("   ")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// No message should be added
@@ -829,7 +792,7 @@ func TestCLIModelUpdateEnterKeyInputNotReady(t *testing.T) {
 	model.textarea.SetValue("Hello world")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// No message should be added (input not ready)
@@ -844,6 +807,7 @@ func TestCLIModelUpdateEnterKeyInputNotReady(t *testing.T) {
 
 func TestCLIModelRenderProgressStatus(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 
 	tests := []struct {
 		phase    string
@@ -874,6 +838,7 @@ func TestCLIModelRenderProgressStatus(t *testing.T) {
 
 func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 	model.progress = nil
 
 	progressStyle := lipgloss.NewStyle()
@@ -972,6 +937,7 @@ func TestCLIModelRenderProgressBlockEmpty(t *testing.T) {
 
 func TestCLIModelRenderProgressBlockThinking(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 	model.handleResize(80, 24)
 	model.typing = true
 	model.typingStartTime = time.Now()

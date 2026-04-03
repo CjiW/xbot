@@ -36,6 +36,10 @@ func (a *todoManagerAdapter) GetTodoItems(sessionKey string) []TodoProgressItem 
 	return result
 }
 
+func (a *todoManagerAdapter) ClearTodos(sessionKey string) {
+	a.mgr.SetTodos(sessionKey, nil)
+}
+
 // applyUserMaxContext 如果用户在 Settings 中设置了 max_context，
 // 创建一个新的 ContextManagerConfig 副本并覆盖 MaxContextTokens，
 // 避免污染 Agent 级别的原始配置（含 sync.RWMutex）。
@@ -161,6 +165,17 @@ func (a *Agent) buildMainRunConfig(
 	// 主 Agent 特有字段
 	cfg.Session = tenantSession
 
+	// Token 状态持久化：Run() 结束后写入 DB，重启后恢复
+	if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
+		memSvc := extras.MemorySvc
+		tenantID := extras.TenantID
+		cfg.SaveTokenState = func(promptTokens, completionTokens int64) {
+			if err := memSvc.SetTokenState(context.Background(), tenantID, promptTokens, completionTokens); err != nil {
+				log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to persist token state")
+			}
+		}
+	}
+
 	// OAuth 处理
 	cfg.OAuthHandler = a.buildOAuthHandler(channel, chatID, senderID, sessionKey)
 
@@ -240,6 +255,15 @@ func (a *Agent) buildMainRunConfig(
 								}
 							}
 						}
+						// §18 传递 Token 使用量快照
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.CLITokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
 						cc.SendProgress(chatID, payload)
 					}
 				} else {
@@ -305,6 +329,13 @@ func (a *Agent) buildMainRunConfig(
 	// 注入 ContextManager
 	cfg.ContextManager = a.GetContextManager()
 	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
+
+	// Per-user token usage tracking (persisted to SQLite)
+	cfg.RecordUserTokenUsage = func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(senderID, inputTokens, outputTokens, conversationCount, llmCallCount); err != nil {
+			log.WithError(err).WithField("sender_id", senderID).Warn("Failed to record user token usage")
+		}
+	}
 
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -458,6 +489,20 @@ func (a *Agent) buildSubAgentRunConfig(
 	// Phase 4: Inject project knowledge from parent agent's archival memory
 	if hint := BuildProjectHintText(ctx, a.multiSession.ArchivalService(), parentExtras.TenantID); hint != "" {
 		sysPrompt += hint
+	}
+
+	// Phase 5: Inject user language preference into SubAgent prompt.
+	// Only inject if not already present in the inherited system prompt
+	// (LanguageMiddleware on the main Agent already adds it via SystemParts).
+	if a.settingsSvc != nil {
+		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
+			if lang, ok := vals["language"]; ok && lang != "" {
+				// Check if language instruction is already in sysPrompt (inherited from main Agent)
+				if !strings.Contains(sysPrompt, "## Language") {
+					sysPrompt += "\n" + LanguageInstruction(lang)
+				}
+			}
+		}
 	}
 
 	messages := []llm.ChatMessage{

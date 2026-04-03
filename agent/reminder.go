@@ -2,9 +2,13 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"xbot/llm"
 )
+
+// systemReminderRe is pre-compiled for stripSystemReminder (called in hot loops).
+var systemReminderRe = regexp.MustCompile(`\n?\n?<system-reminder>[\s\S]*?</system-reminder>`)
 
 // BuildSystemReminder builds a system reminder appended to the last tool message.
 // agentID "main" = main Agent, otherwise SubAgent.
@@ -15,14 +19,17 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 
 	isSubAgent := agentID != "main"
 
-	// 1. 提取任务目标：第一条 user message（去掉时间戳和引导文本）
-	//   - 主 Agent：用户原始需求
+	// 1. 提取任务目标：最后一条 user message（去掉时间戳和引导文本）
+	//   - 主 Agent：用户最新需求
 	//   - SubAgent：父 Agent 分配的任务命令
 	var taskGoal string
-	for _, msg := range messages {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
 		if msg.Role == "user" && msg.Content != "" {
 			taskGoal = extractUserGoal(msg.Content)
-			break
+			if taskGoal != "" {
+				break
+			}
 		}
 	}
 
@@ -41,7 +48,7 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 		if isSubAgent {
 			parts = append(parts, fmt.Sprintf("执行任务: %s", taskGoal))
 		} else {
-			parts = append(parts, fmt.Sprintf("用户原始需求: %s", taskGoal))
+			parts = append(parts, fmt.Sprintf("用户需求: %s", taskGoal))
 		}
 	}
 
@@ -63,22 +70,7 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 // stripSystemReminder removes the <system-reminder>...</system-reminder> block
 // and any preceding blank line from a message's content.
 func stripSystemReminder(content string) string {
-	// 优先匹配 \n\n 前缀（标准格式），fallback 到无前缀的情况
-	start := strings.Index(content, "\n\n<system-reminder>")
-	prefix := "\n\n"
-	if start == -1 {
-		start = strings.Index(content, "<system-reminder>")
-		prefix = ""
-		if start == -1 {
-			return content
-		}
-	}
-	tagStart := start + len(prefix)
-	end := strings.Index(content[tagStart:], "</system-reminder>")
-	if end == -1 {
-		return content[:start]
-	}
-	return content[:start] + content[tagStart+end+len("</system-reminder>"):]
+	return systemReminderRe.ReplaceAllString(content, "")
 }
 
 // extractUserGoal 从 user message 中提取实际用户需求（去掉时间戳和系统引导文本）。

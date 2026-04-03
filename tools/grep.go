@@ -450,25 +450,59 @@ func searchFile(path string, re *regexp.Regexp, contextLines int) ([]grepMatch, 
 	return matches, nil
 }
 
-// expandBracePattern expands a simple brace pattern like "*.{go,ts}" into ["*.go", "*.ts"].
-// Supports a single level of braces. If no braces are found, returns the pattern as-is.
+// expandBracePattern expands brace patterns like "*.{go,ts}" into ["*.go", "*.ts"].
+// Supports nested braces (e.g. "*.{go,{ts,tsx}}" → ["*.go", "*.ts", "*.tsx"])
+// and multiple brace groups via recursion.
+// If no braces are found, returns the pattern as-is.
 func expandBracePattern(pattern string) []string {
-	openIdx := strings.Index(pattern, "{")
-	closeIdx := strings.Index(pattern, "}")
-
-	if openIdx == -1 || closeIdx == -1 || closeIdx < openIdx {
-		return []string{pattern}
+	openIdx := -1
+	depth := 0
+	for i, ch := range pattern {
+		switch ch {
+		case '{':
+			if depth == 0 {
+				openIdx = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && openIdx >= 0 {
+				// Found matching closing brace
+				prefix := pattern[:openIdx]
+				suffix := pattern[i+1:]
+				// Split alternatives respecting nested brace depth
+				alternatives := splitBraceAlternatives(pattern[openIdx+1 : i])
+				var results []string
+				for _, alt := range alternatives {
+					alt = strings.TrimSpace(alt)
+					expanded := expandBracePattern(prefix + alt + suffix)
+					results = append(results, expanded...)
+				}
+				return results
+			}
+		}
 	}
+	return []string{pattern}
+}
 
-	prefix := pattern[:openIdx]
-	suffix := pattern[closeIdx+1:]
-	alternatives := strings.Split(pattern[openIdx+1:closeIdx], ",")
-
-	results := make([]string, 0, len(alternatives))
-	for _, alt := range alternatives {
-		results = append(results, prefix+strings.TrimSpace(alt)+suffix)
+// splitBraceAlternatives splits a brace content string by commas,
+// respecting nested brace depth. E.g. "go,{ts,tsx}" → ["go", "{ts,tsx}"].
+func splitBraceAlternatives(s string) []string {
+	var parts []string
+	start := 0
+	depth := 0
+	for i, ch := range s {
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+		} else if ch == ',' && depth == 0 {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
 	}
-	return results
+	parts = append(parts, s[start:])
+	return parts
 }
 
 // executeLocal 在本地执行 grep 搜索（非沙箱模式）

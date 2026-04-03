@@ -205,18 +205,30 @@ func (t *GlobTool) executeLocal(ctx *ToolContext, pattern, path string) (*ToolRe
 
 	var matches []string
 
-	if strings.Contains(pattern, "**") {
-		// Handle ** patterns with recursive walk
-		matches, err = globWithDoublestar(baseDir, pattern)
-		if err != nil {
-			return nil, fmt.Errorf("glob search failed: %w", err)
+	// Expand brace patterns (e.g., "*.{go,ts}" → ["*.go", "*.ts"]) before matching,
+	// since neither filepath.Glob nor matchDoublestar support brace expansion.
+	bracePatterns := expandBracePattern(pattern)
+	seen := make(map[string]bool)
+
+	for _, bp := range bracePatterns {
+		var bpMatches []string
+		if strings.Contains(bp, "**") {
+			bpMatches, err = globWithDoublestar(baseDir, bp)
+			if err != nil {
+				return nil, fmt.Errorf("glob search failed: %w", err)
+			}
+		} else {
+			fullPattern := filepath.Join(baseDir, bp)
+			bpMatches, err = filepath.Glob(fullPattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid glob pattern: %w", err)
+			}
 		}
-	} else {
-		// Use standard filepath.Glob for simple patterns
-		fullPattern := filepath.Join(baseDir, pattern)
-		matches, err = filepath.Glob(fullPattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid glob pattern: %w", err)
+		for _, m := range bpMatches {
+			if !seen[m] {
+				seen[m] = true
+				matches = append(matches, m)
+			}
 		}
 	}
 

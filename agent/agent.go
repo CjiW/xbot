@@ -37,6 +37,15 @@ func assertNoSystemPersist(m llm.ChatMessage) {
 	}
 }
 
+// copyMessages creates a shallow copy of the messages slice so that
+// in-place modifications (e.g. stripSystemReminder) don't mutate the
+// original cfg.Messages backing array or session storage.
+func copyMessages(msgs []llm.ChatMessage) []llm.ChatMessage {
+	cpy := make([]llm.ChatMessage, len(msgs))
+	copy(cpy, msgs)
+	return cpy
+}
+
 // formatErrorForUser 将错误格式化为对用户可见的提示
 func formatErrorForUser(err error) string {
 	if err == nil {
@@ -196,7 +205,6 @@ type Agent struct {
 	multiSession     *session.MultiTenantSession // Multi-tenant session manager
 	tools            *tools.Registry
 	maxIterations    int
-	memoryWindow     int
 	purgeOldMessages bool
 
 	skills             *SkillStore
@@ -283,6 +291,15 @@ type Agent struct {
 	// bgRunActive is atomically set to 1 when a Run is active and consuming bg notifications,
 	// 0 when idle. Used by bgNotifyLoop to decide routing.
 	bgRunActive int32
+
+	// lastPromptTokens stores the prompt_tokens from the most recent LLM API call.
+	// This is the authoritative token count for the full input (messages + tool defs).
+	// Updated after each Run() completes. Used by /context info and maybeCompress.
+	lastPromptTokens atomic.Int64
+
+	// lastCompletionTokens stores the completion_tokens from the most recent LLM API call.
+	// Updated after each Run() completes. Used to restore token tracking across Run() calls.
+	lastCompletionTokens atomic.Int64
 
 	// bgRunPending buffers bg task notifications that arrived during an active Run.
 	// The Run loop drains these between iterations.
@@ -372,7 +389,6 @@ type Config struct {
 	Model          string
 	MaxIterations  int           // 单次对话最大工具调用迭代次数
 	MaxConcurrency int           // 最大并发会话处理数（默认 3）
-	MemoryWindow   int           // 上下文窗口大小（保留的历史消息数）
 	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
 	SkillsDir      string        // Skills 目录
 	AgentsDir      string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
@@ -413,7 +429,7 @@ type Config struct {
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
 	// 压缩后清理旧消息
-	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
+	PurgeOldMessages bool // 压缩后自动删除旧消息（默认 false）
 
 	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
 	OffloadDir string
@@ -532,9 +548,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.commands = NewCommandRegistry()
 	registerBuiltinCommands(a.commands)
 
-	// 初始化消息构建管道
-	a.initPipelines(memoryProvider)
-
 	// 初始化 Cron 服务和调度器
 	cronSvc := sqlite.NewCronService(multiSession.DB())
 	cronSch := cron.NewScheduler(cronSvc)
@@ -582,8 +595,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
-	maskStore := NewObservationMaskStore(200)
-	a.maskStore = maskStore
+	// 默认开启：在 60% context 阈值时自动 mask 旧工具结果以释放空间。
+	// 可通过 settings 的 enable_masking 关闭（设为 false 时 a.maskStore = nil）。
+	a.maskStore = NewObservationMaskStore(200)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {
@@ -592,8 +606,8 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 注册 recall_masked 工具（需要 MaskStore 依赖注入）
-	if maskStore != nil {
-		registry.RegisterCore(&tools.RecallMaskedTool{Store: maskStore})
+	if a.maskStore != nil {
+		registry.RegisterCore(&tools.RecallMaskedTool{Store: a.maskStore})
 	}
 
 	// 初始化 ContextEditor（Context Editing 工具 — 精确编辑上下文）
@@ -622,6 +636,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	llmSemMgr := llm.NewLLMSemaphoreManager()
 	a.llmFactory.SetLLMSemaphoreManager(llmSemMgr)
 	a.llmFactory.SetSettingsService(a.settingsSvc)
+
+	// 初始化消息构建管道（必须在 settingsSvc 之后，LanguageMiddleware 依赖它）
+	a.initPipelines(memoryProvider)
 }
 
 // New 创建 Agent
@@ -632,9 +649,6 @@ func New(cfg Config) *Agent {
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 3
-	}
-	if cfg.MemoryWindow == 0 {
-		cfg.MemoryWindow = 50
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
@@ -684,7 +698,6 @@ func New(cfg Config) *Agent {
 		tools:            registry,
 		maxIterations:    cfg.MaxIterations,
 		maxConcurrency:   cfg.MaxConcurrency,
-		memoryWindow:     cfg.MemoryWindow,
 		purgeOldMessages: cfg.PurgeOldMessages,
 
 		skills:             skillStore,
@@ -760,7 +773,6 @@ func (a *Agent) SetContextMode(mode string) error {
 }
 
 func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
-func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
 func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
 func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerConfig.MaxContextTokens = n
@@ -1422,8 +1434,46 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
+	// 恢复上次 Run() 的 token 计数，确保 maybeCompress 在重启后仍能使用 API 精确值
+	// 优先使用内存值（同进程内多次 Run），回退到 DB 值（进程重启后）
+	if promptTokens := a.lastPromptTokens.Load(); promptTokens > 0 {
+		cfg.LastPromptTokens = promptTokens
+		cfg.LastCompletionTokens = a.lastCompletionTokens.Load()
+	} else if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
+		if pt, ct, err := extras.MemorySvc.GetTokenState(ctx, extras.TenantID); err == nil && pt > 0 {
+			cfg.LastPromptTokens = pt
+			cfg.LastCompletionTokens = ct
+			// 恢复到内存中供后续 Run() 直接使用
+			a.lastPromptTokens.Store(pt)
+			a.lastCompletionTokens.Store(ct)
+		}
+	}
 	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
 	atomic.StoreInt32(&a.bgRunActive, 1)
+
+	// Inject running background task IDs into the last user message so the LLM
+	// is aware of active tasks and doesn't try to restart them.
+	if a.bgTaskMgr != nil {
+		sessionKey := msg.Channel + ":" + msg.ChatID
+		running := a.bgTaskMgr.ListRunning(sessionKey)
+		if len(running) > 0 {
+			var ids []string
+			for _, t := range running {
+				ids = append(ids, t.ID)
+			}
+			bgInfo := fmt.Sprintf("\n[System] Running background tasks: %s", strings.Join(ids, ", "))
+			// Append bgInfo to a copy of the last user message to avoid mutating session data
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					msg := messages[i] // shallow copy
+					msg.Content += bgInfo
+					messages[i] = msg
+					break
+				}
+			}
+		}
+	}
+
 	// Wire drain callback so Run loop can inject bg task results as tool messages
 	cfg.DrainBgNotifications = func() []*tools.BackgroundTask {
 		a.bgRunPendingMu.Lock()
@@ -1434,6 +1484,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
+	a.lastPromptTokens.Store(out.LastPromptTokens)
+	a.lastCompletionTokens.Store(out.LastCompletionTokens)
 	// Drain any bg notifications that arrived after Run's last iteration.
 	// Process them as user messages (idle path).
 	a.bgRunPendingMu.Lock()
@@ -1496,6 +1548,15 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			"chat_id":      msg.ChatID,
 			"reply_policy": replyPolicy,
 		}).Info("Optional reply policy: no final response generated, skipping outbound")
+		// Send an empty outbound to clear TUI progress state (typing/progress indicator).
+		// Without this, TUI gets stuck showing progress with no way for user to interact.
+		if ch, ok := a.channelFinder(msg.Channel); ok {
+			ch.Send(bus.OutboundMessage{
+				Channel: msg.Channel,
+				ChatID:  msg.ChatID,
+				Content: "",
+			})
+		}
 		return nil, nil
 	}
 
@@ -1633,7 +1694,7 @@ func (a *Agent) persistCronMessages(ctx context.Context, msg bus.InboundMessage,
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。
 // 使用 Agent 持有的 pipeline 实例，通过 MessageContext.Extra 传递动态数据。
 func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
-	history, err := tenantSession.GetHistory(a.memoryWindow)
+	history, err := tenantSession.GetMessages()
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil

@@ -56,12 +56,9 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count user messages as the history window.
-	// Find the id of the N-th most recent user message, then fetch all displayable
+	// Find the id of the 50th most recent user message, then fetch all displayable
 	// messages from that point onward.
-	limit := wc.config.MemoryWindow
-	if limit <= 0 {
-		limit = 50
-	}
+	limit := 50
 	var boundaryID sql.NullInt64
 	err = wc.db.QueryRow(`
 			SELECT id FROM session_messages

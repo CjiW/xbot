@@ -151,16 +151,17 @@ func TestCdTool_NonExistent(t *testing.T) {
 
 func TestCdTool_EscapeWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
-	ctx := &ToolContext{
+
+	// Without a sandbox, Cd allows navigating anywhere (none-sandbox mode).
+	noSandboxCtx := &ToolContext{
 		WorkspaceRoot: tmpDir,
 		CurrentDir:    tmpDir,
 		SetCurrentDir: func(dir string) {},
 	}
-
 	tool := &CdTool{}
-	_, err := tool.Execute(ctx, `{"path":"/tmp"}`)
-	if err == nil {
-		t.Error("expected error when trying to cd outside workspace")
+	_, err := tool.Execute(noSandboxCtx, `{"path":"/tmp"}`)
+	if err != nil {
+		t.Errorf("expected no error in none-sandbox mode, got: %v", err)
 	}
 }
 

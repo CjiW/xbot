@@ -355,7 +355,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 		"stream":      false,
 		"msg_count":   len(messages),
 		"tools_count": len(tools),
-	}).Info("[LLM] Starting non-stream request")
+	}).Debug("[LLM] Starting non-stream request")
 
 	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
@@ -451,7 +451,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	if apiResp.Usage.CacheCreationInputTokens > 0 {
 		logFields["cache_creation_tokens"] = apiResp.Usage.CacheCreationInputTokens
 	}
-	log.Ctx(ctx).WithFields(logFields).Info("[LLM] Non-stream response")
+	log.Ctx(ctx).WithFields(logFields).Debug("[LLM] Non-stream response")
 
 	return out, nil
 }
@@ -481,7 +481,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 		"stream":      true,
 		"msg_count":   len(messages),
 		"tools_count": len(tools),
-	}).Info("[LLM] Starting stream request")
+	}).Debug("[LLM] Starting stream request")
 
 	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{

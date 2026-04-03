@@ -1,23 +1,111 @@
 #!/bin/bash
 
-# Pre-push hook: run CI checks before pushing
+# Pre-push hook: run CI-equivalent checks before pushing.
 # Install: cp scripts/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
-# Skip with: git push --no-verify
+# Skip:    git push --no-verify
 
-set -e
+set -euo pipefail
 
-echo "Running pre-push checks..."
+PASS=0
+FAIL=0
+SKIP=0
 
-# Run lint
-echo "==> Running lint..."
-golangci-lint run ./...
+section() {
+    echo ""
+    echo "==> $1"
+}
 
-# Run build
-echo "==> Running build..."
-go build ./...
+ok()   { echo "  ✅ $1"; ((PASS++)) || true; }
+fail() { echo "  ❌ $1"; ((FAIL++)) || true; }
+skip() { echo "  ⏭️  $1 (not found)"; ((SKIP++)) || true; }
 
-# Run tests
-echo "==> Running tests..."
-go test -v -race -timeout 5m ./...
+# ── 1. Format ──────────────────────────────────────────────
+section "Format (go fmt)"
+if command -v go &>/dev/null; then
+    # go fmt ./... formats in place AND exits non-zero on diff
+    FMT_OUT=$(go fmt ./... 2>&1) && FMT_ERR=0 || FMT_ERR=$?
+    if [ "$FMT_ERR" -eq 0 ]; then
+        ok "go fmt: no issues"
+    else
+        # Files were reformatted in working tree but not staged.
+        # Check if committed files differ from formatted versions.
+        if ! git diff --exit-code --quiet '*.go' 2>/dev/null; then
+            fail "go fmt: committed files are not formatted"
+            echo "     Run: go fmt ./... && git add -A && git commit --amend --no-edit"
+        else
+            fail "go fmt: failed (FMT_ERR=$FMT_ERR)"
+        fi
+    fi
+else
+    skip "go not found"
+fi
 
-echo "✅ All checks passed!"
+# ── 2. Vet ─────────────────────────────────────────────────
+section "Vet (go vet)"
+if command -v go &>/dev/null; then
+    if go vet ./... 2>&1; then
+        ok "go vet: passed"
+    else
+        fail "go vet: failed"
+    fi
+else
+    skip "go not found"
+fi
+
+# ── 3. Lint (golangci-lint) ────────────────────────────────
+section "Lint (golangci-lint)"
+if command -v golangci-lint &>/dev/null; then
+    if golangci-lint run ./... 2>&1; then
+        ok "golangci-lint: passed"
+    else
+        fail "golangci-lint: failed"
+    fi
+else
+    skip "golangci-lint not found (install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)"
+fi
+
+# ── 4. Build ───────────────────────────────────────────────
+section "Build"
+if command -v go &>/dev/null; then
+    VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    LDFLAGS="-X xbot/version.Version=${VERSION} -X xbot/version.Commit=${COMMIT} -X xbot/version.BuildTime=${BUILD_TIME}"
+
+    if go build -ldflags "${LDFLAGS}" ./... 2>&1; then
+        ok "go build: passed"
+    else
+        fail "go build: failed"
+    fi
+else
+    skip "go not found"
+fi
+
+# ── 5. Tests ───────────────────────────────────────────────
+section "Tests"
+if command -v go &>/dev/null; then
+    if go test -race -timeout 5m ./... 2>&1; then
+        ok "go test: passed"
+    else
+        fail "go test: failed"
+    fi
+else
+    skip "go not found"
+fi
+
+# ── Summary ────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════"
+echo "  Results: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
+echo "═══════════════════════════════════"
+
+if [ "$FAIL" -gt 0 ]; then
+    echo ""
+    echo "❌ Pre-push checks FAILED. Fix the above issues before pushing."
+    echo "   To skip: git push --no-verify"
+    exit 1
+fi
+
+echo ""
+echo "✅ All pre-push checks passed!"
+exit 0

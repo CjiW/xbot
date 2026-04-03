@@ -118,7 +118,6 @@ func newCLIApp() *cliApp {
 		Model:                cfg.LLM.Model,
 		MaxIterations:        cfg.Agent.MaxIterations,
 		MaxConcurrency:       cfg.Agent.MaxConcurrency,
-		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotHome, "skills"),
 		AgentsDir:            filepath.Join(xbotHome, "agents"),
@@ -235,7 +234,6 @@ func main() {
 				"context_mode":       app.cfg.Agent.ContextMode,
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
-				"memory_window":      fmt.Sprintf("%d", app.cfg.Agent.MemoryWindow),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
 				"enable_auto_compress": func() string {
 					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
@@ -255,6 +253,18 @@ func main() {
 						}
 					}
 					return "midnight"
+				}(),
+				"language": func() string {
+					if app.agentLoop != nil {
+						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+								if l, ok := vals["language"]; ok {
+									return l
+								}
+							}
+						}
+					}
+					return ""
 				}(),
 			}
 		},
@@ -294,11 +304,6 @@ func main() {
 			if v, ok := values["max_concurrency"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n > 0 {
 					app.cfg.Agent.MaxConcurrency = n
-				}
-			}
-			if v, ok := values["memory_window"]; ok {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					app.cfg.Agent.MemoryWindow = n
 				}
 			}
 			if v, ok := values["max_context_tokens"]; ok {
@@ -352,11 +357,6 @@ func main() {
 				if v, ok := values["max_concurrency"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
 						app.agentLoop.SetMaxConcurrency(n)
-					}
-				}
-				if v, ok := values["memory_window"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.agentLoop.SetMemoryWindow(n)
 					}
 				}
 				if v, ok := values["max_context_tokens"]; ok {

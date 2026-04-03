@@ -268,7 +268,8 @@ type cliStyles struct {
 	KeyLabelSt       lipgloss.Style
 	KeyDescSt        lipgloss.Style
 	// --- search highlight ---
-	SearchHighlightSt lipgloss.Style
+
+	// toolDisplayInfo
 }
 
 func buildStyles(width int) cliStyles {
@@ -379,8 +380,6 @@ func buildStyles(width int) cliStyles {
 		// --- key hints (footer) ---
 		KeyLabelSt:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
 		KeyDescSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		// --- search highlight ---
-		SearchHighlightSt: lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Background(c(t.Surface)),
 	}
 }
 

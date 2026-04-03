@@ -243,10 +243,8 @@ type cliModel struct {
 	toastTimer bool           // true = toast 消除计时器已启动
 
 	// --- §21 消息搜索 /search ---
-	searchQuery    string // 搜索关键词
-	searchMatches  []int  // 匹配的消息索引列表
-	searchMatchIdx int    // 当前聚焦的匹配索引（-1=无）
-	searchActive   bool   // true=搜索模式激活
+
+	// toolDisplayInfo
 
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }

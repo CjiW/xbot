@@ -2,7 +2,6 @@ package channel
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -116,13 +115,11 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	return r
 }
 
-// ansiEscapeRe matches ANSI escape sequences (§21 search highlighting)
-var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/search", "/settings", "/setup", "/update",
+	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/tasks", "/update",
 }
 
 // ---------------------------------------------------------------------------

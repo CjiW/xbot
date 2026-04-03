@@ -59,7 +59,6 @@ type UILocale struct {
 	// --- D. Temp status ---
 	WaitingOperation   string // "... waiting for previous operation to complete..."
 	NoMessagesToDelete string // "[!] no messages to delete"
-	SearchNoMatch      string // "[search] "%s" 未找到匹配"
 	KillFailed         string // "Kill failed: %s"
 
 	// --- E. Help ---
@@ -178,7 +177,6 @@ func init() {
 		// --- D. Temp status ---
 		WaitingOperation:   "... 等待上一个操作完成...",
 		NoMessagesToDelete: "[!] 没有可删除的消息",
-		SearchNoMatch:      "[搜索] \"%s\" 未找到匹配",
 		KillFailed:         "终止失败: %s",
 
 		// --- E. Help commands ---
@@ -193,8 +191,10 @@ func init() {
 			{Cmd: "/models", Desc: "列出可用模型"},
 			{Cmd: "/context", Desc: "查看上下文信息"},
 			{Cmd: "/new", Desc: "开始新会话"},
+			{Cmd: "/quit", Desc: "退出程序"},
 			{Cmd: "/settings", Desc: "打开设置面板"},
 			{Cmd: "/setup", Desc: "重新运行配置引导"},
+			{Cmd: "/tasks", Desc: "查看后台任务"},
 			{Cmd: "/update", Desc: "检查更新"},
 			{Cmd: "/help", Desc: "显示此帮助"},
 		},
@@ -425,7 +425,6 @@ func init() {
 		// --- D. Temp status ---
 		WaitingOperation:   "... waiting for previous operation to complete...",
 		NoMessagesToDelete: "[!] no messages to delete",
-		SearchNoMatch:      "[search] \"%s\" no matches found",
 		KillFailed:         "Kill failed: %s",
 
 		// --- E. Help commands ---
@@ -440,8 +439,10 @@ func init() {
 			{Cmd: "/models", Desc: "List available models"},
 			{Cmd: "/context", Desc: "View context info"},
 			{Cmd: "/new", Desc: "Start new session"},
+			{Cmd: "/quit", Desc: "Quit"},
 			{Cmd: "/settings", Desc: "Open settings panel"},
 			{Cmd: "/setup", Desc: "Re-run setup wizard"},
+			{Cmd: "/tasks", Desc: "View background tasks"},
 			{Cmd: "/update", Desc: "Check for updates"},
 			{Cmd: "/help", Desc: "Show this help"},
 		},
@@ -672,7 +673,6 @@ func init() {
 		// --- D. Temp status ---
 		WaitingOperation:   "... 前の操作の完了を待機中...",
 		NoMessagesToDelete: "[!] 削除するメッセージがありません",
-		SearchNoMatch:      "[検索] \"%s\" 一致なし",
 		KillFailed:         "終了に失敗: %s",
 
 		// --- E. Help commands ---
@@ -687,8 +687,10 @@ func init() {
 			{Cmd: "/models", Desc: "利用可能モデル一覧"},
 			{Cmd: "/context", Desc: "コンテキスト情報表示"},
 			{Cmd: "/new", Desc: "新規セッション開始"},
+			{Cmd: "/quit", Desc: "終了"},
 			{Cmd: "/settings", Desc: "設定パネルを開く"},
 			{Cmd: "/setup", Desc: "セットアップウィザード再実行"},
+			{Cmd: "/tasks", Desc: "バックグラウンドタスク表示"},
 			{Cmd: "/update", Desc: "アップデート確認"},
 			{Cmd: "/help", Desc: "ヘルプ表示"},
 		},

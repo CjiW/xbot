@@ -1111,6 +1111,9 @@ var (
 	pulseFrames = []string{"·", "∙", "●", "∙", "·", "∙", "●", "∙"}
 )
 
+// errorKeywords — system 消息中的错误检测关键词
+var errorKeywords = []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"}
+
 // thinkingVerbs — 类似 Claude Code 的随机动词
 var thinkingVerbs = []string{
 	"Thinking",
@@ -3301,8 +3304,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
 			// Remove the placeholder that PhaseDone appended at the end
 			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].role == "tool_summary" && len(m.messages[i].iterations) > 0 &&
-					len(m.messages[i].iterations) == len(m.pendingToolSummary.iterations) {
+				if m.messages[i].role == "tool_summary" && &m.messages[i] == m.pendingToolSummary {
 					m.messages = append(m.messages[:i], m.messages[i+1:]...)
 					break
 				}
@@ -3378,25 +3380,16 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 		for _, tool := range snap.Tools {
-			label := tool.Label
-			if label == "" {
-				label = tool.Name
-			}
-			icon := "✓"
-			style := toolDoneStyle
-			if tool.Status == "error" {
-				icon = "✗"
-				style = toolErrorStyle
-			}
+			label, icon, sty := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			line := fmt.Sprintf("  │ %s %s", icon, label)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
-					pad = 1
+				pad = 1
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
-			sb.WriteString(dimStyle.Render(style.Render(line)))
+			sb.WriteString(dimStyle.Render(sty.Render(line)))
 			sb.WriteString("\n")
 		}
 	}
@@ -3419,25 +3412,16 @@ func (m *cliModel) renderProgressBlock() string {
 			if tool.Iteration != m.progress.Iteration {
 				continue
 			}
-			label := tool.Label
-			if label == "" {
-				label = tool.Name
-			}
-			style := toolDoneStyle
-			icon := "✓"
-			if tool.Status == "error" {
-				style = toolErrorStyle
-				icon = "✗"
-			}
+			label, icon, sty := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			line := fmt.Sprintf("  │ %s %s", icon, label)
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
-					pad = 1
+				pad = 1
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
-			sb.WriteString(style.Render(line))
+			sb.WriteString(sty.Render(line))
 			sb.WriteString("\n")
 		}
 
@@ -3446,10 +3430,7 @@ func (m *cliModel) renderProgressBlock() string {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
-			label := tool.Label
-			if label == "" {
-				label = tool.Name
-			}
+			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			// 迷你进度条：braille 波浪流动动画（第 4 轮升级）
 			// 使用 braille 点阵创造流畅的波浪填充效果
 			waveBarFrames := []string{
@@ -3925,7 +3906,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
 		isError := false
 		lowerContent := strings.ToLower(msg.content)
-		for _, kw := range []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"} {
+		for _, kw := range errorKeywords {
 			if strings.Contains(lowerContent, kw) {
 				isError = true
 				break

@@ -64,12 +64,14 @@ func truncateToWidth(s string, maxWidth int) string {
 	return s
 }
 
-// truncateRunes truncates a line to maxW display columns, preserving ANSI escape
-// sequences and handling wide runes correctly. Uses runewidth for display width.
-func truncateRunes(line string, maxW int) string {
+// hardWrapRunes wraps a line at maxW columns, breaking at character boundaries.
+// ANSI escape sequences are preserved across wrapped segments.
+// Returns the original line if it fits within maxW.
+func hardWrapRunes(line string, maxW int) string {
 	if lipgloss.Width(line) <= maxW {
 		return line
 	}
+	var lines []string
 	var buf strings.Builder
 	w := 0
 	inEscape := false
@@ -88,12 +90,17 @@ func truncateRunes(line string, maxW int) string {
 		}
 		rw := runewidth.RuneWidth(r)
 		if w+rw > maxW {
-			break
+			lines = append(lines, buf.String())
+			buf.Reset()
+			w = 0
 		}
 		buf.WriteRune(r)
 		w += rw
 	}
-	return buf.String()
+	if buf.Len() > 0 {
+		lines = append(lines, buf.String())
+	}
+	return strings.Join(lines, "\n")
 }
 
 // newGlamourRenderer creates a glamour Markdown renderer.

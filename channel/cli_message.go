@@ -1249,17 +1249,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 func (m *cliModel) setViewportContent(content string) {
 	if m.width > 0 {
 		lines := strings.Split(content, "\n")
-		for i, line := range lines {
+		var wrapped []string
+		for _, line := range lines {
 			// Strip trailing whitespace first — mermaid-ascii and wide tables
 			// pad lines with spaces that inflate lipgloss.Width() far beyond
-			// the actual visible content, causing premature truncation.
+			// the actual visible content, causing premature wrapping.
 			line = strings.TrimRight(line, " \t")
-			if lipgloss.Width(line) > m.width {
-				line = truncateRunes(line, m.width)
-			}
-			lines[i] = line
+			wrapped = append(wrapped, strings.Split(hardWrapRunes(line, m.width), "\n")...)
 		}
-		content = strings.Join(lines, "\n")
+		content = strings.Join(wrapped, "\n")
 	}
 	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(content)

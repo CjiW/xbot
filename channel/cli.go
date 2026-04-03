@@ -892,10 +892,20 @@ func (c *CLIChannel) Start() error {
 
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
-	c.model.channel = c
-	c.model.SetMsgBus(c.msgBus)
-	c.model.workDir = c.workDir
-	c.model.chatID = c.config.ChatID
+		c.model.channel = c
+		c.model.SetMsgBus(c.msgBus)
+		c.model.workDir = c.workDir
+		c.model.chatID = c.config.ChatID
+
+		// i18n: initialize locale from settings
+		if c.settingsSvc != nil {
+			if vals, err := c.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+				if lang, ok := vals["language"]; ok {
+					SetLocale(lang)
+					c.model.locale = GetLocale(lang)
+				}
+			}
+		}
 
 	// Setup bg task count callback
 	c.updateBgTaskCountFn()
@@ -1205,6 +1215,7 @@ type cliModel struct {
 	width    int            // 终端宽度
 	height   int            // 终端高度
 	styles   cliStyles
+	locale   *UILocale // i18n: current UI locale
 
 	// --- Message state ---
 	messages        []cliMessage          // 消息历史
@@ -1379,6 +1390,7 @@ func newCLIModel() *cliModel {
 		progress:        nil,
 		inputReady:      true,
 		msgCollapsed:    make(map[int]bool),
+			locale:           GetLocale(""),
 	}
 }
 
@@ -1493,9 +1505,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewportContent()
 	default:
-	}
+		}
 
-	// §12 Panel mode: intercept all key events when panel is active
+		// i18n: locale 变更通知
+		select {
+		case <-localeChangeCh:
+			m.locale = GetLocale(currentLocaleLang)
+			m.renderCacheValid = false
+			for i := range m.messages {
+				m.messages[i].dirty = true
+			}
+			m.updateViewportContent()
+		default:
+		}
+
+		// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
 		// Ctrl+C must always cancel the agent — never swallow it
 		if key.Type == tea.KeyCtrlC && m.typing {
@@ -3074,9 +3098,15 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 						}
 					}
 					// Update live config overrides (model, base_url)
-					if model, ok := values["llm_model"]; ok && model != "" {
-						m.channel.UpdateConfig(model, values["llm_base_url"])
-					}
+						if model, ok := values["llm_model"]; ok && model != "" {
+							m.channel.UpdateConfig(model, values["llm_base_url"])
+						}
+						// i18n: detect language change
+						if lang, ok := values["language"]; ok {
+							SetLocale(lang)
+							m.locale = GetLocale(lang)
+							m.renderCacheValid = false
+						}
 					m.appendSystem("✅ 设置已保存")
 					m.updateViewportContent()
 				})
@@ -4304,13 +4334,19 @@ func (m *cliModel) openSetupPanel() {
 			m.channel.config.ApplySettings(vals)
 		}
 		// Apply theme immediately
-		if theme, ok := vals["theme"]; ok && theme != "" {
-			ApplyTheme(theme)
-			if m.width > 4 {
-				m.renderer = newGlamourRenderer(m.width - 4)
+			if theme, ok := vals["theme"]; ok && theme != "" {
+				ApplyTheme(theme)
+				if m.width > 4 {
+					m.renderer = newGlamourRenderer(m.width - 4)
+				}
+				m.renderCacheValid = false
 			}
-			m.renderCacheValid = false
-		}
+			// i18n: detect language change
+			if lang, ok := vals["language"]; ok {
+				SetLocale(lang)
+				m.locale = GetLocale(lang)
+				m.renderCacheValid = false
+			}
 		msg := "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
 		if vals["memory_provider"] == "letta" {
 			msg += "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env"

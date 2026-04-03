@@ -1,14 +1,15 @@
 package channel
 
 import (
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 	"xbot/version"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // View 渲染界面
@@ -300,11 +301,11 @@ func (m *cliModel) titleText() string {
 
 // xbotLogo — "XBOT" ASCII art（slant 字体，figlet 生成）
 var xbotLogo = []string{
-	"   _  __    ____    ____   ______",
+	"   _  __    ____    ____    ______",
 	"  | |/ /   / __ )  / __ \\ /_  __/",
 	"  |   /   / __  | / / / /  / /",
 	" /   |   / /_/ / / /_/ /  / /",
-	"/_/|_|  /_____/  \\____/  /_/",
+	"/_/|_|  /_____/  \\____/ /_/",
 }
 
 // renderSplash 渲染启动画面 — 品牌 logo + 版本号 + 加载动画
@@ -325,16 +326,22 @@ func (m *cliModel) renderSplash() string {
 	descStyle := m.styles.TextMutedSt
 	loadingStyle := m.styles.WarningSt
 
-	// 组装 splash 内容
+	// 组装 splash 内容（logo 按最宽行整体居中，保持字母内部对齐）
 	var lines []string
-	for _, line := range xbotLogo {
-		// 居中 logo
-		logoW := lipgloss.Width(logoStyle.Render(line))
-		pad := (screenW - logoW) / 2
-		if pad < 0 {
-			pad = 0
+	maxLogoW := 0
+	renderedLogo := make([]string, len(xbotLogo))
+	for i, line := range xbotLogo {
+		renderedLogo[i] = logoStyle.Render(line)
+		if w := lipgloss.Width(renderedLogo[i]); w > maxLogoW {
+			maxLogoW = w
 		}
-		lines = append(lines, strings.Repeat(" ", pad)+logoStyle.Render(line))
+	}
+	logoPad := (screenW - maxLogoW) / 2
+	if logoPad < 0 {
+		logoPad = 0
+	}
+	for _, line := range renderedLogo {
+		lines = append(lines, strings.Repeat(" ", logoPad)+line)
 	}
 
 	// 空行

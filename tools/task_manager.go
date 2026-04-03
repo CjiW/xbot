@@ -329,6 +329,7 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 		syscall.Kill(-task.process.Pid, syscall.SIGKILL)
 	}
 	task.killed = true
+	task.Status = BgTaskKilled
 	task.mu.Unlock()
 
 	if task.cancel != nil {

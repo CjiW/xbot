@@ -486,8 +486,11 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 		return nil, fmt.Errorf("not a directory: %s", dir)
 	}
 
-	// Validate the target is within allowed roots
-	if ctx != nil && (ctx.WorkspaceRoot != "" || ctx.WorkingDir != "") {
+	// In none-sandbox mode, no workspace boundary check — user has full access.
+	// In sandbox mode, validate the target is within allowed roots.
+	if ctx != nil && !shouldUseSandbox(ctx) {
+		// none-sandbox: skip boundary check
+	} else if ctx != nil && (ctx.WorkspaceRoot != "" || ctx.WorkingDir != "") {
 		root := ctx.WorkspaceRoot
 		if root == "" {
 			root = ctx.WorkingDir

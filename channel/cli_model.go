@@ -384,14 +384,14 @@ func isCtrlJ(msg tea.Msg) bool {
 // Bubble Tea Interface Implementation
 // ---------------------------------------------------------------------------
 
-// Init 初始化 — 启动 splash 画面动画
+// Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
 func (m *cliModel) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, m.splashTick(0))
 }
 
 // splashTick 生成启动画面动画的 tick 命令
 func (m *cliModel) splashTick(frame int) tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
 		return splashTickMsg{frame: frame + 1}
 	})
 }

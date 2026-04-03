@@ -493,13 +493,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashTickMsg:
 		// §14 启动画面动画帧推进
 		m.splashFrame = msg.frame
-		if m.ready {
-			// 初始化完成（收到 WindowSizeMsg），结束 splash
+		if m.ready && msg.frame >= 20 {
+			// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 			m.splashDone = true
 			return m, nil
 		}
-		// 持续动画（最多 ~3 秒 = 37 帧）
-		if msg.frame >= 37 {
+		// 兜底上限：~2 秒（40 帧）
+		if msg.frame >= 40 {
 			m.splashDone = true
 			return m, nil
 		}

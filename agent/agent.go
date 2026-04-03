@@ -1424,6 +1424,28 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	cfg := a.buildMainRunConfig(ctx, msg, messages, tenantSession, preReplyNotify)
 	// Mark Run as active so bgNotifyLoop buffers notifications instead of processing idle
 	atomic.StoreInt32(&a.bgRunActive, 1)
+
+	// Inject running background task IDs into the last user message so the LLM
+	// is aware of active tasks and doesn't try to restart them.
+	if a.bgTaskMgr != nil {
+		sessionKey := msg.Channel + ":" + msg.ChatID
+		running := a.bgTaskMgr.ListRunning(sessionKey)
+		if len(running) > 0 {
+			var ids []string
+			for _, t := range running {
+				ids = append(ids, t.ID)
+			}
+			bgInfo := fmt.Sprintf("\n[System] Running background tasks: %s", strings.Join(ids, ", "))
+			// Append to last user message in the slice (same backing array as cfg.Messages)
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					messages[i].Content += bgInfo
+					break
+				}
+			}
+		}
+	}
+
 	// Wire drain callback so Run loop can inject bg task results as tool messages
 	cfg.DrainBgNotifications = func() []*tools.BackgroundTask {
 		a.bgRunPendingMu.Lock()

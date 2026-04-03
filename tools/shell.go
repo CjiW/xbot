@@ -28,6 +28,8 @@ func (t *ShellTool) Description() string {
 The command will be executed in the agent's working directory.
 IMPORTANT: Commands are executed non-interactively with a timeout. Do NOT run interactive commands (e.g. vim, top, htop) or commands that require manual input. For commands that might prompt for input, use non-interactive flags (e.g. "apt-get -y", "yes |", "ssh -o BatchMode=yes"). For sudo, use NOPASSWD or "echo password | sudo -S".
 
+PROCESS CLEANUP: Non-background commands are killed (including all child processes) when they return. Do NOT use nohup, disown, or trailing & — they create orphaned processes that waste resources and cause confusion. If a command needs to outlive the tool call, use "background": true instead.
+
 BACKGROUND MODE: Set "background": true to run long-running commands (dev servers, build processes) without blocking. Returns a task ID immediately. The agent continues working while the command runs in the background. When the command finishes, its output is automatically injected into the conversation. Use task_status to check progress, task_kill to terminate.
 
 AUTO-BACKGROUND: If a command times out, it is automatically converted to a background task so no work is lost. The agent receives the task ID and can continue.

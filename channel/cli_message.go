@@ -186,6 +186,7 @@ func (m *cliModel) sendToAgent(content string) {
 	if m.msgBus != nil {
 		m.msgBus.Inbound <- m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
 		m.typing = true
+		m.updatePlaceholder()
 		m.inputReady = false
 		m.resetProgressState()
 	}
@@ -219,6 +220,7 @@ func (m *cliModel) sendMessage(content string) {
 		msg.Media = media
 		m.msgBus.Inbound <- msg
 		m.typing = true
+		m.updatePlaceholder()
 		m.inputReady = false
 		m.resetProgressState()
 	}
@@ -458,6 +460,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.streamingMsgIdx = -1
 		m.progress = nil
 		m.typing = false
+		m.updatePlaceholder()
 		return
 	}
 
@@ -567,12 +570,14 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					}
 					m.appendSystem(strings.Join(answerParts, "\n"))
 					m.typing = true
+					m.updatePlaceholder()
 					m.inputReady = false
 					m.resetProgressState()
 					m.updateViewportContent()
 				}, func() {
 					m.appendSystem(m.locale.AskCancelled)
 					m.typing = false
+					m.updatePlaceholder()
 					m.inputReady = true
 					m.resetProgressState()
 					m.updateViewportContent()
@@ -652,6 +657,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.lastSeenIteration = 0
 		m.typingStartTime = time.Time{}
 		m.typing = false
+		m.updatePlaceholder()
 		m.inputReady = true
 
 	}

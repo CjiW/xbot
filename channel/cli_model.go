@@ -89,6 +89,17 @@ func (m *cliModel) pickIdlePlaceholder() string {
 	return placeholders[idx]
 }
 
+// updatePlaceholder refreshes the textarea placeholder based on typing state.
+// Should be called when m.typing changes, not from View().
+func (m *cliModel) updatePlaceholder() {
+	m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
+	if m.typing {
+		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
+	} else {
+		m.textarea.Placeholder = m.pickIdlePlaceholder()
+	}
+}
+
 // tickerTickMsg 是 ticker 定时 tick 消息
 type tickerTickMsg struct{}
 

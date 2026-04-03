@@ -73,16 +73,7 @@ func (m *cliModel) View() string {
 		)
 	}
 
-	// 动态 placeholder：处理中 vs 就绪（就绪态使用轮换提示）
-	if m.typing {
-		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
-		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
-	} else {
-		m.textarea.Placeholder = m.pickIdlePlaceholder()
-		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
-	}
-
-	// 进度状态栏
+	// 输入区
 	var status string
 	if m.typing || m.progress != nil {
 		// 显示 spinner + 进度信息

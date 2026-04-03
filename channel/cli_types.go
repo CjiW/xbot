@@ -5,6 +5,7 @@ import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"strings"
@@ -106,7 +107,7 @@ func hardWrapRunes(line string, maxW int) string {
 // newGlamourRenderer creates a glamour Markdown renderer.
 // Document.Margin=0 prevents misalignment inside lipgloss bubbles.
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
-	style := glamour.DarkStyleConfig
+	style := styles.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
 	r, _ := glamour.NewTermRenderer(

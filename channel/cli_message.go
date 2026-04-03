@@ -1071,8 +1071,8 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		maxBubble := contentWidth * 3 / 4
 		userStyle := s.UserContent
 		if maxWidth <= maxBubble {
-			// 内容够窄，左填充实现气泡靠右
-			userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
+			// 内容够窄，气泡背景 + 左填充实现气泡靠右
+			userStyle = s.UserBubble.PaddingLeft(contentWidth - maxWidth)
 		}
 		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))

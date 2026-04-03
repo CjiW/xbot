@@ -33,121 +33,175 @@ type cliTheme struct {
 	BarFilled string // 进度条填充
 	BarEmpty  string // 进度条空
 	Border    string // 边框
-	TitleText string // 标题栏文字（title bar foreground）
-	// Surface（第 3 轮增强）
-	Surface  string // 标题栏/面板背景（比终端背景稍亮，营造"浮起"效果）
-	Overlay  string // 进度框/工具摘要背景（比 Surface 更亮，形成视觉层级）
-	Gradient string // 渐变辅助色（用于分隔线、提示条渐变等装饰元素）
+	TitleText string // 标题栏文字
+	// Surface
+	Surface  string // 标题栏/面板背景
+	Overlay  string // 进度框/工具摘要背景
+	Gradient string // 渐变辅助色（分隔线、装饰）
+	// Message
+	UserBubble string // 用户消息气泡背景
 }
 
 var (
 	themeMidnight = cliTheme{
-		TextPrimary:   "#e0e0e0",
-		TextSecondary: "#90a4ae",
-		TextMuted:     "#666666",
-		Success:       "#81c784",
-		Warning:       "#ffb74d",
-		Error:         "#ef5350",
-		Info:          "#64b5f6",
-		Accent:        "#5c6bc0",
-		AccentAlt:     "#ce93d8",
-		BarFilled:     "#5c6bc0",
-		BarEmpty:      "#2a2a3a",
-		Border:        "#4a4e69",
-		TitleText:     "#f2e9e4",
-		Surface:       "#2a2a3e",
-		Overlay:       "#353550",
-		Gradient:      "#3949ab",
+		// Inspired by Material Design Indigo — deep, professional, elegant
+		TextPrimary:   "#e8eaed",
+		TextSecondary: "#9aa0a6",
+		TextMuted:     "#5f6368",
+		Success:       "#81c995",
+		Warning:       "#fdd663",
+		Error:         "#f28b82",
+		Info:          "#8ab4f8",
+		Accent:        "#8c9eff",
+		AccentAlt:     "#c58af9",
+		BarFilled:     "#8c9eff",
+		BarEmpty:      "#292a3d",
+		Border:        "#3c4043",
+		TitleText:     "#e8eaed",
+		Surface:       "#1e1f2e",
+		Overlay:       "#282a3e",
+		Gradient:      "#667eea",
+		UserBubble:    "#2d2f45",
 	}
 	themeOcean = cliTheme{
-		TextPrimary:   "#e0f2f1",
-		TextSecondary: "#80cbc4",
-		TextMuted:     "#546e7a",
-		Success:       "#69f0ae",
-		Warning:       "#ffe082",
-		Error:         "#ff8a80",
-		Info:          "#80d8ff",
-		Accent:        "#00acc1",
-		AccentAlt:     "#80deea",
-		BarFilled:     "#00acc1",
-		BarEmpty:      "#1a2a3a",
-		Border:        "#37474f",
-		TitleText:     "#e0f7fa",
-		Surface:       "#1a2a3a",
-		Overlay:       "#1e3345",
-		Gradient:      "#00838f",
+		// Deep ocean blues with cyan highlights — calm, focused
+		TextPrimary:   "#c3e8f0",
+		TextSecondary: "#6fb3c4",
+		TextMuted:     "#3d6b7a",
+		Success:       "#5eead4",
+		Warning:       "#fbbf24",
+		Error:         "#fb7185",
+		Info:          "#7dd3fc",
+		Accent:        "#22d3ee",
+		AccentAlt:     "#67e8f9",
+		BarFilled:     "#22d3ee",
+		BarEmpty:      "#0f2b3c",
+		Border:        "#1e4976",
+		TitleText:     "#ecfeff",
+		Surface:       "#0c1929",
+		Overlay:       "#132f4c",
+		Gradient:      "#0ea5e9",
+		UserBubble:    "#112240",
 	}
 	themeForest = cliTheme{
-		TextPrimary:   "#c8e6c9",
-		TextSecondary: "#81c784",
-		TextMuted:     "#5d6d5e",
-		Success:       "#a5d6a7",
-		Warning:       "#ffe082",
-		Error:         "#ef9a9a",
-		Info:          "#a5d6a7",
-		Accent:        "#66bb6a",
-		AccentAlt:     "#aed581",
-		BarFilled:     "#66bb6a",
-		BarEmpty:      "#1a2e1a",
-		Border:        "#2e4a2e",
-		TitleText:     "#e8f5e9",
-		Surface:       "#1a2e1a",
-		Overlay:       "#223a22",
-		Gradient:      "#388e3c",
+		// Nordic forest greens — organic, natural, soothing
+		TextPrimary:   "#d1e7dd",
+		TextSecondary: "#7dba8a",
+		TextMuted:     "#4a6b50",
+		Success:       "#86efac",
+		Warning:       "#fde68a",
+		Error:         "#fca5a5",
+		Info:          "#93c5fd",
+		Accent:        "#4ade80",
+		AccentAlt:     "#a3e635",
+		BarFilled:     "#4ade80",
+		BarEmpty:      "#0f2419",
+		Border:        "#1a4d2e",
+		TitleText:     "#dcfce7",
+		Surface:       "#0a1f14",
+		Overlay:       "#14332a",
+		Gradient:      "#059669",
+		UserBubble:    "#162e20",
 	}
 	themeSunset = cliTheme{
-		TextPrimary:   "#fff3e0",
-		TextSecondary: "#ffcc80",
-		TextMuted:     "#6d5d4b",
-		Success:       "#ffe082",
-		Warning:       "#ffab91",
-		Error:         "#ef5350",
-		Info:          "#ffe082",
-		Accent:        "#ff7043",
-		AccentAlt:     "#ffab91",
-		BarFilled:     "#ff7043",
-		BarEmpty:      "#2e2a1a",
-		Border:        "#4e3e2e",
-		TitleText:     "#fff8e1",
-		Surface:       "#2e2a1a",
-		Overlay:       "#3a3020",
-		Gradient:      "#e64a19",
+		// Warm amber/coral palette — energetic, inviting
+		TextPrimary:   "#fef3c7",
+		TextSecondary: "#fdba74",
+		TextMuted:     "#78716c",
+		Success:       "#fde68a",
+		Warning:       "#fdba74",
+		Error:         "#fca5a5",
+		Info:          "#93c5fd",
+		Accent:        "#fb923c",
+		AccentAlt:     "#fbbf24",
+		BarFilled:     "#fb923c",
+		BarEmpty:      "#1c1917",
+		Border:        "#44403c",
+		TitleText:     "#fffbeb",
+		Surface:       "#1c1917",
+		Overlay:       "#292524",
+		Gradient:      "#ea580c",
+		UserBubble:    "#2a2218",
 	}
 	themeRose = cliTheme{
-		TextPrimary:   "#fce4ec",
-		TextSecondary: "#f48fb1",
-		TextMuted:     "#6d4b5b",
-		Success:       "#f8bbd0",
-		Warning:       "#ffab91",
-		Error:         "#ef5350",
-		Info:          "#f48fb1",
-		Accent:        "#ec407a",
-		AccentAlt:     "#ce93d8",
-		BarFilled:     "#ec407a",
-		BarEmpty:      "#2e1a2a",
-		Border:        "#4e2e3e",
-		TitleText:     "#fce4ec",
-		Surface:       "#2e1a2a",
-		Overlay:       "#3a2035",
-		Gradient:      "#c2185b",
+		// Soft pink/magenta — modern, playful, expressive
+		TextPrimary:   "#fce7f3",
+		TextSecondary: "#f9a8d4",
+		TextMuted:     "#6b4c5e",
+		Success:       "#fbcfe8",
+		Warning:       "#fdba74",
+		Error:         "#fca5a5",
+		Info:          "#c4b5fd",
+		Accent:        "#f472b6",
+		AccentAlt:     "#c084fc",
+		BarFilled:     "#f472b6",
+		BarEmpty:      "#1f1522",
+		Border:        "#4a2040",
+		TitleText:     "#fdf2f8",
+		Surface:       "#1a0f1e",
+		Overlay:       "#2a1a30",
+		Gradient:      "#db2777",
+		UserBubble:    "#2a1528",
 	}
 	themeMono = cliTheme{
-		TextPrimary:   "#d0d0d0",
-		TextSecondary: "#888888",
-		TextMuted:     "#555555",
-		Success:       "#aaaaaa",
-		Warning:       "#cccccc",
-		Error:         "#ff6666",
-		Info:          "#aaaaaa",
-		Accent:        "#ffffff",
-		AccentAlt:     "#888888",
-		BarFilled:     "#ffffff",
-		BarEmpty:      "#333333",
-		Border:        "#555555",
-		TitleText:     "#ffffff",
-		Surface:       "#222222",
-		Overlay:       "#2a2a2a",
-		Gradient:      "#666666",
+		// Clean grayscale with red accent — minimalist, hacker aesthetic
+		TextPrimary:   "#c9d1d9",
+		TextSecondary: "#8b949e",
+		TextMuted:     "#484f58",
+		Success:       "#7ee787",
+		Warning:       "#e3b341",
+		Error:         "#ff7b72",
+		Info:          "#79c0ff",
+		Accent:        "#f0f6fc",
+		AccentAlt:     "#8b949e",
+		BarFilled:     "#f0f6fc",
+		BarEmpty:      "#21262d",
+		Border:        "#30363d",
+		TitleText:     "#f0f6fc",
+		Surface:       "#161b22",
+		Overlay:       "#21262d",
+		Gradient:      "#484f58",
+		UserBubble:    "#1c2128",
+	}
+	themeNord = cliTheme{
+		// Nord color scheme — arctic, blue-ish, muted elegance
+		TextPrimary:   "#d8dee9",
+		TextSecondary: "#81a1c1",
+		TextMuted:     "#4c566a",
+		Success:       "#a3be8c",
+		Warning:       "#ebcb8b",
+		Error:         "#bf616a",
+		Info:          "#81a1c1",
+		Accent:        "#88c0d0",
+		AccentAlt:     "#b48ead",
+		BarFilled:     "#88c0d0",
+		BarEmpty:      "#3b4252",
+		Border:        "#434c5e",
+		TitleText:     "#eceff4",
+		Surface:       "#2e3440",
+		Overlay:       "#3b4252",
+		Gradient:      "#5e81ac",
+		UserBubble:    "#353b49",
+	}
+	themeDracula = cliTheme{
+		// Dracula — iconic dark purple theme, high contrast
+		TextPrimary:   "#f8f8f2",
+		TextSecondary: "#bd93f9",
+		TextMuted:     "#6272a4",
+		Success:       "#50fa7b",
+		Warning:       "#f1fa8c",
+		Error:         "#ff5555",
+		Info:          "#8be9fd",
+		Accent:        "#bd93f9",
+		AccentAlt:     "#ff79c6",
+		BarFilled:     "#bd93f9",
+		BarEmpty:      "#21222c",
+		Border:        "#44475a",
+		TitleText:     "#f8f8f2",
+		Surface:       "#1e1f29",
+		Overlay:       "#282a36",
+		Gradient:      "#6272a4",
+		UserBubble:    "#2d2f3d",
 	}
 
 	themeRegistry = map[string]*cliTheme{
@@ -157,6 +211,8 @@ var (
 		"sunset":   &themeSunset,
 		"rose":     &themeRose,
 		"mono":     &themeMono,
+		"nord":     &themeNord,
+		"dracula":  &themeDracula,
 	}
 
 	currentTheme = &themeMidnight
@@ -268,7 +324,8 @@ type cliStyles struct {
 	// --- key hints (footer) ---
 	KeyLabelSt lipgloss.Style
 	KeyDescSt  lipgloss.Style
-	// --- search highlight ---
+	// --- message bubble ---
+	UserBubble lipgloss.Style
 
 	// toolDisplayInfo
 }
@@ -287,15 +344,15 @@ func buildStyles(width int) cliStyles {
 		ThinkingSt:       lipgloss.NewStyle().Foreground(c(t.Warning)).Padding(0, 1),
 		Progress:         lipgloss.NewStyle().Foreground(c(t.Warning)),
 		Tool:             lipgloss.NewStyle().Foreground(c(t.Info)),
-		Separator:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
-		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(width - 4),
+		Separator:        lipgloss.NewStyle().Foreground(c(t.Gradient)),
+		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1).Width(width - 4),
 		Time:             lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
 		UserLabel:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		AssistLabel:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
 		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
 		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
-		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
+		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
 		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
@@ -310,7 +367,7 @@ func buildStyles(width int) cliStyles {
 		ProgressElapsed:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
 		ProgressIndent:   lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
 		ProgressDim:      lipgloss.NewStyle().Faint(true),
-		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
+		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1).Width(cw),
 		Accent:           lipgloss.NewStyle().Foreground(c(t.Accent)),
 		TextMutedSt:      lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		WarningSt:        lipgloss.NewStyle().Foreground(c(t.Warning)),
@@ -324,7 +381,7 @@ func buildStyles(width int) cliStyles {
 		TodoEmpty:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
 		TodoDone:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		TodoPending:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
+		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1),
 		PanelHeader:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		PanelCursor:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		PanelDesc:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
@@ -350,14 +407,14 @@ func buildStyles(width int) cliStyles {
 		WarningBold:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Padding(0, 1),
 		PlaceholderSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		// --- splash ---
-		VersionSt: lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		VersionSt: lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
 		// --- toast ---
 		ToastIcon: lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
 		// --- message render ---
-		UserDotSep:     lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
-		UserHeader:     lipgloss.NewStyle(),
+		UserDotSep:     lipgloss.NewStyle().Foreground(c(t.Gradient)),
+		UserHeader:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		UserContent:    lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		AssistantGuide: lipgloss.NewStyle().Foreground(c(t.Accent)),
+		AssistantGuide: lipgloss.NewStyle().Foreground(c(t.Gradient)),
 		StreamCursor:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		// --- settings panel ---
 		SettingsDivider: lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
@@ -381,6 +438,8 @@ func buildStyles(width int) cliStyles {
 		// --- key hints (footer) ---
 		KeyLabelSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
 		KeyDescSt:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		// --- message bubble ---
+		UserBubble: lipgloss.NewStyle().Background(c(t.UserBubble)).Padding(0, 1),
 	}
 }
 

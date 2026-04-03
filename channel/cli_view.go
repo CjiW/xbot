@@ -290,6 +290,11 @@ func (m *cliModel) renderTodoBar() string {
 // titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
 func (m *cliModel) titleText() string {
 	if m.workDir != "" {
+		// Resolve to absolute path so "." → actual directory name
+		abs, err := filepath.Abs(m.workDir)
+		if err == nil {
+			return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(abs))
+		}
 		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
 	}
 	return " xbot CLI"

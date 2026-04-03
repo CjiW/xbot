@@ -15,11 +15,15 @@ import (
 func (m *cliModel) View() tea.View {
 	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
 	if !m.splashDone {
-		return tea.NewView(m.renderSplash())
+		v := tea.NewView(m.renderSplash())
+		v.AltScreen = true // 使用 AltScreen 避免残留到主终端缓冲区
+		return v
 	}
 
 	if !m.ready {
-		return tea.NewView("\n  " + m.locale.SplashLoading)
+		v := tea.NewView("\n  " + m.locale.SplashLoading)
+		v.AltScreen = true
+		return v
 	}
 
 	// ========== 样式定义 ==========

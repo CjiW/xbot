@@ -54,6 +54,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 	}
 
+	// Ctrl+Z: 紧急退出（无论什么状态，包括 panel/typing/idle）
+	if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyCtrlZ {
+		m.appendSystem("🚪 紧急退出 (Ctrl+Z)")
+		m.updateViewportContent()
+		return m, tea.Quit
+	}
+
 	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
 		// Ctrl+C must always cancel the agent — never swallow it

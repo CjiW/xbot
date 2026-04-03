@@ -9,9 +9,8 @@ import (
 
 // phase1Manager implements ContextManager using single-pass structured compaction.
 type phase1Manager struct {
-	config      *ContextManagerConfig
-	cooldown    *CompressCooldown
-	memTools    []llm.ToolDefinition
+	config   *ContextManagerConfig
+	memTools []llm.ToolDefinition
 	memToolExec func(ctx context.Context, tc llm.ToolCall) (content string, err error)
 }
 
@@ -23,14 +22,8 @@ func (m *phase1Manager) SetMemoryTools(tools []llm.ToolDefinition, exec func(ctx
 
 func newPhase1Manager(cfg *ContextManagerConfig) *phase1Manager {
 	return &phase1Manager{
-		config:   cfg,
-		cooldown: NewCompressCooldown(3),
+		config: cfg,
 	}
-}
-
-// Cooldown returns the compaction cooldown manager for external tracking.
-func (m *phase1Manager) Cooldown() *CompressCooldown {
-	return m.cooldown
 }
 
 func (m *phase1Manager) Mode() ContextMode { return ContextModePhase1 }

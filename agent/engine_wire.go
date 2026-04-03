@@ -315,6 +315,13 @@ func (a *Agent) buildMainRunConfig(
 	cfg.ContextManager = a.GetContextManager()
 	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
 
+	// Per-user token usage tracking (persisted to SQLite)
+	cfg.RecordUserTokenUsage = func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(senderID, inputTokens, outputTokens, conversationCount, llmCallCount); err != nil {
+			log.WithError(err).WithField("sender_id", senderID).Warn("Failed to record user token usage")
+		}
+	}
+
 	// SpawnAgent（主 Agent 可以创建 SubAgent）
 	cfg.SpawnAgent = func(ctx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
 		return a.spawnSubAgent(ctx, inMsg)

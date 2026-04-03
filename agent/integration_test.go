@@ -221,6 +221,8 @@ func TestIntegration_Masking_TriggeredAtThreshold(t *testing.T) {
 	cfg := env.buildRunConfig(messages)
 	// masking is inside maybeCompress which requires ContextManager != nil
 	cfg.ContextManager = &mockCompressor{}
+	// Masking is disabled by default; explicitly enable for this test
+	cfg.MaskStore = env.maskStore
 	out := Run(context.Background(), cfg)
 
 	if out.Error != nil {
@@ -899,6 +901,8 @@ func TestIntegration_MaxContext_CustomThreshold(t *testing.T) {
 
 		cfg := env.buildRunConfig(messages)
 		cfg.ContextManager = &mockCompressor{}
+		// Masking is disabled by default; explicitly enable for this test
+		cfg.MaskStore = env.maskStore
 
 		Run(context.Background(), cfg)
 

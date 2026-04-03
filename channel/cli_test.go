@@ -541,6 +541,10 @@ func TestCLIModelHandleAgentMessageEmptyContent(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
+	// Simulate active progress state
+	model.progress = &CLIProgressPayload{Phase: "thinking"}
+	model.typing = true
+
 	msg := bus.OutboundMessage{
 		Content:   "",
 		IsPartial: false,
@@ -548,11 +552,15 @@ func TestCLIModelHandleAgentMessageEmptyContent(t *testing.T) {
 
 	model.handleAgentMessage(msg)
 
-	if len(model.messages) != 1 {
-		t.Fatalf("Expected 1 message, got %d", len(model.messages))
+	// Empty content with no tools/waiting: should clear progress, not add message
+	if len(model.messages) != 0 {
+		t.Fatalf("Expected 0 messages, got %d", len(model.messages))
 	}
-	if model.messages[0].content != "" {
-		t.Errorf("Message content should be empty, got: %q", model.messages[0].content)
+	if model.progress != nil {
+		t.Error("Expected progress to be cleared")
+	}
+	if model.typing {
+		t.Error("Expected typing to be cleared")
 	}
 }
 

@@ -19,7 +19,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 18
+const schemaVersion = 19
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -93,7 +93,11 @@ func (db *DB) initSchema() error {
 	var tableName string
 	err := conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='tenants'").Scan(&tableName)
 	if err == sql.ErrNoRows {
-		return db.createSchema()
+		if err := db.createSchema(); err != nil {
+			return err
+		}
+		// createSchema only creates v2 base; run full migration chain
+		return db.migrateSchema(2)
 	}
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
@@ -832,6 +836,17 @@ CREATE TABLE IF NOT EXISTS runners (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v18 (added display_only to session_messages)")
+	}
+
+	if from < 19 {
+		svc := NewUserTokenUsageService(db)
+		if err := svc.createTable(conn); err != nil {
+			return fmt.Errorf("migrate v18->v19: %w", err)
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 19"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v19 (added user_token_usage)")
 	}
 
 	return nil

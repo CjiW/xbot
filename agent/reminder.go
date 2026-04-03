@@ -15,14 +15,17 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 
 	isSubAgent := agentID != "main"
 
-	// 1. 提取任务目标：第一条 user message（去掉时间戳和引导文本）
-	//   - 主 Agent：用户原始需求
+	// 1. 提取任务目标：最后一条 user message（去掉时间戳和引导文本）
+	//   - 主 Agent：用户最新需求
 	//   - SubAgent：父 Agent 分配的任务命令
 	var taskGoal string
-	for _, msg := range messages {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
 		if msg.Role == "user" && msg.Content != "" {
 			taskGoal = extractUserGoal(msg.Content)
-			break
+			if taskGoal != "" {
+				break
+			}
 		}
 	}
 
@@ -41,7 +44,7 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 		if isSubAgent {
 			parts = append(parts, fmt.Sprintf("执行任务: %s", taskGoal))
 		} else {
-			parts = append(parts, fmt.Sprintf("用户原始需求: %s", taskGoal))
+			parts = append(parts, fmt.Sprintf("用户需求: %s", taskGoal))
 		}
 	}
 

@@ -70,10 +70,11 @@ type ToolCall struct {
 type FinishReason string
 
 const (
-	FinishReasonStop          FinishReason = "stop"           // 正常结束
-	FinishReasonLength        FinishReason = "length"         // 达到最大长度
-	FinishReasonToolCalls     FinishReason = "tool_calls"     // 工具调用
-	FinishReasonContentFilter FinishReason = "content_filter" // 内容过滤
+	FinishReasonStop                FinishReason = "stop"                        // 正常结束
+	FinishReasonLength              FinishReason = "length"                      // 达到最大长度
+	FinishReasonToolCalls           FinishReason = "tool_calls"                  // 工具调用
+	FinishReasonContentFilter       FinishReason = "content_filter"              // 内容过滤
+	FinishReasonContextWindowExceeded FinishReason = "model_context_window_exceeded" // 上下文超限
 )
 
 // TokenUsage token 使用统计

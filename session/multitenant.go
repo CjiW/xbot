@@ -100,6 +100,7 @@ type MultiTenantSession struct {
 	sessionSvc            *sqlite.SessionService
 	memorySvc             *sqlite.MemoryService
 	userProfileSvc        *sqlite.UserProfileService
+	tokenUsageSvc         *sqlite.UserTokenUsageService
 	coreSvc               *sqlite.CoreMemoryService
 	archivalSvc           *vectordb.ArchivalService
 	toolIndexSvc          *vectordb.ToolIndexService
@@ -137,6 +138,7 @@ func NewMultiTenant(dbPath string, opts ...MultiTenantOption) (*MultiTenantSessi
 		sessionSvc:            sqlite.NewSessionService(db),
 		memorySvc:             sqlite.NewMemoryService(db),
 		userProfileSvc:        sqlite.NewUserProfileService(db),
+		tokenUsageSvc:         sqlite.NewUserTokenUsageService(db),
 		coreSvc:               sqlite.NewCoreMemoryService(db),
 		memoryProvider:        "flat",
 		tenantCache:           make(map[string]*TenantSession),
@@ -225,6 +227,21 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mcpConfigPath = path
+}
+
+// RecordUserTokenUsage records token usage for a user (upsert).
+func (m *MultiTenantSession) RecordUserTokenUsage(senderID string, inputTokens, outputTokens int, conversationCount, llmCallCount int) error {
+	return m.tokenUsageSvc.RecordUsage(m.db.Conn(), senderID, inputTokens, outputTokens, conversationCount, llmCallCount)
+}
+
+// GetUserTokenUsage retrieves cumulative token usage for a user.
+func (m *MultiTenantSession) GetUserTokenUsage(senderID string) (*sqlite.UserTokenUsage, error) {
+	return m.tokenUsageSvc.GetUsage(senderID)
+}
+
+// GetAllUserTokenUsage retrieves token usage for all users, sorted by total desc.
+func (m *MultiTenantSession) GetAllUserTokenUsage() ([]sqlite.UserTokenUsage, error) {
+	return m.tokenUsageSvc.GetAllUsage()
 }
 
 // GetOrCreateSession retrieves or creates a tenant session for the given channel and chatID.

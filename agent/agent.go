@@ -284,6 +284,11 @@ type Agent struct {
 	// 0 when idle. Used by bgNotifyLoop to decide routing.
 	bgRunActive int32
 
+	// lastPromptTokens stores the prompt_tokens from the most recent LLM API call.
+	// This is the authoritative token count for the full input (messages + tool defs).
+	// Updated after each Run() completes. Used by /context info for accurate stats.
+	lastPromptTokens atomic.Int64
+
 	// bgRunPending buffers bg task notifications that arrived during an active Run.
 	// The Run loop drains these between iterations.
 	bgRunPending   []*tools.BackgroundTask
@@ -579,8 +584,10 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
-	maskStore := NewObservationMaskStore(200)
-	a.maskStore = maskStore
+	// 默认关闭：masking 会完全隐藏旧工具结果，导致 LLM 丢失推理上下文。
+	// Offload（Layer 1）已足够控制单条工具结果大小，Compression 在接近上限时做整体验证摘要。
+	// 通过 settings 的 enable_masking 开启。
+	// a.maskStore = NewObservationMaskStore(200) // 默认关闭
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {
@@ -589,8 +596,8 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 注册 recall_masked 工具（需要 MaskStore 依赖注入）
-	if maskStore != nil {
-		registry.RegisterCore(&tools.RecallMaskedTool{Store: maskStore})
+	if a.maskStore != nil {
+		registry.RegisterCore(&tools.RecallMaskedTool{Store: a.maskStore})
 	}
 
 	// 初始化 ContextEditor（Context Editing 工具 — 精确编辑上下文）
@@ -1456,6 +1463,7 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)
+	a.lastPromptTokens.Store(out.LastPromptTokens)
 	// Drain any bg notifications that arrived after Run's last iteration.
 	// Process them as user messages (idle path).
 	a.bgRunPendingMu.Lock()
@@ -1518,6 +1526,15 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			"chat_id":      msg.ChatID,
 			"reply_policy": replyPolicy,
 		}).Info("Optional reply policy: no final response generated, skipping outbound")
+		// Send an empty outbound to clear TUI progress state (typing/progress indicator).
+		// Without this, TUI gets stuck showing progress with no way for user to interact.
+		if ch, ok := a.channelFinder(msg.Channel); ok {
+			ch.Send(bus.OutboundMessage{
+				Channel: msg.Channel,
+				ChatID:  msg.ChatID,
+				Content: "",
+			})
+		}
 		return nil, nil
 	}
 

@@ -20,7 +20,7 @@ func TestBuildSystemReminder_Basic(t *testing.T) {
 	if !strings.Contains(result, "<system-reminder>") {
 		t.Error("expected system-reminder tag")
 	}
-	if !strings.Contains(result, "用户原始需求: Hello") {
+	if !strings.Contains(result, "用户需求: Hello") {
 		t.Errorf("expected user goal, got:\n%s", result)
 	}
 	if !strings.Contains(result, "已完成 1 次工具调用") {

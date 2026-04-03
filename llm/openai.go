@@ -529,6 +529,16 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	data, _ := params.MarshalJSON()
 	logrus.Ctx(ctx).Debugf("[LLM] Stream request params: %s", string(data))
 
+	// Debug: 打印请求关键信息（token 数大时帮助排查空响应）
+	logrus.Ctx(ctx).WithFields(logrus.Fields{
+		"provider":    "openai",
+		"model":       model,
+		"msg_count":   len(messages),
+		"tools_count": len(tools),
+		"thinking":    thinkingMode,
+		"param_bytes": len(data),
+	}).Info("[LLM] Stream request summary")
+
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
@@ -542,13 +552,13 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	eventChan := make(chan StreamEvent, 100)
 
 	// 启动 goroutine 处理流式响应
-	go o.processStream(ctx, stream, eventChan, startTime)
+	go o.processStream(ctx, stream, eventChan, startTime, messages, model, tools, thinkingMode)
 
 	return eventChan, nil
 }
 
 // processStream 处理流式响应
-func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[openai.ChatCompletionChunk], eventChan chan<- StreamEvent, startTime time.Time) {
+func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[openai.ChatCompletionChunk], eventChan chan<- StreamEvent, startTime time.Time, messages []ChatMessage, model string, tools []ToolDefinition, thinkingMode string) {
 	defer close(eventChan)
 	defer stream.Close()
 
@@ -557,6 +567,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
 	doneSent := false
+	var lastFinishReason string
 
 	for stream.Next() {
 		select {
@@ -626,6 +637,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			// 处理完成原因
 			if choice.FinishReason != "" {
 				doneSent = true
+				lastFinishReason = string(choice.FinishReason)
 				eventChan <- StreamEvent{
 					Type:         EventDone,
 					FinishReason: FinishReason(choice.FinishReason),
@@ -667,13 +679,30 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		"chunk_count":    chunkCount,
 		"total_duration": time.Since(startTime).String(),
 		"ttft":           firstChunkTime.Sub(startTime).String(),
+		"finish_reason":  lastFinishReason,
 	}
 	if lastUsage != nil {
 		fields["prompt_tokens"] = lastUsage.PromptTokens
 		fields["completion_tokens"] = lastUsage.CompletionTokens
 		fields["total_tokens"] = lastUsage.TotalTokens
 	}
-	l.WithFields(fields).Info("[LLM] Stream completed")
+	// Debug: 当 chunk_count 极低（空响应）时打印详细请求信息
+	if chunkCount <= 1 {
+		fields["msg_count"] = len(messages)
+		fields["tools_count"] = len(tools)
+		fields["model"] = model
+		fields["thinking_mode"] = thinkingMode
+		// 打印最后一条 user 消息的内容（帮助判断上下文）
+		for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			fields["last_user_msg_preview"] = truncateStr(messages[i].Content, 100)
+			break
+		}
+		}
+		l.WithFields(fields).Warn("[LLM] Stream completed with near-empty response")
+	} else {
+		l.WithFields(fields).Info("[LLM] Stream completed")
+	}
 
 	// 仅在未通过 finish_reason 发送过 Done 时补发
 	if !doneSent {
@@ -681,4 +710,11 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			Type: EventDone,
 		}
 	}
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

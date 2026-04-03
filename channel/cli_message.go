@@ -215,7 +215,7 @@ func (m *cliModel) sendMessage(content string) {
 
 	// 发送到消息总线
 	if m.msgBus != nil {
-		msg := m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
+		msg := m.newInbound(content, nil) // ReplyPolicyAuto (default)
 		msg.Media = media
 		m.msgBus.Inbound <- msg
 		m.typing = true
@@ -449,6 +449,16 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 	// 处理 __FEISHU_CARD__ 协议（简化显示）
 	if strings.HasPrefix(content, "__FEISHU_CARD__") {
 		content = ConvertFeishuCard(content)
+	}
+
+	// Empty content with no waiting user: clear progress/typing state without
+	// appending a blank message. This happens when Optional reply policy produces
+	// no response (e.g. LLM returned empty).
+	if content == "" && !msg.WaitingUser && len(msg.ToolsUsed) == 0 {
+		m.streamingMsgIdx = -1
+		m.progress = nil
+		m.typing = false
+		return
 	}
 
 	if msg.IsPartial {

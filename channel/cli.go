@@ -14,11 +14,14 @@ package channel
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
-	"os"
-	"strings"
 	"xbot/bus"
 	log "xbot/logger"
 	"xbot/tools"
@@ -118,6 +121,20 @@ func (c *CLIChannel) Start() error {
 		tea.WithOutput(origStdout),
 	)
 	c.programMu.Unlock()
+
+	// Ctrl+Z 紧急退出：双保险
+	// 1) Key event handler (cli_update.go): raw mode 下终端可能直接传 0x1A 字节
+	// 2) SIGTSTP 信号兜底: 某些终端 emulator 在 raw mode 下仍发信号
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTSTP)
+	go func() {
+		<-sigCh
+		// 恢复终端并直接退出，不依赖 bubbletea 的 Quit 流程
+		_ = c.program.ReleaseTerminal()
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+		os.Exit(0)
+	}()
 
 	// 启动 outbound 消息处理 goroutine
 	c.wg.Add(1)

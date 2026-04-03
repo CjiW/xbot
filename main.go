@@ -274,9 +274,9 @@ func main() {
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
 				Host:             cfg.Web.Host,
-					Port:             cfg.Web.Port,
-					DB:               webDB,
-					FeishuLinkSecret: cfg.Feishu.AppSecret,
+				Port:             cfg.Web.Port,
+				DB:               webDB,
+				FeishuLinkSecret: cfg.Feishu.AppSecret,
 				InviteOnly:       cfg.Web.InviteOnly,
 				PublicURL:        cfg.Sandbox.PublicURL,
 			}, msgBus)

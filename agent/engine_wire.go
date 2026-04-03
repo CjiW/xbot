@@ -165,6 +165,17 @@ func (a *Agent) buildMainRunConfig(
 	// 主 Agent 特有字段
 	cfg.Session = tenantSession
 
+	// Token 状态持久化：Run() 结束后写入 DB，重启后恢复
+	if extras := cfg.ToolContextExtras; extras != nil && extras.MemorySvc != nil && extras.TenantID != 0 {
+		memSvc := extras.MemorySvc
+		tenantID := extras.TenantID
+		cfg.SaveTokenState = func(promptTokens, completionTokens int64) {
+			if err := memSvc.SetTokenState(context.Background(), tenantID, promptTokens, completionTokens); err != nil {
+				log.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to persist token state")
+			}
+		}
+	}
+
 	// OAuth 处理
 	cfg.OAuthHandler = a.buildOAuthHandler(channel, chatID, senderID, sessionKey)
 
@@ -485,12 +496,12 @@ func (a *Agent) buildSubAgentRunConfig(
 	// (LanguageMiddleware on the main Agent already adds it via SystemParts).
 	if a.settingsSvc != nil {
 		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-		if lang, ok := vals["language"]; ok && lang != "" {
-			// Check if language instruction is already in sysPrompt (inherited from main Agent)
-			if !strings.Contains(sysPrompt, "## Language") {
-			sysPrompt += "\n" + LanguageInstruction(lang)
+			if lang, ok := vals["language"]; ok && lang != "" {
+				// Check if language instruction is already in sysPrompt (inherited from main Agent)
+				if !strings.Contains(sysPrompt, "## Language") {
+					sysPrompt += "\n" + LanguageInstruction(lang)
+				}
 			}
-		}
 		}
 	}
 

@@ -1,13 +1,13 @@
 package channel
 
 import (
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"fmt"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
 	"time"
 	"xbot/bus"
 	"xbot/tools"
@@ -92,7 +92,9 @@ func (m *cliModel) pickIdlePlaceholder() string {
 // updatePlaceholder refreshes the textarea placeholder based on typing state.
 // Should be called when m.typing changes, not from View().
 func (m *cliModel) updatePlaceholder() {
-	m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
+	styles := m.textarea.Styles()
+	styles.Blurred.Placeholder = m.styles.PlaceholderSt
+	m.textarea.SetStyles(styles)
 	if m.typing {
 		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
 	} else {
@@ -280,7 +282,7 @@ func newCLIModel() *cliModel {
 	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 
-	vp := viewport.New(80, 20)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
 	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
 	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）

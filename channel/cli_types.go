@@ -1,12 +1,12 @@
 package channel
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"encoding/json"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"strings"
 	"sync"

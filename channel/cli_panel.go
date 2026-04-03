@@ -1,11 +1,11 @@
 package channel
 
 import (
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"fmt"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"time"
 	"xbot/tools"
@@ -123,11 +123,13 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ti.Placeholder = "Type here..."
 	ti.Prompt = ""
 	ti.CharLimit = 200
-	ti.Width = m.panelWidth(40)
-	ti.PromptStyle = m.styles.TIPrompt
-	ti.TextStyle = m.styles.TIText
-	ti.Cursor.Style = m.styles.TICursor
-	ti.PlaceholderStyle = m.styles.TIPlaceholder
+	ti.SetWidth(m.panelWidth(40))
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Prompt = m.styles.TIPrompt
+	tiStyles.Focused.Text = m.styles.TIText
+	tiStyles.Focused.Placeholder = m.styles.TIPlaceholder
+	tiStyles.Cursor.Color = m.styles.TICursor.GetForeground()
+	ti.SetStyles(tiStyles)
 	ti.Focus()
 	m.panelOtherTI = ti
 	m.panelOnAnswer = onAnswer
@@ -174,7 +176,7 @@ func (m *cliModel) openBgTasksPanel() {
 
 // updateBgTasksPanel handles key events in the bg tasks panel.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// Refresh task list
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
 		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
@@ -182,19 +184,19 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 
 	// Log viewing sub-mode
 	if m.panelBgViewing {
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
+		switch {
+		case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
 			m.panelBgViewing = false
 			m.panelBgScroll = 0
 			m.panelBgLogLines = nil
 			return true, m, nil
-		case tea.KeyUp:
+		case msg.Code == tea.KeyUp:
 			m.panelBgScroll -= 5
 			if m.panelBgScroll < 0 {
 				m.panelBgScroll = 0
 			}
 			return true, m, nil
-		case tea.KeyDown:
+		case msg.Code == tea.KeyDown:
 			maxScroll := len(m.panelBgLogLines) - 20
 			if maxScroll < 0 {
 				maxScroll = 0
@@ -204,7 +206,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 				m.panelBgScroll = maxScroll
 			}
 			return true, m, nil
-		case tea.KeyPgUp:
+		case msg.Code == tea.KeyPgUp:
 			m.panelBgScroll -= 18
 			if m.panelBgScroll < 0 {
 				m.panelBgScroll = 0
@@ -228,27 +230,27 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	}
 
 	// Task list mode
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+	switch {
+	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
 		m.closePanel()
 		if m.typing {
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
 
-	case tea.KeyUp, tea.KeyCtrlK:
+	case msg.Code == tea.KeyUp || msg.String() == "ctrl+k":
 		if m.panelBgCursor > 0 {
 			m.panelBgCursor--
 		}
 		return true, m, nil
 
-	case tea.KeyDown, tea.KeyCtrlJ:
+	case msg.Code == tea.KeyDown || msg.String() == "ctrl+j":
 		if m.panelBgCursor < len(m.panelBgTasks)-1 {
 			m.panelBgCursor++
 		}
 		return true, m, nil
 
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		// View log of selected task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
@@ -262,7 +264,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		return true, m, nil
 
-	case tea.KeyDelete, tea.KeyCtrlD:
+	case msg.Code == tea.KeyDelete || msg.String() == "ctrl+d":
 		// Kill selected running task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
@@ -411,7 +413,7 @@ func splitLines(s string) []string {
 
 // updatePanel handles key events when a panel is active.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelMode == "" {
 		return false, m, nil
 	}
@@ -427,10 +429,10 @@ func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	return false, m, nil
 }
 
-func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelEdit {
 		// Editing mode
-		switch msg.Type {
+		switch msg.Code {
 		case tea.KeyEnter:
 			// Save value
 			newVal := strings.TrimSpace(m.panelEditTA.Value())
@@ -456,7 +458,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			opts := def.Options
-			switch msg.Type {
+			switch msg.Code {
 			case tea.KeyEsc:
 				m.panelCombo = false
 				return true, m, nil
@@ -490,28 +492,28 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 	}
 
 	// Navigation mode
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch {
+	case msg.Code == tea.KeyEsc:
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyCtrlS:
+	case msg.String() == "ctrl+s":
 		// Submit all settings
 		if m.panelOnSubmit != nil {
 			m.panelOnSubmit(m.panelValues)
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyUp, tea.KeyShiftTab:
+	case msg.Code == tea.KeyUp || msg.String() == "shift+tab":
 		if m.panelCursor > 0 {
 			m.panelCursor--
 		}
 		return true, m, nil
-	case tea.KeyDown, tea.KeyTab:
+	case msg.Code == tea.KeyDown || msg.Code == tea.KeyTab:
 		if m.panelCursor < len(m.panelSchema)-1 {
 			m.panelCursor++
 		}
 		return true, m, nil
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			switch def.Type {
@@ -568,7 +570,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 	return true, m, nil
 }
 
-func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
 		return true, m, nil
 	}
@@ -580,8 +582,8 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	onOther := hasOpts && cursor == numOpts
 	onSubmit := hasOpts && cursor == numOpts+1
 
-	switch msg.Type {
-	case tea.KeyCtrlS:
+	switch {
+	case msg.String() == "ctrl+s":
 		answers := m.collectAskAnswers()
 		if m.panelOnAnswer != nil {
 			m.panelOnAnswer(answers)
@@ -591,27 +593,27 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEsc:
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyRight, tea.KeyTab:
+	case msg.Code == tea.KeyRight || msg.Code == tea.KeyTab:
 		if len(m.panelItems) > 1 && m.panelTab < len(m.panelItems)-1 {
 			m.saveCurrentFreeInput()
 			m.panelTab++
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyShiftTab, tea.KeyLeft:
+	case msg.String() == "shift+tab" || msg.Code == tea.KeyLeft:
 		if len(m.panelItems) > 1 && m.panelTab > 0 {
 			m.saveCurrentFreeInput()
 			m.panelTab--
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyUp:
+	case msg.Code == tea.KeyUp:
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
@@ -626,7 +628,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyDown:
+	case msg.Code == tea.KeyDown:
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts + 1
@@ -641,7 +643,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		if hasOpts {
 			if onSubmit {
 				answers := m.collectAskAnswers()
@@ -669,7 +671,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeySpace:
+	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {
 				m.toggleOptAtCursor()
@@ -690,7 +692,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyRunes:
+	case len(msg.Text) > 0:
 		if hasOpts && !onOther {
 			m.panelOptCursor[m.panelTab] = numOpts
 			m.restoreOtherInput()
@@ -836,7 +838,7 @@ func (m *cliModel) autoExpandAskTA() {
 func (m *cliModel) panelMaxHeight() int {
 	// viewport.Height 已经减去了 titleBar(1) + separator(1) + status(1) + inputBox(~5) + footer(1)
 	// panel 需要留 2 行给 footer+toast，实际可用 = viewportHeight - 1 (panel border)
-	maxH := m.viewport.Height - 1
+	maxH := m.viewport.Height() - 1
 	if maxH < 8 {
 		maxH = 8 // 最小高度保证
 	}

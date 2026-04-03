@@ -7,12 +7,12 @@ import (
 
 // UserTokenUsage represents a user's cumulative token usage.
 type UserTokenUsage struct {
-	SenderID       string `json:"sender_id"`
-	InputTokens    int64  `json:"input_tokens"`
-	OutputTokens   int64  `json:"output_tokens"`
-	TotalTokens    int64  `json:"total_tokens"`
-	ConversationCount int64 `json:"conversation_count"`
-	LLMCallCount   int64  `json:"llm_call_count"`
+	SenderID          string `json:"sender_id"`
+	InputTokens       int64  `json:"input_tokens"`
+	OutputTokens      int64  `json:"output_tokens"`
+	TotalTokens       int64  `json:"total_tokens"`
+	ConversationCount int64  `json:"conversation_count"`
+	LLMCallCount      int64  `json:"llm_call_count"`
 }
 
 // UserTokenUsageService manages per-user token usage persistence.

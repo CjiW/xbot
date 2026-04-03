@@ -87,8 +87,8 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	}
 
 	if len(lines) == 0 {
-			return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
-		}
+		return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
+	}
 
 	currentMemory, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
 	if err != nil {

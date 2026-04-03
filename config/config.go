@@ -589,9 +589,9 @@ func Load() *Config {
 		cfg.Agent.MaxIterations = 100
 	}
 	if cfg.Agent.MaxConcurrency == 0 {
-			cfg.Agent.MaxConcurrency = 3
-		}
-		if cfg.Agent.MCPInactivityTimeout == 0 {
+		cfg.Agent.MaxConcurrency = 3
+	}
+	if cfg.Agent.MCPInactivityTimeout == 0 {
 		cfg.Agent.MCPInactivityTimeout = 30 * time.Minute
 	}
 	if cfg.Agent.MCPCleanupInterval == 0 {

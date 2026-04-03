@@ -47,11 +47,11 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 	)
 
 	o := &OpenAILLM{
-			client:       &client,
-			models:       nil,
-			defaultModel: cfg.DefaultModel,
-			maxTokens:    cfg.MaxTokens,
-		}
+		client:       &client,
+		models:       nil,
+		defaultModel: cfg.DefaultModel,
+		maxTokens:    cfg.MaxTokens,
+	}
 
 	// 尝试从 API 加载模型列表
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -371,6 +371,7 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 		Messages:            openaiMessages,
 		N:                   param.Opt[int64]{Value: 1},
 		MaxCompletionTokens: param.Opt[int64]{Value: int64(o.maxTokens)},
+		MaxTokens:           param.Opt[int64]{Value: int64(o.maxTokens)},
 	}
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
@@ -442,7 +443,8 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		"msg_count":     len(messages),
 		"tools_count":   len(tools),
 		"thinking_mode": thinkingMode,
-	}).Debug("[LLM] Starting non-stream request")
+		"max_tokens":    o.maxTokens,
+	}).Info("[LLM] Starting non-stream request")
 
 	startTime := time.Now()
 	params := o.buildParams(model, messages, tools)
@@ -528,7 +530,8 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 		"msg_count":     len(messages),
 		"tools_count":   len(tools),
 		"thinking_mode": thinkingMode,
-	}).Debug("[LLM] Starting stream request")
+		"max_tokens":    o.maxTokens,
+	}).Info("[LLM] Starting stream request")
 
 	startTime := time.Now()
 	params := o.buildParams(model, messages, tools)
@@ -693,10 +696,10 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		fields["thinking_mode"] = thinkingMode
 		// 打印最后一条 user 消息的内容（帮助判断上下文）
 		for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			fields["last_user_msg_preview"] = truncateStr(messages[i].Content, 100)
-			break
-		}
+			if messages[i].Role == "user" {
+				fields["last_user_msg_preview"] = truncateStr(messages[i].Content, 100)
+				break
+			}
 		}
 		l.WithFields(fields).Warn("[LLM] Stream completed with near-empty response")
 	} else {

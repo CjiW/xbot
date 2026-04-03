@@ -19,8 +19,8 @@ import (
 	"strings"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"xbot/bus"
 	log "xbot/logger"
@@ -117,7 +117,6 @@ func (c *CLIChannel) Start() error {
 	// 创建 Bubble Tea program
 	c.programMu.Lock()
 	c.program = tea.NewProgram(c.model,
-		tea.WithAltScreen(),
 		tea.WithOutput(origStdout),
 	)
 	c.programMu.Unlock()

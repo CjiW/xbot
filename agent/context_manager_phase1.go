@@ -9,8 +9,8 @@ import (
 
 // phase1Manager implements ContextManager using single-pass structured compaction.
 type phase1Manager struct {
-	config   *ContextManagerConfig
-	memTools []llm.ToolDefinition
+	config      *ContextManagerConfig
+	memTools    []llm.ToolDefinition
 	memToolExec func(ctx context.Context, tc llm.ToolCall) (content string, err error)
 }
 

@@ -1,10 +1,10 @@
 package channel
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"encoding/json"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 	"os"
 	"path/filepath"
@@ -1181,7 +1181,7 @@ func visibleMsgGroupIndices(messages []cliMessage) []int {
 func (m *cliModel) scrollToDeleteLine(content string) {
 	contentLines := strings.Split(content, "\n")
 	totalLines := len(contentLines)
-	vpHeight := m.viewport.Height
+	vpHeight := m.viewport.Height()
 	if vpHeight <= 0 {
 		return
 	}

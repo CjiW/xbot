@@ -92,10 +92,41 @@ func (s *MemoryService) SetState(ctx context.Context, tenantID int64, lastConsol
 	conn := s.db.Conn()
 	_, err := conn.ExecContext(ctx, `
 		INSERT INTO tenant_state (tenant_id, last_consolidated) VALUES (?, ?)
-		ON CONFLICT(tenant_id) DO UPDATE SET last_consolidated = excluded.last_consolidated
+	ON CONFLICT(tenant_id) DO UPDATE SET last_consolidated = excluded.last_consolidated
 	`, tenantID, lastConsolidated)
 	if err != nil {
 		return fmt.Errorf("set tenant state: %w", err)
+	}
+	return nil
+}
+
+// GetTokenState retrieves the last API token counts for a tenant.
+// Returns (promptTokens, completionTokens, error).
+func (s *MemoryService) GetTokenState(ctx context.Context, tenantID int64) (int64, int64, error) {
+	conn := s.db.Conn()
+	var promptTokens, completionTokens int64
+	err := conn.QueryRowContext(ctx,
+		"SELECT COALESCE(last_prompt_tokens, 0), COALESCE(last_completion_tokens, 0) FROM tenant_state WHERE tenant_id = ?",
+		tenantID,
+	).Scan(&promptTokens, &completionTokens)
+	if err == sql.ErrNoRows {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("get token state: %w", err)
+	}
+	return promptTokens, completionTokens, nil
+}
+
+// SetTokenState persists the last API token counts for a tenant.
+func (s *MemoryService) SetTokenState(ctx context.Context, tenantID int64, promptTokens, completionTokens int64) error {
+	conn := s.db.Conn()
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO tenant_state (tenant_id, last_consolidated, last_prompt_tokens, last_completion_tokens) VALUES (?, 0, ?, ?)
+	ON CONFLICT(tenant_id) DO UPDATE SET last_prompt_tokens = excluded.last_prompt_tokens, last_completion_tokens = excluded.last_completion_tokens
+	`, tenantID, promptTokens, completionTokens)
+	if err != nil {
+		return fmt.Errorf("set token state: %w", err)
 	}
 	return nil
 }

@@ -176,20 +176,20 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 				exitCodeCh <- <-waitCh
 			}()
 			ongoingOutput := func() string {
-					outputMu.Lock()
-					defer outputMu.Unlock()
-					var sb strings.Builder
-					if stdoutBuf.Len() > 0 {
-						sb.Write(stdoutBuf.Bytes())
-					}
-					if stderrBuf.Len() > 0 {
-						if sb.Len() > 0 {
-							sb.WriteByte('\n')
-						}
-						sb.Write(stderrBuf.Bytes())
-					}
-					return sb.String()
+				outputMu.Lock()
+				defer outputMu.Unlock()
+				var sb strings.Builder
+				if stdoutBuf.Len() > 0 {
+					sb.Write(stdoutBuf.Bytes())
 				}
+				if stderrBuf.Len() > 0 {
+					if sb.Len() > 0 {
+						sb.WriteByte('\n')
+					}
+					sb.Write(stderrBuf.Bytes())
+				}
+				return sb.String()
+			}
 			result := &ExecResult{
 				Stdout:        stdoutBuf.String(),
 				Stderr:        stderrBuf.String(),

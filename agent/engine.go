@@ -183,6 +183,16 @@ type RunConfig struct {
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
 	SubAgentSem func() func()
 
+	// LastPromptTokens is the prompt_tokens from the previous Run()'s last LLM call.
+	// Restored from agent state or DB to avoid starting from 0 after restart.
+	LastPromptTokens int64
+	// LastCompletionTokens is the completion_tokens from the previous Run()'s last LLM call.
+	LastCompletionTokens int64
+	// SaveTokenState persists token counts after Run() completes.
+	// Called with the final promptTokens and completionTokens values.
+	// If nil, token counts are only kept in memory (lost on restart).
+	SaveTokenState func(promptTokens, completionTokens int64)
+
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
 }
@@ -240,6 +250,8 @@ type RunOutput struct {
 	// LastPromptTokens is the prompt_tokens from the last LLM API call.
 	// This is the authoritative token count for the full input (messages + tool defs).
 	LastPromptTokens int64
+	// LastCompletionTokens is the completion_tokens from the last LLM API call.
+	LastCompletionTokens int64
 }
 
 // IterationSnapshot captures the tool summary of a completed iteration.
@@ -354,11 +366,17 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 	}
 
-	var lastPromptTokens int64        // 上一次 LLM 返回的精确 prompt token 数
-	var lastCompletionTokens int64    // 上一次 LLM 返回的精确 completion token 数
-	var lastMsgCountAtLLMCall int     // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
-	var compressAttempts int          // 压缩尝试计数器（防止压缩循环）
-	var lastCompressIter int          // 上一次成功压缩时的 compressAttempts 值
+	var lastPromptTokens int64     // 上一次 LLM 返回的精确 prompt token 数
+	var lastCompletionTokens int64 // 上一次 LLM 返回的精确 completion token 数
+	var lastMsgCountAtLLMCall int  // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
+
+	// 从持久化状态恢复 token 计数，避免重启后从 0 开始（退化为本地估算）
+	if cfg.LastPromptTokens > 0 {
+		lastPromptTokens = cfg.LastPromptTokens
+		lastCompletionTokens = cfg.LastCompletionTokens
+	}
+	var compressAttempts int // 压缩尝试计数器（防止压缩循环）
+	var lastCompressIter int // 上一次成功压缩时的 compressAttempts 值
 	var disableCompressRetry bool
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
@@ -515,10 +533,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-						log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
-					} else {
-						totalTokens += int64(deltaTokens)
-					}
+					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+				} else {
+					totalTokens += int64(deltaTokens)
+				}
 			}
 		} else {
 			// First iteration: no API value yet, fall back to full local estimation
@@ -530,22 +548,22 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		needCompress := len(messages) > 3 && shouldCompact(int(totalTokens), maxTokens) && (lastCompressIter == 0 || compressAttempts-lastCompressIter >= 5)
 		log.Ctx(ctx).WithFields(log.Fields{
-			"total_tokens":      totalTokens,
-			"max_tokens":        maxTokens,
-			"threshold":         int(float64(maxTokens) * 0.75),
-			"msg_count":         len(messages),
-			"need":              needCompress,
+			"total_tokens":       totalTokens,
+			"max_tokens":         maxTokens,
+			"threshold":          int(float64(maxTokens) * 0.75),
+			"msg_count":          len(messages),
+			"need":               needCompress,
 			"base_prompt_tokens": lastPromptTokens,
-			"completion_tokens": lastCompletionTokens,
-			"source":            func() string {
-					if lastPromptTokens == 0 {
-						return "local"
-					}
-					if len(messages) > lastMsgCountAtLLMCall+1 {
-						return "api+completion+tool_delta"
-					}
-					return "api+completion"
-				}(),
+			"completion_tokens":  lastCompletionTokens,
+			"source": func() string {
+				if lastPromptTokens == 0 {
+					return "local"
+				}
+				if len(messages) > lastMsgCountAtLLMCall+1 {
+					return "api+completion+tool_delta"
+				}
+				return "api+completion"
+			}(),
 		}).Info("maybeCompress check")
 
 		if needCompress {
@@ -654,15 +672,15 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				keepGroups := calculateKeepGroups(int(totalTokens), maxTokens)
 				masked, count := MaskOldToolResults(messages, cfg.MaskStore, keepGroups)
 				if count > 0 {
-				messages = syncMessages(masked)
-				GlobalMetrics.MaskingEvents.Add(1)
-				GlobalMetrics.MaskedItems.Add(int64(count))
+					messages = syncMessages(masked)
+					GlobalMetrics.MaskingEvents.Add(1)
+					GlobalMetrics.MaskedItems.Add(int64(count))
 
-				if autoNotify {
-					progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
-					notifyProgress("")
-				}
-				log.Ctx(ctx).WithField("masked_count", count).Info("Observation masking triggered")
+					if autoNotify {
+						progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
+						notifyProgress("")
+					}
+					log.Ctx(ctx).WithField("masked_count", count).Info("Observation masking triggered")
 				}
 			}
 		}
@@ -710,6 +728,11 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			cfg.OffloadStore.CleanSession(offloadSessionKey)
 		}
 		out.LastPromptTokens = lastPromptTokens
+		out.LastCompletionTokens = lastCompletionTokens
+		// 持久化 token 计数到 DB，重启后恢复
+		if cfg.SaveTokenState != nil && lastPromptTokens > 0 {
+			cfg.SaveTokenState(lastPromptTokens, lastCompletionTokens)
+		}
 		return out
 	}
 
@@ -925,9 +948,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			// 强制压缩后重试（我们的 token 计数可能低于实际值）。
 			if response.FinishReason == llm.FinishReasonContextWindowExceeded {
 				log.Ctx(ctx).WithFields(log.Fields{
-					"msg_count":        len(messages),
+					"msg_count":          len(messages),
 					"last_prompt_tokens": lastPromptTokens,
-					"finish_reason":    response.FinishReason,
+					"finish_reason":      response.FinishReason,
 				}).Warn("Model context window exceeded, forcing compression and retry")
 				cm := cfg.ContextManager
 				if cm != nil && !disableCompressRetry {

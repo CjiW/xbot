@@ -215,8 +215,8 @@ func (m *LettaMemory) Memorize(ctx context.Context, input memory.MemorizeInput) 
 	}
 
 	if len(lines) == 0 {
-			return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
-		}
+		return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
+	}
 
 	// Read current core memory blocks
 	blocks, err := m.coreSvc.GetAllBlocks(m.tenantID, userID)

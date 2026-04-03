@@ -162,56 +162,56 @@ func CountMessagesTokensByRole(messages []ChatMessage, model string) (RoleTokenC
 	overheadPerMessage := 4
 
 	for _, msg := range messages {
-			var contentTokens int
-			var toolCallTokens int
+		var contentTokens int
+		var toolCallTokens int
 
-			// Count content tokens
-			if msg.Content != "" {
-				count, err := CountTokens(msg.Content, model)
+		// Count content tokens
+		if msg.Content != "" {
+			count, err := CountTokens(msg.Content, model)
+			if err != nil {
+				return result, err
+			}
+			contentTokens = count
+		}
+
+		// Count reasoning_content tokens (DeepSeek-R1, o1/o3 models)
+		if msg.ReasoningContent != "" {
+			count, err := CountTokens(msg.ReasoningContent, model)
+			if err != nil {
+				return result, err
+			}
+			contentTokens += count
+		}
+
+		// Count tool call tokens if present (assistant messages with tool calls)
+		for _, tc := range msg.ToolCalls {
+			toolCallTokens += overheadPerMessage // per tool call overhead
+			if tc.Name != "" {
+				count, err := CountTokens(tc.Name, model)
 				if err != nil {
 					return result, err
 				}
-				contentTokens = count
+				toolCallTokens += count
 			}
-
-			// Count reasoning_content tokens (DeepSeek-R1, o1/o3 models)
-			if msg.ReasoningContent != "" {
-				count, err := CountTokens(msg.ReasoningContent, model)
+			if tc.Arguments != "" {
+				count, err := CountTokens(tc.Arguments, model)
 				if err != nil {
 					return result, err
 				}
-				contentTokens += count
+				toolCallTokens += count
 			}
+		}
 
-			// Count tool call tokens if present (assistant messages with tool calls)
-			for _, tc := range msg.ToolCalls {
-				toolCallTokens += overheadPerMessage // per tool call overhead
-				if tc.Name != "" {
-					count, err := CountTokens(tc.Name, model)
-					if err != nil {
-						return result, err
-					}
-					toolCallTokens += count
-				}
-				if tc.Arguments != "" {
-					count, err := CountTokens(tc.Arguments, model)
-					if err != nil {
-						return result, err
-					}
-					toolCallTokens += count
-				}
+		// Count tool_call_id tokens for tool role messages
+		if msg.ToolCallID != "" {
+			count, err := CountTokens(msg.ToolCallID, model)
+			if err != nil {
+				return result, err
 			}
+			contentTokens += count
+		}
 
-			// Count tool_call_id tokens for tool role messages
-			if msg.ToolCallID != "" {
-				count, err := CountTokens(msg.ToolCallID, model)
-				if err != nil {
-					return result, err
-				}
-				contentTokens += count
-			}
-
-			totalForMsg := overheadPerMessage + contentTokens + toolCallTokens
+		totalForMsg := overheadPerMessage + contentTokens + toolCallTokens
 
 		switch msg.Role {
 		case "system":
@@ -238,58 +238,58 @@ func CountMessagesTokens(messages []ChatMessage, model string) (int, error) {
 	overheadPerMessage := 4
 
 	for _, msg := range messages {
-			// Add overhead
-			total += overheadPerMessage
+		// Add overhead
+		total += overheadPerMessage
 
-			// Count content tokens
-			if msg.Content != "" {
-				count, err := CountTokens(msg.Content, model)
+		// Count content tokens
+		if msg.Content != "" {
+			count, err := CountTokens(msg.Content, model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+
+		// Count reasoning_content tokens (DeepSeek-R1, o1/o3 models).
+		// Sent to LLM as part of assistant messages and included in
+		// API prompt_tokens, but must also be counted locally for
+		// accurate delta estimation between LLM calls.
+		if msg.ReasoningContent != "" {
+			count, err := CountTokens(msg.ReasoningContent, model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+
+		// Count tool call tokens if present (assistant messages with tool calls)
+		for _, tc := range msg.ToolCalls {
+			total += overheadPerMessage // per tool call formatting overhead
+			if tc.Name != "" {
+				count, err := CountTokens(tc.Name, model)
 				if err != nil {
 					return 0, err
 				}
 				total += count
 			}
-
-			// Count reasoning_content tokens (DeepSeek-R1, o1/o3 models).
-			// Sent to LLM as part of assistant messages and included in
-			// API prompt_tokens, but must also be counted locally for
-			// accurate delta estimation between LLM calls.
-			if msg.ReasoningContent != "" {
-				count, err := CountTokens(msg.ReasoningContent, model)
-				if err != nil {
-					return 0, err
-				}
-				total += count
-			}
-
-			// Count tool call tokens if present (assistant messages with tool calls)
-			for _, tc := range msg.ToolCalls {
-				total += overheadPerMessage // per tool call formatting overhead
-				if tc.Name != "" {
-					count, err := CountTokens(tc.Name, model)
-					if err != nil {
-						return 0, err
-					}
-					total += count
-				}
-				if tc.Arguments != "" {
-					count, err := CountTokens(tc.Arguments, model)
-					if err != nil {
-						return 0, err
-					}
-					total += count
-				}
-			}
-
-			// Count tool_call_id tokens for tool role messages (sent to LLM)
-			if msg.ToolCallID != "" {
-				count, err := CountTokens(msg.ToolCallID, model)
+			if tc.Arguments != "" {
+				count, err := CountTokens(tc.Arguments, model)
 				if err != nil {
 					return 0, err
 				}
 				total += count
 			}
 		}
+
+		// Count tool_call_id tokens for tool role messages (sent to LLM)
+		if msg.ToolCallID != "" {
+			count, err := CountTokens(msg.ToolCallID, model)
+			if err != nil {
+				return 0, err
+			}
+			total += count
+		}
+	}
 
 	return total, nil
 }

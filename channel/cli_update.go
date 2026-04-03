@@ -1,9 +1,10 @@
 package channel
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
 	"path/filepath"
 	"strings"
 	"time"
@@ -55,16 +56,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Ctrl+Z: 紧急退出（无论什么状态，包括 panel/typing/idle）
-	if key, ok := msg.(tea.KeyMsg); ok && key.Type == tea.KeyCtrlZ {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+z" {
 		m.appendSystem("🚪 紧急退出 (Ctrl+Z)")
 		m.updateViewportContent()
 		return m, tea.Quit
 	}
 
 	// §12 Panel mode: intercept all key events when panel is active
-	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.panelMode != "" {
 		// Ctrl+C must always cancel the agent — never swallow it
-		if key.Type == tea.KeyCtrlC && m.typing {
+		if key.String() == "ctrl+c" && m.typing {
 			m.closePanel()
 			m.sendCancel()
 			return m, tea.Batch(tickerCmd(), tickCmd())
@@ -76,7 +77,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Home/End 跳顶部/底部
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "home":
 			m.viewport.GotoTop()
@@ -108,8 +109,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// §9 Ctrl+K 确认模式：必须在 switch msg.Type 之前拦截所有按键
+	case tea.KeyPressMsg:
+		// §9 Ctrl+K 确认模式：必须在 switch msg.Code 之前拦截所有按键
 		if m.confirmDelete > 0 {
 			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
@@ -133,10 +134,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			default:
 				// 检查数字键（调整删除数量）
-				if msg.Type == tea.KeyRunes {
-					runes := msg.Runes
-					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
-						newDel := int(runes[0] - '0')
+				if len(msg.Text) > 0 {
+					if len(msg.Text) == 1 && msg.Text[0] >= '1' && msg.Text[0] <= '9' {
+						newDel := int(msg.Text[0] - '0')
 						if newDel > len(groups) {
 							newDel = len(groups)
 						}
@@ -154,8 +154,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		switch {
+		case msg.String() == "ctrl+c", msg.Code == tea.KeyEsc:
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
 			if m.typing {
 				m.sendCancel()
@@ -168,15 +168,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyUp:
+		case msg.Code == tea.KeyUp:
 			// ↑ with bg tasks running + empty input → open bg tasks panel
-			// No inputReady gate — bg tasks should be manageable while agent is running
 			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
 				m.openBgTasksPanel()
 				return m, nil
 			}
 
-		case tea.KeyEnter:
+		case msg.Code == tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
@@ -192,13 +191,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_, prefix := detectAtPrefix(input)
 				atStart := len(input) - len(prefix) - 1
 				if isDir(selected) {
-					// 目录：进入下一层，手动触发 glob
 					newInput := input[:atStart] + "@" + selected + "/"
 					m.textarea.SetValue(newInput)
 					m.fileCompActive = false
 					m.populateFileCompletions(selected + "/")
 				} else {
-					// 文件：加空格退出 @ 模式
 					newInput := input[:atStart] + "@" + selected + " "
 					m.textarea.SetValue(newInput)
 					m.fileCompActive = false
@@ -228,12 +225,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyTab:
+		case msg.Code == tea.KeyTab:
 			// §8 Tab 命令补全
 			m.handleTabComplete()
 			return m, nil
 
-		case tea.KeyCtrlK:
+		case msg.String() == "ctrl+k":
 			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
 			if !m.typing && len(m.messages) > 0 {
 				groups := visibleMsgGroupIndices(m.messages)
@@ -250,7 +247,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyCtrlO:
+		case msg.String() == "ctrl+o":
 			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 			m.toolSummaryExpanded = !m.toolSummaryExpanded
 			m.renderCacheValid = false
@@ -261,7 +258,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 			return m, nil
 
-		} // end switch msg.Type
+		} // end switch
 
 	case tea.WindowSizeMsg:
 		// 窗口大小变化 - 动态调整布局
@@ -604,8 +601,8 @@ func (m *cliModel) autoExpandInput() {
 	m.textarea.SetHeight(lines)
 	// Adjust viewport to compensate
 	delta := lines - oldHeight
-	if m.viewport.Height-delta >= 3 {
-		m.viewport.Height -= delta
+	if m.viewport.Height()-delta >= 3 {
+		m.viewport.SetHeight(m.viewport.Height() - delta)
 	}
 	if grew {
 		// When height increases, bubbles textarea repositionView only scrolls
@@ -617,7 +614,7 @@ func (m *cliModel) autoExpandInput() {
 		targetRow := m.textarea.Line()
 		if targetRow > 0 {
 			// InputBegin is bound to ctrl+home; this triggers moveToBegin + repositionView
-			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+			m.textarea, _ = m.textarea.Update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
 			for i := 0; i < targetRow; i++ {
 				m.textarea.CursorDown()
 			}
@@ -655,8 +652,8 @@ func (m *cliModel) handleResize(width, height int) {
 	if viewportHeight < 3 {
 		viewportHeight = 3
 	}
-	m.viewport.Width = width
-	m.viewport.Height = viewportHeight
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(viewportHeight)
 
 	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
 	// textarea must match the content width exactly.
@@ -705,7 +702,7 @@ func (m *cliModel) panelWidth(want int) int {
 
 // renderCompletionsHint returns the dynamic border color and completions hint string
 // based on the current input content (slash commands, @ file references, etc.).
-func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipgloss.Color, hint string) {
+func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.Color, hint string) {
 	borderColor = lipgloss.Color(currentTheme.Accent)
 
 	if strings.HasPrefix(inputValue, "!") {

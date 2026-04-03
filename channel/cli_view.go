@@ -1,8 +1,9 @@
 package channel
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"fmt"
-	"github.com/charmbracelet/lipgloss"
 	"path/filepath"
 	"strings"
 	"time"
@@ -11,14 +12,14 @@ import (
 )
 
 // View 渲染界面
-func (m *cliModel) View() string {
+func (m *cliModel) View() tea.View {
 	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
 	if !m.splashDone {
-		return m.renderSplash()
+		return tea.NewView(m.renderSplash())
 	}
 
 	if !m.ready {
-		return "\n  " + m.locale.SplashLoading
+		return tea.NewView("\n  " + m.locale.SplashLoading)
 	}
 
 	// ========== 样式定义 ==========
@@ -61,96 +62,27 @@ func (m *cliModel) View() string {
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
 
+	// Build content string
+	var content string
+
+	// §16 Toast 通知渲染
+	toastStr := m.renderToast()
+
 	// §9 Ctrl+K 确认模式提示
 	if m.confirmDelete > 0 {
 		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
-		return fmt.Sprintf(
+		content = fmt.Sprintf(
 			"%s\n%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
 			warningText,
 			input,
 		)
-	}
-
-	// 输入区
-	var status string
-	if m.typing || m.progress != nil {
-		// 显示 spinner + 进度信息
-		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
-	} else if m.checkingUpdate {
-		status = thinkingStatusStyle.Render(m.locale.CheckingUpdates)
-	} else if completionsHint != "" {
-		// 显示补全候选提示
-		status = completionsHint
-	} else {
-		// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
-		readyParts := []string{m.locale.StatusReady}
-		// 消息计数
-		msgCount := len(m.messages)
-		if msgCount > 0 {
-			readyParts = append(readyParts, fmt.Sprintf("%d msg%s", msgCount, func() string {
-				if msgCount > 1 {
-					return "s"
-				}
-				return ""
-			}()))
-		}
-		// 模型名称（如果用户通过 /settings 覆盖了）
-		if m.channel != nil {
-			m.channel.configMu.RLock()
-			modelName := m.channel.modelOverride
-			m.channel.configMu.RUnlock()
-			if modelName != "" {
-				readyParts = append(readyParts, modelName)
-			}
-		}
-		status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
-	}
-	// 临时状态提示（自动过期）
-	if m.tempStatus != "" {
-		ts := m.styles.WarningSt.Render(m.tempStatus)
-		if status != "" {
-			status += "  " + ts
-		} else {
-			status = ts
-		}
-	}
-	// 新消息提示：用户上滚且有新内容时显示
-	if m.newContentHint {
-		hint := m.styles.InfoSt.Render(m.locale.NewContentHint)
-		if status != "" {
-			status += "  " + hint
-		} else {
-			status = hint
-		}
-	}
-	// Background task indicator
-	if m.bgTaskCount > 0 {
-		bgHint := m.styles.WarningSt.Render(
-			fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, func() string {
-				if m.bgTaskCount > 1 {
-					return "s"
-				}
-				return ""
-			}()))
-		if status != "" {
-			status += "  " + bgHint
-		} else {
-			status = bgHint
-		}
-	}
-
-	// §16 Toast 通知渲染
-	toastStr := m.renderToast()
-
-	// 组装界面
-	// §12 Panel mode: render panel overlay instead of normal input
-	if m.panelMode != "" {
+	} else if m.panelMode != "" {
+		// §12 Panel mode: render panel overlay instead of normal input
 		panel := m.viewPanel()
-		// Panel 模式下也显示 footer 快捷键提示
 		panelFooter := m.renderFooter()
-		return fmt.Sprintf(
+		content = fmt.Sprintf(
 			"%s\n%s\n%s%s%s",
 			titleBar,
 			m.viewport.View(),
@@ -158,41 +90,115 @@ func (m *cliModel) View() string {
 			panelFooter,
 			toastStr,
 		)
+	} else {
+		// 输入区
+		var status string
+		if m.typing || m.progress != nil {
+			// 显示 spinner + 进度信息
+			status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
+		} else if m.checkingUpdate {
+			status = thinkingStatusStyle.Render(m.locale.CheckingUpdates)
+		} else if completionsHint != "" {
+			// 显示补全候选提示
+			status = completionsHint
+		} else {
+			// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
+			readyParts := []string{m.locale.StatusReady}
+			// 消息计数
+			msgCount := len(m.messages)
+			if msgCount > 0 {
+				readyParts = append(readyParts, fmt.Sprintf("%d msg%s", msgCount, func() string {
+					if msgCount > 1 {
+						return "s"
+					}
+					return ""
+				}()))
+			}
+			// 模型名称（如果用户通过 /settings 覆盖了）
+			if m.channel != nil {
+				m.channel.configMu.RLock()
+				modelName := m.channel.modelOverride
+				m.channel.configMu.RUnlock()
+				if modelName != "" {
+					readyParts = append(readyParts, modelName)
+				}
+			}
+			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
+		}
+		// 临时状态提示（自动过期）
+		if m.tempStatus != "" {
+			ts := m.styles.WarningSt.Render(m.tempStatus)
+			if status != "" {
+				status += "  " + ts
+			} else {
+				status = ts
+			}
+		}
+		// 新消息提示：用户上滚且有新内容时显示
+		if m.newContentHint {
+			hint := m.styles.InfoSt.Render(m.locale.NewContentHint)
+			if status != "" {
+				status += "  " + hint
+			} else {
+				status = hint
+			}
+		}
+		// Background task indicator
+		if m.bgTaskCount > 0 {
+			bgHint := m.styles.WarningSt.Render(
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, func() string {
+					if m.bgTaskCount > 1 {
+						return "s"
+					}
+					return ""
+				}()))
+			if status != "" {
+				status += "  " + bgHint
+			} else {
+				status = bgHint
+			}
+		}
+
+		todoBar := m.renderTodoBar()
+		// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
+		footer := m.renderFooter()
+
+		switch {
+		case todoBar != "":
+			content = fmt.Sprintf(
+				"%s\n%s\n%s\n%s\n%s%s",
+				titleBar,
+				m.viewport.View(),
+				status,
+				todoBar,
+				input,
+				toastStr,
+			)
+		case footer != "":
+			content = fmt.Sprintf(
+				"%s\n%s\n%s\n%s\n%s%s",
+				titleBar,
+				m.viewport.View(),
+				status,
+				footer,
+				input,
+				toastStr,
+			)
+		default:
+			content = fmt.Sprintf(
+				"%s\n%s\n%s\n%s%s",
+				titleBar,
+				m.viewport.View(),
+				status,
+				input,
+				toastStr,
+			)
+		}
 	}
 
-	todoBar := m.renderTodoBar()
-	if todoBar != "" {
-		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s%s",
-			titleBar,
-			m.viewport.View(),
-			status,
-			todoBar,
-			input,
-			toastStr,
-		)
-	}
-	// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
-	footer := m.renderFooter()
-	if footer != "" {
-		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s%s",
-			titleBar,
-			m.viewport.View(),
-			status,
-			footer,
-			input,
-			toastStr,
-		)
-	}
-	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s%s",
-		titleBar,
-		m.viewport.View(),
-		status,
-		input,
-		toastStr,
-	)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 // allTodosDone returns true when todos exist and every item is marked done.

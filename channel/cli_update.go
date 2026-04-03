@@ -593,16 +593,34 @@ func (m *cliModel) autoExpandInput() {
 		return
 	}
 	oldHeight := m.textarea.Height()
+	grew := lines > oldHeight
 	m.textarea.SetHeight(lines)
 	// Adjust viewport to compensate
 	delta := lines - oldHeight
 	if m.viewport.Height-delta >= 3 {
 		m.viewport.Height -= delta
 	}
-	// Trigger repositionView with the new height so the textarea
-	// scroll offset stays correct (e.g. first line stays visible).
-	m.textarea, _ = m.textarea.Update(nil)
+	if grew {
+		// When height increases, bubbles textarea repositionView only scrolls
+		// down (if cursor below view) or up (if cursor above). It won't
+		// shrink YOffset when more lines become visible, so the first content
+		// line stays scrolled off-screen.
+		// Fix: move cursor to top (resets YOffset to 0 via repositionView),
+		// then move back to the original row.
+		targetRow := m.textarea.Line()
+		if targetRow > 0 {
+			// InputBegin is bound to ctrl+home; this triggers moveToBegin + repositionView
+			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+			for i := 0; i < targetRow; i++ {
+				m.textarea.CursorDown()
+			}
+			// CursorDown doesn't call repositionView, but since YOffset=0
+			// and height >= total lines, the cursor is always visible.
+			// We still need one Update to sync internal viewport state.
+			m.textarea, _ = m.textarea.Update(nil)
+		}
 	}
+}
 
 // handleResize 处理窗口大小变化
 func (m *cliModel) handleResize(width, height int) {

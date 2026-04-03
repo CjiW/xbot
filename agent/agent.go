@@ -532,9 +532,6 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	a.commands = NewCommandRegistry()
 	registerBuiltinCommands(a.commands)
 
-	// 初始化消息构建管道
-	a.initPipelines(memoryProvider)
-
 	// 初始化 Cron 服务和调度器
 	cronSvc := sqlite.NewCronService(multiSession.DB())
 	cronSch := cron.NewScheduler(cronSvc)
@@ -622,6 +619,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	llmSemMgr := llm.NewLLMSemaphoreManager()
 	a.llmFactory.SetLLMSemaphoreManager(llmSemMgr)
 	a.llmFactory.SetSettingsService(a.settingsSvc)
+
+	// 初始化消息构建管道（必须在 settingsSvc 之后，LanguageMiddleware 依赖它）
+	a.initPipelines(memoryProvider)
 }
 
 // New 创建 Agent

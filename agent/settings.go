@@ -27,11 +27,17 @@ func (s *SettingsService) SetChannelFinder(fn func(string) (channel.Channel, boo
 
 // GetSettings retrieves all settings for a user on a specific channel.
 func (s *SettingsService) GetSettings(channelName, senderID string) (map[string]string, error) {
+	if s == nil || s.store == nil {
+		return nil, nil
+	}
 	return s.store.Get(channelName, senderID)
 }
 
 // SetSetting sets a single setting value.
 func (s *SettingsService) SetSetting(channelName, senderID, key, value string) error {
+	if s == nil || s.store == nil {
+		return nil
+	}
 	return s.store.Set(channelName, senderID, key, value)
 }
 

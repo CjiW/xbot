@@ -1,0 +1,756 @@
+package channel
+
+// UILocale holds all UI strings for a given language.
+type UILocale struct {
+	// --- A. System messages ---
+	CancelSent          string // "已发送取消请求"
+	SettingsSaved       string // "✅ 设置已保存"
+	NoSettings          string // "当前渠道没有可配置的设置项。"
+	CheckingUpdate      string // "正在检查更新..."
+	ModelUsage          string // "用法: /model <模型名>\n使用 /models 查看可用模型"
+	AskCancelled        string // "已取消提问"
+	SetupComplete       string // "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
+	SetupLettaNote      string // "[!] letta memory mode requires embedding service:\n  1. ..."
+	UpdateFound         string // "发现新版本: %s → %s\n升级命令: ..."
+	UpdateCurrent       string // "当前版本 %s 已是最新"
+	UpdateFailed        string // "更新检查失败（网络超时或无法连接 GitHub API）"
+
+	// --- B. Panel text ---
+	PanelSettingsTitle   string // "⚙ Settings"
+	PanelNotSet          string // "(未设置)"
+	PanelEditHint        string // "Enter confirm | Esc cancel"
+	PanelComboHint       string // "Up/Down select | Enter confirm | Type custom | Esc cancel"
+	PanelNavHint         string // "↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"
+	PanelEditPlaceholder string // "输入新值..."
+
+	PanelOther     string // "Other: "
+	PanelSubmit    string // "Submit →"
+	PanelAskNav    string // "←→/Tab 切换问题"
+	PanelAskToggle string // "Space/Enter toggle"
+	PanelAskOther  string // "v Other input"
+	PanelAskSubmit string // "Enter submit"
+	PanelAskNewline string // "Ctrl+J newline"
+	PanelAskCancel string // "Esc cancel"
+
+	BgTasksTitle  string // "Background Tasks"
+	BgTasksHelp   string // "↑↓ navigate  Enter view log  Del kill  Esc close"
+	BgTasksEmpty  string // "No background tasks running"
+	BgTaskLogTitle string // "Log: %s — %s"
+	BgTaskLogHelp  string // "↑↓ scroll  Esc back"
+
+	PanelOmitted string // "... %d lines omitted (narrow terminal) ..."
+
+	// --- C. Status bar ---
+	TitleHint              string // "Enter send · Ctrl+J newline · /help"
+	ProcessingPlaceholder  string // "[Processing...] (Ctrl+C to cancel)"
+	CheckingUpdates        string // "⟳ checking for updates..."
+	StatusReady            string // "● ready"
+	StatusCompressing      string // "compressing"
+	StatusRetrying         string // "retrying"
+	StatusDone             string // "done"
+	NewContentHint         string // "v new content"
+	BgTaskRunning          string // "[bg: %d task%s running -- ^ to manage]"
+
+	// --- D. Temp status ---
+	WaitingOperation   string // "... waiting for previous operation to complete..."
+	NoMessagesToDelete string // "[!] no messages to delete"
+	SearchNoMatch      string // "[search] "%s" 未找到匹配"
+	KillFailed         string // "Kill failed: %s"
+
+	// --- E. Help commands ---
+	HelpCmds []HelpCmdEntry
+	HelpKeys []HelpKeyEntry
+
+	// --- F. Confirm dialog ---
+	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
+
+	// --- G. Splash ---
+	SplashDesc    string // "AI-powered terminal agent"
+	SplashLoading string // "  %s  initializing..."
+
+	// --- H. Settings schema ---
+	SetupSchema    []SettingDefinition
+	SettingsSchema []SettingDefinition
+}
+
+// HelpCmdEntry describes a single help command entry.
+type HelpCmdEntry struct {
+	Cmd  string
+	Desc string
+}
+
+// HelpKeyEntry describes a single help key entry.
+type HelpKeyEntry struct {
+	Key  string
+	Desc string
+}
+
+// ---------------------------------------------------------------------------
+// Locales
+// ---------------------------------------------------------------------------
+
+var locales map[string]*UILocale
+
+func init() {
+	zh := &UILocale{
+		// --- A. System messages ---
+		CancelSent:     "已发送取消请求",
+		SettingsSaved:  "✅ 设置已保存",
+		NoSettings:     "当前渠道没有可配置的设置项。",
+		CheckingUpdate: "正在检查更新...",
+		ModelUsage:     "用法: /model <模型名>\n使用 /models 查看可用模型",
+		AskCancelled:   "已取消提问",
+		SetupComplete:  "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。",
+		SetupLettaNote: "\n\n[!] letta 记忆模式需要嵌入服务:\n  1. 安装 Ollama: https://ollama.ai\n  2. 拉取嵌入模型: `ollama pull nomic-embed-text`\n  3. 在配置或环境变量中设置嵌入端点",
+		UpdateFound:    "发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s",
+		UpdateCurrent:  "当前版本 %s 已是最新",
+		UpdateFailed:   "更新检查失败（网络超时或无法连接 GitHub API）",
+
+		// --- B. Panel text ---
+		PanelSettingsTitle:   "⚙ 设置",
+		PanelNotSet:          "(未设置)",
+		PanelEditHint:        "Enter 确认 | Esc 取消",
+		PanelComboHint:       "↑↓ 选择 | Enter 确认 | 输入自定义值 | Esc 取消",
+		PanelNavHint:         "↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭",
+		PanelEditPlaceholder: "输入新值...",
+
+		PanelOther:     "其他: ",
+		PanelSubmit:    "提交 →",
+		PanelAskNav:    "←→/Tab 切换问题",
+		PanelAskToggle: "Space/Enter 切换",
+		PanelAskOther:  "v 自定义输入",
+		PanelAskSubmit: "Enter 提交",
+		PanelAskNewline: "Ctrl+J 换行",
+		PanelAskCancel: "Esc 取消",
+
+		BgTasksTitle:   "后台任务",
+		BgTasksHelp:    "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
+		BgTasksEmpty:   "没有正在运行的后台任务",
+		BgTaskLogTitle: "日志: %s — %s",
+		BgTaskLogHelp:  "↑↓ 滚动  Esc 返回",
+
+		PanelOmitted: "  ... %d 行已省略（终端过窄） ...",
+
+		// --- C. Status bar ---
+		TitleHint:             "Enter 发送 · Ctrl+J 换行 · /help",
+		ProcessingPlaceholder: "[处理中...] (Ctrl+C 取消)",
+		CheckingUpdates:       "⟳ 正在检查更新...",
+		StatusReady:           "● 就绪",
+		StatusCompressing:     "压缩中",
+		StatusRetrying:        "重试中",
+		StatusDone:            "完成",
+		NewContentHint:        "↓ 新内容",
+		BgTaskRunning:         "[后台: %d 任务运行中 -- ^ 管理]",
+
+		// --- D. Temp status ---
+		WaitingOperation:   "... 等待上一个操作完成...",
+		NoMessagesToDelete: "[!] 没有可删除的消息",
+		SearchNoMatch:      "[搜索] \"%s\" 未找到匹配",
+		KillFailed:         "终止失败: %s",
+
+		// --- E. Help commands ---
+		HelpCmds: []HelpCmdEntry{
+			{Cmd: "/cancel", Desc: "取消当前操作"},
+			{Cmd: "/clear", Desc: "清空聊天记录"},
+			{Cmd: "/compact", Desc: "压缩上下文"},
+			{Cmd: "/model", Desc: "切换模型"},
+			{Cmd: "/models", Desc: "列出可用模型"},
+			{Cmd: "/context", Desc: "查看上下文信息"},
+			{Cmd: "/new", Desc: "开始新会话"},
+			{Cmd: "/settings", Desc: "打开设置面板"},
+			{Cmd: "/setup", Desc: "重新运行配置引导"},
+			{Cmd: "/update", Desc: "检查更新"},
+			{Cmd: "/help", Desc: "显示此帮助"},
+		},
+		HelpKeys: []HelpKeyEntry{
+			{Key: "Enter", Desc: "发送消息"},
+			{Key: "Ctrl+C/Esc", Desc: "中止/清空"},
+			{Key: "Ctrl+J", Desc: "输入框换行"},
+			{Key: "Ctrl+K", Desc: "上下文删除"},
+			{Key: "Ctrl+O", Desc: "展开/折叠工具"},
+			{Key: "Tab", Desc: "命令/路径补全"},
+			{Key: "Home/End", Desc: "跳到顶/底部"},
+			{Key: "↑", Desc: "后台任务面板"},
+		},
+
+		// --- F. Confirm dialog ---
+		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 条消息？(y/N, 数字调整)",
+
+		// --- G. Splash ---
+		SplashDesc:    "AI 驱动的终端助手",
+		SplashLoading: "  %s  初始化中...",
+
+		// --- H. Settings schema ---
+		SetupSchema: []SettingDefinition{
+			{
+				Key: "llm_provider", Label: "LLM 提供商", Description: "选择 LLM 服务提供商",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI (及兼容 API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key（必填）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "LLM API 地址",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
+			},
+			{
+				Key: "llm_model", Label: "模型名称", Description: "选择或输入 LLM 模型名称",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
+			},
+			{
+				Key: "tavily_api_key", Label: "Tavily API Key", Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "sandbox_mode", Label: "沙箱模式", Description: "命令执行隔离方式",
+				Type: SettingTypeSelect, Category: "环境", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — 直接执行（推荐）", Value: "none"},
+					{Label: "docker — 容器隔离", Value: "docker"},
+				},
+			},
+			{
+				Key: "memory_provider", Label: "记忆模式", Description: "记忆系统实现方式",
+				Type: SettingTypeSelect, Category: "环境", DefaultValue: "flat",
+				Options: []SettingOption{
+					{Label: "flat — 全量注入（推荐）", Value: "flat"},
+					{Label: "letta — 分层记忆", Value: "letta"},
+				},
+			},
+			{
+				Key: "theme", Label: "配色方案", Description: "CLI 界面配色",
+				Type: SettingTypeSelect, Category: "外观", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight（默认）", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+		SettingsSchema: []SettingDefinition{
+			{
+				Key: "llm_model", Label: "LLM 模型", Description: "选择或输入 LLM 模型名称",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "context_mode", Label: "上下文模式", Description: "控制上下文管理策略",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
+				Options: []SettingOption{
+					{Label: "自动（默认）", Value: "auto"},
+					{Label: "手动压缩", Value: "manual"},
+					{Label: "不压缩", Value: "none"},
+				},
+			},
+			{
+				Key: "max_iterations", Label: "最大迭代次数", Description: "单次对话最大工具调用迭代次数（默认 100）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+			},
+			{
+				Key: "max_concurrency", Label: "最大并发数", Description: "同时处理的最大请求数（默认 3）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
+			},
+			{
+				Key: "memory_window", Label: "记忆窗口", Description: "LLM 上下文中保留的最大历史消息数（默认 50）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
+			},
+			{
+				Key: "max_context_tokens", Label: "最大上下文 Token", Description: "上下文最大 token 数（默认 200000）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
+			},
+			{
+				Key: "enable_auto_compress", Label: "自动压缩", Description: "上下文过长时自动压缩（默认开启）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "开启", Value: "true"},
+					{Label: "关闭", Value: "false"},
+				},
+			},
+			{
+				Key: "language", Label: "语言", Description: "Agent 回复使用的语言",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "跟随 Prompt（默认）", Value: ""},
+					{Label: "English", Value: "en"},
+					{Label: "中文", Value: "zh"},
+					{Label: "日本語", Value: "ja"},
+				},
+			},
+			{
+				Key: "theme", Label: "配色", Description: "CLI 界面配色方案",
+				Type: SettingTypeSelect, Category: "外观", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight（默认）", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+	}
+
+	en := &UILocale{
+		// --- A. System messages ---
+		CancelSent:     "Cancel request sent",
+		SettingsSaved:  "✅ Settings saved",
+		NoSettings:     "No configurable settings for this channel.",
+		CheckingUpdate: "Checking for updates...",
+		ModelUsage:     "Usage: /model <model name>\nUse /models to list available models",
+		AskCancelled:   "Question cancelled",
+		SetupComplete:  "✅ Initial setup complete. Use /settings to configure, /setup to re-run.",
+		SetupLettaNote: "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env",
+		UpdateFound:    "New version available: %s → %s\nUpdate command: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s",
+		UpdateCurrent:  "Current version %s is up to date",
+		UpdateFailed:   "Update check failed (network timeout or unable to connect to GitHub API)",
+
+		// --- B. Panel text ---
+		PanelSettingsTitle:   "⚙ Settings",
+		PanelNotSet:          "(not set)",
+		PanelEditHint:        "Enter confirm | Esc cancel",
+		PanelComboHint:       "Up/Down select | Enter confirm | Type custom | Esc cancel",
+		PanelNavHint:         "↑↓ navigate · Enter edit/toggle · Ctrl+S save · Esc close",
+		PanelEditPlaceholder: "Enter new value...",
+
+		PanelOther:     "Other: ",
+		PanelSubmit:    "Submit →",
+		PanelAskNav:    "←→/Tab switch question",
+		PanelAskToggle: "Space/Enter toggle",
+		PanelAskOther:  "v Other input",
+		PanelAskSubmit: "Enter submit",
+		PanelAskNewline: "Ctrl+J newline",
+		PanelAskCancel: "Esc cancel",
+
+		BgTasksTitle:   "Background Tasks",
+		BgTasksHelp:    "↑↓ navigate  Enter view log  Del kill  Esc close",
+		BgTasksEmpty:   "No background tasks running",
+		BgTaskLogTitle: "Log: %s — %s",
+		BgTaskLogHelp:  "↑↓ scroll  Esc back",
+
+		PanelOmitted: "  ... %d lines omitted (narrow terminal) ...",
+
+		// --- C. Status bar ---
+		TitleHint:             "Enter send · Ctrl+J newline · /help",
+		ProcessingPlaceholder: "[Processing...] (Ctrl+C to cancel)",
+		CheckingUpdates:       "⟳ checking for updates...",
+		StatusReady:           "● ready",
+		StatusCompressing:     "compressing",
+		StatusRetrying:        "retrying",
+		StatusDone:            "done",
+		NewContentHint:        "v new content",
+		BgTaskRunning:         "[bg: %d task%s running -- ^ to manage]",
+
+		// --- D. Temp status ---
+		WaitingOperation:   "... waiting for previous operation to complete...",
+		NoMessagesToDelete: "[!] no messages to delete",
+		SearchNoMatch:      "[search] \"%s\" no matches found",
+		KillFailed:         "Kill failed: %s",
+
+		// --- E. Help commands ---
+		HelpCmds: []HelpCmdEntry{
+			{Cmd: "/cancel", Desc: "Cancel current operation"},
+			{Cmd: "/clear", Desc: "Clear chat history"},
+			{Cmd: "/compact", Desc: "Compress context"},
+			{Cmd: "/model", Desc: "Switch model"},
+			{Cmd: "/models", Desc: "List available models"},
+			{Cmd: "/context", Desc: "View context info"},
+			{Cmd: "/new", Desc: "Start new session"},
+			{Cmd: "/settings", Desc: "Open settings panel"},
+			{Cmd: "/setup", Desc: "Re-run setup wizard"},
+			{Cmd: "/update", Desc: "Check for updates"},
+			{Cmd: "/help", Desc: "Show this help"},
+		},
+		HelpKeys: []HelpKeyEntry{
+			{Key: "Enter", Desc: "Send message"},
+			{Key: "Ctrl+C/Esc", Desc: "Abort/clear"},
+			{Key: "Ctrl+J", Desc: "Newline in input"},
+			{Key: "Ctrl+K", Desc: "Context delete"},
+			{Key: "Ctrl+O", Desc: "Expand/collapse tools"},
+			{Key: "Tab", Desc: "Command/path completion"},
+			{Key: "Home/End", Desc: "Jump to top/bottom"},
+			{Key: "↑", Desc: "Background tasks panel"},
+		},
+
+		// --- F. Confirm dialog ---
+		ConfirmDelete: "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)",
+
+		// --- G. Splash ---
+		SplashDesc:    "AI-powered terminal agent",
+		SplashLoading: "  %s  initializing...",
+
+		// --- H. Settings schema ---
+		SetupSchema: []SettingDefinition{
+			{
+				Key: "llm_provider", Label: "LLM Provider", Description: "Select LLM service provider",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI (and compatible API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "API key for LLM service (required)",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "LLM API endpoint",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
+			},
+			{
+				Key: "llm_model", Label: "Model Name", Description: "Select or enter LLM model name",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
+			},
+			{
+				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web search service key (optional, leave empty to disable WebSearch)",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "sandbox_mode", Label: "Sandbox Mode", Description: "Command execution isolation method",
+				Type: SettingTypeSelect, Category: "Environment", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — direct execution (recommended)", Value: "none"},
+					{Label: "docker — container isolation", Value: "docker"},
+				},
+			},
+			{
+				Key: "memory_provider", Label: "Memory Mode", Description: "Memory system implementation",
+				Type: SettingTypeSelect, Category: "Environment", DefaultValue: "flat",
+				Options: []SettingOption{
+					{Label: "flat — full injection (recommended)", Value: "flat"},
+					{Label: "letta — layered memory", Value: "letta"},
+				},
+			},
+			{
+				Key: "theme", Label: "Color Theme", Description: "CLI color scheme",
+				Type: SettingTypeSelect, Category: "Appearance", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight (default)", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+		SettingsSchema: []SettingDefinition{
+			{
+				Key: "llm_model", Label: "LLM Model", Description: "Select or enter LLM model name",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API endpoint (modify for OpenAI-compatible third-party services)",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "context_mode", Label: "Context Mode", Description: "Context management strategy",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
+				Options: []SettingOption{
+					{Label: "Auto (default)", Value: "auto"},
+					{Label: "Manual compress", Value: "manual"},
+					{Label: "No compress", Value: "none"},
+				},
+			},
+			{
+				Key: "max_iterations", Label: "Max Iterations", Description: "Max tool call iterations per conversation (default 100)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+			},
+			{
+				Key: "max_concurrency", Label: "Max Concurrency", Description: "Max concurrent requests (default 3)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
+			},
+			{
+				Key: "memory_window", Label: "Memory Window", Description: "Max history messages in LLM context (default 50)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
+			},
+			{
+				Key: "max_context_tokens", Label: "Max Context Tokens", Description: "Max context token count (default 200000)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
+			},
+			{
+				Key: "enable_auto_compress", Label: "Auto Compress", Description: "Automatically compress when context is too long (on by default)",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "On", Value: "true"},
+					{Label: "Off", Value: "false"},
+				},
+			},
+			{
+				Key: "language", Label: "Language", Description: "Language for agent replies",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "Follow prompt (default)", Value: ""},
+					{Label: "English", Value: "en"},
+					{Label: "中文", Value: "zh"},
+					{Label: "日本語", Value: "ja"},
+				},
+			},
+			{
+				Key: "theme", Label: "Theme", Description: "CLI color scheme",
+				Type: SettingTypeSelect, Category: "Appearance", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight (default)", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+	}
+
+	ja := &UILocale{
+		// --- A. System messages ---
+		CancelSent:     "キャンセルリクエストを送信しました",
+		SettingsSaved:  "✅ 設定を保存しました",
+		NoSettings:     "このチャンネルには設定項目がありません。",
+		CheckingUpdate: "アップデートを確認中...",
+		ModelUsage:     "使い方: /model <モデル名>\n/models で利用可能モデルを表示",
+		AskCancelled:   "質問をキャンセルしました",
+		SetupComplete:  "✅ 初期設定が完了しました。/settings で設定変更、/setup で再設定。",
+		SetupLettaNote: "\n\n[!] letta メモリモードには埋め込みサービスが必要です:\n  1. Ollama をインストール: https://ollama.ai\n  2. 埋め込みモデルを取得: `ollama pull nomic-embed-text`\n  3. 設定または環境変数で埋め込みエンドポイントを設定",
+		UpdateFound:    "新しいバージョン: %s → %s\nアップデート: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s",
+		UpdateCurrent:  "現在のバージョン %s は最新です",
+		UpdateFailed:   "アップデート確認に失敗（ネットワークタイムアウトまたは GitHub API に接続できません）",
+
+		// --- B. Panel text ---
+		PanelSettingsTitle:   "⚙ 設定",
+		PanelNotSet:          "(未設定)",
+		PanelEditHint:        "Enter 確認 | Esc キャンセル",
+		PanelComboHint:       "↑↓ 選択 | Enter 確認 | カスタム入力 | Esc キャンセル",
+		PanelNavHint:         "↑↓ 移動 · Enter 編集/切替 · Ctrl+S 保存 · Esc 閉じる",
+		PanelEditPlaceholder: "新しい値を入力...",
+
+		PanelOther:     "その他: ",
+		PanelSubmit:    "送信 →",
+		PanelAskNav:    "←→/Tab 質問切替",
+		PanelAskToggle: "Space/Enter 切替",
+		PanelAskOther:  "v その他入力",
+		PanelAskSubmit: "Enter 送信",
+		PanelAskNewline: "Ctrl+J 改行",
+		PanelAskCancel: "Esc キャンセル",
+
+		BgTasksTitle:   "バックグラウンドタスク",
+		BgTasksHelp:    "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
+		BgTasksEmpty:   "実行中のバックグラウンドタスクはありません",
+		BgTaskLogTitle: "ログ: %s — %s",
+		BgTaskLogHelp:  "↑↓ スクロール  Esc 戻る",
+
+		PanelOmitted: "  ... %d 行省略（端末が狭すぎます） ...",
+
+		// --- C. Status bar ---
+		TitleHint:             "Enter 送信 · Ctrl+J 改行 · /help",
+		ProcessingPlaceholder: "[処理中...] (Ctrl+C キャンセル)",
+		CheckingUpdates:       "⟳ アップデート確認中...",
+		StatusReady:           "● 準備完了",
+		StatusCompressing:     "圧縮中",
+		StatusRetrying:        "リトライ中",
+		StatusDone:            "完了",
+		NewContentHint:        "↓ 新着",
+		BgTaskRunning:         "[bg: %d タスク実行中 -- ^ 管理]",
+
+		// --- D. Temp status ---
+		WaitingOperation:   "... 前の操作の完了を待機中...",
+		NoMessagesToDelete: "[!] 削除するメッセージがありません",
+		SearchNoMatch:      "[検索] \"%s\" 一致なし",
+		KillFailed:         "終了に失敗: %s",
+
+		// --- E. Help commands ---
+		HelpCmds: []HelpCmdEntry{
+			{Cmd: "/cancel", Desc: "現在の操作をキャンセル"},
+			{Cmd: "/clear", Desc: "チャット履歴をクリア"},
+			{Cmd: "/compact", Desc: "コンテキストを圧縮"},
+			{Cmd: "/model", Desc: "モデル切替"},
+			{Cmd: "/models", Desc: "利用可能モデル一覧"},
+			{Cmd: "/context", Desc: "コンテキスト情報表示"},
+			{Cmd: "/new", Desc: "新規セッション開始"},
+			{Cmd: "/settings", Desc: "設定パネルを開く"},
+			{Cmd: "/setup", Desc: "セットアップウィザード再実行"},
+			{Cmd: "/update", Desc: "アップデート確認"},
+			{Cmd: "/help", Desc: "ヘルプ表示"},
+		},
+		HelpKeys: []HelpKeyEntry{
+			{Key: "Enter", Desc: "メッセージ送信"},
+			{Key: "Ctrl+C/Esc", Desc: "中止/クリア"},
+			{Key: "Ctrl+J", Desc: "入力欄で改行"},
+			{Key: "Ctrl+K", Desc: "コンテキスト削除"},
+			{Key: "Ctrl+O", Desc: "ツール展開/折りたたみ"},
+			{Key: "Tab", Desc: "コマンド/パス補完"},
+			{Key: "Home/End", Desc: "先頭/末尾へ移動"},
+			{Key: "↑", Desc: "バックグラウンドタスクパネル"},
+		},
+
+		// --- F. Confirm dialog ---
+		ConfirmDelete: "[!] Ctrl+K: 最後の %d 件のメッセージを削除しますか？(y/N, 数字で調整)",
+
+		// --- G. Splash ---
+		SplashDesc:    "AI駆動のターミナルエージェント",
+		SplashLoading: "  %s  初期化中...",
+
+		// --- H. Settings schema ---
+		SetupSchema: []SettingDefinition{
+			{
+				Key: "llm_provider", Label: "LLM プロバイダー", Description: "LLM サービスプロバイダーを選択",
+				Type: SettingTypeSelect, Category: "LLM", DefaultValue: "openai",
+				Options: []SettingOption{
+					{Label: "OpenAI (および互換API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key（必須）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "Base URL", Description: "LLM API エンドポイント",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "https://api.openai.com/v1",
+			},
+			{
+				Key: "llm_model", Label: "モデル名", Description: "LLM モデル名を選択または入力",
+				Type: SettingTypeText, Category: "LLM", DefaultValue: "gpt-4o",
+			},
+			{
+				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web検索サービスキー（オプション、空の場合 WebSearch は無効）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "sandbox_mode", Label: "サンドボックスモード", Description: "コマンド実行の分離方法",
+				Type: SettingTypeSelect, Category: "環境", DefaultValue: "none",
+				Options: []SettingOption{
+					{Label: "none — 直接実行（推奨）", Value: "none"},
+					{Label: "docker — コンテナ分離", Value: "docker"},
+				},
+			},
+			{
+				Key: "memory_provider", Label: "メモリモード", Description: "メモリシステムの実装方式",
+				Type: SettingTypeSelect, Category: "環境", DefaultValue: "flat",
+				Options: []SettingOption{
+					{Label: "flat — 全量注入（推奨）", Value: "flat"},
+					{Label: "letta — 階層メモリ", Value: "letta"},
+				},
+			},
+			{
+				Key: "theme", Label: "カラーテーマ", Description: "CLI カラースキーム",
+				Type: SettingTypeSelect, Category: "外観", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight（デフォルト）", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+		SettingsSchema: []SettingDefinition{
+			{
+				Key: "llm_model", Label: "LLM モデル", Description: "LLM モデル名を選択または入力",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API エンドポイント（OpenAI 互換のサードパーティサービス用に変更可）",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "context_mode", Label: "コンテキストモード", Description: "コンテキスト管理戦略",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
+				Options: []SettingOption{
+					{Label: "自動（デフォルト）", Value: "auto"},
+					{Label: "手動圧縮", Value: "manual"},
+					{Label: "圧縮なし", Value: "none"},
+				},
+			},
+			{
+				Key: "max_iterations", Label: "最大反復数", Description: "1回の会話の最大ツール呼び出し反復数（デフォルト 100）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+			},
+			{
+				Key: "max_concurrency", Label: "最大同時実行数", Description: "同時に処理する最大リクエスト数（デフォルト 3）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
+			},
+			{
+				Key: "memory_window", Label: "メモリウィンドウ", Description: "LLM コンテキストに保持する最大履歴メッセージ数（デフォルト 50）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
+			},
+			{
+				Key: "max_context_tokens", Label: "最大コンテキスト Token", Description: "コンテキストの最大トークン数（デフォルト 200000）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
+			},
+			{
+				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "オン", Value: "true"},
+					{Label: "オフ", Value: "false"},
+				},
+			},
+			{
+				Key: "language", Label: "言語", Description: "エージェントの返信言語",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "プロンプトに従う（デフォルト）", Value: ""},
+					{Label: "English", Value: "en"},
+					{Label: "中文", Value: "zh"},
+					{Label: "日本語", Value: "ja"},
+				},
+			},
+			{
+				Key: "theme", Label: "テーマ", Description: "CLI カラースキーム",
+				Type: SettingTypeSelect, Category: "外観", DefaultValue: "midnight",
+				Options: []SettingOption{
+					{Label: "Midnight（デフォルト）", Value: "midnight"},
+					{Label: "Ocean", Value: "ocean"},
+					{Label: "Forest", Value: "forest"},
+					{Label: "Sunset", Value: "sunset"},
+					{Label: "Rose", Value: "rose"},
+					{Label: "Mono", Value: "mono"},
+				},
+			},
+		},
+	}
+
+	locales = map[string]*UILocale{
+		"":    zh, // default
+		"zh":  zh,
+		"en":  en,
+		"ja":  ja,
+	}
+}
+
+// localeChangeCh is used to notify the running CLI model of locale changes.
+// Follows the same pattern as themeChangeCh (buffered channel, non-blocking send).
+var localeChangeCh = make(chan struct{}, 1)
+
+// currentLocaleLang stores the current locale language code.
+var currentLocaleLang string
+
+// SetLocale switches the current locale and notifies the running model.
+func SetLocale(lang string) {
+	currentLocaleLang = lang
+	select {
+	case localeChangeCh <- struct{}{}:
+	default:
+	}
+}
+
+// GetLocale returns the UILocale for the given language code.
+// Falls back to Chinese (zh) for unknown languages.
+func GetLocale(lang string) *UILocale {
+	if loc, ok := locales[lang]; ok {
+		return loc
+	}
+	return locales[""] // default zh
+}

@@ -5,6 +5,7 @@ package channel
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// isTerminal returns true if stdout is connected to a terminal.
+// bubbletea requires a real TTY; tests that call ch.Start() must skip in non-TTY.
+func isTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
 
 // ---------------------------------------------------------------------------
 // CLIChannel Basic Tests
@@ -30,9 +38,9 @@ func TestCLIChannelName(t *testing.T) {
 }
 
 func TestCLIChannelStartStop(t *testing.T) {
-	// Skip in CI/headless environment - requires TTY
-	if testing.Short() {
-		t.Skip("Skipping in short mode - requires TTY")
+	// Skip if not a real terminal — bubbletea.Start() blocks without TTY
+	if !isTerminal() {
+		t.Skip("Skipping - requires TTY")
 	}
 
 	msgBus := bus.NewMessageBus()

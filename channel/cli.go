@@ -3312,20 +3312,22 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// §2 工具可视化：在 assistant 消息之前插入 tool_summary
-		// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
-		// If PhaseDone already appended a placeholder, remove it first.
-		var toolSummaryIterations []cliIterationSnapshot
-		if m.pendingToolSummary != nil {
-			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
-			// Remove the placeholder that PhaseDone appended at the end
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].role == "tool_summary" && &m.messages[i] == m.pendingToolSummary {
-					m.messages = append(m.messages[:i], m.messages[i+1:]...)
-					break
+			// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
+			// If PhaseDone already appended a placeholder, remove it first.
+			var toolSummaryIterations []cliIterationSnapshot
+			if m.pendingToolSummary != nil {
+				toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
+				// Remove the last tool_summary placeholder that PhaseDone appended.
+				// We track by index from end because append copies the value,
+				// making pointer comparison unreliable.
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].role == "tool_summary" {
+						m.messages = append(m.messages[:i], m.messages[i+1:]...)
+						break
+					}
 				}
+				m.pendingToolSummary = nil
 			}
-			m.pendingToolSummary = nil
-		}
 		if len(m.iterationHistory) > 0 {
 			toolSummaryIterations = append(toolSummaryIterations, m.iterationHistory...)
 		}

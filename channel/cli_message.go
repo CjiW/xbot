@@ -200,6 +200,13 @@ func (m *cliModel) sendMessage(content string) {
 		return
 	}
 
+	// 🥚 彩蛋 #3: The Answer is 42 检测
+	if isAnswer42(content) {
+		cmd := m.activateEasterEgg(easterEggAnswer42, 5*time.Second)
+		// 仍然作为用户消息发送给 agent（但彩蛋覆盖层会先显示）
+		_ = cmd
+	}
+
 	// 解析 @ 文件引用，提取文件路径
 	media := parseFileReferences(content)
 
@@ -211,8 +218,10 @@ func (m *cliModel) sendMessage(content string) {
 		dirty:     true,
 	})
 
-	// 更新显示
+	// 更新显示并强制滚动到底部（用户发送新消息时始终可见）
 	m.updateViewportContent()
+	m.viewport.GotoBottom()
+	m.newContentHint = false
 
 	// 发送到消息总线
 	if m.msgBus != nil {
@@ -281,6 +290,15 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	command := ""
 	if len(parts) > 0 {
 		command = strings.ToLower(parts[0])
+	}
+
+	// 🥚 彩蛋命令优先检测（隐藏命令不注册到 cliCommands）
+	if m.handleEasterEggCommand(cmd) {
+		// /version 需要同时显示正常版本号 + 可能的彩蛋
+		if command == "/version" {
+			m.checkVersionOCD()
+		}
+		return
 	}
 
 	switch command {

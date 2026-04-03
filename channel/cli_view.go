@@ -27,6 +27,13 @@ func (m *cliModel) View() tea.View {
 		return v
 	}
 
+	// 🥚 彩蛋覆盖层：有彩蛋激活时优先渲染全屏覆盖
+	if m.easterEgg != easterEggNone {
+		v := tea.NewView(m.renderEasterEggOverlay())
+		v.AltScreen = true
+		return v
+	}
+
 	// ========== 样式定义 ==========
 
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
@@ -361,8 +368,12 @@ func (m *cliModel) renderSplash() string {
 	}
 	lines = append(lines, strings.Repeat(" ", vPad)+versionText)
 
-	// 描述居中
-	descText := descStyle.Render(m.locale.SplashDesc)
+	// 描述居中（节日版彩蛋）
+	splashDesc := m.locale.SplashDesc
+	if holidayDesc := getHolidaySplashDesc(); holidayDesc != "" {
+		splashDesc = holidayDesc
+	}
+	descText := descStyle.Render(splashDesc)
 	dW := lipgloss.Width(descText)
 	dPad := (screenW - dW) / 2
 	if dPad < 0 {

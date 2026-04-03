@@ -246,6 +246,14 @@ type cliModel struct {
 
 	// toolDisplayInfo
 
+	// --- 🥚 Easter Eggs 彩蛋 ---
+	easterEgg       easterEggMode // 当前激活的彩蛋类型（"" = 无）
+	easterEggTimer  int           // 彩蛋动画 tick 计数
+	easterEggCustom string        // 彩蛋自定义内容（版本成就 art 等）
+	konamiBuffer    []string      // Konami Code 按键缓冲区
+	matrixRainLines []string      // Matrix 代码雨当前帧行
+	versionHitTimes []time.Time   // /version 命令调用时间戳（用于三连检测）
+
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 

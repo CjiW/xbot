@@ -175,6 +175,35 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+			// 🥚 Konami Code 彩蛋：监听方向键和字母键
+			if m.easterEgg == easterEggNone {
+				konamiKey := ""
+				switch msg.Code {
+				case tea.KeyUp:
+					konamiKey = "up"
+				case tea.KeyDown:
+					konamiKey = "down"
+				case tea.KeyLeft:
+					konamiKey = "left"
+				case tea.KeyRight:
+					konamiKey = "right"
+				}
+				// 检测字母键 B 和 A
+				if len(msg.Text) == 1 {
+					switch msg.Text[0] {
+					case 'b', 'B':
+						konamiKey = "b"
+					case 'a', 'A':
+						konamiKey = "a"
+					}
+				}
+				if konamiKey != "" && m.checkKonami(konamiKey) {
+					// Konami Code 完整序列匹配！
+					cmd := m.activateEasterEgg(easterEggKonami, 3*time.Second)
+					return m, cmd
+				}
+			}
+
 		switch {
 		case msg.String() == "ctrl+c", msg.Code == tea.KeyEsc:
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
@@ -563,6 +592,23 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.toastTimer = false
 		}
+
+	case easterEggDoneMsg:
+		// 🥚 彩蛋自动消失
+		m.easterEgg = easterEggNone
+		m.easterEggTimer = 0
+		m.matrixRainLines = nil
+		m.easterEggCustom = ""
+		return m, nil
+
+	case easterEggMatrixTickMsg:
+		// 🥚 Matrix 代码雨动画帧推进
+		if m.easterEgg == easterEggMatrix {
+			m.matrixRainLines = msg.rain
+			m.easterEggTimer++
+			cmds = append(cmds, matrixTickCmd(m))
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	// Kick off ticker + tick chains when processing just started

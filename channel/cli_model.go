@@ -63,8 +63,8 @@ var (
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 	// splashFrames: loading bar animation — 启动画面进度条
-		splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	)
+	splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+)
 
 // errorKeywords — system 消息中的错误检测关键词
 var errorKeywords = []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"}
@@ -261,7 +261,8 @@ func newCLIModel() *cliModel {
 	ta.SetWidth(76)
 	ta.SetHeight(3)
 	ta.CharLimit = 0
-	ta.Prompt = "> "
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
 	initStyles := buildStyles(76)
 	applyTAStyles(&ta, &initStyles)
 

@@ -84,6 +84,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Ctrl+Enter 换行（终端发送的 raw sequence 不统一，需手动检测）
 	if isCtrlEnter(msg) {
 		m.textarea.InsertString("\n")
+		m.autoExpandInput()
 		return m, nil
 	}
 
@@ -156,6 +157,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 非处理状态：清空输入
 			if m.textarea.Value() != "" {
 				m.textarea.Reset()
+				m.autoExpandInput()
 			}
 			return m, nil
 
@@ -205,7 +207,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.todosDoneCleared = true
 				}
 				m.sendMessage(content)
-				m.textarea.Reset()
+					m.textarea.Reset()
+					m.autoExpandInput()
 				m.viewport.GotoBottom()
 				m.newContentHint = false
 			}
@@ -400,11 +403,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// when a bg task completes (even when no progress event is coming)
 		if m.bgTaskCountFn != nil {
 			prev := m.bgTaskCount
-		m.bgTaskCount = m.bgTaskCountFn()
-		// Force re-render when count changes (e.g. task killed in panel)
-		if m.bgTaskCount != prev {
-			m.renderCacheValid = false
-		}
+			m.bgTaskCount = m.bgTaskCountFn()
+			// Force re-render when count changes (e.g. task killed in panel)
+			if m.bgTaskCount != prev {
+				m.renderCacheValid = false
+			}
 		}
 		// Schedule next tick when agent is active or bg tasks are running.
 		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
@@ -566,7 +569,36 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	m.autoExpandInput()
+
 	return m, tea.Batch(cmds...)
+}
+
+// autoExpandInput adjusts the main textarea height based on content lines.
+// Keeps it between minTaHeight and maxTaHeight, and shrinks viewport accordingly.
+const (
+	minTaHeight = 3
+	maxTaHeight = 10
+)
+
+func (m *cliModel) autoExpandInput() {
+	lines := strings.Count(m.textarea.Value(), "\n") + 1
+	if lines < minTaHeight {
+		lines = minTaHeight
+	}
+	if lines > maxTaHeight {
+		lines = maxTaHeight
+	}
+	if m.textarea.Height() == lines {
+		return
+	}
+	oldHeight := m.textarea.Height()
+	m.textarea.SetHeight(lines)
+	// Adjust viewport to compensate
+	delta := lines - oldHeight
+	if m.viewport.Height-delta >= 3 {
+		m.viewport.Height -= delta
+	}
 }
 
 // handleResize 处理窗口大小变化
@@ -577,14 +609,16 @@ func (m *cliModel) handleResize(width, height int) {
 	// §20 重建样式缓存
 	m.styles = buildStyles(width)
 
-	// Layout: titleBar(1) + viewport + separator(1) + status(1) + inputBox(5) + footer(1)
-	reservedLines := 9
+	// Layout: titleBar(1) + status(1) + footer(1) + inputBox(taHeight+2 border)
+	fixedLines := 3 // titleBar + status + footer
+	taBorder := 2   // top + bottom border
+	reservedLines := fixedLines + taBorder + m.textarea.Height()
 	// §20b 小终端适配：极小窗口下动态缩减布局
 	if height < 12 {
-		reservedLines = 7
+		reservedLines = fixedLines + taBorder + 2 // min textarea
 	}
 	if height < 8 {
-		reservedLines = 5
+		reservedLines = 4
 	}
 	if height < 5 {
 		reservedLines = 4

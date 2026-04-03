@@ -46,13 +46,6 @@ func (m *cliModel) View() string {
 
 	inputArea := m.textarea.View()
 
-	// 多行输入行数指示（§17）：当输入超过 1 行时，右下角显示行数
-	lineCount := strings.Count(m.textarea.Value(), "\n") + 1
-	if lineCount > 1 && m.inputReady {
-		lineHint := m.styles.LineHint.Render(fmt.Sprintf("Ln %d", lineCount))
-		inputArea += " " + lineHint + "\n"
-	}
-
 	// 状态栏样式
 	readyStatusStyle := m.styles.ReadyStatus
 

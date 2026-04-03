@@ -36,6 +36,10 @@ func (a *todoManagerAdapter) GetTodoItems(sessionKey string) []TodoProgressItem 
 	return result
 }
 
+func (a *todoManagerAdapter) ClearTodos(sessionKey string) {
+	a.mgr.SetTodos(sessionKey, nil)
+}
+
 // applyUserMaxContext 如果用户在 Settings 中设置了 max_context，
 // 创建一个新的 ContextManagerConfig 副本并覆盖 MaxContextTokens，
 // 避免污染 Agent 级别的原始配置（含 sync.RWMutex）。

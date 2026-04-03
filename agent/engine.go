@@ -187,10 +187,11 @@ type RunConfig struct {
 	BgTaskManager *tools.BackgroundTaskManager
 }
 
-// TodoManagerProvider 提供 TODO 状态查询
+// TodoManagerProvider 提供 TODO 状态查询和清理
 type TodoManagerProvider interface {
 	GetTodoSummary(sessionKey string) string
 	GetTodoItems(sessionKey string) []TodoProgressItem
+	ClearTodos(sessionKey string)
 }
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
@@ -302,6 +303,25 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	if sessionKey == "" && cfg.Channel != "" {
 		sessionKey = cfg.Channel + ":" + cfg.ChatID
 	}
+
+	// 当 LLM 生成最终回复后（无 tool_calls），检查 TODO 是否全部完成，若完成则清空
+	defer func() {
+		if cfg.TodoManager != nil && sessionKey != "" {
+			items := cfg.TodoManager.GetTodoItems(sessionKey)
+			if len(items) > 0 {
+				allDone := true
+				for _, item := range items {
+					if !item.Done {
+						allDone = false
+						break
+					}
+				}
+				if allDone {
+					cfg.TodoManager.ClearTodos(sessionKey)
+				}
+			}
+		}
+	}()
 
 	// offloadSessionKey: SubAgent 的 offload 数据存放在顶层 Agent 的 session 目录下，
 	// 与 offload_recall 的 RootSessionKey 保持一致，避免 SubAgent 存了找不到。

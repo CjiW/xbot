@@ -201,9 +201,9 @@ func (m *cliModel) sendMessage(content string) tea.Cmd {
 	}
 
 	// 🥚 彩蛋 #3: The Answer is 42 检测
-		if isAnswer42(content) {
-			_ = m.activateEasterEgg(easterEggAnswer42)
-		}
+	if isAnswer42(content) {
+		_ = m.activateEasterEgg(easterEggAnswer42)
+	}
 
 	// 解析 @ 文件引用，提取文件路径
 	media := parseFileReferences(content)
@@ -292,9 +292,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	}
 
 	// 🥚 彩蛋命令优先检测（隐藏命令不注册到 cliCommands）
-		if handled, cmd := m.handleEasterEggCommand(cmd); handled {
-			return cmd
-		}
+	if handled, cmd := m.handleEasterEggCommand(cmd); handled {
+		return cmd
+	}
 
 	switch command {
 	// --- 本地命令 ---
@@ -450,18 +450,18 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	default:
-			// 🥚 彩蛋 #7: /version 三连检测
-			if command == "/version" {
-				if m.recordVersionHit() {
-						art := fmt.Sprintf(versionAchievementArt, version.Version)
-						_ = m.activateEasterEgg(easterEggVersion)
-						m.easterEggCustom = art
-						m.updateViewportContent()
-						return nil
-				}
+		// 🥚 彩蛋 #7: /version 三连检测
+		if command == "/version" {
+			if m.recordVersionHit() {
+				art := fmt.Sprintf(versionAchievementArt, version.Version)
+				_ = m.activateEasterEgg(easterEggVersion)
+				m.easterEggCustom = art
+				m.updateViewportContent()
+				return nil
 			}
-			// 未知命令尝试透传到 agent（agent 层可能认识）
-			m.sendToAgent(cmd)
+		}
+		// 未知命令尝试透传到 agent（agent 层可能认识）
+		m.sendToAgent(cmd)
 	}
 
 	m.updateViewportContent()

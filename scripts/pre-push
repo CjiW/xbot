@@ -20,18 +20,24 @@ fail() { echo "  ❌ $1"; ((FAIL++)) || true; }
 skip() { echo "  ⏭️  $1 (not found)"; ((SKIP++)) || true; }
 
 # ── 1. Format ──────────────────────────────────────────────
-section "Format (gofmt)"
-if command -v gofmt &>/dev/null; then
-    DIFF=$(gofmt -d . 2>&1 || true)
-    if [ -z "$DIFF" ]; then
-        ok "gofmt: no issues"
+section "Format (go fmt)"
+if command -v go &>/dev/null; then
+    # go fmt ./... formats in place AND exits non-zero on diff
+    FMT_OUT=$(go fmt ./... 2>&1) && FMT_ERR=0 || FMT_ERR=$?
+    if [ "$FMT_ERR" -eq 0 ]; then
+        ok "go fmt: no issues"
     else
-        # Auto-fix
-        gofmt -w .
-        ok "gofmt: auto-fixed formatting"
+        # Files were reformatted in working tree but not staged.
+        # Check if committed files differ from formatted versions.
+        if ! git diff --exit-code --quiet '*.go' 2>/dev/null; then
+            fail "go fmt: committed files are not formatted"
+            echo "     Run: go fmt ./... && git add -A && git commit --amend --no-edit"
+        else
+            fail "go fmt: failed (FMT_ERR=$FMT_ERR)"
+        fi
     fi
 else
-    skip "gofmt not found"
+    skip "go not found"
 fi
 
 # ── 2. Vet ─────────────────────────────────────────────────

@@ -175,39 +175,39 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-			// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
-			if m.easterEgg != easterEggNone {
-				return m, func() tea.Msg { return easterEggDoneMsg{} }
-			}
+		// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
+		if m.easterEgg != easterEggNone {
+			return m, func() tea.Msg { return easterEggDoneMsg{} }
+		}
 
-			// 🥚 Konami Code 彩蛋：监听方向键和字母键
-			if m.easterEgg == easterEggNone {
-				konamiKey := ""
-				switch msg.Code {
-				case tea.KeyUp:
-					konamiKey = "up"
-				case tea.KeyDown:
-					konamiKey = "down"
-				case tea.KeyLeft:
-					konamiKey = "left"
-				case tea.KeyRight:
-					konamiKey = "right"
-				}
-				// 检测字母键 B 和 A
-				if len(msg.Text) == 1 {
-					switch msg.Text[0] {
-					case 'b', 'B':
-						konamiKey = "b"
-					case 'a', 'A':
-						konamiKey = "a"
-					}
-				}
-				if konamiKey != "" && m.checkKonami(konamiKey) {
-					// Konami Code 完整序列匹配！
-					cmd := m.activateEasterEgg(easterEggKonami)
-					return m, cmd
+		// 🥚 Konami Code 彩蛋：监听方向键和字母键
+		if m.easterEgg == easterEggNone {
+			konamiKey := ""
+			switch msg.Code {
+			case tea.KeyUp:
+				konamiKey = "up"
+			case tea.KeyDown:
+				konamiKey = "down"
+			case tea.KeyLeft:
+				konamiKey = "left"
+			case tea.KeyRight:
+				konamiKey = "right"
+			}
+			// 检测字母键 B 和 A
+			if len(msg.Text) == 1 {
+				switch msg.Text[0] {
+				case 'b', 'B':
+					konamiKey = "b"
+				case 'a', 'A':
+					konamiKey = "a"
 				}
 			}
+			if konamiKey != "" && m.checkKonami(konamiKey) {
+				// Konami Code 完整序列匹配！
+				cmd := m.activateEasterEgg(easterEggKonami)
+				return m, cmd
+			}
+		}
 
 		switch {
 		case msg.String() == "ctrl+c", msg.Code == tea.KeyEsc:
@@ -267,10 +267,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.relayoutViewport() // TODO 清除，恢复 viewport 高度
 				}
 				// 发送消息（彩蛋可能返回动画 cmd）
-					if cmd := m.sendMessage(content); cmd != nil {
-						cmds = append(cmds, cmd)
-					}
-					m.textarea.Reset()
+				if cmd := m.sendMessage(content); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				m.textarea.Reset()
 				m.autoExpandInput()
 				m.viewport.GotoBottom()
 				m.newContentHint = false
@@ -602,19 +602,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case easterEggDoneMsg:
-			// 🥚 彩蛋关闭（按任意键触发）
-			m.dismissEasterEgg()
-			m.renderCacheValid = false
-			m.updateViewportContent()
-			return m, nil
+		// 🥚 彩蛋关闭（按任意键触发）
+		m.dismissEasterEgg()
+		m.renderCacheValid = false
+		m.updateViewportContent()
+		return m, nil
 
-		case easterEggMatrixTickMsg:
-			// 🥚 Matrix 代码雨动画帧推进
-			if m.easterEgg == easterEggMatrix {
-				m.tickMatrix()
-				cmds = append(cmds, matrixTickCmd())
-			}
-			return m, tea.Batch(cmds...)
+	case easterEggMatrixTickMsg:
+		// 🥚 Matrix 代码雨动画帧推进
+		if m.easterEgg == easterEggMatrix {
+			m.tickMatrix()
+			cmds = append(cmds, matrixTickCmd())
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	// Kick off ticker + tick chains when processing just started

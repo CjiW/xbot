@@ -161,7 +161,7 @@ func (m *cliModel) tickMatrix() {
 		}
 		// 超出画面：重置
 		if tail > rows+5 {
-			m.matrixDrops[c] = -rng.Intn(rows/2)
+			m.matrixDrops[c] = -rng.Intn(rows / 2)
 			m.matrixSpeeds[c] = 1 + rng.Intn(2)
 			m.matrixTrailLen[c] = 5 + rng.Intn(15)
 		}

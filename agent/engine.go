@@ -369,11 +369,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	var lastPromptTokens int64     // 上一次 LLM 返回的精确 prompt token 数
 	var lastCompletionTokens int64 // 上一次 LLM 返回的精确 completion token 数
 	var lastMsgCountAtLLMCall int  // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
+	var restoredFromDB bool        // 是否从 DB 恢复了 token 计数（用于 maybeCompress 判断）
+	var hadLLMCall bool            // 本轮 Run 是否成功调用过 LLM（用于 SaveTokenState 判断）
 
 	// 从持久化状态恢复 token 计数，避免重启后从 0 开始（退化为本地估算）
 	if cfg.LastPromptTokens > 0 {
 		lastPromptTokens = cfg.LastPromptTokens
 		lastCompletionTokens = cfg.LastCompletionTokens
+		restoredFromDB = true
 	}
 	var compressAttempts int // 压缩尝试计数器（防止压缩循环）
 	var lastCompressIter int // 上一次成功压缩时的 compressAttempts 值
@@ -525,18 +528,29 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// - Local estimation only for tool result messages appended after the assistant message
 		// This minimizes reliance on the local tokenizer (which misses reasoning_content, etc.)
 		totalTokens := int64(0)
-		if lastPromptTokens > 0 && lastMsgCountAtLLMCall > 0 {
+		if lastPromptTokens > 0 && (lastMsgCountAtLLMCall > 0 || restoredFromDB) {
 			totalTokens = lastPromptTokens + lastCompletionTokens
-			// Only estimate tool messages (skip assistant msg at lastMsgCountAtLLMCall,
-			// its tokens are exactly covered by lastCompletionTokens)
-			if len(messages) > lastMsgCountAtLLMCall+1 {
+			if !restoredFromDB && len(messages) > lastMsgCountAtLLMCall+1 {
+				// Normal mid-Run: estimate only new tool messages appended after LLM call
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-						log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
-					} else {
-						totalTokens += int64(deltaTokens)
-					}
+					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+				} else {
+					totalTokens += int64(deltaTokens)
+				}
+			}
+			if restoredFromDB && len(messages) > 3 {
+				// Cross-Run recovery: lastMsgCountAtLLMCall is unknown,
+				// so do a full local estimation as delta on top of the restored base.
+				// This is still better than pure local estimation because the base
+				// (system prompt + early messages) uses the authoritative API value.
+				cachedMsgTokens, msgErr := llm.CountMessagesTokens(messages, cfg.Model)
+				if msgErr != nil {
+				log.Ctx(ctx).WithError(msgErr).Warn("maybeCompress: failed to count msg tokens after restore")
+				} else {
+				totalTokens = int64(cachedMsgTokens)
+				}
 			}
 		} else {
 			// No API value yet (first iteration) OR cross-Run recovery where
@@ -731,8 +745,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 		out.LastPromptTokens = lastPromptTokens
 		out.LastCompletionTokens = lastCompletionTokens
-		// 持久化 token 计数到 DB，重启后恢复
-		if cfg.SaveTokenState != nil && lastPromptTokens > 0 {
+		// 持久化 token 计数到 DB，重启后恢复。
+		// 仅在本轮 Run 确实调用了 LLM 且得到新值后才持久化，
+		// 避免异常退出时用恢复的旧值 + 0 覆盖 DB。
+		if cfg.SaveTokenState != nil && hadLLMCall && lastPromptTokens > 0 {
 			cfg.SaveTokenState(lastPromptTokens, lastCompletionTokens)
 		}
 		return out
@@ -840,6 +856,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPromptTokens = response.Usage.PromptTokens
 			lastCompletionTokens = response.Usage.CompletionTokens
 			lastMsgCountAtLLMCall = len(messages)
+			hadLLMCall = true
 			localInputTokens += int(response.Usage.PromptTokens)
 			localOutputTokens += int(response.Usage.CompletionTokens)
 		}

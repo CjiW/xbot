@@ -3,6 +3,7 @@ package channel
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"xbot/bus"
 	log "xbot/logger"
 )
@@ -14,9 +15,10 @@ import (
 // NonInteractiveChannel 非交互模式渠道，用于管道/参数模式。
 // 收到完整消息后打印到 stdout 并设置退出标志。
 type NonInteractiveChannel struct {
-	msgBus *bus.MessageBus
-	msgCh  chan bus.OutboundMessage
-	done   chan struct{}
+	msgBus  *bus.MessageBus
+	msgCh   chan bus.OutboundMessage
+	done    chan struct{}
+	doneOnce sync.Once // ensures close(done) is called exactly once
 }
 
 // NewNonInteractiveChannel 创建非交互模式渠道
@@ -52,7 +54,7 @@ func (c *NonInteractiveChannel) run() {
 				fmt.Print(diff)
 			}
 			fmt.Println()
-			close(c.done)
+			c.doneOnce.Do(func() { close(c.done) })
 			return
 		}
 	}

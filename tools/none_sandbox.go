@@ -116,13 +116,25 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 
 	// Collect output from pipes
 	var stdoutBuf, stderrBuf bytes.Buffer
-	var outputMu sync.Mutex // protects stdoutBuf/stderrBuf reads in ongoingOutput
+	var pipesClosed bool    // guards against double pipe close
+	var pipesMu sync.Mutex  // protects pipesClosed
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	closePipes := func() {
+		pipesMu.Lock()
+		defer pipesMu.Unlock()
+		if pipesClosed {
+			return
+		}
+		pipesClosed = true
+		stdoutPipe.Close()
+		stderrPipe.Close()
+	}
+
 	capture := func(dst *bytes.Buffer, r io.Reader) {
 		defer wg.Done()
-		io.Copy(dst, r)
+		_, _ = io.Copy(dst, r) // capture goroutines own their respective buffers exclusively
 	}
 	go capture(&stdoutBuf, stdoutPipe)
 	go capture(&stderrBuf, stderrPipe)
@@ -142,8 +154,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 			code = extractExitCodeFromState(state)
 		}
 		// Close pipes to unblock IO goroutines (even if grandchildren hold FDs)
-		stdoutPipe.Close()
-		stderrPipe.Close()
+		closePipes()
 		wg.Wait()
 		waitCh <- code
 	}()
@@ -176,8 +187,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 				exitCodeCh <- <-waitCh
 			}()
 			ongoingOutput := func() string {
-				outputMu.Lock()
-				defer outputMu.Unlock()
+				wg.Wait() // ensure capture goroutines have finished writing
 				var sb strings.Builder
 				if stdoutBuf.Len() > 0 {
 					sb.Write(stdoutBuf.Bytes())
@@ -204,8 +214,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 		case <-cancelCh:
 			// Context canceled (e.g. Ctrl+C) — kill entire process group immediately
 			killProcessGroup(cmd.Process)
-			stdoutPipe.Close()
-			stderrPipe.Close()
+			closePipes()
 			exitCode := <-waitCh
 			result := &ExecResult{
 				Stdout:   stdoutBuf.String(),
@@ -214,11 +223,11 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 			}
 			return result, nil
 		}
-	}
+		}
 
-	// No timeout — wait for completion or context cancel
-	select {
-	case exitCode := <-waitCh:
+		// No timeout — wait for completion or context cancel
+		select {
+		case exitCode := <-waitCh:
 		result := &ExecResult{
 			Stdout:   stdoutBuf.String(),
 			Stderr:   stderrBuf.String(),
@@ -226,11 +235,10 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 		}
 		return result, nil
 
-	case <-cancelCh:
+		case <-cancelCh:
 		// Context canceled (e.g. Ctrl+C) — kill entire process group immediately
 		killProcessGroup(cmd.Process)
-		stdoutPipe.Close()
-		stderrPipe.Close()
+		closePipes()
 		exitCode := <-waitCh
 		result := &ExecResult{
 			Stdout:   stdoutBuf.String(),
@@ -238,7 +246,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 			ExitCode: exitCode,
 		}
 		return result, nil
-	}
+		}
 }
 
 // killProcessGroup sends SIGKILL to the entire process group.

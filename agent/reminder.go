@@ -7,6 +7,9 @@ import (
 	"xbot/llm"
 )
 
+// systemReminderRe is pre-compiled for stripSystemReminder (called in hot loops).
+var systemReminderRe = regexp.MustCompile(`\n?\n?`)
+
 // BuildSystemReminder builds a system reminder appended to the last tool message.
 // agentID "main" = main Agent, otherwise SubAgent.
 func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string, agentID string) string {
@@ -67,8 +70,7 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 // stripSystemReminder removes the <system-reminder>...</system-reminder> block
 // and any preceding blank line from a message's content.
 func stripSystemReminder(content string) string {
-	re := regexp.MustCompile(`\n?\n?<system-reminder>[\s\S]*?</system-reminder>`)
-	return re.ReplaceAllString(content, "")
+	return systemReminderRe.ReplaceAllString(content, "")
 }
 
 // extractUserGoal 从 user message 中提取实际用户需求（去掉时间戳和系统引导文本）。

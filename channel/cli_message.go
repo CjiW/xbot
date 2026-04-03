@@ -502,6 +502,8 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.streamingMsgIdx = -1
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		m.progress = nil
+		m.renderCacheValid = false
+		m.updateViewportContent()
 
 		// §12 AskUser panel: detect WaitingUser and open interactive panel
 		if msg.WaitingUser {

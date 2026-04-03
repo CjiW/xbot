@@ -595,10 +595,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
-	// 默认关闭：masking 会完全隐藏旧工具结果，导致 LLM 丢失推理上下文。
-	// Offload（Layer 1）已足够控制单条工具结果大小，Compression 在接近上限时做整体验证摘要。
-	// 通过 settings 的 enable_masking 开启。
-	a.maskStore = NewObservationMaskStore(200) // 默认关闭
+	// 默认开启：在 60% context 阈值时自动 mask 旧工具结果以释放空间。
+	// 可通过 settings 的 enable_masking 关闭（设为 false 时 a.maskStore = nil）。
+	a.maskStore = NewObservationMaskStore(200)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {

@@ -321,14 +321,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// §2 工具可视化：快照 CompletedTools 到独立字段
 			// Only keep tools matching the current iteration to avoid cross-iteration leakage.
 			if len(msg.payload.CompletedTools) > 0 {
-				filtered := m.lastCompletedTools[:0]
-				for _, t := range msg.payload.CompletedTools {
-					if t.Iteration == msg.payload.Iteration {
-						filtered = append(filtered, t)
+					var filtered []CLIToolProgress
+					for _, t := range msg.payload.CompletedTools {
+						if t.Iteration == msg.payload.Iteration {
+							filtered = append(filtered, t)
+						}
 					}
+					m.lastCompletedTools = filtered
 				}
-				m.lastCompletedTools = filtered
-			}
 			if msg.payload.Phase == "done" {
 				// Snapshot the final iteration before clearing progress.
 				// This handles the case where PhaseDone arrives before

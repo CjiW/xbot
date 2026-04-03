@@ -537,9 +537,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-				log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
 				} else {
-				totalTokens += int64(deltaTokens)
+					totalTokens += int64(deltaTokens)
 				}
 			}
 		} else if restoredFromDB && lastPromptTokens > 0 {
@@ -897,16 +897,16 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						}
 					}
 					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
-						// 重试也要记录 LLM 调用指标（通过 local 变量）
-						localLLMCalls++
-						if response != nil {
-							lastPromptTokens = response.Usage.PromptTokens
-							lastCompletionTokens = response.Usage.CompletionTokens
-							lastMsgCountAtLLMCall = len(messages)
-							hadLLMCall = true
-							localInputTokens += int(response.Usage.PromptTokens)
-							localOutputTokens += int(response.Usage.CompletionTokens)
-						}
+					// 重试也要记录 LLM 调用指标（通过 local 变量）
+					localLLMCalls++
+					if response != nil {
+						lastPromptTokens = response.Usage.PromptTokens
+						lastCompletionTokens = response.Usage.CompletionTokens
+						lastMsgCountAtLLMCall = len(messages)
+						hadLLMCall = true
+						localInputTokens += int(response.Usage.PromptTokens)
+						localOutputTokens += int(response.Usage.CompletionTokens)
+					}
 				}
 			}
 

@@ -228,10 +228,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
 				if m.allTodosDone() {
-						m.todos = nil
-						m.todosDoneCleared = true
-						m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-					}
+					m.todos = nil
+					m.todosDoneCleared = true
+					m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+				}
 				m.sendMessage(content)
 				m.textarea.Reset()
 				m.autoExpandInput()
@@ -311,17 +311,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Already cleared by user input; don't re-accept stale all-done list
 				} else {
 					m.todos = make([]CLITodoItem, len(msg.payload.Todos))
-							copy(m.todos, msg.payload.Todos)
-							m.todosDoneCleared = false
-							m.relayoutViewport() // TODO 行数可能变化，重新计算 viewport 高度
-						}
-					} else {
-						prevTodoCount := len(m.todos)
-						m.todos = nil
-						if prevTodoCount > 0 {
-							m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-						}
-					}
+					copy(m.todos, msg.payload.Todos)
+					m.todosDoneCleared = false
+					m.relayoutViewport() // TODO 行数可能变化，重新计算 viewport 高度
+				}
+			} else {
+				prevTodoCount := len(m.todos)
+				m.todos = nil
+				if prevTodoCount > 0 {
+					m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+				}
+			}
 			// Detect iteration change: snapshot previous iteration into history
 			if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
 				// Filter CompletedTools by Iteration field for the previous iteration
@@ -348,14 +348,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// §2 工具可视化：快照 CompletedTools 到独立字段
 			// Only keep tools matching the current iteration to avoid cross-iteration leakage.
 			if len(msg.payload.CompletedTools) > 0 {
-					var filtered []CLIToolProgress
-					for _, t := range msg.payload.CompletedTools {
-						if t.Iteration == msg.payload.Iteration {
-							filtered = append(filtered, t)
-						}
+				var filtered []CLIToolProgress
+				for _, t := range msg.payload.CompletedTools {
+					if t.Iteration == msg.payload.Iteration {
+						filtered = append(filtered, t)
 					}
-					m.lastCompletedTools = filtered
 				}
+				m.lastCompletedTools = filtered
+			}
 			if msg.payload.Phase == "done" {
 				// Snapshot the final iteration before clearing progress.
 				// This handles the case where PhaseDone arrives before
@@ -422,9 +422,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastSeenIteration = 0
 				m.typingStartTime = time.Time{}
 				m.todos = nil
-					m.todosDoneCleared = false
-					m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-					m.progress = nil
+				m.todosDoneCleared = false
+				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
+				m.progress = nil
 				m.typing = false
 			}
 		}

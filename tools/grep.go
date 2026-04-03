@@ -458,12 +458,13 @@ func expandBracePattern(pattern string) []string {
 	openIdx := -1
 	depth := 0
 	for i, ch := range pattern {
-		if ch == '{' {
+		switch ch {
+		case '{':
 			if depth == 0 {
 				openIdx = i
 			}
 			depth++
-		} else if ch == '}' {
+		case '}':
 			depth--
 			if depth == 0 && openIdx >= 0 {
 				// Found matching closing brace

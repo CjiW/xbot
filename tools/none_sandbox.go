@@ -116,8 +116,8 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 
 	// Collect output from pipes
 	var stdoutBuf, stderrBuf bytes.Buffer
-	var pipesClosed bool    // guards against double pipe close
-	var pipesMu sync.Mutex  // protects pipesClosed
+	var pipesClosed bool   // guards against double pipe close
+	var pipesMu sync.Mutex // protects pipesClosed
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -223,11 +223,11 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 			}
 			return result, nil
 		}
-		}
+	}
 
-		// No timeout — wait for completion or context cancel
-		select {
-		case exitCode := <-waitCh:
+	// No timeout — wait for completion or context cancel
+	select {
+	case exitCode := <-waitCh:
 		result := &ExecResult{
 			Stdout:   stdoutBuf.String(),
 			Stderr:   stderrBuf.String(),
@@ -235,7 +235,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 		}
 		return result, nil
 
-		case <-cancelCh:
+	case <-cancelCh:
 		// Context canceled (e.g. Ctrl+C) — kill entire process group immediately
 		killProcessGroup(cmd.Process)
 		closePipes()
@@ -246,7 +246,7 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 			ExitCode: exitCode,
 		}
 		return result, nil
-		}
+	}
 }
 
 // killProcessGroup sends SIGKILL to the entire process group.
@@ -465,18 +465,6 @@ func setupPipes(cmd *exec.Cmd) (stdoutPipe, stderrPipe io.ReadCloser, err error)
 		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 	return stdoutPipe, stderrPipe, cmd.Start()
-}
-
-// extractExitCode returns the exit code from a cmd.Wait() error.
-// Returns 0 if waitErr is nil, the real exit code for ExitError, or -1 otherwise.
-func extractExitCode(waitErr error) int {
-	if waitErr == nil {
-		return 0
-	}
-	if exitErr, ok := waitErr.(*exec.ExitError); ok {
-		return exitErr.ExitCode()
-	}
-	return -1
 }
 
 // extractExitCodeFromState returns the exit code from an os.ProcessState.

@@ -203,6 +203,52 @@ func TestGlobTool_MarkdownPattern(t *testing.T) {
 	}
 }
 
+func TestGlobTool_BraceExpansion(t *testing.T) {
+	tmpDir := setupGlobTestDir(t)
+	tool := &GlobTool{}
+
+	// Brace expansion: *.{go,md} should match both .go and .md files
+	input, _ := json.Marshal(map[string]string{
+		"pattern": "*.{go,md}",
+		"path":    tmpDir,
+	})
+
+	result, err := tool.Execute(nil, string(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.Summary, "main.go") {
+		t.Errorf("expected main.go match in: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "README.md") {
+		t.Errorf("expected README.md match in: %s", result.Summary)
+	}
+}
+
+func TestGlobTool_BraceExpansionRecursive(t *testing.T) {
+	tmpDir := setupGlobTestDir(t)
+	tool := &GlobTool{}
+
+	// Brace expansion with ** recursive: **/*.{go,md}
+	input, _ := json.Marshal(map[string]string{
+		"pattern": "**/*.{go,md}",
+		"path":    tmpDir,
+	})
+
+	result, err := tool.Execute(nil, string(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result.Summary, "main.go") {
+		t.Errorf("expected main.go match in: %s", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "guide.md") {
+		t.Errorf("expected guide.md match in: %s", result.Summary)
+	}
+}
+
 func TestGlobTool_NoMatches(t *testing.T) {
 	tmpDir := setupGlobTestDir(t)
 	tool := &GlobTool{}

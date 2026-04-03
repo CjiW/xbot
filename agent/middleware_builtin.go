@@ -121,6 +121,52 @@ func (m *SenderInfoMiddleware) Process(mc *MessageContext) error {
 	return nil
 }
 
+// LanguageMiddleware injects a language instruction into the system prompt
+// based on the user's language setting. Priority 135 (after sender info).
+type LanguageMiddleware struct {
+	settingsSvc SettingsReader
+}
+
+// SettingsReader abstracts settings access for the middleware.
+type SettingsReader interface {
+	GetSettings(channelName, senderID string) (map[string]string, error)
+}
+
+func NewLanguageMiddleware(svc SettingsReader) *LanguageMiddleware {
+	return &LanguageMiddleware{settingsSvc: svc}
+}
+
+func (m *LanguageMiddleware) Name() string  { return "language" }
+func (m *LanguageMiddleware) Priority() int { return 135 }
+
+func (m *LanguageMiddleware) Process(mc *MessageContext) error {
+	if m.settingsSvc == nil {
+		return nil
+	}
+	vals, err := m.settingsSvc.GetSettings(mc.Channel, mc.SenderID)
+	if err != nil {
+		return nil
+	}
+	lang, ok := vals["language"]
+	if !ok || lang == "" {
+		return nil
+	}
+	// Map language code to a natural instruction for the LLM
+	var instruction string
+	switch lang {
+	case "en":
+		instruction = "## Language\n\nAlways respond in English."
+	case "zh":
+		instruction = "## Language\n\n始终使用中文回复。"
+	case "ja":
+		instruction = "## Language\n\n常に日本語で返答してください。"
+	default:
+		instruction = fmt.Sprintf("## Language\n\nAlways respond in %s.", lang)
+	}
+	mc.SystemParts["32_language"] = instruction
+	return nil
+}
+
 // --- Priority 200-299: 用户消息处理 ---
 
 // buildSystemGuideText 根据记忆模式生成系统引导文本。

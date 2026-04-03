@@ -167,6 +167,7 @@ func (a *Agent) initPipelines(memoryProvider string) {
 		NewAgentsCatalogMiddleware(),
 		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
+		NewLanguageMiddleware(a.settingsSvc),
 		NewUserMessageMiddleware(memoryProvider),
 	)
 

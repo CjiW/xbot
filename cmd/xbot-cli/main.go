@@ -256,6 +256,18 @@ func main() {
 					}
 					return "midnight"
 				}(),
+				"language": func() string {
+					if app.agentLoop != nil {
+						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+								if l, ok := vals["language"]; ok {
+									return l
+								}
+							}
+						}
+					}
+					return ""
+				}(),
 			}
 		},
 		ApplySettings: func(values map[string]string) {

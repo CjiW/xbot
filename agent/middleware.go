@@ -64,6 +64,7 @@ const (
 	ExtraKeyAgentsCatalog  = "agents_catalog"
 	ExtraKeyMemoryProvider = "memory_provider"
 	ExtraKeyTenantID       = "tenant_id"
+	ExtraKeyUserLanguage   = "user_language"
 )
 
 // GetExtra 从 Extra 中获取指定类型的值

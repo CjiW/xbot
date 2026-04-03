@@ -1393,18 +1393,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Type == tea.KeyCtrlC && m.typing {
 			m.closePanel()
 			if m.msgBus != nil {
-				m.msgBus.Inbound <- bus.InboundMessage{
-					Channel:    cliChannelName,
-					SenderID:   cliSenderID,
-					ChatID:     m.chatID,
-					ChatType:   "p2p",
-					Content:    "/cancel",
-					SenderName: "CLI User",
-					Time:       time.Now(),
-					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 				}
-			}
-			m.messages = append(m.messages, cliMessage{
+				m.messages = append(m.messages, cliMessage{
 				role:      "system",
 				content:   "已发送取消请求",
 				timestamp: time.Now(),
@@ -1502,16 +1493,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
 			if m.typing {
 				if m.msgBus != nil {
-					m.msgBus.Inbound <- bus.InboundMessage{
-						Channel:    cliChannelName,
-						SenderID:   cliSenderID,
-						ChatID:     m.chatID,
-						ChatType:   "p2p",
-						Content:    "/cancel",
-						SenderName: "CLI User",
-						Time:       time.Now(),
-						RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-					}
+					m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 				}
 				m.messages = append(m.messages, cliMessage{
 					role:      "system",
@@ -2002,8 +1984,6 @@ func (m *cliModel) handleResize(width, height int) {
 	}
 }
 
-// calculateProgressHeight returns 0 — progress is now rendered inside the viewport.
-
 // panelWidth returns a width suitable for panel textareas,
 // adapting to the current terminal width (with sensible bounds).
 func (m *cliModel) panelWidth(want int) int {
@@ -2099,9 +2079,6 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 	}
 
 	return
-}
-func (m *cliModel) calculateProgressHeight() int {
-	return 0
 }
 
 // View 渲染界面
@@ -2281,7 +2258,6 @@ func (m *cliModel) View() string {
 	// §16 Toast 通知渲染
 	toastStr := m.renderToast()
 
-	// 组装界面
 	// 组装界面
 	// §12 Panel mode: render panel overlay instead of normal input
 	if m.panelMode != "" {
@@ -2849,6 +2825,22 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+// newInbound creates a bus.InboundMessage with common fields pre-filled.
+// metadata can be nil.
+func (m *cliModel) newInbound(content string, metadata map[string]string) bus.InboundMessage {
+	return bus.InboundMessage{
+		Channel:    cliChannelName,
+		SenderID:   cliSenderID,
+		ChatID:     m.chatID,
+		ChatType:   "p2p",
+		Content:    content,
+		SenderName: "CLI User",
+		Time:       time.Now(),
+		RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+		Metadata:   metadata,
+	}
+}
+
 // sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
 func (m *cliModel) sendToAgent(content string) {
 	m.messages = append(m.messages, cliMessage{
@@ -2858,17 +2850,7 @@ func (m *cliModel) sendToAgent(content string) {
 		dirty:     true,
 	})
 	if m.msgBus != nil {
-		m.msgBus.Inbound <- bus.InboundMessage{
-			Channel:    cliChannelName,
-			SenderID:   cliSenderID,
-			ChatID:     m.chatID,
-			ChatType:   "p2p",
-			Content:    content,
-			SenderName: "CLI User",
-			Time:       time.Now(),
-			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
-		}
+		m.msgBus.Inbound <- m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
 		m.typing = true
 		m.inputReady = false
 		m.resetProgressState()
@@ -2899,18 +2881,8 @@ func (m *cliModel) sendMessage(content string) {
 
 	// 发送到消息总线
 	if m.msgBus != nil {
-		msg := bus.InboundMessage{
-			Channel:    cliChannelName,
-			SenderID:   cliSenderID,
-			ChatID:     m.chatID,
-			ChatType:   "p2p",
-			Content:    content,
-			Media:      media,
-			SenderName: "CLI User",
-			Time:       time.Now(),
-			RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-			Metadata:   map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional},
-		}
+		msg := m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
+		msg.Media = media
 		m.msgBus.Inbound <- msg
 		m.typing = true
 		m.inputReady = false
@@ -2979,16 +2951,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	// --- 本地命令 ---
 	case "/cancel":
 		if m.msgBus != nil {
-			m.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    cliChannelName,
-				SenderID:   cliSenderID,
-				ChatID:     m.chatID,
-				ChatType:   "p2p",
-				Content:    "/cancel",
-				SenderName: "CLI User",
-				Time:       time.Now(),
-				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-			}
+			m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 		}
 		m.messages = append(m.messages, cliMessage{
 			role:      "system",
@@ -3125,23 +3088,8 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
 		if m.msgBus != nil {
-			m.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    cliChannelName,
-				SenderID:   cliSenderID,
-				ChatID:     m.chatID,
-				ChatType:   "p2p",
-				Content:    "/compact",
-				SenderName: "CLI User",
-				Time:       time.Now(),
-				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				m.msgBus.Inbound <- m.newInbound("/compact", nil)
 			}
-		}
-		m.messages = append(m.messages, cliMessage{
-			role:      "system",
-			content:   "已发送上下文压缩请求",
-			timestamp: time.Now(),
-			dirty:     true,
-		})
 
 	// --- 透传命令（发送到 agent） ---
 	case "/model":
@@ -3295,17 +3243,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					content := strings.Join(parts, "\n\n")
 					// Send to agent as tool result replacement (not a new user message)
 					if m.msgBus != nil {
-						m.msgBus.Inbound <- bus.InboundMessage{
-							Channel:    cliChannelName,
-							SenderID:   cliSenderID,
-							ChatID:     m.chatID,
-							ChatType:   "p2p",
-							Content:    content,
-							SenderName: "CLI User",
-							Time:       time.Now(),
-							RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-							Metadata:   map[string]string{"ask_user_answered": "true"},
-						}
+				m.msgBus.Inbound <- m.newInbound(content, map[string]string{"ask_user_answered": "true"})
 					}
 					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{

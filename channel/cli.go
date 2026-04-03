@@ -286,7 +286,7 @@ func buildStyles(width int) cliStyles {
 		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
 		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
-		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
+		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
 		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
@@ -441,57 +441,12 @@ func truncateRunes(line string, maxW int) string {
 	return buf.String()
 }
 
-// newGlamourRenderer creates a glamour Markdown renderer with custom styling.
-// - Document.Margin=0 to prevent misalignment inside lipgloss bubbles
-// - Code blocks: accent-colored prefix + keyword/string highlighting
-// - Inline code: subtle accent background for readability
-// - Headings: accent color for visual hierarchy
+// newGlamourRenderer creates a glamour Markdown renderer.
+// Document.Margin=0 prevents misalignment inside lipgloss bubbles.
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	style := glamour.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
-
-	// 代码块：使用强调色前缀标记代码区域，语法高亮用主题色
-	style.CodeBlock.Margin = &zero
-	accentPrefix := "▌"
-	style.CodeBlock.Prefix = accentPrefix
-	// 语法高亮：关键字用强调色，字符串用成功色，注释用弱化色
-	accentColor := currentTheme.Accent
-	style.CodeBlock.Chroma.Keyword.Color = &accentColor
-	style.CodeBlock.Chroma.KeywordType.Color = &accentColor
-	style.CodeBlock.Chroma.KeywordReserved.Color = &accentColor
-	strColor := currentTheme.Success
-	style.CodeBlock.Chroma.LiteralString.Color = &strColor
-	infoColor := currentTheme.Info
-	style.CodeBlock.Chroma.NameFunction.Color = &infoColor
-	style.CodeBlock.Chroma.NameBuiltin.Color = &infoColor
-	mutedColor := currentTheme.TextSecondary
-	style.CodeBlock.Chroma.Comment.Color = &mutedColor
-	style.CodeBlock.Chroma.CommentPreproc.Color = &mutedColor
-
-	// 内联代码：强调色前缀，提升代码片段辨识度
-	style.Code.Prefix = accentPrefix
-	style.Code.Suffix = accentPrefix
-
-	// 标题：使用强调色建立视觉层次（H1/H2 大标题用强调色，H3 用 Info 色）
-	trueVal := true
-	style.H1.Color = &accentColor
-	style.H1.Bold = &trueVal
-	style.H2.Color = &accentColor
-	style.H2.Bold = &trueVal
-	style.H3.Color = &infoColor
-	style.H3.Bold = &trueVal
-
-	// 加粗文本：用主文本色增强对比度
-	textPrimary := currentTheme.TextPrimary
-	style.Strong.Color = &textPrimary
-	style.Strong.Bold = &trueVal
-
-	// 引用块：用次要文本色 + 竖线缩进
-	pipeToken := "│"
-	style.BlockQuote.IndentToken = &pipeToken
-	style.BlockQuote.Color = &mutedColor
-
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(wrapWidth),
@@ -499,98 +454,8 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	return r
 }
 
-// ---------------------------------------------------------------------------
-// 代码块渲染升级（第 4 轮）：lipgloss 边框 + 语言标签 + 深色背景
-// ---------------------------------------------------------------------------
-
-// codeBlockRe 匹配 markdown 代码块: ```lang\ncode\n```
-var codeBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_+-]*)\\s*\n(.*?)```")
-
-var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`) // ANSI 转义序列匹配（§21 搜索用）
-
-// renderCodeBlockInline 将代码块渲染为 lipgloss 边框包裹的精美样式。
-// 返回渲染后的 ANSI 字符串。
-func renderCodeBlockInline(lang, code string, maxWidth int) string {
-	// 语言标签
-	langLabel := lang
-	if langLabel == "" {
-		langLabel = "text"
-	}
-
-	// §8 代码块行数统计（用于右上角行数提示）
-	lines := strings.Split(strings.TrimRight(code, "\n"), "\n")
-	lineCount := len(lines)
-	if lineCount == 1 && lines[0] == "" {
-		lineCount = 0
-	}
-
-	// 右上角元数据提示：语言标签 + 行数，对齐显示
-	langTag := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Render(" " + langLabel + " ")
-	copyHint := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.TextMuted)).
-		Faint(true).
-		Render(fmt.Sprintf("%d lines ", lineCount))
-
-	// 用空格填充使两个标签左右对齐（内容宽度 = maxWidth - 4）
-	metaWidth := maxWidth - 4
-	if metaWidth < 10 {
-		metaWidth = 10
-	}
-	metaLine := langTag
-	if hintWidth := lipgloss.Width(copyHint); hintWidth > 0 {
-		padWidth := metaWidth - lipgloss.Width(langTag) - hintWidth
-		if padWidth > 0 {
-			metaLine += strings.Repeat(" ", padWidth)
-		}
-		metaLine += copyHint
-	}
-
-	// 代码内容：保持原始缩进，不添加额外前缀（glamour 已处理语法高亮）
-	// 限制最大宽度
-	contentWidth := metaWidth
-	var codeLines []string
-	for _, line := range lines {
-		if lipgloss.Width(line) > contentWidth {
-			line = truncateRunes(line, contentWidth)
-		}
-		codeLines = append(codeLines, line)
-	}
-	codeContent := strings.Join(codeLines, "\n")
-
-	// 代码块容器：深色背景 + 圆角边框
-	blockStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(currentTheme.Accent)).
-		Background(lipgloss.Color(currentTheme.Overlay)).
-		Padding(0, 1).
-		Width(maxWidth)
-
-	// 组装：元数据行（语言+行数）+ 代码内容
-	inner := metaLine + "\n" + codeContent
-	return blockStyle.Render(inner)
-}
-
-// prettifyCodeBlocks 在 markdown 渲染前提取代码块并替换为 lipgloss 渲染版本。
-// 返回 (preprocessed markdown, nil) — glamour 不再处理代码块。
-// 如果输入不包含代码块，直接返回原文本。
-func prettifyCodeBlocks(markdown string, maxWidth int) string {
-	if maxWidth < 10 {
-		maxWidth = 76
-	}
-	return codeBlockRe.ReplaceAllStringFunc(markdown, func(match string) string {
-		sub := codeBlockRe.FindStringSubmatch(match)
-		if len(sub) < 3 {
-			return match
-		}
-		lang := sub[1]
-		code := sub[2]
-		rendered := renderCodeBlockInline(lang, code, maxWidth)
-		// 用 HTML 注释标记包裹，让 glamour 把它当普通文本透传
-		return "<!--CODEBLOCK_START-->\n" + rendered + "\n<!--CODEBLOCK_END-->"
-	})
-}
+// ansiEscapeRe matches ANSI escape sequences (§21 search highlighting)
+var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
@@ -1170,9 +1035,9 @@ func pickVerb(ticks int64) string {
 var idlePlaceholders = []string{
 	"Enter send · Ctrl+J newline · /help",
 	"Type /model to switch model",
-	"Ctrl+K delete · Ctrl+O tools · Ctrl+E collapse",
+	"Ctrl+K delete | Ctrl+O tools",
 	"@filepath to attach files",
-	"↑ open background tasks panel",
+	"^ open background tasks panel",
 	"Type /compact to compress context",
 	"Type /settings to configure",
 	"Type /new to start fresh session",
@@ -1350,9 +1215,7 @@ type cliMessage struct {
 	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 
-	// --- §19 消息折叠 ---
-	collapsed bool // 长消息是否折叠（仅对完成的 assistant 消息生效）
-}
+	}
 
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
@@ -1526,6 +1389,30 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
+		// Ctrl+C must always cancel the agent — never swallow it
+		if key.Type == tea.KeyCtrlC && m.typing {
+			m.closePanel()
+			if m.msgBus != nil {
+				m.msgBus.Inbound <- bus.InboundMessage{
+					Channel:    cliChannelName,
+					SenderID:   cliSenderID,
+					ChatID:     m.chatID,
+					ChatType:   "p2p",
+					Content:    "/cancel",
+					SenderName: "CLI User",
+					Time:       time.Now(),
+					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+				}
+			}
+			m.messages = append(m.messages, cliMessage{
+				role:      "system",
+				content:   "已发送取消请求",
+				timestamp: time.Now(),
+				dirty:     true,
+			})
+			m.updateViewportContent()
+			return m, tea.Batch(tickerCmd(), tickCmd())
+		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
 			return newModel, cmd
@@ -1642,11 +1529,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyUp:
-			// ↑ with bg tasks running + empty input → open bg tasks panel
-			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputReady {
-				m.openBgTasksPanel()
-				return m, nil
-			}
+				// ↑ with bg tasks running + empty input → open bg tasks panel
+				// No inputReady gate — bg tasks should be manageable while agent is running
+				if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
+					m.openBgTasksPanel()
+					return m, nil
+				}
 
 		case tea.KeyEnter:
 			// Enter 发送消息
@@ -1730,27 +1618,6 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.messages[i].dirty = true
 			}
 			m.updateViewportContent()
-			return m, nil
-
-		case tea.KeyCtrlE:
-			// §19 Ctrl+E 切换最后一条 assistant 消息的折叠/展开
-			if !m.typing {
-				lastAssistant := -1
-				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].role == "assistant" && !m.messages[i].isPartial {
-						lastAssistant = i
-						break
-					}
-				}
-				if lastAssistant >= 0 {
-					m.messages[lastAssistant].collapsed = !m.messages[lastAssistant].collapsed
-					m.renderCacheValid = false
-					for i := range m.messages {
-						m.messages[i].dirty = true
-					}
-					m.updateViewportContent()
-				}
-			}
 			return m, nil
 
 		} // end switch msg.Type
@@ -2388,7 +2255,7 @@ func (m *cliModel) View() string {
 	}
 	// 新消息提示：用户上滚且有新内容时显示
 	if m.newContentHint {
-		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info)).Render("↓ new content")
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info)).Render("v new content")
 		if status != "" {
 			status += "  " + hint
 		} else {
@@ -2398,7 +2265,7 @@ func (m *cliModel) View() string {
 	// Background task indicator
 	if m.bgTaskCount > 0 {
 		bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
-			fmt.Sprintf("[bg: %d task%s running — ↑ to manage]", m.bgTaskCount, func() string {
+			fmt.Sprintf("[bg: %d task%s running -- ^ to manage]", m.bgTaskCount, func() string {
 				if m.bgTaskCount > 1 {
 					return "s"
 				}
@@ -2661,7 +2528,19 @@ func (m *cliModel) renderFooter() string {
 	// 收集当前上下文最相关的快捷键提示
 	var hints []string
 
-	if m.typing {
+	if m.panelMode != "" {
+		// 面板打开时：显示面板相关快捷键
+		switch m.panelMode {
+		case "bgtasks":
+			if m.panelBgViewing {
+				hints = append(hints, keyHint("PgUp/PgDn", "scroll"), keyHint("Esc", "back"))
+			} else {
+				hints = append(hints, keyHint("↑↓", "navigate"), keyHint("Enter", "log"), keyHint("Del", "kill"), keyHint("Esc", "close"))
+			}
+		default:
+			hints = append(hints, keyHint("↑↓", "navigate"), keyHint("Enter", "select"), keyHint("Esc", "close"))
+		}
+	} else if m.typing {
 		// 处理中：显示取消快捷键
 		hints = append(hints, ctrlKey("c", "cancel"))
 	} else {
@@ -2669,7 +2548,7 @@ func (m *cliModel) renderFooter() string {
 		if m.textarea.Value() == "" {
 			hints = append(hints, ctrlKey("k", "delete"), keyHint("/", "commands"), keyHint("tab", "complete"))
 			if m.bgTaskCount > 0 {
-				hints = append(hints, keyHint("↑", "bg tasks"))
+				hints = append(hints, keyHint("^", "bg tasks"))
 			}
 		} else {
 			hints = append(hints, ctrlKey("j", "newline"), keyHint("tab", "complete"), ctrlKey("k", "delete"))
@@ -2834,10 +2713,10 @@ func formatTokenCount(tu *CLITokenUsage) string {
 	}
 	parts := []string{}
 	if tu.PromptTokens > 0 {
-		parts = append(parts, fmt.Sprintf("↑%d", tu.PromptTokens))
+		parts = append(parts, fmt.Sprintf("in:%d", tu.PromptTokens))
 	}
 	if tu.CompletionTokens > 0 {
-		parts = append(parts, fmt.Sprintf("↓%d", tu.CompletionTokens))
+		parts = append(parts, fmt.Sprintf("out:%d", tu.CompletionTokens))
 	}
 	if len(parts) > 0 {
 		return "tokens: " + strings.Join(parts, " ") + fmt.Sprintf(" = %d", tu.TotalTokens)
@@ -3805,7 +3684,6 @@ func (m *cliModel) renderHelpPanel() string {
 		{"Ctrl+J", "输入框换行"},
 		{"Ctrl+K", "上下文删除"},
 		{"Ctrl+O", "展开/折叠工具"},
-		{"Ctrl+E", "折叠/展开消息"},
 		{"Tab", "命令/路径补全"},
 		{"Home/End", "跳到顶/底部"},
 		{"↑", "后台任务面板"},
@@ -3993,15 +3871,13 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
 	if msg.role == "assistant" {
-		// Pre-process: 代码块升级渲染（第 4 轮）+ mermaid 图表
-		// 先渲染 mermaid 图表为 ASCII art
-		mermaidProcessed := renderMermaidBlocks(msg.content, m.width-4)
-		// 提取代码块并用 lipgloss 边框包裹（glamour 不再处理代码块）
-		preprocessed := prettifyCodeBlocks(mermaidProcessed, m.width-4)
+		// Pre-process: render mermaid code blocks to ASCII art
+		// Truncate to glamour wrap width to prevent wrapping.
+		preprocessed := renderMermaidBlocks(msg.content, m.width-4)
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {
-			rendered = msg.content
+		rendered = msg.content
 		}
 		rendered = strings.TrimSpace(rendered)
 	} else {
@@ -4207,32 +4083,8 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
-		// §19 长消息折叠：完成的 assistant 消息超过 15 行时自动折叠
-		// collapsed 字段区分"自动折叠"和"用户手动展开"
-		msgLines := strings.Count(rendered, "\n") + 1
-		if !msg.isPartial && msgLines > 15 && !msg.collapsed {
-			// 首次渲染长消息：自动折叠
-			msg.collapsed = true
-		}
-		if !msg.isPartial && msg.collapsed {
-			allLines := strings.Split(rendered, "\n")
-			visibleCount := 4
-			if visibleCount > len(allLines) {
-				visibleCount = len(allLines)
-			}
-			visible := strings.Join(allLines[:visibleCount], "\n")
-			collapseHint := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.TextMuted)).
-				Faint(true).
-				Render(fmt.Sprintf("  ── ▼ %d more lines (Ctrl+E to expand) ──", len(allLines)-visibleCount))
-			sb.WriteString(visible)
-			sb.WriteString("\n")
-			sb.WriteString(collapseHint)
-			sb.WriteString("\n")
-		} else {
-			// Agent 消息直接渲染（glamour 已处理 markdown）
-			sb.WriteString(rendered)
-		}
+		// Agent 消息直接渲染（glamour 已处理 markdown）
+		sb.WriteString(rendered)
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
 		if msg.isPartial && rendered != "" {
 			streamCursor := lipgloss.NewStyle().
@@ -4667,7 +4519,7 @@ func (m *cliModel) openBgTasksPanel() {
 		return
 	}
 	m.panelMode = "bgtasks"
-	m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+	m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
 	m.panelBgScroll = 0
@@ -4685,7 +4537,7 @@ func (m *cliModel) openBgTasksPanel() {
 func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	// Refresh task list
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
-		m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	}
 
 	// Log viewing sub-mode
@@ -4783,7 +4635,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 						})
 					}
 					// Refresh list after kill
-					m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
+					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 					if m.panelBgCursor >= len(m.panelBgTasks) {
 						m.panelBgCursor = len(m.panelBgTasks) - 1
 					}
@@ -4818,7 +4670,6 @@ func (m *cliModel) viewBgTaskList() string {
 	sb.WriteString("  ")
 	sb.WriteString(help)
 	sb.WriteString("\n")
-	sb.WriteString(s.PanelDivider.Render("┈" + strings.Repeat("┈", 40)))
 
 	if len(m.panelBgTasks) == 0 {
 		sb.WriteString(s.PanelEmpty.Render("No background tasks running"))
@@ -5534,7 +5385,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(editLabel)
 		sb.WriteString(m.panelEditTA.View())
 		sb.WriteString("\n")
-		sb.WriteString(descStyle.Render("  Enter 确认 · Esc 取消"))
+		sb.WriteString(descStyle.Render("  Enter confirm | Esc cancel"))
 	} else if m.panelCombo && m.panelCursor < len(m.panelSchema) {
 		def := m.panelSchema[m.panelCursor]
 		sb.WriteString("\n")
@@ -5565,7 +5416,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString(descStyle.Render("  ↑↓ 选择 · Enter 确认 · 输入自定义 · Esc 取消"))
+		sb.WriteString(descStyle.Render("  Up/Down select | Enter confirm | Type custom | Esc cancel"))
 	} else {
 		sb.WriteString("\n")
 		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
@@ -5679,12 +5530,12 @@ func (m *cliModel) viewAskUserPanel() string {
 	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
 		item := m.panelItems[m.panelTab]
 		if len(item.Options) > 0 {
-			hints = append(hints, "Space/Enter 勾选", "↓ Other 输入", "Enter 提交")
+			hints = append(hints, "Space/Enter toggle", "v Other input", "Enter submit")
 		} else {
-			hints = append(hints, "Ctrl+J 换行")
+			hints = append(hints, "Ctrl+J newline")
 		}
 	}
-	hints = append(hints, "Esc 取消")
+	hints = append(hints, "Esc cancel")
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return m.styles.PanelBox.Render(sb.String())

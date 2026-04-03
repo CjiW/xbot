@@ -57,7 +57,6 @@ func (m *cliModel) View() string {
 	toolStyle := m.styles.Tool
 
 	// ========== 渲染各部分 ==========
-	separator := ""
 
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
@@ -66,10 +65,9 @@ func (m *cliModel) View() string {
 	if m.confirmDelete > 0 {
 		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
 		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s",
+			"%s\n%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
-			separator,
 			warningText,
 			input,
 		)
@@ -174,10 +172,9 @@ func (m *cliModel) View() string {
 	todoBar := m.renderTodoBar()
 	if todoBar != "" {
 		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s\n%s%s",
+			"%s\n%s\n%s\n%s\n%s%s",
 			titleBar,
 			m.viewport.View(),
-			separator,
 			status,
 			todoBar,
 			input,
@@ -188,10 +185,9 @@ func (m *cliModel) View() string {
 	footer := m.renderFooter()
 	if footer != "" {
 		return fmt.Sprintf(
-			"%s\n%s\n%s\n%s\n%s\n%s%s",
+			"%s\n%s\n%s\n%s\n%s%s",
 			titleBar,
 			m.viewport.View(),
-			separator,
 			status,
 			footer,
 			input,
@@ -199,10 +195,9 @@ func (m *cliModel) View() string {
 		)
 	}
 	return fmt.Sprintf(
-		"%s\n%s\n%s\n%s\n%s%s",
+		"%s\n%s\n%s\n%s%s",
 		titleBar,
 		m.viewport.View(),
-		separator,
 		status,
 		input,
 		toastStr,

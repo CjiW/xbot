@@ -207,8 +207,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.todosDoneCleared = true
 				}
 				m.sendMessage(content)
-					m.textarea.Reset()
-					m.autoExpandInput()
+				m.textarea.Reset()
+				m.autoExpandInput()
 				m.viewport.GotoBottom()
 				m.newContentHint = false
 			}
@@ -599,7 +599,10 @@ func (m *cliModel) autoExpandInput() {
 	if m.viewport.Height-delta >= 3 {
 		m.viewport.Height -= delta
 	}
-}
+	// Trigger repositionView with the new height so the textarea
+	// scroll offset stays correct (e.g. first line stays visible).
+	m.textarea, _ = m.textarea.Update(nil)
+	}
 
 // handleResize 处理窗口大小变化
 func (m *cliModel) handleResize(width, height int) {

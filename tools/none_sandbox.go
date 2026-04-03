@@ -114,11 +114,25 @@ func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, timeout time.Duration) (*Exec
 	go capture(&stdoutBuf, stdoutPipe)
 	go capture(&stderrBuf, stderrPipe)
 
-	// Wait for the command to finish or timeout to expire
-	waitCh := make(chan error, 1)
+	// Wait for the command to finish or timeout to expire.
+	// NOTE: Use cmd.Process.Wait() instead of cmd.Wait() because cmd.Wait()
+	// blocks until all IO copying completes. If child processes (e.g. from
+	// login shell profile sourcing) inherit pipe FDs, io.Copy never gets EOF
+	// and cmd.Wait() hangs forever. cmd.Process.Wait() only waits for the
+	// direct child process to exit, then we explicitly close pipes to
+	// unblock the IO goroutines.
+	waitCh := make(chan int, 1)
 	go func() {
-		waitCh <- cmd.Wait()
+		state, err := cmd.Process.Wait()
+		code := -1
+		if err == nil && state != nil {
+			code = extractExitCodeFromState(state)
+		}
+		// Close pipes to unblock IO goroutines (even if grandchildren hold FDs)
+		stdoutPipe.Close()
+		stderrPipe.Close()
 		wg.Wait()
+		waitCh <- code
 	}()
 
 	if timeout > 0 {
@@ -126,58 +140,57 @@ func (s *NoneSandbox) execKeepAlive(cmd *exec.Cmd, timeout time.Duration) (*Exec
 		defer timer.Stop()
 
 		select {
-		case waitErr := <-waitCh:
-			// Command finished before timeout
-			result := &ExecResult{
-				Stdout:   stdoutBuf.String(),
-				Stderr:   stderrBuf.String(),
-				ExitCode: extractExitCode(waitErr),
-			}
-			return result, nil
+			case exitCode := <-waitCh:
+				// Command finished before timeout
+				result := &ExecResult{
+					Stdout:   stdoutBuf.String(),
+					Stderr:   stderrBuf.String(),
+					ExitCode: exitCode,
+				}
+				return result, nil
 
-		case <-timer.C:
-			// Timeout — do NOT kill the process. Return it to the caller.
-			// cmd.Wait() is still running in the background goroutine.
-			// Capture goroutines continue writing to stdoutBuf/stderrBuf.
-			// OngoingOutput lets the caller (Adopt) read the final full output
-			// once the process exits and all capture goroutines complete.
-			exitCodeCh := make(chan int, 1)
-			go func() {
-				waitErr := <-waitCh // cmd.Wait() result (wg.Wait() already done)
-				exitCodeCh <- extractExitCode(waitErr)
-			}()
-			ongoingOutput := func() string {
-				var sb strings.Builder
-				if stdoutBuf.Len() > 0 {
-					sb.Write(stdoutBuf.Bytes())
-				}
-				if stderrBuf.Len() > 0 {
-					if sb.Len() > 0 {
-						sb.WriteByte('\n')
+			case <-timer.C:
+				// Timeout — do NOT kill the process. Return it to the caller.
+				// The background goroutine is still running (cmd.Process.Wait()).
+				// Capture goroutines continue writing to stdoutBuf/stderrBuf.
+				// OngoingOutput lets the caller (Adopt) read the final full output
+				// once the process exits and all capture goroutines complete.
+				exitCodeCh := make(chan int, 1)
+				go func() {
+					exitCodeCh <- <-waitCh
+				}()
+				ongoingOutput := func() string {
+					var sb strings.Builder
+					if stdoutBuf.Len() > 0 {
+						sb.Write(stdoutBuf.Bytes())
 					}
-					sb.Write(stderrBuf.Bytes())
+					if stderrBuf.Len() > 0 {
+						if sb.Len() > 0 {
+							sb.WriteByte('\n')
+						}
+						sb.Write(stderrBuf.Bytes())
+					}
+					return sb.String()
 				}
-				return sb.String()
+				result := &ExecResult{
+					Stdout:        stdoutBuf.String(),
+					Stderr:        stderrBuf.String(),
+					ExitCode:      -1,
+					TimedOut:      true,
+					Process:       cmd.Process,
+					ExitCodeCh:    exitCodeCh,
+					OngoingOutput: ongoingOutput,
+				}
+				return result, nil
 			}
-			result := &ExecResult{
-				Stdout:        stdoutBuf.String(),
-				Stderr:        stderrBuf.String(),
-				ExitCode:      -1,
-				TimedOut:      true,
-				Process:       cmd.Process,
-				ExitCodeCh:    exitCodeCh,
-				OngoingOutput: ongoingOutput,
-			}
-			return result, nil
-		}
 	}
 
 	// No timeout — just wait for completion
-	waitErr := <-waitCh
+	exitCode := <-waitCh
 	result := &ExecResult{
 		Stdout:   stdoutBuf.String(),
 		Stderr:   stderrBuf.String(),
-		ExitCode: extractExitCode(waitErr),
+		ExitCode: exitCode,
 	}
 	return result, nil
 }
@@ -391,4 +404,15 @@ func extractExitCode(waitErr error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
+}
+
+// extractExitCodeFromState returns the exit code from an os.ProcessState.
+func extractExitCodeFromState(state *os.ProcessState) int {
+	if state == nil {
+		return -1
+	}
+	if state.Success() {
+		return 0
+	}
+	return state.ExitCode()
 }

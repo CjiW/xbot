@@ -30,6 +30,7 @@ import (
 	"xbot/tools"
 	"xbot/version"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -965,6 +966,7 @@ func newCLIModel() *cliModel {
 	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
 	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
 	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // no background — let terminal bg show through
 	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
 	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
@@ -1968,11 +1970,31 @@ func (m *cliModel) renderTodoBar() string {
 }
 
 // titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
+// 参考 zsh %~ 提示符：绝对路径 + $HOME → ~ + 过长时截断
 func (m *cliModel) titleText() string {
-	if m.workDir != "" {
-		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
+	dir := m.workDir
+	if dir == "" {
+		return " xbot CLI"
 	}
-	return " xbot CLI"
+	// 1. 转绝对路径
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	// 2. 标准化（解析 .. 和 .）
+	abs = filepath.Clean(abs)
+	// 3. $HOME → ~
+	if home, err := os.UserHomeDir(); err == nil && abs == home {
+		abs = "~"
+	} else if home != "" && strings.HasPrefix(abs, home+"/") {
+		abs = "~" + abs[len(home):]
+	}
+	// 4. 过长时只保留最后两级（类似 zsh %2~）
+	parts := strings.Split(abs, string(os.PathSeparator))
+	if len(parts) > 4 {
+		abs = filepath.Join(parts[0], "...", filepath.Join(parts[len(parts)-2:]...))
+	}
+	return fmt.Sprintf(" xbot CLI [%s]", abs)
 }
 
 // renderProgressStatus renders a compact one-line status for the status bar.

@@ -25,12 +25,6 @@ func newAnimTicker(frames []string, color string) *animTicker {
 	}
 }
 
-// refreshStyles 在主题切换时重建 ticker 的颜色样式
-func (t *animTicker) refreshStyles() {
-	t.style = lipgloss.NewStyle().Foreground(lipgloss.Color(t.color))
-	t.styleAlt = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.AccentAlt))
-}
-
 func (t *animTicker) tick() {
 	t.ticks++
 	t.frame = (t.frame + 1) % len(t.frames)
@@ -69,12 +63,8 @@ var (
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 	// splashFrames: loading bar animation — 启动画面进度条
-	splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
-	// neonFrames: neon diamond — 用于错误/重试状态，醒目的视觉提示
-	neonFrames = []string{"◇", "◆", "◆", "◇", "◇", "◆", "◆", "◇"}
-	// pulseFrames: expanding/contracting dots — 用于特殊状态（搜索、扫描等）
-	pulseFrames = []string{"·", "∙", "●", "∙", "·", "∙", "●", "∙"}
-)
+		splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	)
 
 // errorKeywords — system 消息中的错误检测关键词
 var errorKeywords = []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"}
@@ -124,10 +114,6 @@ type cliToastMsg struct {
 
 // cliToastClearMsg Toast 通知自动清除消息（弹出队列头部）
 type cliToastClearMsg struct{}
-
-// §21 消息搜索相关类型
-type cliSearchNextMsg struct{} // n: 下一个匹配
-type cliSearchPrevMsg struct{} // N: 上一个匹配
 
 // cliModel Bubble Tea 状态模型
 type cliModel struct {

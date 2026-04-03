@@ -399,7 +399,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Always refresh bg task count on tick so status bar updates immediately
 		// when a bg task completes (even when no progress event is coming)
 		if m.bgTaskCountFn != nil {
-		prev := m.bgTaskCount
+			prev := m.bgTaskCount
 		m.bgTaskCount = m.bgTaskCountFn()
 		// Force re-render when count changes (e.g. task killed in panel)
 		if m.bgTaskCount != prev {
@@ -410,10 +410,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
 		// (two tickCmd() would double the message count every 100ms → CPU explosion).
 		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || m.typing || m.progress != nil {
-		cmds = append(cmds, tickCmd())
+			cmds = append(cmds, tickCmd())
 		}
 		if m.typing || m.progress != nil {
-		m.updateViewportContent()
+			m.updateViewportContent()
 		}
 
 	case cliTempStatusClearMsg:
@@ -508,7 +508,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.toasts) >= 5 {
 			m.toasts = m.toasts[len(m.toasts)-4:]
 		}
-		m.toasts = append(m.toasts, cliToastItem{text: msg.text, icon: msg.icon})
+		m.toasts = append(m.toasts, cliToastItem(msg))
 		if !m.toastTimer {
 			m.toastTimer = true
 			cmds = append(cmds, tea.Tick(3*time.Second, func(time.Time) tea.Msg {

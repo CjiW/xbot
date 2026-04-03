@@ -799,6 +799,7 @@ func TestCLIModelUpdateEnterKeyInputNotReady(t *testing.T) {
 
 func TestCLIModelRenderProgressStatus(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 
 	tests := []struct {
 		phase    string
@@ -829,6 +830,7 @@ func TestCLIModelRenderProgressStatus(t *testing.T) {
 
 func TestCLIModelRenderProgressStatusNil(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 	model.progress = nil
 
 	progressStyle := lipgloss.NewStyle()
@@ -927,6 +929,7 @@ func TestCLIModelRenderProgressBlockEmpty(t *testing.T) {
 
 func TestCLIModelRenderProgressBlockThinking(t *testing.T) {
 	model := newCLIModel()
+	model.locale = GetLocale("en")
 	model.handleResize(80, 24)
 	model.typing = true
 	model.typingStartTime = time.Now()

@@ -399,20 +399,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Always refresh bg task count on tick so status bar updates immediately
 		// when a bg task completes (even when no progress event is coming)
 		if m.bgTaskCountFn != nil {
-			prev := m.bgTaskCount
-			m.bgTaskCount = m.bgTaskCountFn()
-			// Keep ticking while bg tasks are running to detect completion
-			if m.bgTaskCount > 0 {
-				cmds = append(cmds, tickCmd())
-			}
-			// Force re-render when count changes (e.g. task killed in panel)
-			if m.bgTaskCount != prev {
-				m.renderCacheValid = false
-			}
+		prev := m.bgTaskCount
+		m.bgTaskCount = m.bgTaskCountFn()
+		// Force re-render when count changes (e.g. task killed in panel)
+		if m.bgTaskCount != prev {
+			m.renderCacheValid = false
+		}
+		}
+		// Schedule next tick when agent is active or bg tasks are running.
+		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
+		// (two tickCmd() would double the message count every 100ms → CPU explosion).
+		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || m.typing || m.progress != nil {
+		cmds = append(cmds, tickCmd())
 		}
 		if m.typing || m.progress != nil {
-			cmds = append(cmds, tickCmd())
-			m.updateViewportContent()
+		m.updateViewportContent()
 		}
 
 	case cliTempStatusClearMsg:

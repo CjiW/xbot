@@ -35,11 +35,8 @@ type cliTheme struct {
 	Border    string // 边框
 	TitleText string // 标题栏文字
 	// Surface
-	Surface  string // 标题栏/面板背景
-	Overlay  string // 进度框/工具摘要背景
+	Surface  string // 分隔线/标题栏背景
 	Gradient string // 渐变辅助色（分隔线、装饰）
-	// Message
-	UserBubble string // 用户消息气泡背景
 }
 
 var (
@@ -59,9 +56,7 @@ var (
 		Border:        "#3c4043",
 		TitleText:     "#e8eaed",
 		Surface:       "#1e1f2e",
-		Overlay:       "#282a3e",
 		Gradient:      "#667eea",
-		UserBubble:    "#2d2f45",
 	}
 	themeOcean = cliTheme{
 		// Deep ocean blues with cyan highlights — calm, focused
@@ -79,9 +74,7 @@ var (
 		Border:        "#1e4976",
 		TitleText:     "#ecfeff",
 		Surface:       "#0c1929",
-		Overlay:       "#132f4c",
 		Gradient:      "#0ea5e9",
-		UserBubble:    "#112240",
 	}
 	themeForest = cliTheme{
 		// Nordic forest greens — organic, natural, soothing
@@ -99,9 +92,7 @@ var (
 		Border:        "#1a4d2e",
 		TitleText:     "#dcfce7",
 		Surface:       "#0a1f14",
-		Overlay:       "#14332a",
 		Gradient:      "#059669",
-		UserBubble:    "#162e20",
 	}
 	themeSunset = cliTheme{
 		// Warm amber/coral palette — energetic, inviting
@@ -119,9 +110,7 @@ var (
 		Border:        "#44403c",
 		TitleText:     "#fffbeb",
 		Surface:       "#1c1917",
-		Overlay:       "#292524",
 		Gradient:      "#ea580c",
-		UserBubble:    "#2a2218",
 	}
 	themeRose = cliTheme{
 		// Soft pink/magenta — modern, playful, expressive
@@ -139,9 +128,7 @@ var (
 		Border:        "#4a2040",
 		TitleText:     "#fdf2f8",
 		Surface:       "#1a0f1e",
-		Overlay:       "#2a1a30",
 		Gradient:      "#db2777",
-		UserBubble:    "#2a1528",
 	}
 	themeMono = cliTheme{
 		// Clean grayscale with red accent — minimalist, hacker aesthetic
@@ -159,9 +146,7 @@ var (
 		Border:        "#30363d",
 		TitleText:     "#f0f6fc",
 		Surface:       "#161b22",
-		Overlay:       "#21262d",
 		Gradient:      "#484f58",
-		UserBubble:    "#1c2128",
 	}
 	themeNord = cliTheme{
 		// Nord color scheme — arctic, blue-ish, muted elegance
@@ -179,9 +164,7 @@ var (
 		Border:        "#434c5e",
 		TitleText:     "#eceff4",
 		Surface:       "#2e3440",
-		Overlay:       "#3b4252",
 		Gradient:      "#5e81ac",
-		UserBubble:    "#353b49",
 	}
 	themeDracula = cliTheme{
 		// Dracula — iconic dark purple theme, high contrast
@@ -199,9 +182,7 @@ var (
 		Border:        "#44475a",
 		TitleText:     "#f8f8f2",
 		Surface:       "#1e1f29",
-		Overlay:       "#282a36",
 		Gradient:      "#6272a4",
-		UserBubble:    "#2d2f3d",
 	}
 
 	themeRegistry = map[string]*cliTheme{
@@ -324,8 +305,6 @@ type cliStyles struct {
 	// --- key hints (footer) ---
 	KeyLabelSt lipgloss.Style
 	KeyDescSt  lipgloss.Style
-	// --- message bubble ---
-	UserBubble lipgloss.Style
 
 	// toolDisplayInfo
 }
@@ -344,15 +323,15 @@ func buildStyles(width int) cliStyles {
 		ThinkingSt:       lipgloss.NewStyle().Foreground(c(t.Warning)).Padding(0, 1),
 		Progress:         lipgloss.NewStyle().Foreground(c(t.Warning)),
 		Tool:             lipgloss.NewStyle().Foreground(c(t.Info)),
-		Separator:        lipgloss.NewStyle().Foreground(c(t.Gradient)),
-		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1).Width(width - 4),
+		Separator:        lipgloss.NewStyle().Foreground(c(t.Gradient)).Background(c(t.Surface)),
+		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(width - 4),
 		Time:             lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
 		UserLabel:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		AssistLabel:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
 		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
 		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
-		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
+		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
 		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
@@ -367,21 +346,21 @@ func buildStyles(width int) cliStyles {
 		ProgressElapsed:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
 		ProgressIndent:   lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
 		ProgressDim:      lipgloss.NewStyle().Faint(true),
-		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1).Width(cw),
+		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
 		Accent:           lipgloss.NewStyle().Foreground(c(t.Accent)),
 		TextMutedSt:      lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		WarningSt:        lipgloss.NewStyle().Foreground(c(t.Warning)),
 		InfoSt:           lipgloss.NewStyle().Foreground(c(t.Info)),
 		TokenUsage:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
-		Footer:           lipgloss.NewStyle().Background(c(t.Surface)).Foreground(c(t.TextSecondary)),
-		ToastBg:          lipgloss.NewStyle().Background(c(t.Surface)).Width(width).Padding(0, 1),
+		Footer:           lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		ToastBg:          lipgloss.NewStyle().Width(width).Padding(0, 1),
 		ToastText:        lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
 		TodoLabel:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		TodoFilled:       lipgloss.NewStyle().Foreground(c(t.BarFilled)),
 		TodoEmpty:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
 		TodoDone:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		TodoPending:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).BorderBackground(c(t.Surface)).Padding(0, 1),
+		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
 		PanelHeader:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		PanelCursor:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		PanelDesc:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
@@ -396,7 +375,7 @@ func buildStyles(width int) cliStyles {
 		HelpDesc:         lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		HelpGroup:        lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		HelpKey:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
-		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Padding(0, 1).Width(cw),
+		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
 		// --- completions ---
 		CompSelected:   lipgloss.NewStyle().Bold(true).Underline(true).Foreground(c(t.Success)),
 		CompItem:       lipgloss.NewStyle().Foreground(c(t.Success)),
@@ -419,7 +398,7 @@ func buildStyles(width int) cliStyles {
 		// --- settings panel ---
 		SettingsDivider: lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
 		SettingsCat:     lipgloss.NewStyle().Foreground(c(t.AccentAlt)).Bold(true),
-		SettingsSelBg:   lipgloss.NewStyle().Background(c(t.BarEmpty)),
+		SettingsSelBg:   lipgloss.NewStyle(),
 		// --- textarea presets ---
 		TACursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
 		TABase:           lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
@@ -438,8 +417,6 @@ func buildStyles(width int) cliStyles {
 		// --- key hints (footer) ---
 		KeyLabelSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
 		KeyDescSt:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		// --- message bubble ---
-		UserBubble: lipgloss.NewStyle().Background(c(t.UserBubble)).Padding(0, 1),
 	}
 }
 

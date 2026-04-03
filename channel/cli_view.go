@@ -64,12 +64,7 @@ func (m *cliModel) View() string {
 	toolStyle := m.styles.Tool
 
 	// ========== 渲染各部分 ==========
-	// 分隔线：精致的点线交替图案，比纯虚线更有设计感
-	sepWidth := m.width
-	if sepWidth < 4 {
-		sepWidth = 4
-	}
-	separator := m.styles.Separator.Render("┈" + strings.Repeat("┈", sepWidth-2))
+	separator := ""
 
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)

@@ -110,7 +110,6 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 			LLMClient:        llmClient,
 			Model:            model,
 			ArchiveAll:       true,
-			MemoryWindow:     a.memoryWindow,
 		})
 		if !result.OK {
 			return &bus.OutboundMessage{

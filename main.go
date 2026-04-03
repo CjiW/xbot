@@ -125,7 +125,6 @@ func main() {
 		Model:                cfg.LLM.Model,
 		MaxIterations:        cfg.Agent.MaxIterations,
 		MaxConcurrency:       cfg.Agent.MaxConcurrency,
-		MemoryWindow:         cfg.Agent.MemoryWindow,
 		DBPath:               dbPath,
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
 		AgentsDir:            filepath.Join(xbotDir, "agents"),
@@ -275,10 +274,9 @@ func main() {
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
 				Host:             cfg.Web.Host,
-				Port:             cfg.Web.Port,
-				DB:               webDB,
-				MemoryWindow:     cfg.Agent.MemoryWindow,
-				FeishuLinkSecret: cfg.Feishu.AppSecret,
+					Port:             cfg.Web.Port,
+					DB:               webDB,
+					FeishuLinkSecret: cfg.Feishu.AppSecret,
 				InviteOnly:       cfg.Web.InviteOnly,
 				PublicURL:        cfg.Sandbox.PublicURL,
 			}, msgBus)

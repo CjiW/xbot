@@ -45,7 +45,6 @@ type MemorizeInput struct {
 	LLMClient        llm.LLM           // 用于压缩/分析的 LLM
 	Model            string            // 模型名称
 	ArchiveAll       bool              // true=归档所有消息（/new 命令）
-	MemoryWindow     int               // 上下文窗口大小
 }
 
 // MemorizeResult 记忆写入的结果。

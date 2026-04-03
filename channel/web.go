@@ -47,7 +47,6 @@ type WebChannelConfig struct {
 	Host             string
 	Port             int
 	DB               *sql.DB // SQLite DB handle for user management and history
-	MemoryWindow     int
 	FeishuLinkSecret string // admin token for /api/auth/feishu-link endpoint
 	InviteOnly       bool   // 禁止自主注册，新账号只能由 admin 创建
 	PublicURL        string // 对外访问地址，用于生成 Runner 连接命令

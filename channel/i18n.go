@@ -139,7 +139,7 @@ func init() {
 		PanelEditHint:        "Enter 确认 | Esc 取消",
 		PanelComboHint:       "↑↓ 选择 | Enter 确认 | 输入自定义值 | Esc 取消",
 		PanelNavHint:         "↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭",
-		PanelEditPlaceholder: "输入新值...",
+		PanelEditPlaceholder: "> 输入新值...",
 		PanelToggleOn:        "● 开启",
 		PanelToggleOff:       "○ 关闭",
 
@@ -236,13 +236,13 @@ func init() {
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
 		IdlePlaceholders: []string{
 			"Enter 发送 · Ctrl+J 换行 · /help",
-			"输入 /model 切换模型",
+			"/model 切换模型",
 			"Ctrl+K 删除 · Ctrl+O 工具",
 			"@filepath 附加文件",
 			"^ 打开后台任务面板",
-			"输入 /compact 压缩上下文",
-			"输入 /settings 打开设置",
-			"输入 /new 开始新会话",
+			"/compact 压缩上下文",
+			"/settings 打开设置",
+			"/new 开始新会话",
 		},
 
 		// --- J. Settings schema ---
@@ -325,10 +325,6 @@ func init() {
 			{
 				Key: "max_concurrency", Label: "最大并发数", Description: "同时处理的最大请求数（默认 3）",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
-			},
-			{
-				Key: "memory_window", Label: "记忆窗口", Description: "LLM 上下文中保留的最大历史消息数（默认 50）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
 			},
 			{
 				Key: "max_context_tokens", Label: "最大上下文 Token", Description: "上下文最大 token 数（默认 200000）",
@@ -575,10 +571,6 @@ func init() {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
 			},
 			{
-				Key: "memory_window", Label: "Memory Window", Description: "Max history messages in LLM context (default 50)",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
-			},
-			{
 				Key: "max_context_tokens", Label: "Max Context Tokens", Description: "Max context token count (default 200000)",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
@@ -635,7 +627,7 @@ func init() {
 		PanelEditHint:        "Enter 確認 | Esc キャンセル",
 		PanelComboHint:       "↑↓ 選択 | Enter 確認 | カスタム入力 | Esc キャンセル",
 		PanelNavHint:         "↑↓ 移動 · Enter 編集/切替 · Ctrl+S 保存 · Esc 閉じる",
-		PanelEditPlaceholder: "新しい値を入力...",
+		PanelEditPlaceholder: "> 新しい値を入力...",
 		PanelToggleOn:        "● オン",
 		PanelToggleOff:       "○ オフ",
 
@@ -821,14 +813,6 @@ func init() {
 			{
 				Key: "max_concurrency", Label: "最大同時実行数", Description: "同時に処理する最大リクエスト数（デフォルト 3）",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "3",
-			},
-			{
-				Key: "memory_window", Label: "メモリウィンドウ", Description: "LLM コンテキストに保持する最大履歴メッセージ数（デフォルト 50）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "50",
-			},
-			{
-				Key: "max_context_tokens", Label: "最大コンテキスト Token", Description: "コンテキストの最大トークン数（デフォルト 200000）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",

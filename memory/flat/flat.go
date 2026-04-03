@@ -53,32 +53,12 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	messages := input.Messages
 	lastConsolidated := input.LastConsolidated
 	archiveAll := input.ArchiveAll
-	memoryWindow := input.MemoryWindow
-
-	var oldMessages []llm.ChatMessage
-	keepCount := 0
-
-	if archiveAll {
-		oldMessages = messages
-		log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation (archive_all): %d messages", len(messages))
-	} else {
-		keepCount = memoryWindow / 2
-		if len(messages) <= keepCount {
-			return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
-		}
-		if len(messages)-lastConsolidated <= 0 {
-			return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
-		}
-		end := len(messages) - keepCount
-		if lastConsolidated >= end {
-			return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
-		}
-		oldMessages = messages[lastConsolidated:end]
-		if len(oldMessages) == 0 {
-			return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
-		}
-		log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation: %d to consolidate, %d keep", len(oldMessages), keepCount)
+	if !archiveAll {
+		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
 	}
+
+	oldMessages := messages
+	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation (archive_all): %d messages", len(messages))
 
 	// Format old messages as text
 	var lines []string
@@ -107,12 +87,8 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	}
 
 	if len(lines) == 0 {
-		newLC := 0
-		if !archiveAll {
-			newLC = len(messages) - keepCount
+			return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
 		}
-		return memory.MemorizeResult{NewLastConsolidated: newLC, OK: true}, nil
-	}
 
 	currentMemory, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
 	if err != nil {
@@ -165,12 +141,8 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		}
 	}
 
-	newLC := 0
-	if !archiveAll {
-		newLC = len(messages) - keepCount
-	}
-	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation done: lastConsolidated=%d", newLC)
-	return memory.MemorizeResult{NewLastConsolidated: newLC, OK: true}, nil
+	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation done: lastConsolidated=0")
+	return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
 }
 
 // Close 释放资源（FlatMemory 无需清理）。

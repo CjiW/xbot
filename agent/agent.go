@@ -196,7 +196,6 @@ type Agent struct {
 	multiSession     *session.MultiTenantSession // Multi-tenant session manager
 	tools            *tools.Registry
 	maxIterations    int
-	memoryWindow     int
 	purgeOldMessages bool
 
 	skills             *SkillStore
@@ -377,7 +376,6 @@ type Config struct {
 	Model          string
 	MaxIterations  int           // 单次对话最大工具调用迭代次数
 	MaxConcurrency int           // 最大并发会话处理数（默认 3）
-	MemoryWindow   int           // 上下文窗口大小（保留的历史消息数）
 	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
 	SkillsDir      string        // Skills 目录
 	AgentsDir      string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
@@ -418,7 +416,7 @@ type Config struct {
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
 	// 压缩后清理旧消息
-	PurgeOldMessages bool // 压缩后自动删除超出 MemoryWindow 的旧消息（默认 false）
+	PurgeOldMessages bool // 压缩后自动删除旧消息（默认 false）
 
 	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
 	OffloadDir string
@@ -638,12 +636,9 @@ func New(cfg Config) *Agent {
 		cfg.MaxIterations = 100
 	}
 	if cfg.MaxConcurrency <= 0 {
-		cfg.MaxConcurrency = 3
-	}
-	if cfg.MemoryWindow == 0 {
-		cfg.MemoryWindow = 50
-	}
-	if cfg.WorkDir == "" {
+			cfg.MaxConcurrency = 3
+		}
+		if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
 	}
 	if cfg.SkillsDir == "" {
@@ -691,7 +686,6 @@ func New(cfg Config) *Agent {
 		tools:            registry,
 		maxIterations:    cfg.MaxIterations,
 		maxConcurrency:   cfg.MaxConcurrency,
-		memoryWindow:     cfg.MemoryWindow,
 		purgeOldMessages: cfg.PurgeOldMessages,
 
 		skills:             skillStore,
@@ -767,7 +761,6 @@ func (a *Agent) SetContextMode(mode string) error {
 }
 
 func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
-func (a *Agent) SetMemoryWindow(n int)   { a.memoryWindow = n }
 func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
 func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerConfig.MaxContextTokens = n
@@ -1672,7 +1665,7 @@ func (a *Agent) persistCronMessages(ctx context.Context, msg bus.InboundMessage,
 // buildPrompt 构建完整的 LLM 消息列表（共用逻辑：processMessage 和 handlePromptQuery 都调用）。
 // 使用 Agent 持有的 pipeline 实例，通过 MessageContext.Extra 传递动态数据。
 func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantSession *session.TenantSession) ([]llm.ChatMessage, error) {
-	history, err := tenantSession.GetHistory(a.memoryWindow)
+	history, err := tenantSession.GetMessages()
 	if err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to get history, using empty history")
 		history = nil

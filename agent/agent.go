@@ -37,6 +37,15 @@ func assertNoSystemPersist(m llm.ChatMessage) {
 	}
 }
 
+// copyMessages creates a shallow copy of the messages slice so that
+// in-place modifications (e.g. stripSystemReminder) don't mutate the
+// original cfg.Messages backing array or session storage.
+func copyMessages(msgs []llm.ChatMessage) []llm.ChatMessage {
+	cpy := make([]llm.ChatMessage, len(msgs))
+	copy(cpy, msgs)
+	return cpy
+}
+
 // formatErrorForUser 将错误格式化为对用户可见的提示
 func formatErrorForUser(err error) string {
 	if err == nil {
@@ -1436,11 +1445,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 				ids = append(ids, t.ID)
 			}
 			bgInfo := fmt.Sprintf("\n[System] Running background tasks: %s", strings.Join(ids, ", "))
-			// Append to last user message in the slice (same backing array as cfg.Messages)
+			// Append bgInfo to a copy of the last user message to avoid mutating session data
 			for i := len(messages) - 1; i >= 0; i-- {
 				if messages[i].Role == "user" {
-					messages[i].Content += bgInfo
-					break
+				msg := messages[i] // shallow copy
+				msg.Content += bgInfo
+				messages[i] = msg
+				break
 				}
 			}
 		}

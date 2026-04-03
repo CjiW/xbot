@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"xbot/bus"
+	log "xbot/logger"
 )
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,7 @@ func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
 	select {
 	case c.msgCh <- msg:
 	default:
+		log.WithField("channel", "non-interactive").Warn("Message dropped: buffer full")
 	}
 	return "", nil
 }

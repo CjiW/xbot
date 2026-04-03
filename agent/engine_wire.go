@@ -476,21 +476,17 @@ func (a *Agent) buildSubAgentRunConfig(
 		sysPrompt += hint
 	}
 
-	// Phase 5: Inject user language preference into SubAgent prompt
+	// Phase 5: Inject user language preference into SubAgent prompt.
+	// Only inject if not already present in the inherited system prompt
+	// (LanguageMiddleware on the main Agent already adds it via SystemParts).
 	if a.settingsSvc != nil {
 		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-			if lang, ok := vals["language"]; ok && lang != "" {
-				switch lang {
-				case "en":
-					sysPrompt += "\n## Language\n\nAlways respond in English."
-				case "zh":
-					sysPrompt += "\n## Language\n\n始终使用中文回复。"
-				case "ja":
-					sysPrompt += "\n## Language\n\n常に日本語で返答してください。"
-				default:
-					sysPrompt += fmt.Sprintf("\n## Language\n\nAlways respond in %s.", lang)
-				}
+		if lang, ok := vals["language"]; ok && lang != "" {
+			// Check if language instruction is already in sysPrompt (inherited from main Agent)
+			if !strings.Contains(sysPrompt, "## Language") {
+			sysPrompt += "\n" + LanguageInstruction(lang)
 			}
+		}
 		}
 	}
 

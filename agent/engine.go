@@ -326,6 +326,8 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// 清理历史消息中残留的 system-reminder（修复前持久化的旧数据）。
 	// system-reminder 仅用于 LLM 上下文引导，不应作为 content 的一部分存在。
+	// 先 copy slice 避免修改原始 cfg.Messages 的底层数组。
+	messages = copyMessages(messages)
 	for i := range messages {
 		if messages[i].Role != "system" && strings.Contains(messages[i].Content, "<system-reminder>") {
 			messages[i].Content = stripSystemReminder(messages[i].Content)
@@ -333,8 +335,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	}
 
 	var lastPromptTokens int64        // 上一次 LLM 返回的精确 prompt token 数
-			var lastCompletionTokens int64    // 上一次 LLM 返回的精确 completion token 数
-			var lastMsgCountAtLLMCall int     // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
+	var lastCompletionTokens int64    // 上一次 LLM 返回的精确 completion token 数
+	var lastMsgCountAtLLMCall int     // 上一次 LLM 调用时 messages 的长度（用于增量追踪）
+	var compressAttempts int          // 压缩尝试计数器（防止压缩循环）
+	var lastCompressIter int          // 上一次成功压缩时的 compressAttempts 值
 	var disableCompressRetry bool
 
 	// 初始化 ContextEditor 的消息引用（允许 context_edit 工具直接修改 messages）
@@ -459,6 +463,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// --- 自动压缩 ---
 	maybeCompress := func() {
+		compressAttempts++
 		cm := cfg.ContextManager
 		if cm == nil || len(messages) <= 3 {
 			return
@@ -490,10 +495,10 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-				log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
-				} else {
-				totalTokens += int64(deltaTokens)
-				}
+						log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+					} else {
+						totalTokens += int64(deltaTokens)
+					}
 			}
 		} else {
 			// First iteration: no API value yet, fall back to full local estimation
@@ -503,7 +508,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
 		}
 
-		needCompress := len(messages) > 3 && shouldCompact(int(totalTokens), maxTokens)
+		needCompress := len(messages) > 3 && shouldCompact(int(totalTokens), maxTokens) && (lastCompressIter == 0 || compressAttempts-lastCompressIter >= 5)
 		log.Ctx(ctx).WithFields(log.Fields{
 			"total_tokens":      totalTokens,
 			"max_tokens":        maxTokens,
@@ -513,14 +518,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			"base_prompt_tokens": lastPromptTokens,
 			"completion_tokens": lastCompletionTokens,
 			"source":            func() string {
-				if lastPromptTokens == 0 {
-				return "local"
-				}
-				if len(messages) > lastMsgCountAtLLMCall+1 {
-				return "api+completion+tool_delta"
-				}
-				return "api+completion"
-			}(),
+					if lastPromptTokens == 0 {
+						return "local"
+					}
+					if len(messages) > lastMsgCountAtLLMCall+1 {
+						return "api+completion+tool_delta"
+					}
+					return "api+completion"
+				}(),
 		}).Info("maybeCompress check")
 
 		if needCompress {
@@ -557,6 +562,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			lastPromptTokens = 0
 			lastCompletionTokens = 0
 			lastMsgCountAtLLMCall = len(messages)
+			lastCompressIter = compressAttempts
 
 			newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, cfg.Model)
 			// Restore phase after compression completes
@@ -631,37 +637,6 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				messages = syncMessages(masked)
 				GlobalMetrics.MaskingEvents.Add(1)
 				GlobalMetrics.MaskedItems.Add(int64(count))
-
-				// Sync masked messages back to session so that subsequent
-				// buildPrompt calls (e.g. /context, next Run) see the same
-				// reduced content instead of the original large tool results.
-				if cfg.Session != nil {
-					if err := cfg.Session.Clear(); err != nil {
-						log.Ctx(ctx).WithError(err).Warn("Failed to clear session for masking sync")
-					} else {
-						allOk := true
-						for _, msg := range messages {
-						if msg.Role == "system" {
-							continue
-						}
-						assertNoSystemPersist(msg)
-						if err := cfg.Session.AddMessage(msg); err != nil {
-							log.Ctx(ctx).WithError(err).Error("Partial write during masking sync, session may be corrupted")
-							allOk = false
-							break
-						}
-						}
-						if allOk {
-						lastPersistedCount = len(messages)
-						log.Ctx(ctx).WithFields(log.Fields{
-							"masked_count":     count,
-							"persisted_msgs":   len(messages),
-							"tokens_before":    totalTokens,
-							"tokens_after_est": "see_next_iteration",
-						}).Info("Masking synced to session")
-						}
-					}
-				}
 
 				if autoNotify {
 					progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
@@ -964,7 +939,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				return buildOutput(&bus.OutboundMessage{
 					Channel:   cfg.Channel,
 					ChatID:    cfg.ChatID,
-					Content:   "⚠️ 模型上下文窗口已满，无法继续处理。请使用 /new 开始新对话。",
+					Content:   "⚠️ Context window exceeded. Use /new to start a new conversation.",
 					ToolsUsed: toolsUsed,
 				})
 			}

@@ -132,6 +132,20 @@ type SettingsReader interface {
 	GetSettings(channelName, senderID string) (map[string]string, error)
 }
 
+// LanguageInstruction returns an LLM language instruction for the given language code.
+func LanguageInstruction(lang string) string {
+	switch lang {
+	case "en":
+		return "## Language\n\nAlways respond in English."
+	case "zh":
+		return "## Language\n\n始终使用中文回复。"
+	case "ja":
+		return "## Language\n\n常に日本語で返答してください。"
+	default:
+		return fmt.Sprintf("## Language\n\nAlways respond in %s.", lang)
+	}
+}
+
 func NewLanguageMiddleware(svc SettingsReader) *LanguageMiddleware {
 	return &LanguageMiddleware{settingsSvc: svc}
 }
@@ -152,18 +166,7 @@ func (m *LanguageMiddleware) Process(mc *MessageContext) error {
 		return nil
 	}
 	// Map language code to a natural instruction for the LLM
-	var instruction string
-	switch lang {
-	case "en":
-		instruction = "## Language\n\nAlways respond in English."
-	case "zh":
-		instruction = "## Language\n\n始终使用中文回复。"
-	case "ja":
-		instruction = "## Language\n\n常に日本語で返答してください。"
-	default:
-		instruction = fmt.Sprintf("## Language\n\nAlways respond in %s.", lang)
-	}
-	mc.SystemParts["32_language"] = instruction
+	mc.SystemParts["32_language"] = LanguageInstruction(lang)
 	return nil
 }
 

@@ -28,7 +28,7 @@ func (s *SettingsService) SetChannelFinder(fn func(string) (channel.Channel, boo
 // GetSettings retrieves all settings for a user on a specific channel.
 func (s *SettingsService) GetSettings(channelName, senderID string) (map[string]string, error) {
 	if s == nil || s.store == nil {
-		return nil, nil
+		return nil, fmt.Errorf("settings service not initialized")
 	}
 	return s.store.Get(channelName, senderID)
 }
@@ -36,7 +36,7 @@ func (s *SettingsService) GetSettings(channelName, senderID string) (map[string]
 // SetSetting sets a single setting value.
 func (s *SettingsService) SetSetting(channelName, senderID, key, value string) error {
 	if s == nil || s.store == nil {
-		return nil
+		return fmt.Errorf("settings service not initialized")
 	}
 	return s.store.Set(channelName, senderID, key, value)
 }

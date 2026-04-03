@@ -62,6 +62,7 @@ func (s *UserTokenUsageService) RecordUsage(conn *sql.DB, senderID string, input
 }
 
 // GetUsage retrieves cumulative token usage for a user.
+// Thread-safe: db.Conn() acquires RLock via DB.mu (SQLite single-connection mode).
 func (s *UserTokenUsageService) GetUsage(senderID string) (*UserTokenUsage, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`

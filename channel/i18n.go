@@ -22,6 +22,8 @@ type UILocale struct {
 	PanelComboHint       string // "Up/Down select | Enter confirm | Type custom | Esc cancel"
 	PanelNavHint         string // "↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"
 	PanelEditPlaceholder string // "输入新值..."
+	PanelToggleOn        string // "● ON"
+	PanelToggleOff       string // "○ OFF"
 
 	PanelOther     string // "Other: "
 	PanelSubmit    string // "Submit →"
@@ -32,11 +34,13 @@ type UILocale struct {
 	PanelAskNewline string // "Ctrl+J newline"
 	PanelAskCancel string // "Esc cancel"
 
-	BgTasksTitle  string // "Background Tasks"
-	BgTasksHelp   string // "↑↓ navigate  Enter view log  Del kill  Esc close"
-	BgTasksEmpty  string // "No background tasks running"
-	BgTaskLogTitle string // "Log: %s — %s"
-	BgTaskLogHelp  string // "↑↓ scroll  Esc back"
+	BgTasksTitle        string // "Background Tasks"
+	BgTasksHelp         string // "↑↓ navigate  Enter view log  Del kill  Esc close"
+	BgTasksEmpty        string // "No background tasks running"
+	BgTasksUnsupported  string // "Background tasks not supported."
+	BgTaskLogTitle      string // "Log: %s — %s"
+	BgTaskLogHelp       string // "↑↓ scroll  Esc back"
+	BgTaskLogMore       string // "... %d more lines (↑↓ scroll)"
 
 	PanelOmitted string // "... %d lines omitted (narrow terminal) ..."
 
@@ -50,6 +54,7 @@ type UILocale struct {
 	StatusDone             string // "done"
 	NewContentHint         string // "v new content"
 	BgTaskRunning          string // "[bg: %d task%s running -- ^ to manage]"
+	TabNoMatch             string // "[Tab] no matching files"
 
 	// --- D. Temp status ---
 	WaitingOperation   string // "... waiting for previous operation to complete..."
@@ -57,9 +62,12 @@ type UILocale struct {
 	SearchNoMatch      string // "[search] "%s" 未找到匹配"
 	KillFailed         string // "Kill failed: %s"
 
-	// --- E. Help commands ---
-	HelpCmds []HelpCmdEntry
-	HelpKeys []HelpKeyEntry
+	// --- E. Help ---
+	HelpTitle         string // "xbot Help"
+	HelpCommandsTitle string // " Commands "
+	HelpShortcutsTitle string // " Shortcuts "
+	HelpCmds          []HelpCmdEntry
+	HelpKeys          []HelpKeyEntry
 
 	// --- F. Confirm dialog ---
 	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
@@ -68,7 +76,27 @@ type UILocale struct {
 	SplashDesc    string // "AI-powered terminal agent"
 	SplashLoading string // "  %s  initializing..."
 
-	// --- H. Settings schema ---
+	// --- H. Footer keys ---
+	FooterScroll   string // "scroll"
+	FooterBack     string // "back"
+	FooterNavigate string // "navigate"
+	FooterLog      string // "log"
+	FooterKill     string // "kill"
+	FooterClose    string // "close"
+	FooterCancel   string // "cancel"
+	FooterDelete   string // "delete"
+	FooterCommands string // "commands"
+	FooterComplete string // "complete"
+	FooterBgTasks  string // "bg tasks"
+	FooterNewline  string // "newline"
+	FooterSelect   string // "select"
+	FooterManage   string // "manage"
+
+	// --- I. Dynamic arrays ---
+	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
+	IdlePlaceholders []string // rotating hints for empty input
+
+	// --- J. Settings schema ---
 	SetupSchema    []SettingDefinition
 	SettingsSchema []SettingDefinition
 }
@@ -113,6 +141,8 @@ func init() {
 		PanelComboHint:       "↑↓ 选择 | Enter 确认 | 输入自定义值 | Esc 取消",
 		PanelNavHint:         "↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭",
 		PanelEditPlaceholder: "输入新值...",
+		PanelToggleOn:        "● 开启",
+		PanelToggleOff:       "○ 关闭",
 
 		PanelOther:     "其他: ",
 		PanelSubmit:    "提交 →",
@@ -125,9 +155,11 @@ func init() {
 
 		BgTasksTitle:   "后台任务",
 		BgTasksHelp:    "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
-		BgTasksEmpty:   "没有正在运行的后台任务",
-		BgTaskLogTitle: "日志: %s — %s",
-		BgTaskLogHelp:  "↑↓ 滚动  Esc 返回",
+		BgTasksEmpty:        "没有正在运行的后台任务",
+		BgTasksUnsupported:  "不支持后台任务。",
+		BgTaskLogTitle:      "日志: %s — %s",
+		BgTaskLogHelp:       "↑↓ 滚动  Esc 返回",
+		BgTaskLogMore:       "... 还有 %d 行（↑↓ 滚动）",
 
 		PanelOmitted: "  ... %d 行已省略（终端过窄） ...",
 
@@ -141,6 +173,7 @@ func init() {
 		StatusDone:            "完成",
 		NewContentHint:        "↓ 新内容",
 		BgTaskRunning:         "[后台: %d 任务运行中 -- ^ 管理]",
+		TabNoMatch:            "[Tab] 无匹配文件",
 
 		// --- D. Temp status ---
 		WaitingOperation:   "... 等待上一个操作完成...",
@@ -149,6 +182,9 @@ func init() {
 		KillFailed:         "终止失败: %s",
 
 		// --- E. Help commands ---
+		HelpTitle:          "xbot 帮助",
+		HelpCommandsTitle:  " 命令 ",
+		HelpShortcutsTitle: " 快捷键 ",
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "取消当前操作"},
 			{Cmd: "/clear", Desc: "清空聊天记录"},
@@ -180,7 +216,36 @@ func init() {
 		SplashDesc:    "AI 驱动的终端助手",
 		SplashLoading: "  %s  初始化中...",
 
-		// --- H. Settings schema ---
+		// --- H. Footer keys ---
+		FooterScroll:   "滚动",
+		FooterBack:     "返回",
+		FooterNavigate: "导航",
+		FooterLog:      "日志",
+		FooterKill:     "终止",
+		FooterClose:    "关闭",
+		FooterCancel:   "取消",
+		FooterDelete:   "删除",
+		FooterCommands: "命令",
+		FooterComplete: "补全",
+		FooterBgTasks:  "后台任务",
+		FooterNewline:  "换行",
+		FooterSelect:   "选择",
+		FooterManage:   "管理",
+
+		// --- I. Dynamic arrays ---
+		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
+		IdlePlaceholders: []string{
+			"Enter 发送 · Ctrl+J 换行 · /help",
+			"输入 /model 切换模型",
+			"Ctrl+K 删除 · Ctrl+O 工具",
+			"@filepath 附加文件",
+			"^ 打开后台任务面板",
+			"输入 /compact 压缩上下文",
+			"输入 /settings 打开设置",
+			"输入 /new 开始新会话",
+		},
+
+		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
 			{
 				Key: "llm_provider", Label: "LLM 提供商", Description: "选择 LLM 服务提供商",
@@ -323,6 +388,8 @@ func init() {
 		PanelComboHint:       "Up/Down select | Enter confirm | Type custom | Esc cancel",
 		PanelNavHint:         "↑↓ navigate · Enter edit/toggle · Ctrl+S save · Esc close",
 		PanelEditPlaceholder: "Enter new value...",
+		PanelToggleOn:        "● ON",
+		PanelToggleOff:       "○ OFF",
 
 		PanelOther:     "Other: ",
 		PanelSubmit:    "Submit →",
@@ -335,9 +402,11 @@ func init() {
 
 		BgTasksTitle:   "Background Tasks",
 		BgTasksHelp:    "↑↓ navigate  Enter view log  Del kill  Esc close",
-		BgTasksEmpty:   "No background tasks running",
-		BgTaskLogTitle: "Log: %s — %s",
-		BgTaskLogHelp:  "↑↓ scroll  Esc back",
+		BgTasksEmpty:        "No background tasks running",
+		BgTasksUnsupported:  "Background tasks not supported.",
+		BgTaskLogTitle:      "Log: %s — %s",
+		BgTaskLogHelp:       "↑↓ scroll  Esc back",
+		BgTaskLogMore:       "... %d more lines (↑↓ scroll)",
 
 		PanelOmitted: "  ... %d lines omitted (narrow terminal) ...",
 
@@ -351,6 +420,7 @@ func init() {
 		StatusDone:            "done",
 		NewContentHint:        "v new content",
 		BgTaskRunning:         "[bg: %d task%s running -- ^ to manage]",
+		TabNoMatch:            "[Tab] no matching files",
 
 		// --- D. Temp status ---
 		WaitingOperation:   "... waiting for previous operation to complete...",
@@ -359,6 +429,9 @@ func init() {
 		KillFailed:         "Kill failed: %s",
 
 		// --- E. Help commands ---
+		HelpTitle:          "xbot Help",
+		HelpCommandsTitle:  " Commands ",
+		HelpShortcutsTitle: " Shortcuts ",
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "Cancel current operation"},
 			{Cmd: "/clear", Desc: "Clear chat history"},
@@ -390,7 +463,36 @@ func init() {
 		SplashDesc:    "AI-powered terminal agent",
 		SplashLoading: "  %s  initializing...",
 
-		// --- H. Settings schema ---
+		// --- H. Footer keys ---
+		FooterScroll:   "scroll",
+		FooterBack:     "back",
+		FooterNavigate: "navigate",
+		FooterLog:      "log",
+		FooterKill:     "kill",
+		FooterClose:    "close",
+		FooterCancel:   "cancel",
+		FooterDelete:   "delete",
+		FooterCommands: "commands",
+		FooterComplete: "complete",
+		FooterBgTasks:  "bg tasks",
+		FooterNewline:  "newline",
+		FooterSelect:   "select",
+		FooterManage:   "manage",
+
+		// --- I. Dynamic arrays ---
+		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
+		IdlePlaceholders: []string{
+			"Enter send · Ctrl+J newline · /help",
+			"Type /model to switch model",
+			"Ctrl+K delete | Ctrl+O tools",
+			"@filepath to attach files",
+			"^ open background tasks panel",
+			"Type /compact to compress context",
+			"Type /settings to configure",
+			"Type /new to start fresh session",
+		},
+
+		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
 			{
 				Key: "llm_provider", Label: "LLM Provider", Description: "Select LLM service provider",
@@ -533,6 +635,8 @@ func init() {
 		PanelComboHint:       "↑↓ 選択 | Enter 確認 | カスタム入力 | Esc キャンセル",
 		PanelNavHint:         "↑↓ 移動 · Enter 編集/切替 · Ctrl+S 保存 · Esc 閉じる",
 		PanelEditPlaceholder: "新しい値を入力...",
+		PanelToggleOn:        "● オン",
+		PanelToggleOff:       "○ オフ",
 
 		PanelOther:     "その他: ",
 		PanelSubmit:    "送信 →",
@@ -545,9 +649,11 @@ func init() {
 
 		BgTasksTitle:   "バックグラウンドタスク",
 		BgTasksHelp:    "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
-		BgTasksEmpty:   "実行中のバックグラウンドタスクはありません",
-		BgTaskLogTitle: "ログ: %s — %s",
-		BgTaskLogHelp:  "↑↓ スクロール  Esc 戻る",
+		BgTasksEmpty:        "実行中のバックグラウンドタスクはありません",
+		BgTasksUnsupported:  "バックグラウンドタスクは未対応です。",
+		BgTaskLogTitle:      "ログ: %s — %s",
+		BgTaskLogHelp:       "↑↓ スクロール  Esc 戻る",
+		BgTaskLogMore:       "... あと %d 行（↑↓ スクロール）",
 
 		PanelOmitted: "  ... %d 行省略（端末が狭すぎます） ...",
 
@@ -561,6 +667,7 @@ func init() {
 		StatusDone:            "完了",
 		NewContentHint:        "↓ 新着",
 		BgTaskRunning:         "[bg: %d タスク実行中 -- ^ 管理]",
+		TabNoMatch:            "[Tab] 一致するファイルなし",
 
 		// --- D. Temp status ---
 		WaitingOperation:   "... 前の操作の完了を待機中...",
@@ -569,6 +676,9 @@ func init() {
 		KillFailed:         "終了に失敗: %s",
 
 		// --- E. Help commands ---
+		HelpTitle:          "xbot ヘルプ",
+		HelpCommandsTitle:  " コマンド ",
+		HelpShortcutsTitle: " ショートカット ",
 		HelpCmds: []HelpCmdEntry{
 			{Cmd: "/cancel", Desc: "現在の操作をキャンセル"},
 			{Cmd: "/clear", Desc: "チャット履歴をクリア"},
@@ -600,7 +710,36 @@ func init() {
 		SplashDesc:    "AI駆動のターミナルエージェント",
 		SplashLoading: "  %s  初期化中...",
 
-		// --- H. Settings schema ---
+		// --- H. Footer keys ---
+		FooterScroll:   "スクロール",
+		FooterBack:     "戻る",
+		FooterNavigate: "移動",
+		FooterLog:      "ログ",
+		FooterKill:     "終了",
+		FooterClose:    "閉じる",
+		FooterCancel:   "キャンセル",
+		FooterDelete:   "削除",
+		FooterCommands: "コマンド",
+		FooterComplete: "補完",
+		FooterBgTasks:  "バックグラウンド",
+		FooterNewline:  "改行",
+		FooterSelect:   "選択",
+		FooterManage:   "管理",
+
+		// --- I. Dynamic arrays ---
+		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},
+		IdlePlaceholders: []string{
+			"Enter 送信 · Ctrl+J 改行 · /help",
+			"/model でモデル切替",
+			"Ctrl+K 削除 · Ctrl+O ツール",
+			"@filepath でファイル添付",
+			"^ バックグラウンドタスクパネル",
+			"/compact でコンテキスト圧縮",
+			"/settings で設定",
+			"/new で新規セッション",
+		},
+
+		// --- J. Settings schema ---
 		SetupSchema: []SettingDefinition{
 			{
 				Key: "llm_provider", Label: "LLM プロバイダー", Description: "LLM サービスプロバイダーを選択",

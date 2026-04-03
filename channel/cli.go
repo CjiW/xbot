@@ -1138,42 +1138,24 @@ var (
 // errorKeywords — system 消息中的错误检测关键词
 var errorKeywords = []string{"error", "failed", "失败", "错误", "exception", "denied", "refused"}
 
-// thinkingVerbs — 类似 Claude Code 的随机动词
-var thinkingVerbs = []string{
-	"Thinking",
-	"Reasoning",
-	"Analyzing",
-	"Considering",
-	"Evaluating",
-	"Reflecting",
-	"Processing",
-	"Contemplating",
-}
-
 // pickVerb returns a deterministic verb based on tick count (changes every ~2s at 10 FPS).
-func pickVerb(ticks int64) string {
-	// Change verb every 20 ticks (2 seconds)
-	idx := (ticks / 20) % int64(len(thinkingVerbs))
-	return thinkingVerbs[idx]
-}
-
-// idlePlaceholders — 就绪态下轮换显示的输入提示，帮助用户发现隐藏功能。
-// 每 ~5 秒自动切换（通过 cliTickMsg 驱动）。
-var idlePlaceholders = []string{
-	"Enter send · Ctrl+J newline · /help",
-	"Type /model to switch model",
-	"Ctrl+K delete | Ctrl+O tools",
-	"@filepath to attach files",
-	"^ open background tasks panel",
-	"Type /compact to compress context",
-	"Type /settings to configure",
-	"Type /new to start fresh session",
+func (m *cliModel) pickVerb(ticks int64) string {
+	verbs := m.locale.ThinkingVerbs
+	if len(verbs) == 0 {
+		return "Thinking"
+	}
+	idx := (ticks / 20) % int64(len(verbs))
+	return verbs[idx]
 }
 
 // pickIdlePlaceholder 根据时间返回轮换的 placeholder（每 5 秒切换）
-func pickIdlePlaceholder() string {
-	idx := int(time.Now().Unix()/5) % len(idlePlaceholders)
-	return idlePlaceholders[idx]
+func (m *cliModel) pickIdlePlaceholder() string {
+	placeholders := m.locale.IdlePlaceholders
+	if len(placeholders) == 0 {
+		return ""
+	}
+	idx := int(time.Now().Unix()/5) % len(placeholders)
+	return placeholders[idx]
 }
 
 // tickerTickMsg 是 ticker 定时 tick 消息
@@ -1349,7 +1331,7 @@ type cliMessage struct {
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
 	ta := textarea.New()
-	ta.Placeholder = "Enter send · Ctrl+J newline · /help"
+	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
 	ta.Focus()
 	ta.SetWidth(76)
 	ta.SetHeight(3)
@@ -1864,7 +1846,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Always refresh bg task count on tick so status bar updates immediately
 		// when a bg task completes (even when no progress event is coming)
 		if m.bgTaskCountFn != nil {
+			prev := m.bgTaskCount
 			m.bgTaskCount = m.bgTaskCountFn()
+			// Keep ticking while bg tasks are running to detect completion
+			if m.bgTaskCount > 0 {
+				cmds = append(cmds, tickCmd())
+			}
+			// Force re-render when count changes (e.g. task killed in panel)
+			if m.bgTaskCount != prev {
+				m.renderCacheValid = false
+			}
 		}
 		if m.typing || m.progress != nil {
 			cmds = append(cmds, tickCmd())
@@ -2164,7 +2155,7 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 				Render("[Tab] " + strings.Join(parts, " · "))
 		} else {
 			hint = m.styles.TextMutedSt.Padding(0, 1).
-				Render("[Tab] 无匹配文件")
+				Render(m.locale.TabNoMatch)
 		}
 		return
 	}
@@ -2180,7 +2171,7 @@ func (m *cliModel) View() string {
 	}
 
 	if !m.ready {
-		return "\n  初始化中..."
+		return "\n  " + m.locale.SplashLoading
 	}
 
 	// ========== 样式定义 ==========
@@ -2254,7 +2245,7 @@ func (m *cliModel) View() string {
 		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
 		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	} else {
-		m.textarea.Placeholder = pickIdlePlaceholder()
+		m.textarea.Placeholder = m.pickIdlePlaceholder()
 		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	}
 
@@ -2580,25 +2571,25 @@ func (m *cliModel) renderFooter() string {
 		switch m.panelMode {
 		case "bgtasks":
 			if m.panelBgViewing {
-				hints = append(hints, m.keyHint("PgUp/PgDn", "scroll"), m.keyHint("Esc", "back"))
-			} else {
-				hints = append(hints, m.keyHint("↑↓", "navigate"), m.keyHint("Enter", "log"), m.keyHint("Del", "kill"), m.keyHint("Esc", "close"))
-			}
-		default:
-			hints = append(hints, m.keyHint("↑↓", "navigate"), m.keyHint("Enter", "select"), m.keyHint("Esc", "close"))
+				hints = append(hints, m.keyHint("PgUp/PgDn", m.locale.FooterScroll), m.keyHint("Esc", m.locale.FooterBack))
+					} else {
+						hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterLog), m.keyHint("Del", m.locale.FooterKill), m.keyHint("Esc", m.locale.FooterClose))
+					}
+				default:
+					hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterSelect), m.keyHint("Esc", m.locale.FooterClose))
 		}
 	} else if m.typing {
 		// 处理中：显示取消快捷键
-		hints = append(hints, m.ctrlKey("c", "cancel"))
-	} else {
-		// 就绪态：显示核心快捷键
-		if m.textarea.Value() == "" {
-			hints = append(hints, m.ctrlKey("k", "delete"), m.keyHint("/", "commands"), m.keyHint("tab", "complete"))
-			if m.bgTaskCount > 0 {
-				hints = append(hints, m.keyHint("^", "bg tasks"))
-			}
+		hints = append(hints, m.ctrlKey("c", m.locale.FooterCancel))
 		} else {
-			hints = append(hints, m.ctrlKey("j", "newline"), m.keyHint("tab", "complete"), m.ctrlKey("k", "delete"))
+			// 就绪态：显示核心快捷键
+			if m.textarea.Value() == "" {
+				hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
+				if m.bgTaskCount > 0 {
+					hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
+				}
+			} else {
+				hints = append(hints, m.ctrlKey("j", m.locale.FooterNewline), m.keyHint("tab", m.locale.FooterComplete), m.ctrlKey("k", m.locale.FooterDelete))
 		}
 	}
 
@@ -2708,7 +2699,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 		if !hasActive {
 			switch m.progress.Phase {
 			case "thinking":
-				sb.WriteString(" · " + pickVerb(m.ticker.ticks))
+				sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
 			case "compressing":
 				sb.WriteString(" · " + m.locale.StatusCompressing)
 			case "retrying":
@@ -2720,7 +2711,7 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 			}
 		}
 	} else {
-		sb.WriteString(pickVerb(m.ticker.ticks) + "...")
+		sb.WriteString(m.pickVerb(m.ticker.ticks) + "...")
 	}
 
 	// Total elapsed
@@ -3165,7 +3156,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		if m.bgTaskCountFn != nil {
 			count := m.bgTaskCountFn()
 			if count == 0 {
-				m.appendSystem("No background tasks running.")
+				m.appendSystem(m.locale.BgTasksEmpty)
 			} else {
 				// Get full task list from channel
 				ch := m.channel
@@ -3175,7 +3166,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 				}
 			}
 		} else {
-			m.appendSystem("Background tasks not supported.")
+			m.appendSystem(m.locale.BgTasksUnsupported)
 		}
 
 	default:
@@ -3507,7 +3498,7 @@ func (m *cliModel) renderProgressBlock() string {
 			case "thinking":
 				sb.WriteString("  ")
 				sb.WriteString(m.ticker.view())
-				sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
+				sb.WriteString(thinkingStyle.Render(" " + m.pickVerb(m.ticker.ticks) + "..."))
 				sb.WriteString("\n")
 			case "compressing":
 				sb.WriteString("  ")
@@ -3530,7 +3521,7 @@ func (m *cliModel) renderProgressBlock() string {
 	} else if m.typing {
 		sb.WriteString("  ")
 		sb.WriteString(m.ticker.viewFrames(orbitFrames))
-		sb.WriteString(thinkingStyle.Render(" " + pickVerb(m.ticker.ticks) + "..."))
+		sb.WriteString(thinkingStyle.Render(" " + m.pickVerb(m.ticker.ticks) + "..."))
 		sb.WriteString("\n")
 	}
 
@@ -3601,48 +3592,21 @@ func (m *cliModel) renderHelpPanel() string {
 	keyStyle := s.HelpKey
 	panelStyle := s.HelpPanel.Width(contentWidth)
 
-	// 命令列表
-	commands := []struct{ cmd, desc string }{
-		{"/cancel", "取消当前操作"},
-		{"/clear", "清空聊天记录"},
-		{"/compact", "压缩上下文"},
-		{"/model", "切换模型"},
-		{"/models", "列出可用模型"},
-		{"/context", "查看上下文信息"},
-		{"/new", "开始新会话"},
-		{"/settings", "打开设置面板"},
-		{"/setup", "重新运行配置引导"},
-		{"/update", "检查更新"},
-		{"/help", "显示此帮助"},
-	}
-
-	// 快捷键列表
-	shortcuts := []struct{ key, desc string }{
-		{"Enter", "发送消息"},
-		{"Ctrl+C/Esc", "中止/清空"},
-		{"Ctrl+J", "输入框换行"},
-		{"Ctrl+K", "上下文删除"},
-		{"Ctrl+O", "展开/折叠工具"},
-		{"Tab", "命令/路径补全"},
-		{"Home/End", "跳到顶/底部"},
-		{"↑", "后台任务面板"},
-	}
-
 	var sb strings.Builder
-	sb.WriteString(titleStyle.Render("xbot Help"))
+	sb.WriteString(titleStyle.Render(m.locale.HelpTitle))
 	sb.WriteString("\n")
 
-	sb.WriteString(groupStyle.Render(" Commands "))
+	sb.WriteString(groupStyle.Render(m.locale.HelpCommandsTitle))
 	sb.WriteString("\n")
-	for _, c := range commands {
-		sb.WriteString("  " + cmdStyle.Render(c.cmd) + " " + descStyle.Render(c.desc))
+	for _, c := range m.locale.HelpCmds {
+		sb.WriteString("  " + cmdStyle.Render(c.Cmd) + " " + descStyle.Render(c.Desc))
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(groupStyle.Render(" Shortcuts "))
+	sb.WriteString(groupStyle.Render(m.locale.HelpShortcutsTitle))
 	sb.WriteString("\n")
-	for _, s := range shortcuts {
-		sb.WriteString("  " + keyStyle.Render(s.key) + " " + descStyle.Render(s.desc))
+	for _, k := range m.locale.HelpKeys {
+		sb.WriteString("  " + keyStyle.Render(k.Key) + " " + descStyle.Render(k.Desc))
 		sb.WriteString("\n")
 	}
 
@@ -4303,7 +4267,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.panelOnCancel = nil
 	// Pre-create textarea for editing
 	ta := textarea.New()
-	ta.Placeholder = "输入新值..."
+	ta.Placeholder = m.locale.PanelEditPlaceholder
 	ta.SetWidth(m.panelWidth(60))
 	ta.SetHeight(1)
 	ta.CharLimit = 200
@@ -4312,7 +4276,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 
 // openSetupPanel opens the first-run setup wizard as a settings-style panel.
 func (m *cliModel) openSetupPanel() {
-	schema := cliSetupSchema()
+	schema := m.locale.SetupSchema
 	values := make(map[string]string)
 	// Pre-fill defaults from schema
 	for _, def := range schema {
@@ -4378,7 +4342,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelOptSel = make(map[int]map[int]bool)
 	m.panelOptCursor = make(map[int]int)
 	ta := textarea.New()
-	ta.Placeholder = "Type your answer..."
+	ta.Placeholder = m.locale.PanelEditPlaceholder
 	ta.Prompt = "  "
 	applyTAStyles(&ta, &m.styles)
 	ta.CharLimit = 0
@@ -4571,8 +4535,8 @@ func (m *cliModel) viewBgTaskList() string {
 	// §20 使用缓存样式
 	s := &m.styles
 	cursorStyle := s.PanelCursor
-	header := s.PanelHeader.Render("Background Tasks")
-	help := s.PanelDesc.Render("↑↓ navigate  Enter view log  Del kill  Esc close")
+	header := s.PanelHeader.Render(m.locale.BgTasksTitle)
+	help := s.PanelDesc.Render(m.locale.BgTasksHelp)
 
 	var sb strings.Builder
 	sb.WriteString(header)
@@ -4581,7 +4545,7 @@ func (m *cliModel) viewBgTaskList() string {
 	sb.WriteString("\n")
 
 	if len(m.panelBgTasks) == 0 {
-		sb.WriteString(s.PanelEmpty.Render("No background tasks running"))
+		sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
 	} else {
 		for i, task := range m.panelBgTasks {
 			elapsed := time.Since(task.StartedAt).Round(time.Second)
@@ -4637,9 +4601,9 @@ func (m *cliModel) viewBgTaskLog() string {
 		if len(cmd) > 40 {
 			cmd = cmd[:37] + "..."
 		}
-		title = fmt.Sprintf("Log: %s — %s", task.ID, cmd)
+		title = fmt.Sprintf(m.locale.BgTaskLogTitle, task.ID, cmd)
 	}
-	help := s.PanelDesc.Render("↑↓ scroll  Esc back")
+	help := s.PanelDesc.Render(m.locale.BgTaskLogHelp)
 
 	maxLines := 18
 	start := m.panelBgScroll
@@ -4663,7 +4627,7 @@ func (m *cliModel) viewBgTaskLog() string {
 	}
 
 	if end < len(m.panelBgLogLines) {
-		sb.WriteString(s.PanelDesc.Render(fmt.Sprintf("  ... %d more lines (↑↓ scroll)", len(m.panelBgLogLines)-end)))
+		sb.WriteString(s.PanelDesc.Render(fmt.Sprintf(m.locale.BgTaskLogMore, len(m.panelBgLogLines)-end)))
 		sb.WriteString("\n")
 	}
 
@@ -5200,9 +5164,9 @@ func (m *cliModel) viewSettingsPanel() string {
 		switch def.Type {
 		case SettingTypeToggle:
 			if cur == "true" {
-				displayVal = valueStyle.Render("● ON ")
+				displayVal = valueStyle.Render(m.locale.PanelToggleOn)
 			} else {
-				displayVal = valueStyle.Render("○ OFF")
+				displayVal = valueStyle.Render(m.locale.PanelToggleOff)
 			}
 		case SettingTypeSelect:
 			// Find label for current value
@@ -5216,7 +5180,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		case SettingTypeCombo:
 			// Show current value with dropdown hint
 			if cur == "" {
-				displayVal = descStyle.Render("(未设置)")
+				displayVal = descStyle.Render(m.locale.PanelNotSet)
 			} else {
 				displayVal = valueStyle.Render(cur)
 			}
@@ -5225,7 +5189,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 		default:
 			if cur == "" {
-				displayVal = descStyle.Render("(未设置)")
+				displayVal = descStyle.Render(m.locale.PanelNotSet)
 			} else {
 				displayVal = valueStyle.Render(cur)
 			}
@@ -5247,7 +5211,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(editLabel)
 		sb.WriteString(m.panelEditTA.View())
 		sb.WriteString("\n")
-		sb.WriteString(descStyle.Render("  Enter confirm | Esc cancel"))
+		sb.WriteString(descStyle.Render("  " + m.locale.PanelEditHint))
 	} else if m.panelCombo && m.panelCursor < len(m.panelSchema) {
 		def := m.panelSchema[m.panelCursor]
 		sb.WriteString("\n")
@@ -5278,10 +5242,10 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString(descStyle.Render("  Up/Down select | Enter confirm | Type custom | Esc cancel"))
+		sb.WriteString(descStyle.Render("  " + m.locale.PanelComboHint))
 	} else {
 		sb.WriteString("\n")
-		sb.WriteString(hintStyle.Render("  ↑↓ 导航 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 关闭"))
+		sb.WriteString(hintStyle.Render("  " + m.locale.PanelNavHint))
 	}
 
 	return m.styles.PanelBox.Render(sb.String())
@@ -5359,7 +5323,7 @@ func (m *cliModel) viewAskUserPanel() string {
 			}
 
 			// Other input (single-line)
-			otherLabel := "Other: "
+			otherLabel := m.locale.PanelOther
 			if cursor == numOpts {
 				sb.WriteString(cursorStyle.Render("▸ ") + otherLabel)
 			} else {
@@ -5369,7 +5333,7 @@ func (m *cliModel) viewAskUserPanel() string {
 			sb.WriteString("\n")
 
 			// Submit button
-			submitLabel := "Submit →"
+			submitLabel := m.locale.PanelSubmit
 			if cursor == numOpts+1 {
 				sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
 			} else {
@@ -5387,17 +5351,17 @@ func (m *cliModel) viewAskUserPanel() string {
 	sb.WriteString("\n")
 	hints := []string{}
 	if len(m.panelItems) > 1 {
-		hints = append(hints, "←→/Tab 切换问题")
+		hints = append(hints, m.locale.PanelAskNav)
 	}
 	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
 		item := m.panelItems[m.panelTab]
 		if len(item.Options) > 0 {
-			hints = append(hints, "Space/Enter toggle", "v Other input", "Enter submit")
+			hints = append(hints, m.locale.PanelAskToggle, m.locale.PanelAskOther, m.locale.PanelAskSubmit)
 		} else {
-			hints = append(hints, "Ctrl+J newline")
+			hints = append(hints, m.locale.PanelAskNewline)
 		}
 	}
-	hints = append(hints, "Esc cancel")
+		hints = append(hints, m.locale.PanelAskCancel)
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return m.styles.PanelBox.Render(sb.String())
@@ -5405,205 +5369,11 @@ func (m *cliModel) viewAskUserPanel() string {
 
 // --- SettingsCapability implementation for CLIChannel ---
 
-// cliSetupSchema returns the settings definitions for the first-run setup wizard.
-// Covers core fields needed to get started; other settings available via /settings.
-func cliSetupSchema() []SettingDefinition {
-	return []SettingDefinition{
-		{
-			Key:         "llm_provider",
-			Label:       "LLM 提供商",
-			Description: "选择 LLM 服务提供商",
-			Type:        SettingTypeSelect,
-			Category:    "LLM",
-			Options: []SettingOption{
-				{Label: "OpenAI (及兼容 API)", Value: "openai"},
-				{Label: "Anthropic (Claude)", Value: "anthropic"},
-			},
-			DefaultValue: "openai",
-		},
-		{
-			Key:         "llm_api_key",
-			Label:       "API Key",
-			Description: "LLM 服务的 API Key（必填）",
-			Type:        SettingTypeText,
-			Category:    "LLM",
-		},
-		{
-			Key:          "llm_base_url",
-			Label:        "Base URL",
-			Description:  "LLM API 地址",
-			Type:         SettingTypeText,
-			Category:     "LLM",
-			DefaultValue: "https://api.openai.com/v1",
-		},
-		{
-			Key:          "llm_model",
-			Label:        "模型名称",
-			Description:  "选择或输入 LLM 模型名称",
-			Type:         SettingTypeText,
-			Category:     "LLM",
-			DefaultValue: "gpt-4o",
-		},
-		{
-			Key:         "tavily_api_key",
-			Label:       "Tavily API Key",
-			Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
-			Type:        SettingTypeText,
-			Category:    "LLM",
-		},
-		{
-			Key:         "sandbox_mode",
-			Label:       "沙箱模式",
-			Description: "命令执行隔离方式",
-			Type:        SettingTypeSelect,
-			Category:    "环境",
-			Options: []SettingOption{
-				{Label: "none — 直接执行（推荐）", Value: "none"},
-				{Label: "docker — 容器隔离", Value: "docker"},
-			},
-			DefaultValue: "none",
-		},
-		{
-			Key:         "memory_provider",
-			Label:       "记忆模式",
-			Description: "记忆系统实现方式",
-			Type:        SettingTypeSelect,
-			Category:    "环境",
-			Options: []SettingOption{
-				{Label: "flat — 全量注入（推荐）", Value: "flat"},
-				{Label: "letta — 分层记忆", Value: "letta"},
-			},
-			DefaultValue: "flat",
-		},
-		{
-			Key:         "theme",
-			Label:       "配色方案",
-			Description: "CLI 界面配色",
-			Type:        SettingTypeSelect,
-			Category:    "外观",
-			Options: []SettingOption{
-				{Label: "Midnight（默认）", Value: "midnight"},
-				{Label: "Ocean", Value: "ocean"},
-				{Label: "Forest", Value: "forest"},
-				{Label: "Sunset", Value: "sunset"},
-				{Label: "Rose", Value: "rose"},
-				{Label: "Mono", Value: "mono"},
-			},
-			DefaultValue: "midnight",
-		},
-	}
-}
-
-// cliSettingsSchema returns the settings definitions for CLI channel.
-func cliSettingsSchema() []SettingDefinition {
-	return []SettingDefinition{
-		{
-			Key:         "llm_model",
-			Label:       "LLM 模型",
-			Description: "选择或输入 LLM 模型名称",
-			Type:        SettingTypeCombo,
-			Category:    "LLM",
-		},
-		{
-			Key:         "llm_base_url",
-			Label:       "LLM Base URL",
-			Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
-			Type:        SettingTypeText,
-			Category:    "LLM",
-		},
-		{
-			Key:         "context_mode",
-			Label:       "上下文模式",
-			Description: "控制上下文管理策略",
-			Type:        SettingTypeSelect,
-			Category:    "Agent",
-			Options: []SettingOption{
-				{Label: "自动（默认）", Value: "auto"},
-				{Label: "手动压缩", Value: "manual"},
-				{Label: "不压缩", Value: "none"},
-			},
-			DefaultValue: "auto",
-		},
-		{
-			Key:          "max_iterations",
-			Label:        "最大迭代次数",
-			Description:  "单次对话最大工具调用迭代次数（默认 100）",
-			Type:         SettingTypeNumber,
-			Category:     "Agent",
-			DefaultValue: "100",
-		},
-		{
-			Key:          "max_concurrency",
-			Label:        "最大并发数",
-			Description:  "同时处理的最大请求数（默认 3）",
-			Type:         SettingTypeNumber,
-			Category:     "Agent",
-			DefaultValue: "3",
-		},
-		{
-			Key:          "memory_window",
-			Label:        "记忆窗口",
-			Description:  "LLM 上下文中保留的最大历史消息数（默认 50）",
-			Type:         SettingTypeNumber,
-			Category:     "Agent",
-			DefaultValue: "50",
-		},
-		{
-			Key:          "max_context_tokens",
-			Label:        "最大上下文 Token",
-			Description:  "上下文最大 token 数（默认 200000）",
-			Type:         SettingTypeNumber,
-			Category:     "Agent",
-			DefaultValue: "200000",
-		},
-		{
-			Key:         "enable_auto_compress",
-			Label:       "自动压缩",
-			Description: "上下文过长时自动压缩（默认开启）",
-			Type:        SettingTypeSelect,
-			Category:    "Agent",
-			Options: []SettingOption{
-				{Label: "开启", Value: "true"},
-				{Label: "关闭", Value: "false"},
-			},
-			DefaultValue: "true",
-		},
-		{
-				Key:         "language",
-				Label:       "语言",
-				Description: "Agent 回复使用的语言",
-				Type:        SettingTypeSelect,
-				Category:    "Agent",
-				Options: []SettingOption{
-					{Label: "跟随 Prompt（默认）", Value: ""},
-					{Label: "English", Value: "en"},
-					{Label: "中文", Value: "zh"},
-					{Label: "日本語", Value: "ja"},
-				},
-				DefaultValue: "",
-			},
-			{
-				Key:         "theme",
-				Label:       "配色",
-				Description: "CLI 界面配色方案",
-				Type:        SettingTypeSelect,
-				Category:    "外观",
-			Options: []SettingOption{
-				{Label: "Midnight（默认）", Value: "midnight"},
-				{Label: "Ocean", Value: "ocean"},
-				{Label: "Forest", Value: "forest"},
-				{Label: "Sunset", Value: "sunset"},
-				{Label: "Rose", Value: "rose"},
-				{Label: "Mono", Value: "mono"},
-			},
-			DefaultValue: "midnight",
-		},
-	}
-}
 
 // SettingsSchema returns the settings definitions for CLI channel.
 func (c *CLIChannel) SettingsSchema() []SettingDefinition {
-	return cliSettingsSchema()
+	loc := GetLocale(currentLocaleLang)
+	return loc.SettingsSchema
 }
 
 // HandleSettingSubmit processes a setting value submission from the CLI channel.

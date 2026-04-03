@@ -3088,15 +3088,15 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/update":
 		if m.checkingUpdate {
-		m.appendSystem("正在检查更新...")
+			m.appendSystem("正在检查更新...")
 		} else {
-		m.checkingUpdate = true
-		m.updateNotice = nil
-		if m.channel != nil {
-			m.channel.CheckUpdateAsync()
-		}
-		m.appendSystem("正在检查更新...")
-		m.updateViewportContent()
+			m.checkingUpdate = true
+			m.updateNotice = nil
+			if m.channel != nil {
+				m.channel.CheckUpdateAsync()
+			}
+			m.appendSystem("正在检查更新...")
+			m.updateViewportContent()
 		}
 
 	case "/quit", "/exit":
@@ -3109,7 +3109,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
 		if m.msgBus != nil {
-		m.msgBus.Inbound <- m.newInbound("/compact", nil)
+			m.msgBus.Inbound <- m.newInbound("/compact", nil)
 		}
 
 	// --- 透传命令（发送到 agent） ---
@@ -4785,10 +4785,8 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 					}
 					return true, m, nil
 				}
-				// No options: fall through to edit mode
-					m.panelEdit = true
-					m.panelEditTA = m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
-					return true, m, nil
+				// No options: fall through to default edit mode
+				fallthrough
 				default:
 						// Enter edit mode for text/number/textarea/combo(fallback)
 						m.panelEdit = true

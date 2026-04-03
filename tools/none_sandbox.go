@@ -86,17 +86,18 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
-			// CommandContext only kills the main process. Kill the entire group
-			// to clean up any child processes.
-			killProcessGroup(cmd.Process)
 		} else if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = -1
 			result.TimedOut = true
-			killProcessGroup(cmd.Process)
 		} else {
+			killProcessGroup(cmd.Process) // clean up on unexpected errors too
 			return nil, err
 		}
 	}
+
+	// Always kill the process group to clean up any orphaned children
+	// (e.g. "go run" leaves compiled binary running after parent exits).
+	killProcessGroup(cmd.Process)
 
 	return result, nil
 }

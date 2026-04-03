@@ -1392,16 +1392,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Ctrl+C must always cancel the agent — never swallow it
 		if key.Type == tea.KeyCtrlC && m.typing {
 			m.closePanel()
-			if m.msgBus != nil {
-				m.msgBus.Inbound <- m.newInbound("/cancel", nil)
-			}
-			m.messages = append(m.messages, cliMessage{
-			role:      "system",
-			content:   "已发送取消请求",
-			timestamp: time.Now(),
-			dirty:     true,
-			})
-			m.updateViewportContent()
+			m.sendCancel()
 			return m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		handled, newModel, cmd := m.updatePanel(key)
@@ -1492,16 +1483,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
 			if m.typing {
-				if m.msgBus != nil {
-					m.msgBus.Inbound <- m.newInbound("/cancel", nil)
-				}
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "已发送取消请求",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
-				m.updateViewportContent()
+				m.sendCancel()
 				return m, tea.Batch(cmds...)
 			}
 			// 非处理状态：清空输入
@@ -1804,30 +1786,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateNotice = msg.info
 			if msg.info.HasUpdate {
 				content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   content,
-					timestamp: time.Now(),
-					dirty:     true,
-				})
+				m.appendSystem(content)
 				m.updateViewportContent()
 			} else {
 				content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   content,
-					timestamp: time.Now(),
-					dirty:     true,
-				})
+				m.appendSystem(content)
 				m.updateViewportContent()
 			}
 		} else {
-			m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "更新检查失败（网络超时或无法连接 GitHub API）",
-				timestamp: time.Now(),
-				dirty:     true,
-			})
+			m.appendSystem("更新检查失败（网络超时或无法连接 GitHub API）")
 			m.updateViewportContent()
 		}
 
@@ -2841,6 +2808,25 @@ func (m *cliModel) newInbound(content string, metadata map[string]string) bus.In
 	}
 }
 
+// appendSystem adds a system message to the message history and marks it as dirty.
+func (m *cliModel) appendSystem(content string) {
+	m.messages = append(m.messages, cliMessage{
+		role:      "system",
+		content:   content,
+		timestamp: time.Now(),
+		dirty:     true,
+	})
+}
+
+// sendCancel sends a cancel request to the agent and adds a system notification.
+func (m *cliModel) sendCancel() {
+	if m.msgBus != nil {
+		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
+	}
+	m.appendSystem("已发送取消请求")
+	m.updateViewportContent()
+}
+
 // sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
 func (m *cliModel) sendToAgent(content string) {
 	m.messages = append(m.messages, cliMessage{
@@ -2951,14 +2937,9 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	// --- 本地命令 ---
 	case "/cancel":
 		if m.msgBus != nil {
-			m.msgBus.Inbound <- m.newInbound("/cancel", nil)
+		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 		}
-		m.messages = append(m.messages, cliMessage{
-			role:      "system",
-			content:   "已发送取消请求",
-			timestamp: time.Now(),
-			dirty:     true,
-		})
+		m.appendSystem("已发送取消请求")
 
 	case "/clear":
 		m.messages = make([]cliMessage, 0, cliMsgBufSize)
@@ -2971,12 +2952,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		if m.channel != nil {
 			schema := m.channel.SettingsSchema()
 			if len(schema) == 0 {
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "当前渠道没有可配置的设置项。",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
+				m.appendSystem("当前渠道没有可配置的设置项。")
 				m.updateViewportContent()
 			} else {
 				// Get current values: start from config, overlay with SettingsService
@@ -3036,12 +3012,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 					if model, ok := values["llm_model"]; ok && model != "" {
 						m.channel.UpdateConfig(model, values["llm_base_url"])
 					}
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   "✅ 设置已保存",
-						timestamp: time.Now(),
-						dirty:     true,
-					})
+					m.appendSystem("✅ 设置已保存")
 					m.updateViewportContent()
 				})
 			}
@@ -3052,25 +3023,15 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/update":
 		if m.checkingUpdate {
-			m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "正在检查更新...",
-				timestamp: time.Now(),
-				dirty:     true,
-			})
+		m.appendSystem("正在检查更新...")
 		} else {
-			m.checkingUpdate = true
-			m.updateNotice = nil
-			if m.channel != nil {
-				m.channel.CheckUpdateAsync()
-			}
-			m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "正在检查更新...",
-				timestamp: time.Now(),
-				dirty:     true,
-			})
-			m.updateViewportContent()
+		m.checkingUpdate = true
+		m.updateNotice = nil
+		if m.channel != nil {
+			m.channel.CheckUpdateAsync()
+		}
+		m.appendSystem("正在检查更新...")
+		m.updateViewportContent()
 		}
 
 	case "/quit", "/exit":
@@ -3078,12 +3039,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/help":
 		helpContent := m.renderHelpPanel()
-		m.messages = append(m.messages, cliMessage{
-			role:      "system",
-			content:   helpContent,
-			timestamp: time.Now(),
-			dirty:     true,
-		})
+		m.appendSystem(helpContent)
 
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
@@ -3095,12 +3051,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/model":
 		// /model <name> → /set-model <name>
 		if len(parts) < 2 {
-			m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "用法: /model <模型名>\n使用 /models 查看可用模型",
-				timestamp: time.Now(),
-				dirty:     true,
-			})
+			m.appendSystem("用法: /model <模型名>\n使用 /models 查看可用模型")
 		} else {
 			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
 		}
@@ -3119,32 +3070,17 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		if m.bgTaskCountFn != nil {
 			count := m.bgTaskCountFn()
 			if count == 0 {
-				m.messages = append(m.messages, cliMessage{
-					role:      "system",
-					content:   "No background tasks running.",
-					timestamp: time.Now(),
-					dirty:     true,
-				})
+				m.appendSystem("No background tasks running.")
 			} else {
 				// Get full task list from channel
 				ch := m.channel
 				if ch.bgTaskMgr != nil {
 					tasks := tools.ListBgTasks(ch.bgTaskMgr, ch.bgSessionKey)
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   tasks,
-						timestamp: time.Now(),
-						dirty:     true,
-					})
+					m.appendSystem(tasks)
 				}
 			}
 		} else {
-			m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "Background tasks not supported.",
-				timestamp: time.Now(),
-				dirty:     true,
-			})
+			m.appendSystem("Background tasks not supported.")
 		}
 
 	default:
@@ -3268,23 +3204,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 						ans := answers[key]
 						answerParts = append(answerParts, fmt.Sprintf("  %s → %s", item.Question, ans))
 					}
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   strings.Join(answerParts, "\n"),
-						timestamp: time.Now(),
-						dirty:     true,
-					})
+					m.appendSystem(strings.Join(answerParts, "\n"))
 					m.typing = true
 					m.inputReady = false
 					m.resetProgressState()
 					m.updateViewportContent()
 				}, func() {
-					m.messages = append(m.messages, cliMessage{
-						role:      "system",
-						content:   "已取消提问",
-						timestamp: time.Now(),
-						dirty:     true,
-					})
+					m.appendSystem("已取消提问")
 					m.typing = false
 					m.inputReady = true
 					m.resetProgressState()
@@ -4366,12 +4292,7 @@ func (m *cliModel) openSetupPanel() {
 		if vals["memory_provider"] == "letta" {
 			msg += "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env"
 		}
-		m.messages = append(m.messages, cliMessage{
-			role:      "system",
-			content:   msg,
-			timestamp: time.Now(),
-			dirty:     true,
-		})
+		m.appendSystem(msg)
 		m.updateViewportContent()
 	})
 }

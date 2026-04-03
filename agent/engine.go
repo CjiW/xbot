@@ -525,21 +525,23 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		// - Local estimation only for tool result messages appended after the assistant message
 		// This minimizes reliance on the local tokenizer (which misses reasoning_content, etc.)
 		totalTokens := int64(0)
-		if lastPromptTokens > 0 {
+		if lastPromptTokens > 0 && lastMsgCountAtLLMCall > 0 {
 			totalTokens = lastPromptTokens + lastCompletionTokens
 			// Only estimate tool messages (skip assistant msg at lastMsgCountAtLLMCall,
 			// its tokens are exactly covered by lastCompletionTokens)
-			if lastMsgCountAtLLMCall > 0 && len(messages) > lastMsgCountAtLLMCall+1 {
+			if len(messages) > lastMsgCountAtLLMCall+1 {
 				toolMsgs := messages[lastMsgCountAtLLMCall+1:]
 				deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, cfg.Model)
 				if deltaErr != nil {
-					log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
-				} else {
-					totalTokens += int64(deltaTokens)
-				}
+						log.Ctx(ctx).WithError(deltaErr).Warn("maybeCompress: failed to count tool msg tokens")
+					} else {
+						totalTokens += int64(deltaTokens)
+					}
 			}
 		} else {
-			// First iteration: no API value yet, fall back to full local estimation
+			// No API value yet (first iteration) OR cross-Run recovery where
+			// lastMsgCountAtLLMCall is unknown (reset to 0 each Run).
+			// Fall back to full local estimation to avoid missing delta messages.
 			toolDefs := cfg.Tools.AsDefinitionsForSession(sessionKey)
 			toolTokens, _ := llm.CountToolsTokens(toolDefs, cfg.Model)
 			cachedMsgTokens, _ := llm.CountMessagesTokens(messages, cfg.Model)
@@ -556,7 +558,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			"base_prompt_tokens": lastPromptTokens,
 			"completion_tokens":  lastCompletionTokens,
 			"source": func() string {
-				if lastPromptTokens == 0 {
+				if lastPromptTokens == 0 || lastMsgCountAtLLMCall == 0 {
 					return "local"
 				}
 				if len(messages) > lastMsgCountAtLLMCall+1 {

@@ -317,63 +317,6 @@ func TestCLIModelHandleResizeWithProgress(t *testing.T) {
 	}
 }
 
-func TestCLIModelCalculateProgressHeight(t *testing.T) {
-	model := newCLIModel()
-
-	// No progress
-	if h := model.calculateProgressHeight(); h != 0 {
-		t.Errorf("calculateProgressHeight() with no progress = %d, want 0", h)
-	}
-
-	// With progress — now always returns 0 (progress renders inside viewport)
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "Reading file"},
-			{Name: "grep", Label: "Searching"},
-		},
-		SubAgents: []CLISubAgent{
-			{Role: "reviewer", Status: "running"},
-		},
-		Thinking: "Analyzing code...",
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() = %d, want 0 (progress now renders in viewport)", height)
-	}
-}
-
-func TestCLIModelCalculateProgressHeightOnlyActiveTools(t *testing.T) {
-	model := newCLIModel()
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "Reading file"},
-		},
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() with active tools = %d, want 0", height)
-	}
-}
-
-func TestCLIModelCalculateProgressHeightOnlySubAgents(t *testing.T) {
-	model := newCLIModel()
-	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		SubAgents: []CLISubAgent{
-			{Role: "reviewer", Status: "done"},
-		},
-	}
-
-	height := model.calculateProgressHeight()
-	if height != 0 {
-		t.Errorf("calculateProgressHeight() with subagents = %d, want 0", height)
-	}
-}
-
 func TestCLIModelViewNotReady(t *testing.T) {
 	model := newCLIModel()
 	model.ready = false

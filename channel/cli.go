@@ -1394,12 +1394,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closePanel()
 			if m.msgBus != nil {
 				m.msgBus.Inbound <- m.newInbound("/cancel", nil)
-				}
-				m.messages = append(m.messages, cliMessage{
-				role:      "system",
-				content:   "已发送取消请求",
-				timestamp: time.Now(),
-				dirty:     true,
+			}
+			m.messages = append(m.messages, cliMessage{
+			role:      "system",
+			content:   "已发送取消请求",
+			timestamp: time.Now(),
+			dirty:     true,
 			})
 			m.updateViewportContent()
 			return m, tea.Batch(tickerCmd(), tickCmd())
@@ -3243,7 +3243,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					content := strings.Join(parts, "\n\n")
 					// Send to agent as tool result replacement (not a new user message)
 					if m.msgBus != nil {
-				m.msgBus.Inbound <- m.newInbound(content, map[string]string{"ask_user_answered": "true"})
+						m.msgBus.Inbound <- m.newInbound(content, map[string]string{"ask_user_answered": "true"})
 					}
 					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{

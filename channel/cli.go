@@ -1636,7 +1636,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
-					m.tempStatus = "... waiting for previous operation to complete..."
+					m.tempStatus = m.locale.WaitingOperation
 					return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
 				}
 				return m, nil
@@ -1700,7 +1700,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderCacheValid = false
 				m.updateViewportContent()
 			} else if !m.typing {
-				m.tempStatus = "[!] no messages to delete"
+				m.tempStatus = m.locale.NoMessagesToDelete
 				return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
 			}
 			return m, nil
@@ -1917,16 +1917,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.info != nil {
 			m.updateNotice = msg.info
 			if msg.info.HasUpdate {
-				content := fmt.Sprintf("发现新版本: %s → %s\n升级命令: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash\n%s", msg.info.Current, msg.info.Latest, msg.info.URL)
+				content := fmt.Sprintf(m.locale.UpdateFound, msg.info.Current, msg.info.Latest, msg.info.URL)
 				m.appendSystem(content)
 				m.updateViewportContent()
 			} else {
-				content := fmt.Sprintf("当前版本 %s 已是最新", msg.info.Current)
+				content := fmt.Sprintf(m.locale.UpdateCurrent, msg.info.Current)
 				m.appendSystem(content)
 				m.updateViewportContent()
 			}
 		} else {
-			m.appendSystem("更新检查失败（网络超时或无法连接 GitHub API）")
+			m.appendSystem(m.locale.UpdateFailed)
 			m.updateViewportContent()
 		}
 
@@ -2188,7 +2188,7 @@ func (m *cliModel) View() string {
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
 	titleLeft := m.titleText()
 	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
-	titleRight := "Enter send · Ctrl+J newline · /help"
+	titleRight := m.locale.TitleHint
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
@@ -2238,7 +2238,7 @@ func (m *cliModel) View() string {
 
 	// §9 Ctrl+K 确认模式提示
 	if m.confirmDelete > 0 {
-		warningText := m.styles.WarningBold.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
+		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
 		return fmt.Sprintf(
 			"%s\n%s\n%s\n%s\n%s",
 			titleBar,
@@ -2251,7 +2251,7 @@ func (m *cliModel) View() string {
 
 	// 动态 placeholder：处理中 vs 就绪（就绪态使用轮换提示）
 	if m.typing {
-		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
+		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
 		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	} else {
 		m.textarea.Placeholder = pickIdlePlaceholder()
@@ -2264,13 +2264,13 @@ func (m *cliModel) View() string {
 		// 显示 spinner + 进度信息
 		status = thinkingStatusStyle.Render(m.renderProgressStatus(progressStyle, toolStyle))
 	} else if m.checkingUpdate {
-		status = thinkingStatusStyle.Render("⟳ checking for updates...")
+		status = thinkingStatusStyle.Render(m.locale.CheckingUpdates)
 	} else if completionsHint != "" {
 		// 显示补全候选提示
 		status = completionsHint
 	} else {
 		// 就绪态：显示消息计数 + 当前模型（如果有覆盖）
-		readyParts := []string{"● ready"}
+		readyParts := []string{m.locale.StatusReady}
 		// 消息计数
 		msgCount := len(m.messages)
 		if msgCount > 0 {
@@ -2303,7 +2303,7 @@ func (m *cliModel) View() string {
 	}
 	// 新消息提示：用户上滚且有新内容时显示
 	if m.newContentHint {
-		hint := m.styles.InfoSt.Render("v new content")
+		hint := m.styles.InfoSt.Render(m.locale.NewContentHint)
 		if status != "" {
 			status += "  " + hint
 		} else {
@@ -2313,7 +2313,7 @@ func (m *cliModel) View() string {
 	// Background task indicator
 	if m.bgTaskCount > 0 {
 		bgHint := m.styles.WarningSt.Render(
-			fmt.Sprintf("[bg: %d task%s running -- ^ to manage]", m.bgTaskCount, func() string {
+			fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, func() string {
 				if m.bgTaskCount > 1 {
 					return "s"
 				}
@@ -2526,7 +2526,7 @@ func (m *cliModel) renderSplash() string {
 	lines = append(lines, strings.Repeat(" ", vPad)+versionText)
 
 	// 描述居中
-	descText := descStyle.Render("AI-powered terminal agent")
+	descText := descStyle.Render(m.locale.SplashDesc)
 	dW := lipgloss.Width(descText)
 	dPad := (screenW - dW) / 2
 	if dPad < 0 {
@@ -2539,7 +2539,7 @@ func (m *cliModel) renderSplash() string {
 
 	// 加载动画
 	frame := splashFrames[m.splashFrame%len(splashFrames)]
-	loadingText := loadingStyle.Render("  " + frame + "  initializing...")
+	loadingText := loadingStyle.Render(fmt.Sprintf(m.locale.SplashLoading, frame))
 	lW := lipgloss.Width(loadingText)
 	lPad := (screenW - lW) / 2
 	if lPad < 0 {
@@ -2710,12 +2710,12 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 			case "thinking":
 				sb.WriteString(" · " + pickVerb(m.ticker.ticks))
 			case "compressing":
-				sb.WriteString(" · compressing")
+				sb.WriteString(" · " + m.locale.StatusCompressing)
 			case "retrying":
-				sb.WriteString(" · retrying")
+				sb.WriteString(" · " + m.locale.StatusRetrying)
 			default:
 				if len(m.progress.CompletedTools) > 0 {
-					sb.WriteString(" · done")
+					sb.WriteString(" · " + m.locale.StatusDone)
 				}
 			}
 		}
@@ -2915,7 +2915,7 @@ func (m *cliModel) sendCancel() {
 	if m.msgBus != nil {
 		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 	}
-	m.appendSystem("已发送取消请求")
+	m.appendSystem(m.locale.CancelSent)
 	m.updateViewportContent()
 }
 
@@ -3041,7 +3041,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		if m.channel != nil {
 			schema := m.channel.SettingsSchema()
 			if len(schema) == 0 {
-				m.appendSystem("当前渠道没有可配置的设置项。")
+				m.appendSystem(m.locale.NoSettings)
 				m.updateViewportContent()
 			} else {
 				// Get current values: start from config, overlay with SettingsService
@@ -3107,7 +3107,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 							m.locale = GetLocale(lang)
 							m.renderCacheValid = false
 						}
-					m.appendSystem("✅ 设置已保存")
+					m.appendSystem(m.locale.SettingsSaved)
 					m.updateViewportContent()
 				})
 			}
@@ -3118,14 +3118,14 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 
 	case "/update":
 		if m.checkingUpdate {
-			m.appendSystem("正在检查更新...")
+			m.appendSystem(m.locale.CheckingUpdate)
 		} else {
 			m.checkingUpdate = true
 			m.updateNotice = nil
 			if m.channel != nil {
 				m.channel.CheckUpdateAsync()
 			}
-			m.appendSystem("正在检查更新...")
+			m.appendSystem(m.locale.CheckingUpdate)
 			m.updateViewportContent()
 		}
 
@@ -3146,7 +3146,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 	case "/model":
 		// /model <name> → /set-model <name>
 		if len(parts) < 2 {
-			m.appendSystem("用法: /model <模型名>\n使用 /models 查看可用模型")
+			m.appendSystem(m.locale.ModelUsage)
 		} else {
 			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
 		}
@@ -3305,7 +3305,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					m.resetProgressState()
 					m.updateViewportContent()
 				}, func() {
-					m.appendSystem("已取消提问")
+					m.appendSystem(m.locale.AskCancelled)
 					m.typing = false
 					m.inputReady = true
 					m.resetProgressState()
@@ -3677,7 +3677,7 @@ func (m *cliModel) executeSearch(query string) {
 		m.scrollToSearchMatch()
 	} else {
 		// 未找到，短暂提示后自动退出
-		m.tempStatus = fmt.Sprintf("[search] “%s” 未找到匹配", query)
+		m.tempStatus = fmt.Sprintf(m.locale.SearchNoMatch, query)
 		m.searchActive = false
 		m.searchQuery = ""
 		m.searchMatches = nil
@@ -4347,10 +4347,10 @@ func (m *cliModel) openSetupPanel() {
 				m.locale = GetLocale(lang)
 				m.renderCacheValid = false
 			}
-		msg := "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
-		if vals["memory_provider"] == "letta" {
-			msg += "\n\n[!] letta memory mode requires embedding service:\n  1. Install Ollama: https://ollama.ai\n  2. Pull embedding model: `ollama pull nomic-embed-text`\n  3. Set embedding endpoint in config or env"
-		}
+		msg := m.locale.SetupComplete
+			if vals["memory_provider"] == "letta" {
+				msg += m.locale.SetupLettaNote
+			}
 		m.appendSystem(msg)
 		m.updateViewportContent()
 	})
@@ -4538,7 +4538,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			if task.Status == tools.BgTaskRunning {
 				if m.channel != nil && m.channel.bgTaskMgr != nil {
 					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
-						m.tempStatus = fmt.Sprintf("Kill failed: %s", err)
+						m.tempStatus = fmt.Sprintf(m.locale.KillFailed, err)
 						return true, m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 							return cliTempStatusClearMsg{}
 						})

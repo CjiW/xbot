@@ -1970,29 +1970,34 @@ func (m *cliModel) renderTodoBar() string {
 }
 
 // titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
-// 参考 zsh %~ 提示符：绝对路径 + $HOME → ~ + 过长时截断
+// 参考 zsh %~ 提示符：绝对路径 + $HOME → ~ + 过长时按长度省略
 func (m *cliModel) titleText() string {
 	dir := m.workDir
 	if dir == "" {
 		return " xbot CLI"
 	}
-	// 1. 转绝对路径
+	// 1. 转绝对路径（filepath.Abs 内部已调用 Clean）
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
 	}
-	// 2. 标准化（解析 .. 和 .）
-	abs = filepath.Clean(abs)
-	// 3. $HOME → ~
+	// 2. $HOME → ~
 	if home, err := os.UserHomeDir(); err == nil && abs == home {
 		abs = "~"
-	} else if home != "" && strings.HasPrefix(abs, home+"/") {
+	} else if home != "" && strings.HasPrefix(abs, home+string(os.PathSeparator)) {
 		abs = "~" + abs[len(home):]
 	}
-	// 4. 过长时只保留最后两级（类似 zsh %2~）
-	parts := strings.Split(abs, string(os.PathSeparator))
-	if len(parts) > 4 {
-		abs = filepath.Join(parts[0], "...", filepath.Join(parts[len(parts)-2:]...))
+	// 3. 路径超过 30 字符时：中间各层取首字母，最后一层保留全名
+	if len(abs) > 30 {
+		sep := string(os.PathSeparator)
+		parts := strings.Split(abs, sep)
+		abbr := make([]string, len(parts))
+		abbr[0] = parts[0] // ~ 或根目录保持不变
+		for i := 1; i < len(parts)-1; i++ {
+			abbr[i] = string([]rune(parts[i])[:1])
+		}
+		abbr[len(parts)-1] = parts[len(parts)-1]
+		abs = strings.Join(abbr, "/")
 	}
 	return fmt.Sprintf(" xbot CLI [%s]", abs)
 }

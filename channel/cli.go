@@ -434,6 +434,20 @@ func applyTAStyles(ta *textarea.Model, s *cliStyles) {
 	ta.BlurredStyle.Text = s.TABlurredText
 }
 
+// newPanelTextArea creates a configured textarea for panel editing.
+func (m *cliModel) newPanelTextArea(value string, width, height int) textarea.Model {
+	ta := textarea.New()
+	ta.Prompt = "  "
+	applyTAStyles(&ta, &m.styles)
+	ta.CharLimit = 0
+	ta.SetWidth(m.panelWidth(width))
+	ta.SetHeight(height)
+	ta.SetValue(value)
+	ta.CursorEnd()
+	ta.Focus()
+	return ta
+}
+
 // ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
 // 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
 var themeChangeCh = make(chan struct{}, 1)
@@ -1184,39 +1198,41 @@ type cliSearchPrevMsg struct{} // N: 上一个匹配
 
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
-	viewport        viewport.Model        // 消息显示区
-	textarea        textarea.Model        // 用户输入区
-	ticker          *animTicker           // 进度动画 ticker
+	// --- Core UI ---
+	viewport viewport.Model // 消息显示区
+	textarea textarea.Model // 用户输入区
+	ticker   *animTicker    // 进度动画 ticker
+	width    int            // 终端宽度
+	height   int            // 终端高度
+	styles   cliStyles
+
+	// --- Message state ---
 	messages        []cliMessage          // 消息历史
 	renderer        *glamour.TermRenderer // Markdown 渲染器
-	ready           bool                  // 是否已初始化
-	width           int                   // 终端宽度
-	height          int                   // 终端高度
-	typing          bool                  // agent 是否正在回复
-	msgBus          *bus.MessageBus       // 消息总线引用
 	streamingMsgIdx int                   // 当前流式消息的索引（-1 表示无流式消息）
 	newContentHint  bool                  // 有新内容但用户未在底部（显示 ↓ 提示）
-	tempStatus      string                // 临时状态提示（自动过期）
-	bgTaskCount     int                   // running background tasks (0 = no indicator)
-	bgTaskCountFn   func() int            // callback to get current bg task count (set by channel)
+	ready           bool                  // 是否已初始化
 
-	// 进度信息
+	// --- Agent state ---
+	typing          bool        // agent 是否正在回复
+	typingStartTime time.Time   // 本次处理开始时间
+	inputReady      bool        // 输入就绪状态（agent 回复期间禁止发送）
+	msgBus          *bus.MessageBus // 消息总线引用
+	tempStatus      string      // 临时状态提示（自动过期）
+	shouldQuit      bool        // Smart quit: quit after current operation completes
+
+	// --- Background tasks ---
+	bgTaskCount   int        // running background tasks (0 = no indicator)
+	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
+
+	// --- Progress ---
 	progress          *CLIProgressPayload
 	iterationHistory  []cliIterationSnapshot // 已完成迭代快照
-	typingStartTime   time.Time              // 本次处理开始时间
 	lastSeenIteration int                    // 上次进度事件的迭代号
 
-	// 工作目录（标题栏显示用）
-	workDir string
-
-	// 会话 ID（按工作目录区分）
-	chatID string
-
-	// Smart quit
-	shouldQuit bool // Flag to quit after current operation completes
-
-	// 输入就绪状态（agent 回复期间禁止发送）
-	inputReady bool
+	// --- Session ---
+	workDir string // 工作目录（标题栏显示用）
+	chatID  string // 会话 ID（按工作目录区分）
 
 	// --- §1 增量渲染 ---
 	renderCacheValid bool   // 全局缓存是否有效（resize 后置 false）
@@ -1299,7 +1315,6 @@ type cliModel struct {
 	searchMatchIdx int    // 当前聚焦的匹配索引（-1=无）
 	searchActive   bool   // true=搜索模式激活
 
-	styles  cliStyles
 	channel *CLIChannel // back-reference to owning channel (set during Start)
 }
 
@@ -3095,7 +3110,7 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
 		if m.msgBus != nil {
 		m.msgBus.Inbound <- m.newInbound("/compact", nil)
-			}
+		}
 
 	// --- 透传命令（发送到 agent） ---
 	case "/model":
@@ -3385,7 +3400,7 @@ func (m *cliModel) renderProgressBlock() string {
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
-				pad = 1
+					pad = 1
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
@@ -3417,7 +3432,7 @@ func (m *cliModel) renderProgressBlock() string {
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
-				pad = 1
+					pad = 1
 				}
 				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
@@ -4156,14 +4171,14 @@ func (m *cliModel) fullRebuild() {
 	}
 }
 
-// tickCmd 定时器命令
+// tickCmd returns a command that periodically refreshes viewport during agent processing.
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return cliTickMsg{}
 	})
 }
 
-// tickerCmd returns a cmd that sends tickerTickMsg at ~10 FPS.
+// tickerCmd returns a command that advances the animation ticker frame.
 func tickerCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return tickerTickMsg{}
@@ -4695,17 +4710,8 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 			case tea.KeySpace:
 				m.panelCombo = false
 				// Start typing to filter / enter custom value → switch to edit mode
-					m.panelEdit = true
-					// Re-initialize textarea with proper styles for panel context
-					ta := textarea.New()
-					ta.Prompt = "  "
-					applyTAStyles(&ta, &m.styles)
-					ta.CharLimit = 0
-					ta.SetWidth(m.panelWidth(50))
-					ta.SetHeight(1)
-					ta.SetValue(m.panelValues[def.Key])
-				ta.CursorEnd()
-				ta.Focus()
+				m.panelEdit = true
+				ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
 				var cmd tea.Cmd
 				m.panelEditTA, cmd = ta.Update(msg)
 				return true, m, cmd
@@ -4781,31 +4787,13 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				}
 				// No options: fall through to edit mode
 					m.panelEdit = true
-					ta := textarea.New()
-					ta.Prompt = "  "
-					applyTAStyles(&ta, &m.styles)
-					ta.CharLimit = 0
-					ta.SetWidth(m.panelWidth(50))
-					ta.SetHeight(1)
-					ta.SetValue(m.panelValues[def.Key])
-					ta.CursorEnd()
-					ta.Focus()
-					m.panelEditTA = ta
+					m.panelEditTA = m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
 					return true, m, nil
 				default:
-					// Enter edit mode for text/number/textarea/combo(fallback)
-					m.panelEdit = true
-					ta := textarea.New()
-					ta.Prompt = "  "
-					applyTAStyles(&ta, &m.styles)
-					ta.CharLimit = 0
-				ta.SetWidth(m.panelWidth(50))
-				ta.SetHeight(1)
-				ta.SetValue(m.panelValues[def.Key])
-				ta.CursorEnd()
-				ta.Focus()
-				m.panelEditTA = ta
-				return true, m, nil
+						// Enter edit mode for text/number/textarea/combo(fallback)
+						m.panelEdit = true
+						m.panelEditTA = m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
+						return true, m, nil
 			}
 		}
 		return true, m, nil

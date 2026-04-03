@@ -5172,7 +5172,7 @@ func (m *cliModel) viewSettingsPanel() string {
 	hintStyle := s.PanelHint
 
 	var sb strings.Builder
-	sb.WriteString(s.PanelHeader.Render("⚙ Settings"))
+	sb.WriteString(s.PanelHeader.Render("⚙ " + m.locale.PanelSettingsTitle))
 	sb.WriteString("\n")
 	// 表头下方精致分割线，区分标题与内容
 	sb.WriteString(s.SettingsDivider.Render("┈" + strings.Repeat("┈", 30)))

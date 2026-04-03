@@ -626,17 +626,26 @@ func (m *cliModel) autoExpandInput() {
 	}
 }
 
-// handleResize 处理窗口大小变化
-func (m *cliModel) handleResize(width, height int) {
-	m.width = width
-	m.height = height
-
-	// §20 重建样式缓存
-	m.styles = buildStyles(width)
-
-	// Layout: titleBar(1) + status(1) + footer(1) + inputBox(taHeight+2 border)
+// layoutViewportHeight 计算 viewport 应有的高度，考虑 panel 模式。
+// 正常模式：titleBar(1) + status(1) + footer(1) + inputBox(taHeight+border)
+// Panel 模式：titleBar(1) + panel(border) + panelFooter(1) + toast(~1)
+func (m *cliModel) layoutViewportHeight() int {
+	height := m.height
 	fixedLines := 3 // titleBar + status + footer
-	taBorder := 2   // top + bottom border
+
+	if m.panelMode != "" {
+		// Panel 模式：viewport + panel 共享剩余空间
+		// panelBorder = 2 (top+bottom), panelFooter = 1, toast ≈ 1
+		panelOverhead := 4
+		viewportHeight := (height - fixedLines - panelOverhead) / 2
+		if viewportHeight < 3 {
+			viewportHeight = 3
+		}
+		return viewportHeight
+	}
+
+	// 正常模式
+	taBorder := 2 // top + bottom border
 	reservedLines := fixedLines + taBorder + m.textarea.Height()
 	// §20b 小终端适配：极小窗口下动态缩减布局
 	if height < 12 {
@@ -652,8 +661,28 @@ func (m *cliModel) handleResize(width, height int) {
 	if viewportHeight < 3 {
 		viewportHeight = 3
 	}
+	return viewportHeight
+}
+
+// relayoutViewport 重新计算并设置 viewport 高度（不重建样式缓存）。
+// 用于 panel 打开/关闭时动态调整布局。
+func (m *cliModel) relayoutViewport() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+	m.viewport.SetHeight(m.layoutViewportHeight())
+}
+
+// handleResize 处理窗口大小变化
+func (m *cliModel) handleResize(width, height int) {
+	m.width = width
+	m.height = height
+
+	// §20 重建样式缓存
+	m.styles = buildStyles(width)
+
 	m.viewport.SetWidth(width)
-	m.viewport.SetHeight(viewportHeight)
+	m.viewport.SetHeight(m.layoutViewportHeight())
 
 	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
 	// textarea must match the content width exactly.

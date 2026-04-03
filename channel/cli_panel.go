@@ -16,6 +16,7 @@ import (
 // openSettingsPanel activates the settings panel overlay.
 func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[string]string, onSubmit func(map[string]string)) {
 	m.panelMode = "settings"
+	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 	m.panelCursor = 0
 	m.panelEdit = false
 	m.panelSchema = make([]SettingDefinition, len(schema))
@@ -104,6 +105,7 @@ type askQItem struct {
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
+	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 	m.panelItems = items
 	m.panelTab = 0
 	m.panelOptSel = make(map[int]map[int]bool)
@@ -153,6 +155,8 @@ func (m *cliModel) closePanel() {
 	m.panelBgViewing = false
 	m.panelBgScroll = 0
 	m.panelBgLogLines = nil
+	// 恢复 viewport 到正常模式高度
+	m.relayoutViewport()
 }
 
 // openBgTasksPanel opens the background task management panel.
@@ -161,6 +165,7 @@ func (m *cliModel) openBgTasksPanel() {
 		return
 	}
 	m.panelMode = "bgtasks"
+	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 	m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
@@ -834,15 +839,15 @@ func (m *cliModel) autoExpandAskTA() {
 }
 
 // panelMaxHeight 根据 viewport 高度计算 panel 可用最大行数。
-// Panel 不能超过 viewport 高度，否则内容溢出到标题栏区域。
+// Panel 与 viewport 共享 titleBar 以下的垂直空间，各占约一半。
 func (m *cliModel) panelMaxHeight() int {
-	// viewport.Height 已经减去了 titleBar(1) + separator(1) + status(1) + inputBox(~5) + footer(1)
-	// panel 需要留 2 行给 footer+toast，实际可用 = viewportHeight - 1 (panel border)
-	maxH := m.viewport.Height() - 1
-	if maxH < 8 {
-		maxH = 8 // 最小高度保证
+	// fixedLines: titleBar(1) + status(1) + footer(1) = 3
+	// panelOverhead: panelBorder(2) + panelFooter(1) + toast(~1) = 4
+	panelAvailable := m.height - 3 - 4 - m.viewport.Height()
+	if panelAvailable < 8 {
+		panelAvailable = 8 // 最小高度保证
 	}
-	return maxH
+	return panelAvailable
 }
 
 // clampPanelContent 根据 maxHeight 裁剪 panel 内容行。

@@ -4,21 +4,22 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 
 ## Features
 
-- **Multi-channel** — Message bus architecture with Feishu (WebSocket), QQ (WebSocket), and NapCat (OneBot 11) support
-- **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download
+- **Multi-channel** — Message bus architecture with Feishu (WebSocket), QQ (WebSocket), NapCat (OneBot 11), and CLI (TUI) support
+- **CLI (TUI)** — Beautiful terminal UI with streaming output, Markdown rendering, 6 color schemes, Mermaid diagrams, and interactive setup wizard
+- **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download, context editing
 - **Feishu integration** — Interactive cards, doc/wiki/bitable access, file upload
-- **Skills system** — OpenClaw-style progressive skill loading
-- **Pluggable memory** — Dual-mode: Flat (simple) or Letta (three-tier MemGPT)
+- **Skills system** — OpenClaw-style progressive skill loading with embedded built-in skills (skill-creator, agent-creator)
+- **Pluggable memory** — Dual-mode: Flat (simple, default) or Letta (three-tier MemGPT)
 - **Multi-tenant** — Channel + chatID based isolation
 - **MCP protocol** — Global + user-private config, session-level lazy loading
 - **Workspace isolation** — File ops limited to user workspace, commands run in Linux sandbox
 - **OAuth** — Generic OAuth 2.0 for user-level authorization
-- **SubAgent** — Delegate tasks to sub-agents with predefined roles
-- **Hot-reload prompts** — System prompts as Go templates
+- **SubAgent** — Delegate tasks to sub-agents with predefined roles (explorer, agent-creator, etc.)
+- **Hot-reload prompts** — System prompts as Go templates, embedded defaults with channel-specific overrides
 - **KV-Cache optimized** — Context ordering maximizes LLM cache hits
 - **Encryption** — AES-256-GCM encryption for stored API keys and OAuth tokens
 - **Cron scheduling** — Scheduled tasks via cron expressions and one-shot `at` syntax
-- **Context management** — Auto-compression, topic isolation, configurable token limits
+- **Context management** — Auto-compression, topic isolation, configurable token limits, context editing
 
 ## Architecture
 
@@ -40,7 +41,7 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 ### Core Components
 
 - **bus/** — Inbound/Outbound message channels
-- **channel/** — IM channels (feishu, qq, napcat, web), dispatcher
+- **channel/** — IM channels (feishu, qq, napcat, web, cli), dispatcher
 - **agent/** — Agent loop: LLM → tool calls → response
 - **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry and implementations
@@ -54,11 +55,12 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 - **session/** — Multi-tenant session management
 - **storage/** — SQLite persistence (sessions, memory, tenants)
 - **version/** — Build version info
-- **cmd/** — Subcommands (e.g., sandbox runner)
+- **cmd/** — Subcommands (xbot-cli, sandbox runner)
+- **prompt/** — Embedded default system prompt template
 - **internal/** — Internal packages (runner protocol)
 - **web/** — Web frontend (Vue 3 + TypeScript)
 - **docs/** — Design documents and architecture notes
-- **scripts/** — Development helper scripts
+- **scripts/** — Development helper scripts (install, deploy)
 
 ## Quick Start
 
@@ -264,11 +266,13 @@ Delegate tasks to sub-agents:
 SubAgent(task="...", role="code-reviewer")
 ```
 
-Predefined roles: `code-reviewer`, `explorer`, `tester`, `brainstorm`
+Roles are resolved in priority order: user-private → global → embedded defaults.
 
-Role definitions are stored in `.xbot/agents/`.
+Embedded agents include `explorer` (code exploration and logic analysis). Users can add custom roles in `.xbot/agents/`.
 
 ## Commands
+
+Server-mode slash commands:
 
 | Command | Description |
 |---------|-------------|
@@ -325,7 +329,7 @@ MIT
 
 xbot 提供终端交互界面 (TUI)，适合本地开发调试。
 
-> **平台支持**：目前仅支持 Linux 和 macOS（amd64 / arm64）
+> **平台支持**：仅支持 Linux 和 macOS（amd64 / arm64）
 
 ### 一键安装
 
@@ -343,13 +347,12 @@ INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot
 ### 从源码编译
 
 ```bash
-# 编译
 go build -o xbot-cli ./cmd/xbot-cli
 
-# 首次运行会自动引导配置（provider、API key、模型等）
+# 首次运行会自动打开 TUI 配置引导面板
 ./xbot-cli
 
-# 非交互模式
+# 非交互模式（直接传入提示词）
 ./xbot-cli "hello"
 
 # 管道模式
@@ -361,23 +364,48 @@ echo "explain this" | ./xbot-cli
 | 快捷键 | 功能 |
 |--------|------|
 | `Enter` | 发送消息 |
+| `Ctrl+Enter` / `Ctrl+J` | 换行 |
+| `Tab` | 命令补全（`/` 开头时） |
+| `↑` `↓` | 滚动消息 |
+| `PgUp` `PgDn` | 翻页 |
 | `Esc` | 退出 |
 
 ### 功能特性
 
 - **流式输出** — 实时显示 AI 回复
 - **Markdown 渲染** — 代码高亮、表格、列表
+- **Mermaid 图表** — 自动渲染 Mermaid 代码块为 ASCII 图
 - **进度显示** — 工具执行状态、子 Agent 状态、迭代追踪
 - **美观界面** — 消息气泡、时间戳、状态栏
-- **首次引导** — 自动检测并引导配置 LLM 服务
-- **AskUser** — agent 可主动向用户提问并等待回复
-- **Settings** — 通过 `/settings` 命令可视化查看和修改配置
+- **6 种配色方案** — Midnight、Ocean、Forest、Sunset、Rose、Mono
+- **首次引导** — TUI 交互式配置面板（provider、API key、模型、沙箱等）
+- **AskUser** — agent 可主动向用户提问，CLI 打开交互面板等待回复
+- **Settings** — `/settings` 可视化查看和修改运行时配置，`/setup` 重新引导
 - **内置 Skills/Agents** — skill-creator、agent-creator 等随二进制分发
 - **Flat Memory** — 默认记忆模式，无需 ollama/embedding 服务
+- **Tab 补全** — `/` 开头自动显示命令候选，`!` 高亮提示
+
+### CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `/settings` | 打开设置面板 |
+| `/setup` | 重新运行初始配置引导 |
+| `/update` | 检查并安装最新版本 |
+| `/new` | 开始新会话 |
+| `/clear` | 清屏 |
+| `/compact` | 手动触发上下文压缩 |
+| `/context` | 查看上下文信息 |
+| `/model` | 切换模型 |
+| `/models` | 列出可用模型 |
+| `/cancel` | 取消当前处理 |
+| `/help` | 显示帮助 |
+| `/exit` / `/quit` | 退出 |
+| `!<command>` | 透传命令（跳过 LLM，直接执行） |
 
 ### 配置
 
-首次运行 `xbot-cli` 会自动引导配置。也可以手动编辑 `~/.xbot/config.json`：
+首次运行 `xbot-cli` 会自动打开 TUI 配置面板。也可以手动编辑 `~/.xbot/config.json`：
 
 ```json
 {
@@ -387,6 +415,7 @@ echo "explain this" | ./xbot-cli
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4o"
   },
+  "tavily_api_key": "tvly-xxx",
   "sandbox": {
     "mode": "none"
   },

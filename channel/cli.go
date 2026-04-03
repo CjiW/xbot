@@ -262,6 +262,44 @@ type cliStyles struct {
 	HelpGroup        lipgloss.Style
 	HelpKey          lipgloss.Style
 	HelpPanel        lipgloss.Style
+	// --- completions ---
+	CompSelected     lipgloss.Style
+	CompItem         lipgloss.Style
+	CompHint         lipgloss.Style
+	CompHintBorder   lipgloss.Style
+	// --- view helpers ---
+	LineHint         lipgloss.Style
+	WarningBold      lipgloss.Style
+	PlaceholderSt    lipgloss.Style
+	// --- splash ---
+	VersionSt        lipgloss.Style
+	// --- toast ---
+	ToastIcon        lipgloss.Style
+	// --- message render ---
+	UserDotSep       lipgloss.Style
+	UserHeader       lipgloss.Style
+	UserContent      lipgloss.Style
+	AssistantGuide   lipgloss.Style
+	StreamCursor     lipgloss.Style
+	// --- settings panel ---
+	SettingsDivider  lipgloss.Style
+	SettingsCat      lipgloss.Style
+	SettingsSelBg    lipgloss.Style
+	// --- textarea presets ---
+	TACursor         lipgloss.Style
+	TABase           lipgloss.Style
+	TAPlaceholder    lipgloss.Style
+	TACursorLine     lipgloss.Style
+	TALineNumber     lipgloss.Style
+	TAEndOfBuffer    lipgloss.Style
+	TABlurredCursor  lipgloss.Style
+	TABlurredLineNum lipgloss.Style
+	TABlurredEOB     lipgloss.Style
+	TABlurredText    lipgloss.Style
+	TIPrompt         lipgloss.Style
+	TIText           lipgloss.Style
+	TICursor         lipgloss.Style
+	TIPlaceholder    lipgloss.Style
 }
 
 func buildStyles(width int) cliStyles {
@@ -331,7 +369,59 @@ func buildStyles(width int) cliStyles {
 		HelpGroup:        lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		HelpKey:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
 		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Padding(0, 1).Width(cw),
-	}
+		// --- completions ---
+		CompSelected:     lipgloss.NewStyle().Bold(true).Underline(true).Foreground(c(t.Success)),
+		CompItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
+		CompHint:         lipgloss.NewStyle().Padding(0, 1),
+		CompHintBorder:   lipgloss.NewStyle().Foreground(c(t.Success)).Padding(0, 1),
+		// --- view helpers ---
+		LineHint:         lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
+		WarningBold:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Padding(0, 1),
+		PlaceholderSt:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		// --- splash ---
+		VersionSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		// --- toast ---
+		ToastIcon:        lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
+		// --- message render ---
+		UserDotSep:       lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
+		UserHeader:       lipgloss.NewStyle(),
+		UserContent:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		AssistantGuide:   lipgloss.NewStyle().Foreground(c(t.Accent)),
+		StreamCursor:     lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		// --- settings panel ---
+		SettingsDivider:  lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
+		SettingsCat:      lipgloss.NewStyle().Foreground(c(t.AccentAlt)).Bold(true),
+		SettingsSelBg:    lipgloss.NewStyle().Background(c(t.BarEmpty)),
+		// --- textarea presets ---
+		TACursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
+		TABase:           lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		TAPlaceholder:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		TACursorLine:     lipgloss.NewStyle(),
+		TALineNumber:     lipgloss.NewStyle(),
+		TAEndOfBuffer:    lipgloss.NewStyle(),
+		TABlurredCursor:  lipgloss.NewStyle(),
+		TABlurredLineNum: lipgloss.NewStyle(),
+		TABlurredEOB:     lipgloss.NewStyle(),
+		TABlurredText:    lipgloss.NewStyle(),
+		TIPrompt:         lipgloss.NewStyle(),
+		TIText:           lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		TICursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
+		TIPlaceholder:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		}
+}
+
+// applyTAStyles 将缓存样式应用到 textarea 组件
+func applyTAStyles(ta *textarea.Model, s *cliStyles) {
+	ta.Cursor.Style = s.TACursor
+	ta.FocusedStyle.Base = s.TABase
+	ta.FocusedStyle.Placeholder = s.TAPlaceholder
+	ta.FocusedStyle.CursorLine = s.TACursorLine
+	ta.FocusedStyle.LineNumber = s.TALineNumber
+	ta.FocusedStyle.EndOfBuffer = s.TAEndOfBuffer
+	ta.BlurredStyle.CursorLine = s.TABlurredCursor
+	ta.BlurredStyle.LineNumber = s.TABlurredLineNum
+	ta.BlurredStyle.EndOfBuffer = s.TABlurredEOB
+	ta.BlurredStyle.Text = s.TABlurredText
 }
 
 // ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
@@ -1226,16 +1316,8 @@ func newCLIModel() *cliModel {
 	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.Prompt = "> "
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // no background — let terminal bg show through
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.Text = lipgloss.NewStyle()
+	initStyles := buildStyles(76)
+	applyTAStyles(&ta, &initStyles)
 
 	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
@@ -1374,9 +1456,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// §20 重建样式缓存
 		m.styles = buildStyles(m.width)
 		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
-		m.textarea.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-		m.textarea.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-		m.textarea.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		applyTAStyles(&m.textarea, &m.styles)
 		// 刷新 ticker 颜色
 		m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 		m.renderCacheValid = false
@@ -1980,17 +2060,12 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 			parts := make([]string, len(m.completions))
 			for i, c := range m.completions {
 				if i == m.compIdx {
-					parts[i] = lipgloss.NewStyle().
-						Bold(true).Underline(true).
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
+					parts[i] = m.styles.CompSelected.Render(c)
 				} else {
-					parts[i] = lipgloss.NewStyle().
-						Foreground(lipgloss.Color(currentTheme.Success)).
-						Render(c)
+					parts[i] = m.styles.CompItem.Render(c)
 				}
 			}
-			hint = lipgloss.NewStyle().Padding(0, 1).Render(strings.Join(parts, " · "))
+			hint = m.styles.CompHint.Render(strings.Join(parts, " · "))
 		} else {
 			var matches []string
 			for _, cmd := range cliCommands {
@@ -1999,10 +2074,7 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 				}
 			}
 			if len(matches) > 0 {
-				hint = lipgloss.NewStyle().
-					Foreground(lipgloss.Color(currentTheme.Success)).
-					Padding(0, 1).
-					Render("[Tab] " + strings.Join(matches, " · "))
+				hint = m.styles.CompHintBorder.Render("[Tab] " + strings.Join(matches, " · "))
 			}
 		}
 		return
@@ -2072,11 +2144,7 @@ func (m *cliModel) View() string {
 	if titlePad < 1 {
 		titlePad = 1
 	}
-	titleBar := lipgloss.NewStyle().
-		Background(lipgloss.Color(currentTheme.Border)).
-		Foreground(lipgloss.Color(currentTheme.TitleText)).
-		Bold(true).
-		Width(m.width).
+	titleBar := m.styles.TitleBar.
 		Render(titleLeft + strings.Repeat(" ", titlePad) + titleRight)
 
 		// 输入框样式：根据输入内容动态设置边框颜色
@@ -2084,29 +2152,19 @@ func (m *cliModel) View() string {
 	inputValue := strings.TrimSpace(m.textarea.Value())
 	borderColor, completionsHint := m.renderCompletionsHint(inputValue)
 
-	inputBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(m.width - 4)
+	inputBoxStyle := m.styles.InputBox.BorderForeground(borderColor)
 
 	inputArea := m.textarea.View()
 
 	// 多行输入行数指示（§17）：当输入超过 1 行时，右下角显示行数
 	lineCount := strings.Count(m.textarea.Value(), "\n") + 1
 	if lineCount > 1 && m.inputReady {
-		lineHint := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.TextMuted)).
-			Faint(true).
-			Render(fmt.Sprintf("Ln %d", lineCount))
+		lineHint := m.styles.LineHint.Render(fmt.Sprintf("Ln %d", lineCount))
 		inputArea += " " + lineHint + "\n"
 	}
 
 	// 状态栏样式
-	readyStatusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Success)).
-		Bold(true).
-		Padding(0, 1)
+	readyStatusStyle := m.styles.ReadyStatus
 
 	// §20 使用缓存样式
 	thinkingStatusStyle := m.styles.ThinkingSt
@@ -2121,20 +2179,14 @@ func (m *cliModel) View() string {
 	if sepWidth < 4 {
 		sepWidth = 4
 	}
-	separator := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.BarEmpty)).
-		Render("┈" + strings.Repeat("┈", sepWidth-2))
+	separator := m.styles.Separator.Render("┈" + strings.Repeat("┈", sepWidth-2))
 
 	// 输入区
 	input := inputBoxStyle.Render(inputArea)
 
 	// §9 Ctrl+K 确认模式提示
 	if m.confirmDelete > 0 {
-		warningStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.Warning)).
-			Bold(true).
-			Padding(0, 1)
-		warningText := warningStyle.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
+		warningText := m.styles.WarningBold.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
 		return fmt.Sprintf(
 			"%s\n%s\n%s\n%s\n%s",
 			titleBar,
@@ -2148,10 +2200,10 @@ func (m *cliModel) View() string {
 	// 动态 placeholder：处理中 vs 就绪（就绪态使用轮换提示）
 	if m.typing {
 		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
-		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	} else {
 		m.textarea.Placeholder = pickIdlePlaceholder()
-		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		m.textarea.BlurredStyle.Placeholder = m.styles.PlaceholderSt
 	}
 
 	// 进度状态栏
@@ -2190,7 +2242,7 @@ func (m *cliModel) View() string {
 	}
 	// 临时状态提示（自动过期）
 	if m.tempStatus != "" {
-		ts := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(m.tempStatus)
+		ts := m.styles.WarningSt.Render(m.tempStatus)
 		if status != "" {
 			status += "  " + ts
 		} else {
@@ -2199,7 +2251,7 @@ func (m *cliModel) View() string {
 	}
 	// 新消息提示：用户上滚且有新内容时显示
 	if m.newContentHint {
-		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info)).Render("v new content")
+		hint := m.styles.InfoSt.Render("v new content")
 		if status != "" {
 			status += "  " + hint
 		} else {
@@ -2208,7 +2260,7 @@ func (m *cliModel) View() string {
 	}
 	// Background task indicator
 	if m.bgTaskCount > 0 {
-		bgHint := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning)).Render(
+		bgHint := m.styles.WarningSt.Render(
 			fmt.Sprintf("[bg: %d task%s running -- ^ to manage]", m.bgTaskCount, func() string {
 				if m.bgTaskCount > 1 {
 					return "s"
@@ -2393,7 +2445,7 @@ func (m *cliModel) renderSplash() string {
 
 	// §20 使用缓存样式
 	logoStyle := m.styles.Accent.Bold(true)
-	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextSecondary))
+	versionStyle := m.styles.VersionSt
 	descStyle := m.styles.TextMutedSt
 	loadingStyle := m.styles.WarningSt
 
@@ -2561,18 +2613,16 @@ func (m *cliModel) renderToast() string {
 	for i := 0; i < showCount; i++ {
 		item := m.toasts[i]
 
-		// 图标颜色：根据 icon 类型选择
-		iconColor := currentTheme.Success
+		iconSty := m.styles.ToastIcon
 		switch item.icon {
 		case "✗", "⚠":
-			iconColor = currentTheme.Error
+			iconSty = iconSty.Foreground(lipgloss.Color(currentTheme.Error))
 		case "ℹ":
-			iconColor = currentTheme.Info
+			iconSty = iconSty.Foreground(lipgloss.Color(currentTheme.Info))
 		}
 
 		// 越靠后越透明（营造层级感）
 		faintFactor := i // 0=最新最亮, 1=稍暗, 2=最暗
-		iconSty := lipgloss.NewStyle().Foreground(lipgloss.Color(iconColor)).Bold(true)
 		if faintFactor > 0 {
 			iconSty = iconSty.Faint(true)
 		}
@@ -3667,7 +3717,7 @@ func highlightSearchMatch(text string, query string) string {
 		return text
 	}
 
-	// 高亮样式
+	// 高亮样式（搜索非每帧热路径，直接构建）
 	hlStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(currentTheme.Warning)).
 		Bold(true).
@@ -3861,15 +3911,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			// 状态摘要图标
 			var statusIcons string
 			if errorCount > 0 {
-				statusIcons = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error)).Render("✗") +
-					lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)).Render(fmt.Sprintf("%d", errorCount))
+				statusIcons = s.ProgressError.Render("✗") +
+					s.TextMutedSt.Render(fmt.Sprintf("%d", errorCount))
 			}
 			if successCount > 0 && errorCount > 0 {
 				statusIcons += " "
 			}
 			if successCount > 0 {
-				statusIcons += lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Success)).Render("✓") +
-					lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)).Render(fmt.Sprintf("%d", successCount))
+				statusIcons += s.ProgressDone.Render("✓") +
+					s.TextMutedSt.Render(fmt.Sprintf("%d", successCount))
 			}
 			toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools %d calls · %s", totalTools, elapsedStr)))
 			if statusIcons != "" {
@@ -3897,18 +3947,11 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 	case "user":
 		// 用户消息上方：右侧柔和光点分隔，与 assistant 的左侧竖线形成对称
-		dotSep := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(currentTheme.BarEmpty)).
-			Width(contentWidth).
-			Align(lipgloss.Right).
-			Render("···")
+		dotSep := s.UserDotSep.Width(contentWidth).Align(lipgloss.Right).Render("···")
 		sb.WriteString(dotSep)
 		sb.WriteString("\n")
 		label := userLabelStyle.Render("You")
-		header := lipgloss.NewStyle().
-			Width(contentWidth).
-			Align(lipgloss.Right).
-			Render(fmt.Sprintf("%s %s", timeStr, label))
+		header := s.UserHeader.Width(contentWidth).Align(lipgloss.Right).Render(fmt.Sprintf("%s %s", timeStr, label))
 		sb.WriteString(header)
 		sb.WriteString("\n")
 		// 用户消息：右对齐气泡效果
@@ -3916,42 +3959,36 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		lines := strings.Split(rendered, "\n")
 		maxWidth := 0
 		for _, line := range lines {
-			w := lipgloss.Width(line)
-			if w > maxWidth {
-				maxWidth = w
-			}
+		w := lipgloss.Width(line)
+		if w > maxWidth {
+			maxWidth = w
+		}
 		}
 		maxBubble := contentWidth * 3 / 4
-		userStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
+		userStyle := s.UserContent
 		if maxWidth <= maxBubble {
-			// 内容够窄，左填充实现气泡靠右
-			userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
+		// 内容够窄，左填充实现气泡靠右
+		userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
 		}
 		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))
 	default:
 		// assistant 消息：左侧竖线引导 + 标签
-		guideColor := currentTheme.Accent
+		guide := s.AssistantGuide.Render("│")
 		if msg.isPartial {
-			guideColor = currentTheme.Warning
-		}
-		guide := lipgloss.NewStyle().Foreground(lipgloss.Color(guideColor)).Render("│")
-		if msg.isPartial {
-			label := streamingLabelStyle.Render("Assistant")
-			fmt.Fprintf(&sb, "%s %s %s ...", guide, timeStr, label)
+		guide = s.WarningSt.Render("│")
+		label := streamingLabelStyle.Render("Assistant")
+		fmt.Fprintf(&sb, "%s %s %s ...", guide, timeStr, label)
 		} else {
-			label := assistantLabelStyle.Render("Assistant")
-			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
+		label := assistantLabelStyle.Render("Assistant")
+		fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
 		// Agent 消息直接渲染（glamour 已处理 markdown）
 		sb.WriteString(rendered)
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
 		if msg.isPartial && rendered != "" {
-			streamCursor := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.Warning)).
-				Bold(true)
-			sb.WriteString(streamCursor.Render("▋"))
+		sb.WriteString(s.StreamCursor.Render("▋"))
 		}
 	}
 
@@ -4318,16 +4355,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ta := textarea.New()
 	ta.Placeholder = "Type your answer..."
 	ta.Prompt = "  "
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.Text = lipgloss.NewStyle()
+	applyTAStyles(&ta, &m.styles)
 	ta.CharLimit = 0
 	ta.SetWidth(m.panelWidth(50))
 	ta.SetHeight(3)
@@ -4340,10 +4368,10 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ti.Prompt = ""
 	ti.CharLimit = 200
 	ti.Width = m.panelWidth(40)
-	ti.PromptStyle = lipgloss.NewStyle()
-	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+	ti.PromptStyle = m.styles.TIPrompt
+	ti.TextStyle = m.styles.TIText
+	ti.Cursor.Style = m.styles.TICursor
+	ti.PlaceholderStyle = m.styles.TIPlaceholder
 	ti.Focus()
 	m.panelOtherTI = ti
 	m.panelOnAnswer = onAnswer
@@ -4695,18 +4723,15 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 			case tea.KeySpace:
 				m.panelCombo = false
 				// Start typing to filter / enter custom value → switch to edit mode
-				m.panelEdit = true
-				// Re-initialize textarea with proper styles for panel context
-				ta := textarea.New()
-				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-				ta.CharLimit = 0
-				ta.SetWidth(m.panelWidth(50))
-				ta.SetHeight(1)
-				ta.SetValue(m.panelValues[def.Key])
+					m.panelEdit = true
+					// Re-initialize textarea with proper styles for panel context
+					ta := textarea.New()
+					ta.Prompt = "  "
+					applyTAStyles(&ta, &m.styles)
+					ta.CharLimit = 0
+					ta.SetWidth(m.panelWidth(50))
+					ta.SetHeight(1)
+					ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
 				ta.Focus()
 				var cmd tea.Cmd
@@ -4783,31 +4808,25 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 					return true, m, nil
 				}
 				// No options: fall through to edit mode
-				m.panelEdit = true
-				ta := textarea.New()
-				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-				ta.CharLimit = 0
-				ta.SetWidth(m.panelWidth(50))
-				ta.SetHeight(1)
-				ta.SetValue(m.panelValues[def.Key])
-				ta.CursorEnd()
-				ta.Focus()
-				m.panelEditTA = ta
-				return true, m, nil
-			default:
-				// Enter edit mode for text/number/textarea/combo(fallback)
-				m.panelEdit = true
-				ta := textarea.New()
-				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-				ta.CharLimit = 0
+					m.panelEdit = true
+					ta := textarea.New()
+					ta.Prompt = "  "
+					applyTAStyles(&ta, &m.styles)
+					ta.CharLimit = 0
+					ta.SetWidth(m.panelWidth(50))
+					ta.SetHeight(1)
+					ta.SetValue(m.panelValues[def.Key])
+					ta.CursorEnd()
+					ta.Focus()
+					m.panelEditTA = ta
+					return true, m, nil
+				default:
+					// Enter edit mode for text/number/textarea/combo(fallback)
+					m.panelEdit = true
+					ta := textarea.New()
+					ta.Prompt = "  "
+					applyTAStyles(&ta, &m.styles)
+					ta.CharLimit = 0
 				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
@@ -5160,34 +5179,25 @@ func (m *cliModel) viewSettingsPanel() string {
 	sb.WriteString(s.PanelHeader.Render("⚙ Settings"))
 	sb.WriteString("\n")
 	// 表头下方精致分割线，区分标题与内容
-	dividerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(currentTheme.Border)).
-		Faint(true)
-	sb.WriteString(dividerStyle.Render("┈" + strings.Repeat("┈", 30)))
+	sb.WriteString(s.SettingsDivider.Render("┈" + strings.Repeat("┈", 30)))
 
 	// Group by category
 	lastCat := ""
 	for i, def := range m.panelSchema {
 		if def.Category != lastCat {
-			lastCat = def.Category
-			sb.WriteString("\n")
-			catStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(currentTheme.AccentAlt)).
-				Bold(true)
-			sb.WriteString(catStyle.Render("▸ " + lastCat))
-			sb.WriteString("\n")
+		lastCat = def.Category
+		sb.WriteString("\n")
+		sb.WriteString(s.SettingsCat.Render("▸ " + lastCat))
+		sb.WriteString("\n")
 		}
 
 		cur := m.panelValues[def.Key]
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
-			prefix = cursorStyle.Render("▸")
+		prefix = cursorStyle.Render("▸")
 		} else {
-			prefix = "  "
+		prefix = "  "
 		}
-		// 选中项：添加微妙的强调色背景提升辨识度
-		selectedBgStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color(currentTheme.BarEmpty))
 
 		// Format value display
 		var displayVal string
@@ -5227,7 +5237,7 @@ func (m *cliModel) viewSettingsPanel() string {
 
 		line := fmt.Sprintf("%s %s: %s", prefix, def.Label, displayVal)
 		if i == m.panelCursor && !m.panelEdit {
-			line = selectedBgStyle.Width(m.width - 6).Render(line)
+			line = s.SettingsSelBg.Width(m.width - 6).Render(line)
 		}
 		sb.WriteString(line)
 		sb.WriteString("\n")

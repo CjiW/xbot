@@ -15,6 +15,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"image/color"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,20 +31,20 @@ import (
 	"xbot/tools"
 	"xbot/version"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 )
 
 func init() {
-	lipgloss.SetHasDarkBackground(true) // 所有配色方案都基于深色终端背景
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	// lipgloss v2: SetHasDarkBackground removed — dark bg assumed by default
+	// lipgloss v2: SetColorProfile removed — handled by renderer
 	termenv.SetDefaultOutput(termenv.NewOutput(os.Stdout, termenv.WithTTY(false)))
 }
 
@@ -649,7 +650,6 @@ func (c *CLIChannel) Start() error {
 	// 创建 Bubble Tea program
 	c.programMu.Lock()
 	c.program = tea.NewProgram(c.model,
-		tea.WithAltScreen(),
 		tea.WithOutput(origStdout),
 	)
 	c.programMu.Unlock()
@@ -954,29 +954,43 @@ type cliMessage struct {
 }
 
 // newCLIModel 创建 CLI model
+
+// applyTextareaStyles applies the current theme styles to a textarea Model.
+func applyTextareaStyles(ta *textarea.Model) {
+	ta.SetStyles(textarea.Styles{
+		Cursor: textarea.CursorStyle{
+			Color: lipgloss.Color(currentTheme.Info),
+		},
+		Focused: textarea.StyleState{
+			Base:        lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary)),
+			Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)),
+			CursorLine:  lipgloss.NewStyle(),
+			LineNumber:  lipgloss.NewStyle(),
+			EndOfBuffer: lipgloss.NewStyle(),
+		},
+		Blurred: textarea.StyleState{
+			CursorLine:  lipgloss.NewStyle(),
+			LineNumber:  lipgloss.NewStyle(),
+			EndOfBuffer: lipgloss.NewStyle(),
+			Text:        lipgloss.NewStyle(),
+		},
+	})
+}
+
 func newCLIModel() *cliModel {
 	ta := textarea.New()
 	ta.Placeholder = "Enter send · Ctrl+J newline · /help"
-	ta.Focus()
+	_ = ta.Focus()
 	ta.SetWidth(76)
 	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.Prompt = "> "
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle() // no background — let terminal bg show through
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.Text = lipgloss.NewStyle()
+		applyTextareaStyles(&ta)
 
 	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
 
-	vp := viewport.New(80, 20)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
 	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
 	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
@@ -1099,9 +1113,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.renderer = newGlamourRenderer(m.width - 4)
 		}
 		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
-		m.textarea.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-		m.textarea.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-		m.textarea.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		applyTextareaStyles(&m.textarea)
 		// 刷新 ticker 颜色
 		m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 		m.renderCacheValid = false
@@ -1113,7 +1125,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// §12 Panel mode: intercept all key events when panel is active
-	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.panelMode != "" {
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
 			return newModel, cmd
@@ -1121,7 +1133,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Home/End 跳顶部/底部
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
 		case "home":
 			m.viewport.GotoTop()
@@ -1152,8 +1164,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// §9 Ctrl+K 确认模式：必须在 switch msg.Type 之前拦截所有按键
+	case tea.KeyPressMsg:
+		// §9 Ctrl+K 确认模式：必须在 switch (v2: msg.Code/msg.String) 之前拦截所有按键
 		if m.confirmDelete > 0 {
 			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
@@ -1177,8 +1189,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			default:
 				// 检查数字键（调整删除数量）
-				if msg.Type == tea.KeyRunes {
-					runes := msg.Runes
+				if len(msg.Text) > 0 {
+					runes := msg.Text
 					if len(runes) == 1 && runes[0] >= '1' && runes[0] <= '9' {
 						newDel := int(runes[0] - '0')
 						if newDel > len(groups) {
@@ -1198,8 +1210,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		switch {
+		case msg.String() == "ctrl+c", msg.Code == tea.KeyEsc:
 			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
 			if m.typing {
 				if m.msgBus != nil {
@@ -1229,14 +1241,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyUp:
+		case msg.Code == tea.KeyUp:
 			// ↑ with bg tasks running + empty input → open bg tasks panel
 			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputReady {
 				m.openBgTasksPanel()
 				return m, nil
 			}
 
-		case tea.KeyEnter:
+		case msg.Code == tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
@@ -1287,12 +1299,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyTab:
+		case msg.Code == tea.KeyTab:
 			// §8 Tab 命令补全
 			m.handleTabComplete()
 			return m, nil
 
-		case tea.KeyCtrlK:
+		case msg.String() == "ctrl+k":
 			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
 			if !m.typing && len(m.messages) > 0 {
 				groups := visibleMsgGroupIndices(m.messages)
@@ -1309,7 +1321,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case tea.KeyCtrlO:
+		case msg.String() == "ctrl+o":
 			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 			m.toolSummaryExpanded = !m.toolSummaryExpanded
 			m.renderCacheValid = false
@@ -1319,7 +1331,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.updateViewportContent()
 			return m, nil
-		} // end switch msg.Type
+		} // end switch (v2: msg.Code/msg.String)
 
 	case tea.WindowSizeMsg:
 		// 窗口大小变化 - 动态调整布局
@@ -1589,8 +1601,8 @@ func (m *cliModel) handleResize(width, height int) {
 	if viewportHeight < 5 {
 		viewportHeight = 5
 	}
-	m.viewport.Width = width
-	m.viewport.Height = viewportHeight
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(viewportHeight)
 
 	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
 	// textarea must match the content width exactly.
@@ -1637,7 +1649,7 @@ func (m *cliModel) panelWidth(want int) int {
 
 // renderCompletionsHint returns the dynamic border color and completions hint string
 // based on the current input content (slash commands, @ file references, etc.).
-func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipgloss.Color, hint string) {
+func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.Color, hint string) {
 	borderColor = lipgloss.Color(currentTheme.Accent)
 
 	if strings.HasPrefix(inputValue, "!") {
@@ -1718,9 +1730,14 @@ func (m *cliModel) calculateProgressHeight() int {
 }
 
 // View 渲染界面
-func (m *cliModel) View() string {
+func (m *cliModel) View() tea.View {
+	render := func(s string) tea.View {
+		v := tea.NewView(s)
+		v.AltScreen = true
+		return v
+	}
 	if !m.ready {
-		return "\n  初始化中..."
+		return render("\n  初始化中...")
 	}
 
 	// ========== 样式定义 ==========
@@ -1788,23 +1805,23 @@ func (m *cliModel) View() string {
 			Bold(true).
 			Padding(0, 1)
 		warningText := warningStyle.Render(fmt.Sprintf("[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)", m.confirmDelete))
-		return fmt.Sprintf(
+		return render(fmt.Sprintf(
 			"%s\n%s\n%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
 			separator,
 			warningText,
 			input,
-		)
+		))
 	}
 
 	// 动态 placeholder：处理中 vs 就绪
 	if m.typing {
 		m.textarea.Placeholder = "[Processing...] (Ctrl+C to cancel)"
-		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		applyTextareaStyles(&m.textarea)
 	} else if m.textarea.Placeholder == "[Processing...] (Ctrl+C to cancel)" {
 		m.textarea.Placeholder = "Enter send · Ctrl+J newline · /help"
-		m.textarea.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
+		applyTextareaStyles(&m.textarea)
 	}
 
 	// 进度状态栏
@@ -1858,17 +1875,17 @@ func (m *cliModel) View() string {
 	// §12 Panel mode: render panel overlay instead of normal input
 	if m.panelMode != "" {
 		panel := m.viewPanel()
-		return fmt.Sprintf(
+		return render(fmt.Sprintf(
 			"%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
 			panel,
-		)
+		))
 	}
 
 	todoBar := m.renderTodoBar()
 	if todoBar != "" {
-		return fmt.Sprintf(
+		return render(fmt.Sprintf(
 			"%s\n%s\n%s\n%s\n%s\n%s",
 			titleBar,
 			m.viewport.View(),
@@ -1876,16 +1893,16 @@ func (m *cliModel) View() string {
 			status,
 			todoBar,
 			input,
-		)
+		))
 	}
-	return fmt.Sprintf(
+	return render(fmt.Sprintf(
 		"%s\n%s\n%s\n%s\n%s",
 		titleBar,
 		m.viewport.View(),
 		separator,
 		status,
 		input,
-	)
+	))
 }
 
 // allTodosDone returns true when todos exist and every item is marked done.
@@ -3235,7 +3252,7 @@ func visibleMsgGroupIndices(messages []cliMessage) []int {
 func (m *cliModel) scrollToDeleteLine(content string) {
 	contentLines := strings.Split(content, "\n")
 	totalLines := len(contentLines)
-	vpHeight := m.viewport.Height
+	vpHeight := m.viewport.Height()
 	if vpHeight <= 0 {
 		return
 	}
@@ -3532,33 +3549,33 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	ta := textarea.New()
 	ta.Placeholder = "Type your answer..."
 	ta.Prompt = "  "
-	ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.LineNumber = lipgloss.NewStyle()
-	ta.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.LineNumber = lipgloss.NewStyle()
-	ta.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
-	ta.BlurredStyle.Text = lipgloss.NewStyle()
+		applyTextareaStyles(&ta)
 	ta.CharLimit = 0
 	ta.SetWidth(m.panelWidth(50))
 	ta.SetHeight(3)
 	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
-	ta.Focus()
+	_ = ta.Focus()
 	m.panelAnswerTA = ta
 	// Initialize Other single-line input
 	ti := textinput.New()
 	ti.Placeholder = "Type here..."
 	ti.Prompt = ""
 	ti.CharLimit = 200
-	ti.Width = m.panelWidth(40)
-	ti.PromptStyle = lipgloss.NewStyle()
-	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-	ti.Focus()
+	ti.SetWidth(m.panelWidth(40))
+	ti.SetStyles(textinput.Styles{
+		Cursor: textinput.CursorStyle{Color: lipgloss.Color(currentTheme.Info)},
+		Focused: textinput.StyleState{
+			Prompt:      lipgloss.NewStyle(),
+			Text:        lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary)),
+			Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)),
+		},
+		Blurred: textinput.StyleState{
+			Prompt:      lipgloss.NewStyle(),
+			Text:        lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary)),
+			Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted)),
+		},
+	})
+	_ = ti.Focus()
 	m.panelOtherTI = ti
 	m.panelOnAnswer = onAnswer
 	m.panelOnCancel = onCancel
@@ -3604,7 +3621,7 @@ func (m *cliModel) openBgTasksPanel() {
 
 // updateBgTasksPanel handles key events in the bg tasks panel.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// Refresh task list
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
 		m.panelBgTasks = m.channel.bgTaskMgr.List(m.channel.bgSessionKey)
@@ -3612,19 +3629,19 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 
 	// Log viewing sub-mode
 	if m.panelBgViewing {
-		switch msg.Type {
-		case tea.KeyEsc, tea.KeyCtrlC:
+		switch {
+		case msg.Code == tea.KeyEsc, msg.String() == "ctrl+c":
 			m.panelBgViewing = false
 			m.panelBgScroll = 0
 			m.panelBgLogLines = nil
 			return true, m, nil
-		case tea.KeyUp:
+		case msg.Code == tea.KeyUp:
 			m.panelBgScroll -= 5
 			if m.panelBgScroll < 0 {
 				m.panelBgScroll = 0
 			}
 			return true, m, nil
-		case tea.KeyDown:
+		case msg.Code == tea.KeyDown:
 			maxScroll := len(m.panelBgLogLines) - 20
 			if maxScroll < 0 {
 				maxScroll = 0
@@ -3634,7 +3651,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 				m.panelBgScroll = maxScroll
 			}
 			return true, m, nil
-		case tea.KeyPgUp:
+		case msg.Code == tea.KeyPgUp:
 			m.panelBgScroll -= 18
 			if m.panelBgScroll < 0 {
 				m.panelBgScroll = 0
@@ -3642,7 +3659,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, nil
 		default:
 			// PgDn: bubbletea doesn't have a constant, match by string
-			if msg.String() == "pgdown" {
+			if msg.String() == "pgdn" {
 				maxScroll := len(m.panelBgLogLines) - 20
 				if maxScroll < 0 {
 					maxScroll = 0
@@ -3658,27 +3675,27 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	}
 
 	// Task list mode
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+	switch {
+	case msg.Code == tea.KeyEsc, msg.String() == "ctrl+c":
 		m.closePanel()
 		if m.typing {
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
 
-	case tea.KeyUp, tea.KeyCtrlK:
+	case msg.Code == tea.KeyUp, msg.String() == "ctrl+k":
 		if m.panelBgCursor > 0 {
 			m.panelBgCursor--
 		}
 		return true, m, nil
 
-	case tea.KeyDown, tea.KeyCtrlJ:
+	case msg.Code == tea.KeyDown, msg.String() == "ctrl+j":
 		if m.panelBgCursor < len(m.panelBgTasks)-1 {
 			m.panelBgCursor++
 		}
 		return true, m, nil
 
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		// View log of selected task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
@@ -3692,7 +3709,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		}
 		return true, m, nil
 
-	case tea.KeyDelete, tea.KeyCtrlD:
+	case msg.Code == tea.KeyDelete, msg.String() == "ctrl+d":
 		// Kill selected running task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
@@ -3846,7 +3863,7 @@ func splitLines(s string) []string {
 
 // updatePanel handles key events when a panel is active.
 // Returns (handled, newModel, cmd).
-func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelMode == "" {
 		return false, m, nil
 	}
@@ -3862,11 +3879,11 @@ func (m *cliModel) updatePanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	return false, m, nil
 }
 
-func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelEdit {
 		// Editing mode
-		switch msg.Type {
-		case tea.KeyEnter:
+		switch {
+		case msg.Code == tea.KeyEnter:
 			// Save value
 			newVal := strings.TrimSpace(m.panelEditTA.Value())
 			if m.panelCursor < len(m.panelSchema) {
@@ -3875,7 +3892,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 			}
 			m.panelEdit = false
 			return true, m, nil
-		case tea.KeyEsc:
+		case msg.Code == tea.KeyEsc:
 			m.panelEdit = false
 			return true, m, nil
 		default:
@@ -3891,43 +3908,40 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			opts := def.Options
-			switch msg.Type {
-			case tea.KeyEsc:
+			switch {
+			case msg.Code == tea.KeyEsc:
 				m.panelCombo = false
 				return true, m, nil
-			case tea.KeyUp:
+			case msg.Code == tea.KeyUp:
 				if m.panelComboIdx > 0 {
 					m.panelComboIdx--
 				}
 				return true, m, nil
-			case tea.KeyDown:
+			case msg.Code == tea.KeyDown:
 				if m.panelComboIdx < len(opts)-1 {
 					m.panelComboIdx++
 				}
 				return true, m, nil
-			case tea.KeyEnter:
+			case msg.Code == tea.KeyEnter:
 				if m.panelComboIdx < len(opts) {
 					m.panelValues[def.Key] = opts[m.panelComboIdx].Value
 				}
 				m.panelCombo = false
 				return true, m, nil
-			case tea.KeySpace:
+			case msg.Code == tea.KeySpace:
 				m.panelCombo = false
 				// Start typing to filter / enter custom value → switch to edit mode
 				m.panelEdit = true
 				// Re-initialize textarea with proper styles for panel context
 				ta := textarea.New()
 				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+				applyTextareaStyles(&ta)
 				ta.CharLimit = 0
 				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
-				ta.Focus()
+				_ = ta.Focus()
 				var cmd tea.Cmd
 				m.panelEditTA, cmd = ta.Update(msg)
 				return true, m, cmd
@@ -3937,28 +3951,28 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 	}
 
 	// Navigation mode
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch {
+	case msg.Code == tea.KeyEsc:
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyCtrlS:
+	case msg.String() == "ctrl+s":
 		// Submit all settings
 		if m.panelOnSubmit != nil {
 			m.panelOnSubmit(m.panelValues)
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyUp, tea.KeyShiftTab:
+	case msg.Code == tea.KeyUp, msg.String() == "shift+tab":
 		if m.panelCursor > 0 {
 			m.panelCursor--
 		}
 		return true, m, nil
-	case tea.KeyDown, tea.KeyTab:
+	case msg.Code == tea.KeyDown, msg.Code == tea.KeyTab:
 		if m.panelCursor < len(m.panelSchema)-1 {
 			m.panelCursor++
 		}
 		return true, m, nil
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
 			switch def.Type {
@@ -4005,16 +4019,13 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				m.panelEdit = true
 				ta := textarea.New()
 				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+				applyTextareaStyles(&ta)
 				ta.CharLimit = 0
 				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
-				ta.Focus()
+				_ = ta.Focus()
 				m.panelEditTA = ta
 				return true, m, nil
 			default:
@@ -4022,16 +4033,13 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				m.panelEdit = true
 				ta := textarea.New()
 				ta.Prompt = "  "
-				ta.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Info))
-				ta.FocusedStyle.Base = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextPrimary))
-				ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.TextMuted))
-				ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+				applyTextareaStyles(&ta)
 				ta.CharLimit = 0
 				ta.SetWidth(m.panelWidth(50))
 				ta.SetHeight(1)
 				ta.SetValue(m.panelValues[def.Key])
 				ta.CursorEnd()
-				ta.Focus()
+				_ = ta.Focus()
 				m.panelEditTA = ta
 				return true, m, nil
 			}
@@ -4041,7 +4049,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 	return true, m, nil
 }
 
-func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
+func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
 		return true, m, nil
 	}
@@ -4053,8 +4061,8 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 	onOther := hasOpts && cursor == numOpts
 	onSubmit := hasOpts && cursor == numOpts+1
 
-	switch msg.Type {
-	case tea.KeyCtrlS:
+	switch {
+	case msg.String() == "ctrl+s":
 		answers := m.collectAskAnswers()
 		if m.panelOnAnswer != nil {
 			m.panelOnAnswer(answers)
@@ -4064,27 +4072,27 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeyEsc:
+	case msg.Code == tea.KeyEsc:
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
 		}
 		m.closePanel()
 		return true, m, nil
-	case tea.KeyRight, tea.KeyTab:
+	case msg.Code == tea.KeyRight, msg.Code == tea.KeyTab:
 		if len(m.panelItems) > 1 && m.panelTab < len(m.panelItems)-1 {
 			m.saveCurrentFreeInput()
 			m.panelTab++
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyShiftTab, tea.KeyLeft:
+	case msg.String() == "shift+tab", msg.Code == tea.KeyLeft:
 		if len(m.panelItems) > 1 && m.panelTab > 0 {
 			m.saveCurrentFreeInput()
 			m.panelTab--
 			m.restoreFreeInput()
 		}
 		return true, m, nil
-	case tea.KeyUp:
+	case msg.Code == tea.KeyUp:
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
@@ -4099,7 +4107,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyDown:
+	case msg.Code == tea.KeyDown:
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts + 1
@@ -4114,7 +4122,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyEnter:
+	case msg.Code == tea.KeyEnter:
 		if hasOpts {
 			if onSubmit {
 				answers := m.collectAskAnswers()
@@ -4142,7 +4150,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 			return true, m, tea.Batch(tickerCmd(), tickCmd())
 		}
 		return true, m, nil
-	case tea.KeySpace:
+	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {
 				m.toggleOptAtCursor()
@@ -4163,7 +4171,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd)
 		var cmd tea.Cmd
 		m.panelAnswerTA, cmd = m.panelAnswerTA.Update(msg)
 		return true, m, cmd
-	case tea.KeyRunes:
+	case len(msg.Text) > 0:
 		if hasOpts && !onOther {
 			m.panelOptCursor[m.panelTab] = numOpts
 			m.restoreOtherInput()

@@ -12,8 +12,8 @@ import (
 	"xbot/bus"
 	"xbot/llm"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ---------------------------------------------------------------------------
@@ -312,7 +312,7 @@ func TestCLIModelHandleResizeWithProgress(t *testing.T) {
 
 	model.handleResize(80, 30)
 
-	if model.viewport.Height <= 0 {
+	if model.viewport.Height() <= 0 {
 		t.Error("viewport height should be positive")
 	}
 }
@@ -378,7 +378,7 @@ func TestCLIModelViewNotReady(t *testing.T) {
 	model := newCLIModel()
 	model.ready = false
 
-	view := model.View()
+	view := model.View().Content
 	if !strings.Contains(view, "初始化") {
 		t.Errorf("View() when not ready should show initializing message, got: %q", view)
 	}
@@ -388,7 +388,7 @@ func TestCLIModelViewReady(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
-	view := model.View()
+	view := model.View().Content
 	// Should contain title and UI elements
 	if view == "" {
 		t.Error("View() returned empty string")
@@ -400,7 +400,7 @@ func TestCLIModelViewWithTyping(t *testing.T) {
 	model.handleResize(80, 24)
 	model.typing = true
 
-	view := model.View()
+	view := model.View().Content
 	if view == "" {
 		t.Error("View() returned empty string")
 	}
@@ -414,7 +414,7 @@ func TestCLIModelViewWithProgress(t *testing.T) {
 		Iteration: 1,
 	}
 
-	view := model.View()
+	view := model.View().Content
 	if view == "" {
 		t.Error("View() returned empty string")
 	}
@@ -428,7 +428,7 @@ func TestCLIModelViewWithMessages(t *testing.T) {
 		{role: "assistant", content: "Hi there!", timestamp: time.Now()},
 	}
 
-	view := model.View()
+	view := model.View().Content
 	if view == "" {
 		t.Error("View() returned empty string")
 	}
@@ -627,7 +627,7 @@ func TestCLIModelUpdateCtrlCClearsInput(t *testing.T) {
 	model.handleResize(80, 24)
 	model.textarea.SetValue("some text")
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	keyMsg := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	_, cmd := model.Update(keyMsg)
 
 	// When not typing, Ctrl+C clears input (no quit)
@@ -644,7 +644,7 @@ func TestCLIModelUpdateEscClearsInput(t *testing.T) {
 	model.handleResize(80, 24)
 	model.textarea.SetValue("some text")
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyEsc}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEsc}
 	_, cmd := model.Update(keyMsg)
 
 	// When not typing, Esc clears input (no quit)
@@ -665,7 +665,7 @@ func TestCLIModelUpdateCtrlCWhileTyping(t *testing.T) {
 	// Drain the inbound channel in background
 	go func() { <-model.msgBus.Inbound }()
 
-	keyMsg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	keyMsg := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	_, _ = model.Update(keyMsg)
 
 	// Should add cancel system message
@@ -793,7 +793,7 @@ func TestCLIModelUpdateEnterKeyWithContent(t *testing.T) {
 	model.textarea.SetValue("Hello world")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// Message should be added
@@ -811,7 +811,7 @@ func TestCLIModelUpdateEnterKeyEmptyContent(t *testing.T) {
 	model.textarea.SetValue("   ")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// No message should be added
@@ -829,7 +829,7 @@ func TestCLIModelUpdateEnterKeyInputNotReady(t *testing.T) {
 	model.textarea.SetValue("Hello world")
 
 	// Simulate Enter key
-	keyMsg := tea.KeyMsg{Type: tea.KeyEnter}
+	keyMsg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	_, _ = model.Update(keyMsg)
 
 	// No message should be added (input not ready)

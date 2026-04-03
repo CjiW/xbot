@@ -1,14 +1,14 @@
 package channel
 
 import (
-	"fmt"
-	"strings"
-	"time"
 	"context"
-	"xbot/tools"
+	"fmt"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"strings"
+	"time"
+	"xbot/tools"
 )
 
 // --- §12 Interactive Panel ---
@@ -65,23 +65,23 @@ func (m *cliModel) openSetupPanel() {
 			m.channel.config.ApplySettings(vals)
 		}
 		// Apply theme immediately
-			if theme, ok := vals["theme"]; ok && theme != "" {
-				ApplyTheme(theme)
-				if m.width > 4 {
-					m.renderer = newGlamourRenderer(m.width - 4)
-				}
-				m.renderCacheValid = false
+		if theme, ok := vals["theme"]; ok && theme != "" {
+			ApplyTheme(theme)
+			if m.width > 4 {
+				m.renderer = newGlamourRenderer(m.width - 4)
 			}
-			// i18n: detect language change
-			if lang, ok := vals["language"]; ok {
-				SetLocale(lang)
-				m.locale = GetLocale(lang)
-				m.renderCacheValid = false
-			}
+			m.renderCacheValid = false
+		}
+		// i18n: detect language change
+		if lang, ok := vals["language"]; ok {
+			SetLocale(lang)
+			m.locale = GetLocale(lang)
+			m.renderCacheValid = false
+		}
 		msg := m.locale.SetupComplete
-			if vals["memory_provider"] == "letta" {
-				msg += m.locale.SetupLettaNote
-			}
+		if vals["memory_provider"] == "letta" {
+			msg += m.locale.SetupLettaNote
+		}
 		m.appendSystem(msg)
 		m.updateViewportContent()
 	})
@@ -556,11 +556,11 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd
 				}
 				// No options: fall through to default edit mode
 				fallthrough
-				default:
-						// Enter edit mode for text/number/textarea/combo(fallback)
-						m.panelEdit = true
-						m.panelEditTA = m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
-						return true, m, nil
+			default:
+				// Enter edit mode for text/number/textarea/combo(fallback)
+				m.panelEdit = true
+				m.panelEditTA = m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
+				return true, m, nil
 			}
 		}
 		return true, m, nil
@@ -912,18 +912,18 @@ func (m *cliModel) viewSettingsPanel() string {
 	lastCat := ""
 	for i, def := range m.panelSchema {
 		if def.Category != lastCat {
-		lastCat = def.Category
-		sb.WriteString("\n")
-		sb.WriteString(s.SettingsCat.Render("▸ " + lastCat))
-		sb.WriteString("\n")
+			lastCat = def.Category
+			sb.WriteString("\n")
+			sb.WriteString(s.SettingsCat.Render("▸ " + lastCat))
+			sb.WriteString("\n")
 		}
 
 		cur := m.panelValues[def.Key]
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
-		prefix = cursorStyle.Render("▸")
+			prefix = cursorStyle.Render("▸")
 		} else {
-		prefix = "  "
+			prefix = "  "
 		}
 
 		// Format value display
@@ -1128,14 +1128,13 @@ func (m *cliModel) viewAskUserPanel() string {
 			hints = append(hints, m.locale.PanelAskNewline)
 		}
 	}
-		hints = append(hints, m.locale.PanelAskCancel)
+	hints = append(hints, m.locale.PanelAskCancel)
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return m.styles.PanelBox.Render(sb.String())
 }
 
 // --- SettingsCapability implementation for CLIChannel ---
-
 
 // SettingsSchema returns the settings definitions for CLI channel.
 func (c *CLIChannel) SettingsSchema() []SettingDefinition {

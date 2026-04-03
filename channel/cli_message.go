@@ -1,19 +1,20 @@
 package channel
 
 import (
+	"encoding/json"
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"encoding/json"
 	"xbot/bus"
 	"xbot/tools"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/google/uuid"
 )
+
 // ---------------------------------------------------------------------------
 // Helper Methods
 // ---------------------------------------------------------------------------
@@ -353,15 +354,15 @@ func (m *cliModel) handleSlashCommand(cmd string) {
 						}
 					}
 					// Update live config overrides (model, base_url)
-						if model, ok := values["llm_model"]; ok && model != "" {
-							m.channel.UpdateConfig(model, values["llm_base_url"])
-						}
-						// i18n: detect language change
-						if lang, ok := values["language"]; ok {
-							SetLocale(lang)
-							m.locale = GetLocale(lang)
-							m.renderCacheValid = false
-						}
+					if model, ok := values["llm_model"]; ok && model != "" {
+						m.channel.UpdateConfig(model, values["llm_base_url"])
+					}
+					// i18n: detect language change
+					if lang, ok := values["language"]; ok {
+						SetLocale(lang)
+						m.locale = GetLocale(lang)
+						m.renderCacheValid = false
+					}
 					m.appendSystem(m.locale.SettingsSaved)
 					m.updateViewportContent()
 				})
@@ -597,22 +598,22 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// §2 工具可视化：在 assistant 消息之前插入 tool_summary
-			// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
-			// If PhaseDone already appended a placeholder, remove it first.
-			var toolSummaryIterations []cliIterationSnapshot
-			if m.pendingToolSummary != nil {
-				toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
-				// Remove the last tool_summary placeholder that PhaseDone appended.
-				// We track by index from end because append copies the value,
-				// making pointer comparison unreliable.
-				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].role == "tool_summary" {
-						m.messages = append(m.messages[:i], m.messages[i+1:]...)
-						break
-					}
+		// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
+		// If PhaseDone already appended a placeholder, remove it first.
+		var toolSummaryIterations []cliIterationSnapshot
+		if m.pendingToolSummary != nil {
+			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
+			// Remove the last tool_summary placeholder that PhaseDone appended.
+			// We track by index from end because append copies the value,
+			// making pointer comparison unreliable.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].role == "tool_summary" {
+					m.messages = append(m.messages[:i], m.messages[i+1:]...)
+					break
 				}
-				m.pendingToolSummary = nil
 			}
+			m.pendingToolSummary = nil
+		}
 		if len(m.iterationHistory) > 0 {
 			toolSummaryIterations = append(toolSummaryIterations, m.iterationHistory...)
 		}
@@ -877,7 +878,6 @@ func (m *cliModel) renderHelpPanel() string {
 	return panelStyle.Render(sb.String())
 }
 
-
 // renderMessage 渲染单条消息为 ANSI 字符串（§1 增量渲染：自包含方法）
 // toolDisplayInfo 从工具进度条目中提取显示用的 label、状态图标和样式。
 func toolDisplayInfo(tool CLIToolProgress, okStyle, errStyle lipgloss.Style) (label, icon string, sty lipgloss.Style) {
@@ -916,7 +916,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {
-		rendered = msg.content
+			rendered = msg.content
 		}
 		rendered = strings.TrimSpace(rendered)
 	} else {
@@ -966,27 +966,27 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 						toolSb.WriteString("\n")
 					}
 					for _, tool := range it.Tools {
-							label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
-							elapsed := ""
-							if tool.Elapsed > 0 {
-								elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
-							}
-							toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
-							toolSb.WriteString("\n")
-						}
-				}
-			} else {
-				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))
-				toolSb.WriteString("\n")
-				for _, tool := range msg.tools {
 						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
 						elapsed := ""
 						if tool.Elapsed > 0 {
 							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
 						}
-						toolSb.WriteString(sty.Render(fmt.Sprintf("  %s %s%s", icon, label, elapsed)))
+						toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
 						toolSb.WriteString("\n")
 					}
+				}
+			} else {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))
+				toolSb.WriteString("\n")
+				for _, tool := range msg.tools {
+					label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
+					elapsed := ""
+					if tool.Elapsed > 0 {
+						elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+					}
+					toolSb.WriteString(sty.Render(fmt.Sprintf("  %s %s%s", icon, label, elapsed)))
+					toolSb.WriteString("\n")
+				}
 			}
 		} else {
 			// 折叠模式升级（第 4 轮）：统计摘要 + 成功/失败状态图标
@@ -1063,16 +1063,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		lines := strings.Split(rendered, "\n")
 		maxWidth := 0
 		for _, line := range lines {
-		w := lipgloss.Width(line)
-		if w > maxWidth {
-			maxWidth = w
-		}
+			w := lipgloss.Width(line)
+			if w > maxWidth {
+				maxWidth = w
+			}
 		}
 		maxBubble := contentWidth * 3 / 4
 		userStyle := s.UserContent
 		if maxWidth <= maxBubble {
-		// 内容够窄，左填充实现气泡靠右
-		userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
+			// 内容够窄，左填充实现气泡靠右
+			userStyle = userStyle.PaddingLeft(contentWidth - maxWidth)
 		}
 		// 内容超宽时退回左对齐，避免终端折行后跑到最左边
 		sb.WriteString(userStyle.Render(rendered))
@@ -1080,19 +1080,19 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		// assistant 消息：左侧竖线引导 + 标签
 		guide := s.AssistantGuide.Render("│")
 		if msg.isPartial {
-		guide = s.WarningSt.Render("│")
-		label := streamingLabelStyle.Render("Assistant")
-		fmt.Fprintf(&sb, "%s %s %s ...", guide, timeStr, label)
+			guide = s.WarningSt.Render("│")
+			label := streamingLabelStyle.Render("Assistant")
+			fmt.Fprintf(&sb, "%s %s %s ...", guide, timeStr, label)
 		} else {
-		label := assistantLabelStyle.Render("Assistant")
-		fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
+			label := assistantLabelStyle.Render("Assistant")
+			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
 		// Agent 消息直接渲染（glamour 已处理 markdown）
 		sb.WriteString(rendered)
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
 		if msg.isPartial && rendered != "" {
-		sb.WriteString(s.StreamCursor.Render("▋"))
+			sb.WriteString(s.StreamCursor.Render("▋"))
 		}
 	}
 
@@ -1299,4 +1299,3 @@ func tickerCmd() tea.Cmd {
 		return tickerTickMsg{}
 	})
 }
-

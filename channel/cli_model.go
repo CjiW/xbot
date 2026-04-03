@@ -2,17 +2,18 @@ package channel
 
 import (
 	"fmt"
-	"time"
-	"xbot/bus"
-	"xbot/tools"
-	"xbot/version"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"time"
+	"xbot/bus"
+	"xbot/tools"
+	"xbot/version"
 )
+
 func newAnimTicker(frames []string, color string) *animTicker {
 	altColor := currentTheme.AccentAlt
 	return &animTicker{
@@ -147,12 +148,12 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
-	typing          bool        // agent 是否正在回复
-	typingStartTime time.Time   // 本次处理开始时间
-	inputReady      bool        // 输入就绪状态（agent 回复期间禁止发送）
+	typing          bool            // agent 是否正在回复
+	typingStartTime time.Time       // 本次处理开始时间
+	inputReady      bool            // 输入就绪状态（agent 回复期间禁止发送）
 	msgBus          *bus.MessageBus // 消息总线引用
-	tempStatus      string      // 临时状态提示（自动过期）
-	shouldQuit      bool        // Smart quit: quit after current operation completes
+	tempStatus      string          // 临时状态提示（自动过期）
+	shouldQuit      bool            // Smart quit: quit after current operation completes
 
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
@@ -264,7 +265,7 @@ type cliMessage struct {
 	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 
-	}
+}
 
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
@@ -310,7 +311,7 @@ func newCLIModel() *cliModel {
 		progress:        nil,
 		inputReady:      true,
 		msgCollapsed:    make(map[int]bool),
-			locale:           GetLocale(""),
+		locale:          GetLocale(""),
 	}
 }
 
@@ -394,4 +395,3 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 		return splashTickMsg{frame: frame + 1}
 	})
 }
-

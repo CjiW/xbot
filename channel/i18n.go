@@ -3,17 +3,17 @@ package channel
 // UILocale holds all UI strings for a given language.
 type UILocale struct {
 	// --- A. System messages ---
-	CancelSent          string // "已发送取消请求"
-	SettingsSaved       string // "✅ 设置已保存"
-	NoSettings          string // "当前渠道没有可配置的设置项。"
-	CheckingUpdate      string // "正在检查更新..."
-	ModelUsage          string // "用法: /model <模型名>\n使用 /models 查看可用模型"
-	AskCancelled        string // "已取消提问"
-	SetupComplete       string // "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
-	SetupLettaNote      string // "[!] letta memory mode requires embedding service:\n  1. ..."
-	UpdateFound         string // "发现新版本: %s → %s\n升级命令: ..."
-	UpdateCurrent       string // "当前版本 %s 已是最新"
-	UpdateFailed        string // "更新检查失败（网络超时或无法连接 GitHub API）"
+	CancelSent     string // "已发送取消请求"
+	SettingsSaved  string // "✅ 设置已保存"
+	NoSettings     string // "当前渠道没有可配置的设置项。"
+	CheckingUpdate string // "正在检查更新..."
+	ModelUsage     string // "用法: /model <模型名>\n使用 /models 查看可用模型"
+	AskCancelled   string // "已取消提问"
+	SetupComplete  string // "✅ 初始配置完成，可以开始使用了。随时用 /settings 修改配置，/setup 重新引导。"
+	SetupLettaNote string // "[!] letta memory mode requires embedding service:\n  1. ..."
+	UpdateFound    string // "发现新版本: %s → %s\n升级命令: ..."
+	UpdateCurrent  string // "当前版本 %s 已是最新"
+	UpdateFailed   string // "更新检查失败（网络超时或无法连接 GitHub API）"
 
 	// --- B. Panel text ---
 	PanelSettingsTitle   string // "⚙ Settings"
@@ -25,36 +25,36 @@ type UILocale struct {
 	PanelToggleOn        string // "● ON"
 	PanelToggleOff       string // "○ OFF"
 
-	PanelOther     string // "Other: "
-	PanelSubmit    string // "Submit →"
-	PanelAskNav    string // "←→/Tab 切换问题"
-	PanelAskToggle string // "Space/Enter toggle"
-	PanelAskOther  string // "v Other input"
-	PanelAskSubmit string // "Enter submit"
+	PanelOther      string // "Other: "
+	PanelSubmit     string // "Submit →"
+	PanelAskNav     string // "←→/Tab 切换问题"
+	PanelAskToggle  string // "Space/Enter toggle"
+	PanelAskOther   string // "v Other input"
+	PanelAskSubmit  string // "Enter submit"
 	PanelAskNewline string // "Ctrl+J newline"
-	PanelAskCancel string // "Esc cancel"
+	PanelAskCancel  string // "Esc cancel"
 
-	BgTasksTitle        string // "Background Tasks"
-	BgTasksHelp         string // "↑↓ navigate  Enter view log  Del kill  Esc close"
-	BgTasksEmpty        string // "No background tasks running"
-	BgTasksUnsupported  string // "Background tasks not supported."
-	BgTaskLogTitle      string // "Log: %s — %s"
-	BgTaskLogHelp       string // "↑↓ scroll  Esc back"
-	BgTaskLogMore       string // "... %d more lines (↑↓ scroll)"
+	BgTasksTitle       string // "Background Tasks"
+	BgTasksHelp        string // "↑↓ navigate  Enter view log  Del kill  Esc close"
+	BgTasksEmpty       string // "No background tasks running"
+	BgTasksUnsupported string // "Background tasks not supported."
+	BgTaskLogTitle     string // "Log: %s — %s"
+	BgTaskLogHelp      string // "↑↓ scroll  Esc back"
+	BgTaskLogMore      string // "... %d more lines (↑↓ scroll)"
 
 	PanelOmitted string // "... %d lines omitted (narrow terminal) ..."
 
 	// --- C. Status bar ---
-	TitleHint              string // "Enter send · Ctrl+J newline · /help"
-	ProcessingPlaceholder  string // "[Processing...] (Ctrl+C to cancel)"
-	CheckingUpdates        string // "⟳ checking for updates..."
-	StatusReady            string // "● ready"
-	StatusCompressing      string // "compressing"
-	StatusRetrying         string // "retrying"
-	StatusDone             string // "done"
-	NewContentHint         string // "v new content"
-	BgTaskRunning          string // "[bg: %d task%s running -- ^ to manage]"
-	TabNoMatch             string // "[Tab] no matching files"
+	TitleHint             string // "Enter send · Ctrl+J newline · /help"
+	ProcessingPlaceholder string // "[Processing...] (Ctrl+C to cancel)"
+	CheckingUpdates       string // "⟳ checking for updates..."
+	StatusReady           string // "● ready"
+	StatusCompressing     string // "compressing"
+	StatusRetrying        string // "retrying"
+	StatusDone            string // "done"
+	NewContentHint        string // "v new content"
+	BgTaskRunning         string // "[bg: %d task%s running -- ^ to manage]"
+	TabNoMatch            string // "[Tab] no matching files"
 
 	// --- D. Temp status ---
 	WaitingOperation   string // "... waiting for previous operation to complete..."
@@ -62,11 +62,11 @@ type UILocale struct {
 	KillFailed         string // "Kill failed: %s"
 
 	// --- E. Help ---
-	HelpTitle         string // "xbot Help"
-	HelpCommandsTitle string // " Commands "
+	HelpTitle          string // "xbot Help"
+	HelpCommandsTitle  string // " Commands "
 	HelpShortcutsTitle string // " Shortcuts "
-	HelpCmds          []HelpCmdEntry
-	HelpKeys          []HelpKeyEntry
+	HelpCmds           []HelpCmdEntry
+	HelpKeys           []HelpKeyEntry
 
 	// --- F. Confirm dialog ---
 	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
@@ -143,22 +143,22 @@ func init() {
 		PanelToggleOn:        "● 开启",
 		PanelToggleOff:       "○ 关闭",
 
-		PanelOther:     "其他: ",
-		PanelSubmit:    "提交 →",
-		PanelAskNav:    "←→/Tab 切换问题",
-		PanelAskToggle: "Space/Enter 切换",
-		PanelAskOther:  "v 自定义输入",
-		PanelAskSubmit: "Enter 提交",
+		PanelOther:      "其他: ",
+		PanelSubmit:     "提交 →",
+		PanelAskNav:     "←→/Tab 切换问题",
+		PanelAskToggle:  "Space/Enter 切换",
+		PanelAskOther:   "v 自定义输入",
+		PanelAskSubmit:  "Enter 提交",
 		PanelAskNewline: "Ctrl+J 换行",
-		PanelAskCancel: "Esc 取消",
+		PanelAskCancel:  "Esc 取消",
 
-		BgTasksTitle:   "后台任务",
-		BgTasksHelp:    "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
-		BgTasksEmpty:        "没有正在运行的后台任务",
-		BgTasksUnsupported:  "不支持后台任务。",
-		BgTaskLogTitle:      "日志: %s — %s",
-		BgTaskLogHelp:       "↑↓ 滚动  Esc 返回",
-		BgTaskLogMore:       "... 还有 %d 行（↑↓ 滚动）",
+		BgTasksTitle:       "后台任务",
+		BgTasksHelp:        "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
+		BgTasksEmpty:       "没有正在运行的后台任务",
+		BgTasksUnsupported: "不支持后台任务。",
+		BgTaskLogTitle:     "日志: %s — %s",
+		BgTaskLogHelp:      "↑↓ 滚动  Esc 返回",
+		BgTaskLogMore:      "... 还有 %d 行（↑↓ 滚动）",
 
 		PanelOmitted: "  ... %d 行已省略（终端过窄） ...",
 
@@ -391,22 +391,22 @@ func init() {
 		PanelToggleOn:        "● ON",
 		PanelToggleOff:       "○ OFF",
 
-		PanelOther:     "Other: ",
-		PanelSubmit:    "Submit →",
-		PanelAskNav:    "←→/Tab switch question",
-		PanelAskToggle: "Space/Enter toggle",
-		PanelAskOther:  "v Other input",
-		PanelAskSubmit: "Enter submit",
+		PanelOther:      "Other: ",
+		PanelSubmit:     "Submit →",
+		PanelAskNav:     "←→/Tab switch question",
+		PanelAskToggle:  "Space/Enter toggle",
+		PanelAskOther:   "v Other input",
+		PanelAskSubmit:  "Enter submit",
 		PanelAskNewline: "Ctrl+J newline",
-		PanelAskCancel: "Esc cancel",
+		PanelAskCancel:  "Esc cancel",
 
-		BgTasksTitle:   "Background Tasks",
-		BgTasksHelp:    "↑↓ navigate  Enter view log  Del kill  Esc close",
-		BgTasksEmpty:        "No background tasks running",
-		BgTasksUnsupported:  "Background tasks not supported.",
-		BgTaskLogTitle:      "Log: %s — %s",
-		BgTaskLogHelp:       "↑↓ scroll  Esc back",
-		BgTaskLogMore:       "... %d more lines (↑↓ scroll)",
+		BgTasksTitle:       "Background Tasks",
+		BgTasksHelp:        "↑↓ navigate  Enter view log  Del kill  Esc close",
+		BgTasksEmpty:       "No background tasks running",
+		BgTasksUnsupported: "Background tasks not supported.",
+		BgTaskLogTitle:     "Log: %s — %s",
+		BgTaskLogHelp:      "↑↓ scroll  Esc back",
+		BgTaskLogMore:      "... %d more lines (↑↓ scroll)",
 
 		PanelOmitted: "  ... %d lines omitted (narrow terminal) ...",
 
@@ -639,22 +639,22 @@ func init() {
 		PanelToggleOn:        "● オン",
 		PanelToggleOff:       "○ オフ",
 
-		PanelOther:     "その他: ",
-		PanelSubmit:    "送信 →",
-		PanelAskNav:    "←→/Tab 質問切替",
-		PanelAskToggle: "Space/Enter 切替",
-		PanelAskOther:  "v その他入力",
-		PanelAskSubmit: "Enter 送信",
+		PanelOther:      "その他: ",
+		PanelSubmit:     "送信 →",
+		PanelAskNav:     "←→/Tab 質問切替",
+		PanelAskToggle:  "Space/Enter 切替",
+		PanelAskOther:   "v その他入力",
+		PanelAskSubmit:  "Enter 送信",
 		PanelAskNewline: "Ctrl+J 改行",
-		PanelAskCancel: "Esc キャンセル",
+		PanelAskCancel:  "Esc キャンセル",
 
-		BgTasksTitle:   "バックグラウンドタスク",
-		BgTasksHelp:    "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
-		BgTasksEmpty:        "実行中のバックグラウンドタスクはありません",
-		BgTasksUnsupported:  "バックグラウンドタスクは未対応です。",
-		BgTaskLogTitle:      "ログ: %s — %s",
-		BgTaskLogHelp:       "↑↓ スクロール  Esc 戻る",
-		BgTaskLogMore:       "... あと %d 行（↑↓ スクロール）",
+		BgTasksTitle:       "バックグラウンドタスク",
+		BgTasksHelp:        "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
+		BgTasksEmpty:       "実行中のバックグラウンドタスクはありません",
+		BgTasksUnsupported: "バックグラウンドタスクは未対応です。",
+		BgTaskLogTitle:     "ログ: %s — %s",
+		BgTaskLogHelp:      "↑↓ スクロール  Esc 戻る",
+		BgTaskLogMore:      "... あと %d 行（↑↓ スクロール）",
 
 		PanelOmitted: "  ... %d 行省略（端末が狭すぎます） ...",
 
@@ -864,10 +864,10 @@ func init() {
 	}
 
 	locales = map[string]*UILocale{
-		"":    zh, // default
-		"zh":  zh,
-		"en":  en,
-		"ja":  ja,
+		"":   zh, // default
+		"zh": zh,
+		"en": en,
+		"ja": ja,
 	}
 }
 

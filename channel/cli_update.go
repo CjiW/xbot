@@ -2,12 +2,12 @@ package channel
 
 import (
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Update 处理消息
@@ -40,21 +40,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewportContent()
 	default:
-		}
+	}
 
-		// i18n: locale 变更通知
-		select {
-		case <-localeChangeCh:
-			m.locale = GetLocale(currentLocaleLang)
-			m.renderCacheValid = false
-			for i := range m.messages {
-				m.messages[i].dirty = true
-			}
-			m.updateViewportContent()
-		default:
+	// i18n: locale 变更通知
+	select {
+	case <-localeChangeCh:
+		m.locale = GetLocale(currentLocaleLang)
+		m.renderCacheValid = false
+		for i := range m.messages {
+			m.messages[i].dirty = true
 		}
+		m.updateViewportContent()
+	default:
+	}
 
-		// §12 Panel mode: intercept all key events when panel is active
+	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyMsg); ok && m.panelMode != "" {
 		// Ctrl+C must always cancel the agent — never swallow it
 		if key.Type == tea.KeyCtrlC && m.typing {
@@ -160,12 +160,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case tea.KeyUp:
-				// ↑ with bg tasks running + empty input → open bg tasks panel
-				// No inputReady gate — bg tasks should be manageable while agent is running
-				if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
-					m.openBgTasksPanel()
-					return m, nil
-				}
+			// ↑ with bg tasks running + empty input → open bg tasks panel
+			// No inputReady gate — bg tasks should be manageable while agent is running
+			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
+				m.openBgTasksPanel()
+				return m, nil
+			}
 
 		case tea.KeyEnter:
 			// Enter 发送消息
@@ -715,4 +715,3 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor lipglos
 
 	return
 }
-

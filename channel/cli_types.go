@@ -1,19 +1,20 @@
 package channel
 
 import (
-	"fmt"
-	"strings"
-	"sync"
-	"time"
 	"encoding/json"
-	"xbot/bus"
-	"xbot/llm"
-	"xbot/tools"
+	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"strings"
+	"sync"
+	"time"
+	"xbot/bus"
+	"xbot/llm"
+	"xbot/tools"
 )
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -114,7 +115,6 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	)
 	return r
 }
-
 
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{

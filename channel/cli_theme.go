@@ -1,11 +1,12 @@
 package channel
 
 import (
-	"os"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"os"
 )
+
 func init() {
 	lipgloss.SetHasDarkBackground(true) // 所有配色方案都基于深色终端背景
 	lipgloss.SetColorProfile(termenv.TrueColor)
@@ -227,28 +228,28 @@ type cliStyles struct {
 	HelpKey          lipgloss.Style
 	HelpPanel        lipgloss.Style
 	// --- completions ---
-	CompSelected     lipgloss.Style
-	CompItem         lipgloss.Style
-	CompHint         lipgloss.Style
-	CompHintBorder   lipgloss.Style
+	CompSelected   lipgloss.Style
+	CompItem       lipgloss.Style
+	CompHint       lipgloss.Style
+	CompHintBorder lipgloss.Style
 	// --- view helpers ---
-	LineHint         lipgloss.Style
-	WarningBold      lipgloss.Style
-	PlaceholderSt    lipgloss.Style
+	LineHint      lipgloss.Style
+	WarningBold   lipgloss.Style
+	PlaceholderSt lipgloss.Style
 	// --- splash ---
-	VersionSt        lipgloss.Style
+	VersionSt lipgloss.Style
 	// --- toast ---
-	ToastIcon        lipgloss.Style
+	ToastIcon lipgloss.Style
 	// --- message render ---
-	UserDotSep       lipgloss.Style
-	UserHeader       lipgloss.Style
-	UserContent      lipgloss.Style
-	AssistantGuide   lipgloss.Style
-	StreamCursor     lipgloss.Style
+	UserDotSep     lipgloss.Style
+	UserHeader     lipgloss.Style
+	UserContent    lipgloss.Style
+	AssistantGuide lipgloss.Style
+	StreamCursor   lipgloss.Style
 	// --- settings panel ---
-	SettingsDivider  lipgloss.Style
-	SettingsCat      lipgloss.Style
-	SettingsSelBg    lipgloss.Style
+	SettingsDivider lipgloss.Style
+	SettingsCat     lipgloss.Style
+	SettingsSelBg   lipgloss.Style
 	// --- textarea presets ---
 	TACursor         lipgloss.Style
 	TABase           lipgloss.Style
@@ -265,8 +266,8 @@ type cliStyles struct {
 	TICursor         lipgloss.Style
 	TIPlaceholder    lipgloss.Style
 	// --- key hints (footer) ---
-	KeyLabelSt       lipgloss.Style
-	KeyDescSt        lipgloss.Style
+	KeyLabelSt lipgloss.Style
+	KeyDescSt  lipgloss.Style
 	// --- search highlight ---
 
 	// toolDisplayInfo
@@ -340,28 +341,28 @@ func buildStyles(width int) cliStyles {
 		HelpKey:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
 		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Background(c(t.Overlay)).Padding(0, 1).Width(cw),
 		// --- completions ---
-		CompSelected:     lipgloss.NewStyle().Bold(true).Underline(true).Foreground(c(t.Success)),
-		CompItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
-		CompHint:         lipgloss.NewStyle().Padding(0, 1),
-		CompHintBorder:   lipgloss.NewStyle().Foreground(c(t.Success)).Padding(0, 1),
+		CompSelected:   lipgloss.NewStyle().Bold(true).Underline(true).Foreground(c(t.Success)),
+		CompItem:       lipgloss.NewStyle().Foreground(c(t.Success)),
+		CompHint:       lipgloss.NewStyle().Padding(0, 1),
+		CompHintBorder: lipgloss.NewStyle().Foreground(c(t.Success)).Padding(0, 1),
 		// --- view helpers ---
-		LineHint:         lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
-		WarningBold:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Padding(0, 1),
-		PlaceholderSt:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		LineHint:      lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
+		WarningBold:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true).Padding(0, 1),
+		PlaceholderSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		// --- splash ---
-		VersionSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		VersionSt: lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		// --- toast ---
-		ToastIcon:        lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
+		ToastIcon: lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
 		// --- message render ---
-		UserDotSep:       lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
-		UserHeader:       lipgloss.NewStyle(),
-		UserContent:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		AssistantGuide:   lipgloss.NewStyle().Foreground(c(t.Accent)),
-		StreamCursor:     lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		UserDotSep:     lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
+		UserHeader:     lipgloss.NewStyle(),
+		UserContent:    lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		AssistantGuide: lipgloss.NewStyle().Foreground(c(t.Accent)),
+		StreamCursor:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		// --- settings panel ---
-		SettingsDivider:  lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
-		SettingsCat:      lipgloss.NewStyle().Foreground(c(t.AccentAlt)).Bold(true),
-		SettingsSelBg:    lipgloss.NewStyle().Background(c(t.BarEmpty)),
+		SettingsDivider: lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
+		SettingsCat:     lipgloss.NewStyle().Foreground(c(t.AccentAlt)).Bold(true),
+		SettingsSelBg:   lipgloss.NewStyle().Background(c(t.BarEmpty)),
 		// --- textarea presets ---
 		TACursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
 		TABase:           lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
@@ -378,8 +379,8 @@ func buildStyles(width int) cliStyles {
 		TICursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
 		TIPlaceholder:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		// --- key hints (footer) ---
-		KeyLabelSt:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
-		KeyDescSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		KeyLabelSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
+		KeyDescSt:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 	}
 }
 
@@ -436,4 +437,3 @@ func ThemeNames() []string {
 	}
 	return names
 }
-

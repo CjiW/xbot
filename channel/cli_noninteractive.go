@@ -68,4 +68,3 @@ func (c *NonInteractiveChannel) Send(msg bus.OutboundMessage) (string, error) {
 	return "", nil
 }
 func (c *NonInteractiveChannel) WaitDone() { <-c.done }
-

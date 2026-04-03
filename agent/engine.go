@@ -998,20 +998,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				execResults[entry.index].llmContent = execResults[entry.index].content
 
 				if autoNotify {
-						if tc.Name == "SubAgent" {
-							line := progressLines[progressStartIdx+entry.index]
-							if strings.Contains(line, "🔄") {
-								// Progress callback fired — mark tree as failed while preserving structure
-								progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(line, "🔄", "❌")
-							} else {
-								// Progress callback never fired (e.g. immediate validation error like missing instance)
-								// Replace the ⏳ placeholder with a clear ❌ completion line
-								progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
-							}
+					if tc.Name == "SubAgent" {
+						line := progressLines[progressStartIdx+entry.index]
+						if strings.Contains(line, "🔄") {
+							// Progress callback fired — mark tree as failed while preserving structure
+							progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(line, "🔄", "❌")
 						} else {
+							// Progress callback never fired (e.g. immediate validation error like missing instance)
+							// Replace the ⏳ placeholder with a clear ❌ completion line
 							progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 						}
+					} else {
+						progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 					}
+				}
 			} else {
 				execResults[entry.index].content = result.Summary
 				execResults[entry.index].llmContent = buildToolMessageContent(result)

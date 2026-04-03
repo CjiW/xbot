@@ -2,13 +2,14 @@ package channel
 
 import (
 	"fmt"
+	"github.com/charmbracelet/lipgloss"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 	"xbot/version"
-	"github.com/charmbracelet/lipgloss"
 )
+
 // View 渲染界面
 func (m *cliModel) View() string {
 	// §14 启动画面：品牌展示动画（~2.4 秒后自动消失）
@@ -418,24 +419,24 @@ func (m *cliModel) renderFooter() string {
 		case "bgtasks":
 			if m.panelBgViewing {
 				hints = append(hints, m.keyHint("PgUp/PgDn", m.locale.FooterScroll), m.keyHint("Esc", m.locale.FooterBack))
-					} else {
-						hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterLog), m.keyHint("Del", m.locale.FooterKill), m.keyHint("Esc", m.locale.FooterClose))
-					}
-				default:
-					hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterSelect), m.keyHint("Esc", m.locale.FooterClose))
+			} else {
+				hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterLog), m.keyHint("Del", m.locale.FooterKill), m.keyHint("Esc", m.locale.FooterClose))
+			}
+		default:
+			hints = append(hints, m.keyHint("↑↓", m.locale.FooterNavigate), m.keyHint("Enter", m.locale.FooterSelect), m.keyHint("Esc", m.locale.FooterClose))
 		}
 	} else if m.typing {
 		// 处理中：显示取消快捷键
 		hints = append(hints, m.ctrlKey("c", m.locale.FooterCancel))
+	} else {
+		// 就绪态：显示核心快捷键
+		if m.textarea.Value() == "" {
+			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
+			if m.bgTaskCount > 0 {
+				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
+			}
 		} else {
-			// 就绪态：显示核心快捷键
-			if m.textarea.Value() == "" {
-				hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
-				if m.bgTaskCount > 0 {
-					hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
-				}
-			} else {
-				hints = append(hints, m.ctrlKey("j", m.locale.FooterNewline), m.keyHint("tab", m.locale.FooterComplete), m.ctrlKey("k", m.locale.FooterDelete))
+			hints = append(hints, m.ctrlKey("j", m.locale.FooterNewline), m.keyHint("tab", m.locale.FooterComplete), m.ctrlKey("k", m.locale.FooterDelete))
 		}
 	}
 

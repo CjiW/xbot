@@ -13,17 +13,18 @@
 package channel
 
 import (
-	"os"
-	"strings"
 	"context"
-	"xbot/bus"
-	"xbot/tools"
-	"xbot/version"
-	log "xbot/logger"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"os"
+	"strings"
+	"xbot/bus"
+	log "xbot/logger"
+	"xbot/tools"
+	"xbot/version"
 )
+
 func NewCLIChannel(cfg CLIChannelConfig, msgBus *bus.MessageBus) *CLIChannel {
 	return &CLIChannel{
 		config:  cfg,
@@ -61,20 +62,20 @@ func (c *CLIChannel) Start() error {
 
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
-		c.model.channel = c
-		c.model.SetMsgBus(c.msgBus)
-		c.model.workDir = c.workDir
-		c.model.chatID = c.config.ChatID
+	c.model.channel = c
+	c.model.SetMsgBus(c.msgBus)
+	c.model.workDir = c.workDir
+	c.model.chatID = c.config.ChatID
 
-		// i18n: initialize locale from settings
-		if c.settingsSvc != nil {
-			if vals, err := c.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
-				if lang, ok := vals["language"]; ok {
-					SetLocale(lang)
-					c.model.locale = GetLocale(lang)
-				}
+	// i18n: initialize locale from settings
+	if c.settingsSvc != nil {
+		if vals, err := c.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+			if lang, ok := vals["language"]; ok {
+				SetLocale(lang)
+				c.model.locale = GetLocale(lang)
 			}
 		}
+	}
 
 	// Setup bg task count callback
 	c.updateBgTaskCountFn()
@@ -241,4 +242,3 @@ type animTicker struct {
 	color    string         // 主色值（主题切换时重建样式用）
 	colorAlt string         // 备选色值
 }
-

@@ -58,8 +58,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Ctrl+Z: 紧急退出（无论什么状态，包括 panel/typing/idle）
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+z" {
-		m.appendSystem("🚪 紧急退出 (Ctrl+Z)")
-		m.updateViewportContent()
+		m.showSystemMsg("🚪 紧急退出 (Ctrl+Z)", feedbackWarning)
 		return m, tea.Quit
 	}
 
@@ -117,16 +116,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoExpandInput()
 		return m, nil
 	}
-
 	// Ctrl+O 切换 tool summary 展开/折叠（CSI u 协议兼容层，kitty/Ghostty 等）
 	if isCtrlO(msg) {
-		m.toolSummaryExpanded = !m.toolSummaryExpanded
-		m.renderCacheValid = false
-		m.cachedHistory = ""
-		for i := range m.messages {
-			m.messages[i].dirty = true
-		}
-		m.updateViewportContent()
+		m.toggleToolSummary()
 		return m, nil
 	}
 
@@ -235,8 +227,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Enter 发送消息
 			if !m.inputReady {
 				if m.textarea.Value() != "" {
-					m.tempStatus = m.locale.WaitingOperation
-					return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
+					m.showTempStatus(m.locale.WaitingOperation)
+					return m, m.clearTempStatusCmd()
 				}
 				return m, nil
 			}
@@ -302,20 +294,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderCacheValid = false
 				m.updateViewportContent()
 			} else if !m.typing {
-				m.tempStatus = m.locale.NoMessagesToDelete
-				return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return cliTempStatusClearMsg{} })
+				m.showTempStatus(m.locale.NoMessagesToDelete)
+				return m, m.clearTempStatusCmd()
 			}
 			return m, nil
 
 		case msg.String() == "ctrl+o":
 			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
-			m.toolSummaryExpanded = !m.toolSummaryExpanded
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			for i := range m.messages {
-				m.messages[i].dirty = true
-			}
-			m.updateViewportContent()
+			m.toggleToolSummary()
 			return m, nil
 
 		} // end switch
@@ -537,26 +523,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if strings.Contains(lower, "error") || strings.Contains(lower, "failed") {
 			icon = "✗"
 		}
-		cmds = append(cmds, func() tea.Msg {
-			return cliToastMsg{text: firstLine, icon: icon}
-		})
-
+		cmds = append(cmds, m.enqueueToast(firstLine, icon))
 	case cliUpdateCheckMsg:
 		m.checkingUpdate = false
 		if msg.info != nil {
 			m.updateNotice = msg.info
 			if msg.info.HasUpdate {
 				content := fmt.Sprintf(m.locale.UpdateFound, msg.info.Current, msg.info.Latest, msg.info.URL)
-				m.appendSystem(content)
-				m.updateViewportContent()
+				m.showSystemMsg(content, feedbackInfo)
 			} else {
 				content := fmt.Sprintf(m.locale.UpdateCurrent, msg.info.Current)
-				m.appendSystem(content)
-				m.updateViewportContent()
+				m.showSystemMsg(content, feedbackInfo)
 			}
 		} else {
-			m.appendSystem(m.locale.UpdateFailed)
-			m.updateViewportContent()
+			m.showSystemMsg(m.locale.UpdateFailed, feedbackError)
 		}
 
 	case tickerTickMsg:

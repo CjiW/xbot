@@ -67,24 +67,17 @@ func (m *cliModel) openSetupPanel() {
 		}
 		// Apply theme immediately
 		if theme, ok := vals["theme"]; ok && theme != "" {
-			ApplyTheme(theme)
-			if m.width > 4 {
-				m.renderer = newGlamourRenderer(m.width - 4)
-			}
-			m.renderCacheValid = false
+			m.applyThemeAndRebuild(theme)
 		}
 		// i18n: detect language change
 		if lang, ok := vals["language"]; ok {
-			SetLocale(lang)
-			m.locale = GetLocale(lang)
-			m.renderCacheValid = false
+			m.applyLanguageChange(lang)
 		}
 		msg := m.locale.SetupComplete
 		if vals["memory_provider"] == "letta" {
 			msg += m.locale.SetupLettaNote
 		}
-		m.appendSystem(msg)
-		m.updateViewportContent()
+		m.showSystemMsg(msg, feedbackInfo)
 	})
 }
 
@@ -237,11 +230,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	// Task list mode
 	switch {
 	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.closePanelAndResume()
 
 	case msg.Code == tea.KeyUp || msg.String() == "ctrl+k":
 		if m.panelBgCursor > 0 {
@@ -276,10 +265,8 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			if task.Status == tools.BgTaskRunning {
 				if m.channel != nil && m.channel.bgTaskMgr != nil {
 					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
-						m.tempStatus = fmt.Sprintf(m.locale.KillFailed, err)
-						return true, m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-							return cliTempStatusClearMsg{}
-						})
+						m.showTempStatus(fmt.Sprintf(m.locale.KillFailed, err))
+						return true, m, m.clearTempStatusCmd()
 					}
 					// Refresh list after kill
 					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
@@ -589,15 +576,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 
 	switch {
 	case msg.String() == "ctrl+s":
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.submitAskAnswers()
 	case msg.Code == tea.KeyEsc:
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
@@ -651,15 +630,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	case msg.Code == tea.KeyEnter:
 		if hasOpts {
 			if onSubmit {
-				answers := m.collectAskAnswers()
-				if m.panelOnAnswer != nil {
-					m.panelOnAnswer(answers)
-				}
-				m.closePanel()
-				if m.typing {
-					return true, m, tea.Batch(tickerCmd(), tickCmd())
-				}
-				return true, m, nil
+				return m.submitAskAnswers()
 			}
 			// On checkbox: toggle; on Other: do nothing (let user type)
 			if !onOther {
@@ -667,15 +638,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			}
 			return true, m, nil
 		}
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.submitAskAnswers()
 	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {

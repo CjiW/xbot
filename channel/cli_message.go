@@ -172,8 +172,7 @@ func (m *cliModel) sendCancel() {
 	if m.msgBus != nil {
 		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
 	}
-	m.appendSystem(m.locale.CancelSent)
-	m.updateViewportContent()
+	m.showSystemMsg(m.locale.CancelSent, feedbackInfo)
 }
 
 // sendToAgent 发送命令到 agent，并添加用户消息到历史（§3 命令透传机制）
@@ -186,10 +185,7 @@ func (m *cliModel) sendToAgent(content string) {
 	})
 	if m.msgBus != nil {
 		m.msgBus.Inbound <- m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
-		m.typing = true
-		m.updatePlaceholder()
-		m.inputReady = false
-		m.resetProgressState()
+		m.startAgentTurn()
 	}
 }
 
@@ -226,10 +222,7 @@ func (m *cliModel) sendMessage(content string) tea.Cmd {
 		msg := m.newInbound(content, nil) // ReplyPolicyAuto (default)
 		msg.Media = media
 		m.msgBus.Inbound <- msg
-		m.typing = true
-		m.updatePlaceholder()
-		m.inputReady = false
-		m.resetProgressState()
+		m.startAgentTurn()
 	}
 	return nil
 }
@@ -312,8 +305,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		if m.channel != nil {
 			schema := m.channel.SettingsSchema()
 			if len(schema) == 0 {
-				m.appendSystem(m.locale.NoSettings)
-				m.updateViewportContent()
+				m.showSystemMsg(m.locale.NoSettings, feedbackWarning)
 			} else {
 				// Get current values: start from config, overlay with SettingsService
 				currentValues := make(map[string]string)
@@ -357,16 +349,8 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 					// Apply theme immediately
 					if theme, ok := values["theme"]; ok {
-						ApplyTheme(theme)
-						// Rebuild glamour renderer with new theme
-						if m.width > 4 {
-							m.renderer = newGlamourRenderer(m.width - 4)
-						}
-						m.renderCacheValid = false
-						// Mark all messages dirty so fullRebuild re-renders with new colors
-						for j := range m.messages {
-							m.messages[j].dirty = true
-						}
+						m.applyThemeAndRebuild(theme)
+						m.invalidateAllCache(false)
 					}
 					// Update live config overrides (model, base_url)
 					if model, ok := values["llm_model"]; ok && model != "" {
@@ -374,12 +358,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 					// i18n: detect language change
 					if lang, ok := values["language"]; ok {
-						SetLocale(lang)
-						m.locale = GetLocale(lang)
-						m.renderCacheValid = false
+						m.applyLanguageChange(lang)
 					}
-					m.appendSystem(m.locale.SettingsSaved)
-					m.updateViewportContent()
+					m.showSystemMsg(m.locale.SettingsSaved, feedbackInfo)
 				})
 			}
 		}
@@ -389,15 +370,14 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 	case "/update":
 		if m.checkingUpdate {
-			m.appendSystem(m.locale.CheckingUpdate)
+			m.showSystemMsg(m.locale.CheckingUpdate, feedbackInfo)
 		} else {
 			m.checkingUpdate = true
 			m.updateNotice = nil
 			if m.channel != nil {
 				m.channel.CheckUpdateAsync()
 			}
-			m.appendSystem(m.locale.CheckingUpdate)
-			m.updateViewportContent()
+			m.showSystemMsg(m.locale.CheckingUpdate, feedbackInfo)
 		}
 
 	case "/quit", "/exit":
@@ -405,7 +385,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 	case "/help":
 		helpContent := m.renderHelpPanel()
-		m.appendSystem(helpContent)
+		m.showSystemMsg(helpContent, feedbackInfo)
 
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
@@ -417,7 +397,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/model":
 		// /model <name> → /set-model <name>
 		if len(parts) < 2 {
-			m.appendSystem(m.locale.ModelUsage)
+			m.showSystemMsg(m.locale.ModelUsage, feedbackWarning)
 		} else {
 			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
 		}
@@ -436,17 +416,17 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		if m.bgTaskCountFn != nil {
 			count := m.bgTaskCountFn()
 			if count == 0 {
-				m.appendSystem(m.locale.BgTasksEmpty)
+				m.showSystemMsg(m.locale.BgTasksEmpty, feedbackInfo)
 			} else {
 				// Get full task list from channel
 				ch := m.channel
 				if ch.bgTaskMgr != nil {
 					tasks := tools.ListBgTasks(ch.bgTaskMgr, ch.bgSessionKey)
-					m.appendSystem(tasks)
+					m.showSystemMsg(tasks, feedbackInfo)
 				}
 			}
 		} else {
-			m.appendSystem(m.locale.BgTasksUnsupported)
+			m.showSystemMsg(m.locale.BgTasksUnsupported, feedbackWarning)
 		}
 
 	default:
@@ -594,14 +574,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 						ans := answers[key]
 						answerParts = append(answerParts, fmt.Sprintf("  %s → %s", item.Question, ans))
 					}
-					m.appendSystem(strings.Join(answerParts, "\n"))
-					m.typing = true
-					m.updatePlaceholder()
-					m.inputReady = false
-					m.resetProgressState()
+					m.showSystemMsg(strings.Join(answerParts, "\n"), feedbackInfo)
+					m.startAgentTurn()
 					m.updateViewportContent()
 				}, func() {
-					m.appendSystem(m.locale.AskCancelled)
+					m.showSystemMsg(m.locale.AskCancelled, feedbackInfo)
 					m.typing = false
 					m.updatePlaceholder()
 					m.inputReady = true
@@ -978,29 +955,19 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		hintStyle := s.ToolHint
 
 		// 统计总工具数和总耗时
-		// 统计总工具数和总耗时
-		totalTools := 0
+		allTools, iterCount := msg.iterToolsFlat()
+		totalTools := len(allTools)
 		totalMs := int64(0)
-		if len(msg.iterations) > 0 {
-			for _, it := range msg.iterations {
-				totalTools += len(it.Tools)
-				for _, tool := range it.Tools {
-					totalMs += tool.Elapsed
-				}
-			}
-		} else {
-			totalTools = len(msg.tools)
-			for _, tool := range msg.tools {
-				totalMs += tool.Elapsed
-			}
+		for _, tool := range allTools {
+			totalMs += tool.Elapsed
 		}
 
 		var toolSb strings.Builder
 
 		if m.toolSummaryExpanded {
 			// 展开模式：完整渲染
-			if len(msg.iterations) > 0 {
-				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", len(msg.iterations), totalTools)))
+			if iterCount > 0 {
+				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", iterCount, totalTools)))
 				toolSb.WriteString("\n")
 				for _, it := range msg.iterations {
 					if it.Thinking != "" {
@@ -1035,26 +1002,13 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			elapsedStr := formatElapsed(totalMs)
 			// 统计成功/失败工具数
 			successCount, errorCount := 0, 0
-			if len(msg.iterations) > 0 {
-				for _, it := range msg.iterations {
-					for _, tool := range it.Tools {
-						if tool.Status == "error" {
-							errorCount++
-						} else {
-							successCount++
-						}
-					}
-				}
-			} else {
-				for _, tool := range msg.tools {
-					if tool.Status == "error" {
-						errorCount++
-					} else {
-						successCount++
-					}
+			for _, tool := range allTools {
+				if tool.Status == "error" {
+					errorCount++
+				} else {
+					successCount++
 				}
 			}
-			// 状态摘要图标
 			var statusIcons string
 			if errorCount > 0 {
 				statusIcons = s.ProgressError.Render("✗") +
@@ -1078,14 +1032,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
 		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
-		isError := false
-		lowerContent := strings.ToLower(msg.content)
-		for _, kw := range errorKeywords {
-			if strings.Contains(lowerContent, kw) {
-				isError = true
-				break
-			}
-		}
+		isError := isErrorContent(msg.content)
 		if isError {
 			sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
 		} else {

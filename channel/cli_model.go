@@ -283,7 +283,7 @@ func newCLIModel() *cliModel {
 	ta := textarea.New()
 	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
 	ta.Focus()
-	ta.SetWidth(76)
+	ta.SetWidth(72)
 	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.ShowLineNumbers = false

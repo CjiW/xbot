@@ -782,9 +782,9 @@ func (m *cliModel) handleResize(width, height int) {
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
 
-	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
-	// textarea must match the content width exactly.
-	iw := width - 4
+	// InputBox: Width(width-4) includes border(2) + padding(2).
+	// Content area = width-4-2-2 = width-8. Textarea must match this.
+	iw := width - 8
 	if iw < 10 {
 		iw = 10
 	}

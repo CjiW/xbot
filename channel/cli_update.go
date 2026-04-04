@@ -44,15 +44,15 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// i18n: locale 变更通知
-		select {
-		case <-localeChangeCh:
-			m.locale = GetLocale(currentLocaleLang)
-			m.renderCacheValid = false
-			for i := range m.messages {
-				m.messages[i].dirty = true
-			}
-			m.updatePlaceholder()
-			m.updateViewportContent()
+	select {
+	case <-localeChangeCh:
+		m.locale = GetLocale(currentLocaleLang)
+		m.renderCacheValid = false
+		for i := range m.messages {
+			m.messages[i].dirty = true
+		}
+		m.updatePlaceholder()
+		m.updateViewportContent()
 	default:
 	}
 
@@ -469,36 +469,36 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case cliTickMsg:
-			// Always refresh bg task count on tick so status bar updates immediately
-			// when a bg task completes (even when no progress event is coming)
-			if m.bgTaskCountFn != nil {
-				prev := m.bgTaskCount
-				m.bgTaskCount = m.bgTaskCountFn()
-				// Force re-render when count changes (e.g. task killed in panel)
-				if m.bgTaskCount != prev {
-					m.renderCacheValid = false
-				}
+		// Always refresh bg task count on tick so status bar updates immediately
+		// when a bg task completes (even when no progress event is coming)
+		if m.bgTaskCountFn != nil {
+			prev := m.bgTaskCount
+			m.bgTaskCount = m.bgTaskCountFn()
+			// Force re-render when count changes (e.g. task killed in panel)
+			if m.bgTaskCount != prev {
+				m.renderCacheValid = false
 			}
-			// Schedule next tick when agent is active or bg tasks are running.
-			// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
-			// (two tickCmd() would double the message count every 100ms → CPU explosion).
-			busy := m.typing || m.progress != nil
-			if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
-				cmds = append(cmds, tickCmd())
-			} else {
-				// Transition to idle: start low-frequency tick for placeholder rotation
-				cmds = append(cmds, idleTickCmd())
-			}
-			if busy {
-				m.updateViewportContent()
-			}
+		}
+		// Schedule next tick when agent is active or bg tasks are running.
+		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
+		// (two tickCmd() would double the message count every 100ms → CPU explosion).
+		busy := m.typing || m.progress != nil
+		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
+			cmds = append(cmds, tickCmd())
+		} else {
+			// Transition to idle: start low-frequency tick for placeholder rotation
+			cmds = append(cmds, idleTickCmd())
+		}
+		if busy {
+			m.updateViewportContent()
+		}
 
-		case idleTickMsg:
-			// Low-frequency idle tick: rotate placeholder and keep alive
-			if !m.typing && m.progress == nil {
-				m.updatePlaceholder()
-				cmds = append(cmds, idleTickCmd())
-			}
+	case idleTickMsg:
+		// Low-frequency idle tick: rotate placeholder and keep alive
+		if !m.typing && m.progress == nil {
+			m.updatePlaceholder()
+			cmds = append(cmds, idleTickCmd())
+		}
 
 	case cliTempStatusClearMsg:
 		m.tempStatus = ""
@@ -571,14 +571,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// §14 启动画面动画帧推进
 		m.splashFrame = msg.frame
 		if m.ready && msg.frame >= 20 {
-		// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
-		m.splashDone = true
-		return m, idleTickCmd()
+			// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
+			m.splashDone = true
+			return m, idleTickCmd()
 		}
 		// 兜底上限：~2 秒（40 帧）
 		if msg.frame >= 40 {
-		m.splashDone = true
-		return m, idleTickCmd()
+			m.splashDone = true
+			return m, idleTickCmd()
 		}
 		cmds = append(cmds, m.splashTick(msg.frame))
 		return m, tea.Batch(cmds...)

@@ -127,17 +127,25 @@ func (m *cliModel) View() tea.View {
 				}()))
 			}
 			// 模型名称（优先显示用户覆盖，否则显示当前实际模型）
-				if m.channel != nil {
-					m.channel.configMu.RLock()
-					modelName := m.channel.modelOverride
-					m.channel.configMu.RUnlock()
-					if modelName == "" && m.channel.config.GetCurrentValues != nil {
+			if m.channel != nil {
+				m.channel.configMu.RLock()
+				modelName := m.channel.modelOverride
+				m.channel.configMu.RUnlock()
+				if modelName == "" {
+					// 与 settings panel 一致：GetCurrentValues + SettingsService 覆盖
+					if m.channel.config.GetCurrentValues != nil {
 						modelName = m.channel.config.GetCurrentValues()["llm_model"]
 					}
-					if modelName != "" {
-						readyParts = append(readyParts, modelName)
+					if modelName == "" && m.channel.settingsSvc != nil {
+						if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+							modelName = vals["llm_model"]
+						}
 					}
 				}
+				if modelName != "" {
+					readyParts = append(readyParts, modelName)
+				}
+			}
 			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 		}
 		// 临时状态提示（自动过期）

@@ -124,15 +124,9 @@ func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
 	if msg.feedbackMsg != "" {
 		m.appendSystem(msg.feedbackMsg)
 	}
-	// Only fullRebuild if theme or locale actually changed (new styles/colors).
-	// For non-visual settings (model, iterations, etc.), just appending the
-	// system message and doing a targeted update is enough.
 	if visualChanged {
 		m.invalidateAllCache(true)
 	} else {
-		// Minimal update: only the new system message needs rendering.
-		// updateViewportContent will detect cache is still valid for old messages
-		// (cachedMsgCount != len(m.messages) → rebuild, but skips non-dirty old msgs).
 		m.updateViewportContent()
 	}
 	return nil

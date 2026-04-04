@@ -1143,8 +1143,9 @@ func (c *CLIChannel) UpdateConfig(model, baseURL string) {
 	if baseURL != "" {
 		c.baseURLOverride = baseURL
 	}
-	// Refresh cached model name for View()
-	c.model.refreshCachedModelName()
+	// NOTE: do NOT call refreshCachedModelName() here — it acquires configMu.RLock()
+	// which would deadlock with the write lock held above. Callers must call
+	// refreshCachedModelName() after UpdateConfig returns if needed.
 }
 
 // GetModelOverride returns the user-overridden model name (empty if not set).

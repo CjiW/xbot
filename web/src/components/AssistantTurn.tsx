@@ -127,13 +127,10 @@ function CollapsibleSection({
 function isThinkingContent(content: string): boolean {
   const trimmed = content.trim()
   // Only match explicit thinking markers — NOT regular assistant text
-  if (trimmed.startsWith('💭')) return true
+  if (trimmed.startsWith('💭') && trimmed.length > 12) return true
   if (trimmed.startsWith('<think')) return true
   if (trimmed.startsWith('<thinking')) return true
   if (trimmed.startsWith('【思考】')) return true
-  // Must have substantial thinking content (>10 chars) after the marker
-  // to avoid false positives on short 💭 prefixes
-  if (trimmed.startsWith('💭') && trimmed.length > 12) return true
   return false
 }
 

@@ -2315,6 +2315,31 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
   color: rgba(255, 255, 255, 0.5);
 }
 
+/* Attachment cards — light mode overrides */
+[data-theme="light"] .attachment-image {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: #d1cdc7;
+}
+[data-theme="light"] .attachment-image:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .attachment-meta {
+  color: #78716c;
+  background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .attachment-file {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+[data-theme="light"] .attachment-file:hover {
+  background: #e2e8f0;
+}
+[data-theme="light"] .attachment-file-icon {
+  background: #e2e8f0;
+}
+
+
 /* ========================================================================== */
 /* AskUser Panel Animation                                                     */
 /* ========================================================================== */
@@ -2335,6 +2360,19 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
 @keyframes askuser-slide-up {
   from { opacity: 0; transform: translateY(20px) scale(0.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Search result highlight animation */
+.search-highlight {
+  animation: search-highlight-pulse 0.6s ease-out 3;
+  outline: 2px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+@keyframes search-highlight-pulse {
+  0%, 100% { outline-color: rgba(59, 130, 246, 0.2); }
+  50% { outline-color: rgba(59, 130, 246, 0.7); }
 }
 
 /* ========================================================================== */

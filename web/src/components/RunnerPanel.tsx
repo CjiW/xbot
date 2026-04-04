@@ -81,8 +81,11 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
     setLoading(false)
   }, [])
 
+  // Auto-refresh runner list every 30s while panel is visible
   useEffect(() => {
     fetchRunners()
+    const timer = setInterval(fetchRunners, 30_000)
+    return () => clearInterval(timer)
   }, [fetchRunners])
 
   // Build connect command for a runner

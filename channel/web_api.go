@@ -123,7 +123,6 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages})
 }
 
-
 // handleHistoryDelete clears all messages for the current user.
 func (wc *WebChannel) handleHistoryDelete(w http.ResponseWriter, r *http.Request, senderID string) {
 	// Find tenant ID for this web user

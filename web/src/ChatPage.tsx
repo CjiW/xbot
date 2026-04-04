@@ -475,6 +475,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       }
     }
 
+    ws.onerror = (e) => {
+      console.warn('[WS] error', e)
+    }
+
     ws.onclose = (e) => {
       setConnected(false)
 
@@ -993,6 +997,12 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                     className="px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 cursor-pointer text-sm"
                     onClick={() => {
                       setSearchOpen(false)
+                      const el = messagesContainerRef.current?.querySelector(`[data-msg-id="hist-${hit.id}"]`)
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        el.classList.add('search-highlight')
+                        setTimeout(() => el.classList.remove('search-highlight'), 2000)
+                      }
                     }}
                   >
                     <div className="flex items-center gap-2 mb-1">

@@ -218,7 +218,7 @@ type CLIToolProgress struct {
 	Status    string
 	Elapsed   int64 // milliseconds
 	Iteration int   // 所属迭代 ID
-	Summary string
+	Summary   string
 }
 
 // CLISubAgent 子 Agent 的结构化进度状态。

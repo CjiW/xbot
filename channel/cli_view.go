@@ -126,15 +126,18 @@ func (m *cliModel) View() tea.View {
 					return ""
 				}()))
 			}
-			// 模型名称（如果用户通过 /settings 覆盖了）
-			if m.channel != nil {
-				m.channel.configMu.RLock()
-				modelName := m.channel.modelOverride
-				m.channel.configMu.RUnlock()
-				if modelName != "" {
-					readyParts = append(readyParts, modelName)
+			// 模型名称（优先显示用户覆盖，否则显示当前实际模型）
+				if m.channel != nil {
+					m.channel.configMu.RLock()
+					modelName := m.channel.modelOverride
+					m.channel.configMu.RUnlock()
+					if modelName == "" && m.channel.config.GetCurrentValues != nil {
+						modelName = m.channel.config.GetCurrentValues()["llm_model"]
+					}
+					if modelName != "" {
+						readyParts = append(readyParts, modelName)
+					}
 				}
-			}
 			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 		}
 		// 临时状态提示（自动过期）

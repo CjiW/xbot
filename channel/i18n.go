@@ -42,7 +42,9 @@ type UILocale struct {
 	BgTaskLogHelp      string // "↑↓ scroll  Esc back"
 	BgTaskLogMore      string // "... %d more lines (↑↓ scroll)"
 
-	PanelOmitted string // "... %d lines omitted (narrow terminal) ..."
+	PanelOmitted          string // "... %d lines omitted (narrow terminal) ..."
+	PanelOtherPlaceholder string // askuser panel Other input placeholder
+	EmergencyQuitHint     string // Ctrl+Z emergency quit hint
 
 	// --- C. Status bar ---
 	TitleHint             string // "Enter send · Ctrl+J newline · /help"
@@ -160,7 +162,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ 滚动  Esc 返回",
 		BgTaskLogMore:      "... 还有 %d 行（↑↓ 滚动）",
 
-		PanelOmitted: "  ... %d 行已省略（终端过窄） ...",
+		PanelOmitted:          "  ... %d 行已省略（终端过窄） ...",
+		PanelOtherPlaceholder: "在此输入...",
+		EmergencyQuitHint:     "🚪 紧急退出 (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter 发送 · Ctrl+J 换行 · /help",
@@ -297,6 +301,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:极光", Value: "nord"},
+					{Label: "dracula:暗夜", Value: "dracula"},
 				},
 			},
 		},
@@ -358,6 +364,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:极光", Value: "nord"},
+					{Label: "dracula:暗夜", Value: "dracula"},
 				},
 			},
 		},
@@ -404,7 +412,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ scroll  Esc back",
 		BgTaskLogMore:      "... %d more lines (↑↓ scroll)",
 
-		PanelOmitted: "  ... %d lines omitted (narrow terminal) ...",
+		PanelOmitted:          "  ... %d lines omitted (narrow terminal) ...",
+		PanelOtherPlaceholder: "Type here...",
+		EmergencyQuitHint:     "🚪 Emergency Quit (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter send · Ctrl+J newline · /help",
@@ -541,6 +551,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:Aurora", Value: "nord"},
+					{Label: "dracula:Dark Night", Value: "dracula"},
 				},
 			},
 		},
@@ -602,6 +614,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:Aurora", Value: "nord"},
+					{Label: "dracula:Dark Night", Value: "dracula"},
 				},
 			},
 		},
@@ -648,7 +662,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ スクロール  Esc 戻る",
 		BgTaskLogMore:      "... あと %d 行（↑↓ スクロール）",
 
-		PanelOmitted: "  ... %d 行省略（端末が狭すぎます） ...",
+		PanelOmitted:          "  ... %d 行省略（端末が狭すぎます） ...",
+		PanelOtherPlaceholder: "ここに入力...",
+		EmergencyQuitHint:     "🚪 緊急終了 (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter 送信 · Ctrl+J 改行 · /help",
@@ -785,6 +801,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:オーロラ", Value: "nord"},
+					{Label: "dracula:ダークナイト", Value: "dracula"},
 				},
 			},
 		},
@@ -846,6 +864,8 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:オーロラ", Value: "nord"},
+					{Label: "dracula:ダークナイト", Value: "dracula"},
 				},
 			},
 		},

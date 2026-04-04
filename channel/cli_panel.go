@@ -65,6 +65,8 @@ func (m *cliModel) openSetupPanel() {
 		if m.channel.config.ApplySettings != nil {
 			m.channel.config.ApplySettings(vals)
 		}
+		// Refresh cached model name after settings save
+		m.refreshCachedModelName()
 		// Apply theme immediately
 		if theme, ok := vals["theme"]; ok && theme != "" {
 			m.applyThemeAndRebuild(theme)
@@ -115,7 +117,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelAnswerTA = ta
 	// Initialize Other single-line input
 	ti := textinput.New()
-	ti.Placeholder = "Type here..."
+	ti.Placeholder = m.locale.PanelOtherPlaceholder
 	ti.Prompt = ""
 	ti.CharLimit = 200
 	ti.SetWidth(m.panelWidth(40))
@@ -1150,6 +1152,8 @@ func (c *CLIChannel) UpdateConfig(model, baseURL string) {
 	if baseURL != "" {
 		c.baseURLOverride = baseURL
 	}
+	// Refresh cached model name for View()
+	c.model.refreshCachedModelName()
 }
 
 // GetModelOverride returns the user-overridden model name (empty if not set).

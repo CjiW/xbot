@@ -58,7 +58,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Ctrl+Z: 紧急退出（无论什么状态，包括 panel/typing/idle）
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+z" {
-		m.showSystemMsg("🚪 紧急退出 (Ctrl+Z)", feedbackWarning)
+		m.showSystemMsg(m.locale.EmergencyQuitHint, feedbackWarning)
 		return m, tea.Quit
 	}
 

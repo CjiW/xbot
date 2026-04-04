@@ -66,6 +66,7 @@ func (c *CLIChannel) Start() error {
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
 	c.model.channel = c
+	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID

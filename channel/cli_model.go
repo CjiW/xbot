@@ -258,7 +258,8 @@ type cliModel struct {
 	matrixBuffer    [][]rune      // Matrix 字符缓冲区
 	versionHitTimes []time.Time   // /version 命令调用时间戳（三连检测）
 
-	channel *CLIChannel // back-reference to owning channel (set during Start)
+	channel         *CLIChannel // back-reference to owning channel (set during Start)
+	cachedModelName string      // cached model name for View() performance
 }
 
 // cliMessage 单条消息
@@ -395,9 +396,28 @@ func isCtrlJ(msg tea.Msg) bool {
 	return s == "?CSI[49 48 59 53 117]?" || s == "\x1b[10;5u" || s == "ctrl+j"
 }
 
-// ---------------------------------------------------------------------------
-// Bubble Tea Interface Implementation
-// ---------------------------------------------------------------------------
+// refreshCachedModelName caches the current model name to avoid repeated lookups in View().
+// Should be called after channel init, config changes, and settings saves.
+func (m *cliModel) refreshCachedModelName() {
+	if m.channel == nil {
+		return
+	}
+	m.channel.configMu.RLock()
+	if m.channel.modelOverride != "" {
+		m.cachedModelName = m.channel.modelOverride
+	}
+	m.channel.configMu.RUnlock()
+	if m.cachedModelName == "" {
+		if m.channel.config.GetCurrentValues != nil {
+			m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
+		}
+		if m.cachedModelName == "" && m.channel.settingsSvc != nil {
+			if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+				m.cachedModelName = vals["llm_model"]
+			}
+		}
+	}
+}
 
 // Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
 func (m *cliModel) Init() tea.Cmd {

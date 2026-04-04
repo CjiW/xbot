@@ -605,7 +605,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Authenticate via cookie
 	si := wc.validateSession(r)
 	if si == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
@@ -917,12 +917,12 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 	// Ensure the resolved path is within the static directory
 	absStaticDir, err := filepath.Abs(wc.staticDir)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		jsonErrorResponse(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	absResolved, err := filepath.Abs(absPath)
 	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonErrorResponse(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 	if !strings.HasPrefix(absResolved, absStaticDir+string(os.PathSeparator)) && absResolved != absStaticDir {

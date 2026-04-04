@@ -41,7 +41,7 @@ func NewLocalProvider(uploadDir string) *LocalProvider {
 	return &LocalProvider{uploadDir: uploadDir}
 }
 
-func (p *LocalProvider) Name() string { return "local" }
+func (p *LocalProvider) Name() string   { return "local" }
 func (p *LocalProvider) Domain() string { return "" }
 
 func (p *LocalProvider) Upload(key string, data []byte) error {

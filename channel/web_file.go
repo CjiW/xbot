@@ -25,32 +25,32 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFileSize+1024)
 
 	if err := r.ParseMultipartForm(maxFileSize); err != nil {
-		http.Error(w, "file too large (max 10MB)", http.StatusRequestEntityTooLarge)
+		jsonErrorResponse(w, http.StatusRequestEntityTooLarge, "file too large (max 10MB)")
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "missing file field", http.StatusBadRequest)
+		jsonErrorResponse(w, http.StatusBadRequest, "missing file field")
 		return
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, "failed to read file", http.StatusInternalServerError)
+		jsonErrorResponse(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 
 	if int64(len(data)) > maxFileSize {
-		http.Error(w, "file too large (max 10MB)", http.StatusRequestEntityTooLarge)
+		jsonErrorResponse(w, http.StatusRequestEntityTooLarge, "file too large (max 10MB)")
 		return
 	}
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	detectedMIME := http.DetectContentType(data)
 	if !isAllowedExtension(ext) {
-		http.Error(w, "file type not allowed", http.StatusBadRequest)
+		jsonErrorResponse(w, http.StatusBadRequest, "file type not allowed")
 		return
 	}
 	if isBlockedMIME(detectedMIME) {
@@ -58,7 +58,7 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 			"filename":  header.Filename,
 			"mime_type": detectedMIME,
 		}).Warn("Blocked file upload with dangerous MIME type")
-		http.Error(w, "file type not allowed", http.StatusBadRequest)
+		jsonErrorResponse(w, http.StatusBadRequest, "file type not allowed")
 		return
 	}
 
@@ -70,7 +70,7 @@ func (wc *WebChannel) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	// Web uploads MUST go to cloud OSS - local storage is never allowed for security
 	if wc.ossProvider == nil || wc.ossProvider.Name() == "local" {
 		log.Error("Web file upload rejected: no cloud OSS provider configured (local storage is forbidden for web uploads)")
-		http.Error(w, "file storage not configured", http.StatusServiceUnavailable)
+		jsonErrorResponse(w, http.StatusServiceUnavailable, "file storage not configured")
 		return
 	}
 
@@ -91,7 +91,7 @@ func (wc *WebChannel) handleCloudUpload(w http.ResponseWriter, r *http.Request, 
 			"key":      key,
 			"filename": filename,
 		}).Error("Failed to upload file to cloud OSS")
-		http.Error(w, "failed to upload to cloud storage", http.StatusInternalServerError)
+		jsonErrorResponse(w, http.StatusInternalServerError, "failed to upload to cloud storage")
 		return
 	}
 

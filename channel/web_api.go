@@ -24,6 +24,7 @@ type historyResponse struct {
 }
 
 type histMsg struct {
+	ID          int64   `json:"id"`
 	Role        string  `json:"role"`
 	Content     string  `json:"content"`
 	CreatedAt   string  `json:"created_at,omitempty"`
@@ -36,7 +37,7 @@ type histMsg struct {
 func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	senderID := senderIDFromContext(r.Context())
 	if senderID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
@@ -46,7 +47,7 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		wc.handleHistoryDelete(w, r, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -83,14 +84,14 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 	var rows *sql.Rows
 	if boundaryID.Valid {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
+				SELECT id, role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND id >= ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
 			`, tenantID, boundaryID.Int64)
 	} else {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
+				SELECT id, role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
@@ -107,7 +108,7 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 		var m histMsg
 		var toolCalls, detail sql.NullString
 		var displayOnly int
-		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail, &displayOnly); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail, &displayOnly); err != nil {
 			continue
 		}
 		if toolCalls.Valid {
@@ -174,7 +175,7 @@ func (wc *WebChannel) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		wc.handleUpdateSettings(w, r, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -280,7 +281,7 @@ func (wc *WebChannel) handleRunnerToken(w http.ResponseWriter, r *http.Request) 
 	case http.MethodDelete:
 		wc.handleRunnerTokenRevoke(w, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -452,7 +453,7 @@ func (wc *WebChannel) handleRunnerActive(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: req.Name})
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -469,7 +470,7 @@ func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request)
 	name = strings.TrimSuffix(name, "/")
 	// Reject paths that look like other endpoints
 	if name == "active" || name == "" {
-		http.Error(w, "not found", http.StatusNotFound)
+		jsonErrorResponse(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -490,7 +491,7 @@ func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +668,7 @@ func (wc *WebChannel) handleLLMConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		wc.handleLLMConfigDelete(w, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -782,7 +783,7 @@ func (wc *WebChannel) handleLLMMaxContext(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
 
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 

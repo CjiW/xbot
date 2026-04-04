@@ -436,9 +436,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
               return true
             })
-            .map((m: { role: string; content: string; detail?: string }, i: number) => {
+            .map((m: { id: number; role: string; content: string; detail?: string }) => {
               const msg: Message = {
-                id: `hist-${i}`,
+                id: `hist-${m.id}`,
                 type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
                 content: m.content,
               }
@@ -666,22 +666,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               iterationHistory: finalHistory.length > 0 ? finalHistory : undefined,
             }
             setMessages((prev) => [...prev, msg])
-            break
-          }
-
-          case 'file': {
-            setProgress(null)
-            setLiveIterations([])
-            prevIterationRef.current = -1
-            progressRef.current = null
-            setLoading(false)
-            const fileMsg: Message = {
-              id: data.id || `file-${Date.now()}`,
-              type: 'system',
-              content: `📎 [${data.file.name}](${data.file.url || `/api/files/${data.file.id}`}) (${formatFileSize(data.file.size)})`,
-              ts: data.ts,
-            }
-            setMessages((prev) => [...prev, fileMsg])
             break
           }
 
@@ -1058,7 +1042,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             const isActive = loading || progress !== null
             if (turn.type === 'user') {
 	              const content = (
-	                <div className="flex justify-end msg-fade-in">
+	                <div className="flex justify-end msg-fade-in" data-msg-id={turn.message.id}>
 	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
 		                    <UserMessageContent content={turn.message.content} />
 	                    {turn.message.ts && (
@@ -1079,14 +1063,16 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             // Assistant turn — last one gets live progress & loading
             const turnSavedProgress = turn.messages[turn.messages.length - 1]?.savedProgress ?? null
             const assistantContent = (
-              <AssistantTurn
-                key={turn.messages[0].id}
-                messages={turn.messages}
-                progress={isLatestTurn && isActive ? progress : null}
-                liveIterations={isLatestTurn && isActive ? liveIterations : undefined}
-                loading={isLatestTurn && isActive && loading}
-                savedProgress={turnSavedProgress}
-              />
+              <div data-msg-id={turn.messages[0].id}>
+                <AssistantTurn
+                  key={turn.messages[0].id}
+                  messages={turn.messages}
+                  progress={isLatestTurn && isActive ? progress : null}
+                  liveIterations={isLatestTurn && isActive ? liveIterations : undefined}
+                  loading={isLatestTurn && isActive && loading}
+                  savedProgress={turnSavedProgress}
+                />
+              </div>
             )
             return isLatestTurn ? assistantContent : (
               <LazyTurn key={turn.messages[0].id}>{assistantContent}</LazyTurn>

@@ -150,7 +150,7 @@ type feishuLinkResponse struct {
 // handleRegister handles POST /api/auth/register
 func (wc *WebChannel) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -202,7 +202,7 @@ func (wc *WebChannel) handleRegister(w http.ResponseWriter, r *http.Request) {
 // handleLogin handles POST /api/auth/login
 func (wc *WebChannel) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -265,7 +265,7 @@ func (wc *WebChannel) handleLogin(w http.ResponseWriter, r *http.Request) {
 // handleLogout handles POST /api/auth/logout
 func (wc *WebChannel) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -312,7 +312,7 @@ func (wc *WebChannel) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		si := wc.validateSession(r)
 		if si == nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		// Store senderID in context for handler use (normalize for single-user mode)
@@ -463,7 +463,7 @@ func FeishuUnlinkUser(db *sql.DB, feishuUserID string) error {
 // Requires admin token (Authorization: Bearer <secret>).
 func (wc *WebChannel) handleFeishuLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -499,7 +499,7 @@ func (wc *WebChannel) handleFeishuLink(w http.ResponseWriter, r *http.Request) {
 // Allows a Feishu user to log in to the web using their linked credentials.
 func (wc *WebChannel) handleFeishuLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -581,7 +581,7 @@ func senderIDFromContext(ctx context.Context) string {
 // Returns public auth configuration (e.g., invite-only mode).
 func (wc *WebChannel) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -593,4 +593,12 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// jsonErrorResponse writes a JSON-formatted error response (for consistent API errors).
+func jsonErrorResponse(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]interface{}{
+		"ok":    false,
+		"error": message,
+	})
 }

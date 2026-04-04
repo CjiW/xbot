@@ -195,6 +195,16 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
+// SetTrimHistoryFn 设置 Ctrl+K 截断历史后的数据库同步回调。
+// keepCount 为保留的消息数，实现方应删除数据库中更早的消息。
+func (c *CLIChannel) SetTrimHistoryFn(fn func(keepCount int) error) {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.trimHistoryFn = fn
+	}
+}
+
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。
 // 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
 func (c *CLIChannel) InjectUserMessage(content string) {

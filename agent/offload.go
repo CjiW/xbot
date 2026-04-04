@@ -281,6 +281,41 @@ func (s *OffloadStore) CleanSession(sessionKey string) {
 	}
 }
 
+// CleanOldEntries 删除指定 session 中 timestamp 在 cutoff 之前的 offload 记录和对应文件。
+// 用于压缩后清理：压缩点之前的 offload 已被摘要替代，不再需要召回。
+func (s *OffloadStore) CleanOldEntries(sessionKey string, cutoff time.Time) int {
+	idx := s.getOrCreateIndex(sessionKey)
+	sessionDir := s.getSessionDir(sessionKey)
+
+	idx.mu.Lock()
+	var kept []OffloadedResult
+	removedCount := 0
+	for _, entry := range idx.entries {
+		if entry.Timestamp.Before(cutoff) {
+			// 删除磁盘文件
+			fp := s.offloadFilePath(sessionDir, entry.ID)
+			os.Remove(fp)
+			removedCount++
+		} else {
+			kept = append(kept, entry)
+		}
+	}
+	idx.entries = kept
+	idx.mu.Unlock()
+
+	// 持久化更新后的索引
+	if removedCount > 0 {
+		s.persistIndex(sessionDir, idx)
+		log.WithFields(log.Fields{
+			"session": sessionKey,
+			"removed": removedCount,
+			"kept":    len(kept),
+			"cutoff":  cutoff.Format(time.RFC3339),
+		}).Info("OffloadStore: cleaned old entries after compression")
+	}
+	return removedCount
+}
+
 // CleanStale 清理超过 CleanupAgeDays 的残留 offload 数据。
 func (s *OffloadStore) CleanStale() {
 	cutoff := time.Now().AddDate(0, 0, -s.config.CleanupAgeDays)

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // Update 处理消息
@@ -182,12 +184,22 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
 			case "y", "Y":
-				// 确认删除：根据 group 索引截断
+				// 确认删除：根据 turn 索引截断
 				if m.confirmDelete > len(groups) {
 					m.confirmDelete = len(groups)
 				}
 				cutIdx := groups[len(groups)-m.confirmDelete]
 				m.messages = m.messages[:cutIdx]
+				// 同步截断数据库中的 session messages
+				if m.trimHistoryFn != nil {
+					keepCount := cutIdx
+					// 异步执行避免阻塞 UI
+					go func() {
+						if err := m.trimHistoryFn(keepCount); err != nil {
+							log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
+						}
+					}()
+				}
 				m.confirmDelete = 0
 				m.renderCacheValid = false
 				m.cachedHistory = ""
@@ -379,7 +391,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
 			if !m.typing && len(m.messages) > 0 {
 				groups := visibleMsgGroupIndices(m.messages)
-				defaultDel := 2
+				defaultDel := 1
 				if defaultDel > len(groups) {
 					defaultDel = len(groups)
 				}
@@ -496,8 +508,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if len(newlyDone) > 0 {
-					m.recentlyDoneTools = newlyDone
-					m.flashStartTick = m.ticker.ticks
+					// Tools completed — no flash animation needed
 				}
 			}
 			if msg.payload.Phase == "done" {
@@ -771,50 +782,42 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// autoExpandInput adjusts the main textarea height based on content lines.
-// Keeps it between minTaHeight and maxTaHeight, and shrinks viewport accordingly.
+// autoExpandInput adjusts the viewport height to compensate for textarea height changes.
+// With DynamicHeight enabled on the textarea, it manages its own height based on
+// visual lines (including soft wraps from CJK characters). We just need to keep the
+// viewport in sync.
 const (
 	minTaHeight = 3
 	maxTaHeight = 10
 )
 
 func (m *cliModel) autoExpandInput() {
-	lines := strings.Count(m.textarea.Value(), "\n") + 1
-	if lines < minTaHeight {
-		lines = minTaHeight
+	// DynamicHeight manages textarea height based on visual lines.
+	// We just need to sync the viewport and clamp textarea if terminal is too small.
+	taHeight := m.textarea.Height()
+	if taHeight < minTaHeight {
+		taHeight = minTaHeight
 	}
-	if lines > maxTaHeight {
-		lines = maxTaHeight
+	// Clamp textarea height to available space (don't let it push viewport below minimum)
+	availableForTA := m.height - 3 - 2 // 3 = title+status+footer, 2 = ta border
+	if m.todos != nil {
+		availableForTA -= 1 + len(m.todos)
 	}
-	if m.textarea.Height() == lines {
-		return
+	maxAllowed := availableForTA - 3 // 3 = minimum viewport
+	if maxAllowed < minTaHeight {
+		maxAllowed = minTaHeight
 	}
-	oldHeight := m.textarea.Height()
-	grew := lines > oldHeight
-	m.textarea.SetHeight(lines)
-	// Adjust viewport to compensate
-	delta := lines - oldHeight
-	if m.viewport.Height()-delta >= 3 {
-		m.viewport.SetHeight(m.viewport.Height() - delta)
+	if taHeight > maxAllowed {
+		taHeight = maxAllowed
+		m.textarea.SetHeight(taHeight)
 	}
-	if grew {
-		// When height increases, bubbles textarea repositionView only scrolls
-		// down (if cursor below view) or up (if cursor above). It won't
-		// shrink YOffset when more lines become visible, so the first content
-		// line stays scrolled off-screen.
-		// Fix: move cursor to top (resets YOffset to 0 via repositionView),
-		// then move back to the original row.
-		targetRow := m.textarea.Line()
-		if targetRow > 0 {
-			// InputBegin is bound to ctrl+home; this triggers moveToBegin + repositionView
-			m.textarea, _ = m.textarea.Update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
-			for i := 0; i < targetRow; i++ {
-				m.textarea.CursorDown()
-			}
-			// CursorDown doesn't call repositionView, but since YOffset=0
-			// and height >= total lines, the cursor is always visible.
-			// We still need one Update to sync internal viewport state.
-			m.textarea, _ = m.textarea.Update(nil)
+	expectedVP := m.layoutViewportHeight()
+	currentVP := m.viewport.Height()
+	if currentVP != expectedVP {
+		wasAtBottom := m.viewport.AtBottom()
+		m.viewport.SetHeight(expectedVP)
+		if wasAtBottom {
+			m.viewport.GotoBottom()
 		}
 	}
 }
@@ -882,12 +885,13 @@ func (m *cliModel) handleResize(width, height int) {
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
 
-	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
-	// textarea must match the content width exactly.
-	iw := width - 4
+	// InputBox lipgloss style: Width(width-4) includes border(2) + padding(2).
+	// Content area = width-4-2-2 = width-8. Textarea must match this.
+	iw := width - 8
 	if iw < 10 {
 		iw = 10
 	}
+	iw = iw &^ 1 // round down to even for CJK
 	m.textarea.SetWidth(iw)
 
 	// Glamour word-wrap must match viewport width so that lines

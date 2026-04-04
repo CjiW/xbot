@@ -712,15 +712,6 @@ func (m *cliModel) renderProgressBlock() string {
 	// Render current iteration
 	if m.progress != nil {
 		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", m.progress.Iteration)))
-		// §22 装饰性流动进度条
-		barW := 14
-		tick := int(m.ticker.ticks) % (barW * 2)
-		pos := tick
-		if pos >= barW {
-			pos = barW*2 - pos - 1
-		}
-		bar := strings.Repeat("░", pos) + "▓" + strings.Repeat("░", barW-pos-1)
-		sb.WriteString("  " + m.styles.ProgressGradient.Render(bar) + "\n")
 		sb.WriteString("\n")
 
 		if m.progress.Thinking != "" {
@@ -749,41 +740,14 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// §22 最近完成工具高亮闪烁
-		if len(m.recentlyDoneTools) > 0 && m.flashStartTick > 0 {
-			flashDuration := m.ticker.ticks - m.flashStartTick
-			if flashDuration < 10 {
-				// 闪烁效果：奇偶 tick 交替高亮/普通
-				for _, t := range m.recentlyDoneTools {
-					label, icon, _ := toolDisplayInfo(t, toolDoneStyle, toolErrorStyle)
-					line := fmt.Sprintf("  │ %s %s", icon, label)
-					if t.Elapsed > 0 {
-						pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(t.Elapsed))
-						if pad < 1 {
-							pad = 1
-						}
-						line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(t.Elapsed))
-					}
-					if flashDuration%2 == 0 {
-						sb.WriteString(m.styles.ProgressGlow.Render(line))
-					} else {
-						sb.WriteString(toolDoneStyle.Render(line))
-					}
-					sb.WriteString("\n")
-				}
-			} else {
-				m.recentlyDoneTools = nil
-				m.flashStartTick = 0
-			}
-		}
-		// Active tools — 带迷你脉冲进度条动画
+		// Active tools — with mini pulse progress bar animation
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			// §22 动态宽度 + 脉冲效果的迷你进度条
-			miniW := 8 + int(m.ticker.ticks%7) // 动态宽度 8-14
+			// Mini pulse progress bar with dynamic width
+			miniW := 8 + int(m.ticker.ticks%7) // dynamic width 8-14
 			tick2 := int(m.ticker.ticks) % (miniW * 2)
 			pos2 := tick2
 			if pos2 >= miniW {
@@ -1146,6 +1110,22 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	return sb.String()
 }
 
+// setViewportContentForScroll is like setViewportContent but skips GotoBottom(),
+// allowing the caller to set a precise YOffset afterwards (e.g. for Ctrl+K red line).
+func (m *cliModel) setViewportContentForScroll(content string) {
+	if m.width > 0 {
+		lines := strings.Split(content, "\n")
+		var wrapped []string
+		for _, line := range lines {
+			line = strings.TrimRight(line, " \t")
+			wrapped = append(wrapped, strings.Split(hardWrapRunes(line, m.width), "\n")...)
+		}
+		content = strings.Join(wrapped, "\n")
+	}
+	m.viewport.SetContent(content)
+	m.newContentHint = false
+}
+
 // setViewportContent sets viewport content while preserving scroll position.
 // If the user was at the bottom before the update, keep them at the bottom.
 // Lines wider than the viewport are truncated to prevent layout breakage.
@@ -1212,68 +1192,29 @@ func (m *cliModel) renderDeleteBoundaryLine() string {
 	return "\n" + line + "\n"
 }
 
-// visibleMsgGroupIndices 返回每个"可见消息组"的起始 slice 索引。
-// 每个 group 的起始索引向前延伸，包含紧邻的前置 tool_summary 链，
-// 确保删除时 tool_summary 不会与其所属消息分离而孤立。
-func visibleMsgGroupIndices(messages []cliMessage) []int {
-	var groups []int
-	covered := make([]bool, len(messages))
+// visibleTurnIndices 返回每个"对话轮次"的起始 slice 索引。
+// 每个 turn 以 user 消息开头，包含之后所有的 assistant/tool_summary 消息
+// 直到下一个 user 消息为止。tool_summary 自动归属其前面最近的 user 所在的 turn。
+//
+// 例如: [user(0), assistant(1), tool_summary(2), user(3), assistant(4)]
+// turns: [0, 3] — 按"1"删最后 1 轮即 cutIdx=3，保留 [user(0), assistant(1), tool_summary(2)]
+func visibleTurnIndices(messages []cliMessage) []int {
+	var turns []int
 	for i, msg := range messages {
-		if msg.role == "tool_summary" {
-			continue
-		}
-		// 向前扫描紧邻的 tool_summary 链，找到组的真正起始位置
-		startIdx := i
-		for startIdx > 0 && messages[startIdx-1].role == "tool_summary" {
-			startIdx--
-		}
-		groups = append(groups, startIdx)
-		// 标记该组覆盖的所有消息，避免 tool_summary 重复成组
-		for j := startIdx; j <= i; j++ {
-			covered[j] = true
+		if msg.role == "user" {
+			turns = append(turns, i)
 		}
 	}
-	// 未被任何组覆盖的 tool_summary（如链首或独立存在）单独成组
-	for i, msg := range messages {
-		if !covered[i] && msg.role == "tool_summary" {
-			groups = append(groups, i)
-		}
+	// 如果没有 user 消息但有其他消息，回退到旧逻辑（保留兼容）
+	if len(turns) == 0 && len(messages) > 0 {
+		turns = append(turns, 0)
 	}
-	return groups
+	return turns
 }
 
-// scrollToDeleteLine 确保 Ctrl+K 红线在 viewport 可见区域内。
-func (m *cliModel) scrollToDeleteLine(content string) {
-	contentLines := strings.Split(content, "\n")
-	totalLines := len(contentLines)
-	vpHeight := m.viewport.Height()
-	if vpHeight <= 0 {
-		return
-	}
-	// 找到红线行（包含 "✂ delete above" 的行）
-	redLineIdx := -1
-	for i, line := range contentLines {
-		if strings.Contains(line, "✂ delete below") {
-			redLineIdx = i
-			break
-		}
-	}
-	if redLineIdx < 0 {
-		return
-	}
-	// 将红线定位到视口中央偏上（留 3 行上方边距）
-	targetYOffset := redLineIdx - 3
-	if targetYOffset < 0 {
-		targetYOffset = 0
-	}
-	maxOffset := totalLines - vpHeight
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if targetYOffset > maxOffset {
-		targetYOffset = maxOffset
-	}
-	m.viewport.SetYOffset(targetYOffset)
+// visibleMsgGroupIndices 是 visibleTurnIndices 的别名，保留向后兼容。
+func visibleMsgGroupIndices(messages []cliMessage) []int {
+	return visibleTurnIndices(messages)
 }
 
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
@@ -1382,6 +1323,8 @@ func (m *cliModel) fullRebuild() {
 	m.msgLineOffsets = m.msgLineOffsets[:0]
 	runningLines := 0
 	prevLen := 0
+	// §9 Ctrl+K 红线：记录红线在折行后的 viewport 行号
+	var redLineWrappedPos = -1
 	for i := range m.messages[:splitIdx] {
 		// §19 记录消息在 viewport 折行后内容中的起始行号
 		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
@@ -1400,6 +1343,7 @@ func (m *cliModel) fullRebuild() {
 		historyBuf.WriteString(m.messages[i].rendered)
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
+			redLineWrappedPos = runningLines + wrappedLineCount(historyBuf.String()[prevLen:], m.width)
 			historyBuf.WriteString(m.renderDeleteBoundaryLine())
 		}
 		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
@@ -1419,11 +1363,30 @@ func (m *cliModel) fullRebuild() {
 	}
 	sb.WriteString(m.renderProgressBlock())
 
-	m.setViewportContent(sb.String())
-
-	// §9 Ctrl+K 红线：自动滚动到红线位置
+	// §9 Ctrl+K 红线：设置内容时禁止 GotoBottom，以便随后精确定位红线
 	if m.confirmDelete > 0 {
-		m.scrollToDeleteLine(sb.String())
+		m.setViewportContentForScroll(sb.String())
+	} else {
+		m.setViewportContent(sb.String())
+	}
+
+	// §9 Ctrl+K 红线：自动滚动到红线位置（使用折行后的精确行号）
+	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
+		vpHeight := m.viewport.Height()
+		totalLines := m.viewport.TotalLineCount()
+		// 将红线定位到视口中央偏上（留 3 行上方边距）
+		targetY := redLineWrappedPos - 3
+		if targetY < 0 {
+			targetY = 0
+		}
+		maxOff := totalLines - vpHeight
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		if targetY > maxOff {
+			targetY = maxOff
+		}
+		m.viewport.SetYOffset(targetY)
 	}
 }
 

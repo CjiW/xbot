@@ -240,7 +240,7 @@ func init() {
 		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 条消息？(y/N, 数字调整)",
+		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 轮对话？(y/N, 数字调整)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI 驱动的终端助手",
@@ -356,7 +356,7 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "最大迭代次数", Description: "单次对话最大工具调用迭代次数（默认 100）",
+				Key: "max_iterations", Label: "最大迭代次数", Description: "单次对话最大工具调用迭代次数（默认 2000）",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
 			},
 			{
@@ -370,6 +370,14 @@ func init() {
 			{
 				Key: "enable_auto_compress", Label: "自动压缩", Description: "上下文过长时自动压缩（默认开启）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "开启", Value: "true"},
+					{Label: "关闭", Value: "false"},
+				},
+			},
+			{
+				Key: "enable_masking", Label: "观察遮蔽", Description: "自动遮蔽旧工具结果以释放上下文空间（默认关闭）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
 				Options: []SettingOption{
 					{Label: "开启", Value: "true"},
 					{Label: "关闭", Value: "false"},
@@ -507,7 +515,7 @@ func init() {
 		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)",
+		ConfirmDelete: "[!] Ctrl+K: delete last %d turns? (y/N, number to adjust)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI-powered terminal agent",
@@ -623,7 +631,7 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "Max Iterations", Description: "Max tool call iterations per conversation (default 100)",
+				Key: "max_iterations", Label: "Max Iterations", Description: "Max tool call iterations per conversation (default 2000)",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
 			},
 			{
@@ -637,6 +645,14 @@ func init() {
 			{
 				Key: "enable_auto_compress", Label: "Auto Compress", Description: "Automatically compress when context is too long (on by default)",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "On", Value: "true"},
+					{Label: "Off", Value: "false"},
+				},
+			},
+			{
+				Key: "enable_masking", Label: "Observation Masking", Description: "Auto-mask old tool results to free context space (off by default)",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
 				Options: []SettingOption{
 					{Label: "On", Value: "true"},
 					{Label: "Off", Value: "false"},
@@ -774,7 +790,7 @@ func init() {
 		SearchNavFormat:   "/ %s  [%d/%d]  n 次 · N 前 · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 最後の %d 件のメッセージを削除しますか？(y/N, 数字で調整)",
+		ConfirmDelete: "[!] Ctrl+K: 最後の %d ターンを削除しますか？(y/N, 数字で調整)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI駆動のターミナルエージェント",
@@ -890,7 +906,7 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "最大反復数", Description: "1回の会話の最大ツール呼び出し反復数（デフォルト 100）",
+				Key: "max_iterations", Label: "最大反復数", Description: "1回の会話の最大ツール呼び出し反復数（デフォルト 2000）",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
 			},
 			{
@@ -904,6 +920,14 @@ func init() {
 			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "オン", Value: "true"},
+					{Label: "オフ", Value: "false"},
+				},
+			},
+			{
+				Key: "enable_masking", Label: "観測マスキング", Description: "古いツール結果を自動マスクしてコンテキストを解放（デフォルト: オフ）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
 				Options: []SettingOption{
 					{Label: "オン", Value: "true"},
 					{Label: "オフ", Value: "false"},

@@ -345,8 +345,15 @@ func (a *Agent) buildMainRunConfig(
 	// OffloadStore — Layer 1 offload
 	cfg.OffloadStore = a.offloadStore
 
-	// MaskStore — Observation Masking
+	// MaskStore — Observation Masking (controlled by enable_masking setting, default off)
 	cfg.MaskStore = a.maskStore
+	if a.settingsSvc != nil {
+		if vals, err := a.settingsSvc.GetSettings(channel, senderID); err == nil {
+			if vals["enable_masking"] != "true" {
+				cfg.MaskStore = nil
+			}
+		}
+	}
 
 	// ContextEditor — Context Editing（精确编辑上下文）
 	cfg.ContextEditor = a.contextEditor

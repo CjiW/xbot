@@ -595,8 +595,8 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
-	// 默认开启：在 60% context 阈值时自动 mask 旧工具结果以释放空间。
-	// 可通过 settings 的 enable_masking 关闭（设为 false 时 a.maskStore = nil）。
+	// 默认关闭：通过 settings 的 enable_masking 开启。
+	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
 	a.maskStore = NewObservationMaskStore(200)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
@@ -645,7 +645,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 func New(cfg Config) *Agent {
 	// 1. 设置配置默认值
 	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 100
+		cfg.MaxIterations = 2000
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 3

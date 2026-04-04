@@ -51,7 +51,9 @@ What was being worked on most recently and what should happen next.
 - Preserve ALL file paths from active operations
 - Preserve ALL error messages verbatim
 - Be concise — focus on facts, not narrative
-- If offload markers exist, preserve the summary text but strip the IDs
+- If offload markers (📂 [offload:...]) exist, preserve the summary text but strip the IDs (e.g. "ol_abc123")
+- If masked markers (📂 [masked:...]) exist, preserve the summary text but strip the IDs (e.g. "mk_def456")
+- NEVER include offload IDs (ol_...) or mask IDs (mk_...) in your output — they are ephemeral references
 
 ## Memory Management (Optional)
 If this conversation reveals important new information worth remembering long-term:

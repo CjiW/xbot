@@ -225,7 +225,7 @@ type ToolContextExtras struct {
 }
 
 // DefaultMaxIterations 默认最大迭代次数。
-const DefaultMaxIterations = 100
+const DefaultMaxIterations = 2000
 
 // readOnlyTools 只读工具集合，用于读写分离并行执行。
 var readOnlyTools = map[string]bool{
@@ -667,6 +667,17 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 					}
 				}
 			}
+
+			// Clean offload and mask entries that were compressed away.
+			// After compaction, messages before the tail are replaced by a summary,
+			// so their offload/mask records are no longer needed for recall.
+			compressCutoff := time.Now()
+			if cfg.OffloadStore != nil {
+				cfg.OffloadStore.CleanOldEntries(offloadSessionKey, compressCutoff)
+			}
+			if cfg.MaskStore != nil {
+				cfg.MaskStore.CleanOldEntries(compressCutoff)
+			}
 			return
 		}
 
@@ -675,11 +686,30 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 			maskingThreshold := float64(maxTokens) * 0.6
 			if float64(totalTokens) > maskingThreshold {
 				keepGroups := calculateKeepGroups(int(totalTokens), maxTokens)
-				masked, count := MaskOldToolResults(messages, cfg.MaskStore, keepGroups)
+				masked, count, maskedEntries := MaskOldToolResults(messages, cfg.MaskStore, keepGroups)
 				if count > 0 {
 					messages = syncMessages(masked)
 					GlobalMetrics.MaskingEvents.Add(1)
 					GlobalMetrics.MaskedItems.Add(int64(count))
+
+					// Persist masked content back to session for already-persisted messages.
+					// Masking modifies old messages that were persisted in earlier iterations,
+					// so we must update them in-place to survive across conversation turns.
+					if cfg.Session != nil {
+						persistedMasked := 0
+						for _, entry := range maskedEntries {
+							if entry.MessageIndex < lastPersistedCount {
+								if err := cfg.Session.UpdateMessageContent(entry.MessageIndex, entry.Content); err != nil {
+									log.Ctx(ctx).WithError(err).WithField("idx", entry.MessageIndex).Warn("Failed to persist masked message to session")
+								} else {
+									persistedMasked++
+								}
+							}
+						}
+						if persistedMasked > 0 {
+							log.Ctx(ctx).WithField("persisted_masked", persistedMasked).Info("Persisted masked messages to session")
+						}
+					}
 
 					if autoNotify {
 						progressLines = append(progressLines, fmt.Sprintf("> 🎭 上下文较大 (%d tokens)，已遮蔽 %d 条旧工具结果", totalTokens, count))
@@ -726,12 +756,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		if len(iterationSnapshots) > 0 {
 			out.IterationHistory = iterationSnapshots
 		}
-		// Clean offload data after conversation turn completes.
-		// Only for the top-level agent (RootSessionKey == "") — SubAgents share
-		// the parent's offload namespace and must not delete it while parent runs.
-		if cfg.OffloadStore != nil && cfg.RootSessionKey == "" {
-			cfg.OffloadStore.CleanSession(offloadSessionKey)
-		}
+		// NOTE: Offload data is NOT cleaned here anymore.
+		// Offload cleanup now happens after compression (see Layer 1 in maybeCompress),
+		// since offload files are needed for recall across conversation turns.
 		out.LastPromptTokens = lastPromptTokens
 		out.LastCompletionTokens = lastCompletionTokens
 		// 持久化 token 计数到 DB，重启后恢复。
@@ -887,6 +914,14 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 								}
 							}
 						}
+					}
+					// Clean offload and mask entries that were compressed away.
+					compressCutoff := time.Now()
+					if cfg.OffloadStore != nil {
+						cfg.OffloadStore.CleanOldEntries(offloadSessionKey, compressCutoff)
+					}
+					if cfg.MaskStore != nil {
+						cfg.MaskStore.CleanOldEntries(compressCutoff)
 					}
 					response, err = generateResponse(retryNotifyCtx, cfg.LLMClient, cfg.Model, messages, toolDefs, cfg.ThinkingMode)
 					// 重试也要记录 LLM 调用指标（通过 local 变量）

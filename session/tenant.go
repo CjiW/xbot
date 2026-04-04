@@ -82,6 +82,12 @@ func (s *TenantSession) PurgeOldMessages(keepCount int) (int64, error) {
 	return s.sessionSvc.PurgeOldMessages(s.tenantID, keepCount)
 }
 
+// UpdateMessageContent updates the content of the Nth message (0-indexed) in this tenant's session.
+// Used by observation masking to persist masked content back to session.
+func (s *TenantSession) UpdateMessageContent(messageIndex int, content string) error {
+	return s.sessionSvc.UpdateMessageContent(s.tenantID, messageIndex, content)
+}
+
 // Memory returns the memory provider for this tenant
 func (s *TenantSession) Memory() memory.MemoryProvider {
 	return s.memory

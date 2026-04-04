@@ -152,12 +152,13 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
-	typing          bool            // agent 是否正在回复
-	typingStartTime time.Time       // 本次处理开始时间
-	inputReady      bool            // 输入就绪状态（agent 回复期间禁止发送）
-	msgBus          *bus.MessageBus // 消息总线引用
-	tempStatus      string          // 临时状态提示（自动过期）
-	shouldQuit      bool            // Smart quit: quit after current operation completes
+	typing          bool                      // agent 是否正在回复
+	typingStartTime time.Time                 // 本次处理开始时间
+	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）
+	msgBus          *bus.MessageBus           // 消息总线引用
+	tempStatus      string                    // 临时状态提示（自动过期）
+	shouldQuit      bool                      // Smart quit: quit after current operation completes
+	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
@@ -179,9 +180,6 @@ type cliModel struct {
 
 	// --- §2 工具可视化 ---
 	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
-	// §22 完成工具高亮闪烁
-	recentlyDoneTools []CLIToolProgress // 最近完成的工具（用于高亮闪烁）
-	flashStartTick    int64             // 高亮闪烁开始 tick（0 = 未激活）
 
 	// --- §8 Tab 补全 ---
 	completions []string // 当前补全候选项
@@ -301,11 +299,16 @@ func newCLIModel() *cliModel {
 	ta := textarea.New()
 	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
 	ta.Focus()
-	ta.SetWidth(76)
-	ta.SetHeight(3)
+	ta.SetWidth(72)
 	ta.CharLimit = 0
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+	// Enable DynamicHeight so textarea auto-grows/shrinks based on visual lines
+	// (including soft wraps from CJK characters). This replaces our manual autoExpandInput.
+	ta.DynamicHeight = true
+	ta.MinHeight = minTaHeight
+	ta.MaxHeight = maxTaHeight
+	ta.SetHeight(minTaHeight)
 	initStyles := buildStyles(76)
 	applyTAStyles(&ta, &initStyles)
 

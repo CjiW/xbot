@@ -339,6 +339,14 @@ func init() {
 				},
 			},
 			{
+				Key: "enable_masking", Label: "工具结果遮蔽", Description: "上下文较大时自动遮蔽旧工具结果以释放空间（默认开启）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "开启", Value: "true"},
+					{Label: "关闭", Value: "false"},
+				},
+			},
+			{
 				Key: "language", Label: "语言", Description: "Agent 回复使用的语言",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
 				Options: []SettingOption{
@@ -583,6 +591,14 @@ func init() {
 				},
 			},
 			{
+				Key: "enable_masking", Label: "Tool Result Masking", Description: "Automatically mask old tool results to free context space (on by default)",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "On", Value: "true"},
+					{Label: "Off", Value: "false"},
+				},
+			},
+			{
 				Key: "language", Label: "Language", Description: "Language for agent replies",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
 				Options: []SettingOption{
@@ -820,6 +836,14 @@ func init() {
 			},
 			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "オン", Value: "true"},
+					{Label: "オフ", Value: "false"},
+				},
+			},
+			{
+				Key: "enable_masking", Label: "ツール結果マスキング", Description: "コンテキストが大きい場合に古いツール結果を自動マスキング（デフォルト: オン）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{
 					{Label: "オン", Value: "true"},

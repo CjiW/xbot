@@ -260,7 +260,7 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo"
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo", "ask_user"
 	ID              string             `json:"id,omitempty"`               // UUID
 	Content         string             `json:"content,omitempty"`          // message content
 	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
@@ -277,6 +277,10 @@ type WsProgressPayload struct {
 	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
 	Thinking       string           `json:"thinking,omitempty"`
 	SubAgents      []WsSubAgent     `json:"sub_agents,omitempty"`
+	TokenUsage     *WsTokenUsage    `json:"token_usage,omitempty"`
+	Todos          []WsTodoItem     `json:"todos,omitempty"`
+	Questions []WsAskUserQuestion `json:"questions,omitempty"`
+	RequestID string              `json:"request_id,omitempty"`
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -295,6 +299,21 @@ type WsSubAgent struct {
 	Children []WsSubAgent `json:"children,omitempty"`
 }
 
+// WsTokenUsage Token 使用量快照（对应 agent.TokenUsageSnapshot）。
+type WsTokenUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty"`
+	TotalTokens      int64 `json:"total_tokens,omitempty"`
+	CacheHitTokens   int64 `json:"cache_hit_tokens,omitempty"`
+}
+
+// WsTodoItem represents a TODO item for web display.
+type WsTodoItem struct {
+	ID   int    `json:"id"`
+	Text string `json:"text"`
+	Done bool   `json:"done"`
+}
+
 type wsClientMessage struct {
 	Type       string   `json:"type"`
 	Content    string   `json:"content"`
@@ -303,6 +322,24 @@ type wsClientMessage struct {
 	FileSizes  []int64  `json:"file_sizes,omitempty"`
 	UploadKeys []string `json:"upload_keys,omitempty"` // OSS upload keys (for qiniu mode)
 	FileMimes  []string `json:"file_mimes,omitempty"`  // MIME types
+}
+
+// WsAskUserPayload is the payload for "ask_user" WS messages (agent needs user input).
+type WsAskUserPayload struct {
+	Questions []WsAskUserQuestion `json:"questions"`
+	RequestID string              `json:"request_id,omitempty"`
+}
+
+// WsAskUserQuestion represents a single question in the AskUser flow.
+type WsAskUserQuestion struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+}
+
+// WsAskUserResponse is the client response to an ask_user prompt.
+type WsAskUserResponse struct {
+	Answers   map[string]string `json:"answers"`   // question index -> answer
+	Cancelled bool             `json:"cancelled"` // true = user cancelled
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +546,28 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		// Client offline, message buffered in ring buffer
 		log.WithField("chat_id", msg.ChatID).Debug("Web client offline, message buffered")
 	}
+
+	// AskUser: agent needs user input
+	if msg.WaitingUser {
+		askPayload := &WsProgressPayload{}
+		if msg.Metadata != nil {
+			askPayload.RequestID = msg.Metadata["request_id"]
+			if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+				var qs []WsAskUserQuestion
+				if json.Unmarshal([]byte(qJSON), &qs) == nil {
+					askPayload.Questions = qs
+				}
+			}
+		}
+		askMsg := wsMessage{
+			Type:     "ask_user",
+			ID:       msgID,
+			TS:       time.Now().Unix(),
+			Progress: askPayload,
+		}
+		wc.hub.sendToClient(msg.ChatID, askMsg)
+	}
+
 
 	return msgID, nil
 }
@@ -755,7 +814,50 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				To:         bus.NewIMAddress("web", chatID),
 				Metadata:   metadata,
 			}
-		}
+		case "ask_user_response":
+			var resp WsAskUserResponse
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				log.WithError(err).Debug("WS invalid ask_user_response")
+				continue
+			}
+			if resp.Cancelled {
+				// User cancelled — send /cancel equivalent
+				wc.msgBus.Inbound <- bus.InboundMessage{
+					Channel:    "web",
+					SenderID:   c.userID,
+					SenderName: si.username,
+					ChatID:     chatID,
+					ChatType:   "p2p",
+					Content:    "/cancel",
+					Time:       time.Now(),
+					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					From:       bus.NewIMAddress("web", c.userID),
+					To:         bus.NewIMAddress("web", chatID),
+				}
+			} else {
+				// Format answers as indexed Q/A pairs
+				var parts []string
+				for idx, ans := range resp.Answers {
+					parts = append(parts, fmt.Sprintf("Q%s: %s", idx, ans))
+				}
+				content := strings.Join(parts, "\n\n")
+				wc.msgBus.Inbound <- bus.InboundMessage{
+					Channel:    "web",
+					SenderID:   c.userID,
+					SenderName: si.username,
+					ChatID:     chatID,
+					ChatType:   "p2p",
+					Content:    content,
+					Time:       time.Now(),
+					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					From:       bus.NewIMAddress("web", c.userID),
+					To:         bus.NewIMAddress("web", chatID),
+					Metadata:   map[string]string{"ask_user_answered": "true"},
+				}
+			}
+		default:
+			log.WithField("type", msg.Type).Debug("WS unknown message type")
+	}
 	}
 
 }

@@ -295,6 +295,13 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [nickname, setNickname] = useState<string>(() => localStorage.getItem('xbot-nickname') || '')
   const editorRef = useRef<TiptapEditorHandle>(null)
   const [presets, setPresets] = useState<PresetCommand[]>([])
+  const [askUser, setAskUser] = useState<{ questions: { question: string; options?: string[] }[]; answers: Record<string, string>; currentQ: number } | null>(null)
+  const [toasts, setToasts] = useState<{ id: number; message: string; type: 'info' | 'error' | 'success' }[]>([])
+  const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+  }, [])
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -599,6 +606,14 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
           }
 
+          case 'ask_user': {
+            const questions = data.progress?.questions || []
+            if (questions.length > 0) {
+              setAskUser({ questions, answers: {}, currentQ: 0 })
+            }
+            break
+          }
+
           default:
             break
         }
@@ -622,6 +637,33 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   // --- Send message ---
   const handleSend = useCallback((content: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+
+    // Slash commands
+    const trimmed = content.trim()
+    if (trimmed.startsWith('/')) {
+      const cmd = trimmed.toLowerCase()
+      if (cmd === '/clear' || cmd === '/new') {
+        setMessages([])
+        setProgress(null)
+        setLiveIterations([])
+        prevIterationRef.current = -1
+        progressRef.current = null
+        setLoading(false)
+        showToast('对话已清空', 'info')  // Bug 3 fix: BEFORE return
+        return
+      }
+      if (cmd === '/help') {
+        const helpMsg: Message = {
+          id: `help-${Date.now()}`,
+          type: 'system',
+          content: `## 可用命令\n\n| 命令 | 说明 |\n|------|------|\n| /clear | 清空对话 |\n| /new | 新对话 |\n| /compact | 压缩上下文 |\n| /help | 显示帮助 |\n| /cancel | 取消当前生成 |`,
+          ts: Math.floor(Date.now() / 1000),
+        }
+        setMessages(prev => [...prev, helpMsg])
+        return
+      }
+      // For /compact, /cancel, /model, /models — send as normal message (backend handles them)
+    }
 
     const userMsg: Message = {
       id: `user-${Date.now()}`,
@@ -948,6 +990,168 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           )}
         </div>
       </div>
+
+      {/* Toast notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`px-4 py-2 rounded-lg shadow-lg text-sm animate-slide-in ${
+              toast.type === 'error' ? 'bg-red-500/90 text-white' :
+              toast.type === 'success' ? 'bg-green-500/90 text-white' :
+              'bg-slate-700/90 text-slate-200 border border-slate-600'
+            }`}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
+      {/* AskUser interaction panel */}
+      {askUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 askuser-backdrop" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            // Cancel on backdrop click
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({
+                type: 'ask_user_response',
+                answers: askUser.answers,
+                cancelled: true,
+              }))
+            } else {
+              showToast('连接已断开，请刷新页面', 'error')
+            }
+            setAskUser(null)
+          }
+        }}>
+          <div className="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl max-w-lg w-full mx-4 askuser-panel">
+            <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <span className="text-lg">🤔</span>
+                Agent 需要你的输入
+              </h3>
+              <span className="text-xs text-slate-400">
+                {askUser.currentQ + 1} / {askUser.questions.length}
+              </span>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-slate-200 mb-4">{askUser.questions[askUser.currentQ].question}</p>
+              {askUser.questions[askUser.currentQ].options && askUser.questions[askUser.currentQ].options!.length > 0 ? (
+                <div className="space-y-2">
+                  {askUser.questions[askUser.currentQ].options!.map((opt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        const newAnswers = { ...askUser.answers, [askUser.currentQ]: opt }
+                        if (askUser.currentQ < askUser.questions.length - 1) {
+                          setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
+                        } else {
+                          // Last question — submit
+                          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(JSON.stringify({
+                              type: 'ask_user_response',
+                              answers: newAnswers,
+                              cancelled: false,
+                            }))
+                          } else {
+                            showToast('连接已断开，请刷新页面', 'error')
+                          }
+                          setAskUser(null)
+                        }
+                      }}
+                      className="w-full text-left px-4 py-2.5 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-blue-500/10 hover:border-blue-500/50 transition-colors"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="输入你的回答..."
+                    className="flex-1 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
+                        const newAnswers = { ...askUser.answers, [askUser.currentQ]: (e.target as HTMLInputElement).value.trim() }
+                        if (askUser.currentQ < askUser.questions.length - 1) {
+                          setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
+                        } else {
+                          if (wsRef.current?.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(JSON.stringify({
+                              type: 'ask_user_response',
+                              answers: newAnswers,
+                              cancelled: false,
+                            }))
+                          } else {
+                            showToast('连接已断开，请刷新页面', 'error')
+                          }
+                          setAskUser(null)
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.querySelector<HTMLInputElement>('.askuser-panel input')
+                      const val = input?.value.trim()
+                      if (!val) return
+                      const newAnswers = { ...askUser.answers, [askUser.currentQ]: val }
+                      if (askUser.currentQ < askUser.questions.length - 1) {
+                        setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
+                      } else {
+                        if (wsRef.current?.readyState === WebSocket.OPEN) {
+                          wsRef.current.send(JSON.stringify({
+                            type: 'ask_user_response',
+                            answers: newAnswers,
+                            cancelled: false,
+                          }))
+                        } else {
+                          showToast('连接已断开，请刷新页面', 'error')
+                        }
+                        setAskUser(null)
+                      }
+                    }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
+                  >
+                    提交
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
+              {askUser.currentQ > 0 ? (
+                <button
+                  onClick={() => setAskUser({ ...askUser, currentQ: askUser.currentQ - 1 })}
+                  className="text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  ← 上一题
+                </button>
+              ) : (
+                <div />
+              )}
+              <button
+                onClick={() => {
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'ask_user_response',
+                      answers: askUser.answers,
+                      cancelled: true,
+                    }))
+                  } else {
+                    showToast('连接已断开，请刷新页面', 'error')
+                  }
+                  setAskUser(null)
+                }}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings panel */}
       <SettingsPanel

@@ -315,6 +315,26 @@ func (a *Agent) buildMainRunConfig(
 								payload.SubAgents = wsSubAgents
 							}
 						}
+						// Copy todo items for web display
+						if len(s.Todos) > 0 {
+							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								payload.Todos[i] = channelpkg.WsTodoItem{
+									ID:   td.ID,
+									Text: td.Text,
+									Done: td.Done,
+								}
+							}
+						}
+						// Pass token usage snapshot
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.WsTokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
 
 						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 						wc.SendProgress(chatID, payload)

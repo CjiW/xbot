@@ -1,10 +1,49 @@
-import { useState, memo } from 'react'
+import { useState, useEffect, useRef, memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getCodeBlockProps } from './CodeBlock'
 import type { WsProgressPayload, IterationSnapshot } from './ProgressPanel'
 import { CompletedIteration, BouncingDots, SubAgentTree } from './ProgressPanel'
 
+
+const COLLAPSE_THRESHOLD = 20 // lines
+
+function CollapsibleMessage({ children }: { children: React.ReactNode }) {
+  const [collapsed, setCollapsed] = useState(true)
+  const ref = useRef<HTMLDivElement>(null)
+  const [tooLong, setTooLong] = useState(false)
+
+  useEffect(() => {
+    if (ref.current) {
+      // Use scrollHeight for accurate measurement even when max-h clips the content
+      const lineHeight = parseFloat(getComputedStyle(ref.current).lineHeight) || 20
+      const lineCount = Math.ceil(ref.current.scrollHeight / lineHeight)
+      setTooLong(lineCount > COLLAPSE_THRESHOLD)
+    }
+  }, [children])
+
+  if (!tooLong) return <>{children}</>
+
+  return (
+    <div ref={ref}>
+      <div
+        className={`relative ${collapsed ? 'max-h-80 overflow-hidden' : ''}`}
+      >
+        {children}
+        {collapsed && (
+          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-slate-800/90 to-transparent pointer-events-none" />
+        )}
+      </div>
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="mt-1 text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+      >
+        <span className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>▸</span>
+        {collapsed ? '展开全部' : '折叠'}
+      </button>
+    </div>
+  )
+}
 interface Message {
   id: string
   type: 'user' | 'assistant' | 'system'
@@ -276,25 +315,25 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
         {/* Main text content — always visible */}
         {textMsgs.length > 0 && (
           <div className="assistant-turn-content">
-            {textMsgs.map((msg) => (
-              <div key={msg.id} className="markdown-body">
-                <Markdown components={codeBlockComponents} remarkPlugins={[remarkGfm]}>
-                  {msg.content}
-                </Markdown>
-              </div>
-            ))}
+            <CollapsibleMessage>
+              {textMsgs.map((msg) => (
+                <div key={msg.id} className="markdown-body">
+                  <Markdown components={codeBlockComponents} remarkPlugins={[remarkGfm]}>
+                    {msg.content}
+                  </Markdown>
+                </div>
+              ))}
+            </CollapsibleMessage>
           </div>
         )}
 
         {/* Loading pulse when no content yet and no iteration/progress placeholders */}
         {loading && textMsgs.length === 0 && !hasTools && !phaseIcon && !progress && (
-          <div className="assistant-turn-loading">
-            <div className="flex gap-1">
-              <span className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div className="thinking-orb thinking-orb-sm">
+              <div className="thinking-orb-ring thinking-orb-ring-1" />
+              <div className="thinking-orb-ring thinking-orb-ring-2" />
+              <div className="thinking-orb-core" />
             </div>
-          </div>
         )}
 
         {/* Loading indicator at bottom of content when still streaming */}

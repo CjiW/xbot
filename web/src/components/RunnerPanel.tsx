@@ -111,7 +111,11 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
   const handleSetActive = useCallback(async (name: string) => {
     setActionLoading(true)
     try {
-      const resp = await fetch(`/api/runners/${encodeURIComponent(name)}/active`, { method: 'PUT' })
+      const resp = await fetch('/api/runners/active', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
       const data = await resp.json()
       if (data.ok) {
         setActiveRunner(name)

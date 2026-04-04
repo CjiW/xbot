@@ -719,6 +719,15 @@ func (m *cliModel) renderProgressBlock() string {
 	// Render current iteration
 	if m.progress != nil {
 		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", m.progress.Iteration)))
+		// §22 装饰性流动进度条
+		barW := 14
+		tick := int(m.ticker.ticks) % (barW * 2)
+		pos := tick
+		if pos >= barW {
+			pos = barW*2 - pos - 1
+		}
+		bar := strings.Repeat("░", pos) + "▓" + strings.Repeat("░", barW-pos-1)
+		sb.WriteString("  " + m.styles.ProgressGradient.Render(bar) + "\n")
 		sb.WriteString("\n")
 
 		if m.progress.Thinking != "" {
@@ -747,23 +756,49 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
+		// §22 最近完成工具高亮闪烁
+		if len(m.recentlyDoneTools) > 0 && m.flashStartTick > 0 {
+			flashDuration := m.ticker.ticks - m.flashStartTick
+			if flashDuration < 10 {
+				// 闪烁效果：奇偶 tick 交替高亮/普通
+				for _, t := range m.recentlyDoneTools {
+					label, icon, _ := toolDisplayInfo(t, toolDoneStyle, toolErrorStyle)
+					line := fmt.Sprintf("  │ %s %s", icon, label)
+					if t.Elapsed > 0 {
+						pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(t.Elapsed))
+						if pad < 1 {
+							pad = 1
+						}
+						line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(t.Elapsed))
+					}
+					if flashDuration%2 == 0 {
+						sb.WriteString(m.styles.ProgressGlow.Render(line))
+					} else {
+						sb.WriteString(toolDoneStyle.Render(line))
+					}
+					sb.WriteString("\n")
+				}
+			} else {
+				m.recentlyDoneTools = nil
+				m.flashStartTick = 0
+			}
+		}
 		// Active tools — 带迷你脉冲进度条动画
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			// 迷你进度条：braille 波浪流动动画（第 4 轮升级）
-			// 使用 braille 点阵创造流畅的波浪填充效果
-			waveBarFrames := []string{
-				"⠁⠁⠃⠃⠇⠇⠟⠟", "⠃⠃⠇⠇⠟⠟⠧⠧", "⠇⠇⠟⠟⠧⠧⡧⡧", "⠟⠟⠧⠧⡧⡧⣧⣧",
-				"⠧⠧⡧⡧⣧⣧⣿⣿", "⡧⡧⣧⣧⣿⣿⣿⣿", "⣧⣧⣿⣿⣿⣿⣿⣿", "⣿⣿⣿⣿⣿⣿⣿⣿",
-				"⣿⣿⣿⣿⣿⣿⣧⣧", "⣿⣿⣿⣿⣧⣧⡧⡧", "⣿⣿⣧⣧⡧⡧⠧⠧", "⣧⣧⡧⡧⠧⠧⠇⠇",
-				"⡧⡧⠧⠧⠇⠇⠃⠃", "⠧⠧⠇⠇⠃⠃⠁⠁", "⠇⠇⠃⠃⠁⠁⠁⠁",
+			// §22 动态宽度 + 脉冲效果的迷你进度条
+			miniW := 8 + int(m.ticker.ticks%7) // 动态宽度 8-14
+			tick2 := int(m.ticker.ticks) % (miniW * 2)
+			pos2 := tick2
+			if pos2 >= miniW {
+				pos2 = miniW*2 - pos2 - 1
 			}
-			barIdx := int(m.ticker.ticks) % len(waveBarFrames)
-			miniBar := s.WarningSt.Render(waveBarFrames[barIdx])
-			line := fmt.Sprintf("  │ %s %s  %s", m.ticker.viewFrames(arrowFrames), label, miniBar)
+			miniBar := strings.Repeat("░", pos2) + "▓" + strings.Repeat("░", miniW-pos2-1)
+			pulseIcon := m.ticker.viewFrames(pulseFrames)
+			line := fmt.Sprintf("  │ %s %s  %s", pulseIcon, label, s.ProgressGradient.Render(miniBar))
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -834,20 +869,34 @@ func (m *cliModel) renderProgressBlock() string {
 // Only renders running/pending agents — completed ones are already captured
 // in the tool summary and shouldn't linger in the progress panel.
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
-	indent := strings.Repeat("  ", depth)
-	for _, sa := range agents {
-		// Skip completed sub-agents — their results are in the tool summary
+	for i, sa := range agents {
 		if sa.Status == "done" {
 			continue
 		}
+		// §22 树状连接线
+		prefix := ""
+		if depth == 1 {
+			if i == len(agents)-1 {
+				prefix = "└── "
+			} else {
+				prefix = "├── "
+			}
+		} else {
+			indent := strings.Repeat("│   ", depth-1)
+			if i == len(agents)-1 {
+				prefix = indent + "└── "
+			} else {
+				prefix = indent + "├── "
+			}
+		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := m.styles.ProgressRunning // §20
+		style := m.styles.ProgressRunning
 		switch sa.Status {
 		case "error":
 			icon = "✗"
 			style = m.styles.ProgressError
 		}
-		line := fmt.Sprintf("%s%s %s", indent, icon, sa.Role)
+		line := fmt.Sprintf("%s%s %s", prefix, icon, sa.Role)
 		if sa.Desc != "" {
 			line += ": " + sa.Desc
 		}

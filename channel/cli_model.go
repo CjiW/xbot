@@ -56,14 +56,14 @@ var (
 		"⣾", "⣽", "⣻", "⢿", "⡿", "⠿", "⠟", "⠛",
 		"⠫", "⠭", "⠮", "⡮", "⡯", "⣯", "⣽", "⣾",
 	}
-	// arrowFrames: pulsing arrow — tool execution feel
-	arrowFrames = []string{"›", "▸", "▶", "▸", "›", "▸", "▶", "▸"}
 	// waveFrames: rotating crescent moon phases — subagent feel
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 	// splashFrames: loading bar animation — 启动画面进度条
 	splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	// pulseFrames: pulsing circle — tool completion pulse
+	pulseFrames = []string{"◌", "◎", "◉", "◎", "◌"}
 )
 
 // errorKeywords — system 消息中的错误检测关键词
@@ -133,11 +133,16 @@ type cliModel struct {
 	// --- Core UI ---
 	viewport viewport.Model // 消息显示区
 	textarea textarea.Model // 用户输入区
-	ticker   *animTicker    // 进度动画 ticker
-	width    int            // 终端宽度
-	height   int            // 终端高度
-	styles   cliStyles
-	locale   *UILocale // i18n: current UI locale
+
+	// §22 输入历史
+	inputHistory    []string    // 已发送输入历史（新 → 旧），仅会话内
+	inputHistoryIdx int         // -1 = 不在浏览模式, >=0 = 当前浏览索引
+	inputDraft      string      // 进入历史浏览前的输入草稿
+	ticker          *animTicker // 进度动画 ticker
+	width           int         // 终端宽度
+	height          int         // 终端高度
+	styles          cliStyles
+	locale          *UILocale // i18n: current UI locale
 
 	// --- Message state ---
 	messages        []cliMessage          // 消息历史
@@ -174,6 +179,9 @@ type cliModel struct {
 
 	// --- §2 工具可视化 ---
 	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
+	// §22 完成工具高亮闪烁
+	recentlyDoneTools []CLIToolProgress // 最近完成的工具（用于高亮闪烁）
+	flashStartTick    int64             // 高亮闪烁开始 tick（0 = 未激活）
 
 	// --- §8 Tab 补全 ---
 	completions []string // 当前补全候选项
@@ -325,6 +333,9 @@ func newCLIModel() *cliModel {
 		inputReady:      true,
 		msgCollapsed:    make(map[int]bool),
 		locale:          GetLocale(""),
+		inputHistory:    make([]string, 0, 100),
+		inputHistoryIdx: -1,
+		inputDraft:      "",
 	}
 }
 

@@ -212,14 +212,43 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 非处理状态：清空输入
 			if m.textarea.Value() != "" {
 				m.textarea.Reset()
+				m.inputHistoryIdx = -1
+				m.inputDraft = ""
 				m.autoExpandInput()
 			}
 			return m, nil
 
 		case msg.Code == tea.KeyUp:
-			// ↑ with bg tasks running + empty input → open bg tasks panel
-			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
-				m.openBgTasksPanel()
+			if m.panelMode == "" && !m.typing {
+				// bg tasks panel（原逻辑不变）
+				if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputHistoryIdx == -1 {
+					m.openBgTasksPanel()
+					return m, nil
+				}
+				// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
+				if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+					if m.inputHistoryIdx == -1 {
+						m.inputDraft = "" // 保存空草稿
+						m.inputHistoryIdx = 0
+					} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
+						m.inputHistoryIdx++
+					}
+					m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+					m.autoExpandInput()
+					return m, nil
+				}
+			}
+
+		case msg.Code == tea.KeyDown:
+			if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+				if m.inputHistoryIdx > 0 {
+					m.inputHistoryIdx--
+					m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+				} else {
+					m.inputHistoryIdx = -1
+					m.textarea.SetValue(m.inputDraft)
+				}
+				m.autoExpandInput()
 				return m, nil
 			}
 
@@ -254,6 +283,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
+				// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
+				if !strings.HasPrefix(content, "/") {
+					if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
+						m.inputHistory = append([]string{content}, m.inputHistory...)
+						if len(m.inputHistory) > 100 {
+							m.inputHistory = m.inputHistory[:100]
+						}
+					}
+				}
+				m.inputHistoryIdx = -1
+				m.inputDraft = ""
 				if m.allTodosDone() {
 					m.todos = nil
 					m.todosDoneCleared = true
@@ -379,6 +419,23 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.lastCompletedTools = filtered
+			}
+			// §22 检测消失的 ActiveTools（从 prev 消失 → 刚完成）→ 高亮闪烁
+			if prev != nil && len(prev.ActiveTools) > 0 {
+				currActiveSet := make(map[string]bool)
+				for _, t := range msg.payload.ActiveTools {
+					currActiveSet[t.Name] = true
+				}
+				var newlyDone []CLIToolProgress
+				for _, t := range prev.ActiveTools {
+					if !currActiveSet[t.Name] {
+						newlyDone = append(newlyDone, t)
+					}
+				}
+				if len(newlyDone) > 0 {
+					m.recentlyDoneTools = newlyDone
+					m.flashStartTick = m.ticker.ticks
+				}
 			}
 			if msg.payload.Phase == "done" {
 				// Snapshot the final iteration before clearing progress.

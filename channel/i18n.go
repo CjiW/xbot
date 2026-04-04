@@ -92,6 +92,7 @@ type UILocale struct {
 	FooterNewline  string // "newline"
 	FooterSelect   string // "select"
 	FooterManage   string // "manage"
+	FooterHistory  string // "history"
 
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
@@ -235,6 +236,7 @@ func init() {
 		FooterNewline:  "换行",
 		FooterSelect:   "选择",
 		FooterManage:   "管理",
+		FooterHistory:  "历史",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
@@ -485,6 +487,7 @@ func init() {
 		FooterNewline:  "newline",
 		FooterSelect:   "select",
 		FooterManage:   "manage",
+		FooterHistory:  "history",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
@@ -735,6 +738,7 @@ func init() {
 		FooterNewline:  "改行",
 		FooterSelect:   "選択",
 		FooterManage:   "管理",
+		FooterHistory:  "履歴",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},

@@ -375,8 +375,10 @@ type cliStyles struct {
 	TICursor         lipgloss.Style
 	TIPlaceholder    lipgloss.Style
 	// --- key hints (footer) ---
-	KeyLabelSt lipgloss.Style
-	KeyDescSt  lipgloss.Style
+	KeyLabelSt       lipgloss.Style
+	KeyDescSt        lipgloss.Style
+	ProgressGradient lipgloss.Style
+	ProgressGlow     lipgloss.Style
 
 	// toolDisplayInfo
 }
@@ -487,8 +489,10 @@ func buildStyles(width int) cliStyles {
 		TICursor:         lipgloss.NewStyle().Foreground(c(t.Info)),
 		TIPlaceholder:    lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		// --- key hints (footer) ---
-		KeyLabelSt: lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
-		KeyDescSt:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		KeyLabelSt:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Bold(true),
+		KeyDescSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		ProgressGradient: lipgloss.NewStyle().Foreground(c(t.BarFilled)).Bold(true),
+		ProgressGlow:     lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
 	}
 }
 

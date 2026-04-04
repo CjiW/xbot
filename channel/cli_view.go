@@ -436,6 +436,9 @@ func (m *cliModel) renderFooter() string {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
 			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
+			if len(m.inputHistory) > 0 {
+				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
+			}
 			if m.bgTaskCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}

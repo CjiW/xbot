@@ -359,7 +359,7 @@ func buildStyles(width int) cliStyles {
 		TodoEmpty:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
 		TodoDone:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		TodoPending:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		PanelBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
+		PanelBox:         lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
 		PanelHeader:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
 		PanelCursor:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		PanelDesc:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),

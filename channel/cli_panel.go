@@ -841,13 +841,17 @@ func (m *cliModel) autoExpandAskTA() {
 }
 
 // panelMaxHeight 根据 viewport 高度计算 panel 可用最大行数。
-// Panel 与 viewport 共享 titleBar 以下的垂直空间，各占约一半。
+// Panel 模式下 viewport 已缩到最小，panel 获得几乎所有剩余空间。
+// 返回的是 panel 内容区的可用行数（不含 PanelBox 的 border 行）。
 func (m *cliModel) panelMaxHeight() int {
 	// fixedLines: titleBar(1) + status(1) + footer(1) = 3
+	// viewportMin: 3 (panel 模式下 viewport 缩到最小)
 	// panelOverhead: panelBorder(2) + panelFooter(1) + toast(~1) = 4
-	panelAvailable := m.height - 3 - 4 - m.viewport.Height()
-	if panelAvailable < 8 {
-		panelAvailable = 8 // 最小高度保证
+	panelAvailable := m.height - 3 - 3 - 4
+	// 减去 PanelBox 自身的 border 行数（RoundedBorder 上下各1行 = 2行）
+	panelAvailable -= 2
+	if panelAvailable < 6 {
+		panelAvailable = 6 // 最小高度保证：至少显示标题+几行内容
 	}
 	return panelAvailable
 }
@@ -870,8 +874,13 @@ func clampPanelContent(content string, maxHeight int) string {
 	headerLines := 4
 	footerLines := 2
 	if headerLines+footerLines >= maxHeight {
-		// 极端情况：只保留头部和尾部各一半
-		headerLines = maxHeight / 2
+		// 极端情况：空间不足以同时保留头部和尾部
+		// 至少保留 headerLines 行，剩余空间给尾部
+		if maxHeight <= 1 {
+			// 仅保留第一行（标题）
+			return lines[0]
+		}
+		headerLines = (maxHeight + 1) / 2
 		footerLines = maxHeight - headerLines
 	}
 	kept := headerLines + footerLines

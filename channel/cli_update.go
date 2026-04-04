@@ -51,6 +51,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range m.messages {
 			m.messages[i].dirty = true
 		}
+		m.updatePlaceholder()
 		m.updateViewportContent()
 	default:
 	}
@@ -481,11 +482,22 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Schedule next tick when agent is active or bg tasks are running.
 		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
 		// (two tickCmd() would double the message count every 100ms → CPU explosion).
-		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || m.typing || m.progress != nil {
+		busy := m.typing || m.progress != nil
+		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
 			cmds = append(cmds, tickCmd())
+		} else {
+			// Transition to idle: start low-frequency tick for placeholder rotation
+			cmds = append(cmds, idleTickCmd())
 		}
-		if m.typing || m.progress != nil {
+		if busy {
 			m.updateViewportContent()
+		}
+
+	case idleTickMsg:
+		// Low-frequency idle tick: rotate placeholder and keep alive
+		if !m.typing && m.progress == nil {
+			m.updatePlaceholder()
+			cmds = append(cmds, idleTickCmd())
 		}
 
 	case cliTempStatusClearMsg:
@@ -561,12 +573,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ready && msg.frame >= 20 {
 			// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 			m.splashDone = true
-			return m, nil
+			return m, idleTickCmd()
 		}
 		// 兜底上限：~2 秒（40 帧）
 		if msg.frame >= 40 {
 			m.splashDone = true
-			return m, nil
+			return m, idleTickCmd()
 		}
 		cmds = append(cmds, m.splashTick(msg.frame))
 		return m, tea.Batch(cmds...)
@@ -574,6 +586,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
+		cmds = append(cmds, idleTickCmd())
 
 	case cliToastMsg:
 		// §16 Toast 通知入队（最多保留 5 条，显示前 3 条）
@@ -714,14 +727,9 @@ func (m *cliModel) layoutViewportHeight() int {
 	fixedLines := 3 // titleBar + status + footer
 
 	if m.panelMode != "" {
-		// Panel 模式：viewport + panel 共享剩余空间
-		// panelBorder = 2 (top+bottom), panelFooter = 1, toast ≈ 1
-		panelOverhead := 4
-		viewportHeight := (height - fixedLines - panelOverhead) / 2
-		if viewportHeight < 3 {
-			viewportHeight = 3
-		}
-		return viewportHeight
+		// Panel 模式：viewport 缩到最小，给 panel 尽可能多的空间
+		// 用户在操作 panel 时 viewport 只是背景参考
+		return 3
 	}
 
 	// 正常模式
@@ -750,12 +758,17 @@ func (m *cliModel) layoutViewportHeight() int {
 }
 
 // relayoutViewport 重新计算并设置 viewport 高度（不重建样式缓存）。
-// 用于 panel 打开/关闭时动态调整布局。
+// 用于 panel 打开/关闭、todo 增减时动态调整布局。
+// 如果用户之前在底部，调整后继续保持跟随底部。
 func (m *cliModel) relayoutViewport() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
+	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetHeight(m.layoutViewportHeight())
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // handleResize 处理窗口大小变化
@@ -769,9 +782,9 @@ func (m *cliModel) handleResize(width, height int) {
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
 
-	// inputBoxStyle uses Width(width-4) for content, Padding(0,1) adds 2, Border adds 2.
-	// textarea must match the content width exactly.
-	iw := width - 4
+	// InputBox: Width(width-4) includes border(2) + padding(2).
+	// Content area = width-4-2-2 = width-8. Textarea must match this.
+	iw := width - 8
 	if iw < 10 {
 		iw = 10
 	}

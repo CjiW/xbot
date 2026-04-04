@@ -535,6 +535,7 @@ func buildStyles(width int) cliStyles {
 func applyTAStyles(ta *textarea.Model, s *cliStyles) {
 	styles := ta.Styles()
 	styles.Cursor.Color = s.TACursor.GetForeground()
+	styles.Cursor.Blink = false // 禁用光标闪烁：避免 IME 输入时字符因闪烁竞态而视觉消失
 	styles.Focused.Base = s.TABase
 	styles.Focused.Placeholder = s.TAPlaceholder
 	styles.Focused.CursorLine = s.TACursorLine

@@ -4,6 +4,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
 )
 
 // ---------------------------------------------------------------------------
@@ -40,14 +42,25 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
-// applyThemeAndRebuild applies a theme change and rebuilds the glamour renderer.
-// Callers should still call invalidateAllCache() if messages need re-rendering.
+// applyThemeAndRebuild applies a theme change synchronously: sets the theme,
+// rebuilds styles cache, glamour renderer, and marks all messages dirty.
+// Uses setTheme() instead of ApplyTheme() to avoid sending on themeChangeCh,
+// which would cause a redundant fullRebuild in the next Update cycle.
 func (m *cliModel) applyThemeAndRebuild(theme string) {
-	ApplyTheme(theme)
+	setTheme(theme)
+	// Rebuild styles cache (same as themeChangeCh handler in Update)
+	m.styles = buildStyles(m.width)
+	applyTAStyles(&m.textarea, &m.styles)
+	m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
+	// Rebuild glamour renderer
 	if m.width > 4 {
 		m.renderer = newGlamourRenderer(m.width - 4)
 	}
+	// Mark all messages for re-render (new theme = new styles)
 	m.renderCacheValid = false
+	for i := range m.messages {
+		m.messages[i].dirty = true
+	}
 }
 
 // applyLanguageChange applies a language/locale change and invalidates cache.

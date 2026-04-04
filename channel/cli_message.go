@@ -347,10 +347,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					if m.channel.config.ApplySettings != nil {
 						m.channel.config.ApplySettings(values)
 					}
-					// Apply theme immediately
+					// Apply theme immediately (fully self-contained, no channel notification)
 					if theme, ok := values["theme"]; ok {
 						m.applyThemeAndRebuild(theme)
-						m.invalidateAllCache(false)
 					}
 					// Update live config overrides (model, base_url)
 					if model, ok := values["llm_model"]; ok && model != "" {
@@ -360,7 +359,10 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					if lang, ok := values["language"]; ok {
 						m.applyLanguageChange(lang)
 					}
-					m.showSystemMsg(m.locale.SettingsSaved, feedbackInfo)
+					// Append feedback + single rebuild (avoid showSystemMsg which does
+					// a redundant fullRebuild; invalidateAllCache(true) handles it once)
+					m.appendSystem(m.locale.SettingsSaved)
+					m.invalidateAllCache(true)
 				})
 			}
 		}
@@ -1421,22 +1423,15 @@ func (m *cliModel) toggleMessageFold() {
 	}
 	msg := &m.messages[idx]
 	if msg.isPartial {
-		m.showSystemMsg(m.locale.MsgTooShortToFold, feedbackWarning)
 		return
 	}
 	if msg.renderedLines <= msgFoldThresholdLines && !msg.folded {
-		m.showSystemMsg(m.locale.MsgTooShortToFold, feedbackWarning)
 		return
 	}
 	msg.folded = !msg.folded
 	msg.dirty = true
 	m.renderCacheValid = false
 	m.updateViewportContent()
-	if msg.folded {
-		m.showSystemMsg(m.locale.MsgCollapsed, feedbackInfo)
-	} else {
-		m.showSystemMsg(m.locale.MsgExpanded, feedbackInfo)
-	}
 }
 
 // enterSearchMode 进入搜索模式（§21）

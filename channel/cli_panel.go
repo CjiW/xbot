@@ -67,7 +67,7 @@ func (m *cliModel) openSetupPanel() {
 		}
 		// Refresh cached model name after settings save
 		m.refreshCachedModelName()
-		// Apply theme immediately
+		// Apply theme immediately (fully self-contained, no channel notification)
 		if theme, ok := vals["theme"]; ok && theme != "" {
 			m.applyThemeAndRebuild(theme)
 		}
@@ -79,7 +79,8 @@ func (m *cliModel) openSetupPanel() {
 		if vals["memory_provider"] == "letta" {
 			msg += m.locale.SetupLettaNote
 		}
-		m.showSystemMsg(msg, feedbackInfo)
+		m.appendSystem(msg)
+		m.invalidateAllCache(true)
 	})
 }
 

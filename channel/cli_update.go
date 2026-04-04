@@ -190,10 +190,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				cutIdx := groups[len(groups)-m.confirmDelete]
 				m.messages = m.messages[:cutIdx]
-				// 同步截断数据库中的 session messages
+				// 同步截断数据库中的 session messages（异步避免阻塞 UI）
+				// safe: 此时 typing=false，输入被 confirmDelete 拦截，不会有并发写入
 				if m.trimHistoryFn != nil {
 					keepCount := cutIdx
-					// 异步执行避免阻塞 UI
 					go func() {
 						if err := m.trimHistoryFn(keepCount); err != nil {
 							log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
@@ -494,21 +494,6 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				m.lastCompletedTools = filtered
-			}
-			// §22 检测消失的 ActiveTools（从 prev 消失 → 刚完成）→ 高亮闪烁
-			if prev != nil && len(prev.ActiveTools) > 0 {
-				currActiveSet := make(map[string]bool)
-				for _, t := range msg.payload.ActiveTools {
-					currActiveSet[t.Name] = true
-				}
-				var newlyDone []CLIToolProgress
-				for _, t := range prev.ActiveTools {
-					if !currActiveSet[t.Name] {
-						newlyDone = append(newlyDone, t)
-					}
-				}
-				// Tools completed — no flash animation needed
-				_ = newlyDone
 			}
 			if msg.payload.Phase == "done" {
 				// Snapshot the final iteration before clearing progress.

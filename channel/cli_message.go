@@ -1138,14 +1138,31 @@ func (m *cliModel) renderDeleteBoundaryLine() string {
 }
 
 // visibleMsgGroupIndices 返回每个"可见消息组"的起始 slice 索引。
-// tool_summary 与前一条 assistant 消息合并为一组，不单独计数。
+// 每个 group 的起始索引向前延伸，包含紧邻的前置 tool_summary 链，
+// 确保删除时 tool_summary 不会与其所属消息分离而孤立。
 func visibleMsgGroupIndices(messages []cliMessage) []int {
 	var groups []int
+	covered := make([]bool, len(messages))
 	for i, msg := range messages {
 		if msg.role == "tool_summary" {
 			continue
 		}
-		groups = append(groups, i)
+		// 向前扫描紧邻的 tool_summary 链，找到组的真正起始位置
+		startIdx := i
+		for startIdx > 0 && messages[startIdx-1].role == "tool_summary" {
+			startIdx--
+		}
+		groups = append(groups, startIdx)
+		// 标记该组覆盖的所有消息，避免 tool_summary 重复成组
+		for j := startIdx; j <= i; j++ {
+			covered[j] = true
+		}
+	}
+	// 未被任何组覆盖的 tool_summary（如链首或独立存在）单独成组
+	for i, msg := range messages {
+		if !covered[i] && msg.role == "tool_summary" {
+			groups = append(groups, i)
+		}
 	}
 	return groups
 }

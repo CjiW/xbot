@@ -147,7 +147,7 @@ func (m *cliModel) clearTempStatusCmd(d ...time.Duration) tea.Cmd {
 //   - feedbackWarning / feedbackError: rendered with warning/error styling
 //     if the content matches errorKeywords
 func (m *cliModel) showSystemMsg(content string, level feedbackLevel) {
-	m.appendSystem(content)
+	m.appendSystemLevel(content, level)
 	m.updateViewportContent()
 }
 

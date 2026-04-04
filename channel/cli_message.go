@@ -159,10 +159,16 @@ func (m *cliModel) newInbound(content string, metadata map[string]string) bus.In
 
 // appendSystem adds a system message to the message history and marks it as dirty.
 func (m *cliModel) appendSystem(content string) {
+	m.appendSystemLevel(content, feedbackInfo)
+}
+
+// appendSystemLevel appends a system message with the given feedback level.
+func (m *cliModel) appendSystemLevel(content string, level feedbackLevel) {
 	m.messages = append(m.messages, cliMessage{
 		role:      "system",
 		content:   content,
 		timestamp: time.Now(),
+		sysLevel:  level,
 		dirty:     true,
 	})
 }
@@ -923,8 +929,6 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	userLabelStyle := s.UserLabel
 	assistantLabelStyle := s.AssistLabel
 	streamingLabelStyle := s.StreamingLabel
-	systemMsgStyle := s.SystemMsg
-	errorMsgStyle := s.ErrorMsg
 
 	// 渲染 Markdown（仅对 assistant 消息）
 	var rendered string
@@ -1031,12 +1035,12 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
-		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
-		isError := isErrorContent(msg.content)
-		if isError {
-			sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
+		if msg.sysLevel >= feedbackError {
+			sb.WriteString(s.ErrorMsg.Render("⚠ " + msg.content))
+		} else if msg.sysLevel == feedbackWarning {
+			sb.WriteString(s.WarningMsg.Render("⚡ " + msg.content))
 		} else {
-			sb.WriteString(systemMsgStyle.Render(msg.content))
+			sb.WriteString(s.SystemMsg.Render(msg.content))
 		}
 	case "user":
 		// 用户消息上方：右侧柔和光点分隔，与 assistant 的左侧竖线形成对称

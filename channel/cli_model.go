@@ -267,6 +267,7 @@ type cliMessage struct {
 	content   string
 	timestamp time.Time
 	isPartial bool
+	sysLevel  feedbackLevel // only set for role=="system"; 0=info, 1=warning, 2=error
 	// --- §1 增量渲染 ---
 	rendered    string // 缓存的渲染结果（ANSI 字符串）
 	dirty       bool   // 是否需要重新渲染

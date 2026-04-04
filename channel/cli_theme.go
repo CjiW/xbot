@@ -217,6 +217,7 @@ type cliStyles struct {
 	AssistLabel      lipgloss.Style
 	StreamingLabel   lipgloss.Style
 	SystemMsg        lipgloss.Style
+	WarningMsg       lipgloss.Style
 	ErrorMsg         lipgloss.Style
 	ToolSummary      lipgloss.Style
 	ToolHeader       lipgloss.Style
@@ -329,6 +330,7 @@ func buildStyles(width int) cliStyles {
 		AssistLabel:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
 		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
+		WarningMsg:       lipgloss.NewStyle().Foreground(c(t.Warning)).Italic(true).Width(width).Align(lipgloss.Center),
 		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
 		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
 		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),

@@ -297,11 +297,89 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [presets, setPresets] = useState<PresetCommand[]>([])
   const [askUser, setAskUser] = useState<{ questions: { question: string; options?: string[] }[]; answers: Record<string, string>; currentQ: number } | null>(null)
   const [toasts, setToasts] = useState<{ id: number; message: string; type: 'info' | 'error' | 'success' }[]>([])
+  const [currentModel, setCurrentModel] = useState('')
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<Array<{ id: number; role: string; content: string; snippet: string; created_at: string }>>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
     const id = Date.now()
     setToasts(prev => [...prev, { id, message, type }])
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
   }, [])
+
+  const handleModelSwitch = useCallback(async (model: string) => {
+    setModelDropdownOpen(false)
+    if (model === currentModel) return
+    try {
+      const resp = await fetch('/api/llm-config/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setCurrentModel(model)
+        showToast(`已切换到 ${model}`, 'success')
+      } else {
+        showToast(data.error || '切换失败', 'error')
+      }
+    } catch {
+      showToast('切换失败', 'error')
+    }
+  }, [currentModel, showToast])
+
+  // --- Load available models on mount ---
+  useEffect(() => {
+    fetch('/api/llm-config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          setCurrentModel(data.model || '')
+          setAvailableModels(data.models || [])
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // --- Search: debounce 300ms ---
+  useEffect(() => {
+    if (!searchOpen || !searchQuery.trim()) {
+      setSearchResults([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`)
+        const data = await resp.json()
+        if (data.ok) {
+          setSearchResults(data.results || [])
+        }
+      } catch {}
+      setSearchLoading(false)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery, searchOpen])
+
+  // --- Search: Ctrl+K shortcut ---
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setSearchOpen(prev => !prev)
+        if (!searchOpen) {
+          setSearchQuery('')
+          setSearchResults([])
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [searchOpen])
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -530,6 +608,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 label: t.label,
                 status: t.status,
                 elapsed_ms: t.elapsed_ms,
+                summary: t.summary,
               }))
               return {
                 iteration: prevIterationRef.current,
@@ -642,14 +721,26 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     const trimmed = content.trim()
     if (trimmed.startsWith('/')) {
       const cmd = trimmed.toLowerCase()
-      if (cmd === '/clear' || cmd === '/new') {
+      if (cmd === '/clear') {
+        // Clear both frontend state and backend history
         setMessages([])
         setProgress(null)
         setLiveIterations([])
         prevIterationRef.current = -1
         progressRef.current = null
         setLoading(false)
-        showToast('对话已清空', 'info')  // Bug 3 fix: BEFORE return
+        fetch('/api/history', { method: 'DELETE' }).catch(() => {})
+        showToast('对话已清空', 'info')
+        return
+      }
+      if (cmd === '/new') {
+        setMessages([])
+        setProgress(null)
+        setLiveIterations([])
+        prevIterationRef.current = -1
+        progressRef.current = null
+        setLoading(false)
+        showToast('新对话', 'info')
         return
       }
       if (cmd === '/help') {
@@ -821,8 +912,46 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           }`}>
             {connected ? '● Connected' : reconnecting ? '◐ Connecting...' : '○ Disconnected'}
           </span>
+          {/* Model selector */}
+          {availableModels.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+                className="text-xs px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors flex items-center gap-1"
+                title="切换模型"
+              >
+                🧠 {currentModel || 'default'}
+                <span className="text-[10px]">▾</span>
+              </button>
+              {modelDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
+                  <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 py-1 min-w-[200px] max-h-64 overflow-y-auto">
+                    {availableModels.map(model => (
+                      <button
+                        key={model}
+                        onClick={() => handleModelSwitch(model)}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-700 transition-colors ${
+                          model === currentModel ? 'text-blue-400 bg-blue-500/10' : 'text-slate-300'
+                        }`}
+                      >
+                        {model === currentModel && '✓ '}{model}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setSearchOpen(!searchOpen); setSearchQuery(''); setSearchResults([]) }}
+            className="text-sm text-slate-400 hover:text-white transition-colors p-1"
+            title="搜索 (Ctrl+K)"
+          >
+            🔍
+          </button>
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-sm text-slate-400 hover:text-white transition-colors p-1"
@@ -838,6 +967,51 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           </button>
         </div>
       </header>
+
+      {/* Search panel */}
+      {searchOpen && (
+        <div className="bg-slate-800/95 border-b border-slate-700 px-4 py-3 backdrop-blur-sm">
+          <div className="max-w-2xl mx-auto">
+            <div className="relative">
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setSearchOpen(false) }}
+                placeholder="搜索消息历史..."
+                autoFocus
+                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+              />
+              {searchLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">搜索中...</span>}
+            </div>
+            {searchResults.length > 0 && (
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
+                {searchResults.map(hit => (
+                  <div
+                    key={hit.id}
+                    className="px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 cursor-pointer text-sm"
+                    onClick={() => {
+                      setSearchOpen(false)
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-medium text-slate-400">{hit.role === 'user' ? '👤' : '🤖'}</span>
+                      {hit.created_at && <span className="text-xs text-slate-500">{new Date(hit.created_at).toLocaleString('zh-CN')}</span>}
+                    </div>
+                    <div className="text-slate-300 text-xs line-clamp-2 whitespace-pre-wrap break-words">
+                      {hit.snippet}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {searchQuery && !searchLoading && searchResults.length === 0 && (
+              <div className="mt-2 text-center text-xs text-slate-500">未找到匹配结果</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Disconnected / Reconnecting banner */}
       {!connected && serverStopped.current && (
@@ -973,6 +1147,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               onSend={handleSend}
               disabled={loading}
               connected={connected}
+              currentModel={currentModel}
+              onCancel={handleCancel}
             />
           </div>
           <FileUpload

@@ -271,16 +271,16 @@ type wsMessage struct {
 
 // WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
 type WsProgressPayload struct {
-	Phase          string           `json:"phase,omitempty"`
-	Iteration      int              `json:"iteration,omitempty"`
-	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
-	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
-	Thinking       string           `json:"thinking,omitempty"`
-	SubAgents      []WsSubAgent     `json:"sub_agents,omitempty"`
-	TokenUsage     *WsTokenUsage    `json:"token_usage,omitempty"`
-	Todos          []WsTodoItem     `json:"todos,omitempty"`
-	Questions []WsAskUserQuestion `json:"questions,omitempty"`
-	RequestID string              `json:"request_id,omitempty"`
+	Phase          string              `json:"phase,omitempty"`
+	Iteration      int                 `json:"iteration,omitempty"`
+	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
+	CompletedTools []WsToolProgress    `json:"completed_tools,omitempty"`
+	Thinking       string              `json:"thinking,omitempty"`
+	SubAgents      []WsSubAgent        `json:"sub_agents,omitempty"`
+	TokenUsage     *WsTokenUsage       `json:"token_usage,omitempty"`
+	Todos          []WsTodoItem        `json:"todos,omitempty"`
+	Questions      []WsAskUserQuestion `json:"questions,omitempty"`
+	RequestID      string              `json:"request_id,omitempty"`
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -289,6 +289,7 @@ type WsToolProgress struct {
 	Label   string `json:"label,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
+	Summary string `json:"summary,omitempty"`
 }
 
 // WsSubAgent 子 Agent 的结构化进度状态。
@@ -339,7 +340,7 @@ type WsAskUserQuestion struct {
 // WsAskUserResponse is the client response to an ask_user prompt.
 type WsAskUserResponse struct {
 	Answers   map[string]string `json:"answers"`   // question index -> answer
-	Cancelled bool             `json:"cancelled"` // true = user cancelled
+	Cancelled bool              `json:"cancelled"` // true = user cancelled
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +446,7 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 	mux.HandleFunc("/api/settings", wc.authMiddleware(wc.handleSettings))
 	mux.HandleFunc("/api/runner/token", wc.authMiddleware(wc.handleRunnerToken))
+	mux.HandleFunc("/api/search", wc.authMiddleware(wc.handleSearch))
 
 	// Multi-runner API
 	mux.HandleFunc("/api/runners", wc.authMiddleware(wc.handleRunners))
@@ -567,7 +569,6 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		}
 		wc.hub.sendToClient(msg.ChatID, askMsg)
 	}
-
 
 	return msgID, nil
 }
@@ -857,7 +858,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			}
 		default:
 			log.WithField("type", msg.Type).Debug("WS unknown message type")
-	}
+		}
 	}
 
 }

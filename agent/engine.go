@@ -267,6 +267,7 @@ type IterationToolSnapshot struct {
 	Label     string `json:"label,omitempty"`
 	Status    string `json:"status"` // done | error
 	ElapsedMS int64  `json:"elapsed_ms,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 // readArgsHasOffsetOrLimit checks whether a Read tool call's JSON arguments contain
@@ -1184,7 +1185,24 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				}
 				structuredProgress.ActiveTools[entry.index].Status = status
 				structuredProgress.ActiveTools[entry.index].Elapsed = elapsed
-			}
+					// Extract one-line summary for progress display
+					if result != nil && result.Summary != "" {
+						s := strings.TrimSpace(result.Summary)
+						if idx := strings.Index(s, "\n"); idx >= 0 {
+							s = s[:idx]
+						}
+						if r := []rune(s); len(r) > 100 {
+							s = string(r[:100]) + "..."
+						}
+						structuredProgress.ActiveTools[entry.index].Summary = s
+					} else if execErr != nil {
+						s := execErr.Error()
+						if r := []rune(s); len(r) > 100 {
+							s = string(r[:100]) + "..."
+						}
+						structuredProgress.ActiveTools[entry.index].Summary = s
+					}
+				}
 
 			toolLabel := formatToolProgress(tc.Name, tc.Arguments)
 			if execErr != nil {

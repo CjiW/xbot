@@ -177,6 +177,7 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
           label: t.label,
           status: t.status,
           elapsed_ms: t.elapsed_ms,
+          summary: t.summary,
         })),
       }].sort((a, b) => a.iteration - b.iteration)
     }
@@ -225,13 +226,18 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
                   )}
                   <div className="space-y-0.5">
                     {snap.tools.map((tool, i) => (
-                      <div key={`${snap.iteration}-${i}`} className="flex items-center gap-2 px-2 py-1 text-sm">
-                        <span>{tool.status === 'error' ? '❌' : '✅'}</span>
-                        <span className="font-mono text-xs text-slate-400 flex-1 truncate">
-                          {tool.label || tool.name}
-                        </span>
-                        {tool.elapsed_ms != null && tool.elapsed_ms > 0 && (
-                          <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
+                      <div key={`${snap.iteration}-${i}`} className="px-2 py-1 text-sm">
+                        <div className="flex items-center gap-2">
+                          <span>{tool.status === 'error' ? '❌' : '✅'}</span>
+                          <span className="font-mono text-xs text-slate-400 flex-1 truncate">
+                            {tool.label || tool.name}
+                          </span>
+                          {tool.elapsed_ms != null && tool.elapsed_ms > 0 && (
+                            <span className="text-xs text-slate-500 font-mono">{formatElapsed(tool.elapsed_ms)}</span>
+                          )}
+                        </div>
+                        {tool.summary && (
+                          <div className="text-[10px] text-slate-500 truncate pl-5 mt-0.5">{tool.summary}</div>
                         )}
                       </div>
                     ))}

@@ -52,6 +52,7 @@ type ToolProgress struct {
 	Status    ToolStatus
 	Elapsed   time.Duration
 	Iteration int
+	Summary   string
 }
 
 // ToolStatus 工具执行状态。

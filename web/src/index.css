@@ -2845,3 +2845,149 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ========================================================================== */
+/* Mobile Responsive Adaptation                                                */
+/* ========================================================================== */
+
+@media (max-width: 640px) {
+  /* Header 更紧凑 */
+  header {
+    padding: 8px 12px !important;
+  }
+  header h1 {
+    font-size: 1rem !important;
+  }
+
+  /* 消息区域减少 padding */
+  .chat-messages {
+    padding: 12px 8px !important;
+  }
+
+  /* 用户消息放宽到 92% */
+  .msg-fade-in > div[class*="rounded-xl"].bg-blue-600,
+  .flex.justify-end > div {
+    max-width: 92% !important;
+  }
+
+  /* 助手消息放宽 */
+  .assistant-turn-container {
+    max-width: 100% !important;
+    border-radius: 12px !important;
+  }
+
+  /* 输入区域 */
+  .px-4.py-3.bg-slate-800 {
+    padding: 8px !important;
+  }
+  .max-w-4xl {
+    max-width: 100% !important;
+  }
+
+  /* Tiptap 编辑器 */
+  .tiptap-wrapper {
+    border-radius: 10px !important;
+  }
+  .tiptap-wrapper .tiptap-editor {
+    max-height: 120px !important;
+    padding: 8px 10px !important;
+  }
+
+  /* 预设栏水平滚动 */
+  .preset-bar {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 6px 8px !important;
+    gap: 6px !important;
+  }
+  .preset-bar::-webkit-scrollbar {
+    display: none;
+  }
+  .preset-chip {
+    flex-shrink: 0;
+  }
+
+  /* 代码块 */
+  .xbot-codeblock {
+    border-radius: 8px !important;
+  }
+  .xbot-codeblock-header {
+    padding: 6px 10px !important;
+    font-size: 12px !important;
+  }
+
+  /* 进度面板 */
+  .progress-panel-active {
+    border-radius: 12px !important;
+  }
+
+  /* SubAgent 树 */
+  .subagent-node {
+    margin-left: 8px !important;
+  }
+
+  /* 设置面板全屏 */
+  .settings-overlay {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+  }
+
+  /* AskUser 弹窗 */
+  .askuser-panel {
+    margin: 16px !important;
+    border-radius: 16px !important;
+  }
+
+  /* Scroll to bottom 按钮 */
+  .scroll-to-bottom-btn {
+    bottom: 80px !important;
+    right: 16px !important;
+    font-size: 12px !important;
+    padding: 6px 12px !important;
+  }
+
+  /* Cancel 按钮 */
+  .cancel-btn {
+    width: 36px !important;
+    height: 36px !important;
+  }
+
+  /* 文件标签 */
+  .file-tag {
+    font-size: 11px !important;
+  }
+
+  /* Runner 卡片 */
+  .runner-card {
+    padding: 10px !important;
+  }
+
+  /* Toast 通知 */
+  .fixed.top-4.right-4 {
+    right: 8px !important;
+    left: 8px !important;
+  }
+}
+
+/* Model selector dropdown scrollbar */
+.absolute.top-full.left-0 .max-h-64::-webkit-scrollbar {
+  width: 4px;
+}
+.absolute.top-full.left-0 .max-h-64::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 2px;
+}
+
+/* 小屏手机（< 380px） */
+@media (max-width: 380px) {
+  header h1 {
+    font-size: 0.875rem !important;
+  }
+
+  .preset-chip {
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+  }
+}

@@ -217,6 +217,7 @@ func (a *Agent) buildMainRunConfig(
 								Status:    string(t.Status),
 								Elapsed:   t.Elapsed.Milliseconds(),
 								Iteration: t.Iteration,
+							Summary:   t.Summary,
 							})
 						}
 						for _, t := range s.CompletedTools {
@@ -226,6 +227,7 @@ func (a *Agent) buildMainRunConfig(
 								Status:    string(t.Status),
 								Elapsed:   t.Elapsed.Milliseconds(),
 								Iteration: t.Iteration,
+							Summary:   t.Summary,
 							})
 						}
 						// Parse sub-agent tree from progress lines
@@ -289,6 +291,7 @@ func (a *Agent) buildMainRunConfig(
 								Label:   t.Label,
 								Status:  string(t.Status),
 								Elapsed: t.Elapsed.Milliseconds(),
+							Summary:   t.Summary,
 							})
 						}
 						for _, t := range s.CompletedTools {
@@ -297,6 +300,7 @@ func (a *Agent) buildMainRunConfig(
 								Label:   t.Label,
 								Status:  string(t.Status),
 								Elapsed: t.Elapsed.Milliseconds(),
+							Summary:   t.Summary,
 							})
 						}
 						// Parse sub-agent tree from progress lines

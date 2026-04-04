@@ -423,19 +423,26 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	// 如果指定了工具白名单，只保留白名单中的工具
-	// 但 SubAgent 工具例外：如果 caps.SpawnAgent=true，即使不在白名单中也保留
+	// 以下工具永久可用，不受白名单限制：
+	//   - SubAgent（如果 caps.SpawnAgent=true）
+	//   - offload_recall、recall_masked（SubAgent 需要访问父 Agent 的 offload/mask 数据）
 	if len(allowedTools) > 0 {
 		allowed := make(map[string]bool, len(allowedTools))
 		for _, name := range allowedTools {
 			allowed[name] = true
 		}
 		for _, tool := range subTools.List() {
+			toolName := tool.Name()
 			// SubAgent 工具：如果 SpawnAgent=true，始终保留
-			if tool.Name() == "SubAgent" && caps.SpawnAgent {
+			if toolName == "SubAgent" && caps.SpawnAgent {
 				continue
 			}
-			if !allowed[tool.Name()] {
-				subTools.Unregister(tool.Name())
+			// offload_recall / recall_masked：SubAgent 始终可用
+			if toolName == "offload_recall" || toolName == "recall_masked" {
+				continue
+			}
+			if !allowed[toolName] {
+				subTools.Unregister(toolName)
 			}
 		}
 	}

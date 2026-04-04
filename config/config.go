@@ -586,7 +586,7 @@ func Load() *Config {
 		cfg.Agent.PromptFile = "prompt.md"
 	}
 	if cfg.Agent.MaxIterations == 0 {
-		cfg.Agent.MaxIterations = 100
+		cfg.Agent.MaxIterations = 2000
 	}
 	if cfg.Agent.MaxConcurrency == 0 {
 		cfg.Agent.MaxConcurrency = 3

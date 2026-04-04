@@ -140,6 +140,32 @@ func (s *ObservationMaskStore) Clear() {
 	s.totalChars = 0
 }
 
+// CleanOldEntries 删除 MaskedAt 在 cutoff 之前的记录。
+// 用于压缩后清理：压缩点之前的 masked observation 已被摘要替代，不再需要召回。
+func (s *ObservationMaskStore) CleanOldEntries(cutoff time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var kept []MaskedObservation
+	removedCount := 0
+	for _, e := range s.entries {
+		if e.MaskedAt.Before(cutoff) {
+			s.totalChars -= len([]rune(e.Content))
+			removedCount++
+		} else {
+			kept = append(kept, e)
+		}
+	}
+	s.entries = kept
+	if removedCount > 0 {
+		log.WithFields(log.Fields{
+			"removed": removedCount,
+			"kept":    len(kept),
+			"cutoff":  cutoff.Format(time.RFC3339),
+		}).Info("ObservationMaskStore: cleaned old entries after compression")
+	}
+	return removedCount
+}
+
 // --- tools.MaskedRecallStore 接口实现 ---
 // 这些方法让 ObservationMaskStore 满足 tools 包的 MaskedRecallStore 接口。
 // 不需要导入 tools 包（Go 鸭子类型），只需方法签名匹配。
@@ -192,6 +218,12 @@ func calculateKeepGroups(totalTokens, maxTokens int) int {
 	}
 }
 
+// MaskedEntry 记录一条被 mask 的消息的位置和新内容，用于持久化回 Session。
+type MaskedEntry struct {
+	MessageIndex int    // 在 messages slice 中的位置
+	Content      string // 替换后的 content（占位符或空字符串）
+}
+
 // MaskOldToolResults 遮蔽 messages 中较旧的 tool result，返回修改后的 messages slice。
 //
 // 策略：
@@ -202,8 +234,8 @@ func calculateKeepGroups(totalTokens, maxTokens int) int {
 //   - 按 token 收益排序遮蔽（内容最长的优先）
 //   - assistant 消息的思考内容保留（不 strip think blocks）
 //
-// 返回：修改后的 messages（新 slice），实际遮蔽数量。
-func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore, keepGroups int) ([]llm.ChatMessage, int) {
+// 返回：修改后的 messages（新 slice），实际遮蔽数量，被修改的消息条目（用于持久化）。
+func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore, keepGroups int) ([]llm.ChatMessage, int, []MaskedEntry) {
 	if keepGroups <= 0 {
 		keepGroups = 3
 	}
@@ -223,7 +255,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 
 	maskCount := len(groups) - keepGroups
 	if maskCount <= 0 {
-		return messages, 0
+		return messages, 0, nil
 	}
 
 	// 提取活跃文件（最近 3 轮工具调用涉及的文件路径）
@@ -275,7 +307,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 	}
 
 	if len(candidates) == 0 {
-		return messages, 0
+		return messages, 0, nil
 	}
 
 	// 按 token 收益排序：字符数最多的优先 mask
@@ -287,6 +319,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 	copy(result, messages)
 
 	maskedTotal := 0
+	var maskedEntries []MaskedEntry
 
 	for _, cand := range candidates {
 		grp := cand.grp
@@ -297,7 +330,9 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 
 		if isPureToolGroup {
 			// 连续纯工具组折叠：收集该组的所有 tool result，折叠为一对消息
-			maskedTotal += foldPureToolGroup(result, grp, store)
+			n, entries := foldPureToolGroup(result, grp, store)
+			maskedTotal += n
+			maskedEntries = append(maskedEntries, entries...)
 		} else {
 			// 有思考内容的 assistant 组：独立 mask tool results，保留 assistant 完整内容
 			for j := grp.start; j <= grp.end; j++ {
@@ -312,6 +347,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 						_, placeholder := store.Mask(msg.ToolName, msg.ToolArguments, msg.Content, j)
 						msg.Content = placeholder
 						maskedTotal++
+						maskedEntries = append(maskedEntries, MaskedEntry{MessageIndex: j, Content: placeholder})
 					}
 				}
 				// assistant 消息：保留完整内容（不 strip think blocks）
@@ -328,7 +364,7 @@ func MaskOldToolResults(messages []llm.ChatMessage, store *ObservationMaskStore,
 		"active_groups": maskCount - len(candidates),
 	}).Info("Observation masking: masked old tool results")
 
-	return result, maskedTotal
+	return result, maskedTotal, maskedEntries
 }
 
 // isGroupActiveFile 检查 tool group 是否涉及活跃文件。
@@ -351,12 +387,13 @@ func isGroupActiveFile(messages []llm.ChatMessage, grp struct{ start, end int },
 
 // foldPureToolGroup 将一个纯工具组折叠为一对 assistant+tool 消息。
 // 所有 tool result 存入 MaskStore，assistant 和第一条 tool 被替换为折叠摘要。
-// 返回实际 mask 的 tool result 数量。
-func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, store *ObservationMaskStore) int {
+// 返回实际 mask 的 tool result 数量和被修改的消息条目。
+func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, store *ObservationMaskStore) (int, []MaskedEntry) {
 	// 收集所有 tool call 名称和参数
 	var callSummaries []string
 	maskedCount := 0
 	var batchIDs []string
+	var entries []MaskedEntry
 
 	for j := grp.start; j <= grp.end; j++ {
 		msg := result[j]
@@ -384,7 +421,7 @@ func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, s
 	}
 
 	if maskedCount == 0 {
-		return 0
+		return 0, nil
 	}
 
 	// 折叠 assistant：替换为单行摘要
@@ -393,6 +430,7 @@ func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, s
 		Role:    "assistant",
 		Content: summary,
 	}
+	entries = append(entries, MaskedEntry{MessageIndex: grp.start, Content: summary})
 
 	// 折叠 tool results：第一条 tool 替换为 batch 占位符，其余清空
 	batchPlaceholder := fmt.Sprintf("📂 [batch-masked: %d results] IDs: %s — recall_masked <id> to view", maskedCount, strings.Join(batchIDs, ", "))
@@ -410,13 +448,15 @@ func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, s
 			if firstTool {
 				msg.Content = batchPlaceholder
 				result[j] = msg
+				entries = append(entries, MaskedEntry{MessageIndex: j, Content: batchPlaceholder})
 				firstTool = false
 			} else {
 				msg.Content = "" // 清空后续 tool result
 				result[j] = msg
+				entries = append(entries, MaskedEntry{MessageIndex: j, Content: ""})
 			}
 		}
 	}
 
-	return maskedCount
+	return maskedCount, entries
 }

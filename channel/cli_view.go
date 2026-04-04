@@ -80,8 +80,24 @@ func (m *cliModel) View() tea.View {
 	// §16 Toast 通知渲染
 	toastStr := m.renderToast()
 
-	// §9 Ctrl+K 确认模式提示
-	if m.confirmDelete > 0 {
+	// §21 搜索模式
+	if m.searchMode {
+		var searchBar string
+		if m.searchEditing {
+			searchBar = m.styles.SearchBar.Render(m.searchTI.View())
+		} else {
+			searchBar = m.styles.SearchBar.Render(
+				fmt.Sprintf(m.locale.SearchNavFormat, m.searchQuery, m.searchIdx+1, len(m.searchResults)))
+		}
+		content = fmt.Sprintf(
+			"%s\n%s\n%s\n%s%s",
+			titleBar,
+			m.viewport.View(),
+			searchBar,
+			input,
+			toastStr,
+		)
+	} else if m.confirmDelete > 0 {
 		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
 		content = fmt.Sprintf(
 			"%s\n%s\n%s\n%s",
@@ -126,25 +142,9 @@ func (m *cliModel) View() tea.View {
 					return ""
 				}()))
 			}
-			// 模型名称（优先显示用户覆盖，否则显示当前实际模型）
-			if m.channel != nil {
-				m.channel.configMu.RLock()
-				modelName := m.channel.modelOverride
-				m.channel.configMu.RUnlock()
-				if modelName == "" {
-					// 与 settings panel 一致：GetCurrentValues + SettingsService 覆盖
-					if m.channel.config.GetCurrentValues != nil {
-						modelName = m.channel.config.GetCurrentValues()["llm_model"]
-					}
-					if modelName == "" && m.channel.settingsSvc != nil {
-						if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
-							modelName = vals["llm_model"]
-						}
-					}
-				}
-				if modelName != "" {
-					readyParts = append(readyParts, modelName)
-				}
+			// 模型名称（使用缓存，避免每次 View() 重复查找）
+			if m.cachedModelName != "" {
+				readyParts = append(readyParts, m.cachedModelName)
 			}
 			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 		}
@@ -451,7 +451,10 @@ func (m *cliModel) renderFooter() string {
 	} else {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
-			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
+			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
+			if len(m.inputHistory) > 0 {
+				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
+			}
 			if m.bgTaskCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}

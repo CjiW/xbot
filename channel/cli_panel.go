@@ -65,26 +65,8 @@ func (m *cliModel) openSetupPanel() {
 		if m.channel.config.ApplySettings != nil {
 			m.channel.config.ApplySettings(vals)
 		}
-		// Apply theme immediately
-		if theme, ok := vals["theme"]; ok && theme != "" {
-			ApplyTheme(theme)
-			if m.width > 4 {
-				m.renderer = newGlamourRenderer(m.width - 4)
-			}
-			m.renderCacheValid = false
-		}
-		// i18n: detect language change
-		if lang, ok := vals["language"]; ok {
-			SetLocale(lang)
-			m.locale = GetLocale(lang)
-			m.renderCacheValid = false
-		}
-		msg := m.locale.SetupComplete
-		if vals["memory_provider"] == "letta" {
-			msg += m.locale.SetupLettaNote
-		}
-		m.appendSystem(msg)
-		m.updateViewportContent()
+		// NOTE: UI updates (theme/locale/viewport) are handled by
+		// handleSettingsSavedMsg in Update() since this runs in a goroutine.
 	})
 }
 
@@ -122,7 +104,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelAnswerTA = ta
 	// Initialize Other single-line input
 	ti := textinput.New()
-	ti.Placeholder = "Type here..."
+	ti.Placeholder = m.locale.PanelOtherPlaceholder
 	ti.Prompt = ""
 	ti.CharLimit = 200
 	ti.SetWidth(m.panelWidth(40))
@@ -237,11 +219,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	// Task list mode
 	switch {
 	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.closePanelAndResume()
 
 	case msg.Code == tea.KeyUp || msg.String() == "ctrl+k":
 		if m.panelBgCursor > 0 {
@@ -276,10 +254,8 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			if task.Status == tools.BgTaskRunning {
 				if m.channel != nil && m.channel.bgTaskMgr != nil {
 					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
-						m.tempStatus = fmt.Sprintf(m.locale.KillFailed, err)
-						return true, m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-							return cliTempStatusClearMsg{}
-						})
+						m.showTempStatus(fmt.Sprintf(m.locale.KillFailed, err))
+						return true, m, m.clearTempStatusCmd()
 					}
 					// Refresh list after kill
 					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
@@ -502,11 +478,15 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 		m.closePanel()
 		return true, m, nil
 	case msg.String() == "ctrl+s":
-		// Submit all settings
-		if m.panelOnSubmit != nil {
-			m.panelOnSubmit(m.panelValues)
-		}
+		// Submit all settings — async to avoid blocking the UI.
+		// Close panel immediately to restore responsiveness, then run
+		// the save callback in a goroutine and send back results.
+		onSubmit := m.panelOnSubmit
+		panelVals := m.panelValues
 		m.closePanel()
+		if onSubmit != nil && panelVals != nil {
+			return true, m, m.doSaveSettingsAsync(onSubmit, panelVals)
+		}
 		return true, m, nil
 	case msg.Code == tea.KeyUp || msg.String() == "shift+tab":
 		if m.panelCursor > 0 {
@@ -589,15 +569,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 
 	switch {
 	case msg.String() == "ctrl+s":
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.submitAskAnswers()
 	case msg.Code == tea.KeyEsc:
 		if m.panelOnCancel != nil {
 			m.panelOnCancel()
@@ -651,15 +623,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	case msg.Code == tea.KeyEnter:
 		if hasOpts {
 			if onSubmit {
-				answers := m.collectAskAnswers()
-				if m.panelOnAnswer != nil {
-					m.panelOnAnswer(answers)
-				}
-				m.closePanel()
-				if m.typing {
-					return true, m, tea.Batch(tickerCmd(), tickCmd())
-				}
-				return true, m, nil
+				return m.submitAskAnswers()
 			}
 			// On checkbox: toggle; on Other: do nothing (let user type)
 			if !onOther {
@@ -667,15 +631,7 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			}
 			return true, m, nil
 		}
-		answers := m.collectAskAnswers()
-		if m.panelOnAnswer != nil {
-			m.panelOnAnswer(answers)
-		}
-		m.closePanel()
-		if m.typing {
-			return true, m, tea.Batch(tickerCmd(), tickCmd())
-		}
-		return true, m, nil
+		return m.submitAskAnswers()
 	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {
@@ -1187,6 +1143,9 @@ func (c *CLIChannel) UpdateConfig(model, baseURL string) {
 	if baseURL != "" {
 		c.baseURLOverride = baseURL
 	}
+	// NOTE: do NOT call refreshCachedModelName() here — it acquires configMu.RLock()
+	// which would deadlock with the write lock held above. Callers must call
+	// refreshCachedModelName() after UpdateConfig returns if needed.
 }
 
 // GetModelOverride returns the user-overridden model name (empty if not set).

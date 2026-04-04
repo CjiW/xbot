@@ -18,6 +18,8 @@ func (t *TaskStatusTool) Required() bool { return false }
 func (t *TaskStatusTool) Description() string {
 	return `Check the status of a background task. Shows task ID, command, status (running/done/error/killed), elapsed time, and a preview of the output.
 
+IMPORTANT: After calling task_status and seeing "running" status, do NOT call task_status again immediately. Instead, do other work or use Shell with "sleep 3" (or longer) to wait before checking again. Rapidly polling task_status wastes iterations and context.
+
 Parameters (JSON):
   - task_id: string, the task ID to check`
 }
@@ -151,7 +153,7 @@ func formatTask(task *BackgroundTask) string {
 	fmt.Fprintf(&sb, "Elapsed: %s\n", elapsed)
 
 	if task.Status == BgTaskRunning {
-		fmt.Fprintf(&sb, "\nTip: Task is still running. Consider using sleep to wait before checking again instead of polling task_status repeatedly.\n")
+		fmt.Fprintf(&sb, "\n⚠️ Task is still running. Do NOT call task_status again right away. Go do other work, or run: sleep 3 (wait at least 3s before next check).\n")
 	}
 
 	if task.ExitCode >= 0 {

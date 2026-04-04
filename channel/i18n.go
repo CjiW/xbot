@@ -42,7 +42,9 @@ type UILocale struct {
 	BgTaskLogHelp      string // "↑↓ scroll  Esc back"
 	BgTaskLogMore      string // "... %d more lines (↑↓ scroll)"
 
-	PanelOmitted string // "... %d lines omitted (narrow terminal) ..."
+	PanelOmitted          string // "... %d lines omitted (narrow terminal) ..."
+	PanelOtherPlaceholder string // askuser panel Other input placeholder
+	EmergencyQuitHint     string // Ctrl+Z emergency quit hint
 
 	// --- C. Status bar ---
 	TitleHint             string // "Enter send · Ctrl+J newline · /help"
@@ -68,6 +70,17 @@ type UILocale struct {
 	HelpCmds           []HelpCmdEntry
 	HelpKeys           []HelpKeyEntry
 
+	// --- E2. Fold messages (§19) ---
+	MsgTooShortToFold string
+	MsgExpanded       string
+	MsgCollapsed      string
+
+	// --- E3. Search (§21) ---
+	SearchPlaceholder string
+	SearchResults     string
+	SearchNoResults   string
+	SearchNavFormat   string
+
 	// --- F. Confirm dialog ---
 	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
 
@@ -90,6 +103,10 @@ type UILocale struct {
 	FooterNewline  string // "newline"
 	FooterSelect   string // "select"
 	FooterManage   string // "manage"
+	FooterHistory  string // "history"
+	FooterSearch   string // "search"
+	FooterFold     string // "fold"
+	FooterUnfold   string // "unfold"
 
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
@@ -160,7 +177,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ 滚动  Esc 返回",
 		BgTaskLogMore:      "... 还有 %d 行（↑↓ 滚动）",
 
-		PanelOmitted: "  ... %d 行已省略（终端过窄） ...",
+		PanelOmitted:          "  ... %d 行已省略（终端过窄） ...",
+		PanelOtherPlaceholder: "在此输入...",
+		EmergencyQuitHint:     "🚪 紧急退出 (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter 发送 · Ctrl+J 换行 · /help",
@@ -209,8 +228,19 @@ func init() {
 			{Key: "↑", Desc: "后台任务面板"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "消息太短，无法折叠（需超过 %d 行）",
+		MsgExpanded:       "已展开",
+		MsgCollapsed:      "已折叠",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "搜索消息...",
+		SearchResults:     "找到 %d 条匹配消息 (n/N 导航, Esc 退出)",
+		SearchNoResults:   "未找到匹配消息",
+		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
+
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 条消息？(y/N, 数字调整)",
+		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 轮对话？(y/N, 数字调整)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI 驱动的终端助手",
@@ -231,6 +261,10 @@ func init() {
 		FooterNewline:  "换行",
 		FooterSelect:   "选择",
 		FooterManage:   "管理",
+		FooterHistory:  "历史",
+		FooterSearch:   "搜索",
+		FooterFold:     "折叠",
+		FooterUnfold:   "展开",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
@@ -297,6 +331,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:极光", Value: "nord"},
+					{Label: "dracula:暗夜", Value: "dracula"},
+					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
 		},
@@ -319,8 +356,8 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "最大迭代次数", Description: "单次对话最大工具调用迭代次数（默认 100）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+				Key: "max_iterations", Label: "最大迭代次数", Description: "单次对话最大工具调用迭代次数（默认 2000）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "2000",
 			},
 			{
 				Key: "max_concurrency", Label: "最大并发数", Description: "同时处理的最大请求数（默认 3）",
@@ -366,6 +403,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:极光", Value: "nord"},
+					{Label: "dracula:暗夜", Value: "dracula"},
+					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
 		},
@@ -412,7 +452,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ scroll  Esc back",
 		BgTaskLogMore:      "... %d more lines (↑↓ scroll)",
 
-		PanelOmitted: "  ... %d lines omitted (narrow terminal) ...",
+		PanelOmitted:          "  ... %d lines omitted (narrow terminal) ...",
+		PanelOtherPlaceholder: "Type here...",
+		EmergencyQuitHint:     "🚪 Emergency Quit (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter send · Ctrl+J newline · /help",
@@ -461,8 +503,19 @@ func init() {
 			{Key: "↑", Desc: "Background tasks panel"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "Message too short to fold (needs > %d lines)",
+		MsgExpanded:       "Expanded",
+		MsgCollapsed:      "Collapsed",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "Search messages...",
+		SearchResults:     "Found %d matching messages (n/N navigate, Esc to exit)",
+		SearchNoResults:   "No matching messages found",
+		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
+
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)",
+		ConfirmDelete: "[!] Ctrl+K: delete last %d turns? (y/N, number to adjust)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI-powered terminal agent",
@@ -483,6 +536,10 @@ func init() {
 		FooterNewline:  "newline",
 		FooterSelect:   "select",
 		FooterManage:   "manage",
+		FooterHistory:  "history",
+		FooterSearch:   "search",
+		FooterFold:     "fold",
+		FooterUnfold:   "unfold",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
@@ -549,6 +606,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:Aurora", Value: "nord"},
+					{Label: "dracula:Dark Night", Value: "dracula"},
+					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
 		},
@@ -571,8 +631,8 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "Max Iterations", Description: "Max tool call iterations per conversation (default 100)",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+				Key: "max_iterations", Label: "Max Iterations", Description: "Max tool call iterations per conversation (default 2000)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "2000",
 			},
 			{
 				Key: "max_concurrency", Label: "Max Concurrency", Description: "Max concurrent requests (default 3)",
@@ -618,6 +678,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:Aurora", Value: "nord"},
+					{Label: "dracula:Dark Night", Value: "dracula"},
+					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
 		},
@@ -664,7 +727,9 @@ func init() {
 		BgTaskLogHelp:      "↑↓ スクロール  Esc 戻る",
 		BgTaskLogMore:      "... あと %d 行（↑↓ スクロール）",
 
-		PanelOmitted: "  ... %d 行省略（端末が狭すぎます） ...",
+		PanelOmitted:          "  ... %d 行省略（端末が狭すぎます） ...",
+		PanelOtherPlaceholder: "ここに入力...",
+		EmergencyQuitHint:     "🚪 緊急終了 (Ctrl+Z)",
 
 		// --- C. Status bar ---
 		TitleHint:             "Enter 送信 · Ctrl+J 改行 · /help",
@@ -713,8 +778,19 @@ func init() {
 			{Key: "↑", Desc: "バックグラウンドタスクパネル"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "メッセージが短すぎます（%d 行を超える必要があります）",
+		MsgExpanded:       "展開しました",
+		MsgCollapsed:      "折りたたみました",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "メッセージを検索...",
+		SearchResults:     "%d 件の一致メッセージが見つかりました (n/N で移動, Esc で終了)",
+		SearchNoResults:   "一致するメッセージが見つかりません",
+		SearchNavFormat:   "/ %s  [%d/%d]  n 次 · N 前 · Esc",
+
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 最後の %d 件のメッセージを削除しますか？(y/N, 数字で調整)",
+		ConfirmDelete: "[!] Ctrl+K: 最後の %d ターンを削除しますか？(y/N, 数字で調整)",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI駆動のターミナルエージェント",
@@ -735,6 +811,10 @@ func init() {
 		FooterNewline:  "改行",
 		FooterSelect:   "選択",
 		FooterManage:   "管理",
+		FooterHistory:  "履歴",
+		FooterSearch:   "検索",
+		FooterFold:     "折りたたみ",
+		FooterUnfold:   "展開",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},
@@ -801,6 +881,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:オーロラ", Value: "nord"},
+					{Label: "dracula:ダークナイト", Value: "dracula"},
+					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
 		},
@@ -823,8 +906,8 @@ func init() {
 				},
 			},
 			{
-				Key: "max_iterations", Label: "最大反復数", Description: "1回の会話の最大ツール呼び出し反復数（デフォルト 100）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "100",
+				Key: "max_iterations", Label: "最大反復数", Description: "1回の会話の最大ツール呼び出し反復数（デフォルト 2000）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "2000",
 			},
 			{
 				Key: "max_concurrency", Label: "最大同時実行数", Description: "同時に処理する最大リクエスト数（デフォルト 3）",
@@ -870,6 +953,9 @@ func init() {
 					{Label: "Sunset", Value: "sunset"},
 					{Label: "Rose", Value: "rose"},
 					{Label: "Mono", Value: "mono"},
+					{Label: "nord:オーロラ", Value: "nord"},
+					{Label: "dracula:ダークナイト", Value: "dracula"},
+					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
 		},
@@ -890,9 +976,16 @@ var localeChangeCh = make(chan struct{}, 1)
 // currentLocaleLang stores the current locale language code.
 var currentLocaleLang string
 
+// setLocale updates currentLocaleLang without sending on localeChangeCh.
+// Use when the caller handles the locale change synchronously (e.g. applyLanguageChange),
+// to avoid a redundant fullRebuild in the next Update cycle.
+func setLocale(lang string) {
+	currentLocaleLang = lang
+}
+
 // SetLocale switches the current locale and notifies the running model.
 func SetLocale(lang string) {
-	currentLocaleLang = lang
+	setLocale(lang)
 	select {
 	case localeChangeCh <- struct{}{}:
 	default:

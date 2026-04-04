@@ -1042,7 +1042,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       </div>
       {/* Toast notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm animate-slide-in ${
+        <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm toast-enter ${
           toast.type === 'error' ? 'bg-red-500/90 text-white' :
           toast.type === 'success' ? 'bg-green-500/90 text-white' :
           'bg-slate-700/90 text-slate-200 border border-slate-600'

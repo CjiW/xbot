@@ -302,9 +302,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<Array<{ id: number; role: string; content: string; snippet: string; created_at: string }>>([])
+  const [searchResults, setSearchResults] = useState<Array<{ id: number; role: string; snippet: string; created_at: string }>>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const askUserInputRef = useRef<HTMLInputElement>(null)
   const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
     const id = Date.now()
     setToasts(prev => [...prev, { id, message, type }])
@@ -378,7 +379,13 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault()
-        setSearchOpen(prev => !prev)
+        setSearchOpen(prev => {
+          const next = !prev
+          if (next) {
+            setTimeout(() => searchInputRef.current?.focus(), 0)
+          }
+          return next
+        })
         if (!searchOpen) {
           setSearchQuery('')
           setSearchResults([])
@@ -877,6 +884,23 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     }
   }, [handleFileUploaded, showToast])
 
+  const submitAnswer = useCallback((value: string) => {
+    if (!value.trim()) return
+    const newAnswers = { ...askUser!.answers, [askUser!.currentQ]: value.trim() }
+    if (askUser!.currentQ < askUser!.questions.length - 1) {
+      setAskUser({ ...askUser!, answers: newAnswers, currentQ: askUser!.currentQ + 1 })
+      // Focus input after advancing to next question
+      setTimeout(() => askUserInputRef.current?.focus(), 0)
+    } else {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ask_user_response', answers: newAnswers, cancelled: false }))
+      } else {
+        showToast('连接已断开，请刷新页面', 'error')
+      }
+      setAskUser(null)
+    }
+  }, [askUser, showToast])
+
   // --- Paste handler (for images) ---
   const handlePaste = usePasteUpload(handleFileUploaded, loading)
 
@@ -934,7 +958,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { setSearchOpen(!searchOpen); setSearchQuery(''); setSearchResults([]) }}
+            onClick={() => { const next = !searchOpen; setSearchOpen(next); if (next) { setSearchQuery(''); setSearchResults([]); setTimeout(() => searchInputRef.current?.focus(), 0) } }}
             className="text-sm text-slate-400 hover:text-white transition-colors p-1"
             title="搜索 (Ctrl+K)"
           >
@@ -1168,7 +1192,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         {toasts.map(toast => (
           <div
             key={toast.id}
-            className={`px-4 py-2 rounded-lg shadow-lg text-sm animate-slide-in ${
+            className={`px-4 py-2 rounded-lg shadow-lg text-sm toast-enter ${
               toast.type === 'error' ? 'bg-red-500/90 text-white' :
               toast.type === 'success' ? 'bg-green-500/90 text-white' :
               'bg-slate-700/90 text-slate-200 border border-slate-600'
@@ -1213,24 +1237,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                   {askUser.questions[askUser.currentQ].options!.map((opt, i) => (
                     <button
                       key={i}
-                      onClick={() => {
-                        const newAnswers = { ...askUser.answers, [askUser.currentQ]: opt }
-                        if (askUser.currentQ < askUser.questions.length - 1) {
-                          setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
-                        } else {
-                          // Last question — submit
-                          if (wsRef.current?.readyState === WebSocket.OPEN) {
-                            wsRef.current.send(JSON.stringify({
-                              type: 'ask_user_response',
-                              answers: newAnswers,
-                              cancelled: false,
-                            }))
-                          } else {
-                            showToast('连接已断开，请刷新页面', 'error')
-                          }
-                          setAskUser(null)
-                        }
-                      }}
+                      onClick={() => submitAnswer(opt)}
                       className="w-full text-left px-4 py-2.5 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-blue-500/10 hover:border-blue-500/50 transition-colors"
                     >
                       {opt}
@@ -1241,50 +1248,18 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 <div className="flex gap-2">
                   <input
                     type="text"
+                    ref={askUserInputRef}
                     autoFocus
                     placeholder="输入你的回答..."
                     className="flex-1 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
-                        const newAnswers = { ...askUser.answers, [askUser.currentQ]: (e.target as HTMLInputElement).value.trim() }
-                        if (askUser.currentQ < askUser.questions.length - 1) {
-                          setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
-                        } else {
-                          if (wsRef.current?.readyState === WebSocket.OPEN) {
-                            wsRef.current.send(JSON.stringify({
-                              type: 'ask_user_response',
-                              answers: newAnswers,
-                              cancelled: false,
-                            }))
-                          } else {
-                            showToast('连接已断开，请刷新页面', 'error')
-                          }
-                          setAskUser(null)
-                        }
+                      if (e.key === 'Enter') {
+                        submitAnswer((e.target as HTMLInputElement).value)
                       }
                     }}
                   />
                   <button
-                    onClick={() => {
-                      const input = document.querySelector<HTMLInputElement>('.askuser-panel input')
-                      const val = input?.value.trim()
-                      if (!val) return
-                      const newAnswers = { ...askUser.answers, [askUser.currentQ]: val }
-                      if (askUser.currentQ < askUser.questions.length - 1) {
-                        setAskUser({ ...askUser, answers: newAnswers, currentQ: askUser.currentQ + 1 })
-                      } else {
-                        if (wsRef.current?.readyState === WebSocket.OPEN) {
-                          wsRef.current.send(JSON.stringify({
-                            type: 'ask_user_response',
-                            answers: newAnswers,
-                            cancelled: false,
-                          }))
-                        } else {
-                          showToast('连接已断开，请刷新页面', 'error')
-                        }
-                        setAskUser(null)
-                      }
-                    }}
+                    onClick={() => submitAnswer(askUserInputRef.current?.value || '')}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
                   >
                     提交

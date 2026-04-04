@@ -1029,7 +1029,6 @@ type searchResponse struct {
 type searchHit struct {
 	ID        int64  `json:"id"`
 	Role      string `json:"role"`
-	Content   string `json:"content"`
 	CreatedAt string `json:"created_at,omitempty"`
 	Snippet   string `json:"snippet"`
 }
@@ -1093,7 +1092,6 @@ func (wc *WebChannel) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&hit.ID, &hit.Role, &content, &hit.CreatedAt); err != nil {
 			continue
 		}
-		hit.Content = content
 		hit.Snippet = snippetAround(content, qLower)
 		results = append(results, hit)
 	}

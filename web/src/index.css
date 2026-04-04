@@ -3029,3 +3029,97 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
     padding: 3px 8px !important;
   }
 }
+
+/* ========================================================================== */
+/* Light Theme: Custom Component Overrides                                     */
+/* ========================================================================== */
+
+/* AskUser panel — lighter bg, softer borders */
+[data-theme="light"] .askuser-panel {
+  background: #ffffff;
+  border-color: #cdc9c3;
+}
+[data-theme="light"] .askuser-panel .border-slate-700 {
+  border-color: #e2dfda !important;
+}
+[data-theme="light"] .askuser-panel .text-white {
+  color: #1c1917 !important;
+}
+[data-theme="light"] .askuser-panel .text-slate-200 {
+  color: #3d3833 !important;
+}
+[data-theme="light"] .askuser-panel .text-slate-400 {
+  color: #78716c !important;
+}
+[data-theme="light"] .askuser-panel .border-slate-600 {
+  border-color: #cdc9c3 !important;
+}
+[data-theme="light"] .askuser-panel .bg-slate-700 {
+  background: #e2dfda !important;
+}
+[data-theme="light"] .askuser-panel .placeholder-slate-400::placeholder {
+  color: #a8a29e !important;
+}
+
+/* Thinking orb — softer glow for light backgrounds */
+[data-theme="light"] .thinking-orb-core {
+  background: radial-gradient(circle, #3b82f6, #2563eb);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+[data-theme="light"] .thinking-orb-ring-1 {
+  border-top-color: rgba(59, 130, 246, 0.7);
+  border-right-color: rgba(59, 130, 246, 0.2);
+}
+[data-theme="light"] .thinking-orb-ring-2 {
+  border-bottom-color: rgba(22, 163, 74, 0.5);
+  border-left-color: rgba(22, 163, 74, 0.15);
+}
+[data-theme="light"] .thinking-orb-ring-3 {
+  border-top-color: rgba(126, 34, 206, 0.4);
+}
+[data-theme="light"] .thinking-dot {
+  background: #a8a29e;
+}
+[data-theme="light"] .thinking-dot {
+  animation-name: dot-wave-light;
+}
+@keyframes dot-wave-light {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+    background: #a8a29e;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+    background: #2563eb;
+    box-shadow: 0 0 4px rgba(37, 99, 235, 0.3);
+  }
+}
+
+/* Token usage bar — subtle warm tint */
+[data-theme="light"] .token-usage-bar {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(22, 163, 74, 0.06));
+}
+
+/* Search highlight — darker outline for light bg */
+[data-theme="light"] .search-highlight {
+  outline-color: rgba(37, 99, 235, 0.5);
+  border-radius: 12px;
+}
+@keyframes search-highlight-pulse-light {
+  0%, 100% { outline-color: rgba(37, 99, 235, 0.2); }
+  50% { outline-color: rgba(37, 99, 235, 0.6); }
+}
+[data-theme="light"] .search-highlight {
+  animation-name: search-highlight-pulse-light;
+}
+
+/* SubAgent nodes */
+[data-theme="light"] .subagent-node-running {
+  background: rgba(37, 99, 235, 0.06);
+  border-left-color: rgba(37, 99, 235, 0.3);
+}
+[data-theme="light"] .subagent-node-pending {
+  border-left-color: rgba(168, 162, 158, 0.4);
+}

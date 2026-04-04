@@ -77,10 +77,12 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 
 		case msg.Role == "assistant" && len(msg.ToolCalls) > 0:
 			if msg.Content != "" {
+				// assistant thinking text (non-empty content alongside tool calls)
 				pendingToolSummary.WriteString(msg.Content + "\n")
 			}
 			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&pendingToolSummary, "🔧 %s(%s)\n", tc.Name, truncateArgs(tc.Arguments, 100))
+				summary := summarizeToolCall(tc.Name, tc.Arguments)
+				pendingToolSummary.WriteString(summary + "\n")
 			}
 
 		case msg.Role == "assistant":
@@ -88,15 +90,9 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 			result = append(result, llm.NewAssistantMessage(msg.Content))
 
 		case msg.Role == "tool":
-			if strings.HasPrefix(msg.Content, "📂 [offload:") {
-				stripped := stripRecallID(msg.Content)
-				pendingToolSummary.WriteString(truncateRunes(stripped, 800) + "\n")
-			} else if strings.HasPrefix(msg.Content, "📂 [masked:") {
-				stripped := stripRecallID(msg.Content)
-				fmt.Fprintf(&pendingToolSummary, "  → %s\n", truncateRunes(stripped, 200))
-			} else {
-				toolContent := truncateRunes(msg.Content, 200)
-				fmt.Fprintf(&pendingToolSummary, "  → %s\n", toolContent)
+			stripped := stripOffloadMaskPrefix(msg.Content)
+			if stripped != "" {
+				pendingToolSummary.WriteString("  → " + truncateRunes(stripped, 200) + "\n")
 			}
 		}
 	}
@@ -104,10 +100,83 @@ func extractDialogueFromTail(tail []llm.ChatMessage) []llm.ChatMessage {
 	return result
 }
 
-// stripRecallID removes the offload/mask ID from a marker, keeping the rest.
-func stripRecallID(content string) string {
-	if idx := strings.Index(content, "] "); idx >= 0 {
-		return "📂 " + content[idx+2:]
+// summarizeToolCall converts a raw tool call into a human-readable one-liner.
+// e.g. Shell({"command":"gh pr view 396"}) → "Shell: gh pr view 396"
+func summarizeToolCall(name, args string) string {
+	switch name {
+	case "Shell":
+		cmd := extractJSONString(args, "command")
+		if cmd == "" {
+			return fmt.Sprintf("- **%s**: ...", name)
+		}
+		// Strip common prefixes for brevity
+		if len(cmd) > 80 {
+			cmd = cmd[:80] + "..."
+		}
+		return fmt.Sprintf("- **%s**: `%s`", name, cmd)
+	case "Read":
+		path := extractJSONString(args, "path")
+		if path == "" {
+			return fmt.Sprintf("- **%s**: ...", name)
+		}
+		return fmt.Sprintf("- **%s**: `%s`", name, path)
+	case "Grep":
+		pattern := extractJSONString(args, "pattern")
+		if pattern == "" {
+			return fmt.Sprintf("- **%s**: ...", name)
+		}
+		include := extractJSONString(args, "include")
+		if include != "" {
+			return fmt.Sprintf("- **%s**: `%s` in `%s`", name, pattern, include)
+		}
+		return fmt.Sprintf("- **%s**: `%s`", name, pattern)
+	case "Glob":
+		pat := extractJSONString(args, "pattern")
+		if pat == "" {
+			return fmt.Sprintf("- **%s**: ...", name)
+		}
+		return fmt.Sprintf("- **%s**: `%s`", name, pat)
+	case "FileReplace", "FileCreate":
+		path := extractJSONString(args, "path")
+		if path == "" {
+			return fmt.Sprintf("- **%s**: ...", name)
+		}
+		return fmt.Sprintf("- **%s**: `%s`", name, path)
+	default:
+		// Generic: show name + truncated args
+		truncated := truncateArgs(args, 60)
+		return fmt.Sprintf("- **%s**: %s", name, truncated)
+	}
+}
+
+// extractJSONString extracts a string value for the given key from a JSON object.
+// Returns empty string if not found or parsing fails.
+func extractJSONString(jsonStr, key string) string {
+	// Fast path: look for "key":"value" pattern
+	search := fmt.Sprintf(`"%s":`, key)
+	idx := strings.Index(jsonStr, search)
+	if idx == -1 {
+		return ""
+	}
+	rest := jsonStr[idx+len(search):]
+	rest = strings.TrimLeft(rest, " \t\n")
+	if len(rest) == 0 || rest[0] != '"' {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		return rest
+	}
+	return rest[:end]
+}
+
+// stripOffloadMaskPrefix removes 📂 [offload:...] / 📂 [masked:...] prefix from tool content.
+func stripOffloadMaskPrefix(content string) string {
+	if strings.HasPrefix(content, "📂 [offload:") || strings.HasPrefix(content, "📂 [masked:") {
+		if idx := strings.Index(content, "] "); idx >= 0 {
+			return content[idx+2:]
+		}
 	}
 	return content
 }

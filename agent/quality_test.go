@@ -244,10 +244,10 @@ func TestExtractDialogueFromTail_MaskedMarkerStripped(t *testing.T) {
 			t.Error("mask ID should be stripped from session view")
 		}
 	}
-	// Should contain some info about the tool call
+	// Should contain some info about the tool call (new format: **Shell**: `cat /etc/hosts`)
 	found := false
 	for _, msg := range result {
-		if strings.Contains(msg.Content, "Shell(cat /etc/hosts)") {
+		if strings.Contains(msg.Content, "**Shell**") && strings.Contains(msg.Content, "cat /etc/hosts") {
 			found = true
 		}
 	}
@@ -256,34 +256,38 @@ func TestExtractDialogueFromTail_MaskedMarkerStripped(t *testing.T) {
 	}
 }
 
-func TestStripRecallID(t *testing.T) {
+func TestStripOffloadMaskPrefix(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		wantID   bool
-		wantText string
+		name  string
+		input string
+		want  string
 	}{
 		{
-			name:     "offload marker",
-			input:    "📂 [offload:ol_abc12345] Read(/path)\nsummary",
-			wantText: "📂 Read(/path)\nsummary",
+			name:  "offload marker",
+			input: "📂 [offload:ol_abc12345] Read(/path)\nsummary",
+			want:  "Read(/path)\nsummary",
 		},
 		{
-			name:     "masked marker",
-			input:    "📂 [masked:mk_deadbeef] Shell(ls) — 500 chars",
-			wantText: "📂 Shell(ls) — 500 chars",
+			name:  "masked marker",
+			input: "📂 [masked:mk_deadbeef] Shell(ls) — 500 chars",
+			want:  "Shell(ls) — 500 chars",
 		},
 		{
-			name:     "no closing bracket with space",
-			input:    "📂 [offload:no-space-after-bracket]",
-			wantText: "📂 [offload:no-space-after-bracket]",
+			name:  "no closing bracket with space",
+			input: "📂 [offload:no-space-after-bracket]",
+			want:  "📂 [offload:no-space-after-bracket]",
+		},
+		{
+			name:  "no prefix",
+			input: "regular tool output",
+			want:  "regular tool output",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := stripRecallID(tt.input)
-			if got != tt.wantText {
-				t.Errorf("stripRecallID(%q) = %q, want %q", tt.input, got, tt.wantText)
+			got := stripOffloadMaskPrefix(tt.input)
+			if got != tt.want {
+				t.Errorf("stripOffloadMaskPrefix(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

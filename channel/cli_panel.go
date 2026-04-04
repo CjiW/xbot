@@ -65,19 +65,8 @@ func (m *cliModel) openSetupPanel() {
 		if m.channel.config.ApplySettings != nil {
 			m.channel.config.ApplySettings(vals)
 		}
-		// Apply theme immediately
-		if theme, ok := vals["theme"]; ok && theme != "" {
-			m.applyThemeAndRebuild(theme)
-		}
-		// i18n: detect language change
-		if lang, ok := vals["language"]; ok {
-			m.applyLanguageChange(lang)
-		}
-		msg := m.locale.SetupComplete
-		if vals["memory_provider"] == "letta" {
-			msg += m.locale.SetupLettaNote
-		}
-		m.showSystemMsg(msg, feedbackInfo)
+		// NOTE: UI updates (theme/locale/viewport) are handled by
+		// handleSettingsSavedMsg in Update() since this runs in a goroutine.
 	})
 }
 
@@ -115,7 +104,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelAnswerTA = ta
 	// Initialize Other single-line input
 	ti := textinput.New()
-	ti.Placeholder = "Type here..."
+	ti.Placeholder = m.locale.PanelOtherPlaceholder
 	ti.Prompt = ""
 	ti.CharLimit = 200
 	ti.SetWidth(m.panelWidth(40))
@@ -489,11 +478,15 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 		m.closePanel()
 		return true, m, nil
 	case msg.String() == "ctrl+s":
-		// Submit all settings
-		if m.panelOnSubmit != nil {
-			m.panelOnSubmit(m.panelValues)
-		}
+		// Submit all settings — async to avoid blocking the UI.
+		// Close panel immediately to restore responsiveness, then run
+		// the save callback in a goroutine and send back results.
+		onSubmit := m.panelOnSubmit
+		panelVals := m.panelValues
 		m.closePanel()
+		if onSubmit != nil && panelVals != nil {
+			return true, m, m.doSaveSettingsAsync(onSubmit, panelVals)
+		}
 		return true, m, nil
 	case msg.Code == tea.KeyUp || msg.String() == "shift+tab":
 		if m.panelCursor > 0 {
@@ -1150,6 +1143,9 @@ func (c *CLIChannel) UpdateConfig(model, baseURL string) {
 	if baseURL != "" {
 		c.baseURLOverride = baseURL
 	}
+	// NOTE: do NOT call refreshCachedModelName() here — it acquires configMu.RLock()
+	// which would deadlock with the write lock held above. Callers must call
+	// refreshCachedModelName() after UpdateConfig returns if needed.
 }
 
 // GetModelOverride returns the user-overridden model name (empty if not set).

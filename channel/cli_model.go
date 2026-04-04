@@ -56,14 +56,14 @@ var (
 		"⣾", "⣽", "⣻", "⢿", "⡿", "⠿", "⠟", "⠛",
 		"⠫", "⠭", "⠮", "⡮", "⡯", "⣯", "⣽", "⣾",
 	}
-	// arrowFrames: pulsing arrow — tool execution feel
-	arrowFrames = []string{"›", "▸", "▶", "▸", "›", "▸", "▶", "▸"}
 	// waveFrames: rotating crescent moon phases — subagent feel
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
 	// orbitFrames: spinning orbit — processing feel
 	orbitFrames = []string{"◌", "◔", "◕", "●", "◕", "◔", "◌", "◔", "◕", "●", "◕", "◔"}
 	// splashFrames: loading bar animation — 启动画面进度条
 	splashFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	// pulseFrames: pulsing circle — tool completion pulse
+	pulseFrames = []string{"◌", "◎", "◉", "◎", "◌"}
 )
 
 // errorKeywords — system 消息中的错误检测关键词
@@ -133,11 +133,16 @@ type cliModel struct {
 	// --- Core UI ---
 	viewport viewport.Model // 消息显示区
 	textarea textarea.Model // 用户输入区
-	ticker   *animTicker    // 进度动画 ticker
-	width    int            // 终端宽度
-	height   int            // 终端高度
-	styles   cliStyles
-	locale   *UILocale // i18n: current UI locale
+
+	// §22 输入历史
+	inputHistory    []string    // 已发送输入历史（新 → 旧），仅会话内
+	inputHistoryIdx int         // -1 = 不在浏览模式, >=0 = 当前浏览索引
+	inputDraft      string      // 进入历史浏览前的输入草稿
+	ticker          *animTicker // 进度动画 ticker
+	width           int         // 终端宽度
+	height          int         // 终端高度
+	styles          cliStyles
+	locale          *UILocale // i18n: current UI locale
 
 	// --- Message state ---
 	messages        []cliMessage          // 消息历史
@@ -147,12 +152,13 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
-	typing          bool            // agent 是否正在回复
-	typingStartTime time.Time       // 本次处理开始时间
-	inputReady      bool            // 输入就绪状态（agent 回复期间禁止发送）
-	msgBus          *bus.MessageBus // 消息总线引用
-	tempStatus      string          // 临时状态提示（自动过期）
-	shouldQuit      bool            // Smart quit: quit after current operation completes
+	typing          bool                      // agent 是否正在回复
+	typingStartTime time.Time                 // 本次处理开始时间
+	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）
+	msgBus          *bus.MessageBus           // 消息总线引用
+	tempStatus      string                    // 临时状态提示（自动过期）
+	shouldQuit      bool                      // Smart quit: quit after current operation completes
+	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
@@ -193,9 +199,6 @@ type cliModel struct {
 
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
-
-	// --- §19 长消息折叠 ---
-	msgCollapsed map[int]bool // 折叠状态追踪（key=消息索引）
 
 	// --- §11b Pending Tool Summary ---
 	// PhaseDone may arrive before handleAgentMessage. Store the tool_summary
@@ -242,7 +245,16 @@ type cliModel struct {
 	toasts     []cliToastItem // Toast 队列（头部=当前显示）
 	toastTimer bool           // true = toast 消除计时器已启动
 
+	// --- §19 长消息折叠 ---
+	msgLineOffsets []int // 每条消息在 viewport 折行后 content 中的起始行号
+
 	// --- §21 消息搜索 /search ---
+	searchMode    bool            // 是否处于搜索模式
+	searchQuery   string          // 搜索关键词
+	searchResults []int           // 匹配的消息索引列表
+	searchIdx     int             // 当前导航到的搜索结果索引（-1 = 未选择）
+	searchEditing bool            // true = 编辑搜索词, false = 导航结果
+	searchTI      textinput.Model // 搜索输入框
 
 	// toolDisplayInfo
 
@@ -258,7 +270,8 @@ type cliModel struct {
 	matrixBuffer    [][]rune      // Matrix 字符缓冲区
 	versionHitTimes []time.Time   // /version 命令调用时间戳（三连检测）
 
-	channel *CLIChannel // back-reference to owning channel (set during Start)
+	channel         *CLIChannel // back-reference to owning channel (set during Start)
+	cachedModelName string      // cached model name for View() performance
 }
 
 // cliMessage 单条消息
@@ -276,6 +289,9 @@ type cliMessage struct {
 	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 
+	// --- §19 长消息折叠 ---
+	renderedLines int  // 渲染后的总行数（每次 dirty 重算）
+	folded        bool // 是否折叠
 }
 
 // newCLIModel 创建 CLI model
@@ -284,10 +300,15 @@ func newCLIModel() *cliModel {
 	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
 	ta.Focus()
 	ta.SetWidth(72)
-	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+	// Enable DynamicHeight so textarea auto-grows/shrinks based on visual lines
+	// (including soft wraps from CJK characters). This replaces our manual autoExpandInput.
+	ta.DynamicHeight = true
+	ta.MinHeight = minTaHeight
+	ta.MaxHeight = maxTaHeight
+	ta.SetHeight(minTaHeight)
 	initStyles := buildStyles(76)
 	applyTAStyles(&ta, &initStyles)
 
@@ -322,8 +343,10 @@ func newCLIModel() *cliModel {
 		streamingMsgIdx: -1,
 		progress:        nil,
 		inputReady:      true,
-		msgCollapsed:    make(map[int]bool),
 		locale:          GetLocale(""),
+		inputHistory:    make([]string, 0, 100),
+		inputHistoryIdx: -1,
+		inputDraft:      "",
 	}
 }
 
@@ -354,6 +377,18 @@ type idleTickMsg struct{}
 
 // cliTempStatusClearMsg 临时状态提示自动清除
 type cliTempStatusClearMsg struct{}
+
+// cliSettingsSavedMsg settings save completed (async callback result)
+type cliSettingsSavedMsg struct {
+	themeChanged bool
+	theme        string
+	langChanged  bool
+	lang         string
+	modelChanged bool
+	model        string
+	baseURL      string
+	feedbackMsg  string
+}
 
 // cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）
 type cliInjectedUserMsg struct {
@@ -395,9 +430,28 @@ func isCtrlJ(msg tea.Msg) bool {
 	return s == "?CSI[49 48 59 53 117]?" || s == "\x1b[10;5u" || s == "ctrl+j"
 }
 
-// ---------------------------------------------------------------------------
-// Bubble Tea Interface Implementation
-// ---------------------------------------------------------------------------
+// refreshCachedModelName caches the current model name to avoid repeated lookups in View().
+// Should be called after channel init, config changes, and settings saves.
+func (m *cliModel) refreshCachedModelName() {
+	if m.channel == nil {
+		return
+	}
+	m.channel.configMu.RLock()
+	if m.channel.modelOverride != "" {
+		m.cachedModelName = m.channel.modelOverride
+	}
+	m.channel.configMu.RUnlock()
+	if m.cachedModelName == "" {
+		if m.channel.config.GetCurrentValues != nil {
+			m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
+		}
+		if m.cachedModelName == "" && m.channel.settingsSvc != nil {
+			if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+				m.cachedModelName = vals["llm_model"]
+			}
+		}
+	}
+}
 
 // Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
 func (m *cliModel) Init() tea.Cmd {

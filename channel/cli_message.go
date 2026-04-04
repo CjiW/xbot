@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"encoding/json"
@@ -296,9 +297,8 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 	case "/clear":
 		m.messages = make([]cliMessage, 0, cliMsgBufSize)
-		m.renderCacheValid = false
 		m.cachedHistory = ""
-		m.updateViewportContent()
+		m.exitSearch()
 
 	case "/settings":
 		// Open interactive settings panel locally
@@ -344,23 +344,13 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 						}
 					}
 					// Apply settings: write config.json + update runtime state
+					// (LLM client rebuild, agent state updates — all non-UI work)
 					if m.channel.config.ApplySettings != nil {
 						m.channel.config.ApplySettings(values)
 					}
-					// Apply theme immediately
-					if theme, ok := values["theme"]; ok {
-						m.applyThemeAndRebuild(theme)
-						m.invalidateAllCache(false)
-					}
-					// Update live config overrides (model, base_url)
-					if model, ok := values["llm_model"]; ok && model != "" {
-						m.channel.UpdateConfig(model, values["llm_base_url"])
-					}
-					// i18n: detect language change
-					if lang, ok := values["language"]; ok {
-						m.applyLanguageChange(lang)
-					}
-					m.showSystemMsg(m.locale.SettingsSaved, feedbackInfo)
+					// NOTE: UI updates (theme/locale/model/viewport) are handled
+					// by handleSettingsSavedMsg in Update() — do NOT call them here
+					// since this callback runs in a background goroutine.
 				})
 			}
 		}
@@ -386,6 +376,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/help":
 		helpContent := m.renderHelpPanel()
 		m.showSystemMsg(helpContent, feedbackInfo)
+
+	case "/search":
+		m.enterSearchMode()
 
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
@@ -747,23 +740,22 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Active tools — 带迷你脉冲进度条动画
+		// Active tools — with mini pulse progress bar animation
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			// 迷你进度条：braille 波浪流动动画（第 4 轮升级）
-			// 使用 braille 点阵创造流畅的波浪填充效果
-			waveBarFrames := []string{
-				"⠁⠁⠃⠃⠇⠇⠟⠟", "⠃⠃⠇⠇⠟⠟⠧⠧", "⠇⠇⠟⠟⠧⠧⡧⡧", "⠟⠟⠧⠧⡧⡧⣧⣧",
-				"⠧⠧⡧⡧⣧⣧⣿⣿", "⡧⡧⣧⣧⣿⣿⣿⣿", "⣧⣧⣿⣿⣿⣿⣿⣿", "⣿⣿⣿⣿⣿⣿⣿⣿",
-				"⣿⣿⣿⣿⣿⣿⣧⣧", "⣿⣿⣿⣿⣧⣧⡧⡧", "⣿⣿⣧⣧⡧⡧⠧⠧", "⣧⣧⡧⡧⠧⠧⠇⠇",
-				"⡧⡧⠧⠧⠇⠇⠃⠃", "⠧⠧⠇⠇⠃⠃⠁⠁", "⠇⠇⠃⠃⠁⠁⠁⠁",
+			// Mini pulse progress bar with dynamic width
+			miniW := 8 + int(m.ticker.ticks%7) // dynamic width 8-14
+			tick2 := int(m.ticker.ticks) % (miniW * 2)
+			pos2 := tick2
+			if pos2 >= miniW {
+				pos2 = miniW*2 - pos2 - 1
 			}
-			barIdx := int(m.ticker.ticks) % len(waveBarFrames)
-			miniBar := s.WarningSt.Render(waveBarFrames[barIdx])
-			line := fmt.Sprintf("  │ %s %s  %s", m.ticker.viewFrames(arrowFrames), label, miniBar)
+			miniBar := strings.Repeat("░", pos2) + "▓" + strings.Repeat("░", miniW-pos2-1)
+			pulseIcon := m.ticker.viewFrames(pulseFrames)
+			line := fmt.Sprintf("  │ %s %s  %s", pulseIcon, label, s.ProgressGradient.Render(miniBar))
 			if tool.Elapsed > 0 {
 				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
 				if pad < 1 {
@@ -834,20 +826,34 @@ func (m *cliModel) renderProgressBlock() string {
 // Only renders running/pending agents — completed ones are already captured
 // in the tool summary and shouldn't linger in the progress panel.
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
-	indent := strings.Repeat("  ", depth)
-	for _, sa := range agents {
-		// Skip completed sub-agents — their results are in the tool summary
+	for i, sa := range agents {
 		if sa.Status == "done" {
 			continue
 		}
+		// §22 树状连接线
+		prefix := ""
+		if depth == 1 {
+			if i == len(agents)-1 {
+				prefix = "└── "
+			} else {
+				prefix = "├── "
+			}
+		} else {
+			indent := strings.Repeat("│   ", depth-1)
+			if i == len(agents)-1 {
+				prefix = indent + "└── "
+			} else {
+				prefix = indent + "├── "
+			}
+		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := m.styles.ProgressRunning // §20
+		style := m.styles.ProgressRunning
 		switch sa.Status {
 		case "error":
 			icon = "✗"
 			style = m.styles.ProgressError
 		}
-		line := fmt.Sprintf("%s%s %s", indent, icon, sa.Role)
+		line := fmt.Sprintf("%s%s %s", prefix, icon, sa.Role)
 		if sa.Desc != "" {
 			line += ": " + sa.Desc
 		}
@@ -1077,6 +1083,17 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
+		// §19 长消息折叠：对已完成的 assistant 消息截取预览
+		if msg.folded && !msg.isPartial && msg.renderedLines > msgFoldThresholdLines {
+			renderedLines := strings.Split(rendered, "\n")
+			if len(renderedLines) > msgFoldPreviewLines {
+				rendered = strings.Join(renderedLines[:msgFoldPreviewLines], "\n")
+				foldHint := m.styles.TextMutedSt.Render(
+					fmt.Sprintf("  ... %s (%d lines) ...",
+						m.locale.MsgCollapsed, msg.renderedLines))
+				rendered += "\n" + foldHint
+			}
+		}
 		// Agent 消息直接渲染（glamour 已处理 markdown）
 		sb.WriteString(rendered)
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
@@ -1086,7 +1103,27 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	}
 
 	sb.WriteString("\n\n")
+
+	// §19 计算渲染后行数（每次 dirty 重算）
+	msg.renderedLines = strings.Count(sb.String(), "\n") + 1
+
 	return sb.String()
+}
+
+// setViewportContentForScroll is like setViewportContent but skips GotoBottom(),
+// allowing the caller to set a precise YOffset afterwards (e.g. for Ctrl+K red line).
+func (m *cliModel) setViewportContentForScroll(content string) {
+	if m.width > 0 {
+		lines := strings.Split(content, "\n")
+		var wrapped []string
+		for _, line := range lines {
+			line = strings.TrimRight(line, " \t")
+			wrapped = append(wrapped, strings.Split(hardWrapRunes(line, m.width), "\n")...)
+		}
+		content = strings.Join(wrapped, "\n")
+	}
+	m.viewport.SetContent(content)
+	m.newContentHint = false
 }
 
 // setViewportContent sets viewport content while preserving scroll position.
@@ -1115,6 +1152,24 @@ func (m *cliModel) setViewportContent(content string) {
 	}
 }
 
+// wrappedLineCount returns the number of viewport display lines after hard-wrapping.
+// The logic mirrors setViewportContent exactly so that msgLineOffsets (computed via
+// this function) are always in sync with the viewport's internal line numbering.
+func wrappedLineCount(content string, width int) int {
+	if content == "" {
+		return 0
+	}
+	if width <= 0 {
+		return strings.Count(content, "\n")
+	}
+	count := 0
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimRight(line, " \t")
+		count += strings.Count(hardWrapRunes(line, width), "\n") + 1
+	}
+	return count
+}
+
 // renderDeleteBoundaryLine 渲染 Ctrl+K 删除边界红线。
 func (m *cliModel) renderDeleteBoundaryLine() string {
 	w := m.width
@@ -1137,51 +1192,29 @@ func (m *cliModel) renderDeleteBoundaryLine() string {
 	return "\n" + line + "\n"
 }
 
-// visibleMsgGroupIndices 返回每个"可见消息组"的起始 slice 索引。
-// tool_summary 与前一条 assistant 消息合并为一组，不单独计数。
-func visibleMsgGroupIndices(messages []cliMessage) []int {
-	var groups []int
+// visibleTurnIndices 返回每个"对话轮次"的起始 slice 索引。
+// 每个 turn 以 user 消息开头，包含之后所有的 assistant/tool_summary 消息
+// 直到下一个 user 消息为止。tool_summary 自动归属其前面最近的 user 所在的 turn。
+//
+// 例如: [user(0), assistant(1), tool_summary(2), user(3), assistant(4)]
+// turns: [0, 3] — 按"1"删最后 1 轮即 cutIdx=3，保留 [user(0), assistant(1), tool_summary(2)]
+func visibleTurnIndices(messages []cliMessage) []int {
+	var turns []int
 	for i, msg := range messages {
-		if msg.role == "tool_summary" {
-			continue
+		if msg.role == "user" {
+			turns = append(turns, i)
 		}
-		groups = append(groups, i)
 	}
-	return groups
+	// 如果没有 user 消息但有其他消息，回退到旧逻辑（保留兼容）
+	if len(turns) == 0 && len(messages) > 0 {
+		turns = append(turns, 0)
+	}
+	return turns
 }
 
-// scrollToDeleteLine 确保 Ctrl+K 红线在 viewport 可见区域内。
-func (m *cliModel) scrollToDeleteLine(content string) {
-	contentLines := strings.Split(content, "\n")
-	totalLines := len(contentLines)
-	vpHeight := m.viewport.Height()
-	if vpHeight <= 0 {
-		return
-	}
-	// 找到红线行（包含 "✂ delete above" 的行）
-	redLineIdx := -1
-	for i, line := range contentLines {
-		if strings.Contains(line, "✂ delete below") {
-			redLineIdx = i
-			break
-		}
-	}
-	if redLineIdx < 0 {
-		return
-	}
-	// 将红线定位到视口中央偏上（留 3 行上方边距）
-	targetYOffset := redLineIdx - 3
-	if targetYOffset < 0 {
-		targetYOffset = 0
-	}
-	maxOffset := totalLines - vpHeight
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if targetYOffset > maxOffset {
-		targetYOffset = maxOffset
-	}
-	m.viewport.SetYOffset(targetYOffset)
+// visibleMsgGroupIndices 是 visibleTurnIndices 的别名，保留向后兼容。
+func visibleMsgGroupIndices(messages []cliMessage) []int {
+	return visibleTurnIndices(messages)
 }
 
 // updateViewportContent 更新 viewport 显示内容（§1 增量渲染）
@@ -1198,6 +1231,14 @@ func (m *cliModel) updateViewportContent() {
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
 		m.setViewportContent(sb.String())
+		return
+	}
+
+	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索、无删除确认）
+	// 只渲染新增的 dirty 消息并追加到 cachedHistory，跳过全量重建。
+	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode && m.confirmDelete == 0 &&
+		len(m.messages) > m.cachedMsgCount {
+		m.appendNewMessagesToCache()
 		return
 	}
 
@@ -1221,6 +1262,44 @@ func (m *cliModel) updateStreamingOnly() {
 	m.setViewportContent(sb.String())
 }
 
+// appendNewMessagesToCache incrementally renders and appends only the new messages
+// since cachedMsgCount, updating cachedHistory and msgLineOffsets without rebuilding
+// old messages. This is O(new_messages) instead of O(all_messages).
+func (m *cliModel) appendNewMessagesToCache() {
+	var sb strings.Builder
+	sb.WriteString(m.cachedHistory)
+
+	// Calculate starting line offset for new messages
+	runningLines := 0
+	if len(m.msgLineOffsets) > 0 {
+		// Approximate: use the line count of cachedHistory at current width.
+		// This is an estimate but sufficient for msgLineOffsets (used for Ctrl+E folding).
+		runningLines = wrappedLineCount(m.cachedHistory, m.width)
+	}
+
+	startIdx := m.cachedMsgCount
+	for i := startIdx; i < len(m.messages); i++ {
+		msg := &m.messages[i]
+		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
+		rendered := m.renderMessage(msg)
+		msg.rendered = rendered
+		msg.dirty = false
+		msg.renderWidth = m.width
+		sb.WriteString(rendered)
+		runningLines += wrappedLineCount(rendered, m.width)
+	}
+
+	m.cachedHistory = sb.String()
+	m.renderCacheValid = true
+	m.cachedMsgCount = len(m.messages)
+
+	// Set viewport with new content + progress block
+	var vp strings.Builder
+	vp.WriteString(m.cachedHistory)
+	vp.WriteString(m.renderProgressBlock())
+	m.setViewportContent(vp.String())
+}
+
 // fullRebuild 全量重建渲染缓存（慢速路径）
 func (m *cliModel) fullRebuild() {
 	var historyBuf strings.Builder
@@ -1240,7 +1319,15 @@ func (m *cliModel) fullRebuild() {
 		}
 	}
 
+	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
+	m.msgLineOffsets = m.msgLineOffsets[:0]
+	runningLines := 0
+	prevLen := 0
+	// §9 Ctrl+K 红线：记录红线在折行后的 viewport 行号
+	var redLineWrappedPos = -1
 	for i := range m.messages[:splitIdx] {
+		// §19 记录消息在 viewport 折行后内容中的起始行号
+		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
 		needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
 		if needsRender {
 			rendered := m.renderMessage(&m.messages[i])
@@ -1248,11 +1335,20 @@ func (m *cliModel) fullRebuild() {
 			m.messages[i].dirty = false
 			m.messages[i].renderWidth = m.width
 		}
+		// §21 搜索高亮：匹配消息前插入指示条
+		if m.searchMode && m.isSearchMatch(i) {
+			indicator := m.styles.SearchIndicator.Render("▸ ")
+			historyBuf.WriteString(indicator)
+		}
 		historyBuf.WriteString(m.messages[i].rendered)
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
+			redLineWrappedPos = runningLines + wrappedLineCount(historyBuf.String()[prevLen:], m.width)
 			historyBuf.WriteString(m.renderDeleteBoundaryLine())
 		}
+		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
+		runningLines += wrappedLineCount(historyBuf.String()[prevLen:], m.width)
+		prevLen = historyBuf.Len()
 	}
 
 	m.cachedHistory = historyBuf.String()
@@ -1267,15 +1363,150 @@ func (m *cliModel) fullRebuild() {
 	}
 	sb.WriteString(m.renderProgressBlock())
 
-	m.setViewportContent(sb.String())
-
-	// §9 Ctrl+K 红线：自动滚动到红线位置
+	// §9 Ctrl+K 红线：设置内容时禁止 GotoBottom，以便随后精确定位红线
 	if m.confirmDelete > 0 {
-		m.scrollToDeleteLine(sb.String())
+		m.setViewportContentForScroll(sb.String())
+	} else {
+		m.setViewportContent(sb.String())
+	}
+
+	// §9 Ctrl+K 红线：自动滚动到红线位置（使用折行后的精确行号）
+	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
+		vpHeight := m.viewport.Height()
+		totalLines := m.viewport.TotalLineCount()
+		// 将红线定位到视口中央偏上（留 3 行上方边距）
+		targetY := redLineWrappedPos - 3
+		if targetY < 0 {
+			targetY = 0
+		}
+		maxOff := totalLines - vpHeight
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		if targetY > maxOff {
+			targetY = maxOff
+		}
+		m.viewport.SetYOffset(targetY)
 	}
 }
 
-// tickCmd returns a command that periodically refreshes viewport during agent processing.
+// isSearchMatch 检查消息是否匹配当前搜索（§21）
+func (m *cliModel) isSearchMatch(idx int) bool {
+	for _, si := range m.searchResults {
+		if si == idx {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleMessageFold 切换当前可见消息的折叠状态（§19）
+func (m *cliModel) toggleMessageFold() {
+	if len(m.msgLineOffsets) == 0 || len(m.messages) == 0 {
+		return
+	}
+	yOff := m.viewport.YOffset()
+	idx := sort.Search(len(m.msgLineOffsets), func(i int) bool {
+		return m.msgLineOffsets[i] > yOff
+	})
+	if idx > 0 {
+		idx--
+	}
+	for idx < len(m.messages) && m.messages[idx].role != "assistant" {
+		idx++
+	}
+	if idx >= len(m.messages) {
+		return
+	}
+	msg := &m.messages[idx]
+	if msg.isPartial {
+		return
+	}
+	if msg.renderedLines <= msgFoldThresholdLines && !msg.folded {
+		return
+	}
+	msg.folded = !msg.folded
+	msg.dirty = true
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// enterSearchMode 进入搜索模式（§21）
+func (m *cliModel) enterSearchMode() {
+	ti := textinput.New()
+	ti.Placeholder = m.locale.SearchPlaceholder
+	ti.Prompt = "/"
+	ti.CharLimit = 100
+	ti.Focus()
+	w := m.width - 20
+	if w < 20 {
+		w = 20
+	}
+	ti.SetWidth(w)
+	m.searchTI = ti
+	m.searchMode = true
+	m.searchEditing = true
+	m.searchQuery = ""
+	m.searchResults = nil
+	m.searchIdx = -1
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// executeSearch 执行搜索（§21）
+func (m *cliModel) executeSearch() {
+	query := strings.TrimSpace(m.searchTI.Value())
+	if query == "" {
+		m.exitSearch()
+		return
+	}
+	m.searchQuery = query
+	lower := strings.ToLower(query)
+	m.searchResults = nil
+	for i, msg := range m.messages {
+		if msg.role == "system" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(msg.content), lower) {
+			m.searchResults = append(m.searchResults, i)
+		}
+	}
+	m.searchIdx = -1
+	m.searchEditing = false
+	if len(m.searchResults) == 0 {
+		m.showSystemMsg(m.locale.SearchNoResults, feedbackInfo)
+	} else {
+		m.showSystemMsg(fmt.Sprintf(m.locale.SearchResults, len(m.searchResults)), feedbackInfo)
+		m.jumpToSearchResult(0)
+	}
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// exitSearch 退出搜索模式（§21）
+func (m *cliModel) exitSearch() {
+	m.searchMode = false
+	m.searchQuery = ""
+	m.searchResults = nil
+	m.searchIdx = -1
+	m.searchEditing = false
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// jumpToSearchResult 跳转到指定搜索结果（§21）
+func (m *cliModel) jumpToSearchResult(idx int) {
+	if idx < 0 || idx >= len(m.searchResults) {
+		return
+	}
+	m.searchIdx = idx
+	msgIdx := m.searchResults[idx]
+	if msgIdx < len(m.msgLineOffsets) {
+		m.viewport.SetYOffset(m.msgLineOffsets[msgIdx])
+	}
+}
+
+// // tickCmd returns a command that periodically refreshes viewport during agent processing.
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return cliTickMsg{}

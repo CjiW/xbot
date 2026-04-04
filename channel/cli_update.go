@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // Update 处理消息
@@ -22,6 +24,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevText := m.textarea.Value()
 
 	wasTyping := m.typing
+
+	// Async settings save completed — apply theme/locale/viewport changes
+	if saved, ok := msg.(cliSettingsSavedMsg); ok {
+		cmd := m.handleSettingsSavedMsg(saved)
+		return m, cmd
+	}
 
 	// 主题变更通知：重建样式缓存 + glamour 渲染器
 	select {
@@ -58,7 +66,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Ctrl+Z: 紧急退出（无论什么状态，包括 panel/typing/idle）
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+z" {
-		m.showSystemMsg("🚪 紧急退出 (Ctrl+Z)", feedbackWarning)
+		m.showSystemMsg(m.locale.EmergencyQuitHint, feedbackWarning)
 		return m, tea.Quit
 	}
 
@@ -97,6 +105,53 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// §21 搜索模式拦截
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.searchMode {
+		switch {
+		case m.searchEditing:
+			switch key.String() {
+			case "enter":
+				m.executeSearch()
+				return m, nil
+			case "esc":
+				m.exitSearch()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.searchTI, cmd = m.searchTI.Update(msg)
+			return m, cmd
+		default:
+			switch key.String() {
+			case "n":
+				if len(m.searchResults) > 0 {
+					next := m.searchIdx + 1
+					if next >= len(m.searchResults) {
+						next = 0
+					}
+					m.jumpToSearchResult(next)
+					m.renderCacheValid = false
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "N":
+				if len(m.searchResults) > 0 {
+					prev := m.searchIdx - 1
+					if prev < 0 {
+						prev = len(m.searchResults) - 1
+					}
+					m.jumpToSearchResult(prev)
+					m.renderCacheValid = false
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "esc":
+				m.exitSearch()
+				return m, nil
+			}
+			return m, nil
+		}
+	}
+
 	// Home/End 跳顶部/底部
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
@@ -129,12 +184,22 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			groups := visibleMsgGroupIndices(m.messages)
 			switch msg.String() {
 			case "y", "Y":
-				// 确认删除：根据 group 索引截断
+				// 确认删除：根据 turn 索引截断
 				if m.confirmDelete > len(groups) {
 					m.confirmDelete = len(groups)
 				}
 				cutIdx := groups[len(groups)-m.confirmDelete]
 				m.messages = m.messages[:cutIdx]
+				// 同步截断数据库中的 session messages（异步避免阻塞 UI）
+				// safe: 此时 typing=false，输入被 confirmDelete 拦截，不会有并发写入
+				if m.trimHistoryFn != nil {
+					keepCount := cutIdx
+					go func() {
+						if err := m.trimHistoryFn(keepCount); err != nil {
+							log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
+						}
+					}()
+				}
 				m.confirmDelete = 0
 				m.renderCacheValid = false
 				m.cachedHistory = ""
@@ -212,14 +277,43 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 非处理状态：清空输入
 			if m.textarea.Value() != "" {
 				m.textarea.Reset()
+				m.inputHistoryIdx = -1
+				m.inputDraft = ""
 				m.autoExpandInput()
 			}
 			return m, nil
 
 		case msg.Code == tea.KeyUp:
-			// ↑ with bg tasks running + empty input → open bg tasks panel
-			if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.panelMode == "" {
-				m.openBgTasksPanel()
+			if m.panelMode == "" && !m.typing {
+				// bg tasks panel（原逻辑不变）
+				if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputHistoryIdx == -1 {
+					m.openBgTasksPanel()
+					return m, nil
+				}
+				// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
+				if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+					if m.inputHistoryIdx == -1 {
+						m.inputDraft = "" // 保存空草稿
+						m.inputHistoryIdx = 0
+					} else if m.inputHistoryIdx < len(m.inputHistory)-1 {
+						m.inputHistoryIdx++
+					}
+					m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+					m.autoExpandInput()
+					return m, nil
+				}
+			}
+
+		case msg.Code == tea.KeyDown:
+			if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+				if m.inputHistoryIdx > 0 {
+					m.inputHistoryIdx--
+					m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
+				} else {
+					m.inputHistoryIdx = -1
+					m.textarea.SetValue(m.inputDraft)
+				}
+				m.autoExpandInput()
 				return m, nil
 			}
 
@@ -254,6 +348,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			content := strings.TrimSpace(m.textarea.Value())
 			if content != "" {
+				// §22 输入历史：保存发送的内容（去重，不保存 / 命令和空输入）
+				if !strings.HasPrefix(content, "/") {
+					if len(m.inputHistory) == 0 || m.inputHistory[0] != content {
+						m.inputHistory = append([]string{content}, m.inputHistory...)
+						if len(m.inputHistory) > 100 {
+							m.inputHistory = m.inputHistory[:100]
+						}
+					}
+				}
+				m.inputHistoryIdx = -1
+				m.inputDraft = ""
 				if m.allTodosDone() {
 					m.todos = nil
 					m.todosDoneCleared = true
@@ -286,7 +391,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
 			if !m.typing && len(m.messages) > 0 {
 				groups := visibleMsgGroupIndices(m.messages)
-				defaultDel := 2
+				defaultDel := 1
 				if defaultDel > len(groups) {
 					defaultDel = len(groups)
 				}
@@ -302,6 +407,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "ctrl+o":
 			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 			m.toggleToolSummary()
+			return m, nil
+
+		case msg.String() == "ctrl+e":
+			// §19 Ctrl+E 切换长消息折叠（搜索导航模式下拦截）
+			if m.searchMode && !m.searchEditing {
+				return m, nil
+			}
+			if !m.typing && !m.searchMode && len(m.messages) > 0 {
+				m.toggleMessageFold()
+			}
 			return m, nil
 
 		} // end switch
@@ -651,50 +766,42 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// autoExpandInput adjusts the main textarea height based on content lines.
-// Keeps it between minTaHeight and maxTaHeight, and shrinks viewport accordingly.
+// autoExpandInput adjusts the viewport height to compensate for textarea height changes.
+// With DynamicHeight enabled on the textarea, it manages its own height based on
+// visual lines (including soft wraps from CJK characters). We just need to keep the
+// viewport in sync.
 const (
 	minTaHeight = 3
 	maxTaHeight = 10
 )
 
 func (m *cliModel) autoExpandInput() {
-	lines := strings.Count(m.textarea.Value(), "\n") + 1
-	if lines < minTaHeight {
-		lines = minTaHeight
+	// DynamicHeight manages textarea height based on visual lines.
+	// We just need to sync the viewport and clamp textarea if terminal is too small.
+	taHeight := m.textarea.Height()
+	if taHeight < minTaHeight {
+		taHeight = minTaHeight
 	}
-	if lines > maxTaHeight {
-		lines = maxTaHeight
+	// Clamp textarea height to available space (don't let it push viewport below minimum)
+	availableForTA := m.height - 3 - 2 // 3 = title+status+footer, 2 = ta border
+	if m.todos != nil {
+		availableForTA -= 1 + len(m.todos)
 	}
-	if m.textarea.Height() == lines {
-		return
+	maxAllowed := availableForTA - 3 // 3 = minimum viewport
+	if maxAllowed < minTaHeight {
+		maxAllowed = minTaHeight
 	}
-	oldHeight := m.textarea.Height()
-	grew := lines > oldHeight
-	m.textarea.SetHeight(lines)
-	// Adjust viewport to compensate
-	delta := lines - oldHeight
-	if m.viewport.Height()-delta >= 3 {
-		m.viewport.SetHeight(m.viewport.Height() - delta)
+	if taHeight > maxAllowed {
+		taHeight = maxAllowed
+		m.textarea.SetHeight(taHeight)
 	}
-	if grew {
-		// When height increases, bubbles textarea repositionView only scrolls
-		// down (if cursor below view) or up (if cursor above). It won't
-		// shrink YOffset when more lines become visible, so the first content
-		// line stays scrolled off-screen.
-		// Fix: move cursor to top (resets YOffset to 0 via repositionView),
-		// then move back to the original row.
-		targetRow := m.textarea.Line()
-		if targetRow > 0 {
-			// InputBegin is bound to ctrl+home; this triggers moveToBegin + repositionView
-			m.textarea, _ = m.textarea.Update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
-			for i := 0; i < targetRow; i++ {
-				m.textarea.CursorDown()
-			}
-			// CursorDown doesn't call repositionView, but since YOffset=0
-			// and height >= total lines, the cursor is always visible.
-			// We still need one Update to sync internal viewport state.
-			m.textarea, _ = m.textarea.Update(nil)
+	expectedVP := m.layoutViewportHeight()
+	currentVP := m.viewport.Height()
+	if currentVP != expectedVP {
+		wasAtBottom := m.viewport.AtBottom()
+		m.viewport.SetHeight(expectedVP)
+		if wasAtBottom {
+			m.viewport.GotoBottom()
 		}
 	}
 }
@@ -762,12 +869,13 @@ func (m *cliModel) handleResize(width, height int) {
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
 
-	// InputBox: Width(width-4) includes border(2) + padding(2).
+	// InputBox lipgloss style: Width(width-4) includes border(2) + padding(2).
 	// Content area = width-4-2-2 = width-8. Textarea must match this.
 	iw := width - 8
 	if iw < 10 {
 		iw = 10
 	}
+	iw = iw &^ 1 // round down to even for CJK
 	m.textarea.SetWidth(iw)
 
 	// Glamour word-wrap must match viewport width so that lines

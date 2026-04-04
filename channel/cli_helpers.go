@@ -4,6 +4,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
 )
 
 // ---------------------------------------------------------------------------
@@ -40,21 +42,94 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
-// applyThemeAndRebuild applies a theme change and rebuilds the glamour renderer.
-// Callers should still call invalidateAllCache() if messages need re-rendering.
+// applyThemeAndRebuild applies a theme change synchronously: sets the theme,
+// rebuilds styles cache, glamour renderer, and marks all messages dirty.
+// Uses setTheme() instead of ApplyTheme() to avoid sending on themeChangeCh,
+// which would cause a redundant fullRebuild in the next Update cycle.
 func (m *cliModel) applyThemeAndRebuild(theme string) {
-	ApplyTheme(theme)
+	setTheme(theme)
+	// Rebuild styles cache (same as themeChangeCh handler in Update)
+	m.styles = buildStyles(m.width)
+	applyTAStyles(&m.textarea, &m.styles)
+	m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
+	// Rebuild glamour renderer
 	if m.width > 4 {
 		m.renderer = newGlamourRenderer(m.width - 4)
 	}
+	// Mark all messages for re-render (new theme = new styles)
 	m.renderCacheValid = false
+	for i := range m.messages {
+		m.messages[i].dirty = true
+	}
 }
 
 // applyLanguageChange applies a language/locale change and invalidates cache.
+// Uses setLocale() instead of SetLocale() to avoid sending on localeChangeCh,
+// which would cause a redundant fullRebuild in the next Update cycle.
 func (m *cliModel) applyLanguageChange(lang string) {
-	SetLocale(lang)
+	setLocale(lang)
 	m.locale = GetLocale(lang)
 	m.renderCacheValid = false
+}
+
+// doSaveSettingsAsync runs the settings save callback in a goroutine and returns
+// a tea.Cmd that sends the result back as cliSettingsSavedMsg.
+// This prevents the BubbleTea Update loop from blocking on SQLite writes,
+// file I/O, or fullRebuild.
+func (m *cliModel) doSaveSettingsAsync(onSubmit func(map[string]string), vals map[string]string) tea.Cmd {
+	// Capture the values we need for the deferred UI update
+	theme, hasTheme := vals["theme"]
+	lang, hasLang := vals["language"]
+	model, hasModel := vals["llm_model"]
+	baseURL := vals["llm_base_url"]
+	// Capture feedback string now (m.locale is only safe to read in Update)
+	feedbackMsg := m.locale.SettingsSaved
+
+	return func() tea.Msg {
+		// Run the heavy callback (SQLite writes, config.json save, LLM rebuild)
+		// in a background goroutine so the UI stays responsive.
+		onSubmit(vals)
+
+		return cliSettingsSavedMsg{
+			themeChanged: hasTheme && theme != "",
+			theme:        theme,
+			langChanged:  hasLang,
+			lang:         lang,
+			modelChanged: hasModel && model != "",
+			model:        model,
+			baseURL:      baseURL,
+			feedbackMsg:  feedbackMsg,
+		}
+	}
+}
+
+// handleSettingsSavedMsg processes the async settings save result.
+// Called from Update() to apply theme/locale changes and refresh the viewport.
+func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
+	visualChanged := false
+	if msg.themeChanged {
+		m.applyThemeAndRebuild(msg.theme)
+		visualChanged = true
+	}
+	if msg.langChanged {
+		m.applyLanguageChange(msg.lang)
+		visualChanged = true
+	}
+	if msg.modelChanged {
+		if m.channel != nil {
+			m.channel.UpdateConfig(msg.model, msg.baseURL)
+		}
+	}
+	m.refreshCachedModelName()
+	if msg.feedbackMsg != "" {
+		m.appendSystem(msg.feedbackMsg)
+	}
+	if visualChanged {
+		m.invalidateAllCache(true)
+	} else {
+		m.updateViewportContent()
+	}
+	return nil
 }
 
 // submitAskAnswers collects answers from the AskUser panel, invokes the answer

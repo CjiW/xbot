@@ -133,7 +133,7 @@ func TestMaskOldToolResults_Basic(t *testing.T) {
 	}
 
 	// keepGroups=1 应遮蔽前 2 个 group
-	result, count := MaskOldToolResults(messages, store, 1)
+	result, count, _ := MaskOldToolResults(messages, store, 1)
 	if count != 2 {
 		t.Fatalf("expected 2 masked, got %d", count)
 	}
@@ -164,7 +164,7 @@ func TestMaskOldToolResults_KeepAll(t *testing.T) {
 		{Role: "tool", Content: "output", ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{}`},
 	}
 
-	result, count := MaskOldToolResults(messages, store, 3)
+	result, count, _ := MaskOldToolResults(messages, store, 3)
 	if count != 0 {
 		t.Fatalf("expected 0 masked when keepGroups >= total, got %d", count)
 	}
@@ -182,7 +182,7 @@ func TestMaskOldToolResults_EmptyAndNull(t *testing.T) {
 		{Role: "tool", Content: "null", ToolName: "Read", ToolCallID: "tc2", ToolArguments: `{}`},
 	}
 
-	_, count := MaskOldToolResults(messages, store, 1)
+	_, count, _ := MaskOldToolResults(messages, store, 1)
 	// 空和 null 内容的 tool result 应该跳过遮蔽
 	if count != 0 {
 		t.Fatalf("expected 0 masked for empty/null content, got %d", count)
@@ -200,7 +200,7 @@ func TestMaskOldToolResults_WithThinkBlocks(t *testing.T) {
 		{Role: "tool", Content: "recent output", ToolName: "Shell", ToolCallID: "tc2", ToolArguments: `{}`},
 	}
 
-	result, count := MaskOldToolResults(messages, store, 1)
+	result, count, _ := MaskOldToolResults(messages, store, 1)
 	if count != 1 {
 		t.Fatalf("expected 1 masked, got %d", count)
 	}
@@ -218,7 +218,7 @@ func TestMaskOldToolResults_NoToolMessages(t *testing.T) {
 		{Role: "assistant", Content: "hi there"},
 	}
 
-	result, count := MaskOldToolResults(messages, store, 3)
+	result, count, _ := MaskOldToolResults(messages, store, 3)
 	if count != 0 {
 		t.Fatalf("expected 0 masked for no-tool messages, got %d", count)
 	}
@@ -241,7 +241,7 @@ func TestMaskOldToolResults_AlreadyMaskedSkipped(t *testing.T) {
 		{Role: "tool", Content: "grep results", ToolName: "Grep", ToolCallID: "tc3", ToolArguments: `{}`},
 	}
 
-	result, count := MaskOldToolResults(messages, store, 1)
+	result, count, _ := MaskOldToolResults(messages, store, 1)
 	// Only group 2's tool result should be masked; group 1 is already masked and skipped
 	if count != 1 {
 		t.Fatalf("expected 1 masked (skip already-masked), got %d", count)

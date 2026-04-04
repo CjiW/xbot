@@ -595,8 +595,8 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	}
 
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
-	// 默认开启：在 60% context 阈值时自动 mask 旧工具结果以释放空间。
-	// 可通过 settings 的 enable_masking 关闭（设为 false 时 a.maskStore = nil）。
+	// 默认关闭：通过 settings 的 enable_masking 开启。
+	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
 	a.maskStore = NewObservationMaskStore(200)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
@@ -645,7 +645,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 func New(cfg Config) *Agent {
 	// 1. 设置配置默认值
 	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = 100
+		cfg.MaxIterations = 2000
 	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 3
@@ -1177,6 +1177,31 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		}
 
 		// 普通消息：转发到内部队列，由 processLoop 串行处理
+		// /cancel 拦截：在 chatWorker 层面处理，不进入 msgCh，
+		// 避免 chatProcessLoop 阻塞在 processMessage 时 /cancel 无法被处理导致死锁。
+		if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+			cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+			if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
+				select {
+				case ch.(chan struct{}) <- struct{}{}:
+					a.bus.Outbound <- bus.OutboundMessage{
+						Channel: msg.Channel,
+						ChatID:  msg.ChatID,
+						Content: "✅ 已取消当前请求",
+					}
+				default:
+					// cancel 信号已发过
+				}
+			} else {
+				a.bus.Outbound <- bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: "当前没有正在处理的请求",
+				}
+			}
+			continue
+		}
+
 		select {
 		case msgCh <- msg:
 		case <-ctx.Done():
@@ -1267,6 +1292,11 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		if wasCancelled && ctx.Err() == nil {
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
+			// 即使取消也要发送 response，让 CLI 清理 typing/progress 状态。
+			// processMessage 内部可能已返回 "Agent was cancelled."，但 wasCancelled 时被跳过。
+			if response != nil {
+				a.bus.Outbound <- *response
+			}
 			continue
 		}
 

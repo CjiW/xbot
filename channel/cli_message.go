@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"encoding/json"
@@ -296,9 +297,8 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 	case "/clear":
 		m.messages = make([]cliMessage, 0, cliMsgBufSize)
-		m.renderCacheValid = false
 		m.cachedHistory = ""
-		m.updateViewportContent()
+		m.exitSearch()
 
 	case "/settings":
 		// Open interactive settings panel locally
@@ -386,6 +386,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/help":
 		helpContent := m.renderHelpPanel()
 		m.showSystemMsg(helpContent, feedbackInfo)
+
+	case "/search":
+		m.enterSearchMode()
 
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
@@ -1126,6 +1129,17 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			fmt.Fprintf(&sb, "%s %s %s", guide, timeStr, label)
 		}
 		sb.WriteString("\n")
+		// §19 长消息折叠：对已完成的 assistant 消息截取预览
+		if msg.folded && !msg.isPartial && msg.renderedLines > msgFoldThresholdLines {
+			renderedLines := strings.Split(rendered, "\n")
+			if len(renderedLines) > msgFoldPreviewLines {
+				rendered = strings.Join(renderedLines[:msgFoldPreviewLines], "\n")
+				foldHint := m.styles.TextMutedSt.Render(
+					fmt.Sprintf("  ... %s (%d lines) ...",
+						m.locale.MsgCollapsed, msg.renderedLines))
+				rendered += "\n" + foldHint
+			}
+		}
 		// Agent 消息直接渲染（glamour 已处理 markdown）
 		sb.WriteString(rendered)
 		// 流式输出时追加闪烁光标，让用户感知"正在生成"
@@ -1135,6 +1149,10 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	}
 
 	sb.WriteString("\n\n")
+
+	// §19 计算渲染后行数（每次 dirty 重算）
+	msg.renderedLines = strings.Count(sb.String(), "\n") + 1
+
 	return sb.String()
 }
 
@@ -1162,6 +1180,24 @@ func (m *cliModel) setViewportContent(content string) {
 	} else {
 		m.newContentHint = true
 	}
+}
+
+// wrappedLineCount returns the number of viewport display lines after hard-wrapping.
+// The logic mirrors setViewportContent exactly so that msgLineOffsets (computed via
+// this function) are always in sync with the viewport's internal line numbering.
+func wrappedLineCount(content string, width int) int {
+	if content == "" {
+		return 0
+	}
+	if width <= 0 {
+		return strings.Count(content, "\n")
+	}
+	count := 0
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimRight(line, " \t")
+		count += strings.Count(hardWrapRunes(line, width), "\n") + 1
+	}
+	return count
 }
 
 // renderDeleteBoundaryLine 渲染 Ctrl+K 删除边界红线。
@@ -1306,7 +1342,13 @@ func (m *cliModel) fullRebuild() {
 		}
 	}
 
+	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
+	m.msgLineOffsets = m.msgLineOffsets[:0]
+	runningLines := 0
+	prevLen := 0
 	for i := range m.messages[:splitIdx] {
+		// §19 记录消息在 viewport 折行后内容中的起始行号
+		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
 		needsRender := m.messages[i].dirty || m.messages[i].renderWidth != m.width
 		if needsRender {
 			rendered := m.renderMessage(&m.messages[i])
@@ -1314,11 +1356,19 @@ func (m *cliModel) fullRebuild() {
 			m.messages[i].dirty = false
 			m.messages[i].renderWidth = m.width
 		}
+		// §21 搜索高亮：匹配消息前插入指示条
+		if m.searchMode && m.isSearchMatch(i) {
+			indicator := m.styles.SearchIndicator.Render("▸ ")
+			historyBuf.WriteString(indicator)
+		}
 		historyBuf.WriteString(m.messages[i].rendered)
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
 			historyBuf.WriteString(m.renderDeleteBoundaryLine())
 		}
+		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
+		runningLines += wrappedLineCount(historyBuf.String()[prevLen:], m.width)
+		prevLen = historyBuf.Len()
 	}
 
 	m.cachedHistory = historyBuf.String()
@@ -1341,7 +1391,130 @@ func (m *cliModel) fullRebuild() {
 	}
 }
 
-// tickCmd returns a command that periodically refreshes viewport during agent processing.
+// isSearchMatch 检查消息是否匹配当前搜索（§21）
+func (m *cliModel) isSearchMatch(idx int) bool {
+	for _, si := range m.searchResults {
+		if si == idx {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleMessageFold 切换当前可见消息的折叠状态（§19）
+func (m *cliModel) toggleMessageFold() {
+	if len(m.msgLineOffsets) == 0 || len(m.messages) == 0 {
+		return
+	}
+	yOff := m.viewport.YOffset()
+	idx := sort.Search(len(m.msgLineOffsets), func(i int) bool {
+		return m.msgLineOffsets[i] > yOff
+	})
+	if idx > 0 {
+		idx--
+	}
+	for idx < len(m.messages) && m.messages[idx].role != "assistant" {
+		idx++
+	}
+	if idx >= len(m.messages) {
+		return
+	}
+	msg := &m.messages[idx]
+	if msg.isPartial {
+		m.showSystemMsg(m.locale.MsgTooShortToFold, feedbackWarning)
+		return
+	}
+	if msg.renderedLines <= msgFoldThresholdLines && !msg.folded {
+		m.showSystemMsg(m.locale.MsgTooShortToFold, feedbackWarning)
+		return
+	}
+	msg.folded = !msg.folded
+	msg.dirty = true
+	m.renderCacheValid = false
+	m.updateViewportContent()
+	if msg.folded {
+		m.showSystemMsg(m.locale.MsgCollapsed, feedbackInfo)
+	} else {
+		m.showSystemMsg(m.locale.MsgExpanded, feedbackInfo)
+	}
+}
+
+// enterSearchMode 进入搜索模式（§21）
+func (m *cliModel) enterSearchMode() {
+	ti := textinput.New()
+	ti.Placeholder = m.locale.SearchPlaceholder
+	ti.Prompt = "/"
+	ti.CharLimit = 100
+	ti.Focus()
+	w := m.width - 20
+	if w < 20 {
+		w = 20
+	}
+	ti.SetWidth(w)
+	m.searchTI = ti
+	m.searchMode = true
+	m.searchEditing = true
+	m.searchQuery = ""
+	m.searchResults = nil
+	m.searchIdx = -1
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// executeSearch 执行搜索（§21）
+func (m *cliModel) executeSearch() {
+	query := strings.TrimSpace(m.searchTI.Value())
+	if query == "" {
+		m.exitSearch()
+		return
+	}
+	m.searchQuery = query
+	lower := strings.ToLower(query)
+	m.searchResults = nil
+	for i, msg := range m.messages {
+		if msg.role == "system" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(msg.content), lower) {
+			m.searchResults = append(m.searchResults, i)
+		}
+	}
+	m.searchIdx = -1
+	m.searchEditing = false
+	if len(m.searchResults) == 0 {
+		m.showSystemMsg(m.locale.SearchNoResults, feedbackInfo)
+	} else {
+		m.showSystemMsg(fmt.Sprintf(m.locale.SearchResults, len(m.searchResults)), feedbackInfo)
+		m.jumpToSearchResult(0)
+	}
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// exitSearch 退出搜索模式（§21）
+func (m *cliModel) exitSearch() {
+	m.searchMode = false
+	m.searchQuery = ""
+	m.searchResults = nil
+	m.searchIdx = -1
+	m.searchEditing = false
+	m.renderCacheValid = false
+	m.updateViewportContent()
+}
+
+// jumpToSearchResult 跳转到指定搜索结果（§21）
+func (m *cliModel) jumpToSearchResult(idx int) {
+	if idx < 0 || idx >= len(m.searchResults) {
+		return
+	}
+	m.searchIdx = idx
+	msgIdx := m.searchResults[idx]
+	if msgIdx < len(m.msgLineOffsets) {
+		m.viewport.SetYOffset(m.msgLineOffsets[msgIdx])
+	}
+}
+
+// // tickCmd returns a command that periodically refreshes viewport during agent processing.
 func tickCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 		return cliTickMsg{}

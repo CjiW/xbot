@@ -80,8 +80,24 @@ func (m *cliModel) View() tea.View {
 	// §16 Toast 通知渲染
 	toastStr := m.renderToast()
 
-	// §9 Ctrl+K 确认模式提示
-	if m.confirmDelete > 0 {
+	// §21 搜索模式
+	if m.searchMode {
+		var searchBar string
+		if m.searchEditing {
+			searchBar = m.styles.SearchBar.Render(m.searchTI.View())
+		} else {
+			searchBar = m.styles.SearchBar.Render(
+				fmt.Sprintf(m.locale.SearchNavFormat, m.searchQuery, m.searchIdx+1, len(m.searchResults)))
+		}
+		content = fmt.Sprintf(
+			"%s\n%s\n%s\n%s%s",
+			titleBar,
+			m.viewport.View(),
+			searchBar,
+			input,
+			toastStr,
+		)
+	} else if m.confirmDelete > 0 {
 		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
 		content = fmt.Sprintf(
 			"%s\n%s\n%s\n%s",
@@ -435,7 +451,7 @@ func (m *cliModel) renderFooter() string {
 	} else {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
-			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete))
+			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
 			if len(m.inputHistory) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}

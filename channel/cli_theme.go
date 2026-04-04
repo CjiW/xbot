@@ -380,6 +380,10 @@ type cliStyles struct {
 	ProgressGradient lipgloss.Style
 	ProgressGlow     lipgloss.Style
 
+	// --- search (§21) ---
+	SearchBar       lipgloss.Style
+	SearchIndicator lipgloss.Style
+
 	// toolDisplayInfo
 }
 
@@ -493,6 +497,9 @@ func buildStyles(width int) cliStyles {
 		KeyDescSt:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		ProgressGradient: lipgloss.NewStyle().Foreground(c(t.BarFilled)).Bold(true),
 		ProgressGlow:     lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
+		// --- search (§21) ---
+		SearchBar:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Info)).Padding(0, 1).Width(width - 4),
+		SearchIndicator: lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
 	}
 }
 

@@ -97,6 +97,53 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// §21 搜索模式拦截
+	if key, ok := msg.(tea.KeyPressMsg); ok && m.searchMode {
+		switch {
+		case m.searchEditing:
+			switch key.String() {
+			case "enter":
+				m.executeSearch()
+				return m, nil
+			case "esc":
+				m.exitSearch()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.searchTI, cmd = m.searchTI.Update(msg)
+			return m, cmd
+		default:
+			switch key.String() {
+			case "n":
+				if len(m.searchResults) > 0 {
+					next := m.searchIdx + 1
+					if next >= len(m.searchResults) {
+						next = 0
+					}
+					m.jumpToSearchResult(next)
+					m.renderCacheValid = false
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "N":
+				if len(m.searchResults) > 0 {
+					prev := m.searchIdx - 1
+					if prev < 0 {
+						prev = len(m.searchResults) - 1
+					}
+					m.jumpToSearchResult(prev)
+					m.renderCacheValid = false
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "esc":
+				m.exitSearch()
+				return m, nil
+			}
+			return m, nil
+		}
+	}
+
 	// Home/End 跳顶部/底部
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
@@ -342,6 +389,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "ctrl+o":
 			// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 			m.toggleToolSummary()
+			return m, nil
+
+		case msg.String() == "ctrl+e":
+			// §19 Ctrl+E 切换长消息折叠（搜索导航模式下拦截）
+			if m.searchMode && !m.searchEditing {
+				return m, nil
+			}
+			if !m.typing && !m.searchMode && len(m.messages) > 0 {
+				m.toggleMessageFold()
+			}
 			return m, nil
 
 		} // end switch

@@ -169,8 +169,14 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/tasks", "/update",
+	"/model", "/models", "/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
 }
+
+// §19 长消息折叠阈值
+const (
+	msgFoldThresholdLines = 20
+	msgFoldPreviewLines   = 6
+)
 
 // ---------------------------------------------------------------------------
 // CLI Progress Payload (for structured progress events)

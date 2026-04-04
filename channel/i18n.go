@@ -70,6 +70,17 @@ type UILocale struct {
 	HelpCmds           []HelpCmdEntry
 	HelpKeys           []HelpKeyEntry
 
+	// --- E2. Fold messages (§19) ---
+	MsgTooShortToFold string
+	MsgExpanded       string
+	MsgCollapsed      string
+
+	// --- E3. Search (§21) ---
+	SearchPlaceholder string
+	SearchResults     string
+	SearchNoResults   string
+	SearchNavFormat   string
+
 	// --- F. Confirm dialog ---
 	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
 
@@ -93,6 +104,9 @@ type UILocale struct {
 	FooterSelect   string // "select"
 	FooterManage   string // "manage"
 	FooterHistory  string // "history"
+	FooterSearch   string // "search"
+	FooterFold     string // "fold"
+	FooterUnfold   string // "unfold"
 
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
@@ -214,6 +228,17 @@ func init() {
 			{Key: "↑", Desc: "后台任务面板"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "消息太短，无法折叠（需超过 %d 行）",
+		MsgExpanded:       "已展开",
+		MsgCollapsed:      "已折叠",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "搜索消息...",
+		SearchResults:     "找到 %d 条匹配消息 (n/N 导航, Esc 退出)",
+		SearchNoResults:   "未找到匹配消息",
+		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
+
 		// --- F. Confirm dialog ---
 		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 条消息？(y/N, 数字调整)",
 
@@ -237,6 +262,9 @@ func init() {
 		FooterSelect:   "选择",
 		FooterManage:   "管理",
 		FooterHistory:  "历史",
+		FooterSearch:   "搜索",
+		FooterFold:     "折叠",
+		FooterUnfold:   "展开",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
@@ -465,6 +493,17 @@ func init() {
 			{Key: "↑", Desc: "Background tasks panel"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "Message too short to fold (needs > %d lines)",
+		MsgExpanded:       "Expanded",
+		MsgCollapsed:      "Collapsed",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "Search messages...",
+		SearchResults:     "Found %d matching messages (n/N navigate, Esc to exit)",
+		SearchNoResults:   "No matching messages found",
+		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
+
 		// --- F. Confirm dialog ---
 		ConfirmDelete: "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)",
 
@@ -488,6 +527,9 @@ func init() {
 		FooterSelect:   "select",
 		FooterManage:   "manage",
 		FooterHistory:  "history",
+		FooterSearch:   "search",
+		FooterFold:     "fold",
+		FooterUnfold:   "unfold",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
@@ -716,6 +758,17 @@ func init() {
 			{Key: "↑", Desc: "バックグラウンドタスクパネル"},
 		},
 
+		// --- E2. Fold messages (§19) ---
+		MsgTooShortToFold: "メッセージが短すぎます（%d 行を超える必要があります）",
+		MsgExpanded:       "展開しました",
+		MsgCollapsed:      "折りたたみました",
+
+		// --- E3. Search (§21) ---
+		SearchPlaceholder: "メッセージを検索...",
+		SearchResults:     "%d 件の一致メッセージが見つかりました (n/N で移動, Esc で終了)",
+		SearchNoResults:   "一致するメッセージが見つかりません",
+		SearchNavFormat:   "/ %s  [%d/%d]  n 次 · N 前 · Esc",
+
 		// --- F. Confirm dialog ---
 		ConfirmDelete: "[!] Ctrl+K: 最後の %d 件のメッセージを削除しますか？(y/N, 数字で調整)",
 
@@ -739,6 +792,9 @@ func init() {
 		FooterSelect:   "選択",
 		FooterManage:   "管理",
 		FooterHistory:  "履歴",
+		FooterSearch:   "検索",
+		FooterFold:     "折りたたみ",
+		FooterUnfold:   "展開",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},

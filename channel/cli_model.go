@@ -202,9 +202,6 @@ type cliModel struct {
 	// --- §11 Tool Summary 折叠 ---
 	toolSummaryExpanded bool // Ctrl+O 切换
 
-	// --- §19 长消息折叠 ---
-	msgCollapsed map[int]bool // 折叠状态追踪（key=消息索引）
-
 	// --- §11b Pending Tool Summary ---
 	// PhaseDone may arrive before handleAgentMessage. Store the tool_summary
 	// here so handleAgentMessage can insert it at the correct position.
@@ -250,7 +247,16 @@ type cliModel struct {
 	toasts     []cliToastItem // Toast 队列（头部=当前显示）
 	toastTimer bool           // true = toast 消除计时器已启动
 
+	// --- §19 长消息折叠 ---
+	msgLineOffsets []int // 每条消息在 viewport 折行后 content 中的起始行号
+
 	// --- §21 消息搜索 /search ---
+	searchMode    bool            // 是否处于搜索模式
+	searchQuery   string          // 搜索关键词
+	searchResults []int           // 匹配的消息索引列表
+	searchIdx     int             // 当前导航到的搜索结果索引（-1 = 未选择）
+	searchEditing bool            // true = 编辑搜索词, false = 导航结果
+	searchTI      textinput.Model // 搜索输入框
 
 	// toolDisplayInfo
 
@@ -285,6 +291,9 @@ type cliMessage struct {
 	tools      []CLIToolProgress      // 扁平化工具列表（兼容旧逻辑）
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 
+	// --- §19 长消息折叠 ---
+	renderedLines int  // 渲染后的总行数（每次 dirty 重算）
+	folded        bool // 是否折叠
 }
 
 // newCLIModel 创建 CLI model
@@ -331,7 +340,6 @@ func newCLIModel() *cliModel {
 		streamingMsgIdx: -1,
 		progress:        nil,
 		inputReady:      true,
-		msgCollapsed:    make(map[int]bool),
 		locale:          GetLocale(""),
 		inputHistory:    make([]string, 0, 100),
 		inputHistoryIdx: -1,

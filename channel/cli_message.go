@@ -1400,35 +1400,42 @@ func (m *cliModel) isSearchMatch(idx int) bool {
 	return false
 }
 
-// toggleMessageFold 切换当前可见消息的折叠状态（§19）
+// toggleMessageFold 批量切换所有 assistant 消息的折叠状态（§19）
+// 如果当前有任一长消息未折叠 → 全部折叠；否则 → 全部展开。
 func (m *cliModel) toggleMessageFold() {
-	if len(m.msgLineOffsets) == 0 || len(m.messages) == 0 {
+	if len(m.messages) == 0 {
 		return
 	}
-	yOff := m.viewport.YOffset()
-	idx := sort.Search(len(m.msgLineOffsets), func(i int) bool {
-		return m.msgLineOffsets[i] > yOff
-	})
-	if idx > 0 {
-		idx--
+	// 决定目标状态：如果存在任何未折叠的长消息，则全部折叠
+	anyUnfolded := false
+	for i := range m.messages {
+		msg := &m.messages[i]
+		if msg.role == "assistant" && !msg.isPartial && msg.renderedLines > msgFoldThresholdLines && !msg.folded {
+			anyUnfolded = true
+			break
+		}
 	}
-	for idx < len(m.messages) && m.messages[idx].role != "assistant" {
-		idx++
+	targetFold := anyUnfolded
+
+	changed := false
+	for i := range m.messages {
+		msg := &m.messages[i]
+		if msg.role != "assistant" || msg.isPartial {
+			continue
+		}
+		if msg.renderedLines <= msgFoldThresholdLines {
+			continue
+		}
+		if msg.folded != targetFold {
+			msg.folded = targetFold
+			msg.dirty = true
+			changed = true
+		}
 	}
-	if idx >= len(m.messages) {
-		return
+	if changed {
+		m.renderCacheValid = false
+		m.updateViewportContent()
 	}
-	msg := &m.messages[idx]
-	if msg.isPartial {
-		return
-	}
-	if msg.renderedLines <= msgFoldThresholdLines && !msg.folded {
-		return
-	}
-	msg.folded = !msg.folded
-	msg.dirty = true
-	m.renderCacheValid = false
-	m.updateViewportContent()
 }
 
 // enterSearchMode 进入搜索模式（§21）

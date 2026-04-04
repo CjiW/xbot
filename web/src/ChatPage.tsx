@@ -351,18 +351,26 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       setSearchResults([])
       return
     }
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       setSearchLoading(true)
       try {
-        const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`)
+        const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`, {
+          signal: controller.signal,
+        })
         const data = await resp.json()
         if (data.ok) {
           setSearchResults(data.results || [])
         }
-      } catch {}
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+      }
       setSearchLoading(false)
     }, 300)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [searchQuery, searchOpen])
 
   // --- Search: Ctrl+K shortcut ---
@@ -880,18 +888,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       if (result.ok) {
         handleFileUploaded({ id: result.id, name: result.name, size: result.size, mime: result.mime, uploadKey: result.uploadKey, isOSS: result.isOSS })
       } else {
-        // Show toast
-        const toast = document.createElement('div')
-        toast.className = 'file-upload-toast'
-        toast.textContent = result.error || '上传失败'
-        document.body.appendChild(toast)
-        setTimeout(() => {
-          toast.classList.add('file-upload-toast-hide')
-          setTimeout(() => toast.remove(), 300)
-        }, 3000)
+        showToast(result.error || '上传失败', 'error')
       }
     }
-  }, [handleFileUploaded])
+  }, [handleFileUploaded, showToast])
 
   // --- Paste handler (for images) ---
   const handlePaste = usePasteUpload(handleFileUploaded, loading)

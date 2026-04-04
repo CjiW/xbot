@@ -23,6 +23,8 @@ type OSSProvider interface {
 	GetDownloadURL(key string) (url string, err error)
 	// Name returns the provider name.
 	Name() string
+	// Domain returns the CDN domain URL for this provider (empty if not applicable).
+	Domain() string
 }
 
 // ---------------------------------------------------------------------------
@@ -40,6 +42,7 @@ func NewLocalProvider(uploadDir string) *LocalProvider {
 }
 
 func (p *LocalProvider) Name() string { return "local" }
+func (p *LocalProvider) Domain() string { return "" }
 
 func (p *LocalProvider) Upload(key string, data []byte) error {
 	// Local provider should not be used for cloud upload — files are handled directly.
@@ -149,6 +152,7 @@ func (p *QiniuProvider) GetDownloadURL(key string) (string, error) {
 	log.WithField("key", key).Debug("Generated Qiniu download URL")
 	return signedURL, nil
 }
+func (p *QiniuProvider) Domain() string { return p.domain }
 
 // ---------------------------------------------------------------------------
 // NewOSSProvider — factory function

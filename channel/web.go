@@ -477,7 +477,7 @@ func (wc *WebChannel) Start() error {
 	addr := fmt.Sprintf("%s:%d", wc.config.Host, wc.config.Port)
 	wc.server = &http.Server{
 		Addr:         addr,
-		Handler:      securityHeadersMiddleware(mux),
+		Handler:      wc.securityHeadersMiddleware(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -868,17 +868,26 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 // ---------------------------------------------------------------------------
 
 // securityHeadersMiddleware wraps an http.Handler with security response headers.
-func securityHeadersMiddleware(next http.Handler) http.Handler {
+func (wc *WebChannel) securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Build img-src with OSS domain whitelist (if configured)
+		imgSrc := "'self' data: blob:"
+		if wc.ossProvider != nil {
+			if d := wc.ossProvider.Domain(); d != "" {
+				imgSrc += " " + d
+			}
+		}
+
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"font-src 'self' https://fonts.gstatic.com; "+
-				"img-src 'self' data: blob:; "+
+				"img-src "+imgSrc+"; "+
 				"connect-src 'self' ws: wss:; "+
 				"frame-ancestors 'none'",
 		)

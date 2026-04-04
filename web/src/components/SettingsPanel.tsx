@@ -140,6 +140,13 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [language, setLanguage] = useState<Language>(() => lsGet('language', DEFAULT_SETTINGS.language))
   const [saving, setSaving] = useState(false)
 
+  const [toast, setToast] = useState<{ id: number; message: string; type: 'info' | 'error' | 'success' } | null>(null)
+  const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
+    const id = Date.now()
+    setToast({ id, message, type })
+    setTimeout(() => setToast(null), 2500)
+  }, [])
+
   const [marketType, setMarketType] = useState<'agent' | 'skill'>('agent')
   const [marketSubTab, setMarketSubTab] = useState<'browse' | 'mine'>('browse')
   const [marketEntries, setMarketEntries] = useState<MarketEntry[]>([])
@@ -235,9 +242,14 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
 
   const handleSave = useCallback(async (updates: Partial<UserSettings>) => {
     setSaving(true)
-    await saveSettings(updates)
+    const ok = await saveSettings(updates)
     setSaving(false)
-  }, [])
+    if (ok) {
+      showToast('设置已保存', 'success')
+    } else {
+      showToast('保存失败，请重试', 'error')
+    }
+  }, [showToast])
 
   // Preset commands CRUD
   const savePresets = useCallback(async (list: PresetCommand[]) => {
@@ -1028,6 +1040,16 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           </div>
         )}
       </div>
+      {/* Toast notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm animate-slide-in ${
+          toast.type === 'error' ? 'bg-red-500/90 text-white' :
+          toast.type === 'success' ? 'bg-green-500/90 text-white' :
+          'bg-slate-700/90 text-slate-200 border border-slate-600'
+        }`}>
+          {toast.message}
+        </div>
+      )}
     </>
   )
 }

@@ -507,9 +507,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						newlyDone = append(newlyDone, t)
 					}
 				}
-				if len(newlyDone) > 0 {
-					// Tools completed — no flash animation needed
-				}
+				// Tools completed — no flash animation needed
+				_ = newlyDone
 			}
 			if msg.payload.Phase == "done" {
 				// Snapshot the final iteration before clearing progress.

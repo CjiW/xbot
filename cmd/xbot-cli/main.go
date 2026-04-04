@@ -377,13 +377,16 @@ func main() {
 	}
 
 	// 设置历史消息加载器（会话恢复）
+	var cliTenantID int64
+	var cliSessionSvc *sqlite.SessionService
 	if app.db != nil {
 		tenantSvc := sqlite.NewTenantService(app.db)
-		sessionSvc := sqlite.NewSessionService(app.db)
+		cliSessionSvc = sqlite.NewSessionService(app.db)
 		tenantID, err := tenantSvc.GetOrCreateTenantID("cli", absWorkDir)
 		if err == nil {
+			cliTenantID = tenantID
 			cliCfg.HistoryLoader = func() ([]channel.HistoryMessage, error) {
-				msgs, err := sessionSvc.GetAllMessages(tenantID)
+				msgs, err := cliSessionSvc.GetAllMessages(cliTenantID)
 				if err != nil {
 					return nil, err
 				}
@@ -404,6 +407,16 @@ func main() {
 		// Inject BgTaskManager for background task display
 		bgSessionKey := "cli:" + cliCfg.ChatID
 		cliCh.SetBgTaskManager(app.agentLoop.BgTaskManager(), bgSessionKey)
+		// Inject TrimHistoryFn for Ctrl+K session truncation
+		if cliTenantID != 0 && cliSessionSvc != nil {
+			cliCh.SetTrimHistoryFn(func(keepCount int) error {
+				if keepCount <= 0 {
+					return nil
+				}
+				_, err := cliSessionSvc.PurgeOldMessages(cliTenantID, keepCount)
+				return err
+			})
+		}
 	}
 
 	// Apply saved theme at startup

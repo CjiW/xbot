@@ -108,10 +108,59 @@ func hardWrapRunes(line string, maxW int) string {
 // Document.Margin=0 prevents misalignment inside lipgloss bubbles.
 // WordWrap is disabled (set to 0) — viewport's hardWrapRunes handles wrapping
 // by rune width, ensuring text never wraps at spaces.
+// Color styles follow currentTheme for visual consistency.
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
+	t := currentTheme
+	c := func(s string) *string { return &s }
+
 	style := styles.DarkStyleConfig
 	zero := uint(0)
 	style.Document.Margin = &zero
+
+	// 文档正文
+	if t.GDocumentText != "" {
+		style.Document.Color = c(t.GDocumentText)
+	}
+	// 标题 (H1–H4)
+	if t.GHeadingText != "" {
+		style.Heading.Color = c(t.GHeadingText)
+		style.H1.Color = c(t.GHeadingText)
+		style.H2.Color = c(t.GHeadingText)
+		style.H3.Color = c(t.GHeadingText)
+		style.H4.Color = c(t.GHeadingText)
+	}
+	// 代码块背景与文本
+	if t.GCodeBlock != "" {
+		style.CodeBlock.BackgroundColor = c(t.GCodeBlock)
+		if style.CodeBlock.Chroma != nil {
+			style.CodeBlock.Chroma.Background.BackgroundColor = c(t.GCodeBlock)
+		}
+	}
+	if t.GCodeText != "" {
+		style.CodeBlock.Color = c(t.GCodeText)
+		if style.CodeBlock.Chroma != nil {
+			style.CodeBlock.Chroma.Text.Color = c(t.GCodeText)
+		}
+	}
+	// 链接
+	if t.GLinkText != "" {
+		style.Link.Color = c(t.GLinkText)
+		style.LinkText.Color = c(t.GLinkText)
+	}
+	// 引用
+	if t.GBlockQuote != "" {
+		style.BlockQuote.Color = c(t.GBlockQuote)
+		style.BlockQuote.IndentToken = c("│ ")
+	}
+	// 列表项
+	if t.GListItem != "" {
+		style.Item.Color = c(t.GListItem)
+	}
+	// 水平分隔线
+	if t.GHorizontalRule != "" {
+		style.HorizontalRule.Color = c(t.GHorizontalRule)
+	}
+
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(0),
@@ -122,8 +171,14 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/settings", "/setup", "/tasks", "/update",
+	"/model", "/models", "/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
 }
+
+// §19 长消息折叠阈值
+const (
+	msgFoldThresholdLines = 20
+	msgFoldPreviewLines   = 6
+)
 
 // ---------------------------------------------------------------------------
 // CLI Progress Payload (for structured progress events)

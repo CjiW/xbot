@@ -294,7 +294,7 @@ func TestIntegration_Masking_CapacityEviction(t *testing.T) {
 
 	// First: run MaskOldToolResults directly to test capacity eviction
 	// keepGroups=2 means mask the first 3 groups
-	masked, count := MaskOldToolResults(messages, env.maskStore, 2)
+	masked, count, _ := MaskOldToolResults(messages, env.maskStore, 2)
 	if count == 0 {
 		t.Fatal("expected some tool results to be masked")
 	}

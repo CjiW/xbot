@@ -66,6 +66,7 @@ func (c *CLIChannel) Start() error {
 	// 初始化 Bubble Tea model
 	c.model = newCLIModel()
 	c.model.channel = c
+	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.chatID = c.config.ChatID
@@ -192,6 +193,16 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.bgTaskMgr = mgr
 	c.bgSessionKey = sessionKey
 	c.updateBgTaskCountFn()
+}
+
+// SetTrimHistoryFn 设置 Ctrl+K 截断历史后的数据库同步回调。
+// keepCount 为保留的消息数，实现方应删除数据库中更早的消息。
+func (c *CLIChannel) SetTrimHistoryFn(fn func(keepCount int) error) {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.trimHistoryFn = fn
+	}
 }
 
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。

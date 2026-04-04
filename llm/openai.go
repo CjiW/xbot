@@ -501,9 +501,10 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		}
 	}
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	fields := logrus.Fields{
 		"provider":          "openai",
 		"duration":          time.Since(startTime).String(),
+		"choices_count":     len(completion.Choices),
 		"content_len":       len(resp.Content),
 		"reasoning_len":     len(resp.ReasoningContent),
 		"tool_calls":        len(resp.ToolCalls),
@@ -511,7 +512,13 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		"prompt_tokens":     resp.Usage.PromptTokens,
 		"completion_tokens": resp.Usage.CompletionTokens,
 		"total_tokens":      resp.Usage.TotalTokens,
-	}).Debug("[LLM] Request completed")
+	}
+	if isNearEmptyResponse(resp) {
+		addNearEmptyResponseDebugFields(fields, messages, model, tools, thinkingMode)
+		logrus.Ctx(ctx).WithFields(fields).Warn("[LLM] Request completed with near-empty response")
+	} else {
+		logrus.Ctx(ctx).WithFields(fields).Debug("[LLM] Request completed")
+	}
 
 	return resp, nil
 }
@@ -654,9 +661,9 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				Type:  EventUsage,
 				Usage: lastUsage,
 			}
-			// Debug: dump the chunk containing usage
+			// Info: dump the chunk containing usage
 			if chunkRaw, err := json.Marshal(chunk); err == nil {
-				l.WithField("raw_final_chunk", string(chunkRaw)).Debug("[LLM] Stream final chunk (with usage)")
+				l.WithField("raw_final_chunk", string(chunkRaw)).Info("[LLM] Stream final chunk (with usage)")
 			}
 		}
 	}
@@ -690,17 +697,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	}
 	// Debug: 当 chunk_count 极低（空响应）时打印详细请求信息
 	if chunkCount <= 1 {
-		fields["msg_count"] = len(messages)
-		fields["tools_count"] = len(tools)
-		fields["model"] = model
-		fields["thinking_mode"] = thinkingMode
-		// 打印最后一条 user 消息的内容（帮助判断上下文）
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "user" {
-				fields["last_user_msg_preview"] = truncateStr(messages[i].Content, 100)
-				break
-			}
-		}
+		addNearEmptyResponseDebugFields(fields, messages, model, tools, thinkingMode)
 		l.WithFields(fields).Warn("[LLM] Stream completed with near-empty response")
 	} else {
 		l.WithFields(fields).Debug("[LLM] Stream completed")
@@ -719,4 +716,24 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func isNearEmptyResponse(resp *LLMResponse) bool {
+	if resp == nil {
+		return true
+	}
+	return resp.Content == "" && len(resp.ToolCalls) == 0
+}
+
+func addNearEmptyResponseDebugFields(fields logrus.Fields, messages []ChatMessage, model string, tools []ToolDefinition, thinkingMode string) {
+	fields["msg_count"] = len(messages)
+	fields["tools_count"] = len(tools)
+	fields["model"] = model
+	fields["thinking_mode"] = thinkingMode
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			fields["last_user_msg_preview"] = truncateStr(messages[i].Content, 100)
+			break
+		}
+	}
 }

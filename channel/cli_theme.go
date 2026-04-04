@@ -257,15 +257,43 @@ var (
 		GHorizontalRule: "#6272a4",
 	}
 
+	themeCatppuccin = cliTheme{
+		// Catppuccin Mocha — soft pastel dark theme, community favorite
+		TextPrimary:     "#cdd6f4", // Text
+		TextSecondary:   "#a6adc8", // Overlay0
+		TextMuted:       "#585b70", // Overlay2
+		Success:         "#a6e3a1", // Green
+		Warning:         "#f9e2af", // Yellow
+		Error:           "#f38ba8", // Red
+		Info:            "#89b4fa", // Blue
+		Accent:          "#cba6f7", // Mauve
+		AccentAlt:       "#f5c2e7", // Pink
+		BarFilled:       "#cba6f7", // Mauve
+		BarEmpty:        "#313244", // Surface0
+		Border:          "#45475a", // Surface1
+		TitleText:       "#cdd6f4", // Text
+		Surface:         "#1e1e2e", // Base
+		Gradient:        "#89b4fa", // Blue
+		GDocumentText:   "#cdd6f4", // Text
+		GHeadingText:    "#cba6f7", // Mauve
+		GCodeBlock:      "#181825", // Mantle
+		GCodeText:       "#cdd6f4", // Text
+		GLinkText:       "#89b4fa", // Blue
+		GBlockQuote:     "#f5c2e7", // Pink
+		GListItem:       "#cba6f7", // Mauve
+		GHorizontalRule: "#89b4fa", // Blue
+	}
+
 	themeRegistry = map[string]*cliTheme{
-		"midnight": &themeMidnight,
-		"ocean":    &themeOcean,
-		"forest":   &themeForest,
-		"sunset":   &themeSunset,
-		"rose":     &themeRose,
-		"mono":     &themeMono,
-		"nord":     &themeNord,
-		"dracula":  &themeDracula,
+		"midnight":   &themeMidnight,
+		"ocean":      &themeOcean,
+		"forest":     &themeForest,
+		"sunset":     &themeSunset,
+		"rose":       &themeRose,
+		"mono":       &themeMono,
+		"nord":       &themeNord,
+		"dracula":    &themeDracula,
+		"catppuccin": &themeCatppuccin,
 	}
 
 	currentTheme = &themeMidnight

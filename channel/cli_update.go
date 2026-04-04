@@ -987,6 +987,5 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.C
 		}
 		return
 	}
-
 	return
 }

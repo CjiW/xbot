@@ -1335,6 +1335,13 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// idleTickCmd returns a low-frequency tick (3s) for placeholder rotation in idle state.
+func idleTickCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return idleTickMsg{}
+	})
+}
+
 // tickerCmd returns a command that advances the animation ticker frame.
 func tickerCmd() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {

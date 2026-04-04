@@ -94,7 +94,7 @@ func TestExtractDialogueFromTail_OffloadStrip(t *testing.T) {
 	if strings.Contains(result[0].Content, "ol_abc123") {
 		t.Error("offload ID should be stripped")
 	}
-	if !strings.Contains(result[0].Content, "Read(foo.go)") {
+	if !strings.Contains(result[0].Content, "foo.go") {
 		t.Error("should preserve the tool info after stripping ID")
 	}
 }

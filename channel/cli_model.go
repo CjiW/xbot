@@ -283,7 +283,7 @@ func newCLIModel() *cliModel {
 	ta := textarea.New()
 	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
 	ta.Focus()
-	ta.SetWidth(76)
+	ta.SetWidth(72)
 	ta.SetHeight(3)
 	ta.CharLimit = 0
 	ta.ShowLineNumbers = false
@@ -348,6 +348,9 @@ type cliProgressMsg struct {
 
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
+
+// idleTickMsg 低频定时刷新（用于 placeholder 轮转）
+type idleTickMsg struct{}
 
 // cliTempStatusClearMsg 临时状态提示自动清除
 type cliTempStatusClearMsg struct{}

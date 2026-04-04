@@ -105,7 +105,8 @@ func GetSubAgentRole(name string, userAgentDirs ...string) (*SubAgentRole, bool)
 			return &roles[i], true
 		}
 	}
-	return nil, false
+	// Not found in global dir, try embed fallback
+	return getEmbeddedAgentRole(name)
 }
 
 // getEmbeddedAgentRole 尝试从嵌入的 agent 定义中加载角色。
@@ -162,5 +163,6 @@ func GetSubAgentRoleSandbox(ctx context.Context, name string, sb Sandbox, userID
 			return &roles[i], true
 		}
 	}
-	return nil, false
+	// Not found in global dir, try embed fallback
+	return getEmbeddedAgentRole(name)
 }

@@ -89,16 +89,14 @@ func (m *cliModel) pickIdlePlaceholder() string {
 	return placeholders[idx]
 }
 
-// updatePlaceholder refreshes the textarea placeholder based on typing state.
-// Should be called when m.typing changes, not from View().
+// updatePlaceholder refreshes the placeholder text based on typing state.
+// We store it in m.placeholderText instead of m.textarea.Placeholder to avoid
+// CJK rendering bugs caused by textarea's internal placeholder↔normal view switch.
 func (m *cliModel) updatePlaceholder() {
-	styles := m.textarea.Styles()
-	styles.Blurred.Placeholder = m.styles.PlaceholderSt
-	m.textarea.SetStyles(styles)
 	if m.typing {
-		m.textarea.Placeholder = m.locale.ProcessingPlaceholder
+		m.placeholderText = m.locale.ProcessingPlaceholder
 	} else {
-		m.textarea.Placeholder = m.pickIdlePlaceholder()
+		m.placeholderText = m.pickIdlePlaceholder()
 	}
 }
 
@@ -143,6 +141,11 @@ type cliModel struct {
 	height          int         // 终端高度
 	styles          cliStyles
 	locale          *UILocale // i18n: current UI locale
+
+	// §23 Placeholder: stored separately from textarea to avoid CJK rendering bug.
+	// Textarea's built-in Placeholder causes a view-mode switch (placeholder→normal)
+	// that triggers cellbuf incremental diff issues on Windows Terminal with CJK chars.
+	placeholderText string // current placeholder string to display in View
 
 	// --- Message state ---
 	messages        []cliMessage          // 消息历史
@@ -297,7 +300,7 @@ type cliMessage struct {
 // newCLIModel 创建 CLI model
 func newCLIModel() *cliModel {
 	ta := textarea.New()
-	ta.Placeholder = GetLocale(currentLocaleLang).IdlePlaceholders[0]
+	ta.Placeholder = "" // disabled; placeholder rendered in View() to avoid CJK bug
 	ta.Focus()
 	ta.SetWidth(72)
 	ta.CharLimit = 0
@@ -335,6 +338,7 @@ func newCLIModel() *cliModel {
 		viewport:        vp,
 		textarea:        ta,
 		ticker:          tk,
+		placeholderText: GetLocale(currentLocaleLang).IdlePlaceholders[0],
 		messages:        make([]cliMessage, 0, cliMsgBufSize),
 		styles:          buildStyles(80),
 		renderer:        renderer,

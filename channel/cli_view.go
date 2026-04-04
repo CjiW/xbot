@@ -59,6 +59,33 @@ func (m *cliModel) View() tea.View {
 
 	inputArea := m.textarea.View()
 
+	// §23 Render placeholder manually when textarea is empty.
+	// This avoids textarea's built-in placeholder which causes a view-mode
+	// switch that triggers CJK rendering bugs on Windows Terminal.
+	if strings.TrimSpace(m.textarea.Value()) == "" && m.placeholderText != "" {
+		// Build a 3-line placeholder view matching the textarea's height (minTaHeight=3).
+		taHeight := minTaHeight
+		if h := m.textarea.Height(); h > 0 {
+			taHeight = h
+		}
+		// Render the first character of placeholder as a virtual cursor (reverse style),
+		// using the same cursor color as textarea's normal mode (TACursor).
+		phRunes := []rune(m.placeholderText)
+		if len(phRunes) > 0 {
+			first := string(phRunes[0])
+			rest := string(phRunes[1:])
+			cursorColor := m.styles.TACursor.GetForeground()
+			cursor := lipgloss.NewStyle().Foreground(cursorColor).Reverse(true).Render(first)
+			ph := cursor + m.styles.PlaceholderSt.Render(rest)
+			lines := make([]string, taHeight)
+			lines[0] = ph
+			for i := 1; i < taHeight; i++ {
+				lines[i] = ""
+			}
+			inputArea = strings.Join(lines, "\n")
+		}
+	}
+
 	// 状态栏样式
 	readyStatusStyle := m.styles.ReadyStatus
 

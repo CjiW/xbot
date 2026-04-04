@@ -375,6 +375,18 @@ type idleTickMsg struct{}
 // cliTempStatusClearMsg 临时状态提示自动清除
 type cliTempStatusClearMsg struct{}
 
+// cliSettingsSavedMsg settings save completed (async callback result)
+type cliSettingsSavedMsg struct {
+	themeChanged bool
+	theme        string
+	langChanged  bool
+	lang         string
+	modelChanged bool
+	model        string
+	baseURL      string
+	feedbackMsg  string
+}
+
 // cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）
 type cliInjectedUserMsg struct {
 	content string

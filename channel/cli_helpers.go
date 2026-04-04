@@ -64,10 +64,78 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 }
 
 // applyLanguageChange applies a language/locale change and invalidates cache.
+// Uses setLocale() instead of SetLocale() to avoid sending on localeChangeCh,
+// which would cause a redundant fullRebuild in the next Update cycle.
 func (m *cliModel) applyLanguageChange(lang string) {
-	SetLocale(lang)
+	setLocale(lang)
 	m.locale = GetLocale(lang)
 	m.renderCacheValid = false
+}
+
+// doSaveSettingsAsync runs the settings save callback in a goroutine and returns
+// a tea.Cmd that sends the result back as cliSettingsSavedMsg.
+// This prevents the BubbleTea Update loop from blocking on SQLite writes,
+// file I/O, or fullRebuild.
+func (m *cliModel) doSaveSettingsAsync(onSubmit func(map[string]string), vals map[string]string) tea.Cmd {
+	// Capture the values we need for the deferred UI update
+	theme, hasTheme := vals["theme"]
+	lang, hasLang := vals["language"]
+	model, hasModel := vals["llm_model"]
+	baseURL := vals["llm_base_url"]
+	// Capture feedback string now (m.locale is only safe to read in Update)
+	feedbackMsg := m.locale.SettingsSaved
+
+	return func() tea.Msg {
+		// Run the heavy callback (SQLite writes, config.json save, LLM rebuild)
+		// in a background goroutine so the UI stays responsive.
+		onSubmit(vals)
+
+		return cliSettingsSavedMsg{
+			themeChanged: hasTheme && theme != "",
+			theme:        theme,
+			langChanged:  hasLang,
+			lang:         lang,
+			modelChanged: hasModel && model != "",
+			model:        model,
+			baseURL:      baseURL,
+			feedbackMsg:  feedbackMsg,
+		}
+	}
+}
+
+// handleSettingsSavedMsg processes the async settings save result.
+// Called from Update() to apply theme/locale changes and refresh the viewport.
+func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
+	visualChanged := false
+	if msg.themeChanged {
+		m.applyThemeAndRebuild(msg.theme)
+		visualChanged = true
+	}
+	if msg.langChanged {
+		m.applyLanguageChange(msg.lang)
+		visualChanged = true
+	}
+	if msg.modelChanged {
+		if m.channel != nil {
+			m.channel.UpdateConfig(msg.model, msg.baseURL)
+		}
+	}
+	m.refreshCachedModelName()
+	if msg.feedbackMsg != "" {
+		m.appendSystem(msg.feedbackMsg)
+	}
+	// Only fullRebuild if theme or locale actually changed (new styles/colors).
+	// For non-visual settings (model, iterations, etc.), just appending the
+	// system message and doing a targeted update is enough.
+	if visualChanged {
+		m.invalidateAllCache(true)
+	} else {
+		// Minimal update: only the new system message needs rendering.
+		// updateViewportContent will detect cache is still valid for old messages
+		// (cachedMsgCount != len(m.messages) → rebuild, but skips non-dirty old msgs).
+		m.updateViewportContent()
+	}
+	return nil
 }
 
 // submitAskAnswers collects answers from the AskUser panel, invokes the answer

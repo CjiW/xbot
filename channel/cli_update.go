@@ -23,6 +23,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	wasTyping := m.typing
 
+	// Async settings save completed — apply theme/locale/viewport changes
+	if saved, ok := msg.(cliSettingsSavedMsg); ok {
+		cmd := m.handleSettingsSavedMsg(saved)
+		return m, cmd
+	}
+
 	// 主题变更通知：重建样式缓存 + glamour 渲染器
 	select {
 	case <-themeChangeCh:

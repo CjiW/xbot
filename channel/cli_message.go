@@ -344,25 +344,13 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 						}
 					}
 					// Apply settings: write config.json + update runtime state
+					// (LLM client rebuild, agent state updates — all non-UI work)
 					if m.channel.config.ApplySettings != nil {
 						m.channel.config.ApplySettings(values)
 					}
-					// Apply theme immediately (fully self-contained, no channel notification)
-					if theme, ok := values["theme"]; ok {
-						m.applyThemeAndRebuild(theme)
-					}
-					// Update live config overrides (model, base_url)
-					if model, ok := values["llm_model"]; ok && model != "" {
-						m.channel.UpdateConfig(model, values["llm_base_url"])
-					}
-					// i18n: detect language change
-					if lang, ok := values["language"]; ok {
-						m.applyLanguageChange(lang)
-					}
-					// Append feedback + single rebuild (avoid showSystemMsg which does
-					// a redundant fullRebuild; invalidateAllCache(true) handles it once)
-					m.appendSystem(m.locale.SettingsSaved)
-					m.invalidateAllCache(true)
+					// NOTE: UI updates (theme/locale/model/viewport) are handled
+					// by handleSettingsSavedMsg in Update() — do NOT call them here
+					// since this callback runs in a background goroutine.
 				})
 			}
 		}
@@ -1305,6 +1293,14 @@ func (m *cliModel) updateViewportContent() {
 		return
 	}
 
+	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索、无删除确认）
+	// 只渲染新增的 dirty 消息并追加到 cachedHistory，跳过全量重建。
+	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode && m.confirmDelete == 0 &&
+		len(m.messages) > m.cachedMsgCount {
+		m.appendNewMessagesToCache()
+		return
+	}
+
 	// 慢速路径：全量重建
 	m.fullRebuild()
 }
@@ -1323,6 +1319,44 @@ func (m *cliModel) updateStreamingOnly() {
 	sb.WriteString(m.renderProgressBlock())
 
 	m.setViewportContent(sb.String())
+}
+
+// appendNewMessagesToCache incrementally renders and appends only the new messages
+// since cachedMsgCount, updating cachedHistory and msgLineOffsets without rebuilding
+// old messages. This is O(new_messages) instead of O(all_messages).
+func (m *cliModel) appendNewMessagesToCache() {
+	var sb strings.Builder
+	sb.WriteString(m.cachedHistory)
+
+	// Calculate starting line offset for new messages
+	runningLines := 0
+	if len(m.msgLineOffsets) > 0 {
+		// Approximate: use the line count of cachedHistory at current width.
+		// This is an estimate but sufficient for msgLineOffsets (used for Ctrl+E folding).
+		runningLines = wrappedLineCount(m.cachedHistory, m.width)
+	}
+
+	startIdx := m.cachedMsgCount
+	for i := startIdx; i < len(m.messages); i++ {
+		msg := &m.messages[i]
+		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
+		rendered := m.renderMessage(msg)
+		msg.rendered = rendered
+		msg.dirty = false
+		msg.renderWidth = m.width
+		sb.WriteString(rendered)
+		runningLines += wrappedLineCount(rendered, m.width)
+	}
+
+	m.cachedHistory = sb.String()
+	m.renderCacheValid = true
+	m.cachedMsgCount = len(m.messages)
+
+	// Set viewport with new content + progress block
+	var vp strings.Builder
+	vp.WriteString(m.cachedHistory)
+	vp.WriteString(m.renderProgressBlock())
+	m.setViewportContent(vp.String())
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）

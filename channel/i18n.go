@@ -952,9 +952,16 @@ var localeChangeCh = make(chan struct{}, 1)
 // currentLocaleLang stores the current locale language code.
 var currentLocaleLang string
 
+// setLocale updates currentLocaleLang without sending on localeChangeCh.
+// Use when the caller handles the locale change synchronously (e.g. applyLanguageChange),
+// to avoid a redundant fullRebuild in the next Update cycle.
+func setLocale(lang string) {
+	currentLocaleLang = lang
+}
+
 // SetLocale switches the current locale and notifies the running model.
 func SetLocale(lang string) {
-	currentLocaleLang = lang
+	setLocale(lang)
 	select {
 	case localeChangeCh <- struct{}{}:
 	default:

@@ -654,9 +654,9 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				Type:  EventUsage,
 				Usage: lastUsage,
 			}
-			// Debug: dump the chunk containing usage
+			// Info: dump the chunk containing usage
 			if chunkRaw, err := json.Marshal(chunk); err == nil {
-				l.WithField("raw_final_chunk", string(chunkRaw)).Debug("[LLM] Stream final chunk (with usage)")
+				l.WithField("raw_final_chunk", string(chunkRaw)).Info("[LLM] Stream final chunk (with usage)")
 			}
 		}
 	}

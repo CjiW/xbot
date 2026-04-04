@@ -65,22 +65,8 @@ func (m *cliModel) openSetupPanel() {
 		if m.channel.config.ApplySettings != nil {
 			m.channel.config.ApplySettings(vals)
 		}
-		// Refresh cached model name after settings save
-		m.refreshCachedModelName()
-		// Apply theme immediately (fully self-contained, no channel notification)
-		if theme, ok := vals["theme"]; ok && theme != "" {
-			m.applyThemeAndRebuild(theme)
-		}
-		// i18n: detect language change
-		if lang, ok := vals["language"]; ok {
-			m.applyLanguageChange(lang)
-		}
-		msg := m.locale.SetupComplete
-		if vals["memory_provider"] == "letta" {
-			msg += m.locale.SetupLettaNote
-		}
-		m.appendSystem(msg)
-		m.invalidateAllCache(true)
+		// NOTE: UI updates (theme/locale/viewport) are handled by
+		// handleSettingsSavedMsg in Update() since this runs in a goroutine.
 	})
 }
 
@@ -492,11 +478,15 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 		m.closePanel()
 		return true, m, nil
 	case msg.String() == "ctrl+s":
-		// Submit all settings
-		if m.panelOnSubmit != nil {
-			m.panelOnSubmit(m.panelValues)
-		}
+		// Submit all settings — async to avoid blocking the UI.
+		// Close panel immediately to restore responsiveness, then run
+		// the save callback in a goroutine and send back results.
+		onSubmit := m.panelOnSubmit
+		panelVals := m.panelValues
 		m.closePanel()
+		if onSubmit != nil && panelVals != nil {
+			return true, m, m.doSaveSettingsAsync(onSubmit, panelVals)
+		}
 		return true, m, nil
 	case msg.Code == tea.KeyUp || msg.String() == "shift+tab":
 		if m.panelCursor > 0 {

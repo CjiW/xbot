@@ -791,8 +791,12 @@ func (m *cliModel) renderProgressBlock() string {
 
 		// SubAgent tree
 		if len(m.progress.SubAgents) > 0 {
-			sb.WriteString("\n")
-			m.renderSubAgentTree(&sb, m.progress.SubAgents, 1)
+			var treeSB strings.Builder
+			m.renderSubAgentTree(&treeSB, m.progress.SubAgents, 1)
+			if treeSB.Len() > 0 {
+				sb.WriteString("\n")
+				sb.WriteString(treeSB.String())
+			}
 		}
 	} else if m.typing {
 		sb.WriteString("  ")
@@ -823,11 +827,11 @@ func (m *cliModel) renderProgressBlock() string {
 }
 
 // renderSubAgentTree renders nested sub-agents with indentation.
-// Only renders running/pending agents — completed ones are already captured
-// in the tool summary and shouldn't linger in the progress panel.
+// Only renders running/pending agents — completed or errored ones are already
+// captured in the tool summary and shouldn't linger in the progress panel.
 func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
 	for i, sa := range agents {
-		if sa.Status == "done" {
+		if sa.Status == "done" || sa.Status == "error" {
 			continue
 		}
 		// §22 树状连接线

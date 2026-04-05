@@ -435,12 +435,15 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       .then((data) => {
         if (data.ok && data.messages) {
           const hist: Message[] = data.messages
-            .filter((m: { role: string; tool_calls?: string; detail?: string }) => {
+            .filter((m: { role: string; tool_calls?: string; detail?: string; display_only?: number }) => {
               if (m.role === 'tool') return false
               // Skip intermediate assistant(tool_calls) messages that have no detail.
               // These were saved for LLM context continuity; the final assistant message's
               // detail field contains the full iteration history that covers these.
               if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
+              // Skip display-only assistant messages without content (cancelled placeholders)
+              // when there's no iteration history to show.
+              if (m.role === 'assistant' && m.display_only && !m.content && !m.detail) return false
               return true
             })
             .map((m: { id: number; role: string; content: string; detail?: string }) => {
@@ -460,9 +463,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               return msg
             })
           setMessages(hist)
-          // If the last message is from the user, the backend is still processing.
-          // Set loading so the progress panel shows up once WS delivers events.
-          if (hist.length > 0 && hist[hist.length - 1].type === 'user') {
+          // If the backend reports it's actively processing, set loading.
+          // Also check if the last message is from the user (legacy detection).
+          const isProcessing = data.processing === true
+          const lastIsUser = hist.length > 0 && hist[hist.length - 1].type === 'user'
+          if (isProcessing && lastIsUser) {
             setLoading(true)
           }
           setTimeout(scrollToBottom, 100)

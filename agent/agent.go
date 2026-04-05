@@ -354,6 +354,19 @@ func (a *Agent) SetChannelFinder(fn func(name string) (channel.Channel, bool)) {
 	}
 }
 
+// IsProcessing returns true if there is an active Run for the given sender.
+func (a *Agent) IsProcessing(senderID string) bool {
+	found := false
+	a.chatCancelCh.Range(func(key, _ interface{}) bool {
+		if k, ok := key.(string); ok && strings.HasSuffix(k, ":"+senderID) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // GetSettingsService returns the agent's SettingsService (for CLI panel injection).
 func (a *Agent) GetSettingsService() *SettingsService {
 	return a.settingsSvc
@@ -1542,6 +1555,32 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			if len(out.EngineMessages) > 0 {
 				log.Ctx(ctx).Infof("Cancelled: persisted %d un-persisted engine messages", len(out.EngineMessages))
 			}
+			// Save iteration history as an assistant message with detail,
+			// so web UI can restore it on page refresh without showing "loading".
+			if len(out.IterationHistory) > 0 {
+				cancelMsg := llm.NewAssistantMessage("")
+				cancelMsg.DisplayOnly = true
+				if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+					cancelMsg.Detail = string(jsonBytes)
+				}
+				if err := tenantSession.AddMessage(cancelMsg); err != nil {
+					log.Ctx(ctx).WithError(err).Warn("Failed to save cancelled iteration history")
+				}
+			}
+			// Send a minimal outbound so the web channel knows processing ended.
+			// Without this, web stays in "loading" state after cancel on refresh.
+			meta := map[string]string{"cancelled": "true"}
+			if len(out.IterationHistory) > 0 {
+				if jsonBytes, err := json.Marshal(out.IterationHistory); err == nil {
+					meta["progress_history"] = string(jsonBytes)
+				}
+			}
+			return &bus.OutboundMessage{
+				Channel:  msg.Channel,
+				ChatID:   msg.ChatID,
+				Content:  "",
+				Metadata: meta,
+			}, nil
 		}
 		return nil, out.Error
 	}

@@ -87,6 +87,8 @@ type WebCallbacks struct {
 	LLMSet func(senderID, model string) error
 	// LLMGetConfig returns user's LLM config (provider, baseURL, model, ok).
 	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool)
+	// IsProcessing returns true if the backend is actively processing a request for the user.
+	IsProcessing func(senderID string) bool
 	// LLMSetConfig sets user's personal LLM config.
 	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
 	// LLMDelete reverts user to global LLM config.

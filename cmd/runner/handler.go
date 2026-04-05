@@ -39,6 +39,10 @@ func dispatch(msg RunnerMessage) *RunnerMessage {
 		return handleBgKill(msg)
 	case ProtoBgStatus:
 		return handleBgStatus(msg)
+	case ProtoLLMGenerate:
+		return handleLLMGenerate(msg)
+	case ProtoLLMModels:
+		return handleLLMModels(msg)
 	case "read_file":
 		return handleReadFile(msg)
 	case "write_file":

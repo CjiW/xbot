@@ -17,10 +17,11 @@ import (
 // ---------------------------------------------------------------------------
 
 type historyResponse struct {
-	OK       bool      `json:"ok"`
-	Messages []histMsg `json:"messages,omitempty"`
-	Error    string    `json:"error,omitempty"`
-	Deleted  int64     `json:"deleted,omitempty"`
+	OK         bool      `json:"ok"`
+	Messages   []histMsg `json:"messages,omitempty"`
+	Processing bool      `json:"processing,omitempty"` // true if backend is actively processing a request
+	Error      string    `json:"error,omitempty"`
+	Deleted    int64     `json:"deleted,omitempty"`
 }
 
 type histMsg struct {
@@ -121,7 +122,11 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 		messages = append(messages, m)
 	}
 
-	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages})
+	processing := false
+	if wc.callbacks.IsProcessing != nil {
+		processing = wc.callbacks.IsProcessing(senderID)
+	}
+	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages, Processing: processing})
 }
 
 // handleHistoryDelete clears all messages for the current user.

@@ -453,6 +453,7 @@ func main() {
 				LLMGetConfig: func(senderID string) (string, string, string, bool) {
 					return agentLoop.GetUserLLMConfig(senderID)
 				},
+				IsProcessing: agentLoop.IsProcessing,
 				LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
 					return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
 				},

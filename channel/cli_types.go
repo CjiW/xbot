@@ -21,8 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	cliChannelName = "cli"
-	cliMsgBufSize  = 100
+	cliMsgBufSize = 100
 )
 
 // syncWriter wraps an *os.File with DEC Synchronized Output (mode 2026).
@@ -449,9 +448,16 @@ type CLIChannel struct {
 	// Runner LLM access
 	llmClient    llm.LLM
 	modelList    []string
+	llmProvider  string
 	bgSessionKey string
 
 	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init
+
+	// /su mode callback: when TUI switches user identity via /su command,
+	// this callback is invoked to register/remove dispatcher observer.
+	// enable=true: register CLI as observer of targetChannel's outbound messages.
+	// enable=false: remove observer (switching back to cli_user).
+	OnSuChange func(targetChannel string, enable bool)
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

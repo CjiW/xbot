@@ -81,9 +81,13 @@ func (h *Handler) InitLLM(provider, baseURL, apiKey, model string) error {
 }
 
 // SetLLMClient 直接设置 LLM 客户端（用于 TUI runner 复用已有客户端）。
-func (h *Handler) SetLLMClient(client llm.LLM, models []string) {
+// provider 参数用于 runner 自报告 LLM 能力（传空字符串表示无 LLM）。
+func (h *Handler) SetLLMClient(client llm.LLM, models []string, provider string) {
 	h.LLMClient = client
 	h.LLMModels = models
+	if client != nil && provider != "" {
+		h.LLMProviderName = provider
+	}
 }
 
 // LLMProvider 返回 LLM provider 名称（空 = 无 LLM）。

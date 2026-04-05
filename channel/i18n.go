@@ -441,19 +441,6 @@ func init() {
 					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
-			// Runner settings
-			{
-				Key: "runner_server", Label: "Runner Server", Description: "WebSocket 服务器地址（共享为 Runner 时使用）",
-				Type: SettingTypeText, Category: "Runner",
-			},
-			{
-				Key: "runner_token", Label: "Runner Token", Description: "Runner 认证 Token",
-				Type: SettingTypePassword, Category: "Runner",
-			},
-			{
-				Key: "runner_workspace", Label: "Runner 工作目录", Description: "共享的工作目录路径",
-				Type: SettingTypeText, Category: "Runner",
-			},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
@@ -745,20 +732,8 @@ func init() {
 					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
-			// Runner settings
-			{
-				Key: "runner_server", Label: "Runner Server", Description: "WebSocket server address (for sharing as Runner)",
-				Type: SettingTypeText, Category: "Runner",
-			},
-			{
-				Key: "runner_token", Label: "Runner Token", Description: "Runner authentication token",
-				Type: SettingTypePassword, Category: "Runner",
-			},
-			{
-				Key: "runner_workspace", Label: "Runner Workspace", Description: "Shared workspace directory path",
-				Type: SettingTypeText, Category: "Runner",
-			},
 			// Runner panel entry (display-only, triggers panel switch)
+			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ Danger Zone — Clear Memory", Type: SettingTypeText, Category: "Danger"},
@@ -1049,20 +1024,8 @@ func init() {
 					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
-			// Runner settings
-			{
-				Key: "runner_server", Label: "Runner Server", Description: "WebSocket サーバーアドレス（Runner 共有時使用）",
-				Type: SettingTypeText, Category: "Runner",
-			},
-			{
-				Key: "runner_token", Label: "Runner Token", Description: "Runner 認証 Token",
-				Type: SettingTypePassword, Category: "Runner",
-			},
-			{
-				Key: "runner_workspace", Label: "Runner ワークスペース", Description: "共有ワークスペースディレクトリパス",
-				Type: SettingTypeText, Category: "Runner",
-			},
 			// Runner panel entry (display-only, triggers panel switch)
+			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ 危険エリア — 記憶クリア", Type: SettingTypeText, Category: "危険"},

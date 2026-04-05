@@ -356,20 +356,6 @@ func main() {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
-			// Persist runner settings to settings service
-			if app.agentLoop != nil {
-				if ss := app.agentLoop.GetSettingsService(); ss != nil {
-					if v, ok := values["runner_server"]; ok {
-						_ = ss.SetSetting("cli", "cli_user", "runner_server", v)
-					}
-					if v, ok := values["runner_token"]; ok {
-						_ = ss.SetSetting("cli", "cli_user", "runner_token", v)
-					}
-					if v, ok := values["runner_workspace"]; ok {
-						_ = ss.SetSetting("cli", "cli_user", "runner_workspace", v)
-					}
-				}
-			}
 			// Rebuild LLM client and update agent runtime when LLM config changed
 			_, llmChanged := values["llm_provider"]
 			_, keyChanged := values["llm_api_key"]

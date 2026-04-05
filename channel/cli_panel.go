@@ -1100,9 +1100,18 @@ func (m *cliModel) viewSettingsPanel() string {
 			prefix = "  "
 		}
 
-		// Runner panel entry: render with accent style
+		// Runner panel entry: render with connection status
 		if def.Key == "runner_panel" {
-			line := fmt.Sprintf("%s %s", prefix, s.ProgressDone.Render(def.Label))
+			statusHint := ""
+			if m.runnerBridge != nil {
+				switch m.runnerBridge.Status() {
+				case RunnerConnected:
+					statusHint = " " + s.ProgressDone.Render("● 已连接")
+				case RunnerConnecting:
+					statusHint = " " + s.ProgressRunning.Render("● 连接中")
+				}
+			}
+			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), statusHint)
 			if i == m.panelCursor && !m.panelEdit {
 				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
 			}

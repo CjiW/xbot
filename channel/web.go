@@ -600,9 +600,12 @@ func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 // PushRunnerStatus pushes a runner online/offline status change to the Web client.
 func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
 	wsMsg := wsMessage{
-		Type:    "runner_status",
-		TS:      time.Now().Unix(),
-		Content: func() string { b, _ := json.Marshal(map[string]interface{}{"runner_name": runnerName, "online": online}); return string(b) }(),
+		Type: "runner_status",
+		TS:   time.Now().Unix(),
+		Content: func() string {
+			b, _ := json.Marshal(map[string]interface{}{"runner_name": runnerName, "online": online})
+			return string(b)
+		}(),
 	}
 	if !wc.hub.sendToClient(chatID, wsMsg) {
 		log.WithField("chat_id", chatID).Debug("Web client offline, runner status buffered")
@@ -612,9 +615,12 @@ func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
 // PushSyncProgress pushes a sync progress notification to the Web client.
 func (wc *WebChannel) PushSyncProgress(chatID, phase, message string) {
 	wsMsg := wsMessage{
-		Type:    "sync_progress",
-		TS:      time.Now().Unix(),
-		Content: func() string { b, _ := json.Marshal(map[string]interface{}{"phase": phase, "message": message}); return string(b) }(),
+		Type: "sync_progress",
+		TS:   time.Now().Unix(),
+		Content: func() string {
+			b, _ := json.Marshal(map[string]interface{}{"phase": phase, "message": message})
+			return string(b)
+		}(),
 	}
 	if !wc.hub.sendToClient(chatID, wsMsg) {
 		log.WithField("chat_id", chatID).Debug("Web client offline, sync progress buffered")

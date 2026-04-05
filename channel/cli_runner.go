@@ -79,7 +79,7 @@ func NewRunnerBridge(program *tea.Program) *RunnerBridge {
 }
 
 // Connect 连接到 server（异步，通过 program.Send 回报结果）
-func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient llm.LLM, models []string) {
+func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient llm.LLM, models []string, llmProvider string) {
 	rb.mu.Lock()
 	if rb.status == RunnerConnected || rb.status == RunnerConnecting {
 		rb.mu.Unlock()
@@ -132,7 +132,7 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 
 		// 5. 设置 LLM 客户端（如果有）
 		if llmClient != nil {
-			handler.SetLLMClient(llmClient, models)
+			handler.SetLLMClient(llmClient, models, llmProvider)
 		}
 
 		// 6. 解析 userID

@@ -422,8 +422,9 @@ func main() {
 	// 设置历史消息加载器（会话恢复）
 	var cliTenantID int64
 	var cliSessionSvc *sqlite.SessionService
+	var tenantSvc *sqlite.TenantService
 	if app.db != nil {
-		tenantSvc := sqlite.NewTenantService(app.db)
+		tenantSvc = sqlite.NewTenantService(app.db)
 		cliSessionSvc = sqlite.NewSessionService(app.db)
 		tenantID, err := tenantSvc.GetOrCreateTenantID("cli", absWorkDir)
 		if err == nil {
@@ -438,18 +439,24 @@ func main() {
 		}
 	}
 
-	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
-	disp.Register(cliCh)
-
-	// /su: when TUI switches to web user identity, register CLI as "web" channel
-	// so dispatcher SendDirect and outbound loop can find it.
-	cliCh.OnSuChange = func(targetChannel string, enable bool) {
-		if enable {
-			disp.RegisterAs(targetChannel, cliCh)
-		} else {
-			disp.Unregister(targetChannel)
+	// /su 动态历史加载器：当 chatID 非 CLI 默认值时，尝试从 web tenant 加载历史
+	if tenantSvc != nil && cliSessionSvc != nil {
+		cliCfg.DynamicHistoryLoader = func(_, chatID string) ([]channel.HistoryMessage, error) {
+			// 尝试 web tenant（web 用户的 chatID = userID，如 "web-123"）
+			tid, err := tenantSvc.GetOrCreateTenantID("web", chatID)
+			if err != nil {
+				return nil, fmt.Errorf("get tenant: %w", err)
+			}
+			msgs, err := cliSessionSvc.GetAllMessages(tid)
+			if err != nil {
+				return nil, err
+			}
+			return channel.ConvertMessagesToHistory(msgs), nil
 		}
 	}
+
+	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
+	disp.Register(cliCh)
 
 	// Inject SettingsService for interactive /settings panel
 	if app.agentLoop != nil {

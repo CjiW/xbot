@@ -1,0 +1,37 @@
+FROM golang:1.25-bookworm AS builder
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev") && \
+    BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) && \
+    CGO_ENABLED=0 go build -o xbot .
+
+FROM node:22-bookworm-slim AS web
+
+WORKDIR /build/web
+COPY web/package.json web/yarn.lock ./
+RUN yarn install --frozen-lockfile
+COPY web/ ./
+RUN yarn build
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata git docker.io curl \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=Asia/Shanghai
+
+WORKDIR /app
+COPY --from=builder /build/xbot /app/xbot
+COPY --from=web /build/web/dist /app/web/dist
+COPY .xbot.example/skills/ /app/.xbot/skills/
+COPY .xbot.example/agents/ /app/.xbot/agents/
+
+ENTRYPOINT ["/app/xbot"]

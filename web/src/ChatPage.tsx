@@ -435,7 +435,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       .then((data) => {
         if (data.ok && data.messages) {
           const hist: Message[] = data.messages
-            .filter((m: { role: string; tool_calls?: string; detail?: string; display_only?: number }) => {
+            .filter((m: { role: string; content?: string; tool_calls?: string; detail?: string; display_only?: number }) => {
               if (m.role === 'tool') return false
               // Skip intermediate assistant(tool_calls) messages that have no detail.
               // These were saved for LLM context continuity; the final assistant message's

@@ -77,3 +77,4 @@ cron.json
 /xbot-runner
 /xbot
 xbot-cli
+docker-compose.yml

@@ -33,7 +33,6 @@ WORKDIR /app
 
 # Copy the binary and prompt from builder
 COPY --from=builder /build/xbot /app/xbot
-COPY --from=builder /build/prompt.md /app/prompt.md
 
 # Bundle default skills and agents so they're available out-of-the-box
 COPY --from=builder /build/.xbot.example/skills/ /app/.xbot/skills/

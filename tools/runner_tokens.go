@@ -26,9 +26,11 @@ type RunnerLLMSettings struct {
 	BaseURL  string
 }
 
-// HasLLM returns true if at least provider and API key are configured.
+// HasLLM returns true if the runner declares LLM capability.
+// Note: APIKey is not required here because TUI runners hold their own
+// API key locally — the server only needs to know the runner CAN do LLM.
 func (l *RunnerLLMSettings) HasLLM() bool {
-	return l.Provider != "" && l.APIKey != ""
+	return l.Provider != ""
 }
 
 // RunnerTokenEntry represents a single per-user runner token.

@@ -423,42 +423,36 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	case "/su":
-		// /su <userID> — 切换到指定用户身份（共享 session）
+		// /su <userID> — 切换到指定用户身份，查看其对话历史
+		// channelName 始终保持 "cli"，确保 TUI 功能（进度条、ticker、ack 等）正常
 		if len(parts) < 2 {
-			m.showSystemMsg(fmt.Sprintf("当前身份: %s (channel: %s)\n用法: /su <userID>  切换到目标用户身份\n      /su          切回默认身份", m.senderID, m.channelName), feedbackInfo)
+			// 无参数：切回默认身份
+			if m.senderID == "cli_user" {
+				m.showSystemMsg("当前已是默认身份", feedbackInfo)
+				return nil
+			}
+			m.senderID = "cli_user"
+			m.chatID = m.defaultChatID
 		} else {
 			newID := strings.TrimSpace(parts[1])
-			// 保存旧的 channel（用于移除 observer）
-			oldChannel := m.channelName
-			if newID == "" || newID == "cli_user" {
-				// 切回默认身份
+			if newID == "cli_user" || newID == "" {
+				// 切回默认
 				m.senderID = "cli_user"
-				m.channelName = "cli"
 				m.chatID = m.defaultChatID
 			} else {
 				m.senderID = newID
-				m.channelName = "web"
-				m.chatID = newID // web 的 chatID = userID
+				m.chatID = newID
 			}
-			// 通知 main.go 注册/移除 dispatcher observer
-			if m.channel != nil && m.channel.OnSuChange != nil {
-				if oldChannel != "cli" {
-					m.channel.OnSuChange(oldChannel, false)
-				}
-				if m.channelName != "cli" {
-					m.channel.OnSuChange(m.channelName, true)
-				}
-			}
-			// 清空当前消息列表，异步加载目标用户历史
-			m.messages = nil
-			m.invalidateAllCache(false)
-			if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
-				m.suLoading = true
-				m.splashFrame = 0
-				return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
-			} else {
-				m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: %s)", m.senderID, m.channelName), feedbackInfo)
-			}
+		}
+		// 清空当前消息列表，异步加载目标用户历史
+		m.messages = nil
+		m.invalidateAllCache(false)
+		if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
+			m.suLoading = true
+			m.splashFrame = 0
+			return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
+		} else {
+			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s", m.senderID), feedbackInfo)
 		}
 
 	default:

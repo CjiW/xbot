@@ -500,14 +500,13 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 
 // suLoadHistoryCmd 异步加载 /su 目标用户的历史消息
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
-	channelName := m.channelName
 	chatID := m.chatID
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
 		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
 	}
 	return func() tea.Msg {
-		history, err := loader(channelName, chatID)
+		history, err := loader("", chatID)
 		return suHistoryLoadMsg{history: history, err: err}
 	}
 }

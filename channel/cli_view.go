@@ -483,7 +483,7 @@ func (m *cliModel) renderSuLoading() string {
 	frame := splashFrames[m.splashFrame%len(splashFrames)]
 
 	// 切换目标提示
-	suText := descStyle.Render(fmt.Sprintf("切换身份: %s (%s)", m.senderID, m.channelName))
+	suText := descStyle.Render(fmt.Sprintf("切换身份: %s", m.senderID))
 	suW := lipgloss.Width(suText)
 	suPad := (screenW - suW) / 2
 	if suPad < 0 {

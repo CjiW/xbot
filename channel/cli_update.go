@@ -717,7 +717,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.messages = append(m.messages, cm)
 			}
-			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: %s) — 已加载 %d 条历史消息", m.senderID, m.channelName, len(msg.history)), feedbackInfo)
+			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s — 已加载 %d 条历史消息", m.senderID, len(msg.history)), feedbackInfo)
 		}
 		m.invalidateAllCache(false)
 		m.viewport.GotoBottom()

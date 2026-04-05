@@ -43,6 +43,15 @@ func (m *cliModel) View() tea.View {
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
+	// Runner status indicator in title bar
+	if m.runnerBridge != nil {
+		switch m.runnerBridge.Status() {
+		case RunnerConnected:
+			titleRight = "🟢 Runner · " + titleRight
+		case RunnerConnecting:
+			titleRight = "🟡 Runner · " + titleRight
+		}
+	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1

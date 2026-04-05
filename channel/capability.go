@@ -32,7 +32,8 @@ const (
 	SettingTypeSelect   SettingType = "select"
 	SettingTypeToggle   SettingType = "toggle"
 	SettingTypeTextarea SettingType = "textarea"
-	SettingTypeCombo    SettingType = "combo" // selectable text with options + free input
+	SettingTypeCombo    SettingType = "combo"    // selectable text with options + free input
+	SettingTypePassword SettingType = "password" // password field (masked display)
 )
 
 // SettingOption defines an option for select-type settings.

@@ -64,9 +64,11 @@ type WebCallbacks struct {
 	// RunnerList lists all runners for a user with online status.
 	RunnerList func(senderID string) ([]tools.RunnerInfo, error)
 	// RunnerCreate creates a new named runner and returns the connect command.
-	RunnerCreate func(senderID, name, mode, dockerImage, workspace string) (string, error)
+	RunnerCreate func(senderID, name, mode, dockerImage, workspace string, llm tools.RunnerLLMSettings) (string, error)
 	// RunnerDelete deletes a named runner.
 	RunnerDelete func(senderID, name string) error
+	// RunnerUpdateLLM updates the LLM settings for an existing runner.
+	RunnerUpdateLLM func(senderID, name string, llm tools.RunnerLLMSettings) error
 	// RunnerGetActive returns the active runner name for the user.
 	RunnerGetActive func(senderID string) (string, error)
 	// RunnerSetActive sets the active runner for the user.
@@ -459,6 +461,7 @@ func (wc *WebChannel) Start() error {
 	// Multi-runner API
 	mux.HandleFunc("/api/runners", wc.authMiddleware(wc.handleRunners))
 	mux.HandleFunc("/api/runners/active", wc.authMiddleware(wc.handleRunnerActive))
+	mux.HandleFunc("/api/runners/llm", wc.authMiddleware(wc.handleRunnerLLM))
 	mux.HandleFunc("/api/runners/", wc.authMiddleware(wc.handleRunnerByName))
 
 	// Market API

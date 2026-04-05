@@ -18,6 +18,19 @@ type RunnerTokenSettings struct {
 	Workspace   string
 }
 
+// RunnerLLMSettings holds optional local LLM configuration for a runner.
+type RunnerLLMSettings struct {
+	Provider string
+	APIKey   string
+	Model    string
+	BaseURL  string
+}
+
+// HasLLM returns true if at least provider and API key are configured.
+func (l *RunnerLLMSettings) HasLLM() bool {
+	return l.Provider != "" && l.APIKey != ""
+}
+
 // RunnerTokenEntry represents a single per-user runner token.
 type RunnerTokenEntry struct {
 	Token     string
@@ -128,11 +141,26 @@ type RunnerInfo struct {
 	Shell       string `json:"shell,omitempty"`
 	CreatedAt   string `json:"created_at"`
 	Online      bool   `json:"online"`
+	// Local LLM configuration (set via web settings).
+	LLMProvider string `json:"llm_provider,omitempty"`
+	LLMAPIKey   string `json:"llm_api_key,omitempty"`
+	LLMModel    string `json:"llm_model,omitempty"`
+	LLMBaseURL  string `json:"llm_base_url,omitempty"`
+}
+
+// LLMSettings returns the runner's LLM configuration as RunnerLLMSettings.
+func (r RunnerInfo) LLMSettings() RunnerLLMSettings {
+	return RunnerLLMSettings{
+		Provider: r.LLMProvider,
+		APIKey:   r.LLMAPIKey,
+		Model:    r.LLMModel,
+		BaseURL:  r.LLMBaseURL,
+	}
 }
 
 // CreateRunner creates a new named runner for the user, generates a token.
 // Returns the token and the xbot-runner connect command fragment.
-func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage, workspace string) (token, command string, err error) {
+func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage, workspace string, llm RunnerLLMSettings) (token, command string, err error) {
 	if name == "" {
 		return "", "", fmt.Errorf("runner name is required")
 	}
@@ -158,15 +186,19 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage, workspa
 	defer tx.Rollback()
 
 	_, err = tx.Exec(`
-			INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(user_id, name) DO UPDATE SET
-				token = excluded.token,
-				mode = excluded.mode,
-				docker_image = excluded.docker_image,
-				workspace = excluded.workspace,
-				created_at = excluded.created_at
-		`, userID, name, token, mode, dockerImage, workspace, now)
+				INSERT INTO runners (user_id, name, token, mode, docker_image, workspace, llm_provider, llm_api_key, llm_model, llm_base_url, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(user_id, name) DO UPDATE SET
+					token = excluded.token,
+					mode = excluded.mode,
+					docker_image = excluded.docker_image,
+					workspace = excluded.workspace,
+					llm_provider = excluded.llm_provider,
+					llm_api_key = excluded.llm_api_key,
+					llm_model = excluded.llm_model,
+					llm_base_url = excluded.llm_base_url,
+					created_at = excluded.created_at
+			`, userID, name, token, mode, dockerImage, workspace, llm.Provider, llm.APIKey, llm.Model, llm.BaseURL, now)
 	if err != nil {
 		return "", "", fmt.Errorf("insert runner: %w", err)
 	}
@@ -204,7 +236,7 @@ func (s *RunnerTokenStore) CreateRunner(userID, name, mode, dockerImage, workspa
 // ListRunners returns all runners for a user.
 func (s *RunnerTokenStore) ListRunners(userID string) ([]RunnerInfo, error) {
 	rows, err := s.db.Query(
-		"SELECT name, token, mode, docker_image, COALESCE(workspace,''), COALESCE(created_at,'') FROM runners WHERE user_id = ? ORDER BY created_at",
+		"SELECT name, token, mode, docker_image, COALESCE(workspace,''), COALESCE(created_at,''), COALESCE(llm_provider,''), COALESCE(llm_api_key,''), COALESCE(llm_model,''), COALESCE(llm_base_url,'') FROM runners WHERE user_id = ? ORDER BY created_at",
 		userID,
 	)
 	if err != nil {
@@ -215,7 +247,7 @@ func (s *RunnerTokenStore) ListRunners(userID string) ([]RunnerInfo, error) {
 	var runners []RunnerInfo
 	for rows.Next() {
 		var r RunnerInfo
-		if err := rows.Scan(&r.Name, &r.Token, &r.Mode, &r.DockerImage, &r.Workspace, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.Name, &r.Token, &r.Mode, &r.DockerImage, &r.Workspace, &r.CreatedAt, &r.LLMProvider, &r.LLMAPIKey, &r.LLMModel, &r.LLMBaseURL); err != nil {
 			continue
 		}
 		runners = append(runners, r)
@@ -228,6 +260,18 @@ func (s *RunnerTokenStore) DeleteRunner(userID, name string) error {
 	_, err := s.db.Exec("DELETE FROM runners WHERE user_id = ? AND name = ?", userID, name)
 	if err != nil {
 		return fmt.Errorf("delete runner: %w", err)
+	}
+	return nil
+}
+
+// UpdateRunnerLLM updates the LLM settings for an existing runner.
+func (s *RunnerTokenStore) UpdateRunnerLLM(userID, name string, llm RunnerLLMSettings) error {
+	_, err := s.db.Exec(`
+		UPDATE runners SET llm_provider = ?, llm_api_key = ?, llm_model = ?, llm_base_url = ?
+		WHERE user_id = ? AND name = ?
+	`, llm.Provider, llm.APIKey, llm.Model, llm.BaseURL, userID, name)
+	if err != nil {
+		return fmt.Errorf("update runner LLM: %w", err)
 	}
 	return nil
 }

@@ -14,6 +14,10 @@ interface RunnerInfo {
   created_at: string
   shell?: string
   online: boolean
+  llm_provider?: string
+  llm_api_key?: string
+  llm_model?: string
+  llm_base_url?: string
 }
 
 interface RunnerPanelProps {
@@ -42,6 +46,11 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
   const [formMode, setFormMode] = useState<'native' | 'docker'>('native')
   const [formDockerImage, setFormDockerImage] = useState('ubuntu:22.04')
   const [formWorkspace, setFormWorkspace] = useState('')
+  const [formLLMEnabled, setFormLLMEnabled] = useState(false)
+  const [formLLMProvider, setFormLLMProvider] = useState('openai')
+  const [formLLMAPIKey, setFormLLMAPIKey] = useState('')
+  const [formLLMModel, setFormLLMModel] = useState('')
+  const [formLLMBaseURL, setFormLLMBaseURL] = useState('')
 
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -120,6 +129,12 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
     if (runner.workspace) {
       cmd += ` --workspace ${runner.workspace}`
     }
+    if (runner.llm_provider && runner.llm_api_key) {
+      cmd += ` --llm-provider ${runner.llm_provider} --llm-api-key ${runner.llm_api_key} --llm-model ${runner.llm_model || ''}`
+      if (runner.llm_base_url) {
+        cmd += ` --llm-base-url ${runner.llm_base_url}`
+      }
+    }
     return cmd
   }, [serverWsUrl, serverUrl, serverSenderId])
 
@@ -181,6 +196,12 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
       if (formWorkspace.trim()) {
         body.workspace = formWorkspace.trim()
       }
+      if (formLLMEnabled) {
+        body.llm_provider = formLLMProvider
+        body.llm_api_key = formLLMAPIKey.trim()
+        body.llm_model = formLLMModel.trim()
+        body.llm_base_url = formLLMBaseURL.trim()
+      }
       const resp = await fetch('/api/runners', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -195,6 +216,11 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
         setFormMode('native')
         setFormDockerImage('ubuntu:22.04')
         setFormWorkspace('')
+        setFormLLMEnabled(false)
+        setFormLLMProvider('openai')
+        setFormLLMAPIKey('')
+        setFormLLMModel('')
+        setFormLLMBaseURL('')
       }
     } catch {}
     setActionLoading(false)
@@ -306,6 +332,9 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
                 {runner.workspace && (
                   <span className="runner-card-meta">· {shortPath(runner.workspace)}</span>
                 )}
+                {runner.llm_provider && runner.llm_api_key && (
+                  <span className="runner-card-meta">· 🤖 Local LLM</span>
+                )}
               </div>
 
               {/* Connect command (shown for active or expanded, but not for builtin docker) */}
@@ -387,6 +416,68 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
             />
             <span className="text-xs text-slate-500 mt-1 block">Runner 连接后将使用此目录作为工作区</span>
           </div>
+
+          {/* Local LLM */}
+          <div className="settings-item">
+            <label className="settings-label flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={formLLMEnabled}
+                onChange={e => setFormLLMEnabled(e.target.checked)}
+              />
+              🤖 Local LLM 模式
+            </label>
+            <span className="text-xs text-slate-500 mt-1 block">
+              启用后 Runner 将直接调用 LLM API，服务器只做转发
+            </span>
+          </div>
+          {formLLMEnabled && (
+            <>
+              <div className="settings-item">
+                <label className="settings-label">LLM 提供商</label>
+                <select
+                  className="settings-select"
+                  value={formLLMProvider}
+                  onChange={e => setFormLLMProvider(e.target.value)}
+                >
+                  <option value="openai">OpenAI (及兼容 API)</option>
+                  <option value="anthropic">Anthropic (Claude)</option>
+                </select>
+              </div>
+              <div className="settings-item">
+                <label className="settings-label">API Key</label>
+                <input
+                  type="password"
+                  className="settings-input"
+                  placeholder="LLM 服务的 API Key"
+                  value={formLLMAPIKey}
+                  onChange={e => setFormLLMAPIKey(e.target.value)}
+                />
+              </div>
+              <div className="settings-item">
+                <label className="settings-label">模型</label>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="例如：glm-4-plus"
+                  value={formLLMModel}
+                  onChange={e => setFormLLMModel(e.target.value)}
+                />
+              </div>
+              {formLLMProvider === 'openai' && (
+                <div className="settings-item">
+                  <label className="settings-label">Base URL（可选）</label>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    placeholder="例如：https://open.bigmodel.cn/api/paas/v4"
+                    value={formLLMBaseURL}
+                    onChange={e => setFormLLMBaseURL(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
+          )}
           <div className="flex gap-2 mt-3">
             <button
               className="settings-action-btn"

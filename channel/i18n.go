@@ -212,7 +212,7 @@ func init() {
 		StatusRetrying:        "重试中",
 		StatusDone:            "完成",
 		NewContentHint:        "↓ 新内容",
-		BgTaskRunning:         "[后台: %d 任务运行中 -- ^ 管理]",
+		BgTaskRunning:         "[后台: %d 个任务运行中 -- ^ 管理]",
 		TabNoMatch:            "[Tab] 无匹配文件",
 
 		// --- D. Temp status ---
@@ -525,7 +525,7 @@ func init() {
 		StatusRetrying:        "retrying",
 		StatusDone:            "done",
 		NewContentHint:        "v new content",
-		BgTaskRunning:         "[bg: %d task%s running -- ^ to manage]",
+		BgTaskRunning:         "[bg: %d task(s) running -- ^ to manage]",
 		TabNoMatch:            "[Tab] no matching files",
 
 		// --- D. Temp status ---

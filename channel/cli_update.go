@@ -289,13 +289,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case msg.Text == "^":
+			if m.panelMode == "" && !m.typing && m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputHistoryIdx == -1 {
+				m.openBgTasksPanel()
+				return m, nil
+			}
+
 		case msg.Code == tea.KeyUp:
 			if m.panelMode == "" && !m.typing {
-				// bg tasks panel（原逻辑不变）
-				if m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputHistoryIdx == -1 {
-					m.openBgTasksPanel()
-					return m, nil
-				}
 				// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
 				if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
 					if m.inputHistoryIdx == -1 {

@@ -208,12 +208,7 @@ func (m *cliModel) View() tea.View {
 		// Background task indicator
 		if m.bgTaskCount > 0 {
 			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, func() string {
-					if m.bgTaskCount > 1 {
-						return "s"
-					}
-					return ""
-				}()))
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
 			if status != "" {
 				status += "  " + bgHint
 			} else {

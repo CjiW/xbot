@@ -293,8 +293,9 @@ type cliMessage struct {
 	iterations []cliIterationSnapshot // 按迭代分组的快照（优先使用）
 
 	// --- §19 长消息折叠 ---
-	renderedLines int  // 渲染后的总行数（每次 dirty 重算）
-	folded        bool // 是否折叠
+	renderedLines         int  // 渲染后的总行数（每次 dirty 重算）
+	originalRenderedLines int  // fold 前的原始行数（fold 时保存，用于 unfold 判断）
+	folded                bool // 是否折叠
 }
 
 // newCLIModel 创建 CLI model

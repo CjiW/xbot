@@ -1084,14 +1084,20 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 		sb.WriteString("\n")
 		// §19 长消息折叠：对已完成的 assistant 消息截取预览
-		if msg.folded && !msg.isPartial && msg.renderedLines > msgFoldThresholdLines {
-			renderedLines := strings.Split(rendered, "\n")
-			if len(renderedLines) > msgFoldPreviewLines {
-				rendered = strings.Join(renderedLines[:msgFoldPreviewLines], "\n")
-				foldHint := m.styles.TextMutedSt.Render(
-					fmt.Sprintf("  ... %s (%d lines) ...",
-						m.locale.MsgCollapsed, msg.renderedLines))
-				rendered += "\n" + foldHint
+		if msg.folded && !msg.isPartial {
+			origLines := msg.originalRenderedLines
+			if origLines == 0 {
+				origLines = msg.renderedLines
+			}
+			if origLines > msgFoldThresholdLines {
+				renderedLines := strings.Split(rendered, "\n")
+				if len(renderedLines) > msgFoldPreviewLines {
+					rendered = strings.Join(renderedLines[:msgFoldPreviewLines], "\n")
+					foldHint := m.styles.TextMutedSt.Render(
+						fmt.Sprintf("  ... %s (%d lines) ...",
+							m.locale.MsgCollapsed, origLines))
+					rendered += "\n" + foldHint
+				}
 			}
 		}
 		// Agent 消息直接渲染（glamour 已处理 markdown）
@@ -1410,9 +1416,15 @@ func (m *cliModel) toggleMessageFold() {
 	anyUnfolded := false
 	for i := range m.messages {
 		msg := &m.messages[i]
-		if msg.role == "assistant" && !msg.isPartial && msg.renderedLines > msgFoldThresholdLines && !msg.folded {
-			anyUnfolded = true
-			break
+		if msg.role == "assistant" && !msg.isPartial && !msg.folded {
+			lines := msg.originalRenderedLines
+			if lines == 0 {
+				lines = msg.renderedLines
+			}
+			if lines > msgFoldThresholdLines {
+				anyUnfolded = true
+				break
+			}
 		}
 	}
 	targetFold := anyUnfolded
@@ -1423,11 +1435,28 @@ func (m *cliModel) toggleMessageFold() {
 		if msg.role != "assistant" || msg.isPartial {
 			continue
 		}
-		if msg.renderedLines <= msgFoldThresholdLines {
+		if !targetFold {
+			// Unfolding: skip threshold — renderedLines reflects folded preview,
+			// not original length. Only unfold messages that are currently folded.
+			if !msg.folded {
+				continue
+			}
+			msg.folded = false
+			msg.dirty = true
+			changed = true
 			continue
 		}
-		if msg.folded != targetFold {
-			msg.folded = targetFold
+		// Folding: check threshold using original line count
+		lines := msg.originalRenderedLines
+		if lines == 0 {
+			lines = msg.renderedLines
+		}
+		if lines <= msgFoldThresholdLines {
+			continue
+		}
+		if !msg.folded {
+			msg.folded = true
+			msg.originalRenderedLines = msg.renderedLines
 			msg.dirty = true
 			changed = true
 		}

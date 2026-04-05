@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 	"xbot/bus"
-	"xbot/tools"
 	"xbot/version"
 )
 
@@ -405,18 +404,13 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		m.sendToAgent("/new")
 
 	case "/tasks":
-		// /tasks — show running background tasks
+		// /tasks — open background tasks panel
 		if m.bgTaskCountFn != nil {
 			count := m.bgTaskCountFn()
 			if count == 0 {
 				m.showSystemMsg(m.locale.BgTasksEmpty, feedbackInfo)
 			} else {
-				// Get full task list from channel
-				ch := m.channel
-				if ch.bgTaskMgr != nil {
-					tasks := tools.ListBgTasks(ch.bgTaskMgr, ch.bgSessionKey)
-					m.showSystemMsg(tasks, feedbackInfo)
-				}
+				m.openBgTasksPanel()
 			}
 		} else {
 			m.showSystemMsg(m.locale.BgTasksUnsupported, feedbackWarning)
@@ -428,7 +422,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		if len(parts) < 2 {
 			// 无参数：切回默认身份
 			if m.senderID == "cli_user" {
-				m.showSystemMsg("当前已是默认身份", feedbackInfo)
+				m.showSystemMsg(m.locale.SuAlreadyDefault, feedbackInfo)
 				return nil
 			}
 			m.senderID = "cli_user"
@@ -452,7 +446,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			m.splashFrame = 0
 			return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
 		} else {
-			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s", m.senderID), feedbackInfo)
+			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.senderID), feedbackInfo)
 		}
 
 	default:
@@ -688,6 +682,10 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		m.typing = false
 		m.updatePlaceholder()
 		m.inputReady = true
+		// §Q 标记需要刷新消息队列（由 Update 循环检查）
+		if len(m.messageQueue) > 0 {
+			m.needFlushQueue = true
+		}
 
 	}
 

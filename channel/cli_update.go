@@ -274,9 +274,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
-		case msg.String() == "ctrl+c", msg.Code == tea.KeyEsc:
-			// Ctrl+C / Esc：有迭代时中止，无迭代时清空输入
+		case msg.String() == "ctrl+c":
+			// Ctrl+C：有迭代时中止；无迭代时清空输入
 			if m.typing {
+				// 如果正在编辑排队消息，先取消编辑
+				if m.queueEditing {
+					m.queueEditing = false
+					m.queueEditBuf = ""
+					m.textarea.SetValue("")
+					return m, nil
+				}
 				m.sendCancel()
 				return m, tea.Batch(cmds...)
 			}
@@ -289,13 +296,42 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case msg.Code == tea.KeyEsc:
+			// Esc：非处理状态清空输入；处理中时取消排队编辑或清空输入
+			if m.queueEditing {
+				m.queueEditing = false
+				m.queueEditBuf = ""
+				m.textarea.SetValue("")
+				return m, nil
+			}
+			if !m.typing {
+				if m.textarea.Value() != "" {
+					m.textarea.Reset()
+					m.inputHistoryIdx = -1
+					m.inputDraft = ""
+					m.autoExpandInput()
+				}
+			}
+			return m, nil
+
 		case msg.Text == "^":
-			if m.panelMode == "" && !m.typing && m.bgTaskCount > 0 && m.textarea.Value() == "" && m.inputHistoryIdx == -1 {
+			if m.panelMode == "" && m.bgTaskCount > 0 && m.inputHistoryIdx == -1 {
 				m.openBgTasksPanel()
 				return m, nil
 			}
 
 		case msg.Code == tea.KeyUp:
+			// §Q 消息队列：typing 时 ↑ 追回最后一条排队消息编辑
+			if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
+				if !m.queueEditing && m.textarea.Value() == "" {
+					// 追回最后一条排队消息
+					m.queueEditing = true
+					m.queueEditBuf = m.messageQueue[len(m.messageQueue)-1]
+					m.textarea.SetValue(m.queueEditBuf)
+					m.autoExpandInput()
+					return m, nil
+				}
+			}
 			if m.panelMode == "" && !m.typing {
 				// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
 				if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
@@ -327,8 +363,24 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Code == tea.KeyEnter:
 			// Enter 发送消息
 			if !m.inputReady {
+				// §Q 消息队列：typing 期间允许排队消息
+				if m.queueEditing {
+					// 正在编辑排队消息 → 保存编辑结果
+					m.messageQueue[len(m.messageQueue)-1] = m.textarea.Value()
+					m.queueEditing = false
+					m.queueEditBuf = ""
+					m.textarea.SetValue("")
+					return m, nil
+				}
 				if m.textarea.Value() != "" {
-					m.showTempStatus(m.locale.WaitingOperation)
+					m.messageQueue = append(m.messageQueue, m.textarea.Value())
+					m.textarea.SetValue("")
+					// 显示队列提示
+					if len(m.messageQueue) == 1 {
+						m.showTempStatus(fmt.Sprintf(m.locale.MessageQueuedUp, len(m.messageQueue)))
+					} else {
+						m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
+					}
 					return m, m.clearTempStatusCmd()
 				}
 				return m, nil
@@ -435,6 +487,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cliOutboundMsg:
 		// 收到 agent 回复
 		m.handleAgentMessage(msg.msg)
+		// §Q 刷新消息队列
+		if m.needFlushQueue {
+			m.needFlushQueue = false
+			cmds = append(cmds, m.flushMessageQueue())
+		}
 
 	case cliProgressMsg:
 		prev := m.progress
@@ -699,7 +756,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// /su 切换用户后历史加载完成
 		m.suLoading = false
 		if msg.err != nil {
-			m.showSystemMsg(fmt.Sprintf("⚠️ 加载历史失败: %v", msg.err), feedbackWarning)
+			m.showSystemMsg(fmt.Sprintf(m.locale.SuLoadFailed, msg.err), feedbackWarning)
 		} else {
 			for _, hm := range msg.history {
 				cm := cliMessage{
@@ -717,7 +774,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.messages = append(m.messages, cm)
 			}
-			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s — 已加载 %d 条历史消息", m.senderID, len(msg.history)), feedbackInfo)
+			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitchedHistory, m.senderID, len(msg.history)), feedbackInfo)
 		}
 		m.invalidateAllCache(false)
 		m.viewport.GotoBottom()

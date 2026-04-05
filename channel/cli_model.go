@@ -169,6 +169,12 @@ type cliModel struct {
 	shouldQuit      bool                      // Smart quit: quit after current operation completes
 	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 
+	// --- Message queue (typing 期间排队的消息) ---
+	messageQueue   []string // 排队等待发送的消息
+	queueEditing   bool     // true = 正在编辑/查看最后一条排队消息
+	queueEditBuf   string   // 编辑中的排队消息内容
+	needFlushQueue bool     // true = handleAgentMessage 后需要刷新队列
+
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)

@@ -42,6 +42,33 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
+// flushMessageQueue sends the first queued message (if any) when input becomes ready.
+// Returns a tea.Cmd to send the message, or nil if queue is empty.
+func (m *cliModel) flushMessageQueue() tea.Cmd {
+	if len(m.messageQueue) == 0 {
+		return nil
+	}
+	msg := m.messageQueue[0]
+	m.messageQueue = m.messageQueue[1:]
+	m.queueEditing = false
+	m.queueEditBuf = ""
+	// Put message into textarea and trigger send
+	m.textarea.SetValue(msg)
+	return m.sendMessageFromQueue()
+}
+
+// sendMessageFromQueue sends the current textarea content as a queued message.
+func (m *cliModel) sendMessageFromQueue() tea.Cmd {
+	content := strings.TrimSpace(m.textarea.Value())
+	if content == "" {
+		return nil
+	}
+	m.textarea.Reset()
+	m.autoExpandInput()
+	m.sendToAgent(content)
+	return nil
+}
+
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,
 // rebuilds styles cache, glamour renderer, and marks all messages dirty.
 // Uses setTheme() instead of ApplyTheme() to avoid sending on themeChangeCh,

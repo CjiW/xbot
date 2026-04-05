@@ -483,7 +483,7 @@ func (m *cliModel) renderSuLoading() string {
 	frame := splashFrames[m.splashFrame%len(splashFrames)]
 
 	// 切换目标提示
-	suText := descStyle.Render(fmt.Sprintf("切换身份: %s", m.senderID))
+	suText := descStyle.Render(fmt.Sprintf(m.locale.SuSwitching, m.senderID))
 	suW := lipgloss.Width(suText)
 	suPad := (screenW - suW) / 2
 	if suPad < 0 {
@@ -495,7 +495,7 @@ func (m *cliModel) renderSuLoading() string {
 	lines = append(lines, "")
 
 	// 加载动画
-	loadingText := loadingStyle.Render(fmt.Sprintf("  %s  加载历史中...", frame))
+	loadingText := loadingStyle.Render(fmt.Sprintf(m.locale.SuLoadingHistory, frame))
 	lW := lipgloss.Width(loadingText)
 	lPad := (screenW - lW) / 2
 	if lPad < 0 {

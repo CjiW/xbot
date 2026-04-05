@@ -42,7 +42,7 @@ type UILocale struct {
 	BgTaskLogHelp      string // "↑↓ scroll  Esc back"
 	BgTaskLogMore      string // "... %d more lines (↑↓ scroll)"
 
-	PanelOmitted          string // "... %d lines omitted (narrow terminal) ..."
+	PanelOmitted          string // "... %d lines omitted — resize terminal for full view ..."
 	PanelOtherPlaceholder string // askuser panel Other input placeholder
 	EmergencyQuitHint     string // Ctrl+Z emergency quit hint
 
@@ -130,6 +130,34 @@ type UILocale struct {
 	RunnerLogLabel             string // "📋 日志"
 	RunnerBack                 string // "back"
 
+	// --- L. /su command ---
+	SuAlreadyDefault  string // "Already default identity"
+	SuSwitched        string // "✅ Switched to: %s"
+	SuSwitchedHistory string // "✅ Switched to: %s — loaded %d history messages"
+	SuLoadFailed      string // "⚠️ Failed to load history: %v"
+	SuSwitching       string // "Switching identity: %s"
+	SuLoadingHistory  string // "  %s  loading history..."
+
+	// --- M. Danger zone ---
+	DangerTitle              string // "⚠ Danger Zone"
+	DangerConfirmClear       string // "Confirm clear: %s"
+	DangerIrreversible       string // "This action cannot be undone."
+	DangerTypeConfirm        string // "Type %s to confirm:"
+	DangerNavHint            string // "↑↓ select  Enter confirm  Esc back"
+	DangerMismatch           string // "❌ Confirmation text mismatch"
+	DangerClearFailed        string // "❌ Clear failed: %v"
+	DangerCleared            string // "✅ Cleared: %s"
+	DangerConfirmPlaceholder string // "Type confirmation text..."
+	DangerSessionHistory     string // "Session History"
+	DangerCoreAll            string // "Core Memory: All"
+	DangerLongTerm           string // "Long-term Memory"
+	DangerEventHistory       string // "Event History"
+	DangerArchival           string // "Archival Memory (vector DB)"
+
+	// --- N. Message queue ---
+	MessageQueued   string // "⏳ Message queued (%d pending)"
+	MessageQueuedUp string // "⏳ Message queued (%d pending) — ↑ to recall · Esc to cancel"
+
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
 	IdlePlaceholders []string // rotating hints for empty input
@@ -199,7 +227,7 @@ func init() {
 		BgTaskLogHelp:      "↑↓ 滚动  Esc 返回",
 		BgTaskLogMore:      "... 还有 %d 行（↑↓ 滚动）",
 
-		PanelOmitted:          "  ... %d 行已省略（终端过窄） ...",
+		PanelOmitted:          "  ... %d 行已省略（终端过窄，请放大窗口） ...",
 		PanelOtherPlaceholder: "在此输入...",
 		EmergencyQuitHint:     "🚪 紧急退出 (Ctrl+Z)",
 
@@ -309,6 +337,34 @@ func init() {
 		RunnerNotAvailable:         "Runner 功能不可用",
 		RunnerLogLabel:             "📋 日志",
 		RunnerBack:                 "返回",
+
+		// --- L. /su command ---
+		SuAlreadyDefault:  "当前已是默认身份",
+		SuSwitched:        "✅ 身份已切换为: %s",
+		SuSwitchedHistory: "✅ 身份已切换为: %s — 已加载 %d 条历史消息",
+		SuLoadFailed:      "⚠️ 加载历史失败: %v",
+		SuSwitching:       "切换身份: %s",
+		SuLoadingHistory:  "  %s  加载历史中...",
+
+		// --- M. Danger zone ---
+		DangerTitle:              "⚠ 危险区",
+		DangerConfirmClear:       "确认清空：%s",
+		DangerIrreversible:       "此操作不可恢复",
+		DangerTypeConfirm:        "请输入 %s 确认：",
+		DangerNavHint:            "↑↓ 选择  Enter 确认  Esc 返回",
+		DangerMismatch:           "❌ 确认文字不匹配",
+		DangerClearFailed:        "❌ 清空失败：%v",
+		DangerCleared:            "✅ 已清空：%s",
+		DangerConfirmPlaceholder: "输入确认文字...",
+		DangerSessionHistory:     "会话历史",
+		DangerCoreAll:            "Core Memory: 全部",
+		DangerLongTerm:           "长期记忆",
+		DangerEventHistory:       "事件历史",
+		DangerArchival:           "归档记忆（向量数据库）",
+
+		// --- N. Message queue ---
+		MessageQueued:   "⏳ 消息已排队（%d 条待发送）",
+		MessageQueuedUp: "⏳ 消息已排队（%d 条待发送）— ↑ 追回编辑 · Esc 撤销",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
@@ -512,7 +568,7 @@ func init() {
 		BgTaskLogHelp:      "↑↓ scroll  Esc back",
 		BgTaskLogMore:      "... %d more lines (↑↓ scroll)",
 
-		PanelOmitted:          "  ... %d lines omitted (narrow terminal) ...",
+		PanelOmitted:          "  ... %d lines omitted — resize terminal for full view ...",
 		PanelOtherPlaceholder: "Type here...",
 		EmergencyQuitHint:     "🚪 Emergency Quit (Ctrl+Z)",
 
@@ -622,6 +678,34 @@ func init() {
 		RunnerNotAvailable:         "Runner not available",
 		RunnerLogLabel:             "📋 Log",
 		RunnerBack:                 "back",
+
+		// --- L. /su command ---
+		SuAlreadyDefault:  "Already default identity",
+		SuSwitched:        "✅ Switched to: %s",
+		SuSwitchedHistory: "✅ Switched to: %s — loaded %d history messages",
+		SuLoadFailed:      "⚠️ Failed to load history: %v",
+		SuSwitching:       "Switching identity: %s",
+		SuLoadingHistory:  "  %s  loading history...",
+
+		// --- M. Danger zone ---
+		DangerTitle:              "⚠ Danger Zone",
+		DangerConfirmClear:       "Confirm clear: %s",
+		DangerIrreversible:       "This action cannot be undone.",
+		DangerTypeConfirm:        "Type %s to confirm:",
+		DangerNavHint:            "↑↓ select  Enter confirm  Esc back",
+		DangerMismatch:           "❌ Confirmation text mismatch",
+		DangerClearFailed:        "❌ Clear failed: %v",
+		DangerCleared:            "✅ Cleared: %s",
+		DangerConfirmPlaceholder: "Type confirmation text...",
+		DangerSessionHistory:     "Session History",
+		DangerCoreAll:            "Core Memory: All",
+		DangerLongTerm:           "Long-term Memory",
+		DangerEventHistory:       "Event History",
+		DangerArchival:           "Archival Memory (vector DB)",
+
+		// --- N. Message queue ---
+		MessageQueued:   "⏳ Message queued (%d pending)",
+		MessageQueuedUp: "⏳ Message queued (%d pending) — ↑ to recall · Esc to cancel",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
@@ -825,7 +909,7 @@ func init() {
 		BgTaskLogHelp:      "↑↓ スクロール  Esc 戻る",
 		BgTaskLogMore:      "... あと %d 行（↑↓ スクロール）",
 
-		PanelOmitted:          "  ... %d 行省略（端末が狭すぎます） ...",
+		PanelOmitted:          "  ... %d 行省略（端末を拡大してください） ...",
 		PanelOtherPlaceholder: "ここに入力...",
 		EmergencyQuitHint:     "🚪 緊急終了 (Ctrl+Z)",
 
@@ -935,6 +1019,34 @@ func init() {
 		RunnerNotAvailable:         "Runner 機能は利用できません",
 		RunnerLogLabel:             "📋 ログ",
 		RunnerBack:                 "戻る",
+
+		// --- L. /su command ---
+		SuAlreadyDefault:  "既にデフォルト ID です",
+		SuSwitched:        "✅ ID を切り替えました: %s",
+		SuSwitchedHistory: "✅ ID を切り替えました: %s — %d 件の履歴を読み込みました",
+		SuLoadFailed:      "⚠️ 履歴の読み込みに失敗: %v",
+		SuSwitching:       "ID 切り替え中: %s",
+		SuLoadingHistory:  "  %s  履歴を読み込み中...",
+
+		// --- M. Danger zone ---
+		DangerTitle:              "⚠ 危険エリア",
+		DangerConfirmClear:       "クリア確認: %s",
+		DangerIrreversible:       "この操作は取り消せません",
+		DangerTypeConfirm:        "%s を入力して確認:",
+		DangerNavHint:            "↑↓ 選択  Enter 確認  Esc 戻る",
+		DangerMismatch:           "❌ 確認テキストが一致しません",
+		DangerClearFailed:        "❌ クリア失敗: %v",
+		DangerCleared:            "✅ クリア完了: %s",
+		DangerConfirmPlaceholder: "確認テキストを入力...",
+		DangerSessionHistory:     "セッション履歴",
+		DangerCoreAll:            "Core Memory: 全て",
+		DangerLongTerm:           "長期記憶",
+		DangerEventHistory:       "イベント履歴",
+		DangerArchival:           "アーカイブ記憶（ベクトルDB）",
+
+		// --- N. Message queue ---
+		MessageQueued:   "⏳ メッセージをキューに入れました（%d 件保留中）",
+		MessageQueuedUp: "⏳ メッセージをキューに入れました（%d 件保留中）— ↑ 編集 · Esc キャンセル",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},
@@ -1098,7 +1210,7 @@ func init() {
 	}
 
 	locales = map[string]*UILocale{
-		"":   zh, // default
+		"":   en, // default
 		"zh": zh,
 		"en": en,
 		"ja": ja,

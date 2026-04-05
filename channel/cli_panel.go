@@ -420,21 +420,21 @@ func (m *cliModel) viewDangerPanel() string {
 	s := &m.styles
 	var sb strings.Builder
 
-	sb.WriteString(s.PanelHeader.Render("⚠ 危险区"))
+	sb.WriteString(s.PanelHeader.Render(m.locale.DangerTitle))
 	sb.WriteString("\n")
 
 	if m.panelDangerConfirm && m.panelDangerCursor < len(m.panelDangerItems) {
 		// Confirmation sub-mode
 		item := m.panelDangerItems[m.panelDangerCursor]
 		confirmStr := dangerConfirmStrings[item.Action]
-		fmt.Fprintf(&sb, "  确认清空：%s\n", s.WarningSt.Render(item.Label))
-		sb.WriteString(s.PanelDesc.Render("  此操作不可恢复"))
+		fmt.Fprintf(&sb, "  %s\n", fmt.Sprintf(m.locale.DangerConfirmClear, s.WarningSt.Render(item.Label)))
+		sb.WriteString(s.PanelDesc.Render("  " + m.locale.DangerIrreversible))
 		sb.WriteString("\n\n")
-		fmt.Fprintf(&sb, "  请输入 %s 确认：\n", s.ProgressError.Render(confirmStr))
+		fmt.Fprintf(&sb, "  %s\n", fmt.Sprintf(m.locale.DangerTypeConfirm, s.ProgressError.Render(confirmStr)))
 		sb.WriteString("  ")
 		sb.WriteString(m.panelDangerInput.View())
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  Enter 提交  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.DangerNavHint))
 	} else {
 		// Item selection mode
 		for i, item := range m.panelDangerItems {
@@ -456,7 +456,7 @@ func (m *cliModel) viewDangerPanel() string {
 			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  ↑↓ 选择  Enter 确认  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.DangerNavHint))
 	}
 
 	return s.PanelBox.Render(sb.String())
@@ -508,14 +508,14 @@ func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 			item := m.panelDangerItems[m.panelDangerCursor]
 			confirmStr := dangerConfirmStrings[item.Action]
 			if m.panelDangerInput.Value() != confirmStr {
-				m.showSystemMsg("❌ 确认文字不匹配", feedbackWarning)
+				m.showSystemMsg(m.locale.DangerMismatch, feedbackWarning)
 				return true, m, nil
 			}
 			// Execute the clear action
 			if err := m.panelDangerOnExec(item.Action); err != nil {
-				m.showSystemMsg(fmt.Sprintf("❌ 清空失败：%v", err), feedbackWarning)
+				m.showSystemMsg(fmt.Sprintf(m.locale.DangerClearFailed, err), feedbackWarning)
 			} else {
-				m.showSystemMsg(fmt.Sprintf("✅ 已清空：%s", item.Label), feedbackInfo)
+				m.showSystemMsg(fmt.Sprintf(m.locale.DangerCleared, item.Label), feedbackInfo)
 			}
 			m.closePanel()
 			return true, m, nil
@@ -561,14 +561,14 @@ func (m *cliModel) openDangerPanelFromSettings() {
 	}
 
 	items := []dangerItem{
-		{"session", "会话历史", stats["session"]},
+		{"session", m.locale.DangerSessionHistory, stats["session"]},
 		{"core_persona", "Core Memory: persona", stats["persona"]},
 		{"core_human", "Core Memory: human", stats["human"]},
 		{"core_working", "Core Memory: working_context", stats["working_context"]},
-		{"core_all", "Core Memory: 全部", ""},
-		{"long_term", "长期记忆", stats["long_term"]},
-		{"event_history", "事件历史", stats["event_history"]},
-		{"archival", "归档记忆（向量数据库）", stats["archival"]},
+		{"core_all", m.locale.DangerCoreAll, ""},
+		{"long_term", m.locale.DangerLongTerm, stats["long_term"]},
+		{"event_history", m.locale.DangerEventHistory, stats["event_history"]},
+		{"archival", m.locale.DangerArchival, stats["archival"]},
 	}
 
 	m.panelMode = "danger"
@@ -584,7 +584,7 @@ func (m *cliModel) openDangerPanelFromSettings() {
 	}
 	// Pre-create text input for confirmation
 	ti := textinput.New()
-	ti.Placeholder = "输入确认文字..."
+	ti.Placeholder = m.locale.DangerConfirmPlaceholder
 	ti.CharLimit = 50
 	ti.SetWidth(m.panelWidth(40))
 	tiStyles := ti.Styles()
@@ -1002,8 +1002,8 @@ func (m *cliModel) panelMaxHeight() int {
 	panelAvailable := m.height - 3 - 3 - 4
 	// 减去 PanelBox 自身的 border 行数（RoundedBorder 上下各1行 = 2行）
 	panelAvailable -= 2
-	if panelAvailable < 6 {
-		panelAvailable = 6 // 最小高度保证：至少显示标题+几行内容
+	if panelAvailable < 10 {
+		panelAvailable = 10 // 最小高度保证：标题+至少5行内容+操作提示
 	}
 	return panelAvailable
 }
@@ -1039,7 +1039,7 @@ func clampPanelContent(content string, maxHeight int) string {
 	omitted := len(lines) - kept
 	result := make([]string, 0, maxHeight+1)
 	result = append(result, lines[:headerLines]...)
-	moreHint := fmt.Sprintf("  ... %d lines omitted (narrow terminal) ...", omitted)
+	moreHint := fmt.Sprintf("  ... %d lines omitted — resize terminal for full view ...", omitted)
 	result = append(result, moreHint)
 	result = append(result, lines[len(lines)-footerLines:]...)
 	return strings.Join(result, "\n")
@@ -1106,9 +1106,9 @@ func (m *cliModel) viewSettingsPanel() string {
 			if m.runnerBridge != nil {
 				switch m.runnerBridge.Status() {
 				case RunnerConnected:
-					statusHint = " " + s.ProgressDone.Render("● 已连接")
+					statusHint = " " + s.ProgressDone.Render("● "+m.locale.RunnerStatusConnected)
 				case RunnerConnecting:
-					statusHint = " " + s.ProgressRunning.Render("● 连接中")
+					statusHint = " " + s.ProgressRunning.Render("● "+m.locale.RunnerConnecting)
 				}
 			}
 			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), statusHint)
@@ -1665,7 +1665,7 @@ func (m *cliModel) viewRunnerPanel() string {
 		}
 
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  ↑↓/Tab 切换字段  Enter 连接  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerNavHint))
 	}
 
 	return m.styles.PanelBox.Render(sb.String())

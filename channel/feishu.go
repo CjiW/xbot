@@ -110,6 +110,10 @@ type SettingsCallbacks struct {
 	FeishuWebGetLinked func(feishuUserID string) (string, bool)
 	// FeishuWebUnlink removes the Feishu-Web account link.
 	FeishuWebUnlink func(feishuUserID string) error
+
+	// ── 记忆管理（危险区） ──
+	MemoryClear    func(senderID, chatID, targetType string) error // 执行清空（targetType: "session"/"core_persona"/"core_human"/...）
+	MemoryGetStats func(senderID, chatID string) map[string]string // 获取各项记忆统计
 }
 
 // FeishuChannel 飞书渠道实现

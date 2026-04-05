@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -33,13 +32,15 @@ type stdioManager struct {
 	verbose    bool
 	dockerMode bool
 	executor   Executor
+	logf       LogFunc
 }
 
-func newStdioManager(verbose, dockerMode bool) *stdioManager {
+func newStdioManager(verbose, dockerMode bool, logf LogFunc) *stdioManager {
 	return &stdioManager{
 		procs:      make(map[string]*stdioProcess),
 		verbose:    verbose,
 		dockerMode: dockerMode,
+		logf:       logf,
 	}
 }
 
@@ -107,7 +108,7 @@ func (sm *stdioManager) HandleStart(msg runnerproto.RunnerMessage) *runnerproto.
 	// 等待进程退出并通知 server
 	go sm.waitExit(req.StreamID, proc)
 
-	log.Printf("  stdio_start stream=%s cmd=%s", req.StreamID, req.Command)
+	callLogf(sm.logf, "  stdio_start stream=%s cmd=%s", req.StreamID, req.Command)
 	return runnerproto.MakeResponse(msg.ID, runnerproto.ProtoOK, runnerproto.StdioStartResponse{StreamID: req.StreamID})
 }
 
@@ -161,7 +162,7 @@ func (sm *stdioManager) HandleClose(msg runnerproto.RunnerMessage) *runnerproto.
 		}
 	}
 
-	log.Printf("  stdio_close stream=%s", req.StreamID)
+	callLogf(sm.logf, "  stdio_close stream=%s", req.StreamID)
 	return runnerproto.MakeOK(msg.ID)
 }
 
@@ -249,7 +250,7 @@ func (sm *stdioManager) drainStderr(streamID string, r io.Reader) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 && sm.verbose {
-			log.Printf("  stdio_stderr stream=%s: %s", streamID, strings.TrimSpace(string(buf[:n])))
+			callLogf(sm.logf, "  stdio_stderr stream=%s: %s", streamID, strings.TrimSpace(string(buf[:n])))
 		}
 		if err != nil {
 			return
@@ -290,7 +291,7 @@ func (sm *stdioManager) waitExit(streamID string, proc *stdioProcess) {
 	delete(sm.procs, streamID)
 	sm.mu.Unlock()
 
-	log.Printf("  stdio_exit stream=%s exit=%d", streamID, exitCode)
+	callLogf(sm.logf, "  stdio_exit stream=%s exit=%d", streamID, exitCode)
 }
 
 // Cleanup 杀死所有活跃的 stdio 进程（session 断开时调用）。
@@ -300,7 +301,7 @@ func (sm *stdioManager) Cleanup() {
 	for id, proc := range sm.procs {
 		proc.stdin.Close()
 		proc.cmd.Process.Kill() //nolint:errcheck
-		log.Printf("  stdio cleanup stream=%s", id)
+		callLogf(sm.logf, "  stdio cleanup stream=%s", id)
 	}
 	sm.procs = make(map[string]*stdioProcess)
 }

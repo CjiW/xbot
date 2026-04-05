@@ -82,6 +82,9 @@ func main() {
 	}()
 
 	// 创建 handler
+	runnerLogf := func(format string, args ...interface{}) {
+		log.Printf(format, args...)
+	}
 	handler := runnerclient.NewHandler(exec,
 		runnerclient.WithVerbose(*flagVerbose),
 		runnerclient.WithPathGuard(&runnerclient.PathGuard{
@@ -90,6 +93,7 @@ func main() {
 			DockerMode:  dockerMode,
 		}),
 		runnerclient.WithDockerMode(dockerMode),
+		runnerclient.WithLogFunc(runnerLogf),
 	)
 
 	// 初始化本地 LLM 客户端
@@ -137,9 +141,11 @@ func main() {
 // runSession 连接 server 并运行读写循环。
 // 连接丢失时返回错误（触发重连）。
 func runSession(serverURL, userID, authToken, workspace, shell string, handler *runnerclient.Handler) error {
+	runnerLogf := handler.LogFunc
 	conn, err := runnerclient.Connect(serverURL, userID, authToken, workspace, shell, runnerclient.ConnectOptions{
 		LLMProvider: handler.LLMProvider(),
 		LLMModel:    handler.LLMModel(),
+		LogFunc:     runnerLogf,
 	})
 	if err != nil {
 		return err
@@ -153,8 +159,8 @@ func runSession(serverURL, userID, authToken, workspace, shell string, handler *
 	// 将写通道暴露给 stdio 处理器（用于推送消息）
 	handler.SetWriteChannels(writeCh, writeDone)
 
-	go runnerclient.WritePump(conn, writeCh, stopWrite, writeDone)
-	runnerclient.ReadLoop(conn, handler, writeCh, writeDone)
+	go runnerclient.WritePump(conn, writeCh, stopWrite, writeDone, runnerLogf)
+	runnerclient.ReadLoop(conn, handler, writeCh, writeDone, runnerLogf)
 
 	// 通知 writePump 立即退出
 	close(stopWrite)

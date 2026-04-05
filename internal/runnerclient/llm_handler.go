@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"xbot/internal/runnerproto"
@@ -20,7 +19,7 @@ type LLMProxyRequest struct {
 }
 
 // handleLLMGenerate 处理 "llm_generate" 请求。
-func handleLLMGenerate(msg runnerproto.RunnerMessage, llmClient llm.LLM) *runnerproto.RunnerMessage {
+func handleLLMGenerate(msg runnerproto.RunnerMessage, llmClient llm.LLM, logf LogFunc) *runnerproto.RunnerMessage {
 	if llmClient == nil {
 		return runnerproto.MakeError(msg.ID, "ENOTSUP", "local LLM not configured on this runner")
 	}
@@ -52,7 +51,7 @@ func handleLLMGenerate(msg runnerproto.RunnerMessage, llmClient llm.LLM) *runner
 }
 
 // handleLLMModels 处理 "llm_models" 请求。
-func handleLLMModels(msg runnerproto.RunnerMessage, llmClient llm.LLM, llmModels []string) *runnerproto.RunnerMessage {
+func handleLLMModels(msg runnerproto.RunnerMessage, llmClient llm.LLM, llmModels []string, logf LogFunc) *runnerproto.RunnerMessage {
 	if llmClient == nil {
 		return runnerproto.MakeError(msg.ID, "ENOTSUP", "local LLM not configured on this runner")
 	}
@@ -75,9 +74,9 @@ func (t *toolDefAdapter) Parameters() []llm.ToolParam { return t.params }
 
 // InitLLMClient 从 provider/baseURL/apiKey/model 初始化 LLM 客户端。
 // provider 为空时表示纯 sandbox 模式，不配置 LLM。
-func InitLLMClient(provider, baseURL, apiKey, model string) (llm.LLM, []string, error) {
+func InitLLMClient(provider, baseURL, apiKey, model string, logf LogFunc) (llm.LLM, []string, error) {
 	if provider == "" || apiKey == "" {
-		log.Printf("  Local LLM: not configured (pure sandbox mode)")
+		callLogf(logf, "  Local LLM: not configured (pure sandbox mode)")
 		return nil, nil, nil
 	}
 
@@ -107,7 +106,7 @@ func InitLLMClient(provider, baseURL, apiKey, model string) (llm.LLM, []string, 
 		return nil, nil, fmt.Errorf("unsupported LLM provider: %s", provider)
 	}
 
-	log.Printf("  Local LLM: configured provider=%s model=%s (%d models available)",
+	callLogf(logf, "  Local LLM: configured provider=%s model=%s (%d models available)",
 		provider, model, len(models))
 	return client, models, nil
 }

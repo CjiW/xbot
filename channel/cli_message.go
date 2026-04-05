@@ -147,7 +147,7 @@ func isDir(path string) bool {
 func (m *cliModel) newInbound(content string, metadata map[string]string) bus.InboundMessage {
 	return bus.InboundMessage{
 		Channel:    cliChannelName,
-		SenderID:   cliSenderID,
+		SenderID:   m.senderID,
 		ChatID:     m.chatID,
 		ChatType:   "p2p",
 		Content:    content,
@@ -315,7 +315,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID)
+					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, "cli_user")
 					if err == nil {
 						for k, v := range vals {
 							currentValues[k] = v
@@ -340,7 +340,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					// Persist to SettingsService (SQLite)
 					if m.channel.settingsSvc != nil {
 						for k, v := range values {
-							_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, k, v)
+							_ = m.channel.settingsSvc.SetSetting(cliChannelName, "cli_user", k, v)
 						}
 					}
 					// Apply settings: write config.json + update runtime state
@@ -420,6 +420,19 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			}
 		} else {
 			m.showSystemMsg(m.locale.BgTasksUnsupported, feedbackWarning)
+		}
+
+	case "/su":
+		// /su <userID> — 切换到指定用户身份（共享 session）
+		if len(parts) < 2 {
+			m.showSystemMsg(fmt.Sprintf("当前身份: %s\n用法: /su <userID>  切换到目标用户身份", m.senderID), feedbackInfo)
+		} else {
+			newID := strings.TrimSpace(parts[1])
+			if newID == "cli_user" || newID == "" {
+				newID = "cli_user"
+			}
+			m.senderID = newID
+			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s", m.senderID), feedbackInfo)
 		}
 
 	default:

@@ -71,11 +71,12 @@ func (c *CLIChannel) Start() error {
 	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+	c.model.senderID = "cli_user"
 	c.model.chatID = c.config.ChatID
 
 	// i18n: initialize locale from settings
 	if c.settingsSvc != nil {
-		if vals, err := c.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+		if vals, err := c.settingsSvc.GetSettings(cliChannelName, "cli_user"); err == nil {
 			if lang, ok := vals["language"]; ok {
 				SetLocale(lang)
 				c.model.locale = GetLocale(lang)
@@ -340,6 +341,15 @@ func (c *CLIChannel) StartWithRunner(shareURL, token, workspace string) error {
 		workspace: workspace,
 	}
 	return c.Start()
+}
+
+// ensureRunnerBridge 确保 RunnerBridge 存在（供 settings 面板使用）。
+func (c *CLIChannel) ensureRunnerBridge() {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil && c.model.runnerBridge == nil && c.program != nil {
+		c.model.runnerBridge = NewRunnerBridge(c.program)
+	}
 }
 
 // runnerAutoConnectConfig holds the auto-connect parameters.

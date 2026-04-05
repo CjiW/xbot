@@ -325,6 +325,9 @@ func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
 // SettingsService returns the Agent's SettingsService (for external injection of callbacks).
 func (a *Agent) SettingsService() *SettingsService { return a.settingsSvc }
 
+// MultiSession returns the Agent's MultiTenantSession (for external injection of callbacks).
+func (a *Agent) MultiSession() *session.MultiTenantSession { return a.multiSession }
+
 // SetUserModel sets the model for a user's LLM configuration (used by settings card callback).
 func (a *Agent) SetUserModel(senderID, model string) error {
 	cfg, err := a.llmConfigSvc.GetConfig(senderID)

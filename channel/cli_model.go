@@ -236,6 +236,13 @@ type cliModel struct {
 	panelBgScroll   int                     // log view scroll offset
 	panelBgLogLines []string                // cached log lines for viewing
 
+	// --- Danger Zone Panel ---
+	panelDangerItems   []dangerItem
+	panelDangerCursor  int
+	panelDangerConfirm bool // true = showing confirm input
+	panelDangerInput   textinput.Model
+	panelDangerOnExec  func(targetType string) error // callback to execute clear
+
 	// --- §13 Update Check ---
 	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate bool                // true while /update is in progress

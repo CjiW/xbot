@@ -408,6 +408,8 @@ func init() {
 					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
+			// Danger zone entry (display-only, triggers panel switch)
+			{Key: "danger_zone", Label: "⚠️ 危险区 — 清空记忆", Type: SettingTypeText, Category: "危险"},
 		},
 	}
 
@@ -683,6 +685,8 @@ func init() {
 					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
+			// Danger zone entry (display-only, triggers panel switch)
+			{Key: "danger_zone", Label: "⚠️ Danger Zone — Clear Memory", Type: SettingTypeText, Category: "Danger"},
 		},
 	}
 
@@ -958,6 +962,8 @@ func init() {
 					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
+			// Danger zone entry (display-only, triggers panel switch)
+			{Key: "danger_zone", Label: "⚠️ 危険エリア — 記憶クリア", Type: SettingTypeText, Category: "危険"},
 		},
 	}
 

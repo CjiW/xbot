@@ -413,6 +413,8 @@ type CLIChannelConfig struct {
 	GetCurrentValues func() map[string]string         // 获取当前配置值（用于 settings panel 初始值）
 	ApplySettings    func(values map[string]string)   // 应用设置变更（写 config.json + 更新运行时状态）
 	IsFirstRun       bool                             // 首次运行标志，TUI 启动时自动打开 setup panel
+	ClearMemory      func(targetType string) error    // 清空记忆（danger zone）
+	GetMemoryStats   func() map[string]string         // 获取记忆统计（danger zone）
 }
 
 // ---------------------------------------------------------------------------

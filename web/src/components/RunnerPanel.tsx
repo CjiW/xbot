@@ -12,6 +12,7 @@ interface RunnerInfo {
   docker_image: string
   workspace: string
   created_at: string
+  shell?: string
   online: boolean
 }
 
@@ -81,8 +82,23 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
     setLoading(false)
   }, [])
 
+  // Auto-refresh runner list every 30s while panel is visible
   useEffect(() => {
     fetchRunners()
+    const timer = setInterval(() => { fetchRunners().catch(() => {}) }, 30_000)
+    return () => clearInterval(timer)
+  }, [fetchRunners])
+
+  // Listen for real-time runner status changes from WebSocket
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail) {
+        fetchRunners()
+      }
+    }
+    window.addEventListener('runner-status-change', handler)
+    return () => window.removeEventListener('runner-status-change', handler)
   }, [fetchRunners])
 
   // Build connect command for a runner
@@ -111,7 +127,11 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
   const handleSetActive = useCallback(async (name: string) => {
     setActionLoading(true)
     try {
-      const resp = await fetch(`/api/runners/${encodeURIComponent(name)}/active`, { method: 'PUT' })
+      const resp = await fetch('/api/runners/active', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
       const data = await resp.json()
       if (data.ok) {
         setActiveRunner(name)

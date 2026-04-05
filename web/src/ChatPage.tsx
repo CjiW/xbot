@@ -295,6 +295,106 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [nickname, setNickname] = useState<string>(() => localStorage.getItem('xbot-nickname') || '')
   const editorRef = useRef<TiptapEditorHandle>(null)
   const [presets, setPresets] = useState<PresetCommand[]>([])
+  const [askUser, setAskUser] = useState<{ questions: { question: string; options?: string[] }[]; answers: Record<string, string>; currentQ: number } | null>(null)
+  const [toasts, setToasts] = useState<{ id: number; message: string; type: 'info' | 'error' | 'success' }[]>([])
+  const [currentModel, setCurrentModel] = useState('')
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<Array<{ id: number; role: string; snippet: string; created_at: string }>>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const askUserInputRef = useRef<HTMLInputElement>(null)
+  const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000)
+  }, [])
+
+  const handleModelSwitch = useCallback(async (model: string) => {
+    setModelDropdownOpen(false)
+    if (model === currentModel) return
+    try {
+      const resp = await fetch('/api/llm-config/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        setCurrentModel(model)
+        showToast(`已切换到 ${model}`, 'success')
+      } else {
+        showToast(data.error || '切换失败', 'error')
+      }
+    } catch {
+      showToast('切换失败', 'error')
+    }
+  }, [currentModel, showToast])
+
+  // --- Load available models on mount ---
+  useEffect(() => {
+    fetch('/api/llm-config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          setCurrentModel(data.model || '')
+          setAvailableModels(data.models || [])
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // --- Search: debounce 300ms ---
+  useEffect(() => {
+    if (!searchOpen || !searchQuery.trim()) {
+      setSearchResults([])
+      return
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`, {
+          signal: controller.signal,
+        })
+        const data = await resp.json()
+        if (data.ok) {
+          setSearchResults(data.results || [])
+        }
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+      }
+      setSearchLoading(false)
+    }, 300)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [searchQuery, searchOpen])
+
+  // --- Search: Ctrl+K shortcut ---
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setSearchOpen(prev => {
+          const next = !prev
+          if (next) {
+            setTimeout(() => searchInputRef.current?.focus(), 0)
+          }
+          return next
+        })
+        if (!searchOpen) {
+          setSearchQuery('')
+          setSearchResults([])
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [searchOpen])
 
   const wsRef = useRef<WebSocket | null>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -343,9 +443,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               if (m.role === 'assistant' && m.tool_calls && !m.detail) return false
               return true
             })
-            .map((m: { role: string; content: string; detail?: string }, i: number) => {
+            .map((m: { id: number; role: string; content: string; detail?: string }) => {
               const msg: Message = {
-                id: `hist-${i}`,
+                id: `hist-${m.id}`,
                 type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
                 content: m.content,
               }
@@ -388,6 +488,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
       }
+    }
+
+    ws.onerror = (e) => {
+      console.warn('[WS] error', e)
     }
 
     ws.onclose = (e) => {
@@ -523,6 +627,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 label: t.label,
                 status: t.status,
                 elapsed_ms: t.elapsed_ms,
+                summary: t.summary,
               }))
               return {
                 iteration: prevIterationRef.current,
@@ -571,22 +676,6 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
           }
 
-          case 'file': {
-            setProgress(null)
-            setLiveIterations([])
-            prevIterationRef.current = -1
-            progressRef.current = null
-            setLoading(false)
-            const fileMsg: Message = {
-              id: data.id || `file-${Date.now()}`,
-              type: 'system',
-              content: `📎 [${data.file.name}](${data.file.url || `/api/files/${data.file.id}`}) (${formatFileSize(data.file.size)})`,
-              ts: data.ts,
-            }
-            setMessages((prev) => [...prev, fileMsg])
-            break
-          }
-
           case 'user_echo': {
             // Update optimistic user message with complete content (including file info)
             if (data.original_content) {
@@ -596,6 +685,32 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                   : m
               ))
             }
+            break
+          }
+
+          case 'ask_user': {
+            const questions = data.progress?.questions || []
+            if (questions.length > 0) {
+              setAskUser({ questions, answers: {}, currentQ: 0 })
+            }
+            break
+          }
+
+          case 'runner_status': {
+            try {
+              const detail = data.content ? JSON.parse(data.content) : {}
+              window.dispatchEvent(new CustomEvent('runner-status-change', {
+                detail: { runnerName: detail.runner_name, online: detail.online },
+              }))
+            } catch { /* ignore */ }
+            break
+          }
+
+          case 'sync_progress': {
+            try {
+              const detail = data.content ? JSON.parse(data.content) : {}
+              if (detail.message) showToast(detail.message, detail.phase === 'done' ? 'success' : 'info')
+            } catch { /* ignore */ }
             break
           }
 
@@ -622,6 +737,45 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   // --- Send message ---
   const handleSend = useCallback((content: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+
+    // Slash commands
+    const trimmed = content.trim()
+    if (trimmed.startsWith('/')) {
+      const cmd = trimmed.toLowerCase()
+      if (cmd === '/clear') {
+        // Clear both frontend state and backend history
+        setMessages([])
+        setProgress(null)
+        setLiveIterations([])
+        prevIterationRef.current = -1
+        progressRef.current = null
+        setLoading(false)
+        fetch('/api/history', { method: 'DELETE' }).catch(() => {})
+        showToast('对话已清空', 'info')
+        return
+      }
+      if (cmd === '/new') {
+        setMessages([])
+        setProgress(null)
+        setLiveIterations([])
+        prevIterationRef.current = -1
+        progressRef.current = null
+        setLoading(false)
+        showToast('新对话', 'info')
+        return
+      }
+      if (cmd === '/help') {
+        const helpMsg: Message = {
+          id: `help-${Date.now()}`,
+          type: 'system',
+          content: `## 可用命令\n\n| 命令 | 说明 |\n|------|------|\n| /clear | 清空对话 |\n| /new | 新对话 |\n| /compact | 压缩上下文 |\n| /help | 显示帮助 |\n| /cancel | 取消当前生成 |`,
+          ts: Math.floor(Date.now() / 1000),
+        }
+        setMessages(prev => [...prev, helpMsg])
+        return
+      }
+      // For /compact, /cancel, /model, /models — send as normal message (backend handles them)
+    }
 
     const userMsg: Message = {
       id: `user-${Date.now()}`,
@@ -743,18 +897,27 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       if (result.ok) {
         handleFileUploaded({ id: result.id, name: result.name, size: result.size, mime: result.mime, uploadKey: result.uploadKey, isOSS: result.isOSS })
       } else {
-        // Show toast
-        const toast = document.createElement('div')
-        toast.className = 'file-upload-toast'
-        toast.textContent = result.error || '上传失败'
-        document.body.appendChild(toast)
-        setTimeout(() => {
-          toast.classList.add('file-upload-toast-hide')
-          setTimeout(() => toast.remove(), 300)
-        }, 3000)
+        showToast(result.error || '上传失败', 'error')
       }
     }
-  }, [handleFileUploaded])
+  }, [handleFileUploaded, showToast])
+
+  const submitAnswer = useCallback((value: string) => {
+    if (!value.trim()) return
+    const newAnswers = { ...askUser!.answers, [askUser!.currentQ]: value.trim() }
+    if (askUser!.currentQ < askUser!.questions.length - 1) {
+      setAskUser({ ...askUser!, answers: newAnswers, currentQ: askUser!.currentQ + 1 })
+      // Focus input after advancing to next question
+      setTimeout(() => askUserInputRef.current?.focus(), 0)
+    } else {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'ask_user_response', answers: newAnswers, cancelled: false }))
+      } else {
+        showToast('连接已断开，请刷新页面', 'error')
+      }
+      setAskUser(null)
+    }
+  }, [askUser, showToast])
 
   // --- Paste handler (for images) ---
   const handlePaste = usePasteUpload(handleFileUploaded, loading)
@@ -779,8 +942,46 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           }`}>
             {connected ? '● Connected' : reconnecting ? '◐ Connecting...' : '○ Disconnected'}
           </span>
+          {/* Model selector */}
+          {availableModels.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+                className="text-xs px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors flex items-center gap-1"
+                title="切换模型"
+              >
+                🧠 {currentModel || 'default'}
+                <span className="text-[10px]">▾</span>
+              </button>
+              {modelDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
+                  <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 py-1 min-w-[200px] max-h-64 overflow-y-auto">
+                    {availableModels.map(model => (
+                      <button
+                        key={model}
+                        onClick={() => handleModelSwitch(model)}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-700 transition-colors ${
+                          model === currentModel ? 'text-blue-400 bg-blue-500/10' : 'text-slate-300'
+                        }`}
+                      >
+                        {model === currentModel && '✓ '}{model}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => { const next = !searchOpen; setSearchOpen(next); if (next) { setSearchQuery(''); setSearchResults([]); setTimeout(() => searchInputRef.current?.focus(), 0) } }}
+            className="text-sm text-slate-400 hover:text-white transition-colors p-1"
+            title="搜索 (Ctrl+K)"
+          >
+            🔍
+          </button>
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-sm text-slate-400 hover:text-white transition-colors p-1"
@@ -796,6 +997,57 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           </button>
         </div>
       </header>
+
+      {/* Search panel */}
+      {searchOpen && (
+        <div className="bg-slate-800/95 border-b border-slate-700 px-4 py-3 backdrop-blur-sm">
+          <div className="max-w-2xl mx-auto">
+            <div className="relative">
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setSearchOpen(false) }}
+                placeholder="搜索消息历史..."
+                autoFocus
+                className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+              />
+              {searchLoading && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">搜索中...</span>}
+            </div>
+            {searchResults.length > 0 && (
+              <div className="mt-2 max-h-64 overflow-y-auto space-y-1">
+                {searchResults.map(hit => (
+                  <div
+                    key={hit.id}
+                    className="px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 cursor-pointer text-sm"
+                    onClick={() => {
+                      setSearchOpen(false)
+                      const el = messagesContainerRef.current?.querySelector(`[data-msg-id="hist-${hit.id}"]`)
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        el.classList.add('search-highlight')
+                        setTimeout(() => el.classList.remove('search-highlight'), 2000)
+                      }
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-medium text-slate-400">{hit.role === 'user' ? '👤' : '🤖'}</span>
+                      {hit.created_at && <span className="text-xs text-slate-500">{new Date(hit.created_at).toLocaleString('zh-CN')}</span>}
+                    </div>
+                    <div className="text-slate-300 text-xs line-clamp-2 whitespace-pre-wrap break-words">
+                      {hit.snippet}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {searchQuery && !searchLoading && searchResults.length === 0 && (
+              <div className="mt-2 text-center text-xs text-slate-500">未找到匹配结果</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Disconnected / Reconnecting banner */}
       {!connected && serverStopped.current && (
@@ -832,7 +1084,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             const isActive = loading || progress !== null
             if (turn.type === 'user') {
 	              const content = (
-	                <div className="flex justify-end msg-fade-in">
+	                <div className="flex justify-end msg-fade-in" data-msg-id={turn.message.id}>
 	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
 		                    <UserMessageContent content={turn.message.content} />
 	                    {turn.message.ts && (
@@ -853,14 +1105,16 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             // Assistant turn — last one gets live progress & loading
             const turnSavedProgress = turn.messages[turn.messages.length - 1]?.savedProgress ?? null
             const assistantContent = (
-              <AssistantTurn
-                key={turn.messages[0].id}
-                messages={turn.messages}
-                progress={isLatestTurn && isActive ? progress : null}
-                liveIterations={isLatestTurn && isActive ? liveIterations : undefined}
-                loading={isLatestTurn && isActive && loading}
-                savedProgress={turnSavedProgress}
-              />
+              <div data-msg-id={turn.messages[0].id}>
+                <AssistantTurn
+                  key={turn.messages[0].id}
+                  messages={turn.messages}
+                  progress={isLatestTurn && isActive ? progress : null}
+                  liveIterations={isLatestTurn && isActive ? liveIterations : undefined}
+                  loading={isLatestTurn && isActive && loading}
+                  savedProgress={turnSavedProgress}
+                />
+              </div>
             )
             return isLatestTurn ? assistantContent : (
               <LazyTurn key={turn.messages[0].id}>{assistantContent}</LazyTurn>
@@ -931,6 +1185,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               onSend={handleSend}
               disabled={loading}
               connected={connected}
+              currentModel={currentModel}
+              onCancel={handleCancel}
             />
           </div>
           <FileUpload
@@ -948,6 +1204,119 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           )}
         </div>
       </div>
+
+      {/* Toast notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`px-4 py-2 rounded-lg shadow-lg text-sm toast-enter ${
+              toast.type === 'error' ? 'bg-red-500/90 text-white' :
+              toast.type === 'success' ? 'bg-green-500/90 text-white' :
+              'bg-slate-700/90 text-slate-200 border border-slate-600'
+            }`}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
+      {/* AskUser interaction panel */}
+      {askUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 askuser-backdrop" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            // Cancel on backdrop click
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({
+                type: 'ask_user_response',
+                answers: askUser.answers,
+                cancelled: true,
+              }))
+            } else {
+              showToast('连接已断开，请刷新页面', 'error')
+            }
+            setAskUser(null)
+          }
+        }}>
+          <div className="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl max-w-lg w-full mx-4 askuser-panel">
+            <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <span className="text-lg">🤔</span>
+                Agent 需要你的输入
+              </h3>
+              <span className="text-xs text-slate-400">
+                {askUser.currentQ + 1} / {askUser.questions.length}
+              </span>
+            </div>
+            <div className="px-5 py-4">
+              <p className="text-sm text-slate-200 mb-4">{askUser.questions[askUser.currentQ].question}</p>
+              {askUser.questions[askUser.currentQ].options && askUser.questions[askUser.currentQ].options!.length > 0 ? (
+                <div className="space-y-2">
+                  {askUser.questions[askUser.currentQ].options!.map((opt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => submitAnswer(opt)}
+                      className="w-full text-left px-4 py-2.5 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-blue-500/10 hover:border-blue-500/50 transition-colors"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    ref={askUserInputRef}
+                    autoFocus
+                    placeholder="输入你的回答..."
+                    className="flex-1 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        submitAnswer((e.target as HTMLInputElement).value)
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => submitAnswer(askUserInputRef.current?.value || '')}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
+                  >
+                    提交
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-slate-700 flex justify-between items-center">
+              {askUser.currentQ > 0 ? (
+                <button
+                  onClick={() => setAskUser({ ...askUser, currentQ: askUser.currentQ - 1 })}
+                  className="text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  ← 上一题
+                </button>
+              ) : (
+                <div />
+              )}
+              <button
+                onClick={() => {
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                      type: 'ask_user_response',
+                      answers: askUser.answers,
+                      cancelled: true,
+                    }))
+                  } else {
+                    showToast('连接已断开，请刷新页面', 'error')
+                  }
+                  setAskUser(null)
+                }}
+                className="text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings panel */}
       <SettingsPanel

@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react'
 import LoginPage from './LoginPage'
 import ChatPage from './ChatPage'
 
+// Apply saved theme immediately before React renders (prevents flash)
+const savedTheme = localStorage.getItem('xbot-theme')
+if (savedTheme) {
+  document.documentElement.setAttribute('data-theme', savedTheme)
+}
+
 function App() {
   const [authed, setAuthed] = useState<boolean | null>(null)
 

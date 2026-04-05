@@ -1,20 +1,25 @@
 import { useEffect, useRef, useId, useState } from 'react'
 
-// Singleton mermaid instance — mermaid.initialize should only be called once
-let mermaidInstance: typeof import('mermaid').default | null = null
+let mermaidModule: typeof import('mermaid').default | null = null
 let mermaidLoadPromise: Promise<typeof import('mermaid').default> | null = null
+let lastMermaidTheme: string | null = null
 
-async function getMermaid() {
-  if (mermaidInstance) return mermaidInstance
-  if (mermaidLoadPromise) return mermaidLoadPromise
-  mermaidLoadPromise = import('mermaid').then((mod) => {
-    mermaidInstance = mod.default
-    mermaidInstance.initialize({
+async function getMermaid(): Promise<typeof import('mermaid').default> {
+  if (!mermaidLoadPromise) {
+    mermaidLoadPromise = import('mermaid').then((mod) => {
+      mermaidModule = mod.default
+      return mermaidModule
+    })
+  }
+  const mod = await mermaidLoadPromise
+  const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'default' : 'dark'
+  if (theme !== lastMermaidTheme) {
+    mod.initialize({
       startOnLoad: false,
-      theme: 'dark',
+      theme: theme as 'dark' | 'default',
       securityLevel: 'strict',
       fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-      themeVariables: {
+      themeVariables: theme === 'dark' ? {
         primaryColor: '#6366f1',
         primaryTextColor: '#e2e8f0',
         primaryBorderColor: '#4f46e5',
@@ -27,11 +32,39 @@ async function getMermaid() {
         clusterBkg: '#1e293b80',
         titleColor: '#e2e8f0',
         edgeLabelBackground: '#1e293b',
+      } : {
+        primaryColor: '#6366f1',
+        primaryTextColor: '#1c1917',
+        primaryBorderColor: '#4f46e5',
+        lineColor: '#78716c',
+        secondaryColor: '#e2dfda',
+        tertiaryColor: '#f7f5f2',
+        background: '#f7f5f2',
+        mainBkg: '#f7f5f2',
+        nodeBorder: '#4f46e5',
+        clusterBkg: '#f7f5f280',
+        titleColor: '#1c1917',
+        edgeLabelBackground: '#f7f5f2',
       },
     })
-    return mermaidInstance
-  })
-  return mermaidLoadPromise
+    lastMermaidTheme = theme
+  }
+  return mod
+}
+
+/** Returns the current theme key ('light' or 'dark') from the DOM. */
+function useTheme() {
+  const [theme, setTheme] = useState(
+    () => document.documentElement.getAttribute('data-theme') || 'dark'
+  )
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setTheme(document.documentElement.getAttribute('data-theme') || 'dark')
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+  return theme
 }
 
 export function MermaidBlock({ code }: { code: string }) {
@@ -39,6 +72,7 @@ export function MermaidBlock({ code }: { code: string }) {
   const uniqueId = useId().replace(/:/g, '_')
   const [error, setError] = useState<string | null>(null)
   const [svg, setSvg] = useState<string>('')
+  const theme = useTheme()
 
   useEffect(() => {
     let cancelled = false
@@ -66,7 +100,7 @@ export function MermaidBlock({ code }: { code: string }) {
         if (el) el.remove()
       })
     }
-  }, [code, uniqueId])
+  }, [code, uniqueId, theme])
 
   if (error) {
     return (

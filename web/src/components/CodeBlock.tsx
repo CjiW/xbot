@@ -88,10 +88,12 @@ function CodeBlock({ className, children }: CodeBlockProps) {
     }
   }
 
+  const lineCount = codeText.split('\n').length
+
   return (
     <div className="xbot-codeblock">
       <div className="xbot-codeblock-header">
-        <span>{lang || 'code'}</span>
+        <span>{lang || 'code'}{lineCount > 1 && <span className="ml-2 text-slate-600 text-[10px]">{lineCount} lines</span>}</span>
         <button onClick={handleCopy} className="xbot-codeblock-copy">
           {copied ? '✓ Copied' : 'Copy'}
         </button>

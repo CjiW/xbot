@@ -115,6 +115,11 @@ func (r *SandboxRouter) IsRunnerOnline(userID, runnerName string) bool {
 	return r.remote.IsRunnerOnline(userID, runnerName)
 }
 
+// Remote returns the underlying RemoteSandbox instance (may be nil).
+func (r *SandboxRouter) Remote() *RemoteSandbox {
+	return r.remote
+}
+
 // SetTokenStore stores the runner token store for reading user active_runner preferences.
 func (r *SandboxRouter) SetTokenStore(store *RunnerTokenStore) {
 	r.tokenStore = store

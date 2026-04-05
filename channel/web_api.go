@@ -20,9 +20,11 @@ type historyResponse struct {
 	OK       bool      `json:"ok"`
 	Messages []histMsg `json:"messages,omitempty"`
 	Error    string    `json:"error,omitempty"`
+	Deleted  int64     `json:"deleted,omitempty"`
 }
 
 type histMsg struct {
+	ID          int64   `json:"id"`
 	Role        string  `json:"role"`
 	Content     string  `json:"content"`
 	CreatedAt   string  `json:"created_at,omitempty"`
@@ -31,18 +33,26 @@ type histMsg struct {
 	DisplayOnly bool    `json:"display_only,omitempty"` // true for cron results (not part of LLM context)
 }
 
-// handleHistory handles GET /api/history
+// handleHistory handles GET|DELETE /api/history
 func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	senderID := senderIDFromContext(r.Context())
-	if senderID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	switch r.Method {
+	case http.MethodGet:
+		wc.handleHistoryGet(w, r, senderID)
+	case http.MethodDelete:
+		wc.handleHistoryDelete(w, r, senderID)
+	default:
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleHistoryGet returns the message history for the current user.
+func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, senderID string) {
 
 	// Find tenant ID for this web user
 	var tenantID int64
@@ -74,14 +84,14 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	var rows *sql.Rows
 	if boundaryID.Valid {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
+				SELECT id, role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND id >= ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
 			`, tenantID, boundaryID.Int64)
 	} else {
 		rows, err = wc.db.Query(`
-				SELECT role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
+				SELECT id, role, content, created_at, tool_calls, detail, COALESCE(display_only, 0)
 				FROM session_messages
 				WHERE tenant_id = ? AND role IN ('user', 'assistant')
 				ORDER BY id ASC
@@ -98,7 +108,7 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 		var m histMsg
 		var toolCalls, detail sql.NullString
 		var displayOnly int
-		if err := rows.Scan(&m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail, &displayOnly); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt, &toolCalls, &detail, &displayOnly); err != nil {
 			continue
 		}
 		if toolCalls.Valid {
@@ -112,6 +122,29 @@ func (wc *WebChannel) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages})
+}
+
+// handleHistoryDelete clears all messages for the current user.
+func (wc *WebChannel) handleHistoryDelete(w http.ResponseWriter, r *http.Request, senderID string) {
+	// Find tenant ID for this web user
+	var tenantID int64
+	err := wc.db.QueryRow(
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", senderID,
+	).Scan(&tenantID)
+	if err != nil {
+		// No tenant yet = nothing to delete
+		writeJSON(w, http.StatusOK, historyResponse{OK: true})
+		return
+	}
+
+	result, err := wc.db.Exec("DELETE FROM session_messages WHERE tenant_id = ?", tenantID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, historyResponse{OK: false, Error: "delete failed"})
+		return
+	}
+
+	deleted, _ := result.RowsAffected()
+	writeJSON(w, http.StatusOK, historyResponse{OK: true, Deleted: deleted})
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +175,7 @@ func (wc *WebChannel) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		wc.handleUpdateSettings(w, r, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -248,7 +281,7 @@ func (wc *WebChannel) handleRunnerToken(w http.ResponseWriter, r *http.Request) 
 	case http.MethodDelete:
 		wc.handleRunnerTokenRevoke(w, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -420,7 +453,7 @@ func (wc *WebChannel) handleRunnerActive(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true, Name: req.Name})
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -437,7 +470,7 @@ func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request)
 	name = strings.TrimSuffix(name, "/")
 	// Reject paths that look like other endpoints
 	if name == "active" || name == "" {
-		http.Error(w, "not found", http.StatusNotFound)
+		jsonErrorResponse(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -458,7 +491,7 @@ func (wc *WebChannel) handleRunnerByName(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +668,7 @@ func (wc *WebChannel) handleLLMConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		wc.handleLLMConfigDelete(w, senderID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -750,7 +783,7 @@ func (wc *WebChannel) handleLLMMaxContext(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, llmConfigResponse{OK: true})
 
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -981,4 +1014,154 @@ func (wc *WebChannel) handleMarketUnpublish(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, marketResponse{OK: true})
+}
+
+// ---------------------------------------------------------------------------
+// Search API
+// ---------------------------------------------------------------------------
+
+type searchResponse struct {
+	OK      bool        `json:"ok"`
+	Results []searchHit `json:"results,omitempty"`
+	Error   string      `json:"error,omitempty"`
+}
+
+type searchHit struct {
+	ID        int64  `json:"id"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at,omitempty"`
+	Snippet   string `json:"snippet"`
+}
+
+// handleSearch handles GET /api/search?q=keyword&limit=20
+func (wc *WebChannel) handleSearch(w http.ResponseWriter, r *http.Request) {
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		writeJSON(w, http.StatusUnauthorized, searchResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, searchResponse{OK: false, Error: "method not allowed"})
+		return
+	}
+
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusOK, searchResponse{OK: true, Results: nil})
+		return
+	}
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	// Find tenant ID for this web user
+	var tenantID int64
+	err := wc.db.QueryRow(
+		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", senderID,
+	).Scan(&tenantID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, searchResponse{OK: true, Results: nil})
+		return
+	}
+
+	// Case-insensitive LIKE search (escape wildcards in user input)
+	like := "%" + escapeLike(q) + "%"
+	rows, err := wc.db.Query(`
+		SELECT id, role, content, created_at
+		FROM session_messages
+		WHERE tenant_id = ? AND role IN ('user', 'assistant') AND content LIKE ? COLLATE NOCASE ESCAPE '\'
+		ORDER BY id DESC
+		LIMIT ?
+	`, tenantID, like, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, searchResponse{OK: false, Error: "search failed"})
+		return
+	}
+	defer rows.Close()
+
+	var results []searchHit
+	qLower := strings.ToLower(q)
+	for rows.Next() {
+		var hit searchHit
+		var content string
+		if err := rows.Scan(&hit.ID, &hit.Role, &content, &hit.CreatedAt); err != nil {
+			continue
+		}
+		hit.Snippet = snippetAround(content, qLower)
+		results = append(results, hit)
+	}
+
+	writeJSON(w, http.StatusOK, searchResponse{OK: true, Results: results})
+}
+
+// escapeLike escapes SQL LIKE wildcard characters in user input.
+func escapeLike(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '%' || c == '_' || c == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// snippetAround returns a snippet of text around the first occurrence of the
+// query keyword (case-insensitive), with up to 50 runes before and after.
+// Uses []rune to avoid truncating multi-byte characters (CJK, emoji, etc.).
+func snippetAround(content, queryLower string) string {
+	runes := []rune(content)
+	queryRunes := []rune(queryLower)
+	contentLower := strings.ToLower(content)
+
+	// Find byte offset of match, then convert to rune index
+	byteIdx := strings.Index(contentLower, queryLower)
+	if byteIdx == -1 {
+		// Fallback: return first 150 runes
+		if len(runes) <= 150 {
+			return content
+		}
+		return "..." + string(runes[len(runes)-147:])
+	}
+
+	runeIdx := len([]rune(content[:byteIdx]))
+
+	start := runeIdx - 50
+	if start < 0 {
+		start = 0
+	} else {
+		// Break at space to avoid cutting words
+		for start < runeIdx && runes[start] != ' ' && runes[start] != '\n' {
+			start++
+		}
+		if start < runeIdx {
+			start++ // skip the space/newline
+		}
+	}
+
+	end := runeIdx + len(queryRunes) + 50
+	if end > len(runes) {
+		end = len(runes)
+	} else {
+		// Break at space to avoid cutting words
+		for end < len(runes) && runes[end] != ' ' && runes[end] != '\n' {
+			end++
+		}
+	}
+
+	snippet := string(runes[start:end])
+	if start > 0 {
+		snippet = "..." + snippet
+	}
+	if end < len(runes) {
+		snippet = snippet + "..."
+	}
+	return snippet
 }

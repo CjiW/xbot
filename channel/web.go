@@ -104,6 +104,11 @@ type WebCallbacks struct {
 	// Returns (sandboxInternalPath, error). sandboxInternalPath is the path inside
 	// the sandbox (e.g., /workspace/uploads/file.txt). Returns ("", nil) if no sandbox available.
 	SandboxWriteFile func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (sandboxPath string, err error)
+	// RunnerStatusNotify is called when a runner connects/disconnects.
+	// Used by main to wire up real-time status push to WebChannel.
+	RunnerStatusNotify func(senderID, runnerName string, online bool)
+	// SyncProgressNotify is called when runner sync progress is reported.
+	SyncProgressNotify func(senderID, phase, message string)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +265,7 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo"
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo", "ask_user"
 	ID              string             `json:"id,omitempty"`               // UUID
 	Content         string             `json:"content,omitempty"`          // message content
 	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
@@ -271,20 +276,26 @@ type wsMessage struct {
 
 // WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
 type WsProgressPayload struct {
-	Phase          string           `json:"phase,omitempty"`
-	Iteration      int              `json:"iteration,omitempty"`
-	ActiveTools    []WsToolProgress `json:"active_tools,omitempty"`
-	CompletedTools []WsToolProgress `json:"completed_tools,omitempty"`
-	Thinking       string           `json:"thinking,omitempty"`
-	SubAgents      []WsSubAgent     `json:"sub_agents,omitempty"`
+	Phase          string              `json:"phase,omitempty"`
+	Iteration      int                 `json:"iteration,omitempty"`
+	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
+	CompletedTools []WsToolProgress    `json:"completed_tools,omitempty"`
+	Thinking       string              `json:"thinking,omitempty"`
+	SubAgents      []WsSubAgent        `json:"sub_agents,omitempty"`
+	TokenUsage     *WsTokenUsage       `json:"token_usage,omitempty"`
+	Todos          []WsTodoItem        `json:"todos,omitempty"`
+	Questions      []WsAskUserQuestion `json:"questions,omitempty"`
+	RequestID      string              `json:"request_id,omitempty"`
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
 type WsToolProgress struct {
-	Name    string `json:"name,omitempty"`
-	Label   string `json:"label,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
+	Name      string `json:"name,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Elapsed   int64  `json:"elapsed_ms,omitempty"` // milliseconds
+	Iteration int    `json:"iteration,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 // WsSubAgent 子 Agent 的结构化进度状态。
@@ -295,6 +306,21 @@ type WsSubAgent struct {
 	Children []WsSubAgent `json:"children,omitempty"`
 }
 
+// WsTokenUsage Token 使用量快照（对应 agent.TokenUsageSnapshot）。
+type WsTokenUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty"`
+	TotalTokens      int64 `json:"total_tokens,omitempty"`
+	CacheHitTokens   int64 `json:"cache_hit_tokens,omitempty"`
+}
+
+// WsTodoItem represents a TODO item for web display.
+type WsTodoItem struct {
+	ID   int    `json:"id"`
+	Text string `json:"text"`
+	Done bool   `json:"done"`
+}
+
 type wsClientMessage struct {
 	Type       string   `json:"type"`
 	Content    string   `json:"content"`
@@ -303,6 +329,24 @@ type wsClientMessage struct {
 	FileSizes  []int64  `json:"file_sizes,omitempty"`
 	UploadKeys []string `json:"upload_keys,omitempty"` // OSS upload keys (for qiniu mode)
 	FileMimes  []string `json:"file_mimes,omitempty"`  // MIME types
+}
+
+// WsAskUserPayload is the payload for "ask_user" WS messages (agent needs user input).
+type WsAskUserPayload struct {
+	Questions []WsAskUserQuestion `json:"questions"`
+	RequestID string              `json:"request_id,omitempty"`
+}
+
+// WsAskUserQuestion represents a single question in the AskUser flow.
+type WsAskUserQuestion struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+}
+
+// WsAskUserResponse is the client response to an ask_user prompt.
+type WsAskUserResponse struct {
+	Answers   map[string]string `json:"answers"`   // question index -> answer
+	Cancelled bool              `json:"cancelled"` // true = user cancelled
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +452,7 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/api/history", wc.authMiddleware(wc.handleHistory))
 	mux.HandleFunc("/api/settings", wc.authMiddleware(wc.handleSettings))
 	mux.HandleFunc("/api/runner/token", wc.authMiddleware(wc.handleRunnerToken))
+	mux.HandleFunc("/api/search", wc.authMiddleware(wc.handleSearch))
 
 	// Multi-runner API
 	mux.HandleFunc("/api/runners", wc.authMiddleware(wc.handleRunners))
@@ -438,7 +483,7 @@ func (wc *WebChannel) Start() error {
 	addr := fmt.Sprintf("%s:%d", wc.config.Host, wc.config.Port)
 	wc.server = &http.Server{
 		Addr:         addr,
-		Handler:      securityHeadersMiddleware(mux),
+		Handler:      wc.securityHeadersMiddleware(mux),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -510,6 +555,27 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		log.WithField("chat_id", msg.ChatID).Debug("Web client offline, message buffered")
 	}
 
+	// AskUser: agent needs user input
+	if msg.WaitingUser {
+		askPayload := &WsProgressPayload{}
+		if msg.Metadata != nil {
+			askPayload.RequestID = msg.Metadata["request_id"]
+			if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+				var qs []WsAskUserQuestion
+				if json.Unmarshal([]byte(qJSON), &qs) == nil {
+					askPayload.Questions = qs
+				}
+			}
+		}
+		askMsg := wsMessage{
+			Type:     "ask_user",
+			ID:       msgID,
+			TS:       time.Now().Unix(),
+			Progress: askPayload,
+		}
+		wc.hub.sendToClient(msg.ChatID, askMsg)
+	}
+
 	return msgID, nil
 }
 
@@ -531,6 +597,36 @@ func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 	}
 }
 
+// PushRunnerStatus pushes a runner online/offline status change to the Web client.
+func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
+	wsMsg := wsMessage{
+		Type: "runner_status",
+		TS:   time.Now().Unix(),
+		Content: func() string {
+			b, _ := json.Marshal(map[string]interface{}{"runner_name": runnerName, "online": online})
+			return string(b)
+		}(),
+	}
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, runner status buffered")
+	}
+}
+
+// PushSyncProgress pushes a sync progress notification to the Web client.
+func (wc *WebChannel) PushSyncProgress(chatID, phase, message string) {
+	wsMsg := wsMessage{
+		Type: "sync_progress",
+		TS:   time.Now().Unix(),
+		Content: func() string {
+			b, _ := json.Marshal(map[string]interface{}{"phase": phase, "message": message})
+			return string(b)
+		}(),
+	}
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, sync progress buffered")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket handler
 // ---------------------------------------------------------------------------
@@ -545,7 +641,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Authenticate via cookie
 	si := wc.validateSession(r)
 	if si == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
@@ -755,6 +851,49 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				To:         bus.NewIMAddress("web", chatID),
 				Metadata:   metadata,
 			}
+		case "ask_user_response":
+			var resp WsAskUserResponse
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				log.WithError(err).Debug("WS invalid ask_user_response")
+				continue
+			}
+			if resp.Cancelled {
+				// User cancelled — send /cancel equivalent
+				wc.msgBus.Inbound <- bus.InboundMessage{
+					Channel:    "web",
+					SenderID:   c.userID,
+					SenderName: si.username,
+					ChatID:     chatID,
+					ChatType:   "p2p",
+					Content:    "/cancel",
+					Time:       time.Now(),
+					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					From:       bus.NewIMAddress("web", c.userID),
+					To:         bus.NewIMAddress("web", chatID),
+				}
+			} else {
+				// Format answers as indexed Q/A pairs
+				var parts []string
+				for idx, ans := range resp.Answers {
+					parts = append(parts, fmt.Sprintf("Q%s: %s", idx, ans))
+				}
+				content := strings.Join(parts, "\n\n")
+				wc.msgBus.Inbound <- bus.InboundMessage{
+					Channel:    "web",
+					SenderID:   c.userID,
+					SenderName: si.username,
+					ChatID:     chatID,
+					ChatType:   "p2p",
+					Content:    content,
+					Time:       time.Now(),
+					RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
+					From:       bus.NewIMAddress("web", c.userID),
+					To:         bus.NewIMAddress("web", chatID),
+					Metadata:   map[string]string{"ask_user_answered": "true"},
+				}
+			}
+		default:
+			log.WithField("type", msg.Type).Debug("WS unknown message type")
 		}
 	}
 
@@ -765,17 +904,26 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 // ---------------------------------------------------------------------------
 
 // securityHeadersMiddleware wraps an http.Handler with security response headers.
-func securityHeadersMiddleware(next http.Handler) http.Handler {
+func (wc *WebChannel) securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Build img-src with OSS domain whitelist (if configured)
+		imgSrc := "'self' data: blob:"
+		if wc.ossProvider != nil {
+			if d := wc.ossProvider.Domain(); d != "" {
+				imgSrc += " " + d
+			}
+		}
+
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"font-src 'self' https://fonts.gstatic.com; "+
-				"img-src 'self' data: blob:; "+
+				"img-src "+imgSrc+"; "+
 				"connect-src 'self' ws: wss:; "+
 				"frame-ancestors 'none'",
 		)
@@ -805,12 +953,12 @@ func (wc *WebChannel) handleStatic(w http.ResponseWriter, r *http.Request) {
 	// Ensure the resolved path is within the static directory
 	absStaticDir, err := filepath.Abs(wc.staticDir)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		jsonErrorResponse(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	absResolved, err := filepath.Abs(absPath)
 	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		jsonErrorResponse(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 	if !strings.HasPrefix(absResolved, absStaticDir+string(os.PathSeparator)) && absResolved != absStaticDir {

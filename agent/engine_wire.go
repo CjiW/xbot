@@ -217,6 +217,7 @@ func (a *Agent) buildMainRunConfig(
 								Status:    string(t.Status),
 								Elapsed:   t.Elapsed.Milliseconds(),
 								Iteration: t.Iteration,
+								Summary:   t.Summary,
 							})
 						}
 						for _, t := range s.CompletedTools {
@@ -226,6 +227,7 @@ func (a *Agent) buildMainRunConfig(
 								Status:    string(t.Status),
 								Elapsed:   t.Elapsed.Milliseconds(),
 								Iteration: t.Iteration,
+								Summary:   t.Summary,
 							})
 						}
 						// Parse sub-agent tree from progress lines
@@ -285,18 +287,22 @@ func (a *Agent) buildMainRunConfig(
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
 							})
 						}
 						for _, t := range s.CompletedTools {
 							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
 							})
 						}
 						// Parse sub-agent tree from progress lines
@@ -313,6 +319,26 @@ func (a *Agent) buildMainRunConfig(
 									}
 								}
 								payload.SubAgents = wsSubAgents
+							}
+						}
+						// Copy todo items for web display
+						if len(s.Todos) > 0 {
+							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								payload.Todos[i] = channelpkg.WsTodoItem{
+									ID:   td.ID,
+									Text: td.Text,
+									Done: td.Done,
+								}
+							}
+						}
+						// Pass token usage snapshot
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.WsTokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
 

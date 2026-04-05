@@ -672,6 +672,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashTickMsg:
 		// §14 启动画面动画帧推进
 		m.splashFrame = msg.frame
+		if m.suLoading {
+			// /su 历史加载中，持续动画
+			cmds = append(cmds, m.splashTick(msg.frame))
+			return m, tea.Batch(cmds...)
+		}
 		if m.ready && msg.frame >= 20 {
 			// 初始化完成且已展示至少 1 秒（20 帧 × 50ms）
 			m.splashDone = true
@@ -689,6 +694,33 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// §14 启动画面结束确认
 		m.splashDone = true
 		cmds = append(cmds, idleTickCmd())
+
+	case suHistoryLoadMsg:
+		// /su 切换用户后历史加载完成
+		m.suLoading = false
+		if msg.err != nil {
+			m.showSystemMsg(fmt.Sprintf("⚠️ 加载历史失败: %v", msg.err), feedbackWarning)
+		} else {
+			for _, hm := range msg.history {
+				cm := cliMessage{
+					role:      hm.Role,
+					content:   hm.Content,
+					timestamp: hm.Timestamp,
+					isPartial: false,
+					dirty:     true,
+				}
+				if len(hm.Iterations) > 0 {
+					cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
+					for i, hi := range hm.Iterations {
+						cm.iterations[i] = cliIterationSnapshot(hi)
+					}
+				}
+				m.messages = append(m.messages, cm)
+			}
+			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: %s) — 已加载 %d 条历史消息", m.senderID, m.channelName, len(msg.history)), feedbackInfo)
+		}
+		m.invalidateAllCache(false)
+		m.viewport.GotoBottom()
 
 	case cliToastMsg:
 		// §16 Toast 通知入队（最多保留 5 条，显示前 3 条）

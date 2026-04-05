@@ -111,6 +111,12 @@ type splashTickMsg struct {
 // splashDoneMsg 启动画面结束消息
 type splashDoneMsg struct{}
 
+// suHistoryLoadMsg /su 切换用户后的历史加载完成消息
+type suHistoryLoadMsg struct {
+	history []HistoryMessage
+	err     error
+}
+
 // cliToastItem 单条 Toast 通知数据
 type cliToastItem struct {
 	text string
@@ -259,6 +265,7 @@ type cliModel struct {
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面
 	splashFrame int  // 当前 splash 动画帧索引
+	suLoading   bool // true = /su 切换用户后正在加载历史，显示 loading 画面
 
 	// --- §16 Toast 通知队列 ---
 	toasts     []cliToastItem // Toast 队列（头部=当前显示）
@@ -489,4 +496,18 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
 		return splashTickMsg{frame: frame + 1}
 	})
+}
+
+// suLoadHistoryCmd 异步加载 /su 目标用户的历史消息
+func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
+	channelName := m.channelName
+	chatID := m.chatID
+	loader := m.channel.config.DynamicHistoryLoader
+	if loader == nil {
+		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
+	}
+	return func() tea.Msg {
+		history, err := loader(channelName, chatID)
+		return suHistoryLoadMsg{history: history, err: err}
+	}
 }

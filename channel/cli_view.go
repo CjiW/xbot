@@ -34,6 +34,13 @@ func (m *cliModel) View() tea.View {
 		return v
 	}
 
+	// /su 切换用户后加载历史中的 loading 画面
+	if m.suLoading {
+		v := tea.NewView(m.renderSuLoading())
+		v.AltScreen = true
+		return v
+	}
+
 	// ========== 样式定义 ==========
 
 	// 标题栏：纯 ASCII，避免 emoji 导致宽度误算
@@ -443,6 +450,63 @@ func (m *cliModel) renderSplash() string {
 	emptyLinesBefore := (screenH - len(lines)) / 2
 	if emptyLinesBefore < 2 {
 		emptyLinesBefore = 2
+	}
+
+	var sb strings.Builder
+	for i := 0; i < emptyLinesBefore; i++ {
+		sb.WriteString("\n")
+	}
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// renderSuLoading 渲染 /su 切换用户后的历史加载画面（复用 splash 动画帧）
+func (m *cliModel) renderSuLoading() string {
+	screenW := m.width
+	if screenW < 40 {
+		screenW = 40
+	}
+	screenH := m.height
+	if screenH < 10 {
+		screenH = 10
+	}
+
+	loadingStyle := m.styles.WarningSt
+	descStyle := m.styles.TextMutedSt
+
+	// 居中内容
+	var lines []string
+	frame := splashFrames[m.splashFrame%len(splashFrames)]
+
+	// 切换目标提示
+	suText := descStyle.Render(fmt.Sprintf("切换身份: %s (%s)", m.senderID, m.channelName))
+	suW := lipgloss.Width(suText)
+	suPad := (screenW - suW) / 2
+	if suPad < 0 {
+		suPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", suPad)+suText)
+
+	// 空行
+	lines = append(lines, "")
+
+	// 加载动画
+	loadingText := loadingStyle.Render(fmt.Sprintf("  %s  加载历史中...", frame))
+	lW := lipgloss.Width(loadingText)
+	lPad := (screenW - lW) / 2
+	if lPad < 0 {
+		lPad = 0
+	}
+	lines = append(lines, strings.Repeat(" ", lPad)+loadingText)
+
+	// 垂直居中
+	emptyLinesBefore := (screenH - len(lines)) / 2
+	if emptyLinesBefore < 3 {
+		emptyLinesBefore = 3
 	}
 
 	var sb strings.Builder

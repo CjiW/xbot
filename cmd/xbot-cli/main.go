@@ -422,8 +422,9 @@ func main() {
 	// 设置历史消息加载器（会话恢复）
 	var cliTenantID int64
 	var cliSessionSvc *sqlite.SessionService
+	var tenantSvc *sqlite.TenantService
 	if app.db != nil {
-		tenantSvc := sqlite.NewTenantService(app.db)
+		tenantSvc = sqlite.NewTenantService(app.db)
 		cliSessionSvc = sqlite.NewSessionService(app.db)
 		tenantID, err := tenantSvc.GetOrCreateTenantID("cli", absWorkDir)
 		if err == nil {
@@ -438,16 +439,31 @@ func main() {
 		}
 	}
 
+	// /su 动态历史加载器：根据目标 channel/chatID 查找 tenant 并加载历史
+	if tenantSvc != nil && cliSessionSvc != nil {
+		cliCfg.DynamicHistoryLoader = func(channelName, chatID string) ([]channel.HistoryMessage, error) {
+			tid, err := tenantSvc.GetOrCreateTenantID(channelName, chatID)
+			if err != nil {
+				return nil, fmt.Errorf("get tenant: %w", err)
+			}
+			msgs, err := cliSessionSvc.GetAllMessages(tid)
+			if err != nil {
+				return nil, err
+			}
+			return channel.ConvertMessagesToHistory(msgs), nil
+		}
+	}
+
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
 
-	// /su observer: when TUI switches to web user identity via /su,
-	// register CLI as observer of "web" channel outbound messages.
+	// /su: when TUI switches to web user identity, register CLI as "web" channel
+	// so dispatcher SendDirect and outbound loop can find it.
 	cliCh.OnSuChange = func(targetChannel string, enable bool) {
 		if enable {
-			disp.AddObserver(targetChannel, cliCh)
+			disp.RegisterAs(targetChannel, cliCh)
 		} else {
-			disp.RemoveObserver(targetChannel, cliCh)
+			disp.Unregister(targetChannel)
 		}
 	}
 

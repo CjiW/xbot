@@ -351,11 +351,11 @@ func main() {
 					if err != nil {
 						return nil, err
 					}
-					// Populate online status from RemoteSandbox
+					// Populate online status from SandboxRouter
 					if sb := tools.GetSandbox(); sb != nil {
-						if rs, ok := sb.(*tools.RemoteSandbox); ok {
+						if router, ok := sb.(*tools.SandboxRouter); ok {
 							for i := range runners {
-								runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
+								runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
 							}
 						}
 					}
@@ -403,8 +403,8 @@ func main() {
 					}
 					// Disconnect runner if online
 					if sb := tools.GetSandbox(); sb != nil {
-						if rs, ok := sb.(*tools.RemoteSandbox); ok {
-							rs.DisconnectRunner(senderID, name)
+						if router, ok := sb.(*tools.SandboxRouter); ok {
+							router.DisconnectRunner(senderID, name)
 						}
 					}
 					return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
@@ -665,11 +665,11 @@ func main() {
 				if err != nil {
 					return nil, err
 				}
-				// Populate online status from RemoteSandbox
+				// Populate online status from SandboxRouter
 				if sb := tools.GetSandbox(); sb != nil {
-					if rs, ok := sb.(*tools.RemoteSandbox); ok {
+					if router, ok := sb.(*tools.SandboxRouter); ok {
 						for i := range runners {
-							runners[i].Online = rs.IsRunnerOnline(senderID, runners[i].Name)
+							runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
 						}
 					}
 					// Inject built-in docker sandbox if available
@@ -716,8 +716,8 @@ func main() {
 					return fmt.Errorf("runner management not configured")
 				}
 				if sb := tools.GetSandbox(); sb != nil {
-					if rs, ok := sb.(*tools.RemoteSandbox); ok {
-						rs.DisconnectRunner(senderID, name)
+					if router, ok := sb.(*tools.SandboxRouter); ok {
+						router.DisconnectRunner(senderID, name)
 					}
 				}
 				return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)

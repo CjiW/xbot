@@ -374,6 +374,18 @@ func main() {
 				}
 			}
 		},
+		ClearMemory: func(targetType string) error {
+			if app.agentLoop == nil {
+				return fmt.Errorf("agent not initialized")
+			}
+			return app.agentLoop.MultiSession().ClearMemory(context.Background(), "cli", absWorkDir, targetType, "cli_user")
+		},
+		GetMemoryStats: func() map[string]string {
+			if app.agentLoop == nil {
+				return map[string]string{}
+			}
+			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

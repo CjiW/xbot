@@ -120,6 +120,14 @@ func (r *SandboxRouter) Remote() *RemoteSandbox {
 	return r.remote
 }
 
+// DisconnectRunner disconnects a runner by name for the given user.
+func (r *SandboxRouter) DisconnectRunner(userID, runnerName string) bool {
+	if r.remote == nil {
+		return false
+	}
+	return r.remote.DisconnectRunner(userID, runnerName)
+}
+
 // SetTokenStore stores the runner token store for reading user active_runner preferences.
 func (r *SandboxRouter) SetTokenStore(store *RunnerTokenStore) {
 	r.tokenStore = store

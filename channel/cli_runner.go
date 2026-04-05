@@ -151,9 +151,15 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 			wsURL = "ws://" + wsURL
 		}
 
-		// 8. 连接 server
+		// 8. 连接 server（自报告 LLM 能力）
 		shell := runnerclient.DetectShell(false, executor)
-		conn, err := runnerclient.Connect(wsURL, userID, token, workspace, shell, runnerclient.ConnectOptions{LogFunc: logf})
+		var opts runnerclient.ConnectOptions
+		opts.LogFunc = logf
+		if handler.LLMProvider() != "" {
+			opts.LLMProvider = handler.LLMProvider()
+			opts.LLMModel = handler.LLMModel()
+		}
+		conn, err := runnerclient.Connect(wsURL, userID, token, workspace, shell, opts)
 		if err != nil {
 			program.Send(runnerStatusMsg{
 				status: RunnerDisconnected,

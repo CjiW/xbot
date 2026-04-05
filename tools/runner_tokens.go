@@ -267,13 +267,21 @@ func (s *RunnerTokenStore) DeleteRunner(userID, name string) error {
 }
 
 // UpdateRunnerLLM updates the LLM settings for an existing runner.
+// If the runner record doesn't exist (e.g., TUI direct connect), it creates one.
 func (s *RunnerTokenStore) UpdateRunnerLLM(userID, name string, llm RunnerLLMSettings) error {
+	// Upsert: ensure a runners record exists even for TUI direct connects
+	// that weren't created via the web RunnerPanel.
 	_, err := s.db.Exec(`
-		UPDATE runners SET llm_provider = ?, llm_api_key = ?, llm_model = ?, llm_base_url = ?
-		WHERE user_id = ? AND name = ?
-	`, llm.Provider, llm.APIKey, llm.Model, llm.BaseURL, userID, name)
+		INSERT INTO runners (user_id, name, token, mode, workspace, llm_provider, llm_api_key, llm_model, llm_base_url, created_at)
+		VALUES (?, ?, '', 'native', '', ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(user_id, name) DO UPDATE SET
+			llm_provider = excluded.llm_provider,
+			llm_api_key = excluded.llm_api_key,
+			llm_model = excluded.llm_model,
+			llm_base_url = excluded.llm_base_url
+	`, userID, name, llm.Provider, llm.APIKey, llm.Model, llm.BaseURL)
 	if err != nil {
-		return fmt.Errorf("update runner LLM: %w", err)
+		return fmt.Errorf("upsert runner LLM: %w", err)
 	}
 	return nil
 }

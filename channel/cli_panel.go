@@ -1563,12 +1563,14 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 		// 获取 LLM 客户端
 		var llmClient llm.LLM
 		var models []string
+		var llmProvider string
 		if m.channel != nil {
 			llmClient = m.channel.getLLMClient()
 			models = m.channel.getModelList()
+			llmProvider = m.channel.getLLMProvider()
 		}
 
-		m.runnerBridge.Connect(serverURL, token, workspace, llmClient, models)
+		m.runnerBridge.Connect(serverURL, token, workspace, llmClient, models, llmProvider)
 
 		m.showTempStatus(m.locale.RunnerConnecting)
 		return true, m, m.clearTempStatusCmd()

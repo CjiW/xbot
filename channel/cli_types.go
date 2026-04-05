@@ -448,6 +448,7 @@ type CLIChannel struct {
 	// Runner LLM access
 	llmClient    llm.LLM
 	modelList    []string
+	llmProvider  string
 	bgSessionKey string
 
 	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init

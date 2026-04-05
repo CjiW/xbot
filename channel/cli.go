@@ -170,6 +170,7 @@ func (c *CLIChannel) Start() error {
 					cfg.workspace,
 					c.getLLMClient(),
 					c.getModelList(),
+					c.getLLMProvider(),
 				)
 			}
 		}()
@@ -312,11 +313,12 @@ type animTicker struct {
 }
 
 // SetRunnerLLM sets the LLM client and model list for the runner bridge.
-func (c *CLIChannel) SetRunnerLLM(client llm.LLM, models []string) {
+func (c *CLIChannel) SetRunnerLLM(client llm.LLM, models []string, provider string) {
 	c.configMu.Lock()
 	defer c.configMu.Unlock()
 	c.llmClient = client
 	c.modelList = models
+	c.llmProvider = provider
 }
 
 // getLLMClient returns the LLM client for runner use.
@@ -331,6 +333,13 @@ func (c *CLIChannel) getModelList() []string {
 	c.configMu.RLock()
 	defer c.configMu.RUnlock()
 	return c.modelList
+}
+
+// getLLMProvider returns the LLM provider name for runner use.
+func (c *CLIChannel) getLLMProvider() string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.llmProvider
 }
 
 // StartWithRunner starts the CLI channel and auto-connects as runner after TUI initializes.

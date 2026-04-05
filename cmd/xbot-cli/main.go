@@ -514,13 +514,13 @@ func main() {
 		cancel()
 	}()
 
-	// Runner Bridge: inject LLM client and model list for runner use
+	// Runner Bridge: inject LLM client, model list and provider for runner use
 	cliCh.SetRunnerLLM(app.llmClient, func() []string {
 		if app.agentLoop != nil {
 			return app.agentLoop.LLMFactory().ListModels()
 		}
 		return nil
-	}())
+	}(), app.cfg.LLM.Provider)
 
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {

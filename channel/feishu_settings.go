@@ -409,8 +409,9 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 	// ── Danger zone: step 2 → execute after user confirmation ──
 	case "danger_confirm":
 		userInput := formStr(actionData, "confirm_input")
-		expected := formStr(actionData, "expect_input")
 		target := formStr(actionData, "target_action")
+		// Server-side validation: never trust client-supplied expect_input
+		expected := dangerConfirmString(target)
 		if userInput != expected {
 			return buildDangerResultCard("❌ 确认文字不匹配，操作已取消。"), nil
 		}
@@ -1316,7 +1317,7 @@ func buildDangerConfirmCard(targetLabel, confirmString, targetAction string) map
 								"action_data": mustMapToJSON(map[string]string{
 									"action":        "danger_confirm",
 									"target_action": targetAction,
-									"expect_input":  confirmString,
+									// expect_input removed: server validates via dangerConfirmString(target_action)
 								}),
 							},
 						},

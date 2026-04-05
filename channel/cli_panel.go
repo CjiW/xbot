@@ -545,6 +545,49 @@ func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 	return true, m, nil
 }
 
+// openDangerPanelFromSettings builds danger items with stats and opens the danger zone panel.
+func (m *cliModel) openDangerPanelFromSettings() {
+	stats := map[string]string{}
+	if m.channel != nil && m.channel.config.GetMemoryStats != nil {
+		stats = m.channel.config.GetMemoryStats()
+	}
+
+	items := []dangerItem{
+		{"session", "会话历史", stats["session"]},
+		{"core_persona", "Core Memory: persona", stats["persona"]},
+		{"core_human", "Core Memory: human", stats["human"]},
+		{"core_working", "Core Memory: working_context", stats["working_context"]},
+		{"core_all", "Core Memory: 全部", ""},
+		{"long_term", "长期记忆", stats["long_term"]},
+		{"event_history", "事件历史", stats["event_history"]},
+		{"archival", "归档记忆（向量数据库）", stats["archival"]},
+	}
+
+	m.panelMode = "danger"
+	m.relayoutViewport()
+	m.panelDangerItems = items
+	m.panelDangerCursor = 0
+	m.panelDangerConfirm = false
+	m.panelDangerOnExec = func(targetType string) error {
+		if m.channel != nil && m.channel.config.ClearMemory != nil {
+			return m.channel.config.ClearMemory(targetType)
+		}
+		return fmt.Errorf("clear memory not configured")
+	}
+	// Pre-create text input for confirmation
+	ti := textinput.New()
+	ti.Placeholder = "输入确认文字..."
+	ti.CharLimit = 50
+	ti.SetWidth(m.panelWidth(40))
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Prompt = m.styles.TIPrompt
+	tiStyles.Focused.Text = m.styles.TIText
+	tiStyles.Focused.Placeholder = m.styles.TIPlaceholder
+	tiStyles.Cursor.Color = m.styles.TICursor.GetForeground()
+	ti.SetStyles(tiStyles)
+	m.panelDangerInput = ti
+}
+
 func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	if m.panelEdit {
 		// Editing mode
@@ -636,6 +679,11 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 	case msg.Code == tea.KeyEnter:
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
+			// Danger zone entry
+			if def.Key == "danger_zone" {
+				m.openDangerPanelFromSettings()
+				return true, m, nil
+			}
 			switch def.Type {
 			case SettingTypeToggle:
 				// Toggle on Enter
@@ -1035,6 +1083,17 @@ func (m *cliModel) viewSettingsPanel() string {
 			prefix = cursorStyle.Render("▸")
 		} else {
 			prefix = "  "
+		}
+
+		// Danger zone entry: render with warning style
+		if def.Key == "danger_zone" {
+			line := fmt.Sprintf("%s %s", prefix, s.WarningSt.Render(def.Label))
+			if i == m.panelCursor && !m.panelEdit {
+				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			continue
 		}
 
 		// Format value display

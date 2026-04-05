@@ -322,6 +322,7 @@ func (s *CoreMemoryService) ClearBlock(tenantID int64, blockName, userID string)
 }
 
 // ClearAllBlocks clears all core memory blocks (persona + working_context + human) for a tenant.
+// Uses resolveBlockKey to handle persona/human/working_context correctly.
 func (s *CoreMemoryService) ClearAllBlocks(tenantID int64, userID string) error {
 	conn := s.db.Conn()
 	tx, err := conn.Begin()
@@ -330,16 +331,25 @@ func (s *CoreMemoryService) ClearAllBlocks(tenantID int64, userID string) error 
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'persona'", tenantID); err != nil {
+	// Clear persona (per-tenant)
+	effectivePersonaID, _ := resolveBlockKey(tenantID, "persona", "")
+	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'persona' AND user_id = ''", effectivePersonaID); err != nil {
 		return fmt.Errorf("clear persona: %w", err)
 	}
-	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'working_context'", tenantID); err != nil {
+
+	// Clear working_context (per-tenant)
+	effectiveWcID, _ := resolveBlockKey(tenantID, "working_context", "")
+	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'working_context' AND user_id = ''", effectiveWcID); err != nil {
 		return fmt.Errorf("clear working_context: %w", err)
 	}
+
+	// Clear human (cross-tenant by userID)
+	effectiveHumanID, humanUID := resolveBlockKey(tenantID, "human", userID)
 	if userID != "" {
-		if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = 0 AND block_name = 'human' AND user_id = ?", userID); err != nil {
+		if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'human' AND user_id = ?", effectiveHumanID, humanUID); err != nil {
 			return fmt.Errorf("clear human: %w", err)
 		}
 	}
+
 	return tx.Commit()
 }

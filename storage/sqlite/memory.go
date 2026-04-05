@@ -191,3 +191,11 @@ func (s *MemoryService) ClearState(ctx context.Context, tenantID int64) error {
 	log.WithField("tenant_id", tenantID).Info("Tenant state cleared")
 	return nil
 }
+
+// GetHistoryCount returns the number of event history entries for a tenant.
+func (s *MemoryService) GetHistoryCount(ctx context.Context, tenantID int64) (int64, error) {
+	conn := s.db.Conn()
+	var count int64
+	err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM event_history WHERE tenant_id = ?", tenantID).Scan(&count)
+	return count, err
+}

@@ -697,6 +697,11 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 	switch targetType {
 	case "session":
 		appendErr("session", m.sessionSvc.Clear(tenantID))
+		// Evict cached session so next request loads fresh state
+		sessionKey := channel + ":" + chatID
+		m.mu.Lock()
+		delete(m.tenantCache, sessionKey)
+		m.mu.Unlock()
 	case "core_persona":
 		appendErr("persona", m.coreSvc.ClearBlock(tenantID, "persona", ""))
 	case "core_human":
@@ -705,6 +710,11 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 		appendErr("working_context", m.coreSvc.ClearBlock(tenantID, "working_context", ""))
 	case "core_all":
 		appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
+		// Evict cached session to reset in-memory core memory references
+		sessionKey := channel + ":" + chatID
+		m.mu.Lock()
+		delete(m.tenantCache, sessionKey)
+		m.mu.Unlock()
 	case "long_term":
 		appendErr("long_term", m.memorySvc.ClearLongTerm(ctx, tenantID))
 	case "event_history":
@@ -775,6 +785,11 @@ func (m *MultiTenantSession) GetMemoryStats(ctx context.Context, channel, chatID
 	// Long-term memory
 	if content, err := m.memorySvc.ReadLongTerm(ctx, tenantID); err == nil && content != "" {
 		stats["long_term"] = "有内容"
+	}
+
+	// Event history count
+	if count, err := m.memorySvc.GetHistoryCount(ctx, tenantID); err == nil && count > 0 {
+		stats["event_history"] = fmt.Sprintf("%d 条", count)
 	}
 
 	return stats

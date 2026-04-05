@@ -287,6 +287,27 @@ func init() {
 		FooterFold:     "折叠",
 		FooterUnfold:   "展开",
 
+		// --- K. Runner panel ---
+		RunnerPanelTitle:           "Runner 管理",
+		RunnerStatusConnected:      "已连接",
+		RunnerConnecting:           "正在连接...",
+		RunnerDisconnect:           "断开连接",
+		RunnerDisconnectAction:     "断开",
+		RunnerConnectSuccess:       "✅ Runner 已连接",
+		RunnerConnectFailed:        "❌ Runner 连接失败: %s",
+		RunnerServerLabel:          "Server URL",
+		RunnerTokenLabel:           "Token",
+		RunnerWorkspaceLabel:       "工作目录",
+		RunnerServerPlaceholder:    "ws://host:port/ws/userID",
+		RunnerTokenPlaceholder:     "认证 Token",
+		RunnerWorkspacePlaceholder: "共享的工作目录路径",
+		RunnerServerRequired:       "Server URL 不能为空",
+		RunnerWorkspaceRequired:    "工作目录不能为空",
+		RunnerPleaseWait:           "请稍候...",
+		RunnerNavHint:              "↑↓/Tab 切换字段  Enter 连接  Esc 返回",
+		RunnerNotAvailable:         "Runner 功能不可用",
+		RunnerBack:                 "返回",
+
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
 		IdlePlaceholders: []string{
@@ -578,6 +599,27 @@ func init() {
 		FooterFold:     "fold",
 		FooterUnfold:   "unfold",
 
+		// --- K. Runner panel ---
+		RunnerPanelTitle:           "Runner Manager",
+		RunnerStatusConnected:      "Connected",
+		RunnerConnecting:           "Connecting...",
+		RunnerDisconnect:           "Disconnect",
+		RunnerDisconnectAction:     "disconnect",
+		RunnerConnectSuccess:       "✅ Runner connected",
+		RunnerConnectFailed:        "❌ Runner connection failed: %s",
+		RunnerServerLabel:          "Server URL",
+		RunnerTokenLabel:           "Token",
+		RunnerWorkspaceLabel:       "Workspace",
+		RunnerServerPlaceholder:    "ws://host:port/ws/userID",
+		RunnerTokenPlaceholder:     "Auth token",
+		RunnerWorkspacePlaceholder: "Shared workspace directory",
+		RunnerServerRequired:       "Server URL is required",
+		RunnerWorkspaceRequired:    "Workspace is required",
+		RunnerPleaseWait:           "Please wait...",
+		RunnerNavHint:              "↑↓/Tab switch fields  Enter connect  Esc back",
+		RunnerNotAvailable:         "Runner not available",
+		RunnerBack:                 "back",
+
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
 		IdlePlaceholders: []string{
@@ -868,6 +910,27 @@ func init() {
 		FooterSearch:   "検索",
 		FooterFold:     "折りたたみ",
 		FooterUnfold:   "展開",
+
+		// --- K. Runner panel ---
+		RunnerPanelTitle:           "Runner 管理",
+		RunnerStatusConnected:      "接続済み",
+		RunnerConnecting:           "接続中...",
+		RunnerDisconnect:           "接続解除",
+		RunnerDisconnectAction:     "切断",
+		RunnerConnectSuccess:       "✅ Runner 接続完了",
+		RunnerConnectFailed:        "❌ Runner 接続失敗: %s",
+		RunnerServerLabel:          "Server URL",
+		RunnerTokenLabel:           "Token",
+		RunnerWorkspaceLabel:       "ワークスペース",
+		RunnerServerPlaceholder:    "ws://host:port/ws/userID",
+		RunnerTokenPlaceholder:     "認証 Token",
+		RunnerWorkspacePlaceholder: "共有ワークスペースパス",
+		RunnerServerRequired:       "Server URL は必須です",
+		RunnerWorkspaceRequired:    "ワークスペースは必須です",
+		RunnerPleaseWait:           "お待ちください...",
+		RunnerNavHint:              "↑↓/Tab フィールド切替  Enter 接続  Esc 戻る",
+		RunnerNotAvailable:         "Runner 機能は利用できません",
+		RunnerBack:                 "戻る",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},

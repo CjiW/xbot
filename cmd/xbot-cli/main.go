@@ -386,9 +386,9 @@ func main() {
 			}
 			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
 		},
-		}
+	}
 
-		// 设置历史消息加载器（会话恢复）
+	// 设置历史消息加载器（会话恢复）
 	var cliTenantID int64
 	var cliSessionSvc *sqlite.SessionService
 	if app.db != nil {

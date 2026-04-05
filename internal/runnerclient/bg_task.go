@@ -3,7 +3,6 @@ package runnerclient
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -38,14 +37,16 @@ type bgTaskManager struct {
 	dockerMode bool
 	workspace  string
 	executor   Executor
+	logf       LogFunc
 }
 
-func newBgTaskManager(verbose, dockerMode bool, workspace string) *bgTaskManager {
+func newBgTaskManager(verbose, dockerMode bool, workspace string, logf LogFunc) *bgTaskManager {
 	return &bgTaskManager{
 		tasks:      make(map[string]*bgTask),
 		verbose:    verbose,
 		dockerMode: dockerMode,
 		workspace:  workspace,
+		logf:       logf,
 	}
 }
 
@@ -65,7 +66,7 @@ func (m *bgTaskManager) Start(req runnerproto.BgExecRequest) (*runnerproto.BgSta
 
 	go t.run(m)
 
-	log.Printf("  bg_exec started [id=%s]: %s", req.TaskID, req.Command)
+	callLogf(m.logf, "  bg_exec started [id=%s]: %s", req.TaskID, req.Command)
 	return &runnerproto.BgStartedResponse{TaskID: req.TaskID}, nil
 }
 
@@ -85,7 +86,7 @@ func (t *bgTask) run(m *bgTaskManager) {
 	t.status = status
 	t.mu.Unlock()
 
-	log.Printf("  bg_exec done [id=%s] status=%s exit=%d stdout=%dB stderr=%dB",
+	callLogf(m.logf, "  bg_exec done [id=%s] status=%s exit=%d stdout=%dB stderr=%dB",
 		t.id, t.status, t.exitCode, t.stdout.Len(), t.stderr.Len())
 }
 
@@ -196,7 +197,7 @@ func (m *bgTaskManager) Kill(req runnerproto.BgKillRequest) error {
 			syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		t.status = "killed"
-		log.Printf("  bg_kill [id=%s]: killed", req.TaskID)
+		callLogf(m.logf, "  bg_kill [id=%s]: killed", req.TaskID)
 	}
 
 	return nil
@@ -242,7 +243,7 @@ func (m *bgTaskManager) Cleanup() {
 		t.mu.Unlock()
 		delete(m.tasks, id)
 	}
-	log.Printf("  bg_tasks: cleaned up all tasks on disconnect")
+	callLogf(m.logf, "  bg_tasks: cleaned up all tasks on disconnect")
 }
 
 // getBaseEnv 返回原生命令执行的基础环境。

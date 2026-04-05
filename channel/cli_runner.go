@@ -2,7 +2,8 @@ package channel
 
 import (
 	"fmt"
-	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,10 @@ type RunnerBridge struct {
 
 	// 回调（通过 tea.Cmd 通知 TUI）
 	program *tea.Program
+
+	// 日志文件
+	logFile *os.File
+	logPath string
 }
 
 // NewRunnerBridge 创建 RunnerBridge
@@ -94,18 +99,43 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 	go func() {
 		defer close(doneCh)
 
-		// 1. 创建 NativeExecutor
+		// 1. 创建日志文件
+		cacheDir, _ := os.UserCacheDir()
+		logDir := filepath.Join(cacheDir, "xbot", "runner-logs")
+		os.MkdirAll(logDir, 0755)
+		ts := time.Now().Format("20060102-150405")
+		logPath := filepath.Join(logDir, fmt.Sprintf("runner-%s.log", ts))
+		logFile, logErr := os.Create(logPath)
+		if logErr != nil {
+			logFile = nil // fallback: no logging
+		}
+
+		// 2. 创建日志回调
+		logf := func(format string, args ...interface{}) {
+			if logFile != nil {
+				now := time.Now().Format("15:04:05")
+				fmt.Fprintf(logFile, "[%s] "+format+"\n", append([]interface{}{now}, args...)...)
+			}
+		}
+
+		// 保存到 RunnerBridge
+		rb.mu.Lock()
+		rb.logFile = logFile
+		rb.logPath = logPath
+		rb.mu.Unlock()
+
+		// 3. 创建 NativeExecutor
 		executor := runnerclient.NewNativeExecutor(workspace)
 
-		// 2. 创建 Handler
-		handler := runnerclient.NewHandler(executor)
+		// 4. 创建 Handler（带日志回调）
+		handler := runnerclient.NewHandler(executor, runnerclient.WithLogFunc(logf))
 
-		// 3. 设置 LLM 客户端（如果有）
+		// 5. 设置 LLM 客户端（如果有）
 		if llmClient != nil {
 			handler.SetLLMClient(llmClient, models)
 		}
 
-		// 4. 解析 userID
+		// 6. 解析 userID
 		userID := parseUserID(serverURL)
 		if userID == "" {
 			program.Send(runnerStatusMsg{
@@ -115,17 +145,16 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 			return
 		}
 
-		// 5. 确保有 ws:// 前缀
+		// 7. 确保有 ws:// 前缀
 		wsURL := serverURL
 		if !strings.Contains(wsURL, "://") {
 			wsURL = "ws://" + wsURL
 		}
 
-		// 6. 连接 server
+		// 8. 连接 server
 		shell := runnerclient.DetectShell(false, executor)
-		conn, err := runnerclient.Connect(wsURL, userID, token, workspace, shell)
+		conn, err := runnerclient.Connect(wsURL, userID, token, workspace, shell, runnerclient.ConnectOptions{LogFunc: logf})
 		if err != nil {
-			log.Printf("Runner connect failed: %v", err)
 			program.Send(runnerStatusMsg{
 				status: RunnerDisconnected,
 				err:    err,
@@ -133,7 +162,7 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 			return
 		}
 
-		// 7. 保存内部状态
+		// 9. 保存内部状态
 		rb.mu.Lock()
 		rb.handler = handler
 		rb.stats = RunnerStats{
@@ -142,16 +171,16 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 		rb.status = RunnerConnected
 		rb.mu.Unlock()
 
-		// 8. 启动 WritePump + ReadLoop
+		// 10. 启动 WritePump + ReadLoop
 		writeCh := make(chan runnerclient.WriteMsg, 64)
 		writeDone := make(chan struct{})
 		handler.SetWriteChannels(writeCh, writeDone)
 
 		// 启动 WritePump
-		go runnerclient.WritePump(conn, writeCh, stopCh, writeDone)
+		go runnerclient.WritePump(conn, writeCh, stopCh, writeDone, logf)
 
 		// 启动 ReadLoop（阻塞直到连接断开）
-		runnerclient.ReadLoop(conn, handler, writeCh, writeDone)
+		runnerclient.ReadLoop(conn, handler, writeCh, writeDone, logf)
 
 		// ReadLoop 退出 → 连接断开
 		rb.mu.Lock()
@@ -160,7 +189,6 @@ func (rb *RunnerBridge) Connect(serverURL, token, workspace string, llmClient ll
 		rb.handler = nil
 		rb.mu.Unlock()
 
-		log.Printf("Runner disconnected from server")
 		program.Send(runnerStatusMsg{
 			status: RunnerDisconnected,
 			err:    nil,
@@ -185,6 +213,12 @@ func (rb *RunnerBridge) Disconnect() {
 		// already closed
 	default:
 		close(rb.stopCh)
+	}
+
+	// 关闭日志文件
+	if rb.logFile != nil {
+		rb.logFile.Close()
+		rb.logFile = nil
 	}
 
 	// 清理 handler 资源
@@ -220,6 +254,13 @@ func (rb *RunnerBridge) Workspace() string {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	return rb.workspace
+}
+
+// LogPath 返回当前日志文件路径。
+func (rb *RunnerBridge) LogPath() string {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	return rb.logPath
 }
 
 // parseUserID 从 server URL 中解析 userID

@@ -1420,7 +1420,7 @@ func (m *cliModel) openRunnerPanel() {
 
 	// 从设置中读取已保存的值
 	if m.channel != nil && m.channel.settingsSvc != nil {
-		if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+		if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, "cli_user"); err == nil {
 			if v, ok := vals["runner_server"]; ok && v != "" {
 				serverURL = v
 			}
@@ -1547,9 +1547,9 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 
 		// 保存设置
 		if m.channel != nil && m.channel.settingsSvc != nil {
-			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_server", serverURL)
-			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_token", token)
-			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_workspace", workspace)
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, "cli_user", "runner_server", serverURL)
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, "cli_user", "runner_token", token)
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, "cli_user", "runner_workspace", workspace)
 		}
 
 		// 回到 settings，发起连接

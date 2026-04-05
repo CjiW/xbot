@@ -21,7 +21,6 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	cliSenderID    = "cli_user"
 	cliChannelName = "cli"
 	cliMsgBufSize  = 100
 )

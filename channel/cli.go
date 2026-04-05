@@ -71,11 +71,12 @@ func (c *CLIChannel) Start() error {
 	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+	c.model.senderID = "cli_user"
 	c.model.chatID = c.config.ChatID
 
 	// i18n: initialize locale from settings
 	if c.settingsSvc != nil {
-		if vals, err := c.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+		if vals, err := c.settingsSvc.GetSettings(cliChannelName, "cli_user"); err == nil {
 			if lang, ok := vals["language"]; ok {
 				SetLocale(lang)
 				c.model.locale = GetLocale(lang)

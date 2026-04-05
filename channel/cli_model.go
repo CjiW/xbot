@@ -173,8 +173,9 @@ type cliModel struct {
 	lastSeenIteration int                    // 上次进度事件的迭代号
 
 	// --- Session ---
-	workDir string // 工作目录（标题栏显示用）
-	chatID  string // 会话 ID（按工作目录区分）
+	workDir  string // 工作目录（标题栏显示用）
+	senderID string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
+	chatID   string // 会话 ID（按工作目录区分）
 
 	// --- §1 增量渲染 ---
 	renderCacheValid bool   // 全局缓存是否有效（resize 后置 false）
@@ -467,7 +468,7 @@ func (m *cliModel) refreshCachedModelName() {
 			m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
 		}
 		if m.cachedModelName == "" && m.channel.settingsSvc != nil {
-			if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+			if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, "cli_user"); err == nil {
 				m.cachedModelName = vals["llm_model"]
 			}
 		}

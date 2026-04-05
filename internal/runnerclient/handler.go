@@ -97,6 +97,7 @@ func (h *Handler) LLMModel() string {
 
 // SetWriteChannels 设置写通道（在启动 ReadLoop 前调用）。
 func (h *Handler) SetWriteChannels(writeCh chan<- WriteMsg, writeDone <-chan struct{}) {
+	h.ensureManagers()
 	h.stdioMgr.SetWriteChannels(writeCh, writeDone)
 }
 

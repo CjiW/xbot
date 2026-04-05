@@ -1408,6 +1408,11 @@ func (m *cliModel) openRunnerPanel() {
 	m.panelMode = "runner"
 	m.relayoutViewport()
 
+	// 确保 RunnerBridge 存在（正常 TUI 模式也需要，不只在 --share 时）
+	if m.runnerBridge == nil && m.channel != nil {
+		m.channel.ensureRunnerBridge()
+	}
+
 	// 初始化 textinput 字段
 	serverURL := ""
 	token := ""
@@ -1459,32 +1464,49 @@ func (m *cliModel) newPanelTextInput(value, placeholder string) textinput.Model 
 
 // updateRunnerPanel 处理 Runner 面板的键盘事件
 func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
-	// 已连接状态：显示连接信息 + 断开按钮
-	rb := m.runnerBridge
-	if rb == nil {
-		m.closePanel()
+	// Esc 回到 settings 面板（不关闭整个面板）
+	if msg.Code == tea.KeyEsc || msg.String() == "ctrl+c" {
+		m.panelMode = "settings"
+		m.panelRunnerServerTI = textinput.Model{}
+		m.panelRunnerTokenTI = textinput.Model{}
+		m.panelRunnerWorkspace = textinput.Model{}
+		m.panelRunnerEditField = 0
+		m.relayoutViewport()
 		return true, m, nil
 	}
 
-	status := rb.Status()
-
-	// 连接中：只允许 Esc
-	if status == RunnerConnecting {
-		if msg.Code == tea.KeyEsc || msg.String() == "ctrl+c" {
-			return m.closePanelAndResume()
+	// runnerBridge 为 nil 时只显示表单，不允许连接操作
+	if m.runnerBridge == nil {
+		// 将按键传递给当前编辑的 textinput
+		var cmd tea.Cmd
+		switch m.panelRunnerEditField {
+		case 0:
+			m.panelRunnerServerTI, cmd = m.panelRunnerServerTI.Update(msg)
+		case 1:
+			m.panelRunnerTokenTI, cmd = m.panelRunnerTokenTI.Update(msg)
+		case 2:
+			m.panelRunnerWorkspace, cmd = m.panelRunnerWorkspace.Update(msg)
 		}
+		return true, m, cmd
+	}
+
+	status := m.runnerBridge.Status()
+
+	// 连接中：只允许 Esc（已处理）
+	if status == RunnerConnecting {
 		return true, m, nil
 	}
 
-	// 已连接：导航 + 断开
+	// 已连接：断开按钮
 	if status == RunnerConnected {
-		switch msg.Code {
-		case tea.KeyEsc:
-			return m.closePanelAndResume()
-		case tea.KeyEnter:
-			// 断开连接
-			rb.Disconnect()
-			m.closePanel()
+		if msg.Code == tea.KeyEnter {
+			m.runnerBridge.Disconnect()
+			m.panelMode = "settings"
+			m.panelRunnerServerTI = textinput.Model{}
+			m.panelRunnerTokenTI = textinput.Model{}
+			m.panelRunnerWorkspace = textinput.Model{}
+			m.panelRunnerEditField = 0
+			m.relayoutViewport()
 			return true, m, nil
 		}
 		return true, m, nil
@@ -1492,9 +1514,6 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 
 	// 未连接：表单编辑
 	switch msg.Code {
-	case tea.KeyEsc:
-		return m.closePanelAndResume()
-
 	case tea.KeyUp:
 		if m.panelRunnerEditField > 0 {
 			m.panelRunnerEditField--
@@ -1533,8 +1552,13 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_workspace", workspace)
 		}
 
-		// 关闭面板，发起连接
-		m.closePanel()
+		// 回到 settings，发起连接
+		m.panelMode = "settings"
+		m.panelRunnerServerTI = textinput.Model{}
+		m.panelRunnerTokenTI = textinput.Model{}
+		m.panelRunnerWorkspace = textinput.Model{}
+		m.panelRunnerEditField = 0
+		m.relayoutViewport()
 
 		// 获取 LLM 客户端
 		var llmClient llm.LLM
@@ -1544,9 +1568,7 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 			models = m.channel.getModelList()
 		}
 
-		if rb != nil {
-			rb.Connect(serverURL, token, workspace, llmClient, models)
-		}
+		m.runnerBridge.Connect(serverURL, token, workspace, llmClient, models)
 
 		m.showTempStatus(m.locale.RunnerConnecting)
 		return true, m, m.clearTempStatusCmd()
@@ -1573,26 +1595,22 @@ func (m *cliModel) viewRunnerPanel() string {
 	sb.WriteString(s.PanelHeader.Render("🔧 " + m.locale.RunnerPanelTitle))
 	sb.WriteString("\n")
 
-	rb := m.runnerBridge
-	if rb == nil {
-		sb.WriteString(s.PanelDesc.Render(m.locale.RunnerNotAvailable))
-		sb.WriteString("\n")
-		return m.styles.PanelBox.Render(sb.String())
+	var status RunnerStatus
+	if m.runnerBridge != nil {
+		status = m.runnerBridge.Status()
 	}
-
-	status := rb.Status()
 
 	switch status {
 	case RunnerConnecting:
 		sb.WriteString("\n")
 		sb.WriteString(s.ProgressRunning.Render("⟳ " + m.locale.RunnerConnecting))
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelDesc.Render("  " + rb.ServerURL()))
+		sb.WriteString(s.PanelDesc.Render("  " + m.runnerBridge.ServerURL()))
 		sb.WriteString("\n\n")
 		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerPleaseWait))
 
 	case RunnerConnected:
-		stats := rb.Stats()
+		stats := m.runnerBridge.Stats()
 		elapsed := time.Since(stats.ConnectedAt).Round(time.Minute)
 		elapsedStr := formatElapsed(int64(elapsed.Milliseconds()))
 
@@ -1603,28 +1621,27 @@ func (m *cliModel) viewRunnerPanel() string {
 			s.InfoSt.Render(elapsedStr),
 		)
 		sb.WriteString(s.PanelDesc.Render("  Server: "))
-		sb.WriteString(s.InfoSt.Render(rb.ServerURL()))
+		sb.WriteString(s.InfoSt.Render(m.runnerBridge.ServerURL()))
 		sb.WriteString("\n")
 		sb.WriteString(s.PanelDesc.Render("  " + m.locale.RunnerWorkspaceLabel + ": "))
-		sb.WriteString(s.InfoSt.Render(rb.Workspace()))
+		sb.WriteString(s.InfoSt.Render(m.runnerBridge.Workspace()))
 		sb.WriteString("\n\n")
 		sb.WriteString(s.WarningSt.Render("  [ " + m.locale.RunnerDisconnect + " ]"))
 		sb.WriteString("\n\n")
 		sb.WriteString(s.PanelHint.Render("  Enter " + m.locale.RunnerDisconnectAction + "  Esc " + m.locale.RunnerBack))
 
-	default: // RunnerDisconnected
+	default: // RunnerDisconnected 或 runnerBridge == nil
 		// 显示连接表单
 		sb.WriteString("\n")
 
 		fields := []struct {
-			label       string
-			input       textinput.Model
-			active      bool
-			placeholder string
+			label  string
+			input  textinput.Model
+			active bool
 		}{
-			{m.locale.RunnerServerLabel, m.panelRunnerServerTI, m.panelRunnerEditField == 0, m.locale.RunnerServerPlaceholder},
-			{m.locale.RunnerTokenLabel, m.panelRunnerTokenTI, m.panelRunnerEditField == 1, m.locale.RunnerTokenPlaceholder},
-			{m.locale.RunnerWorkspaceLabel, m.panelRunnerWorkspace, m.panelRunnerEditField == 2, m.locale.RunnerWorkspacePlaceholder},
+			{m.locale.RunnerServerLabel, m.panelRunnerServerTI, m.panelRunnerEditField == 0},
+			{m.locale.RunnerTokenLabel, m.panelRunnerTokenTI, m.panelRunnerEditField == 1},
+			{m.locale.RunnerWorkspaceLabel, m.panelRunnerWorkspace, m.panelRunnerEditField == 2},
 		}
 
 		for _, f := range fields {
@@ -1639,7 +1656,7 @@ func (m *cliModel) viewRunnerPanel() string {
 		}
 
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerNavHint))
+		sb.WriteString(s.PanelHint.Render("  ↑↓/Tab 切换字段  Enter 连接  Esc 返回"))
 	}
 
 	return m.styles.PanelBox.Render(sb.String())

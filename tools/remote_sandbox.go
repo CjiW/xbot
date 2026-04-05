@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"xbot/internal/runnerproto"
+	"xbot/llm"
 	log "xbot/logger"
 )
 
@@ -760,6 +761,79 @@ type RemoteBgTaskStatus struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
+}
+
+// LLMGenerate sends an LLM generation request to the runner and returns the response.
+// This is used by ProxyLLM to forward LLM calls to runners with local LLM configured.
+func (rs *RemoteSandbox) LLMGenerate(ctx context.Context, userID, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	reqBody, _ := json.Marshal(llm.LLMProxyRequest{
+		Model:        model,
+		Messages:     messages,
+		Tools:        llm.SerializeTools(tools),
+		ThinkingMode: thinkingMode,
+	})
+
+	msg := &RunnerMessage{
+		ID:     generateID(),
+		Type:   runnerproto.ProtoLLMGenerate,
+		UserID: userID,
+		Body:   reqBody,
+	}
+
+	resp, err := rs.sendRequest(ctx, rc, msg, llm.ProxyRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Type == runnerproto.ProtoError {
+		var e runnerproto.ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return nil, fmt.Errorf("llm_generate error: %s", e.Message)
+	}
+
+	var result llm.LLMResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal llm_generate result: %w", err)
+	}
+
+	return &result, nil
+}
+
+// LLMModels queries available models from the runner's local LLM.
+func (rs *RemoteSandbox) LLMModels(ctx context.Context, userID string) ([]string, error) {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	msg := &RunnerMessage{
+		ID:     generateID(),
+		Type:   runnerproto.ProtoLLMModels,
+		UserID: userID,
+	}
+
+	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Type == runnerproto.ProtoError {
+		var e runnerproto.ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return nil, fmt.Errorf("llm_models error: %s", e.Message)
+	}
+
+	var result llm.LLMListModelsResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal llm_models result: %w", err)
+	}
+
+	return result.Models, nil
 }
 
 func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]byte, error) {

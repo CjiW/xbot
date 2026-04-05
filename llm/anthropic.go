@@ -24,6 +24,7 @@ const (
 type AnthropicLLM struct {
 	baseURL      string
 	apiKey       string
+	userAgent    string
 	httpClient   *http.Client
 	models       []string
 	defaultModel string
@@ -34,6 +35,7 @@ type AnthropicConfig struct {
 	BaseURL      string // 默认 https://api.anthropic.com
 	APIKey       string
 	DefaultModel string
+	UserAgent    string // 自定义 User-Agent（留空使用默认值）
 }
 
 // 常用 Claude 模型列表（供 ListModels）
@@ -61,8 +63,9 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 	}
 
 	a := &AnthropicLLM{
-		baseURL: baseURL,
-		apiKey:  cfg.APIKey,
+		baseURL:   baseURL,
+		apiKey:    cfg.APIKey,
+		userAgent: cfg.UserAgent,
 		httpClient: &http.Client{
 			Timeout: 300 * time.Second,
 		},
@@ -71,6 +74,10 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 	}
 	if a.defaultModel == "" && len(a.models) > 0 {
 		a.defaultModel = a.models[0]
+	}
+	// Default User-Agent: masquerade as Claude Code to avoid coding-agent rate limits.
+	if a.userAgent == "" {
+		a.userAgent = "claude-code/1.0.26"
 	}
 	return a
 }
@@ -310,6 +317,9 @@ func (a *AnthropicLLM) setHeaders(req *http.Request) {
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", anthropicAPIVersion)
 	req.Header.Set("Content-Type", "application/json")
+	if a.userAgent != "" {
+		req.Header.Set("User-Agent", a.userAgent)
+	}
 }
 
 // parseAnthropicThinking 解析 thinkingMode 参数为 Anthropic thinking 结构

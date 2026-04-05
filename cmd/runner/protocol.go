@@ -40,6 +40,9 @@ const (
 
 	ProtoBgStarted = runnerproto.ProtoBgStarted
 	ProtoBgOutput  = runnerproto.ProtoBgOutput
+
+	ProtoLLMGenerate = runnerproto.ProtoLLMGenerate
+	ProtoLLMModels   = runnerproto.ProtoLLMModels
 )
 
 type RunnerMessage = runnerproto.RunnerMessage

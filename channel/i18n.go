@@ -339,6 +339,18 @@ func init() {
 		},
 		SettingsSchema: []SettingDefinition{
 			{
+				Key: "llm_provider", Label: "LLM 提供商", Description: "选择 LLM 服务提供商",
+				Type: SettingTypeSelect, Category: "LLM",
+				Options: []SettingOption{
+					{Label: "OpenAI (及兼容 API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
 				Key: "llm_model", Label: "LLM 模型", Description: "选择或输入 LLM 模型名称",
 				Type: SettingTypeCombo, Category: "LLM",
 			},
@@ -616,6 +628,18 @@ func init() {
 		},
 		SettingsSchema: []SettingDefinition{
 			{
+				Key: "llm_provider", Label: "LLM Provider", Description: "Select LLM service provider",
+				Type: SettingTypeSelect, Category: "LLM",
+				Options: []SettingOption{
+					{Label: "OpenAI (and compatible API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "LLM service API Key",
+				Type: SettingTypeText, Category: "LLM",
+			},
+			{
 				Key: "llm_model", Label: "LLM Model", Description: "Select or enter LLM model name",
 				Type: SettingTypeCombo, Category: "LLM",
 			},
@@ -892,6 +916,18 @@ func init() {
 			},
 		},
 		SettingsSchema: []SettingDefinition{
+			{
+				Key: "llm_provider", Label: "LLM プロバイダー", Description: "LLM サービスプロバイダーを選択",
+				Type: SettingTypeSelect, Category: "LLM",
+				Options: []SettingOption{
+					{Label: "OpenAI (および互換 API)", Value: "openai"},
+					{Label: "Anthropic (Claude)", Value: "anthropic"},
+				},
+			},
+			{
+				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key",
+				Type: SettingTypeText, Category: "LLM",
+			},
 			{
 				Key: "llm_model", Label: "LLM モデル", Description: "LLM モデル名を選択または入力",
 				Type: SettingTypeCombo, Category: "LLM",

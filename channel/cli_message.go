@@ -146,7 +146,7 @@ func isDir(path string) bool {
 // metadata can be nil.
 func (m *cliModel) newInbound(content string, metadata map[string]string) bus.InboundMessage {
 	return bus.InboundMessage{
-		Channel:    cliChannelName,
+		Channel:    m.channelName,
 		SenderID:   m.senderID,
 		ChatID:     m.chatID,
 		ChatType:   "p2p",
@@ -315,7 +315,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, "cli_user")
+					vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user")
 					if err == nil {
 						for k, v := range vals {
 							currentValues[k] = v
@@ -340,7 +340,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					// Persist to SettingsService (SQLite)
 					if m.channel.settingsSvc != nil {
 						for k, v := range values {
-							_ = m.channel.settingsSvc.SetSetting(cliChannelName, "cli_user", k, v)
+							_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", k, v)
 						}
 					}
 					// Apply settings: write config.json + update runtime state
@@ -425,14 +425,32 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/su":
 		// /su <userID> — 切换到指定用户身份（共享 session）
 		if len(parts) < 2 {
-			m.showSystemMsg(fmt.Sprintf("当前身份: %s\n用法: /su <userID>  切换到目标用户身份", m.senderID), feedbackInfo)
+			m.showSystemMsg(fmt.Sprintf("当前身份: %s (channel: %s)\n用法: /su <userID>  切换到目标用户身份\n      /su          切回默认身份", m.senderID, m.channelName), feedbackInfo)
 		} else {
 			newID := strings.TrimSpace(parts[1])
-			if newID == "cli_user" || newID == "" {
-				newID = "cli_user"
+			// 保存旧的 channel（用于移除 observer）
+			oldChannel := m.channelName
+			if newID == "" || newID == "cli_user" {
+				// 切回默认身份
+				m.senderID = "cli_user"
+				m.channelName = "cli"
+				m.chatID = m.defaultChatID
+				m.showSystemMsg("✅ 身份已切换为: cli_user", feedbackInfo)
+			} else {
+				m.senderID = newID
+				m.channelName = "web"
+				m.chatID = newID // web 的 chatID = userID
+				m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: web)", m.senderID), feedbackInfo)
 			}
-			m.senderID = newID
-			m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s", m.senderID), feedbackInfo)
+			// 通知 main.go 注册/移除 dispatcher observer
+			if m.channel != nil && m.channel.OnSuChange != nil {
+				if oldChannel != "cli" {
+					m.channel.OnSuChange(oldChannel, false)
+				}
+				if m.channelName != "cli" {
+					m.channel.OnSuChange(m.channelName, true)
+				}
+			}
 		}
 
 	default:

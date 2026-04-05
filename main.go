@@ -500,6 +500,19 @@ func main() {
 					return ws, nil
 				},
 			})
+
+			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
+			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
+			if router, ok := tools.GetSandbox().(*tools.SandboxRouter); ok {
+				if remote := router.Remote(); remote != nil {
+					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
+						webCh.PushRunnerStatus(agentLoop.NormalizeSenderID(userID), runnerName, online)
+					}
+					remote.OnSyncProgress = func(userID, phase, message string) {
+						webCh.PushSyncProgress(agentLoop.NormalizeSenderID(userID), phase, message)
+					}
+				}
+			}
 			disp.Register(webCh)
 		} else {
 			log.Warn("Web channel enabled but no database available, skipping")

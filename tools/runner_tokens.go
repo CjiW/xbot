@@ -125,6 +125,7 @@ type RunnerInfo struct {
 	Mode        string `json:"mode"`
 	DockerImage string `json:"docker_image"`
 	Workspace   string `json:"workspace"`
+	Shell       string `json:"shell,omitempty"`
 	CreatedAt   string `json:"created_at"`
 	Online      bool   `json:"online"`
 }
@@ -303,6 +304,15 @@ func ListAllRunners(senderID string) ([]RunnerInfo, error) {
 		case *SandboxRouter:
 			for i := range runners {
 				runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
+				if runners[i].Online && router.remote != nil {
+					w, s := router.remote.GetConnectionInfo(senderID, runners[i].Name)
+					if w != "" {
+						runners[i].Workspace = w
+					}
+					if s != "" {
+						runners[i].Shell = s
+					}
+				}
 			}
 			// Inject built-in docker sandbox if available
 			if router.HasDocker() {
@@ -317,6 +327,15 @@ func ListAllRunners(senderID string) ([]RunnerInfo, error) {
 		case *RemoteSandbox:
 			for i := range runners {
 				runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
+				if runners[i].Online {
+					w, s := router.GetConnectionInfo(senderID, runners[i].Name)
+					if w != "" {
+						runners[i].Workspace = w
+					}
+					if s != "" {
+						runners[i].Shell = s
+					}
+				}
 			}
 		}
 	}

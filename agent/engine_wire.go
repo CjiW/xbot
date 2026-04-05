@@ -287,20 +287,22 @@ func (a *Agent) buildMainRunConfig(
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
-								Summary: t.Summary,
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
 							})
 						}
 						for _, t := range s.CompletedTools {
 							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
-								Name:    t.Name,
-								Label:   t.Label,
-								Status:  string(t.Status),
-								Elapsed: t.Elapsed.Milliseconds(),
-								Summary: t.Summary,
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
 							})
 						}
 						// Parse sub-agent tree from progress lines

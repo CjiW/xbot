@@ -696,6 +696,24 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             break
           }
 
+          case 'runner_status': {
+            try {
+              const detail = data.content ? JSON.parse(data.content) : {}
+              window.dispatchEvent(new CustomEvent('runner-status-change', {
+                detail: { runnerName: detail.runner_name, online: detail.online },
+              }))
+            } catch { /* ignore */ }
+            break
+          }
+
+          case 'sync_progress': {
+            try {
+              const detail = data.content ? JSON.parse(data.content) : {}
+              if (detail.message) showToast(detail.message, detail.phase === 'done' ? 'success' : 'info')
+            } catch { /* ignore */ }
+            break
+          }
+
           default:
             break
         }

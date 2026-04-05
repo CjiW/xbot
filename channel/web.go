@@ -104,6 +104,11 @@ type WebCallbacks struct {
 	// Returns (sandboxInternalPath, error). sandboxInternalPath is the path inside
 	// the sandbox (e.g., /workspace/uploads/file.txt). Returns ("", nil) if no sandbox available.
 	SandboxWriteFile func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (sandboxPath string, err error)
+	// RunnerStatusNotify is called when a runner connects/disconnects.
+	// Used by main to wire up real-time status push to WebChannel.
+	RunnerStatusNotify func(senderID, runnerName string, online bool)
+	// SyncProgressNotify is called when runner sync progress is reported.
+	SyncProgressNotify func(senderID, phase, message string)
 }
 
 // ---------------------------------------------------------------------------
@@ -285,11 +290,12 @@ type WsProgressPayload struct {
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
 type WsToolProgress struct {
-	Name    string `json:"name,omitempty"`
-	Label   string `json:"label,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Elapsed int64  `json:"elapsed_ms,omitempty"` // milliseconds
-	Summary string `json:"summary,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Elapsed   int64  `json:"elapsed_ms,omitempty"` // milliseconds
+	Iteration int    `json:"iteration,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 // WsSubAgent 子 Agent 的结构化进度状态。
@@ -588,6 +594,30 @@ func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 
 	if !wc.hub.sendToClient(chatID, wsMsg) {
 		log.WithField("chat_id", chatID).Debug("Web client offline, progress event buffered")
+	}
+}
+
+// PushRunnerStatus pushes a runner online/offline status change to the Web client.
+func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
+	wsMsg := wsMessage{
+		Type:    "runner_status",
+		TS:      time.Now().Unix(),
+		Content: func() string { b, _ := json.Marshal(map[string]interface{}{"runner_name": runnerName, "online": online}); return string(b) }(),
+	}
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, runner status buffered")
+	}
+}
+
+// PushSyncProgress pushes a sync progress notification to the Web client.
+func (wc *WebChannel) PushSyncProgress(chatID, phase, message string) {
+	wsMsg := wsMessage{
+		Type:    "sync_progress",
+		TS:      time.Now().Unix(),
+		Content: func() string { b, _ := json.Marshal(map[string]interface{}{"phase": phase, "message": message}); return string(b) }(),
+	}
+	if !wc.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Web client offline, sync progress buffered")
 	}
 }
 

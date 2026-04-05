@@ -62,21 +62,23 @@ type sendEntry struct {
 // RemoteSandbox implements the Sandbox interface via WebSocket communication
 // with xbot-runner instances running on users' machines.
 type RemoteSandbox struct {
-	connections     sync.Map // userID → *userRunnersEntry
-	wsServer        *http.Server
-	authToken       string
-	addr            string
-	tokenStore      *RunnerTokenStore
-	pendingMu       sync.Mutex
-	pending         map[string]chan *RunnerMessage // request ID → response channel
-	upgrader        websocket.Upgrader             // per-instance upgrader with origin check
-	globalSkillDirs []string                       // global skill dirs to sync to runner on registration
-	agentsDir       string                         // global agents dir to sync to runner on registration
-	syncMu          sync.Mutex
-	synced          map[string]bool // userID → whether initial sync has completed
-	syncing         map[string]bool // userID → sync in progress (prevent concurrent syncs)
-	stdioMu         sync.Mutex
-	stdioStreams    map[string]*stdioStream // streamID → active stdio stream
+	connections          sync.Map // userID → *userRunnersEntry
+	wsServer             *http.Server
+	authToken            string
+	addr                 string
+	tokenStore           *RunnerTokenStore
+	pendingMu            sync.Mutex
+	pending              map[string]chan *RunnerMessage // request ID → response channel
+	upgrader             websocket.Upgrader             // per-instance upgrader with origin check
+	globalSkillDirs      []string                       // global skill dirs to sync to runner on registration
+	agentsDir            string                         // global agents dir to sync to runner on registration
+	syncMu               sync.Mutex
+	synced               map[string]bool // userID → whether initial sync has completed
+	syncing              map[string]bool // userID → sync in progress (prevent concurrent syncs)
+	stdioMu              sync.Mutex
+	stdioStreams         map[string]*stdioStream // streamID → active stdio stream
+	OnRunnerStatusChange func(userID, runnerName string, online bool)
+	OnSyncProgress       func(userID string, phase string, message string)
 }
 
 // NewRemoteSandbox creates and starts a RemoteSandbox server.
@@ -275,8 +277,14 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 				// No runners left — remove entry entirely.
 				entry.mu.Unlock()
 				rs.connections.Delete(reg.UserID)
+				if rs.OnRunnerStatusChange != nil {
+					go rs.OnRunnerStatusChange(reg.UserID, runnerName, false)
+				}
 				return
 			}
+		}
+		if rs.OnRunnerStatusChange != nil {
+			go rs.OnRunnerStatusChange(reg.UserID, runnerName, false)
 		}
 		entry.mu.Unlock()
 	}()
@@ -291,6 +299,11 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		"runner_name": runnerName,
 		"workspace":   reg.Workspace,
 	}).Info("Runner connected")
+
+	// Notify runner status change
+	if rs.OnRunnerStatusChange != nil {
+		go rs.OnRunnerStatusChange(reg.UserID, runnerName, true)
+	}
 
 	// Single writer goroutine: handles both request writes and ping heartbeats.
 	go rs.writePump(rc, pingPeriod, writeWait)
@@ -375,6 +388,23 @@ func (rs *RemoteSandbox) IsRunnerOnline(userID, runnerName string) bool {
 	defer entry.mu.RUnlock()
 	_, ok = entry.runners[runnerName]
 	return ok
+}
+
+// GetConnectionInfo returns the actual workspace and shell reported by the runner's connection.
+// Returns empty strings if the runner is not connected.
+func (rs *RemoteSandbox) GetConnectionInfo(userID, runnerName string) (workspace, shell string) {
+	val, ok := rs.connections.Load(userID)
+	if !ok {
+		return "", ""
+	}
+	entry := val.(*userRunnersEntry)
+	entry.mu.RLock()
+	defer entry.mu.RUnlock()
+	rc, ok := entry.runners[runnerName]
+	if !ok {
+		return "", ""
+	}
+	return rc.workspace, rc.shell
 }
 
 // sendRequest sends a request to the runner and waits for a response.
@@ -829,6 +859,11 @@ func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 		"agents_dir":        rs.agentsDir,
 	}).Info("syncToRunner: starting sync")
 
+	// Notify sync start
+	if rs.OnSyncProgress != nil {
+		rs.OnSyncProgress(userID, "start", "正在同步 skills 和 agents...")
+	}
+
 	// Sync each global skill directory
 	for _, skillDir := range rs.globalSkillDirs {
 		dstDir := filepath.Join(workspace, "skills")
@@ -858,6 +893,10 @@ func (rs *RemoteSandbox) syncToRunner(userID, workspace string) {
 		"workspace": workspace,
 	}).Info("Runner sync completed")
 
+	// Notify sync done
+	if rs.OnSyncProgress != nil {
+		rs.OnSyncProgress(userID, "done", "同步完成")
+	}
 	// Mark sync as completed (even if some dirs failed, we don't retry individual failures)
 	rs.syncMu.Lock()
 	rs.synced[userID] = true

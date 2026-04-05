@@ -12,6 +12,7 @@ interface RunnerInfo {
   docker_image: string
   workspace: string
   created_at: string
+  shell?: string
   online: boolean
 }
 
@@ -86,6 +87,18 @@ export default function RunnerPanel({ serverUrl, wsUrl, senderId }: RunnerPanelP
     fetchRunners()
     const timer = setInterval(() => { fetchRunners().catch(() => {}) }, 30_000)
     return () => clearInterval(timer)
+  }, [fetchRunners])
+
+  // Listen for real-time runner status changes from WebSocket
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail) {
+        fetchRunners()
+      }
+    }
+    window.addEventListener('runner-status-change', handler)
+    return () => window.removeEventListener('runner-status-change', handler)
   }, [fetchRunners])
 
   // Build connect command for a runner

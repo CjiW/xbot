@@ -999,10 +999,6 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.C
 // handleRunnerStatusMsg 处理 runner 连接状态变化
 func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
 	if msg.err != nil {
-		m.showTempStatus(fmt.Sprintf(m.locale.RunnerConnectFailed, msg.err))
-		return m.clearTempStatusCmd()
-	}
-	if msg.err != nil {
 		m.showTempStatus(fmt.Sprintf("%s: %v", m.locale.RunnerConnectFailed, msg.err))
 		return m.clearTempStatusCmd()
 	}

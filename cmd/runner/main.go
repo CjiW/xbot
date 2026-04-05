@@ -22,6 +22,10 @@ var (
 	flagVerbose     = flag.Bool("v", false, "Verbose logging (log all requests)")
 	flagMode        = flag.String("mode", "native", "Runner mode: native or docker")
 	flagDockerImage = flag.String("docker-image", "ubuntu:22.04", "Docker image (docker mode)")
+	flagLLMProvider = flag.String("llm-provider", "", "LLM provider: openai or anthropic (enables local LLM mode)")
+	flagLLMBaseURL  = flag.String("llm-base-url", "", "LLM API base URL (for OpenAI-compatible endpoints)")
+	flagLLMAPIKey   = flag.String("llm-api-key", "", "LLM API key")
+	flagLLMModel    = flag.String("llm-model", "", "LLM model name")
 )
 
 var verboseLog bool
@@ -75,6 +79,13 @@ func main() {
 			log.Printf("Executor close error: %v", cerr)
 		}
 	}()
+
+	// Initialize local LLM client if configured.
+	if *flagLLMProvider != "" {
+		if err := initLLMClient(*flagLLMProvider, *flagLLMBaseURL, *flagLLMAPIKey, *flagLLMModel); err != nil {
+			log.Fatalf("Failed to init local LLM: %v", err)
+		}
+	}
 
 	registerWorkspace := execWorkspace
 

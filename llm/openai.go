@@ -31,6 +31,7 @@ type OpenAIConfig struct {
 	APIKey       string
 	DefaultModel string // 默认模型（API 获取失败时的回退模型）
 	MaxTokens    int    // 最大生成 token 数（默认 8192）
+	UserAgent    string // 自定义 User-Agent（留空使用默认值）
 }
 
 // defaultMaxTokens 默认最大生成 token 数
@@ -41,10 +42,20 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = defaultMaxTokens
 	}
-	client := openai.NewClient(
+
+	opts := []option.RequestOption{
 		option.WithBaseURL(cfg.BaseURL),
 		option.WithAPIKey(cfg.APIKey),
-	)
+	}
+
+	// Set custom User-Agent if provided, otherwise use default (Cursor).
+	ua := cfg.UserAgent
+	if ua == "" {
+		ua = DefaultOpenAIUserAgent
+	}
+	opts = append(opts, option.WithHeader("User-Agent", ua))
+
+	client := openai.NewClient(opts...)
 
 	o := &OpenAILLM{
 		client:       &client,
@@ -69,6 +80,10 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 
 	return o
 }
+
+// DefaultOpenAIUserAgent is the default User-Agent for OpenAI-compatible clients.
+// Masquerades as Cursor to avoid coding-agent rate limits on providers like Zhipu.
+const DefaultOpenAIUserAgent = "cursor/0.45.3"
 
 // ListModels 获取可用模型列表
 func (o *OpenAILLM) ListModels() []string {

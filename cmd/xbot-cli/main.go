@@ -272,6 +272,17 @@ func main() {
 			// Apply LLM settings
 			if v, ok := values["llm_provider"]; ok && v != "" {
 				app.cfg.LLM.Provider = v
+				// Auto-set default base URL when switching provider
+				if _, urlSet := values["llm_base_url"]; !urlSet {
+					switch v {
+					case "anthropic":
+						app.cfg.LLM.BaseURL = "https://api.anthropic.com"
+					case "openai":
+						if app.cfg.LLM.BaseURL == "https://api.anthropic.com" {
+							app.cfg.LLM.BaseURL = "https://api.openai.com/v1"
+						}
+					}
+				}
 			}
 			if v, ok := values["llm_api_key"]; ok && v != "" {
 				app.cfg.LLM.APIKey = v
@@ -533,6 +544,7 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 		})
 	case "anthropic":
 		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
+			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
 		})

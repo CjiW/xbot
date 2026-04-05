@@ -1021,6 +1021,7 @@ func TestCLIModelRenderProgressBlockSubAgents(t *testing.T) {
 		SubAgents: []CLISubAgent{
 			{Role: "code-reviewer", Status: "running", Desc: "Reviewing code"},
 			{Role: "test-runner", Status: "done", Desc: "Tests passed"},
+			{Role: "explore", Status: "error", Desc: "429 rate limited"},
 		},
 	}
 
@@ -1034,6 +1035,10 @@ func TestCLIModelRenderProgressBlockSubAgents(t *testing.T) {
 	// Done sub-agents should be hidden from progress panel
 	if strings.Contains(result, "test-runner") {
 		t.Errorf("renderProgressBlock should not show completed subagent, got: %q", result)
+	}
+	// Error sub-agents should also be hidden from progress panel
+	if strings.Contains(result, "explore") {
+		t.Errorf("renderProgressBlock should not show errored subagent, got: %q", result)
 	}
 }
 

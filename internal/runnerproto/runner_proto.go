@@ -23,6 +23,9 @@ const (
 	ProtoRemove       = "remove"
 	ProtoRemoveAll    = "remove_all"
 	ProtoDownloadFile = "download_file"
+
+	ProtoLLMGenerate = "llm_generate"
+	ProtoLLMModels   = "llm_models"
 )
 
 // Response types (Runner → Server)

@@ -42,7 +42,7 @@ func NewCLIChannel(cfg CLIChannelConfig, msgBus *bus.MessageBus) *CLIChannel {
 
 // Name 返回渠道名称
 func (c *CLIChannel) Name() string {
-	return cliChannelName
+	return "cli"
 }
 
 // Start 启动 CLI 渠道（阻塞运行）
@@ -72,11 +72,13 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.senderID = "cli_user"
+	c.model.channelName = "cli"
+	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
 
 	// i18n: initialize locale from settings
 	if c.settingsSvc != nil {
-		if vals, err := c.settingsSvc.GetSettings(cliChannelName, "cli_user"); err == nil {
+		if vals, err := c.settingsSvc.GetSettings("cli", "cli_user"); err == nil {
 			if lang, ok := vals["language"]; ok {
 				SetLocale(lang)
 				c.model.locale = GetLocale(lang)

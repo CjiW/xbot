@@ -441,6 +441,16 @@ func main() {
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
 
+	// /su observer: when TUI switches to web user identity via /su,
+	// register CLI as observer of "web" channel outbound messages.
+	cliCh.OnSuChange = func(targetChannel string, enable bool) {
+		if enable {
+			disp.AddObserver(targetChannel, cliCh)
+		} else {
+			disp.RemoveObserver(targetChannel, cliCh)
+		}
+	}
+
 	// Inject SettingsService for interactive /settings panel
 	if app.agentLoop != nil {
 		if ss := app.agentLoop.GetSettingsService(); ss != nil {

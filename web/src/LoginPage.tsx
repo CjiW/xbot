@@ -17,7 +17,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   useEffect(() => {
     fetch('/api/auth/config')
       .then(r => r.json())
-      .then(data => { if (data.invite_only) setInviteOnly(true) })
+      .then(data => { setInviteOnly(!!data.invite_only) })
       .catch(() => {})
   }, [])
 

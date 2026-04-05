@@ -734,7 +734,6 @@ func init() {
 			},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
-			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ Danger Zone — Clear Memory", Type: SettingTypeText, Category: "Danger"},
 		},
@@ -1025,7 +1024,6 @@ func init() {
 				},
 			},
 			// Runner panel entry (display-only, triggers panel switch)
-			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ 危険エリア — 記憶クリア", Type: SettingTypeText, Category: "危険"},

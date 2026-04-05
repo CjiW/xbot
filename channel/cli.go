@@ -342,6 +342,15 @@ func (c *CLIChannel) StartWithRunner(shareURL, token, workspace string) error {
 	return c.Start()
 }
 
+// ensureRunnerBridge 确保 RunnerBridge 存在（供 settings 面板使用）。
+func (c *CLIChannel) ensureRunnerBridge() {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil && c.model.runnerBridge == nil && c.program != nil {
+		c.model.runnerBridge = NewRunnerBridge(c.program)
+	}
+}
+
 // runnerAutoConnectConfig holds the auto-connect parameters.
 type runnerAutoConnectConfig struct {
 	serverURL string

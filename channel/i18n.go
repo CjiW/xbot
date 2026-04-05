@@ -127,6 +127,7 @@ type UILocale struct {
 	RunnerPleaseWait           string
 	RunnerNavHint              string
 	RunnerNotAvailable         string
+	RunnerLogLabel             string // "📋 日志"
 	RunnerBack                 string // "back"
 
 	// --- I. Dynamic arrays ---
@@ -306,6 +307,7 @@ func init() {
 		RunnerPleaseWait:           "请稍候...",
 		RunnerNavHint:              "↑↓/Tab 切换字段  Enter 连接  Esc 返回",
 		RunnerNotAvailable:         "Runner 功能不可用",
+		RunnerLogLabel:             "📋 日志",
 		RunnerBack:                 "返回",
 
 		// --- I. Dynamic arrays ---
@@ -618,6 +620,7 @@ func init() {
 		RunnerPleaseWait:           "Please wait...",
 		RunnerNavHint:              "↑↓/Tab switch fields  Enter connect  Esc back",
 		RunnerNotAvailable:         "Runner not available",
+		RunnerLogLabel:             "📋 Log",
 		RunnerBack:                 "back",
 
 		// --- I. Dynamic arrays ---
@@ -930,6 +933,7 @@ func init() {
 		RunnerPleaseWait:           "お待ちください...",
 		RunnerNavHint:              "↑↓/Tab フィールド切替  Enter 接続  Esc 戻る",
 		RunnerNotAvailable:         "Runner 機能は利用できません",
+		RunnerLogLabel:             "📋 ログ",
 		RunnerBack:                 "戻る",
 
 		// --- I. Dynamic arrays ---

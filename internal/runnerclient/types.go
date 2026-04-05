@@ -16,3 +16,13 @@ type WriteMsg struct {
 	Data []byte
 	Err  chan error // 非 nil 表示控制消息（如 ping），需要错误回报
 }
+
+// LogFunc 是日志回调函数类型。
+type LogFunc func(format string, args ...interface{})
+
+// callLogf 安全调用日志函数（nil 保护）。
+func callLogf(logf LogFunc, format string, args ...interface{}) {
+	if logf != nil {
+		logf(format, args...)
+	}
+}

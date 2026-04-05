@@ -1625,7 +1625,14 @@ func (m *cliModel) viewRunnerPanel() string {
 		sb.WriteString("\n")
 		sb.WriteString(s.PanelDesc.Render("  " + m.locale.RunnerWorkspaceLabel + ": "))
 		sb.WriteString(s.InfoSt.Render(m.runnerBridge.Workspace()))
-		sb.WriteString("\n\n")
+		sb.WriteString("\n")
+		logPath := m.runnerBridge.LogPath()
+		if logPath != "" {
+			sb.WriteString(s.PanelDesc.Render("  " + m.locale.RunnerLogLabel + ": "))
+			sb.WriteString(s.InfoSt.Render(logPath))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
 		sb.WriteString(s.WarningSt.Render("  [ " + m.locale.RunnerDisconnect + " ]"))
 		sb.WriteString("\n\n")
 		sb.WriteString(s.PanelHint.Render("  Enter " + m.locale.RunnerDisconnectAction + "  Esc " + m.locale.RunnerBack))

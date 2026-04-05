@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -25,6 +24,9 @@ type Handler struct {
 	// 内部管理
 	stdioMgr *stdioManager
 	bgMgr    *bgTaskManager
+
+	// 日志回调（nil 时静默）
+	LogFunc LogFunc
 
 	// 模式标记
 	dockerMode bool
@@ -48,6 +50,11 @@ func WithDockerMode(v bool) HandlerOption {
 	return func(h *Handler) { h.dockerMode = v }
 }
 
+// WithLogFunc 设置日志回调函数（nil 时静默）。
+func WithLogFunc(f LogFunc) HandlerOption {
+	return func(h *Handler) { h.LogFunc = f }
+}
+
 // NewHandler 创建一个 Handler。
 func NewHandler(exec Executor, opts ...HandlerOption) *Handler {
 	h := &Handler{
@@ -61,7 +68,7 @@ func NewHandler(exec Executor, opts ...HandlerOption) *Handler {
 
 // InitLLM 初始化 LLM 客户端。
 func (h *Handler) InitLLM(provider, baseURL, apiKey, model string) error {
-	client, models, err := InitLLMClient(provider, baseURL, apiKey, model)
+	client, models, err := InitLLMClient(provider, baseURL, apiKey, model, h.LogFunc)
 	if err != nil {
 		return err
 	}
@@ -114,7 +121,7 @@ func (h *Handler) Cleanup() {
 // ensureManagers 确保 stdio 和 bg task 管理器已初始化。
 func (h *Handler) ensureManagers() {
 	if h.stdioMgr == nil {
-		h.stdioMgr = newStdioManager(h.Verbose, h.dockerMode)
+		h.stdioMgr = newStdioManager(h.Verbose, h.dockerMode, h.LogFunc)
 		h.stdioMgr.executor = h.Executor
 	}
 	if h.bgMgr == nil {
@@ -122,7 +129,7 @@ func (h *Handler) ensureManagers() {
 		if h.PathGuard != nil {
 			ws = h.PathGuard.Workspace
 		}
-		h.bgMgr = newBgTaskManager(h.Verbose, h.dockerMode, ws)
+		h.bgMgr = newBgTaskManager(h.Verbose, h.dockerMode, ws, h.LogFunc)
 		h.bgMgr.executor = h.Executor
 	}
 }
@@ -134,10 +141,10 @@ func (h *Handler) HandleRequest(msg runnerproto.RunnerMessage) *runnerproto.Runn
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
 		if json.Unmarshal(resp.Body, &e) == nil {
-			log.Printf("← %s [id=%s] error: %s — %s", msg.Type, msg.ID, e.Code, e.Message)
+			callLogf(h.LogFunc, "← %s [id=%s] error: %s — %s", msg.Type, msg.ID, e.Code, e.Message)
 		}
 	} else if h.Verbose {
-		log.Printf("← %s [id=%s] ok", msg.Type, msg.ID)
+		callLogf(h.LogFunc, "← %s [id=%s] ok", msg.Type, msg.ID)
 	}
 
 	return resp
@@ -157,9 +164,9 @@ func (h *Handler) Dispatch(msg runnerproto.RunnerMessage) *runnerproto.RunnerMes
 	case runnerproto.ProtoBgStatus:
 		return h.handleBgStatus(msg)
 	case runnerproto.ProtoLLMGenerate:
-		return handleLLMGenerate(msg, h.LLMClient)
+		return handleLLMGenerate(msg, h.LLMClient, h.LogFunc)
 	case runnerproto.ProtoLLMModels:
-		return handleLLMModels(msg, h.LLMClient, h.LLMModels)
+		return handleLLMModels(msg, h.LLMClient, h.LLMModels, h.LogFunc)
 	case "read_file":
 		return h.handleReadFile(msg)
 	case "write_file":
@@ -230,7 +237,7 @@ func (h *Handler) handleExec(msg runnerproto.RunnerMessage) *runnerproto.RunnerM
 		return runnerproto.MakeError(msg.ID, "EIO", "exec error: "+err.Error())
 	}
 
-	log.Printf("  exec done  exit=%d  stdout=%dB  stderr=%dB", result.ExitCode, len(result.Stdout), len(result.Stderr))
+	callLogf(h.LogFunc, "  exec done  exit=%d  stdout=%dB  stderr=%dB", result.ExitCode, len(result.Stdout), len(result.Stderr))
 	return runnerproto.MakeResponse(msg.ID, "exec_result", runnerproto.ExecResultResponse{
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,
@@ -253,7 +260,7 @@ func (h *Handler) handleReadFile(msg runnerproto.RunnerMessage) *runnerproto.Run
 		return runnerproto.MakeError(msg.ID, runnerproto.ProtoErrorCode(err), err.Error())
 	}
 	if h.Verbose {
-		log.Printf("  read_file %s (%d bytes)", req.Path, len(data))
+		callLogf(h.LogFunc, "  read_file %s (%d bytes)", req.Path, len(data))
 	}
 	return runnerproto.MakeResponse(msg.ID, "file_content", runnerproto.FileContentResponse{
 		Data: base64.StdEncoding.EncodeToString(data),
@@ -277,7 +284,7 @@ func (h *Handler) handleWriteFile(msg runnerproto.RunnerMessage) *runnerproto.Ru
 		return runnerproto.MakeError(msg.ID, runnerproto.ProtoErrorCode(err), err.Error())
 	}
 	if h.Verbose {
-		log.Printf("  write_file %s (%d bytes)", req.Path, len(data))
+		callLogf(h.LogFunc, "  write_file %s (%d bytes)", req.Path, len(data))
 	}
 	return runnerproto.MakeOK(msg.ID)
 }
@@ -326,7 +333,7 @@ func (h *Handler) handleReadDir(msg runnerproto.RunnerMessage) *runnerproto.Runn
 		})
 	}
 	if h.Verbose {
-		log.Printf("  read_dir %s (%d entries)", req.Path, len(resp.Entries))
+		callLogf(h.LogFunc, "  read_dir %s (%d entries)", req.Path, len(resp.Entries))
 	}
 	return runnerproto.MakeResponse(msg.ID, "dir_entries", resp)
 }
@@ -344,7 +351,7 @@ func (h *Handler) handleMkdirAll(msg runnerproto.RunnerMessage) *runnerproto.Run
 		return runnerproto.MakeError(msg.ID, runnerproto.ProtoErrorCode(err), err.Error())
 	}
 	if h.Verbose {
-		log.Printf("  mkdir_all %s", req.Path)
+		callLogf(h.LogFunc, "  mkdir_all %s", req.Path)
 	}
 	return runnerproto.MakeOK(msg.ID)
 }
@@ -362,7 +369,7 @@ func (h *Handler) handleRemove(msg runnerproto.RunnerMessage) *runnerproto.Runne
 		return runnerproto.MakeError(msg.ID, runnerproto.ProtoErrorCode(err), err.Error())
 	}
 	if h.Verbose {
-		log.Printf("  remove %s", req.Path)
+		callLogf(h.LogFunc, "  remove %s", req.Path)
 	}
 	return runnerproto.MakeOK(msg.ID)
 }
@@ -380,7 +387,7 @@ func (h *Handler) handleRemoveAll(msg runnerproto.RunnerMessage) *runnerproto.Ru
 		return runnerproto.MakeError(msg.ID, runnerproto.ProtoErrorCode(err), err.Error())
 	}
 	if h.Verbose {
-		log.Printf("  remove_all %s", req.Path)
+		callLogf(h.LogFunc, "  remove_all %s", req.Path)
 	}
 	return runnerproto.MakeOK(msg.ID)
 }
@@ -404,7 +411,7 @@ func (h *Handler) handleDownloadFile(msg runnerproto.RunnerMessage) *runnerproto
 		return runnerproto.MakeError(msg.ID, "EIO", "download failed: "+err.Error())
 	}
 
-	log.Printf("  download_file %s → %s (%d bytes)", req.URL, req.OutputPath, size)
+	callLogf(h.LogFunc, "  download_file %s → %s (%d bytes)", req.URL, req.OutputPath, size)
 	return runnerproto.MakeResponse(msg.ID, runnerproto.ProtoOK, runnerproto.DownloadFileResponse{Size: size})
 }
 

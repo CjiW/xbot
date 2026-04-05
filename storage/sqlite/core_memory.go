@@ -308,3 +308,38 @@ func (s *CoreMemoryService) GetAllBlocks(tenantID int64, userID string) (map[str
 
 	return blocks, nil
 }
+
+// ClearBlock clears a single core memory block content for a tenant.
+// Uses resolveBlockKey to handle persona/human/working_context correctly.
+func (s *CoreMemoryService) ClearBlock(tenantID int64, blockName, userID string) error {
+	conn := s.db.Conn()
+	effectiveTenantID, uid := resolveBlockKey(tenantID, blockName, userID)
+	_, err := conn.Exec(
+		"UPDATE core_memory_blocks SET content = '', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND block_name = ? AND user_id = ?",
+		effectiveTenantID, blockName, uid,
+	)
+	return err
+}
+
+// ClearAllBlocks clears all core memory blocks (persona + working_context + human) for a tenant.
+func (s *CoreMemoryService) ClearAllBlocks(tenantID int64, userID string) error {
+	conn := s.db.Conn()
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'persona'", tenantID); err != nil {
+		return fmt.Errorf("clear persona: %w", err)
+	}
+	if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = ? AND block_name = 'working_context'", tenantID); err != nil {
+		return fmt.Errorf("clear working_context: %w", err)
+	}
+	if userID != "" {
+		if _, err := tx.Exec("UPDATE core_memory_blocks SET content = '' WHERE tenant_id = 0 AND block_name = 'human' AND user_id = ?", userID); err != nil {
+			return fmt.Errorf("clear human: %w", err)
+		}
+	}
+	return tx.Commit()
+}

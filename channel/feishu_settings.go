@@ -34,7 +34,7 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 	}
 
 	switch tab {
-	case "general", "model", "market", "metrics":
+	case "general", "model", "market", "metrics", "danger":
 	default:
 		tab = "general"
 	}
@@ -53,6 +53,8 @@ func (f *FeishuChannel) BuildSettingsCard(ctx context.Context, senderID, chatID,
 		elements = append(elements, f.buildMarketTabContent(ctx, senderID, o)...)
 	case "metrics":
 		elements = append(elements, f.buildMetricsTabContent()...)
+	case "danger":
+		elements = append(elements, f.buildDangerTabContent(ctx, senderID, chatID)...)
 	}
 
 	card := map[string]any{
@@ -396,6 +398,30 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "general")
 
+	// ── Danger zone: step 1 → show confirmation card ──
+	case "danger_clear_session", "danger_clear_core_persona", "danger_clear_core_human",
+		"danger_clear_core_working", "danger_clear_core_all", "danger_clear_long_term",
+		"danger_clear_event_history", "danger_clear_archival", "danger_reset_all":
+		confirmStr := dangerConfirmString(action)
+		label := dangerTargetLabel(action)
+		return buildDangerConfirmCard(label, confirmStr, action), nil
+
+	// ── Danger zone: step 2 → execute after user confirmation ──
+	case "danger_confirm":
+		userInput := formStr(actionData, "confirm_input")
+		expected := formStr(actionData, "expect_input")
+		target := formStr(actionData, "target_action")
+		if userInput != expected {
+			return buildDangerResultCard("❌ 确认文字不匹配，操作已取消。"), nil
+		}
+		if f.settingsCallbacks.MemoryClear != nil {
+			if err := f.settingsCallbacks.MemoryClear(senderID, chatID, target); err != nil {
+				return buildDangerResultCard(fmt.Sprintf("❌ 清空失败：%v", err)), nil
+			}
+		}
+		label := dangerTargetLabel(target)
+		return buildDangerResultCard(fmt.Sprintf("✅ 已清空：%s", label)), nil
+
 	default:
 		return nil, fmt.Errorf("unknown settings action: %s", action)
 	}
@@ -412,6 +438,7 @@ func buildTabButtons(currentTab string) []map[string]any {
 		{"model", "🤖 模型"},
 		{"market", "📦 市场"},
 		{"metrics", "📊 指标"},
+		{"danger", "⚠️ 危险区"},
 	}
 
 	var buttons []map[string]any
@@ -1138,6 +1165,186 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	})
 
 	return elements
+}
+
+// --- Danger zone helpers ---
+
+// dangerTargetLabel returns the human-readable label for a danger action.
+func dangerTargetLabel(action string) string {
+	labels := map[string]string{
+		"danger_clear_session":       "会话历史",
+		"danger_clear_core_persona":  "Core Memory (persona)",
+		"danger_clear_core_human":    "Core Memory (human)",
+		"danger_clear_core_working":  "Core Memory (working_context)",
+		"danger_clear_core_all":      "Core Memory (全部)",
+		"danger_clear_long_term":     "长期记忆",
+		"danger_clear_event_history": "事件历史",
+		"danger_clear_archival":      "归档记忆（向量数据库）",
+		"danger_reset_all":           "全部记忆",
+	}
+	if label, ok := labels[action]; ok {
+		return label
+	}
+	return action
+}
+
+// dangerConfirmString returns the string the user must type to confirm.
+func dangerConfirmString(action string) string {
+	strs := map[string]string{
+		"danger_clear_session":       "DELETE-SESSION",
+		"danger_clear_core_persona":  "DELETE-PERSONA",
+		"danger_clear_core_human":    "DELETE-HUMAN",
+		"danger_clear_core_working":  "DELETE-WORKING",
+		"danger_clear_core_all":      "DELETE-CORE-MEMORY",
+		"danger_clear_long_term":     "DELETE-LONG-TERM",
+		"danger_clear_event_history": "DELETE-HISTORY",
+		"danger_clear_archival":      "DELETE-ARCHIVAL",
+		"danger_reset_all":           "RESET-ALL-MEMORY",
+	}
+	if s, ok := strs[action]; ok {
+		return s
+	}
+	return "CONFIRM-DELETE"
+}
+
+// buildDangerTabContent builds the danger zone tab with memory stats and clear buttons.
+func (f *FeishuChannel) buildDangerTabContent(ctx context.Context, senderID, chatID string) []map[string]any {
+	var elements []map[string]any
+
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**⚠️ 危险区**\n以下操作不可恢复，请谨慎操作。",
+	})
+	elements = append(elements, map[string]any{"tag": "hr"})
+
+	stats := map[string]string{}
+	if f.settingsCallbacks.MemoryGetStats != nil {
+		stats = f.settingsCallbacks.MemoryGetStats(senderID, chatID)
+	}
+
+	type dangerItem struct {
+		action string
+		label  string
+		stat   string
+	}
+	items := []dangerItem{
+		{"danger_clear_session", "会话历史", stats["session"]},
+		{"danger_clear_core_persona", "Core Memory: persona", stats["persona"]},
+		{"danger_clear_core_human", "Core Memory: human", stats["human"]},
+		{"danger_clear_core_working", "Core Memory: working_context", stats["working_context"]},
+		{"danger_clear_core_all", "Core Memory: 全部", ""},
+		{"danger_clear_long_term", "长期记忆", stats["long_term"]},
+		{"danger_clear_event_history", "事件历史", stats["event_history"]},
+		{"danger_clear_archival", "归档记忆（向量数据库）", stats["archival"]},
+	}
+
+	for _, item := range items {
+		text := fmt.Sprintf("🗑️ 清空 %s", item.label)
+		if item.stat != "" {
+			text += fmt.Sprintf("（%s）", item.stat)
+		}
+		elements = append(elements, map[string]any{
+			"tag":  "button",
+			"text": map[string]any{"tag": "plain_text", "content": text},
+			"type": "danger",
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{"action": item.action}),
+			},
+		})
+	}
+
+	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**🔴 一键重置全部**\n清空以上所有记忆数据。",
+	})
+	elements = append(elements, map[string]any{
+		"tag":  "button",
+		"text": map[string]any{"tag": "plain_text", "content": "🔴 重置全部记忆"},
+		"type": "danger",
+		"value": map[string]string{
+			"action_data": mustMapToJSON(map[string]string{"action": "danger_reset_all"}),
+		},
+	})
+
+	return elements
+}
+
+// buildDangerConfirmCard builds a confirmation card requiring user to type a confirm string.
+func buildDangerConfirmCard(targetLabel, confirmString, targetAction string) map[string]any {
+	return map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": "⚠️ 确认清空"},
+			"template": "red",
+		},
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("**确认清空：%s**\n\n此操作不可恢复。请在下方输入框中输入以下文字确认：\n\n`%s`", targetLabel, confirmString),
+				},
+				{"tag": "hr"},
+				{
+					"tag":  "form",
+					"name": "danger_confirm_form",
+					"elements": []map[string]any{
+						{
+							"tag":   "input",
+							"name":  "confirm_input",
+							"label": map[string]any{"tag": "plain_text", "content": "确认文字"},
+							"placeholder": map[string]any{
+								"tag":     "plain_text",
+								"content": confirmString,
+							},
+						},
+						{
+							"tag":         "button",
+							"name":        "danger_confirm_cancel",
+							"text":        map[string]any{"tag": "plain_text", "content": "取消"},
+							"type":        "default",
+							"action_type": "form_reset",
+						},
+						{
+							"tag":         "button",
+							"name":        "danger_confirm_submit",
+							"text":        map[string]any{"tag": "plain_text", "content": "🔴 确认清空"},
+							"type":        "danger",
+							"action_type": "form_submit",
+							"value": map[string]string{
+								"action_data": mustMapToJSON(map[string]string{
+									"action":        "danger_confirm",
+									"target_action": targetAction,
+									"expect_input":  confirmString,
+								}),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildDangerResultCard builds a result card after danger zone action.
+func buildDangerResultCard(message string) map[string]any {
+	return map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": "记忆管理"},
+			"template": "red",
+		},
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{
+					"tag":     "markdown",
+					"content": message,
+				},
+			},
+		},
+	}
 }
 
 // buildMarketTabContent builds the market browsing tab with my items + marketplace.

@@ -461,6 +461,20 @@ func (s *ArchivalService) Delete(ctx context.Context, tenantID int64, entryID st
 	return coll.Delete(ctx, nil, nil, entryID)
 }
 
+// ClearAll removes all archival entries for a tenant by deleting the collection.
+func (s *ArchivalService) ClearAll(ctx context.Context, tenantID int64) error {
+	name := s.collectionName(tenantID)
+	coll := s.db.GetCollection(name, s.embeddingFunc)
+	if coll == nil {
+		return nil
+	}
+	if err := s.db.DeleteCollection(name); err != nil {
+		return fmt.Errorf("drop collection %s: %w", name, err)
+	}
+	log.WithField("tenant_id", tenantID).Info("Archival memory cleared")
+	return nil
+}
+
 // SearchByDocumentContains searches archival entries where document content
 // contains the specified substring, using chromem-go's whereDocument filter.
 // This is useful for finding entries with specific markers like [PROJECT_CARD].

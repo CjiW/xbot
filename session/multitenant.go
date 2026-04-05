@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -675,4 +676,106 @@ func (m *MultiTenantSession) InvalidateSessionMCP(sessionKey string) {
 		sess.InvalidateMCP()
 		log.WithField("session", sessionKey).Info("Session MCP invalidated")
 	}
+}
+
+// ClearMemory clears the specified memory type(s) for a tenant identified by (channel, chatID).
+// targetType is one of: "session", "core_persona", "core_human", "core_working",
+// "core_all", "long_term", "event_history", "archival", "reset_all".
+func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, targetType, userID string) error {
+	tenantID, err := m.tenantSvc.GetOrCreateTenantID(channel, chatID)
+	if err != nil {
+		return fmt.Errorf("resolve tenant: %w", err)
+	}
+
+	var errs []string
+	appendErr := func(name string, err error) {
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+		}
+	}
+
+	switch targetType {
+	case "session":
+		appendErr("session", m.sessionSvc.Clear(tenantID))
+	case "core_persona":
+		appendErr("persona", m.coreSvc.ClearBlock(tenantID, "persona", ""))
+	case "core_human":
+		appendErr("human", m.coreSvc.ClearBlock(tenantID, "human", userID))
+	case "core_working":
+		appendErr("working_context", m.coreSvc.ClearBlock(tenantID, "working_context", ""))
+	case "core_all":
+		appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
+	case "long_term":
+		appendErr("long_term", m.memorySvc.ClearLongTerm(ctx, tenantID))
+	case "event_history":
+		appendErr("event_history", m.memorySvc.ClearHistory(ctx, tenantID))
+	case "archival":
+		if m.archivalSvc != nil {
+			appendErr("archival", m.archivalSvc.ClearAll(ctx, tenantID))
+		}
+	case "reset_all":
+		appendErr("session", m.sessionSvc.Clear(tenantID))
+		appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
+		appendErr("long_term", m.memorySvc.ClearLongTerm(ctx, tenantID))
+		appendErr("event_history", m.memorySvc.ClearHistory(ctx, tenantID))
+		appendErr("state", m.memorySvc.ClearState(ctx, tenantID))
+		if m.archivalSvc != nil {
+			appendErr("archival", m.archivalSvc.ClearAll(ctx, tenantID))
+		}
+		// Evict session from cache to reset in-memory state
+		sessionKey := channel + ":" + chatID
+		m.mu.Lock()
+		delete(m.tenantCache, sessionKey)
+		m.mu.Unlock()
+	default:
+		return fmt.Errorf("unknown target type: %s", targetType)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("部分清空失败: %s", strings.Join(errs, "; "))
+	}
+
+	log.WithFields(log.Fields{
+		"tenant_id":   tenantID,
+		"target_type": targetType,
+	}).Info("Memory cleared")
+	return nil
+}
+
+// GetMemoryStats returns statistics for all memory types of a tenant.
+func (m *MultiTenantSession) GetMemoryStats(ctx context.Context, channel, chatID, userID string) map[string]string {
+	stats := map[string]string{}
+
+	tenantID, err := m.tenantSvc.GetOrCreateTenantID(channel, chatID)
+	if err != nil {
+		return stats
+	}
+
+	// Session message count
+	if count, err := m.sessionSvc.GetMessagesCount(tenantID); err == nil {
+		stats["session"] = fmt.Sprintf("%d 条消息", count)
+	}
+
+	// Core memory blocks
+	if blocks, err := m.coreSvc.GetAllBlocks(tenantID, userID); err == nil {
+		for _, name := range []string{"persona", "human", "working_context"} {
+			if content, ok := blocks[name]; ok && content != "" {
+				stats[name] = fmt.Sprintf("%d chars", len(content))
+			}
+		}
+	}
+
+	// Archival memory count
+	if m.archivalSvc != nil {
+		if count, err := m.archivalSvc.Count(tenantID); err == nil && count > 0 {
+			stats["archival"] = fmt.Sprintf("%d 条", count)
+		}
+	}
+
+	// Long-term memory
+	if content, err := m.memorySvc.ReadLongTerm(ctx, tenantID); err == nil && content != "" {
+		stats["long_term"] = "有内容"
+	}
+
+	return stats
 }

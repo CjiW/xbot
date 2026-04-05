@@ -84,6 +84,26 @@ type askQItem struct {
 	Options  []string `json:"options,omitempty"`
 }
 
+// dangerItem represents a single clearable memory target in the danger zone panel.
+type dangerItem struct {
+	Action string // "session", "core_persona", etc.
+	Label  string // display label
+	Stat   string // current stat (e.g. "128 msgs")
+}
+
+// dangerConfirmStrings maps action keys to required confirmation strings.
+var dangerConfirmStrings = map[string]string{
+	"session":       "DELETE-SESSION",
+	"core_persona":  "DELETE-PERSONA",
+	"core_human":    "DELETE-HUMAN",
+	"core_working":  "DELETE-WORKING",
+	"core_all":      "DELETE-CORE-MEMORY",
+	"long_term":     "DELETE-LONG-TERM",
+	"event_history": "DELETE-HISTORY",
+	"archival":      "DELETE-ARCHIVAL",
+	"reset_all":     "RESET-ALL-MEMORY",
+}
+
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
@@ -137,6 +157,11 @@ func (m *cliModel) closePanel() {
 	m.panelBgViewing = false
 	m.panelBgScroll = 0
 	m.panelBgLogLines = nil
+	// Danger zone cleanup
+	m.panelDangerItems = nil
+	m.panelDangerCursor = 0
+	m.panelDangerConfirm = false
+	m.panelDangerOnExec = nil
 	// 恢复 viewport 到正常模式高度
 	m.relayoutViewport()
 }
@@ -384,6 +409,53 @@ func (m *cliModel) viewBgTaskLog() string {
 	return m.styles.PanelBox.Render(sb.String())
 }
 
+// viewDangerPanel renders the danger zone panel.
+func (m *cliModel) viewDangerPanel() string {
+	s := &m.styles
+	var sb strings.Builder
+
+	sb.WriteString(s.PanelHeader.Render("⚠ 危险区"))
+	sb.WriteString("\n")
+
+	if m.panelDangerConfirm && m.panelDangerCursor < len(m.panelDangerItems) {
+		// Confirmation sub-mode
+		item := m.panelDangerItems[m.panelDangerCursor]
+		confirmStr := dangerConfirmStrings[item.Action]
+		fmt.Fprintf(&sb, "  确认清空：%s\n", s.WarningSt.Render(item.Label))
+		sb.WriteString(s.PanelDesc.Render("  此操作不可恢复"))
+		sb.WriteString("\n\n")
+		fmt.Fprintf(&sb, "  请输入 %s 确认：\n", s.ProgressError.Render(confirmStr))
+		sb.WriteString("  ")
+		sb.WriteString(m.panelDangerInput.View())
+		sb.WriteString("\n")
+		sb.WriteString(s.PanelHint.Render("  Enter 提交  Esc 返回"))
+	} else {
+		// Item selection mode
+		for i, item := range m.panelDangerItems {
+			var prefix string
+			statText := ""
+			if item.Stat != "" {
+				statText = fmt.Sprintf("  %s", s.InfoSt.Render(item.Stat))
+			}
+			if i == m.panelDangerCursor {
+				prefix = s.PanelCursor.Render("▸")
+			} else {
+				prefix = "  "
+			}
+			line := fmt.Sprintf("%s %s%s", prefix, item.Label, statText)
+			if i == m.panelDangerCursor {
+				line = s.SettingsSelBg.Width(m.panelWidth(60) - 4).Render(line)
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+		sb.WriteString(s.PanelHint.Render("  ↑↓ 选择  Enter 确认  Esc 返回"))
+	}
+
+	return s.PanelBox.Render(sb.String())
+}
+
 // splitLines splits a string into lines, preserving trailing empty line.
 func splitLines(s string) []string {
 	if s == "" {
@@ -406,8 +478,71 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return m.updateAskUserPanel(msg)
 	case "bgtasks":
 		return m.updateBgTasksPanel(msg)
+	case "danger":
+		return m.updateDangerPanel(msg)
 	}
 	return false, m, nil
+}
+
+// updateDangerPanel handles key events in the danger zone panel.
+func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+	if m.panelDangerConfirm {
+		// Confirmation input mode
+		switch msg.Code {
+		case tea.KeyEsc:
+			m.panelDangerConfirm = false
+			m.panelDangerInput.SetValue("")
+			return true, m, nil
+		case tea.KeyEnter:
+			if m.panelDangerOnExec == nil || m.panelDangerCursor >= len(m.panelDangerItems) {
+				return true, m, nil
+			}
+			item := m.panelDangerItems[m.panelDangerCursor]
+			confirmStr := dangerConfirmStrings[item.Action]
+			if m.panelDangerInput.Value() != confirmStr {
+				m.showSystemMsg("❌ 确认文字不匹配", feedbackWarning)
+				return true, m, nil
+			}
+			// Execute the clear action
+			if err := m.panelDangerOnExec(item.Action); err != nil {
+				m.showSystemMsg(fmt.Sprintf("❌ 清空失败：%v", err), feedbackWarning)
+			} else {
+				m.showSystemMsg(fmt.Sprintf("✅ 已清空：%s", item.Label), feedbackInfo)
+			}
+			m.closePanel()
+			return true, m, nil
+		default:
+			var cmd tea.Cmd
+			m.panelDangerInput, cmd = m.panelDangerInput.Update(msg)
+			return true, m, cmd
+		}
+	}
+
+	// Item selection mode
+	switch {
+	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
+		return m.closePanelAndResume()
+
+	case msg.Code == tea.KeyUp:
+		if m.panelDangerCursor > 0 {
+			m.panelDangerCursor--
+		}
+
+	case msg.Code == tea.KeyDown:
+		if m.panelDangerCursor < len(m.panelDangerItems)-1 {
+			m.panelDangerCursor++
+		}
+
+	case msg.Code == tea.KeyEnter:
+		if m.panelDangerCursor < len(m.panelDangerItems) {
+			m.panelDangerConfirm = true
+			m.panelDangerInput.SetValue("")
+			m.panelDangerInput.Focus()
+			return true, m, m.panelDangerInput.Focus()
+		}
+	}
+
+	return true, m, nil
 }
 
 func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
@@ -859,6 +994,8 @@ func (m *cliModel) viewPanel() string {
 		raw = m.viewAskUserPanel()
 	case "bgtasks":
 		raw = m.viewBgTasksPanel()
+	case "danger":
+		raw = m.viewDangerPanel()
 	default:
 		return ""
 	}

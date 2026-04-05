@@ -744,6 +744,13 @@ func main() {
 				}
 				return channel.FeishuUnlinkUser(db, feishuUserID)
 			},
+			// ── 记忆管理（危险区） ──
+			MemoryClear: func(senderID, chatID, targetType string) error {
+				return agentLoop.MultiSession().ClearMemory(context.Background(), "feishu", chatID, targetType, senderID)
+			},
+			MemoryGetStats: func(senderID, chatID string) map[string]string {
+				return agentLoop.MultiSession().GetMemoryStats(context.Background(), "feishu", chatID, senderID)
+			},
 		})
 
 		// 注入飞书渠道特化 prompt 提供者

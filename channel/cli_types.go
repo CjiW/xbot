@@ -445,8 +445,14 @@ type CLIChannel struct {
 	modelLister     ModelLister     // provides available model names for combo
 
 	// Background tasks
-	bgTaskMgr    *tools.BackgroundTaskManager
+	bgTaskMgr *tools.BackgroundTaskManager
+
+	// Runner LLM access
+	llmClient    llm.LLM
+	modelList    []string
 	bgSessionKey string
+
+	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

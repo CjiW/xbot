@@ -108,6 +108,27 @@ type UILocale struct {
 	FooterFold     string // "fold"
 	FooterUnfold   string // "unfold"
 
+	// --- K. Runner panel ---
+	RunnerPanelTitle           string
+	RunnerStatusConnected      string
+	RunnerConnecting           string
+	RunnerDisconnect           string
+	RunnerDisconnectAction     string
+	RunnerConnectSuccess       string
+	RunnerConnectFailed        string
+	RunnerServerLabel          string
+	RunnerTokenLabel           string
+	RunnerWorkspaceLabel       string
+	RunnerServerPlaceholder    string
+	RunnerTokenPlaceholder     string
+	RunnerWorkspacePlaceholder string
+	RunnerServerRequired       string
+	RunnerWorkspaceRequired    string
+	RunnerPleaseWait           string
+	RunnerNavHint              string
+	RunnerNotAvailable         string
+	RunnerBack                 string // "back"
+
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
 	IdlePlaceholders []string // rotating hints for empty input
@@ -420,6 +441,21 @@ func init() {
 					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
+			// Runner settings
+			{
+				Key: "runner_server", Label: "Runner Server", Description: "WebSocket 服务器地址（共享为 Runner 时使用）",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			{
+				Key: "runner_token", Label: "Runner Token", Description: "Runner 认证 Token",
+				Type: SettingTypePassword, Category: "Runner",
+			},
+			{
+				Key: "runner_workspace", Label: "Runner 工作目录", Description: "共享的工作目录路径",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			// Runner panel entry (display-only, triggers panel switch)
+			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ 危险区 — 清空记忆", Type: SettingTypeText, Category: "危险"},
 		},
@@ -709,6 +745,21 @@ func init() {
 					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
+			// Runner settings
+			{
+				Key: "runner_server", Label: "Runner Server", Description: "WebSocket server address (for sharing as Runner)",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			{
+				Key: "runner_token", Label: "Runner Token", Description: "Runner authentication token",
+				Type: SettingTypePassword, Category: "Runner",
+			},
+			{
+				Key: "runner_workspace", Label: "Runner Workspace", Description: "Shared workspace directory path",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			// Runner panel entry (display-only, triggers panel switch)
+			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ Danger Zone — Clear Memory", Type: SettingTypeText, Category: "Danger"},
 		},
@@ -998,6 +1049,21 @@ func init() {
 					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
+			// Runner settings
+			{
+				Key: "runner_server", Label: "Runner Server", Description: "WebSocket サーバーアドレス（Runner 共有時使用）",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			{
+				Key: "runner_token", Label: "Runner Token", Description: "Runner 認証 Token",
+				Type: SettingTypePassword, Category: "Runner",
+			},
+			{
+				Key: "runner_workspace", Label: "Runner ワークスペース", Description: "共有ワークスペースディレクトリパス",
+				Type: SettingTypeText, Category: "Runner",
+			},
+			// Runner panel entry (display-only, triggers panel switch)
+			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
 			{Key: "danger_zone", Label: "⚠️ 危険エリア — 記憶クリア", Type: SettingTypeText, Category: "危険"},
 		},

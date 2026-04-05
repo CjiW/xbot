@@ -170,6 +170,11 @@ func main() {
 	// 解析命令行标志
 	prompt := ""
 	newSession := false
+	var (
+		flagShare     string // --share ws://host:port/ws/userID
+		flagToken     string // --token xxx
+		flagWorkspace string // --workspace /path (overrides config)
+	)
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--resume":
@@ -179,6 +184,21 @@ func main() {
 		case "-p":
 			if len(os.Args) > i+1 {
 				prompt = os.Args[i+1]
+			}
+		case "--share":
+			if len(os.Args) > i+1 {
+				flagShare = os.Args[i+1]
+				i++
+			}
+		case "--token":
+			if len(os.Args) > i+1 {
+				flagToken = os.Args[i+1]
+				i++
+			}
+		case "--workspace":
+			if len(os.Args) > i+1 {
+				flagWorkspace = os.Args[i+1]
+				i++
 			}
 		default:
 			if !strings.HasPrefix(os.Args[i], "-") {
@@ -336,6 +356,20 @@ func main() {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
+			// Persist runner settings to settings service
+			if app.agentLoop != nil {
+				if ss := app.agentLoop.GetSettingsService(); ss != nil {
+					if v, ok := values["runner_server"]; ok {
+						_ = ss.SetSetting("cli", "cli_user", "runner_server", v)
+					}
+					if v, ok := values["runner_token"]; ok {
+						_ = ss.SetSetting("cli", "cli_user", "runner_token", v)
+					}
+					if v, ok := values["runner_workspace"]; ok {
+						_ = ss.SetSetting("cli", "cli_user", "runner_workspace", v)
+					}
+				}
+			}
 			// Rebuild LLM client and update agent runtime when LLM config changed
 			_, llmChanged := values["llm_provider"]
 			_, keyChanged := values["llm_api_key"]
@@ -484,8 +518,27 @@ func main() {
 		cancel()
 	}()
 
-	if err := cliCh.Start(); err != nil {
-		log.WithError(err).Fatal("CLI channel error")
+	// Runner Bridge: inject LLM client and model list for runner use
+	cliCh.SetRunnerLLM(app.llmClient, func() []string {
+		if app.agentLoop != nil {
+			return app.agentLoop.LLMFactory().ListModels()
+		}
+		return nil
+	}())
+
+	// --share flag: auto-connect as runner after TUI starts
+	if flagShare != "" {
+		shareURL := flagShare
+		shareToken := flagToken
+		shareWorkspace := flagWorkspace
+		if shareWorkspace == "" {
+			shareWorkspace = app.workDir
+		}
+		cliCh.StartWithRunner(shareURL, shareToken, shareWorkspace)
+	} else {
+		if err := cliCh.Start(); err != nil {
+			log.WithError(err).Fatal("CLI channel error")
+		}
 	}
 }
 

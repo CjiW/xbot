@@ -31,6 +31,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Runner status change notification
+	if rsm, ok := msg.(runnerStatusMsg); ok {
+		cmd := m.handleRunnerStatusMsg(rsm)
+		return m, cmd
+	}
+
 	// 主题变更通知：重建样式缓存 + glamour 渲染器
 	select {
 	case <-themeChangeCh:
@@ -988,4 +994,21 @@ func (m *cliModel) renderCompletionsHint(inputValue string) (borderColor color.C
 		return
 	}
 	return
+}
+
+// handleRunnerStatusMsg 处理 runner 连接状态变化
+func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
+	if msg.err != nil {
+		m.showTempStatus(fmt.Sprintf(m.locale.RunnerConnectFailed, msg.err))
+		return m.clearTempStatusCmd()
+	}
+	if msg.err != nil {
+		m.showTempStatus(fmt.Sprintf("%s: %v", m.locale.RunnerConnectFailed, msg.err))
+		return m.clearTempStatusCmd()
+	}
+	if msg.status == RunnerConnected {
+		m.showTempStatus(m.locale.RunnerConnectSuccess)
+		return m.clearTempStatusCmd()
+	}
+	return nil
 }

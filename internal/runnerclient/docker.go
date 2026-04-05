@@ -1,11 +1,10 @@
-package main
+package runnerclient
 
 import (
 	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,27 +19,28 @@ const (
 	dockerSlowTimeout = 120 * time.Second
 	dockerPullTimeout = 5 * time.Minute
 
-	// MaxSandboxFileSize is the maximum file size for read/write operations (500MB).
+	// MaxSandboxFileSize 是文件读写的最大大小（500MB）。
 	MaxSandboxFileSize int64 = 500 * 1024 * 1024
 )
 
-// dockerExecutor 通过 docker exec 在容器内执行操作。
-type dockerExecutor struct {
-	containerName string
-	image         string
-	hostWorkspace string // 宿主机 workspace 路径（bind mount 源）
-	ctrWorkspace  string // 容器内 workspace 路径（默认 /workspace）
+// DockerExecutor 通过 docker exec 在容器内执行操作。
+type DockerExecutor struct {
+	ContainerName string
+	Image         string
+	HostWorkspace string // 宿主机 workspace 路径（bind mount 源）
+	CtrWorkspace  string // 容器内 workspace 路径（默认 /workspace）
 }
 
-func newDockerExecutor(userID, image, hostWorkspace string) (*dockerExecutor, error) {
-	if err := checkDockerAvailable(); err != nil {
+// NewDockerExecutor 创建一个 DockerExecutor。
+func NewDockerExecutor(userID, image, hostWorkspace string) (*DockerExecutor, error) {
+	if err := CheckDockerAvailable(); err != nil {
 		return nil, err
 	}
-	de := &dockerExecutor{
-		containerName: fmt.Sprintf("xbot-runner-%s", userID),
-		image:         image,
-		hostWorkspace: hostWorkspace,
-		ctrWorkspace:  "/workspace",
+	de := &DockerExecutor{
+		ContainerName: fmt.Sprintf("xbot-runner-%s", userID),
+		Image:         image,
+		HostWorkspace: hostWorkspace,
+		CtrWorkspace:  "/workspace",
 	}
 	if err := de.validateUserID(userID); err != nil {
 		return nil, err
@@ -51,64 +51,57 @@ func newDockerExecutor(userID, image, hostWorkspace string) (*dockerExecutor, er
 	return de, nil
 }
 
-func (de *dockerExecutor) Close() error {
-	log.Printf("Stopping container %s", de.containerName)
-	return de.dockerRun("stop", "-t", "1", de.containerName)
+func (de *DockerExecutor) Close() error {
+	return de.dockerRun("stop", "-t", "1", de.ContainerName)
 }
 
 // --- 容器管理 ---
 
-func (de *dockerExecutor) getOrCreateContainer() error {
-	containerName := de.containerName
+func (de *DockerExecutor) getOrCreateContainer() error {
+	containerName := de.ContainerName
 
 	// 1. 检查容器是否已在运行
 	out, err := de.dockerExec("inspect", "-f", "{{.State.Running}}", containerName)
 	if err == nil && strings.Contains(string(out), "true") {
-		log.Printf("Docker container %s is already running", containerName)
 		return nil
 	}
 
 	// 2. 容器存在但未运行 → start
 	if de.containerExists() {
-		log.Printf("Starting existing container %s", containerName)
 		return de.dockerRun("start", containerName)
 	}
 
 	// 3. 容器不存在 → create
 	//    预检镜像，不存在则自动 pull
-	if out, err := de.dockerExec("image", "inspect", de.image); err != nil {
-		log.Printf("Docker image %q not found locally, pulling...", de.image)
+	if out, err := de.dockerExec("image", "inspect", de.Image); err != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), dockerPullTimeout)
-		pullOut, pullErr := exec.CommandContext(ctx, "docker", "image", "pull", de.image).CombinedOutput()
+		pullOut, pullErr := exec.CommandContext(ctx, "docker", "image", "pull", de.Image).CombinedOutput()
 		cancel()
 		if pullErr != nil {
-			return fmt.Errorf("docker pull %q failed: %w, output: %s", de.image, pullErr, strings.TrimSpace(string(pullOut)))
+			return fmt.Errorf("docker pull %q failed: %w, output: %s", de.Image, pullErr, strings.TrimSpace(string(pullOut)))
 		}
-		_ = out // suppress unused warning
-		log.Printf("Docker image %q pulled successfully", de.image)
+		_ = out
 	}
 
 	args := []string{
 		"run", "-d",
 		"--name", containerName,
 		"--hostname", fmt.Sprintf("xbot-runner-%s", strings.TrimPrefix(containerName, "xbot-runner-")),
-		"-v", fmt.Sprintf("%s:/workspace:rw", de.hostWorkspace),
+		"-v", fmt.Sprintf("%s:/workspace:rw", de.HostWorkspace),
 		"-w", "/workspace",
-		de.image,
+		de.Image,
 		"tail", "-f", "/dev/null",
 	}
-	log.Printf("Creating container %s (image=%s, mount=%s:/workspace)", containerName, de.image, de.hostWorkspace)
 	out, err = de.dockerExec(args...)
 	if err != nil {
 		return fmt.Errorf("create container: %w, output: %s", err, string(out))
 	}
-	log.Printf("Container %s created", containerName)
 	return nil
 }
 
 // --- Docker 辅助函数 ---
 
-func (de *dockerExecutor) dockerExec(args ...string) ([]byte, error) {
+func (de *DockerExecutor) dockerExec(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerCmdTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
@@ -118,7 +111,7 @@ func (de *dockerExecutor) dockerExec(args ...string) ([]byte, error) {
 	return out, nil
 }
 
-func (de *dockerExecutor) dockerExecSlow(args ...string) ([]byte, error) {
+func (de *DockerExecutor) dockerExecSlow(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerSlowTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
@@ -129,7 +122,7 @@ func (de *dockerExecutor) dockerExecSlow(args ...string) ([]byte, error) {
 }
 
 // dockerExecWithStdin 执行 docker 命令并通过 stdin 传入数据。
-func (de *dockerExecutor) dockerExecWithStdin(timeout time.Duration, stdinData []byte, args ...string) ([]byte, error) {
+func (de *DockerExecutor) dockerExecWithStdin(timeout time.Duration, stdinData []byte, args ...string) ([]byte, error) {
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -152,17 +145,17 @@ func (de *dockerExecutor) dockerExecWithStdin(timeout time.Duration, stdinData [
 	return stdout.Bytes(), nil
 }
 
-func (de *dockerExecutor) dockerRun(args ...string) error {
+func (de *DockerExecutor) dockerRun(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerCmdTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "docker", args...).Run()
 }
 
-func (de *dockerExecutor) containerExists() bool {
-	return de.dockerRun("inspect", "-f", "{{.Id}}", de.containerName) == nil
+func (de *DockerExecutor) containerExists() bool {
+	return de.dockerRun("inspect", "-f", "{{.Id}}", de.ContainerName) == nil
 }
 
-func (de *dockerExecutor) validateUserID(userID string) error {
+func (de *DockerExecutor) validateUserID(userID string) error {
 	matched, _ := regexp.MatchString(`^[a-z0-9][a-z0-9_.-]{0,127}$`, userID)
 	if !matched {
 		return fmt.Errorf("invalid userID %q for Docker container naming", userID)
@@ -170,8 +163,8 @@ func (de *dockerExecutor) validateUserID(userID string) error {
 	return nil
 }
 
-// checkDockerAvailable 检查 Docker 是否可用。
-func checkDockerAvailable() error {
+// CheckDockerAvailable 检查 Docker 是否可用。
+func CheckDockerAvailable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", "info")
@@ -188,7 +181,7 @@ func shellEscape(s string) string {
 
 // --- Executor 接口实现 ---
 
-func (de *dockerExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
+func (de *DockerExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
 	dockerArgs := []string{"exec", "-i"}
 	if spec.Dir != "" {
 		dockerArgs = append(dockerArgs, "-w", spec.Dir)
@@ -196,7 +189,7 @@ func (de *dockerExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult,
 	for _, e := range spec.Env {
 		dockerArgs = append(dockerArgs, "-e", e)
 	}
-	dockerArgs = append(dockerArgs, de.containerName)
+	dockerArgs = append(dockerArgs, de.ContainerName)
 
 	if spec.Shell {
 		dockerArgs = append(dockerArgs, "sh", "-c", spec.Command)
@@ -207,7 +200,6 @@ func (de *dockerExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult,
 		dockerArgs = append(dockerArgs, spec.Args...)
 	}
 
-	// 直接使用传入的 ctx（handleExec 已设置 deadline），不重复创建 WithTimeout
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -234,7 +226,7 @@ func (de *dockerExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult,
 	return result, nil
 }
 
-func (de *dockerExecutor) ReadFile(path string) ([]byte, error) {
+func (de *DockerExecutor) ReadFile(path string) ([]byte, error) {
 	// 预检文件大小
 	if info, err := de.Stat(path); err == nil {
 		if info.Size > MaxSandboxFileSize {
@@ -242,7 +234,7 @@ func (de *dockerExecutor) ReadFile(path string) ([]byte, error) {
 		}
 	}
 	// path 作为独立参数传给 base64（不经过 shell），避免 shell 注入
-	out, err := de.dockerExecSlow("exec", "-i", de.containerName, "base64", path)
+	out, err := de.dockerExecSlow("exec", "-i", de.ContainerName, "base64", path)
 	if err != nil {
 		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot open") {
 			return nil, os.ErrNotExist
@@ -260,29 +252,29 @@ func (de *dockerExecutor) ReadFile(path string) ([]byte, error) {
 	return decoded, nil
 }
 
-func (de *dockerExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
+func (de *DockerExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if int64(len(data)) > MaxSandboxFileSize {
 		return fmt.Errorf("data exceeds maximum size of %d bytes", MaxSandboxFileSize)
 	}
 	dir := filepath.Dir(path)
-	if _, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", dir); err != nil {
+	if _, err := de.dockerExec("exec", "-i", de.ContainerName, "mkdir", "-p", dir); err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}
 	// 通过 dockerExecWithStdin 将 data 写入文件
 	if _, err := de.dockerExecWithStdin(dockerSlowTimeout, data,
-		"exec", "-i", de.containerName,
+		"exec", "-i", de.ContainerName,
 		"sh", "-c", fmt.Sprintf("cat > '%s'", shellEscape(path))); err != nil {
 		return fmt.Errorf("docker exec write: %w", err)
 	}
-	if _, err := de.dockerExec("exec", "-i", de.containerName,
+	if _, err := de.dockerExec("exec", "-i", de.ContainerName,
 		"chmod", fmt.Sprintf("%o", uint32(perm)), path); err != nil {
 		return fmt.Errorf("docker exec chmod: %w", err)
 	}
 	return nil
 }
 
-func (de *dockerExecutor) Stat(path string) (FileInfo, error) {
-	out, err := de.dockerExec("exec", "-i", de.containerName, "stat", "--format", "%s|%a|%Y|%F", path)
+func (de *DockerExecutor) Stat(path string) (FileInfo, error) {
+	out, err := de.dockerExec("exec", "-i", de.ContainerName, "stat", "--format", "%s|%a|%Y|%F", path)
 	if err != nil {
 		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot stat") {
 			return FileInfo{}, os.ErrNotExist
@@ -321,8 +313,8 @@ func (de *dockerExecutor) Stat(path string) (FileInfo, error) {
 	}, nil
 }
 
-func (de *dockerExecutor) ReadDir(path string) ([]DirEntry, error) {
-	out, err := de.dockerExec("exec", "-i", de.containerName, "ls", "-1p", path)
+func (de *DockerExecutor) ReadDir(path string) ([]DirEntry, error) {
+	out, err := de.dockerExec("exec", "-i", de.ContainerName, "ls", "-1p", path)
 	if err != nil {
 		if strings.Contains(string(out), "No such file") || strings.Contains(string(out), "cannot access") {
 			return nil, os.ErrNotExist
@@ -350,49 +342,45 @@ func (de *dockerExecutor) ReadDir(path string) ([]DirEntry, error) {
 	return entries, nil
 }
 
-func (de *dockerExecutor) MkdirAll(path string, perm os.FileMode) error {
-	_, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm.Perm())), path)
+func (de *DockerExecutor) MkdirAll(path string, perm os.FileMode) error {
+	_, err := de.dockerExec("exec", "-i", de.ContainerName, "mkdir", "-p", "-m", fmt.Sprintf("%o", uint32(perm.Perm())), path)
 	if err != nil {
 		return fmt.Errorf("docker exec mkdir -p: %w", err)
 	}
 	return nil
 }
 
-func (de *dockerExecutor) Remove(path string) error {
-	_, err := de.dockerExec("exec", "-i", de.containerName, "rm", path)
+func (de *DockerExecutor) Remove(path string) error {
+	_, err := de.dockerExec("exec", "-i", de.ContainerName, "rm", path)
 	if err != nil {
 		return fmt.Errorf("docker exec rm: %w", err)
 	}
 	return nil
 }
 
-func (de *dockerExecutor) RemoveAll(path string) error {
-	_, err := de.dockerExecSlow("exec", "-i", de.containerName, "rm", "-rf", path)
+func (de *DockerExecutor) RemoveAll(path string) error {
+	_, err := de.dockerExecSlow("exec", "-i", de.ContainerName, "rm", "-rf", path)
 	if err != nil {
 		return fmt.Errorf("docker exec rm -rf: %w", err)
 	}
 	return nil
 }
 
-func (de *dockerExecutor) DownloadFile(ctx context.Context, url, outputPath string) (int64, error) {
-	// Use curl inside the container to download directly.
-	// curl is available in most docker images; if not, wget is tried as fallback.
+func (de *DockerExecutor) DownloadFile(ctx context.Context, url, outputPath string) (int64, error) {
 	dir := filepath.Dir(outputPath)
-	if _, err := de.dockerExec("exec", "-i", de.containerName, "mkdir", "-p", dir); err != nil {
+	if _, err := de.dockerExec("exec", "-i", de.ContainerName, "mkdir", "-p", dir); err != nil {
 		return 0, fmt.Errorf("docker exec mkdir -p: %w", err)
 	}
 
-	// Try curl first (supports more features like -L for redirects, --max-filesize)
-	_, err := de.dockerExecSlow("exec", "-i", de.containerName, "curl", "-fsSL", "-o", outputPath, url)
+	// 优先使用 curl，回退 wget
+	_, err := de.dockerExecSlow("exec", "-i", de.ContainerName, "curl", "-fsSL", "-o", outputPath, url)
 	if err != nil {
-		// Fallback to wget
-		if _, wgetErr := de.dockerExecSlow("exec", "-i", de.containerName, "wget", "-q", "-O", outputPath, url); wgetErr != nil {
+		if _, wgetErr := de.dockerExecSlow("exec", "-i", de.ContainerName, "wget", "-q", "-O", outputPath, url); wgetErr != nil {
 			return 0, fmt.Errorf("docker exec download (curl/wget): %w", err)
 		}
 	}
 
-	// Get file size
-	statOut, err := de.dockerExec("exec", "-i", de.containerName, "stat", "--format", "%s", outputPath)
+	statOut, err := de.dockerExec("exec", "-i", de.ContainerName, "stat", "--format", "%s", outputPath)
 	if err != nil {
 		return 0, fmt.Errorf("docker exec stat: %w", err)
 	}

@@ -302,6 +302,21 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		"workspace":   reg.Workspace,
 	}).Info("Runner connected")
 
+	// If runner declares LLM capability, update DB record (for injectProxyLLM to query)
+	if reg.LLMProvider != "" && rs.tokenStore != nil {
+		rs.tokenStore.UpdateRunnerLLM(reg.UserID, runnerName, RunnerLLMSettings{
+			Provider: reg.LLMProvider,
+			Model:    reg.LLMModel,
+			// APIKey and BaseURL are not needed here — runner holds them locally
+		})
+		log.WithFields(log.Fields{
+			"user_id":      reg.UserID,
+			"runner_name":  runnerName,
+			"llm_provider": reg.LLMProvider,
+			"llm_model":    reg.LLMModel,
+		}).Info("Runner LLM capability recorded")
+	}
+
 	// Notify runner status change
 	if rs.OnRunnerStatusChange != nil {
 		go rs.OnRunnerStatusChange(reg.UserID, runnerName, true)

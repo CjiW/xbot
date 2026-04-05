@@ -6,11 +6,12 @@ import (
 	"log"
 	"math/rand"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"xbot/internal/runnerclient"
 )
 
 var (
@@ -28,8 +29,6 @@ var (
 	flagLLMModel    = flag.String("llm-model", "", "LLM model name")
 )
 
-var verboseLog bool
-
 const (
 	baseDelay  = 1 * time.Second
 	maxDelay   = 60 * time.Second
@@ -38,8 +37,6 @@ const (
 
 func main() {
 	flag.Parse()
-	verboseLog = *flagVerbose
-	fullControl = *flagFullControl
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
@@ -61,35 +58,52 @@ func main() {
 	}
 
 	var err error
+	var exec runnerclient.Executor
+	var dockerMode bool
+	var execWorkspace string
+
 	if *flagMode == "docker" {
 		log.Printf("Docker mode: image=%s, workspace=%s", *flagDockerImage, *flagWorkspace)
-		executor, err = newDockerExecutor(userID, *flagDockerImage, *flagWorkspace)
+		exec, err = runnerclient.NewDockerExecutor(userID, *flagDockerImage, *flagWorkspace)
 		if err != nil {
 			log.Fatalf("Failed to create docker executor: %v", err)
 		}
 		dockerMode = true
 		execWorkspace = "/workspace"
 	} else {
-		executor = newNativeExecutor(*flagWorkspace)
+		exec = runnerclient.NewNativeExecutor(*flagWorkspace)
 		dockerMode = false
 		execWorkspace = *flagWorkspace
 	}
 	defer func() {
-		if cerr := executor.Close(); cerr != nil {
+		if cerr := exec.Close(); cerr != nil {
 			log.Printf("Executor close error: %v", cerr)
 		}
 	}()
 
-	// Initialize local LLM client if configured.
+	// 创建 handler
+	handler := runnerclient.NewHandler(exec,
+		runnerclient.WithVerbose(*flagVerbose),
+		runnerclient.WithPathGuard(&runnerclient.PathGuard{
+			Workspace:   execWorkspace,
+			FullControl: *flagFullControl,
+			DockerMode:  dockerMode,
+		}),
+		runnerclient.WithDockerMode(dockerMode),
+	)
+
+	// 初始化本地 LLM 客户端
 	if *flagLLMProvider != "" {
-		if err := initLLMClient(*flagLLMProvider, *flagLLMBaseURL, *flagLLMAPIKey, *flagLLMModel); err != nil {
+		if err := handler.InitLLM(*flagLLMProvider, *flagLLMBaseURL, *flagLLMAPIKey, *flagLLMModel); err != nil {
 			log.Fatalf("Failed to init local LLM: %v", err)
 		}
 	}
 
-	registerWorkspace := execWorkspace
+	// 检测 shell
+	shell := runnerclient.DetectShell(dockerMode, exec)
 
-	log.Printf("Starting xbot-runner  mode=%s server=%s  user=%s  workspace=%s  full-control=%v", *flagMode, *flagServer, userID, registerWorkspace, *flagFullControl)
+	log.Printf("Starting xbot-runner  mode=%s server=%s  user=%s  workspace=%s  full-control=%v",
+		*flagMode, *flagServer, userID, execWorkspace, *flagFullControl)
 
 	serverURL := *flagServer
 	if !strings.Contains(serverURL, "://") {
@@ -106,7 +120,7 @@ func main() {
 
 	attempt := 0
 	for {
-		err := runSession(serverURL, userID, *flagToken, registerWorkspace)
+		err := runSession(serverURL, userID, *flagToken, execWorkspace, shell, handler)
 		if err == nil {
 			return
 		}
@@ -120,39 +134,38 @@ func main() {
 	}
 }
 
-// runSession connects to the server and runs read/write loops.
-// Returns an error when the connection is lost (triggers reconnect).
-func runSession(serverURL, userID, authToken, workspace string) error {
-	conn, err := connectToServer(serverURL, userID, authToken, workspace)
+// runSession 连接 server 并运行读写循环。
+// 连接丢失时返回错误（触发重连）。
+func runSession(serverURL, userID, authToken, workspace, shell string, handler *runnerclient.Handler) error {
+	conn, err := runnerclient.Connect(serverURL, userID, authToken, workspace, shell, runnerclient.ConnectOptions{
+		LLMProvider: handler.LLMProvider(),
+		LLMModel:    handler.LLMModel(),
+	})
 	if err != nil {
 		return err
 	}
 	log.Printf("Connected to server, registered as user=%s", userID)
 
-	writeCh := make(chan writeMsg, 64)
+	writeCh := make(chan runnerclient.WriteMsg, 64)
 	stopWrite := make(chan struct{})
 	writeDone := make(chan struct{})
 
-	// Expose write channel to stdio handlers for push messages.
-	sessionWriteCh = writeCh
-	sessionWriteDone = writeDone
+	// 将写通道暴露给 stdio 处理器（用于推送消息）
+	handler.SetWriteChannels(writeCh, writeDone)
 
-	go writePump(conn, writeCh, stopWrite, writeDone)
-	runReadLoop(conn, writeCh, writeDone)
+	go runnerclient.WritePump(conn, writeCh, stopWrite, writeDone)
+	runnerclient.ReadLoop(conn, handler, writeCh, writeDone)
 
-	// Signal writePump to exit immediately.
+	// 通知 writePump 立即退出
 	close(stopWrite)
 
-	// Kill any active stdio processes on disconnect.
-	cleanupStdioProcs()
-
-	// Kill any background tasks.
-	cleanupBgTasks()
+	// 断开连接时杀死活跃的 stdio 进程和后台任务
+	handler.Cleanup()
 
 	return fmt.Errorf("read loop exited")
 }
 
-// backoff returns an exponential backoff delay with jitter.
+// backoff 返回带随机抖动的指数退避延迟。
 func backoff(attempt int) time.Duration {
 	delay := baseDelay
 	for i := 1; i < attempt; i++ {
@@ -164,27 +177,4 @@ func backoff(attempt int) time.Duration {
 	}
 	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
 	return delay + jitter
-}
-
-// detectShell finds the best available shell.
-// Docker mode: queries /etc/passwd inside the container (same as DockerSandbox.detectShell).
-// Native mode: checks host filesystem.
-func detectShell() string {
-	if dockerMode {
-		out, err := exec.Command("docker", "exec", "-i", executor.(*dockerExecutor).containerName,
-			"sh", "-c", "grep '^root:' /etc/passwd | cut -d: -f7").Output()
-		if err == nil {
-			shell := strings.TrimSpace(string(out))
-			if shell != "" {
-				return shell
-			}
-		}
-	}
-	// Fallback: check host or default
-	for _, candidate := range []string{"/bin/bash", "/usr/bin/bash", "/bin/sh"} {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return "/bin/sh"
 }

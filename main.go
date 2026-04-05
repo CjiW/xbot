@@ -459,13 +459,6 @@ func main() {
 					}
 					return cmd, nil
 				},
-				RunnerUpdateLLM: func(senderID, name string, llm tools.RunnerLLMSettings) error {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return fmt.Errorf("runner management not configured")
-					}
-					return tools.NewRunnerTokenStore(db).UpdateRunnerLLM(senderID, name, llm)
-				},
 				RunnerDelete: func(senderID, name string) error {
 					db := tools.GetRunnerTokenDB()
 					if db == nil {

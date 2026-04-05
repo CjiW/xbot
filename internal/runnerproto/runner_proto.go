@@ -78,6 +78,10 @@ type RegisterRequest struct {
 	AuthToken string `json:"auth_token"`
 	Workspace string `json:"workspace,omitempty"` // Runner's workspace root directory
 	Shell     string `json:"shell,omitempty"`     // Runner's default shell path (e.g. /bin/bash)
+
+	// LLM capability declaration (runner self-reports)
+	LLMProvider string `json:"llm_provider,omitempty"` // "openai" or "anthropic", empty = no LLM
+	LLMModel    string `json:"llm_model,omitempty"`    // default model name
 }
 
 // ExecRequest requests command execution on the runner.

@@ -348,18 +348,6 @@ type runnerCreateRequest struct {
 	Mode        string `json:"mode"`
 	DockerImage string `json:"docker_image"`
 	Workspace   string `json:"workspace"`
-	LLMProvider string `json:"llm_provider,omitempty"`
-	LLMAPIKey   string `json:"llm_api_key,omitempty"`
-	LLMModel    string `json:"llm_model,omitempty"`
-	LLMBaseURL  string `json:"llm_base_url,omitempty"`
-}
-
-type runnerUpdateLLMRequest struct {
-	Name        string `json:"name"`
-	LLMProvider string `json:"llm_provider"`
-	LLMAPIKey   string `json:"llm_api_key"`
-	LLMModel    string `json:"llm_model"`
-	LLMBaseURL  string `json:"llm_base_url"`
 }
 
 type runnerActiveResponse struct {
@@ -414,13 +402,7 @@ func (wc *WebChannel) handleRunners(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, runnerCommandResponse{OK: false, Error: "name is required"})
 			return
 		}
-		llm := tools.RunnerLLMSettings{
-			Provider: req.LLMProvider,
-			APIKey:   req.LLMAPIKey,
-			Model:    req.LLMModel,
-			BaseURL:  req.LLMBaseURL,
-		}
-		cmd, err := wc.callbacks.RunnerCreate(senderID, req.Name, req.Mode, req.DockerImage, req.Workspace, llm)
+		cmd, err := wc.callbacks.RunnerCreate(senderID, req.Name, req.Mode, req.DockerImage, req.Workspace, tools.RunnerLLMSettings{})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, runnerCommandResponse{OK: false, Error: err.Error()})
 			return
@@ -478,39 +460,6 @@ func (wc *WebChannel) handleRunnerActive(w http.ResponseWriter, r *http.Request)
 	default:
 		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-}
-
-// handleRunnerLLM handles PUT /api/runners/llm — update LLM settings for a runner.
-func (wc *WebChannel) handleRunnerLLM(w http.ResponseWriter, r *http.Request) {
-	senderID := senderIDFromContext(r.Context())
-	if senderID == "" {
-		writeJSON(w, http.StatusUnauthorized, runnerActiveResponse{OK: false, Error: "unauthorized"})
-		return
-	}
-	if r.Method != http.MethodPut {
-		writeJSON(w, http.StatusMethodNotAllowed, runnerActiveResponse{OK: false, Error: "method not allowed"})
-		return
-	}
-	if wc.callbacks.RunnerUpdateLLM == nil {
-		writeJSON(w, http.StatusServiceUnavailable, runnerActiveResponse{OK: false, Error: "runner management not configured"})
-		return
-	}
-	var req runnerUpdateLLMRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, runnerActiveResponse{OK: false, Error: "invalid request body"})
-		return
-	}
-	llm := tools.RunnerLLMSettings{
-		Provider: req.LLMProvider,
-		APIKey:   req.LLMAPIKey,
-		Model:    req.LLMModel,
-		BaseURL:  req.LLMBaseURL,
-	}
-	if err := wc.callbacks.RunnerUpdateLLM(senderID, req.Name, llm); err != nil {
-		writeJSON(w, http.StatusInternalServerError, runnerActiveResponse{OK: false, Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, runnerActiveResponse{OK: true})
 }
 
 // handleRunnerByName handles DELETE /api/runners/{name}.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"xbot/llm"
 	"xbot/tools"
 )
 
@@ -162,6 +163,11 @@ func (m *cliModel) closePanel() {
 	m.panelDangerCursor = 0
 	m.panelDangerConfirm = false
 	m.panelDangerOnExec = nil
+	// Runner panel cleanup
+	m.panelRunnerServerTI = textinput.Model{}
+	m.panelRunnerTokenTI = textinput.Model{}
+	m.panelRunnerWorkspace = textinput.Model{}
+	m.panelRunnerEditField = 0
 	// 恢复 viewport 到正常模式高度
 	m.relayoutViewport()
 }
@@ -480,6 +486,8 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return m.updateBgTasksPanel(msg)
 	case "danger":
 		return m.updateDangerPanel(msg)
+	case "runner":
+		return m.updateRunnerPanel(msg)
 	}
 	return false, m, nil
 }
@@ -679,6 +687,11 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 	case msg.Code == tea.KeyEnter:
 		if m.panelCursor < len(m.panelSchema) {
 			def := m.panelSchema[m.panelCursor]
+			// Runner panel entry
+			if def.Key == "runner_panel" {
+				m.openRunnerPanel()
+				return true, m, nil
+			}
 			// Danger zone entry
 			if def.Key == "danger_zone" {
 				m.openDangerPanelFromSettings()
@@ -1044,6 +1057,8 @@ func (m *cliModel) viewPanel() string {
 		raw = m.viewBgTasksPanel()
 	case "danger":
 		raw = m.viewDangerPanel()
+	case "runner":
+		raw = m.viewRunnerPanel()
 	default:
 		return ""
 	}
@@ -1085,6 +1100,17 @@ func (m *cliModel) viewSettingsPanel() string {
 			prefix = "  "
 		}
 
+		// Runner panel entry: render with accent style
+		if def.Key == "runner_panel" {
+			line := fmt.Sprintf("%s %s", prefix, s.ProgressDone.Render(def.Label))
+			if i == m.panelCursor && !m.panelEdit {
+				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			continue
+		}
+
 		// Danger zone entry: render with warning style
 		if def.Key == "danger_zone" {
 			line := fmt.Sprintf("%s %s", prefix, s.WarningSt.Render(def.Label))
@@ -1123,6 +1149,12 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			if len(def.Options) > 0 {
 				displayVal += descStyle.Render(" ▾")
+			}
+		case SettingTypePassword:
+			if cur == "" {
+				displayVal = descStyle.Render(m.locale.PanelNotSet)
+			} else {
+				displayVal = valueStyle.Render("••••••")
 			}
 		default:
 			if cur == "" {
@@ -1356,4 +1388,250 @@ func (c *CLIChannel) GetBaseURLOverride() string {
 	c.configMu.RLock()
 	defer c.configMu.RUnlock()
 	return c.baseURLOverride
+}
+
+// ---------------------------------------------------------------------------
+// Runner Panel
+// ---------------------------------------------------------------------------
+
+// openRunnerPanel 打开 Runner 管理面板
+func (m *cliModel) openRunnerPanel() {
+	m.panelMode = "runner"
+	m.relayoutViewport()
+
+	// 初始化 textinput 字段
+	serverURL := ""
+	token := ""
+	workspace := m.workDir
+
+	// 从设置中读取已保存的值
+	if m.channel != nil && m.channel.settingsSvc != nil {
+		if vals, err := m.channel.settingsSvc.GetSettings(cliChannelName, cliSenderID); err == nil {
+			if v, ok := vals["runner_server"]; ok && v != "" {
+				serverURL = v
+			}
+			if v, ok := vals["runner_token"]; ok && v != "" {
+				token = v
+			}
+			if v, ok := vals["runner_workspace"]; ok && v != "" {
+				workspace = v
+			}
+		}
+	}
+
+	m.panelRunnerServerTI = m.newPanelTextInput(serverURL, m.locale.RunnerServerPlaceholder)
+	m.panelRunnerTokenTI = m.newPanelTextInput(token, m.locale.RunnerTokenPlaceholder)
+	m.panelRunnerTokenTI.EchoMode = 0 // password mode
+	m.panelRunnerTokenTI.EchoCharacter = '•'
+	m.panelRunnerWorkspace = m.newPanelTextInput(workspace, m.locale.RunnerWorkspacePlaceholder)
+	m.panelRunnerEditField = 0
+}
+
+// newPanelTextInput 创建一个配置好的 textinput 用于面板输入
+func (m *cliModel) newPanelTextInput(value, placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.SetWidth(m.panelWidth(50))
+	ti.SetValue(value)
+	if value != "" {
+		ti.CursorEnd()
+	}
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Prompt = m.styles.TIPrompt
+	tiStyles.Focused.Text = m.styles.TIText
+	tiStyles.Focused.Placeholder = m.styles.TIPlaceholder
+	tiStyles.Cursor.Color = m.styles.TICursor.GetForeground()
+	ti.SetStyles(tiStyles)
+	ti.Focus()
+	return ti
+}
+
+// updateRunnerPanel 处理 Runner 面板的键盘事件
+func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
+	// 已连接状态：显示连接信息 + 断开按钮
+	rb := m.runnerBridge
+	if rb == nil {
+		m.closePanel()
+		return true, m, nil
+	}
+
+	status := rb.Status()
+
+	// 连接中：只允许 Esc
+	if status == RunnerConnecting {
+		if msg.Code == tea.KeyEsc || msg.String() == "ctrl+c" {
+			return m.closePanelAndResume()
+		}
+		return true, m, nil
+	}
+
+	// 已连接：导航 + 断开
+	if status == RunnerConnected {
+		switch msg.Code {
+		case tea.KeyEsc:
+			return m.closePanelAndResume()
+		case tea.KeyEnter:
+			// 断开连接
+			rb.Disconnect()
+			m.closePanel()
+			return true, m, nil
+		}
+		return true, m, nil
+	}
+
+	// 未连接：表单编辑
+	switch msg.Code {
+	case tea.KeyEsc:
+		return m.closePanelAndResume()
+
+	case tea.KeyUp:
+		if m.panelRunnerEditField > 0 {
+			m.panelRunnerEditField--
+		}
+		return true, m, nil
+
+	case tea.KeyDown:
+		if m.panelRunnerEditField < 2 {
+			m.panelRunnerEditField++
+		}
+		return true, m, nil
+
+	case tea.KeyTab:
+		m.panelRunnerEditField = (m.panelRunnerEditField + 1) % 3
+		return true, m, nil
+
+	case tea.KeyEnter:
+		// 验证并连接
+		serverURL := strings.TrimSpace(m.panelRunnerServerTI.Value())
+		token := strings.TrimSpace(m.panelRunnerTokenTI.Value())
+		workspace := strings.TrimSpace(m.panelRunnerWorkspace.Value())
+
+		if serverURL == "" {
+			m.showTempStatus(m.locale.RunnerServerRequired)
+			return true, m, m.clearTempStatusCmd()
+		}
+		if workspace == "" {
+			m.showTempStatus(m.locale.RunnerWorkspaceRequired)
+			return true, m, m.clearTempStatusCmd()
+		}
+
+		// 保存设置
+		if m.channel != nil && m.channel.settingsSvc != nil {
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_server", serverURL)
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_token", token)
+			_ = m.channel.settingsSvc.SetSetting(cliChannelName, cliSenderID, "runner_workspace", workspace)
+		}
+
+		// 关闭面板，发起连接
+		m.closePanel()
+
+		// 获取 LLM 客户端
+		var llmClient llm.LLM
+		var models []string
+		if m.channel != nil {
+			llmClient = m.channel.getLLMClient()
+			models = m.channel.getModelList()
+		}
+
+		if rb != nil {
+			rb.Connect(serverURL, token, workspace, llmClient, models)
+		}
+
+		m.showTempStatus(m.locale.RunnerConnecting)
+		return true, m, m.clearTempStatusCmd()
+	}
+
+	// 将按键传递给当前编辑的 textinput
+	var cmd tea.Cmd
+	switch m.panelRunnerEditField {
+	case 0:
+		m.panelRunnerServerTI, cmd = m.panelRunnerServerTI.Update(msg)
+	case 1:
+		m.panelRunnerTokenTI, cmd = m.panelRunnerTokenTI.Update(msg)
+	case 2:
+		m.panelRunnerWorkspace, cmd = m.panelRunnerWorkspace.Update(msg)
+	}
+	return true, m, cmd
+}
+
+// viewRunnerPanel 渲染 Runner 管理面板
+func (m *cliModel) viewRunnerPanel() string {
+	s := &m.styles
+	var sb strings.Builder
+
+	sb.WriteString(s.PanelHeader.Render("🔧 " + m.locale.RunnerPanelTitle))
+	sb.WriteString("\n")
+
+	rb := m.runnerBridge
+	if rb == nil {
+		sb.WriteString(s.PanelDesc.Render(m.locale.RunnerNotAvailable))
+		sb.WriteString("\n")
+		return m.styles.PanelBox.Render(sb.String())
+	}
+
+	status := rb.Status()
+
+	switch status {
+	case RunnerConnecting:
+		sb.WriteString("\n")
+		sb.WriteString(s.ProgressRunning.Render("⟳ " + m.locale.RunnerConnecting))
+		sb.WriteString("\n")
+		sb.WriteString(s.PanelDesc.Render("  " + rb.ServerURL()))
+		sb.WriteString("\n\n")
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerPleaseWait))
+
+	case RunnerConnected:
+		stats := rb.Stats()
+		elapsed := time.Since(stats.ConnectedAt).Round(time.Minute)
+		elapsedStr := formatElapsed(int64(elapsed.Milliseconds()))
+
+		sb.WriteString("\n")
+		fmt.Fprintf(&sb, "  %s %s (%s)\n",
+			s.ProgressDone.Render("●"),
+			m.locale.RunnerStatusConnected,
+			s.InfoSt.Render(elapsedStr),
+		)
+		sb.WriteString(s.PanelDesc.Render("  Server: "))
+		sb.WriteString(s.InfoSt.Render(rb.ServerURL()))
+		sb.WriteString("\n")
+		sb.WriteString(s.PanelDesc.Render("  " + m.locale.RunnerWorkspaceLabel + ": "))
+		sb.WriteString(s.InfoSt.Render(rb.Workspace()))
+		sb.WriteString("\n\n")
+		sb.WriteString(s.WarningSt.Render("  [ " + m.locale.RunnerDisconnect + " ]"))
+		sb.WriteString("\n\n")
+		sb.WriteString(s.PanelHint.Render("  Enter " + m.locale.RunnerDisconnectAction + "  Esc " + m.locale.RunnerBack))
+
+	default: // RunnerDisconnected
+		// 显示连接表单
+		sb.WriteString("\n")
+
+		fields := []struct {
+			label       string
+			input       textinput.Model
+			active      bool
+			placeholder string
+		}{
+			{m.locale.RunnerServerLabel, m.panelRunnerServerTI, m.panelRunnerEditField == 0, m.locale.RunnerServerPlaceholder},
+			{m.locale.RunnerTokenLabel, m.panelRunnerTokenTI, m.panelRunnerEditField == 1, m.locale.RunnerTokenPlaceholder},
+			{m.locale.RunnerWorkspaceLabel, m.panelRunnerWorkspace, m.panelRunnerEditField == 2, m.locale.RunnerWorkspacePlaceholder},
+		}
+
+		for _, f := range fields {
+			prefix := "  "
+			if f.active {
+				prefix = s.PanelCursor.Render("▸")
+			}
+			fmt.Fprintf(&sb, "%s %s\n", prefix, f.label)
+			sb.WriteString("  ")
+			sb.WriteString(f.input.View())
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString("\n")
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerNavHint))
+	}
+
+	return m.styles.PanelBox.Render(sb.String())
 }

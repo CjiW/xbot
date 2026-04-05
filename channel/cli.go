@@ -18,11 +18,13 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/google/uuid"
 	"xbot/bus"
+	"xbot/llm"
 	log "xbot/logger"
 	"xbot/tools"
 	"xbot/version"
@@ -143,6 +145,33 @@ func (c *CLIChannel) Start() error {
 	// §13 异步检查更新（不阻塞 TUI 启动）
 	c.CheckUpdateAsync()
 
+	// Runner auto-connect: inject RunnerBridge into model and connect
+	if c.runnerAutoConnect != nil {
+		c.programMu.Lock()
+		if c.model != nil && c.program != nil {
+			rb := NewRunnerBridge(c.program)
+			c.model.runnerBridge = rb
+		}
+		c.programMu.Unlock()
+		// Delay connection slightly to let TUI render first
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			c.programMu.Lock()
+			model := c.model
+			c.programMu.Unlock()
+			if model != nil && model.runnerBridge != nil {
+				cfg := c.runnerAutoConnect
+				model.runnerBridge.Connect(
+					cfg.serverURL,
+					cfg.token,
+					cfg.workspace,
+					c.getLLMClient(),
+					c.getModelList(),
+				)
+			}
+		}()
+	}
+
 	// 运行 Bubble Tea（阻塞）
 	if _, err := c.program.Run(); err != nil {
 		log.WithError(err).Error("CLI channel exited with error")
@@ -156,6 +185,12 @@ func (c *CLIChannel) Start() error {
 // Stop 停止 CLI 渠道
 func (c *CLIChannel) Stop() {
 	log.Info("CLI channel stopping...")
+	// Disconnect runner bridge if active
+	c.programMu.Lock()
+	if c.model != nil && c.model.runnerBridge != nil {
+		c.model.runnerBridge.Disconnect()
+	}
+	c.programMu.Unlock()
 	close(c.stopCh)
 	c.programMu.Lock()
 	if c.program != nil {
@@ -271,4 +306,45 @@ type animTicker struct {
 	styleAlt lipgloss.Style // 备选色（呼吸效果用）
 	color    string         // 主色值（主题切换时重建样式用）
 	colorAlt string         // 备选色值
+}
+
+// SetRunnerLLM sets the LLM client and model list for the runner bridge.
+func (c *CLIChannel) SetRunnerLLM(client llm.LLM, models []string) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	c.llmClient = client
+	c.modelList = models
+}
+
+// getLLMClient returns the LLM client for runner use.
+func (c *CLIChannel) getLLMClient() llm.LLM {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.llmClient
+}
+
+// getModelList returns the available model list for runner use.
+func (c *CLIChannel) getModelList() []string {
+	c.configMu.RLock()
+	defer c.configMu.RUnlock()
+	return c.modelList
+}
+
+// StartWithRunner starts the CLI channel and auto-connects as runner after TUI initializes.
+func (c *CLIChannel) StartWithRunner(shareURL, token, workspace string) error {
+	// Wrap the original Start to inject runner bridge before the TUI runs.
+	// We set a callback that creates the RunnerBridge after model init.
+	c.runnerAutoConnect = &runnerAutoConnectConfig{
+		serverURL: shareURL,
+		token:     token,
+		workspace: workspace,
+	}
+	return c.Start()
+}
+
+// runnerAutoConnectConfig holds the auto-connect parameters.
+type runnerAutoConnectConfig struct {
+	serverURL string
+	token     string
+	workspace string
 }

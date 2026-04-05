@@ -244,8 +244,14 @@ type cliModel struct {
 	panelDangerOnExec  func(targetType string) error // callback to execute clear
 
 	// --- §13 Update Check ---
-	updateNotice   *version.UpdateInfo // nil=nothing, non-nil=show notice
-	checkingUpdate bool                // true while /update is in progress
+
+	// --- Runner Panel ---
+	panelRunnerServerTI  textinput.Model     // server URL 输入
+	panelRunnerTokenTI   textinput.Model     // token 输入
+	panelRunnerWorkspace textinput.Model     // workspace 输入
+	panelRunnerEditField int                 // 当前编辑字段 (0=server, 1=token, 2=workspace)
+	updateNotice         *version.UpdateInfo // nil=nothing, non-nil=show notice
+	checkingUpdate       bool                // true while /update is in progress
 
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面
@@ -282,6 +288,9 @@ type cliModel struct {
 
 	channel         *CLIChannel // back-reference to owning channel (set during Start)
 	cachedModelName string      // cached model name for View() performance
+
+	// === Runner Bridge ===
+	runnerBridge *RunnerBridge
 }
 
 // cliMessage 单条消息

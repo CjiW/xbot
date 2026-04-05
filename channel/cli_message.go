@@ -435,12 +435,10 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 				m.senderID = "cli_user"
 				m.channelName = "cli"
 				m.chatID = m.defaultChatID
-				m.showSystemMsg("✅ 身份已切换为: cli_user", feedbackInfo)
 			} else {
 				m.senderID = newID
 				m.channelName = "web"
 				m.chatID = newID // web 的 chatID = userID
-				m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: web)", m.senderID), feedbackInfo)
 			}
 			// 通知 main.go 注册/移除 dispatcher observer
 			if m.channel != nil && m.channel.OnSuChange != nil {
@@ -450,6 +448,16 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 				if m.channelName != "cli" {
 					m.channel.OnSuChange(m.channelName, true)
 				}
+			}
+			// 清空当前消息列表，异步加载目标用户历史
+			m.messages = nil
+			m.invalidateAllCache(false)
+			if m.channel != nil && m.channel.config.DynamicHistoryLoader != nil {
+				m.suLoading = true
+				m.splashFrame = 0
+				return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
+			} else {
+				m.showSystemMsg(fmt.Sprintf("✅ 身份已切换为: %s (channel: %s)", m.senderID, m.channelName), feedbackInfo)
 			}
 		}
 

@@ -129,6 +129,32 @@ func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
 	f.thinkingModes = make(map[string]string)
 }
 
+// SetProxyLLM sets a ProxyLLM for a user (used when their active runner has local LLM).
+// This overrides any per-user LLM config for this sender.
+func (f *LLMFactory) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clients[senderID] = proxy
+	f.models[senderID] = model
+	f.maxContexts[senderID] = 0
+	f.thinkingModes[senderID] = ""
+}
+
+// ClearProxyLLM removes a ProxyLLM for a user (runner disconnected or local LLM disabled).
+func (f *LLMFactory) ClearProxyLLM(senderID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.clients, senderID)
+	delete(f.models, senderID)
+	delete(f.maxContexts, senderID)
+	delete(f.thinkingModes, senderID)
+}
+
+// GetDefaultModel returns the default model name.
+func (f *LLMFactory) GetDefaultModel() string {
+	return f.defaultModel
+}
+
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	// 检查必要字段

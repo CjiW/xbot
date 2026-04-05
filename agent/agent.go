@@ -367,7 +367,20 @@ func (a *Agent) IsProcessing(senderID string) bool {
 	return found
 }
 
-// GetSettingsService returns the agent's SettingsService (for CLI panel injection).
+// SetProxyLLM injects a ProxyLLM for a user (when their active runner has local LLM).
+func (a *Agent) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
+	a.llmFactory.SetProxyLLM(senderID, proxy, model)
+}
+
+// ClearProxyLLM removes a ProxyLLM for a user.
+func (a *Agent) ClearProxyLLM(senderID string) {
+	a.llmFactory.ClearProxyLLM(senderID)
+}
+
+// GetDefaultModel returns the default model name.
+func (a *Agent) GetDefaultModel() string {
+	return a.llmFactory.GetDefaultModel()
+}
 func (a *Agent) GetSettingsService() *SettingsService {
 	return a.settingsSvc
 }

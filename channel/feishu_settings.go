@@ -369,7 +369,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if mode != "docker" {
 			dockerImage = ""
 		}
-		cmd, err := f.settingsCallbacks.RunnerCreate(senderID, runnerName, mode, dockerImage, workspace)
+		cmd, err := f.settingsCallbacks.RunnerCreate(senderID, runnerName, mode, dockerImage, workspace, tools.RunnerLLMSettings{})
 		if err != nil {
 			return nil, fmt.Errorf("创建 runner 失败: %v", err)
 		}

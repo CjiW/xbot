@@ -15,7 +15,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
-	"xbot/llm"
+	llm_pkg "xbot/llm"
 	log "xbot/logger"
 	"xbot/oauth"
 	"xbot/oauth/providers"
@@ -25,6 +25,63 @@ import (
 	"xbot/tools/feishu_mcp"
 	"xbot/version"
 )
+
+// injectProxyLLM checks if the user's active runner has local LLM configured,
+// and if so, injects a ProxyLLM into the agent's LLM factory.
+func injectProxyLLM(userID string, agentLoop *agent.Agent) {
+	db := tools.GetRunnerTokenDB()
+	if db == nil {
+		return
+	}
+	store := tools.NewRunnerTokenStore(db)
+	activeName, err := store.GetActiveRunner(userID)
+	if err != nil || activeName == "" {
+		return
+	}
+	runners, err := store.ListRunners(userID)
+	if err != nil {
+		return
+	}
+	for _, r := range runners {
+		if r.Name == activeName {
+			llm := r.LLMSettings()
+			if llm.HasLLM() {
+				sb := tools.GetSandbox()
+				if sb == nil {
+					return
+				}
+				router, ok := sb.(*tools.SandboxRouter)
+				if !ok || router.Remote() == nil {
+					return
+				}
+				rs := router.Remote()
+				proxy := &llm_pkg.ProxyLLM{
+					GenerateFunc: func(ctx context.Context, _, model string, messages []llm_pkg.ChatMessage, tools []llm_pkg.ToolDefinition, thinkingMode string) (*llm_pkg.LLMResponse, error) {
+						return rs.LLMGenerate(ctx, userID, model, messages, tools, thinkingMode)
+					},
+					ListModelsFunc: func() []string {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						models, err := rs.LLMModels(ctx, userID)
+						if err != nil {
+							return nil
+						}
+						return models
+					},
+				}
+				model := llm.Model
+				if model == "" {
+					model = agentLoop.GetDefaultModel()
+				}
+				agentLoop.SetProxyLLM(userID, proxy, model)
+				log.Infof("ProxyLLM injected for user=%s runner=%s provider=%s", userID, activeName, llm.Provider)
+			} else {
+				agentLoop.ClearProxyLLM(userID)
+			}
+			return
+		}
+	}
+}
 
 func main() {
 	cfg := config.Load()
@@ -37,7 +94,7 @@ func main() {
 	defer log.Close()
 
 	// 创建 LLM 客户端
-	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
+	llmClient, err := createLLM(cfg.LLM, llm_pkg.RetryConfig{
 		Attempts: uint(cfg.Agent.LLMRetryAttempts),
 		Delay:    cfg.Agent.LLMRetryDelay,
 		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
@@ -373,13 +430,13 @@ func main() {
 					}
 					return runners, nil
 				},
-				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
+				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string, llm tools.RunnerLLMSettings) (string, error) {
 					db := tools.GetRunnerTokenDB()
 					if db == nil {
 						return "", fmt.Errorf("runner management not configured")
 					}
 					store := tools.NewRunnerTokenStore(db)
-					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace)
+					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace, llm)
 					if err != nil {
 						return "", err
 					}
@@ -394,7 +451,20 @@ func main() {
 					if workspace != "" {
 						cmd += fmt.Sprintf(" --workspace %s", workspace)
 					}
+					if llm.HasLLM() {
+						cmd += fmt.Sprintf(" --llm-provider %s --llm-api-key %s --llm-model %s", llm.Provider, llm.APIKey, llm.Model)
+						if llm.BaseURL != "" {
+							cmd += fmt.Sprintf(" --llm-base-url %s", llm.BaseURL)
+						}
+					}
 					return cmd, nil
+				},
+				RunnerUpdateLLM: func(senderID, name string, llm tools.RunnerLLMSettings) error {
+					db := tools.GetRunnerTokenDB()
+					if db == nil {
+						return fmt.Errorf("runner management not configured")
+					}
+					return tools.NewRunnerTokenStore(db).UpdateRunnerLLM(senderID, name, llm)
 				},
 				RunnerDelete: func(senderID, name string) error {
 					db := tools.GetRunnerTokenDB()
@@ -508,6 +578,12 @@ func main() {
 				if remote := router.Remote(); remote != nil {
 					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
 						webCh.PushRunnerStatus(agentLoop.NormalizeSenderID(userID), runnerName, online)
+						// When a runner with local LLM connects/disconnects, update ProxyLLM.
+						if online {
+							injectProxyLLM(userID, agentLoop)
+						} else {
+							agentLoop.ClearProxyLLM(userID)
+						}
 					}
 					remote.OnSyncProgress = func(userID, phase, message string) {
 						webCh.PushSyncProgress(agentLoop.NormalizeSenderID(userID), phase, message)
@@ -688,13 +764,13 @@ func main() {
 				}
 				return runners, nil
 			},
-			RunnerCreate: func(senderID, name, mode, dockerImage, workspace string) (string, error) {
+			RunnerCreate: func(senderID, name, mode, dockerImage, workspace string, llm tools.RunnerLLMSettings) (string, error) {
 				db := tools.GetRunnerTokenDB()
 				if db == nil {
 					return "", fmt.Errorf("runner management not configured")
 				}
 				store := tools.NewRunnerTokenStore(db)
-				token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace)
+				token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace, llm)
 				if err != nil {
 					return "", err
 				}
@@ -708,6 +784,12 @@ func main() {
 				}
 				if workspace != "" {
 					cmd += fmt.Sprintf(" --workspace %s", workspace)
+				}
+				if llm.HasLLM() {
+					cmd += fmt.Sprintf(" --llm-provider %s --llm-api-key %s --llm-model %s", llm.Provider, llm.APIKey, llm.Model)
+					if llm.BaseURL != "" {
+						cmd += fmt.Sprintf(" --llm-base-url %s", llm.BaseURL)
+					}
 				}
 				return cmd, nil
 			},
@@ -907,17 +989,17 @@ func main() {
 }
 
 // createLLM 根据配置创建 LLM 客户端（带重试、指数退避和随机抖动）
-func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) {
-	var inner llm.LLM
+func createLLM(cfg config.LLMConfig, retryCfg llm_pkg.RetryConfig) (llm_pkg.LLM, error) {
+	var inner llm_pkg.LLM
 	switch cfg.Provider {
 	case "openai":
-		inner = llm.NewOpenAILLM(llm.OpenAIConfig{
+		inner = llm_pkg.NewOpenAILLM(llm_pkg.OpenAIConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
 		})
 	case "anthropic":
-		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
+		inner = llm_pkg.NewAnthropicLLM(llm_pkg.AnthropicConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
@@ -926,7 +1008,7 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 		return nil, fmt.Errorf("unknown LLM provider: %s", cfg.Provider)
 	}
 
-	return llm.NewRetryLLM(inner, retryCfg), nil
+	return llm_pkg.NewRetryLLM(inner, retryCfg), nil
 }
 
 // setupLogger 配置日志

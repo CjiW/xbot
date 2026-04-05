@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	log "xbot/logger"
@@ -19,7 +20,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 20
+const schemaVersion = 21
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema
@@ -224,6 +225,10 @@ CREATE TABLE runners (
     mode         TEXT    NOT NULL DEFAULT 'native',
     docker_image TEXT    NOT NULL DEFAULT 'ubuntu:22.04',
     workspace    TEXT    NOT NULL DEFAULT '',
+    llm_provider TEXT    NOT NULL DEFAULT '',
+    llm_api_key  TEXT    NOT NULL DEFAULT '',
+    llm_model    TEXT    NOT NULL DEFAULT '',
+    llm_base_url TEXT    NOT NULL DEFAULT '',
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, name)
 );
@@ -862,6 +867,35 @@ CREATE TABLE IF NOT EXISTS runners (
 			return fmt.Errorf("update schema version: %w", err)
 		}
 		log.Info("Database migrated to v20 (added token tracking to tenant_state)")
+	}
+
+	if from < 21 {
+		if _, err := conn.Exec("ALTER TABLE runners ADD COLUMN llm_provider TEXT NOT NULL DEFAULT ''"); err != nil {
+			// Column may already exist in fresh DB (created with v21+ schema).
+			// Skip if error is "duplicate column name".
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("migrate v20->v21: %w", err)
+			}
+		}
+		if _, err := conn.Exec("ALTER TABLE runners ADD COLUMN llm_api_key TEXT NOT NULL DEFAULT ''"); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("migrate v20->v21: %w", err)
+			}
+		}
+		if _, err := conn.Exec("ALTER TABLE runners ADD COLUMN llm_model TEXT NOT NULL DEFAULT ''"); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("migrate v20->v21: %w", err)
+			}
+		}
+		if _, err := conn.Exec("ALTER TABLE runners ADD COLUMN llm_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("migrate v20->v21: %w", err)
+			}
+		}
+		if _, err := conn.Exec("UPDATE schema_version SET version = 21"); err != nil {
+			return fmt.Errorf("update schema version: %w", err)
+		}
+		log.Info("Database migrated to v21 (added LLM fields to runners)")
 	}
 
 	return nil

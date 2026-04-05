@@ -441,13 +441,13 @@ func main() {
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
 
-	// /su observer: when TUI switches to web user identity via /su,
-	// register CLI as observer of "web" channel outbound messages.
+	// /su: when TUI switches to web user identity, register CLI as "web" channel
+	// so dispatcher SendDirect and outbound loop can find it.
 	cliCh.OnSuChange = func(targetChannel string, enable bool) {
 		if enable {
-			disp.AddObserver(targetChannel, cliCh)
+			disp.RegisterAs(targetChannel, cliCh)
 		} else {
-			disp.RemoveObserver(targetChannel, cliCh)
+			disp.Unregister(targetChannel)
 		}
 	}
 

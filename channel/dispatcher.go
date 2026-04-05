@@ -35,6 +35,22 @@ func (d *Dispatcher) Register(ch Channel) {
 	log.WithField("channel", ch.Name()).Info("Channel registered")
 }
 
+// RegisterAs 以指定名称注册渠道（允许同一渠道注册多个别名）。
+func (d *Dispatcher) RegisterAs(name string, ch Channel) {
+	d.mu.Lock()
+	d.channels[name] = ch
+	d.mu.Unlock()
+	log.WithField("channel", name).Info("Channel registered")
+}
+
+// Unregister 移除指定名称的渠道。
+func (d *Dispatcher) Unregister(name string) {
+	d.mu.Lock()
+	delete(d.channels, name)
+	d.mu.Unlock()
+	log.WithField("channel", name).Info("Channel unregistered")
+}
+
 // AddObserver 注册观察者：当目标 channel 收到 outbound 时，observer 也会收到一份副本。
 func (d *Dispatcher) AddObserver(targetChannel string, observer Channel) {
 	d.mu.Lock()

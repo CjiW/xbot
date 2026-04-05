@@ -393,8 +393,10 @@ func sandboxExecAsync(
 	switch sandbox.Name() {
 	case "none":
 		return noneSandboxExecAsync(ctx, spec, outputBuf)
+	case "remote":
+		return remoteSandboxExecAsync(ctx, sandbox, spec, outputBuf)
 	default:
-		// Docker/Remote: synchronous fallback (timeout=0 means no timeout)
+		// Docker: synchronous fallback (timeout=0 means no timeout)
 		result, err := sandbox.Exec(ctx, spec)
 		if outputBuf != nil && result != nil {
 			if result.Stdout != "" {
@@ -411,6 +413,70 @@ func sandboxExecAsync(
 			return -1, err
 		}
 		return result.ExitCode, nil
+	}
+}
+
+// remoteSandboxExecAsync runs a command on a remote runner asynchronously.
+// It starts the command via bg_exec protocol, then polls status until completion.
+func remoteSandboxExecAsync(
+	ctx context.Context,
+	sandbox Sandbox,
+	spec ExecSpec,
+	outputBuf func(string),
+) (int, error) {
+	rs, ok := sandbox.(*RemoteSandbox)
+	if !ok {
+		return -1, fmt.Errorf("remote sandbox type assertion failed")
+	}
+
+	// Generate a unique task ID for the runner.
+	taskID := "remote-" + generateID()
+
+	// Start the background task on the runner.
+	if err := rs.ExecBg(ctx, spec, taskID); err != nil {
+		return -1, fmt.Errorf("remote bg_exec: %w", err)
+	}
+
+	// Poll until the task completes or context is cancelled.
+	const pollInterval = 2 * time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			// Try to kill the task on the runner before returning.
+			killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rs.KillBg(killCtx, spec.UserID, taskID)
+			cancel()
+			return -1, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		status, err := rs.StatusBg(ctx, spec.UserID, taskID)
+		if err != nil {
+			return -1, fmt.Errorf("remote bg_status: %w", err)
+		}
+
+		// Stream any new output.
+		if outputBuf != nil {
+			if status.Stdout != "" {
+				outputBuf(status.Stdout)
+			}
+			if status.Stderr != "" {
+				outputBuf("[stderr] " + status.Stderr)
+			}
+		}
+
+		switch status.Status {
+		case "completed":
+			return status.ExitCode, nil
+		case "failed":
+			return status.ExitCode, fmt.Errorf("remote task failed with exit code %d", status.ExitCode)
+		case "killed":
+			return -1, fmt.Errorf("remote task was killed")
+		case "running":
+			// Continue polling.
+		default:
+			return -1, fmt.Errorf("unknown remote task status: %s", status.Status)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"xbot/internal/runnerproto"
 	log "xbot/logger"
 )
 
@@ -642,6 +643,123 @@ func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		ExitCode: result.ExitCode,
 		TimedOut: result.TimedOut,
 	}, nil
+}
+
+// ExecBg starts a background command on the runner.
+// Returns immediately with the task ID — the command runs asynchronously on the runner.
+func (rs *RemoteSandbox) ExecBg(ctx context.Context, spec ExecSpec, taskID string) error {
+	rc, err := rs.getRunner(spec.UserID)
+	if err != nil {
+		return err
+	}
+
+	reqBody, _ := json.Marshal(runnerproto.BgExecRequest{
+		TaskID:  taskID,
+		Command: spec.Command,
+		Args:    spec.Args,
+		Shell:   spec.Shell,
+		Dir:     spec.Dir,
+		Env:     spec.Env,
+		Stdin:   spec.Stdin,
+	})
+
+	msg := &RunnerMessage{
+		ID:     generateID(),
+		Type:   runnerproto.ProtoBgExec,
+		UserID: spec.UserID,
+		Body:   reqBody,
+	}
+
+	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
+	if err != nil {
+		return err
+	}
+
+	if resp.Type == runnerproto.ProtoError {
+		var e runnerproto.ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return fmt.Errorf("bg_exec error: %s", e.Message)
+	}
+
+	return nil
+}
+
+// KillBg kills a background task on the runner.
+func (rs *RemoteSandbox) KillBg(ctx context.Context, userID, taskID string) error {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return err
+	}
+
+	reqBody, _ := json.Marshal(runnerproto.BgKillRequest{TaskID: taskID})
+	msg := &RunnerMessage{
+		ID:     generateID(),
+		Type:   runnerproto.ProtoBgKill,
+		UserID: userID,
+		Body:   reqBody,
+	}
+
+	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
+	if err != nil {
+		return err
+	}
+
+	if resp.Type == runnerproto.ProtoError {
+		var e runnerproto.ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return fmt.Errorf("bg_kill error: %s", e.Message)
+	}
+
+	return nil
+}
+
+// StatusBg queries the current status and output of a background task on the runner.
+func (rs *RemoteSandbox) StatusBg(ctx context.Context, userID, taskID string) (*RemoteBgTaskStatus, error) {
+	rc, err := rs.getRunner(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	reqBody, _ := json.Marshal(runnerproto.BgStatusRequest{TaskID: taskID})
+	msg := &RunnerMessage{
+		ID:     generateID(),
+		Type:   runnerproto.ProtoBgStatus,
+		UserID: userID,
+		Body:   reqBody,
+	}
+
+	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Type == runnerproto.ProtoError {
+		var e runnerproto.ErrorResponse
+		json.Unmarshal(resp.Body, &e)
+		return nil, fmt.Errorf("bg_status error: %s", e.Message)
+	}
+
+	var result runnerproto.BgOutputResponse
+	if err := json.Unmarshal(resp.Body, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal bg_status result: %w", err)
+	}
+
+	return &RemoteBgTaskStatus{
+		TaskID:   result.TaskID,
+		Status:   result.Status,
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+	}, nil
+}
+
+// RemoteBgTaskStatus holds the status snapshot of a remote background task.
+type RemoteBgTaskStatus struct {
+	TaskID   string
+	Status   string // "running", "completed", "failed", "killed"
+	ExitCode int
+	Stdout   string
+	Stderr   string
 }
 
 func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]byte, error) {

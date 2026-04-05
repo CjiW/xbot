@@ -46,6 +46,21 @@ const (
 	ProtoStdioExit  = "stdio_exit"  // Runner → Server: process exited (push)
 )
 
+// Background task protocol for remote sandbox.
+// Allows the server to start commands asynchronously on the runner,
+// poll status, stream output, and kill tasks.
+const (
+	ProtoBgExec   = "bg_exec"   // Server → Runner: start background command (request/response)
+	ProtoBgKill   = "bg_kill"   // Server → Runner: kill a background task (request/response)
+	ProtoBgStatus = "bg_status" // Server → Runner: query task status + output (request/response)
+)
+
+// Background task response types (Runner → Server).
+const (
+	ProtoBgStarted = "bg_started" // Task accepted, returns task_id
+	ProtoBgOutput  = "bg_output"  // Task output snapshot (stdout/stderr so far)
+)
+
 // RunnerMessage is the envelope for all WebSocket messages.
 type RunnerMessage struct {
 	ID     string          `json:"id,omitempty"`
@@ -234,3 +249,40 @@ type StdioExitMessage struct {
 
 // DefaultRequestTimeout is the default timeout for non-exec operations.
 const DefaultRequestTimeout = 30 * time.Second
+
+// --- Background Task Protocol Types ---
+
+// BgExecRequest asks the runner to start a command in the background.
+type BgExecRequest struct {
+	TaskID  string   `json:"task_id"` // server-assigned task ID
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+	Shell   bool     `json:"shell"`
+	Dir     string   `json:"dir,omitempty"`
+	Env     []string `json:"env,omitempty"`
+	Stdin   string   `json:"stdin,omitempty"`
+}
+
+// BgStartedResponse confirms a background task was started.
+type BgStartedResponse struct {
+	TaskID string `json:"task_id"`
+}
+
+// BgKillRequest asks the runner to kill a background task.
+type BgKillRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+// BgStatusRequest asks the runner for the current status of a background task.
+type BgStatusRequest struct {
+	TaskID string `json:"task_id"`
+}
+
+// BgOutputResponse contains the current output snapshot of a background task.
+type BgOutputResponse struct {
+	TaskID   string `json:"task_id"`
+	Status   string `json:"status"`              // "running", "completed", "failed", "killed"
+	ExitCode int    `json:"exit_code,omitempty"` // set when status is completed/failed
+	Stdout   string `json:"stdout"`              // accumulated stdout so far
+	Stderr   string `json:"stderr"`              // accumulated stderr so far
+}

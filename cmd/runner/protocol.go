@@ -33,6 +33,13 @@ const (
 	ProtoStdioClose = runnerproto.ProtoStdioClose
 	ProtoStdioData  = runnerproto.ProtoStdioData
 	ProtoStdioExit  = runnerproto.ProtoStdioExit
+
+	ProtoBgExec   = runnerproto.ProtoBgExec
+	ProtoBgKill   = runnerproto.ProtoBgKill
+	ProtoBgStatus = runnerproto.ProtoBgStatus
+
+	ProtoBgStarted = runnerproto.ProtoBgStarted
+	ProtoBgOutput  = runnerproto.ProtoBgOutput
 )
 
 type RunnerMessage = runnerproto.RunnerMessage
@@ -58,6 +65,12 @@ type StdioWriteRequest = runnerproto.StdioWriteRequest
 type StdioCloseRequest = runnerproto.StdioCloseRequest
 type StdioDataMessage = runnerproto.StdioDataMessage
 type StdioExitMessage = runnerproto.StdioExitMessage
+
+type BgExecRequest = runnerproto.BgExecRequest
+type BgStartedResponse = runnerproto.BgStartedResponse
+type BgKillRequest = runnerproto.BgKillRequest
+type BgStatusRequest = runnerproto.BgStatusRequest
+type BgOutputResponse = runnerproto.BgOutputResponse
 
 var ProtoErrorCodes = runnerproto.ProtoErrorCodes
 

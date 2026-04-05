@@ -33,6 +33,12 @@ func dispatch(msg RunnerMessage) *RunnerMessage {
 	switch msg.Type {
 	case "exec":
 		return handleExec(msg)
+	case ProtoBgExec:
+		return handleBgExec(msg)
+	case ProtoBgKill:
+		return handleBgKill(msg)
+	case ProtoBgStatus:
+		return handleBgStatus(msg)
 	case "read_file":
 		return handleReadFile(msg)
 	case "write_file":
@@ -277,4 +283,52 @@ func handleDownloadFile(msg RunnerMessage) *RunnerMessage {
 
 	log.Printf("  download_file %s → %s (%d bytes)", req.URL, req.OutputPath, size)
 	return makeResponse(msg.ID, ProtoOK, DownloadFileResponse{Size: size})
+}
+
+func handleBgExec(msg RunnerMessage) *RunnerMessage {
+	var req BgExecRequest
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return makeError(msg.ID, "EINVAL", "invalid bg_exec request: "+err.Error())
+	}
+
+	// pathguard check for working directory
+	if req.Dir != "" {
+		if err := validatePath(req.Dir); err != nil {
+			return makeError(msg.ID, "EPERM", err.Error())
+		}
+	}
+
+	resp, err := startBgTask(req)
+	if err != nil {
+		return makeError(msg.ID, "EIO", "bg_exec failed: "+err.Error())
+	}
+
+	return makeResponse(msg.ID, ProtoBgStarted, resp)
+}
+
+func handleBgKill(msg RunnerMessage) *RunnerMessage {
+	var req BgKillRequest
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return makeError(msg.ID, "EINVAL", "invalid bg_kill request: "+err.Error())
+	}
+
+	if err := killBgTask(req); err != nil {
+		return makeError(msg.ID, "EIO", "bg_kill failed: "+err.Error())
+	}
+
+	return makeOK(msg.ID)
+}
+
+func handleBgStatus(msg RunnerMessage) *RunnerMessage {
+	var req BgStatusRequest
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return makeError(msg.ID, "EINVAL", "invalid bg_status request: "+err.Error())
+	}
+
+	resp, err := statusBgTask(req)
+	if err != nil {
+		return makeError(msg.ID, "EIO", "bg_status failed: "+err.Error())
+	}
+
+	return makeResponse(msg.ID, ProtoBgOutput, resp)
 }

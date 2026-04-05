@@ -135,6 +135,9 @@ func runSession(serverURL, userID, authToken, workspace string) error {
 	// Kill any active stdio processes on disconnect.
 	cleanupStdioProcs()
 
+	// Kill any background tasks.
+	cleanupBgTasks()
+
 	return fmt.Errorf("read loop exited")
 }
 

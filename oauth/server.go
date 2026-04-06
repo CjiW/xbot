@@ -221,7 +221,6 @@ func (s *Server) renderSuccess(w http.ResponseWriter, provider string) {
 </div></body></html>`)
 }
 
-
 // truncate safely truncates a string for logging.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {

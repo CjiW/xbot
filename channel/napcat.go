@@ -52,29 +52,17 @@ type NapCatConfig struct {
 
 // NapCatChannel NapCat (OneBot 11) 渠道实现
 type NapCatChannel struct {
+	WSChannelBase
+
 	config NapCatConfig
 	msgBus *bus.MessageBus
 
-	// WebSocket
-	conn     *websocket.Conn
-	connMu   sync.Mutex
-	stopCh   chan struct{}
 	running  atomic.Bool
 	stopOnce sync.Once
 
 	// API 请求-响应匹配
 	pending   map[string]chan json.RawMessage // echo -> response channel
 	pendingMu sync.Mutex
-
-	// 消息去重
-	processedIDs   map[string]struct{}
-	processedOrder []string
-	processedMu    sync.Mutex
-	maxProcessed   int
-
-	// 快速断连检测
-	disconnectTimes []time.Time
-	disconnectMu    sync.Mutex
 
 	// Bot 自身 QQ 号（从事件中获取）
 	selfID atomic.Int64
@@ -86,12 +74,10 @@ type NapCatChannel struct {
 // NewNapCatChannel 创建 NapCat 渠道
 func NewNapCatChannel(cfg NapCatConfig, msgBus *bus.MessageBus) *NapCatChannel {
 	return &NapCatChannel{
-		config:       cfg,
-		msgBus:       msgBus,
-		stopCh:       make(chan struct{}),
-		pending:      make(map[string]chan json.RawMessage),
-		processedIDs: make(map[string]struct{}),
-		maxProcessed: 1000,
+		WSChannelBase: NewWSChannelBase(1000, napcatQuickDisconnectWindow, napcatQuickDisconnectCount),
+		config:        cfg,
+		msgBus:         msgBus,
+		pending:       make(map[string]chan json.RawMessage),
 	}
 }
 
@@ -405,7 +391,7 @@ func (n *NapCatChannel) handleMessage(event *obEvent) error {
 
 	// 白名单检查
 	senderID := fmt.Sprintf("%d", event.UserID)
-	if !n.isAllowed(senderID) {
+	if !n.isAllowed(n.config.AllowFrom, senderID) {
 		log.WithField("sender", senderID).Info("NapCat: access denied")
 		return nil
 	}
@@ -797,32 +783,6 @@ func (n *NapCatChannel) callAPI(action string, params any) (*obAPIResponse, erro
 // WebSocket helpers
 // ---------------------------------------------------------------------------
 
-// wsSend 发送 JSON 消息到 WebSocket
-func (n *NapCatChannel) wsSend(payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal ws payload: %w", err)
-	}
-
-	n.connMu.Lock()
-	defer n.connMu.Unlock()
-
-	if n.conn == nil {
-		return fmt.Errorf("no ws connection")
-	}
-	return n.conn.WriteMessage(websocket.TextMessage, data)
-}
-
-// closeConn 关闭 WebSocket 连接
-func (n *NapCatChannel) closeConn() {
-	n.connMu.Lock()
-	defer n.connMu.Unlock()
-
-	if n.conn != nil {
-		n.conn.Close()
-		n.conn = nil
-	}
-}
 
 // clearPending 清理所有 pending 请求
 func (n *NapCatChannel) clearPending() {
@@ -839,93 +799,16 @@ func (n *NapCatChannel) clearPending() {
 // Deduplication
 // ---------------------------------------------------------------------------
 
-// isDuplicate 检查消息是否重复
-func (n *NapCatChannel) isDuplicate(messageID string) bool {
-	n.processedMu.Lock()
-	defer n.processedMu.Unlock()
-
-	if _, exists := n.processedIDs[messageID]; exists {
-		return true
-	}
-
-	n.processedIDs[messageID] = struct{}{}
-	n.processedOrder = append(n.processedOrder, messageID)
-
-	// 清理过期缓存
-	for len(n.processedOrder) > n.maxProcessed {
-		oldest := n.processedOrder[0]
-		n.processedOrder = n.processedOrder[1:]
-		delete(n.processedIDs, oldest)
-	}
-	return false
-}
 
 // ---------------------------------------------------------------------------
 // Access control
 // ---------------------------------------------------------------------------
 
-// isAllowed 检查用户是否有权限
-func (n *NapCatChannel) isAllowed(senderID string) bool {
-	if len(n.config.AllowFrom) == 0 {
-		return true
-	}
-	for _, allowed := range n.config.AllowFrom {
-		if allowed == senderID {
-			return true
-		}
-	}
-	return false
-}
 
 // ---------------------------------------------------------------------------
 // Quick disconnect detection
 // ---------------------------------------------------------------------------
 
-// sleepOrStop 等待指定时间或直到 stopCh 关闭，返回 true 表示等待完成，false 表示被中断
-func (n *NapCatChannel) sleepOrStop(d time.Duration) bool {
-	select {
-	case <-time.After(d):
-		return true
-	case <-n.stopCh:
-		return false
-	}
-}
-
-// recordDisconnect 记录断开时间
-func (n *NapCatChannel) recordDisconnect(connectTime time.Time) {
-	n.disconnectMu.Lock()
-	defer n.disconnectMu.Unlock()
-
-	n.disconnectTimes = append(n.disconnectTimes, time.Now())
-
-	// Keep only recent entries
-	if len(n.disconnectTimes) > napcatQuickDisconnectCount*2 {
-		n.disconnectTimes = n.disconnectTimes[len(n.disconnectTimes)-napcatQuickDisconnectCount*2:]
-	}
-}
-
-// isQuickDisconnectLoop 检测是否处于快速断连循环
-func (n *NapCatChannel) isQuickDisconnectLoop() bool {
-	n.disconnectMu.Lock()
-	defer n.disconnectMu.Unlock()
-
-	count := len(n.disconnectTimes)
-	if count < napcatQuickDisconnectCount {
-		return false
-	}
-
-	// Check if the last N disconnects all happened within quickDisconnectWindow of each other
-	recent := n.disconnectTimes[count-napcatQuickDisconnectCount:]
-	for i := 1; i < len(recent); i++ {
-		if recent[i].Sub(recent[i-1]) > napcatQuickDisconnectWindow {
-			return false
-		}
-	}
-
-	// Reset after detection to avoid repeated triggers
-	n.disconnectTimes = make([]time.Time, 0, 10)
-	return true
-}
 
 // ---------------------------------------------------------------------------
 // Helpers

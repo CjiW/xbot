@@ -129,13 +129,11 @@ type QQConfig struct {
 
 // QQChannel QQ 机器人渠道实现
 type QQChannel struct {
+	WSChannelBase
+
 	config QQConfig
 	msgBus *bus.MessageBus
 
-	// WebSocket
-	conn    *websocket.Conn
-	connMu  sync.Mutex
-	stopCh  chan struct{}
 	running atomic.Bool
 
 	// Session state
@@ -153,12 +151,6 @@ type QQChannel struct {
 	heartbeatStop     chan struct{}
 	heartbeatACK      atomic.Bool
 
-	// Message deduplication
-	processedIDs   map[string]struct{}
-	processedOrder []string
-	processedMu    sync.Mutex
-	maxProcessed   int
-
 	// msg_seq tracking per conversation for replies
 	msgSeqMap map[string]msgSeqEntry
 	msgSeqMu  sync.Mutex
@@ -167,10 +159,6 @@ type QQChannel struct {
 	chatTypeCache map[string]chatTypeEntry
 	chatTypeMu    sync.RWMutex
 
-	// Quick disconnect detection
-	disconnectTimes []time.Time
-	disconnectMu    sync.Mutex
-
 	// Markdown support: disabled after first failure (auto-fallback to text)
 	markdownDisabled atomic.Bool
 }
@@ -178,11 +166,9 @@ type QQChannel struct {
 // NewQQChannel 创建 QQ 渠道
 func NewQQChannel(cfg QQConfig, msgBus *bus.MessageBus) *QQChannel {
 	return &QQChannel{
+		WSChannelBase: NewWSChannelBase(1000, quickDisconnectWindow, quickDisconnectCount),
 		config:        cfg,
 		msgBus:        msgBus,
-		stopCh:        make(chan struct{}),
-		processedIDs:  make(map[string]struct{}),
-		maxProcessed:  1000,
 		msgSeqMap:     make(map[string]msgSeqEntry),
 		chatTypeCache: make(map[string]chatTypeEntry),
 	}
@@ -744,7 +730,7 @@ func (q *QQChannel) handleC2CMessage(data json.RawMessage) error {
 		return nil
 	}
 
-	if !q.isAllowed(senderID) {
+	if !q.isAllowed(q.config.AllowFrom, senderID) {
 		log.WithField("sender", senderID).Warn("QQ: access denied")
 		return nil
 	}
@@ -809,7 +795,7 @@ func (q *QQChannel) handleGroupMessage(data json.RawMessage) error {
 		return nil
 	}
 
-	if !q.isAllowed(senderID) {
+	if !q.isAllowed(q.config.AllowFrom, senderID) {
 		log.WithField("sender", senderID).Warn("QQ: access denied")
 		return nil
 	}
@@ -881,7 +867,7 @@ func (q *QQChannel) handleGuildMessage(data json.RawMessage) error {
 		return nil
 	}
 
-	if !q.isAllowed(senderID) {
+	if !q.isAllowed(q.config.AllowFrom, senderID) {
 		log.WithField("sender", senderID).Warn("QQ: access denied")
 		return nil
 	}
@@ -1488,76 +1474,16 @@ func (q *QQChannel) stopHeartbeat() {
 // WebSocket helpers
 // ---------------------------------------------------------------------------
 
-// wsSend 发送 JSON 消息到 WebSocket
-func (q *QQChannel) wsSend(payload any) error {
-	q.connMu.Lock()
-	conn := q.conn
-	q.connMu.Unlock()
-
-	if conn == nil {
-		return fmt.Errorf("no ws connection")
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal ws payload: %w", err)
-	}
-
-	return conn.WriteMessage(websocket.TextMessage, data)
-}
-
-// closeConn 关闭 WebSocket 连接
-func (q *QQChannel) closeConn() {
-	q.connMu.Lock()
-	defer q.connMu.Unlock()
-
-	if q.conn != nil {
-		q.conn.Close()
-		q.conn = nil
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Deduplication
 // ---------------------------------------------------------------------------
 
-// isDuplicate 检查消息是否重复
-func (q *QQChannel) isDuplicate(messageID string) bool {
-	q.processedMu.Lock()
-	defer q.processedMu.Unlock()
-
-	if _, exists := q.processedIDs[messageID]; exists {
-		return true
-	}
-
-	q.processedIDs[messageID] = struct{}{}
-	q.processedOrder = append(q.processedOrder, messageID)
-
-	// 清理过期缓存
-	for len(q.processedOrder) > q.maxProcessed {
-		oldest := q.processedOrder[0]
-		q.processedOrder = q.processedOrder[1:]
-		delete(q.processedIDs, oldest)
-	}
-	return false
-}
 
 // ---------------------------------------------------------------------------
 // Access control
 // ---------------------------------------------------------------------------
 
-// isAllowed 检查用户是否有权限
-func (q *QQChannel) isAllowed(senderID string) bool {
-	if len(q.config.AllowFrom) == 0 {
-		return true
-	}
-	for _, allowed := range q.config.AllowFrom {
-		if allowed == senderID {
-			return true
-		}
-	}
-	return false
-}
 
 // ---------------------------------------------------------------------------
 // msg_seq tracking
@@ -1738,55 +1664,11 @@ func (q *QQChannel) parseTimestamp(ts string) time.Time {
 	return time.Now()
 }
 
-// sleepOrStop 等待指定时间或直到 stopCh 关闭，返回 true 表示等待完成，false 表示被中断
-func (q *QQChannel) sleepOrStop(d time.Duration) bool {
-	select {
-	case <-time.After(d):
-		return true
-	case <-q.stopCh:
-		return false
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Quick disconnect detection
 // ---------------------------------------------------------------------------
 
-// recordDisconnect 记录断开时间
-func (q *QQChannel) recordDisconnect(connectTime time.Time) {
-	q.disconnectMu.Lock()
-	defer q.disconnectMu.Unlock()
-
-	q.disconnectTimes = append(q.disconnectTimes, time.Now())
-
-	// Keep only recent entries
-	if len(q.disconnectTimes) > quickDisconnectCount*2 {
-		q.disconnectTimes = q.disconnectTimes[len(q.disconnectTimes)-quickDisconnectCount*2:]
-	}
-}
-
-// isQuickDisconnectLoop 检测是否处于快速断连循环
-func (q *QQChannel) isQuickDisconnectLoop() bool {
-	q.disconnectMu.Lock()
-	defer q.disconnectMu.Unlock()
-
-	n := len(q.disconnectTimes)
-	if n < quickDisconnectCount {
-		return false
-	}
-
-	// Check if the last N disconnects all happened within quickDisconnectWindow of each other
-	recent := q.disconnectTimes[n-quickDisconnectCount:]
-	for i := 1; i < len(recent); i++ {
-		if recent[i].Sub(recent[i-1]) > quickDisconnectWindow {
-			return false
-		}
-	}
-
-	// Reset after detection to avoid repeated triggers
-	q.disconnectTimes = nil
-	return true
-}
 
 // ---------------------------------------------------------------------------
 // Markdown message helpers

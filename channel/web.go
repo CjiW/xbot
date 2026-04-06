@@ -37,7 +37,7 @@ const (
 	webOfflineMsgBufSize = 50
 	webSessionCookieName = "xbot_session"
 	webSessionMaxAge     = 30 * 24 * time.Hour // 30 days
-	maxBodySize          = 1 << 20              // 1MB maximum request body size
+	maxBodySize          = 1 << 20             // 1MB maximum request body size
 )
 
 // limitBodySize wraps a handler to limit request body size.

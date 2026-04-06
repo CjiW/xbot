@@ -674,7 +674,7 @@ func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		Timeout: int(timeout / time.Second),
 	})
 	if err != nil {
-return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	msg := &RunnerMessage{
@@ -869,7 +869,7 @@ func (rs *RemoteSandbox) LLMGenerate(ctx context.Context, userID, model string, 
 		ThinkingMode: thinkingMode,
 	})
 	if err != nil {
-return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	msg := &RunnerMessage{
@@ -1117,7 +1117,7 @@ func (rs *RemoteSandbox) Remove(ctx context.Context, path, userID string) error 
 	}
 	reqBody, err := json.Marshal(PathRequest{Path: path})
 	if err != nil {
-return fmt.Errorf("marshal request: %w", err)
+		return fmt.Errorf("marshal request: %w", err)
 	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoRemove, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
@@ -1144,7 +1144,7 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 	}
 	reqBody, err := json.Marshal(PathRequest{Path: path})
 	if err != nil {
-return fmt.Errorf("marshal request: %w", err)
+		return fmt.Errorf("marshal request: %w", err)
 	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoRemoveAll, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
@@ -1174,7 +1174,7 @@ func (rs *RemoteSandbox) DownloadFile(ctx context.Context, url, outputPath, user
 		OutputPath: outputPath,
 	})
 	if err != nil {
-return fmt.Errorf("marshal request: %w", err)
+		return fmt.Errorf("marshal request: %w", err)
 	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoDownloadFile, UserID: userID, Body: reqBody}
 	// 5-minute timeout for downloads

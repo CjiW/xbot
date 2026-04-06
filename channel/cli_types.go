@@ -454,11 +454,6 @@ type CLIChannel struct {
 
 	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init
 
-	// /su mode callback: when TUI switches user identity via /su command,
-	// this callback is invoked to register/remove dispatcher observer.
-	// enable=true: register CLI as observer of targetChannel's outbound messages.
-	// enable=false: remove observer (switching back to cli_user).
-	OnSuChange func(targetChannel string, enable bool)
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

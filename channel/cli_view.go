@@ -153,14 +153,28 @@ func (m *cliModel) View() tea.View {
 			input,
 		)
 	} else if m.panelMode != "" {
-		// §12 Panel mode: render panel overlay instead of normal input
-		panel := m.viewPanel()
+		// §12 Panel mode: 手动切片 + PanelBox 包裹（边框永远在屏幕内）
 		panelFooter := m.renderFooter()
+		rawContent := m.viewPanel() // 原始内容，无 PanelBox
+		m.clampPanelScroll()
+		rawLines := strings.Split(rawContent, "\n")
+		visibleH := m.panelVisibleHeight()
+		// 切片可见行
+		if m.panelScrollY+visibleH > len(rawLines) {
+			m.panelScrollY = max(0, len(rawLines)-visibleH)
+		}
+		end := m.panelScrollY + visibleH
+		if end > len(rawLines) {
+			end = len(rawLines)
+		}
+		visible := rawLines[m.panelScrollY:end]
+		panelContent := strings.Join(visible, "\n")
+		// PanelBox 包裹（边框在切片之后，保证完整显示）
+		boxedContent := m.styles.PanelBox.Render(panelContent)
 		content = fmt.Sprintf(
-			"%s\n%s\n%s%s%s",
+			"%s\n%s%s%s",
 			titleBar,
-			m.viewport.View(),
-			panel,
+			boxedContent,
 			panelFooter,
 			toastStr,
 		)
@@ -483,7 +497,7 @@ func (m *cliModel) renderSuLoading() string {
 	frame := splashFrames[m.splashFrame%len(splashFrames)]
 
 	// 切换目标提示
-	suText := descStyle.Render(fmt.Sprintf("切换身份: %s (%s)", m.senderID, m.channelName))
+	suText := descStyle.Render(fmt.Sprintf(m.locale.SuSwitching, m.senderID))
 	suW := lipgloss.Width(suText)
 	suPad := (screenW - suW) / 2
 	if suPad < 0 {
@@ -495,7 +509,7 @@ func (m *cliModel) renderSuLoading() string {
 	lines = append(lines, "")
 
 	// 加载动画
-	loadingText := loadingStyle.Render(fmt.Sprintf("  %s  加载历史中...", frame))
+	loadingText := loadingStyle.Render(fmt.Sprintf(m.locale.SuLoadingHistory, frame))
 	lW := lipgloss.Width(loadingText)
 	lPad := (screenW - lW) / 2
 	if lPad < 0 {

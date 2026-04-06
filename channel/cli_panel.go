@@ -20,6 +20,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 	m.panelCursor = 0
 	m.panelEdit = false
+	m.panelScrollY = 0
 	m.panelSchema = make([]SettingDefinition, len(schema))
 	copy(m.panelSchema, schema)
 	m.panelValues = make(map[string]string, len(values))
@@ -169,6 +170,7 @@ func (m *cliModel) closePanel() {
 	m.panelRunnerWorkspace = textinput.Model{}
 	m.panelRunnerEditField = 0
 	// 恢复 viewport 到正常模式高度
+	m.panelScrollY = 0
 	m.relayoutViewport()
 }
 
@@ -367,7 +369,7 @@ func (m *cliModel) viewBgTaskList() string {
 		}
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // viewBgTaskLog renders the log viewer for a selected task.
@@ -412,7 +414,7 @@ func (m *cliModel) viewBgTaskLog() string {
 		sb.WriteString("\n")
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // viewDangerPanel renders the danger zone panel.
@@ -420,21 +422,21 @@ func (m *cliModel) viewDangerPanel() string {
 	s := &m.styles
 	var sb strings.Builder
 
-	sb.WriteString(s.PanelHeader.Render("⚠ 危险区"))
+	sb.WriteString(s.PanelHeader.Render(m.locale.DangerTitle))
 	sb.WriteString("\n")
 
 	if m.panelDangerConfirm && m.panelDangerCursor < len(m.panelDangerItems) {
 		// Confirmation sub-mode
 		item := m.panelDangerItems[m.panelDangerCursor]
 		confirmStr := dangerConfirmStrings[item.Action]
-		fmt.Fprintf(&sb, "  确认清空：%s\n", s.WarningSt.Render(item.Label))
-		sb.WriteString(s.PanelDesc.Render("  此操作不可恢复"))
+		fmt.Fprintf(&sb, "  %s\n", fmt.Sprintf(m.locale.DangerConfirmClear, s.WarningSt.Render(item.Label)))
+		sb.WriteString(s.PanelDesc.Render("  " + m.locale.DangerIrreversible))
 		sb.WriteString("\n\n")
-		fmt.Fprintf(&sb, "  请输入 %s 确认：\n", s.ProgressError.Render(confirmStr))
+		fmt.Fprintf(&sb, "  %s\n", fmt.Sprintf(m.locale.DangerTypeConfirm, s.ProgressError.Render(confirmStr)))
 		sb.WriteString("  ")
 		sb.WriteString(m.panelDangerInput.View())
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  Enter 提交  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.DangerNavHint))
 	} else {
 		// Item selection mode
 		for i, item := range m.panelDangerItems {
@@ -456,10 +458,10 @@ func (m *cliModel) viewDangerPanel() string {
 			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  ↑↓ 选择  Enter 确认  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.DangerNavHint))
 	}
 
-	return s.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // splitLines splits a string into lines, preserving trailing empty line.
@@ -477,19 +479,28 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return false, m, nil
 	}
 
-	switch m.panelMode {
-	case "settings":
-		return m.updateSettingsPanel(msg)
-	case "askuser":
-		return m.updateAskUserPanel(msg)
-	case "bgtasks":
-		return m.updateBgTasksPanel(msg)
-	case "danger":
-		return m.updateDangerPanel(msg)
-	case "runner":
-		return m.updateRunnerPanel(msg)
+	handled, newModel, cmd := func() (bool, tea.Model, tea.Cmd) {
+		switch m.panelMode {
+		case "settings":
+			return m.updateSettingsPanel(msg)
+		case "askuser":
+			return m.updateAskUserPanel(msg)
+		case "bgtasks":
+			return m.updateBgTasksPanel(msg)
+		case "danger":
+			return m.updateDangerPanel(msg)
+		case "runner":
+			return m.updateRunnerPanel(msg)
+		}
+		return false, m, nil
+	}()
+
+	// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
+	if handled && m.panelCursorLn > 0 {
+		m.ensurePanelCursorVisible()
 	}
-	return false, m, nil
+
+	return handled, newModel, cmd
 }
 
 // updateDangerPanel handles key events in the danger zone panel.
@@ -508,14 +519,14 @@ func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 			item := m.panelDangerItems[m.panelDangerCursor]
 			confirmStr := dangerConfirmStrings[item.Action]
 			if m.panelDangerInput.Value() != confirmStr {
-				m.showSystemMsg("❌ 确认文字不匹配", feedbackWarning)
+				m.showSystemMsg(m.locale.DangerMismatch, feedbackWarning)
 				return true, m, nil
 			}
 			// Execute the clear action
 			if err := m.panelDangerOnExec(item.Action); err != nil {
-				m.showSystemMsg(fmt.Sprintf("❌ 清空失败：%v", err), feedbackWarning)
+				m.showSystemMsg(fmt.Sprintf(m.locale.DangerClearFailed, err), feedbackWarning)
 			} else {
-				m.showSystemMsg(fmt.Sprintf("✅ 已清空：%s", item.Label), feedbackInfo)
+				m.showSystemMsg(fmt.Sprintf(m.locale.DangerCleared, item.Label), feedbackInfo)
 			}
 			m.closePanel()
 			return true, m, nil
@@ -561,17 +572,18 @@ func (m *cliModel) openDangerPanelFromSettings() {
 	}
 
 	items := []dangerItem{
-		{"session", "会话历史", stats["session"]},
+		{"session", m.locale.DangerSessionHistory, stats["session"]},
 		{"core_persona", "Core Memory: persona", stats["persona"]},
 		{"core_human", "Core Memory: human", stats["human"]},
 		{"core_working", "Core Memory: working_context", stats["working_context"]},
-		{"core_all", "Core Memory: 全部", ""},
-		{"long_term", "长期记忆", stats["long_term"]},
-		{"event_history", "事件历史", stats["event_history"]},
-		{"archival", "归档记忆（向量数据库）", stats["archival"]},
+		{"core_all", m.locale.DangerCoreAll, ""},
+		{"long_term", m.locale.DangerLongTerm, stats["long_term"]},
+		{"event_history", m.locale.DangerEventHistory, stats["event_history"]},
+		{"archival", m.locale.DangerArchival, stats["archival"]},
 	}
 
 	m.panelMode = "danger"
+	m.panelScrollY = 0
 	m.relayoutViewport()
 	m.panelDangerItems = items
 	m.panelDangerCursor = 0
@@ -584,7 +596,7 @@ func (m *cliModel) openDangerPanelFromSettings() {
 	}
 	// Pre-create text input for confirmation
 	ti := textinput.New()
-	ti.Placeholder = "输入确认文字..."
+	ti.Placeholder = m.locale.DangerConfirmPlaceholder
 	ti.CharLimit = 50
 	ti.SetWidth(m.panelWidth(40))
 	tiStyles := ti.Styles()
@@ -992,59 +1004,6 @@ func (m *cliModel) autoExpandAskTA() {
 	}
 }
 
-// panelMaxHeight 根据 viewport 高度计算 panel 可用最大行数。
-// Panel 模式下 viewport 已缩到最小，panel 获得几乎所有剩余空间。
-// 返回的是 panel 内容区的可用行数（不含 PanelBox 的 border 行）。
-func (m *cliModel) panelMaxHeight() int {
-	// fixedLines: titleBar(1) + status(1) + footer(1) = 3
-	// viewportMin: 3 (panel 模式下 viewport 缩到最小)
-	// panelOverhead: panelBorder(2) + panelFooter(1) + toast(~1) = 4
-	panelAvailable := m.height - 3 - 3 - 4
-	// 减去 PanelBox 自身的 border 行数（RoundedBorder 上下各1行 = 2行）
-	panelAvailable -= 2
-	if panelAvailable < 6 {
-		panelAvailable = 6 // 最小高度保证：至少显示标题+几行内容
-	}
-	return panelAvailable
-}
-
-// clampPanelContent 根据 maxHeight 裁剪 panel 内容行。
-// 保留头部和底部提示，中间部分可裁剪并显示 "... N more ..."。
-func clampPanelContent(content string, maxHeight int) string {
-	if maxHeight <= 0 {
-		return content
-	}
-	lines := strings.Split(content, "\n")
-	// 去掉末尾可能的空行
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) <= maxHeight {
-		return strings.Join(lines, "\n")
-	}
-	// 保留前 4 行（标题+表头）和最后 2 行（操作提示）
-	headerLines := 4
-	footerLines := 2
-	if headerLines+footerLines >= maxHeight {
-		// 极端情况：空间不足以同时保留头部和尾部
-		// 至少保留 headerLines 行，剩余空间给尾部
-		if maxHeight <= 1 {
-			// 仅保留第一行（标题）
-			return lines[0]
-		}
-		headerLines = (maxHeight + 1) / 2
-		footerLines = maxHeight - headerLines
-	}
-	kept := headerLines + footerLines
-	omitted := len(lines) - kept
-	result := make([]string, 0, maxHeight+1)
-	result = append(result, lines[:headerLines]...)
-	moreHint := fmt.Sprintf("  ... %d lines omitted (narrow terminal) ...", omitted)
-	result = append(result, moreHint)
-	result = append(result, lines[len(lines)-footerLines:]...)
-	return strings.Join(result, "\n")
-}
-
 // viewPanel renders the active panel as a string.
 func (m *cliModel) viewPanel() string {
 	var raw string
@@ -1062,9 +1021,7 @@ func (m *cliModel) viewPanel() string {
 	default:
 		return ""
 	}
-	// §8 Panel 小终端适配：根据可用高度裁剪内容
-	maxH := m.panelMaxHeight()
-	return clampPanelContent(raw, maxH)
+	return raw
 }
 
 func (m *cliModel) viewSettingsPanel() string {
@@ -1084,18 +1041,21 @@ func (m *cliModel) viewSettingsPanel() string {
 
 	// Group by category
 	lastCat := ""
+	ln := 0 // 当前渲染行号
 	for i, def := range m.panelSchema {
 		if def.Category != lastCat {
 			lastCat = def.Category
 			sb.WriteString("\n")
 			sb.WriteString(s.SettingsCat.Render("▸ " + lastCat))
 			sb.WriteString("\n")
+			ln += 2
 		}
 
 		cur := m.panelValues[def.Key]
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
 			prefix = cursorStyle.Render("▸")
+			m.panelCursorLn = ln // 记录 cursor 行号
 		} else {
 			prefix = "  "
 		}
@@ -1106,9 +1066,9 @@ func (m *cliModel) viewSettingsPanel() string {
 			if m.runnerBridge != nil {
 				switch m.runnerBridge.Status() {
 				case RunnerConnected:
-					statusHint = " " + s.ProgressDone.Render("● 已连接")
+					statusHint = " " + s.ProgressDone.Render("● "+m.locale.RunnerStatusConnected)
 				case RunnerConnecting:
-					statusHint = " " + s.ProgressRunning.Render("● 连接中")
+					statusHint = " " + s.ProgressRunning.Render("● "+m.locale.RunnerConnecting)
 				}
 			}
 			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), statusHint)
@@ -1117,6 +1077,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			ln++
 			continue
 		}
 
@@ -1128,6 +1089,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			ln++
 			continue
 		}
 
@@ -1226,7 +1188,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(hintStyle.Render("  " + m.locale.PanelNavHint))
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 func (m *cliModel) viewAskUserPanel() string {
@@ -1342,7 +1304,7 @@ func (m *cliModel) viewAskUserPanel() string {
 	hints = append(hints, m.locale.PanelAskCancel)
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // --- SettingsCapability implementation for CLIChannel ---
@@ -1406,6 +1368,7 @@ func (c *CLIChannel) GetBaseURLOverride() string {
 // openRunnerPanel 打开 Runner 管理面板
 func (m *cliModel) openRunnerPanel() {
 	m.panelMode = "runner"
+	m.panelScrollY = 0
 	m.relayoutViewport()
 
 	// 确保 RunnerBridge 存在（正常 TUI 模式也需要，不只在 --share 时）
@@ -1665,8 +1628,8 @@ func (m *cliModel) viewRunnerPanel() string {
 		}
 
 		sb.WriteString("\n")
-		sb.WriteString(s.PanelHint.Render("  ↑↓/Tab 切换字段  Enter 连接  Esc 返回"))
+		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerNavHint))
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }

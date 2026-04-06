@@ -996,14 +996,12 @@ func (m *cliModel) autoExpandAskTA() {
 // Panel 模式下 viewport 已缩到最小，panel 获得几乎所有剩余空间。
 // 返回的是 panel 内容区的可用行数（不含 PanelBox 的 border 行）。
 func (m *cliModel) panelMaxHeight() int {
-	// fixedLines: titleBar(1) + status(1) + footer(1) = 3
-	// viewportMin: 3 (panel 模式下 viewport 缩到最小)
-	// panelOverhead: panelBorder(2) + panelFooter(1) + toast(~1) = 4
-	panelAvailable := m.height - 3 - 3 - 4
-	// 减去 PanelBox 自身的 border 行数（RoundedBorder 上下各1行 = 2行）
-	panelAvailable -= 2
+	// Panel 模式下 viewport 不渲染，可用高度 = 终端高度 - 固定元素
+	// fixedLines: titleBar(1) + panelFooter(1) = 2
+	// overhead: PanelBox border(2) + toast(~1) = 3
+	panelAvailable := m.height - 2 - 3
 	if panelAvailable < 10 {
-		panelAvailable = 10 // 最小高度保证：标题+至少5行内容+操作提示
+		panelAvailable = 10
 	}
 	return panelAvailable
 }

@@ -83,84 +83,375 @@ func injectProxyLLM(userID string, agentLoop *agent.Agent) {
 	}
 }
 
-func main() {
-	cfg := config.Load()
-
-	// 配置日志（支持文件输出 + 按日轮转）
-	workDir := cfg.Agent.WorkDir
-	if err := setupLogger(cfg.Log, workDir); err != nil {
+// setupLogging initializes the logger.
+func setupLogging(cfg *config.Config) {
+	if err := setupLogger(cfg.Log, cfg.Agent.WorkDir); err != nil {
 		log.WithError(err).Fatal("Failed to setup logger")
 	}
-	defer log.Close()
+}
 
-	// 创建 LLM 客户端
-	llmClient, err := createLLM(cfg.LLM, llm_pkg.RetryConfig{
+// setupLLM creates the LLM client.
+func setupLLM(cfg *config.Config) (llm_pkg.LLM, error) {
+	return createLLM(cfg.LLM, llm_pkg.RetryConfig{
 		Attempts: uint(cfg.Agent.LLMRetryAttempts),
 		Delay:    cfg.Agent.LLMRetryDelay,
 		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
 		Timeout:  cfg.Agent.LLMRetryTimeout,
 	})
+}
+
+// setupOAuth creates OAuth server and manager.
+func setupOAuth(cfg *config.Config, dbPath string) (*oauth.Server, *oauth.Manager, *providers.FeishuProvider, *sqlite.DB, error) {
+	if !cfg.OAuth.Enable {
+		return nil, nil, nil, nil, nil
+	}
+
+	sharedDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to open shared database for OAuth: %w", err)
+	}
+	tokenStorage, err := oauth.NewSQLiteStorage(sharedDB)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to create OAuth token storage: %w", err)
+	}
+
+	oauthManager := oauth.NewManager(tokenStorage)
+	feishuProvider := providers.NewFeishuProvider(cfg.Feishu.AppID, cfg.Feishu.AppSecret, cfg.OAuth.BaseURL+"/oauth/callback")
+	oauthManager.RegisterProvider(feishuProvider)
+	oauthServer := oauth.NewServer(oauth.Config{Enable: true, Host: cfg.OAuth.Host, Port: cfg.OAuth.Port, BaseURL: cfg.OAuth.BaseURL}, oauthManager)
+	log.WithFields(log.Fields{"port": cfg.OAuth.Port, "baseURL": cfg.OAuth.BaseURL}).Info("OAuth server started")
+	return oauthServer, oauthManager, feishuProvider, sharedDB, nil
+}
+
+// buildWebCallbacks creates WebCallbacks with all Runner/Registry closures.
+func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCallbacks {
+	return channel.WebCallbacks{
+		RunnerTokenGet: func(senderID string) string {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return ""
+			}
+			entry := tools.NewRunnerTokenStore(db).Get(senderID)
+			if entry == nil {
+				return ""
+			}
+			return buildRunnerConnectCmd(cfg, entry)
+		},
+		RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return "", fmt.Errorf("remote sandbox not configured")
+			}
+			entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+				Mode:        mode,
+				DockerImage: dockerImage,
+				Workspace:   workspace,
+			})
+			if entry == nil {
+				return "", fmt.Errorf("failed to generate token")
+			}
+			return buildRunnerConnectCmd(cfg, entry), nil
+		},
+		RunnerTokenRevoke: func(senderID string) error {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return fmt.Errorf("remote sandbox not configured")
+			}
+			tools.NewRunnerTokenStore(db).Revoke(senderID)
+			return nil
+		},
+		RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return nil, fmt.Errorf("runner management not configured")
+			}
+			store := tools.NewRunnerTokenStore(db)
+			runners, err := store.ListRunners(senderID)
+			if err != nil {
+				return nil, err
+			}
+			// Populate online status from SandboxRouter
+			if sb := tools.GetSandbox(); sb != nil {
+				if router, ok := sb.(*tools.SandboxRouter); ok {
+					for i := range runners {
+						runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
+					}
+				}
+			}
+			// Inject built-in docker sandbox if available
+			if sb := tools.GetSandbox(); sb != nil {
+				if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
+					dockerEntry := tools.RunnerInfo{
+						Name:        tools.BuiltinDockerRunnerName,
+						Mode:        "docker",
+						DockerImage: router.DockerImage(),
+						Online:      true,
+					}
+					runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
+				}
+			}
+			return runners, nil
+		},
+		RunnerCreate: func(senderID, name, mode, dockerImage, workspace string, llm tools.RunnerLLMSettings) (string, error) {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return "", fmt.Errorf("runner management not configured")
+			}
+			store := tools.NewRunnerTokenStore(db)
+			token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace, llm)
+			if err != nil {
+				return "", err
+			}
+			pubURL := cfg.Sandbox.PublicURL
+			if pubURL == "" {
+				pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
+			}
+			cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
+			if mode == "docker" && dockerImage != "" {
+				cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
+			}
+			if workspace != "" {
+				cmd += fmt.Sprintf(" --workspace %s", workspace)
+			}
+			if llm.HasLLM() {
+				cmd += fmt.Sprintf(" --llm-provider %s --llm-api-key %s --llm-model %s", llm.Provider, llm.APIKey, llm.Model)
+				if llm.BaseURL != "" {
+					cmd += fmt.Sprintf(" --llm-base-url %s", llm.BaseURL)
+				}
+			}
+			return cmd, nil
+		},
+		RunnerDelete: func(senderID, name string) error {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return fmt.Errorf("runner management not configured")
+			}
+			// Disconnect runner if online
+			if sb := tools.GetSandbox(); sb != nil {
+				if router, ok := sb.(*tools.SandboxRouter); ok {
+					router.DisconnectRunner(senderID, name)
+				}
+			}
+			return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
+		},
+		RunnerGetActive: func(senderID string) (string, error) {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return "", fmt.Errorf("runner management not configured")
+			}
+			return tools.NewRunnerTokenStore(db).GetActiveRunner(senderID)
+		},
+		RunnerSetActive: func(senderID, name string) error {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
+				return fmt.Errorf("runner management not configured")
+			}
+			return tools.NewRunnerTokenStore(db).SetActiveRunner(senderID, name)
+		},
+
+		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
+			return agentLoop.RegistryManager().Browse(entryType, limit, offset)
+		},
+		RegistryInstall: func(entryType string, id int64, senderID string) error {
+			return agentLoop.RegistryManager().Install(entryType, id, senderID)
+		},
+		RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
+			return agentLoop.RegistryManager().ListMy(senderID, entryType)
+		},
+		RegistryPublish: func(entryType, name, senderID string) error {
+			return agentLoop.RegistryManager().Publish(entryType, name, senderID)
+		},
+		RegistryUnpublish: func(entryType, name, senderID string) error {
+			return agentLoop.RegistryManager().Unpublish(entryType, name, senderID)
+		},
+
+		RegistryUninstall: func(entryType, name, senderID string) error {
+			return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
+		},
+		LLMList: func(senderID string) ([]string, string) {
+			llmClient, currentModel, _, _ := agentLoop.LLMFactory().GetLLM(senderID)
+			return llmClient.ListModels(), currentModel
+		},
+		LLMSet: func(senderID, model string) error {
+			return agentLoop.SetUserModel(senderID, model)
+		},
+		LLMGetConfig: func(senderID string) (string, string, string, bool) {
+			return agentLoop.GetUserLLMConfig(senderID)
+		},
+		IsProcessing: agentLoop.IsProcessing,
+		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+			return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+		},
+		LLMDelete: func(senderID string) error {
+			return agentLoop.DeleteUserLLM(senderID)
+		},
+		LLMGetMaxContext: func(senderID string) int {
+			return agentLoop.GetUserMaxContext(senderID)
+		},
+		LLMSetMaxContext: func(senderID string, maxContext int) error {
+			return agentLoop.SetUserMaxContext(senderID, maxContext)
+		},
+
+		NormalizeSenderID: func(senderID string) string {
+			return agentLoop.NormalizeSenderID(senderID)
+		},
+		SandboxWriteFile: func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (string, error) {
+			sandbox := tools.GetSandbox()
+			if sandbox == nil {
+				return "", fmt.Errorf("no sandbox available")
+			}
+			// Resolve per-user sandbox (e.g., remote runner vs docker)
+			resolver, ok := sandbox.(tools.SandboxResolver)
+			if !ok {
+				return "", fmt.Errorf("sandbox does not support per-user resolution")
+			}
+			userSbx := resolver.SandboxForUser(senderID)
+			if userSbx == nil || userSbx.Name() == "none" {
+				return "", fmt.Errorf("no sandbox available for user %s", senderID)
+			}
+			// Build absolute path inside sandbox (e.g., /workspace/uploads/file.txt)
+			ws := userSbx.Workspace(senderID)
+			absPath := filepath.Join(ws, sandboxRelPath)
+			// Ensure parent directory exists
+			dir := filepath.Dir(absPath)
+			if err := userSbx.MkdirAll(context.Background(), dir, 0755, senderID); err != nil {
+				log.WithError(err).Warn("Failed to create directory in sandbox")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := userSbx.WriteFile(ctx, absPath, data, perm, senderID); err != nil {
+				return "", err
+			}
+			// Return the workspace path prefix so the caller can build the display path
+			return ws, nil
+		},
+	}
+}
+
+// registerChannels creates and registers all channels.
+func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.MessageBus, agentLoop *agent.Agent, webDB *sql.DB, workDir string) (*channel.FeishuChannel, error) {
+	var feishuCh *channel.FeishuChannel
+	if cfg.Feishu.Enabled {
+		feishuCh = channel.NewFeishuChannel(channel.FeishuConfig{
+			AppID:             cfg.Feishu.AppID,
+			AppSecret:         cfg.Feishu.AppSecret,
+			EncryptKey:        cfg.Feishu.EncryptKey,
+			VerificationToken: cfg.Feishu.VerificationToken,
+			AllowFrom:         cfg.Feishu.AllowFrom,
+		}, msgBus)
+		disp.Register(feishuCh)
+
+	}
+
+	// 注册 QQ 渠道
+	if cfg.QQ.Enabled {
+		qqCh := channel.NewQQChannel(channel.QQConfig{
+			AppID:        cfg.QQ.AppID,
+			ClientSecret: cfg.QQ.ClientSecret,
+			AllowFrom:    cfg.QQ.AllowFrom,
+		}, msgBus)
+		disp.Register(qqCh)
+	}
+
+	// 注册 NapCat (OneBot 11) 渠道
+	if cfg.NapCat.Enabled {
+		napcatCh := channel.NewNapCatChannel(channel.NapCatConfig{
+			WSUrl:     cfg.NapCat.WSUrl,
+			Token:     cfg.NapCat.Token,
+			AllowFrom: cfg.NapCat.AllowFrom,
+		}, msgBus)
+		disp.Register(napcatCh)
+	}
+
+	if cfg.Web.Enable {
+		if webDB != nil {
+			webCh := channel.NewWebChannel(channel.WebChannelConfig{
+				Host:             cfg.Web.Host,
+				Port:             cfg.Web.Port,
+				DB:               webDB,
+				FeishuLinkSecret: cfg.Feishu.AppSecret,
+				InviteOnly:       cfg.Web.InviteOnly,
+				PublicURL:        cfg.Sandbox.PublicURL,
+			}, msgBus)
+			if cfg.Web.StaticDir != "" {
+				webCh.SetStaticDir(cfg.Web.StaticDir)
+			}
+			// Web file uploads go through cloud OSS only — no local storage
+			webCh.SetWorkDir(workDir)
+			// Set OSS provider for file storage
+			if cfg.OSS.Provider == "qiniu" {
+				ossProvider, err := channel.NewOSSProvider(
+					cfg.OSS.Provider,
+					"",
+					channel.QiniuConfig{
+						AccessKey: cfg.OSS.QiniuAccessKey,
+						SecretKey: cfg.OSS.QiniuSecretKey,
+						Bucket:    cfg.OSS.QiniuBucket,
+						Domain:    cfg.OSS.QiniuDomain,
+						Region:    cfg.OSS.QiniuRegion,
+					},
+				)
+				if err != nil {
+					log.WithError(err).Error("Failed to create Qiniu OSS provider")
+				} else {
+					webCh.SetOSSProvider(ossProvider)
+					log.Info("OSS provider configured: qiniu")
+				}
+			}
+
+			webCh.SetCallbacks(buildWebCallbacks(cfg, agentLoop))
+			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
+			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
+			if router, ok := tools.GetSandbox().(*tools.SandboxRouter); ok {
+				if remote := router.Remote(); remote != nil {
+					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
+						webCh.PushRunnerStatus(agentLoop.NormalizeSenderID(userID), runnerName, online)
+						// When a runner with local LLM connects/disconnects, update ProxyLLM.
+						if online {
+							injectProxyLLM(userID, agentLoop)
+						} else {
+							agentLoop.ClearProxyLLM(userID)
+						}
+					}
+					remote.OnSyncProgress = func(userID, phase, message string) {
+						webCh.PushSyncProgress(agentLoop.NormalizeSenderID(userID), phase, message)
+					}
+				}
+			}
+			disp.Register(webCh)
+		} else {
+			log.Warn("Web channel enabled but no database available, skipping")
+		}
+	}
+
+	return feishuCh, nil
+}
+
+func main() {
+	cfg := config.Load()
+
+	setupLogging(cfg)
+	defer log.Close()
+
+	llmClient, err := setupLLM(cfg)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create LLM client")
 	}
-	log.WithFields(log.Fields{
-		"provider": cfg.LLM.Provider,
-		"model":    cfg.LLM.Model,
-	}).Info("LLM client created")
+	log.WithFields(log.Fields{"provider": cfg.LLM.Provider, "model": cfg.LLM.Model}).Info("LLM client created")
 
-	// 创建消息总线
 	msgBus := bus.NewMessageBus()
 
-	// 创建 Agent
-	workDir = cfg.Agent.WorkDir
-	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
+	workDir := cfg.Agent.WorkDir
 	xbotDir := filepath.Join(workDir, ".xbot")
 	dbPath := filepath.Join(xbotDir, "xbot.db")
 
-	// 检测并执行数据迁移（如果需要）
 	if err := storage.MigrateIfNeeded(context.Background(), workDir, dbPath); err != nil {
 		log.WithError(err).Fatal("Failed to migrate data to SQLite")
 	}
 
-	// OAuth 管理
-	var oauthServer *oauth.Server
-	var oauthManager *oauth.Manager
-	var feishuProvider *providers.FeishuProvider
-	var sharedDB *sqlite.DB
-	if cfg.OAuth.Enable {
-		// Use the shared database for OAuth token storage
-		sharedDB, err = sqlite.Open(dbPath)
-		if err != nil {
-			log.WithError(err).Fatal("Failed to open shared database for OAuth")
-		}
-		tokenStorage, err := oauth.NewSQLiteStorage(sharedDB)
-		if err != nil {
-			log.WithError(err).Fatal("Failed to create OAuth token storage")
-		}
-
-		// 创建 OAuth 管理器
-		oauthManager = oauth.NewManager(tokenStorage)
-
-		// 注册 Feishu OAuth provider
-		feishuProvider = providers.NewFeishuProvider(
-			cfg.Feishu.AppID,
-			cfg.Feishu.AppSecret,
-			cfg.OAuth.BaseURL+"/oauth/callback",
-		)
-		oauthManager.RegisterProvider(feishuProvider)
-
-		// 创建 OAuth HTTP 服务器（SendFunc 稍后设置，需要在 Dispatcher 创建后）
-		oauthServer = oauth.NewServer(oauth.Config{
-			Enable:  true,
-			Host:    cfg.OAuth.Host,
-			Port:    cfg.OAuth.Port,
-			BaseURL: cfg.OAuth.BaseURL,
-		}, oauthManager)
-
-		log.WithFields(log.Fields{
-			"port":    cfg.OAuth.Port,
-			"baseURL": cfg.OAuth.BaseURL,
-		}).Info("OAuth server started")
+	oauthServer, oauthManager, feishuProvider, sharedDB, err := setupOAuth(cfg, dbPath)
+	if err != nil {
+		log.WithError(err).Fatal("Failed to setup OAuth")
 	}
 
 	// 嵌入向量配置（Letta 归档记忆使用 chromem-go）
@@ -276,7 +567,6 @@ func main() {
 	// 所有工具注册完成，索引全局工具（用于 search_tools 语义搜索）
 	agentLoop.IndexGlobalTools()
 
-	// 设置 runner token 持久化（复用同一个 DB 文件）
 	tokenDB, err := sqlite.Open(dbPath)
 	if err != nil {
 		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")
@@ -284,312 +574,17 @@ func main() {
 		tools.SetRunnerTokenDB(tokenDB.Conn())
 	}
 
-	// 创建消息分发器
 	disp := channel.NewDispatcher(msgBus)
 
-	// 注册飞书渠道
-	var feishuCh *channel.FeishuChannel
-	if cfg.Feishu.Enabled {
-		feishuCh = channel.NewFeishuChannel(channel.FeishuConfig{
-			AppID:             cfg.Feishu.AppID,
-			AppSecret:         cfg.Feishu.AppSecret,
-			EncryptKey:        cfg.Feishu.EncryptKey,
-			VerificationToken: cfg.Feishu.VerificationToken,
-			AllowFrom:         cfg.Feishu.AllowFrom,
-		}, msgBus)
-		disp.Register(feishuCh)
-
-	}
-
-	// 注册 QQ 渠道
-	if cfg.QQ.Enabled {
-		qqCh := channel.NewQQChannel(channel.QQConfig{
-			AppID:        cfg.QQ.AppID,
-			ClientSecret: cfg.QQ.ClientSecret,
-			AllowFrom:    cfg.QQ.AllowFrom,
-		}, msgBus)
-		disp.Register(qqCh)
-	}
-
-	// 注册 NapCat (OneBot 11) 渠道
-	if cfg.NapCat.Enabled {
-		napcatCh := channel.NewNapCatChannel(channel.NapCatConfig{
-			WSUrl:     cfg.NapCat.WSUrl,
-			Token:     cfg.NapCat.Token,
-			AllowFrom: cfg.NapCat.AllowFrom,
-		}, msgBus)
-		disp.Register(napcatCh)
-	}
-
 	var webDB *sql.DB
-
-	// 注册 Web 渠道
-	if cfg.Web.Enable {
-		if tokenDB != nil {
-			webDB = tokenDB.Conn()
-		}
-		if webDB != nil {
-			webCh := channel.NewWebChannel(channel.WebChannelConfig{
-				Host:             cfg.Web.Host,
-				Port:             cfg.Web.Port,
-				DB:               webDB,
-				FeishuLinkSecret: cfg.Feishu.AppSecret,
-				InviteOnly:       cfg.Web.InviteOnly,
-				PublicURL:        cfg.Sandbox.PublicURL,
-			}, msgBus)
-			if cfg.Web.StaticDir != "" {
-				webCh.SetStaticDir(cfg.Web.StaticDir)
-			}
-			// Web file uploads go through cloud OSS only — no local storage
-			webCh.SetWorkDir(workDir)
-			// Set OSS provider for file storage
-			if cfg.OSS.Provider == "qiniu" {
-				ossProvider, err := channel.NewOSSProvider(
-					cfg.OSS.Provider,
-					"",
-					channel.QiniuConfig{
-						AccessKey: cfg.OSS.QiniuAccessKey,
-						SecretKey: cfg.OSS.QiniuSecretKey,
-						Bucket:    cfg.OSS.QiniuBucket,
-						Domain:    cfg.OSS.QiniuDomain,
-						Region:    cfg.OSS.QiniuRegion,
-					},
-				)
-				if err != nil {
-					log.WithError(err).Error("Failed to create Qiniu OSS provider")
-				} else {
-					webCh.SetOSSProvider(ossProvider)
-					log.Info("OSS provider configured: qiniu")
-				}
-			}
-
-			webCh.SetCallbacks(channel.WebCallbacks{
-				RunnerTokenGet: func(senderID string) string {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return ""
-					}
-					entry := tools.NewRunnerTokenStore(db).Get(senderID)
-					if entry == nil {
-						return ""
-					}
-					return buildRunnerConnectCmd(cfg, entry)
-				},
-				RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return "", fmt.Errorf("remote sandbox not configured")
-					}
-					entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
-						Mode:        mode,
-						DockerImage: dockerImage,
-						Workspace:   workspace,
-					})
-					if entry == nil {
-						return "", fmt.Errorf("failed to generate token")
-					}
-					return buildRunnerConnectCmd(cfg, entry), nil
-				},
-				RunnerTokenRevoke: func(senderID string) error {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return fmt.Errorf("remote sandbox not configured")
-					}
-					tools.NewRunnerTokenStore(db).Revoke(senderID)
-					return nil
-				},
-				RunnerList: func(senderID string) ([]tools.RunnerInfo, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return nil, fmt.Errorf("runner management not configured")
-					}
-					store := tools.NewRunnerTokenStore(db)
-					runners, err := store.ListRunners(senderID)
-					if err != nil {
-						return nil, err
-					}
-					// Populate online status from SandboxRouter
-					if sb := tools.GetSandbox(); sb != nil {
-						if router, ok := sb.(*tools.SandboxRouter); ok {
-							for i := range runners {
-								runners[i].Online = router.IsRunnerOnline(senderID, runners[i].Name)
-							}
-						}
-					}
-					// Inject built-in docker sandbox if available
-					if sb := tools.GetSandbox(); sb != nil {
-						if router, ok := sb.(*tools.SandboxRouter); ok && router.HasDocker() {
-							dockerEntry := tools.RunnerInfo{
-								Name:        tools.BuiltinDockerRunnerName,
-								Mode:        "docker",
-								DockerImage: router.DockerImage(),
-								Online:      true,
-							}
-							runners = append([]tools.RunnerInfo{dockerEntry}, runners...)
-						}
-					}
-					return runners, nil
-				},
-				RunnerCreate: func(senderID, name, mode, dockerImage, workspace string, llm tools.RunnerLLMSettings) (string, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return "", fmt.Errorf("runner management not configured")
-					}
-					store := tools.NewRunnerTokenStore(db)
-					token, _, err := store.CreateRunner(senderID, name, mode, dockerImage, workspace, llm)
-					if err != nil {
-						return "", err
-					}
-					pubURL := cfg.Sandbox.PublicURL
-					if pubURL == "" {
-						pubURL = fmt.Sprintf("ws://%s:%d", cfg.Server.Host, cfg.Server.Port)
-					}
-					cmd := fmt.Sprintf("./xbot-runner --server %s/ws/%s --token %s", pubURL, senderID, token)
-					if mode == "docker" && dockerImage != "" {
-						cmd += fmt.Sprintf(" --mode docker --docker-image %s", dockerImage)
-					}
-					if workspace != "" {
-						cmd += fmt.Sprintf(" --workspace %s", workspace)
-					}
-					if llm.HasLLM() {
-						cmd += fmt.Sprintf(" --llm-provider %s --llm-api-key %s --llm-model %s", llm.Provider, llm.APIKey, llm.Model)
-						if llm.BaseURL != "" {
-							cmd += fmt.Sprintf(" --llm-base-url %s", llm.BaseURL)
-						}
-					}
-					return cmd, nil
-				},
-				RunnerDelete: func(senderID, name string) error {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return fmt.Errorf("runner management not configured")
-					}
-					// Disconnect runner if online
-					if sb := tools.GetSandbox(); sb != nil {
-						if router, ok := sb.(*tools.SandboxRouter); ok {
-							router.DisconnectRunner(senderID, name)
-						}
-					}
-					return tools.NewRunnerTokenStore(db).DeleteRunner(senderID, name)
-				},
-				RunnerGetActive: func(senderID string) (string, error) {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return "", fmt.Errorf("runner management not configured")
-					}
-					return tools.NewRunnerTokenStore(db).GetActiveRunner(senderID)
-				},
-				RunnerSetActive: func(senderID, name string) error {
-					db := tools.GetRunnerTokenDB()
-					if db == nil {
-						return fmt.Errorf("runner management not configured")
-					}
-					return tools.NewRunnerTokenStore(db).SetActiveRunner(senderID, name)
-				},
-
-				RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
-					return agentLoop.RegistryManager().Browse(entryType, limit, offset)
-				},
-				RegistryInstall: func(entryType string, id int64, senderID string) error {
-					return agentLoop.RegistryManager().Install(entryType, id, senderID)
-				},
-				RegistryListMy: func(senderID, entryType string) ([]sqlite.SharedEntry, []string, error) {
-					return agentLoop.RegistryManager().ListMy(senderID, entryType)
-				},
-				RegistryPublish: func(entryType, name, senderID string) error {
-					return agentLoop.RegistryManager().Publish(entryType, name, senderID)
-				},
-				RegistryUnpublish: func(entryType, name, senderID string) error {
-					return agentLoop.RegistryManager().Unpublish(entryType, name, senderID)
-				},
-
-				RegistryUninstall: func(entryType, name, senderID string) error {
-					return agentLoop.RegistryManager().Uninstall(entryType, name, senderID)
-				},
-				LLMList: func(senderID string) ([]string, string) {
-					llmClient, currentModel, _, _ := agentLoop.LLMFactory().GetLLM(senderID)
-					return llmClient.ListModels(), currentModel
-				},
-				LLMSet: func(senderID, model string) error {
-					return agentLoop.SetUserModel(senderID, model)
-				},
-				LLMGetConfig: func(senderID string) (string, string, string, bool) {
-					return agentLoop.GetUserLLMConfig(senderID)
-				},
-				IsProcessing: agentLoop.IsProcessing,
-				LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
-					return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
-				},
-				LLMDelete: func(senderID string) error {
-					return agentLoop.DeleteUserLLM(senderID)
-				},
-				LLMGetMaxContext: func(senderID string) int {
-					return agentLoop.GetUserMaxContext(senderID)
-				},
-				LLMSetMaxContext: func(senderID string, maxContext int) error {
-					return agentLoop.SetUserMaxContext(senderID, maxContext)
-				},
-
-				NormalizeSenderID: func(senderID string) string {
-					return agentLoop.NormalizeSenderID(senderID)
-				},
-				SandboxWriteFile: func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (string, error) {
-					sandbox := tools.GetSandbox()
-					if sandbox == nil {
-						return "", fmt.Errorf("no sandbox available")
-					}
-					// Resolve per-user sandbox (e.g., remote runner vs docker)
-					resolver, ok := sandbox.(tools.SandboxResolver)
-					if !ok {
-						return "", fmt.Errorf("sandbox does not support per-user resolution")
-					}
-					userSbx := resolver.SandboxForUser(senderID)
-					if userSbx == nil || userSbx.Name() == "none" {
-						return "", fmt.Errorf("no sandbox available for user %s", senderID)
-					}
-					// Build absolute path inside sandbox (e.g., /workspace/uploads/file.txt)
-					ws := userSbx.Workspace(senderID)
-					absPath := filepath.Join(ws, sandboxRelPath)
-					// Ensure parent directory exists
-					dir := filepath.Dir(absPath)
-					if err := userSbx.MkdirAll(context.Background(), dir, 0755, senderID); err != nil {
-						log.WithError(err).Warn("Failed to create directory in sandbox")
-					}
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if err := userSbx.WriteFile(ctx, absPath, data, perm, senderID); err != nil {
-						return "", err
-					}
-					// Return the workspace path prefix so the caller can build the display path
-					return ws, nil
-				},
-			})
-
-			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
-			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
-			if router, ok := tools.GetSandbox().(*tools.SandboxRouter); ok {
-				if remote := router.Remote(); remote != nil {
-					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
-						webCh.PushRunnerStatus(agentLoop.NormalizeSenderID(userID), runnerName, online)
-						// When a runner with local LLM connects/disconnects, update ProxyLLM.
-						if online {
-							injectProxyLLM(userID, agentLoop)
-						} else {
-							agentLoop.ClearProxyLLM(userID)
-						}
-					}
-					remote.OnSyncProgress = func(userID, phase, message string) {
-						webCh.PushSyncProgress(agentLoop.NormalizeSenderID(userID), phase, message)
-					}
-				}
-			}
-			disp.Register(webCh)
-		} else {
-			log.Warn("Web channel enabled but no database available, skipping")
-		}
+	if tokenDB != nil {
+		webDB = tokenDB.Conn()
+	}
+	feishuCh, err := registerChannels(disp, cfg, msgBus, agentLoop, webDB, workDir)
+	if err != nil {
+		log.WithError(err).Fatal("Failed to register channels")
 	}
 
-	// 注入同步发送函数，使 Agent 可直接通过 Dispatcher 发送消息并获取 message_id
 	agentLoop.SetDirectSend(disp.SendDirect)
 	agentLoop.SetChannelFinder(disp.GetChannel)
 

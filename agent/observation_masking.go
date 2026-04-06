@@ -53,7 +53,12 @@ func NewObservationMaskStore(maxSize int) *ObservationMaskStore {
 // generateMaskID 生成 mask ID: "mk_" + 8位随机 hex。
 func generateMaskID() string {
 	b := make([]byte, 4)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if crypto/rand fails (should never happen)
+		log.WithError(err).Warn("crypto/rand.Read failed in generateMaskID, using fallback")
+		now := time.Now().UnixNano()
+		return fmt.Sprintf("mk_%08x", now&0xffffffff)
+	}
 	return "mk_" + hex.EncodeToString(b)
 }
 

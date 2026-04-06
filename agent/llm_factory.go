@@ -87,7 +87,10 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 func (f *LLMFactory) HasCustomLLM(senderID string) bool {
 	// 先检查缓存
 	if val, ok := f.hasCustomLLMCache.Load(senderID); ok {
-		return val.(bool)
+		if b, ok := val.(bool); ok {
+			return b
+		}
+		return false
 	}
 
 	// 再检查客户端缓存

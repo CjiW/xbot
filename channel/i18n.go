@@ -185,8 +185,8 @@ type HelpKeyEntry struct {
 
 var locales map[string]*UILocale
 
-func init() {
-	zh := &UILocale{
+func localeZH() *UILocale {
+	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "已发送取消请求",
 		SettingsSaved:  "✅ 设置已保存",
@@ -526,8 +526,10 @@ func init() {
 			{Key: "danger_zone", Label: "⚠️ 危险区 — 清空记忆", Type: SettingTypeText, Category: "危险"},
 		},
 	}
+}
 
-	en := &UILocale{
+func localeEN() *UILocale {
+	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "Cancel request sent",
 		SettingsSaved:  "✅ Settings saved",
@@ -867,8 +869,10 @@ func init() {
 			{Key: "danger_zone", Label: "⚠️ Danger Zone — Clear Memory", Type: SettingTypeText, Category: "Danger"},
 		},
 	}
+}
 
-	ja := &UILocale{
+func localeJA() *UILocale {
+	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "キャンセルリクエストを送信しました",
 		SettingsSaved:  "✅ 設定を保存しました",
@@ -1208,12 +1212,14 @@ func init() {
 			{Key: "danger_zone", Label: "⚠️ 危険エリア — 記憶クリア", Type: SettingTypeText, Category: "危険"},
 		},
 	}
+}
 
+func init() {
 	locales = map[string]*UILocale{
-		"":   en, // default
-		"zh": zh,
-		"en": en,
-		"ja": ja,
+		"":   localeEN(),
+		"zh": localeZH(),
+		"en": localeEN(),
+		"ja": localeJA(),
 	}
 }
 

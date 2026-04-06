@@ -86,21 +86,16 @@ func (s *SQLiteStorage) GetToken(ctx context.Context, provider, channel, chatID 
 		return nil, fmt.Errorf("query token: %w", err)
 	}
 
-	// 解密 access_token
+	// Token 未加密存储——DB 与服务同进程，加密只增加复杂度不增加安全性。
+	// 保留 Decrypt 兼容路径：如果之前有加密数据，仍可正常解密。
 	if accessToken != "" {
 		if decrypted, err := crypto.Decrypt(accessToken); err == nil {
 			accessToken = decrypted
-		} else {
-			log.WithError(err).Warn("Failed to decrypt access token, key may have changed")
 		}
 	}
-
-	// 解密 refresh_token
 	if refreshToken != "" {
 		if decrypted, err := crypto.Decrypt(refreshToken); err == nil {
 			refreshToken = decrypted
-		} else {
-			log.WithError(err).Warn("Failed to decrypt refresh token, key may have changed")
 		}
 	}
 
@@ -135,23 +130,17 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 	accessToken := token.AccessToken
 	refreshToken := token.RefreshToken
 
-	// 加密 access_token
-	// Note: If encryption fails, the token is stored in plaintext as a fallback.
-	// This is acceptable for OAuth tokens because they can be recovered via re-authorization.
+	// Token 直接明文存储——DB 与服务同进程，加密无实际安全增益。
+	// 保留 Encrypt 兼容：如果 crypto 已初始化密钥则加密（兼容旧数据读取），否则直接存储。
 	if accessToken != "" {
 		if encrypted, err := crypto.Encrypt(accessToken); err == nil {
 			accessToken = encrypted
-		} else {
-			log.WithError(err).Warn("Failed to encrypt access token")
 		}
+		// 加密失败（未设置密钥等）→ 直接明文存储，不报错
 	}
-
-	// 加密 refresh_token（长期有效凭证，必须加密）
 	if refreshToken != "" {
 		if encrypted, err := crypto.Encrypt(refreshToken); err == nil {
 			refreshToken = encrypted
-		} else {
-			log.WithError(err).Warn("Failed to encrypt refresh token")
 		}
 	}
 

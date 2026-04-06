@@ -29,12 +29,14 @@ import (
 // ErrLLMGenerate 表示 LLM 生成调用失败（网络、API 4xx/5xx 等）
 var ErrLLMGenerate = errors.New("LLM generate failed")
 
-// assertNoSystemPersist 断言不得将 system 消息持久化到 session，否则会导致多条 system / 400 / 多人 sysprompt 混用。
-func assertNoSystemPersist(m llm.ChatMessage) {
+// assertNoSystemPersist checks that a system message is not being persisted to session.
+// Returns error if a system message is detected — callers should skip the message and log.
+func assertNoSystemPersist(m llm.ChatMessage) error {
 	if m.Role == "system" {
 		log.WithField("message", m).Error("ASSERT: must not persist system message to session")
-		panic("assert: must not persist system message to session")
+		return fmt.Errorf("must not persist system message to session")
 	}
+	return nil
 }
 
 // copyMessages creates a shallow copy of the messages slice so that
@@ -1560,7 +1562,9 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		// already persisted (eager-save + incremental persistence).
 		if errors.Is(out.Error, context.Canceled) {
 			for _, em := range out.EngineMessages {
-				assertNoSystemPersist(em)
+				if err := assertNoSystemPersist(em); err != nil {
+					continue
+				}
 				if err := tenantSession.AddMessage(em); err != nil {
 					log.Ctx(ctx).WithError(err).Warn("Failed to save engine message on cancel")
 				}
@@ -1916,11 +1920,15 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 		// For cards: feishu.go will attempt patch first; if cross-type conflict occurs,
 		// it falls back to creating a new message and deleting the old progress message.
 		if existingID, ok := a.sessionMsgIDs.Load(key); ok {
-			msg.Metadata["update_message_id"] = existingID.(string)
+			if id, ok := existingID.(string); ok {
+				msg.Metadata["update_message_id"] = id
+			}
 		}
 
 		if replyTo, ok := a.sessionReplyTo.Load(key); ok {
-			msg.Metadata["message_id"] = replyTo.(string)
+			if id, ok := replyTo.(string); ok {
+				msg.Metadata["message_id"] = id
+			}
 		}
 
 		msgID, err := a.directSend(msg)

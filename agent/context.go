@@ -64,7 +64,7 @@ func (pl *PromptLoader) load() {
 	}
 	// 最终 fallback
 	if t, err := template.New("system").Parse(defaultSystemPrompt); err != nil {
-		panic(fmt.Sprintf("Failed to parse default system prompt template: %v", err))
+		log.Fatalf("Failed to parse default system prompt template: %v", err)
 	} else {
 		pl.tmpl = t
 	}

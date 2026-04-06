@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// usernameRegex validates usernames: alphanumeric, underscore, hyphen, dot.
+var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
 // strongPasswordChars defines the character sets for password generation.
 var strongPasswordChars = []string{
@@ -73,7 +77,7 @@ func CreateWebUser(db *sql.DB, username string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid username (must be 1-64 chars)")
 	}
 	// Only allow alphanumeric, underscore, hyphen, dot
-	if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(username) {
+	if !usernameRegex.MatchString(username) {
 		return "", "", fmt.Errorf("username can only contain letters, digits, underscores, hyphens, and dots")
 	}
 
@@ -256,6 +260,7 @@ func (wc *WebChannel) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   wc.isSecureCookie(),
 		MaxAge:   int(webSessionMaxAge.Seconds()),
 	})
 
@@ -276,6 +281,7 @@ func (wc *WebChannel) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   wc.isSecureCookie(),
 		MaxAge:   -1,
 	})
 
@@ -289,7 +295,8 @@ func (wc *WebChannel) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authResponse{OK: true})
 }
 
-// validateSession checks the session cookie and returns session info
+// validateSession checks the session cookie and returns session info.
+// Sessions are automatically renewed when more than half of their lifetime has passed.
 func (wc *WebChannel) validateSession(r *http.Request) *sessionInfo {
 	cookie, err := r.Cookie(webSessionCookieName)
 	if err != nil {
@@ -302,6 +309,17 @@ func (wc *WebChannel) validateSession(r *http.Request) *sessionInfo {
 
 	if !ok || time.Now().After(si.expires) {
 		return nil
+	}
+
+	// Auto-renew session if more than half of its lifetime has passed
+	remaining := time.Until(si.expires)
+	if remaining < webSessionMaxAge/2 {
+		wc.sessionsMu.Lock()
+		if _, exists := wc.sessions[cookie.Value]; exists {
+			si.expires = time.Now().Add(webSessionMaxAge)
+			wc.sessions[cookie.Value] = si
+		}
+		wc.sessionsMu.Unlock()
 	}
 
 	return &si
@@ -388,10 +406,13 @@ func FeishuLinkUser(db *sql.DB, feishuUserID, username, password string) (string
 
 	// Store the feishu→web link in user_settings
 	now := time.Now().Unix()
-	_, _ = db.Exec(
+	if _, err := db.Exec(
 		`INSERT OR REPLACE INTO user_settings (channel, sender_id, key, value, updated_at) VALUES ('feishu', ?, 'web_user_id', ?, ?)`,
 		feishuUserID, strconv.FormatInt(id, 10), now,
-	)
+	); err != nil {
+		log.WithError(err).Error("Failed to store feishu-web link")
+		return "", fmt.Errorf("failed to store account link: %w", err)
+	}
 
 	return username, nil
 }
@@ -471,7 +492,7 @@ func (wc *WebChannel) handleFeishuLink(w http.ResponseWriter, r *http.Request) {
 	if wc.config.FeishuLinkSecret != "" {
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + wc.config.FeishuLinkSecret
-		if auth != expected {
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, authResponse{OK: false, Message: "unauthorized"})
 			return
 		}
@@ -548,10 +569,16 @@ func (wc *WebChannel) handleFeishuLogin(w http.ResponseWriter, r *http.Request) 
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   wc.isSecureCookie(),
 		MaxAge:   int(webSessionMaxAge.Seconds()),
 	})
 
 	writeJSON(w, http.StatusOK, authResponse{OK: true, UserID: id})
+}
+
+// isSecureCookie returns true if the web channel is served over HTTPS.
+func (wc *WebChannel) isSecureCookie() bool {
+	return wc.config.PublicURL != "" && strings.HasPrefix(wc.config.PublicURL, "https://")
 }
 
 // ---------------------------------------------------------------------------

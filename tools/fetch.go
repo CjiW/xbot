@@ -194,7 +194,7 @@ func (t *FetchTool) fetchURL(ctx *ToolContext, targetURL string) (*http.Response
 			}
 			// 重定向时也验证目标不是内网
 			host := req.URL.Hostname()
-			ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+			ips, err := net.DefaultResolver.LookupIPAddr(req.Context(), host)
 			if err != nil {
 				return fmt.Errorf("redirect DNS lookup failed for %s: %w", host, err)
 			}

@@ -91,9 +91,20 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 }
 
 // ensurePanelCursorVisible 确保 panel cursor 行在可见区域内。
-// 直接从 panelSchema 计算 cursor 行号，不依赖 View() 渲染。
+// 编辑/combo 模式下额外滚到底部，确保 inline editor 可见。
 func (m *cliModel) ensurePanelCursorVisible() {
 	if len(m.panelSchema) == 0 || m.panelCursor >= len(m.panelSchema) {
+		return
+	}
+	// 编辑或下拉模式：直接滚到内容底部，因为 overlay 在末尾
+	if m.panelEdit || m.panelCombo {
+		m.panelScrollY = 0 // 先重置
+		raw := m.viewPanel()
+		total := strings.Count(raw, "\n") + 1
+		visible := m.panelVisibleHeight()
+		if total > visible {
+			m.panelScrollY = total - visible
+		}
 		return
 	}
 	// 复刻 viewSettingsPanel 的行号计算逻辑
@@ -116,7 +127,6 @@ func (m *cliModel) ensurePanelCursorVisible() {
 			break
 		}
 	}
-	// cursorLn 现在指向当前 cursor 的行
 	visibleH := m.panelVisibleHeight()
 	totalLines := cursorLn + 5 // +5 保证底部有足够空间
 	if totalLines <= visibleH {

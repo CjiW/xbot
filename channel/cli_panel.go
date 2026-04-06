@@ -496,7 +496,7 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	}()
 
 	// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
-	if handled && m.panelCursorLn > 0 {
+	if handled && m.panelMode == "settings" {
 		m.ensurePanelCursorVisible()
 	}
 
@@ -1055,7 +1055,6 @@ func (m *cliModel) viewSettingsPanel() string {
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
 			prefix = cursorStyle.Render("▸")
-			m.panelCursorLn = ln // 记录 cursor 行号
 		} else {
 			prefix = "  "
 		}

@@ -42,6 +42,19 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
+// endAgentTurn resets all agent-turn tracking state and returns to idle.
+// This is the unified cleanup for both normal completion (handleAgentMessage)
+// and error/cancel paths (cliProgressMsg PhaseDone).
+func (m *cliModel) endAgentTurn() {
+	m.lastCompletedTools = nil
+	m.iterationHistory = nil
+	m.lastSeenIteration = 0
+	m.typingStartTime = time.Time{}
+	m.progress = nil
+	m.typing = false
+	m.updatePlaceholder()
+}
+
 // flushMessageQueue sends the first queued message (if any) when input becomes ready.
 // Returns a tea.Cmd to send the message, or nil if queue is empty.
 func (m *cliModel) flushMessageQueue() tea.Cmd {
@@ -107,22 +120,17 @@ func (m *cliModel) ensurePanelCursorVisible() {
 		}
 		return
 	}
-	// 复刻 viewSettingsPanel 的行号计算逻辑
-	cursorLn := 0
+	// 复刻 viewSettingsPanel 的行号计算逻辑。
+	// header = 2 lines (title + divider), each category = 2 lines (\n + title),
+	// each item = 1 line (label + value rendered inline).
+	cursorLn := 2 // header offset
 	lastCat := ""
 	for i, def := range m.panelSchema {
 		if def.Category != lastCat {
 			lastCat = def.Category
 			cursorLn += 2 // 空行 + 分类标题
 		}
-		if def.Key == "danger_zone" || def.Key == "runner_panel" {
-			cursorLn++ // 单行 entry
-		} else if m.panelValues[def.Key] != "" {
-			cursorLn++ // 标题行
-			cursorLn++ // 值行
-		} else {
-			cursorLn++ // 标题行
-		}
+		cursorLn++ // 所有 item 类型都是单行渲染
 		if i == m.panelCursor {
 			break
 		}
@@ -151,9 +159,9 @@ func (m *cliModel) panelVisibleHeight() int {
 }
 
 // clampPanelScroll 确保 panelScrollY 不超出范围。
-func (m *cliModel) clampPanelScroll() {
-	raw := m.viewPanel()
-	total := strings.Count(raw, "\n") + 1
+// rawContent 是已渲染的 panel 内容，避免重复调用 viewPanel()。
+func (m *cliModel) clampPanelScroll(rawContent string) {
+	total := strings.Count(rawContent, "\n") + 1
 	visible := m.panelVisibleHeight()
 	if total <= visible {
 		m.panelScrollY = 0

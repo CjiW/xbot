@@ -566,14 +566,19 @@ func (m *cliModel) newPanelTextArea(value string, width, height int) textarea.Mo
 // 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
 var themeChangeCh = make(chan struct{}, 1)
 
+// currentThemeName tracks the active theme name for themeChangeCh handler.
+var currentThemeName string
+
 // setTheme 更新 currentTheme 但不发 channel 通知。
 // 供 applyThemeAndRebuild 等需要同步完成所有工作的调用方使用，
 // 避免后续 Update 周期再触发一次冗余的 fullRebuild。
 func setTheme(name string) {
 	if t, ok := themeRegistry[name]; ok {
 		currentTheme = t
+		currentThemeName = name
 	} else {
 		currentTheme = &themeMidnight
+		currentThemeName = "midnight"
 	}
 }
 

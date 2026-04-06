@@ -40,19 +40,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 主题变更通知：重建样式缓存 + glamour 渲染器
 	select {
 	case <-themeChangeCh:
-		if m.width > 4 {
-			m.renderer = newGlamourRenderer(m.width - 4)
-		}
-		// §20 重建样式缓存
-		m.styles = buildStyles(m.width)
-		// 刷新 textarea 样式（初始化时一次性绑定，theme 切换后需重建）
-		applyTAStyles(&m.textarea, &m.styles)
-		// 刷新 ticker 颜色
-		m.ticker.style = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
-		m.renderCacheValid = false
-		for i := range m.messages {
-			m.messages[i].dirty = true
-		}
+		m.applyThemeAndRebuild(currentThemeName)
 		m.updateViewportContent()
 	default:
 	}
@@ -620,15 +608,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
-				m.lastCompletedTools = nil
-				m.iterationHistory = nil
-				m.lastSeenIteration = 0
-				m.typingStartTime = time.Time{}
 				m.todos = nil
 				m.todosDoneCleared = false
-				m.relayoutViewport() // TODO 清除，恢复 viewport 高度
-				m.progress = nil
-				m.typing = false
+				m.endAgentTurn()
+				m.inputReady = true
+				m.relayoutViewport()
 			}
 		}
 		m.updateViewportContent()

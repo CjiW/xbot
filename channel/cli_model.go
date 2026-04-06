@@ -227,7 +227,6 @@ type cliModel struct {
 	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
 	panelMode     string
 	panelCursor   int            // settings panel: selected item index
-	panelCursorLn int            // settings panel: cursor 所在渲染行号（由 viewSettingsPanel 计算）
 	panelEdit     bool           // settings panel: editing current item
 	panelScrollY  int            // panel 滚动偏移（手动管理，不依赖 viewport）
 	panelEditTA   textarea.Model // settings panel: inline editor

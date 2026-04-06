@@ -952,15 +952,8 @@ func (m *cliModel) relayoutViewport() {
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
-	// Panel viewport：与主 viewport 统一逻辑
+	// Panel viewport 高度在 syncPanelViewport 里统一设置
 	if m.panelMode != "" {
-		// Panel 占满除 titleBar(1) + panelFooter(1) + toast(~1) 外的全部高度
-		panelH := m.height - 3
-		if panelH < 5 {
-			panelH = 5
-		}
-		m.panelViewport.SetHeight(panelH)
-		m.panelViewport.SetWidth(m.width)
 		m.syncPanelViewport(true)
 	}
 }

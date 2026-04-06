@@ -97,6 +97,13 @@ func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
 	if m.panelMode == "" {
 		return
 	}
+	// 每次都重算高度，确保和终端尺寸同步
+	panelH := m.height - 3 // titleBar(1) + panelFooter(1) + toast(~1)
+	if panelH < 5 {
+		panelH = 5
+	}
+	m.panelViewport.SetHeight(panelH)
+	m.panelViewport.SetWidth(m.width)
 	raw := m.viewPanel()
 	m.panelViewport.SetContent(raw)
 	if len(firstOpen) > 0 && firstOpen[0] {

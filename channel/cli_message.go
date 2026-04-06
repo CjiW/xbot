@@ -675,12 +675,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// 重置迭代追踪状态
-		m.lastCompletedTools = nil
-		m.iterationHistory = nil
-		m.lastSeenIteration = 0
-		m.typingStartTime = time.Time{}
-		m.typing = false
-		m.updatePlaceholder()
+		m.endAgentTurn()
 		m.inputReady = true
 		// §Q 标记需要刷新消息队列（由 Update 循环检查）
 		if len(m.messageQueue) > 0 {

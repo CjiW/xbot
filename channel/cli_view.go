@@ -156,7 +156,7 @@ func (m *cliModel) View() tea.View {
 		// §12 Panel mode: 手动切片 + PanelBox 包裹（边框永远在屏幕内）
 		panelFooter := m.renderFooter()
 		rawContent := m.viewPanel() // 原始内容，无 PanelBox
-		m.clampPanelScroll()
+		m.clampPanelScroll(rawContent)
 		rawLines := strings.Split(rawContent, "\n")
 		visibleH := m.panelVisibleHeight()
 		// 切片可见行

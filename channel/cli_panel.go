@@ -992,57 +992,6 @@ func (m *cliModel) autoExpandAskTA() {
 	}
 }
 
-// panelMaxHeight 根据 viewport 高度计算 panel 可用最大行数。
-// Panel 模式下 viewport 已缩到最小，panel 获得几乎所有剩余空间。
-// 返回的是 panel 内容区的可用行数（不含 PanelBox 的 border 行）。
-func (m *cliModel) panelMaxHeight() int {
-	// Panel 模式下 viewport 不渲染，可用高度 = 终端高度 - 固定元素
-	// fixedLines: titleBar(1) + panelFooter(1) = 2
-	// overhead: PanelBox border(2) + toast(~1) = 3
-	panelAvailable := m.height - 2 - 3
-	if panelAvailable < 10 {
-		panelAvailable = 10
-	}
-	return panelAvailable
-}
-
-// clampPanelContent 根据 maxHeight 裁剪 panel 内容行。
-// 保留头部和底部提示，中间部分可裁剪并显示 "... N more ..."。
-func clampPanelContent(content string, maxHeight int) string {
-	if maxHeight <= 0 {
-		return content
-	}
-	lines := strings.Split(content, "\n")
-	// 去掉末尾可能的空行
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) <= maxHeight {
-		return strings.Join(lines, "\n")
-	}
-	// 保留前 4 行（标题+表头）和最后 2 行（操作提示）
-	headerLines := 4
-	footerLines := 2
-	if headerLines+footerLines >= maxHeight {
-		// 极端情况：空间不足以同时保留头部和尾部
-		// 至少保留 headerLines 行，剩余空间给尾部
-		if maxHeight <= 1 {
-			// 仅保留第一行（标题）
-			return lines[0]
-		}
-		headerLines = (maxHeight + 1) / 2
-		footerLines = maxHeight - headerLines
-	}
-	kept := headerLines + footerLines
-	omitted := len(lines) - kept
-	result := make([]string, 0, maxHeight+1)
-	result = append(result, lines[:headerLines]...)
-	moreHint := fmt.Sprintf("  ... %d lines omitted — resize terminal for full view ...", omitted)
-	result = append(result, moreHint)
-	result = append(result, lines[len(lines)-footerLines:]...)
-	return strings.Join(result, "\n")
-}
-
 // viewPanel renders the active panel as a string.
 func (m *cliModel) viewPanel() string {
 	var raw string
@@ -1060,9 +1009,7 @@ func (m *cliModel) viewPanel() string {
 	default:
 		return ""
 	}
-	// §8 Panel 小终端适配：根据可用高度裁剪内容
-	maxH := m.panelMaxHeight()
-	return clampPanelContent(raw, maxH)
+	return raw
 }
 
 func (m *cliModel) viewSettingsPanel() string {

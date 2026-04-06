@@ -1,25 +1,139 @@
 # xbot
 
-An extensible AI Agent built with Go, featuring a message bus + plugin architecture. Supports IM channels like Feishu and QQ, with tool calling, pluggable memory, skills, and scheduled tasks.
+An extensible AI Agent built with Go. Features a message bus + plugin architecture with multi-channel support (CLI, Feishu, QQ), tool calling, pluggable memory, skills, and scheduled tasks.
+
+## Quick Start
+
+### Install
+
+```bash
+# Install latest release (Linux/macOS, amd64/arm64)
+curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+
+# Install a specific version
+VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+
+# Custom install path (default: /usr/local/bin)
+INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+```
+
+### Build from Source
+
+```bash
+git clone https://github.com/CjiW/xbot.git
+cd xbot
+make build
+./xbot
+```
+
+### First Run
+
+Launch `xbot-cli` and an interactive setup wizard appears — configure your LLM provider, API key, model, and sandbox mode through a TUI panel. Or edit `~/.xbot/config.json` directly:
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "api_key": "sk-xxx",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o"
+  },
+  "sandbox": {
+    "mode": "none"
+  },
+  "agent": {
+    "memory_provider": "flat"
+  }
+}
+```
+
+Works with any OpenAI-compatible API (DeepSeek, Qwen, Ollama, etc.) — just change `base_url`.
+
+## CLI Channel
+
+The CLI is the primary interface — a rich terminal UI powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea).
+
+> **Platform**: Linux and macOS (amd64 / arm64)
+
+### Usage
+
+```bash
+# Interactive mode — launch the TUI
+xbot-cli
+
+# One-shot mode — pass a prompt directly
+xbot-cli "explain this concept"
+
+# Pipe mode
+echo "what does this do" | xbot-cli
+```
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send message |
+| `Ctrl+Enter` / `Ctrl+J` | Insert newline |
+| `Tab` | Autocomplete (`/` commands, `@` file paths) |
+| `↑` / `↓` | Browse input history / scroll messages |
+| `PgUp` / `PgDn` | Page up / down |
+| `Home` / `End` | Jump to top / bottom |
+| `Esc` | Cancel / clear input |
+| `Ctrl+C` | Interrupt current operation |
+| `Ctrl+K` | Context editing (trim conversation history by turns) |
+| `Ctrl+O` | Toggle tool summary expand/collapse |
+| `Ctrl+E` | Toggle long message folding |
+| `^` | Open background task panel |
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/settings` | Open settings panel |
+| `/setup` | Re-run initial configuration wizard |
+| `/update` | Check and install latest version |
+| `/new` | Start a new session |
+| `/clear` | Clear screen |
+| `/compact` | Manually trigger context compression |
+| `/context` | Show context and token usage |
+| `/model` | Switch model |
+| `/models` | List available models |
+| `/cancel` | Cancel current processing |
+| `/search` | Search message history |
+| `/tasks` | Open background task panel |
+| `/help` | Show help |
+| `/exit` / `/quit` | Exit |
+| `!<command>` | Pass-through (run directly in sandbox, skip LLM) |
+
+### Features
+
+- **Streaming output** — Real-time AI response display
+- **Markdown rendering** — Syntax highlighting, tables, lists
+- **Mermaid diagrams** — Render Mermaid code blocks as ASCII art
+- **Progress tracking** — Tool execution status, SubAgent state, iteration counter
+- **6 color themes** — Midnight, Ocean, Forest, Sunset, Rose, Mono
+- **Background tasks** — Shell commands run in background, `^` to inspect, `/tasks` to manage
+- **Context editing** — `Ctrl+K` to trim history by turns, synced to database
+- **Message search** — `/search` with match highlighting
+- **AskUser** — Agent can prompt the user for input mid-conversation
+- **Built-in skills/agents** — `skill-creator`, `agent-creator` shipped with the binary
+
+See [docs/cli-channel.md](docs/cli-channel.md) for details.
 
 ## Features
 
-- **Multi-channel** — Message bus architecture with Feishu (WebSocket), QQ (WebSocket), NapCat (OneBot 11), and CLI (TUI) support
-- **CLI (TUI)** — Beautiful terminal UI with streaming output, Markdown rendering, 6 color schemes, Mermaid diagrams, and interactive setup wizard
-- **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, subagent, download, context editing
+- **Multi-channel** — Message bus with Feishu (WebSocket), QQ (WebSocket), NapCat (OneBot 11), Web, and CLI (TUI) support
+- **Built-in tools** — Shell, file I/O, Glob/Grep, web search, cron, SubAgent, download, context editing
 - **Feishu integration** — Interactive cards, doc/wiki/bitable access, file upload
-- **Skills system** — OpenClaw-style progressive skill loading with embedded built-in skills (skill-creator, agent-creator)
+- **Skills system** — Progressive skill loading with embedded built-in skills
 - **Pluggable memory** — Dual-mode: Flat (simple, default) or Letta (three-tier MemGPT)
 - **Multi-tenant** — Channel + chatID based isolation
 - **MCP protocol** — Global + user-private config, session-level lazy loading
-- **Workspace isolation** — File ops limited to user workspace, commands run in Linux sandbox
-- **OAuth** — Generic OAuth 2.0 for user-level authorization
-- **SubAgent** — Delegate tasks to sub-agents with predefined roles (explorer, agent-creator, etc.)
-- **Hot-reload prompts** — System prompts as Go templates, embedded defaults with channel-specific overrides
+- **Workspace isolation** — File ops scoped to user workspace, commands run in sandbox
+- **SubAgent** — Delegate tasks to sub-agents with predefined roles
+- **Hot-reload prompts** — System prompts as Go templates with channel-specific overrides
 - **KV-Cache optimized** — Context ordering maximizes LLM cache hits
-- **Encryption** — AES-256-GCM encryption for stored API keys and OAuth tokens
 - **Cron scheduling** — Scheduled tasks via cron expressions and one-shot `at` syntax
-- **Context management** — Auto-compression, topic isolation, configurable token limits, context editing
 
 ## Architecture
 
@@ -40,61 +154,30 @@ An extensible AI Agent built with Go, featuring a message bus + plugin architect
 
 ### Core Components
 
-- **bus/** — Inbound/Outbound message channels
-- **channel/** — IM channels (feishu, qq, napcat, web, cli), dispatcher
-- **agent/** — Agent loop: LLM → tool calls → response
-- **llm/** — LLM clients (OpenAI-compatible, Anthropic)
-- **tools/** — Tool registry and implementations
-- **memory/** — Memory providers (flat/letta)
-- **config/** — Configuration loading from environment variables / `.env`
-- **cron/** — Scheduled task scheduler
-- **crypto/** — AES-256-GCM encryption for API keys and OAuth tokens
-- **logger/** — Structured logging with file rotation
-- **oauth/** — OAuth 2.0 framework
-- **pprof/** — Optional pprof debug endpoint
-- **session/** — Multi-tenant session management
-- **storage/** — SQLite persistence (sessions, memory, tenants)
-- **version/** — Build version info
-- **cmd/** — Subcommands (xbot-cli, sandbox runner)
-- **prompt/** — Embedded default system prompt template
-- **internal/** — Internal packages (runner protocol)
-- **web/** — Web frontend (Vue 3 + TypeScript)
-- **docs/** — Design documents and architecture notes
-- **scripts/** — Development helper scripts (install, deploy)
-
-## Quick Start
-
-```bash
-# Clone and setup
-git clone https://github.com/CjiW/xbot.git
-cd xbot
-cp .env.example .env
-
-# Build and run
-make build
-./xbot
-
-# Or development mode
-make dev
-```
-
-### Makefile Commands
-
-```bash
-make dev      # Run in development mode
-make build    # Build binary
-make run      # Build and run
-make test     # Run tests with race detection
-make fmt      # Format code
-make lint     # Run golangci-lint
-make ci       # lint → build → test
-make clean    # Remove binary and coverage output
-make clean-memory # Clear .xbot data
-```
+| Directory | Description |
+|-----------|-------------|
+| `bus/` | Inbound/Outbound message channels |
+| `channel/` | IM channels (feishu, qq, napcat, web, cli), dispatcher |
+| `agent/` | Agent loop: LLM → tool calls → response |
+| `llm/` | LLM clients (OpenAI-compatible, Anthropic) |
+| `tools/` | Tool registry and implementations |
+| `memory/` | Memory providers (flat/letta) |
+| `config/` | Configuration from env vars / `.env` |
+| `cron/` | Scheduled task scheduler |
+| `crypto/` | AES-256-GCM encryption for API keys |
+| `logger/` | Structured logging with file rotation |
+| `oauth/` | OAuth 2.0 framework |
+| `session/` | Multi-tenant session management |
+| `storage/` | SQLite persistence (sessions, memory, tenants) |
+| `web/` | Web frontend (React 19 + Vite + TailwindCSS 4 + Tiptap) |
+| `agents/` | Embedded agent role definitions |
+| `cmd/` | Subcommands (xbot-cli, sandbox runner) |
+| `prompt/` | Embedded default system prompt template |
+| `internal/` | Internal packages (runner protocol) |
 
 ## Configuration
 
-All config via environment variables or `.env`:
+All config via environment variables or `.env` file. See `.env.example` for a full template.
 
 ### LLM
 
@@ -113,16 +196,12 @@ All config via environment variables or `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `AGENT_MAX_ITERATIONS` | Max tool-call iterations | `100` |
+| `AGENT_MAX_ITERATIONS` | Max tool-call iterations | `2000` |
 | `AGENT_MAX_CONCURRENCY` | Max concurrent LLM calls | `3` |
-| `AGENT_MEMORY_WINDOW` | Memory consolidation trigger | `50` |
-| `AGENT_MAX_CONTEXT_TOKENS` | Max context tokens | `100000` |
+| `AGENT_MAX_CONTEXT_TOKENS` | Max context tokens | `200000` |
 | `AGENT_ENABLE_AUTO_COMPRESS` | Enable auto context compression | `true` |
 | `AGENT_COMPRESSION_THRESHOLD` | Token ratio to trigger compression | `0.7` |
 | `AGENT_CONTEXT_MODE` | Context management mode | — |
-| `AGENT_ENABLE_TOPIC_ISOLATION` | Enable topic partition isolation (experimental) | `false` |
-| `AGENT_TOPIC_MIN_SEGMENT_SIZE` | Min topic segment size | `3` |
-| `AGENT_TOPIC_SIMILARITY_THRESHOLD` | Topic similarity threshold | `0.3` |
 | `AGENT_PURGE_OLD_MESSAGES` | Purge old messages after compression | `false` |
 | `MAX_SUBAGENT_DEPTH` | SubAgent max nesting depth | `6` |
 
@@ -162,7 +241,7 @@ All config via environment variables or `.env`:
 | `WEB_STATIC_DIR` | Frontend static files directory | — |
 | `WEB_UPLOAD_DIR` | File upload directory | — |
 | `WEB_PERSONA_ISOLATION` | Enable persona isolation per web user | `false` |
-| `WEB_INVITE_ONLY` | Enable invite-only mode (admin creates users) | `false` |
+| `WEB_INVITE_ONLY` | Enable invite-only mode | `false` |
 
 ### Infrastructure
 
@@ -172,14 +251,11 @@ All config via environment variables or `.env`:
 | `PROMPT_FILE` | Custom prompt template | `prompt.md` |
 | `SINGLE_USER` | Single-user mode | `false` |
 | `SANDBOX_MODE` | Sandbox mode (`docker`/`remote`/`none`) | `docker` |
-| `SANDBOX_REMOTE_MODE` | Enable remote sandbox alongside docker (`remote`) | — |
 | `SANDBOX_DOCKER_IMAGE` | Docker sandbox image | `ubuntu:22.04` |
 | `SANDBOX_IDLE_TIMEOUT_MINUTES` | Sandbox idle timeout (0 to disable) | `30` |
-| `HOST_WORK_DIR` | DinD host work dir override (auto-detected) | — |
 | `SANDBOX_WS_PORT` | Remote sandbox WebSocket port | `8080` |
 | `SANDBOX_AUTH_TOKEN` | Sandbox runner auth token | — |
-| `SANDBOX_PUBLIC_URL` | Public URL for runner connections (e.g., `ws://example.com:8080`) | — |
-| `SANDBOX_REMOTE_MODE` | Enable remote sandbox alongside docker | — |
+| `SANDBOX_PUBLIC_URL` | Public URL for runner connections | — |
 | `OAUTH_ENABLE` | Enable OAuth | `false` |
 | `OAUTH_HOST` | OAuth server bind address | `127.0.0.1` |
 | `OAUTH_PORT` | OAuth server port | `8081` |
@@ -189,26 +265,17 @@ All config via environment variables or `.env`:
 | `MCP_INACTIVITY_TIMEOUT` | MCP idle timeout | `30m` |
 | `MCP_CLEANUP_INTERVAL` | MCP cleanup scan interval | `5m` |
 | `SESSION_CACHE_TIMEOUT` | Session cache timeout | `24h` |
-| `STARTUP_NOTIFY_CHANNEL` | Auto-notify channel on startup | — |
-| `STARTUP_NOTIFY_CHAT_ID` | Auto-notify chat ID on startup | — |
-| `ADMIN_CHAT_ID` | Admin chat ID for sensitive ops | — |
-| `PPROF_ENABLE` | Enable pprof debug endpoint | `false` |
-| `PPROF_HOST` | pprof bind host | `localhost` |
-| `PPROF_PORT` | pprof port | `6060` |
 | `LOG_LEVEL` | Log level | `info` |
 | `LOG_FORMAT` | Log format | `json` |
 | `SERVER_HOST` | HTTP server bind address | `0.0.0.0` |
 | `SERVER_PORT` | HTTP server port | `8080` |
-| `SERVER_READ_TIMEOUT` | HTTP read timeout (seconds) | `30` |
-| `SERVER_WRITE_TIMEOUT` | HTTP write timeout (seconds) | `120` |
+| `PPROF_ENABLE` | Enable pprof debug endpoint | `false` |
 
 ## Memory System
 
-Set via `MEMORY_PROVIDER`:
-
 ### Flat (default)
 
-Simple dual-layer: long-term memory blob + event history (Grep-searchable)
+Simple dual-layer: long-term memory blob + event history (grep-searchable). No external services required.
 
 ### Letta (three-tier MemGPT)
 
@@ -220,11 +287,7 @@ Simple dual-layer: long-term memory blob + event history (Grep-searchable)
 
 6 Letta tools: `core_memory_append`, `core_memory_replace`, `rethink`, `archival_memory_insert`, `archival_memory_search`, `recall_memory_search`
 
-Auto-consolidation triggers at `AGENT_MEMORY_WINDOW` (default 50 messages).
-
 ## Skills
-
-Skills use OpenClaw-style progressive loading:
 
 ```
 .xbot/skills/
@@ -234,8 +297,6 @@ Skills use OpenClaw-style progressive loading:
     ├── references/      # Optional
     └── assets/          # Optional
 ```
-
-Users can also install/publish shared skills via `/publish`, `/browse`, `/install`, `/uninstall`, and `/my` commands.
 
 ## MCP Support
 
@@ -256,48 +317,17 @@ Create `.xbot/mcp.json`:
 
 ### Session MCP
 
-Use `ManageTools` tool at runtime. Supports lazy loading, inactivity timeout, and stdio/HTTP transport.
+Use the `ManageTools` tool at runtime. Supports lazy loading, inactivity timeout, and stdio/HTTP transport.
 
 ## SubAgent
 
-Delegate tasks to sub-agents:
+Delegate tasks to sub-agents with predefined roles:
 
 ```
 SubAgent(task="...", role="code-reviewer")
 ```
 
-Roles are resolved in priority order: user-private → global → embedded defaults.
-
-Embedded agents include `explorer` (code exploration and logic analysis). Users can add custom roles in `.xbot/agents/`.
-
-## Commands
-
-Server-mode slash commands:
-
-| Command | Description |
-|---------|-------------|
-| `/new` | Archive memory and reset session |
-| `/version` | Show version |
-| `/help` | Show help |
-| `/prompt <query>` | Preview full prompt (dry run without calling LLM) |
-| `/set-llm` | Set custom LLM API (per-user) |
-| `/unset-llm` | Clear custom LLM configuration |
-| `/llm` | Show current LLM configuration |
-| `/models` | List available models from current API |
-| `/set-model <model>` | Set the model to use |
-| `/compress` | Manually trigger context compression |
-| `/context info` | Show token usage statistics |
-| `/context mode` | View/switch compression mode |
-| `/cancel` | Cancel the current processing request |
-| `!<command>` | Quick execute command (skip LLM, run directly in sandbox) |
-| `/publish` | Publish a skill to the shared marketplace |
-| `/unpublish` | Remove a published skill |
-| `/browse` | Browse available shared skills |
-| `/install` | Install a shared skill |
-| `/uninstall` | Uninstall a skill |
-| `/my` | List your installed/published skills |
-| `/settings` | User settings |
-| `/menu` | Show interactive menu |
+Roles are resolved in priority order: user-private → global → embedded defaults. Users can add custom roles in `.xbot/agents/`.
 
 ## Deployment
 
@@ -319,112 +349,21 @@ docker run -d --name xbot --restart unless-stopped \
   xbot:latest
 ```
 
-Note: Requires Docker installed on host for sandbox execution.
+> Note: Requires Docker installed on host for sandbox execution.
+
+### Makefile
+
+```bash
+make dev       # Run in development mode
+make build     # Build binary
+make run       # Build and run
+make test      # Run tests with race detection
+make fmt       # Format code
+make lint      # Run golangci-lint
+make ci        # lint → build → test
+make clean     # Remove binary and coverage output
+```
 
 ## License
 
 MIT
-
-## CLI Channel
-
-xbot 提供终端交互界面 (TUI)，适合本地开发调试。
-
-> **平台支持**：仅支持 Linux 和 macOS（amd64 / arm64）
-
-### 一键安装
-
-```bash
-# 安装最新版
-curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-
-# 安装指定版本
-VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-
-# 自定义安装路径（默认 /usr/local/bin）
-INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
-```
-
-### 从源码编译
-
-```bash
-go build -o xbot-cli ./cmd/xbot-cli
-
-# 首次运行会自动打开 TUI 配置引导面板
-./xbot-cli
-
-# 非交互模式（直接传入提示词）
-./xbot-cli "hello"
-
-# 管道模式
-echo "explain this" | ./xbot-cli
-```
-
-### 快捷键
-
-| 快捷键 | 功能 |
-|--------|------|
-| `Enter` | 发送消息 |
-| `Ctrl+Enter` / `Ctrl+J` | 换行 |
-| `Tab` | 命令补全（`/` 开头时） |
-| `↑` `↓` | 滚动消息 |
-| `PgUp` `PgDn` | 翻页 |
-| `Esc` | 退出 |
-
-### 功能特性
-
-- **流式输出** — 实时显示 AI 回复
-- **Markdown 渲染** — 代码高亮、表格、列表
-- **Mermaid 图表** — 自动渲染 Mermaid 代码块为 ASCII 图
-- **进度显示** — 工具执行状态、子 Agent 状态、迭代追踪
-- **美观界面** — 消息气泡、时间戳、状态栏
-- **6 种配色方案** — Midnight、Ocean、Forest、Sunset、Rose、Mono
-- **首次引导** — TUI 交互式配置面板（provider、API key、模型、沙箱等）
-- **AskUser** — agent 可主动向用户提问，CLI 打开交互面板等待回复
-- **Settings** — `/settings` 可视化查看和修改运行时配置，`/setup` 重新引导
-- **内置 Skills/Agents** — skill-creator、agent-creator 等随二进制分发
-- **Flat Memory** — 默认记忆模式，无需 ollama/embedding 服务
-- **Tab 补全** — `/` 开头自动显示命令候选，`!` 高亮提示
-
-### CLI 命令
-
-| 命令 | 说明 |
-|------|------|
-| `/settings` | 打开设置面板 |
-| `/setup` | 重新运行初始配置引导 |
-| `/update` | 检查并安装最新版本 |
-| `/new` | 开始新会话 |
-| `/clear` | 清屏 |
-| `/compact` | 手动触发上下文压缩 |
-| `/context` | 查看上下文信息 |
-| `/model` | 切换模型 |
-| `/models` | 列出可用模型 |
-| `/cancel` | 取消当前处理 |
-| `/help` | 显示帮助 |
-| `/exit` / `/quit` | 退出 |
-| `!<command>` | 透传命令（跳过 LLM，直接执行） |
-
-### 配置
-
-首次运行 `xbot-cli` 会自动打开 TUI 配置面板。也可以手动编辑 `~/.xbot/config.json`：
-
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "api_key": "sk-xxx",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o"
-  },
-  "tavily_api_key": "tvly-xxx",
-  "sandbox": {
-    "mode": "none"
-  },
-  "agent": {
-    "memory_provider": "flat"
-  }
-}
-```
-
-支持 OpenAI 兼容 API（DeepSeek、通义千问等），只需修改 `base_url`。
-
-详细文档参见 [docs/cli-channel.md](docs/cli-channel.md)。

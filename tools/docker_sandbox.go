@@ -882,7 +882,10 @@ func NewSandbox(sandboxCfg config.SandboxConfig, workDir string, tokenStore *Run
 		}
 		return rs
 	default:
-		return NewDockerSandbox(sandboxCfg, workDir)
+		// No explicit mode configured — default to none (direct execution).
+		// Docker requires explicit opt-in; creating DockerSandbox here would
+		// fail on systems without Docker installed (e.g. macOS without Docker Desktop).
+		return &NoneSandbox{}
 	}
 }
 

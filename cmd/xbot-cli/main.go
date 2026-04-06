@@ -244,11 +244,16 @@ func main() {
 		IsFirstRun: firstRun,
 		GetCurrentValues: func() map[string]string {
 			return map[string]string{
-				"llm_provider":       app.cfg.LLM.Provider,
-				"llm_api_key":        app.cfg.LLM.APIKey,
-				"llm_model":          app.cfg.LLM.Model,
-				"llm_base_url":       app.cfg.LLM.BaseURL,
-				"sandbox_mode":       app.cfg.Sandbox.Mode,
+				"llm_provider": app.cfg.LLM.Provider,
+				"llm_api_key":  app.cfg.LLM.APIKey,
+				"llm_model":    app.cfg.LLM.Model,
+				"llm_base_url": app.cfg.LLM.BaseURL,
+				"sandbox_mode": func() string {
+					if app.cfg.Sandbox.Mode != "" {
+						return app.cfg.Sandbox.Mode
+					}
+					return "none"
+				}(),
 				"memory_provider":    app.cfg.Agent.MemoryProvider,
 				"tavily_api_key":     app.cfg.TavilyAPIKey,
 				"context_mode":       app.cfg.Agent.ContextMode,
@@ -316,6 +321,12 @@ func main() {
 			// Apply Sandbox settings
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
 				app.cfg.Sandbox.Mode = v
+				// Reinitialize sandbox so the new mode takes effect immediately
+				tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
+				// Sync the new sandbox into the agent loop
+				if app.agentLoop != nil {
+					app.agentLoop.SetSandbox(tools.GetSandbox(), v)
+				}
 			}
 			// Apply Agent settings
 			if v, ok := values["memory_provider"]; ok && v != "" {

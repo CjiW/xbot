@@ -809,6 +809,16 @@ func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerConfig.MaxContextTokens = n
 }
 
+// SetSandbox replaces the sandbox instance and mode at runtime (e.g. when user
+// switches from docker to none in the settings panel).
+func (a *Agent) SetSandbox(sb tools.Sandbox, mode string) {
+	a.sandbox = sb
+	a.sandboxMode = mode
+	if a.offloadStore != nil {
+		a.offloadStore.SetSandbox(sb)
+	}
+}
+
 // GetUserLLMConfig returns the user's LLM config summary (no API key), or nil if none.
 func (a *Agent) GetUserLLMConfig(senderID string) (provider, baseURL, model string, ok bool) {
 	cfg, err := a.llmConfigSvc.GetConfig(senderID)

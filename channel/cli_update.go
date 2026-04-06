@@ -952,6 +952,17 @@ func (m *cliModel) relayoutViewport() {
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
+	// Panel viewport：与主 viewport 统一逻辑
+	if m.panelMode != "" {
+		// Panel 占满除 titleBar(1) + panelFooter(1) + toast(~1) 外的全部高度
+		panelH := m.height - 3
+		if panelH < 5 {
+			panelH = 5
+		}
+		m.panelViewport.SetHeight(panelH)
+		m.panelViewport.SetWidth(m.width)
+		m.syncPanelViewport(true)
+	}
 }
 
 // handleResize 处理窗口大小变化
@@ -964,6 +975,7 @@ func (m *cliModel) handleResize(width, height int) {
 
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
+	m.panelViewport.SetWidth(width)
 
 	// InputBox lipgloss style: Width(width-4) includes border(2) + padding(2).
 	// Content area = width-4-2-2 = width-8. Textarea must match this.

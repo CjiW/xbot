@@ -153,14 +153,13 @@ func (m *cliModel) View() tea.View {
 			input,
 		)
 	} else if m.panelMode != "" {
-		// §12 Panel mode: render panel overlay instead of normal input
-		// Panel gets all available space — no viewport, no input area
-		panel := m.viewPanel()
+		// §12 Panel mode: render panel via panelViewport (unified scrolling logic)
+		m.syncPanelViewport()
 		panelFooter := m.renderFooter()
 		content = fmt.Sprintf(
 			"%s\n%s%s%s",
 			titleBar,
-			panel,
+			m.panelViewport.View(),
 			panelFooter,
 			toastStr,
 		)

@@ -90,6 +90,20 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 	}
 }
 
+// syncPanelViewport 将当前 panel 内容写入 panelViewport，统一滚动逻辑。
+// 每次 panel 内容变化（打开、cursor 移动、编辑等）后调用。
+// firstOpen=true 时滚动到顶部（panel 刚打开）。
+func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
+	if m.panelMode == "" {
+		return
+	}
+	raw := m.viewPanel()
+	m.panelViewport.SetContent(raw)
+	if len(firstOpen) > 0 && firstOpen[0] {
+		m.panelViewport.GotoTop()
+	}
+}
+
 // applyLanguageChange applies a language/locale change and invalidates cache.
 // Uses setLocale() instead of SetLocale() to avoid sending on localeChangeCh,
 // which would cause a redundant fullRebuild in the next Update cycle.

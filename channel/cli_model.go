@@ -135,8 +135,9 @@ type cliToastClearMsg struct{}
 // cliModel Bubble Tea 状态模型
 type cliModel struct {
 	// --- Core UI ---
-	viewport viewport.Model // 消息显示区
-	textarea textarea.Model // 用户输入区
+	viewport      viewport.Model // 消息显示区
+	panelViewport viewport.Model // Panel 内容区（与主 viewport 统一滚动逻辑）
+	textarea      textarea.Model // 用户输入区
 
 	// §22 输入历史
 	inputHistory    []string    // 已发送输入历史（新 → 旧），仅会话内
@@ -353,6 +354,9 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
+	// Panel viewport — 与主 viewport 统一滚动逻辑
+	panelVP := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
+
 	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
 	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
 	vp.KeyMap.Up.SetKeys("up")
@@ -369,6 +373,7 @@ func newCLIModel() *cliModel {
 
 	return &cliModel{
 		viewport:        vp,
+		panelViewport:   panelVP,
 		textarea:        ta,
 		ticker:          tk,
 		placeholderText: GetLocale(currentLocaleLang).IdlePlaceholders[0],

@@ -169,6 +169,7 @@ func (m *cliModel) closePanel() {
 	m.panelRunnerWorkspace = textinput.Model{}
 	m.panelRunnerEditField = 0
 	// 恢复 viewport 到正常模式高度
+	m.panelViewport.SetContent("")
 	m.relayoutViewport()
 }
 
@@ -477,19 +478,36 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return false, m, nil
 	}
 
-	switch m.panelMode {
-	case "settings":
-		return m.updateSettingsPanel(msg)
-	case "askuser":
-		return m.updateAskUserPanel(msg)
-	case "bgtasks":
-		return m.updateBgTasksPanel(msg)
-	case "danger":
-		return m.updateDangerPanel(msg)
-	case "runner":
-		return m.updateRunnerPanel(msg)
+	// 对没有内部 up/down 导航的 panel，路由到 panelViewport 滚动
+	if m.panelMode == "bgtasks" {
+		switch msg.Code {
+		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+			_, cmd := m.panelViewport.Update(msg)
+			return true, m, cmd
+		}
 	}
-	return false, m, nil
+
+	handled, newModel, cmd := func() (bool, tea.Model, tea.Cmd) {
+		switch m.panelMode {
+		case "settings":
+			return m.updateSettingsPanel(msg)
+		case "askuser":
+			return m.updateAskUserPanel(msg)
+		case "bgtasks":
+			return m.updateBgTasksPanel(msg)
+		case "danger":
+			return m.updateDangerPanel(msg)
+		case "runner":
+			return m.updateRunnerPanel(msg)
+		}
+		return false, m, nil
+	}()
+
+	// Panel 内容变化后同步到 viewport
+	if handled {
+		m.syncPanelViewport()
+	}
+	return handled, newModel, cmd
 }
 
 // updateDangerPanel handles key events in the danger zone panel.

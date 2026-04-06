@@ -42,6 +42,33 @@ func (m *cliModel) startAgentTurn() {
 	m.resetProgressState()
 }
 
+// flushMessageQueue sends the first queued message (if any) when input becomes ready.
+// Returns a tea.Cmd to send the message, or nil if queue is empty.
+func (m *cliModel) flushMessageQueue() tea.Cmd {
+	if len(m.messageQueue) == 0 {
+		return nil
+	}
+	msg := m.messageQueue[0]
+	m.messageQueue = m.messageQueue[1:]
+	m.queueEditing = false
+	m.queueEditBuf = ""
+	// Put message into textarea and trigger send
+	m.textarea.SetValue(msg)
+	return m.sendMessageFromQueue()
+}
+
+// sendMessageFromQueue sends the current textarea content as a queued message.
+func (m *cliModel) sendMessageFromQueue() tea.Cmd {
+	content := strings.TrimSpace(m.textarea.Value())
+	if content == "" {
+		return nil
+	}
+	m.textarea.Reset()
+	m.autoExpandInput()
+	m.sendToAgent(content)
+	return nil
+}
+
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,
 // rebuilds styles cache, glamour renderer, and marks all messages dirty.
 // Uses setTheme() instead of ApplyTheme() to avoid sending on themeChangeCh,
@@ -60,6 +87,83 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 	m.renderCacheValid = false
 	for i := range m.messages {
 		m.messages[i].dirty = true
+	}
+}
+
+// ensurePanelCursorVisible 确保 panel cursor 行在可见区域内。
+// 编辑/combo 模式下额外滚到底部，确保 inline editor 可见。
+func (m *cliModel) ensurePanelCursorVisible() {
+	if len(m.panelSchema) == 0 || m.panelCursor >= len(m.panelSchema) {
+		return
+	}
+	// 编辑或下拉模式：直接滚到内容底部，因为 overlay 在末尾
+	if m.panelEdit || m.panelCombo {
+		m.panelScrollY = 0 // 先重置
+		raw := m.viewPanel()
+		total := strings.Count(raw, "\n") + 1
+		visible := m.panelVisibleHeight()
+		if total > visible {
+			m.panelScrollY = total - visible
+		}
+		return
+	}
+	// 复刻 viewSettingsPanel 的行号计算逻辑
+	cursorLn := 0
+	lastCat := ""
+	for i, def := range m.panelSchema {
+		if def.Category != lastCat {
+			lastCat = def.Category
+			cursorLn += 2 // 空行 + 分类标题
+		}
+		if def.Key == "danger_zone" || def.Key == "runner_panel" {
+			cursorLn++ // 单行 entry
+		} else if m.panelValues[def.Key] != "" {
+			cursorLn++ // 标题行
+			cursorLn++ // 值行
+		} else {
+			cursorLn++ // 标题行
+		}
+		if i == m.panelCursor {
+			break
+		}
+	}
+	visibleH := m.panelVisibleHeight()
+	totalLines := cursorLn + 5 // +5 保证底部有足够空间
+	if totalLines <= visibleH {
+		m.panelScrollY = 0
+		return
+	}
+	if cursorLn >= m.panelScrollY+visibleH {
+		m.panelScrollY = cursorLn - visibleH + 1
+	}
+	if cursorLn < m.panelScrollY {
+		m.panelScrollY = cursorLn
+	}
+}
+
+// panelVisibleHeight 返回 panel 可见区域高度。
+func (m *cliModel) panelVisibleHeight() int {
+	h := m.height - 5 // titleBar(1) + footer(1) + toast(1) + PanelBox borders(2)
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// clampPanelScroll 确保 panelScrollY 不超出范围。
+func (m *cliModel) clampPanelScroll() {
+	raw := m.viewPanel()
+	total := strings.Count(raw, "\n") + 1
+	visible := m.panelVisibleHeight()
+	if total <= visible {
+		m.panelScrollY = 0
+		return
+	}
+	if m.panelScrollY < 0 {
+		m.panelScrollY = 0
+	}
+	if m.panelScrollY > total-visible {
+		m.panelScrollY = total - visible
 	}
 }
 

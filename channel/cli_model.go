@@ -169,6 +169,12 @@ type cliModel struct {
 	shouldQuit      bool                      // Smart quit: quit after current operation completes
 	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 
+	// --- Message queue (typing 期间排队的消息) ---
+	messageQueue   []string // 排队等待发送的消息
+	queueEditing   bool     // true = 正在编辑/查看最后一条排队消息
+	queueEditBuf   string   // 编辑中的排队消息内容
+	needFlushQueue bool     // true = handleAgentMessage 后需要刷新队列
+
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
@@ -221,7 +227,9 @@ type cliModel struct {
 	// panelMode: ""=normal, "settings"=settings panel, "askuser"=ask user panel
 	panelMode     string
 	panelCursor   int            // settings panel: selected item index
+	panelCursorLn int            // settings panel: cursor 所在渲染行号（由 viewSettingsPanel 计算）
 	panelEdit     bool           // settings panel: editing current item
+	panelScrollY  int            // panel 滚动偏移（手动管理，不依赖 viewport）
 	panelEditTA   textarea.Model // settings panel: inline editor
 	panelCombo    bool           // settings panel: combo dropdown open
 	panelComboIdx int            // settings panel: combo selected option index
@@ -500,14 +508,13 @@ func (m *cliModel) splashTick(frame int) tea.Cmd {
 
 // suLoadHistoryCmd 异步加载 /su 目标用户的历史消息
 func (m *cliModel) suLoadHistoryCmd() tea.Cmd {
-	channelName := m.channelName
 	chatID := m.chatID
 	loader := m.channel.config.DynamicHistoryLoader
 	if loader == nil {
 		return func() tea.Msg { return suHistoryLoadMsg{err: fmt.Errorf("no dynamic history loader")} }
 	}
 	return func() tea.Msg {
-		history, err := loader(channelName, chatID)
+		history, err := loader("", chatID)
 		return suHistoryLoadMsg{history: history, err: err}
 	}
 }

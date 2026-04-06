@@ -224,9 +224,9 @@ func main() {
 	}
 
 	if newSession {
-		fmt.Println("模式: 新会话 (--new)")
+		fmt.Println("Mode: new session (--new)")
 	} else {
-		fmt.Println("模式: 恢复上次会话 (使用 --new 开始新会话)")
+		fmt.Println("Mode: resuming last session (use --new for new session)")
 	}
 	fmt.Println("Starting...")
 
@@ -439,10 +439,10 @@ func main() {
 		}
 	}
 
-	// /su 动态历史加载器：根据目标 channel/chatID 查找 tenant 并加载历史
+	// /su 动态历史加载器：从 web tenant 加载目标用户历史
 	if tenantSvc != nil && cliSessionSvc != nil {
-		cliCfg.DynamicHistoryLoader = func(channelName, chatID string) ([]channel.HistoryMessage, error) {
-			tid, err := tenantSvc.GetOrCreateTenantID(channelName, chatID)
+		cliCfg.DynamicHistoryLoader = func(_, chatID string) ([]channel.HistoryMessage, error) {
+			tid, err := tenantSvc.GetOrCreateTenantID("web", chatID)
 			if err != nil {
 				return nil, fmt.Errorf("get tenant: %w", err)
 			}
@@ -456,16 +456,6 @@ func main() {
 
 	cliCh := channel.NewCLIChannel(cliCfg, app.msgBus)
 	disp.Register(cliCh)
-
-	// /su: when TUI switches to web user identity, register CLI as "web" channel
-	// so dispatcher SendDirect and outbound loop can find it.
-	cliCh.OnSuChange = func(targetChannel string, enable bool) {
-		if enable {
-			disp.RegisterAs(targetChannel, cliCh)
-		} else {
-			disp.Unregister(targetChannel)
-		}
-	}
 
 	// Inject SettingsService for interactive /settings panel
 	if app.agentLoop != nil {

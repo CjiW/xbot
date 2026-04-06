@@ -634,7 +634,7 @@ func TestCLIModelUpdateCtrlCWhileTyping(t *testing.T) {
 	// Should add cancel system message
 	hasCancel := false
 	for _, msg := range model.messages {
-		if msg.role == "system" && strings.Contains(msg.content, "取消") {
+		if msg.role == "system" && (strings.Contains(msg.content, "取消") || strings.Contains(msg.content, "Cancel")) {
 			hasCancel = true
 		}
 	}

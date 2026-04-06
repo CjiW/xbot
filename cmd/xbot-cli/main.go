@@ -224,9 +224,9 @@ func main() {
 	}
 
 	if newSession {
-		fmt.Println("模式: 新会话 (--new)")
+		fmt.Println("Mode: new session (--new)")
 	} else {
-		fmt.Println("模式: 恢复上次会话 (使用 --new 开始新会话)")
+		fmt.Println("Mode: resuming last session (use --new for new session)")
 	}
 	fmt.Println("Starting...")
 

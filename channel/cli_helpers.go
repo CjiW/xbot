@@ -104,6 +104,26 @@ func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
 	}
 }
 
+// ensurePanelCursorVisible 确保 panel cursor 行在 viewport 可见区域内。
+// cursor 超出底部时向下滚动，超出顶部时向上滚动。
+func (m *cliModel) ensurePanelCursorVisible() {
+	totalLines := m.panelViewport.TotalLineCount()
+	viewH := m.panelViewport.Height()
+	if viewH <= 0 || totalLines <= viewH {
+		return // 内容全可见，无需滚动
+	}
+	yoff := m.panelViewport.YOffset()
+	cursorLn := m.panelCursorLn
+	// 可见范围：[yoff, yoff+viewH-1]
+	if cursorLn < yoff {
+		// cursor 在可视区域上方
+		m.panelViewport.SetYOffset(cursorLn)
+	} else if cursorLn >= yoff+viewH {
+		// cursor 在可视区域下方
+		m.panelViewport.SetYOffset(cursorLn - viewH + 1)
+	}
+}
+
 // applyLanguageChange applies a language/locale change and invalidates cache.
 // Uses setLocale() instead of SetLocale() to avoid sending on localeChangeCh,
 // which would cause a redundant fullRebuild in the next Update cycle.

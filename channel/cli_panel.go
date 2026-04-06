@@ -478,15 +478,6 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return false, m, nil
 	}
 
-	// 对没有内部 up/down 导航的 panel，路由到 panelViewport 滚动
-	if m.panelMode == "bgtasks" {
-		switch msg.Code {
-		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
-			_, cmd := m.panelViewport.Update(msg)
-			return true, m, cmd
-		}
-	}
-
 	handled, newModel, cmd := func() (bool, tea.Model, tea.Cmd) {
 		switch m.panelMode {
 		case "settings":
@@ -506,6 +497,10 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// Panel 内容变化后同步到 viewport
 	if handled {
 		m.syncPanelViewport()
+		// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
+		if m.panelCursorLn > 0 {
+			m.ensurePanelCursorVisible()
+		}
 	}
 	return handled, newModel, cmd
 }
@@ -1047,18 +1042,21 @@ func (m *cliModel) viewSettingsPanel() string {
 
 	// Group by category
 	lastCat := ""
+	ln := 0 // 当前渲染行号
 	for i, def := range m.panelSchema {
 		if def.Category != lastCat {
 			lastCat = def.Category
 			sb.WriteString("\n")
 			sb.WriteString(s.SettingsCat.Render("▸ " + lastCat))
 			sb.WriteString("\n")
+			ln += 2
 		}
 
 		cur := m.panelValues[def.Key]
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
 			prefix = cursorStyle.Render("▸")
+			m.panelCursorLn = ln // 记录 cursor 行号
 		} else {
 			prefix = "  "
 		}
@@ -1080,6 +1078,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			ln++
 			continue
 		}
 
@@ -1091,6 +1090,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			ln++
 			continue
 		}
 

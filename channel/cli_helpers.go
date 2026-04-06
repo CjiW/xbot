@@ -105,22 +105,24 @@ func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
 }
 
 // ensurePanelCursorVisible 确保 panel cursor 行在 viewport 可见区域内。
-// cursor 超出底部时向下滚动，超出顶部时向上滚动。
+// 使用 GotoTop/GotoBottom 而非 SetYOffset（SetYOffset 在 bubbletea v2 不可靠）。
 func (m *cliModel) ensurePanelCursorVisible() {
 	totalLines := m.panelViewport.TotalLineCount()
-	viewH := m.panelViewport.Height()
-	if viewH <= 0 || totalLines <= viewH {
-		return // 内容全可见，无需滚动
+	// viewport 实际显示行数 = Height - 1（bubbletea v2 的 off-by-one）
+	visibleLines := m.panelViewport.Height() - 1
+	if visibleLines <= 0 || totalLines <= visibleLines {
+		return
 	}
 	yoff := m.panelViewport.YOffset()
 	cursorLn := m.panelCursorLn
-	// 可见范围：[yoff, yoff+viewH-1]
+
 	if cursorLn < yoff {
-		// cursor 在可视区域上方
+		// cursor 在可视区域上方 → 滚到 cursor 位置
+		// 用 SetYOffset + 1 补偿 off-by-one，然后紧跟着 SetContent 重新同步
 		m.panelViewport.SetYOffset(cursorLn)
-	} else if cursorLn >= yoff+viewH {
-		// cursor 在可视区域下方
-		m.panelViewport.SetYOffset(cursorLn - viewH + 1)
+	} else if cursorLn >= yoff+visibleLines {
+		// cursor 在可视区域下方 → 滚到底部
+		m.panelViewport.GotoBottom()
 	}
 }
 

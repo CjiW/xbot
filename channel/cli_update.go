@@ -942,8 +942,9 @@ func (m *cliModel) layoutViewportHeight() int {
 
 // layoutPanelHeight 计算 panel viewport 的高度（与 layoutViewportHeight 同模式）。
 // panel 布局：titleBar(1) + panelViewport + footer(1) + toast(0-1) = m.height
+// viewport 在 bubbletea v2 有 off-by-one：Height=N 只输出 N-1 行，所以 +1 补偿
 func (m *cliModel) layoutPanelHeight() int {
-	return m.height - 3 // titleBar(1) + footer(1) + toast预留(1)
+	return m.height - 3 + 1 // -3 for titleBar+footer+toast, +1 for viewport off-by-one
 }
 
 // relayoutViewport 重新计算并设置 viewport 高度（不重建样式缓存）。

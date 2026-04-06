@@ -35,6 +35,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.0.7] - 2026-04-06 (PR #402-#419, #420)
+
+### Added
+
+- **WebSocket 基础设施提取**: `qq.go`/`napcat.go` 共享 WS 逻辑提取到 `channel/ws_base.go`
+- **Engine 拆分**: `engine.Run()` 拆分为 `engine_run.go` 子函数
+- **Main 拆分**: `main()` 拆分为 setup 辅助函数
+- **SQLite Schema 拆分**: Schema 和迁移逻辑提取到 `schema.go`/`migrations.go`
+- **CLI Update 拆分**: Update() handlers 提取到 `cli_update_handlers.go`
+- **登录速率限制**: Web channel 登录添加速率限制
+- **Cookie Secure 标志**: HTTPS 模式下自动设置 Secure cookie
+- **Session 自动续期**: validateSession 滑动续期
+- **Request body 大小限制**: Auth 端点限制 1MB
+- **OAuth token 明文存储**: DB 与服务同进程，加密改为可选（向后兼容）
+
+### Changed
+
+- **engine.Run()**: 1341 行拆分为子函数（runState + 6 个子函数）
+- **main()**: 898 行拆分为 setup 函数组
+- **cli Update()**: 830 行拆分为 handler 方法
+- **i18n init()**: 1041 行硬编码文案提取为 locale 函数
+- **Logger import**: 统一 `log "xbot/logger"` 别名（3 个文件）
+- **HTTP Client 复用**: `feishu_mcp/download.go`, `vectordb/archival.go`
+
+### Security
+
+- **OAuth 日志脱敏**: code/state 不再记录到日志
+- **Timing Attack 防护**: FeishuLinkSecret 使用 ConstantTimeCompare
+- **WebSocket Origin 验证**: CheckOrigin 从全放行改为同源校验
+- **错误处理加固**: panic→error, 15+ 类型断言加 comma-ok, 14 处 json.Unmarshal 错误处理
+
+### Fixed
+
+- **assertNoSystemPersist**: panic 改为 error return（消除进程崩溃风险）
+- **context.go**: panic 改为 log.Fatalf
+- **fetch.go**: context.Background() → req.Context()
+- **remote_sandbox**: 34 处 json.Marshal/Unmarshal 错误处理
+- **cli_update.go**: Logger import 从 logrus 改为 log
+- **pprof.go**: Logger import 修正
+
+---
+
 ## [0.9.0] - 2026-03-23 (PR #290)
 
 ### Security

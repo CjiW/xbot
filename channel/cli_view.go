@@ -153,19 +153,13 @@ func (m *cliModel) View() tea.View {
 			input,
 		)
 	} else if m.panelMode != "" {
-		// §12 Panel mode: render panel via panelViewport (unified scrolling logic)
+		// §12 Panel mode: render panel via panelViewport (unified with main view)
 		m.syncPanelViewport()
 		panelFooter := m.renderFooter()
-		// 安全截断：确保 panel 不超出终端高度
-		maxPanelLines := m.height - 2 // titleBar(1) + footer(1)
-		panelView := m.panelViewport.View()
-		if panelLines := strings.Split(panelView, "\n"); len(panelLines) > maxPanelLines {
-			panelView = strings.Join(panelLines[:maxPanelLines], "\n")
-		}
 		content = fmt.Sprintf(
 			"%s\n%s%s%s",
 			titleBar,
-			panelView,
+			m.panelViewport.View(),
 			panelFooter,
 			toastStr,
 		)

@@ -90,20 +90,13 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 	}
 }
 
-// syncPanelViewport 将当前 panel 内容写入 panelViewport，统一滚动逻辑。
+// syncPanelViewport 将当前 panel 内容写入 panelViewport（统一滚动逻辑）。
 // 每次 panel 内容变化（打开、cursor 移动、编辑等）后调用。
 // firstOpen=true 时滚动到顶部（panel 刚打开）。
 func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
 	if m.panelMode == "" {
 		return
 	}
-	// 每次都重算高度，确保和终端尺寸同步
-	panelH := m.height - 3 // titleBar(1) + panelFooter(1) + toast(~1)
-	if panelH < 5 {
-		panelH = 5
-	}
-	m.panelViewport.SetHeight(panelH)
-	m.panelViewport.SetWidth(m.width)
 	raw := m.viewPanel()
 	m.panelViewport.SetContent(raw)
 	if len(firstOpen) > 0 && firstOpen[0] {

@@ -940,6 +940,12 @@ func (m *cliModel) layoutViewportHeight() int {
 	return viewportHeight
 }
 
+// layoutPanelHeight 计算 panel viewport 的高度（与 layoutViewportHeight 同模式）。
+// panel 布局：titleBar(1) + panelViewport + footer(1) + toast(0-1) = m.height
+func (m *cliModel) layoutPanelHeight() int {
+	return m.height - 3 // titleBar(1) + footer(1) + toast预留(1)
+}
+
 // relayoutViewport 重新计算并设置 viewport 高度（不重建样式缓存）。
 // 用于 panel 打开/关闭、todo 增减时动态调整布局。
 // 如果用户之前在底部，调整后继续保持跟随底部。
@@ -952,9 +958,10 @@ func (m *cliModel) relayoutViewport() {
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
-	// Panel viewport 高度在 syncPanelViewport 里统一设置
+	// Panel viewport：和主 viewport 同模式
 	if m.panelMode != "" {
-		m.syncPanelViewport(true)
+		m.panelViewport.SetHeight(m.layoutPanelHeight())
+		m.panelViewport.SetWidth(m.width)
 	}
 }
 
@@ -969,6 +976,7 @@ func (m *cliModel) handleResize(width, height int) {
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
 	m.panelViewport.SetWidth(width)
+	m.panelViewport.SetHeight(m.layoutPanelHeight())
 
 	// InputBox lipgloss style: Width(width-4) includes border(2) + padding(2).
 	// Content area = width-4-2-2 = width-8. Textarea must match this.

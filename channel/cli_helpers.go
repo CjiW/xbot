@@ -91,32 +91,44 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 }
 
 // ensurePanelCursorVisible 确保 panel cursor 行在可见区域内。
-// 使用 panelScrollY 手动偏移，不依赖 viewport。
+// 直接从 panelSchema 计算 cursor 行号，不依赖 View() 渲染。
 func (m *cliModel) ensurePanelCursorVisible() {
-	totalLines := m.panelCursorLn + 1 // cursorLn 是 0-based, totalLines 至少是 cursorLn+1
-	// 可见高度 = 终端高度 - titleBar(1) - footer(1) - toast(1) - PanelBox上下边框(2)
-	visibleH := m.height - 5
-	if visibleH < 3 {
-		visibleH = 3
+	if len(m.panelSchema) == 0 || m.panelCursor >= len(m.panelSchema) {
+		return
 	}
+	// 复刻 viewSettingsPanel 的行号计算逻辑
+	cursorLn := 0
+	lastCat := ""
+	for i, def := range m.panelSchema {
+		if def.Category != lastCat {
+			lastCat = def.Category
+			cursorLn += 2 // 空行 + 分类标题
+		}
+		if def.Key == "danger_zone" || def.Key == "runner_panel" {
+			cursorLn++ // 单行 entry
+		} else if m.panelValues[def.Key] != "" {
+			cursorLn++ // 标题行
+			cursorLn++ // 值行
+		} else {
+			cursorLn++ // 标题行
+		}
+		if i == m.panelCursor {
+			break
+		}
+	}
+	// cursorLn 现在指向当前 cursor 的行
+	visibleH := m.panelVisibleHeight()
+	totalLines := cursorLn + 5 // +5 保证底部有足够空间
 	if totalLines <= visibleH {
 		m.panelScrollY = 0
 		return
 	}
-	// cursor 超出底部
-	if m.panelCursorLn >= m.panelScrollY+visibleH {
-		m.panelScrollY = m.panelCursorLn - visibleH + 1
+	if cursorLn >= m.panelScrollY+visibleH {
+		m.panelScrollY = cursorLn - visibleH + 1
 	}
-	// cursor 超出顶部
-	if m.panelCursorLn < m.panelScrollY {
-		m.panelScrollY = m.panelCursorLn
+	if cursorLn < m.panelScrollY {
+		m.panelScrollY = cursorLn
 	}
-}
-
-// panelTotalLines 返回当前 panel 原始内容的总行数。
-func (m *cliModel) panelTotalLines() int {
-	raw := m.viewPanel()
-	return strings.Count(raw, "\n") + 1
 }
 
 // panelVisibleHeight 返回 panel 可见区域高度。
@@ -130,7 +142,8 @@ func (m *cliModel) panelVisibleHeight() int {
 
 // clampPanelScroll 确保 panelScrollY 不超出范围。
 func (m *cliModel) clampPanelScroll() {
-	total := m.panelTotalLines()
+	raw := m.viewPanel()
+	total := strings.Count(raw, "\n") + 1
 	visible := m.panelVisibleHeight()
 	if total <= visible {
 		m.panelScrollY = 0

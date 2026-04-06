@@ -32,9 +32,13 @@ func (s *Server) SetSendFunc(fn func(channel, chatID, content string) error) {
 	s.sendFuncVal.Store(sendFuncHolder{fn: fn})
 }
 
-// getSendFunc atomically retrieves the send function (never nil after NewServer).
+// getSendFunc atomically retrieves the send function. Returns a no-op if not initialized.
 func (s *Server) getSendFunc() func(channel, chatID, content string) error {
-	return s.sendFuncVal.Load().(sendFuncHolder).fn
+	val := s.sendFuncVal.Load()
+	if val == nil {
+		return func(channel, chatID, content string) error { return nil }
+	}
+	return val.(sendFuncHolder).fn
 }
 
 // Config contains the OAuth server configuration.
@@ -140,9 +144,9 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	errorMsg := query.Get("error")
 
 	log.WithFields(log.Fields{
-		"state": state,
-		"code":  code,
-		"error": errorMsg,
+		"state":    truncate(state, 8),
+		"has_code": code != "",
+		"error":    errorMsg,
 	}).Info("OAuth callback params")
 
 	if errorMsg != "" {
@@ -215,6 +219,14 @@ func (s *Server) renderSuccess(w http.ResponseWriter, provider string) {
 <p>您已成功授权 `+html.EscapeString(provider)+`。</p>
 <p>现在可以关闭此窗口并返回对话。</p>
 </div></body></html>`)
+}
+
+// truncate safely truncates a string for logging.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (s *Server) renderError(w http.ResponseWriter, title, detail string) {

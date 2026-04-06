@@ -43,7 +43,10 @@ func (a *Agent) cleanupExpiredSessions() {
 		lastUsed := ia.lastUsed
 		ia.mu.Unlock()
 		if now.Sub(lastUsed) > interactiveSessionTTL {
-			key := k.(string)
+			key, ok := k.(string)
+			if !ok {
+				return true
+			}
 			log.WithFields(log.Fields{
 				"key":       key,
 				"role":      ia.roleName,
@@ -387,7 +390,10 @@ func (a *Agent) GetActiveInteractiveRoles(channel, chatID string) []string {
 	var roles []string
 	prefix := channel + ":" + chatID + "/"
 	a.interactiveSubAgents.Range(func(k, v interface{}) bool {
-		key := k.(string)
+		key, ok := k.(string)
+		if !ok {
+			return true
+		}
 		if strings.HasPrefix(key, prefix) {
 			role := strings.TrimPrefix(key, prefix)
 			if ia, ok := v.(*interactiveAgent); ok && ia != nil {

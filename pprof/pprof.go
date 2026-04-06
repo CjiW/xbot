@@ -7,7 +7,7 @@ import (
 	"net/http/pprof"
 	"runtime"
 	"time"
-	"xbot/logger"
+	log "xbot/logger"
 )
 
 // Config pprof 配置
@@ -42,7 +42,7 @@ func NewServer(cfg Config) *Server {
 // Start 启动 pprof 服务器
 func (s *Server) Start() error {
 	if !s.config.Enable {
-		logger.Info("pprof server is disabled")
+		log.Info("pprof server is disabled")
 		return nil
 	}
 
@@ -69,19 +69,19 @@ func (s *Server) Start() error {
 		WriteTimeout: 120 * time.Second, // profile 可能需要较长时间
 	}
 
-	logger.Infof("pprof server started on http://%s/debug/pprof/", addr)
-	logger.Info("Available endpoints:")
-	logger.Info("  /debug/pprof/         - pprof index")
-	logger.Info("  /debug/pprof/heap     - heap profile")
-	logger.Info("  /debug/pprof/goroutine - goroutine profile")
-	logger.Info("  /debug/pprof/profile  - CPU profile (30s)")
-	logger.Info("  /debug/pprof/trace    - execution trace")
-	logger.Info("  /debug/stats          - runtime statistics")
-	logger.Info("  /debug/gc             - trigger GC")
+	log.Infof("pprof server started on http://%s/debug/pprof/", addr)
+	log.Info("Available endpoints:")
+	log.Info("  /debug/pprof/         - pprof index")
+	log.Info("  /debug/pprof/heap     - heap profile")
+	log.Info("  /debug/pprof/goroutine - goroutine profile")
+	log.Info("  /debug/pprof/profile  - CPU profile (30s)")
+	log.Info("  /debug/pprof/trace    - execution trace")
+	log.Info("  /debug/stats          - runtime statistics")
+	log.Info("  /debug/gc             - trigger GC")
 
 	go func() {
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Errorf("pprof server error: %v", err)
+			log.Errorf("pprof server error: %v", err)
 		}
 	}()
 
@@ -93,7 +93,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.server == nil {
 		return nil
 	}
-	logger.Info("Shutting down pprof server...")
+	log.Info("Shutting down pprof server...")
 	return s.server.Shutdown(ctx)
 }
 
@@ -196,7 +196,7 @@ Freed:
 		m1.HeapObjects-m2.HeapObjects,
 	)
 
-	logger.Info("GC triggered via /debug/gc endpoint")
+	log.Info("GC triggered via /debug/gc endpoint")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(result))
 }

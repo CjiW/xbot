@@ -264,7 +264,9 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 	}
 	allOk := true
 	for _, msg := range result.SessionView {
-		assertNoSystemPersist(msg)
+		if err := assertNoSystemPersist(msg); err != nil {
+			continue
+		}
 		if err := tenantSession.AddMessage(msg); err != nil {
 			log.Ctx(ctx).WithError(err).Error("Partial write during compression, session may be corrupted")
 			allOk = false

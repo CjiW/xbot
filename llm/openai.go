@@ -3,12 +3,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	logrus "xbot/logger"
+	log "xbot/logger"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -68,13 +69,13 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := o.LoadModelsFromAPI(ctx); err != nil {
-		logrus.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+		log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
 		// API 获取失败，使用默认模型作为回退
 		if cfg.DefaultModel != "" {
 			o.mu.Lock()
 			o.models = []string{cfg.DefaultModel}
 			o.mu.Unlock()
-			logrus.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
+			log.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
 		}
 	}
 
@@ -109,12 +110,12 @@ func (o *OpenAILLM) GetDefaultModel() string {
 
 // LoadModelsFromAPI 从 OpenAI API 加载可用模型列表
 func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
-	logrus.Debug("[LLM] Loading models from OpenAI API")
+	log.Debug("[LLM] Loading models from OpenAI API")
 
 	// 使用 openai-go SDK 获取模型列表
 	page, err := o.client.Models.List(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("openai models list: %w", err)
 	}
 
 	// 提取模型 ID
@@ -124,7 +125,7 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	}
 
 	if len(models) == 0 {
-		logrus.Warn("[LLM] No models found from OpenAI API")
+		log.Warn("[LLM] No models found from OpenAI API")
 		return nil
 	}
 
@@ -138,7 +139,7 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	defaultModel := o.defaultModel
 	o.mu.Unlock()
 
-	logrus.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"model_count":   modelCount,
 		"default_model": defaultModel,
 	}).Info("[LLM] Models loaded from OpenAI API")
@@ -431,13 +432,13 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 					}
 				}
 			} else {
-				logrus.WithFields(logrus.Fields{
+				log.WithFields(log.Fields{
 					"thinking_mode": thinkingMode,
 					"error":         err.Error(),
 				}).Warn("[LLM] Failed to parse thinking mode as JSON, ignoring")
 			}
 		} else {
-			logrus.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode is not valid JSON, ignoring")
+			log.WithField("thinking_mode", thinkingMode).Warn("[LLM] Unknown thinking mode is not valid JSON, ignoring")
 		}
 	}
 
@@ -451,7 +452,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		model = o.GetDefaultModel()
 	}
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "openai",
 		"model":         model,
 		"stream":        false,
@@ -467,17 +468,17 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
-		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
 	completion, err := o.client.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
-		logrus.Ctx(ctx).WithFields(logrus.Fields{
+		log.Ctx(ctx).WithFields(log.Fields{
 			"provider": "openai",
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
 		}).Error("[LLM] Request failed")
-		return nil, err
+		return nil, fmt.Errorf("openai chat completion: %w", err)
 	}
 
 	// 解析响应
@@ -502,7 +503,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		if len(choice.Message.ToolCalls) > 0 {
 			resp.ToolCalls = make([]ToolCall, 0, len(choice.Message.ToolCalls))
 			for _, tc := range choice.Message.ToolCalls {
-				logrus.Ctx(ctx).WithFields(logrus.Fields{
+				log.Ctx(ctx).WithFields(log.Fields{
 					"provider":  "openai",
 					"tool_id":   tc.ID,
 					"tool_name": tc.Function.Name,
@@ -516,7 +517,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		}
 	}
 
-	fields := logrus.Fields{
+	fields := log.Fields{
 		"provider":          "openai",
 		"duration":          time.Since(startTime).String(),
 		"choices_count":     len(completion.Choices),
@@ -530,9 +531,9 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	}
 	if isNearEmptyResponse(resp) {
 		addNearEmptyResponseDebugFields(fields, messages, model, tools, thinkingMode)
-		logrus.Ctx(ctx).WithFields(fields).Warn("[LLM] Request completed with near-empty response")
+		log.Ctx(ctx).WithFields(fields).Warn("[LLM] Request completed with near-empty response")
 	} else {
-		logrus.Ctx(ctx).WithFields(fields).Debug("[LLM] Request completed")
+		log.Ctx(ctx).WithFields(fields).Debug("[LLM] Request completed")
 	}
 
 	return resp, nil
@@ -545,7 +546,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 		model = o.GetDefaultModel()
 	}
 
-	logrus.Ctx(ctx).WithFields(logrus.Fields{
+	log.Ctx(ctx).WithFields(log.Fields{
 		"provider":      "openai",
 		"model":         model,
 		"stream":        true,
@@ -561,7 +562,7 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
 	if len(opts) > 0 {
-		logrus.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
+		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
 	// 创建流式请求
@@ -581,7 +582,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	defer close(eventChan)
 	defer stream.Close()
 
-	l := logrus.Ctx(ctx)
+	l := log.Ctx(ctx)
 	chunkCount := 0
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
@@ -591,7 +592,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	for stream.Next() {
 		select {
 		case <-ctx.Done():
-			l.WithFields(logrus.Fields{
+			l.WithFields(log.Fields{
 				"provider": "openai",
 				"reason":   ctx.Err().Error(),
 			}).Warn("[LLM] Stream cancelled")
@@ -609,7 +610,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		// 记录第一个 chunk 时间
 		if chunkCount == 1 {
 			firstChunkTime = time.Now()
-			l.WithFields(logrus.Fields{
+			l.WithFields(log.Fields{
 				"provider": "openai",
 				"ttft":     firstChunkTime.Sub(startTime).String(),
 			}).Debug("[LLM] First chunk received")
@@ -635,7 +636,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			// 处理工具调用
 			for _, tc := range choice.Delta.ToolCalls {
 				if tc.ID != "" || tc.Function.Name != "" {
-					l.WithFields(logrus.Fields{
+					l.WithFields(log.Fields{
 						"provider":  "openai",
 						"tool_id":   tc.ID,
 						"tool_name": tc.Function.Name,
@@ -685,7 +686,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
-		l.WithFields(logrus.Fields{
+		l.WithFields(log.Fields{
 			"provider":    "openai",
 			"chunk_count": chunkCount,
 			"duration":    time.Since(startTime).String(),
@@ -698,7 +699,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		return
 	}
 
-	fields := logrus.Fields{
+	fields := log.Fields{
 		"provider":       "openai",
 		"chunk_count":    chunkCount,
 		"total_duration": time.Since(startTime).String(),
@@ -740,7 +741,7 @@ func isNearEmptyResponse(resp *LLMResponse) bool {
 	return resp.Content == "" && len(resp.ToolCalls) == 0
 }
 
-func addNearEmptyResponseDebugFields(fields logrus.Fields, messages []ChatMessage, model string, tools []ToolDefinition, thinkingMode string) {
+func addNearEmptyResponseDebugFields(fields log.Fields, messages []ChatMessage, model string, tools []ToolDefinition, thinkingMode string) {
 	fields["msg_count"] = len(messages)
 	fields["tools_count"] = len(tools)
 	fields["model"] = model

@@ -245,21 +245,21 @@ func TestNapCatIsDuplicate_Eviction(t *testing.T) {
 
 func TestNapCatIsAllowed_EmptyList(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{AllowFrom: nil}, nil)
-	if !ch.isAllowed("12345") {
+	if !ch.isAllowed(ch.config.AllowFrom, "12345") {
 		t.Error("empty allowlist should allow everyone")
 	}
 }
 
 func TestNapCatIsAllowed_InList(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{AllowFrom: []string{"111", "222", "333"}}, nil)
-	if !ch.isAllowed("222") {
+	if !ch.isAllowed(ch.config.AllowFrom, "222") {
 		t.Error("222 should be allowed")
 	}
 }
 
 func TestNapCatIsAllowed_NotInList(t *testing.T) {
 	ch := NewNapCatChannel(NapCatConfig{AllowFrom: []string{"111", "222"}}, nil)
-	if ch.isAllowed("999") {
+	if ch.isAllowed(ch.config.AllowFrom, "999") {
 		t.Error("999 should not be allowed")
 	}
 }

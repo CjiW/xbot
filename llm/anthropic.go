@@ -396,7 +396,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
-		return nil, err
+		return nil, fmt.Errorf("anthropic API request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -522,7 +522,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		log.Ctx(ctx).WithError(err).WithField("provider", "anthropic").Error("[LLM] Request failed")
-		return nil, err
+		return nil, fmt.Errorf("anthropic streaming API request: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {

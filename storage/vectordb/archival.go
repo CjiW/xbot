@@ -36,6 +36,9 @@ type ContentCompressorFunc func(ctx context.Context, content string, maxTokens i
 // It is initialized on startup if an LLM client is available.
 var llmContentCompressor ContentCompressorFunc
 
+// archivalHTTPClient is the shared HTTP client for embedding API requests.
+var archivalHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // SetLLMContentCompressor sets the package-level LLM-based content compressor.
 // This should be called during application startup if an LLM client is available,
 // so that ensureContentFits can prefer semantic compression over naive truncation.
@@ -266,7 +269,7 @@ func toOllamaBaseURL(rawURL string) string {
 // newOllamaEmbedFunc returns an EmbeddingFunc using Ollama's native /api/embed
 // with explicit num_ctx so the model isn't loaded with an oversized context.
 func newOllamaEmbedFunc(baseURL, model string, numCtx int) chromem.EmbeddingFunc {
-	client := &http.Client{}
+	client := archivalHTTPClient
 
 	var checkedNormalized bool
 	// checkedNormalized 是闭包变量，在每个 embedding 调用后被读取。

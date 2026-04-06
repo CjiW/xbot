@@ -76,7 +76,7 @@ func NewNapCatChannel(cfg NapCatConfig, msgBus *bus.MessageBus) *NapCatChannel {
 	return &NapCatChannel{
 		WSChannelBase: NewWSChannelBase(1000, napcatQuickDisconnectWindow, napcatQuickDisconnectCount),
 		config:        cfg,
-		msgBus:         msgBus,
+		msgBus:        msgBus,
 		pending:       make(map[string]chan json.RawMessage),
 	}
 }
@@ -783,7 +783,6 @@ func (n *NapCatChannel) callAPI(action string, params any) (*obAPIResponse, erro
 // WebSocket helpers
 // ---------------------------------------------------------------------------
 
-
 // clearPending 清理所有 pending 请求
 func (n *NapCatChannel) clearPending() {
 	n.pendingMu.Lock()
@@ -799,16 +798,13 @@ func (n *NapCatChannel) clearPending() {
 // Deduplication
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Access control
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Quick disconnect detection
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Helpers

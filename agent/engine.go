@@ -14,7 +14,6 @@ import (
 	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 	"xbot/tools"
-
 )
 
 // SubAgentProgressCallback is the type for SubAgent progress callback.
@@ -294,6 +293,7 @@ func readArgsHasOffsetOrLimit(argsJSON string) bool {
 func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
 	return client.Generate(ctx, model, messages, tools, thinkingMode)
 }
+
 // Run 统一的 Agent 循环。
 //
 // 输入：RunConfig（从 InboundMessage 构建）

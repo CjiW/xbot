@@ -190,7 +190,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case cliProgressMsg:
-			m.handleProgressMsg(msg)
+		m.handleProgressMsg(msg)
 
 	case cliTickMsg:
 		// Always refresh bg task count on tick so status bar updates immediately
@@ -228,10 +228,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tempStatus = ""
 
 	case cliInjectedUserMsg:
-			// Agent injected a user message (e.g. bg task completion notification).
-			cmds = append(cmds, m.handleInjectedUserMsg(msg)...)
+		// Agent injected a user message (e.g. bg task completion notification).
+		cmds = append(cmds, m.handleInjectedUserMsg(msg)...)
 	case cliUpdateCheckMsg:
-			m.handleUpdateCheck(msg)
+		m.handleUpdateCheck(msg)
 
 	case tickerTickMsg:
 		// Ticker tick: advance frame and trigger viewport refresh
@@ -242,23 +242,23 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case splashTickMsg:
-			return m.handleSplashTick(msg)
+		return m.handleSplashTick(msg)
 
-		case splashDoneMsg:
-			// §14 启动画面结束确认
-			m.splashDone = true
-			cmds = append(cmds, idleTickCmd())
+	case splashDoneMsg:
+		// §14 启动画面结束确认
+		m.splashDone = true
+		cmds = append(cmds, idleTickCmd())
 
-		case suHistoryLoadMsg:
-			m.handleSuHistoryLoad(msg)
+	case suHistoryLoadMsg:
+		m.handleSuHistoryLoad(msg)
 
-		case cliToastMsg:
-			cmds = append(cmds, m.handleToastMsg(msg)...)
+	case cliToastMsg:
+		cmds = append(cmds, m.handleToastMsg(msg)...)
 
-		case cliToastClearMsg:
-			cmds = append(cmds, m.handleToastClear(msg)...)
+	case cliToastClearMsg:
+		cmds = append(cmds, m.handleToastClear(msg)...)
 
-		case easterEggDoneMsg:
+	case easterEggDoneMsg:
 		// 🥚 彩蛋关闭（按任意键触发）
 		m.dismissEasterEgg()
 		m.renderCacheValid = false

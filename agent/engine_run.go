@@ -17,8 +17,8 @@ import (
 
 // toolCallEntry tracks a single tool call within an iteration.
 type toolCallEntry struct {
-	iteration int         // Agent loop iteration number (for debug tracing)
-	index     int         // Index within the LLM response's tool calls
+	iteration int // Agent loop iteration number (for debug tracing)
+	index     int // Index within the LLM response's tool calls
 	tc        llm.ToolCall
 }
 
@@ -599,7 +599,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	if maxTokens <= 0 {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"last_prompt_tokens": s.lastPromptTokens,
-			"msg_count":         len(s.messages),
+			"msg_count":          len(s.messages),
 		}).Info("maybeCompress skipped: maxTokens=0")
 		return
 	}
@@ -634,8 +634,8 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		"total_tokens":       totalTokens,
 		"max_tokens":         maxTokens,
 		"threshold":          int(float64(maxTokens) * 0.75),
-		"msg_count":         len(s.messages),
-		"need":              needCompress,
+		"msg_count":          len(s.messages),
+		"need":               needCompress,
 		"base_prompt_tokens": s.lastPromptTokens,
 		"completion_tokens":  s.lastCompletionTokens,
 		"source": func() string {

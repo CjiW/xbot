@@ -95,7 +95,7 @@ var (
 )
 var sandboxInitOnce sync.Once
 
-// InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）
+// InitSandbox 初始化全局沙箱实例（由 main.go 在启动时调用）。
 // 启动时自动清理上次残留的临时文件和悬空 Docker 资源。
 //
 // When RemoteMode is set (non-empty), both docker and remote sandbox instances
@@ -103,20 +103,37 @@ var sandboxInitOnce sync.Once
 // Otherwise, falls back to the legacy single-sandbox behavior.
 func InitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
 	sandboxInitOnce.Do(func() {
-		if sandboxCfg.RemoteMode != "" {
-			// Dual-mode: create SandboxRouter with both docker and remote
-			globalSandbox = NewSandboxRouter(sandboxCfg, workDir)
-			log.Infof("Sandbox initialized: %s (router)", globalSandbox.Name())
-		} else {
-			// Legacy single-mode
-			if sandboxCfg.Mode == "docker" {
-				cleanupStaleTmpFiles()
-				pruneDockerResources()
-			}
-			globalSandbox = NewSandbox(sandboxCfg, workDir, nil)
-			log.Infof("Sandbox initialized: %s", globalSandbox.Name())
-		}
+		reinitSandbox(sandboxCfg, workDir)
 	})
+}
+
+// ReinitSandbox reinitializes the global sandbox (used when sandbox_mode changes at runtime).
+func ReinitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
+	// Close old sandbox if possible
+	globalSandboxMu.Lock()
+	old := globalSandbox
+	globalSandbox = nil
+	globalSandboxMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	reinitSandbox(sandboxCfg, workDir)
+}
+
+func reinitSandbox(sandboxCfg config.SandboxConfig, workDir string) {
+	if sandboxCfg.RemoteMode != "" {
+		// Dual-mode: create SandboxRouter with both docker and remote
+		globalSandbox = NewSandboxRouter(sandboxCfg, workDir)
+		log.Infof("Sandbox initialized: %s (router)", globalSandbox.Name())
+	} else {
+		// Legacy single-mode
+		if sandboxCfg.Mode == "docker" {
+			cleanupStaleTmpFiles()
+			pruneDockerResources()
+		}
+		globalSandbox = NewSandbox(sandboxCfg, workDir, nil)
+		log.Infof("Sandbox initialized: %s", globalSandbox.Name())
+	}
 }
 
 // GetSandbox 获取全局沙箱实例

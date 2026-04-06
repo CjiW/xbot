@@ -15,9 +15,9 @@ import (
 // hold stdout/stderr FDs open. Even after the main process exits, io.Copy blocks.
 func TestExecKeepAlive_ChildHoldsPipeOpen(t *testing.T) {
 	// This command exits immediately but spawns a background child holding pipe FDs.
-	// /bin/sh -c "(sleep 300 &); echo done; exec 0>&- 1>&- 2>&-"
 	// The subshell background sleep inherits stdout, so the pipe write end stays open.
-	cmd := exec.Command("/bin/sh", "-c", "(sleep 300 &) && echo done")
+	// Use ";" (not "&&") to ensure echo runs unconditionally regardless of background exit status.
+	cmd := exec.Command("/bin/sh", "-c", "(sleep 300 &); echo done")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdoutPipe, stderrPipe, err := setupPipes(cmd)

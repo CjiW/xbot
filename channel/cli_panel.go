@@ -45,21 +45,16 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 }
 
 // openSetupPanel opens the first-run setup wizard as a settings-style panel.
+// Unlike /settings, the setup wizard always starts from the schema's recommended
+// DefaultValue — it does NOT pre-fill from GetCurrentValues (which may contain
+// environment variable overrides like SANDBOX_MODE=docker). This ensures first-time
+// users see the recommended defaults, not values inherited from their environment.
 func (m *cliModel) openSetupPanel() {
 	schema := m.locale.SetupSchema
 	values := make(map[string]string)
-	// Pre-fill defaults from schema
 	for _, def := range schema {
 		if def.DefaultValue != "" {
 			values[def.Key] = def.DefaultValue
-		}
-	}
-	// Pre-fill current values if available
-	if m.channel != nil && m.channel.config.GetCurrentValues != nil {
-		for k, v := range m.channel.config.GetCurrentValues() {
-			if v != "" {
-				values[k] = v
-			}
 		}
 	}
 	m.openSettingsPanel(schema, values, func(vals map[string]string) {
@@ -722,6 +717,9 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 			case SettingTypeSelect:
 				// Cycle through options
 				cur := m.panelValues[def.Key]
+				if cur == "" && def.DefaultValue != "" {
+					cur = def.DefaultValue
+				}
 				found := false
 				for i, opt := range def.Options {
 					if opt.Value == cur && i < len(def.Options)-1 {
@@ -1052,6 +1050,10 @@ func (m *cliModel) viewSettingsPanel() string {
 		}
 
 		cur := m.panelValues[def.Key]
+		// If value is empty, fall back to DefaultValue for display
+		if cur == "" && def.DefaultValue != "" {
+			cur = def.DefaultValue
+		}
 		var prefix string
 		if i == m.panelCursor && !m.panelEdit {
 			prefix = cursorStyle.Render("▸")

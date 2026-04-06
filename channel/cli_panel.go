@@ -20,6 +20,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 	m.panelCursor = 0
 	m.panelEdit = false
+	m.panelScrollY = 0
 	m.panelSchema = make([]SettingDefinition, len(schema))
 	copy(m.panelSchema, schema)
 	m.panelValues = make(map[string]string, len(values))
@@ -169,7 +170,7 @@ func (m *cliModel) closePanel() {
 	m.panelRunnerWorkspace = textinput.Model{}
 	m.panelRunnerEditField = 0
 	// 恢复 viewport 到正常模式高度
-	m.panelViewport.SetContent("")
+	m.panelScrollY = 0
 	m.relayoutViewport()
 }
 
@@ -368,7 +369,7 @@ func (m *cliModel) viewBgTaskList() string {
 		}
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // viewBgTaskLog renders the log viewer for a selected task.
@@ -413,7 +414,7 @@ func (m *cliModel) viewBgTaskLog() string {
 		sb.WriteString("\n")
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // viewDangerPanel renders the danger zone panel.
@@ -460,7 +461,7 @@ func (m *cliModel) viewDangerPanel() string {
 		sb.WriteString(s.PanelHint.Render("  " + m.locale.DangerNavHint))
 	}
 
-	return s.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // splitLines splits a string into lines, preserving trailing empty line.
@@ -494,14 +495,11 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 		return false, m, nil
 	}()
 
-	// Panel 内容变化后同步到 viewport
-	if handled {
-		m.syncPanelViewport()
-		// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
-		if m.panelCursorLn > 0 {
-			m.ensurePanelCursorVisible()
-		}
+	// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
+	if handled && m.panelCursorLn > 0 {
+		m.ensurePanelCursorVisible()
 	}
+
 	return handled, newModel, cmd
 }
 
@@ -585,6 +583,7 @@ func (m *cliModel) openDangerPanelFromSettings() {
 	}
 
 	m.panelMode = "danger"
+	m.panelScrollY = 0
 	m.relayoutViewport()
 	m.panelDangerItems = items
 	m.panelDangerCursor = 0
@@ -1189,7 +1188,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		sb.WriteString(hintStyle.Render("  " + m.locale.PanelNavHint))
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 func (m *cliModel) viewAskUserPanel() string {
@@ -1305,7 +1304,7 @@ func (m *cliModel) viewAskUserPanel() string {
 	hints = append(hints, m.locale.PanelAskCancel)
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }
 
 // --- SettingsCapability implementation for CLIChannel ---
@@ -1369,6 +1368,7 @@ func (c *CLIChannel) GetBaseURLOverride() string {
 // openRunnerPanel 打开 Runner 管理面板
 func (m *cliModel) openRunnerPanel() {
 	m.panelMode = "runner"
+	m.panelScrollY = 0
 	m.relayoutViewport()
 
 	// 确保 RunnerBridge 存在（正常 TUI 模式也需要，不只在 --share 时）
@@ -1631,5 +1631,5 @@ func (m *cliModel) viewRunnerPanel() string {
 		sb.WriteString(s.PanelHint.Render("  " + m.locale.RunnerNavHint))
 	}
 
-	return m.styles.PanelBox.Render(sb.String())
+	return sb.String()
 }

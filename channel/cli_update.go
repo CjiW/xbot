@@ -940,13 +940,6 @@ func (m *cliModel) layoutViewportHeight() int {
 	return viewportHeight
 }
 
-// layoutPanelHeight 计算 panel viewport 的高度（与 layoutViewportHeight 同模式）。
-// panel 布局：titleBar(1) + panelViewport + footer(1) + toast(0-1) = m.height
-// viewport 在 bubbletea v2 有 off-by-one：Height=N 只输出 N-1 行，所以 +1 补偿
-func (m *cliModel) layoutPanelHeight() int {
-	return m.height - 3 + 1 // -3 for titleBar+footer+toast, +1 for viewport off-by-one
-}
-
 // relayoutViewport 重新计算并设置 viewport 高度（不重建样式缓存）。
 // 用于 panel 打开/关闭、todo 增减时动态调整布局。
 // 如果用户之前在底部，调整后继续保持跟随底部。
@@ -958,11 +951,6 @@ func (m *cliModel) relayoutViewport() {
 	m.viewport.SetHeight(m.layoutViewportHeight())
 	if wasAtBottom {
 		m.viewport.GotoBottom()
-	}
-	// Panel viewport：和主 viewport 同模式
-	if m.panelMode != "" {
-		m.panelViewport.SetHeight(m.layoutPanelHeight())
-		m.panelViewport.SetWidth(m.width)
 	}
 }
 
@@ -976,8 +964,6 @@ func (m *cliModel) handleResize(width, height int) {
 
 	m.viewport.SetWidth(width)
 	m.viewport.SetHeight(m.layoutViewportHeight())
-	m.panelViewport.SetWidth(width)
-	m.panelViewport.SetHeight(m.layoutPanelHeight())
 
 	// InputBox lipgloss style: Width(width-4) includes border(2) + padding(2).
 	// Content area = width-4-2-2 = width-8. Textarea must match this.

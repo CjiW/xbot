@@ -90,39 +90,57 @@ func (m *cliModel) applyThemeAndRebuild(theme string) {
 	}
 }
 
-// syncPanelViewport 将当前 panel 内容写入 panelViewport（统一滚动逻辑）。
-// 每次 panel 内容变化（打开、cursor 移动、编辑等）后调用。
-// firstOpen=true 时滚动到顶部（panel 刚打开）。
-func (m *cliModel) syncPanelViewport(firstOpen ...bool) {
-	if m.panelMode == "" {
+// ensurePanelCursorVisible 确保 panel cursor 行在可见区域内。
+// 使用 panelScrollY 手动偏移，不依赖 viewport。
+func (m *cliModel) ensurePanelCursorVisible() {
+	totalLines := m.panelCursorLn + 1 // cursorLn 是 0-based, totalLines 至少是 cursorLn+1
+	// 可见高度 = 终端高度 - titleBar(1) - footer(1) - toast(1) - PanelBox上下边框(2)
+	visibleH := m.height - 5
+	if visibleH < 3 {
+		visibleH = 3
+	}
+	if totalLines <= visibleH {
+		m.panelScrollY = 0
 		return
 	}
-	raw := m.viewPanel()
-	m.panelViewport.SetContent(raw)
-	if len(firstOpen) > 0 && firstOpen[0] {
-		m.panelViewport.GotoTop()
+	// cursor 超出底部
+	if m.panelCursorLn >= m.panelScrollY+visibleH {
+		m.panelScrollY = m.panelCursorLn - visibleH + 1
+	}
+	// cursor 超出顶部
+	if m.panelCursorLn < m.panelScrollY {
+		m.panelScrollY = m.panelCursorLn
 	}
 }
 
-// ensurePanelCursorVisible 确保 panel cursor 行在 viewport 可见区域内。
-// 使用 GotoTop/GotoBottom 而非 SetYOffset（SetYOffset 在 bubbletea v2 不可靠）。
-func (m *cliModel) ensurePanelCursorVisible() {
-	totalLines := m.panelViewport.TotalLineCount()
-	// viewport 实际显示行数 = Height - 1（bubbletea v2 的 off-by-one）
-	visibleLines := m.panelViewport.Height() - 1
-	if visibleLines <= 0 || totalLines <= visibleLines {
+// panelTotalLines 返回当前 panel 原始内容的总行数。
+func (m *cliModel) panelTotalLines() int {
+	raw := m.viewPanel()
+	return strings.Count(raw, "\n") + 1
+}
+
+// panelVisibleHeight 返回 panel 可见区域高度。
+func (m *cliModel) panelVisibleHeight() int {
+	h := m.height - 5 // titleBar(1) + footer(1) + toast(1) + PanelBox borders(2)
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+// clampPanelScroll 确保 panelScrollY 不超出范围。
+func (m *cliModel) clampPanelScroll() {
+	total := m.panelTotalLines()
+	visible := m.panelVisibleHeight()
+	if total <= visible {
+		m.panelScrollY = 0
 		return
 	}
-	yoff := m.panelViewport.YOffset()
-	cursorLn := m.panelCursorLn
-
-	if cursorLn < yoff {
-		// cursor 在可视区域上方 → 滚到 cursor 位置
-		// 用 SetYOffset + 1 补偿 off-by-one，然后紧跟着 SetContent 重新同步
-		m.panelViewport.SetYOffset(cursorLn)
-	} else if cursorLn >= yoff+visibleLines {
-		// cursor 在可视区域下方 → 滚到底部
-		m.panelViewport.GotoBottom()
+	if m.panelScrollY < 0 {
+		m.panelScrollY = 0
+	}
+	if m.panelScrollY > total-visible {
+		m.panelScrollY = total - visible
 	}
 }
 

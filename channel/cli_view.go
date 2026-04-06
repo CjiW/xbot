@@ -153,13 +153,28 @@ func (m *cliModel) View() tea.View {
 			input,
 		)
 	} else if m.panelMode != "" {
-		// §12 Panel mode: render panel via panelViewport (unified with main view)
-		m.syncPanelViewport()
+		// §12 Panel mode: 手动切片 + PanelBox 包裹（边框永远在屏幕内）
 		panelFooter := m.renderFooter()
+		rawContent := m.viewPanel() // 原始内容，无 PanelBox
+		m.clampPanelScroll()
+		rawLines := strings.Split(rawContent, "\n")
+		visibleH := m.panelVisibleHeight()
+		// 切片可见行
+		if m.panelScrollY+visibleH > len(rawLines) {
+			m.panelScrollY = max(0, len(rawLines)-visibleH)
+		}
+		end := m.panelScrollY + visibleH
+		if end > len(rawLines) {
+			end = len(rawLines)
+		}
+		visible := rawLines[m.panelScrollY:end]
+		panelContent := strings.Join(visible, "\n")
+		// PanelBox 包裹（边框在切片之后，保证完整显示）
+		boxedContent := m.styles.PanelBox.Render(panelContent)
 		content = fmt.Sprintf(
 			"%s\n%s%s%s",
 			titleBar,
-			m.panelViewport.View(),
+			boxedContent,
 			panelFooter,
 			toastStr,
 		)

@@ -651,7 +651,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 				} else {
 					allOk := true
 					for _, msg := range result.SessionView {
-						assertNoSystemPersist(msg)
+						if err := assertNoSystemPersist(msg); err != nil {
+							continue
+						}
 						if err := cfg.Session.AddMessage(msg); err != nil {
 							log.Ctx(ctx).WithError(err).Error("Partial write during auto compaction, session may be corrupted")
 							allOk = false
@@ -908,7 +910,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 							log.Ctx(ctx).WithError(clearErr).Warn("Failed to clear session for force compression, skipping persistence")
 						} else {
 							for _, msg := range result.SessionView {
-								assertNoSystemPersist(msg)
+								if err := assertNoSystemPersist(msg); err != nil {
+									continue
+								}
 								if addErr := cfg.Session.AddMessage(msg); addErr != nil {
 									log.Ctx(ctx).WithError(addErr).Warn("Failed to persist force-compressed message")
 									break
@@ -1015,7 +1019,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 						if cfg.Session != nil {
 							_ = cfg.Session.Clear()
 							for _, msg := range result.SessionView {
-								assertNoSystemPersist(msg)
+								if err := assertNoSystemPersist(msg); err != nil {
+									continue
+								}
 								_ = cfg.Session.AddMessage(msg)
 							}
 						}

@@ -136,23 +136,21 @@ func (s *SQLiteStorage) SetToken(ctx context.Context, provider, channel, chatID 
 	refreshToken := token.RefreshToken
 
 	// 加密 access_token
-	// Note: If encryption fails, the token is stored in plaintext as a fallback.
-	// This is acceptable for OAuth tokens because they can be recovered via re-authorization.
 	if accessToken != "" {
-		if encrypted, err := crypto.Encrypt(accessToken); err == nil {
-			accessToken = encrypted
-		} else {
-			log.WithError(err).Warn("Failed to encrypt access token")
+		encrypted, err := crypto.Encrypt(accessToken)
+		if err != nil {
+			return fmt.Errorf("encrypt access token: %w", err)
 		}
+		accessToken = encrypted
 	}
 
 	// 加密 refresh_token（长期有效凭证，必须加密）
 	if refreshToken != "" {
-		if encrypted, err := crypto.Encrypt(refreshToken); err == nil {
-			refreshToken = encrypted
-		} else {
-			log.WithError(err).Warn("Failed to encrypt refresh token")
+		encrypted, err := crypto.Encrypt(refreshToken)
+		if err != nil {
+			return fmt.Errorf("encrypt refresh token: %w", err)
 		}
+		refreshToken = encrypted
 	}
 
 	query := `

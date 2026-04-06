@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -114,7 +115,7 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	// 使用 openai-go SDK 获取模型列表
 	page, err := o.client.Models.List(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("openai models list: %w", err)
 	}
 
 	// 提取模型 ID
@@ -477,7 +478,7 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 			"duration": time.Since(startTime).String(),
 			"error":    err.Error(),
 		}).Error("[LLM] Request failed")
-		return nil, err
+		return nil, fmt.Errorf("openai chat completion: %w", err)
 	}
 
 	// 解析响应

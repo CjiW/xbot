@@ -134,7 +134,9 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 
 	capture := func(dst *bytes.Buffer, r io.Reader) {
 		defer wg.Done()
-		_, _ = io.Copy(dst, r) // capture goroutines own their respective buffers exclusively
+		if _, err := io.Copy(dst, r); err != nil {
+			log.WithError(err).Debug("sandbox: stdout/stderr capture incomplete")
+		}
 	}
 	go capture(&stdoutBuf, stdoutPipe)
 	go capture(&stderrBuf, stderrPipe)

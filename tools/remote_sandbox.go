@@ -255,7 +255,13 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		active:  runnerName,
 	}
 	actual, loaded := rs.connections.LoadOrStore(reg.UserID, newEntry)
-	entry := actual.(*userRunnersEntry)
+	entry, ok := actual.(*userRunnersEntry)
+	if !ok {
+		log.WithField("user_id", reg.UserID).Error("invalid runner connection type")
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","body":{"code":"internal_error","message":"invalid connection state"}}`))
+		conn.Close()
+		return
+	}
 	if loaded {
 		entry.mu.Lock()
 		entry.runners[runnerName] = rc
@@ -292,8 +298,18 @@ func (rs *RemoteSandbox) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	}()
 
 	// Send registration acknowledgment
-	okBody, _ := json.Marshal(map[string]string{"status": "ok"})
-	okMsg, _ := json.Marshal(RunnerMessage{Type: "register_ok", Body: okBody})
+	okBody, err := json.Marshal(map[string]string{"status": "ok"})
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal register_ok body")
+		conn.Close()
+		return
+	}
+	okMsg, err := json.Marshal(RunnerMessage{Type: "register_ok", Body: okBody})
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal register_ok message")
+		conn.Close()
+		return
+	}
 	conn.WriteMessage(websocket.TextMessage, okMsg)
 
 	log.WithFields(log.Fields{
@@ -368,7 +384,10 @@ func (rs *RemoteSandbox) getRunner(userID string) (*runnerConnection, error) {
 	if !ok {
 		return nil, fmt.Errorf("no runner connected for user %q", userID)
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return nil, fmt.Errorf("invalid runner connection type for user %q", userID)
+	}
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
 	if entry.active == "" || len(entry.runners) == 0 {
@@ -388,7 +407,10 @@ func (rs *RemoteSandbox) HasUser(userID string) bool {
 	if !ok {
 		return false
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return false
+	}
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
 	return len(entry.runners) > 0
@@ -400,7 +422,10 @@ func (rs *RemoteSandbox) IsRunnerOnline(userID, runnerName string) bool {
 	if !ok {
 		return false
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return false
+	}
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
 	_, ok = entry.runners[runnerName]
@@ -414,7 +439,10 @@ func (rs *RemoteSandbox) GetConnectionInfo(userID, runnerName string) (workspace
 	if !ok {
 		return "", ""
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return "", ""
+	}
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()
 	rc, ok := entry.runners[runnerName]
@@ -515,8 +543,18 @@ func (rs *RemoteSandbox) writePump(rc *runnerConnection, pingPeriod, writeWait t
 
 // sendRegisterError sends a registration error to the runner and closes the connection.
 func (rs *RemoteSandbox) sendRegisterError(conn *websocket.Conn, code, message string) {
-	errBody, _ := json.Marshal(ErrorResponse{Code: code, Message: message})
-	errMsg, _ := json.Marshal(RunnerMessage{Type: "error", Body: errBody})
+	errBody, err := json.Marshal(ErrorResponse{Code: code, Message: message})
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal error response")
+		conn.Close()
+		return
+	}
+	errMsg, err := json.Marshal(RunnerMessage{Type: "error", Body: errBody})
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal error message")
+		conn.Close()
+		return
+	}
 	conn.WriteMessage(websocket.TextMessage, errMsg)
 	conn.Close()
 }
@@ -558,7 +596,10 @@ func (rs *RemoteSandbox) CloseForUser(userID string) error {
 	if !ok {
 		return nil
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return nil
+	}
 	entry.mu.Lock()
 	for _, rc := range entry.runners {
 		rc.wsConn.Close()
@@ -576,7 +617,10 @@ func (rs *RemoteSandbox) DisconnectRunner(userID, runnerName string) bool {
 	if !ok {
 		return false
 	}
-	entry := val.(*userRunnersEntry)
+	entry, ok := val.(*userRunnersEntry)
+	if !ok {
+		return false
+	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	rc, ok := entry.runners[runnerName]
@@ -620,7 +664,7 @@ func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		timeout = 60 * time.Second
 	}
 
-	reqBody, _ := json.Marshal(ExecRequest{
+	reqBody, err := json.Marshal(ExecRequest{
 		Command: spec.Command,
 		Args:    spec.Args,
 		Shell:   spec.Shell,
@@ -629,6 +673,9 @@ func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		Stdin:   spec.Stdin,
 		Timeout: int(timeout / time.Second),
 	})
+	if err != nil {
+return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	msg := &RunnerMessage{
 		ID:     generateID(),
@@ -644,7 +691,12 @@ func (rs *RemoteSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("exec error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("exec error (raw: %s)", string(resp.Body))
+		}
 		return nil, fmt.Errorf("exec error: %s", e.Message)
 	}
 
@@ -669,7 +721,7 @@ func (rs *RemoteSandbox) ExecBg(ctx context.Context, spec ExecSpec, taskID strin
 		return err
 	}
 
-	reqBody, _ := json.Marshal(runnerproto.BgExecRequest{
+	reqBody, err := json.Marshal(runnerproto.BgExecRequest{
 		TaskID:  taskID,
 		Command: spec.Command,
 		Args:    spec.Args,
@@ -678,6 +730,9 @@ func (rs *RemoteSandbox) ExecBg(ctx context.Context, spec ExecSpec, taskID strin
 		Env:     spec.Env,
 		Stdin:   spec.Stdin,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 
 	msg := &RunnerMessage{
 		ID:     generateID(),
@@ -693,7 +748,12 @@ func (rs *RemoteSandbox) ExecBg(ctx context.Context, spec ExecSpec, taskID strin
 
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("bg_exec error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("bg_exec error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("bg_exec error: %s", e.Message)
 	}
 
@@ -707,7 +767,10 @@ func (rs *RemoteSandbox) KillBg(ctx context.Context, userID, taskID string) erro
 		return err
 	}
 
-	reqBody, _ := json.Marshal(runnerproto.BgKillRequest{TaskID: taskID})
+	reqBody, err := json.Marshal(runnerproto.BgKillRequest{TaskID: taskID})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{
 		ID:     generateID(),
 		Type:   runnerproto.ProtoBgKill,
@@ -722,7 +785,12 @@ func (rs *RemoteSandbox) KillBg(ctx context.Context, userID, taskID string) erro
 
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("bg_kill error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("bg_kill error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("bg_kill error: %s", e.Message)
 	}
 
@@ -736,7 +804,10 @@ func (rs *RemoteSandbox) StatusBg(ctx context.Context, userID, taskID string) (*
 		return nil, err
 	}
 
-	reqBody, _ := json.Marshal(runnerproto.BgStatusRequest{TaskID: taskID})
+	reqBody, err := json.Marshal(runnerproto.BgStatusRequest{TaskID: taskID})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{
 		ID:     generateID(),
 		Type:   runnerproto.ProtoBgStatus,
@@ -751,7 +822,12 @@ func (rs *RemoteSandbox) StatusBg(ctx context.Context, userID, taskID string) (*
 
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("bg_status error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("bg_status error (raw: %s)", string(resp.Body))
+		}
 		return nil, fmt.Errorf("bg_status error: %s", e.Message)
 	}
 
@@ -786,12 +862,15 @@ func (rs *RemoteSandbox) LLMGenerate(ctx context.Context, userID, model string, 
 		return nil, err
 	}
 
-	reqBody, _ := json.Marshal(llm.LLMProxyRequest{
+	reqBody, err := json.Marshal(llm.LLMProxyRequest{
 		Model:        model,
 		Messages:     messages,
 		Tools:        llm.SerializeTools(tools),
 		ThinkingMode: thinkingMode,
 	})
+	if err != nil {
+return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	msg := &RunnerMessage{
 		ID:     generateID(),
@@ -807,7 +886,12 @@ func (rs *RemoteSandbox) LLMGenerate(ctx context.Context, userID, model string, 
 
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("llm_generate error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("llm_generate error (raw: %s)", string(resp.Body))
+		}
 		return nil, fmt.Errorf("llm_generate error: %s", e.Message)
 	}
 
@@ -839,7 +923,12 @@ func (rs *RemoteSandbox) LLMModels(ctx context.Context, userID string) ([]string
 
 	if resp.Type == runnerproto.ProtoError {
 		var e runnerproto.ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("llm_models error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("llm_models error (raw: %s)", string(resp.Body))
+		}
 		return nil, fmt.Errorf("llm_models error: %s", e.Message)
 	}
 
@@ -857,7 +946,10 @@ func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]b
 		return nil, err
 	}
 
-	reqBody, _ := json.Marshal(ReadFileRequest{Path: path})
+	reqBody, err := json.Marshal(ReadFileRequest{Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoReadFile, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -865,9 +957,14 @@ func (rs *RemoteSandbox) ReadFile(ctx context.Context, path, userID string) ([]b
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("read file error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
 		if e.Code == "ENOENT" {
 			return nil, os.ErrNotExist
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("read file error (raw: %s)", string(resp.Body))
 		}
 		return nil, fmt.Errorf("read file: %s", e.Message)
 	}
@@ -884,11 +981,14 @@ func (rs *RemoteSandbox) WriteFile(ctx context.Context, path string, data []byte
 		return err
 	}
 
-	reqBody, _ := json.Marshal(WriteFileRequest{
+	reqBody, err := json.Marshal(WriteFileRequest{
 		Path: path,
 		Data: base64.StdEncoding.EncodeToString(data),
 		Perm: int(perm),
 	})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoWriteFile, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -896,7 +996,12 @@ func (rs *RemoteSandbox) WriteFile(ctx context.Context, path string, data []byte
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("write file error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("write file error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("write file: %s", e.Message)
 	}
 	return nil
@@ -907,7 +1012,10 @@ func (rs *RemoteSandbox) Stat(ctx context.Context, path, userID string) (*Sandbo
 	if err != nil {
 		return nil, err
 	}
-	reqBody, _ := json.Marshal(StatRequest{Path: path})
+	reqBody, err := json.Marshal(StatRequest{Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoStat, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -915,9 +1023,14 @@ func (rs *RemoteSandbox) Stat(ctx context.Context, path, userID string) (*Sandbo
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("stat error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
 		if e.Code == "ENOENT" {
 			return nil, os.ErrNotExist
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("stat error (raw: %s)", string(resp.Body))
 		}
 		return nil, fmt.Errorf("stat: %s", e.Message)
 	}
@@ -940,7 +1053,10 @@ func (rs *RemoteSandbox) ReadDir(ctx context.Context, path, userID string) ([]Di
 	if err != nil {
 		return nil, err
 	}
-	reqBody, _ := json.Marshal(ReadDirRequest{Path: path})
+	reqBody, err := json.Marshal(ReadDirRequest{Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoReadDir, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -948,7 +1064,12 @@ func (rs *RemoteSandbox) ReadDir(ctx context.Context, path, userID string) ([]Di
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, fmt.Errorf("read_dir error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return nil, fmt.Errorf("read_dir error (raw: %s)", string(resp.Body))
+		}
 		return nil, fmt.Errorf("read_dir: %s", e.Message)
 	}
 	var de DirEntriesResponse
@@ -967,7 +1088,10 @@ func (rs *RemoteSandbox) MkdirAll(ctx context.Context, path string, perm os.File
 	if err != nil {
 		return err
 	}
-	reqBody, _ := json.Marshal(PathRequest{Path: path, Perm: int(perm)})
+	reqBody, err := json.Marshal(PathRequest{Path: path, Perm: int(perm)})
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoMkdirAll, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -975,7 +1099,12 @@ func (rs *RemoteSandbox) MkdirAll(ctx context.Context, path string, perm os.File
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("mkdir_all error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("mkdir_all error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("mkdir_all: %s", e.Message)
 	}
 	return nil
@@ -986,7 +1115,10 @@ func (rs *RemoteSandbox) Remove(ctx context.Context, path, userID string) error 
 	if err != nil {
 		return err
 	}
-	reqBody, _ := json.Marshal(PathRequest{Path: path})
+	reqBody, err := json.Marshal(PathRequest{Path: path})
+	if err != nil {
+return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoRemove, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -994,7 +1126,12 @@ func (rs *RemoteSandbox) Remove(ctx context.Context, path, userID string) error 
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("remove error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("remove error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("remove: %s", e.Message)
 	}
 	return nil
@@ -1005,7 +1142,10 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 	if err != nil {
 		return err
 	}
-	reqBody, _ := json.Marshal(PathRequest{Path: path})
+	reqBody, err := json.Marshal(PathRequest{Path: path})
+	if err != nil {
+return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoRemoveAll, UserID: userID, Body: reqBody}
 	resp, err := rs.sendRequest(ctx, rc, msg, defaultRequestTimeout)
 	if err != nil {
@@ -1013,7 +1153,12 @@ func (rs *RemoteSandbox) RemoveAll(ctx context.Context, path, userID string) err
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("remove_all error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("remove_all error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("remove_all: %s", e.Message)
 	}
 	return nil
@@ -1024,10 +1169,13 @@ func (rs *RemoteSandbox) DownloadFile(ctx context.Context, url, outputPath, user
 	if err != nil {
 		return err
 	}
-	reqBody, _ := json.Marshal(DownloadFileRequest{
+	reqBody, err := json.Marshal(DownloadFileRequest{
 		URL:        url,
 		OutputPath: outputPath,
 	})
+	if err != nil {
+return fmt.Errorf("marshal request: %w", err)
+	}
 	msg := &RunnerMessage{ID: generateID(), Type: ProtoDownloadFile, UserID: userID, Body: reqBody}
 	// 5-minute timeout for downloads
 	resp, err := rs.sendRequest(ctx, rc, msg, 5*time.Minute)
@@ -1036,7 +1184,12 @@ func (rs *RemoteSandbox) DownloadFile(ctx context.Context, url, outputPath, user
 	}
 	if resp.Type == ProtoError {
 		var e ErrorResponse
-		json.Unmarshal(resp.Body, &e)
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return fmt.Errorf("download_file error (raw: %s): unmarshal failed: %w", string(resp.Body), err)
+		}
+		if e.Message == "" {
+			return fmt.Errorf("download_file error (raw: %s)", string(resp.Body))
+		}
 		return fmt.Errorf("download_file: %s", e.Message)
 	}
 	return nil

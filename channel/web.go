@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,7 +37,16 @@ const (
 	webOfflineMsgBufSize = 50
 	webSessionCookieName = "xbot_session"
 	webSessionMaxAge     = 30 * 24 * time.Hour // 30 days
+	maxBodySize          = 1 << 20              // 1MB maximum request body size
 )
+
+// limitBodySize wraps a handler to limit request body size.
+func limitBodySize(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		next(w, r)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // WebConfig (channel-level)
@@ -443,11 +453,11 @@ func (wc *WebChannel) Start() error {
 	mux.HandleFunc("/ws", wc.handleWS)
 
 	// Auth API
-	mux.HandleFunc("/api/auth/register", wc.handleRegister)
-	mux.HandleFunc("/api/auth/login", wc.handleLogin)
+	mux.HandleFunc("/api/auth/register", limitBodySize(wc.handleRegister))
+	mux.HandleFunc("/api/auth/login", limitBodySize(wc.handleLogin))
 	mux.HandleFunc("/api/auth/logout", wc.handleLogout)
-	mux.HandleFunc("/api/auth/feishu-link", wc.handleFeishuLink)
-	mux.HandleFunc("/api/auth/feishu-login", wc.handleFeishuLogin)
+	mux.HandleFunc("/api/auth/feishu-link", limitBodySize(wc.handleFeishuLink))
+	mux.HandleFunc("/api/auth/feishu-login", limitBodySize(wc.handleFeishuLogin))
 	mux.HandleFunc("/api/auth/config", wc.handleAuthConfig)
 
 	// REST API
@@ -633,10 +643,29 @@ func (wc *WebChannel) PushSyncProgress(chatID, phase, message string) {
 // WebSocket handler
 // ---------------------------------------------------------------------------
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+// wsUpgrader returns a WebSocket upgrader with origin checking.
+func (wc *WebChannel) wsUpgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true // non-browser clients
+			}
+			u, err := url.Parse(origin)
+			if err != nil {
+				return false
+			}
+			// Allow same-origin or configured public URL
+			if wc.config.PublicURL != "" {
+				if pu, err := url.Parse(wc.config.PublicURL); err == nil && u.Host == pu.Host {
+					return true
+				}
+			}
+			return u.Host == r.Host
+		},
+	}
 }
 
 func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -648,7 +677,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := wc.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		log.WithError(err).Warn("WebSocket upgrade failed")
 		return

@@ -106,7 +106,10 @@ func (s *OffloadStore) SetSandbox(sb tools.Sandbox) {
 // generateID 生成 offload 短 ID: "ol_" + 8位随机 hex。
 func generateID() string {
 	b := make([]byte, 4)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if crypto/rand fails (should never happen)
+		return fmt.Sprintf("ol_%08x", time.Now().UnixNano()&0xffffffff)
+	}
 	return "ol_" + hex.EncodeToString(b)
 }
 

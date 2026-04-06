@@ -16,6 +16,12 @@ import (
 	log "xbot/logger"
 )
 
+// Package-level HTTP clients to avoid creating new instances per request.
+var (
+	downloadClient = &http.Client{Timeout: 60 * time.Second}
+	uploadClient   = &http.Client{Timeout: 30 * time.Second}
+)
+
 // DownloadFileTool downloads files/images sent by users in Feishu chat via Message Resource API.
 type DownloadFileTool struct {
 	FeishuToolBase
@@ -91,7 +97,7 @@ func (t *DownloadFileTool) Execute(ctx *tools.ToolContext, input string) (*tools
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	resp, err := downloadClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download request failed: %w", err)
 	}
@@ -163,11 +169,13 @@ func (t *DownloadFileTool) getTenantToken() (string, error) {
 		"app_secret": appSecret,
 	})
 
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Post(
-		"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-		"application/json; charset=utf-8",
-		bytes.NewReader(reqBody),
-	)
+	req, err := http.NewRequest(http.MethodPost, "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := uploadClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request tenant token: %w", err)
 	}

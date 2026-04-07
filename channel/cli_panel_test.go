@@ -49,6 +49,10 @@ func (m *mockSubscriptionManager) SetModel(id, model string) error {
 	return nil
 }
 
+func (m *mockSubscriptionManager) Rename(id, name string) error {
+	return nil
+}
+
 // TestApplyQuickSwitch tests that switching a subscription actually calls SwitchLLM.
 func TestApplyQuickSwitch(t *testing.T) {
 	// Track what SwitchLLM received

@@ -276,6 +276,15 @@ func (s *LLMSubscriptionService) SetModel(id, model string) error {
 	return nil
 }
 
+func (s *LLMSubscriptionService) Rename(id, name string) error {
+	conn := s.db.Conn()
+	_, err := conn.Exec("UPDATE user_llm_subscriptions SET name = ?, updated_at = datetime('now') WHERE id = ?", name, id)
+	if err != nil {
+		return fmt.Errorf("rename subscription: %w", err)
+	}
+	return nil
+}
+
 // newULID generates a new ULID string.
 func newULID() string {
 	// Use crypto/rand + timestamp for a simple unique ID

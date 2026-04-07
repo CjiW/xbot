@@ -711,6 +711,16 @@ func (m *configSubscriptionManager) SetModel(id, model string) error {
 	return fmt.Errorf("subscription %s not found", id)
 }
 
+func (m *configSubscriptionManager) Rename(id, name string) error {
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Name = name
+			return m.saveFn()
+		}
+	}
+	return fmt.Errorf("subscription %s not found", id)
+}
+
 // configLLMSubscriber switches LLM at runtime using config-based subscriptions.
 type configLLMSubscriber struct {
 	cfg     *config.Config

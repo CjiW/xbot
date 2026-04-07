@@ -124,6 +124,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.applyQuickSwitch()
 			return m, nil, true
 		}
+		// E: rename selected subscription
+		if msg.String() == "e" {
+			m.renameQuickSwitchEntry()
+			return m, nil, true
+		}
 		return m, nil, true // block all other keys
 	}
 

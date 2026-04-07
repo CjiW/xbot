@@ -1525,6 +1525,7 @@ func (m *cliModel) applyQuickSwitch() {
 			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_provider", target.Provider)
 			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_model", target.Model)
 			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_base_url", target.BaseURL)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_api_key", target.APIKey)
 		}
 		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
 		m.refreshCachedModelName()
@@ -1537,6 +1538,36 @@ func (m *cliModel) applyQuickSwitch() {
 	}
 
 	m.quickSwitchMode = ""
+}
+
+// renameQuickSwitchEntry opens a mini panel to rename the selected subscription.
+func (m *cliModel) renameQuickSwitchEntry() {
+	if m.quickSwitchCursor >= len(m.quickSwitchList) {
+		return
+	}
+	selected := m.quickSwitchList[m.quickSwitchCursor]
+	if selected.ID == "__add__" {
+		return
+	}
+	oldName := selected.Name
+	renameSchema := []SettingDefinition{
+		{Key: "sub_name", Label: "Name", Description: "New display name for this subscription", Type: SettingTypeText, DefaultValue: oldName},
+	}
+	renameValues := map[string]string{"sub_name": oldName}
+	m.quickSwitchMode = "" // close overlay while renaming
+	m.openSettingsPanel(renameSchema, renameValues, func(values map[string]string) {
+		newName := values["sub_name"]
+		if newName == "" || newName == oldName {
+			return
+		}
+		if m.subscriptionMgr != nil {
+			if err := m.subscriptionMgr.Rename(selected.ID, newName); err != nil {
+				m.showTempStatus(fmt.Sprintf("Failed to rename: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Renamed: %s → %s", oldName, newName))
+			}
+		}
+	})
 }
 
 // viewQuickSwitch renders the quick switch overlay as a centered panel.
@@ -1584,6 +1615,9 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 	panelContent := strings.Join(lines, "\n")
 	box := m.styles.PanelBox.Render(panelContent)
 
+	// Hint line below the box
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Rename  Esc Close")
+
 	// Center vertically
 	listH := len(m.quickSwitchList) + 3 // header + spacer + items + borders(~2)
 	blankLines := max(0, (height-listH)/2)
@@ -1592,6 +1626,8 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 		b.WriteString("\n")
 	}
 	b.WriteString(box)
+	b.WriteString("\n")
+	b.WriteString(hint)
 
 	return b.String()
 }

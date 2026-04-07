@@ -108,23 +108,23 @@ type WebConfig struct {
 
 // Config 应用配置
 type Config struct {
-	Server        ServerConfig        `json:"server"`
-	LLM           LLMConfig           `json:"llm"`
-	Embedding     EmbeddingConfig     `json:"embedding"`
-	Log           LogConfig           `json:"log"`
-	PProf         PProfConfig         `json:"pprof"`
-	Feishu        FeishuConfig        `json:"feishu"`
-	QQ            QQConfig            `json:"qq"`
-	NapCat        NapCatConfig        `json:"napcat"`
-	Agent         AgentConfig         `json:"agent"`
-	OAuth         OAuthConfig         `json:"oauth"`
-	Sandbox       SandboxConfig       `json:"sandbox"`
-	StartupNotify StartupNotifyConfig `json:"startup_notify"`
-	Admin         AdminConfig         `json:"admin"`
-	Web           WebConfig           `json:"web"`
-	EventWebhook  EventWebhookConfig  `json:"event_webhook"`
-	OSS           OSSConfig           `json:"oss"`
-	TavilyAPIKey  string              `json:"tavily_api_key"`
+	Server        ServerConfig         `json:"server"`
+	LLM           LLMConfig            `json:"llm"`
+	Embedding     EmbeddingConfig      `json:"embedding"`
+	Log           LogConfig            `json:"log"`
+	PProf         PProfConfig          `json:"pprof"`
+	Feishu        FeishuConfig         `json:"feishu"`
+	QQ            QQConfig             `json:"qq"`
+	NapCat        NapCatConfig         `json:"napcat"`
+	Agent         AgentConfig          `json:"agent"`
+	OAuth         OAuthConfig          `json:"oauth"`
+	Sandbox       SandboxConfig        `json:"sandbox"`
+	StartupNotify StartupNotifyConfig  `json:"startup_notify"`
+	Admin         AdminConfig          `json:"admin"`
+	Web           WebConfig            `json:"web"`
+	EventWebhook  EventWebhookConfig   `json:"event_webhook"`
+	OSS           OSSConfig            `json:"oss"`
+	TavilyAPIKey  string               `json:"tavily_api_key"`
 	Subscriptions []SubscriptionConfig `json:"subscriptions,omitempty"`
 }
 

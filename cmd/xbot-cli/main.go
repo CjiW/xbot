@@ -543,16 +543,16 @@ func main() {
 	if len(app.cfg.Subscriptions) == 0 {
 		// Migration: create first subscription from current LLM config
 		app.cfg.Subscriptions = []config.SubscriptionConfig{{
-		ID:       "default",
-		Name:     app.cfg.LLM.Provider,
-		Provider: app.cfg.LLM.Provider,
-		BaseURL:  app.cfg.LLM.BaseURL,
-		APIKey:   app.cfg.LLM.APIKey,
-		Model:    app.cfg.LLM.Model,
-		Active:   true,
+			ID:       "default",
+			Name:     app.cfg.LLM.Provider,
+			Provider: app.cfg.LLM.Provider,
+			BaseURL:  app.cfg.LLM.BaseURL,
+			APIKey:   app.cfg.LLM.APIKey,
+			Model:    app.cfg.LLM.Model,
+			Active:   true,
 		}}
 		if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
-		log.WithError(err).Warn("Failed to save migrated subscriptions")
+			log.WithError(err).Warn("Failed to save migrated subscriptions")
 		}
 	}
 	saveConfig := func() error {
@@ -583,8 +583,8 @@ func main() {
 
 // configSubscriptionManager manages CLI subscriptions in config.json (no database).
 type configSubscriptionManager struct {
-	cfg       *config.Config
-	saveFn    func() error // persists config to disk
+	cfg    *config.Config
+	saveFn func() error // persists config to disk
 }
 
 func newConfigSubscriptionManager(cfg *config.Config, saveFn func() error) *configSubscriptionManager {
@@ -673,9 +673,9 @@ func (m *configSubscriptionManager) SetModel(id, model string) error {
 
 // configLLMSubscriber switches LLM at runtime using config-based subscriptions.
 type configLLMSubscriber struct {
-	cfg       *config.Config
-	factory   *agent.LLMFactory
-	saveFn    func() error
+	cfg     *config.Config
+	factory *agent.LLMFactory
+	saveFn  func() error
 }
 
 func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveFn func() error) *configLLMSubscriber {

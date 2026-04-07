@@ -1417,7 +1417,7 @@ func (m *cliModel) applyQuickSwitch() {
 	m.quickSwitchMode = ""
 }
 
-// viewQuickSwitch renders the quick switch overlay using ANSI cursor positioning.
+// viewQuickSwitch renders the quick switch overlay as a centered panel.
 func (m *cliModel) viewQuickSwitch(width, height int) string {
 	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
 		return ""
@@ -1428,20 +1428,14 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 		title = "Switch Model"
 	}
 
-	listW := min(52, width-4)
-	listH := min(len(m.quickSwitchList)+2, height/2)
-	x := max(1, (width-listW)/2)
-	y := max(1, (height-listH)/2)
+	var lines []string
 
-	var b strings.Builder
-	// Move cursor to overlay position
-	fmt.Fprintf(&b, "\x1b[%d;%dH", y, x)
+	// Header
+	lines = append(lines, m.styles.PanelHeader.Render(title))
+	lines = append(lines, "") // spacer
 
-	header := m.styles.TextMutedSt.Render(fmt.Sprintf("┌─ %s ", title) + strings.Repeat("─", max(0, listW-len(title)-6)) + "┐")
-	b.WriteString(header)
-
+	// Items
 	for i, s := range m.quickSwitchList {
-		fmt.Fprintf(&b, "\x1b[%d;%dH", y+1+i, x)
 		cursor := " "
 		style := m.styles.TextMutedSt
 		if i == m.quickSwitchCursor {
@@ -1456,13 +1450,22 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 		if name == "" {
 			name = s.ID
 		}
-		line := style.Render(fmt.Sprintf("│%s %-30s %-16s%s│", cursor, name, s.Model, active))
-		b.WriteString(line)
+		line := style.Render(fmt.Sprintf(" %s %-30s %-16s%s", cursor, name, s.Model, active))
+		lines = append(lines, line)
 	}
 
-	fmt.Fprintf(&b, "\x1b[%d;%dH", y+1+len(m.quickSwitchList), x)
-	footer := m.styles.TextMutedSt.Render("└" + strings.Repeat("─", listW-2) + "┘")
-	b.WriteString(footer)
+	// Build panel with border
+	panelContent := strings.Join(lines, "\n")
+	box := m.styles.PanelBox.Render(panelContent)
+
+	// Center vertically
+	listH := len(m.quickSwitchList) + 3 // header + spacer + items + borders(~2)
+	blankLines := max(0, (height-listH)/2)
+	var b strings.Builder
+	for i := 0; i < blankLines; i++ {
+		b.WriteString("\n")
+	}
+	b.WriteString(box)
 
 	return b.String()
 }

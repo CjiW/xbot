@@ -282,11 +282,11 @@ func (m *cliModel) View() tea.View {
 	v.AltScreen = true
 
 	// §15 Quick switch overlay (subscription/model picker)
-	// Rendered as ANSI-positioned overlay on top of content.
+	// Rendered as a centered panel replacing the entire view.
 	if m.quickSwitchMode != "" {
 		overlay := m.viewQuickSwitch(m.width, m.height)
 		if overlay != "" {
-			v.Content += overlay
+			v.Content = overlay
 		}
 	}
 

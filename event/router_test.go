@@ -95,8 +95,8 @@ func TestRouter_DispatchByID(t *testing.T) {
 
 	var injected []string
 	router.SetInjectFunc(func(msg Message) {
-			injected = append(injected, msg.Content)
-		})
+		injected = append(injected, msg.Content)
+	})
 
 	trigger := &Trigger{
 		ID:         "trg_test1",

@@ -714,6 +714,13 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 				m.openDangerPanelFromSettings()
 				return true, m, nil
 			}
+			// Subscription management entry — close settings, open quick switch
+			if def.Key == "subscription_manage" {
+				m.panelMode = ""
+				m.relayoutViewport()
+				m.openQuickSwitch("subscription")
+				return true, m, nil
+			}
 			switch def.Type {
 			case SettingTypeToggle:
 				// Toggle on Enter
@@ -1104,6 +1111,34 @@ func (m *cliModel) viewSettingsPanel() string {
 			continue
 		}
 
+		// Subscription management entry: show count + active subscription
+		if def.Key == "subscription_manage" {
+			subHint := ""
+			if m.subscriptionMgr != nil {
+				if subs, err := m.subscriptionMgr.List(""); err == nil && len(subs) > 0 {
+					var activeName string
+					for _, sub := range subs {
+						if sub.Active {
+							activeName = sub.Name
+							break
+						}
+					}
+					if activeName != "" {
+						subHint = " " + s.ProgressDone.Render("● "+activeName)
+					}
+					subHint += descStyle.Render(fmt.Sprintf(" (%d)", len(subs)))
+				}
+			}
+			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), subHint)
+			if i == m.panelCursor && !m.panelEdit {
+				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			ln++
+			continue
+		}
+
 		// Format value display
 		var displayVal string
 		switch def.Type {
@@ -1407,7 +1442,7 @@ func (m *cliModel) applyQuickSwitch() {
 	if selected.ID == "__add__" {
 		m.quickSwitchMode = ""
 		addSchema := []SettingDefinition{
-			{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: "new"},
+			{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: ""},
 			{Key: "sub_provider", Label: "Provider", Description: "LLM provider (openai, anthropic, deepseek, etc.)", Type: SettingTypeText, DefaultValue: "openai"},
 			{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeText, DefaultValue: ""},
 			{Key: "sub_base_url", Label: "Base URL", Description: "API base URL (leave empty for provider default)", Type: SettingTypeText, DefaultValue: ""},
@@ -1463,6 +1498,18 @@ func (m *cliModel) applyQuickSwitch() {
 							if err := m.channel.config.SwitchLLM(s.Provider, s.BaseURL, s.APIKey, s.Model); err != nil {
 								m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
 							} else {
+								// Clear model/baseURL overrides so refreshCachedModelName
+								// picks up the new value from GetCurrentValues() instead of
+								// returning a stale override from a previous /settings edit.
+								m.channel.UpdateConfig(s.Model, s.BaseURL)
+								// Sync LLM values to SettingsService so /settings
+								// doesn't show stale values from a previous save.
+								if m.channel.settingsSvc != nil {
+									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_provider", s.Provider)
+									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_model", s.Model)
+									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_base_url", s.BaseURL)
+									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_api_key", s.APIKey)
+								}
 								m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
 								m.refreshCachedModelName()
 							}

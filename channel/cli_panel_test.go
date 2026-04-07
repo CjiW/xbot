@@ -7,11 +7,11 @@ import (
 
 // mockSubscriptionManager implements SubscriptionManager for testing.
 type mockSubscriptionManager struct {
-	subs       []Subscription
-	defaultID  string
-	addCalled  bool
-	setDefID   string
-	saveErr    error
+	subs      []Subscription
+	defaultID string
+	addCalled bool
+	setDefID  string
+	saveErr   error
 }
 
 func (m *mockSubscriptionManager) List(_ string) ([]Subscription, error) {

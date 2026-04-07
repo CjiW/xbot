@@ -458,6 +458,8 @@ func localeZH() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			// Subscription management entry (display-only, triggers quick switch)
+			{Key: "subscription_manage", Label: "📦 订阅管理", Type: SettingTypeText, Category: "LLM"},
 			{
 				Key: "context_mode", Label: "上下文模式", Description: "控制上下文管理策略",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",

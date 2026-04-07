@@ -534,6 +534,7 @@ func (m *cliModel) refreshCachedModelName() {
 	if m.channel == nil {
 		return
 	}
+	m.cachedModelName = ""
 	m.channel.configMu.RLock()
 	if m.channel.modelOverride != "" {
 		m.cachedModelName = m.channel.modelOverride

@@ -414,6 +414,7 @@ type CLIChannelConfig struct {
 	IsFirstRun           bool                                                       // 首次运行标志，TUI 启动时自动打开 setup panel
 	ClearMemory          func(targetType string) error                              // 清空记忆（danger zone）
 	GetMemoryStats       func() map[string]string                                   // 获取记忆统计（danger zone）
+	SwitchLLM            func(provider, baseURL, apiKey, model string) error        // 切换活跃 LLM（config + factory + save）
 }
 
 // ---------------------------------------------------------------------------

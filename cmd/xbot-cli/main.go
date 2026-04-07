@@ -427,8 +427,44 @@ func main() {
 				return map[string]string{}
 			}
 			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
-		},
-	}
+			},
+			SwitchLLM: func(provider, baseURL, apiKey, model string) error {
+				// Inherit from global config if not specified per-subscription
+				if baseURL == "" {
+					baseURL = app.cfg.LLM.BaseURL
+				}
+				if apiKey == "" {
+					apiKey = app.cfg.LLM.APIKey
+				}
+				if provider == "" {
+					provider = app.cfg.LLM.Provider
+				}
+				llmCfg := config.LLMConfig{
+					Provider: provider,
+					BaseURL:  baseURL,
+					APIKey:   apiKey,
+					Model:    model,
+				}
+				client, err := createLLM(llmCfg, llm.RetryConfig{
+					Attempts: 5,
+					Delay:    1 * time.Second,
+					MaxDelay: 30 * time.Second,
+				})
+				if err != nil {
+					return fmt.Errorf("create LLM: %w", err)
+				}
+				app.llmClient = client
+				if app.agentLoop != nil {
+					app.agentLoop.LLMFactory().SetDefaults(client, model)
+				}
+				// Sync to global config
+				app.cfg.LLM.Provider = provider
+				app.cfg.LLM.BaseURL = baseURL
+				app.cfg.LLM.APIKey = apiKey
+				app.cfg.LLM.Model = model
+				return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+			},
+		}
 
 	// 设置历史消息加载器（会话恢复）
 	var cliTenantID int64
@@ -598,6 +634,8 @@ func (m *configSubscriptionManager) List(_ string) ([]channel.Subscription, erro
 			ID:       s.ID,
 			Name:     s.Name,
 			Provider: s.Provider,
+			BaseURL:  s.BaseURL,
+			APIKey:   s.APIKey,
 			Model:    s.Model,
 			Active:   s.Active,
 		}

@@ -1455,22 +1455,28 @@ func (m *cliModel) applyQuickSwitch() {
 		if m.subscriptionMgr != nil {
 		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
 			m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
-		} else {
-			if m.llmSubscriber != nil {
-			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &selected); err != nil {
-				m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
-			} else {
-				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
-				m.refreshCachedModelName()
+		} else if m.channel != nil && m.channel.config.SwitchLLM != nil {
+			// Find the full subscription config (with base_url/api_key) from subscriptionMgr
+			if subs, err := m.subscriptionMgr.List(""); err == nil {
+			for _, s := range subs {
+				if s.ID == selected.ID {
+				if err := m.channel.config.SwitchLLM(s.Provider, s.BaseURL, s.APIKey, s.Model); err != nil {
+					m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
+				} else {
+					m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
+					m.refreshCachedModelName()
+				}
+				break
+				}
 			}
 			}
 		}
 		}
 	case "model":
 		if m.llmSubscriber != nil {
-		m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
-		m.cachedModelName = selected.Model
-		m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
+			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
+			m.cachedModelName = selected.Model
+			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
 		}
 	}
 

@@ -878,7 +878,7 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 }
 
 // SetEventRouter sets the event trigger router.
-// The router's InjectFunc is wired to injectInbound when Agent.Run starts.
+// The router's InjectFunc is wired to injectEventMessage when Agent.Run starts.
 func (a *Agent) SetEventRouter(r *event.Router) {
 	a.eventRouter = r
 }
@@ -969,7 +969,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.cronSch.StartDelayed(3 * time.Second)
 
 	if a.eventRouter != nil {
-		a.eventRouter.SetInjectFunc(a.injectInbound)
+		a.eventRouter.SetInjectFunc(a.injectEventMessage)
 	}
 
 	defer func() {
@@ -1977,7 +1977,8 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	}
 }
 
-// injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
+// injectInbound 向入站队列注入消息，触发 Agent 完整处理循环。
+// 用于 cron 调度和后台任务通知等内部系统消息。
 func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
 		Channel:   channel,
@@ -1987,6 +1988,23 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		Time:      time.Now(),
 		IsCron:    false,
 		RequestID: log.NewRequestID(),
+	}
+}
+
+// injectEventMessage 向入站队列注入事件触发的消息。
+// Event Router 通过此函数将外部事件（webhook 等）路由到 agent loop，
+// 并设置 EventSource/EventTrigger 元数据。
+func (a *Agent) injectEventMessage(msg event.Message) {
+	a.bus.Inbound <- bus.InboundMessage{
+		Channel:      msg.Channel,
+		SenderID:     msg.SenderID,
+		ChatID:       msg.ChatID,
+		Content:      msg.Content,
+		Time:         time.Now(),
+		IsCron:       false,
+		RequestID:    log.NewRequestID(),
+		EventSource:  msg.EventSource,
+		EventTrigger: msg.EventTrigger,
 	}
 }
 

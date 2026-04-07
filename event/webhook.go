@@ -1,6 +1,7 @@
 package event
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,10 +65,12 @@ func (ws *WebhookServer) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the webhook server.
+// Stop gracefully shuts down the webhook server, waiting for in-flight requests.
 func (ws *WebhookServer) Stop() {
 	if ws.server != nil {
-		ws.server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ws.server.Shutdown(ctx)
 	}
 }
 
@@ -178,6 +181,7 @@ func (ws *WebhookServer) handlePing(w http.ResponseWriter, triggerID string) {
 }
 
 // rateLimiter implements a simple per-key sliding window rate limiter.
+// Expired entries (empty windows older than 2 minutes) are cleaned up on each allow() call.
 type rateLimiter struct {
 	maxPerMin int
 	mu        sync.Mutex
@@ -220,5 +224,22 @@ func (rl *rateLimiter) allow(key string) bool {
 	}
 
 	w.timestamps = append(w.timestamps, now)
+
+	// Periodic cleanup: remove empty windows to prevent unbounded map growth.
+	// Only runs periodically (every ~256 calls) to amortize cost.
+	if len(rl.windows) > 64 && now.Unix()%64 == 0 {
+		rl.evictEmpty()
+	}
+
 	return true
+}
+
+// evictEmpty removes windows with no recent timestamps.
+func (rl *rateLimiter) evictEmpty() {
+	cutoff := time.Now().Add(-2 * time.Minute)
+	for k, w := range rl.windows {
+		if len(w.timestamps) == 0 || w.timestamps[len(w.timestamps)-1].Before(cutoff) {
+			delete(rl.windows, k)
+		}
+	}
 }

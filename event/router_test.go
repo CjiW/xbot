@@ -94,9 +94,9 @@ func TestRouter_DispatchByID(t *testing.T) {
 	router := NewRouter(store)
 
 	var injected []string
-	router.SetInjectFunc(func(channel, chatID, senderID, content string) {
-		injected = append(injected, content)
-	})
+	router.SetInjectFunc(func(msg Message) {
+			injected = append(injected, msg.Content)
+		})
 
 	trigger := &Trigger{
 		ID:         "trg_test1",
@@ -143,7 +143,7 @@ func TestRouter_DispatchByID(t *testing.T) {
 func TestRouter_DispatchByID_NotFound(t *testing.T) {
 	store := newMemTriggerStore()
 	router := NewRouter(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	_, err := router.DispatchByID("nonexistent", Event{})
 	if err == nil {
@@ -154,7 +154,7 @@ func TestRouter_DispatchByID_NotFound(t *testing.T) {
 func TestRouter_DispatchByID_Disabled(t *testing.T) {
 	store := newMemTriggerStore()
 	router := NewRouter(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	store.AddTrigger(&Trigger{
 		ID:        "trg_dis",
@@ -174,7 +174,7 @@ func TestRouter_DispatchByID_Disabled(t *testing.T) {
 func TestRouter_DispatchByID_OneShot(t *testing.T) {
 	store := newMemTriggerStore()
 	router := NewRouter(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	store.AddTrigger(&Trigger{
 		ID:         "trg_one",
@@ -205,9 +205,9 @@ func TestRouter_Dispatch_MultipleMatches(t *testing.T) {
 
 	var mu sync.Mutex
 	var injected []string
-	router.SetInjectFunc(func(_, chatID, _, content string) {
+	router.SetInjectFunc(func(msg Message) {
 		mu.Lock()
-		injected = append(injected, chatID+":"+content)
+		injected = append(injected, msg.ChatID+":"+msg.Content)
 		mu.Unlock()
 	})
 
@@ -229,7 +229,7 @@ func TestRouter_Dispatch_SignatureVerification(t *testing.T) {
 	router := NewRouter(store)
 
 	var injected int
-	router.SetInjectFunc(func(_, _, _, _ string) { injected++ })
+	router.SetInjectFunc(func(msg Message) { injected++ })
 
 	secret := "my-secret"
 	store.AddTrigger(&Trigger{

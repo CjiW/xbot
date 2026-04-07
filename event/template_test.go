@@ -69,13 +69,9 @@ func TestRenderMessage_NestedPayload(t *testing.T) {
 		},
 		Timestamp: time.Now(),
 	}
-	result := RenderMessage("PR: {{.Payload.pull_request.title}}", evt)
-	// Go templates can't access nested maps directly with dot notation on map[string]any
-	// but with index function they can. The template renders what it can.
-	// With missingkey=zero, nested access on maps may not work as expected.
-	// This test verifies the fallback behavior.
-	if result == "" {
-		t.Error("result should not be empty")
+	result := RenderMessage("PR: {{dig .Payload \"pull_request\" \"title\"}}", evt)
+	if result != "PR: Fix login bug" {
+		t.Errorf("unexpected result: %q", result)
 	}
 }
 

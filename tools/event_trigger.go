@@ -41,7 +41,7 @@ func (t *EventTriggerTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "action", Type: "string", Description: "Action: add, list, remove, enable, disable", Required: true},
 		{Name: "name", Type: "string", Description: "Human-readable trigger name (for add)", Required: false},
-		{Name: "message", Type: "string", Description: "Message template sent to the agent when triggered. Supports Go template syntax: {{.EventType}}, {{.Payload}} (full JSON), {{.Timestamp}}. Nested payload fields: {{.Payload.action}}, {{.Payload.pull_request.title}}, etc.", Required: false},
+		{Name: "message", Type: "string", Description: "Message template sent to the agent when triggered. Go template syntax: {{.EventType}}, {{.Payload}} (full JSON), {{.Payload.action}} (top-level field), {{dig .Payload \"pull_request\" \"title\"}} (nested field), {{.Headers.x-github-event}}, {{.Timestamp}}", Required: false},
 		{Name: "secret", Type: "string", Description: "Webhook signing secret for HMAC-SHA256 verification. Use 'auto' to auto-generate. If omitted, no signature verification is performed.", Required: false},
 		{Name: "one_shot", Type: "boolean", Description: "If true, the trigger auto-disables after the first event (default: false)", Required: false},
 		{Name: "trigger_id", Type: "string", Description: "Trigger ID (for remove/enable/disable)", Required: false},

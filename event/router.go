@@ -12,8 +12,18 @@ import (
 	log "xbot/logger"
 )
 
-// InjectFunc injects a message into the agent loop for a given (channel, chatID, senderID).
-type InjectFunc func(channel, chatID, senderID, content string)
+// Message represents a message to be injected into the agent loop.
+type Message struct {
+	Channel      string
+	ChatID       string
+	SenderID     string
+	Content      string
+	EventSource  string // event origin: "webhook", "cron", etc.
+	EventTrigger string // trigger ID that produced this message
+}
+
+// InjectFunc injects a message into the agent loop.
+type InjectFunc func(msg Message)
 
 // TriggerStore abstracts persistence for triggers.
 type TriggerStore interface {
@@ -45,11 +55,52 @@ func NewRouter(store TriggerStore) *Router {
 	return &Router{store: store}
 }
 
-// SetInjectFunc sets the message injection function (typically agent.injectInbound).
+// SetInjectFunc sets the message injection function (typically agent.injectEventMessage).
 func (r *Router) SetInjectFunc(fn InjectFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.injectFn = fn
+}
+
+// dispatchOne is the shared core logic for dispatching an event to a single trigger.
+// It verifies the signature, renders the message template, injects, records fire, and handles one-shot.
+func (r *Router) dispatchOne(t *Trigger, evt Event) DispatchResult {
+	if t.Secret != "" && !verifySignature(evt, t.Secret) {
+		return DispatchResult{
+			TriggerID: t.ID,
+			OK:        false,
+			Error:     "signature verification failed",
+		}
+	}
+
+	message := RenderMessage(t.MessageTpl, evt)
+	r.injectFn(Message{
+		Channel:      t.Channel,
+		ChatID:       t.ChatID,
+		SenderID:     t.SenderID,
+		Content:      message,
+		EventSource:  evt.Type,
+		EventTrigger: t.ID,
+	})
+
+	now := time.Now()
+	if err := r.store.RecordFire(t.ID, now); err != nil {
+		log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to record fire")
+	}
+
+	if t.OneShot {
+		if err := r.store.UpdateEnabled(t.ID, false); err != nil {
+			log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to disable one-shot trigger")
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"trigger_id": t.ID,
+		"channel":    t.Channel,
+		"chat_id":    t.ChatID,
+	}).Info("EventRouter: dispatched event to trigger")
+
+	return DispatchResult{TriggerID: t.ID, OK: true}
 }
 
 // Dispatch matches an event against registered triggers and injects messages.
@@ -70,43 +121,17 @@ func (r *Router) Dispatch(evt Event) []DispatchResult {
 	}
 
 	var results []DispatchResult
-	now := time.Now()
 
 	for _, t := range triggers {
 		if !t.Enabled {
 			continue
 		}
 
-		if t.Secret != "" && !verifySignature(evt, t.Secret) {
-			results = append(results, DispatchResult{
-				TriggerID: t.ID,
-				OK:        false,
-				Error:     "signature verification failed",
-			})
+		result := r.dispatchOne(t, evt)
+		if !result.OK {
 			log.WithField("trigger_id", t.ID).Warn("EventRouter: signature mismatch")
-			continue
 		}
-
-		message := RenderMessage(t.MessageTpl, evt)
-		injectFn(t.Channel, t.ChatID, t.SenderID, message)
-
-		if err := r.store.RecordFire(t.ID, now); err != nil {
-			log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to record fire")
-		}
-
-		if t.OneShot {
-			if err := r.store.UpdateEnabled(t.ID, false); err != nil {
-				log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to disable one-shot trigger")
-			}
-		}
-
-		log.WithFields(log.Fields{
-			"trigger_id": t.ID,
-			"channel":    t.Channel,
-			"chat_id":    t.ChatID,
-		}).Info("EventRouter: dispatched event to trigger")
-
-		results = append(results, DispatchResult{TriggerID: t.ID, OK: true})
+		results = append(results, result)
 	}
 
 	return results
@@ -134,32 +159,8 @@ func (r *Router) DispatchByID(triggerID string, evt Event) (*DispatchResult, err
 		return &DispatchResult{TriggerID: t.ID, OK: false, Error: "trigger disabled"}, nil
 	}
 
-	if t.Secret != "" && !verifySignature(evt, t.Secret) {
-		return &DispatchResult{TriggerID: t.ID, OK: false, Error: "signature verification failed"}, nil
-	}
-
-	message := RenderMessage(t.MessageTpl, evt)
-	now := time.Now()
-
-	injectFn(t.Channel, t.ChatID, t.SenderID, message)
-
-	if err := r.store.RecordFire(t.ID, now); err != nil {
-		log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to record fire")
-	}
-
-	if t.OneShot {
-		if err := r.store.UpdateEnabled(t.ID, false); err != nil {
-			log.WithError(err).WithField("trigger_id", t.ID).Warn("EventRouter: failed to disable one-shot trigger")
-		}
-	}
-
-	log.WithFields(log.Fields{
-		"trigger_id": t.ID,
-		"channel":    t.Channel,
-		"chat_id":    t.ChatID,
-	}).Info("EventRouter: dispatched event to trigger by ID")
-
-	return &DispatchResult{TriggerID: t.ID, OK: true}, nil
+	result := r.dispatchOne(t, evt)
+	return &result, nil
 }
 
 // RegisterTrigger creates a new trigger.
@@ -193,7 +194,7 @@ func (r *Router) DisableTrigger(id string) error {
 }
 
 // verifySignature checks HMAC-SHA256 signature from common webhook headers.
-// Supports GitHub-style X-Hub-Signature-256 and generic X-Webhook-Secret.
+// Priority: X-Hub-Signature-256 (GitHub) > X-Gitlab-Token (plain) > X-Webhook-Signature (generic).
 func verifySignature(evt Event, secret string) bool {
 	if len(evt.RawBody) == 0 {
 		return false

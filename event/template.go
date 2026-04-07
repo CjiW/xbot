@@ -8,6 +8,31 @@ import (
 	"text/template"
 )
 
+// dig recursively accesses nested map keys.
+// Usage in templates: {{dig .Payload "pull_request" "title"}}
+func dig(m map[string]any, keys ...string) any {
+	if len(keys) == 0 {
+		return nil
+	}
+	val, ok := m[keys[0]]
+	if !ok {
+		return nil
+	}
+	if len(keys) == 1 {
+		return val
+	}
+	sub, ok := val.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return dig(sub, keys[1:]...)
+}
+
+// templateFuncs is the function map available in message templates.
+var templateFuncs = template.FuncMap{
+	"dig": dig,
+}
+
 // templateData is the data passed to message templates.
 type templateData struct {
 	EventType string            `json:"event_type"`
@@ -18,6 +43,15 @@ type templateData struct {
 
 // RenderMessage renders a trigger's message template with the given event data.
 // If tpl is empty or rendering fails, a sensible default is returned.
+//
+// Template syntax:
+//
+//	{{.EventType}}                          — event type string
+//	{{.Payload}}                            — full payload as JSON
+//	{{.Payload.action}}                     — top-level payload field
+//	{{dig .Payload "pull_request" "title"}} — nested payload field (use dig for nested maps)
+//	{{.Headers.x-github-event}}            — HTTP header
+//	{{.Timestamp}}                          — event timestamp
 func RenderMessage(tpl string, evt Event) string {
 	data := templateData{
 		EventType: evt.Type,
@@ -30,7 +64,7 @@ func RenderMessage(tpl string, evt Event) string {
 		return defaultMessage(data)
 	}
 
-	t, err := template.New("msg").Option("missingkey=zero").Parse(tpl)
+	t, err := template.New("msg").Funcs(templateFuncs).Option("missingkey=zero").Parse(tpl)
 	if err != nil {
 		return defaultMessage(data)
 	}

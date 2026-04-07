@@ -29,8 +29,8 @@ func TestWebhookServer_PostHook(t *testing.T) {
 	ws, router := newTestWebhookServer(store)
 
 	var injectedMsg string
-	router.SetInjectFunc(func(channel, chatID, senderID, content string) {
-		injectedMsg = content
+	router.SetInjectFunc(func(msg Message) {
+		injectedMsg = msg.Content
 	})
 
 	store.AddTrigger(&Trigger{
@@ -62,7 +62,7 @@ func TestWebhookServer_PostHook(t *testing.T) {
 func TestWebhookServer_NotFound(t *testing.T) {
 	store := newMemTriggerStore()
 	ws, router := newTestWebhookServer(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	req := httptest.NewRequest(http.MethodPost, "/hooks/nonexistent", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
@@ -77,7 +77,7 @@ func TestWebhookServer_NotFound(t *testing.T) {
 func TestWebhookServer_Disabled(t *testing.T) {
 	store := newMemTriggerStore()
 	ws, router := newTestWebhookServer(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	store.AddTrigger(&Trigger{
 		ID:        "trg_dis",
@@ -137,7 +137,7 @@ func TestWebhookServer_MethodNotAllowed(t *testing.T) {
 func TestWebhookServer_TooLargeBody(t *testing.T) {
 	store := newMemTriggerStore()
 	ws, router := newTestWebhookServer(store)
-	router.SetInjectFunc(func(_, _, _, _ string) {})
+	router.SetInjectFunc(func(msg Message) {})
 
 	store.AddTrigger(&Trigger{
 		ID:        "trg_big",
@@ -164,7 +164,7 @@ func TestWebhookServer_SignatureVerification(t *testing.T) {
 	ws, router := newTestWebhookServer(store)
 
 	var injected bool
-	router.SetInjectFunc(func(_, _, _, _ string) { injected = true })
+	router.SetInjectFunc(func(msg Message) { injected = true })
 
 	secret := "test-secret"
 	store.AddTrigger(&Trigger{
@@ -219,7 +219,7 @@ func TestWebhookServer_NonJSONBody(t *testing.T) {
 	ws, router := newTestWebhookServer(store)
 
 	var injectedMsg string
-	router.SetInjectFunc(func(_, _, _, content string) { injectedMsg = content })
+	router.SetInjectFunc(func(msg Message) { injectedMsg = msg.Content })
 
 	store.AddTrigger(&Trigger{
 		ID:         "trg_raw",

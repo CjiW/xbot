@@ -202,6 +202,7 @@ type cliModel struct {
 	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）
 	msgBus          *bus.MessageBus           // 消息总线引用
 	tempStatus      string                    // 临时状态提示（自动过期）
+	pendingCmds     []tea.Cmd                 // commands queued by helpers (auto-drained in Update)
 	shouldQuit      bool                      // Smart quit: quit after current operation completes
 	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 

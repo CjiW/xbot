@@ -309,10 +309,11 @@ const (
 //
 // Usage (in Update method):
 //
-//	m.showTempStatus(m.locale.WaitingOperation)
-//	return m, m.clearTempStatusCmd(2 * time.Second)
+// showTempStatus sets a temporary status message that auto-clears after 5s.
+// Queues the clear command into pendingCmds (auto-drained by Update).
 func (m *cliModel) showTempStatus(text string) {
 	m.tempStatus = text
+	m.pendingCmds = append(m.pendingCmds, m.clearTempStatusCmd(5*time.Second))
 }
 
 // clearTempStatusCmd returns a tea.Cmd that clears the temp status after the

@@ -249,7 +249,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				} else {
 					m.showTempStatus(fmt.Sprintf(m.locale.MessageQueued, len(m.messageQueue)))
 				}
-				return m, []tea.Cmd{m.clearTempStatusCmd()}, true
+				return m, nil, true
 			}
 			return m, nil, true
 		}
@@ -327,7 +327,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.updateViewportContent()
 		} else if !m.typing {
 			m.showTempStatus(m.locale.NoMessagesToDelete)
-			return m, []tea.Cmd{m.clearTempStatusCmd()}, true
+			return m, nil, true
 		}
 		return m, nil, true
 

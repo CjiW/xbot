@@ -276,6 +276,16 @@ func (m *cliModel) View() tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
+
+	// §15 Quick switch overlay (subscription/model picker)
+	// Rendered as ANSI-positioned overlay on top of content.
+	if m.quickSwitchMode != "" {
+		overlay := m.viewQuickSwitch(m.width, m.height)
+		if overlay != "" {
+			v.Content += overlay
+		}
+	}
+
 	return v
 }
 
@@ -564,6 +574,9 @@ func (m *cliModel) renderFooter() string {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
 			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
+			if m.subscriptionMgr != nil {
+				hints = append(hints, m.ctrlKey("p", "Subs"), m.ctrlKey("m", "Model"))
+			}
 			if len(m.inputHistory) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}

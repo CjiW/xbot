@@ -70,6 +70,7 @@ func (db *DB) migrateSchema(from int) error {
 		{20, migrateV19ToV20},
 		{21, migrateV20ToV21},
 		{22, migrateV21ToV22},
+		{23, migrateV22ToV23},
 	}
 
 	for _, m := range lateMigrations {
@@ -712,5 +713,30 @@ UPDATE schema_version SET version = 22;
 		return fmt.Errorf("migrate v21->v22: %w", err)
 	}
 	log.Info("Database migrated to v22 (added event_triggers)")
+	return nil
+}
+
+// migrateV22ToV23 adds the user_llm_subscriptions table for multi-provider management.
+func migrateV22ToV23(conn *sql.DB) error {
+	migration := `
+CREATE TABLE IF NOT EXISTS user_llm_subscriptions (
+    id          TEXT PRIMARY KEY,
+    sender_id   TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    provider    TEXT NOT NULL DEFAULT 'openai',
+    base_url    TEXT NOT NULL DEFAULT '',
+    api_key     TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    is_default  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_llm_subs_sender ON user_llm_subscriptions(sender_id);
+UPDATE schema_version SET version = 23;
+`
+	if _, err := conn.Exec(migration); err != nil {
+		return fmt.Errorf("migrate v22->v23: %w", err)
+	}
+	log.Info("Database migrated to v23 (added user_llm_subscriptions)")
 	return nil
 }

@@ -269,6 +269,13 @@ type cliModel struct {
 	updateNotice         *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate       bool                // true while /update is in progress
 
+	// --- §15 Subscription / Model Quick Switch ---
+	quickSwitchMode   string              // ""=off, "subscription"=selecting subscription, "model"=selecting model
+	quickSwitchList   []Subscription      // available subscriptions or models
+	quickSwitchCursor int                 // selected index
+	subscriptionMgr   SubscriptionManager // injected by CLIChannel
+	llmSubscriber     LLMSubscriber       // injected by CLIChannel
+
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面
 	splashFrame int  // 当前 splash 动画帧索引
@@ -397,6 +404,16 @@ func newCLIModel() *cliModel {
 // SetMsgBus 设置消息总线（用于发送用户消息）
 func (m *cliModel) SetMsgBus(msgBus *bus.MessageBus) {
 	m.msgBus = msgBus
+}
+
+// SetSubscriptionMgr sets the subscription manager for quick switch.
+func (m *cliModel) SetSubscriptionMgr(mgr SubscriptionManager) {
+	m.subscriptionMgr = mgr
+}
+
+// SetLLMSubscriber sets the LLM subscriber for quick switch.
+func (m *cliModel) SetLLMSubscriber(sub LLMSubscriber) {
+	m.llmSubscriber = sub
 }
 
 // ---------------------------------------------------------------------------

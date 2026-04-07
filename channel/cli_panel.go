@@ -654,12 +654,22 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 				return true, m, nil
 			case tea.KeySpace:
 				m.panelCombo = false
-				// Start typing to filter / enter custom value → switch to edit mode
+				// Switch to edit mode for custom input
 				m.panelEdit = true
 				ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
 				var cmd tea.Cmd
 				m.panelEditTA, cmd = ta.Update(msg)
 				return true, m, cmd
+			default:
+				// Any printable key: auto-switch to edit mode for custom input
+				if len(msg.Text) > 0 {
+					m.panelCombo = false
+					m.panelEdit = true
+					ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
+					var cmd tea.Cmd
+					m.panelEditTA, cmd = ta.Update(msg)
+					return true, m, cmd
+				}
 			}
 		}
 		return true, m, nil
@@ -1330,6 +1340,129 @@ func (c *CLIChannel) SetSettingsService(svc SettingsService) {
 // SetModelLister injects the model lister for combo settings.
 func (c *CLIChannel) SetModelLister(lister ModelLister) {
 	c.modelLister = lister
+}
+
+// SetSubscriptionManager sets the subscription manager for multi-subscription support.
+func (c *CLIChannel) SetSubscriptionManager(mgr SubscriptionManager) {
+	c.subscriptionMgr = mgr
+	if c.model != nil {
+		c.model.SetSubscriptionMgr(mgr)
+	}
+}
+
+// SetLLMSubscriber sets the LLM subscriber for switching subscriptions/models.
+func (c *CLIChannel) SetLLMSubscriber(sub LLMSubscriber) {
+	if c.model != nil {
+		c.model.SetLLMSubscriber(sub)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// §15 Quick Switch: Subscription / Model picker overlay
+// ---------------------------------------------------------------------------
+
+// openQuickSwitch opens the quick switch overlay for subscription or model selection.
+func (m *cliModel) openQuickSwitch(mode string) {
+	if m.subscriptionMgr == nil {
+		return
+	}
+	subs, err := m.subscriptionMgr.List(m.senderID)
+	if err != nil || len(subs) == 0 {
+		m.showTempStatus("No subscriptions found. Add one in /settings first.")
+		return
+	}
+
+	m.quickSwitchMode = mode
+	m.quickSwitchList = subs
+	m.quickSwitchCursor = 0
+
+	// Pre-select the active subscription
+	for i, s := range subs {
+		if s.Active {
+			m.quickSwitchCursor = i
+			break
+		}
+	}
+}
+
+// applyQuickSwitch applies the selected item from the quick switch overlay.
+func (m *cliModel) applyQuickSwitch() {
+	if m.quickSwitchCursor >= len(m.quickSwitchList) {
+		m.quickSwitchMode = ""
+		return
+	}
+	selected := m.quickSwitchList[m.quickSwitchCursor]
+
+	switch m.quickSwitchMode {
+	case "subscription":
+		if m.subscriptionMgr != nil {
+			if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
+				m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
+				if m.llmSubscriber != nil {
+					m.llmSubscriber.SwitchSubscription(m.senderID, &selected)
+				}
+			}
+		}
+	case "model":
+		if m.llmSubscriber != nil {
+			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
+			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
+		}
+	}
+
+	m.quickSwitchMode = ""
+}
+
+// viewQuickSwitch renders the quick switch overlay using ANSI cursor positioning.
+func (m *cliModel) viewQuickSwitch(width, height int) string {
+	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
+		return ""
+	}
+
+	title := "Switch Subscription"
+	if m.quickSwitchMode == "model" {
+		title = "Switch Model"
+	}
+
+	listW := min(52, width-4)
+	listH := min(len(m.quickSwitchList)+2, height/2)
+	x := max(1, (width-listW)/2)
+	y := max(1, (height-listH)/2)
+
+	var b strings.Builder
+	// Move cursor to overlay position
+	fmt.Fprintf(&b, "\x1b[%d;%dH", y, x)
+
+	header := m.styles.TextMutedSt.Render(fmt.Sprintf("┌─ %s ", title) + strings.Repeat("─", max(0, listW-len(title)-6)) + "┐")
+	b.WriteString(header)
+
+	for i, s := range m.quickSwitchList {
+		fmt.Fprintf(&b, "\x1b[%d;%dH", y+1+i, x)
+		cursor := " "
+		style := m.styles.TextMutedSt
+		if i == m.quickSwitchCursor {
+		cursor = "▸"
+		style = m.styles.Accent
+		}
+		active := ""
+		if s.Active {
+			active = " ✓"
+		}
+		name := s.Name
+		if name == "" {
+			name = s.ID
+		}
+		line := style.Render(fmt.Sprintf("│%s %-30s %-16s%s│", cursor, name, s.Model, active))
+		b.WriteString(line)
+	}
+
+	fmt.Fprintf(&b, "\x1b[%d;%dH", y+1+len(m.quickSwitchList), x)
+	footer := m.styles.TextMutedSt.Render("└" + strings.Repeat("─", listW-2) + "┘")
+	b.WriteString(footer)
+
+	return b.String()
 }
 
 // UpdateConfig updates the live LLM configuration (model, base_url).

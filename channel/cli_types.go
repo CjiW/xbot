@@ -443,6 +443,9 @@ type CLIChannel struct {
 	baseURLOverride string          // user-overridden base URL from /settings panel
 	modelLister     ModelLister     // provides available model names for combo
 
+	// Multi-subscription management
+	subscriptionMgr SubscriptionManager // manages LLM subscriptions
+
 	// Background tasks
 	bgTaskMgr *tools.BackgroundTaskManager
 
@@ -465,6 +468,32 @@ type SettingsService interface {
 // ModelLister provides available model names for the settings combo box.
 type ModelLister interface {
 	ListModels() []string
+}
+
+// Subscription represents a LLM subscription for display/selection.
+type Subscription struct {
+	ID       string
+	Name     string
+	Provider string
+	Model    string
+	Active   bool
+}
+
+// SubscriptionManager manages user LLM subscriptions.
+type SubscriptionManager interface {
+	List(senderID string) ([]Subscription, error)
+	GetDefault(senderID string) (*Subscription, error)
+	Add(sub *Subscription) error
+	Remove(id string) error
+	SetDefault(id string) error
+	SetModel(id, model string) error
+}
+
+// LLMSubscriber switches the active LLM for a user (called when subscription changes).
+type LLMSubscriber interface {
+	SwitchSubscription(senderID string, sub *Subscription) error
+	SwitchModel(senderID, model string)
+	GetDefaultModel() string
 }
 
 // NewCLIChannel 创建 CLI 渠道

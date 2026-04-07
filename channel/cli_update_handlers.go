@@ -104,6 +104,29 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 	}
 
+	// Quick switch overlay (subscription/model picker) intercepts all navigation keys
+	if m.quickSwitchMode != "" {
+		switch msg.Code {
+		case tea.KeyEsc:
+			m.quickSwitchMode = ""
+			return m, nil, true
+		case tea.KeyUp:
+			if m.quickSwitchCursor > 0 {
+				m.quickSwitchCursor--
+			}
+			return m, nil, true
+		case tea.KeyDown:
+			if m.quickSwitchCursor < len(m.quickSwitchList)-1 {
+				m.quickSwitchCursor++
+			}
+			return m, nil, true
+		case tea.KeyEnter:
+			m.applyQuickSwitch()
+			return m, nil, true
+		}
+		return m, nil, true // block all other keys
+	}
+
 	switch {
 	case msg.String() == "ctrl+c":
 		// Ctrl+C：有迭代时中止；无迭代时清空输入
@@ -144,6 +167,20 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 		}
 		return m, nil, true
+
+	case msg.String() == "ctrl+p":
+		// Ctrl+P: Quick switch subscription
+		if m.panelMode == "" && m.subscriptionMgr != nil && !m.typing {
+			m.openQuickSwitch("subscription")
+			return m, nil, true
+		}
+
+	case msg.String() == "ctrl+m":
+		// Ctrl+M: Quick switch model
+		if m.panelMode == "" && m.subscriptionMgr != nil && !m.typing {
+			m.openQuickSwitch("model")
+			return m, nil, true
+		}
 
 	case msg.Text == "^":
 		if m.panelMode == "" && m.bgTaskCount > 0 && m.inputHistoryIdx == -1 {

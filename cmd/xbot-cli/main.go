@@ -539,6 +539,15 @@ func main() {
 		return nil
 	}(), app.cfg.LLM.Provider)
 
+	// Multi-subscription support
+	if app.agentLoop != nil {
+		factory := app.agentLoop.LLMFactory()
+		if factory.GetSubscriptionSvc() != nil {
+			cliCh.SetSubscriptionManager(newSubscriptionAdapter(factory.GetSubscriptionSvc()))
+			cliCh.SetLLMSubscriber(newLLMSubscriberAdapter(factory))
+		}
+	}
+
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {
 		shareURL := flagShare
@@ -553,6 +562,100 @@ func main() {
 			log.WithError(err).Fatal("CLI channel error")
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Adapters: bridge sqlite/service types to CLI interfaces
+// ---------------------------------------------------------------------------
+
+// subscriptionAdapter adapts sqlite.LLMSubscriptionService to channel.SubscriptionManager.
+type subscriptionAdapter struct {
+	svc *sqlite.LLMSubscriptionService
+}
+
+func newSubscriptionAdapter(svc *sqlite.LLMSubscriptionService) *subscriptionAdapter {
+	return &subscriptionAdapter{svc: svc}
+}
+
+func (a *subscriptionAdapter) List(senderID string) ([]channel.Subscription, error) {
+	subs, err := a.svc.List(senderID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]channel.Subscription, len(subs))
+	for i, s := range subs {
+		result[i] = channel.Subscription{
+			ID:       s.ID,
+			Name:     s.Name,
+			Provider: s.Provider,
+			Model:    s.Model,
+			Active:   s.IsDefault,
+		}
+	}
+	return result, nil
+}
+
+func (a *subscriptionAdapter) GetDefault(senderID string) (*channel.Subscription, error) {
+	sub, err := a.svc.GetDefault(senderID)
+	if err != nil || sub == nil {
+		return nil, err
+	}
+	return &channel.Subscription{
+		ID:       sub.ID,
+		Name:     sub.Name,
+		Provider: sub.Provider,
+		Model:    sub.Model,
+		Active:   sub.IsDefault,
+	}, nil
+}
+
+func (a *subscriptionAdapter) Add(sub *channel.Subscription) error {
+	return a.svc.Add(&sqlite.LLMSubscription{
+		SenderID:  "",
+		Name:      sub.Name,
+		Provider:  sub.Provider,
+		BaseURL:   "",
+		APIKey:    "",
+		Model:     sub.Model,
+		IsDefault: sub.Active,
+	})
+}
+
+func (a *subscriptionAdapter) Remove(id string) error {
+	return a.svc.Remove(id)
+}
+
+func (a *subscriptionAdapter) SetDefault(id string) error {
+	return a.svc.SetDefault(id)
+}
+
+func (a *subscriptionAdapter) SetModel(id, model string) error {
+	return a.svc.SetModel(id, model)
+}
+
+// llmSubscriberAdapter adapts LLMFactory to channel.LLMSubscriber.
+type llmSubscriberAdapter struct {
+	factory *agent.LLMFactory
+}
+
+func newLLMSubscriberAdapter(factory *agent.LLMFactory) *llmSubscriberAdapter {
+	return &llmSubscriberAdapter{factory: factory}
+}
+
+func (a *llmSubscriberAdapter) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+	dbSub, err := a.factory.GetSubscriptionSvc().Get(sub.ID)
+	if err != nil {
+		return err
+	}
+	return a.factory.SwitchSubscription(senderID, dbSub)
+}
+
+func (a *llmSubscriberAdapter) SwitchModel(senderID, model string) {
+	a.factory.SwitchModel(senderID, model)
+}
+
+func (a *llmSubscriberAdapter) GetDefaultModel() string {
+	return a.factory.GetDefaultModel()
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。

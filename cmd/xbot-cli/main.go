@@ -8,6 +8,7 @@
 //   xbot-cli <prompt>      非交互模式执行单次 prompt
 //   xbot-cli -p <prompt>   非交互模式执行单次 prompt
 //   echo "hello" | xbot-cli  管道模式
+//   xbot-cli --config /path/to/config.json  使用指定配置文件
 
 package main
 
@@ -40,31 +41,25 @@ import (
 
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
 type cliApp struct {
-	cfg       *config.Config
-	llmClient llm.LLM
-	msgBus    *bus.MessageBus
-	db        *sqlite.DB
-	agentLoop *agent.Agent
-	workDir   string
-	xbotHome  string
+	cfg        *config.Config
+	llmClient  llm.LLM
+	msgBus     *bus.MessageBus
+	db         *sqlite.DB
+	agentLoop  *agent.Agent
+	workDir    string
+	xbotHome   string
+	configPath string
 }
 
 // isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
-func isFirstRun() bool {
-	configPath := config.ConfigFilePath()
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return true
-	}
-	cfg := config.LoadFromFile(configPath)
-	if cfg == nil {
-		return true
-	}
+func isFirstRun(configPath string) bool {
+	cfg := config.LoadFrom(configPath)
 	return cfg.LLM.APIKey == ""
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
-func newCLIApp() *cliApp {
-	cfg := config.Load()
+func newCLIApp(configPath string) *cliApp {
+	cfg := config.LoadFrom(configPath)
 
 	workDir := cfg.Agent.WorkDir
 	xbotHome := config.XbotHome()
@@ -146,13 +141,14 @@ func newCLIApp() *cliApp {
 	agentLoop.IndexGlobalTools()
 
 	return &cliApp{
-		cfg:       cfg,
-		llmClient: llmClient,
-		msgBus:    msgBus,
-		db:        db,
-		agentLoop: agentLoop,
-		workDir:   workDir,
-		xbotHome:  xbotHome,
+		cfg:        cfg,
+		llmClient:  llmClient,
+		msgBus:     msgBus,
+		db:         db,
+		agentLoop:  agentLoop,
+		workDir:    workDir,
+		xbotHome:   xbotHome,
+		configPath: configPath,
 	}
 }
 
@@ -171,6 +167,7 @@ func main() {
 	prompt := ""
 	newSession := false
 	var (
+		flagConfig    string // --config /path/to/config.json
 		flagShare     string // --share ws://host:port/ws/userID
 		flagToken     string // --token xxx
 		flagWorkspace string // --workspace /path (overrides config)
@@ -181,6 +178,11 @@ func main() {
 			// 保留兼容性，行为与默认相同
 		case "--new":
 			newSession = true
+		case "--config":
+			if len(os.Args) > i+1 && !strings.HasPrefix(os.Args[i+1], "-") {
+				flagConfig = os.Args[i+1]
+				i++
+			}
 		case "-p":
 			if len(os.Args) > i+1 {
 				prompt = os.Args[i+1]
@@ -215,11 +217,11 @@ func main() {
 	}
 
 	// 首次运行检测（仅在交互模式下，传给 TUI 做 setup panel）
-	firstRun := prompt == "" && isFirstRun()
+	firstRun := prompt == "" && isFirstRun(flagConfig)
 
 	// 非交互模式
 	if prompt != "" {
-		executeNonInteractive(prompt)
+		executeNonInteractive(prompt, flagConfig)
 		return
 	}
 
@@ -230,7 +232,7 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp()
+	app := newCLIApp(flagConfig)
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)
@@ -358,7 +360,7 @@ func main() {
 				app.cfg.Agent.EnableAutoCompress = &b
 			}
 			// Persist to config.json
-			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+			if err := config.SaveToFile(app.configPath, app.cfg); err != nil {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
 			// Persist theme to settings service (theme is CLI-specific, not in config.json)
@@ -462,7 +464,7 @@ func main() {
 			app.cfg.LLM.BaseURL = baseURL
 			app.cfg.LLM.APIKey = apiKey
 			app.cfg.LLM.Model = model
-			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+			return config.SaveToFile(app.configPath, app.cfg)
 		},
 	}
 
@@ -587,12 +589,12 @@ func main() {
 			Model:    app.cfg.LLM.Model,
 			Active:   true,
 		}}
-		if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
-			log.WithError(err).Warn("Failed to save migrated subscriptions")
+		if err := config.SaveToFile(app.configPath, app.cfg); err != nil {
+				log.WithError(err).Warn("Failed to save migrated subscriptions")
+			}
 		}
-	}
-	saveConfig := func() error {
-		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+		saveConfig := func() error {
+			return config.SaveToFile(app.configPath, app.cfg)
 	}
 	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig))
 	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.agentLoop.LLMFactory(), saveConfig))
@@ -783,8 +785,8 @@ func (s *configLLMSubscriber) GetDefaultModel() string {
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。
-func executeNonInteractive(prompt string) {
-	app := newCLIApp()
+func executeNonInteractive(prompt string, configPath string) {
+	app := newCLIApp(configPath)
 	defer app.Close()
 
 	absWorkDir, _ := filepath.Abs(app.workDir)

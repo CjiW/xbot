@@ -607,7 +607,16 @@ func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 // Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
 // 这保证了：config.json 提供持久化配置，环境变量用于临时覆盖（如 CI/Docker）。
 func Load() *Config {
-	cfg := LoadFromFile(ConfigFilePath())
+	return LoadFrom("")
+}
+
+// LoadFrom 加载配置，支持自定义 config.json 路径。
+// path 为空字符串时，使用默认的 $XBOT_HOME/config.json。
+func LoadFrom(path string) *Config {
+	if path == "" {
+		path = ConfigFilePath()
+	}
+	cfg := LoadFromFile(path)
 	if cfg == nil {
 		cfg = &Config{}
 	}

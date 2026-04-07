@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -429,7 +430,10 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 }
 
 func main() {
-	cfg := config.Load()
+	configPath := flag.String("config", "", "Path to config.json (default: $XBOT_HOME/config.json)")
+	flag.Parse()
+
+	cfg := config.LoadFrom(*configPath)
 
 	setupLogging(cfg)
 	defer log.Close()

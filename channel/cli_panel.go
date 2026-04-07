@@ -1368,7 +1368,7 @@ func (m *cliModel) openQuickSwitch(mode string) {
 	if m.subscriptionMgr == nil {
 		return
 	}
-	subs, err := m.subscriptionMgr.List(m.senderID)
+	subs, err := m.subscriptionMgr.List("") // CLI stores subscriptions with empty senderID
 	if err != nil || len(subs) == 0 {
 		m.showTempStatus("No subscriptions found. Add one in /settings first.")
 		return

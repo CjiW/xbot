@@ -539,14 +539,27 @@ func main() {
 		return nil
 	}(), app.cfg.LLM.Provider)
 
-	// Multi-subscription support
-	if app.agentLoop != nil {
-		factory := app.agentLoop.LLMFactory()
-		if factory.GetSubscriptionSvc() != nil {
-			cliCh.SetSubscriptionManager(newSubscriptionAdapter(factory.GetSubscriptionSvc()))
-			cliCh.SetLLMSubscriber(newLLMSubscriberAdapter(factory))
+	// Multi-subscription support (config-based, no database)
+	if len(app.cfg.Subscriptions) == 0 {
+		// Migration: create first subscription from current LLM config
+		app.cfg.Subscriptions = []config.SubscriptionConfig{{
+		ID:       "default",
+		Name:     app.cfg.LLM.Provider,
+		Provider: app.cfg.LLM.Provider,
+		BaseURL:  app.cfg.LLM.BaseURL,
+		APIKey:   app.cfg.LLM.APIKey,
+		Model:    app.cfg.LLM.Model,
+		Active:   true,
+		}}
+		if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+		log.WithError(err).Warn("Failed to save migrated subscriptions")
 		}
 	}
+	saveConfig := func() error {
+		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+	}
+	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig))
+	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.agentLoop.LLMFactory(), saveConfig))
 
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {
@@ -565,97 +578,151 @@ func main() {
 }
 
 // ---------------------------------------------------------------------------
-// Adapters: bridge sqlite/service types to CLI interfaces
+// Adapters: bridge config/types to CLI interfaces
 // ---------------------------------------------------------------------------
 
-// subscriptionAdapter adapts sqlite.LLMSubscriptionService to channel.SubscriptionManager.
-type subscriptionAdapter struct {
-	svc *sqlite.LLMSubscriptionService
+// configSubscriptionManager manages CLI subscriptions in config.json (no database).
+type configSubscriptionManager struct {
+	cfg       *config.Config
+	saveFn    func() error // persists config to disk
 }
 
-func newSubscriptionAdapter(svc *sqlite.LLMSubscriptionService) *subscriptionAdapter {
-	return &subscriptionAdapter{svc: svc}
+func newConfigSubscriptionManager(cfg *config.Config, saveFn func() error) *configSubscriptionManager {
+	return &configSubscriptionManager{cfg: cfg, saveFn: saveFn}
 }
 
-func (a *subscriptionAdapter) List(senderID string) ([]channel.Subscription, error) {
-	subs, err := a.svc.List(senderID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]channel.Subscription, len(subs))
-	for i, s := range subs {
+func (m *configSubscriptionManager) List(_ string) ([]channel.Subscription, error) {
+	result := make([]channel.Subscription, len(m.cfg.Subscriptions))
+	for i, s := range m.cfg.Subscriptions {
 		result[i] = channel.Subscription{
 			ID:       s.ID,
 			Name:     s.Name,
 			Provider: s.Provider,
 			Model:    s.Model,
-			Active:   s.IsDefault,
+			Active:   s.Active,
 		}
 	}
 	return result, nil
 }
 
-func (a *subscriptionAdapter) GetDefault(senderID string) (*channel.Subscription, error) {
-	sub, err := a.svc.GetDefault(senderID)
-	if err != nil || sub == nil {
-		return nil, err
+func (m *configSubscriptionManager) GetDefault(_ string) (*channel.Subscription, error) {
+	for _, s := range m.cfg.Subscriptions {
+		if s.Active {
+			return &channel.Subscription{
+				ID:       s.ID,
+				Name:     s.Name,
+				Provider: s.Provider,
+				Model:    s.Model,
+				Active:   true,
+			}, nil
+		}
 	}
-	return &channel.Subscription{
+	return nil, nil
+}
+
+func (m *configSubscriptionManager) Add(sub *channel.Subscription) error {
+	m.cfg.Subscriptions = append(m.cfg.Subscriptions, config.SubscriptionConfig{
 		ID:       sub.ID,
 		Name:     sub.Name,
 		Provider: sub.Provider,
 		Model:    sub.Model,
-		Active:   sub.IsDefault,
-	}, nil
-}
-
-func (a *subscriptionAdapter) Add(sub *channel.Subscription) error {
-	return a.svc.Add(&sqlite.LLMSubscription{
-		SenderID:  "",
-		Name:      sub.Name,
-		Provider:  sub.Provider,
-		BaseURL:   "",
-		APIKey:    "",
-		Model:     sub.Model,
-		IsDefault: sub.Active,
+		Active:   sub.Active,
 	})
+	return m.saveFn()
 }
 
-func (a *subscriptionAdapter) Remove(id string) error {
-	return a.svc.Remove(id)
-}
-
-func (a *subscriptionAdapter) SetDefault(id string) error {
-	return a.svc.SetDefault(id)
-}
-
-func (a *subscriptionAdapter) SetModel(id, model string) error {
-	return a.svc.SetModel(id, model)
-}
-
-// llmSubscriberAdapter adapts LLMFactory to channel.LLMSubscriber.
-type llmSubscriberAdapter struct {
-	factory *agent.LLMFactory
-}
-
-func newLLMSubscriberAdapter(factory *agent.LLMFactory) *llmSubscriberAdapter {
-	return &llmSubscriberAdapter{factory: factory}
-}
-
-func (a *llmSubscriberAdapter) SwitchSubscription(senderID string, sub *channel.Subscription) error {
-	dbSub, err := a.factory.GetSubscriptionSvc().Get(sub.ID)
-	if err != nil {
-		return err
+func (m *configSubscriptionManager) Remove(id string) error {
+	filtered := m.cfg.Subscriptions[:0]
+	for _, s := range m.cfg.Subscriptions {
+		if s.ID != id {
+			filtered = append(filtered, s)
+		}
 	}
-	return a.factory.SwitchSubscription(senderID, dbSub)
+	if len(filtered) == len(m.cfg.Subscriptions) {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	m.cfg.Subscriptions = filtered
+	return m.saveFn()
 }
 
-func (a *llmSubscriberAdapter) SwitchModel(senderID, model string) {
-	a.factory.SwitchModel(senderID, model)
+func (m *configSubscriptionManager) SetDefault(id string) error {
+	found := false
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Active = true
+			found = true
+		} else {
+			m.cfg.Subscriptions[i].Active = false
+		}
+	}
+	if !found {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	return m.saveFn()
 }
 
-func (a *llmSubscriberAdapter) GetDefaultModel() string {
-	return a.factory.GetDefaultModel()
+func (m *configSubscriptionManager) SetModel(id, model string) error {
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Model = model
+			return m.saveFn()
+		}
+	}
+	return fmt.Errorf("subscription %s not found", id)
+}
+
+// configLLMSubscriber switches LLM at runtime using config-based subscriptions.
+type configLLMSubscriber struct {
+	cfg       *config.Config
+	factory   *agent.LLMFactory
+	saveFn    func() error
+}
+
+func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveFn func() error) *configLLMSubscriber {
+	return &configLLMSubscriber{cfg: cfg, factory: factory, saveFn: saveFn}
+}
+
+func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+	// Find full config (with API key) for this subscription
+	for _, sc := range s.cfg.Subscriptions {
+		if sc.ID == sub.ID {
+			llmCfg := config.LLMConfig{
+				Provider: sc.Provider,
+				BaseURL:  sc.BaseURL,
+				APIKey:   sc.APIKey,
+				Model:    sc.Model,
+			}
+			// If subscription doesn't have its own base_url/key, inherit from global LLM config
+			if llmCfg.BaseURL == "" {
+				llmCfg.BaseURL = s.cfg.LLM.BaseURL
+			}
+			if llmCfg.APIKey == "" {
+				llmCfg.APIKey = s.cfg.LLM.APIKey
+			}
+			if llmCfg.Provider == "" {
+				llmCfg.Provider = s.cfg.LLM.Provider
+			}
+			client, err := createLLM(llmCfg, llm.RetryConfig{
+				Attempts: 5,
+				Delay:    1 * time.Second,
+				MaxDelay: 30 * time.Second,
+			})
+			if err != nil {
+				return fmt.Errorf("create LLM for subscription: %w", err)
+			}
+			s.factory.SetDefaults(client, sc.Model)
+			return nil
+		}
+	}
+	return fmt.Errorf("subscription %s not found in config", sub.ID)
+}
+
+func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
+	s.factory.SwitchModel(senderID, model)
+}
+
+func (s *configLLMSubscriber) GetDefaultModel() string {
+	return s.factory.GetDefaultModel()
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。

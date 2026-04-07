@@ -125,6 +125,7 @@ type Config struct {
 	EventWebhook  EventWebhookConfig  `json:"event_webhook"`
 	OSS           OSSConfig           `json:"oss"`
 	TavilyAPIKey  string              `json:"tavily_api_key"`
+	Subscriptions []SubscriptionConfig `json:"subscriptions,omitempty"`
 }
 
 // FeishuConfig 飞书渠道配置
@@ -181,6 +182,17 @@ type LLMConfig struct {
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+}
+
+// SubscriptionConfig CLI 订阅配置（存储在 config.json，不存数据库）。
+type SubscriptionConfig struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	Active   bool   `json:"active"`
 }
 
 // LogConfig 日志配置

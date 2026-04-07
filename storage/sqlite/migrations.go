@@ -69,6 +69,7 @@ func (db *DB) migrateSchema(from int) error {
 	lateMigrations := []migration{
 		{20, migrateV19ToV20},
 		{21, migrateV20ToV21},
+		{22, migrateV21ToV22},
 	}
 
 	for _, m := range lateMigrations {
@@ -682,5 +683,34 @@ func migrateV20ToV21(conn *sql.DB) error {
 		return fmt.Errorf("update schema version: %w", err)
 	}
 	log.Info("Database migrated to v21 (added LLM fields to runners)")
+	return nil
+}
+
+// migrateV21ToV22 adds the event_triggers table.
+func migrateV21ToV22(conn *sql.DB) error {
+	migration := `
+CREATE TABLE IF NOT EXISTS event_triggers (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    event_type  TEXT NOT NULL DEFAULT 'webhook',
+    channel     TEXT NOT NULL,
+    chat_id     TEXT NOT NULL,
+    sender_id   TEXT NOT NULL,
+    message_tpl TEXT NOT NULL,
+    secret      TEXT NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    one_shot    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    last_fired  TEXT,
+    fire_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_event_triggers_sender ON event_triggers(sender_id);
+CREATE INDEX IF NOT EXISTS idx_event_triggers_type ON event_triggers(event_type, enabled);
+UPDATE schema_version SET version = 22;
+`
+	if _, err := conn.Exec(migration); err != nil {
+		return fmt.Errorf("migrate v21->v22: %w", err)
+	}
+	log.Info("Database migrated to v22 (added event_triggers)")
 	return nil
 }

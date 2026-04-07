@@ -54,6 +54,10 @@ type InboundMessage struct {
 	IsCron    bool   // 是否由 cron 定时任务触发
 	RequestID string // 请求追踪 ID（UUID 无横线），在渠道收到消息时生成
 
+	// Event-triggered metadata (generalization beyond IsCron)
+	EventSource  string // event origin: "webhook", "cron", "" (user message)
+	EventTrigger string // trigger ID that fired this message (optional)
+
 	// === Agent 间通信扩展（仅 Channel="agent" 时有值） ===
 	ParentAgentID string   // 父 Agent ID（如 "main"）
 	SystemPrompt  string   // 覆盖 system prompt

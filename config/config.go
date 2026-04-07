@@ -85,6 +85,16 @@ type OSSConfig struct {
 	QiniuRegion    string `json:"qiniu_region"`
 }
 
+// EventWebhookConfig 事件 Webhook 配置
+type EventWebhookConfig struct {
+	Enable      bool   `json:"enable"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	BaseURL     string `json:"base_url"`
+	MaxBodySize int64  `json:"max_body_size"`
+	RateLimit   int    `json:"rate_limit"` // max requests per minute per trigger
+}
+
 // WebConfig Web 渠道配置
 type WebConfig struct {
 	Enable           bool   `json:"enable"`
@@ -112,6 +122,7 @@ type Config struct {
 	StartupNotify StartupNotifyConfig `json:"startup_notify"`
 	Admin         AdminConfig         `json:"admin"`
 	Web           WebConfig           `json:"web"`
+	EventWebhook  EventWebhookConfig  `json:"event_webhook"`
 	OSS           OSSConfig           `json:"oss"`
 	TavilyAPIKey  string              `json:"tavily_api_key"`
 }
@@ -500,6 +511,33 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 
+	if v := os.Getenv("EVENT_WEBHOOK_ENABLE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.EventWebhook.Enable = b
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_HOST"); v != "" {
+		cfg.EventWebhook.Host = v
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.Port = i
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_BASE_URL"); v != "" {
+		cfg.EventWebhook.BaseURL = v
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_MAX_BODY_SIZE"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.MaxBodySize = int64(i)
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_RATE_LIMIT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.RateLimit = i
+		}
+	}
+
 	if v := os.Getenv("OAUTH_ENABLE"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.OAuth.Enable = b
@@ -638,6 +676,18 @@ func Load() *Config {
 	}
 	if cfg.Web.Port == 0 {
 		cfg.Web.Port = 8082
+	}
+	if cfg.EventWebhook.Host == "" {
+		cfg.EventWebhook.Host = "0.0.0.0"
+	}
+	if cfg.EventWebhook.Port == 0 {
+		cfg.EventWebhook.Port = 8090
+	}
+	if cfg.EventWebhook.MaxBodySize == 0 {
+		cfg.EventWebhook.MaxBodySize = 1 << 20 // 1 MB
+	}
+	if cfg.EventWebhook.RateLimit == 0 {
+		cfg.EventWebhook.RateLimit = 60
 	}
 	if cfg.NapCat.WSUrl == "" {
 		cfg.NapCat.WSUrl = "ws://localhost:3001"

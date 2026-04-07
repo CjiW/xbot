@@ -17,6 +17,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/cron"
+	"xbot/event"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
@@ -236,6 +237,9 @@ type Agent struct {
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
+
+	// Event trigger router
+	eventRouter *event.Router
 
 	// User LLM config service and factory
 	llmConfigSvc *sqlite.UserLLMConfigService
@@ -873,6 +877,12 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
 }
 
+// SetEventRouter sets the event trigger router.
+// The router's InjectFunc is wired to injectInbound when Agent.Run starts.
+func (a *Agent) SetEventRouter(r *event.Router) {
+	a.eventRouter = r
+}
+
 // SetChannelPromptProviders 设置 channel 特化 prompt 提供者。
 // 调用后会重建 pipeline，将 ChannelPromptMiddleware 插入到管道中。
 func (a *Agent) SetChannelPromptProviders(providers ...ChannelPromptProvider) {
@@ -957,6 +967,10 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.cronSch.SetInjectFunc(a.injectInbound)
 	a.cronSch.StartDelayed(3 * time.Second)
+
+	if a.eventRouter != nil {
+		a.eventRouter.SetInjectFunc(a.injectInbound)
+	}
 
 	defer func() {
 		a.cronSch.Stop()

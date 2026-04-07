@@ -15,6 +15,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/config"
+	"xbot/event"
 	llm_pkg "xbot/llm"
 	log "xbot/logger"
 	"xbot/oauth"
@@ -564,6 +565,28 @@ func main() {
 		log.WithField("admin_chat_id", adminChatID).Info("Logs tool registered (admin only)")
 	}
 
+	// 初始化事件触发系统（Event Trigger System）
+	triggerSvc := sqlite.NewTriggerService(agentLoop.MultiSession().DB())
+	eventRouter := event.NewRouter(triggerSvc)
+	agentLoop.SetEventRouter(eventRouter)
+
+	webhookBaseURL := cfg.EventWebhook.BaseURL
+	if webhookBaseURL == "" {
+		webhookBaseURL = fmt.Sprintf("http://%s:%d", cfg.EventWebhook.Host, cfg.EventWebhook.Port)
+	}
+	agentLoop.RegisterCoreTool(tools.NewEventTriggerTool(eventRouter, webhookBaseURL))
+
+	var webhookServer *event.WebhookServer
+	if cfg.EventWebhook.Enable {
+		webhookServer = event.NewWebhookServer(eventRouter, event.WebhookConfig{
+			Host:        cfg.EventWebhook.Host,
+			Port:        cfg.EventWebhook.Port,
+			BaseURL:     webhookBaseURL,
+			MaxBodySize: cfg.EventWebhook.MaxBodySize,
+			RateLimit:   cfg.EventWebhook.RateLimit,
+		})
+	}
+
 	// 所有工具注册完成，索引全局工具（用于 search_tools 语义搜索）
 	agentLoop.IndexGlobalTools()
 
@@ -904,6 +927,25 @@ func main() {
 		}(name, ch)
 	}
 
+	// 启动 Webhook 事件服务器
+	if webhookServer != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithField("panic", r).Error("Webhook server panicked\n" + string(debug.Stack()))
+				}
+			}()
+			if err := webhookServer.Start(); err != nil {
+				log.WithError(err).Error("Webhook server failed")
+			}
+		}()
+		log.WithFields(log.Fields{
+			"host":     cfg.EventWebhook.Host,
+			"port":     cfg.EventWebhook.Port,
+			"base_url": webhookBaseURL,
+		}).Info("Webhook event server started")
+	}
+
 	// 启动 Agent 循环
 	go func() {
 		defer func() {
@@ -933,6 +975,11 @@ func main() {
 
 	// 先取消 context，让 agent.Run() 退出（其 defer 会清理 cron 和 cleanup routine）
 	cancel()
+
+	// 关闭 Webhook 事件服务器
+	if webhookServer != nil {
+		webhookServer.Stop()
+	}
 
 	// 等待 agent loop 退出后再继续关闭
 	if agentLoop != nil {

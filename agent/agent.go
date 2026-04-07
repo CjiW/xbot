@@ -17,6 +17,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/cron"
+	"xbot/event"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
@@ -236,6 +237,9 @@ type Agent struct {
 	// Cron service and scheduler
 	cronSvc *sqlite.CronService
 	cronSch *cron.Scheduler
+
+	// Event trigger router
+	eventRouter *event.Router
 
 	// User LLM config service and factory
 	llmConfigSvc *sqlite.UserLLMConfigService
@@ -597,6 +601,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// Initialize UserLLMConfigService
 	a.llmConfigSvc = sqlite.NewUserLLMConfigService(multiSession.DB())
 	a.llmFactory = NewLLMFactory(a.llmConfigSvc, cfg.LLM, cfg.Model)
+	a.llmFactory.SetSubscriptionSvc(sqlite.NewLLMSubscriptionService(multiSession.DB()))
 
 	// 初始化上下文管理器
 	a.contextManagerConfig = &ContextManagerConfig{
@@ -873,6 +878,12 @@ func (a *Agent) SetDirectSend(fn func(bus.OutboundMessage) (string, error)) {
 	a.directSend = fn
 }
 
+// SetEventRouter sets the event trigger router.
+// The router's InjectFunc is wired to injectEventMessage when Agent.Run starts.
+func (a *Agent) SetEventRouter(r *event.Router) {
+	a.eventRouter = r
+}
+
 // SetChannelPromptProviders 设置 channel 特化 prompt 提供者。
 // 调用后会重建 pipeline，将 ChannelPromptMiddleware 插入到管道中。
 func (a *Agent) SetChannelPromptProviders(providers ...ChannelPromptProvider) {
@@ -957,6 +968,10 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	a.cronSch.SetInjectFunc(a.injectInbound)
 	a.cronSch.StartDelayed(3 * time.Second)
+
+	if a.eventRouter != nil {
+		a.eventRouter.SetInjectFunc(a.injectEventMessage)
+	}
 
 	defer func() {
 		a.cronSch.Stop()
@@ -1963,7 +1978,8 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	}
 }
 
-// injectInbound 向入站队列注入消息，触发 Agent 完整处理循环
+// injectInbound 向入站队列注入消息，触发 Agent 完整处理循环。
+// 用于 cron 调度和后台任务通知等内部系统消息。
 func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 	a.bus.Inbound <- bus.InboundMessage{
 		Channel:   channel,
@@ -1973,6 +1989,23 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		Time:      time.Now(),
 		IsCron:    false,
 		RequestID: log.NewRequestID(),
+	}
+}
+
+// injectEventMessage 向入站队列注入事件触发的消息。
+// Event Router 通过此函数将外部事件（webhook 等）路由到 agent loop，
+// 并设置 EventSource/EventTrigger 元数据。
+func (a *Agent) injectEventMessage(msg event.Message) {
+	a.bus.Inbound <- bus.InboundMessage{
+		Channel:      msg.Channel,
+		SenderID:     msg.SenderID,
+		ChatID:       msg.ChatID,
+		Content:      msg.Content,
+		Time:         time.Now(),
+		IsCron:       false,
+		RequestID:    log.NewRequestID(),
+		EventSource:  msg.EventSource,
+		EventTrigger: msg.EventTrigger,
 	}
 }
 

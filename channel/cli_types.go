@@ -414,6 +414,7 @@ type CLIChannelConfig struct {
 	IsFirstRun           bool                                                       // 首次运行标志，TUI 启动时自动打开 setup panel
 	ClearMemory          func(targetType string) error                              // 清空记忆（danger zone）
 	GetMemoryStats       func() map[string]string                                   // 获取记忆统计（danger zone）
+	SwitchLLM            func(provider, baseURL, apiKey, model string) error        // 切换活跃 LLM（config + factory + save）
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +444,10 @@ type CLIChannel struct {
 	baseURLOverride string          // user-overridden base URL from /settings panel
 	modelLister     ModelLister     // provides available model names for combo
 
+	// Multi-subscription management
+	subscriptionMgr SubscriptionManager // manages LLM subscriptions
+	llmSubscriber   LLMSubscriber       // switches active LLM (propagated to model)
+
 	// Background tasks
 	bgTaskMgr *tools.BackgroundTaskManager
 
@@ -465,6 +470,35 @@ type SettingsService interface {
 // ModelLister provides available model names for the settings combo box.
 type ModelLister interface {
 	ListModels() []string
+}
+
+// Subscription represents a LLM subscription for display/selection.
+type Subscription struct {
+	ID       string
+	Name     string
+	Provider string
+	BaseURL  string
+	APIKey   string
+	Model    string
+	Active   bool
+}
+
+// SubscriptionManager manages user LLM subscriptions.
+type SubscriptionManager interface {
+	List(senderID string) ([]Subscription, error)
+	GetDefault(senderID string) (*Subscription, error)
+	Add(sub *Subscription) error
+	Remove(id string) error
+	SetDefault(id string) error
+	SetModel(id, model string) error
+	Rename(id, name string) error
+}
+
+// LLMSubscriber switches the active LLM for a user (called when subscription changes).
+type LLMSubscriber interface {
+	SwitchSubscription(senderID string, sub *Subscription) error
+	SwitchModel(senderID, model string)
+	GetDefaultModel() string
 }
 
 // NewCLIChannel 创建 CLI 渠道

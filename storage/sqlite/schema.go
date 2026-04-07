@@ -187,6 +187,24 @@ CREATE TABLE cron_jobs (
 );
 CREATE INDEX idx_cron_jobs_next_run ON cron_jobs(next_run);
 CREATE INDEX idx_cron_jobs_sender ON cron_jobs(sender_id);
+
+CREATE TABLE event_triggers (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    event_type  TEXT NOT NULL DEFAULT 'webhook',
+    channel     TEXT NOT NULL,
+    chat_id     TEXT NOT NULL,
+    sender_id   TEXT NOT NULL,
+    message_tpl TEXT NOT NULL,
+    secret      TEXT NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    one_shot    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    last_fired  TEXT,
+    fire_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_event_triggers_sender ON event_triggers(sender_id);
+CREATE INDEX idx_event_triggers_type ON event_triggers(event_type, enabled);
 `
 	if _, err := db.Conn().Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)

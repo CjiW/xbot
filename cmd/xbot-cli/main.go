@@ -428,6 +428,42 @@ func main() {
 			}
 			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
 		},
+		SwitchLLM: func(provider, baseURL, apiKey, model string) error {
+			// Inherit from global config if not specified per-subscription
+			if baseURL == "" {
+				baseURL = app.cfg.LLM.BaseURL
+			}
+			if apiKey == "" {
+				apiKey = app.cfg.LLM.APIKey
+			}
+			if provider == "" {
+				provider = app.cfg.LLM.Provider
+			}
+			llmCfg := config.LLMConfig{
+				Provider: provider,
+				BaseURL:  baseURL,
+				APIKey:   apiKey,
+				Model:    model,
+			}
+			client, err := createLLM(llmCfg, llm.RetryConfig{
+				Attempts: 5,
+				Delay:    1 * time.Second,
+				MaxDelay: 30 * time.Second,
+			})
+			if err != nil {
+				return fmt.Errorf("create LLM: %w", err)
+			}
+			app.llmClient = client
+			if app.agentLoop != nil {
+				app.agentLoop.LLMFactory().SetDefaults(client, model)
+			}
+			// Sync to global config
+			app.cfg.LLM.Provider = provider
+			app.cfg.LLM.BaseURL = baseURL
+			app.cfg.LLM.APIKey = apiKey
+			app.cfg.LLM.Model = model
+			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）
@@ -539,6 +575,28 @@ func main() {
 		return nil
 	}(), app.cfg.LLM.Provider)
 
+	// Multi-subscription support (config-based, no database)
+	if len(app.cfg.Subscriptions) == 0 {
+		// Migration: create first subscription from current LLM config
+		app.cfg.Subscriptions = []config.SubscriptionConfig{{
+			ID:       "default",
+			Name:     app.cfg.LLM.Provider,
+			Provider: app.cfg.LLM.Provider,
+			BaseURL:  app.cfg.LLM.BaseURL,
+			APIKey:   app.cfg.LLM.APIKey,
+			Model:    app.cfg.LLM.Model,
+			Active:   true,
+		}}
+		if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+			log.WithError(err).Warn("Failed to save migrated subscriptions")
+		}
+	}
+	saveConfig := func() error {
+		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
+	}
+	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig))
+	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.agentLoop.LLMFactory(), saveConfig))
+
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {
 		shareURL := flagShare
@@ -553,6 +611,175 @@ func main() {
 			log.WithError(err).Fatal("CLI channel error")
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Adapters: bridge config/types to CLI interfaces
+// ---------------------------------------------------------------------------
+
+// configSubscriptionManager manages CLI subscriptions in config.json (no database).
+type configSubscriptionManager struct {
+	cfg    *config.Config
+	saveFn func() error // persists config to disk
+}
+
+func newConfigSubscriptionManager(cfg *config.Config, saveFn func() error) *configSubscriptionManager {
+	return &configSubscriptionManager{cfg: cfg, saveFn: saveFn}
+}
+
+func (m *configSubscriptionManager) List(_ string) ([]channel.Subscription, error) {
+	result := make([]channel.Subscription, len(m.cfg.Subscriptions))
+	for i, s := range m.cfg.Subscriptions {
+		result[i] = channel.Subscription{
+			ID:       s.ID,
+			Name:     s.Name,
+			Provider: s.Provider,
+			BaseURL:  s.BaseURL,
+			APIKey:   s.APIKey,
+			Model:    s.Model,
+			Active:   s.Active,
+		}
+	}
+	return result, nil
+}
+
+func (m *configSubscriptionManager) GetDefault(_ string) (*channel.Subscription, error) {
+	for _, s := range m.cfg.Subscriptions {
+		if s.Active {
+			return &channel.Subscription{
+				ID:       s.ID,
+				Name:     s.Name,
+				Provider: s.Provider,
+				Model:    s.Model,
+				Active:   true,
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *configSubscriptionManager) Add(sub *channel.Subscription) error {
+	m.cfg.Subscriptions = append(m.cfg.Subscriptions, config.SubscriptionConfig{
+		ID:       sub.ID,
+		Name:     sub.Name,
+		Provider: sub.Provider,
+		BaseURL:  sub.BaseURL,
+		APIKey:   sub.APIKey,
+		Model:    sub.Model,
+		Active:   sub.Active,
+	})
+	return m.saveFn()
+}
+
+func (m *configSubscriptionManager) Remove(id string) error {
+	filtered := m.cfg.Subscriptions[:0]
+	for _, s := range m.cfg.Subscriptions {
+		if s.ID != id {
+			filtered = append(filtered, s)
+		}
+	}
+	if len(filtered) == len(m.cfg.Subscriptions) {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	m.cfg.Subscriptions = filtered
+	return m.saveFn()
+}
+
+func (m *configSubscriptionManager) SetDefault(id string) error {
+	found := false
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Active = true
+			found = true
+		} else {
+			m.cfg.Subscriptions[i].Active = false
+		}
+	}
+	if !found {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	return m.saveFn()
+}
+
+func (m *configSubscriptionManager) SetModel(id, model string) error {
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Model = model
+			return m.saveFn()
+		}
+	}
+	return fmt.Errorf("subscription %s not found", id)
+}
+
+func (m *configSubscriptionManager) Rename(id, name string) error {
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Name = name
+			return m.saveFn()
+		}
+	}
+	return fmt.Errorf("subscription %s not found", id)
+}
+
+// configLLMSubscriber switches LLM at runtime using config-based subscriptions.
+type configLLMSubscriber struct {
+	cfg     *config.Config
+	factory *agent.LLMFactory
+	saveFn  func() error
+}
+
+func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveFn func() error) *configLLMSubscriber {
+	return &configLLMSubscriber{cfg: cfg, factory: factory, saveFn: saveFn}
+}
+
+func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+	// Find full config (with API key) for this subscription
+	for _, sc := range s.cfg.Subscriptions {
+		if sc.ID == sub.ID {
+			llmCfg := config.LLMConfig{
+				Provider: sc.Provider,
+				BaseURL:  sc.BaseURL,
+				APIKey:   sc.APIKey,
+				Model:    sc.Model,
+			}
+			// If subscription doesn't have its own base_url/key, inherit from global LLM config
+			if llmCfg.BaseURL == "" {
+				llmCfg.BaseURL = s.cfg.LLM.BaseURL
+			}
+			if llmCfg.APIKey == "" {
+				llmCfg.APIKey = s.cfg.LLM.APIKey
+			}
+			if llmCfg.Provider == "" {
+				llmCfg.Provider = s.cfg.LLM.Provider
+			}
+			client, err := createLLM(llmCfg, llm.RetryConfig{
+				Attempts: 5,
+				Delay:    1 * time.Second,
+				MaxDelay: 30 * time.Second,
+			})
+			if err != nil {
+				return fmt.Errorf("create LLM for subscription: %w", err)
+			}
+			s.factory.SetDefaults(client, sc.Model)
+			// Sync subscription's LLM config back to global config
+			// so GetCurrentValues / settings panel reflect the switch
+			s.cfg.LLM.Provider = llmCfg.Provider
+			s.cfg.LLM.BaseURL = llmCfg.BaseURL
+			s.cfg.LLM.APIKey = llmCfg.APIKey
+			s.cfg.LLM.Model = sc.Model
+			_ = s.saveFn()
+			return nil
+		}
+	}
+	return fmt.Errorf("subscription %s not found in config", sub.ID)
+}
+
+func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
+	s.factory.SwitchModel(senderID, model)
+}
+
+func (s *configLLMSubscriber) GetDefaultModel() string {
+	return s.factory.GetDefaultModel()
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。

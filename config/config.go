@@ -85,6 +85,16 @@ type OSSConfig struct {
 	QiniuRegion    string `json:"qiniu_region"`
 }
 
+// EventWebhookConfig 事件 Webhook 配置
+type EventWebhookConfig struct {
+	Enable      bool   `json:"enable"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	BaseURL     string `json:"base_url"`
+	MaxBodySize int64  `json:"max_body_size"`
+	RateLimit   int    `json:"rate_limit"` // max requests per minute per trigger
+}
+
 // WebConfig Web 渠道配置
 type WebConfig struct {
 	Enable           bool   `json:"enable"`
@@ -98,22 +108,24 @@ type WebConfig struct {
 
 // Config 应用配置
 type Config struct {
-	Server        ServerConfig        `json:"server"`
-	LLM           LLMConfig           `json:"llm"`
-	Embedding     EmbeddingConfig     `json:"embedding"`
-	Log           LogConfig           `json:"log"`
-	PProf         PProfConfig         `json:"pprof"`
-	Feishu        FeishuConfig        `json:"feishu"`
-	QQ            QQConfig            `json:"qq"`
-	NapCat        NapCatConfig        `json:"napcat"`
-	Agent         AgentConfig         `json:"agent"`
-	OAuth         OAuthConfig         `json:"oauth"`
-	Sandbox       SandboxConfig       `json:"sandbox"`
-	StartupNotify StartupNotifyConfig `json:"startup_notify"`
-	Admin         AdminConfig         `json:"admin"`
-	Web           WebConfig           `json:"web"`
-	OSS           OSSConfig           `json:"oss"`
-	TavilyAPIKey  string              `json:"tavily_api_key"`
+	Server        ServerConfig         `json:"server"`
+	LLM           LLMConfig            `json:"llm"`
+	Embedding     EmbeddingConfig      `json:"embedding"`
+	Log           LogConfig            `json:"log"`
+	PProf         PProfConfig          `json:"pprof"`
+	Feishu        FeishuConfig         `json:"feishu"`
+	QQ            QQConfig             `json:"qq"`
+	NapCat        NapCatConfig         `json:"napcat"`
+	Agent         AgentConfig          `json:"agent"`
+	OAuth         OAuthConfig          `json:"oauth"`
+	Sandbox       SandboxConfig        `json:"sandbox"`
+	StartupNotify StartupNotifyConfig  `json:"startup_notify"`
+	Admin         AdminConfig          `json:"admin"`
+	Web           WebConfig            `json:"web"`
+	EventWebhook  EventWebhookConfig   `json:"event_webhook"`
+	OSS           OSSConfig            `json:"oss"`
+	TavilyAPIKey  string               `json:"tavily_api_key"`
+	Subscriptions []SubscriptionConfig `json:"subscriptions,omitempty"`
 }
 
 // FeishuConfig 飞书渠道配置
@@ -170,6 +182,17 @@ type LLMConfig struct {
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+}
+
+// SubscriptionConfig CLI 订阅配置（存储在 config.json，不存数据库）。
+type SubscriptionConfig struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
+	Active   bool   `json:"active"`
 }
 
 // LogConfig 日志配置
@@ -237,7 +260,7 @@ func SaveToFile(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func splitCommaTrim(s string) []string {
@@ -500,6 +523,33 @@ func applyEnvOverrides(cfg *Config) {
 		}
 	}
 
+	if v := os.Getenv("EVENT_WEBHOOK_ENABLE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.EventWebhook.Enable = b
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_HOST"); v != "" {
+		cfg.EventWebhook.Host = v
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_PORT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.Port = i
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_BASE_URL"); v != "" {
+		cfg.EventWebhook.BaseURL = v
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_MAX_BODY_SIZE"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.MaxBodySize = int64(i)
+		}
+	}
+	if v := os.Getenv("EVENT_WEBHOOK_RATE_LIMIT"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.EventWebhook.RateLimit = i
+		}
+	}
+
 	if v := os.Getenv("OAUTH_ENABLE"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.OAuth.Enable = b
@@ -638,6 +688,18 @@ func Load() *Config {
 	}
 	if cfg.Web.Port == 0 {
 		cfg.Web.Port = 8082
+	}
+	if cfg.EventWebhook.Host == "" {
+		cfg.EventWebhook.Host = "0.0.0.0"
+	}
+	if cfg.EventWebhook.Port == 0 {
+		cfg.EventWebhook.Port = 8090
+	}
+	if cfg.EventWebhook.MaxBodySize == 0 {
+		cfg.EventWebhook.MaxBodySize = 1 << 20 // 1 MB
+	}
+	if cfg.EventWebhook.RateLimit == 0 {
+		cfg.EventWebhook.RateLimit = 60
 	}
 	if cfg.NapCat.WSUrl == "" {
 		cfg.NapCat.WSUrl = "ws://localhost:3001"

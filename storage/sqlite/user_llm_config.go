@@ -36,6 +36,7 @@ func NewUserLLMConfigService(db *DB) *UserLLMConfigService {
 func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error) {
 	conn := s.db.Conn()
 
+	// Try user_llm_subscriptions first (new table)
 	var cfg UserLLMConfig
 	var createdAt, updatedAt sql.NullTime
 	err := conn.QueryRow(`
@@ -49,7 +50,25 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, nil // 无配置
+		// Fallback to user_llm_configs (old table)
+		var thinkingMode sql.NullString
+		err = conn.QueryRow(`
+			SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at
+			FROM user_llm_configs
+			WHERE sender_id = ?
+		`, senderID).Scan(
+			&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model, &cfg.MaxContext,
+			&thinkingMode, &createdAt, &updatedAt,
+		)
+		if err == sql.ErrNoRows {
+			return nil, nil // 无配置
+		}
+		if err != nil {
+			return nil, fmt.Errorf("query user llm config (fallback): %w", err)
+		}
+		if thinkingMode.Valid {
+			cfg.ThinkingMode = thinkingMode.String
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query user llm config: %w", err)
@@ -75,7 +94,7 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	return &cfg, nil
 }
 
-// SetConfig 设置用户的 LLM 配置（写入 user_llm_subscriptions 的 default 条目）
+// SetConfig 设置用户的 LLM 配置（写入 user_llm_subscriptions + user_llm_configs）
 func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	conn := s.db.Conn()
 
@@ -91,36 +110,50 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	}
 
 	now := time.Now()
+
+	// --- Write to user_llm_configs (old table, backward compat) ---
+	_, err := conn.Exec(`
+		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(sender_id) DO UPDATE SET
+			provider = excluded.provider,
+			base_url = excluded.base_url,
+			api_key = excluded.api_key,
+			model = excluded.model,
+			max_context = excluded.max_context,
+			thinking_mode = excluded.thinking_mode,
+			updated_at = excluded.updated_at
+	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode, now, now)
+	if err != nil {
+		return fmt.Errorf("upsert user_llm_configs: %w", err)
+	}
+
+	// --- Write to user_llm_subscriptions (new table) ---
 	name := cfg.Provider
 	if name == "" {
 		name = "openai"
 	}
 
-	// Clear existing default, then upsert
 	tx, err := conn.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Clear default flag for this user
 	tx.Exec("UPDATE user_llm_subscriptions SET is_default = 0 WHERE sender_id = ?", cfg.SenderID)
 
-	// Try update existing default first
 	result, err := tx.Exec(`
 		UPDATE user_llm_subscriptions SET
 			name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
 			is_default = 1, updated_at = ?
-		WHERE sender_id = ? AND is_default = 0 AND provider = ?
+		WHERE sender_id = ? AND provider = ?
 	`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, now, cfg.SenderID, cfg.Provider)
-
 	if err != nil {
 		return fmt.Errorf("update subscription: %w", err)
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		// No existing non-default subscription for this provider, insert new
 		subID := fmt.Sprintf("sub_%x", now.UnixNano())
 		_, err = tx.Exec(`
 			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
@@ -144,12 +177,14 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	return nil
 }
 
-// DeleteConfig 删除用户的 LLM 配置
+// DeleteConfig 删除用户的 LLM 配置（两张表都删）
 func (s *UserLLMConfigService) DeleteConfig(senderID string) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec("DELETE FROM user_llm_configs WHERE sender_id = ?", senderID)
-	if err != nil {
-		return fmt.Errorf("delete user llm config: %w", err)
+	if _, err := conn.Exec("DELETE FROM user_llm_configs WHERE sender_id = ?", senderID); err != nil {
+		return fmt.Errorf("delete user_llm_configs: %w", err)
+	}
+	if _, err := conn.Exec("DELETE FROM user_llm_subscriptions WHERE sender_id = ?", senderID); err != nil {
+		return fmt.Errorf("delete user_llm_subscriptions: %w", err)
 	}
 	log.WithField("sender_id", senderID).Info("User LLM config deleted")
 	return nil

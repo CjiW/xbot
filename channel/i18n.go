@@ -458,6 +458,8 @@ func localeZH() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			// Subscription management entry (display-only, triggers quick switch)
+			{Key: "subscription_manage", Label: "📦 订阅管理", Type: SettingTypeText, Category: "LLM"},
 			{
 				Key: "context_mode", Label: "上下文模式", Description: "控制上下文管理策略",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
@@ -801,6 +803,8 @@ func localeEN() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API endpoint (modify for OpenAI-compatible third-party services)",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			// Subscription management entry (display-only, triggers quick switch)
+			{Key: "subscription_manage", Label: "📦 Subscriptions", Type: SettingTypeText, Category: "LLM"},
 			{
 				Key: "context_mode", Label: "Context Mode", Description: "Context management strategy",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",
@@ -1144,6 +1148,8 @@ func localeJA() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API エンドポイント（OpenAI 互換のサードパーティサービス用に変更可）",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			// Subscription management entry (display-only, triggers quick switch)
+			{Key: "subscription_manage", Label: "📦 サブスクリプション管理", Type: SettingTypeText, Category: "LLM"},
 			{
 				Key: "context_mode", Label: "コンテキストモード", Description: "コンテキスト管理戦略",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "auto",

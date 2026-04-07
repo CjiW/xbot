@@ -76,6 +76,14 @@ func (c *CLIChannel) Start() error {
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
 
+	// Propagate late-injected services to model (set before Start() when model was nil)
+	if c.subscriptionMgr != nil {
+		c.model.SetSubscriptionMgr(c.subscriptionMgr)
+	}
+	if c.llmSubscriber != nil {
+		c.model.SetLLMSubscriber(c.llmSubscriber)
+	}
+
 	// i18n: initialize locale from settings
 	if c.settingsSvc != nil {
 		if vals, err := c.settingsSvc.GetSettings("cli", "cli_user"); err == nil {

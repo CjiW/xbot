@@ -11,10 +11,11 @@ import (
 
 // LLMFactory 管理用户自定义 LLM 客户端的创建和缓存
 type LLMFactory struct {
-	configSvc    *sqlite.UserLLMConfigService
-	settingsSvc  *SettingsService // 用于读写用户并发配置
-	defaultLLM   llm.LLM
-	defaultModel string
+	configSvc       *sqlite.UserLLMConfigService
+	subscriptionSvc *sqlite.LLMSubscriptionService // 多订阅管理
+	settingsSvc     *SettingsService               // 用于读写用户并发配置
+	defaultLLM      llm.LLM
+	defaultModel    string
 
 	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
 	llmSemManager *llm.LLMSemaphoreManager
@@ -118,6 +119,62 @@ func (f *LLMFactory) InvalidateCustomLLMCache(senderID string) {
 	f.hasCustomLLMCache.Delete(senderID)
 }
 
+// SetSubscriptionSvc sets the subscription service (optional, for multi-subscription support).
+func (f *LLMFactory) SetSubscriptionSvc(svc *sqlite.LLMSubscriptionService) {
+	f.subscriptionSvc = svc
+}
+
+// GetSubscriptionSvc returns the subscription service.
+func (f *LLMFactory) GetSubscriptionSvc() *sqlite.LLMSubscriptionService {
+	return f.subscriptionSvc
+}
+
+// GetDefaultModel returns the default model name.
+func (f *LLMFactory) GetDefaultModel() string {
+	return f.defaultModel
+}
+
+// SwitchSubscription switches a user's active LLM to the specified subscription.
+// It creates a new LLM client from the subscription config and caches it.
+func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscription) error {
+	cfg := &sqlite.UserLLMConfig{
+		Provider:     sub.Provider,
+		BaseURL:      sub.BaseURL,
+		APIKey:       sub.APIKey,
+		Model:        sub.Model,
+		MaxContext:   0,
+		ThinkingMode: "",
+	}
+	client, model := f.createClient(cfg)
+	if client == nil {
+		return fmt.Errorf("failed to create LLM client for subscription %s", sub.ID)
+	}
+
+	f.mu.Lock()
+	f.clients[senderID] = client
+	f.models[senderID] = model
+	f.maxContexts[senderID] = 0
+	f.thinkingModes[senderID] = ""
+	f.mu.Unlock()
+
+	f.hasCustomLLMCache.Store(senderID, true)
+	return nil
+}
+
+// SwitchModel switches a user's active model without changing the subscription/LLM client.
+// Works by invalidating the cache so next GetLLM call picks up the new model from DB.
+func (f *LLMFactory) SwitchModel(senderID, model string) {
+	f.mu.Lock()
+	if _, ok := f.clients[senderID]; ok {
+		// User has a custom client — update model in cache
+		f.models[senderID] = model
+	} else {
+		// User uses default client — update default model
+		f.defaultModel = model
+	}
+	f.mu.Unlock()
+}
+
 // SetDefaults 更新默认 LLM 客户端和模型名。
 // 用于 setup/settings 面板修改全局 LLM 配置后立即生效。
 func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
@@ -151,11 +208,6 @@ func (f *LLMFactory) ClearProxyLLM(senderID string) {
 	delete(f.models, senderID)
 	delete(f.maxContexts, senderID)
 	delete(f.thinkingModes, senderID)
-}
-
-// GetDefaultModel returns the default model name.
-func (f *LLMFactory) GetDefaultModel() string {
-	return f.defaultModel
 }
 
 // createClient 根据配置创建 LLM 客户端，配置无效时返回 nil

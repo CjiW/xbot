@@ -42,6 +42,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 	}
 
+	// Drain pending cmds queued by helpers (e.g. showTempStatus)
+	if len(m.pendingCmds) > 0 {
+		cmds := m.pendingCmds
+		m.pendingCmds = nil
+		// Return batched cmd via tea.Batch
+		return m, tea.Batch(cmds...)
+	}
+
 	// i18n: locale 变更通知
 	select {
 	case <-localeChangeCh:

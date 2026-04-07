@@ -654,12 +654,22 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 				return true, m, nil
 			case tea.KeySpace:
 				m.panelCombo = false
-				// Start typing to filter / enter custom value → switch to edit mode
+				// Switch to edit mode for custom input
 				m.panelEdit = true
 				ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
 				var cmd tea.Cmd
 				m.panelEditTA, cmd = ta.Update(msg)
 				return true, m, cmd
+			default:
+				// Any printable key: auto-switch to edit mode for custom input
+				if len(msg.Text) > 0 {
+					m.panelCombo = false
+					m.panelEdit = true
+					ta := m.newPanelTextArea(m.panelValues[def.Key], 50, 1)
+					var cmd tea.Cmd
+					m.panelEditTA, cmd = ta.Update(msg)
+					return true, m, cmd
+				}
 			}
 		}
 		return true, m, nil
@@ -702,6 +712,13 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 			// Danger zone entry
 			if def.Key == "danger_zone" {
 				m.openDangerPanelFromSettings()
+				return true, m, nil
+			}
+			// Subscription management entry — close settings, open quick switch
+			if def.Key == "subscription_manage" {
+				m.panelMode = ""
+				m.relayoutViewport()
+				m.openQuickSwitch("subscription")
 				return true, m, nil
 			}
 			switch def.Type {
@@ -1094,6 +1111,34 @@ func (m *cliModel) viewSettingsPanel() string {
 			continue
 		}
 
+		// Subscription management entry: show count + active subscription
+		if def.Key == "subscription_manage" {
+			subHint := ""
+			if m.subscriptionMgr != nil {
+				if subs, err := m.subscriptionMgr.List(""); err == nil && len(subs) > 0 {
+					var activeName string
+					for _, sub := range subs {
+						if sub.Active {
+							activeName = sub.Name
+							break
+						}
+					}
+					if activeName != "" {
+						subHint = " " + s.ProgressDone.Render("● "+activeName)
+					}
+					subHint += descStyle.Render(fmt.Sprintf(" (%d)", len(subs)))
+				}
+			}
+			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), subHint)
+			if i == m.panelCursor && !m.panelEdit {
+				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			ln++
+			continue
+		}
+
 		// Format value display
 		var displayVal string
 		switch def.Type {
@@ -1330,6 +1375,261 @@ func (c *CLIChannel) SetSettingsService(svc SettingsService) {
 // SetModelLister injects the model lister for combo settings.
 func (c *CLIChannel) SetModelLister(lister ModelLister) {
 	c.modelLister = lister
+}
+
+// SetSubscriptionManager sets the subscription manager for multi-subscription support.
+func (c *CLIChannel) SetSubscriptionManager(mgr SubscriptionManager) {
+	c.subscriptionMgr = mgr
+	if c.model != nil {
+		c.model.SetSubscriptionMgr(mgr)
+	}
+}
+
+// SetLLMSubscriber sets the LLM subscriber for quick switch actions.
+// Stores on channel for propagation to model in Start().
+func (c *CLIChannel) SetLLMSubscriber(sub LLMSubscriber) {
+	c.llmSubscriber = sub
+	if c.model != nil {
+		c.model.SetLLMSubscriber(sub)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// §15 Quick Switch: Subscription / Model picker overlay
+// ---------------------------------------------------------------------------
+
+// openQuickSwitch opens the quick switch overlay for subscription or model selection.
+func (m *cliModel) openQuickSwitch(mode string) {
+	if m.subscriptionMgr == nil {
+		return
+	}
+	subs, err := m.subscriptionMgr.List("")
+	if err != nil || len(subs) == 0 {
+		// Even with no subscriptions, allow adding one
+		subs = nil
+	}
+
+	m.quickSwitchMode = mode
+	m.quickSwitchList = subs
+	m.quickSwitchCursor = 0
+
+	// Append "Add subscription" entry for subscription mode
+	if mode == "subscription" {
+		m.quickSwitchList = append(m.quickSwitchList, Subscription{
+			ID:   "__add__",
+			Name: "➕ Add subscription",
+		})
+	}
+
+	// Pre-select the active subscription
+	for i, s := range subs {
+		if s.Active {
+			m.quickSwitchCursor = i
+			break
+		}
+	}
+}
+
+// applyQuickSwitch applies the selected item from the quick switch overlay.
+func (m *cliModel) applyQuickSwitch() {
+	if m.quickSwitchCursor >= len(m.quickSwitchList) {
+		m.quickSwitchMode = ""
+		return
+	}
+	selected := m.quickSwitchList[m.quickSwitchCursor]
+
+	// "Add subscription" entry — open a mini settings panel
+	if selected.ID == "__add__" {
+		m.quickSwitchMode = ""
+		addSchema := []SettingDefinition{
+			{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: ""},
+			{Key: "sub_provider", Label: "Provider", Description: "LLM provider (openai, anthropic, deepseek, etc.)", Type: SettingTypeText, DefaultValue: "openai"},
+			{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeText, DefaultValue: ""},
+			{Key: "sub_base_url", Label: "Base URL", Description: "API base URL (leave empty for provider default)", Type: SettingTypeText, DefaultValue: ""},
+			{Key: "sub_api_key", Label: "API Key", Description: "API key (leave empty to use global key)", Type: SettingTypePassword, DefaultValue: ""},
+		}
+		// Inject model list into combo for model field
+		if m.channel.modelLister != nil {
+			models := m.channel.modelLister.ListModels()
+			if len(models) > 0 {
+				opts := make([]SettingOption, len(models))
+				for j, mdl := range models {
+					opts[j] = SettingOption{Label: mdl, Value: mdl}
+				}
+				addSchema[2].Options = opts
+			}
+		}
+		m.openSettingsPanel(addSchema, map[string]string{}, func(values map[string]string) {
+			name := values["sub_name"]
+			if name == "" {
+				name = values["sub_provider"]
+			}
+			if name == "" {
+				name = "unnamed"
+			}
+			sub := &Subscription{
+				ID:       fmt.Sprintf("sub_%d", time.Now().UnixNano()),
+				Name:     name,
+				Provider: values["sub_provider"],
+				BaseURL:  values["sub_base_url"],
+				APIKey:   values["sub_api_key"],
+				Model:    values["sub_model"],
+				Active:   false,
+			}
+			if err := m.subscriptionMgr.Add(sub); err != nil {
+				m.showTempStatus(fmt.Sprintf("Failed to add subscription: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Added subscription: %s (%s)", sub.Name, sub.Model))
+			}
+		})
+		return
+	}
+
+	switch m.quickSwitchMode {
+	case "subscription":
+		if m.subscriptionMgr == nil {
+			break
+		}
+		// Find the full subscription config first
+		var target *Subscription
+		if subs, err := m.subscriptionMgr.List(""); err == nil {
+			for i := range subs {
+				if subs[i].ID == selected.ID {
+					target = &subs[i]
+					break
+				}
+			}
+		}
+		if target == nil {
+			m.showTempStatus("Subscription not found")
+			break
+		}
+		// Switch runtime LLM first — only persist SetDefault on success
+		if m.channel == nil || m.channel.config.SwitchLLM == nil {
+			break
+		}
+		if err := m.channel.config.SwitchLLM(target.Provider, target.BaseURL, target.APIKey, target.Model); err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
+			break
+		}
+		// Runtime switch succeeded — now persist default + sync state
+		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
+			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save default: %v", err))
+		}
+		m.channel.UpdateConfig(target.Model, target.BaseURL)
+		// Sync LLM values to SettingsService so /settings
+		// doesn't show stale values from a previous save.
+		// NOTE: intentionally skip llm_api_key — API keys should not be
+		// stored in SettingsService (SQLite) in plaintext.
+		if m.channel.settingsSvc != nil {
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_provider", target.Provider)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_model", target.Model)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_base_url", target.BaseURL)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_api_key", target.APIKey)
+		}
+		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
+		m.refreshCachedModelName()
+	case "model":
+		if m.llmSubscriber != nil {
+			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
+			m.cachedModelName = selected.Model
+			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
+		}
+	}
+
+	m.quickSwitchMode = ""
+}
+
+// renameQuickSwitchEntry opens a mini panel to rename the selected subscription.
+func (m *cliModel) renameQuickSwitchEntry() {
+	if m.quickSwitchCursor >= len(m.quickSwitchList) {
+		return
+	}
+	selected := m.quickSwitchList[m.quickSwitchCursor]
+	if selected.ID == "__add__" {
+		return
+	}
+	oldName := selected.Name
+	renameSchema := []SettingDefinition{
+		{Key: "sub_name", Label: "Name", Description: "New display name for this subscription", Type: SettingTypeText, DefaultValue: oldName},
+	}
+	renameValues := map[string]string{"sub_name": oldName}
+	m.quickSwitchMode = "" // close overlay while renaming
+	m.openSettingsPanel(renameSchema, renameValues, func(values map[string]string) {
+		newName := values["sub_name"]
+		if newName == "" || newName == oldName {
+			return
+		}
+		if m.subscriptionMgr != nil {
+			if err := m.subscriptionMgr.Rename(selected.ID, newName); err != nil {
+				m.showTempStatus(fmt.Sprintf("Failed to rename: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Renamed: %s → %s", oldName, newName))
+			}
+		}
+	})
+}
+
+// viewQuickSwitch renders the quick switch overlay as a centered panel.
+func (m *cliModel) viewQuickSwitch(width, height int) string {
+	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
+		return ""
+	}
+
+	title := "Switch Subscription"
+	if m.quickSwitchMode == "model" {
+		title = "Switch Model"
+	}
+
+	var lines []string
+
+	// Header
+	lines = append(lines, m.styles.PanelHeader.Render(title))
+	lines = append(lines, "") // spacer
+
+	// Items
+	for i, s := range m.quickSwitchList {
+		// Separator before "Add" entry
+		if s.ID == "__add__" && i > 0 {
+			lines = append(lines, m.styles.TextMutedSt.Render(" ─────────────────────────────────"))
+		}
+		cursor := " "
+		style := m.styles.TextMutedSt
+		if i == m.quickSwitchCursor {
+			cursor = "▸"
+			style = m.styles.Accent
+		}
+		active := ""
+		if s.Active {
+			active = " ✓"
+		}
+		name := s.Name
+		if name == "" {
+			name = s.ID
+		}
+		line := style.Render(fmt.Sprintf(" %s %-30s %-16s%s", cursor, name, s.Model, active))
+		lines = append(lines, line)
+	}
+
+	// Build panel with border
+	panelContent := strings.Join(lines, "\n")
+	box := m.styles.PanelBox.Render(panelContent)
+
+	// Hint line below the box
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Rename  Esc Close")
+
+	// Center vertically
+	listH := len(m.quickSwitchList) + 3 // header + spacer + items + borders(~2)
+	blankLines := max(0, (height-listH)/2)
+	var b strings.Builder
+	for i := 0; i < blankLines; i++ {
+		b.WriteString("\n")
+	}
+	b.WriteString(box)
+	b.WriteString("\n")
+	b.WriteString(hint)
+
+	return b.String()
 }
 
 // UpdateConfig updates the live LLM configuration (model, base_url).

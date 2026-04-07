@@ -69,6 +69,9 @@ func (db *DB) migrateSchema(from int) error {
 	lateMigrations := []migration{
 		{20, migrateV19ToV20},
 		{21, migrateV20ToV21},
+		{22, migrateV21ToV22},
+		{23, migrateV22ToV23},
+		{24, migrateV23ToV24},
 	}
 
 	for _, m := range lateMigrations {
@@ -682,5 +685,98 @@ func migrateV20ToV21(conn *sql.DB) error {
 		return fmt.Errorf("update schema version: %w", err)
 	}
 	log.Info("Database migrated to v21 (added LLM fields to runners)")
+	return nil
+}
+
+// migrateV21ToV22 adds the event_triggers table.
+func migrateV21ToV22(conn *sql.DB) error {
+	migration := `
+CREATE TABLE IF NOT EXISTS event_triggers (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    event_type  TEXT NOT NULL DEFAULT 'webhook',
+    channel     TEXT NOT NULL,
+    chat_id     TEXT NOT NULL,
+    sender_id   TEXT NOT NULL,
+    message_tpl TEXT NOT NULL,
+    secret      TEXT NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    one_shot    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    last_fired  TEXT,
+    fire_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_event_triggers_sender ON event_triggers(sender_id);
+CREATE INDEX IF NOT EXISTS idx_event_triggers_type ON event_triggers(event_type, enabled);
+UPDATE schema_version SET version = 22;
+`
+	if _, err := conn.Exec(migration); err != nil {
+		return fmt.Errorf("migrate v21->v22: %w", err)
+	}
+	log.Info("Database migrated to v22 (added event_triggers)")
+	return nil
+}
+
+func migrateV22ToV23(conn *sql.DB) error {
+	migration := `
+CREATE TABLE IF NOT EXISTS user_llm_subscriptions (
+    id          TEXT PRIMARY KEY,
+    sender_id   TEXT NOT NULL,
+    name        TEXT NOT NULL DEFAULT '',
+    provider    TEXT NOT NULL DEFAULT 'openai',
+    base_url    TEXT NOT NULL DEFAULT '',
+    api_key     TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    is_default  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_llm_subs_sender ON user_llm_subscriptions(sender_id);
+UPDATE schema_version SET version = 23;
+`
+	if _, err := conn.Exec(migration); err != nil {
+		return fmt.Errorf("migrate v22->v23: %w", err)
+	}
+	log.Info("Database migrated to v23 (added user_llm_subscriptions)")
+	return nil
+}
+
+// migrateV23ToV24 migrates existing user_llm_configs data into user_llm_subscriptions.
+// This is a one-time migration — after this, user_llm_subscriptions is the sole source of truth.
+func migrateV23ToV24(conn *sql.DB) error {
+	// Copy any rows from old table that don't already have a matching subscription.
+	// Match by (sender_id, provider) to avoid duplicates.
+	migrate := `
+INSERT OR IGNORE INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
+SELECT
+    'sub_' || LOWER(HEX(RANDOMBLOB(8))),
+    u.sender_id,
+    COALESCE(u.provider, 'openai'),
+    COALESCE(u.provider, 'openai'),
+    u.base_url,
+    u.api_key,
+    u.model,
+    1,
+    u.created_at,
+    u.updated_at
+FROM user_llm_configs u
+WHERE u.sender_id IS NOT NULL
+  AND u.sender_id != ''
+  AND NOT EXISTS (
+      SELECT 1 FROM user_llm_subscriptions s
+      WHERE s.sender_id = u.sender_id AND s.provider = COALESCE(u.provider, 'openai')
+  );
+`
+	if _, err := conn.Exec(migrate); err != nil {
+		return fmt.Errorf("migrate v23->v24 data: %w", err)
+	}
+
+	var count int
+	conn.QueryRow("SELECT COUNT(*) FROM user_llm_subscriptions").Scan(&count)
+
+	if _, err := conn.Exec("UPDATE schema_version SET version = 24"); err != nil {
+		return fmt.Errorf("migrate v23->v24 version: %w", err)
+	}
+	log.WithField("subscriptions", count).Info("Database migrated to v24 (user_llm_configs → user_llm_subscriptions)")
 	return nil
 }

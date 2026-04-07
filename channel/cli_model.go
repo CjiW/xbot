@@ -100,6 +100,42 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
+// cycleModel switches to the next model in the available model list.
+// Wraps around when reaching the end.
+func (m *cliModel) cycleModel() {
+	if m.channel == nil || m.channel.modelLister == nil {
+		return
+	}
+	models := m.channel.modelLister.ListModels()
+	if len(models) < 2 {
+		m.showTempStatus("Only one model available")
+		return
+	}
+
+	current := m.cachedModelName
+	nextIdx := 0
+	for i, name := range models {
+		if name == current {
+			nextIdx = (i + 1) % len(models)
+			break
+		}
+	}
+	nextModel := models[nextIdx]
+
+	// Update model override on channel
+	m.channel.configMu.Lock()
+	m.channel.modelOverride = nextModel
+	m.channel.configMu.Unlock()
+
+	m.cachedModelName = nextModel
+	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
+
+	// Notify LLM subscriber if available
+	if m.llmSubscriber != nil {
+		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
+	}
+}
+
 // tickerTickMsg 是 ticker 定时 tick 消息
 type tickerTickMsg struct{}
 
@@ -166,6 +202,7 @@ type cliModel struct {
 	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）
 	msgBus          *bus.MessageBus           // 消息总线引用
 	tempStatus      string                    // 临时状态提示（自动过期）
+	pendingCmds     []tea.Cmd                 // commands queued by helpers (auto-drained in Update)
 	shouldQuit      bool                      // Smart quit: quit after current operation completes
 	trimHistoryFn   func(keepCount int) error // Ctrl+K 确认删除后回调：截断数据库中的 session messages
 
@@ -268,6 +305,13 @@ type cliModel struct {
 	panelRunnerEditField int                 // 当前编辑字段 (0=server, 1=token, 2=workspace)
 	updateNotice         *version.UpdateInfo // nil=nothing, non-nil=show notice
 	checkingUpdate       bool                // true while /update is in progress
+
+	// --- §15 Subscription / Model Quick Switch ---
+	quickSwitchMode   string              // ""=off, "subscription"=selecting subscription, "model"=selecting model
+	quickSwitchList   []Subscription      // available subscriptions or models
+	quickSwitchCursor int                 // selected index
+	subscriptionMgr   SubscriptionManager // injected by CLIChannel
+	llmSubscriber     LLMSubscriber       // injected by CLIChannel
 
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面
@@ -399,6 +443,16 @@ func (m *cliModel) SetMsgBus(msgBus *bus.MessageBus) {
 	m.msgBus = msgBus
 }
 
+// SetSubscriptionMgr sets the subscription manager for quick switch.
+func (m *cliModel) SetSubscriptionMgr(mgr SubscriptionManager) {
+	m.subscriptionMgr = mgr
+}
+
+// SetLLMSubscriber sets the LLM subscriber for quick switch.
+func (m *cliModel) SetLLMSubscriber(sub LLMSubscriber) {
+	m.llmSubscriber = sub
+}
+
 // ---------------------------------------------------------------------------
 // Bubble Tea Messages (内部消息类型)
 // ---------------------------------------------------------------------------
@@ -480,6 +534,7 @@ func (m *cliModel) refreshCachedModelName() {
 	if m.channel == nil {
 		return
 	}
+	m.cachedModelName = ""
 	m.channel.configMu.RLock()
 	if m.channel.modelOverride != "" {
 		m.cachedModelName = m.channel.modelOverride

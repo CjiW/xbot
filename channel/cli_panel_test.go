@@ -139,8 +139,9 @@ func TestApplyQuickSwitchNilChannel(t *testing.T) {
 	model.quickSwitchCursor = 0
 	model.applyQuickSwitch() // should NOT panic
 
-	if mgr.setDefID != "sub1" {
-		t.Errorf("expected SetDefault called even with nil channel, got %s", mgr.setDefID)
+	// SetDefault should NOT be called because SwitchLLM is unreachable (nil channel)
+	if mgr.setDefID != "" {
+		t.Errorf("expected SetDefault NOT called with nil channel, got %s", mgr.setDefID)
 	}
 }
 
@@ -167,8 +168,9 @@ func TestApplyQuickSwitchNilSwitchLLM(t *testing.T) {
 	model.quickSwitchCursor = 0
 	model.applyQuickSwitch() // should NOT panic, should NOT call SwitchLLM
 
-	if mgr.setDefID != "sub1" {
-		t.Errorf("expected SetDefault called, got %s", mgr.setDefID)
+	// SetDefault should NOT be called because SwitchLLM is nil
+	if mgr.setDefID != "" {
+		t.Errorf("expected SetDefault NOT called with nil SwitchLLM, got %s", mgr.setDefID)
 	}
 }
 
@@ -222,19 +224,20 @@ func TestApplyQuickSwitchError(t *testing.T) {
 	model.quickSwitchCursor = 1
 	model.applyQuickSwitch()
 
-	// SetDefault should still have been called
-	if mgr.setDefID != "sub2" {
-		t.Errorf("expected SetDefault(sub2), got %s", mgr.setDefID)
+	// SetDefault should NOT be called because SwitchLLM failed
+	if mgr.setDefID != "" {
+		t.Errorf("expected SetDefault NOT called after SwitchLLM error, got %s", mgr.setDefID)
 	}
 
 	// tempStatus should show error
 	if model.tempStatus == "" {
 		t.Error("expected tempStatus to show error")
 	}
-	if mgr.subs[0].Active {
-		t.Error("expected sub1 active=false after SetDefault(sub2)")
+	// subs should remain unchanged — sub1 still active, sub2 still inactive
+	if !mgr.subs[0].Active {
+		t.Error("expected sub1 still active after SwitchLLM failure")
 	}
-	if !mgr.subs[1].Active {
-		t.Error("expected sub2 active=true after SetDefault(sub2)")
+	if mgr.subs[1].Active {
+		t.Error("expected sub2 still inactive after SwitchLLM failure")
 	}
 }

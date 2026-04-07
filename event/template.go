@@ -78,6 +78,11 @@ func RenderMessage(tpl string, evt Event) string {
 	if result == "" {
 		return defaultMessage(data)
 	}
+	// Limit output size to prevent template-based DoS (e.g. deeply nested range loops).
+	const maxRenderLen = 4096
+	if len(result) > maxRenderLen {
+		result = result[:maxRenderLen] + "…(truncated)"
+	}
 	return result
 }
 

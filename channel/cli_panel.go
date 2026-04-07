@@ -1487,38 +1487,47 @@ func (m *cliModel) applyQuickSwitch() {
 
 	switch m.quickSwitchMode {
 	case "subscription":
-		if m.subscriptionMgr != nil {
-			if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
-				m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
-			} else if m.channel != nil && m.channel.config.SwitchLLM != nil {
-				// Find the full subscription config (with base_url/api_key) from subscriptionMgr
-				if subs, err := m.subscriptionMgr.List(""); err == nil {
-					for _, s := range subs {
-						if s.ID == selected.ID {
-							if err := m.channel.config.SwitchLLM(s.Provider, s.BaseURL, s.APIKey, s.Model); err != nil {
-								m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
-							} else {
-								// Clear model/baseURL overrides so refreshCachedModelName
-								// picks up the new value from GetCurrentValues() instead of
-								// returning a stale override from a previous /settings edit.
-								m.channel.UpdateConfig(s.Model, s.BaseURL)
-								// Sync LLM values to SettingsService so /settings
-								// doesn't show stale values from a previous save.
-								if m.channel.settingsSvc != nil {
-									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_provider", s.Provider)
-									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_model", s.Model)
-									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_base_url", s.BaseURL)
-									_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "llm_api_key", s.APIKey)
-								}
-								m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
-								m.refreshCachedModelName()
-							}
-							break
-						}
-					}
+		if m.subscriptionMgr == nil {
+			break
+		}
+		// Find the full subscription config first
+		var target *Subscription
+		if subs, err := m.subscriptionMgr.List(""); err == nil {
+			for i := range subs {
+				if subs[i].ID == selected.ID {
+					target = &subs[i]
+					break
 				}
 			}
 		}
+		if target == nil {
+			m.showTempStatus("Subscription not found")
+			break
+		}
+		// Switch runtime LLM first — only persist SetDefault on success
+		if m.channel == nil || m.channel.config.SwitchLLM == nil {
+			break
+		}
+		if err := m.channel.config.SwitchLLM(target.Provider, target.BaseURL, target.APIKey, target.Model); err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
+			break
+		}
+		// Runtime switch succeeded — now persist default + sync state
+		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
+			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save default: %v", err))
+		}
+		m.channel.UpdateConfig(target.Model, target.BaseURL)
+		// Sync LLM values to SettingsService so /settings
+		// doesn't show stale values from a previous save.
+		// NOTE: intentionally skip llm_api_key — API keys should not be
+		// stored in SettingsService (SQLite) in plaintext.
+		if m.channel.settingsSvc != nil {
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_provider", target.Provider)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_model", target.Model)
+			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_base_url", target.BaseURL)
+		}
+		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
+		m.refreshCachedModelName()
 	case "model":
 		if m.llmSubscriber != nil {
 			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)

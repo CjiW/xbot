@@ -99,7 +99,7 @@ func (t *EventTriggerTool) addTrigger(ctx *ToolContext, p eventTriggerParams) (*
 	}
 
 	trigger := &event.Trigger{
-		ID:         fmt.Sprintf("trg_%s", uuid.New().String()[:8]),
+		ID:         fmt.Sprintf("trg_%s", uuid.New().String()),
 		Name:       p.Name,
 		EventType:  "webhook",
 		MessageTpl: p.Message,

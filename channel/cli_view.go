@@ -579,8 +579,8 @@ func (m *cliModel) renderFooter() string {
 		if m.textarea.Value() == "" {
 			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
 			if m.subscriptionMgr != nil {
-					hints = append(hints, m.ctrlKey("p", "Subs"))
-				}
+				hints = append(hints, m.ctrlKey("p", "Subs"))
+			}
 			if len(m.inputHistory) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}

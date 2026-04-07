@@ -38,14 +38,14 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 
 	var cfg UserLLMConfig
 	var createdAt, updatedAt sql.NullTime
-	var thinkingMode sql.NullString
 	err := conn.QueryRow(`
-		SELECT sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at
-		FROM user_llm_configs
-		WHERE sender_id = ?
+		SELECT sender_id, provider, base_url, api_key, model, created_at, updated_at
+		FROM user_llm_subscriptions
+		WHERE sender_id = ? AND is_default = 1
+		LIMIT 1
 	`, senderID).Scan(
-		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model, &cfg.MaxContext,
-		&thinkingMode, &createdAt, &updatedAt,
+		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model,
+		&createdAt, &updatedAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -53,10 +53,6 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query user llm config: %w", err)
-	}
-
-	if thinkingMode.Valid {
-		cfg.ThinkingMode = thinkingMode.String
 	}
 
 	if createdAt.Valid {
@@ -79,7 +75,7 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	return &cfg, nil
 }
 
-// SetConfig 设置用户的 LLM 配置
+// SetConfig 设置用户的 LLM 配置（写入 user_llm_subscriptions 的 default 条目）
 func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	conn := s.db.Conn()
 
@@ -95,29 +91,54 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	}
 
 	now := time.Now()
-	_, err := conn.Exec(`
-		INSERT INTO user_llm_configs (sender_id, provider, base_url, api_key, model, max_context, thinking_mode, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(sender_id) DO UPDATE SET
-			provider = excluded.provider,
-			base_url = excluded.base_url,
-			api_key = excluded.api_key,
-			model = excluded.model,
-			max_context = excluded.max_context,
-			thinking_mode = excluded.thinking_mode,
-			updated_at = excluded.updated_at
-	`, cfg.SenderID, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.ThinkingMode, now, now)
+	name := cfg.Provider
+	if name == "" {
+		name = "openai"
+	}
+
+	// Clear existing default, then upsert
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Clear default flag for this user
+	tx.Exec("UPDATE user_llm_subscriptions SET is_default = 0 WHERE sender_id = ?", cfg.SenderID)
+
+	// Try update existing default first
+	result, err := tx.Exec(`
+		UPDATE user_llm_subscriptions SET
+			name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+			is_default = 1, updated_at = ?
+		WHERE sender_id = ? AND is_default = 0 AND provider = ?
+	`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, now, cfg.SenderID, cfg.Provider)
 
 	if err != nil {
-		return fmt.Errorf("upsert user llm config: %w", err)
+		return fmt.Errorf("update subscription: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		// No existing non-default subscription for this provider, insert new
+		subID := fmt.Sprintf("sub_%x", now.UnixNano())
+		_, err = tx.Exec(`
+			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+		`, subID, cfg.SenderID, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, now, now)
+		if err != nil {
+			return fmt.Errorf("insert subscription: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
 	}
 
 	log.WithFields(log.Fields{
-		"sender_id":     cfg.SenderID,
-		"provider":      cfg.Provider,
-		"model":         cfg.Model,
-		"max_context":   cfg.MaxContext,
-		"thinking_mode": cfg.ThinkingMode,
+		"sender_id": cfg.SenderID,
+		"provider":  cfg.Provider,
+		"model":     cfg.Model,
 	}).Info("User LLM config saved")
 
 	return nil

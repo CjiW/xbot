@@ -716,7 +716,8 @@ UPDATE schema_version SET version = 22;
 	return nil
 }
 
-// migrateV22ToV23 adds the user_llm_subscriptions table for multi-provider management.
+// migrateV22ToV23 adds the user_llm_subscriptions table and migrates
+// existing user_llm_configs data into it.
 func migrateV22ToV23(conn *sql.DB) error {
 	migration := `
 CREATE TABLE IF NOT EXISTS user_llm_subscriptions (
@@ -732,11 +733,40 @@ CREATE TABLE IF NOT EXISTS user_llm_subscriptions (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_llm_subs_sender ON user_llm_subscriptions(sender_id);
-UPDATE schema_version SET version = 23;
 `
 	if _, err := conn.Exec(migration); err != nil {
-		return fmt.Errorf("migrate v22->v23: %w", err)
+		return fmt.Errorf("migrate v22->v23 create table: %w", err)
 	}
-	log.Info("Database migrated to v23 (added user_llm_subscriptions)")
+
+	// Migrate existing user_llm_configs → user_llm_subscriptions.
+	// Each row becomes a subscription with name=provider and is_default=1.
+	migrate := `
+INSERT OR IGNORE INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
+SELECT
+    'sub_' || LOWER(HEX(RANDOMBLOB(8))),
+    sender_id,
+    COALESCE(provider, 'openai'),
+    COALESCE(provider, 'openai'),
+    base_url,
+    api_key,
+    model,
+    1,
+    created_at,
+    updated_at
+FROM user_llm_configs
+WHERE sender_id IS NOT NULL AND sender_id != '';
+`
+	if _, err := conn.Exec(migrate); err != nil {
+		return fmt.Errorf("migrate v22->v23 data: %w", err)
+	}
+
+	// Count migrated rows for logging
+	var count int
+	conn.QueryRow("SELECT COUNT(*) FROM user_llm_subscriptions").Scan(&count)
+
+	if _, err := conn.Exec("UPDATE schema_version SET version = 23"); err != nil {
+		return fmt.Errorf("migrate v22->v23 version: %w", err)
+	}
+	log.WithField("migrated", count).Info("Database migrated to v23 (user_llm_configs → user_llm_subscriptions)")
 	return nil
 }

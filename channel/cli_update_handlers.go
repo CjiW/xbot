@@ -171,15 +171,15 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 	case msg.String() == "ctrl+p":
 		// Ctrl+P: Quick switch subscription
 		if m.panelMode == "" && m.subscriptionMgr != nil && !m.typing {
-		m.openQuickSwitch("subscription")
-		return m, nil, true
+			m.openQuickSwitch("subscription")
+			return m, nil, true
 		}
 
 	case msg.String() == "ctrl+m":
 		// Ctrl+M: Cycle model (next in list)
 		if m.panelMode == "" && !m.typing && m.channel != nil {
-		m.cycleModel()
-		return m, nil, true
+			m.cycleModel()
+			return m, nil, true
 		}
 
 	case msg.Text == "^":

@@ -263,12 +263,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.viewport.GotoBottom()
 			m.newContentHint = false
 		}
-		if m.typing {
-			cmds = append(cmds, tickCmd())
-		}
-		// Kick off ticker chain when processing just started
+		// Start tick+ticker chains ONLY when transitioning from idle → busy.
+		// When already busy (wasTyping==true), the chain is already running.
+		// Emitting extra tickCmd() while busy creates duplicate chains:
+		// 2 chains → 4 → 8 → ... → CPU freeze within seconds.
 		if m.typing && !wasTyping {
-			cmds = append(cmds, tickerCmd())
+			cmds = append(cmds, tickCmd(), tickerCmd())
 		}
 		return m, cmds, true
 

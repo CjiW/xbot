@@ -713,6 +713,13 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}
 			s.factory.SetDefaults(client, sc.Model)
+			// Sync subscription's LLM config back to global config
+			// so GetCurrentValues / settings panel reflect the switch
+			s.cfg.LLM.Provider = llmCfg.Provider
+			s.cfg.LLM.BaseURL = llmCfg.BaseURL
+			s.cfg.LLM.APIKey = llmCfg.APIKey
+			s.cfg.LLM.Model = sc.Model
+			_ = s.saveFn()
 			return nil
 		}
 	}

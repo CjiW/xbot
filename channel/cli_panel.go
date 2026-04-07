@@ -1453,19 +1453,24 @@ func (m *cliModel) applyQuickSwitch() {
 	switch m.quickSwitchMode {
 	case "subscription":
 		if m.subscriptionMgr != nil {
-			if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
+		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
+		} else {
+			if m.llmSubscriber != nil {
+			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &selected); err != nil {
 				m.showTempStatus(fmt.Sprintf("Failed to switch: %v", err))
 			} else {
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
-				if m.llmSubscriber != nil {
-					m.llmSubscriber.SwitchSubscription(m.senderID, &selected)
-				}
+				m.refreshCachedModelName()
 			}
+			}
+		}
 		}
 	case "model":
 		if m.llmSubscriber != nil {
-			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
-			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
+		m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
+		m.cachedModelName = selected.Model
+		m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
 		}
 	}
 

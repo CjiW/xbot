@@ -122,6 +122,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		case tea.KeyEnter:
 			m.applyQuickSwitch()
+			if len(m.pendingCmds) > 0 {
+				pending := m.pendingCmds
+				m.pendingCmds = nil
+				return m, []tea.Cmd{tea.Batch(pending...)}, true
+			}
 			return m, nil, true
 		}
 		// E: rename selected subscription
@@ -184,6 +189,13 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		// Ctrl+M: Cycle model (next in list)
 		if m.panelMode == "" && !m.typing && m.channel != nil {
 			m.cycleModel()
+			// Drain pending cmds (e.g. showTempStatus timer) immediately
+			// to avoid an extra Update→View cycle on the next frame.
+			if len(m.pendingCmds) > 0 {
+				pending := m.pendingCmds
+				m.pendingCmds = nil
+				return m, []tea.Cmd{tea.Batch(pending...)}, true
+			}
 			return m, nil, true
 		}
 

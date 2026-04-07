@@ -71,7 +71,7 @@ func (m *cliModel) View() tea.View {
 
 		// 输入框样式：根据输入内容动态设置边框颜色
 		// ! 开头 → 错误色，/ 开头 → 成功色，默认 → 主题强调色
-	inputValue := strings.TrimSpace(m.textarea.Value())
+	inputValue := m.textarea.Value()
 	borderColor, completionsHint := m.renderCompletionsHint(inputValue)
 
 	inputBoxStyle := m.styles.InputBox.BorderForeground(borderColor)
@@ -81,7 +81,7 @@ func (m *cliModel) View() tea.View {
 	// §23 Render placeholder manually when textarea is empty.
 	// This avoids textarea's built-in placeholder which causes a view-mode
 	// switch that triggers CJK rendering bugs on Windows Terminal.
-	if strings.TrimSpace(m.textarea.Value()) == "" && m.placeholderText != "" {
+	if m.textarea.Value() == "" && m.placeholderText != "" {
 		// Build a 3-line placeholder view matching the textarea's height (minTaHeight=3).
 		taHeight := minTaHeight
 		if h := m.textarea.Height(); h > 0 {
@@ -204,7 +204,11 @@ func (m *cliModel) View() tea.View {
 			}
 			// 模型名称（使用缓存，避免每次 View() 重复查找）
 			if m.cachedModelName != "" {
-				readyParts = append(readyParts, m.cachedModelName)
+				modelHint := m.cachedModelName
+				if m.channel != nil && m.channel.modelLister != nil && len(m.channel.modelLister.ListModels()) > 1 {
+					modelHint += " [Ctrl+M]"
+				}
+				readyParts = append(readyParts, modelHint)
 			}
 			status = readyStatusStyle.Render(strings.Join(readyParts, " · "))
 		}
@@ -575,8 +579,8 @@ func (m *cliModel) renderFooter() string {
 		if m.textarea.Value() == "" {
 			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
 			if m.subscriptionMgr != nil {
-				hints = append(hints, m.ctrlKey("p", "Subs"), m.ctrlKey("m", "Model"))
-			}
+					hints = append(hints, m.ctrlKey("p", "Subs"))
+				}
 			if len(m.inputHistory) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}

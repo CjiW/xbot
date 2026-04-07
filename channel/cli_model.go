@@ -100,6 +100,42 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
+// cycleModel switches to the next model in the available model list.
+// Wraps around when reaching the end.
+func (m *cliModel) cycleModel() {
+	if m.channel == nil || m.channel.modelLister == nil {
+		return
+	}
+	models := m.channel.modelLister.ListModels()
+	if len(models) < 2 {
+		m.showTempStatus("Only one model available")
+		return
+	}
+
+	current := m.cachedModelName
+	nextIdx := 0
+	for i, name := range models {
+		if name == current {
+			nextIdx = (i + 1) % len(models)
+			break
+		}
+	}
+	nextModel := models[nextIdx]
+
+	// Update model override on channel
+	m.channel.configMu.Lock()
+	m.channel.modelOverride = nextModel
+	m.channel.configMu.Unlock()
+
+	m.cachedModelName = nextModel
+	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
+
+	// Notify LLM subscriber if available
+	if m.llmSubscriber != nil {
+		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
+	}
+}
+
 // tickerTickMsg 是 ticker 定时 tick 消息
 type tickerTickMsg struct{}
 

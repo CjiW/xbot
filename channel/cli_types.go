@@ -445,6 +445,7 @@ type CLIChannel struct {
 
 	// Multi-subscription management
 	subscriptionMgr SubscriptionManager // manages LLM subscriptions
+	llmSubscriber   LLMSubscriber       // switches active LLM (propagated to model)
 
 	// Background tasks
 	bgTaskMgr *tools.BackgroundTaskManager

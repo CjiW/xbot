@@ -1350,8 +1350,10 @@ func (c *CLIChannel) SetSubscriptionManager(mgr SubscriptionManager) {
 	}
 }
 
-// SetLLMSubscriber sets the LLM subscriber for switching subscriptions/models.
+// SetLLMSubscriber sets the LLM subscriber for quick switch actions.
+// Stores on channel for propagation to model in Start().
 func (c *CLIChannel) SetLLMSubscriber(sub LLMSubscriber) {
+	c.llmSubscriber = sub
 	if c.model != nil {
 		c.model.SetLLMSubscriber(sub)
 	}
@@ -1443,8 +1445,8 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 		cursor := " "
 		style := m.styles.TextMutedSt
 		if i == m.quickSwitchCursor {
-		cursor = "▸"
-		style = m.styles.Accent
+			cursor = "▸"
+			style = m.styles.Accent
 		}
 		active := ""
 		if s.Active {

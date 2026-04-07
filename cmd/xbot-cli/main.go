@@ -625,6 +625,8 @@ func (m *configSubscriptionManager) Add(sub *channel.Subscription) error {
 		ID:       sub.ID,
 		Name:     sub.Name,
 		Provider: sub.Provider,
+		BaseURL:  sub.BaseURL,
+		APIKey:   sub.APIKey,
 		Model:    sub.Model,
 		Active:   sub.Active,
 	})

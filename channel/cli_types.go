@@ -476,6 +476,8 @@ type Subscription struct {
 	ID       string
 	Name     string
 	Provider string
+	BaseURL  string
+	APIKey   string
 	Model    string
 	Active   bool
 }

@@ -1368,15 +1368,23 @@ func (m *cliModel) openQuickSwitch(mode string) {
 	if m.subscriptionMgr == nil {
 		return
 	}
-	subs, err := m.subscriptionMgr.List("") // CLI stores subscriptions with empty senderID
+	subs, err := m.subscriptionMgr.List("")
 	if err != nil || len(subs) == 0 {
-		m.showTempStatus("No subscriptions found. Add one in /settings first.")
-		return
+		// Even with no subscriptions, allow adding one
+		subs = nil
 	}
 
 	m.quickSwitchMode = mode
 	m.quickSwitchList = subs
 	m.quickSwitchCursor = 0
+
+	// Append "Add subscription" entry for subscription mode
+	if mode == "subscription" {
+		m.quickSwitchList = append(m.quickSwitchList, Subscription{
+			ID:   "__add__",
+			Name: "➕ Add subscription",
+		})
+	}
 
 	// Pre-select the active subscription
 	for i, s := range subs {
@@ -1394,6 +1402,53 @@ func (m *cliModel) applyQuickSwitch() {
 		return
 	}
 	selected := m.quickSwitchList[m.quickSwitchCursor]
+
+	// "Add subscription" entry — open a mini settings panel
+	if selected.ID == "__add__" {
+		m.quickSwitchMode = ""
+		addSchema := []SettingDefinition{
+			{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: "new"},
+			{Key: "sub_provider", Label: "Provider", Description: "LLM provider (openai, anthropic, deepseek, etc.)", Type: SettingTypeText, DefaultValue: "openai"},
+			{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeText, DefaultValue: ""},
+			{Key: "sub_base_url", Label: "Base URL", Description: "API base URL (leave empty for provider default)", Type: SettingTypeText, DefaultValue: ""},
+			{Key: "sub_api_key", Label: "API Key", Description: "API key (leave empty to use global key)", Type: SettingTypePassword, DefaultValue: ""},
+		}
+		// Inject model list into combo for model field
+		if m.channel.modelLister != nil {
+			models := m.channel.modelLister.ListModels()
+			if len(models) > 0 {
+				opts := make([]SettingOption, len(models))
+				for j, mdl := range models {
+					opts[j] = SettingOption{Label: mdl, Value: mdl}
+				}
+				addSchema[2].Options = opts
+			}
+		}
+		m.openSettingsPanel(addSchema, map[string]string{}, func(values map[string]string) {
+			name := values["sub_name"]
+			if name == "" {
+				name = values["sub_provider"]
+			}
+			if name == "" {
+				name = "unnamed"
+			}
+			sub := &Subscription{
+				ID:       fmt.Sprintf("sub_%d", time.Now().UnixNano()),
+				Name:     name,
+				Provider: values["sub_provider"],
+				BaseURL:  values["sub_base_url"],
+				APIKey:   values["sub_api_key"],
+				Model:    values["sub_model"],
+				Active:   false,
+			}
+			if err := m.subscriptionMgr.Add(sub); err != nil {
+				m.showTempStatus(fmt.Sprintf("Failed to add subscription: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Added subscription: %s (%s)", sub.Name, sub.Model))
+			}
+		})
+		return
+	}
 
 	switch m.quickSwitchMode {
 	case "subscription":
@@ -1436,6 +1491,10 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 
 	// Items
 	for i, s := range m.quickSwitchList {
+		// Separator before "Add" entry
+		if s.ID == "__add__" && i > 0 {
+			lines = append(lines, m.styles.TextMutedSt.Render(" ─────────────────────────────────"))
+		}
 		cursor := " "
 		style := m.styles.TextMutedSt
 		if i == m.quickSwitchCursor {

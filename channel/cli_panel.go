@@ -1578,23 +1578,22 @@ func (m *cliModel) renameQuickSwitchEntry() {
 	})
 }
 
-
 // updateQuickSwitchModels updates the model field in quickSwitchList for the active subscription.
 func (m *cliModel) updateQuickSwitchModels(newModel string) {
-if len(m.quickSwitchList) == 0 {
-return
-}
-for i := range m.quickSwitchList {
-if m.quickSwitchList[i].Active {
-m.quickSwitchList[i].Model = newModel
-return
-}
-}
+	if len(m.quickSwitchList) == 0 {
+		return
+	}
+	for i := range m.quickSwitchList {
+		if m.quickSwitchList[i].Active {
+			m.quickSwitchList[i].Model = newModel
+			return
+		}
+	}
 }
 
 func (m *cliModel) viewQuickSwitch(width, height int) string {
 	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
-	return ""
+		return ""
 	}
 
 	title := "Switch Subscription"

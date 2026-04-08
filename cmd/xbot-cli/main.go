@@ -776,6 +776,15 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 
 func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
 	s.factory.SwitchModel(senderID, model)
+	// Persist model change to config so it survives restart.
+	s.cfg.LLM.Model = model
+	for i := range s.cfg.Subscriptions {
+		if s.cfg.Subscriptions[i].Active {
+			s.cfg.Subscriptions[i].Model = model
+			break
+		}
+	}
+	_ = s.saveFn()
 }
 
 func (s *configLLMSubscriber) GetDefaultModel() string {

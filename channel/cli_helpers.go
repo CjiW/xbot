@@ -72,6 +72,9 @@ func (m *cliModel) flushMessageQueue() tea.Cmd {
 }
 
 // sendMessageFromQueue sends the current textarea content as a queued message.
+// Uses the same send path as sendMessage() — includes @ file parsing,
+// viewport scroll, and correct ReplyPolicyAuto — so queued messages behave
+// identically to directly-sent ones.
 func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	content := strings.TrimSpace(m.textarea.Value())
 	if content == "" {
@@ -79,9 +82,15 @@ func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	}
 	m.textarea.Reset()
 	m.autoExpandInput()
-	m.sendToAgent(content)
-	// Start tick chain for the new agent turn — the previous chain may have
-	// already transitioned to idleTickCmd (3s) after endAgentTurn set typing=false.
+
+	// Reuse sendMessage()'s logic (file refs, viewport scroll, reply policy).
+	// sendMessage() calls startAgentTurn() internally.
+	m.sendMessage(content)
+
+	// Must explicitly return tickCmd() because the wasTyping guard at the
+	// bottom of Update() won't detect the typing transition: in the flush
+	// scenario, the same Update call first sets typing=false (endAgentTurn)
+	// then typing=true (startAgentTurn), so wasTyping==m.typing==true.
 	return tickCmd()
 }
 

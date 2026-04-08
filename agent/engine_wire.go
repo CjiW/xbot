@@ -57,11 +57,8 @@ func applyUserMaxContext(base *ContextManagerConfig, userMaxCtx int) *ContextMan
 // buildBaseRunConfig 构建主 Agent（main/cron）共用的基础 RunConfig。
 // 包含 LLM、身份、工作区、工具执行器、循环控制、HookChain 等公共字段。
 // 返回 (RunConfig, userMaxContext) — userMaxContext 为用户在 Settings 中设置的值，0 表示未设置。
-//
-// rawSenderID 是归一化前的原始发送者 ID（如 CLI 的 "cli_user"），用于 settingsSvc 读写。
-// senderID 是归一化后的 ID（如 "default"），用于 session/workspace 隔离。
 func (a *Agent) buildBaseRunConfig(
-	channel, chatID, senderID, rawSenderID string,
+	channel, chatID, senderID string,
 	messages []llm.ChatMessage,
 	senderName string,
 	sandboxUserID string,
@@ -83,13 +80,12 @@ func (a *Agent) buildBaseRunConfig(
 		Messages:     messages,
 
 		// 身份
-			AgentID:      "main",
-			Channel:      channel,
-			ChatID:       chatID,
-			SenderID:     senderID,      // 主 Agent: 直接调用者 = 原始用户（用于消息路由）
-			OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
-			SenderName:   senderName,
-			RawSenderID:  rawSenderID,   // 归一化前的原始 senderID（用于 usage/settings 存储 key）
+		AgentID:      "main",
+		Channel:      channel,
+		ChatID:       chatID,
+		SenderID:     senderID,      // 直接调用者 = 原始用户（用于消息路由 + settings/usage 存储 key）
+		OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
+		SenderName:   senderName,
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,
@@ -151,7 +147,6 @@ func (a *Agent) buildMainRunConfig(
 	autoNotify bool,
 ) RunConfig {
 	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
-	rawSenderID := msg.Metadata["raw_sender_id"] // 归一化前的原始 ID，用于 settingsSvc 读写
 	sessionKey := channel + ":" + chatID
 
 	// 飞书身份登录 web 时，用飞书用户 ID 作为沙箱用户 ID，
@@ -162,7 +157,7 @@ func (a *Agent) buildMainRunConfig(
 		sandboxUserID = feishuUserID
 	}
 
-	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, rawSenderID, messages, senderName, sandboxUserID)
+	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName, sandboxUserID)
 
 	// 保留 FeishuUserID 供 buildToolContext 等处使用
 	cfg.FeishuUserID = feishuUserID
@@ -377,14 +372,9 @@ func (a *Agent) buildMainRunConfig(
 	cfg.OffloadStore = a.offloadStore
 
 	// MaskStore — Observation Masking（默认开启，可通过 settings 的 enable_masking 关闭）
-	// 用 rawSenderID 读取 settingsSvc，确保与 TUI 层写入的 key 一致。
-	settingsSenderID := rawSenderID
-	if settingsSenderID == "" {
-		settingsSenderID = senderID
-	}
 	cfg.MaskStore = a.maskStore
 	if a.settingsSvc != nil {
-		if vals, err := a.settingsSvc.GetSettings(channel, settingsSenderID); err == nil {
+		if vals, err := a.settingsSvc.GetSettings(channel, senderID); err == nil {
 			if vals["enable_masking"] == "false" {
 				cfg.MaskStore = nil
 			}
@@ -431,7 +421,7 @@ func (a *Agent) buildCronRunConfig(
 ) RunConfig {
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 
-	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, "", messages, "", senderID)
+	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, messages, "", senderID)
 	return cfg
 }
 
@@ -568,9 +558,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
-	// Stream — 直接从父 Agent 继承（父 Agent 已在 buildBaseRunConfig 中解析过 enable_stream 设置）。
-	// 不能重新查 settingsSvc，因为 OriginUserID 是沙箱用户 ID（可能是归一化后的 "default"），
-	// 而 settings 是按原始 senderID（如 "cli_user"）存储的。
+	// Stream — 直接从父 Agent 继承
 	stream := parentCtx.Stream
 
 	cfg := RunConfig{

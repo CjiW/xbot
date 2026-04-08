@@ -146,7 +146,7 @@ type AgentConfig struct {
 	MemoryProvider string `json:"memory_provider"`
 	WorkDir        string `json:"work_dir"`
 	PromptFile     string `json:"prompt_file"`
-	SingleUser     bool   `json:"single_user"`
+	SingleUser     bool   `json:"single_user"` // Deprecated: no longer used, kept for config file compatibility
 
 	MCPInactivityTimeout time.Duration `json:"mcp_inactivity_timeout"`
 	MCPCleanupInterval   time.Duration `json:"mcp_cleanup_interval"`
@@ -367,11 +367,7 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("PROMPT_FILE"); v != "" {
 		cfg.Agent.PromptFile = v
 	}
-	if v := os.Getenv("SINGLE_USER"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.Agent.SingleUser = b
-		}
-	}
+	// SINGLE_USER env var removed — singleUser normalization is no longer used
 	if v := os.Getenv("MEMORY_PROVIDER"); v != "" {
 		cfg.Agent.MemoryProvider = v
 	}

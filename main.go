@@ -293,9 +293,6 @@ func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCa
 			return agentLoop.SetUserMaxContext(senderID, maxContext)
 		},
 
-		NormalizeSenderID: func(senderID string) string {
-			return agentLoop.NormalizeSenderID(senderID)
-		},
 		SandboxWriteFile: func(senderID string, sandboxRelPath string, data []byte, perm os.FileMode) (string, error) {
 			sandbox := tools.GetSandbox()
 			if sandbox == nil {
@@ -406,7 +403,7 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 			if router, ok := tools.GetSandbox().(*tools.SandboxRouter); ok {
 				if remote := router.Remote(); remote != nil {
 					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
-						webCh.PushRunnerStatus(agentLoop.NormalizeSenderID(userID), runnerName, online)
+						webCh.PushRunnerStatus(userID, runnerName, online)
 						// When a runner with local LLM connects/disconnects, update ProxyLLM.
 						if online {
 							injectProxyLLM(userID, agentLoop)
@@ -415,7 +412,7 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 						}
 					}
 					remote.OnSyncProgress = func(userID, phase, message string) {
-						webCh.PushSyncProgress(agentLoop.NormalizeSenderID(userID), phase, message)
+						webCh.PushSyncProgress(userID, phase, message)
 					}
 				}
 			}
@@ -479,7 +476,7 @@ func main() {
 		AgentsDir:            filepath.Join(xbotDir, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
-		SingleUser:           cfg.Agent.SingleUser,
+		SingleUser:           false, // Deprecated: no longer used
 		SandboxMode:          cfg.Sandbox.Mode,
 		Sandbox:              tools.GetSandbox(),
 		MemoryProvider:       cfg.Agent.MemoryProvider,
@@ -658,9 +655,6 @@ func main() {
 			},
 			ContextModeSet: func(mode string) error {
 				return agentLoop.SetContextMode(mode)
-			},
-			NormalizeSenderID: func(senderID string) string {
-				return agentLoop.NormalizeSenderID(senderID)
 			},
 			RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 				return agentLoop.RegistryManager().Browse(entryType, limit, offset)

@@ -221,7 +221,7 @@ type Agent struct {
 	sandboxMode        string           // "none" or "docker"
 	sandbox            tools.Sandbox    // Sandbox 实例引用（V4 新增）
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
-	singleUser         bool             // 单用户模式
+	directWorkspace    string           // 非空时 workspaceRoot() 直接返回此值（CLI 模式使用，取代 singleUser 的 workspace 短路）
 	maxConcurrency     int              // 最大并发会话处理数
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
@@ -419,19 +419,20 @@ func buildToolMessageContent(result *tools.ToolResult) string {
 
 // Config Agent 配置
 type Config struct {
-	Bus            *bus.MessageBus
-	LLM            llm.LLM
-	Model          string
-	MaxIterations  int           // 单次对话最大工具调用迭代次数
-	MaxConcurrency int           // 最大并发会话处理数（默认 3）
-	DBPath         string        // SQLite 数据库路径（空则使用默认路径）
-	SkillsDir      string        // Skills 目录
-	AgentsDir      string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
-	WorkDir        string        // 工作目录（所有文件相对此目录）
-	PromptFile     string        // 系统提示词模板文件路径（空则使用内置默认值）
-	SingleUser     bool          // 单用户模式：所有消息的 SenderID 归一化为 "default"
-	SandboxMode    string        // 沙箱模式: "none" 或 "docker"（默认 "docker"）
-	Sandbox        tools.Sandbox // Sandbox 实例引用（V4 新增）
+	Bus             *bus.MessageBus
+	LLM             llm.LLM
+	Model           string
+	MaxIterations   int           // 单次对话最大工具调用迭代次数
+	MaxConcurrency  int           // 最大并发会话处理数（默认 3）
+	DBPath          string        // SQLite 数据库路径（空则使用默认路径）
+	SkillsDir       string        // Skills 目录
+	AgentsDir       string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
+	WorkDir         string        // 工作目录（所有文件相对此目录）
+	PromptFile      string        // 系统提示词模板文件路径（空则使用内置默认值）
+	SingleUser      bool          `json:"single_user"` // Deprecated: no longer used, kept for config file compatibility
+	DirectWorkspace string        `json:"-"`           // 非空时直接作为 workspaceRoot（CLI 模式使用）
+	SandboxMode     string        // 沙箱模式: "none" 或 "docker"（默认 "docker"）
+	Sandbox         tools.Sandbox // Sandbox 实例引用（V4 新增）
 
 	SandboxIdleTimeout time.Duration // 沙箱空闲超时（0 禁用）
 
@@ -745,7 +746,7 @@ func New(cfg Config) *Agent {
 		sandboxMode:        sandboxMode,
 		sandbox:            cfg.Sandbox,
 		sandboxIdleTimeout: cfg.SandboxIdleTimeout,
-		singleUser:         cfg.SingleUser,
+		directWorkspace:    cfg.DirectWorkspace,
 		globalSkillDirs:    resolveGlobalSkillsDirs(cfg.SkillsDir),
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
@@ -961,7 +962,6 @@ func (a *Agent) sendAck(channel, chatID string) {
 func (a *Agent) Run(ctx context.Context) error {
 	log.WithFields(log.Fields{
 		"max_concurrency": a.maxConcurrency,
-		"single_user":     a.singleUser,
 	}).Info("Agent loop started")
 
 	a.multiSession.StartCleanupRoutine()
@@ -1018,15 +1018,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
-			// 单用户模式：在 bus 入口统一归一化 SenderID。
-			// 归一化前保存原始值，供 settingsSvc 等需要原始身份的场景使用。
-			if a.singleUser && msg.SenderID != "default" {
-				if msg.Metadata == nil {
-					msg.Metadata = make(map[string]string)
-				}
-				msg.Metadata["raw_sender_id"] = msg.SenderID
-				msg.SenderID = "default"
-			}
 
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
@@ -1063,21 +1054,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// NormalizeSenderID returns the effective sender ID for the message.
-// In single-user mode, all sender IDs are mapped to "default".
-func (a *Agent) NormalizeSenderID(senderID string) string {
-	if a.singleUser {
-		return "default"
-	}
-	return senderID
-}
-
 // workspaceRoot returns the workspace root for the given sender.
-// In single-user mode, returns workDir directly (no per-user subdirectory),
-// skipping directory permission checks that are unnecessary for single-user deployments.
+// If DirectWorkspace is set (e.g. CLI mode), returns it directly (no per-user subdirectory).
+// Otherwise, returns per-user workspace directory.
 func (a *Agent) workspaceRoot(senderID string) string {
-	if a.singleUser {
-		return a.workDir
+	if a.directWorkspace != "" {
+		return a.directWorkspace
 	}
 	return tools.UserWorkspaceRoot(a.workDir, senderID)
 }
@@ -2127,7 +2109,7 @@ func (a *Agent) addReaction(msg bus.InboundMessage) {
 func (a *Agent) ProcessDirect(ctx context.Context, content string) (string, error) {
 	msg := bus.InboundMessage{
 		Channel:   "cli",
-		SenderID:  a.NormalizeSenderID("user"),
+		SenderID:  "cli_user",
 		ChatID:    "direct",
 		Content:   content,
 		Time:      time.Now(),

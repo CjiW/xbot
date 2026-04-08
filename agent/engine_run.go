@@ -219,17 +219,8 @@ func (s *runState) cleanupTodos() {
 // recordMetrics records conversation metrics. Called via defer from Run().
 func (s *runState) recordMetrics() {
 	GlobalMetrics.RecordConversation(s.localIterCount, s.localToolCalls, s.localLLMCalls, s.localInputTokens, s.localOutputTokens)
-	if s.cfg.RecordUserTokenUsage != nil {
-		// Use RawSenderID (pre-normalization, e.g. "cli_user") for usage storage key,
-		// falling back to OriginUserID. This ensures /usage query (which uses senderID
-		// from the CLI model) can find the data.
-		usageSenderID := s.cfg.RawSenderID
-		if usageSenderID == "" {
-			usageSenderID = s.cfg.OriginUserID
-		}
-		if usageSenderID != "" {
-			s.cfg.RecordUserTokenUsage(usageSenderID, s.cfg.Model, s.localInputTokens, s.localOutputTokens, s.localCachedTokens, 1, s.localLLMCalls)
-		}
+	if s.cfg.RecordUserTokenUsage != nil && s.cfg.SenderID != "" {
+		s.cfg.RecordUserTokenUsage(s.cfg.SenderID, s.cfg.Model, s.localInputTokens, s.localOutputTokens, s.localCachedTokens, 1, s.localLLMCalls)
 	}
 	GlobalMetrics.ClearRecallTracking()
 }

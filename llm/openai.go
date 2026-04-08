@@ -201,7 +201,7 @@ func extractReasoningContentFromDelta(delta openai.ChatCompletionChunkChoiceDelt
 // assistantMessageWithReasoning 用于构建包含 reasoning_content 的 assistant message
 type assistantMessageWithReasoning struct {
 	Role             string `json:"role"`
-	Content          string `json:"content,omitempty"`
+	Content          any    `json:"content"` // string or null — must be present per OpenAI protocol
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 	ToolCalls        any    `json:"tool_calls,omitempty"`
 }
@@ -243,9 +243,13 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 			// 如果有 reasoning_content，使用原始 JSON 构建消息
 			if msg.ReasoningContent != "" {
 				// 使用 param.Override 构建包含 reasoning_content 的消息
+				var content any = msg.Content // 空字符串序列化为 "content":""
+				if msg.Content == "" {
+					content = nil // OpenAI 协议: 空 content 用 null
+				}
 				rawMsg := assistantMessageWithReasoning{
 					Role:             "assistant",
-					Content:          msg.Content,
+					Content:          content,
 					ReasoningContent: msg.ReasoningContent,
 				}
 				if len(msg.ToolCalls) > 0 {

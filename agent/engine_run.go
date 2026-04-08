@@ -566,10 +566,15 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				ToolsUsed: s.toolsUsed,
 			}), false
 		}
+		// length: output truncated due to max_tokens/max_completion_tokens limit
+		output := cleanContent
+		if response.FinishReason == llm.FinishReasonLength {
+			output += "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
+		}
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
-			Content:     cleanContent,
+			Content:     output,
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: s.waitingUser,
 		}), false
@@ -590,6 +595,11 @@ func (s *runState) recordAssistantMsg(ctx context.Context, response *llm.LLMResp
 	}
 	if s.structuredProgress != nil && cleanContent != "" {
 		s.structuredProgress.ThinkingContent = cleanContent
+	}
+	// Wire the model's reasoning chain (reasoning_content) to progress
+	// so the CLI can display the thinking process to the user.
+	if s.structuredProgress != nil && response.ReasoningContent != "" {
+		s.structuredProgress.ReasoningContent = response.ReasoningContent
 	}
 
 	assistantMsg := llm.ChatMessage{

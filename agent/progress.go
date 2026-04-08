@@ -25,13 +25,14 @@ func (e *ProgressEvent) FullText() string {
 
 // StructuredProgress 结构化进度信息，描述 Agent 当前状态。
 type StructuredProgress struct {
-	Phase           ProgressPhase
-	Iteration       int
-	ActiveTools     []ToolProgress
-	CompletedTools  []ToolProgress
-	ThinkingContent string
-	TokenUsage      *TokenUsageSnapshot
-	Todos           []TodoProgressItem
+	Phase            ProgressPhase
+	Iteration        int
+	ActiveTools      []ToolProgress
+	CompletedTools   []ToolProgress
+	ThinkingContent  string // assistant's text output (streaming, for display)
+	ReasoningContent string // model's reasoning/thinking chain (reasoning_content field)
+	TokenUsage       *TokenUsageSnapshot
+	Todos            []TodoProgressItem
 }
 
 // ProgressPhase Agent 运行阶段。

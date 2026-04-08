@@ -10,7 +10,7 @@ import (
 	"xbot/storage/sqlite"
 )
 
-const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [thinking_mode=<mode>]
+const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [max_output_tokens=<tokens>] [thinking_mode=<mode>]
 
 参数说明:
   provider      - LLM 提供商: anthropic 或 openai/deepseek/zhipu 等 OpenAI 兼容服务
@@ -146,6 +146,13 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			var maxCtx int
 			if _, err := fmt.Sscanf(value, "%d", &maxCtx); err == nil {
 				cfg.MaxContext = maxCtx
+			} else {
+				parseErrors = true
+			}
+		case "max_output_tokens":
+			var maxOut int
+			if _, err := fmt.Sscanf(value, "%d", &maxOut); err == nil {
+				cfg.MaxOutputTokens = maxOut
 			} else {
 				parseErrors = true
 			}

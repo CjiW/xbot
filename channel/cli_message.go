@@ -715,6 +715,7 @@ func (m *cliModel) renderProgressBlock() string {
 	s := &m.styles
 	iterStyle := s.ProgressIter
 	thinkingStyle := s.ProgressThinking
+	reasoningStyle := s.TextMutedSt // dimmed style for reasoning chain
 	toolDoneStyle := s.ProgressDone
 	toolRunningStyle := s.ProgressRunning
 	toolErrorStyle := s.ProgressError
@@ -754,6 +755,27 @@ func (m *cliModel) renderProgressBlock() string {
 	if m.progress != nil {
 		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", m.progress.Iteration)))
 		sb.WriteString("\n")
+
+		if m.progress.Reasoning != "" {
+			// Show the model's reasoning/thinking chain (reasoning_content).
+			// Display last few lines truncated, dimmed style to distinguish
+			// from assistant's actual output.
+			lines := strings.Split(m.progress.Reasoning, "\n")
+			// Show last 3 lines of reasoning (most recent context)
+			start := len(lines) - 3
+			if start < 0 {
+				start = 0
+			}
+			for _, line := range lines[start:] {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				text := truncateToWidth(line, innerWidth-6)
+				sb.WriteString(indentGuide.Render("  │ ") + reasoningStyle.Render("💭 "+text))
+				sb.WriteString("\n")
+			}
+		}
 
 		if m.progress.Thinking != "" {
 			// Collapse multi-line thinking text into a single line to avoid

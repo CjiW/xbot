@@ -209,6 +209,7 @@ func (a *Agent) buildMainRunConfig(
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
 							Thinking:  s.ThinkingContent,
+							Reasoning: s.ReasoningContent,
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{

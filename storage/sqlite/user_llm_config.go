@@ -11,15 +11,16 @@ import (
 
 // UserLLMConfig 用户 LLM 配置
 type UserLLMConfig struct {
-	SenderID     string    // 用户 ID
-	Provider     string    // LLM 提供商: "openai", "deepseek", "anthropic" 等
-	BaseURL      string    // API Base URL
-	APIKey       string    // API Key
-	Model        string    // 默认模型
-	MaxContext   int       // 最大上下文 token 数（0 表示不限制）
-	ThinkingMode string    // 思考模式: "" (自动), "enabled", "disabled"
-	CreatedAt    time.Time // 创建时间
-	UpdatedAt    time.Time // 更新时间
+	SenderID        string    // 用户 ID
+	Provider        string    // LLM 提供商: "openai", "deepseek", "anthropic" 等
+	BaseURL         string    // API Base URL
+	APIKey          string    // API Key
+	Model           string    // 默认模型
+	MaxContext      int       // 最大上下文 token 数（0 表示不限制）
+	MaxOutputTokens int       // 最大输出 token 数（0 表示使用默认值 18192）
+	ThinkingMode    string    // 思考模式: "" (自动), "enabled", "disabled"
+	CreatedAt       time.Time // 创建时间
+	UpdatedAt       time.Time // 更新时间
 }
 
 // UserLLMConfigService 用户 LLM 配置服务

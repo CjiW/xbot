@@ -233,10 +233,12 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 
 	default:
 		// 其他所有 provider（openai, deepseek, siliconflow 等）都使用 OpenAI 兼容 API
+		maxTokens := cfg.MaxOutputTokens
 		client := llm.NewOpenAILLM(llm.OpenAIConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: model,
+			MaxTokens:    maxTokens,
 		})
 		return client, model
 	}

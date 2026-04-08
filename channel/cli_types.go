@@ -191,6 +191,7 @@ type CLIProgressPayload struct {
 	ActiveTools    []CLIToolProgress
 	CompletedTools []CLIToolProgress
 	Thinking       string
+	Reasoning      string // model's reasoning/thinking chain (reasoning_content)
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
 	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）

@@ -139,6 +139,9 @@ type RunConfig struct {
 	// HookChain tool execution hook chain (nil = no hooks).
 	HookChain *tools.HookChain
 
+	// SettingsSvc provides access to user settings (nil = settings not available).
+	SettingsSvc *SettingsService
+
 	// OffloadStore Layer 1 offload store（nil = 不启用）
 	OffloadStore *OffloadStore
 
@@ -392,9 +395,16 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 
 		toolCtx := buildToolContext(ctx, cfg)
 
-		// Run pre-tool hooks
+		// Run pre-tool hooks (inject perm users into context for ApprovalHook)
 		if cfg.HookChain != nil {
-			if err := cfg.HookChain.RunPre(ctx, tc.Name, tc.Arguments); err != nil {
+			hookCtx := ctx
+			if cfg.SettingsSvc != nil {
+				permUsers := cfg.SettingsSvc.GetPermUsers(cfg.Channel, cfg.OriginUserID)
+				if permUsers != nil {
+					hookCtx = tools.WithPermUsers(ctx, permUsers.DefaultUser, permUsers.PrivilegedUser)
+				}
+			}
+			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
 				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
 			}
 		}

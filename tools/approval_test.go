@@ -19,8 +19,12 @@ func (m *mockApprovalHandler) RequestApproval(ctx context.Context, req ApprovalR
 	return m.result, m.err
 }
 
+func withPerm(ctx context.Context, defaultUser, privilegedUser string) context.Context {
+	return WithPermUsers(ctx, defaultUser, privilegedUser)
+}
+
 func TestApprovalHook_Name(t *testing.T) {
-	h := NewApprovalHook(&mockApprovalHandler{}, "alice", "root")
+	h := NewApprovalHook(&mockApprovalHandler{})
 	if h.Name() != "approval" {
 		t.Errorf("expected 'approval', got %q", h.Name())
 	}
@@ -28,8 +32,8 @@ func TestApprovalHook_Name(t *testing.T) {
 
 func TestApprovalHook_NoRunAs(t *testing.T) {
 	handler := &mockApprovalHandler{}
-	h := NewApprovalHook(handler, "alice", "root")
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "ls"}`)
 	if err != nil {
 		t.Errorf("expected no error for empty run_as, got %v", err)
 	}
@@ -40,8 +44,8 @@ func TestApprovalHook_NoRunAs(t *testing.T) {
 
 func TestApprovalHook_DefaultUser(t *testing.T) {
 	handler := &mockApprovalHandler{}
-	h := NewApprovalHook(handler, "alice", "root")
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "alice"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "ls", "run_as": "alice"}`)
 	if err != nil {
 		t.Errorf("expected no error for default_user, got %v", err)
 	}
@@ -52,8 +56,8 @@ func TestApprovalHook_DefaultUser(t *testing.T) {
 
 func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalApproved}
-	h := NewApprovalHook(handler, "alice", "root")
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
 	if err != nil {
 		t.Errorf("expected no error for approved privileged_user, got %v", err)
 	}
@@ -64,8 +68,8 @@ func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
 
 func TestApprovalHook_PrivilegedUser_Denied(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalDenied}
-	h := NewApprovalHook(handler, "alice", "root")
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
 	if err == nil {
 		t.Fatal("expected error for denied privileged_user")
 	}
@@ -73,8 +77,8 @@ func TestApprovalHook_PrivilegedUser_Denied(t *testing.T) {
 
 func TestApprovalHook_UnknownUser(t *testing.T) {
 	handler := &mockApprovalHandler{}
-	h := NewApprovalHook(handler, "alice", "root")
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "hacker"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "ls", "run_as": "hacker"}`)
 	if err == nil {
 		t.Fatal("expected error for unknown user")
 	}
@@ -82,22 +86,33 @@ func TestApprovalHook_UnknownUser(t *testing.T) {
 
 func TestApprovalHook_FeatureDisabled(t *testing.T) {
 	handler := &mockApprovalHandler{}
-	h := NewApprovalHook(handler, "", "") // feature disabled
+	h := NewApprovalHook(handler)
+	// No perm users in context — feature disabled
 	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "root"}`)
 	if err == nil {
 		t.Fatal("expected error when feature is disabled")
 	}
 }
 
+func TestApprovalHook_EmptyPermUsers(t *testing.T) {
+	handler := &mockApprovalHandler{}
+	h := NewApprovalHook(handler)
+	// Perm users in context but both empty
+	err := h.PreToolUse(withPerm(context.Background(), "", ""), "Shell", `{"command": "ls", "run_as": "root"}`)
+	if err == nil {
+		t.Fatal("expected error when perm users are empty")
+	}
+}
+
 func TestApprovalHook_OnlyDefaultUser(t *testing.T) {
 	handler := &mockApprovalHandler{}
-	h := NewApprovalHook(handler, "alice", "") // only default user, no privileged
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "alice"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "alice"}`)
 	if err != nil {
 		t.Errorf("expected no error for default_user, got %v", err)
 	}
 	// run_as "root" should fail because privileged_user is not configured
-	err = h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "root"}`)
+	err = h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "root"}`)
 	if err == nil {
 		t.Fatal("expected error for run_as=root when privileged_user is empty")
 	}
@@ -105,8 +120,8 @@ func TestApprovalHook_OnlyDefaultUser(t *testing.T) {
 
 func TestApprovalHook_OnlyPrivilegedUser(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalApproved}
-	h := NewApprovalHook(handler, "", "root") // only privileged user
-	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "root"}`)
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "", "root"), "Shell", `{"command": "ls", "run_as": "root"}`)
 	if err != nil {
 		t.Errorf("expected no error for approved privileged_user, got %v", err)
 	}
@@ -149,7 +164,31 @@ func TestApprovalHook_PopulateDetails(t *testing.T) {
 }
 
 func TestApprovalHook_PostToolUse(t *testing.T) {
-	h := NewApprovalHook(&mockApprovalHandler{}, "alice", "root")
+	h := NewApprovalHook(&mockApprovalHandler{})
 	// PostToolUse should be a no-op — verify it doesn't panic
 	h.PostToolUse(context.Background(), "Shell", "", nil, nil, 0)
+}
+
+func TestApprovalHook_NilHandler(t *testing.T) {
+	h := NewApprovalHook(nil)
+	ctx := withPerm(context.Background(), "", "root")
+	err := h.PreToolUse(ctx, "Shell", `{"command": "ls", "run_as": "root"}`)
+	if err == nil {
+		t.Fatal("expected error when handler is nil and privileged_user requested")
+	}
+}
+
+func TestPermUsersFromContext(t *testing.T) {
+	// Empty context
+	du, pu := PermUsersFromContext(context.Background())
+	if du != "" || pu != "" {
+		t.Errorf("expected empty users from empty context, got %q/%q", du, pu)
+	}
+
+	// With perm users
+	ctx := WithPermUsers(context.Background(), "alice", "root")
+	du, pu = PermUsersFromContext(ctx)
+	if du != "alice" || pu != "root" {
+		t.Errorf("expected alice/root, got %q/%q", du, pu)
+	}
 }

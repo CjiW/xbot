@@ -754,6 +754,7 @@ func New(cfg Config) *Agent {
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
+			tools.NewApprovalHook(nil), // handler set later by channel when available
 		),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
 	}

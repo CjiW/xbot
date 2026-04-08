@@ -7,6 +7,34 @@ import (
 	"time"
 )
 
+// contextKey is an unexported type for context keys defined in this package.
+type contextKey string
+
+const permUsersKey contextKey = "perm_users"
+
+// PermUsersFromContext retrieves the permission control user config from context.
+func PermUsersFromContext(ctx context.Context) (defaultUser, privilegedUser string) {
+	config, ok := ctx.Value(permUsersKey).(*PermUsersPair)
+	if !ok || config == nil {
+		return "", ""
+	}
+	return config.DefaultUser, config.PrivilegedUser
+}
+
+// PermUsersPair holds the permission control user pair for context injection.
+type PermUsersPair struct {
+	DefaultUser    string
+	PrivilegedUser string
+}
+
+// WithPermUsers injects the permission control user config into the context.
+func WithPermUsers(ctx context.Context, defaultUser, privilegedUser string) context.Context {
+	return context.WithValue(ctx, permUsersKey, &PermUsersPair{
+		DefaultUser:    defaultUser,
+		PrivilegedUser: privilegedUser,
+	})
+}
+
 // ApprovalRequest represents a pending user approval for a tool execution.
 type ApprovalRequest struct {
 	ToolName string `json:"tool_name"` // e.g., "Shell"
@@ -35,22 +63,19 @@ type ApprovalHandler interface {
 }
 
 // ApprovalHook is a ToolHook that intercepts tool calls targeting privileged users.
-// It only activates when the tool call includes a run_as parameter matching the
-// configured privileged user.
+// It reads the user configuration from context (injected per-request by the engine),
+// so settings changes take effect immediately without restart.
 type ApprovalHook struct {
-	handler        ApprovalHandler
-	defaultUser    string // from user settings (empty = feature disabled)
-	privilegedUser string // from user settings (empty = no privileged user)
-	timeout        time.Duration
+	handler ApprovalHandler
+	timeout time.Duration
 }
 
-// NewApprovalHook creates an ApprovalHook with the given handler and user configuration.
-func NewApprovalHook(handler ApprovalHandler, defaultUser, privilegedUser string) *ApprovalHook {
+// NewApprovalHook creates an ApprovalHook with the given handler.
+// User configuration (defaultUser, privilegedUser) is read from context per-request.
+func NewApprovalHook(handler ApprovalHandler) *ApprovalHook {
 	return &ApprovalHook{
-		handler:        handler,
-		defaultUser:    defaultUser,
-		privilegedUser: privilegedUser,
-		timeout:        60 * time.Second,
+		handler: handler,
+		timeout: 60 * time.Second,
 	}
 }
 
@@ -64,31 +89,39 @@ func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args str
 		return nil
 	}
 
+	// Read user configuration from context (per-request, from user_settings)
+	defaultUser, privilegedUser := PermUsersFromContext(ctx)
+
 	// Feature not configured — reject any run_as value
-	if h.defaultUser == "" && h.privilegedUser == "" {
+	if defaultUser == "" && privilegedUser == "" {
 		return fmt.Errorf("permission control is not enabled: cannot use run_as %q (configure default_user or privileged_user in settings)", runAs)
 	}
 
 	// Validate run_as against configured users
-	if runAs == h.defaultUser {
+	if runAs == defaultUser {
 		// Default user — no approval needed
 		return nil
 	}
 
-	if runAs != h.privilegedUser {
+	if runAs != privilegedUser {
 		// Unknown user
-		users := h.defaultUser
-		if h.privilegedUser != "" {
+		users := defaultUser
+		if privilegedUser != "" {
 			if users != "" {
-				users += " or " + h.privilegedUser
+				users += " or " + privilegedUser
 			} else {
-				users = h.privilegedUser
+				users = privilegedUser
 			}
 		}
 		return fmt.Errorf("unknown run_as user %q: must be %q", runAs, users)
 	}
 
 	// Privileged user — request approval with timeout
+	if h.handler == nil {
+		// No approval handler registered — block execution
+		return fmt.Errorf("execution as %q requires approval but no approval handler is available (running in non-interactive channel?)", runAs)
+	}
+
 	approvalCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 

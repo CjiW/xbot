@@ -87,17 +87,22 @@ func (m *cliModel) View() tea.View {
 		if h := m.textarea.Height(); h > 0 {
 			taHeight = h
 		}
+		// Truncate placeholder to fit the textarea content width on narrow terminals.
+		ph := m.placeholderText
+		if tw := m.textarea.Width(); tw > 0 {
+			ph = truncateToWidth(ph, tw)
+		}
 		// Render the first character of placeholder as a virtual cursor (reverse style),
 		// using the same cursor color as textarea's normal mode (TACursor).
-		phRunes := []rune(m.placeholderText)
+		phRunes := []rune(ph)
 		if len(phRunes) > 0 {
 			first := string(phRunes[0])
 			rest := string(phRunes[1:])
 			cursorColor := m.styles.TACursor.GetForeground()
 			cursor := lipgloss.NewStyle().Foreground(cursorColor).Reverse(true).Render(first)
-			ph := cursor + m.styles.PlaceholderSt.Render(rest)
+			phRendered := cursor + m.styles.PlaceholderSt.Render(rest)
 			lines := make([]string, taHeight)
-			lines[0] = ph
+			lines[0] = phRendered
 			for i := 1; i < taHeight; i++ {
 				lines[i] = ""
 			}

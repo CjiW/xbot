@@ -28,6 +28,10 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -36,6 +40,10 @@ jobs:
         run: |
           go install github.com/gohugoio/hugo@v${HUGO_VERSION}
           hugo version
+
+      - name: Build theme assets
+        working-directory: docs-site/themes/hugo-geekdoc
+        run: npm ci && npm run build
 
       - name: Setup Pages
         id: pages

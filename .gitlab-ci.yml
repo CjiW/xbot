@@ -67,16 +67,26 @@ build:
 # Docs / GitLab Pages
 pages:
   stage: build
-  image: golang:1.26
+  image: node:22
   tags:
     - linux-x86
-  cache: *go_cache
+  cache:
+    key:
+      files:
+        - docs-site/themes/hugo-geekdoc/package-lock.json
+      prefix: npm-docs
+    paths:
+      - docs-site/themes/hugo-geekdoc/node_modules
+    policy: pull
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     GIT_DEPTH: 0
   before_script:
+    - apt-get update -qq && apt-get install -y -qq golang-go
     - go install github.com/gohugoio/hugo@v${HUGO_VERSION}
   script:
+    - cd docs-site/themes/hugo-geekdoc && npm ci && npm run build
+    - cd ../../..
     - cd docs-site
     - hugo --minify --baseURL "${CI_PAGES_URL}/"
     - mv public ../public

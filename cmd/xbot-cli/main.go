@@ -305,44 +305,44 @@ func main() {
 			if llmChanged || keyChanged || modelChanged || urlChanged {
 				// Write to active subscription
 				for i := range app.cfg.Subscriptions {
-				if app.cfg.Subscriptions[i].Active {
-					if v, ok := values["llm_provider"]; ok && v != "" {
-						app.cfg.Subscriptions[i].Provider = v
+					if app.cfg.Subscriptions[i].Active {
+						if v, ok := values["llm_provider"]; ok && v != "" {
+							app.cfg.Subscriptions[i].Provider = v
+						}
+						if v, ok := values["llm_api_key"]; ok && v != "" {
+							app.cfg.Subscriptions[i].APIKey = v
+						}
+						if v, ok := values["llm_model"]; ok && v != "" {
+							app.cfg.Subscriptions[i].Model = v
+						}
+						if v, ok := values["llm_base_url"]; ok && v != "" {
+							app.cfg.Subscriptions[i].BaseURL = v
+						}
+						break
 					}
-					if v, ok := values["llm_api_key"]; ok && v != "" {
-						app.cfg.Subscriptions[i].APIKey = v
-					}
-					if v, ok := values["llm_model"]; ok && v != "" {
-						app.cfg.Subscriptions[i].Model = v
-					}
-					if v, ok := values["llm_base_url"]; ok && v != "" {
-						app.cfg.Subscriptions[i].BaseURL = v
-					}
-					break
-				}
 				}
 				// Auto-set default base URL when switching provider
 				if v, ok := values["llm_provider"]; ok && v != "" {
-				if _, urlSet := values["llm_base_url"]; !urlSet {
-					switch v {
-					case "anthropic":
-						for i := range app.cfg.Subscriptions {
-						if app.cfg.Subscriptions[i].Active {
-							app.cfg.Subscriptions[i].BaseURL = "https://api.anthropic.com"
-							break
-						}
-						}
-					case "openai":
-						for i := range app.cfg.Subscriptions {
-						if app.cfg.Subscriptions[i].Active {
-							if app.cfg.Subscriptions[i].BaseURL == "https://api.anthropic.com" {
-								app.cfg.Subscriptions[i].BaseURL = "https://api.openai.com/v1"
+					if _, urlSet := values["llm_base_url"]; !urlSet {
+						switch v {
+						case "anthropic":
+							for i := range app.cfg.Subscriptions {
+								if app.cfg.Subscriptions[i].Active {
+									app.cfg.Subscriptions[i].BaseURL = "https://api.anthropic.com"
+									break
+								}
 							}
-							break
-						}
+						case "openai":
+							for i := range app.cfg.Subscriptions {
+								if app.cfg.Subscriptions[i].Active {
+									if app.cfg.Subscriptions[i].BaseURL == "https://api.anthropic.com" {
+										app.cfg.Subscriptions[i].BaseURL = "https://api.openai.com/v1"
+									}
+									break
+								}
+							}
 						}
 					}
-				}
 				}
 				// Derive cfg.LLM from active subscription
 				syncLLMFromActiveSub(app.cfg)
@@ -485,11 +485,11 @@ func main() {
 			// Single source of truth: write to active subscription, derive cfg.LLM
 			for i := range app.cfg.Subscriptions {
 				if app.cfg.Subscriptions[i].Active {
-				app.cfg.Subscriptions[i].Provider = provider
-				app.cfg.Subscriptions[i].BaseURL = baseURL
-				app.cfg.Subscriptions[i].APIKey = apiKey
-				app.cfg.Subscriptions[i].Model = model
-				break
+					app.cfg.Subscriptions[i].Provider = provider
+					app.cfg.Subscriptions[i].BaseURL = baseURL
+					app.cfg.Subscriptions[i].APIKey = apiKey
+					app.cfg.Subscriptions[i].Model = model
+					break
 				}
 			}
 			syncLLMFromActiveSub(app.cfg)

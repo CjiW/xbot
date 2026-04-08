@@ -306,21 +306,27 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			if len(schema) == 0 {
 				m.showSystemMsg(m.locale.NoSettings, feedbackWarning)
 			} else {
-				// Get current values: start from config, overlay with SettingsService
-				currentValues := make(map[string]string)
-				if m.channel.config.GetCurrentValues != nil {
-					for k, v := range m.channel.config.GetCurrentValues() {
-						currentValues[k] = v
-					}
-				}
-				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user")
-					if err == nil {
-						for k, v := range vals {
+				// Get current values: config is the single source of truth for LLM settings.
+					// Only overlay non-LLM settings from SettingsService (e.g. theme, language).
+					currentValues := make(map[string]string)
+					if m.channel.config.GetCurrentValues != nil {
+						for k, v := range m.channel.config.GetCurrentValues() {
 							currentValues[k] = v
 						}
 					}
-				}
+					if m.channel.settingsSvc != nil {
+						vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user")
+						if err == nil {
+							for k, v := range vals {
+								// Skip LLM fields — they come from config (single source of truth)
+								switch k {
+								case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+									continue
+								}
+								currentValues[k] = v
+							}
+						}
+					}
 				// Inject model list into combo options
 				if m.channel.modelLister != nil {
 					models := m.channel.modelLister.ListModels()
@@ -336,12 +342,17 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
-					// Persist to SettingsService (SQLite)
-					if m.channel.settingsSvc != nil {
-						for k, v := range values {
-							_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", k, v)
+						// Persist non-LLM settings to SettingsService (SQLite).
+						// LLM settings go only to config.json (single source of truth).
+						if m.channel.settingsSvc != nil {
+							for k, v := range values {
+								switch k {
+								case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+									continue
+								}
+								_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", k, v)
+							}
 						}
-					}
 					// Apply settings: write config.json + update runtime state
 					// (LLM client rebuild, agent state updates — all non-UI work)
 					if m.channel.config.ApplySettings != nil {

@@ -1679,7 +1679,6 @@ func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return true, nil // block all other keys
 }
 
-
 // ---------------------------------------------------------------------------
 // Runner Panel
 // ---------------------------------------------------------------------------

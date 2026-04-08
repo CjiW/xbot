@@ -104,39 +104,6 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 	}
 
-	// Quick switch overlay (subscription/model picker) intercepts all navigation keys
-	if m.quickSwitchMode != "" {
-		switch msg.Code {
-		case tea.KeyEsc:
-			m.quickSwitchMode = ""
-			return m, nil, true
-		case tea.KeyUp:
-			if m.quickSwitchCursor > 0 {
-				m.quickSwitchCursor--
-			}
-			return m, nil, true
-		case tea.KeyDown:
-			if m.quickSwitchCursor < len(m.quickSwitchList)-1 {
-				m.quickSwitchCursor++
-			}
-			return m, nil, true
-		case tea.KeyEnter:
-			m.applyQuickSwitch()
-			if len(m.pendingCmds) > 0 {
-				pending := m.pendingCmds
-				m.pendingCmds = nil
-				return m, []tea.Cmd{tea.Batch(pending...)}, true
-			}
-			return m, nil, true
-		}
-		// E: rename selected subscription
-		if msg.String() == "e" {
-			m.renameQuickSwitchEntry()
-			return m, nil, true
-		}
-		return m, nil, true // block all other keys
-	}
-
 	switch {
 	case msg.String() == "ctrl+c":
 		// Ctrl+C：有迭代时中止；无迭代时清空输入

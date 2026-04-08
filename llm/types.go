@@ -100,9 +100,12 @@ type LLMResponse struct {
 	Usage            TokenUsage   `json:"usage"`                       // token 使用统计
 }
 
-// HasToolCalls 检查是否有工具调用
+// HasToolCalls 检查是否有工具调用。
+// 判断依据：实际收到了 tool_calls 数据（而非依赖 finish_reason）。
+// 某些 provider (DeepSeek、智谱) 返回 tool_calls 时 finish_reason 为 "stop" 而非 "tool_calls"，
+// 因此不能依赖 finish_reason 来判断。
 func (r *LLMResponse) HasToolCalls() bool {
-	return r.FinishReason == FinishReasonToolCalls && len(r.ToolCalls) > 0
+	return len(r.ToolCalls) > 0
 }
 
 // StreamEventType 流式事件类型

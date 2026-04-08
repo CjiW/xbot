@@ -24,6 +24,10 @@ type OpenAILLM struct {
 	models       []string     // 可用模型列表
 	defaultModel string       // 默认模型
 	maxTokens    int          // 最大生成 token 数
+
+	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
+	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
+	maxTokensUpgrade sync.Map // model -> bool
 }
 
 // OpenAIConfig OpenAI 配置
@@ -201,7 +205,7 @@ func extractReasoningContentFromDelta(delta openai.ChatCompletionChunkChoiceDelt
 // assistantMessageWithReasoning 用于构建包含 reasoning_content 的 assistant message
 type assistantMessageWithReasoning struct {
 	Role             string `json:"role"`
-	Content          string `json:"content,omitempty"`
+	Content          any    `json:"content"` // string or null — must be present per OpenAI protocol
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 	ToolCalls        any    `json:"tool_calls,omitempty"`
 }
@@ -243,9 +247,13 @@ func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessagePara
 			// 如果有 reasoning_content，使用原始 JSON 构建消息
 			if msg.ReasoningContent != "" {
 				// 使用 param.Override 构建包含 reasoning_content 的消息
+				var content any = msg.Content // 空字符串序列化为 "content":""
+				if msg.Content == "" {
+					content = nil // OpenAI 协议: 空 content 用 null
+				}
 				rawMsg := assistantMessageWithReasoning{
 					Role:             "assistant",
-					Content:          msg.Content,
+					Content:          content,
 					ReasoningContent: msg.ReasoningContent,
 				}
 				if len(msg.ToolCalls) > 0 {
@@ -383,16 +391,65 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	openaiMessages := toOpenAIMessages(messages)
 
 	p := openai.ChatCompletionNewParams{
-		Model:               model,
-		Messages:            openaiMessages,
-		N:                   param.Opt[int64]{Value: 1},
-		MaxCompletionTokens: param.Opt[int64]{Value: int64(o.maxTokens)},
-		MaxTokens:           param.Opt[int64]{Value: int64(o.maxTokens)},
+		Model:    model,
+		Messages: openaiMessages,
+		N:        param.Opt[int64]{Value: 1},
 	}
+
+	// OpenAI API has two mutually exclusive params for max output tokens:
+	//   - max_completion_tokens (new, required by o1/o3/o4/gpt-5.4+)
+	//   - max_tokens (legacy, broadly compatible across all providers)
+	//
+	// Strategy: default to max_tokens (works everywhere including GLM, Claude
+	// proxies, etc.). If a model rejects it with a 400 error, we learn at
+	// runtime and switch to max_completion_tokens (see isMaxTokensParamError).
+	// Note: some providers (GLM) silently ignore max_completion_tokens without
+	// error, so max_tokens is the safer default.
+	if _, useNew := o.maxTokensUpgrade.Load(model); useNew {
+		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+	} else {
+		p.MaxTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+	}
+
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
 	}
 	return p
+}
+
+// isMaxTokensParamError checks if a 400 error is caused by the wrong
+// max_tokens / max_completion_tokens parameter choice.
+// Returns:
+//   - "use_legacy" if the model rejects max_completion_tokens (need max_tokens)
+//   - "use_new" if the model rejects max_tokens (need max_completion_tokens)
+//   - "" if the error is unrelated
+//
+// Strategy: the rejected parameter name appears first in the error message.
+// e.g. "'max_tokens' is not supported ... Use 'max_completion_tokens' instead"
+// → "max_tokens" appears first → it's the rejected one → return "use_new".
+func isMaxTokensParamError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	idxMT := strings.Index(msg, "max_tokens")
+	idxMCT := strings.Index(msg, "max_completion_tokens")
+	if idxMT < 0 && idxMCT < 0 {
+		return ""
+	}
+	lower := strings.ToLower(msg)
+	if !strings.Contains(lower, "not supported") && !strings.Contains(lower, "unsupported") {
+		return ""
+	}
+	// "max_tokens" is NOT a substring of "max_completion_tokens", so Index is unambiguous.
+	// The rejected param appears first; the suggested alternative appears later.
+	if idxMT >= 0 && (idxMCT < 0 || idxMT < idxMCT) {
+		return "use_new"
+	}
+	if idxMCT >= 0 && (idxMT < 0 || idxMCT < idxMT) {
+		return "use_legacy"
+	}
+	return ""
 }
 
 // buildThinkingOptions 根据 thinkingMode 构建对应的 request options
@@ -417,8 +474,7 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// DeepSeek/GLM 标准格式
 		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "enabled"}))
 	case "disabled":
-		// 显式禁用 thinking
-		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
+		// 不发送任何 thinking 参数，让模型自己决定
 	default:
 		// JSON 格式的 thinking 参数
 		if len(thinkingMode) > 0 && thinkingMode[0] == '{' {
@@ -473,6 +529,20 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 
 	completion, err := o.client.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
+		// Auto-detect max_tokens vs max_completion_tokens mismatch and retry
+		if verdict := isMaxTokensParamError(err); verdict != "" {
+			if verdict == "use_new" {
+				o.maxTokensUpgrade.Store(model, true)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires max_completion_tokens, retrying")
+			} else {
+				o.maxTokensUpgrade.Delete(model)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires legacy max_tokens, retrying")
+			}
+			params = o.buildParams(model, messages, tools)
+			completion, err = o.client.Chat.Completions.New(ctx, params, opts...)
+		}
+	}
+	if err != nil {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"provider": "openai",
 			"duration": time.Since(startTime).String(),
@@ -499,6 +569,14 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		// 提取 reasoning_content（DeepSeek/OpenAI reasoning 模型）
 		resp.ReasoningContent = extractReasoningContent(choice.Message)
 
+		// BUG 5 fix: 某些 provider (DeepSeek) 会在 Content 中重复包含 reasoning_content。
+		// 如果 reasoning_content 非空且 Content 以 reasoning_content 开头，去除重复部分。
+		if resp.ReasoningContent != "" && resp.Content != "" {
+			if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
+				resp.Content = strings.TrimSpace(resp.Content[len(resp.ReasoningContent):])
+			}
+		}
+
 		// 解析工具调用
 		if len(choice.Message.ToolCalls) > 0 {
 			resp.ToolCalls = make([]ToolCall, 0, len(choice.Message.ToolCalls))
@@ -515,6 +593,12 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 				})
 			}
 		}
+	}
+
+	// Infer finish_reason from actual response data.
+	// Some providers send "stop" instead of "tool_calls" even when tool_calls are present.
+	if resp.FinishReason == "" && len(resp.ToolCalls) > 0 {
+		resp.FinishReason = FinishReasonToolCalls
 	}
 
 	fields := log.Fields{
@@ -586,8 +670,8 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	chunkCount := 0
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
-	doneSent := false
-	var lastFinishReason string
+	var lastFinishReason FinishReason
+	var hasToolCalls bool // track if any tool call deltas were seen
 
 	for stream.Next() {
 		select {
@@ -633,8 +717,11 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				}
 			}
 
-			// 处理工具调用
+			// 处理工具调用 — 跳过全空 delta（BUG 4 fix）
 			for _, tc := range choice.Delta.ToolCalls {
+				if tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" {
+					continue
+				}
 				if tc.ID != "" || tc.Function.Name != "" {
 					l.WithFields(log.Fields{
 						"provider":  "openai",
@@ -643,6 +730,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 						"index":     tc.Index,
 					}).Debug("[LLM] Tool call started")
 				}
+				hasToolCalls = true
 				eventChan <- StreamEvent{
 					Type: EventToolCall,
 					ToolCall: &ToolCallDelta{
@@ -654,14 +742,11 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				}
 			}
 
-			// 处理完成原因
+			// 记录 finish_reason 但不立即发送 EventDone（BUG 1 fix）
+			// 只在 stream 循环结束后统一发送，防止中间 chunk 的 finish_reason
+			// 导致消费方提前终止，丢失后续 content/tool_calls。
 			if choice.FinishReason != "" {
-				doneSent = true
-				lastFinishReason = string(choice.FinishReason)
-				eventChan <- StreamEvent{
-					Type:         EventDone,
-					FinishReason: FinishReason(choice.FinishReason),
-				}
+				lastFinishReason = FinishReason(choice.FinishReason)
 			}
 		}
 
@@ -673,19 +758,21 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
 			}
-			eventChan <- StreamEvent{
-				Type:  EventUsage,
-				Usage: lastUsage,
-			}
-			// Info: dump the chunk containing usage
-			if chunkRaw, err := json.Marshal(chunk); err == nil {
-				l.WithField("raw_final_chunk", string(chunkRaw)).Info("[LLM] Stream final chunk (with usage)")
-			}
 		}
 	}
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
+		// Learn max_tokens preference for future retries
+		if verdict := isMaxTokensParamError(err); verdict != "" {
+			if verdict == "use_new" {
+				o.maxTokensUpgrade.Store(model, true)
+				l.WithField("model", model).Info("[LLM] Stream: model requires max_completion_tokens, will retry with correct param")
+			} else {
+				o.maxTokensUpgrade.Delete(model)
+				l.WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, will retry with correct param")
+			}
+		}
 		l.WithFields(log.Fields{
 			"provider":    "openai",
 			"chunk_count": chunkCount,
@@ -697,6 +784,24 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			Error: err.Error(),
 		}
 		return
+	}
+
+	// BUG 2 fix: 先发 Usage，再发 Done。确保消费方在处理 Done 之前拿到 usage。
+	if lastUsage != nil {
+		eventChan <- StreamEvent{
+			Type:  EventUsage,
+			Usage: lastUsage,
+		}
+	}
+
+	// BUG 1 fix: 统一在 stream 结束后发送 EventDone。
+	// 如果 provider 没有发送 finish_reason，但有 tool_calls，推断为 tool_calls。
+	if lastFinishReason == "" && hasToolCalls {
+		lastFinishReason = FinishReasonToolCalls
+	}
+	eventChan <- StreamEvent{
+		Type:         EventDone,
+		FinishReason: lastFinishReason,
 	}
 
 	fields := log.Fields{
@@ -717,13 +822,6 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		l.WithFields(fields).Warn("[LLM] Stream completed with near-empty response")
 	} else {
 		l.WithFields(fields).Debug("[LLM] Stream completed")
-	}
-
-	// 仅在未通过 finish_reason 发送过 Done 时补发
-	if !doneSent {
-		eventChan <- StreamEvent{
-			Type: EventDone,
-		}
 	}
 }
 

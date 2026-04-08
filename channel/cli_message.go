@@ -306,7 +306,8 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			if len(schema) == 0 {
 				m.showSystemMsg(m.locale.NoSettings, feedbackWarning)
 			} else {
-				// Get current values: start from config, overlay with SettingsService
+				// Get current values: config is the single source of truth for LLM settings.
+				// Only overlay non-LLM settings from SettingsService (e.g. theme, language).
 				currentValues := make(map[string]string)
 				if m.channel.config.GetCurrentValues != nil {
 					for k, v := range m.channel.config.GetCurrentValues() {
@@ -314,9 +315,14 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user")
+					vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
 					if err == nil {
 						for k, v := range vals {
+							// Skip LLM fields — they come from config (single source of truth)
+							switch k {
+							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+								continue
+							}
 							currentValues[k] = v
 						}
 					}
@@ -336,10 +342,15 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
-					// Persist to SettingsService (SQLite)
+					// Persist non-LLM settings to SettingsService (SQLite).
+					// LLM settings go only to config.json (single source of truth).
 					if m.channel.settingsSvc != nil {
 						for k, v := range values {
-							_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", k, v)
+							switch k {
+							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+								continue
+							}
+							_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)
 						}
 					}
 					// Apply settings: write config.json + update runtime state
@@ -386,17 +397,6 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	// --- 透传命令（发送到 agent） ---
-	case "/model":
-		// /model <name> → /set-model <name>
-		if len(parts) < 2 {
-			m.showSystemMsg(m.locale.ModelUsage, feedbackWarning)
-		} else {
-			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
-		}
-
-	case "/models":
-		m.sendToAgent("/models")
-
 	case "/context":
 		m.sendToAgent(cmd) // 直接透传，agent 层会解析
 

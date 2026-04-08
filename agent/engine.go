@@ -40,6 +40,7 @@ type RunConfig struct {
 	LLMClient    llm.LLM
 	Model        string
 	ThinkingMode string // 思考模式（如 "enabled", "auto"）
+	Stream       bool   // 使用流式 API 调用 LLM（兼容 Copilot 等代理）
 	Tools        *tools.Registry
 	Messages     []llm.ChatMessage
 
@@ -290,7 +291,17 @@ func readArgsHasOffsetOrLimit(argsJSON string) bool {
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
 
 // generateResponse calls the LLM using non-streaming mode.
-func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string) (*llm.LLMResponse, error) {
+func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string, stream bool) (*llm.LLMResponse, error) {
+	if stream {
+		if sc, ok := client.(llm.StreamingLLM); ok {
+			eventCh, err := sc.GenerateStream(ctx, model, messages, tools, thinkingMode)
+			if err != nil {
+				return nil, err
+			}
+			return llm.CollectStream(ctx, eventCh)
+		}
+		// Fallback: client doesn't support streaming, use non-stream
+	}
 	return client.Generate(ctx, model, messages, tools, thinkingMode)
 }
 

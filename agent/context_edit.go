@@ -182,6 +182,22 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 	case ContextEditDelete:
 		placeholder := fmt.Sprintf("[context edited: %s — deleted %s at %s]", req.Reason, beforeChars, time.Now().Format("15:04:05"))
 		messages[actualIdx].Content = placeholder
+		// If the deleted message is an assistant with tool calls, also clean up
+		// the subsequent tool messages to maintain tool_use/tool_result pairing.
+		if len(messages[actualIdx].ToolCalls) > 0 {
+			tcIDs := make(map[string]bool, len(messages[actualIdx].ToolCalls))
+			for _, tc := range messages[actualIdx].ToolCalls {
+				tcIDs[tc.ID] = true
+			}
+			for j := actualIdx + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
+				if tcIDs[messages[j].ToolCallID] {
+					messages[j].Content = placeholder
+					messages[j].ToolCallID = ""
+					messages[j].ToolName = ""
+					messages[j].ToolArguments = ""
+				}
+			}
+		}
 		messages[actualIdx].ToolCalls = nil
 		afterChars = "0 chars"
 
@@ -411,6 +427,7 @@ func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string
 	for i := t.StartSliceIdx; i <= t.EndSliceIdx; i++ {
 		messages[i].Content = placeholder
 		messages[i].ToolCalls = nil
+		messages[i].ToolCallID = ""
 		messages[i].ToolName = ""
 		messages[i].ToolArguments = ""
 		deletedMsgCount++

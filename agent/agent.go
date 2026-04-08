@@ -1018,8 +1018,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Info("Agent loop stopped")
 			return ctx.Err()
 		case msg := <-a.bus.Inbound:
-			// 单用户模式：在 bus 入口统一归一化 SenderID
-			msg.SenderID = a.NormalizeSenderID(msg.SenderID)
+			// 单用户模式：在 bus 入口统一归一化 SenderID。
+			// 归一化前保存原始值，供 settingsSvc 等需要原始身份的场景使用。
+			if a.singleUser && msg.SenderID != "default" {
+				if msg.Metadata == nil {
+					msg.Metadata = make(map[string]string)
+				}
+				msg.Metadata["raw_sender_id"] = msg.SenderID
+				msg.SenderID = "default"
+			}
 
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
@@ -1030,7 +1037,7 @@ func (a *Agent) Run(ctx context.Context) error {
 						a.bus.Outbound <- bus.OutboundMessage{
 							Channel: msg.Channel,
 							ChatID:  msg.ChatID,
-							Content: "✅ 已取消当前请求",
+							Content: "Request cancelled.",
 						}
 					default:
 						// cancel 信号已发过
@@ -1039,7 +1046,7 @@ func (a *Agent) Run(ctx context.Context) error {
 					a.bus.Outbound <- bus.OutboundMessage{
 						Channel: msg.Channel,
 						ChatID:  msg.ChatID,
-						Content: "当前没有正在处理的请求",
+						Content: "No active request.",
 					}
 				}
 				continue
@@ -1243,7 +1250,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 					a.bus.Outbound <- bus.OutboundMessage{
 						Channel: msg.Channel,
 						ChatID:  msg.ChatID,
-						Content: "✅ 已取消当前请求",
+						Content: "Request cancelled.",
 					}
 				default:
 					// cancel 信号已发过
@@ -1252,7 +1259,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 				a.bus.Outbound <- bus.OutboundMessage{
 					Channel: msg.Channel,
 					ChatID:  msg.ChatID,
-					Content: "当前没有正在处理的请求",
+					Content: "No active request.",
 				}
 			}
 			continue

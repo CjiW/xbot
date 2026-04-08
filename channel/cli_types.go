@@ -104,8 +104,8 @@ func hardWrapRunes(line string, maxW int) string {
 
 // newGlamourRenderer creates a glamour Markdown renderer.
 // Document.Margin=0 prevents misalignment inside lipgloss bubbles.
-// WordWrap is disabled (set to 0) — viewport's hardWrapRunes handles wrapping
-// by rune width, ensuring text never wraps at spaces.
+// WordWrap is set to the available width so glamour can calculate proper
+// table column widths and wrap cell content within cells.
 // Color styles follow currentTheme for visual consistency.
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	t := currentTheme
@@ -161,7 +161,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
-		glamour.WithWordWrap(0),
+		glamour.WithWordWrap(wrapWidth),
 	)
 	return r
 }
@@ -169,7 +169,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/model", "/models", "/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
+	"/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
 }
 
 // §19 长消息折叠阈值
@@ -438,11 +438,9 @@ type CLIChannel struct {
 	wg     sync.WaitGroup
 
 	// Services (injected by Agent or main)
-	settingsSvc     SettingsService // interface for GetSettings/SetSetting
-	configMu        sync.RWMutex    // protects config override fields
-	modelOverride   string          // user-overridden model from /settings panel
-	baseURLOverride string          // user-overridden base URL from /settings panel
-	modelLister     ModelLister     // provides available model names for combo
+	settingsSvc SettingsService // interface for GetSettings/SetSetting
+	configMu    sync.RWMutex    // protects runner LLM fields (llmClient, modelList, llmProvider)
+	modelLister ModelLister     // provides available model names for combo
 
 	// Multi-subscription management
 	subscriptionMgr SubscriptionManager // manages LLM subscriptions

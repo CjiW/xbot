@@ -490,6 +490,14 @@ func localeZH() *UILocale {
 				},
 			},
 			{
+				Key: "enable_stream", Label: "流式输出", Description: "使用流式 API 调用 LLM，兼容 Copilot 等代理（默认关闭）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
+				Options: []SettingOption{
+					{Label: "开启", Value: "true"},
+					{Label: "关闭", Value: "false"},
+				},
+			},
+			{
 				Key: "enable_masking", Label: "工具结果遮蔽", Description: "上下文较大时自动遮蔽旧工具结果以释放空间（默认开启）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{
@@ -835,6 +843,14 @@ func localeEN() *UILocale {
 				},
 			},
 			{
+				Key: "enable_stream", Label: "Stream Output", Description: "Use streaming API for LLM calls, compatible with Copilot proxies (off by default)",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
+				Options: []SettingOption{
+					{Label: "On", Value: "true"},
+					{Label: "Off", Value: "false"},
+				},
+			},
+			{
 				Key: "enable_masking", Label: "Tool Result Masking", Description: "Automatically mask old tool results to free context space (on by default)",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{
@@ -1174,6 +1190,14 @@ func localeJA() *UILocale {
 			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
+				Options: []SettingOption{
+					{Label: "オン", Value: "true"},
+					{Label: "オフ", Value: "false"},
+				},
+			},
+			{
+				Key: "enable_stream", Label: "ストリーム出力", Description: "ストリーミング API で LLM を呼び出し、Copilot プロキシ等と互換（デフォルト: オフ）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "false",
 				Options: []SettingOption{
 					{Label: "オン", Value: "true"},
 					{Label: "オフ", Value: "false"},

@@ -192,8 +192,6 @@ func (m *cliModel) doSaveSettingsAsync(onSubmit func(map[string]string), vals ma
 	// Capture the values we need for the deferred UI update
 	theme, hasTheme := vals["theme"]
 	lang, hasLang := vals["language"]
-	model, hasModel := vals["llm_model"]
-	baseURL := vals["llm_base_url"]
 	// Capture feedback string now (m.locale is only safe to read in Update)
 	feedbackMsg := m.locale.SettingsSaved
 
@@ -207,9 +205,6 @@ func (m *cliModel) doSaveSettingsAsync(onSubmit func(map[string]string), vals ma
 			theme:        theme,
 			langChanged:  hasLang,
 			lang:         lang,
-			modelChanged: hasModel && model != "",
-			model:        model,
-			baseURL:      baseURL,
 			feedbackMsg:  feedbackMsg,
 		}
 	}
@@ -226,11 +221,6 @@ func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
 	if msg.langChanged {
 		m.applyLanguageChange(msg.lang)
 		visualChanged = true
-	}
-	if msg.modelChanged {
-		if m.channel != nil {
-			m.channel.UpdateConfig(msg.model, msg.baseURL)
-		}
 	}
 	m.refreshCachedModelName()
 	if msg.feedbackMsg != "" {

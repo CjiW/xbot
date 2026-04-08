@@ -118,6 +118,15 @@ func (t *TodoWriteTool) Parameters() []llm.ToolParam {
 			Type:        "array",
 			Description: "Complete TODO list (overwrites). Each item: {id(number), text(string), done(boolean)}",
 			Required:    true,
+			Items: &llm.ToolParamItems{
+				Type: "object",
+				Properties: map[string]any{
+					"id":   map[string]any{"type": "number"},
+					"text": map[string]any{"type": "string"},
+					"done": map[string]any{"type": "boolean"},
+				},
+				Required: []string{"id", "text", "done"},
+			},
 		},
 	}
 }

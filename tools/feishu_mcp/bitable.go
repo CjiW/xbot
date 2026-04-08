@@ -368,6 +368,10 @@ func (t *BatchCreateAppTableRecordTool) Parameters() []llm.ToolParam {
 			Type:        "array",
 			Description: "Array of record objects, each with fields property",
 			Required:    true,
+			Items: &llm.ToolParamItems{
+				Type:       "object",
+				Properties: map[string]any{},
+			},
 		},
 	}
 }

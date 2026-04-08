@@ -69,6 +69,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	// §15 Quick switch overlay: highest priority (above panelMode).
+	// This ensures ESC in quick switch closes the overlay, not the panel behind it.
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		if handled, cmd := m.handleQuickSwitchKey(key); handled {
+			return m, cmd
+		}
+	}
+
 	// §12 Panel mode: intercept all key events when panel is active
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.panelMode != "" {
 		// Ctrl+C must always cancel the agent — never swallow it

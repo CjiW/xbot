@@ -534,7 +534,13 @@ func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 
 	// Item selection mode
 	switch {
-	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
+	case msg.Code == tea.KeyEsc:
+		// ESC goes back to settings (parent panel), not close everything
+		m.panelMode = "settings"
+		m.relayoutViewport()
+		return true, m, nil
+
+	case msg.String() == "ctrl+c":
 		return m.closePanelAndResume()
 
 	case msg.Code == tea.KeyUp:
@@ -785,10 +791,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	item := &m.panelItems[m.panelTab]
 	numOpts := len(item.Options)
 	hasOpts := numOpts > 0
-	// Cursor: 0..numOpts-1 (checkbox), numOpts (Other input), numOpts+1 (Submit)
+	isLastTab := m.panelTab == len(m.panelItems)-1
+	// Cursor: 0..numOpts-1 (checkbox), numOpts (Other input), numOpts+1 (Submit, last tab only)
 	cursor := m.panelOptCursor[m.panelTab]
 	onOther := hasOpts && cursor == numOpts
-	onSubmit := hasOpts && cursor == numOpts+1
+	onSubmit := hasOpts && isLastTab && cursor == numOpts+1
 
 	switch {
 	case msg.String() == "ctrl+s":
@@ -830,11 +837,17 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, cmd
 	case msg.Code == tea.KeyDown:
 		if hasOpts {
+			maxCursor := numOpts // Other input is the last item
+			if isLastTab {
+				maxCursor = numOpts + 1 // Submit button only on last tab
+			}
 			if onOther {
-				m.panelOptCursor[m.panelTab] = numOpts + 1
+				if isLastTab {
+					m.panelOptCursor[m.panelTab] = numOpts + 1
+				}
 				return true, m, nil
 			}
-			if cursor < numOpts+1 {
+			if cursor < maxCursor {
 				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
 			return true, m, nil
@@ -854,7 +867,14 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			}
 			return true, m, nil
 		}
-		return m.submitAskAnswers()
+		// No options (textarea): submit only on last tab, otherwise advance
+		if isLastTab {
+			return m.submitAskAnswers()
+		}
+		m.saveCurrentFreeInput()
+		m.panelTab++
+		m.restoreFreeInput()
+		return true, m, nil
 	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {
@@ -1270,6 +1290,7 @@ func (m *cliModel) viewAskUserPanel() string {
 	// Current question
 	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) {
 		item := m.panelItems[m.panelTab]
+		isLastTab := m.panelTab == len(m.panelItems)-1
 		sb.WriteString(questionStyle.Render("❓ " + item.Question))
 		sb.WriteString("\n")
 
@@ -1318,14 +1339,16 @@ func (m *cliModel) viewAskUserPanel() string {
 			sb.WriteString(m.panelOtherTI.View())
 			sb.WriteString("\n")
 
-			// Submit button
-			submitLabel := m.locale.PanelSubmit
-			if cursor == numOpts+1 {
-				sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
-			} else {
-				sb.WriteString("  " + submitStyle.Render(submitLabel))
+			// Submit button (only on last tab)
+			if isLastTab {
+				submitLabel := m.locale.PanelSubmit
+				if cursor == numOpts+1 {
+					sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
+				} else {
+					sb.WriteString("  " + submitStyle.Render(submitLabel))
+				}
+				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
 		} else {
 			sb.WriteString("\n")
 			sb.WriteString(m.panelAnswerTA.View())
@@ -1516,23 +1539,14 @@ func (m *cliModel) applyQuickSwitch() {
 		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
 			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save default: %v", err))
 		}
-		m.channel.UpdateConfig(target.Model, target.BaseURL)
-		// Sync LLM values to SettingsService so /settings
-		// doesn't show stale values from a previous save.
-		// NOTE: intentionally skip llm_api_key — API keys should not be
-		// stored in SettingsService (SQLite) in plaintext.
-		if m.channel.settingsSvc != nil {
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_provider", target.Provider)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_model", target.Model)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_base_url", target.BaseURL)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_api_key", target.APIKey)
-		}
 		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
 		m.refreshCachedModelName()
 	case "model":
 		if m.llmSubscriber != nil {
 			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
 			m.cachedModelName = selected.Model
+			// Update quickSwitchList so the panel reflects the new model
+			m.updateQuickSwitchModels(selected.Model)
 			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
 		}
 	}
@@ -1570,7 +1584,19 @@ func (m *cliModel) renameQuickSwitchEntry() {
 	})
 }
 
-// viewQuickSwitch renders the quick switch overlay as a centered panel.
+// updateQuickSwitchModels updates the model field in quickSwitchList for the active subscription.
+func (m *cliModel) updateQuickSwitchModels(newModel string) {
+	if len(m.quickSwitchList) == 0 {
+		return
+	}
+	for i := range m.quickSwitchList {
+		if m.quickSwitchList[i].Active {
+			m.quickSwitchList[i].Model = newModel
+			return
+		}
+	}
+}
+
 func (m *cliModel) viewQuickSwitch(width, height int) string {
 	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
 		return ""
@@ -1632,34 +1658,42 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 	return b.String()
 }
 
-// UpdateConfig updates the live LLM configuration (model, base_url).
-// These overrides are picked up by the Agent on next message.
-func (c *CLIChannel) UpdateConfig(model, baseURL string) {
-	c.configMu.Lock()
-	defer c.configMu.Unlock()
-	if model != "" {
-		c.modelOverride = model
+// handleQuickSwitchKey handles key events for the quick switch overlay.
+// Returns (handled, cmd). Called from Update() BEFORE panelMode check
+// so quick switch has higher priority than panels.
+func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.quickSwitchMode == "" {
+		return false, nil
 	}
-	if baseURL != "" {
-		c.baseURLOverride = baseURL
+	switch msg.Code {
+	case tea.KeyEsc:
+		m.quickSwitchMode = ""
+		return true, nil
+	case tea.KeyUp:
+		if m.quickSwitchCursor > 0 {
+			m.quickSwitchCursor--
+		}
+		return true, nil
+	case tea.KeyDown:
+		if m.quickSwitchCursor < len(m.quickSwitchList)-1 {
+			m.quickSwitchCursor++
+		}
+		return true, nil
+	case tea.KeyEnter:
+		m.applyQuickSwitch()
+		if len(m.pendingCmds) > 0 {
+			pending := m.pendingCmds
+			m.pendingCmds = nil
+			return true, tea.Batch(pending...)
+		}
+		return true, nil
 	}
-	// NOTE: do NOT call refreshCachedModelName() here — it acquires configMu.RLock()
-	// which would deadlock with the write lock held above. Callers must call
-	// refreshCachedModelName() after UpdateConfig returns if needed.
-}
-
-// GetModelOverride returns the user-overridden model name (empty if not set).
-func (c *CLIChannel) GetModelOverride() string {
-	c.configMu.RLock()
-	defer c.configMu.RUnlock()
-	return c.modelOverride
-}
-
-// GetBaseURLOverride returns the user-overridden base URL (empty if not set).
-func (c *CLIChannel) GetBaseURLOverride() string {
-	c.configMu.RLock()
-	defer c.configMu.RUnlock()
-	return c.baseURLOverride
+	// E: rename selected subscription
+	if msg.String() == "e" {
+		m.renameQuickSwitchEntry()
+		return true, nil
+	}
+	return true, nil // block all other keys
 }
 
 // ---------------------------------------------------------------------------

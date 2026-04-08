@@ -2,10 +2,12 @@ stages:
   - lint
   - test
   - build
+  - pages
 
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  HUGO_VERSION: 0.160.0
 
 .go_cache: &go_cache
   key:
@@ -60,5 +62,27 @@ build:
     - docker push $IMAGE_NAME:latest
   after_script:
     - docker rmi $IMAGE_NAME:$IMAGE_TAG || true
+  only:
+    - master
+
+# Docs / GitLab Pages
+pages:
+  stage: pages
+  image: golang:1.26
+  tags:
+    - linux-x86
+  cache: *go_cache
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    GIT_DEPTH: 0
+  before_script:
+    - go install github.com/gohugoio/hugo@v${HUGO_VERSION}
+  script:
+    - cd docs-site
+    - hugo --minify --baseURL "${CI_PAGES_URL}/"
+    - mv public ../public
+  artifacts:
+    paths:
+      - public
   only:
     - master

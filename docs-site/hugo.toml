@@ -1,0 +1,29 @@
+# baseURL is overridden by CI via --baseURL flag
+# GitHub: steps.pages.outputs.base_url
+# GitLab: $CI_PAGES_URL
+baseURL = ""
+languageCode = "en-us"
+title = "xbot"
+theme = "hugo-geekdoc"
+
+# GeekDoc
+pluralizeListTitles = false
+pygmentsUseClasses = true
+pygmentsCodeFences = true
+
+[params]
+  geekdocToC = 3
+  geekdocRepo = "https://github.com/CjiW/xbot"
+  geekdocEditPath = "edit/master/docs-site"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.tableOfContents]
+    endLevel = 4
+    ordered = false
+    startLevel = 2
+
+[outputs]
+  home = ["HTML", "RSS"]

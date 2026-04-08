@@ -195,6 +195,7 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
+	agentTurnID     uint64                    // monotonically increasing turn counter
 	typing          bool                      // agent 是否正在回复
 	typingStartTime time.Time                 // 本次处理开始时间
 	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）

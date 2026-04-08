@@ -6,6 +6,7 @@ stages:
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE
   IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  HUGO_VERSION: 0.160.0
 
 .go_cache: &go_cache
   key:
@@ -60,5 +61,44 @@ build:
     - docker push $IMAGE_NAME:latest
   after_script:
     - docker rmi $IMAGE_NAME:$IMAGE_TAG || true
+  only:
+    - master
+
+# Docs / GitLab Pages
+pages:
+  stage: lint
+  image: golang:1.26
+  tags:
+    - linux-x86
+  cache:
+    - key: go-mod
+      paths:
+        - .cache/go-mod
+        - .cache/go-build
+      policy: pull-push
+    - key:
+        files:
+          - docs-site/themes/hugo-geekdoc/package-lock.json
+        prefix: npm-docs
+      paths:
+        - docs-site/themes/hugo-geekdoc/node_modules
+      policy: pull-push
+  variables:
+    GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
+    GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+    GIT_SUBMODULE_STRATEGY: recursive
+    GIT_DEPTH: 0
+  before_script:
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y -qq nodejs
+    - go install github.com/gohugoio/hugo@v${HUGO_VERSION}
+  script:
+    - cd docs-site/themes/hugo-geekdoc && npm install && npm run build
+    - cd ../../..
+    - cd docs-site
+    - hugo --minify --baseURL "${CI_PAGES_URL}/"
+    - mv public ../public
+  artifacts:
+    paths:
+      - public
   only:
     - master

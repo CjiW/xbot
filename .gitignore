@@ -79,3 +79,9 @@ cron.json
 xbot-cli
 docker-compose.yml
 agents/explore.md
+
+# Hugo build output
+docs-site/public/
+docs-site/.hugo_build.lock
+docs-site/resources/_gen/
+docs-site/themes/hugo-geekdoc/node_modules/

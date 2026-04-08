@@ -50,6 +50,7 @@ func (t *ShellTool) Parameters() []llm.ToolParam {
 		{Name: "command", Type: "string", Description: "The command to execute", Required: true},
 		{Name: "timeout", Type: "number", Description: "Timeout in seconds (default: 120, max: 600)", Required: false},
 		{Name: "background", Type: "boolean", Description: "Run command in background (for long-running tasks like dev servers). Returns task ID immediately.", Required: false},
+		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
 	}
 }
 
@@ -58,6 +59,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		Command    string  `json:"command"`
 		Timeout    float64 `json:"timeout"`
 		Background bool    `json:"background"`
+		RunAs      string  `json:"run_as"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -180,12 +182,13 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 			}
 		default:
 			return ExecSpec{
-				Command: shell,
-				Args:    []string{shell, "-l", "-c", shellCmd},
-				Shell:   false,
-				Dir:     execDir,
-				Timeout: timeout,
-				UserID:  userID,
+				Command:   shell,
+				Args:      []string{shell, "-l", "-c", shellCmd},
+				Shell:     false,
+				Dir:       execDir,
+				Timeout:   timeout,
+				UserID:    userID,
+				RunAsUser: params.RunAs,
 			}
 		}
 	}

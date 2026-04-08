@@ -220,13 +220,14 @@ func (h *Handler) handleExec(msg runnerproto.RunnerMessage) *runnerproto.RunnerM
 	defer cancel()
 
 	spec := ExecSpec{
-		Command: req.Command,
-		Args:    req.Args,
-		Shell:   req.Shell,
-		Dir:     req.Dir,
-		Env:     req.Env,
-		Stdin:   req.Stdin,
-		Timeout: timeout,
+		Command:   req.Command,
+		Args:      req.Args,
+		Shell:     req.Shell,
+		Dir:       req.Dir,
+		Env:       req.Env,
+		Stdin:     req.Stdin,
+		Timeout:   timeout,
+		RunAsUser: req.RunAsUser,
 	}
 
 	// pathguard 检查工作目录

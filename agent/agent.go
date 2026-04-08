@@ -1854,6 +1854,7 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(ctx, msg.SenderID))
 	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(ctx, msg.SenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
+	mc.SetExtra(ExtraKeyPermUsers, a.settingsSvc.GetPermUsers(msg.Channel, msg.SenderID))
 
 	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
 

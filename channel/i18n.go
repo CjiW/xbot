@@ -546,6 +546,9 @@ func localeZH() *UILocale {
 					{Label: "catppuccin:摩卡", Value: "catppuccin"},
 				},
 			},
+			// Permission control
+			{Key: "default_user", Label: "默认执行用户", Description: "工具执行的默认 OS 用户（需要配置 NOPASSWD sudoers）", Type: SettingTypeText, Category: "权限"},
+			{Key: "privileged_user", Label: "特权用户", Description: "需要审批才能使用的特权 OS 用户（需要配置 NOPASSWD sudoers）", Type: SettingTypeText, Category: "权限"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
@@ -914,6 +917,9 @@ func localeEN() *UILocale {
 					{Label: "catppuccin:Mocha", Value: "catppuccin"},
 				},
 			},
+			// Permission control
+			{Key: "default_user", Label: "Default User", Description: "Default OS user for tool execution (requires NOPASSWD sudoers)", Type: SettingTypeText, Category: "Permissions"},
+			{Key: "privileged_user", Label: "Privileged User", Description: "Privileged OS user requiring approval (requires NOPASSWD sudoers)", Type: SettingTypeText, Category: "Permissions"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
@@ -1282,6 +1288,9 @@ func localeJA() *UILocale {
 					{Label: "catppuccin:モカ", Value: "catppuccin"},
 				},
 			},
+			// Permission control
+			{Key: "default_user", Label: "デフォルトユーザー", Description: "ツール実行用のデフォルト OS ユーザー（NOPASSWD sudoers 設定が必要）", Type: SettingTypeText, Category: "権限"},
+			{Key: "privileged_user", Label: "特権ユーザー", Description: "承認が必要な特権 OS ユーザー（NOPASSWD sudoers 設定が必要）", Type: SettingTypeText, Category: "権限"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)

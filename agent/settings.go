@@ -33,6 +33,26 @@ func (s *SettingsService) GetSettings(channelName, senderID string) (map[string]
 	return s.store.Get(channelName, senderID)
 }
 
+// GetPermUsers retrieves the permission control user configuration for a user.
+// Returns a PermUsersConfig with DefaultUser and PrivilegedUser from user settings.
+func (s *SettingsService) GetPermUsers(channelName, senderID string) *PermUsersConfig {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	settings, err := s.store.Get(channelName, senderID)
+	if err != nil {
+		return nil
+	}
+	config := &PermUsersConfig{
+		DefaultUser:    settings["default_user"],
+		PrivilegedUser: settings["privileged_user"],
+	}
+	if config.DefaultUser == "" && config.PrivilegedUser == "" {
+		return nil // feature disabled
+	}
+	return config
+}
+
 // SetSetting sets a single setting value.
 func (s *SettingsService) SetSetting(channelName, senderID, key, value string) error {
 	if s == nil || s.store == nil {

@@ -93,6 +93,10 @@ type ExecRequest struct {
 	Env     []string `json:"env,omitempty"`
 	Stdin   string   `json:"stdin,omitempty"`
 	Timeout int      `json:"timeout"` // seconds
+
+	// RunAsUser is the OS username to execute as.
+	// When set, the runner wraps the command with sudo -n -H -u <user> --
+	RunAsUser string `json:"run_as_user,omitempty"`
 }
 
 // ExecResultResponse is the response for command execution.

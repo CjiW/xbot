@@ -175,6 +175,7 @@ func (a *Agent) initPipelines(memoryProvider string) {
 		NewSystemPromptMiddleware(a.promptLoader, memoryProvider),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
+		NewPermissionControlMiddleware(),
 		NewMemoryMiddleware(),
 		NewSenderInfoMiddleware(),
 		NewLanguageMiddleware(a.settingsSvc),

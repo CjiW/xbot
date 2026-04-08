@@ -162,6 +162,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(0),
+		glamour.WithTableWrap(false),
 	)
 	return r
 }

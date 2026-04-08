@@ -429,7 +429,7 @@ type Config struct {
 	AgentsDir       string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
 	WorkDir         string        // 工作目录（所有文件相对此目录）
 	PromptFile      string        // 系统提示词模板文件路径（空则使用内置默认值）
-	DirectWorkspace string        `json:"-"`           // 非空时直接作为 workspaceRoot（CLI 模式使用）
+	DirectWorkspace string        `json:"-"` // 非空时直接作为 workspaceRoot（CLI 模式使用）
 	SandboxMode     string        // 沙箱模式: "none" 或 "docker"（默认 "docker"）
 	Sandbox         tools.Sandbox // Sandbox 实例引用（V4 新增）
 

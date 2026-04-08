@@ -141,11 +141,11 @@ type FeishuConfig struct {
 
 // AgentConfig Agent 配置
 type AgentConfig struct {
-	MaxIterations  int    `json:"max_iterations"`
-	MaxConcurrency int    `json:"max_concurrency"`
-	MemoryProvider string `json:"memory_provider"`
-	WorkDir        string `json:"work_dir"`
-	PromptFile     string `json:"prompt_file"`
+	MaxIterations        int           `json:"max_iterations"`
+	MaxConcurrency       int           `json:"max_concurrency"`
+	MemoryProvider       string        `json:"memory_provider"`
+	WorkDir              string        `json:"work_dir"`
+	PromptFile           string        `json:"prompt_file"`
 	MCPInactivityTimeout time.Duration `json:"mcp_inactivity_timeout"`
 	MCPCleanupInterval   time.Duration `json:"mcp_cleanup_interval"`
 	SessionCacheTimeout  time.Duration `json:"session_cache_timeout"`

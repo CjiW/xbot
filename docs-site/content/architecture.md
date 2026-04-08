@@ -104,14 +104,13 @@ Channel 实现（feishu / qq / napcat / web / cli）
   │ 注入 bus.Inbound（cap=64 缓冲区）
   ▼
 Agent.processMessage()
-  │ 1. 归一化 SenderID（singleUser 模式 → "default"）
-  │ 2. CommandRegistry.Match() — 斜杠命令/!命令分发
+  │ 1. CommandRegistry.Match() — 斜杠命令/!命令分发
   │    ├─ Concurrent()=true → goroutine 立即执行（不占信号量）
   │    └─ Concurrent()=false → msgCh 串行队列（cap=32）
-  │ 3. 获取/创建 TenantSession
-  │ 4. 获取历史消息 + eager-save 用户消息
-  │ 5. Pipeline.Run() → 组装 system prompt + history + user message
-  │ 6. engine.Run()
+  │ 2. 获取/创建 TenantSession
+  │ 3. 获取历史消息 + eager-save 用户消息
+  │ 4. Pipeline.Run() → 组装 system prompt + history + user message
+  │ 5. engine.Run()
   ▼
 engine.Run() — 核心循环（见 §2.2）
   │

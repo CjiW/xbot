@@ -68,7 +68,6 @@ Environment variables (or `.env`):
 - `QQ_ENABLED`, `QQ_APP_ID`, `QQ_CLIENT_SECRET`
 - `WORK_DIR` — Working directory
 - `PROMPT_FILE` — Custom prompt template (default `prompt.md`)
-- `SINGLE_USER` — Single-user mode (default `false`)
 - `AGENT_MAX_ITERATIONS` — Max tool-call iterations (default `100`)
 - `AGENT_MAX_CONCURRENCY` — Max concurrent LLM calls (default `3`)
 - `AGENT_MEMORY_WINDOW` — Memory consolidation trigger (default `50`)

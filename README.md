@@ -290,7 +290,6 @@ All config via environment variables or `.env` file. See [`.env.example`](.env.e
 |----------|---------|-------------|
 | `WORK_DIR` | `.` | Working directory |
 | `PROMPT_FILE` | `prompt.md` | Custom prompt template |
-| `SINGLE_USER` | `false` | Single-user mode |
 | `XBOT_ENCRYPTION_KEY` | — | AES-256-GCM key (base64, 32 bytes) |
 | `TAVILY_API_KEY` | — | Tavily web search API key |
 | `OAUTH_ENABLE` | `false` | Enable OAuth server |

@@ -52,6 +52,7 @@ type RunConfig struct {
 	OriginUserID string // 原始用户 ID（始终为终端用户，用于 LLM 配置、工作区路径等）
 	SenderName   string
 	FeishuUserID string // 非空表示通过飞书身份登录 web（用于 runner 路由）
+	RawSenderID  string // 归一化前的原始 senderID（如 "cli_user"），用于 usage/settings 等需要原始身份的存储 key
 
 	// === 工作区 & 沙箱 ===
 	WorkingDir       string   // Agent 工作目录（宿主机）

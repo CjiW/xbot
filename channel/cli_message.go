@@ -1085,13 +1085,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
-		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
-		isError := isErrorContent(msg.content)
-		if isError {
-			sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
-		} else {
-			sb.WriteString(systemMsgStyle.Render(msg.content))
-		}
+			// 检测是否为错误消息（包含 error/failed/失败 等关键词）
+			isError := isErrorContent(msg.content)
+			if isError {
+				sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
+			} else if msg.markdown {
+				// Markdown system messages (e.g. /usage tables): use glamour-rendered output directly
+				sb.WriteString(rendered)
+			} else {
+				sb.WriteString(systemMsgStyle.Render(msg.content))
+			}
 	case "user":
 		// 用户消息上方：右侧柔和光点分隔，与 assistant 的左侧竖线形成对称
 		dotSep := s.UserDotSep.Width(contentWidth).Align(lipgloss.Right).Render("···")

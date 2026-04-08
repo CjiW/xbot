@@ -83,12 +83,13 @@ func (a *Agent) buildBaseRunConfig(
 		Messages:     messages,
 
 		// 身份
-		AgentID:      "main",
-		Channel:      channel,
-		ChatID:       chatID,
-		SenderID:     senderID,      // 主 Agent: 直接调用者 = 原始用户（用于消息路由）
-		OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
-		SenderName:   senderName,
+			AgentID:      "main",
+			Channel:      channel,
+			ChatID:       chatID,
+			SenderID:     senderID,      // 主 Agent: 直接调用者 = 原始用户（用于消息路由）
+			OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
+			SenderName:   senderName,
+			RawSenderID:  rawSenderID,   // 归一化前的原始 senderID（用于 usage/settings 存储 key）
 
 		// 工作区 & 沙箱
 		WorkingDir:       a.workDir,

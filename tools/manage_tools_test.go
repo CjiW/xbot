@@ -211,6 +211,62 @@ func TestManageTools_ToolDefinition(t *testing.T) {
 	}
 }
 
+func TestManageTools_CLIWritesGlobalConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	globalConfigPath := filepath.Join(tempDir, "global-mcp.json")
+	userConfigPath := filepath.Join(tempDir, "user", "mcp.json")
+
+	tool := NewManageTools(tempDir, globalConfigPath)
+	ctx := &ToolContext{
+		Registry:            NewRegistry(),
+		Channel:             "cli",
+		MCPConfigPath:       userConfigPath,
+		GlobalMCPConfigPath: globalConfigPath,
+	}
+
+	addInput, _ := json.Marshal(manageToolsArgs{
+		Action:       "add_mcp",
+		Name:         "cli-global",
+		MCPConfig:    `{"command":"echo","args":["cli"]}`,
+		Instructions: "cli test",
+	})
+	if _, err := tool.Execute(ctx, string(addInput)); err != nil {
+		t.Fatalf("cli add_mcp failed: %v", err)
+	}
+
+	globalData, err := os.ReadFile(globalConfigPath)
+	if err != nil {
+		t.Fatalf("read global config: %v", err)
+	}
+	var globalCfg MCPConfig
+	if err := json.Unmarshal(globalData, &globalCfg); err != nil {
+		t.Fatalf("parse global config: %v", err)
+	}
+	if _, ok := globalCfg.MCPServers["cli-global"]; !ok {
+		t.Fatalf("expected cli-global written to global config")
+	}
+	if _, err := os.Stat(userConfigPath); !os.IsNotExist(err) {
+		t.Fatalf("expected user config untouched, got err=%v", err)
+	}
+
+	removeInput, _ := json.Marshal(manageToolsArgs{Action: "remove_mcp", Name: "cli-global"})
+	if _, err := tool.Execute(ctx, string(removeInput)); err != nil {
+		t.Fatalf("cli remove_mcp failed: %v", err)
+	}
+
+	globalData, err = os.ReadFile(globalConfigPath)
+	if err != nil {
+		t.Fatalf("read global config after remove: %v", err)
+	}
+	globalCfg = MCPConfig{}
+	if err := json.Unmarshal(globalData, &globalCfg); err != nil {
+		t.Fatalf("parse global config after remove: %v", err)
+	}
+	if _, ok := globalCfg.MCPServers["cli-global"]; ok {
+		t.Fatalf("expected cli-global removed from global config")
+	}
+}
+
 func TestManageTools_UserIsolationAndGlobalMerge(t *testing.T) {
 	tempDir := t.TempDir()
 	globalConfigPath := filepath.Join(tempDir, "global-mcp.json")

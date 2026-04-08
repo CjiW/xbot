@@ -112,9 +112,8 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	// Set instructions from args
 	cfg.Instructions = args.Instructions
 
-	// Load existing config
-	userPath := t.resolveUserMCPConfigPath(ctx)
-	config, err := t.loadMCPConfig(userPath)
+	configPath := t.resolveWritableMCPConfigPath(ctx)
+	config, err := t.loadMCPConfig(configPath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
@@ -129,7 +128,7 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 	config.MCPServers[args.Name] = cfg
 
 	// Save config
-	if err := t.saveMCPConfig(userPath, config); err != nil {
+	if err := t.saveMCPConfig(configPath, config); err != nil {
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
@@ -144,9 +143,8 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 		return nil, err
 	}
 
-	// Load existing config
-	userPath := t.resolveUserMCPConfigPath(ctx)
-	config, err := t.loadMCPConfig(userPath)
+	configPath := t.resolveWritableMCPConfigPath(ctx)
+	config, err := t.loadMCPConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
@@ -163,7 +161,7 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 	delete(config.MCPServers, args.Name)
 
 	// Save config
-	if err := t.saveMCPConfig(userPath, config); err != nil {
+	if err := t.saveMCPConfig(configPath, config); err != nil {
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
@@ -253,6 +251,15 @@ func (t *ManageTools) resolveUserMCPConfigPath(ctx *ToolContext) string {
 	}
 	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 	return filepath.Join(t.workDir, ".xbot", "users", "anonymous", "mcp.json")
+}
+
+func (t *ManageTools) resolveWritableMCPConfigPath(ctx *ToolContext) string {
+	if ctx != nil && ctx.Channel == "cli" {
+		if globalPath := t.resolveGlobalMCPConfigPath(ctx); globalPath != "" {
+			return globalPath
+		}
+	}
+	return t.resolveUserMCPConfigPath(ctx)
 }
 
 func (t *ManageTools) resolveGlobalMCPConfigPath(ctx *ToolContext) string {

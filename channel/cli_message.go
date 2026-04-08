@@ -485,6 +485,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 // handleAgentMessage 处理 agent 回复
 func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
+	turnID := m.agentTurnID // capture at entry for stale-signal guard
 	content := msg.Content
 
 	// 处理 __FEISHU_CARD__ 协议（简化显示）
@@ -492,14 +493,18 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		content = ConvertFeishuCard(content)
 	}
 
-	// Empty content with no waiting user: clear progress/typing state without
-	// appending a blank message. This happens when Optional reply policy produces
-	// no response (e.g. LLM returned empty).
+	// Empty content with no waiting user: end turn and flush queue,
+	// but don't append a blank message.
 	if content == "" && !msg.WaitingUser && len(msg.ToolsUsed) == 0 {
 		m.streamingMsgIdx = -1
 		m.progress = nil
-		m.typing = false
-		m.updatePlaceholder()
+		m.endAgentTurn(turnID)
+		if turnID == m.agentTurnID {
+			m.inputReady = true
+			if len(m.messageQueue) > 0 {
+				m.needFlushQueue = true
+			}
+		}
 		return
 	}
 
@@ -540,7 +545,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// 重置流式状态
 		m.streamingMsgIdx = -1
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
-		m.progress = nil
+		if turnID == m.agentTurnID {
+			m.progress = nil
+		}
 		m.renderCacheValid = false
 		m.updateViewportContent()
 
@@ -690,11 +697,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// 重置迭代追踪状态
-		m.endAgentTurn()
-		m.inputReady = true
-		// §Q 标记需要刷新消息队列（由 Update 循环检查）
-		if len(m.messageQueue) > 0 {
-			m.needFlushQueue = true
+		m.endAgentTurn(turnID)
+		if turnID == m.agentTurnID {
+			m.inputReady = true
+			// §Q 标记需要刷新消息队列（由 Update 循环检查）
+			if len(m.messageQueue) > 0 {
+				m.needFlushQueue = true
+			}
 		}
 
 	}

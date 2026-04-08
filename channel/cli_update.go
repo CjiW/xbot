@@ -57,12 +57,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 	}
 
-	// Drain pending cmds queued by helpers (e.g. showTempStatus)
+	// Drain pending cmds queued by helpers (e.g. showTempStatus).
+	// Append to cmds so they get batched with any cmds produced by the
+	// switch cases below — do NOT return early here, or the tick chain
+	// breaks (e.g. a pending tempStatus clear would prevent cliTickMsg
+	// from emitting the next tickCmd).
 	if len(m.pendingCmds) > 0 {
-		cmds := m.pendingCmds
+		cmds = append(cmds, m.pendingCmds...)
 		m.pendingCmds = nil
-		// Return batched cmd via tea.Batch
-		return m, tea.Batch(cmds...)
 	}
 
 	// i18n: locale 变更通知

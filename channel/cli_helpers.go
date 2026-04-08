@@ -37,6 +37,7 @@ func (m *cliModel) toggleToolSummary() {
 // startAgentTurn transitions the model into the "agent processing" state:
 // sets typing=true, updates placeholder, disables input, and resets progress.
 func (m *cliModel) startAgentTurn() {
+	m.agentTurnID++
 	m.typing = true
 	m.updatePlaceholder()
 	m.inputReady = false
@@ -44,9 +45,14 @@ func (m *cliModel) startAgentTurn() {
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.
-// This is the unified cleanup for both normal completion (handleAgentMessage)
-// and error/cancel paths (cliProgressMsg PhaseDone).
-func (m *cliModel) endAgentTurn() {
+// Takes the turnID that triggered this end. If a new turn has already
+// started (turnID != m.agentTurnID), the call is a no-op — this prevents
+// stale completion signals (cliOutboundMsg / PhaseDone) from killing a
+// new turn's animation.
+func (m *cliModel) endAgentTurn(turnID uint64) {
+	if turnID != m.agentTurnID {
+		return // new turn already started — stale signal, ignore
+	}
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
@@ -72,6 +78,10 @@ func (m *cliModel) flushMessageQueue() tea.Cmd {
 }
 
 // sendMessageFromQueue sends the current textarea content as a queued message.
+// Uses sendMessage() for identical behavior (file refs, viewport scroll,
+// reply policy). Explicitly returns tickCmd() because the wasTyping guard
+// at the bottom of Update() can't detect the typing transition within
+// the same flush cycle (endAgentTurn→startAgentTurn in one Update call).
 func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	content := strings.TrimSpace(m.textarea.Value())
 	if content == "" {
@@ -79,9 +89,7 @@ func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	}
 	m.textarea.Reset()
 	m.autoExpandInput()
-	m.sendToAgent(content)
-	// Start tick chain for the new agent turn — the previous chain may have
-	// already transitioned to idleTickCmd (3s) after endAgentTurn set typing=false.
+	m.sendMessage(content)
 	return tickCmd()
 }
 

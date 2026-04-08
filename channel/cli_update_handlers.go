@@ -338,6 +338,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 // handleProgressMsg processes progress update events from the agent.
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
+	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
 	m.progress = msg.payload
 	// Update bg task count from callback
@@ -466,11 +467,13 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
 			m.todos = nil
 			m.todosDoneCleared = false
-			m.endAgentTurn()
-			m.inputReady = true
-			// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
-			if len(m.messageQueue) > 0 {
-				m.needFlushQueue = true
+			m.endAgentTurn(turnID)
+			if turnID == m.agentTurnID {
+				m.inputReady = true
+				// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
+				if len(m.messageQueue) > 0 {
+					m.needFlushQueue = true
+				}
 			}
 			m.relayoutViewport()
 		}

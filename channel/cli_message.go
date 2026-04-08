@@ -485,6 +485,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 
 // handleAgentMessage 处理 agent 回复
 func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
+	turnID := m.agentTurnID // capture before any mutation
 	content := msg.Content
 
 	// 处理 __FEISHU_CARD__ 协议（简化显示）
@@ -540,7 +541,12 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// 重置流式状态
 		m.streamingMsgIdx = -1
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
-		m.progress = nil
+		// Only clear progress if this is the current turn — a stale
+		// handleAgentMessage from the previous turn must not wipe the
+		// new turn's progress state.
+		if turnID == m.agentTurnID {
+			m.progress = nil
+		}
 		m.renderCacheValid = false
 		m.updateViewportContent()
 
@@ -690,11 +696,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// 重置迭代追踪状态
-		m.endAgentTurn()
-		m.inputReady = true
-		// §Q 标记需要刷新消息队列（由 Update 循环检查）
-		if len(m.messageQueue) > 0 {
-			m.needFlushQueue = true
+		m.endAgentTurn(turnID)
+		if turnID == m.agentTurnID {
+			m.inputReady = true
+			// §Q 标记需要刷新消息队列（由 Update 循环检查）
+			if len(m.messageQueue) > 0 {
+				m.needFlushQueue = true
+			}
 		}
 
 	}

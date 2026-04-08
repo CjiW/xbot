@@ -235,7 +235,11 @@ func (m *CronSystemPromptMiddleware) Priority() int { return 0 }
 
 func (m *CronSystemPromptMiddleware) Process(mc *MessageContext) error {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	mc.SystemParts["00_base"] = fmt.Sprintf(cronSystemPrompt, m.workDir, now)
+	cronPrompt := EmbeddedCronPrompt()
+	if cronPrompt == "" {
+		cronPrompt = "You are xbot executing a scheduled cron task.\n\n## Guidelines\n- You are processing a scheduled reminder/task\n- Execute the task directly and concisely\n- Use tools when needed\n- Report results clearly\n- WorkDir: %s\n- Time: %s\n"
+	}
+	mc.SystemParts["00_base"] = fmt.Sprintf(cronPrompt, m.workDir, now)
 	// Cron 消息不需要额外处理 UserMessage，直接使用原始内容
 	mc.UserMessage = mc.UserContent
 	return nil

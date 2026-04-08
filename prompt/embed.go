@@ -8,3 +8,24 @@ import _ "embed"
 //
 //go:embed prompt.md
 var Default string
+
+// Fallback 是最小兜底系统提示词模板，仅在默认 prompt 无法解析时使用。
+//
+//go:embed fallback.md
+var Fallback string
+
+// CLIChannel 是 CLI 渠道的特化 prompt。
+//
+//go:embed channels/cli.md
+var CLIChannel string
+
+// FeishuChannel 是飞书渠道的特化 prompt。
+//
+//go:embed channels/feishu.md
+var FeishuChannel string
+
+// CronSystem 是 Cron 专用系统提示词模板。
+// 使用 fmt.Sprintf(workDir, now) 渲染。
+//
+//go:embed cron/system.md
+var CronSystem string

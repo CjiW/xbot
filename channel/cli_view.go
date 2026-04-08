@@ -617,6 +617,15 @@ func (m *cliModel) renderFooter() string {
 	helpHint := m.styles.TextMutedSt.Render("/help")
 	footerText = padBetween(footerText, helpHint, m.width)
 
+	// Ensure footer fits on one line. hardWrapRunes is ANSI-aware so it
+	// won't break escape sequences. Take only the first line.
+	if lipgloss.Width(footerText) > m.width {
+		footerText = hardWrapRunes(footerText, m.width)
+		if idx := strings.Index(footerText, "\n"); idx >= 0 {
+			footerText = footerText[:idx]
+		}
+	}
+
 	return m.styles.Footer.Width(m.width).Render(footerText)
 }
 

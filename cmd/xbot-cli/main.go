@@ -66,6 +66,9 @@ func isFirstRun() bool {
 func newCLIApp() *cliApp {
 	cfg := config.Load()
 
+	// Derive cfg.LLM from active subscription (single source of truth)
+	syncLLMFromActiveSub(cfg)
+
 	workDir := cfg.Agent.WorkDir
 	xbotHome := config.XbotHome()
 	dbPath := config.DBFilePath()
@@ -294,29 +297,55 @@ func main() {
 			}
 		},
 		ApplySettings: func(values map[string]string) {
-			// Apply LLM settings
-			if v, ok := values["llm_provider"]; ok && v != "" {
-				app.cfg.LLM.Provider = v
+			// Apply LLM settings — write to active subscription (single source of truth)
+			_, llmChanged := values["llm_provider"]
+			_, keyChanged := values["llm_api_key"]
+			_, modelChanged := values["llm_model"]
+			_, urlChanged := values["llm_base_url"]
+			if llmChanged || keyChanged || modelChanged || urlChanged {
+				// Write to active subscription
+				for i := range app.cfg.Subscriptions {
+				if app.cfg.Subscriptions[i].Active {
+					if v, ok := values["llm_provider"]; ok && v != "" {
+						app.cfg.Subscriptions[i].Provider = v
+					}
+					if v, ok := values["llm_api_key"]; ok && v != "" {
+						app.cfg.Subscriptions[i].APIKey = v
+					}
+					if v, ok := values["llm_model"]; ok && v != "" {
+						app.cfg.Subscriptions[i].Model = v
+					}
+					if v, ok := values["llm_base_url"]; ok && v != "" {
+						app.cfg.Subscriptions[i].BaseURL = v
+					}
+					break
+				}
+				}
 				// Auto-set default base URL when switching provider
+				if v, ok := values["llm_provider"]; ok && v != "" {
 				if _, urlSet := values["llm_base_url"]; !urlSet {
 					switch v {
 					case "anthropic":
-						app.cfg.LLM.BaseURL = "https://api.anthropic.com"
+						for i := range app.cfg.Subscriptions {
+						if app.cfg.Subscriptions[i].Active {
+							app.cfg.Subscriptions[i].BaseURL = "https://api.anthropic.com"
+							break
+						}
+						}
 					case "openai":
-						if app.cfg.LLM.BaseURL == "https://api.anthropic.com" {
-							app.cfg.LLM.BaseURL = "https://api.openai.com/v1"
+						for i := range app.cfg.Subscriptions {
+						if app.cfg.Subscriptions[i].Active {
+							if app.cfg.Subscriptions[i].BaseURL == "https://api.anthropic.com" {
+								app.cfg.Subscriptions[i].BaseURL = "https://api.openai.com/v1"
+							}
+							break
+						}
 						}
 					}
 				}
-			}
-			if v, ok := values["llm_api_key"]; ok && v != "" {
-				app.cfg.LLM.APIKey = v
-			}
-			if v, ok := values["llm_model"]; ok && v != "" {
-				app.cfg.LLM.Model = v
-			}
-			if v, ok := values["llm_base_url"]; ok && v != "" {
-				app.cfg.LLM.BaseURL = v
+				}
+				// Derive cfg.LLM from active subscription
+				syncLLMFromActiveSub(app.cfg)
 			}
 			// Apply Sandbox settings
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
@@ -368,10 +397,6 @@ func main() {
 				}
 			}
 			// Rebuild LLM client and update agent runtime when LLM config changed
-			_, llmChanged := values["llm_provider"]
-			_, keyChanged := values["llm_api_key"]
-			_, modelChanged := values["llm_model"]
-			_, urlChanged := values["llm_base_url"]
 			if llmChanged || keyChanged || modelChanged || urlChanged {
 				if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
 					Attempts: 5,
@@ -457,11 +482,17 @@ func main() {
 			if app.agentLoop != nil {
 				app.agentLoop.LLMFactory().SetDefaults(client, model)
 			}
-			// Sync to global config
-			app.cfg.LLM.Provider = provider
-			app.cfg.LLM.BaseURL = baseURL
-			app.cfg.LLM.APIKey = apiKey
-			app.cfg.LLM.Model = model
+			// Single source of truth: write to active subscription, derive cfg.LLM
+			for i := range app.cfg.Subscriptions {
+				if app.cfg.Subscriptions[i].Active {
+				app.cfg.Subscriptions[i].Provider = provider
+				app.cfg.Subscriptions[i].BaseURL = baseURL
+				app.cfg.Subscriptions[i].APIKey = apiKey
+				app.cfg.Subscriptions[i].Model = model
+				break
+				}
+			}
+			syncLLMFromActiveSub(app.cfg)
 			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
 		},
 	}
@@ -722,6 +753,8 @@ func (m *configSubscriptionManager) Rename(id, name string) error {
 }
 
 // configLLMSubscriber switches LLM at runtime using config-based subscriptions.
+// Single source of truth: cfg.Subscriptions[active].Model/Provider/BaseURL/APIKey.
+// cfg.LLM.* is a read-only view derived from the active subscription.
 type configLLMSubscriber struct {
 	cfg     *config.Config
 	factory *agent.LLMFactory
@@ -729,28 +762,49 @@ type configLLMSubscriber struct {
 }
 
 func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveFn func() error) *configLLMSubscriber {
+	// On startup, derive cfg.LLM from active subscription
+	syncLLMFromActiveSub(cfg)
 	return &configLLMSubscriber{cfg: cfg, factory: factory, saveFn: saveFn}
+}
+
+// syncLLMFromActiveSub derives cfg.LLM.* from the active subscription.
+// This is the ONLY place that writes cfg.LLM fields.
+func syncLLMFromActiveSub(cfg *config.Config) {
+	for _, sc := range cfg.Subscriptions {
+		if sc.Active {
+			cfg.LLM.Provider = sc.Provider
+			cfg.LLM.BaseURL = sc.BaseURL
+			cfg.LLM.APIKey = sc.APIKey
+			cfg.LLM.Model = sc.Model
+			return
+		}
+	}
+	// No active subscription — keep cfg.LLM as-is (single-subscription or migration case)
 }
 
 func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
 	// Find full config (with API key) for this subscription
-	for _, sc := range s.cfg.Subscriptions {
-		if sc.ID == sub.ID {
+	for i := range s.cfg.Subscriptions {
+		if s.cfg.Subscriptions[i].ID == sub.ID {
+			sc := &s.cfg.Subscriptions[i]
+			// Inherit from global config if not specified per-subscription
+			provider := sc.Provider
+			baseURL := sc.BaseURL
+			apiKey := sc.APIKey
+			if provider == "" {
+				provider = s.cfg.LLM.Provider
+			}
+			if baseURL == "" {
+				baseURL = s.cfg.LLM.BaseURL
+			}
+			if apiKey == "" {
+				apiKey = s.cfg.LLM.APIKey
+			}
 			llmCfg := config.LLMConfig{
-				Provider: sc.Provider,
-				BaseURL:  sc.BaseURL,
-				APIKey:   sc.APIKey,
+				Provider: provider,
+				BaseURL:  baseURL,
+				APIKey:   apiKey,
 				Model:    sc.Model,
-			}
-			// If subscription doesn't have its own base_url/key, inherit from global LLM config
-			if llmCfg.BaseURL == "" {
-				llmCfg.BaseURL = s.cfg.LLM.BaseURL
-			}
-			if llmCfg.APIKey == "" {
-				llmCfg.APIKey = s.cfg.LLM.APIKey
-			}
-			if llmCfg.Provider == "" {
-				llmCfg.Provider = s.cfg.LLM.Provider
 			}
 			client, err := createLLM(llmCfg, llm.RetryConfig{
 				Attempts: 5,
@@ -761,14 +815,9 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}
 			s.factory.SetDefaults(client, sc.Model)
-			// Sync subscription's LLM config back to global config
-			// so GetCurrentValues / settings panel reflect the switch
-			s.cfg.LLM.Provider = llmCfg.Provider
-			s.cfg.LLM.BaseURL = llmCfg.BaseURL
-			s.cfg.LLM.APIKey = llmCfg.APIKey
-			s.cfg.LLM.Model = sc.Model
-			_ = s.saveFn()
-			return nil
+			// Derive cfg.LLM from active subscription (single source of truth)
+			syncLLMFromActiveSub(s.cfg)
+			return s.saveFn()
 		}
 	}
 	return fmt.Errorf("subscription %s not found in config", sub.ID)
@@ -776,14 +825,14 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 
 func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
 	s.factory.SwitchModel(senderID, model)
-	// Persist model change to config so it survives restart.
-	s.cfg.LLM.Model = model
+	// Single source of truth: update active subscription's model, then derive cfg.LLM
 	for i := range s.cfg.Subscriptions {
 		if s.cfg.Subscriptions[i].Active {
 			s.cfg.Subscriptions[i].Model = model
 			break
 		}
 	}
+	syncLLMFromActiveSub(s.cfg)
 	_ = s.saveFn()
 }
 

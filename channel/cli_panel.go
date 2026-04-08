@@ -1522,17 +1522,6 @@ func (m *cliModel) applyQuickSwitch() {
 		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
 			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save default: %v", err))
 		}
-		m.channel.UpdateConfig(target.Model, target.BaseURL)
-		// Sync LLM values to SettingsService so /settings
-		// doesn't show stale values from a previous save.
-		// NOTE: intentionally skip llm_api_key — API keys should not be
-		// stored in SettingsService (SQLite) in plaintext.
-		if m.channel.settingsSvc != nil {
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_provider", target.Provider)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_model", target.Model)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_base_url", target.BaseURL)
-			_ = m.channel.settingsSvc.SetSetting("cli", m.senderID, "llm_api_key", target.APIKey)
-		}
 		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
 		m.refreshCachedModelName()
 	case "model":
@@ -1690,35 +1679,6 @@ func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return true, nil // block all other keys
 }
 
-// UpdateConfig updates the live LLM configuration (model, base_url).
-// These overrides are picked up by the Agent on next message.
-func (c *CLIChannel) UpdateConfig(model, baseURL string) {
-	c.configMu.Lock()
-	defer c.configMu.Unlock()
-	if model != "" {
-		c.modelOverride = model
-	}
-	if baseURL != "" {
-		c.baseURLOverride = baseURL
-	}
-	// NOTE: do NOT call refreshCachedModelName() here — it acquires configMu.RLock()
-	// which would deadlock with the write lock held above. Callers must call
-	// refreshCachedModelName() after UpdateConfig returns if needed.
-}
-
-// GetModelOverride returns the user-overridden model name (empty if not set).
-func (c *CLIChannel) GetModelOverride() string {
-	c.configMu.RLock()
-	defer c.configMu.RUnlock()
-	return c.modelOverride
-}
-
-// GetBaseURLOverride returns the user-overridden base URL (empty if not set).
-func (c *CLIChannel) GetBaseURLOverride() string {
-	c.configMu.RLock()
-	defer c.configMu.RUnlock()
-	return c.baseURLOverride
-}
 
 // ---------------------------------------------------------------------------
 // Runner Panel

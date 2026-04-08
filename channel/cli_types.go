@@ -438,11 +438,9 @@ type CLIChannel struct {
 	wg     sync.WaitGroup
 
 	// Services (injected by Agent or main)
-	settingsSvc     SettingsService // interface for GetSettings/SetSetting
-	configMu        sync.RWMutex    // protects config override fields
-	modelOverride   string          // user-overridden model from /settings panel
-	baseURLOverride string          // user-overridden base URL from /settings panel
-	modelLister     ModelLister     // provides available model names for combo
+	settingsSvc SettingsService // interface for GetSettings/SetSetting
+	configMu    sync.RWMutex    // protects runner LLM fields (llmClient, modelList, llmProvider)
+	modelLister ModelLister     // provides available model names for combo
 
 	// Multi-subscription management
 	subscriptionMgr SubscriptionManager // manages LLM subscriptions

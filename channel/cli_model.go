@@ -122,15 +122,10 @@ func (m *cliModel) cycleModel() {
 	}
 	nextModel := models[nextIdx]
 
-	// Update model override on channel
-	m.channel.configMu.Lock()
-	m.channel.modelOverride = nextModel
-	m.channel.configMu.Unlock()
-
 	m.cachedModelName = nextModel
 	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
 
-	// Notify LLM subscriber if available
+	// Persist via LLM subscriber (writes active subscription + derives cfg.LLM + saves)
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
@@ -484,9 +479,6 @@ type cliSettingsSavedMsg struct {
 	theme        string
 	langChanged  bool
 	lang         string
-	modelChanged bool
-	model        string
-	baseURL      string
 	feedbackMsg  string
 }
 
@@ -536,21 +528,9 @@ func (m *cliModel) refreshCachedModelName() {
 	if m.channel == nil {
 		return
 	}
-	m.cachedModelName = ""
-	m.channel.configMu.RLock()
-	if m.channel.modelOverride != "" {
-		m.cachedModelName = m.channel.modelOverride
-	}
-	m.channel.configMu.RUnlock()
-	if m.cachedModelName == "" {
-		if m.channel.config.GetCurrentValues != nil {
-			m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
-		}
-		if m.cachedModelName == "" && m.channel.settingsSvc != nil {
-			if vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user"); err == nil {
-				m.cachedModelName = vals["llm_model"]
-			}
-		}
+	// Single source of truth: read from cfg.LLM.Model (derived from active subscription)
+	if m.channel.config.GetCurrentValues != nil {
+		m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
 	}
 }
 

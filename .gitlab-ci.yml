@@ -19,21 +19,21 @@ variables:
 # Lint job
 lint:
   stage: lint
-  image: golang:1.25
+  image: golang:1.26
   tags:
     - linux-x86
   variables:
     GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
     GOCACHE: $CI_PROJECT_DIR/.cache/go-build
   script:
-    - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.10.0
+    - curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.10.1
     - $(go env GOPATH)/bin/golangci-lint run --timeout 5m
   cache: *go_cache
 
 # Test job
 test:
   stage: test
-  image: golang:1.25
+  image: golang:1.26
   tags:
     - linux-x86
   variables:

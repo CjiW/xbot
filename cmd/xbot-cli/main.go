@@ -267,6 +267,25 @@ func main() {
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"max_output_tokens": func() string {
+					for _, sub := range app.cfg.Subscriptions {
+						if sub.Active {
+							if sub.MaxOutputTokens > 0 {
+								return fmt.Sprintf("%d", sub.MaxOutputTokens)
+							}
+							break
+						}
+					}
+					return "0"
+				}(),
+				"thinking_mode": func() string {
+					for _, sub := range app.cfg.Subscriptions {
+						if sub.Active {
+							return sub.ThinkingMode
+						}
+					}
+					return ""
+				}(),
 				"enable_auto_compress": func() string {
 					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
 						return "true"
@@ -384,6 +403,24 @@ func main() {
 			if v, ok := values["max_context_tokens"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 					app.cfg.Agent.MaxContextTokens = n
+				}
+			}
+			if v, ok := values["max_output_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					for i := range app.cfg.Subscriptions {
+						if app.cfg.Subscriptions[i].Active {
+							app.cfg.Subscriptions[i].MaxOutputTokens = n
+							break
+						}
+					}
+				}
+			}
+			if v, ok := values["thinking_mode"]; ok {
+				for i := range app.cfg.Subscriptions {
+					if app.cfg.Subscriptions[i].Active {
+						app.cfg.Subscriptions[i].ThinkingMode = v
+						break
+					}
 				}
 			}
 			if v, ok := values["enable_auto_compress"]; ok {
@@ -786,6 +823,7 @@ func syncLLMFromActiveSub(cfg *config.Config) {
 			cfg.LLM.BaseURL = sc.BaseURL
 			cfg.LLM.APIKey = sc.APIKey
 			cfg.LLM.Model = sc.Model
+			cfg.LLM.MaxOutputTokens = sc.MaxOutputTokens
 			return
 		}
 	}
@@ -811,10 +849,11 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				apiKey = s.cfg.LLM.APIKey
 			}
 			llmCfg := config.LLMConfig{
-				Provider: provider,
-				BaseURL:  baseURL,
-				APIKey:   apiKey,
-				Model:    sc.Model,
+				Provider:        provider,
+				BaseURL:         baseURL,
+				APIKey:          apiKey,
+				Model:           sc.Model,
+				MaxOutputTokens: sc.MaxOutputTokens,
 			}
 			client, err := createLLM(llmCfg, llm.RetryConfig{
 				Attempts: 5,
@@ -907,6 +946,7 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
+			MaxTokens:    cfg.MaxOutputTokens,
 		})
 	case "anthropic":
 		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{

@@ -85,5 +85,11 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 		}
 	}
 
+	// Infer finish_reason from actual response data.
+	// Some providers send "stop" instead of "tool_calls" even when tool_calls are present.
+	if resp.FinishReason == "" && len(resp.ToolCalls) > 0 {
+		resp.FinishReason = FinishReasonToolCalls
+	}
+
 	return &resp, nil
 }

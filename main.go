@@ -644,6 +644,12 @@ func main() {
 			LLMSetMaxContext: func(senderID string, maxContext int) error {
 				return agentLoop.SetUserMaxContext(senderID, maxContext)
 			},
+			LLMGetMaxOutputTokens: func(senderID string) int {
+				return agentLoop.GetUserMaxOutputTokens(senderID)
+			},
+			LLMSetMaxOutputTokens: func(senderID string, maxTokens int) error {
+				return agentLoop.SetUserMaxOutputTokens(senderID, maxTokens)
+			},
 			LLMGetThinkingMode: func(senderID string) string {
 				return agentLoop.GetUserThinkingMode(senderID)
 			},

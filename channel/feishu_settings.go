@@ -141,6 +141,30 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_set_max_output_tokens":
+		maxOutStr := parsed["max_output_tokens"]
+		if maxOutStr == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				maxOutStr = opt
+			}
+		}
+		if maxOutStr == "" {
+			return nil, fmt.Errorf("missing max_output_tokens")
+		}
+		maxOut, err := strconv.Atoi(maxOutStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max_output_tokens: %v", err)
+		}
+		if maxOut < 0 || maxOut > 2000000 {
+			return nil, fmt.Errorf("max_output_tokens must be between 0 and 2000000, got %d", maxOut)
+		}
+		if f.settingsCallbacks.LLMSetMaxOutputTokens != nil {
+			if err := f.settingsCallbacks.LLMSetMaxOutputTokens(senderID, maxOut); err != nil {
+				return nil, fmt.Errorf("设置 max_output_tokens 失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_set_concurrency":
 		concStr := parsed["conc"]
 		if concStr == "" {
@@ -1080,6 +1104,42 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			"value": map[string]string{
 				"action_data": mustMapToJSON(map[string]string{
 					"action": "settings_set_max_context",
+				}),
+			},
+		},
+	))
+
+	// Max output tokens setting
+	currentMaxOutputTokens := 0
+	maxOutputDisplay := "默认"
+	if f.settingsCallbacks.LLMGetMaxOutputTokens != nil {
+		currentMaxOutputTokens = f.settingsCallbacks.LLMGetMaxOutputTokens(senderID)
+	}
+	if currentMaxOutputTokens > 0 {
+		maxOutputDisplay = fmt.Sprintf("%d", currentMaxOutputTokens)
+	}
+
+	maxOutputOptions := []map[string]any{
+		{"text": map[string]any{"tag": "plain_text", "content": "默认（18192）"}, "value": "0"},
+		{"text": map[string]any{"tag": "plain_text", "content": "4,096"}, "value": "4096"},
+		{"text": map[string]any{"tag": "plain_text", "content": "8,192"}, "value": "8192"},
+		{"text": map[string]any{"tag": "plain_text", "content": "16,384"}, "value": "16384"},
+		{"text": map[string]any{"tag": "plain_text", "content": "32,768"}, "value": "32768"},
+		{"text": map[string]any{"tag": "plain_text", "content": "65,536"}, "value": "65536"},
+		{"text": map[string]any{"tag": "plain_text", "content": "131,072"}, "value": "131072"},
+	}
+	elements = append(elements, buildSettingRow(
+		"最大输出 Token",
+		maxOutputDisplay,
+		map[string]any{
+			"tag":            "select_static",
+			"name":           "settings_max_output_tokens_select",
+			"placeholder":    map[string]any{"tag": "plain_text", "content": "选择最大输出..."},
+			"initial_option": fmt.Sprintf("%d", currentMaxOutputTokens),
+			"options":        maxOutputOptions,
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_set_max_output_tokens",
 				}),
 			},
 		},

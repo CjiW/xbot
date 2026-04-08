@@ -454,47 +454,26 @@ func main() {
 			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
 		},
 		SwitchLLM: func(provider, baseURL, apiKey, model string) error {
-			// Inherit from global config if not specified per-subscription
-			if baseURL == "" {
-				baseURL = app.cfg.LLM.BaseURL
-			}
-			if apiKey == "" {
-				apiKey = app.cfg.LLM.APIKey
-			}
-			if provider == "" {
-				provider = app.cfg.LLM.Provider
-			}
-			llmCfg := config.LLMConfig{
-				Provider: provider,
-				BaseURL:  baseURL,
-				APIKey:   apiKey,
-				Model:    model,
-			}
-			client, err := createLLM(llmCfg, llm.RetryConfig{
-				Attempts: 5,
-				Delay:    1 * time.Second,
-				MaxDelay: 30 * time.Second,
-			})
-			if err != nil {
-				return fmt.Errorf("create LLM: %w", err)
-			}
-			app.llmClient = client
-			if app.agentLoop != nil {
-				app.agentLoop.LLMFactory().SetDefaults(client, model)
-			}
-			// Single source of truth: write to active subscription, derive cfg.LLM
-			for i := range app.cfg.Subscriptions {
-				if app.cfg.Subscriptions[i].Active {
-					app.cfg.Subscriptions[i].Provider = provider
-					app.cfg.Subscriptions[i].BaseURL = baseURL
-					app.cfg.Subscriptions[i].APIKey = apiKey
-					app.cfg.Subscriptions[i].Model = model
-					break
+				llmCfg := config.LLMConfig{
+					Provider: provider,
+					BaseURL:  baseURL,
+					APIKey:   apiKey,
+					Model:    model,
 				}
-			}
-			syncLLMFromActiveSub(app.cfg)
-			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
-		},
+				client, err := createLLM(llmCfg, llm.RetryConfig{
+					Attempts: 5,
+					Delay:    1 * time.Second,
+					MaxDelay: 30 * time.Second,
+				})
+				if err != nil {
+					return fmt.Errorf("create LLM: %w", err)
+				}
+				app.llmClient = client
+				if app.agentLoop != nil {
+					app.agentLoop.LLMFactory().SetDefaults(client, model)
+				}
+				return nil
+			},
 	}
 
 	// 设置历史消息加载器（会话恢复）
@@ -729,6 +708,8 @@ func (m *configSubscriptionManager) SetDefault(id string) error {
 	if !found {
 		return fmt.Errorf("subscription %s not found", id)
 	}
+	// Derive cfg.LLM from new active subscription
+	syncLLMFromActiveSub(m.cfg)
 	return m.saveFn()
 }
 
@@ -736,6 +717,10 @@ func (m *configSubscriptionManager) SetModel(id, model string) error {
 	for i := range m.cfg.Subscriptions {
 		if m.cfg.Subscriptions[i].ID == id {
 			m.cfg.Subscriptions[i].Model = model
+			// If modifying active subscription, sync cfg.LLM
+			if m.cfg.Subscriptions[i].Active {
+				syncLLMFromActiveSub(m.cfg)
+			}
 			return m.saveFn()
 		}
 	}
@@ -815,7 +800,10 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}
 			s.factory.SetDefaults(client, sc.Model)
-			// Derive cfg.LLM from active subscription (single source of truth)
+			// Set active flag + derive cfg.LLM + save (all in one place)
+			for j := range s.cfg.Subscriptions {
+				s.cfg.Subscriptions[j].Active = (s.cfg.Subscriptions[j].ID == sub.ID)
+			}
 			syncLLMFromActiveSub(s.cfg)
 			return s.saveFn()
 		}

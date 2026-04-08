@@ -382,23 +382,42 @@ func (m *cliModel) handleUsageCommand() {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Token Usage\n\n")
+	sb.WriteString("# Token Usage\n\n")
 
-	// Cumulative totals
+	// --- Cumulative totals ---
 	if cumulative != nil && cumulative.TotalTokens > 0 {
-		sb.WriteString("### All Time\n\n")
-		sb.WriteString("| Metric | Value |\n|--------|-------|\n")
-		fmt.Fprintf(&sb, "| Input tokens | %s |\n", fmtTokens(cumulative.InputTokens))
-		fmt.Fprintf(&sb, "| Output tokens | %s |\n", fmtTokens(cumulative.OutputTokens))
-		fmt.Fprintf(&sb, "| Cached tokens | %s |\n", fmtTokens(cumulative.CachedTokens))
-		fmt.Fprintf(&sb, "| Total tokens | %s |\n", fmtTokens(cumulative.TotalTokens))
+		// Calculate usage duration from daily data
+		usageDays := 0
+		if len(daily) > 0 {
+			// daily is sorted by date DESC; last entry = earliest date
+			earliest := daily[len(daily)-1].Date
+			if first, err := time.Parse("2006-01-02", earliest); err == nil {
+				usageDays = int(time.Since(first).Hours()/24) + 1
+			}
+		}
+
+		sb.WriteString("## Summary\n\n")
+		sb.WriteString("| | |\n|---|---|\n")
+		fmt.Fprintf(&sb, "| **Total tokens** | **%s** |\n", fmtTokens(cumulative.TotalTokens))
+		fmt.Fprintf(&sb, "| Input | %s |\n", fmtTokens(cumulative.InputTokens))
+		fmt.Fprintf(&sb, "| Output | %s |\n", fmtTokens(cumulative.OutputTokens))
+		fmt.Fprintf(&sb, "| Cached | %s |\n", fmtTokens(cumulative.CachedTokens))
 		fmt.Fprintf(&sb, "| Conversations | %d |\n", cumulative.ConversationCount)
 		fmt.Fprintf(&sb, "| LLM calls | %d |\n", cumulative.LLMCallCount)
+		if usageDays > 0 {
+			fmt.Fprintf(&sb, "| **Usage duration** | **%d days** |\n", usageDays)
+			avgDaily := cumulative.TotalTokens / int64(usageDays)
+			fmt.Fprintf(&sb, "| Avg daily tokens | %s |\n", fmtTokens(avgDaily))
+		}
 
-		// Analysis
+		// Analysis section
+		sb.WriteString("\n### Analysis\n\n")
+		sb.WriteString("| | |\n|---|---|\n")
 		if cumulative.InputTokens > 0 {
 			cacheRate := float64(cumulative.CachedTokens) / float64(cumulative.InputTokens) * 100
 			fmt.Fprintf(&sb, "| **Cache hit rate** | **%.1f%%** |\n", cacheRate)
+			nonCachedInput := cumulative.InputTokens - cumulative.CachedTokens
+			fmt.Fprintf(&sb, "| Actual input (non-cached) | %s |\n", fmtTokens(nonCachedInput))
 		}
 		if cumulative.LLMCallCount > 0 {
 			avgIn := cumulative.InputTokens / cumulative.LLMCallCount
@@ -410,15 +429,14 @@ func (m *cliModel) handleUsageCommand() {
 			avgCalls := float64(cumulative.LLMCallCount) / float64(cumulative.ConversationCount)
 			fmt.Fprintf(&sb, "| Avg calls/conversation | %.1f |\n", avgCalls)
 		}
-		sb.WriteString("\n")
 	} else {
-		sb.WriteString("No usage data recorded yet.\n\n")
+		sb.WriteString("No usage data recorded yet.\n")
 	}
 
-	// Daily breakdown (last 30 days)
+	// --- Daily breakdown (last 30 days) ---
 	if len(daily) > 0 {
-		sb.WriteString("### Daily (last 30 days)\n\n")
-		sb.WriteString("| Date | Model | Input | Output | Cached | Cache% | Calls |\n")
+		sb.WriteString("\n## Daily Breakdown (last 30 days)\n\n")
+		sb.WriteString("| Date | Model | Input | Output | Cached | Cache%% | Calls |\n")
 		sb.WriteString("|------|-------|-------|--------|--------|--------|-------|\n")
 		for _, d := range daily {
 			model := d.Model
@@ -440,7 +458,8 @@ func (m *cliModel) handleUsageCommand() {
 		}
 	}
 
-	m.showSystemMsg(sb.String(), feedbackInfo)
+	m.appendSystemMarkdown(sb.String())
+	m.updateViewportContent()
 }
 
 // formatTokenCount is defined in cli_view.go — do not duplicate here.

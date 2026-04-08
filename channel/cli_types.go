@@ -171,6 +171,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
 	"/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
+	"/usage",
 }
 
 // §19 长消息折叠阈值

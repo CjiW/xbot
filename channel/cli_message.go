@@ -167,6 +167,18 @@ func (m *cliModel) appendSystem(content string) {
 	})
 }
 
+// appendSystemMarkdown adds a system message that will be rendered through
+// the glamour markdown renderer (for tables, headers, etc.).
+func (m *cliModel) appendSystemMarkdown(content string) {
+	m.messages = append(m.messages, cliMessage{
+		role:      "system",
+		content:   content,
+		timestamp: time.Now(),
+		dirty:     true,
+		markdown:  true,
+	})
+}
+
 // sendCancel sends a cancel request to the agent and adds a system notification.
 func (m *cliModel) sendCancel() {
 	if m.msgBus != nil {
@@ -965,12 +977,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	systemMsgStyle := s.SystemMsg
 	errorMsgStyle := s.ErrorMsg
 
-	// 渲染 Markdown（仅对 assistant 消息）
+	// 渲染 Markdown（assistant 消息 + 带 markdown 标记的 system 消息）
 	var rendered string
-	if msg.role == "assistant" {
+	if msg.role == "assistant" || (msg.role == "system" && msg.markdown) {
 		// Pre-process: render mermaid code blocks to ASCII art
 		// Truncate to glamour wrap width to prevent wrapping.
-		preprocessed := renderMermaidBlocks(msg.content, m.width-4)
+		preprocessed := msg.content
+		if msg.role == "assistant" {
+			preprocessed = renderMermaidBlocks(msg.content, m.width-4)
+		}
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {

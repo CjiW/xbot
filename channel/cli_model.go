@@ -374,6 +374,9 @@ type cliMessage struct {
 	renderedLines         int  // 渲染后的总行数（每次 dirty 重算）
 	originalRenderedLines int  // fold 前的原始行数（fold 时保存，用于 unfold 判断）
 	folded                bool // 是否折叠
+
+	// --- Markdown rendering for system messages ---
+	markdown bool // when true, system messages go through glamour renderer (e.g. /usage tables)
 }
 
 // newCLIModel 创建 CLI model

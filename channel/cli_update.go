@@ -222,6 +222,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+		// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
+		if m.needFlushQueue {
+			m.needFlushQueue = false
+			cmds = append(cmds, m.flushMessageQueue())
+		}
 
 	case cliTickMsg:
 		// Always refresh bg task count on tick so status bar updates immediately

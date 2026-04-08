@@ -80,7 +80,9 @@ func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	m.textarea.Reset()
 	m.autoExpandInput()
 	m.sendToAgent(content)
-	return nil
+	// Start tick chain for the new agent turn — the previous chain may have
+	// already transitioned to idleTickCmd (3s) after endAgentTurn set typing=false.
+	return tickCmd()
 }
 
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,

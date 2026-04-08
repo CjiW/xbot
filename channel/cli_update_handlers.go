@@ -468,6 +468,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			m.todosDoneCleared = false
 			m.endAgentTurn()
 			m.inputReady = true
+			// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
+			if len(m.messageQueue) > 0 {
+				m.needFlushQueue = true
+			}
 			m.relayoutViewport()
 		}
 	}

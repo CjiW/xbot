@@ -221,7 +221,7 @@ type Agent struct {
 	sandboxMode        string           // "none" or "docker"
 	sandbox            tools.Sandbox    // Sandbox 实例引用（V4 新增）
 	sandboxIdleTimeout time.Duration    // 沙箱空闲超时（0 禁用）
-	directWorkspace    string           // 非空时 workspaceRoot() 直接返回此值（CLI 模式使用，取代 singleUser 的 workspace 短路）
+	directWorkspace    string           // 非空时 workspaceRoot() 直接返回此值（CLI 模式使用）
 	maxConcurrency     int              // 最大并发会话处理数
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
@@ -429,7 +429,6 @@ type Config struct {
 	AgentsDir       string        // Agents 目录（空则使用 WorkDir/.xbot/agents）
 	WorkDir         string        // 工作目录（所有文件相对此目录）
 	PromptFile      string        // 系统提示词模板文件路径（空则使用内置默认值）
-	SingleUser      bool          `json:"single_user"` // Deprecated: no longer used, kept for config file compatibility
 	DirectWorkspace string        `json:"-"`           // 非空时直接作为 workspaceRoot（CLI 模式使用）
 	SandboxMode     string        // 沙箱模式: "none" 或 "docker"（默认 "docker"）
 	Sandbox         tools.Sandbox // Sandbox 实例引用（V4 新增）

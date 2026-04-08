@@ -476,7 +476,6 @@ func main() {
 		AgentsDir:            filepath.Join(xbotDir, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
-		SingleUser:           false, // Deprecated: no longer used
 		SandboxMode:          cfg.Sandbox.Mode,
 		Sandbox:              tools.GetSandbox(),
 		MemoryProvider:       cfg.Agent.MemoryProvider,

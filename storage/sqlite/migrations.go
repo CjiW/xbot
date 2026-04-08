@@ -89,7 +89,7 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
-	// v26: migrate singleUser "default" sender IDs to "cli_user"
+	// v26: migrate legacy "default" sender IDs to "cli_user"
 	if from < 26 {
 		if err := migrateV25ToV26(db.Conn()); err != nil {
 			return fmt.Errorf("migrate to v26: %w", err)

@@ -593,7 +593,7 @@ func (m *cliModel) renderFooter() string {
 	} else {
 		// 就绪态：显示核心快捷键
 		if m.textarea.Value() == "" {
-			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.keyHint("/search", m.locale.FooterSearch), m.ctrlKey("e", m.locale.FooterFold))
+			hints = append(hints, m.ctrlKey("k", m.locale.FooterDelete), m.keyHint("/", m.locale.FooterCommands), m.keyHint("tab", m.locale.FooterComplete), m.ctrlKey("e", m.locale.FooterFold))
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
@@ -613,20 +613,23 @@ func (m *cliModel) renderFooter() string {
 	}
 
 	// §20 使用缓存样式
-	footerText := strings.Join(hints, "  ")
 	helpHint := m.styles.TextMutedSt.Render("/help")
-	footerText = padBetween(footerText, helpHint, m.width)
-
-	// Ensure footer fits on one line. hardWrapRunes is ANSI-aware so it
-	// won't break escape sequences. Take only the first line.
-	if lipgloss.Width(footerText) > m.width {
-		footerText = hardWrapRunes(footerText, m.width)
-		if idx := strings.Index(footerText, "\n"); idx >= 0 {
-			footerText = footerText[:idx]
+	ellipsis := m.styles.TextMutedSt.Render("…")
+	ellipsisW := lipgloss.Width(ellipsis)
+	// Progressively drop hints from the end until the footer fits.
+	// The rightmost "/help" is always preserved; extra hints are trimmed
+	// and replaced with "…" when the terminal is too narrow.
+	for len(hints) > 0 {
+		footerText := strings.Join(hints, "  ")
+		footerText = padBetween(footerText, helpHint, m.width)
+		if lipgloss.Width(footerText) <= m.width {
+			return m.styles.Footer.Width(m.width).Render(footerText)
 		}
+		hints = hints[:len(hints)-1]
 	}
-
-	return m.styles.Footer.Width(m.width).Render(footerText)
+	// Even a single hint overflows — show just "… /help"
+	return m.styles.Footer.Width(m.width).Render(
+		padBetween(ellipsis, helpHint, max(ellipsisW+lipgloss.Width(helpHint)+1, m.width)))
 }
 
 // ctrlKey 渲染 Ctrl+X 快捷键标签（灰色键帽 + 彩色描述）

@@ -75,14 +75,14 @@ pages:
       paths:
         - .cache/go-mod
         - .cache/go-build
-      policy: pull
+      policy: pull-push
     - key:
         files:
           - docs-site/themes/hugo-geekdoc/package-lock.json
         prefix: npm-docs
       paths:
         - docs-site/themes/hugo-geekdoc/node_modules
-      policy: pull
+      policy: pull-push
   variables:
     GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
     GOCACHE: $CI_PROJECT_DIR/.cache/go-build
@@ -92,7 +92,7 @@ pages:
     - curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y -qq nodejs
     - go install github.com/gohugoio/hugo@v${HUGO_VERSION}
   script:
-    - cd docs-site/themes/hugo-geekdoc && npm ci && npm run build
+    - cd docs-site/themes/hugo-geekdoc && npm install && npm run build
     - cd ../../..
     - cd docs-site
     - hugo --minify --baseURL "${CI_PAGES_URL}/"

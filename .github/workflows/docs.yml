@@ -43,7 +43,7 @@ jobs:
 
       - name: Build theme assets
         working-directory: docs-site/themes/hugo-geekdoc
-        run: npm ci && npm run build
+        run: npm install && npm run build
 
       - name: Setup Pages
         id: pages

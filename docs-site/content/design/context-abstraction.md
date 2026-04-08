@@ -6,9 +6,7 @@ weight: 10
 # xbot 上下文管理架构抽象与开关机制设计
 
 > 中书省拟 | 2026-03-19
-> 状态：待门下省审核（v2，修正版）
 > 前置文档：[Phase 1 设计](context-management-design.md)、[Phase 2 设计](context-management-phase2-design.md)
-> v1 审核意见：门下省驳回修改，6 条修改意见（见附录 A）
 
 ---
 
@@ -144,6 +142,10 @@ type ContextManager interface {
     // SessionHook 返回压缩后的 session 持久化钩子（可选，返回 nil 表示无特殊处理）。
     // Phase 2 可能需要在此钩子中做额外操作（如更新话题分区索引）。
     SessionHook() SessionCompressHook
+
+    // SetMemoryTools 注册 memory 相关工具（recall_memory / store_memory）。
+    // ContextManager 需要感知这些工具以在压缩时正确处理记忆消息。
+    SetMemoryTools(tools []Tool)
 }
 
 // ContextStats 上下文统计信息
@@ -864,106 +866,8 @@ func (a *Agent) buildSubAgentRunConfig(...) RunConfig {
 - 当前模式: phase1（运行时覆盖，默认为 phase1）
 ```
 
----
-
-## 三、实现步骤拆解
-
-### 步骤 1：定义接口和配置（1 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 创建 `ContextManager` 接口、`ContextMode`、`ContextStats` 等 | `agent/context_manager.go` | §2.2 完整定义 |
-| 创建 `ContextManagerConfig`（含 `sync.RWMutex`） | `agent/context_manager.go` | §2.3 并发安全配置 |
-| 添加 `AGENT_CONTEXT_MODE` 到 `config.Load()` | `config/config.go` | §2.7.1，与 `AGENT_ENABLE_AUTO_COMPRESS` 同级 |
-| 新增 `resolveContextMode()` | `agent/agent.go` | §2.7.1 向后兼容 |
-| 新增 `GetContextManager()`/`SetContextManager()` | `agent/agent.go` | §2.4 并发安全读写 |
-
-**验证**：`go build ./...` 编译通过
-
-### 步骤 2：提取 compressMessages + 实现 Phase1Manager（1 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 将 `compressContext` 核心逻辑提取为 `compressMessages` 独立函数 | `agent/compress.go` | §2.5.1，消除 Agent 引用 |
-| 保留 `compressContext()` 作为 `compressMessages()` 的 wrapper | `agent/compress.go` | 保持向后兼容 |
-| 创建 `phase1Manager`，调用 `compressMessages` | `agent/context_manager_phase1.go` | §2.5.1 |
-| 实现 `phase1Manager.ContextInfo()` | `agent/context_manager_phase1.go` | 从 `handleContext` 提取统计逻辑 |
-
-**验证**：
-- Phase1Manager 单元测试：`ShouldCompress` 边界值（messages<=3、恰好阈值、超阈值）
-- `compressMessages` 行为与原 `compressContext` 完全一致（可用现有测试对比）
-
-### 步骤 3：实现 noopManager、phase2Manager 和工厂（0.5 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 创建 `noopManager`（ManualCompress 降级到 Phase 1） | `agent/context_manager.go` | §2.5.3 |
-| 创建 `phase2Manager` 空壳 | `agent/context_manager_phase2.go` | §2.5.2 |
-| 实现 `NewContextManager` 工厂 | `agent/context_manager.go` | §2.6 |
-
-**验证**：
-- 工厂函数参数化测试：phase1/phase2/none/""/invalid 全覆盖
-- `noopManager.ManualCompress()` 返回有效结果（不返回 error）
-- `phase2Manager.Compress()` 返回 error，`ManualCompress()` 返回有效结果
-
-### 步骤 4：Agent 集成（1 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 修改 `Agent` 结构体新增字段 | `agent/agent.go` | §2.4 |
-| 修改 `Agent.New()` 初始化 ContextManager | `agent/agent.go` | 调用 `resolveContextMode()` + `NewContextManager()` |
-| 修改 `buildMainRunConfig()` 注入 ContextManager | `agent/engine_wire.go` | §2.7.5 |
-| 修改 `buildSubAgentRunConfig()` 注入 ContextManager | `agent/engine_wire.go` | §2.7.5 SubAgent 共用策略 |
-| 确认 `buildCronRunConfig()` 无需修改 | `agent/engine_wire.go` | Cron 不使用压缩 |
-
-**验证**：
-- 现有行为不变（默认 phase1），所有现有测试通过
-- `Agent.New()` 中 `resolveContextMode` 单元测试
-
-### 步骤 5：改造 /context 命令（0.5 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 修改 `contextCmd.Match()` 支持子命令 | `agent/command_builtin.go` | §2.7.2 |
-| 新增 `contextCmd.Concurrent() bool { return true }` | `agent/command_builtin.go` | §2.7.2 |
-| 将 `handleContext()` 重命名为 `handleContextInfo()` | `agent/context_handler.go` | 输出增加模式信息 |
-| 新增 `handleContextMode()` | `agent/context_handler.go` | §2.7.2 |
-| 删除旧的 `/context` 注册中的方法引用 | `agent/command_builtin.go` | 确保只有一个注册入口 |
-
-**验证**：手动测试全部子命令
-
-### 步骤 6：engine.go maybeCompress 适配（1 天）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 修改 `RunConfig` 新增 `ContextManager` 字段 | `agent/engine.go` | §2.7.3 |
-| 修改 `maybeCompress` 优先使用 ContextManager | `agent/engine.go` | §2.7.3 |
-| 修改输入超限强制压缩路径 | `agent/engine.go` | §2.7.3 |
-| 修改 `handleCompress` 通过 `ManualCompress` 执行 | `agent/compress.go` | §2.7.4 |
-
-**验证**：
-- 自动压缩仍正常触发
-- `/compress` 手动命令在各模式下均正常工作
-- `mode=none` 时不触发自动压缩，但 `/compress` 仍可用
-- 输入超限时强制压缩仍正常工作
-
-### 步骤 7：清理旧字段（0.5 天，可延后）
-
-| 任务 | 文件 | 说明 |
-|------|------|------|
-| 删除 `enableAutoCompress`/`maxContextTokens`/`compressionThreshold` Agent 字段 | `agent/agent.go` | 由 `contextManagerConfig` 完全替代 |
-| 删除 `Agent.Config` 中的旧字段 | `agent/agent.go` | 由 `ContextMode` 替代 |
-| 删除 `CompressConfig` 和 `RunConfig.AutoCompress` | `agent/engine.go` | 由 `ContextManager` 替代 |
-| 清理 engine_wire.go 中的旧兼容代码 | `agent/engine_wire.go` | 移除所有 `AutoCompress` 回退路径 |
-| 删除 `compressContext()` Agent 方法 | `agent/compress.go` | 仅保留 `compressMessages()` 独立函数 |
-
-**验证**：`go build ./...` 编译通过，全部测试通过
-
-**合计工时：5.5 天**
 
 ---
-
-## 四、验证标准
 
 ### 4.1 功能验证
 
@@ -988,26 +892,6 @@ func (a *Agent) buildSubAgentRunConfig(...) RunConfig {
 | 2 | 不设置任何新字段 | 默认 Phase 1，行为不变 |
 | 3 | `/context` 无参数 | 输出格式与现有基本一致，增加模式行 |
 
-### 4.3 单元测试计划
-
-| 测试 | 文件 | 覆盖内容 |
-|------|------|---------|
-| `TestNewContextManager` | `context_manager_test.go` | phase1/phase2/none/""/invalid 五种输入 |
-| `TestContextManagerConfig_EffectiveMode` | `context_manager_test.go` | RuntimeMode 优先级、ResetRuntimeMode |
-| `TestPhase1Manager_ShouldCompress` | `context_manager_phase1_test.go` | 边界值：messages<=3、恰好阈值、超阈值 |
-| `TestNoopManager` | `context_manager_test.go` | ShouldCompress=false、ManualCompress 返回有效结果 |
-| `TestPhase2Manager_ManualCompress` | `context_manager_phase2_test.go` | Compress 返回 error、ManualCompress 降级成功 |
-| `TestResolveContextMode` | `agent_test.go` | 新字段优先级、旧字段兼容、默认值 |
-| `TestContextManagerConfig_Concurrent` | `context_manager_test.go` | 并发 SetRuntimeMode + EffectiveMode（race detector） |
-| `TestGetSetContextManager_Concurrent` | `agent_test.go` | 并发 Get/Set（race detector） |
-
-### 4.4 回滚方案
-
-- 所有旧字段在步骤 1-6 中保留（双写），步骤 7 才删除
-- 如果新架构有问题：在 `NewContextManager()` 中强制 `return newPhase1Manager(cfg)` 即可
-- `AGENT_CONTEXT_MODE` 环境变量是纯新增，不影响现有部署
-- `config.Load()` 中的新字段有默认值（空字符串），空值走旧兼容路径
-
 ---
 
 ## 五、风险与注意
@@ -1018,19 +902,3 @@ func (a *Agent) buildSubAgentRunConfig(...) RunConfig {
 | Phase 2 降级时的用户体验 | 用户切到 Phase 2 期望新功能，实际仍是 Phase 1 | `/context mode phase2` 时明确提示降级；`phase2Manager.Compress` 返回 error 时 `maybeCompress` 降级到 `ManualCompress` |
 | /context 命令改造向后兼容 | 现有 `/context` 输出可能变化 | `/context` 无参数输出格式保持不变，仅末尾增加一行模式信息 |
 | SubAgent 模式继承 | SubAgent 是否应继承父 Agent 模式 | SubAgent 共用主 Agent 的 `ContextManager` 实例（构建时注入），运行时切换影响后续新建的 SubAgent，不影响正在运行的 SubAgent |
-
----
-
-## 附录 A：v1 审核意见与修改对照
-
-| # | 门下省意见 | v2 修改 |
-|---|-----------|---------|
-| 1 | SubAgent ContextManager 策略未明确 | §2.7.5 明确：共用主 Agent 实例，构建时注入，运行时切换不影响正在运行的 SubAgent |
-| 2 | `/compress` 在 `mode=none` 时行为与现有语义冲突 | §2.5.3 `noopManager.ManualCompress` 降级到 Phase 1，`/compress` 始终可用 |
-| 3 | 并发安全仅提及风险无具体实现 | §2.3 `ContextManagerConfig` 用 `sync.RWMutex`；§2.4 `Agent` 新增 `contextManagerMu` + `Get/Set` 方法；§4.3 新增 race detector 测试 |
-| 4 | `config.go` 集成方式与现有 `Load()` 模式不一致 | §2.7.1 改为在 `config.Load()` 中新增 `AGENT_CONTEXT_MODE`，与 `AGENT_ENABLE_AUTO_COMPRESS` 同级 |
-| 5 | 建议消除 `phase1Manager` 对 `*Agent` 的引用 | §2.5.1 提取 `compressMessages` 独立函数，`phase1Manager` 不再持有 `*Agent` |
-| 6 | 缺少单元测试计划 | §4.3 新增 8 项单元测试覆盖工厂、配置、边界值、并发安全 |
-| 额外 | 工时估算偏低 | §三 工时从 3 天调整为 5.5 天 |
-| 额外 | `buildCronRunConfig` 未提及 | §2.7.5 明确：Cron 不使用压缩，无需修改 |
-| 额外 | `handleCompress` 适配细节不足 | §2.7.4 详细说明：保留外壳逻辑，仅替换核心压缩调用 |

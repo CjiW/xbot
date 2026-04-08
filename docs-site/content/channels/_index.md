@@ -1,4 +1,4 @@
 ---
 title: "Channels"
-weight: 0
+weight: 20
 ---

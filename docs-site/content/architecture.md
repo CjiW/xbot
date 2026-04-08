@@ -84,12 +84,13 @@ xbot/
 │   ├── runnerclient/        # Runner 客户端（Runner 端使用）
 │   └── runnerproto/         # Runner 协议定义
 ├── oauth/                   # OAuth 服务
+├── event/                   # 事件系统（Webhook 接收 + Trigger 路由 + 消息注入）
 ├── cron/                    # 定时任务调度
 ├── crypto/                  # 加密工具
 ├── prompt/                  # 嵌入式 Prompt 模板（go:embed）
 ├── version/                 # 版本信息
-├── agents/                  # 嵌入式 Agent 角色定义
-└── web/                     # 前端静态资源（React 19 + Vite + TailwindCSS 4 + Tiptap）
+├── agents/                  # [运行时目录] Agent 角色定义（~/.xbot/agents/），非源码包
+└── web/                     # 前端静态资源（React 19 + Vite + TailwindCSS 4 + Tiptap），独立部署（不使用 go:embed）
 ```
 
 ### 1.4 消息流转路径
@@ -142,6 +143,8 @@ type Channel interface {
 | NapCat | OneBot 11 WebSocket | 指数退避（同 QQ），30s 长连接重置计数 |
 | Web | HTTP + WebSocket | 客户端负责重连；服务端 WS Ping 30s，ReadDeadline 60s，离线 ringBuffer(50) |
 | CLI | 终端 | N/A |
+
+**Web Channel 文件**: `channel/web.go`（核心 + WS）、`channel/web_api.go`（HTTP API）、`channel/web_auth.go`（认证）、`channel/web_file.go`（文件上传）。前端静态文件通过 `SetStaticDir()` 从外部目录提供，**不使用 go:embed**。
 
 ### 1.6 斜杠命令与 Bang 命令
 
@@ -465,7 +468,16 @@ type ToolHook interface {
 
 **Sandbox 接口**: Name, Workspace, Exec, ReadFile, WriteFile, Stat, ReadDir, MkdirAll, Close。
 
+**SandboxRouter** (`tools/sandbox_router.go`): 统一沙箱入口，按用户级别路由到不同的后端。实现了 `Sandbox` 和 `SandboxResolver` 接口。路由规则（per-user，由 `user_settings.active_runner` 决定）:
+- `active_runner == "__docker__"` → DockerSandbox（如启用）
+- `active_runner == 特定远程 Runner 名称` → 对应的 RemoteSandbox 连接（如已连接）
+- 兜底: Remote → Docker → None
+
+支持同时持有 Docker 和 Remote 实例（dual-mode），可按用户独立路由。用户可在设置面板中切换活跃 Runner。
+
 **路由策略**: 优先 Remote Runner → Docker → None。
+
+**Remote Runner / 多 Runner 支持**: RemoteSandbox 支持多个 Runner 同时连接，每个 Runner 有独立名称和 Token。Runner 通过 WebSocket 连接 server，Token 认证（`subtle.ConstantTimeCompare`），支持 `runners` 表管理 Token。Runner 可在用户设置中按名称选择（`active_runner`），实现多用户各自绑定不同 Runner。同步配置支持将 skills/agents 目录同步到 Runner 端。
 
 **DockerSandbox**: 每用户独立容器，stop 不 rm 下次复用，DinD 模式路径翻译。
 

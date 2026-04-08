@@ -1,4 +1,9 @@
 ---
+title: "Web Channel v1 Design [Superseded]"
+weight: 90
+---
+
+---
 title: "Web Channel Design"
 weight: 20
 ---

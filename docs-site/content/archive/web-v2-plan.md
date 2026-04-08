@@ -1,5 +1,5 @@
 ---
-title: "Web Channel v2 Plan"
+title: "Web Channel v2 Plan [Completed]"
 weight: 30
 ---
 

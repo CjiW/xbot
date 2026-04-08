@@ -1,5 +1,5 @@
 ---
-title: "Three Provinces Optimization"
+title: "Three Provinces Optimization [Completed]"
 weight: 10
 ---
 

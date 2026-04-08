@@ -131,39 +131,10 @@ r.RegisterCore(NewFetchTool())
 *⚠️ 内容已截断（已截取 {实际} / {限制} tokens）*
 ```
 
-## 6. 任务拆分
+## 6. 验证方法
 
-| 任务 | 说明 | 状态 | 测试方案 |
-|------|------|------|----------|
-| T1 | 创建 `tools/fetch.go`，实现基础 FetchTool 结构 | ✅ 已完成 | 编译通过 |
-| T2 | 实现 URL 验证逻辑（协议、内网 IP、域名） | ✅ 已完成 | 单元测试：合法/非法 URL |
-| T3 | 实现 HTTP 请求（User-Agent、超时、Content-Type 检查） | ✅ 已完成 | 集成测试 |
-| T4 | 集成 go-readability，提取正文转为 Markdown | ✅ 已完成 | 测试多种网站 |
-| T5 | 集成 tiktoken，支持 max_tokens 参数截断 | ✅ 已完成 | 单元测试：截断边界 |
-| T6 | 添加到 DefaultRegistry | ✅ 已完成 | 编译通过 |
-| T7 | 单元测试（URL 验证、Token 截断） | ✅ 已完成 | 测试覆盖 |
-| T8 | 手动验证（不同类型网站） | ⏳ 待完成 | 手动测试 |
-
-## 7. 验证方法
-
-### 7.1 单元测试
 - URL 验证：合法 URL、非法协议、内网 IP、localhost
 - Token 截断：不同 max_tokens 值的截断行为
-
-### 7.2 手动测试
-```bash
-# 测试获取普通网页
-fetch {"url": "https://example.com"}
-
-# 测试带 token 限制
-fetch {"url": "https://example.com", "max_tokens": 500}
-
-# 测试非法 URL（应拒绝）
-fetch {"url": "http://localhost:8080"}
-fetch {"url": "http://192.168.1.1"}
-```
-
-### 7.3 预期效果
 - 普通网页 → Markdown 格式标题+正文
 - 长页面 → 截断在 max_tokens 处
 - 非法 URL → 友好错误提示

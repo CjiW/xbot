@@ -3,176 +3,257 @@ title: "Sandbox Docker"
 weight: 10
 ---
 
-# Docker 沙箱模式使用指南
+# Sandbox Guide
 
-## 概述
+## Overview
 
-xbot 支持两种沙箱模式：
-- `none` - 无沙箱，直接执行命令
-- `docker` - Docker 容器隔离（默认）
+xbot supports three sandbox modes, managed by a `SandboxRouter` that selects the appropriate backend on a **per-user** basis:
 
-本文档介绍 Docker 模式的使用方法。
+| Mode | Backend | Description |
+|------|---------|-------------|
+| `none` | `NoneSandbox` | No isolation — commands execute directly on the host |
+| `docker` | `DockerSandbox` | Each user gets an isolated Docker container with persistent filesystem |
+| `remote` | `RemoteSandbox` | Commands execute on the user's own machine via WebSocket-connected `xbot-runner` |
 
-## 环境要求
+All three modes can coexist simultaneously. The router decides which backend to use for each user according to the following priority:
 
-1. **安装 Docker**
-   ```bash
-   # Ubuntu/Debian
-   sudo apt-get update
-   sudo apt-get install -y docker.io
+1. If the user has set `active_runner` to the built-in Docker name (`__docker__`) → Docker
+2. If the user has a connected remote runner matching their `active_runner` name → Remote
+3. If the user has any connected remote runner → Remote
+4. Fallback → Docker (if enabled), then None
 
-   # 启动 Docker 服务
-   sudo systemctl start docker
-   sudo systemctl enable docker
+> **Note:** Web users (`web-*` IDs) are blocked from all sandbox access unless `WEB_USER_SERVER_RUNNER=true` is set. They must connect their own remote runner.
 
-   # 将当前用户加入 docker 组（需要重新登录生效）
-   sudo usermod -aG docker $USER
-   ```
+---
 
-2. **配置环境变量**
+## Docker Mode
 
-   在 `.env` 文件中添加：
-   ```bash
-   # 沙箱模式：none / docker
-   SANDBOX_MODE=docker
+Docker mode provides per-user container isolation on the server. Each user gets their own container with a persistent filesystem.
 
-   # Docker 镜像（可选，默认 ubuntu:22.04）
-   SANDBOX_DOCKER_IMAGE=ubuntu:22.04
-   ```
+### Prerequisites
 
-## 工作原理
+```bash
+# Install Docker
+sudo apt-get update && sudo apt-get install -y docker.io
+sudo systemctl start docker && sudo systemctl enable docker
+sudo usermod -aG docker $USER  # re-login required
+```
 
-### 容器隔离
+### Configuration
 
-每个用户拥有独立的 Docker 容器：
-- 容器命名格式：`xbot-{user_id}`
-- 用户之间完全隔离
-- 容器按需创建，启动后保持运行
+```bash
+# .env file
 
-### 环境持久化原理（docker commit）
+# Sandbox mode: none / docker
+SANDBOX_MODE=docker
+
+# Docker image (optional, default: ubuntu:22.04)
+SANDBOX_DOCKER_IMAGE=ubuntu:22.04
+
+# Host working directory (optional)
+HOST_WORK_DIR=/tmp/xbot-work
+
+# Container idle timeout before commit (optional, in minutes)
+SANDBOX_IDLE_TIMEOUT_MINUTES=30
+```
+
+### Container Lifecycle
+
+Each user's container follows this lifecycle:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        生命周期                               │
+│  1. First use                                                │
+│     Base image (e.g. ubuntu:22.04)                           │
+│              │                                                │
+│              ▼                                                │
+│     Create container xbot-{user_id}                           │
+│              │                                                │
+│              ▼                                                │
+│     User operations (apt install, pip install, etc.)         │
 │                                                              │
-│   1. 首次使用                                                │
-│      基础镜像 (ubuntu:22.04)                                  │
-│            │                                                  │
-│            ▼                                                  │
-│      创建容器 xbot-{user_id}                                  │
-│            │                                                  │
-│            ▼                                                  │
-│      用户操作（apt install, pip install 等）                   │
+│  2. On close / idle timeout                                  │
+│     docker export | docker import → xbot-{user_id}:latest    │
+│     stop + rm container                                       │
 │                                                              │
-│   2. 关闭时                                                  │
-│      docker commit xbot-{user_id} xbot-{user_id}:latest     │
-│            │                                                  │
-│            ▼                                                  │
-│      stop + rm 容器                                           │
-│                                                              │
-│   3. 再次使用                                                │
-│      检测到用户镜像 xbot-{user_id}:latest                     │
-│            │                                                  │
-│            ▼                                                  │
-│      用该镜像创建新容器 ── 所有环境完整恢复                     │
+│  3. Next use                                                  │
+│     Detect user image xbot-{user_id}:latest                   │
+│              │                                                │
+│              ▼                                                │
+│     Create new container from user image — env fully restored│
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 为什么安装的软件不会消失？
+### Persistence via Export/Import
 
-xbot 使用 **docker commit** 将容器的完整文件系统保存为用户专属镜像：
+The server uses `docker export | docker import` (piped, no intermediate tar file) to persist the container's filesystem as a user-specific image:
 
-1. **完整持久化** — 所有文件系统变更都会被保存，包括：
-   - `apt-get install` 安装的系统级包
-   - `pip install` / `npm install -g` 等语言级包
-   - 编译安装的软件（`make install`）
-   - 配置文件修改（`.bashrc`、`/etc` 下的配置等）
+- **All filesystem changes are saved**: system packages (`apt-get install`), language packages (`pip install`, `npm install -g`), compiled software, config file edits
+- **Transparent restore**: the next container is created from the committed image automatically
+- **Startup cleanup**: stale export temp files and dangling Docker images are pruned on server start
 
-2. **透明恢复** — 下次创建容器时自动使用已提交的镜像，用户无感知
-
-3. **支持的安装方式**
-   ```bash
-   # 系统包
-   apt-get update && apt-get install -y golang-go python3 git
-
-   # Python 包
-   pip install numpy pandas
-
-   # Node.js 全局包
-   npm install -g typescript
-
-   # 编译安装
-   ./configure && make && make install
-   ```
-
-## 使用示例
-
-### 首次使用：安装开发环境
+### Manual Cleanup
 
 ```bash
-apt-get update
-apt-get install -y wget python3 python3-pip
+# Remove a specific user's container and image
+docker rm -f xbot-{user_id}
+docker rmi xbot-{user_id}:latest
 
-pip install numpy pandas
-```
-
-### 后续使用：环境已就绪
-
-再次启动时，已安装的工具可以直接使用：
-```bash
-python3 -c "import numpy; print(numpy.__version__)"
-```
-
-## 容器生命周期
-
-- **按需创建**：首次执行命令时自动创建容器
-- **持续运行**：容器保持运行状态（`tail -f /dev/null`）
-- **自动恢复**：容器停止后自动启动（通过 `docker start`）
-- **自动提交**：xbot 关闭时自动 `docker commit` 保存环境
-- **手动清理**：如需重置环境，删除容器和用户镜像：
-  ```bash
-  docker rm -f xbot-{user_id}
-  docker rmi xbot-{user_id}:latest
-  ```
-
-## 故障排查
-
-### Docker 命令不可用
-
-```bash
-# 检查 Docker 服务状态
-sudo systemctl status docker
-
-# 检查当前用户是否有 Docker 权限
-docker ps
-```
-
-### 容器创建失败
-
-```bash
-# 查看容器日志
-docker logs xbot-{user_id}
-
-# 检查镜像是否存在
-docker images
-```
-
-### 清理所有用户的容器和镜像
-
-```bash
-# 列出所有 xbot 容器
+# List all xbot containers
 docker ps -a --filter "name=xbot-"
 
-# 删除所有 xbot 容器
+# Bulk cleanup
 docker rm -f $(docker ps -aq --filter "name=xbot-")
-
-# 删除所有 xbot 用户镜像
 docker rmi $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^xbot-')
 ```
 
-## 性能考量
+### Troubleshooting
 
-- **冷启动**：首次执行需要拉取镜像和创建容器（约 10-30 秒）
-- **热执行**：容器运行后，命令执行与直接执行无明显差异
-- **docker commit**：通常在 1-2 秒内完成（仅保存文件系统差异层）
-- **资源占用**：每个活跃用户占用一个容器，用户镜像占用磁盘空间（增量存储）
+```bash
+# Check Docker service
+sudo systemctl status docker
+
+# Check permissions
+docker ps
+
+# View container logs
+docker logs xbot-{user_id}
+
+# List images
+docker images
+```
+
+---
+
+## Remote Runner Mode
+
+Remote runner mode lets users connect their own machine as an execution environment via WebSocket. The server manages runners and routes commands to them.
+
+### Architecture
+
+```
+┌──────────────┐         WebSocket          ┌──────────────────┐
+│  xbot server │◄──────────────────────────►│  xbot-runner     │
+│              │   /ws/{user_id}            │  (user's machine)│
+│  RemoteSandbox                            │                  │
+│  (router)    │  commands, file ops, LLM   │  native / docker │
+└──────────────┘                            └──────────────────┘
+```
+
+The `xbot-runner` binary connects to the server's WebSocket endpoint and executes commands locally or inside a local Docker container.
+
+### Runner Modes
+
+Each `xbot-runner` instance can operate in one of two modes:
+
+| Runner Mode | Flag | Description |
+|-------------|------|-------------|
+| `native` | `--mode native` (default) | Commands execute directly on the runner's host |
+| `docker` | `--mode docker --docker-image <image>` | Commands execute inside a local Docker container on the runner's machine |
+
+### Connecting a Runner
+
+1. **Create a runner** via the runner management API (see below). This generates a token and a connect command.
+2. **Run the connect command** on the user's machine:
+   ```bash
+   ./xbot-runner --server <server-url>/ws/<user-id> --token <token>
+   ```
+3. The runner auto-detects its user ID from the server URL path, or set it explicitly with `--user-id`.
+
+### Runner CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server` | *(required)* | WebSocket server URL |
+| `--token` | *(required)* | Authentication token |
+| `--user-id` | *(from URL)* | User ID |
+| `--workspace` | `/workspace` | Workspace root directory |
+| `--mode` | `native` | Runner mode: `native` or `docker` |
+| `--docker-image` | `ubuntu:22.04` | Docker image (docker mode) |
+| `--full-control` | `false` | Disable path restrictions |
+| `--v` | `false` | Verbose logging |
+| `--llm-provider` | | LLM provider (`openai`, `anthropic`, etc.) |
+| `--llm-api-key` | | LLM API key |
+| `--llm-model` | | LLM model name |
+| `--llm-base-url` | | Custom LLM API base URL |
+
+### Multi-Runner Support
+
+Each user can register **multiple runners** with different names. The server tracks which runner is active per user via `user_settings.active_runner`. The `SandboxRouter` routes commands to the user's active runner.
+
+When a runner connects, the server automatically **syncs** global skills and agent definitions from the server to the runner's workspace, ensuring the runner has the same tools available.
+
+### Runner Management API
+
+The server exposes these management functions (used by the web UI and agent tools):
+
+| Operation | Description |
+|-----------|-------------|
+| `RunnerList` | List all runners for a user, including online status and the built-in Docker runner |
+| `RunnerCreate` | Create a new named runner, returns token and connect command |
+| `RunnerDelete` | Delete a runner and disconnect it if online |
+| `RunnerGetActive` | Get the currently active runner name |
+| `RunnerSetActive` | Set the active runner for routing |
+
+When creating a runner, the returned command includes all necessary flags (mode, workspace, LLM config if specified).
+
+### Reconnection
+
+The runner uses exponential backoff (`1s` → `60s` max) with infinite retries on connection failure.
+
+---
+
+## ProxyLLM
+
+Runners can optionally serve as **LLM proxies** — when a runner has local LLM configuration, the server transparently forwards LLM API calls through the runner instead of calling the LLM provider directly.
+
+### How It Works
+
+1. A runner is created with LLM settings (`--llm-provider`, `--llm-model`, `--llm-api-key`, `--llm-base-url`), or LLM settings are configured later via the web UI.
+2. When the runner connects, the server detects its LLM capability and stores the configuration.
+3. When the agent processes a request for that user, `injectProxyLLM` checks if the user's active runner has LLM configured.
+4. If so, a `ProxyLLM` wrapper is injected into the agent's LLM factory:
+   - **`GenerateFunc`**: LLM generate requests are forwarded to the runner via WebSocket (`LLMGenerate`)
+   - **`ListModelsFunc`**: Model listing is forwarded to the runner (`LLMModels`)
+5. If the runner disconnects or has no LLM config, the proxy is cleared and the server's own LLM is used.
+
+### Use Cases
+
+- Users who want to use their own API keys without sharing them with the server
+- Runners behind firewalls that can access private LLM endpoints
+- Per-user LLM provider/model customization
+
+---
+
+## Configuration Reference
+
+### Sandbox Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SANDBOX_MODE` | `none` | Primary sandbox mode: `none`, `docker`, or `remote` |
+| `SANDBOX_REMOTE_MODE` | | Set to `remote` to enable remote runner WebSocket server alongside Docker |
+| `SANDBOX_DOCKER_IMAGE` | `ubuntu:22.04` | Docker image for container creation |
+| `HOST_WORK_DIR` | | Host directory for sandbox working files |
+| `SANDBOX_IDLE_TIMEOUT_MINUTES` | | Container idle timeout before auto-commit (in minutes) |
+| `SANDBOX_WS_PORT` | `8080` | WebSocket listen port for remote runner connections |
+| `SANDBOX_AUTH_TOKEN` | | Global auth token for runner authentication (when not using per-user tokens) |
+| `SANDBOX_PUBLIC_URL` | | Public URL of the server, used to construct runner connect commands |
+| `WEB_USER_SERVER_RUNNER` | `false` | Allow web users to use server-side Docker sandbox (default: denied) |
+
+### Mode Combinations
+
+| `SANDBOX_MODE` | `SANDBOX_REMOTE_MODE` | Docker | Remote | Effect |
+|----------------|----------------------|--------|--------|--------|
+| `docker` | *(unset)* | ✅ | ❌ | Docker only |
+| `none` | `remote` | ❌ | ✅ | Remote only |
+| `docker` | `remote` | ✅ | ✅ | Both (router selects per user) |
+| `none` | *(unset)* | ❌ | ❌ | No sandbox (NoneSandbox) |
+
+### Docker-Specific Notes
+
+- **Cold start**: First execution requires pulling the image and creating a container (~10–30 seconds)
+- **Hot execution**: Once running, command execution has negligible overhead
+- **Export/import**: Typically completes in 1–2 seconds (only filesystem diff layers)
+- **Resource usage**: Each active user occupies one container; user images consume disk space (incremental storage)
+- **Stale cleanup**: On server start, temp export files older than 10 minutes and dangling Docker images are automatically pruned

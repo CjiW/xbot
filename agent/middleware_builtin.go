@@ -122,7 +122,7 @@ func (m *PermissionControlMiddleware) Process(mc *MessageContext) error {
 		fmt.Fprintf(&sb, "- Use `run_as: %q` for routine operations\n", config.DefaultUser)
 	}
 	if config.PrivilegedUser != "" {
-		sb.WriteString(fmt.Sprintf("- Use `run_as: %q` ONLY when the task genuinely requires elevated privileges\n", config.PrivilegedUser))
+		fmt.Fprintf(&sb, "- Use `run_as: %q` ONLY when the task genuinely requires elevated privileges\n", config.PrivilegedUser)
 		sb.WriteString("- Always explain WHY you need the privileged user when requesting it\n")
 	}
 

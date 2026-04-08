@@ -45,13 +45,13 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 	}
 
 	_, err := conn.Exec(`
-		INSERT INTO session_messages
-		(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, display_only, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+			INSERT INTO session_messages
+			(tenant_id, role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, display_only, reasoning_content, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
 		tenantID, msg.Role, msg.Content,
 		msg.ToolCallID, msg.ToolName, msg.ToolArguments,
-		toolCallsJSON, msg.Detail, displayOnly,
+		toolCallsJSON, msg.Detail, displayOnly, msg.ReasoningContent,
 		ts.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -118,18 +118,18 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 	var rows *sql.Rows
 	if boundaryID.Valid {
 		rows, err = conn.Query(`
-			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
-			FROM session_messages
-			WHERE tenant_id = ? AND id >= ? AND COALESCE(display_only, 0) = 0
-			ORDER BY id ASC
-		`, tenantID, boundaryID.Int64)
+			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, reasoning_content, created_at
+				FROM session_messages
+				WHERE tenant_id = ? AND id >= ? AND COALESCE(display_only, 0) = 0
+				ORDER BY id ASC
+			`, tenantID, boundaryID.Int64)
 	} else {
 		rows, err = conn.Query(`
-			SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
-			FROM session_messages
-			WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
-			ORDER BY id ASC
-		`, tenantID)
+				SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, reasoning_content, created_at
+				FROM session_messages
+				WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
+				ORDER BY id ASC
+			`, tenantID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query session history: %w", err)
@@ -150,7 +150,7 @@ func (s *SessionService) GetHistory(tenantID int64, limit int) ([]llm.ChatMessag
 func (s *SessionService) GetAllMessages(tenantID int64) ([]llm.ChatMessage, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, created_at
+		SELECT role, content, tool_call_id, tool_name, tool_arguments, tool_calls, detail, reasoning_content, created_at
 		FROM session_messages
 		WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
 		ORDER BY id ASC
@@ -285,13 +285,13 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 	for rows.Next() {
 		var msg llm.ChatMessage
 		var toolCallsJSON, detailJSON sql.NullString
-		var toolCallID, toolName, toolArguments sql.NullString
+		var toolCallID, toolName, toolArguments, reasoningContent sql.NullString
 		var createdAt string
 
 		err := rows.Scan(
 			&msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolArguments,
-			&toolCallsJSON, &detailJSON, &createdAt,
+			&toolCallsJSON, &detailJSON, &reasoningContent, &createdAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
@@ -313,6 +313,9 @@ func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error)
 			if err := json.Unmarshal([]byte(toolCallsJSON.String), &msg.ToolCalls); err != nil {
 				log.WithError(err).Warn("Failed to unmarshal tool_calls, skipping")
 			}
+		}
+		if reasoningContent.Valid {
+			msg.ReasoningContent = reasoningContent.String
 		}
 
 		msg.Timestamp = internal.ParseTimestamp(createdAt)

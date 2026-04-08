@@ -103,6 +103,13 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v28: add reasoning_content to session_messages
+	if from < 28 {
+		if err := migrateV27ToV28(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v28: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -912,5 +919,23 @@ func migrateV26ToV27(conn *sql.DB) error {
 		return fmt.Errorf("update schema version: %w", err)
 	}
 	log.Info("Database migrated to v27: added max_context, max_output_tokens, thinking_mode to user_llm_subscriptions")
+	return nil
+}
+
+// migrateV27ToV28 adds reasoning_content column to session_messages
+// so the model's thinking chain persists across restarts.
+func migrateV27ToV28(conn *sql.DB) error {
+	var count int
+	err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('session_messages') WHERE name = 'reasoning_content'").Scan(&count)
+	if err == nil && count == 0 {
+		_, err = conn.Exec("ALTER TABLE session_messages ADD COLUMN reasoning_content TEXT DEFAULT ''")
+		if err != nil {
+			return fmt.Errorf("migrate v27->v28 add reasoning_content: %w", err)
+		}
+	}
+	if _, err := conn.Exec("UPDATE schema_version SET version = 28"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	log.Info("Database migrated to v28: added reasoning_content to session_messages")
 	return nil
 }

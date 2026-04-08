@@ -11,6 +11,7 @@ import (
 
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/prompt"
 )
 
 // PromptData 模板渲染数据
@@ -19,6 +20,13 @@ type PromptData struct {
 	WorkDir        string
 	CWD            string // 当前工作目录（始终有值，默认等于 WorkDir）
 	MemoryProvider string // "flat" or "letta"
+	Identity       string
+	Behavior       string
+	Tools          string
+	Memory         string
+	Environment    string
+	ResponseRules  string
+	CodeRules      string
 }
 
 // PromptLoader 负责加载和渲染系统提示词模板
@@ -121,6 +129,7 @@ func (pl *PromptLoader) reload() {
 // 每次调用时检查文件是否更新，支持热加载
 func (pl *PromptLoader) Render(data PromptData) string {
 	pl.reload()
+	data = enrichPromptData(data)
 
 	pl.mu.RLock()
 	tmpl := pl.tmpl
@@ -134,6 +143,24 @@ func (pl *PromptLoader) Render(data PromptData) string {
 			data.Channel, data.WorkDir)
 	}
 	return buf.String()
+}
+
+func enrichPromptData(data PromptData) PromptData {
+	data.Identity = prompt.Identity
+	data.Behavior = prompt.Behavior
+	data.Environment = prompt.Environment
+	data.ResponseRules = prompt.ResponseRules
+	data.CodeRules = prompt.CodeRules
+
+	switch data.MemoryProvider {
+	case "letta":
+		data.Tools = prompt.ToolsLetta
+		data.Memory = prompt.MemoryLetta
+	default:
+		data.Tools = prompt.ToolsFlat
+		data.Memory = ""
+	}
+	return data
 }
 
 // initPipelines 初始化 Agent 的消息构建管道。

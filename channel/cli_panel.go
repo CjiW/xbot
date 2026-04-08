@@ -1539,6 +1539,8 @@ func (m *cliModel) applyQuickSwitch() {
 		if m.llmSubscriber != nil {
 			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
 			m.cachedModelName = selected.Model
+			// Update quickSwitchList so the panel reflects the new model
+			m.updateQuickSwitchModels(selected.Model)
 			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
 		}
 	}
@@ -1576,10 +1578,23 @@ func (m *cliModel) renameQuickSwitchEntry() {
 	})
 }
 
-// viewQuickSwitch renders the quick switch overlay as a centered panel.
+
+// updateQuickSwitchModels updates the model field in quickSwitchList for the active subscription.
+func (m *cliModel) updateQuickSwitchModels(newModel string) {
+if len(m.quickSwitchList) == 0 {
+return
+}
+for i := range m.quickSwitchList {
+if m.quickSwitchList[i].Active {
+m.quickSwitchList[i].Model = newModel
+return
+}
+}
+}
+
 func (m *cliModel) viewQuickSwitch(width, height int) string {
 	if m.quickSwitchMode == "" || len(m.quickSwitchList) == 0 {
-		return ""
+	return ""
 	}
 
 	title := "Switch Subscription"

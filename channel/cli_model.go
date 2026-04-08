@@ -134,6 +134,8 @@ func (m *cliModel) cycleModel() {
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
+	// Update quickSwitch panel models so UI stays consistent
+	m.updateQuickSwitchModels(nextModel)
 }
 
 // tickerTickMsg 是 ticker 定时 tick 消息

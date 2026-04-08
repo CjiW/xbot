@@ -1377,7 +1377,6 @@ func (m *cliModel) fullRebuild() {
 	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
 	m.msgLineOffsets = m.msgLineOffsets[:0]
 	runningLines := 0
-	prevLen := 0
 	// §9 Ctrl+K 红线：记录红线在折行后的 viewport 行号
 	var redLineWrappedPos = -1
 	for i := range m.messages[:splitIdx] {
@@ -1390,20 +1389,25 @@ func (m *cliModel) fullRebuild() {
 			m.messages[i].dirty = false
 			m.messages[i].renderWidth = m.width
 		}
+		// Build per-message chunk for line counting (avoids calling
+		// historyBuf.String() on every iteration — the O(N²) full
+		// buffer copy caused 100% CPU during resize with many messages).
+		chunk := m.messages[i].rendered
 		// §21 搜索高亮：匹配消息前插入指示条
 		if m.searchMode && m.isSearchMatch(i) {
 			indicator := m.styles.SearchIndicator.Render("▸ ")
 			historyBuf.WriteString(indicator)
+			chunk = indicator + chunk
 		}
 		historyBuf.WriteString(m.messages[i].rendered)
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
-			redLineWrappedPos = runningLines + wrappedLineCount(historyBuf.String()[prevLen:], m.width)
-			historyBuf.WriteString(m.renderDeleteBoundaryLine())
+			boundary := m.renderDeleteBoundaryLine()
+			redLineWrappedPos = runningLines + wrappedLineCount(chunk+"\n"+boundary, m.width)
+			historyBuf.WriteString(boundary)
 		}
 		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
-		runningLines += wrappedLineCount(historyBuf.String()[prevLen:], m.width)
-		prevLen = historyBuf.Len()
+		runningLines += wrappedLineCount(chunk, m.width)
 	}
 
 	m.cachedHistory = historyBuf.String()

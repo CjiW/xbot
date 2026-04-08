@@ -534,7 +534,13 @@ func (m *cliModel) updateDangerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 
 	// Item selection mode
 	switch {
-	case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
+	case msg.Code == tea.KeyEsc:
+		// ESC goes back to settings (parent panel), not close everything
+		m.panelMode = "settings"
+		m.relayoutViewport()
+		return true, m, nil
+
+	case msg.String() == "ctrl+c":
 		return m.closePanelAndResume()
 
 	case msg.Code == tea.KeyUp:
@@ -1630,6 +1636,44 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 	b.WriteString(hint)
 
 	return b.String()
+}
+
+// handleQuickSwitchKey handles key events for the quick switch overlay.
+// Returns (handled, cmd). Called from Update() BEFORE panelMode check
+// so quick switch has higher priority than panels.
+func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.quickSwitchMode == "" {
+		return false, nil
+	}
+	switch msg.Code {
+	case tea.KeyEsc:
+		m.quickSwitchMode = ""
+		return true, nil
+	case tea.KeyUp:
+		if m.quickSwitchCursor > 0 {
+			m.quickSwitchCursor--
+		}
+		return true, nil
+	case tea.KeyDown:
+		if m.quickSwitchCursor < len(m.quickSwitchList)-1 {
+			m.quickSwitchCursor++
+		}
+		return true, nil
+	case tea.KeyEnter:
+		m.applyQuickSwitch()
+		if len(m.pendingCmds) > 0 {
+			pending := m.pendingCmds
+			m.pendingCmds = nil
+			return true, tea.Batch(pending...)
+		}
+		return true, nil
+	}
+	// E: rename selected subscription
+	if msg.String() == "e" {
+		m.renameQuickSwitchEntry()
+		return true, nil
+	}
+	return true, nil // block all other keys
 }
 
 // UpdateConfig updates the live LLM configuration (model, base_url).

@@ -386,17 +386,6 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	// --- 透传命令（发送到 agent） ---
-	case "/model":
-		// /model <name> → /set-model <name>
-		if len(parts) < 2 {
-			m.showSystemMsg(m.locale.ModelUsage, feedbackWarning)
-		} else {
-			m.sendToAgent(fmt.Sprintf("/set-model %s", strings.Join(parts[1:], " ")))
-		}
-
-	case "/models":
-		m.sendToAgent("/models")
-
 	case "/context":
 		m.sendToAgent(cmd) // 直接透传，agent 层会解析
 

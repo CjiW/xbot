@@ -2,7 +2,6 @@ stages:
   - lint
   - test
   - build
-  - pages
 
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE
@@ -67,7 +66,7 @@ build:
 
 # Docs / GitLab Pages
 pages:
-  stage: pages
+  stage: build
   image: golang:1.26
   tags:
     - linux-x86

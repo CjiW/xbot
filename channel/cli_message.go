@@ -1586,9 +1586,10 @@ func idleTickCmd() tea.Cmd {
 	})
 }
 
-// tickerCmd returns a command that advances the animation ticker frame.
-func tickerCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-		return tickerTickMsg{}
-	})
-}
+// tickerCmd is deprecated — ticker is now driven by cliTickMsg.
+// Kept for reference only.
+// func tickerCmd() tea.Cmd {
+// 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+// 		return tickerTickMsg{}
+// 	})
+// }

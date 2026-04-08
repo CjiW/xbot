@@ -245,7 +245,7 @@ func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
 	}
 	m.closePanel()
 	if m.typing {
-		return true, m, tea.Batch(tickerCmd(), tickCmd())
+		return true, m, tickCmd()
 	}
 	return true, m, nil
 }
@@ -257,7 +257,7 @@ func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
 func (m *cliModel) closePanelAndResume() (bool, tea.Model, tea.Cmd) {
 	m.closePanel()
 	if m.typing {
-		return true, m, tea.Batch(tickerCmd(), tickCmd())
+		return true, m, tickCmd()
 	}
 	return true, m, nil
 }

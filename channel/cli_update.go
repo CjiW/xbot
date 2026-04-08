@@ -98,7 +98,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.String() == "ctrl+c" && m.typing {
 			m.closePanel()
 			m.sendCancel()
-			return m, tea.Batch(tickerCmd(), tickCmd())
+			return m, tickCmd()
 		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
@@ -245,6 +245,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, idleTickCmd())
 		}
 		if busy {
+			// Advance spinner frame on every tick so the animation stays in sync
+			// with elapsed time display. Previously driven by a separate tickerTickMsg
+			// chain that could break when m.progress briefly went nil.
+			m.ticker.tick()
 			m.updateViewportContent()
 		}
 
@@ -265,12 +269,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleUpdateCheck(msg)
 
 	case tickerTickMsg:
-		// Ticker tick: advance frame and trigger viewport refresh
-		if m.typing || m.progress != nil {
-			m.ticker.tick()
-			cmds = append(cmds, tickerCmd())
-			m.updateViewportContent()
-		}
+		// Legacy: ticker is now driven by cliTickMsg. Drop stale messages.
 
 	case splashTickMsg:
 		return m.handleSplashTick(msg)
@@ -305,9 +304,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
-	// Kick off ticker + tick chains when processing just started
+	// Kick off tick chain when processing just started
 	if m.typing && !wasTyping {
-		cmds = append(cmds, tickerCmd(), tickCmd())
+		cmds = append(cmds, tickCmd())
 	}
 
 	// 更新 viewport

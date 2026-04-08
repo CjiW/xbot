@@ -603,6 +603,16 @@ func (a *Agent) buildSubAgentRunConfig(
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
 	}
 
+	// Per-user token usage tracking：SubAgent 的 token 消耗归属原始用户
+	cfg.RecordUserTokenUsage = func(senderID, model string, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(originUserID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount); err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"sender_id":    originUserID,
+				"sub_agent_id": subAgentID,
+			}).Warn("Failed to record SubAgent token usage")
+		}
+	}
+
 	// 独立 sessionKey：使用 subAgentID 确保与父 Agent 隔离，
 	// 避免工具激活、OffloadStore、MaskStore 等按 sessionKey 索引的数据污染。
 	cfg.SessionKey = subAgentID

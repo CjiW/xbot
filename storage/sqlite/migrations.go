@@ -855,6 +855,7 @@ func migrateV25ToV26(conn *sql.DB) error {
 	// Tables with user_id column
 	userIDTables := []string{
 		"core_memory_blocks",
+		"runners",
 	}
 	for _, table := range userIDTables {
 		_, err := tx.Exec(

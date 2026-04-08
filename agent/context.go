@@ -25,7 +25,6 @@ type PromptData struct {
 	Tools          string
 	Memory         string
 	Environment    string
-	ResponseRules  string
 	CodeRules      string
 }
 
@@ -149,7 +148,6 @@ func enrichPromptData(data PromptData) PromptData {
 	data.Identity = prompt.Identity
 	data.Behavior = prompt.Behavior
 	data.Environment = prompt.Environment
-	data.ResponseRules = prompt.ResponseRules
 	data.CodeRules = prompt.CodeRules
 
 	switch data.MemoryProvider {

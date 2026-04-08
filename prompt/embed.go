@@ -20,9 +20,6 @@ var Behavior string
 //go:embed base/environment.md
 var Environment string
 
-//go:embed base/response_rules.md
-var ResponseRules string
-
 //go:embed base/code_rules.md
 var CodeRules string
 

@@ -290,6 +290,7 @@ func (m *cliModel) View() tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion // enable mouse wheel as MouseWheelMsg (not KeyUp/KeyDown)
 
 	// §15 Quick switch overlay (subscription/model picker)
 	// Rendered as a centered panel replacing the entire view.

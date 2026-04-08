@@ -402,11 +402,11 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
-	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
-	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
-	// 左右方向键不绑定——内容已 hardWrap，无需水平滚动
-	vp.KeyMap.Up.SetKeys("up")
-	vp.KeyMap.Down.SetKeys("down")
+	// 禁用 viewport 的键盘快捷键，避免和用户输入冲突
+	// 滚动通过鼠标滚轮实现（MouseWheelEnabled 默认已开启，View 设置 MouseModeCellMotion）
+	// 方向键保留给 textarea 光标移动和输入历史浏览
+	vp.KeyMap.Up.SetKeys()
+	vp.KeyMap.Down.SetKeys()
 	vp.KeyMap.Left.SetKeys()
 	vp.KeyMap.Right.SetKeys()
 	vp.KeyMap.PageUp.SetKeys("pgup")

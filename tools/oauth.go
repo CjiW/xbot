@@ -43,11 +43,14 @@ func (t *OAuthTool) Parameters() []llm.ToolParam {
 			Required:    true,
 		},
 		{
-			Name:        "scopes",
-			Type:        "array",
-			Description: "OAuth scopes (LEAVE EMPTY to use default scopes which cover all common operations)",
-			Required:    false,
-		},
+				Name:        "scopes",
+				Type:        "array",
+				Description: "OAuth scopes (LEAVE EMPTY to use default scopes which cover all common operations)",
+				Required:    false,
+				Items: &llm.ToolParamItems{
+					Type: "string",
+				},
+			},
 	}
 }
 

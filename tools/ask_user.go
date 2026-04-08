@@ -25,6 +25,14 @@ func (t *AskUserTool) Parameters() []llm.ToolParam {
 			Type:        "array",
 			Description: `Array of questions to ask the user. Each item is an object with "question" (string, required, supports multi-line) and "options" (array of strings, optional) fields. Example: [{"question":"Choose a theme","options":["dark","light"]},{"question":"Any other preferences?"}]`,
 			Required:    true,
+			Items: &llm.ToolParamItems{
+				Type:       "object",
+				Properties: map[string]any{
+					"question": map[string]any{"type": "string", "description": "The question to ask the user (supports multi-line)"},
+					"options":  map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "Optional choices for multiple-choice questions"},
+				},
+				Required: []string{"question"},
+			},
 		},
 	}
 }

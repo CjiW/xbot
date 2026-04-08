@@ -567,13 +567,10 @@ func (a *Agent) buildSubAgentRunConfig(
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
-	// Stream — 继承父 Agent 的流式输出设置
-	var stream bool
-	if a.settingsSvc != nil {
-		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-			stream = vals["enable_stream"] == "true"
-		}
-	}
+	// Stream — 直接从父 Agent 继承（父 Agent 已在 buildBaseRunConfig 中解析过 enable_stream 设置）。
+	// 不能重新查 settingsSvc，因为 OriginUserID 是沙箱用户 ID（可能是归一化后的 "default"），
+	// 而 settings 是按原始 senderID（如 "cli_user"）存储的。
+	stream := parentCtx.Stream
 
 	cfg := RunConfig{
 		LLMClient:    llmClient,

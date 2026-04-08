@@ -599,6 +599,9 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 		// 工具注册表
 		Registry: cfg.Tools,
+
+		// 流式设置继承
+		Stream: cfg.Stream,
 	}
 
 	// 注入 SpawnAgent（包装为 SubAgentManager 接口）

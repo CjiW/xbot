@@ -59,6 +59,10 @@ type ToolContext struct {
 	CurrentDir    string           // 当前工作目录（优先级高于 WorkspaceRoot）
 	SetCurrentDir func(dir string) // 更新 session 中的 cwd
 
+	// Stream indicates whether the parent Agent is using streaming LLM calls.
+	// SubAgents inherit this from the parent to ensure consistent behavior.
+	Stream bool
+
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *BackgroundTaskManager
 	// SessionKey for task scoping (set by engine, not via RunConfig)

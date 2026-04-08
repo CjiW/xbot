@@ -157,6 +157,7 @@ type UILocale struct {
 	// --- N. Message queue ---
 	MessageQueued   string // "⏳ Message queued (%d pending)"
 	MessageQueuedUp string // "⏳ Message queued (%d pending) — ↑ to recall · Esc to cancel"
+	QueuePending    string // "📬 %d queued" — persistent status bar indicator
 
 	// --- I. Dynamic arrays ---
 	ThinkingVerbs    []string // spinner verbs: Thinking, Reasoning, ...
@@ -365,6 +366,7 @@ func localeZH() *UILocale {
 		// --- N. Message queue ---
 		MessageQueued:   "⏳ 消息已排队（%d 条待发送）",
 		MessageQueuedUp: "⏳ 消息已排队（%d 条待发送）— ↑ 追回编辑 · Esc 撤销",
+		QueuePending:    "📬 %d 条排队中",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推理中", "分析中", "考虑中", "评估中", "反思中", "处理中", "沉思中"},
@@ -718,6 +720,7 @@ func localeEN() *UILocale {
 		// --- N. Message queue ---
 		MessageQueued:   "⏳ Message queued (%d pending)",
 		MessageQueuedUp: "⏳ Message queued (%d pending) — ↑ to recall · Esc to cancel",
+		QueuePending:    "📬 %d queued",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"Thinking", "Reasoning", "Analyzing", "Considering", "Evaluating", "Reflecting", "Processing", "Contemplating"},
@@ -1071,6 +1074,7 @@ func localeJA() *UILocale {
 		// --- N. Message queue ---
 		MessageQueued:   "⏳ メッセージをキューに入れました（%d 件保留中）",
 		MessageQueuedUp: "⏳ メッセージをキューに入れました（%d 件保留中）— ↑ 編集 · Esc キャンセル",
+		QueuePending:    "📬 %d 件キュー中",
 
 		// --- I. Dynamic arrays ---
 		ThinkingVerbs: []string{"思考中", "推論中", "分析中", "検討中", "評価中", "振り返り", "処理中", "熟考中"},

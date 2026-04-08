@@ -74,6 +74,7 @@ type runState struct {
 	localLLMCalls     int
 	localInputTokens  int
 	localOutputTokens int
+	localCachedTokens int
 
 	// Progress
 	progressLines      []string
@@ -218,10 +219,22 @@ func (s *runState) cleanupTodos() {
 // recordMetrics records conversation metrics. Called via defer from Run().
 func (s *runState) recordMetrics() {
 	GlobalMetrics.RecordConversation(s.localIterCount, s.localToolCalls, s.localLLMCalls, s.localInputTokens, s.localOutputTokens)
-	if s.cfg.RecordUserTokenUsage != nil && s.cfg.OriginUserID != "" {
-		s.cfg.RecordUserTokenUsage(s.cfg.OriginUserID, s.localInputTokens, s.localOutputTokens, 1, s.localLLMCalls)
+	if s.cfg.RecordUserTokenUsage != nil && s.cfg.SenderID != "" {
+		s.cfg.RecordUserTokenUsage(s.cfg.SenderID, s.cfg.Model, s.localInputTokens, s.localOutputTokens, s.localCachedTokens, 1, s.localLLMCalls)
 	}
 	GlobalMetrics.ClearRecallTracking()
+}
+
+// accumulateCompressUsage adds compression LLM token usage to the local counters
+// so they are included in recordMetrics (and thus /usage).
+func (s *runState) accumulateCompressUsage(result *CompressResult) {
+	if result == nil {
+		return
+	}
+	s.localLLMCalls += result.LLMCalls
+	s.localInputTokens += int(result.InputTokens)
+	s.localOutputTokens += int(result.OutputTokens)
+	s.localCachedTokens += int(result.CachedTokens)
 }
 
 // syncMessages syncs the ContextEditor reference when messages are reassigned.
@@ -383,6 +396,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		s.hadLLMCall = true
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
+		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 	}
 
 	if err != nil && llm.IsInputTooLongError(err) && len(s.messages) > 3 {
@@ -415,6 +429,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		log.Ctx(ctx).WithError(compressErr).Warn("Forced context compression after input-too-long failed")
 		return nil, compressErr
 	}
+	s.accumulateCompressUsage(result)
 
 	s.messages = s.syncMessages(result.LLMView)
 	s.lastPromptTokens = 0
@@ -457,6 +472,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.hadLLMCall = true
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
+		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 	}
 	return response, err
 }
@@ -525,6 +541,7 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				if compressErr != nil {
 					log.Ctx(ctx).WithError(compressErr).Warn("Forced compression failed after context_window_exceeded")
 				} else {
+					s.accumulateCompressUsage(result)
 					s.messages = s.syncMessages(result.LLMView)
 					s.lastPromptTokens = 0
 					s.lastCompletionTokens = 0
@@ -715,6 +732,7 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 		}
 		return
 	}
+	s.accumulateCompressUsage(result)
 
 	oldTokenCount := totalTokens
 	s.messages = s.syncMessages(result.LLMView)

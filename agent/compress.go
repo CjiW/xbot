@@ -15,6 +15,12 @@ import (
 type CompressResult struct {
 	LLMView     []llm.ChatMessage // Full messages for continuing the current Run()
 	SessionView []llm.ChatMessage // User/assistant only, persisted to session
+
+	// Token usage from compression LLM calls (for tracking in /usage).
+	InputTokens  int64
+	OutputTokens int64
+	CachedTokens int64
+	LLMCalls     int
 }
 
 // compactionPrompt is the structured contract for LLM-based context compaction.
@@ -253,6 +259,17 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		}, nil
 	}
 
+	// Record compress token usage to /usage stats.
+	if result.LLMCalls > 0 && a.multiSession != nil {
+		if recordErr := a.multiSession.RecordUserTokenUsage(
+			msg.SenderID, model,
+			int(result.InputTokens), int(result.OutputTokens), int(result.CachedTokens),
+			0, result.LLMCalls,
+		); recordErr != nil {
+			log.Ctx(ctx).WithError(recordErr).Warn("Failed to record compress token usage")
+		}
+	}
+
 	if err := tenantSession.Clear(); err != nil {
 		log.Ctx(ctx).WithError(err).Warn("Failed to clear session for compression")
 		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, model)
@@ -455,16 +472,22 @@ Output the structured working state directly.`
 	}
 
 	var compressed string
+	var totalInput, totalOutput, totalCached int64
+	var llmCalls int
 	maxToolRounds := 10
 	for round := 0; round <= maxToolRounds; round++ {
 		resp, err := client.Generate(ctx, model, compactionMsgs, memTools, "")
 		if err != nil {
 			return nil, fmt.Errorf("compaction failed: %w", err)
 		}
+		llmCalls++
 		GlobalMetrics.TotalLLMCalls.Add(1)
 		if resp != nil {
 			GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
 			GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
+			totalInput += resp.Usage.PromptTokens
+			totalOutput += resp.Usage.CompletionTokens
+			totalCached += resp.Usage.CacheHitTokens
 		}
 
 		if !resp.HasToolCalls() {
@@ -496,10 +519,14 @@ Output the structured working state directly.`
 		if err != nil {
 			return nil, fmt.Errorf("compaction fallback failed: %w", err)
 		}
+		llmCalls++
 		GlobalMetrics.TotalLLMCalls.Add(1)
 		if resp != nil {
 			GlobalMetrics.TotalInputTokens.Add(resp.Usage.PromptTokens)
 			GlobalMetrics.TotalOutputTokens.Add(resp.Usage.CompletionTokens)
+			totalInput += resp.Usage.PromptTokens
+			totalOutput += resp.Usage.CompletionTokens
+			totalCached += resp.Usage.CacheHitTokens
 		}
 		compressed = llm.StripThinkBlocks(resp.Content)
 	}
@@ -538,7 +565,11 @@ Output the structured working state directly.`
 	}).Info("Context compaction completed")
 
 	return &CompressResult{
-		LLMView:     llmView,
-		SessionView: sessionView,
+		LLMView:      llmView,
+		SessionView:  sessionView,
+		InputTokens:  totalInput,
+		OutputTokens: totalOutput,
+		CachedTokens: totalCached,
+		LLMCalls:     llmCalls,
 	}, nil
 }

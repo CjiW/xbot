@@ -57,11 +57,8 @@ func applyUserMaxContext(base *ContextManagerConfig, userMaxCtx int) *ContextMan
 // buildBaseRunConfig 构建主 Agent（main/cron）共用的基础 RunConfig。
 // 包含 LLM、身份、工作区、工具执行器、循环控制、HookChain 等公共字段。
 // 返回 (RunConfig, userMaxContext) — userMaxContext 为用户在 Settings 中设置的值，0 表示未设置。
-//
-// rawSenderID 是归一化前的原始发送者 ID（如 CLI 的 "cli_user"），用于 settingsSvc 读写。
-// senderID 是归一化后的 ID（如 "default"），用于 session/workspace 隔离。
 func (a *Agent) buildBaseRunConfig(
-	channel, chatID, senderID, rawSenderID string,
+	channel, chatID, senderID string,
 	messages []llm.ChatMessage,
 	senderName string,
 	sandboxUserID string,
@@ -86,7 +83,7 @@ func (a *Agent) buildBaseRunConfig(
 		AgentID:      "main",
 		Channel:      channel,
 		ChatID:       chatID,
-		SenderID:     senderID,      // 主 Agent: 直接调用者 = 原始用户（用于消息路由）
+		SenderID:     senderID,      // 直接调用者 = 原始用户（用于消息路由 + settings/usage 存储 key）
 		OriginUserID: sandboxUserID, // 沙箱/工作区用户（飞书身份登录 web 时为飞书 ou_xxx）
 		SenderName:   senderName,
 
@@ -150,7 +147,6 @@ func (a *Agent) buildMainRunConfig(
 	autoNotify bool,
 ) RunConfig {
 	channel, chatID, senderID, senderName := msg.Channel, msg.ChatID, msg.SenderID, msg.SenderName
-	rawSenderID := msg.Metadata["raw_sender_id"] // 归一化前的原始 ID，用于 settingsSvc 读写
 	sessionKey := channel + ":" + chatID
 
 	// 飞书身份登录 web 时，用飞书用户 ID 作为沙箱用户 ID，
@@ -161,7 +157,7 @@ func (a *Agent) buildMainRunConfig(
 		sandboxUserID = feishuUserID
 	}
 
-	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, rawSenderID, messages, senderName, sandboxUserID)
+	cfg, userMaxCtx := a.buildBaseRunConfig(channel, chatID, senderID, messages, senderName, sandboxUserID)
 
 	// 保留 FeishuUserID 供 buildToolContext 等处使用
 	cfg.FeishuUserID = feishuUserID
@@ -361,8 +357,8 @@ func (a *Agent) buildMainRunConfig(
 	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
 
 	// Per-user token usage tracking (persisted to SQLite)
-	cfg.RecordUserTokenUsage = func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int) {
-		if err := a.multiSession.RecordUserTokenUsage(senderID, inputTokens, outputTokens, conversationCount, llmCallCount); err != nil {
+	cfg.RecordUserTokenUsage = func(senderID, model string, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(senderID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount); err != nil {
 			log.WithError(err).WithField("sender_id", senderID).Warn("Failed to record user token usage")
 		}
 	}
@@ -376,14 +372,9 @@ func (a *Agent) buildMainRunConfig(
 	cfg.OffloadStore = a.offloadStore
 
 	// MaskStore — Observation Masking（默认开启，可通过 settings 的 enable_masking 关闭）
-	// 用 rawSenderID 读取 settingsSvc，确保与 TUI 层写入的 key 一致。
-	settingsSenderID := rawSenderID
-	if settingsSenderID == "" {
-		settingsSenderID = senderID
-	}
 	cfg.MaskStore = a.maskStore
 	if a.settingsSvc != nil {
-		if vals, err := a.settingsSvc.GetSettings(channel, settingsSenderID); err == nil {
+		if vals, err := a.settingsSvc.GetSettings(channel, senderID); err == nil {
 			if vals["enable_masking"] == "false" {
 				cfg.MaskStore = nil
 			}
@@ -430,7 +421,7 @@ func (a *Agent) buildCronRunConfig(
 ) RunConfig {
 	channel, chatID, senderID := msg.Channel, msg.ChatID, msg.SenderID
 
-	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, "", messages, "", senderID)
+	cfg, _ := a.buildBaseRunConfig(channel, chatID, senderID, messages, "", senderID)
 	return cfg
 }
 
@@ -567,13 +558,8 @@ func (a *Agent) buildSubAgentRunConfig(
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
-	// Stream — 继承父 Agent 的流式输出设置
-	var stream bool
-	if a.settingsSvc != nil {
-		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-			stream = vals["enable_stream"] == "true"
-		}
-	}
+	// Stream — 直接从父 Agent 继承
+	stream := parentCtx.Stream
 
 	cfg := RunConfig{
 		LLMClient:    llmClient,
@@ -615,6 +601,16 @@ func (a *Agent) buildSubAgentRunConfig(
 		LLMSemAcquire: a.llmFactory.LLMSemAcquireForUser(originUserID),
 
 		// ToolExecutor = nil → 使用 defaultToolExecutor（统一 buildToolContext）
+	}
+
+	// Per-user token usage tracking：SubAgent 的 token 消耗归属原始用户
+	cfg.RecordUserTokenUsage = func(senderID, model string, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(originUserID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount); err != nil {
+			log.WithError(err).WithFields(log.Fields{
+				"sender_id":    originUserID,
+				"sub_agent_id": subAgentID,
+			}).Warn("Failed to record SubAgent token usage")
+		}
 	}
 
 	// 独立 sessionKey：使用 subAgentID 确保与父 Agent 隔离，

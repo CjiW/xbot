@@ -284,12 +284,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.viewport.GotoBottom()
 			m.newContentHint = false
 		}
-		// Start tick+ticker chains ONLY when transitioning from idle → busy.
+		// Start tick chain ONLY when transitioning from idle → busy.
 		// When already busy (wasTyping==true), the chain is already running.
 		// Emitting extra tickCmd() while busy creates duplicate chains:
 		// 2 chains → 4 → 8 → ... → CPU freeze within seconds.
 		if m.typing && !wasTyping {
-			cmds = append(cmds, tickCmd(), tickerCmd())
+			cmds = append(cmds, tickCmd())
 		}
 		return m, cmds, true
 
@@ -468,6 +468,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			m.todosDoneCleared = false
 			m.endAgentTurn()
 			m.inputReady = true
+			// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
+			if len(m.messageQueue) > 0 {
+				m.needFlushQueue = true
+			}
 			m.relayoutViewport()
 		}
 	}

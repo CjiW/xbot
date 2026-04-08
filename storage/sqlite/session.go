@@ -60,14 +60,37 @@ func (s *SessionService) AddMessage(tenantID int64, msg llm.ChatMessage) error {
 	return nil
 }
 
-// ReplaceLastToolMessage replaces the content of the most recent tool-role message.
-func (s *SessionService) ReplaceLastToolMessage(tenantID int64, content string) error {
+// ReplaceToolMessage updates the most recent matching tool-role message.
+//
+// Parameters:
+//   - toolName:    filter by tool_name. Empty string = match any (wildcard).
+//   - toolCallID:  filter by tool_call_id. Empty string = match any (wildcard).
+//   - content:     new content to write.
+//
+// Returns sql.ErrNoRows if no matching message exists.
+func (s *SessionService) ReplaceToolMessage(tenantID int64, toolName, toolCallID, content string) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec(`
+	res, err := conn.Exec(`
 		UPDATE session_messages SET content = ?
-		WHERE id = (SELECT id FROM session_messages WHERE tenant_id = ? AND role = 'tool' ORDER BY id DESC LIMIT 1)
-	`, content, tenantID)
-	return err
+		WHERE id = (
+			SELECT id FROM session_messages
+			WHERE tenant_id = ? AND role = 'tool'
+			  AND (? = '' OR tool_name = ?)
+			  AND (? = '' OR tool_call_id = ?)
+			ORDER BY id DESC LIMIT 1
+		)
+	`, content, tenantID, toolName, toolName, toolCallID, toolCallID)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // GetHistory retrieves the most recent messages for a tenant.

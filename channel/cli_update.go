@@ -28,6 +28,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Async subscription switch completed
+	if done, ok := msg.(cliSwitchLLMDoneMsg); ok {
+		if done.err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
+		} else if done.mgr != nil {
+			if err := done.mgr.SetDefault(done.subID); err != nil {
+				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
+			}
+			m.refreshCachedModelName()
+		}
+		return m, nil
+	}
+
 	// Runner status change notification
 	if rsm, ok := msg.(runnerStatusMsg); ok {
 		cmd := m.handleRunnerStatusMsg(rsm)
@@ -83,7 +98,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.String() == "ctrl+c" && m.typing {
 			m.closePanel()
 			m.sendCancel()
-			return m, tea.Batch(tickerCmd(), tickCmd())
+			return m, tickCmd()
 		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
@@ -207,6 +222,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+		// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
+		if m.needFlushQueue {
+			m.needFlushQueue = false
+			cmds = append(cmds, m.flushMessageQueue())
+		}
 
 	case cliTickMsg:
 		// Always refresh bg task count on tick so status bar updates immediately
@@ -230,6 +250,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, idleTickCmd())
 		}
 		if busy {
+			// Advance spinner frame on every tick so the animation stays in sync
+			// with elapsed time display. Previously driven by a separate tickerTickMsg
+			// chain that could break when m.progress briefly went nil.
+			m.ticker.tick()
 			m.updateViewportContent()
 		}
 
@@ -250,12 +274,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleUpdateCheck(msg)
 
 	case tickerTickMsg:
-		// Ticker tick: advance frame and trigger viewport refresh
-		if m.typing || m.progress != nil {
-			m.ticker.tick()
-			cmds = append(cmds, tickerCmd())
-			m.updateViewportContent()
-		}
+		// Legacy: ticker is now driven by cliTickMsg. Drop stale messages.
 
 	case splashTickMsg:
 		return m.handleSplashTick(msg)
@@ -290,9 +309,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
-	// Kick off ticker + tick chains when processing just started
+	// Kick off tick chain when processing just started
 	if m.typing && !wasTyping {
-		cmds = append(cmds, tickerCmd(), tickCmd())
+		cmds = append(cmds, tickCmd())
 	}
 
 	// 更新 viewport

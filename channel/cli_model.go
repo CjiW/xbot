@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
 )
@@ -213,6 +214,9 @@ type cliModel struct {
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
 
+	// --- Usage query ---
+	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
+
 	// --- Progress ---
 	progress          *CLIProgressPayload
 	iterationHistory  []cliIterationSnapshot // 已完成迭代快照
@@ -370,6 +374,9 @@ type cliMessage struct {
 	renderedLines         int  // 渲染后的总行数（每次 dirty 重算）
 	originalRenderedLines int  // fold 前的原始行数（fold 时保存，用于 unfold 判断）
 	folded                bool // 是否折叠
+
+	// --- Markdown rendering for system messages ---
+	markdown bool // when true, system messages go through glamour renderer (e.g. /usage tables)
 }
 
 // newCLIModel 创建 CLI model
@@ -395,11 +402,11 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
-	// 禁用 viewport 的字母快捷键，避免和用户输入冲突
-	// 只保留方向键翻页，鼠标滚轮（MouseWheelEnabled 默认已开启）
-	// 左右方向键不绑定——内容已 hardWrap，无需水平滚动
-	vp.KeyMap.Up.SetKeys("up")
-	vp.KeyMap.Down.SetKeys("down")
+	// 禁用 viewport 的键盘快捷键，避免和用户输入冲突
+	// 滚动通过鼠标滚轮实现（MouseWheelEnabled 默认已开启，View 设置 MouseModeCellMotion）
+	// 方向键保留给 textarea 光标移动和输入历史浏览
+	vp.KeyMap.Up.SetKeys()
+	vp.KeyMap.Down.SetKeys()
 	vp.KeyMap.Left.SetKeys()
 	vp.KeyMap.Right.SetKeys()
 	vp.KeyMap.PageUp.SetKeys("pgup")
@@ -480,6 +487,15 @@ type cliSettingsSavedMsg struct {
 	langChanged  bool
 	lang         string
 	feedbackMsg  string
+}
+
+// cliSwitchLLMDoneMsg is sent when an async subscription switch completes.
+type cliSwitchLLMDoneMsg struct {
+	err      error
+	subID    string
+	subName  string
+	subModel string
+	mgr      SubscriptionManager
 }
 
 // cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）

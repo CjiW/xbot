@@ -79,15 +79,19 @@ const (
 
 // TokenUsage token 使用统计
 type TokenUsage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`     // 输入 token 数
-	CompletionTokens int64 `json:"completion_tokens"` // 输出 token 数
-	TotalTokens      int64 `json:"total_tokens"`      // 总 token 数
+	PromptTokens        int64 `json:"prompt_tokens"`         // 输入 token 数
+	CompletionTokens    int64 `json:"completion_tokens"`     // 输出 token 数
+	TotalTokens         int64 `json:"total_tokens"`          // 总 token 数
+	CacheHitTokens      int64 `json:"cache_hit_tokens"`      // 缓存命中的 input tokens（OpenAI: prompt_tokens_details.cached_tokens, Anthropic: cache_read_input_tokens）
+	CacheCreationTokens int64 `json:"cache_creation_tokens"` // 缓存创建的 input tokens（Anthropic: cache_creation_input_tokens）
 }
 
 func (u TokenUsage) Add(u1 TokenUsage) TokenUsage {
 	u.CompletionTokens += u1.CompletionTokens
 	u.PromptTokens += u1.PromptTokens
 	u.TotalTokens += u1.TotalTokens
+	u.CacheHitTokens += u1.CacheHitTokens
+	u.CacheCreationTokens += u1.CacheCreationTokens
 	return u
 }
 

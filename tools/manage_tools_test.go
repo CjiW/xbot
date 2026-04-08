@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xbot/llm"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestManageTools_Name(t *testing.T) {
@@ -211,6 +214,62 @@ func TestManageTools_ToolDefinition(t *testing.T) {
 	}
 }
 
+func TestManageTools_CLIWritesGlobalConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	globalConfigPath := filepath.Join(tempDir, "global-mcp.json")
+	userConfigPath := filepath.Join(tempDir, "user", "mcp.json")
+
+	tool := NewManageTools(tempDir, globalConfigPath)
+	ctx := &ToolContext{
+		Registry:            NewRegistry(),
+		Channel:             "cli",
+		MCPConfigPath:       userConfigPath,
+		GlobalMCPConfigPath: globalConfigPath,
+	}
+
+	addInput, _ := json.Marshal(manageToolsArgs{
+		Action:       "add_mcp",
+		Name:         "cli-global",
+		MCPConfig:    `{"command":"echo","args":["cli"]}`,
+		Instructions: "cli test",
+	})
+	if _, err := tool.Execute(ctx, string(addInput)); err != nil {
+		t.Fatalf("cli add_mcp failed: %v", err)
+	}
+
+	globalData, err := os.ReadFile(globalConfigPath)
+	if err != nil {
+		t.Fatalf("read global config: %v", err)
+	}
+	var globalCfg MCPConfig
+	if err := json.Unmarshal(globalData, &globalCfg); err != nil {
+		t.Fatalf("parse global config: %v", err)
+	}
+	if _, ok := globalCfg.MCPServers["cli-global"]; !ok {
+		t.Fatalf("expected cli-global written to global config")
+	}
+	if _, err := os.Stat(userConfigPath); !os.IsNotExist(err) {
+		t.Fatalf("expected user config untouched, got err=%v", err)
+	}
+
+	removeInput, _ := json.Marshal(manageToolsArgs{Action: "remove_mcp", Name: "cli-global"})
+	if _, err := tool.Execute(ctx, string(removeInput)); err != nil {
+		t.Fatalf("cli remove_mcp failed: %v", err)
+	}
+
+	globalData, err = os.ReadFile(globalConfigPath)
+	if err != nil {
+		t.Fatalf("read global config after remove: %v", err)
+	}
+	globalCfg = MCPConfig{}
+	if err := json.Unmarshal(globalData, &globalCfg); err != nil {
+		t.Fatalf("parse global config after remove: %v", err)
+	}
+	if _, ok := globalCfg.MCPServers["cli-global"]; ok {
+		t.Fatalf("expected cli-global removed from global config")
+	}
+}
+
 func TestManageTools_UserIsolationAndGlobalMerge(t *testing.T) {
 	tempDir := t.TempDir()
 	globalConfigPath := filepath.Join(tempDir, "global-mcp.json")
@@ -266,5 +325,64 @@ func TestManageTools_UserIsolationAndGlobalMerge(t *testing.T) {
 	}
 	if strings.Contains(res2.Summary, "user1-only") {
 		t.Fatalf("user2 should not see user1 private server, got: %s", res2.Summary)
+	}
+}
+
+func TestManageTools_AddMCPInvalidatesImmediatelyInFlatMode(t *testing.T) {
+	tempDir := t.TempDir()
+	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
+	tool := NewManageTools(tempDir, mcpConfigPath)
+
+	registry := NewRegistry()
+	registry.SetFlatMode(true)
+	invalidated := 0
+	ctx := &ToolContext{
+		Registry:                registry,
+		MCPConfigPath:           mcpConfigPath,
+		InvalidateAllSessionMCP: func() { invalidated++ },
+	}
+
+	input, _ := json.Marshal(manageToolsArgs{
+		Action:       "add_mcp",
+		Name:         "flat-visible-now",
+		MCPConfig:    `{"command":"echo","args":["flat"]}`,
+		Instructions: "flat test",
+	})
+
+	result, err := tool.Execute(ctx, string(input))
+	if err != nil {
+		t.Fatalf("flat add_mcp failed: %v", err)
+	}
+	if invalidated != 1 {
+		t.Fatalf("expected immediate MCP invalidation once, got %d", invalidated)
+	}
+	if !strings.Contains(result.Summary, "immediately visible") {
+		t.Fatalf("expected immediate visibility hint, got: %s", result.Summary)
+	}
+}
+
+func TestRegistry_AsDefinitionsForSession_FlatModeIncludesSessionMCPTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.SetFlatMode(true)
+
+	sm := &SessionMCPManager{
+		connections: map[string]*mcpConnection{
+			"demo": {
+				name: "demo",
+				tools: []*mcp.Tool{{
+					Name:        "ping",
+					Description: "Ping demo server",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				}},
+			},
+		},
+		lastActive:  make(map[string]time.Time),
+		initialized: true,
+	}
+	registry.SetSessionMCPManagerProvider(&mockSessionMCPProvider{manager: sm})
+
+	defs := registry.AsDefinitionsForSession("test:chat")
+	if !hasToolDefinitionName(defs, "mcp_demo_ping") {
+		t.Fatalf("expected flat mode to expose session MCP tool immediately")
 	}
 }

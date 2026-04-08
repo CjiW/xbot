@@ -167,6 +167,18 @@ func (m *cliModel) appendSystem(content string) {
 	})
 }
 
+// appendSystemMarkdown adds a system message that will be rendered through
+// the glamour markdown renderer (for tables, headers, etc.).
+func (m *cliModel) appendSystemMarkdown(content string) {
+	m.messages = append(m.messages, cliMessage{
+		role:      "system",
+		content:   content,
+		timestamp: time.Now(),
+		dirty:     true,
+		markdown:  true,
+	})
+}
+
 // sendCancel sends a cancel request to the agent and adds a system notification.
 func (m *cliModel) sendCancel() {
 	if m.msgBus != nil {
@@ -448,6 +460,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		} else {
 			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.senderID), feedbackInfo)
 		}
+
+	case "/usage":
+		m.handleUsageCommand()
 
 	default:
 		// 🥚 彩蛋 #7: /version 三连检测
@@ -962,12 +977,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	systemMsgStyle := s.SystemMsg
 	errorMsgStyle := s.ErrorMsg
 
-	// 渲染 Markdown（仅对 assistant 消息）
+	// 渲染 Markdown（assistant 消息 + 带 markdown 标记的 system 消息）
 	var rendered string
-	if msg.role == "assistant" {
+	if msg.role == "assistant" || (msg.role == "system" && msg.markdown) {
 		// Pre-process: render mermaid code blocks to ASCII art
 		// Truncate to glamour wrap width to prevent wrapping.
-		preprocessed := renderMermaidBlocks(msg.content, m.width-4)
+		preprocessed := msg.content
+		if msg.role == "assistant" {
+			preprocessed = renderMermaidBlocks(msg.content, m.width-4)
+		}
 		var err error
 		rendered, err = m.renderer.Render(preprocessed)
 		if err != nil {
@@ -1067,9 +1085,10 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		}
 		sb.WriteString(toolSummaryStyle.Render(toolSb.String()))
 	case "system":
-		// 检测是否为错误消息（包含 error/failed/失败 等关键词）
-		isError := isErrorContent(msg.content)
-		if isError {
+		if msg.markdown {
+			// Markdown system messages (e.g. /usage tables): use glamour-rendered output directly
+			sb.WriteString(rendered)
+		} else if isErrorContent(msg.content) {
 			sb.WriteString(errorMsgStyle.Render("⚠ " + msg.content))
 		} else {
 			sb.WriteString(systemMsgStyle.Render(msg.content))
@@ -1586,9 +1605,10 @@ func idleTickCmd() tea.Cmd {
 	})
 }
 
-// tickerCmd returns a command that advances the animation ticker frame.
-func tickerCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-		return tickerTickMsg{}
-	})
-}
+// tickerCmd is deprecated — ticker is now driven by cliTickMsg.
+// Kept for reference only.
+// func tickerCmd() tea.Cmd {
+// 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+// 		return tickerTickMsg{}
+// 	})
+// }

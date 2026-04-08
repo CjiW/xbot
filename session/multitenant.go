@@ -231,13 +231,23 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 }
 
 // RecordUserTokenUsage records token usage for a user (upsert).
-func (m *MultiTenantSession) RecordUserTokenUsage(senderID string, inputTokens, outputTokens int, conversationCount, llmCallCount int) error {
-	return m.tokenUsageSvc.RecordUsage(m.db.Conn(), senderID, inputTokens, outputTokens, conversationCount, llmCallCount)
+func (m *MultiTenantSession) RecordUserTokenUsage(senderID, model string, inputTokens, outputTokens, cachedTokens int, conversationCount, llmCallCount int) error {
+	return m.tokenUsageSvc.RecordUsage(m.db.Conn(), senderID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount)
 }
 
 // GetUserTokenUsage retrieves cumulative token usage for a user.
 func (m *MultiTenantSession) GetUserTokenUsage(senderID string) (*sqlite.UserTokenUsage, error) {
 	return m.tokenUsageSvc.GetUsage(senderID)
+}
+
+// GetDailyTokenUsage retrieves daily token usage for a user.
+func (m *MultiTenantSession) GetDailyTokenUsage(senderID string, days int) ([]sqlite.DailyTokenUsage, error) {
+	return m.tokenUsageSvc.GetDailyUsage(senderID, days)
+}
+
+// GetDailyTokenUsageSummary retrieves aggregated per-day usage for a user.
+func (m *MultiTenantSession) GetDailyTokenUsageSummary(senderID string, days int) ([]sqlite.DailyTokenUsage, error) {
+	return m.tokenUsageSvc.GetDailyUsageSummary(senderID, days)
 }
 
 // GetAllUserTokenUsage retrieves token usage for all users, sorted by total desc.

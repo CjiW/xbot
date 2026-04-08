@@ -59,6 +59,10 @@ type ToolContext struct {
 	CurrentDir    string           // 当前工作目录（优先级高于 WorkspaceRoot）
 	SetCurrentDir func(dir string) // 更新 session 中的 cwd
 
+	// Stream indicates whether the parent Agent is using streaming LLM calls.
+	// SubAgents inherit this from the parent to ensure consistent behavior.
+	Stream bool
+
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *BackgroundTaskManager
 	// SessionKey for task scoping (set by engine, not via RunConfig)
@@ -159,6 +163,12 @@ func (r *Registry) SetFlatMode(flat bool) {
 	r.flatMode = flat
 }
 
+func (r *Registry) IsFlatMode() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.flatMode
+}
+
 // Register 注册工具（非核心，需通过 load_tools 激活后才出现在 tool definitions 中）。
 // flat 模式下等同于 RegisterCore。
 func (r *Registry) Register(tool Tool) {
@@ -239,12 +249,13 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 	defer r.mu.RUnlock()
 
 	active := r.activeToolSet(sessionKey)
+	flatMode := r.flatMode
 
 	var defs []llm.ToolDefinition
 	for _, tool := range r.globalTools {
 		if mcp, isMCP := tool.(mcpSchemaProvider); isMCP {
-			// 全局 MCP 工具：仅在激活后以完整参数 schema 加入
-			if active[tool.Name()] {
+			// 全局 MCP 工具：flat 模式直接可见；否则仅在激活后以完整参数 schema 加入
+			if flatMode || active[tool.Name()] {
 				defs = append(defs, &mcpToolDefinition{
 					name:   tool.Name(),
 					desc:   tool.Description(),
@@ -258,10 +269,18 @@ func (r *Registry) AsDefinitionsForSession(sessionKey string) []llm.ToolDefiniti
 		}
 	}
 
-	// 追加已激活的会话 MCP 工具（带完整参数 schema）
+	// 追加会话 MCP 工具：flat 模式直接可见；否则仅追加已激活工具
 	if r.sessionMCPMgr != nil {
 		if sm := r.sessionMCPMgr.GetSessionMCPManager(sessionKey); sm != nil {
-			defs = append(defs, sm.GetActivatedToolDefs(active)...)
+			if flatMode {
+				for _, tool := range sm.GetSessionTools() {
+					if def, ok := tool.(llm.ToolDefinition); ok {
+						defs = append(defs, def)
+					}
+				}
+			} else {
+				defs = append(defs, sm.GetActivatedToolDefs(active)...)
+			}
 		}
 	}
 

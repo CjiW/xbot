@@ -169,7 +169,7 @@ type RunConfig struct {
 	// RecordUserTokenUsage is called at the end of Run() to persist per-user
 	// token usage (inputTokens, outputTokens, conversationCount, llmCallCount).
 	// If nil, per-user tracking is skipped.
-	RecordUserTokenUsage func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int)
+	RecordUserTokenUsage func(senderID, model string, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount int)
 
 	// EnableConcurrentSubAgents enables parallel execution of SubAgent tool calls.
 	// When true, multiple SubAgent calls in the same iteration run concurrently,
@@ -599,6 +599,9 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 		// 工具注册表
 		Registry: cfg.Tools,
+
+		// 流式设置继承
+		Stream: cfg.Stream,
 	}
 
 	// 注入 SpawnAgent（包装为 SubAgentManager 接口）

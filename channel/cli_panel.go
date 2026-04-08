@@ -1454,6 +1454,8 @@ func (m *cliModel) openQuickSwitch(mode string) {
 }
 
 // applyQuickSwitch applies the selected item from the quick switch overlay.
+// For subscription switches, the LLM creation (which may hit the network) runs
+// asynchronously so the UI never freezes.
 func (m *cliModel) applyQuickSwitch() {
 	if m.quickSwitchCursor >= len(m.quickSwitchList) {
 		m.quickSwitchMode = ""
@@ -1527,20 +1529,26 @@ func (m *cliModel) applyQuickSwitch() {
 			m.showTempStatus("Subscription not found")
 			break
 		}
-		// Switch runtime LLM first — only persist SetDefault on success
 		if m.channel == nil || m.channel.config.SwitchLLM == nil {
 			break
 		}
-		if err := m.channel.config.SwitchLLM(target.Provider, target.BaseURL, target.APIKey, target.Model); err != nil {
-			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", err))
-			break
-		}
-		// Runtime switch succeeded — now persist default + sync state
-		if err := m.subscriptionMgr.SetDefault(selected.ID); err != nil {
-			m.showTempStatus(fmt.Sprintf("LLM switched but failed to save default: %v", err))
-		}
-		m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", selected.Name, selected.Model))
-		m.refreshCachedModelName()
+		// Switch LLM asynchronously — createLLM may hit the network (LoadModelsFromAPI, 10s timeout)
+		m.showTempStatus(fmt.Sprintf("Switching to: %s …", selected.Name))
+		switchFn := m.channel.config.SwitchLLM
+		subID := selected.ID
+		subName := selected.Name
+		subModel := selected.Model
+		mgr := m.subscriptionMgr
+		m.pendingCmds = append(m.pendingCmds, func() tea.Msg {
+			err := switchFn(target.Provider, target.BaseURL, target.APIKey, target.Model)
+			return cliSwitchLLMDoneMsg{
+				err:      err,
+				subID:    subID,
+				subName:  subName,
+				subModel: subModel,
+				mgr:      mgr,
+			}
+		})
 	case "model":
 		if m.llmSubscriber != nil {
 			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)

@@ -641,7 +641,6 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	}).Info("[LLM] Starting stream request")
 
 	startTime := time.Now()
-	params := o.buildParams(model, messages, tools)
 
 	// 构建 thinking mode 相关的 request options
 	opts := o.buildThinkingOptions(thinkingMode)
@@ -649,8 +648,10 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 		log.Ctx(ctx).Debugf("[LLM] Thinking mode options: %v", thinkingMode)
 	}
 
-	// 创建流式请求
-	stream := o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
+	stream, err := o.newStreamingWithRetry(ctx, model, messages, tools, opts)
+	if err != nil {
+		return nil, fmt.Errorf("openai stream completion: %w", err)
+	}
 
 	// 创建事件 channel
 	eventChan := make(chan StreamEvent, 100)
@@ -659,6 +660,33 @@ func (o *OpenAILLM) GenerateStream(ctx context.Context, model string, messages [
 	go o.processStream(ctx, stream, eventChan, startTime, messages, model, tools, thinkingMode)
 
 	return eventChan, nil
+}
+
+func (o *OpenAILLM) newStreamingWithRetry(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, opts []option.RequestOption) (*ssestream.Stream[openai.ChatCompletionChunk], error) {
+	params := o.buildParams(model, messages, tools)
+	stream := o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
+	if err := stream.Err(); err != nil {
+		if verdict := isMaxTokensParamError(err); verdict != "" {
+			if verdict == "use_new" {
+				o.maxTokensUpgrade.Store(model, true)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Stream: model requires max_completion_tokens, retrying")
+			} else {
+				o.maxTokensUpgrade.Delete(model)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, retrying")
+			}
+			stream.Close()
+			params = o.buildParams(model, messages, tools)
+			stream = o.client.Chat.Completions.NewStreaming(ctx, params, opts...)
+			if retryErr := stream.Err(); retryErr != nil {
+				stream.Close()
+				return nil, retryErr
+			}
+			return stream, nil
+		}
+		stream.Close()
+		return nil, err
+	}
+	return stream, nil
 }
 
 // processStream 处理流式响应
@@ -763,14 +791,15 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
-		// Learn max_tokens preference for future retries
+		// Learn max_tokens preference for future requests (mid-stream safety net;
+		// HTTP-level 400 is handled by newStreamingWithRetry before reaching here).
 		if verdict := isMaxTokensParamError(err); verdict != "" {
 			if verdict == "use_new" {
 				o.maxTokensUpgrade.Store(model, true)
-				l.WithField("model", model).Info("[LLM] Stream: model requires max_completion_tokens, will retry with correct param")
+				l.WithField("model", model).Info("[LLM] Stream: mid-stream max_tokens error, updated preference for future requests")
 			} else {
 				o.maxTokensUpgrade.Delete(model)
-				l.WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, will retry with correct param")
+				l.WithField("model", model).Info("[LLM] Stream: mid-stream max_tokens error, updated preference for future requests")
 			}
 		}
 		l.WithFields(log.Fields{

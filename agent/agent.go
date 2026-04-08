@@ -1493,22 +1493,31 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	}
 
 	// AskUser 回答不是新的 user message，而是替换 AskUser 的 tool result。
-	// 移除 Assemble 追加的 user message，用回答替换最后一个 tool message 的内容。
+	// 移除 Assemble 追加的 user message，并精确替换最近的 AskUser tool message。
 	askUserAnswered := msg.Metadata != nil && msg.Metadata["ask_user_answered"] == "true"
 	if askUserAnswered {
 		// Remove last user message appended by Assemble
 		if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
 			messages = messages[:len(messages)-1]
 		}
-		// Replace last tool message content with user's answer
+		// Replace the most recent AskUser tool message content with user's answer.
+		foundAskUserTool := false
 		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "tool" {
-				messages[i].Content = msg.Content
-				break
+			if messages[i].Role != "tool" {
+				continue
 			}
+			if messages[i].ToolName != "AskUser" {
+				continue
+			}
+			messages[i].Content = msg.Content
+			foundAskUserTool = true
+			break
 		}
-		// Also update the stale tool result in session so future buildPrompt reads correct content
-		if err := tenantSession.ReplaceLastToolMessage(msg.Content); err != nil {
+		if !foundAskUserTool {
+			log.Ctx(ctx).Warn("AskUser answer received but no matching AskUser tool message found in prompt history")
+		}
+		// Also update the stale tool result in session so future buildPrompt reads correct content.
+		if err := tenantSession.ReplaceToolMessage("AskUser", "", msg.Content); err != nil {
 			log.Ctx(ctx).WithError(err).Warn("Failed to replace AskUser tool result in session")
 		}
 	}

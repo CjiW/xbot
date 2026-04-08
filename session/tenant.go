@@ -31,9 +31,10 @@ func (s *TenantSession) AddMessage(msg llm.ChatMessage) error {
 	return s.sessionSvc.AddMessage(s.tenantID, msg)
 }
 
-// ReplaceLastToolMessage replaces the content of the most recent tool-role message.
-func (s *TenantSession) ReplaceLastToolMessage(content string) error {
-	return s.sessionSvc.ReplaceLastToolMessage(s.tenantID, content)
+// ReplaceToolMessage updates the most recent matching tool-role message.
+// Empty toolName/toolCallID act as wildcards (match any).
+func (s *TenantSession) ReplaceToolMessage(toolName, toolCallID, content string) error {
+	return s.sessionSvc.ReplaceToolMessage(s.tenantID, toolName, toolCallID, content)
 }
 
 // GetHistory retrieves recent messages for LLM context window

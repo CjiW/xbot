@@ -238,6 +238,7 @@ func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
 // callback, closes the panel, and returns the appropriate tea.Cmd.
 // This pattern appears 3 times in updateAskUserPanel (ctrl+s, Enter with options, Enter without options).
 func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
+	m.saveCurrentFreeInput()
 	answers := m.collectAskAnswers()
 	if m.panelOnAnswer != nil {
 		m.panelOnAnswer(answers)

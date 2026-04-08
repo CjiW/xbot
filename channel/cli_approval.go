@@ -3,7 +3,6 @@ package channel
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,18 +12,12 @@ import (
 // CLIApprovalHandler implements tools.ApprovalHandler for the CLI channel.
 // It uses the Bubble Tea TUI to present approval dialogs.
 type CLIApprovalHandler struct {
-	mu      sync.Mutex
 	program *tea.Program
 }
 
 // NewCLIApprovalHandler creates a new CLIApprovalHandler.
 func NewCLIApprovalHandler(program *tea.Program) *CLIApprovalHandler {
 	return &CLIApprovalHandler{program: program}
-}
-
-// approvalResultMsg carries the user's approval decision back to the waiting goroutine.
-type approvalResultMsg struct {
-	approved bool
 }
 
 // RequestApproval sends an approval request to the TUI and blocks until the user responds.

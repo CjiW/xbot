@@ -1,6 +1,7 @@
 package cmdbuilder
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +28,7 @@ func TestShellEscape(t *testing.T) {
 
 func TestBuild_NoRunAs(t *testing.T) {
 	// Without RunAsUser, should produce a direct command
-	cmd, err := Build(nil, true, "echo hello", nil, "", nil, Config{})
+	cmd, err := Build(context.TODO(), true, "echo hello", nil, "", nil, Config{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestBuild_NoRunAs(t *testing.T) {
 
 func TestBuild_WithRunAs(t *testing.T) {
 	// With RunAsUser, should produce a sudo-wrapped command
-	cmd, err := Build(nil, true, "echo hello", nil, "", nil, Config{RunAsUser: "alice"})
+	cmd, err := Build(context.TODO(), true, "echo hello", nil, "", nil, Config{RunAsUser: "alice"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestBuild_WithRunAs(t *testing.T) {
 }
 
 func TestBuild_NonShellRequiresArgs(t *testing.T) {
-	_, err := Build(nil, false, "", nil, "", nil, Config{})
+	_, err := Build(context.TODO(), false, "", nil, "", nil, Config{})
 	if err == nil {
 		t.Error("expected error for non-shell with empty args")
 	}

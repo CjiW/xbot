@@ -111,15 +111,15 @@ func (m *PermissionControlMiddleware) Process(mc *MessageContext) error {
 	sb.WriteString("|------|-------------------|-------------|\n")
 	sb.WriteString("| (omit run_as) | None | Current process user |\n")
 	if config.DefaultUser != "" {
-		sb.WriteString(fmt.Sprintf("| %s | None | Default execution user |\n", config.DefaultUser))
+		fmt.Fprintf(&sb, "| %s | None | Default execution user |\n", config.DefaultUser)
 	}
 	if config.PrivilegedUser != "" {
-		sb.WriteString(fmt.Sprintf("| %s | **Yes** | Privileged user — user must approve each use |\n", config.PrivilegedUser))
+		fmt.Fprintf(&sb, "| %s | **Yes** | Privileged user — user must approve each use |\n", config.PrivilegedUser)
 	}
 	sb.WriteString("\n### Rules\n")
 	sb.WriteString("- Omit `run_as` to execute as the current process user\n")
 	if config.DefaultUser != "" {
-		sb.WriteString(fmt.Sprintf("- Use `run_as: %q` for routine operations\n", config.DefaultUser))
+		fmt.Fprintf(&sb, "- Use `run_as: %q` for routine operations\n", config.DefaultUser)
 	}
 	if config.PrivilegedUser != "" {
 		sb.WriteString(fmt.Sprintf("- Use `run_as: %q` ONLY when the task genuinely requires elevated privileges\n", config.PrivilegedUser))

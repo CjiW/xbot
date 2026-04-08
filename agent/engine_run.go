@@ -332,6 +332,7 @@ func (s *runState) beginIteration(i int) {
 		s.structuredProgress.ActiveTools = nil
 		s.structuredProgress.CompletedTools = nil
 		s.structuredProgress.ThinkingContent = ""
+		s.structuredProgress.ReasoningContent = ""
 	}
 	if s.structuredProgress != nil && s.cfg.TodoManager != nil && s.sessionKey != "" {
 		todos := s.cfg.TodoManager.GetTodoItems(s.sessionKey)

@@ -40,12 +40,13 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	var cfg UserLLMConfig
 	var createdAt, updatedAt sql.NullTime
 	err := conn.QueryRow(`
-		SELECT sender_id, provider, base_url, api_key, model, created_at, updated_at
-		FROM user_llm_subscriptions
-		WHERE sender_id = ? AND is_default = 1
-		LIMIT 1
-	`, senderID).Scan(
+			SELECT sender_id, provider, base_url, api_key, model, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+			FROM user_llm_subscriptions
+			WHERE sender_id = ? AND is_default = 1
+			LIMIT 1
+		`, senderID).Scan(
 		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model,
+		&cfg.MaxContext, &cfg.MaxOutputTokens, &cfg.ThinkingMode,
 		&createdAt, &updatedAt,
 	)
 
@@ -109,10 +110,13 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	// Try update existing subscription for this sender+provider
 	result, err := tx.Exec(`
 		UPDATE user_llm_subscriptions SET
-			name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
-			is_default = 1, updated_at = ?
+		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
+		is_default = 1, updated_at = ?
 		WHERE sender_id = ? AND provider = ?
-	`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, now, cfg.SenderID, cfg.Provider)
+	`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
+		cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
+		now, cfg.SenderID, cfg.Provider)
 	if err != nil {
 		return fmt.Errorf("update subscription: %w", err)
 	}
@@ -121,9 +125,9 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	if rowsAffected == 0 {
 		subID := fmt.Sprintf("sub_%x", now.UnixNano())
 		_, err = tx.Exec(`
-			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-		`, subID, cfg.SenderID, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, now, now)
+			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+		`, subID, cfg.SenderID, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode, now, now)
 		if err != nil {
 			return fmt.Errorf("insert subscription: %w", err)
 		}

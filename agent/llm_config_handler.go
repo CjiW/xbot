@@ -294,6 +294,35 @@ func (a *Agent) SetUserMaxContext(senderID string, maxContext int) error {
 	return nil
 }
 
+// GetUserMaxOutputTokens returns the user's max_output_tokens setting (0 = use default).
+func (a *Agent) GetUserMaxOutputTokens(senderID string) int {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.MaxOutputTokens
+}
+
+// SetUserMaxOutputTokens updates the user's max_output_tokens setting and invalidates cached LLM client.
+func (a *Agent) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
+	if maxTokens < 0 || maxTokens > 2000000 {
+		return fmt.Errorf("max_output_tokens must be between 0 and 2000000, got %d", maxTokens)
+	}
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil {
+		return fmt.Errorf("get config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("当前未配置自定义 LLM，请先通过 /set-llm 设置")
+	}
+	cfg.MaxOutputTokens = maxTokens
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	a.llmFactory.Invalidate(senderID)
+	return nil
+}
+
 // GetUserThinkingMode returns the user's thinking_mode setting ("" = auto).
 func (a *Agent) GetUserThinkingMode(senderID string) string {
 	cfg, err := a.llmConfigSvc.GetConfig(senderID)

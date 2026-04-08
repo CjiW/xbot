@@ -280,7 +280,7 @@ func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCa
 			return agentLoop.GetUserLLMConfig(senderID)
 		},
 		IsProcessing: agentLoop.IsProcessing,
-		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
 			return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
 		},
 		LLMDelete: func(senderID string) error {
@@ -632,7 +632,7 @@ func main() {
 			LLMGetConfig: func(senderID string) (string, string, string, bool) {
 				return agentLoop.GetUserLLMConfig(senderID)
 			},
-			LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+			LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
 				return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
 			},
 			LLMDelete: func(senderID string) error {

@@ -175,7 +175,7 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 			return nil, fmt.Errorf("请填写完整配置")
 		}
 		if f.settingsCallbacks.LLMSetConfig != nil {
-			if err := f.settingsCallbacks.LLMSetConfig(senderID, provider, baseURL, apiKey, model); err != nil {
+			if err := f.settingsCallbacks.LLMSetConfig(senderID, provider, baseURL, apiKey, model, 0, ""); err != nil {
 				return nil, fmt.Errorf("保存失败: %v", err)
 			}
 		}

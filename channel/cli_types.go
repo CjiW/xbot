@@ -104,8 +104,8 @@ func hardWrapRunes(line string, maxW int) string {
 
 // newGlamourRenderer creates a glamour Markdown renderer.
 // Document.Margin=0 prevents misalignment inside lipgloss bubbles.
-// WordWrap is disabled (set to 0) — viewport's hardWrapRunes handles wrapping
-// by rune width, ensuring text never wraps at spaces.
+// WordWrap is set to the available width so glamour can calculate proper
+// table column widths and wrap cell content within cells.
 // Color styles follow currentTheme for visual consistency.
 func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 	t := currentTheme
@@ -161,8 +161,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
-		glamour.WithWordWrap(0),
-		glamour.WithTableWrap(false),
+		glamour.WithWordWrap(wrapWidth),
 	)
 	return r
 }

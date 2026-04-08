@@ -387,7 +387,6 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 		Messages:            openaiMessages,
 		N:                   param.Opt[int64]{Value: 1},
 		MaxCompletionTokens: param.Opt[int64]{Value: int64(o.maxTokens)},
-		MaxTokens:           param.Opt[int64]{Value: int64(o.maxTokens)},
 	}
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
@@ -417,8 +416,7 @@ func (o *OpenAILLM) buildThinkingOptions(thinkingMode string) []option.RequestOp
 		// DeepSeek/GLM 标准格式
 		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "enabled"}))
 	case "disabled":
-		// 显式禁用 thinking
-		opts = append(opts, option.WithJSONSet("thinking", map[string]any{"type": "disabled"}))
+		// 不发送任何 thinking 参数，让模型自己决定
 	default:
 		// JSON 格式的 thinking 参数
 		if len(thinkingMode) > 0 && thinkingMode[0] == '{' {
@@ -498,6 +496,14 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 
 		// 提取 reasoning_content（DeepSeek/OpenAI reasoning 模型）
 		resp.ReasoningContent = extractReasoningContent(choice.Message)
+
+		// BUG 5 fix: 某些 provider (DeepSeek) 会在 Content 中重复包含 reasoning_content。
+		// 如果 reasoning_content 非空且 Content 以 reasoning_content 开头，去除重复部分。
+		if resp.ReasoningContent != "" && resp.Content != "" {
+			if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
+				resp.Content = strings.TrimSpace(resp.Content[len(resp.ReasoningContent):])
+			}
+		}
 
 		// 解析工具调用
 		if len(choice.Message.ToolCalls) > 0 {
@@ -586,8 +592,8 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 	chunkCount := 0
 	var firstChunkTime time.Time
 	var lastUsage *TokenUsage
-	doneSent := false
-	var lastFinishReason string
+	var lastFinishReason FinishReason
+	var hasToolCalls bool // track if any tool call deltas were seen
 
 	for stream.Next() {
 		select {
@@ -633,8 +639,11 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				}
 			}
 
-			// 处理工具调用
+			// 处理工具调用 — 跳过全空 delta（BUG 4 fix）
 			for _, tc := range choice.Delta.ToolCalls {
+				if tc.ID == "" && tc.Function.Name == "" && tc.Function.Arguments == "" {
+					continue
+				}
 				if tc.ID != "" || tc.Function.Name != "" {
 					l.WithFields(log.Fields{
 						"provider":  "openai",
@@ -643,6 +652,7 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 						"index":     tc.Index,
 					}).Debug("[LLM] Tool call started")
 				}
+				hasToolCalls = true
 				eventChan <- StreamEvent{
 					Type: EventToolCall,
 					ToolCall: &ToolCallDelta{
@@ -654,14 +664,11 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				}
 			}
 
-			// 处理完成原因
+			// 记录 finish_reason 但不立即发送 EventDone（BUG 1 fix）
+			// 只在 stream 循环结束后统一发送，防止中间 chunk 的 finish_reason
+			// 导致消费方提前终止，丢失后续 content/tool_calls。
 			if choice.FinishReason != "" {
-				doneSent = true
-				lastFinishReason = string(choice.FinishReason)
-				eventChan <- StreamEvent{
-					Type:         EventDone,
-					FinishReason: FinishReason(choice.FinishReason),
-				}
+				lastFinishReason = FinishReason(choice.FinishReason)
 			}
 		}
 
@@ -672,14 +679,6 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
-			}
-			eventChan <- StreamEvent{
-				Type:  EventUsage,
-				Usage: lastUsage,
-			}
-			// Info: dump the chunk containing usage
-			if chunkRaw, err := json.Marshal(chunk); err == nil {
-				l.WithField("raw_final_chunk", string(chunkRaw)).Info("[LLM] Stream final chunk (with usage)")
 			}
 		}
 	}
@@ -697,6 +696,24 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 			Error: err.Error(),
 		}
 		return
+	}
+
+	// BUG 2 fix: 先发 Usage，再发 Done。确保消费方在处理 Done 之前拿到 usage。
+	if lastUsage != nil {
+		eventChan <- StreamEvent{
+			Type:  EventUsage,
+			Usage: lastUsage,
+		}
+	}
+
+	// BUG 1 fix: 统一在 stream 结束后发送 EventDone。
+	// 如果 provider 没有发送 finish_reason，但有 tool_calls，推断为 tool_calls。
+	if lastFinishReason == "" && hasToolCalls {
+		lastFinishReason = FinishReasonToolCalls
+	}
+	eventChan <- StreamEvent{
+		Type:         EventDone,
+		FinishReason: lastFinishReason,
 	}
 
 	fields := log.Fields{
@@ -717,13 +734,6 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 		l.WithFields(fields).Warn("[LLM] Stream completed with near-empty response")
 	} else {
 		l.WithFields(fields).Debug("[LLM] Stream completed")
-	}
-
-	// 仅在未通过 finish_reason 发送过 Done 时补发
-	if !doneSent {
-		eventChan <- StreamEvent{
-			Type: EventDone,
-		}
 	}
 }
 

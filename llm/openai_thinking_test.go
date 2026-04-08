@@ -28,12 +28,9 @@ func TestBuildThinkingOptions(t *testing.T) {
 			},
 		},
 		{
-			name:         "disabled mode",
+			name:         "disabled mode — no options sent",
 			thinkingMode: "disabled",
-			expectNil:    false,
-			expectedInJSON: map[string]any{
-				"thinking": map[string]any{"type": "disabled"},
-			},
+			expectNil:    true,
 		},
 		{
 			name:         "custom JSON with type field (GLM preserved thinking)",

@@ -735,6 +735,20 @@ func TestSubmitAskAnswers_NilCallback(t *testing.T) {
 	}
 }
 
+func TestSubmitAskAnswers_SavesCurrentFreeInputBeforeCollect(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.panelMode = "askuser"
+	model.panelItems = []askItem{{Question: "q1"}, {Question: "q2", Other: "stale"}}
+	model.panelTab = 1
+	model.panelAnswerTA = model.newPanelTextArea("custom", 50, 3)
+
+	model.saveCurrentFreeInput()
+	if got := model.panelItems[1].Other; got != "custom" {
+		t.Fatalf("panelItems[1].Other = %q, want custom", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Security / edge-case: ensure no panic on boundary inputs
 // ---------------------------------------------------------------------------

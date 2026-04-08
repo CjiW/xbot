@@ -108,8 +108,6 @@ type WebCallbacks struct {
 	// LLMSetMaxContext sets the user's max context tokens setting.
 	LLMSetMaxContext func(senderID string, maxContext int) error
 
-	// NormalizeSenderID normalizes sender ID for single-user mode.
-	NormalizeSenderID func(senderID string) string
 	// RegistryPublish publishes a user's agent/skill to the marketplace.
 	RegistryPublish func(entryType, name, senderID string) error
 	// SandboxWriteFile writes file data to the user's sandbox at the given path.
@@ -684,9 +682,6 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	senderID := "web-" + strconv.Itoa(si.userID)
-	if wc.callbacks.NormalizeSenderID != nil {
-		senderID = wc.callbacks.NormalizeSenderID(senderID)
-	}
 	// If linked to Feishu account, use Feishu identity directly.
 	// This makes the web user share the same session/persona/workspace/skills/agents
 	// as their Feishu account — effectively the same user.

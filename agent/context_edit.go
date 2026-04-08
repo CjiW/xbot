@@ -189,8 +189,10 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 			for _, tc := range messages[actualIdx].ToolCalls {
 				tcIDs[tc.ID] = true
 			}
-			for j := actualIdx + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
-				if tcIDs[messages[j].ToolCallID] {
+			// Scan remaining messages (not just consecutive tool segment)
+			// to find all tool results paired with this assistant's tool calls.
+			for j := actualIdx + 1; j < len(messages); j++ {
+				if messages[j].Role == "tool" && tcIDs[messages[j].ToolCallID] {
 					messages[j].Content = placeholder
 					messages[j].ToolCallID = ""
 					messages[j].ToolName = ""

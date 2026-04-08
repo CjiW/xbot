@@ -82,6 +82,20 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v25 requires *DB to instantiate UserTokenUsageService (daily_token_usage + cached_tokens column).
+	if from < 25 {
+		if err := migrateV24ToV25WithDB(db); err != nil {
+			return fmt.Errorf("migrate to v25: %w", err)
+		}
+	}
+
+	// v26: migrate singleUser "default" sender IDs to "cli_user"
+	if from < 26 {
+		if err := migrateV25ToV26(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v26: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -778,5 +792,90 @@ WHERE u.sender_id IS NOT NULL
 		return fmt.Errorf("migrate v23->v24 version: %w", err)
 	}
 	log.WithField("subscriptions", count).Info("Database migrated to v24 (user_llm_configs → user_llm_subscriptions)")
+	return nil
+}
+
+// migrateV24ToV25WithDB adds daily_token_usage table and cached_tokens column.
+func migrateV24ToV25WithDB(db *DB) error {
+	conn := db.Conn()
+	svc := NewUserTokenUsageService(db)
+
+	// Add cached_tokens column to existing user_token_usage (if not present)
+	if err := svc.addCachedTokensColumn(conn); err != nil {
+		return fmt.Errorf("add cached_tokens column: %w", err)
+	}
+
+	// Create daily_token_usage table
+	if err := svc.createDailyTable(conn); err != nil {
+		return fmt.Errorf("create daily_token_usage: %w", err)
+	}
+
+	if _, err := conn.Exec("UPDATE schema_version SET version = 25"); err != nil {
+		return fmt.Errorf("migrate v24->v25 version: %w", err)
+	}
+	log.Info("Database migrated to v25 (daily_token_usage + cached_tokens)")
+	return nil
+}
+
+// migrateV25ToV26 migrates "default" sender IDs to "cli_user".
+// This is a one-time migration for CLI single-user mode data that was previously
+// stored under the normalized "default" sender ID.
+func migrateV25ToV26(conn *sql.DB) error {
+	const oldID = "default"
+	const newID = "cli_user"
+
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Tables with sender_id column
+	senderIDTables := []string{
+		"user_profiles",
+		"cron_jobs",
+		"user_llm_configs",
+		"user_settings",
+		"user_token_usage",
+		"daily_token_usage",
+		"event_triggers",
+		"user_llm_subscriptions",
+	}
+	for _, table := range senderIDTables {
+		_, err := tx.Exec(
+			fmt.Sprintf(`UPDATE %s SET sender_id = ? WHERE sender_id = ?`, table),
+			newID, oldID,
+		)
+		if err != nil {
+			// Table might not exist on fresh installs — ignore
+			log.WithField("table", table).WithError(err).Debug("v26 migration: skipping table")
+		}
+	}
+
+	// Tables with user_id column
+	userIDTables := []string{
+		"core_memory_blocks",
+		"runners",
+	}
+	for _, table := range userIDTables {
+		_, err := tx.Exec(
+			fmt.Sprintf(`UPDATE %s SET user_id = ? WHERE user_id = ?`, table),
+			newID, oldID,
+		)
+		if err != nil {
+			log.WithField("table", table).WithError(err).Debug("v26 migration: skipping table")
+		}
+	}
+
+	// Update version stamp inside the same transaction
+	if _, err := tx.Exec("UPDATE schema_version SET version = 26"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	log.Info("Database migrated to v26: sender_id 'default' → 'cli_user'")
 	return nil
 }

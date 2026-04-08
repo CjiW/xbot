@@ -99,9 +99,21 @@ func TestApplyQuickSwitch(t *testing.T) {
 	model.quickSwitchCursor = 1
 	model.applyQuickSwitch()
 
-	// Verify SetDefault was called
-	if mgr.setDefID != "sub2" {
-		t.Errorf("expected SetDefault(sub2), got SetDefault(%s)", mgr.setDefID)
+	// applyQuickSwitch now defers SwitchLLM + SetDefault to a background Cmd.
+	// Verify pending Cmds were queued (showTempStatus + async SwitchLLM).
+	if len(model.pendingCmds) < 2 {
+		t.Fatalf("expected at least 2 pendingCmds (status clear + async switch), got %d", len(model.pendingCmds))
+	}
+
+	// The last pending Cmd is the async SwitchLLM (first is tempStatus clear)
+	asyncCmd := model.pendingCmds[len(model.pendingCmds)-1]
+	msg := asyncCmd()
+	doneMsg, ok := msg.(cliSwitchLLMDoneMsg)
+	if !ok {
+		t.Fatalf("expected cliSwitchLLMDoneMsg, got %T", msg)
+	}
+	if doneMsg.err != nil {
+		t.Fatalf("unexpected SwitchLLM error: %v", doneMsg.err)
 	}
 
 	// Verify SwitchLLM was called with correct values
@@ -124,6 +136,17 @@ func TestApplyQuickSwitch(t *testing.T) {
 	// Verify quick switch mode is cleared
 	if model.quickSwitchMode != "" {
 		t.Errorf("expected quickSwitchMode cleared, got %s", model.quickSwitchMode)
+	}
+
+	// Now simulate the Update handler processing the doneMsg (which calls SetDefault)
+	// The Update handler in cli_update.go does this when it receives cliSwitchLLMDoneMsg
+	if doneMsg.mgr != nil {
+		if err := doneMsg.mgr.SetDefault(doneMsg.subID); err != nil {
+			t.Fatalf("SetDefault failed: %v", err)
+		}
+	}
+	if mgr.setDefID != "sub2" {
+		t.Errorf("expected SetDefault(sub2), got SetDefault(%s)", mgr.setDefID)
 	}
 }
 

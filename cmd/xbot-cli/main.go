@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,6 +38,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 )
+
+// saveWg tracks in-flight config saves so SIGINT can wait for them.
+var saveWg sync.WaitGroup
 
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
 type cliApp struct {
@@ -126,7 +130,7 @@ func newCLIApp() *cliApp {
 		AgentsDir:            filepath.Join(xbotHome, "agents"),
 		WorkDir:              workDir,
 		PromptFile:           cfg.Agent.PromptFile,
-		SingleUser:           true,
+		DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
 		SandboxMode:          cfg.Sandbox.Mode,
 		Sandbox:              tools.GetSandbox(),
 		MemoryProvider:       cfg.Agent.MemoryProvider,
@@ -474,6 +478,21 @@ func main() {
 			}
 			return nil
 		},
+		UsageQuery: func(senderID string, days int) (*sqlite.UserTokenUsage, []sqlite.DailyTokenUsage, error) {
+			if app.agentLoop == nil {
+				return nil, nil, fmt.Errorf("agent not initialized")
+			}
+			ms := app.agentLoop.MultiSession()
+			cumulative, err := ms.GetUserTokenUsage(senderID)
+			if err != nil {
+				return nil, nil, err
+			}
+			daily, err := ms.GetDailyTokenUsage(senderID, days)
+			if err != nil {
+				return nil, nil, err
+			}
+			return cumulative, daily, nil
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）
@@ -573,7 +592,9 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Info("Received shutdown signal")
+		log.Info("Received shutdown signal, waiting for pending saves...")
+		saveWg.Wait()
+		log.Info("All saves complete, shutting down")
 		cancel()
 	}()
 
@@ -602,6 +623,8 @@ func main() {
 		}
 	}
 	saveConfig := func() error {
+		saveWg.Add(1)
+		defer saveWg.Done()
 		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
 	}
 	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig))
@@ -618,7 +641,9 @@ func main() {
 		cliCh.StartWithRunner(shareURL, shareToken, shareWorkspace)
 	} else {
 		if err := cliCh.Start(); err != nil {
-			log.WithError(err).Fatal("CLI channel error")
+			log.WithError(err).Error("CLI channel error")
+			app.Close()
+			return
 		}
 	}
 }
@@ -821,7 +846,9 @@ func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
 		}
 	}
 	syncLLMFromActiveSub(s.cfg)
-	_ = s.saveFn()
+	if err := s.saveFn(); err != nil {
+		log.WithError(err).Warn("Failed to persist model switch")
+	}
 }
 
 func (s *configLLMSubscriber) GetDefaultModel() string {

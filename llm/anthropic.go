@@ -419,9 +419,11 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 
 	out := &LLMResponse{
 		Usage: TokenUsage{
-			PromptTokens:     int64(apiResp.Usage.InputTokens),
-			CompletionTokens: int64(apiResp.Usage.OutputTokens),
-			TotalTokens:      int64(apiResp.Usage.InputTokens + apiResp.Usage.OutputTokens),
+			PromptTokens:        int64(apiResp.Usage.InputTokens),
+			CompletionTokens:    int64(apiResp.Usage.OutputTokens),
+			TotalTokens:         int64(apiResp.Usage.InputTokens + apiResp.Usage.OutputTokens),
+			CacheHitTokens:      int64(apiResp.Usage.CacheReadInputTokens),
+			CacheCreationTokens: int64(apiResp.Usage.CacheCreationInputTokens),
 		},
 		FinishReason: mapStopReason(apiResp.StopReason),
 	}
@@ -636,6 +638,8 @@ func (a *AnthropicLLM) processStream(ctx context.Context, resp *http.Response, e
 					lastUsage.PromptTokens = int64(ev.Message.Usage.InputTokens)
 					lastUsage.CompletionTokens = int64(ev.Message.Usage.OutputTokens)
 					lastUsage.TotalTokens = lastUsage.PromptTokens + lastUsage.CompletionTokens
+					lastUsage.CacheHitTokens = int64(ev.Message.Usage.CacheReadInputTokens)
+					lastUsage.CacheCreationTokens = int64(ev.Message.Usage.CacheCreationInputTokens)
 				}
 			}
 

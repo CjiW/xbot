@@ -1,10 +1,11 @@
 package channel
 
 import (
-	tea "charm.land/bubbletea/v2"
+	"fmt"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -79,7 +80,9 @@ func (m *cliModel) sendMessageFromQueue() tea.Cmd {
 	m.textarea.Reset()
 	m.autoExpandInput()
 	m.sendToAgent(content)
-	return nil
+	// Start tick chain for the new agent turn — the previous chain may have
+	// already transitioned to idleTickCmd (3s) after endAgentTurn set typing=false.
+	return tickCmd()
 }
 
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,
@@ -238,13 +241,14 @@ func (m *cliModel) handleSettingsSavedMsg(msg cliSettingsSavedMsg) tea.Cmd {
 // callback, closes the panel, and returns the appropriate tea.Cmd.
 // This pattern appears 3 times in updateAskUserPanel (ctrl+s, Enter with options, Enter without options).
 func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
+	m.saveCurrentFreeInput()
 	answers := m.collectAskAnswers()
 	if m.panelOnAnswer != nil {
 		m.panelOnAnswer(answers)
 	}
 	m.closePanel()
 	if m.typing {
-		return true, m, tea.Batch(tickerCmd(), tickCmd())
+		return true, m, tickCmd()
 	}
 	return true, m, nil
 }
@@ -256,7 +260,7 @@ func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
 func (m *cliModel) closePanelAndResume() (bool, tea.Model, tea.Cmd) {
 	m.closePanel()
 	if m.typing {
-		return true, m, tea.Batch(tickerCmd(), tickCmd())
+		return true, m, tickCmd()
 	}
 	return true, m, nil
 }
@@ -364,4 +368,111 @@ func (m *cliModel) enqueueToast(text, icon string) tea.Cmd {
 	return func() tea.Msg {
 		return cliToastMsg{text: text, icon: icon}
 	}
+}
+
+// handleUsageCommand renders token usage statistics for the current user.
+func (m *cliModel) handleUsageCommand() {
+	if m.usageQueryFn == nil {
+		m.showSystemMsg("Usage tracking not available", feedbackWarning)
+		return
+	}
+
+	cumulative, daily, err := m.usageQueryFn(m.senderID, 30)
+	if err != nil {
+		m.showSystemMsg(fmt.Sprintf("Failed to query usage: %v", err), feedbackError)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Token Usage\n\n")
+
+	// --- Cumulative totals ---
+	if cumulative != nil && cumulative.TotalTokens > 0 {
+		// Calculate usage duration from daily data
+		usageDays := 0
+		if len(daily) > 0 {
+			// daily is sorted by date DESC; last entry = earliest date
+			earliest := daily[len(daily)-1].Date
+			if first, err := time.Parse("2006-01-02", earliest); err == nil {
+				usageDays = int(time.Since(first).Hours()/24) + 1
+			}
+		}
+
+		sb.WriteString("## Summary\n\n")
+		sb.WriteString("| | |\n|---|---|\n")
+		fmt.Fprintf(&sb, "| **Total tokens** | **%s** |\n", fmtTokens(cumulative.TotalTokens))
+		fmt.Fprintf(&sb, "| Input | %s |\n", fmtTokens(cumulative.InputTokens))
+		fmt.Fprintf(&sb, "| Output | %s |\n", fmtTokens(cumulative.OutputTokens))
+		fmt.Fprintf(&sb, "| Cached | %s |\n", fmtTokens(cumulative.CachedTokens))
+		fmt.Fprintf(&sb, "| Conversations | %d |\n", cumulative.ConversationCount)
+		fmt.Fprintf(&sb, "| LLM calls | %d |\n", cumulative.LLMCallCount)
+		if usageDays > 0 {
+			fmt.Fprintf(&sb, "| **Usage duration** | **%d days** |\n", usageDays)
+			avgDaily := cumulative.TotalTokens / int64(usageDays)
+			fmt.Fprintf(&sb, "| Avg daily tokens | %s |\n", fmtTokens(avgDaily))
+		}
+
+		// Analysis section
+		sb.WriteString("\n### Analysis\n\n")
+		sb.WriteString("| | |\n|---|---|\n")
+		if cumulative.InputTokens > 0 {
+			cacheRate := float64(cumulative.CachedTokens) / float64(cumulative.InputTokens) * 100
+			fmt.Fprintf(&sb, "| **Cache hit rate** | **%.1f%%** |\n", cacheRate)
+			nonCachedInput := cumulative.InputTokens - cumulative.CachedTokens
+			fmt.Fprintf(&sb, "| Actual input (non-cached) | %s |\n", fmtTokens(nonCachedInput))
+		}
+		if cumulative.LLMCallCount > 0 {
+			avgIn := cumulative.InputTokens / cumulative.LLMCallCount
+			avgOut := cumulative.OutputTokens / cumulative.LLMCallCount
+			fmt.Fprintf(&sb, "| Avg input/call | %s |\n", fmtTokens(avgIn))
+			fmt.Fprintf(&sb, "| Avg output/call | %s |\n", fmtTokens(avgOut))
+		}
+		if cumulative.ConversationCount > 0 {
+			avgCalls := float64(cumulative.LLMCallCount) / float64(cumulative.ConversationCount)
+			fmt.Fprintf(&sb, "| Avg calls/conversation | %.1f |\n", avgCalls)
+		}
+	} else {
+		sb.WriteString("No usage data recorded yet.\n")
+	}
+
+	// --- Daily breakdown (last 30 days) ---
+	if len(daily) > 0 {
+		sb.WriteString("\n## Daily Breakdown (last 30 days)\n\n")
+		sb.WriteString("| Date | Model | Input | Output | Cached | Cache%% | Calls |\n")
+		sb.WriteString("|------|-------|-------|--------|--------|--------|-------|\n")
+		for _, d := range daily {
+			model := d.Model
+			if model == "" {
+				model = "(unknown)"
+			}
+			cacheRate := ""
+			if d.InputTokens > 0 {
+				cacheRate = fmt.Sprintf("%.0f%%", float64(d.CachedTokens)/float64(d.InputTokens)*100)
+			}
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s | %d |\n",
+				d.Date, model,
+				fmtTokens(d.InputTokens),
+				fmtTokens(d.OutputTokens),
+				fmtTokens(d.CachedTokens),
+				cacheRate,
+				d.LLMCallCount,
+			)
+		}
+	}
+
+	m.appendSystemMarkdown(sb.String())
+	m.updateViewportContent()
+}
+
+// formatTokenCount is defined in cli_view.go — do not duplicate here.
+
+// fmtTokens formats large token counts with K/M suffixes for usage tables.
+func fmtTokens(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 10_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"xbot/memory"
+	"xbot/prompt"
 )
 
 // --- Priority 0-99: 基础设施 ---
@@ -176,18 +177,9 @@ func (m *LanguageMiddleware) Process(mc *MessageContext) error {
 // letta 模式下包含 search_tools 引导，flat 模式下不包含。
 func buildSystemGuideText(memoryProvider string) string {
 	if memoryProvider == "letta" {
-		return `[系统引导] 在执行任何操作前，**必须**先用` + "`search_tools`" + `搜索工具库尝试寻找工具。
-	- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）
-	- 浏览/获取网页内容 → Fetch
-	- 如果需要查找或使用 skill，请使用 ` + "`Skill`" + ` 工具（不是 search_tools）
-	- search_tools 仅用于搜索其他工具
-`
+		return prompt.UserMessageGuideLetta
 	}
-	return `[系统引导]
-- 搜索实时信息 → web_search（搜索引擎，不是浏览网页）
-- 浏览/获取网页内容 → Fetch
-- 如果需要查找或使用 skill，请使用 ` + "`Skill`" + ` 工具
-`
+	return prompt.UserMessageGuideFlat
 }
 
 // UserMessageMiddleware 构建最终的用户消息（注入时间戳、发送者标识、系统引导）
@@ -235,7 +227,11 @@ func (m *CronSystemPromptMiddleware) Priority() int { return 0 }
 
 func (m *CronSystemPromptMiddleware) Process(mc *MessageContext) error {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	mc.SystemParts["00_base"] = fmt.Sprintf(cronSystemPrompt, m.workDir, now)
+	cronPrompt := EmbeddedCronPrompt()
+	if cronPrompt == "" {
+		cronPrompt = "You are xbot executing a scheduled cron task.\n\n## Guidelines\n- You are processing a scheduled reminder/task\n- Execute the task directly and concisely\n- Use tools when needed\n- Report results clearly\n- WorkDir: %s\n- Time: %s\n"
+	}
+	mc.SystemParts["00_base"] = fmt.Sprintf(cronPrompt, m.workDir, now)
 	// Cron 消息不需要额外处理 UserMessage，直接使用原始内容
 	mc.UserMessage = mc.UserContent
 	return nil

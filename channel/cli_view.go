@@ -240,6 +240,16 @@ func (m *cliModel) View() tea.View {
 				status = bgHint
 			}
 		}
+		// Message queue indicator (persistent, not temp status)
+		if len(m.messageQueue) > 0 {
+			queueHint := m.styles.InfoSt.Render(
+				fmt.Sprintf(m.locale.QueuePending, len(m.messageQueue)))
+			if status != "" {
+				status += "  " + queueHint
+			} else {
+				status = queueHint
+			}
+		}
 
 		todoBar := m.renderTodoBar()
 		// 底部快捷键提示条（第 4 轮：激活已定义但未使用的 renderFooter）
@@ -280,6 +290,7 @@ func (m *cliModel) View() tea.View {
 
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion // enable mouse wheel as MouseWheelMsg (not KeyUp/KeyDown)
 
 	// §15 Quick switch overlay (subscription/model picker)
 	// Rendered as a centered panel replacing the entire view.

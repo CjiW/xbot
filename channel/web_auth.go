@@ -333,11 +333,7 @@ func (wc *WebChannel) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		// Store senderID in context for handler use (normalize for single-user mode)
 		senderID := "web-" + strconv.Itoa(si.userID)
-		if wc.callbacks.NormalizeSenderID != nil {
-			senderID = wc.callbacks.NormalizeSenderID(senderID)
-		}
 		// If linked to Feishu account, use Feishu identity for all operations.
 		// This ensures web users share session/persona/workspace/skills/agents with their Feishu account.
 		if si.feishuUserID != "" {

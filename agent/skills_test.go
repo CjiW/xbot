@@ -68,3 +68,15 @@ func TestSkillStore_PrivateOverrideGlobal(t *testing.T) {
 		t.Fatalf("expected private dup to override global dup, got: %s", catalog)
 	}
 }
+
+func TestSkillStore_EmbeddedDebugSkillPresent(t *testing.T) {
+	store := NewSkillStore(t.TempDir(), nil, nil)
+	catalog := store.GetSkillsCatalog(context.Background(), "user-1")
+
+	if !strings.Contains(catalog, "<name>debug</name>") {
+		t.Fatalf("expected embedded debug skill in catalog, got: %s", catalog)
+	}
+	if !strings.Contains(catalog, "Investigate and fix bugs") {
+		t.Fatalf("expected debug skill description in catalog, got: %s", catalog)
+	}
+}

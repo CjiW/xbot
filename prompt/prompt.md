@@ -6,8 +6,8 @@
 
 {{.Memory}}
 
-{{.Environment}}
+{{.Environment}}{{if .ResponseRules}}
 
-{{.ResponseRules}}
+{{.ResponseRules}}{{end}}{{if .CodeRules}}
 
-{{.CodeRules}}
+{{.CodeRules}}{{end}}

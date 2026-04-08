@@ -429,15 +429,14 @@ func foldPureToolGroup(result []llm.ChatMessage, grp struct{ start, end int }, s
 		return 0, nil
 	}
 
-	// 折叠 assistant：替换为单行摘要
+	// 折叠 assistant：保留 ToolCalls 以维持 tool_use/tool_result 配对，只替换 Content
 	summary := fmt.Sprintf("📂 [batch: %d tool calls folded] %s", maskedCount, strings.Join(callSummaries, ", "))
-	result[grp.start] = llm.ChatMessage{
-		Role:    "assistant",
-		Content: summary,
-	}
+	assistantMsg := result[grp.start]
+	assistantMsg.Content = summary
+	result[grp.start] = assistantMsg
 	entries = append(entries, MaskedEntry{MessageIndex: grp.start, Content: summary})
 
-	// 折叠 tool results：第一条 tool 替换为 batch 占位符，其余清空
+	// 折叠 tool results：替换 Content 为占位符，保留 ToolCallID 以维持配对
 	batchPlaceholder := fmt.Sprintf("📂 [batch-masked: %d results] IDs: %s — recall_masked <id> to view", maskedCount, strings.Join(batchIDs, ", "))
 	firstTool := true
 	for j := grp.start + 1; j <= grp.end; j++ {

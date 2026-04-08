@@ -315,7 +315,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user")
+					vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
 					if err == nil {
 						for k, v := range vals {
 							// Skip LLM fields — they come from config (single source of truth)
@@ -350,7 +350,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
 								continue
 							}
-							_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", k, v)
+							_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)
 						}
 					}
 					// Apply settings: write config.json + update runtime state

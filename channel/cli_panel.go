@@ -791,10 +791,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	item := &m.panelItems[m.panelTab]
 	numOpts := len(item.Options)
 	hasOpts := numOpts > 0
-	// Cursor: 0..numOpts-1 (checkbox), numOpts (Other input), numOpts+1 (Submit)
+	isLastTab := m.panelTab == len(m.panelItems)-1
+	// Cursor: 0..numOpts-1 (checkbox), numOpts (Other input), numOpts+1 (Submit, last tab only)
 	cursor := m.panelOptCursor[m.panelTab]
 	onOther := hasOpts && cursor == numOpts
-	onSubmit := hasOpts && cursor == numOpts+1
+	onSubmit := hasOpts && isLastTab && cursor == numOpts+1
 
 	switch {
 	case msg.String() == "ctrl+s":
@@ -836,11 +837,17 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, cmd
 	case msg.Code == tea.KeyDown:
 		if hasOpts {
+			maxCursor := numOpts // Other input is the last item
+			if isLastTab {
+				maxCursor = numOpts + 1 // Submit button only on last tab
+			}
 			if onOther {
-				m.panelOptCursor[m.panelTab] = numOpts + 1
+				if isLastTab {
+					m.panelOptCursor[m.panelTab] = numOpts + 1
+				}
 				return true, m, nil
 			}
-			if cursor < numOpts+1 {
+			if cursor < maxCursor {
 				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
 			return true, m, nil
@@ -860,7 +867,14 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 			}
 			return true, m, nil
 		}
-		return m.submitAskAnswers()
+		// No options (textarea): submit only on last tab, otherwise advance
+		if isLastTab {
+			return m.submitAskAnswers()
+		}
+		m.saveCurrentFreeInput()
+		m.panelTab++
+		m.restoreFreeInput()
+		return true, m, nil
 	case msg.Code == tea.KeySpace:
 		if hasOpts && !onOther {
 			if cursor < numOpts {
@@ -1276,6 +1290,7 @@ func (m *cliModel) viewAskUserPanel() string {
 	// Current question
 	if m.panelTab >= 0 && m.panelTab < len(m.panelItems) {
 		item := m.panelItems[m.panelTab]
+		isLastTab := m.panelTab == len(m.panelItems)-1
 		sb.WriteString(questionStyle.Render("❓ " + item.Question))
 		sb.WriteString("\n")
 
@@ -1324,14 +1339,16 @@ func (m *cliModel) viewAskUserPanel() string {
 			sb.WriteString(m.panelOtherTI.View())
 			sb.WriteString("\n")
 
-			// Submit button
-			submitLabel := m.locale.PanelSubmit
-			if cursor == numOpts+1 {
-				sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
-			} else {
-				sb.WriteString("  " + submitStyle.Render(submitLabel))
+			// Submit button (only on last tab)
+			if isLastTab {
+				submitLabel := m.locale.PanelSubmit
+				if cursor == numOpts+1 {
+					sb.WriteString(cursorStyle.Render("▸ ") + submitStyle.Render(submitLabel))
+				} else {
+					sb.WriteString("  " + submitStyle.Render(submitLabel))
+				}
+				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
 		} else {
 			sb.WriteString("\n")
 			sb.WriteString(m.panelAnswerTA.View())

@@ -24,6 +24,10 @@ type OpenAILLM struct {
 	models       []string     // 可用模型列表
 	defaultModel string       // 默认模型
 	maxTokens    int          // 最大生成 token 数
+
+	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
+	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
+	maxTokensUpgrade sync.Map // model -> bool
 }
 
 // OpenAIConfig OpenAI 配置
@@ -387,15 +391,65 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	openaiMessages := toOpenAIMessages(messages)
 
 	p := openai.ChatCompletionNewParams{
-		Model:               model,
-		Messages:            openaiMessages,
-		N:                   param.Opt[int64]{Value: 1},
-		MaxCompletionTokens: param.Opt[int64]{Value: int64(o.maxTokens)},
+		Model:    model,
+		Messages: openaiMessages,
+		N:        param.Opt[int64]{Value: 1},
 	}
+
+	// OpenAI API has two mutually exclusive params for max output tokens:
+	//   - max_completion_tokens (new, required by o1/o3/o4/gpt-5.4+)
+	//   - max_tokens (legacy, broadly compatible across all providers)
+	//
+	// Strategy: default to max_tokens (works everywhere including GLM, Claude
+	// proxies, etc.). If a model rejects it with a 400 error, we learn at
+	// runtime and switch to max_completion_tokens (see isMaxTokensParamError).
+	// Note: some providers (GLM) silently ignore max_completion_tokens without
+	// error, so max_tokens is the safer default.
+	if _, useNew := o.maxTokensUpgrade.Load(model); useNew {
+		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+	} else {
+		p.MaxTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+	}
+
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
 	}
 	return p
+}
+
+// isMaxTokensParamError checks if a 400 error is caused by the wrong
+// max_tokens / max_completion_tokens parameter choice.
+// Returns:
+//   - "use_legacy" if the model rejects max_completion_tokens (need max_tokens)
+//   - "use_new" if the model rejects max_tokens (need max_completion_tokens)
+//   - "" if the error is unrelated
+//
+// Strategy: the rejected parameter name appears first in the error message.
+// e.g. "'max_tokens' is not supported ... Use 'max_completion_tokens' instead"
+// → "max_tokens" appears first → it's the rejected one → return "use_new".
+func isMaxTokensParamError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	idxMT := strings.Index(msg, "max_tokens")
+	idxMCT := strings.Index(msg, "max_completion_tokens")
+	if idxMT < 0 && idxMCT < 0 {
+		return ""
+	}
+	lower := strings.ToLower(msg)
+	if !strings.Contains(lower, "not supported") && !strings.Contains(lower, "unsupported") {
+		return ""
+	}
+	// "max_tokens" is NOT a substring of "max_completion_tokens", so Index is unambiguous.
+	// The rejected param appears first; the suggested alternative appears later.
+	if idxMT >= 0 && (idxMCT < 0 || idxMT < idxMCT) {
+		return "use_new"
+	}
+	if idxMCT >= 0 && (idxMT < 0 || idxMCT < idxMT) {
+		return "use_legacy"
+	}
+	return ""
 }
 
 // buildThinkingOptions 根据 thinkingMode 构建对应的 request options
@@ -474,6 +528,20 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 	}
 
 	completion, err := o.client.Chat.Completions.New(ctx, params, opts...)
+	if err != nil {
+		// Auto-detect max_tokens vs max_completion_tokens mismatch and retry
+		if verdict := isMaxTokensParamError(err); verdict != "" {
+			if verdict == "use_new" {
+				o.maxTokensUpgrade.Store(model, true)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires max_completion_tokens, retrying")
+			} else {
+				o.maxTokensUpgrade.Delete(model)
+				log.Ctx(ctx).WithField("model", model).Info("[LLM] Model requires legacy max_tokens, retrying")
+			}
+			params = o.buildParams(model, messages, tools)
+			completion, err = o.client.Chat.Completions.New(ctx, params, opts...)
+		}
+	}
 	if err != nil {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"provider": "openai",
@@ -695,6 +763,16 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 
 	// 检查错误
 	if err := stream.Err(); err != nil {
+		// Learn max_tokens preference for future retries
+		if verdict := isMaxTokensParamError(err); verdict != "" {
+			if verdict == "use_new" {
+				o.maxTokensUpgrade.Store(model, true)
+				l.WithField("model", model).Info("[LLM] Stream: model requires max_completion_tokens, will retry with correct param")
+			} else {
+				o.maxTokensUpgrade.Delete(model)
+				l.WithField("model", model).Info("[LLM] Stream: model requires legacy max_tokens, will retry with correct param")
+			}
+		}
 		l.WithFields(log.Fields{
 			"provider":    "openai",
 			"chunk_count": chunkCount,

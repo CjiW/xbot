@@ -259,3 +259,72 @@ func TestMaskOldToolResults_AlreadyMaskedSkipped(t *testing.T) {
 		t.Errorf("expected 1 store entry, got %d", store.Size())
 	}
 }
+
+// TestMaskOldToolResults_FoldPreservesToolPairing tests that foldPureToolGroup
+// preserves tool_use/tool_result pairing (assistant.ToolCalls ↔ tool.ToolCallID).
+// This was a bug: foldPureToolGroup replaced the assistant message with a new
+// ChatMessage{Role: "assistant", Content: summary}, dropping ToolCalls entirely.
+// The orphaned tool_result messages then caused Claude API 400 errors.
+func TestMaskOldToolResults_FoldPreservesToolPairing(t *testing.T) {
+	store := NewObservationMaskStore(100)
+	longContent := "very long output " + string(make([]byte, 500))
+	messages := []llm.ChatMessage{
+		// Group 1: pure tool group (no thinking text) — should be folded
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{
+			{ID: "tc1", Name: "Shell", Arguments: `{"command":"ls -la"}`},
+			{ID: "tc2", Name: "Shell", Arguments: `{"command":"cat /tmp/x"}`},
+		}},
+		{Role: "tool", Content: longContent, ToolName: "Shell", ToolCallID: "tc1", ToolArguments: `{"command":"ls -la"}`},
+		{Role: "tool", Content: longContent, ToolName: "Shell", ToolCallID: "tc2", ToolArguments: `{"command":"cat /tmp/x"}`},
+		// Group 2: pure tool group — should also be folded
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{
+			{ID: "tc3", Name: "Shell", Arguments: `{"command":"echo hello"}`},
+		}},
+		{Role: "tool", Content: longContent, ToolName: "Shell", ToolCallID: "tc3", ToolArguments: `{"command":"echo hello"}`},
+		// Group 3: kept (recent)
+		{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{ID: "tc4", Name: "Shell", Arguments: `{"command":"pwd"}`}}},
+		{Role: "tool", Content: "recent output", ToolName: "Shell", ToolCallID: "tc4", ToolArguments: `{"command":"pwd"}`},
+	}
+
+	result, count, _ := MaskOldToolResults(messages, store, 1)
+	if count == 0 {
+		t.Fatal("expected some tool results to be masked, got 0")
+	}
+
+	// Key assertion: every assistant message with ToolCalls must preserve them
+	for i, msg := range result {
+		if msg.Role == "assistant" {
+			// Check pairing: each ToolCall ID must have a corresponding tool message
+			for _, tc := range msg.ToolCalls {
+				found := false
+				for j := i + 1; j < len(result) && result[j].Role == "tool"; j++ {
+					if result[j].ToolCallID == tc.ID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("assistant at index %d has ToolCall %q but no matching tool message (orphaned tool_use)", i, tc.ID)
+				}
+			}
+		}
+		if msg.Role == "tool" && msg.ToolCallID != "" {
+			// Check reverse: each tool message with ToolCallID must have a matching assistant ToolCall
+			found := false
+			for j := i - 1; j >= 0; j-- {
+				if result[j].Role == "assistant" {
+					for _, tc := range result[j].ToolCalls {
+						if tc.ID == msg.ToolCallID {
+							found = true
+							break
+						}
+					}
+					break
+				}
+			}
+			if !found {
+				t.Errorf("tool message at index %d has ToolCallID %q but no matching assistant ToolCall (orphaned tool_result)", i, msg.ToolCallID)
+			}
+		}
+	}
+}

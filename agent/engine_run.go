@@ -74,6 +74,7 @@ type runState struct {
 	localLLMCalls     int
 	localInputTokens  int
 	localOutputTokens int
+	localCachedTokens int
 
 	// Progress
 	progressLines      []string
@@ -219,7 +220,7 @@ func (s *runState) cleanupTodos() {
 func (s *runState) recordMetrics() {
 	GlobalMetrics.RecordConversation(s.localIterCount, s.localToolCalls, s.localLLMCalls, s.localInputTokens, s.localOutputTokens)
 	if s.cfg.RecordUserTokenUsage != nil && s.cfg.OriginUserID != "" {
-		s.cfg.RecordUserTokenUsage(s.cfg.OriginUserID, s.localInputTokens, s.localOutputTokens, 1, s.localLLMCalls)
+		s.cfg.RecordUserTokenUsage(s.cfg.OriginUserID, s.cfg.Model, s.localInputTokens, s.localOutputTokens, s.localCachedTokens, 1, s.localLLMCalls)
 	}
 	GlobalMetrics.ClearRecallTracking()
 }
@@ -383,6 +384,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		s.hadLLMCall = true
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
+		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 	}
 
 	if err != nil && llm.IsInputTooLongError(err) && len(s.messages) > 3 {
@@ -457,6 +459,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.hadLLMCall = true
 		s.localInputTokens += int(response.Usage.PromptTokens)
 		s.localOutputTokens += int(response.Usage.CompletionTokens)
+		s.localCachedTokens += int(response.Usage.CacheHitTokens)
 	}
 	return response, err
 }

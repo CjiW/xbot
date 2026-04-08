@@ -271,6 +271,10 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 			return len(c.bgTaskMgr.ListRunning(key))
 		}
 	}
+	// Wire usage query callback
+	if c.config.UsageQuery != nil {
+		c.model.usageQueryFn = c.config.UsageQuery
+	}
 }
 
 // CheckUpdateAsync starts a background goroutine to check for updates.

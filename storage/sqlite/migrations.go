@@ -82,6 +82,13 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v25 requires *DB to instantiate UserTokenUsageService (daily_token_usage + cached_tokens column).
+	if from < 25 {
+		if err := migrateV24ToV25WithDB(db); err != nil {
+			return fmt.Errorf("migrate to v25: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -778,5 +785,27 @@ WHERE u.sender_id IS NOT NULL
 		return fmt.Errorf("migrate v23->v24 version: %w", err)
 	}
 	log.WithField("subscriptions", count).Info("Database migrated to v24 (user_llm_configs → user_llm_subscriptions)")
+	return nil
+}
+
+// migrateV24ToV25WithDB adds daily_token_usage table and cached_tokens column.
+func migrateV24ToV25WithDB(db *DB) error {
+	conn := db.Conn()
+	svc := NewUserTokenUsageService(db)
+
+	// Add cached_tokens column to existing user_token_usage (if not present)
+	if err := svc.addCachedTokensColumn(conn); err != nil {
+		return fmt.Errorf("add cached_tokens column: %w", err)
+	}
+
+	// Create daily_token_usage table
+	if err := svc.createDailyTable(conn); err != nil {
+		return fmt.Errorf("create daily_token_usage: %w", err)
+	}
+
+	if _, err := conn.Exec("UPDATE schema_version SET version = 25"); err != nil {
+		return fmt.Errorf("migrate v24->v25 version: %w", err)
+	}
+	log.Info("Database migrated to v25 (daily_token_usage + cached_tokens)")
 	return nil
 }

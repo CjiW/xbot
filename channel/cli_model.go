@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
 )
@@ -212,6 +213,9 @@ type cliModel struct {
 	// --- Background tasks ---
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
+
+	// --- Usage query ---
+	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
 
 	// --- Progress ---
 	progress          *CLIProgressPayload

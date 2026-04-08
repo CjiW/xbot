@@ -560,6 +560,10 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		CompletionTokens: completion.Usage.CompletionTokens,
 		TotalTokens:      completion.Usage.TotalTokens,
 	}
+	// OpenAI prompt_tokens_details.cached_tokens
+	if ptd := completion.Usage.PromptTokensDetails; ptd.CachedTokens > 0 {
+		resp.Usage.CacheHitTokens = ptd.CachedTokens
+	}
 
 	if len(completion.Choices) > 0 {
 		choice := completion.Choices[0]
@@ -785,6 +789,9 @@ func (o *OpenAILLM) processStream(ctx context.Context, stream *ssestream.Stream[
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
+			}
+			if ptd := chunk.Usage.PromptTokensDetails; ptd.CachedTokens > 0 {
+				lastUsage.CacheHitTokens = ptd.CachedTokens
 			}
 		}
 	}

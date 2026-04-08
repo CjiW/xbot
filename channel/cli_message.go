@@ -449,6 +449,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.senderID), feedbackInfo)
 		}
 
+	case "/usage":
+		m.handleUsageCommand()
+
 	default:
 		// 🥚 彩蛋 #7: /version 三连检测
 		if command == "/version" {

@@ -1,10 +1,11 @@
 package channel
 
 import (
-	tea "charm.land/bubbletea/v2"
+	"fmt"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -365,4 +366,92 @@ func (m *cliModel) enqueueToast(text, icon string) tea.Cmd {
 	return func() tea.Msg {
 		return cliToastMsg{text: text, icon: icon}
 	}
+}
+
+// handleUsageCommand renders token usage statistics for the current user.
+func (m *cliModel) handleUsageCommand() {
+	if m.usageQueryFn == nil {
+		m.showSystemMsg("Usage tracking not available", feedbackWarning)
+		return
+	}
+
+	cumulative, daily, err := m.usageQueryFn(m.senderID, 30)
+	if err != nil {
+		m.showSystemMsg(fmt.Sprintf("Failed to query usage: %v", err), feedbackError)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Token Usage\n\n")
+
+	// Cumulative totals
+	if cumulative != nil && cumulative.TotalTokens > 0 {
+		sb.WriteString("### All Time\n\n")
+		sb.WriteString("| Metric | Value |\n|--------|-------|\n")
+		fmt.Fprintf(&sb, "| Input tokens | %s |\n", fmtTokens(cumulative.InputTokens))
+		fmt.Fprintf(&sb, "| Output tokens | %s |\n", fmtTokens(cumulative.OutputTokens))
+		fmt.Fprintf(&sb, "| Cached tokens | %s |\n", fmtTokens(cumulative.CachedTokens))
+		fmt.Fprintf(&sb, "| Total tokens | %s |\n", fmtTokens(cumulative.TotalTokens))
+		fmt.Fprintf(&sb, "| Conversations | %d |\n", cumulative.ConversationCount)
+		fmt.Fprintf(&sb, "| LLM calls | %d |\n", cumulative.LLMCallCount)
+
+		// Analysis
+		if cumulative.InputTokens > 0 {
+			cacheRate := float64(cumulative.CachedTokens) / float64(cumulative.InputTokens) * 100
+			fmt.Fprintf(&sb, "| **Cache hit rate** | **%.1f%%** |\n", cacheRate)
+		}
+		if cumulative.LLMCallCount > 0 {
+			avgIn := cumulative.InputTokens / cumulative.LLMCallCount
+			avgOut := cumulative.OutputTokens / cumulative.LLMCallCount
+			fmt.Fprintf(&sb, "| Avg input/call | %s |\n", fmtTokens(avgIn))
+			fmt.Fprintf(&sb, "| Avg output/call | %s |\n", fmtTokens(avgOut))
+		}
+		if cumulative.ConversationCount > 0 {
+			avgCalls := float64(cumulative.LLMCallCount) / float64(cumulative.ConversationCount)
+			fmt.Fprintf(&sb, "| Avg calls/conversation | %.1f |\n", avgCalls)
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("No usage data recorded yet.\n\n")
+	}
+
+	// Daily breakdown (last 30 days)
+	if len(daily) > 0 {
+		sb.WriteString("### Daily (last 30 days)\n\n")
+		sb.WriteString("| Date | Model | Input | Output | Cached | Cache% | Calls |\n")
+		sb.WriteString("|------|-------|-------|--------|--------|--------|-------|\n")
+		for _, d := range daily {
+			model := d.Model
+			if model == "" {
+				model = "(unknown)"
+			}
+			cacheRate := ""
+			if d.InputTokens > 0 {
+				cacheRate = fmt.Sprintf("%.0f%%", float64(d.CachedTokens)/float64(d.InputTokens)*100)
+			}
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s | %d |\n",
+				d.Date, model,
+				fmtTokens(d.InputTokens),
+				fmtTokens(d.OutputTokens),
+				fmtTokens(d.CachedTokens),
+				cacheRate,
+				d.LLMCallCount,
+			)
+		}
+	}
+
+	m.showSystemMsg(sb.String(), feedbackInfo)
+}
+
+// formatTokenCount is defined in cli_view.go — do not duplicate here.
+
+// fmtTokens formats large token counts with K/M suffixes for usage tables.
+func fmtTokens(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 10_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }

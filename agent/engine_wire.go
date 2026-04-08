@@ -361,8 +361,8 @@ func (a *Agent) buildMainRunConfig(
 	cfg.ContextManagerConfig = applyUserMaxContext(a.contextManagerConfig, userMaxCtx)
 
 	// Per-user token usage tracking (persisted to SQLite)
-	cfg.RecordUserTokenUsage = func(senderID string, inputTokens, outputTokens, conversationCount, llmCallCount int) {
-		if err := a.multiSession.RecordUserTokenUsage(senderID, inputTokens, outputTokens, conversationCount, llmCallCount); err != nil {
+	cfg.RecordUserTokenUsage = func(senderID, model string, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount int) {
+		if err := a.multiSession.RecordUserTokenUsage(senderID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount); err != nil {
 			log.WithError(err).WithField("sender_id", senderID).Warn("Failed to record user token usage")
 		}
 	}

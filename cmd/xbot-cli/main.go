@@ -478,6 +478,21 @@ func main() {
 			}
 			return nil
 		},
+		UsageQuery: func(senderID string, days int) (*sqlite.UserTokenUsage, []sqlite.DailyTokenUsage, error) {
+			if app.agentLoop == nil {
+				return nil, nil, fmt.Errorf("agent not initialized")
+			}
+			ms := app.agentLoop.MultiSession()
+			cumulative, err := ms.GetUserTokenUsage(senderID)
+			if err != nil {
+				return nil, nil, err
+			}
+			daily, err := ms.GetDailyTokenUsage(senderID, days)
+			if err != nil {
+				return nil, nil, err
+			}
+			return cumulative, daily, nil
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

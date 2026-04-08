@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xbot/llm"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestManageTools_Name(t *testing.T) {
@@ -322,5 +325,64 @@ func TestManageTools_UserIsolationAndGlobalMerge(t *testing.T) {
 	}
 	if strings.Contains(res2.Summary, "user1-only") {
 		t.Fatalf("user2 should not see user1 private server, got: %s", res2.Summary)
+	}
+}
+
+func TestManageTools_AddMCPInvalidatesImmediatelyInFlatMode(t *testing.T) {
+	tempDir := t.TempDir()
+	mcpConfigPath := filepath.Join(tempDir, "mcp.json")
+	tool := NewManageTools(tempDir, mcpConfigPath)
+
+	registry := NewRegistry()
+	registry.SetFlatMode(true)
+	invalidated := 0
+	ctx := &ToolContext{
+		Registry:                registry,
+		MCPConfigPath:           mcpConfigPath,
+		InvalidateAllSessionMCP: func() { invalidated++ },
+	}
+
+	input, _ := json.Marshal(manageToolsArgs{
+		Action:       "add_mcp",
+		Name:         "flat-visible-now",
+		MCPConfig:    `{"command":"echo","args":["flat"]}`,
+		Instructions: "flat test",
+	})
+
+	result, err := tool.Execute(ctx, string(input))
+	if err != nil {
+		t.Fatalf("flat add_mcp failed: %v", err)
+	}
+	if invalidated != 1 {
+		t.Fatalf("expected immediate MCP invalidation once, got %d", invalidated)
+	}
+	if !strings.Contains(result.Summary, "immediately visible") {
+		t.Fatalf("expected immediate visibility hint, got: %s", result.Summary)
+	}
+}
+
+func TestRegistry_AsDefinitionsForSession_FlatModeIncludesSessionMCPTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.SetFlatMode(true)
+
+	sm := &SessionMCPManager{
+		connections: map[string]*mcpConnection{
+			"demo": {
+				name: "demo",
+				tools: []*mcp.Tool{{
+					Name:        "ping",
+					Description: "Ping demo server",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				}},
+			},
+		},
+		lastActive:  make(map[string]time.Time),
+		initialized: true,
+	}
+	registry.SetSessionMCPManagerProvider(&mockSessionMCPProvider{manager: sm})
+
+	defs := registry.AsDefinitionsForSession("test:chat")
+	if !hasToolDefinitionName(defs, "mcp_demo_ping") {
+		t.Fatalf("expected flat mode to expose session MCP tool immediately")
 	}
 }

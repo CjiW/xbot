@@ -132,7 +132,19 @@ func (t *ManageTools) addMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResul
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
-	return NewResult(fmt.Sprintf("MCP server '%s' has been added. Use ManageTools' 'reload' action to connect to it.", args.Name)), nil
+	results := []string{fmt.Sprintf("MCP server '%s' has been added.", args.Name)}
+	if ctx != nil && ctx.InvalidateAllSessionMCP != nil {
+		ctx.InvalidateAllSessionMCP()
+		if ctx.Registry != nil && ctx.Registry.IsFlatMode() {
+			results = append(results, "Flat memory: MCP config invalidated, new tools are immediately visible.")
+		} else {
+			results = append(results, "Use ManageTools' 'reload' action to connect to it.")
+		}
+	} else {
+		results = append(results, "Use ManageTools' 'reload' action to connect to it.")
+	}
+
+	return NewResult(strings.Join(results, " ")), nil
 }
 
 func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolResult, error) {
@@ -165,7 +177,19 @@ func (t *ManageTools) removeMCP(ctx *ToolContext, args manageToolsArgs) (*ToolRe
 		return nil, fmt.Errorf("save mcp config: %w", err)
 	}
 
-	return NewResult(fmt.Sprintf("MCP server '%s' has been removed. Use 'reload' action to apply changes.", args.Name)), nil
+	results := []string{fmt.Sprintf("MCP server '%s' has been removed.", args.Name)}
+	if ctx != nil && ctx.InvalidateAllSessionMCP != nil {
+		ctx.InvalidateAllSessionMCP()
+		if ctx.Registry != nil && ctx.Registry.IsFlatMode() {
+			results = append(results, "Flat memory: MCP config invalidated, tool removal is immediately visible.")
+		} else {
+			results = append(results, "Use 'reload' action to apply changes.")
+		}
+	} else {
+		results = append(results, "Use 'reload' action to apply changes.")
+	}
+
+	return NewResult(strings.Join(results, " ")), nil
 }
 
 type mcpServerInfo struct {

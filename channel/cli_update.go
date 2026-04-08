@@ -319,8 +319,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	// 更新 textarea
-	m.textarea, cmd = m.textarea.Update(msg)
-	cmds = append(cmds, cmd)
+	// Skip WindowSizeMsg: handleResize already calls SetWidth() which
+	// triggers recalculateHeight(). Forwarding the resize message to
+	// textarea.Update() would redundantly recalculate + render view().
+	if _, ok := msg.(tea.WindowSizeMsg); !ok {
+		m.textarea, cmd = m.textarea.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	// §8 Tab 补全：输入内容变化时重置补全状态
 	newVal := m.textarea.Value()
@@ -444,6 +449,14 @@ func (m *cliModel) relayoutViewport() {
 
 // handleResize 处理窗口大小变化
 func (m *cliModel) handleResize(width, height int) {
+	// Deduplicate: skip if size hasn't actually changed.
+	// During resize drags, terminals (especially foot) may fire many
+	// SIGWINCH signals with the same dimensions — each one triggers a
+	// full O(N) rebuild of the message history.
+	if width == m.width && height == m.height && m.ready {
+		return
+	}
+
 	m.width = width
 	m.height = height
 

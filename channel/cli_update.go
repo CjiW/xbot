@@ -28,6 +28,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Async subscription switch completed
+	if done, ok := msg.(cliSwitchLLMDoneMsg); ok {
+		if done.err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
+		} else if done.mgr != nil {
+			if err := done.mgr.SetDefault(done.subID); err != nil {
+				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
+			} else {
+				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
+			}
+			m.refreshCachedModelName()
+		}
+		return m, nil
+	}
+
 	// Runner status change notification
 	if rsm, ok := msg.(runnerStatusMsg); ok {
 		cmd := m.handleRunnerStatusMsg(rsm)

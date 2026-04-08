@@ -250,7 +250,7 @@ func LoadFromFile(path string) *Config {
 	return &cfg
 }
 
-// SaveToFile 将配置保存到 JSON 文件。
+// SaveToFile 将配置保存到 JSON 文件（原子写入：先写临时文件再 rename）。
 func SaveToFile(path string, cfg *Config) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -260,7 +260,15 @@ func SaveToFile(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // best-effort cleanup
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
 }
 
 func splitCommaTrim(s string) []string {

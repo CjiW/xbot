@@ -482,6 +482,15 @@ type cliSettingsSavedMsg struct {
 	feedbackMsg  string
 }
 
+// cliSwitchLLMDoneMsg is sent when an async subscription switch completes.
+type cliSwitchLLMDoneMsg struct {
+	err      error
+	subID    string
+	subName  string
+	subModel string
+	mgr      SubscriptionManager
+}
+
 // cliInjectedUserMsg 通知 CLI 有 user 消息被注入（如 bg task 完成通知）
 type cliInjectedUserMsg struct {
 	content string

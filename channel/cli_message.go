@@ -1061,11 +1061,11 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		toolHeaderStyle := s.ToolHeader
 		toolItemStyle := s.ToolItem
 		toolErrorItemStyle := s.ToolErrorItem
-		thinkingStyle := s.ToolThinking
-		reasoningStyle := s.ToolReasoning
-		reasoningGuide := s.ToolReasoningGuide
-		thinkingGuide := s.ToolThinkingGuide
-		hintStyle := s.ToolHint
+		thinkingStyle := s.ProgressThinking
+			reasoningStyle := s.TextMutedSt
+			reasoningGuide := s.ProgressDim
+			thinkingGuide := s.ProgressIndent
+			hintStyle := s.ToolHint
 
 		// 统计总工具数和总耗时
 		allTools, iterCount := msg.iterToolsFlat()
@@ -1083,40 +1083,39 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", iterCount, totalTools)))
 				toolSb.WriteString("\n")
 				// Box internal width: ToolSummary has Border(2) + Padding(0,1 → 2) = 4 cols overhead
-						boxInnerW := contentWidth - 4
-						reasoningIW := lipgloss.Width(reasoningGuide.Render("  │ "))
-						thinkingIW := lipgloss.Width(thinkingGuide.Render("  │ "))
-						reasoningTW := boxInnerW - reasoningIW
-						thinkingTW := boxInnerW - thinkingIW
-				for _, it := range msg.iterations {
-					// Render #iter header
-					iterLabel := s.ProgressIter.Render(fmt.Sprintf("#%d", it.Iteration))
-					toolSb.WriteString(iterLabel)
-					toolSb.WriteString("\n")
-					if it.Reasoning != "" {
-						for _, line := range strings.Split(it.Reasoning, "\n") {
-							line = strings.TrimSpace(line)
-							if line == "" {
-								continue
-							}
-							for _, wl := range strings.Split(hardWrapRunes(line, reasoningTW), "\n") {
-								toolSb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
-								toolSb.WriteString("\n")
-							}
-						}
-					}
-					if it.Thinking != "" {
-						for _, line := range strings.Split(it.Thinking, "\n") {
-							line = strings.TrimSpace(line)
-							if line == "" {
-								continue
-							}
-							for _, wl := range strings.Split(hardWrapRunes(line, thinkingTW), "\n") {
-								toolSb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
-								toolSb.WriteString("\n")
+					boxInnerW := contentWidth - 4
+					guideW := lipgloss.Width(s.ProgressIndent.Render("  │ "))
+					reasoningTW := boxInnerW - guideW
+					thinkingTW := boxInnerW - guideW
+					for _, it := range msg.iterations {
+						// Render #iter header
+						iterLabel := s.ProgressIter.Render(fmt.Sprintf("#%d", it.Iteration))
+						toolSb.WriteString(iterLabel)
+						toolSb.WriteString("\n")
+						if it.Reasoning != "" {
+							for _, line := range strings.Split(it.Reasoning, "\n") {
+								line = strings.TrimSpace(line)
+								if line == "" {
+									continue
+								}
+								for _, wl := range strings.Split(hardWrapRunes(line, reasoningTW), "\n") {
+									toolSb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
+									toolSb.WriteString("\n")
+								}
 							}
 						}
-					}
+						if it.Thinking != "" {
+							for _, line := range strings.Split(it.Thinking, "\n") {
+								line = strings.TrimSpace(line)
+								if line == "" {
+									continue
+								}
+								for _, wl := range strings.Split(hardWrapRunes(line, thinkingTW), "\n") {
+									toolSb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
+									toolSb.WriteString("\n")
+								}
+							}
+						}
 					for _, tool := range it.Tools {
 						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
 						elapsed := ""

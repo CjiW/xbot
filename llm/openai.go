@@ -581,15 +581,15 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 		resp.ReasoningContent = extractReasoningContent(choice.Message)
 
 		// BUG 5 fix: 某些 provider (DeepSeek) 会在 Content 中重复包含 reasoning_content。
-			// 如果 reasoning_content 非空且 Content 以 reasoning_content 开头，去除重复部分。
-			// 使用 TrimSpace 比较，避免前导空白（如 \n）导致漏判。
-			if resp.ReasoningContent != "" && resp.Content != "" {
-				if strings.TrimSpace(resp.Content) == strings.TrimSpace(resp.ReasoningContent) {
-					resp.Content = ""
-				} else if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
-					resp.Content = strings.TrimSpace(resp.Content[len(resp.ReasoningContent):])
-				}
+		// 如果 reasoning_content 非空且 Content 以 reasoning_content 开头，去除重复部分。
+		// 使用 TrimSpace 比较，避免前导空白（如 \n）导致漏判。
+		if resp.ReasoningContent != "" && resp.Content != "" {
+			if strings.TrimSpace(resp.Content) == strings.TrimSpace(resp.ReasoningContent) {
+				resp.Content = ""
+			} else if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
+				resp.Content = strings.TrimSpace(resp.Content[len(resp.ReasoningContent):])
 			}
+		}
 
 		// 解析工具调用
 		if len(choice.Message.ToolCalls) > 0 {

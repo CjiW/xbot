@@ -37,9 +37,9 @@ type LLMFactory struct {
 // NewLLMFactory 创建 LLM 工厂
 func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, defaultModel string) *LLMFactory {
 	return &LLMFactory{
-		configSvc:     configSvc,
-		defaultLLM:    defaultLLM,
-		defaultModel:  defaultModel,
+		configSvc:       configSvc,
+		defaultLLM:      defaultLLM,
+		defaultModel:    defaultModel,
 		clients:         make(map[string]llm.LLM),
 		models:          make(map[string]string),
 		maxContexts:     make(map[string]int),
@@ -77,13 +77,13 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	}
 
 	// 缓存客户端
-		f.mu.Lock()
-		f.clients[senderID] = client
-		f.models[senderID] = model
-		f.maxContexts[senderID] = cfg.MaxContext
-		f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
-		f.thinkingModes[senderID] = cfg.ThinkingMode
-		f.mu.Unlock()
+	f.mu.Lock()
+	f.clients[senderID] = client
+	f.models[senderID] = model
+	f.maxContexts[senderID] = cfg.MaxContext
+	f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
+	f.thinkingModes[senderID] = cfg.ThinkingMode
+	f.mu.Unlock()
 
 	return client, model, cfg.MaxContext, cfg.ThinkingMode
 }

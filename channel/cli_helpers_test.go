@@ -749,6 +749,40 @@ func TestSubmitAskAnswers_SavesCurrentFreeInputBeforeCollect(t *testing.T) {
 	}
 }
 
+func TestCollectAskAnswers_UncheckedOptionsExcluded(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.panelItems = []askItem{
+		{Question: "color?", Options: []string{"Red", "Blue", "Green"}},
+	}
+	model.panelOptSel = map[int]map[int]bool{
+		0: {0: true, 1: false, 2: true},
+	}
+
+	answers := model.collectAskAnswers()
+	got := answers["q0"]
+	if got != "Red, Green" {
+		t.Fatalf("expected only checked options, got %q", got)
+	}
+}
+
+func TestCollectAskAnswers_AllUncheckedReturnsEmpty(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.panelItems = []askItem{
+		{Question: "color?", Options: []string{"Red", "Blue"}},
+	}
+	model.panelOptSel = map[int]map[int]bool{
+		0: {0: false, 1: false},
+	}
+
+	answers := model.collectAskAnswers()
+	got := answers["q0"]
+	if got != "" {
+		t.Fatalf("expected empty answer when all unchecked, got %q", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Security / edge-case: ensure no panic on boundary inputs
 // ---------------------------------------------------------------------------

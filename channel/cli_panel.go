@@ -960,8 +960,8 @@ func (m *cliModel) collectAskAnswers() map[string]string {
 		var parts []string
 		if hasOpts {
 			if sel, ok := m.panelOptSel[i]; ok && len(sel) > 0 {
-				for idx := range sel {
-					if idx < len(item.Options) {
+				for idx, checked := range sel {
+					if checked && idx < len(item.Options) {
 						parts = append(parts, item.Options[idx])
 					}
 				}

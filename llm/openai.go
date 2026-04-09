@@ -112,6 +112,13 @@ func (o *OpenAILLM) GetDefaultModel() string {
 	return ""
 }
 
+// MaxTokens returns the configured max output token limit.
+func (o *OpenAILLM) MaxTokens() int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.maxTokens
+}
+
 // LoadModelsFromAPI 从 OpenAI API 加载可用模型列表
 func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	log.Debug("[LLM] Loading models from OpenAI API")

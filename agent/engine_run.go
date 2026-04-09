@@ -621,16 +621,29 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	}
 
 	maxTokens := 0
-	if s.cfg.ContextManagerConfig != nil {
-		maxTokens = s.cfg.ContextManagerConfig.MaxContextTokens
-	}
-	if maxTokens <= 0 {
-		log.Ctx(ctx).WithFields(log.Fields{
-			"last_prompt_tokens": s.lastPromptTokens,
-			"msg_count":          len(s.messages),
-		}).Info("maybeCompress skipped: maxTokens=0")
-		return
-	}
+		if s.cfg.ContextManagerConfig != nil {
+			maxTokens = s.cfg.ContextManagerConfig.MaxContextTokens
+		}
+		if maxTokens <= 0 {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"last_prompt_tokens": s.lastPromptTokens,
+				"msg_count":          len(s.messages),
+			}).Info("maybeCompress skipped: maxTokens=0")
+			return
+		}
+
+		// Reserve headroom for max_output_tokens: the API budget is shared
+		// between prompt (input) and completion (output). If we don't subtract
+		// maxOutputTokens, we risk exceeding the context window when the model
+		// generates a long response.
+		maxOutputTokens := s.cfg.MaxOutputTokens
+		if maxOutputTokens <= 0 {
+			maxOutputTokens = 8192 // defaultMaxOutputTokens
+		}
+		promptBudget := maxTokens - maxOutputTokens
+		if promptBudget <= 0 {
+			promptBudget = maxTokens / 2 // fallback: reserve half for output
+		}
 
 	// Token estimation strategy:
 	// - API prompt_tokens (exact) covers messages[0..lastMsgCount] + tool defs
@@ -657,11 +670,13 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
 	}
 
-	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), maxTokens) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
-	log.Ctx(ctx).WithFields(log.Fields{
-		"total_tokens":       totalTokens,
-		"max_tokens":         maxTokens,
-		"threshold":          int(float64(maxTokens) * 0.75),
+	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
+		log.Ctx(ctx).WithFields(log.Fields{
+			"total_tokens":       totalTokens,
+			"max_context":        maxTokens,
+			"max_output_tokens":  maxOutputTokens,
+			"prompt_budget":      promptBudget,
+			"threshold":          int(float64(promptBudget) * 0.75),
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
 		"base_prompt_tokens": s.lastPromptTokens,

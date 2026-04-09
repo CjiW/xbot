@@ -69,7 +69,8 @@ type RunConfig struct {
 	InitialCWD       string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
-	MaxIterations int // 0 = 使用默认值 100
+	MaxIterations   int // 0 = 使用默认值 100
+	MaxOutputTokens int // 0 = 使用 LLM client 默认值（8192）
 
 	// === 可选能力（nil = 不启用） ===
 

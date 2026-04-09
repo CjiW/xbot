@@ -493,6 +493,7 @@ func localeZH() *UILocale {
 				Options: []SettingOption{
 					{Label: "自动", Value: ""},
 					{Label: "开启", Value: "enabled"},
+					{Label: "开启（保留历史推理）", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "关闭", Value: "disabled"},
 				},
 			},
@@ -860,6 +861,7 @@ func localeEN() *UILocale {
 				Options: []SettingOption{
 					{Label: "Auto", Value: ""},
 					{Label: "Enabled", Value: "enabled"},
+					{Label: "Enabled (Preserved)", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "Disabled", Value: "disabled"},
 				},
 			},
@@ -1227,6 +1229,7 @@ func localeJA() *UILocale {
 				Options: []SettingOption{
 					{Label: "自動", Value: ""},
 					{Label: "有効", Value: "enabled"},
+					{Label: "有効（推論保持）", Value: `{"type":"enabled","clear_thinking":false}`},
 					{Label: "無効", Value: "disabled"},
 				},
 			},

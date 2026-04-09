@@ -14,8 +14,9 @@ type LLMFactory struct {
 	configSvc       *sqlite.UserLLMConfigService
 	subscriptionSvc *sqlite.LLMSubscriptionService // 多订阅管理
 	settingsSvc     *SettingsService               // 用于读写用户并发配置
-	defaultLLM      llm.LLM
-	defaultModel    string
+	defaultLLM            llm.LLM
+	defaultModel          string
+	defaultThinkingMode   string
 
 	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
 	llmSemManager *llm.LLMSemaphoreManager
@@ -61,17 +62,17 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	f.mu.RUnlock()
 
 	// 从数据库加载配置
-	cfg, err := f.configSvc.GetConfig(senderID)
-	if err != nil || cfg == nil {
-		// 无配置或出错，使用默认客户端
-		return f.defaultLLM, f.defaultModel, 0, ""
-	}
+		cfg, err := f.configSvc.GetConfig(senderID)
+		if err != nil || cfg == nil {
+			// 无配置或出错，使用默认客户端
+			return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+		}
 
-	// 创建用户自定义 LLM 客户端
-	client, model := f.createClient(cfg)
-	if client == nil {
-		return f.defaultLLM, f.defaultModel, 0, ""
-	}
+		// 创建用户自定义 LLM 客户端
+		client, model := f.createClient(cfg)
+		if client == nil {
+			return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+		}
 
 	// 缓存客户端
 	f.mu.Lock()
@@ -187,6 +188,16 @@ func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
 	f.models = make(map[string]string)
 	f.maxContexts = make(map[string]int)
 	f.thinkingModes = make(map[string]string)
+}
+
+// SetDefaultThinkingMode sets the default thinking mode for users without custom config.
+// Used by CLI mode where there's no DB-backed configSvc.
+func (f *LLMFactory) SetDefaultThinkingMode(mode string) {
+	f.mu.Lock()
+	f.defaultThinkingMode = mode
+	// Clear cached thinkingModes so GetLLM picks up the new default
+	f.thinkingModes = make(map[string]string)
+	f.mu.Unlock()
 }
 
 // SetProxyLLM sets a ProxyLLM for a user (used when their active runner has local LLM).
@@ -364,4 +375,13 @@ func (f *LLMFactory) getSetting(senderID, key string) string {
 		return ""
 	}
 	return settings[key]
+}
+
+// GetMaxOutputTokens returns the user's configured max_output_tokens (0 = default).
+func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
+	cfg, err := f.configSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.MaxOutputTokens
 }

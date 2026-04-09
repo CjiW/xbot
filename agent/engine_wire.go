@@ -102,7 +102,8 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations: a.maxIterations,
+			MaxIterations:   a.maxIterations,
+			MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
 
 		// Session
 		SessionKey: sessionKey,

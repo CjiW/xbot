@@ -231,12 +231,18 @@ func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParam
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+	mode := info.Mode().Perm()
+
 	newContent, result, err := doReplace(string(content), params, filePath)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := cmdbuilder.WriteFileAsUser(params.RunAs, filePath, []byte(newContent), 0644); err != nil {
+	if err := cmdbuilder.WriteFileAsUser(params.RunAs, filePath, []byte(newContent), mode); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 

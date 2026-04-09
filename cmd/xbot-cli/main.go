@@ -571,6 +571,9 @@ func main() {
 			}
 			return entries
 		},
+		AgentInspect: func(roleName, instance string, tailCount int) (string, error) {
+			return app.agentLoop.InspectInteractiveSession(context.Background(), roleName, "cli", absWorkDir, instance, tailCount)
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

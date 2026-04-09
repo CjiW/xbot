@@ -296,6 +296,9 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 			return result
 		}
 	}
+	if c.config.AgentInspect != nil {
+		c.model.agentInspectFn = c.config.AgentInspect
+	}
 	// Wire usage query callback
 	if c.config.UsageQuery != nil {
 		c.model.usageQueryFn = c.config.UsageQuery

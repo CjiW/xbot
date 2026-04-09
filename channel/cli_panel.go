@@ -288,18 +288,34 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 
 	case msg.Code == tea.KeyEnter:
-		// View log of selected task (only for task entries, not agents)
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			// Task entry: view output log
 			task := m.panelBgTasks[m.panelBgCursor]
-			// Output is written atomically by the task runner, safe to read
 			m.panelBgLogLines = splitLines(task.Output)
 			if len(m.panelBgLogLines) == 0 {
 				m.panelBgLogLines = []string{"(no output)"}
 			}
 			m.panelBgViewing = true
 			m.panelBgScroll = 0
+		} else if m.panelBgCursor >= len(m.panelBgTasks) && m.panelBgAgents != nil {
+			// Agent entry: inspect recent activity
+			agentIdx := m.panelBgCursor - len(m.panelBgTasks)
+			if agentIdx < len(m.panelBgAgents) {
+				ag := m.panelBgAgents[agentIdx]
+				if m.agentInspectFn != nil {
+					result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
+					if err != nil {
+						m.panelBgLogLines = []string{"Error: " + err.Error()}
+					} else if result == "" {
+						m.panelBgLogLines = []string{"(no activity yet)"}
+					} else {
+						m.panelBgLogLines = splitLines(result)
+					}
+					m.panelBgViewing = true
+					m.panelBgScroll = 0
+				}
+			}
 		}
-		// Agent entries: Enter does nothing for now (inspect is via SubAgent tool)
 		return true, m, nil
 
 	case msg.Code == tea.KeyDelete || msg.String() == "ctrl+d":

@@ -675,7 +675,7 @@ type InteractiveSessionInfo struct {
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
 func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
-	prefix := channel + ":" + chatID + ":"
+	prefix := channel + ":" + chatID + "/"
 	var results []InteractiveSessionInfo
 
 	a.interactiveSubAgents.Range(func(key, value any) bool {

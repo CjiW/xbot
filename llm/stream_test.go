@@ -84,12 +84,19 @@ func TestCollectStream_Error(t *testing.T) {
 	ch <- StreamEvent{Type: EventError, Error: "connection reset"}
 	close(ch)
 
-	_, err := CollectStream(context.Background(), ch)
+	resp, err := CollectStream(context.Background(), ch)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if err.Error() != "stream error: connection reset" {
 		t.Errorf("error = %q, want %q", err.Error(), "stream error: connection reset")
+	}
+	// Verify partial content is preserved in response
+	if resp == nil {
+		t.Fatal("expected non-nil response with partial content")
+	}
+	if resp.Content != "partial" {
+		t.Errorf("resp.Content = %q, want %q", resp.Content, "partial")
 	}
 }
 

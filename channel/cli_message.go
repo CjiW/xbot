@@ -769,7 +769,7 @@ func (m *cliModel) renderProgressBlock() string {
 		}
 		if snap.Thinking != "" {
 			for _, line := range strings.Split(snap.Thinking, "\n") {
-				line = strings.TrimRight(line, " \t")
+				line = strings.TrimSpace(line)
 				if line == "" {
 					continue
 				}
@@ -814,7 +814,7 @@ func (m *cliModel) renderProgressBlock() string {
 
 		if m.progress.Thinking != "" {
 			for _, line := range strings.Split(m.progress.Thinking, "\n") {
-				line = strings.TrimRight(line, " \t")
+				line = strings.TrimSpace(line)
 				if line == "" {
 					continue
 				}
@@ -925,6 +925,13 @@ func (m *cliModel) renderProgressBlock() string {
 
 	// Wrap in border
 	blockStyle := s.ProgressBlock.Width(bubbleWidth)
+
+	// Strip trailing whitespace per line
+	contentLines := strings.Split(content, "\n")
+	for i, l := range contentLines {
+		contentLines[i] = strings.TrimRight(l, " \t")
+	}
+	content = strings.Join(contentLines, "\n")
 
 	return blockStyle.Render(header+"\n"+content) + "\n\n"
 }
@@ -1253,9 +1260,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	sb.WriteString("\n\n")
 
 	// §19 计算渲染后行数（每次 dirty 重算）
-	msg.renderedLines = strings.Count(sb.String(), "\n") + 1
+	// Strip trailing whitespace from each line to prevent invisible trailing spaces.
+	result := sb.String()
+	lines := strings.Split(result, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	result = strings.Join(lines, "\n")
+	msg.renderedLines = strings.Count(result, "\n") + 1
 
-	return sb.String()
+	return result
 }
 
 // setViewportContentForScroll is like setViewportContent but skips GotoBottom(),

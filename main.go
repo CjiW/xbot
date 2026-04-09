@@ -285,10 +285,14 @@ func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCa
 				return err
 			}
 			if maxOutputTokens > 0 {
-				_ = agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens)
+				if err := agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens); err != nil {
+					log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user max output tokens")
+				}
 			}
 			if thinkingMode != "" {
-				_ = agentLoop.SetUserThinkingMode(senderID, thinkingMode)
+				if err := agentLoop.SetUserThinkingMode(senderID, thinkingMode); err != nil {
+					log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user thinking mode")
+				}
 			}
 			return nil
 		},
@@ -646,10 +650,14 @@ func main() {
 					return err
 				}
 				if maxOutputTokens > 0 {
-					_ = agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens)
+					if err := agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens); err != nil {
+						log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user max output tokens")
+					}
 				}
 				if thinkingMode != "" {
-					_ = agentLoop.SetUserThinkingMode(senderID, thinkingMode)
+					if err := agentLoop.SetUserThinkingMode(senderID, thinkingMode); err != nil {
+						log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user thinking mode")
+					}
 				}
 				return nil
 			},

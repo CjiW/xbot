@@ -307,10 +307,16 @@ type Agent struct {
 	// Updated after each Run() completes. Used to restore token tracking across Run() calls.
 	lastCompletionTokens atomic.Int64
 
-	// bgRunPending buffers bg task notifications that arrived during an active Run.
+	// bgRunPending buffers bg notifications that arrived during an active Run.
 	// The Run loop drains these between iterations.
-	bgRunPending   []*tools.BackgroundTask
+	bgRunPending   []tools.BgNotification
 	bgRunPendingMu sync.Mutex
+
+	// agentCtx is the Agent-level context, set when Run() starts and cancelled when Run() exits.
+	// Background interactive subagents derive their context from this (not from per-request ctx)
+	// so they survive across multiple requests and only stop when the parent Agent process exits.
+	agentCtx    context.Context
+	agentCancel context.CancelFunc
 }
 
 // SetRegistryManager sets the RegistryManager (for external injection or override).
@@ -974,7 +980,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.eventRouter.SetInjectFunc(a.injectEventMessage)
 	}
 
+	// Set up Agent-level context for background interactive subagents.
+	// Bg subagents derive from this ctx (not per-request ctx) so they survive across requests.
+	a.agentCtx, a.agentCancel = context.WithCancel(ctx)
 	defer func() {
+		a.agentCancel() // cancel all bg subagents when Agent exits
 		a.cronSch.Stop()
 		a.multiSession.StopCleanupRoutine()
 	}()
@@ -1586,8 +1596,8 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		}
 	}
 
-	// Wire drain callback so Run loop can inject bg task results as tool messages
-	cfg.DrainBgNotifications = func() []*tools.BackgroundTask {
+	// Wire drain callback so Run loop can inject bg notifications as tool messages
+	cfg.DrainBgNotifications = func() []tools.BgNotification {
 		a.bgRunPendingMu.Lock()
 		pending := a.bgRunPending
 		a.bgRunPending = nil
@@ -1604,8 +1614,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	remaining := a.bgRunPending
 	a.bgRunPending = nil
 	a.bgRunPendingMu.Unlock()
-	for _, task := range remaining {
-		go a.processBgNotification(task)
+	for _, notif := range remaining {
+		switch n := notif.(type) {
+		case *tools.BackgroundTask:
+			go a.processBgNotification(n)
+		case *tools.SubAgentBgNotify:
+			go a.processSubAgentBgNotification(n)
+		}
 	}
 	if out.Error != nil {
 		// When cancelled, save any un-persisted engine messages from the
@@ -2038,22 +2053,25 @@ func (a *Agent) injectEventMessage(msg event.Message) {
 	}
 }
 
-// bgNotifyLoop routes background task completion notifications from BgTaskManager.NotifyCh.
+// bgNotifyLoop routes background notifications from BgTaskManager.NotifyCh.
 // When a Run is active (bgRunActive=1), notifications are buffered in bgRunPending
 // for the Run loop to drain between iterations. When idle (bgRunActive=0),
-// notifications go directly to processBgNotification.
+// notifications go directly to the appropriate handler based on type.
 func (a *Agent) bgNotifyLoop() {
-	for task := range a.bgTaskMgr.NotifyCh {
+	for notif := range a.bgTaskMgr.NotifyCh {
 		if atomic.LoadInt32(&a.bgRunActive) == 1 {
 			// Run is active — buffer for Run loop to drain
 			a.bgRunPendingMu.Lock()
-			a.bgRunPending = append(a.bgRunPending, task)
+			a.bgRunPending = append(a.bgRunPending, notif)
 			a.bgRunPendingMu.Unlock()
-			log.WithField("task_id", task.ID).Debug("Bg task notification buffered for active Run")
 		} else {
-			// Idle — process directly
-			log.WithField("task_id", task.ID).Info("Bg task notification: idle mode, processing directly")
-			go a.processBgNotification(task)
+			// Idle — process directly based on notification type
+			switch n := notif.(type) {
+			case *tools.BackgroundTask:
+				go a.processBgNotification(n)
+			case *tools.SubAgentBgNotify:
+				go a.processSubAgentBgNotification(n)
+			}
 		}
 	}
 }
@@ -2084,6 +2102,35 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 	}).Info("Bg task notification: injecting as user message")
 
 	// Notify CLI to display the user message in the chat UI
+	if a.channelFinder != nil {
+		if ch, ok := a.channelFinder(channelName); ok {
+			if cliCh, ok := ch.(*channel.CLIChannel); ok {
+				cliCh.InjectUserMessage(content)
+			}
+		}
+	}
+
+	a.injectInbound(channelName, chatID, "system", content)
+}
+
+// processSubAgentBgNotification handles a bg subagent notification when no Run() is active.
+// Formats the notification and injects it as a user message, triggering a new agent Run.
+func (a *Agent) processSubAgentBgNotification(n *tools.SubAgentBgNotify) {
+	parts := strings.SplitN(n.SessionKey(), ":", 2)
+	if len(parts) != 2 {
+		log.WithField("session_key", n.SessionKey()).Warn("Bg subagent notification: invalid session key")
+		return
+	}
+	channelName, chatID := parts[0], parts[1]
+	content := tools.FormatSubAgentBgNotify(n)
+
+	log.WithFields(log.Fields{
+		"role":     n.Role,
+		"instance": n.Instance,
+		"type":     n.Type,
+		"channel":  channelName,
+	}).Info("Bg subagent notification: injecting as user message")
+
 	if a.channelFinder != nil {
 		if ch, ok := a.channelFinder(channelName); ok {
 			if cliCh, ok := ch.(*channel.CLIChannel); ok {

@@ -6,12 +6,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	log "xbot/logger"
 )
+
+// BgNotification is the interface for background notifications that flow through
+// BgTaskManager.NotifyCh → bgNotifyLoop → bgRunPending → DrainBgNotifications.
+// Both BackgroundTask (shell tasks) and SubAgentBgNotify (bg subagents) implement this.
+type BgNotification interface {
+	// SessionKey returns the session key (channel:chatID) for routing.
+	SessionKey() string
+}
 
 // maxBgOutputSize is the maximum output size per background task (50KB).
 const maxBgOutputSize = 50 * 1024
@@ -56,10 +65,11 @@ type BackgroundTaskManager struct {
 	tasks    map[string]*BackgroundTask // taskID → task
 	sessions map[string][]string        // sessionKey → []taskID
 
-	// NotifyCh is a buffered channel that receives completed background tasks.
+	// NotifyCh is a buffered channel that receives background notifications
+	// (both BackgroundTask and SubAgentBgNotify).
 	// The engine reads from this to inject results into the conversation.
 	// Set by engine before starting the Run() loop.
-	NotifyCh chan *BackgroundTask
+	NotifyCh chan BgNotification
 
 	// OnComplete callbacks per session: sessionKey → []callback
 	callbacks map[string][]func(task *BackgroundTask)
@@ -70,7 +80,7 @@ func NewBackgroundTaskManager() *BackgroundTaskManager {
 	return &BackgroundTaskManager{
 		tasks:     make(map[string]*BackgroundTask),
 		sessions:  make(map[string][]string),
-		NotifyCh:  make(chan *BackgroundTask, 16),
+		NotifyCh:  make(chan BgNotification, 16),
 		callbacks: make(map[string][]func(task *BackgroundTask)),
 	}
 }
@@ -411,4 +421,68 @@ func (m *BackgroundTaskManager) CleanupSession(sessionKey string) {
 		delete(m.sessions, sessionKey)
 	}
 	delete(m.callbacks, sessionKey)
+}
+
+// SubAgentBgNotifyType distinguishes bg subagent notification types.
+type SubAgentBgNotifyType string
+
+const (
+	// SubAgentBgNotifyProgress is sent when a bg subagent completes an iteration.
+	// The parent agent sees it as an update within the current Run loop.
+	SubAgentBgNotifyProgress SubAgentBgNotifyType = "progress"
+
+	// SubAgentBgNotifyCompleted is sent when a bg subagent's Run() finishes.
+	// The parent agent sees it as a completion notification.
+	SubAgentBgNotifyCompleted SubAgentBgNotifyType = "completed"
+)
+
+// SubAgentBgNotify is a background notification for interactive subagent events.
+// Implements BgNotification so it flows through the same NotifyCh pipeline.
+type SubAgentBgNotify struct {
+	Key      string               // channel:chatID for routing
+	Type     SubAgentBgNotifyType // "progress" or "completed"
+	Role     string               // subagent role name
+	Instance string               // subagent instance ID
+	Content  string               // formatted notification content for the LLM
+}
+
+// SessionKey implements BgNotification.
+func (n *SubAgentBgNotify) SessionKey() string { return n.Key }
+
+// SendSubAgentNotify sends a subagent notification through BgTaskManager.NotifyCh.
+// Safe to call from any goroutine. Drops silently if channel is full.
+func (m *BackgroundTaskManager) SendSubAgentNotify(n *SubAgentBgNotify) {
+	if m.NotifyCh == nil {
+		return
+	}
+	select {
+	case m.NotifyCh <- n:
+	default:
+		log.WithFields(log.Fields{
+			"role":     n.Role,
+			"instance": n.Instance,
+			"type":     n.Type,
+		}).Warn("Bg subagent notify channel full, dropping notification")
+	}
+}
+
+// FormatSubAgentBgNotify formats a bg subagent notification for injection into
+// the parent agent's conversation as a synthetic tool result.
+func FormatSubAgentBgNotify(n *SubAgentBgNotify) string {
+	var sb strings.Builder
+	switch n.Type {
+	case SubAgentBgNotifyProgress:
+		fmt.Fprintf(&sb, "[System Notification] Background subagent %s", n.Role)
+		if n.Instance != "" {
+			fmt.Fprintf(&sb, " (instance=%s)", n.Instance)
+		}
+		fmt.Fprintf(&sb, " progress update.\n%s", n.Content)
+	case SubAgentBgNotifyCompleted:
+		fmt.Fprintf(&sb, "[System Notification] Background subagent %s", n.Role)
+		if n.Instance != "" {
+			fmt.Fprintf(&sb, " (instance=%s)", n.Instance)
+		}
+		fmt.Fprintf(&sb, " completed.\n%s", n.Content)
+	}
+	return sb.String()
 }

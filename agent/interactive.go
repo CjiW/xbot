@@ -14,6 +14,12 @@ import (
 	"xbot/tools"
 )
 
+// bgSessionCtxKey is a context value marker for background interactive session contexts.
+// When present, it indicates the context belongs to a bg session (not a per-request ctx).
+// Nested bg subagents detect this marker to derive from their parent session's lifecycle
+// instead of the Agent-level ctx, ensuring they never outlive their direct parent.
+type bgSessionCtxKey struct{}
+
 // interactiveAgent 封装一个 interactive SubAgent 会话。
 // 存储在 parent Agent 的 interactiveSubAgents map 中。
 type interactiveAgent struct {
@@ -159,9 +165,26 @@ func (a *Agent) SpawnInteractiveSession(
 
 	if background {
 		// Background mode: launch Run in goroutine, return immediately.
-		// Derive from parent context so Ctrl+C / /cancel also stops background runs.
-		// The session state survives cancellation — only active Run is stopped.
-		runCtx, runCancel := context.WithCancel(subCtx)
+		// Lifecycle rule: bg subagents never outlive their parent.
+		// - First level: ctx is per-request (no marker) → derive from Agent-level ctx
+		//   so the session survives across multiple parent requests.
+		// - Nested level: ctx is a bg session's runCtx (has marker) → derive from
+		//   parent's ctx so the child dies when the parent session is cancelled/unloaded.
+		// - Agent exit: agentCancel() cascades through first-level → nested levels.
+		var bgBase context.Context
+		if ctx.Value(bgSessionCtxKey{}) != nil {
+			// Nested: parent is a bg session → derive from parent's lifecycle
+			bgBase = ctx
+		} else {
+			// First level: derive from Agent lifecycle
+			bgBase = a.agentCtx
+		}
+		if bgBase == nil {
+			bgBase = context.Background() // safety fallback for tests
+		}
+		runCtx, runCancel := context.WithCancel(bgBase)
+		// Mark this context as a bg session context for nested detection
+		runCtx = context.WithValue(runCtx, bgSessionCtxKey{}, true)
 		// Copy call chain into derived context
 		runCtx = WithCallChain(runCtx, CallChainFromContext(subCtx))
 
@@ -170,9 +193,65 @@ func (a *Agent) SpawnInteractiveSession(
 		placeholder.running = true
 		placeholder.mu.Unlock()
 
+		// Wire incremental snapshot callback so iteration history is visible
+		// during Run(), not only after it completes.
+		// Also send progress notifications to the parent agent via BgTaskManager.
+		sessionKey := originChannel + ":" + originChatID
+		notifyMgr := a.bgTaskMgr
+		cfg.OnIterationSnapshot = func(snap IterationSnapshot) {
+			placeholder.mu.Lock()
+			placeholder.iterationHistory = append(placeholder.iterationHistory, snap)
+			placeholder.mu.Unlock()
+
+			// Notify parent agent about iteration progress
+			if notifyMgr != nil {
+				var sb strings.Builder
+				fmt.Fprintf(&sb, "Iteration %d completed.\n", snap.Iteration)
+				if snap.Thinking != "" {
+					thinking := snap.Thinking
+					if len(thinking) > 200 {
+						thinking = thinking[len(thinking)-200:]
+					}
+					fmt.Fprintf(&sb, "Thinking: %s\n", thinking)
+				}
+				for _, t := range snap.Tools {
+					fmt.Fprintf(&sb, "- %s [%s, %dms]", t.Name, t.Status, t.ElapsedMS)
+					if t.Summary != "" {
+						fmt.Fprintf(&sb, " %s", t.Summary)
+					}
+					sb.WriteString("\n")
+				}
+				notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+					Key:      sessionKey,
+					Type:     tools.SubAgentBgNotifyProgress,
+					Role:     roleName,
+					Instance: instance,
+					Content:  sb.String(),
+				})
+			}
+		}
+
 		go func() {
 			out := Run(runCtx, cfg)
 			runCancel()
+
+			// Notify parent agent about completion
+			if notifyMgr != nil {
+				content := out.Content
+				if out.Error != nil {
+					content = fmt.Sprintf("Error: %v\n%s", out.Error, out.Content)
+				}
+				if len(content) > 2000 {
+					content = content[:2000] + "... [truncated, use inspect for details]"
+				}
+				notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+					Key:      sessionKey,
+					Type:     tools.SubAgentBgNotifyCompleted,
+					Role:     roleName,
+					Instance: instance,
+					Content:  content,
+				})
+			}
 
 			// Write results back
 			placeholder.mu.Lock()
@@ -189,10 +268,8 @@ func (a *Agent) SpawnInteractiveSession(
 				placeholder.lastReply = out.Content
 			}
 
-			// Store iteration history
-			if len(out.IterationHistory) > 0 {
-				placeholder.iterationHistory = out.IterationHistory
-			}
+			// Iteration history was incrementally updated via OnIterationSnapshot during Run().
+			// out.IterationHistory contains the same snapshots, no need to overwrite.
 
 			// Store messages
 			var newMsgs []llm.ChatMessage
@@ -557,6 +634,10 @@ func (a *Agent) UnloadInteractiveSession(
 		ia.mu.Unlock()
 		a.interactiveSubAgents.Delete(key)
 		return nil
+	}
+	// Cancel any running bg goroutine to prevent leaks
+	if ia.cancelCurrent != nil {
+		ia.cancelCurrent()
 	}
 	messages := make([]llm.ChatMessage, len(ia.messages))
 	copy(messages, ia.messages)

@@ -141,7 +141,7 @@ func newRunState(cfg RunConfig) *runState {
 
 // initProgress sets up structured progress tracking and the progress finalizer.
 func (s *runState) initProgress() {
-	if s.cfg.ProgressEventHandler != nil {
+	if s.cfg.ProgressEventHandler != nil || s.cfg.OnIterationSnapshot != nil {
 		s.structuredProgress = &StructuredProgress{
 			Phase:          PhaseThinking,
 			Iteration:      0,
@@ -1125,9 +1125,13 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 				Label:     t.Label,
 				Status:    string(t.Status),
 				ElapsedMS: t.Elapsed.Milliseconds(),
+				Summary:   t.Summary,
 			}
 		}
 		s.iterationSnapshots = append(s.iterationSnapshots, snap)
+		if s.cfg.OnIterationSnapshot != nil {
+			s.cfg.OnIterationSnapshot(snap)
+		}
 	}
 	if s.autoNotify && s.batchProgressByIteration {
 		s.notifyProgress("")
@@ -1307,51 +1311,15 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 		s.lastPersistedCount = len(s.messages)
 	}
 
-	// --- Background task notification draining ---
+	// --- Background notification draining (bg tasks + bg subagents) ---
 	if s.cfg.DrainBgNotifications != nil {
 		pending := s.cfg.DrainBgNotifications()
-		for _, bgTask := range pending {
-			bgContent := tools.FormatBgTaskCompletion(bgTask)
-			bgAssistantMsg := llm.ChatMessage{
-				Role:    "assistant",
-				Content: "A background task has completed. Let me check the result.",
-				ToolCalls: []llm.ToolCall{{
-					ID:   "bg_" + bgTask.ID,
-					Name: "background_task_result",
-				}},
-			}
-			if s.cfg.OffloadStore != nil {
-				if offloaded, ok := s.cfg.OffloadStore.MaybeOffload(ctx, s.offloadSessionKey, "background_task_result", "", bgContent, s.cfg.WorkspaceRoot, "", s.cfg.OriginUserID); ok {
-					bgContent = offloaded.Summary
-					GlobalMetrics.OffloadEvents.Add(1)
-					GlobalMetrics.OffloadedItems.Add(1)
-				}
-			}
-			bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
-			s.messages = s.syncMessages(append(s.messages, bgAssistantMsg, bgToolMsg))
-			log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
-
-			if s.cfg.Session != nil {
-				_ = s.cfg.Session.AddMessage(bgAssistantMsg)
-				_ = s.cfg.Session.AddMessage(bgToolMsg)
-				s.lastPersistedCount = len(s.messages)
-			}
-
-			if s.structuredProgress != nil {
-				var elapsed time.Duration
-				if bgTask.FinishedAt != nil {
-					elapsed = bgTask.FinishedAt.Sub(bgTask.StartedAt)
-				}
-				s.structuredProgress.CompletedTools = append(s.structuredProgress.CompletedTools, ToolProgress{
-					Name:      "background_task_result",
-					Label:     fmt.Sprintf("bg:%s", bgTask.ID),
-					Status:    ToolDone,
-					Elapsed:   elapsed,
-					Iteration: iteration,
-				})
-				if s.autoNotify {
-					s.notifyProgress("")
-				}
+		for _, notif := range pending {
+			switch n := notif.(type) {
+			case *tools.BackgroundTask:
+				s.injectBgTaskNotification(ctx, iteration, n)
+			case *tools.SubAgentBgNotify:
+				s.injectSubAgentBgNotification(ctx, iteration, n)
 			}
 		}
 	}
@@ -1378,6 +1346,99 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 	}
 
 	return nil
+}
+
+// injectBgTaskNotification injects a bg task completion as a synthetic tool call/result pair.
+func (s *runState) injectBgTaskNotification(ctx context.Context, iteration int, bgTask *tools.BackgroundTask) {
+	bgContent := tools.FormatBgTaskCompletion(bgTask)
+	bgAssistantMsg := llm.ChatMessage{
+		Role:    "assistant",
+		Content: "A background task has completed. Let me check the result.",
+		ToolCalls: []llm.ToolCall{{
+			ID:   "bg_" + bgTask.ID,
+			Name: "background_task_result",
+		}},
+	}
+	if s.cfg.OffloadStore != nil {
+		if offloaded, ok := s.cfg.OffloadStore.MaybeOffload(ctx, s.offloadSessionKey, "background_task_result", "", bgContent, s.cfg.WorkspaceRoot, "", s.cfg.OriginUserID); ok {
+			bgContent = offloaded.Summary
+			GlobalMetrics.OffloadEvents.Add(1)
+			GlobalMetrics.OffloadedItems.Add(1)
+		}
+	}
+	bgToolMsg := llm.NewToolMessage("background_task_result", "bg_"+bgTask.ID, "", bgContent)
+	s.messages = s.syncMessages(append(s.messages, bgAssistantMsg, bgToolMsg))
+	log.Ctx(ctx).WithField("task_id", bgTask.ID).Info("Injected bg task completion into Run loop")
+
+	if s.cfg.Session != nil {
+		_ = s.cfg.Session.AddMessage(bgAssistantMsg)
+		_ = s.cfg.Session.AddMessage(bgToolMsg)
+		s.lastPersistedCount = len(s.messages)
+	}
+
+	if s.structuredProgress != nil {
+		var elapsed time.Duration
+		if bgTask.FinishedAt != nil {
+			elapsed = bgTask.FinishedAt.Sub(bgTask.StartedAt)
+		}
+		s.structuredProgress.CompletedTools = append(s.structuredProgress.CompletedTools, ToolProgress{
+			Name:      "background_task_result",
+			Label:     fmt.Sprintf("bg:%s", bgTask.ID),
+			Status:    ToolDone,
+			Elapsed:   elapsed,
+			Iteration: iteration,
+		})
+		if s.autoNotify {
+			s.notifyProgress("")
+		}
+	}
+}
+
+// injectSubAgentBgNotification injects a bg subagent notification as a synthetic tool call/result pair.
+func (s *runState) injectSubAgentBgNotification(ctx context.Context, iteration int, n *tools.SubAgentBgNotify) {
+	bgContent := tools.FormatSubAgentBgNotify(n)
+	toolName := "bg_subagent_" + string(n.Type)
+	toolID := fmt.Sprintf("bgsub_%s_%s", n.Role, n.Instance)
+	assistantMsg := llm.ChatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("Background subagent %s has a %s update.", n.Role, n.Type),
+		ToolCalls: []llm.ToolCall{{
+			ID:   toolID,
+			Name: toolName,
+		}},
+	}
+	if s.cfg.OffloadStore != nil {
+		if offloaded, ok := s.cfg.OffloadStore.MaybeOffload(ctx, s.offloadSessionKey, toolName, "", bgContent, s.cfg.WorkspaceRoot, "", s.cfg.OriginUserID); ok {
+			bgContent = offloaded.Summary
+			GlobalMetrics.OffloadEvents.Add(1)
+			GlobalMetrics.OffloadedItems.Add(1)
+		}
+	}
+	toolMsg := llm.NewToolMessage(toolName, toolID, "", bgContent)
+	s.messages = s.syncMessages(append(s.messages, assistantMsg, toolMsg))
+	log.Ctx(ctx).WithFields(log.Fields{
+		"role":     n.Role,
+		"instance": n.Instance,
+		"type":     n.Type,
+	}).Info("Injected bg subagent notification into Run loop")
+
+	if s.cfg.Session != nil {
+		_ = s.cfg.Session.AddMessage(assistantMsg)
+		_ = s.cfg.Session.AddMessage(toolMsg)
+		s.lastPersistedCount = len(s.messages)
+	}
+
+	if s.structuredProgress != nil {
+		s.structuredProgress.CompletedTools = append(s.structuredProgress.CompletedTools, ToolProgress{
+			Name:      toolName,
+			Label:     fmt.Sprintf("bgsub:%s/%s", n.Role, n.Instance),
+			Status:    ToolDone,
+			Iteration: iteration,
+		})
+		if s.autoNotify {
+			s.notifyProgress("")
+		}
+	}
 }
 
 // buildMaxIterOutput creates the output for when max iterations is reached.

@@ -160,10 +160,11 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
-	// DrainBgNotifications is called between iterations to check for completed bg tasks.
-	// Returns tasks that should be injected as tool results into the current Run loop.
+	// DrainBgNotifications is called between iterations to check for completed bg tasks
+	// and bg subagent notifications. Returns notifications that should be injected
+	// as tool results into the current Run loop.
 	// Returns nil when no notifications are pending. Called on each iteration.
-	DrainBgNotifications func() []*tools.BackgroundTask
+	DrainBgNotifications func() []tools.BgNotification
 
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
@@ -197,6 +198,11 @@ type RunConfig struct {
 
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
+
+	// OnIterationSnapshot is called after each iteration snapshot is created.
+	// Used by background interactive sessions to incrementally expose iteration
+	// history for real-time inspect, instead of waiting for Run() to finish.
+	OnIterationSnapshot func(snap IterationSnapshot)
 }
 
 // TodoManagerProvider 提供 TODO 状态查询和清理

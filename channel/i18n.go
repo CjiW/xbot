@@ -547,8 +547,8 @@ func localeZH() *UILocale {
 				},
 			},
 			// Permission control
-			{Key: "default_user", Label: "默认执行用户", Description: "工具执行的默认 OS 用户（需要配置 NOPASSWD sudoers）", Type: SettingTypeText, Category: "权限"},
-			{Key: "privileged_user", Label: "特权用户", Description: "需要审批才能使用的特权 OS 用户（需要配置 NOPASSWD sudoers）", Type: SettingTypeText, Category: "权限"},
+			{Key: "default_user", Label: "默认执行用户", Description: "LLM 可以免审批以此用户执行工具。留空则只能以当前进程用户执行（最安全）。需配置 NOPASSWD sudoers", Type: SettingTypeText, Category: "权限"},
+			{Key: "privileged_user", Label: "特权用户", Description: "LLM 以此用户执行时需要人工审批。留空则禁止提权。需配置 NOPASSWD sudoers", Type: SettingTypeText, Category: "权限"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
@@ -918,8 +918,8 @@ func localeEN() *UILocale {
 				},
 			},
 			// Permission control
-			{Key: "default_user", Label: "Default User", Description: "Default OS user for tool execution (requires NOPASSWD sudoers)", Type: SettingTypeText, Category: "Permissions"},
-			{Key: "privileged_user", Label: "Privileged User", Description: "Privileged OS user requiring approval (requires NOPASSWD sudoers)", Type: SettingTypeText, Category: "Permissions"},
+			{Key: "default_user", Label: "Default User", Description: "OS user for LLM tool execution without approval. Leave empty to restrict to current process user (safest). Requires NOPASSWD sudoers", Type: SettingTypeText, Category: "Permissions"},
+			{Key: "privileged_user", Label: "Privileged User", Description: "OS user that requires human approval when used by LLM. Leave empty to block privilege escalation. Requires NOPASSWD sudoers", Type: SettingTypeText, Category: "Permissions"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner Manager", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)
@@ -1289,8 +1289,8 @@ func localeJA() *UILocale {
 				},
 			},
 			// Permission control
-			{Key: "default_user", Label: "デフォルトユーザー", Description: "ツール実行用のデフォルト OS ユーザー（NOPASSWD sudoers 設定が必要）", Type: SettingTypeText, Category: "権限"},
-			{Key: "privileged_user", Label: "特権ユーザー", Description: "承認が必要な特権 OS ユーザー（NOPASSWD sudoers 設定が必要）", Type: SettingTypeText, Category: "権限"},
+			{Key: "default_user", Label: "デフォルトユーザー", Description: "LLMが承認なしでツールを実行できるOSユーザー。空の場合は現在のプロセスユーザーに制限（最も安全）。NOPASSWD sudoersが必要", Type: SettingTypeText, Category: "権限"},
+			{Key: "privileged_user", Label: "特権ユーザー", Description: "LLMが使用時に人間の承認が必要なOSユーザー。空の場合は権限昇格を禁止。NOPASSWD sudoersが必要", Type: SettingTypeText, Category: "権限"},
 			// Runner panel entry (display-only, triggers panel switch)
 			{Key: "runner_panel", Label: "🔧 Runner 管理", Type: SettingTypeText, Category: "Runner"},
 			// Danger zone entry (display-only, triggers panel switch)

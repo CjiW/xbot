@@ -1836,11 +1836,11 @@ func wrapButtonsInColumns(buttons []map[string]any) map[string]any {
 // --- Thinking mode helpers ---
 
 var thinkingModeLabelMap = map[string]string{
-	"":                                       "auto（自动）",
-	"enabled":                                "enabled（开启）",
+	"":        "auto（自动）",
+	"enabled": "enabled（开启）",
 	`{"type":"enabled","clear_thinking":false}`: "enabled + preserved（保留推理）",
-	"disabled":                               "disabled（关闭）",
-	"adaptive":                               "adaptive（自适应）",
+	"disabled": "disabled（关闭）",
+	"adaptive": "adaptive（自适应）",
 }
 
 func thinkingModeLabel(mode string) string {

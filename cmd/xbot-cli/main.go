@@ -406,42 +406,42 @@ func main() {
 				}
 			}
 			if v, ok := values["max_output_tokens"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						for i := range app.cfg.Subscriptions {
-							if app.cfg.Subscriptions[i].Active {
-								app.cfg.Subscriptions[i].MaxOutputTokens = n
-								break
-							}
-						}
-						// Sync to cfg.LLM so createLLM picks it up on rebuild
-						app.cfg.LLM.MaxOutputTokens = n
-						// Rebuild LLM client with new max_output_tokens
-						if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
-							Attempts: 5,
-							Delay:    1 * time.Second,
-							MaxDelay: 30 * time.Second,
-						}); err == nil {
-							app.llmClient = newClient
-							if app.agentLoop != nil {
-								app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
-							}
-						} else {
-							log.Warnf("Failed to rebuild LLM client: %v", err)
-						}
-					}
-				}
-			if v, ok := values["thinking_mode"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 					for i := range app.cfg.Subscriptions {
 						if app.cfg.Subscriptions[i].Active {
-							app.cfg.Subscriptions[i].ThinkingMode = v
+							app.cfg.Subscriptions[i].MaxOutputTokens = n
 							break
 						}
 					}
-					// Sync to factory so next GetLLM picks up the change
-					if app.agentLoop != nil {
-						app.agentLoop.LLMFactory().SetDefaultThinkingMode(v)
+					// Sync to cfg.LLM so createLLM picks it up on rebuild
+					app.cfg.LLM.MaxOutputTokens = n
+					// Rebuild LLM client with new max_output_tokens
+					if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
+						Attempts: 5,
+						Delay:    1 * time.Second,
+						MaxDelay: 30 * time.Second,
+					}); err == nil {
+						app.llmClient = newClient
+						if app.agentLoop != nil {
+							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+						}
+					} else {
+						log.Warnf("Failed to rebuild LLM client: %v", err)
 					}
 				}
+			}
+			if v, ok := values["thinking_mode"]; ok {
+				for i := range app.cfg.Subscriptions {
+					if app.cfg.Subscriptions[i].Active {
+						app.cfg.Subscriptions[i].ThinkingMode = v
+						break
+					}
+				}
+				// Sync to factory so next GetLLM picks up the change
+				if app.agentLoop != nil {
+					app.agentLoop.LLMFactory().SetDefaultThinkingMode(v)
+				}
+			}
 			if v, ok := values["enable_auto_compress"]; ok {
 				b := v == "true"
 				app.cfg.Agent.EnableAutoCompress = &b
@@ -884,8 +884,8 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}
 			s.factory.SetDefaults(client, sc.Model)
-				s.factory.SetDefaultThinkingMode(sc.ThinkingMode)
-				// Set active flag + derive cfg.LLM + save (all in one place)
+			s.factory.SetDefaultThinkingMode(sc.ThinkingMode)
+			// Set active flag + derive cfg.LLM + save (all in one place)
 			for j := range s.cfg.Subscriptions {
 				s.cfg.Subscriptions[j].Active = (s.cfg.Subscriptions[j].ID == sub.ID)
 			}
@@ -974,6 +974,7 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
+			MaxTokens:    cfg.MaxOutputTokens,
 		})
 	default:
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.Provider)

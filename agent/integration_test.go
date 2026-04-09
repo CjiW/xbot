@@ -82,8 +82,8 @@ func (env *integrationTestEnv) buildRunConfig(messages []llm.ChatMessage) RunCon
 		OffloadStore:         env.offloadStore,
 		ContextManagerConfig: env.cmConfig,
 		Memory:               &mockMemory{},
-			MaxOutputTokens:      1, // minimal — tests set their own MaxContextTokens budgets
-		}
+		MaxOutputTokens:      1, // minimal — tests set their own MaxContextTokens budgets
+	}
 }
 
 // generateLargeText generates text of approximately tokenCount tokens.

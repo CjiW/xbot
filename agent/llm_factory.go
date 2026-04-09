@@ -11,22 +11,23 @@ import (
 
 // LLMFactory 管理用户自定义 LLM 客户端的创建和缓存
 type LLMFactory struct {
-	configSvc       *sqlite.UserLLMConfigService
-	subscriptionSvc *sqlite.LLMSubscriptionService // 多订阅管理
-	settingsSvc     *SettingsService               // 用于读写用户并发配置
-	defaultLLM            llm.LLM
-	defaultModel          string
-	defaultThinkingMode   string
+	configSvc           *sqlite.UserLLMConfigService
+	subscriptionSvc     *sqlite.LLMSubscriptionService // 多订阅管理
+	settingsSvc         *SettingsService               // 用于读写用户并发配置
+	defaultLLM          llm.LLM
+	defaultModel        string
+	defaultThinkingMode string
 
 	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
 	llmSemManager *llm.LLMSemaphoreManager
 
 	// 缓存用户的 LLM 客户端
-	mu            sync.RWMutex
-	clients       map[string]llm.LLM // senderID -> LLM client
-	models        map[string]string  // senderID -> model name
-	maxContexts   map[string]int     // senderID -> max_context tokens
-	thinkingModes map[string]string  // senderID -> thinking_mode
+	mu              sync.RWMutex
+	clients         map[string]llm.LLM // senderID -> LLM client
+	models          map[string]string  // senderID -> model name
+	maxContexts     map[string]int     // senderID -> max_context tokens
+	maxOutputTokens map[string]int     // senderID -> max_output_tokens
+	thinkingModes   map[string]string  // senderID -> thinking_mode
 
 	// hasCustomLLMCache 缓存用户是否有自定义 LLM 配置（避免频繁查数据库）
 	// 使用 sync.Map 保证并发安全
@@ -39,10 +40,11 @@ func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, d
 		configSvc:     configSvc,
 		defaultLLM:    defaultLLM,
 		defaultModel:  defaultModel,
-		clients:       make(map[string]llm.LLM),
-		models:        make(map[string]string),
-		maxContexts:   make(map[string]int),
-		thinkingModes: make(map[string]string),
+		clients:         make(map[string]llm.LLM),
+		models:          make(map[string]string),
+		maxContexts:     make(map[string]int),
+		maxOutputTokens: make(map[string]int),
+		thinkingModes:   make(map[string]string),
 		// hasCustomLLMCache 使用零值 sync.Map，无需初始化
 	}
 }
@@ -62,25 +64,26 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	f.mu.RUnlock()
 
 	// 从数据库加载配置
-		cfg, err := f.configSvc.GetConfig(senderID)
-		if err != nil || cfg == nil {
-			// 无配置或出错，使用默认客户端
-			return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
-		}
+	cfg, err := f.configSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		// 无配置或出错，使用默认客户端
+		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+	}
 
-		// 创建用户自定义 LLM 客户端
-		client, model := f.createClient(cfg)
-		if client == nil {
-			return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
-		}
+	// 创建用户自定义 LLM 客户端
+	client, model := f.createClient(cfg)
+	if client == nil {
+		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+	}
 
 	// 缓存客户端
-	f.mu.Lock()
-	f.clients[senderID] = client
-	f.models[senderID] = model
-	f.maxContexts[senderID] = cfg.MaxContext
-	f.thinkingModes[senderID] = cfg.ThinkingMode
-	f.mu.Unlock()
+		f.mu.Lock()
+		f.clients[senderID] = client
+		f.models[senderID] = model
+		f.maxContexts[senderID] = cfg.MaxContext
+		f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
+		f.thinkingModes[senderID] = cfg.ThinkingMode
+		f.mu.Unlock()
 
 	return client, model, cfg.MaxContext, cfg.ThinkingMode
 }
@@ -187,6 +190,7 @@ func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {
 	f.clients = make(map[string]llm.LLM)
 	f.models = make(map[string]string)
 	f.maxContexts = make(map[string]int)
+	f.maxOutputTokens = make(map[string]int)
 	f.thinkingModes = make(map[string]string)
 }
 
@@ -208,6 +212,7 @@ func (f *LLMFactory) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model str
 	f.clients[senderID] = proxy
 	f.models[senderID] = model
 	f.maxContexts[senderID] = 0
+	f.maxOutputTokens[senderID] = 0
 	f.thinkingModes[senderID] = ""
 }
 
@@ -239,6 +244,7 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: model,
+			MaxTokens:    cfg.MaxOutputTokens,
 		})
 		return client, model
 
@@ -261,6 +267,7 @@ func (f *LLMFactory) Invalidate(senderID string) {
 	delete(f.clients, senderID)
 	delete(f.models, senderID)
 	delete(f.maxContexts, senderID)
+	delete(f.maxOutputTokens, senderID)
 	delete(f.thinkingModes, senderID)
 	f.mu.Unlock()
 }
@@ -271,6 +278,7 @@ func (f *LLMFactory) InvalidateAll() {
 	f.clients = make(map[string]llm.LLM)
 	f.models = make(map[string]string)
 	f.maxContexts = make(map[string]int)
+	f.maxOutputTokens = make(map[string]int)
 	f.thinkingModes = make(map[string]string)
 	f.mu.Unlock()
 }
@@ -378,10 +386,14 @@ func (f *LLMFactory) getSetting(senderID, key string) string {
 }
 
 // GetMaxOutputTokens returns the user's configured max_output_tokens (0 = default).
+// Uses the per-user cache populated by GetLLM(); no DB hit.
 func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
-	cfg, err := f.configSvc.GetConfig(senderID)
-	if err != nil || cfg == nil {
-		return 0
+	f.mu.RLock()
+	if v, ok := f.maxOutputTokens[senderID]; ok {
+		f.mu.RUnlock()
+		return v
 	}
-	return cfg.MaxOutputTokens
+	f.mu.RUnlock()
+	// User has no cached config (using default client) — return 0 (use default)
+	return 0
 }

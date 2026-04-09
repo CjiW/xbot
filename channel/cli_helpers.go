@@ -56,6 +56,7 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
+	m.lastReasoning = ""
 	m.typingStartTime = time.Time{}
 	m.progress = nil
 	m.typing = false
@@ -64,9 +65,9 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 
 // flushMessageQueue sends the first queued message (if any) when input becomes ready.
 // Returns a tea.Cmd to send the message, or nil if queue is empty.
-func (m *cliModel) flushMessageQueue() tea.Cmd {
+func (m *cliModel) flushMessageQueue() {
 	if len(m.messageQueue) == 0 {
-		return nil
+		return
 	}
 	msg := m.messageQueue[0]
 	m.messageQueue = m.messageQueue[1:]
@@ -74,23 +75,20 @@ func (m *cliModel) flushMessageQueue() tea.Cmd {
 	m.queueEditBuf = ""
 	// Put message into textarea and trigger send
 	m.textarea.SetValue(msg)
-	return m.sendMessageFromQueue()
+	m.sendMessageFromQueue()
 }
 
 // sendMessageFromQueue sends the current textarea content as a queued message.
-// Uses sendMessage() for identical behavior (file refs, viewport scroll,
-// reply policy). Explicitly returns tickCmd() because the wasTyping guard
-// at the bottom of Update() can't detect the typing transition within
-// the same flush cycle (endAgentTurn→startAgentTurn in one Update call).
-func (m *cliModel) sendMessageFromQueue() tea.Cmd {
+// Does NOT return tickCmd() — the wasTyping guard at the bottom of Update()
+// detects the idle→typing transition and kicks off the tick chain.
+func (m *cliModel) sendMessageFromQueue() {
 	content := strings.TrimSpace(m.textarea.Value())
 	if content == "" {
-		return nil
+		return
 	}
 	m.textarea.Reset()
 	m.autoExpandInput()
 	m.sendMessage(content)
-	return tickCmd()
 }
 
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,

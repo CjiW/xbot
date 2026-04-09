@@ -560,14 +560,22 @@ func (a *Agent) buildSubAgentRunConfig(
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
-	// Stream — 直接从父 Agent 继承
-	stream := parentCtx.Stream
+	// Stream — 从用户设置继承（与 buildMainRunConfig 一致）
+	stream := false
+	if a.settingsSvc != nil {
+		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
+		if vals["enable_stream"] == "true" {
+			stream = true
+		}
+		}
+	}
 
 	cfg := RunConfig{
-		LLMClient:    llmClient,
-		Model:        model,
-		ThinkingMode: thinkingMode,
-		Stream:       stream,
+		LLMClient:       llmClient,
+		Model:           model,
+		ThinkingMode:    thinkingMode,
+		Stream:          stream,
+		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
 		Tools:        subTools,
 		Messages:     messages,
 		AgentID:      subAgentID,

@@ -28,13 +28,20 @@ type CompressResult struct {
 const compactionPrompt = `You are performing a CONTEXT COMPACTION. Create a structured working state
 that allows another LLM to continue this task without re-asking any questions.
 
+## CRITICAL: Recency Priority
+
+The conversation history below is ordered oldest → newest. Messages near the END
+are the most recent work and MUST be preserved in maximum detail. Older messages
+that are unrelated to the current topic may be aggressively compressed or omitted
+entirely to save space for recent work. NEVER sacrifice recent context for old history.
+
 ## Required Sections
 
 ### Historical Context (from previous compactions)
 If this conversation contains a summary from a previous compaction (marked with
-"[Compacted context]"), extract its key historical thread and include it here.
-Each compaction should add 3-5 sentences. Never discard entries from previous
-compactions — this is how long sessions preserve continuity.
+"[Compacted context]"), extract only what remains relevant to the CURRENT topic.
+If older context is unrelated to recent work, summarize it in 1-2 sentences or omit it.
+Do NOT bloat this section — relevance to the current task is the filter.
 
 ### Task Summary
 What the user asked for and current overall progress (1-3 sentences).
@@ -50,8 +57,16 @@ if relevant.
 ### Errors & Fixes
 Errors encountered and how they were resolved. Preserve error messages verbatim.
 
-### Current State & Next Steps
-What was being worked on most recently and what should happen next.
+### Recent Work (HIGHEST PRIORITY)
+What was being worked on most recently — preserve in detail:
+- The last few user requests and what was done for each
+- Files modified, code changes made, commands run
+- Current state of in-progress work
+- Any pending items or incomplete steps
+This section gets the most space in your output. Omitting recent work is NOT acceptable.
+
+### Next Steps
+What should happen next to continue from where we left off.
 
 ## Constraints
 - Preserve ALL file paths from active operations
@@ -60,6 +75,7 @@ What was being worked on most recently and what should happen next.
 - If offload markers (📂 [offload:...]) exist, preserve the summary text but strip the IDs (e.g. "ol_abc123")
 - If masked markers (📂 [masked:...]) exist, preserve the summary text but strip the IDs (e.g. "mk_def456")
 - NEVER include offload IDs (ol_...) or mask IDs (mk_...) in your output — they are ephemeral references
+- Allocate the majority of your output budget to "Recent Work" — this is the most important section
 
 ## Memory Management (Optional)
 If this conversation reveals important new information worth remembering long-term:
@@ -68,7 +84,7 @@ If this conversation reveals important new information worth remembering long-te
 - This is OPTIONAL — if nothing important needs remembering, skip tool calls and just output the compaction summary`
 
 // continuationMessage is injected after compaction to tell the LLM to resume work.
-const continuationMessage = `This conversation was compacted from a longer session. The summary above covers earlier work. Continue from where you left off without re-asking the user any questions.`
+const continuationMessage = `This conversation was compacted from a longer session. The "Recent Work" section above is the most critical context — it reflects what was happening immediately before compaction. Continue from where you left off without re-asking the user any questions.`
 
 // extractDialogueFromTail extracts a pure user/assistant view from a tail
 // that may contain tool messages. Tool group summaries are folded into
@@ -441,7 +457,15 @@ func compactMessages(
 	if omittedCount > 0 {
 		fmt.Fprintf(&historyText, "[Note: %d older messages omitted from compaction]\n\n", omittedCount)
 	}
-	for _, msg := range toCompress[omittedCount:] {
+	fitting := toCompress[omittedCount:]
+	// Insert a visual separator between older context and recent messages.
+	// The last ~40% of fitting messages are considered "recent" — the LLM
+	// must prioritize preserving these in detail.
+	recentStart := len(fitting) * 3 / 5 // top 40% = recent
+	for i, msg := range fitting {
+		if i == recentStart && recentStart > 0 && recentStart < len(fitting) {
+		historyText.WriteString("--- RECENT WORK BEGINS (messages below are highest priority) ---\n\n")
+		}
 		historyText.WriteString(formatCompactLine(msg))
 	}
 

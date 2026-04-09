@@ -355,9 +355,9 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		response, err := s.callLLM(ctx, retryNotifyCtx)
 
-		if out := s.handleLLMError(ctx, err, i); out != nil {
-			return out
-		}
+			if out := s.handleLLMError(ctx, err, response, i); out != nil {
+				return out
+			}
 
 		out, retry := s.handleFinalResponse(ctx, response)
 		if retry {

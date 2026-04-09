@@ -274,6 +274,7 @@ func parseFileReferences(content string) []string {
 func (m *cliModel) resetProgressState() {
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
+	m.lastReasoning = ""
 	m.typingStartTime = time.Now()
 }
 
@@ -545,7 +546,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// 重置流式状态
 		m.streamingMsgIdx = -1
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
+		// Capture reasoning before clearing — needed for final iteration snapshot.
 		if turnID == m.agentTurnID {
+			if m.progress != nil && m.progress.Reasoning != "" {
+				m.lastReasoning = m.progress.Reasoning
+			}
 			m.progress = nil
 		}
 		m.renderCacheValid = false
@@ -632,27 +637,29 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// Snapshot the final iteration before clearing
-		if m.lastSeenIteration >= 0 && len(m.lastCompletedTools) > 0 {
+		if m.lastSeenIteration >= 0 && (len(m.lastCompletedTools) > 0 || m.lastReasoning != "") {
 			alreadySnapped := false
 			for _, s := range m.iterationHistory {
 				if s.Iteration == m.lastSeenIteration {
-					alreadySnapped = true
-					break
+				alreadySnapped = true
+				break
 				}
 			}
 			if !alreadySnapped {
 				// Filter tools by Iteration field to ensure correct attribution
 				var finalTools []CLIToolProgress
 				for _, t := range m.lastCompletedTools {
-					if t.Iteration == m.lastSeenIteration {
-						finalTools = append(finalTools, t)
-					}
+				if t.Iteration == m.lastSeenIteration {
+					finalTools = append(finalTools, t)
 				}
-				if len(finalTools) > 0 {
-					m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-						Iteration: m.lastSeenIteration,
-						Tools:     finalTools,
-					})
+				}
+				snap := cliIterationSnapshot{
+				Iteration: m.lastSeenIteration,
+				Reasoning: m.lastReasoning,
+				Tools:     finalTools,
+				}
+				if len(finalTools) > 0 || m.lastReasoning != "" {
+				m.iterationHistory = append(m.iterationHistory, snap)
 				}
 			}
 		}
@@ -738,13 +745,30 @@ func (m *cliModel) renderProgressBlock() string {
 	for _, snap := range m.iterationHistory {
 		sb.WriteString(dimStyle.Render(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration))))
 		sb.WriteString("\n")
+		if snap.Reasoning != "" {
+				for _, line := range strings.Split(snap.Reasoning, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+				continue
+				}
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+					sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + reasoningStyle.Render(wl)))
+					sb.WriteString("\n")
+				}
+					}
+				}
 		if snap.Thinking != "" {
-			// Collapse multi-line thinking text into a single line to avoid
-			// command output bleeding into subsequent progress lines.
-			text := truncateToWidth(strings.ReplaceAll(snap.Thinking, "\n", " "), innerWidth-4)
-			sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + thinkingStyle.Render(text)))
-			sb.WriteString("\n")
-		}
+				for _, line := range strings.Split(snap.Thinking, "\n") {
+				line = strings.TrimRight(line, " \t")
+				if line == "" {
+				continue
+				}
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+					sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + thinkingStyle.Render(wl)))
+					sb.WriteString("\n")
+				}
+				}
+			}
 		for _, tool := range snap.Tools {
 			label, icon, sty := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			line := fmt.Sprintf("  │ %s %s", icon, label)
@@ -766,33 +790,30 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString("\n")
 
 		if m.progress.Reasoning != "" {
-			// Show the model's reasoning/thinking chain (reasoning_content).
-			// Display last few lines truncated, dimmed style to distinguish
-			// from assistant's actual output.
-			lines := strings.Split(m.progress.Reasoning, "\n")
-			// Show last 3 lines of reasoning (most recent context)
-			start := len(lines) - 3
-			if start < 0 {
-				start = 0
-			}
-			for _, line := range lines[start:] {
-				line = strings.TrimSpace(line)
-				if line == "" {
+				for _, line := range strings.Split(m.progress.Reasoning, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
 					continue
+					}
+					for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+						sb.WriteString(indentGuide.Render("  │ ") + reasoningStyle.Render(wl))
+						sb.WriteString("\n")
+					}
 				}
-				text := truncateToWidth(line, innerWidth-6)
-				sb.WriteString(indentGuide.Render("  │ ") + reasoningStyle.Render("💭 "+text))
-				sb.WriteString("\n")
 			}
-		}
 
-		if m.progress.Thinking != "" {
-			// Collapse multi-line thinking text into a single line to avoid
-			// command output bleeding into subsequent progress lines.
-			text := truncateToWidth(strings.ReplaceAll(m.progress.Thinking, "\n", " "), innerWidth-4)
-			sb.WriteString(indentGuide.Render("  │ ") + thinkingStyle.Render(text))
-			sb.WriteString("\n")
-		}
+			if m.progress.Thinking != "" {
+				for _, line := range strings.Split(m.progress.Thinking, "\n") {
+					line = strings.TrimRight(line, " \t")
+					if line == "" {
+					continue
+					}
+					for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+						sb.WriteString(indentGuide.Render("  │ ") + thinkingStyle.Render(wl))
+						sb.WriteString("\n")
+					}
+				}
+			}
 
 		// Completed tools in current iteration — filter by Iteration field
 		for _, tool := range m.progress.CompletedTools {
@@ -1055,10 +1076,43 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", iterCount, totalTools)))
 				toolSb.WriteString("\n")
 				for _, it := range msg.iterations {
-					if it.Thinking != "" {
-						toolSb.WriteString(thinkingStyle.Render(fmt.Sprintf("  [%d] %s", it.Iteration, it.Thinking)))
-						toolSb.WriteString("\n")
-					}
+										iterPrefix := fmt.Sprintf("  [%d]", it.Iteration)
+										if it.Reasoning != "" {
+											for _, line := range strings.Split(it.Reasoning, "\n") {
+													line = strings.TrimSpace(line)
+													if line == "" {
+														continue
+													}
+													prefix := iterPrefix + " "
+													prefixW := lipgloss.Width(thinkingStyle.Render(prefix))
+													for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
+														if j == 0 {
+															toolSb.WriteString(thinkingStyle.Render(prefix + wl))
+														} else {
+															toolSb.WriteString(thinkingStyle.Render(strings.Repeat(" ", prefixW) + wl))
+														}
+														toolSb.WriteString("\n")
+													}
+											}
+										}
+										if it.Thinking != "" {
+											for _, line := range strings.Split(it.Thinking, "\n") {
+													line = strings.TrimSpace(line)
+													if line == "" {
+														continue
+													}
+													prefix := iterPrefix + " "
+													prefixW := lipgloss.Width(thinkingStyle.Render(prefix))
+													for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
+														if j == 0 {
+															toolSb.WriteString(thinkingStyle.Render(prefix + wl))
+														} else {
+															toolSb.WriteString(thinkingStyle.Render(strings.Repeat(" ", prefixW) + wl))
+														}
+														toolSb.WriteString("\n")
+													}
+											}
+										}
 					for _, tool := range it.Tools {
 						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
 						elapsed := ""

@@ -266,13 +266,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Guard: only flush when NOT typing (previous turn fully complete).
 		if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
 			m.needFlushQueue = false
-			if flushCmd := m.flushMessageQueue(); flushCmd != nil {
-				cmds = append(cmds, flushCmd)
-				// flushMessageQueue() → sendMessageFromQueue() returns tickCmd()
-				// already. Skip the busy-check tickCmd below to avoid emitting
-				// two tickCmd() (which would cause exponential message growth #423).
-				break
-			}
+			m.flushMessageQueue()
+			// Always break after flush. The wasTyping guard at the bottom of
+			// Update() detects the idle→typing transition and kicks off the
+			// tick chain. Without break, line 246 would also emit tickCmd().
+			break
 		}
 
 	case idleTickMsg:

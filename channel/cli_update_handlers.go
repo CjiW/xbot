@@ -173,6 +173,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyUp:
+		// Viewport 不在底部时，方向键优先滚动 viewport（不触发 input history）
+		if !m.viewport.AtBottom() {
+			m.viewport.ScrollUp(1)
+			return m, nil, true
+		}
 		// §Q 消息队列：typing 时 ↑ 追回最后一条排队消息编辑
 		if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
 			if !m.queueEditing && m.textarea.Value() == "" {
@@ -200,6 +205,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown:
+		// Viewport 不在底部时，方向键优先滚动 viewport
+		if !m.viewport.AtBottom() {
+			m.viewport.ScrollDown(1)
+			return m, nil, true
+		}
 		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
 			if m.inputHistoryIdx > 0 {
 				m.inputHistoryIdx--
@@ -379,10 +389,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 					prevIterTools = append(prevIterTools, t)
 				}
 			}
-			if len(prevIterTools) > 0 || prev.Thinking != "" {
+			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
 				snap := cliIterationSnapshot{
 					Iteration: m.lastSeenIteration,
 					Thinking:  prev.Thinking,
+					Reasoning: prev.Reasoning,
 					Tools:     prevIterTools,
 				}
 				m.iterationHistory = append(m.iterationHistory, snap)
@@ -432,8 +443,8 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 							dup := false
 							for _, existing := range finalTools {
 								if existing.Name == t.Name && existing.Label == t.Label {
-									dup = true
-									break
+								dup = true
+								break
 								}
 							}
 							if !dup {
@@ -441,11 +452,19 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 							}
 						}
 					}
-					if len(finalTools) > 0 {
-						m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-							Iteration: m.lastSeenIteration,
-							Tools:     finalTools,
-						})
+					snap := cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Thinking:  msg.payload.Thinking,
+						Tools:     finalTools,
+					}
+					// Carry over reasoning from previous progress if present
+					if prev != nil && prev.Reasoning != "" {
+						snap.Reasoning = prev.Reasoning
+					} else if msg.payload.Reasoning != "" {
+						snap.Reasoning = msg.payload.Reasoning
+					}
+					if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
+						m.iterationHistory = append(m.iterationHistory, snap)
 					}
 				}
 				// Generate tool_summary if we have iteration history.

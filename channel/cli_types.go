@@ -234,6 +234,7 @@ type CLISubAgent struct {
 type cliIterationSnapshot struct {
 	Iteration int
 	Thinking  string
+	Reasoning string // model's reasoning/thinking chain (reasoning_content)
 	Tools     []CLIToolProgress
 }
 
@@ -258,6 +259,7 @@ func formatElapsed(ms int64) string {
 type HistoryIteration struct {
 	Iteration int
 	Thinking  string
+	Reasoning string
 	Tools     []CLIToolProgress
 }
 

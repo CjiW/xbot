@@ -480,7 +480,8 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 
 // handleLLMError handles errors from LLM calls. Returns a RunOutput if the
 // error should terminate the loop, nil if no error.
-func (s *runState) handleLLMError(ctx context.Context, err error, iteration int) *RunOutput {
+// partialResp may contain content accumulated before the stream error.
+func (s *runState) handleLLMError(ctx context.Context, err error, partialResp *llm.LLMResponse, iteration int) *RunOutput {
 	if err == nil {
 		return nil
 	}
@@ -496,7 +497,16 @@ func (s *runState) handleLLMError(ctx context.Context, err error, iteration int)
 			ToolsUsed: s.toolsUsed,
 		})
 	}
-	if s.lastContent != "" {
+	// Use partial response content if available (stream error with partial output),
+	// otherwise fall back to lastContent from previous successful iteration.
+	partialContent := ""
+	if partialResp != nil {
+		partialContent = llm.StripThinkBlocks(partialResp.Content)
+	}
+	if partialContent == "" {
+		partialContent = s.lastContent
+	}
+	if partialContent != "" {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"agent_id":  s.cfg.AgentID,
 			"iteration": iteration + 1,
@@ -504,7 +514,7 @@ func (s *runState) handleLLMError(ctx context.Context, err error, iteration int)
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:   s.cfg.Channel,
 			ChatID:    s.cfg.ChatID,
-			Content:   s.lastContent + "\n\n> ⚠️ LLM 调用失败 (" + summarizeRetryError(err) + ")，以上为部分结果。",
+			Content:   partialContent + "\n\n> ⚠️ LLM 调用失败 (" + summarizeRetryError(err) + ")，以上为部分结果。",
 			ToolsUsed: s.toolsUsed,
 		})
 	}
@@ -601,6 +611,12 @@ func (s *runState) recordAssistantMsg(ctx context.Context, response *llm.LLMResp
 	// so the CLI can display the thinking process to the user.
 	if s.structuredProgress != nil && response.ReasoningContent != "" {
 		s.structuredProgress.ReasoningContent = response.ReasoningContent
+	}
+
+	// Push progress so CLI can display reasoning immediately after LLM completes,
+	// rather than waiting for the next notifyProgress call (e.g. executeToolCalls).
+	if s.autoNotify {
+		s.notifyProgress("")
 	}
 
 	assistantMsg := llm.ChatMessage{

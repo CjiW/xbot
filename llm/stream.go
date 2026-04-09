@@ -54,9 +54,13 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 				resp.FinishReason = ev.FinishReason
 			}
 		case EventError:
-			if ev.Error != "" {
-				return nil, fmt.Errorf("stream error: %s", ev.Error)
-			}
+				if ev.Error != "" {
+					// Return partial content accumulated so far instead of nil,
+					// so the engine can display what was received before the stream broke.
+					resp.Content = content.String()
+					resp.ReasoningContent = reasoningContent.String()
+					return &resp, fmt.Errorf("stream error: %s", ev.Error)
+				}
 		}
 	}
 

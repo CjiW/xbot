@@ -305,68 +305,68 @@ var (
 // 每个 View() 调用创建 200+ 个 lipgloss.NewStyle() → 改为缓存，只在主题/resize 时重建。
 
 type cliStyles struct {
-	TitleBar         lipgloss.Style
-	TitleText        lipgloss.Style
-	ReadyStatus      lipgloss.Style
-	ThinkingSt       lipgloss.Style
-	Progress         lipgloss.Style
-	Tool             lipgloss.Style
-	Separator        lipgloss.Style
-	InputBox         lipgloss.Style
-	Time             lipgloss.Style
-	UserLabel        lipgloss.Style
-	AssistLabel      lipgloss.Style
-	StreamingLabel   lipgloss.Style
-	SystemMsg        lipgloss.Style
-	ErrorMsg         lipgloss.Style
-	ToolSummary      lipgloss.Style
-	ToolHeader       lipgloss.Style
-	ToolItem         lipgloss.Style
-	ToolErrorItem    lipgloss.Style
-	ToolThinking     lipgloss.Style
-	ToolReasoning    lipgloss.Style // reasoning chain (more dim than thinking)
+	TitleBar           lipgloss.Style
+	TitleText          lipgloss.Style
+	ReadyStatus        lipgloss.Style
+	ThinkingSt         lipgloss.Style
+	Progress           lipgloss.Style
+	Tool               lipgloss.Style
+	Separator          lipgloss.Style
+	InputBox           lipgloss.Style
+	Time               lipgloss.Style
+	UserLabel          lipgloss.Style
+	AssistLabel        lipgloss.Style
+	StreamingLabel     lipgloss.Style
+	SystemMsg          lipgloss.Style
+	ErrorMsg           lipgloss.Style
+	ToolSummary        lipgloss.Style
+	ToolHeader         lipgloss.Style
+	ToolItem           lipgloss.Style
+	ToolErrorItem      lipgloss.Style
+	ToolThinking       lipgloss.Style
+	ToolReasoning      lipgloss.Style // reasoning chain (more dim than thinking)
 	ToolReasoningGuide lipgloss.Style // │ guide for reasoning
 	ToolThinkingGuide  lipgloss.Style // │ guide for thinking
-	ToolHint         lipgloss.Style
-	ProgressHeader   lipgloss.Style
-	ProgressIter     lipgloss.Style
-	ProgressThinking lipgloss.Style
-	ProgressDone     lipgloss.Style
-	ProgressRunning  lipgloss.Style
-	ProgressError    lipgloss.Style
-	ProgressElapsed  lipgloss.Style
-	ProgressIndent   lipgloss.Style
-	ProgressDim      lipgloss.Style
-	ProgressBlock    lipgloss.Style
-	Accent           lipgloss.Style
-	TextMutedSt      lipgloss.Style
-	WarningSt        lipgloss.Style
-	InfoSt           lipgloss.Style
-	TokenUsage       lipgloss.Style
-	Footer           lipgloss.Style
-	ToastBg          lipgloss.Style
-	ToastText        lipgloss.Style
-	TodoLabel        lipgloss.Style
-	TodoFilled       lipgloss.Style
-	TodoEmpty        lipgloss.Style
-	TodoDone         lipgloss.Style
-	TodoPending      lipgloss.Style
-	PanelBox         lipgloss.Style
-	PanelHeader      lipgloss.Style
-	PanelCursor      lipgloss.Style
-	PanelDesc        lipgloss.Style
-	PanelHint        lipgloss.Style
-	PanelDivider     lipgloss.Style
-	PanelEmpty       lipgloss.Style
-	FileCompDir      lipgloss.Style
-	FileCompFile     lipgloss.Style
-	FileCompSel      lipgloss.Style
-	HelpTitle        lipgloss.Style
-	HelpCmd          lipgloss.Style
-	HelpDesc         lipgloss.Style
-	HelpGroup        lipgloss.Style
-	HelpKey          lipgloss.Style
-	HelpPanel        lipgloss.Style
+	ToolHint           lipgloss.Style
+	ProgressHeader     lipgloss.Style
+	ProgressIter       lipgloss.Style
+	ProgressThinking   lipgloss.Style
+	ProgressDone       lipgloss.Style
+	ProgressRunning    lipgloss.Style
+	ProgressError      lipgloss.Style
+	ProgressElapsed    lipgloss.Style
+	ProgressIndent     lipgloss.Style
+	ProgressDim        lipgloss.Style
+	ProgressBlock      lipgloss.Style
+	Accent             lipgloss.Style
+	TextMutedSt        lipgloss.Style
+	WarningSt          lipgloss.Style
+	InfoSt             lipgloss.Style
+	TokenUsage         lipgloss.Style
+	Footer             lipgloss.Style
+	ToastBg            lipgloss.Style
+	ToastText          lipgloss.Style
+	TodoLabel          lipgloss.Style
+	TodoFilled         lipgloss.Style
+	TodoEmpty          lipgloss.Style
+	TodoDone           lipgloss.Style
+	TodoPending        lipgloss.Style
+	PanelBox           lipgloss.Style
+	PanelHeader        lipgloss.Style
+	PanelCursor        lipgloss.Style
+	PanelDesc          lipgloss.Style
+	PanelHint          lipgloss.Style
+	PanelDivider       lipgloss.Style
+	PanelEmpty         lipgloss.Style
+	FileCompDir        lipgloss.Style
+	FileCompFile       lipgloss.Style
+	FileCompSel        lipgloss.Style
+	HelpTitle          lipgloss.Style
+	HelpCmd            lipgloss.Style
+	HelpDesc           lipgloss.Style
+	HelpGroup          lipgloss.Style
+	HelpKey            lipgloss.Style
+	HelpPanel          lipgloss.Style
 	// --- completions ---
 	CompSelected   lipgloss.Style
 	CompItem       lipgloss.Style
@@ -426,68 +426,68 @@ func buildStyles(width int) cliStyles {
 		cw = 10
 	}
 	return cliStyles{
-		TitleBar:         lipgloss.NewStyle().Background(c(t.Border)).Foreground(c(t.TitleText)).Bold(true).Width(width),
-		TitleText:        lipgloss.NewStyle(),
-		ReadyStatus:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true).Padding(0, 1),
-		ThinkingSt:       lipgloss.NewStyle().Foreground(c(t.Warning)).Padding(0, 1),
-		Progress:         lipgloss.NewStyle().Foreground(c(t.Warning)),
-		Tool:             lipgloss.NewStyle().Foreground(c(t.Info)),
-		Separator:        lipgloss.NewStyle().Foreground(c(t.Gradient)).Background(c(t.Surface)),
-		InputBox:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(width - 4),
-		Time:             lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
-		UserLabel:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
-		AssistLabel:      lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
-		StreamingLabel:   lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
-		SystemMsg:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
-		ErrorMsg:         lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
-		ToolSummary:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
-		ToolHeader:       lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
-		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
-		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
-		ToolThinking:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
-			ToolReasoning:    lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Italic(true),
-			ToolReasoningGuide: lipgloss.NewStyle().Foreground(c(t.TextMuted)),
-			ToolThinkingGuide:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		ToolHint:         lipgloss.NewStyle().Foreground(c(t.TextMuted)),
-		ProgressHeader:   lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
-		ProgressIter:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Bold(true),
-		ProgressThinking: lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
-		ProgressDone:     lipgloss.NewStyle().Foreground(c(t.Success)),
-		ProgressRunning:  lipgloss.NewStyle().Foreground(c(t.Warning)),
-		ProgressError:    lipgloss.NewStyle().Foreground(c(t.Error)),
-		ProgressElapsed:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
-		ProgressIndent:   lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		ProgressDim:      lipgloss.NewStyle().Faint(true),
-		ProgressBlock:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
-		Accent:           lipgloss.NewStyle().Foreground(c(t.Accent)),
-		TextMutedSt:      lipgloss.NewStyle().Foreground(c(t.TextMuted)),
-		WarningSt:        lipgloss.NewStyle().Foreground(c(t.Warning)),
-		InfoSt:           lipgloss.NewStyle().Foreground(c(t.Info)),
-		TokenUsage:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
-		Footer:           lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		ToastBg:          lipgloss.NewStyle().Width(width).Padding(0, 1),
-		ToastText:        lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		TodoLabel:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		TodoFilled:       lipgloss.NewStyle().Foreground(c(t.BarFilled)),
-		TodoEmpty:        lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
-		TodoDone:         lipgloss.NewStyle().Foreground(c(t.Success)),
-		TodoPending:      lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
-		PanelBox:         lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
-		PanelHeader:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
-		PanelCursor:      lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
-		PanelDesc:        lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
-		PanelHint:        lipgloss.NewStyle().Foreground(c(t.TextMuted)),
-		PanelDivider:     lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
-		PanelEmpty:       lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Width(width - 8).Align(lipgloss.Center),
-		FileCompDir:      lipgloss.NewStyle().Foreground(c(t.Info)),
-		FileCompFile:     lipgloss.NewStyle().Foreground(c(t.Info)),
-		FileCompSel:      lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Underline(true),
-		HelpTitle:        lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
-		HelpCmd:          lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Width(12),
-		HelpDesc:         lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
-		HelpGroup:        lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
-		HelpKey:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
-		HelpPanel:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
+		TitleBar:           lipgloss.NewStyle().Background(c(t.Border)).Foreground(c(t.TitleText)).Bold(true).Width(width),
+		TitleText:          lipgloss.NewStyle(),
+		ReadyStatus:        lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true).Padding(0, 1),
+		ThinkingSt:         lipgloss.NewStyle().Foreground(c(t.Warning)).Padding(0, 1),
+		Progress:           lipgloss.NewStyle().Foreground(c(t.Warning)),
+		Tool:               lipgloss.NewStyle().Foreground(c(t.Info)),
+		Separator:          lipgloss.NewStyle().Foreground(c(t.Gradient)).Background(c(t.Surface)),
+		InputBox:           lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(width - 4),
+		Time:               lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		UserLabel:          lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		AssistLabel:        lipgloss.NewStyle().Foreground(c(t.Success)).Bold(true),
+		StreamingLabel:     lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		SystemMsg:          lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true).Width(width).Align(lipgloss.Center),
+		ErrorMsg:           lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Error)).Foreground(c(t.Error)).Bold(true).Padding(0, 1).Width(cw),
+		ToolSummary:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Foreground(c(t.TextPrimary)).Padding(0, 1).Width(cw).Align(lipgloss.Left),
+		ToolHeader:         lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		ToolItem:           lipgloss.NewStyle().Foreground(c(t.Success)),
+		ToolErrorItem:      lipgloss.NewStyle().Foreground(c(t.Error)),
+		ToolThinking:       lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
+			ToolReasoning:      lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Italic(true),
+			ToolReasoningGuide: lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
+			ToolThinkingGuide:  lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		ToolHint:           lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		ProgressHeader:     lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
+		ProgressIter:       lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Bold(true),
+		ProgressThinking:   lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
+		ProgressDone:       lipgloss.NewStyle().Foreground(c(t.Success)),
+		ProgressRunning:    lipgloss.NewStyle().Foreground(c(t.Warning)),
+		ProgressError:      lipgloss.NewStyle().Foreground(c(t.Error)),
+		ProgressElapsed:    lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		ProgressIndent:     lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		ProgressDim:        lipgloss.NewStyle().Faint(true),
+		ProgressBlock:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
+		Accent:             lipgloss.NewStyle().Foreground(c(t.Accent)),
+		TextMutedSt:        lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		WarningSt:          lipgloss.NewStyle().Foreground(c(t.Warning)),
+		InfoSt:             lipgloss.NewStyle().Foreground(c(t.Info)),
+		TokenUsage:         lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true),
+		Footer:             lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		ToastBg:            lipgloss.NewStyle().Width(width).Padding(0, 1),
+		ToastText:          lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		TodoLabel:          lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		TodoFilled:         lipgloss.NewStyle().Foreground(c(t.BarFilled)),
+		TodoEmpty:          lipgloss.NewStyle().Foreground(c(t.BarEmpty)),
+		TodoDone:           lipgloss.NewStyle().Foreground(c(t.Success)),
+		TodoPending:        lipgloss.NewStyle().Foreground(c(t.TextPrimary)),
+		PanelBox:           lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1),
+		PanelHeader:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true),
+		PanelCursor:        lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		PanelDesc:          lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Faint(true),
+		PanelHint:          lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+		PanelDivider:       lipgloss.NewStyle().Foreground(c(t.Border)).Faint(true),
+		PanelEmpty:         lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Width(width - 8).Align(lipgloss.Center),
+		FileCompDir:        lipgloss.NewStyle().Foreground(c(t.Info)),
+		FileCompFile:       lipgloss.NewStyle().Foreground(c(t.Info)),
+		FileCompSel:        lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Underline(true),
+		HelpTitle:          lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
+		HelpCmd:            lipgloss.NewStyle().Foreground(c(t.Info)).Bold(true).Width(12),
+		HelpDesc:           lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
+		HelpGroup:          lipgloss.NewStyle().Foreground(c(t.Warning)).Bold(true),
+		HelpKey:            lipgloss.NewStyle().Foreground(c(t.TextPrimary)).Bold(true).Width(14),
+		HelpPanel:          lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c(t.Accent)).Padding(0, 1).Width(cw),
 		// --- completions ---
 		CompSelected:   lipgloss.NewStyle().Bold(true).Underline(true).Foreground(c(t.Success)),
 		CompItem:       lipgloss.NewStyle().Foreground(c(t.Success)),

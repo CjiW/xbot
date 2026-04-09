@@ -453,16 +453,19 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 						}
 					}
 					snap := cliIterationSnapshot{
-						Iteration: m.lastSeenIteration,
-						Thinking:  msg.payload.Thinking,
-						Tools:     finalTools,
-					}
-					// Carry over reasoning from previous progress if present
-					if prev != nil && prev.Reasoning != "" {
-						snap.Reasoning = prev.Reasoning
-					} else if msg.payload.Reasoning != "" {
-						snap.Reasoning = msg.payload.Reasoning
-					}
+							Iteration: m.lastSeenIteration,
+							Thinking:  msg.payload.Thinking,
+							Tools:     finalTools,
+						}
+						// Carry over reasoning: priority is lastReasoning (captured before progress clear)
+						// > prev progress > PhaseDone payload
+						if m.lastReasoning != "" {
+							snap.Reasoning = m.lastReasoning
+						} else if prev != nil && prev.Reasoning != "" {
+							snap.Reasoning = prev.Reasoning
+						} else if msg.payload.Reasoning != "" {
+							snap.Reasoning = msg.payload.Reasoning
+						}
 					if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
 						m.iterationHistory = append(m.iterationHistory, snap)
 					}

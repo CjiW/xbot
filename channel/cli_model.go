@@ -238,6 +238,7 @@ type cliModel struct {
 	// --- §2 工具可视化 ---
 	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
 	lastReasoning      string            // 最后一次迭代的 reasoning_content，在 progress 清除前捕获
+	lastThinking       string            // 最后一次迭代的 thinking_content，在 progress 清除前捕获
 
 	// --- §8 Tab 补全 ---
 	completions []string // 当前补全候选项

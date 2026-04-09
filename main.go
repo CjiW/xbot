@@ -281,7 +281,16 @@ func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCa
 		},
 		IsProcessing: agentLoop.IsProcessing,
 		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
-			return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+			if err := agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model); err != nil {
+				return err
+			}
+			if maxOutputTokens > 0 {
+				_ = agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens)
+			}
+			if thinkingMode != "" {
+				_ = agentLoop.SetUserThinkingMode(senderID, thinkingMode)
+			}
+			return nil
 		},
 		LLMDelete: func(senderID string) error {
 			return agentLoop.DeleteUserLLM(senderID)

@@ -57,6 +57,7 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
 	m.lastReasoning = ""
+	m.lastThinking = ""
 	m.typingStartTime = time.Time{}
 	m.progress = nil
 	m.typing = false

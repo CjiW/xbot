@@ -68,6 +68,9 @@ func truncateToWidth(s string, maxWidth int) string {
 // ANSI escape sequences are preserved across wrapped segments.
 // Returns the original line if it fits within maxW.
 func hardWrapRunes(line string, maxW int) string {
+	if maxW <= 0 {
+		return line
+	}
 	if lipgloss.Width(line) <= maxW {
 		return line
 	}

@@ -548,8 +548,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// 清除进度信息（保留 TODO，可跨 turn 存活）
 		// Capture reasoning before clearing — needed for final iteration snapshot.
 		if turnID == m.agentTurnID {
-			if m.progress != nil && m.progress.Reasoning != "" {
-				m.lastReasoning = m.progress.Reasoning
+			if m.progress != nil {
+				if m.progress.Reasoning != "" {
+					m.lastReasoning = m.progress.Reasoning
+				}
+				if m.progress.Thinking != "" {
+					m.lastThinking = m.progress.Thinking
+				}
 			}
 			m.progress = nil
 		}
@@ -637,7 +642,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 
 		// Snapshot the final iteration before clearing
-		if m.lastSeenIteration >= 0 && (len(m.lastCompletedTools) > 0 || m.lastReasoning != "") {
+		if m.lastSeenIteration >= 0 && (len(m.lastCompletedTools) > 0 || m.lastReasoning != "" || m.lastThinking != "") {
 			alreadySnapped := false
 			for _, s := range m.iterationHistory {
 				if s.Iteration == m.lastSeenIteration {
@@ -656,9 +661,10 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 				snap := cliIterationSnapshot{
 					Iteration: m.lastSeenIteration,
 					Reasoning: m.lastReasoning,
+					Thinking:  m.lastThinking,
 					Tools:     finalTools,
 				}
-				if len(finalTools) > 0 || m.lastReasoning != "" {
+				if len(finalTools) > 0 || m.lastReasoning != "" || m.lastThinking != "" {
 					m.iterationHistory = append(m.iterationHistory, snap)
 				}
 			}
@@ -1085,8 +1091,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				// Box internal width: ToolSummary has Border(2) + Padding(0,1 → 2) = 4 cols overhead
 				boxInnerW := contentWidth - 4
 				guideW := lipgloss.Width(s.ProgressIndent.Render("  │ "))
-				reasoningTW := boxInnerW - guideW
-				thinkingTW := boxInnerW - guideW
+				textW := boxInnerW - guideW
 				for _, it := range msg.iterations {
 					// Render #iter header
 					iterLabel := s.ProgressIter.Render(fmt.Sprintf("#%d", it.Iteration))
@@ -1098,7 +1103,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 							if line == "" {
 								continue
 							}
-							for _, wl := range strings.Split(hardWrapRunes(line, reasoningTW), "\n") {
+							for _, wl := range strings.Split(hardWrapRunes(line, textW), "\n") {
 								toolSb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
 								toolSb.WriteString("\n")
 							}
@@ -1110,7 +1115,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 							if line == "" {
 								continue
 							}
-							for _, wl := range strings.Split(hardWrapRunes(line, thinkingTW), "\n") {
+							for _, wl := range strings.Split(hardWrapRunes(line, textW), "\n") {
 								toolSb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
 								toolSb.WriteString("\n")
 							}

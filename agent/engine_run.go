@@ -621,7 +621,7 @@ func (s *runState) recordAssistantMsg(ctx context.Context, response *llm.LLMResp
 
 	assistantMsg := llm.ChatMessage{
 		Role:             "assistant",
-		Content:          response.Content,
+		Content:          strings.TrimRight(response.Content, " \t"),
 		ReasoningContent: response.ReasoningContent,
 		ToolCalls:        response.ToolCalls,
 	}

@@ -50,7 +50,7 @@ type SettingsCallbacks struct {
 	LLMGetMaxContext func(senderID string) int
 	// LLMSetMaxContext 设置用户 max_context
 	LLMSetMaxContext func(senderID string, maxContext int) error
-	// LLMGetMaxOutputTokens 获取用户当前 max_output_tokens 设置（0 = 使用默认值 18192）
+	// LLMGetMaxOutputTokens 获取用户当前 max_output_tokens 设置（0 = 使用默认值 8192）
 	LLMGetMaxOutputTokens func(senderID string) int
 	// LLMSetMaxOutputTokens 设置用户 max_output_tokens
 	LLMSetMaxOutputTokens func(senderID string, maxTokens int) error

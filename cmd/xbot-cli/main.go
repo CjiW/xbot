@@ -276,7 +276,7 @@ func main() {
 							break
 						}
 					}
-					return "0"
+					return "8192" // default value used in llm/openai.go
 				}(),
 				"thinking_mode": func() string {
 					for _, sub := range app.cfg.Subscriptions {

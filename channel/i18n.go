@@ -484,8 +484,8 @@ func localeZH() *UILocale {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
-				Key: "max_output_tokens", Label: "最大输出 Token", Description: "单次回复最大 token 数（默认 18192，设 0 使用默认值）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0",
+				Key: "max_output_tokens", Label: "最大输出 Token", Description: "单次回复最大 token 数（默认 8192）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
 			},
 			{
 				Key: "thinking_mode", Label: "思考模式", Description: "模型推理/思维链模式（默认自动）",
@@ -851,8 +851,8 @@ func localeEN() *UILocale {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
-				Key: "max_output_tokens", Label: "Max Output Tokens", Description: "Max tokens per response (default 18192, 0 = use default)",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0",
+				Key: "max_output_tokens", Label: "Max Output Tokens", Description: "Max tokens per response (default 8192)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
 			},
 			{
 				Key: "thinking_mode", Label: "Thinking Mode", Description: "Model reasoning/thinking chain mode (default: auto)",
@@ -1218,8 +1218,8 @@ func localeJA() *UILocale {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
-				Key: "max_output_tokens", Label: "最大出力トークン", Description: "1回の応答の最大トークン数（デフォルト 18192、0でデフォルト値）",
-				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "0",
+				Key: "max_output_tokens", Label: "最大出力トークン", Description: "1回の応答の最大トークン数（デフォルト 8192）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
 			},
 			{
 				Key: "thinking_mode", Label: "思考モード", Description: "モデルの推論/思考チェーンモード（デフォルト: 自動）",

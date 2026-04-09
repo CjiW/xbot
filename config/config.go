@@ -182,7 +182,7 @@ type LLMConfig struct {
 	BaseURL         string `json:"base_url"`
 	APIKey          string `json:"api_key"`
 	Model           string `json:"model"`
-	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (18192)
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (8192)
 }
 
 // SubscriptionConfig CLI 订阅配置（存储在 config.json，不存数据库）。
@@ -193,7 +193,7 @@ type SubscriptionConfig struct {
 	BaseURL         string `json:"base_url"`
 	APIKey          string `json:"api_key"`
 	Model           string `json:"model"`
-	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (18192)
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (8192)
 	ThinkingMode    string `json:"thinking_mode,omitempty"`     // "" = auto, "enabled", "disabled"
 	Active          bool   `json:"active"`
 }

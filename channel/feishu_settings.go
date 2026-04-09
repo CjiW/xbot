@@ -1120,7 +1120,7 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 	}
 
 	maxOutputOptions := []map[string]any{
-		{"text": map[string]any{"tag": "plain_text", "content": "默认（18192）"}, "value": "0"},
+		{"text": map[string]any{"tag": "plain_text", "content": "默认（8192）"}, "value": "0"},
 		{"text": map[string]any{"tag": "plain_text", "content": "4,096"}, "value": "4096"},
 		{"text": map[string]any{"tag": "plain_text", "content": "8,192"}, "value": "8192"},
 		{"text": map[string]any{"tag": "plain_text", "content": "16,384"}, "value": "16384"},

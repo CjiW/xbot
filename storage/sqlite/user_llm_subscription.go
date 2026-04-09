@@ -19,7 +19,7 @@ type LLMSubscription struct {
 	APIKey          string // API key (plaintext in struct, encrypted in DB)
 	Model           string // default model for this subscription
 	MaxContext      int    // max context token limit (0 = use default)
-	MaxOutputTokens int    // max output token limit (0 = use default 18192)
+	MaxOutputTokens int    // max output token limit (0 = use default 8192)
 	ThinkingMode    string // thinking mode: "" (auto), "enabled", "disabled"
 	IsDefault       bool   // whether this is the active subscription
 	CreatedAt       time.Time

@@ -310,9 +310,14 @@ func TestBgTaskInjectedUserMessage_StartsSpinner(t *testing.T) {
 		t.Error("should not be typing initially")
 	}
 
-	model.Update(cliInjectedUserMsg{content: "bg task done"})
+	_, cmd := model.Update(cliInjectedUserMsg{content: "bg task done"})
 
-	// After injection, should be typing
+	// After injection, should be typing and re-arm fast tick chain.
+	// This prevents spinner/elapsed timers from freezing when a bg task
+	// completion arrives while the UI was idle.
+	if cmd == nil {
+		t.Fatal("expected injected bg-task message to schedule follow-up commands (tick/toast)")
+	}
 	if !model.typing {
 		t.Error("should be typing after bg injection")
 	}

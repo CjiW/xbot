@@ -598,6 +598,12 @@ func main() {
 		// Inject BgTaskManager for background task display
 		bgSessionKey := "cli:" + cliCfg.ChatID
 		cliCh.SetBgTaskManager(app.agentLoop.BgTaskManager(), bgSessionKey)
+		// Inject ApprovalHook for permission control approval dialog
+		if hook := app.agentLoop.ToolHookChain().Get("approval"); hook != nil {
+			if ah, ok := hook.(*tools.ApprovalHook); ok {
+				cliCh.SetApprovalHook(ah)
+			}
+		}
 		// Inject TrimHistoryFn for Ctrl+K session truncation
 		if cliTenantID != 0 && cliSessionSvc != nil {
 			cliCh.SetTrimHistoryFn(func(keepCount int) error {

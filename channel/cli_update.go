@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"fmt"
@@ -323,6 +324,20 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, matrixTickCmd())
 		}
 		return m, tea.Batch(cmds...)
+
+	case approvalRequestMsg:
+		// Permission control: show approval dialog
+		m.approvalRequest = &msg.request
+		m.approvalResultCh = msg.resultCh
+		m.approvalCursor = 0 // default to Approve
+		m.approvalEnteringDeny = false
+		m.approvalDenyInput = textinput.New()
+		m.approvalDenyInput.Placeholder = "Optional deny reason for LLM"
+		m.approvalDenyInput.CharLimit = 200
+		m.approvalDenyInput.SetWidth(60)
+		m.panelMode = "approval"
+		m.renderCacheValid = false
+		return m, nil
 	}
 
 	// Kick off tick chain when processing just started

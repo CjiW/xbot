@@ -39,6 +39,7 @@ func (t *FileCreateTool) Parameters() []llm.ToolParam {
 		{Name: "path", Type: "string", Description: "File path to create (relative to working directory or absolute)", Required: true},
 		{Name: "content", Type: "string", Description: "Content to write to the new file", Required: true},
 		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
+		{Name: "reason", Type: "string", Description: "Optional human-readable reason shown in approval requests when approval is required.", Required: false},
 	}
 }
 
@@ -46,6 +47,7 @@ type FileCreateParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	RunAs   string `json:"run_as"`
+	Reason  string `json:"reason"`
 }
 
 func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -55,6 +57,9 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
+	}
+	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
+		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
 
 	if shouldUseSandbox(ctx) {
@@ -145,6 +150,7 @@ func (t *FileReplaceTool) Parameters() []llm.ToolParam {
 		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive", Required: false},
 		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive", Required: false},
 		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
+		{Name: "reason", Type: "string", Description: "Optional human-readable reason shown in approval requests when approval is required.", Required: false},
 	}
 }
 
@@ -157,6 +163,7 @@ type FileReplaceParams struct {
 	StartLine  int    `json:"start_line"`
 	EndLine    int    `json:"end_line"`
 	RunAs      string `json:"run_as"`
+	Reason     string `json:"reason"`
 }
 
 func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -169,6 +176,9 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	}
 	if params.OldString == "" {
 		return nil, fmt.Errorf("old_string is required")
+	}
+	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
+		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
 
 	// Safety: reject oversized inputs to prevent CPU/memory exhaustion

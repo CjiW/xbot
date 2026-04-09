@@ -126,8 +126,9 @@ func ReadFileAsUser(runAsUser, path string) ([]byte, error) {
 		return os.ReadFile(path)
 	}
 
-	escaped := shellEscape(path)
-	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", "cat", escaped)
+	// Pass the raw path as an argv element. Do NOT shell-escape here because
+	// exec.Command does not invoke a shell; quoting would become part of the filename.
+	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", "cat", path)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

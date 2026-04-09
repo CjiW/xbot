@@ -51,6 +51,7 @@ func (t *ShellTool) Parameters() []llm.ToolParam {
 		{Name: "timeout", Type: "number", Description: "Timeout in seconds (default: 120, max: 600)", Required: false},
 		{Name: "background", Type: "boolean", Description: "Run command in background (for long-running tasks like dev servers). Returns task ID immediately.", Required: false},
 		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
+		{Name: "reason", Type: "string", Description: "Optional human-readable reason shown in approval requests when approval is required.", Required: false},
 	}
 }
 
@@ -60,6 +61,7 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 		Timeout    float64 `json:"timeout"`
 		Background bool    `json:"background"`
 		RunAs      string  `json:"run_as"`
+		Reason     string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -68,6 +70,9 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	if params.Command == "" {
 		return nil, fmt.Errorf("command is required")
 	}
+	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
+		return nil, fmt.Errorf("run_as and reason must be provided together")
+	}
 
 	// 检测命令中的控制字符和 null bytes
 	if strings.ContainsAny(params.Command, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f") {
@@ -75,7 +80,9 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	}
 
 	// 安全预检：拦截危险命令
-	if blocked, reason := checkDangerousCommand(params.Command); blocked {
+	// - run_as 模式下禁止任何形式的 sudo（用户切换由框架通过 cmdbuilder 处理）
+	// - permission control 启用时，即使未设置 run_as，也禁止 LLM 直接使用 sudo
+	if blocked, reason := checkDangerousCommand(toolCtx.Ctx, params.Command, params.RunAs != ""); blocked {
 		return nil, fmt.Errorf("command blocked by safety check: %s", reason)
 	}
 
@@ -602,7 +609,8 @@ var warningPatterns = []*regexp.Regexp{
 
 // checkDangerousCommand 检查命令是否包含危险模式
 // 返回 (blocked, reason)，如果 blocked=true 则应拒绝执行
-func checkDangerousCommand(cmd string) (bool, string) {
+// disallowSudo: 当为 true 时（run_as 模式），任何形式的 sudo 都被禁止
+func checkDangerousCommand(ctx context.Context, cmd string, disallowSudo bool) (bool, string) {
 	// 检查绝对禁止模式
 	for _, dp := range dangerPatterns {
 		if dp.pattern.MatchString(cmd) {
@@ -610,11 +618,21 @@ func checkDangerousCommand(cmd string) (bool, string) {
 		}
 	}
 
-	// 检查裸 sudo（无 -S / -n / NOPASSWD）：在 none sandbox 下会打开 /dev/tty 导致终端卡死
-	// 允许的写法: echo pass | sudo -S ..., sudo -n ..., sudo --non-interactive, NOPASSWD 配置
-	// NOTE: Go regexp (RE2) 不支持 lookbehind/lookahead，用单词边界 + 代码逻辑代替
+	// sudo 检查
 	sudoRe := regexp.MustCompile(`\bsudo\b`)
 	if sudoRe.MatchString(cmd) {
+		if disallowSudo {
+			// run_as 模式：用户切换由框架控制，禁止 LLM 使用任何形式的 sudo
+			return true, "sudo is not allowed when run_as is set (user switching is handled by the framework)"
+		}
+		defaultUser, privilegedUser := PermUsersFromContext(ctx)
+		if defaultUser != "" || privilegedUser != "" {
+			// Permission control enabled: all LLM-authored sudo is forbidden.
+			// User switching must go through run_as so approval/default-user policy can be enforced.
+			return true, "sudo is not allowed when permission control is enabled (use run_as instead so the framework can enforce approval policy)"
+		}
+		// 非 run_as / 非 permission-control 模式：拦截裸 sudo（无 -S / -n / NOPASSWD），防止终端卡死
+		// 允许的写法: echo pass | sudo -S ..., sudo -n ..., sudo --non-interactive, NOPASSWD 配置
 		hasSafeFlag := regexp.MustCompile(`\bsudo\s+(-[Sn]\b|--non-interactive\b)`).MatchString(cmd)
 		hasPipeOrNopasswd := strings.Contains(cmd, "|") || strings.Contains(cmd, "NOPASSWD")
 		if !hasSafeFlag && !hasPipeOrNopasswd {

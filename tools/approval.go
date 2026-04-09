@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -43,17 +44,16 @@ type ApprovalRequest struct {
 	Reason   string `json:"reason"`    // Human-readable description
 
 	// Extracted details for display (populated by ApprovalHook)
-	Command  string `json:"command,omitempty"`   // Parsed command (for Shell)
-	FilePath string `json:"file_path,omitempty"` // Target file (for FileReplace/FileCreate)
+	Command     string `json:"command,omitempty"`      // Parsed command (possibly truncated for display)
+	FilePath    string `json:"file_path,omitempty"`    // Target file (possibly truncated for display)
+	ArgsSummary string `json:"args_summary,omitempty"` // Extra argument summary for approval UI
 }
 
 // ApprovalResult is the user's decision.
-type ApprovalResult int
-
-const (
-	ApprovalDenied   ApprovalResult = 0
-	ApprovalApproved ApprovalResult = 1
-)
+type ApprovalResult struct {
+	Approved   bool   `json:"approved"`
+	DenyReason string `json:"deny_reason,omitempty"`
+}
 
 // ApprovalHandler is the channel-agnostic interface for user approval.
 // Each channel (CLI, Web) provides its own implementation.
@@ -80,6 +80,12 @@ func NewApprovalHook(handler ApprovalHandler) *ApprovalHook {
 }
 
 func (h *ApprovalHook) Name() string { return "approval" }
+
+// SetHandler replaces the approval handler at runtime.
+// Called by channels (CLI, Web) after they have a UI program ready.
+func (h *ApprovalHook) SetHandler(handler ApprovalHandler) {
+	h.handler = handler
+}
 
 func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args string) error {
 	runAs := extractRunAs(args)
@@ -138,7 +144,10 @@ func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args str
 	if err != nil {
 		return fmt.Errorf("approval request failed: %w", err)
 	}
-	if result != ApprovalApproved {
+	if !result.Approved {
+		if strings.TrimSpace(result.DenyReason) != "" {
+			return fmt.Errorf("user denied execution as %q: %s", runAs, strings.TrimSpace(result.DenyReason))
+		}
 		return fmt.Errorf("user denied execution as %q", runAs)
 	}
 
@@ -161,32 +170,66 @@ func extractRunAs(args string) string {
 	return raw.RunAs
 }
 
+func truncateApprovalText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
 // populateApprovalDetails extracts human-readable details for the approval dialog.
 func populateApprovalDetails(req *ApprovalRequest, toolName, args string) {
+	const maxDisplayLen = 160
+
 	switch toolName {
 	case "Shell":
 		var p struct {
 			Command string `json:"command"`
+			Reason  string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(args), &p) == nil {
-			req.Command = p.Command
-			req.Reason = fmt.Sprintf("Execute command as %q: %s", req.RunAs, p.Command)
+			req.Command = truncateApprovalText(p.Command, maxDisplayLen)
+			req.ArgsSummary = req.Command
+			if strings.TrimSpace(p.Reason) != "" {
+				req.Reason = truncateApprovalText(p.Reason, maxDisplayLen)
+			} else {
+				req.Reason = fmt.Sprintf("Execute command as %q", req.RunAs)
+			}
 		}
 	case "FileCreate":
 		var p struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			RunAs  string `json:"run_as"`
+			Reason string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(args), &p) == nil {
-			req.FilePath = p.Path
-			req.Reason = fmt.Sprintf("Create file as %q: %s", req.RunAs, p.Path)
+			req.FilePath = truncateApprovalText(p.Path, maxDisplayLen)
+			req.ArgsSummary = req.FilePath
+			if strings.TrimSpace(p.Reason) != "" {
+				req.Reason = truncateApprovalText(p.Reason, maxDisplayLen)
+			} else {
+				req.Reason = fmt.Sprintf("Create file as %q", req.RunAs)
+			}
 		}
 	case "FileReplace":
 		var p struct {
-			Path string `json:"path"`
+			Path      string `json:"path"`
+			OldString string `json:"old_string"`
+			NewString string `json:"new_string"`
+			Reason    string `json:"reason"`
 		}
 		if json.Unmarshal([]byte(args), &p) == nil {
-			req.FilePath = p.Path
-			req.Reason = fmt.Sprintf("Modify file as %q: %s", req.RunAs, p.Path)
+			req.FilePath = truncateApprovalText(p.Path, maxDisplayLen)
+			req.ArgsSummary = fmt.Sprintf("old=%q new=%q", truncateApprovalText(p.OldString, 40), truncateApprovalText(p.NewString, 40))
+			if strings.TrimSpace(p.Reason) != "" {
+				req.Reason = truncateApprovalText(p.Reason, maxDisplayLen)
+			} else {
+				req.Reason = fmt.Sprintf("Modify file as %q", req.RunAs)
+			}
 		}
 	}
 	if req.Reason == "" {

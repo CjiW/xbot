@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -55,7 +56,7 @@ func TestApprovalHook_DefaultUser(t *testing.T) {
 }
 
 func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
-	handler := &mockApprovalHandler{result: ApprovalApproved}
+	handler := &mockApprovalHandler{result: ApprovalResult{Approved: true}}
 	h := NewApprovalHook(handler)
 	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
 	if err != nil {
@@ -67,11 +68,23 @@ func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
 }
 
 func TestApprovalHook_PrivilegedUser_Denied(t *testing.T) {
-	handler := &mockApprovalHandler{result: ApprovalDenied}
+	handler := &mockApprovalHandler{result: ApprovalResult{Approved: false}}
 	h := NewApprovalHook(handler)
 	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
 	if err == nil {
 		t.Fatal("expected error for denied privileged_user")
+	}
+}
+
+func TestApprovalHook_PrivilegedUser_DeniedWithReason(t *testing.T) {
+	handler := &mockApprovalHandler{result: ApprovalResult{Approved: false, DenyReason: "unsafe package source"}}
+	h := NewApprovalHook(handler)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	if err == nil {
+		t.Fatal("expected error for denied privileged_user")
+	}
+	if !strings.Contains(err.Error(), "unsafe package source") {
+		t.Fatalf("expected deny reason in error, got %v", err)
 	}
 }
 
@@ -119,7 +132,7 @@ func TestApprovalHook_OnlyDefaultUser(t *testing.T) {
 }
 
 func TestApprovalHook_OnlyPrivilegedUser(t *testing.T) {
-	handler := &mockApprovalHandler{result: ApprovalApproved}
+	handler := &mockApprovalHandler{result: ApprovalResult{Approved: true}}
 	h := NewApprovalHook(handler)
 	err := h.PreToolUse(withPerm(context.Background(), "", "root"), "Shell", `{"command": "ls", "run_as": "root"}`)
 	if err != nil {
@@ -155,11 +168,30 @@ func TestApprovalHook_PopulateDetails(t *testing.T) {
 	if req.Reason == "" {
 		t.Error("expected non-empty reason")
 	}
+	if req.ArgsSummary != "apt install nginx" {
+		t.Errorf("expected args summary to match command, got %q", req.ArgsSummary)
+	}
 
 	req2 := ApprovalRequest{RunAs: "root"}
 	populateApprovalDetails(&req2, "FileCreate", `{"path": "/etc/test.conf"}`)
 	if req2.FilePath != "/etc/test.conf" {
 		t.Errorf("expected file path '/etc/test.conf', got %q", req2.FilePath)
+	}
+
+	req3 := ApprovalRequest{RunAs: "root"}
+	populateApprovalDetails(&req3, "Shell", `{"command": "apt install nginx", "reason": "Install nginx for reverse proxy"}`)
+	if req3.Reason != "Install nginx for reverse proxy" {
+		t.Errorf("expected explicit reason, got %q", req3.Reason)
+	}
+
+	longCmd := "python -c '" + strings.Repeat("x", 300) + "'"
+	req4 := ApprovalRequest{RunAs: "root"}
+	populateApprovalDetails(&req4, "Shell", `{"command": "`+longCmd+`"}`)
+	if len(req4.Command) > 160 {
+		t.Fatalf("expected truncated command <= 160 chars, got %d", len(req4.Command))
+	}
+	if !strings.HasSuffix(req4.Command, "...") {
+		t.Fatalf("expected truncated command to end with ellipsis, got %q", req4.Command)
 	}
 }
 

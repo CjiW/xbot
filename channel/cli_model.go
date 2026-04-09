@@ -274,17 +274,23 @@ type cliModel struct {
 	panelCombo    bool           // settings panel: combo dropdown open
 	panelComboIdx int            // settings panel: combo selected option index
 	// --- AskUser panel ---
-	panelItems     []askItem                       // askuser panel: question items
-	panelTab       int                             // askuser panel: current tab (question index)
-	panelOptSel    map[int]map[int]bool            // askuser panel: selected option indices per question
-	panelOptCursor map[int]int                     // askuser panel: highlighted option index per question
-	panelAnswerTA  textarea.Model                  // askuser panel: free-input editor (no-options mode)
-	panelOtherTI   textinput.Model                 // askuser panel: single-line Other input
-	panelSchema    []SettingDefinition             // settings panel: schema copy
-	panelValues    map[string]string               // settings panel: current values
-	panelOnSubmit  func(values map[string]string)  // callback on settings submit
-	panelOnAnswer  func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
-	panelOnCancel  func()                          // callback on cancel
+	panelItems     []askItem            // askuser panel: question items
+	panelTab       int                  // askuser panel: current tab (question index)
+	panelOptSel    map[int]map[int]bool // askuser panel: selected option indices per question
+	panelOptCursor map[int]int          // askuser panel: highlighted option index per question
+	panelAnswerTA  textarea.Model       // askuser panel: free-input editor (no-options mode)
+	panelOtherTI   textinput.Model      // askuser panel: single-line Other input
+	panelSchema    []SettingDefinition  // settings panel: schema copy
+	// --- Approval panel ---
+	approvalRequest      *tools.ApprovalRequest // pending approval request
+	approvalResultCh     chan<- tools.ApprovalResult
+	approvalCursor       int                             // 0=approve, 1=deny
+	approvalDenyInput    textinput.Model                 // deny reason input
+	approvalEnteringDeny bool                            // true when editing deny reason
+	panelValues          map[string]string               // settings panel: current values
+	panelOnSubmit        func(values map[string]string)  // callback on settings submit
+	panelOnAnswer        func(answers map[string]string) // callback on askuser answers (key=index, value=answer)
+	panelOnCancel        func()                          // callback on cancel
 
 	// --- Bg Tasks Panel ---
 	panelBgTasks    []*tools.BackgroundTask // cached task list

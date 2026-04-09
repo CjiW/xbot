@@ -486,6 +486,8 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 			return m.updateDangerPanel(msg)
 		case "runner":
 			return m.updateRunnerPanel(msg)
+		case "approval":
+			return m.updateApprovalPanel(msg)
 		}
 		return false, m, nil
 	}()
@@ -1053,6 +1055,8 @@ func (m *cliModel) viewPanel() string {
 		raw = m.viewDangerPanel()
 	case "runner":
 		raw = m.viewRunnerPanel()
+	case "approval":
+		raw = m.viewApprovalPanel()
 	default:
 		return ""
 	}

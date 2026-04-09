@@ -39,7 +39,7 @@ func (a *Agent) handleContextInfo(ctx context.Context, msg bus.InboundMessage, t
 
 	// 获取工具定义并计算 token
 	sessionKey := msg.Channel + ":" + msg.ChatID
-	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+	toolDefs := visibleToolDefs(a.tools.AsDefinitionsForSession(sessionKey), a.settingsSvc, msg.Channel, msg.SenderID)
 	toolDefsTokens, _ := llm.CountToolsTokens(toolDefs, model)
 
 	// Prefer API-returned prompt_tokens (authoritative) over local estimation.

@@ -826,11 +826,11 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 			}
 		}
 
-		toolExecCtx := ctx
+		toolExecCtx := withApprovalTarget(ctx, cfg.ChatID, cfg.OriginUserID)
 		if cfg.SettingsSvc != nil {
 			permUsers := cfg.SettingsSvc.GetPermUsers(cfg.Channel, cfg.OriginUserID)
 			if permUsers != nil {
-				toolExecCtx = tools.WithPermUsers(ctx, permUsers.DefaultUser, permUsers.PrivilegedUser)
+				toolExecCtx = tools.WithPermUsers(toolExecCtx, permUsers.DefaultUser, permUsers.PrivilegedUser)
 			}
 		}
 

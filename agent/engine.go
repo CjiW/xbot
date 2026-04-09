@@ -393,11 +393,11 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 			return nil, fmt.Errorf("unknown tool: %s", tc.Name)
 		}
 
-		toolExecCtx := ctx
+		toolExecCtx := withApprovalTarget(ctx, cfg.ChatID, cfg.OriginUserID)
 		if cfg.SettingsSvc != nil {
 			permUsers := cfg.SettingsSvc.GetPermUsers(cfg.Channel, cfg.OriginUserID)
 			if permUsers != nil {
-				toolExecCtx = tools.WithPermUsers(ctx, permUsers.DefaultUser, permUsers.PrivilegedUser)
+				toolExecCtx = tools.WithPermUsers(toolExecCtx, permUsers.DefaultUser, permUsers.PrivilegedUser)
 			}
 		}
 		toolCtx := buildToolContext(toolExecCtx, cfg)

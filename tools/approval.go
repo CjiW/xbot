@@ -88,7 +88,10 @@ func (h *ApprovalHook) SetHandler(handler ApprovalHandler) {
 }
 
 func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args string) error {
-	runAs := extractRunAs(args)
+	runAs, reason := extractRunAsAndReason(args)
+	if (strings.TrimSpace(runAs) == "") != (strings.TrimSpace(reason) == "") {
+		return fmt.Errorf("run_as and reason must be provided together")
+	}
 
 	// No run_as specified — execute as current process user
 	if runAs == "" {
@@ -158,16 +161,17 @@ func (h *ApprovalHook) PostToolUse(ctx context.Context, toolName string, args st
 	// No post-action needed
 }
 
-// extractRunAs parses the "run_as" field from JSON tool arguments.
-// Returns empty string if not present or on parse error.
-func extractRunAs(args string) string {
+// extractRunAsAndReason parses the "run_as" and "reason" fields from JSON tool arguments.
+// Returns empty strings if not present or on parse error.
+func extractRunAsAndReason(args string) (runAs, reason string) {
 	var raw struct {
-		RunAs string `json:"run_as"`
+		RunAs  string `json:"run_as"`
+		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(args), &raw); err != nil {
-		return ""
+		return "", ""
 	}
-	return raw.RunAs
+	return raw.RunAs, raw.Reason
 }
 
 func truncateApprovalText(s string, max int) string {

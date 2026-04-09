@@ -32,7 +32,7 @@ func (a *Agent) handlePromptQuery(ctx context.Context, msg bus.InboundMessage, t
 
 	// 获取工具定义
 	sessionKey := msg.Channel + ":" + msg.ChatID
-	toolDefs := a.tools.AsDefinitionsForSession(sessionKey)
+	toolDefs := visibleToolDefs(a.tools.AsDefinitionsForSession(sessionKey), a.settingsSvc, msg.Channel, msg.SenderID)
 
 	// 格式化输出
 	var buf strings.Builder

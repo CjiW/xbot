@@ -82,6 +82,11 @@ type PermUsersConfig struct {
 	PrivilegedUser string `json:"privileged_user"`
 }
 
+// IsPermControlEnabled reports whether permission control is active for the current user/channel.
+func IsPermControlEnabled(config *PermUsersConfig) bool {
+	return config != nil && (config.DefaultUser != "" || config.PrivilegedUser != "")
+}
+
 // PermissionControlMiddleware injects the permission control system prompt
 // when the feature is enabled (at least one user is configured).
 type PermissionControlMiddleware struct{}
@@ -95,10 +100,7 @@ func (m *PermissionControlMiddleware) Priority() int { return 115 }
 
 func (m *PermissionControlMiddleware) Process(mc *MessageContext) error {
 	config, ok := GetExtraTyped[*PermUsersConfig](mc, ExtraKeyPermUsers)
-	if !ok || config == nil {
-		return nil
-	}
-	if config.DefaultUser == "" && config.PrivilegedUser == "" {
+	if !ok || !IsPermControlEnabled(config) {
 		return nil // feature disabled
 	}
 

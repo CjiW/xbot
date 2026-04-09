@@ -46,7 +46,7 @@ func TestApprovalHook_NoRunAs(t *testing.T) {
 func TestApprovalHook_DefaultUser(t *testing.T) {
 	handler := &mockApprovalHandler{}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "ls", "run_as": "alice"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "ls", "run_as": "alice", "reason": "list directory"}`)
 	if err != nil {
 		t.Errorf("expected no error for default_user, got %v", err)
 	}
@@ -58,7 +58,7 @@ func TestApprovalHook_DefaultUser(t *testing.T) {
 func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalResult{Approved: true}}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root", "reason": "install package"}`)
 	if err != nil {
 		t.Errorf("expected no error for approved privileged_user, got %v", err)
 	}
@@ -70,7 +70,7 @@ func TestApprovalHook_PrivilegedUser_Approved(t *testing.T) {
 func TestApprovalHook_PrivilegedUser_Denied(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalResult{Approved: false}}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root", "reason": "install package"}`)
 	if err == nil {
 		t.Fatal("expected error for denied privileged_user")
 	}
@@ -79,7 +79,7 @@ func TestApprovalHook_PrivilegedUser_Denied(t *testing.T) {
 func TestApprovalHook_PrivilegedUser_DeniedWithReason(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalResult{Approved: false, DenyReason: "unsafe package source"}}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", "root"), "Shell", `{"command": "apt install nginx", "run_as": "root", "reason": "install package"}`)
 	if err == nil {
 		t.Fatal("expected error for denied privileged_user")
 	}
@@ -120,12 +120,12 @@ func TestApprovalHook_EmptyPermUsers(t *testing.T) {
 func TestApprovalHook_OnlyDefaultUser(t *testing.T) {
 	handler := &mockApprovalHandler{}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "alice"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "alice", "reason": "list directory"}`)
 	if err != nil {
 		t.Errorf("expected no error for default_user, got %v", err)
 	}
 	// run_as "root" should fail because privileged_user is not configured
-	err = h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "root"}`)
+	err = h.PreToolUse(withPerm(context.Background(), "alice", ""), "Shell", `{"command": "ls", "run_as": "root", "reason": "list root"}`)
 	if err == nil {
 		t.Fatal("expected error for run_as=root when privileged_user is empty")
 	}
@@ -134,27 +134,28 @@ func TestApprovalHook_OnlyDefaultUser(t *testing.T) {
 func TestApprovalHook_OnlyPrivilegedUser(t *testing.T) {
 	handler := &mockApprovalHandler{result: ApprovalResult{Approved: true}}
 	h := NewApprovalHook(handler)
-	err := h.PreToolUse(withPerm(context.Background(), "", "root"), "Shell", `{"command": "ls", "run_as": "root"}`)
+	err := h.PreToolUse(withPerm(context.Background(), "", "root"), "Shell", `{"command": "ls", "run_as": "root", "reason": "list root directory"}`)
 	if err != nil {
 		t.Errorf("expected no error for approved privileged_user, got %v", err)
 	}
 }
 
-func TestApprovalHook_ExtractRunAs(t *testing.T) {
+func TestApprovalHook_ExtractRunAsAndReason(t *testing.T) {
 	tests := []struct {
-		args     string
-		expected string
+		args           string
+		expectedRunAs  string
+		expectedReason string
 	}{
-		{`{"command": "ls"}`, ""},
-		{`{"command": "ls", "run_as": "root"}`, "root"},
-		{`{}`, ""},
-		{"invalid json", ""},
+		{`{"command": "ls"}`, "", ""},
+		{`{"command": "ls", "run_as": "root", "reason": "list root"}`, "root", "list root"},
+		{`{}`, "", ""},
+		{"invalid json", "", ""},
 	}
 
 	for _, tt := range tests {
-		got := extractRunAs(tt.args)
-		if got != tt.expected {
-			t.Errorf("extractRunAs(%q) = %q, want %q", tt.args, got, tt.expected)
+		runAs, reason := extractRunAsAndReason(tt.args)
+		if runAs != tt.expectedRunAs || reason != tt.expectedReason {
+			t.Errorf("extractRunAsAndReason(%q) = (%q, %q), want (%q, %q)", tt.args, runAs, reason, tt.expectedRunAs, tt.expectedReason)
 		}
 	}
 }

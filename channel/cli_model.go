@@ -215,6 +215,11 @@ type cliModel struct {
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
 
+	// --- Interactive agents ---
+	agentCount   int                      // active interactive agent sessions (0 = no indicator)
+	agentCountFn func() int               // callback to get current agent count (set by channel)
+	agentListFn  func() []panelAgentEntry // callback to list active agents for panel
+
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
 
@@ -294,7 +299,8 @@ type cliModel struct {
 
 	// --- Bg Tasks Panel ---
 	panelBgTasks    []*tools.BackgroundTask // cached task list
-	panelBgCursor   int                     // selected task index
+	panelBgAgents   []panelAgentEntry       // cached agent list
+	panelBgCursor   int                     // selected item index (tasks first, then agents)
 	panelBgViewing  bool                    // true = viewing log of selected task
 	panelBgScroll   int                     // log view scroll offset
 	panelBgLogLines []string                // cached log lines for viewing

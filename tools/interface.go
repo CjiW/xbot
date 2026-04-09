@@ -63,6 +63,10 @@ type ToolContext struct {
 	// SubAgents inherit this from the parent to ensure consistent behavior.
 	Stream bool
 
+	// Metadata holds ephemeral key-value pairs passed between tool and adapter layers.
+	// Used e.g. to propagate background=true from SubAgent tool to spawn adapter.
+	Metadata map[string]string
+
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *BackgroundTaskManager
 	// SessionKey for task scoping (set by engine, not via RunConfig)

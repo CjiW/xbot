@@ -271,7 +271,7 @@ func (c *CLIChannel) InjectUserMessage(content string) {
 	}
 }
 
-// updateBgTaskCountFn updates the model's bg task count callback.
+// updateBgTaskCountFn updates the model's bg task count and agent count callbacks.
 func (c *CLIChannel) updateBgTaskCountFn() {
 	if c.model == nil {
 		return
@@ -280,6 +280,20 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 		key := c.bgSessionKey
 		c.model.bgTaskCountFn = func() int {
 			return len(c.bgTaskMgr.ListRunning(key))
+		}
+	}
+	// Wire agent count/list callbacks
+	if c.config.AgentCount != nil {
+		c.model.agentCountFn = c.config.AgentCount
+	}
+	if c.config.AgentList != nil {
+		c.model.agentListFn = func() []panelAgentEntry {
+			entries := c.config.AgentList()
+			result := make([]panelAgentEntry, len(entries))
+			for i, e := range entries {
+				result[i] = panelAgentEntry(e)
+			}
+			return result
 		}
 	}
 	// Wire usage query callback

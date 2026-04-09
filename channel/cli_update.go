@@ -239,11 +239,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderCacheValid = false
 			}
 		}
+		// Refresh agent count on tick
+		if m.agentCountFn != nil {
+			prev := m.agentCount
+			m.agentCount = m.agentCountFn()
+			if m.agentCount != prev {
+				m.renderCacheValid = false
+			}
+		}
 		// Schedule next tick when agent is active or bg tasks are running.
 		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
 		// (two tickCmd() would double the message count every 100ms → CPU explosion).
 		busy := m.typing || m.progress != nil
-		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
+		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || (m.agentCountFn != nil && m.agentCount > 0) || busy {
 			cmds = append(cmds, tickCmd())
 		} else if m.needFlushQueue && len(m.messageQueue) > 0 {
 			// Pending queue flush — use fast tick so the queued message

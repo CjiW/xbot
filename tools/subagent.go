@@ -18,6 +18,10 @@ type InteractiveSubAgentManager interface {
 	SendInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance string) (string, error)
 	// UnloadInteractive 结束 interactive session（巩固记忆 + 清理）。
 	UnloadInteractive(ctx *ToolContext, roleName, instance string) error
+	// InspectInteractive 返回 interactive session 的最近活动摘要（tail 风格）。
+	InspectInteractive(ctx *ToolContext, roleName, instance string, tailCount int) (string, error)
+	// InterruptInteractive 中断 interactive session 当前正在执行的迭代。
+	InterruptInteractive(ctx *ToolContext, roleName, instance string) error
 }
 
 type SubAgentTool struct{}
@@ -72,6 +76,7 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 		{Name: "interactive", Type: "boolean", Description: "Create or reuse an interactive session for multi-turn conversation"},
 		{Name: "background", Type: "boolean", Description: "Run the interactive sub-agent in background mode. Only valid when interactive=true."},
 		{Name: "action", Type: "string", Description: `Optional control action: "send", "unload", "inspect", or "interrupt".`},
+		{Name: "tail", Type: "integer", Description: "For action=\"inspect\": number of recent iterations to show (default: 5)."},
 	}
 }
 
@@ -83,6 +88,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		Background  bool   `json:"background"`
 		Action      string `json:"action"`
 		Instance    string `json:"instance"`
+		Tail        int    `json:"tail"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -176,14 +182,32 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			return NewResult(result), nil
 
 		case "inspect":
-			return nil, fmt.Errorf("action=\"inspect\" is not implemented yet")
+			tailCount := params.Tail
+			if tailCount <= 0 {
+				tailCount = 5
+			}
+			result, err := im.InspectInteractive(ctx, params.Role, params.Instance, tailCount)
+			if err != nil {
+				return nil, fmt.Errorf("inspect failed: %w", err)
+			}
+			return NewResult(result), nil
 
 		case "interrupt":
-			return nil, fmt.Errorf("action=\"interrupt\" is not implemented yet")
+			if err := im.InterruptInteractive(ctx, params.Role, params.Instance); err != nil {
+				return nil, err
+			}
+			return NewResult(fmt.Sprintf("Interactive session for role %q (instance=%q) interrupted.", params.Role, params.Instance)), nil
 
 		default:
 			if params.Background && !params.Interactive {
 				return nil, fmt.Errorf("background=true requires interactive=true")
+			}
+			// Propagate background flag via ToolContext metadata
+			if params.Background {
+				if ctx.Metadata == nil {
+					ctx.Metadata = make(map[string]string)
+				}
+				ctx.Metadata["background"] = "true"
 			}
 			// action="" + interactive=true → spawn/reuse
 			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance)

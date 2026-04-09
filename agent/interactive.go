@@ -17,12 +17,19 @@ import (
 // interactiveAgent 封装一个 interactive SubAgent 会话。
 // 存储在 parent Agent 的 interactiveSubAgents map 中。
 type interactiveAgent struct {
-	roleName     string            // 角色名
-	messages     []llm.ChatMessage // 累积的对话历史（不含 system prompt）
-	mu           sync.Mutex        // 保护 messages 并发访问
-	systemPrompt llm.ChatMessage   // spawn 时的 system prompt（保持一致性，后续 send 不重建）
-	cfg          *RunConfig        // RunConfig 模板（Messages=nil，复用于 send/unload）
-	lastUsed     time.Time         // 最后访问时间，用于 TTL 清理
+	roleName         string              // 角色名
+	instance         string              // instance ID
+	messages         []llm.ChatMessage   // 累积的对话历史（不含 system prompt）
+	iterationHistory []IterationSnapshot // 最近迭代快照，供 inspect/tail 使用
+	mu               sync.Mutex          // 保护会话状态并发访问
+	systemPrompt     llm.ChatMessage     // spawn 时的 system prompt（保持一致性，后续 send 不重建）
+	cfg              *RunConfig          // RunConfig 模板（Messages=nil，复用于 send/unload）
+	lastUsed         time.Time           // 最后访问时间，用于 TTL 清理
+	running          bool                // 当前是否有 Run 在执行
+	background       bool                // 是否后台模式
+	cancelCurrent    context.CancelFunc  // 当前运行的取消函数（nil = idle）
+	lastError        string              // 最近一次错误
+	lastReply        string              // 最近一次回复摘要
 }
 
 // interactiveSessionTTL 是 interactive SubAgent 会话的生存时间。
@@ -84,6 +91,7 @@ func (a *Agent) SpawnInteractiveSession(
 ) (*bus.OutboundMessage, error) {
 	originChannel, originChatID, originSender := resolveOriginIDs(msg)
 	instance := msg.Metadata["instance_id"]
+	background := msg.Metadata["background"] == "true"
 
 	key := interactiveKey(originChannel, originChatID, roleName, instance)
 
@@ -92,7 +100,7 @@ func (a *Agent) SpawnInteractiveSession(
 	a.cleanupExpiredSessions()
 
 	// 原子 check-and-store：如果 key 已存在，直接返回
-	placeholder := &interactiveAgent{roleName: roleName, lastUsed: time.Now()}
+	placeholder := &interactiveAgent{roleName: roleName, instance: instance, lastUsed: time.Now(), background: background}
 	if _, loaded := a.interactiveSubAgents.LoadOrStore(key, placeholder); loaded {
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
@@ -146,8 +154,69 @@ func (a *Agent) SpawnInteractiveSession(
 		})
 	}
 
-	// --- 阶段 3：锁外执行 Run（嵌套 spawn 不会死锁） ---
+	// --- 阶段 3：执行 Run ---
 	preLen := len(cfg.Messages)
+
+	if background {
+		// Background mode: launch Run in goroutine, return immediately.
+		// Derive from parent context so Ctrl+C / /cancel also stops background runs.
+		// The session state survives cancellation — only active Run is stopped.
+		runCtx, runCancel := context.WithCancel(subCtx)
+		// Copy call chain into derived context
+		runCtx = WithCallChain(runCtx, CallChainFromContext(subCtx))
+
+		placeholder.mu.Lock()
+		placeholder.cancelCurrent = runCancel
+		placeholder.running = true
+		placeholder.mu.Unlock()
+
+		go func() {
+			out := Run(runCtx, cfg)
+			runCancel()
+
+			// Write results back
+			placeholder.mu.Lock()
+			defer placeholder.mu.Unlock()
+
+			placeholder.running = false
+			placeholder.cancelCurrent = nil
+
+			if out.Error != nil {
+				placeholder.lastError = out.Error.Error()
+				placeholder.lastReply = out.Content
+			} else {
+				placeholder.lastError = ""
+				placeholder.lastReply = out.Content
+			}
+
+			// Store iteration history
+			if len(out.IterationHistory) > 0 {
+				placeholder.iterationHistory = out.IterationHistory
+			}
+
+			// Store messages
+			var newMsgs []llm.ChatMessage
+			if len(out.Messages) > preLen {
+				newMsgs = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+			}
+			placeholder.messages = newMsgs
+			placeholder.systemPrompt = cfg.Messages[0]
+			placeholder.cfg = &cfg
+			placeholder.cfg.Messages = nil
+		}()
+
+		log.WithFields(log.Fields{
+			"role":       roleName,
+			"instance":   instance,
+			"background": true,
+		}).Info("Interactive session spawned in background")
+
+		return &bus.OutboundMessage{
+			Content: fmt.Sprintf("Interactive sub-agent %q (instance=%q) started in background. Use action=\"inspect\" to check progress, action=\"send\" to send messages, action=\"interrupt\" to interrupt, or action=\"unload\" to terminate.", roleName, instance),
+		}, nil
+	}
+
+	// Foreground mode: execute synchronously
 	out := Run(subCtx, cfg)
 
 	if out.Error != nil {
@@ -169,11 +238,14 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 
 	ia := &interactiveAgent{
-		roleName:     roleName,
-		messages:     newMessages,
-		systemPrompt: cfg.Messages[0],
-		cfg:          &cfg,
-		lastUsed:     time.Now(),
+		roleName:         roleName,
+		instance:         instance,
+		messages:         newMessages,
+		iterationHistory: out.IterationHistory,
+		systemPrompt:     cfg.Messages[0],
+		cfg:              &cfg,
+		lastUsed:         time.Now(),
+		lastReply:        out.Content,
 	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)
@@ -214,6 +286,14 @@ func (a *Agent) SendToInteractiveSession(
 
 	// --- 阶段 1：锁内准备配置（读取 ia 数据）---
 	ia.mu.Lock()
+
+	// Guard: reject send while a background Run is in progress
+	if ia.running {
+		ia.mu.Unlock()
+		return &bus.OutboundMessage{
+			Content: fmt.Sprintf("interactive session for role %q (instance=%q) is currently running. Use action=\"interrupt\" first, or wait for it to finish, then send.", roleName, instance),
+		}, nil
+	}
 
 	if ia.cfg == nil {
 		ia.mu.Unlock()
@@ -303,8 +383,151 @@ func (a *Agent) SendToInteractiveSession(
 			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 		}
 	}
+	// Save iteration history for inspect
+	if len(out.IterationHistory) > 0 {
+		ia.iterationHistory = append(ia.iterationHistory, out.IterationHistory...)
+	}
+	ia.lastReply = out.Content
 
 	return out.OutboundMessage, nil
+}
+
+// InterruptInteractiveSession cancels the current running iteration of an interactive session.
+func (a *Agent) InterruptInteractiveSession(
+	ctx context.Context,
+	roleName string,
+	channel, chatID string,
+	instance string,
+) error {
+	key := interactiveKey(channel, chatID, roleName, instance)
+
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return fmt.Errorf("no active interactive session for role %q (instance=%q)", roleName, instance)
+	}
+
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return fmt.Errorf("corrupted interactive session for role %q", roleName)
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	if !ia.running || ia.cancelCurrent == nil {
+		return fmt.Errorf("interactive session %q (instance=%q) is not currently running", roleName, instance)
+	}
+
+	ia.cancelCurrent()
+	log.WithFields(log.Fields{
+		"role":     roleName,
+		"instance": instance,
+	}).Info("Interactive session interrupted")
+	return nil
+}
+
+// InspectInteractiveSession returns a tail-style summary of recent activity in an interactive session.
+func (a *Agent) InspectInteractiveSession(
+	ctx context.Context,
+	roleName string,
+	channel, chatID string,
+	instance string,
+	tailCount int,
+) (string, error) {
+	key := interactiveKey(channel, chatID, roleName, instance)
+
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return "", fmt.Errorf("no active interactive session for role %q (instance=%q)", roleName, instance)
+	}
+
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return "", fmt.Errorf("corrupted interactive session for role %q", roleName)
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	if tailCount <= 0 {
+		tailCount = 5
+	}
+
+	var sb strings.Builder
+	// Header
+	status := "idle"
+	if ia.running {
+		status = "running"
+	}
+	sb.WriteString("## SubAgent Inspect: ")
+	sb.WriteString(roleName)
+	sb.WriteString(" (instance=")
+	sb.WriteString(instance)
+	sb.WriteString(")\n")
+	fmt.Fprintf(&sb, "Status: %s | Background: %v | Messages: %d\n", status, ia.background, len(ia.messages))
+
+	if ia.lastError != "" {
+		fmt.Fprintf(&sb, "Last Error: %s\n", ia.lastError)
+	}
+
+	// Show last N iteration snapshots
+	snapshots := ia.iterationHistory
+	if len(snapshots) > tailCount {
+		snapshots = snapshots[len(snapshots)-tailCount:]
+	}
+	if len(snapshots) > 0 {
+		fmt.Fprintf(&sb, "\n### Recent Iterations (last %d):\n", len(snapshots))
+		for _, snap := range snapshots {
+			fmt.Fprintf(&sb, "\n**Iteration %d**\n", snap.Iteration)
+			if snap.Thinking != "" {
+				thinking := snap.Thinking
+				if len(thinking) > 300 {
+					thinking = thinking[len(thinking)-300:]
+					thinking = "..." + thinking
+				}
+				fmt.Fprintf(&sb, "Thinking: %s\n", thinking)
+			}
+			if snap.Reasoning != "" {
+				reasoning := snap.Reasoning
+				if len(reasoning) > 300 {
+					reasoning = reasoning[len(reasoning)-300:]
+					reasoning = "..." + reasoning
+				}
+				fmt.Fprintf(&sb, "Reasoning: %s\n", reasoning)
+			}
+			for _, t := range snap.Tools {
+				summary := t.Summary
+				if len(summary) > 200 {
+					summary = summary[:200] + "..."
+				}
+				label := t.Label
+				if len(label) > 60 {
+					label = label[:57] + "..."
+				}
+				fmt.Fprintf(&sb, "- Tool: %s", t.Name)
+				if label != "" {
+					fmt.Fprintf(&sb, " (%s)", label)
+				}
+				fmt.Fprintf(&sb, " [%s, %dms]", t.Status, t.ElapsedMS)
+				if summary != "" {
+					fmt.Fprintf(&sb, "\n  %s", summary)
+				}
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Show tail of last reply
+	if ia.lastReply != "" {
+		reply := ia.lastReply
+		if len(reply) > 500 {
+			reply = reply[len(reply)-500:]
+			reply = "..." + reply
+		}
+		fmt.Fprintf(&sb, "\n### Last Reply (tail):\n%s\n", reply)
+	}
+
+	return sb.String(), nil
 }
 
 // UnloadInteractiveSession 结束 interactive session：巩固记忆并清理。
@@ -440,4 +663,49 @@ func resolveOriginIDs(msg bus.InboundMessage) (channel, chatID, sender string) {
 		sender = msg.SenderID
 	}
 	return
+}
+
+// InteractiveSessionInfo represents a snapshot of an interactive agent session.
+type InteractiveSessionInfo struct {
+	Role       string
+	Instance   string
+	Running    bool
+	Background bool
+}
+
+// ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
+func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
+	prefix := channel + ":" + chatID + ":"
+	var results []InteractiveSessionInfo
+
+	a.interactiveSubAgents.Range(func(key, value any) bool {
+		keyStr, ok := key.(string)
+		if !ok {
+			return true
+		}
+		// Only return sessions belonging to this channel/chatID
+		if !strings.HasPrefix(keyStr, prefix) {
+			return true
+		}
+		ia, ok := value.(*interactiveAgent)
+		if !ok || ia == nil {
+			return true
+		}
+		ia.mu.Lock()
+		info := InteractiveSessionInfo{
+			Role:       ia.roleName,
+			Instance:   ia.instance,
+			Running:    ia.running,
+			Background: ia.background,
+		}
+		ia.mu.Unlock()
+		results = append(results, info)
+		return true
+	})
+	return results
+}
+
+// CountInteractiveSessions returns the number of active interactive sessions for the given channel/chatID.
+func (a *Agent) CountInteractiveSessions(channel, chatID string) int {
+	return len(a.ListInteractiveSessions(channel, chatID))
 }

@@ -549,6 +549,28 @@ func main() {
 			}
 			return cumulative, daily, nil
 		},
+		AgentCount: func() int {
+			if app.agentLoop == nil {
+				return 0
+			}
+			return app.agentLoop.CountInteractiveSessions("cli", absWorkDir)
+		},
+		AgentList: func() []channel.AgentPanelEntry {
+			if app.agentLoop == nil {
+				return nil
+			}
+			sessions := app.agentLoop.ListInteractiveSessions("cli", absWorkDir)
+			entries := make([]channel.AgentPanelEntry, len(sessions))
+			for i, s := range sessions {
+				entries[i] = channel.AgentPanelEntry{
+					Role:       s.Role,
+					Instance:   s.Instance,
+					Running:    s.Running,
+					Background: s.Background,
+				}
+			}
+			return entries
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

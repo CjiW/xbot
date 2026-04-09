@@ -235,10 +235,11 @@ func (m *cliModel) View() tea.View {
 				status = hint
 			}
 		}
-		// Background task indicator
-		if m.bgTaskCount > 0 {
+		// Background task + agent indicator
+		totalItems := m.bgTaskCount + m.agentCount
+		if totalItems > 0 {
 			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, m.agentCount))
 			if status != "" {
 				status += "  " + bgHint
 			} else {
@@ -601,7 +602,7 @@ func (m *cliModel) renderFooter() string {
 			if len(m.inputHistory) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}
-			if m.bgTaskCount > 0 {
+			if m.bgTaskCount > 0 || m.agentCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}
 		} else {

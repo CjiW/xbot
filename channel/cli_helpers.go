@@ -61,6 +61,10 @@ func (m *cliModel) endAgentTurn(turnID uint64) {
 	m.typingStartTime = time.Time{}
 	m.progress = nil
 	m.typing = false
+	// Refresh agent count so the tick chain continues if agents exist
+	if m.agentCountFn != nil {
+		m.agentCount = m.agentCountFn()
+	}
 	m.updatePlaceholder()
 }
 

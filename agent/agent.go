@@ -1538,21 +1538,48 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 
 	// Inject running background task IDs into the last user message so the LLM
 	// is aware of active tasks and doesn't try to restart them.
-	if a.bgTaskMgr != nil {
-		sessionKey := msg.Channel + ":" + msg.ChatID
-		running := a.bgTaskMgr.ListRunning(sessionKey)
-		if len(running) > 0 {
-			var ids []string
-			for _, t := range running {
-				ids = append(ids, t.ID)
+	{
+		var systemNotes []string
+
+		// Background tasks
+		if a.bgTaskMgr != nil {
+			sessionKey := msg.Channel + ":" + msg.ChatID
+			running := a.bgTaskMgr.ListRunning(sessionKey)
+			if len(running) > 0 {
+				var ids []string
+				for _, t := range running {
+					ids = append(ids, t.ID)
+				}
+				systemNotes = append(systemNotes, fmt.Sprintf("Running background tasks: %s", strings.Join(ids, ", ")))
 			}
-			bgInfo := fmt.Sprintf("\n[System] Running background tasks: %s", strings.Join(ids, ", "))
-			// Append bgInfo to a copy of the last user message to avoid mutating session data
+		}
+
+		// Interactive agent sessions
+		sessions := a.ListInteractiveSessions(msg.Channel, msg.ChatID)
+		if len(sessions) > 0 {
+			var agentParts []string
+			for _, s := range sessions {
+				status := "idle"
+				if s.Running {
+					status = "running"
+				}
+				mode := "fg"
+				if s.Background {
+					mode = "bg"
+				}
+				agentParts = append(agentParts, fmt.Sprintf("%s/%s(%s,%s)", s.Role, s.Instance, mode, status))
+			}
+			systemNotes = append(systemNotes, fmt.Sprintf("Active interactive agents: %s", strings.Join(agentParts, ", ")))
+		}
+
+		if len(systemNotes) > 0 {
+			info := "\n[System] " + strings.Join(systemNotes, " | ")
+			// Append to a copy of the last user message to avoid mutating session data
 			for i := len(messages) - 1; i >= 0; i-- {
 				if messages[i].Role == "user" {
-					msg := messages[i] // shallow copy
-					msg.Content += bgInfo
-					messages[i] = msg
+					m := messages[i] // shallow copy
+					m.Content += info
+					messages[i] = m
 					break
 				}
 			}

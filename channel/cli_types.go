@@ -430,6 +430,16 @@ type CLIChannelConfig struct {
 	GetMemoryStats       func() map[string]string                                                                                       // 获取记忆统计（danger zone）
 	SwitchLLM            func(provider, baseURL, apiKey, model string) error                                                            // 切换活跃 LLM（config + factory + save）
 	UsageQuery           func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error) // 查询 token 用量
+	AgentCount           func() int                                                                                                     // 获取活跃的 interactive agent 数量
+	AgentList            func() []AgentPanelEntry                                                                                       // 列出活跃 interactive agents（用于 panel 展示）
+}
+
+// AgentPanelEntry is the channel-layer representation of an interactive agent session for panel display.
+type AgentPanelEntry struct {
+	Role       string
+	Instance   string
+	Running    bool
+	Background bool
 }
 
 // ---------------------------------------------------------------------------

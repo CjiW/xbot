@@ -167,7 +167,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Text == "^":
-		if m.panelMode == "" && m.bgTaskCount > 0 && m.inputHistoryIdx == -1 {
+		if m.panelMode == "" && (m.bgTaskCount > 0 || m.agentCount > 0) && m.inputHistoryIdx == -1 {
 			m.openBgTasksPanel()
 			return m, nil, true
 		}
@@ -355,6 +355,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
 	}
+	// Update agent count from callback
+	if m.agentCountFn != nil {
+		m.agentCount = m.agentCountFn()
+	}
 	if msg.payload != nil {
 		// Sync todo items from progress event
 		if len(msg.payload.Todos) > 0 {
@@ -516,6 +520,10 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 	// Refresh bg task count on injection
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
+	}
+	// Refresh agent count on injection
+	if m.agentCountFn != nil {
+		m.agentCount = m.agentCountFn()
 	}
 	m.renderCacheValid = false
 	// IMPORTANT: re-arm the fast tick chain *here* when an injected user message

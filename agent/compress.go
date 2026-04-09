@@ -461,10 +461,10 @@ func compactMessages(
 	// Insert a visual separator between older context and recent messages.
 	// The last ~40% of fitting messages are considered "recent" — the LLM
 	// must prioritize preserving these in detail.
-	recentStart := len(fitting) * 3 / 5 // top 40% = recent
+	recentStart := len(fitting) * 3 / 5 // top 40% = recent (0 when len <= 2 — no separator needed)
 	for i, msg := range fitting {
 		if i == recentStart && recentStart > 0 && recentStart < len(fitting) {
-		historyText.WriteString("--- RECENT WORK BEGINS (messages below are highest priority) ---\n\n")
+			historyText.WriteString("--- RECENT WORK BEGINS (messages below are highest priority) ---\n\n")
 		}
 		historyText.WriteString(formatCompactLine(msg))
 	}

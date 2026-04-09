@@ -641,25 +641,25 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			alreadySnapped := false
 			for _, s := range m.iterationHistory {
 				if s.Iteration == m.lastSeenIteration {
-				alreadySnapped = true
-				break
+					alreadySnapped = true
+					break
 				}
 			}
 			if !alreadySnapped {
 				// Filter tools by Iteration field to ensure correct attribution
 				var finalTools []CLIToolProgress
 				for _, t := range m.lastCompletedTools {
-				if t.Iteration == m.lastSeenIteration {
-					finalTools = append(finalTools, t)
-				}
+					if t.Iteration == m.lastSeenIteration {
+						finalTools = append(finalTools, t)
+					}
 				}
 				snap := cliIterationSnapshot{
-				Iteration: m.lastSeenIteration,
-				Reasoning: m.lastReasoning,
-				Tools:     finalTools,
+					Iteration: m.lastSeenIteration,
+					Reasoning: m.lastReasoning,
+					Tools:     finalTools,
 				}
 				if len(finalTools) > 0 || m.lastReasoning != "" {
-				m.iterationHistory = append(m.iterationHistory, snap)
+					m.iterationHistory = append(m.iterationHistory, snap)
 				}
 			}
 		}
@@ -737,6 +737,7 @@ func (m *cliModel) renderProgressBlock() string {
 	toolErrorStyle := s.ProgressError
 	elapsedStyle := s.ProgressElapsed
 	indentGuide := s.ProgressIndent
+	indentW := lipgloss.Width(indentGuide.Render("  │ "))
 	dimStyle := s.ProgressDim
 
 	var sb strings.Builder
@@ -746,29 +747,29 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString(dimStyle.Render(iterStyle.Render(fmt.Sprintf("#%d", snap.Iteration))))
 		sb.WriteString("\n")
 		if snap.Reasoning != "" {
-				for _, line := range strings.Split(snap.Reasoning, "\n") {
+			for _, line := range strings.Split(snap.Reasoning, "\n") {
 				line = strings.TrimSpace(line)
 				if line == "" {
-				continue
+					continue
 				}
-				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-indentW), "\n") {
 					sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + reasoningStyle.Render(wl)))
 					sb.WriteString("\n")
 				}
-					}
-				}
+			}
+		}
 		if snap.Thinking != "" {
-				for _, line := range strings.Split(snap.Thinking, "\n") {
+			for _, line := range strings.Split(snap.Thinking, "\n") {
 				line = strings.TrimRight(line, " \t")
 				if line == "" {
-				continue
+					continue
 				}
-				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-indentW), "\n") {
 					sb.WriteString(dimStyle.Render(indentGuide.Render("  │ ") + thinkingStyle.Render(wl)))
 					sb.WriteString("\n")
 				}
-				}
 			}
+		}
 		for _, tool := range snap.Tools {
 			label, icon, sty := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			line := fmt.Sprintf("  │ %s %s", icon, label)
@@ -790,30 +791,30 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString("\n")
 
 		if m.progress.Reasoning != "" {
-				for _, line := range strings.Split(m.progress.Reasoning, "\n") {
-					line = strings.TrimSpace(line)
-					if line == "" {
+			for _, line := range strings.Split(m.progress.Reasoning, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
 					continue
-					}
-					for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
-						sb.WriteString(indentGuide.Render("  │ ") + reasoningStyle.Render(wl))
-						sb.WriteString("\n")
-					}
+				}
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-indentW), "\n") {
+					sb.WriteString(indentGuide.Render("  │ ") + reasoningStyle.Render(wl))
+					sb.WriteString("\n")
 				}
 			}
+		}
 
-			if m.progress.Thinking != "" {
-				for _, line := range strings.Split(m.progress.Thinking, "\n") {
-					line = strings.TrimRight(line, " \t")
-					if line == "" {
+		if m.progress.Thinking != "" {
+			for _, line := range strings.Split(m.progress.Thinking, "\n") {
+				line = strings.TrimRight(line, " \t")
+				if line == "" {
 					continue
-					}
-					for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-4), "\n") {
-						sb.WriteString(indentGuide.Render("  │ ") + thinkingStyle.Render(wl))
-						sb.WriteString("\n")
-					}
+				}
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-indentW), "\n") {
+					sb.WriteString(indentGuide.Render("  │ ") + thinkingStyle.Render(wl))
+					sb.WriteString("\n")
 				}
 			}
+		}
 
 		// Completed tools in current iteration — filter by Iteration field
 		for _, tool := range m.progress.CompletedTools {
@@ -1076,43 +1077,40 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", iterCount, totalTools)))
 				toolSb.WriteString("\n")
 				for _, it := range msg.iterations {
-										iterPrefix := fmt.Sprintf("  [%d]", it.Iteration)
-										if it.Reasoning != "" {
-											for _, line := range strings.Split(it.Reasoning, "\n") {
-													line = strings.TrimSpace(line)
-													if line == "" {
-														continue
-													}
-													prefix := iterPrefix + " "
-													prefixW := lipgloss.Width(thinkingStyle.Render(prefix))
-													for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
-														if j == 0 {
-															toolSb.WriteString(thinkingStyle.Render(prefix + wl))
-														} else {
-															toolSb.WriteString(thinkingStyle.Render(strings.Repeat(" ", prefixW) + wl))
-														}
-														toolSb.WriteString("\n")
-													}
-											}
-										}
-										if it.Thinking != "" {
-											for _, line := range strings.Split(it.Thinking, "\n") {
-													line = strings.TrimSpace(line)
-													if line == "" {
-														continue
-													}
-													prefix := iterPrefix + " "
-													prefixW := lipgloss.Width(thinkingStyle.Render(prefix))
-													for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
-														if j == 0 {
-															toolSb.WriteString(thinkingStyle.Render(prefix + wl))
-														} else {
-															toolSb.WriteString(thinkingStyle.Render(strings.Repeat(" ", prefixW) + wl))
-														}
-														toolSb.WriteString("\n")
-													}
-											}
-										}
+						iterPrefix := fmt.Sprintf("  [%d]", it.Iteration)
+						prefixW := lipgloss.Width(thinkingStyle.Render(iterPrefix + " "))
+						if it.Reasoning != "" {
+							for _, line := range strings.Split(it.Reasoning, "\n") {
+								line = strings.TrimSpace(line)
+								if line == "" {
+									continue
+								}
+								for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
+									if j == 0 {
+										toolSb.WriteString(thinkingStyle.Render(iterPrefix + " " + wl))
+									} else {
+										toolSb.WriteString(thinkingStyle.Render(s.ProgressIndent.Render("  │ ") + strings.Repeat(" ", prefixW-lipgloss.Width(s.ProgressIndent.Render("  │ "))) + wl))
+									}
+									toolSb.WriteString("\n")
+								}
+							}
+						}
+						if it.Thinking != "" {
+							for _, line := range strings.Split(it.Thinking, "\n") {
+								line = strings.TrimSpace(line)
+								if line == "" {
+									continue
+								}
+								for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
+									if j == 0 {
+										toolSb.WriteString(thinkingStyle.Render(iterPrefix + " " + wl))
+									} else {
+										toolSb.WriteString(thinkingStyle.Render(s.ProgressIndent.Render("  │ ") + strings.Repeat(" ", prefixW-lipgloss.Width(s.ProgressIndent.Render("  │ "))) + wl))
+									}
+									toolSb.WriteString("\n")
+								}
+							}
+						}
 					for _, tool := range it.Tools {
 						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
 						elapsed := ""

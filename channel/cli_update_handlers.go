@@ -443,8 +443,8 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 							dup := false
 							for _, existing := range finalTools {
 								if existing.Name == t.Name && existing.Label == t.Label {
-								dup = true
-								break
+									dup = true
+									break
 								}
 							}
 							if !dup {

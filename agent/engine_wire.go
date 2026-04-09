@@ -564,9 +564,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	stream := false
 	if a.settingsSvc != nil {
 		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-		if vals["enable_stream"] == "true" {
-			stream = true
-		}
+			if vals["enable_stream"] == "true" {
+				stream = true
+			}
 		}
 	}
 
@@ -576,13 +576,13 @@ func (a *Agent) buildSubAgentRunConfig(
 		ThinkingMode:    thinkingMode,
 		Stream:          stream,
 		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
-		Tools:        subTools,
-		Messages:     messages,
-		AgentID:      subAgentID,
-		Channel:      parentCtx.Channel,
-		ChatID:       parentCtx.ChatID,
-		SenderID:     parentAgentID, // SubAgent: 直接调用者 = 父 Agent
-		OriginUserID: originUserID,  // SubAgent: 继承原始用户 ID
+		Tools:           subTools,
+		Messages:        messages,
+		AgentID:         subAgentID,
+		Channel:         parentCtx.Channel,
+		ChatID:          parentCtx.ChatID,
+		SenderID:        parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID:    originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,

@@ -59,6 +59,20 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 					// so the engine can display what was received before the stream broke.
 					resp.Content = content.String()
 					resp.ReasoningContent = reasoningContent.String()
+					// Preserve any tool call deltas received before the error.
+					if len(toolCalls) > 0 {
+						maxIdx := -1
+						for idx := range toolCalls {
+							if idx > maxIdx {
+								maxIdx = idx
+							}
+						}
+						for i := 0; i <= maxIdx; i++ {
+							if tc, ok := toolCalls[i]; ok {
+								resp.ToolCalls = append(resp.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
+							}
+						}
+					}
 					return &resp, fmt.Errorf("stream error: %s", ev.Error)
 				}
 		}

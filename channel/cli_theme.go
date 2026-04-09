@@ -324,6 +324,9 @@ type cliStyles struct {
 	ToolItem         lipgloss.Style
 	ToolErrorItem    lipgloss.Style
 	ToolThinking     lipgloss.Style
+	ToolReasoning    lipgloss.Style // reasoning chain (more dim than thinking)
+	ToolReasoningGuide lipgloss.Style // │ guide for reasoning
+	ToolThinkingGuide  lipgloss.Style // │ guide for thinking
 	ToolHint         lipgloss.Style
 	ProgressHeader   lipgloss.Style
 	ProgressIter     lipgloss.Style
@@ -442,6 +445,9 @@ func buildStyles(width int) cliStyles {
 		ToolItem:         lipgloss.NewStyle().Foreground(c(t.Success)),
 		ToolErrorItem:    lipgloss.NewStyle().Foreground(c(t.Error)),
 		ToolThinking:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Italic(true),
+			ToolReasoning:    lipgloss.NewStyle().Foreground(c(t.TextMuted)).Faint(true).Italic(true),
+			ToolReasoningGuide: lipgloss.NewStyle().Foreground(c(t.TextMuted)),
+			ToolThinkingGuide:  lipgloss.NewStyle().Foreground(c(t.TextSecondary)),
 		ToolHint:         lipgloss.NewStyle().Foreground(c(t.TextMuted)),
 		ProgressHeader:   lipgloss.NewStyle().Foreground(c(t.Accent)).Bold(true),
 		ProgressIter:     lipgloss.NewStyle().Foreground(c(t.TextSecondary)).Bold(true),

@@ -32,6 +32,12 @@ type ExecSpec struct {
 	// Instead, the caller takes ownership of the process via ExecResult.Process.
 	// Currently only supported by NoneSandbox.
 	KeepAlive bool
+
+	// RunAsUser is the OS username to execute the command as.
+	// When set, the command is wrapped with: sudo -n -H -u <user> --
+	// Only effective in NoneSandbox (docker/remote ignore this field).
+	// Requires NOPASSWD sudoers entry for the target user.
+	RunAsUser string
 }
 
 // ExecResult holds the result of a sandbox command execution.

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"xbot/internal/cmdbuilder"
 	"xbot/llm"
 )
 
@@ -36,12 +38,16 @@ func (t *FileCreateTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "path", Type: "string", Description: "File path to create (relative to working directory or absolute)", Required: true},
 		{Name: "content", Type: "string", Description: "Content to write to the new file", Required: true},
+		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
+		{Name: "reason", Type: "string", Description: "Optional human-readable reason shown in approval requests when approval is required.", Required: false},
 	}
 }
 
 type FileCreateParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	RunAs   string `json:"run_as"`
+	Reason  string `json:"reason"`
 }
 
 func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -51,6 +57,9 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 	}
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
+	}
+	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
+		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
 
 	if shouldUseSandbox(ctx) {
@@ -82,12 +91,16 @@ func (t *FileCreateTool) executeLocal(ctx *ToolContext, params FileCreateParams)
 	// Create parent directories if needed
 	dir := filepath.Dir(filePath)
 	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if params.RunAs != "" {
+			if err := cmdbuilder.MkdirAllAsUser(params.RunAs, dir, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create directory as user %q: %w", params.RunAs, err)
+			}
+		} else if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create directory: %w", err)
 		}
 	}
 
-	if err := os.WriteFile(filePath, []byte(params.Content), 0644); err != nil {
+	if err := cmdbuilder.WriteFileAsUser(params.RunAs, filePath, []byte(params.Content), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -136,6 +149,8 @@ func (t *FileReplaceTool) Parameters() []llm.ToolParam {
 		{Name: "regex", Type: "boolean", Description: "Use RE2 regex matching (default false, exact match)", Required: false},
 		{Name: "start_line", Type: "integer", Description: "Restrict search from this line, 1-based inclusive", Required: false},
 		{Name: "end_line", Type: "integer", Description: "Restrict search to this line, 1-based inclusive", Required: false},
+		{Name: "run_as", Type: "string", Description: "OS username to execute as. Requires permission control to be enabled. Only effective in none sandbox mode.", Required: false},
+		{Name: "reason", Type: "string", Description: "Optional human-readable reason shown in approval requests when approval is required.", Required: false},
 	}
 }
 
@@ -147,6 +162,8 @@ type FileReplaceParams struct {
 	Regex      bool   `json:"regex"`
 	StartLine  int    `json:"start_line"`
 	EndLine    int    `json:"end_line"`
+	RunAs      string `json:"run_as"`
+	Reason     string `json:"reason"`
 }
 
 func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
@@ -159,6 +176,9 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	}
 	if params.OldString == "" {
 		return nil, fmt.Errorf("old_string is required")
+	}
+	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
+		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
 
 	// Safety: reject oversized inputs to prevent CPU/memory exhaustion
@@ -206,17 +226,23 @@ func (t *FileReplaceTool) executeLocal(ctx *ToolContext, params FileReplaceParam
 		return nil, err
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := cmdbuilder.ReadFileAsUser(params.RunAs, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+	mode := info.Mode().Perm()
 
 	newContent, result, err := doReplace(string(content), params, filePath)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
+	if err := cmdbuilder.WriteFileAsUser(params.RunAs, filePath, []byte(newContent), mode); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 

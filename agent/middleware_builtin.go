@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"xbot/memory"
@@ -72,6 +73,62 @@ func (m *AgentsCatalogMiddleware) Process(mc *MessageContext) error {
 	if catalog != "" {
 		mc.SystemParts["15_agents"] = catalog
 	}
+	return nil
+}
+
+// PermUsersConfig holds the permission control user configuration.
+type PermUsersConfig struct {
+	DefaultUser    string `json:"default_user"`
+	PrivilegedUser string `json:"privileged_user"`
+}
+
+// IsPermControlEnabled reports whether permission control is active for the current user/channel.
+func IsPermControlEnabled(config *PermUsersConfig) bool {
+	return config != nil && (config.DefaultUser != "" || config.PrivilegedUser != "")
+}
+
+// PermissionControlMiddleware injects the permission control system prompt
+// when the feature is enabled (at least one user is configured).
+type PermissionControlMiddleware struct{}
+
+func NewPermissionControlMiddleware() *PermissionControlMiddleware {
+	return &PermissionControlMiddleware{}
+}
+
+func (m *PermissionControlMiddleware) Name() string  { return "permission_control" }
+func (m *PermissionControlMiddleware) Priority() int { return 115 }
+
+func (m *PermissionControlMiddleware) Process(mc *MessageContext) error {
+	config, ok := GetExtraTyped[*PermUsersConfig](mc, ExtraKeyPermUsers)
+	if !ok || !IsPermControlEnabled(config) {
+		return nil // feature disabled
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Execution User Control\n\n")
+	sb.WriteString("You can execute tools as a different OS user by passing the `run_as` parameter.\n")
+	sb.WriteString("Available users are configured by the system administrator.\n\n")
+	sb.WriteString("### Available Users\n")
+	sb.WriteString("| User | Approval Required | Description |\n")
+	sb.WriteString("|------|-------------------|-------------|\n")
+	sb.WriteString("| (omit run_as) | None | Current process user |\n")
+	if config.DefaultUser != "" {
+		fmt.Fprintf(&sb, "| %s | None | Default execution user |\n", config.DefaultUser)
+	}
+	if config.PrivilegedUser != "" {
+		fmt.Fprintf(&sb, "| %s | **Yes** | Privileged user — user must approve each use |\n", config.PrivilegedUser)
+	}
+	sb.WriteString("\n### Rules\n")
+	sb.WriteString("- Omit `run_as` to execute as the current process user\n")
+	if config.DefaultUser != "" {
+		fmt.Fprintf(&sb, "- Use `run_as: %q` for routine operations\n", config.DefaultUser)
+	}
+	if config.PrivilegedUser != "" {
+		fmt.Fprintf(&sb, "- Use `run_as: %q` ONLY when the task genuinely requires elevated privileges\n", config.PrivilegedUser)
+		sb.WriteString("- Always explain WHY you need the privileged user when requesting it\n")
+	}
+
+	mc.SystemParts["14_perm_control"] = sb.String()
 	return nil
 }
 

@@ -135,6 +135,11 @@ func (c *CLIChannel) Start() error {
 	)
 	c.programMu.Unlock()
 
+	// Wire CLIApprovalHandler into the ApprovalHook now that the program exists
+	if c.approvalHook != nil {
+		c.approvalHook.SetHandler(NewCLIApprovalHandler(c.program))
+	}
+
 	// Ctrl+Z 紧急退出：双保险
 	// 1) Key event handler (cli_update.go): raw mode 下终端可能直接传 0x1A 字节
 	// 2) SIGTSTP 信号兜底: 某些终端 emulator 在 raw mode 下仍发信号
@@ -233,6 +238,12 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 		return
 	}
 	c.program.Send(cliProgressMsg{payload: payload})
+}
+
+// SetApprovalHook stores the ApprovalHook reference so that Start() can wire
+// the CLIApprovalHandler after the tea.Program is created.
+func (c *CLIChannel) SetApprovalHook(hook *tools.ApprovalHook) {
+	c.approvalHook = hook
 }
 
 // SetBgTaskManager configures the background task manager for status display.

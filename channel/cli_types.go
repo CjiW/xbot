@@ -472,6 +472,9 @@ type CLIChannel struct {
 
 	runnerAutoConnect *runnerAutoConnectConfig // auto-connect as runner after TUI init
 
+	// Permission control
+	approvalHook *tools.ApprovalHook // injected to wire CLIApprovalHandler after program creation
+
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

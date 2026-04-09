@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"xbot/internal/cmdbuilder"
+
 	log "xbot/logger"
 )
 
@@ -429,28 +431,15 @@ func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(str
 // If managedCtx is true, uses exec.CommandContext (context cancel kills the process).
 // If false, uses exec.Command (caller manages process lifecycle manually, e.g. KeepAlive).
 func buildCmdFromSpec(ctx context.Context, spec ExecSpec, managedCtx bool) (*exec.Cmd, error) {
-	var cmd *exec.Cmd
-	if spec.Shell {
-		if managedCtx {
-			cmd = exec.CommandContext(ctx, "/bin/sh", "-c", spec.Command)
-		} else {
-			cmd = exec.Command("/bin/sh", "-c", spec.Command)
-		}
-	} else {
-		if len(spec.Args) == 0 {
-			return nil, fmt.Errorf("non-shell exec requires Args to be set")
-		}
-		if managedCtx {
-			cmd = exec.CommandContext(ctx, spec.Args[0], spec.Args[1:]...)
-		} else {
-			cmd = exec.Command(spec.Args[0], spec.Args[1:]...)
-		}
+	// When managedCtx=false, pass nil context to get exec.Command (no context-based kill)
+	buildCtx := ctx
+	if !managedCtx {
+		buildCtx = nil
 	}
-	if spec.Dir != "" {
-		cmd.Dir = spec.Dir
-	}
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), spec.Env...)
+	cmd, err := cmdbuilder.Build(buildCtx, spec.Shell, spec.Command, spec.Args,
+		spec.Dir, spec.Env, cmdbuilder.Config{RunAsUser: spec.RunAsUser})
+	if err != nil {
+		return nil, err
 	}
 	return cmd, nil
 }

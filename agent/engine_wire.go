@@ -131,6 +131,9 @@ func (a *Agent) buildBaseRunConfig(
 		// HookChain — inherit from Agent
 		HookChain: a.hookChain,
 
+		// SettingsSvc — inherit from Agent
+		SettingsSvc: a.settingsSvc,
+
 		// LLM 并发限流回调（per-tenant）
 		LLMSemAcquire:             llmSemAcquire,
 		EnableConcurrentSubAgents: true,
@@ -700,6 +703,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 	// HookChain — SubAgent inherits parent Agent's hook chain
 	cfg.HookChain = a.hookChain
+	cfg.SettingsSvc = a.settingsSvc
 
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -774,6 +778,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 
 	// Inherit hook chain from Agent.
 	cfg.HookChain = a.hookChain
+	cfg.SettingsSvc = a.settingsSvc
 
 	return func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
 		// Lazy-inject session so buildToolContext can persist CWD across tool calls.
@@ -821,15 +826,24 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 			}
 		}
 
-		// 5. Run pre-tool hooks
+		toolExecCtx := withApprovalTarget(ctx, cfg.ChatID, cfg.OriginUserID)
+		if cfg.SettingsSvc != nil {
+			permUsers := cfg.SettingsSvc.GetPermUsers(cfg.Channel, cfg.OriginUserID)
+			if permUsers != nil {
+				toolExecCtx = tools.WithPermUsers(toolExecCtx, permUsers.DefaultUser, permUsers.PrivilegedUser)
+			}
+		}
+
+		// 5. Run pre-tool hooks (inject perm users into context for ApprovalHook)
 		if cfg.HookChain != nil {
-			if err := cfg.HookChain.RunPre(ctx, tc.Name, tc.Arguments); err != nil {
+			hookCtx := toolExecCtx
+			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
 				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
 			}
 		}
 
 		// 6. 构建 ToolContext（统一路径，只有 ctx 变化）
-		toolCtx := buildToolContext(ctx, cfg)
+		toolCtx := buildToolContext(toolExecCtx, cfg)
 
 		// 7. Execute tool with timing
 		start := time.Now()

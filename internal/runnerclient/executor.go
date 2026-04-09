@@ -36,6 +36,11 @@ type ExecSpec struct {
 	Env     []string
 	Stdin   string
 	Timeout time.Duration
+
+	// RunAsUser is the OS username to execute the command as.
+	// When set, the command is wrapped with: sudo -n -H -u <user> --
+	// Requires NOPASSWD sudoers entry for the target user.
+	RunAsUser string
 }
 
 // ExecResult 是命令执行结果。

@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"xbot/bus"
 	"xbot/storage/sqlite"
+	"xbot/tools"
+
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
 func newTestFeishuChannel() *FeishuChannel {
@@ -189,6 +193,145 @@ func TestBuildSettingsCard_DefaultsToGeneral(t *testing.T) {
 		if !strings.Contains(cardJSON(card), "远程 Runner") {
 			t.Errorf("tab=%q should default to general tab", tab)
 		}
+	}
+}
+
+func TestBuildApprovalCard_ContainsApproveDenyControls(t *testing.T) {
+	f := newTestFeishuChannel()
+	pending := &feishuPendingApproval{
+		Request: tools.ApprovalRequest{
+			ToolName: "Shell",
+			RunAs:    "root",
+			Reason:   "install package",
+			Command:  "apt install nginx",
+		},
+		ApproveAction:    "perm_approve_test",
+		DenyAction:       "perm_deny_test",
+		DenySubmitAction: "perm_deny_submit_test",
+	}
+
+	card := f.buildApprovalCard(pending)
+	s := cardJSON(card)
+	if !strings.Contains(s, "Permission Approval") {
+		t.Fatalf("expected approval card header, got %s", s)
+	}
+	if !strings.Contains(s, "perm_approve_test") || !strings.Contains(s, "perm_deny_test") {
+		t.Fatalf("expected approve/deny action ids in card: %s", s)
+	}
+	if strings.Contains(s, "deny_reason") {
+		t.Fatalf("did not expect deny_reason field in initial approval card: %s", s)
+	}
+	if !strings.Contains(s, "Deny") {
+		t.Fatalf("expected deny button in card: %s", s)
+	}
+	if strings.Contains(s, "perm_deny_submit_test") {
+		t.Fatalf("did not expect deny submit action in initial approval card: %s", s)
+	}
+}
+
+func TestHandleApprovalCardAction_DenyReasonPropagates(t *testing.T) {
+	f := newTestFeishuChannel()
+	pending := &feishuPendingApproval{
+		Request:          tools.ApprovalRequest{ToolName: "Shell", RunAs: "root", Command: "rm -rf /tmp/x"},
+		SenderID:         "user_open_id",
+		ResultCh:         make(chan tools.ApprovalResult, 1),
+		CreatedAt:        time.Now(),
+		ApproveAction:    "perm_approve_test",
+		DenyAction:       "perm_deny_test",
+		DenySubmitAction: "perm_deny_submit_test",
+	}
+	f.approvals[pending.ApproveAction] = pending
+	f.approvals[pending.DenyAction] = pending
+	f.approvals[pending.DenySubmitAction] = pending
+
+	resp, handled := f.handleApprovalCardAction(
+		map[string]any{"action": pending.DenyAction},
+		&callback.CallBackAction{},
+		"user_open_id",
+	)
+	if !handled {
+		t.Fatal("expected action to be handled")
+	}
+	if resp == nil || resp.Toast == nil || resp.Card == nil {
+		t.Fatal("expected toast and updated card response")
+	}
+	if got := <-func() chan string {
+		ch := make(chan string, 1)
+		select {
+		case result := <-pending.ResultCh:
+			ch <- result.DenyReason
+		default:
+			ch <- "__pending__"
+		}
+		return ch
+	}(); got != "__pending__" {
+		t.Fatalf("deny button should open deny-reason card first, got immediate result %q", got)
+	}
+
+	resp, handled = f.handleApprovalCardAction(
+		map[string]any{"action": pending.DenySubmitAction},
+		&callback.CallBackAction{FormValue: map[string]any{"deny_reason": "unsafe"}},
+		"user_open_id",
+	)
+	if !handled {
+		t.Fatal("expected deny submit action to be handled")
+	}
+	if resp == nil || resp.Toast == nil || resp.Card == nil {
+		t.Fatal("expected toast and updated card response after deny submit")
+	}
+	select {
+	case result := <-pending.ResultCh:
+		if result.Approved {
+			t.Fatal("expected denied result")
+		}
+		if result.DenyReason != "unsafe" {
+			t.Fatalf("expected deny reason propagation, got %q", result.DenyReason)
+		}
+	default:
+		t.Fatal("expected approval result to be delivered after deny submit")
+	}
+}
+
+func TestBuildApprovalResultCard_TimeoutClosedMessage(t *testing.T) {
+	f := newTestFeishuChannel()
+	pending := &feishuPendingApproval{
+		Request:   tools.ApprovalRequest{ToolName: "Shell", RunAs: "root", Command: "ls -la /root"},
+		MessageID: "msg_timeout_test",
+	}
+	card := f.buildApprovalResultCard(pending, tools.ApprovalResult{Approved: false, DenyReason: "approval request timed out"})
+	s := cardJSON(card)
+	if !strings.Contains(s, "Timed Out") {
+		t.Fatalf("expected timeout status in card: %s", s)
+	}
+	if !strings.Contains(s, "This card is now closed") {
+		t.Fatalf("expected closed-card message in timeout card: %s", s)
+	}
+}
+
+func TestHandleApprovalCardAction_RejectsWrongUser(t *testing.T) {
+	f := newTestFeishuChannel()
+	pending := &feishuPendingApproval{
+		Request:       tools.ApprovalRequest{ToolName: "Shell", RunAs: "root"},
+		SenderID:      "owner_user",
+		ResultCh:      make(chan tools.ApprovalResult, 1),
+		CreatedAt:     time.Now(),
+		ApproveAction: "perm_approve_test2",
+		DenyAction:    "perm_deny_test2",
+	}
+	f.approvals[pending.ApproveAction] = pending
+	f.approvals[pending.DenyAction] = pending
+
+	resp, handled := f.handleApprovalCardAction(map[string]any{"action": pending.ApproveAction}, &callback.CallBackAction{}, "other_user")
+	if !handled {
+		t.Fatal("expected action to be handled")
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "error" {
+		t.Fatal("expected error toast for wrong user")
+	}
+	select {
+	case <-pending.ResultCh:
+		t.Fatal("should not resolve pending approval for wrong user")
+	default:
 	}
 }
 

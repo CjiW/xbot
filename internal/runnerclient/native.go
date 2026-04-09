@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"xbot/internal/cmdbuilder"
 )
 
 // maxDownloadSize 是下载操作的最大文件大小（100MB）。
@@ -33,15 +35,10 @@ func NewNativeExecutor(workspace string) *NativeExecutor {
 func (e *NativeExecutor) Close() error { return nil }
 
 func (e *NativeExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
-	var cmd *exec.Cmd
-	if spec.Shell {
-		cmd = exec.CommandContext(ctx, "sh", "-c", spec.Command)
-	} else {
-		args := spec.Args
-		if len(args) == 0 {
-			return nil, fmt.Errorf("non-shell exec requires Args to be set explicitly")
-		}
-		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd, err := cmdbuilder.Build(ctx, spec.Shell, spec.Command, spec.Args,
+		"", spec.Env, cmdbuilder.Config{RunAsUser: spec.RunAsUser})
+	if err != nil {
+		return nil, err
 	}
 
 	// 创建新进程组，超时时可以 kill 所有子进程
@@ -50,9 +47,6 @@ func (e *NativeExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		cmd.Dir = filepath.Clean(spec.Dir)
 	} else {
 		cmd.Dir = e.Workspace
-	}
-	if len(spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), spec.Env...)
 	}
 	if spec.Stdin != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
@@ -63,7 +57,7 @@ func (e *NativeExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	_ = time.Since(start)
 
 	exitCode := 0

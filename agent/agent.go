@@ -754,6 +754,7 @@ func New(cfg Config) *Agent {
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),
+			tools.NewApprovalHook(nil), // handler set later by channel when available
 		),
 		bgTaskMgr: tools.NewBackgroundTaskManager(),
 	}
@@ -1854,6 +1855,9 @@ func (a *Agent) buildPrompt(ctx context.Context, msg bus.InboundMessage, tenantS
 	mc.SetExtra(ExtraKeySkillsCatalog, a.skills.GetSkillsCatalog(ctx, msg.SenderID))
 	mc.SetExtra(ExtraKeyAgentsCatalog, a.agents.GetAgentsCatalog(ctx, msg.SenderID))
 	mc.SetExtra(ExtraKeyMemoryProvider, tenantSession.Memory())
+	permUsers := a.settingsSvc.GetPermUsers(msg.Channel, msg.SenderID)
+	mc.SetExtra(ExtraKeyPermUsers, permUsers)
+	mc.Ctx = withPermControlEnabled(mc.Ctx, IsPermControlEnabled(permUsers))
 
 	mc.SetExtra(ExtraKeyTenantID, tenantSession.TenantID())
 

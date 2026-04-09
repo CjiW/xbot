@@ -71,6 +71,18 @@ func (hc *HookChain) Use(hook ToolHook) error {
 	return nil
 }
 
+// Get returns a hook by name, or nil if not found.
+func (hc *HookChain) Get(name string) ToolHook {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+	for _, h := range hc.hooks {
+		if h.Name() == name {
+			return h
+		}
+	}
+	return nil
+}
+
 // Remove removes a hook by name.
 func (hc *HookChain) Remove(name string) {
 	hc.mu.Lock()

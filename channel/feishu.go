@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"xbot/bus"
+	"xbot/internal/ctxkeys"
 	log "xbot/logger"
 	"xbot/prompt"
 	"xbot/storage/sqlite"
@@ -148,6 +149,23 @@ type FeishuChannel struct {
 
 	// Settings card callbacks (injected from Agent via main.go)
 	settingsCallbacks SettingsCallbacks
+
+	// Permission control
+	approvalHook *tools.ApprovalHook
+	approvalsMu  sync.Mutex
+	approvals    map[string]*feishuPendingApproval
+}
+
+type feishuPendingApproval struct {
+	Request          tools.ApprovalRequest
+	ChatID           string
+	SenderID         string
+	MessageID        string
+	ResultCh         chan tools.ApprovalResult
+	CreatedAt        time.Time
+	ApproveAction    string
+	DenyAction       string
+	DenySubmitAction string
 }
 
 // NewFeishuChannel 创建飞书渠道
@@ -158,6 +176,7 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 		processedIDs:  make(map[string]struct{}),
 		maxProcessed:  1000,
 		userNameCache: make(map[string]string),
+		approvals:     make(map[string]*feishuPendingApproval),
 	}
 }
 
@@ -174,6 +193,11 @@ func (f *FeishuChannel) ChannelSystemParts(ctx context.Context, chatID, senderID
 // SetCardBuilder sets the CardBuilder for card callback handling.
 func (f *FeishuChannel) SetCardBuilder(builder *tools.CardBuilder) {
 	f.cardBuilder = builder
+}
+
+// SetApprovalHook stores the ApprovalHook reference so Start() can wire a Feishu approval handler.
+func (f *FeishuChannel) SetApprovalHook(hook *tools.ApprovalHook) {
+	f.approvalHook = hook
 }
 
 // SetSettingsCallbacks injects settings card callbacks from Agent.
@@ -207,6 +231,10 @@ func (f *FeishuChannel) Start() error {
 	// 初始化机器人自身 open_id（用于群聊 @ 识别）
 	if err := f.refreshBotOpenID(context.Background()); err != nil {
 		log.WithError(err).Warn("Feishu: failed to initialize bot open_id from bot/v3/info")
+	}
+
+	if f.approvalHook != nil {
+		f.approvalHook.SetHandler(NewFeishuApprovalHandler(f))
 	}
 
 	// 创建事件处理器
@@ -1172,6 +1200,11 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 		messageID = event.Event.Context.OpenMessageID
 	}
 
+	// Intercept permission approval actions before other card routing.
+	if resp, ok := f.handleApprovalCardAction(actionData, action, senderID); ok {
+		return resp, nil
+	}
+
 	// 拦截 settings 卡片交互（按钮点击、下拉选择、表单提交，在 CardBuilder 路由之前）
 	if parsed := parseActionDataFromMap(actionData); parsed != nil {
 		if actionName := parsed["action"]; strings.HasPrefix(actionName, settingsCardActionPrefix) {
@@ -1262,6 +1295,314 @@ func (f *FeishuChannel) buildKeepCardResponse(cardID string) *callback.CardActio
 		}
 	}
 	return resp
+}
+
+// FeishuApprovalHandler implements tools.ApprovalHandler for the Feishu channel.
+type FeishuApprovalHandler struct {
+	channel *FeishuChannel
+}
+
+// NewFeishuApprovalHandler creates a new FeishuApprovalHandler.
+func NewFeishuApprovalHandler(channel *FeishuChannel) *FeishuApprovalHandler {
+	return &FeishuApprovalHandler{channel: channel}
+}
+
+// RequestApproval sends an approval card and waits for the user's response.
+func (h *FeishuApprovalHandler) RequestApproval(ctx context.Context, req tools.ApprovalRequest) (tools.ApprovalResult, error) {
+	if h == nil || h.channel == nil {
+		return tools.ApprovalResult{Approved: false}, fmt.Errorf("feishu approval handler is not initialized")
+	}
+	return h.channel.requestApproval(ctx, req)
+}
+
+func (f *FeishuChannel) requestApproval(ctx context.Context, req tools.ApprovalRequest) (tools.ApprovalResult, error) {
+	chatID, senderID := ctxkeys.ApprovalTargetFromContext(ctx)
+	if chatID == "" || senderID == "" {
+		log.WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID, "tool": req.ToolName, "run_as": req.RunAs}).Warn("Feishu approval missing target context")
+		return tools.ApprovalResult{Approved: false}, fmt.Errorf("feishu approval requires chat and sender in context")
+	}
+
+	pending := &feishuPendingApproval{
+		Request:          req,
+		ChatID:           chatID,
+		SenderID:         senderID,
+		ResultCh:         make(chan tools.ApprovalResult, 1),
+		CreatedAt:        time.Now(),
+		ApproveAction:    fmt.Sprintf("perm_approve_%d", time.Now().UnixNano()),
+		DenyAction:       fmt.Sprintf("perm_deny_%d", time.Now().UnixNano()),
+		DenySubmitAction: fmt.Sprintf("perm_deny_submit_%d", time.Now().UnixNano()),
+	}
+
+	card := f.buildApprovalCard(pending)
+	cardJSON, err := json.Marshal(card)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID, "tool": req.ToolName, "run_as": req.RunAs}).Error("Feishu approval card marshal failed")
+		return tools.ApprovalResult{Approved: false}, fmt.Errorf("marshal approval card: %w", err)
+	}
+
+	log.WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID, "tool": req.ToolName, "run_as": req.RunAs}).Info("Sending Feishu approval card")
+	messageID, err := f.sendNormalMessage(chatID, cardJSON)
+	if err != nil {
+		log.WithError(err).WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID, "tool": req.ToolName, "run_as": req.RunAs, "card": string(cardJSON)}).Error("Feishu approval card send failed")
+		return tools.ApprovalResult{Approved: false}, fmt.Errorf("send approval card: %w", err)
+	}
+	pending.MessageID = messageID
+	log.WithFields(log.Fields{"message_id": messageID, "chat_id": chatID, "sender_id": senderID, "tool": req.ToolName, "run_as": req.RunAs}).Info("Feishu approval card sent")
+
+	f.approvalsMu.Lock()
+	f.approvals[pending.ApproveAction] = pending
+	f.approvals[pending.DenyAction] = pending
+	f.approvals[pending.DenySubmitAction] = pending
+	f.approvalsMu.Unlock()
+
+	select {
+	case result := <-pending.ResultCh:
+		log.WithFields(log.Fields{"message_id": pending.MessageID, "tool": req.ToolName, "run_as": req.RunAs, "approved": result.Approved}).Info("Feishu approval resolved")
+		return result, nil
+	case <-ctx.Done():
+		result := tools.ApprovalResult{Approved: false, DenyReason: "approval request timed out"}
+		f.finishPendingApproval(pending, result)
+		f.closeApprovalCardOnTimeout(pending)
+		log.WithFields(log.Fields{"message_id": pending.MessageID, "tool": req.ToolName, "run_as": req.RunAs}).Warn("Feishu approval timed out")
+		return tools.ApprovalResult{Approved: false}, fmt.Errorf("approval request timed out")
+	}
+}
+
+func (f *FeishuChannel) buildApprovalCard(p *feishuPendingApproval) map[string]any {
+	req := p.Request
+	elements := []map[string]any{
+		{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Permission approval required**\n\nLLM wants to execute as `%s`.", req.RunAs),
+		},
+		{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Tool:** %s\n**Reason:** %s", req.ToolName, escapeFeishuMarkdown(req.Reason)),
+		},
+	}
+	if req.Command != "" {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Command:** `%s`", escapeFeishuMarkdown(req.Command)),
+		})
+	}
+	if req.FilePath != "" {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**File:** `%s`", escapeFeishuMarkdown(req.FilePath)),
+		})
+		if req.ArgsSummary != "" && req.ArgsSummary != req.FilePath {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("**Args:** `%s`", escapeFeishuMarkdown(req.ArgsSummary)),
+			})
+		}
+	} else if req.ArgsSummary != "" && req.ArgsSummary != req.Command {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Args:** `%s`", escapeFeishuMarkdown(req.ArgsSummary)),
+		})
+	}
+	elements = append(elements,
+		wrapButtonsInColumns([]map[string]any{
+			{
+				"tag":   "button",
+				"text":  map[string]any{"tag": "plain_text", "content": "Approve"},
+				"type":  "primary",
+				"value": map[string]any{"action": p.ApproveAction},
+			},
+			{
+				"tag":   "button",
+				"text":  map[string]any{"tag": "plain_text", "content": "Deny"},
+				"type":  "danger",
+				"value": map[string]any{"action": p.DenyAction},
+			},
+		}),
+	)
+
+	return map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": "Permission Approval"},
+			"template": "orange",
+		},
+		"body":   map[string]any{"elements": elements},
+		"config": map[string]any{"wide_screen_mode": true},
+	}
+}
+
+func escapeFeishuMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "`", "'")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
+func (f *FeishuChannel) findPendingApproval(action string) *feishuPendingApproval {
+	f.approvalsMu.Lock()
+	defer f.approvalsMu.Unlock()
+	return f.approvals[action]
+}
+
+func (f *FeishuChannel) removePendingApproval(p *feishuPendingApproval) {
+	f.approvalsMu.Lock()
+	defer f.approvalsMu.Unlock()
+	delete(f.approvals, p.ApproveAction)
+	delete(f.approvals, p.DenyAction)
+	delete(f.approvals, p.DenySubmitAction)
+}
+
+func (f *FeishuChannel) finishPendingApproval(p *feishuPendingApproval, result tools.ApprovalResult) {
+	if p == nil {
+		return
+	}
+	f.removePendingApproval(p)
+	select {
+	case p.ResultCh <- result:
+	default:
+	}
+}
+
+func (f *FeishuChannel) handleApprovalCardAction(actionData map[string]any, action *callback.CallBackAction, senderID string) (*callback.CardActionTriggerResponse, bool) {
+	if actionData == nil {
+		return nil, false
+	}
+	actionName, _ := actionData["action"].(string)
+	pending := f.findPendingApproval(actionName)
+	if pending == nil {
+		return nil, false
+	}
+	if senderID == "" || senderID != pending.SenderID {
+		return &callback.CardActionTriggerResponse{
+			Toast: &callback.Toast{Type: "error", Content: "Only the requesting user can approve this action."},
+		}, true
+	}
+
+	switch actionName {
+	case pending.ApproveAction:
+		result := tools.ApprovalResult{Approved: true}
+		f.finishPendingApproval(pending, result)
+		return &callback.CardActionTriggerResponse{
+			Card:  &callback.Card{Type: "raw", Data: f.buildApprovalResultCard(pending, result)},
+			Toast: &callback.Toast{Type: "success", Content: approvalToastContent(result)},
+		}, true
+	case pending.DenyAction:
+		return &callback.CardActionTriggerResponse{
+			Card:  &callback.Card{Type: "raw", Data: f.buildApprovalDenyReasonCard(pending)},
+			Toast: &callback.Toast{Type: "info", Content: "Add an optional deny reason, then submit."},
+		}, true
+	case pending.DenySubmitAction:
+		denyReason := strings.TrimSpace(formStr(action.FormValue, "deny_reason"))
+		result := tools.ApprovalResult{Approved: false, DenyReason: denyReason}
+		f.finishPendingApproval(pending, result)
+		return &callback.CardActionTriggerResponse{
+			Card:  &callback.Card{Type: "raw", Data: f.buildApprovalResultCard(pending, result)},
+			Toast: &callback.Toast{Type: "success", Content: approvalToastContent(result)},
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func approvalToastContent(result tools.ApprovalResult) string {
+	if result.Approved {
+		return "Approved"
+	}
+	if strings.Contains(strings.ToLower(strings.TrimSpace(result.DenyReason)), "timed out") {
+		return "Timed out"
+	}
+	return "Denied"
+}
+
+func (f *FeishuChannel) buildApprovalDenyReasonCard(p *feishuPendingApproval) map[string]any {
+	elements := []map[string]any{
+		{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Deny execution as `%s`**\n\nTool: %s", escapeFeishuMarkdown(p.Request.RunAs), p.Request.ToolName),
+		},
+	}
+	if p.Request.Command != "" {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**Command:** `%s`", escapeFeishuMarkdown(p.Request.Command)),
+		})
+	}
+	elements = append(elements, map[string]any{
+		"tag":  "form",
+		"name": "perm_deny_reason_form",
+		"elements": []map[string]any{
+			{
+				"tag":         "input",
+				"name":        "deny_reason",
+				"label":       map[string]any{"tag": "plain_text", "content": "Deny reason (optional)"},
+				"placeholder": map[string]any{"tag": "plain_text", "content": "Why deny this request?"},
+			},
+			{
+				"tag":   "button",
+				"name":  "submit_deny_reason",
+				"text":  map[string]any{"tag": "plain_text", "content": "Submit Deny"},
+				"type":  "danger",
+				"value": map[string]any{"action": p.DenySubmitAction},
+			},
+		},
+	})
+	return map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": "Permission Approval - Deny"},
+			"template": "red",
+		},
+		"body":   map[string]any{"elements": elements},
+		"config": map[string]any{"wide_screen_mode": true},
+	}
+}
+
+func (f *FeishuChannel) closeApprovalCardOnTimeout(p *feishuPendingApproval) {
+	if f == nil || p == nil || p.MessageID == "" {
+		return
+	}
+	cardJSON, err := json.Marshal(f.buildApprovalResultCard(p, tools.ApprovalResult{Approved: false, DenyReason: "approval request timed out"}))
+	if err != nil {
+		log.WithError(err).WithField("message_id", p.MessageID).Warn("Feishu: failed to marshal timeout approval card")
+		return
+	}
+	if err := f.patchMessage(p.MessageID, cardJSON); err != nil {
+		log.WithError(err).WithField("message_id", p.MessageID).Warn("Feishu: failed to patch timed-out approval card")
+		return
+	}
+	log.WithField("message_id", p.MessageID).Info("Feishu approval card closed after timeout")
+}
+
+func (f *FeishuChannel) buildApprovalResultCard(p *feishuPendingApproval, result tools.ApprovalResult) map[string]any {
+	status := "Denied"
+	template := "red"
+	summary := "Execution denied."
+	if result.Approved {
+		status = "Approved"
+		template = "green"
+		summary = "Execution approved."
+	} else if strings.Contains(strings.ToLower(strings.TrimSpace(result.DenyReason)), "timed out") {
+		status = "Timed Out"
+		template = "grey"
+		summary = "Approval request timed out. This card is now closed."
+	} else if strings.TrimSpace(result.DenyReason) != "" {
+		summary = fmt.Sprintf("Execution denied: %s", escapeFeishuMarkdown(result.DenyReason))
+	}
+	content := fmt.Sprintf("**Status:** %s\n**Tool:** %s\n**Run as:** `%s`\n%s", status, p.Request.ToolName, escapeFeishuMarkdown(p.Request.RunAs), summary)
+	if p.Request.Command != "" {
+		content += fmt.Sprintf("\n**Command:** `%s`", escapeFeishuMarkdown(p.Request.Command))
+	}
+	if p.Request.FilePath != "" {
+		content += fmt.Sprintf("\n**File:** `%s`", escapeFeishuMarkdown(p.Request.FilePath))
+	}
+	return map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": "Permission Approval - " + status},
+			"template": template,
+		},
+		"body": map[string]any{"elements": []map[string]any{{"tag": "markdown", "content": content}}},
+	}
 }
 
 // handleCardBuilderAction handles card actions from Card Builder MCP cards.
@@ -2225,15 +2566,16 @@ func limitMarkdownTables(content string, maxTables int) string {
 
 // feishuSettingsSchema returns the settings definitions for Feishu channel.
 func feishuSettingsSchema() []SettingDefinition {
-	return []SettingDefinition{
-		{
-			Key:         "sandbox_cleanup",
-			Label:       "沙箱持久化",
-			Description: "将当前沙箱文件系统变更保存为镜像（export+import）。执行期间会阻塞你的所有请求。",
-			Type:        SettingTypeToggle,
-			Category:    "沙箱",
-		},
-	}
+	loc := GetLocale(currentLocaleLang)
+	base := append([]SettingDefinition(nil), loc.SettingsSchema...)
+	base = append(base, SettingDefinition{
+		Key:         "sandbox_cleanup",
+		Label:       "沙箱持久化",
+		Description: "将当前沙箱文件系统变更保存为镜像（export+import）。执行期间会阻塞你的所有请求。",
+		Type:        SettingTypeToggle,
+		Category:    "沙箱",
+	})
+	return base
 }
 
 // SettingsSchema returns the settings definitions for Feishu channel.

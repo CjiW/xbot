@@ -10,7 +10,7 @@ import (
 	"xbot/storage/sqlite"
 )
 
-const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [thinking_mode=<mode>]
+const setLLMUsage = `用法: /set-llm provider=<provider> base_url=<url> api_key=<key> [model=<model>] [max_context=<tokens>] [max_output_tokens=<tokens>] [thinking_mode=<mode>]
 
 参数说明:
   provider      - LLM 提供商: anthropic 或 openai/deepseek/zhipu 等 OpenAI 兼容服务
@@ -149,6 +149,13 @@ func (a *Agent) handleSetLLM(ctx context.Context, msg bus.InboundMessage) (*bus.
 			} else {
 				parseErrors = true
 			}
+		case "max_output_tokens":
+			var maxOut int
+			if _, err := fmt.Sscanf(value, "%d", &maxOut); err == nil {
+				cfg.MaxOutputTokens = maxOut
+			} else {
+				parseErrors = true
+			}
 		case "thinking_mode":
 			// 支持: enabled, disabled, adaptive, 自定义 JSON 字符串
 			if value == "enabled" || value == "disabled" || value == "adaptive" {
@@ -280,6 +287,35 @@ func (a *Agent) SetUserMaxContext(senderID string, maxContext int) error {
 		return fmt.Errorf("当前未配置自定义 LLM，请先通过 /set-llm 设置")
 	}
 	cfg.MaxContext = maxContext
+	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	a.llmFactory.Invalidate(senderID)
+	return nil
+}
+
+// GetUserMaxOutputTokens returns the user's max_output_tokens setting (0 = use default).
+func (a *Agent) GetUserMaxOutputTokens(senderID string) int {
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.MaxOutputTokens
+}
+
+// SetUserMaxOutputTokens updates the user's max_output_tokens setting and invalidates cached LLM client.
+func (a *Agent) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
+	if maxTokens < 0 || maxTokens > 2000000 {
+		return fmt.Errorf("max_output_tokens must be between 0 and 2000000, got %d", maxTokens)
+	}
+	cfg, err := a.llmConfigSvc.GetConfig(senderID)
+	if err != nil {
+		return fmt.Errorf("get config: %w", err)
+	}
+	if cfg == nil {
+		return fmt.Errorf("当前未配置自定义 LLM，请先通过 /set-llm 设置")
+	}
+	cfg.MaxOutputTokens = maxTokens
 	if err := a.llmConfigSvc.SetConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}

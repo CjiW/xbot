@@ -195,6 +195,7 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
+	agentTurnID     uint64                    // monotonically increasing turn counter
 	typing          bool                      // agent 是否正在回复
 	typingStartTime time.Time                 // 本次处理开始时间
 	inputReady      bool                      // 输入就绪状态（agent 回复期间禁止发送）
@@ -236,6 +237,8 @@ type cliModel struct {
 
 	// --- §2 工具可视化 ---
 	lastCompletedTools []CLIToolProgress // 每轮结束时快照，不依赖 m.progress 生命周期
+	lastReasoning      string            // 最后一次迭代的 reasoning_content，在 progress 清除前捕获
+	lastThinking       string            // 最后一次迭代的 thinking_content，在 progress 清除前捕获
 
 	// --- §8 Tab 补全 ---
 	completions []string // 当前补全候选项
@@ -402,11 +405,12 @@ func newCLIModel() *cliModel {
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
-	// 禁用 viewport 的键盘快捷键，避免和用户输入冲突
-	// 滚动通过鼠标滚轮实现（MouseWheelEnabled 默认已开启，View 设置 MouseModeCellMotion）
-	// 方向键保留给 textarea 光标移动和输入历史浏览
-	vp.KeyMap.Up.SetKeys()
-	vp.KeyMap.Down.SetKeys()
+	// 滚动方式：Up/Down（逐行，也响应鼠标滚轮的转义序列）、PgUp/PgDn（翻页）
+	// 注意：Up/Down 会同时被 textarea 的光标移动和 viewport 的滚动处理。
+	// handleKeyPress 里对 KeyUp/KeyDown 的 input history 逻辑会优先拦截，
+	// 但仅在 idle + 输入框为空时才触发，所以滚轮滚动在 typing 时不冲突。
+	vp.KeyMap.Up.SetKeys("up")
+	vp.KeyMap.Down.SetKeys("down")
 	vp.KeyMap.Left.SetKeys()
 	vp.KeyMap.Right.SetKeys()
 	vp.KeyMap.PageUp.SetKeys("pgup")

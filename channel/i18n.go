@@ -484,6 +484,20 @@ func localeZH() *UILocale {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
+				Key: "max_output_tokens", Label: "最大输出 Token", Description: "单次回复最大 token 数（默认 8192）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
+			},
+			{
+				Key: "thinking_mode", Label: "思考模式", Description: "模型推理/思维链模式（默认自动）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "自动", Value: ""},
+					{Label: "开启", Value: "enabled"},
+					{Label: "开启（保留历史推理）", Value: `{"type":"enabled","clear_thinking":false}`},
+					{Label: "关闭", Value: "disabled"},
+				},
+			},
+			{
 				Key: "enable_auto_compress", Label: "自动压缩", Description: "上下文过长时自动压缩（默认开启）",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{
@@ -838,6 +852,20 @@ func localeEN() *UILocale {
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
 			},
 			{
+				Key: "max_output_tokens", Label: "Max Output Tokens", Description: "Max tokens per response (default 8192)",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
+			},
+			{
+				Key: "thinking_mode", Label: "Thinking Mode", Description: "Model reasoning/thinking chain mode (default: auto)",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "Auto", Value: ""},
+					{Label: "Enabled", Value: "enabled"},
+					{Label: "Enabled (Preserved)", Value: `{"type":"enabled","clear_thinking":false}`},
+					{Label: "Disabled", Value: "disabled"},
+				},
+			},
+			{
 				Key: "enable_auto_compress", Label: "Auto Compress", Description: "Automatically compress when context is too long (on by default)",
 				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "true",
 				Options: []SettingOption{
@@ -1190,6 +1218,20 @@ func localeJA() *UILocale {
 			{
 				Key: "max_context_tokens", Label: "最大コンテキストトークン", Description: "コンテキストの最大トークン数（デフォルト 200000）",
 				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "200000",
+			},
+			{
+				Key: "max_output_tokens", Label: "最大出力トークン", Description: "1回の応答の最大トークン数（デフォルト 8192）",
+				Type: SettingTypeNumber, Category: "Agent", DefaultValue: "8192",
+			},
+			{
+				Key: "thinking_mode", Label: "思考モード", Description: "モデルの推論/思考チェーンモード（デフォルト: 自動）",
+				Type: SettingTypeSelect, Category: "Agent", DefaultValue: "",
+				Options: []SettingOption{
+					{Label: "自動", Value: ""},
+					{Label: "有効", Value: "enabled"},
+					{Label: "有効（推論保持）", Value: `{"type":"enabled","clear_thinking":false}`},
+					{Label: "無効", Value: "disabled"},
+				},
 			},
 			{
 				Key: "enable_auto_compress", Label: "自動圧縮", Description: "コンテキストが長すぎる場合に自動圧縮（デフォルト: オン）",

@@ -102,7 +102,8 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations: a.maxIterations,
+		MaxIterations:   a.maxIterations,
+		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
 
 		// Session
 		SessionKey: sessionKey,
@@ -209,6 +210,7 @@ func (a *Agent) buildMainRunConfig(
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
 							Thinking:  s.ThinkingContent,
+							Reasoning: s.ReasoningContent,
 						}
 						for _, t := range s.ActiveTools {
 							payload.ActiveTools = append(payload.ActiveTools, channelpkg.CLIToolProgress{
@@ -558,21 +560,29 @@ func (a *Agent) buildSubAgentRunConfig(
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
 	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
 
-	// Stream — 直接从父 Agent 继承
-	stream := parentCtx.Stream
+	// Stream — 从用户设置继承（与 buildMainRunConfig 一致）
+	stream := false
+	if a.settingsSvc != nil {
+		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
+			if vals["enable_stream"] == "true" {
+				stream = true
+			}
+		}
+	}
 
 	cfg := RunConfig{
-		LLMClient:    llmClient,
-		Model:        model,
-		ThinkingMode: thinkingMode,
-		Stream:       stream,
-		Tools:        subTools,
-		Messages:     messages,
-		AgentID:      subAgentID,
-		Channel:      parentCtx.Channel,
-		ChatID:       parentCtx.ChatID,
-		SenderID:     parentAgentID, // SubAgent: 直接调用者 = 父 Agent
-		OriginUserID: originUserID,  // SubAgent: 继承原始用户 ID
+		LLMClient:       llmClient,
+		Model:           model,
+		ThinkingMode:    thinkingMode,
+		Stream:          stream,
+		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
+		Tools:           subTools,
+		Messages:        messages,
+		AgentID:         subAgentID,
+		Channel:         parentCtx.Channel,
+		ChatID:          parentCtx.ChatID,
+		SenderID:        parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID:    originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,

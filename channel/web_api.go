@@ -632,21 +632,26 @@ func (wc *WebChannel) handleMarketInstall(w http.ResponseWriter, r *http.Request
 // ---------------------------------------------------------------------------
 
 type llmConfigResponse struct {
-	OK         bool     `json:"ok"`
-	IsGlobal   bool     `json:"is_global,omitempty"`
-	Provider   string   `json:"provider,omitempty"`
-	BaseURL    string   `json:"base_url,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	Models     []string `json:"models,omitempty"`
-	MaxContext int      `json:"max_context,omitempty"`
-	Error      string   `json:"error,omitempty"`
+	OK              bool     `json:"ok"`
+	IsGlobal        bool     `json:"is_global,omitempty"`
+	Provider        string   `json:"provider,omitempty"`
+	BaseURL         string   `json:"base_url,omitempty"`
+	Model           string   `json:"model,omitempty"`
+	Models          []string `json:"models,omitempty"`
+	MaxContext      int      `json:"max_context,omitempty"`
+	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+	ThinkingMode    string   `json:"thinking_mode,omitempty"`
+	Error           string   `json:"error,omitempty"`
 }
 
 type llmConfigSetRequest struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	MaxContext      int    `json:"max_context"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+	ThinkingMode    string `json:"thinking_mode"`
 }
 
 type llmModelSetRequest struct {
@@ -728,7 +733,7 @@ func (wc *WebChannel) handleLLMConfigSet(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	if err := wc.callbacks.LLMSetConfig(senderID, req.Provider, req.BaseURL, req.APIKey, req.Model); err != nil {
+	if err := wc.callbacks.LLMSetConfig(senderID, req.Provider, req.BaseURL, req.APIKey, req.Model, req.MaxOutputTokens, req.ThinkingMode); err != nil {
 		writeJSON(w, http.StatusInternalServerError, llmConfigResponse{OK: false, Error: err.Error()})
 		return
 	}

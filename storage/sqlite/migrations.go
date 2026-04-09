@@ -96,6 +96,20 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v27: add max_context, max_output_tokens, thinking_mode to user_llm_subscriptions
+	if from < 27 {
+		if err := migrateV26ToV27(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v27: %w", err)
+		}
+	}
+
+	// v28: add reasoning_content to session_messages
+	if from < 28 {
+		if err := migrateV27ToV28(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v28: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -877,5 +891,51 @@ func migrateV25ToV26(conn *sql.DB) error {
 	}
 
 	log.Info("Database migrated to v26: sender_id 'default' → 'cli_user'")
+	return nil
+}
+
+// migrateV26ToV27 adds max_context, max_output_tokens, thinking_mode columns
+// to user_llm_subscriptions so these settings are persisted to DB.
+func migrateV26ToV27(conn *sql.DB) error {
+	cols := []struct {
+		name string
+		def  string
+	}{
+		{"max_context", "INTEGER DEFAULT 0"},
+		{"max_output_tokens", "INTEGER DEFAULT 0"},
+		{"thinking_mode", "TEXT DEFAULT ''"},
+	}
+	for _, c := range cols {
+		var count int
+		err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('user_llm_subscriptions') WHERE name = ?", c.name).Scan(&count)
+		if err == nil && count == 0 {
+			_, err = conn.Exec(fmt.Sprintf("ALTER TABLE user_llm_subscriptions ADD COLUMN %s %s", c.name, c.def))
+			if err != nil {
+				return fmt.Errorf("migrate v26->v27 add %s: %w", c.name, err)
+			}
+		}
+	}
+	if _, err := conn.Exec("UPDATE schema_version SET version = 27"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	log.Info("Database migrated to v27: added max_context, max_output_tokens, thinking_mode to user_llm_subscriptions")
+	return nil
+}
+
+// migrateV27ToV28 adds reasoning_content column to session_messages
+// so the model's thinking chain persists across restarts.
+func migrateV27ToV28(conn *sql.DB) error {
+	var count int
+	err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('session_messages') WHERE name = 'reasoning_content'").Scan(&count)
+	if err == nil && count == 0 {
+		_, err = conn.Exec("ALTER TABLE session_messages ADD COLUMN reasoning_content TEXT DEFAULT ''")
+		if err != nil {
+			return fmt.Errorf("migrate v27->v28 add reasoning_content: %w", err)
+		}
+	}
+	if _, err := conn.Exec("UPDATE schema_version SET version = 28"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	log.Info("Database migrated to v28: added reasoning_content to session_messages")
 	return nil
 }

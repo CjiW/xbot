@@ -11,16 +11,19 @@ import (
 
 // LLMSubscription represents a user's LLM provider subscription.
 type LLMSubscription struct {
-	ID        string // unique subscription ID
-	SenderID  string // user ID
-	Name      string // display name (e.g. "OpenAI GPT-4", "DeepSeek")
-	Provider  string // LLM provider: "openai", "deepseek", "anthropic", etc.
-	BaseURL   string // API base URL
-	APIKey    string // API key (plaintext in struct, encrypted in DB)
-	Model     string // default model for this subscription
-	IsDefault bool   // whether this is the active subscription
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              string // unique subscription ID
+	SenderID        string // user ID
+	Name            string // display name (e.g. "OpenAI GPT-4", "DeepSeek")
+	Provider        string // LLM provider: "openai", "deepseek", "anthropic", etc.
+	BaseURL         string // API base URL
+	APIKey          string // API key (plaintext in struct, encrypted in DB)
+	Model           string // default model for this subscription
+	MaxContext      int    // max context token limit (0 = use default)
+	MaxOutputTokens int    // max output token limit (0 = use default 8192)
+	ThinkingMode    string // thinking mode: "" (auto), "enabled", "disabled"
+	IsDefault       bool   // whether this is the active subscription
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // LLMSubscriptionService manages user LLM subscriptions.
@@ -37,11 +40,11 @@ func NewLLMSubscriptionService(db *DB) *LLMSubscriptionService {
 func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at
-		FROM user_llm_subscriptions
-		WHERE sender_id = ?
-		ORDER BY created_at ASC
-	`, senderID)
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+			FROM user_llm_subscriptions
+			WHERE sender_id = ?
+			ORDER BY created_at ASC
+		`, senderID)
 	if err != nil {
 		return nil, fmt.Errorf("list subscriptions: %w", err)
 	}
@@ -53,7 +56,7 @@ func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, erro
 		var encryptedAPIKey string
 		var isDefault int
 		err := rows.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-			&encryptedAPIKey, &sub.Model, &isDefault, &sub.CreatedAt, &sub.UpdatedAt)
+			&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("scan subscription: %w", err)
 		}
@@ -76,17 +79,17 @@ func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, erro
 func (s *LLMSubscriptionService) GetDefault(senderID string) (*LLMSubscription, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at
-		FROM user_llm_subscriptions
-		WHERE sender_id = ? AND is_default = 1
-		LIMIT 1
-	`, senderID)
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+			FROM user_llm_subscriptions
+			WHERE sender_id = ? AND is_default = 1
+			LIMIT 1
+		`, senderID)
 
 	sub := &LLMSubscription{}
 	var encryptedAPIKey string
 	var isDefault int
 	err := row.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-		&encryptedAPIKey, &sub.Model, &isDefault, &sub.CreatedAt, &sub.UpdatedAt)
+		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -110,16 +113,16 @@ func (s *LLMSubscriptionService) GetDefault(senderID string) (*LLMSubscription, 
 func (s *LLMSubscriptionService) Get(id string) (*LLMSubscription, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at
-		FROM user_llm_subscriptions
-		WHERE id = ?
-	`, id)
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+			FROM user_llm_subscriptions
+			WHERE id = ?
+		`, id)
 
 	sub := &LLMSubscription{}
 	var encryptedAPIKey string
 	var isDefault int
 	err := row.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-		&encryptedAPIKey, &sub.Model, &isDefault, &sub.CreatedAt, &sub.UpdatedAt)
+		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -176,9 +179,9 @@ func (s *LLMSubscriptionService) Add(sub *LLMSubscription) error {
 		isDefault = 1
 	}
 	_, err = tx.Exec(`
-		INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, sub.ID, sub.SenderID, sub.Name, sub.Provider, sub.BaseURL, encryptedAPIKey, sub.Model, isDefault, now, now)
+		INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, sub.ID, sub.SenderID, sub.Name, sub.Provider, sub.BaseURL, encryptedAPIKey, sub.Model, isDefault, sub.MaxContext, sub.MaxOutputTokens, sub.ThinkingMode, now, now)
 	if err != nil {
 		return fmt.Errorf("insert subscription: %w", err)
 	}
@@ -218,10 +221,11 @@ func (s *LLMSubscriptionService) Update(sub *LLMSubscription) error {
 	}
 	_, err = tx.Exec(`
 		UPDATE user_llm_subscriptions SET
-			name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
-			is_default = ?, updated_at = ?
+		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
+		is_default = ?, updated_at = ?
 		WHERE id = ? AND sender_id = ?
-	`, sub.Name, sub.Provider, sub.BaseURL, encryptedAPIKey, sub.Model, isDefault, now, sub.ID, sub.SenderID)
+	`, sub.Name, sub.Provider, sub.BaseURL, encryptedAPIKey, sub.Model, sub.MaxContext, sub.MaxOutputTokens, sub.ThinkingMode, isDefault, now, sub.ID, sub.SenderID)
 	if err != nil {
 		return fmt.Errorf("update subscription: %w", err)
 	}

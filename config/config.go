@@ -178,21 +178,25 @@ type ServerConfig struct {
 
 // LLMConfig LLM 配置
 type LLMConfig struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (8192)
+	ThinkingMode    string `json:"thinking_mode,omitempty"`
 }
 
 // SubscriptionConfig CLI 订阅配置（存储在 config.json，不存数据库）。
 type SubscriptionConfig struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
-	Active   bool   `json:"active"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (8192)
+	ThinkingMode    string `json:"thinking_mode,omitempty"`     // "" = auto, "enabled", "disabled"
+	Active          bool   `json:"active"`
 }
 
 // LogConfig 日志配置

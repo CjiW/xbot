@@ -100,7 +100,7 @@ type WebCallbacks struct {
 	// IsProcessing returns true if the backend is actively processing a request for the user.
 	IsProcessing func(senderID string) bool
 	// LLMSetConfig sets user's personal LLM config.
-	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error
+	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error
 	// LLMDelete reverts user to global LLM config.
 	LLMDelete func(senderID string) error
 	// LLMGetMaxContext returns the user's max context tokens setting.

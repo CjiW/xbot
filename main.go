@@ -280,8 +280,21 @@ func buildWebCallbacks(cfg *config.Config, agentLoop *agent.Agent) channel.WebCa
 			return agentLoop.GetUserLLMConfig(senderID)
 		},
 		IsProcessing: agentLoop.IsProcessing,
-		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
-			return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
+			if err := agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model); err != nil {
+				return err
+			}
+			if maxOutputTokens > 0 {
+				if err := agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens); err != nil {
+					log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user max output tokens")
+				}
+			}
+			if thinkingMode != "" {
+				if err := agentLoop.SetUserThinkingMode(senderID, thinkingMode); err != nil {
+					log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user thinking mode")
+				}
+			}
+			return nil
 		},
 		LLMDelete: func(senderID string) error {
 			return agentLoop.DeleteUserLLM(senderID)
@@ -632,8 +645,21 @@ func main() {
 			LLMGetConfig: func(senderID string) (string, string, string, bool) {
 				return agentLoop.GetUserLLMConfig(senderID)
 			},
-			LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
-				return agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model)
+			LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
+				if err := agentLoop.SetUserLLM(senderID, provider, baseURL, apiKey, model); err != nil {
+					return err
+				}
+				if maxOutputTokens > 0 {
+					if err := agentLoop.SetUserMaxOutputTokens(senderID, maxOutputTokens); err != nil {
+						log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user max output tokens")
+					}
+				}
+				if thinkingMode != "" {
+					if err := agentLoop.SetUserThinkingMode(senderID, thinkingMode); err != nil {
+						log.WithError(err).WithField("sender_id", senderID).Warn("failed to set user thinking mode")
+					}
+				}
+				return nil
 			},
 			LLMDelete: func(senderID string) error {
 				return agentLoop.DeleteUserLLM(senderID)
@@ -643,6 +669,12 @@ func main() {
 			},
 			LLMSetMaxContext: func(senderID string, maxContext int) error {
 				return agentLoop.SetUserMaxContext(senderID, maxContext)
+			},
+			LLMGetMaxOutputTokens: func(senderID string) int {
+				return agentLoop.GetUserMaxOutputTokens(senderID)
+			},
+			LLMSetMaxOutputTokens: func(senderID string, maxTokens int) error {
+				return agentLoop.SetUserMaxOutputTokens(senderID, maxTokens)
 			},
 			LLMGetThinkingMode: func(senderID string) string {
 				return agentLoop.GetUserThinkingMode(senderID)

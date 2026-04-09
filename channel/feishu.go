@@ -41,15 +41,19 @@ type FeishuConfig struct {
 // SettingsCallbacks holds the callback functions for settings card interaction.
 // Injected from Agent to decouple channel from agent packages.
 type SettingsCallbacks struct {
-	LLMList      func(senderID string) ([]string, string)                         // (models, currentModel)
-	LLMSet       func(senderID, model string) error                               // switch model
-	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool) // user config (no key)
-	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string) error    // create/update config
-	LLMDelete    func(senderID string) error                                      // revert to global
+	LLMList      func(senderID string) ([]string, string)                                                                // (models, currentModel)
+	LLMSet       func(senderID, model string) error                                                                      // switch model
+	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool)                                        // user config (no key)
+	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error // create/update config
+	LLMDelete    func(senderID string) error                                                                             // revert to global
 	// LLMGetMaxContext 获取用户当前 max_context 设置（0 = 使用默认值）
 	LLMGetMaxContext func(senderID string) int
 	// LLMSetMaxContext 设置用户 max_context
 	LLMSetMaxContext func(senderID string, maxContext int) error
+	// LLMGetMaxOutputTokens 获取用户当前 max_output_tokens 设置（0 = 使用默认值 8192）
+	LLMGetMaxOutputTokens func(senderID string) int
+	// LLMSetMaxOutputTokens 设置用户 max_output_tokens
+	LLMSetMaxOutputTokens func(senderID string, maxTokens int) error
 	// LLMGetThinkingMode 获取用户当前 thinking_mode（"" = auto）
 	LLMGetThinkingMode func(senderID string) string
 	// LLMSetThinkingMode 设置用户 thinking_mode

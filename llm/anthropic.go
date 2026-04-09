@@ -28,6 +28,7 @@ type AnthropicLLM struct {
 	httpClient   *http.Client
 	models       []string
 	defaultModel string
+	maxTokens    int
 }
 
 // AnthropicConfig Anthropic 配置
@@ -35,6 +36,7 @@ type AnthropicConfig struct {
 	BaseURL      string // 默认 https://api.anthropic.com
 	APIKey       string
 	DefaultModel string
+	MaxTokens    int    // 0 = use default (8192)
 	UserAgent    string // 自定义 User-Agent（留空使用默认值）
 }
 
@@ -71,6 +73,7 @@ func NewAnthropicLLM(cfg AnthropicConfig) *AnthropicLLM {
 		},
 		models:       anthropicKnownModels,
 		defaultModel: cfg.DefaultModel,
+		maxTokens:    cfg.MaxTokens,
 	}
 	if a.defaultModel == "" && len(a.models) > 0 {
 		a.defaultModel = a.models[0]
@@ -98,6 +101,14 @@ func (a *AnthropicLLM) GetDefaultModel() string {
 		return a.models[0]
 	}
 	return ""
+}
+
+// getMaxTokens returns the configured max output tokens, falling back to the default.
+func (a *AnthropicLLM) getMaxTokens() int {
+	if a.maxTokens > 0 {
+		return a.maxTokens
+	}
+	return anthropicMaxTokens
 }
 
 // --- 请求/响应类型（Anthropic Messages API）---
@@ -370,7 +381,7 @@ func (a *AnthropicLLM) Generate(ctx context.Context, model string, messages []Ch
 	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
-		MaxTokens: anthropicMaxTokens,
+		MaxTokens: a.getMaxTokens(),
 		Messages:  anthropicMsgs,
 		System:    buildAnthropicSystem(messages),
 		Stream:    false,
@@ -498,7 +509,7 @@ func (a *AnthropicLLM) GenerateStream(ctx context.Context, model string, message
 	anthropicMsgs := toAnthropicMessages(messages)
 	body := anthropicReq{
 		Model:     model,
-		MaxTokens: anthropicMaxTokens,
+		MaxTokens: a.getMaxTokens(),
 		Messages:  anthropicMsgs,
 		System:    buildAnthropicSystem(messages),
 		Stream:    true,

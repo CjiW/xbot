@@ -267,6 +267,25 @@ func main() {
 				"max_iterations":     fmt.Sprintf("%d", app.cfg.Agent.MaxIterations),
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
+				"max_output_tokens": func() string {
+					for _, sub := range app.cfg.Subscriptions {
+						if sub.Active {
+							if sub.MaxOutputTokens > 0 {
+								return fmt.Sprintf("%d", sub.MaxOutputTokens)
+							}
+							break
+						}
+					}
+					return "8192" // default value used in llm/openai.go
+				}(),
+				"thinking_mode": func() string {
+					for _, sub := range app.cfg.Subscriptions {
+						if sub.Active {
+							return sub.ThinkingMode
+						}
+					}
+					return ""
+				}(),
 				"enable_auto_compress": func() string {
 					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
 						return "true"
@@ -384,6 +403,43 @@ func main() {
 			if v, ok := values["max_context_tokens"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 					app.cfg.Agent.MaxContextTokens = n
+				}
+			}
+			if v, ok := values["max_output_tokens"]; ok {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					for i := range app.cfg.Subscriptions {
+						if app.cfg.Subscriptions[i].Active {
+							app.cfg.Subscriptions[i].MaxOutputTokens = n
+							break
+						}
+					}
+					// Sync to cfg.LLM so createLLM picks it up on rebuild
+					app.cfg.LLM.MaxOutputTokens = n
+					// Rebuild LLM client with new max_output_tokens
+					if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
+						Attempts: 5,
+						Delay:    1 * time.Second,
+						MaxDelay: 30 * time.Second,
+					}); err == nil {
+						app.llmClient = newClient
+						if app.agentLoop != nil {
+							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+						}
+					} else {
+						log.Warnf("Failed to rebuild LLM client: %v", err)
+					}
+				}
+			}
+			if v, ok := values["thinking_mode"]; ok {
+				for i := range app.cfg.Subscriptions {
+					if app.cfg.Subscriptions[i].Active {
+						app.cfg.Subscriptions[i].ThinkingMode = v
+						break
+					}
+				}
+				// Sync to factory so next GetLLM picks up the change
+				if app.agentLoop != nil {
+					app.agentLoop.LLMFactory().SetDefaultThinkingMode(v)
 				}
 			}
 			if v, ok := values["enable_auto_compress"]; ok {
@@ -786,6 +842,8 @@ func syncLLMFromActiveSub(cfg *config.Config) {
 			cfg.LLM.BaseURL = sc.BaseURL
 			cfg.LLM.APIKey = sc.APIKey
 			cfg.LLM.Model = sc.Model
+			cfg.LLM.MaxOutputTokens = sc.MaxOutputTokens
+			cfg.LLM.ThinkingMode = sc.ThinkingMode
 			return
 		}
 	}
@@ -811,10 +869,11 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				apiKey = s.cfg.LLM.APIKey
 			}
 			llmCfg := config.LLMConfig{
-				Provider: provider,
-				BaseURL:  baseURL,
-				APIKey:   apiKey,
-				Model:    sc.Model,
+				Provider:        provider,
+				BaseURL:         baseURL,
+				APIKey:          apiKey,
+				Model:           sc.Model,
+				MaxOutputTokens: sc.MaxOutputTokens,
 			}
 			client, err := createLLM(llmCfg, llm.RetryConfig{
 				Attempts: 5,
@@ -825,6 +884,7 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}
 			s.factory.SetDefaults(client, sc.Model)
+			s.factory.SetDefaultThinkingMode(sc.ThinkingMode)
 			// Set active flag + derive cfg.LLM + save (all in one place)
 			for j := range s.cfg.Subscriptions {
 				s.cfg.Subscriptions[j].Active = (s.cfg.Subscriptions[j].ID == sub.ID)
@@ -907,12 +967,14 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
+			MaxTokens:    cfg.MaxOutputTokens,
 		})
 	case "anthropic":
 		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
+			MaxTokens:    cfg.MaxOutputTokens,
 		})
 	default:
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.Provider)

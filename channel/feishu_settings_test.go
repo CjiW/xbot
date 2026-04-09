@@ -331,7 +331,7 @@ func TestHandleSettingsAction_SetLLM(t *testing.T) {
 	f := newTestFeishuChannel()
 	var gotProvider, gotURL, gotKey, gotModel string
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string) error {
+		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
 			gotProvider = provider
 			gotURL = baseURL
 			gotKey = apiKey

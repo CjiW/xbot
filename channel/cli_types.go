@@ -68,6 +68,9 @@ func truncateToWidth(s string, maxWidth int) string {
 // ANSI escape sequences are preserved across wrapped segments.
 // Returns the original line if it fits within maxW.
 func hardWrapRunes(line string, maxW int) string {
+	if maxW <= 0 {
+		return line
+	}
 	if lipgloss.Width(line) <= maxW {
 		return line
 	}
@@ -191,6 +194,7 @@ type CLIProgressPayload struct {
 	ActiveTools    []CLIToolProgress
 	CompletedTools []CLIToolProgress
 	Thinking       string
+	Reasoning      string // model's reasoning/thinking chain (reasoning_content)
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
 	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）
@@ -233,6 +237,7 @@ type CLISubAgent struct {
 type cliIterationSnapshot struct {
 	Iteration int
 	Thinking  string
+	Reasoning string // model's reasoning/thinking chain (reasoning_content)
 	Tools     []CLIToolProgress
 }
 
@@ -257,6 +262,7 @@ func formatElapsed(ms int64) string {
 type HistoryIteration struct {
 	Iteration int
 	Thinking  string
+	Reasoning string
 	Tools     []CLIToolProgress
 }
 
@@ -272,6 +278,7 @@ type HistoryMessage struct {
 type iterSnapshot struct {
 	Iteration int            `json:"iteration"`
 	Thinking  string         `json:"thinking,omitempty"`
+	Reasoning string         `json:"reasoning,omitempty"`
 	Tools     []iterToolSnap `json:"tools"`
 }
 
@@ -293,17 +300,20 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 	var curIterTools []CLIToolProgress
 	var curIterIdx int
 	var curIterThinking string
+	var curIterReasoning string
 
 	finishCurIter := func() {
-		if len(curIterTools) > 0 || curIterThinking != "" {
+		if len(curIterTools) > 0 || curIterThinking != "" || curIterReasoning != "" {
 			pendingIters = append(pendingIters, HistoryIteration{
 				Iteration: curIterIdx,
 				Thinking:  curIterThinking,
+				Reasoning: curIterReasoning,
 				Tools:     curIterTools,
 			})
 		}
 		curIterTools = nil
 		curIterThinking = ""
+		curIterReasoning = ""
 	}
 
 	flushPending := func() {
@@ -349,6 +359,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 						iters = append(iters, HistoryIteration{
 							Iteration: snap.Iteration,
 							Thinking:  snap.Thinking,
+							Reasoning: snap.Reasoning,
 							Tools:     toolList,
 						})
 					}
@@ -373,6 +384,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 				finishCurIter()
 				curIterIdx++
 				curIterThinking = m.Content
+				curIterReasoning = m.ReasoningContent
 				for _, tc := range m.ToolCalls {
 					curIterTools = append(curIterTools, CLIToolProgress{
 						Name:      tc.Name,

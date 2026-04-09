@@ -116,7 +116,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				return m, nil, true
 			}
 			m.sendCancel()
-			return m, cmds, true
+			return m, []tea.Cmd{tickCmd()}, true
 		}
 		// 非处理状态：清空输入
 		if m.textarea.Value() != "" {
@@ -173,6 +173,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyUp:
+		// Viewport 不在底部时，方向键优先滚动 viewport（不触发 input history）
+		if !m.viewport.AtBottom() {
+			m.viewport.ScrollUp(1)
+			return m, nil, true
+		}
 		// §Q 消息队列：typing 时 ↑ 追回最后一条排队消息编辑
 		if m.panelMode == "" && m.typing && !m.inputReady && len(m.messageQueue) > 0 {
 			if !m.queueEditing && m.textarea.Value() == "" {
@@ -200,6 +205,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown:
+		// Viewport 不在底部时，方向键优先滚动 viewport
+		if !m.viewport.AtBottom() {
+			m.viewport.ScrollDown(1)
+			return m, nil, true
+		}
 		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
 			if m.inputHistoryIdx > 0 {
 				m.inputHistoryIdx--
@@ -338,6 +348,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 // handleProgressMsg processes progress update events from the agent.
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
+	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
 	m.progress = msg.payload
 	// Update bg task count from callback
@@ -378,10 +389,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 					prevIterTools = append(prevIterTools, t)
 				}
 			}
-			if len(prevIterTools) > 0 || prev.Thinking != "" {
+			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
 				snap := cliIterationSnapshot{
 					Iteration: m.lastSeenIteration,
 					Thinking:  prev.Thinking,
+					Reasoning: prev.Reasoning,
 					Tools:     prevIterTools,
 				}
 				m.iterationHistory = append(m.iterationHistory, snap)
@@ -440,11 +452,22 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 							}
 						}
 					}
-					if len(finalTools) > 0 {
-						m.iterationHistory = append(m.iterationHistory, cliIterationSnapshot{
-							Iteration: m.lastSeenIteration,
-							Tools:     finalTools,
-						})
+					snap := cliIterationSnapshot{
+						Iteration: m.lastSeenIteration,
+						Thinking:  msg.payload.Thinking,
+						Tools:     finalTools,
+					}
+					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
+					// > prev progress > PhaseDone payload
+					if m.lastReasoning != "" {
+						snap.Reasoning = m.lastReasoning
+					} else if prev != nil && prev.Reasoning != "" {
+						snap.Reasoning = prev.Reasoning
+					} else if msg.payload.Reasoning != "" {
+						snap.Reasoning = msg.payload.Reasoning
+					}
+					if len(finalTools) > 0 || snap.Thinking != "" || snap.Reasoning != "" {
+						m.iterationHistory = append(m.iterationHistory, snap)
 					}
 				}
 				// Generate tool_summary if we have iteration history.
@@ -466,11 +489,12 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Reset all iteration tracking state (always, even if handleAgentMessage ran first)
 			m.todos = nil
 			m.todosDoneCleared = false
-			m.endAgentTurn()
-			m.inputReady = true
-			// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
-			if len(m.messageQueue) > 0 {
-				m.needFlushQueue = true
+			m.endAgentTurn(turnID)
+			if turnID == m.agentTurnID {
+				m.inputReady = true
+				if len(m.messageQueue) > 0 {
+					m.needFlushQueue = true
+				}
 			}
 			m.relayoutViewport()
 		}

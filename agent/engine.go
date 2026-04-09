@@ -69,7 +69,8 @@ type RunConfig struct {
 	InitialCWD       string        // 初始当前工作目录（宿主机路径，用于 SubAgent 继承父 Agent 的 CWD）
 
 	// === 循环控制 ===
-	MaxIterations int // 0 = 使用默认值 100
+	MaxIterations   int // 0 = 使用默认值 100
+	MaxOutputTokens int // 0 = 使用 LLM client 默认值（8192）
 
 	// === 可选能力（nil = 不启用） ===
 
@@ -256,6 +257,7 @@ type RunOutput struct {
 type IterationSnapshot struct {
 	Iteration int                     `json:"iteration"`
 	Thinking  string                  `json:"thinking,omitempty"`
+	Reasoning string                  `json:"reasoning,omitempty"`
 	Tools     []IterationToolSnapshot `json:"tools"`
 }
 
@@ -354,7 +356,7 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 		response, err := s.callLLM(ctx, retryNotifyCtx)
 
-		if out := s.handleLLMError(ctx, err, i); out != nil {
+		if out := s.handleLLMError(ctx, err, response, i); out != nil {
 			return out
 		}
 

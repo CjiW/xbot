@@ -57,12 +57,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 	}
 
-	// Drain pending cmds queued by helpers (e.g. showTempStatus)
+	// Drain pending cmds queued by helpers (e.g. showTempStatus).
+	// Append to cmds so they get batched with any cmds produced by the
+	// switch cases below — do NOT return early here, or the tick chain
+	// breaks (e.g. a pending tempStatus clear would prevent cliTickMsg
+	// from emitting the next tickCmd).
 	if len(m.pendingCmds) > 0 {
-		cmds := m.pendingCmds
+		cmds = append(cmds, m.pendingCmds...)
 		m.pendingCmds = nil
-		// Return batched cmd via tea.Batch
-		return m, tea.Batch(cmds...)
 	}
 
 	// i18n: locale 变更通知
@@ -214,19 +216,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cliOutboundMsg:
 		// 收到 agent 回复
 		m.handleAgentMessage(msg.msg)
-		// §Q 刷新消息队列
-		if m.needFlushQueue {
-			m.needFlushQueue = false
-			cmds = append(cmds, m.flushMessageQueue())
-		}
+		// Queue flush is handled in cliTickMsg to ensure correct message ordering
+		// (reply must be appended before queued message is sent).
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
-		// §Q 刷新消息队列（PhaseDone 可能先于 cliOutboundMsg 到达）
-		if m.needFlushQueue {
-			m.needFlushQueue = false
-			cmds = append(cmds, m.flushMessageQueue())
-		}
+		// NOTE: do NOT flush queue here even if needFlushQueue is true!
+		// PhaseDone can arrive before cliOutboundMsg (the reply text). If we
+		// flush here, the queued message gets appended BEFORE the reply,
+		// producing wrong order: msg1, msg2, reply1 instead of msg1, reply1, msg2.
+		// Flush is handled in cliTickMsg instead (next tick after typing=false).
 
 	case cliTickMsg:
 		// Always refresh bg task count on tick so status bar updates immediately
@@ -245,6 +244,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		busy := m.typing || m.progress != nil
 		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
 			cmds = append(cmds, tickCmd())
+		} else if m.needFlushQueue && len(m.messageQueue) > 0 {
+			// Pending queue flush — use fast tick so the queued message
+			// is sent promptly (not waiting 3s for idleTickCmd).
+			cmds = append(cmds, tickCmd())
 		} else {
 			// Transition to idle: start low-frequency tick for placeholder rotation
 			cmds = append(cmds, idleTickCmd())
@@ -255,6 +258,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// chain that could break when m.progress briefly went nil.
 			m.ticker.tick()
 			m.updateViewportContent()
+		}
+
+		// §Q Flush message queue on tick (not in cliProgressMsg/cliOutboundMsg).
+		// This ensures the previous reply is already appended to m.messages before
+		// the queued message gets sent, producing correct order: msg1, reply1, msg2.
+		// Guard: only flush when NOT typing (previous turn fully complete).
+		if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
+			m.needFlushQueue = false
+			m.flushMessageQueue()
+			// Always break after flush. The wasTyping guard at the bottom of
+			// Update() detects the idle→typing transition and kicks off the
+			// tick chain. Without break, line 246 would also emit tickCmd().
+			break
 		}
 
 	case idleTickMsg:

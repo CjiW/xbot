@@ -332,6 +332,7 @@ func (s *runState) beginIteration(i int) {
 		s.structuredProgress.ActiveTools = nil
 		s.structuredProgress.CompletedTools = nil
 		s.structuredProgress.ThinkingContent = ""
+		s.structuredProgress.ReasoningContent = ""
 	}
 	if s.structuredProgress != nil && s.cfg.TodoManager != nil && s.sessionKey != "" {
 		todos := s.cfg.TodoManager.GetTodoItems(s.sessionKey)
@@ -479,7 +480,8 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 
 // handleLLMError handles errors from LLM calls. Returns a RunOutput if the
 // error should terminate the loop, nil if no error.
-func (s *runState) handleLLMError(ctx context.Context, err error, iteration int) *RunOutput {
+// partialResp may contain content accumulated before the stream error.
+func (s *runState) handleLLMError(ctx context.Context, err error, partialResp *llm.LLMResponse, iteration int) *RunOutput {
 	if err == nil {
 		return nil
 	}
@@ -495,7 +497,16 @@ func (s *runState) handleLLMError(ctx context.Context, err error, iteration int)
 			ToolsUsed: s.toolsUsed,
 		})
 	}
-	if s.lastContent != "" {
+	// Use partial response content if available (stream error with partial output),
+	// otherwise fall back to lastContent from previous successful iteration.
+	partialContent := ""
+	if partialResp != nil {
+		partialContent = llm.StripThinkBlocks(partialResp.Content)
+	}
+	if partialContent == "" {
+		partialContent = s.lastContent
+	}
+	if partialContent != "" {
 		log.Ctx(ctx).WithFields(log.Fields{
 			"agent_id":  s.cfg.AgentID,
 			"iteration": iteration + 1,
@@ -503,7 +514,7 @@ func (s *runState) handleLLMError(ctx context.Context, err error, iteration int)
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:   s.cfg.Channel,
 			ChatID:    s.cfg.ChatID,
-			Content:   s.lastContent + "\n\n> ⚠️ LLM 调用失败 (" + summarizeRetryError(err) + ")，以上为部分结果。",
+			Content:   partialContent + "\n\n> ⚠️ LLM 调用失败 (" + summarizeRetryError(err) + ")，以上为部分结果。",
 			ToolsUsed: s.toolsUsed,
 		})
 	}
@@ -566,10 +577,15 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				ToolsUsed: s.toolsUsed,
 			}), false
 		}
+		// length: output truncated due to max_tokens/max_completion_tokens limit
+		output := cleanContent
+		if response.FinishReason == llm.FinishReasonLength {
+			output += "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
+		}
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
-			Content:     cleanContent,
+			Content:     output,
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: s.waitingUser,
 		}), false
@@ -591,10 +607,21 @@ func (s *runState) recordAssistantMsg(ctx context.Context, response *llm.LLMResp
 	if s.structuredProgress != nil && cleanContent != "" {
 		s.structuredProgress.ThinkingContent = cleanContent
 	}
+	// Wire the model's reasoning chain (reasoning_content) to progress
+	// so the CLI can display the thinking process to the user.
+	if s.structuredProgress != nil && response.ReasoningContent != "" {
+		s.structuredProgress.ReasoningContent = response.ReasoningContent
+	}
+
+	// Push progress so CLI can display reasoning immediately after LLM completes,
+	// rather than waiting for the next notifyProgress call (e.g. executeToolCalls).
+	if s.autoNotify {
+		s.notifyProgress("")
+	}
 
 	assistantMsg := llm.ChatMessage{
 		Role:             "assistant",
-		Content:          response.Content,
+		Content:          strings.TrimRight(response.Content, " \t"),
 		ReasoningContent: response.ReasoningContent,
 		ToolCalls:        response.ToolCalls,
 	}
@@ -619,6 +646,19 @@ func (s *runState) maybeCompress(ctx context.Context) {
 			"msg_count":          len(s.messages),
 		}).Info("maybeCompress skipped: maxTokens=0")
 		return
+	}
+
+	// Reserve headroom for max_output_tokens: the API budget is shared
+	// between prompt (input) and completion (output). If we don't subtract
+	// maxOutputTokens, we risk exceeding the context window when the model
+	// generates a long response.
+	maxOutputTokens := s.cfg.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 8192 // defaultMaxOutputTokens
+	}
+	promptBudget := maxTokens - maxOutputTokens
+	if promptBudget <= 0 {
+		promptBudget = maxTokens / 2 // fallback: reserve half for output
 	}
 
 	// Token estimation strategy:
@@ -646,11 +686,13 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
 	}
 
-	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), maxTokens) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
+	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
 	log.Ctx(ctx).WithFields(log.Fields{
 		"total_tokens":       totalTokens,
-		"max_tokens":         maxTokens,
-		"threshold":          int(float64(maxTokens) * 0.75),
+		"max_context":        maxTokens,
+		"max_output_tokens":  maxOutputTokens,
+		"prompt_budget":      promptBudget,
+		"threshold":          int(float64(promptBudget) * 0.75),
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
 		"base_prompt_tokens": s.lastPromptTokens,
@@ -1074,6 +1116,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		snap := IterationSnapshot{
 			Iteration: iteration,
 			Thinking:  s.structuredProgress.ThinkingContent,
+			Reasoning: s.structuredProgress.ReasoningContent,
 			Tools:     make([]IterationToolSnapshot, len(s.structuredProgress.CompletedTools)),
 		}
 		for j, t := range s.structuredProgress.CompletedTools {

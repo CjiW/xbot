@@ -112,6 +112,13 @@ func (o *OpenAILLM) GetDefaultModel() string {
 	return ""
 }
 
+// MaxTokens returns the configured max output token limit.
+func (o *OpenAILLM) MaxTokens() int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.maxTokens
+}
+
 // LoadModelsFromAPI 从 OpenAI API 加载可用模型列表
 func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	log.Debug("[LLM] Loading models from OpenAI API")
@@ -575,8 +582,11 @@ func (o *OpenAILLM) Generate(ctx context.Context, model string, messages []ChatM
 
 		// BUG 5 fix: 某些 provider (DeepSeek) 会在 Content 中重复包含 reasoning_content。
 		// 如果 reasoning_content 非空且 Content 以 reasoning_content 开头，去除重复部分。
+		// 使用 TrimSpace 比较，避免前导空白（如 \n）导致漏判。
 		if resp.ReasoningContent != "" && resp.Content != "" {
-			if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
+			if strings.TrimSpace(resp.Content) == strings.TrimSpace(resp.ReasoningContent) {
+				resp.Content = ""
+			} else if strings.HasPrefix(resp.Content, resp.ReasoningContent) {
 				resp.Content = strings.TrimSpace(resp.Content[len(resp.ReasoningContent):])
 			}
 		}

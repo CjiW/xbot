@@ -37,6 +37,7 @@ func (m *cliModel) toggleToolSummary() {
 // startAgentTurn transitions the model into the "agent processing" state:
 // sets typing=true, updates placeholder, disables input, and resets progress.
 func (m *cliModel) startAgentTurn() {
+	m.agentTurnID++
 	m.typing = true
 	m.updatePlaceholder()
 	m.inputReady = false
@@ -44,12 +45,19 @@ func (m *cliModel) startAgentTurn() {
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.
-// This is the unified cleanup for both normal completion (handleAgentMessage)
-// and error/cancel paths (cliProgressMsg PhaseDone).
-func (m *cliModel) endAgentTurn() {
+// Takes the turnID that triggered this end. If a new turn has already
+// started (turnID != m.agentTurnID), the call is a no-op — this prevents
+// stale completion signals (cliOutboundMsg / PhaseDone) from killing a
+// new turn's animation.
+func (m *cliModel) endAgentTurn(turnID uint64) {
+	if turnID != m.agentTurnID {
+		return // new turn already started — stale signal, ignore
+	}
 	m.lastCompletedTools = nil
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
+	m.lastReasoning = ""
+	m.lastThinking = ""
 	m.typingStartTime = time.Time{}
 	m.progress = nil
 	m.typing = false
@@ -58,9 +66,9 @@ func (m *cliModel) endAgentTurn() {
 
 // flushMessageQueue sends the first queued message (if any) when input becomes ready.
 // Returns a tea.Cmd to send the message, or nil if queue is empty.
-func (m *cliModel) flushMessageQueue() tea.Cmd {
+func (m *cliModel) flushMessageQueue() {
 	if len(m.messageQueue) == 0 {
-		return nil
+		return
 	}
 	msg := m.messageQueue[0]
 	m.messageQueue = m.messageQueue[1:]
@@ -68,21 +76,20 @@ func (m *cliModel) flushMessageQueue() tea.Cmd {
 	m.queueEditBuf = ""
 	// Put message into textarea and trigger send
 	m.textarea.SetValue(msg)
-	return m.sendMessageFromQueue()
+	m.sendMessageFromQueue()
 }
 
 // sendMessageFromQueue sends the current textarea content as a queued message.
-func (m *cliModel) sendMessageFromQueue() tea.Cmd {
+// Does NOT return tickCmd() — the wasTyping guard at the bottom of Update()
+// detects the idle→typing transition and kicks off the tick chain.
+func (m *cliModel) sendMessageFromQueue() {
 	content := strings.TrimSpace(m.textarea.Value())
 	if content == "" {
-		return nil
+		return
 	}
 	m.textarea.Reset()
 	m.autoExpandInput()
-	m.sendToAgent(content)
-	// Start tick chain for the new agent turn — the previous chain may have
-	// already transitioned to idleTickCmd (3s) after endAgentTurn set typing=false.
-	return tickCmd()
+	m.sendMessage(content)
 }
 
 // applyThemeAndRebuild applies a theme change synchronously: sets the theme,

@@ -54,27 +54,27 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 				resp.FinishReason = ev.FinishReason
 			}
 		case EventError:
-				if ev.Error != "" {
-					// Return partial content accumulated so far instead of nil,
-					// so the engine can display what was received before the stream broke.
-					resp.Content = content.String()
-					resp.ReasoningContent = reasoningContent.String()
-					// Preserve any tool call deltas received before the error.
-					if len(toolCalls) > 0 {
-						maxIdx := -1
-						for idx := range toolCalls {
-							if idx > maxIdx {
-								maxIdx = idx
-							}
-						}
-						for i := 0; i <= maxIdx; i++ {
-							if tc, ok := toolCalls[i]; ok {
-								resp.ToolCalls = append(resp.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
-							}
+			if ev.Error != "" {
+				// Return partial content accumulated so far instead of nil,
+				// so the engine can display what was received before the stream broke.
+				resp.Content = content.String()
+				resp.ReasoningContent = reasoningContent.String()
+				// Preserve any tool call deltas received before the error.
+				if len(toolCalls) > 0 {
+					maxIdx := -1
+					for idx := range toolCalls {
+						if idx > maxIdx {
+							maxIdx = idx
 						}
 					}
-					return &resp, fmt.Errorf("stream error: %s", ev.Error)
+					for i := 0; i <= maxIdx; i++ {
+						if tc, ok := toolCalls[i]; ok {
+							resp.ToolCalls = append(resp.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
+						}
+					}
 				}
+				return &resp, fmt.Errorf("stream error: %s", ev.Error)
+			}
 		}
 	}
 

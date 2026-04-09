@@ -1077,20 +1077,14 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d iterations, %d calls)", iterCount, totalTools)))
 				toolSb.WriteString("\n")
 				for _, it := range msg.iterations {
-						iterPrefix := fmt.Sprintf("  [%d]", it.Iteration)
-						prefixW := lipgloss.Width(thinkingStyle.Render(iterPrefix + " "))
 						if it.Reasoning != "" {
 							for _, line := range strings.Split(it.Reasoning, "\n") {
 								line = strings.TrimSpace(line)
 								if line == "" {
 									continue
 								}
-								for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
-									if j == 0 {
-										toolSb.WriteString(thinkingStyle.Render(iterPrefix + " " + wl))
-									} else {
-										toolSb.WriteString(thinkingStyle.Render(s.ProgressIndent.Render("  │ ") + strings.Repeat(" ", prefixW-lipgloss.Width(s.ProgressIndent.Render("  │ "))) + wl))
-									}
+								for _, wl := range strings.Split(hardWrapRunes(line, contentWidth-4), "\n") {
+									toolSb.WriteString(thinkingStyle.Render("  │ " + wl))
 									toolSb.WriteString("\n")
 								}
 							}
@@ -1101,25 +1095,21 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 								if line == "" {
 									continue
 								}
-								for j, wl := range strings.Split(hardWrapRunes(line, contentWidth-prefixW), "\n") {
-									if j == 0 {
-										toolSb.WriteString(thinkingStyle.Render(iterPrefix + " " + wl))
-									} else {
-										toolSb.WriteString(thinkingStyle.Render(s.ProgressIndent.Render("  │ ") + strings.Repeat(" ", prefixW-lipgloss.Width(s.ProgressIndent.Render("  │ "))) + wl))
-									}
+								for _, wl := range strings.Split(hardWrapRunes(line, contentWidth-4), "\n") {
+									toolSb.WriteString(thinkingStyle.Render("  │ " + wl))
 									toolSb.WriteString("\n")
 								}
 							}
 						}
-					for _, tool := range it.Tools {
-						label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
-						elapsed := ""
-						if tool.Elapsed > 0 {
-							elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+						for _, tool := range it.Tools {
+							label, icon, sty := toolDisplayInfo(tool, toolItemStyle, toolErrorItemStyle)
+							elapsed := ""
+							if tool.Elapsed > 0 {
+								elapsed = fmt.Sprintf(" (%dms)", tool.Elapsed)
+							}
+							toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
+							toolSb.WriteString("\n")
 						}
-						toolSb.WriteString(sty.Render(fmt.Sprintf("    %s %s%s", icon, label, elapsed)))
-						toolSb.WriteString("\n")
-					}
 				}
 			} else {
 				toolSb.WriteString(toolHeaderStyle.Render(fmt.Sprintf("Tools (%d)", totalTools)))

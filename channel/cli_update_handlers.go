@@ -526,16 +526,9 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 		m.agentCount = m.agentCountFn()
 	}
 	m.renderCacheValid = false
-	// IMPORTANT: re-arm the fast tick chain *here* when an injected user message
-	// flips the UI from idle -> typing (common case: bg task completion arrives
-	// while the agent is otherwise idle). Do NOT rely solely on the generic
-	// `if m.typing && !wasTyping { tickCmd() }` logic at the bottom of Update():
-	// that transition can be bypassed by future early-return branches, which has
-	// repeatedly caused the whole TUI (spinner / elapsed timers / queue flush)
-	// to stop updating. The message that starts typing must enqueue its own tick.
-	//
-	// Keep this invariant local to the state transition source to prevent another
-	// recurrence of the “UI froze after bg task completion” class of bugs.
+	// NOTE: do NOT return tickCmd() here. The wasTyping guard at the bottom of
+	// Update() detects idle->typing and starts the tick chain.
+	// Returning tickCmd() here creates a duplicate chain (2x spinner speed).
 	// §16 触发 toast 通知（后台任务完成提示）
 	// 提取首行作为 toast 文本，避免内容过长
 	firstLine := msg.content
@@ -553,7 +546,7 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 	} else if strings.Contains(lower, "error") || strings.Contains(lower, "failed") {
 		icon = "✗"
 	}
-	return []tea.Cmd{tickCmd(), m.enqueueToast(firstLine, icon)}
+	return []tea.Cmd{m.enqueueToast(firstLine, icon)}
 }
 
 // handleUpdateCheck processes update check results.

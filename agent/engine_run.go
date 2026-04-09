@@ -1116,6 +1116,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		snap := IterationSnapshot{
 			Iteration: iteration,
 			Thinking:  s.structuredProgress.ThinkingContent,
+			Reasoning: s.structuredProgress.ReasoningContent,
 			Tools:     make([]IterationToolSnapshot, len(s.structuredProgress.CompletedTools)),
 		}
 		for j, t := range s.structuredProgress.CompletedTools {

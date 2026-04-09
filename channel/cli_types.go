@@ -275,6 +275,7 @@ type HistoryMessage struct {
 type iterSnapshot struct {
 	Iteration int            `json:"iteration"`
 	Thinking  string         `json:"thinking,omitempty"`
+	Reasoning string         `json:"reasoning,omitempty"`
 	Tools     []iterToolSnap `json:"tools"`
 }
 
@@ -296,17 +297,20 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 	var curIterTools []CLIToolProgress
 	var curIterIdx int
 	var curIterThinking string
+	var curIterReasoning string
 
 	finishCurIter := func() {
-		if len(curIterTools) > 0 || curIterThinking != "" {
+		if len(curIterTools) > 0 || curIterThinking != "" || curIterReasoning != "" {
 			pendingIters = append(pendingIters, HistoryIteration{
 				Iteration: curIterIdx,
 				Thinking:  curIterThinking,
+				Reasoning: curIterReasoning,
 				Tools:     curIterTools,
 			})
 		}
 		curIterTools = nil
 		curIterThinking = ""
+		curIterReasoning = ""
 	}
 
 	flushPending := func() {
@@ -352,6 +356,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 						iters = append(iters, HistoryIteration{
 							Iteration: snap.Iteration,
 							Thinking:  snap.Thinking,
+							Reasoning: snap.Reasoning,
 							Tools:     toolList,
 						})
 					}
@@ -376,6 +381,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 				finishCurIter()
 				curIterIdx++
 				curIterThinking = m.Content
+				curIterReasoning = m.ReasoningContent
 				for _, tc := range m.ToolCalls {
 					curIterTools = append(curIterTools, CLIToolProgress{
 						Name:      tc.Name,

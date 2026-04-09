@@ -257,6 +257,7 @@ type RunOutput struct {
 type IterationSnapshot struct {
 	Iteration int                     `json:"iteration"`
 	Thinking  string                  `json:"thinking,omitempty"`
+	Reasoning string                  `json:"reasoning,omitempty"`
 	Tools     []IterationToolSnapshot `json:"tools"`
 }
 

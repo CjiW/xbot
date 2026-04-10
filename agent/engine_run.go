@@ -865,10 +865,6 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 			s.progressLines = append(s.progressLines, fmt.Sprintf("> ⏳ %s ...", toolLabel))
 		}
 	}
-	if s.autoNotify && !s.batchProgressByIteration {
-		s.notifyProgress("")
-	}
-
 	execResults := make([]toolExecResult, len(response.ToolCalls))
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseToolExec
@@ -883,7 +879,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 			}
 		}
 	}
-	if s.autoNotify && s.batchProgressByIteration {
+	if s.autoNotify {
 		s.notifyProgress("")
 	}
 

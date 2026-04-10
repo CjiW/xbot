@@ -101,7 +101,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.String() == "ctrl+c" && m.typing {
 			m.closePanel()
 			m.sendCancel()
-			return m, tickCmd()
+			return m, nil
 		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
@@ -276,9 +276,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
 			m.needFlushQueue = false
 			m.flushMessageQueue()
-			// Always break after flush. The wasTyping guard at the bottom of
-			// Update() detects the idle→typing transition and kicks off the
-			// tick chain. Without break, line 246 would also emit tickCmd().
+			// Always break after flush so the tickCmd queued by startAgentTurn()
+			// (inside sendMessageFromQueue → sendMessage) gets picked up in cmds.
 			break
 		}
 
@@ -348,10 +347,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Kick off tick chain when processing just started
-	if m.typing && !wasTyping {
-		cmds = append(cmds, tickCmd())
-	}
+	// NOTE: tick chain is now started inside startAgentTurn() via pendingCmds.
+	// No need for a separate wasTyping guard here — all idle→typing transitions
+	// go through startAgentTurn() which guarantees tickCmd() is queued.
 
 	// 更新 viewport
 	m.viewport, cmd = m.viewport.Update(msg)

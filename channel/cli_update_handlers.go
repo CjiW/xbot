@@ -116,7 +116,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				return m, nil, true
 			}
 			m.sendCancel()
-			return m, []tea.Cmd{tickCmd()}, true
+			return m, nil, true
 		}
 		// 非处理状态：清空输入
 		if m.textarea.Value() != "" {
@@ -294,13 +294,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.viewport.GotoBottom()
 			m.newContentHint = false
 		}
-		// Start tick chain ONLY when transitioning from idle → busy.
-		// When already busy (wasTyping==true), the chain is already running.
-		// Emitting extra tickCmd() while busy creates duplicate chains:
-		// 2 chains → 4 → 8 → ... → CPU freeze within seconds.
-		if m.typing && !wasTyping {
-			cmds = append(cmds, tickCmd())
-		}
+		// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
+		// No need to emit tickCmd() here — doing so would create duplicate chains.
 		return m, cmds, true
 
 	case msg.Code == tea.KeyTab:
@@ -514,9 +509,14 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 		timestamp: time.Now(),
 		dirty:     true,
 	})
-	m.typing = true
-	m.inputReady = false
-	m.resetProgressState()
+	// Only start a new turn if the agent is idle.
+	// If already typing, the agent is processing this message (injectInbound was
+	// already called). Starting a new turn here would increment agentTurnID,
+	// causing the current turn's endAgentTurn to become a no-op (stale turnID).
+	// This produces two user messages without an assistant reply between them.
+	if !m.typing {
+		m.startAgentTurn()
+	}
 	// Refresh bg task count on injection
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()

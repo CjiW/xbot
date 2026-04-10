@@ -35,13 +35,20 @@ func (m *cliModel) toggleToolSummary() {
 }
 
 // startAgentTurn transitions the model into the "agent processing" state:
-// sets typing=true, updates placeholder, disables input, and resets progress.
+// sets typing=true, updates placeholder, disables input, resets progress,
+// and queues a tick command to ensure the spinner/progress chain starts.
+// This is the SINGLE source of truth for tick chain initiation — no other
+// code path should emit tickCmd() on idle→typing transition.
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
 	m.updatePlaceholder()
 	m.inputReady = false
 	m.resetProgressState()
+	// Queue tickCmd so the next Update() drain picks it up.
+	// This guarantees the tick chain starts regardless of any early-return
+	// paths in Update() — the cmd will be drained at the top of the next call.
+	m.pendingCmds = append(m.pendingCmds, tickCmd())
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.
@@ -84,8 +91,7 @@ func (m *cliModel) flushMessageQueue() {
 }
 
 // sendMessageFromQueue sends the current textarea content as a queued message.
-// Does NOT return tickCmd() — the wasTyping guard at the bottom of Update()
-// detects the idle→typing transition and kicks off the tick chain.
+// Does NOT return tickCmd() — startAgentTurn() inside sendMessage() handles that.
 func (m *cliModel) sendMessageFromQueue() {
 	content := strings.TrimSpace(m.textarea.Value())
 	if content == "" {
@@ -258,9 +264,9 @@ func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
 		m.panelOnAnswer(answers)
 	}
 	m.closePanel()
-	if m.typing {
-		return true, m, tickCmd()
-	}
+	// NOTE: tickCmd() is NOT returned here. If agent is typing, the tick chain
+	// is already running from startAgentTurn(). Returning tickCmd() while busy
+	// creates a duplicate chain → 2x spinner speed.
 	return true, m, nil
 }
 
@@ -270,9 +276,8 @@ func (m *cliModel) submitAskAnswers() (bool, tea.Model, tea.Cmd) {
 // and askuser panel (Esc/cancel) handlers.
 func (m *cliModel) closePanelAndResume() (bool, tea.Model, tea.Cmd) {
 	m.closePanel()
-	if m.typing {
-		return true, m, tickCmd()
-	}
+	// NOTE: do NOT return tickCmd() here — same reason as submitAskAnswers.
+	// The tick chain is already running if agent is typing.
 	return true, m, nil
 }
 

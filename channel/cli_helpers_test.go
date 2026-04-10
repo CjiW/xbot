@@ -514,8 +514,9 @@ func TestClosePanelAndResume_Typing(t *testing.T) {
 	if !cont {
 		t.Error("should return continue=true")
 	}
-	if cmd == nil {
-		t.Error("cmd should be non-nil (batch) when typing")
+	// tickCmd() is no longer returned — startAgentTurn() manages tick chain via pendingCmds
+	if cmd != nil {
+		t.Error("cmd should be nil — tick chain managed by startAgentTurn")
 	}
 	if model.panelMode != "" {
 		t.Errorf("panelMode = %q, want empty", model.panelMode)
@@ -712,8 +713,9 @@ func TestSubmitAskAnswers_Typing(t *testing.T) {
 	if !cont {
 		t.Error("should return continue=true")
 	}
-	if cmd == nil {
-		t.Error("cmd should be non-nil (batch) when typing")
+	// tickCmd() is no longer returned — startAgentTurn() manages tick chain via pendingCmds
+	if cmd != nil {
+		t.Error("cmd should be nil — tick chain managed by startAgentTurn")
 	}
 }
 

@@ -58,6 +58,13 @@ func (t *FileCreateTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 	if params.Path == "" {
 		return nil, fmt.Errorf("path is required")
 	}
+
+	// When permission control is disabled, ignore stale run_as/reason from LLM cache
+	if ctx.Ctx == nil || !isPermControlActiveFromCtx(ctx.Ctx) {
+		params.RunAs = ""
+		params.Reason = ""
+	}
+
 	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
 		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
@@ -177,6 +184,13 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 	if params.OldString == "" {
 		return nil, fmt.Errorf("old_string is required")
 	}
+
+	// When permission control is disabled, ignore stale run_as/reason from LLM cache
+	if ctx.Ctx == nil || !isPermControlActiveFromCtx(ctx.Ctx) {
+		params.RunAs = ""
+		params.Reason = ""
+	}
+
 	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
 		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}

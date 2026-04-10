@@ -298,15 +298,55 @@ func isSubAgentLine(line string) bool {
 // isStatusEmojiLine 检查行是否以状态 emoji 开头并包含冒号（子 Agent 格式化输出的特征）。
 // 注意：⏳ 不在此列表中 — ⏳ 仅用于工具占位行（> ⏳ ToolName: args），
 // 工具占位行由 isSubAgentLine 的其他分支处理（⏳ SubAgent [...] 专用匹配）。
+//
+// 为避免将 LLM 输出中引用的工具结果（如 "❌ Shell: cmd"）误判为子 Agent 行，
+// 冒号前的名称需通过 isPlausibleAgentRole 检查。
 func isStatusEmojiLine(line string) bool {
 	for _, prefix := range []string{"🔄 ", "✅ ", "❌ "} {
 		if strings.HasPrefix(line, prefix) {
-			if idx := strings.Index(line, ":"); idx > 0 {
-				return true
+			rest := line[len(prefix):]
+			if idx := strings.Index(rest, ":"); idx > 0 {
+				candidate := strings.TrimSpace(rest[:idx])
+				if isPlausibleAgentRole(candidate) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// isPlausibleAgentRole 检查名称是否像 SubAgent 角色名而非工具名。
+// SubAgent 角色名特征：
+//   - 全小写英文 + 连字符/下划线，如 "crown-prince", "ministry-works", "explore"
+//   - 中文角色名，如 "刑部", "工部", "中书省"
+//
+// 工具名特征：首字母大写英文，如 "Shell", "Read", "FileCreate", "SubAgent"。
+// 也排除路径（含 /）和其他非角色名模式。
+func isPlausibleAgentRole(name string) bool {
+	if name == "" {
+		return false
+	}
+	// 含路径分隔符 → 不是角色名
+	if strings.Contains(name, "/") {
+		return false
+	}
+	runes := []rune(name)
+	firstRune := runes[0]
+	// 首字母是大写 ASCII → 工具名（Shell, Read, FileCreate, SubAgent, Grep, ...）
+	if firstRune >= 'A' && firstRune <= 'Z' {
+		return false
+	}
+	// 首字母是非 ASCII（中文等）→ 角色名
+	if firstRune > 127 {
+		return true
+	}
+	// ASCII 小写开头 → 角色名（如 "explore", "crown-prince"）
+	// 但需排除含空格的句子
+	if strings.Contains(name, " ") {
+		return false
+	}
+	return true
 }
 
 // parseSubAgentLine 解析子 Agent 进度行，提取角色名和状态。
@@ -360,6 +400,12 @@ func parseSubAgentLine(line string) (childAgentStatus, bool) {
 	// 清理角色名：如果格式为 "SubAgent [actual-role]"，提取实际角色名
 	if strings.HasPrefix(role, "SubAgent [") && strings.HasSuffix(role, "]") {
 		role = role[10 : len(role)-1]
+	}
+
+	// Defense: reject tool names (PascalCase) parsed as agent roles.
+	// This prevents LLM content like "❌ Shell: cmd" from being misidentified.
+	if !isPlausibleAgentRole(role) {
+		return childAgentStatus{}, false
 	}
 
 	return childAgentStatus{Role: role, Status: status, Desc: desc}, true

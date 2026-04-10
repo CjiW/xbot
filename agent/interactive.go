@@ -232,6 +232,33 @@ func (a *Agent) SpawnInteractiveSession(
 		}
 
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithFields(log.Fields{
+						"role":     roleName,
+						"instance": instance,
+						"panic":    r,
+					}).Error("Background interactive session Run() panicked")
+					// Prevent zombie session: clean up state so send/spawn can proceed
+					placeholder.mu.Lock()
+					placeholder.running = false
+					placeholder.cancelCurrent = nil
+					placeholder.lastError = fmt.Sprintf("panic: %v", r)
+					placeholder.mu.Unlock()
+					runCancel()
+					// Notify parent
+					if notifyMgr != nil {
+						notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+							Key:      sessionKey,
+							Type:     tools.SubAgentBgNotifyCompleted,
+							Role:     roleName,
+							Instance: instance,
+							Content:  fmt.Sprintf("Panic: %v", r),
+						})
+					}
+				}
+			}()
+
 			out := Run(runCtx, cfg)
 			runCancel()
 

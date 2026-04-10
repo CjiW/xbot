@@ -54,20 +54,9 @@ LLM Response → executeToolCalls() → execOne() → toolExecutor()
   → HookChain.RunPre() → tool.Execute() → HookChain.RunPost()
 ```
 
-Two execution modes (`agent/engine_run.go`):
-- **Normal**: all tool calls serial
+Two modes (`agent/engine_run.go`):
+- **Normal**: all serial
 - **ReadWrite split**: read tools parallel (max 8), write tools serial, SubAgent concurrent
-
-Tool hooks (`tools/hook.go`): LoggingHook, TimingHook, ApprovalHook.
-Hook chain is shared across main Agent and all SubAgents (same instance pointer).
-
-## Agent Hierarchy
-
-`agent/engine_wire.go` — SubAgent inherits parent's HookChain, LLMFactory, skill catalog.
-SubAgents bypass the pipeline; system prompt built manually in `buildSubAgentRunConfig`.
-
-Three nesting levels: main Agent → SubAgent → SubSubAgent (max depth 6).
-Interactive SubAgents (`agent/interactive.go`) support multi-turn sessions with inspect/tail.
 
 ## Key Interfaces
 
@@ -88,3 +77,13 @@ Interactive SubAgents (`agent/interactive.go`) support multi-turn sessions with 
 - Tool calls: controlled by `maxConcurrency` (global semaphore) + read/write split
 - LLM calls: per-tenant semaphore (`llm/semaphore.go`)
 - Background tasks: goroutine + WaitGroup, drained on shutdown
+
+## Per-Package Details
+
+- `docs/agent/agent.md` — agent loop, middleware, SubAgent, context management
+- `docs/agent/llm.md` — LLM clients, streaming pitfalls, retry behavior
+- `docs/agent/tools.md` — built-in tools, hooks, sandbox types
+- `docs/agent/channel.md` — CLI, Feishu, Web, QQ adapters
+- `docs/agent/memory.md` — letta vs flat providers
+- `docs/agent/conventions.md` — error handling, logging, testing, naming
+- `docs/agent/gotchas.md` — cross-cutting pitfalls

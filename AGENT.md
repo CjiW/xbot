@@ -11,9 +11,14 @@
 
 ## Knowledge Files
 
-- `docs/agent/architecture.md` — package map, message flow, middleware pipeline, tool execution, agent hierarchy, key interfaces, concurrency model
-- `docs/agent/conventions.md` — error handling, logging, testing, interfaces, concurrency, naming, build
-- `docs/agent/gotchas.md` — tool schema pitfalls, LLM streaming bugs, SubAgent deadlocks, concurrency traps, SQLite patterns, Hugo docs site
+- `docs/agent/architecture.md` — package map, message flow, pipeline, key interfaces, concurrency
+- `docs/agent/agent.md` — agent loop, middleware, SubAgent, context management, masking
+- `docs/agent/llm.md` — LLM clients, streaming pitfalls, retry behavior
+- `docs/agent/tools.md` — built-in tools, hooks, sandbox types
+- `docs/agent/channel.md` — CLI, Feishu, Web, QQ adapters
+- `docs/agent/memory.md` — letta vs flat providers
+- `docs/agent/conventions.md` — error handling, logging, testing, naming, build
+- `docs/agent/gotchas.md` — cross-cutting pitfalls (per-package pitfalls in each file above)
 
 ## Project Context
 

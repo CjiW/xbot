@@ -3,7 +3,6 @@ title: "plan-subagent-interactive"
 weight: 200
 ---
 
-# SubAgent Interactive Mode
 
 > 状态：待审批
 > 日期：2026-03-17

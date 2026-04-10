@@ -3,7 +3,6 @@ title: "plan-subagent-memory"
 weight: 210
 ---
 
-# SubAgent 独立记忆系统
 
 > 状态：已完成（Phase 1-4 全部实现）
 > 日期：2026-03-17

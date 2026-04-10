@@ -3,7 +3,6 @@ title: "Core Memory Isolation"
 weight: 20
 ---
 
-# Core Memory 隔离设计
 
 ## 概述
 

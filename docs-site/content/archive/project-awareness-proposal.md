@@ -3,7 +3,6 @@ title: "project-awareness-proposal"
 weight: 230
 ---
 
-# 项目感知与知识库系统设计方案
 
 > **版本**: v3.0  
 > **日期**: 2026-03-20  

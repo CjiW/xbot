@@ -3,7 +3,6 @@ title: "Context Abstraction Design"
 weight: 10
 ---
 
-# xbot 上下文管理架构抽象与开关机制设计
 
 > 中书省拟 | 2026-03-19
 > 前置文档：[Phase 1 设计](context-management-design.md)、[Phase 2 设计](context-management-phase2-design.md)

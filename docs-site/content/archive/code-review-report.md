@@ -3,7 +3,6 @@ title: "code-review-report"
 weight: 50
 ---
 
-# xbot 全面代码审核报告
 
 **项目**: xbot — 多渠道 AI Agent 框架  
 **审核范围**: 全部 Go 源文件（197 个文件，60,465 行代码）  

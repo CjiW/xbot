@@ -3,7 +3,6 @@ title: "unified-agent-architecture"
 weight: 270
 ---
 
-# 统一 Agent 架构设计文档
 
 > 合并 Issue #127（Agent 架构统一）与 Issue #119（SubAgent 记忆隔离）的完整设计。
 > 核心理念：**InboundMessage / OutboundMessage 作为统一通信协议**，覆盖 IM↔Agent 和 Agent↔Agent 两种通信场景。

@@ -3,7 +3,6 @@ title: "Three Provinces Optimization [Completed]"
 weight: 10
 ---
 
-# 三省六部 Agent 体系优化方案
 
 ## 目标
 

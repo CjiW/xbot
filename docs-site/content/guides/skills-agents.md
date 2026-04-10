@@ -3,7 +3,6 @@ title: "Skills & Agents"
 weight: 30
 ---
 
-# Skills & Agents
 
 xbot supports extensible skills and role-based sub-agents, both defined as Markdown files.
 

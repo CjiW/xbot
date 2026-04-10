@@ -3,7 +3,6 @@ title: "context-management-research"
 weight: 90
 ---
 
-# xbot 上下文管理改进：调研报告
 
 > 中书省编撰 | 2026-03-19
 > 圣旨：调查先进agent上下文管理方案，改进xbot上下文管理功能

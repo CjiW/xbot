@@ -3,7 +3,6 @@ title: "2026-03-06-pluggable-memory-phase1"
 weight: 10
 ---
 
-# 可插拔记忆系统 Phase 1：接口抽取
 
 **目标：** 定义 `MemoryProvider` 接口，将现有 `TenantMemory` 包装为 `FlatMemory` 实现，所有调用方改为面向接口。行为完全不变，为后续分层记忆（Phase 2）和 Agentic Memory（Phase 4）打基础。
 

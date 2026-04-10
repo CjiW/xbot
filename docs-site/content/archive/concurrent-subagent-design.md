@@ -3,7 +3,6 @@ title: "concurrent-subagent-design"
 weight: 60
 ---
 
-# 并发 SubAgent 设计方案
 
 > 状态：v2 ✅ 门下省审核通过
 > v1 审核意见：驳回，4 个 P0 问题（EnableReadWriteSplit 默认值错误、并发分支设计不完整、信号量容量更新、LLM 类型判断）

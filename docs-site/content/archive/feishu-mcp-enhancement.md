@@ -3,7 +3,6 @@ title: "feishu-mcp-enhancement"
 weight: 110
 ---
 
-# 飞书 MCP 增强：Download + Card 迁移 + SendFile + Prompt 完善
 
 ## 目标
 

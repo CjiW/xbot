@@ -3,7 +3,6 @@ title: "Web Channel v2 Plan [Completed]"
 weight: 30
 ---
 
-# Web Channel V2 — 圆桌会议纪要
 
 > 日期：2026-03-27
 > 分支：`feat/web-fancy`（基于 master `aa7fa0c`）

@@ -3,7 +3,6 @@ title: "plan-fix-sandbox-tools"
 weight: 170
 ---
 
-# 修复沙箱内置工具（Glob / Grep / Read / Edit / Skill）文件查找问题
 
 > **版本**：v2（门下省审核修订版）
 > **修订内容**：补充 edit.go / skill.go 修复；安全加固升级为必做；补充边界测试

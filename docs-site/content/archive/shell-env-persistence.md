@@ -3,7 +3,6 @@ title: "shell-env-persistence"
 weight: 260
 ---
 
-# Shell 环境变量持久化方案
 
 ## 问题背景
 

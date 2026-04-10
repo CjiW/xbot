@@ -3,7 +3,6 @@ title: "Architecture"
 weight: 10
 ---
 
-# xbot 代码架构文档
 
 ## 全局架构图
 

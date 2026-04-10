@@ -3,7 +3,6 @@ title: "Fetch Tool Design"
 weight: 40
 ---
 
-# Fetch Tool 设计方案
 
 ## 1. 需求概述
 

@@ -3,7 +3,6 @@ title: "QQ & NapCat"
 weight: 40
 ---
 
-# QQ & NapCat Channels
 
 Two QQ integration options: native QQ Bot API and NapCat (OneBot 11 protocol).
 

@@ -3,7 +3,6 @@ title: "logs-tool-improvement-proposal"
 weight: 120
 ---
 
-# 日志系统重构 + Admin 权限控制方案
 
 > 中书省起草 | 第 4 版（响应门下省第 3 轮封驳）
 

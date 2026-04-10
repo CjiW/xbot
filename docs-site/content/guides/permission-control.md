@@ -3,7 +3,6 @@ title: "Permission Control"
 weight: 40
 ---
 
-# Permission Control
 
 OS user-based permission control for tool execution. Restricts which OS users the agent can execute commands as, with optional approval workflows for privileged operations.
 

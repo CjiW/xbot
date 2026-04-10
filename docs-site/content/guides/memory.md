@@ -3,7 +3,6 @@ title: "Memory"
 weight: 20
 ---
 
-# Memory System
 
 xbot supports pluggable memory providers. The agent uses memory to persist information across conversations, recall past interactions, and maintain user-specific context.
 

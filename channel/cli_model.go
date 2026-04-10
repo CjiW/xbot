@@ -297,12 +297,12 @@ type cliModel struct {
 	panelOnCancel        func()                          // callback on cancel
 
 	// --- Bg Tasks Panel ---
-	panelBgTasks    []*tools.BackgroundTask // cached task list
-	panelBgAgents   []panelAgentEntry       // cached agent list
-	panelBgCursor   int                     // selected item index (tasks first, then agents)
-	panelBgViewing  bool                    // true = viewing log of selected task
-	panelBgScroll   int                     // log view scroll offset
-	panelBgLogLines []string                // cached log lines for viewing
+	panelBgTasks   []*tools.BackgroundTask // cached task list
+	panelBgAgents  []panelAgentEntry       // cached agent list
+	panelBgCursor  int                     // selected item index (tasks first, then agents)
+	panelBgViewing bool                    // true = viewing log of selected task
+
+	panelBgLogLines []string // cached log lines for viewing
 
 	// --- Danger Zone Panel ---
 	panelDangerItems   []dangerItem

@@ -3,6 +3,7 @@ title: "Web Channel"
 weight: 30
 ---
 
+# Web Channel
 
 Browser-based chat interface with user authentication, REST API, WebSocket real-time communication, file upload, and marketplace support.
 

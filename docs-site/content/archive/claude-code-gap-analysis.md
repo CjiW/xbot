@@ -3,6 +3,7 @@ title: "claude-code-gap-analysis"
 weight: 30
 ---
 
+# xbot vs Claude Code: 架构深度分析与超越设计方案
 
 > **文档版本**: v1.0  
 > **日期**: 2026-03-22  

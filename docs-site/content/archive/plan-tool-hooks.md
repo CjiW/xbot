@@ -3,6 +3,7 @@ title: "plan-tool-hooks"
 weight: 220
 ---
 
+# Issue #98：工具执行 Hook 机制（PreToolUse / PostToolUse）
 
 ## 调研结果
 

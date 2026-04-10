@@ -3,6 +3,7 @@ title: "MCP Protocol"
 weight: 50
 ---
 
+# MCP (Model Context Protocol)
 
 xbot supports the [Model Context Protocol](https://modelcontextprotocol.io/) for integrating external tools. MCP servers expose tools that the agent can discover and use at runtime.
 

@@ -64,6 +64,18 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	parts = append(parts, "- 修改后运行测试验证")
 	parts = append(parts, "- 错误时先分析根因再修改")
 
+	// Detect file modification tools — remind agent to update project knowledge
+	modifiedFiles := false
+	for _, name := range roundToolNames {
+		switch name {
+		case "FileReplace", "FileCreate", "Shell":
+			modifiedFiles = true
+		}
+	}
+	if modifiedFiles {
+		parts = append(parts, "- 修改完成之后回复用户前激活knowledge management skill更新文档")
+	}
+
 	return "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
 }
 

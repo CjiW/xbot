@@ -3,6 +3,7 @@ title: "Tools"
 weight: 10
 ---
 
+# Built-in Tools
 
 xbot includes ~50 built-in tools the agent can call during conversations. This page provides a reference for all available tools.
 

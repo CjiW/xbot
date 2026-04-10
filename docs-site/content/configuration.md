@@ -3,6 +3,7 @@ title: "Configuration"
 weight: 60
 ---
 
+# Configuration Reference
 
 All configuration is done via environment variables or a `.env` file. See [`.env.example`](https://github.com/CjiW/xbot/blob/master/.env.example) for a complete template.
 

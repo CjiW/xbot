@@ -3,6 +3,7 @@ title: "plan-cli-optimization"
 weight: 160
 ---
 
+# 计划：CLI 全面优化
 
 > 生成时间：2026-04-01
 > 状态：待确认

@@ -8,6 +8,7 @@ title: "Web Channel Design"
 weight: 20
 ---
 
+# Web Channel 设计方案
 
 > 圆桌会议共识 — 4 位大臣（拥护者、魔鬼代言人、工程实践者、全局架构师）经 2 轮讨论后收敛
 

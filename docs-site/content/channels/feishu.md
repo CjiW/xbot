@@ -3,6 +3,7 @@ title: "Feishu Channel"
 weight: 20
 ---
 
+# Feishu (Lark) Channel
 
 WebSocket-based Feishu enterprise messaging bot. Supports interactive message cards, rich text, file/image handling, settings UI, and approval workflows.
 

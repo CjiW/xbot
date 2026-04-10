@@ -3,6 +3,7 @@ title: "context-management-phase2-design"
 weight: 80
 ---
 
+# xbot 上下文管理 Phase 2 优化设计
 
 > ⚠️ **演进说明（2026-03-27）**：本文档基于 Phase 1 的「执行视图隔离」原则设计，该原则已在后续重构（commit `45d6078`）中被调整——当前实现直接持久化 engine 产生的 assistant + tool 消息。本 Phase 2 方案中依赖该原则的部分可能需要修订。本文档状态仍为「待审核」。
 

@@ -3,6 +3,7 @@ title: "plan-background-shell-tasks"
 weight: 150
 ---
 
+# Plan: Background Shell Task Execution
 
 > Generated: 2026-04-02
 > Status: Pending Review

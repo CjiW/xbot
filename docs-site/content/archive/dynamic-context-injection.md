@@ -3,6 +3,7 @@ title: "dynamic-context-injection"
 weight: 100
 ---
 
+# Prompt 动态注入问题分析与优化方案
 
 > 状态：✅ 门下省审核通过（v2）  
 > 分支：feat/prompt-and-mask-refactor  

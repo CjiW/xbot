@@ -3,6 +3,7 @@ title: "settings-audit-report"
 weight: 250
 ---
 
+# `/settings` 命令全链路审核报告
 
 **审核方**：门下省  
 **日期**：2026-03-20  

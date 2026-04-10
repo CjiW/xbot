@@ -3,6 +3,7 @@ title: "CLI Channel"
 weight: 10
 ---
 
+# CLI Channel
 
 xbot 的终端交互界面，基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea) TUI 框架构建，提供现代化的命令行聊天体验。
 

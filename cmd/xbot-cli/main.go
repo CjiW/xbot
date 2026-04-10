@@ -70,13 +70,6 @@ func isFirstRun() bool {
 
 // newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
 func newCLIApp(configPath string) *cliApp {
-	// Phase 2 过渡：自动将 .env 迁移到 config.json
-	effectivePath := configPath
-	if effectivePath == "" {
-		effectivePath = config.ConfigFilePath()
-	}
-	config.MigrateFromDotenv(effectivePath) // nolint:errcheck
-
 	var cfg *config.Config
 	if configPath != "" {
 		cfg = config.LoadFromPath(configPath)

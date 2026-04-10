@@ -135,29 +135,29 @@ func migrateFromDotenv(dotenvPath, configPath string) error {
 
 ## 实施路径
 
-### Phase 1 — 清理（低风险，可立即执行）
+### Phase 1 — 清理（低风险，可立即执行） ✅
 
-- [ ] 提取 `applyDefaults(cfg)` 函数（将 `Load()` 中 625-748 行的默认值逻辑独立）
-- [ ] `WEB_USER_SERVER_RUNNER` 纳入 Config 结构体
-- [ ] `.env.example` 改为 `config.example.json`
-- [ ] 清理废弃注释（`SINGLE_USER` 等）
-- [ ] 添加 `--config` 命令行参数（`Load()` → `Load(configPath string)`）
-- [ ] `getAdminChatID()` 环境变量读取清理
+- [x] 提取 `applyDefaults(cfg)` 函数（将 `Load()` 中 625-748 行的默认值逻辑独立）
+- [x] `WEB_USER_SERVER_RUNNER` 纳入 Config 结构体
+- [x] `.env.example` 改为 `config.example.json`
+- [x] 清理废弃注释（`SINGLE_USER` 等）
+- [x] 添加 `--config` 命令行参数（`Load()` → `LoadFromPath(configPath string)`）
+- [x] `getAdminChatID()` 环境变量读取清理
 
-### Phase 2 — 过渡期（中风险）
+### Phase 2 — 过渡期（中风险） ✅
 
-- [ ] `applyEnvOverrides()` 标记 deprecated，日志 warn 提示迁移
-- [ ] CLI 首次运行时检测 `.env` 并自动合并到 config.json
-- [ ] 关键环境变量（`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_PROVIDER`）保留覆盖能力，标记 deprecated
-- [ ] 更新部署文档
+- [x] `applyEnvOverrides()` 标记 deprecated，日志 warn 提示迁移
+- [x] CLI 首次运行时检测 `.env` 并自动合并到 config.json
+- [x] 关键环境变量（`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_PROVIDER`）保留覆盖能力，标记 deprecated
+- [x] 更新部署文档
 
-### Phase 3 — 统一（破坏性变更）
+### Phase 3 — 统一（破坏性变更） ✅
 
-- [ ] 删除 godotenv 依赖
-- [ ] 删除 `applyEnvOverrides()`
-- [ ] 删除 `getAdminChatID()` 中的环境变量读取
-- [ ] `Load()` 简化为 `file → defaults`
-- [ ] 更新 Dockerfile / CI 配置
+- [x] 删除 godotenv 依赖
+- [x] 删除 `applyEnvOverrides()`
+- [x] `getAdminChatID()` 中的环境变量读取（已在 Phase 1 清理）
+- [x] `Load()` 简化为 `file → defaults`
+- [x] 更新 Dockerfile / CI 配置（无需修改，无 .env 引用）
 - [ ] CHANGELOG 记录 breaking change
 
 ## 审查记录（2026-04-11）

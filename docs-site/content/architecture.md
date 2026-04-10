@@ -495,6 +495,8 @@ type ToolHook interface {
 3. 环境变量覆盖（applyEnvOverrides）  ← 最高
 ```
 
+> ⚠️ **Deprecated**: `.env` 文件和环境变量覆盖将在未来版本中移除。请直接使用 `config.json` 作为唯一配置来源。参见 [Configuration](/configuration/) 获取最新的配置方式。
+
 ### 6.2 XBOT_HOME 与路径推导
 
 ```go

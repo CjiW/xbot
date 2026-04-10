@@ -5,6 +5,8 @@ weight: 60
 
 # Configuration Reference
 
+> ⚠️ **Deprecated**: 环境变量配置将在未来版本中移除。请迁移到 `config.json`。参见 [Configuration](/configuration/) 获取最新的配置方式。
+
 All configuration is done via environment variables or a `.env` file. See [`.env.example`](https://github.com/CjiW/xbot/blob/master/.env.example) for a complete template.
 
 ## LLM

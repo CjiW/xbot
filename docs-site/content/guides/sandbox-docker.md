@@ -23,6 +23,8 @@ All three modes can coexist simultaneously. The router decides which backend to 
 4. Fallback → Docker (if enabled), then None
 
 > **Note:** Web users (`web-*` IDs) are blocked from all sandbox access unless `WEB_USER_SERVER_RUNNER=true` is set. They must connect their own remote runner.
+>
+> ⚠️ **Deprecated**: `WEB_USER_SERVER_RUNNER` 环境变量将在未来版本中移除。请迁移到 `config.json` 中的 `sandbox.allow_web_user_server_runner` 字段。参见 [Configuration](/configuration/) 获取最新的配置方式。
 
 ---
 
@@ -40,6 +42,8 @@ sudo usermod -aG docker $USER  # re-login required
 ```
 
 ### Configuration
+
+> ⚠️ **Deprecated**: 环境变量配置将在未来版本中移除。请迁移到 `config.json`。参见 [Configuration](/configuration/) 获取最新的配置方式。
 
 ```bash
 # .env file
@@ -229,6 +233,8 @@ Runners can optionally serve as **LLM proxies** — when a runner has local LLM 
 
 ### Sandbox Environment Variables
 
+> ⚠️ **Deprecated**: 以下环境变量将在未来版本中移除。请迁移到 `config.json`。参见 [Configuration](/configuration/) 获取最新的配置方式。
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SANDBOX_MODE` | `none` | Primary sandbox mode: `none`, `docker`, or `remote` |
@@ -239,7 +245,7 @@ Runners can optionally serve as **LLM proxies** — when a runner has local LLM 
 | `SANDBOX_WS_PORT` | `8080` | WebSocket listen port for remote runner connections |
 | `SANDBOX_AUTH_TOKEN` | | Global auth token for runner authentication (when not using per-user tokens) |
 | `SANDBOX_PUBLIC_URL` | | Public URL of the server, used to construct runner connect commands |
-| `WEB_USER_SERVER_RUNNER` | `false` | Allow web users to use server-side Docker sandbox (default: denied) |
+| `WEB_USER_SERVER_RUNNER` | `false` | Allow web users to use server-side Docker sandbox (default: denied) — 迁移至 `config.json` 的 `sandbox.allow_web_user_server_runner` |
 
 ### Mode Combinations
 

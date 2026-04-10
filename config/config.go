@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -18,6 +19,9 @@ func init() {
 		slog.Debug("failed to load .env file, using environment variables only", "error", err)
 	}
 }
+
+// applyEnvOverridesOnce 确保 deprecation 警告只输出一次。
+var applyEnvOverridesOnce sync.Once
 
 // OAuthConfig OAuth 配置
 type OAuthConfig struct {
@@ -308,7 +312,21 @@ func setSecondsEnv(key string, dst *time.Duration) {
 }
 
 // applyEnvOverrides 用环境变量覆盖配置（与 README / .env.example 中的变量名一致，优先级高于 config.json）。
+//
+// Deprecated: 环境变量覆盖将在未来版本中移除，请将所有配置迁移到 config.json。
+// 使用 xbot-cli --config 或直接编辑 ~/.xbot/config.json。
 func applyEnvOverrides(cfg *Config) {
+	applyEnvOverridesOnce.Do(func() {
+		// 检测关键 LLM 环境变量是否被设置，输出更具体的迁移提示
+		keys := []string{"LLM_API_KEY", "LLM_BASE_URL", "LLM_PROVIDER"}
+		for _, k := range keys {
+			if v := os.Getenv(k); v != "" {
+				slog.Warn("environment variable override is deprecated, please migrate to config.json",
+					"var", k, "see", "https://github.com/CjiW/xbot/blob/master/docs/plans/unified-config-design.md")
+				break // 只提示一次
+			}
+		}
+	})
 	if v := os.Getenv("SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
@@ -607,6 +625,46 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TAVILY_API_KEY"); v != "" {
 		cfg.TavilyAPIKey = v
 	}
+}
+
+// MigrateFromDotenv 检测 .env 文件是否存在，如存在则将其中有效变量合并到 config.json。
+// 返回 true 表示执行了迁移。
+//
+// 过渡期 init() 中的 godotenv.Load 还未移除，.env 文件在程序启动时已经被加载到环境变量中，
+// 因此这里直接复用 applyEnvOverrides 来获取 .env 中的配置值。
+func MigrateFromDotenv(configPath string) bool {
+	// 检查 .env 文件是否存在（当前工作目录）
+	if _, err := os.Stat(".env"); os.IsNotExist(err) {
+		return false
+	}
+
+	slog.Info("found .env file, migrating to config.json...")
+
+	// 加载已有 config（或创建空 Config）
+	cfg := LoadFromFile(configPath)
+	if cfg == nil {
+		cfg = &Config{}
+	}
+
+	// .env 已通过 init() 加载到环境变量，直接用 applyEnvOverrides 合并
+	applyEnvOverrides(cfg)
+	applyDefaults(cfg)
+
+	// 保存
+	if err := SaveToFile(configPath, cfg); err != nil {
+		slog.Error("failed to save migrated config", "error", err)
+		return false
+	}
+
+	// 重命名 .env -> .env.migrated
+	backup := ".env.migrated"
+	if err := os.Rename(".env", backup); err != nil {
+		slog.Warn("failed to rename .env to .env.migrated", "error", err)
+	} else {
+		slog.Info(".env migrated to config.json successfully", "path", configPath, "backup", backup)
+	}
+
+	return true
 }
 
 // EffectiveEnableAutoCompress 返回是否启用自动压缩；config.json 省略该字段时与文档默认一致，为 true。

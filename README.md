@@ -245,6 +245,8 @@ Set via `MEMORY_PROVIDER=flat` or `MEMORY_PROVIDER=letta`. Letta also requires e
 
 ## Configuration
 
+> ⚠️ **Deprecated**: 环境变量配置将在未来版本中移除。请迁移到 `config.json`。参见 [docs-site Configuration](https://cjiw.github.io/xbot/configuration/) 获取最新的配置方式。
+
 All config via environment variables or `.env` file. See [`.env.example`](.env.example) for a complete template.
 
 ### LLM
@@ -305,6 +307,8 @@ All config via environment variables or `.env` file. See [`.env.example`](.env.e
 ## Deployment
 
 ### Docker
+
+> ⚠️ **Deprecated**: 以下 Docker 部署示例使用环境变量配置，将在未来版本中改为挂载 `config.json`。
 
 ```bash
 docker run -d --name xbot --restart unless-stopped \

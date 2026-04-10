@@ -93,3 +93,5 @@ The web frontend is built with:
 - Web users (`web-*` IDs) are blocked from server-side sandbox access by default
 - They must connect their own remote runner for tool execution
 - Override with `WEB_USER_SERVER_RUNNER=true` (not recommended for production)
+
+> ⚠️ **Deprecated**: `WEB_USER_SERVER_RUNNER` 环境变量将在未来版本中移除。请迁移到 `config.json` 中的 `sandbox.allow_web_user_server_runner` 字段。参见 [Configuration](/configuration/) 获取最新的配置方式。

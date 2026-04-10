@@ -14,6 +14,14 @@ import (
 
 // --- §12 Interactive Panel ---
 
+// panelAgentEntry represents an interactive sub-agent session in the unified panel.
+type panelAgentEntry struct {
+	Role       string // role name (e.g. "explore")
+	Instance   string // instance ID
+	Running    bool   // true = currently executing
+	Background bool   // true = background mode
+}
+
 // openSettingsPanel activates the settings panel overlay.
 func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[string]string, onSubmit func(map[string]string)) {
 	m.panelMode = "settings"
@@ -149,8 +157,9 @@ func (m *cliModel) closePanel() {
 	m.panelTab = 0
 	m.panelOptSel = nil
 	m.panelOptCursor = nil
-	// Bg tasks panel cleanup
+	// Bg tasks/agents panel cleanup
 	m.panelBgTasks = nil
+	m.panelBgAgents = nil
 	m.panelBgViewing = false
 	m.panelBgScroll = 0
 	m.panelBgLogLines = nil
@@ -169,23 +178,35 @@ func (m *cliModel) closePanel() {
 	m.relayoutViewport()
 }
 
-// openBgTasksPanel opens the background task management panel.
+// openBgTasksPanel opens the unified tasks & agents management panel.
 func (m *cliModel) openBgTasksPanel() {
-	if m.channel == nil || m.channel.bgTaskMgr == nil {
-		return
-	}
 	m.panelMode = "bgtasks"
 	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
-	m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
+
+	// Fetch tasks
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
+	} else {
+		m.panelBgTasks = nil
+	}
+
+	// Fetch agents
+	if m.agentListFn != nil {
+		m.panelBgAgents = m.agentListFn()
+	} else {
+		m.panelBgAgents = nil
+	}
+
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
 	m.panelBgScroll = 0
 	m.panelBgLogLines = nil
 	// Clamp cursor
-	if len(m.panelBgTasks) == 0 {
+	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
+	if totalItems == 0 {
 		m.panelBgCursor = -1
-	} else if m.panelBgCursor >= len(m.panelBgTasks) {
-		m.panelBgCursor = len(m.panelBgTasks) - 1
+	} else if m.panelBgCursor >= totalItems {
+		m.panelBgCursor = totalItems - 1
 	}
 }
 
@@ -196,6 +217,11 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	if m.channel != nil && m.channel.bgTaskMgr != nil {
 		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
 	}
+	// Refresh agent list
+	if m.agentListFn != nil {
+		m.panelBgAgents = m.agentListFn()
+	}
+	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
 
 	// Log viewing sub-mode
 	if m.panelBgViewing {
@@ -256,22 +282,39 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 
 	case msg.Code == tea.KeyDown || msg.String() == "ctrl+j":
-		if m.panelBgCursor < len(m.panelBgTasks)-1 {
+		if m.panelBgCursor < totalItems-1 {
 			m.panelBgCursor++
 		}
 		return true, m, nil
 
 	case msg.Code == tea.KeyEnter:
-		// View log of selected task
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
+			// Task entry: view output log
 			task := m.panelBgTasks[m.panelBgCursor]
-			// Output is written atomically by the task runner, safe to read
 			m.panelBgLogLines = splitLines(task.Output)
 			if len(m.panelBgLogLines) == 0 {
 				m.panelBgLogLines = []string{"(no output)"}
 			}
 			m.panelBgViewing = true
 			m.panelBgScroll = 0
+		} else if m.panelBgCursor >= len(m.panelBgTasks) && m.panelBgAgents != nil {
+			// Agent entry: inspect recent activity
+			agentIdx := m.panelBgCursor - len(m.panelBgTasks)
+			if agentIdx < len(m.panelBgAgents) {
+				ag := m.panelBgAgents[agentIdx]
+				if m.agentInspectFn != nil {
+					result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
+					if err != nil {
+						m.panelBgLogLines = []string{"Error: " + err.Error()}
+					} else if result == "" {
+						m.panelBgLogLines = []string{"(no activity yet)"}
+					} else {
+						m.panelBgLogLines = splitLines(result)
+					}
+					m.panelBgViewing = true
+					m.panelBgScroll = 0
+				}
+			}
 		}
 		return true, m, nil
 
@@ -287,12 +330,18 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 					}
 					// Refresh list after kill
 					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-					if m.panelBgCursor >= len(m.panelBgTasks) {
-						m.panelBgCursor = len(m.panelBgTasks) - 1
+					newTotal := len(m.panelBgTasks) + len(m.panelBgAgents)
+					if m.panelBgCursor >= newTotal {
+						m.panelBgCursor = newTotal - 1
 					}
 					return true, m, nil
 				}
 			}
+		}
+		// Agent entries: Del shows hint — agents are managed via SubAgent tool
+		if m.panelBgCursor >= len(m.panelBgTasks) {
+			m.showTempStatus("Use SubAgent action=\"unload\" or \"interrupt\" to control agents")
+			return true, m, m.clearTempStatusCmd()
 		}
 		return true, m, nil
 	}
@@ -308,7 +357,7 @@ func (m *cliModel) viewBgTasksPanel() string {
 	return m.viewBgTaskList()
 }
 
-// viewBgTaskList renders the task list view.
+// viewBgTaskList renders the unified task + agent list view.
 func (m *cliModel) viewBgTaskList() string {
 	// §20 使用缓存样式
 	s := &m.styles
@@ -322,10 +371,13 @@ func (m *cliModel) viewBgTaskList() string {
 	sb.WriteString(help)
 	sb.WriteString("\n")
 
-	if len(m.panelBgTasks) == 0 {
+	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
+	if totalItems == 0 {
 		sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
 	} else {
-		for i, task := range m.panelBgTasks {
+		idx := 0
+		// Render tasks
+		for _, task := range m.panelBgTasks {
 			elapsed := time.Since(task.StartedAt).Round(time.Second)
 			if task.FinishedAt != nil {
 				elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
@@ -343,7 +395,7 @@ func (m *cliModel) viewBgTaskList() string {
 			}
 
 			prefix := "  "
-			if i == m.panelBgCursor {
+			if idx == m.panelBgCursor {
 				prefix = cursorStyle.Render("▸")
 			}
 
@@ -361,6 +413,41 @@ func (m *cliModel) viewBgTaskList() string {
 			)
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			idx++
+		}
+
+		// Render agents
+		for _, ag := range m.panelBgAgents {
+			statusIcon := "●"
+			statusStyle := s.ProgressRunning
+			if !ag.Running {
+				statusIcon = "◦"
+				statusStyle = s.ProgressDone
+			}
+
+			prefix := "  "
+			if idx == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
+
+			mode := "fg"
+			if ag.Background {
+				mode = "bg"
+			}
+
+			label := fmt.Sprintf("[agent] %s/%s (%s)", ag.Role, ag.Instance, mode)
+			if len(label) > 55 {
+				label = label[:52] + "..."
+			}
+
+			line := fmt.Sprintf("%s %s  %s",
+				prefix,
+				statusStyle.Render(statusIcon),
+				label,
+			)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			idx++
 		}
 	}
 
@@ -960,8 +1047,9 @@ func (m *cliModel) collectAskAnswers() map[string]string {
 		var parts []string
 		if hasOpts {
 			if sel, ok := m.panelOptSel[i]; ok && len(sel) > 0 {
-				for idx := range sel {
-					if idx < len(item.Options) {
+				// Iterate by index order (maps are unordered in Go)
+				for idx := 0; idx < len(item.Options); idx++ {
+					if sel[idx] {
 						parts = append(parts, item.Options[idx])
 					}
 				}

@@ -101,7 +101,7 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.String() == "ctrl+c" && m.typing {
 			m.closePanel()
 			m.sendCancel()
-			return m, tickCmd()
+			return m, nil
 		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
@@ -196,6 +196,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoExpandInput()
 		return m, nil
 	}
+	// Ctrl+J 换行 — 直接 InsertString 绕过 textarea 内部 atContentLimit 检查，
+	// 否则到达 MaxHeight 后 textarea 的 InsertNewline keymap 会静默丢弃换行。
+	if isCtrlJ(msg) {
+		m.textarea.InsertString("\n")
+		m.autoExpandInput()
+		return m, nil
+	}
 	// Ctrl+O 切换 tool summary 展开/折叠（CSI u 协议兼容层，kitty/Ghostty 等）
 	if isCtrlO(msg) {
 		m.toggleToolSummary()
@@ -239,11 +246,19 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderCacheValid = false
 			}
 		}
+		// Refresh agent count on tick
+		if m.agentCountFn != nil {
+			prev := m.agentCount
+			m.agentCount = m.agentCountFn()
+			if m.agentCount != prev {
+				m.renderCacheValid = false
+			}
+		}
 		// Schedule next tick when agent is active or bg tasks are running.
 		// IMPORTANT: only emit ONE tickCmd to prevent exponential message growth
 		// (two tickCmd() would double the message count every 100ms → CPU explosion).
 		busy := m.typing || m.progress != nil
-		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || busy {
+		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || (m.agentCountFn != nil && m.agentCount > 0) || busy {
 			cmds = append(cmds, tickCmd())
 		} else if m.needFlushQueue && len(m.messageQueue) > 0 {
 			// Pending queue flush — use fast tick so the queued message
@@ -268,9 +283,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.needFlushQueue && !m.typing && len(m.messageQueue) > 0 {
 			m.needFlushQueue = false
 			m.flushMessageQueue()
-			// Always break after flush. The wasTyping guard at the bottom of
-			// Update() detects the idle→typing transition and kicks off the
-			// tick chain. Without break, line 246 would also emit tickCmd().
+			// Always break after flush so the tickCmd queued by startAgentTurn()
+			// (inside sendMessageFromQueue → sendMessage) gets picked up in cmds.
 			break
 		}
 
@@ -340,10 +354,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Kick off tick chain when processing just started
-	if m.typing && !wasTyping {
-		cmds = append(cmds, tickCmd())
-	}
+	// NOTE: tick chain is now started inside startAgentTurn() via pendingCmds.
+	// No need for a separate wasTyping guard here — all idle→typing transitions
+	// go through startAgentTurn() which guarantees tickCmd() is queued.
 
 	// 更新 viewport
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -396,25 +409,11 @@ const (
 )
 
 func (m *cliModel) autoExpandInput() {
-	// DynamicHeight manages textarea height based on visual lines.
-	// We just need to sync the viewport and clamp textarea if terminal is too small.
-	taHeight := m.textarea.Height()
-	if taHeight < minTaHeight {
-		taHeight = minTaHeight
-	}
-	// Clamp textarea height to available space (don't let it push viewport below minimum)
-	availableForTA := m.height - 3 - 2 // 3 = title+status+footer, 2 = ta border
-	if m.todos != nil {
-		availableForTA -= 1 + len(m.todos)
-	}
-	maxAllowed := availableForTA - 3 // 3 = minimum viewport
-	if maxAllowed < minTaHeight {
-		maxAllowed = minTaHeight
-	}
-	if taHeight > maxAllowed {
-		taHeight = maxAllowed
-		m.textarea.SetHeight(taHeight)
-	}
+	// Bubble Tea textarea owns its own height when DynamicHeight is enabled.
+	// Do NOT force SetHeight here: once the textarea reaches MaxHeight it switches
+	// from grow mode to internal scrolling, and external SetHeight calls can break
+	// newline insertion / cursor behavior exactly at that boundary.
+	// We only keep the outer viewport in sync with the textarea's current height.
 	expectedVP := m.layoutViewportHeight()
 	currentVP := m.viewport.Height()
 	if currentVP != expectedVP {

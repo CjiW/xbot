@@ -404,6 +404,12 @@ func (a *Agent) buildMainRunConfig(
 		UnloadFn: func(ctx context.Context, roleName, instance string) error {
 			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID, instance)
 		},
+		InterruptFn: func(ctx context.Context, roleName, instance string) error {
+			return a.InterruptInteractiveSession(ctx, roleName, channel, chatID, instance)
+		},
+		InspectFn: func(ctx context.Context, roleName, instance string, tail int) (string, error) {
+			return a.InspectInteractiveSession(ctx, roleName, channel, chatID, instance, tail)
+		},
 	}
 
 	// Memory tools for compaction — allows the compaction LLM to archive
@@ -712,6 +718,12 @@ func (a *Agent) buildSubAgentRunConfig(
 		UnloadFn: func(ctx context.Context, roleName, instance string) error {
 			return a.UnloadInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID, instance)
 		},
+		InterruptFn: func(ctx context.Context, roleName, instance string) error {
+			return a.InterruptInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID, instance)
+		},
+		InspectFn: func(ctx context.Context, roleName, instance string, tail int) (string, error) {
+			return a.InspectInteractiveSession(ctx, roleName, parentCtx.Channel, parentCtx.ChatID, instance, tail)
+		},
 	}
 
 	return cfg
@@ -770,6 +782,12 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		SendFn:  a.SendToInteractiveSession,
 		UnloadFn: func(ctx context.Context, roleName, instance string) error {
 			return a.UnloadInteractiveSession(ctx, roleName, channel, chatID, instance)
+		},
+		InterruptFn: func(ctx context.Context, roleName, instance string) error {
+			return a.InterruptInteractiveSession(ctx, roleName, channel, chatID, instance)
+		},
+		InspectFn: func(ctx context.Context, roleName, instance string, tail int) (string, error) {
+			return a.InspectInteractiveSession(ctx, roleName, channel, chatID, instance, tail)
 		},
 	}
 

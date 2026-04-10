@@ -160,10 +160,11 @@ type RunConfig struct {
 	// TodoManager TODO 管理器（可选）
 	TodoManager TodoManagerProvider
 
-	// DrainBgNotifications is called between iterations to check for completed bg tasks.
-	// Returns tasks that should be injected as tool results into the current Run loop.
+	// DrainBgNotifications is called between iterations to check for completed bg tasks
+	// and bg subagent notifications. Returns notifications that should be injected
+	// as tool results into the current Run loop.
 	// Returns nil when no notifications are pending. Called on each iteration.
-	DrainBgNotifications func() []*tools.BackgroundTask
+	DrainBgNotifications func() []tools.BgNotification
 
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
@@ -197,6 +198,11 @@ type RunConfig struct {
 
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
+
+	// OnIterationSnapshot is called after each iteration snapshot is created.
+	// Used by background interactive sessions to incrementally expose iteration
+	// history for real-time inspect, instead of waiting for Run() to finish.
+	OnIterationSnapshot func(snap IterationSnapshot)
 }
 
 // TodoManagerProvider 提供 TODO 状态查询和清理
@@ -208,9 +214,11 @@ type TodoManagerProvider interface {
 
 // InteractiveCallbacks 主 Agent 提供给 buildToolContext 的 interactive 回调。
 type InteractiveCallbacks struct {
-	SpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	SendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	UnloadFn func(ctx context.Context, roleName, instance string) error
+	SpawnFn     func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	SendFn      func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	UnloadFn    func(ctx context.Context, roleName, instance string) error
+	InterruptFn func(ctx context.Context, roleName, instance string) error
+	InspectFn   func(ctx context.Context, roleName, instance string, tail int) (string, error)
 }
 
 // ToolContextExtras Letta 记忆相关的 ToolContext 扩展字段。
@@ -436,9 +444,11 @@ type spawnAgentAdapter struct {
 	senderID string
 
 	// Interactive mode callbacks (nil = interactive not supported)
-	interactiveSpawnFn  func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	interactiveSendFn   func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
-	interactiveUnloadFn func(ctx context.Context, roleName, instance string) error
+	interactiveSpawnFn     func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	interactiveSendFn      func(ctx context.Context, roleName string, msg bus.InboundMessage) (*bus.OutboundMessage, error)
+	interactiveUnloadFn    func(ctx context.Context, roleName, instance string) error
+	interactiveInterruptFn func(ctx context.Context, roleName, instance string) error
+	interactiveInspectFn   func(ctx context.Context, roleName, instance string, tail int) (string, error)
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
@@ -494,6 +504,22 @@ func (a *spawnAgentAdapter) UnloadInteractive(parentCtx *tools.ToolContext, role
 	return a.interactiveUnloadFn(parentCtx.Ctx, roleName, instance)
 }
 
+// InspectInteractive 实现 InteractiveSubAgentManager.InspectInteractive。
+func (a *spawnAgentAdapter) InspectInteractive(parentCtx *tools.ToolContext, roleName, instance string, tailCount int) (string, error) {
+	if a.interactiveInspectFn == nil {
+		return "", fmt.Errorf("interactive inspect not supported")
+	}
+	return a.interactiveInspectFn(parentCtx.Ctx, roleName, instance, tailCount)
+}
+
+// InterruptInteractive 实现 InteractiveSubAgentManager.InterruptInteractive。
+func (a *spawnAgentAdapter) InterruptInteractive(parentCtx *tools.ToolContext, roleName, instance string) error {
+	if a.interactiveInterruptFn == nil {
+		return fmt.Errorf("interactive interrupt not supported")
+	}
+	return a.interactiveInterruptFn(parentCtx.Ctx, roleName, instance)
+}
+
 // buildMsg 构造 SubAgent InboundMessage。
 func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool, instance string) bus.InboundMessage {
 	metadata := map[string]string{
@@ -506,6 +532,12 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 	}
 	if instance != "" {
 		metadata["instance_id"] = instance
+	}
+	// Propagate background flag from ToolContext metadata
+	if parentCtx.Metadata != nil {
+		if bg, ok := parentCtx.Metadata["background"]; ok {
+			metadata["background"] = bg
+		}
 	}
 
 	return bus.InboundMessage{
@@ -636,6 +668,8 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 			adapter.interactiveSpawnFn = cb.SpawnFn
 			adapter.interactiveSendFn = cb.SendFn
 			adapter.interactiveUnloadFn = cb.UnloadFn
+			adapter.interactiveInterruptFn = cb.InterruptFn
+			adapter.interactiveInspectFn = cb.InspectFn
 		}
 		tc.Manager = adapter
 	}

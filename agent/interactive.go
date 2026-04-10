@@ -14,15 +14,28 @@ import (
 	"xbot/tools"
 )
 
+// bgSessionCtxKey is a context value marker for background interactive session contexts.
+// When present, it indicates the context belongs to a bg session (not a per-request ctx).
+// Nested bg subagents detect this marker to derive from their parent session's lifecycle
+// instead of the Agent-level ctx, ensuring they never outlive their direct parent.
+type bgSessionCtxKey struct{}
+
 // interactiveAgent 封装一个 interactive SubAgent 会话。
 // 存储在 parent Agent 的 interactiveSubAgents map 中。
 type interactiveAgent struct {
-	roleName     string            // 角色名
-	messages     []llm.ChatMessage // 累积的对话历史（不含 system prompt）
-	mu           sync.Mutex        // 保护 messages 并发访问
-	systemPrompt llm.ChatMessage   // spawn 时的 system prompt（保持一致性，后续 send 不重建）
-	cfg          *RunConfig        // RunConfig 模板（Messages=nil，复用于 send/unload）
-	lastUsed     time.Time         // 最后访问时间，用于 TTL 清理
+	roleName         string              // 角色名
+	instance         string              // instance ID
+	messages         []llm.ChatMessage   // 累积的对话历史（不含 system prompt）
+	iterationHistory []IterationSnapshot // 最近迭代快照，供 inspect/tail 使用
+	mu               sync.Mutex          // 保护会话状态并发访问
+	systemPrompt     llm.ChatMessage     // spawn 时的 system prompt（保持一致性，后续 send 不重建）
+	cfg              *RunConfig          // RunConfig 模板（Messages=nil，复用于 send/unload）
+	lastUsed         time.Time           // 最后访问时间，用于 TTL 清理
+	running          bool                // 当前是否有 Run 在执行
+	background       bool                // 是否后台模式
+	cancelCurrent    context.CancelFunc  // 当前运行的取消函数（nil = idle）
+	lastError        string              // 最近一次错误
+	lastReply        string              // 最近一次回复摘要
 }
 
 // interactiveSessionTTL 是 interactive SubAgent 会话的生存时间。
@@ -84,6 +97,7 @@ func (a *Agent) SpawnInteractiveSession(
 ) (*bus.OutboundMessage, error) {
 	originChannel, originChatID, originSender := resolveOriginIDs(msg)
 	instance := msg.Metadata["instance_id"]
+	background := msg.Metadata["background"] == "true"
 
 	key := interactiveKey(originChannel, originChatID, roleName, instance)
 
@@ -92,7 +106,7 @@ func (a *Agent) SpawnInteractiveSession(
 	a.cleanupExpiredSessions()
 
 	// 原子 check-and-store：如果 key 已存在，直接返回
-	placeholder := &interactiveAgent{roleName: roleName, lastUsed: time.Now()}
+	placeholder := &interactiveAgent{roleName: roleName, instance: instance, lastUsed: time.Now(), background: background}
 	if _, loaded := a.interactiveSubAgents.LoadOrStore(key, placeholder); loaded {
 		return &bus.OutboundMessage{
 			Content: fmt.Sprintf("interactive session for role %q already exists, use action=\"send\" to continue or action=\"unload\" to end it", roleName),
@@ -115,39 +129,204 @@ func (a *Agent) SpawnInteractiveSession(
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
 	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		rn := roleName
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(rn).Chain
-		cfg.ProgressNotifier = func(lines []string) {
-			if len(lines) > 0 {
-				cb(SubAgentProgressDetail{
-					Path:  myPath,
-					Lines: lines,
-					Depth: myDepth,
+	// Background 模式例外：bg subagent 的进度不应穿透到父 agent 的 TUI。
+	if !background {
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			rn := roleName
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(rn).Chain
+			cfg.ProgressNotifier = func(lines []string) {
+				if len(lines) > 0 {
+					cb(SubAgentProgressDetail{
+						Path:  myPath,
+						Lines: lines,
+						Depth: myDepth,
+					})
+				}
+			}
+		}
+		// 注意：无父引擎进度上下文时不使用 fallback sendMessage。
+		// 多个交互式 agent 共享 sessionMsgIDs（key=channel:chatID）会导致
+		// 后一个 agent 的进度 patch 到前一个 agent 的消息上（进度树串扰）。
+
+		// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(roleName).Chain
+			subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+				detail.Depth = myDepth + detail.Depth
+				if len(detail.Path) == 0 {
+					detail.Path = myPath
+				}
+				cb(detail)
+			})
+		}
+	}
+
+	// --- 阶段 3：执行 Run ---
+	preLen := len(cfg.Messages)
+
+	if background {
+		// Background mode: launch Run in goroutine, return immediately.
+		// Lifecycle rule: bg subagents never outlive their parent.
+		// - First level: ctx is per-request (no marker) → derive from Agent-level ctx
+		//   so the session survives across multiple parent requests.
+		// - Nested level: ctx is a bg session's runCtx (has marker) → derive from
+		//   parent's ctx so the child dies when the parent session is cancelled/unloaded.
+		// - Agent exit: agentCancel() cascades through first-level → nested levels.
+		var bgBase context.Context
+		if ctx.Value(bgSessionCtxKey{}) != nil {
+			// Nested: parent is a bg session → derive from parent's lifecycle
+			bgBase = ctx
+		} else {
+			// First level: derive from Agent lifecycle
+			bgBase = a.agentCtx
+		}
+		if bgBase == nil {
+			bgBase = context.Background() // safety fallback for tests
+		}
+		runCtx, runCancel := context.WithCancel(bgBase)
+		// Mark this context as a bg session context for nested detection
+		runCtx = context.WithValue(runCtx, bgSessionCtxKey{}, true)
+		// Copy call chain into derived context
+		runCtx = WithCallChain(runCtx, CallChainFromContext(subCtx))
+
+		placeholder.mu.Lock()
+		placeholder.cancelCurrent = runCancel
+		placeholder.running = true
+		placeholder.mu.Unlock()
+
+		// Wire incremental snapshot callback so iteration history is visible
+		// during Run(), not only after it completes.
+		// Also send progress notifications to the parent agent via BgTaskManager.
+		sessionKey := originChannel + ":" + originChatID
+		notifyMgr := a.bgTaskMgr
+		cfg.OnIterationSnapshot = func(snap IterationSnapshot) {
+			placeholder.mu.Lock()
+			placeholder.iterationHistory = append(placeholder.iterationHistory, snap)
+			placeholder.mu.Unlock()
+
+			// Notify parent agent about iteration progress
+			if notifyMgr != nil {
+				var sb strings.Builder
+				fmt.Fprintf(&sb, "Iteration %d completed.\n", snap.Iteration)
+				if snap.Thinking != "" {
+					thinking := snap.Thinking
+					if len(thinking) > 200 {
+						thinking = thinking[len(thinking)-200:]
+					}
+					fmt.Fprintf(&sb, "Thinking: %s\n", thinking)
+				}
+				for _, t := range snap.Tools {
+					fmt.Fprintf(&sb, "- %s [%s, %dms]", t.Name, t.Status, t.ElapsedMS)
+					if t.Summary != "" {
+						fmt.Fprintf(&sb, " %s", t.Summary)
+					}
+					sb.WriteString("\n")
+				}
+				notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+					Key:      sessionKey,
+					Type:     tools.SubAgentBgNotifyProgress,
+					Role:     roleName,
+					Instance: instance,
+					Content:  sb.String(),
 				})
 			}
 		}
-	}
-	// 注意：无父引擎进度上下文时不使用 fallback sendMessage。
-	// 多个交互式 agent 共享 sessionMsgIDs（key=channel:chatID）会导致
-	// 后一个 agent 的进度 patch 到前一个 agent 的消息上（进度树串扰）。
 
-	// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(roleName).Chain
-		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
-			detail.Depth = myDepth + detail.Depth
-			if len(detail.Path) == 0 {
-				detail.Path = myPath
+		go func() {
+			startTime := time.Now()
+			defer func() {
+				if r := recover(); r != nil {
+					log.WithFields(log.Fields{
+						"role":     roleName,
+						"instance": instance,
+						"panic":    r,
+					}).Error("Background interactive session Run() panicked")
+					// Prevent zombie session: clean up state so send/spawn can proceed
+					placeholder.mu.Lock()
+					placeholder.running = false
+					placeholder.cancelCurrent = nil
+					placeholder.lastError = fmt.Sprintf("panic: %v", r)
+					placeholder.mu.Unlock()
+					runCancel()
+					// Notify parent
+					if notifyMgr != nil {
+						notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+							Key:      sessionKey,
+							Type:     tools.SubAgentBgNotifyCompleted,
+							Role:     roleName,
+							Instance: instance,
+							Content:  fmt.Sprintf("Panic: %v", r),
+							Elapsed:  time.Since(startTime),
+						})
+					}
+				}
+			}()
+
+			out := Run(runCtx, cfg)
+			runCancel()
+
+			// Notify parent agent about completion
+			if notifyMgr != nil {
+				content := out.Content
+				if out.Error != nil {
+					content = fmt.Sprintf("Error: %v\n%s", out.Error, out.Content)
+				}
+				if len(content) > 2000 {
+					content = content[:2000] + "... [truncated, use inspect for details]"
+				}
+				notifyMgr.SendSubAgentNotify(&tools.SubAgentBgNotify{
+					Key:      sessionKey,
+					Type:     tools.SubAgentBgNotifyCompleted,
+					Role:     roleName,
+					Instance: instance,
+					Content:  content,
+					Elapsed:  time.Since(startTime),
+				})
 			}
-			cb(detail)
-		})
+
+			// Write results back
+			placeholder.mu.Lock()
+			defer placeholder.mu.Unlock()
+
+			placeholder.running = false
+			placeholder.cancelCurrent = nil
+
+			if out.Error != nil {
+				placeholder.lastError = out.Error.Error()
+				placeholder.lastReply = out.Content
+			} else {
+				placeholder.lastError = ""
+				placeholder.lastReply = out.Content
+			}
+
+			// Iteration history was incrementally updated via OnIterationSnapshot during Run().
+			// out.IterationHistory contains the same snapshots, no need to overwrite.
+
+			// Store messages
+			var newMsgs []llm.ChatMessage
+			if len(out.Messages) > preLen {
+				newMsgs = append([]llm.ChatMessage(nil), out.Messages[preLen:]...)
+			}
+			placeholder.messages = newMsgs
+			placeholder.systemPrompt = cfg.Messages[0]
+			placeholder.cfg = &cfg
+			placeholder.cfg.Messages = nil
+		}()
+
+		log.WithFields(log.Fields{
+			"role":       roleName,
+			"instance":   instance,
+			"background": true,
+		}).Info("Interactive session spawned in background")
+
+		return &bus.OutboundMessage{
+			Content: fmt.Sprintf("Interactive sub-agent %q (instance=%q) started in background. Use action=\"inspect\" to check progress, action=\"send\" to send messages, action=\"interrupt\" to interrupt, or action=\"unload\" to terminate.", roleName, instance),
+		}, nil
 	}
 
-	// --- 阶段 3：锁外执行 Run（嵌套 spawn 不会死锁） ---
-	preLen := len(cfg.Messages)
+	// Foreground mode: execute synchronously
 	out := Run(subCtx, cfg)
 
 	if out.Error != nil {
@@ -169,11 +348,14 @@ func (a *Agent) SpawnInteractiveSession(
 	}
 
 	ia := &interactiveAgent{
-		roleName:     roleName,
-		messages:     newMessages,
-		systemPrompt: cfg.Messages[0],
-		cfg:          &cfg,
-		lastUsed:     time.Now(),
+		roleName:         roleName,
+		instance:         instance,
+		messages:         newMessages,
+		iterationHistory: out.IterationHistory,
+		systemPrompt:     cfg.Messages[0],
+		cfg:              &cfg,
+		lastUsed:         time.Now(),
+		lastReply:        out.Content,
 	}
 	ia.cfg.Messages = nil // 避免与 ia.messages 重复（实际消息在 ia.messages 中）
 	a.interactiveSubAgents.Store(key, ia)
@@ -215,6 +397,14 @@ func (a *Agent) SendToInteractiveSession(
 	// --- 阶段 1：锁内准备配置（读取 ia 数据）---
 	ia.mu.Lock()
 
+	// Guard: reject send while a background Run is in progress
+	if ia.running {
+		ia.mu.Unlock()
+		return &bus.OutboundMessage{
+			Content: fmt.Sprintf("interactive session for role %q (instance=%q) is currently running. Use action=\"interrupt\" first, or wait for it to finish, then send.", roleName, instance),
+		}, nil
+	}
+
 	if ia.cfg == nil {
 		ia.mu.Unlock()
 		return &bus.OutboundMessage{
@@ -252,28 +442,34 @@ func (a *Agent) SendToInteractiveSession(
 	// BUG FIX: 必须使用当前 ctx 重建 ProgressNotifier 和进度穿透回调。
 	// ia.cfg 中存储的是 spawn 期间的旧闭包，捕获的 SubAgentProgressFromContext(ctx)
 	// 指向 spawn 时的 pi。send 期间子代理进度会通过旧闭包上报到旧 pi → 进度树串扰。
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(roleName).Chain
-		cfg.ProgressNotifier = func(lines []string) {
-			if len(lines) > 0 {
-				cb(SubAgentProgressDetail{
-					Path:  myPath,
-					Lines: lines,
-					Depth: myDepth,
-				})
+	// Background 子代理不穿透进度到父 agent TUI。
+	if !ia.background {
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(roleName).Chain
+			cfg.ProgressNotifier = func(lines []string) {
+				if len(lines) > 0 {
+					cb(SubAgentProgressDetail{
+						Path:  myPath,
+						Lines: lines,
+						Depth: myDepth,
+					})
+				}
 			}
+			subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+				detail.Depth = myDepth + detail.Depth
+				if len(detail.Path) == 0 {
+					detail.Path = myPath
+				}
+				cb(detail)
+			})
+		} else {
+			// fallback：无父引擎进度上下文时，禁用直接 sendMessage 进度通知，
+			// 避免多个交互式 agent 竞争同一个 sessionMsgIDs 导致进度树串扰。
+			cfg.ProgressNotifier = nil
 		}
-		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
-			detail.Depth = myDepth + detail.Depth
-			if len(detail.Path) == 0 {
-				detail.Path = myPath
-			}
-			cb(detail)
-		})
 	} else {
-		// fallback：无父引擎进度上下文时，禁用直接 sendMessage 进度通知，
-		// 避免多个交互式 agent 竞争同一个 sessionMsgIDs 导致进度树串扰。
+		// Background 模式：禁用进度穿透
 		cfg.ProgressNotifier = nil
 	}
 
@@ -303,8 +499,185 @@ func (a *Agent) SendToInteractiveSession(
 			ia.messages = append(ia.messages, llm.NewAssistantMessage(out.Content))
 		}
 	}
+	// Save iteration history for inspect
+	if len(out.IterationHistory) > 0 {
+		ia.iterationHistory = append(ia.iterationHistory, out.IterationHistory...)
+	}
+	ia.lastReply = out.Content
 
 	return out.OutboundMessage, nil
+}
+
+// InterruptInteractiveSession cancels the current running iteration of an interactive session.
+func (a *Agent) InterruptInteractiveSession(
+	ctx context.Context,
+	roleName string,
+	channel, chatID string,
+	instance string,
+) error {
+	key := interactiveKey(channel, chatID, roleName, instance)
+
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return fmt.Errorf("no active interactive session for role %q (instance=%q)", roleName, instance)
+	}
+
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return fmt.Errorf("corrupted interactive session for role %q", roleName)
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	if !ia.running || ia.cancelCurrent == nil {
+		return fmt.Errorf("interactive session %q (instance=%q) is not currently running", roleName, instance)
+	}
+
+	ia.cancelCurrent()
+	log.WithFields(log.Fields{
+		"role":     roleName,
+		"instance": instance,
+	}).Info("Interactive session interrupted")
+	return nil
+}
+
+// InspectInteractiveSession returns a tail-style summary of recent activity in an interactive session.
+//
+// Output layout (newest first):
+//  1. Header — status, message count
+//  2. Last Reply — full final assistant output (if any)
+//  3. Recent Messages — tail of conversation history (user ↔ assistant turns)
+//  4. Recent Iterations — last N iteration snapshots (thinking, tool calls)
+//  5. Last Error — if any
+func (a *Agent) InspectInteractiveSession(
+	ctx context.Context,
+	roleName string,
+	channel, chatID string,
+	instance string,
+	tailCount int,
+) (string, error) {
+	key := interactiveKey(channel, chatID, roleName, instance)
+
+	val, ok := a.interactiveSubAgents.Load(key)
+	if !ok {
+		return "", fmt.Errorf("no active interactive session for role %q (instance=%q)", roleName, instance)
+	}
+
+	ia, ok := val.(*interactiveAgent)
+	if !ok || ia == nil {
+		return "", fmt.Errorf("corrupted interactive session for role %q", roleName)
+	}
+
+	ia.mu.Lock()
+	defer ia.mu.Unlock()
+
+	if tailCount <= 0 {
+		tailCount = 5
+	}
+
+	var sb strings.Builder
+
+	// ── 1. Header ──
+	status := "idle"
+	if ia.running {
+		status = "running"
+	}
+	fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
+
+	// ── 2. Last Reply (full) — most useful info first ──
+	if ia.lastReply != "" {
+		fmt.Fprintf(&sb, "\n### Last Reply:\n%s\n", ia.lastReply)
+	}
+
+	// ── 3. Recent Messages — tail of conversation history ──
+	// Show the last tailCount messages so the parent agent can see
+	// what was asked and what was answered.
+	msgCount := len(ia.messages)
+	msgStart := msgCount - tailCount
+	if msgStart < 0 {
+		msgStart = 0
+	}
+	if msgCount > 0 {
+		fmt.Fprintf(&sb, "\n### Recent Messages (last %d of %d):\n", msgCount-msgStart, msgCount)
+		if msgStart > 0 {
+			fmt.Fprintf(&sb, "... %d earlier messages omitted ...\n", msgStart)
+		}
+		for _, msg := range ia.messages[msgStart:] {
+			role := msg.Role
+			content := msg.Content
+			// Truncate very long individual messages but keep enough context
+			if len(content) > 2000 {
+				content = content[:2000] + "... (truncated)"
+			}
+			// Skip empty content (e.g. assistant messages with only tool_calls)
+			if strings.TrimSpace(content) == "" {
+				if len(msg.ToolCalls) > 0 {
+					toolNames := make([]string, 0, len(msg.ToolCalls))
+					for _, tc := range msg.ToolCalls {
+						toolNames = append(toolNames, tc.Name)
+					}
+					fmt.Fprintf(&sb, "**%s**: [called tools: %s]\n", role, strings.Join(toolNames, ", "))
+				}
+				continue
+			}
+			fmt.Fprintf(&sb, "**%s**: %s\n", role, content)
+		}
+	}
+
+	// ── 4. Recent Iterations — thinking + tool execution details ──
+	snapshots := ia.iterationHistory
+	if len(snapshots) > tailCount {
+		snapshots = snapshots[len(snapshots)-tailCount:]
+	}
+	if len(snapshots) > 0 {
+		fmt.Fprintf(&sb, "\n### Recent Iterations (last %d):\n", len(snapshots))
+		for _, snap := range snapshots {
+			fmt.Fprintf(&sb, "\n**Iteration %d**\n", snap.Iteration)
+			if snap.Thinking != "" {
+				thinking := snap.Thinking
+				if len(thinking) > 300 {
+					thinking = thinking[len(thinking)-300:]
+					thinking = "..." + thinking
+				}
+				fmt.Fprintf(&sb, "Thinking: %s\n", thinking)
+			}
+			if snap.Reasoning != "" {
+				reasoning := snap.Reasoning
+				if len(reasoning) > 300 {
+					reasoning = reasoning[len(reasoning)-300:]
+					reasoning = "..." + reasoning
+				}
+				fmt.Fprintf(&sb, "Reasoning: %s\n", reasoning)
+			}
+			for _, t := range snap.Tools {
+				summary := t.Summary
+				if len(summary) > 200 {
+					summary = summary[:200] + "..."
+				}
+				label := t.Label
+				if len(label) > 60 {
+					label = label[:57] + "..."
+				}
+				fmt.Fprintf(&sb, "- Tool: %s", t.Name)
+				if label != "" {
+					fmt.Fprintf(&sb, " (%s)", label)
+				}
+				fmt.Fprintf(&sb, " [%s, %dms]", t.Status, t.ElapsedMS)
+				if summary != "" {
+					fmt.Fprintf(&sb, "\n  %s", summary)
+				}
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// ── 5. Last Error ──
+	if ia.lastError != "" {
+		fmt.Fprintf(&sb, "\n### Last Error:\n%s\n", ia.lastError)
+	}
+
+	return sb.String(), nil
 }
 
 // UnloadInteractiveSession 结束 interactive session：巩固记忆并清理。
@@ -334,6 +707,10 @@ func (a *Agent) UnloadInteractiveSession(
 		ia.mu.Unlock()
 		a.interactiveSubAgents.Delete(key)
 		return nil
+	}
+	// Cancel any running bg goroutine to prevent leaks
+	if ia.cancelCurrent != nil {
+		ia.cancelCurrent()
 	}
 	messages := make([]llm.ChatMessage, len(ia.messages))
 	copy(messages, ia.messages)
@@ -440,4 +817,49 @@ func resolveOriginIDs(msg bus.InboundMessage) (channel, chatID, sender string) {
 		sender = msg.SenderID
 	}
 	return
+}
+
+// InteractiveSessionInfo represents a snapshot of an interactive agent session.
+type InteractiveSessionInfo struct {
+	Role       string
+	Instance   string
+	Running    bool
+	Background bool
+}
+
+// ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
+func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSessionInfo {
+	prefix := channel + ":" + chatID + "/"
+	var results []InteractiveSessionInfo
+
+	a.interactiveSubAgents.Range(func(key, value any) bool {
+		keyStr, ok := key.(string)
+		if !ok {
+			return true
+		}
+		// Only return sessions belonging to this channel/chatID
+		if !strings.HasPrefix(keyStr, prefix) {
+			return true
+		}
+		ia, ok := value.(*interactiveAgent)
+		if !ok || ia == nil {
+			return true
+		}
+		ia.mu.Lock()
+		info := InteractiveSessionInfo{
+			Role:       ia.roleName,
+			Instance:   ia.instance,
+			Running:    ia.running,
+			Background: ia.background,
+		}
+		ia.mu.Unlock()
+		results = append(results, info)
+		return true
+	})
+	return results
+}
+
+// CountInteractiveSessions returns the number of active interactive sessions for the given channel/chatID.
+func (a *Agent) CountInteractiveSessions(channel, chatID string) int {
+	return len(a.ListInteractiveSessions(channel, chatID))
 }

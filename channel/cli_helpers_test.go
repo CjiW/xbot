@@ -514,8 +514,9 @@ func TestClosePanelAndResume_Typing(t *testing.T) {
 	if !cont {
 		t.Error("should return continue=true")
 	}
-	if cmd == nil {
-		t.Error("cmd should be non-nil (batch) when typing")
+	// tickCmd() is no longer returned — startAgentTurn() manages tick chain via pendingCmds
+	if cmd != nil {
+		t.Error("cmd should be nil — tick chain managed by startAgentTurn")
 	}
 	if model.panelMode != "" {
 		t.Errorf("panelMode = %q, want empty", model.panelMode)
@@ -712,8 +713,9 @@ func TestSubmitAskAnswers_Typing(t *testing.T) {
 	if !cont {
 		t.Error("should return continue=true")
 	}
-	if cmd == nil {
-		t.Error("cmd should be non-nil (batch) when typing")
+	// tickCmd() is no longer returned — startAgentTurn() manages tick chain via pendingCmds
+	if cmd != nil {
+		t.Error("cmd should be nil — tick chain managed by startAgentTurn")
 	}
 }
 
@@ -746,6 +748,40 @@ func TestSubmitAskAnswers_SavesCurrentFreeInputBeforeCollect(t *testing.T) {
 	model.saveCurrentFreeInput()
 	if got := model.panelItems[1].Other; got != "custom" {
 		t.Fatalf("panelItems[1].Other = %q, want custom", got)
+	}
+}
+
+func TestCollectAskAnswers_UncheckedOptionsExcluded(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.panelItems = []askItem{
+		{Question: "color?", Options: []string{"Red", "Blue", "Green"}},
+	}
+	model.panelOptSel = map[int]map[int]bool{
+		0: {0: true, 1: false, 2: true},
+	}
+
+	answers := model.collectAskAnswers()
+	got := answers["q0"]
+	if got != "Red, Green" {
+		t.Fatalf("expected only checked options, got %q", got)
+	}
+}
+
+func TestCollectAskAnswers_AllUncheckedReturnsEmpty(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+	model.panelItems = []askItem{
+		{Question: "color?", Options: []string{"Red", "Blue"}},
+	}
+	model.panelOptSel = map[int]map[int]bool{
+		0: {0: false, 1: false},
+	}
+
+	answers := model.collectAskAnswers()
+	got := answers["q0"]
+	if got != "" {
+		t.Fatalf("expected empty answer when all unchecked, got %q", got)
 	}
 }
 

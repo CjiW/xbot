@@ -116,7 +116,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				return m, nil, true
 			}
 			m.sendCancel()
-			return m, []tea.Cmd{tickCmd()}, true
+			return m, nil, true
 		}
 		// 非处理状态：清空输入
 		if m.textarea.Value() != "" {
@@ -167,12 +167,18 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Text == "^":
-		if m.panelMode == "" && m.bgTaskCount > 0 && m.inputHistoryIdx == -1 {
+		if m.panelMode == "" && (m.bgTaskCount > 0 || m.agentCount > 0) && m.inputHistoryIdx == -1 {
 			m.openBgTasksPanel()
 			return m, nil, true
 		}
 
 	case msg.Code == tea.KeyUp:
+		// If textarea has content, let textarea own multiline vertical cursor movement.
+		// Otherwise long pasted input cannot navigate back to earlier lines because
+		// viewport/history steals Up before textarea sees it.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			break
+		}
 		// Viewport 不在底部时，方向键优先滚动 viewport（不触发 input history）
 		if !m.viewport.AtBottom() {
 			m.viewport.ScrollUp(1)
@@ -190,8 +196,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 		}
 		if m.panelMode == "" && !m.typing {
-			// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
-			if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+			// 空输入时浏览历史：仅当有排队消息时才启用，避免误触覆盖输入。
+			if len(m.messageQueue) > 0 && m.textarea.Value() == "" && len(m.inputHistory) > 0 {
 				if m.inputHistoryIdx == -1 {
 					m.inputDraft = "" // 保存空草稿
 					m.inputHistoryIdx = 0
@@ -205,12 +211,16 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown:
+		// If textarea has content, let textarea own multiline vertical cursor movement.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			break
+		}
 		// Viewport 不在底部时，方向键优先滚动 viewport
 		if !m.viewport.AtBottom() {
 			m.viewport.ScrollDown(1)
 			return m, nil, true
 		}
-		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 && len(m.messageQueue) > 0 {
 			if m.inputHistoryIdx > 0 {
 				m.inputHistoryIdx--
 				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
@@ -223,6 +233,13 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyEnter:
+		// Plain Enter sends. Modified/newline-intent variants should fall through to
+		// the textarea so its native multiline/internal-scroll behavior works,
+		// especially once the input reaches MaxHeight.
+		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
+		if msg.String() == "ctrl+m" {
+			break
+		}
 		// Enter 发送消息
 		if !m.inputReady {
 			// §Q 消息队列：typing 期间允许排队消息
@@ -294,13 +311,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			m.viewport.GotoBottom()
 			m.newContentHint = false
 		}
-		// Start tick chain ONLY when transitioning from idle → busy.
-		// When already busy (wasTyping==true), the chain is already running.
-		// Emitting extra tickCmd() while busy creates duplicate chains:
-		// 2 chains → 4 → 8 → ... → CPU freeze within seconds.
-		if m.typing && !wasTyping {
-			cmds = append(cmds, tickCmd())
-		}
+		// NOTE: tick chain is started by startAgentTurn() inside sendMessage().
+		// No need to emit tickCmd() here — doing so would create duplicate chains.
 		return m, cmds, true
 
 	case msg.Code == tea.KeyTab:
@@ -354,6 +366,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	// Update bg task count from callback
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
+	}
+	// Update agent count from callback
+	if m.agentCountFn != nil {
+		m.agentCount = m.agentCountFn()
 	}
 	if msg.payload != nil {
 		// Sync todo items from progress event
@@ -510,24 +526,26 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 		timestamp: time.Now(),
 		dirty:     true,
 	})
-	m.typing = true
-	m.inputReady = false
-	m.resetProgressState()
+	// Only start a new turn if the agent is idle.
+	// If already typing, the agent is processing this message (injectInbound was
+	// already called). Starting a new turn here would increment agentTurnID,
+	// causing the current turn's endAgentTurn to become a no-op (stale turnID).
+	// This produces two user messages without an assistant reply between them.
+	if !m.typing {
+		m.startAgentTurn()
+	}
 	// Refresh bg task count on injection
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()
 	}
+	// Refresh agent count on injection
+	if m.agentCountFn != nil {
+		m.agentCount = m.agentCountFn()
+	}
 	m.renderCacheValid = false
-	// IMPORTANT: re-arm the fast tick chain *here* when an injected user message
-	// flips the UI from idle -> typing (common case: bg task completion arrives
-	// while the agent is otherwise idle). Do NOT rely solely on the generic
-	// `if m.typing && !wasTyping { tickCmd() }` logic at the bottom of Update():
-	// that transition can be bypassed by future early-return branches, which has
-	// repeatedly caused the whole TUI (spinner / elapsed timers / queue flush)
-	// to stop updating. The message that starts typing must enqueue its own tick.
-	//
-	// Keep this invariant local to the state transition source to prevent another
-	// recurrence of the “UI froze after bg task completion” class of bugs.
+	// NOTE: do NOT return tickCmd() here. The wasTyping guard at the bottom of
+	// Update() detects idle->typing and starts the tick chain.
+	// Returning tickCmd() here creates a duplicate chain (2x spinner speed).
 	// §16 触发 toast 通知（后台任务完成提示）
 	// 提取首行作为 toast 文本，避免内容过长
 	firstLine := msg.content
@@ -545,7 +563,7 @@ func (m *cliModel) handleInjectedUserMsg(msg cliInjectedUserMsg) []tea.Cmd {
 	} else if strings.Contains(lower, "error") || strings.Contains(lower, "failed") {
 		icon = "✗"
 	}
-	return []tea.Cmd{tickCmd(), m.enqueueToast(firstLine, icon)}
+	return []tea.Cmd{m.enqueueToast(firstLine, icon)}
 }
 
 // handleUpdateCheck processes update check results.

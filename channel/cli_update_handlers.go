@@ -106,14 +106,19 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 
 	switch {
 	case msg.String() == "ctrl+c":
-		// Ctrl+C：有迭代时中止；无迭代时清空输入
+		// Ctrl+C：有迭代时中止并清空队列；无迭代时清空输入
 		if m.typing {
 			// 如果正在编辑排队消息，先取消编辑
 			if m.queueEditing {
 				m.queueEditing = false
 				m.queueEditBuf = ""
 				m.textarea.SetValue("")
-				return m, nil, true
+			}
+			// 清空排队消息，防止 cancel 后队列自动继续
+			queueLen := len(m.messageQueue)
+			if queueLen > 0 {
+				m.messageQueue = nil
+				m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
 			}
 			m.sendCancel()
 			return m, nil, true

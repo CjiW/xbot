@@ -15,7 +15,8 @@ Every entry must be self-contained and immediately actionable.
 ## AGENT.md
 
 `AGENT.md` at the project root is the entry point. It is automatically loaded into
-your system prompt (first 2000 chars). Use it as an **index**, not a dump.
+your system prompt (up to 10000 chars). Keep it **concise** — it is an index, not a dump.
+Aim for 1000-3000 chars. If you need more space, link to knowledge files.
 
 ### Structure
 

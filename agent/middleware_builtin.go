@@ -55,7 +55,7 @@ const (
 	// maxProjectContextChars is the maximum number of characters injected into
 	// the system prompt. Content beyond this is truncated with a hint to use
 	// the Read tool for the full file.
-	maxProjectContextChars = 2000
+	maxProjectContextChars = 10000
 
 	// projectContextCacheTTL controls how long the file content is cached
 	// before re-reading from disk.

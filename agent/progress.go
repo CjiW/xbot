@@ -296,8 +296,10 @@ func isSubAgentLine(line string) bool {
 }
 
 // isStatusEmojiLine 检查行是否以状态 emoji 开头并包含冒号（子 Agent 格式化输出的特征）。
+// 注意：⏳ 不在此列表中 — ⏳ 仅用于工具占位行（> ⏳ ToolName: args），
+// 工具占位行由 isSubAgentLine 的其他分支处理（⏳ SubAgent [...] 专用匹配）。
 func isStatusEmojiLine(line string) bool {
-	for _, prefix := range []string{"🔄 ", "✅ ", "❌ ", "⏳ "} {
+	for _, prefix := range []string{"🔄 ", "✅ ", "❌ "} {
 		if strings.HasPrefix(line, prefix) {
 			if idx := strings.Index(line, ":"); idx > 0 {
 				return true

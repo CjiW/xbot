@@ -1,4 +1,7 @@
 ---
 title: "Plans"
-weight: 0
+weight: 50
+geekdocCollapseSection: true
 ---
+
+Historical plans and design proposals. These documents have been superseded by implementation or are kept for reference.

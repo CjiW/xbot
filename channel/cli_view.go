@@ -235,10 +235,11 @@ func (m *cliModel) View() tea.View {
 				status = hint
 			}
 		}
-		// Background task indicator
-		if m.bgTaskCount > 0 {
+		// Background task + agent indicator
+		totalItems := m.bgTaskCount + m.agentCount
+		if totalItems > 0 {
 			bgHint := m.styles.WarningSt.Render(
-				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount))
+				fmt.Sprintf(m.locale.BgTaskRunning, m.bgTaskCount, m.agentCount))
 			if status != "" {
 				status += "  " + bgHint
 			} else {
@@ -409,10 +410,10 @@ func (m *cliModel) titleText() string {
 // xbotLogo — "XBOT" ASCII art（slant 字体，figlet 生成）
 var xbotLogo = []string{
 	"   _  __    ____    ____    ______",
-	"  | |/ /   / __ )  / __ \\ /_  __/",
-	"  |   /   / __  | / / / /  / /",
-	" /   |   / /_/ / / /_/ /  / /",
-	"/_/|_|  /_____/  \\____/ /_/",
+	"  | |/ /   / __ )  / __ \\  /_  __/",
+	"  |   /   / __  | / / / /   / /",
+	" /   |   / /_/ / / /_/ /   / /",
+	"/_/|_|  /_____/  \\____/   /_/",
 }
 
 // renderSplash 渲染启动画面 — 品牌 logo + 版本号 + 加载动画
@@ -598,10 +599,10 @@ func (m *cliModel) renderFooter() string {
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
-			if len(m.inputHistory) > 0 {
+			if len(m.inputHistory) > 0 && len(m.messageQueue) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}
-			if m.bgTaskCount > 0 {
+			if m.bgTaskCount > 0 || m.agentCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}
 		} else {

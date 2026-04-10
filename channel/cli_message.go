@@ -417,16 +417,19 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		m.sendToAgent("/new")
 
 	case "/tasks":
-		// /tasks — open background tasks panel
+		// /tasks — open unified tasks & agents panel
+		taskCount := 0
 		if m.bgTaskCountFn != nil {
-			count := m.bgTaskCountFn()
-			if count == 0 {
-				m.showSystemMsg(m.locale.BgTasksEmpty, feedbackInfo)
-			} else {
-				m.openBgTasksPanel()
-			}
+			taskCount = m.bgTaskCountFn()
+		}
+		agentCnt := 0
+		if m.agentCountFn != nil {
+			agentCnt = m.agentCountFn()
+		}
+		if taskCount+agentCnt == 0 {
+			m.showSystemMsg(m.locale.BgTasksEmpty, feedbackInfo)
 		} else {
-			m.showSystemMsg(m.locale.BgTasksUnsupported, feedbackWarning)
+			m.openBgTasksPanel()
 		}
 
 	case "/su":

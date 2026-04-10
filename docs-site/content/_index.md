@@ -53,14 +53,26 @@ go build -o xbot-cli ./cmd/xbot-cli
 ## Features
 
 - **Multi-channel** — Pluggable channel adapters: CLI (TUI), Feishu (Lark), QQ, NapCat (OneBot 11), Web
-- **Tools** — Shell, File I/O, Web fetch/search, Context editing, SubAgent, Cron scheduling, Download, and more
+- **Tools** — 50+ built-in tools: Shell, File I/O, Web fetch/search, Context editing, SubAgent, Cron scheduling, Download, Feishu MCP, and more
 - **Memory** — Pluggable providers: **Flat** (in-memory blocks + grep archival) and **Letta/MemGPT** (SQLite core + vector search + FTS5)
 - **Skills & Agents** — Markdown-defined skill packages; role-based SubAgents with custom roles, max nesting depth 6
 - **MCP Protocol** — Global and session-scoped MCP servers, stdio and HTTP transports, lazy cleanup
+- **Permission Control** — OS user-based permission control with approval workflows for privileged operations
 - **Multi-tenant** — Channel + chatID isolation
 - **OAuth 2.0** — Built-in OAuth server for web channel authentication
 - **Hot-reload prompts** — Go templates with channel-specific overrides
 - **KV-Cache optimized** — Context ordering maximizes LLM cache hits
+
+## Documentation
+
+| Section | Description |
+|---------|-------------|
+| [Architecture](/architecture/) | System design and data flow |
+| [Channels](/channels/) | Channel setup guides |
+| [Guides](/guides/) | Sandbox, Permission Control, Memory, MCP, Skills & Agents |
+| [Tools](/tools/) | Built-in tools reference |
+| [Configuration](/configuration/) | Environment variables and config reference |
+| [Design](/design/) | Design documents |
 
 ## Channels
 

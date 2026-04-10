@@ -68,17 +68,15 @@ Environment variables (or `.env`):
 - `QQ_ENABLED`, `QQ_APP_ID`, `QQ_CLIENT_SECRET`
 - `WORK_DIR` — Working directory
 - `PROMPT_FILE` — Custom prompt template (default `prompt.md`)
-- `SINGLE_USER` — Single-user mode (default `false`)
-- `AGENT_MAX_ITERATIONS` — Max tool-call iterations (default `100`)
+- `AGENT_MAX_ITERATIONS` — Max tool-call iterations (default `2000`)
 - `AGENT_MAX_CONCURRENCY` — Max concurrent LLM calls (default `3`)
-- `AGENT_MEMORY_WINDOW` — Memory consolidation trigger (default `50`)
 - `AGENT_ENABLE_AUTO_COMPRESS` — Auto context compression (default `true`)
-- `AGENT_MAX_CONTEXT_TOKENS` — Max context tokens (default `100000`)
+- `AGENT_MAX_CONTEXT_TOKENS` — Max context tokens (default `200000`)
 - `AGENT_CONTEXT_MODE` — Context ordering mode
 - `MAX_SUBAGENT_DEPTH` — Max nested subagent depth (default `6`)
 - `XBOT_ENCRYPTION_KEY` — AES-256-GCM key (base64-encoded 32 bytes) for encrypting API keys and OAuth tokens
 - `OAUTH_ENABLE`, `OAUTH_HOST`, `OAUTH_PORT`, `OAUTH_BASE_URL`
-- `SANDBOX_MODE` — Sandbox mode: `docker` (default) or `none`
+- `SANDBOX_MODE` — Sandbox mode: `none` (default), `docker`, or `remote`
 - `SANDBOX_DOCKER_IMAGE`, `HOST_WORK_DIR`, `SANDBOX_IDLE_TIMEOUT_MINUTES`
 - `PPROF_ENABLE`, `PPROF_HOST`, `PPROF_PORT`
 - `SERVER_HOST`, `SERVER_PORT`

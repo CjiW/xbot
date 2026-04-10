@@ -174,9 +174,9 @@ func TestIsStatusEmojiLine(t *testing.T) {
 		{"🔄 role: desc", true},
 		{"✅ role:", true},
 		{"❌ role: error", true},
-		{"⏳ role: pending", true},
-		{"🔄 role", false},     // 无冒号
-		{"💡 thinking", false}, // 非 status emoji
+		{"⏳ role: pending", false}, // ⏳ 不再匹配 — 工具占位符格式由 isSubAgentLine 的专用分支处理
+		{"🔄 role", false},          // 无冒号
+		{"💡 thinking", false},      // 非 status emoji
 		{"", false},
 	}
 	for _, tt := range tests {

@@ -55,7 +55,7 @@ type UILocale struct {
 	StatusRetrying        string // "retrying"
 	StatusDone            string // "done"
 	NewContentHint        string // "v new content"
-	BgTaskRunning         string // "[bg: %d task%s running -- ^ to manage]"
+	BgTaskRunning         string // "[%d task(s) %d agent(s) -- ^ to manage]"
 	TabNoMatch            string // "[Tab] no matching files"
 
 	// --- D. Temp status ---
@@ -220,9 +220,9 @@ func localeZH() *UILocale {
 		PanelAskNewline: "Ctrl+J 换行",
 		PanelAskCancel:  "Esc 取消",
 
-		BgTasksTitle:       "后台任务",
+		BgTasksTitle:       "任务 & 代理",
 		BgTasksHelp:        "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
-		BgTasksEmpty:       "没有正在运行的后台任务",
+		BgTasksEmpty:       "没有正在运行的任务或代理",
 		BgTasksUnsupported: "不支持后台任务。",
 		BgTaskLogTitle:     "日志: %s — %s",
 		BgTaskLogHelp:      "↑↓ 滚动  Esc 返回",
@@ -241,7 +241,7 @@ func localeZH() *UILocale {
 		StatusRetrying:        "重试中",
 		StatusDone:            "完成",
 		NewContentHint:        "↓ 新内容",
-		BgTaskRunning:         "[后台: %d 个任务运行中 -- ^ 管理]",
+		BgTaskRunning:         "[%d 任务 %d 代理 -- ^ 管理]",
 		TabNoMatch:            "[Tab] 无匹配文件",
 
 		// --- D. Temp status ---
@@ -264,7 +264,7 @@ func localeZH() *UILocale {
 			{Cmd: "/quit", Desc: "退出程序"},
 			{Cmd: "/settings", Desc: "打开设置面板"},
 			{Cmd: "/setup", Desc: "重新运行配置引导"},
-			{Cmd: "/tasks", Desc: "查看后台任务"},
+			{Cmd: "/tasks", Desc: "查看任务和代理"},
 			{Cmd: "/update", Desc: "检查更新"},
 			{Cmd: "/help", Desc: "显示此帮助"},
 		},
@@ -308,7 +308,7 @@ func localeZH() *UILocale {
 		FooterDelete:   "删除",
 		FooterCommands: "命令",
 		FooterComplete: "补全",
-		FooterBgTasks:  "后台任务",
+		FooterBgTasks:  "任务/代理",
 		FooterNewline:  "换行",
 		FooterSelect:   "选择",
 		FooterManage:   "管理",
@@ -591,9 +591,9 @@ func localeEN() *UILocale {
 		PanelAskNewline: "Ctrl+J newline",
 		PanelAskCancel:  "Esc cancel",
 
-		BgTasksTitle:       "Background Tasks",
+		BgTasksTitle:       "Tasks & Agents",
 		BgTasksHelp:        "↑↓ navigate  Enter view log  Del kill  Esc close",
-		BgTasksEmpty:       "No background tasks running",
+		BgTasksEmpty:       "No running tasks or agents",
 		BgTasksUnsupported: "Background tasks not supported.",
 		BgTaskLogTitle:     "Log: %s — %s",
 		BgTaskLogHelp:      "↑↓ scroll  Esc back",
@@ -612,7 +612,7 @@ func localeEN() *UILocale {
 		StatusRetrying:        "retrying",
 		StatusDone:            "done",
 		NewContentHint:        "v new content",
-		BgTaskRunning:         "[bg: %d task(s) running -- ^ to manage]",
+		BgTaskRunning:         "[%d task(s) %d agent(s) -- ^ to manage]",
 		TabNoMatch:            "[Tab] no matching files",
 
 		// --- D. Temp status ---
@@ -635,7 +635,7 @@ func localeEN() *UILocale {
 			{Cmd: "/quit", Desc: "Quit"},
 			{Cmd: "/settings", Desc: "Open settings panel"},
 			{Cmd: "/setup", Desc: "Re-run setup wizard"},
-			{Cmd: "/tasks", Desc: "View background tasks"},
+			{Cmd: "/tasks", Desc: "View tasks & agents"},
 			{Cmd: "/update", Desc: "Check for updates"},
 			{Cmd: "/help", Desc: "Show this help"},
 		},
@@ -679,7 +679,7 @@ func localeEN() *UILocale {
 		FooterDelete:   "delete",
 		FooterCommands: "commands",
 		FooterComplete: "complete",
-		FooterBgTasks:  "bg tasks",
+		FooterBgTasks:  "tasks/agents",
 		FooterNewline:  "newline",
 		FooterSelect:   "select",
 		FooterManage:   "manage",
@@ -962,9 +962,9 @@ func localeJA() *UILocale {
 		PanelAskNewline: "Ctrl+J 改行",
 		PanelAskCancel:  "Esc キャンセル",
 
-		BgTasksTitle:       "バックグラウンドタスク",
+		BgTasksTitle:       "タスク & エージェント",
 		BgTasksHelp:        "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
-		BgTasksEmpty:       "実行中のバックグラウンドタスクはありません",
+		BgTasksEmpty:       "実行中のタスクやエージェントはありません",
 		BgTasksUnsupported: "バックグラウンドタスクは未対応です。",
 		BgTaskLogTitle:     "ログ: %s — %s",
 		BgTaskLogHelp:      "↑↓ スクロール  Esc 戻る",
@@ -983,7 +983,7 @@ func localeJA() *UILocale {
 		StatusRetrying:        "リトライ中",
 		StatusDone:            "完了",
 		NewContentHint:        "↓ 新着",
-		BgTaskRunning:         "[bg: %d タスク実行中 -- ^ 管理]",
+		BgTaskRunning:         "[%d タスク %d エージェント -- ^ 管理]",
 		TabNoMatch:            "[Tab] 一致するファイルなし",
 
 		// --- D. Temp status ---
@@ -1006,7 +1006,7 @@ func localeJA() *UILocale {
 			{Cmd: "/quit", Desc: "終了"},
 			{Cmd: "/settings", Desc: "設定パネルを開く"},
 			{Cmd: "/setup", Desc: "セットアップウィザード再実行"},
-			{Cmd: "/tasks", Desc: "バックグラウンドタスク表示"},
+			{Cmd: "/tasks", Desc: "タスクとエージェント表示"},
 			{Cmd: "/update", Desc: "アップデート確認"},
 			{Cmd: "/help", Desc: "ヘルプ表示"},
 		},
@@ -1050,7 +1050,7 @@ func localeJA() *UILocale {
 		FooterDelete:   "削除",
 		FooterCommands: "コマンド",
 		FooterComplete: "補完",
-		FooterBgTasks:  "バックグラウンド",
+		FooterBgTasks:  "タスク/エージェント",
 		FooterNewline:  "改行",
 		FooterSelect:   "選択",
 		FooterManage:   "管理",

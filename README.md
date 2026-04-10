@@ -277,7 +277,7 @@ All config via environment variables or `.env` file. See [`.env.example`](.env.e
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SANDBOX_MODE` | `docker` | `docker` / `remote` / `none` |
+| `SANDBOX_MODE` | `none` | `none` / `docker` / `remote` |
 | `SANDBOX_DOCKER_IMAGE` | `ubuntu:22.04` | Docker image for sandbox |
 | `SANDBOX_IDLE_TIMEOUT_MINUTES` | `30` | Idle timeout (0 = disabled) |
 | `SANDBOX_WS_PORT` | `8080` | Remote sandbox WebSocket port |
@@ -290,7 +290,6 @@ All config via environment variables or `.env` file. See [`.env.example`](.env.e
 |----------|---------|-------------|
 | `WORK_DIR` | `.` | Working directory |
 | `PROMPT_FILE` | `prompt.md` | Custom prompt template |
-| `SINGLE_USER` | `false` | Single-user mode |
 | `XBOT_ENCRYPTION_KEY` | — | AES-256-GCM key (base64, 32 bytes) |
 | `TAVILY_API_KEY` | — | Tavily web search API key |
 | `OAUTH_ENABLE` | `false` | Enable OAuth server |
@@ -334,8 +333,14 @@ make clean  # Remove build artifacts
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — Detailed system design
-- [CLI Channel](docs/cli-channel.md) — Full TUI documentation
+Full documentation is available at [cjiw.github.io/xbot](https://cjiw.github.io/xbot/).
+
+- [Architecture](https://cjiw.github.io/xbot/architecture/) — System design and data flow
+- [Channels](https://cjiw.github.io/xbot/channels/) — Channel setup guides (CLI, Feishu, Web, QQ/NapCat)
+- [Guides](https://cjiw.github.io/xbot/guides/) — Sandbox, Permission Control, Memory, MCP, Skills & Agents
+- [Tools](https://cjiw.github.io/xbot/tools/) — Built-in tools reference
+- [Configuration](https://cjiw.github.io/xbot/configuration/) — Environment variables and config reference
+- [Design](https://cjiw.github.io/xbot/design/) — Design documents
 - [CHANGELOG](CHANGELOG.md) — Release history
 
 ## License

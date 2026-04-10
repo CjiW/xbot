@@ -51,11 +51,9 @@ func (t *animTicker) viewFrames(frames []string) string {
 
 // Ticker frame presets
 var (
-	// dotFrames: smooth braille dot sweep — 24 frames for a fluid loop
+	// dotFrames: braille dot orbit — 8 frames for a smooth clockwise loop
 	dotFrames = []string{
-		"⠁", "⠃", "⠇", "⡇", "⣇", "⣧", "⣷", "⣿",
-		"⣾", "⣽", "⣻", "⢿", "⡿", "⠿", "⠟", "⠛",
-		"⠫", "⠭", "⠮", "⡮", "⡯", "⣯", "⣽", "⣾",
+		"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 	}
 	// waveFrames: rotating crescent moon phases — subagent feel
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}
@@ -215,6 +213,12 @@ type cliModel struct {
 	bgTaskCount   int        // running background tasks (0 = no indicator)
 	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
 
+	// --- Interactive agents ---
+	agentCount     int                                                            // active interactive agent sessions (0 = no indicator)
+	agentCountFn   func() int                                                     // callback to get current agent count (set by channel)
+	agentListFn    func() []panelAgentEntry                                       // callback to list active agents for panel
+	agentInspectFn func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
+
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
 
@@ -294,7 +298,8 @@ type cliModel struct {
 
 	// --- Bg Tasks Panel ---
 	panelBgTasks    []*tools.BackgroundTask // cached task list
-	panelBgCursor   int                     // selected task index
+	panelBgAgents   []panelAgentEntry       // cached agent list
+	panelBgCursor   int                     // selected item index (tasks first, then agents)
 	panelBgViewing  bool                    // true = viewing log of selected task
 	panelBgScroll   int                     // log view scroll offset
 	panelBgLogLines []string                // cached log lines for viewing
@@ -406,8 +411,11 @@ func newCLIModel() *cliModel {
 	initStyles := buildStyles(76)
 	applyTAStyles(&ta, &initStyles)
 
-	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
-	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
+	// Keep textarea's native newline bindings intact.
+	// Plain Enter is intercepted by the outer CLI handler and used for send,
+	// while modified/newline-intent keys (for example Ctrl+J / Ctrl+M depending on
+	// terminal encoding) are allowed to reach the textarea so its built-in
+	// multiline + internal-scroll behavior continues to work at MaxHeight.
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 

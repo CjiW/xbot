@@ -52,6 +52,17 @@ SubAgents bypass pipeline; system prompt built manually in `buildSubAgentRunConf
 - `docs/agent/conventions.md` — coding style, naming, error handling patterns
 - `docs/agent/gotchas.md` — known pitfalls and workarounds
 
+## Project Context System
+
+`ProjectContextMiddleware` auto-loads AGENT.md (or `.xbot/context.md`, `.cursorrules`) from CWD into system prompt. This is how cross-session project knowledge works — independent of memory provider.
+
+`knowledge-management` skill teaches the agent to maintain AGENT.md and knowledge tree. System-reminder auto-nudges agent to activate it after `FileReplace`/`FileCreate`/`Shell` usage.
+
+## Docs Site
+
+Hugo site at `docs-site/`, theme `hugo-geekdoc`.
+Custom layout override at `docs-site/layouts/_default/single.html` — removes auto-generated h1 from frontmatter title to avoid duplicate headings with markdown `#` headers.
+
 ## Build & Test
 
 ```bash

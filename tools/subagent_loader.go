@@ -75,7 +75,7 @@ func ParseAgentFile(path string) (SubAgentRole, error) {
 	}
 
 	// 解析 frontmatter 字段
-	name, description, allowedTools, caps, err := parseFrontmatter(frontmatter)
+	name, description, model, allowedTools, caps, err := parseFrontmatter(frontmatter)
 	if err != nil {
 		return SubAgentRole{}, fmt.Errorf("parse frontmatter: %w", err)
 	}
@@ -90,6 +90,7 @@ func ParseAgentFile(path string) (SubAgentRole, error) {
 	return SubAgentRole{
 		Name:         name,
 		Description:  description,
+		Model:        model,
 		SystemPrompt: strings.TrimSpace(body),
 		AllowedTools: allowedTools,
 		Capabilities: caps,
@@ -104,7 +105,7 @@ func ParseAgentFileContent(data []byte, fallbackName string) (SubAgentRole, erro
 	if err != nil {
 		return SubAgentRole{}, fmt.Errorf("invalid frontmatter: %w", err)
 	}
-	name, description, allowedTools, caps, err := parseFrontmatter(frontmatter)
+	name, description, model, allowedTools, caps, err := parseFrontmatter(frontmatter)
 	if err != nil {
 		return SubAgentRole{}, fmt.Errorf("parse frontmatter: %w", err)
 	}
@@ -114,6 +115,7 @@ func ParseAgentFileContent(data []byte, fallbackName string) (SubAgentRole, erro
 	return SubAgentRole{
 		Name:         name,
 		Description:  description,
+		Model:        model,
 		SystemPrompt: strings.TrimSpace(body),
 		AllowedTools: allowedTools,
 		Capabilities: caps,
@@ -150,9 +152,9 @@ func splitFrontmatter(content string) (frontmatter, body string, err error) {
 }
 
 // parseFrontmatter 手动解析简单 YAML frontmatter
-// 支持 name, description（字符串）、tools（列表）和 capabilities（子字段）
+// 支持 name, description（字符串）、tools（列表）、model（字符串）和 capabilities（子字段）
 // 默认 spawn_agent=true，除非显式设置 spawn_agent: false
-func parseFrontmatter(fm string) (name, description string, tools []string, caps SubAgentCapabilities, err error) {
+func parseFrontmatter(fm string) (name, description, model string, tools []string, caps SubAgentCapabilities, err error) {
 	caps = SubAgentCapabilities{
 		SpawnAgent: true, // 默认允许 spawn 子 agent
 	}
@@ -219,6 +221,9 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 		case "description":
 			description = value
 			currentField = "description"
+		case "model":
+			model = value
+			currentField = "model"
 		case "tools":
 			currentField = "tools"
 			// tools 的值可能在同一行（如 tools: [a, b]）或后续行（列表格式）
@@ -234,7 +239,7 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 	if name != "" {
 		for _, c := range name {
 			if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '-' && c != '_' {
-				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid agent name %q: only letters (including CJK), digits, hyphens and underscores are allowed", name)
+				return "", "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid agent name %q: only letters (including CJK), digits, hyphens and underscores are allowed", name)
 			}
 		}
 	}
@@ -242,16 +247,16 @@ func parseFrontmatter(fm string) (name, description string, tools []string, caps
 	// 校验 tools 列表格式
 	for _, t := range tools {
 		if t == "" {
-			return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("empty tool name in tools list")
+			return "", "", "", nil, SubAgentCapabilities{}, fmt.Errorf("empty tool name in tools list")
 		}
 		for _, c := range t {
 			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
-				return "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid tool name %q: only letters, digits, hyphens, underscores and dots are allowed", t)
+				return "", "", "", nil, SubAgentCapabilities{}, fmt.Errorf("invalid tool name %q: only letters, digits, hyphens, underscores and dots are allowed", t)
 			}
 		}
 	}
 
-	return name, description, tools, caps, nil
+	return name, description, model, tools, caps, nil
 }
 
 // isTruthy 判断字符串是否表示 true

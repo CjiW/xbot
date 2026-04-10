@@ -28,6 +28,13 @@ type PermUsersPair struct {
 	PrivilegedUser string
 }
 
+// isPermControlActiveFromCtx checks if permission control is active from context.
+// Returns false when no perm users are configured (both empty).
+func isPermControlActiveFromCtx(ctx context.Context) bool {
+	defaultUser, privilegedUser := PermUsersFromContext(ctx)
+	return defaultUser != "" || privilegedUser != ""
+}
+
 // WithPermUsers injects the permission control user config into the context.
 func WithPermUsers(ctx context.Context, defaultUser, privilegedUser string) context.Context {
 	return context.WithValue(ctx, permUsersKey, &PermUsersPair{
@@ -88,6 +95,14 @@ func (h *ApprovalHook) SetHandler(handler ApprovalHandler) {
 }
 
 func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args string) error {
+	// Read user configuration from context first (per-request, from user_settings)
+	defaultUser, privilegedUser := PermUsersFromContext(ctx)
+
+	// Feature not configured — ignore any run_as/reason (may be stale LLM context)
+	if defaultUser == "" && privilegedUser == "" {
+		return nil
+	}
+
 	runAs, reason := extractRunAsAndReason(args)
 	if (strings.TrimSpace(runAs) == "") != (strings.TrimSpace(reason) == "") {
 		return fmt.Errorf("run_as and reason must be provided together")
@@ -96,14 +111,6 @@ func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args str
 	// No run_as specified — execute as current process user
 	if runAs == "" {
 		return nil
-	}
-
-	// Read user configuration from context (per-request, from user_settings)
-	defaultUser, privilegedUser := PermUsersFromContext(ctx)
-
-	// Feature not configured — reject any run_as value
-	if defaultUser == "" && privilegedUser == "" {
-		return fmt.Errorf("permission control is not enabled: cannot use run_as %q (configure default_user or privileged_user in settings)", runAs)
 	}
 
 	// Validate run_as against configured users

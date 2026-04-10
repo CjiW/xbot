@@ -14,6 +14,7 @@ type SubAgentRole struct {
 	Description  string
 	SystemPrompt string
 	AllowedTools []string
+	Model        string // 可选：指定使用的 LLM 模型（如 "claude-sonnet-4-20250514"）。为空时继承主 Agent 模型。
 
 	Capabilities SubAgentCapabilities
 }

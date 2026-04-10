@@ -100,20 +100,20 @@ func TestApprovalHook_UnknownUser(t *testing.T) {
 func TestApprovalHook_FeatureDisabled(t *testing.T) {
 	handler := &mockApprovalHandler{}
 	h := NewApprovalHook(handler)
-	// No perm users in context — feature disabled
+	// No perm users in context — feature disabled, stale run_as should be silently ignored
 	err := h.PreToolUse(context.Background(), "Shell", `{"command": "ls", "run_as": "root"}`)
-	if err == nil {
-		t.Fatal("expected error when feature is disabled")
+	if err != nil {
+		t.Fatalf("expected nil when perm control is disabled (stale run_as should be ignored), got %v", err)
 	}
 }
 
 func TestApprovalHook_EmptyPermUsers(t *testing.T) {
 	handler := &mockApprovalHandler{}
 	h := NewApprovalHook(handler)
-	// Perm users in context but both empty
+	// Perm users in context but both empty — feature disabled, stale run_as should be ignored
 	err := h.PreToolUse(withPerm(context.Background(), "", ""), "Shell", `{"command": "ls", "run_as": "root"}`)
-	if err == nil {
-		t.Fatal("expected error when perm users are empty")
+	if err != nil {
+		t.Fatalf("expected nil when perm users are both empty (stale run_as should be ignored), got %v", err)
 	}
 }
 

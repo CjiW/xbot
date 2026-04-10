@@ -178,12 +178,69 @@ func TestIsStatusEmojiLine(t *testing.T) {
 		{"🔄 role", false},          // 无冒号
 		{"💡 thinking", false},      // 非 status emoji
 		{"", false},
+		// Tool names rejected (PascalCase = not agent role)
+		{"❌ Shell: kubectl get pods", false},
+		{"✅ Read: /home/user/src/xbot-1/tools/shell.go", false},
+		{"🔄 FileCreate: test.go", false},
+		{"❌ SubAgent: task", false},
+		{"✅ Grep: pattern", false},
+		// Chinese role names accepted
+		{"🔄 刑部: 审查中", true},
+		{"✅ 工部:", true},
+		{"❌ 中书省: 方案有问题", true},
+		// Real agent roles accepted
+		{"🔄 crown-prince: 调度中", true},
+		{"✅ ministry-works:", true},
+		{"❌ explore: 分析失败", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.line, func(t *testing.T) {
 			got := isStatusEmojiLine(tt.line)
 			if got != tt.want {
 				t.Errorf("isStatusEmojiLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsPlausibleAgentRole(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		// Agent roles → true
+		{"crown-prince", true},
+		{"ministry-works", true},
+		{"explore", true},
+		{"department-state", true},
+		{"刑部", true},
+		{"工部", true},
+		{"中书省", true},
+		{"role", true},
+		{"test-agent_v2", true},
+		// Tool names → false (PascalCase)
+		{"Shell", false},
+		{"Read", false},
+		{"FileCreate", false},
+		{"SubAgent", false},
+		{"Grep", false},
+		{"Glob", false},
+		{"Fetch", false},
+		{"AskUser", false},
+		// Paths → false
+		{"/home/user/src", false},
+		{"src/main.go", false},
+		// Sentences → false
+		{"some random text", false},
+		{"The environment changed", false},
+		// Empty → false
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPlausibleAgentRole(tt.name)
+			if got != tt.want {
+				t.Errorf("isPlausibleAgentRole(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
 	}

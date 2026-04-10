@@ -13,9 +13,10 @@ type InteractiveSubAgentManager interface {
 	SubAgentManager
 	// SpawnInteractive 创建/复用 interactive SubAgent session 并执行任务。
 	// instance 为空时行为与旧版一致；设置 instance 后同一 role 可创建多个独立 session。
-	SpawnInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance string) (string, error)
+	// model 为可选的模型覆盖，为空时继承主 Agent 模型。
+	SpawnInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance, model string) (string, error)
 	// SendInteractive 向已有的 interactive session 发送消息。
-	SendInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance string) (string, error)
+	SendInteractive(ctx *ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, instance, model string) (string, error)
 	// UnloadInteractive 结束 interactive session（巩固记忆 + 清理）。
 	UnloadInteractive(ctx *ToolContext, roleName, instance string) error
 	// InspectInteractive 返回 interactive session 的最近活动摘要（tail 风格）。
@@ -175,7 +176,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			if params.Task == "" {
 				return nil, fmt.Errorf("task is required for action=\"send\"")
 			}
-			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance)
+			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, role.Model)
 			if err != nil {
 				return nil, fmt.Errorf("interactive send failed: %w", err)
 			}
@@ -210,7 +211,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 				ctx.Metadata["background"] = "true"
 			}
 			// action="" + interactive=true → spawn/reuse
-			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance)
+			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, role.Model)
 			if err != nil {
 				return nil, fmt.Errorf("interactive spawn failed: %w", err)
 			}
@@ -223,7 +224,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	}
 
 	// Default: one-shot mode
-	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Role)
+	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Role, role.Model)
 	if err != nil {
 		return nil, fmt.Errorf("sub-agent failed: %w", err)
 	}

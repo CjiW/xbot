@@ -161,7 +161,7 @@ func (m *cliModel) closePanel() {
 	m.panelBgTasks = nil
 	m.panelBgAgents = nil
 	m.panelBgViewing = false
-	m.panelBgScroll = 0
+	m.panelScrollY = 0
 	m.panelBgLogLines = nil
 	// Danger zone cleanup
 	m.panelDangerItems = nil
@@ -199,7 +199,7 @@ func (m *cliModel) openBgTasksPanel() {
 
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
-	m.panelBgScroll = 0
+	m.panelScrollY = 0
 	m.panelBgLogLines = nil
 	// Clamp cursor
 	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
@@ -228,42 +228,28 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		switch {
 		case msg.Code == tea.KeyEsc || msg.String() == "ctrl+c":
 			m.panelBgViewing = false
-			m.panelBgScroll = 0
+			m.panelScrollY = 0
 			m.panelBgLogLines = nil
 			return true, m, nil
 		case msg.Code == tea.KeyUp:
-			m.panelBgScroll -= 5
-			if m.panelBgScroll < 0 {
-				m.panelBgScroll = 0
+			m.panelScrollY -= 5
+			if m.panelScrollY < 0 {
+				m.panelScrollY = 0
 			}
 			return true, m, nil
 		case msg.Code == tea.KeyDown:
-			maxScroll := len(m.panelBgLogLines) - 20
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			m.panelBgScroll += 5
-			if m.panelBgScroll > maxScroll {
-				m.panelBgScroll = maxScroll
-			}
+			m.panelScrollY += 5
 			return true, m, nil
 		case msg.Code == tea.KeyPgUp:
-			m.panelBgScroll -= 18
-			if m.panelBgScroll < 0 {
-				m.panelBgScroll = 0
+			m.panelScrollY -= m.panelVisibleHeight()
+			if m.panelScrollY < 0 {
+				m.panelScrollY = 0
 			}
 			return true, m, nil
 		default:
 			// PgDn: bubbletea doesn't have a constant, match by string
 			if msg.String() == "pgdown" {
-				maxScroll := len(m.panelBgLogLines) - 20
-				if maxScroll < 0 {
-					maxScroll = 0
-				}
-				m.panelBgScroll += 18
-				if m.panelBgScroll > maxScroll {
-					m.panelBgScroll = maxScroll
-				}
+				m.panelScrollY += m.panelVisibleHeight()
 				return true, m, nil
 			}
 		}
@@ -296,7 +282,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 				m.panelBgLogLines = []string{"(no output)"}
 			}
 			m.panelBgViewing = true
-			m.panelBgScroll = 0
+			m.panelScrollY = 0
 		} else if m.panelBgCursor >= len(m.panelBgTasks) && m.panelBgAgents != nil {
 			// Agent entry: inspect recent activity
 			agentIdx := m.panelBgCursor - len(m.panelBgTasks)
@@ -312,7 +298,7 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 						m.panelBgLogLines = splitLines(result)
 					}
 					m.panelBgViewing = true
-					m.panelBgScroll = 0
+					m.panelScrollY = 0
 				}
 			}
 		}
@@ -455,6 +441,7 @@ func (m *cliModel) viewBgTaskList() string {
 }
 
 // viewBgTaskLog renders the log viewer for a selected task.
+// Returns the FULL content — scrolling is handled by the outer clampPanelScroll + cli_view.go slicing.
 func (m *cliModel) viewBgTaskLog() string {
 	// §20 使用缓存样式
 	s := &m.styles
@@ -467,18 +454,14 @@ func (m *cliModel) viewBgTaskLog() string {
 			cmd = cmd[:37] + "..."
 		}
 		title = fmt.Sprintf(m.locale.BgTaskLogTitle, task.ID, cmd)
+	} else if m.panelBgAgents != nil {
+		agentIdx := m.panelBgCursor - len(m.panelBgTasks)
+		if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
+			ag := m.panelBgAgents[agentIdx]
+			title = fmt.Sprintf("%s/%s", ag.Role, ag.Instance)
+		}
 	}
 	help := s.PanelDesc.Render(m.locale.BgTaskLogHelp)
-
-	maxLines := 18
-	start := m.panelBgScroll
-	if start > len(m.panelBgLogLines) {
-		start = len(m.panelBgLogLines)
-	}
-	end := start + maxLines
-	if end > len(m.panelBgLogLines) {
-		end = len(m.panelBgLogLines)
-	}
 
 	var sb strings.Builder
 	sb.WriteString(s.PanelHeader.Render(title))
@@ -486,13 +469,8 @@ func (m *cliModel) viewBgTaskLog() string {
 	sb.WriteString(help)
 	sb.WriteString("\n")
 
-	for _, line := range m.panelBgLogLines[start:end] {
+	for _, line := range m.panelBgLogLines {
 		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-
-	if end < len(m.panelBgLogLines) {
-		sb.WriteString(s.PanelDesc.Render(fmt.Sprintf(m.locale.BgTaskLogMore, len(m.panelBgLogLines)-end)))
 		sb.WriteString("\n")
 	}
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"xbot/llm"
@@ -64,6 +65,9 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	f.mu.RUnlock()
 
 	// 从数据库加载配置
+	if f.configSvc == nil {
+		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+	}
 	cfg, err := f.configSvc.GetConfig(senderID)
 	if err != nil || cfg == nil {
 		// 无配置或出错，使用默认客户端
@@ -396,4 +400,105 @@ func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
 	f.mu.RUnlock()
 	// User has no cached config (using default client) — return 0 (use default)
 	return 0
+}
+
+// GetLLMForModel 获取指定模型的 LLM 客户端，用于 SubAgent 使用不同于主 Agent 的模型。
+//
+// 查找优先级：
+//  1. 在用户所有订阅中查找 Model 字段精确匹配 targetModel 的订阅
+//  2. 使用当前活跃订阅的凭证 + targetModel
+//  3. 使用任意订阅的凭证 + targetModel（优先 Provider 匹配）
+//  4. Fallback 到主 Agent 的当前 LLM（忽略 targetModel）
+//
+// 返回: (LLM客户端, 实际模型名, maxContext, thinkingMode, 是否使用了非默认模型)
+func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, string, int, string, bool) {
+	if targetModel == "" || f.subscriptionSvc == nil {
+		// 无指定模型或无订阅服务 → 使用默认
+		client, model, maxCtx, tm := f.GetLLM(senderID)
+		return client, model, maxCtx, tm, false
+	}
+
+	subs, err := f.subscriptionSvc.List(senderID)
+	if err != nil || len(subs) == 0 {
+		// 无订阅 → fallback 到默认
+		client, model, maxCtx, tm := f.GetLLM(senderID)
+		return client, model, maxCtx, tm, false
+	}
+
+	// 1. 精确匹配：订阅的 Model 字段 == targetModel
+	for _, sub := range subs {
+		if sub.Model == targetModel {
+			client := f.createClientFromSub(sub, targetModel)
+			if client != nil {
+				return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
+			}
+		}
+	}
+
+	// 2. 使用活跃订阅的凭证 + targetModel
+	activeSub, err := f.subscriptionSvc.GetDefault(senderID)
+	if err == nil && activeSub != nil {
+		client := f.createClientFromSub(activeSub, targetModel)
+		if client != nil {
+			return client, targetModel, activeSub.MaxContext, activeSub.ThinkingMode, true
+		}
+	}
+
+	// 3. Provider 匹配：找 provider 能服务该模型的订阅
+	provider := guessProvider(targetModel)
+	for _, sub := range subs {
+		if provider != "" && sub.Provider == provider {
+			client := f.createClientFromSub(sub, targetModel)
+			if client != nil {
+				return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
+			}
+		}
+	}
+
+	// 4. 任意可用订阅
+	for _, sub := range subs {
+		client := f.createClientFromSub(sub, targetModel)
+		if client != nil {
+			return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
+		}
+	}
+
+	// 5. Fallback 到默认
+	client, model, maxCtx, tm := f.GetLLM(senderID)
+	return client, model, maxCtx, tm, false
+}
+
+// createClientFromSub 从订阅创建 LLM 客户端，使用指定的模型名（而非订阅的默认模型）
+func (f *LLMFactory) createClientFromSub(sub *sqlite.LLMSubscription, model string) llm.LLM {
+	if sub.BaseURL == "" || sub.APIKey == "" {
+		return nil
+	}
+	cfg := &sqlite.UserLLMConfig{
+		Provider:        sub.Provider,
+		BaseURL:         sub.BaseURL,
+		APIKey:          sub.APIKey,
+		Model:           model,
+		MaxOutputTokens: sub.MaxOutputTokens,
+	}
+	client, _ := f.createClient(cfg)
+	return client
+}
+
+// guessProvider 根据模型名猜测 provider。
+// 返回空字符串表示无法猜测。
+func guessProvider(model string) string {
+	switch {
+	case strings.Contains(model, "claude"):
+		return "anthropic"
+	case strings.Contains(model, "gpt") || strings.Contains(model, "o1") || strings.Contains(model, "o3") || strings.Contains(model, "chatgpt"):
+		return "openai"
+	case strings.Contains(model, "deepseek"):
+		return "deepseek"
+	case strings.Contains(model, "gemini"):
+		return "google"
+	case strings.Contains(model, "qwen"):
+		return "qwen"
+	default:
+		return ""
+	}
 }

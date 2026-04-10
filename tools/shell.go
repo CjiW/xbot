@@ -70,6 +70,14 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 	if params.Command == "" {
 		return nil, fmt.Errorf("command is required")
 	}
+
+	// When permission control is disabled, ignore any stale run_as/reason
+	// the LLM might send from cached context.
+	if toolCtx.Ctx == nil || !isPermControlActiveFromCtx(toolCtx.Ctx) {
+		params.RunAs = ""
+		params.Reason = ""
+	}
+
 	if (strings.TrimSpace(params.RunAs) == "") != (strings.TrimSpace(params.Reason) == "") {
 		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}

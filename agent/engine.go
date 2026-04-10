@@ -452,8 +452,8 @@ type spawnAgentAdapter struct {
 }
 
 // RunSubAgent 实现 tools.SubAgentManager 接口。
-func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName string) (string, error) {
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false, "")
+func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task string, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, roleName, model string) (string, error) {
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, false, "", model)
 	out, err := a.spawnFn(parentCtx.Ctx, msg)
 	if err != nil {
 		return "", err
@@ -465,11 +465,11 @@ func (a *spawnAgentAdapter) RunSubAgent(parentCtx *tools.ToolContext, task strin
 }
 
 // SpawnInteractive 实现 InteractiveSubAgentManager.SpawnInteractive。
-func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance string) (string, error) {
+func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance, model string) (string, error) {
 	if a.interactiveSpawnFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance)
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance, model)
 	out, err := a.interactiveSpawnFn(parentCtx.Ctx, roleName, msg)
 	if err != nil {
 		return "", err
@@ -481,11 +481,11 @@ func (a *spawnAgentAdapter) SpawnInteractive(parentCtx *tools.ToolContext, task,
 }
 
 // SendInteractive 实现 InteractiveSubAgentManager.SendInteractive。
-func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance string) (string, error) {
+func (a *spawnAgentAdapter) SendInteractive(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, instance, model string) (string, error) {
 	if a.interactiveSendFn == nil {
 		return "", fmt.Errorf("interactive mode not supported")
 	}
-	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance)
+	msg := a.buildMsg(parentCtx, task, roleName, systemPrompt, allowedTools, caps, true, instance, model)
 	out, err := a.interactiveSendFn(parentCtx.Ctx, roleName, msg)
 	if err != nil {
 		return "", err
@@ -521,7 +521,7 @@ func (a *spawnAgentAdapter) InterruptInteractive(parentCtx *tools.ToolContext, r
 }
 
 // buildMsg 构造 SubAgent InboundMessage。
-func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool, instance string) bus.InboundMessage {
+func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleName, systemPrompt string, allowedTools []string, caps tools.SubAgentCapabilities, interactive bool, instance, model string) bus.InboundMessage {
 	metadata := map[string]string{
 		"origin_channel": a.channel,
 		"origin_chat_id": a.chatID,
@@ -538,6 +538,10 @@ func (a *spawnAgentAdapter) buildMsg(parentCtx *tools.ToolContext, task, roleNam
 		if bg, ok := parentCtx.Metadata["background"]; ok {
 			metadata["background"] = bg
 		}
+	}
+	// Propagate model override from SubAgent role definition
+	if model != "" {
+		metadata["model"] = model
 	}
 
 	return bus.InboundMessage{

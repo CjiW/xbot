@@ -124,7 +124,11 @@ func (a *Agent) SpawnInteractiveSession(
 	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
 
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
-	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true)
+	subModel := ""
+	if msg.Metadata != nil {
+		subModel = msg.Metadata["model"]
+	}
+	cfg := a.buildSubAgentRunConfig(subCtx, parentCtx, msg.Content, msg.SystemPrompt, msg.AllowedTools, caps, roleName, true, subModel)
 
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。

@@ -761,7 +761,7 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 		panelVals := m.panelValues
 		m.closePanel()
 		if onSubmit != nil && panelVals != nil {
-			return true, m, m.doSaveSettingsAsync(onSubmit, panelVals)
+			return true, m, m.doSaveSettings(onSubmit, panelVals)
 		}
 		return true, m, nil
 	case msg.Code == tea.KeyUp || msg.String() == "shift+tab":
@@ -1602,7 +1602,8 @@ func (m *cliModel) applyQuickSwitch() {
 		if m.channel == nil || m.channel.config.SwitchLLM == nil {
 			break
 		}
-		// Switch LLM asynchronously — createLLM may hit the network (LoadModelsFromAPI, 10s timeout)
+		// Switch LLM asynchronously — createLLM is now non-blocking
+		// (model list loads in background), but we keep async for UX feedback.
 		m.showTempStatus(fmt.Sprintf("Switching to: %s …", selected.Name))
 		switchFn := m.channel.config.SwitchLLM
 		subID := selected.ID

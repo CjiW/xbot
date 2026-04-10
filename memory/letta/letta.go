@@ -530,6 +530,7 @@ func (t *consolidateMemoryToolDef) Parameters() []llm.ToolParam {
 			Type:        "array",
 			Description: "List of detailed facts/events to archive. Recommended: 100-500 chars per entry. Each entry is a string.",
 			Required:    false,
+			Items:       &llm.ToolParamItems{Type: "string"},
 		},
 		{
 			Name:        "history_entry",

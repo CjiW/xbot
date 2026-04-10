@@ -69,19 +69,20 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		maxTokens:    cfg.MaxTokens,
 	}
 
-	// 尝试从 API 加载模型列表
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := o.LoadModelsFromAPI(ctx); err != nil {
-		log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
-		// API 获取失败，使用默认模型作为回退
-		if cfg.DefaultModel != "" {
-			o.mu.Lock()
-			o.models = []string{cfg.DefaultModel}
-			o.mu.Unlock()
-			log.WithField("fallback_model", cfg.DefaultModel).Info("[LLM] Using fallback model from config")
-		}
+	// Set fallback model immediately so ListModels() always returns something.
+	if cfg.DefaultModel != "" {
+		o.models = []string{cfg.DefaultModel}
 	}
+
+	// Load model list asynchronously to avoid blocking startup.
+	// The fallback model above ensures ListModels() works before API responds.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := o.LoadModelsFromAPI(ctx); err != nil {
+			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+		}
+	}()
 
 	return o
 }

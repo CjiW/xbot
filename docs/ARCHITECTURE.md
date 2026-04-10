@@ -206,12 +206,13 @@ for i := 0; i < maxIter; i++ {
 | 顺序 | 中间件 | Priority | SystemParts Key | 职责 |
 |------|--------|----------|----------------|------|
 | 1 | SystemPromptMiddleware | 0 | `00_base` | 渲染 prompt.md（支持 hot reload） |
-| 2 | ProjectHintMiddleware | 1 | `05_project_hint` | 注入已知项目知识卡片 |
+| 2 | ProjectContextMiddleware | 5 | `05_project_context` | 自动加载 AGENT.md 项目上下文 |
 | 3 | SkillsCatalogMiddleware | 100 | `10_skills` | 可用 Skills 目录 |
 | 4 | AgentsCatalogMiddleware | 110 | `15_agents` | 可用 Agents 目录 |
-| 5 | MemoryMiddleware | 120 | `20_memory` | 长期记忆（Recall） |
-| 6 | SenderInfoMiddleware | 130 | `30_sender` | 发送者名称 |
-| 7 | LanguageMiddleware | 135 | `32_language` | 语言指令 |
+| 5 | PermissionControlMiddleware | 115 | `14_perm_control` | OS 用户权限控制 |
+| 6 | MemoryMiddleware | 120 | `20_memory` | 长期记忆（Recall） |
+| 7 | SenderInfoMiddleware | 130 | `30_sender` | 发送者名称 |
+| 8 | LanguageMiddleware | 135 | `32_language` | 语言指令 |
 | 8 | UserMessageMiddleware | 200 | — | 时间戳 + 引导文本 |
 
 **CacheHint**: system prompt 标记为 `"static"`，Anthropic 下转为 `cache_control: {type: "ephemeral"}`。

@@ -541,9 +541,9 @@ func (a *Agent) buildSubAgentRunConfig(
 	// Pre-compute parentExtras once (shared between Phase 4 and buildSubAgentMemory)
 	parentExtras := a.buildToolContextExtras(parentCtx.Channel, parentCtx.ChatID)
 
-	// Phase 4: Inject project knowledge from parent agent's archival memory
-	if hint := BuildProjectHintText(ctx, a.multiSession.ArchivalService(), parentExtras.TenantID); hint != "" {
-		sysPrompt += hint
+	// Phase 4: Inject project context from AGENT.md in current working directory
+	if projectCtx := LoadProjectContextFile(a.workDir); projectCtx != "" {
+		sysPrompt += projectCtx
 	}
 
 	// Phase 5: Inject user language preference into SubAgent prompt.

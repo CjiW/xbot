@@ -204,22 +204,21 @@ func (m *cliModel) applyLanguageChange(lang string) {
 	m.renderCacheValid = false
 }
 
-// doSaveSettingsAsync runs the settings save callback in a goroutine and returns
+// doSaveSettings runs the settings save callback synchronously and returns
 // a tea.Cmd that sends the result back as cliSettingsSavedMsg.
-// This prevents the BubbleTea Update loop from blocking on SQLite writes,
-// file I/O, or fullRebuild.
-func (m *cliModel) doSaveSettingsAsync(onSubmit func(map[string]string), vals map[string]string) tea.Cmd {
-	// Capture the values we need for the deferred UI update
+// The callback is pure local I/O (config.json write, SQLite write, LLM rebuild)
+// with no network calls, so it completes in milliseconds.
+func (m *cliModel) doSaveSettings(onSubmit func(map[string]string), vals map[string]string) tea.Cmd {
+	// Capture the values we need for the UI update
 	theme, hasTheme := vals["theme"]
 	lang, hasLang := vals["language"]
 	// Capture feedback string now (m.locale is only safe to read in Update)
 	feedbackMsg := m.locale.SettingsSaved
 
-	return func() tea.Msg {
-		// Run the heavy callback (SQLite writes, config.json save, LLM rebuild)
-		// in a background goroutine so the UI stays responsive.
-		onSubmit(vals)
+	// Run synchronously — all operations are local I/O, no network calls
+	onSubmit(vals)
 
+	return func() tea.Msg {
 		return cliSettingsSavedMsg{
 			themeChanged: hasTheme && theme != "",
 			theme:        theme,

@@ -1,6 +1,6 @@
 ---
 name: knowledge-management
-description: "Manage project knowledge files (AGENT.md and knowledge tree) across sessions. Activate after completing significant tasks, when exploring a new codebase, or when asked to review/update project documentation."
+description: "Manage project knowledge files (AGENT.md and knowledge tree) across sessions. MUST activate after ANY code modification that adds/removes files, changes architecture, or modifies core behavior — before responding to the user. Also activate when exploring a new codebase for the first time, or when the user asks about project documentation."
 ---
 
 # Knowledge Management

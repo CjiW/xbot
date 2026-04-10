@@ -129,35 +129,38 @@ func (a *Agent) SpawnInteractiveSession(
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。
 	// 进度穿透：子 Agent 不仅上报自身进度，还注入回调到 subCtx 让更深层 SubAgent 也能递归穿透。
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		rn := roleName
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(rn).Chain
-		cfg.ProgressNotifier = func(lines []string) {
-			if len(lines) > 0 {
-				cb(SubAgentProgressDetail{
-					Path:  myPath,
-					Lines: lines,
-					Depth: myDepth,
-				})
+	// Background 模式例外：bg subagent 的进度不应穿透到父 agent 的 TUI。
+	if !background {
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			rn := roleName
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(rn).Chain
+			cfg.ProgressNotifier = func(lines []string) {
+				if len(lines) > 0 {
+					cb(SubAgentProgressDetail{
+						Path:  myPath,
+						Lines: lines,
+						Depth: myDepth,
+					})
+				}
 			}
 		}
-	}
-	// 注意：无父引擎进度上下文时不使用 fallback sendMessage。
-	// 多个交互式 agent 共享 sessionMsgIDs（key=channel:chatID）会导致
-	// 后一个 agent 的进度 patch 到前一个 agent 的消息上（进度树串扰）。
+		// 注意：无父引擎进度上下文时不使用 fallback sendMessage。
+		// 多个交互式 agent 共享 sessionMsgIDs（key=channel:chatID）会导致
+		// 后一个 agent 的进度 patch 到前一个 agent 的消息上（进度树串扰）。
 
-	// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(roleName).Chain
-		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
-			detail.Depth = myDepth + detail.Depth
-			if len(detail.Path) == 0 {
-				detail.Path = myPath
-			}
-			cb(detail)
-		})
+		// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(roleName).Chain
+			subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+				detail.Depth = myDepth + detail.Depth
+				if len(detail.Path) == 0 {
+					detail.Path = myPath
+				}
+				cb(detail)
+			})
+		}
 	}
 
 	// --- 阶段 3：执行 Run ---
@@ -232,6 +235,7 @@ func (a *Agent) SpawnInteractiveSession(
 		}
 
 		go func() {
+			startTime := time.Now()
 			defer func() {
 				if r := recover(); r != nil {
 					log.WithFields(log.Fields{
@@ -254,6 +258,7 @@ func (a *Agent) SpawnInteractiveSession(
 							Role:     roleName,
 							Instance: instance,
 							Content:  fmt.Sprintf("Panic: %v", r),
+							Elapsed:  time.Since(startTime),
 						})
 					}
 				}
@@ -277,6 +282,7 @@ func (a *Agent) SpawnInteractiveSession(
 					Role:     roleName,
 					Instance: instance,
 					Content:  content,
+					Elapsed:  time.Since(startTime),
 				})
 			}
 
@@ -436,28 +442,34 @@ func (a *Agent) SendToInteractiveSession(
 	// BUG FIX: 必须使用当前 ctx 重建 ProgressNotifier 和进度穿透回调。
 	// ia.cfg 中存储的是 spawn 期间的旧闭包，捕获的 SubAgentProgressFromContext(ctx)
 	// 指向 spawn 时的 pi。send 期间子代理进度会通过旧闭包上报到旧 pi → 进度树串扰。
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(roleName).Chain
-		cfg.ProgressNotifier = func(lines []string) {
-			if len(lines) > 0 {
-				cb(SubAgentProgressDetail{
-					Path:  myPath,
-					Lines: lines,
-					Depth: myDepth,
-				})
+	// Background 子代理不穿透进度到父 agent TUI。
+	if !ia.background {
+		if cb, ok := SubAgentProgressFromContext(ctx); ok {
+			myDepth := cc.Depth() + 1
+			myPath := cc.Spawn(roleName).Chain
+			cfg.ProgressNotifier = func(lines []string) {
+				if len(lines) > 0 {
+					cb(SubAgentProgressDetail{
+						Path:  myPath,
+						Lines: lines,
+						Depth: myDepth,
+					})
+				}
 			}
+			subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+				detail.Depth = myDepth + detail.Depth
+				if len(detail.Path) == 0 {
+					detail.Path = myPath
+				}
+				cb(detail)
+			})
+		} else {
+			// fallback：无父引擎进度上下文时，禁用直接 sendMessage 进度通知，
+			// 避免多个交互式 agent 竞争同一个 sessionMsgIDs 导致进度树串扰。
+			cfg.ProgressNotifier = nil
 		}
-		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
-			detail.Depth = myDepth + detail.Depth
-			if len(detail.Path) == 0 {
-				detail.Path = myPath
-			}
-			cb(detail)
-		})
 	} else {
-		// fallback：无父引擎进度上下文时，禁用直接 sendMessage 进度通知，
-		// 避免多个交互式 agent 竞争同一个 sessionMsgIDs 导致进度树串扰。
+		// Background 模式：禁用进度穿透
 		cfg.ProgressNotifier = nil
 	}
 
@@ -531,6 +543,13 @@ func (a *Agent) InterruptInteractiveSession(
 }
 
 // InspectInteractiveSession returns a tail-style summary of recent activity in an interactive session.
+//
+// Output layout (newest first):
+//  1. Header — status, message count
+//  2. Last Reply — full final assistant output (if any)
+//  3. Recent Messages — tail of conversation history (user ↔ assistant turns)
+//  4. Recent Iterations — last N iteration snapshots (thinking, tool calls)
+//  5. Last Error — if any
 func (a *Agent) InspectInteractiveSession(
 	ctx context.Context,
 	roleName string,
@@ -558,23 +577,55 @@ func (a *Agent) InspectInteractiveSession(
 	}
 
 	var sb strings.Builder
-	// Header
+
+	// ── 1. Header ──
 	status := "idle"
 	if ia.running {
 		status = "running"
 	}
-	sb.WriteString("## SubAgent Inspect: ")
-	sb.WriteString(roleName)
-	sb.WriteString(" (instance=")
-	sb.WriteString(instance)
-	sb.WriteString(")\n")
-	fmt.Fprintf(&sb, "Status: %s | Background: %v | Messages: %d\n", status, ia.background, len(ia.messages))
+	fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
 
-	if ia.lastError != "" {
-		fmt.Fprintf(&sb, "Last Error: %s\n", ia.lastError)
+	// ── 2. Last Reply (full) — most useful info first ──
+	if ia.lastReply != "" {
+		fmt.Fprintf(&sb, "\n### Last Reply:\n%s\n", ia.lastReply)
 	}
 
-	// Show last N iteration snapshots
+	// ── 3. Recent Messages — tail of conversation history ──
+	// Show the last tailCount messages so the parent agent can see
+	// what was asked and what was answered.
+	msgCount := len(ia.messages)
+	msgStart := msgCount - tailCount
+	if msgStart < 0 {
+		msgStart = 0
+	}
+	if msgCount > 0 {
+		fmt.Fprintf(&sb, "\n### Recent Messages (last %d of %d):\n", msgCount-msgStart, msgCount)
+		if msgStart > 0 {
+			fmt.Fprintf(&sb, "... %d earlier messages omitted ...\n", msgStart)
+		}
+		for _, msg := range ia.messages[msgStart:] {
+			role := msg.Role
+			content := msg.Content
+			// Truncate very long individual messages but keep enough context
+			if len(content) > 2000 {
+				content = content[:2000] + "... (truncated)"
+			}
+			// Skip empty content (e.g. assistant messages with only tool_calls)
+			if strings.TrimSpace(content) == "" {
+				if len(msg.ToolCalls) > 0 {
+					toolNames := make([]string, 0, len(msg.ToolCalls))
+					for _, tc := range msg.ToolCalls {
+						toolNames = append(toolNames, tc.Name)
+					}
+					fmt.Fprintf(&sb, "**%s**: [called tools: %s]\n", role, strings.Join(toolNames, ", "))
+				}
+				continue
+			}
+			fmt.Fprintf(&sb, "**%s**: %s\n", role, content)
+		}
+	}
+
+	// ── 4. Recent Iterations — thinking + tool execution details ──
 	snapshots := ia.iterationHistory
 	if len(snapshots) > tailCount {
 		snapshots = snapshots[len(snapshots)-tailCount:]
@@ -621,14 +672,9 @@ func (a *Agent) InspectInteractiveSession(
 		}
 	}
 
-	// Show tail of last reply
-	if ia.lastReply != "" {
-		reply := ia.lastReply
-		if len(reply) > 500 {
-			reply = reply[len(reply)-500:]
-			reply = "..." + reply
-		}
-		fmt.Fprintf(&sb, "\n### Last Reply (tail):\n%s\n", reply)
+	// ── 5. Last Error ──
+	if ia.lastError != "" {
+		fmt.Fprintf(&sb, "\n### Last Error:\n%s\n", ia.lastError)
 	}
 
 	return sb.String(), nil

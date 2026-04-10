@@ -967,11 +967,9 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 			if s.autoNotify {
 				if tc.Name == "SubAgent" {
 					line := s.progressLines[progressStartIdx+entry.index]
-					if strings.Contains(line, "🔄") {
-						s.progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(line, "🔄", "❌")
-					} else {
-						s.progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
-					}
+					line = strings.ReplaceAll(line, "⏳", "❌")
+					line = strings.ReplaceAll(line, "🔄", "❌")
+					s.progressLines[progressStartIdx+entry.index] = line
 				} else {
 					s.progressLines[progressStartIdx+entry.index] = fmt.Sprintf("> ❌ %s (%s)", toolLabel, elapsed.Round(time.Millisecond))
 				}
@@ -996,8 +994,11 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 
 			if s.autoNotify {
 				if tc.Name == "SubAgent" {
-					s.progressLines[progressStartIdx+entry.index] = strings.ReplaceAll(
-						s.progressLines[progressStartIdx+entry.index], "🔄", "✅")
+					line := s.progressLines[progressStartIdx+entry.index]
+					// Replace both possible prefixes: ⏳ (initial placeholder) and 🔄 (progress-updated)
+					line = strings.ReplaceAll(line, "⏳", "✅")
+					line = strings.ReplaceAll(line, "🔄", "✅")
+					s.progressLines[progressStartIdx+entry.index] = line
 				} else {
 					icon := "✅"
 					if result.IsError {
@@ -1395,7 +1396,17 @@ func (s *runState) injectBgTaskNotification(ctx context.Context, iteration int, 
 }
 
 // injectSubAgentBgNotification injects a bg subagent notification as a synthetic tool call/result pair.
+// Progress notifications are dropped entirely — they would pollute the parent's TUI and waste LLM tokens.
+// Only completed notifications are injected (as tool messages) and shown in the TUI progress block.
 func (s *runState) injectSubAgentBgNotification(ctx context.Context, iteration int, n *tools.SubAgentBgNotify) {
+	// Drop progress notifications — only completion matters for the parent agent
+	if n.Type == tools.SubAgentBgNotifyProgress {
+		log.Ctx(ctx).WithFields(log.Fields{
+			"role":     n.Role,
+			"instance": n.Instance,
+		}).Debug("Dropping bg subagent progress notification in Run loop")
+		return
+	}
 	bgContent := tools.FormatSubAgentBgNotify(n)
 	toolName := "bg_subagent_" + string(n.Type)
 	toolID := fmt.Sprintf("bgsub_%s_%s", n.Role, n.Instance)
@@ -1428,6 +1439,7 @@ func (s *runState) injectSubAgentBgNotification(ctx context.Context, iteration i
 		s.lastPersistedCount = len(s.messages)
 	}
 
+	// Show completion in TUI progress block
 	if s.structuredProgress != nil {
 		s.structuredProgress.CompletedTools = append(s.structuredProgress.CompletedTools, ToolProgress{
 			Name:      toolName,

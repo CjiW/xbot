@@ -196,6 +196,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoExpandInput()
 		return m, nil
 	}
+	// Ctrl+J 换行 — 直接 InsertString 绕过 textarea 内部 atContentLimit 检查，
+	// 否则到达 MaxHeight 后 textarea 的 InsertNewline keymap 会静默丢弃换行。
+	if isCtrlJ(msg) {
+		m.textarea.InsertString("\n")
+		m.autoExpandInput()
+		return m, nil
+	}
 	// Ctrl+O 切换 tool summary 展开/折叠（CSI u 协议兼容层，kitty/Ghostty 等）
 	if isCtrlO(msg) {
 		m.toggleToolSummary()
@@ -402,25 +409,11 @@ const (
 )
 
 func (m *cliModel) autoExpandInput() {
-	// DynamicHeight manages textarea height based on visual lines.
-	// We just need to sync the viewport and clamp textarea if terminal is too small.
-	taHeight := m.textarea.Height()
-	if taHeight < minTaHeight {
-		taHeight = minTaHeight
-	}
-	// Clamp textarea height to available space (don't let it push viewport below minimum)
-	availableForTA := m.height - 3 - 2 // 3 = title+status+footer, 2 = ta border
-	if m.todos != nil {
-		availableForTA -= 1 + len(m.todos)
-	}
-	maxAllowed := availableForTA - 3 // 3 = minimum viewport
-	if maxAllowed < minTaHeight {
-		maxAllowed = minTaHeight
-	}
-	if taHeight > maxAllowed {
-		taHeight = maxAllowed
-		m.textarea.SetHeight(taHeight)
-	}
+	// Bubble Tea textarea owns its own height when DynamicHeight is enabled.
+	// Do NOT force SetHeight here: once the textarea reaches MaxHeight it switches
+	// from grow mode to internal scrolling, and external SetHeight calls can break
+	// newline insertion / cursor behavior exactly at that boundary.
+	// We only keep the outer viewport in sync with the textarea's current height.
 	expectedVP := m.layoutViewportHeight()
 	currentVP := m.viewport.Height()
 	if currentVP != expectedVP {

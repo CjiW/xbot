@@ -410,10 +410,10 @@ func (m *cliModel) titleText() string {
 // xbotLogo — "XBOT" ASCII art（slant 字体，figlet 生成）
 var xbotLogo = []string{
 	"   _  __    ____    ____    ______",
-	"  | |/ /   / __ )  / __ \\ /_  __/",
-	"  |   /   / __  | / / / /  / /",
-	" /   |   / /_/ / / /_/ /  / /",
-	"/_/|_|  /_____/  \\____/ /_/",
+	"  | |/ /   / __ )  / __ \\  /_  __/",
+	"  |   /   / __  | / / / /   / /",
+	" /   |   / /_/ / / /_/ /   / /",
+	"/_/|_|  /_____/  \\____/   /_/",
 }
 
 // renderSplash 渲染启动画面 — 品牌 logo + 版本号 + 加载动画
@@ -599,7 +599,7 @@ func (m *cliModel) renderFooter() string {
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
-			if len(m.inputHistory) > 0 {
+			if len(m.inputHistory) > 0 && len(m.messageQueue) > 0 {
 				hints = append(hints, m.keyHint("↑", m.locale.FooterHistory))
 			}
 			if m.bgTaskCount > 0 || m.agentCount > 0 {

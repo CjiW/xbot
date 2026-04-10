@@ -444,6 +444,7 @@ type SubAgentBgNotify struct {
 	Role     string               // subagent role name
 	Instance string               // subagent instance ID
 	Content  string               // formatted notification content for the LLM
+	Elapsed  time.Duration        // total elapsed time (for completed notifications)
 }
 
 // SessionKey implements BgNotification.
@@ -482,7 +483,12 @@ func FormatSubAgentBgNotify(n *SubAgentBgNotify) string {
 		if n.Instance != "" {
 			fmt.Fprintf(&sb, " (instance=%s)", n.Instance)
 		}
-		fmt.Fprintf(&sb, " completed.\n%s", n.Content)
+		fmt.Fprintf(&sb, " completed.")
+		if n.Elapsed > 0 {
+			fmt.Fprintf(&sb, " Elapsed: %s", n.Elapsed.Round(time.Second))
+		}
+		fmt.Fprintf(&sb, "\n%s\n", n.Content)
+		fmt.Fprintf(&sb, "If this subagent is no longer needed, use SubAgent(action=\"unload\", instance=%q) to release its resources.", n.Instance)
 	}
 	return sb.String()
 }

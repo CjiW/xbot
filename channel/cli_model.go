@@ -411,8 +411,11 @@ func newCLIModel() *cliModel {
 	initStyles := buildStyles(76)
 	applyTAStyles(&ta, &initStyles)
 
-	// Enter = send, Ctrl+Enter/Ctrl+J = newline (Ctrl+Enter raw sequences vary by terminal)
-	ta.KeyMap.InsertNewline.SetKeys("ctrl+j")
+	// Keep textarea's native newline bindings intact.
+	// Plain Enter is intercepted by the outer CLI handler and used for send,
+	// while modified/newline-intent keys (for example Ctrl+J / Ctrl+M depending on
+	// terminal encoding) are allowed to reach the textarea so its built-in
+	// multiline + internal-scroll behavior continues to work at MaxHeight.
 
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 

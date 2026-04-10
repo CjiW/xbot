@@ -2110,12 +2110,23 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 		}
 	}
 
-	a.injectInbound(channelName, chatID, "system", content)
+	a.injectInbound(channelName, chatID, "user", content)
 }
 
 // processSubAgentBgNotification handles a bg subagent notification when no Run() is active.
-// Formats the notification and injects it as a user message, triggering a new agent Run.
+// Only completion notifications trigger a new Run; progress notifications are dropped
+// (they're only meaningful during an active Run, where they're injected as tool results).
 func (a *Agent) processSubAgentBgNotification(n *tools.SubAgentBgNotify) {
+	// During idle, only completion matters — progress would waste an LLM call
+	if n.Type != tools.SubAgentBgNotifyCompleted {
+		log.WithFields(log.Fields{
+			"role":     n.Role,
+			"instance": n.Instance,
+			"type":     n.Type,
+		}).Debug("Dropping bg subagent progress notification (agent idle)")
+		return
+	}
+
 	parts := strings.SplitN(n.SessionKey(), ":", 2)
 	if len(parts) != 2 {
 		log.WithField("session_key", n.SessionKey()).Warn("Bg subagent notification: invalid session key")
@@ -2139,7 +2150,7 @@ func (a *Agent) processSubAgentBgNotification(n *tools.SubAgentBgNotify) {
 		}
 	}
 
-	a.injectInbound(channelName, chatID, "system", content)
+	a.injectInbound(channelName, chatID, "user", content)
 }
 
 // buildBgNotificationRunConfig is no longer needed — idle bg notifications

@@ -173,6 +173,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyUp:
+		// If textarea has content, let textarea own multiline vertical cursor movement.
+		// Otherwise long pasted input cannot navigate back to earlier lines because
+		// viewport/history steals Up before textarea sees it.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			break
+		}
 		// Viewport 不在底部时，方向键优先滚动 viewport（不触发 input history）
 		if !m.viewport.AtBottom() {
 			m.viewport.ScrollUp(1)
@@ -190,8 +196,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 		}
 		if m.panelMode == "" && !m.typing {
-			// 空输入时浏览历史（仅空输入触发，避免破坏 textarea 多行编辑）
-			if m.textarea.Value() == "" && len(m.inputHistory) > 0 {
+			// 空输入时浏览历史：仅当有排队消息时才启用，避免误触覆盖输入。
+			if len(m.messageQueue) > 0 && m.textarea.Value() == "" && len(m.inputHistory) > 0 {
 				if m.inputHistoryIdx == -1 {
 					m.inputDraft = "" // 保存空草稿
 					m.inputHistoryIdx = 0
@@ -205,12 +211,16 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyDown:
+		// If textarea has content, let textarea own multiline vertical cursor movement.
+		if m.panelMode == "" && m.textarea.Value() != "" {
+			break
+		}
 		// Viewport 不在底部时，方向键优先滚动 viewport
 		if !m.viewport.AtBottom() {
 			m.viewport.ScrollDown(1)
 			return m, nil, true
 		}
-		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 {
+		if m.panelMode == "" && !m.typing && m.inputHistoryIdx >= 0 && len(m.messageQueue) > 0 {
 			if m.inputHistoryIdx > 0 {
 				m.inputHistoryIdx--
 				m.textarea.SetValue(m.inputHistory[m.inputHistoryIdx])
@@ -223,6 +233,13 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Code == tea.KeyEnter:
+		// Plain Enter sends. Modified/newline-intent variants should fall through to
+		// the textarea so its native multiline/internal-scroll behavior works,
+		// especially once the input reaches MaxHeight.
+		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
+		if msg.String() == "ctrl+m" {
+			break
+		}
 		// Enter 发送消息
 		if !m.inputReady {
 			// §Q 消息队列：typing 期间允许排队消息

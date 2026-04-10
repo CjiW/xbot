@@ -5,132 +5,88 @@ description: "Manage project knowledge files (AGENT.md and knowledge tree) acros
 
 # Knowledge Management
 
-Manage persistent project knowledge that survives across sessions.
+Maintain a living knowledge base so future sessions (with zero memory) can work effectively.
 
-## Core Principle
+## Iron Rules
 
-Write as if the next reader (your future self) has **zero memory** of this project.
-Every entry must be self-contained and immediately actionable.
+1. **Every file referenced in AGENT.md MUST exist on disk.** Before adding a reference, create the file. Before removing a file, remove its reference. Broken references are worse than no references.
+2. **Knowledge files are the primary deliverable, not AGENT.md.** AGENT.md is just an index. When you learn something non-obvious, write it into the appropriate knowledge file. Only update AGENT.md's index entry if the file list changed.
+3. **Read before write.** Before updating any knowledge file, read it first. Before creating AGENT.md references, verify the target file exists.
+4. **Do NOT copy the structure from this skill into AGENT.md.** Every project is different. Observe the actual project structure and document what exists, not what a template says should exist.
+
+## Two-Layer Architecture
+
+```
+AGENT.md (index, auto-injected into prompt)
+  → tells you WHERE to look for details
+  → should make you want to Read specific files, not answer questions directly
+
+Knowledge files (the actual knowledge, on disk)
+  → agent reads them with Read tool when needed
+  → each file is self-contained on one topic
+  → AGENT.md references them; agent uses them
+```
 
 ## AGENT.md
 
-`AGENT.md` at the project root is the entry point. It is automatically loaded into
-your system prompt (up to 10000 chars). Keep it **concise** — it is an index, not a dump.
-Aim for 1000-3000 chars. If you need more space, link to knowledge files.
+Auto-loaded into system prompt (up to 10000 chars). Keep it concise — an index, not an encyclopedia.
 
-### Structure
+Purpose: tell your future self **where to look**, not **everything you know**.
 
-```markdown
-# Project Name
+What belongs:
+- One-line project summary
+- Architecture overview (2-3 sentences, link to detail file for more)
+- Build/test/lint commands
+- **Knowledge Files section**: list of existing files with one-line descriptions
+- Key conventions that don't fit elsewhere (max 5 bullets)
 
-> One-line summary of what this project does.
-
-## Architecture
-Brief overview. Link to detail files for complex subsystems.
+What does NOT belong:
+- Anything that belongs in a knowledge file
+- Specific line numbers, function signatures, or code snippets
+- Information already in README
 
 ## Knowledge Files
-- `docs/agent/architecture.md` — module relationships, data flow
-- `docs/agent/conventions.md` — coding style, naming rules, error handling
-- `docs/agent/gotchas.md` — known pitfalls and workarounds
 
-## Build & Test
-- `make build` — compile
-- `make test` — run tests
-- `go test ./path/...` — test specific package
+These are where the real knowledge lives. Create them under a consistent directory (e.g. `docs/agent/`).
 
-## Key Conventions
-- Rule 1
-- Rule 2
-```
+When to create a new knowledge file:
+- You've explored a subsystem and understand it well enough to document it
+- You keep revisiting the same topic across sessions
+- The information is too detailed for AGENT.md but worth preserving
 
-### What belongs in AGENT.md
+When to update an existing knowledge file:
+- You discovered something that changes or contradicts what's documented
+- The project structure changed (files moved, APIs renamed)
+- You found a bug, workaround, or gotcha worth recording
 
-- Architecture overview (where is the entry point, what are the main packages)
-- Build/test/lint commands
-- Critical conventions that differ from language defaults
-- **References** to deeper knowledge files (tree structure)
+When to NOT create/update:
+- Trivial changes (typo fixes, comment edits)
+- Information that's already correctly documented
+- When nothing surprising was learned
 
-### What does NOT belong
+## Decision Flow
 
-- Information already in README
-- Obvious facts ("Go uses .go files")
-- Specific line numbers or function names that change frequently
-- Verbose explanations — keep it terse, link to detail files
+After completing a task, ask yourself:
 
-## Knowledge Tree
+1. Did I learn something non-obvious? → Write it into the relevant knowledge file (or create one)
+2. Did the file/knowledge list change? → Update AGENT.md's index
+3. Did nothing worth remembering happen? → Skip entirely
 
-For non-trivial projects, maintain a tree of knowledge files under `docs/agent/`
-(or a similar convention). Each file covers one topic deeply.
+**Most of the time, the answer should be (3).** Do not inflate documentation.
 
-### Rules
+## Accuracy Maintenance
 
-- **One topic per file**: architecture, conventions, gotchas, APIs, deployment, etc.
-- **Cross-reference**: files link to each other with relative paths
-- **Shallow tree**: prefer flat list over deep nesting; max 2 levels
-- **AGENT.md is the root**: all knowledge files are referenced from AGENT.md
+- Before writing: Read the existing file first
+- After writing: Verify AGENT.md references match actual files on disk
+- When deleting/renaming files: Update all references in AGENT.md and other knowledge files
+- Do NOT just append — revise outdated content
+- Check existing knowledge files for staleness: are the described files, APIs, and conventions still current? If not, update or remove
 
-### Example tree
+## Validation
 
-```
-AGENT.md                          ← index (auto-injected in prompt)
-docs/agent/
-  architecture.md                 ← module map, data flow diagrams
-  conventions.md                  ← coding style, naming, error handling
-  gotchas.md                      ← known pitfalls, workarounds
-  testing.md                      ← test conventions, fixtures, mocks
-```
+After creating or significantly updating the knowledge base, verify it works:
 
-## When to Create or Update
-
-### Create AGENT.md
-- After first meaningful exploration of a new project
-- When the user asks "document this project for yourself"
-
-### Update AGENT.md or knowledge files
-- After completing a task that revealed non-obvious architecture or conventions
-- When you discover a gotcha, workaround, or hidden dependency
-- After making structural changes (new packages, renamed APIs, moved files)
-
-### When NOT to update
-- Trivial changes (typo fix, comment addition)
-- Changes to ephemeral state (test output, temporary branches)
-- When the user hasn't asked and nothing surprising was discovered
-
-**Rule of thumb**: Only update when future sessions would benefit. If in doubt, skip.
-
-## Self-Improvement
-
-After completing a task, briefly consider:
-
-1. **Should I create/update AGENT.md?** Only if the project has none, or you
-   discovered important non-obvious information.
-2. **Should I create a knowledge file?** Only if the topic is complex enough
-   that a short AGENT.md entry can't cover it AND you expect to revisit it.
-3. **Should I create a Skill?** Only if you've developed a repeatable workflow
-   that would benefit from structured instructions (e.g., a project-specific
-   deployment checklist, a debugging methodology for this codebase).
-
-**Anti-bloat guard**: Never add knowledge just because you can. Every piece of
-documentation must earn its place by saving future effort. If existing docs
-already cover something, don't duplicate — link instead.
-
-## Updating Existing Content
-
-When project structure changes (files moved, packages renamed, conventions
-shifted), update the affected knowledge files. Do NOT just append new info
-on top — **revise** the existing content to stay accurate.
-
-Checklist for updates:
-- [ ] Is the old content still accurate? If not, fix it.
-- [ ] Are cross-references still valid? Fix broken links.
-- [ ] Is the file getting too long? Consider splitting.
-- [ ] Can anything be removed because it's now obvious or obsolete?
-
-## Format Guidelines
-
-- Use relative paths for all file references
-- Keep paragraphs short (2-3 sentences)
-- Use bullet lists for enumerations
-- Use headers for structure, not decoration
-- Write in English for code-level docs; project-level docs may follow the
-  project's existing language convention
+1. Launch a SubAgent (explore role) restricted to only reading AGENT.md and files referenced from it
+2. Ask it architecture questions that require understanding the project structure
+3. If it cannot answer correctly, the knowledge files are incomplete — fix them
+4. The test proves the knowledge base is self-sufficient for a zero-memory agent

@@ -1,0 +1,90 @@
+# Architecture
+
+## Package Map
+
+```
+cmd/xbot-cli/     CLI entry point, app wiring, subscription management
+cmd/runner/       Remote runner process (sandbox execution)
+agent/            Agent loop, LLM orchestration, middleware pipeline, tool execution
+channel/          Channel adapters: CLI (BubbleTea), Feishu, QQ, Web
+llm/              LLM client abstraction (OpenAI, Anthropic), retry, streaming
+memory/           Pluggable memory: letta/ (archival+core), flat/ (in-memory)
+tools/            Built-in tools, sandbox, hooks, MCP integration
+session/          Multi-tenant session management
+storage/          SQLite persistence, vector DB for archival memory
+config/           JSON config (~/.xbot/config.json), env var overrides
+prompt/           Go embed templates for system prompt construction
+event/            Event routing and trigger system
+cron/             Cron scheduler for timed tasks
+oauth/            OAuth 2.0 server and providers
+```
+
+## Message Flow
+
+```
+User Message → Bus.Inbound → Dispatcher → Channel.HandleMessage
+  → Agent.HandleMessage → chatProcessLoop → runState.Run()
+    → Pipeline.Assemble(system prompt) → LLM.Generate()
+    → executeToolCalls() → toolExecutor() → HookChain → Tool.Execute()
+    → results → LLM.Generate() → ... (loop up to maxIterations)
+    → ExtractFinalReply() → Bus.Outbound → Dispatcher → Channel.Send()
+```
+
+## System Prompt Pipeline
+
+`agent/middleware.go` — `MessagePipeline` executes ordered `MessageMiddleware` chain.
+Registered in `agent/context.go:initPipelines()`.
+
+| Priority | Middleware | Key | Purpose |
+|----------|-----------|-----|---------|
+| 0 | SystemPromptMiddleware | `00_base` | Render prompt.md template |
+| 5 | ProjectContextMiddleware | `05_project_context` | Load AGENT.md from CWD |
+| 100 | SkillsCatalogMiddleware | `10_skills` | Inject skill names+descriptions |
+| 110 | AgentsCatalogMiddleware | `15_agents` | Inject subagent catalog |
+| 115 | PermissionControlMiddleware | `14_perm_control` | OS user permission control |
+| 120 | MemoryMiddleware | `20_memory` | Core memory (persona/human/working_context) |
+| 130 | SenderInfoMiddleware | `30_sender` | Sender name |
+| 135 | LanguageMiddleware | `32_language` | Language preference |
+| 200 | UserMessageMiddleware | — | Timestamp + user message wrapping |
+
+## Tool Execution
+
+```
+LLM Response → executeToolCalls() → execOne() → toolExecutor()
+  → HookChain.RunPre() → tool.Execute() → HookChain.RunPost()
+```
+
+Two execution modes (`agent/engine_run.go`):
+- **Normal**: all tool calls serial
+- **ReadWrite split**: read tools parallel (max 8), write tools serial, SubAgent concurrent
+
+Tool hooks (`tools/hook.go`): LoggingHook, TimingHook, ApprovalHook.
+Hook chain is shared across main Agent and all SubAgents (same instance pointer).
+
+## Agent Hierarchy
+
+`agent/engine_wire.go` — SubAgent inherits parent's HookChain, LLMFactory, skill catalog.
+SubAgents bypass the pipeline; system prompt built manually in `buildSubAgentRunConfig`.
+
+Three nesting levels: main Agent → SubAgent → SubSubAgent (max depth 6).
+Interactive SubAgents (`agent/interactive.go`) support multi-turn sessions with inspect/tail.
+
+## Key Interfaces
+
+| Interface | File | Purpose |
+|-----------|------|---------|
+| `LLM` | `llm/interface.go` | Generate, ListModels, Stream |
+| `Tool` | `tools/interface.go` | Execute, Definition, Name |
+| `ToolHook` | `tools/hook.go` | PreToolUse, PostToolUse |
+| `Sandbox` | `tools/sandbox.go` | Run, Sync, Resolve |
+| `Channel` | `channel/channel.go` | Start, Stop, Send |
+| `MessageMiddleware` | `agent/middleware.go` | Process(mc) |
+| `MemoryProvider` | `memory/memory.go` | Core + Archival memory |
+
+## Concurrency Model
+
+- Agent main loop: one goroutine per chat (`chatProcessLoop`)
+- Commands: serialized via message queue (non-concurrent commands)
+- Tool calls: controlled by `maxConcurrency` (global semaphore) + read/write split
+- LLM calls: per-tenant semaphore (`llm/semaphore.go`)
+- Background tasks: goroutine + WaitGroup, drained on shutdown

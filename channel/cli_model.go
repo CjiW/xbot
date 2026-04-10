@@ -51,11 +51,9 @@ func (t *animTicker) viewFrames(frames []string) string {
 
 // Ticker frame presets
 var (
-	// dotFrames: smooth braille dot sweep — 24 frames for a fluid loop
+	// dotFrames: braille dot orbit — 8 frames for a smooth clockwise loop
 	dotFrames = []string{
-		"⠁", "⠃", "⠇", "⡇", "⣇", "⣧", "⣷", "⣿",
-		"⣾", "⣽", "⣻", "⢿", "⡿", "⠿", "⠟", "⠛",
-		"⠫", "⠭", "⠮", "⡮", "⡯", "⣯", "⣽", "⣾",
+		"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 	}
 	// waveFrames: rotating crescent moon phases — subagent feel
 	waveFrames = []string{"◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒", "◐", "◓", "◑", "◒"}

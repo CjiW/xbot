@@ -113,20 +113,7 @@ func (m *ProjectContextMiddleware) Process(mc *MessageContext) error {
 		return nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("\n## Project Context\n\n")
-	sb.WriteString("Project-level instructions loaded from `")
-	sb.WriteString(filePath)
-	sb.WriteString("`.\n\n")
-	if len(content) > maxProjectContextChars {
-		sb.WriteString(content[:maxProjectContextChars])
-		fmt.Fprintf(&sb, "\n\n... (truncated, use Read tool to view full `%s`)\n", filePath)
-	} else {
-		sb.WriteString(content)
-	}
-	sb.WriteString("\n")
-
-	mc.SystemParts["05_project_context"] = sb.String()
+	mc.SystemParts["05_project_context"] = formatProjectContext(content, filePath)
 
 	log.WithFields(log.Fields{
 		"dir":       dir,
@@ -160,8 +147,8 @@ func (m *ProjectContextMiddleware) load(dir string) (content string, filePath st
 			continue
 		}
 
-		// If cached entry matches modTime, reuse content (avoid re-reading unchanged file)
-		if hit && entry.filePath == fullPath && entry.modTime.Equal(info.ModTime()) {
+		// If cached entry matches file name and modTime, reuse content (avoid re-reading unchanged file)
+		if hit && entry.filePath == name && entry.modTime.Equal(info.ModTime()) {
 			// Refresh TTL only
 			m.cache.mu.Lock()
 			entry.expireAt = now.Add(projectContextCacheTTL)
@@ -175,7 +162,9 @@ func (m *ProjectContextMiddleware) load(dir string) (content string, filePath st
 		}
 
 		content = strings.TrimSpace(string(data))
-		filePath = name // relative name for display
+		if content == "" {
+			continue
+		}
 
 		// Update cache
 		m.cache.mu.Lock()
@@ -187,7 +176,7 @@ func (m *ProjectContextMiddleware) load(dir string) (content string, filePath st
 		}
 		m.cache.mu.Unlock()
 
-		return content, filePath
+		return content, name
 	}
 
 	// No file found — cache empty result to avoid repeated scans
@@ -198,6 +187,23 @@ func (m *ProjectContextMiddleware) load(dir string) (content string, filePath st
 	m.cache.mu.Unlock()
 
 	return "", ""
+}
+
+// formatProjectContext builds a formatted string for injection into system prompts.
+func formatProjectContext(content string, filePath string) string {
+	var sb strings.Builder
+	sb.WriteString("\n## Project Context\n\n")
+	sb.WriteString("Project-level instructions loaded from `")
+	sb.WriteString(filePath)
+	sb.WriteString("`.\n\n")
+	if len(content) > maxProjectContextChars {
+		sb.WriteString(content[:maxProjectContextChars])
+		fmt.Fprintf(&sb, "\n\n... (truncated, use Read tool to view full `%s`)\n", filePath)
+	} else {
+		sb.WriteString(content)
+	}
+	sb.WriteString("\n")
+	return sb.String()
 }
 
 // LoadProjectContextFile is a standalone helper that loads the first matching
@@ -216,19 +222,7 @@ func LoadProjectContextFile(dir string) string {
 		if content == "" {
 			continue
 		}
-		var sb strings.Builder
-		sb.WriteString("\n## Project Context\n\n")
-		sb.WriteString("Project-level instructions loaded from `")
-		sb.WriteString(name)
-		sb.WriteString("`.\n\n")
-		if len(content) > maxProjectContextChars {
-			sb.WriteString(content[:maxProjectContextChars])
-			fmt.Fprintf(&sb, "\n\n... (truncated, use Read tool to view full `%s`)\n", name)
-		} else {
-			sb.WriteString(content)
-		}
-		sb.WriteString("\n")
-		return sb.String()
+		return formatProjectContext(content, name)
 	}
 	return ""
 }

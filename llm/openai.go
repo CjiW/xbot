@@ -71,7 +71,9 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 
 	// Set fallback model immediately so ListModels() always returns something.
 	if cfg.DefaultModel != "" {
+		o.mu.Lock()
 		o.models = []string{cfg.DefaultModel}
+		o.mu.Unlock()
 	}
 
 	// Load model list asynchronously to avoid blocking startup.

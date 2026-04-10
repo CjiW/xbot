@@ -68,7 +68,7 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	modifiedFiles := false
 	for _, name := range roundToolNames {
 		switch name {
-		case "FileReplace", "FileCreate", "Shell":
+		case "FileReplace", "FileCreate":
 			modifiedFiles = true
 		}
 	}

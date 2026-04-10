@@ -1,0 +1,146 @@
+{
+  "_comment": "xbot 配置文件模板。复制为 config.json 并根据需要修改。time.Duration 字段使用 Go json.Marshal 的纳秒整数格式（1s = 1000000000, 1m = 60000000000, 1h = 3600000000000）。环境变量优先级高于此文件，参见 .env.example。",
+
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "read_timeout": 30000000000,
+    "write_timeout": 120000000000
+  },
+
+  "llm": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "your-api-key",
+    "model": "gpt-4o",
+    "max_output_tokens": 0,
+    "thinking_mode": ""
+  },
+
+  "embedding": {
+    "provider": "",
+    "base_url": "",
+    "api_key": "",
+    "model": "text-embedding-3-small",
+    "max_tokens": 2048
+  },
+
+  "log": {
+    "level": "info",
+    "format": "json"
+  },
+
+  "pprof": {
+    "enable": false,
+    "host": "localhost",
+    "port": 6060
+  },
+
+  "feishu": {
+    "enabled": false,
+    "app_id": "",
+    "app_secret": "",
+    "encrypt_key": "",
+    "verification_token": "",
+    "allow_from": [],
+    "domain": ""
+  },
+
+  "qq": {
+    "enabled": false,
+    "app_id": "",
+    "client_secret": "",
+    "allow_from": []
+  },
+
+  "napcat": {
+    "enabled": false,
+    "ws_url": "ws://localhost:3001",
+    "token": "",
+    "allow_from": []
+  },
+
+  "agent": {
+    "max_iterations": 2000,
+    "max_concurrency": 3,
+    "memory_provider": "flat",
+    "work_dir": ".",
+    "prompt_file": "prompt.md",
+
+    "mcp_inactivity_timeout": 1800000000000,
+    "mcp_cleanup_interval": 300000000000,
+    "session_cache_timeout": 86400000000000,
+
+    "context_mode": "",
+    "enable_auto_compress": true,
+    "max_context_tokens": 200000,
+    "compression_threshold": 0.7,
+    "purge_old_messages": false,
+    "max_sub_agent_depth": 6,
+
+    "llm_retry_attempts": 5,
+    "llm_retry_delay": 1000000000,
+    "llm_retry_max_delay": 30000000000,
+    "llm_retry_timeout": 120000000000
+  },
+
+  "oauth": {
+    "enable": false,
+    "host": "127.0.0.1",
+    "port": 8081,
+    "base_url": ""
+  },
+
+  "sandbox": {
+    "mode": "docker",
+    "remote_mode": "",
+    "docker_image": "ubuntu:22.04",
+    "host_work_dir": "",
+    "idle_timeout": 1800000000000,
+    "ws_port": 8080,
+    "auth_token": "",
+    "public_url": "",
+    "allow_web_user_server_runner": false
+  },
+
+  "startup_notify": {
+    "channel": "feishu",
+    "chat_id": ""
+  },
+
+  "admin": {
+    "chat_id": ""
+  },
+
+  "web": {
+    "enable": false,
+    "host": "0.0.0.0",
+    "port": 8082,
+    "static_dir": "",
+    "upload_dir": "",
+    "persona_isolation": false,
+    "invite_only": false
+  },
+
+  "event_webhook": {
+    "enable": false,
+    "host": "0.0.0.0",
+    "port": 8090,
+    "base_url": "",
+    "max_body_size": 1048576,
+    "rate_limit": 60
+  },
+
+  "oss": {
+    "provider": "",
+    "qiniu_access_key": "",
+    "qiniu_secret_key": "",
+    "qiniu_bucket": "",
+    "qiniu_domain": "",
+    "qiniu_region": ""
+  },
+
+  "tavily_api_key": "",
+
+  "subscriptions": []
+}

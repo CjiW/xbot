@@ -37,6 +37,7 @@ type SandboxConfig struct {
 	WSPort      int           `json:"ws_port"`
 	AuthToken   string        `json:"auth_token"`
 	PublicURL   string        `json:"public_url"`
+	AllowWebUserServerRunner bool `json:"allow_web_user_server_runner"`
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -371,7 +372,6 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("PROMPT_FILE"); v != "" {
 		cfg.Agent.PromptFile = v
 	}
-	// SINGLE_USER env var removed — singleUser normalization is no longer used
 	if v := os.Getenv("MEMORY_PROVIDER"); v != "" {
 		cfg.Agent.MemoryProvider = v
 	}
@@ -445,6 +445,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("SANDBOX_PUBLIC_URL"); v != "" {
 		cfg.Sandbox.PublicURL = v
+	}
+	if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Sandbox.AllowWebUserServerRunner = b
+		}
 	}
 
 	if v := os.Getenv("FEISHU_ENABLED"); v != "" {
@@ -612,16 +617,28 @@ func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 	return *a.EnableAutoCompress
 }
 
-// Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。
-// 这保证了：config.json 提供持久化配置，环境变量用于临时覆盖（如 CI/Docker）。
+// Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖，最后填充默认值。
+// 便捷函数，等价于 LoadFromPath(ConfigFilePath())。
 func Load() *Config {
-	cfg := LoadFromFile(ConfigFilePath())
+	return LoadFromPath(ConfigFilePath())
+}
+
+// LoadFromPath 从指定路径加载配置，应用环境变量覆盖和默认值。
+func LoadFromPath(path string) *Config {
+	cfg := LoadFromFile(path)
 	if cfg == nil {
+		if path != "" {
+			slog.Warn("config file not found, using defaults", "path", path)
+		}
 		cfg = &Config{}
 	}
 	applyEnvOverrides(cfg)
+	applyDefaults(cfg)
+	return cfg
+}
 
-	// 填充 CLI 常用的默认值（仅在配置和环境变量都未设置时生效）
+// applyDefaults 填充零值默认配置（仅在对应字段为零值时生效）。
+func applyDefaults(cfg *Config) {
 	if cfg.LLM.Provider == "" {
 		cfg.LLM.Provider = "openai"
 	}
@@ -743,17 +760,15 @@ func Load() *Config {
 		cfg.Server.WriteTimeout = 120 * time.Second
 	}
 	if cfg.Admin.ChatID == "" {
-		cfg.Admin.ChatID = getAdminChatID()
+		cfg.Admin.ChatID = getAdminChatID(cfg)
 	}
-
-	return cfg
 }
 
-// getAdminChatID 获取管理员会话 ID，实现回退逻辑
-// 优先读取 ADMIN_CHAT_ID，如果为空则回退到 STARTUP_NOTIFY_CHAT_ID
-func getAdminChatID() string {
-	if adminChatID := os.Getenv("ADMIN_CHAT_ID"); adminChatID != "" {
-		return adminChatID
+// getAdminChatID 获取管理员会话 ID，实现回退逻辑。
+// 优先使用 Admin.ChatID，为空则回退到 StartupNotify.ChatID。
+func getAdminChatID(cfg *Config) string {
+	if cfg.Admin.ChatID != "" {
+		return cfg.Admin.ChatID
 	}
-	return os.Getenv("STARTUP_NOTIFY_CHAT_ID")
+	return cfg.StartupNotify.ChatID
 }

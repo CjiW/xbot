@@ -31,6 +31,8 @@ type SandboxRouter struct {
 	// defaultMode is used when SandboxForUser can't determine per-user routing.
 	// "docker" if docker is enabled, "remote" if remote is enabled, "none" otherwise.
 	defaultMode string
+	// allowWebUserServerRunner controls whether web users (userID prefix "web-") can use the server-side sandbox.
+	allowWebUserServerRunner bool
 }
 
 // NewSandboxRouter creates a router that holds both docker and remote sandbox instances.
@@ -40,6 +42,7 @@ func NewSandboxRouter(sandboxCfg config.SandboxConfig, workDir string) *SandboxR
 		none:   &NoneSandbox{},
 		denied: &DeniedSandbox{},
 	}
+	r.allowWebUserServerRunner = sandboxCfg.AllowWebUserServerRunner
 
 	// Initialize docker sandbox if configured
 	// Docker is enabled when Mode=="docker", or when RemoteMode is set and Mode is not "none".
@@ -163,13 +166,7 @@ func (r *SandboxRouter) SandboxForUser(userID string) Sandbox {
 
 	// 3. Pure web user without remote runner — denied by default
 	if strings.HasPrefix(userID, "web-") {
-		webServerRunner := false
-		if v := os.Getenv("WEB_USER_SERVER_RUNNER"); v != "" {
-			if b, err := strconv.ParseBool(v); err == nil {
-				webServerRunner = b
-			}
-		}
-		if !webServerRunner {
+		if !r.allowWebUserServerRunner {
 			// User must have their own remote runner — return DeniedSandbox to block ALL access
 			return r.denied
 		}

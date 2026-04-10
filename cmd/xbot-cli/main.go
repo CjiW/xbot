@@ -8,6 +8,7 @@
 //   xbot-cli <prompt>      非交互模式执行单次 prompt
 //   xbot-cli -p <prompt>   非交互模式执行单次 prompt
 //   echo "hello" | xbot-cli  管道模式
+//   xbot-cli --config <path>  指定配置文件路径
 
 package main
 
@@ -42,6 +43,7 @@ import (
 // saveWg tracks in-flight config saves so SIGINT can wait for them.
 var saveWg sync.WaitGroup
 
+
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
 type cliApp struct {
 	cfg       *config.Config
@@ -67,8 +69,13 @@ func isFirstRun() bool {
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
-func newCLIApp() *cliApp {
-	cfg := config.Load()
+func newCLIApp(configPath string) *cliApp {
+	var cfg *config.Config
+	if configPath != "" {
+		cfg = config.LoadFromPath(configPath)
+	} else {
+		cfg = config.Load()
+	}
 
 	// Derive cfg.LLM from active subscription (single source of truth)
 	syncLLMFromActiveSub(cfg)
@@ -178,6 +185,7 @@ func main() {
 	prompt := ""
 	newSession := false
 	var (
+		cliConfigPath string // --config <path>
 		flagShare     string // --share ws://host:port/ws/userID
 		flagToken     string // --token xxx
 		flagWorkspace string // --workspace /path (overrides config)
@@ -202,6 +210,13 @@ func main() {
 				flagToken = os.Args[i+1]
 				i++
 			}
+		case "--config":
+			if i+1 >= len(os.Args) {
+				fmt.Fprintln(os.Stderr, "error: --config requires a path argument")
+				os.Exit(1)
+			}
+			cliConfigPath = os.Args[i+1]
+			i++
 		case "--workspace":
 			if len(os.Args) > i+1 {
 				flagWorkspace = os.Args[i+1]
@@ -226,7 +241,7 @@ func main() {
 
 	// 非交互模式
 	if prompt != "" {
-		executeNonInteractive(prompt)
+		executeNonInteractive(prompt, cliConfigPath)
 		return
 	}
 
@@ -237,7 +252,7 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp()
+	app := newCLIApp(cliConfigPath)
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)
@@ -947,8 +962,8 @@ func (s *configLLMSubscriber) GetDefaultModel() string {
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。
-func executeNonInteractive(prompt string) {
-	app := newCLIApp()
+func executeNonInteractive(prompt, configPath string) {
+	app := newCLIApp(configPath)
 	defer app.Close()
 
 	absWorkDir, _ := filepath.Abs(app.workDir)

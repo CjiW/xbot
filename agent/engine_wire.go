@@ -449,6 +449,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	caps tools.SubAgentCapabilities,
 	roleName string,
 	interactive bool,
+	model string, // 可选：角色指定的模型，为空时继承主 Agent
 ) RunConfig {
 	parentAgentID := parentCtx.AgentID
 
@@ -567,7 +568,16 @@ func (a *Agent) buildSubAgentRunConfig(
 	subAgentID := parentAgentID + "/" + roleName
 
 	// SubAgent 继承父 Agent 的 LLM 配置（使用 OriginUserID 获取原始用户的配置）
-	llmClient, model, userMaxCtx, thinkingMode := a.llmFactory.GetLLM(originUserID)
+	// 如果角色指定了模型，则通过 GetLLMForModel 智能查找对应的订阅
+	var llmClient llm.LLM
+	var subModel string
+	var userMaxCtx int
+	var thinkingMode string
+	if model != "" {
+		llmClient, subModel, userMaxCtx, thinkingMode, _ = a.llmFactory.GetLLMForModel(originUserID, model)
+	} else {
+		llmClient, subModel, userMaxCtx, thinkingMode = a.llmFactory.GetLLM(originUserID)
+	}
 
 	// Stream — 从用户设置继承（与 buildMainRunConfig 一致）
 	stream := false
@@ -581,7 +591,7 @@ func (a *Agent) buildSubAgentRunConfig(
 
 	cfg := RunConfig{
 		LLMClient:       llmClient,
-		Model:           model,
+		Model:           subModel,
 		ThinkingMode:    thinkingMode,
 		Stream:          stream,
 		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
@@ -1150,7 +1160,13 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	// 从 InboundMessage 恢复 capabilities
 	caps := tools.CapabilitiesFromMap(msg.Capabilities)
 
-	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName, false)
+	// 从 InboundMessage 元数据中获取角色指定的模型
+	subModel := ""
+	if msg.Metadata != nil {
+		subModel = msg.Metadata["model"]
+	}
+
+	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName, false, subModel)
 
 	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
 	// 否则 fallback 到直接发送消息（非并行场景）。

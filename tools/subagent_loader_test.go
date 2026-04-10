@@ -16,7 +16,7 @@ capabilities:
   memory: true
   send_message: true`
 
-	name, desc, tools, caps, err := parseFrontmatter(fm)
+	name, desc, _, tools, caps, err := parseFrontmatter(fm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ description: "Simple agent"
 tools:
   - Shell`
 
-	_, _, _, caps, err := parseFrontmatter(fm)
+	_, _, _, _, caps, err := parseFrontmatter(fm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +68,7 @@ capabilities:
   send_message: true
   spawn_agent: true`
 
-	_, _, _, caps, err := parseFrontmatter(fm)
+	_, _, _, _, caps, err := parseFrontmatter(fm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ capabilities:
   memory: true
   spawn_agent: true`
 
-	name, desc, _, caps, err := parseFrontmatter(fm)
+	name, desc, _, _, caps, err := parseFrontmatter(fm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestParseFrontmatter_MixedName(t *testing.T) {
 	fm := `name: 工部-dev_01
 description: "Mixed CJK and ASCII name"`
 
-	name, _, _, _, err := parseFrontmatter(fm)
+	name, _, _, _, _, err := parseFrontmatter(fm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,8 +159,60 @@ description: "Mixed CJK and ASCII name"`
 func TestParseFrontmatter_InvalidNameWithSpaces(t *testing.T) {
 	fm := `name: 中书 省`
 
-	_, _, _, _, err := parseFrontmatter(fm)
+	_, _, _, _, _, err := parseFrontmatter(fm)
 	if err == nil {
 		t.Fatal("expected error for name with spaces, got nil")
+	}
+}
+
+func TestParseFrontmatter_ModelField(t *testing.T) {
+	fm := `---
+name: test-role
+description: A test role
+model: claude-sonnet-4-20250514
+tools:
+  - Read
+  - Grep
+---
+System prompt here.`
+
+	name, desc, model, tools, caps, err := parseFrontmatter(fm)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "test-role" {
+		t.Errorf("name = %q, want %q", name, "test-role")
+	}
+	if desc != "A test role" {
+		t.Errorf("desc = %q, want %q", desc, "A test role")
+	}
+	if model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want %q", model, "claude-sonnet-4-20250514")
+	}
+	if len(tools) != 2 || tools[0] != "Read" || tools[1] != "Grep" {
+		t.Errorf("tools = %v, want [Read Grep]", tools)
+	}
+	if !caps.SpawnAgent {
+		t.Error("caps.SpawnAgent should be true by default")
+	}
+}
+
+func TestParseFrontmatter_NoModelField(t *testing.T) {
+	fm := `---
+name: test-role
+tools:
+  - Read
+---
+System prompt.`
+
+	name, _, model, _, _, err := parseFrontmatter(fm)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "test-role" {
+		t.Errorf("name = %q", name)
+	}
+	if model != "" {
+		t.Errorf("model = %q, want empty string", model)
 	}
 }

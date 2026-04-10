@@ -28,7 +28,7 @@ func defaultWorkspaceRoot(ctx *ToolContext) string {
 func resolveScopedBase(ctx *ToolContext) (string, error) {
 	root := defaultWorkspaceRoot(ctx)
 	if root == "" {
-		cwd, err := os.Getwd()
+		cwd, err := effectiveCWD(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}
@@ -39,6 +39,22 @@ func resolveScopedBase(ctx *ToolContext) (string, error) {
 		return "", fmt.Errorf("invalid workspace root: %w", err)
 	}
 	return absRoot, nil
+}
+
+// effectiveCWD returns the current working directory for path resolution.
+// Priority: ctx.CurrentDir (set by Cd tool) > effectiveCWD(ctx) (process CWD).
+//
+// Bug fix: In unrestricted mode (none/remote sandbox), all path resolution
+// functions used os.Getwd() which returns the OS process CWD, not the
+// virtual CWD set by the Cd tool. The Cd tool only sets ctx.CurrentDir
+// (session-persisted), it does NOT call os.Chdir(). This caused relative
+// paths in Read/FileCreate/FileReplace/Grep/Glob to resolve against the
+// wrong directory after a Cd.
+func effectiveCWD(ctx *ToolContext) (string, error) {
+	if ctx != nil && ctx.CurrentDir != "" {
+		return ctx.CurrentDir, nil
+	}
+	return os.Getwd()
 }
 
 // isUnrestricted returns true when path restrictions should be skipped.
@@ -66,7 +82,7 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
+		cwd, err := effectiveCWD(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}
@@ -77,7 +93,7 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
+		cwd, err := effectiveCWD(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}
@@ -138,7 +154,7 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
+		cwd, err := effectiveCWD(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}
@@ -149,7 +165,7 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		if filepath.IsAbs(inputPath) {
 			return cleanAbsPath(inputPath)
 		}
-		cwd, err := os.Getwd()
+		cwd, err := effectiveCWD(ctx)
 		if err != nil {
 			return "", fmt.Errorf("failed to get working directory: %w", err)
 		}

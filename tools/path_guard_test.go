@@ -396,3 +396,53 @@ func TestReadTool_Fallthrough_CurrentDir(t *testing.T) {
 		t.Errorf("expected 'root content' in result, got: %s", result.Summary)
 	}
 }
+
+// TestResolveReadPath_Unrestricted_CurrentDir verifies that in unrestricted mode
+// (none sandbox), relative paths resolve against CurrentDir, not os.Getwd().
+func TestResolveReadPath_Unrestricted_CurrentDir(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "test.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		CurrentDir: sub,
+		Sandbox:    &mockSandbox{name: "none"},
+	}
+
+	resolved, err := ResolveReadPath(ctx, "test.txt")
+	if err != nil {
+		t.Fatalf("ResolveReadPath(unrestricted, relative) failed: %v", err)
+	}
+	want := filepath.Join(sub, "test.txt")
+	if resolved != want {
+		t.Errorf("ResolveReadPath = %q, want %q (should resolve against CurrentDir, not os.Getwd())", resolved, want)
+	}
+}
+
+// TestResolveWritePath_Unrestricted_CurrentDir verifies the same fix for write paths.
+func TestResolveWritePath_Unrestricted_CurrentDir(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &ToolContext{
+		CurrentDir: sub,
+		Sandbox:    &mockSandbox{name: "none"},
+	}
+
+	resolved, err := ResolveWritePath(ctx, "new-file.txt")
+	if err != nil {
+		t.Fatalf("ResolveWritePath(unrestricted, relative) failed: %v", err)
+	}
+	want := filepath.Join(sub, "new-file.txt")
+	if resolved != want {
+		t.Errorf("ResolveWritePath = %q, want %q (should resolve against CurrentDir, not os.Getwd())", resolved, want)
+	}
+}

@@ -12,7 +12,8 @@ var systemReminderRe = regexp.MustCompile(`\n?\n?<system-reminder>[\s\S]*?</syst
 
 // BuildSystemReminder builds a system reminder appended to the last tool message.
 // agentID "main" = main Agent, otherwise SubAgent.
-func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, todoSummary string, agentID string) string {
+// roundToolCalls is the current round's tool calls (used to detect git commit).
+func BuildSystemReminder(messages []llm.ChatMessage, roundToolCalls []llm.ToolCall, todoSummary string, agentID string) string {
 	if len(messages) == 0 {
 		return ""
 	}
@@ -41,7 +42,13 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 		}
 	}
 
-	// 3. 构建提醒
+	// 3. Collect round tool names for display
+	var roundToolNames []string
+	for _, tc := range roundToolCalls {
+		roundToolNames = append(roundToolNames, tc.Name)
+	}
+
+	// 4. 构建提醒
 	var parts []string
 
 	if taskGoal != "" {
@@ -64,16 +71,16 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolNames []string, to
 	parts = append(parts, "- 修改后运行测试验证")
 	parts = append(parts, "- 错误时先分析根因再修改")
 
-	// Detect file modification tools — remind agent to update project knowledge
-	modifiedFiles := false
-	for _, name := range roundToolNames {
-		switch name {
-		case "FileReplace", "FileCreate":
-			modifiedFiles = true
+	// Detect git commit in Shell tool calls — remind agent to activate post-dev skill
+	gitCommitDetected := false
+	for _, tc := range roundToolCalls {
+		if tc.Name == "Shell" && strings.Contains(tc.Arguments, "git commit") {
+			gitCommitDetected = true
+			break
 		}
 	}
-	if modifiedFiles {
-		parts = append(parts, "- 修改完成之后回复用户前激活knowledge management skill更新文档")
+	if gitCommitDetected {
+		parts = append(parts, "- 检测到 git commit，立即激活 post-dev skill 更新项目文档")
 	}
 
 	return "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"

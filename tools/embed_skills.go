@@ -3,7 +3,7 @@ package tools
 import (
 	"embed"
 	"io/fs"
-	"path/filepath"
+	"path"
 )
 
 // EmbeddedSkills contains skill templates built into the binary.
@@ -31,13 +31,13 @@ func ListEmbeddedSkills() []string {
 // file is the relative path within the skill directory (e.g., "SKILL.md").
 // Returns nil if the file doesn't exist.
 func ReadEmbeddedSkillFile(skillName, file string) ([]byte, error) {
-	path := filepath.Join("embed_skills", skillName, file)
+	path := path.Join("embed_skills", skillName, file)
 	return EmbeddedSkills.ReadFile(path)
 }
 
 // ListEmbeddedSkillFiles returns all file paths (relative to skill root) in an embedded skill.
 func ListEmbeddedSkillFiles(skillName string) ([]string, error) {
-	dir := filepath.Join("embed_skills", skillName)
+	dir := path.Join("embed_skills", skillName)
 	entries, err := fs.ReadDir(EmbeddedSkills, dir)
 	if err != nil {
 		return nil, err

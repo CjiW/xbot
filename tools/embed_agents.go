@@ -3,6 +3,7 @@ package tools
 import (
 	"embed"
 	"io/fs"
+	"path"
 	"path/filepath"
 )
 
@@ -35,8 +36,8 @@ func ListEmbeddedAgents() []string {
 // agentName is the agent name without .md extension (e.g., "explore").
 // Returns nil if the agent doesn't exist.
 func ReadEmbeddedAgentFile(agentName string) ([]byte, error) {
-	path := filepath.Join("embed_agents", agentName+".md")
-	return EmbeddedAgents.ReadFile(path)
+	embedPath := path.Join("embed_agents", agentName+".md")
+	return EmbeddedAgents.ReadFile(embedPath)
 }
 
 // HasEmbeddedAgent checks if an agent with the given name exists in the embedded FS.

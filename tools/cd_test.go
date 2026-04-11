@@ -56,7 +56,7 @@ func TestCdTool_AbsolutePath(t *testing.T) {
 	}
 
 	tool := &CdTool{}
-	_, err := tool.Execute(ctx, `{"path":"`+subDir+`"}`)
+	_, err := tool.Execute(ctx, `{"path":"`+strings.ReplaceAll(subDir, `\`, `\\`)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

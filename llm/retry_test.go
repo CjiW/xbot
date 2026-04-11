@@ -470,8 +470,12 @@ func TestRetryLLM_perAttemptCtx(t *testing.T) {
 			t.Fatal("child context should have a deadline")
 		}
 		parentDeadline, _ := parent.Deadline()
-		if childDeadline.Equal(parentDeadline) {
-			t.Error("child deadline should not equal parent deadline")
+		// Child deadline should be strictly after parent deadline because
+		// time.Until() captures remaining duration, then WithTimeout creates
+		// a new deadline slightly later. Use Before/After instead of Equal
+		// to avoid timer precision issues on Windows.
+		if !childDeadline.After(parentDeadline) {
+			t.Errorf("child deadline %v should be after parent deadline %v", childDeadline, parentDeadline)
 		}
 	})
 

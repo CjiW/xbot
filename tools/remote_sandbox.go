@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1393,7 +1394,7 @@ func (rs *RemoteSandbox) syncEmbeddedSkillToRunner(ctx context.Context, userID, 
 	if _, err := rs.Stat(ctx, dstDir, userID); err == nil {
 		return // already exists
 	}
-	entries, err := fs.ReadDir(EmbeddedSkills, filepath.Join("embed_skills", skillName))
+	entries, err := fs.ReadDir(EmbeddedSkills, path.Join("embed_skills", skillName))
 	if err != nil {
 		return
 	}

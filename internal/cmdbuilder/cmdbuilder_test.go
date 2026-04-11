@@ -32,12 +32,20 @@ func TestBuild_NoRunAs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cmd.Path != defaultShell {
-		t.Errorf("expected %s, got %s", defaultShell, cmd.Path)
+	if filepath.Base(cmd.Path) != filepath.Base(defaultShell) {
+		t.Errorf("expected %s, got %s", filepath.Base(defaultShell), cmd.Path)
 	}
 }
 
 func TestBuild_WithRunAs(t *testing.T) {
+	// RunAs is not supported on Windows
+	if filepath.Base(defaultShell) == "powershell.exe" {
+		_, err := Build(context.TODO(), true, "echo hello", nil, "", nil, Config{RunAsUser: "alice"})
+		if err == nil {
+			t.Fatal("expected error for RunAsUser on Windows")
+		}
+		return
+	}
 	// With RunAsUser, should produce a sudo-wrapped command
 	cmd, err := Build(context.TODO(), true, "echo hello", nil, "", nil, Config{RunAsUser: "alice"})
 	if err != nil {

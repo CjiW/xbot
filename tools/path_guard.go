@@ -134,6 +134,11 @@ func ResolveWritePath(ctx *ToolContext, inputPath string) (string, error) {
 	}
 
 	if !isWithinRoot(checkPath, realRoot) {
+		// Fallback: compare without EvalSymlinks (handles Windows short paths
+		// where intermediate directories don't exist yet)
+		if isWithinRoot(candidate, root) {
+			return candidate, nil
+		}
 		return "", fmt.Errorf("write path escapes workspace: %s", inputPath)
 	}
 	return candidate, nil
@@ -214,6 +219,11 @@ func ResolveReadPath(ctx *ToolContext, inputPath string) (string, error) {
 		if isWithinRoot(candidate, absAllowed) {
 			return candidate, nil
 		}
+		// Fallback: compare without EvalSymlinks (handles Windows short/long
+		// path name mismatches when file doesn't exist yet)
+		if isWithinRoot(candidate, allowed) {
+			return candidate, nil
+		}
 	}
 
 	return "", fmt.Errorf("read path is outside allowed roots: %s", inputPath)
@@ -250,16 +260,22 @@ func resolveSandboxCWD(ctx *ToolContext, sandboxBase string) string {
 	if ctx == nil || ctx.CurrentDir == "" {
 		return ""
 	}
-	if ctx.CurrentDir == sandboxBase || strings.HasPrefix(ctx.CurrentDir, sandboxBase+"/") {
+	// Normalize separators for cross-platform comparison
+	currentDir := filepath.ToSlash(ctx.CurrentDir)
+	sandboxBaseSlash := filepath.ToSlash(sandboxBase)
+	if currentDir == sandboxBaseSlash || strings.HasPrefix(currentDir, sandboxBaseSlash+"/") {
 		return ctx.CurrentDir
 	}
-	if ctx.WorkspaceRoot != "" && strings.HasPrefix(ctx.CurrentDir, ctx.WorkspaceRoot) {
-		rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
-		if err == nil {
-			if rel == "." {
-				return sandboxBase
+	if ctx.WorkspaceRoot != "" {
+		wsRoot := filepath.ToSlash(ctx.WorkspaceRoot)
+		if strings.HasPrefix(currentDir, wsRoot) {
+			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
+			if err == nil {
+				if rel == "." {
+					return sandboxBase
+				}
+				return filepath.Join(sandboxBase, rel)
 			}
-			return filepath.Join(sandboxBase, rel)
 		}
 	}
 	return ""

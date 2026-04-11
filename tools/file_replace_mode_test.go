@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestFileReplaceTool_PreservesExistingFileMode(t *testing.T) {
 
 	tool := &FileReplaceTool{}
 	ctx := &ToolContext{WorkingDir: tmpDir}
-	_, err := tool.Execute(ctx, `{"path":"`+path+`","old_string":"world","new_string":"xbot"}`)
+	_, err := tool.Execute(ctx, `{"path":"`+strings.ReplaceAll(path, `\`, `\\`)+`","old_string":"world","new_string":"xbot"}`)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}

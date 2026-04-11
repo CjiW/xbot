@@ -51,7 +51,7 @@ func killProcessTree(proc *os.Process) {
 func isProcessAlive(pid int) bool {
 	const (
 		_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-		_STILL_ACTIVE                    = 259
+		_STILL_ACTIVE                      = 259
 	)
 	handle, err := syscall.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {

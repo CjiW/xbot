@@ -1016,6 +1016,7 @@ func (f *FeishuChannel) buildAddSubscriptionCard(senderID string) (map[string]an
 	}
 
 	return map[string]any{
+		"schema": "2.0",
 		"config": map[string]any{
 			"wide_screen_mode": true,
 		},

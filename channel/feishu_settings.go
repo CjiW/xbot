@@ -235,6 +235,60 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_activate_subscription":
+		subID := parsed["subscription_id"]
+		if subID == "" {
+			return nil, fmt.Errorf("missing subscription_id")
+		}
+		if f.settingsCallbacks.LLMSetDefaultSubscription != nil {
+			if err := f.settingsCallbacks.LLMSetDefaultSubscription(subID); err != nil {
+				return nil, fmt.Errorf("切换订阅失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
+	case "settings_delete_subscription":
+		subID := parsed["subscription_id"]
+		if subID == "" {
+			return nil, fmt.Errorf("missing subscription_id")
+		}
+		if f.settingsCallbacks.LLMRemoveSubscription != nil {
+			if err := f.settingsCallbacks.LLMRemoveSubscription(subID); err != nil {
+				return nil, fmt.Errorf("删除订阅失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
+	case "settings_add_subscription":
+		// Build a form card for adding a new subscription
+		return f.buildAddSubscriptionCard(senderID)
+
+	case "settings_submit_subscription":
+		// Handle the add subscription form submission
+		provider := formStr(actionData, "provider")
+		baseURL := formStr(actionData, "base_url")
+		apiKey := formStr(actionData, "api_key")
+		model := formStr(actionData, "model")
+		name := formStr(actionData, "name")
+		if name == "" {
+			name = provider + " " + model
+		}
+		if provider == "" || baseURL == "" || apiKey == "" {
+			return nil, fmt.Errorf("请填写完整配置（Provider、API 地址、API Key）")
+		}
+		if f.settingsCallbacks.LLMAddSubscription != nil {
+			if err := f.settingsCallbacks.LLMAddSubscription(senderID, &Subscription{
+				Name:     name,
+				Provider: provider,
+				BaseURL:  baseURL,
+				APIKey:   apiKey,
+				Model:    model,
+			}); err != nil {
+				return nil, fmt.Errorf("添加订阅失败: %v", err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_install":
 		entryType := parsed["entry_type"]
 		entryIDStr := parsed["entry_id"]
@@ -914,6 +968,106 @@ func (f *FeishuChannel) buildGeneralTabContent(senderID string, o SettingsCardOp
 }
 
 // buildModelTabContent builds the model configuration tab.
+func (f *FeishuChannel) buildAddSubscriptionCard(senderID string) (map[string]any, error) {
+	formElements := []map[string]any{
+		{
+			"tag":  "input",
+			"name": "name",
+			"label": map[string]any{
+				"tag":     "plain_text",
+				"content": "订阅名称（可选）",
+			},
+			"placeholder": map[string]any{
+				"tag":     "plain_text",
+				"content": "例: My GPT-4o",
+			},
+		},
+		{
+			"tag":  "select_static",
+			"name": "provider",
+			"placeholder": map[string]any{
+				"tag":     "plain_text",
+				"content": "选择 Provider",
+			},
+			"options": []map[string]any{
+				{"text": map[string]any{"tag": "plain_text", "content": "OpenAI（含兼容 API）"}, "value": "openai"},
+				{"text": map[string]any{"tag": "plain_text", "content": "Anthropic"}, "value": "anthropic"},
+			},
+		},
+		{
+			"tag":  "input",
+			"name": "base_url",
+			"label": map[string]any{
+				"tag":     "plain_text",
+				"content": "API 地址",
+			},
+			"placeholder": map[string]any{
+				"tag":     "plain_text",
+				"content": "https://api.openai.com/v1",
+			},
+		},
+		{
+			"tag":  "input",
+			"name": "api_key",
+			"label": map[string]any{
+				"tag":     "plain_text",
+				"content": "API Key",
+			},
+			"placeholder": map[string]any{
+				"tag":     "plain_text",
+				"content": "sk-...",
+			},
+		},
+		{
+			"tag":  "input",
+			"name": "model",
+			"label": map[string]any{
+				"tag":     "plain_text",
+				"content": "模型名称（可选，保存后可切换）",
+			},
+			"placeholder": map[string]any{
+				"tag":     "plain_text",
+				"content": "gpt-4o",
+			},
+		},
+		{
+			"tag":         "button",
+			"name":        "sub_submit",
+			"text":        map[string]any{"tag": "plain_text", "content": "保存订阅"},
+			"type":        "primary",
+			"action_type": "form_submit",
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_submit_subscription",
+				}),
+			},
+		},
+	}
+
+	return map[string]any{
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"header": map[string]any{
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "➕ 添加订阅",
+			},
+		},
+		"elements": []map[string]any{
+			{
+				"tag":     "markdown",
+				"content": "填写 LLM 订阅信息。添加后可在设置页切换活跃订阅。",
+			},
+			{
+				"tag":      "form",
+				"name":     "add_subscription_form",
+				"elements": formElements,
+			},
+		},
+	}, nil
+}
+
 func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
@@ -1209,6 +1363,80 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			},
 		},
 	))
+
+	// --- Subscription management section ---
+	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**订阅管理**",
+	})
+
+	if f.settingsCallbacks.LLMListSubscriptions != nil {
+		subs, err := f.settingsCallbacks.LLMListSubscriptions(senderID)
+		if err != nil {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("⚠️ 加载订阅失败: %v", err),
+			})
+		} else if len(subs) == 0 {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "暂无订阅。添加订阅后可在此管理。",
+			})
+		} else {
+			for _, sub := range subs {
+				activeMark := "  "
+				if sub.Active {
+					activeMark = "✅ "
+				}
+				label := fmt.Sprintf("%s%s — %s (%s)", activeMark, sub.Name, sub.Provider, sub.Model)
+				if sub.BaseURL != "" {
+					label += "\n" + sub.BaseURL
+				}
+				var btns []map[string]any
+				if !sub.Active {
+					btns = append(btns, map[string]any{
+						"tag":  "button",
+						"text": map[string]any{"tag": "plain_text", "content": "切换"},
+						"type": "primary",
+						"value": map[string]string{
+							"action_data": mustMapToJSON(map[string]string{
+								"action":          "settings_activate_subscription",
+								"subscription_id": sub.ID,
+							}),
+						},
+					})
+				}
+				btns = append(btns, map[string]any{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "删除"},
+					"type": "danger",
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action":          "settings_delete_subscription",
+							"subscription_id": sub.ID,
+						}),
+					},
+				})
+				elements = append(elements, buildItemRow(label, "", btns...))
+			}
+		}
+
+		// Add subscription button
+		elements = append(elements, map[string]any{
+			"tag": "button",
+			"text": map[string]any{
+				"tag":     "plain_text",
+				"content": "➕ 添加订阅",
+			},
+			"type": "default",
+			"value": map[string]string{
+				"action_data": mustMapToJSON(map[string]string{
+					"action": "settings_add_subscription",
+				}),
+			},
+		})
+	}
 
 	elements = append(elements, map[string]any{"tag": "hr"})
 	elements = append(elements, map[string]any{

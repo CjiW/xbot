@@ -52,6 +52,12 @@ func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, d
 
 // GetLLM 获取用户的 LLM 客户端，如果没有自定义配置则返回默认客户端
 // 返回: (LLM客户端, 模型名, maxContext, thinkingMode)
+//
+// 查找优先级:
+//  1. 缓存 (configSvc 或 subscriptionSvc 建立的)
+//  2. configSvc (user_llm_configs 表，旧的单配置系统)
+//  3. subscriptionSvc (user_llm_subscriptions 表，新的多订阅系统，取 default)
+//  4. 全局默认 LLM
 func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	// 先检查缓存
 	f.mu.RLock()
@@ -64,32 +70,48 @@ func (f *LLMFactory) GetLLM(senderID string) (llm.LLM, string, int, string) {
 	}
 	f.mu.RUnlock()
 
-	// 从数据库加载配置
-	if f.configSvc == nil {
-		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
-	}
-	cfg, err := f.configSvc.GetConfig(senderID)
-	if err != nil || cfg == nil {
-		// 无配置或出错，使用默认客户端
-		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+	// 从 configSvc 加载 (旧的单配置系统)
+	if f.configSvc != nil {
+		cfg, err := f.configSvc.GetConfig(senderID)
+		if err == nil && cfg != nil && cfg.BaseURL != "" && cfg.APIKey != "" {
+			client, model := f.createClient(cfg)
+			if client != nil {
+				f.mu.Lock()
+				f.clients[senderID] = client
+				f.models[senderID] = model
+				f.maxContexts[senderID] = cfg.MaxContext
+				f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
+				f.thinkingModes[senderID] = cfg.ThinkingMode
+				f.mu.Unlock()
+				return client, model, cfg.MaxContext, cfg.ThinkingMode
+			}
+		}
 	}
 
-	// 创建用户自定义 LLM 客户端
-	client, model := f.createClient(cfg)
-	if client == nil {
-		return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
+	// Fallback 到 subscriptionSvc (新的多订阅系统)
+	if f.subscriptionSvc != nil {
+		sub, err := f.subscriptionSvc.GetDefault(senderID)
+		if err == nil && sub != nil && sub.BaseURL != "" && sub.APIKey != "" {
+			client := f.createClientFromSub(sub, sub.Model)
+			if client != nil {
+				model := sub.Model
+				if model == "" {
+					model = f.defaultModel
+				}
+				f.mu.Lock()
+				f.clients[senderID] = client
+				f.models[senderID] = model
+				f.maxContexts[senderID] = sub.MaxContext
+				f.maxOutputTokens[senderID] = sub.MaxOutputTokens
+				f.thinkingModes[senderID] = sub.ThinkingMode
+				f.mu.Unlock()
+				return client, model, sub.MaxContext, sub.ThinkingMode
+			}
+		}
 	}
 
-	// 缓存客户端
-	f.mu.Lock()
-	f.clients[senderID] = client
-	f.models[senderID] = model
-	f.maxContexts[senderID] = cfg.MaxContext
-	f.maxOutputTokens[senderID] = cfg.MaxOutputTokens
-	f.thinkingModes[senderID] = cfg.ThinkingMode
-	f.mu.Unlock()
-
-	return client, model, cfg.MaxContext, cfg.ThinkingMode
+	// 无配置或出错，使用默认客户端
+	return f.defaultLLM, f.defaultModel, 0, f.defaultThinkingMode
 }
 
 // HasCustomLLM 检查用户是否有自定义 LLM 配置

@@ -325,19 +325,21 @@ var foo = 42
 }
 
 func TestOffloadStore_SessionDirSanitization(t *testing.T) {
-	store := NewOffloadStore(OffloadConfig{StoreDir: "/tmp/test"})
+	storeDir := filepath.FromSlash("/tmp/test")
+	store := NewOffloadStore(OffloadConfig{StoreDir: storeDir})
 	dir := store.getSessionDir("cli:user/../../etc")
 	// Verify path traversal characters are sanitized (replaced with _)
-	if strings.Contains(dir, "/../") || strings.Contains(dir, "\\..\\") {
+	if strings.Contains(dir, string(os.PathSeparator)+".."+string(os.PathSeparator)) {
 		t.Errorf("session directory should not contain path traversal sequences: %s", dir)
 	}
-	// Verify colon is sanitized
+	// Verify colon is sanitized (important on Windows where C: is a drive letter)
 	if strings.Contains(dir, ":") {
 		t.Errorf("session directory should not contain colon: %s", dir)
 	}
-	// Verify it's under the store dir
-	if !strings.HasPrefix(dir, "/tmp/test") {
-		t.Errorf("session directory should be under store dir: %s", dir)
+	// Verify it's under the store dir (use filepath.ToSlash for cross-platform comparison)
+	expected := filepath.ToSlash(filepath.Join(storeDir, "cli_user_.._.._etc"))
+	if filepath.ToSlash(dir) != expected {
+		t.Errorf("session directory should be under store dir: got %s, want %s", filepath.ToSlash(dir), expected)
 	}
 }
 
@@ -474,7 +476,7 @@ func TestInvalidateStaleReads_NoChange(t *testing.T) {
 	content := strings.Repeat("line of content\n", 500)
 	os.WriteFile(filePath, []byte(content), 0o644)
 
-	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	args := fmt.Sprintf(`{"path":"%s"}`, strings.ReplaceAll(filePath, `\`, `\\`))
 	offloaded, ok := store.MaybeOffload(ctx, "stale:test", "Read", args, content, "", "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
@@ -501,7 +503,7 @@ func TestInvalidateStaleReads_FileModified(t *testing.T) {
 	content := strings.Repeat("original content\n", 500)
 	os.WriteFile(filePath, []byte(content), 0o644)
 
-	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	args := fmt.Sprintf(`{"path":"%s"}`, strings.ReplaceAll(filePath, `\`, `\\`))
 	offloaded, ok := store.MaybeOffload(ctx, "stale:test", "Read", args, content, "", "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
@@ -528,7 +530,7 @@ func TestInvalidateStaleReads_FileDeleted(t *testing.T) {
 	content := strings.Repeat("temp content\n", 500)
 	os.WriteFile(filePath, []byte(content), 0o644)
 
-	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	args := fmt.Sprintf(`{"path":"%s"}`, strings.ReplaceAll(filePath, `\`, `\\`))
 	offloaded, ok := store.MaybeOffload(ctx, "stale:test", "Read", args, content, "", "", "")
 	if !ok {
 		t.Fatal("expected offload to succeed")
@@ -578,7 +580,7 @@ func TestPurgeStaleMessages(t *testing.T) {
 	content := strings.Repeat("purge content\n", 500)
 	os.WriteFile(filePath, []byte(content), 0o644)
 
-	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	args := fmt.Sprintf(`{"path":"%s"}`, strings.ReplaceAll(filePath, `\`, `\\`))
 	offloaded, _ := store.MaybeOffload(ctx, "stale:test", "Read", args, content, "", "", "")
 
 	// Modify file to make it stale
@@ -646,7 +648,7 @@ func TestInvalidateStaleReads_AlreadyStale(t *testing.T) {
 	content := strings.Repeat("already stale content\n", 500)
 	os.WriteFile(filePath, []byte(content), 0o644)
 
-	args := fmt.Sprintf(`{"path":"%s"}`, filePath)
+	args := fmt.Sprintf(`{"path":"%s"}`, strings.ReplaceAll(filePath, `\`, `\\`))
 	_, _ = store.MaybeOffload(ctx, "stale:test", "Read", args, content, "", "", "")
 
 	// Modify file and invalidate → first time should return the ID

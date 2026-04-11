@@ -11,6 +11,7 @@ import (
 
 // UserLLMConfig 用户 LLM 配置
 type UserLLMConfig struct {
+	ID              string    // subscription ID (for precise UPDATE targeting)
 	SenderID        string    // 用户 ID
 	Provider        string    // LLM 提供商: "openai", "deepseek", "anthropic" 等
 	BaseURL         string    // API Base URL
@@ -40,12 +41,12 @@ func (s *UserLLMConfigService) GetConfig(senderID string) (*UserLLMConfig, error
 	var cfg UserLLMConfig
 	var createdAt, updatedAt string
 	err := conn.QueryRow(`
-				SELECT sender_id, provider, base_url, api_key, model, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+				SELECT id, sender_id, provider, base_url, api_key, model, max_context, max_output_tokens, thinking_mode, created_at, updated_at
 				FROM user_llm_subscriptions
 				WHERE sender_id = ? AND is_default = 1
 				LIMIT 1
 			`, senderID).Scan(
-		&cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model,
+		&cfg.ID, &cfg.SenderID, &cfg.Provider, &cfg.BaseURL, &cfg.APIKey, &cfg.Model,
 		&cfg.MaxContext, &cfg.MaxOutputTokens, &cfg.ThinkingMode,
 		&createdAt, &updatedAt,
 	)
@@ -103,29 +104,46 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 	// Clear default flag for this user
 	tx.Exec("UPDATE user_llm_subscriptions SET is_default = 0 WHERE sender_id = ?", cfg.SenderID)
 
-	// Try update existing subscription for this sender+provider
-	result, err := tx.Exec(`
+	if cfg.ID != "" {
+		// Update existing subscription by ID (precise match, avoids overwriting
+		// same-provider subscriptions when user has multiple with the same provider)
+		_, err = tx.Exec(`
+		UPDATE user_llm_subscriptions SET
+		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
+		is_default = 1, updated_at = ?
+		WHERE id = ? AND sender_id = ?
+		`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
+			cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
+			now, cfg.ID, cfg.SenderID)
+		if err != nil {
+			return fmt.Errorf("update subscription by id: %w", err)
+		}
+	} else {
+		// Legacy path: no ID available (e.g. /set-llm command), match by sender+provider
+		result, err := tx.Exec(`
 		UPDATE user_llm_subscriptions SET
 		name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
 		max_context = ?, max_output_tokens = ?, thinking_mode = ?,
 		is_default = 1, updated_at = ?
 		WHERE sender_id = ? AND provider = ?
-	`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
-		cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
-		now, cfg.SenderID, cfg.Provider)
-	if err != nil {
-		return fmt.Errorf("update subscription: %w", err)
-	}
+		`, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model,
+			cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode,
+			now, cfg.SenderID, cfg.Provider)
+		if err != nil {
+			return fmt.Errorf("update subscription: %w", err)
+		}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		subID := fmt.Sprintf("sub_%x", now.UnixNano())
-		_, err = tx.Exec(`
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected == 0 {
+			subID := fmt.Sprintf("sub_%x", now.UnixNano())
+			_, err = tx.Exec(`
 			INSERT INTO user_llm_subscriptions (id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
 		`, subID, cfg.SenderID, name, cfg.Provider, cfg.BaseURL, encryptedAPIKey, cfg.Model, cfg.MaxContext, cfg.MaxOutputTokens, cfg.ThinkingMode, now, now)
-		if err != nil {
-			return fmt.Errorf("insert subscription: %w", err)
+			if err != nil {
+				return fmt.Errorf("insert subscription: %w", err)
+			}
 		}
 	}
 

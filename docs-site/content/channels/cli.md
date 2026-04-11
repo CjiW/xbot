@@ -26,6 +26,22 @@ CLI Channel 是 xbot 的默认渠道，允许用户直接在终端中与 AI Agen
 
 ## 安装与启动
 
+### 一键安装
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+```
+
+安装脚本会自动检测平台并下载对应版本。也支持从 [GitHub Releases](https://github.com/CjiW/xbot/releases) 手动下载。
+
+> **Windows 用户**：安装后如需使用 Shell 工具，建议使用 Windows Terminal 以获得最佳体验。Shell 工具在 none 沙箱模式下使用 PowerShell。
+
 ### 编译
 
 ```bash

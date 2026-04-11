@@ -31,20 +31,16 @@ jobs:
           mkdir -p dist
 
           # Matrix: OS x ARCH
-          for os in linux darwin; do
+          for os in linux darwin windows; do
             for arch in amd64 arm64; do
-              suffix=""
-              if [ "$os" = "darwin" ]; then
-                suffix=""
-              fi
-              binary="xbot-cli"
+              ext=""
               if [ "$os" = "windows" ]; then
-                binary="xbot-cli.exe"
+                ext=".exe"
               fi
               echo "Building $os/$arch..."
               CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build \
                 -ldflags "$LDFLAGS" \
-                -o "dist/xbot-cli-${os}-${arch}" \
+                -o "dist/xbot-cli-${os}-${arch}${ext}" \
                 ./cmd/xbot-cli
             done
           done
@@ -63,4 +59,6 @@ jobs:
             dist/xbot-cli-linux-arm64
             dist/xbot-cli-darwin-amd64
             dist/xbot-cli-darwin-arm64
+            dist/xbot-cli-windows-amd64.exe
+            dist/xbot-cli-windows-arm64.exe
             checksums.txt

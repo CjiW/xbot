@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -271,10 +272,11 @@ func resolveSandboxCWD(ctx *ToolContext, sandboxBase string) string {
 		if strings.HasPrefix(currentDir, wsRoot) {
 			rel, err := filepath.Rel(ctx.WorkspaceRoot, ctx.CurrentDir)
 			if err == nil {
+				rel = filepath.ToSlash(rel)
 				if rel == "." {
 					return sandboxBase
 				}
-				return filepath.Join(sandboxBase, rel)
+				return path.Join(sandboxBase, rel)
 			}
 		}
 	}

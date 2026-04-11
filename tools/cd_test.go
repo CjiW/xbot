@@ -110,9 +110,12 @@ func TestCdTool_DotDot(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// Both sides should be normalized via EvalSymlinks for comparison
+	// (Windows short vs long path names can differ)
+	realSaved, _ := filepath.EvalSymlinks(savedDir)
 	realTmp, _ := filepath.EvalSymlinks(tmpDir)
-	if savedDir != realTmp {
-		t.Errorf("expected %q, got %q", realTmp, savedDir)
+	if realSaved != realTmp {
+		t.Errorf("expected %q, got %q", realTmp, realSaved)
 	}
 }
 
@@ -159,7 +162,9 @@ func TestCdTool_EscapeWorkspace(t *testing.T) {
 		SetCurrentDir: func(dir string) {},
 	}
 	tool := &CdTool{}
-	_, err := tool.Execute(noSandboxCtx, `{"path":"/tmp"}`)
+	// Use os.TempDir() instead of /tmp (doesn't exist on Windows)
+	targetDir := os.TempDir()
+	_, err := tool.Execute(noSandboxCtx, `{"path":"`+strings.ReplaceAll(targetDir, `\`, `\\`)+`"}`)
 	if err != nil {
 		t.Errorf("expected no error in none-sandbox mode, got: %v", err)
 	}

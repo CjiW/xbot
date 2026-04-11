@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,7 +30,11 @@ func TestFileReplaceTool_PreservesExistingFileMode(t *testing.T) {
 		t.Fatalf("stat result: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0600 {
-		t.Fatalf("expected mode 0600 preserved, got %#o", got)
+		// Windows doesn't support Unix permissions; skip check if 0666 (default)
+		if runtime.GOOS != "windows" || got != 0666 {
+			t.Fatalf("expected mode 0600 preserved, got %#o", got)
+		}
+		t.Logf("skipping permission check on Windows (got %#o)", got)
 	}
 
 	content, err := os.ReadFile(path)

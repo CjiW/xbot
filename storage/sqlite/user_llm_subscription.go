@@ -48,16 +48,8 @@ func scanSubscription(scanner interface{ Scan(...interface{}) error }, sub *LLMS
 		return "", 0, err
 	}
 	sub.IsDefault = isDefault == 1
-	if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
-		sub.CreatedAt = t
-	} else if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
-		sub.CreatedAt = t
-	}
-	if t, err := time.Parse(time.RFC3339, updatedAt); err == nil {
-		sub.UpdatedAt = t
-	} else if t, err := time.Parse("2006-01-02 15:04:05", updatedAt); err == nil {
-		sub.UpdatedAt = t
-	}
+	sub.CreatedAt = parseSQLiteTime(createdAt)
+	sub.UpdatedAt = parseSQLiteTime(updatedAt)
 	return encryptedAPIKey, isDefault, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	log "xbot/logger"
 
@@ -113,4 +114,23 @@ func (db *DB) initSchema() error {
 		return db.migrateSchema(version)
 	}
 	return nil
+}
+
+// parseSQLiteTime parses a time string from SQLite into time.Time.
+// SQLite datetime('now') produces "2006-01-02 15:04:05" format,
+// but some code may store RFC3339. This function tries both formats.
+func parseSQLiteTime(s string) time.Time {
+	for _, layout := range []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02T15:04:05.999999999",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

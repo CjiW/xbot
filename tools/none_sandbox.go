@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"xbot/internal/cmdbuilder"
@@ -37,7 +36,7 @@ func (s *NoneSandbox) IsExporting(userID string) bool      { return false }
 func (s *NoneSandbox) ExportAndImport(userID string) error { return nil }
 
 func (s *NoneSandbox) GetShell(userID string, workspace string) (string, error) {
-	return "/bin/bash", nil
+	return defaultShell(), nil
 }
 
 func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, error) {
@@ -55,10 +54,7 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 	}
 
 	// Always use process group so we can kill the entire tree on cancel.
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
+	setProcessAttrs(cmd)
 
 	if spec.Stdin != "" {
 		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
@@ -109,7 +105,7 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 // the caller takes ownership via ExecResult.Process.
 func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (*ExecResult, error) {
 	// Setpgid so we can kill the process group independently
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessAttrs(cmd)
 
 	stdoutPipe, stderrPipe, err := setupPipes(cmd)
 	if err != nil {
@@ -253,15 +249,10 @@ func (s *NoneSandbox) execKeepAlive(ctx context.Context, cmd *exec.Cmd, timeout 
 	}
 }
 
-// killProcessGroup sends SIGKILL to the entire process group.
+// killProcessGroup sends a kill signal to the entire process tree.
+// This is a legacy wrapper — callers should use killProcessTree directly.
 func killProcessGroup(proc *os.Process) {
-	if proc == nil || proc.Pid == 0 {
-		return
-	}
-	// Try process group first (-pid), fall back to single process
-	if err := syscall.Kill(-proc.Pid, syscall.SIGKILL); err != nil {
-		proc.Kill()
-	}
+	killProcessTree(proc)
 }
 
 func (s *NoneSandbox) ReadFile(ctx context.Context, path string, userID string) ([]byte, error) {
@@ -379,7 +370,7 @@ func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(str
 	}
 
 	// Setpgid: create new process group so kill kills all children
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessAttrs(cmd)
 
 	stdoutPipe, stderrPipe, err := setupPipes(cmd)
 	if err != nil {

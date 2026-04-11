@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -198,13 +199,22 @@ func buildMinimalExecEnv(envList []string) []string {
 	return env
 }
 
-// getLoginShellEnv runs `bash -l -c 'env -0'` to capture the full environment
-// from a login shell. Returns empty slice on failure (caller will use fallback).
+// getLoginShellEnv runs a login shell command to capture the full environment.
+// Unix: bash -l -c 'env -0'
+// Windows: powershell.exe -Command "[Environment]::GetEnvironmentVariables() | ..."
+// Returns empty slice on failure (caller will use fallback).
 func getLoginShellEnv() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-l", "-c", "env -0")
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// PowerShell: list env vars as KEY=VALUE lines
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command",
+			"Get-ChildItem Env: | ForEach-Object { $_.Name + '=' + $_.Value }")
+	} else {
+		cmd = exec.CommandContext(ctx, "bash", "-l", "-c", "env -0")
+	}
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = nil // discard stderr (shell startup noise)
@@ -214,26 +224,38 @@ func getLoginShellEnv() []string {
 		return nil
 	}
 
-	// Parse null-delimited output
+	// Parse output
 	output := stdout.Bytes()
 	if len(output) == 0 {
 		return nil
 	}
 
 	var env []string
-	for len(output) > 0 {
-		idx := bytes.IndexByte(output, 0)
-		if idx < 0 {
-			idx = len(output)
+	if runtime.GOOS == "windows" {
+		// PowerShell outputs newline-delimited KEY=VALUE lines
+		scanner := bufio.NewScanner(bytes.NewReader(output))
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.IndexByte(line, '=') > 0 {
+				env = append(env, line)
+			}
 		}
-		line := string(output[:idx])
-		if idx2 := strings.IndexByte(line, '='); idx2 > 0 {
-			env = append(env, line)
+	} else {
+		// Unix: null-delimited output
+		for len(output) > 0 {
+			idx := bytes.IndexByte(output, 0)
+			if idx < 0 {
+				idx = len(output)
+			}
+			line := string(output[:idx])
+			if idx2 := strings.IndexByte(line, '='); idx2 > 0 {
+				env = append(env, line)
+			}
+			if idx >= len(output) {
+				break
+			}
+			output = output[idx+1:]
 		}
-		if idx >= len(output) {
-			break
-		}
-		output = output[idx+1:]
 	}
 
 	sort.Strings(env)

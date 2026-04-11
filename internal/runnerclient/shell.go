@@ -3,6 +3,7 @@ package runnerclient
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -23,7 +24,16 @@ func DetectShell(dockerMode bool, executor Executor) string {
 			}
 		}
 	}
-	// 回退：检查宿主机或默认
+
+	// Platform-specific fallback
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("powershell.exe"); err == nil {
+			return "powershell.exe"
+		}
+		return "cmd.exe"
+	}
+
+	// Unix fallback
 	for _, candidate := range []string{"/bin/bash", "/usr/bin/bash", "/bin/sh"} {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate

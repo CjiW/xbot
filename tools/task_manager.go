@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	log "xbot/logger"
@@ -243,7 +242,7 @@ func (m *BackgroundTaskManager) Adopt(
 			case <-ticker.C:
 				// Poll fallback: channel might never fire if cmd.Wait already returned
 				for {
-					if err := proc.Signal(syscall.Signal(0)); err != nil {
+					if !isProcessAlive(proc.Pid) {
 						// Process dead, try non-blocking read from channel
 						select {
 						case code := <-exitCodeCh:
@@ -257,12 +256,12 @@ func (m *BackgroundTaskManager) Adopt(
 				}
 			}
 		} else {
-			// No channel provided — use Signal(0) polling heuristic.
+			// No channel provided — use isProcessAlive polling heuristic.
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 
 			for range ticker.C {
-				if err := proc.Signal(syscall.Signal(0)); err != nil {
+				if !isProcessAlive(proc.Pid) {
 					exitCode = 0
 					break
 				}
@@ -332,11 +331,10 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
 	}
 
-	// Kill the OS process group directly (covers Adopt tasks with no cancel func)
+	// Kill the OS process tree directly (covers Adopt tasks with no cancel func)
 	task.mu.Lock()
 	if task.process != nil {
-		// Kill the entire process group (negative PID)
-		syscall.Kill(-task.process.Pid, syscall.SIGKILL)
+		killProcessTree(task.process)
 	}
 	task.killed = true
 	task.Status = BgTaskKilled

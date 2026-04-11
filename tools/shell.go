@@ -196,9 +196,13 @@ func (t *ShellTool) Execute(toolCtx *ToolContext, input string) (*ToolResult, er
 				UserID:  userID,
 			}
 		default:
+			// None sandbox: use platform-aware shell args.
+			// Unix: bash -l -c "command" (login shell, loads profile)
+			// Windows: powershell.exe -Command "command" (loads profile by default)
+			args := loginShellArgs(shell, shellCmd)
 			return ExecSpec{
 				Command:   shell,
-				Args:      []string{shell, "-l", "-c", shellCmd},
+				Args:      args,
 				Shell:     false,
 				Dir:       execDir,
 				Timeout:   timeout,

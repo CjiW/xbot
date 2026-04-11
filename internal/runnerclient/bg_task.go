@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"xbot/internal/runnerproto"
@@ -103,7 +102,7 @@ func (t *bgTask) runNative(m *bgTaskManager) (int, string) {
 	}
 
 	// 创建进程组以便 kill 整个进程树
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessAttrs(cmd)
 
 	dir := t.req.Dir
 	if dir == "" {
@@ -125,9 +124,7 @@ func (t *bgTask) runNative(m *bgTaskManager) (int, string) {
 	err := cmd.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				return ws.ExitStatus(), "failed"
-			}
+			return exitErr.ExitCode(), "failed"
 		}
 		return -1, "failed"
 	}
@@ -164,9 +161,7 @@ func (t *bgTask) dockerRun(de *DockerExecutor, args []string, stdin string) (int
 	err := cmd.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				return ws.ExitStatus(), "failed"
-			}
+			return exitErr.ExitCode(), "failed"
 		}
 		return -1, "failed"
 	}
@@ -194,7 +189,7 @@ func (m *bgTaskManager) Kill(req runnerproto.BgKillRequest) error {
 			t.cmd.Process.Kill()
 		} else {
 			// Kill 整个进程组
-			syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+			killProcessTree(t.cmd.Process.Pid)
 		}
 		t.status = "killed"
 		callLogf(m.logf, "  bg_kill [id=%s]: killed", req.TaskID)
@@ -236,7 +231,7 @@ func (m *bgTaskManager) Cleanup() {
 			if m.dockerMode {
 				t.cmd.Process.Kill()
 			} else {
-				syscall.Kill(-t.cmd.Process.Pid, syscall.SIGKILL)
+				killProcessTree(t.cmd.Process.Pid)
 			}
 			t.status = "killed"
 		}

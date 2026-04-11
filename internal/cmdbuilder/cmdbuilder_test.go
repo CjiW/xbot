@@ -32,8 +32,8 @@ func TestBuild_NoRunAs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cmd.Path != "/bin/sh" {
-		t.Errorf("expected /bin/sh, got %s", cmd.Path)
+	if cmd.Path != defaultShell {
+		t.Errorf("expected %s, got %s", defaultShell, cmd.Path)
 	}
 }
 

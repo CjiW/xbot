@@ -233,10 +233,10 @@ func TestSandboxRouter_Delegation_NoneSandbox(t *testing.T) {
 		t.Errorf("Workspace() = %q, want empty string", ws)
 	}
 
-	// GetShell：NoneSandbox 返回 /bin/bash
+	// GetShell：NoneSandbox 返回平台默认 shell
 	shell, err := r.GetShell("user1", "")
-	if err != nil || shell != "/bin/bash" {
-		t.Errorf("GetShell() = %q, %v, want /bin/bash, nil", shell, err)
+	if err != nil || shell != defaultShell() {
+		t.Errorf("GetShell() = %q, %v, want %s, nil", shell, err, defaultShell())
 	}
 }
 

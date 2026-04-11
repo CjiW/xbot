@@ -26,3 +26,10 @@
 - `docs/agent/agent.md` — SubAgent deadlocks, context management
 - `docs/agent/llm.md` — streaming bugs, retry context traps
 - `docs/agent/tools.md` — tool schema Items requirement, hook chain behavior
+
+## Windows
+
+- `syscall.PROCESS_QUERY_LIMITED_INFORMATION` and `STILL_ACTIVE` are NOT in Go's stdlib `syscall` — define as uint32 constants (0x1000, 259)
+- `exec.ExitError.ExitCode()` is cross-platform; avoid `syscall.WaitStatus` type assertion (fails on Windows)
+- `signal.Notify(sigCh, syscall.SIGTSTP)` doesn't compile on Windows — use build-tagged files
+- PowerShell env output is newline-delimited, not null-delimited — different parsing needed in `mcp_common.go`

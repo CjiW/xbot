@@ -19,6 +19,9 @@
 | `glob.go` | Glob tool (pattern matching) |
 | `fetch.go` | Fetch tool (HTTP → markdown) |
 | `shell.go` | Shell tool (command execution) |
+| `shell_unix.go` | Unix process helpers: setProcessAttrs (Setpgid), killProcessTree (-pgid SIGKILL), isProcessAlive (Signal(0)), defaultShell, loginShellArgs |
+| `shell_windows.go` | Windows process helpers: setProcessAttrs (CREATE_NEW_PROCESS_GROUP), killProcessTree (taskkill /T /F), isProcessAlive (OpenProcess), defaultShell (powershell.exe), loginShellArgs |
+| `none_sandbox.go` | None sandbox (local execution). Uses platform helpers from shell_unix/shell_windows.go |
 | `mcp_common.go` | MCP protocol definitions |
 | `mcp_remote_transport.go` | MCP HTTP transport |
 | `memory_tools.go` | Core memory tools (append/replace/rethink/search/recall) |
@@ -44,6 +47,15 @@ PostToolUse: guarantees all hooks run even if one panics (recover).
 
 ## Sandbox Types
 
-- `none`: direct execution (default)
-- `docker`: Docker container per OS user
-- `remote`: remote runner process via runner protocol
+- `none`: direct execution (default). Uses `/bin/bash -l -c` on Unix, `powershell.exe -Command` on Windows
+- `docker`: Docker container per OS user (always Linux)
+- `remote`: remote runner process via runner protocol (always Linux)
+
+## Windows Support
+
+- **None sandbox only** — docker/remote sandboxes are always Linux
+- Shell: `powershell.exe -Command` replaces `/bin/bash -l -c`
+- Process management: `taskkill /T /F` replaces `kill(-pgid, SIGKILL)`; `CREATE_NEW_PROCESS_GROUP` replaces `Setpgid`
+- `run_as` (sudo) not supported on Windows — returns error
+- Platform helpers in `shell_unix.go` / `shell_windows.go`: `setProcessAttrs`, `killProcessTree`, `isProcessAlive`, `defaultShell`, `loginShellArgs`
+- `cmdbuilder` uses `defaultShell`/`defaultShellFlag` constants from `shell_default.go` / `shell_windows.go`

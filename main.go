@@ -465,6 +465,7 @@ func main() {
 		SkillsDir:            filepath.Join(xbotDir, "skills"),
 		AgentsDir:            filepath.Join(xbotDir, "agents"),
 		WorkDir:              workDir,
+		XbotHome:             xbotDir,
 		PromptFile:           cfg.Agent.PromptFile,
 		SingleUser:           false, // Deprecated: no longer used
 		SandboxMode:          cfg.Sandbox.Mode,

@@ -28,16 +28,24 @@ func NewMockSandbox() *MockSandbox {
 	}
 }
 
+// parentDirs returns all ancestor directories of path (excluding path itself).
+// Uses the fact that filepath.Dir returns the same string when it reaches a root
+// (e.g. "/" on Unix, "C:\" on Windows), providing a natural termination condition.
+func parentDirs(path string) []string {
+	var dirs []string
+	for p, prev := filepath.Dir(path), path; p != prev; p, prev = filepath.Dir(p), p {
+		dirs = append(dirs, p)
+	}
+	return dirs
+}
+
 // SetDir marks a path as a directory (create intermediate dirs automatically).
 func (m *MockSandbox) SetDir(path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Dirs[path] = true
-	// Ensure parent dirs exist
-	for p := filepath.Dir(path); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
-		if !m.Dirs[p] {
-			m.Dirs[p] = true
-		}
+	for _, p := range parentDirs(path) {
+		m.Dirs[p] = true
 	}
 }
 
@@ -45,14 +53,11 @@ func (m *MockSandbox) SetFile(path string, content []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Files[path] = content
-	// Ensure parent dir exists
 	dir := filepath.Dir(path)
 	if dir != "." {
 		m.Dirs[dir] = true
-		for p := filepath.Dir(dir); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
-			if !m.Dirs[p] {
-				m.Dirs[p] = true
-			}
+		for _, p := range parentDirs(path) {
+			m.Dirs[p] = true
 		}
 	}
 }
@@ -200,11 +205,8 @@ func (m *MockSandbox) MkdirAll(ctx context.Context, path string, perm os.FileMod
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Dirs[path] = true
-	// Create intermediate dirs
-	for p := filepath.Dir(path); p != "/" && p != "." && p != ""; p = filepath.Dir(p) {
-		if !m.Dirs[p] {
-			m.Dirs[p] = true
-		}
+	for _, p := range parentDirs(path) {
+		m.Dirs[p] = true
 	}
 	return nil
 }

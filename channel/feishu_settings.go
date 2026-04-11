@@ -211,6 +211,24 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if subID == "" {
 			return nil, fmt.Errorf("missing subscription_id")
 		}
+		// Audit log: record subscription state before switch for debugging
+		if f.settingsCallbacks.LLMListSubscriptions != nil {
+			if subs, err := f.settingsCallbacks.LLMListSubscriptions(senderID); err == nil {
+				for _, s := range subs {
+					log.WithFields(log.Fields{
+						"action":    "settings_activate_subscription",
+						"sender_id": senderID,
+						"sub_id":    s.ID,
+						"sub_name":  s.Name,
+						"provider":  s.Provider,
+						"model":     s.Model,
+						"base_url":  s.BaseURL,
+						"is_active": s.Active,
+						"target_id": subID,
+					}).Info("Subscription state before activate")
+				}
+			}
+		}
 		if f.settingsCallbacks.LLMSetDefaultSubscription != nil {
 			if err := f.settingsCallbacks.LLMSetDefaultSubscription(subID); err != nil {
 				return nil, fmt.Errorf("切换订阅失败: %v", err)

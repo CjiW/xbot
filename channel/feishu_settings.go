@@ -189,27 +189,6 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
-	case "settings_set_llm":
-		provider := formStr(actionData, "provider")
-		baseURL := formStr(actionData, "base_url")
-		apiKey := formStr(actionData, "api_key")
-		model := formStr(actionData, "model")
-		thinkingMode := formStr(actionData, "thinking_mode")
-		if provider == "" || baseURL == "" || apiKey == "" {
-			return nil, fmt.Errorf("请填写完整配置")
-		}
-		if f.settingsCallbacks.LLMSetConfig != nil {
-			if err := f.settingsCallbacks.LLMSetConfig(senderID, provider, baseURL, apiKey, model, 0, ""); err != nil {
-				return nil, fmt.Errorf("保存失败: %v", err)
-			}
-		}
-		if thinkingMode != "" && f.settingsCallbacks.LLMSetThinkingMode != nil {
-			if err := f.settingsCallbacks.LLMSetThinkingMode(senderID, thinkingMode); err != nil {
-				log.WithError(err).Warn("HandleSettingsAction: failed to set thinking_mode")
-			}
-		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
-
 	case "settings_set_thinking_mode":
 		mode := parsed["mode"]
 		if mode == "" {
@@ -223,14 +202,6 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		if f.settingsCallbacks.LLMSetThinkingMode != nil {
 			if err := f.settingsCallbacks.LLMSetThinkingMode(senderID, mode); err != nil {
 				return nil, fmt.Errorf("设置思考模式失败: %v", err)
-			}
-		}
-		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
-
-	case "settings_delete_llm":
-		if f.settingsCallbacks.LLMDelete != nil {
-			if err := f.settingsCallbacks.LLMDelete(senderID); err != nil {
-				return nil, fmt.Errorf("删除失败: %v", err)
 			}
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
@@ -1071,124 +1042,11 @@ func (f *FeishuChannel) buildAddSubscriptionCard(senderID string) (map[string]an
 func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID string) []map[string]any {
 	var elements []map[string]any
 
-	hasCustom := false
-	var cfgProvider, cfgBaseURL, cfgModel string
-	if f.settingsCallbacks.LLMGetConfig != nil {
-		var ok bool
-		cfgProvider, cfgBaseURL, cfgModel, ok = f.settingsCallbacks.LLMGetConfig(senderID)
-		hasCustom = ok
-	}
-
-	if !hasCustom {
-		// No custom LLM — show setup form
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": "**配置个人模型**",
-		})
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": "当前使用系统默认模型，配置个人 LLM 后可自由选择模型。",
-		})
-
-		formElements := []map[string]any{
-			{
-				"tag":  "select_static",
-				"name": "provider",
-				"placeholder": map[string]any{
-					"tag":     "plain_text",
-					"content": "选择 Provider",
-				},
-				"options": []map[string]any{
-					{"text": map[string]any{"tag": "plain_text", "content": "OpenAI（含兼容 API）"}, "value": "openai"},
-					{"text": map[string]any{"tag": "plain_text", "content": "Anthropic"}, "value": "anthropic"},
-				},
-			},
-			{
-				"tag":  "input",
-				"name": "base_url",
-				"label": map[string]any{
-					"tag":     "plain_text",
-					"content": "API 地址",
-				},
-				"placeholder": map[string]any{
-					"tag":     "plain_text",
-					"content": "https://api.openai.com/v1",
-				},
-			},
-			{
-				"tag":  "input",
-				"name": "api_key",
-				"label": map[string]any{
-					"tag":     "plain_text",
-					"content": "API Key",
-				},
-				"placeholder": map[string]any{
-					"tag":     "plain_text",
-					"content": "sk-...",
-				},
-			},
-			{
-				"tag":  "input",
-				"name": "model",
-				"label": map[string]any{
-					"tag":     "plain_text",
-					"content": "模型名称（可选，保存后可从列表选择）",
-				},
-				"placeholder": map[string]any{
-					"tag":     "plain_text",
-					"content": "gpt-4o",
-				},
-			},
-			{
-				"tag":  "select_static",
-				"name": "thinking_mode",
-				"placeholder": map[string]any{
-					"tag":     "plain_text",
-					"content": "思考模式（可选）",
-				},
-				"options": thinkingModeOptions(),
-			},
-			{
-				"tag":         "button",
-				"name":        "llm_submit",
-				"text":        map[string]any{"tag": "plain_text", "content": "保存配置"},
-				"type":        "primary",
-				"action_type": "form_submit",
-				"value": map[string]string{
-					"action_data": mustMapToJSON(map[string]string{
-						"action": "settings_set_llm",
-					}),
-				},
-			},
-		}
-
-		elements = append(elements, map[string]any{
-			"tag":      "form",
-			"name":     "llm_setup_form",
-			"elements": formElements,
-		})
-
-		return elements
-	}
-
-	// Has custom LLM — show config info + model switch + delete
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": "**个人模型配置**",
-	})
-
-	elements = append(elements, map[string]any{
-		"tag":     "markdown",
-		"content": fmt.Sprintf("Provider：**%s**\nAPI 地址：**%s**", cfgProvider, cfgBaseURL),
-	})
-
+	// --- Quick model switch (for active subscription) ---
 	var models []string
-	currentModel := cfgModel
+	currentModel := ""
 	if f.settingsCallbacks.LLMList != nil {
 		models, currentModel = f.settingsCallbacks.LLMList(senderID)
-	}
-	if currentModel == "" {
-		currentModel = cfgModel
 	}
 
 	maxModels := 30
@@ -1221,11 +1079,6 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 				},
 			},
 		))
-	} else {
-		elements = append(elements, map[string]any{
-			"tag":     "markdown",
-			"content": fmt.Sprintf("当前模型：**%s**", currentModel),
-		})
 	}
 
 	// Max context setting
@@ -1437,21 +1290,6 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			},
 		})
 	}
-
-	elements = append(elements, map[string]any{"tag": "hr"})
-	elements = append(elements, map[string]any{
-		"tag": "button",
-		"text": map[string]any{
-			"tag":     "plain_text",
-			"content": "🗑️ 删除个人配置，恢复系统默认",
-		},
-		"type": "danger",
-		"value": map[string]string{
-			"action_data": mustMapToJSON(map[string]string{
-				"action": "settings_delete_llm",
-			}),
-		},
-	})
 
 	return elements
 }

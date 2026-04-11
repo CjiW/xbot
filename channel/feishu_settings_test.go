@@ -335,122 +335,11 @@ func TestHandleApprovalCardAction_RejectsWrongUser(t *testing.T) {
 	}
 }
 
-func TestBuildSettingsCard_ModelTab_NoCustomLLM(t *testing.T) {
-	f := newTestFeishuChannel()
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "", "", "", false
-		},
-	})
-
-	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-
-	s := cardJSON(card)
-
-	if !cardContainsTag(card, "form") {
-		t.Error("should show setup form when no custom LLM")
-	}
-	if !strings.Contains(s, "配置个人模型") {
-		t.Error("should show setup title")
-	}
-	if strings.Contains(s, "/set-llm") {
-		t.Error("should NOT show command instructions")
-	}
-
-	selects := collectSelectsFromCard(card)
-	for _, ad := range selects {
-		if strings.Contains(ad, "settings_set_model") {
-			t.Error("should NOT have model switcher without custom LLM")
-		}
-	}
-}
-
-func TestBuildSettingsCard_ModelTab_WithCustomLLM(t *testing.T) {
-	f := newTestFeishuChannel()
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "openai", "https://api.example.com/v1", "gpt-4", true
-		},
-		LLMList: func(senderID string) ([]string, string) {
-			return []string{"gpt-4", "claude-3"}, "gpt-4"
-		},
-	})
-
-	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-
-	s := cardJSON(card)
-
-	if strings.Contains(s, "api_key") || strings.Contains(s, "sk-") {
-		t.Error("API key must NEVER appear in card")
-	}
-	if !strings.Contains(s, "openai") {
-		t.Error("should show provider")
-	}
-	if !strings.Contains(s, "api.example.com") {
-		t.Error("should show base URL")
-	}
-
-	selects := collectSelectsFromCard(card)
-	hasModel := false
-	for _, ad := range selects {
-		if strings.Contains(ad, "settings_set_model") {
-			hasModel = true
-		}
-	}
-	if !hasModel {
-		t.Error("should have model select when custom LLM configured")
-	}
-
-	var buttons []string
-	elements, _ := getCardElements(card)
-	collectInteractiveRecursive(elements, &buttons, nil)
-	hasDelete := false
-	for _, ad := range buttons {
-		if strings.Contains(ad, "settings_delete_llm") {
-			hasDelete = true
-		}
-	}
-	if !hasDelete {
-		t.Error("should have delete button when custom LLM configured")
-	}
-}
-
-func TestBuildSettingsCard_ModelTab_NoAPIKeyExposed(t *testing.T) {
-	f := newTestFeishuChannel()
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "openai", "https://api.openai.com/v1", "gpt-4o", true
-		},
-		LLMList: func(senderID string) ([]string, string) {
-			return []string{"gpt-4o"}, "gpt-4o"
-		},
-	})
-
-	card, err := f.BuildSettingsCard(context.Background(), "user1", "chat1", "model")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-
-	s := cardJSON(card)
-	if strings.Contains(s, "api_key") || strings.Contains(s, "API Key") {
-		t.Error("API key field should not appear in existing config display")
-	}
-}
-
 func TestHandleSettingsAction_SetModel(t *testing.T) {
 	f := newTestFeishuChannel()
 	var setModel string
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMSet: func(senderID, model string) error { setModel = model; return nil },
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "openai", "https://api.openai.com/v1", "claude-3", true
-		},
+		LLMSet:  func(senderID, model string) error { setModel = model; return nil },
 		LLMList: func(senderID string) ([]string, string) { return []string{"gpt-4", "claude-3"}, "claude-3" },
 	})
 
@@ -467,80 +356,6 @@ func TestHandleSettingsAction_SetModel(t *testing.T) {
 	}
 	if setModel != "claude-3" {
 		t.Errorf("expected model=claude-3, got %q", setModel)
-	}
-}
-
-func TestHandleSettingsAction_SetLLM(t *testing.T) {
-	f := newTestFeishuChannel()
-	var gotProvider, gotURL, gotKey, gotModel string
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMSetConfig: func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error {
-			gotProvider = provider
-			gotURL = baseURL
-			gotKey = apiKey
-			gotModel = model
-			return nil
-		},
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return gotProvider, gotURL, gotModel, gotProvider != ""
-		},
-	})
-
-	actionData := map[string]any{
-		"action_data": `{"action":"settings_set_llm"}`,
-		"provider":    "openai",
-		"base_url":    "https://api.openai.com/v1",
-		"api_key":     "sk-test123",
-		"model":       "gpt-4o",
-	}
-	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if card == nil {
-		t.Fatal("expected card")
-	}
-	if gotProvider != "openai" || gotURL != "https://api.openai.com/v1" || gotKey != "sk-test123" || gotModel != "gpt-4o" {
-		t.Errorf("unexpected config: provider=%q url=%q key=%q model=%q", gotProvider, gotURL, gotKey, gotModel)
-	}
-}
-
-func TestHandleSettingsAction_SetLLM_MissingFields(t *testing.T) {
-	f := newTestFeishuChannel()
-	f.SetSettingsCallbacks(SettingsCallbacks{})
-
-	actionData := map[string]any{
-		"action_data": `{"action":"settings_set_llm"}`,
-		"provider":    "openai",
-	}
-	_, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
-	if err == nil {
-		t.Error("should fail with missing required fields")
-	}
-}
-
-func TestHandleSettingsAction_DeleteLLM(t *testing.T) {
-	f := newTestFeishuChannel()
-	deleted := false
-	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMDelete: func(senderID string) error { deleted = true; return nil },
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "", "", "", false
-		},
-	})
-
-	actionData := map[string]any{
-		"action_data": `{"action":"settings_delete_llm"}`,
-	}
-	card, err := f.HandleSettingsAction(context.Background(), actionData, "user1", "chat1", "msg1")
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if card == nil {
-		t.Fatal("expected card")
-	}
-	if !deleted {
-		t.Error("LLMDelete should have been called")
 	}
 }
 
@@ -1145,10 +960,7 @@ func TestSettingsCard_NoUnsupportedV2Tags(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		ContextModeGet: func() string { return "phase1" },
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "openai", "https://api.openai.com/v1", "gpt-4", true
-		},
-		LLMList: func(senderID string) ([]string, string) { return []string{"gpt-4"}, "gpt-4" },
+		LLMList:        func(senderID string) ([]string, string) { return []string{"gpt-4"}, "gpt-4" },
 		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 			return []sqlite.SharedEntry{{ID: 1, Name: "test"}}, nil
 		},
@@ -1175,9 +987,6 @@ func TestSettingsCard_NoCommandReferences(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
 		ContextModeGet: func() string { return "phase1" },
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "", "", "", false
-		},
 		RegistryBrowse: func(entryType string, limit, offset int) ([]sqlite.SharedEntry, error) {
 			return nil, nil
 		},
@@ -1259,9 +1068,6 @@ func TestHandleSettingsAction_SetConcurrency_Error(t *testing.T) {
 func TestBuildSettingsCard_ModelTab_WithConcurrency(t *testing.T) {
 	f := newTestFeishuChannel()
 	f.SetSettingsCallbacks(SettingsCallbacks{
-		LLMGetConfig: func(senderID string) (string, string, string, bool) {
-			return "openai", "https://api.example.com/v1", "gpt-4", true
-		},
 		LLMList: func(senderID string) ([]string, string) {
 			return []string{"gpt-4", "gpt-4o"}, "gpt-4"
 		},

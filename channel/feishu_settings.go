@@ -1026,15 +1026,17 @@ func (f *FeishuChannel) buildAddSubscriptionCard(senderID string) (map[string]an
 				"content": "➕ 添加订阅",
 			},
 		},
-		"elements": []map[string]any{
-			{
-				"tag":     "markdown",
-				"content": "填写 LLM 订阅信息。添加后可在设置页切换活跃订阅。",
-			},
-			{
-				"tag":      "form",
-				"name":     "add_subscription_form",
-				"elements": formElements,
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{
+					"tag":     "markdown",
+					"content": "填写 LLM 订阅信息。添加后可在设置页切换活跃订阅。",
+				},
+				{
+					"tag":      "form",
+					"name":     "add_subscription_form",
+					"elements": formElements,
+				},
 			},
 		},
 	}, nil

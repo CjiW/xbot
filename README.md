@@ -231,7 +231,7 @@ Set via `MEMORY_PROVIDER=flat` or `MEMORY_PROVIDER=letta`. Letta also requires e
 | `llm/` | LLM clients (OpenAI, Anthropic) |
 | `tools/` | Tool registry and implementations |
 | `memory/` | Memory providers (flat / letta) |
-| `config/` | Environment-based configuration |
+| `config/` | JSON-based configuration |
 | `storage/` | SQLite persistence (sessions, memory, tenants) |
 | `session/` | Multi-tenant session management |
 | `cron/` | Scheduled task execution |
@@ -245,9 +245,7 @@ Set via `MEMORY_PROVIDER=flat` or `MEMORY_PROVIDER=letta`. Letta also requires e
 
 ## Configuration
 
-> ⚠️ **Deprecated**: 环境变量配置将在未来版本中移除。请迁移到 `config.json`。参见 [docs-site Configuration](https://cjiw.github.io/xbot/configuration/) 获取最新的配置方式。
-
-All config via environment variables or `.env` file. See [`.env.example`](.env.example) for a complete template.
+All configuration is done via `config.json`. See [`config.example.json`](config.example.json) for a complete template.
 
 ### LLM
 
@@ -308,7 +306,7 @@ All config via environment variables or `.env` file. See [`.env.example`](.env.e
 
 ### Docker
 
-> ⚠️ **Deprecated**: 以下 Docker 部署示例使用环境变量配置，将在未来版本中改为挂载 `config.json`。
+> ⚠️ **Note**: Docker 部署推荐挂载 `config.json`，而非使用环境变量。
 
 ```bash
 docker run -d --name xbot --restart unless-stopped \

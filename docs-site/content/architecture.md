@@ -69,7 +69,7 @@ xbot/
 ├── cmd/
 │   ├── xbot-cli/            # 独立 CLI 客户端
 │   └── runner/              # 远程沙箱 Runner
-├── config/                  # 配置系统（JSON + 环境变量）
+├── config/                  # 配置系统（JSON）
 ├── bus/                     # 消息总线（InboundMessage / OutboundMessage）
 ├── channel/                 # 渠道层（抽象 + 各渠道实现 + Dispatcher）
 ├── agent/                   # Agent 核心引擎
@@ -490,12 +490,11 @@ type ToolHook interface {
 ### 6.1 配置加载优先级
 
 ```
-1. .env 文件（godotenv）          ← 最低
-2. config.json（LoadFromFile，覆盖 JSON 中存在的非零值字段）
-3. 环境变量覆盖（applyEnvOverrides）  ← 最高
+1. config.json（LoadFromFile）
+2. 硬编码默认值（applyDefaults）
 ```
 
-> ⚠️ **Deprecated**: `.env` 文件和环境变量覆盖将在未来版本中移除。请直接使用 `config.json` 作为唯一配置来源。参见 [Configuration](/configuration/) 获取最新的配置方式。
+> ℹ️ `.env` 文件和 `applyEnvOverrides` 已移除。配置仅通过 `config.json` 加载，缺失字段使用硬编码默认值。参见 [Configuration](/configuration/) 获取配置参考。
 
 ### 6.2 XBOT_HOME 与路径推导
 

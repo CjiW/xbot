@@ -43,7 +43,6 @@ import (
 // saveWg tracks in-flight config saves so SIGINT can wait for them.
 var saveWg sync.WaitGroup
 
-
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
 type cliApp struct {
 	cfg       *config.Config

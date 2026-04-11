@@ -1,5 +1,5 @@
 {
-  "_comment": "xbot 配置文件模板。复制为 config.json 并根据需要修改。time.Duration 字段使用 Go json.Marshal 的纳秒整数格式（1s = 1000000000, 1m = 60000000000, 1h = 3600000000000）。环境变量优先级高于此文件，参见 .env.example。",
+  "_comment": "xbot 配置文件模板。复制为 config.json 并根据需要修改。time.Duration 字段使用 Go json.Marshal 的纳秒整数格式（1s = 1000000000, 1m = 60000000000, 1h = 3600000000000）。",
 
   "server": {
     "host": "0.0.0.0",

@@ -31,7 +31,7 @@ Channel → MessageBus → Agent → LLM → Tools
 - **llm/** — LLM clients (OpenAI-compatible, Anthropic)
 - **tools/** — Tool registry; implement `Tool` interface and register in `DefaultRegistry()`
 - **memory/** — Memory providers: `flat` (default) or `letta` (three-tier MemGPT)
-- **config/** — Configuration loading from environment variables / `.env`
+- **config/** — Configuration loading from `config.json`
 - **cron/** — Scheduled task scheduler (cron expressions + one-shot `at`)
 - **crypto/** — AES-256-GCM encryption utilities for API keys and OAuth tokens
 - **logger/** — Logrus-based structured logging with file rotation
@@ -59,28 +59,29 @@ Channel → MessageBus → Agent → LLM → Tools
 
 ## Configuration
 
-Environment variables (or `.env`):
-- `LLM_PROVIDER` — `openai` or `anthropic`
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
-- `LLM_EMBEDDING_PROVIDER`, `LLM_EMBEDDING_BASE_URL`, `LLM_EMBEDDING_API_KEY`, `LLM_EMBEDDING_MODEL`, `LLM_EMBEDDING_MAX_TOKENS`
-- `MEMORY_PROVIDER` — `flat` (default) or `letta`
-- `FEISHU_ENABLED`, `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_ENCRYPT_KEY`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_DOMAIN`
-- `QQ_ENABLED`, `QQ_APP_ID`, `QQ_CLIENT_SECRET`
-- `WORK_DIR` — Working directory
-- `PROMPT_FILE` — Custom prompt template (default `prompt.md`)
-- `AGENT_MAX_ITERATIONS` — Max tool-call iterations (default `2000`)
-- `AGENT_MAX_CONCURRENCY` — Max concurrent LLM calls (default `3`)
-- `AGENT_ENABLE_AUTO_COMPRESS` — Auto context compression (default `true`)
-- `AGENT_MAX_CONTEXT_TOKENS` — Max context tokens (default `200000`)
-- `AGENT_CONTEXT_MODE` — Context ordering mode
-- `MAX_SUBAGENT_DEPTH` — Max nested subagent depth (default `6`)
-- `XBOT_ENCRYPTION_KEY` — AES-256-GCM key (base64-encoded 32 bytes) for encrypting API keys and OAuth tokens
-- `OAUTH_ENABLE`, `OAUTH_HOST`, `OAUTH_PORT`, `OAUTH_BASE_URL`
-- `SANDBOX_MODE` — Sandbox mode: `none` (default), `docker`, or `remote`
-- `SANDBOX_DOCKER_IMAGE`, `HOST_WORK_DIR`, `SANDBOX_IDLE_TIMEOUT_MINUTES`
-- `PPROF_ENABLE`, `PPROF_HOST`, `PPROF_PORT`
-- `SERVER_HOST`, `SERVER_PORT`
-- `LOG_LEVEL`, `LOG_FORMAT`
-- `LLM_RETRY_ATTEMPTS` — LLM retry attempts (default `5`)
-- `STARTUP_NOTIFY_CHANNEL`, `STARTUP_NOTIFY_CHAT_ID`
-- `TAVILY_API_KEY` — API key for Tavily web search tool
+Configuration (via `config.json`):
+- `llm.provider` — `openai` or `anthropic`
+- `llm.base_url`, `llm.api_key`, `llm.model`
+- `llm.max_output_tokens` — Max tokens in LLM response (0 = model default)
+- `embedding.provider`, `embedding.base_url`, `embedding.api_key`, `embedding.model`, `embedding.max_tokens`
+- `agent.memory_provider` — `flat` (default) or `letta`
+- `feishu.enabled`, `feishu.app_id`, `feishu.app_secret`, `feishu.encrypt_key`, `feishu.verification_token`, `feishu.domain`
+- `qq.enabled`, `qq.app_id`, `qq.client_secret`
+- `agent.work_dir` — Working directory
+- `agent.prompt_file` — Custom prompt template (default `prompt.md`)
+- `agent.max_iterations` — Max tool-call iterations (default `2000`)
+- `agent.max_concurrency` — Max concurrent LLM calls (default `3`)
+- `agent.enable_auto_compress` — Auto context compression (default `true`)
+- `agent.max_context_tokens` — Max context tokens (default `200000`)
+- `agent.context_mode` — Context ordering mode
+- `agent.max_sub_agent_depth` — Max nested subagent depth (default `6`)
+- `XBOT_ENCRYPTION_KEY` env var — AES-256-GCM key (base64-encoded 32 bytes) for encrypting API keys and OAuth tokens
+- `oauth.enable`, `oauth.host`, `oauth.port`, `oauth.base_url`
+- `sandbox.mode` — Sandbox mode: `none` (default), `docker`, or `remote`
+- `sandbox.docker_image`, `sandbox.host_work_dir`, `sandbox.idle_timeout`
+- `pprof.enable`, `pprof.host`, `pprof.port`
+- `server.host`, `server.port`
+- `log.level`, `log.format`
+- `agent.llm_retry_attempts` — LLM retry attempts (default `5`)
+- `startup_notify.channel`, `startup_notify.chat_id`
+- `tavily_api_key` — API key for Tavily web search tool

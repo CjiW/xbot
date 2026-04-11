@@ -5,123 +5,122 @@ weight: 60
 
 # Configuration Reference
 
-> ⚠️ **Deprecated**: 环境变量配置将在未来版本中移除。请迁移到 `config.json`。参见 [Configuration](/configuration/) 获取最新的配置方式。
-
-All configuration is done via environment variables or a `.env` file. See [`.env.example`](https://github.com/CjiW/xbot/blob/master/.env.example) for a complete template.
+All configuration is done via `config.json`. See [`config.example.json`](https://github.com/CjiW/xbot/blob/master/config.example.json) for a complete template.
 
 ## LLM
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | API endpoint |
-| `LLM_API_KEY` | — | API key |
-| `LLM_MODEL` | `gpt-4o` | Model name |
-| `LLM_RETRY_ATTEMPTS` | `5` | Retry count on failure |
-| `LLM_RETRY_DELAY` | `1s` | Initial retry backoff |
-| `LLM_RETRY_MAX_DELAY` | `30s` | Max retry backoff |
-| `LLM_RETRY_TIMEOUT` | `120s` | Per-call timeout |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Provider | `llm.provider` | `openai` | `openai` or `anthropic` |
+| Base URL | `llm.base_url` | `https://api.openai.com/v1` | API endpoint |
+| API Key | `llm.api_key` | — | API key |
+| Model | `llm.model` | `gpt-4o` | Model name |
+| Max Output Tokens | `llm.max_output_tokens` | `0` | Max tokens in LLM response (0 = model default) |
+| Retry Attempts | `agent.llm_retry_attempts` | `5` | Retry count on failure |
+| Retry Delay | `agent.llm_retry_delay` | `1s` | Initial retry backoff |
+| Retry Max Delay | `agent.llm_retry_max_delay` | `30s` | Max retry backoff |
+| Retry Timeout | `agent.llm_retry_timeout` | `120s` | Per-call timeout |
 
 ## Agent
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENT_MAX_ITERATIONS` | `2000` | Max tool-call iterations per turn |
-| `AGENT_MAX_CONCURRENCY` | `3` | Max concurrent LLM calls |
-| `AGENT_MAX_CONTEXT_TOKENS` | `200000` | Max context window tokens |
-| `AGENT_ENABLE_AUTO_COMPRESS` | `true` | Auto context compression |
-| `AGENT_COMPRESSION_THRESHOLD` | `0.7` | Token ratio to trigger compression |
-| `AGENT_CONTEXT_MODE` | — | Custom context management mode |
-| `AGENT_PURGE_OLD_MESSAGES` | `false` | Purge old messages after compression |
-| `MAX_SUBAGENT_DEPTH` | `6` | SubAgent max nesting depth |
-| `MEMORY_PROVIDER` | `flat` | `flat` or `letta` |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Max Iterations | `agent.max_iterations` | `2000` | Max tool-call iterations per turn |
+| Max Concurrency | `agent.max_concurrency` | `3` | Max concurrent LLM calls |
+| Max Context Tokens | `agent.max_context_tokens` | `200000` | Max context window tokens |
+| Auto Compress | `agent.enable_auto_compress` | `true` | Auto context compression |
+| Compression Threshold | `agent.compression_threshold` | `0.7` | Token ratio to trigger compression |
+| Context Mode | `agent.context_mode` | — | Custom context management mode |
+| Purge Old Messages | `agent.purge_old_messages` | `false` | Purge old messages after compression |
+| SubAgent Depth | `agent.max_sub_agent_depth` | `6` | SubAgent max nesting depth |
+| Memory Provider | `agent.memory_provider` | `flat` | `flat` or `letta` |
 
 ## Embedding (Letta Mode)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_EMBEDDING_PROVIDER` | `openai` | Embedding provider |
-| `LLM_EMBEDDING_BASE_URL` | — | Embedding API endpoint |
-| `LLM_EMBEDDING_API_KEY` | — | Embedding API key |
-| `LLM_EMBEDDING_MODEL` | — | Embedding model name |
-| `LLM_EMBEDDING_MAX_TOKENS` | — | Max embedding tokens |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Provider | `embedding.provider` | `openai` | Embedding provider |
+| Base URL | `embedding.base_url` | — | Embedding API endpoint |
+| API Key | `embedding.api_key` | — | Embedding API key |
+| Model | `embedding.model` | `text-embedding-3-small` | Embedding model name |
+| Max Tokens | `embedding.max_tokens` | `2048` | Max embedding tokens |
 
 ## Sandbox
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SANDBOX_MODE` | `none` | `none` / `docker` / `remote` |
-| `SANDBOX_DOCKER_IMAGE` | `ubuntu:22.04` | Docker image for sandbox |
-| `SANDBOX_IDLE_TIMEOUT_MINUTES` | `30` | Idle timeout (0 = disabled) |
-| `SANDBOX_WS_PORT` | `8080` | Remote sandbox WebSocket port |
-| `SANDBOX_AUTH_TOKEN` | — | Runner authentication token |
-| `SANDBOX_PUBLIC_URL` | — | Public URL for runner connections |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Mode | `sandbox.mode` | `none` | `none` / `docker` / `remote` |
+| Docker Image | `sandbox.docker_image` | `ubuntu:22.04` | Docker image for sandbox |
+| Idle Timeout | `sandbox.idle_timeout` | `30m` | Idle timeout (0 = disabled) |
+| WS Port | `sandbox.ws_port` | `8080` | Remote sandbox WebSocket port |
+| Auth Token | `sandbox.auth_token` | — | Runner authentication token |
+| Public URL | `sandbox.public_url` | — | Public URL for runner connections |
 
 ## Channels
 
 ### Feishu
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FEISHU_ENABLED` | `false` | Enable Feishu channel |
-| `FEISHU_APP_ID` | — | Feishu App ID |
-| `FEISHU_APP_SECRET` | — | Feishu App Secret |
-| `FEISHU_ENCRYPT_KEY` | — | Event encryption key |
-| `FEISHU_VERIFICATION_TOKEN` | — | Verification token |
-| `FEISHU_ALLOW_FROM` | — | Allowed user open_id list |
-| `FEISHU_DOMAIN` | — | Tenant domain |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Enabled | `feishu.enabled` | `false` | Enable Feishu channel |
+| App ID | `feishu.app_id` | — | Feishu App ID |
+| App Secret | `feishu.app_secret` | — | Feishu App Secret |
+| Encrypt Key | `feishu.encrypt_key` | — | Event encryption key |
+| Verification Token | `feishu.verification_token` | — | Verification token |
+| Allow From | `feishu.allow_from` | — | Allowed user open_id list |
+| Domain | `feishu.domain` | — | Tenant domain |
 
 ### QQ
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `QQ_ENABLED` | `false` | Enable QQ channel |
-| `QQ_APP_ID` | — | QQ App ID |
-| `QQ_CLIENT_SECRET` | — | QQ Client Secret |
-| `QQ_ALLOW_FROM` | — | Allowed openid list |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Enabled | `qq.enabled` | `false` | Enable QQ channel |
+| App ID | `qq.app_id` | — | QQ App ID |
+| Client Secret | `qq.client_secret` | — | QQ Client Secret |
+| Allow From | `qq.allow_from` | — | Allowed openid list |
 
 ### NapCat
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NAPCAT_ENABLED` | `false` | Enable NapCat channel |
-| `NAPCAT_WS_URL` | — | WebSocket URL |
-| `NAPCAT_TOKEN` | — | Auth token |
-| `NAPCAT_ALLOW_FROM` | — | Allowed QQ numbers |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Enabled | `napcat.enabled` | `false` | Enable NapCat channel |
+| WS URL | `napcat.ws_url` | — | WebSocket URL |
+| Token | `napcat.token` | — | Auth token |
+| Allow From | `napcat.allow_from` | — | Allowed QQ numbers |
 
 ### Web
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEB_ENABLED` | `false` | Enable Web channel |
-| `WEB_HOST` | `0.0.0.0` | Bind address |
-| `WEB_PORT` | `8082` | Port |
-| `WEB_STATIC_DIR` | — | Frontend static files |
-| `WEB_UPLOAD_DIR` | — | File upload directory |
-| `WEB_PERSONA_ISOLATION` | `true` | Per-user persona isolation |
-| `WEB_INVITE_ONLY` | `false` | Invite-only mode |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Enabled | `web.enable` | `false` | Enable Web channel |
+| Host | `web.host` | `0.0.0.0` | Bind address |
+| Port | `web.port` | `8082` | Port |
+| Static Dir | `web.static_dir` | — | Frontend static files |
+| Upload Dir | `web.upload_dir` | — | File upload directory |
+| Persona Isolation | `web.persona_isolation` | `true` | Per-user persona isolation |
+| Invite Only | `web.invite_only` | `false` | Invite-only mode |
 
 ## OAuth
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OAUTH_ENABLE` | `false` | Enable OAuth server |
-| `OAUTH_HOST` | `127.0.0.1` | OAuth bind address |
-| `OAUTH_PORT` | `8081` | OAuth port |
-| `OAUTH_BASE_URL` | — | OAuth callback base URL |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Enable | `oauth.enable` | `false` | Enable OAuth server |
+| Host | `oauth.host` | `127.0.0.1` | OAuth bind address |
+| Port | `oauth.port` | `8081` | OAuth port |
+| Base URL | `oauth.base_url` | — | OAuth callback base URL |
 
 ## Infrastructure
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SERVER_HOST` | `0.0.0.0` | HTTP server bind address |
-| `SERVER_PORT` | `8080` | HTTP server port |
-| `WORK_DIR` | `.` | Working directory |
-| `PROMPT_FILE` | `prompt.md` | Custom prompt template |
-| `LOG_LEVEL` | `info` | Log level |
-| `LOG_FORMAT` | `json` | Log format |
-| `XBOT_ENCRYPTION_KEY` | — | AES-256-GCM key (base64, 32 bytes) |
-| `TAVILY_API_KEY` | — | Tavily web search API key |
-| `PPROF_ENABLE` | `false` | Enable pprof endpoint |
-| `PPROF_HOST` | `localhost` | pprof bind address |
-| `PPROF_PORT` | `6060` | pprof port |
+| Field | JSON Path | Default | Description |
+|-------|-----------|---------|-------------|
+| Server Host | `server.host` | `0.0.0.0` | HTTP server bind address |
+| Server Port | `server.port` | `8080` | HTTP server port |
+| Work Dir | `agent.work_dir` | `.` | Working directory |
+| Prompt File | `agent.prompt_file` | `prompt.md` | Custom prompt template |
+| Log Level | `log.level` | `info` | Log level |
+| Log Format | `log.format` | `json` | Log format |
+| Encryption Key | `XBOT_ENCRYPTION_KEY` env | — | AES-256-GCM key (base64, 32 bytes) |
+| Tavily API Key | `tavily_api_key` | — | Tavily web search API key |
+| Pprof Enable | `pprof.enable` | `false` | Enable pprof endpoint |
+| Pprof Host | `pprof.host` | `localhost` | pprof bind address |
+| Pprof Port | `pprof.port` | `6060` | pprof port |

@@ -19,15 +19,15 @@ type OAuthConfig struct {
 
 // SandboxConfig 沙箱配置
 type SandboxConfig struct {
-	Mode        string        `json:"mode"`
-	RemoteMode  string        `json:"remote_mode"`
-	DockerImage string        `json:"docker_image"`
-	HostWorkDir string        `json:"host_work_dir"`
-	IdleTimeout time.Duration `json:"idle_timeout"`
-	WSPort      int           `json:"ws_port"`
-	AuthToken   string        `json:"auth_token"`
-	PublicURL   string        `json:"public_url"`
-	AllowWebUserServerRunner bool `json:"allow_web_user_server_runner"`
+	Mode                     string        `json:"mode"`
+	RemoteMode               string        `json:"remote_mode"`
+	DockerImage              string        `json:"docker_image"`
+	HostWorkDir              string        `json:"host_work_dir"`
+	IdleTimeout              time.Duration `json:"idle_timeout"`
+	WSPort                   int           `json:"ws_port"`
+	AuthToken                string        `json:"auth_token"`
+	PublicURL                string        `json:"public_url"`
+	AllowWebUserServerRunner bool          `json:"allow_web_user_server_runner"`
 }
 
 // QQConfig QQ 机器人渠道配置
@@ -144,7 +144,7 @@ type AgentConfig struct {
 	SessionCacheTimeout  time.Duration `json:"session_cache_timeout"`
 
 	ContextMode string `json:"context_mode"`
-	// EnableAutoCompress 为 nil 表示 JSON 未写该字段，Load 后与未设置 AGENT_ENABLE_AUTO_COMPRESS 一致，默认启用压缩。
+	// EnableAutoCompress 为 nil 表示 JSON 未写该字段，默认启用压缩。
 	EnableAutoCompress   *bool   `json:"enable_auto_compress,omitempty"`
 	MaxContextTokens     int     `json:"max_context_tokens"`
 	CompressionThreshold float64 `json:"compression_threshold"`
@@ -265,7 +265,6 @@ func SaveToFile(path string, cfg *Config) error {
 	}
 	return nil
 }
-
 
 func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 	if a.EnableAutoCompress == nil {

@@ -13,8 +13,8 @@
 package main
 
 import (
-	"flag"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -183,9 +183,9 @@ func main() {
 
 	// 命令行标志
 	var (
-		configPath string
-		newSession bool
-		prompt     string
+		configPath    string
+		newSession    bool
+		prompt        string
 		flagShare     string
 		flagToken     string
 		flagWorkspace string

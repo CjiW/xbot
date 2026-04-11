@@ -120,17 +120,17 @@ func newCLIApp() *cliApp {
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
 	agentLoop := agent.New(agent.Config{
-			Bus:                  msgBus,
-			LLM:                  llmClient,
-			Model:                cfg.LLM.Model,
-			MaxIterations:        cfg.Agent.MaxIterations,
-			MaxConcurrency:       cfg.Agent.MaxConcurrency,
-			DBPath:               dbPath,
-			SkillsDir:            filepath.Join(xbotHome, "skills"),
-			AgentsDir:            filepath.Join(xbotHome, "agents"),
-			WorkDir:              workDir,
-			XbotHome:             xbotHome,
-			PromptFile:           cfg.Agent.PromptFile,
+		Bus:                  msgBus,
+		LLM:                  llmClient,
+		Model:                cfg.LLM.Model,
+		MaxIterations:        cfg.Agent.MaxIterations,
+		MaxConcurrency:       cfg.Agent.MaxConcurrency,
+		DBPath:               dbPath,
+		SkillsDir:            filepath.Join(xbotHome, "skills"),
+		AgentsDir:            filepath.Join(xbotHome, "agents"),
+		WorkDir:              workDir,
+		XbotHome:             xbotHome,
+		PromptFile:           cfg.Agent.PromptFile,
 		DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
 		SandboxMode:          cfg.Sandbox.Mode,
 		Sandbox:              tools.GetSandbox(),

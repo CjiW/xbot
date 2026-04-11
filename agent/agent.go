@@ -225,7 +225,7 @@ type Agent struct {
 	maxConcurrency     int              // 最大并发会话处理数
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
-	xbotHome           string           // global xbot config dir (e.g. ~/.xbot), used for mcp.json etc.
+	xbotHome           string // global xbot config dir (e.g. ~/.xbot), used for mcp.json etc.
 
 	// 上下文管理配置
 	contextManagerConfig *ContextManagerConfig

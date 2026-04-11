@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"xbot/llm"
@@ -132,7 +133,7 @@ func (t *ReadTool) executeInSandbox(ctx *ToolContext, filePath string) (*ToolRes
 		// 相对路径：优先基于 CurrentDir（Cd 后的沙箱路径），否则 sandboxBase
 		sandboxCWD := resolveSandboxCWD(ctx, sandboxBase)
 		if sandboxCWD != "" {
-			sandboxPath = filepath.Join(sandboxCWD, filePath)
+			sandboxPath = path.Join(sandboxCWD, filePath)
 		} else {
 			sandboxPath = sandboxBase + "/" + filePath
 		}

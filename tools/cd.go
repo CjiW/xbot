@@ -502,7 +502,7 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 // executeWithSandboxAPI changes directory using Sandbox API.
 func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResult, error) {
 	target := dir
-	if !filepath.IsAbs(target) {
+	if !path.IsAbs(target) {
 		base := ""
 		if ctx.CurrentDir != "" {
 			base = ctx.CurrentDir

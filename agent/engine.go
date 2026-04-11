@@ -357,6 +357,19 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 
 	// --- Main loop ---
 	for i := 0; i < s.maxIter; i++ {
+		// Check for cancellation before starting each iteration
+		select {
+		case <-ctx.Done():
+			out := s.buildOutput(&bus.OutboundMessage{
+				Channel: s.cfg.Channel,
+				ChatID:  s.cfg.ChatID,
+				Content: "Agent was cancelled.",
+			})
+			out.Error = ctx.Err()
+			return out
+		default:
+		}
+
 		s.beginIteration(i)
 		s.maybeCompress(ctx)
 		s.notifyThinking(i)
@@ -366,6 +379,17 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		}
 
 		response, err := s.callLLM(ctx, retryNotifyCtx)
+
+		// If ctx was cancelled during LLM call, exit immediately
+		if ctx.Err() != nil {
+			out := s.buildOutput(&bus.OutboundMessage{
+				Channel: s.cfg.Channel,
+				ChatID:  s.cfg.ChatID,
+				Content: "Agent was cancelled.",
+			})
+			out.Error = ctx.Err()
+			return out
+		}
 
 		if out := s.handleLLMError(ctx, err, response, i); out != nil {
 			return out
@@ -382,7 +406,20 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 		s.recordAssistantMsg(ctx, response)
 
 		results := s.executeToolCalls(ctx, response, i)
+
+		// Always process tool results (preserves engine messages for session continuity)
 		s.processToolResults(ctx, response, results)
+
+		// If ctx was cancelled during tool execution, exit after preserving results
+		if ctx.Err() != nil {
+			out := s.buildOutput(&bus.OutboundMessage{
+				Channel: s.cfg.Channel,
+				ChatID:  s.cfg.ChatID,
+				Content: "Agent was cancelled.",
+			})
+			out.Error = ctx.Err()
+			return out
+		}
 
 		if out := s.postToolProcessing(ctx, response, i); out != nil {
 			return out

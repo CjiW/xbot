@@ -1275,16 +1275,12 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			}
 		}
 
-		var roundToolNames []string
-		for _, tc2 := range response.ToolCalls {
-			roundToolNames = append(roundToolNames, tc2.Name)
-		}
 		var todoSummary string
 		if s.cfg.TodoManager != nil && s.sessionKey != "" {
 			todoSummary = s.cfg.TodoManager.GetTodoSummary(s.sessionKey)
 		}
 
-		reminder := BuildSystemReminder(s.messages, roundToolNames, todoSummary, s.cfg.AgentID)
+		reminder := BuildSystemReminder(s.messages, response.ToolCalls, todoSummary, s.cfg.AgentID)
 		if reminder != "" && len(s.messages) > 0 {
 			lastIdx := len(s.messages) - 1
 			s.messages[lastIdx].Content += "\n\n" + reminder

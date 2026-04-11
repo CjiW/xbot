@@ -37,4 +37,4 @@
 ### 核心记忆管理
 - persona/human block 保持精炼（用要点，不写长文），内容混乱时用 `rethink` 重写
 - working_context 只放当前活跃任务，完成后清理
-- 项目信息存入 Archival Memory（`archival_memory_insert`），格式：`[PROJECT_CARD]...[END_PROJECT_CARD]`
+- 项目级知识使用 AGENT.md + 知识文件树管理（见 knowledge-management Skill），不依赖 archival memory

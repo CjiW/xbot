@@ -3,11 +3,16 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"xbot/memory"
 	"xbot/prompt"
+
+	log "xbot/logger"
 )
 
 // --- Priority 0-99: 基础设施 ---
@@ -34,6 +39,201 @@ func (m *SystemPromptMiddleware) Process(mc *MessageContext) error {
 	})
 	mc.SystemParts["00_base"] = content
 	return nil
+}
+
+// --- Priority 5: 项目级上下文 ---
+
+// agentContextFiles defines the file names to search for project-level context,
+// in priority order. First match wins.
+var agentContextFiles = []string{
+	".xbot/context.md",
+	"AGENT.md",
+	".cursorrules",
+}
+
+const (
+	// maxProjectContextChars is the maximum number of characters injected into
+	// the system prompt. Content beyond this is truncated with a hint to use
+	// the Read tool for the full file.
+	maxProjectContextChars = 10000
+
+	// projectContextCacheTTL controls how long the file content is cached
+	// before re-reading from disk.
+	projectContextCacheTTL = 30 * time.Second
+)
+
+// ProjectContextMiddleware automatically loads a project-level context file
+// (AGENT.md, .xbot/context.md, or .cursorrules) from the current working
+// directory and injects it into the system prompt. This gives the LLM
+// immediate awareness of project conventions, architecture, and coding rules
+// without any memory provider dependency.
+//
+// Priority=5: runs after SystemPromptMiddleware(0), before SkillsCatalogMiddleware(100).
+type ProjectContextMiddleware struct {
+	cache projectContextCache
+}
+
+// projectContextCache caches the loaded context content keyed by directory path.
+type projectContextCache struct {
+	mu    sync.RWMutex
+	items map[string]*projectContextEntry
+}
+
+type projectContextEntry struct {
+	content  string
+	filePath string
+	modTime  time.Time
+	expireAt time.Time
+}
+
+func newProjectContextCache() projectContextCache {
+	return projectContextCache{items: make(map[string]*projectContextEntry)}
+}
+
+func NewProjectContextMiddleware() *ProjectContextMiddleware {
+	return &ProjectContextMiddleware{cache: newProjectContextCache()}
+}
+
+func (m *ProjectContextMiddleware) Name() string { return "project_context" }
+
+// Priority=5: after SystemPromptMiddleware(0), before SkillsCatalogMiddleware(100)
+func (m *ProjectContextMiddleware) Priority() int { return 5 }
+
+func (m *ProjectContextMiddleware) Process(mc *MessageContext) error {
+	dir := mc.CWD
+	if dir == "" {
+		dir = mc.WorkDir
+	}
+	if dir == "" {
+		return nil
+	}
+
+	content, filePath := m.load(dir)
+	if content == "" {
+		return nil
+	}
+
+	mc.SystemParts["05_project_context"] = formatProjectContext(content, filePath)
+
+	log.WithFields(log.Fields{
+		"dir":       dir,
+		"file":      filePath,
+		"chars":     len(content),
+		"truncated": len(content) > maxProjectContextChars,
+	}).Debug("ProjectContextMiddleware: injected project context")
+
+	return nil
+}
+
+// load searches for the first matching context file in dir and returns its content.
+// Results are cached per directory with a short TTL, refreshed when the file changes.
+func (m *ProjectContextMiddleware) load(dir string) (content string, filePath string) {
+	now := time.Now()
+
+	// Check cache
+	m.cache.mu.RLock()
+	entry, hit := m.cache.items[dir]
+	m.cache.mu.RUnlock()
+
+	if hit && now.Before(entry.expireAt) {
+		return entry.content, entry.filePath
+	}
+
+	// Cache miss or expired — scan files
+	for _, name := range agentContextFiles {
+		fullPath := filepath.Join(dir, name)
+		info, err := os.Stat(fullPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		// If cached entry matches file name and modTime, reuse content (avoid re-reading unchanged file)
+		if hit && entry.filePath == name && entry.modTime.Equal(info.ModTime()) {
+			// Refresh TTL only
+			m.cache.mu.Lock()
+			entry.expireAt = now.Add(projectContextCacheTTL)
+			m.cache.mu.Unlock()
+			return entry.content, entry.filePath
+		}
+
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+
+		content = strings.TrimSpace(string(data))
+		if content == "" {
+			continue
+		}
+
+		// Update cache
+		m.cache.mu.Lock()
+		m.cache.items[dir] = &projectContextEntry{
+			content:  content,
+			filePath: name,
+			modTime:  info.ModTime(),
+			expireAt: now.Add(projectContextCacheTTL),
+		}
+		m.cache.mu.Unlock()
+
+		return content, name
+	}
+
+	// No file found — cache empty result to avoid repeated scans
+	m.cache.mu.Lock()
+	m.cache.items[dir] = &projectContextEntry{
+		expireAt: now.Add(projectContextCacheTTL),
+	}
+	m.cache.mu.Unlock()
+
+	return "", ""
+}
+
+// formatProjectContext builds a formatted string for injection into system prompts.
+// It prepends usage instructions so the LLM knows to consult knowledge files
+// before diving into code exploration or modifications.
+func formatProjectContext(content string, filePath string) string {
+	var sb strings.Builder
+	sb.WriteString("\n## Project Context\n\n")
+	sb.WriteString("Project-level instructions loaded from `")
+	sb.WriteString(filePath)
+	sb.WriteString("`.\n\n")
+
+	// Usage instructions — tell the LLM how to leverage this context.
+	sb.WriteString("**Before modifying code or exploring the project:**\n")
+	sb.WriteString("1. Scan the **Knowledge Files** list below and identify which files are relevant to your current task.\n")
+	sb.WriteString("2. Read only the relevant knowledge files before diving into code. They contain architecture, conventions, and known pitfalls that prevent mistakes.\n")
+	sb.WriteString("3. Follow the **Quick Reference** for build/test/lint commands — do not guess.\n\n")
+
+	if len(content) > maxProjectContextChars {
+		sb.WriteString(content[:maxProjectContextChars])
+		fmt.Fprintf(&sb, "\n\n... (truncated, use Read tool to view full `%s`)\n", filePath)
+	} else {
+		sb.WriteString(content)
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// LoadProjectContextFile is a standalone helper that loads the first matching
+// project context file from dir. Used by SubAgent code which doesn't go
+// through the pipeline. Returns a formatted string for injection or empty string.
+func LoadProjectContextFile(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	for _, name := range agentContextFiles {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		content := strings.TrimSpace(string(data))
+		if content == "" {
+			continue
+		}
+		return formatProjectContext(content, name)
+	}
+	return ""
 }
 
 // --- Priority 100-199: 上下文注入 ---

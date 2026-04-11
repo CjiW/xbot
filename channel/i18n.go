@@ -4,6 +4,7 @@ package channel
 type UILocale struct {
 	// --- A. System messages ---
 	CancelSent     string // "已发送取消请求"
+	QueueCleared   string // "已清空 %d 条排队消息"
 	SettingsSaved  string // "✅ 设置已保存"
 	NoSettings     string // "当前渠道没有可配置的设置项。"
 	CheckingUpdate string // "正在检查更新..."
@@ -190,6 +191,7 @@ func localeZH() *UILocale {
 	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "已发送取消请求",
+		QueueCleared:   "已清空 %d 条排队消息",
 		SettingsSaved:  "✅ 设置已保存",
 		NoSettings:     "当前渠道没有可配置的设置项。",
 		CheckingUpdate: "正在检查更新...",
@@ -561,6 +563,7 @@ func localeEN() *UILocale {
 	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "Cancel request sent",
+		QueueCleared:   "Cleared %d queued messages",
 		SettingsSaved:  "✅ Settings saved",
 		NoSettings:     "No configurable settings for this channel.",
 		CheckingUpdate: "Checking for updates...",
@@ -932,6 +935,7 @@ func localeJA() *UILocale {
 	return &UILocale{
 		// --- A. System messages ---
 		CancelSent:     "キャンセルリクエストを送信しました",
+		QueueCleared:   "%d 件のキューに入ったメッセージをクリアしました",
 		SettingsSaved:  "✅ 設定を保存しました",
 		NoSettings:     "このチャンネルには設定項目がありません。",
 		CheckingUpdate: "アップデートを確認中...",

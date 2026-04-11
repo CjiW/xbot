@@ -171,8 +171,8 @@ func (a *Agent) initPipelines(memoryProvider string) {
 
 	// 主 pipeline：用于普通消息和卡片响应
 	a.pipeline = NewMessagePipeline(
-		NewProjectHintMiddleware(a.multiSession.ArchivalService),
 		NewSystemPromptMiddleware(a.promptLoader, memoryProvider),
+		NewProjectContextMiddleware(),
 		NewSkillsCatalogMiddleware(),
 		NewAgentsCatalogMiddleware(),
 		NewPermissionControlMiddleware(),

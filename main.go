@@ -687,6 +687,84 @@ func main() {
 			LLMSetThinkingMode: func(senderID string, mode string) error {
 				return agentLoop.SetUserThinkingMode(senderID, mode)
 			},
+			LLMListSubscriptions: func(senderID string) ([]channel.Subscription, error) {
+				subs, err := agentLoop.LLMFactory().GetSubscriptionSvc().List(senderID)
+				if err != nil {
+					return nil, err
+				}
+				result := make([]channel.Subscription, len(subs))
+				for i, s := range subs {
+					result[i] = channel.Subscription{
+						ID:       s.ID,
+						Name:     s.Name,
+						Provider: s.Provider,
+						BaseURL:  s.BaseURL,
+						APIKey:   s.APIKey,
+						Model:    s.Model,
+						Active:   s.IsDefault,
+					}
+				}
+				return result, nil
+			},
+			LLMGetDefaultSubscription: func(senderID string) (*channel.Subscription, error) {
+				sub, err := agentLoop.LLMFactory().GetSubscriptionSvc().GetDefault(senderID)
+				if err != nil || sub == nil {
+					return nil, err
+				}
+				return &channel.Subscription{
+					ID:       sub.ID,
+					Name:     sub.Name,
+					Provider: sub.Provider,
+					BaseURL:  sub.BaseURL,
+					APIKey:   sub.APIKey,
+					Model:    sub.Model,
+					Active:   sub.IsDefault,
+				}, nil
+			},
+			LLMAddSubscription: func(senderID string, sub *channel.Subscription) error {
+				svc := agentLoop.LLMFactory().GetSubscriptionSvc()
+				err := svc.Add(&sqlite.LLMSubscription{
+					SenderID: senderID,
+					Name:     sub.Name,
+					Provider: sub.Provider,
+					BaseURL:  sub.BaseURL,
+					APIKey:   sub.APIKey,
+					Model:    sub.Model,
+				})
+				if err == nil {
+					agentLoop.LLMFactory().Invalidate(senderID)
+				}
+				return err
+			},
+			LLMRemoveSubscription: func(id string) error {
+				svc := agentLoop.LLMFactory().GetSubscriptionSvc()
+				// Get senderID before removing for cache invalidation
+				sub, err := svc.Get(id)
+				if err != nil {
+					return err
+				}
+				if err := svc.Remove(id); err != nil {
+					return err
+				}
+				agentLoop.LLMFactory().Invalidate(sub.SenderID)
+				return nil
+			},
+			LLMSetDefaultSubscription: func(id string) error {
+				svc := agentLoop.LLMFactory().GetSubscriptionSvc()
+				if err := svc.SetDefault(id); err != nil {
+					return err
+				}
+				// Invalidate LLM cache for the subscription owner so GetLLM
+				// picks up the new default on next request.
+				sub, err := svc.Get(id)
+				if err == nil && sub != nil {
+					agentLoop.LLMFactory().Invalidate(sub.SenderID)
+				}
+				return nil
+			},
+			LLMRenameSubscription: func(id, name string) error {
+				return agentLoop.LLMFactory().GetSubscriptionSvc().Rename(id, name)
+			},
 			ContextModeGet: func() string {
 				return agentLoop.GetContextMode()
 			},

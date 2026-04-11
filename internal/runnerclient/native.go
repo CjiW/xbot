@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"xbot/internal/cmdbuilder"
@@ -42,7 +41,7 @@ func (e *NativeExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 	}
 
 	// 创建新进程组，超时时可以 kill 所有子进程
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessAttrs(cmd)
 	if spec.Dir != "" {
 		cmd.Dir = filepath.Clean(spec.Dir)
 	} else {
@@ -67,13 +66,11 @@ func (e *NativeExecutor) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, 
 		timedOut = true
 		exitCode = -1
 		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			killProcessTree(cmd.Process.Pid)
 		}
 	} else if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				exitCode = status.ExitStatus()
-			}
+			exitCode = exitErr.ExitCode()
 		} else {
 			return nil, err
 		}

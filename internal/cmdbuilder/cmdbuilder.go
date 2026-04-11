@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -23,17 +24,20 @@ type Config struct {
 
 // Build creates an *exec.Cmd with optional OS user switching.
 //
-// When cfg.RunAsUser is set, the command is wrapped with sudo:
+// When cfg.RunAsUser is set (Unix only), the command is wrapped with sudo:
 //
-//	sudo -n -H -u <user> -- /bin/sh -c "<command>"
+//	sudo -n -H -u <user> -- <shell> <flag> "<command>"
 //
 // When cfg.RunAsUser is empty, the command is constructed directly:
 //
-//	/bin/sh -c "<command>"
+//	<shell> <flag> "<command>"
+//
+// On Windows, RunAsUser is not supported and returns an error.
+// The default shell is /bin/sh on Unix and powershell.exe on Windows.
 //
 // Parameters:
 //   - ctx: context for cancellation (nil → no context)
-//   - shell: true → use "sh -c <command>"; false → use args directly
+//   - shell: true → use shell command; false → use args directly
 //   - command: the command string (used when shell=true)
 //   - args: the arg list (used when shell=false, must be non-empty)
 //   - dir: working directory
@@ -45,9 +49,13 @@ func Build(ctx context.Context, shell bool, command string, args []string,
 	var cmd *exec.Cmd
 
 	if cfg.RunAsUser != "" {
+		// OS user switching via sudo is not supported on Windows.
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("run_as (user switching) is not supported on Windows")
+		}
 		// Wrap with sudo -n -H -u <user> --
 		if shell {
-			sudoArgs := []string{"-n", "-H", "-u", cfg.RunAsUser, "--", "/bin/sh", "-c", command}
+			sudoArgs := []string{"-n", "-H", "-u", cfg.RunAsUser, "--", defaultShell, defaultShellFlag, command}
 			if ctx != nil {
 				cmd = exec.CommandContext(ctx, "sudo", sudoArgs...)
 			} else {
@@ -68,9 +76,9 @@ func Build(ctx context.Context, shell bool, command string, args []string,
 		// No user switching — direct execution
 		if shell {
 			if ctx != nil {
-				cmd = exec.CommandContext(ctx, "/bin/sh", "-c", command)
+				cmd = exec.CommandContext(ctx, defaultShell, defaultShellFlag, command)
 			} else {
-				cmd = exec.Command("/bin/sh", "-c", command)
+				cmd = exec.Command(defaultShell, defaultShellFlag, command)
 			}
 		} else {
 			if len(args) == 0 {
@@ -102,12 +110,12 @@ func WriteFileAsUser(runAsUser, path string, data []byte, perm os.FileMode) erro
 	}
 
 	// Use sudo to write as the target user:
-	// sudo -n -H -u <user> -- /bin/sh -c "cat > '<escaped_path>' && chmod <perm> '<escaped_path>'"
+	// sudo -n -H -u <user> -- <shell> <flag> "cat > '<escaped_path>' && chmod <perm> '<escaped_path>'"
 	escaped := shellEscape(path)
 	permStr := fmt.Sprintf("%o", perm)
 	shellCmd := fmt.Sprintf("cat > %s && chmod %s %s", escaped, permStr, escaped)
 
-	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", "/bin/sh", "-c", shellCmd)
+	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", defaultShell, defaultShellFlag, shellCmd)
 	cmd.Stdin = bytes.NewReader(data)
 
 	var stderr bytes.Buffer
@@ -151,7 +159,7 @@ func MkdirAllAsUser(runAsUser, path string, perm os.FileMode) error {
 	permStr := fmt.Sprintf("%o", perm)
 	shellCmd := fmt.Sprintf("mkdir -p %s && chmod %s %s", escaped, permStr, escaped)
 
-	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", "/bin/sh", "-c", shellCmd)
+	cmd := exec.Command("sudo", "-n", "-H", "-u", runAsUser, "--", defaultShell, defaultShellFlag, shellCmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 

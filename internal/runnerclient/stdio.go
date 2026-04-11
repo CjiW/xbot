@@ -154,7 +154,7 @@ func (sm *stdioManager) HandleClose(msg runnerproto.RunnerMessage) *runnerproto.
 	select {
 	case <-proc.done:
 	case <-time.After(5 * time.Second):
-		proc.cmd.Process.Signal(syscall.SIGTERM) //nolint:errcheck
+		signalProcess(proc.cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-proc.done:
 		case <-time.After(3 * time.Second):

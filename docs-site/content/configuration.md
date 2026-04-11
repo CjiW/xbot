@@ -7,6 +7,8 @@ weight: 60
 
 All configuration is done via `config.json`. See [`config.example.json`](https://github.com/CjiW/xbot/blob/master/config.example.json) for a complete template.
 
+> ⚠️ **Security**: `XBOT_ENCRYPTION_KEY` must ONLY be set as an environment variable, never written to `config.json`. This key encrypts API keys at rest — storing it alongside the data it protects defeats the purpose.
+
 ## LLM
 
 | Field | JSON Path | Default | Description |

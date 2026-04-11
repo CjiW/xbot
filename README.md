@@ -247,6 +247,24 @@ Set via `MEMORY_PROVIDER=flat` or `MEMORY_PROVIDER=letta`. Letta also requires e
 
 All configuration is done via `config.json`. See [`config.example.json`](config.example.json) for a complete template.
 
+> ⚠️ **Security**: `XBOT_ENCRYPTION_KEY` must ONLY be set as an environment variable, never written to `config.json`. This key encrypts API keys at rest — storing it alongside the data it protects defeats the purpose.
+
+### Migrating from .env
+
+If you have an existing `.env` file from a previous version, use the migration script:
+
+```bash
+# 基本用法：将 .env 转换为 config.json
+./scripts/migrate-env-to-config.sh .env ~/.xbot/config.json
+
+# Docker / systemd 部署场景
+./scripts/migrate-env-to-config.sh /path/to/.env /path/to/config.json
+```
+
+The script converts all 80+ environment variables to the equivalent `config.json` format. Meta-level variables (`XBOT_HOME`, `XBOT_ENCRYPTION_KEY`) are skipped — keep them as environment variables.
+
+After verifying the generated `config.json`, you can remove the `.env` file.
+
 ### LLM
 
 | Variable | Default | Description |
@@ -306,19 +324,22 @@ All configuration is done via `config.json`. See [`config.example.json`](config.
 
 ### Docker
 
-> ⚠️ **Note**: Docker 部署推荐挂载 `config.json`，而非使用环境变量。
+1. Create a `config.json` from the template:
+```bash
+cp config.example.json config.json
+# Edit config.json with your LLM API key and other settings
+```
 
+2. Run with mounted config:
 ```bash
 docker run -d --name xbot --restart unless-stopped \
   --security-opt seccomp=unconfined --cap-add SYS_ADMIN \
+  -v /opt/xbot/config.json:/data/.xbot/config.json:ro \
   -v /opt/xbot/.xbot:/data/.xbot \
-  -e WORK_DIR=/data \
-  -e LLM_PROVIDER=openai \
-  -e LLM_BASE_URL=https://api.openai.com/v1 \
-  -e LLM_API_KEY=your_key \
-  -e LLM_MODEL=gpt-4o-mini \
   xbot:latest
 ```
+
+> 💡 Mount config.json as read-only (`:ro`) to prevent accidental modifications inside the container.
 
 ### Makefile
 

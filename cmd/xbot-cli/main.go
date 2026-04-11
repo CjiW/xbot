@@ -13,6 +13,7 @@
 package main
 
 import (
+	"flag"
 	"context"
 	"fmt"
 	"io"
@@ -180,53 +181,31 @@ func (app *cliApp) Close() {
 func main() {
 	fmt.Printf("xbot CLI %s\n", version.Version)
 
-	// 解析命令行标志
-	prompt := ""
-	newSession := false
+	// 命令行标志
 	var (
-		cliConfigPath string // --config <path>
-		flagShare     string // --share ws://host:port/ws/userID
-		flagToken     string // --token xxx
-		flagWorkspace string // --workspace /path (overrides config)
+		configPath string
+		newSession bool
+		prompt     string
+		flagShare     string
+		flagToken     string
+		flagWorkspace string
 	)
-	for i := 1; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--resume":
-			// 保留兼容性，行为与默认相同
-		case "--new":
-			newSession = true
-		case "-p":
-			if len(os.Args) > i+1 {
-				prompt = os.Args[i+1]
-			}
-		case "--share":
-			if len(os.Args) > i+1 {
-				flagShare = os.Args[i+1]
-				i++
-			}
-		case "--token":
-			if len(os.Args) > i+1 {
-				flagToken = os.Args[i+1]
-				i++
-			}
-		case "--config":
-			if i+1 >= len(os.Args) {
-				fmt.Fprintln(os.Stderr, "error: --config requires a path argument")
-				os.Exit(1)
-			}
-			cliConfigPath = os.Args[i+1]
-			i++
-		case "--workspace":
-			if len(os.Args) > i+1 {
-				flagWorkspace = os.Args[i+1]
-				i++
-			}
-		default:
-			if !strings.HasPrefix(os.Args[i], "-") {
-				prompt = os.Args[i]
-			}
-		}
+
+	flag.StringVar(&configPath, "config", "", "path to config file (default: $XBOT_HOME/config.json)")
+	flag.BoolVar(&newSession, "new", false, "start a new session")
+	flag.BoolVar(&newSession, "resume", false, "resume last session (default behavior)")
+	flag.StringVar(&flagShare, "share", "", "WebSocket URL for shared runner mode")
+	flag.StringVar(&flagToken, "token", "", "auth token for shared runner mode")
+	flag.StringVar(&flagWorkspace, "workspace", "", "override working directory")
+	flag.StringVar(&prompt, "p", "", "one-shot prompt (non-interactive mode)")
+	flag.Parse()
+
+	// 位置参数作为 prompt
+	if prompt == "" && flag.NArg() > 0 {
+		prompt = flag.Arg(0)
 	}
+
+	// stdin 管道模式
 	if prompt == "" && !isatty.IsTerminal(os.Stdin.Fd()) {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -240,7 +219,7 @@ func main() {
 
 	// 非交互模式
 	if prompt != "" {
-		executeNonInteractive(prompt, cliConfigPath)
+		executeNonInteractive(prompt, configPath)
 		return
 	}
 
@@ -251,7 +230,7 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp(cliConfigPath)
+	app := newCLIApp(configPath)
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)

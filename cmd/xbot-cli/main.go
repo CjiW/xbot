@@ -129,6 +129,7 @@ func newCLIApp() *cliApp {
 		SkillsDir:            filepath.Join(xbotHome, "skills"),
 		AgentsDir:            filepath.Join(xbotHome, "agents"),
 		WorkDir:              workDir,
+		XbotHome:             xbotHome,
 		PromptFile:           cfg.Agent.PromptFile,
 		DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
 		SandboxMode:          cfg.Sandbox.Mode,

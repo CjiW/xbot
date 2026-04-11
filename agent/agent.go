@@ -106,7 +106,7 @@ var metaTools = map[string]bool{
 func (a *Agent) IndexGlobalTools() {
 	registry := a.tools
 	multiSession := a.multiSession
-	globalMCPConfigPath := resolveDataPath(a.workDir, "mcp.json")
+	globalMCPConfigPath := resolveDataPath(a.xbotHome, "mcp.json")
 
 	ctx := context.Background()
 	var toolEntries []memory.ToolIndexEntry
@@ -225,6 +225,7 @@ type Agent struct {
 	maxConcurrency     int              // 最大并发会话处理数
 	globalSkillDirs    []string         // 全局 skill 目录（宿主机路径）
 	agentsDir          string
+	xbotHome           string // global xbot config dir (e.g. ~/.xbot), used for mcp.json etc.
 
 	// 上下文管理配置
 	contextManagerConfig *ContextManagerConfig
@@ -449,6 +450,10 @@ type Config struct {
 	EmbeddingModel     string // 嵌入模型名称
 	EmbeddingMaxTokens int    // 嵌入模型最大 token 数
 
+	// XbotHome is the global xbot config directory (e.g. ~/.xbot).
+	// Used to locate global config files like mcp.json.
+	XbotHome string
+
 	// MCP 会话管理配置
 	MCPInactivityTimeout time.Duration // MCP 不活跃超时时间
 	MCPCleanupInterval   time.Duration // MCP 清理扫描间隔
@@ -506,8 +511,12 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
 	registry.Register(tools.NewChatHistoryTool(chatHistory))
 
-	// MCP 配置路径：优先使用 .xbot/mcp.json，向后兼容 mcp.json
-	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
+	// MCP 配置路径：使用 xbotHome (e.g. ~/.xbot/mcp.json) 作为全局 MCP 配置位置
+	xbotHome := cfg.XbotHome
+	if xbotHome == "" {
+		xbotHome = cfg.WorkDir
+	}
+	mcpConfigPath := resolveDataPath(xbotHome, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
 	registry.RegisterCore(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
@@ -558,7 +567,11 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 // initServices 注册工具、初始化 cron/LLM/offload/registry/settings 等服务。
 // 此方法直接修改 Agent 指针。
 func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession, registry *tools.Registry) {
-	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
+	xbotHome := cfg.XbotHome
+	if xbotHome == "" {
+		xbotHome = cfg.WorkDir
+	}
+	mcpConfigPath := resolveDataPath(xbotHome, "mcp.json")
 	contextMode := resolveContextMode(cfg)
 
 	memoryProvider := cfg.MemoryProvider
@@ -757,6 +770,7 @@ func New(cfg Config) *Agent {
 		maxSubAgentDepth:   cfg.MaxSubAgentDepth,
 		// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
 		agentsDir: filepath.Join(cfg.WorkDir, ".xbot", "agents"),
+		xbotHome:  cfg.XbotHome,
 		hookChain: tools.NewHookChain(
 			tools.NewLoggingHook(),
 			tools.NewTimingHook(),

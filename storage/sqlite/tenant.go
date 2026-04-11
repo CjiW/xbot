@@ -107,9 +107,12 @@ func (s *TenantService) ListTenants() ([]TenantInfo, error) {
 	var tenants []TenantInfo
 	for rows.Next() {
 		var t TenantInfo
-		if err := rows.Scan(&t.ID, &t.Channel, &t.ChatID, &t.CreatedAt, &t.LastActiveAt); err != nil {
+		var createdAt, lastActiveAt string
+		if err := rows.Scan(&t.ID, &t.Channel, &t.ChatID, &createdAt, &lastActiveAt); err != nil {
 			return nil, fmt.Errorf("scan tenant: %w", err)
 		}
+		t.CreatedAt = parseSQLiteTime(createdAt)
+		t.LastActiveAt = parseSQLiteTime(lastActiveAt)
 		tenants = append(tenants, t)
 	}
 	if err := rows.Err(); err != nil {

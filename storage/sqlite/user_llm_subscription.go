@@ -36,15 +36,53 @@ func NewLLMSubscriptionService(db *DB) *LLMSubscriptionService {
 	return &LLMSubscriptionService{db: db}
 }
 
+// scanSubscription scans a single subscription row from the given scanner.
+// SQLite stores created_at/updated_at as TEXT, so we scan into string and parse.
+func scanSubscription(scanner interface{ Scan(...interface{}) error }, sub *LLMSubscription) (string, int, error) {
+	var encryptedAPIKey string
+	var isDefault int
+	var createdAt, updatedAt string
+	err := scanner.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
+		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &createdAt, &updatedAt)
+	if err != nil {
+		return "", 0, err
+	}
+	sub.IsDefault = isDefault == 1
+	if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+		sub.CreatedAt = t
+	} else if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
+		sub.CreatedAt = t
+	}
+	if t, err := time.Parse(time.RFC3339, updatedAt); err == nil {
+		sub.UpdatedAt = t
+	} else if t, err := time.Parse("2006-01-02 15:04:05", updatedAt); err == nil {
+		sub.UpdatedAt = t
+	}
+	return encryptedAPIKey, isDefault, nil
+}
+
+// decryptAPIKey decrypts the subscription's API key in place.
+func decryptAPIKey(sub *LLMSubscription, encryptedAPIKey string) {
+	if encryptedAPIKey != "" {
+		decrypted, err := crypto.Decrypt(encryptedAPIKey)
+		if err != nil {
+			log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to decrypt API key")
+			sub.APIKey = "(decryption failed)"
+		} else {
+			sub.APIKey = decrypted
+		}
+	}
+}
+
 // List returns all subscriptions for a user, ordered by creation time.
 func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
-			FROM user_llm_subscriptions
-			WHERE sender_id = ?
-			ORDER BY created_at ASC
-		`, senderID)
+			SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+				FROM user_llm_subscriptions
+				WHERE sender_id = ?
+				ORDER BY created_at ASC
+			`, senderID)
 	if err != nil {
 		return nil, fmt.Errorf("list subscriptions: %w", err)
 	}
@@ -53,23 +91,11 @@ func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, erro
 	var subs []*LLMSubscription
 	for rows.Next() {
 		sub := &LLMSubscription{}
-		var encryptedAPIKey string
-		var isDefault int
-		err := rows.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-			&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
+		encryptedAPIKey, _, err := scanSubscription(rows, sub)
 		if err != nil {
 			return nil, fmt.Errorf("scan subscription: %w", err)
 		}
-		sub.IsDefault = isDefault == 1
-		if encryptedAPIKey != "" {
-			decrypted, err := crypto.Decrypt(encryptedAPIKey)
-			if err != nil {
-				log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to decrypt API key")
-				sub.APIKey = "(decryption failed)"
-			} else {
-				sub.APIKey = decrypted
-			}
-		}
+		decryptAPIKey(sub, encryptedAPIKey)
 		subs = append(subs, sub)
 	}
 	return subs, rows.Err()
@@ -86,26 +112,14 @@ func (s *LLMSubscriptionService) GetDefault(senderID string) (*LLMSubscription, 
 		`, senderID)
 
 	sub := &LLMSubscription{}
-	var encryptedAPIKey string
-	var isDefault int
-	err := row.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
+	encryptedAPIKey, _, err := scanSubscription(row, sub)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get default subscription: %w", err)
 	}
-	sub.IsDefault = isDefault == 1
-	if encryptedAPIKey != "" {
-		decrypted, err := crypto.Decrypt(encryptedAPIKey)
-		if err != nil {
-			log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to decrypt API key")
-			sub.APIKey = "(decryption failed)"
-		} else {
-			sub.APIKey = decrypted
-		}
-	}
+	decryptAPIKey(sub, encryptedAPIKey)
 	return sub, nil
 }
 
@@ -119,26 +133,14 @@ func (s *LLMSubscriptionService) Get(id string) (*LLMSubscription, error) {
 		`, id)
 
 	sub := &LLMSubscription{}
-	var encryptedAPIKey string
-	var isDefault int
-	err := row.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &sub.CreatedAt, &sub.UpdatedAt)
+	encryptedAPIKey, _, err := scanSubscription(row, sub)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get subscription: %w", err)
 	}
-	sub.IsDefault = isDefault == 1
-	if encryptedAPIKey != "" {
-		decrypted, err := crypto.Decrypt(encryptedAPIKey)
-		if err != nil {
-			log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to decrypt API key")
-			sub.APIKey = "(decryption failed)"
-		} else {
-			sub.APIKey = decrypted
-		}
-	}
+	decryptAPIKey(sub, encryptedAPIKey)
 	return sub, nil
 }
 

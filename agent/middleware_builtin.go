@@ -190,12 +190,21 @@ func (m *ProjectContextMiddleware) load(dir string) (content string, filePath st
 }
 
 // formatProjectContext builds a formatted string for injection into system prompts.
+// It prepends usage instructions so the LLM knows to consult knowledge files
+// before diving into code exploration or modifications.
 func formatProjectContext(content string, filePath string) string {
 	var sb strings.Builder
 	sb.WriteString("\n## Project Context\n\n")
 	sb.WriteString("Project-level instructions loaded from `")
 	sb.WriteString(filePath)
 	sb.WriteString("`.\n\n")
+
+	// Usage instructions — tell the LLM how to leverage this context.
+	sb.WriteString("**Before modifying code or exploring the project:**\n")
+	sb.WriteString("1. Scan the **Knowledge Files** list below and identify which files are relevant to your current task.\n")
+	sb.WriteString("2. Read only the relevant knowledge files before diving into code. They contain architecture, conventions, and known pitfalls that prevent mistakes.\n")
+	sb.WriteString("3. Follow the **Quick Reference** for build/test/lint commands — do not guess.\n\n")
+
 	if len(content) > maxProjectContextChars {
 		sb.WriteString(content[:maxProjectContextChars])
 		fmt.Fprintf(&sb, "\n\n... (truncated, use Read tool to view full `%s`)\n", filePath)

@@ -1,6 +1,6 @@
 ---
-name: knowledge-management
-description: "Manage project knowledge files (AGENT.md and knowledge tree) across sessions. MUST activate after ANY code modification that adds/removes files, changes architecture, or modifies core behavior — before responding to the user. Also activate when exploring a new codebase for the first time, or when the user asks about project documentation."
+name: post-dev
+description: "Post-development cleanup: update AGENT.md and knowledge files to reflect code changes. MUST activate before git commit (or when user asks to commit/push). Also activate after any code modification that adds/removes files, changes architecture, or modifies core behavior."
 ---
 
 # Knowledge Management

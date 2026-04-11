@@ -23,7 +23,7 @@ detect_platform() {
     case "$os" in
         linux)  ;;
         darwin) ;;
-        *)      error "Unsupported OS: $os. xbot-cli only supports Linux and macOS." ;;
+        *)      error "Unsupported OS: $os. Use the PowerShell installer on Windows: irm https://raw.githubusercontent.com/${REPO}/master/scripts/install.ps1 | iex" ;;
     esac
 
     case "$arch" in

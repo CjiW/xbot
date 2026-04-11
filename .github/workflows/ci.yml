@@ -57,3 +57,33 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Build CLI binary
+        run: go build -v -o xbot-cli.exe ./cmd/xbot-cli
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    needs: [build-windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -v -race ./...

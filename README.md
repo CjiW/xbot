@@ -10,14 +10,14 @@ xbot is a Go framework for building AI agents. It provides a message bus + plugi
 Channel → Bus → Agent → LLM ↔ Tools → Bus → Channel
 ```
 
-Designed for self-hosted deployments. Supports **OpenAI** and **Anthropic** as native LLM providers, plus any OpenAI-compatible API (DeepSeek, Qwen, Ollama, etc.) via the `openai` provider with a custom `base_url`.
+Designed for self-hosted deployments. Cross-platform: Linux, macOS, and Windows (none sandbox with PowerShell). Supports **OpenAI** and **Anthropic** as native LLM providers, plus any OpenAI-compatible API (DeepSeek, Qwen, Ollama, etc.) via the `openai` provider with a custom `base_url`.
 
 ## Quick Start
 
 ### Install CLI
 
 ```bash
-# Linux / macOS (amd64, arm64) — installs xbot-cli only
+# Linux / macOS (amd64, arm64)
 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 
 # Specific version
@@ -25,6 +25,17 @@ VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scr
 
 # Custom install path (default: /usr/local/bin)
 INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.ps1 | iex
+
+# Specific version
+.\install.ps1 -Version v0.0.7
+
+# Custom install path (default: ~/.local/bin)
+.\install.ps1 -InstallPath C:\Tools
 ```
 
 ### Build from Source
@@ -166,7 +177,7 @@ Browser-based chat with optional login, invite-only mode, and persona isolation.
 
 Built-in tools the agent can call during a conversation:
 
-- **Shell** — Execute commands in sandbox (Docker / remote / none)
+- **Shell** — Execute commands in sandbox (Docker / remote / none; Windows PowerShell supported in none mode)
 - **File I/O** — Read, write, Glob, Grep with workspace isolation
 - **Web** — Fetch pages, Tavily web search
 - **Context** — Edit conversation context mid-session

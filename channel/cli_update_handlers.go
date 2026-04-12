@@ -157,18 +157,20 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 
-	case msg.String() == "ctrl+m":
+	case msg.String() == "ctrl+m" || (msg.Code == tea.KeyEnter && msg.Mod&tea.ModCtrl != 0):
 		// Ctrl+M: Cycle model (next in list)
+		// Windows Terminal sends Ctrl+M as {Code: KeyEnter, Mod: ModCtrl} when
+		// modifyOtherKeys/Kitty protocol is not honored by ConPTY.
 		if m.panelMode == "" && !m.typing && m.channel != nil {
-			m.cycleModel()
-			// Drain pending cmds (e.g. showTempStatus timer) immediately
-			// to avoid an extra Update→View cycle on the next frame.
-			if len(m.pendingCmds) > 0 {
-				pending := m.pendingCmds
-				m.pendingCmds = nil
-				return m, []tea.Cmd{tea.Batch(pending...)}, true
-			}
-			return m, nil, true
+		m.cycleModel()
+		// Drain pending cmds (e.g. showTempStatus timer) immediately
+		// to avoid an extra Update→View cycle on the next frame.
+		if len(m.pendingCmds) > 0 {
+			pending := m.pendingCmds
+			m.pendingCmds = nil
+			return m, []tea.Cmd{tea.Batch(pending...)}, true
+		}
+		return m, nil, true
 		}
 
 	case msg.Text == "^":
@@ -242,8 +244,10 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		// the textarea so its native multiline/internal-scroll behavior works,
 		// especially once the input reaches MaxHeight.
 		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
-		if msg.String() == "ctrl+m" {
-			break
+		// Windows Terminal sends Ctrl+M as {Code: KeyEnter, Mod: ModCtrl} (String: "ctrl+enter"),
+		// while Unix terminals send "ctrl+m". Match both to trigger cycleModel below.
+		if msg.String() == "ctrl+m" || msg.Mod&tea.ModCtrl != 0 {
+		break
 		}
 		// Enter 发送消息
 		if !m.inputReady {

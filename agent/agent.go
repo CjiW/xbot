@@ -599,6 +599,20 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 		log.Info("Letta memory tools registered (core)")
 	}
 
+	// Flat 模式：注册 flat memory tools（memory_read/write/list）
+	if memoryProvider == "flat" || memoryProvider == "" {
+		for _, tool := range tools.FlatMemoryTools() {
+			registry.RegisterCore(tool)
+		}
+		log.Info("Flat memory tools registered (core)")
+	}
+
+	// 项目记忆工具：所有 provider 都注册（provider-agnostic）
+	for _, tool := range tools.KnowledgeTools() {
+		registry.RegisterCore(tool)
+	}
+	log.Info("Knowledge tools registered (core)")
+
 	// 初始化指令注册表
 	a.commands = NewCommandRegistry()
 	registerBuiltinCommands(a.commands)

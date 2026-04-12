@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/storage/sqlite"
@@ -227,4 +229,89 @@ func MigrateIfNeeded(ctx context.Context, workDir, dbPath string) error {
 	log.WithField("db_path", dbPath).Info("Migrating to SQLite database")
 
 	return MigrateFromFileStorage(workDir, dbPath)
+}
+
+const (
+	migrateMemoryFileName = "MEMORY.md"
+	migrateHistoryFileName = "HISTORY.md"
+)
+
+// MigrateMemoryToFiles migrates flat memory data from SQLite tables to MD files.
+// Called once at startup if long_term_memory or event_history tables have data
+// but the target MD files don't exist yet.
+func MigrateMemoryToFiles(dbPath string) {
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.WithError(err).Warn("Failed to open database for memory file migration")
+		return
+	}
+	defer db.Close()
+
+	memorySvc := sqlite.NewMemoryService(db)
+	ctx := context.Background()
+
+	// Get all tenant IDs that have memory data
+	tenantIDs := getDistinctTenantIDs(ctx, db)
+	if len(tenantIDs) == 0 {
+		return
+	}
+
+	home := config.XbotHome()
+
+	for _, tenantID := range tenantIDs {
+		// Check if MEMORY.md already exists (directory name = tenantID)
+		tenantDir := filepath.Join(home, "memory", fmt.Sprintf("%d", tenantID))
+		memoryFile := filepath.Join(tenantDir, migrateMemoryFileName)
+		historyFile := filepath.Join(tenantDir, migrateHistoryFileName)
+
+		if _, err := os.Stat(memoryFile); err == nil {
+			continue // Already migrated
+		}
+
+		os.MkdirAll(tenantDir, 0o755)
+
+		// Migrate long_term_memory → MEMORY.md
+		content, err := memorySvc.ReadLongTerm(ctx, tenantID)
+		if err == nil && content != "" {
+			if err := os.WriteFile(memoryFile, []byte(content), 0o644); err != nil {
+				log.WithError(err).WithField("tenant_id", tenantID).Error("Failed to migrate long_term_memory to file")
+			} else {
+				log.WithField("tenant_id", tenantID).Info("Migrated long_term_memory to MEMORY.md")
+			}
+		}
+
+		// Migrate event_history → HISTORY.md
+		entries, err := memorySvc.GetHistoryEntries(ctx, tenantID, 1000)
+		if err == nil && len(entries) > 0 {
+			var sb strings.Builder
+			for _, entry := range entries {
+				sb.WriteString(entry)
+				sb.WriteString("\n")
+			}
+			if err := os.WriteFile(historyFile, []byte(sb.String()), 0o644); err != nil {
+				log.WithError(err).WithField("tenant_id", tenantID).Error("Failed to migrate event_history to file")
+			} else {
+				log.WithField("tenant_id", tenantID).Infof("Migrated %d event_history entries to HISTORY.md", len(entries))
+			}
+		}
+	}
+}
+
+// getDistinctTenantIDs returns all distinct tenant IDs from long_term_memory and event_history.
+func getDistinctTenantIDs(ctx context.Context, db *sqlite.DB) []int64 {
+	conn := db.Conn()
+	rows, err := conn.QueryContext(ctx, "SELECT DISTINCT tenant_id FROM long_term_memory UNION SELECT DISTINCT tenant_id FROM event_history")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

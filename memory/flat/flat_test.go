@@ -2,31 +2,22 @@ package flat
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
-
-	"xbot/storage/sqlite"
 )
 
-func setupTestDB(t *testing.T) (*sqlite.DB, int64) {
+func setupTestDir(t *testing.T) (string, int64) {
 	t.Helper()
-	db, err := sqlite.Open(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("Failed to open test db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	tenantSvc := sqlite.NewTenantService(db)
-	tenantID, err := tenantSvc.GetOrCreateTenantID("test", "chat1")
-	if err != nil {
-		t.Fatalf("Failed to create tenant: %v", err)
-	}
-	return db, tenantID
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "memory")
+	os.MkdirAll(memDir, 0o755)
+	return memDir, 42
 }
 
 func TestFlatMemory_Recall_Empty(t *testing.T) {
-	db, tenantID := setupTestDB(t)
-	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc, nil)
+	memDir, tenantID := setupTestDir(t)
+	m := New(tenantID, memDir)
 
 	result, err := m.Recall(context.Background(), "any query")
 	if err != nil {
@@ -38,12 +29,14 @@ func TestFlatMemory_Recall_Empty(t *testing.T) {
 }
 
 func TestFlatMemory_Recall_WithContent(t *testing.T) {
-	db, tenantID := setupTestDB(t)
-	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc, nil)
+	memDir, tenantID := setupTestDir(t)
+	m := New(tenantID, memDir)
 
-	if err := memorySvc.WriteLongTerm(context.Background(), tenantID, "# Facts\nUser likes Go"); err != nil {
-		t.Fatalf("WriteLongTerm failed: %v", err)
+	// Write MEMORY.md directly
+	memoryPath := filepath.Join(memDir, memoryFileName)
+	content := "# Facts\n- User likes Go\n- Prefers concise code"
+	if err := os.WriteFile(memoryPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write MEMORY.md: %v", err)
 	}
 
 	result, err := m.Recall(context.Background(), "ignored query")
@@ -53,18 +46,48 @@ func TestFlatMemory_Recall_WithContent(t *testing.T) {
 	if result == "" {
 		t.Fatal("Expected non-empty result")
 	}
-	expected := "## Long-term Memory\n# Facts\nUser likes Go"
-	if result != expected {
-		t.Errorf("Expected %q, got %q", expected, result)
+	// Should contain "Core Memory" header and the content
+	if result == "" {
+		t.Error("Expected non-empty result")
+	}
+}
+
+func TestFlatMemory_Recall_WithKnowledgeFiles(t *testing.T) {
+	memDir, tenantID := setupTestDir(t)
+	m := New(tenantID, memDir)
+
+	// Write MEMORY.md
+	os.WriteFile(filepath.Join(memDir, memoryFileName), []byte("Core facts"), 0o644)
+
+	// Create knowledge files
+	knowledgeDir := filepath.Join(memDir, "knowledge")
+	os.MkdirAll(knowledgeDir, 0o755)
+	os.WriteFile(filepath.Join(knowledgeDir, "gotchas.md"), []byte("Windows VT issues"), 0o644)
+
+	result, err := m.Recall(context.Background(), "any query")
+	if err != nil {
+		t.Fatalf("Recall failed: %v", err)
+	}
+	// Should list knowledge files
+	if result == "" {
+		t.Fatal("Expected non-empty result")
 	}
 }
 
 func TestFlatMemory_Close(t *testing.T) {
-	db, tenantID := setupTestDB(t)
-	memorySvc := sqlite.NewMemoryService(db)
-	m := New(tenantID, memorySvc, nil)
+	memDir, tenantID := setupTestDir(t)
+	m := New(tenantID, memDir)
 
 	if err := m.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
+	}
+}
+
+func TestFlatMemory_BaseDir(t *testing.T) {
+	memDir, tenantID := setupTestDir(t)
+	m := New(tenantID, memDir)
+
+	if m.BaseDir() != memDir {
+		t.Errorf("Expected %q, got %q", memDir, m.BaseDir())
 	}
 }

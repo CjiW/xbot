@@ -128,18 +128,6 @@ func listKnowledgeDir(dir string) (*ToolResult, error) {
 	return NewResult(sb.String()), nil
 }
 
-// readFileSandboxAware reads a file, using Sandbox API when in sandbox mode.
-func readFileSandboxAware(ctx *ToolContext, path string) ([]byte, error) {
-	if shouldUseSandbox(ctx) {
-		userID := ctx.OriginUserID
-		if userID == "" {
-			userID = ctx.SenderID
-		}
-		return ctx.Sandbox.ReadFile(ctx.Ctx, path, userID)
-	}
-	return os.ReadFile(path)
-}
-
 // writeFileSandboxAware writes a file, auto-creating parent directories.
 // Uses Sandbox API when in sandbox mode.
 func writeFileSandboxAware(ctx *ToolContext, path string, data []byte) error {

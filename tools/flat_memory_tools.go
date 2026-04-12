@@ -11,53 +11,13 @@ import (
 	log "xbot/logger"
 )
 
-// MemoryReadTool reads a file from the user's flat memory directory (~/.xbot/memory/{tenant}/).
-// Only available in flat memory mode.
-type MemoryReadTool struct{}
-
-func (t *MemoryReadTool) Name() string { return "memory_read" }
-func (t *MemoryReadTool) Description() string {
-	return "Read a file from your personal memory directory. Use this to retrieve your own notes, cross-project knowledge, or any non-project-specific information you previously saved."
-}
-func (t *MemoryReadTool) Parameters() []llm.ToolParam {
-	return []llm.ToolParam{
-		{Name: "path", Type: "string", Description: "File path relative to memory directory (e.g. \"MEMORY.md\", \"knowledge/notes.md\"). Use \"MEMORY.md\" for core memory, \"HISTORY.md\" for event history.", Required: true},
-	}
-}
-
-func (t *MemoryReadTool) Execute(ctx *ToolContext, input string) (*ToolResult, error) {
-	params, err := parseToolArgs[struct {
-		Path string `json:"path"`
-	}](input)
-	if err != nil {
-		return nil, fmt.Errorf("invalid parameters: %w", err)
-	}
-	if params.Path == "" {
-		return nil, fmt.Errorf("path is required")
-	}
-
-	// Security: prevent path traversal
-	if strings.Contains(params.Path, "..") {
-		return nil, fmt.Errorf("path traversal not allowed")
-	}
-
-	dir := flatMemoryDir(ctx)
-	fullPath := filepath.Join(dir, params.Path)
-
-	data, err := readFileSandboxAware(ctx, fullPath)
-	if err != nil {
-		return nil, fmt.Errorf("read memory file: %w", err)
-	}
-
-	return NewResult(string(data)), nil
-}
-
 // MemoryWriteTool creates or updates a file in the user's flat memory directory.
+// Read memory files with the standard Read tool (path shown by memory_list).
 type MemoryWriteTool struct{}
 
 func (t *MemoryWriteTool) Name() string { return "memory_write" }
 func (t *MemoryWriteTool) Description() string {
-	return "Create or update a file in your personal memory directory. Use this to save personal notes, cross-project knowledge, or any non-project-specific information. MEMORY.md is auto-injected into system prompt (keep it under 1000 chars)."
+	return "Create or update a file in your personal memory directory. Use this to save personal notes, cross-project knowledge, or any non-project-specific information. MEMORY.md is auto-injected into system prompt (keep it under 1000 chars). Read existing files with the Read tool (path shown by memory_list)."
 }
 func (t *MemoryWriteTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
@@ -103,7 +63,7 @@ type MemoryListTool struct{}
 
 func (t *MemoryListTool) Name() string { return "memory_list" }
 func (t *MemoryListTool) Description() string {
-	return "List all files in your personal memory directory. Use this to discover what memory files exist before reading them."
+	return "List all files in your personal memory directory with full paths. Discover what memory files exist, then read them with the Read tool."
 }
 func (t *MemoryListTool) Parameters() []llm.ToolParam {
 	return nil
@@ -134,7 +94,7 @@ func (t *MemoryListTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 
 	sort.Strings(files)
 	var sb strings.Builder
-	sb.WriteString("## Memory Files\n\n")
+	fmt.Fprintf(&sb, "## Memory Files\n\nDirectory: %s\n\n", dir)
 	for _, f := range files {
 		fullPath := filepath.Join(dir, f)
 		info, err := os.Stat(fullPath)
@@ -142,7 +102,7 @@ func (t *MemoryListTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 		if err == nil {
 			size = fmt.Sprintf(" (%d bytes)", info.Size())
 		}
-		fmt.Fprintf(&sb, "- `%s`%s\n", f, size)
+		fmt.Fprintf(&sb, "- `%s`%s\n", fullPath, size)
 	}
 	return NewResult(sb.String()), nil
 }
@@ -150,7 +110,6 @@ func (t *MemoryListTool) Execute(ctx *ToolContext, input string) (*ToolResult, e
 // FlatMemoryTools returns all flat memory tools for registration.
 func FlatMemoryTools() []Tool {
 	return []Tool{
-		&MemoryReadTool{},
 		&MemoryWriteTool{},
 		&MemoryListTool{},
 	}

@@ -115,7 +115,7 @@ func listKnowledgeDir(dir string) (*ToolResult, error) {
 
 	sort.Strings(files)
 	var sb strings.Builder
-	sb.WriteString("## Knowledge Files\n\n")
+	fmt.Fprintf(&sb, "## Knowledge Files\n\nDirectory: %s\n\n", dir)
 	for _, f := range files {
 		fullPath := filepath.Join(dir, f)
 		info, err := os.Stat(fullPath)
@@ -123,7 +123,7 @@ func listKnowledgeDir(dir string) (*ToolResult, error) {
 		if err == nil {
 			size = fmt.Sprintf(" (%d bytes)", info.Size())
 		}
-		fmt.Fprintf(&sb, "- `%s`%s\n", f, size)
+		fmt.Fprintf(&sb, "- `%s`%s\n", fullPath, size)
 	}
 	return NewResult(sb.String()), nil
 }

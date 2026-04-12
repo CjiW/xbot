@@ -22,4 +22,4 @@
 
 ## Project Context
 
-`ProjectContextMiddleware` auto-loads this file into system prompt. `knowledge-management` skill guides maintenance. System-reminder nudges after file modifications.
+`ProjectContextMiddleware` auto-loads this file into system prompt. After code changes, update relevant Knowledge Files to keep documentation in sync.

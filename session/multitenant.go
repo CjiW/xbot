@@ -13,6 +13,7 @@ import (
 
 	log "xbot/logger"
 
+	"xbot/config"
 	"xbot/llm"
 	"xbot/memory"
 	"xbot/memory/flat"
@@ -302,7 +303,10 @@ func (m *MultiTenantSession) GetOrCreateSession(channel, chatID string) (*Tenant
 		// 前向兼容：一次性迁移 user_profiles → core memory blocks
 		m.migrateProfileToCoreMemory(tenantID)
 	default:
-		memProvider = flat.New(tenantID, m.memorySvc, m.toolIndexSvc)
+		// Flat memory: file-based storage under ~/.xbot/memory/{tenantID}/
+		// Use tenantID (numeric) as directory name for filesystem safety
+		flatMemDir := filepath.Join(config.XbotHome(), "memory", fmt.Sprintf("%d", tenantID))
+		memProvider = flat.New(tenantID, flatMemDir)
 	}
 	// Create tenant session
 	sess = &TenantSession{

@@ -2,9 +2,12 @@ package session
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"xbot/config"
 	"xbot/llm"
 	"xbot/memory/letta"
 )
@@ -132,13 +135,14 @@ func TestMultiTenantSession_MemoryIsolation(t *testing.T) {
 		t.Fatalf("Failed to create session 2: %v", err)
 	}
 
-	// Write memory via underlying memorySvc (FlatMemory doesn't expose WriteLongTerm)
-	if err := mt.memorySvc.WriteLongTerm(context.Background(), sess1.TenantID(), "# Memory 1\nUser likes Go"); err != nil {
-		t.Fatalf("Failed to write memory 1: %v", err)
-	}
-	if err := mt.memorySvc.WriteLongTerm(context.Background(), sess2.TenantID(), "# Memory 2\nUser likes Rust"); err != nil {
-		t.Fatalf("Failed to write memory 2: %v", err)
-	}
+	// Write memory directly to MEMORY.md files (flat memory is now file-based)
+	// Directory name = tenantID (numeric)
+	memDir1 := filepath.Join(config.XbotHome(), "memory", "1")
+	memDir2 := filepath.Join(config.XbotHome(), "memory", "2")
+	os.MkdirAll(memDir1, 0o755)
+	os.MkdirAll(memDir2, 0o755)
+	os.WriteFile(filepath.Join(memDir1, "MEMORY.md"), []byte("# Memory 1\nUser likes Go"), 0o644)
+	os.WriteFile(filepath.Join(memDir2, "MEMORY.md"), []byte("# Memory 2\nUser likes Rust"), 0o644)
 
 	// Verify memory isolation via Recall
 	ctx := context.Background()

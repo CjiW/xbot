@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -11,15 +13,26 @@ import (
 	"xbot/llm"
 	log "xbot/logger"
 	"xbot/memory"
-	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 )
 
-// FlatMemory 全量注入式记忆（现有逻辑的接口化包装）。
-// 所有长期记忆全量注入 system prompt，不做按需检索。
+const (
+	// memoryFileName is the core memory file (auto-injected into system prompt).
+	memoryFileName = "MEMORY.md"
+	// historyFileName is the event history file (appended during Memorize).
+	historyFileName = "HISTORY.md"
+	// maxMemoryChars limits MEMORY.md size for system prompt injection.
+	maxMemoryChars = 1000
+)
+
+// FlatMemory file-based memory provider.
+// Stores per-user global memory as markdown files under ~/.xbot/memory/{tenantKey}/.
+// MEMORY.md: core memory (≤1000 chars, injected into system prompt)
+// HISTORY.md: event timeline (appended during Memorize)
+// knowledge/: personal knowledge files (read on demand)
 type FlatMemory struct {
 	tenantID    int64
-	memorySvc   *sqlite.MemoryService
+	baseDir     string // ~/.xbot/memory/{tenantKey}/
 	toolIndex   []memory.ToolIndexEntry
 	toolIndexMu sync.RWMutex
 }
@@ -27,28 +40,86 @@ type FlatMemory struct {
 var _ memory.MemoryProvider = (*FlatMemory)(nil)
 var _ memory.ToolIndexer = (*FlatMemory)(nil)
 
-// New 创建 FlatMemory 实例。
-// toolIndexSvc 参数保留以实现 ToolIndexer 接口，但 Flat 模式不使用向量搜索
-func New(tenantID int64, memorySvc *sqlite.MemoryService, _ *vectordb.ToolIndexService) *FlatMemory {
+// New creates a FlatMemory instance with file-based storage.
+// baseDir is the per-tenant memory directory (e.g. ~/.xbot/memory/cli:direct/).
+func New(tenantID int64, baseDir string) *FlatMemory {
+	os.MkdirAll(baseDir, 0o755)
 	return &FlatMemory{
-		tenantID:  tenantID,
-		memorySvc: memorySvc,
+		tenantID: tenantID,
+		baseDir:  baseDir,
 	}
 }
 
-// Recall 返回全量长期记忆（忽略 query 参数）。
-func (m *FlatMemory) Recall(ctx context.Context, _ string) (string, error) {
-	content, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
-	if err != nil {
-		return "", err
+// NewFromLegacy creates a FlatMemory with the old SQLite-based signature.
+// Kept for backward compatibility during migration.
+func NewFromLegacy(tenantID int64, _ *vectordb.ToolIndexService) *FlatMemory {
+	home := os.Getenv("XBOT_HOME")
+	if home == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(h, ".xbot")
+		} else {
+			home = ".xbot"
+		}
 	}
-	if content == "" {
+	baseDir := filepath.Join(home, "memory", fmt.Sprintf("tenant_%d", tenantID))
+	os.MkdirAll(baseDir, 0o755)
+	return &FlatMemory{
+		tenantID: tenantID,
+		baseDir:  baseDir,
+	}
+}
+
+// BaseDir returns the memory directory path.
+func (m *FlatMemory) BaseDir() string {
+	return m.baseDir
+}
+
+// Recall reads MEMORY.md and lists knowledge/ subdirectory files.
+// Returns formatted text for system prompt injection.
+func (m *FlatMemory) Recall(ctx context.Context, _ string) (string, error) {
+	memoryPath := filepath.Join(m.baseDir, memoryFileName)
+	content, err := os.ReadFile(memoryPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read memory file: %w", err)
+	}
+
+	text := strings.TrimSpace(string(content))
+	if text == "" {
 		return "", nil
 	}
-	return "## Long-term Memory\n" + content, nil
+
+	var sb strings.Builder
+	sb.WriteString("### Core Memory\n")
+	if len([]rune(text)) > maxMemoryChars {
+		runes := []rune(text)
+		sb.WriteString(string(runes[:maxMemoryChars]))
+		sb.WriteString("\n...(truncated, use memory_read for full content)")
+	} else {
+		sb.WriteString(text)
+	}
+
+	// List knowledge files for on-demand access
+	knowledgeDir := filepath.Join(m.baseDir, "knowledge")
+	entries, err := os.ReadDir(knowledgeDir)
+	if err == nil && len(entries) > 0 {
+		sb.WriteString("\n\n### Knowledge Files (read on demand with memory_read)\n")
+		for _, e := range entries {
+			if e.IsDir() {
+				fmt.Fprintf(&sb, "- `%s/` (directory)\n", e.Name())
+			} else {
+				fmt.Fprintf(&sb, "- `%s`\n", e.Name())
+			}
+		}
+	}
+
+	return sb.String(), nil
 }
 
-// Memorize 使用 LLM 合并旧消息到长期记忆和事件历史。
+// Memorize consolidates conversation messages into memory files.
+// Uses LLM to generate history_entry, memory_update, and optional knowledge_updates.
 func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (memory.MemorizeResult, error) {
 	messages := input.Messages
 	lastConsolidated := input.LastConsolidated
@@ -57,12 +128,11 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: true}, nil
 	}
 
-	oldMessages := messages
 	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation (archive_all): %d messages", len(messages))
 
 	// Format old messages as text
 	var lines []string
-	for _, msg := range oldMessages {
+	for _, msg := range messages {
 		if msg.Content == "" {
 			continue
 		}
@@ -90,24 +160,52 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
 	}
 
-	currentMemory, err := m.memorySvc.ReadLongTerm(ctx, m.tenantID)
-	if err != nil {
-		log.WithError(err).Error("Failed to read long-term memory for consolidation")
-		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil
-	}
-
-	memoryDisplay := currentMemory
+	// Read current MEMORY.md
+	currentMemory, _ := os.ReadFile(filepath.Join(m.baseDir, memoryFileName))
+	memoryDisplay := string(currentMemory)
 	if memoryDisplay == "" {
 		memoryDisplay = "(empty)"
 	}
 
+	// Read existing knowledge files for context
+	var knowledgeCtx strings.Builder
+	knowledgeDir := filepath.Join(m.baseDir, "knowledge")
+	if entries, err := os.ReadDir(knowledgeDir); err == nil && len(entries) > 0 {
+		knowledgeCtx.WriteString("\n\n## Existing Knowledge Files in memory/knowledge/\n")
+		for _, e := range entries {
+			if e.IsDir() {
+				fmt.Fprintf(&knowledgeCtx, "- %s/ (directory)\n", e.Name())
+			} else {
+				fpath := filepath.Join(knowledgeDir, e.Name())
+				data, err := os.ReadFile(fpath)
+				if err == nil {
+					preview := string(data)
+					if len([]rune(preview)) > 200 {
+						preview = string([]rune(preview)[:200]) + "..."
+					}
+					fmt.Fprintf(&knowledgeCtx, "- %s: %.200s\n", e.Name(), preview)
+				}
+			}
+		}
+	}
+
 	prompt := fmt.Sprintf(`Process this conversation and call the save_memory tool with your consolidation.
 
-## Current Long-term Memory
+## Current Core Memory (MEMORY.md, keep under 1000 chars)
 %s
 
+## Existing Knowledge Files
+(These are personal non-project notes. Update if new relevant information was learned.)%s
+
 ## Conversation to Process
-%s`, memoryDisplay, strings.Join(lines, "\n"))
+%s
+
+## Instructions
+1. Update MEMORY.md with core facts (keep concise, ≤1000 chars, bullet points).
+2. Add a history_entry summarizing key events/decisions (start with [YYYY-MM-DD HH:MM]).
+3. If any new cross-project knowledge was learned (pitfalls, preferences, patterns), include knowledge_updates.
+4. If existing knowledge files need updates, include them in knowledge_updates with action "update".
+5. Do NOT include project-specific knowledge here — use knowledge_write tool for that during the conversation.`, memoryDisplay, knowledgeCtx.String(), strings.Join(lines, "\n"))
 
 	resp, err := input.LLMClient.Generate(ctx, input.Model, []llm.ChatMessage{
 		llm.NewSystemMessage("You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."),
@@ -129,15 +227,52 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		return memory.MemorizeResult{NewLastConsolidated: lastConsolidated, OK: false}, nil
 	}
 
+	// Append to HISTORY.md
 	if args.HistoryEntry != "" {
-		if err := m.memorySvc.AppendHistory(ctx, m.tenantID, args.HistoryEntry); err != nil {
-			log.WithError(err).Error("Failed to append history entry")
+		historyPath := filepath.Join(m.baseDir, historyFileName)
+		f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			log.WithError(err).Error("Failed to open HISTORY.md for append")
+		} else {
+			fmt.Fprintf(f, "%s\n", args.HistoryEntry)
+			f.Close()
 		}
 	}
 
-	if args.MemoryUpdate != "" && args.MemoryUpdate != currentMemory {
-		if err := m.memorySvc.WriteLongTerm(ctx, m.tenantID, args.MemoryUpdate); err != nil {
-			log.WithError(err).Error("Failed to write long-term memory")
+	// Write MEMORY.md
+	if args.MemoryUpdate != "" && args.MemoryUpdate != strings.TrimSpace(string(currentMemory)) {
+		memoryPath := filepath.Join(m.baseDir, memoryFileName)
+		if err := os.WriteFile(memoryPath, []byte(args.MemoryUpdate), 0o644); err != nil {
+			log.WithError(err).Error("Failed to write MEMORY.md")
+		}
+	}
+
+	// Process knowledge_updates
+	for _, ku := range args.KnowledgeUpdates {
+		if ku.Path == "" || ku.Content == "" {
+			continue
+		}
+		if strings.Contains(ku.Path, "..") {
+			log.WithField("path", ku.Path).Warn("Skipping knowledge update with path traversal")
+			continue
+		}
+		knowledgePath := filepath.Join(m.baseDir, "knowledge", ku.Path)
+		os.MkdirAll(filepath.Dir(knowledgePath), 0o755)
+		switch ku.Action {
+		case "append":
+			f, err := os.OpenFile(knowledgePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err != nil {
+				log.WithError(err).WithField("path", ku.Path).Error("Failed to open knowledge file for append")
+			} else {
+				fmt.Fprintf(f, "%s\n", ku.Content)
+				f.Close()
+			}
+		default: // "create", "update", ""
+			if err := os.WriteFile(knowledgePath, []byte(ku.Content), 0o644); err != nil {
+				log.WithError(err).WithField("path", ku.Path).Error("Failed to write knowledge file")
+			} else {
+				log.WithField("path", ku.Path).Info("Knowledge file updated during consolidation")
+			}
 		}
 	}
 
@@ -250,13 +385,35 @@ func (t *saveMemoryToolDef) Parameters() []llm.ToolParam {
 		{
 			Name:        "memory_update",
 			Type:        "string",
-			Description: "Full updated long-term memory as markdown. Recommended: 500-2000 chars. Include all existing facts plus new ones. Use bullet points. Return unchanged if nothing new.",
+			Description: "Full updated core memory as markdown. Recommended: 200-1000 chars. Include all existing facts plus new ones. Use bullet points. Return unchanged if nothing new.",
 			Required:    true,
+		},
+		{
+			Name:        "knowledge_updates",
+			Type:        "array",
+			Description: "Optional: list of knowledge file updates. Each has path (relative to knowledge/), action (create/update/append), and content.",
+			Required:    false,
+			Items: &llm.ToolParamItems{
+				Type: "object",
+				Properties: map[string]any{
+					"path":    map[string]string{"type": "string", "description": "File path relative to knowledge/ directory (e.g. \"gotchas.md\")"},
+					"action":  map[string]string{"type": "string", "description": "Action: \"create\" (new file), \"update\" (overwrite), \"append\" (add to end)"},
+					"content": map[string]string{"type": "string", "description": "File content in markdown"},
+				},
+				Required: []string{"path", "content"},
+			},
 		},
 	}
 }
 
 type saveMemoryArgs struct {
-	HistoryEntry string `json:"history_entry"`
-	MemoryUpdate string `json:"memory_update"`
+	HistoryEntry     string            `json:"history_entry"`
+	MemoryUpdate     string            `json:"memory_update"`
+	KnowledgeUpdates []knowledgeUpdate `json:"knowledge_updates,omitempty"`
+}
+
+type knowledgeUpdate struct {
+	Path    string `json:"path"`
+	Action  string `json:"action"`
+	Content string `json:"content"`
 }

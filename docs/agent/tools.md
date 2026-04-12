@@ -24,7 +24,9 @@
 | `none_sandbox.go` | None sandbox (local execution). Uses platform helpers from shell_unix/shell_windows.go |
 | `mcp_common.go` | MCP protocol definitions |
 | `mcp_remote_transport.go` | MCP HTTP transport |
-| `memory_tools.go` | Core memory tools (append/replace/rethink/search/recall) |
+| `memory_tools.go` | Core memory tools (append/replace/rethink/search/recall) — letta only |
+| `knowledge_tools.go` | Project knowledge tools (write/list) — provider-agnostic |
+| `flat_memory_tools.go` | Flat memory tools (read/write/list) — flat provider only |
 | `context_edit.go` | ContextEdit tool (conversation history surgery) |
 | `cron.go` | Cron tool (scheduled tasks) |
 | `task_manager.go` | Background task management |

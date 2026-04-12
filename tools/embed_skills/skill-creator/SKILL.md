@@ -16,7 +16,11 @@ skills/{skill-name}/
 └── assets/               # Optional: templates, config files
 ```
 
-Create skills under `skills/` in the working directory. The `Skill` tool auto-discovers them by name.
+**IMPORTANT**: Create skills under the directory shown in the system prompt's **"Skills 存储目录"** line (e.g. `/opt/xbot/.xbot/skills/`). Do NOT use the current working directory or project root — the running xbot instance only scans its configured skills directory.
+
+To find the correct path, look at the system prompt section `# Available Skills` → `**Skills 存储目录**`.
+
+Alternatively, use `Skill(name=skill-creator, action=list_files)` to get this skill's own directory, then derive the parent as the skills root.
 
 ## Lifecycle
 

@@ -18,7 +18,9 @@ Ask the user:
 
 ### Step 2: Create Agent File
 
-Create `agents/{agent-name}.md` in the workspace root. This is the user's personal agents directory — files here are loaded automatically and override same-name global agents.
+**IMPORTANT**: Create agent files in the correct agents directory, NOT in the current working directory. The correct path follows the same pattern as the system prompt's **"Skills 存储目录"** but with `agents` instead of `skills`. For example, if Skills 存储目录 is `/opt/xbot/.xbot/skills`, then agents go in `/opt/xbot/.xbot/agents/{agent-name}.md`.
+
+To find the correct path, check the system prompt's `Available Agents` section, or derive it from `Skill(name=agent-creator, action=list_files)` — replace `skills` with `agents` in the parent path.
 
 Agent definition uses YAML frontmatter + Markdown body:
 

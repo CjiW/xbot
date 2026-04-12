@@ -47,7 +47,11 @@ func TestExecKeepAlive_ChildHoldsPipeOpen(t *testing.T) {
 	go capture(&stdoutBuf, stdoutPipe)
 	go capture(&stderrBuf, stderrPipe)
 
-	// Use cmd.Process.Wait() + close pipes approach
+	// Use cmd.Process.Wait() + kill process group + close pipes approach.
+	// After the direct child exits, grandchild processes (e.g. "sleep 300 &")
+	// may still hold pipe FDs open. We must kill the entire process group
+	// before closing pipes, otherwise Read() in capture goroutines never
+	// returns EOF and wg.Wait() hangs.
 	waitCh := make(chan int, 1)
 	go func() {
 		state, err := cmd.Process.Wait()
@@ -55,6 +59,8 @@ func TestExecKeepAlive_ChildHoldsPipeOpen(t *testing.T) {
 		if err == nil && state != nil {
 			code = extractExitCodeFromState(state)
 		}
+		// Kill the entire process group to release pipe FDs held by grandchildren
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		stdoutPipe.Close()
 		stderrPipe.Close()
 		wg.Wait()

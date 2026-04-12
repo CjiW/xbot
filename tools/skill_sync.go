@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func syncSkillsAndAgents(ctx *ToolContext) {
 	for _, name := range ListEmbeddedSkills() {
 		dstSkill := filepath.Join(targetSkillsDir, name)
 		if _, err := os.Stat(dstSkill); os.IsNotExist(err) {
-			syncEmbeddedDir(filepath.Join("embed_skills", name), dstSkill)
+			syncEmbeddedDir(path.Join("embed_skills", name), dstSkill)
 		}
 	}
 
@@ -234,10 +235,10 @@ func syncEmbeddedDir(embedDir, dstDir string) {
 	}
 	for _, e := range entries {
 		if e.IsDir() {
-			syncEmbeddedDir(filepath.Join(embedDir, e.Name()), filepath.Join(dstDir, e.Name()))
+			syncEmbeddedDir(path.Join(embedDir, e.Name()), filepath.Join(dstDir, e.Name()))
 			continue
 		}
-		data, err := EmbeddedSkills.ReadFile(filepath.Join(embedDir, e.Name()))
+		data, err := EmbeddedSkills.ReadFile(path.Join(embedDir, e.Name()))
 		if err != nil {
 			continue
 		}

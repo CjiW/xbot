@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -273,7 +274,8 @@ func resolveSandboxPath(ctx *ToolContext, userPath string) string {
 
 	if !strings.HasPrefix(userPath, sandboxBase+"/") && userPath != sandboxBase && !strings.HasPrefix(userPath, "/") {
 		if sandboxCWD := resolveSandboxCWD(ctx, sandboxBase); sandboxCWD != "" {
-			return filepath.Join(sandboxCWD, userPath)
+			// Sandbox paths always use forward slashes (Linux container)
+			return path.Join(sandboxCWD, filepath.ToSlash(userPath))
 		}
 		return sandboxBase + "/" + userPath
 	} else if strings.HasPrefix(userPath, sandboxBase+"/") || userPath == sandboxBase {
@@ -281,7 +283,7 @@ func resolveSandboxPath(ctx *ToolContext, userPath string) string {
 	} else if strings.HasPrefix(userPath, "/") {
 		if ctx.WorkspaceRoot != "" {
 			if rel, err := filepath.Rel(ctx.WorkspaceRoot, userPath); err == nil && !strings.HasPrefix(rel, "..") {
-				return sandboxBase + "/" + rel
+				return sandboxBase + "/" + filepath.ToSlash(rel)
 			}
 		}
 	}

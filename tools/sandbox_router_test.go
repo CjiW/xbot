@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -224,8 +225,9 @@ func TestSandboxRouter_Delegation_NoneSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec failed: %v", err)
 	}
-	if result.Stdout != "hello\n" {
-		t.Errorf("Exec stdout = %q, want %q", result.Stdout, "hello\n")
+	stdout := strings.ReplaceAll(result.Stdout, "\r\n", "\n")
+	if stdout != "hello\n" {
+		t.Errorf("Exec stdout = %q, want %q", stdout, "hello\n")
 	}
 
 	// Workspace：NoneSandbox 返回空字符串
@@ -436,8 +438,9 @@ func TestSandboxRouter_Exec_EmptyUserID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec with empty userID failed: %v", err)
 	}
-	if result.Stdout != "test\n" {
-		t.Errorf("Exec stdout = %q, want %q", result.Stdout, "test\n")
+	stdout := strings.ReplaceAll(result.Stdout, "\r\n", "\n")
+	if stdout != "test\n" {
+		t.Errorf("Exec stdout = %q, want %q", stdout, "test\n")
 	}
 }
 

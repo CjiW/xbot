@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -501,7 +502,7 @@ func (t *CdTool) executeLocal(ctx *ToolContext, dir string) (*ToolResult, error)
 // executeWithSandboxAPI changes directory using Sandbox API.
 func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResult, error) {
 	target := dir
-	if !filepath.IsAbs(target) {
+	if !path.IsAbs(target) {
 		base := ""
 		if ctx.CurrentDir != "" {
 			base = ctx.CurrentDir
@@ -509,10 +510,10 @@ func (t *CdTool) executeWithSandboxAPI(ctx *ToolContext, dir string) (*ToolResul
 			base = sandboxBaseDir(ctx)
 		}
 		if base != "" {
-			target = filepath.Join(base, target)
+			target = path.Join(base, target)
 		}
 	}
-	target = filepath.Clean(target)
+	target = path.Clean(target)
 
 	// Verify directory exists in sandbox
 	userID := ctx.OriginUserID

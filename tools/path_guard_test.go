@@ -308,7 +308,15 @@ func TestResolveReadPath_CurrentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != testFile {
+	// EvalSymlinks may return short (8.3) paths on Windows; normalize both sides
+	normalizePath := func(p string) string {
+		real, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			return real
+		}
+		return p
+	}
+	if normalizePath(got) != normalizePath(testFile) {
 		t.Errorf("with CurrentDir: got %q, want %q", got, testFile)
 	}
 
@@ -317,7 +325,7 @@ func TestResolveReadPath_CurrentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != testFile {
+	if normalizePath(got) != normalizePath(testFile) {
 		t.Errorf("absolute path: got %q, want %q", got, testFile)
 	}
 }

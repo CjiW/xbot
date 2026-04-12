@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,7 +216,8 @@ func TestReadTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
 		t.Fatal("resolveSandboxCWD returned empty for sandbox CurrentDir")
 	}
 
-	resolved := filepath.Join(sandboxCWD, filePath)
+	// Sandbox paths always use forward slashes (Linux container)
+	resolved := path.Join(sandboxCWD, filePath)
 	expected := "/workspace/xbot/go.mod"
 	if resolved != expected {
 		t.Errorf("sandbox path resolution = %q, want %q", resolved, expected)
@@ -285,7 +287,7 @@ func TestFileReplaceTool_SandboxCWD_SandboxPath_Regression(t *testing.T) {
 		t.Fatal("resolveSandboxCWD returned empty")
 	}
 
-	resolved := filepath.Join(sandboxCWD, filePath)
+	resolved := path.Join(sandboxCWD, filePath)
 	expected := "/workspace/myproject/src/main.go"
 	if resolved != expected {
 		t.Errorf("Edit path = %q, want %q", resolved, expected)

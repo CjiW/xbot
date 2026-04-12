@@ -377,12 +377,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MAX_ITERATIONS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxIterations == 0 {
-		cfg.Agent.MaxIterations = i
+			cfg.Agent.MaxIterations = i
 		}
 	}
 	if v := os.Getenv("AGENT_MAX_CONCURRENCY"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxConcurrency == 0 {
-		cfg.Agent.MaxConcurrency = i
+			cfg.Agent.MaxConcurrency = i
 		}
 	}
 	setDurationEnv("MCP_INACTIVITY_TIMEOUT", &cfg.Agent.MCPInactivityTimeout)
@@ -399,7 +399,7 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxContextTokens == 0 {
-		cfg.Agent.MaxContextTokens = i
+			cfg.Agent.MaxContextTokens = i
 		}
 	}
 	if v := os.Getenv("AGENT_COMPRESSION_THRESHOLD"); v != "" {
@@ -414,7 +414,7 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MAX_SUBAGENT_DEPTH"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxSubAgentDepth == 0 {
-		cfg.Agent.MaxSubAgentDepth = i
+			cfg.Agent.MaxSubAgentDepth = i
 		}
 	}
 
@@ -432,12 +432,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("SANDBOX_IDLE_TIMEOUT_MINUTES"); v != "" {
 		if min, err := strconv.Atoi(v); err == nil && cfg.Sandbox.IdleTimeout == 0 {
-		cfg.Sandbox.IdleTimeout = time.Duration(min) * time.Minute
+			cfg.Sandbox.IdleTimeout = time.Duration(min) * time.Minute
 		}
 	}
 	if v := os.Getenv("SANDBOX_WS_PORT"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Sandbox.WSPort == 0 {
-		cfg.Sandbox.WSPort = i
+			cfg.Sandbox.WSPort = i
 		}
 	}
 	if v := os.Getenv("SANDBOX_AUTH_TOKEN"); v != "" {

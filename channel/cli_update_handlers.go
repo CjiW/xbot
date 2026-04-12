@@ -158,19 +158,19 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.String() == "ctrl+n":
-			// Cycle model (next in list)
-			// Uses Ctrl+N instead of Ctrl+M because Ctrl+M is indistinguishable
-			// from Enter on Windows VT Input Mode (Char=\r in both cases).
-			if m.panelMode == "" && !m.typing && m.channel != nil {
-		m.cycleModel()
-		// Drain pending cmds (e.g. showTempStatus timer) immediately
-		// to avoid an extra Update→View cycle on the next frame.
-		if len(m.pendingCmds) > 0 {
-			pending := m.pendingCmds
-			m.pendingCmds = nil
-			return m, []tea.Cmd{tea.Batch(pending...)}, true
-		}
-		return m, nil, true
+		// Cycle model (next in list)
+		// Uses Ctrl+N instead of Ctrl+M because Ctrl+M is indistinguishable
+		// from Enter on Windows VT Input Mode (Char=\r in both cases).
+		if m.panelMode == "" && !m.typing && m.channel != nil {
+			m.cycleModel()
+			// Drain pending cmds (e.g. showTempStatus timer) immediately
+			// to avoid an extra Update→View cycle on the next frame.
+			if len(m.pendingCmds) > 0 {
+				pending := m.pendingCmds
+				m.pendingCmds = nil
+				return m, []tea.Cmd{tea.Batch(pending...)}, true
+			}
+			return m, nil, true
 		}
 
 	case msg.Text == "^":

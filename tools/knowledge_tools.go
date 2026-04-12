@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	log "xbot/logger"
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 const knowledgeDirName = ".xbot/knowledge"

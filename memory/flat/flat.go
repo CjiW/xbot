@@ -183,7 +183,7 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 					if len([]rune(preview)) > 200 {
 						preview = string([]rune(preview)[:200]) + "..."
 					}
-					knowledgeCtx.WriteString(fmt.Sprintf("- %s: %.200s\n", e.Name(), preview))
+					fmt.Fprintf(&knowledgeCtx, "- %s: %.200s\n", e.Name(), preview)
 				}
 			}
 		}

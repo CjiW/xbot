@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	log "xbot/logger"
 	"xbot/llm"
+	log "xbot/logger"
 )
 
 // MemoryReadTool reads a file from the user's flat memory directory (~/.xbot/memory/{tenant}/).

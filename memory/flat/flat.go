@@ -31,9 +31,9 @@ const (
 // HISTORY.md: event timeline (appended during Memorize)
 // knowledge/: personal knowledge files (read on demand)
 type FlatMemory struct {
-	tenantID   int64
-	baseDir    string // ~/.xbot/memory/{tenantKey}/
-	toolIndex  []memory.ToolIndexEntry
+	tenantID    int64
+	baseDir     string // ~/.xbot/memory/{tenantKey}/
+	toolIndex   []memory.ToolIndexEntry
 	toolIndexMu sync.RWMutex
 }
 
@@ -108,9 +108,9 @@ func (m *FlatMemory) Recall(ctx context.Context, _ string) (string, error) {
 		sb.WriteString("\n\n### Knowledge Files (read on demand with memory_read)\n")
 		for _, e := range entries {
 			if e.IsDir() {
-				sb.WriteString(fmt.Sprintf("- `%s/` (directory)\n", e.Name()))
+				fmt.Fprintf(&sb, "- `%s/` (directory)\n", e.Name())
 			} else {
-				sb.WriteString(fmt.Sprintf("- `%s`\n", e.Name()))
+				fmt.Fprintf(&sb, "- `%s`\n", e.Name())
 			}
 		}
 	}
@@ -174,7 +174,7 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		knowledgeCtx.WriteString("\n\n## Existing Knowledge Files in memory/knowledge/\n")
 		for _, e := range entries {
 			if e.IsDir() {
-				knowledgeCtx.WriteString(fmt.Sprintf("- %s/ (directory)\n", e.Name()))
+				fmt.Fprintf(&knowledgeCtx, "- %s/ (directory)\n", e.Name())
 			} else {
 				fpath := filepath.Join(knowledgeDir, e.Name())
 				data, err := os.ReadFile(fpath)
@@ -389,10 +389,10 @@ func (t *saveMemoryToolDef) Parameters() []llm.ToolParam {
 			Required:    true,
 		},
 		{
-			Name: "knowledge_updates",
-			Type: "array",
+			Name:        "knowledge_updates",
+			Type:        "array",
 			Description: "Optional: list of knowledge file updates. Each has path (relative to knowledge/), action (create/update/append), and content.",
-			Required:   false,
+			Required:    false,
 			Items: &llm.ToolParamItems{
 				Type: "object",
 				Properties: map[string]any{

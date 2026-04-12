@@ -13,11 +13,11 @@ import (
 
 	log "xbot/logger"
 
+	"xbot/config"
 	"xbot/llm"
 	"xbot/memory"
 	"xbot/memory/flat"
 	"xbot/memory/letta"
-	"xbot/config"
 	"xbot/storage/sqlite"
 	"xbot/storage/vectordb"
 	"xbot/tools"

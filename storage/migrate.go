@@ -232,7 +232,7 @@ func MigrateIfNeeded(ctx context.Context, workDir, dbPath string) error {
 }
 
 const (
-	migrateMemoryFileName = "MEMORY.md"
+	migrateMemoryFileName  = "MEMORY.md"
 	migrateHistoryFileName = "HISTORY.md"
 )
 

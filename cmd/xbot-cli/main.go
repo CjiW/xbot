@@ -101,6 +101,9 @@ func newCLIApp() *cliApp {
 		log.WithError(err).Fatal("Failed to migrate data to SQLite")
 	}
 
+	// Migrate flat memory from SQLite tables to MD files (if needed)
+	storage.MigrateMemoryToFiles(dbPath)
+
 	db, err := sqlite.Open(dbPath)
 	if err != nil {
 		log.WithError(err).Warn("Failed to open token database, runner tokens disabled")

@@ -157,11 +157,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 
-	case msg.String() == "ctrl+m" || (msg.Code == tea.KeyEnter && msg.Mod&tea.ModCtrl != 0):
-		// Ctrl+M: Cycle model (next in list)
-		// Windows Terminal sends Ctrl+M as {Code: KeyEnter, Mod: ModCtrl} when
-		// modifyOtherKeys/Kitty protocol is not honored by ConPTY.
-		if m.panelMode == "" && !m.typing && m.channel != nil {
+	case msg.String() == "ctrl+m" || msg.String() == "ctrl+n":
+			// Cycle model (next in list)
+			// Ctrl+M: works on Unix terminals (CSI u / Kitty protocol).
+			// On Windows, Ctrl+M is indistinguishable from Enter in VT Input Mode,
+			// so Ctrl+N is also bound as a cross-platform alternative.
+			if m.panelMode == "" && !m.typing && m.channel != nil {
 		m.cycleModel()
 		// Drain pending cmds (e.g. showTempStatus timer) immediately
 		// to avoid an extra Update→View cycle on the next frame.
@@ -244,9 +245,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		// the textarea so its native multiline/internal-scroll behavior works,
 		// especially once the input reaches MaxHeight.
 		// Note: ctrl+j is handled earlier in Update() via isCtrlJ() → InsertString("\n").
-		// Windows Terminal sends Ctrl+M as {Code: KeyEnter, Mod: ModCtrl} (String: "ctrl+enter"),
-		// while Unix terminals send "ctrl+m". Match both to trigger cycleModel below.
-		if msg.String() == "ctrl+m" || msg.Mod&tea.ModCtrl != 0 {
+		// On Unix terminals with CSI u/Kitty protocol, Ctrl+M arrives as "ctrl+m"
+		// (matched in the cycleModel handler above), not as KeyEnter.
+		// On Windows VT Input Mode, Ctrl+M is indistinguishable from Enter;
+		// use Ctrl+N instead.
+		if msg.String() == "ctrl+m" {
 		break
 		}
 		// Enter 发送消息

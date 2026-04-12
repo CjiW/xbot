@@ -211,7 +211,7 @@ func (m *cliModel) View() tea.View {
 			if m.cachedModelName != "" {
 				modelHint := m.cachedModelName
 				if m.channel != nil && m.channel.modelLister != nil && len(m.channel.modelLister.ListModels()) > 1 {
-					modelHint += " [Ctrl+M]"
+					modelHint += " [Ctrl+N]"
 				}
 				readyParts = append(readyParts, modelHint)
 			}

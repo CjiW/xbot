@@ -7,9 +7,11 @@ import (
 	"xbot/llm"
 )
 
-// AskUserTool allows the agent to ask the user a question in CLI mode.
-// It sends the question via SendFunc and pauses execution until the user responds.
-// Only available in CLI channel (implements ChannelProvider).
+// AskUserTool allows the agent to ask the user a question and wait for their response.
+// Supported channels: CLI, Feishu, Web.
+// In CLI, opens an interactive TUI panel. In Feishu, sends an interactive card with buttons/options.
+// In Web, sends a WebSocket message that renders a form.
+// Only available in channels that support interactive responses (implements ChannelProvider).
 type AskUserTool struct{}
 
 func (t *AskUserTool) Name() string { return "AskUser" }
@@ -61,21 +63,10 @@ func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 		"ask_questions": string(qJSON),
 	}
 
-	// Send via SendFunc for non-CLI channels
-	if ctx.Channel != "cli" && ctx.SendFunc != nil {
-		for i, q := range args.Questions {
-			msg := fmt.Sprintf("❓ %s", q.Question)
-			for j, opt := range q.Options {
-				msg += fmt.Sprintf("\n  %d. %s", j+1, opt)
-			}
-			if i < len(args.Questions)-1 {
-				msg += "\n"
-			}
-			if err := ctx.SendFunc(ctx.Channel, ctx.ChatID, msg); err != nil {
-				return nil, fmt.Errorf("send question: %w", err)
-			}
-		}
-	}
+	// For CLI, the engine sends OutboundMessage{WaitingUser:true} to the channel
+	// adapter which opens the TUI panel. For Feishu, the channel adapter builds
+	// and sends an interactive card. No SendFunc needed here.
+	_ = ctx // ctx is available for future use but not needed currently
 
 	return &ToolResult{
 		Summary:     fmt.Sprintf("Asked %d question(s)", len(args.Questions)),
@@ -84,7 +75,7 @@ func (t *AskUserTool) Execute(ctx *ToolContext, input string) (*ToolResult, erro
 	}, nil
 }
 
-// SupportedChannels implements ChannelProvider interface - CLI only
+// SupportedChannels implements ChannelProvider interface.
 func (t *AskUserTool) SupportedChannels() []string {
-	return []string{"cli"}
+	return []string{"cli", "feishu"}
 }

@@ -863,16 +863,18 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 			}
 		}
 
-		// 5. Run pre-tool hooks (inject perm users into context for ApprovalHook)
+		// 5. 构建 ToolContext（统一路径，只有 ctx 变化）
+		toolCtx := buildToolContext(toolExecCtx, cfg)
+
+		// 6. Run pre-tool hooks after ToolContext is built so hooks
+		//    can access WorkingDir via context (e.g. checkpoint hook
+		//    needs WorkingDir to resolve relative file paths).
 		if cfg.HookChain != nil {
-			hookCtx := toolExecCtx
+			hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
 			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
 				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
 			}
 		}
-
-		// 6. 构建 ToolContext（统一路径，只有 ctx 变化）
-		toolCtx := buildToolContext(toolExecCtx, cfg)
 
 		// 7. Execute tool with timing
 		start := time.Now()

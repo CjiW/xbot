@@ -646,16 +646,6 @@ func main() {
 				cliCh.SetApprovalHook(ah)
 			}
 		}
-		// Inject TrimHistoryFn for Ctrl+K session truncation
-		if cliTenantID != 0 && cliSessionSvc != nil {
-			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
-				if cutoff.IsZero() {
-					return nil
-				}
-				_, err := cliSessionSvc.PurgeNewerThan(cliTenantID, cutoff)
-				return err
-			})
-		}
 		// Inject CheckpointHook for Ctrl+K rewind file rollback
 		checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
 		if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
@@ -665,9 +655,23 @@ func main() {
 			} else {
 				cliCh.SetCheckpointHook(cpHook)
 				defer cpStore.Cleanup()
+				log.WithField("dir", checkpointDir).Info("Checkpoint hook registered for Ctrl+K rewind")
 			}
 		} else {
 			log.WithError(err).Warn("Failed to create checkpoint store")
+		}
+		// Inject TrimHistoryFn for Ctrl+K session truncation
+		if cliTenantID != 0 && cliSessionSvc != nil {
+			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
+				if cutoff.IsZero() {
+					return nil
+				}
+				_, err := cliSessionSvc.PurgeNewerThan(cliTenantID, cutoff)
+				return err
+			})
+			log.WithField("tenantID", cliTenantID).Info("TrimHistoryFn registered for Ctrl+K rewind")
+		} else {
+			log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
 		}
 	}
 

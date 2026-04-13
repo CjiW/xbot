@@ -2138,7 +2138,12 @@ func (a *Agent) processBgNotification(task *tools.BackgroundTask) {
 		}
 	}
 
-	a.injectInbound(channelName, chatID, "user", content)
+	senderID := task.SenderID()
+	if senderID == "" {
+		senderID = "user"
+	}
+
+	a.injectInbound(channelName, chatID, senderID, content)
 }
 
 // processSubAgentBgNotification handles a bg subagent notification when no Run() is active.
@@ -2178,7 +2183,12 @@ func (a *Agent) processSubAgentBgNotification(n *tools.SubAgentBgNotify) {
 		}
 	}
 
-	a.injectInbound(channelName, chatID, "user", content)
+	senderID := n.SenderID
+	if senderID == "" {
+		senderID = "user"
+	}
+
+	a.injectInbound(channelName, chatID, senderID, content)
 }
 
 // buildBgNotificationRunConfig is no longer needed — idle bg notifications

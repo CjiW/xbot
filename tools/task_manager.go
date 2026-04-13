@@ -50,6 +50,7 @@ type BackgroundTask struct {
 
 	// Internal fields (not serialized to LLM)
 	sessionKey string // session key for routing completion notifications
+	senderID   string // original sender ID for correct LLM routing on notification
 	cancel     context.CancelFunc
 	mu         sync.Mutex  // protects Output for concurrent writes
 	killed     bool        // set by Kill() before cancel()
@@ -95,6 +96,7 @@ func generateTaskID() string {
 // The task runs in a goroutine; on completion, it's sent to NotifyCh.
 func (m *BackgroundTaskManager) Start(
 	sessionKey string,
+	senderID string,
 	command string,
 	execFn func(ctx context.Context, outputBuf func(string)) (exitCode int, execErr error),
 ) *BackgroundTask {
@@ -106,6 +108,7 @@ func (m *BackgroundTaskManager) Start(
 		StartedAt:  time.Now(),
 		ExitCode:   -1,
 		sessionKey: sessionKey,
+		senderID:   senderID,
 	}
 
 	// Safety timeout context (24h max lifetime)
@@ -204,6 +207,7 @@ func (m *BackgroundTaskManager) Start(
 // Called after the process exits and all capture goroutines have completed.
 func (m *BackgroundTaskManager) Adopt(
 	sessionKey string,
+	senderID string,
 	command string,
 	proc *os.Process,
 	partialOutput string,
@@ -220,6 +224,8 @@ func (m *BackgroundTaskManager) Adopt(
 		Output:     partialOutput,
 		process:    proc,
 		exitCodeCh: exitCodeCh,
+		sessionKey: sessionKey,
+		senderID:   senderID,
 	}
 
 	m.mu.Lock()
@@ -349,6 +355,9 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 // SessionKey returns the session key this task belongs to.
 func (t *BackgroundTask) SessionKey() string { return t.sessionKey }
 
+// SenderID returns the original sender ID for correct LLM routing on notification.
+func (t *BackgroundTask) SenderID() string { return t.senderID }
+
 // IsKilled returns true if the task was killed by the user.
 func (t *BackgroundTask) IsKilled() bool { return t.killed }
 
@@ -443,6 +452,7 @@ type SubAgentBgNotify struct {
 	Instance string               // subagent instance ID
 	Content  string               // formatted notification content for the LLM
 	Elapsed  time.Duration        // total elapsed time (for completed notifications)
+	SenderID string               // original sender ID for correct LLM routing
 }
 
 // SessionKey implements BgNotification.

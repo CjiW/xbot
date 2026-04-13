@@ -183,6 +183,7 @@ type feishuPendingApproval struct {
 // feishuPendingAskUser tracks an active AskUser waiting for user response.
 type feishuPendingAskUser struct {
 	ChatID    string
+	ChatType  string
 	SenderID  string
 	Questions []askQItem
 	CreatedAt time.Time
@@ -1687,9 +1688,14 @@ func (f *FeishuChannel) sendAskUserCard(msg bus.OutboundMessage) (string, error)
 
 	// Register pending state for text reply fallback
 	askKey := msg.ChatID + ":" + senderID
+	chatType := "p2p" // default
+	if msg.Metadata != nil && msg.Metadata["chat_type"] != "" {
+		chatType = msg.Metadata["chat_type"]
+	}
 	f.askUserMu.Lock()
 	f.askUsers[askKey] = &feishuPendingAskUser{
 		ChatID:    msg.ChatID,
+		ChatType:  chatType,
 		SenderID:  senderID,
 		Questions: questions,
 		CreatedAt: time.Now(),
@@ -1823,7 +1829,7 @@ func (f *FeishuChannel) handleAskUserCardAction(actionData map[string]any, actio
 			Channel:   "feishu",
 			SenderID:  senderID,
 			ChatID:    chatID,
-			ChatType:  "p2p",
+			ChatType:  pending.ChatType,
 			Content:   "/cancel",
 			Time:      time.Now(),
 			RequestID: log.NewRequestID(),
@@ -1869,7 +1875,7 @@ func (f *FeishuChannel) handleAskUserCardAction(actionData map[string]any, actio
 		SenderID:   senderID,
 		SenderName: "",
 		ChatID:     chatID,
-		ChatType:   "p2p",
+		ChatType:   pending.ChatType,
 		Content:    content,
 		Time:       time.Now(),
 		RequestID:  log.NewRequestID(),

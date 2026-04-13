@@ -62,37 +62,38 @@ func TestChatCancelCh_BasicSignaling(t *testing.T) {
 	}
 }
 
-func TestCancelKeyIncludesSenderID(t *testing.T) {
-	// Verify that cancel keys are per-sender, preventing cross-user cancellation in group chats
+func TestCancelKeyIsPerChat(t *testing.T) {
+	// Verify that cancel keys are per-chat (channel:chatID), not per-sender.
+	// One chat has at most one active Run at a time.
 	var cancelMap sync.Map
 
-	userA := "feishu:groupChat:userA"
-	userB := "feishu:groupChat:userB"
+	chatA := "feishu:chatA"
+	chatB := "feishu:chatB"
 
 	chA := make(chan struct{}, 1)
 	chB := make(chan struct{}, 1)
-	cancelMap.Store(userA, chA)
-	cancelMap.Store(userB, chB)
+	cancelMap.Store(chatA, chA)
+	cancelMap.Store(chatB, chB)
 
-	// Cancel userA's task
-	if ch, ok := cancelMap.Load(userA); ok {
+	// Cancel chatA's task
+	if ch, ok := cancelMap.Load(chatA); ok {
 		ch.(chan struct{}) <- struct{}{}
 	}
 
-	// userB's channel should still be empty
+	// chatB's channel should still be empty
 	select {
 	case <-chB:
-		t.Error("userB's cancel channel should not have been signaled")
+		t.Error("chatB's cancel channel should not have been signaled")
 	default:
 		// OK
 	}
 
-	// userA's channel should have the signal
+	// chatA's channel should have the signal
 	select {
 	case <-chA:
 		// OK
 	default:
-		t.Error("userA's cancel channel should have been signaled")
+		t.Error("chatA's cancel channel should have been signaled")
 	}
 }
 

@@ -866,27 +866,8 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		// 5. 构建 ToolContext（统一路径，只有 ctx 变化）
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		// 6. Run pre-tool hooks after ToolContext is built so hooks
-		//    can access WorkingDir via context (e.g. checkpoint hook
-		//    needs WorkingDir to resolve relative file paths).
-		if cfg.HookChain != nil {
-			hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
-			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
-				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
-			}
-		}
-
-		// 7. Execute tool with timing
-		start := time.Now()
-		result, err := tool.Execute(toolCtx, tc.Arguments)
-		elapsed := time.Since(start)
-
-		// 8. Run post-tool hooks (always, even on error)
-		if cfg.HookChain != nil {
-			cfg.HookChain.RunPost(ctx, tc.Name, tc.Arguments, result, err, elapsed)
-		}
-
-		return result, err
+		// 6-8. Execute with hooks (shared implementation — same as defaultToolExecutor)
+		return executeWithHooks(cfg.HookChain, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
 	}
 }
 

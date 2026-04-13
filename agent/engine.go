@@ -431,6 +431,45 @@ func Run(ctx context.Context, cfg RunConfig) *RunOutput {
 	return s.buildMaxIterOutput()
 }
 
+// executeWithHooks wraps tool execution with pre/post hook calls.
+// Both defaultToolExecutor (SubAgents) and buildToolExecutor (main Agent)
+// MUST use this function to ensure hooks are called identically.
+//
+// The function:
+//  1. Runs pre-tool hooks with WorkingDir injected into context
+//  2. Executes the tool
+//  3. Runs post-tool hooks (always, even on error)
+//
+// toolExecCtx is the base context (with perm users etc. injected).
+// toolCtx is the ToolContext (with WorkingDir resolved).
+// workingDir is toolCtx.WorkingDir, extracted for convenience.
+func executeWithHooks(
+	hookChain *tools.HookChain,
+	toolExecCtx context.Context,
+	toolCtx *tools.ToolContext,
+	toolName, toolArgs string,
+	tool tools.Tool,
+) (*tools.ToolResult, error) {
+	// Pre-tool hooks: inject WorkingDir so hooks can resolve paths
+	if hookChain != nil {
+		hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
+		if err := hookChain.RunPre(hookCtx, toolName, toolArgs); err != nil {
+			return nil, fmt.Errorf("pre-tool hook blocked %q: %w", toolName, err)
+		}
+	}
+
+	start := time.Now()
+	result, err := tool.Execute(toolCtx, toolArgs)
+	elapsed := time.Since(start)
+
+	// Post-tool hooks (always, even on error)
+	if hookChain != nil {
+		hookChain.RunPost(toolExecCtx, toolName, toolArgs, result, err, elapsed)
+	}
+
+	return result, err
+}
+
 // defaultToolExecutor creates the default tool executor (looks up from Registry and executes).
 // Used for SubAgent and other scenarios that don't need session MCP / activation checks.
 func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error) {
@@ -449,25 +488,7 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 		}
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		// Run pre-tool hooks after ToolContext is built so hooks can access
-		// working directory and other context for path resolution etc.
-		if cfg.HookChain != nil {
-			hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
-			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
-				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
-			}
-		}
-
-		start := time.Now()
-		result, err := tool.Execute(toolCtx, tc.Arguments)
-		elapsed := time.Since(start)
-
-		// Run post-tool hooks (always, even on error)
-		if cfg.HookChain != nil {
-			cfg.HookChain.RunPost(ctx, tc.Name, tc.Arguments, result, err, elapsed)
-		}
-
-		return result, err
+		return executeWithHooks(cfg.HookChain, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
 	}
 }
 

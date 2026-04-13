@@ -20,6 +20,174 @@ func TestManageTools_Name(t *testing.T) {
 	}
 }
 
+// TestManageTools_WritePathByChannel verifies that add_mcp writes to the correct
+// config file for each channel/sandbox mode:
+//   - CLI (none sandbox): writes to GlobalMCPConfigPath (xbotHome/mcp.json)
+//   - Feishu (remote sandbox): writes to per-user MCPConfigPath
+//   - CLI (docker sandbox): writes to per-user MCPConfigPath (sandbox has own dir)
+func TestManageTools_WritePathByChannel(t *testing.T) {
+	t.Run("cli_none_sandbox_writes_global", func(t *testing.T) {
+		tempDir := t.TempDir()
+		globalPath := filepath.Join(tempDir, "xbotHome", "mcp.json")
+		userPath := filepath.Join(tempDir, "users", "cli_user", "mcp.json")
+
+		tool := NewManageTools(tempDir, globalPath)
+		ctx := &ToolContext{
+			Registry:            NewRegistry(),
+			Channel:             "cli",
+			MCPConfigPath:       userPath,
+			GlobalMCPConfigPath: globalPath,
+		}
+
+		input, _ := json.Marshal(manageToolsArgs{
+			Action:       "add_mcp",
+			Name:         "cli-test",
+			MCPConfig:    `{"url":"http://example.com/mcp"}`,
+			Instructions: "test",
+		})
+		if _, err := tool.Execute(ctx, string(input)); err != nil {
+			t.Fatalf("add_mcp failed: %v", err)
+		}
+
+		// Must be in global path
+		if _, err := os.Stat(globalPath); err != nil {
+			t.Fatalf("expected global config at %s: %v", globalPath, err)
+		}
+		// User path must NOT exist
+		if _, err := os.Stat(userPath); !os.IsNotExist(err) {
+			t.Fatalf("user config should not exist at %s", userPath)
+		}
+
+		// Verify content
+		data, _ := os.ReadFile(globalPath)
+		var cfg MCPConfig
+		json.Unmarshal(data, &cfg)
+		if _, ok := cfg.MCPServers["cli-test"]; !ok {
+			t.Fatal("cli-test not found in global config")
+		}
+	})
+
+	t.Run("feishu_sandbox_writes_user_path", func(t *testing.T) {
+		tempDir := t.TempDir()
+		globalPath := filepath.Join(tempDir, "xbotHome", "mcp.json")
+		userPath := filepath.Join(tempDir, "users", "feishu_user", "mcp.json")
+
+		// Pre-create global config with a shared server
+		globalCfg := MCPConfig{MCPServers: map[string]MCPServerConfig{
+			"shared-server": {URL: "http://shared.example.com/mcp"},
+		}}
+		globalData, _ := json.MarshalIndent(globalCfg, "", "  ")
+		os.MkdirAll(filepath.Dir(globalPath), 0o755)
+		os.WriteFile(globalPath, globalData, 0o644)
+
+		tool := NewManageTools(tempDir, globalPath)
+		ctx := &ToolContext{
+			Registry:            NewRegistry(),
+			Channel:             "feishu",
+			MCPConfigPath:       userPath,
+			GlobalMCPConfigPath: globalPath,
+		}
+
+		input, _ := json.Marshal(manageToolsArgs{
+			Action:       "add_mcp",
+			Name:         "feishu-private",
+			MCPConfig:    `{"url":"http://example.com/mcp"}`,
+			Instructions: "feishu private tool",
+		})
+		if _, err := tool.Execute(ctx, string(input)); err != nil {
+			t.Fatalf("add_mcp failed: %v", err)
+		}
+
+		// Must be in user path, NOT in global
+		if _, err := os.Stat(userPath); err != nil {
+			t.Fatalf("expected user config at %s: %v", userPath, err)
+		}
+		data, _ := os.ReadFile(userPath)
+		var userCfg MCPConfig
+		json.Unmarshal(data, &userCfg)
+		if _, ok := userCfg.MCPServers["feishu-private"]; !ok {
+			t.Fatal("feishu-private not found in user config")
+		}
+
+		// Global config should NOT be modified
+		globalData2, _ := os.ReadFile(globalPath)
+		var globalCfg2 MCPConfig
+		json.Unmarshal(globalData2, &globalCfg2)
+		if _, ok := globalCfg2.MCPServers["feishu-private"]; ok {
+			t.Fatal("feishu-private should NOT be in global config")
+		}
+		if _, ok := globalCfg2.MCPServers["shared-server"]; !ok {
+			t.Fatal("shared-server should still exist in global config")
+		}
+	})
+
+	t.Run("cli_docker_sandbox_writes_user_path", func(t *testing.T) {
+		tempDir := t.TempDir()
+		globalPath := filepath.Join(tempDir, "xbotHome", "mcp.json")
+		userPath := filepath.Join(tempDir, "users", "cli_user", "mcp.json")
+
+		tool := NewManageTools(tempDir, globalPath)
+		// Docker sandbox: CLI channel but sandbox is enabled, so should still
+		// write to global (CLI always writes to global regardless of sandbox)
+		ctx := &ToolContext{
+			Registry:            NewRegistry(),
+			Channel:             "cli",
+			MCPConfigPath:       userPath,
+			GlobalMCPConfigPath: globalPath,
+			SandboxEnabled:      true,
+		}
+
+		input, _ := json.Marshal(manageToolsArgs{
+			Action:       "add_mcp",
+			Name:         "cli-docker",
+			MCPConfig:    `{"url":"http://example.com/mcp"}`,
+			Instructions: "docker sandbox test",
+		})
+		if _, err := tool.Execute(ctx, string(input)); err != nil {
+			t.Fatalf("add_mcp failed: %v", err)
+		}
+
+		// CLI always writes to global regardless of sandbox
+		if _, err := os.Stat(globalPath); err != nil {
+			t.Fatalf("expected global config at %s: %v", globalPath, err)
+		}
+		data, _ := os.ReadFile(globalPath)
+		var cfg MCPConfig
+		json.Unmarshal(data, &cfg)
+		if _, ok := cfg.MCPServers["cli-docker"]; !ok {
+			t.Fatal("cli-docker not found in global config")
+		}
+	})
+
+	t.Run("no_context_falls_back_to_anonymous", func(t *testing.T) {
+		tempDir := t.TempDir()
+		globalPath := filepath.Join(tempDir, "global-mcp.json")
+		anonymousPath := filepath.Join(tempDir, ".xbot", "users", "anonymous", "mcp.json")
+
+		tool := NewManageTools(tempDir, globalPath)
+		// Nil context → falls back to workDir/.xbot/users/anonymous/mcp.json
+		input, _ := json.Marshal(manageToolsArgs{
+			Action:       "add_mcp",
+			Name:         "anonymous-srv",
+			MCPConfig:    `{"url":"http://example.com/mcp"}`,
+			Instructions: "fallback test",
+		})
+		if _, err := tool.Execute(nil, string(input)); err != nil {
+			t.Fatalf("add_mcp with nil ctx failed: %v", err)
+		}
+
+		if _, err := os.Stat(anonymousPath); err != nil {
+			t.Fatalf("expected anonymous config at %s: %v", anonymousPath, err)
+		}
+		data, _ := os.ReadFile(anonymousPath)
+		var cfg MCPConfig
+		json.Unmarshal(data, &cfg)
+		if _, ok := cfg.MCPServers["anonymous-srv"]; !ok {
+			t.Fatal("anonymous-srv not found in anonymous config")
+		}
+	})
+}
+
 func TestManageTools_Description(t *testing.T) {
 	tool := NewManageTools("/tmp", "/tmp/mcp.json")
 	desc := tool.Description()

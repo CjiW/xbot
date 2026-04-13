@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -94,7 +95,7 @@ func (a *Agent) buildBaseRunConfig(
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+		GlobalMCPConfig:  filepath.Join(a.xbotHome, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,
@@ -772,7 +773,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		SkillsDirs:       a.globalSkillDirs,
 		AgentsDir:        a.agentsDir,
 		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
-		GlobalMCPConfig:  resolveDataPath(a.workDir, "mcp.json"),
+		GlobalMCPConfig:  filepath.Join(a.xbotHome, "mcp.json"),
 		DataDir:          a.workDir,
 		SandboxEnabled:   a.sandboxMode != "none",
 		PreferredSandbox: a.sandboxMode,

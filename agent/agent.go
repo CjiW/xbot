@@ -60,27 +60,6 @@ func formatErrorForUser(err error) string {
 	return fmt.Sprintf("处理消息时发生错误: %v", err)
 }
 
-// resolveDataPath 解析数据文件路径，优先使用 .xbot/ 目录，向后兼容工作目录根路径
-// 读取时：优先新路径，不存在则回退旧路径
-// 写入时：始终使用新路径
-func resolveDataPath(workDir, filename string) string {
-	// NOTE: .xbot is the server-side config directory; not accessible in user sandbox
-	xbotDir := filepath.Join(workDir, ".xbot")
-	newPath := filepath.Join(xbotDir, filename)
-	oldPath := filepath.Join(workDir, filename)
-
-	// 优先使用新路径
-	if _, err := os.Stat(newPath); err == nil {
-		return newPath
-	}
-	// 新路径不存在，检查旧路径
-	if _, err := os.Stat(oldPath); err == nil {
-		return oldPath
-	}
-	// 都不存在，返回新路径（用于创建新文件）
-	return newPath
-}
-
 func resolveGlobalSkillsDirs(legacySkillsDir string) []string {
 	if legacySkillsDir == "" {
 		return nil

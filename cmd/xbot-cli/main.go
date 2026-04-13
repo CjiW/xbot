@@ -420,11 +420,7 @@ func main() {
 					// Sync to cfg.LLM so createLLM picks it up on rebuild
 					app.cfg.LLM.MaxOutputTokens = n
 					// Rebuild LLM client with new max_output_tokens
-					if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
-						Attempts: 5,
-						Delay:    1 * time.Second,
-						MaxDelay: 30 * time.Second,
-					}); err == nil {
+					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
 						if app.agentLoop != nil {
 							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -462,11 +458,7 @@ func main() {
 			}
 			// Rebuild LLM client and update agent runtime when LLM config changed
 			if llmChanged || keyChanged || modelChanged || urlChanged {
-				if newClient, err := createLLM(app.cfg.LLM, llm.RetryConfig{
-					Attempts: 5,
-					Delay:    1 * time.Second,
-					MaxDelay: 30 * time.Second,
-				}); err == nil {
+				if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 					app.llmClient = newClient
 					if app.agentLoop != nil {
 						app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -524,11 +516,7 @@ func main() {
 				APIKey:   apiKey,
 				Model:    model,
 			}
-			client, err := createLLM(llmCfg, llm.RetryConfig{
-				Attempts: 5,
-				Delay:    1 * time.Second,
-				MaxDelay: 30 * time.Second,
-			})
+			client, err := createLLM(llmCfg, llm.DefaultRetryConfig())
 			if err != nil {
 				return fmt.Errorf("create LLM: %w", err)
 			}
@@ -910,11 +898,7 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 				Model:           sc.Model,
 				MaxOutputTokens: sc.MaxOutputTokens,
 			}
-			client, err := createLLM(llmCfg, llm.RetryConfig{
-				Attempts: 5,
-				Delay:    1 * time.Second,
-				MaxDelay: 30 * time.Second,
-			})
+			client, err := createLLM(llmCfg, llm.DefaultRetryConfig())
 			if err != nil {
 				return fmt.Errorf("create LLM for subscription: %w", err)
 			}

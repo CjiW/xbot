@@ -109,6 +109,7 @@ func (s *CheckpointStore) ReadAll() ([]FileSnapshot, error) {
 func (s *CheckpointStore) Rewind(turnIdx int) *RewindResult {
 	snapshots, err := s.ReadAll()
 	if err != nil {
+		log.WithError(err).Warn("checkpoint rewind: failed to read snapshots")
 		return &RewindResult{Errors: []string{fmt.Sprintf("read checkpoints: %v", err)}}
 	}
 
@@ -120,8 +121,11 @@ func (s *CheckpointStore) Rewind(turnIdx int) *RewindResult {
 		}
 	}
 	if len(affected) == 0 {
+		log.WithField("turnIdx", turnIdx).Debug("checkpoint rewind: no snapshots found at or after turn")
 		return &RewindResult{}
 	}
+
+	log.WithFields(log.Fields{"turnIdx": turnIdx, "snapshots": len(affected), "total": len(snapshots)}).Debug("checkpoint rewind: starting")
 
 	// Group by file path, keep the earliest snapshot per file (pre-turn state)
 	earliestPerFile := make(map[string]FileSnapshot)
@@ -295,6 +299,7 @@ func (h *CheckpointHook) PreToolUse(ctx context.Context, toolName string, args s
 
 	filePath := parseFilePath(toolName, args)
 	if filePath == "" {
+		log.WithField("tool", toolName).Warn("checkpoint hook: empty file path from args")
 		return nil
 	}
 
@@ -367,6 +372,8 @@ func (h *CheckpointHook) PostToolUse(_ context.Context, toolName string, _ strin
 	// Tool succeeded — write snapshot to store
 	if writeErr := h.store.Write(snap); writeErr != nil {
 		log.WithError(writeErr).Warn("checkpoint hook: failed to write snapshot")
+	} else {
+		log.WithFields(log.Fields{"turn": snap.TurnIdx, "tool": toolName, "file": snap.FilePath, "existed": snap.Existed}).Debug("checkpoint hook: snapshot saved")
 	}
 }
 

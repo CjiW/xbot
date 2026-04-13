@@ -652,7 +652,7 @@ func main() {
 				if cutoff.IsZero() {
 					return nil
 				}
-				_, err := cliSessionSvc.PurgeOlderThan(cliTenantID, cutoff)
+				_, err := cliSessionSvc.PurgeNewerThan(cliTenantID, cutoff)
 				return err
 			})
 		}

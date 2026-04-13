@@ -114,7 +114,7 @@ func (a *Agent) buildBaseRunConfig(
 
 		// 工具执行
 		ToolExecutor: a.buildToolExecutor(channel, chatID, senderID, senderName, sandboxUserID),
-		ToolTimeout:  120 * time.Second,
+		// ToolTimeout: no longer used. Tools manage their own timeouts.
 
 		// 读写分离（主 Agent 始终启用）
 		EnableReadWriteSplit: true,

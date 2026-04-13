@@ -122,7 +122,9 @@ type RunConfig struct {
 	// SubAgent 使用 nil（defaultToolExecutor 从 cfg.Tools 查找并执行）。
 	ToolExecutor func(ctx context.Context, tc llm.ToolCall) (*tools.ToolResult, error)
 
-	// ToolTimeout 单个工具调用超时（0 = 使用默认 120s）
+	// ToolTimeout is deprecated and no longer used for wrapping tool contexts.
+	// Individual tools (e.g. Shell) manage their own timeouts.
+	// Engine only passes through the parent context (user Ctrl+C cancels it).
 	ToolTimeout time.Duration
 
 	// EnableReadWriteSplit 启用读写分离并行执行（默认 false = 全部串行）

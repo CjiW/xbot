@@ -106,10 +106,10 @@ func newRunState(cfg RunConfig) *runState {
 		toolExecutor = defaultToolExecutor(&cfg)
 	}
 
+	// toolTimeout is kept for API compat but no longer used to wrap tool contexts.
+	// Individual tools manage their own timeouts; engine only passes through the
+	// parent context (which carries user cancellation via Ctrl+C).
 	toolTimeout := cfg.ToolTimeout
-	if toolTimeout == 0 {
-		toolTimeout = 120 * time.Second
-	}
 
 	messages := copyMessages(cfg.Messages)
 	for i := range messages {
@@ -913,7 +913,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 				}
 			}
 		} else {
-			execCtx, cancel = context.WithTimeout(ctx, s.toolTimeout)
+			execCtx, cancel = ctx, func() {}
 		}
 
 		start := time.Now()

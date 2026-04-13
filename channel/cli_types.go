@@ -441,6 +441,7 @@ type AgentPanelEntry struct {
 	Instance   string
 	Running    bool
 	Background bool
+	Task       string // one-shot subagent task (empty for interactive)
 }
 
 // ---------------------------------------------------------------------------

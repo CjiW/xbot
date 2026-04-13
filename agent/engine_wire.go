@@ -1226,6 +1226,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		lastUsed:   time.Now(),
 		running:    true,
 		background: false,
+		task:       task,
 	}
 	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
 

@@ -21,6 +21,7 @@ type panelAgentEntry struct {
 	Instance   string // instance ID
 	Running    bool   // true = currently executing
 	Background bool   // true = background mode
+	Task       string // one-shot subagent task description
 }
 
 // openSettingsPanel activates the settings panel overlay.
@@ -426,6 +427,16 @@ func (m *cliModel) viewBgTaskList() string {
 			}
 
 			label := fmt.Sprintf("[agent] %s/%s (%s)", ag.Role, ag.Instance, mode)
+			if ag.Task != "" {
+				// One-shot subagent: show truncated task instead of instance ID
+				taskPreview := ag.Task
+				if len(taskPreview) > 45 {
+					taskPreview = taskPreview[:42] + "..."
+				}
+				// Replace newlines for single-line display
+				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
+				label = fmt.Sprintf("[agent] %s: %s", ag.Role, taskPreview)
+			}
 			if len(label) > 55 {
 				label = label[:52] + "..."
 			}

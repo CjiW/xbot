@@ -581,6 +581,7 @@ func main() {
 					Instance:   s.Instance,
 					Running:    s.Running,
 					Background: s.Background,
+					Task:       s.Task,
 				}
 			}
 			return entries

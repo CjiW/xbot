@@ -37,6 +37,7 @@ type interactiveAgent struct {
 	cancelCurrent    context.CancelFunc  // 当前运行的取消函数（nil = idle）
 	lastError        string              // 最近一次错误
 	lastReply        string              // 最近一次回复摘要
+	task             string              // one-shot subagent 的任务描述（交互式为空）
 }
 
 // interactiveSessionTTL 是 interactive SubAgent 会话的生存时间。
@@ -588,11 +589,28 @@ func (a *Agent) InspectInteractiveSession(
 	if ia.running {
 		status = "running"
 	}
-	fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
+	if ia.task != "" {
+		// One-shot subagent: show task instead of message count
+		fmt.Fprintf(&sb, "## %s/%s  (%s)\n", roleName, instance, status)
+		fmt.Fprintf(&sb, "\n**Task**: %s\n", ia.task)
+	} else {
+		fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
+	}
 
 	// ── 2. Last Reply (full) — most useful info first ──
 	if ia.lastReply != "" {
 		fmt.Fprintf(&sb, "\n### Last Reply:\n%s\n", ia.lastReply)
+	}
+
+	// One-shot subagents don't have messages or iterationHistory.
+	// Show a status line instead.
+	if ia.task != "" && len(ia.messages) == 0 && len(ia.iterationHistory) == 0 {
+		if ia.running {
+			fmt.Fprintf(&sb, "\n_One-shot subagent is executing..._\n")
+		} else {
+			fmt.Fprintf(&sb, "\n_One-shot subagent completed._\n")
+		}
+		return sb.String(), nil
 	}
 
 	// ── 3. Recent Messages — tail of conversation history ──
@@ -830,6 +848,7 @@ type InteractiveSessionInfo struct {
 	Instance   string
 	Running    bool
 	Background bool
+	Task       string // one-shot subagent task description (empty for interactive)
 }
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
@@ -856,6 +875,7 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 			Instance:   ia.instance,
 			Running:    ia.running,
 			Background: ia.background,
+			Task:       ia.task,
 		}
 		ia.mu.Unlock()
 		results = append(results, info)

@@ -254,9 +254,10 @@ type cliModel struct {
 	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
 
 	// --- §9 Ctrl+K Rewind ---
-	confirmDelete  int                   // >0 = in rewind confirmation mode, value = turns to rewind
-	checkpointHook *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
-	rewindResult   *tools.RewindResult   // result of the last rewind operation (for display)
+	confirmDelete     int                   // >0 = in rewind confirmation mode, value = turns to rewind
+	checkpointHook    *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
+	rewindResult      *tools.RewindResult   // result of the last rewind operation (for display)
+	redLineTargetYOff int                   // cached YOffset to keep red line visible during confirmDelete mode
 
 	// --- §10 TODO 进度条 ---
 	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表

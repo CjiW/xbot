@@ -1422,6 +1422,7 @@ func (m *cliModel) updateViewportContent() {
 		if m.confirmDelete > 0 {
 			// Don't auto-scroll during rewind confirmation — keep red line visible
 			m.setViewportContentForScroll(sb.String())
+			m.scrollToRedLineIfNeeded()
 		} else {
 			m.setViewportContent(sb.String())
 		}
@@ -1494,7 +1495,12 @@ func (m *cliModel) appendNewMessagesToCache() {
 	vp.WriteString(m.cachedHistory)
 	vp.WriteString(m.renderProgressBlock())
 	vp.WriteString(m.renderRewindResultBlock())
-	m.setViewportContent(vp.String())
+	if m.confirmDelete > 0 {
+		m.setViewportContentForScroll(vp.String())
+		m.scrollToRedLineIfNeeded()
+	} else {
+		m.setViewportContent(vp.String())
+	}
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）
@@ -1577,19 +1583,33 @@ func (m *cliModel) fullRebuild() {
 
 	// §9 Ctrl+K 红线：自动滚动到红线位置（使用折行后的精确行号）
 	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
-		vpHeight := m.viewport.Height()
-		totalLines := m.viewport.TotalLineCount()
-		// redLineWrappedPos points to the start of the boundary block
-		// (the leading "\n" before "━━━ rewind below ━━━").
-		// Scroll so the red line appears near the top of the viewport.
-		maxOff := totalLines - vpHeight
-		if maxOff < 0 {
-			maxOff = 0
-		}
-		if redLineWrappedPos > maxOff {
-			redLineWrappedPos = maxOff
-		}
-		m.viewport.SetYOffset(redLineWrappedPos)
+		m.scrollViewportToRedLine(redLineWrappedPos)
+	}
+}
+
+// scrollViewportToRedLine scrolls the viewport so the red line boundary is visible
+// near the top. Used by all viewport update paths during confirmDelete mode.
+func (m *cliModel) scrollViewportToRedLine(redLinePos int) {
+	if redLinePos < 0 {
+		return
+	}
+	maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	target := redLinePos
+	if target > maxOff {
+		target = maxOff
+	}
+	m.viewport.SetYOffset(target)
+	m.redLineTargetYOff = target
+}
+
+// scrollToRedLineIfNeeded restores the viewport to the cached red line position.
+// Called by fast-path viewport updates (tick, append) during confirmDelete mode.
+func (m *cliModel) scrollToRedLineIfNeeded() {
+	if m.confirmDelete > 0 && m.redLineTargetYOff >= 0 {
+		m.viewport.SetYOffset(m.redLineTargetYOff)
 	}
 }
 

@@ -51,6 +51,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 
 			m.confirmDelete = 0
+			m.redLineTargetYOff = 0
 			m.renderCacheValid = false
 			m.cachedHistory = ""
 			m.updateViewportContent()
@@ -74,6 +75,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				}()
 			}
 			m.confirmDelete = 0
+			m.redLineTargetYOff = 0
 			m.rewindResult = nil
 			m.renderCacheValid = false
 			m.cachedHistory = ""
@@ -82,6 +84,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		case "n", "N":
 			// Cancel rewind
 			m.confirmDelete = 0
+			m.redLineTargetYOff = 0
 			m.renderCacheValid = false
 			m.updateViewportContent()
 			return m, nil, true
@@ -101,6 +104,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			}
 			// Other keys also cancel (including Esc)
 			m.confirmDelete = 0
+			m.redLineTargetYOff = 0
 			m.renderCacheValid = false
 			m.updateViewportContent()
 			return m, nil, true

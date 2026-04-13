@@ -1584,7 +1584,7 @@ func (m *cliModel) scrollToRedLine() {
 		return
 	}
 	content := m.viewport.GetContent()
-	idx := strings.Index(content, "━")
+	idx := strings.Index(content, "rewind below")
 	if idx < 0 {
 		return
 	}

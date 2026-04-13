@@ -282,13 +282,14 @@ type cliModel struct {
 	panelCursorBackup   int                            // saved panelCursor before quick switch
 	panelOnSubmitBackup func(values map[string]string) // saved onSubmit callback
 	// --- AskUser panel ---
-	panelItems     []askItem            // askuser panel: question items
-	panelTab       int                  // askuser panel: current tab (question index)
-	panelOptSel    map[int]map[int]bool // askuser panel: selected option indices per question
-	panelOptCursor map[int]int          // askuser panel: highlighted option index per question
-	panelAnswerTA  textarea.Model       // askuser panel: free-input editor (no-options mode)
-	panelOtherTI   textinput.Model      // askuser panel: single-line Other input
-	panelSchema    []SettingDefinition  // settings panel: schema copy
+	panelItems      []askItem            // askuser panel: question items
+	panelTab        int                  // askuser panel: current tab (question index)
+	panelOptSel     map[int]map[int]bool // askuser panel: selected option indices per question
+	panelOptCursor  map[int]int          // askuser panel: highlighted option index per question
+	panelAnswerTA   textarea.Model       // askuser panel: free-input editor (no-options mode)
+	panelOtherTI    textinput.Model      // askuser panel: single-line Other input
+	askPanelScrollY int                  // askuser panel: internal scroll offset for long content
+	panelSchema     []SettingDefinition  // settings panel: schema copy
 	// --- Approval panel ---
 	approvalRequest      *tools.ApprovalRequest // pending approval request
 	approvalResultCh     chan<- tools.ApprovalResult

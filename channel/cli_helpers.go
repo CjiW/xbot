@@ -277,6 +277,60 @@ func (m *cliModel) clampPanelScroll(rawContent string) {
 	}
 }
 
+// clampAskUserPanelScroll adjusts askPanelScrollY for the askuser split layout.
+// The visible height depends on viewport height + fixed chrome, not panelVisibleHeight().
+func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
+	total := strings.Count(rawContent, "\n") + 1
+	fixedLines := 3 // titleBar + footer + toast
+	panelBorder := 2
+	viewportH := m.layoutViewportHeight()
+	visible := m.height - fixedLines - viewportH - panelBorder
+	if visible < 3 {
+		visible = 3
+	}
+	if total <= visible {
+		m.askPanelScrollY = 0
+		return
+	}
+	if m.askPanelScrollY < 0 {
+		m.askPanelScrollY = 0
+	}
+	if m.askPanelScrollY > total-visible {
+		m.askPanelScrollY = total - visible
+	}
+}
+
+// askUserPanelVisibleHeight returns how many lines the askuser panel can display.
+func (m *cliModel) askUserPanelVisibleHeight() int {
+	fixedLines := 3
+	panelBorder := 2
+	viewportH := m.layoutViewportHeight()
+	visible := m.height - fixedLines - viewportH - panelBorder
+	if visible < 3 {
+		return 3
+	}
+	return visible
+}
+
+// ensureAskPanelCursorVisible scrolls the askuser panel so the current cursor line is visible.
+func (m *cliModel) ensureAskPanelCursorVisible() {
+	// The cursor is at approximately: tab bar (1-2 lines) + question (1) + gap (1) + cursor position
+	lineOfCursor := 2 // question + gap
+	if m.panelTab > 0 {
+		lineOfCursor = 2 // tab bar + gap
+	}
+	cursor := m.panelOptCursor[m.panelTab]
+	lineOfCursor += cursor + 1 // +1 for the option line itself
+
+	visible := m.askUserPanelVisibleHeight()
+	if m.askPanelScrollY+visible <= lineOfCursor {
+		m.askPanelScrollY = lineOfCursor - visible + 1
+	}
+	if m.askPanelScrollY > lineOfCursor {
+		m.askPanelScrollY = lineOfCursor
+	}
+}
+
 // applyLanguageChange applies a language/locale change and invalidates cache.
 // Uses setLocale() instead of SetLocale() to avoid sending on localeChangeCh,
 // which would cause a redundant fullRebuild in the next Update cycle.

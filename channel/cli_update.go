@@ -448,8 +448,29 @@ func (m *cliModel) layoutViewportHeight() int {
 	fixedLines := 3 // titleBar + status + footer
 
 	if m.panelMode != "" {
-		// Panel 模式：viewport 缩到最小，给 panel 尽可能多的空间
-		// 用户在操作 panel 时 viewport 只是背景参考
+		if m.panelMode == "askuser" {
+			// AskUser split layout: viewport stays visible above the panel.
+			// Calculate panel content height, cap it, let viewport take the rest.
+			askContent := m.viewAskUserPanel()
+			askLines := strings.Count(askContent, "\n") + 1
+			panelBorder := 2                // PanelBox top + bottom border
+			fixedLines := 3                 // titleBar + footer + toast
+			maxPanelH := (m.height / 2) + 2 // panel gets at most ~half the screen
+			minPanelH := askLines + panelBorder
+			if minPanelH < 8 {
+				minPanelH = 8
+			}
+			if minPanelH > maxPanelH {
+				minPanelH = maxPanelH
+			}
+			viewportH := m.height - fixedLines - minPanelH
+			if viewportH < 5 {
+				viewportH = 5
+				_ = m.height - fixedLines - viewportH // panel gets the rest
+			}
+			return viewportH
+		}
+		// Other panels: viewport shrinks to minimum, panel takes all space
 		return 3
 	}
 

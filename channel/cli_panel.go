@@ -113,11 +113,12 @@ var dangerConfirmStrings = map[string]string{
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
-	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
+	m.relayoutViewport() // viewport gets split-layout height
 	m.panelItems = items
 	m.panelTab = 0
 	m.panelOptSel = make(map[int]map[int]bool)
 	m.panelOptCursor = make(map[int]int)
+	m.askPanelScrollY = 0
 	ta := textarea.New()
 	ta.Placeholder = m.locale.PanelEditPlaceholder
 	ta.Prompt = "  "
@@ -864,6 +865,21 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
 		return true, m, nil
 	}
+
+	// Panel-internal scroll for long content (PgUp/PgDn)
+	switch {
+	case msg.String() == "pgup":
+		m.askPanelScrollY -= 5
+		if m.askPanelScrollY < 0 {
+			m.askPanelScrollY = 0
+		}
+		return true, m, nil
+	case msg.String() == "pgdown":
+		m.askPanelScrollY += 5
+		// clamp happens in View via clampAskUserPanelScroll
+		return true, m, nil
+	}
+
 	item := &m.panelItems[m.panelTab]
 	numOpts := len(item.Options)
 	hasOpts := numOpts > 0
@@ -900,11 +916,13 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
+				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor > 0 {
 				m.panelOptCursor[m.panelTab] = cursor - 1
 			}
+			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()
@@ -921,11 +939,13 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 				if isLastTab {
 					m.panelOptCursor[m.panelTab] = numOpts + 1
 				}
+				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor < maxCursor {
 				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
+			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()

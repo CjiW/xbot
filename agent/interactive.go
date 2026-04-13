@@ -602,16 +602,16 @@ func (a *Agent) InspectInteractiveSession(
 		fmt.Fprintf(&sb, "\n### Last Reply:\n%s\n", ia.lastReply)
 	}
 
-	// One-shot subagents don't have messages or iterationHistory.
-	// Show a status line instead.
+	// One-shot subagents: show status when no iterations yet (still running)
 	if ia.task != "" && len(ia.messages) == 0 && len(ia.iterationHistory) == 0 {
 		if ia.running {
 			fmt.Fprintf(&sb, "\n_One-shot subagent is executing..._\n")
-		} else {
-			fmt.Fprintf(&sb, "\n_One-shot subagent completed._\n")
 		}
 		return sb.String(), nil
 	}
+
+	// One-shot subagents have no messages, skip that section.
+	// But they do have iterationHistory (after completion).
 
 	// ── 3. Recent Messages — tail of conversation history ──
 	// Show the last tailCount messages so the parent agent can see

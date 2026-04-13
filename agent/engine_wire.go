@@ -1232,8 +1232,13 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 
 	out := Run(subCtx, cfg)
 
-	// Unregister one-shot subagent
-	a.interactiveSubAgents.Delete(oneshotKey)
+	// Populate iteration history so inspect can show results after completion
+	oneshotIA.running = false
+	oneshotIA.lastReply = out.Content
+	if len(out.IterationHistory) > 0 {
+		oneshotIA.iterationHistory = append(oneshotIA.iterationHistory, out.IterationHistory...)
+	}
+	// Don't delete — let inactivity cleanup remove it so user can inspect results
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

@@ -37,7 +37,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			// Truncate UI messages
 			m.messages = m.messages[:cutIdx]
 			// Truncate DB session messages (async, by timestamp)
-			if m.trimHistoryFn != nil && !cutoff.IsZero() {
+			if m.trimHistoryFn == nil {
+				log.Warn("Ctrl+K rewind: trimHistoryFn is nil, DB messages will NOT be truncated")
+			} else if cutoff.IsZero() {
+				log.Warn("Ctrl+K rewind: cutoff timestamp is zero, DB messages will NOT be truncated")
+			} else {
+				log.WithFields(log.Fields{"cutIdx": cutIdx, "cutoff": cutoff, "totalMsgs": len(m.messages)}).Info("Ctrl+K rewind: truncating DB messages")
 				go func() {
 					if err := m.trimHistoryFn(cutoff); err != nil {
 						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
@@ -67,7 +72,12 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				cutoff = m.messages[cutIdx].timestamp
 			}
 			m.messages = m.messages[:cutIdx]
-			if m.trimHistoryFn != nil && !cutoff.IsZero() {
+			if m.trimHistoryFn == nil {
+				log.Warn("Ctrl+K rewind (K): trimHistoryFn is nil, DB messages will NOT be truncated")
+			} else if cutoff.IsZero() {
+				log.Warn("Ctrl+K rewind (K): cutoff timestamp is zero, DB messages will NOT be truncated")
+			} else {
+				log.WithFields(log.Fields{"cutIdx": cutIdx, "cutoff": cutoff}).Info("Ctrl+K rewind (K): truncating DB messages")
 				go func() {
 					if err := m.trimHistoryFn(cutoff); err != nil {
 						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")

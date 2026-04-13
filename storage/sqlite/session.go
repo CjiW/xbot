@@ -270,13 +270,11 @@ func (s *SessionService) PurgeNewerThan(tenantID int64, cutoff time.Time) (int64
 		return 0, fmt.Errorf("purge newer than: %w", err)
 	}
 	rows, _ := result.RowsAffected()
-	if rows > 0 {
-		log.WithFields(log.Fields{
-			"tenant_id": tenantID,
-			"purged":    rows,
-			"cutoff":    cutoff,
-		}).Debug("Session messages purged (newer than)")
-	}
+	log.WithFields(log.Fields{
+		"tenant_id": tenantID,
+		"purged":    rows,
+		"cutoff":    cutoff.Format(time.RFC3339),
+	}).Info("Session messages purged (newer than or equal)")
 	return rows, nil
 }
 

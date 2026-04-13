@@ -387,7 +387,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 		releaseLLMSem = s.cfg.LLMSemAcquire()
 	}
 
-	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc)
+	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc, s.cfg.StreamReasoningFunc)
 
 	s.localLLMCalls++
 	if response != nil {
@@ -464,7 +464,7 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 		s.cfg.MaskStore.CleanOldEntries(compressCutoff)
 	}
 
-	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc)
+	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc, s.cfg.StreamReasoningFunc)
 	s.localLLMCalls++
 	if response != nil {
 		s.lastPromptTokens = response.Usage.PromptTokens
@@ -917,10 +917,15 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		}
 
 		start := time.Now()
-		if s.structuredProgress != nil && entry.index < len(s.structuredProgress.ActiveTools) {
-			s.structuredProgress.ActiveTools[entry.index].Status = ToolRunning
-		}
-		result, execErr := s.toolExecutor(execCtx, tc)
+			if s.structuredProgress != nil && entry.index < len(s.structuredProgress.ActiveTools) {
+				s.structuredProgress.ActiveTools[entry.index].Status = ToolRunning
+			}
+			// Notify CLI immediately so the running animation is visible
+			// before the tool blocks on execution.
+			if s.autoNotify {
+				s.notifyProgress("")
+			}
+			result, execErr := s.toolExecutor(execCtx, tc)
 		elapsed := time.Since(start)
 		cancel()
 

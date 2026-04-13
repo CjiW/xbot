@@ -198,7 +198,8 @@ type CLIProgressPayload struct {
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
 	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）
-	StreamContent  string         // LLM streaming text content (accumulated, for real-time render)
+	StreamContent         string // LLM streaming text content (accumulated, for real-time render)
+	ReasoningStreamContent string // LLM streaming reasoning content (accumulated, for real-time render)
 }
 
 // CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）

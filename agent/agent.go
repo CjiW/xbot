@@ -140,7 +140,7 @@ func (a *Agent) IndexGlobalTools() {
 		indexed[name] = true
 	}
 
-	// 3. Index global MCP servers
+	// 3. Index global MCP servers (non-blocking: starts background init, re-indexes on completion)
 	dummySessionKey := "indexing:dummy"
 	mcpMgr := tools.NewSessionMCPManager(
 		dummySessionKey,
@@ -149,7 +149,11 @@ func (a *Agent) IndexGlobalTools() {
 		"", "", 30*time.Minute,
 	)
 	if mcpMgr != nil {
-		catalog := mcpMgr.GetCatalog()
+		// Set up callback to re-index when MCP servers finish connecting
+		mcpMgr.SetOnChange(func() {
+			a.IndexGlobalTools()
+		})
+		catalog := mcpMgr.GetCatalog() // non-blocking: returns current (may be empty on first call)
 		for _, entry := range catalog {
 			for _, toolName := range entry.ToolNames {
 				fullName := fmt.Sprintf("mcp_%s_%s", entry.Name, toolName)

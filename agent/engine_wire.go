@@ -385,19 +385,24 @@ func (a *Agent) buildMainRunConfig(
 				cfg.MaskStore = nil
 			}
 			if vals["enable_stream"] == "true" {
-				cfg.Stream = true
-				// Wire stream content callback: push accumulated content into progress block
-				// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
-				if ch, ok := a.channelFinder("cli"); ok {
-					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-						cfg.StreamContentFunc = func(content string) {
-							cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-								StreamContent: content,
-							})
+					cfg.Stream = true
+					// Wire stream content callback: push accumulated content into progress block
+					// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
+					if ch, ok := a.channelFinder("cli"); ok {
+						if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+							cfg.StreamContentFunc = func(content string) {
+								cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
+									StreamContent: content,
+								})
+							}
+							cfg.StreamReasoningFunc = func(content string) {
+								cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
+									ReasoningStreamContent: content,
+								})
+							}
 						}
 					}
 				}
-			}
 		}
 	}
 

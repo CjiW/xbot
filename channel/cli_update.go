@@ -102,6 +102,49 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	// Ctrl+C: 统一处理，位于所有其他 key handler 之前。
+	// 这是唯一的 Ctrl+C 处理点——任何其他地方不得再拦截 Ctrl+C。
+	// 保证无论什么状态（typing/idle/panel/queue/editing），Ctrl+C 始终有效。
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+c" {
+		// 1. 关闭所有 overlay/panel
+		if m.quickSwitchMode != "" {
+			m.quickSwitchMode = ""
+		}
+		if m.rewindMode {
+			m.closeRewindPanel()
+		}
+		if m.panelMode != "" {
+			m.closePanel()
+		}
+		if m.searchMode {
+			m.exitSearch()
+		}
+		// 2. 取消正在编辑的排队消息
+		if m.queueEditing {
+			m.queueEditing = false
+			m.queueEditBuf = ""
+			m.textarea.SetValue("")
+		}
+		// 3. 如果 agent 正在处理：清空队列 + 发送取消
+		if m.typing {
+			queueLen := len(m.messageQueue)
+			if queueLen > 0 {
+				m.messageQueue = nil
+				m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
+			}
+			m.sendCancel()
+			return m, nil
+		}
+		// 4. 空闲状态：清空输入
+		if m.textarea.Value() != "" {
+			m.textarea.Reset()
+			m.inputHistoryIdx = -1
+			m.inputDraft = ""
+			m.autoExpandInput()
+		}
+		return m, nil
+	}
+
 	// §15 Quick switch overlay: highest priority (above panelMode).
 	// This ensures ESC in quick switch closes the overlay, not the panel behind it.
 	if key, ok := msg.(tea.KeyPressMsg); ok {
@@ -115,13 +158,8 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// §12 Panel mode: intercept all key events when panel is active
+	// NOTE: Ctrl+C is handled at the top of Update() — never intercept it here.
 	if key, ok := msg.(tea.KeyPressMsg); ok && m.panelMode != "" {
-		// Ctrl+C must always cancel the agent — never swallow it
-		if key.String() == "ctrl+c" && m.typing {
-			m.closePanel()
-			m.sendCancel()
-			return m, nil
-		}
 		handled, newModel, cmd := m.updatePanel(key)
 		if handled {
 			return newModel, cmd

@@ -775,7 +775,7 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString("\n")
 		if snap.Reasoning != "" {
 			for _, line := range strings.Split(snap.Reasoning, "\n") {
-				line = strings.TrimSpace(line)
+				line = strings.TrimRight(line, " \t\r")
 				if line == "" {
 					continue
 				}
@@ -787,7 +787,7 @@ func (m *cliModel) renderProgressBlock() string {
 		}
 		if snap.Thinking != "" {
 			for _, line := range strings.Split(snap.Thinking, "\n") {
-				line = strings.TrimSpace(line)
+				line = strings.TrimRight(line, " \t\r")
 				if line == "" {
 					continue
 				}
@@ -817,22 +817,37 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString(iterStyle.Render(fmt.Sprintf("#%d", m.progress.Iteration)))
 		sb.WriteString("\n")
 
-		if m.progress.Reasoning != "" {
-			for _, line := range strings.Split(m.progress.Reasoning, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-reasoningW), "\n") {
-					sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
-					sb.WriteString("\n")
+		// Reasoning: prefer streaming content (real-time) over static snapshot
+			reasoningText := m.progress.ReasoningStreamContent
+			if reasoningText == "" {
+				reasoningText = m.progress.Reasoning
+			}
+			isReasoningStreaming := m.progress.ReasoningStreamContent != "" && m.progress.StreamContent == ""
+			if reasoningText != "" {
+				lines := strings.Split(reasoningText, "\n")
+				cursorVisible := (m.ticker.ticks/5)%2 == 0
+				for i, line := range lines {
+					line = strings.TrimRight(line, " \t\r")
+					if line == "" {
+						continue
+					}
+					isLastLine := i == len(lines)-1
+					wrappedLines := strings.Split(hardWrapRunes(line, innerWidth-reasoningW), "\n")
+					for j, wl := range wrappedLines {
+						isLast := isLastLine && j == len(wrappedLines)-1
+						if isLast && isReasoningStreaming && cursorVisible {
+							sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl) + s.StreamCursor.Render("▋"))
+						} else {
+							sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
+						}
+						sb.WriteString("\n")
+					}
 				}
 			}
-		}
 
-		if m.progress.Thinking != "" {
+			if m.progress.Thinking != "" {
 			for _, line := range strings.Split(m.progress.Thinking, "\n") {
-				line = strings.TrimSpace(line)
+				line = strings.TrimRight(line, " \t\r")
 				if line == "" {
 					continue
 				}
@@ -893,19 +908,26 @@ func (m *cliModel) renderProgressBlock() string {
 
 		// Stream content: render LLM output in progress block when streaming
 		if m.progress.StreamContent != "" {
-			for _, line := range strings.Split(m.progress.StreamContent, "\n") {
-				line = strings.TrimSpace(line)
+			lines := strings.Split(m.progress.StreamContent, "\n")
+			// Blinking cursor: visible for 5 ticks (500ms), hidden for 5 ticks
+			cursorVisible := (m.ticker.ticks/5)%2 == 0
+			for i, line := range lines {
+				line = strings.TrimRight(line, " \t\r")
 				if line == "" {
 					continue
 				}
-				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-thinkingW), "\n") {
-					sb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
+				isLastLine := i == len(lines)-1
+				wrappedLines := strings.Split(hardWrapRunes(line, innerWidth-thinkingW), "\n")
+				for j, wl := range wrappedLines {
+					isLast := isLastLine && j == len(wrappedLines)-1
+					if isLast && cursorVisible {
+						sb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl) + s.StreamCursor.Render("▋"))
+					} else {
+						sb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
+					}
 					sb.WriteString("\n")
 				}
 			}
-			// Blinking cursor at end of stream content
-			sb.WriteString(s.StreamCursor.Render("▋"))
-			sb.WriteString("\n")
 		} else if !hasTools {
 			switch m.progress.Phase {
 			case "thinking":
@@ -1133,7 +1155,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 					toolSb.WriteString("\n")
 					if it.Reasoning != "" {
 						for _, line := range strings.Split(it.Reasoning, "\n") {
-							line = strings.TrimSpace(line)
+							line = strings.TrimRight(line, " \t\r")
 							if line == "" {
 								continue
 							}
@@ -1145,7 +1167,7 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 					}
 					if it.Thinking != "" {
 						for _, line := range strings.Split(it.Thinking, "\n") {
-							line = strings.TrimSpace(line)
+							line = strings.TrimRight(line, " \t\r")
 							if line == "" {
 								continue
 							}
@@ -1277,11 +1299,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			}
 		}
 		// Agent 消息直接渲染（glamour 已处理 markdown）
-		sb.WriteString(rendered)
-		// 流式输出时追加闪烁光标，让用户感知"正在生成"
-		if msg.isPartial && rendered != "" {
-			sb.WriteString(s.StreamCursor.Render("▋"))
-		}
+			// Trim trailing newlines so cursor appears inline at end of content
+			trimmedRendered := strings.TrimRight(rendered, "\n")
+			sb.WriteString(trimmedRendered)
+			// 流式输出时追加闪烁光标，让用户感知"正在生成"
+			if msg.isPartial && trimmedRendered != "" {
+				cursorVisible := (m.ticker.ticks/5)%2 == 0
+				if cursorVisible {
+					sb.WriteString(s.StreamCursor.Render("▋"))
+				}
+			}
 	}
 
 	sb.WriteString("\n\n")

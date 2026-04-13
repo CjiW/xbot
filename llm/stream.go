@@ -113,10 +113,11 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 }
 
 // CollectStreamWithCallback is like CollectStream but calls onContent with the
-// accumulated text content after each EventContent delta. It does NOT call
-// onContent for EventReasoningContent (thinking tokens). EventError handling
+// accumulated text content after each EventContent delta. Optionally calls
+// onReasoning with accumulated reasoning content after each EventReasoningContent
+// delta (for real-time thinking/reasoning display). EventError handling
 // is identical to CollectStream (returns partial content).
-func CollectStreamWithCallback(ctx context.Context, eventCh <-chan StreamEvent, onContent func(content string)) (*LLMResponse, error) {
+func CollectStreamWithCallback(ctx context.Context, eventCh <-chan StreamEvent, onContent func(content string), onReasoning func(content string)) (*LLMResponse, error) {
 	var resp LLMResponse
 	var content strings.Builder
 	var reasoningContent strings.Builder
@@ -138,6 +139,9 @@ func CollectStreamWithCallback(ctx context.Context, eventCh <-chan StreamEvent, 
 			}
 		case EventReasoningContent:
 			reasoningContent.WriteString(ev.ReasoningContent)
+			if onReasoning != nil {
+				onReasoning(reasoningContent.String())
+			}
 		case EventToolCall:
 			if ev.ToolCall == nil {
 				continue

@@ -48,32 +48,11 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 	}
 
+	// NOTE: Ctrl+C is handled at the top of Update() — never handle it here.
+	// This case only remains to prevent Ctrl+C from falling through to the
+	// textarea (which would insert a ^C character).
 	switch {
 	case msg.String() == "ctrl+c":
-		// Ctrl+C：有迭代时中止并清空队列；无迭代时清空输入
-		if m.typing {
-			// 如果正在编辑排队消息，先取消编辑
-			if m.queueEditing {
-				m.queueEditing = false
-				m.queueEditBuf = ""
-				m.textarea.SetValue("")
-			}
-			// 清空排队消息，防止 cancel 后队列自动继续
-			queueLen := len(m.messageQueue)
-			if queueLen > 0 {
-				m.messageQueue = nil
-				m.showSystemMsg(fmt.Sprintf(m.locale.QueueCleared, queueLen), feedbackInfo)
-			}
-			m.sendCancel()
-			return m, nil, true
-		}
-		// 非处理状态：清空输入
-		if m.textarea.Value() != "" {
-			m.textarea.Reset()
-			m.inputHistoryIdx = -1
-			m.inputDraft = ""
-			m.autoExpandInput()
-		}
 		return m, nil, true
 
 	case msg.Code == tea.KeyEsc:
@@ -294,11 +273,20 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
-	// Stream-only payloads (from StreamContentFunc) only carry StreamContent.
-	// Merge into existing progress instead of replacing to preserve tool/iteration state.
-	if msg.payload != nil && msg.payload.StreamContent != "" && msg.payload.Phase == "" && msg.payload.Iteration == 0 {
+	// Stream-only payloads (from StreamContentFunc/StreamReasoningFunc) only carry
+	// stream content fields. Merge into existing progress instead of replacing to
+	// preserve tool/iteration state.
+	isStreamOnly := msg.payload != nil &&
+		msg.payload.Phase == "" && msg.payload.Iteration == 0 &&
+		(msg.payload.StreamContent != "" || msg.payload.ReasoningStreamContent != "")
+	if isStreamOnly {
 		if m.progress != nil {
-			m.progress.StreamContent = msg.payload.StreamContent
+			if msg.payload.StreamContent != "" {
+				m.progress.StreamContent = msg.payload.StreamContent
+			}
+			if msg.payload.ReasoningStreamContent != "" {
+				m.progress.ReasoningStreamContent = msg.payload.ReasoningStreamContent
+			}
 		} else if m.typing {
 			// Turn started but no structured progress yet — create minimal payload
 			m.progress = msg.payload

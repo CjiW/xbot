@@ -210,6 +210,10 @@ type RunConfig struct {
 	// during LLM streaming. When set (and Stream=true), generateResponse uses
 	// CollectStreamWithCallback instead of CollectStream. Nil by default (no streaming).
 	StreamContentFunc func(content string)
+
+	// StreamReasoningFunc is called with accumulated reasoning content on each
+	// reasoning delta during LLM streaming. Nil by default (no reasoning streaming).
+	StreamReasoningFunc func(content string)
 }
 
 // TodoManagerProvider 提供 TODO 状态查询和清理
@@ -311,15 +315,15 @@ func readArgsHasOffsetOrLimit(argsJSON string) bool {
 //   - 主 Agent: ToolExecutor=buildToolExecutor, ProgressNotifier=sendMessage, ContextManager=enabled, ...
 
 // generateResponse calls the LLM using non-streaming mode.
-func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string, stream bool, streamContentFn func(string)) (*llm.LLMResponse, error) {
+func generateResponse(ctx context.Context, client llm.LLM, model string, messages []llm.ChatMessage, tools []llm.ToolDefinition, thinkingMode string, stream bool, streamContentFn func(string), streamReasoningFn func(string)) (*llm.LLMResponse, error) {
 	if stream {
 		if sc, ok := client.(llm.StreamingLLM); ok {
 			eventCh, err := sc.GenerateStream(ctx, model, messages, tools, thinkingMode)
 			if err != nil {
 				return nil, err
 			}
-			if streamContentFn != nil {
-				return llm.CollectStreamWithCallback(ctx, eventCh, streamContentFn)
+			if streamContentFn != nil || streamReasoningFn != nil {
+				return llm.CollectStreamWithCallback(ctx, eventCh, streamContentFn, streamReasoningFn)
 			}
 			return llm.CollectStream(ctx, eventCh)
 		}

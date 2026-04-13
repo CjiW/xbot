@@ -158,7 +158,7 @@ func TestCollectStreamWithCallback_ContentAccumulated(t *testing.T) {
 	var calls []string
 	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
 		calls = append(calls, content)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestCollectStreamWithCallback_ReasoningNotCalled(t *testing.T) {
 	var calls []string
 	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
 		calls = append(calls, content)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestCollectStreamWithCallback_ErrorReturnsPartial(t *testing.T) {
 	var calls []string
 	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
 		calls = append(calls, content)
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -240,7 +240,7 @@ func TestCollectStreamWithCallback_NilCallback(t *testing.T) {
 	close(ch)
 
 	// Nil callback should not panic
-	resp, err := CollectStreamWithCallback(context.Background(), ch, nil)
+	resp, err := CollectStreamWithCallback(context.Background(), ch, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

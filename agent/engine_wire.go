@@ -1216,7 +1216,23 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		})
 	}
 
+	// Register one-shot subagent in interactiveSubAgents so it's visible
+	// in the task & agents panel. Removed immediately after Run completes.
+	oneshotInstance := fmt.Sprintf("oneshot-%s-%d", roleName, time.Now().UnixNano())
+	oneshotKey := interactiveKey(originChannel, originChatID, roleName, oneshotInstance)
+	oneshotIA := &interactiveAgent{
+		roleName:   roleName,
+		instance:   oneshotInstance,
+		lastUsed:   time.Now(),
+		running:    true,
+		background: false,
+	}
+	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
+
 	out := Run(subCtx, cfg)
+
+	// Unregister one-shot subagent
+	a.interactiveSubAgents.Delete(oneshotKey)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

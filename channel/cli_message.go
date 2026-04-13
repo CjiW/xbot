@@ -818,34 +818,34 @@ func (m *cliModel) renderProgressBlock() string {
 		sb.WriteString("\n")
 
 		// Reasoning: prefer streaming content (real-time) over static snapshot
-			reasoningText := m.progress.ReasoningStreamContent
-			if reasoningText == "" {
-				reasoningText = m.progress.Reasoning
-			}
-			isReasoningStreaming := m.progress.ReasoningStreamContent != "" && m.progress.StreamContent == ""
-			if reasoningText != "" {
-				lines := strings.Split(reasoningText, "\n")
-				cursorVisible := (m.ticker.ticks/5)%2 == 0
-				for i, line := range lines {
-					line = strings.TrimRight(line, " \t\r")
-					if line == "" {
-						continue
+		reasoningText := m.progress.ReasoningStreamContent
+		if reasoningText == "" {
+			reasoningText = m.progress.Reasoning
+		}
+		isReasoningStreaming := m.progress.ReasoningStreamContent != "" && m.progress.StreamContent == ""
+		if reasoningText != "" {
+			lines := strings.Split(reasoningText, "\n")
+			cursorVisible := (m.ticker.ticks/5)%2 == 0
+			for i, line := range lines {
+				line = strings.TrimRight(line, " \t\r")
+				if line == "" {
+					continue
+				}
+				isLastLine := i == len(lines)-1
+				wrappedLines := strings.Split(hardWrapRunes(line, innerWidth-reasoningW), "\n")
+				for j, wl := range wrappedLines {
+					isLast := isLastLine && j == len(wrappedLines)-1
+					if isLast && isReasoningStreaming && cursorVisible {
+						sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl) + s.StreamCursor.Render("▋"))
+					} else {
+						sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
 					}
-					isLastLine := i == len(lines)-1
-					wrappedLines := strings.Split(hardWrapRunes(line, innerWidth-reasoningW), "\n")
-					for j, wl := range wrappedLines {
-						isLast := isLastLine && j == len(wrappedLines)-1
-						if isLast && isReasoningStreaming && cursorVisible {
-							sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl) + s.StreamCursor.Render("▋"))
-						} else {
-							sb.WriteString(reasoningGuide.Render("  │ ") + reasoningStyle.Render(wl))
-						}
-						sb.WriteString("\n")
-					}
+					sb.WriteString("\n")
 				}
 			}
+		}
 
-			if m.progress.Thinking != "" {
+		if m.progress.Thinking != "" {
 			for _, line := range strings.Split(m.progress.Thinking, "\n") {
 				line = strings.TrimRight(line, " \t\r")
 				if line == "" {
@@ -1299,16 +1299,16 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 			}
 		}
 		// Agent 消息直接渲染（glamour 已处理 markdown）
-			// Trim trailing newlines so cursor appears inline at end of content
-			trimmedRendered := strings.TrimRight(rendered, "\n")
-			sb.WriteString(trimmedRendered)
-			// 流式输出时追加闪烁光标，让用户感知"正在生成"
-			if msg.isPartial && trimmedRendered != "" {
-				cursorVisible := (m.ticker.ticks/5)%2 == 0
-				if cursorVisible {
-					sb.WriteString(s.StreamCursor.Render("▋"))
-				}
+		// Trim trailing newlines so cursor appears inline at end of content
+		trimmedRendered := strings.TrimRight(rendered, "\n")
+		sb.WriteString(trimmedRendered)
+		// 流式输出时追加闪烁光标，让用户感知"正在生成"
+		if msg.isPartial && trimmedRendered != "" {
+			cursorVisible := (m.ticker.ticks/5)%2 == 0
+			if cursorVisible {
+				sb.WriteString(s.StreamCursor.Render("▋"))
 			}
+		}
 	}
 
 	sb.WriteString("\n\n")
@@ -1323,6 +1323,15 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 // If the user was at the bottom before the update, keep them at the bottom.
 // Lines wider than the viewport are truncated to prevent layout breakage.
 func (m *cliModel) setViewportContent(content string) {
+	// Deduplicate: skip if content and width haven't changed.
+	// During resize storms or high-frequency ticks (busy state), this prevents
+	// O(N*W) hardWrapRunes from running every 100ms on the same content.
+	if content == m.lastViewportContent && m.width == m.lastViewportWidth && m.ready {
+		return
+	}
+	m.lastViewportContent = content
+	m.lastViewportWidth = m.width
+
 	if m.width > 0 {
 		lines := strings.Split(content, "\n")
 		var wrapped []string

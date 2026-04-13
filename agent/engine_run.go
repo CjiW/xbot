@@ -917,15 +917,15 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 		}
 
 		start := time.Now()
-			if s.structuredProgress != nil && entry.index < len(s.structuredProgress.ActiveTools) {
-				s.structuredProgress.ActiveTools[entry.index].Status = ToolRunning
-			}
-			// Notify CLI immediately so the running animation is visible
-			// before the tool blocks on execution.
-			if s.autoNotify {
-				s.notifyProgress("")
-			}
-			result, execErr := s.toolExecutor(execCtx, tc)
+		if s.structuredProgress != nil && entry.index < len(s.structuredProgress.ActiveTools) {
+			s.structuredProgress.ActiveTools[entry.index].Status = ToolRunning
+		}
+		// Notify CLI immediately so the running animation is visible
+		// before the tool blocks on execution.
+		if s.autoNotify {
+			s.notifyProgress("")
+		}
+		result, execErr := s.toolExecutor(execCtx, tc)
 		elapsed := time.Since(start)
 		cancel()
 

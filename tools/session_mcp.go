@@ -35,7 +35,7 @@ type SessionMCPManager struct {
 	inactivityTimeout time.Duration             // 不活跃超时配置
 	initialized       bool                      // 是否已初始化配置加载
 	initOnce          sync.Once                 // 确保后台初始化只启动一次
-	initDone          chan struct{}              // 后台初始化完成信号（closed = done）
+	initDone          chan struct{}             // 后台初始化完成信号（closed = done）
 	onChange          func()                    // 初始化完成后的回调（通知调用方重新索引）
 }
 
@@ -72,10 +72,10 @@ func (sm *SessionMCPManager) UpdateScope(userID, userConfigPath, workspaceRoot s
 	sm.userID = userID
 	sm.userConfigPath = userConfigPath
 	sm.workspaceRoot = workspaceRoot
-		sm.initialized = false
-		sm.initOnce = sync.Once{}
-		sm.initDone = make(chan struct{})
-	}
+	sm.initialized = false
+	sm.initOnce = sync.Once{}
+	sm.initDone = make(chan struct{})
+}
 
 // GetCatalog 返回此会话所有已连接 MCP Server 的目录信息。
 // 首次调用时启动后台初始化（非阻塞），立即返回空 catalog。
@@ -241,10 +241,10 @@ func (sm *SessionMCPManager) Invalidate() {
 	sm.connections = make(map[string]*mcpConnection)
 	sm.lastActive = make(map[string]time.Time)
 	sm.initialized = false
-		sm.initOnce = sync.Once{}
-		sm.initDone = make(chan struct{})
+	sm.initOnce = sync.Once{}
+	sm.initDone = make(chan struct{})
 
-		log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")
+	log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")
 }
 
 // loadAndConnect 加载配置并连接所有启用的 MCP Server（跳过已连接的服务器）

@@ -534,20 +534,20 @@ func TestRegistry_AsDefinitionsForSession_FlatModeIncludesSessionMCPTools(t *tes
 	registry.SetFlatMode(true)
 
 	sm := &SessionMCPManager{
-			connections: map[string]*mcpConnection{
-				"demo": {
-					name: "demo",
-					tools: []*mcp.Tool{{
-						Name:        "ping",
-						Description: "Ping demo server",
-						InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-					}},
-				},
+		connections: map[string]*mcpConnection{
+			"demo": {
+				name: "demo",
+				tools: []*mcp.Tool{{
+					Name:        "ping",
+					Description: "Ping demo server",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				}},
 			},
-			lastActive:  make(map[string]time.Time),
-			initialized: true,
-			initDone:    make(chan struct{}),
-		}
+		},
+		lastActive:  make(map[string]time.Time),
+		initialized: true,
+		initDone:    make(chan struct{}),
+	}
 	registry.SetSessionMCPManagerProvider(&mockSessionMCPProvider{manager: sm})
 
 	defs := registry.AsDefinitionsForSession("test:chat")

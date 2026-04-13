@@ -189,17 +189,17 @@ const (
 
 // CLIProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
 type CLIProgressPayload struct {
-	Phase          string
-	Iteration      int
-	ActiveTools    []CLIToolProgress
-	CompletedTools []CLIToolProgress
-	Thinking       string
-	Reasoning      string // model's reasoning/thinking chain (reasoning_content)
-	SubAgents      []CLISubAgent
-	Todos          []CLITodoItem
-	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）
-	StreamContent         string // LLM streaming text content (accumulated, for real-time render)
-	ReasoningStreamContent string // LLM streaming reasoning content (accumulated, for real-time render)
+	Phase                  string
+	Iteration              int
+	ActiveTools            []CLIToolProgress
+	CompletedTools         []CLIToolProgress
+	Thinking               string
+	Reasoning              string // model's reasoning/thinking chain (reasoning_content)
+	SubAgents              []CLISubAgent
+	Todos                  []CLITodoItem
+	TokenUsage             *CLITokenUsage // Token 用量快照（实时更新）
+	StreamContent          string         // LLM streaming text content (accumulated, for real-time render)
+	ReasoningStreamContent string         // LLM streaming reasoning content (accumulated, for real-time render)
 }
 
 // CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）

@@ -1545,7 +1545,10 @@ func (m *cliModel) fullRebuild() {
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
 			boundary := m.renderDeleteBoundaryLine()
-			redLineWrappedPos = runningLines + wrappedLineCount(chunk+"\n"+boundary, m.width)
+			// boundaryStartLine: the viewport line where the boundary begins (the leading \n)
+			// This is right after the current chunk (runningLines + chunk lines)
+			chunkLines := wrappedLineCount(chunk, m.width)
+			redLineWrappedPos = runningLines + chunkLines
 			historyBuf.WriteString(boundary)
 		}
 		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
@@ -1576,23 +1579,17 @@ func (m *cliModel) fullRebuild() {
 	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
 		vpHeight := m.viewport.Height()
 		totalLines := m.viewport.TotalLineCount()
-		// redLineWrappedPos points to the line after the boundary.
-		// We want to show the boundary near the top of the viewport (line 3).
-		// The boundary itself spans a few lines, so target just before it.
-		boundaryStart := redLineWrappedPos - 2 // approximate boundary start (2 lines for boundary content)
-		if boundaryStart < 0 {
-			boundaryStart = 0
-		}
-		targetY := boundaryStart
-		// Ensure boundary is visible: don't scroll past the point where boundary goes off-screen
+		// redLineWrappedPos points to the start of the boundary block
+		// (the leading "\n" before "━━━ rewind below ━━━").
+		// Scroll so the red line appears near the top of the viewport.
 		maxOff := totalLines - vpHeight
 		if maxOff < 0 {
 			maxOff = 0
 		}
-		if targetY > maxOff {
-			targetY = maxOff
+		if redLineWrappedPos > maxOff {
+			redLineWrappedPos = maxOff
 		}
-		m.viewport.SetYOffset(targetY)
+		m.viewport.SetYOffset(redLineWrappedPos)
 	}
 }
 

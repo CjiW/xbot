@@ -159,12 +159,12 @@ func (m *cliModel) View() tea.View {
 		)
 	} else if m.panelMode == "askuser" {
 		// §12b AskUser split layout: viewport visible above, panel at bottom
-		panelFooter := m.renderFooter()
+		// Note: no panelFooter here — hints are inside the panel (viewAskUserPanel)
 		askRaw := m.viewAskUserPanel()
 		m.clampAskUserPanelScroll(askRaw)
 		askLines := strings.Split(askRaw, "\n")
 		// Calculate available height for the ask panel
-		fixedLines := 3 // titleBar + footer + toast
+		fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
 		panelBorder := 2
 		viewportH := m.layoutViewportHeight()
 		askVisibleH := m.height - fixedLines - viewportH - panelBorder
@@ -189,12 +189,11 @@ func (m *cliModel) View() tea.View {
 			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] ↑↓PgUp/PgDn scroll", pct))
 		}
 		content = fmt.Sprintf(
-			"%s\n%s\n%s%s%s%s",
+			"%s\n%s\n%s%s%s",
 			titleBar,
 			m.viewport.View(),
 			boxedAsk,
 			scrollHint,
-			panelFooter,
 			toastStr,
 		)
 	} else if m.panelMode != "" {

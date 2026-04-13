@@ -28,28 +28,29 @@ func (m *cliModel) invalidateAllCache(updateViewport bool) {
 
 // toggleToolSummary toggles the tool-summary expanded state,
 // invalidates all cached rendering, clears cachedHistory, and refreshes the viewport.
-// It preserves the viewport scroll position so Ctrl+O doesn't cause a jarring jump.
+// It preserves the viewport scroll position anchored to the first visible message,
+// so Ctrl+O doesn't cause a jarring jump when tool summary lines change.
 func (m *cliModel) toggleToolSummary() {
-	// Save current scroll position (the first visible line).
+	// Find the first visible message index before toggling.
 	prevYOffset := m.viewport.YOffset()
 	prevAtBottom := m.viewport.AtBottom()
+	anchorMsgIdx := -1
+	if !prevAtBottom && len(m.msgLineOffsets) > 0 {
+		for i := len(m.msgLineOffsets) - 1; i >= 0; i-- {
+			if m.msgLineOffsets[i] <= prevYOffset {
+				anchorMsgIdx = i
+				break
+			}
+		}
+	}
 
 	m.toolSummaryExpanded = !m.toolSummaryExpanded
 	m.cachedHistory = ""
 	m.invalidateAllCache(true)
 
-	// Restore scroll position. After toggle, content height changes (tool summary
-	// lines expand/collapse), so we need to clamp to the new valid range.
-	// If the user was at the bottom, keep them at the bottom.
-	if !prevAtBottom {
-		maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
-		if maxOff < 0 {
-			maxOff = 0
-		}
-		if prevYOffset > maxOff {
-			prevYOffset = maxOff
-		}
-		m.viewport.SetYOffset(prevYOffset)
+	// Restore scroll position anchored to the same message.
+	if !prevAtBottom && anchorMsgIdx >= 0 && anchorMsgIdx < len(m.msgLineOffsets) {
+		m.viewport.SetYOffset(m.msgLineOffsets[anchorMsgIdx])
 	}
 }
 
@@ -281,7 +282,7 @@ func (m *cliModel) clampPanelScroll(rawContent string) {
 // The visible height depends on viewport height + fixed chrome, not panelVisibleHeight().
 func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	total := strings.Count(rawContent, "\n") + 1
-	fixedLines := 3 // titleBar + footer + toast
+	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
 	panelBorder := 2
 	viewportH := m.layoutViewportHeight()
 	visible := m.height - fixedLines - viewportH - panelBorder
@@ -291,6 +292,11 @@ func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	if total <= visible {
 		m.askPanelScrollY = 0
 		return
+	}
+	// When content overflows, default to showing the bottom (hints) rather than the top.
+	// Only respect user's explicit scroll position if they've scrolled away from default.
+	if m.askPanelScrollY == 0 {
+		m.askPanelScrollY = total - visible
 	}
 	if m.askPanelScrollY < 0 {
 		m.askPanelScrollY = 0
@@ -302,7 +308,7 @@ func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 
 // askUserPanelVisibleHeight returns how many lines the askuser panel can display.
 func (m *cliModel) askUserPanelVisibleHeight() int {
-	fixedLines := 3
+	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
 	panelBorder := 2
 	viewportH := m.layoutViewportHeight()
 	visible := m.height - fixedLines - viewportH - panelBorder

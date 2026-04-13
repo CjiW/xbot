@@ -868,6 +868,24 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 
 	// Panel-internal scroll for long content (PgUp/PgDn)
 	switch {
+	case msg.String() == "ctrl+o":
+		// §11 Ctrl+O toggles tool summary expand/collapse — must work in askuser mode too
+		m.toggleToolSummary()
+		return true, m, nil
+	case msg.Code == tea.KeyHome:
+		// Home/End jump to top/bottom of viewport (iteration history above the panel)
+		m.viewport.GotoTop()
+		return true, m, nil
+	case msg.Code == tea.KeyEnd:
+		m.viewport.GotoBottom()
+		m.newContentHint = false
+		return true, m, nil
+	case msg.String() == "shift+up":
+		m.viewport.ScrollUp(1)
+		return true, m, nil
+	case msg.String() == "shift+down":
+		m.viewport.ScrollDown(1)
+		return true, m, nil
 	case msg.String() == "pgup":
 		m.askPanelScrollY -= 5
 		if m.askPanelScrollY < 0 {
@@ -1469,7 +1487,7 @@ func (m *cliModel) viewAskUserPanel() string {
 			hints = append(hints, m.locale.PanelAskNewline)
 		}
 	}
-	hints = append(hints, m.locale.PanelAskCancel)
+	hints = append(hints, "Shift+↑↓ scroll history", "Ctrl+O expand tools", m.locale.PanelAskCancel)
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return sb.String()

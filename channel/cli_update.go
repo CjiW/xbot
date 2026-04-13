@@ -454,7 +454,7 @@ func (m *cliModel) layoutViewportHeight() int {
 			askContent := m.viewAskUserPanel()
 			askLines := strings.Count(askContent, "\n") + 1
 			panelBorder := 2                // PanelBox top + bottom border
-			fixedLines := 3                 // titleBar + footer + toast
+			fixedLines := 2                 // titleBar + toast (no separate footer — hints are in-panel)
 			maxPanelH := (m.height / 2) + 2 // panel gets at most ~half the screen
 			minPanelH := askLines + panelBorder
 			if minPanelH < 8 {

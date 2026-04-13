@@ -37,6 +37,10 @@ type OpenAIConfig struct {
 	DefaultModel string // 默认模型（API 获取失败时的回退模型）
 	MaxTokens    int    // 最大生成 token 数（默认 8192）
 	UserAgent    string // 自定义 User-Agent（留空使用默认值）
+
+	// OnModelsLoadError is called when the async model list API call fails.
+	// Used by CLI to show a toast notification.
+	OnModelsLoadError func(err error)
 }
 
 // defaultMaxTokens 默认最大生成 token 数
@@ -78,11 +82,15 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 
 	// Load model list asynchronously to avoid blocking startup.
 	// The fallback model above ensures ListModels() works before API responds.
+	onError := cfg.OnModelsLoadError
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := o.LoadModelsFromAPI(ctx); err != nil {
 			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+			if onError != nil {
+				onError(err)
+			}
 		}
 	}()
 

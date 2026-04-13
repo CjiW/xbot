@@ -182,6 +182,9 @@ type LLMConfig struct {
 	BaseURL         string `json:"base_url"`
 	APIKey          string `json:"api_key"`
 	Model           string `json:"model"`
+	VanguardModel   string `json:"vanguard_model,omitempty"`
+	BalanceModel    string `json:"balance_model,omitempty"`
+	SwiftModel      string `json:"swift_model,omitempty"`
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"` // 0 = use default (8192)
 	ThinkingMode    string `json:"thinking_mode,omitempty"`
 }

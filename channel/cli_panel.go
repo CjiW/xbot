@@ -29,6 +29,7 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 	m.panelCursor = 0
 	m.panelEdit = false
 	m.panelScrollY = 0
+	m.panelSubGeneration = m.subGeneration // capture current subscription generation
 	m.panelSchema = make([]SettingDefinition, len(schema))
 	copy(m.panelSchema, schema)
 	m.panelValues = make(map[string]string, len(values))
@@ -787,10 +788,18 @@ func (m *cliModel) updateSettingsPanel(msg tea.KeyPressMsg) (bool, tea.Model, te
 				m.openDangerPanelFromSettings()
 				return true, m, nil
 			}
-			// Subscription management entry — close settings, open quick switch
+			// Subscription management entry — save panel state, open quick switch
 			if def.Key == "subscription_manage" {
+				// Backup current panel state so we can restore after quick switch
+				m.panelValuesBackup = make(map[string]string, len(m.panelValues))
+				for k, v := range m.panelValues {
+					m.panelValuesBackup[k] = v
+				}
+				m.panelCursorBackup = m.panelCursor
+				m.panelOnSubmitBackup = m.panelOnSubmit
 				m.panelMode = ""
 				m.relayoutViewport()
+				m.quickSwitchReturnToPanel = true
 				m.openQuickSwitch("subscription")
 				return true, m, nil
 			}
@@ -1624,6 +1633,7 @@ func (m *cliModel) applyQuickSwitch() {
 		if m.llmSubscriber != nil {
 			m.llmSubscriber.SwitchModel(m.senderID, selected.Model)
 			m.cachedModelName = selected.Model
+			m.subGeneration++ // model switch also changes effective subscription state
 			// Update quickSwitchList so the panel reflects the new model
 			m.updateQuickSwitchModels(selected.Model)
 			m.showTempStatus(fmt.Sprintf("Model switched to: %s", selected.Model))
@@ -1661,6 +1671,37 @@ func (m *cliModel) renameQuickSwitchEntry() {
 			}
 		}
 	})
+}
+
+// deleteQuickSwitchEntry deletes the selected subscription (with confirmation if it's active).
+func (m *cliModel) deleteQuickSwitchEntry() {
+	if m.quickSwitchCursor >= len(m.quickSwitchList) {
+		return
+	}
+	selected := m.quickSwitchList[m.quickSwitchCursor]
+	if selected.ID == "__add__" {
+		return
+	}
+	if m.subscriptionMgr == nil {
+		return
+	}
+	// Don't allow deleting the active subscription without a fallback
+	subs, err := m.subscriptionMgr.List("")
+	if err != nil || len(subs) <= 1 {
+		m.showTempStatus("Cannot delete the last subscription")
+		return
+	}
+	if selected.Active {
+		m.showTempStatus("Cannot delete active subscription — switch to another first")
+		return
+	}
+	if err := m.subscriptionMgr.Remove(selected.ID); err != nil {
+		m.showTempStatus(fmt.Sprintf("Failed to delete: %v", err))
+		return
+	}
+	m.showTempStatus(fmt.Sprintf("Deleted: %s", selected.Name))
+	// Refresh the list
+	m.openQuickSwitch(m.quickSwitchMode)
 }
 
 // updateQuickSwitchModels updates the model field in quickSwitchList for the active subscription.
@@ -1721,7 +1762,7 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 	box := m.styles.PanelBox.Render(panelContent)
 
 	// Hint line below the box
-	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Rename  Esc Close")
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Rename  D Delete  Esc Close")
 
 	// Center vertically
 	listH := len(m.quickSwitchList) + 3 // header + spacer + items + borders(~2)
@@ -1746,7 +1787,12 @@ func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	switch msg.Code {
 	case tea.KeyEsc:
+		returnToSettings := m.quickSwitchReturnToPanel
+		m.quickSwitchReturnToPanel = false
 		m.quickSwitchMode = ""
+		if returnToSettings {
+			m.openSettingsFromQuickSwitch()
+		}
 		return true, nil
 	case tea.KeyUp:
 		if m.quickSwitchCursor > 0 {
@@ -1770,6 +1816,11 @@ func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// E: rename selected subscription
 	if msg.String() == "e" {
 		m.renameQuickSwitchEntry()
+		return true, nil
+	}
+	// D: delete selected subscription
+	if msg.String() == "d" {
+		m.deleteQuickSwitchEntry()
 		return true, nil
 	}
 	return true, nil // block all other keys

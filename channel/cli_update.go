@@ -31,15 +31,22 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Async subscription switch completed
 	if done, ok := msg.(cliSwitchLLMDoneMsg); ok {
+		returnToSettings := m.quickSwitchReturnToPanel
+		m.quickSwitchReturnToPanel = false
 		if done.err != nil {
 			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
 		} else if done.mgr != nil {
 			if err := done.mgr.SetDefault(done.subID); err != nil {
 				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
 			} else {
+				m.subGeneration++ // subscription actually changed
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
 			}
 			m.refreshCachedModelName()
+		}
+		// If we came from the settings panel, re-open it so the user can continue editing
+		if returnToSettings {
+			m.openSettingsFromQuickSwitch()
 		}
 		return m, nil
 	}
@@ -55,6 +62,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case <-themeChangeCh:
 		m.applyThemeAndRebuild(currentThemeName)
 		m.updateViewportContent()
+	default:
+	}
+
+	// Model list load error notification from LLM goroutines
+	select {
+	case err := <-modelsLoadErrorCh:
+		m.showTempStatus(fmt.Sprintf("Model list load failed: %v", err))
+		_ = m.clearTempStatusCmd()
 	default:
 	}
 

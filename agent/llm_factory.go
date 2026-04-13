@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"xbot/config"
 	"xbot/llm"
 	"xbot/storage/sqlite"
 )
@@ -18,6 +19,7 @@ type LLMFactory struct {
 	defaultLLM          llm.LLM
 	defaultModel        string
 	defaultThinkingMode string
+	tierModels          config.LLMConfig
 
 	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
 	llmSemManager *llm.LLMSemaphoreManager
@@ -48,6 +50,13 @@ func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, d
 		thinkingModes:   make(map[string]string),
 		// hasCustomLLMCache 使用零值 sync.Map，无需初始化
 	}
+}
+
+// SetModelTiers updates the configured tier-to-model mappings used by SubAgent model resolution.
+func (f *LLMFactory) SetModelTiers(cfg config.LLMConfig) {
+	f.mu.Lock()
+	f.tierModels = cfg
+	f.mu.Unlock()
 }
 
 // GetLLM 获取用户的 LLM 客户端，如果没有自定义配置则返回默认客户端
@@ -330,6 +339,36 @@ func (f *LLMFactory) ListModels() []string {
 	return f.defaultLLM.ListModels()
 }
 
+// ListAllModelsForUser returns model names from the default LLM plus all subscription
+// Model fields for a given user. Used for global tier settings where the user should
+// see models across all their subscriptions.
+func (f *LLMFactory) ListAllModelsForUser(senderID string) []string {
+	seen := make(map[string]bool)
+	var result []string
+
+	// Default LLM models
+	for _, m := range f.defaultLLM.ListModels() {
+		if !seen[m] {
+			seen[m] = true
+			result = append(result, m)
+		}
+	}
+
+	// All subscription model fields (no API calls, just DB records)
+	if f.subscriptionSvc != nil && senderID != "" {
+		if subs, err := f.subscriptionSvc.List(senderID); err == nil {
+			for _, sub := range subs {
+				if sub.Model != "" && !seen[sub.Model] {
+					seen[sub.Model] = true
+					result = append(result, sub.Model)
+				}
+			}
+		}
+	}
+
+	return result
+}
+
 // GetLLMConcurrency 读取用户配置的个人 LLM 并发上限。
 // 未配置时使用默认值 DefaultLLMConcurrencyPersonal。
 func (f *LLMFactory) GetLLMConcurrency(senderID string) int {
@@ -434,60 +473,60 @@ func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
 //
 // 返回: (LLM客户端, 实际模型名, maxContext, thinkingMode, 是否使用了非默认模型)
 func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, string, int, string, bool) {
-	if targetModel == "" || f.subscriptionSvc == nil {
-		// 无指定模型或无订阅服务 → 使用默认
+	resolvedModel, _ := f.resolveTierModel(targetModel)
+	if resolvedModel == "" {
+		// 无指定模型 → 使用默认
 		client, model, maxCtx, tm := f.GetLLM(senderID)
 		return client, model, maxCtx, tm, false
 	}
 
-	subs, err := f.subscriptionSvc.List(senderID)
-	if err != nil || len(subs) == 0 {
-		// 无订阅 → fallback 到默认
-		client, model, maxCtx, tm := f.GetLLM(senderID)
-		return client, model, maxCtx, tm, false
-	}
+	// Tier resolved or explicit model name specified — try subscription matching first
+	if f.subscriptionSvc != nil {
+		subs, err := f.subscriptionSvc.List(senderID)
+		if err == nil && len(subs) > 0 {
+			// 1. 精确匹配：订阅的 Model 字段 == resolvedModel
+			for _, sub := range subs {
+				if sub.Model == resolvedModel {
+					client := f.createClientFromSub(sub, resolvedModel)
+					if client != nil {
+						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+					}
+				}
+			}
 
-	// 1. 精确匹配：订阅的 Model 字段 == targetModel
-	for _, sub := range subs {
-		if sub.Model == targetModel {
-			client := f.createClientFromSub(sub, targetModel)
-			if client != nil {
-				return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
+			// 2. 使用活跃订阅的凭证 + resolvedModel
+			activeSub, err := f.subscriptionSvc.GetDefault(senderID)
+			if err == nil && activeSub != nil {
+				client := f.createClientFromSub(activeSub, resolvedModel)
+				if client != nil {
+					return client, resolvedModel, activeSub.MaxContext, activeSub.ThinkingMode, true
+				}
+			}
+
+			// 3. Provider 匹配：找 provider 能服务该模型的订阅
+			provider := guessProvider(resolvedModel)
+			for _, sub := range subs {
+				if provider != "" && sub.Provider == provider {
+					client := f.createClientFromSub(sub, resolvedModel)
+					if client != nil {
+						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+					}
+				}
+			}
+
+			// 4. 任意可用订阅
+			for _, sub := range subs {
+				client := f.createClientFromSub(sub, resolvedModel)
+				if client != nil {
+					return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+				}
 			}
 		}
 	}
 
-	// 2. 使用活跃订阅的凭证 + targetModel
-	activeSub, err := f.subscriptionSvc.GetDefault(senderID)
-	if err == nil && activeSub != nil {
-		client := f.createClientFromSub(activeSub, targetModel)
-		if client != nil {
-			return client, targetModel, activeSub.MaxContext, activeSub.ThinkingMode, true
-		}
-	}
-
-	// 3. Provider 匹配：找 provider 能服务该模型的订阅
-	provider := guessProvider(targetModel)
-	for _, sub := range subs {
-		if provider != "" && sub.Provider == provider {
-			client := f.createClientFromSub(sub, targetModel)
-			if client != nil {
-				return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
-			}
-		}
-	}
-
-	// 4. 任意可用订阅
-	for _, sub := range subs {
-		client := f.createClientFromSub(sub, targetModel)
-		if client != nil {
-			return client, targetModel, sub.MaxContext, sub.ThinkingMode, true
-		}
-	}
-
-	// 5. Fallback 到默认
-	client, model, maxCtx, tm := f.GetLLM(senderID)
-	return client, model, maxCtx, tm, false
+	// Fallback: use default client with resolved model name (works for CLI mode without subscriptions)
+	client, _, maxCtx, tm := f.GetLLM(senderID)
+	return client, resolvedModel, maxCtx, tm, true
 }
 
 // createClientFromSub 从订阅创建 LLM 客户端，使用指定的模型名（而非订阅的默认模型）
@@ -504,6 +543,46 @@ func (f *LLMFactory) createClientFromSub(sub *sqlite.LLMSubscription, model stri
 	}
 	client, _ := f.createClient(cfg)
 	return client
+}
+
+func normalizeModelTier(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "vanguard", "strong":
+		return "vanguard"
+	case "balance", "medium":
+		return "balance"
+	case "swift", "weak":
+		return "swift"
+	default:
+		return ""
+	}
+}
+
+func (f *LLMFactory) resolveTierModel(value string) (string, bool) {
+	tier := normalizeModelTier(value)
+	if tier == "" {
+		return value, false
+	}
+
+	f.mu.RLock()
+	tiers := f.tierModels
+	f.mu.RUnlock()
+
+	switch tier {
+	case "vanguard":
+		if strings.TrimSpace(tiers.VanguardModel) != "" {
+			return strings.TrimSpace(tiers.VanguardModel), true
+		}
+	case "balance":
+		if strings.TrimSpace(tiers.BalanceModel) != "" {
+			return strings.TrimSpace(tiers.BalanceModel), true
+		}
+	case "swift":
+		if strings.TrimSpace(tiers.SwiftModel) != "" {
+			return strings.TrimSpace(tiers.SwiftModel), true
+		}
+	}
+	return "", true
 }
 
 // guessProvider 根据模型名猜测 provider。

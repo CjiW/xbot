@@ -333,7 +333,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 						for k, v := range vals {
 							// Skip LLM fields — they come from config (single source of truth)
 							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
 								continue
 							}
 							currentValues[k] = v
@@ -341,26 +341,38 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					}
 				}
 				// Inject model list into combo options
+				// ALL model dropdowns (llm_model + tiers) use ListAllModels() which includes
+				// default LLM models + all subscription Model fields, so newly added
+				// subscriptions are always visible without restart.
 				if m.channel.modelLister != nil {
-					models := m.channel.modelLister.ListModels()
+					allModels := m.channel.modelLister.ListAllModels()
 					for i, s := range schema {
-						if s.Key == "llm_model" && len(models) > 0 {
-							opts := make([]SettingOption, len(models))
-							for j, m := range models {
-								opts[j] = SettingOption{Label: m, Value: m}
+						if (s.Key == "llm_model" || s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
+							opts := make([]SettingOption, len(allModels))
+							for j, ml := range allModels {
+								opts[j] = SettingOption{Label: ml, Value: ml}
 							}
 							schema[i].Options = opts
-							break
 						}
 					}
 				}
 				m.openSettingsPanel(schema, currentValues, func(values map[string]string) {
+					// --- Subscription generation guard ---
+					// If the active subscription changed since this panel was opened,
+					// the per-subscription LLM fields (provider/key/model/base_url) are STALE
+					// and must NOT be written back — they would overwrite the new subscription.
+					// This is the structural guarantee against subscription data corruption.
+					if m.panelSubGeneration != m.subGeneration {
+						for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
+							delete(values, k)
+						}
+					}
 					// Persist non-LLM settings to SettingsService (SQLite).
 					// LLM settings go only to config.json (single source of truth).
 					if m.channel.settingsSvc != nil {
 						for k, v := range values {
 							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key":
+							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
 								continue
 							}
 							_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)

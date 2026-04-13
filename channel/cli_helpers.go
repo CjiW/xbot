@@ -28,10 +28,92 @@ func (m *cliModel) invalidateAllCache(updateViewport bool) {
 
 // toggleToolSummary toggles the tool-summary expanded state,
 // invalidates all cached rendering, clears cachedHistory, and refreshes the viewport.
+// It preserves the viewport scroll position so Ctrl+O doesn't cause a jarring jump.
 func (m *cliModel) toggleToolSummary() {
+	// Save current scroll position (the first visible line).
+	prevYOffset := m.viewport.YOffset()
+	prevAtBottom := m.viewport.AtBottom()
+
 	m.toolSummaryExpanded = !m.toolSummaryExpanded
 	m.cachedHistory = ""
 	m.invalidateAllCache(true)
+
+	// Restore scroll position. After toggle, content height changes (tool summary
+	// lines expand/collapse), so we need to clamp to the new valid range.
+	// If the user was at the bottom, keep them at the bottom.
+	if !prevAtBottom {
+		maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		if prevYOffset > maxOff {
+			prevYOffset = maxOff
+		}
+		m.viewport.SetYOffset(prevYOffset)
+	}
+}
+
+// openSettingsFromQuickSwitch restores the settings panel after a subscription quick switch.
+// The subscription generation guard (in onSubmit) prevents stale LLM fields from being
+// written back. Here we only need to refresh LLM display values from the new active
+// subscription and preserve global settings from the backup.
+func (m *cliModel) openSettingsFromQuickSwitch() {
+	if m.channel == nil || len(m.panelValuesBackup) == 0 {
+		return
+	}
+	schema := m.channel.SettingsSchema()
+	if len(schema) == 0 {
+		return
+	}
+	// Refresh model list options in the schema (subscription change may affect available models)
+	if m.channel.modelLister != nil {
+		allModels := m.channel.modelLister.ListAllModels()
+		for i, s := range schema {
+			if (s.Key == "llm_model" || s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
+				opts := make([]SettingOption, len(allModels))
+				for j, ml := range allModels {
+					opts[j] = SettingOption{Label: ml, Value: ml}
+				}
+				schema[i].Options = opts
+			}
+		}
+	}
+	// Re-read ALL values fresh (including LLM fields from new active subscription)
+	values := make(map[string]string)
+	if m.channel.config.GetCurrentValues != nil {
+		for k, v := range m.channel.config.GetCurrentValues() {
+			values[k] = v
+		}
+	}
+	if m.channel.settingsSvc != nil {
+		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
+		if err == nil {
+			for k, v := range vals {
+				switch k {
+				case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
+					continue
+				}
+				values[k] = v
+			}
+		}
+	}
+	// Overlay non-LLM settings from backup (preserves user's in-memory edits for global settings)
+	perSubKeys := map[string]bool{
+		"llm_provider": true, "llm_api_key": true, "llm_model": true, "llm_base_url": true,
+	}
+	for k, v := range m.panelValuesBackup {
+		if !perSubKeys[k] {
+			values[k] = v
+		}
+	}
+	cursor := m.panelCursorBackup
+	onSubmit := m.panelOnSubmitBackup
+	// Clear backup
+	m.panelValuesBackup = nil
+	m.panelOnSubmitBackup = nil
+	// Open panel with restored state
+	m.openSettingsPanel(schema, values, onSubmit)
+	m.panelCursor = cursor
 }
 
 // startAgentTurn transitions the model into the "agent processing" state:

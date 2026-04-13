@@ -155,6 +155,7 @@ func newCLIApp() *cliApp {
 	})
 	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 	agentLoop.IndexGlobalTools()
+	agentLoop.LLMFactory().SetModelTiers(cfg.LLM)
 
 	return &cliApp{
 		cfg:       cfg,
@@ -255,10 +256,13 @@ func main() {
 		IsFirstRun: firstRun,
 		GetCurrentValues: func() map[string]string {
 			return map[string]string{
-				"llm_provider": app.cfg.LLM.Provider,
-				"llm_api_key":  app.cfg.LLM.APIKey,
-				"llm_model":    app.cfg.LLM.Model,
-				"llm_base_url": app.cfg.LLM.BaseURL,
+				"llm_provider":   app.cfg.LLM.Provider,
+				"llm_api_key":    app.cfg.LLM.APIKey,
+				"llm_model":      app.cfg.LLM.Model,
+				"llm_base_url":   app.cfg.LLM.BaseURL,
+				"vanguard_model": app.cfg.LLM.VanguardModel,
+				"balance_model":  app.cfg.LLM.BalanceModel,
+				"swift_model":    app.cfg.LLM.SwiftModel,
 				"sandbox_mode": func() string {
 					if app.cfg.Sandbox.Mode != "" {
 						return app.cfg.Sandbox.Mode
@@ -329,6 +333,9 @@ func main() {
 			_, keyChanged := values["llm_api_key"]
 			_, modelChanged := values["llm_model"]
 			_, urlChanged := values["llm_base_url"]
+			_, vanguardChanged := values["vanguard_model"]
+			_, balanceChanged := values["balance_model"]
+			_, swiftChanged := values["swift_model"]
 			if llmChanged || keyChanged || modelChanged || urlChanged {
 				// Write to active subscription
 				for i := range app.cfg.Subscriptions {
@@ -373,6 +380,18 @@ func main() {
 				}
 				// Derive cfg.LLM from active subscription
 				syncLLMFromActiveSub(app.cfg)
+			}
+			if v, ok := values["vanguard_model"]; ok {
+				app.cfg.LLM.VanguardModel = strings.TrimSpace(v)
+			}
+			if v, ok := values["balance_model"]; ok {
+				app.cfg.LLM.BalanceModel = strings.TrimSpace(v)
+			}
+			if v, ok := values["swift_model"]; ok {
+				app.cfg.LLM.SwiftModel = strings.TrimSpace(v)
+			}
+			if app.agentLoop != nil && (vanguardChanged || balanceChanged || swiftChanged) {
+				app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
 			// Apply Sandbox settings
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
@@ -424,6 +443,7 @@ func main() {
 						app.llmClient = newClient
 						if app.agentLoop != nil {
 							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+							app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
 						}
 					} else {
 						log.Warnf("Failed to rebuild LLM client: %v", err)
@@ -462,6 +482,7 @@ func main() {
 					app.llmClient = newClient
 					if app.agentLoop != nil {
 						app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+						app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
 					}
 				} else {
 					log.Warnf("Failed to rebuild LLM client: %v", err)
@@ -523,6 +544,7 @@ func main() {
 			app.llmClient = client
 			if app.agentLoop != nil {
 				app.agentLoop.LLMFactory().SetDefaults(client, model)
+				app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
 			return nil
 		},
@@ -611,7 +633,10 @@ func main() {
 		if ss := app.agentLoop.GetSettingsService(); ss != nil {
 			cliCh.SetSettingsService(ss)
 		}
-		cliCh.SetModelLister(app.agentLoop.LLMFactory())
+		cliCh.SetModelLister(&cliModelLister{
+			factory: app.agentLoop.LLMFactory(),
+			cfg:     app.cfg,
+		})
 		// Inject BgTaskManager for background task display
 		bgSessionKey := "cli:" + cliCfg.ChatID
 		cliCh.SetBgTaskManager(app.agentLoop.BgTaskManager(), bgSessionKey)
@@ -706,7 +731,11 @@ func main() {
 		defer saveWg.Done()
 		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
 	}
-	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig))
+	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig, func(llmCfg config.LLMConfig) {
+		if app.agentLoop != nil {
+			app.agentLoop.LLMFactory().SetModelTiers(llmCfg)
+		}
+	}))
 	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.agentLoop.LLMFactory(), saveConfig))
 
 	// --share flag: auto-connect as runner after TUI starts
@@ -731,14 +760,44 @@ func main() {
 // Adapters: bridge config/types to CLI interfaces
 // ---------------------------------------------------------------------------
 
-// configSubscriptionManager manages CLI subscriptions in config.json (no database).
-type configSubscriptionManager struct {
-	cfg    *config.Config
-	saveFn func() error // persists config to disk
+// cliModelLister wraps LLMFactory + config to implement channel.ModelLister.
+// ListAllModels collects models from default LLM + all config subscriptions.
+type cliModelLister struct {
+	factory *agent.LLMFactory
+	cfg     *config.Config
 }
 
-func newConfigSubscriptionManager(cfg *config.Config, saveFn func() error) *configSubscriptionManager {
-	return &configSubscriptionManager{cfg: cfg, saveFn: saveFn}
+func (l *cliModelLister) ListModels() []string {
+	return l.factory.ListModels()
+}
+
+func (l *cliModelLister) ListAllModels() []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, m := range l.factory.ListModels() {
+		if !seen[m] {
+			seen[m] = true
+			result = append(result, m)
+		}
+	}
+	for _, sub := range l.cfg.Subscriptions {
+		if sub.Model != "" && !seen[sub.Model] {
+			seen[sub.Model] = true
+			result = append(result, sub.Model)
+		}
+	}
+	return result
+}
+
+// configSubscriptionManager manages CLI subscriptions in config.json (no database).
+type configSubscriptionManager struct {
+	cfg      *config.Config
+	saveFn   func() error           // persists config to disk
+	tierSync func(config.LLMConfig) // called after subscription switch to re-sync tier models
+}
+
+func newConfigSubscriptionManager(cfg *config.Config, saveFn func() error, tierSync func(config.LLMConfig)) *configSubscriptionManager {
+	return &configSubscriptionManager{cfg: cfg, saveFn: saveFn, tierSync: tierSync}
 }
 
 func (m *configSubscriptionManager) List(_ string) ([]channel.Subscription, error) {
@@ -814,6 +873,10 @@ func (m *configSubscriptionManager) SetDefault(id string) error {
 	}
 	// Derive cfg.LLM from new active subscription
 	syncLLMFromActiveSub(m.cfg)
+	// Re-sync model tiers (tier fields are global, not per-subscription)
+	if m.tierSync != nil {
+		m.tierSync(m.cfg.LLM)
+	}
 	return m.saveFn()
 }
 
@@ -824,6 +887,9 @@ func (m *configSubscriptionManager) SetModel(id, model string) error {
 			// If modifying active subscription, sync cfg.LLM
 			if m.cfg.Subscriptions[i].Active {
 				syncLLMFromActiveSub(m.cfg)
+				if m.tierSync != nil {
+					m.tierSync(m.cfg.LLM)
+				}
 			}
 			return m.saveFn()
 		}
@@ -857,7 +923,8 @@ func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveF
 }
 
 // syncLLMFromActiveSub derives cfg.LLM.* from the active subscription.
-// This is the ONLY place that writes cfg.LLM fields.
+// It only writes the 6 subscription-derived fields; tier fields (VanguardModel/BalanceModel/SwiftModel)
+// are global and NOT touched here.
 func syncLLMFromActiveSub(cfg *config.Config) {
 	for _, sc := range cfg.Subscriptions {
 		if sc.Active {
@@ -904,6 +971,7 @@ func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 			}
 			s.factory.SetDefaults(client, sc.Model)
 			s.factory.SetDefaultThinkingMode(sc.ThinkingMode)
+			s.factory.SetModelTiers(s.cfg.LLM)
 			// Set active flag + derive cfg.LLM + save (all in one place)
 			for j := range s.cfg.Subscriptions {
 				s.cfg.Subscriptions[j].Active = (s.cfg.Subscriptions[j].ID == sub.ID)
@@ -925,6 +993,7 @@ func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
 		}
 	}
 	syncLLMFromActiveSub(s.cfg)
+	s.factory.SetModelTiers(s.cfg.LLM)
 	if err := s.saveFn(); err != nil {
 		log.WithError(err).Warn("Failed to persist model switch")
 	}
@@ -987,6 +1056,12 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 			APIKey:       cfg.APIKey,
 			DefaultModel: cfg.Model,
 			MaxTokens:    cfg.MaxOutputTokens,
+			OnModelsLoadError: func(err error) {
+				select {
+				case channel.ModelsLoadErrorCh() <- err:
+				default:
+				}
+			},
 		})
 	case "anthropic":
 		inner = llm.NewAnthropicLLM(llm.AnthropicConfig{

@@ -277,6 +277,10 @@ type cliModel struct {
 	panelEditTA   textarea.Model // settings panel: inline editor
 	panelCombo    bool           // settings panel: combo dropdown open
 	panelComboIdx int            // settings panel: combo selected option index
+	// --- Panel state backup (for quick switch round-trip) ---
+	panelValuesBackup   map[string]string              // saved panelValues before quick switch
+	panelCursorBackup   int                            // saved panelCursor before quick switch
+	panelOnSubmitBackup func(values map[string]string) // saved onSubmit callback
 	// --- AskUser panel ---
 	panelItems     []askItem            // askuser panel: question items
 	panelTab       int                  // askuser panel: current tab (question index)
@@ -322,11 +326,20 @@ type cliModel struct {
 	checkingUpdate       bool                // true while /update is in progress
 
 	// --- §15 Subscription / Model Quick Switch ---
-	quickSwitchMode   string              // ""=off, "subscription"=selecting subscription, "model"=selecting model
-	quickSwitchList   []Subscription      // available subscriptions or models
-	quickSwitchCursor int                 // selected index
-	subscriptionMgr   SubscriptionManager // injected by CLIChannel
-	llmSubscriber     LLMSubscriber       // injected by CLIChannel
+	quickSwitchMode          string              // ""=off, "subscription"=selecting subscription, "model"=selecting model
+	quickSwitchList          []Subscription      // available subscriptions or models
+	quickSwitchCursor        int                 // selected index
+	quickSwitchReturnToPanel bool                // true = return to settings panel after switch completes
+	subscriptionMgr          SubscriptionManager // injected by CLIChannel
+	llmSubscriber            LLMSubscriber       // injected by CLIChannel
+
+	// --- §16 Subscription generation guard ---
+	// subGeneration increments every time the active subscription actually changes.
+	// panelSubGeneration captures the generation when the settings panel opens.
+	// ApplySettings REFUSES to write per-subscription LLM fields if generations don't match.
+	// This is the structural guarantee against stale LLM values overwriting a new subscription.
+	subGeneration      int
+	panelSubGeneration int
 
 	// --- §14 Splash 画面 ---
 	splashDone  bool // true = splash 动画结束，进入正常界面

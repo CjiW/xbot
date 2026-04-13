@@ -209,6 +209,11 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 	config, err := sm.loadConfig()
 	if err != nil {
 		if os.IsNotExist(err) {
+			log.WithFields(log.Fields{
+				"session":    sm.sessionKey,
+				"globalPath": sm.globalConfigPath,
+				"userPath":   sm.userConfigPath,
+			}).Debug("No MCP config found (not an error)")
 			return nil // 没有 mcp.json 不是错误
 		}
 		return fmt.Errorf("load mcp config: %w", err)
@@ -326,6 +331,8 @@ func (sm *SessionMCPManager) loadConfig() (*MCPConfig, error) {
 					merged.MCPServers[name] = server
 				}
 			}
+		} else if !os.IsNotExist(err) {
+			log.WithError(err).WithField("path", sm.globalConfigPath).Warn("Failed to read global MCP config")
 		}
 	}
 

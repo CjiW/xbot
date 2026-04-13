@@ -70,6 +70,14 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.senderID = "cli_user"
+
+	// Apply pending injections that were set before model existed
+	if c.pendingTrimHistoryFn != nil {
+		c.model.trimHistoryFn = c.pendingTrimHistoryFn
+	}
+	if c.pendingCheckpointHook != nil {
+		c.model.checkpointHook = c.pendingCheckpointHook
+	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
@@ -245,21 +253,25 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 
 // SetTrimHistoryFn sets the callback for Ctrl+K rewind DB truncation.
 // cutoff is the timestamp threshold — all DB messages with created_at < cutoff will be deleted.
+// If the model hasn't been created yet, the callback is cached and applied later.
 func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
 	c.programMu.Lock()
 	defer c.programMu.Unlock()
 	if c.model != nil {
 		c.model.trimHistoryFn = fn
 	}
+	c.pendingTrimHistoryFn = fn
 }
 
 // SetCheckpointHook sets the file checkpoint hook for Ctrl+K rewind file rollback.
+// If the model hasn't been created yet, the hook is cached and applied later.
 func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
 	c.programMu.Lock()
 	defer c.programMu.Unlock()
 	if c.model != nil {
 		c.model.checkpointHook = hook
 	}
+	c.pendingCheckpointHook = hook
 }
 
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。

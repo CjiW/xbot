@@ -655,7 +655,6 @@ func main() {
 			} else {
 				cliCh.SetCheckpointHook(cpHook)
 				defer cpStore.Cleanup()
-				log.WithField("dir", checkpointDir).Info("Checkpoint hook registered for Ctrl+K rewind")
 			}
 		} else {
 			log.WithError(err).Warn("Failed to create checkpoint store")
@@ -669,7 +668,6 @@ func main() {
 				_, err := cliSessionSvc.PurgeNewerThan(cliTenantID, cutoff)
 				return err
 			})
-			log.WithField("tenantID", cliTenantID).Info("TrimHistoryFn registered for Ctrl+K rewind")
 		} else {
 			log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
 		}

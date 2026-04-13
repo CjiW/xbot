@@ -486,6 +486,9 @@ type CLIChannel struct {
 	// Permission control
 	approvalHook *tools.ApprovalHook // injected to wire CLIApprovalHandler after program creation
 
+	// Pending injections (set before model exists, applied in Start)
+	pendingTrimHistoryFn  func(time.Time) error
+	pendingCheckpointHook *tools.CheckpointHook
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

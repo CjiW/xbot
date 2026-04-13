@@ -849,6 +849,7 @@ type InteractiveSessionInfo struct {
 	Running    bool
 	Background bool
 	Task       string // one-shot subagent task description (empty for interactive)
+	Preview    string // latest progress/last reply summary for panel display
 }
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
@@ -876,6 +877,7 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 			Running:    ia.running,
 			Background: ia.background,
 			Task:       ia.task,
+			Preview:    summarizeInteractivePreviewLocked(ia),
 		}
 		ia.mu.Unlock()
 		results = append(results, info)
@@ -887,4 +889,28 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 // CountInteractiveSessions returns the number of active interactive sessions for the given channel/chatID.
 func (a *Agent) CountInteractiveSessions(channel, chatID string) int {
 	return len(a.ListInteractiveSessions(channel, chatID))
+}
+
+func summarizeInteractivePreviewLocked(ia *interactiveAgent) string {
+	if ia == nil {
+		return ""
+	}
+	if n := len(ia.iterationHistory); n > 0 {
+		snap := ia.iterationHistory[n-1]
+		if snap.Thinking != "" {
+			return snap.Thinking
+		}
+		if snap.Reasoning != "" {
+			return snap.Reasoning
+		}
+		for i := len(snap.Tools) - 1; i >= 0; i-- {
+			if snap.Tools[i].Summary != "" {
+				return snap.Tools[i].Summary
+			}
+		}
+	}
+	if ia.lastError != "" {
+		return "Error: " + ia.lastError
+	}
+	return ia.lastReply
 }

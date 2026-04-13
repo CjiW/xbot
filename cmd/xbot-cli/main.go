@@ -582,6 +582,7 @@ func main() {
 					Running:    s.Running,
 					Background: s.Background,
 					Task:       s.Task,
+					Preview:    s.Preview,
 				}
 			}
 			return entries

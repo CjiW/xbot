@@ -22,6 +22,7 @@ type panelAgentEntry struct {
 	Running    bool   // true = currently executing
 	Background bool   // true = background mode
 	Task       string // one-shot subagent task description
+	Preview    string // latest progress/last reply summary
 }
 
 // openSettingsPanel activates the settings panel overlay.
@@ -453,6 +454,18 @@ func (m *cliModel) viewBgTaskList() string {
 			)
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			if ag.Preview != "" {
+				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
+				preview = strings.TrimSpace(preview)
+				if len(preview) > 64 {
+					preview = preview[:61] + "..."
+				}
+				previewStyle := s.PanelDesc
+				if !ag.Running {
+					previewStyle = previewStyle.Faint(true)
+				}
+				fmt.Fprintf(&sb, "    %s\n", previewStyle.Render(preview))
+			}
 			idx++
 		}
 	}

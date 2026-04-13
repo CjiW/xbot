@@ -442,6 +442,7 @@ type AgentPanelEntry struct {
 	Running    bool
 	Background bool
 	Task       string // one-shot subagent task (empty for interactive)
+	Preview    string // latest progress/last reply summary for panel display
 }
 
 // ---------------------------------------------------------------------------

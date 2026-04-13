@@ -1549,6 +1549,8 @@ func (m *cliModel) fullRebuild() {
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
 			boundary := m.renderDeleteBoundaryLine()
+			// 记录红线在 viewport 中的行号：当前消息结束后的下一行
+			m.redLineWrappedPos = runningLines + wrappedLineCount(chunk, m.width)
 			historyBuf.WriteString(boundary)
 		}
 		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
@@ -1571,39 +1573,28 @@ func (m *cliModel) fullRebuild() {
 	// §9 Ctrl+K 红线：设置内容后定位到红线
 	if m.confirmDelete > 0 {
 		m.setViewportContentForScroll(sb.String())
-		m.scrollToRedLine()
+		m.applyRedLineScroll()
 	} else {
 		m.setViewportContent(sb.String())
 	}
 }
 
-// scrollToRedLine finds the red line boundary in the viewport content and scrolls to it.
-// Uses viewport's GetContent() to find the boundary, guaranteeing line number matches.
-func (m *cliModel) scrollToRedLine() {
-	if m.confirmDelete <= 0 {
+// applyRedLineScroll scrolls the viewport to the cached red line position.
+// Called after setViewportContentForScroll in fullRebuild.
+func (m *cliModel) applyRedLineScroll() {
+	if m.confirmDelete <= 0 || m.redLineWrappedPos < 0 {
 		return
-	}
-	content := m.viewport.GetContent()
-	idx := strings.Index(content, "rewind below")
-	if idx < 0 {
-		return
-	}
-	// Count newlines before the red line to get the viewport line number
-	lineNum := strings.Count(content[:idx], "\n")
-	// Scroll so the red line appears a few lines from the top
-	scrollTarget := lineNum - 2
-	if scrollTarget < 0 {
-		scrollTarget = 0
 	}
 	maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
 	if maxOff < 0 {
 		maxOff = 0
 	}
-	if scrollTarget > maxOff {
-		scrollTarget = maxOff
+	target := m.redLineWrappedPos
+	if target > maxOff {
+		target = maxOff
 	}
-	m.viewport.SetYOffset(scrollTarget)
-	m.redLineTargetYOff = scrollTarget
+	m.viewport.SetYOffset(target)
+	m.redLineTargetYOff = target
 }
 
 // scrollToRedLineIfNeeded restores the viewport to the cached red line position.

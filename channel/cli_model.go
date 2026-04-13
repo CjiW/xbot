@@ -257,6 +257,7 @@ type cliModel struct {
 	confirmDelete     int                   // >0 = in rewind confirmation mode, value = turns to rewind
 	checkpointHook    *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
 	rewindResult      *tools.RewindResult   // result of the last rewind operation (for display)
+	redLineWrappedPos int                   // viewport line number where red line starts (set by fullRebuild)
 	redLineTargetYOff int                   // cached YOffset to keep red line visible during confirmDelete mode
 
 	// --- §10 TODO 进度条 ---

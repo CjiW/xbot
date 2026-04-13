@@ -4,8 +4,10 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/termenv"
+	"hash/fnv"
 	"image/color"
 	"os"
+	"strings"
 )
 
 func init() {
@@ -603,4 +605,45 @@ func ThemeNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// roleColorPalette provides distinct hues for known SubAgent roles.
+// Roles not listed here get a deterministic color from hash.
+var roleColorPalette = map[string]string{
+	"explore":            "#8ab4f8", // blue
+	"debug":              "#f28b82", // red
+	"secretariat":        "#c58af9", // purple
+	"chancellery":        "#fdd663", // yellow
+	"department-state":   "#81c995", // green
+	"crown-prince":       "#ff8a65", // orange
+	"ministry-works":     "#4dd0e1", // cyan
+	"ministry-justice":   "#ef5350", // red-alt
+	"ministry-personnel": "#ab47bc", // purple-alt
+	"ministry-revenue":   "#66bb6a", // green-alt
+	"ministry-defense":   "#ffa726", // amber
+	"ministry-rites":     "#42a5f5", // blue-alt
+	"github":             "#f0f6fc", // white (GitHub logo)
+	"gitlab":             "#fc6d26", // GitLab orange
+	"pipeline-operator":  "#4dd0e1", // cyan
+}
+
+// fallbackRoleHues is a pool of visually distinct hues for unknown roles.
+var fallbackRoleHues = []string{
+	"#8ab4f8", "#81c995", "#c58af9", "#fdd663", "#f28b82",
+	"#4dd0e1", "#ff8a65", "#ab47bc", "#66bb6a", "#42a5f5",
+	"#ef5350", "#ffa726",
+}
+
+// RoleColor returns a lipgloss.Color for a SubAgent role name.
+// Known roles get a fixed color from roleColorPalette; unknown roles get
+// a deterministic color from hash so the same role always has the same color.
+func RoleColor(role string) string {
+	if c, ok := roleColorPalette[role]; ok {
+		return c
+	}
+	// Deterministic hash for unknown roles
+	h := fnv.New32a()
+	h.Write([]byte(strings.ToLower(role)))
+	idx := h.Sum32() % uint32(len(fallbackRoleHues))
+	return fallbackRoleHues[idx]
 }

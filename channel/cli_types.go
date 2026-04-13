@@ -173,7 +173,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
+	"/new", "/quit", "/rewind", "/search", "/settings", "/setup", "/tasks", "/update",
 	"/usage",
 }
 
@@ -198,6 +198,7 @@ type CLIProgressPayload struct {
 	SubAgents      []CLISubAgent
 	Todos          []CLITodoItem
 	TokenUsage     *CLITokenUsage // Token 用量快照（实时更新）
+	StreamContent  string         // LLM streaming text content (accumulated, for real-time render)
 }
 
 // CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）
@@ -441,6 +442,8 @@ type AgentPanelEntry struct {
 	Instance   string
 	Running    bool
 	Background bool
+	Task       string // one-shot subagent task (empty for interactive)
+	Preview    string // latest progress/last reply summary for panel display
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +489,9 @@ type CLIChannel struct {
 	// Permission control
 	approvalHook *tools.ApprovalHook // injected to wire CLIApprovalHandler after program creation
 
+	// Pending injections (set before model exists, applied in Start)
+	pendingTrimHistoryFn  func(time.Time) error
+	pendingCheckpointHook *tools.CheckpointHook
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

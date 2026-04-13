@@ -111,3 +111,109 @@ func CollectStream(ctx context.Context, eventCh <-chan StreamEvent) (*LLMRespons
 
 	return &resp, nil
 }
+
+// CollectStreamWithCallback is like CollectStream but calls onContent with the
+// accumulated text content after each EventContent delta. It does NOT call
+// onContent for EventReasoningContent (thinking tokens). EventError handling
+// is identical to CollectStream (returns partial content).
+func CollectStreamWithCallback(ctx context.Context, eventCh <-chan StreamEvent, onContent func(content string)) (*LLMResponse, error) {
+	var resp LLMResponse
+	var content strings.Builder
+	var reasoningContent strings.Builder
+	toolCalls := make(map[int]*ToolCallDelta) // index → accumulated delta
+
+	for ev := range eventCh {
+		// Check context cancellation between events
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		switch ev.Type {
+		case EventContent:
+			content.WriteString(ev.Content)
+			if onContent != nil {
+				onContent(content.String())
+			}
+		case EventReasoningContent:
+			reasoningContent.WriteString(ev.ReasoningContent)
+		case EventToolCall:
+			if ev.ToolCall == nil {
+				continue
+			}
+			idx := ev.ToolCall.Index
+			tc := toolCalls[idx]
+			if tc == nil {
+				tc = &ToolCallDelta{Index: idx}
+				toolCalls[idx] = tc
+			}
+			if ev.ToolCall.ID != "" {
+				tc.ID = ev.ToolCall.ID
+			}
+			if ev.ToolCall.Name != "" {
+				tc.Name = ev.ToolCall.Name
+			}
+			tc.Arguments += ev.ToolCall.Arguments
+		case EventUsage:
+			if ev.Usage != nil {
+				resp.Usage = *ev.Usage
+			}
+		case EventDone:
+			if ev.FinishReason != "" {
+				resp.FinishReason = ev.FinishReason
+			}
+		case EventError:
+			if ev.Error != "" {
+				resp.Content = content.String()
+				resp.ReasoningContent = reasoningContent.String()
+				if len(toolCalls) > 0 {
+					maxIdx := -1
+					for idx := range toolCalls {
+						if idx > maxIdx {
+							maxIdx = idx
+						}
+					}
+					for i := 0; i <= maxIdx; i++ {
+						if tc, ok := toolCalls[i]; ok {
+							resp.ToolCalls = append(resp.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Name, Arguments: tc.Arguments})
+						}
+					}
+				}
+				return &resp, fmt.Errorf("stream error: %s", ev.Error)
+			}
+		}
+	}
+
+	resp.Content = content.String()
+	resp.ReasoningContent = reasoningContent.String()
+
+	// Convert map to ordered slice by index
+	if len(toolCalls) > 0 {
+		maxIdx := -1
+		for idx := range toolCalls {
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		resp.ToolCalls = make([]ToolCall, 0, len(toolCalls))
+		for i := 0; i <= maxIdx; i++ {
+			tc, ok := toolCalls[i]
+			if !ok {
+				continue
+			}
+			resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			})
+		}
+	}
+
+	// Infer finish_reason from actual response data.
+	if resp.FinishReason == "" && len(resp.ToolCalls) > 0 {
+		resp.FinishReason = FinishReasonToolCalls
+	}
+
+	return &resp, nil
+}

@@ -12,6 +12,7 @@ import (
 type contextKey string
 
 const permUsersKey contextKey = "perm_users"
+const workingDirKey contextKey = "working_dir"
 
 // PermUsersFromContext retrieves the permission control user config from context.
 func PermUsersFromContext(ctx context.Context) (defaultUser, privilegedUser string) {
@@ -41,6 +42,20 @@ func WithPermUsers(ctx context.Context, defaultUser, privilegedUser string) cont
 		DefaultUser:    defaultUser,
 		PrivilegedUser: privilegedUser,
 	})
+}
+
+// WithWorkingDir injects the agent's working directory into context.
+// Used by checkpoint hook to resolve relative file paths to absolute.
+func WithWorkingDir(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, workingDirKey, dir)
+}
+
+// WorkingDirFromContext retrieves the working directory from context.
+func WorkingDirFromContext(ctx context.Context) string {
+	if dir, ok := ctx.Value(workingDirKey).(string); ok {
+		return dir
+	}
+	return ""
 }
 
 // ApprovalRequest represents a pending user approval for a tool execution.

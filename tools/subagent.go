@@ -57,13 +57,14 @@ Persistent multi-turn session. Create once, send multiple messages, unload when 
 
 ## Background rule
 Only interactive sub-agents may run in background mode.
+Prefer foreground execution by default. Use background=true only when the sub-agent truly needs to keep running while the caller does other work; using background=true and then immediately waiting/sleeping for the result is effectively the same as foreground mode, just with more complexity.
 
 Parameters (JSON):
   - task: string (required except some control actions), the task or message for the sub-agent
   - role: string (required), predefined role name
   - instance: string (REQUIRED on every call), unique instance ID used to identify the session/run
   - interactive: boolean (optional), create or reuse an interactive session
-  - background: boolean (optional), only valid when interactive=true
+  - background: boolean (optional), only valid when interactive=true; prefer false unless there is a concrete need to let the caller continue doing other work before checking back later
   - action: string (optional), one of "send", "unload", "inspect", "interrupt"
 
 Available roles are listed in the <available_agents> section of the system prompt.`
@@ -75,7 +76,7 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 		{Name: "role", Type: "string", Description: "Predefined role name (for example: code-reviewer)", Required: true},
 		{Name: "instance", Type: "string", Description: `REQUIRED on every call. Stable unique ID for this sub-agent run/session. Never omit it. Examples: "review-1", "planner-main", "bugfix-login".`, Required: true},
 		{Name: "interactive", Type: "boolean", Description: "Create or reuse an interactive session for multi-turn conversation"},
-		{Name: "background", Type: "boolean", Description: "Run the interactive sub-agent in background mode. Only valid when interactive=true."},
+		{Name: "background", Type: "boolean", Description: "Run the interactive sub-agent in background mode. Only valid when interactive=true. Prefer foreground by default; use this only when the caller genuinely needs to continue other work and check back later."},
 		{Name: "action", Type: "string", Description: `Optional control action: "send", "unload", "inspect", or "interrupt".`},
 		{Name: "tail", Type: "integer", Description: "For action=\"inspect\": number of recent iterations to show (default: 5)."},
 	}

@@ -48,6 +48,14 @@ type UIBuilder interface {
 	BuildProgressUI(ctx context.Context, progress interface{}) string
 }
 
+// StreamRenderer is implemented by channels that support real-time stream rendering.
+// When a channel implements this interface AND enable_stream=true in settings,
+// the agent pushes content deltas as IsPartial messages during LLM streaming.
+type StreamRenderer interface {
+	// SupportsStreamRender returns true if the channel can render stream content in real-time.
+	SupportsStreamRender() bool
+}
+
 // BuildTextSettingsUI builds a Markdown-formatted text representation of settings.
 // Used as fallback for channels that don't implement UIBuilder.
 func BuildTextSettingsUI(schema []SettingDefinition, currentValues map[string]string) string {

@@ -125,6 +125,12 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	// Sync checkpoint hook turn index
+	if m.checkpointHook != nil {
+		m.checkpointHook.SetTurnIdx(int(m.agentTurnID))
+	}
+	// Clear rewind result when new turn starts
+	m.rewindResult = nil
 	m.updatePlaceholder()
 	m.inputReady = false
 	m.resetProgressState()

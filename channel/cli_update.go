@@ -108,6 +108,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, cmd := m.handleQuickSwitchKey(key); handled {
 			return m, cmd
 		}
+		// §9 Rewind overlay: same priority as quick switch.
+		if handled, cmd := m.handleRewindKey(key); handled {
+			return m, cmd
+		}
 	}
 
 	// §12 Panel mode: intercept all key events when panel is active

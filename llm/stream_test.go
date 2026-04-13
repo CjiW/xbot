@@ -147,3 +147,104 @@ func TestCollectStream_SlowStream(t *testing.T) {
 		t.Errorf("content = %q, want %q", resp.Content, "ab")
 	}
 }
+
+func TestCollectStreamWithCallback_ContentAccumulated(t *testing.T) {
+	ch := make(chan StreamEvent, 10)
+	ch <- StreamEvent{Type: EventContent, Content: "hello "}
+	ch <- StreamEvent{Type: EventContent, Content: "world"}
+	ch <- StreamEvent{Type: EventDone, FinishReason: FinishReasonStop}
+	close(ch)
+
+	var calls []string
+	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
+		calls = append(calls, content)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "hello world" {
+		t.Errorf("content = %q, want %q", resp.Content, "hello world")
+	}
+	if len(calls) != 2 {
+		t.Fatalf("callback calls = %d, want 2", len(calls))
+	}
+	if calls[0] != "hello " {
+		t.Errorf("calls[0] = %q, want %q", calls[0], "hello ")
+	}
+	if calls[1] != "hello world" {
+		t.Errorf("calls[1] = %q, want %q", calls[1], "hello world")
+	}
+}
+
+func TestCollectStreamWithCallback_ReasoningNotCalled(t *testing.T) {
+	ch := make(chan StreamEvent, 10)
+	ch <- StreamEvent{Type: EventReasoningContent, ReasoningContent: "think"}
+	ch <- StreamEvent{Type: EventContent, Content: "answer"}
+	ch <- StreamEvent{Type: EventDone, FinishReason: FinishReasonStop}
+	close(ch)
+
+	var calls []string
+	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
+		calls = append(calls, content)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.ReasoningContent != "think" {
+		t.Errorf("reasoning = %q, want %q", resp.ReasoningContent, "think")
+	}
+	// Callback should only be called once (for the content event, not reasoning)
+	if len(calls) != 1 {
+		t.Fatalf("callback calls = %d, want 1", len(calls))
+	}
+	if calls[0] != "answer" {
+		t.Errorf("calls[0] = %q, want %q", calls[0], "answer")
+	}
+}
+
+func TestCollectStreamWithCallback_ErrorReturnsPartial(t *testing.T) {
+	ch := make(chan StreamEvent, 10)
+	ch <- StreamEvent{Type: EventContent, Content: "partial"}
+	ch <- StreamEvent{Type: EventError, Error: "connection reset"}
+	close(ch)
+
+	var calls []string
+	resp, err := CollectStreamWithCallback(context.Background(), ch, func(content string) {
+		calls = append(calls, content)
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err.Error() != "stream error: connection reset" {
+		t.Errorf("error = %q, want %q", err.Error(), "stream error: connection reset")
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response with partial content")
+	}
+	if resp.Content != "partial" {
+		t.Errorf("resp.Content = %q, want %q", resp.Content, "partial")
+	}
+	// Callback should have been called once before the error
+	if len(calls) != 1 {
+		t.Fatalf("callback calls = %d, want 1", len(calls))
+	}
+	if calls[0] != "partial" {
+		t.Errorf("calls[0] = %q, want %q", calls[0], "partial")
+	}
+}
+
+func TestCollectStreamWithCallback_NilCallback(t *testing.T) {
+	ch := make(chan StreamEvent, 10)
+	ch <- StreamEvent{Type: EventContent, Content: "hello"}
+	ch <- StreamEvent{Type: EventDone, FinishReason: FinishReasonStop}
+	close(ch)
+
+	// Nil callback should not panic
+	resp, err := CollectStreamWithCallback(context.Background(), ch, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Content != "hello" {
+		t.Errorf("content = %q, want %q", resp.Content, "hello")
+	}
+}

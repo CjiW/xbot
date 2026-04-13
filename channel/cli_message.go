@@ -312,6 +312,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		m.cachedHistory = ""
 		m.exitSearch()
 
+	case "/rewind":
+		m.openRewindPanel()
+
 	case "/settings":
 		// Open interactive settings panel locally
 		if m.channel != nil {
@@ -887,7 +890,23 @@ func (m *cliModel) renderProgressBlock() string {
 
 		// Phase-specific fallback when no tools are shown
 		hasTools := len(m.progress.ActiveTools) > 0 || len(m.progress.CompletedTools) > 0
-		if !hasTools {
+
+		// Stream content: render LLM output in progress block when streaming
+		if m.progress.StreamContent != "" {
+			for _, line := range strings.Split(m.progress.StreamContent, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				for _, wl := range strings.Split(hardWrapRunes(line, innerWidth-thinkingW), "\n") {
+					sb.WriteString(thinkingGuide.Render("  │ ") + thinkingStyle.Render(wl))
+					sb.WriteString("\n")
+				}
+			}
+			// Blinking cursor at end of stream content
+			sb.WriteString(s.StreamCursor.Render("▋"))
+			sb.WriteString("\n")
+		} else if !hasTools {
 			switch m.progress.Phase {
 			case "thinking":
 				sb.WriteString("  ")
@@ -969,7 +988,7 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 			}
 		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := m.styles.ProgressRunning
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(RoleColor(sa.Role)))
 		switch sa.Status {
 		case "error":
 			icon = "✗"
@@ -1273,22 +1292,6 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	return sb.String()
 }
 
-// setViewportContentForScroll is like setViewportContent but skips GotoBottom(),
-// allowing the caller to set a precise YOffset afterwards (e.g. for Ctrl+K red line).
-func (m *cliModel) setViewportContentForScroll(content string) {
-	if m.width > 0 {
-		lines := strings.Split(content, "\n")
-		var wrapped []string
-		for _, line := range lines {
-			line = strings.TrimRight(line, " \t")
-			wrapped = append(wrapped, strings.Split(hardWrapRunes(line, m.width), "\n")...)
-		}
-		content = strings.Join(wrapped, "\n")
-	}
-	m.viewport.SetContent(content)
-	m.newContentHint = false
-}
-
 // setViewportContent sets viewport content while preserving scroll position.
 // If the user was at the bottom before the update, keep them at the bottom.
 // Lines wider than the viewport are truncated to prevent layout breakage.
@@ -1333,28 +1336,6 @@ func wrappedLineCount(content string, width int) int {
 	return count
 }
 
-// renderDeleteBoundaryLine 渲染 Ctrl+K 删除边界红线。
-func (m *cliModel) renderDeleteBoundaryLine() string {
-	w := m.width
-	if w <= 0 {
-		w = 80
-	}
-	redStyle := m.styles.ProgressError // §20
-	label := " ✂ delete below "
-	// label 的可见宽度（不含 ANSI 转义）
-	labelWidth := lipgloss.Width(redStyle.Bold(true).Render(label))
-	totalPad := w - labelWidth
-	if totalPad < 0 {
-		totalPad = 0
-	}
-	leftPad := totalPad / 2
-	rightPad := totalPad - leftPad
-	line := redStyle.Bold(true).Render(
-		strings.Repeat("━", leftPad) + label + strings.Repeat("━", rightPad),
-	)
-	return "\n" + line + "\n"
-}
-
 // visibleTurnIndices 返回每个"对话轮次"的起始 slice 索引。
 // 每个 turn 以 user 消息开头，包含之后所有的 assistant/tool_summary 消息
 // 直到下一个 user 消息为止。tool_summary 自动归属其前面最近的 user 所在的 turn。
@@ -1393,13 +1374,14 @@ func (m *cliModel) updateViewportContent() {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
+		sb.WriteString(m.renderRewindResultBlock())
 		m.setViewportContent(sb.String())
 		return
 	}
 
-	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索、无删除确认）
+	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索）
 	// 只渲染新增的 dirty 消息并追加到 cachedHistory，跳过全量重建。
-	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode && m.confirmDelete == 0 &&
+	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode &&
 		len(m.messages) > m.cachedMsgCount {
 		m.appendNewMessagesToCache()
 		return
@@ -1422,10 +1404,12 @@ func (m *cliModel) updateStreamingOnly() {
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
 
+	// Append rewind result block
+	sb.WriteString(m.renderRewindResultBlock())
+
 	m.setViewportContent(sb.String())
 }
 
-// appendNewMessagesToCache incrementally renders and appends only the new messages
 // since cachedMsgCount, updating cachedHistory and msgLineOffsets without rebuilding
 // old messages. This is O(new_messages) instead of O(all_messages).
 func (m *cliModel) appendNewMessagesToCache() {
@@ -1460,6 +1444,7 @@ func (m *cliModel) appendNewMessagesToCache() {
 	var vp strings.Builder
 	vp.WriteString(m.cachedHistory)
 	vp.WriteString(m.renderProgressBlock())
+	vp.WriteString(m.renderRewindResultBlock())
 	m.setViewportContent(vp.String())
 }
 
@@ -1473,20 +1458,9 @@ func (m *cliModel) fullRebuild() {
 		splitIdx = m.streamingMsgIdx
 	}
 
-	// §9 Ctrl+K 红线：根据可见消息组计算删除边界 slice 索引
-	var redLineInsertIdx = -1
-	if m.confirmDelete > 0 {
-		groups := visibleMsgGroupIndices(m.messages)
-		if m.confirmDelete <= len(groups) {
-			redLineInsertIdx = groups[len(groups)-m.confirmDelete] - 1
-		}
-	}
-
 	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
 	m.msgLineOffsets = m.msgLineOffsets[:0]
 	runningLines := 0
-	// §9 Ctrl+K 红线：记录红线在折行后的 viewport 行号
-	var redLineWrappedPos = -1
 	for i := range m.messages[:splitIdx] {
 		// §19 记录消息在 viewport 折行后内容中的起始行号
 		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
@@ -1508,13 +1482,7 @@ func (m *cliModel) fullRebuild() {
 			chunk = indicator + chunk
 		}
 		historyBuf.WriteString(m.messages[i].rendered)
-		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
-		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
-			boundary := m.renderDeleteBoundaryLine()
-			redLineWrappedPos = runningLines + wrappedLineCount(chunk+"\n"+boundary, m.width)
-			historyBuf.WriteString(boundary)
-		}
-		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
+		// 累加本消息（含搜索指示条）在折行后占用的行数
 		runningLines += wrappedLineCount(chunk, m.width)
 	}
 
@@ -1522,39 +1490,16 @@ func (m *cliModel) fullRebuild() {
 	m.renderCacheValid = true
 	m.cachedMsgCount = len(m.messages)
 
-	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block
+	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block + rewind result
 	var sb strings.Builder
 	sb.WriteString(m.cachedHistory)
 	if m.streamingMsgIdx >= 0 {
 		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
 	}
 	sb.WriteString(m.renderProgressBlock())
+	sb.WriteString(m.renderRewindResultBlock())
 
-	// §9 Ctrl+K 红线：设置内容时禁止 GotoBottom，以便随后精确定位红线
-	if m.confirmDelete > 0 {
-		m.setViewportContentForScroll(sb.String())
-	} else {
-		m.setViewportContent(sb.String())
-	}
-
-	// §9 Ctrl+K 红线：自动滚动到红线位置（使用折行后的精确行号）
-	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
-		vpHeight := m.viewport.Height()
-		totalLines := m.viewport.TotalLineCount()
-		// 将红线定位到视口中央偏上（留 3 行上方边距）
-		targetY := redLineWrappedPos - 3
-		if targetY < 0 {
-			targetY = 0
-		}
-		maxOff := totalLines - vpHeight
-		if maxOff < 0 {
-			maxOff = 0
-		}
-		if targetY > maxOff {
-			targetY = maxOff
-		}
-		m.viewport.SetYOffset(targetY)
-	}
+	m.setViewportContent(sb.String())
 }
 
 // isSearchMatch 检查消息是否匹配当前搜索（§21）
@@ -1715,6 +1660,41 @@ func idleTickCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return idleTickMsg{}
 	})
+}
+
+// renderRewindResultBlock renders the rewind result summary after a /rewind operation.
+// NOTE: This is a pure render function — it does NOT modify m.rewindResult.
+// The result is cleared when a new agent turn starts (in startAgentTurn).
+func (m *cliModel) renderRewindResultBlock() string {
+	if m.rewindResult == nil {
+		return ""
+	}
+	r := m.rewindResult
+
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sb.WriteString(m.styles.ProgressDone.Bold(true).Render("  Rewind complete"))
+	sb.WriteString("\n")
+
+	if len(r.Restored) > 0 {
+		fmt.Fprintf(&sb, "  Files restored: %d\n", len(r.Restored))
+		for _, f := range r.Restored {
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+		}
+	}
+	if len(r.CreatedDel) > 0 {
+		fmt.Fprintf(&sb, "  Files deleted: %d\n", len(r.CreatedDel))
+		for _, f := range r.CreatedDel {
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+		}
+	}
+	if len(r.Errors) > 0 {
+		for _, e := range r.Errors {
+			sb.WriteString(m.styles.ProgressError.Render(fmt.Sprintf("  Error: %s\n", e)))
+		}
+	}
+
+	return sb.String()
 }
 
 // tickerCmd is deprecated — ticker is now driven by cliTickMsg.

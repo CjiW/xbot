@@ -148,15 +148,6 @@ func (m *cliModel) View() tea.View {
 			input,
 			toastStr,
 		)
-	} else if m.confirmDelete > 0 {
-		warningText := m.styles.WarningBold.Render(fmt.Sprintf(m.locale.ConfirmDelete, m.confirmDelete))
-		content = fmt.Sprintf(
-			"%s\n%s\n%s\n%s",
-			titleBar,
-			m.viewport.View(),
-			warningText,
-			input,
-		)
 	} else if m.panelMode == "askuser" {
 		// §12b AskUser split layout: viewport visible above, panel at bottom
 		// Note: no panelFooter here — hints are inside the panel (viewAskUserPanel)
@@ -340,6 +331,14 @@ func (m *cliModel) View() tea.View {
 	// Rendered as a centered panel replacing the entire view.
 	if m.quickSwitchMode != "" {
 		overlay := m.viewQuickSwitch(m.width, m.height)
+		if overlay != "" {
+			v.Content = overlay
+		}
+	}
+
+	// §9 Rewind overlay (/rewind command)
+	if m.rewindMode {
+		overlay := m.viewRewindPanel(m.width, m.height)
 		if overlay != "" {
 			v.Content = overlay
 		}

@@ -386,6 +386,17 @@ func (a *Agent) buildMainRunConfig(
 			}
 			if vals["enable_stream"] == "true" {
 				cfg.Stream = true
+				// Wire stream content callback: push accumulated content into progress block
+				// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
+				if ch, ok := a.channelFinder("cli"); ok {
+					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+						cfg.StreamContentFunc = func(content string) {
+							cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
+								StreamContent: content,
+							})
+						}
+					}
+				}
 			}
 		}
 	}
@@ -863,28 +874,11 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 			}
 		}
 
-		// 5. Run pre-tool hooks (inject perm users into context for ApprovalHook)
-		if cfg.HookChain != nil {
-			hookCtx := toolExecCtx
-			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
-				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
-			}
-		}
-
-		// 6. 构建 ToolContext（统一路径，只有 ctx 变化）
+		// 5. 构建 ToolContext（统一路径，只有 ctx 变化）
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		// 7. Execute tool with timing
-		start := time.Now()
-		result, err := tool.Execute(toolCtx, tc.Arguments)
-		elapsed := time.Since(start)
-
-		// 8. Run post-tool hooks (always, even on error)
-		if cfg.HookChain != nil {
-			cfg.HookChain.RunPost(ctx, tc.Name, tc.Arguments, result, err, elapsed)
-		}
-
-		return result, err
+		// 6-8. Execute with hooks (shared implementation — same as defaultToolExecutor)
+		return executeWithHooks(cfg.HookChain, toolExecCtx, toolCtx, tc.Name, tc.Arguments, tool)
 	}
 }
 
@@ -1169,17 +1163,36 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 
 	cfg := a.buildSubAgentRunConfig(ctx, parentCtx, task, systemPrompt, allowedTools, caps, roleName, false, subModel)
 
-	// SubAgent 进度上报：优先使用父 Agent 注入的回调（避免并发 SubAgent 互相覆盖 patch），
-	// 否则 fallback 到直接发送消息（非并行场景）。
-	// 进度穿透：子 Agent 的 ProgressNotifier 不仅上报自身进度，还注入回调到 subCtx
-	// 让更深层 SubAgent 也能递归穿透进度到最顶层。
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		rn := roleName
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(rn).Chain
+	// SubAgent 进度上报：统一走穿透回调模式。
+	// 顶层 agent（无 parent callback）创建 root callback，只渲染 depth=1（直接子 agent）的进度。
+	// 深层子 agent 的进度通过穿透回调冒泡上来，但 depth>1 不发送到聊天窗口。
+	myDepth := cc.Depth() + 1
+	myPath := cc.Spawn(roleName).Chain
+
+	// 确定当前层级使用的 parent callback（可能为 nil）
+	parentCB, _ := SubAgentProgressFromContext(ctx)
+
+	// 构建 subCtx：传递 CallChain + 穿透回调
+	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
+
+	// 注入穿透回调到 subCtx，让更深层 SubAgent 递归上报进度到顶层
+	// 穿透回调包装 parentCB，累加 depth 和 path
+	subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
+		detail.Depth = myDepth + detail.Depth
+		if len(detail.Path) == 0 {
+			detail.Path = myPath
+		}
+		if parentCB != nil {
+			parentCB(detail)
+		}
+	})
+
+	// 设置当前层级的 ProgressNotifier
+	if parentCB != nil {
+		// 非顶层：穿透进度到父 agent（由上面的穿透回调处理）
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
-				cb(SubAgentProgressDetail{
+				parentCB(SubAgentProgressDetail{
 					Path:  myPath,
 					Lines: lines,
 					Depth: myDepth,
@@ -1187,7 +1200,8 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 			}
 		}
 	} else if originChannel != "" && originChatID != "" {
-		rn := roleName // 闭包捕获
+		// 顶层 agent（交互式）：只发送 depth=1 的进度到聊天窗口
+		rn := roleName
 		cfg.ProgressNotifier = func(lines []string) {
 			if len(lines) > 0 {
 				last := lines[len(lines)-1]
@@ -1200,23 +1214,39 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		}
 	}
 
-	// 传递 CallChain 给子 Agent
-	subCtx := WithCallChain(ctx, cc.Spawn(roleName))
+	// Register one-shot subagent in interactiveSubAgents so it's visible
+	// in the task & agents panel. Removed immediately after Run completes.
+	oneshotInstance := fmt.Sprintf("oneshot-%s-%d", roleName, time.Now().UnixNano())
+	oneshotKey := interactiveKey(originChannel, originChatID, roleName, oneshotInstance)
+	oneshotIA := &interactiveAgent{
+		roleName:   roleName,
+		instance:   oneshotInstance,
+		lastUsed:   time.Now(),
+		running:    true,
+		background: false,
+		task:       task,
+	}
+	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
 
-	// 注入穿透回调到 subCtx，让子 Agent 的 execOne 能获取并递归上报进度到父 Agent
-	if cb, ok := SubAgentProgressFromContext(ctx); ok {
-		myDepth := cc.Depth() + 1
-		myPath := cc.Spawn(roleName).Chain
-		subCtx = WithSubAgentProgress(subCtx, func(detail SubAgentProgressDetail) {
-			detail.Depth = myDepth + detail.Depth
-			if len(detail.Path) == 0 {
-				detail.Path = myPath
-			}
-			cb(detail)
-		})
+	// Wire incremental snapshot callback so iteration history is available
+	// during Run() for panel preview and inspect — not only after completion.
+	cfg.OnIterationSnapshot = func(snap IterationSnapshot) {
+		oneshotIA.iterationHistory = append(oneshotIA.iterationHistory, snap)
 	}
 
 	out := Run(subCtx, cfg)
+
+	// Populate iteration history so inspect can show results after completion
+	oneshotIA.running = false
+	if out != nil {
+		oneshotIA.lastReply = out.Content
+		log.Ctx(ctx).WithField("iteration_count", len(oneshotIA.iterationHistory)).Info("oneshot subagent completed")
+	} else {
+		log.Ctx(ctx).Warn("oneshot subagent returned nil output")
+	}
+	// One-shot agents are ephemeral: remove immediately after completion.
+	// Unlike interactive sessions, there's no "send more messages" use case.
+	a.interactiveSubAgents.Delete(oneshotKey)
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

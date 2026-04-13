@@ -6,8 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	log "xbot/logger"
 )
 
 // handleKeyPress processes key press events in the main update loop.
@@ -15,60 +13,6 @@ import (
 // immediately; otherwise, post-switch processing (viewport/textarea update) should continue.
 func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Model, []tea.Cmd, bool) {
 	var cmds []tea.Cmd
-
-	// §9 Ctrl+K 确认模式：必须在 switch msg.Code 之前拦截所有按键
-	if m.confirmDelete > 0 {
-		groups := visibleMsgGroupIndices(m.messages)
-		switch msg.String() {
-		case "y", "Y":
-			// 确认删除：根据 turn 索引截断
-			if m.confirmDelete > len(groups) {
-				m.confirmDelete = len(groups)
-			}
-			cutIdx := groups[len(groups)-m.confirmDelete]
-			m.messages = m.messages[:cutIdx]
-			// 同步截断数据库中的 session messages（异步避免阻塞 UI）
-			// safe: 此时 typing=false，输入被 confirmDelete 拦截，不会有并发写入
-			if m.trimHistoryFn != nil {
-				keepCount := cutIdx
-				go func() {
-					if err := m.trimHistoryFn(keepCount); err != nil {
-						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
-					}
-				}()
-			}
-			m.confirmDelete = 0
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			m.updateViewportContent()
-			return m, nil, true
-		case "n", "N":
-			// 取消删除
-			m.confirmDelete = 0
-			m.renderCacheValid = false
-			m.updateViewportContent()
-			return m, nil, true
-		default:
-			// 检查数字键（调整删除数量）
-			if len(msg.Text) > 0 {
-				if len(msg.Text) == 1 && msg.Text[0] >= '1' && msg.Text[0] <= '9' {
-					newDel := int(msg.Text[0] - '0')
-					if newDel > len(groups) {
-						newDel = len(groups)
-					}
-					m.confirmDelete = newDel
-					m.renderCacheValid = false
-					m.updateViewportContent()
-					return m, nil, true
-				}
-			}
-			// 其他键也取消（包括 Esc）
-			m.confirmDelete = 0
-			m.renderCacheValid = false
-			m.updateViewportContent()
-			return m, nil, true
-		}
-	}
 
 	// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
 	if m.easterEgg != easterEggNone {
@@ -325,23 +269,6 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		m.handleTabComplete()
 		return m, nil, true
 
-	case msg.String() == "ctrl+k":
-		// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
-		if !m.typing && len(m.messages) > 0 {
-			groups := visibleMsgGroupIndices(m.messages)
-			defaultDel := 1
-			if defaultDel > len(groups) {
-				defaultDel = len(groups)
-			}
-			m.confirmDelete = defaultDel
-			m.renderCacheValid = false
-			m.updateViewportContent()
-		} else if !m.typing {
-			m.showTempStatus(m.locale.NoMessagesToDelete)
-			return m, nil, true
-		}
-		return m, nil, true
-
 	case msg.String() == "ctrl+o":
 		// §11 Ctrl+O 切换 tool summary 展开/折叠（兼容非 CSI-u 终端）
 		m.toggleToolSummary()
@@ -367,6 +294,17 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	turnID := m.agentTurnID // capture before any mutation
 	prev := m.progress
+	// Stream-only payloads (from StreamContentFunc) only carry StreamContent.
+	// Merge into existing progress instead of replacing to preserve tool/iteration state.
+	if msg.payload != nil && msg.payload.StreamContent != "" && msg.payload.Phase == "" && msg.payload.Iteration == 0 {
+		if m.progress != nil {
+			m.progress.StreamContent = msg.payload.StreamContent
+		} else if m.typing {
+			// Turn started but no structured progress yet — create minimal payload
+			m.progress = msg.payload
+		}
+		return
+	}
 	m.progress = msg.payload
 	// Update bg task count from callback
 	if m.bgTaskCountFn != nil {

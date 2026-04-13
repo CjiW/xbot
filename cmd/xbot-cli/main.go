@@ -581,6 +581,8 @@ func main() {
 					Instance:   s.Instance,
 					Running:    s.Running,
 					Background: s.Background,
+					Task:       s.Task,
+					Preview:    s.Preview,
 				}
 			}
 			return entries
@@ -646,15 +648,30 @@ func main() {
 				cliCh.SetApprovalHook(ah)
 			}
 		}
+		// Inject CheckpointHook for Ctrl+K rewind file rollback
+		checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
+		if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
+			cpHook := tools.NewCheckpointHook(cpStore)
+			if err := app.agentLoop.ToolHookChain().Use(cpHook); err != nil {
+				log.WithError(err).Warn("Failed to register checkpoint hook")
+			} else {
+				cliCh.SetCheckpointHook(cpHook)
+				defer cpStore.Cleanup()
+			}
+		} else {
+			log.WithError(err).Warn("Failed to create checkpoint store")
+		}
 		// Inject TrimHistoryFn for Ctrl+K session truncation
 		if cliTenantID != 0 && cliSessionSvc != nil {
-			cliCh.SetTrimHistoryFn(func(keepCount int) error {
-				if keepCount <= 0 {
+			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
+				if cutoff.IsZero() {
 					return nil
 				}
-				_, err := cliSessionSvc.PurgeOldMessages(cliTenantID, keepCount)
+				_, err := cliSessionSvc.PurgeNewerThan(cliTenantID, cutoff)
 				return err
 			})
+		} else {
+			log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
 		}
 	}
 

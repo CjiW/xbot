@@ -37,6 +37,7 @@ type interactiveAgent struct {
 	cancelCurrent    context.CancelFunc  // 当前运行的取消函数（nil = idle）
 	lastError        string              // 最近一次错误
 	lastReply        string              // 最近一次回复摘要
+	task             string              // one-shot subagent 的任务描述（交互式为空）
 }
 
 // interactiveSessionTTL 是 interactive SubAgent 会话的生存时间。
@@ -588,12 +589,29 @@ func (a *Agent) InspectInteractiveSession(
 	if ia.running {
 		status = "running"
 	}
-	fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
+	if ia.task != "" {
+		// One-shot subagent: show task instead of message count
+		fmt.Fprintf(&sb, "## %s/%s  (%s)\n", roleName, instance, status)
+		fmt.Fprintf(&sb, "\n**Task**: %s\n", ia.task)
+	} else {
+		fmt.Fprintf(&sb, "## %s/%s  (%s, %d messages)\n", roleName, instance, status, len(ia.messages))
+	}
 
 	// ── 2. Last Reply (full) — most useful info first ──
 	if ia.lastReply != "" {
 		fmt.Fprintf(&sb, "\n### Last Reply:\n%s\n", ia.lastReply)
 	}
+
+	// One-shot subagents: show status when no iterations yet (still running)
+	if ia.task != "" && len(ia.messages) == 0 && len(ia.iterationHistory) == 0 {
+		if ia.running {
+			fmt.Fprintf(&sb, "\n_One-shot subagent is executing..._\n")
+		}
+		return sb.String(), nil
+	}
+
+	// One-shot subagents have no messages, skip that section.
+	// But they do have iterationHistory (after completion).
 
 	// ── 3. Recent Messages — tail of conversation history ──
 	// Show the last tailCount messages so the parent agent can see
@@ -830,6 +848,8 @@ type InteractiveSessionInfo struct {
 	Instance   string
 	Running    bool
 	Background bool
+	Task       string // one-shot subagent task description (empty for interactive)
+	Preview    string // latest progress/last reply summary for panel display
 }
 
 // ListInteractiveSessions returns info about all interactive sessions matching the given channel/chatID prefix.
@@ -856,6 +876,8 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 			Instance:   ia.instance,
 			Running:    ia.running,
 			Background: ia.background,
+			Task:       ia.task,
+			Preview:    summarizeInteractivePreviewLocked(ia),
 		}
 		ia.mu.Unlock()
 		results = append(results, info)
@@ -867,4 +889,28 @@ func (a *Agent) ListInteractiveSessions(channel, chatID string) []InteractiveSes
 // CountInteractiveSessions returns the number of active interactive sessions for the given channel/chatID.
 func (a *Agent) CountInteractiveSessions(channel, chatID string) int {
 	return len(a.ListInteractiveSessions(channel, chatID))
+}
+
+func summarizeInteractivePreviewLocked(ia *interactiveAgent) string {
+	if ia == nil {
+		return ""
+	}
+	if n := len(ia.iterationHistory); n > 0 {
+		snap := ia.iterationHistory[n-1]
+		if snap.Thinking != "" {
+			return snap.Thinking
+		}
+		if snap.Reasoning != "" {
+			return snap.Reasoning
+		}
+		for i := len(snap.Tools) - 1; i >= 0; i-- {
+			if snap.Tools[i].Summary != "" {
+				return snap.Tools[i].Summary
+			}
+		}
+	}
+	if ia.lastError != "" {
+		return "Error: " + ia.lastError
+	}
+	return ia.lastReply
 }

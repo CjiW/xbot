@@ -4,11 +4,13 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 	"xbot/llm"
+	log "xbot/logger"
 	"xbot/tools"
 )
 
@@ -20,6 +22,8 @@ type panelAgentEntry struct {
 	Instance   string // instance ID
 	Running    bool   // true = currently executing
 	Background bool   // true = background mode
+	Task       string // one-shot subagent task description
+	Preview    string // latest progress/last reply summary
 }
 
 // openSettingsPanel activates the settings panel overlay.
@@ -88,6 +92,14 @@ type askItem struct {
 type askQItem struct {
 	Question string   `json:"question"`
 	Options  []string `json:"options,omitempty"`
+}
+
+// rewindItem represents a candidate user message in the rewind selection list.
+type rewindItem struct {
+	MsgIndex int       // index in m.messages
+	Preview  string    // first line of the message content (for display)
+	Content  string    // full message content (for input box on select)
+	Time     time.Time // message timestamp (for DB truncation cutoff)
 }
 
 // dangerItem represents a single clearable memory target in the danger zone panel.
@@ -178,6 +190,218 @@ func (m *cliModel) closePanel() {
 	// 恢复 viewport 到正常模式高度
 	m.panelScrollY = 0
 	m.relayoutViewport()
+}
+
+// ---------------------------------------------------------------------------
+// §9 Rewind Panel (/rewind command)
+// ---------------------------------------------------------------------------
+
+// openRewindPanel collects user messages from history and opens the rewind overlay.
+func (m *cliModel) openRewindPanel() {
+	var items []rewindItem
+	for i, msg := range m.messages {
+		if msg.role != "user" {
+			continue
+		}
+		content := msg.content
+		// Build preview: first line, truncated
+		preview := content
+		if idx := strings.Index(preview, "\n"); idx >= 0 {
+			preview = preview[:idx]
+		}
+		if runes := []rune(preview); len(runes) > 60 {
+			preview = string(runes[:57]) + "..."
+		}
+		items = append(items, rewindItem{
+			MsgIndex: i,
+			Preview:  preview,
+			Content:  content,
+			Time:     msg.timestamp,
+		})
+	}
+	if len(items) == 0 {
+		m.showTempStatus(m.locale.NoMessagesToDelete)
+		return
+	}
+	m.rewindItems = items
+	m.rewindCursor = len(items) - 1 // default to most recent
+	m.rewindMode = true
+	m.renderCacheValid = false
+}
+
+// closeRewindPanel deactivates the rewind overlay.
+func (m *cliModel) closeRewindPanel() {
+	m.rewindMode = false
+	m.rewindItems = nil
+	m.rewindCursor = 0
+}
+
+// viewRewindPanel renders the rewind selection overlay (centered panel).
+func (m *cliModel) viewRewindPanel(width, height int) string {
+	if !m.rewindMode || len(m.rewindItems) == 0 {
+		return ""
+	}
+
+	var lines []string
+
+	// Header
+	lines = append(lines, m.styles.PanelHeader.Render(m.locale.RewindTitle))
+	lines = append(lines, m.styles.PanelDesc.Render(m.locale.RewindHint))
+	lines = append(lines, "") // spacer
+
+	// Items (newest first for natural selection)
+	total := len(m.rewindItems)
+	maxVisible := height - 10 // leave room for header + hints + borders
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+
+	// Calculate scroll offset to keep cursor visible
+	scrollStart := 0
+	scrollEnd := total
+	if total > maxVisible {
+		scrollStart = m.rewindCursor - maxVisible/2
+		if scrollStart < 0 {
+			scrollStart = 0
+		}
+		scrollEnd = scrollStart + maxVisible
+		if scrollEnd > total {
+			scrollEnd = total
+			scrollStart = scrollEnd - maxVisible
+		}
+	}
+
+	for i := scrollStart; i < scrollEnd; i++ {
+		item := m.rewindItems[i]
+		cursor := " "
+		style := m.styles.TextMutedSt
+		if i == m.rewindCursor {
+			cursor = "▸"
+			style = m.styles.Accent
+		}
+		// Show turn number (newest = 1)
+		turnNum := total - i
+		line := style.Render(fmt.Sprintf(" %s #%d  %s", cursor, turnNum, item.Preview))
+		lines = append(lines, line)
+	}
+
+	// Scroll indicator
+	if total > maxVisible {
+		if scrollStart > 0 {
+			lines = append(lines, m.styles.TextMutedSt.Render("  ↑ more"))
+		}
+		if scrollEnd < total {
+			lines = append(lines, m.styles.TextMutedSt.Render("  ↓ more"))
+		}
+	}
+
+	// Build panel with border
+	panelContent := strings.Join(lines, "\n")
+	box := m.styles.PanelBox.Render(panelContent)
+
+	// Hint line
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Rewind  Esc Cancel")
+
+	// Center vertically
+	listH := len(lines) + 3
+	blankLines := max(0, (height-listH)/2)
+	var b strings.Builder
+	for i := 0; i < blankLines; i++ {
+		b.WriteString("\n")
+	}
+	b.WriteString(box)
+	b.WriteString("\n")
+	b.WriteString(hint)
+
+	return b.String()
+}
+
+// handleRewindKey handles key events for the rewind overlay.
+// Returns (handled, cmd). Called from Update() at same priority as quickSwitch.
+func (m *cliModel) handleRewindKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if !m.rewindMode {
+		return false, nil
+	}
+	switch msg.Code {
+	case tea.KeyEsc:
+		m.closeRewindPanel()
+		return true, nil
+	case tea.KeyUp:
+		if m.rewindCursor > 0 {
+			m.rewindCursor--
+		}
+		return true, nil
+	case tea.KeyDown:
+		if m.rewindCursor < len(m.rewindItems)-1 {
+			m.rewindCursor++
+		}
+		return true, nil
+	case tea.KeyHome:
+		m.rewindCursor = 0
+		return true, nil
+	case tea.KeyEnd:
+		m.rewindCursor = len(m.rewindItems) - 1
+		return true, nil
+	case tea.KeyEnter:
+		m.applyRewind()
+		return true, nil
+	}
+	return true, nil // block all other keys
+}
+
+// applyRewind executes the rewind: truncate history at selected message,
+// run file checkpoint rollback, and place selected message content in input box.
+func (m *cliModel) applyRewind() {
+	if m.rewindCursor < 0 || m.rewindCursor >= len(m.rewindItems) {
+		m.closeRewindPanel()
+		return
+	}
+	item := m.rewindItems[m.rewindCursor]
+	selectedContent := item.Content
+	cutoff := item.Time
+
+	// Truncate UI messages: keep everything BEFORE the selected message
+	cutIdx := item.MsgIndex
+	m.messages = m.messages[:cutIdx]
+
+	// Truncate DB session messages (async, by timestamp)
+	if m.trimHistoryFn == nil {
+		log.Warn("Rewind: trimHistoryFn is nil, DB messages will NOT be truncated")
+	} else if cutoff.IsZero() {
+		log.Warn("Rewind: cutoff timestamp is zero, DB messages will NOT be truncated")
+	} else {
+		log.WithFields(log.Fields{"cutIdx": cutIdx, "cutoff": cutoff, "totalMsgs": len(m.messages)}).Info("Rewind: truncating DB messages")
+		go func() {
+			if err := m.trimHistoryFn(cutoff); err != nil {
+				log.WithError(err).Warn("Failed to trim session history after rewind")
+			}
+		}()
+	}
+
+	// File rollback via checkpoint hook
+	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
+		// Count how many user turns are being rewound (for checkpoint lookup)
+		turnsAfter := 0
+		for _, ri := range m.rewindItems {
+			if ri.MsgIndex >= cutIdx {
+				turnsAfter++
+			}
+		}
+		m.rewindResult = m.checkpointHook.Store().Rewind(turnsAfter)
+	}
+
+	// Put selected message content into input box
+	m.textarea.SetValue(selectedContent)
+	m.textarea.CursorEnd()
+	m.textarea.Focus()
+
+	// Reset state
+	m.rewindMode = false
+	m.rewindItems = nil
+	m.rewindCursor = 0
+	m.renderCacheValid = false
+	m.cachedHistory = ""
+	m.updateViewportContent()
 }
 
 // openBgTasksPanel opens the unified tasks & agents management panel.
@@ -407,10 +631,11 @@ func (m *cliModel) viewBgTaskList() string {
 		// Render agents
 		for _, ag := range m.panelBgAgents {
 			statusIcon := "●"
-			statusStyle := s.ProgressRunning
+			roleColor := lipgloss.Color(RoleColor(ag.Role))
+			statusStyle := lipgloss.NewStyle().Foreground(roleColor)
 			if !ag.Running {
 				statusIcon = "◦"
-				statusStyle = s.ProgressDone
+				statusStyle = statusStyle.Faint(true)
 			}
 
 			prefix := "  "
@@ -424,17 +649,44 @@ func (m *cliModel) viewBgTaskList() string {
 			}
 
 			label := fmt.Sprintf("[agent] %s/%s (%s)", ag.Role, ag.Instance, mode)
+			if ag.Task != "" {
+				// One-shot subagent: show truncated task instead of instance ID
+				taskPreview := ag.Task
+				if len(taskPreview) > 45 {
+					taskPreview = taskPreview[:42] + "..."
+				}
+				// Replace newlines for single-line display
+				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
+				label = fmt.Sprintf("[agent] %s: %s", ag.Role, taskPreview)
+			}
 			if len(label) > 55 {
 				label = label[:52] + "..."
+			}
+
+			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !ag.Running {
+				labelStyle = labelStyle.Faint(true)
 			}
 
 			line := fmt.Sprintf("%s %s  %s",
 				prefix,
 				statusStyle.Render(statusIcon),
-				label,
+				labelStyle.Render(label),
 			)
 			sb.WriteString(line)
 			sb.WriteString("\n")
+			if ag.Preview != "" {
+				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
+				preview = strings.TrimSpace(preview)
+				if len(preview) > 64 {
+					preview = preview[:61] + "..."
+				}
+				previewStyle := s.PanelDesc
+				if !ag.Running {
+					previewStyle = previewStyle.Faint(true)
+				}
+				fmt.Fprintf(&sb, "    %s\n", previewStyle.Render(preview))
+			}
 			idx++
 		}
 	}

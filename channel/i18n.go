@@ -82,8 +82,9 @@ type UILocale struct {
 	SearchNoResults   string
 	SearchNavFormat   string
 
-	// --- F. Confirm dialog ---
-	ConfirmDelete string // "[!] Ctrl+K: delete last %d messages? (y/N, number to adjust)"
+	// --- F. Rewind ---
+	RewindTitle string // "Rewind"
+	RewindHint  string // "Select a message to rewind to. Content will be placed in input box."
 
 	// --- G. Splash ---
 	SplashDesc    string // "AI-powered terminal agent"
@@ -264,6 +265,7 @@ func localeZH() *UILocale {
 			{Cmd: "/context", Desc: "查看上下文信息"},
 			{Cmd: "/new", Desc: "开始新会话"},
 			{Cmd: "/quit", Desc: "退出程序"},
+			{Cmd: "/rewind", Desc: "回退对话"},
 			{Cmd: "/settings", Desc: "打开设置面板"},
 			{Cmd: "/setup", Desc: "重新运行配置引导"},
 			{Cmd: "/tasks", Desc: "查看任务和代理"},
@@ -274,7 +276,6 @@ func localeZH() *UILocale {
 			{Key: "Enter", Desc: "发送消息"},
 			{Key: "Ctrl+C/Esc", Desc: "中止/清空"},
 			{Key: "Ctrl+J", Desc: "输入框换行"},
-			{Key: "Ctrl+K", Desc: "上下文删除"},
 			{Key: "Ctrl+O", Desc: "展开/折叠工具"},
 			{Key: "Tab", Desc: "命令/路径补全"},
 			{Key: "Home/End", Desc: "跳到顶/底部"},
@@ -293,7 +294,8 @@ func localeZH() *UILocale {
 		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 删除最后 %d 轮对话？(y/N, 数字调整)",
+		RewindTitle: "Rewind",
+		RewindHint:  "选择要回退到的消息，内容将放入输入框",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI 驱动的终端助手",
@@ -375,7 +377,7 @@ func localeZH() *UILocale {
 		IdlePlaceholders: []string{
 			"Enter 发送 · Ctrl+J 换行 · /help",
 			"/model 切换模型",
-			"Ctrl+K 删除 · Ctrl+O 工具",
+			"Ctrl+O 工具",
 			"@filepath 附加文件",
 			"^ 打开后台任务面板",
 			"/compact 压缩上下文",
@@ -648,6 +650,7 @@ func localeEN() *UILocale {
 			{Cmd: "/context", Desc: "View context info"},
 			{Cmd: "/new", Desc: "Start new session"},
 			{Cmd: "/quit", Desc: "Quit"},
+			{Cmd: "/rewind", Desc: "Rewind conversation"},
 			{Cmd: "/settings", Desc: "Open settings panel"},
 			{Cmd: "/setup", Desc: "Re-run setup wizard"},
 			{Cmd: "/tasks", Desc: "View tasks & agents"},
@@ -658,7 +661,6 @@ func localeEN() *UILocale {
 			{Key: "Enter", Desc: "Send message"},
 			{Key: "Ctrl+C/Esc", Desc: "Abort/clear"},
 			{Key: "Ctrl+J", Desc: "Newline in input"},
-			{Key: "Ctrl+K", Desc: "Context delete"},
 			{Key: "Ctrl+O", Desc: "Expand/collapse tools"},
 			{Key: "Tab", Desc: "Command/path completion"},
 			{Key: "Home/End", Desc: "Jump to top/bottom"},
@@ -677,7 +679,8 @@ func localeEN() *UILocale {
 		SearchNavFormat:   "/ %s  [%d/%d]  n next · N prev · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: delete last %d turns? (y/N, number to adjust)",
+		RewindTitle: "Rewind",
+		RewindHint:  "Select a message to rewind to. Content will be placed in input box.",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI-powered terminal agent",
@@ -759,7 +762,7 @@ func localeEN() *UILocale {
 		IdlePlaceholders: []string{
 			"Enter send · Ctrl+J newline · /help",
 			"Type /model to switch model",
-			"Ctrl+K delete | Ctrl+O tools",
+			"Ctrl+O tools",
 			"@filepath to attach files",
 			"^ open background tasks panel",
 			"Type /compact to compress context",
@@ -1032,6 +1035,7 @@ func localeJA() *UILocale {
 			{Cmd: "/context", Desc: "コンテキスト情報表示"},
 			{Cmd: "/new", Desc: "新規セッション開始"},
 			{Cmd: "/quit", Desc: "終了"},
+			{Cmd: "/rewind", Desc: "会話を巻き戻す"},
 			{Cmd: "/settings", Desc: "設定パネルを開く"},
 			{Cmd: "/setup", Desc: "セットアップウィザード再実行"},
 			{Cmd: "/tasks", Desc: "タスクとエージェント表示"},
@@ -1042,7 +1046,6 @@ func localeJA() *UILocale {
 			{Key: "Enter", Desc: "メッセージ送信"},
 			{Key: "Ctrl+C/Esc", Desc: "中止/クリア"},
 			{Key: "Ctrl+J", Desc: "入力欄で改行"},
-			{Key: "Ctrl+K", Desc: "コンテキスト削除"},
 			{Key: "Ctrl+O", Desc: "ツール展開/折りたたみ"},
 			{Key: "Tab", Desc: "コマンド/パス補完"},
 			{Key: "Home/End", Desc: "先頭/末尾へ移動"},
@@ -1061,7 +1064,8 @@ func localeJA() *UILocale {
 		SearchNavFormat:   "/ %s  [%d/%d]  n 次 · N 前 · Esc",
 
 		// --- F. Confirm dialog ---
-		ConfirmDelete: "[!] Ctrl+K: 最後の %d ターンを削除しますか？(y/N, 数字で調整)",
+		RewindTitle: "Rewind",
+		RewindHint:  "巻き戻すメッセージを選択してください。内容が入力欄に配置されます。",
 
 		// --- G. Splash ---
 		SplashDesc:    "AI駆動のターミナルエージェント",
@@ -1143,7 +1147,7 @@ func localeJA() *UILocale {
 		IdlePlaceholders: []string{
 			"Enter 送信 · Ctrl+J 改行 · /help",
 			"/model でモデル切替",
-			"Ctrl+K 削除 · Ctrl+O ツール",
+			"Ctrl+O ツール",
 			"@filepath でファイル添付",
 			"^ バックグラウンドタスクパネル",
 			"/compact でコンテキスト圧縮",

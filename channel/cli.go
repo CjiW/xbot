@@ -6,7 +6,7 @@
 //   - Tool call visualization with live status indicators
 //   - Built-in slash commands: /model, /models, /context, /new
 //   - Tab completion for commands and input history
-//   - Ctrl+K line deletion with confirmation
+//   - /rewind conversation rewind
 //   - Non-interactive (pipe) mode with streaming output
 //   - Session restore via --new/--resume flags
 
@@ -43,6 +43,11 @@ func (c *CLIChannel) Name() string {
 	return "cli"
 }
 
+// SupportsStreamRender returns true — CLI supports real-time stream rendering.
+func (c *CLIChannel) SupportsStreamRender() bool {
+	return true
+}
+
 // Start 启动 CLI 渠道（阻塞运行）
 func (c *CLIChannel) Start() error {
 	log.Info("CLI channel starting...")
@@ -70,6 +75,14 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.senderID = "cli_user"
+
+	// Apply pending injections that were set before model existed
+	if c.pendingTrimHistoryFn != nil {
+		c.model.trimHistoryFn = c.pendingTrimHistoryFn
+	}
+	if c.pendingCheckpointHook != nil {
+		c.model.checkpointHook = c.pendingCheckpointHook
+	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
@@ -243,14 +256,27 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
-// SetTrimHistoryFn 设置 Ctrl+K 截断历史后的数据库同步回调。
-// keepCount 为保留的消息数，实现方应删除数据库中更早的消息。
-func (c *CLIChannel) SetTrimHistoryFn(fn func(keepCount int) error) {
+// SetTrimHistoryFn sets the callback for /rewind DB truncation.
+// cutoff is the timestamp threshold — all DB messages with created_at < cutoff will be deleted.
+// If the model hasn't been created yet, the callback is cached and applied later.
+func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
 	c.programMu.Lock()
 	defer c.programMu.Unlock()
 	if c.model != nil {
 		c.model.trimHistoryFn = fn
 	}
+	c.pendingTrimHistoryFn = fn
+}
+
+// SetCheckpointHook sets the file checkpoint hook for /rewind file rollback.
+// If the model hasn't been created yet, the hook is cached and applied later.
+func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.checkpointHook = hook
+	}
+	c.pendingCheckpointHook = hook
 }
 
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。

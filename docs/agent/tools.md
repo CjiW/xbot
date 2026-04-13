@@ -30,6 +30,7 @@
 | `context_edit.go` | ContextEdit tool (conversation history surgery) |
 | `cron.go` | Cron tool (scheduled tasks) |
 | `task_manager.go` | Background task management |
+| `checkpoint.go` | CheckpointHook + CheckpointStore (Ctrl+K rewind file rollback) |
 
 ## Tool Schema Rule
 
@@ -41,6 +42,7 @@ Items: &llm.ToolParamItems{Type: "string"}
 ## Hook Chain
 
 Three built-in hooks: LoggingHook, TimingHook, ApprovalHook.
+Fourth hook: CheckpointHook (file snapshot for Ctrl+K rewind, CLI-only).
 Chain is shared across main Agent and all SubAgents (same instance pointer).
 Max 20 hooks (`MaxHookChainLen` in `hook.go`).
 

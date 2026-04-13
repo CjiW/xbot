@@ -1060,7 +1060,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				cancelKey := msg.Channel + ":" + msg.ChatID
 				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
@@ -1264,7 +1264,7 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		// /cancel 拦截：在 chatWorker 层面处理，不进入 msgCh，
 		// 避免 chatProcessLoop 阻塞在 processMessage 时 /cancel 无法被处理导致死锁。
 		if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-			cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+			cancelKey := msg.Channel + ":" + msg.ChatID
 			if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
 				select {
 				case ch.(chan struct{}) <- struct{}{}:
@@ -1334,7 +1334,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		var response *bus.OutboundMessage
 		var err error
 		cancelCh := make(chan struct{}, 1)
-		cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+		cancelKey := msg.Channel + ":" + msg.ChatID
 		a.chatCancelCh.Store(cancelKey, cancelCh)
 
 		reqCtx, reqCancel := context.WithCancel(ctx)

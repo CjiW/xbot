@@ -235,9 +235,9 @@ type cliModel struct {
 	chatID        string // 会话 ID（按工作目录区分）
 
 	// --- §1 增量渲染 ---
-	renderCacheValid   bool   // 全局缓存是否有效（resize 后置 false）
-	cachedHistory      string // 缓存的历史消息渲染结果（不含当前流式消息）
-	cachedMsgCount     int    // messages count when cache was built
+	renderCacheValid    bool   // 全局缓存是否有效（resize 后置 false）
+	cachedHistory       string // 缓存的历史消息渲染结果（不含当前流式消息）
+	cachedMsgCount      int    // messages count when cache was built
 	lastViewportContent string // 上次 setViewportContent 的原始内容（去重用）
 	lastViewportWidth   int    // 上次 setViewportContent 的宽度（去重用）
 

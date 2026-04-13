@@ -179,11 +179,26 @@ func (m *cliModel) appendSystemMarkdown(content string) {
 	})
 }
 
+// sendInbound sends a message to the agent's inbound channel.
+// Uses non-blocking send to prevent the BubbleTea event loop from freezing
+// if the channel is full (e.g., agent is busy with a long LLM call).
+// Returns false if the message was dropped.
+func (m *cliModel) sendInbound(msg bus.InboundMessage) bool {
+	if m.msgBus == nil {
+		return false
+	}
+	select {
+	case m.msgBus.Inbound <- msg:
+		return true
+	default:
+			// Channel full — agent is backlogged. Drop to prevent TUI freeze.
+			return false
+	}
+}
+
 // sendCancel sends a cancel request to the agent and adds a system notification.
 func (m *cliModel) sendCancel() {
-	if m.msgBus != nil {
-		m.msgBus.Inbound <- m.newInbound("/cancel", nil)
-	}
+	m.sendInbound(m.newInbound("/cancel", nil))
 	m.showSystemMsg(m.locale.CancelSent, feedbackInfo)
 }
 
@@ -196,7 +211,7 @@ func (m *cliModel) sendToAgent(content string) {
 		dirty:     true,
 	})
 	if m.msgBus != nil {
-		m.msgBus.Inbound <- m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional})
+		m.sendInbound(m.newInbound(content, map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}))
 		m.startAgentTurn()
 	}
 }
@@ -233,7 +248,7 @@ func (m *cliModel) sendMessage(content string) tea.Cmd {
 	if m.msgBus != nil {
 		msg := m.newInbound(content, nil) // ReplyPolicyAuto (default)
 		msg.Media = media
-		m.msgBus.Inbound <- msg
+		m.sendInbound(msg)
 		m.startAgentTurn()
 	}
 	return nil
@@ -421,7 +436,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 	case "/compact":
 		// 保留本地处理（system 消息样式），发送到 msgBus 但不作为用户气泡
 		if m.msgBus != nil {
-			m.msgBus.Inbound <- m.newInbound("/compact", nil)
+			m.sendInbound(m.newInbound("/compact", nil))
 		}
 
 	// --- 透传命令（发送到 agent） ---
@@ -619,7 +634,7 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					content := strings.Join(parts, "\n\n")
 					// Send to agent as tool result replacement (not a new user message)
 					if m.msgBus != nil {
-						m.msgBus.Inbound <- m.newInbound(content, map[string]string{"ask_user_answered": "true"})
+						m.sendInbound(m.newInbound(content, map[string]string{"ask_user_answered": "true"}))
 					}
 					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{

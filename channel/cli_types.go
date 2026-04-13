@@ -92,6 +92,14 @@ func hardWrapRunes(line string, maxW int) string {
 			continue
 		}
 		rw := runewidth.RuneWidth(r)
+		// Safety: if a rune has zero display width (combining chars, control
+		// chars, zero-width joiners), still emit it but don't let it block
+		// line wrapping.  Without this, a run of zero-width runes causes
+		// w to never reach maxW → infinite loop → CPU 100% freeze.
+		if rw == 0 {
+			buf.WriteRune(r)
+			continue
+		}
 		if w+rw > maxW {
 			lines = append(lines, buf.String())
 			buf.Reset()

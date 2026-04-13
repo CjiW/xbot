@@ -185,6 +185,7 @@ func (s *CheckpointStore) truncateTo(cutoff int) {
 
 	// Close current file
 	s.file.Close()
+	s.file = nil
 
 	// Rewrite with only pre-cutoff snapshots
 	f, err := os.Create(filepath.Join(s.baseDir, "changes.jsonl"))

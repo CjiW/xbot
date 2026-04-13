@@ -118,9 +118,17 @@ func (sm *SessionMCPManager) ensureInitAsync() {
 				if err != errNotInitialized {
 					log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
 				}
+				// On errNotInitialized: don't mark initialized, reset initOnce so
+				// the next access retries (config may be created later by ManageTools).
+				// Also do NOT close initDone or fire onChange — callers waiting on
+				// initDone (GetCatalogBlocking) would deadlock, but that's acceptable
+				// since the config doesn't exist yet.
+				sm.initOnce = sync.Once{}
+				sm.mu.Unlock()
+				return
 			}
 			sm.initialized = true
-			// Close initDone to signal completion (safe-guard for nil from literal construction)
+			// Close initDone to signal completion
 			if ch := sm.initDone; ch != nil {
 				close(ch)
 			}

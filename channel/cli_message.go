@@ -191,14 +191,32 @@ func (m *cliModel) sendInbound(msg bus.InboundMessage) bool {
 	case m.msgBus.Inbound <- msg:
 		return true
 	default:
-			// Channel full — agent is backlogged. Drop to prevent TUI freeze.
-			return false
+		// Channel full — agent is backlogged. Drop to prevent TUI freeze.
+		return false
+	}
+}
+
+// sendInboundWait sends a message to the agent's inbound channel with a timeout.
+// Use for critical messages (ask_user answers) that MUST be delivered.
+// Returns false if the message couldn't be sent within the deadline.
+func (m *cliModel) sendInboundWait(msg bus.InboundMessage, timeout time.Duration) bool {
+	if m.msgBus == nil {
+		return false
+	}
+	select {
+	case m.msgBus.Inbound <- msg:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 
 // sendCancel sends a cancel request to the agent and adds a system notification.
 func (m *cliModel) sendCancel() {
-	m.sendInbound(m.newInbound("/cancel", nil))
+	if !m.sendInbound(m.newInbound("/cancel", nil)) {
+		m.showSystemMsg("Cancel failed: agent channel busy, try again", feedbackError)
+		return
+	}
 	m.showSystemMsg(m.locale.CancelSent, feedbackInfo)
 }
 
@@ -632,9 +650,13 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 						parts = append(parts, fmt.Sprintf("Q: %s\nA: %s", item.Question, ans))
 					}
 					content := strings.Join(parts, "\n\n")
-					// Send to agent as tool result replacement (not a new user message)
+					// Send to agent as tool result replacement (not a new user message).
+					// Use blocking send with timeout — ask_user answers are critical:
+					// if dropped, the agent hangs indefinitely waiting for a response.
 					if m.msgBus != nil {
-						m.sendInbound(m.newInbound(content, map[string]string{"ask_user_answered": "true"}))
+					if !m.sendInboundWait(m.newInbound(content, map[string]string{"ask_user_answered": "true"}), 5*time.Second) {
+						m.showSystemMsg("Failed to deliver answer to agent, please try again", feedbackError)
+					}
 					}
 					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{

@@ -140,7 +140,11 @@ func (a *Agent) IndexGlobalTools() {
 		indexed[name] = true
 	}
 
-	// 3. Index global MCP servers (non-blocking: starts background init, re-indexes on completion)
+	// 3. Index global MCP servers (non-blocking: starts background init, re-indexes once on completion)
+	//    We do NOT use SetOnChange here because IndexGlobalTools creates a fresh
+	//    mcpMgr each call, and onChange would trigger another IndexGlobalTools →
+	//    another mcpMgr → infinite goroutine chain. Instead, we fire a single
+	//    background re-index that creates its own mcpMgr with sync.Once guard.
 	dummySessionKey := "indexing:dummy"
 	mcpMgr := tools.NewSessionMCPManager(
 		dummySessionKey,
@@ -149,10 +153,6 @@ func (a *Agent) IndexGlobalTools() {
 		"", "", 30*time.Minute,
 	)
 	if mcpMgr != nil {
-		// Set up callback to re-index when MCP servers finish connecting
-		mcpMgr.SetOnChange(func() {
-			a.IndexGlobalTools()
-		})
 		catalog := mcpMgr.GetCatalog() // non-blocking: returns current (may be empty on first call)
 		for _, entry := range catalog {
 			for _, toolName := range entry.ToolNames {

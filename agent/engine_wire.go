@@ -1235,13 +1235,17 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 
 	// Wire incremental snapshot callback so iteration history is available
 	// during Run() for panel preview and inspect — not only after completion.
+	// Lock mu to avoid data race with ListInteractiveSessions/summarizeInteractivePreviewLocked.
 	cfg.OnIterationSnapshot = func(snap IterationSnapshot) {
+		oneshotIA.mu.Lock()
 		oneshotIA.iterationHistory = append(oneshotIA.iterationHistory, snap)
+		oneshotIA.mu.Unlock()
 	}
 
 	out := Run(subCtx, cfg)
 
 	// Populate iteration history so inspect can show results after completion
+	oneshotIA.mu.Lock()
 	oneshotIA.running = false
 	if out != nil {
 		oneshotIA.lastReply = out.Content
@@ -1249,6 +1253,7 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	} else {
 		log.Ctx(ctx).Warn("oneshot subagent returned nil output")
 	}
+	oneshotIA.mu.Unlock()
 	// One-shot agents are ephemeral: remove immediately after completion.
 	// Unlike interactive sessions, there's no "send more messages" use case.
 	a.interactiveSubAgents.Delete(oneshotKey)

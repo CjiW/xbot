@@ -650,18 +650,18 @@ func (m *cliModel) viewBgTaskList() string {
 
 			label := fmt.Sprintf("[agent] %s/%s (%s)", ag.Role, ag.Instance, mode)
 			if ag.Task != "" {
-				// One-shot subagent: show truncated task instead of instance ID
-				taskPreview := ag.Task
-				if len(taskPreview) > 45 {
-					taskPreview = taskPreview[:42] + "..."
-				}
+					// One-shot subagent: show truncated task instead of instance ID
+					taskPreview := ag.Task
+					if runes := []rune(taskPreview); len(runes) > 45 {
+						taskPreview = string(runes[:42]) + "..."
+					}
 				// Replace newlines for single-line display
 				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
 				label = fmt.Sprintf("[agent] %s: %s", ag.Role, taskPreview)
 			}
-			if len(label) > 55 {
-				label = label[:52] + "..."
-			}
+			if labelRunes := []rune(label); len(labelRunes) > 55 {
+					label = string(labelRunes[:52]) + "..."
+				}
 
 			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
 			if !ag.Running {
@@ -678,8 +678,8 @@ func (m *cliModel) viewBgTaskList() string {
 			if ag.Preview != "" {
 				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
 				preview = strings.TrimSpace(preview)
-				if len(preview) > 64 {
-					preview = preview[:61] + "..."
+				if previewRunes := []rune(preview); len(previewRunes) > 64 {
+					preview = string(previewRunes[:61]) + "..."
 				}
 				previewStyle := s.PanelDesc
 				if !ag.Running {

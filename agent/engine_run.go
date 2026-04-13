@@ -1326,8 +1326,11 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: true,
 		}
-		if s.waitingQuestion != "" || len(s.waitingMetadata) > 0 {
+		if s.waitingQuestion != "" || len(s.waitingMetadata) > 0 || s.cfg.SenderID != "" {
 			outMsg.Metadata = make(map[string]string)
+			if s.cfg.SenderID != "" {
+				outMsg.Metadata["sender_id"] = s.cfg.SenderID
+			}
 			if s.waitingQuestion != "" {
 				outMsg.Metadata["ask_question"] = s.waitingQuestion
 			}

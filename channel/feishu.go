@@ -162,6 +162,10 @@ type FeishuChannel struct {
 	approvalHook *tools.ApprovalHook
 	approvalsMu  sync.Mutex
 	approvals    map[string]*feishuPendingApproval
+
+	// AskUser pending state: key is "chatID:senderID" → waiting for user's answer
+	askUserMu sync.Mutex
+	askUsers  map[string]*feishuPendingAskUser
 }
 
 type feishuPendingApproval struct {
@@ -176,6 +180,14 @@ type feishuPendingApproval struct {
 	DenySubmitAction string
 }
 
+// feishuPendingAskUser tracks an active AskUser waiting for user response.
+type feishuPendingAskUser struct {
+	ChatID    string
+	SenderID  string
+	Questions []askQItem
+	CreatedAt time.Time
+}
+
 // NewFeishuChannel 创建飞书渠道
 func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 	return &FeishuChannel{
@@ -185,6 +197,7 @@ func NewFeishuChannel(cfg FeishuConfig, msgBus *bus.MessageBus) *FeishuChannel {
 		maxProcessed:  1000,
 		userNameCache: make(map[string]string),
 		approvals:     make(map[string]*feishuPendingApproval),
+		askUsers:      make(map[string]*feishuPendingAskUser),
 	}
 }
 
@@ -350,6 +363,11 @@ func (f *FeishuChannel) Send(msg bus.OutboundMessage) (string, error) {
 			}
 		}
 		return "", nil
+	}
+
+	// AskUser: build and send an interactive card with buttons/options, then register pending state.
+	if msg.WaitingUser {
+		return f.sendAskUserCard(msg)
 	}
 
 	if msg.Content == "" {
@@ -997,6 +1015,12 @@ func (f *FeishuChannel) onMessage(ctx context.Context, event *larkim.P2MessageRe
 		metadata[bus.MetadataReplyPolicy] = bus.ReplyPolicyOptional
 	}
 
+	// AskUser text reply fallback: if there's a pending AskUser for this chat+user,
+	// treat the text message as the answer instead of a new conversation turn.
+	if askKey := chatID + ":" + senderID; f.tryResolveAskUserByText(askKey, finalContent, senderID, senderName, chatID, chatType, msgTime, requestID, metadata) {
+		return nil
+	}
+
 	f.msgBus.Inbound <- bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
@@ -1210,6 +1234,11 @@ func (f *FeishuChannel) onCardAction(ctx context.Context, event *callback.CardAc
 
 	// Intercept permission approval actions before other card routing.
 	if resp, ok := f.handleApprovalCardAction(actionData, action, senderID); ok {
+		return resp, nil
+	}
+
+	// Intercept AskUser card actions.
+	if resp, ok := f.handleAskUserCardAction(actionData, action, chatID, senderID, messageID); ok {
 		return resp, nil
 	}
 
@@ -1610,6 +1639,339 @@ func (f *FeishuChannel) buildApprovalResultCard(p *feishuPendingApproval, result
 			"template": template,
 		},
 		"body": map[string]any{"elements": []map[string]any{{"tag": "markdown", "content": content}}},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AskUser: interactive card for asking user questions
+// ---------------------------------------------------------------------------
+
+const askUserActionPrefix = "askuser_"
+
+// sendAskUserCard builds and sends an interactive card for AskUser questions.
+// Registers pending state so that subsequent text messages or card callbacks
+// are routed as answers instead of new conversation turns.
+func (f *FeishuChannel) sendAskUserCard(msg bus.OutboundMessage) (string, error) {
+	var questions []askQItem
+	if msg.Metadata != nil {
+		if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+			json.Unmarshal([]byte(qJSON), &questions)
+		}
+	}
+	if len(questions) == 0 {
+		return "", fmt.Errorf("ask_user card: no questions in metadata")
+	}
+
+	card := f.buildAskUserCard(questions)
+	cardJSON, err := json.Marshal(card)
+	if err != nil {
+		return "", fmt.Errorf("marshal ask_user card: %w", err)
+	}
+
+	// Try reply mode if we have a parent message_id
+	msgID := ""
+	if msg.Metadata != nil && msg.Metadata["message_id"] != "" {
+		msgID, err = f.sendReplyMessage(msg.ChatID, msg.Metadata["message_id"], cardJSON)
+	} else {
+		msgID, err = f.sendNormalMessage(msg.ChatID, cardJSON)
+	}
+	if err != nil {
+		return "", fmt.Errorf("send ask_user card: %w", err)
+	}
+
+	// Extract senderID from metadata (injected by engine)
+	senderID := ""
+	if msg.Metadata != nil {
+		senderID = msg.Metadata["sender_id"]
+	}
+
+	// Register pending state for text reply fallback
+	askKey := msg.ChatID + ":" + senderID
+	f.askUserMu.Lock()
+	f.askUsers[askKey] = &feishuPendingAskUser{
+		ChatID:    msg.ChatID,
+		SenderID:  senderID,
+		Questions: questions,
+		CreatedAt: time.Now(),
+	}
+	f.askUserMu.Unlock()
+
+	log.WithFields(log.Fields{
+		"message_id": msgID,
+		"chat_id":    msg.ChatID,
+		"sender_id":  senderID,
+		"questions":  len(questions),
+	}).Info("Feishu: AskUser card sent")
+
+	return msgID, nil
+}
+
+// buildAskUserCard constructs a Feishu interactive card for AskUser questions.
+// Questions with options become button groups; questions without options show
+// as markdown prompts with a text reply expected.
+func (f *FeishuChannel) buildAskUserCard(questions []askQItem) map[string]any {
+	elements := []map[string]any{}
+
+	for i, q := range questions {
+		// Question text
+		questionText := q.Question
+		if len(questions) > 1 {
+			questionText = fmt.Sprintf("**Q%d.** %s", i+1, q.Question)
+		}
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": questionText,
+		})
+
+		if len(q.Options) > 0 {
+			// Options as buttons
+			action := fmt.Sprintf("%sq%d_opt", askUserActionPrefix, i)
+			buttons := []map[string]any{}
+			for _, opt := range q.Options {
+				buttons = append(buttons, map[string]any{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": opt},
+					"type": "primary",
+					"value": map[string]any{
+						"ask_user_action": action,
+						"answer":          opt,
+					},
+				})
+			}
+			elements = append(elements, map[string]any{
+				"tag":     "action",
+				"actions": buttons,
+				"layout":  "flow",
+			})
+		} else {
+			// Open question: hint for text reply
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": "<text_tag color='grey'>Reply to this message to answer</text_tag>",
+			})
+		}
+
+		// Separator between questions
+		if i < len(questions)-1 {
+			elements = append(elements, map[string]any{"tag": "hr"})
+		}
+	}
+
+	// Cancel button
+	elements = append(elements, map[string]any{
+		"tag": "hr",
+	})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "",
+	})
+	elements = append(elements, map[string]any{
+		"tag": "action",
+		"actions": []map[string]any{{
+			"tag":  "button",
+			"text": map[string]any{"tag": "plain_text", "content": "Cancel"},
+			"type": "danger",
+			"value": map[string]any{
+				"ask_user_action": askUserActionPrefix + "cancel",
+			},
+		}},
+		"layout": "flow",
+	})
+
+	return map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "Question",
+			},
+			"template": "blue",
+		},
+		"elements": elements,
+	}
+}
+
+// handleAskUserCardAction intercepts card callbacks from AskUser cards.
+// Returns (response, true) if the action was an AskUser action, (nil, false) otherwise.
+func (f *FeishuChannel) handleAskUserCardAction(actionData map[string]any, action *callback.CallBackAction, chatID, senderID, messageID string) (*callback.CardActionTriggerResponse, bool) {
+	if actionData == nil {
+		return nil, false
+	}
+	actionVal, _ := actionData["ask_user_action"].(string)
+	if actionVal == "" {
+		return nil, false
+	}
+
+	// Find pending AskUser for this chat+user
+	askKey := chatID + ":" + senderID
+	f.askUserMu.Lock()
+	pending, ok := f.askUsers[askKey]
+	if ok {
+		delete(f.askUsers, askKey)
+	}
+	f.askUserMu.Unlock()
+
+	if !ok {
+		log.WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID}).Debug("AskUser card action but no pending state")
+		return nil, false
+	}
+
+	// Handle cancel
+	if actionVal == askUserActionPrefix+"cancel" {
+		log.WithFields(log.Fields{"chat_id": chatID, "sender_id": senderID}).Info("AskUser cancelled via card")
+		f.msgBus.Inbound <- bus.InboundMessage{
+			Channel:   "feishu",
+			SenderID:  senderID,
+			ChatID:    chatID,
+			ChatType:  "p2p",
+			Content:   "/cancel",
+			Time:      time.Now(),
+			RequestID: log.NewRequestID(),
+			From:      bus.NewIMAddress("feishu", senderID),
+			To:        bus.NewIMAddress("feishu", chatID),
+		}
+		return f.buildAskUserAnsweredCard(pending, "Cancelled", "grey"), true
+	}
+
+	// Handle option button click
+	answer, _ := actionData["answer"].(string)
+	if answer == "" {
+		return nil, false
+	}
+
+	// Determine which question this answer is for
+	questionIdx := -1
+	if strings.HasPrefix(actionVal, askUserActionPrefix+"q") && strings.Contains(actionVal, "_opt") {
+		// Parse "askuser_q{N}_opt" to get N
+		parts := strings.TrimPrefix(actionVal, askUserActionPrefix+"q")
+		if idx := strings.Index(parts, "_opt"); idx >= 0 {
+			if n, err := strconv.Atoi(parts[:idx]); err == nil {
+				questionIdx = n
+			}
+		}
+	}
+
+	// Format the answer in the same style as CLI: "Q: question\nA: answer"
+	content := fmt.Sprintf("Q: %s\nA: %s", pending.Questions[0].Question, answer)
+	if questionIdx >= 0 && questionIdx < len(pending.Questions) {
+		content = fmt.Sprintf("Q: %s\nA: %s", pending.Questions[questionIdx].Question, answer)
+	}
+
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"sender_id": senderID,
+		"question":  questionIdx,
+		"answer":    answer,
+	}).Info("AskUser answered via card button")
+
+	f.msgBus.Inbound <- bus.InboundMessage{
+		Channel:    "feishu",
+		SenderID:   senderID,
+		SenderName: "",
+		ChatID:     chatID,
+		ChatType:   "p2p",
+		Content:    content,
+		Time:       time.Now(),
+		RequestID:  log.NewRequestID(),
+		From:       bus.NewIMAddress("feishu", senderID),
+		To:         bus.NewIMAddress("feishu", chatID),
+		Metadata:   map[string]string{"ask_user_answered": "true"},
+	}
+
+	return f.buildAskUserAnsweredCard(pending, answer, "green"), true
+}
+
+// tryResolveAskUserByText checks if there's a pending AskUser and routes the text
+// message as an answer. Returns true if the message was consumed (should not be
+// sent to the bus as a normal message).
+func (f *FeishuChannel) tryResolveAskUserByText(askKey, text, senderID, senderName, chatID, chatType string, msgTime time.Time, requestID string, baseMetadata map[string]string) bool {
+	f.askUserMu.Lock()
+	pending, ok := f.askUsers[askKey]
+	if ok {
+		delete(f.askUsers, askKey)
+	}
+	f.askUserMu.Unlock()
+
+	if !ok {
+		return false
+	}
+
+	// If all questions have options, text reply doesn't make sense —
+	// but still accept it as an answer to the first open question.
+	// Format: "Q: question\nA: text"
+	content := fmt.Sprintf("Q: %s\nA: %s", pending.Questions[0].Question, text)
+
+	log.WithFields(log.Fields{
+		"chat_id":   chatID,
+		"sender_id": senderID,
+		"answer":    text,
+	}).Info("AskUser answered via text reply")
+
+	metadata := make(map[string]string, len(baseMetadata)+1)
+	for k, v := range baseMetadata {
+		metadata[k] = v
+	}
+	metadata["ask_user_answered"] = "true"
+
+	f.msgBus.Inbound <- bus.InboundMessage{
+		Channel:    "feishu",
+		SenderID:   senderID,
+		SenderName: senderName,
+		ChatID:     chatID,
+		ChatType:   chatType,
+		Content:    content,
+		Time:       msgTime,
+		RequestID:  requestID,
+		From:       bus.NewIMAddress("feishu", senderID),
+		To:         bus.NewIMAddress("feishu", chatID),
+		Metadata:   metadata,
+	}
+
+	return true
+}
+
+// buildAskUserAnsweredCard returns a card response shown after the user answers or cancels.
+func (f *FeishuChannel) buildAskUserAnsweredCard(pending *feishuPendingAskUser, answer, template string) *callback.CardActionTriggerResponse {
+	summary := "Answered"
+	if template == "grey" {
+		summary = "Cancelled"
+	}
+
+	elements := []map[string]any{}
+	for i, q := range pending.Questions {
+		questionText := q.Question
+		if len(pending.Questions) > 1 {
+			questionText = fmt.Sprintf("Q%d. %s", i+1, q.Question)
+		}
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": questionText,
+		})
+		if template != "grey" && i == 0 {
+			elements = append(elements, map[string]any{
+				"tag":     "markdown",
+				"content": fmt.Sprintf("**A:** %s", answer),
+			})
+		}
+	}
+
+	cardData := map[string]any{
+		"schema": "2.0",
+		"header": map[string]any{
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": summary,
+			},
+			"template": template,
+		},
+		"elements": elements,
+	}
+
+	return &callback.CardActionTriggerResponse{
+		Card: &callback.Card{
+			Type: "raw",
+			Data: cardData,
+		},
 	}
 }
 

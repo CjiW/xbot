@@ -106,7 +106,7 @@ var metaTools = map[string]bool{
 func (a *Agent) IndexGlobalTools() {
 	registry := a.tools
 	multiSession := a.multiSession
-	globalMCPConfigPath := resolveDataPath(a.xbotHome, "mcp.json")
+	globalMCPConfigPath := resolveDataPath(a.workDir, "mcp.json")
 
 	ctx := context.Background()
 	var toolEntries []memory.ToolIndexEntry
@@ -511,12 +511,8 @@ func initStores(cfg Config) (*SkillStore, *AgentStore, *tools.ChatHistoryStore, 
 	chatHistory := tools.NewChatHistoryStore(200) // 每个群组保留最近 200 条
 	registry.Register(tools.NewChatHistoryTool(chatHistory))
 
-	// MCP 配置路径：使用 xbotHome (e.g. ~/.xbot/mcp.json) 作为全局 MCP 配置位置
-	xbotHome := cfg.XbotHome
-	if xbotHome == "" {
-		xbotHome = cfg.WorkDir
-	}
-	mcpConfigPath := resolveDataPath(xbotHome, "mcp.json")
+	// MCP config path must align with ManageTools.resolveWritableMCPConfigPath (uses workDir).
+	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 
 	// 注册 ManageTools tool（需要 skillStore 和 mcpConfigPath）
 	registry.RegisterCore(tools.NewManageTools(cfg.WorkDir, mcpConfigPath))
@@ -567,11 +563,9 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 // initServices 注册工具、初始化 cron/LLM/offload/registry/settings 等服务。
 // 此方法直接修改 Agent 指针。
 func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession, registry *tools.Registry) {
-	xbotHome := cfg.XbotHome
-	if xbotHome == "" {
-		xbotHome = cfg.WorkDir
-	}
-	mcpConfigPath := resolveDataPath(xbotHome, "mcp.json")
+	// MCP config must use workDir to align with ManageTools.resolveWritableMCPConfigPath.
+	// Using xbotHome (~/.xbot) causes resolveDataPath to produce ~/.xbot/.xbot/mcp.json.
+	mcpConfigPath := resolveDataPath(cfg.WorkDir, "mcp.json")
 	contextMode := resolveContextMode(cfg)
 
 	memoryProvider := cfg.MemoryProvider

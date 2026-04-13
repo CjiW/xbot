@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"xbot/config"
+)
 
 func TestGuessProvider(t *testing.T) {
 	tests := []struct {
@@ -53,12 +57,149 @@ func TestGetLLMForModel_NilSubscriptionSvc(t *testing.T) {
 	f := NewLLMFactory(nil, nil, "default-model")
 	f.defaultThinkingMode = "auto"
 
-	// No subscriptionSvc → should fallback to default (not panic)
+	// No subscriptionSvc but explicit model → fallback to default client with target model name
 	_, model, _, _, usedCustom := f.GetLLMForModel("user1", "claude-opus-4-20250115")
-	if model != "default-model" {
-		t.Errorf("model = %q, want default-model (fallback when no subscriptionSvc)", model)
+	if model != "claude-opus-4-20250115" {
+		t.Errorf("model = %q, want claude-opus-4-20250115 (fallback uses target model name)", model)
 	}
-	if usedCustom {
-		t.Error("usedCustom should be false when no subscriptionSvc")
+	if !usedCustom {
+		t.Error("usedCustom should be true when target model is specified")
+	}
+}
+
+func TestNormalizeModelTier(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"vanguard", "vanguard"},
+		{"VANGUARD", "vanguard"},
+		{"Vanguard", "vanguard"},
+		{"strong", "vanguard"},
+		{"Strong", "vanguard"},
+		{"balance", "balance"},
+		{"medium", "balance"},
+		{"swift", "swift"},
+		{"weak", "swift"},
+		{"gpt-4o", ""},
+		{"", ""},
+		{"unknown", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeModelTier(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeModelTier(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveTierModel(t *testing.T) {
+	f := NewLLMFactory(nil, nil, "default-model")
+
+	// No tiers configured → tier keywords are recognized but model is empty
+	model, usedTier := f.resolveTierModel("vanguard")
+	if !usedTier {
+		t.Error("usedTier should be true (keyword recognized)")
+	}
+	if model != "" {
+		t.Errorf("model = %q, want empty", model)
+	}
+
+	// Non-tier value passes through unchanged
+	model, usedTier = f.resolveTierModel("gpt-4o")
+	if usedTier {
+		t.Error("usedTier should be false for non-tier value")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("model = %q, want gpt-4o", model)
+	}
+
+	// Configure tiers
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "claude-opus-4-20250115",
+		BalanceModel:  "claude-sonnet-4-20250514",
+		SwiftModel:    "gpt-4o-mini",
+	})
+
+	model, usedTier = f.resolveTierModel("vanguard")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "claude-opus-4-20250115" {
+		t.Errorf("model = %q, want claude-opus-4-20250115", model)
+	}
+
+	model, usedTier = f.resolveTierModel("balance")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want claude-sonnet-4-20250514", model)
+	}
+
+	model, usedTier = f.resolveTierModel("swift")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "gpt-4o-mini" {
+		t.Errorf("model = %q, want gpt-4o-mini", model)
+	}
+
+	// Aliases: strong/medium/weak
+	model, _ = f.resolveTierModel("strong")
+	if model != "claude-opus-4-20250115" {
+		t.Errorf("model = %q, want claude-opus-4-20250115", model)
+	}
+
+	model, _ = f.resolveTierModel("medium")
+	if model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want claude-sonnet-4-20250514", model)
+	}
+
+	model, _ = f.resolveTierModel("weak")
+	if model != "gpt-4o-mini" {
+		t.Errorf("model = %q, want gpt-4o-mini", model)
+	}
+
+	// Partial config: only vanguard set
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "opus",
+	})
+	model, usedTier = f.resolveTierModel("balance")
+	if !usedTier {
+		t.Error("usedTier should be true even for unconfigured tier")
+	}
+	if model != "" {
+		t.Errorf("model = %q, want empty for unconfigured tier", model)
+	}
+}
+
+func TestGetLLMForModel_TierResolution(t *testing.T) {
+	f := NewLLMFactory(nil, nil, "default-model")
+	f.defaultThinkingMode = "auto"
+
+	// Tier with no subscriptionSvc → fallback to default client with resolved model name
+	f.SetModelTiers(config.LLMConfig{
+		VanguardModel: "claude-opus-4-20250115",
+	})
+
+	// Without subscriptionSvc, tier resolves and uses default client with resolved name
+	_, model, _, _, usedCustom := f.GetLLMForModel("user1", "vanguard")
+	if !usedCustom {
+		t.Error("usedCustom should be true for tier resolution")
+	}
+	if model != "claude-opus-4-20250115" {
+		t.Errorf("model = %q, want claude-opus-4-20250115", model)
+	}
+
+	// Non-tier model with no subscriptionSvc → fallback to default client with target model
+	_, model, _, _, usedCustom = f.GetLLMForModel("user1", "gpt-4o")
+	if !usedCustom {
+		t.Error("usedCustom should be true when target model is specified")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("model = %q, want gpt-4o", model)
 	}
 }

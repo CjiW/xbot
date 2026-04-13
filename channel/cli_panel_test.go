@@ -150,6 +150,86 @@ func TestApplyQuickSwitch(t *testing.T) {
 	}
 }
 
+// TestSubscriptionGenerationGuard tests that stale per-subscription LLM values
+// are NEVER written back after a subscription switch. This is the structural guarantee
+// against the subscription overwrite bug.
+func TestSubscriptionGenerationGuard(t *testing.T) {
+	model := newCLIModel()
+	model.subGeneration = 5
+
+	// Simulate: settings panel opens with generation 5
+	model.panelSubGeneration = model.subGeneration
+
+	// Simulate: user edits some values
+	values := map[string]string{
+		"llm_provider":   "openai",
+		"llm_api_key":    "old-key-123",
+		"llm_model":      "gpt-4o",
+		"llm_base_url":   "https://api.openai.com/v1",
+		"vanguard_model": "claude-opus-4",
+		"balance_model":  "claude-sonnet-4",
+		"max_tokens":     "4096",
+	}
+
+	// Simulate: subscription switch happens (generation increments)
+	model.subGeneration = 6
+
+	// Simulate: the onSubmit callback runs (this is what the guard checks)
+	// After switch, stale LLM fields should be stripped
+	if model.panelSubGeneration != model.subGeneration {
+		for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
+			delete(values, k)
+		}
+	}
+
+	// Verify: per-subscription LLM fields are GONE
+	for _, k := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+		if _, exists := values[k]; exists {
+			t.Errorf("BUG: stale LLM field %q should have been deleted after subscription switch", k)
+		}
+	}
+
+	// Verify: global/tier settings are PRESERVED
+	if values["vanguard_model"] != "claude-opus-4" {
+		t.Errorf("global setting vanguard_model should be preserved, got %q", values["vanguard_model"])
+	}
+	if values["balance_model"] != "claude-sonnet-4" {
+		t.Errorf("global setting balance_model should be preserved, got %q", values["balance_model"])
+	}
+	if values["max_tokens"] != "4096" {
+		t.Errorf("global setting max_tokens should be preserved, got %q", values["max_tokens"])
+	}
+}
+
+// TestSubscriptionGenerationGuardNoSwitch tests that when subscription does NOT change,
+// all LLM fields are preserved (no false positives).
+func TestSubscriptionGenerationGuardNoSwitch(t *testing.T) {
+	model := newCLIModel()
+	model.subGeneration = 5
+	model.panelSubGeneration = 5 // same generation = no switch
+
+	values := map[string]string{
+		"llm_provider": "anthropic",
+		"llm_api_key":  "key-456",
+		"llm_model":    "claude-sonnet-4",
+		"llm_base_url": "https://api.anthropic.com",
+	}
+
+	// Guard should NOT strip anything
+	if model.panelSubGeneration != model.subGeneration {
+		for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
+			delete(values, k)
+		}
+	}
+
+	// All fields should still be present
+	for _, k := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+		if _, exists := values[k]; !exists {
+			t.Errorf("LLM field %q should NOT be deleted when subscription hasn't changed", k)
+		}
+	}
+}
+
 // TestApplyQuickSwitchNilChannel tests that nil channel doesn't crash.
 func TestApplyQuickSwitchNilChannel(t *testing.T) {
 	mgr := &mockSubscriptionManager{

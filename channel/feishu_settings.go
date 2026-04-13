@@ -206,6 +206,24 @@ func (f *FeishuChannel) HandleSettingsAction(ctx context.Context, actionData map
 		}
 		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
 
+	case "settings_set_model_tier":
+		tier := parsed["tier"]
+		if tier == "" {
+			return nil, fmt.Errorf("missing tier")
+		}
+		model := parsed["model"]
+		if model == "" {
+			if opt, ok := actionData["selected_option"].(string); ok {
+				model = opt
+			}
+		}
+		if f.settingsCallbacks.LLMSetModelTier != nil {
+			if err := f.settingsCallbacks.LLMSetModelTier(tier, model); err != nil {
+				return nil, fmt.Errorf("设置 %s 模型失败: %v", tier, err)
+			}
+		}
+		return f.BuildSettingsCard(ctx, senderID, chatID, "model")
+
 	case "settings_activate_subscription":
 		subID := parsed["subscription_id"]
 		if subID == "" {
@@ -1237,6 +1255,66 @@ func (f *FeishuChannel) buildModelTabContent(ctx context.Context, senderID strin
 			},
 		},
 	))
+
+	// --- Model tier section ---
+	elements = append(elements, map[string]any{"tag": "hr"})
+	elements = append(elements, map[string]any{
+		"tag":     "markdown",
+		"content": "**模型等级 (SubAgent)** — 全局设置，跨订阅生效",
+	})
+	// Collect models from ALL subscriptions (not just active one) for tier selectors.
+	var allModels []string
+	if f.settingsCallbacks.LLMListAllModels != nil {
+		allModels = f.settingsCallbacks.LLMListAllModels()
+	}
+	maxTierModels := 50
+	if len(allModels) > maxTierModels {
+		allModels = allModels[:maxTierModels]
+	}
+	for _, tier := range []struct {
+		key, label string
+	}{
+		{"vanguard", "Vanguard（强）"},
+		{"balance", "Balance（中）"},
+		{"swift", "Swift（弱）"},
+	} {
+		currentTierModel := ""
+		if f.settingsCallbacks.LLMGetModelTier != nil {
+			currentTierModel = f.settingsCallbacks.LLMGetModelTier(tier.key)
+		}
+		tierDisplay := currentTierModel
+		if tierDisplay == "" {
+			tierDisplay = "未设置"
+		}
+		var tierOptions []map[string]any
+		if len(allModels) > 0 {
+			for _, m := range allModels {
+				tierOptions = append(tierOptions, map[string]any{
+					"text":  map[string]any{"tag": "plain_text", "content": m},
+					"value": m,
+				})
+			}
+		}
+		if len(tierOptions) > 0 {
+			elements = append(elements, buildSettingRow(
+				tier.label,
+				tierDisplay,
+				map[string]any{
+					"tag":            "select_static",
+					"name":           "settings_tier_" + tier.key + "_select",
+					"placeholder":    map[string]any{"tag": "plain_text", "content": "选择模型..."},
+					"initial_option": currentTierModel,
+					"options":        tierOptions,
+					"value": map[string]string{
+						"action_data": mustMapToJSON(map[string]string{
+							"action": "settings_set_model_tier",
+							"tier":   tier.key,
+						}),
+					},
+				},
+			))
+		}
+	}
 
 	// --- Subscription management section ---
 	elements = append(elements, map[string]any{"tag": "hr"})

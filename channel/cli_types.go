@@ -497,6 +497,8 @@ type SettingsService interface {
 // ModelLister provides available model names for the settings combo box.
 type ModelLister interface {
 	ListModels() []string
+	// ListAllModels returns models across all subscriptions (for global tier settings).
+	ListAllModels() []string
 }
 
 // Subscription represents a LLM subscription for display/selection.

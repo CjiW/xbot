@@ -31,15 +31,22 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Async subscription switch completed
 	if done, ok := msg.(cliSwitchLLMDoneMsg); ok {
+		returnToSettings := m.quickSwitchReturnToPanel
+		m.quickSwitchReturnToPanel = false
 		if done.err != nil {
 			m.showTempStatus(fmt.Sprintf("Failed to switch LLM: %v", done.err))
 		} else if done.mgr != nil {
 			if err := done.mgr.SetDefault(done.subID); err != nil {
 				m.showTempStatus(fmt.Sprintf("LLM switched but failed to save: %v", err))
 			} else {
+				m.subGeneration++ // subscription actually changed
 				m.showTempStatus(fmt.Sprintf("Switched to: %s (%s)", done.subName, done.subModel))
 			}
 			m.refreshCachedModelName()
+		}
+		// If we came from the settings panel, re-open it so the user can continue editing
+		if returnToSettings {
+			m.openSettingsFromQuickSwitch()
 		}
 		return m, nil
 	}
@@ -55,6 +62,14 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case <-themeChangeCh:
 		m.applyThemeAndRebuild(currentThemeName)
 		m.updateViewportContent()
+	default:
+	}
+
+	// Model list load error notification from LLM goroutines
+	select {
+	case err := <-modelsLoadErrorCh:
+		m.showTempStatus(fmt.Sprintf("Model list load failed: %v", err))
+		_ = m.clearTempStatusCmd()
 	default:
 	}
 
@@ -433,8 +448,29 @@ func (m *cliModel) layoutViewportHeight() int {
 	fixedLines := 3 // titleBar + status + footer
 
 	if m.panelMode != "" {
-		// Panel 模式：viewport 缩到最小，给 panel 尽可能多的空间
-		// 用户在操作 panel 时 viewport 只是背景参考
+		if m.panelMode == "askuser" {
+			// AskUser split layout: viewport stays visible above the panel.
+			// Calculate panel content height, cap it, let viewport take the rest.
+			askContent := m.viewAskUserPanel()
+			askLines := strings.Count(askContent, "\n") + 1
+			panelBorder := 2                // PanelBox top + bottom border
+			fixedLines := 2                 // titleBar + toast (no separate footer — hints are in-panel)
+			maxPanelH := (m.height / 2) + 2 // panel gets at most ~half the screen
+			minPanelH := askLines + panelBorder
+			if minPanelH < 8 {
+				minPanelH = 8
+			}
+			if minPanelH > maxPanelH {
+				minPanelH = maxPanelH
+			}
+			viewportH := m.height - fixedLines - minPanelH
+			if viewportH < 5 {
+				viewportH = 5
+				_ = m.height - fixedLines - viewportH // panel gets the rest
+			}
+			return viewportH
+		}
+		// Other panels: viewport shrinks to minimum, panel takes all space
 		return 3
 	}
 

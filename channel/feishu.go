@@ -91,6 +91,14 @@ type SettingsCallbacks struct {
 	// LLMSetPersonalConcurrency 设置用户个人 LLM 并发上限
 	LLMSetPersonalConcurrency func(senderID string, personal int) error
 
+	// Model tier get/set (global config, not per-user)
+	// LLMGetModelTier returns the current model mapping for a tier ("vanguard"/"balance"/"swift").
+	LLMGetModelTier func(tier string) string
+	// LLMSetModelTier sets the model mapping for a tier and persists to config.
+	LLMSetModelTier func(tier, model string) error
+	// LLMListAllModels returns models from all subscriptions (for tier selectors).
+	LLMListAllModels func() []string
+
 	// RunnerConnectCmdGet 返回远程 Runner 连接命令（空字符串表示未启用）
 	// Deprecated: replaced by per-user token callbacks below.
 	RunnerConnectCmdGet func(senderID string) string

@@ -577,6 +577,7 @@ func main() {
 
 	// 所有工具注册完成，索引全局工具（用于 search_tools 语义搜索）
 	agentLoop.IndexGlobalTools()
+	agentLoop.LLMFactory().SetModelTiers(cfg.LLM)
 
 	tokenDB, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -642,6 +643,35 @@ func main() {
 			},
 			LLMSetThinkingMode: func(senderID string, mode string) error {
 				return agentLoop.SetUserThinkingMode(senderID, mode)
+			},
+			LLMGetModelTier: func(tier string) string {
+				switch tier {
+				case "vanguard":
+					return cfg.LLM.VanguardModel
+				case "balance":
+					return cfg.LLM.BalanceModel
+				case "swift":
+					return cfg.LLM.SwiftModel
+				default:
+					return ""
+				}
+			},
+			LLMSetModelTier: func(tier, model string) error {
+				switch tier {
+				case "vanguard":
+					cfg.LLM.VanguardModel = model
+				case "balance":
+					cfg.LLM.BalanceModel = model
+				case "swift":
+					cfg.LLM.SwiftModel = model
+				default:
+					return fmt.Errorf("unknown tier: %s", tier)
+				}
+				agentLoop.LLMFactory().SetModelTiers(cfg.LLM)
+				return config.SaveToFile(config.ConfigFilePath(), cfg)
+			},
+			LLMListAllModels: func() []string {
+				return agentLoop.LLMFactory().ListAllModelsForUser("")
 			},
 			LLMListSubscriptions: func(senderID string) ([]channel.Subscription, error) {
 				subs, err := agentLoop.LLMFactory().GetSubscriptionSvc().List(senderID)

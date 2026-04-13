@@ -562,9 +562,14 @@ func (m *cliModel) newPanelTextArea(value string, width, height int) textarea.Mo
 	return ta
 }
 
-// ApplyTheme 切换当前配色方案。支持: midnight, ocean, forest, sunset, rose, mono。
-// 无效名称回退到 midnight。变更后通过 themeChangeCh 通知运行中的 model。
+// themeChangeCh signals the running model to rebuild styles after a theme change.
 var themeChangeCh = make(chan struct{}, 1)
+
+// modelsLoadErrorCh carries model list API load errors from LLM goroutines to the tea Update loop.
+var modelsLoadErrorCh = make(chan error, 1)
+
+// ModelsLoadErrorCh returns the channel for model list load errors.
+func ModelsLoadErrorCh() chan<- error { return modelsLoadErrorCh }
 
 // currentThemeName tracks the active theme name for themeChangeCh handler.
 var currentThemeName string

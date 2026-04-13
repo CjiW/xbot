@@ -462,6 +462,18 @@ func localeZH() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API 地址（兼容 OpenAI 格式的第三方服务可修改此项）",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			{
+				Key: "vanguard_model", Label: "Vanguard 模型", Description: "SubAgent 的高强度模型等级映射",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "balance_model", Label: "Balance 模型", Description: "SubAgent 的均衡模型等级映射",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "swift_model", Label: "Swift 模型", Description: "SubAgent 的轻量模型等级映射",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 订阅管理", Type: SettingTypeText, Category: "LLM"},
 			{
@@ -834,6 +846,18 @@ func localeEN() *UILocale {
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API endpoint (modify for OpenAI-compatible third-party services)",
 				Type: SettingTypeText, Category: "LLM",
 			},
+			{
+				Key: "vanguard_model", Label: "Vanguard Model", Description: "SubAgent tier mapping for high-power tasks",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "balance_model", Label: "Balance Model", Description: "SubAgent tier mapping for balanced tasks",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "swift_model", Label: "Swift Model", Description: "SubAgent tier mapping for lightweight tasks",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 Subscriptions", Type: SettingTypeText, Category: "LLM"},
 			{
@@ -1205,6 +1229,18 @@ func localeJA() *UILocale {
 			{
 				Key: "llm_base_url", Label: "LLM Base URL", Description: "LLM API エンドポイント（OpenAI 互換のサードパーティサービス用に変更可）",
 				Type: SettingTypeText, Category: "LLM",
+			},
+			{
+				Key: "vanguard_model", Label: "Vanguard モデル", Description: "SubAgent の高強度タスク向けモデル階層マッピング",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "balance_model", Label: "Balance モデル", Description: "SubAgent のバランスタスク向けモデル階層マッピング",
+				Type: SettingTypeCombo, Category: "LLM",
+			},
+			{
+				Key: "swift_model", Label: "Swift モデル", Description: "SubAgent の軽量タスク向けモデル階層マッピング",
+				Type: SettingTypeCombo, Category: "LLM",
 			},
 			// Subscription management entry (display-only, triggers quick switch)
 			{Key: "subscription_manage", Label: "📦 サブスクリプション管理", Type: SettingTypeText, Category: "LLM"},

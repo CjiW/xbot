@@ -157,6 +157,45 @@ func (m *cliModel) View() tea.View {
 			warningText,
 			input,
 		)
+	} else if m.panelMode == "askuser" {
+		// §12b AskUser split layout: viewport visible above, panel at bottom
+		// Note: no panelFooter here — hints are inside the panel (viewAskUserPanel)
+		askRaw := m.viewAskUserPanel()
+		m.clampAskUserPanelScroll(askRaw)
+		askLines := strings.Split(askRaw, "\n")
+		// Calculate available height for the ask panel
+		fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
+		panelBorder := 2
+		viewportH := m.layoutViewportHeight()
+		askVisibleH := m.height - fixedLines - viewportH - panelBorder
+		if askVisibleH < 3 {
+			askVisibleH = 3
+		}
+		if m.askPanelScrollY+askVisibleH > len(askLines) {
+			m.askPanelScrollY = max(0, len(askLines)-askVisibleH)
+		}
+		end := m.askPanelScrollY + askVisibleH
+		if end > len(askLines) {
+			end = len(askLines)
+		}
+		visibleAsk := askLines[m.askPanelScrollY:end]
+		askContent := strings.Join(visibleAsk, "\n")
+		boxedAsk := m.styles.PanelBox.Render(askContent)
+		// Scroll indicator
+		totalAskLines := len(askLines)
+		scrollHint := ""
+		if totalAskLines > askVisibleH {
+			pct := (m.askPanelScrollY + askVisibleH) * 100 / totalAskLines
+			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] ↑↓PgUp/PgDn scroll", pct))
+		}
+		content = fmt.Sprintf(
+			"%s\n%s\n%s%s%s",
+			titleBar,
+			m.viewport.View(),
+			boxedAsk,
+			scrollHint,
+			toastStr,
+		)
 	} else if m.panelMode != "" {
 		// §12 Panel mode: 手动切片 + PanelBox 包裹（边框永远在屏幕内）
 		panelFooter := m.renderFooter()

@@ -28,10 +28,93 @@ func (m *cliModel) invalidateAllCache(updateViewport bool) {
 
 // toggleToolSummary toggles the tool-summary expanded state,
 // invalidates all cached rendering, clears cachedHistory, and refreshes the viewport.
+// It preserves the viewport scroll position anchored to the first visible message,
+// so Ctrl+O doesn't cause a jarring jump when tool summary lines change.
 func (m *cliModel) toggleToolSummary() {
+	// Find the first visible message index before toggling.
+	prevYOffset := m.viewport.YOffset()
+	prevAtBottom := m.viewport.AtBottom()
+	anchorMsgIdx := -1
+	if !prevAtBottom && len(m.msgLineOffsets) > 0 {
+		for i := len(m.msgLineOffsets) - 1; i >= 0; i-- {
+			if m.msgLineOffsets[i] <= prevYOffset {
+				anchorMsgIdx = i
+				break
+			}
+		}
+	}
+
 	m.toolSummaryExpanded = !m.toolSummaryExpanded
 	m.cachedHistory = ""
 	m.invalidateAllCache(true)
+
+	// Restore scroll position anchored to the same message.
+	if !prevAtBottom && anchorMsgIdx >= 0 && anchorMsgIdx < len(m.msgLineOffsets) {
+		m.viewport.SetYOffset(m.msgLineOffsets[anchorMsgIdx])
+	}
+}
+
+// openSettingsFromQuickSwitch restores the settings panel after a subscription quick switch.
+// The subscription generation guard (in onSubmit) prevents stale LLM fields from being
+// written back. Here we only need to refresh LLM display values from the new active
+// subscription and preserve global settings from the backup.
+func (m *cliModel) openSettingsFromQuickSwitch() {
+	if m.channel == nil || len(m.panelValuesBackup) == 0 {
+		return
+	}
+	schema := m.channel.SettingsSchema()
+	if len(schema) == 0 {
+		return
+	}
+	// Refresh model list options in the schema (subscription change may affect available models)
+	if m.channel.modelLister != nil {
+		allModels := m.channel.modelLister.ListAllModels()
+		for i, s := range schema {
+			if (s.Key == "llm_model" || s.Key == "vanguard_model" || s.Key == "balance_model" || s.Key == "swift_model") && len(allModels) > 0 {
+				opts := make([]SettingOption, len(allModels))
+				for j, ml := range allModels {
+					opts[j] = SettingOption{Label: ml, Value: ml}
+				}
+				schema[i].Options = opts
+			}
+		}
+	}
+	// Re-read ALL values fresh (including LLM fields from new active subscription)
+	values := make(map[string]string)
+	if m.channel.config.GetCurrentValues != nil {
+		for k, v := range m.channel.config.GetCurrentValues() {
+			values[k] = v
+		}
+	}
+	if m.channel.settingsSvc != nil {
+		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
+		if err == nil {
+			for k, v := range vals {
+				switch k {
+				case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
+					continue
+				}
+				values[k] = v
+			}
+		}
+	}
+	// Overlay non-LLM settings from backup (preserves user's in-memory edits for global settings)
+	perSubKeys := map[string]bool{
+		"llm_provider": true, "llm_api_key": true, "llm_model": true, "llm_base_url": true,
+	}
+	for k, v := range m.panelValuesBackup {
+		if !perSubKeys[k] {
+			values[k] = v
+		}
+	}
+	cursor := m.panelCursorBackup
+	onSubmit := m.panelOnSubmitBackup
+	// Clear backup
+	m.panelValuesBackup = nil
+	m.panelOnSubmitBackup = nil
+	// Open panel with restored state
+	m.openSettingsPanel(schema, values, onSubmit)
+	m.panelCursor = cursor
 }
 
 // startAgentTurn transitions the model into the "agent processing" state:
@@ -192,6 +275,65 @@ func (m *cliModel) clampPanelScroll(rawContent string) {
 	}
 	if m.panelScrollY > total-visible {
 		m.panelScrollY = total - visible
+	}
+}
+
+// clampAskUserPanelScroll adjusts askPanelScrollY for the askuser split layout.
+// The visible height depends on viewport height + fixed chrome, not panelVisibleHeight().
+func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
+	total := strings.Count(rawContent, "\n") + 1
+	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
+	panelBorder := 2
+	viewportH := m.layoutViewportHeight()
+	visible := m.height - fixedLines - viewportH - panelBorder
+	if visible < 3 {
+		visible = 3
+	}
+	if total <= visible {
+		m.askPanelScrollY = 0
+		return
+	}
+	// When content overflows, default to showing the bottom (hints) rather than the top.
+	// Only respect user's explicit scroll position if they've scrolled away from default.
+	if m.askPanelScrollY == 0 {
+		m.askPanelScrollY = total - visible
+	}
+	if m.askPanelScrollY < 0 {
+		m.askPanelScrollY = 0
+	}
+	if m.askPanelScrollY > total-visible {
+		m.askPanelScrollY = total - visible
+	}
+}
+
+// askUserPanelVisibleHeight returns how many lines the askuser panel can display.
+func (m *cliModel) askUserPanelVisibleHeight() int {
+	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
+	panelBorder := 2
+	viewportH := m.layoutViewportHeight()
+	visible := m.height - fixedLines - viewportH - panelBorder
+	if visible < 3 {
+		return 3
+	}
+	return visible
+}
+
+// ensureAskPanelCursorVisible scrolls the askuser panel so the current cursor line is visible.
+func (m *cliModel) ensureAskPanelCursorVisible() {
+	// The cursor is at approximately: tab bar (1-2 lines) + question (1) + gap (1) + cursor position
+	lineOfCursor := 2 // question + gap
+	if m.panelTab > 0 {
+		lineOfCursor = 2 // tab bar + gap
+	}
+	cursor := m.panelOptCursor[m.panelTab]
+	lineOfCursor += cursor + 1 // +1 for the option line itself
+
+	visible := m.askUserPanelVisibleHeight()
+	if m.askPanelScrollY+visible <= lineOfCursor {
+		m.askPanelScrollY = lineOfCursor - visible + 1
+	}
+	if m.askPanelScrollY > lineOfCursor {
+		m.askPanelScrollY = lineOfCursor
 	}
 }
 

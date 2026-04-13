@@ -1525,8 +1525,6 @@ func (m *cliModel) fullRebuild() {
 	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
 	m.msgLineOffsets = m.msgLineOffsets[:0]
 	runningLines := 0
-	// §9 Ctrl+K 红线：记录红线在折行后的 viewport 行号
-	var redLineWrappedPos = -1
 	for i := range m.messages[:splitIdx] {
 		// §19 记录消息在 viewport 折行后内容中的起始行号
 		m.msgLineOffsets = append(m.msgLineOffsets, runningLines)
@@ -1551,10 +1549,6 @@ func (m *cliModel) fullRebuild() {
 		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
 		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
 			boundary := m.renderDeleteBoundaryLine()
-			// boundaryStartLine: the viewport line where the boundary begins (the leading \n)
-			// This is right after the current chunk (runningLines + chunk lines)
-			chunkLines := wrappedLineCount(chunk, m.width)
-			redLineWrappedPos = runningLines + chunkLines
 			historyBuf.WriteString(boundary)
 		}
 		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
@@ -1574,35 +1568,42 @@ func (m *cliModel) fullRebuild() {
 	sb.WriteString(m.renderProgressBlock())
 	sb.WriteString(m.renderRewindResultBlock())
 
-	// §9 Ctrl+K 红线：设置内容时禁止 GotoBottom，以便随后精确定位红线
+	// §9 Ctrl+K 红线：设置内容后定位到红线
 	if m.confirmDelete > 0 {
 		m.setViewportContentForScroll(sb.String())
+		m.scrollToRedLine()
 	} else {
 		m.setViewportContent(sb.String())
 	}
-
-	// §9 Ctrl+K 红线：自动滚动到红线位置（使用折行后的精确行号）
-	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
-		m.scrollViewportToRedLine(redLineWrappedPos)
-	}
 }
 
-// scrollViewportToRedLine scrolls the viewport so the red line boundary is visible
-// near the top. Used by all viewport update paths during confirmDelete mode.
-func (m *cliModel) scrollViewportToRedLine(redLinePos int) {
-	if redLinePos < 0 {
+// scrollToRedLine finds the red line boundary in the viewport content and scrolls to it.
+// Uses viewport's GetContent() to find the boundary, guaranteeing line number matches.
+func (m *cliModel) scrollToRedLine() {
+	if m.confirmDelete <= 0 {
 		return
+	}
+	content := m.viewport.GetContent()
+	idx := strings.Index(content, "━")
+	if idx < 0 {
+		return
+	}
+	// Count newlines before the red line to get the viewport line number
+	lineNum := strings.Count(content[:idx], "\n")
+	// Scroll so the red line appears a few lines from the top
+	scrollTarget := lineNum - 2
+	if scrollTarget < 0 {
+		scrollTarget = 0
 	}
 	maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
 	if maxOff < 0 {
 		maxOff = 0
 	}
-	target := redLinePos
-	if target > maxOff {
-		target = maxOff
+	if scrollTarget > maxOff {
+		scrollTarget = maxOff
 	}
-	m.viewport.SetYOffset(target)
-	m.redLineTargetYOff = target
+	m.viewport.SetYOffset(scrollTarget)
+	m.redLineTargetYOff = scrollTarget
 }
 
 // scrollToRedLineIfNeeded restores the viewport to the cached red line position.

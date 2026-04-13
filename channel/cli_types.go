@@ -173,7 +173,7 @@ func newGlamourRenderer(wrapWidth int) *glamour.TermRenderer {
 // cliCommands 已知命令列表（用于 Tab 补全，§8）
 var cliCommands = []string{
 	"/cancel", "/clear", "/compact", "/context", "/exit", "/help",
-	"/new", "/quit", "/search", "/settings", "/setup", "/tasks", "/update",
+	"/new", "/quit", "/rewind", "/search", "/settings", "/setup", "/tasks", "/update",
 	"/usage",
 }
 

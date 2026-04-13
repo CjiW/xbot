@@ -6,8 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	log "xbot/logger"
 )
 
 // handleKeyPress processes key press events in the main update loop.
@@ -15,115 +13,6 @@ import (
 // immediately; otherwise, post-switch processing (viewport/textarea update) should continue.
 func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Model, []tea.Cmd, bool) {
 	var cmds []tea.Cmd
-
-	// §9 Ctrl+K 确认模式：必须在 switch msg.Code 之前拦截所有按键
-	if m.confirmDelete > 0 {
-		groups := visibleMsgGroupIndices(m.messages)
-		switch msg.String() {
-		case "y", "Y":
-			// Rewind all: conversation + file rollback
-			if m.confirmDelete > len(groups) {
-				m.confirmDelete = len(groups)
-			}
-			cutIdx := groups[len(groups)-m.confirmDelete]
-			// Get timestamp of the first message being removed (for DB truncation)
-			var cutoff time.Time
-			if cutIdx < len(m.messages) {
-				cutoff = m.messages[cutIdx].timestamp
-			}
-			// Count turns being rewound (for file checkpoint lookup)
-			rewindFromTurn := len(groups) - m.confirmDelete
-
-			// Truncate UI messages
-			m.messages = m.messages[:cutIdx]
-			// Truncate DB session messages (async, by timestamp)
-			if m.trimHistoryFn == nil {
-				log.Warn("Ctrl+K rewind: trimHistoryFn is nil, DB messages will NOT be truncated")
-			} else if cutoff.IsZero() {
-				log.Warn("Ctrl+K rewind: cutoff timestamp is zero, DB messages will NOT be truncated")
-			} else {
-				log.WithFields(log.Fields{"cutIdx": cutIdx, "cutoff": cutoff, "totalMsgs": len(m.messages)}).Info("Ctrl+K rewind: truncating DB messages")
-				go func() {
-					if err := m.trimHistoryFn(cutoff); err != nil {
-						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
-					}
-				}()
-			}
-
-			// File rollback if checkpoint hook is available
-			if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
-				m.rewindResult = m.checkpointHook.Store().Rewind(rewindFromTurn)
-			}
-
-			m.confirmDelete = 0
-			m.redLineTargetYOff = 0
-			m.redLineWrappedPos = 0
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			m.updateViewportContent()
-			return m, nil, true
-		case "k", "K":
-			// Rewind conversation only (no file rollback)
-			if m.confirmDelete > len(groups) {
-				m.confirmDelete = len(groups)
-			}
-			cutIdx := groups[len(groups)-m.confirmDelete]
-			var cutoff time.Time
-			if cutIdx < len(m.messages) {
-				cutoff = m.messages[cutIdx].timestamp
-			}
-			m.messages = m.messages[:cutIdx]
-			if m.trimHistoryFn == nil {
-				log.Warn("Ctrl+K rewind (K): trimHistoryFn is nil, DB messages will NOT be truncated")
-			} else if cutoff.IsZero() {
-				log.Warn("Ctrl+K rewind (K): cutoff timestamp is zero, DB messages will NOT be truncated")
-			} else {
-				log.WithFields(log.Fields{"cutIdx": cutIdx, "cutoff": cutoff}).Info("Ctrl+K rewind (K): truncating DB messages")
-				go func() {
-					if err := m.trimHistoryFn(cutoff); err != nil {
-						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
-					}
-				}()
-			}
-			m.confirmDelete = 0
-			m.redLineTargetYOff = 0
-			m.redLineWrappedPos = 0
-			m.rewindResult = nil
-			m.renderCacheValid = false
-			m.cachedHistory = ""
-			m.updateViewportContent()
-			return m, nil, true
-		case "n", "N":
-			// Cancel rewind
-			m.confirmDelete = 0
-			m.redLineTargetYOff = 0
-			m.redLineWrappedPos = 0
-			m.renderCacheValid = false
-			m.updateViewportContent()
-			return m, nil, true
-		default:
-			// Check number keys (adjust rewind count)
-			if len(msg.Text) > 0 {
-				if len(msg.Text) == 1 && msg.Text[0] >= '1' && msg.Text[0] <= '9' {
-					newDel := int(msg.Text[0] - '0')
-					if newDel > len(groups) {
-						newDel = len(groups)
-					}
-					m.confirmDelete = newDel
-					m.renderCacheValid = false
-					m.updateViewportContent()
-					return m, nil, true
-				}
-			}
-			// Other keys also cancel (including Esc)
-			m.confirmDelete = 0
-			m.redLineTargetYOff = 0
-			m.redLineWrappedPos = 0
-			m.renderCacheValid = false
-			m.updateViewportContent()
-			return m, nil, true
-		}
-	}
 
 	// 🥚 彩蛋覆盖层激活时，按任意键退出（Ctrl+C 除外，已在上面处理）
 	if m.easterEgg != easterEggNone {
@@ -378,23 +267,6 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 	case msg.Code == tea.KeyTab:
 		// §8 Tab 命令补全
 		m.handleTabComplete()
-		return m, nil, true
-
-	case msg.String() == "ctrl+k":
-		// §9 Ctrl+K Rewind mode
-		if !m.typing && len(m.messages) > 0 {
-			groups := visibleMsgGroupIndices(m.messages)
-			defaultDel := 1
-			if defaultDel > len(groups) {
-				defaultDel = len(groups)
-			}
-			m.confirmDelete = defaultDel
-			m.renderCacheValid = false
-			m.updateViewportContent()
-		} else if !m.typing {
-			m.showTempStatus(m.locale.NoMessagesToDelete)
-			return m, nil, true
-		}
 		return m, nil, true
 
 	case msg.String() == "ctrl+o":

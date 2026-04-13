@@ -6,7 +6,7 @@
 //   - Tool call visualization with live status indicators
 //   - Built-in slash commands: /model, /models, /context, /new
 //   - Tab completion for commands and input history
-//   - Ctrl+K line deletion with confirmation
+//   - /rewind conversation rewind
 //   - Non-interactive (pipe) mode with streaming output
 //   - Session restore via --new/--resume flags
 
@@ -251,7 +251,7 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
-// SetTrimHistoryFn sets the callback for Ctrl+K rewind DB truncation.
+// SetTrimHistoryFn sets the callback for /rewind DB truncation.
 // cutoff is the timestamp threshold — all DB messages with created_at < cutoff will be deleted.
 // If the model hasn't been created yet, the callback is cached and applied later.
 func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
@@ -263,7 +263,7 @@ func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
 	c.pendingTrimHistoryFn = fn
 }
 
-// SetCheckpointHook sets the file checkpoint hook for Ctrl+K rewind file rollback.
+// SetCheckpointHook sets the file checkpoint hook for /rewind file rollback.
 // If the model hasn't been created yet, the hook is cached and applied later.
 func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
 	c.programMu.Lock()

@@ -312,6 +312,9 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		m.cachedHistory = ""
 		m.exitSearch()
 
+	case "/rewind":
+		m.openRewindPanel()
+
 	case "/settings":
 		// Open interactive settings panel locally
 		if m.channel != nil {
@@ -1273,22 +1276,6 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 	return sb.String()
 }
 
-// setViewportContentForScroll is like setViewportContent but skips GotoBottom(),
-// allowing the caller to set a precise YOffset afterwards (e.g. for Ctrl+K red line).
-func (m *cliModel) setViewportContentForScroll(content string) {
-	if m.width > 0 {
-		lines := strings.Split(content, "\n")
-		var wrapped []string
-		for _, line := range lines {
-			line = strings.TrimRight(line, " \t")
-			wrapped = append(wrapped, strings.Split(hardWrapRunes(line, m.width), "\n")...)
-		}
-		content = strings.Join(wrapped, "\n")
-	}
-	m.viewport.SetContent(content)
-	m.newContentHint = false
-}
-
 // setViewportContent sets viewport content while preserving scroll position.
 // If the user was at the bottom before the update, keep them at the bottom.
 // Lines wider than the viewport are truncated to prevent layout breakage.
@@ -1333,53 +1320,6 @@ func wrappedLineCount(content string, width int) int {
 	return count
 }
 
-// renderDeleteBoundaryLine renders the Ctrl+K rewind boundary line.
-func (m *cliModel) renderDeleteBoundaryLine() string {
-	w := m.width
-	if w <= 0 {
-		w = 80
-	}
-	accentStyle := m.styles.ProgressError // §20
-	label := " rewind below "
-	labelWidth := lipgloss.Width(accentStyle.Bold(true).Render(label))
-	totalPad := w - labelWidth
-	if totalPad < 0 {
-		totalPad = 0
-	}
-	leftPad := totalPad / 2
-	rightPad := totalPad - leftPad
-	line := accentStyle.Bold(true).Render(
-		strings.Repeat("━", leftPad) + label + strings.Repeat("━", rightPad),
-	)
-
-	// Build action hints
-	var hints []string
-	hints = append(hints, "[Y] rewind all")
-	hints = append(hints, "[K] conversation only")
-	hints = append(hints, "[N] cancel")
-
-	// Show file change count if checkpoint hook is available
-	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
-		groups := visibleMsgGroupIndices(m.messages)
-		turnsBefore := groups[:len(groups)-m.confirmDelete]
-		rewindFromTurn := len(turnsBefore)
-		fileCount := m.checkpointHook.Store().CountChanges(rewindFromTurn)
-		if fileCount > 0 {
-			hints = append([]string{fmt.Sprintf("%d file(s) affected", fileCount)}, hints...)
-		} else {
-			hints = append([]string{"no file changes to rollback"}, hints...)
-		}
-	}
-
-	hintLine := strings.Join(hints, "  ")
-	// Wrap hint if too long
-	if lipgloss.Width(hintLine) > w {
-		hintLine = strings.Join(hints, "\n")
-	}
-
-	return "\n" + line + "\n" + hintLine + "\n"
-}
-
 // visibleTurnIndices 返回每个"对话轮次"的起始 slice 索引。
 // 每个 turn 以 user 消息开头，包含之后所有的 assistant/tool_summary 消息
 // 直到下一个 user 消息为止。tool_summary 自动归属其前面最近的 user 所在的 turn。
@@ -1419,19 +1359,13 @@ func (m *cliModel) updateViewportContent() {
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
 		sb.WriteString(m.renderRewindResultBlock())
-		if m.confirmDelete > 0 {
-			// Don't auto-scroll during rewind confirmation — keep red line visible
-			m.setViewportContentForScroll(sb.String())
-			m.scrollToRedLineIfNeeded()
-		} else {
-			m.setViewportContent(sb.String())
-		}
+		m.setViewportContent(sb.String())
 		return
 	}
 
-	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索、无删除确认）
+	// 快速路径：缓存有效 + 仅追加了新消息（无流式、无搜索）
 	// 只渲染新增的 dirty 消息并追加到 cachedHistory，跳过全量重建。
-	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode && m.confirmDelete == 0 &&
+	if m.renderCacheValid && m.streamingMsgIdx < 0 && !m.searchMode &&
 		len(m.messages) > m.cachedMsgCount {
 		m.appendNewMessagesToCache()
 		return
@@ -1495,12 +1429,7 @@ func (m *cliModel) appendNewMessagesToCache() {
 	vp.WriteString(m.cachedHistory)
 	vp.WriteString(m.renderProgressBlock())
 	vp.WriteString(m.renderRewindResultBlock())
-	if m.confirmDelete > 0 {
-		m.setViewportContentForScroll(vp.String())
-		m.scrollToRedLineIfNeeded()
-	} else {
-		m.setViewportContent(vp.String())
-	}
+	m.setViewportContent(vp.String())
 }
 
 // fullRebuild 全量重建渲染缓存（慢速路径）
@@ -1511,15 +1440,6 @@ func (m *cliModel) fullRebuild() {
 	splitIdx := len(m.messages)
 	if m.streamingMsgIdx >= 0 {
 		splitIdx = m.streamingMsgIdx
-	}
-
-	// §9 Ctrl+K 红线：根据可见消息组计算删除边界 slice 索引
-	var redLineInsertIdx = -1
-	if m.confirmDelete > 0 {
-		groups := visibleMsgGroupIndices(m.messages)
-		if m.confirmDelete <= len(groups) {
-			redLineInsertIdx = groups[len(groups)-m.confirmDelete] - 1
-		}
 	}
 
 	// §19 重置消息行号偏移（基于折行后的 viewport 行号）
@@ -1546,14 +1466,7 @@ func (m *cliModel) fullRebuild() {
 			chunk = indicator + chunk
 		}
 		historyBuf.WriteString(m.messages[i].rendered)
-		// §9 Ctrl+K 红线：在删除边界处插入红线指示器
-		if redLineInsertIdx >= 0 && i == redLineInsertIdx {
-			boundary := m.renderDeleteBoundaryLine()
-			// 记录红线在 viewport 中的行号：当前消息结束后的下一行
-			m.redLineWrappedPos = runningLines + wrappedLineCount(chunk, m.width)
-			historyBuf.WriteString(boundary)
-		}
-		// 累加本消息（含搜索指示条/红线）在折行后占用的行数
+		// 累加本消息（含搜索指示条）在折行后占用的行数
 		runningLines += wrappedLineCount(chunk, m.width)
 	}
 
@@ -1570,39 +1483,7 @@ func (m *cliModel) fullRebuild() {
 	sb.WriteString(m.renderProgressBlock())
 	sb.WriteString(m.renderRewindResultBlock())
 
-	// §9 Ctrl+K 红线：设置内容后定位到红线
-	if m.confirmDelete > 0 {
-		m.setViewportContentForScroll(sb.String())
-		m.applyRedLineScroll()
-	} else {
-		m.setViewportContent(sb.String())
-	}
-}
-
-// applyRedLineScroll scrolls the viewport to the cached red line position.
-// Called after setViewportContentForScroll in fullRebuild.
-func (m *cliModel) applyRedLineScroll() {
-	if m.confirmDelete <= 0 || m.redLineWrappedPos < 0 {
-		return
-	}
-	maxOff := m.viewport.TotalLineCount() - m.viewport.Height()
-	if maxOff < 0 {
-		maxOff = 0
-	}
-	target := m.redLineWrappedPos
-	if target > maxOff {
-		target = maxOff
-	}
-	m.viewport.SetYOffset(target)
-	m.redLineTargetYOff = target
-}
-
-// scrollToRedLineIfNeeded restores the viewport to the cached red line position.
-// Called by fast-path viewport updates (tick, append) during confirmDelete mode.
-func (m *cliModel) scrollToRedLineIfNeeded() {
-	if m.confirmDelete > 0 && m.redLineTargetYOff >= 0 {
-		m.viewport.SetYOffset(m.redLineTargetYOff)
-	}
+	m.setViewportContent(sb.String())
 }
 
 // isSearchMatch 检查消息是否匹配当前搜索（§21）
@@ -1765,7 +1646,7 @@ func idleTickCmd() tea.Cmd {
 	})
 }
 
-// renderRewindResultBlock renders the rewind result summary after a Ctrl+K rewind.
+// renderRewindResultBlock renders the rewind result summary after a /rewind operation.
 // NOTE: This is a pure render function — it does NOT modify m.rewindResult.
 // The result is cleared when a new agent turn starts (in startAgentTurn).
 func (m *cliModel) renderRewindResultBlock() string {

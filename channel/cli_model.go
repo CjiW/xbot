@@ -201,7 +201,7 @@ type cliModel struct {
 	tempStatus      string                       // 临时状态提示（自动过期）
 	pendingCmds     []tea.Cmd                    // commands queued by helpers (auto-drained in Update)
 	shouldQuit      bool                         // Smart quit: quit after current operation completes
-	trimHistoryFn   func(cutoff time.Time) error // Ctrl+K rewind: delete DB messages older than cutoff timestamp
+	trimHistoryFn   func(cutoff time.Time) error // /rewind: delete DB messages at or after cutoff timestamp
 
 	// --- Message queue (typing 期间排队的消息) ---
 	messageQueue   []string // 排队等待发送的消息
@@ -253,12 +253,12 @@ type cliModel struct {
 	fileCompIdx     int      // 当前选中的文件补全索引
 	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
 
-	// --- §9 Ctrl+K Rewind ---
-	confirmDelete     int                   // >0 = in rewind confirmation mode, value = turns to rewind
-	checkpointHook    *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
-	rewindResult      *tools.RewindResult   // result of the last rewind operation (for display)
-	redLineWrappedPos int                   // viewport line number where red line starts (set by fullRebuild)
-	redLineTargetYOff int                   // cached YOffset to keep red line visible during confirmDelete mode
+	// --- §9 Rewind (/rewind command) ---
+	rewindMode     bool                  // true = rewind overlay active
+	rewindItems    []rewindItem          // candidate user messages for rewind selection
+	rewindCursor   int                   // selected index in rewindItems
+	rewindResult   *tools.RewindResult   // result of the last rewind operation (for display)
+	checkpointHook *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
 
 	// --- §10 TODO 进度条 ---
 	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表

@@ -253,8 +253,10 @@ type cliModel struct {
 	fileCompIdx     int      // 当前选中的文件补全索引
 	fileCompActive  bool     // true = Tab 循环中，阻止重新 glob
 
-	// --- §9 Ctrl+K 上下文编辑 ---
-	confirmDelete int // >0 时处于删除确认状态，值为待删除消息数
+	// --- §9 Ctrl+K Rewind ---
+	confirmDelete  int                   // >0 = in rewind confirmation mode, value = turns to rewind
+	checkpointHook *tools.CheckpointHook // file checkpoint hook for rewind file rollback (nil = no file tracking)
+	rewindResult   *tools.RewindResult   // result of the last rewind operation (for display)
 
 	// --- §10 TODO 进度条 ---
 	todos            []CLITodoItem // 从 progress 事件同步的 TODO 列表

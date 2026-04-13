@@ -253,6 +253,15 @@ func (c *CLIChannel) SetTrimHistoryFn(fn func(keepCount int) error) {
 	}
 }
 
+// SetCheckpointHook sets the file checkpoint hook for Ctrl+K rewind file rollback.
+func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.checkpointHook = hook
+	}
+}
+
 // InjectUserMessage 通知 CLI 有 user 消息被 agent 注入（如 bg task 完成通知）。
 // 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
 func (c *CLIChannel) InjectUserMessage(content string) {

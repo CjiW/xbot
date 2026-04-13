@@ -656,6 +656,19 @@ func main() {
 				return err
 			})
 		}
+		// Inject CheckpointHook for Ctrl+K rewind file rollback
+		checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
+		if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
+			cpHook := tools.NewCheckpointHook(cpStore)
+			if err := app.agentLoop.ToolHookChain().Use(cpHook); err != nil {
+				log.WithError(err).Warn("Failed to register checkpoint hook")
+			} else {
+				cliCh.SetCheckpointHook(cpHook)
+				defer cpStore.Cleanup()
+			}
+		} else {
+			log.WithError(err).Warn("Failed to create checkpoint store")
+		}
 	}
 
 	// Apply saved theme at startup

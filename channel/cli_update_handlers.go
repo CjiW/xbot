@@ -21,14 +21,45 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		groups := visibleMsgGroupIndices(m.messages)
 		switch msg.String() {
 		case "y", "Y":
-			// 确认删除：根据 turn 索引截断
+			// Rewind all: conversation + file rollback
+			if m.confirmDelete > len(groups) {
+				m.confirmDelete = len(groups)
+			}
+			cutIdx := groups[len(groups)-m.confirmDelete]
+			// Count turns being rewound (for file checkpoint lookup)
+			// turnsToRewind = number of user turns being removed
+			turnsBefore := groups[:len(groups)-m.confirmDelete]
+			rewindFromTurn := len(turnsBefore) // turn index where rewind starts
+
+			// Truncate UI messages
+			m.messages = m.messages[:cutIdx]
+			// Truncate DB session messages (async)
+			if m.trimHistoryFn != nil {
+				keepCount := cutIdx
+				go func() {
+					if err := m.trimHistoryFn(keepCount); err != nil {
+						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
+					}
+				}()
+			}
+
+			// File rollback if checkpoint hook is available
+			if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
+				m.rewindResult = m.checkpointHook.Store().Rewind(rewindFromTurn)
+			}
+
+			m.confirmDelete = 0
+			m.renderCacheValid = false
+			m.cachedHistory = ""
+			m.updateViewportContent()
+			return m, nil, true
+		case "k", "K":
+			// Rewind conversation only (no file rollback)
 			if m.confirmDelete > len(groups) {
 				m.confirmDelete = len(groups)
 			}
 			cutIdx := groups[len(groups)-m.confirmDelete]
 			m.messages = m.messages[:cutIdx]
-			// 同步截断数据库中的 session messages（异步避免阻塞 UI）
-			// safe: 此时 typing=false，输入被 confirmDelete 拦截，不会有并发写入
 			if m.trimHistoryFn != nil {
 				keepCount := cutIdx
 				go func() {
@@ -38,18 +69,19 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				}()
 			}
 			m.confirmDelete = 0
+			m.rewindResult = nil
 			m.renderCacheValid = false
 			m.cachedHistory = ""
 			m.updateViewportContent()
 			return m, nil, true
 		case "n", "N":
-			// 取消删除
+			// Cancel rewind
 			m.confirmDelete = 0
 			m.renderCacheValid = false
 			m.updateViewportContent()
 			return m, nil, true
 		default:
-			// 检查数字键（调整删除数量）
+			// Check number keys (adjust rewind count)
 			if len(msg.Text) > 0 {
 				if len(msg.Text) == 1 && msg.Text[0] >= '1' && msg.Text[0] <= '9' {
 					newDel := int(msg.Text[0] - '0')
@@ -62,7 +94,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 					return m, nil, true
 				}
 			}
-			// 其他键也取消（包括 Esc）
+			// Other keys also cancel (including Esc)
 			m.confirmDelete = 0
 			m.renderCacheValid = false
 			m.updateViewportContent()
@@ -326,7 +358,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		return m, nil, true
 
 	case msg.String() == "ctrl+k":
-		// §9 Ctrl+K 上下文编辑（按可见消息组计数，tool_summary 合并到 assistant）
+		// §9 Ctrl+K Rewind mode
 		if !m.typing && len(m.messages) > 0 {
 			groups := visibleMsgGroupIndices(m.messages)
 			defaultDel := 1

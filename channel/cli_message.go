@@ -1333,26 +1333,51 @@ func wrappedLineCount(content string, width int) int {
 	return count
 }
 
-// renderDeleteBoundaryLine 渲染 Ctrl+K 删除边界红线。
+// renderDeleteBoundaryLine renders the Ctrl+K rewind boundary line.
 func (m *cliModel) renderDeleteBoundaryLine() string {
 	w := m.width
 	if w <= 0 {
 		w = 80
 	}
-	redStyle := m.styles.ProgressError // §20
-	label := " ✂ delete below "
-	// label 的可见宽度（不含 ANSI 转义）
-	labelWidth := lipgloss.Width(redStyle.Bold(true).Render(label))
+	accentStyle := m.styles.ProgressError // §20
+	label := " rewind below "
+	labelWidth := lipgloss.Width(accentStyle.Bold(true).Render(label))
 	totalPad := w - labelWidth
 	if totalPad < 0 {
 		totalPad = 0
 	}
 	leftPad := totalPad / 2
 	rightPad := totalPad - leftPad
-	line := redStyle.Bold(true).Render(
+	line := accentStyle.Bold(true).Render(
 		strings.Repeat("━", leftPad) + label + strings.Repeat("━", rightPad),
 	)
-	return "\n" + line + "\n"
+
+	// Build action hints
+	var hints []string
+	hints = append(hints, "[Y] rewind all")
+	hints = append(hints, "[K] conversation only")
+	hints = append(hints, "[N] cancel")
+
+	// Show file change count if checkpoint hook is available
+	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
+		groups := visibleMsgGroupIndices(m.messages)
+		turnsBefore := groups[:len(groups)-m.confirmDelete]
+		rewindFromTurn := len(turnsBefore)
+		fileCount := m.checkpointHook.Store().CountChanges(rewindFromTurn)
+		if fileCount > 0 {
+			hints = append([]string{fmt.Sprintf("%d file(s) affected", fileCount)}, hints...)
+		} else {
+			hints = append([]string{"no file changes to rollback"}, hints...)
+		}
+	}
+
+	hintLine := strings.Join(hints, "  ")
+	// Wrap hint if too long
+	if lipgloss.Width(hintLine) > w {
+		hintLine = strings.Join(hints, "\n")
+	}
+
+	return "\n" + line + "\n" + hintLine + "\n"
 }
 
 // visibleTurnIndices 返回每个"对话轮次"的起始 slice 索引。
@@ -1393,6 +1418,7 @@ func (m *cliModel) updateViewportContent() {
 		var sb strings.Builder
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
+		sb.WriteString(m.renderRewindResultBlock())
 		m.setViewportContent(sb.String())
 		return
 	}
@@ -1422,10 +1448,12 @@ func (m *cliModel) updateStreamingOnly() {
 	// Append progress block
 	sb.WriteString(m.renderProgressBlock())
 
+	// Append rewind result block
+	sb.WriteString(m.renderRewindResultBlock())
+
 	m.setViewportContent(sb.String())
 }
 
-// appendNewMessagesToCache incrementally renders and appends only the new messages
 // since cachedMsgCount, updating cachedHistory and msgLineOffsets without rebuilding
 // old messages. This is O(new_messages) instead of O(all_messages).
 func (m *cliModel) appendNewMessagesToCache() {
@@ -1460,6 +1488,7 @@ func (m *cliModel) appendNewMessagesToCache() {
 	var vp strings.Builder
 	vp.WriteString(m.cachedHistory)
 	vp.WriteString(m.renderProgressBlock())
+	vp.WriteString(m.renderRewindResultBlock())
 	m.setViewportContent(vp.String())
 }
 
@@ -1522,13 +1551,14 @@ func (m *cliModel) fullRebuild() {
 	m.renderCacheValid = true
 	m.cachedMsgCount = len(m.messages)
 
-	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block
+	// 拼接最终内容：历史 + 当前流式消息（如有） + progress block + rewind result
 	var sb strings.Builder
 	sb.WriteString(m.cachedHistory)
 	if m.streamingMsgIdx >= 0 {
 		sb.WriteString(m.renderMessage(&m.messages[m.streamingMsgIdx]))
 	}
 	sb.WriteString(m.renderProgressBlock())
+	sb.WriteString(m.renderRewindResultBlock())
 
 	// §9 Ctrl+K 红线：设置内容时禁止 GotoBottom，以便随后精确定位红线
 	if m.confirmDelete > 0 {
@@ -1715,6 +1745,41 @@ func idleTickCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 		return idleTickMsg{}
 	})
+}
+
+// renderRewindResultBlock renders the rewind result summary after a Ctrl+K rewind.
+// NOTE: This is a pure render function — it does NOT modify m.rewindResult.
+// The result is cleared when a new agent turn starts (in startAgentTurn).
+func (m *cliModel) renderRewindResultBlock() string {
+	if m.rewindResult == nil {
+		return ""
+	}
+	r := m.rewindResult
+
+	var sb strings.Builder
+	sb.WriteString("\n")
+	sb.WriteString(m.styles.ProgressDone.Bold(true).Render("  Rewind complete"))
+	sb.WriteString("\n")
+
+	if len(r.Restored) > 0 {
+		fmt.Fprintf(&sb, "  Files restored: %d\n", len(r.Restored))
+		for _, f := range r.Restored {
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+		}
+	}
+	if len(r.CreatedDel) > 0 {
+		fmt.Fprintf(&sb, "  Files deleted: %d\n", len(r.CreatedDel))
+		for _, f := range r.CreatedDel {
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+		}
+	}
+	if len(r.Errors) > 0 {
+		for _, e := range r.Errors {
+			sb.WriteString(m.styles.ProgressError.Render(fmt.Sprintf("  Error: %s\n", e)))
+		}
+	}
+
+	return sb.String()
 }
 
 // tickerCmd is deprecated — ticker is now driven by cliTickMsg.

@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
 	"strings"
@@ -407,10 +408,11 @@ func (m *cliModel) viewBgTaskList() string {
 		// Render agents
 		for _, ag := range m.panelBgAgents {
 			statusIcon := "●"
-			statusStyle := s.ProgressRunning
+			roleColor := lipgloss.Color(RoleColor(ag.Role))
+			statusStyle := lipgloss.NewStyle().Foreground(roleColor)
 			if !ag.Running {
 				statusIcon = "◦"
-				statusStyle = s.ProgressDone
+				statusStyle = statusStyle.Faint(true)
 			}
 
 			prefix := "  "
@@ -428,10 +430,15 @@ func (m *cliModel) viewBgTaskList() string {
 				label = label[:52] + "..."
 			}
 
+			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !ag.Running {
+				labelStyle = labelStyle.Faint(true)
+			}
+
 			line := fmt.Sprintf("%s %s  %s",
 				prefix,
 				statusStyle.Render(statusIcon),
-				label,
+				labelStyle.Render(label),
 			)
 			sb.WriteString(line)
 			sb.WriteString("\n")

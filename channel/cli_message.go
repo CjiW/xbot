@@ -969,7 +969,7 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 			}
 		}
 		icon := m.ticker.viewFrames(waveFrames)
-		style := m.styles.ProgressRunning
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(RoleColor(sa.Role)))
 		switch sa.Status {
 		case "error":
 			icon = "✗"

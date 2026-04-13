@@ -17,6 +17,10 @@ import (
 
 const maxMCPConnections = 20
 
+// errNotInitialized indicates MCP config files don't exist yet.
+// The caller should NOT set initialized=true so that the next access retries.
+var errNotInitialized = fmt.Errorf("MCP config not found, will retry on next access")
+
 // SessionMCPManager 管理单个会话的 MCP 连接
 type SessionMCPManager struct {
 	mu                sync.RWMutex
@@ -75,8 +79,10 @@ func (sm *SessionMCPManager) GetCatalog() []MCPServerCatalogEntry {
 	// 首次调用时确保配置已加载
 	if !sm.initialized {
 		if err := sm.loadAndConnect(context.Background()); err != nil {
-			log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
-			sm.initialized = true
+			if err != errNotInitialized {
+				log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
+				sm.initialized = true
+			}
 			return nil
 		}
 		sm.initialized = true
@@ -108,8 +114,11 @@ func (sm *SessionMCPManager) GetSessionTools() []Tool {
 	// 首次调用时加载配置
 	if !sm.initialized {
 		if err := sm.loadAndConnect(context.Background()); err != nil {
-			log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for session")
-			sm.initialized = true // 标记为已尝试，避免重复尝试
+			if err != errNotInitialized {
+				log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for session")
+				sm.initialized = true // 真正的错误，标记为已尝试，避免重复
+			}
+			// errNotInitialized: 配置文件暂不存在，不设 initialized，下次重试
 			return nil
 		}
 		sm.initialized = true
@@ -209,12 +218,9 @@ func (sm *SessionMCPManager) loadAndConnect(ctx context.Context) error {
 	config, err := sm.loadConfig()
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.WithFields(log.Fields{
-				"session":    sm.sessionKey,
-				"globalPath": sm.globalConfigPath,
-				"userPath":   sm.userConfigPath,
-			}).Debug("No MCP config found (not an error)")
-			return nil // 没有 mcp.json 不是错误
+			// 配置文件暂不存在，返回 errNotInitialized 让调用方不标记 initialized=true，
+			// 以便下次调用时重试（配置可能稍后被 ManageTools 创建）。
+			return errNotInitialized
 		}
 		return fmt.Errorf("load mcp config: %w", err)
 	}

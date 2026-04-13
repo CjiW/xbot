@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -751,7 +752,7 @@ func (a *Agent) buildParentToolContext(ctx context.Context, channel, chatID, sen
 		SkillsDirs:          a.globalSkillDirs,
 		AgentsDir:           a.agentsDir,
 		MCPConfigPath:       tools.UserMCPConfigPath(a.workDir, senderID),
-		GlobalMCPConfigPath: resolveDataPath(a.workDir, "mcp.json"),
+		GlobalMCPConfigPath: filepath.Join(a.xbotHome, "mcp.json"),
 		DataDir:             a.workDir,
 		SandboxEnabled:      a.sandboxMode != "none",
 		PreferredSandbox:    a.sandboxMode,

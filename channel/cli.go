@@ -243,9 +243,9 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
-// SetTrimHistoryFn 设置 Ctrl+K 截断历史后的数据库同步回调。
-// keepCount 为保留的消息数，实现方应删除数据库中更早的消息。
-func (c *CLIChannel) SetTrimHistoryFn(fn func(keepCount int) error) {
+// SetTrimHistoryFn sets the callback for Ctrl+K rewind DB truncation.
+// cutoff is the timestamp threshold — all DB messages with created_at < cutoff will be deleted.
+func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
 	c.programMu.Lock()
 	defer c.programMu.Unlock()
 	if c.model != nil {

@@ -449,9 +449,10 @@ func defaultToolExecutor(cfg *RunConfig) func(ctx context.Context, tc llm.ToolCa
 		}
 		toolCtx := buildToolContext(toolExecCtx, cfg)
 
-		// Run pre-tool hooks (inject perm users into context for ApprovalHook)
+		// Run pre-tool hooks after ToolContext is built so hooks can access
+		// working directory and other context for path resolution etc.
 		if cfg.HookChain != nil {
-			hookCtx := toolExecCtx
+			hookCtx := tools.WithWorkingDir(toolExecCtx, toolCtx.WorkingDir)
 			if err := cfg.HookChain.RunPre(hookCtx, tc.Name, tc.Arguments); err != nil {
 				return nil, fmt.Errorf("pre-tool hook blocked %q: %w", tc.Name, err)
 			}

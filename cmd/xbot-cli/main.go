@@ -648,11 +648,11 @@ func main() {
 		}
 		// Inject TrimHistoryFn for Ctrl+K session truncation
 		if cliTenantID != 0 && cliSessionSvc != nil {
-			cliCh.SetTrimHistoryFn(func(keepCount int) error {
-				if keepCount <= 0 {
+			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
+				if cutoff.IsZero() {
 					return nil
 				}
-				_, err := cliSessionSvc.PurgeOldMessages(cliTenantID, keepCount)
+				_, err := cliSessionSvc.PurgeOlderThan(cliTenantID, cutoff)
 				return err
 			})
 		}

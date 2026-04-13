@@ -26,18 +26,20 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				m.confirmDelete = len(groups)
 			}
 			cutIdx := groups[len(groups)-m.confirmDelete]
+			// Get timestamp of the first message being removed (for DB truncation)
+			var cutoff time.Time
+			if cutIdx < len(m.messages) {
+				cutoff = m.messages[cutIdx].timestamp
+			}
 			// Count turns being rewound (for file checkpoint lookup)
-			// turnsToRewind = number of user turns being removed
-			turnsBefore := groups[:len(groups)-m.confirmDelete]
-			rewindFromTurn := len(turnsBefore) // turn index where rewind starts
+			rewindFromTurn := len(groups) - m.confirmDelete
 
 			// Truncate UI messages
 			m.messages = m.messages[:cutIdx]
-			// Truncate DB session messages (async)
-			if m.trimHistoryFn != nil {
-				keepCount := cutIdx
+			// Truncate DB session messages (async, by timestamp)
+			if m.trimHistoryFn != nil && !cutoff.IsZero() {
 				go func() {
-					if err := m.trimHistoryFn(keepCount); err != nil {
+					if err := m.trimHistoryFn(cutoff); err != nil {
 						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
 					}
 				}()
@@ -59,11 +61,14 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 				m.confirmDelete = len(groups)
 			}
 			cutIdx := groups[len(groups)-m.confirmDelete]
+			var cutoff time.Time
+			if cutIdx < len(m.messages) {
+				cutoff = m.messages[cutIdx].timestamp
+			}
 			m.messages = m.messages[:cutIdx]
-			if m.trimHistoryFn != nil {
-				keepCount := cutIdx
+			if m.trimHistoryFn != nil && !cutoff.IsZero() {
 				go func() {
-					if err := m.trimHistoryFn(keepCount); err != nil {
+					if err := m.trimHistoryFn(cutoff); err != nil {
 						log.WithError(err).Warn("Failed to trim session history after Ctrl+K")
 					}
 				}()

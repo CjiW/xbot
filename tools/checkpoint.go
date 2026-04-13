@@ -288,7 +288,7 @@ func NewCheckpointHook(store *CheckpointStore) *CheckpointHook {
 func (h *CheckpointHook) Name() string { return "checkpoint" }
 
 // PreToolUse snapshots the file before a FileCreate/FileReplace operation.
-func (h *CheckpointHook) PreToolUse(_ context.Context, toolName string, args string) error {
+func (h *CheckpointHook) PreToolUse(ctx context.Context, toolName string, args string) error {
 	if toolName != "FileCreate" && toolName != "FileReplace" {
 		return nil
 	}
@@ -297,6 +297,18 @@ func (h *CheckpointHook) PreToolUse(_ context.Context, toolName string, args str
 	if filePath == "" {
 		return nil
 	}
+
+	// Resolve to absolute path using working directory from context
+	if !filepath.IsAbs(filePath) {
+		wd := WorkingDirFromContext(ctx)
+		if wd == "" {
+			wd, _ = os.Getwd()
+		}
+		if wd != "" {
+			filePath = filepath.Join(wd, filePath)
+		}
+	}
+	filePath = filepath.Clean(filePath)
 
 	// Read current file content (if it exists)
 	var content []byte

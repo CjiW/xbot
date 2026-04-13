@@ -1419,7 +1419,12 @@ func (m *cliModel) updateViewportContent() {
 		sb.WriteString(m.cachedHistory)
 		sb.WriteString(m.renderProgressBlock())
 		sb.WriteString(m.renderRewindResultBlock())
-		m.setViewportContent(sb.String())
+		if m.confirmDelete > 0 {
+			// Don't auto-scroll during rewind confirmation — keep red line visible
+			m.setViewportContentForScroll(sb.String())
+		} else {
+			m.setViewportContent(sb.String())
+		}
 		return
 	}
 
@@ -1571,11 +1576,15 @@ func (m *cliModel) fullRebuild() {
 	if m.confirmDelete > 0 && redLineWrappedPos >= 0 {
 		vpHeight := m.viewport.Height()
 		totalLines := m.viewport.TotalLineCount()
-		// 将红线定位到视口中央偏上（留 3 行上方边距）
-		targetY := redLineWrappedPos - 3
-		if targetY < 0 {
-			targetY = 0
+		// redLineWrappedPos points to the line after the boundary.
+		// We want to show the boundary near the top of the viewport (line 3).
+		// The boundary itself spans a few lines, so target just before it.
+		boundaryStart := redLineWrappedPos - 2 // approximate boundary start (2 lines for boundary content)
+		if boundaryStart < 0 {
+			boundaryStart = 0
 		}
+		targetY := boundaryStart
+		// Ensure boundary is visible: don't scroll past the point where boundary goes off-screen
 		maxOff := totalLines - vpHeight
 		if maxOff < 0 {
 			maxOff = 0

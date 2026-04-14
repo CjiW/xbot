@@ -230,9 +230,10 @@ type CLIToolProgress struct {
 	Name      string
 	Label     string
 	Status    string
-	Elapsed   int64 // milliseconds
+	Elapsed   int64 // milliseconds (from progress event)
 	Iteration int   // 所属迭代 ID
 	Summary   string
+	StartedAt time.Time // when tool started (for live elapsed timer)
 }
 
 // CLISubAgent 子 Agent 的结构化进度状态。

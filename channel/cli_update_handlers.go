@@ -294,6 +294,16 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		return
 	}
 	m.progress = msg.payload
+	// Set StartedAt for active tools so we can render live elapsed timers.
+	// Only set on first appearance (when StartedAt is zero) to avoid drift.
+	if m.progress != nil {
+		for i := range m.progress.ActiveTools {
+			t := &m.progress.ActiveTools[i]
+			if t.StartedAt.IsZero() && t.Elapsed > 0 {
+				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			}
+		}
+	}
 	// Update bg task count from callback
 	if m.bgTaskCountFn != nil {
 		m.bgTaskCount = m.bgTaskCountFn()

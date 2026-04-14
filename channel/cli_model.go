@@ -471,9 +471,8 @@ func newCLIModel() *cliModel {
 
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
-	// Ticker — speed=2 means 200ms per frame (dotFrames: 10 frames → 2s full cycle)
+	// Ticker
 	tk := newAnimTicker(dotFrames, currentTheme.Warning)
-	tk.speed = 2
 
 	return &cliModel{
 		viewport:        vp,

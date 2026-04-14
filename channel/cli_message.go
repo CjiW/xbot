@@ -915,23 +915,25 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Active tools — label + elapsed (no progress bar)
+		// Active tools — label + live elapsed timer
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			pulseIcon := m.ticker.viewFrames(pulseFrames, 3) // 300ms/frame → 1.5s cycle
+			pulseIcon := m.ticker.viewFrames(pulseFrames, 3)
+			// Calculate live elapsed time
+			var elapsedMs int64
+			if !tool.StartedAt.IsZero() {
+				elapsedMs = time.Since(tool.StartedAt).Milliseconds()
+			} else {
+				elapsedMs = tool.Elapsed
+			}
+			elapsedStr := formatElapsed(elapsedMs)
 			// Prefix: "  │ "(4) + icon(2) + " "(1) = 7, elapsed adds ~8 more
-			overhead := 7
-			if tool.Elapsed > 0 {
-				overhead += 2 + len(formatElapsed(tool.Elapsed))
-			}
+			overhead := 7 + 2 + len(elapsedStr)
 			label = truncateToWidth(label, innerWidth-overhead)
-			line := fmt.Sprintf("  │ %s %s", pulseIcon, label)
-			if tool.Elapsed > 0 {
-				line += "  " + elapsedStyle.Render(formatElapsed(tool.Elapsed))
-			}
+			line := fmt.Sprintf("  │ %s %s  %s", pulseIcon, label, elapsedStyle.Render(elapsedStr))
 			sb.WriteString(toolRunningStyle.Render(line))
 			sb.WriteString("\n")
 		}

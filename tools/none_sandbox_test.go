@@ -59,8 +59,11 @@ func TestExecKeepAlive_ChildHoldsPipeOpen(t *testing.T) {
 		if err == nil && state != nil {
 			code = extractExitCodeFromState(state)
 		}
-		// Kill the entire process group to release pipe FDs held by grandchildren
+		// Kill process group to release pipe FDs held by background
+		// sleep, then wait briefly for capture goroutines to drain
+		// before closing our pipe ends (avoids race on slow CI).
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		time.Sleep(10 * time.Millisecond)
 		stdoutPipe.Close()
 		stderrPipe.Close()
 		wg.Wait()

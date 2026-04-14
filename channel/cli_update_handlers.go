@@ -294,12 +294,25 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		return
 	}
 	m.progress = msg.payload
-	// Set StartedAt for active tools so we can render live elapsed timers.
-	// Only set on first appearance (when StartedAt is zero) to avoid drift.
+	// Preserve StartedAt across progress updates so live timers don't reset.
+	// Each structured progress event replaces ActiveTools entirely (StartedAt=zero),
+	// so we must carry forward the previous StartedAt values by matching tool name.
+	startedAtMap := make(map[string]time.Time)
+	if prev != nil {
+		for _, t := range prev.ActiveTools {
+			if !t.StartedAt.IsZero() {
+				startedAtMap[t.Name] = t.StartedAt
+			}
+		}
+	}
 	if m.progress != nil {
 		for i := range m.progress.ActiveTools {
 			t := &m.progress.ActiveTools[i]
-			if t.StartedAt.IsZero() {
+			// Restore from previous progress if available
+			if prev, ok := startedAtMap[t.Name]; ok {
+				t.StartedAt = prev
+			} else if t.StartedAt.IsZero() {
+				// First appearance: bootstrap from Elapsed or now
 				if t.Elapsed > 0 {
 					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
 				} else {

@@ -312,15 +312,15 @@ func (a *Agent) SpawnInteractiveSession(
 			}
 
 			if cancelled {
-					// Context was cancelled (parent unloaded, agent shutdown, etc.)
-					// Clean up children and remove self from panel.
-					// Check if key still exists — UnloadInteractiveSession may have
-					// already cleaned up this session, preventing duplicate cleanup.
-					if _, ok := a.interactiveSubAgents.Load(key); !ok {
-						return
-					}
-					a.cancelChildSessions(key)
-					a.interactiveSubAgents.Delete(key)
+				// Context was cancelled (parent unloaded, agent shutdown, etc.)
+				// Clean up children and remove self from panel.
+				// Check if key still exists — UnloadInteractiveSession may have
+				// already cleaned up this session, preventing duplicate cleanup.
+				if _, ok := a.interactiveSubAgents.Load(key); !ok {
+					return
+				}
+				a.cancelChildSessions(key)
+				a.interactiveSubAgents.Delete(key)
 				log.WithFields(log.Fields{
 					"role":     roleName,
 					"instance": instance,

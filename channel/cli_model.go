@@ -316,8 +316,8 @@ type cliModel struct {
 	typewriterTickActive bool                   // true when typewriter tick chain (50ms) is running
 	twVisible            int                    // typewriter: runes currently visible in stream content
 	rwVisible            int                    // typewriter: runes currently visible in reasoning stream content
-	rwCjkSkipTick       bool                   // alternates each tick to halve CJK speed (reasoning)
-	twCjkSkipTick       bool                   // alternates each tick to halve CJK speed (stream)
+	rwCjkSkipTick        bool                   // alternates each tick to halve CJK speed (reasoning)
+	twCjkSkipTick        bool                   // alternates each tick to halve CJK speed (stream)
 
 	// --- Session ---
 	workDir       string // 工作目录（标题栏显示用）

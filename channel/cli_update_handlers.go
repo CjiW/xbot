@@ -197,7 +197,7 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		// typing @path auto-populates completions via input change handler.
 		if len(m.fileCompletions) > 0 {
 			input := m.textarea.Value()
-			if _, prefix := detectAtPrefix(input); prefix != "" {
+			if ok, prefix := detectAtPrefix(input); ok {
 				selected := m.fileCompletions[m.fileCompIdx]
 				atStart := len(input) - len(prefix) - 1
 				if isDir(selected) {

@@ -193,24 +193,27 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 		// §8b @ 模式：Enter 进入目录或确认文件
-		if m.fileCompActive && len(m.fileCompletions) > 0 {
-			selected := m.fileCompletions[m.fileCompIdx]
+		// Check fileCompletions even without Tab (fileCompActive=false):
+		// typing @path auto-populates completions via input change handler.
+		if len(m.fileCompletions) > 0 {
 			input := m.textarea.Value()
-			_, prefix := detectAtPrefix(input)
-			atStart := len(input) - len(prefix) - 1
-			if isDir(selected) {
-				newInput := input[:atStart] + "@" + selected + "/"
-				m.textarea.SetValue(newInput)
-				m.fileCompActive = false
-				m.populateFileCompletions(selected + "/")
-			} else {
-				newInput := input[:atStart] + "@" + selected + " "
-				m.textarea.SetValue(newInput)
-				m.fileCompActive = false
-				m.fileCompletions = nil
-				m.fileCompIdx = 0
+			if _, prefix := detectAtPrefix(input); prefix != "" {
+				selected := m.fileCompletions[m.fileCompIdx]
+				atStart := len(input) - len(prefix) - 1
+				if isDir(selected) {
+					newInput := input[:atStart] + "@" + selected + "/"
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.populateFileCompletions(selected + "/")
+				} else {
+					newInput := input[:atStart] + "@" + selected + " "
+					m.textarea.SetValue(newInput)
+					m.fileCompActive = false
+					m.fileCompletions = nil
+					m.fileCompIdx = 0
+				}
+				return m, nil, true
 			}
-			return m, nil, true
 		}
 		content := strings.TrimSpace(m.textarea.Value())
 		if content != "" {

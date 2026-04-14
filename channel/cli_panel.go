@@ -490,12 +490,14 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 	case msg.Code == tea.KeyUp || msg.String() == "ctrl+k":
 		if m.panelBgCursor > 0 {
 			m.panelBgCursor--
+			m.ensureBgCursorVisible()
 		}
 		return true, m, nil
 
 	case msg.Code == tea.KeyDown || msg.String() == "ctrl+j":
 		if m.panelBgCursor < totalItems-1 {
 			m.panelBgCursor++
+			m.ensureBgCursorVisible()
 		}
 		return true, m, nil
 
@@ -583,6 +585,14 @@ func (m *cliModel) viewBgTaskList() string {
 	sb.WriteString(help)
 	sb.WriteString("\n")
 
+	// Calculate dynamic truncation width.
+	// PanelBox uses Width(m.width) with padding(0,1) and rounded border (2 chars).
+	// Available content width = m.width - 2(border) - 2(padding) = m.width - 4.
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+
 	totalItems := len(m.panelBgTasks) + len(m.panelBgAgents)
 	if totalItems == 0 {
 		sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
@@ -612,9 +622,12 @@ func (m *cliModel) viewBgTaskList() string {
 			}
 
 			cmd := task.Command
-			if len(cmd) > 50 {
-				cmd = cmd[:47] + "..."
+			// Prefix: prefix(~2) + icon(~1) + spaces(~2) + ID(8) + space + elapsed(~6) + space(~2) ≈ 23
+			cmdW := contentW - 23
+			if cmdW < 10 {
+				cmdW = 10
 			}
+			cmd = truncateToWidth(cmd, cmdW)
 
 			line := fmt.Sprintf("%s %s  %-8s %s  %s",
 				prefix,
@@ -623,7 +636,7 @@ func (m *cliModel) viewBgTaskList() string {
 				formatElapsed(int64(elapsed.Milliseconds())),
 				cmd,
 			)
-			sb.WriteString(line)
+			sb.WriteString(truncateToWidth(line, contentW))
 			sb.WriteString("\n")
 			idx++
 		}
@@ -659,9 +672,12 @@ func (m *cliModel) viewBgTaskList() string {
 				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
 				label = fmt.Sprintf("[agent] %s: %s", ag.Role, taskPreview)
 			}
-			if labelRunes := []rune(label); len(labelRunes) > 55 {
-				label = string(labelRunes[:52]) + "..."
+			// Prefix: prefix(~2) + icon(~1) + space(~2) ≈ 5
+			labelW := contentW - 5
+			if labelW < 10 {
+				labelW = 10
 			}
+			label = truncateToWidth(label, labelW)
 
 			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
 			if !ag.Running {
@@ -673,14 +689,17 @@ func (m *cliModel) viewBgTaskList() string {
 				statusStyle.Render(statusIcon),
 				labelStyle.Render(label),
 			)
-			sb.WriteString(line)
+			sb.WriteString(truncateToWidth(line, contentW))
 			sb.WriteString("\n")
 			if ag.Preview != "" {
 				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
 				preview = strings.TrimSpace(preview)
-				if previewRunes := []rune(preview); len(previewRunes) > 64 {
-					preview = string(previewRunes[:61]) + "..."
+				// Prefix: "    "(4)
+				previewW := contentW - 4
+				if previewW < 10 {
+					previewW = 10
 				}
+				preview = truncateToWidth(preview, previewW)
 				previewStyle := s.PanelDesc
 				if !ag.Running {
 					previewStyle = previewStyle.Faint(true)
@@ -700,31 +719,33 @@ func (m *cliModel) viewBgTaskLog() string {
 	// §20 使用缓存样式
 	s := &m.styles
 
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
+
 	var title string
 	if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 		task := m.panelBgTasks[m.panelBgCursor]
-		cmd := task.Command
-		if len(cmd) > 40 {
-			cmd = cmd[:37] + "..."
-		}
+		cmd := truncateToWidth(task.Command, contentW-12) // leave room for "#X: " prefix
 		title = fmt.Sprintf(m.locale.BgTaskLogTitle, task.ID, cmd)
 	} else if m.panelBgAgents != nil {
 		agentIdx := m.panelBgCursor - len(m.panelBgTasks)
 		if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
 			ag := m.panelBgAgents[agentIdx]
-			title = fmt.Sprintf("%s/%s", ag.Role, ag.Instance)
+			title = truncateToWidth(fmt.Sprintf("%s/%s", ag.Role, ag.Instance), contentW)
 		}
 	}
 	help := s.PanelDesc.Render(m.locale.BgTaskLogHelp)
 
 	var sb strings.Builder
-	sb.WriteString(s.PanelHeader.Render(title))
+	sb.WriteString(s.PanelHeader.Render(truncateToWidth(title, contentW)))
 	sb.WriteString("  ")
 	sb.WriteString(help)
 	sb.WriteString("\n")
 
 	for _, line := range m.panelBgLogLines {
-		sb.WriteString(line)
+		sb.WriteString(truncateToWidth(line, contentW))
 		sb.WriteString("\n")
 	}
 

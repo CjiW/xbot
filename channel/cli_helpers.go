@@ -258,6 +258,48 @@ func (m *cliModel) ensurePanelCursorVisible() {
 	}
 }
 
+// ensureBgCursorVisible adjusts panelScrollY so the bg task/agent cursor is within the visible area.
+// Accounts for preview lines (an agent with a preview takes 2 rendered lines).
+func (m *cliModel) ensureBgCursorVisible() {
+	visibleH := m.panelVisibleHeight()
+	// Calculate the cursor item's approximate line number.
+	// Tasks take 1 line each; agents take 1 line + 1 extra if they have a preview.
+	cursorLine := 0
+	// Header line
+	cursorLine = 1
+	idx := 0
+	for _, task := range m.panelBgTasks {
+		_ = task // tasks are always 1 line
+		if idx == m.panelBgCursor {
+			break
+		}
+		cursorLine++
+		idx++
+	}
+	for _, ag := range m.panelBgAgents {
+		if idx == m.panelBgCursor {
+			break
+		}
+		cursorLine++ // agent label line
+		if ag.Preview != "" {
+			cursorLine++ // preview line
+		}
+		idx++
+	}
+
+	totalLines := cursorLine + 2 // +2 for header and bottom padding
+	if totalLines <= visibleH {
+		m.panelScrollY = 0
+		return
+	}
+	if cursorLine >= m.panelScrollY+visibleH {
+		m.panelScrollY = cursorLine - visibleH + 1
+	}
+	if cursorLine < m.panelScrollY {
+		m.panelScrollY = cursorLine
+	}
+}
+
 // panelVisibleHeight 返回 panel 可见区域高度。
 func (m *cliModel) panelVisibleHeight() int {
 	h := m.height - 5 // titleBar(1) + footer(1) + toast(1) + PanelBox borders(2)

@@ -235,7 +235,12 @@ func (s *CheckpointStore) readAllInternal() ([]FileSnapshot, error) {
 func (s *CheckpointStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.file.Close()
+	if s.file == nil {
+		return nil
+	}
+	err := s.file.Close()
+	s.file = nil
+	return err
 }
 
 // Cleanup removes the entire checkpoint directory.

@@ -1252,6 +1252,9 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		log.Ctx(ctx).WithField("iteration_count", len(oneshotIA.iterationHistory)).Info("oneshot subagent completed")
 	} else {
 		log.Ctx(ctx).Warn("oneshot subagent returned nil output")
+		oneshotIA.mu.Unlock()
+		a.interactiveSubAgents.Delete(oneshotKey)
+		return &bus.OutboundMessage{}, nil
 	}
 	oneshotIA.mu.Unlock()
 	// One-shot agents are ephemeral: remove immediately after completion.
@@ -1265,10 +1268,6 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 		"has_error": out.Error != nil,
 	}).Info("SubAgent completed (via Run)")
 
-	// BUG FIX: 当 SubAgent 遇到错误时，确保错误信息在 Content 中可见。
-	// spawnSubAgent 返回 (out.OutboundMessage, nil)，Go error 始终为 nil。
-	// 虽然 adapter 会检查 OutboundMessage.Error 并传播，但为了确保主 Agent LLM
-	// 能清晰识别 SubAgent 的异常状态，在 Content 中也附加错误标注。
 	if out.Error != nil {
 		content := out.Content
 		if content == "" {

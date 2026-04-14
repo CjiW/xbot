@@ -308,6 +308,7 @@ func (m *cliModel) resetProgressState() {
 	m.iterationHistory = nil
 	m.lastSeenIteration = 0
 	m.lastReasoning = ""
+	m.progress = nil
 	m.typingStartTime = time.Now()
 }
 

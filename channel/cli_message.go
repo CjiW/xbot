@@ -978,7 +978,7 @@ func (m *cliModel) renderProgressBlock() string {
 		// SubAgent tree
 		if len(m.progress.SubAgents) > 0 {
 			var treeSB strings.Builder
-			m.renderSubAgentTree(&treeSB, m.progress.SubAgents, 1)
+			m.renderSubAgentTree(&treeSB, m.progress.SubAgents, 1, innerWidth)
 			if treeSB.Len() > 0 {
 				sb.WriteString("\n")
 				sb.WriteString(treeSB.String())
@@ -1015,7 +1015,7 @@ func (m *cliModel) renderProgressBlock() string {
 // renderSubAgentTree renders nested sub-agents with indentation.
 // Only renders running/pending agents — completed or errored ones are already
 // captured in the tool summary and shouldn't linger in the progress panel.
-func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int) {
+func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent, depth int, maxWidth int) {
 	for i, sa := range agents {
 		if sa.Status == "done" || sa.Status == "error" {
 			continue
@@ -1047,10 +1047,12 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 		if sa.Desc != "" {
 			line += ": " + sa.Desc
 		}
+		// Truncate line to fit within maxWidth to prevent hard-wrap breaking styling
+		line = truncateToWidth(line, maxWidth)
 		sb.WriteString(style.Render(line))
 		sb.WriteString("\n")
 		if len(sa.Children) > 0 {
-			m.renderSubAgentTree(sb, sa.Children, depth+1)
+			m.renderSubAgentTree(sb, sa.Children, depth+1, maxWidth)
 		}
 	}
 }

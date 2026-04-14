@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
@@ -34,7 +35,7 @@ type SessionMCPManager struct {
 	sessionLastUsed   time.Time                 // 会话级别活跃时间
 	inactivityTimeout time.Duration             // 不活跃超时配置
 	initialized       bool                      // 是否已初始化配置加载
-	initOnce          sync.Once                 // 确保后台初始化只启动一次
+	initOnce          uint32                    // atomic state: 0=idle, 1=starting, 2=started (background goroutine launched)
 	initDone          chan struct{}             // 后台初始化完成信号（closed = done）
 	onChange          func()                    // 初始化完成后的回调（通知调用方重新索引）
 }
@@ -73,7 +74,7 @@ func (sm *SessionMCPManager) UpdateScope(userID, userConfigPath, workspaceRoot s
 	sm.userConfigPath = userConfigPath
 	sm.workspaceRoot = workspaceRoot
 	sm.initialized = false
-	sm.initOnce = sync.Once{}
+	sm.initOnce = 0
 	sm.initDone = make(chan struct{})
 }
 
@@ -110,35 +111,42 @@ func (sm *SessionMCPManager) GetCatalogBlocking() []MCPServerCatalogEntry {
 }
 
 // ensureInitAsync starts background initialization on first call (idempotent).
+// On errNotInitialized, it resets so the next access retries.
 func (sm *SessionMCPManager) ensureInitAsync() {
-	sm.initOnce.Do(func() {
-		go func() {
-			sm.mu.Lock()
-			if err := sm.loadAndConnect(context.Background()); err != nil {
-				if err != errNotInitialized {
-					log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
-				}
-				// On errNotInitialized: don't mark initialized, reset initOnce so
-				// the next access retries (config may be created later by ManageTools).
-				// Also do NOT close initDone or fire onChange — callers waiting on
-				// initDone (GetCatalogBlocking) would deadlock, but that's acceptable
-				// since the config doesn't exist yet.
-				sm.initOnce = sync.Once{}
-				sm.mu.Unlock()
-				return
+	// Fast path: already started
+	if atomic.LoadUint32(&sm.initOnce) != 0 {
+		return
+	}
+	// CAS from 0→1: we are the one to start the background goroutine
+	if !atomic.CompareAndSwapUint32(&sm.initOnce, 0, 1) {
+		return
+	}
+	go func() {
+		sm.mu.Lock()
+		if err := sm.loadAndConnect(context.Background()); err != nil {
+			if err != errNotInitialized {
+				log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
 			}
-			sm.initialized = true
-			// Close initDone to signal completion
-			if ch := sm.initDone; ch != nil {
-				close(ch)
-			}
-			onChange := sm.onChange
+			// Reset to idle so the next access retries (config may be created later).
+			// Safe because only the goroutine that won CAS(0→1) can CAS back to 0,
+			// and concurrent callers that saw 1 will return on the fast path above.
+			atomic.StoreUint32(&sm.initOnce, 0)
 			sm.mu.Unlock()
-			if onChange != nil {
-				onChange()
-			}
-		}()
-	})
+			return
+		}
+		sm.initialized = true
+		// Mark as fully started (prevent any retry)
+		atomic.StoreUint32(&sm.initOnce, 2)
+		// Close initDone to signal completion
+		if ch := sm.initDone; ch != nil {
+			close(ch)
+		}
+		onChange := sm.onChange
+		sm.mu.Unlock()
+		if onChange != nil {
+			onChange()
+		}
+	}()
 }
 
 // SetOnChange registers a callback invoked after background initialization completes.
@@ -249,7 +257,7 @@ func (sm *SessionMCPManager) Invalidate() {
 	sm.connections = make(map[string]*mcpConnection)
 	sm.lastActive = make(map[string]time.Time)
 	sm.initialized = false
-	sm.initOnce = sync.Once{}
+	sm.initOnce = 0
 	sm.initDone = make(chan struct{})
 
 	log.WithField("session", sm.sessionKey).Info("Session MCP invalidated, will reload on next use")

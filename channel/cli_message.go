@@ -922,6 +922,12 @@ func (m *cliModel) renderProgressBlock() string {
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
 			pulseIcon := m.ticker.viewFrames(pulseFrames)
+			// Prefix: "  │ "(4) + icon(2) + " "(1) = 7, elapsed adds ~8 more
+			overhead := 7
+			if tool.Elapsed > 0 {
+				overhead += 2 + len(formatElapsed(tool.Elapsed))
+			}
+			label = truncateToWidth(label, innerWidth-overhead)
 			line := fmt.Sprintf("  │ %s %s", pulseIcon, label)
 			if tool.Elapsed > 0 {
 				line += "  " + elapsedStyle.Render(formatElapsed(tool.Elapsed))
@@ -1045,10 +1051,14 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 		}
 		line := fmt.Sprintf("%s%s %s", prefix, icon, sa.Role)
 		if sa.Desc != "" {
-			line += ": " + sa.Desc
+			// Truncate Desc separately to account for prefix+icon+role overhead.
+			overhead := lipgloss.Width(line) + 2 // +2 for ": "
+			descW := maxWidth - overhead
+			if descW < 10 {
+				descW = 10
+			}
+			line += ": " + truncateToWidth(sa.Desc, descW)
 		}
-		// Truncate line to fit within maxWidth to prevent hard-wrap breaking styling
-		line = truncateToWidth(line, maxWidth)
 		sb.WriteString(style.Render(line))
 		sb.WriteString("\n")
 		if len(sa.Children) > 0 {

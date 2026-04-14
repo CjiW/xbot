@@ -928,7 +928,7 @@ func (m *cliModel) renderProgressBlock() string {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			pulseIcon := m.ticker.viewFrames(pulseFrames, 3)
+			pulseIcon := m.ticker.viewFrames(pulseFrames)
 			// Calculate live elapsed time
 			var elapsedMs int64
 			if !tool.StartedAt.IsZero() {

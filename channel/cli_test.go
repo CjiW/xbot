@@ -747,17 +747,37 @@ func TestTickChainSelfHealingViaProgressMsg(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
-	// Simulate typing with stale tick
+	// Progress events should NOT emit tickCmd — that would create duplicate chains.
+	// Self-healing is handled by idleTickMsg (3s safety net).
 	model.typing = true
-	model.lastTickAt = time.Now().Add(-2 * time.Second) // 2s ago — chain broken
+	model.lastTickAt = time.Now().Add(-2 * time.Second) // stale
 
-	// Progress event should detect stale tick and re-arm
 	_, cmd := model.Update(cliProgressMsg{payload: &CLIProgressPayload{
 		Iteration: 1,
 		Phase:     "thinking",
 	}})
-	if cmd == nil {
-		t.Fatal("progressMsg with stale lastTickAt should return tickCmd to self-heal")
+	// cmd may contain viewport/textarea sub-commands but should NOT contain tickCmd
+	// (we can't easily inspect tea.Cmd contents, but at minimum verify no panic)
+	_ = cmd
+}
+
+func TestStartAgentTurnDoesNotDuplicateChain(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	// When chain is already running (lastTickAt set), startAgentTurn should NOT inject
+	model.lastTickAt = time.Now()
+	model.startAgentTurn()
+	if len(model.pendingCmds) > 0 {
+		t.Error("startAgentTurn should not inject tickCmd when chain was already running")
+	}
+
+	// When no chain (lastTickAt zero), it SHOULD inject
+	model.lastTickAt = time.Time{}
+	model.pendingCmds = nil
+	model.startAgentTurn()
+	if len(model.pendingCmds) == 0 {
+		t.Error("startAgentTurn should inject tickCmd when lastTickAt is zero (no chain)")
 	}
 }
 

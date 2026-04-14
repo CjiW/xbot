@@ -125,6 +125,10 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	// Capture whether a tick chain was already running BEFORE resetting.
+	// This prevents injecting a duplicate tickCmd when a chain already exists
+	// (e.g. bg task tick chain running when user sends a message).
+	chainWasRunning := !m.lastTickAt.IsZero()
 	m.lastTickAt = time.Time{} // reset tick tracker for new turn
 	// Sync checkpoint hook turn index
 	if m.checkpointHook != nil {
@@ -136,9 +140,10 @@ func (m *cliModel) startAgentTurn() {
 	m.inputReady = false
 	m.resetProgressState()
 	// Queue tickCmd so the next Update() drain picks it up.
-	// This guarantees the tick chain starts regardless of any early-return
-	// paths in Update() — the cmd will be drained at the top of the next call.
-	m.pendingCmds = append(m.pendingCmds, tickCmd())
+	// Only if no fast tick chain was already running.
+	if !chainWasRunning {
+		m.pendingCmds = append(m.pendingCmds, tickCmd())
+	}
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.

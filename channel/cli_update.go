@@ -292,10 +292,6 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// flush here, the queued message gets appended BEFORE the reply,
 		// producing wrong order: msg1, msg2, reply1 instead of msg1, reply1, msg2.
 		// Flush is handled in cliTickMsg instead (next tick after typing=false).
-		// Self-heal: if typing but no recent tick, the tick chain broke.
-		if m.typing && !m.lastTickAt.IsZero() && time.Since(m.lastTickAt) > 500*time.Millisecond {
-			cmds = append(cmds, tickCmd())
-		}
 
 	case cliTickMsg:
 		m.lastTickAt = time.Now()
@@ -357,9 +353,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updatePlaceholder()
 			cmds = append(cmds, idleTickCmd())
 		} else if m.typing {
-			// Self-healing: if we're typing but received an idle tick (3s interval),
-			// the fast tick chain (100ms) broke somehow. Re-arm it immediately.
-			cmds = append(cmds, tickCmd())
+			// Self-healing: if typing but idle tick arrived, the fast tick chain broke.
+			// Re-arm fast tick — but ONLY if lastTickAt is stale (avoids duplicating
+			// a chain that's still running but just slow).
+			if m.lastTickAt.IsZero() || time.Since(m.lastTickAt) > 500*time.Millisecond {
+				cmds = append(cmds, tickCmd())
+			}
 		}
 
 	case cliTempStatusClearMsg:

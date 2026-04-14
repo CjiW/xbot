@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sync"
 	"time"
@@ -142,19 +141,30 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	case "https":
 		u.Scheme = "wss"
 	}
-	wsURL := fmt.Sprintf("%s://%s/ws", u.Scheme, u.Host)
 
-	header := http.Header{}
-	if b.token != "" {
-		header.Set("Authorization", "Bearer "+b.token)
+	// Build path: server URL may already include /ws path
+	wsPath := u.Path
+	if wsPath == "" || wsPath == "/" {
+		wsPath = "/ws"
 	}
+	u.Path = wsPath
+
+	// Add CLI client type and token as query params
+	q := u.Query()
+	q.Set("client_type", "cli")
+	if b.token != "" {
+		q.Set("token", b.token)
+	}
+	u.RawQuery = q.Encode()
+
+	wsURL := u.String()
 
 	log.WithField("url", wsURL).Info("Connecting to remote xbot server...")
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-	conn, _, err := dialer.DialContext(ctx, wsURL, header)
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("WS dial: %w", err)
 	}

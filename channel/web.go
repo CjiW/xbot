@@ -667,11 +667,35 @@ func (wc *WebChannel) wsUpgrader() *websocket.Upgrader {
 }
 
 func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
-	// Authenticate via cookie
-	si := wc.validateSession(r)
-	if si == nil {
-		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
-		return
+	var senderID, username string
+	var si *sessionInfo
+
+	// Support token-based auth for CLI clients (RemoteBackend).
+	// Query params: ?token=<runner_token>&client_type=cli
+	if token := r.URL.Query().Get("token"); token != "" && r.URL.Query().Get("client_type") == "cli" {
+		var err error
+		senderID, err = wc.validateCLIToken(token)
+		if err != nil {
+			log.WithError(err).Warn("CLI token auth failed")
+			jsonErrorResponse(w, http.StatusUnauthorized, "invalid token")
+			return
+		}
+		username = "cli:" + senderID
+	} else {
+		// Authenticate via cookie (web browser clients)
+		si = wc.validateSession(r)
+		if si == nil {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		senderID = "web-" + strconv.Itoa(si.userID)
+		// If linked to Feishu account, use Feishu identity directly.
+		// This makes the web user share the same session/persona/workspace/skills/agents
+		// as their Feishu account — effectively the same user.
+		if si.feishuUserID != "" {
+			senderID = si.feishuUserID
+		}
+		username = si.username
 	}
 
 	// Upgrade to WebSocket
@@ -679,14 +703,6 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.WithError(err).Warn("WebSocket upgrade failed")
 		return
-	}
-
-	senderID := "web-" + strconv.Itoa(si.userID)
-	// If linked to Feishu account, use Feishu identity directly.
-	// This makes the web user share the same session/persona/workspace/skills/agents
-	// as their Feishu account — effectively the same user.
-	if si.feishuUserID != "" {
-		senderID = si.feishuUserID
 	}
 
 	client := &Client{
@@ -700,7 +716,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	wc.hub.addClient(senderID, client)
 	log.WithFields(log.Fields{
 		"sender_id": senderID,
-		"username":  si.username,
+		"username":  username,
 	}).Info("Web client connected")
 
 	// Write pump
@@ -711,7 +727,25 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Read pump (blocks until disconnect)
+	// si is nil for CLI token auth; readPump uses it only for username lookup
 	wc.readPump(client, si)
+}
+
+// validateCLIToken validates a runner token and returns the associated senderID.
+// CLI RemoteBackend uses runner tokens for authentication — each token maps to a web user.
+func (wc *WebChannel) validateCLIToken(token string) (string, error) {
+	if token == "" {
+		return "", fmt.Errorf("empty token")
+	}
+	// Look up the token in runner_tokens table to find the user
+	row := wc.db.QueryRow(
+		"SELECT user_id FROM runner_tokens WHERE token = ?", token,
+	)
+	var userID string
+	if err := row.Scan(&userID); err != nil {
+		return "", fmt.Errorf("invalid token")
+	}
+	return userID, nil
 }
 
 func (wc *WebChannel) writePump(c *Client) {
@@ -759,6 +793,14 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		return nil
 	})
 
+	// Resolve username safely (si is nil for CLI token-authed clients)
+	username := "cli-remote"
+	var feishuUserID string
+	if si != nil {
+		username = si.username
+		feishuUserID = si.feishuUserID
+	}
+
 	chatID := c.userID // p2p mode
 
 	for {
@@ -789,7 +831,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			wc.msgBus.Inbound <- bus.InboundMessage{
 				Channel:    "web",
 				SenderID:   c.userID,
-				SenderName: si.username,
+				SenderName: username,
 				ChatID:     chatID,
 				ChatType:   "p2p",
 				Content:    "/cancel",
@@ -840,8 +882,8 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 			metadata := map[string]string{bus.MetadataReplyPolicy: bus.ReplyPolicyOptional}
 
-			if si.feishuUserID != "" {
-				metadata["feishu_user_id"] = si.feishuUserID
+			if feishuUserID != "" {
+				metadata["feishu_user_id"] = feishuUserID
 			}
 
 			// Echo back complete user message (with file info) so frontend can update optimistic message
@@ -866,7 +908,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			wc.msgBus.Inbound <- bus.InboundMessage{
 				Channel:    "web",
 				SenderID:   c.userID,
-				SenderName: si.username,
+				SenderName: username,
 				ChatID:     chatID,
 				ChatType:   "p2p",
 				Content:    content,
@@ -888,7 +930,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				wc.msgBus.Inbound <- bus.InboundMessage{
 					Channel:    "web",
 					SenderID:   c.userID,
-					SenderName: si.username,
+					SenderName: username,
 					ChatID:     chatID,
 					ChatType:   "p2p",
 					Content:    "/cancel",
@@ -907,7 +949,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				wc.msgBus.Inbound <- bus.InboundMessage{
 					Channel:    "web",
 					SenderID:   c.userID,
-					SenderName: si.username,
+					SenderName: username,
 					ChatID:     chatID,
 					ChatType:   "p2p",
 					Content:    content,

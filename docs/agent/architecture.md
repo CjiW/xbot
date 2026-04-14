@@ -92,6 +92,13 @@ Both implement the same `AgentBackend` interface, so CLI code works identically 
 Management methods (LLMFactory, SettingsService, etc.) return nil for RemoteBackend until the
 WS protocol is extended with RPC support.
 
+### RemoteBackend Connection
+
+CLI connects to server's web channel WebSocket endpoint with query params:
+- `?client_type=cli&token=<runner_token>` — token-based auth for CLI clients
+- Server validates token against `runner_tokens` table, returns associated `userID`
+- Messages use the same WS protocol as web browser clients (`wsMessage`/`wsClientMessage`)
+
 ## Per-Package Details
 
 - `docs/agent/agent.md` — agent loop, middleware, SubAgent, context management

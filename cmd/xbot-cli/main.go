@@ -66,8 +66,10 @@ func isFirstRun() bool {
 	return cfg.LLM.APIKey == ""
 }
 
-// newCLIApp 执行公共初始化：加载配置、创建 LLM/DB/Agent。
-func newCLIApp() *cliApp {
+// newCLIApp 执行公共初始化：加载配置、创建 Backend。
+// If serverURL is non-empty, creates a RemoteBackend (agent runs on server).
+// Otherwise creates a LocalBackend (agent runs in-process).
+func newCLIApp(serverURL, token string) *cliApp {
 	cfg := config.Load()
 
 	// Derive cfg.LLM from active subscription (single source of truth)
@@ -122,40 +124,52 @@ func newCLIApp() *cliApp {
 
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
-	backend := agent.NewLocalBackend(agent.Config{
-		Bus:                  msgBus,
-		LLM:                  llmClient,
-		Model:                cfg.LLM.Model,
-		MaxIterations:        cfg.Agent.MaxIterations,
-		MaxConcurrency:       cfg.Agent.MaxConcurrency,
-		DBPath:               dbPath,
-		SkillsDir:            filepath.Join(xbotHome, "skills"),
-		AgentsDir:            filepath.Join(xbotHome, "agents"),
-		WorkDir:              workDir,
-		XbotHome:             xbotHome,
-		PromptFile:           cfg.Agent.PromptFile,
-		DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
-		SandboxMode:          cfg.Sandbox.Mode,
-		Sandbox:              tools.GetSandbox(),
-		MemoryProvider:       cfg.Agent.MemoryProvider,
-		EmbeddingProvider:    cfg.Embedding.Provider,
-		EmbeddingBaseURL:     embBaseURL,
-		EmbeddingAPIKey:      embAPIKey,
-		EmbeddingModel:       cfg.Embedding.Model,
-		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
-		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
-		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
-		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
-		MaxContextTokens:     cfg.Agent.MaxContextTokens,
-		CompressionThreshold: cfg.Agent.CompressionThreshold,
-		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
-		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
-		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
-	})
-	backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
-	backend.IndexGlobalTools()
-	backend.LLMFactory().SetModelTiers(cfg.LLM)
+	var backend agent.AgentBackend
+	if serverURL != "" {
+		// Remote mode: agent loop runs on the server
+		log.WithField("server", serverURL).Info("Using remote backend")
+		backend = agent.NewRemoteBackend(agent.RemoteBackendConfig{
+			ServerURL: serverURL,
+			Token:     token,
+		})
+	} else {
+		// Local mode: agent loop runs in-process
+		backend = agent.NewLocalBackend(agent.Config{
+			Bus:                  msgBus,
+			LLM:                  llmClient,
+			Model:                cfg.LLM.Model,
+			MaxIterations:        cfg.Agent.MaxIterations,
+			MaxConcurrency:       cfg.Agent.MaxConcurrency,
+			DBPath:               dbPath,
+			SkillsDir:            filepath.Join(xbotHome, "skills"),
+			AgentsDir:            filepath.Join(xbotHome, "agents"),
+			WorkDir:              workDir,
+			XbotHome:             xbotHome,
+			PromptFile:           cfg.Agent.PromptFile,
+			DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
+			SandboxMode:          cfg.Sandbox.Mode,
+			Sandbox:              tools.GetSandbox(),
+			MemoryProvider:       cfg.Agent.MemoryProvider,
+			EmbeddingProvider:    cfg.Embedding.Provider,
+			EmbeddingBaseURL:     embBaseURL,
+			EmbeddingAPIKey:      embAPIKey,
+			EmbeddingModel:       cfg.Embedding.Model,
+			EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
+			MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
+			MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
+			SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
+			EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
+			MaxContextTokens:     cfg.Agent.MaxContextTokens,
+			CompressionThreshold: cfg.Agent.CompressionThreshold,
+			ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
+			MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
+			OffloadDir:           filepath.Join(xbotHome, "offload_store"),
+		})
+		// Local-only: register core tools and index
+		backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
+		backend.IndexGlobalTools()
+		backend.LLMFactory().SetModelTiers(cfg.LLM)
+	}
 
 	return &cliApp{
 		cfg:       cfg,
@@ -183,7 +197,8 @@ func main() {
 	prompt := ""
 	newSession := false
 	var (
-		flagShare     string // --share ws://host:port/ws/userID
+		flagServer    string // --server ws://host:port (RemoteBackend: agent runs on server)
+		flagShare     string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
 		flagToken     string // --token xxx
 		flagWorkspace string // --workspace /path (overrides config)
 	)
@@ -196,6 +211,11 @@ func main() {
 		case "-p":
 			if len(os.Args) > i+1 {
 				prompt = os.Args[i+1]
+			}
+		case "--server":
+			if len(os.Args) > i+1 {
+				flagServer = os.Args[i+1]
+				i++
 			}
 		case "--share":
 			if len(os.Args) > i+1 {
@@ -242,7 +262,7 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp()
+	app := newCLIApp(flagServer, flagToken)
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)
@@ -1022,7 +1042,7 @@ func (s *configLLMSubscriber) GetDefaultModel() string {
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。
 func executeNonInteractive(prompt string) {
-	app := newCLIApp()
+	app := newCLIApp("", "") // non-interactive always uses local backend
 	defer app.Close()
 
 	absWorkDir, _ := filepath.Abs(app.workDir)

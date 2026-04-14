@@ -914,28 +914,16 @@ func (m *cliModel) renderProgressBlock() string {
 			sb.WriteString("\n")
 		}
 
-		// Active tools — with mini pulse progress bar animation
+		// Active tools — label + elapsed (no progress bar)
 		for _, tool := range m.progress.ActiveTools {
 			if tool.Status == "done" || tool.Status == "error" {
 				continue
 			}
 			label, _, _ := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			// Mini pulse progress bar with dynamic width
-			miniW := 8 + int(m.ticker.ticks%7) // dynamic width 8-14
-			tick2 := int(m.ticker.ticks) % (miniW * 2)
-			pos2 := tick2
-			if pos2 >= miniW {
-				pos2 = miniW*2 - pos2 - 1
-			}
-			miniBar := strings.Repeat("░", pos2) + "▓" + strings.Repeat("░", miniW-pos2-1)
 			pulseIcon := m.ticker.viewFrames(pulseFrames)
-			line := fmt.Sprintf("  │ %s %s  %s", pulseIcon, label, s.ProgressGradient.Render(miniBar))
+			line := fmt.Sprintf("  │ %s %s", pulseIcon, label)
 			if tool.Elapsed > 0 {
-				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
-				if pad < 1 {
-					pad = 1
-				}
-				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
+				line += "  " + elapsedStyle.Render(formatElapsed(tool.Elapsed))
 			}
 			sb.WriteString(toolRunningStyle.Render(line))
 			sb.WriteString("\n")

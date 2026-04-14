@@ -244,7 +244,7 @@ func localeZH() *UILocale {
 		StatusRetrying:        "重试中",
 		StatusDone:            "完成",
 		NewContentHint:        "↓ 新内容",
-		BgTaskRunning:         "[%d 任务 %d 代理 -- ^ 管理]",
+		BgTaskRunning:         "[^ %dt %da]",
 		TabNoMatch:            "[Tab] 无匹配文件",
 
 		// --- D. Temp status ---
@@ -629,7 +629,7 @@ func localeEN() *UILocale {
 		StatusRetrying:        "retrying",
 		StatusDone:            "done",
 		NewContentHint:        "v new content",
-		BgTaskRunning:         "[%d task(s) %d agent(s) -- ^ to manage]",
+		BgTaskRunning:         "[^ %dt %da]",
 		TabNoMatch:            "[Tab] no matching files",
 
 		// --- D. Temp status ---
@@ -1014,7 +1014,7 @@ func localeJA() *UILocale {
 		StatusRetrying:        "リトライ中",
 		StatusDone:            "完了",
 		NewContentHint:        "↓ 新着",
-		BgTaskRunning:         "[%d タスク %d エージェント -- ^ 管理]",
+		BgTaskRunning:         "[^ %dタ %dエ]",
 		TabNoMatch:            "[Tab] 一致するファイルなし",
 
 		// --- D. Temp status ---

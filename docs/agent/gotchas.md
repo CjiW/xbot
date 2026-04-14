@@ -10,6 +10,7 @@
 - Pure Go via `modernc.org/sqlite` — no CGO required.
 - Use `INSERT ... ON CONFLICT DO UPDATE` or `INSERT OR IGNORE` for TOCTOU-safe upserts.
 - `INSERT ... WHERE NOT EXISTS` for concurrent-safe conditional inserts.
+- **CRITICAL: modernc.org/sqlite serializes `time.Time` differently from RFC3339 storage format.** When you pass a `time.Time` parameter to `Exec`, the driver formats it with a space separator (`2026-04-14 20:34:25+08:00`), but timestamps stored via `time.Now().Format(time.RFC3339)` use a T separator (`2026-04-14T20:34:25+08:00`). SQLite compares DATETIME as strings lexicographically, and space (`0x20`) sorts before `T` (`0x54`), so `WHERE created_at > ?` with a raw `time.Time` parameter will match ALL rows. **Always format timestamps as strings explicitly** before passing to SQL: `cutoff.Format(time.RFC3339)`. See `storage/sqlite/session.go:PurgeNewerThan` for the fix.
 
 ## Hugo Docs Site
 

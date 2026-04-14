@@ -984,12 +984,12 @@ func (m *cliModel) renderProgressBlock() string {
 				sb.WriteString("\n")
 			case "compressing":
 				sb.WriteString("  ")
-				sb.WriteString(m.ticker.viewFrames(orbitFrames, 2)) // 200ms/frame
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
 				sb.WriteString(thinkingStyle.Render(" compressing..."))
 				sb.WriteString("\n")
 			case "retrying":
 				sb.WriteString("  ")
-				sb.WriteString(m.ticker.viewFrames(orbitFrames, 2)) // 200ms/frame
+				sb.WriteString(m.ticker.viewFrames(orbitFrames))
 				sb.WriteString(thinkingStyle.Render(" retrying..."))
 				sb.WriteString("\n")
 			}
@@ -1006,7 +1006,7 @@ func (m *cliModel) renderProgressBlock() string {
 		}
 	} else if m.typing {
 		sb.WriteString("  ")
-		sb.WriteString(m.ticker.viewFrames(orbitFrames, 2)) // 200ms/frame
+		sb.WriteString(m.ticker.viewFrames(orbitFrames))
 		sb.WriteString(thinkingStyle.Render(" " + m.pickVerb(m.ticker.ticks) + "..."))
 		sb.WriteString("\n")
 	}
@@ -1056,7 +1056,7 @@ func (m *cliModel) renderSubAgentTree(sb *strings.Builder, agents []CLISubAgent,
 				prefix = indent + "├── "
 			}
 		}
-		icon := m.ticker.viewFrames(waveFrames, 3) // 300ms/frame → 3.6s cycle
+		icon := m.ticker.viewFrames(waveFrames)
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color(RoleColor(sa.Role)))
 		switch sa.Status {
 		case "error":

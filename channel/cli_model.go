@@ -28,7 +28,10 @@ func newAnimTicker(frames []string, color string) *animTicker {
 
 func (t *animTicker) tick() {
 	t.ticks++
-	t.frame = (t.frame + 1) % len(t.frames)
+	// Advance frame only every `speed` ticks (speed=1 → every tick, speed=3 → every 3rd)
+	if t.speed <= 1 || t.ticks%int64(t.speed) == 0 {
+		t.frame = (t.frame + 1) % len(t.frames)
+	}
 }
 
 // view 渲染当前帧，带双色呼吸效果（每 10 tick 在两种颜色间切换）
@@ -40,9 +43,20 @@ func (t *animTicker) view() string {
 }
 
 // viewFrames renders a frame from a given set using the ticker's current frame index.
+// speedOverride controls per-call animation speed (0 = use ticker's default speed).
 // 同样带呼吸效果。
-func (t *animTicker) viewFrames(frames []string) string {
-	idx := t.frame % len(frames)
+func (t *animTicker) viewFrames(frames []string, speedOverride ...int) string {
+	speed := t.speed
+	if len(speedOverride) > 0 && speedOverride[0] > 0 {
+		speed = speedOverride[0]
+	}
+	// Calculate effective frame based on speed
+	effectiveFrame := t.frame
+	if speed > 1 {
+		// Use a separate counter for this frame set, keyed by speed
+		effectiveFrame = int(t.ticks/int64(speed)) % len(frames)
+	}
+	idx := effectiveFrame % len(frames)
 	if t.ticks%20 < 10 {
 		return t.style.Render(frames[idx])
 	}
@@ -457,8 +471,9 @@ func newCLIModel() *cliModel {
 
 	renderer := newGlamourRenderer(maxBubbleWidth(80) - 2)
 
-	// Ticker
+	// Ticker — speed=2 means 200ms per frame (dotFrames: 10 frames → 2s full cycle)
 	tk := newAnimTicker(dotFrames, currentTheme.Warning)
+	tk.speed = 2
 
 	return &cliModel{
 		viewport:        vp,

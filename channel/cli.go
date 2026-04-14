@@ -358,10 +358,14 @@ func (c *CLIChannel) handleOutbound() {
 
 // animTicker 是一个简单的字符动画 ticker，不依赖 bubbles/spinner。
 // 支持双色呼吸效果：颜色在 Accent 和 AccentAlt 之间平滑过渡。
+// speed 字段控制动画速度：每 speed 个 tick 才推进一帧。
+//
+//	speed=1 → 100ms/frame (快), speed=3 → 300ms/frame (中等), speed=5 → 500ms/frame (慢)
 type animTicker struct {
 	frames   []string
 	frame    int
 	ticks    int64          // total ticks for phase-aware behavior
+	speed    int            // ticks per frame advance (1=fast, 3=medium, 5=slow)
 	style    lipgloss.Style // 主色调
 	styleAlt lipgloss.Style // 备选色（呼吸效果用）
 	color    string         // 主色值（主题切换时重建样式用）

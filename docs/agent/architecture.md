@@ -69,6 +69,7 @@ Two modes (`agent/engine_run.go`):
 | `Channel` | `channel/channel.go` | Start, Stop, Send |
 | `MessageMiddleware` | `agent/middleware.go` | Process(mc) |
 | `MemoryProvider` | `memory/memory.go` | Core + Archival memory |
+| `AgentBackend` | `agent/backend.go` | Abstract local/remote agent execution |
 
 ## Concurrency Model
 
@@ -77,6 +78,19 @@ Two modes (`agent/engine_run.go`):
 - Tool calls: controlled by `maxConcurrency` (global semaphore) + read/write split
 - LLM calls: per-tenant semaphore (`llm/semaphore.go`)
 - Background tasks: goroutine + WaitGroup, drained on shutdown
+
+## AgentBackend
+
+The `AgentBackend` interface (`agent/backend.go`) abstracts where the agent loop runs:
+
+- **LocalBackend** (`agent/backend_local.go`): In-process `agent.Agent`. CLI creates the agent,
+  runs `agent.Run()`, and executes tools locally. This is the default mode (no `--server` flag).
+- **RemoteBackend** (`agent/backend_remote.go`): Connects to a remote xbot server via WebSocket.
+  Agent loop and tool execution run server-side; CLI is a display/input layer.
+
+Both implement the same `AgentBackend` interface, so CLI code works identically regardless of mode.
+Management methods (LLMFactory, SettingsService, etc.) return nil for RemoteBackend until the
+WS protocol is extended with RPC support.
 
 ## Per-Package Details
 

@@ -728,6 +728,39 @@ func TestCLIModelUpdateTickMsg(t *testing.T) {
 	}
 }
 
+func TestTickChainSelfHealingViaIdleTick(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	// Simulate broken tick chain: typing=true but only idle tick arrives
+	model.typing = true
+	model.lastTickAt = time.Time{} // no recent fast tick
+
+	// idleTickMsg with typing=true should re-arm fast tick chain
+	_, cmd := model.Update(idleTickMsg{})
+	if cmd == nil {
+		t.Fatal("idleTickMsg with typing=true should return tickCmd to self-heal")
+	}
+}
+
+func TestTickChainSelfHealingViaProgressMsg(t *testing.T) {
+	model := newCLIModel()
+	model.handleResize(80, 24)
+
+	// Simulate typing with stale tick
+	model.typing = true
+	model.lastTickAt = time.Now().Add(-2 * time.Second) // 2s ago — chain broken
+
+	// Progress event should detect stale tick and re-arm
+	_, cmd := model.Update(cliProgressMsg{payload: &CLIProgressPayload{
+		Iteration: 1,
+		Phase:     "thinking",
+	}})
+	if cmd == nil {
+		t.Fatal("progressMsg with stale lastTickAt should return tickCmd to self-heal")
+	}
+}
+
 func TestCLIModelUpdateOutboundMsg(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)

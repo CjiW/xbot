@@ -135,12 +135,31 @@ func CollectStreamWithCallback(ctx context.Context, eventCh <-chan StreamEvent, 
 		case EventContent:
 			content.WriteString(ev.Content)
 			if onContent != nil {
-				onContent(content.String())
+				// Guard: check ctx and protect against callback panic.
+				// A panicking callback (e.g. program.Send on exited BubbleTea)
+				// would kill the stream goroutine, leaking resources.
+				func() {
+					defer func() { recover() }()
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					onContent(content.String())
+				}()
 			}
 		case EventReasoningContent:
 			reasoningContent.WriteString(ev.ReasoningContent)
 			if onReasoning != nil {
-				onReasoning(reasoningContent.String())
+				func() {
+					defer func() { recover() }()
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					onReasoning(reasoningContent.String())
+				}()
 			}
 		case EventToolCall:
 			if ev.ToolCall == nil {

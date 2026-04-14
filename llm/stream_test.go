@@ -248,3 +248,68 @@ func TestCollectStreamWithCallback_NilCallback(t *testing.T) {
 		t.Errorf("content = %q, want %q", resp.Content, "hello")
 	}
 }
+
+func TestCollectStreamWithCallbackPanicProtection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eventCh := make(chan StreamEvent, 10)
+	eventCh <- StreamEvent{Type: EventContent, Content: "hello"}
+	eventCh <- StreamEvent{Type: EventDone}
+	close(eventCh)
+
+	panicCount := 0
+	resp, err := CollectStreamWithCallback(ctx, eventCh, func(content string) {
+		panicCount++
+		if panicCount == 1 {
+			panic("test panic in callback")
+		}
+	}, nil)
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if resp.Content != "hello" {
+		t.Errorf("expected content 'hello', got %q", resp.Content)
+	}
+	// Callback was called once, panicked, but stream collection continued
+	if panicCount != 1 {
+		t.Errorf("expected panicCount=1, got %d", panicCount)
+	}
+}
+
+func TestCollectStreamWithCallbackCtxCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	eventCh := make(chan StreamEvent, 10)
+	eventCh <- StreamEvent{Type: EventContent, Content: "partial"}
+	// After callback cancels ctx, EventDone arrives
+	go func() {
+		<-ctx.Done()
+		eventCh <- StreamEvent{Type: EventDone}
+		close(eventCh)
+	}()
+
+	cancelled := false
+	resp, err := CollectStreamWithCallback(ctx, eventCh, func(content string) {
+		if !cancelled {
+			cancelled = true
+			cancel()
+		}
+	}, nil)
+
+	// Context cancelled → function returns nil, ctx.Err()
+	// (even though EventDone was in the channel, ctx check at top of loop fires first)
+	if resp != nil {
+		t.Errorf("expected nil response after ctx cancel, got content %q", resp.Content)
+	}
+	if err == nil {
+		t.Error("expected context.Canceled error")
+	}
+	if !cancelled {
+		t.Error("callback should have been called")
+	}
+}

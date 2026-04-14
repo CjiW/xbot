@@ -125,6 +125,7 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	m.lastTickAt = time.Time{} // reset tick tracker for new turn
 	// Sync checkpoint hook turn index
 	if m.checkpointHook != nil {
 		m.checkpointHook.SetTurnIdx(int(m.agentTurnID))

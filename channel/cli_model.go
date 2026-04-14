@@ -227,6 +227,7 @@ type cliModel struct {
 	iterationHistory   []cliIterationSnapshot // 已完成迭代快照
 	lastSeenIteration  int                    // 上次进度事件的迭代号
 	iterationStartTime time.Time              // current iteration wall-clock start time
+	lastTickAt         time.Time              // last cliTickMsg received (for self-healing)
 
 	// --- Session ---
 	workDir       string // 工作目录（标题栏显示用）

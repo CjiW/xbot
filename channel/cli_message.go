@@ -654,9 +654,9 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					// Use blocking send with timeout — ask_user answers are critical:
 					// if dropped, the agent hangs indefinitely waiting for a response.
 					if m.msgBus != nil {
-					if !m.sendInboundWait(m.newInbound(content, map[string]string{"ask_user_answered": "true"}), 5*time.Second) {
-						m.showSystemMsg("Failed to deliver answer to agent, please try again", feedbackError)
-					}
+						if !m.sendInboundWait(m.newInbound(content, map[string]string{"ask_user_answered": "true"}), 5*time.Second) {
+							m.showSystemMsg("Failed to deliver answer to agent, please try again", feedbackError)
+						}
 					}
 					// Render as tool call style (not user message)
 					m.messages = append(m.messages, cliMessage{

@@ -93,10 +93,11 @@ When to NOT create/update:
 After completing a task, ask yourself:
 
 1. Did I learn something non-obvious? → Write it into the relevant knowledge file (or create one)
-2. Did the file/knowledge list change? → Update AGENT.md's index
-3. Did nothing worth remembering happen? → Skip entirely
+2. **Did I encounter or fix a gotcha/pitfall? → ALWAYS write it into `docs/agent/gotchas.md`.** This is non-negotiable. Gotchas are the highest-value knowledge because they prevent future sessions from repeating the same mistake. AGENT.md enforces reading gotchas before any code change — if you don't record them, the loop breaks.
+3. Did the file/knowledge list change? → Update AGENT.md's index
+4. Did nothing worth remembering happen? → Skip entirely
 
-**Most of the time, the answer should be (3).** Do not inflate documentation.
+**Most of the time, the answer should be (4).** Do not inflate documentation.
 
 ## Accuracy Maintenance
 

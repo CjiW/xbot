@@ -18,8 +18,12 @@
 - `docs/agent/channel.md` — CLI, Feishu, Web, QQ adapters
 - `docs/agent/memory.md` — letta vs flat providers
 - `docs/agent/conventions.md` — error handling, logging, testing, naming, build
-- `docs/agent/gotchas.md` — cross-cutting pitfalls (per-package pitfalls in each file above)
+- `docs/agent/gotchas.md` — **MUST READ before any code change.** cross-cutting pitfalls, driver quirks, per-package traps
 
 ## Project Context
 
 `ProjectContextMiddleware` auto-loads this file into system prompt. After code changes, update relevant Knowledge Files to keep documentation in sync.
+
+### Mandatory: Read Gotchas Before Modifying Code
+
+**Every code modification MUST start by reading `docs/agent/gotchas.md`.** This file contains hard-won lessons about driver serialization bugs, concurrency traps, and framework-specific pitfalls that are invisible from code alone. Skipping this step leads to wasted effort fixing already-solved problems.

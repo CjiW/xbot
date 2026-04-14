@@ -338,10 +338,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			}
 			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
 				snap := cliIterationSnapshot{
-					Iteration: m.lastSeenIteration,
-					Thinking:  prev.Thinking,
-					Reasoning: prev.Reasoning,
-					Tools:     prevIterTools,
+					Iteration:   m.lastSeenIteration,
+					Thinking:    prev.Thinking,
+					Reasoning:   prev.Reasoning,
+					Tools:       prevIterTools,
+					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 				}
 				m.iterationHistory = append(m.iterationHistory, snap)
 			}
@@ -350,6 +351,7 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			m.lastCompletedTools = m.lastCompletedTools[:0]
 		}
 		m.lastSeenIteration = msg.payload.Iteration
+		m.iterationStartTime = time.Now()
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
 		// Only keep tools matching the current iteration to avoid cross-iteration leakage.
@@ -400,9 +402,10 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 						}
 					}
 					snap := cliIterationSnapshot{
-						Iteration: m.lastSeenIteration,
-						Thinking:  msg.payload.Thinking,
-						Tools:     finalTools,
+						Iteration:   m.lastSeenIteration,
+						Thinking:    msg.payload.Thinking,
+						Tools:       finalTools,
+						ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 					}
 					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
 					// > prev progress > PhaseDone payload

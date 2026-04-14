@@ -870,10 +870,9 @@ func TestCLIModelRenderProgressStatusWithIteration(t *testing.T) {
 func TestCLIModelRenderProgressStatusWithActiveTools(t *testing.T) {
 	model := newCLIModel()
 	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "Reading file", Elapsed: 100},
-		},
+		Phase:       "tool_exec",
+		Iteration:   1,
+		ActiveTools: []CLIToolProgress{{Name: "read", Label: "Reading file", Elapsed: 100}},
 	}
 
 	progressStyle := lipgloss.NewStyle()
@@ -881,18 +880,19 @@ func TestCLIModelRenderProgressStatusWithActiveTools(t *testing.T) {
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
 
-	if !strings.Contains(result, "Reading file") {
-		t.Errorf("renderProgressStatus should show tool label, got: %q", result)
+	// Active tool name is NOT shown in status bar (rendered in progress block instead)
+	// Verify it shows iteration and doesn't crash
+	if !strings.Contains(result, "#1") {
+		t.Errorf("renderProgressStatus should show iteration with active tools, got: %q", result)
 	}
 }
 
 func TestCLIModelRenderProgressStatusToolWithoutLabel(t *testing.T) {
 	model := newCLIModel()
 	model.progress = &CLIProgressPayload{
-		Phase: "tool_exec",
-		ActiveTools: []CLIToolProgress{
-			{Name: "read", Label: "", Elapsed: 0},
-		},
+		Phase:       "tool_exec",
+		Iteration:   1,
+		ActiveTools: []CLIToolProgress{{Name: "read", Label: "", Elapsed: 0}},
 	}
 
 	progressStyle := lipgloss.NewStyle()
@@ -900,8 +900,9 @@ func TestCLIModelRenderProgressStatusToolWithoutLabel(t *testing.T) {
 
 	result := model.renderProgressStatus(progressStyle, toolStyle)
 
-	if !strings.Contains(result, "read") {
-		t.Errorf("renderProgressStatus should show tool name when label empty, got: %q", result)
+	// Active tool name is NOT shown in status bar (rendered in progress block instead)
+	if !strings.Contains(result, "#1") {
+		t.Errorf("renderProgressStatus should show iteration without crash, got: %q", result)
 	}
 }
 

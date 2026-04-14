@@ -223,9 +223,10 @@ type cliModel struct {
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)
 
 	// --- Progress ---
-	progress          *CLIProgressPayload
-	iterationHistory  []cliIterationSnapshot // 已完成迭代快照
-	lastSeenIteration int                    // 上次进度事件的迭代号
+	progress           *CLIProgressPayload
+	iterationHistory   []cliIterationSnapshot // 已完成迭代快照
+	lastSeenIteration  int                    // 上次进度事件的迭代号
+	iterationStartTime time.Time              // current iteration wall-clock start time
 
 	// --- Session ---
 	workDir       string // 工作目录（标题栏显示用）

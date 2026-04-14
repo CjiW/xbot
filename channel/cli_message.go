@@ -309,6 +309,7 @@ func (m *cliModel) resetProgressState() {
 	m.lastSeenIteration = 0
 	m.lastReasoning = ""
 	m.progress = nil
+	m.iterationStartTime = time.Time{}
 	m.typingStartTime = time.Now()
 }
 
@@ -1155,12 +1156,19 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		thinkingGuide := s.ProgressIndent
 		hintStyle := s.ToolHint
 
-		// 统计总工具数和总耗时
+		// 统计总工具数和总耗时（使用 wall-clock 时间，非工具时间之和）
 		allTools, iterCount := msg.iterToolsFlat()
 		totalTools := len(allTools)
 		totalMs := int64(0)
-		for _, tool := range allTools {
-			totalMs += tool.Elapsed
+		for _, it := range msg.iterations {
+			if it.ElapsedWall > 0 {
+				totalMs += it.ElapsedWall
+			} else {
+				// Fallback: sum tool times for snapshots without wall-clock tracking
+				for _, tool := range it.Tools {
+					totalMs += tool.Elapsed
+				}
+			}
 		}
 
 		var toolSb strings.Builder
@@ -1175,9 +1183,12 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 				guideW := lipgloss.Width(s.ProgressIndent.Render("  │ "))
 				textW := boxInnerW - guideW
 				for _, it := range msg.iterations {
-					// Render #iter header
-					iterLabel := s.ProgressIter.Render(fmt.Sprintf("#%d", it.Iteration))
-					toolSb.WriteString(iterLabel)
+					// Render #iter header with wall-clock time
+					iterLabel := fmt.Sprintf("#%d", it.Iteration)
+					if it.ElapsedWall > 0 {
+						iterLabel += " " + reasoningStyle.Render(formatElapsed(it.ElapsedWall))
+					}
+					toolSb.WriteString(s.ProgressIter.Render(iterLabel))
 					toolSb.WriteString("\n")
 					if it.Reasoning != "" {
 						for _, line := range strings.Split(it.Reasoning, "\n") {

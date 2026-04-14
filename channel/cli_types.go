@@ -245,10 +245,11 @@ type CLISubAgent struct {
 
 // cliIterationSnapshot captures a completed iteration for the progress panel.
 type cliIterationSnapshot struct {
-	Iteration int
-	Thinking  string
-	Reasoning string // model's reasoning/thinking chain (reasoning_content)
-	Tools     []CLIToolProgress
+	Iteration   int
+	Thinking    string
+	Reasoning   string // model's reasoning/thinking chain (reasoning_content)
+	Tools       []CLIToolProgress
+	ElapsedWall int64 // wall-clock duration of the iteration (ms)
 }
 
 // formatElapsed formats milliseconds into a human-friendly duration string.
@@ -270,10 +271,11 @@ func formatElapsed(ms int64) string {
 
 // HistoryIteration 历史迭代快照（用于会话恢复的 tool_summary 渲染）
 type HistoryIteration struct {
-	Iteration int
-	Thinking  string
-	Reasoning string
-	Tools     []CLIToolProgress
+	Iteration   int
+	Thinking    string
+	Reasoning   string
+	Tools       []CLIToolProgress
+	ElapsedWall int64 // wall-clock duration of the iteration (ms)
 }
 
 // HistoryMessage 历史消息（用于会话恢复）

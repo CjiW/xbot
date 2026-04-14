@@ -748,33 +748,17 @@ func (m *cliModel) renderProgressStatus(progressStyle, toolStyle lipgloss.Style)
 	if m.progress != nil {
 		fmt.Fprintf(&sb, "#%d", m.progress.Iteration)
 
-		// Show first active tool name
-		hasActive := false
-		for _, tool := range m.progress.ActiveTools {
-			if tool.Status != "done" && tool.Status != "error" {
-				hasActive = true
-				label := tool.Label
-				if label == "" {
-					label = tool.Name
-				}
-				sb.WriteString(s.Tool.Render(" · " + label))
-				break
-			}
-		}
-
-		// Phase hint when no active tool
-		if !hasActive {
-			switch m.progress.Phase {
-			case "thinking":
-				sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
-			case "compressing":
-				sb.WriteString(" · " + m.locale.StatusCompressing)
-			case "retrying":
-				sb.WriteString(" · " + m.locale.StatusRetrying)
-			default:
-				if len(m.progress.CompletedTools) > 0 {
-					sb.WriteString(" · " + m.locale.StatusDone)
-				}
+		// Phase hint (active tool is shown in progress block, skip here to avoid duplication)
+		switch m.progress.Phase {
+		case "thinking":
+			sb.WriteString(" · " + m.pickVerb(m.ticker.ticks))
+		case "compressing":
+			sb.WriteString(" · " + m.locale.StatusCompressing)
+		case "retrying":
+			sb.WriteString(" · " + m.locale.StatusRetrying)
+		default:
+			if len(m.progress.CompletedTools) > 0 {
+				sb.WriteString(" · " + m.locale.StatusDone)
 			}
 		}
 	} else {

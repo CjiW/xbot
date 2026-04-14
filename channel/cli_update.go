@@ -353,9 +353,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.typing && m.progress == nil {
 			m.updatePlaceholder()
 			cmds = append(cmds, idleTickCmd())
-		} else if m.typing && !m.fastTickActive {
-			// Self-healing: if typing but idle tick arrived, the fast tick chain broke.
-			// Re-arm fast tick.
+		} else if !m.fastTickActive {
+			// Self-healing: if fast tick chain broke but we're still busy
+			// (typing or progress active), re-arm fast tick.
 			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
 		}

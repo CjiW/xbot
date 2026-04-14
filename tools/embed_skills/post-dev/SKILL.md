@@ -83,21 +83,16 @@ When you explore a new subsystem or package, create its knowledge file. Don't wo
 - The project structure changed (files moved, APIs renamed)
 - You found a bug, workaround, or gotcha worth recording
 
-When to NOT create/update:
-- Trivial changes (typo fixes, comment edits)
-- Information that's already correctly documented
-- When nothing surprising was learned
-
 ## Decision Flow
 
-After completing a task, ask yourself:
+After completing a task, update knowledge:
 
-1. Did I learn something non-obvious? → Write it into the relevant knowledge file (or create one)
-2. **Did I encounter or fix a gotcha/pitfall? → ALWAYS write it into `docs/agent/gotchas.md`.** This is non-negotiable. Gotchas are the highest-value knowledge because they prevent future sessions from repeating the same mistake. AGENT.md enforces reading gotchas before any code change — if you don't record them, the loop breaks.
+1. **Did I encounter or fix a gotcha/pitfall? → ALWAYS write it into `docs/agent/gotchas.md`.** This is non-negotiable. Gotchas are the highest-value knowledge because they prevent future sessions from repeating the same mistake. AGENT.md enforces reading gotchas before any code change — if you don't record them, the loop breaks.
+2. Did I learn something about the codebase (APIs, dependencies, conventions, architecture)? → Write it into the relevant knowledge file
 3. Did the file/knowledge list change? → Update AGENT.md's index
-4. Did nothing worth remembering happen? → Skip entirely
+4. Did any existing documentation become stale due to my changes? → Update it in place
 
-**Most of the time, the answer should be (4).** Do not inflate documentation.
+**Default to updating.** Every session should leave the knowledge base more accurate than it found it. The only exception is truly trivial changes (typo fixes, comment-only edits).
 
 ## Accuracy Maintenance
 
@@ -105,13 +100,4 @@ After completing a task, ask yourself:
 - After writing: Verify AGENT.md references match actual files on disk
 - When deleting/renaming files: Update all references in AGENT.md and other knowledge files
 - Do NOT just append — revise outdated content
-- Check existing knowledge files for staleness: are the described files, APIs, and conventions still current? If not, update or remove
-
-## Validation
-
-After creating or significantly updating the knowledge base, verify it works:
-
-1. Launch a SubAgent (explore role) restricted to only reading AGENT.md and files referenced from it
-2. Ask it architecture questions that require understanding the project structure
-3. If it cannot answer correctly, the knowledge files are incomplete — fix them
-4. The test proves the knowledge base is self-sufficient for a zero-memory agent
+- Keep each file focused on one topic; split when a file grows beyond ~200 lines

@@ -48,7 +48,7 @@ type cliApp struct {
 	llmClient llm.LLM
 	msgBus    *bus.MessageBus
 	db        *sqlite.DB
-	agentLoop *agent.Agent
+	backend   agent.AgentBackend
 	workDir   string
 	xbotHome  string
 }
@@ -122,7 +122,7 @@ func newCLIApp() *cliApp {
 
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
-	agentLoop := agent.New(agent.Config{
+	backend := agent.NewLocalBackend(agent.Config{
 		Bus:                  msgBus,
 		LLM:                  llmClient,
 		Model:                cfg.LLM.Model,
@@ -153,16 +153,16 @@ func newCLIApp() *cliApp {
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
 		OffloadDir:           filepath.Join(xbotHome, "offload_store"),
 	})
-	agentLoop.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
-	agentLoop.IndexGlobalTools()
-	agentLoop.LLMFactory().SetModelTiers(cfg.LLM)
+	backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
+	backend.IndexGlobalTools()
+	backend.LLMFactory().SetModelTiers(cfg.LLM)
 
 	return &cliApp{
 		cfg:       cfg,
 		llmClient: llmClient,
 		msgBus:    msgBus,
 		db:        db,
-		agentLoop: agentLoop,
+		backend:   backend,
 		workDir:   workDir,
 		xbotHome:  xbotHome,
 	}
@@ -302,8 +302,8 @@ func main() {
 				}(),
 				"theme": func() string {
 					// Read persisted theme from settings, default to dark
-					if app.agentLoop != nil {
-						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+					if app.backend != nil {
+						if ss := app.backend.SettingsService(); ss != nil {
 							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 								if t, ok := vals["theme"]; ok && t != "" {
 									return t
@@ -314,8 +314,8 @@ func main() {
 					return "midnight"
 				}(),
 				"language": func() string {
-					if app.agentLoop != nil {
-						if ss := app.agentLoop.GetSettingsService(); ss != nil {
+					if app.backend != nil {
+						if ss := app.backend.SettingsService(); ss != nil {
 							if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 								if l, ok := vals["language"]; ok {
 									return l
@@ -390,8 +390,8 @@ func main() {
 			if v, ok := values["swift_model"]; ok {
 				app.cfg.LLM.SwiftModel = strings.TrimSpace(v)
 			}
-			if app.agentLoop != nil && (vanguardChanged || balanceChanged || swiftChanged) {
-				app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
+			if app.backend != nil && (vanguardChanged || balanceChanged || swiftChanged) {
+				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
 			// Apply Sandbox settings
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
@@ -399,8 +399,8 @@ func main() {
 				// Reinitialize sandbox so the new mode takes effect immediately
 				tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
 				// Sync the new sandbox into the agent loop
-				if app.agentLoop != nil {
-					app.agentLoop.SetSandbox(tools.GetSandbox(), v)
+				if app.backend != nil {
+					app.backend.SetSandbox(tools.GetSandbox(), v)
 				}
 			}
 			// Apply Agent settings
@@ -441,9 +441,9 @@ func main() {
 					// Rebuild LLM client with new max_output_tokens
 					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
-						if app.agentLoop != nil {
-							app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
-							app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
+						if app.backend != nil {
+							app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+							app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 						}
 					} else {
 						log.Warnf("Failed to rebuild LLM client: %v", err)
@@ -458,8 +458,8 @@ func main() {
 					}
 				}
 				// Sync to factory so next GetLLM picks up the change
-				if app.agentLoop != nil {
-					app.agentLoop.LLMFactory().SetDefaultThinkingMode(v)
+				if app.backend != nil {
+					app.backend.LLMFactory().SetDefaultThinkingMode(v)
 				}
 			}
 			if v, ok := values["enable_auto_compress"]; ok {
@@ -471,8 +471,8 @@ func main() {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
 			// Persist theme to settings service (theme is CLI-specific, not in config.json)
-			if theme, ok := values["theme"]; ok && theme != "" && app.agentLoop != nil {
-				if ss := app.agentLoop.GetSettingsService(); ss != nil {
+			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil {
+				if ss := app.backend.SettingsService(); ss != nil {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
@@ -480,55 +480,55 @@ func main() {
 			if llmChanged || keyChanged || modelChanged || urlChanged {
 				if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 					app.llmClient = newClient
-					if app.agentLoop != nil {
-						app.agentLoop.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
-						app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
+					if app.backend != nil {
+						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+						app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 					}
 				} else {
 					log.Warnf("Failed to rebuild LLM client: %v", err)
 				}
 			}
 			// Update agent runtime state
-			if app.agentLoop != nil {
+			if app.backend != nil {
 				if v, ok := values["context_mode"]; ok && v != "" {
-					_ = app.agentLoop.SetContextMode(v)
+					_ = app.backend.SetContextMode(v)
 				}
 				if v, ok := values["max_iterations"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.agentLoop.SetMaxIterations(n)
+						app.backend.SetMaxIterations(n)
 					}
 				}
 				if v, ok := values["max_concurrency"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.agentLoop.SetMaxConcurrency(n)
+						app.backend.SetMaxConcurrency(n)
 					}
 				}
 				if v, ok := values["max_context_tokens"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						app.agentLoop.SetMaxContextTokens(n)
+						app.backend.SetMaxContextTokens(n)
 					}
 				}
 				// enable_auto_compress maps to context_mode: true→auto, false→none
 				if v, ok := values["enable_auto_compress"]; ok {
 					if v == "true" {
-						_ = app.agentLoop.SetContextMode("auto")
+						_ = app.backend.SetContextMode("auto")
 					} else {
-						_ = app.agentLoop.SetContextMode("none")
+						_ = app.backend.SetContextMode("none")
 					}
 				}
 			}
 		},
 		ClearMemory: func(targetType string) error {
-			if app.agentLoop == nil {
+			if app.backend == nil {
 				return fmt.Errorf("agent not initialized")
 			}
-			return app.agentLoop.MultiSession().ClearMemory(context.Background(), "cli", absWorkDir, targetType, "cli_user")
+			return app.backend.MultiSession().ClearMemory(context.Background(), "cli", absWorkDir, targetType, "cli_user")
 		},
 		GetMemoryStats: func() map[string]string {
-			if app.agentLoop == nil {
+			if app.backend == nil {
 				return map[string]string{}
 			}
-			return app.agentLoop.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
+			return app.backend.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
 		},
 		SwitchLLM: func(provider, baseURL, apiKey, model string) error {
 			llmCfg := config.LLMConfig{
@@ -542,17 +542,17 @@ func main() {
 				return fmt.Errorf("create LLM: %w", err)
 			}
 			app.llmClient = client
-			if app.agentLoop != nil {
-				app.agentLoop.LLMFactory().SetDefaults(client, model)
-				app.agentLoop.LLMFactory().SetModelTiers(app.cfg.LLM)
+			if app.backend != nil {
+				app.backend.LLMFactory().SetDefaults(client, model)
+				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
 			return nil
 		},
 		UsageQuery: func(senderID string, days int) (*sqlite.UserTokenUsage, []sqlite.DailyTokenUsage, error) {
-			if app.agentLoop == nil {
+			if app.backend == nil {
 				return nil, nil, fmt.Errorf("agent not initialized")
 			}
-			ms := app.agentLoop.MultiSession()
+			ms := app.backend.MultiSession()
 			cumulative, err := ms.GetUserTokenUsage(senderID)
 			if err != nil {
 				return nil, nil, err
@@ -564,16 +564,16 @@ func main() {
 			return cumulative, daily, nil
 		},
 		AgentCount: func() int {
-			if app.agentLoop == nil {
+			if app.backend == nil {
 				return 0
 			}
-			return app.agentLoop.CountInteractiveSessions("cli", absWorkDir)
+			return app.backend.CountInteractiveSessions("cli", absWorkDir)
 		},
 		AgentList: func() []channel.AgentPanelEntry {
-			if app.agentLoop == nil {
+			if app.backend == nil {
 				return nil
 			}
-			sessions := app.agentLoop.ListInteractiveSessions("cli", absWorkDir)
+			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 			entries := make([]channel.AgentPanelEntry, len(sessions))
 			for i, s := range sessions {
 				entries[i] = channel.AgentPanelEntry{
@@ -588,7 +588,7 @@ func main() {
 			return entries
 		},
 		AgentInspect: func(roleName, instance string, tailCount int) (string, error) {
-			return app.agentLoop.InspectInteractiveSession(context.Background(), roleName, "cli", absWorkDir, instance, tailCount)
+			return app.backend.InspectInteractiveSession(context.Background(), roleName, "cli", absWorkDir, instance, tailCount)
 		},
 	}
 
@@ -631,19 +631,19 @@ func main() {
 	disp.Register(cliCh)
 
 	// Inject SettingsService for interactive /settings panel
-	if app.agentLoop != nil {
-		if ss := app.agentLoop.GetSettingsService(); ss != nil {
+	if app.backend != nil {
+		if ss := app.backend.SettingsService(); ss != nil {
 			cliCh.SetSettingsService(ss)
 		}
 		cliCh.SetModelLister(&cliModelLister{
-			factory: app.agentLoop.LLMFactory(),
+			factory: app.backend.LLMFactory(),
 			cfg:     app.cfg,
 		})
 		// Inject BgTaskManager for background task display
 		bgSessionKey := "cli:" + cliCfg.ChatID
-		cliCh.SetBgTaskManager(app.agentLoop.BgTaskManager(), bgSessionKey)
+		cliCh.SetBgTaskManager(app.backend.BgTaskManager(), bgSessionKey)
 		// Inject ApprovalHook for permission control approval dialog
-		if hook := app.agentLoop.ToolHookChain().Get("approval"); hook != nil {
+		if hook := app.backend.ToolHookChain().Get("approval"); hook != nil {
 			if ah, ok := hook.(*tools.ApprovalHook); ok {
 				cliCh.SetApprovalHook(ah)
 			}
@@ -652,7 +652,7 @@ func main() {
 		checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
 		if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
 			cpHook := tools.NewCheckpointHook(cpStore)
-			if err := app.agentLoop.ToolHookChain().Use(cpHook); err != nil {
+			if err := app.backend.ToolHookChain().Use(cpHook); err != nil {
 				log.WithError(err).Warn("Failed to register checkpoint hook")
 			} else {
 				cliCh.SetCheckpointHook(cpHook)
@@ -676,7 +676,7 @@ func main() {
 	}
 
 	// Apply saved theme at startup
-	if ss := app.agentLoop.GetSettingsService(); ss != nil {
+	if ss := app.backend.SettingsService(); ss != nil {
 		if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 			if t, ok := vals["theme"]; ok && t != "" {
 				channel.ApplyTheme(t)
@@ -685,15 +685,15 @@ func main() {
 	}
 
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
-	app.agentLoop.SetDirectSend(disp.SendDirect)
-	app.agentLoop.SetChannelFinder(disp.GetChannel)
+	app.backend.SetDirectSend(disp.SendDirect)
+	app.backend.SetChannelFinder(disp.GetChannel)
 
 	// 注入 CLI 渠道特化 prompt 提供者
-	app.agentLoop.SetChannelPromptProviders(&channel.CliPromptProvider{})
+	app.backend.SetChannelPromptProviders(&channel.CliPromptProvider{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go app.agentLoop.Run(ctx)
+	_ = app.backend.Start(ctx)
 	go disp.Run()
 
 	if newSession {
@@ -721,8 +721,8 @@ func main() {
 
 	// Runner Bridge: inject LLM client, model list and provider for runner use
 	cliCh.SetRunnerLLM(app.llmClient, func() []string {
-		if app.agentLoop != nil {
-			return app.agentLoop.LLMFactory().ListModels()
+		if app.backend != nil {
+			return app.backend.LLMFactory().ListModels()
 		}
 		return nil
 	}(), app.cfg.LLM.Provider)
@@ -749,11 +749,11 @@ func main() {
 		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
 	}
 	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig, func(llmCfg config.LLMConfig) {
-		if app.agentLoop != nil {
-			app.agentLoop.LLMFactory().SetModelTiers(llmCfg)
+		if app.backend != nil {
+			app.backend.LLMFactory().SetModelTiers(llmCfg)
 		}
 	}))
-	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.agentLoop.LLMFactory(), saveConfig))
+	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.backend.LLMFactory(), saveConfig))
 
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {
@@ -1033,7 +1033,7 @@ func executeNonInteractive(prompt string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go app.agentLoop.Run(ctx)
+	_ = app.backend.Start(ctx)
 	go disp.Run()
 
 	app.msgBus.Inbound <- bus.InboundMessage{

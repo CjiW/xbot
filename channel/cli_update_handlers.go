@@ -299,8 +299,12 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 	if m.progress != nil {
 		for i := range m.progress.ActiveTools {
 			t := &m.progress.ActiveTools[i]
-			if t.StartedAt.IsZero() && t.Elapsed > 0 {
-				t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+			if t.StartedAt.IsZero() {
+				if t.Elapsed > 0 {
+					t.StartedAt = time.Now().Add(-time.Duration(t.Elapsed) * time.Millisecond)
+				} else {
+					t.StartedAt = time.Now()
+				}
 			}
 		}
 	}

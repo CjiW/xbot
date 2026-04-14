@@ -8,7 +8,6 @@ import (
 	"image/color"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -294,7 +293,6 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flush is handled in cliTickMsg instead (next tick after typing=false).
 
 	case cliTickMsg:
-		m.lastTickAt = time.Now()
 		// Always refresh bg task count on tick so status bar updates immediately
 		// when a bg task completes (even when no progress event is coming)
 		if m.bgTaskCountFn != nil {
@@ -318,13 +316,16 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (two tickCmd() would double the message count every 100ms → CPU explosion).
 		busy := m.typing || m.progress != nil
 		if (m.bgTaskCountFn != nil && m.bgTaskCount > 0) || (m.agentCountFn != nil && m.agentCount > 0) || busy {
+			m.fastTickActive = true
 			cmds = append(cmds, tickCmd())
 		} else if m.needFlushQueue && len(m.messageQueue) > 0 {
+			m.fastTickActive = true
 			// Pending queue flush — use fast tick so the queued message
 			// is sent promptly (not waiting 3s for idleTickCmd).
 			cmds = append(cmds, tickCmd())
 		} else {
 			// Transition to idle: start low-frequency tick for placeholder rotation
+			m.fastTickActive = false
 			cmds = append(cmds, idleTickCmd())
 		}
 		if busy {
@@ -352,13 +353,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.typing && m.progress == nil {
 			m.updatePlaceholder()
 			cmds = append(cmds, idleTickCmd())
-		} else if m.typing {
+		} else if m.typing && !m.fastTickActive {
 			// Self-healing: if typing but idle tick arrived, the fast tick chain broke.
-			// Re-arm fast tick — but ONLY if lastTickAt is stale (avoids duplicating
-			// a chain that's still running but just slow).
-			if m.lastTickAt.IsZero() || time.Since(m.lastTickAt) > 500*time.Millisecond {
-				cmds = append(cmds, tickCmd())
-			}
+			// Re-arm fast tick.
+			m.fastTickActive = true
+			cmds = append(cmds, tickCmd())
 		}
 
 	case cliTempStatusClearMsg:

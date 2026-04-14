@@ -903,15 +903,22 @@ func (m *cliModel) renderProgressBlock() string {
 				continue
 			}
 			label, icon, sty := toolDisplayInfo(tool, toolDoneStyle, toolErrorStyle)
-			line := fmt.Sprintf("  │ %s %s", icon, label)
 			if tool.Elapsed > 0 {
-				pad := innerWidth - lipgloss.Width(line) - len(formatElapsed(tool.Elapsed))
+				elapsedStr := formatElapsed(tool.Elapsed)
+				// Prefix: "  │ "(4) + icon(2) + " "(1) = 7, elapsed adds len(elapsedStr) more
+				overhead := 7 + len(elapsedStr)
+				label = truncateToWidth(label, innerWidth-overhead)
+				line := fmt.Sprintf("  │ %s %s", icon, label)
+				pad := innerWidth - lipgloss.Width(line) - len(elapsedStr)
 				if pad < 1 {
 					pad = 1
 				}
-				line += strings.Repeat(" ", pad) + elapsedStyle.Render(formatElapsed(tool.Elapsed))
+				line += strings.Repeat(" ", pad) + elapsedStyle.Render(elapsedStr)
+				sb.WriteString(sty.Render(line))
+			} else {
+				line := fmt.Sprintf("  │ %s %s", icon, truncateToWidth(label, innerWidth-7))
+				sb.WriteString(sty.Render(line))
 			}
-			sb.WriteString(sty.Render(line))
 			sb.WriteString("\n")
 		}
 
@@ -933,7 +940,12 @@ func (m *cliModel) renderProgressBlock() string {
 			// Prefix: "  │ "(4) + icon(2) + " "(1) = 7, elapsed adds ~8 more
 			overhead := 7 + 2 + len(elapsedStr)
 			label = truncateToWidth(label, innerWidth-overhead)
-			line := fmt.Sprintf("  │ %s %s  %s", pulseIcon, label, elapsedStyle.Render(elapsedStr))
+			line := fmt.Sprintf("  │ %s %s", pulseIcon, label)
+			pad := innerWidth - lipgloss.Width(line) - len(elapsedStr)
+			if pad < 1 {
+				pad = 1
+			}
+			line += strings.Repeat(" ", pad) + elapsedStyle.Render(elapsedStr)
 			sb.WriteString(toolRunningStyle.Render(line))
 			sb.WriteString("\n")
 		}

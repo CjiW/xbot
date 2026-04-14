@@ -734,7 +734,7 @@ func TestTickChainSelfHealingViaIdleTick(t *testing.T) {
 
 	// Simulate broken tick chain: typing=true but only idle tick arrives
 	model.typing = true
-	model.lastTickAt = time.Time{} // no recent fast tick
+	model.fastTickActive = false
 
 	// idleTickMsg with typing=true should re-arm fast tick chain
 	_, cmd := model.Update(idleTickMsg{})
@@ -750,7 +750,7 @@ func TestTickChainSelfHealingViaProgressMsg(t *testing.T) {
 	// Progress events should NOT emit tickCmd — that would create duplicate chains.
 	// Self-healing is handled by idleTickMsg (3s safety net).
 	model.typing = true
-	model.lastTickAt = time.Now().Add(-2 * time.Second) // stale
+	model.fastTickActive = false
 
 	_, cmd := model.Update(cliProgressMsg{payload: &CLIProgressPayload{
 		Iteration: 1,
@@ -765,19 +765,19 @@ func TestStartAgentTurnDoesNotDuplicateChain(t *testing.T) {
 	model := newCLIModel()
 	model.handleResize(80, 24)
 
-	// When chain is already running (lastTickAt set), startAgentTurn should NOT inject
-	model.lastTickAt = time.Now()
+	// When chain is already running (fastTickActive=true), startAgentTurn should NOT inject
+	model.fastTickActive = true
 	model.startAgentTurn()
 	if len(model.pendingCmds) > 0 {
 		t.Error("startAgentTurn should not inject tickCmd when chain was already running")
 	}
 
-	// When no chain (lastTickAt zero), it SHOULD inject
-	model.lastTickAt = time.Time{}
+	// When no chain (fastTickActive=false), it SHOULD inject
+	model.fastTickActive = false
 	model.pendingCmds = nil
 	model.startAgentTurn()
 	if len(model.pendingCmds) == 0 {
-		t.Error("startAgentTurn should inject tickCmd when lastTickAt is zero (no chain)")
+		t.Error("startAgentTurn should inject tickCmd when fastTickActive is false (no chain)")
 	}
 }
 

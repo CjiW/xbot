@@ -125,11 +125,11 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
-	// Capture whether a tick chain was already running BEFORE resetting.
-	// This prevents injecting a duplicate tickCmd when a chain already exists
-	// (e.g. bg task tick chain running when user sends a message).
-	chainWasRunning := !m.lastTickAt.IsZero()
-	m.lastTickAt = time.Time{} // reset tick tracker for new turn
+	// If fast tick chain is NOT running (e.g. we're on idle tick after Ctrl+C),
+	// inject a tickCmd so the spinner starts immediately.
+	if !m.fastTickActive {
+		m.pendingCmds = append(m.pendingCmds, tickCmd())
+	}
 	// Sync checkpoint hook turn index
 	if m.checkpointHook != nil {
 		m.checkpointHook.SetTurnIdx(int(m.agentTurnID))
@@ -139,11 +139,6 @@ func (m *cliModel) startAgentTurn() {
 	m.updatePlaceholder()
 	m.inputReady = false
 	m.resetProgressState()
-	// Queue tickCmd so the next Update() drain picks it up.
-	// Only if no fast tick chain was already running.
-	if !chainWasRunning {
-		m.pendingCmds = append(m.pendingCmds, tickCmd())
-	}
 }
 
 // endAgentTurn resets all agent-turn tracking state and returns to idle.

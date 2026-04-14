@@ -732,17 +732,18 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // validateCLIToken validates a runner token and returns the associated senderID.
-// CLI RemoteBackend uses runner tokens for authentication — each token maps to a web user.
+// CLI RemoteBackend uses runner tokens for authentication — each token maps to a user.
 func (wc *WebChannel) validateCLIToken(token string) (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("empty token")
 	}
-	// Look up the token in runner_tokens table to find the user
-	row := wc.db.QueryRow(
-		"SELECT user_id FROM runner_tokens WHERE token = ?", token,
-	)
-	var userID string
-	if err := row.Scan(&userID); err != nil {
+	db := tools.GetRunnerTokenDB()
+	if db == nil {
+		return "", fmt.Errorf("runner token auth not available")
+	}
+	store := tools.NewRunnerTokenStore(db)
+	userID := store.FindByTokenInRunnerTokens(token)
+	if userID == "" {
 		return "", fmt.Errorf("invalid token")
 	}
 	return userID, nil

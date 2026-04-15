@@ -124,6 +124,7 @@ func (b *RemoteBackend) Start(ctx context.Context) error {
 	}
 	go b.readPump(ctx)
 	go b.reconnectLoop(ctx)
+	go b.pingLoop(ctx)
 	return nil
 }
 
@@ -217,6 +218,16 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("WS dial: %w", err)
 	}
+
+	// Set up pong handler to detect server liveness.
+	// Server sends pings every 30s; pong handler resets read deadline.
+	conn.SetPongHandler(func(_ string) error {
+		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
+	// Initial read deadline — if no data (including pongs) in 120s, connection is dead.
+	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+
 	b.connMu.Lock()
 	b.conn = conn
 	b.connMu.Unlock()
@@ -247,7 +258,9 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.WithError(err).Warn("WS read error")
+				log.WithError(err).Warn("WS connection lost (read error)")
+			} else {
+				log.WithError(err).Info("WS connection closed")
 			}
 			select {
 			case b.reconnectCh <- struct{}{}:
@@ -280,6 +293,8 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			b.outboundMu.RUnlock()
 			if cb != nil {
 				cb(outMsg)
+			} else {
+				log.Warn("Received server reply but no outbound callback registered")
 			}
 		case "progress_structured":
 			b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
@@ -381,6 +396,41 @@ func convertWsSubAgent(sa channel.WsSubAgent) channel.CLISubAgent {
 }
 
 // ---------------------------------------------------------------------------
+// Ping loop — sends WebSocket pings to keep connection alive
+// ---------------------------------------------------------------------------
+
+// pingLoop sends WebSocket pings every 25 seconds.
+// The server sends pings every 30s and expects pongs within 60s.
+// Client pings prevent the server's read deadline from expiring.
+func (b *RemoteBackend) pingLoop(ctx context.Context) {
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-b.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.sendPing()
+		}
+	}
+}
+
+// sendPing sends a WebSocket ping frame to the server.
+func (b *RemoteBackend) sendPing() {
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+	if b.conn == nil {
+		return
+	}
+	b.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := b.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+		log.WithError(err).Warn("WS ping failed")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Reconnect
 // ---------------------------------------------------------------------------
 
@@ -406,6 +456,7 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 					log.WithError(err).Warn("Reconnect failed")
 					continue
 				}
+				log.Info("Reconnected to server")
 				go b.readPump(ctx)
 				break
 			}

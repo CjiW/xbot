@@ -11,6 +11,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/event"
+	llm "xbot/llm"
 	"xbot/session"
 	"xbot/tools"
 
@@ -306,4 +307,53 @@ func (b *RemoteBackend) ListInteractiveSessions(string, string) []InteractiveSes
 }
 func (b *RemoteBackend) InspectInteractiveSession(_ context.Context, _, _, _, _ string, _ int) (string, error) {
 	return "", fmt.Errorf("not supported: remote backend does not support InspectInteractiveSession")
+}
+
+// --- Extended method stubs (not supported by RemoteBackend) ---
+
+func (b *RemoteBackend) RegisterTool(tools.Tool) {}
+
+func (b *RemoteBackend) RegistryManager() *RegistryManager { return nil }
+
+func (b *RemoteBackend) SetProxyLLM(string, *llm.ProxyLLM, string) {}
+
+func (b *RemoteBackend) ClearProxyLLM(string) {}
+
+func (b *RemoteBackend) GetDefaultModel() string { return "" }
+
+func (b *RemoteBackend) SetUserModel(string, string) error {
+	return fmt.Errorf("not supported: remote backend does not support SetUserModel")
+}
+
+func (b *RemoteBackend) GetUserMaxContext(string) int { return 0 }
+
+func (b *RemoteBackend) SetUserMaxContext(string, int) error {
+	return fmt.Errorf("not supported: remote backend does not support SetUserMaxContext")
+}
+
+func (b *RemoteBackend) GetUserMaxOutputTokens(string) int { return 0 }
+
+func (b *RemoteBackend) SetUserMaxOutputTokens(string, int) error {
+	return fmt.Errorf("not supported: remote backend does not support SetUserMaxOutputTokens")
+}
+
+func (b *RemoteBackend) GetUserThinkingMode(string) string { return "" }
+
+func (b *RemoteBackend) SetUserThinkingMode(string, string) error {
+	return fmt.Errorf("not supported: remote backend does not support SetUserThinkingMode")
+}
+
+func (b *RemoteBackend) GetLLMConcurrency(string) int { return 0 }
+
+func (b *RemoteBackend) SetLLMConcurrency(string, int) error {
+	return fmt.Errorf("not supported: remote backend does not support SetLLMConcurrency")
+}
+
+func (b *RemoteBackend) GetContextMode() string { return "" }
+
+func (b *RemoteBackend) Close() error { return nil }
+
+func (b *RemoteBackend) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
 }

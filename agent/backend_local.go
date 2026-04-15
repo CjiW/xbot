@@ -7,6 +7,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/event"
+	llm "xbot/llm"
 	"xbot/session"
 	"xbot/tools"
 )
@@ -145,4 +146,74 @@ func (b *LocalBackend) GetCardBuilder() *tools.CardBuilder {
 
 func (b *LocalBackend) SetEventRouter(router *event.Router) {
 	b.agent.SetEventRouter(router)
+}
+
+// --- Extended methods (delegated to b.agent) ---
+
+func (b *LocalBackend) RegisterTool(tool tools.Tool) {
+	b.agent.RegisterTool(tool)
+}
+
+func (b *LocalBackend) RegistryManager() *RegistryManager {
+	return b.agent.RegistryManager()
+}
+
+func (b *LocalBackend) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
+	b.agent.SetProxyLLM(senderID, proxy, model)
+}
+
+func (b *LocalBackend) ClearProxyLLM(senderID string) {
+	b.agent.ClearProxyLLM(senderID)
+}
+
+func (b *LocalBackend) GetDefaultModel() string {
+	return b.agent.GetDefaultModel()
+}
+
+func (b *LocalBackend) SetUserModel(senderID, model string) error {
+	return b.agent.SetUserModel(senderID, model)
+}
+
+func (b *LocalBackend) GetUserMaxContext(senderID string) int {
+	return b.agent.GetUserMaxContext(senderID)
+}
+
+func (b *LocalBackend) SetUserMaxContext(senderID string, maxContext int) error {
+	return b.agent.SetUserMaxContext(senderID, maxContext)
+}
+
+func (b *LocalBackend) GetUserMaxOutputTokens(senderID string) int {
+	return b.agent.GetUserMaxOutputTokens(senderID)
+}
+
+func (b *LocalBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
+	return b.agent.SetUserMaxOutputTokens(senderID, maxTokens)
+}
+
+func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
+	return b.agent.GetUserThinkingMode(senderID)
+}
+
+func (b *LocalBackend) SetUserThinkingMode(senderID string, mode string) error {
+	return b.agent.SetUserThinkingMode(senderID, mode)
+}
+
+func (b *LocalBackend) GetLLMConcurrency(senderID string) int {
+	return b.agent.GetLLMConcurrency(senderID)
+}
+
+func (b *LocalBackend) SetLLMConcurrency(senderID string, personal int) error {
+	return b.agent.SetLLMConcurrency(senderID, personal)
+}
+
+func (b *LocalBackend) GetContextMode() string {
+	return b.agent.GetContextMode()
+}
+
+func (b *LocalBackend) Close() error {
+	return b.agent.Close()
+}
+
+func (b *LocalBackend) Run(ctx context.Context) error {
+	return b.agent.Run(ctx)
 }

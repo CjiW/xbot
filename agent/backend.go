@@ -6,6 +6,7 @@ import (
 	"xbot/bus"
 	"xbot/channel"
 	"xbot/event"
+	llm "xbot/llm"
 	"xbot/session"
 	"xbot/tools"
 )
@@ -94,4 +95,58 @@ type AgentBackend interface {
 
 	// SetEventRouter sets the event trigger router.
 	SetEventRouter(router *event.Router)
+
+	// --- Extended methods (used by server main.go) ---
+
+	// RegisterTool registers a user tool.
+	RegisterTool(tool tools.Tool)
+
+	// RegistryManager returns the registry manager for shared entries.
+	RegistryManager() *RegistryManager
+
+	// SetProxyLLM injects a proxy LLM for a specific user.
+	SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string)
+
+	// ClearProxyLLM removes the proxy LLM for a specific user.
+	ClearProxyLLM(senderID string)
+
+	// GetDefaultModel returns the default model name.
+	GetDefaultModel() string
+
+	// SetUserModel sets the model for a specific user.
+	SetUserModel(senderID, model string) error
+
+	// GetUserMaxContext returns the max context tokens for a specific user.
+	GetUserMaxContext(senderID string) int
+
+	// SetUserMaxContext sets the max context tokens for a specific user.
+	SetUserMaxContext(senderID string, maxContext int) error
+
+	// GetUserMaxOutputTokens returns the max output tokens for a specific user.
+	GetUserMaxOutputTokens(senderID string) int
+
+	// SetUserMaxOutputTokens sets the max output tokens for a specific user.
+	SetUserMaxOutputTokens(senderID string, maxTokens int) error
+
+	// GetUserThinkingMode returns the thinking mode for a specific user.
+	GetUserThinkingMode(senderID string) string
+
+	// SetUserThinkingMode sets the thinking mode for a specific user.
+	SetUserThinkingMode(senderID string, mode string) error
+
+	// GetLLMConcurrency returns the LLM concurrency limit for a specific user.
+	GetLLMConcurrency(senderID string) int
+
+	// SetLLMConcurrency sets the LLM concurrency limit for a specific user.
+	SetLLMConcurrency(senderID string, personal int) error
+
+	// GetContextMode returns the current context management mode.
+	GetContextMode() string
+
+	// Close shuts down the agent, releasing all resources.
+	Close() error
+
+	// Run starts the agent loop and blocks until the context is cancelled.
+	// Use this for the main goroutine blocking wait.
+	Run(ctx context.Context) error
 }

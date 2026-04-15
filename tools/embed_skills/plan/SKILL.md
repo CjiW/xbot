@@ -12,6 +12,7 @@ Break complex tasks into actionable, verifiable implementation plans before writ
 1. **READ-ONLY.** Do NOT modify files, run non-readonly commands, or make any changes to the system. You may only read files, search code, and explore the codebase.
 2. **One plan, one file.** Write the plan to a single markdown file. Update it in place as the plan evolves — do not create multiple drafts.
 3. **End with a decision point.** Every plan must conclude with clear next steps and a go/no-go decision for the user.
+4. **Ask when unsure.** Use the `AskUser` tool whenever the requirement is ambiguous, multiple approaches seem equally valid, or you need to confirm assumptions before committing to a direction. Never guess silently — a 10-second question prevents a 10-minute wrong turn.
 
 ## Workflow
 

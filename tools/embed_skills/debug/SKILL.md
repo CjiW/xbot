@@ -29,6 +29,7 @@ Turn vague bug reports into reproducible, verified fixes.
    - Run the nearest related validation commands to catch regressions.
 
 5. **If user cooperation is required**
+   - Use `AskUser` to ask focused questions with choices when possible — this reduces back-and-forth.
    - Prepare everything the user needs before asking them to test:
      - exact command(s) to run
      - required environment variables / setup
@@ -43,7 +44,7 @@ Turn vague bug reports into reproducible, verified fixes.
 - Prefer **test-first debugging** whenever the environment allows it.
 - Do not claim a bug is fixed without a passing reproduction check or an explicit explanation of why local verification is impossible.
 - If you cannot reproduce locally, say so clearly and switch to preparing the best user-runnable reproduction and logging plan.
-- When asking the user to help test, minimize their work; prepare commands, paths, and logging details for them.
+- When asking the user to help test, minimize their work; prepare commands, paths, and logging details for them. Use `AskUser` to ask targeted questions — provide choices when possible to reduce ambiguity.
 - Always report:
   - how the bug was reproduced
   - what changed

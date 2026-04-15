@@ -19,11 +19,12 @@ import (
 
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
-	client       *openai.Client
-	mu           sync.RWMutex // 保护 models 和 defaultModel 的并发读写（C-12）
-	models       []string     // 可用模型列表
-	defaultModel string       // 默认模型
-	maxTokens    int          // 最大生成 token 数
+	client         *openai.Client
+	mu             sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
+	models         []string       // 可用模型列表
+	defaultModel   string         // 默认模型
+	maxTokens      int            // 最大生成 token 数
+	onModelsLoaded func([]string) // callback after models loaded from API
 
 	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
 	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
@@ -41,6 +42,14 @@ type OpenAIConfig struct {
 	// OnModelsLoadError is called when the async model list API call fails.
 	// Used by CLI to show a toast notification.
 	OnModelsLoadError func(err error)
+
+	// OnModelsLoaded is called when the async model list API call succeeds.
+	// Receives the full list of model names. Used to cache models in DB.
+	OnModelsLoaded func(models []string)
+
+	// SubscriptionID identifies the subscription that owns this client.
+	// Used by OnModelsLoaded to know which subscription to update.
+	SubscriptionID string
 }
 
 // defaultMaxTokens 默认最大生成 token 数
@@ -67,10 +76,11 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 	client := openai.NewClient(opts...)
 
 	o := &OpenAILLM{
-		client:       &client,
-		models:       nil,
-		defaultModel: cfg.DefaultModel,
-		maxTokens:    cfg.MaxTokens,
+		client:         &client,
+		models:         nil,
+		defaultModel:   cfg.DefaultModel,
+		maxTokens:      cfg.MaxTokens,
+		onModelsLoaded: cfg.OnModelsLoaded,
 	}
 
 	// Set fallback model immediately so ListModels() always returns something.
@@ -162,6 +172,11 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 		"model_count":   modelCount,
 		"default_model": defaultModel,
 	}).Info("[LLM] Models loaded from OpenAI API")
+
+	// Notify callback (e.g. to cache models in DB)
+	if o.onModelsLoaded != nil {
+		o.onModelsLoaded(models)
+	}
 
 	return nil
 }

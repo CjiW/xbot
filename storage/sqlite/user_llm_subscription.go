@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,17 +12,18 @@ import (
 
 // LLMSubscription represents a user's LLM provider subscription.
 type LLMSubscription struct {
-	ID              string // unique subscription ID
-	SenderID        string // user ID
-	Name            string // display name (e.g. "OpenAI GPT-4", "DeepSeek")
-	Provider        string // LLM provider: "openai", "deepseek", "anthropic", etc.
-	BaseURL         string // API base URL
-	APIKey          string // API key (plaintext in struct, encrypted in DB)
-	Model           string // default model for this subscription
-	MaxContext      int    // max context token limit (0 = use default)
-	MaxOutputTokens int    // max output token limit (0 = use default 8192)
-	ThinkingMode    string // thinking mode: "" (auto), "enabled", "disabled"
-	IsDefault       bool   // whether this is the active subscription
+	ID              string   // unique subscription ID
+	SenderID        string   // user ID
+	Name            string   // display name (e.g. "OpenAI GPT-4", "DeepSeek")
+	Provider        string   // LLM provider: "openai", "deepseek", "anthropic", etc.
+	BaseURL         string   // API base URL
+	APIKey          string   // API key (plaintext in struct, encrypted in DB)
+	Model           string   // default model for this subscription
+	MaxContext      int      // max context token limit (0 = use default)
+	MaxOutputTokens int      // max output token limit (0 = use default 8192)
+	ThinkingMode    string   // thinking mode: "" (auto), "enabled", "disabled"
+	IsDefault       bool     // whether this is the active subscription
+	CachedModels    []string // cached model list from API (JSON in DB)
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -42,14 +44,19 @@ func scanSubscription(scanner interface{ Scan(...interface{}) error }, sub *LLMS
 	var encryptedAPIKey string
 	var isDefault int
 	var createdAt, updatedAt string
+	var cachedModelsJSON string
 	err := scanner.Scan(&sub.ID, &sub.SenderID, &sub.Name, &sub.Provider, &sub.BaseURL,
-		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode, &createdAt, &updatedAt)
+		&encryptedAPIKey, &sub.Model, &isDefault, &sub.MaxContext, &sub.MaxOutputTokens, &sub.ThinkingMode,
+		&cachedModelsJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return "", 0, err
 	}
 	sub.IsDefault = isDefault == 1
 	sub.CreatedAt = parseSQLiteTime(createdAt)
 	sub.UpdatedAt = parseSQLiteTime(updatedAt)
+	if cachedModelsJSON != "" {
+		_ = json.Unmarshal([]byte(cachedModelsJSON), &sub.CachedModels)
+	}
 	return encryptedAPIKey, isDefault, nil
 }
 
@@ -70,7 +77,7 @@ func decryptAPIKey(sub *LLMSubscription, encryptedAPIKey string) {
 func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, error) {
 	conn := s.db.Conn()
 	rows, err := conn.Query(`
-			SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+			SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, cached_models, created_at, updated_at
 				FROM user_llm_subscriptions
 				WHERE sender_id = ?
 				ORDER BY created_at ASC
@@ -97,7 +104,7 @@ func (s *LLMSubscriptionService) List(senderID string) ([]*LLMSubscription, erro
 func (s *LLMSubscriptionService) GetDefault(senderID string) (*LLMSubscription, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, cached_models, created_at, updated_at
 			FROM user_llm_subscriptions
 			WHERE sender_id = ? AND is_default = 1
 			LIMIT 1
@@ -119,7 +126,7 @@ func (s *LLMSubscriptionService) GetDefault(senderID string) (*LLMSubscription, 
 func (s *LLMSubscriptionService) Get(id string) (*LLMSubscription, error) {
 	conn := s.db.Conn()
 	row := conn.QueryRow(`
-		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, created_at, updated_at
+		SELECT id, sender_id, name, provider, base_url, api_key, model, is_default, max_context, max_output_tokens, thinking_mode, cached_models, created_at, updated_at
 			FROM user_llm_subscriptions
 			WHERE id = ?
 		`, id)
@@ -181,6 +188,36 @@ func (s *LLMSubscriptionService) Add(sub *LLMSubscription) error {
 	}
 
 	return tx.Commit()
+}
+
+// UpdateCachedModels persists the model list cache for a subscription.
+// It ensures the subscription's active model is always included.
+func (s *LLMSubscriptionService) UpdateCachedModels(subID string, models []string) error {
+	sub, err := s.Get(subID)
+	if err != nil {
+		return err
+	}
+	models = ensureModel(models, sub.Model)
+	data, err := json.Marshal(models)
+	if err != nil {
+		return fmt.Errorf("marshal cached models: %w", err)
+	}
+	_, err = s.db.Conn().Exec("UPDATE user_llm_subscriptions SET cached_models = ?, updated_at = datetime('now') WHERE id = ?",
+		string(data), subID)
+	return err
+}
+
+// ensureModel adds model to the list if not already present.
+func ensureModel(models []string, model string) []string {
+	if model == "" {
+		return models
+	}
+	for _, m := range models {
+		if m == model {
+			return models
+		}
+	}
+	return append(models, model)
 }
 
 // Update updates an existing subscription.

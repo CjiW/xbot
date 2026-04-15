@@ -20,7 +20,7 @@ type DB struct {
 	mu   sync.RWMutex
 }
 
-const schemaVersion = 28
+const schemaVersion = 29
 
 // Open opens or creates a SQLite database at the given path
 // If the database doesn't exist, it will be created with the required schema

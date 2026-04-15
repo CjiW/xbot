@@ -8,6 +8,7 @@ import (
 
 	"xbot/config"
 	"xbot/llm"
+	log "xbot/logger"
 	"xbot/storage/sqlite"
 )
 
@@ -287,10 +288,12 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 		// 其他所有 provider（openai, deepseek, siliconflow 等）都使用 OpenAI 兼容 API
 		maxTokens := cfg.MaxOutputTokens
 		client := llm.NewOpenAILLM(llm.OpenAIConfig{
-			BaseURL:      cfg.BaseURL,
-			APIKey:       cfg.APIKey,
-			DefaultModel: model,
-			MaxTokens:    maxTokens,
+			BaseURL:        cfg.BaseURL,
+			APIKey:         cfg.APIKey,
+			DefaultModel:   model,
+			MaxTokens:      maxTokens,
+			OnModelsLoaded: cfg.OnModelsLoaded,
+			SubscriptionID: cfg.ID,
 		})
 		return client, model
 	}
@@ -475,58 +478,50 @@ func (f *LLMFactory) GetMaxOutputTokens(senderID string) int {
 func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, string, int, string, bool) {
 	resolvedModel, _ := f.resolveTierModel(targetModel)
 	if resolvedModel == "" {
-		// 无指定模型 → 使用默认
 		client, model, maxCtx, tm := f.GetLLM(senderID)
 		return client, model, maxCtx, tm, false
 	}
 
-	// Tier resolved or explicit model name specified — try subscription matching first
-	if f.subscriptionSvc != nil {
-		subs, err := f.subscriptionSvc.List(senderID)
-		if err == nil && len(subs) > 0 {
-			// 1. 精确匹配：订阅的 Model 字段 == resolvedModel
-			for _, sub := range subs {
-				if sub.Model == resolvedModel {
-					client := f.createClientFromSub(sub, resolvedModel)
-					if client != nil {
-						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
-					}
-				}
-			}
-
-			// 2. 使用活跃订阅的凭证 + resolvedModel
-			activeSub, err := f.subscriptionSvc.GetDefault(senderID)
-			if err == nil && activeSub != nil {
-				client := f.createClientFromSub(activeSub, resolvedModel)
-				if client != nil {
-					return client, resolvedModel, activeSub.MaxContext, activeSub.ThinkingMode, true
-				}
-			}
-
-			// 3. Provider 匹配：找 provider 能服务该模型的订阅
-			provider := guessProvider(resolvedModel)
-			for _, sub := range subs {
-				if provider != "" && sub.Provider == provider {
-					client := f.createClientFromSub(sub, resolvedModel)
-					if client != nil {
-						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
-					}
-				}
-			}
-
-			// 4. 任意可用订阅
-			for _, sub := range subs {
-				client := f.createClientFromSub(sub, resolvedModel)
-				if client != nil {
-					return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
-				}
-			}
+	// Build lookup table from cached model lists in DB — O(1) lookup, no API calls
+	modelMap := f.buildModelSubscriptionMap(senderID)
+	if sub, ok := modelMap[resolvedModel]; ok {
+		client := f.createClientFromSub(sub, resolvedModel)
+		if client != nil {
+			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 		}
 	}
 
-	// Fallback: use default client with resolved model name (works for CLI mode without subscriptions)
+	// Fallback: use default client (works for CLI mode without subscriptions)
 	client, _, maxCtx, tm := f.GetLLM(senderID)
 	return client, resolvedModel, maxCtx, tm, true
+}
+
+// buildModelSubscriptionMap builds a model_name → subscription lookup table from
+// cached model lists in DB. No API calls, no client creation — pure DB lookup.
+// Each subscription's active model (sub.Model) is always included.
+func (f *LLMFactory) buildModelSubscriptionMap(senderID string) map[string]*sqlite.LLMSubscription {
+	m := make(map[string]*sqlite.LLMSubscription)
+	if f.subscriptionSvc == nil || senderID == "" {
+		return m
+	}
+	subs, err := f.subscriptionSvc.List(senderID)
+	if err != nil || len(subs) == 0 {
+		return m
+	}
+	for _, sub := range subs {
+		if sub.BaseURL == "" || sub.APIKey == "" {
+			continue
+		}
+		for _, modelName := range sub.CachedModels {
+			if _, exists := m[modelName]; !exists {
+				m[modelName] = sub
+			}
+		}
+		if sub.Model != "" {
+			m[sub.Model] = sub
+		}
+	}
+	return m
 }
 
 // createClientFromSub 从订阅创建 LLM 客户端，使用指定的模型名（而非订阅的默认模型）
@@ -540,6 +535,13 @@ func (f *LLMFactory) createClientFromSub(sub *sqlite.LLMSubscription, model stri
 		APIKey:          sub.APIKey,
 		Model:           model,
 		MaxOutputTokens: sub.MaxOutputTokens,
+		OnModelsLoaded: func(models []string) {
+			if f.subscriptionSvc != nil && sub.ID != "" {
+				if err := f.subscriptionSvc.UpdateCachedModels(sub.ID, models); err != nil {
+					log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to cache subscription models")
+				}
+			}
+		},
 	}
 	client, _ := f.createClient(cfg)
 	return client

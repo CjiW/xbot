@@ -110,6 +110,13 @@ func (db *DB) migrateSchema(from int) error {
 		}
 	}
 
+	// v29: add cached_models to user_llm_subscriptions
+	if from < 29 {
+		if err := migrateV28ToV29(db.Conn()); err != nil {
+			return fmt.Errorf("migrate to v29: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -937,5 +944,23 @@ func migrateV27ToV28(conn *sql.DB) error {
 		return fmt.Errorf("update schema version: %w", err)
 	}
 	log.Info("Database migrated to v28: added reasoning_content to session_messages")
+	return nil
+}
+
+// migrateV28ToV29 adds cached_models column to user_llm_subscriptions
+// for per-subscription model list caching.
+func migrateV28ToV29(conn *sql.DB) error {
+	var count int
+	err := conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('user_llm_subscriptions') WHERE name = 'cached_models'").Scan(&count)
+	if err == nil && count == 0 {
+		_, err = conn.Exec("ALTER TABLE user_llm_subscriptions ADD COLUMN cached_models TEXT NOT NULL DEFAULT ''")
+		if err != nil {
+			return fmt.Errorf("migrate v28->v29 add cached_models: %w", err)
+		}
+	}
+	if _, err := conn.Exec("UPDATE schema_version SET version = 29"); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	log.Info("Database migrated to v29: added cached_models to user_llm_subscriptions")
 	return nil
 }

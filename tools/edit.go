@@ -196,15 +196,6 @@ func (t *FileReplaceTool) Execute(ctx *ToolContext, input string) (*ToolResult, 
 		return nil, fmt.Errorf("run_as and reason must be provided together")
 	}
 
-	// Safety: reject oversized inputs to prevent CPU/memory exhaustion
-	const maxParamLen = 1 << 20 // 1 MB
-	if len(params.OldString) > maxParamLen {
-		return nil, fmt.Errorf("old_string too large (%d bytes, max %d)", len(params.OldString), maxParamLen)
-	}
-	if len(params.NewString) > maxParamLen {
-		return nil, fmt.Errorf("new_string too large (%d bytes, max %d)", len(params.NewString), maxParamLen)
-	}
-
 	// When only end_line is specified, default start_line to 1
 	if params.EndLine > 0 && params.StartLine <= 0 {
 		params.StartLine = 1

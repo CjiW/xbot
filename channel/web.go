@@ -119,6 +119,10 @@ type WebCallbacks struct {
 	RunnerStatusNotify func(senderID, runnerName string, online bool)
 	// SyncProgressNotify is called when runner sync progress is reported.
 	SyncProgressNotify func(senderID, phase, message string)
+	// RPCHandler handles RPC requests from CLI remote clients.
+	// The method string identifies the operation; params is the JSON-encoded request body.
+	// Returns JSON-encoded result or an error.
+	RPCHandler func(method string, params json.RawMessage) (json.RawMessage, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -275,16 +279,19 @@ func (rb *ringBuffer) flush() []wsMessage {
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
-	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo", "ask_user"
-	ID              string             `json:"id,omitempty"`               // UUID
+	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo", "ask_user", "stream_content", "rpc_response"
+	ID              string             `json:"id,omitempty"`               // UUID or RPC request ID
 	Content         string             `json:"content,omitempty"`          // message content
 	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
 	TS              int64              `json:"ts,omitempty"`               // timestamp
 	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
 	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
+	// RPC response fields (used when Type == "rpc_response")
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
-// WsProgressPayload 结构化进度消息负载（对应 agent.StructuredProgress）。
+// WsProgressPayload — structured progress data (corresponds to agent.StructuredProgress).
 type WsProgressPayload struct {
 	Phase          string              `json:"phase,omitempty"`
 	Iteration      int                 `json:"iteration,omitempty"`
@@ -296,6 +303,18 @@ type WsProgressPayload struct {
 	Todos          []WsTodoItem        `json:"todos,omitempty"`
 	Questions      []WsAskUserQuestion `json:"questions,omitempty"`
 	RequestID      string              `json:"request_id,omitempty"`
+	// StreamContent carries accumulated LLM streaming text (for CLI RemoteBackend).
+	StreamContent          string `json:"stream_content,omitempty"`
+	ReasoningStreamContent string `json:"reasoning_stream_content,omitempty"`
+}
+
+// GetReasoningStreamContent returns the ReasoningStreamContent field.
+// Used by RemoteBackend to extract reasoning from stream_content messages.
+func (p *WsProgressPayload) GetReasoningStreamContent() string {
+	if p == nil {
+		return ""
+	}
+	return p.ReasoningStreamContent
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -607,6 +626,23 @@ func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 	}
 }
 
+// SendStreamContent sends streaming LLM content to a specific client.
+// Used by CLI RemoteBackend connections to push token-by-token streaming.
+func (wc *WebChannel) SendStreamContent(chatID, content, reasoning string) {
+	if content == "" && reasoning == "" {
+		return
+	}
+	wsMsg := wsMessage{
+		Type: "stream_content",
+		TS:   time.Now().Unix(),
+		Progress: &WsProgressPayload{
+			StreamContent:          content,
+			ReasoningStreamContent: reasoning,
+		},
+	}
+	_ = wc.hub.sendToClient(chatID, wsMsg) // stream events are ephemeral, safe to drop
+}
+
 // PushRunnerStatus pushes a runner online/offline status change to the Web client.
 func (wc *WebChannel) PushRunnerStatus(chatID, runnerName string, online bool) {
 	wsMsg := wsMessage{
@@ -840,6 +876,33 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
 				From:       bus.NewIMAddress("web", c.userID),
 				To:         bus.NewIMAddress("web", chatID),
+			}
+			continue
+		case "rpc":
+			// CLI RemoteBackend RPC request — dispatch to server-side handler
+			if wc.callbacks.RPCHandler == nil {
+				continue
+			}
+			var rpcReq struct {
+				ID     string          `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal(raw, &rpcReq); err != nil {
+				log.WithError(err).Debug("Invalid RPC message from CLI client")
+				continue
+			}
+			result, rpcErr := wc.callbacks.RPCHandler(rpcReq.Method, rpcReq.Params)
+			rpcMsg := wsMessage{Type: "rpc_response", ID: rpcReq.ID}
+			if rpcErr != nil {
+				rpcMsg.Error = rpcErr.Error()
+			} else if result != nil {
+				rpcMsg.Result = result
+			}
+			select {
+			case c.sendCh <- rpcMsg:
+			default:
+				log.Warn("RPC response channel full, dropping response to CLI client")
 			}
 			continue
 		case "message":

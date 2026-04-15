@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -124,9 +125,465 @@ func setupOAuth(cfg *config.Config, dbPath string) (*oauth.Server, *oauth.Manage
 	return oauthServer, oauthManager, feishuProvider, sharedDB, nil
 }
 
+// handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
+// to the server's LocalBackend. This is the server-side counterpart of
+// RemoteBackend.callRPC().
+func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage) (json.RawMessage, error) {
+	switch method {
+	// --- Context / settings ---
+	case "get_context_mode":
+		return json.Marshal(backend.GetContextMode())
+	case "set_context_mode":
+		var p struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetContextMode(p.Mode)
+	case "get_settings":
+		var p struct {
+			Namespace string `json:"namespace"`
+			SenderID  string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.SettingsService() == nil {
+			return nil, fmt.Errorf("settings service not available")
+		}
+		result, err := backend.SettingsService().GetSettings(p.Namespace, p.SenderID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	case "set_setting":
+		var p struct {
+			Namespace string `json:"namespace"`
+			SenderID  string `json:"sender_id"`
+			Key       string `json:"key"`
+			Value     string `json:"value"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.SettingsService() == nil {
+			return nil, fmt.Errorf("settings service not available")
+		}
+		return nil, backend.SettingsService().SetSetting(p.Namespace, p.SenderID, p.Key, p.Value)
+
+	// --- Max iterations / concurrency / context tokens ---
+	case "set_max_iterations":
+		var p struct {
+			N int `json:"n"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		backend.SetMaxIterations(p.N)
+		return nil, nil
+	case "set_max_concurrency":
+		var p struct {
+			N int `json:"n"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		backend.SetMaxConcurrency(p.N)
+		return nil, nil
+	case "set_max_context_tokens":
+		var p struct {
+			N int `json:"n"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		backend.SetMaxContextTokens(p.N)
+		return nil, nil
+
+	// --- LLM ---
+	case "get_default_model":
+		return json.Marshal(backend.GetDefaultModel())
+	case "set_user_model":
+		var p struct {
+			SenderID string `json:"sender_id"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetUserModel(p.SenderID, p.Model)
+	case "get_user_max_context":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.GetUserMaxContext(p.SenderID))
+	case "set_user_max_context":
+		var p struct {
+			SenderID   string `json:"sender_id"`
+			MaxContext int    `json:"max_context"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetUserMaxContext(p.SenderID, p.MaxContext)
+	case "get_user_max_output_tokens":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.GetUserMaxOutputTokens(p.SenderID))
+	case "set_user_max_output_tokens":
+		var p struct {
+			SenderID  string `json:"sender_id"`
+			MaxTokens int    `json:"max_tokens"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetUserMaxOutputTokens(p.SenderID, p.MaxTokens)
+	case "get_user_thinking_mode":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.GetUserThinkingMode(p.SenderID))
+	case "set_user_thinking_mode":
+		var p struct {
+			SenderID string `json:"sender_id"`
+			Mode     string `json:"mode"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetUserThinkingMode(p.SenderID, p.Mode)
+	case "get_llm_concurrency":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.GetLLMConcurrency(p.SenderID))
+	case "set_llm_concurrency":
+		var p struct {
+			SenderID string `json:"sender_id"`
+			Personal int    `json:"personal"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetLLMConcurrency(p.SenderID, p.Personal)
+	case "set_default_thinking_mode":
+		var p struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		backend.LLMFactory().SetDefaultThinkingMode(p.Mode)
+		return nil, nil
+	case "list_models":
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		return json.Marshal(backend.LLMFactory().ListModels())
+	case "list_all_models":
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(""))
+	case "set_model_tiers":
+		var llmCfg config.LLMConfig
+		if err := json.Unmarshal(params, &llmCfg); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		backend.LLMFactory().SetModelTiers(llmCfg)
+		return nil, nil
+	case "set_proxy_llm":
+		var p struct {
+			SenderID string `json:"sender_id"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		backend.SetProxyLLM(p.SenderID, nil, p.Model)
+		return nil, nil
+	case "clear_proxy_llm":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		backend.ClearProxyLLM(p.SenderID)
+		return nil, nil
+
+	// --- Memory ---
+	case "clear_memory":
+		var p struct {
+			Channel    string `json:"channel"`
+			ChatID     string `json:"chat_id"`
+			TargetType string `json:"target_type"`
+			SenderID   string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.MultiSession() == nil {
+			return nil, fmt.Errorf("multi-session not available")
+		}
+		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, p.SenderID)
+	case "get_memory_stats":
+		var p struct {
+			Channel  string `json:"channel"`
+			ChatID   string `json:"chat_id"`
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.MultiSession() == nil {
+			return nil, fmt.Errorf("multi-session not available")
+		}
+		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, p.SenderID)
+		return json.Marshal(result)
+	case "get_user_token_usage":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.MultiSession() == nil {
+			return nil, fmt.Errorf("multi-session not available")
+		}
+		usage, err := backend.MultiSession().GetUserTokenUsage(p.SenderID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(usage)
+	case "get_daily_token_usage":
+		var p struct {
+			SenderID string `json:"sender_id"`
+			Days     int    `json:"days"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.MultiSession() == nil {
+			return nil, fmt.Errorf("multi-session not available")
+		}
+		daily, err := backend.MultiSession().GetDailyTokenUsage(p.SenderID, p.Days)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(daily)
+
+	// --- Sub-agents ---
+	case "count_interactive_sessions":
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
+	case "list_interactive_sessions":
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
+	case "inspect_interactive_session":
+		var p struct {
+			Role      string `json:"role"`
+			Channel   string `json:"channel"`
+			ChatID    string `json:"chat_id"`
+			Instance  string `json:"instance"`
+			TailCount int    `json:"tail_count"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		result, err := backend.InspectInteractiveSession(context.Background(), p.Role, p.Channel, p.ChatID, p.Instance, p.TailCount)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+
+	// --- Background tasks ---
+	case "get_bg_task_count":
+		var p struct {
+			SessionKey string `json:"session_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() == nil {
+			return json.Marshal(0)
+		}
+		return json.Marshal(len(backend.BgTaskManager().List(p.SessionKey)))
+
+	// --- Subscriptions ---
+	case "list_subscriptions":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return json.Marshal([]channel.Subscription{})
+		}
+		subs, err := svc.List(p.SenderID)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]channel.Subscription, len(subs))
+		for i, s := range subs {
+			result[i] = channel.Subscription{
+				ID: s.ID, Name: s.Name, Provider: s.Provider,
+				BaseURL: s.BaseURL, APIKey: s.APIKey,
+				Model: s.Model, Active: s.IsDefault,
+			}
+		}
+		return json.Marshal(result)
+	case "get_default_subscription":
+		var p struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, nil
+		}
+		sub, err := svc.GetDefault(p.SenderID)
+		if err != nil || sub == nil {
+			return nil, err
+		}
+		return json.Marshal(channel.Subscription{
+			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
+			BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+			Model: sub.Model, Active: sub.IsDefault,
+		})
+	case "add_subscription":
+		var p struct {
+			SenderID string                 `json:"sender_id"`
+			Sub      sqlite.LLMSubscription `json:"sub"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		return nil, svc.Add(&p.Sub)
+	case "remove_subscription":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		// Get senderID before removal for cache invalidation
+		sub, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := svc.Remove(p.ID); err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			backend.LLMFactory().Invalidate(sub.SenderID)
+		}
+		return nil, nil
+	case "set_default_subscription":
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		if err := svc.SetDefault(p.ID); err != nil {
+			return nil, err
+		}
+		// Invalidate cache so next request picks up the new default
+		sub, err := svc.Get(p.ID)
+		if err == nil && sub != nil {
+			backend.LLMFactory().Invalidate(sub.SenderID)
+		}
+		return nil, nil
+	case "rename_subscription":
+		var p struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		return nil, svc.Rename(p.ID, p.Name)
+
+	default:
+		return nil, fmt.Errorf("unknown RPC method: %s", method)
+	}
+}
+
 // buildWebCallbacks creates WebCallbacks with all Runner/Registry closures.
 func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.WebCallbacks {
-	return channel.WebCallbacks{
+	callbacks := channel.WebCallbacks{
 		RunnerTokenGet: func(senderID string) string {
 			db := tools.GetRunnerTokenDB()
 			if db == nil {
@@ -314,6 +771,11 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 			return ws, nil
 		},
 	}
+	// Wire RPC handler for CLI RemoteBackend clients
+	callbacks.RPCHandler = func(method string, params json.RawMessage) (json.RawMessage, error) {
+		return handleCLIRPC(cfg, backend, method, params)
+	}
+	return callbacks
 }
 
 // registerChannels creates and registers all channels.

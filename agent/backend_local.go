@@ -6,9 +6,11 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
 	"xbot/session"
+	"xbot/storage/sqlite"
 	"xbot/tools"
 )
 
@@ -67,6 +69,12 @@ func (b *LocalBackend) OnOutbound(_ func(bus.OutboundMessage)) {
 }
 
 func (b *LocalBackend) Bus() *bus.MessageBus { return b.bus }
+
+func (b *LocalBackend) IsRemote() bool { return false }
+
+// OnProgress is a no-op for LocalBackend: progress flows through the
+// Dispatcher → CLIChannel.SendProgress path directly.
+func (b *LocalBackend) OnProgress(_ func(*channel.CLIProgressPayload)) {}
 
 func (b *LocalBackend) LLMFactory() *LLMFactory {
 	return b.agent.LLMFactory()
@@ -208,6 +216,185 @@ func (b *LocalBackend) SetLLMConcurrency(senderID string, personal int) error {
 
 func (b *LocalBackend) GetContextMode() string {
 	return b.agent.GetContextMode()
+}
+
+// --- Extended RPC methods (delegate to local services) ---
+
+func (b *LocalBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
+	if b.agent.settingsSvc == nil {
+		return nil, nil
+	}
+	return b.agent.settingsSvc.GetSettings(namespace, senderID)
+}
+
+func (b *LocalBackend) SetSetting(namespace, senderID, key, value string) error {
+	if b.agent.settingsSvc == nil {
+		return nil
+	}
+	return b.agent.settingsSvc.SetSetting(namespace, senderID, key, value)
+}
+
+func (b *LocalBackend) ListModels() []string {
+	return b.agent.llmFactory.ListModels()
+}
+
+func (b *LocalBackend) ListAllModels() []string {
+	return b.agent.llmFactory.ListAllModelsForUser("")
+}
+
+func (b *LocalBackend) SetModelTiers(cfg config.LLMConfig) error {
+	b.agent.llmFactory.SetModelTiers(cfg)
+	return nil
+}
+
+func (b *LocalBackend) SetDefaultThinkingMode(mode string) error {
+	b.agent.llmFactory.SetDefaultThinkingMode(mode)
+	return nil
+}
+
+func (b *LocalBackend) ClearMemory(ctx context.Context, ch, chatID, targetType, senderID string) error {
+	if b.agent.multiSession == nil {
+		return nil
+	}
+	return b.agent.multiSession.ClearMemory(ctx, ch, chatID, targetType, senderID)
+}
+
+func (b *LocalBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID string) map[string]string {
+	if b.agent.multiSession == nil {
+		return nil
+	}
+	return b.agent.multiSession.GetMemoryStats(ctx, ch, chatID, senderID)
+}
+
+func (b *LocalBackend) GetUserTokenUsage(senderID string) (map[string]any, error) {
+	if b.agent.multiSession == nil {
+		return nil, nil
+	}
+	usage, err := b.agent.multiSession.GetUserTokenUsage(senderID)
+	if err != nil || usage == nil {
+		return nil, err
+	}
+	return map[string]any{
+		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
+		"total_tokens": usage.TotalTokens, "cached_tokens": usage.CachedTokens,
+		"conversation_count": usage.ConversationCount, "llm_call_count": usage.LLMCallCount,
+	}, nil
+}
+
+func (b *LocalBackend) GetDailyTokenUsage(senderID string, days int) ([]map[string]any, error) {
+	if b.agent.multiSession == nil {
+		return nil, nil
+	}
+	daily, err := b.agent.multiSession.GetDailyTokenUsage(senderID, days)
+	if err != nil || daily == nil {
+		return nil, err
+	}
+	result := make([]map[string]any, len(daily))
+	for i, d := range daily {
+		result[i] = map[string]any{
+			"date": d.Date, "model": d.Model,
+			"input_tokens": d.InputTokens, "output_tokens": d.OutputTokens,
+			"cached_tokens":      d.CachedTokens,
+			"conversation_count": d.ConversationCount, "llm_call_count": d.LLMCallCount,
+		}
+	}
+	return result, nil
+}
+
+func (b *LocalBackend) GetBgTaskCount(sessionKey string) int {
+	if b.agent.bgTaskMgr == nil {
+		return 0
+	}
+	return len(b.agent.bgTaskMgr.List(sessionKey))
+}
+
+func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return nil, nil
+	}
+	subs, err := svc.List(senderID)
+	if err != nil || subs == nil {
+		return nil, err
+	}
+	result := make([]channel.Subscription, len(subs))
+	for i, s := range subs {
+		result[i] = channel.Subscription{
+			ID: s.ID, Name: s.Name, Provider: s.Provider,
+			BaseURL: s.BaseURL, APIKey: s.APIKey,
+			Model: s.Model, Active: s.IsDefault,
+		}
+	}
+	return result, nil
+}
+
+func (b *LocalBackend) GetDefaultSubscription(senderID string) (*channel.Subscription, error) {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return nil, nil
+	}
+	sub, err := svc.GetDefault(senderID)
+	if err != nil || sub == nil {
+		return nil, err
+	}
+	return &channel.Subscription{
+		ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
+		BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+		Model: sub.Model, Active: sub.IsDefault,
+	}, nil
+}
+
+func (b *LocalBackend) AddSubscription(senderID string, sub channel.Subscription) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return svc.Add(&sqlite.LLMSubscription{
+		ID: sub.ID, SenderID: senderID, Name: sub.Name,
+		Provider: sub.Provider, BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+		Model: sub.Model, IsDefault: sub.Active,
+	})
+}
+
+func (b *LocalBackend) RemoveSubscription(id string) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	sub, err := svc.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := svc.Remove(id); err != nil {
+		return err
+	}
+	if sub != nil {
+		b.agent.llmFactory.Invalidate(sub.SenderID)
+	}
+	return nil
+}
+
+func (b *LocalBackend) SetDefaultSubscription(id string) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	if err := svc.SetDefault(id); err != nil {
+		return err
+	}
+	sub, err := svc.Get(id)
+	if err == nil && sub != nil {
+		b.agent.llmFactory.Invalidate(sub.SenderID)
+	}
+	return nil
+}
+
+func (b *LocalBackend) RenameSubscription(id, name string) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return svc.Rename(id, name)
 }
 
 func (b *LocalBackend) Close() error {

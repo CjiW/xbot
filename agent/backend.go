@@ -5,6 +5,7 @@ import (
 
 	"xbot/bus"
 	"xbot/channel"
+	"xbot/config"
 	"xbot/event"
 	llm "xbot/llm"
 	"xbot/session"
@@ -33,6 +34,17 @@ type AgentBackend interface {
 
 	// Bus returns the message bus (LocalBackend only; RemoteBackend returns nil).
 	Bus() *bus.MessageBus
+
+	// IsRemote returns true if the backend is remote (server-side agent loop).
+	// Callers should use this to guard calls that return nil for RemoteBackend
+	// (SettingsService, LLMFactory, BgTaskManager, ToolHookChain, MultiSession).
+	IsRemote() bool
+
+	// OnProgress registers a callback for streaming progress events from the server.
+	// LocalBackend: no-op (progress flows through dispatcher/channel directly).
+	// RemoteBackend: converts WS progress_structured/stream_content messages to
+	// CLIProgressPayload and calls the callback.
+	OnProgress(callback func(*channel.CLIProgressPayload))
 
 	// --- Runtime management (used by CLI settings panel, dispatchers, etc.) ---
 
@@ -142,6 +154,60 @@ type AgentBackend interface {
 
 	// GetContextMode returns the current context management mode.
 	GetContextMode() string
+
+	// --- Extended RPC methods (remote-friendly, used by CLI adapters) ---
+	// LocalBackend delegates to local services; RemoteBackend forwards via WS RPC.
+
+	// GetSettings retrieves settings for a namespace/sender.
+	GetSettings(namespace, senderID string) (map[string]string, error)
+
+	// SetSetting sets a single setting value.
+	SetSetting(namespace, senderID, key, value string) error
+
+	// ListModels returns available model names.
+	ListModels() []string
+
+	// ListAllModels returns all available model names (including subscriptions).
+	ListAllModels() []string
+
+	// SetModelTiers syncs model tier configuration.
+	SetModelTiers(cfg config.LLMConfig) error
+
+	// SetDefaultThinkingMode sets the default thinking mode.
+	SetDefaultThinkingMode(mode string) error
+
+	// ClearMemory clears memory for a channel/chat/sender.
+	ClearMemory(ctx context.Context, channel, chatID, targetType, senderID string) error
+
+	// GetMemoryStats retrieves memory statistics.
+	GetMemoryStats(ctx context.Context, channel, chatID, senderID string) map[string]string
+
+	// GetUserTokenUsage retrieves token usage for a sender.
+	GetUserTokenUsage(senderID string) (map[string]any, error)
+
+	// GetDailyTokenUsage retrieves daily token usage.
+	GetDailyTokenUsage(senderID string, days int) ([]map[string]any, error)
+
+	// GetBgTaskCount returns the count of active background tasks.
+	GetBgTaskCount(sessionKey string) int
+
+	// ListSubscriptions lists LLM subscriptions.
+	ListSubscriptions(senderID string) ([]channel.Subscription, error)
+
+	// GetDefaultSubscription gets the default subscription.
+	GetDefaultSubscription(senderID string) (*channel.Subscription, error)
+
+	// AddSubscription adds a new subscription.
+	AddSubscription(senderID string, sub channel.Subscription) error
+
+	// RemoveSubscription removes a subscription by ID.
+	RemoveSubscription(id string) error
+
+	// SetDefaultSubscription sets the default subscription.
+	SetDefaultSubscription(id string) error
+
+	// RenameSubscription renames a subscription.
+	RenameSubscription(id, name string) error
 
 	// Close shuts down the agent, releasing all resources.
 	Close() error

@@ -379,7 +379,7 @@ func main() {
 			if v, ok := values["swift_model"]; ok {
 				app.cfg.LLM.SwiftModel = strings.TrimSpace(v)
 			}
-			if app.backend != nil && (vanguardChanged || balanceChanged || swiftChanged) {
+			if app.backend != nil && !app.backend.IsRemote() && (vanguardChanged || balanceChanged || swiftChanged) {
 				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
 			// Apply Sandbox settings
@@ -428,14 +428,14 @@ func main() {
 					// Sync to cfg.LLM so createLLM picks it up on rebuild
 					app.cfg.LLM.MaxOutputTokens = n
 					// Rebuild LLM client with new max_output_tokens
-					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
-						app.llmClient = newClient
-						if app.backend != nil {
+					if app.backend != nil && !app.backend.IsRemote() {
+						if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
+							app.llmClient = newClient
 							app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
 							app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+						} else {
+							log.Warnf("Failed to rebuild LLM client: %v", err)
 						}
-					} else {
-						log.Warnf("Failed to rebuild LLM client: %v", err)
 					}
 				}
 			}
@@ -447,7 +447,7 @@ func main() {
 					}
 				}
 				// Sync to factory so next GetLLM picks up the change
-				if app.backend != nil {
+				if app.backend != nil && !app.backend.IsRemote() {
 					app.backend.LLMFactory().SetDefaultThinkingMode(v)
 				}
 			}
@@ -460,21 +460,21 @@ func main() {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
 			// Persist theme to settings service (theme is CLI-specific, not in config.json)
-			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil {
+			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil && !app.backend.IsRemote() {
 				if ss := app.backend.SettingsService(); ss != nil {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
 			// Rebuild LLM client and update agent runtime when LLM config changed
 			if llmChanged || keyChanged || modelChanged || urlChanged {
-				if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
-					app.llmClient = newClient
-					if app.backend != nil {
+				if !app.backend.IsRemote() {
+					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
+						app.llmClient = newClient
 						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
 						app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+					} else {
+						log.Warnf("Failed to rebuild LLM client: %v", err)
 					}
-				} else {
-					log.Warnf("Failed to rebuild LLM client: %v", err)
 				}
 			}
 			// Update agent runtime state
@@ -621,54 +621,67 @@ func main() {
 
 	// Inject SettingsService for interactive /settings panel
 	if app.backend != nil {
-		if ss := app.backend.SettingsService(); ss != nil {
-			cliCh.SetSettingsService(ss)
-		}
-		cliCh.SetModelLister(&cliModelLister{
-			factory: app.backend.LLMFactory(),
-			cfg:     app.cfg,
-		})
-		// Inject BgTaskManager for background task display
-		bgSessionKey := "cli:" + cliCfg.ChatID
-		cliCh.SetBgTaskManager(app.backend.BgTaskManager(), bgSessionKey)
-		// Inject ApprovalHook for permission control approval dialog
-		if hook := app.backend.ToolHookChain().Get("approval"); hook != nil {
-			if ah, ok := hook.(*tools.ApprovalHook); ok {
-				cliCh.SetApprovalHook(ah)
-			}
-		}
-		// Inject CheckpointHook for Ctrl+K rewind file rollback
-		checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
-		if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
-			cpHook := tools.NewCheckpointHook(cpStore)
-			if err := app.backend.ToolHookChain().Use(cpHook); err != nil {
-				log.WithError(err).Warn("Failed to register checkpoint hook")
-			} else {
-				cliCh.SetCheckpointHook(cpHook)
-				defer cpStore.Cleanup()
-			}
-		} else {
-			log.WithError(err).Warn("Failed to create checkpoint store")
-		}
-		// Inject TrimHistoryFn for Ctrl+K session truncation
-		if cliTenantID != 0 && cliSessionSvc != nil {
-			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
-				if cutoff.IsZero() {
-					return nil
-				}
-				_, err := cliSessionSvc.PurgeNewerThanOrEqual(cliTenantID, cutoff)
-				return err
+		if app.backend.IsRemote() {
+			// Remote mode: use RPC-backed adapters
+			cliCh.SetSettingsService(newRemoteSettingsService(app.backend))
+			cliCh.SetModelLister(newRemoteModelLister(app.backend))
+			// Register OnProgress callback for streaming progress from server
+			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
+				cliCh.SendProgress(cliCfg.ChatID, p)
 			})
 		} else {
-			log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
+			// Local mode: use local service objects directly
+			if ss := app.backend.SettingsService(); ss != nil {
+				cliCh.SetSettingsService(ss)
+			}
+			cliCh.SetModelLister(&cliModelLister{
+				factory: app.backend.LLMFactory(),
+				cfg:     app.cfg,
+			})
+			// Inject BgTaskManager for background task display
+			bgSessionKey := "cli:" + cliCfg.ChatID
+			cliCh.SetBgTaskManager(app.backend.BgTaskManager(), bgSessionKey)
+			// Inject ApprovalHook for permission control approval dialog
+			if hook := app.backend.ToolHookChain().Get("approval"); hook != nil {
+				if ah, ok := hook.(*tools.ApprovalHook); ok {
+					cliCh.SetApprovalHook(ah)
+				}
+			}
+			// Inject CheckpointHook for Ctrl+K rewind file rollback
+			checkpointDir := filepath.Join(os.Getenv("HOME"), ".xbot", "checkpoints", "cli-default")
+			if cpStore, err := tools.NewCheckpointStore(checkpointDir); err == nil {
+				cpHook := tools.NewCheckpointHook(cpStore)
+				if err := app.backend.ToolHookChain().Use(cpHook); err != nil {
+					log.WithError(err).Warn("Failed to register checkpoint hook")
+				} else {
+					cliCh.SetCheckpointHook(cpHook)
+					defer cpStore.Cleanup()
+				}
+			} else {
+				log.WithError(err).Warn("Failed to create checkpoint store")
+			}
+			// Inject TrimHistoryFn for Ctrl+K session truncation
+			if cliTenantID != 0 && cliSessionSvc != nil {
+				cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
+					if cutoff.IsZero() {
+						return nil
+					}
+					_, err := cliSessionSvc.PurgeNewerThanOrEqual(cliTenantID, cutoff)
+					return err
+				})
+			} else {
+				log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
+			}
 		}
 	}
 
 	// Apply saved theme at startup
-	if ss := app.backend.SettingsService(); ss != nil {
-		if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
-			if t, ok := vals["theme"]; ok && t != "" {
-				channel.ApplyTheme(t)
+	if app.backend != nil && !app.backend.IsRemote() {
+		if ss := app.backend.SettingsService(); ss != nil {
+			if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
+				if t, ok := vals["theme"]; ok && t != "" {
+					channel.ApplyTheme(t)
+				}
 			}
 		}
 	}
@@ -709,40 +722,48 @@ func main() {
 	}()
 
 	// Runner Bridge: inject LLM client, model list and provider for runner use
-	cliCh.SetRunnerLLM(app.llmClient, func() []string {
-		if app.backend != nil {
-			return app.backend.LLMFactory().ListModels()
-		}
-		return nil
-	}(), app.cfg.LLM.Provider)
+	if !app.backend.IsRemote() {
+		cliCh.SetRunnerLLM(app.llmClient, func() []string {
+			if app.backend != nil {
+				return app.backend.LLMFactory().ListModels()
+			}
+			return nil
+		}(), app.cfg.LLM.Provider)
+	}
 
-	// Multi-subscription support (config-based, no database)
-	if len(app.cfg.Subscriptions) == 0 {
-		// Migration: create first subscription from current LLM config
-		app.cfg.Subscriptions = []config.SubscriptionConfig{{
-			ID:       "default",
-			Name:     app.cfg.LLM.Provider,
-			Provider: app.cfg.LLM.Provider,
-			BaseURL:  app.cfg.LLM.BaseURL,
-			APIKey:   app.cfg.LLM.APIKey,
-			Model:    app.cfg.LLM.Model,
-			Active:   true,
-		}}
-		if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
-			log.WithError(err).Warn("Failed to save migrated subscriptions")
+	// Multi-subscription support
+	if app.backend.IsRemote() {
+		// Remote mode: use RPC-backed subscription manager
+		cliCh.SetSubscriptionManager(newRemoteSubscriptionManager(app.backend))
+		cliCh.SetLLMSubscriber(newRemoteLLMSubscriber(app.backend))
+	} else {
+		if len(app.cfg.Subscriptions) == 0 {
+			// Migration: create first subscription from current LLM config
+			app.cfg.Subscriptions = []config.SubscriptionConfig{{
+				ID:       "default",
+				Name:     app.cfg.LLM.Provider,
+				Provider: app.cfg.LLM.Provider,
+				BaseURL:  app.cfg.LLM.BaseURL,
+				APIKey:   app.cfg.LLM.APIKey,
+				Model:    app.cfg.LLM.Model,
+				Active:   true,
+			}}
+			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+				log.WithError(err).Warn("Failed to save migrated subscriptions")
+			}
 		}
-	}
-	saveConfig := func() error {
-		saveWg.Add(1)
-		defer saveWg.Done()
-		return config.SaveToFile(config.ConfigFilePath(), app.cfg)
-	}
-	cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig, func(llmCfg config.LLMConfig) {
-		if app.backend != nil {
-			app.backend.LLMFactory().SetModelTiers(llmCfg)
+		saveConfig := func() error {
+			saveWg.Add(1)
+			defer saveWg.Done()
+			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
 		}
-	}))
-	cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.backend.LLMFactory(), saveConfig))
+		cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig, func(llmCfg config.LLMConfig) {
+			if app.backend != nil {
+				app.backend.LLMFactory().SetModelTiers(llmCfg)
+			}
+		}))
+		cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.backend.LLMFactory(), saveConfig))
+	}
 
 	// --share flag: auto-connect as runner after TUI starts
 	if flagShare != "" {
@@ -1080,4 +1101,112 @@ func createLLM(cfg config.LLMConfig, retryCfg llm.RetryConfig) (llm.LLM, error) 
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.Provider)
 	}
 	return llm.NewRetryLLM(inner, retryCfg), nil
+}
+
+// ---------------------------------------------------------------------------
+// Remote backend adapters — implement CLI interfaces via RPC
+// ---------------------------------------------------------------------------
+
+// remoteSettingsService implements channel.SettingsService via RPC.
+type remoteSettingsService struct {
+	backend agent.AgentBackend
+}
+
+func newRemoteSettingsService(backend agent.AgentBackend) *remoteSettingsService {
+	return &remoteSettingsService{backend: backend}
+}
+
+func (s *remoteSettingsService) GetSettings(namespace, senderID string) (map[string]string, error) {
+	return s.backend.GetSettings(namespace, senderID)
+}
+
+func (s *remoteSettingsService) SetSetting(namespace, senderID, key, value string) error {
+	return s.backend.SetSetting(namespace, senderID, key, value)
+}
+
+// remoteModelLister implements channel.ModelLister via RPC.
+type remoteModelLister struct {
+	backend agent.AgentBackend
+}
+
+func newRemoteModelLister(backend agent.AgentBackend) *remoteModelLister {
+	return &remoteModelLister{backend: backend}
+}
+
+func (l *remoteModelLister) ListModels() []string {
+	return l.backend.ListModels()
+}
+
+func (l *remoteModelLister) ListAllModels() []string {
+	return l.backend.ListAllModels()
+}
+
+// remoteSubscriptionManager implements channel.SubscriptionManager via RPC.
+type remoteSubscriptionManager struct {
+	backend agent.AgentBackend
+}
+
+func newRemoteSubscriptionManager(backend agent.AgentBackend) *remoteSubscriptionManager {
+	return &remoteSubscriptionManager{backend: backend}
+}
+
+func (m *remoteSubscriptionManager) List(senderID string) ([]channel.Subscription, error) {
+	return m.backend.ListSubscriptions(senderID)
+}
+
+func (m *remoteSubscriptionManager) GetDefault(senderID string) (*channel.Subscription, error) {
+	return m.backend.GetDefaultSubscription(senderID)
+}
+
+func (m *remoteSubscriptionManager) Add(sub *channel.Subscription) error {
+	return m.backend.AddSubscription("cli_user", *sub)
+}
+
+func (m *remoteSubscriptionManager) Remove(id string) error {
+	return m.backend.RemoveSubscription(id)
+}
+
+func (m *remoteSubscriptionManager) SetDefault(id string) error {
+	return m.backend.SetDefaultSubscription(id)
+}
+
+func (m *remoteSubscriptionManager) SetModel(id, model string) error {
+	// SetModel updates the model of a subscription — not directly in RPC,
+	// use AddSubscription with updated fields as a workaround.
+	// TODO: add dedicated RPC method if needed
+	return nil
+}
+
+func (m *remoteSubscriptionManager) Rename(id, name string) error {
+	return m.backend.RenameSubscription(id, name)
+}
+
+// remoteLLMSubscriber implements channel.LLMSubscriber via RPC.
+type remoteLLMSubscriber struct {
+	backend agent.AgentBackend
+}
+
+func newRemoteLLMSubscriber(backend agent.AgentBackend) *remoteLLMSubscriber {
+	return &remoteLLMSubscriber{backend: backend}
+}
+
+func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+	if sub == nil {
+		return nil
+	}
+	if err := s.backend.SetDefaultSubscription(sub.ID); err != nil {
+		return err
+	}
+	if sub.Model != "" {
+		return s.backend.SetUserModel(senderID, sub.Model)
+	}
+	return nil
+}
+
+func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {
+	_ = s.backend.SetUserModel(senderID, model)
+}
+
+func (s *remoteLLMSubscriber) GetDefaultModel() string {
+	return s.backend.GetDefaultModel()
 }

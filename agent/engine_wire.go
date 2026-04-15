@@ -402,6 +402,22 @@ func (a *Agent) buildMainRunConfig(
 						}
 					}
 				}
+				// Also wire for web channel — needed for CLI RemoteBackend clients
+				// connected via WebSocket who receive stream_content messages.
+				if ch, ok := a.channelFinder("web"); ok {
+					if wc, ok := ch.(*channelpkg.WebChannel); ok {
+						if cfg.StreamContentFunc == nil {
+							cfg.StreamContentFunc = func(content string) {
+								wc.SendStreamContent(chatID, content, "")
+							}
+						}
+						if cfg.StreamReasoningFunc == nil {
+							cfg.StreamReasoningFunc = func(content string) {
+								wc.SendStreamContent(chatID, "", content)
+							}
+						}
+					}
+				}
 			}
 		}
 	}

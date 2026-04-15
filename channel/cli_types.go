@@ -504,6 +504,7 @@ type CLIChannel struct {
 	// Pending injections (set before model exists, applied in Start)
 	pendingTrimHistoryFn  func(time.Time) error
 	pendingCheckpointHook *tools.CheckpointHook
+	pendingSendInboundFn  func(bus.InboundMessage) bool // remote mode: forward to server
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

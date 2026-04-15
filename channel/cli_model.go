@@ -278,15 +278,16 @@ type cliModel struct {
 	ready           bool                  // 是否已初始化
 
 	// --- Agent state ---
-	agentTurnID     uint64                       // monotonically increasing turn counter
-	typing          bool                         // agent 是否正在回复
-	typingStartTime time.Time                    // 本次处理开始时间
-	inputReady      bool                         // 输入就绪状态（agent 回复期间禁止发送）
-	msgBus          *bus.MessageBus              // 消息总线引用
-	tempStatus      string                       // 临时状态提示（自动过期）
-	pendingCmds     []tea.Cmd                    // commands queued by helpers (auto-drained in Update)
-	shouldQuit      bool                         // Smart quit: quit after current operation completes
-	trimHistoryFn   func(cutoff time.Time) error // /rewind: delete DB messages at or after cutoff timestamp
+	agentTurnID     uint64                        // monotonically increasing turn counter
+	typing          bool                          // agent 是否正在回复
+	typingStartTime time.Time                     // 本次处理开始时间
+	inputReady      bool                          // 输入就绪状态（agent 回复期间禁止发送）
+	msgBus          *bus.MessageBus               // 消息总线引用
+	sendInboundFn   func(bus.InboundMessage) bool // remote mode: forward to server via backend.SendInbound
+	tempStatus      string                        // 临时状态提示（自动过期）
+	pendingCmds     []tea.Cmd                     // commands queued by helpers (auto-drained in Update)
+	shouldQuit      bool                          // Smart quit: quit after current operation completes
+	trimHistoryFn   func(cutoff time.Time) error  // /rewind: delete DB messages at or after cutoff timestamp
 
 	// --- Message queue (typing 期间排队的消息) ---
 	messageQueue   []string // 排队等待发送的消息

@@ -184,6 +184,9 @@ func (m *cliModel) appendSystemMarkdown(content string) {
 // if the channel is full (e.g., agent is busy with a long LLM call).
 // Returns false if the message was dropped.
 func (m *cliModel) sendInbound(msg bus.InboundMessage) bool {
+	if m.sendInboundFn != nil {
+		return m.sendInboundFn(msg)
+	}
 	if m.msgBus == nil {
 		return false
 	}
@@ -200,6 +203,9 @@ func (m *cliModel) sendInbound(msg bus.InboundMessage) bool {
 // Use for critical messages (ask_user answers) that MUST be delivered.
 // Returns false if the message couldn't be sent within the deadline.
 func (m *cliModel) sendInboundWait(msg bus.InboundMessage, timeout time.Duration) bool {
+	if m.sendInboundFn != nil {
+		return m.sendInboundFn(msg)
+	}
 	if m.msgBus == nil {
 		return false
 	}

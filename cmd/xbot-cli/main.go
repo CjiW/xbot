@@ -625,6 +625,14 @@ func main() {
 			// Remote mode: use RPC-backed adapters
 			cliCh.SetSettingsService(newRemoteSettingsService(app.backend))
 			cliCh.SetModelLister(newRemoteModelLister(app.backend))
+			// Forward user messages to server instead of local bus
+			cliCh.SetSendInboundFn(func(msg bus.InboundMessage) bool {
+				if err := app.backend.SendInbound(msg); err != nil {
+					log.WithError(err).Warn("Failed to forward message to remote server")
+					return false
+				}
+				return true
+			})
 			// Register OnProgress callback for streaming progress from server
 			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
 				cliCh.SendProgress(cliCfg.ChatID, p)

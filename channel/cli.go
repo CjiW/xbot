@@ -83,6 +83,9 @@ func (c *CLIChannel) Start() error {
 	if c.pendingCheckpointHook != nil {
 		c.model.checkpointHook = c.pendingCheckpointHook
 	}
+	if c.pendingSendInboundFn != nil {
+		c.model.sendInboundFn = c.pendingSendInboundFn
+	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
@@ -247,6 +250,13 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 // the CLIApprovalHandler after the tea.Program is created.
 func (c *CLIChannel) SetApprovalHook(hook *tools.ApprovalHook) {
 	c.approvalHook = hook
+}
+
+// SetSendInboundFn overrides the default sendInbound behavior.
+// In remote mode, this forwards user messages to the server via backend.SendInbound
+// instead of the local bus (which has no agent loop).
+func (c *CLIChannel) SetSendInboundFn(fn func(bus.InboundMessage) bool) {
+	c.pendingSendInboundFn = fn
 }
 
 // SetBgTaskManager configures the background task manager for status display.

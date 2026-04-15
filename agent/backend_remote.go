@@ -292,7 +292,9 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			cb := b.outboundCb
 			b.outboundMu.RUnlock()
 			if cb != nil {
+				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Debug("RemoteBackend: dispatching outbound message")
 				cb(outMsg)
+				log.Debug("RemoteBackend: outbound callback returned")
 			} else {
 				log.Warn("Received server reply but no outbound callback registered")
 			}

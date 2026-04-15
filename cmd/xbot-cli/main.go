@@ -541,6 +541,9 @@ func main() {
 			if app.backend == nil {
 				return nil, nil, fmt.Errorf("agent not initialized")
 			}
+			if app.backend.IsRemote() {
+				return nil, nil, fmt.Errorf("usage query not supported in remote mode")
+			}
 			ms := app.backend.MultiSession()
 			cumulative, err := ms.GetUserTokenUsage(senderID)
 			if err != nil {
@@ -556,10 +559,19 @@ func main() {
 			if app.backend == nil {
 				return 0
 			}
+			// Remote mode: RPC calls from event loop cause deadlock
+			// (event loop waits for RPC response, but readPump needs event loop to process messages).
+			// Return 0 for remote — agent count is not critical for remote mode.
+			if app.backend.IsRemote() {
+				return 0
+			}
 			return app.backend.CountInteractiveSessions("cli", absWorkDir)
 		},
 		AgentList: func() []channel.AgentPanelEntry {
 			if app.backend == nil {
+				return nil
+			}
+			if app.backend.IsRemote() {
 				return nil
 			}
 			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)

@@ -229,6 +229,7 @@ func (c *CLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	// 发送到消息通道，由 handleOutbound 处理
+	log.WithField("msg_id", msgID).WithField("content_len", len(msg.Content)).Debug("CLIChannel.Send: queuing")
 	select {
 	case c.msgChan <- msg:
 	default:

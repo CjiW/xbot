@@ -185,24 +185,11 @@ func (s *Scheduler) checkAndFire(now time.Time) {
 			continue
 		}
 
-		// Skip expired one-shot jobs (next_run is in the past and already triggered)
-		if job.OneShot && job.NextRun.Before(now) {
-			// Check if this was already triggered recently (within last minute)
-			// This handles the case where service was restarted after a job was due
-			if job.LastTrigger != nil && now.Sub(*job.LastTrigger) < time.Minute {
-				// Already triggered recently, skip
-				log.WithFields(log.Fields{
-					"job_id":       job.ID,
-					"last_trigger": job.LastTrigger,
-				}).Info("Cron job already triggered recently, skipping expired one-shot")
-			} else {
-				// Hasn't been triggered, remove the expired one-shot job
-				log.WithFields(log.Fields{
-					"job_id":   job.ID,
-					"next_run": job.NextRun,
-				}).Info("Removing expired one-shot cron job")
-				s.cronSvc.RemoveJob(job.ID)
-			}
+		// Skip one-shot jobs that were already fired (LastTrigger is set).
+		// One-shot jobs with NextRun in the past and no LastTrigger were never
+		// executed (e.g. missed during downtime) — they should fall through to
+		// the firing logic below, not be silently removed.
+		if job.OneShot && job.LastTrigger != nil {
 			continue
 		}
 

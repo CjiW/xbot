@@ -477,7 +477,7 @@ func FeishuUnlinkUser(db *sql.DB, feishuUserID string) error {
 }
 
 // handleFeishuLink handles POST /api/auth/feishu-link
-// Requires admin token (Authorization: Bearer <secret>).
+// Requires global admin token (Authorization: Bearer <secret>).
 func (wc *WebChannel) handleFeishuLink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -485,15 +485,15 @@ func (wc *WebChannel) handleFeishuLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify admin token
-	if wc.config.FeishuLinkSecret != "" {
+	if wc.config.AdminToken != "" {
 		auth := r.Header.Get("Authorization")
-		expected := "Bearer " + wc.config.FeishuLinkSecret
+		expected := "Bearer " + wc.config.AdminToken
 		if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, authResponse{OK: false, Message: "unauthorized"})
 			return
 		}
 	} else {
-		writeJSON(w, http.StatusForbidden, authResponse{OK: false, Message: "feishu link not configured"})
+		writeJSON(w, http.StatusForbidden, authResponse{OK: false, Message: "admin token not configured"})
 		return
 	}
 

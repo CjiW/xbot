@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"xbot/bus"
 	"xbot/channel"
@@ -395,6 +396,38 @@ func (b *LocalBackend) RenameSubscription(id, name string) error {
 		return fmt.Errorf("subscription service not available")
 	}
 	return svc.Rename(id, name)
+}
+
+func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	return svc.SetModel(id, model)
+}
+
+func (b *LocalBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, error) {
+	ms := b.agent.MultiSession()
+	if ms == nil {
+		return nil, fmt.Errorf("multi-session not available")
+	}
+	sess, err := ms.GetOrCreateSession(ch, chatID)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := sess.GetMessages()
+	if err != nil {
+		return nil, err
+	}
+	return channel.ConvertMessagesToHistory(msgs), nil
+}
+
+func (b *LocalBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {
+	ms := b.agent.MultiSession()
+	if ms == nil {
+		return fmt.Errorf("multi-session not available")
+	}
+	return ms.TrimHistory(ch, chatID, cutoff)
 }
 
 func (b *LocalBackend) Close() error {

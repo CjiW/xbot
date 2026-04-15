@@ -128,7 +128,7 @@ func setupOAuth(cfg *config.Config, dbPath string) (*oauth.Server, *oauth.Manage
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
 // to the server's LocalBackend. This is the server-side counterpart of
 // RemoteBackend.callRPC().
-func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage) (json.RawMessage, error) {
+func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
 	switch method {
 	// --- Context / settings ---
 	case "get_context_mode":
@@ -430,7 +430,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(result)
 
-	// --- Background tasks ---
+		// --- Background tasks ---
 	case "get_bg_task_count":
 		var p struct {
 			SessionKey string `json:"session_key"`
@@ -442,6 +442,32 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return json.Marshal(0)
 		}
 		return json.Marshal(len(backend.BgTaskManager().List(p.SessionKey)))
+
+	// --- History ---
+	case "get_history":
+		// Use authenticated senderID to resolve the tenant session.
+		// CLI remote clients use channel="web", chatID=senderID.
+		history, err := backend.GetHistory("web", senderID)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(history)
+	case "trim_history":
+		var p struct {
+			Cutoff string `json:"cutoff"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		var cutoff time.Time
+		if p.Cutoff != "" {
+			var err error
+			cutoff, err = time.Parse(time.RFC3339, p.Cutoff)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cutoff format: %w", err)
+			}
+		}
+		return nil, backend.TrimHistory("web", senderID, cutoff)
 
 	// --- Subscriptions ---
 	case "list_subscriptions":
@@ -575,6 +601,23 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("subscription service not available")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
+
+	case "set_subscription_model":
+		var p struct {
+			ID    string `json:"id"`
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		return nil, svc.SetModel(p.ID, p.Model)
 
 	default:
 		return nil, fmt.Errorf("unknown RPC method: %s", method)
@@ -772,8 +815,8 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 		},
 	}
 	// Wire RPC handler for CLI RemoteBackend clients
-	callbacks.RPCHandler = func(method string, params json.RawMessage) (json.RawMessage, error) {
-		return handleCLIRPC(cfg, backend, method, params)
+	callbacks.RPCHandler = func(method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
+		return handleCLIRPC(cfg, backend, method, params, senderID)
 	}
 	return callbacks
 }
@@ -816,12 +859,12 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 	if cfg.Web.Enable {
 		if webDB != nil {
 			webCh := channel.NewWebChannel(channel.WebChannelConfig{
-				Host:             cfg.Web.Host,
-				Port:             cfg.Web.Port,
-				DB:               webDB,
-				FeishuLinkSecret: cfg.Feishu.AppSecret,
-				InviteOnly:       cfg.Web.InviteOnly,
-				PublicURL:        cfg.Sandbox.PublicURL,
+				Host:       cfg.Web.Host,
+				Port:       cfg.Web.Port,
+				DB:         webDB,
+				AdminToken: cfg.Admin.Token,
+				InviteOnly: cfg.Web.InviteOnly,
+				PublicURL:  cfg.Sandbox.PublicURL,
 			}, msgBus)
 			if cfg.Web.StaticDir != "" {
 				webCh.SetStaticDir(cfg.Web.StaticDir)

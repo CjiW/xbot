@@ -73,6 +73,7 @@ type StartupNotifyConfig struct {
 // AdminConfig 管理员配置
 type AdminConfig struct {
 	ChatID string `json:"chat_id"`
+	Token  string `json:"token"`
 }
 
 // OSSConfig 对象存储配置
@@ -600,6 +601,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ADMIN_CHAT_ID"); v != "" {
 		cfg.Admin.ChatID = v
+	}
+	if v := os.Getenv("ADMIN_TOKEN"); v != "" {
+		cfg.Admin.Token = v
 	}
 
 	if v := os.Getenv("TAVILY_API_KEY"); v != "" {

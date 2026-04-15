@@ -4,9 +4,11 @@ package channel
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"xbot/bus"
@@ -54,12 +57,12 @@ func limitBodySize(next http.HandlerFunc) http.HandlerFunc {
 
 // WebChannelConfig Web 渠道配置（channel 包内部使用）
 type WebChannelConfig struct {
-	Host             string
-	Port             int
-	DB               *sql.DB // SQLite DB handle for user management and history
-	FeishuLinkSecret string  // admin token for /api/auth/feishu-link endpoint
-	InviteOnly       bool    // 禁止自主注册，新账号只能由 admin 创建
-	PublicURL        string  // 对外访问地址，用于生成 Runner 连接命令
+	Host       string
+	Port       int
+	DB         *sql.DB // SQLite DB handle for user management and history
+	AdminToken string  // global admin token for privileged auth
+	InviteOnly bool    // 禁止自主注册，新账号只能由 admin 创建
+	PublicURL  string  // 对外访问地址，用于生成 Runner 连接命令
 }
 
 // WebCallbacks holds callback functions for Web channel API endpoints.
@@ -121,8 +124,9 @@ type WebCallbacks struct {
 	SyncProgressNotify func(senderID, phase, message string)
 	// RPCHandler handles RPC requests from CLI remote clients.
 	// The method string identifies the operation; params is the JSON-encoded request body.
+	// senderID is the authenticated user ID (from the WS connection / runner token).
 	// Returns JSON-encoded result or an error.
-	RPCHandler func(method string, params json.RawMessage) (json.RawMessage, error)
+	RPCHandler func(method string, params json.RawMessage, senderID string) (json.RawMessage, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +312,15 @@ type WsProgressPayload struct {
 	ReasoningStreamContent string `json:"reasoning_stream_content,omitempty"`
 }
 
+// GetStreamContent returns the StreamContent field.
+// Used by RemoteBackend to extract stream text from stream_content messages.
+func (p *WsProgressPayload) GetStreamContent() string {
+	if p == nil {
+		return ""
+	}
+	return p.StreamContent
+}
+
 // GetReasoningStreamContent returns the ReasoningStreamContent field.
 // Used by RemoteBackend to extract reasoning from stream_content messages.
 func (p *WsProgressPayload) GetReasoningStreamContent() string {
@@ -384,10 +397,11 @@ type WsAskUserResponse struct {
 
 // WebChannel Web 渠道实现
 type WebChannel struct {
-	config WebChannelConfig
-	msgBus *bus.MessageBus
-	hub    *Hub
-	server *http.Server
+	config   WebChannelConfig
+	msgBus   *bus.MessageBus
+	hub      *Hub
+	server   *http.Server
+	listener net.Listener
 
 	// Callbacks from main
 	callbacks WebCallbacks
@@ -510,6 +524,19 @@ func (wc *WebChannel) Start() error {
 	}
 
 	addr := fmt.Sprintf("%s:%d", wc.config.Host, wc.config.Port)
+	// Use custom listener with SO_REUSEADDR to avoid "address already in use"
+	// after unclean shutdown (e.g., SIGKILL, crash).
+	lc := net.ListenConfig{Control: func(network, address string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+		})
+	}}
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	wc.listener = ln
+
 	wc.server = &http.Server{
 		Addr:         addr,
 		Handler:      wc.securityHeadersMiddleware(mux),
@@ -527,7 +554,7 @@ func (wc *WebChannel) Start() error {
 	wc.wg.Add(1)
 	go wc.sessionCleanup()
 
-	err := wc.server.ListenAndServe()
+	err = wc.server.Serve(wc.listener)
 	if err == http.ErrServerClosed {
 		return nil
 	}
@@ -767,12 +794,19 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	wc.readPump(client, si)
 }
 
-// validateCLIToken validates a runner token and returns the associated senderID.
-// CLI RemoteBackend uses runner tokens for authentication — each token maps to a user.
+// validateCLIToken validates a CLI auth token and returns the associated senderID.
+// Two auth methods:
+//  1. Admin token (WebChannelConfig.AdminToken) — senderID = "admin", full access
+//  2. Runner token — per-user token from runner_tokens table
 func (wc *WebChannel) validateCLIToken(token string) (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("empty token")
 	}
+	// Check admin token first
+	if wc.config.AdminToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(wc.config.AdminToken)) == 1 {
+		return "admin", nil
+	}
+	// Fall back to runner token lookup
 	db := tools.GetRunnerTokenDB()
 	if db == nil {
 		return "", fmt.Errorf("runner token auth not available")
@@ -797,6 +831,11 @@ func (wc *WebChannel) writePump(c *Client) {
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
+			}
+			// Internal pong — reply to client ping via single-writer goroutine.
+			if msg.Type == "__pong__" {
+				c.conn.WriteControl(websocket.PongMessage, []byte(msg.Content), time.Now().Add(5*time.Second))
+				continue
 			}
 			if err := c.conn.WriteJSON(msg); err != nil {
 				log.WithError(err).Debug("WS write error")
@@ -824,9 +863,19 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	}()
 
 	c.conn.SetReadLimit(65536) // 64KB max message
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
+	// Route client pings through sendCh so writePump handles the pong.
+	// This avoids any direct write from readPump (no mutex needed).
+	c.conn.SetPingHandler(func(appData string) error {
+		c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		select {
+		case c.sendCh <- wsMessage{Type: "__pong__", Content: appData}:
+		default:
+		}
 		return nil
 	})
 
@@ -892,7 +941,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				log.WithError(err).Debug("Invalid RPC message from CLI client")
 				continue
 			}
-			result, rpcErr := wc.callbacks.RPCHandler(rpcReq.Method, rpcReq.Params)
+			result, rpcErr := wc.callbacks.RPCHandler(rpcReq.Method, rpcReq.Params, c.userID)
 			rpcMsg := wsMessage{Type: "rpc_response", ID: rpcReq.ID}
 			if rpcErr != nil {
 				rpcMsg.Error = rpcErr.Error()
@@ -1152,19 +1201,27 @@ func isImageExt(ext string) bool {
 // eagerSaveUserMsg persists a user message to session_messages immediately
 // so that a page-refresh can recover it while the backend is still processing.
 func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
+	// Ensure tenant exists before saving (first message from a new client).
+	now := time.Now().Format(time.RFC3339)
+	db.Exec(`INSERT OR IGNORE INTO tenants (channel, chat_id, created_at, last_active_at) VALUES ('web', ?, ?, ?)`,
+		userID, now, now)
+
 	var tenantID int64
 	if err := db.QueryRow(
 		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", userID,
 	).Scan(&tenantID); err != nil {
 		return err
 	}
-	// Use INSERT ... WHERE NOT EXISTS to avoid duplicate in race condition
-	_, err := db.Exec(`INSERT INTO session_messages (tenant_id, role, content)
-		SELECT ?, 'user', ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM session_messages
-			WHERE tenant_id = ? AND role = 'user' AND content = ?
-			ORDER BY id DESC LIMIT 1
-		)`, tenantID, content, tenantID, content)
+	// Dedup by checking if the very last message for this tenant is an identical
+	// user message saved within the last 2 seconds (handles page-refresh double-submit).
+	// We do NOT dedup by content alone — users may send the same text legitimately.
+	_, err := db.Exec(`INSERT INTO session_messages (tenant_id, role, content, created_at)
+SELECT ?, 'user', ?, ?
+WHERE NOT EXISTS (
+SELECT 1 FROM session_messages
+WHERE tenant_id = ? AND role = 'user' AND content = ?
+  AND created_at > datetime(?, '-2 seconds')
+ORDER BY id DESC LIMIT 1
+)`, tenantID, content, now, tenantID, content, now)
 	return err
 }

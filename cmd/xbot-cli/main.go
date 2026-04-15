@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,11 @@ type cliApp struct {
 	backend   agent.AgentBackend
 	workDir   string
 	xbotHome  string
+
+	// Remote-mode async cache for agent info (avoid RPC from event loop → deadlock)
+	agentCacheMu    sync.RWMutex
+	agentCacheCount int
+	agentCacheList  []channel.AgentPanelEntry
 }
 
 // isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
@@ -153,6 +159,9 @@ func newCLIApp(serverURL, token string) *cliApp {
 
 // Close 释放资源。
 func (app *cliApp) Close() {
+	if app.backend != nil {
+		app.backend.Stop()
+	}
 	if app.db != nil {
 		app.db.Close()
 	}
@@ -244,6 +253,49 @@ func main() {
 		ChatID:     absWorkDir,
 		IsFirstRun: firstRun,
 		GetCurrentValues: func() map[string]string {
+			// In remote mode, read current values from server via RPC.
+			if app.backend != nil && app.backend.IsRemote() {
+				vals := make(map[string]string)
+				// Model from server
+				vals["llm_model"] = app.backend.GetDefaultModel()
+				// Settings from server (contains most config values)
+				if ss := app.backend.SettingsService(); ss != nil {
+					if sv, err := ss.GetSettings("cli", "cli_user"); err == nil {
+						for k, v := range sv {
+							vals[k] = v
+						}
+					}
+				}
+				// Context mode from server
+				vals["context_mode"] = app.backend.GetContextMode()
+				// Defaults for fields not in settings
+				if _, ok := vals["sandbox_mode"]; !ok {
+					vals["sandbox_mode"] = "none"
+				}
+				if _, ok := vals["memory_provider"]; !ok {
+					vals["memory_provider"] = "flat"
+				}
+				if _, ok := vals["max_iterations"]; !ok {
+					vals["max_iterations"] = "30"
+				}
+				if _, ok := vals["max_concurrency"]; !ok {
+					vals["max_concurrency"] = "3"
+				}
+				if _, ok := vals["max_context_tokens"]; !ok {
+					vals["max_context_tokens"] = "0"
+				}
+				if _, ok := vals["max_output_tokens"]; !ok {
+					vals["max_output_tokens"] = "8192"
+				}
+				if _, ok := vals["enable_auto_compress"]; !ok {
+					vals["enable_auto_compress"] = "true"
+				}
+				if _, ok := vals["theme"]; !ok {
+					vals["theme"] = "midnight"
+				}
+				return vals
+			}
+			// Local mode: read from config
 			return map[string]string{
 				"llm_provider":   app.cfg.LLM.Provider,
 				"llm_api_key":    app.cfg.LLM.APIKey,
@@ -317,7 +369,51 @@ func main() {
 			}
 		},
 		ApplySettings: func(values map[string]string) {
-			// Apply LLM settings — write to active subscription (single source of truth)
+			if app.backend == nil {
+				return
+			}
+
+			// ── Remote mode: all settings go to server, skip config.json ──
+			if app.backend.IsRemote() {
+				// Persist every setting to server via RPC
+				if ss := app.backend.SettingsService(); ss != nil {
+					for k, v := range values {
+						_ = ss.SetSetting("cli", "cli_user", k, v)
+					}
+				}
+				// Push runtime state to server
+				if v, ok := values["context_mode"]; ok && v != "" {
+					_ = app.backend.SetContextMode(v)
+				}
+				if v, ok := values["max_iterations"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.backend.SetMaxIterations(n)
+					}
+				}
+				if v, ok := values["max_concurrency"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						app.backend.SetMaxConcurrency(n)
+					}
+				}
+				if v, ok := values["max_context_tokens"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+						app.backend.SetMaxContextTokens(n)
+					}
+				}
+				if v, ok := values["enable_auto_compress"]; ok {
+					if v == "true" {
+						_ = app.backend.SetContextMode("auto")
+					} else {
+						_ = app.backend.SetContextMode("none")
+					}
+				}
+				if v, ok := values["sandbox_mode"]; ok && v != "" {
+					app.backend.SetSandbox(nil, v)
+				}
+				return
+			}
+
+			// ── Local mode: write config.json + apply runtime ──
 			_, llmChanged := values["llm_provider"]
 			_, keyChanged := values["llm_api_key"]
 			_, modelChanged := values["llm_model"]
@@ -326,7 +422,6 @@ func main() {
 			_, balanceChanged := values["balance_model"]
 			_, swiftChanged := values["swift_model"]
 			if llmChanged || keyChanged || modelChanged || urlChanged {
-				// Write to active subscription
 				for i := range app.cfg.Subscriptions {
 					if app.cfg.Subscriptions[i].Active {
 						if v, ok := values["llm_provider"]; ok && v != "" {
@@ -344,7 +439,6 @@ func main() {
 						break
 					}
 				}
-				// Auto-set default base URL when switching provider
 				if v, ok := values["llm_provider"]; ok && v != "" {
 					if _, urlSet := values["llm_base_url"]; !urlSet {
 						switch v {
@@ -367,7 +461,6 @@ func main() {
 						}
 					}
 				}
-				// Derive cfg.LLM from active subscription
 				syncLLMFromActiveSub(app.cfg)
 			}
 			if v, ok := values["vanguard_model"]; ok {
@@ -379,20 +472,16 @@ func main() {
 			if v, ok := values["swift_model"]; ok {
 				app.cfg.LLM.SwiftModel = strings.TrimSpace(v)
 			}
-			if app.backend != nil && !app.backend.IsRemote() && (vanguardChanged || balanceChanged || swiftChanged) {
+			if app.backend != nil && (vanguardChanged || balanceChanged || swiftChanged) {
 				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
-			// Apply Sandbox settings
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
 				app.cfg.Sandbox.Mode = v
-				// Reinitialize sandbox so the new mode takes effect immediately
 				tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
-				// Sync the new sandbox into the agent loop
 				if app.backend != nil {
 					app.backend.SetSandbox(tools.GetSandbox(), v)
 				}
 			}
-			// Apply Agent settings
 			if v, ok := values["memory_provider"]; ok && v != "" {
 				app.cfg.Agent.MemoryProvider = v
 			}
@@ -425,10 +514,8 @@ func main() {
 							break
 						}
 					}
-					// Sync to cfg.LLM so createLLM picks it up on rebuild
 					app.cfg.LLM.MaxOutputTokens = n
-					// Rebuild LLM client with new max_output_tokens
-					if app.backend != nil && !app.backend.IsRemote() {
+					if app.backend != nil {
 						if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 							app.llmClient = newClient
 							app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -446,8 +533,7 @@ func main() {
 						break
 					}
 				}
-				// Sync to factory so next GetLLM picks up the change
-				if app.backend != nil && !app.backend.IsRemote() {
+				if app.backend != nil {
 					app.backend.LLMFactory().SetDefaultThinkingMode(v)
 				}
 			}
@@ -455,19 +541,16 @@ func main() {
 				b := v == "true"
 				app.cfg.Agent.EnableAutoCompress = &b
 			}
-			// Persist to config.json
 			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
-			// Persist theme to settings service (theme is CLI-specific, not in config.json)
-			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil && !app.backend.IsRemote() {
+			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil {
 				if ss := app.backend.SettingsService(); ss != nil {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
-			// Rebuild LLM client and update agent runtime when LLM config changed
 			if llmChanged || keyChanged || modelChanged || urlChanged {
-				if !app.backend.IsRemote() {
+				if app.backend != nil {
 					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
 						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
@@ -477,7 +560,6 @@ func main() {
 					}
 				}
 			}
-			// Update agent runtime state
 			if app.backend != nil {
 				if v, ok := values["context_mode"]; ok && v != "" {
 					_ = app.backend.SetContextMode(v)
@@ -497,7 +579,6 @@ func main() {
 						app.backend.SetMaxContextTokens(n)
 					}
 				}
-				// enable_auto_compress maps to context_mode: true→auto, false→none
 				if v, ok := values["enable_auto_compress"]; ok {
 					if v == "true" {
 						_ = app.backend.SetContextMode("auto")
@@ -511,13 +592,13 @@ func main() {
 			if app.backend == nil {
 				return fmt.Errorf("agent not initialized")
 			}
-			return app.backend.MultiSession().ClearMemory(context.Background(), "cli", absWorkDir, targetType, "cli_user")
+			return app.backend.ClearMemory(context.Background(), "cli", absWorkDir, targetType, "cli_user")
 		},
 		GetMemoryStats: func() map[string]string {
 			if app.backend == nil {
 				return map[string]string{}
 			}
-			return app.backend.MultiSession().GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
+			return app.backend.GetMemoryStats(context.Background(), "cli", absWorkDir, "cli_user")
 		},
 		SwitchLLM: func(provider, baseURL, apiKey, model string) error {
 			llmCfg := config.LLMConfig{
@@ -542,7 +623,32 @@ func main() {
 				return nil, nil, fmt.Errorf("agent not initialized")
 			}
 			if app.backend.IsRemote() {
-				return nil, nil, fmt.Errorf("usage query not supported in remote mode")
+				// Remote mode: get data via RPC and convert from map to struct
+				cumMap, err := app.backend.GetUserTokenUsage(senderID)
+				if err != nil {
+					return nil, nil, err
+				}
+				var cumulative *sqlite.UserTokenUsage
+				if cumMap != nil {
+					var u sqlite.UserTokenUsage
+					if b, _ := json.Marshal(cumMap); len(b) > 0 {
+						_ = json.Unmarshal(b, &u)
+					}
+					cumulative = &u
+				}
+				dailyMaps, err := app.backend.GetDailyTokenUsage(senderID, days)
+				if err != nil {
+					return nil, nil, err
+				}
+				var daily []sqlite.DailyTokenUsage
+				for _, dm := range dailyMaps {
+					var d sqlite.DailyTokenUsage
+					if b, _ := json.Marshal(dm); len(b) > 0 {
+						_ = json.Unmarshal(b, &d)
+					}
+					daily = append(daily, d)
+				}
+				return cumulative, daily, nil
 			}
 			ms := app.backend.MultiSession()
 			cumulative, err := ms.GetUserTokenUsage(senderID)
@@ -559,11 +665,10 @@ func main() {
 			if app.backend == nil {
 				return 0
 			}
-			// Remote mode: RPC calls from event loop cause deadlock
-			// (event loop waits for RPC response, but readPump needs event loop to process messages).
-			// Return 0 for remote — agent count is not critical for remote mode.
 			if app.backend.IsRemote() {
-				return 0
+				app.agentCacheMu.RLock()
+				defer app.agentCacheMu.RUnlock()
+				return app.agentCacheCount
 			}
 			return app.backend.CountInteractiveSessions("cli", absWorkDir)
 		},
@@ -572,7 +677,9 @@ func main() {
 				return nil
 			}
 			if app.backend.IsRemote() {
-				return nil
+				app.agentCacheMu.RLock()
+				defer app.agentCacheMu.RUnlock()
+				return app.agentCacheList
 			}
 			sessions := app.backend.ListInteractiveSessions("cli", absWorkDir)
 			entries := make([]channel.AgentPanelEntry, len(sessions))
@@ -597,7 +704,7 @@ func main() {
 	var cliTenantID int64
 	var cliSessionSvc *sqlite.SessionService
 	var tenantSvc *sqlite.TenantService
-	if app.db != nil {
+	if !app.backend.IsRemote() && app.db != nil {
 		tenantSvc = sqlite.NewTenantService(app.db)
 		cliSessionSvc = sqlite.NewSessionService(app.db)
 		tenantID, err := tenantSvc.GetOrCreateTenantID("cli", absWorkDir)
@@ -612,6 +719,8 @@ func main() {
 			}
 		}
 	}
+	// Remote mode: history loaded after backend.Start() via cliCh.LoadHistory()
+	// (HistoryLoader runs during NewCLIChannel, before WS is connected)
 
 	// /su 动态历史加载器：从 web tenant 加载目标用户历史
 	if tenantSvc != nil && cliSessionSvc != nil {
@@ -653,6 +762,10 @@ func main() {
 			// Register OnProgress callback for streaming progress from server
 			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
 				cliCh.SendProgress(cliCfg.ChatID, p)
+			})
+			// Inject TrimHistoryFn for Ctrl+K session truncation (RPC-backed)
+			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
+				return app.backend.TrimHistory("", "", cutoff)
 			})
 		} else {
 			// Local mode: use local service objects directly
@@ -700,8 +813,8 @@ func main() {
 		}
 	}
 
-	// Apply saved theme at startup
-	if app.backend != nil && !app.backend.IsRemote() {
+	// Apply saved theme at startup (works in both local and remote mode)
+	if app.backend != nil {
 		if ss := app.backend.SettingsService(); ss != nil {
 			if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 				if t, ok := vals["theme"]; ok && t != "" {
@@ -723,6 +836,43 @@ func main() {
 	_ = app.backend.Start(ctx)
 	go disp.Run()
 
+	// Remote mode: load history from server after WS connection is established
+	if app.backend.IsRemote() {
+		if history, err := app.backend.GetHistory("", ""); err != nil {
+			log.WithError(err).Warn("Failed to load remote session history")
+		} else if len(history) > 0 {
+			cliCh.LoadHistory(history)
+		}
+		// Background goroutine: periodically refresh agent count/list cache
+		// (RPC calls must not happen from BubbleTea event loop → deadlock)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if app.backend == nil {
+					return
+				}
+				count := app.backend.CountInteractiveSessions("web", "")
+				sessions := app.backend.ListInteractiveSessions("web", "")
+				entries := make([]channel.AgentPanelEntry, len(sessions))
+				for i, s := range sessions {
+					entries[i] = channel.AgentPanelEntry{
+						Role:       s.Role,
+						Instance:   s.Instance,
+						Running:    s.Running,
+						Background: s.Background,
+						Task:       s.Task,
+						Preview:    s.Preview,
+					}
+				}
+				app.agentCacheMu.Lock()
+				app.agentCacheCount = count
+				app.agentCacheList = entries
+				app.agentCacheMu.Unlock()
+			}
+		}()
+	}
+
 	if newSession {
 		app.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "cli",
@@ -740,10 +890,26 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Info("Received shutdown signal, waiting for pending saves...")
-		saveWg.Wait()
-		log.Info("All saves complete, shutting down")
+		log.Info("Received shutdown signal, shutting down...")
+		// Stop backend first (closes WS, unblocks pending RPCs)
+		if app.backend != nil {
+			app.backend.Stop()
+		}
+		// Wait for pending saves with timeout (avoid blocking forever on hung RPC)
+		done := make(chan struct{})
+		go func() {
+			saveWg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			log.Info("All saves complete")
+		case <-time.After(2 * time.Second):
+			log.Warn("Timeout waiting for pending saves, forcing shutdown")
+		}
 		cancel()
+		// Quit BubbleTea program so cliCh.Start() returns
+		cliCh.Stop()
 	}()
 
 	// Runner Bridge: inject LLM client, model list and provider for runner use
@@ -1196,10 +1362,7 @@ func (m *remoteSubscriptionManager) SetDefault(id string) error {
 }
 
 func (m *remoteSubscriptionManager) SetModel(id, model string) error {
-	// SetModel updates the model of a subscription — not directly in RPC,
-	// use AddSubscription with updated fields as a workaround.
-	// TODO: add dedicated RPC method if needed
-	return nil
+	return m.backend.SetSubscriptionModel(id, model)
 }
 
 func (m *remoteSubscriptionManager) Rename(id, name string) error {

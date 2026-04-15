@@ -333,6 +333,14 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				}
 			}
 		}
+		// Carry forward CompletedTools from previous progress within the same iteration.
+		// Progress events may arrive without CompletedTools (e.g. a thinking-phase event
+		// after tool completion), which would cause completed tools to flicker/disappear.
+		if len(m.progress.CompletedTools) == 0 && prev != nil && len(prev.CompletedTools) > 0 {
+			if m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0 {
+				m.progress.CompletedTools = prev.CompletedTools
+			}
+		}
 	}
 	// Preserve SubAgent tree across progress updates within the SAME iteration.
 	// Progress events may arrive with incomplete subagent data (missing deep
@@ -395,13 +403,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		}
 		// Detect iteration change: snapshot previous iteration into history
 		if msg.payload.Iteration > m.lastSeenIteration && m.lastSeenIteration >= 0 && prev != nil {
-			// Filter CompletedTools by Iteration field for the previous iteration
-			var prevIterTools []CLIToolProgress
-			for _, t := range prev.CompletedTools {
-				if t.Iteration == m.lastSeenIteration {
-					prevIterTools = append(prevIterTools, t)
-				}
-			}
+			// Snapshot all completed tools from prev — they belong to iterations
+			// that finished before this new iteration started. Don't filter by
+			// Iteration field because tools from earlier iterations may have been
+			// carried forward via the CompletedTools carry-forward logic.
+			prevIterTools := prev.CompletedTools
 			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
 				snap := cliIterationSnapshot{
 					Iteration:   m.lastSeenIteration,
@@ -420,15 +426,11 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 		m.iterationStartTime = time.Now()
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
-		// Only keep tools matching the current iteration to avoid cross-iteration leakage.
+		// Accept all completed tools regardless of their Iteration field — they
+		// represent work that finished and should be displayed.
 		if len(msg.payload.CompletedTools) > 0 {
-			var filtered []CLIToolProgress
-			for _, t := range msg.payload.CompletedTools {
-				if t.Iteration == msg.payload.Iteration {
-					filtered = append(filtered, t)
-				}
-			}
-			m.lastCompletedTools = filtered
+			m.lastCompletedTools = make([]CLIToolProgress, len(msg.payload.CompletedTools))
+			copy(m.lastCompletedTools, msg.payload.CompletedTools)
 		}
 		if msg.payload.Phase == "done" {
 			// Snapshot the final iteration before clearing progress.
@@ -447,24 +449,18 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				if !alreadySnapped {
 					var finalTools []CLIToolProgress
 					// Check progress.CompletedTools first (set by progressFinalizer)
-					for _, t := range msg.payload.CompletedTools {
-						if t.Iteration == m.lastSeenIteration {
-							finalTools = append(finalTools, t)
-						}
-					}
+					finalTools = append(finalTools, msg.payload.CompletedTools...)
 					// Also include any from lastCompletedTools (race safety)
 					for _, t := range m.lastCompletedTools {
-						if t.Iteration == m.lastSeenIteration {
-							dup := false
-							for _, existing := range finalTools {
-								if existing.Name == t.Name && existing.Label == t.Label {
-									dup = true
-									break
-								}
+						dup := false
+						for _, existing := range finalTools {
+							if existing.Name == t.Name && existing.Label == t.Label {
+								dup = true
+								break
 							}
-							if !dup {
-								finalTools = append(finalTools, t)
-							}
+						}
+						if !dup {
+							finalTools = append(finalTools, t)
 						}
 					}
 					snap := cliIterationSnapshot{

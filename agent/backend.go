@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"xbot/bus"
 	"xbot/channel"
@@ -208,6 +209,17 @@ type AgentBackend interface {
 
 	// RenameSubscription renames a subscription.
 	RenameSubscription(id, name string) error
+
+	// SetSubscriptionModel updates the model of a subscription.
+	SetSubscriptionModel(id, model string) error
+
+	// GetHistory retrieves session messages for a channel/chatID pair.
+	// RemoteBackend forwards via RPC; LocalBackend reads from local DB.
+	GetHistory(channel, chatID string) ([]channel.HistoryMessage, error)
+
+	// TrimHistory deletes messages newer than or equal to cutoff for a channel/chatID.
+	// Used by CLI Ctrl+K session truncation. RemoteBackend forwards via RPC.
+	TrimHistory(channel, chatID string, cutoff time.Time) error
 
 	// Close shuts down the agent, releasing all resources.
 	Close() error

@@ -869,7 +869,9 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseToolExec
 		s.structuredProgress.ActiveTools = make([]ToolProgress, len(response.ToolCalls))
-		s.structuredProgress.CompletedTools = nil
+		// NOTE: do NOT clear CompletedTools here — they represent tools that finished
+		// earlier in this iteration (e.g. first batch of WebSearch done, second batch started).
+		// Clearing them causes completed tools to flicker/disappear in the CLI progress panel.
 		for j, tc := range response.ToolCalls {
 			s.structuredProgress.ActiveTools[j] = ToolProgress{
 				Name:      tc.Name,

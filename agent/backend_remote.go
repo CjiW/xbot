@@ -161,6 +161,9 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 	if b.conn == nil {
 		return fmt.Errorf("not connected to server")
 	}
+	// Set write deadline to avoid blocking indefinitely on dead connections.
+	b.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	defer b.conn.SetWriteDeadline(time.Time{}) // reset
 	outMsg := wsOutgoingMessage{Type: "message", Content: msg.Content}
 	return b.conn.WriteJSON(outMsg)
 }
@@ -228,7 +231,17 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	// Initial read deadline — if no data (including pongs) in 120s, connection is dead.
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 
+	// Close old connection before replacing (reconnect scenario).
 	b.connMu.Lock()
+	if b.conn != nil {
+		old := b.conn
+		b.conn = nil
+		b.connMu.Unlock()
+		old.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "reconnecting"))
+		old.Close()
+		b.connMu.Lock()
+	}
 	b.conn = conn
 	b.connMu.Unlock()
 	log.Info("Connected to remote xbot server")
@@ -302,7 +315,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
 		case "stream_content":
 			b.dispatchProgress(&channel.CLIProgressPayload{
-				StreamContent:          msg.Content,
+				StreamContent:          msg.Progress.GetStreamContent(),
 				ReasoningStreamContent: msg.Progress.GetReasoningStreamContent(),
 			})
 		case "ask_user":
@@ -426,8 +439,7 @@ func (b *RemoteBackend) sendPing() {
 	if b.conn == nil {
 		return
 	}
-	b.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := b.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+	if err := b.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 		log.WithError(err).Warn("WS ping failed")
 	}
 }
@@ -453,7 +465,16 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 				default:
 				}
 				log.WithField("delay", delay).Info("Reconnecting to server...")
-				time.Sleep(delay)
+				timer := time.NewTimer(delay)
+				select {
+				case <-b.done:
+					timer.Stop()
+					return
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 				if err := b.connect(ctx); err != nil {
 					log.WithError(err).Warn("Reconnect failed")
 					continue
@@ -858,6 +879,40 @@ func (b *RemoteBackend) SetDefaultSubscription(id string) error {
 
 func (b *RemoteBackend) RenameSubscription(id, name string) error {
 	return b.callRPCVoid("rename_subscription", map[string]string{"id": id, "name": name})
+}
+
+func (b *RemoteBackend) SetSubscriptionModel(id, model string) error {
+	return b.callRPCVoid("set_subscription_model", map[string]string{"id": id, "model": model})
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+func (b *RemoteBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error) {
+	// Server resolves channel/chatID from the authenticated WS connection.
+	raw, err := b.callRPC("get_history", nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result []channel.HistoryMessage
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (b *RemoteBackend) TrimHistory(_, _ string, cutoff time.Time) error {
+	if cutoff.IsZero() {
+		return nil
+	}
+	// Server resolves channel/chatID from the authenticated WS connection.
+	return b.callRPCVoid("trim_history", map[string]any{
+		"cutoff": cutoff.Format(time.RFC3339),
+	})
 }
 
 // ---------------------------------------------------------------------------

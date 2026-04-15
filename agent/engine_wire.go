@@ -379,43 +379,49 @@ func (a *Agent) buildMainRunConfig(
 
 	// MaskStore — Observation Masking（默认开启，可通过 settings 的 enable_masking 关闭）
 	cfg.MaskStore = a.maskStore
+	streamDisabled := false
 	if a.settingsSvc != nil {
 		if vals, err := a.settingsSvc.GetSettings(channel, senderID); err == nil {
 			if vals["enable_masking"] == "false" {
 				cfg.MaskStore = nil
 			}
-			if vals["enable_stream"] == "true" {
-				cfg.Stream = true
-				// Wire stream content callback: push accumulated content into progress block
-				// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
-				if ch, ok := a.channelFinder("cli"); ok {
-					if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-						cfg.StreamContentFunc = func(content string) {
-							cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-								StreamContent: content,
-							})
-						}
-						cfg.StreamReasoningFunc = func(content string) {
-							cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-								ReasoningStreamContent: content,
-							})
-						}
+			if vals["enable_stream"] == "false" {
+				streamDisabled = true
+			}
+		}
+	}
+
+	// Stream — default ON for all channels; wire callbacks per channel type.
+	if !streamDisabled {
+		cfg.Stream = true
+		// Wire stream content callback: push accumulated content into progress block
+		// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
+		if ch, ok := a.channelFinder("cli"); ok {
+			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+				cfg.StreamContentFunc = func(content string) {
+					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
+						StreamContent: content,
+					})
+				}
+				cfg.StreamReasoningFunc = func(content string) {
+					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
+						ReasoningStreamContent: content,
+					})
+				}
+			}
+		}
+		// Also wire for web channel — needed for CLI RemoteBackend clients
+		// connected via WebSocket who receive stream_content messages.
+		if ch, ok := a.channelFinder("web"); ok {
+			if wc, ok := ch.(*channelpkg.WebChannel); ok {
+				if cfg.StreamContentFunc == nil {
+					cfg.StreamContentFunc = func(content string) {
+						wc.SendStreamContent(chatID, content, "")
 					}
 				}
-				// Also wire for web channel — needed for CLI RemoteBackend clients
-				// connected via WebSocket who receive stream_content messages.
-				if ch, ok := a.channelFinder("web"); ok {
-					if wc, ok := ch.(*channelpkg.WebChannel); ok {
-						if cfg.StreamContentFunc == nil {
-							cfg.StreamContentFunc = func(content string) {
-								wc.SendStreamContent(chatID, content, "")
-							}
-						}
-						if cfg.StreamReasoningFunc == nil {
-							cfg.StreamReasoningFunc = func(content string) {
-								wc.SendStreamContent(chatID, "", content)
-							}
-						}
+				if cfg.StreamReasoningFunc == nil {
+					cfg.StreamReasoningFunc = func(content string) {
+						wc.SendStreamContent(chatID, "", content)
 					}
 				}
 			}
@@ -612,12 +618,12 @@ func (a *Agent) buildSubAgentRunConfig(
 		llmClient, subModel, userMaxCtx, thinkingMode = a.llmFactory.GetLLM(originUserID)
 	}
 
-	// Stream — 从用户设置继承（与 buildMainRunConfig 一致）
-	stream := false
+	// Stream — default ON; inherit from parent config unless explicitly disabled.
+	stream := true
 	if a.settingsSvc != nil {
 		if vals, err := a.settingsSvc.GetSettings(parentCtx.Channel, originUserID); err == nil {
-			if vals["enable_stream"] == "true" {
-				stream = true
+			if vals["enable_stream"] == "false" {
+				stream = false
 			}
 		}
 	}

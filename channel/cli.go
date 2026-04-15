@@ -86,6 +86,26 @@ func (c *CLIChannel) Start() error {
 	if c.pendingSendInboundFn != nil {
 		c.model.sendInboundFn = c.pendingSendInboundFn
 	}
+	if c.pendingHistory != nil {
+		for _, hm := range c.pendingHistory {
+			cm := cliMessage{
+				role:      hm.Role,
+				content:   hm.Content,
+				timestamp: hm.Timestamp,
+				isPartial: false,
+				dirty:     true,
+			}
+			if len(hm.Iterations) > 0 {
+				cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
+				for i, hi := range hm.Iterations {
+					cm.iterations[i] = cliIterationSnapshot(hi)
+				}
+			}
+			c.model.messages = append(c.model.messages, cm)
+		}
+		log.WithField("count", len(c.pendingHistory)).Info("Restored cached session history (remote)")
+		c.pendingHistory = nil
+	}
 	c.model.channelName = "cli"
 	c.model.defaultChatID = c.config.ChatID
 	c.model.chatID = c.config.ChatID
@@ -265,6 +285,42 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.bgTaskMgr = mgr
 	c.bgSessionKey = sessionKey
 	c.updateBgTaskCountFn()
+}
+
+// LoadHistory loads session history into the CLI model.
+// Used by remote mode where history must be fetched via RPC after the WS connection
+// is established (HistoryLoader runs during NewCLIChannel, before backend.Start()).
+// If the model hasn't been created yet (before Run()), the history is cached and
+// applied when the model is initialized.
+func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
+	if len(history) == 0 {
+		return
+	}
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model == nil {
+		// Model not created yet — cache for later application in newCLIModel
+		c.pendingHistory = history
+		log.WithField("count", len(history)).Info("Cached remote history (model not ready yet)")
+		return
+	}
+	for _, hm := range history {
+		cm := cliMessage{
+			role:      hm.Role,
+			content:   hm.Content,
+			timestamp: hm.Timestamp,
+			isPartial: false,
+			dirty:     true,
+		}
+		if len(hm.Iterations) > 0 {
+			cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
+			for i, hi := range hm.Iterations {
+				cm.iterations[i] = cliIterationSnapshot(hi)
+			}
+		}
+		c.model.messages = append(c.model.messages, cm)
+	}
+	log.WithField("count", len(history)).Info("Restored session history (remote)")
 }
 
 // SetTrimHistoryFn sets the callback for /rewind DB truncation.

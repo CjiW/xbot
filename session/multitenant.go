@@ -808,3 +808,17 @@ func (m *MultiTenantSession) GetMemoryStats(ctx context.Context, channel, chatID
 
 	return stats
 }
+
+// TrimHistory deletes messages newer than or equal to the given cutoff timestamp
+// for the tenant identified by channel and chatID.
+func (m *MultiTenantSession) TrimHistory(channel, chatID string, cutoff time.Time) error {
+	if cutoff.IsZero() {
+		return nil
+	}
+	tenantID, err := m.tenantSvc.GetOrCreateTenantID(channel, chatID)
+	if err != nil {
+		return fmt.Errorf("get tenant: %w", err)
+	}
+	_, err = m.sessionSvc.PurgeNewerThanOrEqual(tenantID, cutoff)
+	return err
+}

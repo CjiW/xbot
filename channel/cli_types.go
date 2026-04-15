@@ -503,6 +503,7 @@ type CLIChannel struct {
 
 	// Pending injections (set before model exists, applied in Start)
 	pendingTrimHistoryFn  func(time.Time) error
+	pendingHistory        []HistoryMessage // remote mode: cached history before model is ready
 	pendingCheckpointHook *tools.CheckpointHook
 	pendingSendInboundFn  func(bus.InboundMessage) bool // remote mode: forward to server
 }

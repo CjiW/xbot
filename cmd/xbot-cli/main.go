@@ -633,6 +633,11 @@ func main() {
 				}
 				return true
 			})
+			// Forward server responses directly to CLI channel (skip dispatcher
+			// since there's no local agent loop — dispatcher would not match "remote" channel)
+			app.backend.OnOutbound(func(msg bus.OutboundMessage) {
+				cliCh.Send(msg)
+			})
 			// Register OnProgress callback for streaming progress from server
 			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
 				cliCh.SendProgress(cliCfg.ChatID, p)

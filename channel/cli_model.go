@@ -190,7 +190,7 @@ func (m *cliModel) cycleModel() {
 	if m.channel == nil || m.channel.modelLister == nil {
 		return
 	}
-	models := m.channel.modelLister.ListModels()
+	models := m.channel.modelLister.ListAllModels()
 	if len(models) < 2 {
 		m.showTempStatus("Only one model available")
 		return

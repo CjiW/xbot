@@ -55,6 +55,32 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 		if _, ok := m.panelValues[def.Key]; !ok && def.DefaultValue != "" {
 			m.panelValues[def.Key] = def.DefaultValue
 		}
+		// Inject current subscription model list as combo options for llm_model.
+		// This limits the selector to models available on the current provider,
+		// while vanguard/balance/swift model selectors use ListAllModels (cross-subscription).
+		if def.Key == "llm_model" && m.channel.modelLister != nil && len(def.Options) == 0 {
+			models := m.channel.modelLister.ListModels()
+			if len(models) > 0 {
+				opts := make([]SettingOption, len(models))
+				for j, mdl := range models {
+					opts[j] = SettingOption{Label: mdl, Value: mdl}
+				}
+				def.Options = opts
+				def.Type = SettingTypeCombo
+			}
+		}
+		// Inject cross-subscription model list for tier model selectors.
+		if (def.Key == "vanguard_model" || def.Key == "balance_model" || def.Key == "swift_model") && m.channel.modelLister != nil && len(def.Options) == 0 {
+			models := m.channel.modelLister.ListAllModels()
+			if len(models) > 0 {
+				opts := make([]SettingOption, len(models))
+				for j, mdl := range models {
+					opts[j] = SettingOption{Label: mdl, Value: mdl}
+				}
+				def.Options = opts
+				def.Type = SettingTypeCombo
+			}
+		}
 	}
 	m.panelOnSubmit = onSubmit
 	m.panelOnCancel = nil

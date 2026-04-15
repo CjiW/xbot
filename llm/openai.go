@@ -134,26 +134,23 @@ func (o *OpenAILLM) MaxTokens() int {
 func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 	log.Debug("[LLM] Loading models from OpenAI API")
 
-	// 使用 openai-go SDK 获取模型列表
-	page, err := o.client.Models.List(ctx)
-	if err != nil {
+	// Use ListAutoPaging to fetch ALL models across pages.
+	// OpenAI may return >100 models; a single List() call only returns the first page.
+	pager := o.client.Models.ListAutoPaging(ctx)
+	models := make([]string, 0)
+	for pager.Next() {
+		models = append(models, pager.Current().ID)
+	}
+	if err := pager.Err(); err != nil {
 		return fmt.Errorf("openai models list: %w", err)
-	}
-
-	// 提取模型 ID
-	models := make([]string, 0, len(page.Data))
-	for _, model := range page.Data {
-		models = append(models, model.ID)
-	}
-
-	if len(models) == 0 {
-		log.Warn("[LLM] No models found from OpenAI API")
-		return nil
 	}
 
 	// 更新模型列表
 	o.mu.Lock()
 	o.models = models
+	if o.defaultModel == "" && len(o.models) > 0 {
+		o.defaultModel = o.models[0]
+	}
 	if o.defaultModel == "" && len(o.models) > 0 {
 		o.defaultModel = o.models[0]
 	}

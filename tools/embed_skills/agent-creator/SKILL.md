@@ -26,6 +26,7 @@ Agent definition uses YAML frontmatter + Markdown body:
 ---
 name: {agent-name}
 description: "{What this agent does. Use WHEN to use it — this is the trigger.}"
+model: balance
 tools:
   - ToolName1
   - ToolName2
@@ -68,6 +69,22 @@ Common tools for agents:
 
 If `tools` is omitted, the agent gets the full dynamic tool set (search_tools + load_tools).
 If `tools` is specified, only those tools are directly available — no search/load needed.
+
+### Step 3.5: Choose Model Tier
+
+The `model` field in frontmatter controls which LLM model the agent uses. Three tiers are available:
+
+| Tier | When to use | Examples |
+|------|-------------|---------|
+| `vanguard` | Complex reasoning, architecture decisions, multi-step analysis | Code review of critical PRs, complex refactoring plans |
+| `balance` (default) | General tasks, most agents | Code exploration, test writing, docs, debugging |
+| `swift` | Simple/fast tasks, bulk operations | Log parsing, file searching, formatting, trivial edits |
+
+**Rules:**
+- If `model` is omitted, defaults to `balance` (NOT the parent agent's model).
+- The caller can override with the `model_tier` parameter in SubAgent() at invocation time.
+- Think about cost vs quality: don't use vanguard for grep/search tasks; don't use swift for design tasks.
+- Examples: exploration agents → `swift`; code reviewer → `vanguard`; most others → omit (gets `balance`).
 
 ### Step 4: Configure Capabilities
 

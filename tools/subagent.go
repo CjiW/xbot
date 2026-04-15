@@ -40,6 +40,16 @@ IMPORTANT:
 - Always provide a stable, explicit instance string such as "review-1", "planner-main", or "fix-login-bug".
 - If you omit instance, the tool call will fail.
 
+## Model Tier
+
+SubAgents default to the "balance" model tier. Use model_tier to override:
+- "vanguard" — strongest model, for complex reasoning tasks
+- "swift" — fast/small model, for simple exploration or formatting tasks
+- "balance" (default) — balanced model for general tasks
+
+The agent role definition may also specify a model via frontmatter (model: vanguard/swift/balance).
+model_tier parameter takes priority over the role's model setting. If neither is set, defaults to "balance".
+
 ## One-shot mode (default)
 SubAgent(task, role, instance="...") — runs once in the foreground and returns the final result.
 
@@ -66,6 +76,7 @@ Parameters (JSON):
   - interactive: boolean (optional), create or reuse an interactive session
   - background: boolean (optional), only valid when interactive=true; prefer false unless there is a concrete need to let the caller continue doing other work before checking back later
   - action: string (optional), one of "send", "unload", "inspect", "interrupt"
+  - model_tier: string (optional), model tier for this call: "vanguard", "swift", or "balance" (default). Overrides the role's model setting.
 
 Available roles are listed in the <available_agents> section of the system prompt.`
 }
@@ -79,6 +90,7 @@ func (t *SubAgentTool) Parameters() []llm.ToolParam {
 		{Name: "background", Type: "boolean", Description: "Run the interactive sub-agent in background mode. Only valid when interactive=true. Prefer foreground by default; use this only when the caller genuinely needs to continue other work and check back later."},
 		{Name: "action", Type: "string", Description: `Optional control action: "send", "unload", "inspect", or "interrupt".`},
 		{Name: "tail", Type: "integer", Description: "For action=\"inspect\": number of recent iterations to show (default: 5)."},
+		{Name: "model_tier", Type: "string", Description: `Model tier for this call: "vanguard" (strongest), "swift" (fastest), or "balance" (default). Overrides the role's model setting. Use when you need a different model than the role's default for a specific task.`},
 	}
 }
 
@@ -91,6 +103,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		Action      string `json:"action"`
 		Instance    string `json:"instance"`
 		Tail        int    `json:"tail"`
+		ModelTier   string `json:"model_tier"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %w", err)
@@ -155,6 +168,15 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
 	}
 
+	// Resolve model: model_tier param > role.Model > "balance" (default)
+	effectiveModel := role.Model
+	if params.ModelTier != "" {
+		effectiveModel = params.ModelTier
+	}
+	if effectiveModel == "" {
+		effectiveModel = "balance"
+	}
+
 	if ctx.Manager == nil {
 		return nil, fmt.Errorf("sub-agent capability not available")
 	}
@@ -177,7 +199,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			if params.Task == "" {
 				return nil, fmt.Errorf("task is required for action=\"send\"")
 			}
-			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, role.Model)
+			result, err := im.SendInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
 			if err != nil {
 				return nil, fmt.Errorf("interactive send failed: %w", err)
 			}
@@ -212,7 +234,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 				ctx.Metadata["background"] = "true"
 			}
 			// action="" + interactive=true → spawn/reuse
-			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, role.Model)
+			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
 			if err != nil {
 				return nil, fmt.Errorf("interactive spawn failed: %w", err)
 			}
@@ -225,7 +247,7 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 	}
 
 	// Default: one-shot mode
-	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Role, role.Model)
+	result, err := ctx.Manager.RunSubAgent(ctx, params.Task, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Role, effectiveModel)
 	if err != nil {
 		return nil, fmt.Errorf("sub-agent failed: %w", err)
 	}

@@ -1,6 +1,7 @@
 ---
 name: explore
 description: "Code exploration and logic analysis agent. Use when you need to understand business logic, trace code flow, identify dependencies, or summarize how a subsystem works before making changes."
+model: swift
 tools:
   - Grep
   - Glob

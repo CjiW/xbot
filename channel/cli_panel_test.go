@@ -395,7 +395,7 @@ func TestApplyQuickSwitchError(t *testing.T) {
 	if mgr.subs[1].Active {
 		t.Error("expected sub2 still inactive after SwitchLLM failure")
 	}
-	}
+}
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 

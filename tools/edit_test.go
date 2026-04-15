@@ -186,7 +186,32 @@ func TestDoReplace_ReplaceAll(t *testing.T) {
 		if !strings.Contains(summary, "3 occurrence") {
 			t.Errorf("summary should mention 3 occurrences, got: %s", summary)
 		}
+		// Verify NO old_string remains after replace_all
+		if strings.Contains(result, "foo") {
+			t.Errorf("replace_all=true but old_string still present in result: %q", result)
+		}
 	})
+}
+
+// TestDoReplace_ReplaceAll_NoResidual verifies that replace_all truly removes all occurrences,
+// including when old_string appears in multiple non-overlapping contexts.
+func TestDoReplace_ReplaceAll_NoResidual(t *testing.T) {
+	content := "a.role.Model\n\trole.Model,\nrole.Model) // end"
+	params := FileReplaceParams{OldString: "role.Model", NewString: "effectiveModel", ReplaceAll: true}
+	result, summary, err := doReplace(content, params, "/test/file.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(result, "role.Model") {
+		t.Errorf("replace_all=true but 'role.Model' still present in result:\n%s", result)
+	}
+	if !strings.Contains(summary, "3 occurrence") {
+		t.Errorf("expected 3 occurrences replaced, got summary: %s", summary)
+	}
+	expected := "a.effectiveModel\n\teffectiveModel,\neffectiveModel) // end"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
 }
 
 func TestDoReplace_Regex(t *testing.T) {

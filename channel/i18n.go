@@ -397,7 +397,7 @@ func localeZH() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key（必填）",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_base_url", Label: "Base URL", Description: "LLM API 地址",
@@ -409,7 +409,7 @@ func localeZH() *UILocale {
 			},
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "网络搜索服务密钥（可选，留空则无法使用 WebSearch）",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "sandbox_mode", Label: "沙箱模式", Description: "命令执行隔离方式",
@@ -454,7 +454,7 @@ func localeZH() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "LLM 服务的 API Key",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_model", Label: "LLM 模型", Description: "选择或输入 LLM 模型名称",
@@ -782,7 +782,7 @@ func localeEN() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "API key for LLM service (required)",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_base_url", Label: "Base URL", Description: "LLM API endpoint",
@@ -794,7 +794,7 @@ func localeEN() *UILocale {
 			},
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web search service key (optional, leave empty to disable WebSearch)",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "sandbox_mode", Label: "Sandbox Mode", Description: "Command execution isolation method",
@@ -839,7 +839,7 @@ func localeEN() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "LLM service API Key",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_model", Label: "LLM Model", Description: "Select or enter LLM model name",
@@ -1167,7 +1167,7 @@ func localeJA() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key（必須）",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_base_url", Label: "Base URL", Description: "LLM API エンドポイント",
@@ -1179,7 +1179,7 @@ func localeJA() *UILocale {
 			},
 			{
 				Key: "tavily_api_key", Label: "Tavily API Key", Description: "Web検索サービスキー（オプション、空の場合 WebSearch は無効）",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "sandbox_mode", Label: "サンドボックスモード", Description: "コマンド実行の分離方法",
@@ -1224,7 +1224,7 @@ func localeJA() *UILocale {
 			},
 			{
 				Key: "llm_api_key", Label: "API Key", Description: "LLM サービスの API Key",
-					Type: SettingTypePassword, Category: "LLM",
+				Type: SettingTypePassword, Category: "LLM",
 			},
 			{
 				Key: "llm_model", Label: "LLM モデル", Description: "LLM モデル名を選択または入力",

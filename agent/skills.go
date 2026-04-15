@@ -184,6 +184,7 @@ func (s *SkillStore) GetSkillsCatalog(ctx context.Context, senderID string) stri
 	var sb strings.Builder
 	sb.WriteString("# Available Skills\n\n")
 	sb.WriteString("Skills 是特定任务的专门指导文档。当任务匹配时，用 `Skill` 工具加载对应的 skill 获取详细指令。\n\n")
+	sb.WriteString("当用户输入以 `/xxxx` 开头的消息时，优先在 available_skills 中查找名称匹配的 skill 并激活再处理请求。\n\n")
 
 	// 注入目录路径，供 skill-creator 参考新建位置
 	if len(s.globalDirs) > 0 {

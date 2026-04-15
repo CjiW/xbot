@@ -1125,6 +1125,27 @@ func (m *configSubscriptionManager) Rename(id, name string) error {
 	return fmt.Errorf("subscription %s not found", id)
 }
 
+func (m *configSubscriptionManager) Update(id string, sub *channel.Subscription) error {
+	for i := range m.cfg.Subscriptions {
+		if m.cfg.Subscriptions[i].ID == id {
+			m.cfg.Subscriptions[i].Name = sub.Name
+			m.cfg.Subscriptions[i].Provider = sub.Provider
+			m.cfg.Subscriptions[i].BaseURL = sub.BaseURL
+			m.cfg.Subscriptions[i].APIKey = sub.APIKey
+			m.cfg.Subscriptions[i].Model = sub.Model
+			// If modifying active subscription, sync cfg.LLM
+			if m.cfg.Subscriptions[i].Active {
+				syncLLMFromActiveSub(m.cfg)
+				if m.tierSync != nil {
+					m.tierSync(m.cfg.LLM)
+				}
+			}
+			return m.saveFn()
+		}
+	}
+	return fmt.Errorf("subscription %s not found", id)
+}
+
 // configLLMSubscriber switches LLM at runtime using config-based subscriptions.
 // Single source of truth: cfg.Subscriptions[active].Model/Provider/BaseURL/APIKey.
 // cfg.LLM.* is a read-only view derived from the active subscription.
@@ -1367,6 +1388,10 @@ func (m *remoteSubscriptionManager) SetModel(id, model string) error {
 
 func (m *remoteSubscriptionManager) Rename(id, name string) error {
 	return m.backend.RenameSubscription(id, name)
+}
+
+func (m *remoteSubscriptionManager) Update(id string, sub *channel.Subscription) error {
+	return m.backend.UpdateSubscription(id, *sub)
 }
 
 // remoteLLMSubscriber implements channel.LLMSubscriber via RPC.

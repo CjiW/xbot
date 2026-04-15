@@ -2,6 +2,8 @@ package channel
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +52,10 @@ func (m *mockSubscriptionManager) SetModel(id, model string) error {
 }
 
 func (m *mockSubscriptionManager) Rename(id, name string) error {
+	return nil
+}
+
+func (m *mockSubscriptionManager) Update(id string, sub *Subscription) error {
 	return nil
 }
 
@@ -148,6 +154,48 @@ func TestApplyQuickSwitch(t *testing.T) {
 	if mgr.setDefID != "sub2" {
 		t.Errorf("expected SetDefault(sub2), got SetDefault(%s)", mgr.setDefID)
 	}
+}
+
+func TestPanelBoxLeftAlign(t *testing.T) {
+	// Verify that settings panel content is left-aligned after PanelBox wrapping.
+	// Regression test: lipgloss v2 Width() defaults to centering content.
+	m := newCLIModel()
+	m.width = 80
+	m.styles = buildStyles(80) // rebuild with test width
+
+	// Simulate a settings panel with a short selected line
+	schema := []SettingDefinition{
+		{Key: "name", Label: "Name", Type: SettingTypeText, Category: "Test"},
+		{Key: "provider", Label: "Provider", Type: SettingTypeText, DefaultValue: "openai", Category: "Test"},
+	}
+	m.panelSchema = schema
+	m.panelValues = map[string]string{"provider": "openai"}
+	m.panelCursor = 0
+	m.panelMode = "settings"
+
+	raw := m.viewPanel()
+	// Wrap in PanelBox like cli_view.go does
+	boxed := m.styles.PanelBox.Render(raw)
+
+	t.Log("=== Boxed panel output (stripped) ===")
+	lines := splitANSILines(boxed)
+	for i, line := range lines {
+		t.Logf("  [%d] len=%d: %q", i, len(stripANSI(line)), stripANSI(line))
+	}
+	// Find the line containing "Name:" and verify position
+	for _, line := range lines {
+		stripped := stripANSI(line)
+		if idx := indexOfStr(stripped, "Name:"); idx >= 0 {
+			// After PanelBox border ("│") + padding (" ") + cursor ("▸") + space = ~4 visible chars
+			// "Name:" should appear at column ~4 in the stripped string
+			// (may be higher due to multi-byte UTF-8 in cursor char + ANSI-wrapped styling)
+			if idx > 20 {
+				t.Errorf("'Name:' at column %d (expected <= 6, looks centered).\nLine: %q", idx, stripped)
+			}
+			return
+		}
+	}
+	t.Error("could not find 'Name:' in panel output")
 }
 
 // TestSubscriptionGenerationGuard tests that stale per-subscription LLM values
@@ -347,4 +395,18 @@ func TestApplyQuickSwitchError(t *testing.T) {
 	if mgr.subs[1].Active {
 		t.Error("expected sub2 still inactive after SwitchLLM failure")
 	}
+	}
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func splitANSILines(s string) []string {
+	return strings.Split(s, "\n")
+}
+
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
+
+func indexOfStr(s, substr string) int {
+	return strings.Index(s, substr)
 }

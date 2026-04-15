@@ -398,6 +398,22 @@ func (b *LocalBackend) RenameSubscription(id, name string) error {
 	return svc.Rename(id, name)
 }
 
+func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) error {
+	svc := b.agent.llmFactory.GetSubscriptionSvc()
+	if svc == nil {
+		return fmt.Errorf("subscription service not available")
+	}
+	dbSub := &sqlite.LLMSubscription{
+		ID:       sub.ID,
+		Name:     sub.Name,
+		Provider: sub.Provider,
+		BaseURL:  sub.BaseURL,
+		APIKey:   sub.APIKey,
+		Model:    sub.Model,
+	}
+	return svc.Update(dbSub)
+}
+
 func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {

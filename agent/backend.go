@@ -210,6 +210,9 @@ type AgentBackend interface {
 	// RenameSubscription renames a subscription.
 	RenameSubscription(id, name string) error
 
+	// UpdateSubscription updates all fields of a subscription.
+	UpdateSubscription(id string, sub channel.Subscription) error
+
 	// SetSubscriptionModel updates the model of a subscription.
 	SetSubscriptionModel(id, model string) error
 

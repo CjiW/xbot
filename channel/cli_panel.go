@@ -26,6 +26,16 @@ type panelAgentEntry struct {
 	Preview    string // latest progress/last reply summary
 }
 
+// renderSelLine renders a settings panel selected row left-aligned to the given width.
+// lipgloss v2 Width() defaults to centering; this helper avoids that by manual padding.
+func (m *cliModel) renderSelLine(line string, w int) string {
+	vw := lipgloss.Width(line)
+	if vw < w {
+		line += strings.Repeat(" ", w-vw)
+	}
+	return m.styles.SettingsSelBg.Render(line)
+}
+
 // openSettingsPanel activates the settings panel overlay.
 func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[string]string, onSubmit func(map[string]string)) {
 	m.panelMode = "settings"
@@ -788,7 +798,7 @@ func (m *cliModel) viewDangerPanel() string {
 			}
 			line := fmt.Sprintf("%s %s%s", prefix, item.Label, statText)
 			if i == m.panelDangerCursor {
-				line = s.SettingsSelBg.Width(m.panelWidth(60) - 4).Render(line)
+				line = m.renderSelLine(line, m.panelWidth(60)-4)
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -1460,10 +1470,11 @@ func (m *cliModel) viewSettingsPanel() string {
 	hintStyle := s.PanelHint
 
 	var sb strings.Builder
-	sb.WriteString(s.PanelHeader.Render("⚙ " + m.locale.PanelSettingsTitle))
+	sb.WriteString(s.PanelHeader.Render(m.locale.PanelSettingsTitle))
 	sb.WriteString("\n")
 	// 表头下方精致分割线，区分标题与内容
 	sb.WriteString(s.SettingsDivider.Render("┈" + strings.Repeat("┈", 30)))
+	sb.WriteString("\n")
 
 	// Group by category
 	lastCat := ""
@@ -1502,7 +1513,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), statusHint)
 			if i == m.panelCursor && !m.panelEdit {
-				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+				line = m.renderSelLine(line, m.width-6)
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -1514,7 +1525,7 @@ func (m *cliModel) viewSettingsPanel() string {
 		if def.Key == "danger_zone" {
 			line := fmt.Sprintf("%s %s", prefix, s.WarningSt.Render(def.Label))
 			if i == m.panelCursor && !m.panelEdit {
-				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+				line = m.renderSelLine(line, m.width-6)
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -1542,7 +1553,7 @@ func (m *cliModel) viewSettingsPanel() string {
 			}
 			line := fmt.Sprintf("%s %s%s", prefix, s.ProgressDone.Render(def.Label), subHint)
 			if i == m.panelCursor && !m.panelEdit {
-				line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+				line = m.renderSelLine(line, m.width-6)
 			}
 			sb.WriteString(line)
 			sb.WriteString("\n")
@@ -1594,7 +1605,7 @@ func (m *cliModel) viewSettingsPanel() string {
 
 		line := fmt.Sprintf("%s %s: %s", prefix, def.Label, displayVal)
 		if i == m.panelCursor && !m.panelEdit {
-			line = s.SettingsSelBg.Width(m.width - 6).Render(line)
+			line = m.renderSelLine(line, m.width-6)
 		}
 		sb.WriteString(line)
 		sb.WriteString("\n")
@@ -1955,8 +1966,8 @@ func (m *cliModel) applyQuickSwitch() {
 	m.quickSwitchMode = ""
 }
 
-// renameQuickSwitchEntry opens a mini panel to rename the selected subscription.
-func (m *cliModel) renameQuickSwitchEntry() {
+// editQuickSwitchEntry opens a mini panel to edit all fields of the selected subscription.
+func (m *cliModel) editQuickSwitchEntry() {
 	if m.quickSwitchCursor >= len(m.quickSwitchList) {
 		return
 	}
@@ -1964,23 +1975,66 @@ func (m *cliModel) renameQuickSwitchEntry() {
 	if selected.ID == "__add__" {
 		return
 	}
-	oldName := selected.Name
-	renameSchema := []SettingDefinition{
-		{Key: "sub_name", Label: "Name", Description: "New display name for this subscription", Type: SettingTypeText, DefaultValue: oldName},
+	// Find the full subscription config (including APIKey) from the manager
+	var target *Subscription
+	if m.subscriptionMgr != nil {
+		if subs, err := m.subscriptionMgr.List(""); err == nil {
+			for i := range subs {
+				if subs[i].ID == selected.ID {
+					target = &subs[i]
+					break
+				}
+			}
+		}
 	}
-	renameValues := map[string]string{"sub_name": oldName}
-	m.quickSwitchMode = "" // close overlay while renaming
-	m.openSettingsPanel(renameSchema, renameValues, func(values map[string]string) {
-		newName := values["sub_name"]
-		if newName == "" || newName == oldName {
+	if target == nil {
+		m.showTempStatus("Subscription not found")
+		return
+	}
+
+	editSchema := []SettingDefinition{
+		{Key: "sub_name", Label: "Name", Description: "Display name for this subscription", Type: SettingTypeText, DefaultValue: target.Name},
+		{Key: "sub_provider", Label: "Provider", Description: "LLM provider (openai, anthropic, deepseek, etc.)", Type: SettingTypeText, DefaultValue: target.Provider},
+		{Key: "sub_model", Label: "Model", Description: "Model name", Type: SettingTypeText, DefaultValue: target.Model},
+		{Key: "sub_base_url", Label: "Base URL", Description: "API base URL (leave empty for provider default)", Type: SettingTypeText, DefaultValue: target.BaseURL},
+		{Key: "sub_api_key", Label: "API Key", Description: "API key (leave empty to use global key)", Type: SettingTypePassword, DefaultValue: target.APIKey},
+	}
+	// Inject model list into combo for model field
+	if m.channel.modelLister != nil {
+		models := m.channel.modelLister.ListModels()
+		if len(models) > 0 {
+			opts := make([]SettingOption, len(models))
+			for j, mdl := range models {
+				opts[j] = SettingOption{Label: mdl, Value: mdl}
+			}
+			editSchema[2].Options = opts
+		}
+	}
+	editValues := map[string]string{
+		"sub_name":     target.Name,
+		"sub_provider": target.Provider,
+		"sub_model":    target.Model,
+		"sub_base_url": target.BaseURL,
+		"sub_api_key":  target.APIKey,
+	}
+	m.quickSwitchMode = "" // close overlay while editing
+	m.openSettingsPanel(editSchema, editValues, func(values map[string]string) {
+		if m.subscriptionMgr == nil {
 			return
 		}
-		if m.subscriptionMgr != nil {
-			if err := m.subscriptionMgr.Rename(selected.ID, newName); err != nil {
-				m.showTempStatus(fmt.Sprintf("Failed to rename: %v", err))
-			} else {
-				m.showTempStatus(fmt.Sprintf("Renamed: %s → %s", oldName, newName))
-			}
+		updated := &Subscription{
+			ID:       target.ID,
+			Name:     values["sub_name"],
+			Provider: values["sub_provider"],
+			Model:    values["sub_model"],
+			BaseURL:  values["sub_base_url"],
+			APIKey:   values["sub_api_key"],
+			Active:   target.Active,
+		}
+		if err := m.subscriptionMgr.Update(target.ID, updated); err != nil {
+			m.showTempStatus(fmt.Sprintf("Failed to update: %v", err))
+		} else {
+			m.showTempStatus(fmt.Sprintf("Updated: %s", updated.Name))
 		}
 	})
 }
@@ -2074,7 +2128,7 @@ func (m *cliModel) viewQuickSwitch(width, height int) string {
 	box := m.styles.PanelBox.Render(panelContent)
 
 	// Hint line below the box
-	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Rename  D Delete  Esc Close")
+	hint := m.styles.PanelHint.Render(" ↑↓ Navigate  Enter Select  E Edit  D Delete  Esc Close")
 
 	// Center vertically
 	listH := len(m.quickSwitchList) + 3 // header + spacer + items + borders(~2)
@@ -2125,9 +2179,9 @@ func (m *cliModel) handleQuickSwitchKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	}
-	// E: rename selected subscription
+	// E: edit selected subscription
 	if msg.String() == "e" {
-		m.renameQuickSwitchEntry()
+		m.editQuickSwitchEntry()
 		return true, nil
 	}
 	// D: delete selected subscription

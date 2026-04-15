@@ -541,7 +541,8 @@ type SubscriptionManager interface {
 	SetDefault(id string) error
 	SetModel(id, model string) error
 	Rename(id, name string) error
-}
+	Update(id string, sub *Subscription) error
+	}
 
 // LLMSubscriber switches the active LLM for a user (called when subscription changes).
 type LLMSubscriber interface {

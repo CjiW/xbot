@@ -881,6 +881,10 @@ func (b *RemoteBackend) RenameSubscription(id, name string) error {
 	return b.callRPCVoid("rename_subscription", map[string]string{"id": id, "name": name})
 }
 
+func (b *RemoteBackend) UpdateSubscription(id string, sub channel.Subscription) error {
+	return b.callRPCVoid("update_subscription", map[string]any{"id": id, "sub": sub})
+}
+
 func (b *RemoteBackend) SetSubscriptionModel(id, model string) error {
 	return b.callRPCVoid("set_subscription_model", map[string]string{"id": id, "model": model})
 }

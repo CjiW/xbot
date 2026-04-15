@@ -113,15 +113,6 @@ func newCLIApp(serverURL, token string) *cliApp {
 		tools.SetRunnerTokenDB(db.Conn())
 	}
 
-	embBaseURL := cfg.Embedding.BaseURL
-	if embBaseURL == "" {
-		embBaseURL = cfg.LLM.BaseURL
-	}
-	embAPIKey := cfg.Embedding.APIKey
-	if embAPIKey == "" {
-		embAPIKey = cfg.LLM.APIKey
-	}
-
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
 	var backend agent.AgentBackend
@@ -134,38 +125,16 @@ func newCLIApp(serverURL, token string) *cliApp {
 		})
 	} else {
 		// Local mode: agent loop runs in-process
-		backend = agent.NewLocalBackend(agent.Config{
-			Bus:                  msgBus,
-			LLM:                  llmClient,
-			Model:                cfg.LLM.Model,
-			MaxIterations:        cfg.Agent.MaxIterations,
-			MaxConcurrency:       cfg.Agent.MaxConcurrency,
-			DBPath:               dbPath,
-			SkillsDir:            filepath.Join(xbotHome, "skills"),
-			AgentsDir:            filepath.Join(xbotHome, "agents"),
-			WorkDir:              workDir,
-			XbotHome:             xbotHome,
-			PromptFile:           cfg.Agent.PromptFile,
-			DirectWorkspace:      workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
-			SandboxMode:          cfg.Sandbox.Mode,
-			Sandbox:              tools.GetSandbox(),
-			MemoryProvider:       cfg.Agent.MemoryProvider,
-			EmbeddingProvider:    cfg.Embedding.Provider,
-			EmbeddingBaseURL:     embBaseURL,
-			EmbeddingAPIKey:      embAPIKey,
-			EmbeddingModel:       cfg.Embedding.Model,
-			EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
-			MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
-			MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
-			SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-			EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
-			MaxContextTokens:     cfg.Agent.MaxContextTokens,
-			CompressionThreshold: cfg.Agent.CompressionThreshold,
-			ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
-			MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
-			OffloadDir:           filepath.Join(xbotHome, "offload_store"),
-		})
-		// Local-only: register core tools and index
+		bc := agent.BackendConfig{
+			Cfg:             cfg,
+			LLM:             llmClient,
+			Bus:             msgBus,
+			DBPath:          dbPath,
+			WorkDir:         workDir,
+			XbotHome:        xbotHome,
+			DirectWorkspace: workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
+		}
+		backend = agent.NewLocalBackend(bc.AgentConfig())
 		backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 		backend.IndexGlobalTools()
 		backend.LLMFactory().SetModelTiers(cfg.LLM)

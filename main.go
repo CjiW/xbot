@@ -442,52 +442,19 @@ func main() {
 		log.WithError(err).Fatal("Failed to setup OAuth")
 	}
 
-	// 嵌入向量配置（Letta 归档记忆使用 chromem-go）
-	embBaseURL := cfg.Embedding.BaseURL
-	if embBaseURL == "" {
-		embBaseURL = cfg.LLM.BaseURL // 回退到 LLM 的 base URL
-	}
-	embAPIKey := cfg.Embedding.APIKey
-	if embAPIKey == "" {
-		embAPIKey = cfg.LLM.APIKey
-	}
-
 	// 初始化沙箱
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
-	backend := agent.NewLocalBackend(agent.Config{
-		Bus:                  msgBus,
-		LLM:                  llmClient,
-		Model:                cfg.LLM.Model,
-		MaxIterations:        cfg.Agent.MaxIterations,
-		MaxConcurrency:       cfg.Agent.MaxConcurrency,
-		DBPath:               dbPath,
-		SkillsDir:            filepath.Join(xbotDir, "skills"),
-		AgentsDir:            filepath.Join(xbotDir, "agents"),
-		WorkDir:              workDir,
-		XbotHome:             xbotDir,
-		PromptFile:           cfg.Agent.PromptFile,
-		SingleUser:           false, // Deprecated: no longer used
-		SandboxMode:          cfg.Sandbox.Mode,
-		Sandbox:              tools.GetSandbox(),
-		MemoryProvider:       cfg.Agent.MemoryProvider,
-		EmbeddingProvider:    cfg.Embedding.Provider,
-		EmbeddingBaseURL:     embBaseURL,
-		EmbeddingAPIKey:      embAPIKey,
-		EmbeddingModel:       cfg.Embedding.Model,
-		EmbeddingMaxTokens:   cfg.Embedding.MaxTokens,
-		MCPInactivityTimeout: cfg.Agent.MCPInactivityTimeout,
-		MCPCleanupInterval:   cfg.Agent.MCPCleanupInterval,
-		SessionCacheTimeout:  cfg.Agent.SessionCacheTimeout,
-		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
-		MaxContextTokens:     cfg.Agent.MaxContextTokens,
-		CompressionThreshold: cfg.Agent.CompressionThreshold,
-		ContextMode:          agent.ContextMode(cfg.Agent.ContextMode),
-		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
-		PersonaIsolation:     cfg.Web.PersonaIsolation,
-		PurgeOldMessages:     cfg.Agent.PurgeOldMessages,
-		SandboxIdleTimeout:   cfg.Sandbox.IdleTimeout,
-	})
+	bc := agent.BackendConfig{
+		Cfg:              cfg,
+		LLM:              llmClient,
+		Bus:              msgBus,
+		DBPath:           dbPath,
+		WorkDir:          workDir,
+		XbotHome:         xbotDir,
+		PersonaIsolation: cfg.Web.PersonaIsolation,
+	}
+	backend := agent.NewLocalBackend(bc.AgentConfig())
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
 	if cfg.OAuth.Enable && oauthManager != nil {

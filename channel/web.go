@@ -528,7 +528,7 @@ func (wc *WebChannel) Start() error {
 	// after unclean shutdown (e.g., SIGKILL, crash).
 	lc := net.ListenConfig{Control: func(network, address string, c syscall.RawConn) error {
 		return c.Control(func(fd uintptr) {
-			syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			setReuseAddr(fd)
 		})
 	}}
 	ln, err := lc.Listen(context.Background(), "tcp", addr)

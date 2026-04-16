@@ -449,11 +449,14 @@ type SubAgentBgNotify struct {
 func (n *SubAgentBgNotify) SessionKey() string { return n.Key }
 
 // SendSubAgentNotify sends a subagent notification through BgTaskManager.NotifyCh.
-// Safe to call from any goroutine. Drops silently if channel is full.
+// Safe to call from any goroutine. Drops silently if channel is full or closed.
 func (m *BackgroundTaskManager) SendSubAgentNotify(n *SubAgentBgNotify) {
 	if m.NotifyCh == nil {
 		return
 	}
+	defer func() {
+		recover() // send on closed channel panics — safe to ignore during shutdown
+	}()
 	select {
 	case m.NotifyCh <- n:
 	default:

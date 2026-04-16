@@ -233,7 +233,11 @@ func (m *MultiTenantSession) SetMCPConfigPath(path string) {
 
 // RecordUserTokenUsage records token usage for a user (upsert).
 func (m *MultiTenantSession) RecordUserTokenUsage(senderID, model string, inputTokens, outputTokens, cachedTokens int, conversationCount, llmCallCount int) error {
-	return m.tokenUsageSvc.RecordUsage(m.db.Conn(), senderID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount)
+	db := m.db.Conn()
+	if db == nil {
+		return fmt.Errorf("database connection is nil (agent may be shutting down)")
+	}
+	return m.tokenUsageSvc.RecordUsage(db, senderID, model, inputTokens, outputTokens, cachedTokens, conversationCount, llmCallCount)
 }
 
 // GetUserTokenUsage retrieves cumulative token usage for a user.

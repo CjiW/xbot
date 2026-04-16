@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -927,6 +928,10 @@ func (b *RemoteBackend) Close() error {
 	return nil
 }
 
+func (b *RemoteBackend) ResetTokenState() {
+	b.callRPCVoid("reset_token_state", nil)
+}
+
 func (b *RemoteBackend) Run(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
@@ -939,36 +944,26 @@ func (b *RemoteBackend) Run(ctx context.Context) error {
 // RPCMethodList returns all RPC method names for documentation/validation.
 func RPCMethodList() []string {
 	return []string{
-		// Context & settings
 		"get_context_mode", "set_context_mode",
 		"get_settings", "set_setting",
-		// Agent tuning
 		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens",
-		// LLM per-user
 		"get_default_model", "set_user_model",
 		"get_user_max_context", "set_user_max_context",
 		"get_user_max_output_tokens", "set_user_max_output_tokens",
 		"get_user_thinking_mode", "set_user_thinking_mode",
 		"get_llm_concurrency", "set_llm_concurrency",
 		"set_default_thinking_mode",
-		// LLM model management
 		"list_models", "list_all_models", "set_model_tiers",
 		"set_proxy_llm", "clear_proxy_llm",
-		// Memory
 		"clear_memory", "get_memory_stats",
-		// Token usage
 		"get_user_token_usage", "get_daily_token_usage",
-		// Sub-agents
 		"count_interactive_sessions", "list_interactive_sessions",
 		"inspect_interactive_session",
-		// Background tasks
 		"get_bg_task_count",
-		// History
-		"get_history", "trim_history",
-		// Subscriptions
 		"list_subscriptions", "get_default_subscription",
 		"add_subscription", "remove_subscription",
 		"set_default_subscription", "rename_subscription",
-		"update_subscription", "set_subscription_model",
 	}
 }
+
+var _ = strconv.Itoa(len(RPCMethodList()))

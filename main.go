@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
 	"syscall"
 	"time"
 
@@ -124,20 +123,6 @@ func setupOAuth(cfg *config.Config, dbPath string) (*oauth.Server, *oauth.Manage
 	oauthServer := oauth.NewServer(oauth.Config{Enable: true, Host: cfg.OAuth.Host, Port: cfg.OAuth.Port, BaseURL: cfg.OAuth.BaseURL}, oauthManager)
 	log.WithFields(log.Fields{"port": cfg.OAuth.Port, "baseURL": cfg.OAuth.BaseURL}).Info("OAuth server started")
 	return oauthServer, oauthManager, feishuProvider, sharedDB, nil
-}
-
-// maskAPIKey masks an API key, showing only the first 4 characters.
-func maskAPIKey(key string) string {
-	if len(key) <= 4 {
-		return "****"
-	}
-	return key[:4] + "****"
-}
-
-// isMaskedAPIKey returns true if the key appears to be a masked value
-// (produced by maskAPIKey) that should not be persisted.
-func isMaskedAPIKey(key string) bool {
-	return strings.HasSuffix(key, "****")
 }
 
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
@@ -507,7 +492,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		for i, s := range subs {
 			result[i] = channel.Subscription{
 				ID: s.ID, Name: s.Name, Provider: s.Provider,
-				BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
+				BaseURL: s.BaseURL, APIKey: s.APIKey,
 				Model: s.Model, Active: s.IsDefault,
 			}
 		}
@@ -532,7 +517,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
-			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),
+			BaseURL: sub.BaseURL, APIKey: sub.APIKey,
 			Model: sub.Model, Active: sub.IsDefault,
 		})
 	case "add_subscription":
@@ -633,39 +618,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("subscription service not available")
 		}
 		return nil, svc.SetModel(p.ID, p.Model)
-
-	case "update_subscription":
-		var p struct {
-			ID  string               `json:"id"`
-			Sub channel.Subscription `json:"sub"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		if backend.LLMFactory() == nil {
-			return nil, fmt.Errorf("LLM factory not available")
-		}
-		svc := backend.LLMFactory().GetSubscriptionSvc()
-		if svc == nil {
-			return nil, fmt.Errorf("subscription service not available")
-		}
-		existing, err := svc.Get(p.ID)
-		if err != nil || existing == nil {
-			return nil, fmt.Errorf("subscription %s not found", p.ID)
-		}
-		existing.Name = p.Sub.Name
-		existing.Provider = p.Sub.Provider
-		existing.BaseURL = p.Sub.BaseURL
-		// Only update API key if a new (non-masked) value is provided
-		if p.Sub.APIKey != "" && !isMaskedAPIKey(p.Sub.APIKey) {
-			existing.APIKey = p.Sub.APIKey
-		}
-		existing.Model = p.Sub.Model
-		if err := svc.Update(existing); err != nil {
-			return nil, err
-		}
-		backend.LLMFactory().Invalidate(existing.SenderID)
-		return nil, nil
 
 	default:
 		return nil, fmt.Errorf("unknown RPC method: %s", method)

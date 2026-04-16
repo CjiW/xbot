@@ -502,10 +502,11 @@ type CLIChannel struct {
 	approvalHook *tools.ApprovalHook // injected to wire CLIApprovalHandler after program creation
 
 	// Pending injections (set before model exists, applied in Start)
-	pendingTrimHistoryFn  func(time.Time) error
-	pendingHistory        []HistoryMessage // remote mode: cached history before model is ready
-	pendingCheckpointHook *tools.CheckpointHook
-	pendingSendInboundFn  func(bus.InboundMessage) bool // remote mode: forward to server
+	pendingTrimHistoryFn     func(time.Time) error
+	pendingResetTokenStateFn func()
+	pendingHistory           []HistoryMessage // remote mode: cached history before model is ready
+	pendingCheckpointHook    *tools.CheckpointHook
+	pendingSendInboundFn     func(bus.InboundMessage) bool // remote mode: forward to server
 }
 
 // SettingsService is the interface needed by CLIChannel for settings panel.

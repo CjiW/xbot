@@ -415,6 +415,12 @@ func (m *cliModel) applyRewind() {
 		}
 	}
 
+	// Reset cached token counts so maybeCompress doesn't use stale values
+	// from before the rewind and trigger an immediate (incorrect) compression.
+	if m.resetTokenStateFn != nil {
+		m.resetTokenStateFn()
+	}
+
 	// File rollback via checkpoint hook
 	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
 		// Count how many user turns are being rewound (for checkpoint lookup)

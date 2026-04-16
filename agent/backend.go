@@ -224,6 +224,11 @@ type AgentBackend interface {
 	// Used by CLI Ctrl+K session truncation. RemoteBackend forwards via RPC.
 	TrimHistory(channel, chatID string, cutoff time.Time) error
 
+	// ResetTokenState clears the cached prompt/completion token counts.
+	// Must be called after /rewind to prevent maybeCompress from using stale
+	// large token counts and triggering an immediate incorrect compression.
+	ResetTokenState()
+
 	// Close shuts down the agent, releasing all resources.
 	Close() error
 

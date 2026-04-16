@@ -80,6 +80,9 @@ func (c *CLIChannel) Start() error {
 	if c.pendingTrimHistoryFn != nil {
 		c.model.trimHistoryFn = c.pendingTrimHistoryFn
 	}
+	if c.pendingResetTokenStateFn != nil {
+		c.model.resetTokenStateFn = c.pendingResetTokenStateFn
+	}
 	if c.pendingCheckpointHook != nil {
 		c.model.checkpointHook = c.pendingCheckpointHook
 	}
@@ -333,6 +336,18 @@ func (c *CLIChannel) SetTrimHistoryFn(fn func(cutoff time.Time) error) {
 		c.model.trimHistoryFn = fn
 	}
 	c.pendingTrimHistoryFn = fn
+}
+
+// SetResetTokenStateFn sets the callback for /rewind token state reset.
+// Must be called to prevent stale prompt_tokens from triggering immediate
+// compression after a rewind truncates history.
+func (c *CLIChannel) SetResetTokenStateFn(fn func()) {
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model != nil {
+		c.model.resetTokenStateFn = fn
+	}
+	c.pendingResetTokenStateFn = fn
 }
 
 // SetCheckpointHook sets the file checkpoint hook for /rewind file rollback.

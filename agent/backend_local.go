@@ -450,6 +450,11 @@ func (b *LocalBackend) Close() error {
 	return b.agent.Close()
 }
 
+func (b *LocalBackend) ResetTokenState() {
+	b.agent.lastPromptTokens.Store(0)
+	b.agent.lastCompletionTokens.Store(0)
+}
+
 func (b *LocalBackend) Run(ctx context.Context) error {
 	return b.agent.Run(ctx)
 }

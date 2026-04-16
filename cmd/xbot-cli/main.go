@@ -54,10 +54,6 @@ type cliApp struct {
 	xbotHome  string
 
 	// Remote-mode async cache for agent info (avoid RPC from event loop → deadlock)
-	// CountInteractiveSessions and ListInteractiveSessions are called from BubbleTea
-	// Update() which holds the render lock. RPC responses arrive on readPump goroutine
-	// which calls p.Send() → deadlock if event loop is blocked on RPC.
-	// These are refreshed by a background goroutine every 5s.
 	agentCacheMu    sync.RWMutex
 	agentCacheCount int
 	agentCacheList  []channel.AgentPanelEntry
@@ -772,6 +768,9 @@ func main() {
 			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
 				return app.backend.TrimHistory("", "", cutoff)
 			})
+			cliCh.SetResetTokenStateFn(func() {
+				app.backend.ResetTokenState()
+			})
 		} else {
 			// Local mode: use local service objects directly
 			if ss := app.backend.SettingsService(); ss != nil {
@@ -815,6 +814,10 @@ func main() {
 			} else {
 				log.WithFields(log.Fields{"tenantID": cliTenantID, "hasSessionSvc": cliSessionSvc != nil, "hasDB": app.db != nil}).Warn("TrimHistoryFn NOT registered — DB truncation will not work")
 			}
+			// Reset cached token state after rewind to prevent stale compress trigger
+			cliCh.SetResetTokenStateFn(func() {
+				app.backend.ResetTokenState()
+			})
 		}
 	}
 
@@ -850,7 +853,6 @@ func main() {
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
-		// TODO: Also consider async-caching UsageQuery (currently returns error in remote mode)
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()

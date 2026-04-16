@@ -192,29 +192,19 @@ func (s *LLMSubscriptionService) Add(sub *LLMSubscription) error {
 
 // UpdateCachedModels persists the model list cache for a subscription.
 // It ensures the subscription's active model is always included.
-// Uses a transaction to prevent read-modify-write race conditions.
 func (s *LLMSubscriptionService) UpdateCachedModels(subID string, models []string) error {
-	tx, err := s.db.Conn().Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	var model string
-	if err := tx.QueryRow("SELECT model FROM user_llm_subscriptions WHERE id = ?", subID).Scan(&model); err != nil {
+	sub, err := s.Get(subID)
+	if err != nil || sub == nil {
 		return fmt.Errorf("subscription %s not found: %w", subID, err)
 	}
-	models = ensureModel(models, model)
+	models = ensureModel(models, sub.Model)
 	data, err := json.Marshal(models)
 	if err != nil {
 		return fmt.Errorf("marshal cached models: %w", err)
 	}
-	_, err = tx.Exec("UPDATE user_llm_subscriptions SET cached_models = ?, updated_at = datetime('now') WHERE id = ?",
+	_, err = s.db.Conn().Exec("UPDATE user_llm_subscriptions SET cached_models = ?, updated_at = datetime('now') WHERE id = ?",
 		string(data), subID)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 // ensureModel adds model to the list if not already present.

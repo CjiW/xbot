@@ -323,6 +323,14 @@ func doReplace(content string, params FileReplaceParams, filePath string) (strin
 	if params.OldString == "" {
 		return "", "", fmt.Errorf("old_string is required")
 	}
+	// Guard against excessively large inputs that could cause memory/CPU issues.
+	const maxParamLen = 4 << 20 // 4 MB
+	if len(params.OldString) > maxParamLen {
+		return "", "", fmt.Errorf("old_string too large (%d bytes, max %d)", len(params.OldString), maxParamLen)
+	}
+	if len(params.NewString) > maxParamLen {
+		return "", "", fmt.Errorf("new_string too large (%d bytes, max %d)", len(params.NewString), maxParamLen)
+	}
 
 	// Split content by line range if start_line/end_line specified
 	prefix, rangeText, suffix, err := splitContentByLineRange(content, params.StartLine, params.EndLine)

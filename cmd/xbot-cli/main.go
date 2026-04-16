@@ -377,10 +377,8 @@ func main() {
 			// ── Remote mode: all settings go to server, skip config.json ──
 			if app.backend.IsRemote() {
 				// Persist every setting to server via RPC
-				if ss := app.backend.SettingsService(); ss != nil {
-					for k, v := range values {
-						_ = ss.SetSetting("cli", "cli_user", k, v)
-					}
+				for k, v := range values {
+					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
 				// Push runtime state to server
 				if v, ok := values["enable_auto_compress"]; ok {
@@ -826,7 +824,14 @@ func main() {
 
 	// Apply saved theme at startup (works in both local and remote mode)
 	if app.backend != nil {
-		if ss := app.backend.SettingsService(); ss != nil {
+		if app.backend.IsRemote() {
+			// Remote mode: use RPC directly (SettingsService() is nil for RemoteBackend)
+			if vals, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
+				if t, ok := vals["theme"]; ok && t != "" {
+					channel.ApplyTheme(t)
+				}
+			}
+		} else if ss := app.backend.SettingsService(); ss != nil {
 			if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 				if t, ok := vals["theme"]; ok && t != "" {
 					channel.ApplyTheme(t)
@@ -859,27 +864,32 @@ func main() {
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				if app.backend == nil {
+			for {
+				select {
+				case <-ctx.Done():
 					return
-				}
-				count := app.backend.CountInteractiveSessions("web", "")
-				sessions := app.backend.ListInteractiveSessions("web", "")
-				entries := make([]channel.AgentPanelEntry, len(sessions))
-				for i, s := range sessions {
-					entries[i] = channel.AgentPanelEntry{
-						Role:       s.Role,
-						Instance:   s.Instance,
-						Running:    s.Running,
-						Background: s.Background,
-						Task:       s.Task,
-						Preview:    s.Preview,
+				case <-ticker.C:
+					if app.backend == nil {
+						return
 					}
+					count := app.backend.CountInteractiveSessions("web", "")
+					sessions := app.backend.ListInteractiveSessions("web", "")
+					entries := make([]channel.AgentPanelEntry, len(sessions))
+					for i, s := range sessions {
+						entries[i] = channel.AgentPanelEntry{
+							Role:       s.Role,
+							Instance:   s.Instance,
+							Running:    s.Running,
+							Background: s.Background,
+							Task:       s.Task,
+							Preview:    s.Preview,
+						}
+					}
+					app.agentCacheMu.Lock()
+					app.agentCacheCount = count
+					app.agentCacheList = entries
+					app.agentCacheMu.Unlock()
 				}
-				app.agentCacheMu.Lock()
-				app.agentCacheCount = count
-				app.agentCacheList = entries
-				app.agentCacheMu.Unlock()
 			}
 		}()
 	}

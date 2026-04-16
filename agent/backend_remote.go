@@ -227,14 +227,6 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 		return fmt.Errorf("WS dial: %w", err)
 	}
 
-	// Check if Stop() was called during dial to avoid leaking the new connection.
-	select {
-	case <-b.done:
-		conn.Close()
-		return fmt.Errorf("backend stopped during connect")
-	default:
-	}
-
 	// Set up pong handler to detect server liveness.
 	// Server sends pings every 30s; pong handler resets read deadline.
 	conn.SetPongHandler(func(_ string) error {
@@ -511,6 +503,7 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) callRPC(method string, params any) (json.RawMessage, error) {
+	// Lock order: connMu → rpcMu (never reverse, to prevent deadlock).
 	b.connMu.Lock()
 	if b.conn == nil {
 		b.connMu.Unlock()

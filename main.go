@@ -325,6 +325,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
+		// Non-admin users can only clear their own memory
+		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
+		}
 		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, senderID)
 	case "get_memory_stats":
 		var p struct {
@@ -336,6 +343,13 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
+		}
+		// Non-admin users can only view their own memory stats
+		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
 		}
 		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, senderID)
 		return json.Marshal(result)
@@ -520,6 +534,36 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		p.Sub.SenderID = senderID
 		return nil, svc.Add(&p.Sub)
+	case "update_subscription":
+		var p struct {
+			ID  string                 `json:"id"`
+			Sub sqlite.LLMSubscription `json:"sub"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.LLMFactory() == nil {
+			return nil, fmt.Errorf("LLM factory not available")
+		}
+		svc := backend.LLMFactory().GetSubscriptionSvc()
+		if svc == nil {
+			return nil, fmt.Errorf("subscription service not available")
+		}
+		// Non-admin users can only update their own subscriptions
+		existing, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if senderID != "admin" && existing.SenderID != senderID {
+			return nil, fmt.Errorf("subscription not found")
+		}
+		p.Sub.ID = p.ID
+		p.Sub.SenderID = existing.SenderID // preserve owner
+		if err := svc.Update(&p.Sub); err != nil {
+			return nil, err
+		}
+		backend.LLMFactory().Invalidate(existing.SenderID)
+		return nil, nil
 	case "remove_subscription":
 		var p struct {
 			ID string `json:"id"`
@@ -534,19 +578,17 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
-		// Get subscription for ownership check and cache invalidation
+		// Get senderID before removal for cache invalidation
 		sub, err := svc.Get(p.ID)
 		if err != nil {
 			return nil, err
 		}
-		// Non-admin users can only remove their own subscriptions
-		if senderID != "admin" && sub.SenderID != senderID {
-			return nil, fmt.Errorf("subscription not found")
-		}
 		if err := svc.Remove(p.ID); err != nil {
 			return nil, err
 		}
-		backend.LLMFactory().Invalidate(sub.SenderID)
+		if sub != nil {
+			backend.LLMFactory().Invalidate(sub.SenderID)
+		}
 		return nil, nil
 	case "set_default_subscription":
 		var p struct {
@@ -562,19 +604,14 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
-		// Non-admin users can only set their own subscription as default
-		sub, err := svc.Get(p.ID)
-		if err != nil {
-			return nil, err
-		}
-		if senderID != "admin" && sub.SenderID != senderID {
-			return nil, fmt.Errorf("subscription not found")
-		}
 		if err := svc.SetDefault(p.ID); err != nil {
 			return nil, err
 		}
 		// Invalidate cache so next request picks up the new default
-		backend.LLMFactory().Invalidate(sub.SenderID)
+		sub, err := svc.Get(p.ID)
+		if err == nil && sub != nil {
+			backend.LLMFactory().Invalidate(sub.SenderID)
+		}
 		return nil, nil
 	case "rename_subscription":
 		var p struct {
@@ -590,14 +627,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		svc := backend.LLMFactory().GetSubscriptionSvc()
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
-		}
-		// Non-admin users can only rename their own subscriptions
-		sub, err := svc.Get(p.ID)
-		if err != nil {
-			return nil, err
-		}
-		if senderID != "admin" && sub.SenderID != senderID {
-			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
 
@@ -615,14 +644,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		svc := backend.LLMFactory().GetSubscriptionSvc()
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
-		}
-		// Non-admin users can only modify their own subscriptions
-		sub, err := svc.Get(p.ID)
-		if err != nil {
-			return nil, err
-		}
-		if senderID != "admin" && sub.SenderID != senderID {
-			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.SetModel(p.ID, p.Model)
 

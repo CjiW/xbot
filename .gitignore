@@ -86,3 +86,5 @@ docs-site/.hugo_build.lock
 docs-site/resources/_gen/
 docs-site/themes/hugo-geekdoc/node_modules/
 cmd-output-*.md
+mermaid-ascii
+ultraviolet

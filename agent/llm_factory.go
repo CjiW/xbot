@@ -486,10 +486,13 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 	// Step 1: look up from cached model lists in DB — O(1), no API calls
 	modelMap := f.buildModelSubscriptionMap(senderID)
 	if sub, ok := modelMap[resolvedModel]; ok {
+		log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 1}).Debug("[LLM] GetLLMForModel: cache hit")
 		client := f.createClientFromSub(sub, resolvedModel)
 		if client != nil {
 			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 		}
+	} else {
+		log.WithField("model", resolvedModel).Debug("[LLM] GetLLMForModel: cache miss")
 	}
 
 	// Step 2: cache miss or empty — try each subscription synchronously.
@@ -621,6 +624,12 @@ func (f *LLMFactory) resolveTierModel(value string) (string, bool) {
 	case "swift":
 		if strings.TrimSpace(tiers.SwiftModel) != "" {
 			return strings.TrimSpace(tiers.SwiftModel), true
+		}
+	}
+	// Tier recognized but no model configured — fallback to balance tier
+	if tier == "swift" || tier == "vanguard" {
+		if strings.TrimSpace(tiers.BalanceModel) != "" {
+			return strings.TrimSpace(tiers.BalanceModel), true
 		}
 	}
 	return "", true

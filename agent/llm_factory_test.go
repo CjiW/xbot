@@ -203,3 +203,53 @@ func TestGetLLMForModel_TierResolution(t *testing.T) {
 		t.Errorf("model = %q, want gpt-4o", model)
 	}
 }
+
+func TestResolveTierModel_UnconfiguredFallback(t *testing.T) {
+	// When swift/vanguard are not configured, should fallback to balance
+	f := NewLLMFactory(nil, nil, "default-model")
+	f.SetModelTiers(config.LLMConfig{
+		BalanceModel: "gpt-4o",
+		// VanguardModel and SwiftModel intentionally empty
+	})
+
+	// swift not configured → fallback to balance
+	model, usedTier := f.resolveTierModel("swift")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("swift fallback = %q, want gpt-4o (balance)", model)
+	}
+
+	// vanguard not configured → fallback to balance
+	model, usedTier = f.resolveTierModel("vanguard")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("vanguard fallback = %q, want gpt-4o (balance)", model)
+	}
+
+	// balance configured → returns balance
+	model, usedTier = f.resolveTierModel("balance")
+	if !usedTier {
+		t.Error("usedTier should be true")
+	}
+	if model != "gpt-4o" {
+		t.Errorf("balance = %q, want gpt-4o", model)
+	}
+}
+
+func TestResolveTierModel_AllUnconfigured(t *testing.T) {
+	// All tiers unconfigured → returns empty string (will fall to default client)
+	f := NewLLMFactory(nil, nil, "default-model")
+	f.SetModelTiers(config.LLMConfig{})
+
+	model, usedTier := f.resolveTierModel("swift")
+	if !usedTier {
+		t.Error("usedTier should be true (tier keyword recognized)")
+	}
+	if model != "" {
+		t.Errorf("model = %q, want empty (no tiers configured)", model)
+	}
+}

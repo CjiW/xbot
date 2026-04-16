@@ -138,6 +138,7 @@ func (b *RemoteBackend) Stop() {
 		close(b.done)
 		b.connMu.Lock()
 		if b.conn != nil {
+			b.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			b.conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "client shutdown"))
 			b.conn.Close()
@@ -235,19 +236,16 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 	// Initial read deadline — if no data (including pongs) in 120s, connection is dead.
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 
-	// Close old connection before replacing (reconnect scenario).
+	// Atomically replace connection to avoid race with Stop().
 	b.connMu.Lock()
-	if b.conn != nil {
-		old := b.conn
-		b.conn = nil
-		b.connMu.Unlock()
+	old := b.conn
+	b.conn = conn
+	b.connMu.Unlock()
+	if old != nil {
 		old.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "reconnecting"))
 		old.Close()
-		b.connMu.Lock()
 	}
-	b.conn = conn
-	b.connMu.Unlock()
 	log.Info("Connected to remote xbot server")
 	return nil
 }
@@ -646,35 +644,35 @@ func (b *RemoteBackend) SetMaxContextTokens(n int) {
 }
 
 func (b *RemoteBackend) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
-	if err := b.callRPCVoid("set_proxy_llm", map[string]string{"sender_id": senderID, "model": model}); err != nil {
+	if err := b.callRPCVoid("set_proxy_llm", map[string]string{"model": model}); err != nil {
 		log.WithError(err).Warn("RemoteBackend: SetProxyLLM RPC failed")
 	}
 }
 
 func (b *RemoteBackend) ClearProxyLLM(senderID string) {
-	if err := b.callRPCVoid("clear_proxy_llm", map[string]string{"sender_id": senderID}); err != nil {
+	if err := b.callRPCVoid("clear_proxy_llm", nil); err != nil {
 		log.WithError(err).Warn("RemoteBackend: ClearProxyLLM RPC failed")
 	}
 }
 
 func (b *RemoteBackend) SetUserModel(senderID, model string) error {
-	return b.callRPCVoid("set_user_model", map[string]string{"sender_id": senderID, "model": model})
+	return b.callRPCVoid("set_user_model", map[string]string{"model": model})
 }
 
 func (b *RemoteBackend) SetUserMaxContext(senderID string, maxContext int) error {
-	return b.callRPCVoid("set_user_max_context", map[string]any{"sender_id": senderID, "max_context": maxContext})
+	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext})
 }
 
 func (b *RemoteBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
-	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"sender_id": senderID, "max_tokens": maxTokens})
+	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"max_tokens": maxTokens})
 }
 
 func (b *RemoteBackend) SetUserThinkingMode(senderID string, mode string) error {
-	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"sender_id": senderID, "mode": mode})
+	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"mode": mode})
 }
 
 func (b *RemoteBackend) SetLLMConcurrency(senderID string, personal int) error {
-	return b.callRPCVoid("set_llm_concurrency", map[string]any{"sender_id": senderID, "personal": personal})
+	return b.callRPCVoid("set_llm_concurrency", map[string]any{"personal": personal})
 }
 
 // ---------------------------------------------------------------------------
@@ -687,22 +685,22 @@ func (b *RemoteBackend) GetDefaultModel() string {
 }
 
 func (b *RemoteBackend) GetUserMaxContext(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_context", map[string]string{"sender_id": senderID})
+	n, _ := b.callRPCInt("get_user_max_context", nil)
 	return n
 }
 
 func (b *RemoteBackend) GetUserMaxOutputTokens(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_output_tokens", map[string]string{"sender_id": senderID})
+	n, _ := b.callRPCInt("get_user_max_output_tokens", nil)
 	return n
 }
 
 func (b *RemoteBackend) GetUserThinkingMode(senderID string) string {
-	s, _ := b.callRPCString("get_user_thinking_mode", map[string]string{"sender_id": senderID})
+	s, _ := b.callRPCString("get_user_thinking_mode", nil)
 	return s
 }
 
 func (b *RemoteBackend) GetLLMConcurrency(senderID string) int {
-	n, _ := b.callRPCInt("get_llm_concurrency", map[string]string{"sender_id": senderID})
+	n, _ := b.callRPCInt("get_llm_concurrency", nil)
 	return n
 }
 
@@ -752,7 +750,7 @@ func (b *RemoteBackend) InspectInteractiveSession(ctx context.Context, roleName,
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
-	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace, "sender_id": senderID})
+	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace})
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +766,7 @@ func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]stri
 
 func (b *RemoteBackend) SetSetting(namespace, senderID, key, value string) error {
 	return b.callRPCVoid("set_setting", map[string]string{
-		"namespace": namespace, "sender_id": senderID, "key": key, "value": value,
+		"namespace": namespace, "key": key, "value": value,
 	})
 }
 
@@ -808,13 +806,13 @@ func (b *RemoteBackend) SetDefaultThinkingMode(mode string) error {
 
 func (b *RemoteBackend) ClearMemory(ctx context.Context, ch, chatID, targetType, senderID string) error {
 	return b.callRPCVoid("clear_memory", map[string]string{
-		"channel": ch, "chat_id": chatID, "target_type": targetType, "sender_id": senderID,
+		"channel": ch, "chat_id": chatID, "target_type": targetType,
 	})
 }
 
 func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID string) map[string]string {
 	raw, err := b.callRPC("get_memory_stats", map[string]string{
-		"channel": ch, "chat_id": chatID, "sender_id": senderID,
+		"channel": ch, "chat_id": chatID,
 	})
 	if err != nil || len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -828,7 +826,7 @@ func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID
 }
 
 func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, error) {
-	raw, err := b.callRPC("get_user_token_usage", map[string]string{"sender_id": senderID})
+	raw, err := b.callRPC("get_user_token_usage", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -843,7 +841,7 @@ func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, erro
 }
 
 func (b *RemoteBackend) GetDailyTokenUsage(senderID string, days int) ([]map[string]any, error) {
-	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"sender_id": senderID, "days": days})
+	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"days": days})
 	if err != nil {
 		return nil, err
 	}
@@ -863,7 +861,7 @@ func (b *RemoteBackend) GetBgTaskCount(sessionKey string) int {
 }
 
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
-	raw, err := b.callRPC("list_subscriptions", map[string]string{"sender_id": senderID})
+	raw, err := b.callRPC("list_subscriptions", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -878,7 +876,7 @@ func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscripti
 }
 
 func (b *RemoteBackend) GetDefaultSubscription(senderID string) (*channel.Subscription, error) {
-	raw, err := b.callRPC("get_default_subscription", map[string]string{"sender_id": senderID})
+	raw, err := b.callRPC("get_default_subscription", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -893,7 +891,7 @@ func (b *RemoteBackend) GetDefaultSubscription(senderID string) (*channel.Subscr
 }
 
 func (b *RemoteBackend) AddSubscription(senderID string, sub channel.Subscription) error {
-	return b.callRPCVoid("add_subscription", map[string]any{"sender_id": senderID, "sub": sub})
+	return b.callRPCVoid("add_subscription", map[string]any{"sub": sub})
 }
 
 func (b *RemoteBackend) RemoveSubscription(id string) error {

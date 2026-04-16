@@ -153,7 +153,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 	case "get_settings":
 		var p struct {
 			Namespace string `json:"namespace"`
-			SenderID  string `json:"sender_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -161,7 +160,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		result, err := backend.SettingsService().GetSettings(p.Namespace, p.SenderID)
+		result, err := backend.SettingsService().GetSettings(p.Namespace, senderID)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +168,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 	case "set_setting":
 		var p struct {
 			Namespace string `json:"namespace"`
-			SenderID  string `json:"sender_id"`
 			Key       string `json:"key"`
 			Value     string `json:"value"`
 		}
@@ -179,7 +177,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		return nil, backend.SettingsService().SetSetting(p.Namespace, p.SenderID, p.Key, p.Value)
+		return nil, backend.SettingsService().SetSetting(p.Namespace, senderID, p.Key, p.Value)
 
 	// --- Max iterations / concurrency / context tokens ---
 	case "set_max_iterations":
@@ -215,81 +213,52 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return json.Marshal(backend.GetDefaultModel())
 	case "set_user_model":
 		var p struct {
-			SenderID string `json:"sender_id"`
-			Model    string `json:"model"`
+			Model string `json:"model"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserModel(p.SenderID, p.Model)
+		return nil, backend.SetUserModel(senderID, p.Model)
 	case "get_user_max_context":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		return json.Marshal(backend.GetUserMaxContext(p.SenderID))
+		return json.Marshal(backend.GetUserMaxContext(senderID))
 	case "set_user_max_context":
 		var p struct {
-			SenderID   string `json:"sender_id"`
-			MaxContext int    `json:"max_context"`
+			MaxContext int `json:"max_context"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxContext(p.SenderID, p.MaxContext)
+		return nil, backend.SetUserMaxContext(senderID, p.MaxContext)
 	case "get_user_max_output_tokens":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		return json.Marshal(backend.GetUserMaxOutputTokens(p.SenderID))
+		return json.Marshal(backend.GetUserMaxOutputTokens(senderID))
 	case "set_user_max_output_tokens":
 		var p struct {
-			SenderID  string `json:"sender_id"`
-			MaxTokens int    `json:"max_tokens"`
+			MaxTokens int `json:"max_tokens"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserMaxOutputTokens(p.SenderID, p.MaxTokens)
+		return nil, backend.SetUserMaxOutputTokens(senderID, p.MaxTokens)
 	case "get_user_thinking_mode":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		return json.Marshal(backend.GetUserThinkingMode(p.SenderID))
+		return json.Marshal(backend.GetUserThinkingMode(senderID))
 	case "set_user_thinking_mode":
 		var p struct {
-			SenderID string `json:"sender_id"`
-			Mode     string `json:"mode"`
+			Mode string `json:"mode"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetUserThinkingMode(p.SenderID, p.Mode)
+		return nil, backend.SetUserThinkingMode(senderID, p.Mode)
 	case "get_llm_concurrency":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		return json.Marshal(backend.GetLLMConcurrency(p.SenderID))
+		return json.Marshal(backend.GetLLMConcurrency(senderID))
 	case "set_llm_concurrency":
 		var p struct {
-			SenderID string `json:"sender_id"`
-			Personal int    `json:"personal"`
+			Personal int `json:"personal"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return nil, backend.SetLLMConcurrency(p.SenderID, p.Personal)
+		return nil, backend.SetLLMConcurrency(senderID, p.Personal)
 	case "set_default_thinking_mode":
 		var p struct {
 			Mode string `json:"mode"`
@@ -311,8 +280,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(""))
+		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(senderID))
 	case "set_model_tiers":
+		if senderID != "admin" {
+			return nil, fmt.Errorf("admin only")
+		}
 		var llmCfg config.LLMConfig
 		if err := json.Unmarshal(params, &llmCfg); err != nil {
 			return nil, err
@@ -324,8 +296,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		return nil, nil
 	case "set_proxy_llm":
 		var p struct {
-			SenderID string `json:"sender_id"`
-			Model    string `json:"model"`
+			Model string `json:"model"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -334,17 +305,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		// SetProxyLLM(nil) would store a nil client and crash GetLLM,
 		// so use SwitchModel instead which only updates the cached model name.
 		if backend.LLMFactory() != nil {
-			backend.LLMFactory().SwitchModel(p.SenderID, p.Model)
+			backend.LLMFactory().SwitchModel(senderID, p.Model)
 		}
 		return nil, nil
 	case "clear_proxy_llm":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
-		backend.ClearProxyLLM(p.SenderID)
+		backend.ClearProxyLLM(senderID)
 		return nil, nil
 
 	// --- Memory ---
@@ -353,7 +318,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			Channel    string `json:"channel"`
 			ChatID     string `json:"chat_id"`
 			TargetType string `json:"target_type"`
-			SenderID   string `json:"sender_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -361,12 +325,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, p.SenderID)
+		return nil, backend.MultiSession().ClearMemory(context.Background(), p.Channel, p.ChatID, p.TargetType, senderID)
 	case "get_memory_stats":
 		var p struct {
-			Channel  string `json:"channel"`
-			ChatID   string `json:"chat_id"`
-			SenderID string `json:"sender_id"`
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -374,27 +337,20 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, p.SenderID)
+		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, senderID)
 		return json.Marshal(result)
 	case "get_user_token_usage":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		usage, err := backend.MultiSession().GetUserTokenUsage(p.SenderID)
+		usage, err := backend.MultiSession().GetUserTokenUsage(senderID)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(usage)
 	case "get_daily_token_usage":
 		var p struct {
-			SenderID string `json:"sender_id"`
-			Days     int    `json:"days"`
+			Days int `json:"days"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -402,7 +358,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		daily, err := backend.MultiSession().GetDailyTokenUsage(p.SenderID, p.Days)
+		daily, err := backend.MultiSession().GetDailyTokenUsage(senderID, p.Days)
 		if err != nil {
 			return nil, err
 		}
@@ -473,6 +429,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.ChatID == "" {
 			p.ChatID = senderID
 		}
+		if senderID != "admin" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
 		history, err := backend.GetHistory(p.Channel, p.ChatID)
 		if err != nil {
 			return nil, err
@@ -493,6 +452,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.ChatID == "" {
 			p.ChatID = senderID
 		}
+		if senderID != "admin" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
 		var cutoff time.Time
 		if p.Cutoff != "" {
 			var err error
@@ -505,12 +467,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 	// --- Subscriptions ---
 	case "list_subscriptions":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -518,7 +474,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return json.Marshal([]channel.Subscription{})
 		}
-		subs, err := svc.List(p.SenderID)
+		subs, err := svc.List(senderID)
 		if err != nil {
 			return nil, err
 		}
@@ -532,12 +488,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(result)
 	case "get_default_subscription":
-		var p struct {
-			SenderID string `json:"sender_id"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, err
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -545,7 +495,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		sub, err := svc.GetDefault(p.SenderID)
+		sub, err := svc.GetDefault(senderID)
 		if err != nil || sub == nil {
 			return nil, err
 		}
@@ -556,8 +506,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		})
 	case "add_subscription":
 		var p struct {
-			SenderID string                 `json:"sender_id"`
-			Sub      sqlite.LLMSubscription `json:"sub"`
+			Sub sqlite.LLMSubscription `json:"sub"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -569,6 +518,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
+		p.Sub.SenderID = senderID
 		return nil, svc.Add(&p.Sub)
 	case "remove_subscription":
 		var p struct {

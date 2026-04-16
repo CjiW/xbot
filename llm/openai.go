@@ -155,12 +155,13 @@ func (o *OpenAILLM) LoadModelsFromAPI(ctx context.Context) error {
 		return fmt.Errorf("openai models list: %w", err)
 	}
 
+	if len(models) == 0 {
+		return nil
+	}
+
 	// 更新模型列表
 	o.mu.Lock()
 	o.models = models
-	if o.defaultModel == "" && len(o.models) > 0 {
-		o.defaultModel = o.models[0]
-	}
 	if o.defaultModel == "" && len(o.models) > 0 {
 		o.defaultModel = o.models[0]
 	}

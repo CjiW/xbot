@@ -166,10 +166,22 @@ func (t *LogsTool) readLogs(logDir, filename string, lines int, level, grep stri
 	}
 
 	// 确定日志文件路径
-	var logPath string
-	if filename != "" {
-		logPath = filepath.Join(logDir, filename)
-	} else {
+		var logPath string
+		if filename != "" {
+			logPath = filepath.Join(logDir, filename)
+			// Security: prevent path traversal
+			absLogPath, err := filepath.Abs(logPath)
+			if err != nil {
+				return nil, fmt.Errorf("invalid log path: %w", err)
+			}
+			absLogDir, err := filepath.Abs(logDir)
+			if err != nil {
+				return nil, fmt.Errorf("invalid log directory: %w", err)
+			}
+			if !strings.HasPrefix(absLogPath, absLogDir+string(filepath.Separator)) && absLogPath != absLogDir {
+				return nil, fmt.Errorf("path traversal not allowed")
+			}
+		} else {
 		// 默认读取最新的日志文件
 		files, err := t.getLogFiles(logDir)
 		if err != nil {

@@ -13,20 +13,76 @@ const DefaultLLMConcurrency = 5
 // for personal (user-provided) LLM.
 const DefaultLLMConcurrencyPersonal = 3
 
+// tenantSem is a counting semaphore that supports dynamic capacity changes
+// without replacing the underlying channel, avoiding goroutine leaks.
+type tenantSem struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	count    int
+	capacity int
+}
+
+func newTenantSem(capacity int) *tenantSem {
+	s := &tenantSem{capacity: capacity}
+	s.cond = sync.NewCond(&s.mu)
+	return s
+}
+
+// acquire blocks until a slot is available or ctx is cancelled.
+func (s *tenantSem) acquire(ctx context.Context) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for s.count >= s.capacity {
+		// Wait with context cancellation support
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				s.cond.Broadcast()
+			case <-done:
+			}
+		}()
+
+		s.cond.Wait()
+		close(done) // signal the goroutine to stop
+
+		if ctx.Err() != nil {
+			return false
+		}
+	}
+	s.count++
+	return true
+}
+
+func (s *tenantSem) release() {
+	s.mu.Lock()
+	s.count--
+	s.mu.Unlock()
+	s.cond.Signal()
+}
+
+func (s *tenantSem) setCapacity(cap int) {
+	s.mu.Lock()
+	s.capacity = cap
+	s.mu.Unlock()
+	s.cond.Broadcast()
+}
+
 // LLMSemaphoreManager manages per-tenant LLM call concurrency using semaphores.
 // Each tenant (identified by OriginUserID) gets independent semaphores for
 // global LLM and personal LLM calls, preventing a single user from exhausting
 // shared resources.
 type LLMSemaphoreManager struct {
 	mu         sync.RWMutex
-	semaphores map[string]chan struct{} // key: "senderID:llmKey" → semaphore
+	semaphores map[string]*tenantSem // key: "senderID:llmKey" → semaphore
 	// llmKey: "global" for shared LLM, "personal" for user-provided LLM
 }
 
 // NewLLMSemaphoreManager creates a new LLMSemaphoreManager.
 func NewLLMSemaphoreManager() *LLMSemaphoreManager {
 	return &LLMSemaphoreManager{
-		semaphores: make(map[string]chan struct{}),
+		semaphores: make(map[string]*tenantSem),
 	}
 }
 
@@ -35,10 +91,8 @@ func NewLLMSemaphoreManager() *LLMSemaphoreManager {
 // getCapacity is called to dynamically read the current max concurrency setting.
 // Returns a release function that must be called when the LLM call completes.
 //
-// If capacity changes between calls (user updated settings), the semaphore is
-// recreated with the new capacity. Existing goroutines holding slots on the
-// old semaphore continue unaffected (the old semaphore won't be GC'd until
-// they release, but new requests use the new one).
+// The semaphore is never replaced — capacity changes are applied in-place via
+// setCapacity + Broadcast, so goroutines blocked in acquire are always woken.
 func (m *LLMSemaphoreManager) Acquire(ctx context.Context, senderID, llmKey string, getCapacity func() int) func() {
 	desired := getCapacity()
 	if desired <= 0 {
@@ -48,26 +102,25 @@ func (m *LLMSemaphoreManager) Acquire(ctx context.Context, senderID, llmKey stri
 
 	key := senderID + ":" + llmKey
 
-	// Double-check locking: check capacity, rebuild if mismatch
 	m.mu.RLock()
 	sem := m.semaphores[key]
 	m.mu.RUnlock()
 
-	if sem == nil || cap(sem) != desired {
+	if sem == nil {
 		m.mu.Lock()
 		sem = m.semaphores[key]
-		if sem == nil || cap(sem) != desired {
-			newSem := make(chan struct{}, desired)
-			m.semaphores[key] = newSem
-			sem = newSem
+		if sem == nil {
+			sem = newTenantSem(desired)
+			m.semaphores[key] = sem
 		}
 		m.mu.Unlock()
 	}
 
-	select {
-	case sem <- struct{}{}:
-		return func() { <-sem }
-	case <-ctx.Done():
+	// Update capacity in-place; Broadcast wakes any goroutines blocked in acquire
+	sem.setCapacity(desired)
+
+	if !sem.acquire(ctx) {
 		return func() {}
 	}
+	return sem.release
 }

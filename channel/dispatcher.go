@@ -40,7 +40,11 @@ func (d *Dispatcher) Run() {
 		select {
 		case <-d.done:
 			return
-		case msg := <-d.bus.Outbound:
+		case msg, ok := <-d.bus.Outbound:
+				if !ok {
+					log.Info("Outbound channel closed, dispatcher exiting")
+					return
+				}
 			d.mu.RLock()
 			ch, ok := d.channels[msg.Channel]
 			d.mu.RUnlock()

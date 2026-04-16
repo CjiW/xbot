@@ -54,11 +54,10 @@ func NewRunnerTokenStore(db *sql.DB) *RunnerTokenStore {
 
 // Generate creates a new token for the given user, replacing any existing one.
 // Returns the new entry.
-func (s *RunnerTokenStore) Generate(userID string, settings RunnerTokenSettings) *RunnerTokenEntry {
+func (s *RunnerTokenStore) Generate(userID string, settings RunnerTokenSettings) (*RunnerTokenEntry, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		log.WithError(err).Error("Failed to generate random token bytes")
-		return nil
+		return nil, fmt.Errorf("generate random token: %w", err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 
@@ -74,8 +73,7 @@ func (s *RunnerTokenStore) Generate(userID string, settings RunnerTokenSettings)
 			created_at = excluded.created_at
 	`, userID, token, settings.Mode, settings.DockerImage, settings.Workspace, now.Format(time.RFC3339))
 	if err != nil {
-		log.WithError(err).Error("Failed to store runner token")
-		return nil
+		return nil, fmt.Errorf("store runner token: %w", err)
 	}
 
 	return &RunnerTokenEntry{
@@ -83,7 +81,7 @@ func (s *RunnerTokenStore) Generate(userID string, settings RunnerTokenSettings)
 		UserID:    userID,
 		CreatedAt: now,
 		Settings:  settings,
-	}
+	}, nil
 }
 
 // Validate checks whether the token exists and is owned by the given user.
@@ -250,6 +248,7 @@ func (s *RunnerTokenStore) ListRunners(userID string) ([]RunnerInfo, error) {
 	for rows.Next() {
 		var r RunnerInfo
 		if err := rows.Scan(&r.Name, &r.Token, &r.Mode, &r.DockerImage, &r.Workspace, &r.CreatedAt, &r.LLMProvider, &r.LLMAPIKey, &r.LLMModel, &r.LLMBaseURL); err != nil {
+			log.WithError(err).Warn("Failed to scan runner row, skipping")
 			continue
 		}
 		runners = append(runners, r)

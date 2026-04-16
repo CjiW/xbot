@@ -37,6 +37,7 @@ type SessionMCPManager struct {
 	initialized       bool                      // 是否已初始化配置加载
 	initOnce          uint32                    // atomic state: 0=idle, 1=starting, 2=started (background goroutine launched)
 	initDone          chan struct{}             // 后台初始化完成信号（closed = done）
+	closed            uint32                    // atomic: 1 = Close() has been called
 	onChange          func()                    // 初始化完成后的回调（通知调用方重新索引）
 }
 
@@ -123,6 +124,10 @@ func (sm *SessionMCPManager) ensureInitAsync() {
 	}
 	go func() {
 		sm.mu.Lock()
+		if atomic.LoadUint32(&sm.closed) == 1 {
+			sm.mu.Unlock()
+			return
+		}
 		if err := sm.loadAndConnect(context.Background()); err != nil {
 			if err != errNotInitialized {
 				log.WithError(err).WithField("session", sm.sessionKey).Warn("Failed to load MCP servers for catalog")
@@ -231,6 +236,8 @@ func (sm *SessionMCPManager) UnloadInactiveServers() time.Time {
 
 // Close 关闭所有连接
 func (sm *SessionMCPManager) Close() {
+	atomic.StoreUint32(&sm.closed, 1)
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

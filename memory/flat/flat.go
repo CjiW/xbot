@@ -150,8 +150,8 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		}
 		ts := time.Now().Format("2006-01-02 15:04")
 		content := msg.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		if len([]rune(content)) > 500 {
+			content = string([]rune(content)[:500]) + "..."
 		}
 		lines = append(lines, fmt.Sprintf("[%s] %s%s: %s", ts, role, toolHint, content))
 	}
@@ -239,13 +239,17 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		}
 	}
 
-	// Write MEMORY.md
-	if args.MemoryUpdate != "" && args.MemoryUpdate != strings.TrimSpace(string(currentMemory)) {
-		memoryPath := filepath.Join(m.baseDir, memoryFileName)
-		if err := os.WriteFile(memoryPath, []byte(args.MemoryUpdate), 0o644); err != nil {
-			log.WithError(err).Error("Failed to write MEMORY.md")
+	// Write MEMORY.md atomically (tmp + rename to prevent corruption on crash)
+		if args.MemoryUpdate != "" && args.MemoryUpdate != strings.TrimSpace(string(currentMemory)) {
+			memoryPath := filepath.Join(m.baseDir, memoryFileName)
+			tmpPath := memoryPath + ".tmp"
+			if err := os.WriteFile(tmpPath, []byte(args.MemoryUpdate), 0o644); err != nil {
+				log.WithError(err).Error("Failed to write MEMORY.md temp file")
+			} else if err := os.Rename(tmpPath, memoryPath); err != nil {
+				log.WithError(err).Error("Failed to rename MEMORY.md temp file")
+				os.Remove(tmpPath) // cleanup temp file
+			}
 		}
-	}
 
 	// Process knowledge_updates
 	for _, ku := range args.KnowledgeUpdates {
@@ -276,8 +280,8 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 		}
 	}
 
-	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation done: lastConsolidated=0")
-	return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
+	log.WithField("tenant_id", m.tenantID).Infof("Memory consolidation done: lastConsolidated=%d", len(messages))
+	return memory.MemorizeResult{NewLastConsolidated: len(messages), OK: true}, nil
 }
 
 // Close 释放资源（FlatMemory 无需清理）。

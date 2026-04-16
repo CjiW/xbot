@@ -101,13 +101,14 @@ func IsInputTooLongError(err error) bool {
 	indicators := []string{
 		"range of input length",
 		"maximum context length",
-		"max_tokens",
+		"exceeds the maximum number of tokens",
 		"context_length_exceeded",
 		"prompt is too long",
 		"input too long",
 		"token limit",
 		"reduce the length",
 		"too many tokens",
+		"request too large",
 	}
 	for _, ind := range indicators {
 		if strings.Contains(msg, ind) {

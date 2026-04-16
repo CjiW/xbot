@@ -101,51 +101,53 @@ func (t *OAuthTool) buildAuthCard(provider, reason, authURL, state string) strin
 		providerDisplay = "飞书"
 	}
 
-	card := fmt.Sprintf(`{
-		"config": {
-			"wide_screen_mode": true
+	card := map[string]interface{}{
+		"config": map[string]interface{}{
+			"wide_screen_mode": true,
 		},
-		"header": {
+		"header": map[string]interface{}{
 			"template": "blue",
-			"title": {
-				"content": "授权 %s 访问",
-				"tag": "plain_text"
-			}
+			"title": map[string]interface{}{
+				"content": "授权 " + providerDisplay + " 访问",
+				"tag":     "plain_text",
+			},
 		},
-		"elements": [
-			{
+		"elements": []interface{}{
+			map[string]interface{}{
 				"tag": "div",
-				"text": {
-					"tag": "lark_md",
-					"content": "需要授权 **%s** 才能继续操作。\n\n点击下方按钮完成授权。"
-				}
+				"text": map[string]interface{}{
+					"tag":     "lark_md",
+					"content": "需要授权 **" + providerDisplay + "** 才能继续操作。\n\n点击下方按钮完成授权。",
+				},
 			},
-			{
+			map[string]interface{}{
 				"tag": "action",
-				"actions": [
-					{
-						"tag": "button",
-						"text": {
-							"tag": "plain_text",
-							"content": "点击授权"
-						},
+				"actions": []interface{}{
+					map[string]interface{}{
+						"tag":  "button",
+						"text": map[string]interface{}{"tag": "plain_text", "content": "点击授权"},
 						"type": "primary",
-						"url": "%s"
-					}
-				]
+						"url":  authURL,
+					},
+				},
 			},
-			{
-				"tag": "hr"
+			map[string]interface{}{
+				"tag": "hr",
 			},
-			{
+			map[string]interface{}{
 				"tag": "div",
-				"text": {
-					"tag": "plain_text",
-					"content": "授权完成后，您可以继续之前的操作。"
-				}
-			}
-		]
-	}`, providerDisplay, providerDisplay, authURL)
+				"text": map[string]interface{}{
+					"tag":     "plain_text",
+					"content": "授权完成后，您可以继续之前的操作。",
+				},
+			},
+		},
+	}
 
-	return card
+	data, err := json.Marshal(card)
+	if err != nil {
+		// Fallback: return minimal safe card
+		return `{"header":{"title":{"tag":"plain_text","content":"OAuth Authorization"}},"elements":[]}`
+	}
+	return string(data)
 }

@@ -4,7 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
+	"crypto/rand"
+	"math/big"
 	"os"
 	"os/signal"
 	"strings"
@@ -115,18 +116,29 @@ func main() {
 	}
 
 	sigCh := make(chan os.Signal, 1)
+	stopCh := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		log.Printf("Received shutdown signal, stopping...")
-		os.Exit(0)
+		close(stopCh)
 	}()
 
 	attempt := 0
 	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
 		err := runSession(serverURL, userID, *flagToken, execWorkspace, shell, handler)
 		if err == nil {
 			return
+		}
+		select {
+		case <-stopCh:
+			return
+		default:
 		}
 		attempt++
 		if maxRetries > 0 && attempt >= maxRetries {
@@ -171,6 +183,18 @@ func runSession(serverURL, userID, authToken, workspace, shell string, handler *
 	return fmt.Errorf("read loop exited")
 }
 
+// mustRandInt63n returns a cryptographically random int64 in [0, n).
+func mustRandInt63n(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	r, err := rand.Int(rand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0 // fallback to no jitter on error
+	}
+	return r.Int64()
+}
+
 // backoff 返回带随机抖动的指数退避延迟。
 func backoff(attempt int) time.Duration {
 	delay := baseDelay
@@ -181,6 +205,6 @@ func backoff(attempt int) time.Duration {
 			break
 		}
 	}
-	jitter := time.Duration(rand.Int63n(int64(delay) / 4))
+	jitter := time.Duration(mustRandInt63n(int64(delay) / 4))
 	return delay + jitter
 }

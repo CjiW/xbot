@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -322,7 +323,6 @@ func (s *LLMSubscriptionService) Rename(id, name string) error {
 
 // newULID generates a new ULID string.
 func newULID() string {
-	// Use crypto/rand + timestamp for a simple unique ID
 	b := make([]byte, 16)
 	// time component (6 bytes, ms since epoch)
 	now := time.Now()
@@ -333,9 +333,12 @@ func newULID() string {
 	b[3] = byte(ms >> 16)
 	b[4] = byte(ms >> 8)
 	b[5] = byte(ms)
-	// random component (10 bytes) — simplified, no external dependency
-	for i := 6; i < 16; i++ {
-		b[i] = byte(now.UnixNano() >> (i * 7)) // pseudo-unique from nanos
+	// random component (10 bytes) — cryptographically secure
+	if _, err := rand.Read(b[6:16]); err != nil {
+		// This should never happen with /dev/urandom, but fallback to timestamp-based
+		for i := 6; i < 16; i++ {
+			b[i] = byte(now.UnixNano() >> (i * 7))
+		}
 	}
 	return fmt.Sprintf("%x", b)
 }

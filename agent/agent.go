@@ -543,7 +543,7 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 		}),
 	)
 	if err != nil {
-		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
+		return nil, fmt.Errorf("initialize multi-tenant session: %w", err)
 	}
 	return multiSession, nil
 }
@@ -693,7 +693,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 }
 
 // New 创建 Agent
-func New(cfg Config) *Agent {
+func New(cfg Config) (*Agent, error) {
 	// 1. 设置配置默认值
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = 2000
@@ -735,7 +735,10 @@ func New(cfg Config) *Agent {
 	skillStore, agentStore, chatHistory, registry, cardBuilder := initStores(cfg)
 
 	// 3. 初始化会话管理器
-	multiSession, _ := initSession(cfg)
+	multiSession, err := initSession(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init session: %w", err)
+	}
 
 	// 4. 构建 Agent 实例
 	sandboxMode := cfg.SandboxMode
@@ -780,7 +783,7 @@ func New(cfg Config) *Agent {
 	// 6. 启动 bg task 通知路由 goroutine
 	go agent.bgNotifyLoop()
 
-	return agent
+	return agent, nil
 }
 
 // GetContextManager 获取当前上下文管理器（读锁保护）。
@@ -825,10 +828,20 @@ func (a *Agent) SetContextMode(mode string) error {
 	return nil
 }
 
-func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
-func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
+func (a *Agent) SetMaxIterations(n int) {
+	a.contextManagerMu.Lock()
+	a.maxIterations = n
+	a.contextManagerMu.Unlock()
+}
+func (a *Agent) SetMaxConcurrency(n int) {
+	a.contextManagerMu.Lock()
+	a.maxConcurrency = n
+	a.contextManagerMu.Unlock()
+}
 func (a *Agent) SetMaxContextTokens(n int) {
+	a.contextManagerMu.Lock()
 	a.contextManagerConfig.MaxContextTokens = n
+	a.contextManagerMu.Unlock()
 }
 
 // SetSandbox replaces the sandbox instance and mode at runtime (e.g. when user
@@ -933,6 +946,10 @@ func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
 
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
+	// Cancel agent-level context to stop background subagents
+	if a.agentCancel != nil {
+		a.agentCancel()
+	}
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
 	if a.cronSch != nil {
 		a.cronSch.Stop()

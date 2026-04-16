@@ -83,8 +83,12 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else if ctx.Err() == context.DeadlineExceeded {
+				result.ExitCode = exitErr.ExitCode()
+				// Even with ExitError, check if context was cancelled (timeout)
+				if ctx.Err() == context.DeadlineExceeded {
+					result.TimedOut = true
+				}
+			} else if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = -1
 			result.TimedOut = true
 		} else {
@@ -403,10 +407,10 @@ func noneSandboxExecAsync(ctx context.Context, spec ExecSpec, outputBuf func(str
 	// profile sourcing spawns background children that inherit pipe FDs,
 	// io.Copy never gets EOF and cmd.Wait() hangs forever.
 	state, _ := cmd.Process.Wait()
-	// Close pipe read ends to unblock stream goroutines
+	// Wait for stream goroutines to finish reading before closing pipes
+	wg.Wait()
 	stdoutPipe.Close()
 	stderrPipe.Close()
-	wg.Wait()
 
 	exitCode := extractExitCodeFromState(state)
 

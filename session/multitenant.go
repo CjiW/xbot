@@ -714,12 +714,15 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 
 	switch targetType {
 	case "session":
-		appendErr("session", m.sessionSvc.Clear(tenantID))
-		// Evict cached session so next request loads fresh state
-		sessionKey := channel + ":" + chatID
-		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
-		m.mu.Unlock()
+			appendErr("session", m.sessionSvc.Clear(tenantID))
+			// Evict cached session so next request loads fresh state
+			sessionKey := channel + ":" + chatID
+			m.mu.Lock()
+			if sess, ok := m.tenantCache[sessionKey]; ok {
+				sess.Close()
+				delete(m.tenantCache, sessionKey)
+			}
+			m.mu.Unlock()
 	case "core_persona":
 		appendErr("persona", m.coreSvc.ClearBlock(tenantID, "persona", ""))
 	case "core_human":
@@ -727,12 +730,15 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 	case "core_working":
 		appendErr("working_context", m.coreSvc.ClearBlock(tenantID, "working_context", ""))
 	case "core_all":
-		appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
-		// Evict cached session to reset in-memory core memory references
-		sessionKey := channel + ":" + chatID
-		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
-		m.mu.Unlock()
+			appendErr("core_all", m.coreSvc.ClearAllBlocks(tenantID, userID))
+			// Evict cached session to reset in-memory core memory references
+			sessionKey := channel + ":" + chatID
+			m.mu.Lock()
+			if sess, ok := m.tenantCache[sessionKey]; ok {
+				sess.Close()
+				delete(m.tenantCache, sessionKey)
+			}
+			m.mu.Unlock()
 	case "long_term":
 		appendErr("long_term", m.memorySvc.ClearLongTerm(ctx, tenantID))
 	case "event_history":
@@ -751,10 +757,13 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 			appendErr("archival", m.archivalSvc.ClearAll(ctx, tenantID))
 		}
 		// Evict session from cache to reset in-memory state
-		sessionKey := channel + ":" + chatID
-		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
-		m.mu.Unlock()
+			sessionKey := channel + ":" + chatID
+			m.mu.Lock()
+			if sess, ok := m.tenantCache[sessionKey]; ok {
+				sess.Close()
+				delete(m.tenantCache, sessionKey)
+			}
+			m.mu.Unlock()
 	default:
 		return fmt.Errorf("unknown target type: %s", targetType)
 	}

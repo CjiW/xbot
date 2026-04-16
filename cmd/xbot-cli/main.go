@@ -144,6 +144,7 @@ func newCLIApp(serverURL, token string) *cliApp {
 		backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 		backend.IndexGlobalTools()
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
+		backend.LLMFactory().SetConfigSubs(func() []config.SubscriptionConfig { return cfg.Subscriptions })
 	}
 
 	return &cliApp{

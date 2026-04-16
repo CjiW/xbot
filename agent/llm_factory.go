@@ -16,8 +16,9 @@ import (
 // LLMFactory 管理用户自定义 LLM 客户端的创建和缓存
 type LLMFactory struct {
 	configSvc           *sqlite.UserLLMConfigService
-	subscriptionSvc     *sqlite.LLMSubscriptionService // 多订阅管理
-	settingsSvc         *SettingsService               // 用于读写用户并发配置
+	subscriptionSvc     *sqlite.LLMSubscriptionService     // 多订阅管理 (DB-backed)
+	configSubsFn        func() []config.SubscriptionConfig // CLI config.json subscriptions (non-DB)
+	settingsSvc         *SettingsService                   // 用于读写用户并发配置
 	defaultLLM          llm.LLM
 	defaultModel        string
 	defaultThinkingMode string
@@ -163,6 +164,14 @@ func (f *LLMFactory) InvalidateCustomLLMCache(senderID string) {
 // SetSubscriptionSvc sets the subscription service (optional, for multi-subscription support).
 func (f *LLMFactory) SetSubscriptionSvc(svc *sqlite.LLMSubscriptionService) {
 	f.subscriptionSvc = svc
+}
+
+// SetConfigSubs sets a function that returns CLI config.json subscriptions (used when DB subscriptions are empty).
+// Using a function instead of a slice ensures we always read the latest subscriptions after Add/Remove/Update.
+func (f *LLMFactory) SetConfigSubs(fn func() []config.SubscriptionConfig) {
+	f.mu.Lock()
+	f.configSubsFn = fn
+	f.mu.Unlock()
 }
 
 // GetSubscriptionSvc returns the subscription service.
@@ -486,18 +495,40 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 	// Step 1: look up from cached model lists in DB — O(1), no API calls
 	modelMap := f.buildModelSubscriptionMap(senderID)
 	if sub, ok := modelMap[resolvedModel]; ok {
-		log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 1}).Debug("[LLM] GetLLMForModel: cache hit")
+		log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 1}).Info("[LLM] GetLLMForModel: cache hit")
 		client := f.createClientFromSub(sub, resolvedModel)
 		if client != nil {
 			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 		}
 	} else {
-		log.WithField("model", resolvedModel).Debug("[LLM] GetLLMForModel: cache miss")
+		log.WithField("model", resolvedModel).Info("[LLM] GetLLMForModel: cache miss, trying subscriptions")
 	}
 
-	// Step 2: cache miss or empty — try each subscription synchronously.
-	// This handles first-run (cached_models is empty) and cross-subscription models.
-	// On success, OnModelsLoaded callback persists the list to DB for future O(1) lookups.
+	// Step 2: cache miss — try each subscription.
+	// First try config.json subscriptions (CLI mode), then DB subscriptions.
+	// Config subs match on Model field only (no CachedModels).
+	f.mu.RLock()
+	getConfigSubs := f.configSubsFn
+	f.mu.RUnlock()
+	var configSubs []config.SubscriptionConfig
+	if getConfigSubs != nil {
+		configSubs = getConfigSubs()
+	}
+	for _, cs := range configSubs {
+		if cs.BaseURL == "" || cs.APIKey == "" {
+			continue
+		}
+		if cs.Model == resolvedModel {
+			sub := configSubToLLMSubscription(cs)
+			client := f.createClientFromSub(sub, resolvedModel)
+			if client != nil {
+				log.WithFields(log.Fields{"model": resolvedModel, "sub": cs.Name, "step": 2, "source": "config"}).Info("[LLM] GetLLMForModel: found in config sub")
+				return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+			}
+		}
+	}
+
+	// DB subscriptions (same logic as before)
 	if f.subscriptionSvc != nil && senderID != "" {
 		subs, err := f.subscriptionSvc.List(senderID)
 		if err == nil && len(subs) > 0 {
@@ -505,65 +536,126 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 				if sub.BaseURL == "" || sub.APIKey == "" {
 					continue
 				}
-				client := f.createClientFromSub(sub, resolvedModel)
-				if client == nil {
-					continue
+				// Check DB cache first (O(1) per sub, no API call)
+				found := false
+				for _, m := range sub.CachedModels {
+					if m == resolvedModel {
+						found = true
+						break
+					}
 				}
-				// Try to load models from API if not cached yet
+				if !found && sub.Model == resolvedModel {
+					found = true
+				}
+				if found {
+					client := f.createClientFromSub(sub, resolvedModel)
+					if client != nil {
+						log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 2}).Info("[LLM] GetLLMForModel: found in sub cache")
+						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+					}
+				}
+				// No cache — try loading from API (first-run for this subscription)
 				if len(sub.CachedModels) == 0 {
+					client := f.createClientFromSub(sub, resolvedModel)
+					if client == nil {
+						continue
+					}
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					if loader, ok := client.(llm.ModelLoader); ok {
 						_ = loader.LoadModelsFromAPI(ctx)
 					}
 					cancel()
-					// Re-check after loading
-					for _, m := range client.ListModels() {
-						if m == resolvedModel {
-							return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+					// OnModelsLoaded callback updated DB — re-read sub to get fresh cache
+					updatedSubs, err2 := f.subscriptionSvc.List(senderID)
+					if err2 == nil {
+						for _, us := range updatedSubs {
+							if us.ID == sub.ID {
+								for _, m := range us.CachedModels {
+									if m == resolvedModel {
+										log.WithFields(log.Fields{"model": resolvedModel, "sub": sub.Name, "step": 2}).Info("[LLM] GetLLMForModel: found after API load")
+										return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+									}
+								}
+							}
 						}
 					}
 				}
-				// Check if model is in the already-loaded list
-				for _, m := range client.ListModels() {
-					if m == resolvedModel {
-						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+			}
+		}
+	}
+
+	// Fallback: model not found in any subscription — use default client with its OWN model
+	// (not resolvedModel, to avoid sending wrong model to wrong endpoint).
+	log.WithFields(log.Fields{"model": resolvedModel, "fallback": true}).Warn("[LLM] GetLLMForModel: model not found in any subscription, using default")
+	client, defaultModel, maxCtx, tm := f.GetLLM(senderID)
+	return client, defaultModel, maxCtx, tm, false
+}
+
+// buildModelSubscriptionMap builds a model_name → subscription lookup table from
+// cached model lists in DB and config.json subscriptions. No API calls.
+// Each subscription's active model (sub.Model) is always included.
+// Config subs are checked first (CLI mode), then DB subs (server mode).
+func (f *LLMFactory) buildModelSubscriptionMap(senderID string) map[string]*sqlite.LLMSubscription {
+	m := make(map[string]*sqlite.LLMSubscription)
+
+	// First: config.json subscriptions (CLI mode)
+	f.mu.RLock()
+	getConfigSubs := f.configSubsFn
+	f.mu.RUnlock()
+	var configSubs []config.SubscriptionConfig
+	if getConfigSubs != nil {
+		configSubs = getConfigSubs()
+	}
+	for _, cs := range configSubs {
+		if cs.BaseURL == "" || cs.APIKey == "" {
+			continue
+		}
+		sub := configSubToLLMSubscription(cs)
+		if sub.Model != "" {
+			if _, exists := m[sub.Model]; !exists {
+				m[sub.Model] = sub
+			}
+		}
+		// Config subs don't have CachedModels — only Model field is available
+	}
+
+	// Second: DB subscriptions (server mode)
+	if f.subscriptionSvc != nil && senderID != "" {
+		subs, err := f.subscriptionSvc.List(senderID)
+		if err == nil && len(subs) > 0 {
+			for _, sub := range subs {
+				if sub.BaseURL == "" || sub.APIKey == "" {
+					continue
+				}
+				for _, modelName := range sub.CachedModels {
+					if _, exists := m[modelName]; !exists {
+						m[modelName] = sub
+					}
+				}
+				if sub.Model != "" {
+					if _, exists := m[sub.Model]; !exists {
+						m[sub.Model] = sub
 					}
 				}
 			}
 		}
 	}
-
-	// Fallback: use default client (works for CLI mode without subscriptions)
-	client, _, maxCtx, tm := f.GetLLM(senderID)
-	return client, resolvedModel, maxCtx, tm, true
+	return m
 }
 
-// buildModelSubscriptionMap builds a model_name → subscription lookup table from
-// cached model lists in DB. No API calls, no client creation — pure DB lookup.
-// Each subscription's active model (sub.Model) is always included.
-func (f *LLMFactory) buildModelSubscriptionMap(senderID string) map[string]*sqlite.LLMSubscription {
-	m := make(map[string]*sqlite.LLMSubscription)
-	if f.subscriptionSvc == nil || senderID == "" {
-		return m
+// configSubToLLMSubscription converts a config.SubscriptionConfig to sqlite.LLMSubscription
+// for use in buildModelSubscriptionMap.
+func configSubToLLMSubscription(cs config.SubscriptionConfig) *sqlite.LLMSubscription {
+	return &sqlite.LLMSubscription{
+		ID:              cs.ID,
+		Name:            cs.Name,
+		Provider:        cs.Provider,
+		BaseURL:         cs.BaseURL,
+		APIKey:          cs.APIKey,
+		Model:           cs.Model,
+		MaxOutputTokens: cs.MaxOutputTokens,
+		ThinkingMode:    cs.ThinkingMode,
 	}
-	subs, err := f.subscriptionSvc.List(senderID)
-	if err != nil || len(subs) == 0 {
-		return m
-	}
-	for _, sub := range subs {
-		if sub.BaseURL == "" || sub.APIKey == "" {
-			continue
-		}
-		for _, modelName := range sub.CachedModels {
-			if _, exists := m[modelName]; !exists {
-				m[modelName] = sub
-			}
-		}
-		if sub.Model != "" {
-			m[sub.Model] = sub
-		}
-	}
-	return m
 }
 
 // createClientFromSub 从订阅创建 LLM 客户端，使用指定的模型名（而非订阅的默认模型）

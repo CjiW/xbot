@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +50,10 @@ type RemoteBackend struct {
 	connMu    sync.Mutex
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// readPump lifecycle — WaitGroup ensures old readPump exits
+	// before reconnect spawns a new one, preventing goroutine leaks.
+	readPumpWg sync.WaitGroup
 
 	// Outbound message callback (for final agent replies)
 	outboundMu sync.RWMutex
@@ -122,6 +125,7 @@ func (b *RemoteBackend) Start(ctx context.Context) error {
 	if err := b.connect(ctx); err != nil {
 		return fmt.Errorf("connect to %s: %w", b.serverURL, err)
 	}
+	b.readPumpWg.Add(1)
 	go b.readPump(ctx)
 	go b.reconnectLoop(ctx)
 	go b.pingLoop(ctx)
@@ -253,6 +257,7 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) readPump(ctx context.Context) {
+	defer b.readPumpWg.Done()
 	for {
 		select {
 		case <-b.done:
@@ -480,6 +485,7 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 					continue
 				}
 				log.Info("Reconnected to server")
+				b.readPumpWg.Add(1)
 				go b.readPump(ctx)
 				break
 			}
@@ -611,23 +617,33 @@ func (b *RemoteBackend) SetContextMode(mode string) error {
 }
 
 func (b *RemoteBackend) SetMaxIterations(n int) {
-	_ = b.callRPCVoid("set_max_iterations", map[string]int{"n": n})
+	if err := b.callRPCVoid("set_max_iterations", map[string]int{"n": n}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetMaxIterations RPC failed")
+	}
 }
 
 func (b *RemoteBackend) SetMaxConcurrency(n int) {
-	_ = b.callRPCVoid("set_max_concurrency", map[string]int{"n": n})
+	if err := b.callRPCVoid("set_max_concurrency", map[string]int{"n": n}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetMaxConcurrency RPC failed")
+	}
 }
 
 func (b *RemoteBackend) SetMaxContextTokens(n int) {
-	_ = b.callRPCVoid("set_max_context_tokens", map[string]int{"n": n})
+	if err := b.callRPCVoid("set_max_context_tokens", map[string]int{"n": n}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetMaxContextTokens RPC failed")
+	}
 }
 
 func (b *RemoteBackend) SetProxyLLM(senderID string, proxy *llm.ProxyLLM, model string) {
-	_ = b.callRPCVoid("set_proxy_llm", map[string]string{"sender_id": senderID, "model": model})
+	if err := b.callRPCVoid("set_proxy_llm", map[string]string{"sender_id": senderID, "model": model}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: SetProxyLLM RPC failed")
+	}
 }
 
 func (b *RemoteBackend) ClearProxyLLM(senderID string) {
-	_ = b.callRPCVoid("clear_proxy_llm", map[string]string{"sender_id": senderID})
+	if err := b.callRPCVoid("clear_proxy_llm", map[string]string{"sender_id": senderID}); err != nil {
+		log.WithError(err).Warn("RemoteBackend: ClearProxyLLM RPC failed")
+	}
 }
 
 func (b *RemoteBackend) SetUserModel(senderID, model string) error {
@@ -893,9 +909,10 @@ func (b *RemoteBackend) SetSubscriptionModel(id, model string) error {
 // History
 // ---------------------------------------------------------------------------
 
-func (b *RemoteBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error) {
-	// Server resolves channel/chatID from the authenticated WS connection.
-	raw, err := b.callRPC("get_history", nil)
+func (b *RemoteBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, error) {
+	raw, err := b.callRPC("get_history", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -909,12 +926,12 @@ func (b *RemoteBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error
 	return result, nil
 }
 
-func (b *RemoteBackend) TrimHistory(_, _ string, cutoff time.Time) error {
+func (b *RemoteBackend) TrimHistory(ch, chatID string, cutoff time.Time) error {
 	if cutoff.IsZero() {
 		return nil
 	}
-	// Server resolves channel/chatID from the authenticated WS connection.
 	return b.callRPCVoid("trim_history", map[string]any{
+		"channel": ch, "chat_id": chatID,
 		"cutoff": cutoff.Format(time.RFC3339),
 	})
 }
@@ -929,7 +946,9 @@ func (b *RemoteBackend) Close() error {
 }
 
 func (b *RemoteBackend) ResetTokenState() {
-	b.callRPCVoid("reset_token_state", nil)
+	if err := b.callRPCVoid("reset_token_state", nil); err != nil {
+		log.WithError(err).Warn("RemoteBackend: ResetTokenState RPC failed")
+	}
 }
 
 func (b *RemoteBackend) Run(ctx context.Context) error {
@@ -965,5 +984,3 @@ func RPCMethodList() []string {
 		"set_default_subscription", "rename_subscription",
 	}
 }
-
-var _ = strconv.Itoa(len(RPCMethodList()))

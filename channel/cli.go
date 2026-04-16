@@ -90,23 +90,7 @@ func (c *CLIChannel) Start() error {
 		c.model.sendInboundFn = c.pendingSendInboundFn
 	}
 	if c.pendingHistory != nil {
-		for _, hm := range c.pendingHistory {
-			cm := cliMessage{
-				role:      hm.Role,
-				content:   hm.Content,
-				timestamp: hm.Timestamp,
-				isPartial: false,
-				dirty:     true,
-			}
-			if len(hm.Iterations) > 0 {
-				cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
-				for i, hi := range hm.Iterations {
-					cm.iterations[i] = cliIterationSnapshot(hi)
-				}
-			}
-			c.model.messages = append(c.model.messages, cm)
-		}
-		log.WithField("count", len(c.pendingHistory)).Info("Restored cached session history (remote)")
+		c.LoadHistory(c.pendingHistory)
 		c.pendingHistory = nil
 	}
 	c.model.channelName = "cli"

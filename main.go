@@ -125,6 +125,15 @@ func setupOAuth(cfg *config.Config, dbPath string) (*oauth.Server, *oauth.Manage
 	return oauthServer, oauthManager, feishuProvider, sharedDB, nil
 }
 
+// maskAPIKey masks an API key for safe transport over WS RPC.
+// Shows first 4 chars + "****" so users can identify the key.
+func maskAPIKey(key string) string {
+	if len(key) <= 4 {
+		return "****"
+	}
+	return key[:4] + "****"
+}
+
 // handleCLIRPC dispatches RPC requests from CLI RemoteBackend clients
 // to the server's LocalBackend. This is the server-side counterpart of
 // RemoteBackend.callRPC().
@@ -445,19 +454,39 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 	// --- History ---
 	case "get_history":
-		// Use authenticated senderID to resolve the tenant session.
-		// CLI remote clients use channel="web", chatID=senderID.
-		history, err := backend.GetHistory("web", senderID)
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		// If client doesn't send channel/chatID, fall back to auth context.
+		if p.Channel == "" {
+			p.Channel = "web"
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
+		}
+		history, err := backend.GetHistory(p.Channel, p.ChatID)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(history)
 	case "trim_history":
 		var p struct {
-			Cutoff string `json:"cutoff"`
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+			Cutoff  string `json:"cutoff"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if p.Channel == "" {
+			p.Channel = "web"
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
 		}
 		var cutoff time.Time
 		if p.Cutoff != "" {
@@ -467,7 +496,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 				return nil, fmt.Errorf("invalid cutoff format: %w", err)
 			}
 		}
-		return nil, backend.TrimHistory("web", senderID, cutoff)
+		return nil, backend.TrimHistory(p.Channel, p.ChatID, cutoff)
 
 	// --- Subscriptions ---
 	case "list_subscriptions":
@@ -492,7 +521,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		for i, s := range subs {
 			result[i] = channel.Subscription{
 				ID: s.ID, Name: s.Name, Provider: s.Provider,
-				BaseURL: s.BaseURL, APIKey: s.APIKey,
+				BaseURL: s.BaseURL, APIKey: maskAPIKey(s.APIKey),
 				Model: s.Model, Active: s.IsDefault,
 			}
 		}
@@ -517,7 +546,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(channel.Subscription{
 			ID: sub.ID, Name: sub.Name, Provider: sub.Provider,
-			BaseURL: sub.BaseURL, APIKey: sub.APIKey,
+			BaseURL: sub.BaseURL, APIKey: maskAPIKey(sub.APIKey),
 			Model: sub.Model, Active: sub.IsDefault,
 		})
 	case "add_subscription":

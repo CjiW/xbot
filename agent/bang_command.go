@@ -68,12 +68,12 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 	// If output is too long, handle based on channel:
 	// - Feishu: write to a .md file and send as file link (feishu renders markdown file links as downloadable cards)
 	// - Other channels (CLI, Web, etc.): truncate inline (file links are meaningless)
-	if len([]rune(content)) > bangOutputMaxLen {
+	runes := []rune(content)
+	if len(runes) > bangOutputMaxLen {
 		if msg.Channel == "feishu" {
 			filePath, err := a.writeBangOutputFile(ctx, workspaceRoot, command, output, exitErr, sbUID)
 			if err != nil {
 				log.WithError(err).Warn("Failed to write bang output file, sending truncated")
-				runes := []rune(content)
 				content = string(runes[:bangOutputMaxLen-100]) + "\n...\n(output truncated, full output write failed)"
 			} else {
 				fileName := filepath.Base(filePath)
@@ -81,7 +81,6 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 			}
 		} else {
 			// Non-feishu channels: truncate inline
-			runes := []rune(content)
 			content = string(runes[:bangOutputMaxLen-100]) + "\n...\n(output truncated)"
 		}
 	}

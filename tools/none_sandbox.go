@@ -83,12 +83,12 @@ func (s *NoneSandbox) Exec(ctx context.Context, spec ExecSpec) (*ExecResult, err
 
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-				result.ExitCode = exitErr.ExitCode()
-				// Even with ExitError, check if context was cancelled (timeout)
-				if ctx.Err() == context.DeadlineExceeded {
-					result.TimedOut = true
-				}
-			} else if ctx.Err() == context.DeadlineExceeded {
+			result.ExitCode = exitErr.ExitCode()
+			// Even with ExitError, check if context was cancelled (timeout)
+			if ctx.Err() == context.DeadlineExceeded {
+				result.TimedOut = true
+			}
+		} else if ctx.Err() == context.DeadlineExceeded {
 			result.ExitCode = -1
 			result.TimedOut = true
 		} else {

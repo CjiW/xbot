@@ -240,7 +240,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		log.Ctx(ctx).WithError(err).Warn("Failed to count tokens for compression")
 	}
 
-	threshold := int(float64(a.contextManagerConfig.MaxContextTokens) * a.contextManagerConfig.CompressionThreshold)
+	threshold := int(float64(a.getMaxContextTokens()) * a.contextManagerConfig.CompressionThreshold)
 	if err == nil && tokenCount < threshold {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,

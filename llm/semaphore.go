@@ -1,11 +1,11 @@
 package llm
 
 import (
-		"context"
-		"sync"
+	"context"
+	"sync"
 
-		log "xbot/logger"
-	)
+	log "xbot/logger"
+)
 
 // DefaultLLMConcurrency is the default max concurrent LLM calls per tenant
 // for the global (shared) LLM.
@@ -58,16 +58,16 @@ func (s *tenantSem) acquire(ctx context.Context) bool {
 }
 
 func (s *tenantSem) release() {
-		s.mu.Lock()
-		if s.count <= 0 {
-			s.mu.Unlock()
-			log.Warn("semaphore underflow")
-			return
-		}
-		s.count--
+	s.mu.Lock()
+	if s.count <= 0 {
 		s.mu.Unlock()
-		s.cond.Signal()
+		log.Warn("semaphore underflow")
+		return
 	}
+	s.count--
+	s.mu.Unlock()
+	s.cond.Signal()
+}
 
 func (s *tenantSem) setCapacity(cap int) {
 	s.mu.Lock()

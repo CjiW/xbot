@@ -240,16 +240,16 @@ func (m *FlatMemory) Memorize(ctx context.Context, input memory.MemorizeInput) (
 	}
 
 	// Write MEMORY.md atomically (tmp + rename to prevent corruption on crash)
-		if args.MemoryUpdate != "" && args.MemoryUpdate != strings.TrimSpace(string(currentMemory)) {
-			memoryPath := filepath.Join(m.baseDir, memoryFileName)
-			tmpPath := memoryPath + ".tmp"
-			if err := os.WriteFile(tmpPath, []byte(args.MemoryUpdate), 0o644); err != nil {
-				log.WithError(err).Error("Failed to write MEMORY.md temp file")
-			} else if err := os.Rename(tmpPath, memoryPath); err != nil {
-				log.WithError(err).Error("Failed to rename MEMORY.md temp file")
-				os.Remove(tmpPath) // cleanup temp file
-			}
+	if args.MemoryUpdate != "" && args.MemoryUpdate != strings.TrimSpace(string(currentMemory)) {
+		memoryPath := filepath.Join(m.baseDir, memoryFileName)
+		tmpPath := memoryPath + ".tmp"
+		if err := os.WriteFile(tmpPath, []byte(args.MemoryUpdate), 0o644); err != nil {
+			log.WithError(err).Error("Failed to write MEMORY.md temp file")
+		} else if err := os.Rename(tmpPath, memoryPath); err != nil {
+			log.WithError(err).Error("Failed to rename MEMORY.md temp file")
+			os.Remove(tmpPath) // cleanup temp file
 		}
+	}
 
 	// Process knowledge_updates
 	for _, ku := range args.KnowledgeUpdates {

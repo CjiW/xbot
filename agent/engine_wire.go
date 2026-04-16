@@ -103,7 +103,7 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations:   a.maxIterations,
+		MaxIterations:   a.getMaxIterations(),
 		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
 
 		// Session
@@ -662,7 +662,7 @@ func (a *Agent) buildSubAgentRunConfig(
 		}(),
 		InitialCWD: parentCtx.CurrentDir, // 继承父 Agent 的 CWD
 
-		MaxIterations: a.maxIterations, // 继承主 Agent 配置
+		MaxIterations: a.getMaxIterations(), // 继承主 Agent 配置
 		// SubAgent 不设独立超时，直接使用父 context 携带的 deadline
 
 		// LLM 并发限流：继承父 Agent 的 per-tenant 信号量

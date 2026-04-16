@@ -717,20 +717,20 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 			return buildRunnerConnectCmd(cfg, entry)
 		},
 		RunnerTokenGenerate: func(senderID, mode, dockerImage, workspace string) (string, error) {
-				db := tools.GetRunnerTokenDB()
-				if db == nil {
+			db := tools.GetRunnerTokenDB()
+			if db == nil {
 				return "", fmt.Errorf("remote sandbox not configured")
-				}
-				entry, err := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+			}
+			entry, err := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
 				Mode:        mode,
 				DockerImage: dockerImage,
 				Workspace:   workspace,
-				})
-				if err != nil {
+			})
+			if err != nil {
 				return "", fmt.Errorf("generate token: %w", err)
-				}
-				return buildRunnerConnectCmd(cfg, entry), nil
-			},
+			}
+			return buildRunnerConnectCmd(cfg, entry), nil
+		},
 		RunnerTokenRevoke: func(senderID string) error {
 			db := tools.GetRunnerTokenDB()
 			if db == nil {

@@ -58,24 +58,24 @@ func (s *Scheduler) StartDelayed(delay time.Duration) {
 		s.mu.Unlock()
 
 		go func() {
-				// Wait for the delay, but allow Stop() to interrupt
-				log.WithField("delay", delay).Info("Cron scheduler waiting before start")
-				select {
-				case <-time.After(delay):
-				case <-s.stopCh:
-					s.mu.Lock()
-					s.running = false
-					s.mu.Unlock()
-					log.Info("Cron scheduler stopped during delay")
-					return
-				}
+			// Wait for the delay, but allow Stop() to interrupt
+			log.WithField("delay", delay).Info("Cron scheduler waiting before start")
+			select {
+			case <-time.After(delay):
+			case <-s.stopCh:
+				s.mu.Lock()
+				s.running = false
+				s.mu.Unlock()
+				log.Info("Cron scheduler stopped during delay")
+				return
+			}
 
-				// Clean up expired jobs before first tick
-				s.cleanupExpiredJobs()
+			// Clean up expired jobs before first tick
+			s.cleanupExpiredJobs()
 
-				go s.runLoop()
-				log.Info("Cron scheduler started after delay")
-			}()
+			go s.runLoop()
+			log.Info("Cron scheduler started after delay")
+		}()
 	})
 }
 

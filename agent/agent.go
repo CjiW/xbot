@@ -844,6 +844,24 @@ func (a *Agent) SetMaxContextTokens(n int) {
 	a.contextManagerMu.Unlock()
 }
 
+func (a *Agent) getMaxIterations() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.maxIterations
+}
+
+func (a *Agent) getMaxConcurrency() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.maxConcurrency
+}
+
+func (a *Agent) getMaxContextTokens() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.contextManagerConfig.MaxContextTokens
+}
+
 // SetSandbox replaces the sandbox instance and mode at runtime (e.g. when user
 // switches from docker to none in the settings panel).
 func (a *Agent) SetSandbox(sb tools.Sandbox, mode string) {
@@ -994,7 +1012,7 @@ func (a *Agent) sendAck(channel, chatID string) {
 // 用户设置了自己的 LLM 配置后，该用户的请求使用独立的信号量，不再占用全局资源。
 func (a *Agent) Run(ctx context.Context) error {
 	log.WithFields(log.Fields{
-		"max_concurrency": a.maxConcurrency,
+		"max_concurrency": a.getMaxConcurrency(),
 	}).Info("Agent loop started")
 
 	a.multiSession.StartCleanupRoutine()
@@ -1015,7 +1033,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.multiSession.StopCleanupRoutine()
 	}()
 
-	sem := make(chan struct{}, a.maxConcurrency)
+	sem := make(chan struct{}, a.getMaxConcurrency())
 
 	var mu sync.Mutex
 	chatQueues := make(map[string]chan bus.InboundMessage)

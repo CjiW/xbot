@@ -41,19 +41,19 @@ func (t *KnowledgeWriteTool) Execute(ctx *ToolContext, input string) (*ToolResul
 	}
 
 	// Security: prevent path traversal using filepath.Abs + prefix check
-		dir := knowledgeDir(ctx)
-		fullPath := filepath.Join(dir, params.Path)
-		absFullPath, err := filepath.Abs(fullPath)
-		if err != nil {
-			return nil, fmt.Errorf("invalid path: %w", err)
-		}
-		absDir, err := filepath.Abs(dir)
-		if err != nil {
-			return nil, fmt.Errorf("invalid knowledge directory: %w", err)
-		}
-		if !strings.HasPrefix(absFullPath, absDir+string(filepath.Separator)) && absFullPath != absDir {
-			return nil, fmt.Errorf("path traversal not allowed")
-		}
+	dir := knowledgeDir(ctx)
+	fullPath := filepath.Join(dir, params.Path)
+	absFullPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid knowledge directory: %w", err)
+	}
+	if !strings.HasPrefix(absFullPath, absDir+string(filepath.Separator)) && absFullPath != absDir {
+		return nil, fmt.Errorf("path traversal not allowed")
+	}
 
 	// Auto-create parent directories
 	if err := writeFileSandboxAware(ctx, fullPath, []byte(params.Content)); err != nil {

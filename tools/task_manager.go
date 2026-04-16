@@ -142,31 +142,34 @@ func (m *BackgroundTaskManager) Start(
 
 		exitCode, execErr := execFn(ctx, outputBuf)
 
-			task.mu.Lock()
-			wasKilled := task.killed
-			now := time.Now()
-			task.FinishedAt = &now
-			task.ExitCode = exitCode
+		task.mu.Lock()
+		wasKilled := task.killed
+		now := time.Now()
+		task.FinishedAt = &now
+		task.ExitCode = exitCode
 
-			if execErr != nil {
-				if wasKilled || ctx.Err() != nil {
-					task.Status = BgTaskKilled
-					task.Error = "killed by user"
-				} else {
-					task.Status = BgTaskError
-					task.Error = execErr.Error()
-				}
+		if execErr != nil {
+			if wasKilled || ctx.Err() != nil {
+				task.Status = BgTaskKilled
+				task.Error = "killed by user"
 			} else {
-				task.Status = BgTaskDone
+				task.Status = BgTaskError
+				task.Error = execErr.Error()
 			}
-			task.mu.Unlock()
+		} else if wasKilled {
+			task.Status = BgTaskKilled
+			task.Error = "killed by user"
+		} else {
+			task.Status = BgTaskDone
+		}
+		task.mu.Unlock()
 
-			log.WithFields(log.Fields{
-				"task_id":   id,
-				"status":    task.Status,
-				"exit_code": exitCode,
-				"elapsed":   now.Sub(task.StartedAt).Round(time.Millisecond),
-			}).Info("Background task completed")
+		log.WithFields(log.Fields{
+			"task_id":   id,
+			"status":    task.Status,
+			"exit_code": exitCode,
+			"elapsed":   now.Sub(task.StartedAt).Round(time.Millisecond),
+		}).Info("Background task completed")
 
 		// Fire callbacks
 		m.mu.RLock()
@@ -264,27 +267,27 @@ func (m *BackgroundTaskManager) Adopt(
 		}
 
 		task.mu.Lock()
-			wasKilled := task.killed
+		wasKilled := task.killed
 
-			// Capture final output from capture goroutines if available.
-			// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
-			// so all capture goroutines have finished writing.
-			if ongoingOutput != nil {
-				task.Output = ongoingOutput()
-			}
+		// Capture final output from capture goroutines if available.
+		// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
+		// so all capture goroutines have finished writing.
+		if ongoingOutput != nil {
+			task.Output = ongoingOutput()
+		}
 
-			now := time.Now()
-			task.FinishedAt = &now
-			task.ExitCode = exitCode
+		now := time.Now()
+		task.FinishedAt = &now
+		task.ExitCode = exitCode
 
-			if wasKilled {
-				task.Status = BgTaskKilled
-				task.Error = "killed by user"
-				task.ExitCode = -1
-			} else {
-				task.Status = BgTaskDone
-			}
-			task.mu.Unlock()
+		if wasKilled {
+			task.Status = BgTaskKilled
+			task.Error = "killed by user"
+			task.ExitCode = -1
+		} else {
+			task.Status = BgTaskDone
+		}
+		task.mu.Unlock()
 
 		log.WithFields(log.Fields{
 			"task_id":   id,
@@ -383,8 +386,13 @@ func (m *BackgroundTaskManager) ListRunning(sessionKey string) []*BackgroundTask
 	ids := m.sessions[sessionKey]
 	var tasks []*BackgroundTask
 	for _, id := range ids {
-		if t, ok := m.tasks[id]; ok && t.Status == BgTaskRunning {
-			tasks = append(tasks, t)
+		if t, ok := m.tasks[id]; ok {
+			t.mu.Lock()
+			status := t.Status
+			t.mu.Unlock()
+			if status == BgTaskRunning {
+				tasks = append(tasks, t)
+			}
 		}
 	}
 	return tasks
@@ -407,13 +415,13 @@ func (m *BackgroundTaskManager) CleanupSession(sessionKey string) {
 		for _, id := range ids {
 			if task, ok := m.tasks[id]; ok {
 				if task.cancel != nil {
-								task.mu.Lock()
-								running := task.Status == BgTaskRunning
-								task.mu.Unlock()
-								if running {
-									task.cancel()
-								}
+					task.mu.Lock()
+					running := task.Status == BgTaskRunning
+					task.mu.Unlock()
+					if running {
+						task.cancel()
 					}
+				}
 				delete(m.tasks, id)
 			}
 		}

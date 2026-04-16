@@ -1,10 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"log"
-	"crypto/rand"
 	"math/big"
 	"os"
 	"os/signal"

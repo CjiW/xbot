@@ -223,14 +223,14 @@ func (b *LocalBackend) GetContextMode() string {
 
 func (b *LocalBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
 	if b.agent.settingsSvc == nil {
-		return nil, nil
+		return nil, fmt.Errorf("settings service not available")
 	}
 	return b.agent.settingsSvc.GetSettings(namespace, senderID)
 }
 
 func (b *LocalBackend) SetSetting(namespace, senderID, key, value string) error {
 	if b.agent.settingsSvc == nil {
-		return nil
+		return fmt.Errorf("settings service not available")
 	}
 	return b.agent.settingsSvc.SetSetting(namespace, senderID, key, value)
 }

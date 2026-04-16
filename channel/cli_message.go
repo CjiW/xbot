@@ -1811,18 +1811,21 @@ func (m *cliModel) renderRewindResultBlock() string {
 	if len(r.Restored) > 0 {
 		fmt.Fprintf(&sb, "  Files restored: %d\n", len(r.Restored))
 		for _, f := range r.Restored {
-			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s", f)))
+			sb.WriteString("\n")
 		}
 	}
 	if len(r.CreatedDel) > 0 {
 		fmt.Fprintf(&sb, "  Files deleted: %d\n", len(r.CreatedDel))
 		for _, f := range r.CreatedDel {
-			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s\n", f)))
+			sb.WriteString(m.styles.TextMutedSt.Render(fmt.Sprintf("    %s", f)))
+			sb.WriteString("\n")
 		}
 	}
 	if len(r.Errors) > 0 {
 		for _, e := range r.Errors {
-			sb.WriteString(m.styles.ProgressError.Render(fmt.Sprintf("  Error: %s\n", e)))
+			sb.WriteString(m.styles.ProgressError.Render(fmt.Sprintf("  Error: %s", e)))
+			sb.WriteString("\n")
 		}
 	}
 

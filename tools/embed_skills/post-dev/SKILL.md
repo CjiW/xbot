@@ -17,8 +17,10 @@ Maintain a living knowledge base so future sessions (with zero memory) can work 
 ## Two-Layer Architecture
 
 ```
-AGENT.md (index, auto-injected into prompt)
-  → tells you WHERE to look for details
+AGENT.md (auto-injected into prompt — the single source of truth)
+  → project summary, build commands, architecture overview
+  → GOTCHAS: critical pitfalls written directly here (no separate file)
+  → Knowledge Files index: tells you WHERE to look for details
   → should make you want to Read specific files, not answer questions directly
 
 Knowledge files (the actual knowledge, on disk)
@@ -29,21 +31,23 @@ Knowledge files (the actual knowledge, on disk)
 
 ## AGENT.md
 
-Auto-loaded into system prompt (up to 10000 chars). Keep it concise — an index, not an encyclopedia.
+Auto-loaded into system prompt (up to 10000 chars). Keep it concise but information-dense.
 
-Purpose: tell your future self **where to look**, not **everything you know**.
+Purpose: tell your future self **where to look** AND **what will kill you**.
 
 What belongs:
 - One-line project summary
 - Architecture overview (2-3 sentences, link to detail file for more)
 - Build/test/lint commands
+- **GOTCHAS section**: critical pitfalls that MUST be visible without opening extra files. These are non-negotiable — if a pitfall can waste hours or crash the process, it goes here. Keep it to bullet points, no prose.
 - **Knowledge Files section**: list of existing files with one-line descriptions
 - Key conventions that don't fit elsewhere (max 5 bullets)
 
 What does NOT belong:
-- Anything that belongs in a knowledge file
+- Anything that belongs in a knowledge file (except critical gotchas)
 - Specific line numbers, function signatures, or code snippets
 - Information already in README
+- Minor/niche gotchas that are package-specific → put those in the relevant knowledge file
 
 ## Knowledge Files
 
@@ -57,7 +61,6 @@ Mirror the repository's directory structure under the knowledge root (e.g. `docs
 docs/agent/                    ← knowledge root
   architecture.md              ← cross-cutting: message flow, pipeline, conventions
   conventions.md               ← cross-cutting: coding style, error handling
-  gotchas.md                   ← cross-cutting: known pitfalls
   agent.md                     ← agent/ package: loop, engine, middleware
   channel.md                   ← channel/ package: CLI, Feishu, Web, QQ
   llm.md                       ← llm/ package: OpenAI, Anthropic, retry, streaming
@@ -87,10 +90,11 @@ When you explore a new subsystem or package, create its knowledge file. Don't wo
 
 After completing a task, update knowledge:
 
-1. **Did I encounter or fix a gotcha/pitfall? → ALWAYS write it into `docs/agent/gotchas.md`.** This is non-negotiable. Gotchas are the highest-value knowledge because they prevent future sessions from repeating the same mistake. AGENT.md enforces reading gotchas before any code change — if you don't record them, the loop breaks.
+1. **Did I encounter or fix a gotcha/pitfall? → Write it directly into AGENT.md's GOTCHAS section.** Critical gotchas (crashes, silent data loss, hours-wasting traps) go into AGENT.md so they're always visible without opening extra files. Package-specific/niche gotchas can go into the relevant knowledge file instead.
 2. Did I learn something about the codebase (APIs, dependencies, conventions, architecture)? → Write it into the relevant knowledge file
-3. Did the file/knowledge list change? → Update AGENT.md's index
+3. Did the file/knowledge list change? → Update AGENT.md's Knowledge Files index
 4. Did any existing documentation become stale due to my changes? → Update it in place
+5. Did I add gotchas to AGENT.md? → Remove `docs/agent/gotchas.md` if it exists and all its content has been migrated to AGENT.md. AGENT.md should be the single source of truth for critical pitfalls.
 
 **Default to updating.** Every session should leave the knowledge base more accurate than it found it. The only exception is truly trivial changes (typo fixes, comment-only edits).
 

@@ -18,12 +18,30 @@
 - `docs/agent/channel.md` — CLI, Feishu, Web, QQ adapters
 - `docs/agent/memory.md` — letta vs flat providers
 - `docs/agent/conventions.md` — error handling, logging, testing, naming, build
-- `docs/agent/gotchas.md` — **MUST READ before any code change.** cross-cutting pitfalls, driver quirks, per-package traps
+
+## Gotchas — MUST READ Before Any Code Change
+
+### Concurrency
+- **Never `defer` semaphore release inside a loop.** Deadlock when iterations exceed capacity. Release immediately after Generate completes.
+- Non-blocking channel sends: always use `select` with `ctx.Done()` to prevent blocking on full channels during shutdown.
+
+### Subscription & Model Resolution
+- **CLI subscriptions are in config.json, server subscriptions are in DB (`user_llm_subscriptions`).** `GetLLMForModel` must check both — `configSubsFn` (CLI) and `subscriptionSvc` (DB).
+- **`UpdateCachedModels(subID)` nil-derefs if subID not in DB.** Always nil-check `sub` after `Get()`. Config subs have IDs not in DB.
+- **`OnModelsLoaded` callback runs in `NewOpenAILLM`'s async goroutine** — must be concurrency-safe.
+- **Tier fallback**: unconfigured tier → vanguard→balance→swift chain. Empty tier must NOT return default client with wrong model.
+- **`createClientFromSub` uses sub's credentials with a *different* model** — verify target model is served by that endpoint.
+
+### Startup
+- `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.
+- Settings save is synchronous — all local I/O, no network calls.
+
+### Windows
+- `syscall.PROCESS_QUERY_LIMITED_INFORMATION` and `STILL_ACTIVE` not in Go stdlib — define as uint32 constants.
+- `exec.ExitError.ExitCode()` is cross-platform; avoid `syscall.WaitStatus` type assertion.
+- `signal.Notify(sigCh, syscall.SIGTSTP)` doesn't compile on Windows — use build-tagged files.
+- PowerShell env output is newline-delimited, not null-delimited.
 
 ## Project Context
 
 `ProjectContextMiddleware` auto-loads this file into system prompt. After code changes, update relevant Knowledge Files to keep documentation in sync.
-
-### Mandatory: Read Gotchas Before Modifying Code
-
-**Every code modification MUST start by reading `docs/agent/gotchas.md`.** This file contains hard-won lessons about driver serialization bugs, concurrency traps, and framework-specific pitfalls that are invisible from code alone. Skipping this step leads to wasted effort fixing already-solved problems.

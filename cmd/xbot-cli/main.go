@@ -54,6 +54,10 @@ type cliApp struct {
 	xbotHome  string
 
 	// Remote-mode async cache for agent info (avoid RPC from event loop → deadlock)
+	// CountInteractiveSessions and ListInteractiveSessions are called from BubbleTea
+	// Update() which holds the render lock. RPC responses arrive on readPump goroutine
+	// which calls p.Send() → deadlock if event loop is blocked on RPC.
+	// These are refreshed by a background goroutine every 5s.
 	agentCacheMu    sync.RWMutex
 	agentCacheCount int
 	agentCacheList  []channel.AgentPanelEntry
@@ -846,6 +850,7 @@ func main() {
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
+		// TODO: Also consider async-caching UsageQuery (currently returns error in remote mode)
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()

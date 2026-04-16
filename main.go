@@ -578,17 +578,19 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
-		// Get senderID before removal for cache invalidation
+		// Get subscription for ownership check and cache invalidation
 		sub, err := svc.Get(p.ID)
 		if err != nil {
 			return nil, err
 		}
+		// Non-admin users can only remove their own subscriptions
+		if senderID != "admin" && sub.SenderID != senderID {
+			return nil, fmt.Errorf("subscription not found")
+		}
 		if err := svc.Remove(p.ID); err != nil {
 			return nil, err
 		}
-		if sub != nil {
-			backend.LLMFactory().Invalidate(sub.SenderID)
-		}
+		backend.LLMFactory().Invalidate(sub.SenderID)
 		return nil, nil
 	case "set_default_subscription":
 		var p struct {
@@ -604,14 +606,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
+		// Non-admin users can only set their own subscription as default
+		sub, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if senderID != "admin" && sub.SenderID != senderID {
+			return nil, fmt.Errorf("subscription not found")
+		}
 		if err := svc.SetDefault(p.ID); err != nil {
 			return nil, err
 		}
-		// Invalidate cache so next request picks up the new default
-		sub, err := svc.Get(p.ID)
-		if err == nil && sub != nil {
-			backend.LLMFactory().Invalidate(sub.SenderID)
-		}
+		backend.LLMFactory().Invalidate(sub.SenderID)
 		return nil, nil
 	case "rename_subscription":
 		var p struct {
@@ -627,6 +633,14 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		svc := backend.LLMFactory().GetSubscriptionSvc()
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
+		}
+		// Non-admin users can only rename their own subscriptions
+		sub, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if senderID != "admin" && sub.SenderID != senderID {
+			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
 
@@ -645,7 +659,19 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, fmt.Errorf("subscription service not available")
 		}
+		// Non-admin users can only modify their own subscriptions
+		sub, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if senderID != "admin" && sub.SenderID != senderID {
+			return nil, fmt.Errorf("subscription not found")
+		}
 		return nil, svc.SetModel(p.ID, p.Model)
+
+	case "reset_token_state":
+		backend.ResetTokenState()
+		return nil, nil
 
 	default:
 		return nil, fmt.Errorf("unknown RPC method: %s", method)

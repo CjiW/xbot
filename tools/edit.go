@@ -625,12 +625,12 @@ func suggestMatch(content, searchStr string) string {
 
 // Truncate 截断字符串（公共函数，供多处使用）
 func Truncate(s string, maxLen int) string {
-	if maxLen < 4 {
-		return s
-	}
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
+	}
+	if maxLen < 4 {
+		return "..."
 	}
 	return string(runes[:maxLen-3]) + "..."
 }

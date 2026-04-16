@@ -26,3 +26,8 @@ type StreamingLLM interface {
 	// channel 会在完成或出错时关闭
 	GenerateStream(ctx context.Context, model string, messages []ChatMessage, tools []ToolDefinition, thinkingMode string) (<-chan StreamEvent, error)
 }
+
+// ModelLoader is implemented by LLM clients that can refresh their model list from API.
+type ModelLoader interface {
+	LoadModelsFromAPI(ctx context.Context) error
+}

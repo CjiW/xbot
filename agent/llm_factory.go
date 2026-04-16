@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"xbot/config"
 	"xbot/llm"
@@ -482,12 +483,50 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 		return client, model, maxCtx, tm, false
 	}
 
-	// Build lookup table from cached model lists in DB — O(1) lookup, no API calls
+	// Step 1: look up from cached model lists in DB — O(1), no API calls
 	modelMap := f.buildModelSubscriptionMap(senderID)
 	if sub, ok := modelMap[resolvedModel]; ok {
 		client := f.createClientFromSub(sub, resolvedModel)
 		if client != nil {
 			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+		}
+	}
+
+	// Step 2: cache miss or empty — try each subscription synchronously.
+	// This handles first-run (cached_models is empty) and cross-subscription models.
+	// On success, OnModelsLoaded callback persists the list to DB for future O(1) lookups.
+	if f.subscriptionSvc != nil && senderID != "" {
+		subs, err := f.subscriptionSvc.List(senderID)
+		if err == nil && len(subs) > 0 {
+			for _, sub := range subs {
+				if sub.BaseURL == "" || sub.APIKey == "" {
+					continue
+				}
+				client := f.createClientFromSub(sub, resolvedModel)
+				if client == nil {
+					continue
+				}
+				// Try to load models from API if not cached yet
+				if len(sub.CachedModels) == 0 {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					if loader, ok := client.(llm.ModelLoader); ok {
+						_ = loader.LoadModelsFromAPI(ctx)
+					}
+					cancel()
+					// Re-check after loading
+					for _, m := range client.ListModels() {
+						if m == resolvedModel {
+							return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+						}
+					}
+				}
+				// Check if model is in the already-loaded list
+				for _, m := range client.ListModels() {
+					if m == resolvedModel {
+						return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+					}
+				}
+			}
 		}
 	}
 

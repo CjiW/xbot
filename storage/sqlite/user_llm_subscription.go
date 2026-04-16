@@ -194,8 +194,8 @@ func (s *LLMSubscriptionService) Add(sub *LLMSubscription) error {
 // It ensures the subscription's active model is always included.
 func (s *LLMSubscriptionService) UpdateCachedModels(subID string, models []string) error {
 	sub, err := s.Get(subID)
-	if err != nil {
-		return err
+	if err != nil || sub == nil {
+		return fmt.Errorf("subscription %s not found: %w", subID, err)
 	}
 	models = ensureModel(models, sub.Model)
 	data, err := json.Marshal(models)

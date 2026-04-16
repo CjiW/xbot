@@ -672,7 +672,7 @@ func (f *LLMFactory) createClientFromSub(sub *sqlite.LLMSubscription, model stri
 		OnModelsLoaded: func(models []string) {
 			if f.subscriptionSvc != nil && sub.ID != "" {
 				if err := f.subscriptionSvc.UpdateCachedModels(sub.ID, models); err != nil {
-					log.WithError(err).WithField("sub_id", sub.ID).Warn("failed to cache subscription models")
+					log.WithError(err).WithField("sub_id", sub.ID).Debug("failed to cache subscription models (may be config-only sub)")
 				}
 			}
 		},

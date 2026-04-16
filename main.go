@@ -1041,12 +1041,12 @@ func main() {
 		PersonaIsolation: cfg.Web.PersonaIsolation,
 	}
 	backend, err := agent.NewLocalBackend(bc.AgentConfig())
-		if err != nil {
-			log.WithError(err).Fatal("Failed to create local backend")
-		}
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create local backend")
+	}
 
-		// 注册 OAuth 和 Feishu MCP 工具（如果启用）
-		if cfg.OAuth.Enable && oauthManager != nil {
+	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
+	if cfg.OAuth.Enable && oauthManager != nil {
 		// 注册 OAuth 工具
 		oauthTool := &tools.OAuthTool{
 			Manager: oauthManager,

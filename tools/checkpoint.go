@@ -354,22 +354,25 @@ func (h *CheckpointHook) PreToolUse(ctx context.Context, toolName string, args s
 }
 
 // PostToolUse confirms the snapshot if the tool succeeded, or discards it on failure.
-func (h *CheckpointHook) PostToolUse(_ context.Context, toolName string, args string, _ *ToolResult, err error, _ time.Duration) {
-	if toolName != "FileCreate" && toolName != "FileReplace" {
-		return
-	}
-
-	// Parse the file path from args to look up the correct pending entry
-	filePath := parseFilePath(toolName, args)
-	if filePath != "" {
-		if !filepath.IsAbs(filePath) {
-			wd, _ := os.Getwd()
-			if wd != "" {
-				filePath = filepath.Join(wd, filePath)
-			}
+func (h *CheckpointHook) PostToolUse(ctx context.Context, toolName string, args string, _ *ToolResult, err error, _ time.Duration) {
+		if toolName != "FileCreate" && toolName != "FileReplace" {
+			return
 		}
-		filePath = filepath.Clean(filePath)
-	}
+
+		// Parse the file path from args to look up the correct pending entry
+		filePath := parseFilePath(toolName, args)
+		if filePath != "" {
+			if !filepath.IsAbs(filePath) {
+				wd := WorkingDirFromContext(ctx)
+				if wd == "" {
+					wd, _ = os.Getwd()
+				}
+				if wd != "" {
+					filePath = filepath.Join(wd, filePath)
+				}
+			}
+			filePath = filepath.Clean(filePath)
+		}
 
 	h.mu.Lock()
 	snap, found := h.pending[filePath]

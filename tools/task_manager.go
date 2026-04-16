@@ -142,36 +142,31 @@ func (m *BackgroundTaskManager) Start(
 
 		exitCode, execErr := execFn(ctx, outputBuf)
 
-		now := time.Now()
+			task.mu.Lock()
+			wasKilled := task.killed
+			now := time.Now()
+			task.FinishedAt = &now
+			task.ExitCode = exitCode
 
-		// Read killed flag ONCE and keep it — do NOT reset it.
-		// Kill() sets killed=true then calls cancel(); resetting here
-		// would race with status determination.
-		task.mu.Lock()
-		wasKilled := task.killed
-		task.mu.Unlock()
-
-		task.FinishedAt = &now
-		task.ExitCode = exitCode
-
-		if execErr != nil {
-			if wasKilled || ctx.Err() != nil {
-				task.Status = BgTaskKilled
-				task.Error = "killed by user"
+			if execErr != nil {
+				if wasKilled || ctx.Err() != nil {
+					task.Status = BgTaskKilled
+					task.Error = "killed by user"
+				} else {
+					task.Status = BgTaskError
+					task.Error = execErr.Error()
+				}
 			} else {
-				task.Status = BgTaskError
-				task.Error = execErr.Error()
+				task.Status = BgTaskDone
 			}
-		} else {
-			task.Status = BgTaskDone
-		}
+			task.mu.Unlock()
 
-		log.WithFields(log.Fields{
-			"task_id":   id,
-			"status":    task.Status,
-			"exit_code": exitCode,
-			"elapsed":   now.Sub(task.StartedAt).Round(time.Millisecond),
-		}).Info("Background task completed")
+			log.WithFields(log.Fields{
+				"task_id":   id,
+				"status":    task.Status,
+				"exit_code": exitCode,
+				"elapsed":   now.Sub(task.StartedAt).Round(time.Millisecond),
+			}).Info("Background task completed")
 
 		// Fire callbacks
 		m.mu.RLock()
@@ -269,29 +264,27 @@ func (m *BackgroundTaskManager) Adopt(
 		}
 
 		task.mu.Lock()
-		wasKilled := task.killed
-		task.mu.Unlock()
+			wasKilled := task.killed
 
-		// Capture final output from capture goroutines if available.
-		// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
-		// so all capture goroutines have finished writing.
-		if ongoingOutput != nil {
-			task.mu.Lock()
-			task.Output = ongoingOutput()
+			// Capture final output from capture goroutines if available.
+			// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
+			// so all capture goroutines have finished writing.
+			if ongoingOutput != nil {
+				task.Output = ongoingOutput()
+			}
+
+			now := time.Now()
+			task.FinishedAt = &now
+			task.ExitCode = exitCode
+
+			if wasKilled {
+				task.Status = BgTaskKilled
+				task.Error = "killed by user"
+				task.ExitCode = -1
+			} else {
+				task.Status = BgTaskDone
+			}
 			task.mu.Unlock()
-		}
-
-		now := time.Now()
-		task.FinishedAt = &now
-		task.ExitCode = exitCode
-
-		if wasKilled {
-			task.Status = BgTaskKilled
-			task.Error = "killed by user"
-			task.ExitCode = -1
-		} else {
-			task.Status = BgTaskDone
-		}
 
 		log.WithFields(log.Fields{
 			"task_id":   id,
@@ -327,12 +320,11 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
+	task.mu.Lock()
 	if task.Status != BgTaskRunning {
+		task.mu.Unlock()
 		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
 	}
-
-	// Kill the OS process tree directly (covers Adopt tasks with no cancel func)
-	task.mu.Lock()
 	if task.process != nil {
 		killProcessTree(task.process)
 	}
@@ -350,7 +342,11 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 func (t *BackgroundTask) SessionKey() string { return t.sessionKey }
 
 // IsKilled returns true if the task was killed by the user.
-func (t *BackgroundTask) IsKilled() bool { return t.killed }
+func (t *BackgroundTask) IsKilled() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.killed
+}
 
 // Status returns the current state of a task.
 func (m *BackgroundTaskManager) Status(taskID string) (*BackgroundTask, error) {
@@ -410,9 +406,14 @@ func (m *BackgroundTaskManager) CleanupSession(sessionKey string) {
 	if ids, ok := m.sessions[sessionKey]; ok {
 		for _, id := range ids {
 			if task, ok := m.tasks[id]; ok {
-				if task.cancel != nil && task.Status == BgTaskRunning {
-					task.cancel()
-				}
+				if task.cancel != nil {
+								task.mu.Lock()
+								running := task.Status == BgTaskRunning
+								task.mu.Unlock()
+								if running {
+									task.cancel()
+								}
+					}
 				delete(m.tasks, id)
 			}
 		}

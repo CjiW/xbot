@@ -383,6 +383,13 @@ func main() {
 					}
 				}
 				// Push runtime state to server
+				if v, ok := values["enable_auto_compress"]; ok {
+					if v == "true" {
+						_ = app.backend.SetContextMode("auto")
+					} else {
+						_ = app.backend.SetContextMode("none")
+					}
+				}
 				if v, ok := values["context_mode"]; ok && v != "" {
 					_ = app.backend.SetContextMode(v)
 				}
@@ -399,13 +406,6 @@ func main() {
 				if v, ok := values["max_context_tokens"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 						app.backend.SetMaxContextTokens(n)
-					}
-				}
-				if v, ok := values["enable_auto_compress"]; ok {
-					if v == "true" {
-						_ = app.backend.SetContextMode("auto")
-					} else {
-						_ = app.backend.SetContextMode("none")
 					}
 				}
 				if v, ok := values["sandbox_mode"]; ok && v != "" {
@@ -697,6 +697,9 @@ func main() {
 			return entries
 		},
 		AgentInspect: func(roleName, instance string, tailCount int) (string, error) {
+			if app.backend == nil {
+				return "", fmt.Errorf("agent not initialized")
+			}
 			return app.backend.InspectInteractiveSession(context.Background(), roleName, "cli", absWorkDir, instance, tailCount)
 		},
 	}

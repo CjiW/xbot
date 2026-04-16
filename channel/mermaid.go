@@ -13,8 +13,10 @@ import (
 var mermaidBlockRe = regexp.MustCompile("(?s)```mermaid\\s*\n(.*?)```")
 
 // renderMermaidBlocks replaces all ```mermaid code blocks in markdown content
-// with their ASCII/Unicode art representation. Each output line is truncated to
-// maxW display columns to prevent glamour from wrapping them.
+// with their ASCII/Unicode art representation. maxW is the maximum output
+// width in display columns (0 = no constraint). When maxW > 0, it is passed
+// to mermaid-ascii as TargetWidth so the diagram re-layouts to fit, with a
+// fallback truncation for any lines that still exceed maxW.
 func renderMermaidBlocks(content string, maxW int) string {
 	return mermaidBlockRe.ReplaceAllStringFunc(content, func(match string) string {
 		sub := mermaidBlockRe.FindStringSubmatch(match)
@@ -26,14 +28,17 @@ func renderMermaidBlocks(content string, maxW int) string {
 			return match
 		}
 
-		output, err := render.Render(src, diagram.DefaultConfig())
+		cfg := diagram.DefaultConfig()
+		if maxW > 0 {
+			cfg.TargetWidth = maxW
+		}
+
+		output, err := render.Render(src, cfg)
 		if err != nil {
 			return match
 		}
 
-		// Truncate each line to maxW columns so glamour won't wrap.
-		// mermaid-ascii output is plain text (no ANSI), so we can use
-		// runewidth directly.
+		// Fallback: truncate any lines that still exceed maxW after re-layout.
 		if maxW > 0 {
 			lines := strings.Split(output, "\n")
 			for i, line := range lines {

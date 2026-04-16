@@ -704,27 +704,39 @@ func (f *LLMFactory) resolveTierModel(value string) (string, bool) {
 	tiers := f.tierModels
 	f.mu.RUnlock()
 
+	// Try requested tier first
+	model := f.tierModel(tiers, tier)
+	if model != "" {
+		return model, true
+	}
+	// Fallback chain: swift/vanguard → balance → vanguard/swift
+	fallback := ""
+	switch tier {
+	case "swift", "vanguard":
+		fallback = "balance"
+	case "balance":
+		fallback = "vanguard"
+	}
+	if fallback != "" {
+		if model = f.tierModel(tiers, fallback); model != "" {
+			return model, true
+		}
+	}
+	// All tiers unconfigured — let caller fall through to default LLM
+	return "", true
+}
+
+// tierModel returns the trimmed model name for a tier, or "" if unconfigured.
+func (f *LLMFactory) tierModel(tiers config.LLMConfig, tier string) string {
 	switch tier {
 	case "vanguard":
-		if strings.TrimSpace(tiers.VanguardModel) != "" {
-			return strings.TrimSpace(tiers.VanguardModel), true
-		}
+		return strings.TrimSpace(tiers.VanguardModel)
 	case "balance":
-		if strings.TrimSpace(tiers.BalanceModel) != "" {
-			return strings.TrimSpace(tiers.BalanceModel), true
-		}
+		return strings.TrimSpace(tiers.BalanceModel)
 	case "swift":
-		if strings.TrimSpace(tiers.SwiftModel) != "" {
-			return strings.TrimSpace(tiers.SwiftModel), true
-		}
+		return strings.TrimSpace(tiers.SwiftModel)
 	}
-	// Tier recognized but no model configured — fallback to balance tier
-	if tier == "swift" || tier == "vanguard" {
-		if strings.TrimSpace(tiers.BalanceModel) != "" {
-			return strings.TrimSpace(tiers.BalanceModel), true
-		}
-	}
-	return "", true
+	return ""
 }
 
 // guessProvider 根据模型名猜测 provider。

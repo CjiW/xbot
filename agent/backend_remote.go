@@ -311,7 +311,14 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			b.outboundMu.RUnlock()
 			if cb != nil {
 				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Debug("RemoteBackend: dispatching outbound message")
-				cb(outMsg)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.WithField("panic", r).Warn("RemoteBackend outbound callback panicked")
+						}
+					}()
+					cb(outMsg)
+				}()
 				log.Debug("RemoteBackend: outbound callback returned")
 			} else {
 				log.Warn("Received server reply but no outbound callback registered")
@@ -518,13 +525,17 @@ func (b *RemoteBackend) callRPC(method string, params any) (json.RawMessage, err
 	b.pending[id] = ch
 	b.rpcMu.Unlock()
 	req := wsOutgoingMessage{Type: "rpc", ID: id, Method: method, Params: rawParams}
+	// Set write deadline to avoid blocking indefinitely on dead connections.
+	b.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := b.conn.WriteJSON(req); err != nil {
+		b.conn.SetWriteDeadline(time.Time{})
 		b.connMu.Unlock()
 		b.rpcMu.Lock()
 		delete(b.pending, id)
 		b.rpcMu.Unlock()
 		return nil, fmt.Errorf("send RPC %s: %w", method, err)
 	}
+	b.conn.SetWriteDeadline(time.Time{})
 	b.connMu.Unlock()
 	select {
 	case resp, ok := <-ch:
@@ -982,5 +993,8 @@ func RPCMethodList() []string {
 		"list_subscriptions", "get_default_subscription",
 		"add_subscription", "remove_subscription",
 		"set_default_subscription", "rename_subscription",
+		"update_subscription", "set_subscription_model",
+		"get_history", "trim_history",
+		"reset_token_state",
 	}
 }

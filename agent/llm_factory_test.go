@@ -172,8 +172,9 @@ func TestResolveTierModel(t *testing.T) {
 	if !usedTier {
 		t.Error("usedTier should be true even for unconfigured tier")
 	}
-	if model != "" {
-		t.Errorf("model = %q, want empty for unconfigured tier", model)
+	// balance unconfigured → fallback to vanguard
+	if model != "opus" {
+		t.Errorf("model = %q, want opus (fallback from unconfigured balance to vanguard)", model)
 	}
 }
 

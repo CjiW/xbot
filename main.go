@@ -330,7 +330,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		backend.SetProxyLLM(p.SenderID, nil, p.Model)
+		// CLI remote mode uses this RPC to switch the server-side model.
+		// SetProxyLLM(nil) would store a nil client and crash GetLLM,
+		// so use SwitchModel instead which only updates the cached model name.
+		if backend.LLMFactory() != nil {
+			backend.LLMFactory().SwitchModel(p.SenderID, p.Model)
+		}
 		return nil, nil
 	case "clear_proxy_llm":
 		var p struct {
@@ -439,7 +444,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(result)
 
-		// --- Background tasks ---
+	// --- Background tasks ---
 	case "get_bg_task_count":
 		var p struct {
 			SessionKey string `json:"session_key"`

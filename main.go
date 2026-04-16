@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -378,7 +379,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(daily)
 
-	// --- Sub-agents ---
+		// --- Sub-agents ---
 	case "count_interactive_sessions":
 		var p struct {
 			Channel string `json:"channel"`
@@ -386,6 +387,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
 		}
 		return json.Marshal(backend.CountInteractiveSessions(p.Channel, p.ChatID))
 	case "list_interactive_sessions":
@@ -395,6 +402,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
 		}
 		return json.Marshal(backend.ListInteractiveSessions(p.Channel, p.ChatID))
 	case "inspect_interactive_session":
@@ -407,6 +420,12 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
+		}
+		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		if p.ChatID == "" {
+			p.ChatID = senderID
 		}
 		result, err := backend.InspectInteractiveSession(context.Background(), p.Role, p.Channel, p.ChatID, p.Instance, p.TailCount)
 		if err != nil {
@@ -559,6 +578,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		p.Sub.ID = p.ID
 		p.Sub.SenderID = existing.SenderID // preserve owner
+		// If client sent a masked API key (user didn't change it),
+		// preserve the original key to avoid corrupting credentials.
+		if strings.HasSuffix(p.Sub.APIKey, "****") {
+			p.Sub.APIKey = existing.APIKey
+		}
 		if err := svc.Update(&p.Sub); err != nil {
 			return nil, err
 		}

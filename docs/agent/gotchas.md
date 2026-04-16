@@ -21,6 +21,15 @@
 - `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.
 - Settings save is synchronous (`doSaveSettings`) — all local I/O, no network calls.
 
+## Subscription & Model Resolution
+
+- **CLI stores subscriptions in config.json, server stores in DB (`user_llm_subscriptions` table).** These are separate data sources. `GetLLMForModel` must check both via `configSubsFn` closure (CLI) and `subscriptionSvc` (DB).
+- **`configSubToLLMSubscription` creates lightweight `sqlite.LLMSubscription` from config — has `Model` field but no `CachedModels`.** Config subs only match on their `Model` field, not on cached API model lists.
+- **`UpdateCachedModels(subID)` crashes (nil deref on `sub.Model`) if subID doesn't exist in DB.** Always nil-check `sub` after `Get()`. Config subs have IDs that don't exist in DB.
+- **`OnModelsLoaded` callback runs in `NewOpenAILLM`'s async goroutine** — must be safe for concurrent use. Config-only subs will trigger DB write that fails gracefully (nil check in `UpdateCachedModels`).
+- **Tier fallback chain**: unconfigured tier falls through vanguard→balance→swift, returns first configured or empty with `usedTier=false`. Empty tier must NOT return default client with wrong model.
+- **`createClientFromSub` uses subscription's credentials with a *different* model** — always verify the target model is actually served by that subscription's endpoint.
+
 ## Per-Package Pitfalls
 
 - `docs/agent/agent.md` — SubAgent deadlocks, context management

@@ -43,4 +43,13 @@ type LLM interface {
 type StreamingLLM interface {
     Stream(ctx, model, messages, tools, thinkingMode) (<-chan StreamEvent, error)
 }
+type ModelLoader interface {
+    LoadModelsFromAPI(ctx context.Context) error
+}
 ```
+
+`ModelLoader` is implemented by `*OpenAILLM` only — used by `GetLLMForModel` via type assertion for sync model loading on cache miss.
+
+## OnModelsLoaded Callback
+
+`UserLLMConfig.OnModelsLoaded` is called by `NewOpenAILLM`'s async goroutine after fetching model list from API. Used to persist models to DB via `UpdateCachedModels`. Must handle case where sub ID doesn't exist in DB (config-only subs).

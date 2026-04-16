@@ -423,14 +423,19 @@ func (m *cliModel) applyRewind() {
 
 	// File rollback via checkpoint hook
 	if m.checkpointHook != nil && m.checkpointHook.Store() != nil {
-		// Count how many user turns are being rewound (for checkpoint lookup)
-		turnsAfter := 0
-		for _, ri := range m.rewindItems {
-			if ri.MsgIndex >= cutIdx {
-				turnsAfter++
-			}
+		// Compute the absolute turn index for the selected user message.
+		// m.agentTurnID is the turn index of the most recent user message.
+		// Each rewindItem corresponds to one user turn (startAgentTurn increments
+		// agentTurnID by 1). The selected item at rewindCursor has turn index:
+		//   agentTurnID - (totalItems - 1 - rewindCursor)
+		// This correctly handles multiple rewind-send-cancel cycles where
+		// agentTurnID has grown beyond the number of visible user messages.
+		totalItems := len(m.rewindItems)
+		absTurnIdx := int(m.agentTurnID) - (totalItems - 1 - m.rewindCursor)
+		if absTurnIdx < 1 {
+			absTurnIdx = 1
 		}
-		m.rewindResult = m.checkpointHook.Store().Rewind(turnsAfter)
+		m.rewindResult = m.checkpointHook.Store().Rewind(absTurnIdx)
 	}
 
 	// Put selected message content into input box

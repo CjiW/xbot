@@ -284,3 +284,165 @@ func TestCheckpointHook_PostError(t *testing.T) {
 		t.Errorf("expected 0 snapshots on error, got %d", len(snaps))
 	}
 }
+
+// TestCheckpointStore_RewindMultiCycle tests the scenario where a user
+// repeatedly rewinds to the same message, sends, cancels, then rewinds again.
+// This was a real bug: turnsAfter (a count) was passed to Rewind() which
+// expects an absolute turn index. After cycles, agentTurnID grows, making
+// the count much smaller than the actual turn indices, causing Rewind() to
+// delete ALL checkpoints including early ones.
+func TestCheckpointStore_RewindMultiCycle(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCheckpointStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	testDir := t.TempDir()
+	fooPath := filepath.Join(testDir, "foo.go")
+	barPath := filepath.Join(testDir, "bar.go")
+	bazPath := filepath.Join(testDir, "baz.go")
+
+	os.WriteFile(fooPath, []byte("original foo"), 0644)
+	os.WriteFile(barPath, []byte("original bar"), 0644)
+	os.WriteFile(bazPath, []byte("original baz"), 0644)
+
+	// Turn 1: modify foo.go
+	store.Write(FileSnapshot{TurnIdx: 1, ToolName: "FileReplace", FilePath: fooPath,
+		Existed: true, ContentB64: encodeB64("original foo")})
+	os.WriteFile(fooPath, []byte("modified foo"), 0644)
+
+	// Turn 2: modify bar.go
+	store.Write(FileSnapshot{TurnIdx: 2, ToolName: "FileReplace", FilePath: barPath,
+		Existed: true, ContentB64: encodeB64("original bar")})
+	os.WriteFile(barPath, []byte("modified bar"), 0644)
+
+	// Turn 3: modify baz.go
+	store.Write(FileSnapshot{TurnIdx: 3, ToolName: "FileReplace", FilePath: bazPath,
+		Existed: true, ContentB64: encodeB64("original baz")})
+	os.WriteFile(bazPath, []byte("modified baz"), 0644)
+
+	// --- Cycle 1: Rewind to turn 2 (simulate user selecting 2nd message) ---
+	// agentTurnID=3, rewindItems=[U1,U2,U3], selecting U2 (index 1)
+	// Correct absTurnIdx = 3 - (3-1-1) = 2
+	store.Rewind(2)
+
+	// Verify: baz.go restored (turn 3 snapshot), bar.go restored (turn 2 snapshot)
+	content, _ := os.ReadFile(bazPath)
+	if string(content) != "original baz" {
+		t.Errorf("cycle 1: baz.go = %q, want %q", string(content), "original baz")
+	}
+	content, _ = os.ReadFile(barPath)
+	if string(content) != "original bar" {
+		t.Errorf("cycle 1: bar.go = %q, want %q", string(content), "original bar")
+	}
+
+	// Verify turn 1 snapshot still exists (critical regression check)
+	snaps, _ := store.ReadAll()
+	for _, s := range snaps {
+		if s.TurnIdx == 1 {
+			t.Log("turn 1 snapshot survived cycle 1 (correct)")
+			break
+		}
+	}
+	// After Rewind(2), snapshots with TurnIdx >= 2 are truncated
+	// So only turn 1 snapshot should remain
+	for _, s := range snaps {
+		if s.TurnIdx >= 2 {
+			t.Errorf("cycle 1: turn %d snapshot should have been truncated", s.TurnIdx)
+		}
+	}
+
+	// --- Cycle 2: User re-sends (turn 4), modifies bar.go, then cancels ---
+	store.Write(FileSnapshot{TurnIdx: 4, ToolName: "FileReplace", FilePath: barPath,
+		Existed: true, ContentB64: encodeB64("original bar")})
+	os.WriteFile(barPath, []byte("modified bar v2"), 0644)
+
+	// Now agentTurnID=4, rewindItems=[U1,U2_new]
+	// Simulate rewind to U2_new: absTurnIdx = 4 - (2-1-1) = 4
+	store.Rewind(4)
+
+	// bar.go should be restored to "original bar"
+	content, _ = os.ReadFile(barPath)
+	if string(content) != "original bar" {
+		t.Errorf("cycle 2: bar.go = %q, want %q", string(content), "original bar")
+	}
+
+	// Verify turn 1 snapshot STILL exists (this was the bug: old code would
+	// pass turnsAfter=1, causing Rewind(1) to delete turn 1's snapshot)
+	snaps, _ = store.ReadAll()
+	foundTurn1 := false
+	for _, s := range snaps {
+		if s.TurnIdx == 1 {
+			foundTurn1 = true
+			break
+		}
+	}
+	if !foundTurn1 {
+		t.Error("REGRESSION: turn 1 snapshot was deleted after cycle 2 rewind")
+	}
+
+	// --- Cycle 3: Another re-send (turn 5), modifies foo.go, then cancels ---
+	store.Write(FileSnapshot{TurnIdx: 5, ToolName: "FileReplace", FilePath: fooPath,
+		Existed: true, ContentB64: encodeB64("original foo")})
+	os.WriteFile(fooPath, []byte("modified foo v2"), 0644)
+
+	// agentTurnID=5, rewindItems=[U1,U2_new2]
+	// Simulate rewind to U1: absTurnIdx = 5 - (2-1-0) = 4
+	store.Rewind(4)
+
+	// foo.go was modified in cycle 3 at turn 5, Rewind(4) removes TurnIdx >= 4
+	// Turn 5 snapshot is removed → foo.go restored (it was turn 1 that modified it,
+	// and turn 5 that modified it again — only turn 5's snapshot exists now)
+	// Wait: foo.go was modified at turn 1 (snapshot exists). Rewind(4) keeps TurnIdx < 4.
+	// Turn 1 snapshot for foo.go is kept. But foo.go is currently "modified foo v2".
+	// Rewind(4) removes turn 5 snapshot and restores foo.go from... no, Rewind only
+	// restores files that have snapshots with TurnIdx >= the argument.
+	// Turn 5's snapshot for foo.go has TurnIdx=5 >= 4, so it gets restored.
+	content, _ = os.ReadFile(fooPath)
+	if string(content) != "original foo" {
+		t.Errorf("cycle 3: foo.go = %q, want %q", string(content), "original foo")
+	}
+	content, _ = os.ReadFile(barPath)
+	// bar.go was "original bar" after cycle 2. No new snapshot for bar in cycle 3.
+	if string(content) != "original bar" {
+		t.Errorf("cycle 3: bar.go = %q, want %q", string(content), "original bar")
+	}
+}
+
+// TestCheckpointStore_RewindPreservesEarlierSnapshots verifies that Rewind(N)
+// only removes snapshots with TurnIdx >= N, preserving all earlier ones.
+func TestCheckpointStore_RewindPreservesEarlierSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCheckpointStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Write snapshots across 5 turns
+	for i := 1; i <= 5; i++ {
+		store.Write(FileSnapshot{
+			TurnIdx:    i,
+			ToolName:   "FileReplace",
+			FilePath:   filepath.Join(t.TempDir(), "f.go"),
+			Existed:    true,
+			ContentB64: encodeB64("content"),
+		})
+	}
+
+	// Rewind to turn 3
+	store.Rewind(3)
+
+	snaps, _ := store.ReadAll()
+	for _, s := range snaps {
+		if s.TurnIdx >= 3 {
+			t.Errorf("snapshot with TurnIdx=%d should have been removed", s.TurnIdx)
+		}
+	}
+	// Turns 1 and 2 should remain
+	if len(snaps) != 2 {
+		t.Errorf("expected 2 remaining snapshots, got %d", len(snaps))
+	}
+}

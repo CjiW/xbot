@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"testing"
+	"time"
 
 	"xbot/llm"
 )
@@ -243,5 +244,137 @@ func TestSessionService_ToolCalls(t *testing.T) {
 	}
 	if messages[0].ToolCalls[0].Name != "tool1" {
 		t.Errorf("Expected tool name 'tool1', got '%s'", messages[0].ToolCalls[0].Name)
+	}
+}
+
+func TestSessionService_PurgeNewerThanOrEqual(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	tenantSvc := NewTenantService(db)
+	sessionSvc := NewSessionService(db)
+
+	tenantID, err := tenantSvc.GetOrCreateTenantID("test", "chat1")
+	if err != nil {
+		t.Fatalf("Failed to create tenant: %v", err)
+	}
+
+	// Add messages with controlled timestamps (1 second apart to ensure unique created_at)
+	baseTime := time.Date(2026, 4, 16, 12, 0, 0, 0, time.Local)
+	msgs := []llm.ChatMessage{
+		llm.NewUserMessage("U1"),
+		llm.NewAssistantMessage("A1"),
+		llm.NewUserMessage("U2"),
+		llm.NewAssistantMessage("A2"),
+		llm.NewUserMessage("U3"),
+		llm.NewAssistantMessage("A3"),
+		llm.NewUserMessage("U4"),
+		llm.NewAssistantMessage("A4"),
+	}
+	for i, m := range msgs {
+		m.Timestamp = baseTime.Add(time.Duration(i) * time.Second)
+		if err := sessionSvc.AddMessage(tenantID, m); err != nil {
+			t.Fatalf("Failed to add message %d: %v", i, err)
+		}
+	}
+
+	// Purge from U3 onwards (timestamp = baseTime + 4s)
+	cutoff := baseTime.Add(4 * time.Second)
+	purged, err := sessionSvc.PurgeNewerThanOrEqual(tenantID, cutoff)
+	if err != nil {
+		t.Fatalf("PurgeNewerThanOrEqual: %v", err)
+	}
+	if purged != 4 {
+		t.Errorf("expected 4 purged (U3, A3, U4, A4), got %d", purged)
+	}
+
+	// Verify remaining messages
+	remaining, err := sessionSvc.GetAllMessages(tenantID)
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	if len(remaining) != 4 {
+		t.Errorf("expected 4 remaining (U1, A1, U2, A2), got %d", len(remaining))
+	}
+
+	// Verify first message content
+	if remaining[0].Content != "U1" {
+		t.Errorf("first message = %q, want %q", remaining[0].Content, "U1")
+	}
+}
+
+func TestSessionService_PurgeNewerThanOrEqual_MultiCycle(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	tenantSvc := NewTenantService(db)
+	sessionSvc := NewSessionService(db)
+
+	tenantID, err := tenantSvc.GetOrCreateTenantID("test", "chat1")
+	if err != nil {
+		t.Fatalf("Failed to create tenant: %v", err)
+	}
+
+	baseTime := time.Date(2026, 4, 16, 12, 0, 0, 0, time.Local)
+	add := func(role, content string, offset int) {
+		m := llm.ChatMessage{Role: role, Content: content}
+		m.Timestamp = baseTime.Add(time.Duration(offset) * time.Second)
+		if err := sessionSvc.AddMessage(tenantID, m); err != nil {
+			t.Fatalf("AddMessage: %v", err)
+		}
+	}
+
+	// Initial state: U1(0s), A1(1s), U2(2s), A2(3s), U3(4s), A3(5s)
+	add("user", "U1", 0)
+	add("assistant", "A1", 1)
+	add("user", "U2", 2)
+	add("assistant", "A2", 3)
+	add("user", "U3", 4)
+	add("assistant", "A3", 5)
+
+	// Cycle 1: Rewind to U3 (4s) — removes U3 and A3
+	sessionSvc.PurgeNewerThanOrEqual(tenantID, baseTime.Add(4*time.Second))
+	count, _ := sessionSvc.GetMessagesCount(tenantID)
+	if count != 4 {
+		t.Errorf("cycle 1: expected 4 messages, got %d", count)
+	}
+
+	// Re-send U3 (new timestamp 10s), cancel (simulated by just adding messages)
+	add("user", "U3-v2", 10)
+	add("assistant", "A3-v2", 11)
+	add("tool", "tool_result", 12)
+
+	// Cycle 2: Rewind to U3-v2 (10s) — removes U3-v2 and everything after
+	sessionSvc.PurgeNewerThanOrEqual(tenantID, baseTime.Add(10*time.Second))
+	count, _ = sessionSvc.GetMessagesCount(tenantID)
+	if count != 4 {
+		t.Errorf("cycle 2: expected 4 messages (U1,A1,U2,A2), got %d", count)
+	}
+
+	// Re-send U3 again (new timestamp 20s), add more messages
+	add("user", "U3-v3", 20)
+	add("assistant", "A3-v3", 21)
+	add("user", "U4", 22)
+	add("assistant", "A4", 23)
+
+	// Cycle 3: Rewind to U2 (2s) — removes U2 and everything after
+	sessionSvc.PurgeNewerThanOrEqual(tenantID, baseTime.Add(2*time.Second))
+	count, _ = sessionSvc.GetMessagesCount(tenantID)
+	if count != 2 {
+		t.Errorf("cycle 3: expected 2 messages (U1,A1), got %d", count)
+	}
+
+	// Verify first message is still U1
+	remaining, _ := sessionSvc.GetAllMessages(tenantID)
+	if len(remaining) > 0 && remaining[0].Content != "U1" {
+		t.Errorf("after cycle 3: first message = %q, want %q", remaining[0].Content, "U1")
 	}
 }

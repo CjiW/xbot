@@ -260,11 +260,9 @@ func main() {
 				// Model from server
 				vals["llm_model"] = app.backend.GetDefaultModel()
 				// Settings from server (contains most config values)
-				if ss := app.backend.SettingsService(); ss != nil {
-					if sv, err := ss.GetSettings("cli", "cli_user"); err == nil {
-						for k, v := range sv {
-							vals[k] = v
-						}
+				if sv, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
+					for k, v := range sv {
+						vals[k] = v
 					}
 				}
 				// Context mode from server
@@ -381,15 +379,15 @@ func main() {
 					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
 				// Push runtime state to server
+				if v, ok := values["context_mode"]; ok && v != "" {
+					_ = app.backend.SetContextMode(v)
+				}
 				if v, ok := values["enable_auto_compress"]; ok {
 					if v == "true" {
 						_ = app.backend.SetContextMode("auto")
 					} else {
 						_ = app.backend.SetContextMode("none")
 					}
-				}
-				if v, ok := values["context_mode"]; ok && v != "" {
-					_ = app.backend.SetContextMode(v)
 				}
 				if v, ok := values["max_iterations"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {

@@ -1115,36 +1115,16 @@ func (a *Agent) Run(ctx context.Context) error {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
 						log.Info("Cancel signal sent to processing goroutine")
-						cancelResp := bus.OutboundMessage{
-							Channel: msg.Channel,
-							ChatID:  msg.ChatID,
-							Content: "Request cancelled.",
-						}
-						if a.directSend != nil {
-							if _, err := a.directSend(cancelResp); err != nil {
-								log.WithError(err).Warn("Failed to send cancel response via directSend")
-							}
-						} else {
-							a.bus.Outbound <- cancelResp
-						}
+						// Use sendMessage to ensure transport metadata is loaded
+						// (required for remote mode: hub routing needs transport_chat_id)
+						_ = a.sendMessage(msg.Channel, msg.ChatID, "Request cancelled.")
 					default:
 						// cancel 信号已发过
 						log.WithField("cancel_key", cancelKey).Warn("Cancel signal already sent (buffer full)")
 					}
 				} else {
 					log.WithField("cancel_key", cancelKey).Warn("No active request found for cancel")
-					noActiveResp := bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: "No active request.",
-					}
-					if a.directSend != nil {
-						if _, err := a.directSend(noActiveResp); err != nil {
-							log.WithError(err).Warn("Failed to send no-active-request response via directSend")
-						}
-					} else {
-						a.bus.Outbound <- noActiveResp
-					}
+					_ = a.sendMessage(msg.Channel, msg.ChatID, "No active request.")
 				}
 				continue
 			}
@@ -1434,9 +1414,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
 			// 即使取消也要发送 response，让 CLI 清理 typing/progress 状态。
-			// processMessage 内部可能已返回 "Agent was cancelled."，但 wasCancelled 时被跳过。
+			// Use sendMessage to ensure transport metadata is loaded for remote mode.
 			if response != nil {
-				a.bus.Outbound <- *response
+				_ = a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata)
 			}
 			continue
 		}
@@ -1456,13 +1436,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			continue
 		}
 		if response != nil {
-			if a.directSend != nil {
-				if _, err := a.directSend(*response); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via directSend, fallback to bus")
-					a.bus.Outbound <- *response
-				}
-			} else {
-				a.bus.Outbound <- *response
+			// Use sendMessage to ensure transport metadata is loaded for remote mode.
+			if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via sendMessage")
 			}
 		}
 

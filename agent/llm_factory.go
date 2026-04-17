@@ -534,38 +534,75 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 	if getConfigSubs != nil {
 		configSubs = getConfigSubs()
 	}
-	for _, cs := range configSubs {
+	// Config subs don't have CachedModels. Search all subs by priority:
+	// 1. Exact Model field match
+	// 2. Provider guess match (e.g. "gpt-5-mini" → openai, "claude-*" → anthropic)
+	// 3. Any sub with valid credentials (last resort)
+	// This allows tier models to span across multiple subscriptions.
+	guessedProvider := guessProvider(resolvedModel)
+	var providerMatchSub *config.SubscriptionConfig
+	var anyValidSub *config.SubscriptionConfig
+	for i := range configSubs {
+		cs := &configSubs[i]
 		if cs.BaseURL == "" || cs.APIKey == "" {
 			continue
 		}
+		// Priority 1: exact Model match
 		if cs.Model == resolvedModel {
-			sub := configSubToLLMSubscription(cs)
+			sub := configSubToLLMSubscription(*cs)
 			client := f.createClientFromSub(sub, resolvedModel)
 			if client != nil {
-				log.WithFields(log.Fields{"model": resolvedModel, "sub": cs.Name, "step": 2, "source": "config"}).Info("[LLM] GetLLMForModel: found in config sub")
+				log.WithFields(log.Fields{"model": resolvedModel, "sub": cs.Name, "step": 2, "source": "config-exact"}).Info("[LLM] GetLLMForModel: found in config sub (exact)")
 				return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
 			}
 		}
+		// Priority 2: provider guess
+		if providerMatchSub == nil && guessedProvider != "" && strings.Contains(strings.ToLower(cs.Provider), guessedProvider) {
+			providerMatchSub = cs
+		}
+		// Priority 3: any valid sub (prefer active)
+		if anyValidSub == nil || cs.Active {
+			anyValidSub = cs
+		}
+	}
+	// Try provider-matched sub
+	if providerMatchSub != nil {
+		sub := configSubToLLMSubscription(*providerMatchSub)
+		client := f.createClientFromSub(sub, resolvedModel)
+		if client != nil {
+			log.WithFields(log.Fields{"model": resolvedModel, "sub": providerMatchSub.Name, "step": 2, "source": "config-provider"}).Info("[LLM] GetLLMForModel: found via provider guess")
+			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+		}
+	}
+	// Try any valid sub (active preferred, already set above)
+	if anyValidSub != nil {
+		sub := configSubToLLMSubscription(*anyValidSub)
+		client := f.createClientFromSub(sub, resolvedModel)
+		if client != nil {
+			log.WithFields(log.Fields{"model": resolvedModel, "sub": anyValidSub.Name, "step": 2, "source": "config-fallback"}).Info("[LLM] GetLLMForModel: using fallback config sub")
+			return client, resolvedModel, sub.MaxContext, sub.ThinkingMode, true
+		}
 	}
 
-	// DB subscriptions (same logic as before)
+	// DB subscriptions: search by CachedModels/Model match, then provider guess, then any valid sub.
 	if f.subscriptionSvc != nil && senderID != "" {
 		subs, err := f.subscriptionSvc.List(senderID)
 		if err == nil && len(subs) > 0 {
+			var dbProviderSub *sqlite.LLMSubscription
+			var dbAnySub *sqlite.LLMSubscription
 			for _, sub := range subs {
 				if sub.BaseURL == "" || sub.APIKey == "" {
 					continue
 				}
-				// Check DB cache first (O(1) per sub, no API call)
-				found := false
-				for _, m := range sub.CachedModels {
-					if m == resolvedModel {
-						found = true
-						break
+				// Priority 1: model in CachedModels or exact Model field
+				found := sub.Model == resolvedModel
+				if !found {
+					for _, m := range sub.CachedModels {
+						if m == resolvedModel {
+							found = true
+							break
+						}
 					}
-				}
-				if !found && sub.Model == resolvedModel {
-					found = true
 				}
 				if found {
 					client := f.createClientFromSub(sub, resolvedModel)
@@ -599,6 +636,29 @@ func (f *LLMFactory) GetLLMForModel(senderID, targetModel string) (llm.LLM, stri
 							}
 						}
 					}
+				}
+				// Collect fallbacks: provider guess and any valid sub
+				if dbProviderSub == nil && guessedProvider != "" && strings.Contains(strings.ToLower(sub.Provider), guessedProvider) {
+					dbProviderSub = sub
+				}
+				if dbAnySub == nil {
+					dbAnySub = sub
+				}
+			}
+			// Priority 2: provider guess
+			if dbProviderSub != nil {
+				client := f.createClientFromSub(dbProviderSub, resolvedModel)
+				if client != nil {
+					log.WithFields(log.Fields{"model": resolvedModel, "sub": dbProviderSub.Name, "step": 2, "source": "db-provider"}).Info("[LLM] GetLLMForModel: found via provider guess (DB)")
+					return client, resolvedModel, dbProviderSub.MaxContext, dbProviderSub.ThinkingMode, true
+				}
+			}
+			// Priority 3: any valid DB sub
+			if dbAnySub != nil {
+				client := f.createClientFromSub(dbAnySub, resolvedModel)
+				if client != nil {
+					log.WithFields(log.Fields{"model": resolvedModel, "sub": dbAnySub.Name, "step": 2, "source": "db-fallback"}).Info("[LLM] GetLLMForModel: using fallback DB sub")
+					return client, resolvedModel, dbAnySub.MaxContext, dbAnySub.ThinkingMode, true
 				}
 			}
 		}

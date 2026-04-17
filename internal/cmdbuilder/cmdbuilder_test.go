@@ -4,21 +4,40 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestShellEscape(t *testing.T) {
-	tests := []struct {
+	type escCase struct {
 		input    string
 		expected string
-	}{
+	}
+
+	// Common cases: same output on all platforms.
+	common := []escCase{
 		{"/tmp/file.txt", "'/tmp/file.txt'"},
 		{"file with spaces", "'file with spaces'"},
-		{"file'with'quotes", "'file'\\''with'\\''quotes'"},
 		{"", "''"},
 	}
 
-	for _, tt := range tests {
+	// Platform-specific quote escaping.
+	var platformCases []escCase
+	if runtime.GOOS == "windows" {
+		// PowerShell single-quoted strings escape embedded quotes as ''.
+		platformCases = []escCase{
+			{"file'with'quotes", "'file''with''quotes'"},
+		}
+	} else {
+		// POSIX sh: end quote, backslash-escaped quote, reopen quote.
+		platformCases = []escCase{
+			{"file'with'quotes", "'file'\\''with'\\''quotes'"},
+		}
+	}
+
+	all := append(common, platformCases...)
+
+	for _, tt := range all {
 		got := shellEscape(tt.input)
 		if got != tt.expected {
 			t.Errorf("shellEscape(%q) = %q, want %q", tt.input, got, tt.expected)

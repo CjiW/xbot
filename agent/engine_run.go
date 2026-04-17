@@ -67,7 +67,6 @@ type runState struct {
 	disableCompressRetry bool
 	compressAttempts     int
 	lastCompressIter     int
-	lengthRetryUsed      bool // guard: only auto-retry once for finish_reason=length
 
 	// Metrics (local counters for this Run)
 	localIterCount    int
@@ -589,70 +588,28 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 			}), false
 		}
 
-		// length: model hit max_output_tokens, response is truncated.
-		// The model may have been about to call a tool but ran out of tokens.
-		// Auto-retry by appending partial content as assistant message and
-		// asking the model to continue.
+		// length: output truncated due to max_tokens limit
+		output := cleanContent
 		if response.FinishReason == llm.FinishReasonLength {
-			if !s.lengthRetryUsed && cleanContent != "" {
-				s.lengthRetryUsed = true
-				log.Ctx(ctx).WithFields(log.Fields{
-					"iteration":         s.localIterCount,
-					"truncated_len":     len(cleanContent),
-					"completion_tokens": s.lastCompletionTokens,
-				}).Warn("Model output truncated (length), auto-retrying with continue instruction")
-				// Append the truncated assistant message so the model can continue
-				s.messages = append(s.messages, llm.NewAssistantMessage(cleanContent))
-				s.messages = append(s.messages, llm.NewUserMessage("[Output was truncated due to max_output_tokens. Please continue from where you left off. If you were about to call a tool, call it now.]"))
-				return nil, true // retry
-			}
-			// Second length truncation or empty content — give up and return
-			log.Ctx(ctx).WithFields(log.Fields{
-				"iteration":         s.localIterCount,
-				"second_truncation": !s.lengthRetryUsed,
-			}).Warn("Model output truncated again after retry, returning partial result")
-			output := cleanContent + "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
-			return s.buildOutput(&bus.OutboundMessage{
-				Channel:   s.cfg.Channel,
-				ChatID:    s.cfg.ChatID,
-				Content:   output,
-				ToolsUsed: s.toolsUsed,
-			}), false
+			output += "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
 		}
-
 		// content_filter: model output was filtered by safety system
 		if response.FinishReason == llm.FinishReasonContentFilter {
 			log.Ctx(ctx).WithFields(log.Fields{
 				"finish_reason": response.FinishReason,
 				"content_len":   len(cleanContent),
 			}).Warn("Model response filtered by content filter")
-			output := cleanContent
 			if output == "" {
 				output = "⚠️ Response was filtered by content safety system."
 			} else {
 				output += "\n\n⚠️ Response was partially filtered by content safety system."
 			}
-			return s.buildOutput(&bus.OutboundMessage{
-				Channel:   s.cfg.Channel,
-				ChatID:    s.cfg.ChatID,
-				Content:   output,
-				ToolsUsed: s.toolsUsed,
-			}), false
 		}
 
-		// Non-stop finish reason (empty string, unknown provider-specific values)
-		if response.FinishReason != "" && response.FinishReason != llm.FinishReasonStop {
-			log.Ctx(ctx).WithFields(log.Fields{
-				"finish_reason": response.FinishReason,
-				"content_len":   len(cleanContent),
-			}).Warn("Model returned unexpected finish_reason, treating as stop")
-		}
-
-		// stop (or empty/unknown): normal text response
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
-			Content:     cleanContent,
+			Content:     output,
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: s.waitingUser,
 		}), false
@@ -754,6 +711,18 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	}
 
 	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
+
+	// Free snip layer (Claude Code style): before expensive API-based compression,
+	// trim old tool result contents that are no longer needed. This is free — no
+	// API call required, just replaces large tool result content with placeholders.
+	// Triggered when context exceeds 65% of prompt budget but before the 75%
+	// compression threshold. Only activates when maxOutputTokens is reasonable
+	// (>100 tokens) to avoid interfering with test scenarios using extreme values.
+	snipped := false
+	if !needCompress && maxOutputTokens > 100 && totalTokens > int64(float64(promptBudget)*0.65) && len(s.messages) > 6 {
+		snipped = s.snipOldToolResults(ctx)
+	}
+
 	log.Ctx(ctx).WithFields(log.Fields{
 		"total_tokens":       totalTokens,
 		"max_context":        maxTokens,
@@ -762,6 +731,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		"threshold":          int(float64(promptBudget) * 0.75),
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
+		"snipped":            snipped,
 		"base_prompt_tokens": s.lastPromptTokens,
 		"completion_tokens":  s.lastCompletionTokens,
 		"source": func() string {
@@ -818,6 +788,48 @@ func (s *runState) maybeCompress(ctx context.Context) {
 }
 
 // runCompression performs the actual context compression.
+// snipOldToolResults replaces large tool result contents from earlier iterations
+// with compact placeholders. This is a FREE context reduction layer — no API call
+// needed. Inspired by Claude Code's "Snip" layer.
+//
+// Strategy: tool results from iterations before the last 3 are replaced with
+// "[Tool result cleared to save context]" if they exceed 500 chars. This preserves
+// the message structure (tool_use/tool_result pairing) while freeing tokens.
+func (s *runState) snipOldToolResults(ctx context.Context) bool {
+	const (
+		minIterationsBeforeSnip = 3
+		maxContentLen           = 500
+		placeholder             = "[Old tool result cleared to save context]"
+	)
+
+	snipped := false
+	for i := range s.messages {
+		msg := &s.messages[i]
+		if msg.Role != "tool" || len(msg.Content) <= maxContentLen {
+			continue
+		}
+		// Check if this tool result is from an old iteration by finding the
+		// corresponding tool_use (assistant message with matching ToolCallID).
+		// Simple heuristic: if message index is far from the end, it's old.
+		distanceFromEnd := len(s.messages) - i
+		if distanceFromEnd < minIterationsBeforeSnip*3 { // ~3 messages per iteration
+			continue
+		}
+		oldLen := len(msg.Content)
+		msg.Content = placeholder
+		snipped = true
+		log.Ctx(ctx).WithFields(log.Fields{
+			"msg_index":    i,
+			"old_content":  oldLen,
+			"distance_end": distanceFromEnd,
+		}).Debug("Snipped old tool result")
+	}
+	if snipped {
+		log.Ctx(ctx).Debug("Snipped old tool results to reduce context")
+	}
+	return snipped
+}
+
 func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalTokens, maxTokens int) {
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseCompressing

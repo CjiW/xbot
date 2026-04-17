@@ -996,11 +996,13 @@ func main() {
 			}
 		}
 		// Check if server has an active agent turn for this chat (mid-session reconnect).
-		// If so, restore the current progress state (tool calls, thinking, etc.).
-		if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
-			cliCh.SendProgress(cliCfg.ChatID, progress)
-			cliCh.SetProcessing(true)
-		}
+		// Run in goroutine to avoid blocking TUI startup on RPC timeout.
+		go func() {
+			if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
+				cliCh.SendProgress(cliCfg.ChatID, progress)
+				cliCh.SetProcessing(true)
+			}
+		}()
 
 		// Wire reconnect callback to reload history on WS reconnect.
 		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {

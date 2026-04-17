@@ -604,8 +604,10 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 				log.Info("Reconnected to server")
 				consecutiveFailures = 0
 				// Notify CLI to reload history and re-sync state.
+				// Run in goroutine — callback may make slow RPC calls that
+				// should not block the reconnectLoop.
 				if b.onReconnectCb != nil {
-					b.onReconnectCb()
+					go b.onReconnectCb()
 				}
 				b.readPumpWg.Add(1)
 				go b.readPump(ctx)

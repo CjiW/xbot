@@ -159,6 +159,8 @@ write_systemd_unit() {
     install_user="$(id -un)"
     local xbot_home
     xbot_home="$(cd "$XBOT_HOME" && pwd)"
+    local work_dir
+    work_dir="$(pwd)"
     cat > "$unit_file" <<EOF_UNIT
 [Unit]
 Description=xbot Agent Server
@@ -168,6 +170,7 @@ After=network.target
 Type=simple
 User=${install_user}
 Environment=XBOT_HOME=${xbot_home}
+WorkingDirectory=${work_dir}
 ExecStart=${bin_path} serve --config ${config_path}
 Restart=on-failure
 RestartSec=5

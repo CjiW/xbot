@@ -145,6 +145,12 @@ func newCLIApp(serverURL, token string) *cliApp {
 		backend.IndexGlobalTools()
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
 		backend.LLMFactory().SetConfigSubs(func() []config.SubscriptionConfig { return cfg.Subscriptions })
+		backend.LLMFactory().SetRetryConfig(llm.RetryConfig{
+			Attempts: uint(cfg.Agent.LLMRetryAttempts),
+			Delay:    cfg.Agent.LLMRetryDelay,
+			MaxDelay: cfg.Agent.LLMRetryMaxDelay,
+			Timeout:  cfg.Agent.LLMRetryTimeout,
+		})
 	}
 
 	return &cliApp{

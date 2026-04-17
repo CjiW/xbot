@@ -856,7 +856,7 @@ func main() {
 			})
 			// Inject TrimHistoryFn for Ctrl+K session truncation (RPC-backed)
 			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
-				return app.backend.TrimHistory("", "", cutoff)
+				return app.backend.TrimHistory("cli", cliCfg.ChatID, cutoff)
 			})
 			cliCh.SetResetTokenStateFn(func() {
 				app.backend.ResetTokenState()

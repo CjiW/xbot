@@ -1084,22 +1084,40 @@ func (a *Agent) Run(ctx context.Context) error {
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
 				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				log.WithField("cancel_key", cancelKey).Info("Received /cancel request")
 				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
-						a.bus.Outbound <- bus.OutboundMessage{
+						log.Info("Cancel signal sent to processing goroutine")
+						cancelResp := bus.OutboundMessage{
 							Channel: msg.Channel,
 							ChatID:  msg.ChatID,
 							Content: "Request cancelled.",
 						}
+						if a.directSend != nil {
+							if _, err := a.directSend(cancelResp); err != nil {
+								log.WithError(err).Warn("Failed to send cancel response via directSend")
+							}
+						} else {
+							a.bus.Outbound <- cancelResp
+						}
 					default:
 						// cancel 信号已发过
+						log.WithField("cancel_key", cancelKey).Warn("Cancel signal already sent (buffer full)")
 					}
 				} else {
-					a.bus.Outbound <- bus.OutboundMessage{
+					log.WithField("cancel_key", cancelKey).Warn("No active request found for cancel")
+					noActiveResp := bus.OutboundMessage{
 						Channel: msg.Channel,
 						ChatID:  msg.ChatID,
 						Content: "No active request.",
+					}
+					if a.directSend != nil {
+						if _, err := a.directSend(noActiveResp); err != nil {
+							log.WithError(err).Warn("Failed to send no-active-request response via directSend")
+						}
+					} else {
+						a.bus.Outbound <- noActiveResp
 					}
 				}
 				continue

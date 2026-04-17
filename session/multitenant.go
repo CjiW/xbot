@@ -718,7 +718,10 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 		// Evict cached session so next request loads fresh state
 		sessionKey := channel + ":" + chatID
 		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
+		if sess, ok := m.tenantCache[sessionKey]; ok {
+			sess.Close()
+			delete(m.tenantCache, sessionKey)
+		}
 		m.mu.Unlock()
 	case "core_persona":
 		appendErr("persona", m.coreSvc.ClearBlock(tenantID, "persona", ""))
@@ -731,7 +734,10 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 		// Evict cached session to reset in-memory core memory references
 		sessionKey := channel + ":" + chatID
 		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
+		if sess, ok := m.tenantCache[sessionKey]; ok {
+			sess.Close()
+			delete(m.tenantCache, sessionKey)
+		}
 		m.mu.Unlock()
 	case "long_term":
 		appendErr("long_term", m.memorySvc.ClearLongTerm(ctx, tenantID))
@@ -753,7 +759,10 @@ func (m *MultiTenantSession) ClearMemory(ctx context.Context, channel, chatID, t
 		// Evict session from cache to reset in-memory state
 		sessionKey := channel + ":" + chatID
 		m.mu.Lock()
-		delete(m.tenantCache, sessionKey)
+		if sess, ok := m.tenantCache[sessionKey]; ok {
+			sess.Close()
+			delete(m.tenantCache, sessionKey)
+		}
 		m.mu.Unlock()
 	default:
 		return fmt.Errorf("unknown target type: %s", targetType)

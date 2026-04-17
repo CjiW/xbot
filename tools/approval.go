@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -88,8 +89,9 @@ type ApprovalHandler interface {
 // It reads the user configuration from context (injected per-request by the engine),
 // so settings changes take effect immediately without restart.
 type ApprovalHook struct {
-	handler ApprovalHandler
-	timeout time.Duration
+	handlerMu sync.RWMutex
+	handler   ApprovalHandler
+	timeout   time.Duration
 }
 
 // NewApprovalHook creates an ApprovalHook with the given handler.
@@ -106,7 +108,9 @@ func (h *ApprovalHook) Name() string { return "approval" }
 // SetHandler replaces the approval handler at runtime.
 // Called by channels (CLI, Web) after they have a UI program ready.
 func (h *ApprovalHook) SetHandler(handler ApprovalHandler) {
+	h.handlerMu.Lock()
 	h.handler = handler
+	h.handlerMu.Unlock()
 }
 
 func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args string) error {
@@ -148,7 +152,10 @@ func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args str
 	}
 
 	// Privileged user — request approval with timeout
-	if h.handler == nil {
+	h.handlerMu.RLock()
+	handler := h.handler
+	h.handlerMu.RUnlock()
+	if handler == nil {
 		// No approval handler registered — block execution
 		return fmt.Errorf("execution as %q requires approval but no approval handler is available (running in non-interactive channel?)", runAs)
 	}
@@ -165,7 +172,7 @@ func (h *ApprovalHook) PreToolUse(ctx context.Context, toolName string, args str
 	// Extract display details from args
 	populateApprovalDetails(&req, toolName, args)
 
-	result, err := h.handler.RequestApproval(approvalCtx, req)
+	result, err := handler.RequestApproval(approvalCtx, req)
 	if err != nil {
 		return fmt.Errorf("approval request failed: %w", err)
 	}

@@ -70,7 +70,7 @@ func (a *Agent) cleanupExpiredSessions() {
 			log.WithFields(log.Fields{
 				"key":       key,
 				"role":      ia.roleName,
-				"idle_time": now.Sub(ia.lastUsed).String(),
+				"idle_time": now.Sub(lastUsed).String(),
 			}).Info("Cleaning up expired interactive session")
 			a.interactiveSubAgents.Delete(key)
 		}

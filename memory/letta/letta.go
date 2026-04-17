@@ -349,8 +349,8 @@ Review the conversation below and call the consolidate_memory tool to update the
 		}
 	}
 
-	log.WithField("tenant_id", m.tenantID).Infof("Letta memory consolidation done: lastConsolidated=0")
-	return memory.MemorizeResult{NewLastConsolidated: 0, OK: true}, nil
+	log.WithField("tenant_id", m.tenantID).Infof("Letta memory consolidation done: lastConsolidated=%d", len(oldMessages))
+	return memory.MemorizeResult{NewLastConsolidated: len(oldMessages), OK: true}, nil
 }
 
 // Close releases resources (no-op for LettaMemory).

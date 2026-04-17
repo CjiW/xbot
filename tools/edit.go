@@ -629,5 +629,8 @@ func Truncate(s string, maxLen int) string {
 	if len(runes) <= maxLen {
 		return s
 	}
+	if maxLen < 4 {
+		return "..."
+	}
 	return string(runes[:maxLen-3]) + "..."
 }

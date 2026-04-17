@@ -721,13 +721,13 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 			if db == nil {
 				return "", fmt.Errorf("remote sandbox not configured")
 			}
-			entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+			entry, err := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
 				Mode:        mode,
 				DockerImage: dockerImage,
 				Workspace:   workspace,
 			})
-			if entry == nil {
-				return "", fmt.Errorf("failed to generate token")
+			if err != nil {
+				return "", fmt.Errorf("generate token: %w", err)
 			}
 			return buildRunnerConnectCmd(cfg, entry), nil
 		},
@@ -973,19 +973,22 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 			webCh.SetCallbacks(buildWebCallbacks(cfg, backend))
 			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
 			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
-			if router, ok := tools.GetSandbox().(*tools.SandboxRouter); ok {
-				if remote := router.Remote(); remote != nil {
-					remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
-						webCh.PushRunnerStatus(userID, runnerName, online)
-						// When a runner with local LLM connects/disconnects, update ProxyLLM.
-						if online {
-							injectProxyLLM(userID, backend)
-						} else {
-							backend.ClearProxyLLM(userID)
+			sb := tools.GetSandbox()
+			if sb != nil {
+				if router, ok := sb.(*tools.SandboxRouter); ok {
+					if remote := router.Remote(); remote != nil {
+						remote.OnRunnerStatusChange = func(userID, runnerName string, online bool) {
+							webCh.PushRunnerStatus(userID, runnerName, online)
+							// When a runner with local LLM connects/disconnects, update ProxyLLM.
+							if online {
+								injectProxyLLM(userID, backend)
+							} else {
+								backend.ClearProxyLLM(userID)
+							}
 						}
-					}
-					remote.OnSyncProgress = func(userID, phase, message string) {
-						webCh.PushSyncProgress(userID, phase, message)
+						remote.OnSyncProgress = func(userID, phase, message string) {
+							webCh.PushSyncProgress(userID, phase, message)
+						}
 					}
 				}
 			}
@@ -1037,7 +1040,10 @@ func main() {
 		XbotHome:         xbotDir,
 		PersonaIsolation: cfg.Web.PersonaIsolation,
 	}
-	backend := agent.NewLocalBackend(bc.AgentConfig())
+	backend, err := agent.NewLocalBackend(bc.AgentConfig())
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create local backend")
+	}
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
 	if cfg.OAuth.Enable && oauthManager != nil {
@@ -1177,6 +1183,9 @@ func main() {
 		feishuCh.SetSettingsCallbacks(channel.SettingsCallbacks{
 			LLMList: func(senderID string) ([]string, string) {
 				llmClient, currentModel, _, _ := backend.LLMFactory().GetLLM(senderID)
+				if llmClient == nil {
+					return nil, currentModel
+				}
 				return llmClient.ListModels(), currentModel
 			},
 			LLMSet: func(senderID, model string) error {
@@ -1336,10 +1345,16 @@ func main() {
 			},
 			SandboxCleanupTrigger: func(senderID string) error {
 				sb := tools.GetSandbox()
+				if sb == nil {
+					return fmt.Errorf("sandbox not initialized")
+				}
 				return sb.ExportAndImport(senderID)
 			},
 			SandboxIsExporting: func(senderID string) bool {
 				sb := tools.GetSandbox()
+				if sb == nil {
+					return false
+				}
 				return sb.IsExporting(senderID)
 			},
 			LLMGetPersonalConcurrency: func(senderID string) int {
@@ -1376,13 +1391,13 @@ func main() {
 				if db == nil {
 					return "", fmt.Errorf("remote sandbox not configured")
 				}
-				entry := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
+				entry, err := tools.NewRunnerTokenStore(db).Generate(senderID, tools.RunnerTokenSettings{
 					Mode:        mode,
 					DockerImage: dockerImage,
 					Workspace:   workspace,
 				})
-				if entry == nil {
-					return "", fmt.Errorf("failed to generate token")
+				if err != nil {
+					return "", fmt.Errorf("generate token: %w", err)
 				}
 				return buildRunnerConnectCmd(cfg, entry), nil
 			},

@@ -87,7 +87,14 @@ func NewBackgroundTaskManager() *BackgroundTaskManager {
 // generateTaskID generates a unique 8-char hex task ID.
 func generateTaskID() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: use time-based ID to avoid all-zero collision
+		v := uint32(time.Now().UnixNano())
+		b[0] = byte(v >> 24)
+		b[1] = byte(v >> 16)
+		b[2] = byte(v >> 8)
+		b[3] = byte(v)
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -142,15 +149,9 @@ func (m *BackgroundTaskManager) Start(
 
 		exitCode, execErr := execFn(ctx, outputBuf)
 
-		now := time.Now()
-
-		// Read killed flag ONCE and keep it — do NOT reset it.
-		// Kill() sets killed=true then calls cancel(); resetting here
-		// would race with status determination.
 		task.mu.Lock()
 		wasKilled := task.killed
-		task.mu.Unlock()
-
+		now := time.Now()
 		task.FinishedAt = &now
 		task.ExitCode = exitCode
 
@@ -162,9 +163,13 @@ func (m *BackgroundTaskManager) Start(
 				task.Status = BgTaskError
 				task.Error = execErr.Error()
 			}
+		} else if wasKilled {
+			task.Status = BgTaskKilled
+			task.Error = "killed by user"
 		} else {
 			task.Status = BgTaskDone
 		}
+		task.mu.Unlock()
 
 		log.WithFields(log.Fields{
 			"task_id":   id,
@@ -270,15 +275,12 @@ func (m *BackgroundTaskManager) Adopt(
 
 		task.mu.Lock()
 		wasKilled := task.killed
-		task.mu.Unlock()
 
 		// Capture final output from capture goroutines if available.
 		// Safe to call: exitCodeCh fires after cmd.Wait() + wg.Wait() complete,
 		// so all capture goroutines have finished writing.
 		if ongoingOutput != nil {
-			task.mu.Lock()
 			task.Output = ongoingOutput()
-			task.mu.Unlock()
 		}
 
 		now := time.Now()
@@ -292,6 +294,7 @@ func (m *BackgroundTaskManager) Adopt(
 		} else {
 			task.Status = BgTaskDone
 		}
+		task.mu.Unlock()
 
 		log.WithFields(log.Fields{
 			"task_id":   id,
@@ -327,12 +330,11 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
+	task.mu.Lock()
 	if task.Status != BgTaskRunning {
+		task.mu.Unlock()
 		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
 	}
-
-	// Kill the OS process tree directly (covers Adopt tasks with no cancel func)
-	task.mu.Lock()
 	if task.process != nil {
 		killProcessTree(task.process)
 	}
@@ -350,7 +352,11 @@ func (m *BackgroundTaskManager) Kill(taskID string) error {
 func (t *BackgroundTask) SessionKey() string { return t.sessionKey }
 
 // IsKilled returns true if the task was killed by the user.
-func (t *BackgroundTask) IsKilled() bool { return t.killed }
+func (t *BackgroundTask) IsKilled() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.killed
+}
 
 // Status returns the current state of a task.
 func (m *BackgroundTaskManager) Status(taskID string) (*BackgroundTask, error) {
@@ -387,8 +393,13 @@ func (m *BackgroundTaskManager) ListRunning(sessionKey string) []*BackgroundTask
 	ids := m.sessions[sessionKey]
 	var tasks []*BackgroundTask
 	for _, id := range ids {
-		if t, ok := m.tasks[id]; ok && t.Status == BgTaskRunning {
-			tasks = append(tasks, t)
+		if t, ok := m.tasks[id]; ok {
+			t.mu.Lock()
+			status := t.Status
+			t.mu.Unlock()
+			if status == BgTaskRunning {
+				tasks = append(tasks, t)
+			}
 		}
 	}
 	return tasks
@@ -410,8 +421,13 @@ func (m *BackgroundTaskManager) CleanupSession(sessionKey string) {
 	if ids, ok := m.sessions[sessionKey]; ok {
 		for _, id := range ids {
 			if task, ok := m.tasks[id]; ok {
-				if task.cancel != nil && task.Status == BgTaskRunning {
-					task.cancel()
+				if task.cancel != nil {
+					task.mu.Lock()
+					running := task.Status == BgTaskRunning
+					task.mu.Unlock()
+					if running {
+						task.cancel()
+					}
 				}
 				delete(m.tasks, id)
 			}

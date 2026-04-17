@@ -439,7 +439,7 @@ func parseOrDefault(s string, defaultVal int) int {
 // It determines whether the user uses a personal or global LLM and reads
 // the corresponding concurrency setting.
 // Returns nil if no semaphore manager is configured.
-func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func() func() {
+func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func(context.Context) func() {
 	if f.llmSemManager == nil {
 		return nil
 	}
@@ -447,27 +447,27 @@ func (f *LLMFactory) LLMSemAcquireForUser(senderID string) func() func() {
 	if f.HasCustomLLM(senderID) {
 		llmKey = "personal"
 	}
-	return func() func() {
+	return func(ctx context.Context) func() {
 		personalCap := f.GetLLMConcurrency(senderID)
 		cap := llm.DefaultLLMConcurrency
 		if llmKey == "personal" {
 			cap = personalCap
 		}
-		return f.llmSemManager.Acquire(context.Background(), senderID, llmKey, func() int { return cap })
+		return f.llmSemManager.Acquire(ctx, senderID, llmKey, func() int { return cap })
 	}
 }
 
 // SubAgentSemAcquireForUser returns a SubAgentSem callback for the given user.
 // SubAgent concurrency is bounded by a separate semaphore (llmKey="subagent").
 // Returns nil if no semaphore manager is configured.
-func (f *LLMFactory) SubAgentSemAcquireForUser(senderID string) func() func() {
+func (f *LLMFactory) SubAgentSemAcquireForUser(senderID string) func(context.Context) func() {
 	if f.llmSemManager == nil {
 		return nil
 	}
-	return func() func() {
+	return func(ctx context.Context) func() {
 		// Default max concurrent SubAgents: 3
 		cap := parseOrDefault(f.getSetting(senderID, "subagent_max_concurrent"), 3)
-		return f.llmSemManager.Acquire(context.Background(), senderID, "subagent", func() int { return cap })
+		return f.llmSemManager.Acquire(ctx, senderID, "subagent", func() int { return cap })
 	}
 }
 

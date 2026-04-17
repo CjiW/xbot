@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -176,23 +177,15 @@ func summarizeToolCall(name, args string) string {
 // extractJSONString extracts a string value for the given key from a JSON object.
 // Returns empty string if not found or parsing fails.
 func extractJSONString(jsonStr, key string) string {
-	// Fast path: look for "key":"value" pattern
-	search := fmt.Sprintf(`"%s":`, key)
-	idx := strings.Index(jsonStr, search)
-	if idx == -1 {
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &obj); err != nil {
 		return ""
 	}
-	rest := jsonStr[idx+len(search):]
-	rest = strings.TrimLeft(rest, " \t\n")
-	if len(rest) == 0 || rest[0] != '"' {
+	val, ok := obj[key].(string)
+	if !ok {
 		return ""
 	}
-	rest = rest[1:]
-	end := strings.Index(rest, `"`)
-	if end == -1 {
-		return rest
-	}
-	return rest[:end]
+	return val
 }
 
 // stripOffloadMaskPrefix removes 📂 [offload:...] / 📂 [masked:...] prefix from tool content.
@@ -247,7 +240,7 @@ func (a *Agent) handleCompress(ctx context.Context, msg bus.InboundMessage, tena
 		log.Ctx(ctx).WithError(err).Warn("Failed to count tokens for compression")
 	}
 
-	threshold := int(float64(a.contextManagerConfig.MaxContextTokens) * a.contextManagerConfig.CompressionThreshold)
+	threshold := int(float64(a.getMaxContextTokens()) * a.contextManagerConfig.CompressionThreshold)
 	if err == nil && tokenCount < threshold {
 		return &bus.OutboundMessage{
 			Channel: msg.Channel,

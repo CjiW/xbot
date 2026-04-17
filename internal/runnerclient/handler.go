@@ -213,7 +213,8 @@ func (h *Handler) handleExec(msg runnerproto.RunnerMessage) *runnerproto.RunnerM
 	}
 
 	timeout := time.Duration(req.Timeout) * time.Second
-	if timeout <= 0 {
+	// Guard against integer overflow: cap at 1 hour
+	if req.Timeout <= 0 || req.Timeout > 3600 {
 		timeout = 60 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

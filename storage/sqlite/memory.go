@@ -162,7 +162,7 @@ func (s *MemoryService) GetHistoryEntries(ctx context.Context, tenantID int64, l
 // ClearLongTerm clears long-term memory for a tenant.
 func (s *MemoryService) ClearLongTerm(ctx context.Context, tenantID int64) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec("DELETE FROM long_term_memory WHERE tenant_id = ?", tenantID)
+	_, err := conn.ExecContext(ctx, "DELETE FROM long_term_memory WHERE tenant_id = ?", tenantID)
 	if err != nil {
 		return fmt.Errorf("clear long-term memory: %w", err)
 	}
@@ -173,7 +173,7 @@ func (s *MemoryService) ClearLongTerm(ctx context.Context, tenantID int64) error
 // ClearHistory clears event history for a tenant.
 func (s *MemoryService) ClearHistory(ctx context.Context, tenantID int64) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec("DELETE FROM event_history WHERE tenant_id = ?", tenantID)
+	_, err := conn.ExecContext(ctx, "DELETE FROM event_history WHERE tenant_id = ?", tenantID)
 	if err != nil {
 		return fmt.Errorf("clear event history: %w", err)
 	}
@@ -184,7 +184,7 @@ func (s *MemoryService) ClearHistory(ctx context.Context, tenantID int64) error 
 // ClearState clears tenant state for a tenant.
 func (s *MemoryService) ClearState(ctx context.Context, tenantID int64) error {
 	conn := s.db.Conn()
-	_, err := conn.Exec("DELETE FROM tenant_state WHERE tenant_id = ?", tenantID)
+	_, err := conn.ExecContext(ctx, "DELETE FROM tenant_state WHERE tenant_id = ?", tenantID)
 	if err != nil {
 		return fmt.Errorf("clear tenant state: %w", err)
 	}

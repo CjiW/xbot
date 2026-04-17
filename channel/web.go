@@ -1014,7 +1014,9 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			// Skip bang commands (! prefix) — they should never be persisted.
 			trimmed := strings.TrimSpace(content)
 			if len(trimmed) <= 1 || trimmed[0] != '!' {
-				_ = eagerSaveUserMsg(wc.db, c.userID, content)
+				if err := eagerSaveUserMsg(wc.db, c.userID, content); err != nil {
+					log.WithError(err).Warn("Failed to eager-save user message")
+				}
 				metadata["user_msg_eager_saved"] = "true"
 			}
 
@@ -1201,13 +1203,22 @@ func isImageExt(ext string) bool {
 // eagerSaveUserMsg persists a user message to session_messages immediately
 // so that a page-refresh can recover it while the backend is still processing.
 func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	// Ensure tenant exists before saving (first message from a new client).
 	now := time.Now().Format(time.RFC3339)
-	db.Exec(`INSERT OR IGNORE INTO tenants (channel, chat_id, created_at, last_active_at) VALUES ('web', ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT OR IGNORE INTO tenants (channel, chat_id, created_at, last_active_at) VALUES ('web', ?, ?, ?)`,
 		userID, now, now)
+	if err != nil {
+		return err
+	}
 
 	var tenantID int64
-	if err := db.QueryRow(
+	if err := tx.QueryRow(
 		"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", userID,
 	).Scan(&tenantID); err != nil {
 		return err
@@ -1215,13 +1226,16 @@ func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
 	// Dedup by checking if the very last message for this tenant is an identical
 	// user message saved within the last 2 seconds (handles page-refresh double-submit).
 	// We do NOT dedup by content alone — users may send the same text legitimately.
-	_, err := db.Exec(`INSERT INTO session_messages (tenant_id, role, content, created_at)
-SELECT ?, 'user', ?, ?
-WHERE NOT EXISTS (
-SELECT 1 FROM session_messages
-WHERE tenant_id = ? AND role = 'user' AND content = ?
-  AND created_at > datetime(?, '-2 seconds')
-ORDER BY id DESC LIMIT 1
-)`, tenantID, content, now, tenantID, content, now)
-	return err
+	_, err = tx.Exec(`INSERT INTO session_messages (tenant_id, role, content, created_at)
+	SELECT ?, 'user', ?, ?
+	WHERE NOT EXISTS (
+	SELECT 1 FROM session_messages
+	WHERE tenant_id = ? AND role = 'user' AND content = ?
+	  AND created_at > datetime(?, '-2 seconds')
+	ORDER BY id DESC LIMIT 1
+	)`, tenantID, content, now, tenantID, content, now)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }

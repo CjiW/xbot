@@ -10,6 +10,8 @@ import (
 
 	log "xbot/logger"
 
+	"xbot/storage/internal"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -117,20 +119,8 @@ func (db *DB) initSchema() error {
 }
 
 // parseSQLiteTime parses a time string from SQLite into time.Time.
-// SQLite datetime('now') produces "2006-01-02 15:04:05" format,
-// but some code may store RFC3339. This function tries both formats.
+// Delegates to internal.ParseTimestamp which correctly handles timezone
+// interpretation for values stored by the modernc.org/sqlite driver.
 func parseSQLiteTime(s string) time.Time {
-	for _, layout := range []string{
-		time.RFC3339,
-		time.RFC3339Nano,
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05",
-		"2006-01-02 15:04:05.999999999",
-		"2006-01-02T15:04:05.999999999",
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
+	return internal.ParseTimestamp(s)
 }

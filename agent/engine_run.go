@@ -384,7 +384,7 @@ func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) 
 
 	var releaseLLMSem func()
 	if s.cfg.LLMSemAcquire != nil {
-		releaseLLMSem = s.cfg.LLMSemAcquire()
+		releaseLLMSem = s.cfg.LLMSemAcquire(ctx)
 	}
 
 	response, err := generateResponse(retryNotifyCtx, s.cfg.LLMClient, s.cfg.Model, s.messages, toolDefs, s.cfg.ThinkingMode, s.cfg.Stream, s.cfg.StreamContentFunc, s.cfg.StreamReasoningFunc)
@@ -1014,7 +1014,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 	}
 
 	// executeSubAgentOps runs SubAgent tool calls concurrently.
-	executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func() func(), doAutoNotify bool) {
+	executeSubAgentOps := func(ops []toolCallEntry, execFn func(toolCallEntry), subAgentSem func(context.Context) func(), doAutoNotify bool) {
 		var wg sync.WaitGroup
 		var mu sync.Mutex
 		for _, entry := range ops {
@@ -1023,7 +1023,7 @@ func (s *runState) executeToolCalls(ctx context.Context, response *llm.LLMRespon
 				defer wg.Done()
 				var release func()
 				if subAgentSem != nil {
-					release = subAgentSem()
+					release = subAgentSem(ctx)
 					defer release()
 				}
 				execFn(e)

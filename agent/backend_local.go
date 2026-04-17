@@ -28,12 +28,15 @@ type LocalBackend struct {
 // NewLocalBackend creates a LocalBackend with the given agent config.
 // It calls agent.New() internally, so all initialization (tools, sessions, etc.)
 // is complete by the time this returns.
-func NewLocalBackend(cfg Config) *LocalBackend {
-	a := New(cfg)
+func NewLocalBackend(cfg Config) (*LocalBackend, error) {
+	a, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &LocalBackend{
 		agent: a,
 		bus:   cfg.Bus,
-	}
+	}, nil
 }
 
 // Agent returns the underlying *Agent for direct access when needed

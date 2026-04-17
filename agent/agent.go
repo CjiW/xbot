@@ -543,7 +543,7 @@ func initSession(cfg Config) (*session.MultiTenantSession, error) {
 		}),
 	)
 	if err != nil {
-		log.WithError(err).Fatal("Failed to initialize multi-tenant session")
+		return nil, fmt.Errorf("initialize multi-tenant session: %w", err)
 	}
 	return multiSession, nil
 }
@@ -693,7 +693,7 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 }
 
 // New 创建 Agent
-func New(cfg Config) *Agent {
+func New(cfg Config) (*Agent, error) {
 	// 1. 设置配置默认值
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = 2000
@@ -735,7 +735,10 @@ func New(cfg Config) *Agent {
 	skillStore, agentStore, chatHistory, registry, cardBuilder := initStores(cfg)
 
 	// 3. 初始化会话管理器
-	multiSession, _ := initSession(cfg)
+	multiSession, err := initSession(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init session: %w", err)
+	}
 
 	// 4. 构建 Agent 实例
 	sandboxMode := cfg.SandboxMode
@@ -780,7 +783,7 @@ func New(cfg Config) *Agent {
 	// 6. 启动 bg task 通知路由 goroutine
 	go agent.bgNotifyLoop()
 
-	return agent
+	return agent, nil
 }
 
 // GetContextManager 获取当前上下文管理器（读锁保护）。
@@ -825,10 +828,38 @@ func (a *Agent) SetContextMode(mode string) error {
 	return nil
 }
 
-func (a *Agent) SetMaxIterations(n int)  { a.maxIterations = n }
-func (a *Agent) SetMaxConcurrency(n int) { a.maxConcurrency = n }
+func (a *Agent) SetMaxIterations(n int) {
+	a.contextManagerMu.Lock()
+	a.maxIterations = n
+	a.contextManagerMu.Unlock()
+}
+func (a *Agent) SetMaxConcurrency(n int) {
+	a.contextManagerMu.Lock()
+	a.maxConcurrency = n
+	a.contextManagerMu.Unlock()
+}
 func (a *Agent) SetMaxContextTokens(n int) {
+	a.contextManagerMu.Lock()
 	a.contextManagerConfig.MaxContextTokens = n
+	a.contextManagerMu.Unlock()
+}
+
+func (a *Agent) getMaxIterations() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.maxIterations
+}
+
+func (a *Agent) getMaxConcurrency() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.maxConcurrency
+}
+
+func (a *Agent) getMaxContextTokens() int {
+	a.contextManagerMu.RLock()
+	defer a.contextManagerMu.RUnlock()
+	return a.contextManagerConfig.MaxContextTokens
 }
 
 // SetSandbox replaces the sandbox instance and mode at runtime (e.g. when user
@@ -933,6 +964,10 @@ func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
 
 // Close 关闭 Agent 及其所有资源
 func (a *Agent) Close() error {
+	// Cancel agent-level context to stop background subagents
+	if a.agentCancel != nil {
+		a.agentCancel()
+	}
 	// 先停止 cron 调度器，避免在数据库关闭后仍尝试访问
 	if a.cronSch != nil {
 		a.cronSch.Stop()
@@ -977,7 +1012,7 @@ func (a *Agent) sendAck(channel, chatID string) {
 // 用户设置了自己的 LLM 配置后，该用户的请求使用独立的信号量，不再占用全局资源。
 func (a *Agent) Run(ctx context.Context) error {
 	log.WithFields(log.Fields{
-		"max_concurrency": a.maxConcurrency,
+		"max_concurrency": a.getMaxConcurrency(),
 	}).Info("Agent loop started")
 
 	a.multiSession.StartCleanupRoutine()
@@ -998,7 +1033,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.multiSession.StopCleanupRoutine()
 	}()
 
-	sem := make(chan struct{}, a.maxConcurrency)
+	sem := make(chan struct{}, a.getMaxConcurrency())
 
 	var mu sync.Mutex
 	chatQueues := make(map[string]chan bus.InboundMessage)
@@ -1331,7 +1366,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 
 		// 执行消息处理，完成后检查是否被取消
 		// 注意：必须在 reqCancel() 调用前检查，否则 reqCtx.Err() 总是返回 Canceled
-		wasCancelled := reqCtx.Err() == context.Canceled
+		wasCancelled := false
 		func() {
 			defer func() {
 				reqCancel()
@@ -2036,7 +2071,7 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 // injectInbound 向入站队列注入消息，触发 Agent 完整处理循环。
 // 用于 cron 调度和后台任务通知等内部系统消息。
 func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
-	a.bus.Inbound <- bus.InboundMessage{
+	msg := bus.InboundMessage{
 		Channel:   channel,
 		SenderID:  senderID,
 		ChatID:    chatID,
@@ -2045,13 +2080,17 @@ func (a *Agent) injectInbound(channel, chatID, senderID, content string) {
 		IsCron:    false,
 		RequestID: log.NewRequestID(),
 	}
+	select {
+	case a.bus.Inbound <- msg:
+	case <-a.agentCtx.Done():
+	}
 }
 
 // injectEventMessage 向入站队列注入事件触发的消息。
 // Event Router 通过此函数将外部事件（webhook 等）路由到 agent loop，
 // 并设置 EventSource/EventTrigger 元数据。
 func (a *Agent) injectEventMessage(msg event.Message) {
-	a.bus.Inbound <- bus.InboundMessage{
+	inbound := bus.InboundMessage{
 		Channel:      msg.Channel,
 		SenderID:     msg.SenderID,
 		ChatID:       msg.ChatID,
@@ -2061,6 +2100,10 @@ func (a *Agent) injectEventMessage(msg event.Message) {
 		RequestID:    log.NewRequestID(),
 		EventSource:  msg.EventSource,
 		EventTrigger: msg.EventTrigger,
+	}
+	select {
+	case a.bus.Inbound <- inbound:
+	case <-a.agentCtx.Done():
 	}
 }
 

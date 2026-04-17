@@ -247,7 +247,10 @@ func (s *CheckpointStore) Close() error {
 func (s *CheckpointStore) Cleanup() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.file.Close()
+	if s.file != nil {
+		s.file.Close()
+		s.file = nil
+	}
 	return os.RemoveAll(s.baseDir)
 }
 
@@ -351,20 +354,30 @@ func (h *CheckpointHook) PreToolUse(ctx context.Context, toolName string, args s
 }
 
 // PostToolUse confirms the snapshot if the tool succeeded, or discards it on failure.
-func (h *CheckpointHook) PostToolUse(_ context.Context, toolName string, _ string, _ *ToolResult, err error, _ time.Duration) {
+func (h *CheckpointHook) PostToolUse(ctx context.Context, toolName string, args string, _ *ToolResult, err error, _ time.Duration) {
 	if toolName != "FileCreate" && toolName != "FileReplace" {
 		return
 	}
 
+	// Parse the file path from args to look up the correct pending entry
+	filePath := parseFilePath(toolName, args)
+	if filePath != "" {
+		if !filepath.IsAbs(filePath) {
+			wd := WorkingDirFromContext(ctx)
+			if wd == "" {
+				wd, _ = os.Getwd()
+			}
+			if wd != "" {
+				filePath = filepath.Join(wd, filePath)
+			}
+		}
+		filePath = filepath.Clean(filePath)
+	}
+
 	h.mu.Lock()
-	// Find and remove the pending entry (most recent)
-	var snap FileSnapshot
-	var found bool
-	for p, s := range h.pending {
-		snap = s
-		delete(h.pending, p)
-		found = true
-		break
+	snap, found := h.pending[filePath]
+	if found {
+		delete(h.pending, filePath)
 	}
 	h.mu.Unlock()
 

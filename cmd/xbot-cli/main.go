@@ -140,7 +140,10 @@ func newCLIApp(serverURL, token string) *cliApp {
 			XbotHome:        xbotHome,
 			DirectWorkspace: workDir, // CLI: workspace = workDir directly (no per-user subdirectory)
 		}
-		backend = agent.NewLocalBackend(bc.AgentConfig())
+		backend, err = agent.NewLocalBackend(bc.AgentConfig())
+		if err != nil {
+			log.WithError(err).Fatal("Failed to create local backend")
+		}
 		backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 		backend.IndexGlobalTools()
 		backend.LLMFactory().SetModelTiers(cfg.LLM)

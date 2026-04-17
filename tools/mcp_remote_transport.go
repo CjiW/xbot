@@ -96,6 +96,8 @@ type stdioStream struct {
 	exitCode int
 	exitErr  string
 	exited   bool
+
+	pwMu sync.Mutex // protects pw.Write and pw.Close from concurrent access
 }
 
 // remoteStdinWriter sends data to the runner's stdin via WebSocket.
@@ -200,7 +202,9 @@ func (rs *RemoteSandbox) handleStdioPush(resp *RunnerMessage) bool {
 		if err != nil {
 			return true
 		}
+		stream.pwMu.Lock()
 		stream.pw.Write(decoded) //nolint:errcheck
+		stream.pwMu.Unlock()
 		return true
 
 	case ProtoStdioExit:
@@ -220,7 +224,9 @@ func (rs *RemoteSandbox) handleStdioPush(resp *RunnerMessage) bool {
 		stream.exitErr = exit.Error
 		stream.mu.Unlock()
 		// Close the pipe writer to signal EOF to the MCP reader.
+		stream.pwMu.Lock()
 		stream.pw.Close()
+		stream.pwMu.Unlock()
 		close(stream.exitCh)
 		log.WithFields(log.Fields{
 			"stream_id": exit.StreamID,

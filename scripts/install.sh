@@ -212,6 +212,9 @@ install_launchd() {
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>XBOT_HOME</key><string>${XBOT_HOME}</string>
+  </dict>
   <key>StandardOutPath</key><string>${XBOT_HOME}/logs/xbot-server.log</string>
   <key>StandardErrorPath</key><string>${XBOT_HOME}/logs/xbot-server.err</string>
 </dict></plist>

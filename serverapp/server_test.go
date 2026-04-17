@@ -48,6 +48,7 @@ func newTestBackendWithSettings(t *testing.T) (agent.AgentBackend, *sqlite.UserS
 	if err != nil {
 		t.Fatalf("sqlite.Open() error = %v", err)
 	}
+	t.Cleanup(func() { db.Close() })
 	store := sqlite.NewUserSettingsService(db)
 	agentSvc := agent.NewSettingsService(store)
 	return fakeBackend{settingsSvc: agentSvc}, store

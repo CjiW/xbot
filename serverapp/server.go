@@ -186,7 +186,7 @@ func persistAdminSubscriptions(cfg *config.Config, backend agent.AgentBackend) e
 	syncLLMFromActiveAdminSub(cfg)
 	if backend.LLMFactory() != nil {
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
-		backend.LLMFactory().Invalidate("admin")
+		backend.LLMFactory().Invalidate(adminSenderID)
 	}
 	return config.SaveToFile(config.ConfigFilePath(), cfg)
 }
@@ -450,7 +450,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(senderID))
 	case "set_model_tiers":
-		if senderID != "admin" {
+		if !isAdmin(senderID) {
 			return nil, fmt.Errorf("admin only")
 		}
 		var llmCfg config.LLMConfig
@@ -494,7 +494,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only clear their own memory
-		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
@@ -513,7 +513,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("multi-session not available")
 		}
 		// Non-admin users can only view their own memory stats
-		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
@@ -555,7 +555,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
@@ -570,7 +570,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
@@ -588,7 +588,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && p.ChatID != "" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != "" && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		if p.ChatID == "" {
@@ -629,7 +629,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.ChatID == "" {
 			p.ChatID = senderID
 		}
-		if senderID != "admin" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		history, err := backend.GetHistory(p.Channel, p.ChatID)
@@ -653,7 +653,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.ChatID == "" {
 			p.ChatID = senderID
 		}
-		if senderID != "admin" && p.ChatID != senderID {
+		if !isAdmin(senderID) && p.ChatID != senderID {
 			return nil, fmt.Errorf("access denied")
 		}
 		var cutoff time.Time
@@ -668,7 +668,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 	// --- Subscriptions ---
 	case "list_subscriptions":
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return json.Marshal(adminConfigSubscriptions(cfg))
 		}
 		if backend.LLMFactory() == nil {
@@ -692,7 +692,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(result)
 	case "get_default_subscription":
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return json.Marshal(adminGetDefaultSubscription(cfg))
 		}
 		if backend.LLMFactory() == nil {
@@ -718,7 +718,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminAddSubscription(cfg, backend, channel.Subscription{
 				ID: p.Sub.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
 				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
@@ -741,7 +741,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminUpdateSubscription(cfg, backend, p.ID, channel.Subscription{
 				ID: p.ID, Name: p.Sub.Name, Provider: p.Sub.Provider,
 				BaseURL: p.Sub.BaseURL, APIKey: p.Sub.APIKey, Model: p.Sub.Model, Active: p.Sub.IsDefault,
@@ -758,7 +758,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && existing.SenderID != senderID {
+		if !isAdmin(senderID) && existing.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		p.Sub.ID = p.ID
@@ -778,7 +778,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminRemoveSubscription(cfg, backend, p.ID)
 		}
 		if backend.LLMFactory() == nil {
@@ -792,7 +792,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.Remove(p.ID); err != nil {
@@ -807,7 +807,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminSetDefaultSubscription(cfg, backend, p.ID)
 		}
 		if backend.LLMFactory() == nil {
@@ -821,7 +821,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		if err := svc.SetDefault(p.ID); err != nil {
@@ -837,7 +837,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminRenameSubscription(cfg, backend, p.ID, p.Name)
 		}
 		if backend.LLMFactory() == nil {
@@ -851,7 +851,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.Rename(p.ID, p.Name)
@@ -864,7 +864,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if senderID == "admin" {
+		if isAdmin(senderID) {
 			return nil, adminSetSubscriptionModel(cfg, backend, p.ID, p.Model)
 		}
 		if backend.LLMFactory() == nil {
@@ -878,7 +878,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err != nil {
 			return nil, err
 		}
-		if senderID != "admin" && sub.SenderID != senderID {
+		if !isAdmin(senderID) && sub.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
 		return nil, svc.SetModel(p.ID, p.Model)
@@ -2045,7 +2045,7 @@ func userScopedSettingsFromGlobalCLI(cfg *config.Config) map[string]string {
 }
 
 func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.AgentBackend, namespace, senderID string) error {
-	if senderID == "" || senderID == "admin" || backend.SettingsService() == nil {
+	if senderID == "" || isAdmin(senderID) || backend.SettingsService() == nil {
 		return nil
 	}
 	existing, err := backend.SettingsService().GetSettings(namespace, senderID)
@@ -2151,3 +2151,10 @@ func mustParseInt(s string, def int) int {
 	}
 	return n
 }
+
+// adminSenderID is the sender ID for the server admin (config-level user).
+// Use this constant instead of the literal "admin" string to prevent typos.
+const adminSenderID = "admin"
+
+// isAdmin checks if the given senderID belongs to the server admin.
+func isAdmin(senderID string) bool { return senderID == adminSenderID }

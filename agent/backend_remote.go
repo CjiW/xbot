@@ -857,6 +857,12 @@ func (b *RemoteBackend) ClearMemory(ctx context.Context, ch, chatID, targetType,
 	})
 }
 
+// RewindCheckpoints rolls back file checkpoints on the server side.
+// Returns JSON-encoded RewindResult.
+func (b *RemoteBackend) RewindCheckpoints(turnIdx int) (string, error) {
+	return b.callRPCString("rewind_checkpoints", map[string]any{"turn_idx": turnIdx})
+}
+
 func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID string) map[string]string {
 	raw, err := b.callRPC("get_memory_stats", map[string]string{
 		"channel": ch, "chat_id": chatID,

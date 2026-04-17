@@ -274,6 +274,12 @@ func (m *cliModel) sendMessage(content string) tea.Cmd {
 		msg.Media = media
 		m.sendInbound(msg)
 		m.startAgentTurn()
+	} else if m.sendInboundFn != nil {
+		// Remote mode: msgBus is nil but sendInboundFn is set
+		msg := m.newInbound(content, nil)
+		msg.Media = media
+		m.sendInbound(msg)
+		m.startAgentTurn()
 	}
 	return nil
 }

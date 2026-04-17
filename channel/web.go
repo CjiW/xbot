@@ -456,6 +456,11 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 	}
 }
 
+// Hub returns the web channel's hub for sharing with other channels.
+func (wc *WebChannel) Hub() *Hub {
+	return wc.hub
+}
+
 // SetStaticDir sets the directory for serving frontend static files.
 func (wc *WebChannel) SetStaticDir(dir string) {
 	if dir != "" {
@@ -595,6 +600,21 @@ func (wc *WebChannel) Stop() {
 // ---------------------------------------------------------------------------
 
 // Send 发送消息到 Web 客户端（非阻塞）
+
+// resolveTargetClientID resolves the WebSocket target client ID from an outbound message.
+// It checks transport_chat_id and transport_sender_id metadata, falling back to ChatID.
+func resolveTargetClientID(msg bus.OutboundMessage) string {
+	targetClientID := msg.ChatID
+	if msg.Metadata != nil {
+		if v := msg.Metadata["transport_chat_id"]; v != "" {
+			targetClientID = v
+		} else if v := msg.Metadata["transport_sender_id"]; v != "" {
+			targetClientID = v
+		}
+	}
+	return targetClientID
+}
+
 func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
@@ -615,14 +635,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
-	targetClientID := msg.ChatID
-	if msg.Metadata != nil {
-		if v := msg.Metadata["transport_chat_id"]; v != "" {
-			targetClientID = v
-		} else if v := msg.Metadata["transport_sender_id"]; v != "" {
-			targetClientID = v
-		}
-	}
+	targetClientID := resolveTargetClientID(msg)
 
 	// Send via hub (non-blocking: writes to buffered channel)
 	if !wc.hub.sendToClient(targetClientID, wsMsg) {
@@ -1300,4 +1313,75 @@ func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ---------------------------------------------------------------------------
+// remoteCLIChannel — virtual CLI channel for remote mode (CLI→WS→server)
+// ---------------------------------------------------------------------------
+
+// remoteCLIChannel is a virtual Channel implementation registered as "cli"
+// in the server's dispatcher. It routes outbound messages to the correct
+// WebSocket client via the web channel's hub.
+type remoteCLIChannel struct {
+	hub *Hub
+}
+
+// NewRemoteCLIChannel creates a virtual CLI channel that shares the given hub.
+func NewRemoteCLIChannel(hub *Hub) *remoteCLIChannel {
+	return &remoteCLIChannel{hub: hub}
+}
+
+func (c *remoteCLIChannel) Name() string { return "cli" }
+
+func (c *remoteCLIChannel) Start() error { return nil }
+
+func (c *remoteCLIChannel) Stop() {}
+
+func (c *remoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
+	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
+
+	content := msg.Content
+	msgType := "text"
+
+	if strings.HasPrefix(content, "__FEISHU_CARD__") {
+		msgType = "card"
+		content = ConvertFeishuCard(content)
+	}
+
+	targetClientID := resolveTargetClientID(msg)
+
+	wsMsg := wsMessage{
+		Type:            msgType,
+		ID:              msgID,
+		Content:         content,
+		TS:              time.Now().Unix(),
+		ProgressHistory: msg.Metadata["progress_history"],
+	}
+
+	if !c.hub.sendToClient(targetClientID, wsMsg) {
+		log.WithFields(log.Fields{"chat_id": msg.ChatID, "target_client_id": targetClientID}).Debug("CLI WS client offline, message buffered")
+	}
+
+	// AskUser: agent needs user input
+	if msg.WaitingUser {
+		askPayload := &WsProgressPayload{}
+		if msg.Metadata != nil {
+			askPayload.RequestID = msg.Metadata["request_id"]
+			if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+				var qs []WsAskUserQuestion
+				if json.Unmarshal([]byte(qJSON), &qs) == nil {
+					askPayload.Questions = qs
+				}
+			}
+		}
+		askMsg := wsMessage{
+			Type:     "ask_user",
+			ID:       msgID,
+			TS:       time.Now().Unix(),
+			Progress: askPayload,
+		}
+		c.hub.sendToClient(targetClientID, askMsg)
+	}
+
+	return msgID, nil
 }

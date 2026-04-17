@@ -221,6 +221,7 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	m.lastCancelTime = time.Time{} // reset cancel debounce on new turn
 	// If fast tick chain is NOT running (e.g. we're on idle tick after Ctrl+C),
 	// inject a tickCmd so the spinner starts immediately.
 	if !m.fastTickActive {

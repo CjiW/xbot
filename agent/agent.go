@@ -672,6 +672,32 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	editStore := NewContextEditStore(100)
 	contextEditor := NewContextEditor(editStore)
 	a.contextEditor = contextEditor
+	// Wire up persistence callback for context edits (best-effort sync to DB).
+	// IMPORTANT: PersistFn is called while ContextEditor.mu is held (write lock).
+	// Do NOT acquire ContextEditor.mu inside PersistFn — deadlock!
+	sessionSvc := sqlite.NewSessionService(multiSession.DB())
+	contextEditor.PersistFn = func(editedIndices []int) {
+		tenantID := contextEditor.tenantID
+		if tenantID == 0 {
+			return
+		}
+		// messages is safe to read here — caller (applyEdit/deleteTurn) holds the write lock
+		msgs := contextEditor.messages
+		if msgs == nil {
+			return
+		}
+		for _, idx := range editedIndices {
+			if idx < 0 || idx >= len(msgs) {
+				continue
+			}
+			if err := sessionSvc.UpdateMessageContentNonDisplayOnly(tenantID, idx, msgs[idx].Content); err != nil {
+				log.WithError(err).WithFields(log.Fields{
+					"tenant_id": tenantID,
+					"index":     idx,
+				}).Warn("Failed to persist context edit to database")
+			}
+		}
+	}
 	registry.RegisterCore(&tools.ContextEditTool{Handler: contextEditor})
 
 	// 初始化并注册 TODO 管理工具
@@ -1316,31 +1342,6 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		}
 
 		// 普通消息：转发到内部队列，由 processLoop 串行处理
-		// /cancel 拦截：在 chatWorker 层面处理，不进入 msgCh，
-		// 避免 chatProcessLoop 阻塞在 processMessage 时 /cancel 无法被处理导致死锁。
-		if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-			cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
-			if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
-				select {
-				case ch.(chan struct{}) <- struct{}{}:
-					a.bus.Outbound <- bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: "Request cancelled.",
-					}
-				default:
-					// cancel 信号已发过
-				}
-			} else {
-				a.bus.Outbound <- bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: "No active request.",
-				}
-			}
-			continue
-		}
-
 		select {
 		case msgCh <- msg:
 		case <-ctx.Done():
@@ -1455,14 +1456,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			continue
 		}
 		if response != nil {
-			if response.WaitingUser && a.directSend != nil {
-				log.Ctx(ctx).WithFields(log.Fields{
-					"channel":      response.Channel,
-					"chat_id":      response.ChatID,
-					"waiting_user": response.WaitingUser,
-				}).Info("Dispatching WaitingUser response via directSend")
+			if a.directSend != nil {
 				if _, err := a.directSend(*response); err != nil {
-					log.Ctx(ctx).WithError(err).Warn("Failed to dispatch WaitingUser via directSend, fallback to bus")
+					log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via directSend, fallback to bus")
 					a.bus.Outbound <- *response
 				}
 			} else {
@@ -1562,6 +1558,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 	tenantSession, err := a.multiSession.GetOrCreateSession(msg.Channel, msg.ChatID)
 	if err != nil {
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
+	}
+
+	// Set tenant ID for context editor persistence (context edits happen during engine run)
+	if a.contextEditor != nil {
+		a.contextEditor.SetTenantID(tenantSession.TenantID())
 	}
 
 	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）

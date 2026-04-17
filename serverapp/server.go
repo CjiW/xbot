@@ -1406,12 +1406,14 @@ func Run(args []string) error {
 		log.WithError(err).Fatal("Failed to register channels")
 	}
 
+	// Register virtual CLI channel for remote mode (CLI→WS→server).
+	// This makes the dispatcher aware of channel=cli so all outbound messages
+	// (including raw bus.Outbound calls) route correctly to WS clients.
+	if webCh != nil {
+		disp.Register(channel.NewRemoteCLIChannel(webCh.Hub()))
+	}
+
 	backend.SetDirectSend(func(msg bus.OutboundMessage) (string, error) {
-		if msg.Channel == "cli" && webCh != nil {
-			if msgID, err := webCh.Send(msg); err == nil {
-				return msgID, nil
-			}
-		}
 		return disp.SendDirect(msg)
 	})
 	backend.SetChannelFinder(disp.GetChannel)

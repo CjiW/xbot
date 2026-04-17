@@ -218,16 +218,11 @@ func (m *cliModel) sendInboundWait(msg bus.InboundMessage, timeout time.Duration
 }
 
 // sendCancel sends a cancel request to the agent and adds a system notification.
-// Debounced: skips if called within 2 seconds of the last successful cancel.
 func (m *cliModel) sendCancel() {
-	if time.Since(m.lastCancelTime) < 2*time.Second {
-		return // debounce: ignore rapid repeat Ctrl+C
-	}
 	if !m.sendInbound(m.newInbound("/cancel", nil)) {
 		m.showSystemMsg("Cancel failed: agent channel busy, try again", feedbackError)
 		return
 	}
-	m.lastCancelTime = time.Now()
 	m.showSystemMsg(m.locale.CancelSent, feedbackInfo)
 }
 

@@ -281,7 +281,6 @@ type cliModel struct {
 	agentTurnID       uint64                        // monotonically increasing turn counter
 	typing            bool                          // agent 是否正在回复
 	typingStartTime   time.Time                     // 本次处理开始时间
-	lastCancelTime    time.Time                     // 上次成功发送 cancel 的时间（用于防抖）
 	inputReady        bool                          // 输入就绪状态（agent 回复期间禁止发送）
 	msgBus            *bus.MessageBus               // 消息总线引用
 	sendInboundFn     func(bus.InboundMessage) bool // remote mode: forward to server via backend.SendInbound

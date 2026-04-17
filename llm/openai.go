@@ -457,6 +457,69 @@ func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam
 }
 
 // buildParams 构建请求参数
+// modelMaxOutputTokens returns the maximum output tokens a model can produce.
+// Used to clamp max_tokens/max_completion_tokens to prevent API errors when
+// the user configures a value larger than the model supports.
+// Returns 0 for unknown models (no clamping — let the API decide).
+func modelMaxOutputTokens(model string) int {
+	// Prefix match: "gpt-4.1-mini-2025-04-14" should match "gpt-4.1-mini".
+	// Order matters: more specific prefixes first.
+	type limit struct {
+		prefix string
+		tokens int
+	}
+	limits := []limit{
+		// OpenAI GPT-4.1 family (2025-04)
+		{"gpt-4.1-nano", 32768},
+		{"gpt-4.1-mini", 32768},
+		{"gpt-4.1", 32768},
+		// OpenAI o-series reasoning models
+		{"o4-mini", 100000},
+		{"o3-mini", 65536},
+		{"o3", 100000},
+		{"o1-mini", 65536},
+		{"o1", 100000},
+		// OpenAI GPT-4o family
+		{"gpt-4o-mini", 16384},
+		{"gpt-4o", 16384},
+		{"gpt-4-turbo", 4096},
+		{"gpt-4-32k", 4096},
+		{"gpt-4", 8192},
+		{"gpt-3.5-turbo", 4096},
+		// Anthropic Claude (via proxy)
+		{"claude-opus-4", 32768},
+		{"claude-sonnet-4", 16384},
+		{"claude-3-5-sonnet", 8192},
+		{"claude-3-opus", 4096},
+		{"claude-3-haiku", 4096},
+		// DeepSeek
+		{"deepseek-r1", 16384},
+		{"deepseek-reasoner", 16384},
+		{"deepseek-v3", 8192},
+		{"deepseek-chat", 8192},
+		// Zhipu GLM
+		{"glm-4-plus", 4096},
+		{"glm-4", 4096},
+		{"glm-4-flash", 4096},
+		// Google Gemini (via proxy)
+		{"gemini-2.5-pro", 65536},
+		{"gemini-2.5-flash", 65536},
+		{"gemini-2.0-flash", 8192},
+		{"gemini-1.5-pro", 8192},
+		// Qwen
+		{"qwen-max", 8192},
+		{"qwen-plus", 8192},
+		{"qwen-turbo", 8192},
+	}
+	lower := strings.ToLower(model)
+	for _, l := range limits {
+		if strings.HasPrefix(lower, l.prefix) {
+			return l.tokens
+		}
+	}
+	return 0
+}
+
 func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition) openai.ChatCompletionNewParams {
 	openaiMessages := toOpenAIMessages(messages)
 
@@ -482,6 +545,13 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 		effectiveMaxTokens = o.maxTokens
 	}
 	o.dynamicMaxTokens = 0 // reset for next call
+
+	// Clamp to model's max output token limit to prevent API errors.
+	// Models not in this table are left unclamped — the API will return
+	// its own error if the value exceeds the model's limit.
+	if maxOut := modelMaxOutputTokens(model); maxOut > 0 && effectiveMaxTokens > maxOut {
+		effectiveMaxTokens = maxOut
+	}
 
 	if _, useNew := o.maxTokensUpgrade.Load(model); useNew {
 		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(effectiveMaxTokens)}

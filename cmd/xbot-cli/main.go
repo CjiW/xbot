@@ -930,7 +930,47 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_ = app.backend.Start(ctx)
+
+	// Remote mode: connect to server with retry loop before starting TUI.
+	// Shows progress to the user instead of silently failing.
+	if app.backend.IsRemote() {
+		fmt.Fprintf(os.Stderr, "\n  Connecting to remote server %s ...\n", app.cfg.CLI.ServerURL)
+		const maxRetries = 5
+		var connectErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			connectErr = app.backend.Start(ctx)
+			if connectErr == nil {
+				fmt.Fprintln(os.Stderr, "  Connected.")
+				break
+			}
+			delay := time.Duration(1<<uint(attempt)) * time.Second
+			if attempt < maxRetries-1 {
+				fmt.Fprintf(os.Stderr, "  Connection failed: %v\n  Retrying in %vs (%d/%d)...\n", connectErr, delay, attempt+1, maxRetries)
+				select {
+				case <-ctx.Done():
+					fmt.Fprintln(os.Stderr, "\n  Cancelled.")
+					app.Close()
+					return
+				case <-time.After(delay):
+				}
+			}
+		}
+		if connectErr != nil {
+			fmt.Fprintf(os.Stderr, "\n  %s\n  Could not connect to server after %d attempts. Please check:\n    1. Server is running (xbot-cli serve)\n    2. Port matches in config (%s)\n    3. Token is correct\n  %s\n\n",
+				red("ERROR: "+connectErr.Error()),
+				maxRetries,
+				config.ConfigFilePath(),
+				red("Exiting."))
+			app.Close()
+			return
+		}
+	} else {
+		if err := app.backend.Start(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start backend: %v\n", err)
+			app.Close()
+			return
+		}
+	}
 	go disp.Run()
 
 	// Remote mode: load history from server after WS connection is established.
@@ -1353,6 +1393,11 @@ func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
 
 func (s *configLLMSubscriber) GetDefaultModel() string {
 	return s.factory.GetDefaultModel()
+}
+
+// red wraps text in ANSI red for terminal error output.
+func red(s string) string {
+	return "\033[0;31m" + s + "\033[0m"
 }
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。

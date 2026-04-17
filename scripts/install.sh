@@ -119,15 +119,23 @@ def set_if_missing(section, key, value):
     else:
         preserved.append(f'{section}.{key}={cfg[section][key]}')
 
+def set_always(section, key, value):
+    old = cfg[section].get(key)
+    cfg[section][key] = value
+    if old != value:
+        changes.append(f'{section}.{key}={value} (was {old})')
+    else:
+        preserved.append(f'{section}.{key}={old}')
+
 set_if_missing('admin', 'token', token)
 if mode == 'server-client':
     set_if_missing('server', 'host', '127.0.0.1')
-    set_if_missing('server', 'port', port)
-    set_if_missing('web', 'enable', True)
+    set_always('server', 'port', port)
+    set_always('web', 'enable', True)
     set_if_missing('web', 'host', '127.0.0.1')
-    set_if_missing('web', 'port', port)
-    set_if_missing('cli', 'server_url', f'ws://127.0.0.1:{port}')
-    set_if_missing('cli', 'token', cfg['admin'].get('token') or token)
+    set_always('web', 'port', port)
+    set_always('cli', 'server_url', f'ws://127.0.0.1:{port}')
+    set_always('cli', 'token', cfg['admin'].get('token') or token)
 else:
     set_if_missing('cli', 'token', cfg['admin'].get('token') or token)
 

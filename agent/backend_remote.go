@@ -212,6 +212,9 @@ func (b *RemoteBackend) Bus() *bus.MessageBus { return nil }
 // IsRemote returns true — the agent loop runs on the server.
 func (b *RemoteBackend) IsRemote() bool { return true }
 
+// ServerURL returns the configured server URL for display purposes.
+func (b *RemoteBackend) ServerURL() string { return b.serverURL }
+
 // OnProgress registers a callback for streaming progress events.
 func (b *RemoteBackend) OnProgress(callback func(*channel.CLIProgressPayload)) {
 	b.progressMu.Lock()

@@ -64,6 +64,7 @@ func (b fakeBackend) OnOutbound(_ func(bus.OutboundMessage))                    
 func (b fakeBackend) Bus() *bus.MessageBus                                               { return nil }
 func (b fakeBackend) IsRemote() bool                                                     { return false }
 func (b fakeBackend) IsProcessing(_, _ string) bool                                      { return false }
+func (b fakeBackend) GetActiveProgress(_, _ string) *channel.CLIProgressPayload          { return nil }
 func (b fakeBackend) OnProgress(_ func(*channel.CLIProgressPayload))                     {}
 func (b fakeBackend) LLMFactory() *agent.LLMFactory                                      { return nil }
 func (b fakeBackend) SettingsService() *agent.SettingsService                            { return b.settingsSvc }

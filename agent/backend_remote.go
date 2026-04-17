@@ -236,6 +236,21 @@ func (b *RemoteBackend) IsProcessing(ch, chatID string) bool {
 	return strings.TrimSpace(string(raw)) == "true"
 }
 
+// GetActiveProgress returns the latest progress snapshot for an active turn via RPC.
+func (b *RemoteBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload {
+	raw, err := b.callRPC("get_active_progress", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil || len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var payload channel.CLIProgressPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	return &payload
+}
+
 // OnProgress registers a callback for streaming progress events.
 func (b *RemoteBackend) OnProgress(callback func(*channel.CLIProgressPayload)) {
 	b.progressMu.Lock()

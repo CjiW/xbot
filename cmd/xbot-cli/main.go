@@ -996,8 +996,9 @@ func main() {
 			}
 		}
 		// Check if server has an active agent turn for this chat (mid-session reconnect).
-		// If so, restore the typing indicator so the CLI shows "processing" state.
-		if app.backend.IsProcessing("cli", remoteChatID) {
+		// If so, restore the current progress state (tool calls, thinking, etc.).
+		if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
+			cliCh.SendProgress(cliCfg.ChatID, progress)
 			cliCh.SetProcessing(true)
 		}
 

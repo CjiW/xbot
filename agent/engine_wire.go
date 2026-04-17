@@ -218,6 +218,7 @@ func (a *Agent) buildMainRunConfig(
 				}
 			}
 			if cliCh != nil || webCh != nil {
+				progressKey := channel + ":" + chatID
 				cfg.ProgressEventHandler = func(event *ProgressEvent) {
 					if event == nil || event.Structured == nil {
 						return
@@ -280,6 +281,8 @@ func (a *Agent) buildMainRunConfig(
 							}
 						}
 						cliCh.SendProgress(chatID, payload)
+						// Save snapshot for mid-session reconnect (GetActiveProgress RPC).
+						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
 					if webCh != nil {
 						payload := &channelpkg.WsProgressPayload{
@@ -338,6 +341,7 @@ func (a *Agent) buildMainRunConfig(
 		case "web":
 			if ch, ok := a.channelFinder("web"); ok {
 				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					progressKey := channel + ":" + chatID
 					cfg.ProgressEventHandler = func(event *ProgressEvent) {
 						if event == nil || event.Structured == nil {
 							return
@@ -407,6 +411,12 @@ func (a *Agent) buildMainRunConfig(
 
 						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 						wc.SendProgress(chatID, payload)
+						// Save CLI-format snapshot for mid-session reconnect.
+						a.lastProgressSnapshot.Store(progressKey, &channelpkg.CLIProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						})
 					}
 				} else {
 					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")

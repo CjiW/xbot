@@ -682,6 +682,26 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return json.Marshal(backend.IsProcessing(p.Channel, p.ChatID))
 
+	case "get_active_progress":
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.Channel == "" {
+			p.Channel = "web"
+		}
+		if !isAdmin(senderID) && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		progress := backend.GetActiveProgress(p.Channel, p.ChatID)
+		if progress == nil {
+			return json.Marshal(nil)
+		}
+		return json.Marshal(progress)
+
 		// --- Subscriptions ---
 	case "list_subscriptions":
 		if isAdmin(senderID) {

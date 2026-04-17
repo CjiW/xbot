@@ -244,6 +244,12 @@ type Agent struct {
 	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
 	chatCancelCh sync.Map
 
+	// lastProgressSnapshot stores the latest CLIProgressPayload per active chat,
+	// updated by ProgressEventHandler during processing. Used by GetActiveProgress
+	// RPC to restore progress state on mid-session reconnect.
+	// key: "channel:chatID" -> *channel.CLIProgressPayload
+	lastProgressSnapshot sync.Map
+
 	// interactiveSubAgents stores interactive SubAgent sessions
 	// key: "channel:chatID/roleName" -> *interactiveAgent
 	// sync.Map provides atomic Load/Store/Delete/LoadOrStore, no additional mutex needed
@@ -1386,6 +1392,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			defer func() {
 				reqCancel()
 				a.chatCancelCh.Delete(cancelKey)
+				a.lastProgressSnapshot.Delete(msg.Channel + ":" + msg.ChatID)
 				<-sem // 释放槽位
 			}()
 

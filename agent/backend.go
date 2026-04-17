@@ -45,6 +45,11 @@ type AgentBackend interface {
 	// Used by CLI to restore typing indicator on mid-session reconnect.
 	IsProcessing(ch, chatID string) bool
 
+	// GetActiveProgress returns the latest progress snapshot for an active turn,
+	// or nil if no turn is active. Used by CLI to restore tool call progress
+	// and streaming content on mid-session reconnect.
+	GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload
+
 	// OnProgress registers a callback for streaming progress events from the server.
 	// LocalBackend: no-op (progress flows through dispatcher/channel directly).
 	// RemoteBackend: converts WS progress_structured/stream_content messages to

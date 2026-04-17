@@ -287,6 +287,12 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case tea.KeyPressMsg:
 		model, keyCmds, handled := m.handleKeyPress(msg, wasTyping)
 		if handled {
+			// wasTyping guard: ensure tick chain starts on idle→typing transition.
+			// handleKeyPress may call sendMessage→startAgentTurn which sets typing=true,
+			// but the early return below skips the wasTyping guard at the end of Update.
+			if cm, ok := model.(*cliModel); ok && !wasTyping && cm.typing && !cm.fastTickActive {
+				keyCmds = append(keyCmds, tickCmd())
+			}
 			return model, tea.Batch(keyCmds...)
 		}
 		// Unhandled key: fall through to post-switch processing

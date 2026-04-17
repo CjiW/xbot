@@ -31,27 +31,26 @@ func newTenantSem(capacity int) *tenantSem {
 }
 
 // acquire blocks until a slot is available or ctx is cancelled.
+// Uses context.AfterFunc to register a single Broadcast callback — no per-Wait goroutine.
 func (s *tenantSem) acquire(ctx context.Context) bool {
+	// Register ctx cancellation wakeup once for this acquire call.
+	// When ctx is cancelled, Broadcast wakes all waiters so they can check ctx.Err().
+	stop := context.AfterFunc(ctx, func() {
+		s.cond.Broadcast()
+	})
+	defer stop()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for s.count >= s.capacity {
-		// Wait with context cancellation support
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				s.cond.Broadcast()
-			case <-done:
-			}
-		}()
-
-		s.cond.Wait()
-		close(done) // signal the goroutine to stop
-
 		if ctx.Err() != nil {
 			return false
 		}
+		s.cond.Wait()
+	}
+	if ctx.Err() != nil {
+		return false
 	}
 	s.count++
 	return true

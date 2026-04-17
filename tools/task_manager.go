@@ -87,7 +87,14 @@ func NewBackgroundTaskManager() *BackgroundTaskManager {
 // generateTaskID generates a unique 8-char hex task ID.
 func generateTaskID() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// fallback: use time-based ID to avoid all-zero collision
+		v := uint32(time.Now().UnixNano())
+		b[0] = byte(v >> 24)
+		b[1] = byte(v >> 16)
+		b[2] = byte(v >> 8)
+		b[3] = byte(v)
+	}
 	return hex.EncodeToString(b)
 }
 

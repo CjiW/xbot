@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"xbot/bus"
@@ -12,8 +13,11 @@ func TestInjectInbound_IsCronFalse(t *testing.T) {
 	// injectInbound must NOT set IsCron=true, otherwise processMessage
 	// routes through processCronMessage which skips persistence.
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	a := &Agent{
-		bus: bus.NewMessageBus(),
+		bus:      bus.NewMessageBus(),
+		agentCtx: ctx,
 	}
 
 	go func() {

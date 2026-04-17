@@ -1551,7 +1551,7 @@ func TestRun_LLMSemaphore_NoLeakAcrossIterations(t *testing.T) {
 	sem := make(chan struct{}, semCapacity)
 	var acquireCount atomic.Int32
 
-	semAcquire := func() func() {
+	semAcquire := func(_ context.Context) func() {
 		acquireCount.Add(1)
 		sem <- struct{}{}
 		return func() { <-sem }

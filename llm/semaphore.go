@@ -65,8 +65,8 @@ func (s *tenantSem) release() {
 		return
 	}
 	s.count--
-	s.mu.Unlock()
 	s.cond.Signal()
+	s.mu.Unlock()
 }
 
 func (s *tenantSem) setCapacity(cap int) {

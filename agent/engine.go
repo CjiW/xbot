@@ -171,7 +171,7 @@ type RunConfig struct {
 	// LLMSemAcquire is called before each LLM call to acquire a per-tenant
 	// concurrency slot. Returns a release function that must be called after
 	// the LLM call completes. If nil, no concurrency limiting is applied.
-	LLMSemAcquire func() func()
+	LLMSemAcquire func(context.Context) func()
 
 	// RecordUserTokenUsage is called at the end of Run() to persist per-user
 	// token usage (inputTokens, outputTokens, conversationCount, llmCallCount).
@@ -186,7 +186,7 @@ type RunConfig struct {
 	// SubAgentSem acquires a per-tenant semaphore slot for SubAgent execution.
 	// It blocks until a slot is available and returns a release function.
 	// If nil and EnableConcurrentSubAgents is true, no limit is applied.
-	SubAgentSem func() func()
+	SubAgentSem func(context.Context) func()
 
 	// LastPromptTokens is the prompt_tokens from the previous Run()'s last LLM call.
 	// Restored from agent state or DB to avoid starting from 0 after restart.

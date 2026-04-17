@@ -155,6 +155,10 @@ PY
 
 write_systemd_unit() {
     local bin_path="$1" config_path="$2" unit_file="$3"
+    local install_user
+    install_user="$(id -un)"
+    local xbot_home
+    xbot_home="$(cd "$XBOT_HOME" && pwd)"
     cat > "$unit_file" <<EOF_UNIT
 [Unit]
 Description=xbot Agent Server
@@ -162,6 +166,8 @@ After=network.target
 
 [Service]
 Type=simple
+User=${install_user}
+Environment=XBOT_HOME=${xbot_home}
 ExecStart=${bin_path} serve --config ${config_path}
 Restart=on-failure
 RestartSec=5

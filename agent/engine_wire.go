@@ -103,8 +103,9 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations:   a.getMaxIterations(),
-		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
+		MaxIterations:    a.getMaxIterations(),
+		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(senderID),
+		DynamicMaxTokens: a.dynamicMaxTokens(),
 
 		// Session
 		SessionKey: sessionKey,
@@ -710,18 +711,19 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	cfg := RunConfig{
-		LLMClient:       llmClient,
-		Model:           subModel,
-		ThinkingMode:    thinkingMode,
-		Stream:          stream,
-		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
-		Tools:           subTools,
-		Messages:        messages,
-		AgentID:         subAgentID,
-		Channel:         parentCtx.Channel,
-		ChatID:          parentCtx.ChatID,
-		SenderID:        parentAgentID, // SubAgent: 直接调用者 = 父 Agent
-		OriginUserID:    originUserID,  // SubAgent: 继承原始用户 ID
+		LLMClient:        llmClient,
+		Model:            subModel,
+		ThinkingMode:     thinkingMode,
+		Stream:           stream,
+		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(originUserID),
+		DynamicMaxTokens: a.dynamicMaxTokens(),
+		Tools:            subTools,
+		Messages:         messages,
+		AgentID:          subAgentID,
+		Channel:          parentCtx.Channel,
+		ChatID:           parentCtx.ChatID,
+		SenderID:         parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID:     originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,

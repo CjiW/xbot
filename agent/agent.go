@@ -187,11 +187,12 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus              *bus.MessageBus
-	multiSession     *session.MultiTenantSession // Multi-tenant session manager
-	tools            *tools.Registry
-	maxIterations    int
-	purgeOldMessages bool
+	bus                     *bus.MessageBus
+	multiSession            *session.MultiTenantSession // Multi-tenant session manager
+	tools                   *tools.Registry
+	maxIterations           int
+	dynamicMaxTokensEnabled bool
+	purgeOldMessages        bool
 
 	skills             *SkillStore
 	agents             *AgentStore
@@ -461,6 +462,11 @@ type Config struct {
 	MaxContextTokens     int     // 最大上下文 token 数（默认 100000）
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7）
 	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true，旧字段）
+
+	// DynamicMaxTokens dynamically adjusts max_output_tokens based on remaining
+	// context space. When enabled, max_output_tokens is reduced when the context
+	// is large to prevent context_window_exceeded errors.
+	DynamicMaxTokens bool
 
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
@@ -780,12 +786,13 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		bus:              cfg.Bus,
-		multiSession:     multiSession,
-		tools:            registry,
-		maxIterations:    cfg.MaxIterations,
-		maxConcurrency:   cfg.MaxConcurrency,
-		purgeOldMessages: cfg.PurgeOldMessages,
+		bus:                     cfg.Bus,
+		multiSession:            multiSession,
+		tools:                   registry,
+		maxIterations:           cfg.MaxIterations,
+		maxConcurrency:          cfg.MaxConcurrency,
+		dynamicMaxTokensEnabled: cfg.DynamicMaxTokens,
+		purgeOldMessages:        cfg.PurgeOldMessages,
 
 		skills:             skillStore,
 		agents:             agentStore,
@@ -881,6 +888,10 @@ func (a *Agent) getMaxIterations() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
 	return a.maxIterations
+}
+
+func (a *Agent) dynamicMaxTokens() bool {
+	return a.dynamicMaxTokensEnabled
 }
 
 func (a *Agent) getMaxConcurrency() int {

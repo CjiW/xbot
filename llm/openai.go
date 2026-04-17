@@ -23,12 +23,51 @@ type OpenAILLM struct {
 	mu             sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
 	models         []string       // 可用模型列表
 	defaultModel   string         // 默认模型
-	maxTokens      int            // 最大生成 token 数
+	maxTokens      int            // 最大生成 token 数（用户配置值，作为上限）
 	onModelsLoaded func([]string) // callback after models loaded from API
+
+	// dynamicMaxTokens is the dynamically adjusted max_tokens for the next API call.
+	// Set by AdjustMaxTokens() based on remaining context space. Resets after each call.
+	// When 0 (default), buildParams uses the static maxTokens value.
+	dynamicMaxTokens int
 
 	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
 	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
 	maxTokensUpgrade sync.Map // model -> bool
+}
+
+// MaxTokensAdjuster is an optional interface that LLM clients can implement
+// to support dynamic max_tokens adjustment based on remaining context space.
+// The engine calls AdjustMaxTokens before each API call when the feature is enabled.
+type MaxTokensAdjuster interface {
+	AdjustMaxTokens(inputTokens, maxContextTokens int)
+}
+
+// AdjustMaxTokens dynamically adjusts the max_tokens parameter for the next API call.
+// inputTokens: the token count from the previous API call (or estimated).
+// maxContextTokens: the model's context window size (MaxContextTokens config).
+// The adjusted value is: min(configuredMaxTokens, maxContextTokens - inputTokens - safetyMargin)
+// This prevents context_window_exceeded errors by leaving room for the response.
+func (o *OpenAILLM) AdjustMaxTokens(inputTokens, maxContextTokens int) {
+	if maxContextTokens <= 0 || inputTokens <= 0 {
+		return
+	}
+	// Safety margin: 10% of context window or at least 2048 tokens.
+	// Accounts for token counting inaccuracies, tool result growth, and
+	// the next iteration's input increase.
+	safetyMargin := maxContextTokens / 10
+	if safetyMargin < 2048 {
+		safetyMargin = 2048
+	}
+	available := maxContextTokens - inputTokens - safetyMargin
+	if available <= 0 {
+		available = 256 // minimum: let the model at least respond with something
+	}
+	if available < o.maxTokens {
+		o.dynamicMaxTokens = available
+	}
+	// else: context is small enough, use the full configured maxTokens
+	// (dynamicMaxTokens stays 0, which means "use static value")
 }
 
 // OpenAIConfig OpenAI 配置
@@ -436,10 +475,18 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	// runtime and switch to max_completion_tokens (see isMaxTokensParamError).
 	// Note: some providers (GLM) silently ignore max_completion_tokens without
 	// error, so max_tokens is the safer default.
+	// Determine max_tokens: use dynamic value if set (from AdjustMaxTokens),
+	// otherwise fall back to the static configured value.
+	effectiveMaxTokens := o.dynamicMaxTokens
+	if effectiveMaxTokens <= 0 {
+		effectiveMaxTokens = o.maxTokens
+	}
+	o.dynamicMaxTokens = 0 // reset for next call
+
 	if _, useNew := o.maxTokensUpgrade.Load(model); useNew {
-		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(effectiveMaxTokens)}
 	} else {
-		p.MaxTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+		p.MaxTokens = param.Opt[int64]{Value: int64(effectiveMaxTokens)}
 	}
 
 	if len(tools) > 0 {

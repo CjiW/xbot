@@ -380,6 +380,20 @@ func (s *runState) assertSystemMessages(ctx context.Context) *RunOutput {
 // callLLM invokes the LLM with the current messages, handling per-tenant
 // concurrency semaphore and input-too-long errors with forced compression.
 func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) (*llm.LLMResponse, error) {
+	// Dynamic max_tokens: if enabled and we have prompt token info from a previous
+	// call, adjust max_output_tokens to fit within the context window.
+	if s.cfg.DynamicMaxTokens && s.lastPromptTokens > 0 {
+		maxCtxTokens := 0
+		if s.cfg.ContextManagerConfig != nil {
+			maxCtxTokens = s.cfg.ContextManagerConfig.MaxContextTokens
+		}
+		if maxCtxTokens > 0 {
+			if adjuster, ok := s.cfg.LLMClient.(llm.MaxTokensAdjuster); ok {
+				adjuster.AdjustMaxTokens(int(s.lastPromptTokens), maxCtxTokens)
+			}
+		}
+	}
+
 	toolDefs := visibleToolDefs(s.cfg.Tools.AsDefinitionsForSession(s.sessionKey), s.cfg.SettingsSvc, s.cfg.Channel, s.cfg.OriginUserID)
 
 	var releaseLLMSem func()

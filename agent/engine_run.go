@@ -67,6 +67,7 @@ type runState struct {
 	disableCompressRetry bool
 	compressAttempts     int
 	lastCompressIter     int
+	lengthRetryUsed      bool // guard: only auto-retry once for finish_reason=length
 
 	// Metrics (local counters for this Run)
 	localIterCount    int
@@ -531,6 +532,16 @@ func (s *runState) handleLLMError(ctx context.Context, err error, partialResp *l
 // handleFinalResponse processes LLM responses.
 // Returns (output, retry): output is non-nil when Run should return it;
 // retry is true when context was compressed and the loop should continue.
+//
+// Finish reason handling:
+//   - "stop" + no tool_calls → final text response, return
+//   - "tool_calls" (or HasToolCalls) → execute tools, continue loop
+//   - "length" → model hit max_tokens, output is truncated. Auto-retry once
+//     by appending partial content and asking model to continue. If model
+//     still can't finish, return with truncation warning.
+//   - "content_filter" → filtered by safety, return with warning
+//   - "" (empty/unknown) → abnormal stream termination, warn and return
+//   - "model_context_window_exceeded" → compress and retry
 func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMResponse) (output *RunOutput, retry bool) {
 	cleanContent := llm.StripThinkBlocks(response.Content)
 
@@ -577,15 +588,71 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				ToolsUsed: s.toolsUsed,
 			}), false
 		}
-		// length: output truncated due to max_tokens/max_completion_tokens limit
-		output := cleanContent
+
+		// length: model hit max_output_tokens, response is truncated.
+		// The model may have been about to call a tool but ran out of tokens.
+		// Auto-retry by appending partial content as assistant message and
+		// asking the model to continue.
 		if response.FinishReason == llm.FinishReasonLength {
-			output += "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
+			if !s.lengthRetryUsed && cleanContent != "" {
+				s.lengthRetryUsed = true
+				log.Ctx(ctx).WithFields(log.Fields{
+					"iteration":         s.localIterCount,
+					"truncated_len":     len(cleanContent),
+					"completion_tokens": s.lastCompletionTokens,
+				}).Warn("Model output truncated (length), auto-retrying with continue instruction")
+				// Append the truncated assistant message so the model can continue
+				s.messages = append(s.messages, llm.NewAssistantMessage(cleanContent))
+				s.messages = append(s.messages, llm.NewUserMessage("[Output was truncated due to max_output_tokens. Please continue from where you left off. If you were about to call a tool, call it now.]"))
+				return nil, true // retry
+			}
+			// Second length truncation or empty content — give up and return
+			log.Ctx(ctx).WithFields(log.Fields{
+				"iteration":         s.localIterCount,
+				"second_truncation": !s.lengthRetryUsed,
+			}).Warn("Model output truncated again after retry, returning partial result")
+			output := cleanContent + "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
+			return s.buildOutput(&bus.OutboundMessage{
+				Channel:   s.cfg.Channel,
+				ChatID:    s.cfg.ChatID,
+				Content:   output,
+				ToolsUsed: s.toolsUsed,
+			}), false
 		}
+
+		// content_filter: model output was filtered by safety system
+		if response.FinishReason == llm.FinishReasonContentFilter {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"finish_reason": response.FinishReason,
+				"content_len":   len(cleanContent),
+			}).Warn("Model response filtered by content filter")
+			output := cleanContent
+			if output == "" {
+				output = "⚠️ Response was filtered by content safety system."
+			} else {
+				output += "\n\n⚠️ Response was partially filtered by content safety system."
+			}
+			return s.buildOutput(&bus.OutboundMessage{
+				Channel:   s.cfg.Channel,
+				ChatID:    s.cfg.ChatID,
+				Content:   output,
+				ToolsUsed: s.toolsUsed,
+			}), false
+		}
+
+		// Non-stop finish reason (empty string, unknown provider-specific values)
+		if response.FinishReason != "" && response.FinishReason != llm.FinishReasonStop {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"finish_reason": response.FinishReason,
+				"content_len":   len(cleanContent),
+			}).Warn("Model returned unexpected finish_reason, treating as stop")
+		}
+
+		// stop (or empty/unknown): normal text response
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
-			Content:     output,
+			Content:     cleanContent,
 			ToolsUsed:   s.toolsUsed,
 			WaitingUser: s.waitingUser,
 		}), false

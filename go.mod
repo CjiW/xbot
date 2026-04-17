@@ -94,4 +94,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/pgavlin/mermaid-ascii => github.com/Chronostasys/mermaid-ascii v0.0.0-20260416164759-1cea6c45b247
+replace github.com/pgavlin/mermaid-ascii => github.com/Chronostasys/mermaid-ascii v0.0.0-20260416173126-a903e2a57055

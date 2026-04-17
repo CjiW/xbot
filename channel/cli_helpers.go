@@ -221,6 +221,16 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
+	// Remote mode: optimistically show initial progress so the user sees
+	// immediate feedback (progress bubble) without waiting for the server's
+	// first progress_structured event (which has network round-trip latency).
+	if m.remoteMode && m.progress == nil {
+		m.progress = &CLIProgressPayload{
+			Phase:     "thinking",
+			Iteration: 0,
+		}
+		m.renderCacheValid = false
+	}
 	// If fast tick chain is NOT running (e.g. we're on idle tick after Ctrl+C),
 	// inject a tickCmd so the spinner starts immediately.
 	if !m.fastTickActive {

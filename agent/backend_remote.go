@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,7 +65,8 @@ type RemoteBackend struct {
 	progressCb func(*channel.CLIProgressPayload)
 
 	// Reconnect
-	reconnectCh chan struct{}
+	reconnectCh   chan struct{}
+	onReconnectCb func() // called after successful reconnect (for history reload)
 
 	// RPC pending calls: requestID → response channel
 	rpcMu      sync.Mutex
@@ -174,8 +176,16 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 	// Set write deadline to avoid blocking indefinitely on dead connections.
 	b.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	defer b.conn.SetWriteDeadline(time.Time{}) // reset
+
+	// Detect /cancel and send as "cancel" type so the server's cancel handler
+	// routes it correctly (web.go readPump switch on msg.Type).
+	msgType := "message"
+	if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+		msgType = "cancel"
+	}
+
 	outMsg := wsOutgoingMessage{
-		Type:       "message",
+		Type:       msgType,
 		Content:    msg.Content,
 		Channel:    msg.Channel,
 		ChatID:     msg.ChatID,
@@ -215,11 +225,28 @@ func (b *RemoteBackend) IsRemote() bool { return true }
 // ServerURL returns the configured server URL for display purposes.
 func (b *RemoteBackend) ServerURL() string { return b.serverURL }
 
+// IsProcessing returns true if there is an active agent turn for the given chat.
+func (b *RemoteBackend) IsProcessing(ch, chatID string) bool {
+	raw, err := b.callRPC("is_processing", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == "true"
+}
+
 // OnProgress registers a callback for streaming progress events.
 func (b *RemoteBackend) OnProgress(callback func(*channel.CLIProgressPayload)) {
 	b.progressMu.Lock()
 	defer b.progressMu.Unlock()
 	b.progressCb = callback
+}
+
+// OnReconnect registers a callback invoked after a successful WS reconnection.
+// Used to reload history and re-sync state that may have changed during disconnect.
+func (b *RemoteBackend) OnReconnect(callback func()) {
+	b.onReconnectCb = callback
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +334,13 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			} else {
 				log.WithError(err).Info("WS connection closed")
 			}
+			// Unblock all pending RPC callers so they don't hang until timeout.
+			b.rpcMu.Lock()
+			for id, ch := range b.pending {
+				close(ch)
+				delete(b.pending, id)
+			}
+			b.rpcMu.Unlock()
 			select {
 			case b.reconnectCh <- struct{}{}:
 			default:
@@ -515,6 +549,7 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-b.reconnectCh:
+			consecutiveFailures := 0
 			for delay := time.Second; delay <= 30*time.Second; delay *= 2 {
 				select {
 				case <-b.done:
@@ -535,10 +570,28 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 				case <-timer.C:
 				}
 				if err := b.connect(ctx); err != nil {
+					consecutiveFailures++
 					log.WithError(err).Warn("Reconnect failed")
+					// Notify user after 3 consecutive failures via outbound callback.
+					if consecutiveFailures == 3 {
+						b.outboundMu.RLock()
+						cb := b.outboundCb
+						b.outboundMu.RUnlock()
+						if cb != nil {
+							cb(bus.OutboundMessage{
+								Channel: "remote",
+								Content: fmt.Sprintf("Connection lost, reconnecting (attempt %d)...", consecutiveFailures),
+							})
+						}
+					}
 					continue
 				}
 				log.Info("Reconnected to server")
+				consecutiveFailures = 0
+				// Notify CLI to reload history and re-sync state.
+				if b.onReconnectCb != nil {
+					b.onReconnectCb()
+				}
 				b.readPumpWg.Add(1)
 				go b.readPump(ctx)
 				break

@@ -666,7 +666,23 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		return nil, backend.TrimHistory(p.Channel, p.ChatID, cutoff)
 
-	// --- Subscriptions ---
+	case "is_processing":
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.Channel == "" {
+			p.Channel = "web"
+		}
+		if !isAdmin(senderID) && p.ChatID != senderID {
+			return nil, fmt.Errorf("access denied")
+		}
+		return json.Marshal(backend.IsProcessing(p.Channel, p.ChatID))
+
+		// --- Subscriptions ---
 	case "list_subscriptions":
 		if isAdmin(senderID) {
 			return json.Marshal(adminConfigSubscriptions(cfg))

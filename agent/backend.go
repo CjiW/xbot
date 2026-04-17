@@ -41,6 +41,10 @@ type AgentBackend interface {
 	// (SettingsService, LLMFactory, BgTaskManager, ToolHookChain, MultiSession).
 	IsRemote() bool
 
+	// IsProcessing returns true if there is an active agent turn for the given channel/chatID.
+	// Used by CLI to restore typing indicator on mid-session reconnect.
+	IsProcessing(ch, chatID string) bool
+
 	// OnProgress registers a callback for streaming progress events from the server.
 	// LocalBackend: no-op (progress flows through dispatcher/channel directly).
 	// RemoteBackend: converts WS progress_structured/stream_content messages to

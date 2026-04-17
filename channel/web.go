@@ -931,18 +931,34 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 		switch msg.Type {
 		case "cancel":
-			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus
+			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus.
+			// Resolve business channel/chatID from WS message fields (same as message handler)
+			// so the cancel key matches the one used during message processing.
+			msgChannel := "web"
+			msgChatID := chatID
+			msgSenderID := c.userID
+			msgSenderName := username
+			if msg.Channel != "" && msg.ChatID != "" {
+				msgChannel = msg.Channel
+				msgChatID = msg.ChatID
+				if msg.SenderID != "" {
+					msgSenderID = msg.SenderID
+				}
+				if msg.SenderName != "" {
+					msgSenderName = msg.SenderName
+				}
+			}
 			wc.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    "web",
-				SenderID:   c.userID,
-				SenderName: username,
-				ChatID:     chatID,
+				Channel:    msgChannel,
+				SenderID:   msgSenderID,
+				SenderName: msgSenderName,
+				ChatID:     msgChatID,
 				ChatType:   "p2p",
 				Content:    "/cancel",
 				Time:       time.Now(),
 				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-				From:       bus.NewIMAddress("web", c.userID),
-				To:         bus.NewIMAddress("web", chatID),
+				From:       bus.NewIMAddress(msgChannel, msgSenderID),
+				To:         bus.NewIMAddress(msgChannel, msgChatID),
 			}
 			continue
 		case "rpc":

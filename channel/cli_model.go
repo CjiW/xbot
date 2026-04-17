@@ -604,6 +604,11 @@ type cliProgressMsg struct {
 	payload *CLIProgressPayload
 }
 
+// cliProcessingMsg sets the typing/processing state externally (remote reconnect).
+type cliProcessingMsg struct {
+	processing bool
+}
+
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 

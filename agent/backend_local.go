@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"xbot/bus"
@@ -75,6 +76,20 @@ func (b *LocalBackend) OnOutbound(_ func(bus.OutboundMessage)) {
 func (b *LocalBackend) Bus() *bus.MessageBus { return b.bus }
 
 func (b *LocalBackend) IsRemote() bool { return false }
+
+// IsProcessing returns true if there is an active agent turn for the given chat.
+func (b *LocalBackend) IsProcessing(ch, chatID string) bool {
+	prefix := ch + ":" + chatID + ":"
+	found := false
+	b.agent.chatCancelCh.Range(func(key, _ interface{}) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
 
 // OnProgress is a no-op for LocalBackend: progress flows through the
 // Dispatcher → CLIChannel.SendProgress path directly.

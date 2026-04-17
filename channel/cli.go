@@ -259,6 +259,22 @@ func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 	c.program.Send(cliProgressMsg{payload: payload})
 }
 
+// SetProcessing externally sets the typing/processing state (for remote reconnect).
+func (c *CLIChannel) SetProcessing(processing bool) {
+	if c.program == nil {
+		return
+	}
+	c.program.Send(cliProcessingMsg{processing: processing})
+}
+
+// SendToast shows a toast notification in the CLI (non-blocking).
+func (c *CLIChannel) SendToast(text, icon string) {
+	if c.program == nil {
+		return
+	}
+	c.program.Send(cliToastMsg{text: text, icon: icon})
+}
+
 // SetApprovalHook stores the ApprovalHook reference so that Start() can wire
 // the CLIApprovalHandler after the tea.Program is created.
 func (c *CLIChannel) SetApprovalHook(hook *tools.ApprovalHook) {

@@ -837,6 +837,10 @@ func main() {
 				go func() {
 					if err := app.backend.SendInbound(msg); err != nil {
 						log.WithError(err).Warn("Failed to forward message to remote server")
+						// For /cancel specifically, show a toast so the user knows it failed.
+						if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+							cliCh.SendToast("Failed to cancel: "+err.Error(), "✗")
+						}
 					}
 				}()
 				return true
@@ -990,6 +994,28 @@ func main() {
 			if len(history) > 0 {
 				cliCh.LoadHistory(history)
 			}
+		}
+		// Check if server has an active agent turn for this chat (mid-session reconnect).
+		// If so, restore the typing indicator so the CLI shows "processing" state.
+		if app.backend.IsProcessing("cli", remoteChatID) {
+			cliCh.SetProcessing(true)
+		}
+
+		// Wire reconnect callback to reload history on WS reconnect.
+		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {
+			rb.OnReconnect(func() {
+				if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
+					log.WithError(err).Warn("Failed to reload history after reconnect")
+				} else {
+					cliCh.LoadHistory(history)
+				}
+				// Re-check processing state after reconnect.
+				if app.backend.IsProcessing("cli", remoteChatID) {
+					cliCh.SetProcessing(true)
+				} else {
+					cliCh.SetProcessing(false)
+				}
+			})
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)

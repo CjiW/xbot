@@ -303,6 +303,13 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+
+	case cliProcessingMsg:
+		if msg.processing && !m.typing {
+			m.startAgentTurn()
+		} else if !msg.processing && m.typing {
+			m.endAgentTurn(m.agentTurnID)
+		}
 		// NOTE: do NOT flush queue here even if needFlushQueue is true!
 		// PhaseDone can arrive before cliOutboundMsg (the reply text). If we
 		// flush here, the queued message gets appended BEFORE the reply,

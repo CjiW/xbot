@@ -23,6 +23,7 @@ type LLMFactory struct {
 	defaultModel        string
 	defaultThinkingMode string
 	tierModels          config.LLMConfig
+	retryConfig         llm.RetryConfig // 用于包装 createClient 创建的裸客户端
 
 	// LLMSemaphoreManager 管理 per-tenant LLM 并发信号量
 	llmSemManager *llm.LLMSemaphoreManager
@@ -59,6 +60,15 @@ func NewLLMFactory(configSvc *sqlite.UserLLMConfigService, defaultLLM llm.LLM, d
 func (f *LLMFactory) SetModelTiers(cfg config.LLMConfig) {
 	f.mu.Lock()
 	f.tierModels = cfg
+	f.mu.Unlock()
+}
+
+// SetRetryConfig sets the retry configuration used to wrap LLM clients
+// created by createClient/createClientFromSub (subscription-based clients).
+// Without this, subscription clients have NO retry logic for 429/5xx errors.
+func (f *LLMFactory) SetRetryConfig(cfg llm.RetryConfig) {
+	f.mu.Lock()
+	f.retryConfig = cfg
 	f.mu.Unlock()
 }
 
@@ -272,7 +282,9 @@ func (f *LLMFactory) ClearProxyLLM(senderID string) {
 	delete(f.thinkingModes, senderID)
 }
 
-// createClient 根据配置创建 LLM 客户端，配置无效时返回 nil
+// createClient 根据配置创建 LLM 客户端，配置无效时返回 nil。
+// 创建的裸客户端会被 RetryLLM 包装，确保 SubAgent 和订阅客户端
+// 同样享有 429/5xx 指数退避重试能力。
 func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 	// 检查必要字段
 	if cfg.BaseURL == "" || cfg.APIKey == "" {
@@ -284,29 +296,37 @@ func (f *LLMFactory) createClient(cfg *sqlite.UserLLMConfig) (llm.LLM, string) {
 		model = f.defaultModel
 	}
 
+	var client llm.LLM
 	switch cfg.Provider {
 	case "anthropic":
-		client := llm.NewAnthropicLLM(llm.AnthropicConfig{
+		client = llm.NewAnthropicLLM(llm.AnthropicConfig{
 			BaseURL:      cfg.BaseURL,
 			APIKey:       cfg.APIKey,
 			DefaultModel: model,
 			MaxTokens:    cfg.MaxOutputTokens,
 		})
-		return client, model
 
 	default:
 		// 其他所有 provider（openai, deepseek, siliconflow 等）都使用 OpenAI 兼容 API
-		maxTokens := cfg.MaxOutputTokens
-		client := llm.NewOpenAILLM(llm.OpenAIConfig{
+		client = llm.NewOpenAILLM(llm.OpenAIConfig{
 			BaseURL:        cfg.BaseURL,
 			APIKey:         cfg.APIKey,
 			DefaultModel:   model,
-			MaxTokens:      maxTokens,
+			MaxTokens:      cfg.MaxOutputTokens,
 			OnModelsLoaded: cfg.OnModelsLoaded,
 			SubscriptionID: cfg.ID,
 		})
-		return client, model
 	}
+
+	// 包装 RetryLLM：确保所有通过 LLMFactory 创建的客户端都有重试能力
+	f.mu.RLock()
+	retryCfg := f.retryConfig
+	f.mu.RUnlock()
+	if retryCfg.Attempts > 0 {
+		client = llm.NewRetryLLM(client, retryCfg)
+	}
+
+	return client, model
 }
 
 // Invalidate 使用户的 LLM 客户端缓存失效（配置更新后调用）

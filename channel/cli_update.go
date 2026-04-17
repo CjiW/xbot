@@ -469,9 +469,13 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		return m, nil
 	}
 
-	// NOTE: tick chain is now started inside startAgentTurn() via pendingCmds.
-	// No need for a separate wasTyping guard here — all idle→typing transitions
-	// go through startAgentTurn() which guarantees tickCmd() is queued.
+	// Idle→typing transition guard: if typing just started (e.g. from
+	// handleInjectedUserMsg or cliProcessingMsg), ensure the tick chain is running.
+	// This is the universal safety net — callers that can return cmds do so
+	// directly, but this catches any missed transitions.
+	if !wasTyping && m.typing && !m.fastTickActive {
+		cmds = append(cmds, tickCmd())
+	}
 
 	// 更新 viewport
 	m.viewport, cmd = m.viewport.Update(msg)

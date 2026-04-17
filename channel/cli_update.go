@@ -6,13 +6,30 @@ import (
 	"charm.land/lipgloss/v2"
 	"fmt"
 	"image/color"
+	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	log "xbot/logger"
 )
 
 // Update 处理消息
-func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.WithField("panic", r).Error("cli model update panicked")
+			_ = os.MkdirAll(filepath.Join(configXbotHome(), "logs"), 0o755)
+			if f, err := os.OpenFile(filepath.Join(configXbotHome(), "logs", "cli-panic.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				_, _ = fmt.Fprintf(f, "\n==== %s update panic ====\nmsg=%T\npanic=%v\n%s\n", time.Now().Format(time.RFC3339), msg, r, stack)
+				_ = f.Close()
+			}
+			panic(r)
+		}
+	}()
 	var (
 		cmd  tea.Cmd
 		cmds []tea.Cmd
@@ -741,4 +758,11 @@ func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
 		return m.clearTempStatusCmd()
 	}
 	return nil
+}
+
+func configXbotHome() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".xbot")
+	}
+	return ".xbot"
 }

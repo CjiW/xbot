@@ -203,13 +203,27 @@ func (a *Agent) buildMainRunConfig(
 		// CLI 渠道进度处理
 		switch channel {
 		case "cli":
+			var cliCh *channelpkg.CLIChannel
 			if ch, ok := a.channelFinder("cli"); ok {
 				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-					cfg.ProgressEventHandler = func(event *ProgressEvent) {
-						if event == nil || event.Structured == nil {
-							return
-						}
-						s := event.Structured
+					cliCh = cc
+				} else {
+					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
+				}
+			}
+			var webCh *channelpkg.WebChannel
+			if ch, ok := a.channelFinder("web"); ok {
+				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					webCh = wc
+				}
+			}
+			if cliCh != nil || webCh != nil {
+				cfg.ProgressEventHandler = func(event *ProgressEvent) {
+					if event == nil || event.Structured == nil {
+						return
+					}
+					s := event.Structured
+					if cliCh != nil {
 						payload := &channelpkg.CLIProgressPayload{
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
@@ -236,7 +250,6 @@ func (a *Agent) buildMainRunConfig(
 								Summary:   t.Summary,
 							})
 						}
-						// Parse sub-agent tree from progress lines
 						if len(event.Lines) > 0 {
 							subAgents := ExtractSubAgentTree(event.Lines)
 							if len(subAgents) > 0 {
@@ -252,18 +265,12 @@ func (a *Agent) buildMainRunConfig(
 								payload.SubAgents = cliSubAgents
 							}
 						}
-						// Copy todo items for CLI display
 						if len(s.Todos) > 0 {
 							payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
 							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.CLITodoItem{
-									ID:   td.ID,
-									Text: td.Text,
-									Done: td.Done,
-								}
+								payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
 							}
 						}
-						// §18 传递 Token 使用量快照
 						if s.TokenUsage != nil {
 							payload.TokenUsage = &channelpkg.CLITokenUsage{
 								PromptTokens:     s.TokenUsage.PromptTokens,
@@ -272,10 +279,60 @@ func (a *Agent) buildMainRunConfig(
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
-						cc.SendProgress(chatID, payload)
+						cliCh.SendProgress(chatID, payload)
 					}
-				} else {
-					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
+					if webCh != nil {
+						payload := &channelpkg.WsProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						}
+						for _, t := range s.ActiveTools {
+							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
+							})
+						}
+						for _, t := range s.CompletedTools {
+							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
+							})
+						}
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									wsSubAgents[i] = channelpkg.WsSubAgent{Role: sa.Role, Status: sa.Status, Desc: sa.Desc, Children: convertWsSubAgentTree(sa.Children)}
+								}
+								payload.SubAgents = wsSubAgents
+							}
+						}
+						if len(s.Todos) > 0 {
+							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								payload.Todos[i] = channelpkg.WsTodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+							}
+						}
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.WsTokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
+						webCh.SendProgress(chatID, payload)
+					}
 				}
 			}
 		case "web":
@@ -394,35 +451,49 @@ func (a *Agent) buildMainRunConfig(
 	// Stream — default ON for all channels; wire callbacks per channel type.
 	if !streamDisabled {
 		cfg.Stream = true
-		// Wire stream content callback: push accumulated content into progress block
-		// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
-		if ch, ok := a.channelFinder("cli"); ok {
-			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-				cfg.StreamContentFunc = func(content string) {
-					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-						StreamContent: content,
-					})
-				}
-				cfg.StreamReasoningFunc = func(content string) {
-					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-						ReasoningStreamContent: content,
-					})
+		if a.channelFinder != nil {
+			var cliCh *channelpkg.CLIChannel
+			if ch, ok := a.channelFinder("cli"); ok {
+				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+					cliCh = cc
 				}
 			}
-		}
-		// Also wire for web channel — needed for CLI RemoteBackend clients
-		// connected via WebSocket who receive stream_content messages.
-		if ch, ok := a.channelFinder("web"); ok {
-			if wc, ok := ch.(*channelpkg.WebChannel); ok {
-				if cfg.StreamContentFunc == nil {
-					cfg.StreamContentFunc = func(content string) {
-						wc.SendStreamContent(chatID, content, "")
-					}
+			var webCh *channelpkg.WebChannel
+			if ch, ok := a.channelFinder("web"); ok {
+				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					webCh = wc
 				}
-				if cfg.StreamReasoningFunc == nil {
-					cfg.StreamReasoningFunc = func(content string) {
-						wc.SendStreamContent(chatID, "", content)
+			}
+			cfg.StreamContentFunc = func(content string) {
+				if cliCh != nil {
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
+				}
+				if webCh != nil {
+					streamChatID := chatID
+					if metaAny, ok := a.sessionTransportMeta.Load(channel + ":" + chatID); ok {
+						if meta, ok := metaAny.(map[string]string); ok {
+							if v := meta["transport_chat_id"]; v != "" {
+								streamChatID = v
+							}
+						}
 					}
+					webCh.SendStreamContent(streamChatID, content, "")
+				}
+			}
+			cfg.StreamReasoningFunc = func(content string) {
+				if cliCh != nil {
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
+				}
+				if webCh != nil {
+					reasoningChatID := chatID
+					if metaAny, ok := a.sessionTransportMeta.Load(channel + ":" + chatID); ok {
+						if meta, ok := metaAny.(map[string]string); ok {
+							if v := meta["transport_chat_id"]; v != "" {
+								reasoningChatID = v
+							}
+						}
+					}
+					webCh.SendStreamContent(reasoningChatID, "", content)
 				}
 			}
 		}

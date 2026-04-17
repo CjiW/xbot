@@ -434,6 +434,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 type CLIChannelConfig struct {
 	WorkDir              string                                                                                                         // 工作目录（用于标题栏显示）
 	ChatID               string                                                                                                         // 会话 ID（按工作目录区分）
+	RemoteMode           bool                                                                                                           // 是否为 remote backend 模式（用于标题栏/轻提示）
 	HistoryLoader        func() ([]HistoryMessage, error)                                                                               // 会话恢复：加载历史消息
 	DynamicHistoryLoader func(channelName, chatID string) ([]HistoryMessage, error)                                                     // /su 切换用户后加载目标用户历史
 	GetCurrentValues     func() map[string]string                                                                                       // 获取当前配置值（用于 settings panel 初始值）

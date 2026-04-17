@@ -33,5 +33,8 @@ Optional channel capabilities via interfaces in `capability.go`:
 ## CLI Conventions
 
 - Settings save is synchronous (`doSaveSettings` in `cli_helpers.go`) — all local I/O
+- Remote CLI settings RPC must use business sender identity (for example `cli_user`) rather than WS auth user (`admin`)
+- Server-side `get_settings`/`set_setting` accept payload `sender_id`; for first-time non-admin users with empty settings, they seed a small user-scoped whitelist from global CLI config (`context_mode`, `max_iterations`, `max_concurrency`, `max_context_tokens`, `enable_auto_compress`, `theme`)
+- CLI TUI now centralizes user-scoped setting keys in `channel/cli_helpers.go` and uses shared merge/persist helpers instead of duplicating per-call switch lists; current user-scoped keys: `theme`, `language`, `context_mode`, `max_iterations`, `max_concurrency`, `max_context_tokens`, `enable_auto_compress`, `runner_server`, `runner_token`, `runner_workspace`
 - `AskUser` tool works via CLI channel's interactive input panel
 - ApprovalHook handler injected after program creation (`cli.go:139`)

@@ -74,6 +74,7 @@ func (c *CLIChannel) Start() error {
 	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+	c.model.remoteMode = c.config.RemoteMode
 	c.model.senderID = "cli_user"
 
 	// Apply pending injections that were set before model existed
@@ -150,10 +151,14 @@ func (c *CLIChannel) Start() error {
 	}
 
 	// 创建 Bubble Tea program
-	c.programMu.Lock()
-	c.program = tea.NewProgram(c.model,
+	programOpts := []tea.ProgramOption{
 		tea.WithOutput(origStdout),
-	)
+	}
+	if os.Getenv("XBOT_BUBBLETEA_PANIC") == "1" {
+		programOpts = append(programOpts, tea.WithoutCatchPanics())
+	}
+	c.programMu.Lock()
+	c.program = tea.NewProgram(c.model, programOpts...)
 	c.programMu.Unlock()
 
 	// Wire CLIApprovalHandler into the ApprovalHook now that the program exists
@@ -288,7 +293,7 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 	if c.model == nil {
 		// Model not created yet — cache for later application in newCLIModel
 		c.pendingHistory = history
-		log.WithField("count", len(history)).Info("Cached remote history (model not ready yet)")
+		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Cached remote history (model not ready yet)")
 		return
 	}
 	for _, hm := range history {
@@ -307,7 +312,12 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 		}
 		c.model.messages = append(c.model.messages, cm)
 	}
-	log.WithField("count", len(history)).Info("Restored session history (remote)")
+	c.model.invalidateAllCache(false)
+	c.model.updateViewportContent()
+	if c.model.streamingMsgIdx < 0 {
+		c.model.viewport.GotoBottom()
+	}
+	log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Restored session history (remote)")
 }
 
 // SetTrimHistoryFn sets the callback for /rewind DB truncation.
@@ -411,6 +421,7 @@ func (c *CLIChannel) handleOutbound() {
 			c.programMu.Lock()
 			p := c.program
 			c.programMu.Unlock()
+			log.WithFields(log.Fields{"waiting_user": msg.WaitingUser, "metadata_keys": len(msg.Metadata), "has_program": p != nil}).Debug("CLIChannel.handleOutbound: dequeued")
 			if p != nil {
 				p.Send(cliOutboundMsg{msg: msg})
 			}

@@ -365,25 +365,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			} else {
 				// Get current values: config is the single source of truth for LLM settings.
 				// Only overlay non-LLM settings from SettingsService (e.g. theme, language).
-				currentValues := make(map[string]string)
-				if m.channel.config.GetCurrentValues != nil {
-					for k, v := range m.channel.config.GetCurrentValues() {
-						currentValues[k] = v
-					}
-				}
-				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
-					if err == nil {
-						for k, v := range vals {
-							// Skip LLM fields — they come from config (single source of truth)
-							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
-								continue
-							}
-							currentValues[k] = v
-						}
-					}
-				}
+				currentValues := m.mergeCLISettingsValues()
 				// Inject model list into combo options
 				// ALL model dropdowns (llm_model + tiers) use ListAllModels() which includes
 				// default LLM models + all subscription Model fields, so newly added
@@ -407,26 +389,15 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					// and must NOT be written back — they would overwrite the new subscription.
 					// This is the structural guarantee against subscription data corruption.
 					if m.panelSubGeneration != m.subGeneration {
-						for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
-							delete(values, k)
-						}
-					}
-					// Persist non-LLM settings to SettingsService (SQLite).
-					// LLM settings go only to config.json (single source of truth).
-					if m.channel.settingsSvc != nil {
-						for k, v := range values {
-							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
-								continue
+						for k := range values {
+							if isSubscriptionScopedSettingKey(k) {
+								delete(values, k)
 							}
-							_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)
 						}
 					}
-					// Apply settings: write config.json + update runtime state
-					// (LLM client rebuild, agent state updates — all non-UI work)
-					if m.channel.config.ApplySettings != nil {
-						m.channel.config.ApplySettings(values)
-					}
+					// Persist user-scoped settings to SettingsService, and apply global/runtime
+					// settings through config.ApplySettings (single source of truth for global/LLM).
+					m.persistCLISettingsValues(values)
 					// NOTE: UI updates (theme/locale/model/viewport) are handled
 					// by handleSettingsSavedMsg in Update() — do NOT call them here
 					// since this callback runs in a background goroutine.

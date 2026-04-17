@@ -18,10 +18,13 @@ Designed for self-hosted deployments. Cross-platform: Linux, macOS, and Windows 
 
 ## Quick Start
 
-### Install CLI
+### Install CLI / Server
 
 ```bash
 # Linux / macOS (amd64, arm64)
+# Installer will ask whether to use:
+#   1) standalone mode
+#   2) server-client mode (configure local server + service + CLI remote connection)
 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 
 # Specific version
@@ -30,6 +33,13 @@ VERSION=v0.0.7 curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scr
 # Custom install path (default: /usr/local/bin)
 INSTALL_PATH=~/.local/bin curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash
 ```
+
+In `server-client` mode, the installer will:
+- generate a random admin token
+- write/update `~/.xbot/config.json`
+- configure CLI default remote connection
+- install a local service (systemd on Linux / launchd on macOS)
+
 
 ```powershell
 # Windows (PowerShell)

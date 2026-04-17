@@ -47,6 +47,11 @@ func (m *cliModel) View() tea.View {
 	titleLeft := m.titleText()
 	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
 	titleRight := m.locale.TitleHint
+	if m.remoteMode {
+		titleRight = "◉ REMOTE · " + titleRight
+	} else {
+		titleRight = "⌂ LOCAL · " + titleRight
+	}
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
@@ -428,17 +433,21 @@ func (m *cliModel) renderTodoBar() string {
 	return sb.String()
 }
 
-// titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
+// titleText 生成标题栏文字。
 func (m *cliModel) titleText() string {
+	modeLabel := "⌂ xbot"
+	if m.remoteMode {
+		modeLabel = "◉ xbot remote"
+	}
 	if m.workDir != "" {
 		// Resolve to absolute path so "." → actual directory name
 		abs, err := filepath.Abs(m.workDir)
 		if err == nil {
-			return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(abs))
+			return fmt.Sprintf(" %s [%s]", modeLabel, filepath.Base(abs))
 		}
-		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
+		return fmt.Sprintf(" %s [%s]", modeLabel, filepath.Base(m.workDir))
 	}
-	return " xbot CLI"
+	return " " + modeLabel
 }
 
 // ---------------------------------------------------------------------------

@@ -161,6 +161,8 @@ var dangerConfirmStrings = map[string]string{
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
+	m.progress = nil
+	m.typing = false
 	m.relayoutViewport() // viewport gets split-layout height
 	m.panelItems = items
 	m.panelTab = 0
@@ -881,8 +883,13 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	}()
 
 	// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
-	if handled && m.panelMode == "settings" {
-		m.ensurePanelCursorVisible()
+	if handled {
+		switch m.panelMode {
+		case "settings":
+			m.ensurePanelCursorVisible()
+		case "askuser":
+			m.ensureAskUserVisible()
+		}
 	}
 
 	return handled, newModel, cmd
@@ -1461,6 +1468,50 @@ func (m *cliModel) restoreOtherInput() {
 	m.panelOtherTI.CursorEnd()
 }
 
+func (m *cliModel) askCursorLine() int {
+	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return 0
+	}
+	line := 0
+	if len(m.panelItems) > 1 {
+		line += 2 // tab bar + blank line
+	}
+	item := m.panelItems[m.panelTab]
+	questionWidth := m.panelWidth(60)
+	qLines := len(strings.Split(truncateToWidth("❓ "+item.Question, questionWidth), "\n"))
+	if qLines < 1 {
+		qLines = 1
+	}
+	line += qLines
+	if len(item.Options) > 0 {
+		line += 1 // blank line before options
+		cursor := m.panelOptCursor[m.panelTab]
+		if cursor < 0 {
+			cursor = 0
+		}
+		if cursor < len(item.Options) {
+			return line + cursor
+		}
+		line += len(item.Options)
+		// Other input row
+		if cursor == len(item.Options) {
+			return line
+		}
+		line++
+		// Submit row (last tab only)
+		if m.panelTab == len(m.panelItems)-1 {
+			if cursor == len(item.Options)+1 {
+				return line
+			}
+		}
+		return line
+	}
+	// textarea mode: anchor near the bottom so expanded input stays visible
+	line += 1
+	line += max(0, m.panelAnswerTA.Height()-1)
+	return line
+}
+
 // autoExpandAskTA adjusts textarea height based on content.
 func (m *cliModel) autoExpandAskTA() {
 	lines := strings.Count(m.panelAnswerTA.Value(), "\n") + 1
@@ -1472,6 +1523,7 @@ func (m *cliModel) autoExpandAskTA() {
 	}
 	if m.panelAnswerTA.Height() != lines {
 		m.panelAnswerTA.SetHeight(lines)
+		m.ensureAskPanelCursorVisible()
 	}
 }
 
@@ -2249,19 +2301,16 @@ func (m *cliModel) openRunnerPanel() {
 	token := ""
 	workspace := m.workDir
 
-	// 从设置中读取已保存的值
-	if m.channel != nil && m.channel.settingsSvc != nil {
-		if vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user"); err == nil {
-			if v, ok := vals["runner_server"]; ok && v != "" {
-				serverURL = v
-			}
-			if v, ok := vals["runner_token"]; ok && v != "" {
-				token = v
-			}
-			if v, ok := vals["runner_workspace"]; ok && v != "" {
-				workspace = v
-			}
-		}
+	// 从统一设置视图中读取已保存的值
+	vals := m.mergeCLISettingsValues()
+	if v, ok := vals["runner_server"]; ok && v != "" {
+		serverURL = v
+	}
+	if v, ok := vals["runner_token"]; ok && v != "" {
+		token = v
+	}
+	if v, ok := vals["runner_workspace"]; ok && v != "" {
+		workspace = v
 	}
 
 	m.panelRunnerServerTI = m.newPanelTextInput(serverURL, m.locale.RunnerServerPlaceholder)
@@ -2377,11 +2426,11 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 		}
 
 		// 保存设置
-		if m.channel != nil && m.channel.settingsSvc != nil {
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_server", serverURL)
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_token", token)
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_workspace", workspace)
-		}
+		m.persistCLISettingsValues(map[string]string{
+			"runner_server":    serverURL,
+			"runner_token":     token,
+			"runner_workspace": workspace,
+		})
 
 		// 回到 settings，发起连接
 		m.panelMode = "settings"
@@ -2500,4 +2549,27 @@ func (m *cliModel) viewRunnerPanel() string {
 	}
 
 	return sb.String()
+}
+
+func (m *cliModel) ensureAskUserVisible() {
+	if m.panelMode != "askuser" || m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return
+	}
+	raw := m.viewAskUserPanel()
+	total := strings.Count(raw, "\n") + 1
+	visible := m.panelVisibleHeight()
+	if visible <= 0 {
+		return
+	}
+	if total <= visible {
+		m.askPanelScrollY = 0
+		return
+	}
+	if m.askPanelScrollY < 0 {
+		m.askPanelScrollY = 0
+	}
+	maxScroll := total - visible
+	if m.askPanelScrollY > maxScroll {
+		m.askPanelScrollY = maxScroll
+	}
 }

@@ -290,6 +290,11 @@ type wsMessage struct {
 	TS              int64              `json:"ts,omitempty"`               // timestamp
 	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
 	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
+	Channel         string             `json:"channel,omitempty"`
+	ChatID          string             `json:"chat_id,omitempty"`
+	SenderID        string             `json:"sender_id,omitempty"`
+	SenderName      string             `json:"sender_name,omitempty"`
+	ChatType        string             `json:"chat_type,omitempty"`
 	// RPC response fields (used when Type == "rpc_response")
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
@@ -371,6 +376,11 @@ type wsClientMessage struct {
 	FileSizes  []int64  `json:"file_sizes,omitempty"`
 	UploadKeys []string `json:"upload_keys,omitempty"` // OSS upload keys (for qiniu mode)
 	FileMimes  []string `json:"file_mimes,omitempty"`  // MIME types
+	Channel    string   `json:"channel,omitempty"`
+	ChatID     string   `json:"chat_id,omitempty"`
+	SenderID   string   `json:"sender_id,omitempty"`
+	SenderName string   `json:"sender_name,omitempty"`
+	ChatType   string   `json:"chat_type,omitempty"`
 }
 
 // WsAskUserPayload is the payload for "ask_user" WS messages (agent needs user input).
@@ -605,10 +615,18 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
+	targetClientID := msg.ChatID
+	if msg.Metadata != nil {
+		if v := msg.Metadata["transport_chat_id"]; v != "" {
+			targetClientID = v
+		} else if v := msg.Metadata["transport_sender_id"]; v != "" {
+			targetClientID = v
+		}
+	}
+
 	// Send via hub (non-blocking: writes to buffered channel)
-	if !wc.hub.sendToClient(msg.ChatID, wsMsg) {
-		// Client offline, message buffered in ring buffer
-		log.WithField("chat_id", msg.ChatID).Debug("Web client offline, message buffered")
+	if !wc.hub.sendToClient(targetClientID, wsMsg) {
+		log.WithFields(log.Fields{"chat_id": msg.ChatID, "target_client_id": targetClientID}).Debug("Web client offline, message buffered")
 	}
 
 	// AskUser: agent needs user input
@@ -629,7 +647,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 			TS:       time.Now().Unix(),
 			Progress: askPayload,
 		}
-		wc.hub.sendToClient(msg.ChatID, askMsg)
+		wc.hub.sendToClient(targetClientID, askMsg)
 	}
 
 	return msgID, nil
@@ -998,6 +1016,12 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			if feishuUserID != "" {
 				metadata["feishu_user_id"] = feishuUserID
 			}
+			// Preserve transport identity for remote CLI: business identity may be
+			// forwarded as channel=cli/chat_id=<workdir>, but replies must still go
+			// back through this websocket client.
+			metadata["transport_channel"] = "web"
+			metadata["transport_chat_id"] = c.userID
+			metadata["transport_sender_id"] = c.userID
 
 			// Echo back complete user message (with file info) so frontend can update optimistic message
 			if content != originalContent && len(msg.UploadKeys) > 0 {
@@ -1010,28 +1034,50 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				wc.hub.sendToClient(chatID, echoMsg)
 			}
 
+			msgChannel := "web"
+			msgSenderID := c.userID
+			msgSenderName := username
+			msgChatID := chatID
+			msgChatType := "p2p"
+			if msg.Channel != "" && msg.ChatID != "" {
+				msgChannel = msg.Channel
+				msgChatID = msg.ChatID
+				if msg.SenderID != "" {
+					msgSenderID = msg.SenderID
+				}
+				if msg.SenderName != "" {
+					msgSenderName = msg.SenderName
+				}
+				if msg.ChatType != "" {
+					msgChatType = msg.ChatType
+				}
+			}
+
 			// Eagerly save user message so history API can return it during processing.
 			// Skip bang commands (! prefix) — they should never be persisted.
+			// For remote CLI (business channel=cli), do NOT eager-save here: this web-layer
+			// helper persists by web sender/chat tenant, while remote CLI history must be
+			// stored under business tenant (channel=cli, chat_id=<abs cwd>) inside agent.processMessage().
 			trimmed := strings.TrimSpace(content)
-			if len(trimmed) <= 1 || trimmed[0] != '!' {
-				if err := eagerSaveUserMsg(wc.db, c.userID, content); err != nil {
+			if msgChannel != "cli" && (len(trimmed) <= 1 || trimmed[0] != '!') {
+				if err := eagerSaveUserMsg(wc.db, msgSenderID, content); err != nil {
 					log.WithError(err).Warn("Failed to eager-save user message")
 				}
 				metadata["user_msg_eager_saved"] = "true"
 			}
 
 			wc.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    "web",
-				SenderID:   c.userID,
-				SenderName: username,
-				ChatID:     chatID,
-				ChatType:   "p2p",
+				Channel:    msgChannel,
+				SenderID:   msgSenderID,
+				SenderName: msgSenderName,
+				ChatID:     msgChatID,
+				ChatType:   msgChatType,
 				Content:    content,
 				Media:      mediaPaths,
 				Time:       time.Now(),
 				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-				From:       bus.NewIMAddress("web", c.userID),
-				To:         bus.NewIMAddress("web", chatID),
+				From:       bus.NewIMAddress(msgChannel, msgSenderID),
+				To:         bus.NewIMAddress(msgChannel, msgChatID),
 				Metadata:   metadata,
 			}
 		case "ask_user_response":

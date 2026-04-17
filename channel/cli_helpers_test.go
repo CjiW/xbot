@@ -6,10 +6,98 @@
 package channel
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// ---------------------------------------------------------------------------
+// CLI settings scope helpers
+// ---------------------------------------------------------------------------
+
+func TestCLISettingScope_KnownKeys(t *testing.T) {
+	cases := map[string]string{
+		"theme":               "user",
+		"language":            "user",
+		"runner_server":       "user",
+		"llm_provider":        "global",
+		"llm_model":           "global",
+		"default_user":        "global",
+		"privileged_user":     "global",
+		"subscription_manage": "action",
+		"runner_panel":        "action",
+		"danger_zone":         "action",
+		"definitely_unknown":  "unknown",
+	}
+	for key, want := range cases {
+		if got := cliSettingScope(key); got != want {
+			t.Fatalf("cliSettingScope(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestCLISettingScope_SettingsSchemaKeysAreClassified(t *testing.T) {
+	locale := localeZH()
+	if locale == nil {
+		t.Fatal("localeZH() returned nil")
+	}
+	var unknown []string
+	for _, def := range locale.SettingsSchema {
+		if cliSettingScope(def.Key) == "unknown" {
+			unknown = append(unknown, def.Key)
+		}
+	}
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		t.Fatalf("unclassified settings schema keys: %v", unknown)
+	}
+}
+
+func TestIsSubscriptionScopedSettingKey(t *testing.T) {
+	for _, key := range []string{"llm_provider", "llm_api_key", "llm_model", "llm_base_url"} {
+		if !isSubscriptionScopedSettingKey(key) {
+			t.Fatalf("expected %q to be subscription-scoped", key)
+		}
+	}
+	for _, key := range []string{"theme", "language", "sandbox_mode"} {
+		if isSubscriptionScopedSettingKey(key) {
+			t.Fatalf("expected %q to not be subscription-scoped", key)
+		}
+	}
+}
+
+func TestOpenSettingsFromQuickSwitch_PreservesNonSubscriptionEdits(t *testing.T) {
+	model := newCLIModel()
+	model.channel = &CLIChannel{}
+	model.panelValuesBackup = map[string]string{
+		"theme":        "mono",
+		"language":     "en",
+		"llm_provider": "should-refresh",
+	}
+	model.panelCursorBackup = 2
+	model.panelOnSubmitBackup = func(map[string]string) {}
+	model.channel.config.GetCurrentValues = func() map[string]string {
+		return map[string]string{
+			"theme":        "midnight",
+			"language":     "zh",
+			"llm_provider": "openai",
+		}
+	}
+	model.openSettingsFromQuickSwitch()
+	if model.panelMode != "settings" {
+		t.Fatalf("panelMode = %q, want settings", model.panelMode)
+	}
+	if got := model.panelValues["theme"]; got != "mono" {
+		t.Fatalf("theme = %q, want mono", got)
+	}
+	if got := model.panelValues["language"]; got != "en" {
+		t.Fatalf("language = %q, want en", got)
+	}
+	if got := model.panelValues["llm_provider"]; got != "openai" {
+		t.Fatalf("llm_provider = %q, want openai", got)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // isErrorContent — pure function, comprehensive edge-case coverage
@@ -850,5 +938,121 @@ func TestIsErrorContent_NilSafeSlice(t *testing.T) {
 	for _, v := range variants {
 		// Just ensure no panic
 		_ = isErrorContent(v)
+	}
+}
+
+type testSettingsService struct {
+	getResult map[string]string
+	getErr    error
+	setCalls  []testSettingsSetCall
+}
+
+type testSettingsSetCall struct {
+	channelName string
+	senderID    string
+	key         string
+	value       string
+}
+
+func (s *testSettingsService) GetSettings(channelName, senderID string) (map[string]string, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	out := make(map[string]string, len(s.getResult))
+	for k, v := range s.getResult {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (s *testSettingsService) SetSetting(channelName, senderID, key, value string) error {
+	s.setCalls = append(s.setCalls, testSettingsSetCall{
+		channelName: channelName,
+		senderID:    senderID,
+		key:         key,
+		value:       value,
+	})
+	return nil
+}
+
+func TestCLISettingScopeClassification(t *testing.T) {
+	cases := []struct {
+		key   string
+		scope string
+	}{
+		{key: "theme", scope: "user"},
+		{key: "runner_token", scope: "user"},
+		{key: "llm_model", scope: "global"},
+		{key: "enable_stream", scope: "global"},
+		{key: "subscription_manage", scope: "action"},
+	}
+	for _, tc := range cases {
+		if got := cliSettingScope(tc.key); got != tc.scope {
+			t.Errorf("cliSettingScope(%q) = %q, want %q", tc.key, got, tc.scope)
+		}
+	}
+}
+
+func TestMergeCLISettingsValues_OverlaysUserScopedOnly(t *testing.T) {
+	cfgVals := map[string]string{
+		"theme":     "midnight",
+		"llm_model": "gpt-4.1",
+	}
+	settingsSvc := &testSettingsService{getResult: map[string]string{
+		"theme":         "mono",
+		"llm_model":     "claude-3-7",
+		"runner_server": "https://runner.example",
+	}}
+	model := newCLIModel()
+	model.channelName = "cli"
+	model.senderID = "cli_user"
+	model.channel = &CLIChannel{settingsSvc: settingsSvc}
+	model.channel.config.GetCurrentValues = func() map[string]string { return cfgVals }
+
+	merged := model.mergeCLISettingsValues()
+	if got := merged["theme"]; got != "mono" {
+		t.Fatalf("theme = %q, want mono", got)
+	}
+	if got := merged["llm_model"]; got != "gpt-4.1" {
+		t.Fatalf("llm_model = %q, want config value gpt-4.1", got)
+	}
+	if got := merged["runner_server"]; got != "https://runner.example" {
+		t.Fatalf("runner_server = %q, want settings value", got)
+	}
+}
+
+func TestPersistCLISettingsValues_PersistsUserScopedAndAppliesAll(t *testing.T) {
+	settingsSvc := &testSettingsService{}
+	applied := map[string]string{}
+	model := newCLIModel()
+	model.channelName = "cli"
+	model.senderID = "cli_user"
+	model.channel = &CLIChannel{settingsSvc: settingsSvc}
+	model.channel.config.ApplySettings = func(vals map[string]string) {
+		for k, v := range vals {
+			applied[k] = v
+		}
+	}
+
+	input := map[string]string{
+		"theme":            "mono",
+		"runner_workspace": "/tmp/ws",
+		"llm_model":        "gpt-4.1",
+	}
+	model.persistCLISettingsValues(input)
+
+	if len(settingsSvc.setCalls) != 2 {
+		t.Fatalf("setCalls = %d, want 2", len(settingsSvc.setCalls))
+	}
+	for _, call := range settingsSvc.setCalls {
+		if cliSettingScope(call.key) != "user" {
+			t.Fatalf("persisted non-user-scoped key %q", call.key)
+		}
+		if call.channelName != "cli" || call.senderID != "cli_user" {
+			t.Fatalf("unexpected target: channel=%q sender=%q", call.channelName, call.senderID)
+		}
+	}
+	if applied["llm_model"] != "gpt-4.1" || applied["theme"] != "mono" || applied["runner_workspace"] != "/tmp/ws" {
+		t.Fatalf("ApplySettings did not receive full input: %#v", applied)
 	}
 }

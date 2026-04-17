@@ -84,9 +84,12 @@ Two modes (`agent/engine_run.go`):
 The `AgentBackend` interface (`agent/backend.go`) abstracts where the agent loop runs:
 
 - **LocalBackend** (`agent/backend_local.go`): In-process `agent.Agent`. CLI creates the agent,
-  runs `agent.Run()`, and executes tools locally. This is the default mode (no `--server` flag).
+  runs `agent.Run()`, and executes tools locally. This is the default mode (no `--server` flag / `serve` subcommand).
 - **RemoteBackend** (`agent/backend_remote.go`): Connects to a remote xbot server via WebSocket.
   Agent loop and tool execution run server-side; CLI is a display/input layer.
+
+Server entry can now be launched either from the root binary (`main.go`) or from the CLI binary via
+`xbot-cli serve [--config path]`. Both paths call the same reusable server startup logic in `serverapp/`.
 
 Both implement the same `AgentBackend` interface, so CLI code works identically regardless of mode.
 Management methods (LLMFactory, SettingsService, etc.) return nil for RemoteBackend until the

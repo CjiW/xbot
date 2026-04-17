@@ -108,6 +108,16 @@ type WebConfig struct {
 }
 
 // Config 应用配置
+// CLIConfig CLI 客户端配置（存储在 config.json，供 xbot-cli 读取）。
+type CLIConfig struct {
+	// ServerURL 指定远端 agent server 的 WebSocket 地址（如 ws://localhost:8080）。
+	// 若非空，xbot-cli 默认以 RemoteBackend 连接该 server，而非本地运行 agent。
+	// 可通过 --server flag 在命令行覆盖此值。
+	ServerURL string `json:"server_url,omitempty"`
+	// Token 连接 server 时使用的认证 token（对应 server 端的 admin.token）。
+	Token string `json:"token,omitempty"`
+}
+
 type Config struct {
 	Server        ServerConfig         `json:"server"`
 	LLM           LLMConfig            `json:"llm"`
@@ -127,6 +137,7 @@ type Config struct {
 	OSS           OSSConfig            `json:"oss"`
 	TavilyAPIKey  string               `json:"tavily_api_key"`
 	Subscriptions []SubscriptionConfig `json:"subscriptions,omitempty"`
+	CLI           CLIConfig            `json:"cli,omitempty"`
 }
 
 // FeishuConfig 飞书渠道配置

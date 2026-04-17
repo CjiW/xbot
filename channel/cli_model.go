@@ -323,6 +323,7 @@ type cliModel struct {
 
 	// --- Session ---
 	workDir       string // 工作目录（标题栏显示用）
+	remoteMode    bool   // 是否连接 remote backend（标题栏提示用）
 	senderID      string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
 	channelName   string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
 	defaultChatID string // 默认 chatID（/su 切换回来时恢复）

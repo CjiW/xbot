@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/serverapp"
 	"xbot/storage"
 	"xbot/storage/sqlite"
 	"xbot/tools"
@@ -75,11 +77,22 @@ func isFirstRun() bool {
 // newCLIApp 执行公共初始化：加载配置、创建 Backend。
 // If serverURL is non-empty, creates a RemoteBackend (agent runs on server).
 // Otherwise creates a LocalBackend (agent runs in-process).
-func newCLIApp(serverURL, token string) *cliApp {
+func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 	cfg := config.Load()
 
 	// Derive cfg.LLM from active subscription (single source of truth)
 	syncLLMFromActiveSub(cfg)
+
+	// If --server was not specified on the command line, fall back to config.
+	// --local disables this fallback and forces legacy in-process mode.
+	if !forceLocal {
+		if serverURL == "" && cfg.CLI.ServerURL != "" {
+			serverURL = cfg.CLI.ServerURL
+		}
+		if token == "" && cfg.CLI.Token != "" {
+			token = cfg.CLI.Token
+		}
+	}
 
 	workDir := cfg.Agent.WorkDir
 	xbotHome := config.XbotHome()
@@ -179,7 +192,51 @@ func (app *cliApp) Close() {
 }
 
 func main() {
+	xbotHome := config.XbotHome()
+	defer func() {
+		if r := recover(); r != nil {
+			appendCLIPanicLog(xbotHome, r)
+			panic(r)
+		}
+	}()
 	fmt.Printf("xbot CLI %s\n", version.Version)
+
+	printHelp := func() {
+		fmt.Println("Usage: xbot-cli [options] [prompt]")
+		fmt.Println()
+		fmt.Println("Modes:")
+		fmt.Println("  default             Auto mode: use remote server if cli.server_url is configured")
+		fmt.Println("  --local             Force legacy local mode (in-process agent, old behavior)")
+		fmt.Println("  --server <ws-url>   Force remote mode and connect to server")
+		fmt.Println("  serve               Run server mode in the same binary")
+		fmt.Println()
+		fmt.Println("Options:")
+		fmt.Println("  --help, -h          Show this help")
+		fmt.Println("  --new               Start a new session")
+		fmt.Println("  --resume            Resume last session (default)")
+		fmt.Println("  -p <prompt>         Non-interactive single prompt")
+		fmt.Println("  --token <token>     Token for remote server")
+		fmt.Println("  --workspace <path>  Override workspace")
+	}
+
+	// Sub-commands: handled before flag parsing.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			fmt.Println("install 子命令已不再主推，请使用 scripts/install.sh")
+			fmt.Println("例如: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash")
+			return
+		case "serve":
+			if err := serverapp.Run(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "--help", "-h", "help":
+			printHelp()
+			return
+		}
+	}
 
 	// 解析命令行标志
 	prompt := ""
@@ -189,6 +246,7 @@ func main() {
 		flagShare     string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
 		flagToken     string // --token xxx
 		flagWorkspace string // --workspace /path (overrides config)
+		flagLocal     bool   // --local force legacy in-process mode
 	)
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -205,6 +263,11 @@ func main() {
 				flagServer = os.Args[i+1]
 				i++
 			}
+		case "--local":
+			flagLocal = true
+		case "--help", "-h":
+			printHelp()
+			return
 		case "--share":
 			if len(os.Args) > i+1 {
 				flagShare = os.Args[i+1]
@@ -250,7 +313,17 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp(flagServer, flagToken)
+	if flagLocal {
+		flagServer = ""
+	}
+	app := newCLIApp(flagServer, flagToken, flagLocal)
+	if flagLocal {
+		fmt.Println("Backend: legacy local mode (--local)")
+	} else if app.backend != nil && app.backend.IsRemote() {
+		fmt.Println("Backend: remote server mode")
+	} else {
+		fmt.Println("Backend: local mode")
+	}
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)
@@ -258,9 +331,11 @@ func main() {
 	// 用工作目录绝对路径作为 ChatID，不同目录有不同的会话
 	absWorkDir, _ := filepath.Abs(app.workDir)
 
+	_, isRemoteBackend := app.backend.(*agent.RemoteBackend)
 	cliCfg := channel.CLIChannelConfig{
 		WorkDir:    app.workDir,
 		ChatID:     absWorkDir,
+		RemoteMode: isRemoteBackend,
 		IsFirstRun: firstRun,
 		GetCurrentValues: func() map[string]string {
 			// In remote mode, read current values from server via RPC.
@@ -619,8 +694,10 @@ func main() {
 			}
 			app.llmClient = client
 			if app.backend != nil {
-				app.backend.LLMFactory().SetDefaults(client, model)
-				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+				if factory := app.backend.LLMFactory(); factory != nil {
+					factory.SetDefaults(client, model)
+					factory.SetModelTiers(app.cfg.LLM)
+				}
 			}
 			return nil
 		},
@@ -757,10 +834,11 @@ func main() {
 			cliCh.SetModelLister(newRemoteModelLister(app.backend))
 			// Forward user messages to server instead of local bus
 			cliCh.SetSendInboundFn(func(msg bus.InboundMessage) bool {
-				if err := app.backend.SendInbound(msg); err != nil {
-					log.WithError(err).Warn("Failed to forward message to remote server")
-					return false
-				}
+				go func() {
+					if err := app.backend.SendInbound(msg); err != nil {
+						log.WithError(err).Warn("Failed to forward message to remote server")
+					}
+				}()
 				return true
 			})
 			// Forward server responses directly to CLI channel (skip dispatcher
@@ -829,16 +907,12 @@ func main() {
 		}
 	}
 
-	// Apply saved theme at startup (works in both local and remote mode)
-	if app.backend != nil {
-		if app.backend.IsRemote() {
-			// Remote mode: use RPC directly (SettingsService() is nil for RemoteBackend)
-			if vals, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
-				if t, ok := vals["theme"]; ok && t != "" {
-					channel.ApplyTheme(t)
-				}
-			}
-		} else if ss := app.backend.SettingsService(); ss != nil {
+	// Apply saved theme at startup.
+	// Local mode can read settings immediately; remote mode must wait until backend.Start()
+	// establishes the WS/RPC connection, otherwise theme fetch races and the UI keeps default
+	// colors until the user re-saves settings.
+	if app.backend != nil && !app.backend.IsRemote() {
+		if ss := app.backend.SettingsService(); ss != nil {
 			if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 				if t, ok := vals["theme"]; ok && t != "" {
 					channel.ApplyTheme(t)
@@ -859,12 +933,23 @@ func main() {
 	_ = app.backend.Start(ctx)
 	go disp.Run()
 
-	// Remote mode: load history from server after WS connection is established
+	// Remote mode: load history from server after WS connection is established.
+	// Use the original CLI tenant key so remote mode can resume the same session
+	// as legacy local mode: channel=cli, chat_id=absWorkDir.
 	if app.backend.IsRemote() {
-		if history, err := app.backend.GetHistory("", ""); err != nil {
-			log.WithError(err).Warn("Failed to load remote session history")
-		} else if len(history) > 0 {
-			cliCh.LoadHistory(history)
+		if vals, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
+			if t, ok := vals["theme"]; ok && t != "" {
+				channel.ApplyTheme(t)
+			}
+		}
+		remoteChatID, _ := filepath.Abs(app.workDir)
+		if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
+			log.WithError(err).WithField("chat_id", remoteChatID).Warn("Failed to load remote session history")
+		} else {
+			log.WithFields(log.Fields{"chat_id": remoteChatID, "count": len(history)}).Info("CLI loaded remote history via RPC")
+			if len(history) > 0 {
+				cliCh.LoadHistory(history)
+			}
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
@@ -1272,7 +1357,7 @@ func (s *configLLMSubscriber) GetDefaultModel() string {
 
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。
 func executeNonInteractive(prompt string) {
-	app := newCLIApp("", "") // non-interactive always uses local backend
+	app := newCLIApp("", "", true) // non-interactive always uses local backend
 	defer app.Close()
 
 	absWorkDir, _ := filepath.Abs(app.workDir)
@@ -1450,4 +1535,18 @@ func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {
 
 func (s *remoteLLMSubscriber) GetDefaultModel() string {
 	return s.backend.GetDefaultModel()
+}
+
+func appendCLIPanicLog(xbotHome string, recovered any) {
+	logDir := filepath.Join(xbotHome, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(logDir, "cli-panic.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "\n==== %s panic ====\n%v\n%s\n", time.Now().Format(time.RFC3339), recovered, debug.Stack())
 }

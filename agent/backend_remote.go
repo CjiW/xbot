@@ -109,11 +109,16 @@ type wsIncomingMessage struct {
 
 // wsOutgoingMessage represents a message sent to the server.
 type wsOutgoingMessage struct {
-	Type    string          `json:"type"`
-	Content string          `json:"content,omitempty"`
-	ID      string          `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	Type       string          `json:"type"`
+	Content    string          `json:"content,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	Method     string          `json:"method,omitempty"`
+	Params     json.RawMessage `json:"params,omitempty"`
+	Channel    string          `json:"channel,omitempty"`
+	ChatID     string          `json:"chat_id,omitempty"`
+	SenderID   string          `json:"sender_id,omitempty"`
+	SenderName string          `json:"sender_name,omitempty"`
+	ChatType   string          `json:"chat_type,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +174,28 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 	// Set write deadline to avoid blocking indefinitely on dead connections.
 	b.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	defer b.conn.SetWriteDeadline(time.Time{}) // reset
-	outMsg := wsOutgoingMessage{Type: "message", Content: msg.Content}
+	outMsg := wsOutgoingMessage{
+		Type:       "message",
+		Content:    msg.Content,
+		Channel:    msg.Channel,
+		ChatID:     msg.ChatID,
+		SenderID:   msg.SenderID,
+		SenderName: msg.SenderName,
+		ChatType:   msg.ChatType,
+	}
+	if msg.Metadata != nil {
+		if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
+			outMsg.ChatID = transportChatID
+		}
+		if transportSenderID := msg.Metadata["transport_sender_id"]; transportSenderID != "" {
+			outMsg.SenderID = transportSenderID
+		}
+		if transportChannel := msg.Metadata["transport_channel"]; transportChannel != "" {
+			// Keep original business identity in Channel/ChatID fields above; transport
+			// fields are forwarded via metadata on the inbound message instead.
+			_ = transportChannel
+		}
+	}
 	return b.conn.WriteJSON(outMsg)
 }
 
@@ -308,7 +334,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			cb := b.outboundCb
 			b.outboundMu.RUnlock()
 			if cb != nil {
-				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Debug("RemoteBackend: dispatching outbound message")
+				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Info("RemoteBackend: dispatching outbound message")
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
@@ -330,7 +356,27 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			})
 		case "ask_user":
 			if msg.Progress != nil {
-				b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
+				if len(msg.Progress.Questions) > 0 {
+					qJSON, _ := json.Marshal(msg.Progress.Questions)
+					outMsg := bus.OutboundMessage{
+						Channel:     "cli",
+						WaitingUser: true,
+						Metadata: map[string]string{
+							"ask_questions": string(qJSON),
+						},
+					}
+					if msg.Progress.RequestID != "" {
+						outMsg.Metadata["request_id"] = msg.Progress.RequestID
+					}
+					b.outboundMu.RLock()
+					cb := b.outboundCb
+					b.outboundMu.RUnlock()
+					if cb != nil {
+						cb(outMsg)
+					} else {
+						log.Warn("Received ask_user but no outbound callback registered")
+					}
+				}
 			}
 		}
 	}
@@ -751,7 +797,7 @@ func (b *RemoteBackend) InspectInteractiveSession(ctx context.Context, roleName,
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
-	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace})
+	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace, "sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -767,7 +813,7 @@ func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]stri
 
 func (b *RemoteBackend) SetSetting(namespace, senderID, key, value string) error {
 	return b.callRPCVoid("set_setting", map[string]string{
-		"namespace": namespace, "key": key, "value": value,
+		"namespace": namespace, "sender_id": senderID, "key": key, "value": value,
 	})
 }
 

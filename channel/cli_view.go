@@ -51,21 +51,7 @@ func (m *cliModel) View() tea.View {
 	// Askuser panel: override titleRight with panel-specific hints (always visible)
 	if m.panelMode == "askuser" {
 		titleRight = m.askUserTitleHints()
-	}
-	// Remote mode: show connection state dot on right side
-	if m.remoteMode {
-		var dot string
-		switch m.connState {
-		case "connected":
-			dot = "🟢"
-		case "disconnected":
-			dot = "🔴"
-		case "reconnecting":
-			dot = "🟡"
-		}
-		titleRight = dot + " " + titleRight
-	}
-	if m.updateNotice != nil && m.updateNotice.HasUpdate && m.panelMode != "askuser" {
+	} else if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
 	// Runner status + identity indicator in title bar
@@ -79,6 +65,19 @@ func (m *cliModel) View() tea.View {
 	}
 	if m.senderID != "cli_user" {
 		titleRight = "👤 " + m.senderID + " · " + titleRight
+	}
+	// Remote mode: connection state dot — always last so nothing can overwrite it
+	if m.remoteMode {
+		var dot string
+		switch m.connState {
+		case "connected":
+			dot = "🟢"
+		case "disconnected":
+			dot = "🔴"
+		case "reconnecting":
+			dot = "🟡"
+		}
+		titleRight = dot + " " + titleRight
 	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {

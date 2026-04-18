@@ -79,6 +79,9 @@ func (c *CLIChannel) Start() error {
 	c.model.remoteMode = c.config.RemoteMode
 	c.model.remoteServerURL = c.config.RemoteServerURL
 	c.model.debugMode = c.config.DebugMode
+	if c.config.RemoteMode {
+		c.model.connState = "connected"
+	}
 	c.model.debugCaptureMs = c.config.DebugCaptureMs
 	c.model.senderID = "cli_user"
 

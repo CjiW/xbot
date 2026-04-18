@@ -48,10 +48,18 @@ func (m *cliModel) View() tea.View {
 	titleLeft := m.titleText()
 	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
 	titleRight := m.locale.TitleHint
+	// Remote mode: show connection state dot on right side
 	if m.remoteMode {
-		titleRight = "◉ REMOTE · " + titleRight
-	} else {
-		titleRight = "⌂ LOCAL · " + titleRight
+		var dot string
+		switch m.connState {
+		case "connected":
+			dot = "🟢"
+		case "disconnected":
+			dot = "🔴"
+		case "reconnecting":
+			dot = "🟡"
+		}
+		titleRight = dot + " remote · " + titleRight
 	}
 	if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
@@ -443,20 +451,10 @@ func (m *cliModel) titleText() string {
 		if u, err := url.Parse(host); err == nil && u.Host != "" {
 			host = u.Host
 		}
-		// Connection state indicator
-		var stateIcon string
-		switch m.connState {
-		case "connected":
-			stateIcon = "🟢"
-		case "disconnected":
-			stateIcon = "🔴"
-		case "reconnecting":
-			stateIcon = "🟡"
-		}
 		if host != "" {
-			modeLabel = fmt.Sprintf("◉ %s xbot [%s]", stateIcon, host)
+			modeLabel = fmt.Sprintf("☁ xbot %s", host)
 		} else {
-			modeLabel = fmt.Sprintf("◉ %s xbot remote", stateIcon)
+			modeLabel = "☁ xbot remote"
 		}
 	}
 	if m.workDir != "" {

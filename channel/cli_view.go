@@ -66,19 +66,6 @@ func (m *cliModel) View() tea.View {
 	if m.senderID != "cli_user" {
 		titleRight = "👤 " + m.senderID + " · " + titleRight
 	}
-	// Remote mode: ☁ with connection-state color
-	if m.remoteMode {
-		var cloud string
-		switch m.connState {
-		case "connected":
-			cloud = m.styles.TodoDone.Render("☁")
-		case "disconnected":
-			cloud = m.styles.ProgressError.Render("☁")
-		case "reconnecting":
-			cloud = m.styles.WarningSt.Render("☁…")
-		}
-		titleRight = cloud + " " + titleRight
-	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {
 		titlePad = 1
@@ -454,10 +441,22 @@ func (m *cliModel) titleText() string {
 		if u, err := url.Parse(host); err == nil && u.Host != "" {
 			host = u.Host
 		}
+		// ☁ color reflects connection state
+		var cloud string
+		switch m.connState {
+		case "connected":
+			cloud = m.styles.TodoDone.Render("☁")
+		case "disconnected":
+			cloud = m.styles.ProgressError.Render("☁")
+		case "reconnecting":
+			cloud = m.styles.WarningSt.Render("☁")
+		default:
+			cloud = "☁"
+		}
 		if host != "" {
-			modeLabel = fmt.Sprintf("☁ xbot %s", host)
+			modeLabel = fmt.Sprintf("%s xbot %s", cloud, host)
 		} else {
-			modeLabel = "☁ xbot remote"
+			modeLabel = fmt.Sprintf("%s xbot remote", cloud)
 		}
 	}
 	if m.workDir != "" {

@@ -726,13 +726,13 @@ func (s *runState) maybeCompress(ctx context.Context) {
 			tokenSource = "api+completion+tool_delta"
 		}
 	} else if s.restoredFromDB && s.lastPromptTokens > 0 {
-		// Restored from previous Run — use API value + estimate new user msg delta.
-		totalTokens = s.lastPromptTokens + s.lastCompletionTokens
+		// Restored from previous Run — use API prompt_tokens as baseline.
+		// Do NOT add lastCompletionTokens: those are output tokens from the
+		// previous Run, not part of the current context size.
+		totalTokens = s.lastPromptTokens
 		tokenSource = "restored"
-		// Estimate delta: new user message + any assistant messages added since last API call.
-		// The API value covers messages up to the last LLM call; the current messages include
-		// the full history + new user message. Use local estimation as a floor to avoid
-		// underestimating.
+		// Local estimate includes new user message + saved assistant reply.
+		// Use as floor to account for messages added since last API call.
 		localEstimate, _ := llm.CountMessagesTokens(s.messages, s.cfg.Model)
 		if int64(localEstimate) > totalTokens {
 			totalTokens = int64(localEstimate)

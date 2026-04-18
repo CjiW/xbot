@@ -60,7 +60,10 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 		return nil, fmt.Errorf("create user workspace: %w", err)
 	}
 
-	output, exitErr := a.executeBangCommand(ctx, command, workspaceRoot, sbUID)
+	// Resolve session CWD so bang commands run in the same directory as the agent.
+	sessionCWD := a.resolveBangCWD(msg.Channel, msg.ChatID, sbUID, workspaceRoot)
+
+	output, exitErr := a.executeBangCommand(ctx, command, workspaceRoot, sbUID, sessionCWD)
 
 	// Format result
 	content := formatBangOutput(command, output, exitErr)
@@ -92,10 +95,44 @@ func (a *Agent) handleBangCommand(ctx context.Context, msg bus.InboundMessage, c
 	}, nil
 }
 
+// resolveBangCWD looks up the session's current working directory for bang commands.
+// Returns empty string if session is not available (falls back to workspaceRoot).
+func (a *Agent) resolveBangCWD(channel, chatID, senderID, workspaceRoot string) string {
+	if a.multiSession == nil {
+		return ""
+	}
+	sess, err := a.multiSession.GetOrCreateSession(channel, chatID)
+	if err != nil {
+		return ""
+	}
+	cwd := sess.GetCurrentDir()
+	if cwd == "" {
+		return ""
+	}
+	// For docker sandbox, translate host CWD → container path.
+	// Session CWD is always stored as a host path.
+	if a.sandbox != nil {
+		sb := a.sandbox
+		if resolver, ok := sb.(tools.SandboxResolver); ok {
+			sb = resolver.SandboxForUser(senderID)
+		}
+		if sb.Name() == "docker" {
+			hostRoot := a.workspaceRoot(senderID)
+			containerWS := sb.Workspace(senderID)
+			if containerWS != "" && strings.HasPrefix(cwd, hostRoot) {
+				return containerWS + cwd[len(hostRoot):]
+			}
+			return ""
+		}
+	}
+	return cwd
+}
+
 // executeBangCommand runs the command in the user's sandbox (or locally if sandbox is disabled).
 // Both paths use login shell (bash -l -c) via Sandbox.Exec for consistent behavior.
 // workspaceRoot is the sandbox-internal path for file operations.
-func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, senderID string) (string, error) {
+// cwd is the session's current working directory (may be empty if not set).
+func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, senderID string, cwd string) (string, error) {
 	execCtx, cancel := context.WithTimeout(ctx, bangDefaultTimeout)
 	defer cancel()
 
@@ -116,15 +153,20 @@ func (a *Agent) executeBangCommand(ctx context.Context, command, workspaceRoot, 
 		return "", fmt.Errorf("failed to get shell: %w", err)
 	}
 
-	// Determine working directory based on sandbox mode
+	// Determine working directory based on sandbox mode.
+	// cwd is already translated by resolveBangCWD (docker → container path).
+	// For remote sandbox, don't set dir (runner manages its own CWD).
 	var dir string
 	switch sandbox.Name() {
-	case "docker":
-		dir = "/workspace"
 	case "remote":
 		// Don't set dir -- runner defaults to its workspace
+		// (remote runner manages its own CWD via the agent's Cd tool)
 	default:
-		dir = workspaceRoot
+		if cwd != "" {
+			dir = cwd
+		} else {
+			dir = workspaceRoot
+		}
 	}
 
 	spec := tools.ExecSpec{

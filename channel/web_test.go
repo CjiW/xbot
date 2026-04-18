@@ -279,6 +279,20 @@ func TestWebSocketAuth(t *testing.T) {
 	}
 
 	conn := makeWSConnection(t, server.URL, sessionCookie.Name+"="+sessionCookie.Value)
+	time.Sleep(50 * time.Millisecond)
+
+	// Hub routes by chatID — find the connected client and subscribe it.
+	// (In production, readPump subscribes when client sends its first message.)
+	wc.hub.mu.RLock()
+	var clientCID string
+	for cid := range wc.hub.conns {
+		clientCID = cid
+		break
+	}
+	wc.hub.mu.RUnlock()
+	if clientCID != "" {
+		wc.hub.subscribe(clientCID, "web-1")
+	}
 	conn.Close()
 }
 
@@ -356,6 +370,19 @@ func TestSendToWebSocket(t *testing.T) {
 	}
 
 	conn := makeWSConnection(t, server.URL, sessionCookie.Name+"="+sessionCookie.Value)
+	time.Sleep(50 * time.Millisecond)
+
+	// Subscribe client to chatID (in production, readPump subscribes on first message)
+	wc.hub.mu.RLock()
+	var clientCID string
+	for cid := range wc.hub.conns {
+		clientCID = cid
+		break
+	}
+	wc.hub.mu.RUnlock()
+	if clientCID != "" {
+		wc.hub.subscribe(clientCID, "web-1")
+	}
 
 	// Send a message to the client
 	msgID, err := wc.Send(bus.OutboundMessage{
@@ -486,27 +513,28 @@ func TestRingBuffer(t *testing.T) {
 func TestHubOfflineBuffering(t *testing.T) {
 	hub := newHub()
 
-	senderID := "web-1"
+	chatID := "web-1"
 	msg := wsMessage{Content: "offline msg"}
 
-	// Send to offline user → should be buffered
-	ok := hub.sendToClient(senderID, msg)
+	// Send to unsubscribed chatID → should be buffered
+	ok := hub.sendToClient(chatID, msg)
 	if ok {
 		t.Error("expected sendToClient to return false for offline user")
 	}
 
 	// Verify buffered message count
-	if hub.offline[senderID] == nil || hub.offline[senderID].count != 1 {
+	if hub.offline[chatID] == nil || hub.offline[chatID].count != 1 {
 		t.Error("expected 1 buffered message")
 	}
 
-	// Add client → should flush offline messages
+	// Add client and subscribe → should flush offline messages
 	client := &Client{
 		sendCh: make(chan wsMessage, 10),
 		done:   make(chan struct{}),
 		id:     "test-client-1",
 	}
-	hub.addClient(senderID, client.id, client)
+	hub.addClient(client.id, client)
+	hub.subscribe(client.id, chatID)
 
 	// Wait for flush
 	time.Sleep(100 * time.Millisecond)
@@ -547,6 +575,21 @@ func TestConcurrentSends(t *testing.T) {
 	}
 
 	conn := makeWSConnection(t, server.URL, sessionCookie.Name+"="+sessionCookie.Value)
+	time.Sleep(50 * time.Millisecond)
+
+	// Hub routes by chatID — find the connected client and subscribe it.
+	// (In production, readPump subscribes when client sends first message.)
+	wc.hub.mu.RLock()
+	var clientCID string
+	for cid := range wc.hub.conns {
+		clientCID = cid
+		break
+	}
+	wc.hub.mu.RUnlock()
+	if clientCID == "" {
+		t.Fatal("no connected clients in hub")
+	}
+	wc.hub.subscribe(clientCID, "web-1")
 
 	// Send messages concurrently — must not block (non-blocking design)
 	// sendCh has capacity 64, so some may be dropped for rapid sends

@@ -194,22 +194,6 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 		SenderName: msg.SenderName,
 		ChatType:   msg.ChatType,
 	}
-	if msg.Metadata != nil {
-		// For cancel messages, do NOT override ChatID/SenderID with transport values.
-		// The cancel handler needs the original business chatID to match the cancelKey
-		// (channel:chatID:senderID) stored during message processing.
-		if !isCancel {
-			if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
-				outMsg.ChatID = transportChatID
-			}
-			if transportSenderID := msg.Metadata["transport_sender_id"]; transportSenderID != "" {
-				outMsg.SenderID = transportSenderID
-			}
-		}
-		if transportChannel := msg.Metadata["transport_channel"]; transportChannel != "" {
-			_ = transportChannel
-		}
-	}
 	return b.conn.WriteJSON(outMsg)
 }
 

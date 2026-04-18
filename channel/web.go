@@ -133,104 +133,108 @@ type WebCallbacks struct {
 // Hub: manages all WebSocket clients
 // ---------------------------------------------------------------------------
 
-// Hub 管理所有 WebSocket 连接
+// Hub 管理所有 WebSocket 连接。
+// Routing is by business chatID (e.g. "/home/smith/src/xbot" or feishuUserID).
+// Auth identity (c.userID, e.g. "admin") is NOT used for routing.
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[string]map[string]*Client // senderID → clientID → Client
-	routes  map[string]string             // businessChatID → senderID (auto-registered on first message)
-	offline map[string]*ringBuffer        // senderID → offline message buffer
+	conns   map[string]*Client         // clientID → Client (lifecycle management)
+	subs    map[string]map[string]bool // chatID → set of clientIDs (message routing)
+	offline map[string]*ringBuffer     // chatID → offline message buffer
 	offMu   sync.Mutex
 }
 
 func newHub() *Hub {
 	return &Hub{
-		clients: make(map[string]map[string]*Client),
-		routes:  make(map[string]string),
+		conns:   make(map[string]*Client),
+		subs:    make(map[string]map[string]bool),
 		offline: make(map[string]*ringBuffer),
 	}
 }
 
-func (h *Hub) addClient(senderID, clientID string, c *Client) {
+// addClient registers a WS connection for lifecycle management.
+// Use subscribe() to register it for message routing.
+func (h *Hub) addClient(clientID string, c *Client) {
 	h.mu.Lock()
-	if h.clients[senderID] == nil {
-		h.clients[senderID] = make(map[string]*Client)
-	}
-	h.clients[senderID][clientID] = c
+	h.conns[clientID] = c
 	h.mu.Unlock()
+}
 
-	// Flush offline messages
-	h.offMu.Lock()
-	if buf, ok := h.offline[senderID]; ok {
-		msgs := buf.flush()
-		for _, msg := range msgs {
-			select {
-			case c.sendCh <- msg:
-			default:
-				// sendCh full, drop message
+// removeClient removes a WS connection and all its subscriptions.
+func (h *Hub) removeClient(clientID string) {
+	h.mu.Lock()
+	delete(h.conns, clientID)
+	for chatID, clients := range h.subs {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(h.subs, chatID)
+		}
+	}
+	h.mu.Unlock()
+}
+
+// subscribe registers a client to receive messages for a given chatID.
+// Idempotent — safe to call on every message from the client.
+func (h *Hub) subscribe(clientID, chatID string) {
+	h.mu.Lock()
+	if h.subs[chatID] == nil {
+		h.subs[chatID] = make(map[string]bool)
+		// Flush any offline messages for this chatID
+		h.offMu.Lock()
+		if buf, ok := h.offline[chatID]; ok {
+			msgs := buf.flush()
+			for _, msg := range msgs {
+				if c, ok := h.conns[clientID]; ok {
+					select {
+					case c.sendCh <- msg:
+					default:
+					}
+				}
 			}
+			delete(h.offline, chatID)
 		}
-		delete(h.offline, senderID)
+		h.offMu.Unlock()
 	}
-	h.offMu.Unlock()
-}
-
-func (h *Hub) removeClient(senderID, clientID string) {
-	h.mu.Lock()
-	if m, ok := h.clients[senderID]; ok {
-		delete(m, clientID)
-		if len(m) == 0 {
-			delete(h.clients, senderID)
-		}
-	}
+	h.subs[chatID][clientID] = true
 	h.mu.Unlock()
 }
 
-// getClient returns the first client for a given senderID (backward compat).
-func (h *Hub) getClient(senderID string) *Client {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if m := h.clients[senderID]; len(m) > 0 {
-		for _, c := range m {
-			return c
-		}
-	}
-	return nil
-}
-
-// getClients returns all clients for a given senderID.
-func (h *Hub) getClients(senderID string) []*Client {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	var result []*Client
-	if m := h.clients[senderID]; len(m) > 0 {
-		for _, c := range m {
-			result = append(result, c)
-		}
-	}
-	return result
-}
-
+// sendToClient sends a message to all clients subscribed to a chatID.
+// If no clients are subscribed, buffers the message for later delivery.
 func (h *Hub) sendToClient(chatID string, msg wsMessage) bool {
-	// Auto-resolve business chatID → hub senderID via route table.
-	// For remote CLI, chatID might be "/home/smith/src/xbot" but hub key is "admin".
-	// For web clients, chatID == senderID already, resolveRoute returns unchanged.
-	resolved := h.resolveRoute(chatID)
+	h.mu.RLock()
+	// Copy subscriber keys to a slice to avoid iterating the map while
+	// removeClient() may concurrently delete from it (data race).
+	chatIDs, ok := h.subs[chatID]
+	var subscriberIDs []string
+	if ok {
+		for cid := range chatIDs {
+			subscriberIDs = append(subscriberIDs, cid)
+		}
+	}
+	h.mu.RUnlock()
+
 	sent := false
-	for _, c := range h.getClients(resolved) {
+	for _, cid := range subscriberIDs {
+		h.mu.RLock()
+		c := h.conns[cid]
+		h.mu.RUnlock()
+		if c == nil {
+			continue
+		}
 		select {
 		case c.sendCh <- msg:
 			sent = true
 		default:
-			// Channel full, skip this client
+			// sendCh full, skip
 		}
 	}
 	if !sent {
-		// Buffer as offline message (keyed by resolved senderID so flush works correctly)
 		h.offMu.Lock()
-		buf, ok := h.offline[resolved]
+		buf, ok := h.offline[chatID]
 		if !ok {
 			buf = newRingBuffer(webOfflineMsgBufSize)
-			h.offline[resolved] = buf
+			h.offline[chatID] = buf
 		}
 		buf.push(msg)
 		h.offMu.Unlock()
@@ -242,48 +246,13 @@ func (c *Client) closeDone() {
 	c.closeOnce.Do(func() { close(c.done) })
 }
 
-// addRoute registers a mapping from business chatID to hub senderID.
-// Called when a CLI client sends its first message, establishing the routing
-// so that subsequent server-initiated messages (progress, stream, cron) can
-// find the correct WebSocket client without needing transport metadata.
-func (h *Hub) addRoute(chatID, senderID string) {
-	h.mu.Lock()
-	h.routes[chatID] = senderID
-	h.mu.Unlock()
-}
-
-// removeRoute removes all routes pointing to a given senderID (on disconnect).
-func (h *Hub) removeRoutes(senderID string) {
-	h.mu.Lock()
-	for k, v := range h.routes {
-		if v == senderID {
-			delete(h.routes, k)
-		}
-	}
-	h.mu.Unlock()
-}
-
-// resolveRoute maps a business chatID to the hub senderID that can deliver it.
-// If no route exists, returns the input unchanged (e.g. web clients where
-// chatID == senderID already).
-func (h *Hub) resolveRoute(chatID string) string {
-	h.mu.RLock()
-	if senderID, ok := h.routes[chatID]; ok {
-		h.mu.RUnlock()
-		return senderID
-	}
-	h.mu.RUnlock()
-	return chatID
-}
-
 func (h *Hub) stopAll() {
 	h.mu.Lock()
-	for _, m := range h.clients {
-		for _, c := range m {
-			c.closeDone()
-		}
+	for _, c := range h.conns {
+		c.closeDone()
 	}
-	h.clients = make(map[string]map[string]*Client)
+	h.conns = make(map[string]*Client)
+	h.subs = make(map[string]map[string]bool)
 	h.mu.Unlock()
 }
 
@@ -666,20 +635,6 @@ func (wc *WebChannel) Stop() {
 
 // Send 发送消息到 Web 客户端（非阻塞）
 
-// resolveTargetClientID resolves the WebSocket target client ID from an outbound message.
-// It checks transport_chat_id and transport_sender_id metadata, falling back to ChatID.
-func resolveTargetClientID(msg bus.OutboundMessage) string {
-	targetClientID := msg.ChatID
-	if msg.Metadata != nil {
-		if v := msg.Metadata["transport_chat_id"]; v != "" {
-			targetClientID = v
-		} else if v := msg.Metadata["transport_sender_id"]; v != "" {
-			targetClientID = v
-		}
-	}
-	return targetClientID
-}
-
 func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
@@ -700,7 +655,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
-	targetClientID := resolveTargetClientID(msg)
+	targetClientID := msg.ChatID
 
 	// Send via hub (non-blocking: writes to buffered channel)
 	if !wc.hub.sendToClient(targetClientID, wsMsg) {
@@ -873,7 +828,7 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 		id:     strings.ReplaceAll(uuid.New().String(), "-", ""),
 	}
 
-	wc.hub.addClient(senderID, client.id, client)
+	wc.hub.addClient(client.id, client)
 	log.WithFields(log.Fields{
 		"sender_id": senderID,
 		"client_id": client.id,
@@ -956,7 +911,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	defer func() {
 		c.conn.Close()
 		c.closeDone()
-		wc.hub.removeClient(c.userID, c.id)
+		wc.hub.removeClient(c.id)
 		// Note: do NOT removeRoutes here — multiple clients may share the same
 		// senderID. Routes are idempotent and re-registered on each message.
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
@@ -1114,12 +1069,6 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			if feishuUserID != "" {
 				metadata["feishu_user_id"] = feishuUserID
 			}
-			// Preserve transport identity for remote CLI: business identity may be
-			// forwarded as channel=cli/chat_id=<workdir>, but replies must still go
-			// back through this websocket client.
-			metadata["transport_channel"] = "web"
-			metadata["transport_chat_id"] = c.userID
-			metadata["transport_sender_id"] = c.userID
 
 			// Echo back complete user message (with file info) so frontend can update optimistic message
 			if content != originalContent && len(msg.UploadKeys) > 0 {
@@ -1149,13 +1098,9 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				if msg.ChatType != "" {
 					msgChatType = msg.ChatType
 				}
-				// Register route: business chatID → hub senderID.
-				// Enables server-initiated messages (progress, stream, cron) to
-				// find the correct WS client without needing transport metadata.
-				// Safe to call on every message — it's an idempotent map write.
-				if msgChatID != c.userID {
-					wc.hub.addRoute(msgChatID, c.userID)
-				}
+				// Subscribe this client to receive messages for this chatID.
+				// Hub routes by business chatID directly — no transport metadata needed.
+				wc.hub.subscribe(c.id, msgChatID)
 			}
 
 			// Eagerly save user message so history API can return it during processing.
@@ -1398,22 +1343,53 @@ func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
 // remoteCLIChannel is a virtual Channel implementation registered as "cli"
 // in the server's dispatcher. It routes outbound messages to the correct
 // WebSocket client via the web channel's hub.
-type remoteCLIChannel struct {
+type RemoteCLIChannel struct {
 	hub *Hub
 }
 
 // NewRemoteCLIChannel creates a virtual CLI channel that shares the given hub.
-func NewRemoteCLIChannel(hub *Hub) *remoteCLIChannel {
-	return &remoteCLIChannel{hub: hub}
+func NewRemoteCLIChannel(hub *Hub) *RemoteCLIChannel {
+	return &RemoteCLIChannel{hub: hub}
 }
 
-func (c *remoteCLIChannel) Name() string { return "cli" }
+func (c *RemoteCLIChannel) Name() string { return "cli" }
 
-func (c *remoteCLIChannel) Start() error { return nil }
+func (c *RemoteCLIChannel) Start() error { return nil }
 
-func (c *remoteCLIChannel) Stop() {}
+func (c *RemoteCLIChannel) Stop() {}
 
-func (c *remoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
+// SendProgress sends structured progress to remote CLI clients via the Hub.
+func (c *RemoteCLIChannel) SendProgress(chatID string, payload *WsProgressPayload) {
+	if payload == nil {
+		return
+	}
+	wsMsg := wsMessage{
+		Type:     "progress_structured",
+		TS:       time.Now().Unix(),
+		Progress: payload,
+	}
+	if !c.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Remote CLI client offline, progress event buffered")
+	}
+}
+
+// SendStreamContent sends streaming LLM content to remote CLI clients via the Hub.
+func (c *RemoteCLIChannel) SendStreamContent(chatID, content, reasoning string) {
+	if content == "" && reasoning == "" {
+		return
+	}
+	wsMsg := wsMessage{
+		Type: "stream_content",
+		TS:   time.Now().Unix(),
+		Progress: &WsProgressPayload{
+			StreamContent:          content,
+			ReasoningStreamContent: reasoning,
+		},
+	}
+	_ = c.hub.sendToClient(chatID, wsMsg) // stream events are ephemeral, safe to drop
+}
+
+func (c *RemoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	content := msg.Content
@@ -1424,7 +1400,7 @@ func (c *remoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 		content = ConvertFeishuCard(content)
 	}
 
-	targetClientID := resolveTargetClientID(msg)
+	targetClientID := msg.ChatID
 
 	wsMsg := wsMessage{
 		Type:            msgType,

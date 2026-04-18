@@ -30,11 +30,13 @@ import (
 
 func NewCLIChannel(cfg CLIChannelConfig, msgBus *bus.MessageBus) *CLIChannel {
 	return &CLIChannel{
-		config:  cfg,
-		msgBus:  msgBus,
-		workDir: cfg.WorkDir,
-		msgChan: make(chan bus.OutboundMessage, cliMsgBufSize),
-		stopCh:  make(chan struct{}),
+		config:     cfg,
+		msgBus:     msgBus,
+		workDir:    cfg.WorkDir,
+		msgChan:    make(chan bus.OutboundMessage, cliMsgBufSize),
+		progressCh: make(chan *CLIProgressPayload, 1), // buffered-1: latest progress wins
+		asyncCh:    make(chan tea.Msg, 64),            // unified async send: progress + outbound
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -75,7 +77,9 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.remoteMode = c.config.RemoteMode
+	c.model.remoteServerURL = c.config.RemoteServerURL
 	c.model.debugMode = c.config.DebugMode
+	c.model.debugCaptureMs = c.config.DebugCaptureMs
 	c.model.senderID = "cli_user"
 
 	// Apply pending injections that were set before model existed
@@ -177,6 +181,15 @@ func (c *CLIChannel) Start() error {
 	c.wg.Add(1)
 	go c.handleOutbound()
 
+	// 启动 progress coalescing goroutine: drains progressCh and forwards
+	// to the unified async channel.
+	c.wg.Add(1)
+	go c.handleProgressDrain()
+
+	// 启动 unified async drain goroutine: single sender to p.msgs
+	c.wg.Add(1)
+	go c.handleAsyncDrain()
+
 	// §13 异步检查更新（不阻塞 TUI 启动）
 	c.CheckUpdateAsync()
 
@@ -221,6 +234,10 @@ func (c *CLIChannel) Start() error {
 			} else {
 				log.WithField("socket", sockPath).Info("Debug socket listening")
 			}
+		}
+		// --debug-input: auto-inject key sequence after startup
+		if c.config.DebugInput != "" {
+			startAutoInput(c.config.DebugInput, c.asyncCh, c.stopCh)
 		}
 	}
 
@@ -275,11 +292,27 @@ func (c *CLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 }
 
 // SendProgress 发送结构化进度事件到 CLI（非阻塞）。
+// ALL messages (including PhaseDone) go through asyncCh to ensure there is only
+// ONE goroutine (handleAsyncDrain) calling program.Send(). This prevents multiple
+// senders from competing on the unbuffered p.msgs channel, which would starve
+// the Bubble Tea readLoop (keyboard events) and cause Ctrl+C freeze.
 func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 	if payload == nil || c.program == nil {
 		return
 	}
-	c.program.Send(cliProgressMsg{payload: payload})
+	select {
+	case c.progressCh <- payload:
+	default:
+		// Drain stale, send fresh
+		select {
+		case <-c.progressCh:
+		default:
+		}
+		select {
+		case c.progressCh <- payload:
+		default:
+		}
+	}
 }
 
 // SetProcessing externally sets the typing/processing state (for remote reconnect).
@@ -287,7 +320,11 @@ func (c *CLIChannel) SetProcessing(processing bool) {
 	if c.program == nil {
 		return
 	}
-	c.program.Send(cliProcessingMsg{processing: processing})
+	select {
+	case c.asyncCh <- cliProcessingMsg{processing: processing}:
+	default:
+		// Drop if asyncCh full — processing state will recover on next message
+	}
 }
 
 // SendToast shows a toast notification in the CLI (non-blocking).
@@ -295,7 +332,11 @@ func (c *CLIChannel) SendToast(text, icon string) {
 	if c.program == nil {
 		return
 	}
-	c.program.Send(cliToastMsg{text: text, icon: icon})
+	select {
+	case c.asyncCh <- cliToastMsg{text: text, icon: icon}:
+	default:
+		// Drop if asyncCh full — toast is non-critical
+	}
 }
 
 // SetApprovalHook stores the ApprovalHook reference so that Start() can wire
@@ -398,7 +439,10 @@ func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
 // 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
 func (c *CLIChannel) InjectUserMessage(content string) {
 	if c.program != nil {
-		c.program.Send(cliInjectedUserMsg{content: content})
+		select {
+		case c.asyncCh <- cliInjectedUserMsg{content: content}:
+		default:
+		}
 	}
 }
 
@@ -444,11 +488,14 @@ func (c *CLIChannel) CheckUpdateAsync() {
 	}
 	go func() {
 		info := version.CheckUpdate(context.Background())
-		c.program.Send(cliUpdateCheckMsg{info: info})
+		select {
+		case c.asyncCh <- cliUpdateCheckMsg{info: info}:
+		default:
+		}
 	}()
 }
 
-// handleOutbound 处理从 agent 发来的消息
+// handleOutbound 处理从 agent 发来的消息 — 通过 asyncCh 合并发送
 func (c *CLIChannel) handleOutbound() {
 	defer c.wg.Done()
 
@@ -460,9 +507,67 @@ func (c *CLIChannel) handleOutbound() {
 			c.programMu.Lock()
 			p := c.program
 			c.programMu.Unlock()
-			log.WithFields(log.Fields{"waiting_user": msg.WaitingUser, "metadata_keys": len(msg.Metadata), "has_program": p != nil}).Debug("CLIChannel.handleOutbound: dequeued")
-			if p != nil {
+			if p == nil {
+				continue
+			}
+			// Route through asyncCh: non-blocking send, drops if full.
+			// WaitingUser messages (AskUser) must not be dropped, send directly.
+			if msg.WaitingUser {
 				p.Send(cliOutboundMsg{msg: msg})
+				continue
+			}
+			select {
+			case c.asyncCh <- cliOutboundMsg{msg: msg}:
+			default:
+				// asyncCh full — drain one stale message, then send
+				select {
+				case <-c.asyncCh:
+				default:
+				}
+				select {
+				case c.asyncCh <- cliOutboundMsg{msg: msg}:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// handleProgressDrain drains the progress coalescing channel and forwards
+// events to the unified asyncCh. Non-blocking — drops stale progress events.
+func (c *CLIChannel) handleProgressDrain() {
+	defer c.wg.Done()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case payload := <-c.progressCh:
+			select {
+			case c.asyncCh <- cliProgressMsg{payload: payload}:
+			default:
+				// Drop: eventLoop is behind, next progress will be fresher
+			}
+		}
+	}
+}
+
+// handleAsyncDrain is the SINGLE goroutine that forwards messages from asyncCh
+// to the Bubble Tea event loop via program.Send. This is the only non-readLoop
+// sender to p.msgs, ensuring key events get fair scheduling (~50% instead of ~25%).
+func (c *CLIChannel) handleAsyncDrain() {
+	defer c.wg.Done()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case msg := <-c.asyncCh:
+			c.programMu.Lock()
+			p := c.program
+			c.programMu.Unlock()
+			if p != nil {
+				p.Send(msg)
 			}
 		}
 	}

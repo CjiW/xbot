@@ -234,12 +234,11 @@ type Agent struct {
 	// key: senderID, value: 用户独立的信号量（容量为1）
 	userSemaphores sync.Map // map[string]chan struct{}
 
-	commands             *CommandRegistry                          // 指令注册表
-	directSend           func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
-	sessionMsgIDs        sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
-	sessionReplyTo       sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
-	sessionFinalSent     sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
-	sessionTransportMeta sync.Map                                  // key: "channel:chatID" -> map[string]string transport overrides for remote clients
+	commands         *CommandRegistry                          // 指令注册表
+	directSend       func(bus.OutboundMessage) (string, error) // 同步发送，绕过 bus 以获取 message_id
+	sessionMsgIDs    sync.Map                                  // key: "channel:chatID" -> 当前 session 已发消息 ID（用于 Patch 更新）
+	sessionReplyTo   sync.Map                                  // key: "channel:chatID" -> 用户入站消息 ID（用于首条回复的 reply 模式）
+	sessionFinalSent sync.Map                                  // key: "channel:chatID" -> bool, 工具已发送最终回复（如卡片），后续 sendMessage 跳过
 
 	// per-request cancel: 用于 /cancel 取消当前正在处理的请求
 	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
@@ -1126,8 +1125,6 @@ func (a *Agent) Run(ctx context.Context) error {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
 						log.Info("Cancel signal sent to processing goroutine")
-						// Use sendMessage to ensure transport metadata is loaded
-						// (required for remote mode: hub routing needs transport_chat_id)
 						_ = a.sendMessage(msg.Channel, msg.ChatID, "Request cancelled.")
 					default:
 						// cancel 信号已发过
@@ -1290,18 +1287,6 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 			if cmd.Concurrent() {
 				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
 				go func(m bus.InboundMessage, c Command) {
-					if m.Metadata != nil {
-						if transportChannel := m.Metadata["transport_channel"]; transportChannel != "" {
-							meta := map[string]string{"transport_channel": transportChannel}
-							if transportChatID := m.Metadata["transport_chat_id"]; transportChatID != "" {
-								meta["transport_chat_id"] = transportChatID
-							}
-							if transportSenderID := m.Metadata["transport_sender_id"]; transportSenderID != "" {
-								meta["transport_sender_id"] = transportSenderID
-							}
-							a.sessionTransportMeta.Store(m.Channel+":"+m.ChatID, meta)
-						}
-					}
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
 						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")
@@ -1425,7 +1410,6 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
 			// 即使取消也要发送 response，让 CLI 清理 typing/progress 状态。
-			// Use sendMessage to ensure transport metadata is loaded for remote mode.
 			if response != nil {
 				_ = a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata)
 			} else {
@@ -1451,16 +1435,25 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			continue
 		}
 		if response != nil {
-			// Use sendMessage to ensure transport metadata is loaded for remote mode.
-			// Pass WaitingUser through metadata so sendMessage can propagate it.
-			meta := response.Metadata
 			if response.WaitingUser {
-				if meta == nil {
-					meta = make(map[string]string)
+				// WaitingUser response: send directly with WaitingUser flag set.
+				// Bypass sendMessage (which doesn't support WaitingUser) to avoid metadata hack.
+				outMsg := bus.OutboundMessage{
+					Channel:     msg.Channel,
+					ChatID:      msg.ChatID,
+					Content:     response.Content,
+					WaitingUser: true,
+					Metadata:    response.Metadata,
 				}
-				meta["__waiting_user"] = "true"
-			}
-			if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, meta); err != nil {
+				if outMsg.Metadata == nil {
+					outMsg.Metadata = make(map[string]string)
+				}
+				select {
+				case a.bus.Outbound <- outMsg:
+				default:
+					log.Ctx(ctx).Warn("Message bus outbound channel is full, dropping WaitingUser response")
+				}
+			} else if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata); err != nil {
 				log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via sendMessage")
 			}
 		}
@@ -1532,25 +1525,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		a.sessionReplyTo.Store(key, msg.Metadata["message_id"])
 	} else {
 		a.sessionReplyTo.Delete(key)
-	}
-	if msg.Metadata != nil {
-		transportMeta := map[string]string{}
-		if v := msg.Metadata["transport_channel"]; v != "" {
-			transportMeta["transport_channel"] = v
-		}
-		if v := msg.Metadata["transport_chat_id"]; v != "" {
-			transportMeta["transport_chat_id"] = v
-		}
-		if v := msg.Metadata["transport_sender_id"]; v != "" {
-			transportMeta["transport_sender_id"] = v
-		}
-		if len(transportMeta) > 0 {
-			a.sessionTransportMeta.Store(key, transportMeta)
-		} else {
-			a.sessionTransportMeta.Delete(key)
-		}
-	} else {
-		a.sessionTransportMeta.Delete(key)
 	}
 
 	// 获取或创建租户会话（senderID 通过 context 传递，不在这里传）
@@ -1800,17 +1774,6 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		meta := map[string]string{}
 		for k, v := range out.Metadata {
 			meta[k] = v
-		}
-		if msg.Metadata != nil {
-			if v := msg.Metadata["transport_channel"]; v != "" {
-				meta["transport_channel"] = v
-			}
-			if v := msg.Metadata["transport_chat_id"]; v != "" {
-				meta["transport_chat_id"] = v
-			}
-			if v := msg.Metadata["transport_sender_id"]; v != "" {
-				meta["transport_sender_id"] = v
-			}
 		}
 		waitOut := &bus.OutboundMessage{
 			Channel:     msg.Channel,
@@ -2116,27 +2079,6 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	}
 	if msg.Metadata == nil {
 		msg.Metadata = make(map[string]string)
-	}
-	if transport, ok := a.sessionTransportMeta.Load(key); ok {
-		if tm, ok := transport.(map[string]string); ok {
-			for k, v := range tm {
-				if msg.Metadata[k] == "" {
-					msg.Metadata[k] = v
-				}
-			}
-		}
-	}
-	if transportChannel := msg.Metadata["transport_channel"]; transportChannel != "" {
-		msg.Channel = transportChannel
-	}
-	if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
-		msg.ChatID = transportChatID
-	}
-
-	// Propagate WaitingUser from metadata signal (set by processMessage dispatch)
-	if msg.Metadata["__waiting_user"] == "true" {
-		msg.WaitingUser = true
-		delete(msg.Metadata, "__waiting_user")
 	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")

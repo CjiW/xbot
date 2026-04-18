@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -437,7 +438,16 @@ func (m *cliModel) renderTodoBar() string {
 func (m *cliModel) titleText() string {
 	modeLabel := "⌂ xbot"
 	if m.remoteMode {
-		modeLabel = "◉ xbot remote"
+		host := m.remoteServerURL
+		// Strip scheme for display: "ws://host:port" → "host:port"
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		if host != "" {
+			modeLabel = fmt.Sprintf("◉ xbot [%s]", host)
+		} else {
+			modeLabel = "◉ xbot remote"
+		}
 	}
 	if m.workDir != "" {
 		// Resolve to absolute path so "." → actual directory name

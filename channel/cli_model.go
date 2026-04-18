@@ -325,13 +325,15 @@ type cliModel struct {
 	twCjkSkipTick        bool                   // alternates each tick to halve CJK speed (stream)
 
 	// --- Session ---
-	workDir       string // 工作目录（标题栏显示用）
-	remoteMode    bool   // 是否连接 remote backend（标题栏提示用）
-	debugMode     bool   // --debug: UI capture + key injection via SIGUSR1
-	senderID      string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
-	channelName   string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
-	defaultChatID string // 默认 chatID（/su 切换回来时恢复）
-	chatID        string // 会话 ID（按工作目录区分）
+	workDir         string // 工作目录（标题栏显示用）
+	remoteMode      bool   // 是否连接 remote backend（标题栏提示用）
+	remoteServerURL string // remote server host for header display (e.g. "host:port")
+	debugMode       bool   // --debug: UI capture + key injection via SIGUSR1
+	debugCaptureMs  int    // --debug-capture-ms: UI capture interval in ms (0 = default 1000)
+	senderID        string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
+	channelName     string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
+	defaultChatID   string // 默认 chatID（/su 切换回来时恢复）
+	chatID          string // 会话 ID（按工作目录区分）
 
 	// --- §1 增量渲染 ---
 	renderCacheValid    bool   // 全局缓存是否有效（resize 后置 false）
@@ -704,9 +706,13 @@ func (m *cliModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// debugCaptureTick returns a tea.Cmd that fires every 1s to capture UI state.
+// debugCaptureTick returns a tea.Cmd that fires periodically to capture UI state.
 func (m *cliModel) debugCaptureTick() tea.Cmd {
-	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+	interval := time.Duration(m.debugCaptureMs) * time.Millisecond
+	if interval < 50*time.Millisecond {
+		interval = 1 * time.Second
+	}
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return debugCaptureMsg{}
 	})
 }

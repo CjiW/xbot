@@ -242,12 +242,14 @@ func main() {
 	prompt := ""
 	newSession := false
 	var (
-		flagServer    string // --server ws://host:port (RemoteBackend: agent runs on server)
-		flagShare     string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
-		flagToken     string // --token xxx
-		flagWorkspace string // --workspace /path (overrides config)
-		flagLocal     bool   // --local force legacy in-process mode
-		flagDebug     bool   // --debug enable UI capture + key injection via SIGUSR1
+		flagServer     string // --server ws://host:port (RemoteBackend: agent runs on server)
+		flagShare      string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
+		flagToken      string // --token xxx
+		flagWorkspace  string // --workspace /path (overrides config)
+		flagLocal      bool   // --local force legacy in-process mode
+		flagDebug      bool   // --debug enable UI capture + key injection via SIGUSR1
+		flagDebugInput string // --debug-input "1,enter,ctrl+c" auto-inject key sequence after startup
+		flagDebugCapMs int    // --debug-capture-ms 200  UI capture interval in ms (default 1000)
 	)
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -268,6 +270,20 @@ func main() {
 			flagLocal = true
 		case "--debug":
 			flagDebug = true
+		case "--debug-input":
+			if len(os.Args) > i+1 {
+				flagDebugInput = os.Args[i+1]
+				i++
+				flagDebug = true // auto-enable debug mode
+			}
+		case "--debug-capture-ms":
+			if len(os.Args) > i+1 {
+				n, err := strconv.Atoi(os.Args[i+1])
+				if err == nil && n >= 50 {
+					flagDebugCapMs = n
+				}
+				i++
+			}
 		case "--help", "-h":
 			printHelp()
 			return
@@ -335,12 +351,19 @@ func main() {
 	absWorkDir, _ := filepath.Abs(app.workDir)
 
 	_, isRemoteBackend := app.backend.(*agent.RemoteBackend)
+	remoteServerURL := ""
+	if rb, ok := app.backend.(*agent.RemoteBackend); ok {
+		remoteServerURL = rb.ServerURL()
+	}
 	cliCfg := channel.CLIChannelConfig{
-		WorkDir:    app.workDir,
-		ChatID:     absWorkDir,
-		RemoteMode: isRemoteBackend,
-		DebugMode:  flagDebug,
-		IsFirstRun: firstRun,
+		WorkDir:         app.workDir,
+		ChatID:          absWorkDir,
+		RemoteMode:      isRemoteBackend,
+		RemoteServerURL: remoteServerURL,
+		DebugMode:       flagDebug,
+		DebugInput:      flagDebugInput,
+		DebugCaptureMs:  flagDebugCapMs,
+		IsFirstRun:      firstRun,
 		GetCurrentValues: func() map[string]string {
 			// In remote mode, read current values from server via RPC.
 			if app.backend != nil && app.backend.IsRemote() {

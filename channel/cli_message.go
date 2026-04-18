@@ -699,10 +699,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					}
 				}
 				snap := cliIterationSnapshot{
-					Iteration: m.lastSeenIteration,
-					Reasoning: m.lastReasoning,
-					Thinking:  m.lastThinking,
-					Tools:     finalTools,
+					Iteration:   m.lastSeenIteration,
+					Reasoning:   m.lastReasoning,
+					Thinking:    m.lastThinking,
+					Tools:       finalTools,
+					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 				}
 				if len(finalTools) > 0 || m.lastReasoning != "" || m.lastThinking != "" {
 					m.iterationHistory = append(m.iterationHistory, snap)
@@ -712,9 +713,14 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 
 		// §2 工具可视化：在 assistant 消息之前插入 tool_summary
 		// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
-		// If PhaseDone already appended a placeholder, remove it first.
+		// Deduplicate: if an iteration exists in both, prefer the PhaseDone version
+		// (which has complete reasoning from the server) over the local snapshot.
 		var toolSummaryIterations []cliIterationSnapshot
+		pendingIters := make(map[int]bool)
 		if m.pendingToolSummary != nil {
+			for _, it := range m.pendingToolSummary.iterations {
+				pendingIters[it.Iteration] = true
+			}
 			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
 			// Remove the last tool_summary placeholder that PhaseDone appended.
 			// We track by index from end because append copies the value,
@@ -728,7 +734,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			m.pendingToolSummary = nil
 		}
 		if len(m.iterationHistory) > 0 {
-			toolSummaryIterations = append(toolSummaryIterations, m.iterationHistory...)
+			for _, it := range m.iterationHistory {
+				if !pendingIters[it.Iteration] {
+					toolSummaryIterations = append(toolSummaryIterations, it)
+				}
+			}
 		}
 		if len(toolSummaryIterations) > 0 {
 			toolMsg := cliMessage{

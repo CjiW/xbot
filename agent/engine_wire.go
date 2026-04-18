@@ -205,20 +205,15 @@ func (a *Agent) buildMainRunConfig(
 		switch channel {
 		case "cli":
 			var cliCh *channelpkg.CLIChannel
+			var remoteCLICh *channelpkg.RemoteCLIChannel
 			if ch, ok := a.channelFinder("cli"); ok {
 				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
 					cliCh = cc
-				} else {
-					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
+				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+					remoteCLICh = rc
 				}
 			}
-			var webCh *channelpkg.WebChannel
-			if ch, ok := a.channelFinder("web"); ok {
-				if wc, ok := ch.(*channelpkg.WebChannel); ok {
-					webCh = wc
-				}
-			}
-			if cliCh != nil || webCh != nil {
+			if cliCh != nil || remoteCLICh != nil {
 				progressKey := channel + ":" + chatID
 				cfg.ProgressEventHandler = func(event *ProgressEvent) {
 					if event == nil || event.Structured == nil {
@@ -285,7 +280,7 @@ func (a *Agent) buildMainRunConfig(
 						// Save snapshot for mid-session reconnect (GetActiveProgress RPC).
 						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
-					if webCh != nil {
+					if remoteCLICh != nil {
 						payload := &channelpkg.WsProgressPayload{
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
@@ -335,7 +330,7 @@ func (a *Agent) buildMainRunConfig(
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
-						webCh.SendProgress(chatID, payload)
+						remoteCLICh.SendProgress(chatID, payload)
 					}
 				}
 			}
@@ -464,31 +459,28 @@ func (a *Agent) buildMainRunConfig(
 		cfg.Stream = true
 		if a.channelFinder != nil {
 			var cliCh *channelpkg.CLIChannel
+			var remoteCLICh *channelpkg.RemoteCLIChannel
 			if ch, ok := a.channelFinder("cli"); ok {
 				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
 					cliCh = cc
-				}
-			}
-			var webCh *channelpkg.WebChannel
-			if ch, ok := a.channelFinder("web"); ok {
-				if wc, ok := ch.(*channelpkg.WebChannel); ok {
-					webCh = wc
+				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+					remoteCLICh = rc
 				}
 			}
 			cfg.StreamContentFunc = func(content string) {
 				if cliCh != nil {
 					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
 				}
-				if webCh != nil {
-					webCh.SendStreamContent(chatID, content, "")
+				if remoteCLICh != nil {
+					remoteCLICh.SendStreamContent(chatID, content, "")
 				}
 			}
 			cfg.StreamReasoningFunc = func(content string) {
 				if cliCh != nil {
 					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
 				}
-				if webCh != nil {
-					webCh.SendStreamContent(chatID, "", content)
+				if remoteCLICh != nil {
+					remoteCLICh.SendStreamContent(chatID, "", content)
 				}
 			}
 		}

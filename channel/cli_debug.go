@@ -9,15 +9,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+	log "xbot/logger"
 
 	tea "charm.land/bubbletea/v2"
+	"xbot/config"
 )
 
 const (
-	debugDir        = ".xbot/debug"
+	debugDir        = "debug" // relative to XbotHome() (which is $HOME/.xbot or $XBOT_HOME)
 	debugSockName   = "ctl.sock"
 	debugUIFile     = "ui_capture.log"
-	debugCaptureMax = 200 // max lines to keep in capture log (ring buffer)
+	debugCaptureMax = 2000 // max lines to keep in capture log (ring buffer)
 )
 
 // parseKeyInput parses a human-readable key string into a tea.KeyPressMsg.
@@ -109,19 +111,25 @@ func parseKeyInput(input string) tea.KeyPressMsg {
 	// Single printable character
 	runes := []rune(input)
 	if len(runes) == 1 {
+		if mod != 0 {
+			// With modifier: don't set Text so String() returns Keystroke() (e.g. "ctrl+c")
+			// instead of raw Text (e.g. "c"). This ensures key.String() matches
+			// what the real terminal produces.
+			return tea.KeyPressMsg{Code: runes[0], Mod: mod}
+		}
 		return tea.KeyPressMsg{Code: runes[0], Text: input, Mod: mod}
 	}
 
 	// Fallback: treat as text
+	if mod != 0 {
+		return tea.KeyPressMsg{Code: runes[0], Mod: mod}
+	}
 	return tea.KeyPressMsg{Code: runes[0], Text: input, Mod: mod}
 }
 
 // debugCaptureUI dumps the current TUI view to the capture log file.
 func (m *cliModel) debugCaptureUI() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
+	home := config.XbotHome()
 	dir := filepath.Join(home, debugDir)
 	os.MkdirAll(dir, 0700)
 
@@ -230,13 +238,120 @@ func (dl *debugSockListener) Stop() {
 
 // debugSockPath returns the Unix socket path for the debug control interface.
 func debugSockPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.XbotHome()
 	dir := filepath.Join(home, debugDir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, debugSockName), nil
+}
+
+// startAutoInput parses a comma-separated key sequence (e.g. "1,enter,ctrl+c")
+// and injects each key into the tea program after an initial delay.
+// Items can be:
+//   - Special keys: enter, tab, esc, up, down, left, right, backspace, ctrl+c, etc.
+//   - Single characters: a, 1, etc.
+//   - Multi-character text: "hello" (sent char by char)
+//   - Sleep: "sleep:2" to wait 2 seconds before next key
+//
+// Keys are sent via asyncCh to avoid competing with handleAsyncDrain on program.Send().
+func startAutoInput(sequence string, asyncCh chan<- tea.Msg, stopCh <-chan struct{}) {
+	if sequence == "" {
+		return
+	}
+
+	// Parse: split by comma, but handle "sleep:N" specially
+	type keyItem struct {
+		keys  []tea.KeyPressMsg // one item may produce multiple key events (multi-char text)
+		sleep time.Duration     // if non-zero, sleep before sending these keys
+	}
+
+	items := strings.Split(sequence, ",")
+	var parsed []keyItem
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.HasPrefix(item, "sleep:") {
+			secs, err := time.ParseDuration(item[6:] + "s")
+			if err == nil && secs > 0 {
+				parsed = append(parsed, keyItem{sleep: secs})
+			}
+			continue
+		}
+		// Check if it's a known special key or modifier combo
+		lower := strings.ToLower(item)
+		if isSpecialKey(lower) {
+			parsed = append(parsed, keyItem{keys: []tea.KeyPressMsg{parseKeyInput(item)}})
+		} else {
+			// Multi-character text: send each rune as a separate key event
+			var keys []tea.KeyPressMsg
+			for _, r := range item {
+				keys = append(keys, tea.KeyPressMsg{Code: r, Text: string(r)})
+			}
+			if len(keys) > 0 {
+				parsed = append(parsed, keyItem{keys: keys})
+			}
+		}
+	}
+
+	if len(parsed) == 0 {
+		return
+	}
+
+	go func() {
+		log.WithField("sequence", sequence).Info("Auto-input: waiting for splash to finish")
+		// Wait for splash to finish and UI to stabilize
+		select {
+		case <-stopCh:
+			return
+		case <-time.After(2 * time.Second):
+		}
+
+		for _, p := range parsed {
+			if p.sleep > 0 {
+				select {
+				case <-stopCh:
+					log.Info("Auto-input: aborted during sleep")
+					return
+				case <-time.After(p.sleep):
+				}
+				continue
+			}
+			for _, key := range p.keys {
+				select {
+				case <-stopCh:
+					log.Info("Auto-input: aborted")
+					return
+				case asyncCh <- key:
+					log.WithField("key", fmt.Sprintf("%+v", key)).Debug("Auto-input: sent key")
+				}
+				// Small delay between chars for realistic typing
+				time.Sleep(50 * time.Millisecond)
+			}
+			// Delay between items for UI to process
+			time.Sleep(300 * time.Millisecond)
+		}
+		log.Info("Auto-input: sequence complete")
+	}()
+}
+
+// isSpecialKey checks if the input is a recognized special key or modifier combo.
+func isSpecialKey(s string) bool {
+	s = strings.ToLower(s)
+	switch {
+	case strings.HasPrefix(s, "ctrl+"), strings.HasPrefix(s, "alt+"), strings.HasPrefix(s, "shift+"):
+		return true
+	}
+	switch s {
+	case "enter", "return", "tab", "esc", "escape",
+		"up", "down", "left", "right",
+		"home", "end", "pgup", "pageup", "pgdown", "pagedown",
+		"backspace", "bs", "delete", "del", "insert", "ins",
+		"space",
+		"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
+		return true
+	}
+	return false
 }

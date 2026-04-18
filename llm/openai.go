@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
@@ -29,7 +30,9 @@ type OpenAILLM struct {
 	// dynamicMaxTokens is the dynamically adjusted max_tokens for the next API call.
 	// Set by AdjustMaxTokens() based on remaining context space. Resets after each call.
 	// When 0 (default), buildParams uses the static maxTokens value.
-	dynamicMaxTokens int
+	// Uses atomic for thread-safety: the same OpenAILLM instance may be shared
+	// across concurrent agents (defaultLLM singleton, or per-user cached client).
+	dynamicMaxTokens atomic.Int64
 
 	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
 	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
@@ -64,7 +67,7 @@ func (o *OpenAILLM) AdjustMaxTokens(inputTokens, maxContextTokens int) {
 		available = 256 // minimum: let the model at least respond with something
 	}
 	if available < o.maxTokens {
-		o.dynamicMaxTokens = available
+		o.dynamicMaxTokens.Store(int64(available))
 	}
 	// else: context is small enough, use the full configured maxTokens
 	// (dynamicMaxTokens stays 0, which means "use static value")
@@ -540,11 +543,11 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	// error, so max_tokens is the safer default.
 	// Determine max_tokens: use dynamic value if set (from AdjustMaxTokens),
 	// otherwise fall back to the static configured value.
-	effectiveMaxTokens := o.dynamicMaxTokens
+	// Swap(0) atomically reads and resets in one operation.
+	effectiveMaxTokens := int(o.dynamicMaxTokens.Swap(0))
 	if effectiveMaxTokens <= 0 {
 		effectiveMaxTokens = o.maxTokens
 	}
-	o.dynamicMaxTokens = 0 // reset for next call
 
 	// Clamp to model's max output token limit to prevent API errors.
 	// Models not in this table are left unclamped — the API will return

@@ -289,6 +289,16 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		return nil, backend.SetContextMode(p.Mode)
+	case "set_cwd":
+		var p struct {
+			Channel string `json:"channel"`
+			ChatID  string `json:"chat_id"`
+			Dir     string `json:"dir"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return nil, backend.SetCWD(p.Channel, p.ChatID, p.Dir)
 	case "get_settings":
 		var p struct {
 			Namespace string `json:"namespace"`

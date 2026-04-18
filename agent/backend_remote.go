@@ -734,6 +734,12 @@ func (b *RemoteBackend) SetContextMode(mode string) error {
 	return b.callRPCVoid("set_context_mode", map[string]string{"mode": mode})
 }
 
+func (b *RemoteBackend) SetCWD(ch, chatID, dir string) error {
+	return b.callRPCVoid("set_cwd", map[string]string{
+		"channel": ch, "chat_id": chatID, "dir": dir,
+	})
+}
+
 func (b *RemoteBackend) SetMaxIterations(n int) {
 	if err := b.callRPCVoid("set_max_iterations", map[string]int{"n": n}); err != nil {
 		log.WithError(err).Warn("RemoteBackend: SetMaxIterations RPC failed")

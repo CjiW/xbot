@@ -15,7 +15,7 @@ func TestBuildSystemReminder_Basic(t *testing.T) {
 		{Role: "tool", Content: "Result"},
 	}
 
-	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Shell"}}, "", "main")
+	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Shell"}}, "", "main", "")
 
 	if !strings.Contains(result, "<system-reminder>") {
 		t.Error("expected system-reminder tag")
@@ -37,7 +37,7 @@ func TestBuildSystemReminder_SubAgent(t *testing.T) {
 		{Role: "user", Content: "Do task X"},
 	}
 
-	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Read"}}, "", "main/worker")
+	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Read"}}, "", "main/worker", "")
 
 	if !strings.Contains(result, "执行任务: Do task X") {
 		t.Errorf("SubAgent should show task prefix, got:\n%s", result)
@@ -50,7 +50,7 @@ func TestBuildSystemReminder_WithTodo(t *testing.T) {
 		{Role: "user", Content: "hi"},
 	}
 
-	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Read"}}, "2/5 完成", "main")
+	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Read"}}, "2/5 完成", "main", "")
 
 	if !strings.Contains(result, "TODO: 2/5 完成") {
 		t.Errorf("expected TODO summary, got:\n%s", result)
@@ -64,7 +64,7 @@ func TestBuildSystemReminder_NoContextEditHints(t *testing.T) {
 		{Role: "tool", Content: "result"},
 	}
 
-	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Shell"}}, "", "main")
+	result := BuildSystemReminder(messages, []llm.ToolCall{{Name: "Shell"}}, "", "main", "")
 
 	if strings.Contains(result, "context_edit") {
 		t.Errorf("should not contain context_edit hints, got:\n%s", result)
@@ -72,7 +72,7 @@ func TestBuildSystemReminder_NoContextEditHints(t *testing.T) {
 }
 
 func TestBuildSystemReminder_Empty(t *testing.T) {
-	result := BuildSystemReminder(nil, nil, "", "main")
+	result := BuildSystemReminder(nil, nil, "", "main", "")
 	if result != "" {
 		t.Errorf("expected empty result for nil messages, got: %q", result)
 	}
@@ -88,7 +88,7 @@ func TestBuildSystemReminder_GitCommitTriggersPostDev(t *testing.T) {
 	result := BuildSystemReminder(messages, []llm.ToolCall{{
 		Name:      "Shell",
 		Arguments: `{"command":"git commit -m \"fix: bug\" -a"}`,
-	}}, "", "main")
+	}}, "", "main", "")
 
 	if !strings.Contains(result, "post-dev") {
 		t.Errorf("expected post-dev reminder on git commit, got:\n%s", result)
@@ -108,7 +108,7 @@ func TestBuildSystemReminder_NoPostDevWithoutGitCommit(t *testing.T) {
 	result := BuildSystemReminder(messages, []llm.ToolCall{{
 		Name:      "Shell",
 		Arguments: `{"command":"go build ./..."}`,
-	}}, "", "main")
+	}}, "", "main", "")
 
 	if strings.Contains(result, "post-dev") {
 		t.Errorf("should not contain post-dev reminder without git commit, got:\n%s", result)

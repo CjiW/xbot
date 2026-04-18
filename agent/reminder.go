@@ -13,7 +13,7 @@ var systemReminderRe = regexp.MustCompile(`\n?\n?<system-reminder>[\s\S]*?</syst
 // BuildSystemReminder builds a system reminder appended to the last tool message.
 // agentID "main" = main Agent, otherwise SubAgent.
 // roundToolCalls is the current round's tool calls (used to detect git commit).
-func BuildSystemReminder(messages []llm.ChatMessage, roundToolCalls []llm.ToolCall, todoSummary string, agentID string) string {
+func BuildSystemReminder(messages []llm.ChatMessage, roundToolCalls []llm.ToolCall, todoSummary string, agentID string, cwd string) string {
 	if len(messages) == 0 {
 		return ""
 	}
@@ -57,6 +57,10 @@ func BuildSystemReminder(messages []llm.ChatMessage, roundToolCalls []llm.ToolCa
 		} else {
 			parts = append(parts, fmt.Sprintf("用户需求: %s", taskGoal))
 		}
+	}
+
+	if cwd != "" {
+		parts = append(parts, fmt.Sprintf("当前目录: %s", cwd))
 	}
 
 	parts = append(parts, fmt.Sprintf("已完成 %d 次工具调用", toolCount))

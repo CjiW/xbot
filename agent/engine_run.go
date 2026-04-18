@@ -1380,7 +1380,13 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			todoSummary = s.cfg.TodoManager.GetTodoSummary(s.sessionKey)
 		}
 
-		reminder := BuildSystemReminder(s.messages, response.ToolCalls, todoSummary, s.cfg.AgentID)
+		// Get current CWD for system reminder
+		var cwd string
+		if s.cfg.Session != nil {
+			cwd = s.cfg.Session.GetCurrentDir()
+		}
+
+		reminder := BuildSystemReminder(s.messages, response.ToolCalls, todoSummary, s.cfg.AgentID, cwd)
 		if reminder != "" && len(s.messages) > 0 {
 			lastIdx := len(s.messages) - 1
 			s.messages[lastIdx].Content += "\n\n" + reminder

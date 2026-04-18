@@ -97,6 +97,10 @@ type AgentBackend interface {
 	// InspectInteractiveSession inspects a running interactive subagent.
 	InspectInteractiveSession(ctx context.Context, roleName, channelName, chatID, instance string, tailCount int) (string, error)
 
+	// SetCWD sets the current working directory for a session on the server.
+	// Used by CLI remote mode to sync the client's cwd to the server session.
+	SetCWD(ch, chatID, dir string) error
+
 	// SetContextMode changes the runtime context management mode.
 	SetContextMode(mode string) error
 

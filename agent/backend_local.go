@@ -160,6 +160,18 @@ func (b *LocalBackend) SetContextMode(mode string) error {
 	return b.agent.SetContextMode(mode)
 }
 
+func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
+	if b.agent.MultiSession() == nil {
+		return fmt.Errorf("no session manager")
+	}
+	sess, err := b.agent.MultiSession().GetOrCreateSession(ch, chatID)
+	if err != nil {
+		return err
+	}
+	sess.SetCurrentDir(dir)
+	return nil
+}
+
 func (b *LocalBackend) SetMaxIterations(n int) {
 	b.agent.SetMaxIterations(n)
 }

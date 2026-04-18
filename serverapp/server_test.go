@@ -83,6 +83,7 @@ func (b fakeBackend) InspectInteractiveSession(_ context.Context, _, _, _, _ str
 	return "", nil
 }
 func (b fakeBackend) SetContextMode(_ string) error                                  { return nil }
+func (b fakeBackend) SetCWD(_, _, _ string) error                                    { return nil }
 func (b fakeBackend) SetMaxIterations(_ int)                                         {}
 func (b fakeBackend) SetMaxConcurrency(_ int)                                        {}
 func (b fakeBackend) SetMaxContextTokens(_ int)                                      {}

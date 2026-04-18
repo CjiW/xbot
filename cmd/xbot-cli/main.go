@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -72,6 +73,16 @@ func isFirstRun() bool {
 		return true
 	}
 	return cfg.LLM.APIKey == ""
+}
+
+// isLocalServer returns true if the server URL points to a local/loopback address.
+func isLocalServer(serverURL string) bool {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return false
+	}
+	h := strings.Split(u.Host, ":")[0] // strip port
+	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == ""
 }
 
 // newCLIApp 执行公共初始化：加载配置、创建 Backend。
@@ -1014,6 +1025,20 @@ func main() {
 			}
 		}
 		remoteChatID, _ := filepath.Abs(app.workDir)
+
+		// Auto-set CWD: if connected to a local server (127.0.0.1/localhost),
+		// sync the CLI's actual cwd to the server session so the agent uses
+		// the correct directory regardless of where the server was started.
+		if isLocalServer(app.cfg.CLI.ServerURL) {
+			if cwd, err := os.Getwd(); err == nil {
+				if err := app.backend.SetCWD("cli", remoteChatID, cwd); err != nil {
+					log.WithError(err).Warn("Failed to sync CWD to server")
+				} else {
+					log.WithField("cwd", cwd).Info("Synced CLI CWD to local server")
+				}
+			}
+		}
+
 		if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
 			log.WithError(err).WithField("chat_id", remoteChatID).Warn("Failed to load remote session history")
 		} else {
@@ -1034,6 +1059,12 @@ func main() {
 		// Wire reconnect callback to reload history on WS reconnect.
 		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {
 			rb.OnReconnect(func() {
+				// Re-sync CWD on reconnect (server may have restarted, losing in-memory cwd)
+				if isLocalServer(app.cfg.CLI.ServerURL) {
+					if cwd, err := os.Getwd(); err == nil {
+						_ = app.backend.SetCWD("cli", remoteChatID, cwd)
+					}
+				}
 				if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
 					log.WithError(err).Warn("Failed to reload history after reconnect")
 				} else {

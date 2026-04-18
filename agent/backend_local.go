@@ -249,6 +249,10 @@ func (b *LocalBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) er
 	if err := b.agent.SetUserMaxOutputTokens(senderID, maxTokens); err != nil {
 		// LLMConfig may not exist (e.g. remote CLI user using server default) —
 		// fallback to updating the factory cache directly.
+		// Still apply basic validation.
+		if maxTokens < 0 {
+			return fmt.Errorf("max_output_tokens must be >= 0, got %d", maxTokens)
+		}
 		b.agent.llmFactory.SetUserMaxOutputTokens(senderID, maxTokens)
 	}
 	return nil
@@ -259,6 +263,10 @@ func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
 }
 
 func (b *LocalBackend) SetUserThinkingMode(senderID string, mode string) error {
+	validModes := map[string]bool{"": true, "enabled": true, "disabled": true, "auto": true}
+	if !validModes[mode] {
+		return fmt.Errorf("invalid thinking_mode: %q", mode)
+	}
 	if err := b.agent.SetUserThinkingMode(senderID, mode); err != nil {
 		b.agent.llmFactory.SetUserThinkingMode(senderID, mode)
 	}

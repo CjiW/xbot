@@ -1155,5 +1155,7 @@ func RPCMethodList() []string {
 		"update_subscription", "set_subscription_model",
 		"get_history", "trim_history",
 		"reset_token_state",
+		"is_processing", "get_active_progress",
+		"rewind_checkpoints",
 	}
 }

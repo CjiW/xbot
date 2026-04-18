@@ -4,6 +4,7 @@ import (
 	"context"
 	"xbot/internal/ctxkeys"
 	"xbot/llm"
+	"xbot/tools"
 )
 
 func withPermControlEnabled(ctx context.Context, enabled bool) context.Context {
@@ -51,6 +52,15 @@ func visibleToolDefs(defs []llm.ToolDefinition, settingsSvc *SettingsService, ch
 	}
 	out := make([]llm.ToolDefinition, 0, len(defs))
 	for _, d := range defs {
+		// Filter tools by channel: if a tool implements ChannelProvider and
+		// the current channel is not in its supported list, skip it.
+		// This prevents CLI from using Feishu-only tools like card_create.
+		if cp, ok := d.(tools.ChannelProvider); ok {
+			supported := cp.SupportedChannels()
+			if len(supported) > 0 && !containsString(supported, channel) {
+				continue
+			}
+		}
 		switch d.Name() {
 		case "Shell", "FileCreate", "FileReplace":
 			out = append(out, &toolDefFilter{base: d, hiddenArgs: map[string]bool{"run_as": true, "reason": true}})
@@ -59,4 +69,13 @@ func visibleToolDefs(defs []llm.ToolDefinition, settingsSvc *SettingsService, ch
 		}
 	}
 	return out
+}
+
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }

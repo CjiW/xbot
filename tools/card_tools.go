@@ -8,15 +8,26 @@ import (
 	"xbot/llm"
 )
 
+// feishuOnlyTool wraps a Tool to restrict it to Feishu channel only.
+type feishuOnlyTool struct {
+	Tool
+}
+
+func (t *feishuOnlyTool) SupportedChannels() []string {
+	return []string{"feishu"}
+}
+
 // NewCardTools returns all card-related tools for startup registration.
+// All card tools are restricted to Feishu channel only (CLI uses AskUser).
 func NewCardTools(builder *CardBuilder) []Tool {
+	wrap := func(t Tool) Tool { return &feishuOnlyTool{Tool: t} }
 	return []Tool{
-		&CardCreateTool{builder: builder},
-		&CardAddContentTool{builder: builder},
-		&CardAddInteractiveTool{builder: builder},
-		&CardAddContainerTool{builder: builder},
-		&CardPreviewTool{builder: builder},
-		&CardSendTool{builder: builder},
+		wrap(&CardCreateTool{builder: builder}),
+		wrap(&CardAddContentTool{builder: builder}),
+		wrap(&CardAddInteractiveTool{builder: builder}),
+		wrap(&CardAddContainerTool{builder: builder}),
+		wrap(&CardPreviewTool{builder: builder}),
+		wrap(&CardSendTool{builder: builder}),
 	}
 }
 

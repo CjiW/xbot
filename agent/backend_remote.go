@@ -180,7 +180,8 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 	// Detect /cancel and send as "cancel" type so the server's cancel handler
 	// routes it correctly (web.go readPump switch on msg.Type).
 	msgType := "message"
-	if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+	isCancel := strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel"
+	if isCancel {
 		msgType = "cancel"
 	}
 
@@ -194,15 +195,18 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 		ChatType:   msg.ChatType,
 	}
 	if msg.Metadata != nil {
-		if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
-			outMsg.ChatID = transportChatID
-		}
-		if transportSenderID := msg.Metadata["transport_sender_id"]; transportSenderID != "" {
-			outMsg.SenderID = transportSenderID
+		// For cancel messages, do NOT override ChatID/SenderID with transport values.
+		// The cancel handler needs the original business chatID to match the cancelKey
+		// (channel:chatID:senderID) stored during message processing.
+		if !isCancel {
+			if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
+				outMsg.ChatID = transportChatID
+			}
+			if transportSenderID := msg.Metadata["transport_sender_id"]; transportSenderID != "" {
+				outMsg.SenderID = transportSenderID
+			}
 		}
 		if transportChannel := msg.Metadata["transport_channel"]; transportChannel != "" {
-			// Keep original business identity in Channel/ChatID fields above; transport
-			// fields are forwarded via metadata on the inbound message instead.
 			_ = transportChannel
 		}
 	}

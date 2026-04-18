@@ -63,7 +63,7 @@ func (m *cliModel) View() tea.View {
 		case "reconnecting":
 			dot = "🟡"
 		}
-		titleRight = dot + " remote · " + titleRight
+		titleRight = dot + " " + titleRight
 	}
 	if m.updateNotice != nil && m.updateNotice.HasUpdate && m.panelMode != "askuser" {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
@@ -478,12 +478,12 @@ func (m *cliModel) titleText() string {
 
 // askUserTitleHints returns the minimal control hints for the askuser panel,
 // displayed in the header bar so they're always visible regardless of scroll.
+// Keep it short — header width is limited and line wrap looks terrible.
 func (m *cliModel) askUserTitleHints() string {
-	hints := []string{"Shift+↑↓ history", "Ctrl+↑↓/PgUp/PgDn question"}
+	hints := []string{"Shift+↑↓ history", "Ctrl+↑↓ question", "Enter submit", "Esc cancel"}
 	if len(m.panelItems) > 1 {
-		hints = append(hints, "←→/Tab switch")
+		hints = append([]string{"←→/Tab switch"}, hints...)
 	}
-	hints = append(hints, "Enter submit", "Esc cancel")
 	return strings.Join(hints, " · ")
 }
 

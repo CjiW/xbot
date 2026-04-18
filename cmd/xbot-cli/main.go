@@ -1083,6 +1083,10 @@ func main() {
 			csc.OnConnStateChange(func(state string) {
 				cliCh.SetConnState(state)
 			})
+			// Sync initial state — connection was established before callback was wired
+			if cs, ok2 := app.backend.(interface{ ConnState() string }); ok2 {
+				cliCh.SetConnState(cs.ConnState())
+			}
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)

@@ -161,6 +161,12 @@ func (b *LocalBackend) SetContextMode(mode string) error {
 }
 
 func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
+	// CWD sync only makes sense when sandbox is "none" — CLI and server share
+	// the same filesystem. In docker/remote mode, host paths don't map to the
+	// sandbox environment.
+	if b.agent.sandboxMode != "none" {
+		return fmt.Errorf("CWD sync not supported in %s sandbox mode", b.agent.sandboxMode)
+	}
 	if b.agent.MultiSession() == nil {
 		return fmt.Errorf("no session manager")
 	}

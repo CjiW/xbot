@@ -68,6 +68,10 @@ type RemoteBackend struct {
 	reconnectCh   chan struct{}
 	onReconnectCb func() // called after successful reconnect (for history reload)
 
+	// Connection state — tracks WS liveness for CLI header bar indicator
+	connState     string // "connected" | "disconnected" | "reconnecting"
+	onConnStateCb func(state string)
+
 	// RPC pending calls: requestID → response channel
 	rpcMu      sync.Mutex
 	pending    map[string]chan *rpcResponse
@@ -252,6 +256,33 @@ func (b *RemoteBackend) OnReconnect(callback func()) {
 	b.onReconnectCb = callback
 }
 
+// OnConnStateChange registers a callback invoked when the WS connection state changes.
+// States: "connected", "disconnected", "reconnecting".
+// Used by CLI to update the header bar connection indicator in real-time.
+func (b *RemoteBackend) OnConnStateChange(callback func(state string)) {
+	b.onConnStateCb = callback
+}
+
+// ConnState returns the current connection state string.
+func (b *RemoteBackend) ConnState() string {
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+	return b.connState
+}
+
+// setConnState updates connState and fires the callback if state changed.
+// Must be called with connMu held OR from a single-threaded context.
+func (b *RemoteBackend) setConnState(state string) {
+	b.connMu.Lock()
+	prev := b.connState
+	b.connState = state
+	cb := b.onConnStateCb
+	b.connMu.Unlock()
+	if prev != state && cb != nil {
+		cb(state)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket connection
 // ---------------------------------------------------------------------------
@@ -306,6 +337,7 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 		old.Close()
 	}
 	log.Info("Connected to remote xbot server")
+	b.setConnState("connected")
 	return nil
 }
 
@@ -348,6 +380,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			case b.reconnectCh <- struct{}{}:
 			default:
 			}
+			b.setConnState("disconnected")
 			return
 		}
 		var msg wsIncomingMessage
@@ -553,6 +586,7 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-b.reconnectCh:
+			b.setConnState("reconnecting")
 			consecutiveFailures := 0
 			for delay := time.Second; delay <= 30*time.Second; delay *= 2 {
 				select {

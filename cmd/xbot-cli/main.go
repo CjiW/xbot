@@ -1078,6 +1078,12 @@ func main() {
 				}
 			})
 		}
+		// Wire connection state change callback for header bar indicator.
+		if csc, ok := app.backend.(interface{ OnConnStateChange(func(string)) }); ok {
+			csc.OnConnStateChange(func(state string) {
+				cliCh.SetConnState(state)
+			})
+		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
 		go func() {

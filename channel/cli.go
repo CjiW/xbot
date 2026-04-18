@@ -327,6 +327,18 @@ func (c *CLIChannel) SetProcessing(processing bool) {
 	}
 }
 
+// SetConnState updates the connection state indicator in the header bar.
+// Non-blocking — drops if asyncCh is full.
+func (c *CLIChannel) SetConnState(state string) {
+	if c.program == nil {
+		return
+	}
+	select {
+	case c.asyncCh <- cliConnStateMsg{state: state}:
+	default:
+	}
+}
+
 // SendToast shows a toast notification in the CLI (non-blocking).
 func (c *CLIChannel) SendToast(text, icon string) {
 	if c.program == nil {

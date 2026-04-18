@@ -443,10 +443,20 @@ func (m *cliModel) titleText() string {
 		if u, err := url.Parse(host); err == nil && u.Host != "" {
 			host = u.Host
 		}
+		// Connection state indicator
+		var stateIcon string
+		switch m.connState {
+		case "connected":
+			stateIcon = "🟢"
+		case "disconnected":
+			stateIcon = "🔴"
+		case "reconnecting":
+			stateIcon = "🟡"
+		}
 		if host != "" {
-			modeLabel = fmt.Sprintf("◉ xbot [%s]", host)
+			modeLabel = fmt.Sprintf("◉ %s xbot [%s]", stateIcon, host)
 		} else {
-			modeLabel = "◉ xbot remote"
+			modeLabel = fmt.Sprintf("◉ %s xbot remote", stateIcon)
 		}
 	}
 	if m.workDir != "" {

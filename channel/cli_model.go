@@ -328,6 +328,7 @@ type cliModel struct {
 	workDir         string // 工作目录（标题栏显示用）
 	remoteMode      bool   // 是否连接 remote backend（标题栏提示用）
 	remoteServerURL string // remote server host for header display (e.g. "host:port")
+	connState       string // WS connection state: "connected"|"disconnected"|"reconnecting"
 	debugMode       bool   // --debug: UI capture + key injection via SIGUSR1
 	debugCaptureMs  int    // --debug-capture-ms: UI capture interval in ms (0 = default 1000)
 	senderID        string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
@@ -613,6 +614,11 @@ type cliProgressMsg struct {
 // cliProcessingMsg sets the typing/processing state externally (remote reconnect).
 type cliProcessingMsg struct {
 	processing bool
+}
+
+// cliConnStateMsg updates the WS connection state for the header bar indicator.
+type cliConnStateMsg struct {
+	state string // "connected" | "disconnected" | "reconnecting"
 }
 
 // cliTickMsg 定时刷新（用于流式输出动画）

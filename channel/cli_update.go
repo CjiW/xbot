@@ -323,6 +323,9 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 		}
 		// NOTE: do NOT flush queue here even if needFlushQueue is true!
 		// PhaseDone can arrive before cliOutboundMsg (the reply text). If we
+
+	case cliConnStateMsg:
+		m.connState = msg.state
 		// flush here, the queued message gets appended BEFORE the reply,
 		// producing wrong order: msg1, msg2, reply1 instead of msg1, reply1, msg2.
 		// Flush is handled in cliTickMsg instead (next tick after typing=false).

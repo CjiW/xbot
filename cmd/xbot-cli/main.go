@@ -247,6 +247,7 @@ func main() {
 		flagToken     string // --token xxx
 		flagWorkspace string // --workspace /path (overrides config)
 		flagLocal     bool   // --local force legacy in-process mode
+		flagDebug     bool   // --debug enable UI capture + key injection via SIGUSR1
 	)
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -265,6 +266,8 @@ func main() {
 			}
 		case "--local":
 			flagLocal = true
+		case "--debug":
+			flagDebug = true
 		case "--help", "-h":
 			printHelp()
 			return
@@ -336,6 +339,7 @@ func main() {
 		WorkDir:    app.workDir,
 		ChatID:     absWorkDir,
 		RemoteMode: isRemoteBackend,
+		DebugMode:  flagDebug,
 		IsFirstRun: firstRun,
 		GetCurrentValues: func() map[string]string {
 			// In remote mode, read current values from server via RPC.

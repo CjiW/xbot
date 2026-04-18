@@ -1428,6 +1428,10 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			// Use sendMessage to ensure transport metadata is loaded for remote mode.
 			if response != nil {
 				_ = a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata)
+			} else {
+				// No response generated yet (cancelled mid-tool-call) — send empty
+				// message to signal turn end so CLI can clean up typing/progress state.
+				_ = a.sendMessage(msg.Channel, msg.ChatID, "")
 			}
 			continue
 		}

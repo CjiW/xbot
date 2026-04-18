@@ -225,6 +225,9 @@ type splashTickMsg struct {
 	frame int // 当前帧索引
 }
 
+// debugCaptureMsg triggers a UI capture (dump View() to file).
+type debugCaptureMsg struct{}
+
 // splashDoneMsg 启动画面结束消息
 type splashDoneMsg struct{}
 
@@ -324,6 +327,7 @@ type cliModel struct {
 	// --- Session ---
 	workDir       string // 工作目录（标题栏显示用）
 	remoteMode    bool   // 是否连接 remote backend（标题栏提示用）
+	debugMode     bool   // --debug: UI capture + key injection via SIGUSR1
 	senderID      string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
 	channelName   string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
 	defaultChatID string // 默认 chatID（/su 切换回来时恢复）
@@ -693,7 +697,18 @@ func (m *cliModel) refreshCachedModelName() {
 
 // Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
 func (m *cliModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.splashTick(0))
+	cmds := []tea.Cmd{textarea.Blink, m.splashTick(0)}
+	if m.debugMode {
+		cmds = append(cmds, m.debugCaptureTick())
+	}
+	return tea.Batch(cmds...)
+}
+
+// debugCaptureTick returns a tea.Cmd that fires every 1s to capture UI state.
+func (m *cliModel) debugCaptureTick() tea.Cmd {
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+		return debugCaptureMsg{}
+	})
 }
 
 // splashTick 生成启动画面动画的 tick 命令

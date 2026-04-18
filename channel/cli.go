@@ -75,6 +75,7 @@ func (c *CLIChannel) Start() error {
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
 	c.model.remoteMode = c.config.RemoteMode
+	c.model.debugMode = c.config.DebugMode
 	c.model.senderID = "cli_user"
 
 	// Apply pending injections that were set before model existed

@@ -581,18 +581,18 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 		// 重置流式状态
 		m.streamingMsgIdx = -1
-		// 清除进度信息（保留 TODO，可跨 turn 存活）
-		// Capture reasoning before clearing — needed for final iteration snapshot.
-		if turnID == m.agentTurnID {
-			if m.progress != nil {
-				if m.progress.Reasoning != "" {
-					m.lastReasoning = m.progress.Reasoning
-				}
-				if m.progress.Thinking != "" {
-					m.lastThinking = m.progress.Thinking
-				}
+		// Capture reasoning from progress before it might be cleared.
+		// Do NOT clear m.progress here — progress is only cleared by endAgentTurn.
+		// Intermediate text messages (e.g. thinking content) arrive while the agent
+		// is still running; clearing progress here would hide the progress panel
+		// and make it look like the turn ended prematurely.
+		if turnID == m.agentTurnID && m.progress != nil {
+			if m.progress.Reasoning != "" {
+				m.lastReasoning = m.progress.Reasoning
 			}
-			m.progress = nil
+			if m.progress.Thinking != "" {
+				m.lastThinking = m.progress.Thinking
+			}
 		}
 		m.renderCacheValid = false
 		m.updateViewportContent()

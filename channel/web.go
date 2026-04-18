@@ -957,7 +957,8 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		c.conn.Close()
 		c.closeDone()
 		wc.hub.removeClient(c.userID, c.id)
-		wc.hub.removeRoutes(c.userID)
+		// Note: do NOT removeRoutes here — multiple clients may share the same
+		// senderID. Routes are idempotent and re-registered on each message.
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()
 

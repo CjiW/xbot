@@ -431,6 +431,11 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case splashTickMsg:
 		return m.handleSplashTick(msg)
 
+	case debugCaptureMsg:
+		// --debug: dump current TUI view to file every second
+		m.debugCaptureUI()
+		cmds = append(cmds, m.debugCaptureTick())
+
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true

@@ -388,7 +388,18 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 
 	// --- LLM ---
 	case "get_default_model":
-		return json.Marshal(backend.GetDefaultModel())
+		model := ""
+		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
+			if sub, err := subSvc.GetDefault(senderID); err == nil && sub != nil && sub.Model != "" {
+				model = sub.Model
+			}
+		}
+		if model == "" {
+			_, m, _, _ := backend.LLMFactory().GetLLM(senderID)
+			model = m
+		}
+		log.WithField("sender_id", senderID).WithField("model", model).Info("RPC get_default_model")
+		return json.Marshal(model)
 	case "set_user_model":
 		var p struct {
 			Model string `json:"model"`
@@ -397,6 +408,27 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		return nil, backend.SetUserModel(senderID, p.Model)
+	case "switch_model":
+		var p struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		log.WithField("sender_id", senderID).WithField("model", p.Model).Info("RPC switch_model")
+		backend.SwitchModel(senderID, p.Model)
+		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
+			if sub, err := subSvc.GetDefault(senderID); err == nil && sub != nil {
+				if err := subSvc.SetModel(sub.ID, p.Model); err != nil {
+					log.WithError(err).Warn("RPC switch_model: SetModel failed")
+				} else {
+					log.WithField("sub_id", sub.ID).Debug("RPC switch_model: persisted")
+				}
+			} else {
+				log.WithField("sender_id", senderID).Warn("RPC switch_model: no default subscription")
+			}
+		}
+		return nil, nil
 	case "get_user_max_context":
 		return json.Marshal(backend.GetUserMaxContext(senderID))
 	case "set_user_max_context":
@@ -1302,6 +1334,15 @@ func Run(args []string) error {
 		log.WithError(err).Fatal("Failed to create local backend")
 	}
 
+	// Migrate config.json subscriptions into DB for the admin user.
+	// This ensures admin is a normal DB user with real subscriptions,
+	// so model switches persist across restarts.
+	if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
+		if err := migrateConfigSubscriptions(cfg, subSvc, adminSenderID); err != nil {
+			log.WithError(err).Warn("Failed to migrate config subscriptions to DB")
+		}
+	}
+
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
 	if cfg.OAuth.Enable && oauthManager != nil {
 		// 注册 OAuth 工具
@@ -2093,7 +2134,7 @@ func userScopedSettingsFromGlobalCLI(cfg *config.Config) map[string]string {
 }
 
 func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.AgentBackend, namespace, senderID string) error {
-	if senderID == "" || isAdmin(senderID) || backend.SettingsService() == nil {
+	if senderID == "" || backend.SettingsService() == nil {
 		return nil
 	}
 	existing, err := backend.SettingsService().GetSettings(namespace, senderID)
@@ -2206,3 +2247,49 @@ const adminSenderID = "admin"
 
 // isAdmin checks if the given senderID belongs to the server admin.
 func isAdmin(senderID string) bool { return senderID == adminSenderID }
+
+// migrateConfigSubscriptions seeds config.json subscriptions into the DB for a given user.
+// Idempotent — skips if the user already has DB subscriptions.
+func migrateConfigSubscriptions(cfg *config.Config, subSvc *sqlite.LLMSubscriptionService, senderID string) error {
+	if len(cfg.Subscriptions) == 0 {
+		return nil
+	}
+	// Skip if user already has DB subscriptions
+	existing, err := subSvc.List(senderID)
+	if err != nil {
+		return fmt.Errorf("list subscriptions: %w", err)
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	for i, s := range cfg.Subscriptions {
+		sub := &sqlite.LLMSubscription{
+			SenderID:        senderID,
+			Name:            s.Name,
+			Provider:        s.Provider,
+			BaseURL:         s.BaseURL,
+			APIKey:          s.APIKey,
+			Model:           s.Model,
+			MaxOutputTokens: s.MaxOutputTokens,
+			ThinkingMode:    s.ThinkingMode,
+			IsDefault:       s.Active || (i == 0 && !hasActiveSub(cfg)),
+		}
+		if s.ID != "" {
+			sub.ID = s.ID
+		}
+		if err := subSvc.Add(sub); err != nil {
+			return fmt.Errorf("add subscription %s: %w", s.Name, err)
+		}
+		log.WithFields(log.Fields{"name": s.Name, "sender_id": senderID}).Info("Migrated config subscription to DB")
+	}
+	return nil
+}
+
+func hasActiveSub(cfg *config.Config) bool {
+	for _, s := range cfg.Subscriptions {
+		if s.Active {
+			return true
+		}
+	}
+	return false
+}

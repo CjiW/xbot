@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
+	log "xbot/logger"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
@@ -184,10 +185,46 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
-// cycleModel switches to the next model in the available model list.
-// Wraps around when reaching the end.
+// cycleModel switches to the next active subscription.
+// If only one subscription exists, falls back to cycling models within it.
 func (m *cliModel) cycleModel() {
-	if m.channel == nil || m.channel.modelLister == nil {
+	if m.channel == nil {
+		return
+	}
+
+	// Prefer cycling through active subscriptions
+	if m.subscriptionMgr != nil && m.llmSubscriber != nil {
+		subs, err := m.subscriptionMgr.List(m.senderID)
+		if err == nil && len(subs) >= 2 {
+			// Find current default
+			def, _ := m.subscriptionMgr.GetDefault(m.senderID)
+			currentID := ""
+			if def != nil {
+				currentID = def.ID
+			}
+			// Cycle to next
+			nextIdx := 0
+			for i, s := range subs {
+				if s.ID == currentID {
+					nextIdx = (i + 1) % len(subs)
+					break
+				}
+			}
+			next := subs[nextIdx]
+			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &next); err != nil {
+				m.showTempStatus(fmt.Sprintf("Switch failed: %v", err))
+				return
+			}
+			m.cachedModelName = next.Model
+			log.WithField("subscription", next.Name).WithField("model", next.Model).Info("cycleModel: switched subscription")
+			m.showTempStatus(fmt.Sprintf("%s (%s)", next.Name, next.Model))
+			m.updateQuickSwitchModels(next.Model)
+			return
+		}
+	}
+
+	// Fallback: cycle models within current subscription (single-sub setup)
+	if m.channel.modelLister == nil {
 		return
 	}
 	models := m.channel.modelLister.ListAllModels()
@@ -213,7 +250,6 @@ func (m *cliModel) cycleModel() {
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
-	// Update quickSwitch panel models so UI stays consistent
 	m.updateQuickSwitchModels(nextModel)
 }
 

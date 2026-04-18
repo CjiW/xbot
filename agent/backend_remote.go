@@ -808,6 +808,12 @@ func (b *RemoteBackend) SetUserModel(senderID, model string) error {
 	return b.callRPCVoid("set_user_model", map[string]string{"model": model})
 }
 
+// SwitchModel switches the active model for a user (memory-only, like LLMFactory.SwitchModel).
+// Unlike SetUserModel, this does not require an existing LLMConfig.
+func (b *RemoteBackend) SwitchModel(senderID, model string) error {
+	return b.callRPCVoid("switch_model", map[string]string{"model": model})
+}
+
 func (b *RemoteBackend) SetUserMaxContext(senderID string, maxContext int) error {
 	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext})
 }
@@ -1130,7 +1136,7 @@ func RPCMethodList() []string {
 		"get_context_mode", "set_context_mode",
 		"get_settings", "set_setting",
 		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens",
-		"get_default_model", "set_user_model",
+		"get_default_model", "set_user_model", "switch_model",
 		"get_user_max_context", "set_user_max_context",
 		"get_user_max_output_tokens", "set_user_max_output_tokens",
 		"get_user_thinking_mode", "set_user_thinking_mode",

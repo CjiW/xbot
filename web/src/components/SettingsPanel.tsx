@@ -170,6 +170,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [llmFormApiKey, setLlmFormApiKey] = useState('')
   const [llmFormModel, setLlmFormModel] = useState('')
   const [llmError, setLlmError] = useState('')
+  const [llmFormMaxOutputTokens, setLlmFormMaxOutputTokens] = useState('')
+  const [llmFormThinkingMode, setLlmFormThinkingMode] = useState('auto')
 
   // Load settings from server on mount
   useEffect(() => {
@@ -321,6 +323,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           base_url: llmFormBaseUrl.trim(),
           api_key: llmFormApiKey.trim(),
           model: llmFormModel.trim(),
+          max_output_tokens: llmFormMaxOutputTokens ? parseInt(llmFormMaxOutputTokens) : 0,
+          thinking_mode: llmFormThinkingMode,
         }),
       })
       const data = await resp.json()
@@ -328,6 +332,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
         setLlmFormBaseUrl('')
         setLlmFormApiKey('')
         setLlmFormModel('')
+        setLlmFormMaxOutputTokens('')
+        setLlmFormThinkingMode('auto')
         await fetchLLMConfig()
       } else {
         setLlmError(data.error || '保存失败')
@@ -336,7 +342,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
       setLlmError('网络错误')
     }
     setLlmSaving(false)
-  }, [llmFormProvider, llmFormBaseUrl, llmFormApiKey, llmFormModel, fetchLLMConfig])
+  }, [llmFormProvider, llmFormBaseUrl, llmFormApiKey, llmFormModel, llmFormMaxOutputTokens, llmFormThinkingMode, fetchLLMConfig])
 
   const handleLLMSetModel = useCallback(async (model: string) => {
     setLlmSaving(true)
@@ -372,6 +378,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
         setLlmFormBaseUrl('')
         setLlmFormApiKey('')
         setLlmFormModel('')
+        setLlmFormMaxOutputTokens('')
+        setLlmFormThinkingMode('auto')
       } else {
         setLlmError(data.error || '删除失败')
       }
@@ -876,6 +884,32 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                     value={llmFormModel}
                     onChange={(e) => setLlmFormModel(e.target.value)}
                   />
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">Max Output Tokens</label>
+                  <input
+                    type="number"
+                    className="settings-input"
+                    placeholder="0 = use default"
+                    value={llmFormMaxOutputTokens}
+                    onChange={e => setLlmFormMaxOutputTokens(e.target.value)}
+                    min={0}
+                    step={256}
+                  />
+                </div>
+
+                <div className="settings-item">
+                  <label className="settings-label">Thinking Mode</label>
+                  <select
+                    className="settings-select"
+                    value={llmFormThinkingMode}
+                    onChange={e => setLlmFormThinkingMode(e.target.value)}
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
                 </div>
 
                 {llmError && <p className="text-xs text-red-400 mt-1 mb-2">{llmError}</p>}

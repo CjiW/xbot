@@ -142,6 +142,9 @@ type AgentBackend interface {
 	// SetUserModel sets the model for a specific user.
 	SetUserModel(senderID, model string) error
 
+	// SwitchModel switches the active model in memory (no LLMConfig required).
+	SwitchModel(senderID, model string) error
+
 	// GetUserMaxContext returns the max context tokens for a specific user.
 	GetUserMaxContext(senderID string) int
 

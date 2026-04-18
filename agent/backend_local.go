@@ -228,6 +228,11 @@ func (b *LocalBackend) SetUserModel(senderID, model string) error {
 	return b.agent.SetUserModel(senderID, model)
 }
 
+func (b *LocalBackend) SwitchModel(senderID, model string) error {
+	b.agent.llmFactory.SwitchModel(senderID, model)
+	return nil
+}
+
 func (b *LocalBackend) GetUserMaxContext(senderID string) int {
 	return b.agent.GetUserMaxContext(senderID)
 }
@@ -241,7 +246,12 @@ func (b *LocalBackend) GetUserMaxOutputTokens(senderID string) int {
 }
 
 func (b *LocalBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
-	return b.agent.SetUserMaxOutputTokens(senderID, maxTokens)
+	if err := b.agent.SetUserMaxOutputTokens(senderID, maxTokens); err != nil {
+		// LLMConfig may not exist (e.g. remote CLI user using server default) —
+		// fallback to updating the factory cache directly.
+		b.agent.llmFactory.SetUserMaxOutputTokens(senderID, maxTokens)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
@@ -249,7 +259,10 @@ func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
 }
 
 func (b *LocalBackend) SetUserThinkingMode(senderID string, mode string) error {
-	return b.agent.SetUserThinkingMode(senderID, mode)
+	if err := b.agent.SetUserThinkingMode(senderID, mode); err != nil {
+		b.agent.llmFactory.SetUserThinkingMode(senderID, mode)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetLLMConcurrency(senderID string) int {

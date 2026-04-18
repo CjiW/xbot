@@ -235,6 +235,21 @@ func (f *LLMFactory) SwitchModel(senderID, model string) {
 	f.mu.Unlock()
 }
 
+// SetUserMaxOutputTokens updates the max_output_tokens cache for a user.
+// This is a lightweight update that doesn't require LLMConfig.
+func (f *LLMFactory) SetUserMaxOutputTokens(senderID string, n int) {
+	f.mu.Lock()
+	f.maxOutputTokens[senderID] = n
+	f.mu.Unlock()
+}
+
+// SetUserThinkingMode updates the thinking_mode cache for a user.
+func (f *LLMFactory) SetUserThinkingMode(senderID, mode string) {
+	f.mu.Lock()
+	f.thinkingModes[senderID] = mode
+	f.mu.Unlock()
+}
+
 // SetDefaults 更新默认 LLM 客户端和模型名。
 // 用于 setup/settings 面板修改全局 LLM 配置后立即生效。
 func (f *LLMFactory) SetDefaults(newLLM llm.LLM, newModel string) {

@@ -379,14 +379,14 @@ func main() {
 			// In remote mode, read current values from server via RPC.
 			if app.backend != nil && app.backend.IsRemote() {
 				vals := make(map[string]string)
-				// Model from server
-				vals["llm_model"] = app.backend.GetDefaultModel()
 				// Settings from server (contains most config values)
 				if sv, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
 					for k, v := range sv {
 						vals[k] = v
 					}
 				}
+				// Model from server — must be AFTER settings to override stale llm_model in DB
+				vals["llm_model"] = app.backend.GetDefaultModel()
 				// Context mode from server
 				vals["context_mode"] = app.backend.GetContextMode()
 				// Defaults for fields not in settings
@@ -525,6 +525,14 @@ func main() {
 					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 						app.backend.SetMaxContextTokens(n)
 					}
+				}
+				if v, ok := values["max_output_tokens"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+						_ = app.backend.SetUserMaxOutputTokens("cli_user", n)
+					}
+				}
+				if v, ok := values["thinking_mode"]; ok {
+					_ = app.backend.SetUserThinkingMode("cli_user", v)
 				}
 				if v, ok := values["sandbox_mode"]; ok && v != "" {
 					app.backend.SetSandbox(nil, v)
@@ -1658,17 +1666,17 @@ func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 	if sub == nil {
 		return nil
 	}
-	if err := s.backend.SetDefaultSubscription(sub.ID); err != nil {
-		return err
-	}
-	if sub.Model != "" {
-		return s.backend.SetUserModel(senderID, sub.Model)
-	}
-	return nil
+	// Server-side set_default_subscription invalidates the LLM cache so
+	// the next GetLLM call picks up the new subscription's provider/model/credentials.
+	// Do NOT call SetUserModel here — it would create a conflicting LLMConfig
+	// that overrides the subscription's model.
+	return s.backend.SetDefaultSubscription(sub.ID)
 }
 
 func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {
-	_ = s.backend.SetUserModel(senderID, model)
+	if err := s.backend.SwitchModel(senderID, model); err != nil {
+		log.WithError(err).Warn("remoteLLMSubscriber: SwitchModel RPC failed")
+	}
 }
 
 func (s *remoteLLMSubscriber) GetDefaultModel() string {

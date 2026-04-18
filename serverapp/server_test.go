@@ -96,6 +96,7 @@ func (b fakeBackend) SetProxyLLM(_ string, _ *llm.ProxyLLM, _ string)           
 func (b fakeBackend) ClearProxyLLM(_ string)                                         {}
 func (b fakeBackend) GetDefaultModel() string                                        { return "" }
 func (b fakeBackend) SetUserModel(_, _ string) error                                 { return nil }
+func (b fakeBackend) SwitchModel(_, _ string) error                                  { return nil }
 func (b fakeBackend) GetUserMaxContext(_ string) int                                 { return 0 }
 func (b fakeBackend) SetUserMaxContext(_ string, _ int) error                        { return nil }
 func (b fakeBackend) GetUserMaxOutputTokens(_ string) int                            { return 0 }

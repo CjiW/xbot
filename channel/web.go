@@ -337,7 +337,7 @@ type wsMessage struct {
 // WsProgressPayload — structured progress data (corresponds to agent.StructuredProgress).
 type WsProgressPayload struct {
 	Phase          string              `json:"phase,omitempty"`
-	Iteration      int                 `json:"iteration,omitempty"`
+	Iteration      int                 `json:"iteration"`
 	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
 	CompletedTools []WsToolProgress    `json:"completed_tools,omitempty"`
 	Thinking       string              `json:"thinking,omitempty"`
@@ -776,7 +776,17 @@ func (wc *WebChannel) wsUpgrader() *websocket.Upgrader {
 					return true
 				}
 			}
-			return u.Host == r.Host
+			// Always allow requests from the backend's own host (e.g. Vite proxy
+			// sets Origin to the backend host, or direct browser access).
+			if u.Host == r.Host {
+				return true
+			}
+			// Allow localhost origins in development (Vite dev server on
+			// a different port proxies to the backend).
+			if u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" {
+				return true
+			}
+			return false
 		},
 	}
 }
@@ -1099,10 +1109,12 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				if msg.ChatType != "" {
 					msgChatType = msg.ChatType
 				}
-				// Subscribe this client to receive messages for this chatID.
-				// Hub routes by business chatID directly — no transport metadata needed.
-				wc.hub.subscribe(c.id, msgChatID)
 			}
+			// Subscribe this client to receive messages for this chatID.
+			// Hub routes by business chatID directly — no transport metadata needed.
+			// Always subscribe on every message — idempotent and handles both
+			// vanilla web messages (no channel/chat_id) and CLI relay messages.
+			wc.hub.subscribe(c.id, msgChatID)
 
 			// Eagerly save user message so history API can return it during processing.
 			// Skip bang commands (! prefix) — they should never be persisted.

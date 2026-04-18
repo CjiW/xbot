@@ -496,7 +496,7 @@ func TestHubOfflineBuffering(t *testing.T) {
 	}
 
 	// Verify buffered message count
-	if hub.offline[senderID].count != 1 {
+	if hub.offline[senderID] == nil || hub.offline[senderID].count != 1 {
 		t.Error("expected 1 buffered message")
 	}
 
@@ -504,8 +504,9 @@ func TestHubOfflineBuffering(t *testing.T) {
 	client := &Client{
 		sendCh: make(chan wsMessage, 10),
 		done:   make(chan struct{}),
+		id:     "test-client-1",
 	}
-	hub.addClient(senderID, client)
+	hub.addClient(senderID, client.id, client)
 
 	// Wait for flush
 	time.Sleep(100 * time.Millisecond)

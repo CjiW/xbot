@@ -480,15 +480,7 @@ func (a *Agent) buildMainRunConfig(
 					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
 				}
 				if webCh != nil {
-					streamChatID := chatID
-					if metaAny, ok := a.sessionTransportMeta.Load(channel + ":" + chatID); ok {
-						if meta, ok := metaAny.(map[string]string); ok {
-							if v := meta["transport_chat_id"]; v != "" {
-								streamChatID = v
-							}
-						}
-					}
-					webCh.SendStreamContent(streamChatID, content, "")
+					webCh.SendStreamContent(chatID, content, "")
 				}
 			}
 			cfg.StreamReasoningFunc = func(content string) {
@@ -496,15 +488,7 @@ func (a *Agent) buildMainRunConfig(
 					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
 				}
 				if webCh != nil {
-					reasoningChatID := chatID
-					if metaAny, ok := a.sessionTransportMeta.Load(channel + ":" + chatID); ok {
-						if meta, ok := metaAny.(map[string]string); ok {
-							if v := meta["transport_chat_id"]; v != "" {
-								reasoningChatID = v
-							}
-						}
-					}
-					webCh.SendStreamContent(reasoningChatID, "", content)
+					webCh.SendStreamContent(chatID, "", content)
 				}
 			}
 		}

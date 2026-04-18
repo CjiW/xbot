@@ -136,26 +136,26 @@ type WebCallbacks struct {
 // Hub 管理所有 WebSocket 连接
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[string]*Client     // senderID → Client
-	offline map[string]*ringBuffer // senderID → offline message buffer
+	clients map[string]map[string]*Client // senderID → clientID → Client
+	routes  map[string]string             // businessChatID → senderID (auto-registered on first message)
+	offline map[string]*ringBuffer        // senderID → offline message buffer
 	offMu   sync.Mutex
 }
 
 func newHub() *Hub {
 	return &Hub{
-		clients: make(map[string]*Client),
+		clients: make(map[string]map[string]*Client),
+		routes:  make(map[string]string),
 		offline: make(map[string]*ringBuffer),
 	}
 }
 
-func (h *Hub) addClient(senderID string, c *Client) {
+func (h *Hub) addClient(senderID, clientID string, c *Client) {
 	h.mu.Lock()
-	// Close existing connection for same user
-	if old, ok := h.clients[senderID]; ok {
-		old.closeDone()
-
+	if h.clients[senderID] == nil {
+		h.clients[senderID] = make(map[string]*Client)
 	}
-	h.clients[senderID] = c
+	h.clients[senderID][clientID] = c
 	h.mu.Unlock()
 
 	// Flush offline messages
@@ -174,52 +174,116 @@ func (h *Hub) addClient(senderID string, c *Client) {
 	h.offMu.Unlock()
 }
 
-func (h *Hub) removeClient(senderID string, c *Client) {
+func (h *Hub) removeClient(senderID, clientID string) {
 	h.mu.Lock()
-	if existing, ok := h.clients[senderID]; ok && existing == c {
-		delete(h.clients, senderID)
+	if m, ok := h.clients[senderID]; ok {
+		delete(m, clientID)
+		if len(m) == 0 {
+			delete(h.clients, senderID)
+		}
 	}
 	h.mu.Unlock()
 }
 
+// getClient returns the first client for a given senderID (backward compat).
 func (h *Hub) getClient(senderID string) *Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.clients[senderID]
-}
-
-func (h *Hub) sendToClient(senderID string, msg wsMessage) bool {
-	c := h.getClient(senderID)
-	if c != nil {
-		select {
-		case c.sendCh <- msg:
-			return true
-		default:
-			// Channel full, buffer offline
+	if m := h.clients[senderID]; len(m) > 0 {
+		for _, c := range m {
+			return c
 		}
 	}
-	// Buffer as offline message
-	h.offMu.Lock()
-	buf, ok := h.offline[senderID]
-	if !ok {
-		buf = newRingBuffer(webOfflineMsgBufSize)
-		h.offline[senderID] = buf
+	return nil
+}
+
+// getClients returns all clients for a given senderID.
+func (h *Hub) getClients(senderID string) []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var result []*Client
+	if m := h.clients[senderID]; len(m) > 0 {
+		for _, c := range m {
+			result = append(result, c)
+		}
 	}
-	buf.push(msg)
-	h.offMu.Unlock()
-	return false
+	return result
+}
+
+func (h *Hub) sendToClient(chatID string, msg wsMessage) bool {
+	// Auto-resolve business chatID → hub senderID via route table.
+	// For remote CLI, chatID might be "/home/smith/src/xbot" but hub key is "admin".
+	// For web clients, chatID == senderID already, resolveRoute returns unchanged.
+	resolved := h.resolveRoute(chatID)
+	sent := false
+	for _, c := range h.getClients(resolved) {
+		select {
+		case c.sendCh <- msg:
+			sent = true
+		default:
+			// Channel full, skip this client
+		}
+	}
+	if !sent {
+		// Buffer as offline message (keyed by resolved senderID so flush works correctly)
+		h.offMu.Lock()
+		buf, ok := h.offline[resolved]
+		if !ok {
+			buf = newRingBuffer(webOfflineMsgBufSize)
+			h.offline[resolved] = buf
+		}
+		buf.push(msg)
+		h.offMu.Unlock()
+	}
+	return sent
 }
 
 func (c *Client) closeDone() {
 	c.closeOnce.Do(func() { close(c.done) })
 }
 
+// addRoute registers a mapping from business chatID to hub senderID.
+// Called when a CLI client sends its first message, establishing the routing
+// so that subsequent server-initiated messages (progress, stream, cron) can
+// find the correct WebSocket client without needing transport metadata.
+func (h *Hub) addRoute(chatID, senderID string) {
+	h.mu.Lock()
+	h.routes[chatID] = senderID
+	h.mu.Unlock()
+}
+
+// removeRoute removes all routes pointing to a given senderID (on disconnect).
+func (h *Hub) removeRoutes(senderID string) {
+	h.mu.Lock()
+	for k, v := range h.routes {
+		if v == senderID {
+			delete(h.routes, k)
+		}
+	}
+	h.mu.Unlock()
+}
+
+// resolveRoute maps a business chatID to the hub senderID that can deliver it.
+// If no route exists, returns the input unchanged (e.g. web clients where
+// chatID == senderID already).
+func (h *Hub) resolveRoute(chatID string) string {
+	h.mu.RLock()
+	if senderID, ok := h.routes[chatID]; ok {
+		h.mu.RUnlock()
+		return senderID
+	}
+	h.mu.RUnlock()
+	return chatID
+}
+
 func (h *Hub) stopAll() {
 	h.mu.Lock()
-	for id, c := range h.clients {
-		c.closeDone()
-		delete(h.clients, id)
+	for _, m := range h.clients {
+		for _, c := range m {
+			c.closeDone()
+		}
 	}
+	h.clients = make(map[string]map[string]*Client)
 	h.mu.Unlock()
 }
 
@@ -235,6 +299,7 @@ type Client struct {
 	closeOnce sync.Once
 	hub       *Hub
 	userID    string
+	id        string // unique client ID (UUID), generated at connection time
 }
 
 // ---------------------------------------------------------------------------
@@ -805,11 +870,13 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 		done:   make(chan struct{}),
 		hub:    wc.hub,
 		userID: senderID,
+		id:     strings.ReplaceAll(uuid.New().String(), "-", ""),
 	}
 
-	wc.hub.addClient(senderID, client)
+	wc.hub.addClient(senderID, client.id, client)
 	log.WithFields(log.Fields{
 		"sender_id": senderID,
+		"client_id": client.id,
 		"username":  username,
 	}).Info("Web client connected")
 
@@ -889,7 +956,8 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	defer func() {
 		c.conn.Close()
 		c.closeDone()
-		wc.hub.removeClient(c.userID, c)
+		wc.hub.removeClient(c.userID, c.id)
+		wc.hub.removeRoutes(c.userID)
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()
 
@@ -1079,6 +1147,13 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				}
 				if msg.ChatType != "" {
 					msgChatType = msg.ChatType
+				}
+				// Register route: business chatID → hub senderID.
+				// Enables server-initiated messages (progress, stream, cron) to
+				// find the correct WS client without needing transport metadata.
+				// Safe to call on every message — it's an idempotent map write.
+				if msgChatID != c.userID {
+					wc.hub.addRoute(msgChatID, c.userID)
 				}
 			}
 

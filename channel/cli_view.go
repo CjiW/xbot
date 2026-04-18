@@ -65,7 +65,7 @@ func (m *cliModel) View() tea.View {
 		}
 		titleRight = dot + " remote · " + titleRight
 	}
-	if m.updateNotice != nil && m.updateNotice.HasUpdate {
+	if m.updateNotice != nil && m.updateNotice.HasUpdate && m.panelMode != "askuser" {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
 	// Runner status + identity indicator in title bar

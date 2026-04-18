@@ -341,6 +341,25 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				m.progress.CompletedTools = prev.CompletedTools
 			}
 		}
+		// Carry forward Reasoning/Thinking from previous progress within the same iteration.
+		// When a tool completes, the server sends a new progress event (Phase="tool") that
+		// may not include Reasoning — replacing progress would clear it mid-iteration.
+		if prev != nil {
+			sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
+			if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
+				m.progress.Reasoning = prev.Reasoning
+			}
+			if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
+				m.progress.Thinking = prev.Thinking
+			}
+			// ReasoningStreamContent: carry forward if new payload doesn't have it
+			// and we're still in reasoning streaming phase (no StreamContent yet).
+			if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
+				if m.progress.StreamContent == "" {
+					m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
+				}
+			}
+		}
 	}
 	// Preserve SubAgent tree across progress updates within the SAME iteration.
 	// Progress events may arrive with incomplete subagent data (missing deep

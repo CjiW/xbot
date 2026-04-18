@@ -501,15 +501,19 @@ func main() {
 					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
 				// Push runtime state to server
+				// enable_auto_compress is a legacy alias for context_mode.
+				// Only apply it if context_mode is NOT also being set.
+				if v, ok := values["enable_auto_compress"]; ok {
+					if _, hasContextMode := values["context_mode"]; !hasContextMode {
+						if v == "true" {
+							_ = app.backend.SetContextMode("auto")
+						} else {
+							_ = app.backend.SetContextMode("none")
+						}
+					}
+				}
 				if v, ok := values["context_mode"]; ok && v != "" {
 					_ = app.backend.SetContextMode(v)
-				}
-				if v, ok := values["enable_auto_compress"]; ok {
-					if v == "true" {
-						_ = app.backend.SetContextMode("auto")
-					} else {
-						_ = app.backend.SetContextMode("none")
-					}
 				}
 				if v, ok := values["max_iterations"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -533,9 +537,6 @@ func main() {
 				}
 				if v, ok := values["thinking_mode"]; ok {
 					_ = app.backend.SetUserThinkingMode("cli_user", v)
-				}
-				if v, ok := values["sandbox_mode"]; ok && v != "" {
-					app.backend.SetSandbox(nil, v)
 				}
 				return
 			}

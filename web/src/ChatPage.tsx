@@ -738,11 +738,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             prevIterationRef.current = -1
             progressRef.current = null
             reasoningRef.current = ''
-            streamingContentRef.current = ''
             setLoading(false)
 
             // Use accumulated streaming content if available, otherwise use server content
             const finalContent = streamingContentRef.current || data.content || ''
+            streamingContentRef.current = ''
 
             // Replace streaming placeholder with final message
             setMessages((prev) => {

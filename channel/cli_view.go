@@ -441,15 +441,15 @@ func (m *cliModel) titleText() string {
 		if u, err := url.Parse(host); err == nil && u.Host != "" {
 			host = u.Host
 		}
-		// ☁ color reflects connection state
+		// Connection state via plain Unicode symbol (no ANSI — colors break titleBar background)
 		var cloud string
 		switch m.connState {
 		case "connected":
-			cloud = m.styles.TodoDone.Render("☁")
+			cloud = "☁"
 		case "disconnected":
-			cloud = m.styles.ProgressError.Render("☁")
+			cloud = "⊘"
 		case "reconnecting":
-			cloud = m.styles.WarningSt.Render("☁")
+			cloud = "◌"
 		default:
 			cloud = "☁"
 		}

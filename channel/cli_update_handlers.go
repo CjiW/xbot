@@ -440,9 +440,9 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Clear lastCompletedTools to prevent stale tools from being
 			// re-snapshotted when the final iteration is snapshotted in handleAgentMessage.
 			m.lastCompletedTools = m.lastCompletedTools[:0]
+			m.lastSeenIteration = msg.payload.Iteration
+			m.iterationStartTime = time.Now()
 		}
-		m.lastSeenIteration = msg.payload.Iteration
-		m.iterationStartTime = time.Now()
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
 		// Accept all completed tools regardless of their Iteration field — they

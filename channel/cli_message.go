@@ -321,7 +321,7 @@ func (m *cliModel) resetProgressState() {
 	m.lastSeenIteration = 0
 	m.lastReasoning = ""
 	m.progress = nil
-	m.iterationStartTime = time.Time{}
+	m.iterationStartTime = time.Now() // wall-clock start for iteration 0
 	m.typingStartTime = time.Now()
 }
 
@@ -1194,19 +1194,12 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		thinkingGuide := s.ProgressIndent
 		hintStyle := s.ToolHint
 
-		// 统计总工具数和总耗时（使用 wall-clock 时间，非工具时间之和）
+		// 统计总工具数和总耗时
 		allTools, iterCount := msg.iterToolsFlat()
 		totalTools := len(allTools)
 		totalMs := int64(0)
 		for _, it := range msg.iterations {
-			if it.ElapsedWall > 0 {
-				totalMs += it.ElapsedWall
-			} else {
-				// Fallback: sum tool times for snapshots without wall-clock tracking
-				for _, tool := range it.Tools {
-					totalMs += tool.Elapsed
-				}
-			}
+			totalMs += it.ElapsedWall
 		}
 
 		var toolSb strings.Builder

@@ -66,18 +66,18 @@ func (m *cliModel) View() tea.View {
 	if m.senderID != "cli_user" {
 		titleRight = "👤 " + m.senderID + " · " + titleRight
 	}
-	// Remote mode: connection state dot — always last so nothing can overwrite it
+	// Remote mode: ☁ with connection-state color
 	if m.remoteMode {
-		var dot string
+		var cloud string
 		switch m.connState {
 		case "connected":
-			dot = "🟢"
+			cloud = m.styles.TodoDone.Render("☁")
 		case "disconnected":
-			dot = "🔴"
+			cloud = m.styles.ProgressError.Render("☁")
 		case "reconnecting":
-			dot = "🟡"
+			cloud = m.styles.WarningSt.Render("☁…")
 		}
-		titleRight = dot + " " + titleRight
+		titleRight = cloud + " " + titleRight
 	}
 	titlePad := m.width - lipgloss.Width(titleLeft) - lipgloss.Width(titleRight)
 	if titlePad < 1 {

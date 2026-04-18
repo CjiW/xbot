@@ -341,6 +341,7 @@ type WsProgressPayload struct {
 	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
 	CompletedTools []WsToolProgress    `json:"completed_tools,omitempty"`
 	Thinking       string              `json:"thinking,omitempty"`
+	Reasoning      string              `json:"reasoning,omitempty"`
 	SubAgents      []WsSubAgent        `json:"sub_agents,omitempty"`
 	TokenUsage     *WsTokenUsage       `json:"token_usage,omitempty"`
 	Todos          []WsTodoItem        `json:"todos,omitempty"`

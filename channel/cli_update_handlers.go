@@ -427,11 +427,15 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Iteration field because tools from earlier iterations may have been
 			// carried forward via the CompletedTools carry-forward logic.
 			prevIterTools := prev.CompletedTools
-			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
+			prevReasoning := prev.Reasoning
+			if prevReasoning == "" {
+				prevReasoning = prev.ReasoningStreamContent
+			}
+			if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
 				snap := cliIterationSnapshot{
 					Iteration:   m.lastSeenIteration,
 					Thinking:    prev.Thinking,
-					Reasoning:   prev.Reasoning,
+					Reasoning:   prevReasoning,
 					Tools:       prevIterTools,
 					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 				}
@@ -489,11 +493,14 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 						ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 					}
 					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
-					// > prev progress > PhaseDone payload
+					// > prev progress Reasoning > prev ReasoningStreamContent
+					// > PhaseDone payload Reasoning
 					if m.lastReasoning != "" {
 						snap.Reasoning = m.lastReasoning
 					} else if prev != nil && prev.Reasoning != "" {
 						snap.Reasoning = prev.Reasoning
+					} else if prev != nil && prev.ReasoningStreamContent != "" {
+						snap.Reasoning = prev.ReasoningStreamContent
 					} else if msg.payload.Reasoning != "" {
 						snap.Reasoning = msg.payload.Reasoning
 					}

@@ -468,6 +468,7 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 		Phase:     wp.Phase,
 		Iteration: wp.Iteration,
 		Thinking:  wp.Thinking,
+		Reasoning: wp.Reasoning,
 	}
 	for _, t := range wp.ActiveTools {
 		payload.ActiveTools = append(payload.ActiveTools, channel.CLIToolProgress{

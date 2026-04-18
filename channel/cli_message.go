@@ -587,8 +587,12 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		// is still running; clearing progress here would hide the progress panel
 		// and make it look like the turn ended prematurely.
 		if turnID == m.agentTurnID && m.progress != nil {
-			if m.progress.Reasoning != "" {
-				m.lastReasoning = m.progress.Reasoning
+			reasoning := m.progress.Reasoning
+			if reasoning == "" {
+				reasoning = m.progress.ReasoningStreamContent
+			}
+			if reasoning != "" {
+				m.lastReasoning = reasoning
 			}
 			if m.progress.Thinking != "" {
 				m.lastThinking = m.progress.Thinking

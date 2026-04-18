@@ -621,6 +621,12 @@ type cliConnStateMsg struct {
 	state string // "connected" | "disconnected" | "reconnecting"
 }
 
+// cliHistoryLoadMsg loads history messages into the model from a goroutine-safe context.
+// Data is pre-converted, so the Update handler only appends and rebuilds viewport.
+type cliHistoryLoadMsg struct {
+	history []cliMessage
+}
+
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 

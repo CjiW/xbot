@@ -376,22 +376,15 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 
 // LoadHistory loads session history into the CLI model.
 // Used by remote mode where history must be fetched via RPC after the WS connection
-// is established (HistoryLoader runs during NewCLIChannel, before backend.Start()).
-// If the model hasn't been created yet (before Run()), the history is cached and
-// applied when the model is initialized.
+// is established. Thread-safe: always goes through asyncCh to avoid racing with
+// BubbleTea's View (glamour is not goroutine-safe).
 func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 	if len(history) == 0 {
 		return
 	}
-	c.programMu.Lock()
-	defer c.programMu.Unlock()
-	if c.model == nil {
-		// Model not created yet — cache for later application in newCLIModel
-		c.pendingHistory = history
-		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Cached remote history (model not ready yet)")
-		return
-	}
-	for _, hm := range history {
+	// Pre-convert to cliMessage outside the event loop (cheap allocation).
+	msgs := make([]cliMessage, len(history))
+	for i, hm := range history {
 		cm := cliMessage{
 			role:      hm.Role,
 			content:   hm.Content,
@@ -401,18 +394,37 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 		}
 		if len(hm.Iterations) > 0 {
 			cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
-			for i, hi := range hm.Iterations {
-				cm.iterations[i] = cliIterationSnapshot(hi)
+			for j, hi := range hm.Iterations {
+				cm.iterations[j] = cliIterationSnapshot(hi)
 			}
 		}
-		c.model.messages = append(c.model.messages, cm)
+		msgs[i] = cm
 	}
-	c.model.invalidateAllCache(false)
-	c.model.updateViewportContent()
-	if c.model.streamingMsgIdx < 0 {
-		c.model.viewport.GotoBottom()
+
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model == nil {
+		// Model not created yet — cache for later application in newCLIModel
+		c.pendingHistory = history
+		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Cached remote history (model not ready yet)")
+		return
 	}
-	log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Restored session history (remote)")
+	if c.program == nil {
+		// Program not started yet (ensureModel path) — safe to mutate directly.
+		// View() hasn't been called, so no concurrent rendering.
+		c.model.messages = append(c.model.messages, msgs...)
+		c.model.invalidateAllCache(false)
+		c.model.updateViewportContent()
+		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Applied remote history (before program start)")
+		return
+	}
+	// Program is running — send through asyncCh to avoid racing with View()
+	// (glamour is not goroutine-safe).
+	select {
+	case c.asyncCh <- cliHistoryLoadMsg{history: msgs}:
+	default:
+		log.Warn("LoadHistory: asyncCh full, history not applied")
+	}
 }
 
 // SetTrimHistoryFn sets the callback for /rewind DB truncation.

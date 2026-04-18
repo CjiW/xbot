@@ -455,6 +455,17 @@ func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
 	case cliToastMsg:
 		cmds = append(cmds, m.handleToastMsg(msg)...)
 
+	case cliHistoryLoadMsg:
+		if len(msg.history) > 0 {
+			m.messages = append(m.messages, msg.history...)
+			m.invalidateAllCache(false)
+			m.updateViewportContent()
+			if m.streamingMsgIdx < 0 {
+				m.viewport.GotoBottom()
+			}
+			log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
+		}
+
 	case cliToastClearMsg:
 		cmds = append(cmds, m.handleToastClear(msg)...)
 

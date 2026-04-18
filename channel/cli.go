@@ -208,12 +208,34 @@ func (c *CLIChannel) Start() error {
 		}()
 	}
 
+	// --debug: start Unix socket for key injection
+	var debugSock *debugSockListener
+	if c.config.DebugMode {
+		sockPath, err := debugSockPath()
+		if err == nil {
+			debugSock, err = startDebugSock(sockPath, func(msg tea.Msg) {
+				c.program.Send(msg)
+			})
+			if err != nil {
+				log.WithError(err).Warn("Failed to start debug socket")
+			} else {
+				log.WithField("socket", sockPath).Info("Debug socket listening")
+			}
+		}
+	}
+
 	// 运行 Bubble Tea（阻塞）
 	if _, err := c.program.Run(); err != nil {
 		log.WithError(err).Error("CLI channel exited with error")
+		if debugSock != nil {
+			debugSock.Stop()
+		}
 		return err
 	}
 
+	if debugSock != nil {
+		debugSock.Stop()
+	}
 	log.Info("CLI channel stopped")
 	return nil
 }

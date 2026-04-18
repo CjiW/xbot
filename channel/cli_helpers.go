@@ -436,8 +436,11 @@ func (m *cliModel) clampPanelScroll(rawContent string) {
 
 // clampAskUserPanelScroll adjusts askPanelScrollY for the askuser split layout.
 // The visible height depends on viewport height + fixed chrome, not panelVisibleHeight().
+// Default scroll is 0 (show question at top), not bottom (hints).
+// Caches total line count in askPanelTotalLines for use by ensureAskUserVisible.
 func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	total := strings.Count(rawContent, "\n") + 1
+	m.askPanelTotalLines = total
 	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
 	panelBorder := 2
 	viewportH := m.layoutViewportHeight()
@@ -448,11 +451,6 @@ func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	if total <= visible {
 		m.askPanelScrollY = 0
 		return
-	}
-	// When content overflows, default to showing the bottom (hints) rather than the top.
-	// Only respect user's explicit scroll position if they've scrolled away from default.
-	if m.askPanelScrollY == 0 {
-		m.askPanelScrollY = total - visible
 	}
 	if m.askPanelScrollY < 0 {
 		m.askPanelScrollY = 0
@@ -472,27 +470,6 @@ func (m *cliModel) askUserPanelVisibleHeight() int {
 		return 3
 	}
 	return visible
-}
-
-// ensureAskPanelCursorVisible scrolls the askuser panel so the current cursor line is visible.
-func (m *cliModel) ensureAskPanelCursorVisible() {
-	if m.panelMode != "askuser" {
-		return
-	}
-	visible := m.askUserPanelVisibleHeight()
-	cursorLine := m.askCursorLine()
-	margin := 1
-	if cursorLine < m.askPanelScrollY+margin {
-		m.askPanelScrollY = max(0, cursorLine-margin)
-		return
-	}
-	bottom := m.askPanelScrollY + visible - 1 - margin
-	if cursorLine > bottom {
-		m.askPanelScrollY = cursorLine - visible + 1 + margin
-		if m.askPanelScrollY < 0 {
-			m.askPanelScrollY = 0
-		}
-	}
 }
 
 // applyLanguageChange applies a language/locale change and invalidates cache.

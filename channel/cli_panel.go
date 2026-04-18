@@ -169,6 +169,7 @@ func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]st
 	m.panelOptSel = make(map[int]map[int]bool)
 	m.panelOptCursor = make(map[int]int)
 	m.askPanelScrollY = 0
+	m.askPanelTotalLines = 0
 	ta := textarea.New()
 	ta.Placeholder = m.locale.PanelEditPlaceholder
 	ta.Prompt = "  "
@@ -1194,7 +1195,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 	}
 
-	// Panel-internal scroll for long content (PgUp/PgDn)
+	// Panel-internal scroll for long content.
+	// Two separate scroll targets:
+	//   Shift+↑/↓ — scroll the conversation viewport (history above)
+	//   Ctrl+↑/↓  — scroll the ask panel content (question/options)
+	//   PgUp/PgDn — scroll the ask panel content (page at a time)
 	switch {
 	case msg.String() == "ctrl+o":
 		// §11 Ctrl+O toggles tool summary expand/collapse — must work in askuser mode too
@@ -1213,6 +1218,16 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 	case msg.String() == "shift+down":
 		m.viewport.ScrollDown(1)
+		return true, m, nil
+	case msg.String() == "ctrl+up":
+		m.askPanelScrollY -= 1
+		if m.askPanelScrollY < 0 {
+			m.askPanelScrollY = 0
+		}
+		return true, m, nil
+	case msg.String() == "ctrl+down":
+		m.askPanelScrollY += 1
+		// clamp happens in View via clampAskUserPanelScroll
 		return true, m, nil
 	case msg.String() == "pgup":
 		m.askPanelScrollY -= 5
@@ -1262,13 +1277,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
-				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor > 0 {
 				m.panelOptCursor[m.panelTab] = cursor - 1
 			}
-			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()
@@ -1285,13 +1298,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 				if isLastTab {
 					m.panelOptCursor[m.panelTab] = numOpts + 1
 				}
-				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor < maxCursor {
 				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
-			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()
@@ -1468,51 +1479,7 @@ func (m *cliModel) restoreOtherInput() {
 	m.panelOtherTI.CursorEnd()
 }
 
-func (m *cliModel) askCursorLine() int {
-	if m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
-		return 0
-	}
-	line := 0
-	if len(m.panelItems) > 1 {
-		line += 2 // tab bar + blank line
-	}
-	item := m.panelItems[m.panelTab]
-	questionWidth := m.panelWidth(60)
-	qLines := len(strings.Split(truncateToWidth("❓ "+item.Question, questionWidth), "\n"))
-	if qLines < 1 {
-		qLines = 1
-	}
-	line += qLines
-	if len(item.Options) > 0 {
-		line += 1 // blank line before options
-		cursor := m.panelOptCursor[m.panelTab]
-		if cursor < 0 {
-			cursor = 0
-		}
-		if cursor < len(item.Options) {
-			return line + cursor
-		}
-		line += len(item.Options)
-		// Other input row
-		if cursor == len(item.Options) {
-			return line
-		}
-		line++
-		// Submit row (last tab only)
-		if m.panelTab == len(m.panelItems)-1 {
-			if cursor == len(item.Options)+1 {
-				return line
-			}
-		}
-		return line
-	}
-	// textarea mode: anchor near the bottom so expanded input stays visible
-	line += 1
-	line += max(0, m.panelAnswerTA.Height()-1)
-	return line
-}
-
-// autoExpandAskTA adjusts textarea height based on content.
+// autoExpandAskTA dynamically grows the textarea height based on content.
 func (m *cliModel) autoExpandAskTA() {
 	lines := strings.Count(m.panelAnswerTA.Value(), "\n") + 1
 	if lines < 2 {
@@ -1523,7 +1490,6 @@ func (m *cliModel) autoExpandAskTA() {
 	}
 	if m.panelAnswerTA.Height() != lines {
 		m.panelAnswerTA.SetHeight(lines)
-		m.ensureAskPanelCursorVisible()
 	}
 }
 
@@ -1847,21 +1813,16 @@ func (m *cliModel) viewAskUserPanel() string {
 		}
 	}
 
-	// Hints
+	// Hints — minimal: only what user needs to know
 	sb.WriteString("\n")
-	hints := []string{}
+	hints := []string{
+		"Shift+↑↓ history",
+		"Ctrl+↑↓/PgUp/PgDn question",
+	}
 	if len(m.panelItems) > 1 {
-		hints = append(hints, m.locale.PanelAskNav)
+		hints = append(hints, "←→/Tab switch")
 	}
-	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
-		item := m.panelItems[m.panelTab]
-		if len(item.Options) > 0 {
-			hints = append(hints, m.locale.PanelAskToggle, m.locale.PanelAskOther, m.locale.PanelAskSubmit)
-		} else {
-			hints = append(hints, m.locale.PanelAskNewline)
-		}
-	}
-	hints = append(hints, "Shift+↑↓ scroll history", "Ctrl+O expand tools", m.locale.PanelAskCancel)
+	hints = append(hints, "Enter submit", "Esc cancel")
 	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return sb.String()
@@ -2555,10 +2516,12 @@ func (m *cliModel) ensureAskUserVisible() {
 	if m.panelMode != "askuser" || m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
 		return
 	}
-	raw := m.viewAskUserPanel()
-	total := strings.Count(raw, "\n") + 1
-	visible := m.panelVisibleHeight()
+	visible := m.askUserPanelVisibleHeight()
 	if visible <= 0 {
+		return
+	}
+	total := m.askPanelTotalLines
+	if total == 0 {
 		return
 	}
 	if total <= visible {

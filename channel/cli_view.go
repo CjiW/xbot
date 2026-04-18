@@ -191,7 +191,7 @@ func (m *cliModel) View() tea.View {
 		scrollHint := ""
 		if totalAskLines > askVisibleH {
 			pct := (m.askPanelScrollY + askVisibleH) * 100 / totalAskLines
-			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] ↑↓PgUp/PgDn scroll", pct))
+			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] Ctrl+↑↓/PgUp/PgDn", pct))
 		}
 		content = fmt.Sprintf(
 			"%s\n%s\n%s%s%s",

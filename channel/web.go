@@ -918,7 +918,7 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()
 
-	c.conn.SetReadLimit(65536) // 64KB max message
+	c.conn.SetReadLimit(10 << 20) // 10MB max message (agent replies with code blocks can be large)
 	c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))

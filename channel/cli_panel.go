@@ -1719,7 +1719,6 @@ func (m *cliModel) viewAskUserPanel() string {
 	// §20 使用缓存样式
 	s := &m.styles
 	questionStyle := s.WarningSt.Bold(true)
-	hintStyle := s.PanelHint
 	activeTabStyle := s.PanelHeader
 	inactiveTabStyle := s.PanelDesc
 	checkStyle := s.ToolItem
@@ -1812,18 +1811,6 @@ func (m *cliModel) viewAskUserPanel() string {
 			sb.WriteString("\n")
 		}
 	}
-
-	// Hints — minimal: only what user needs to know
-	sb.WriteString("\n")
-	hints := []string{
-		"Shift+↑↓ history",
-		"Ctrl+↑↓/PgUp/PgDn question",
-	}
-	if len(m.panelItems) > 1 {
-		hints = append(hints, "←→/Tab switch")
-	}
-	hints = append(hints, "Enter submit", "Esc cancel")
-	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return sb.String()
 }

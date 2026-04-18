@@ -48,6 +48,10 @@ func (m *cliModel) View() tea.View {
 	titleLeft := m.titleText()
 	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
 	titleRight := m.locale.TitleHint
+	// Askuser panel: override titleRight with panel-specific hints (always visible)
+	if m.panelMode == "askuser" {
+		titleRight = m.askUserTitleHints()
+	}
 	// Remote mode: show connection state dot on right side
 	if m.remoteMode {
 		var dot string
@@ -466,6 +470,21 @@ func (m *cliModel) titleText() string {
 		return fmt.Sprintf(" %s [%s]", modeLabel, filepath.Base(m.workDir))
 	}
 	return " " + modeLabel
+}
+
+// ---------------------------------------------------------------------------
+// §14 Dynamic title bar hints
+// ---------------------------------------------------------------------------
+
+// askUserTitleHints returns the minimal control hints for the askuser panel,
+// displayed in the header bar so they're always visible regardless of scroll.
+func (m *cliModel) askUserTitleHints() string {
+	hints := []string{"Shift+↑↓ history", "Ctrl+↑↓/PgUp/PgDn question"}
+	if len(m.panelItems) > 1 {
+		hints = append(hints, "←→/Tab switch")
+	}
+	hints = append(hints, "Enter submit", "Esc cancel")
+	return strings.Join(hints, " · ")
 }
 
 // ---------------------------------------------------------------------------

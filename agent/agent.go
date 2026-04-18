@@ -1452,7 +1452,15 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 		}
 		if response != nil {
 			// Use sendMessage to ensure transport metadata is loaded for remote mode.
-			if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata); err != nil {
+			// Pass WaitingUser through metadata so sendMessage can propagate it.
+			meta := response.Metadata
+			if response.WaitingUser {
+				if meta == nil {
+					meta = make(map[string]string)
+				}
+				meta["__waiting_user"] = "true"
+			}
+			if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, meta); err != nil {
 				log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via sendMessage")
 			}
 		}
@@ -2123,6 +2131,12 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	}
 	if transportChatID := msg.Metadata["transport_chat_id"]; transportChatID != "" {
 		msg.ChatID = transportChatID
+	}
+
+	// Propagate WaitingUser from metadata signal (set by processMessage dispatch)
+	if msg.Metadata["__waiting_user"] == "true" {
+		msg.WaitingUser = true
+		delete(msg.Metadata, "__waiting_user")
 	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")

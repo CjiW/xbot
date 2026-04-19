@@ -514,6 +514,22 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 content: ap.stream_content,
               }])
             }
+            // Restore iteration history (completed iterations 1..N-1)
+            if (ap.iteration_history && ap.iteration_history.length > 0) {
+              const restoredIterations: IterationSnapshot[] = ap.iteration_history.map(
+                (iter: { iteration: number; thinking?: string; completed_tools?: { name: string; label?: string; status: string; summary?: string }[] }) => ({
+                  iteration: iter.iteration,
+                  thinking: iter.thinking || '',
+                  tools: (iter.completed_tools || []).map(t => ({
+                    name: t.name,
+                    label: t.label,
+                    status: t.status,
+                    summary: t.summary,
+                  })),
+                })
+              )
+              setLiveIterationsSync(restoredIterations)
+            }
           }
           // Store last_seq for WS sync handshake
           if (data.last_seq) {

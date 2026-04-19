@@ -250,6 +250,11 @@ type Agent struct {
 	// key: "channel:chatID" -> *channel.CLIProgressPayload
 	lastProgressSnapshot sync.Map
 
+	// iterationHistories stores completed iteration snapshots per active chat.
+	// key: "channel:chatID" -> *[]channel.CLIProgressPayload (one per completed iteration)
+	// On turn end, the entry is deleted.
+	iterationHistories sync.Map
+
 	// interactiveSubAgents stores interactive SubAgent sessions
 	// key: "channel:chatID/roleName" -> *interactiveAgent
 	// sync.Map provides atomic Load/Store/Delete/LoadOrStore, no additional mutex needed
@@ -1389,7 +1394,9 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			defer func() {
 				reqCancel()
 				a.chatCancelCh.Delete(cancelKey)
-				a.lastProgressSnapshot.Delete(msg.Channel + ":" + msg.ChatID)
+				key := msg.Channel + ":" + msg.ChatID
+				a.lastProgressSnapshot.Delete(key)
+				a.iterationHistories.Delete(key)
 				<-sem // 释放槽位
 			}()
 

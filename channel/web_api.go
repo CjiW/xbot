@@ -27,12 +27,19 @@ type historyResponse struct {
 }
 
 type histProgress struct {
-	Phase          string     `json:"phase,omitempty"`
+	Phase            string             `json:"phase,omitempty"`
+	Iteration        int                `json:"iteration"`
+	Thinking         string             `json:"thinking,omitempty"`
+	ActiveTools      []histTool         `json:"active_tools,omitempty"`
+	CompletedTools   []histTool         `json:"completed_tools,omitempty"`
+	StreamContent    string             `json:"stream_content,omitempty"`
+	IterationHistory []histIterSnapshot `json:"iteration_history,omitempty"` // completed iterations 1..N-1
+}
+
+type histIterSnapshot struct {
 	Iteration      int        `json:"iteration"`
 	Thinking       string     `json:"thinking,omitempty"`
-	ActiveTools    []histTool `json:"active_tools,omitempty"`
 	CompletedTools []histTool `json:"completed_tools,omitempty"`
-	StreamContent  string     `json:"stream_content,omitempty"`
 }
 
 type histTool struct {
@@ -165,6 +172,19 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 				hp.CompletedTools = append(hp.CompletedTools, histTool{
 					Name: t.Name, Label: t.Label, Status: t.Status, Summary: t.Summary,
 				})
+			}
+			// Attach iteration history (completed iterations 1..N-1)
+			for _, iter := range p.IterationHistory {
+				snap := histIterSnapshot{
+					Iteration: iter.Iteration,
+					Thinking:  iter.Thinking,
+				}
+				for _, t := range iter.CompletedTools {
+					snap.CompletedTools = append(snap.CompletedTools, histTool{
+						Name: t.Name, Label: t.Label, Status: t.Status, Summary: t.Summary,
+					})
+				}
+				hp.IterationHistory = append(hp.IterationHistory, snap)
 			}
 			activeProgress = hp
 		}

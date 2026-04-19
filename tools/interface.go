@@ -74,6 +74,10 @@ type ToolContext struct {
 	BgSessionKey string
 	// MessageSender allows sending messages to any Channel via Dispatcher.
 	MessageSender bus.MessageSender
+	// CreateGroupFn creates a group chat channel and registers it with the Dispatcher.
+	// Returns the group channel name (e.g., "group:rt1") on success.
+	// Injected by agent package to avoid tools→channel circular dependency.
+	CreateGroupFn func(groupID string, members []string, maxRounds int) (string, error)
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖

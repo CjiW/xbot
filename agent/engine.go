@@ -204,6 +204,9 @@ type RunConfig struct {
 	// MessageSender 允许 Agent 向任何 Channel 发消息（IM、Agent、Group）。
 	// nil = 不启用（SubAgent 继承主 Agent 的 MessageSender）。
 	MessageSender bus.MessageSender
+	// CreateGroupFn creates a group chat channel and registers it with the Dispatcher.
+	// Injected by agent package to avoid tools→channel circular dependency.
+	CreateGroupFn func(groupID string, members []string, maxRounds int) (string, error)
 
 	// OnIterationSnapshot is called after each iteration snapshot is created.
 	// Used by background interactive sessions to incrementally expose iteration
@@ -782,6 +785,8 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 	// 注入 MessageSender（Dispatcher 引用，允许 Agent 向任何 Channel 发消息）
 	tc.MessageSender = cfg.MessageSender
+	// 注入 CreateGroupFn（创建 GroupChannel 的回调，避免 tools→channel 循环依赖）
+	tc.CreateGroupFn = cfg.CreateGroupFn
 
 	// 注入 ToolContext extras (memory, MCP, etc.)
 

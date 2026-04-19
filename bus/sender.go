@@ -21,3 +21,17 @@ type ChannelLike interface {
 	Start() error
 	Stop()
 }
+
+// ResolveChannelName extracts the Dispatcher channel name from an address.
+// For IM addresses ("feishu:ou_xxx") it returns the protocol prefix ("feishu").
+// For agent/group addresses ("agent:reviewer-cr1", "group:rt1") it returns the full address.
+// Plain names pass through unchanged.
+func ResolveChannelName(addr string) string {
+	imPrefixes := []string{"feishu", "web", "qq", "cli"}
+	for _, prefix := range imPrefixes {
+		if len(addr) > len(prefix)+1 && addr[:len(prefix)+1] == prefix+":" {
+			return prefix
+		}
+	}
+	return addr
+}

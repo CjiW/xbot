@@ -3,28 +3,47 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"xbot/llm"
 )
 
+// groupCounter generates unique IDs for group channels.
+var groupCounter atomic.Int64
+
 // CreateChatTool creates a new conversation (agent private chat or group chat).
-// This replaces the SubAgent tool for creating agents, and adds group chat creation.
+// Agent type delegates to InteractiveSubAgentManager (existing SubAgent infrastructure).
+// Group type creates a GroupChannel and registers it with the Dispatcher.
 type CreateChatTool struct{}
 
 func (t *CreateChatTool) Name() string { return "CreateChat" }
 
 func (t *CreateChatTool) Description() string {
-	return `⚠️ NOT YET IMPLEMENTED — This tool is reserved for future use.
-
-Create a new conversation — either a private chat with a SubAgent or a group chat among multiple agents.
+	return `Create a new conversation — either a private chat with a SubAgent or a group chat among multiple agents.
 
 ## Types
-- "agent": Creates a new SubAgent session. The agent runs in the background.
-  Use SendMessage to send tasks and receive responses.
+- "agent": Creates a new interactive SubAgent session. The agent runs in the background.
+  Use SendMessage with the agent address to send follow-up tasks.
+  The agent auto-cleans when unloaded or when the parent session ends.
 - "group": Creates a group chat among multiple agents.
-  Use SendMessage to broadcast messages to all members.
+  Use SendMessage with the group address to broadcast to all members.
+  Members must be already-running interactive SubAgents.
 
-Currently returns "not implemented" error. Use the SubAgent tool to spawn agents instead.`
+## Agent type
+- Spawns an interactive SubAgent (same as SubAgent tool with interactive=true)
+- Returns an address like "agent:<role>/<instance>" for use with SendMessage
+- The SubAgent runs in background, processing messages via SendMessage
+
+## Group type
+- Creates a broadcast group among SubAgents
+- Members are specified as addresses (e.g., ["agent:reviewer/cr1", "agent:tester/ts1"])
+- Returns a group address like "group:<id>" for use with SendMessage
+- Group auto-closes after max_rounds (default 10)
+
+## Note
+CreateChat(agent) is equivalent to the SubAgent tool's interactive mode.
+For group chat with agent members, use the SubAgent tool with multiple interactive sessions
+and coordinate via SendMessage to each agent individually.`
 }
 
 type CreateChatParams struct {
@@ -58,10 +77,6 @@ func (t *CreateChatTool) Execute(ctx *ToolContext, raw string) (*ToolResult, err
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	if ctx.MessageSender == nil {
-		return nil, fmt.Errorf("message sending not available in this context")
-	}
-
 	switch params.Type {
 	case "agent":
 		return t.createAgentChat(ctx, &params)
@@ -80,16 +95,58 @@ func (t *CreateChatTool) createAgentChat(ctx *ToolContext, params *CreateChatPar
 		return nil, fmt.Errorf("instance is required for agent type")
 	}
 
-	// TODO: Full AgentChannel integration coming in next PR.
-	// Currently the SubAgent tool handles agent creation.
-	return nil, fmt.Errorf("CreateChat(agent) not yet implemented — use the SubAgent tool to spawn agents")
+	im, ok := ctx.Manager.(InteractiveSubAgentManager)
+	if !ok {
+		return nil, fmt.Errorf("interactive SubAgent not supported in this context")
+	}
+
+	// Load role definition
+	role, ok := loadRoleFromCtx(ctx, params.Role)
+	if !ok {
+		return nil, fmt.Errorf("unknown role: %s, see <available_agents> in system prompt", params.Role)
+	}
+
+	effectiveModel := params.ModelTier
+	if effectiveModel == "" {
+		effectiveModel = role.Model
+	}
+
+	// Spawn interactive SubAgent session
+	task := params.Task
+	if task == "" {
+		task = "Ready. Waiting for instructions."
+	}
+
+	result, err := im.SpawnInteractive(ctx, task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to spawn SubAgent %q (%s): %w", params.Role, params.Instance, err)
+	}
+
+	addr := "agent:" + params.Role + "/" + params.Instance
+	return NewResult(fmt.Sprintf("Created agent chat: %s\n%s\n\nUse SendMessage(to=\"%s\", message=\"...\") to send tasks.", addr, result, addr)), nil
 }
 
 func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatParams) (*ToolResult, error) {
 	if len(params.Members) < 2 {
-		return nil, fmt.Errorf("group requires at least 2 members")
+		return nil, fmt.Errorf("group requires at least 2 members, got %d", len(params.Members))
 	}
 
-	// TODO: Full GroupChannel integration coming in next PR.
-	return nil, fmt.Errorf("CreateChat(group) not yet implemented — group chat via Channel is coming soon")
+	if ctx.CreateGroupFn == nil {
+		return nil, fmt.Errorf("group chat not available in this context")
+	}
+
+	maxRounds := params.MaxRounds
+	if maxRounds <= 0 {
+		maxRounds = 10
+	}
+
+	// Generate unique group ID
+	groupID := fmt.Sprintf("g%d", groupCounter.Add(1))
+
+	groupName, err := ctx.CreateGroupFn(groupID, params.Members, maxRounds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create group: %w", err)
+	}
+
+	return NewResult(fmt.Sprintf("Created group chat: %s\nMembers: %v\nMax rounds: %d\n\nUse SendMessage(to=\"%s\", message=\"...\") to broadcast.", groupName, params.Members, maxRounds, groupName)), nil
 }

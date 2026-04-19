@@ -3,6 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"xbot/llm"
 )
@@ -18,8 +20,8 @@ func (t *SendMessageTool) Description() string {
 	return `Send a message to any addressable target (agent, group, or IM user).
 
 ## Addressing
-- Agent: "agent:<role>-<instance>" (e.g., "agent:reviewer-cr1")
-- Group: "group:<id>" (e.g., "group:roundtable")
+- Agent: "agent:<role>/<instance>" (e.g., "agent:reviewer/cr1")
+- Group: "group:<id>" (e.g., "group:g1")
 - IM user (Feishu): "feishu:<open_id>" (e.g., "feishu:ou_xxx")
 
 ## Behavior
@@ -51,15 +53,38 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	if ctx.MessageSender == nil {
-		return nil, fmt.Errorf("message sending not available in this context")
-	}
-
-	// Parse address: "agent:xxx" → channel="agent:xxx", chatID=""
-	// "feishu:ou_xxx" → channel="feishu", chatID="ou_xxx"
 	channelName, chatID := parseAddress(params.To)
 	if channelName == "" {
 		return nil, fmt.Errorf("invalid address format: %q", params.To)
+	}
+
+	// Agent addresses go through InteractiveSubAgentManager.SendInteractive
+	// (not Dispatcher, since SubAgents are not registered Channels).
+	if len(channelName) > 6 && channelName[:6] == "agent:" {
+		im, ok := ctx.Manager.(InteractiveSubAgentManager)
+		if !ok {
+			return nil, fmt.Errorf("agent messaging not available in this context")
+		}
+		// Parse "agent:<role>-<instance>" → role, instance
+		role, instance := parseAgentAddress(channelName)
+		if role == "" || instance == "" {
+			return nil, fmt.Errorf("invalid agent address %q: expected format agent:<role>-<instance>", params.To)
+		}
+		// Load role to get system prompt and capabilities for SendInteractive
+		roleDef, ok := loadRoleFromCtx(ctx, role)
+		if !ok {
+			return nil, fmt.Errorf("unknown agent role: %s", role)
+		}
+		result, err := im.SendInteractive(ctx, params.Message, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
+		if err != nil {
+			return nil, fmt.Errorf("agent send failed: %w", err)
+		}
+		return NewResult(result), nil
+	}
+
+	// Group and IM addresses go through Dispatcher
+	if ctx.MessageSender == nil {
+		return nil, fmt.Errorf("message sending not available in this context")
 	}
 
 	result, err := ctx.MessageSender.SendMessage(channelName, chatID, params.Message)
@@ -71,6 +96,48 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 		return NewResult(result), nil
 	}
 	return NewResult(fmt.Sprintf("Message sent to %s", params.To)), nil
+}
+
+// parseAgentAddress splits "agent:<role>/<instance>" into (role, instance).
+// Returns ("", "") if the format doesn't match.
+func parseAgentAddress(addr string) (role, instance string) {
+	// addr is already confirmed to start with "agent:"
+	rest := addr[6:]
+	idx := strings.Index(rest, "/")
+	if idx < 0 {
+		return "", ""
+	}
+	return rest[:idx], rest[idx+1:]
+}
+
+// loadRoleFromCtx loads a SubAgentRole using the ToolContext's sandbox and directory info.
+func loadRoleFromCtx(ctx *ToolContext, roleName string) (*SubAgentRole, bool) {
+	EnsureSynced(ctx)
+	originUserID := ctx.OriginUserID
+	if originUserID == "" {
+		originUserID = ctx.SenderID
+	}
+
+	var roleSb Sandbox
+	var roleUserID string
+	var userAgentDirs []string
+	if shouldUseSandbox(ctx) {
+		roleSb = ctx.Sandbox
+		roleUserID = originUserID
+		if sbDir := sandboxBaseDir(ctx); sbDir != "" {
+			userAgentDirs = append(userAgentDirs, filepath.Join(sbDir, "agents"))
+		}
+	} else {
+		if originUserID != "" && ctx.WorkingDir != "" {
+			userAgentDirs = append(userAgentDirs, UserAgentsRoot(ctx.WorkingDir, originUserID))
+		}
+		if ctx.WorkspaceRoot != "" {
+			userAgentDirs = append(userAgentDirs, filepath.Join(ctx.WorkspaceRoot, ".agents"))
+		}
+	}
+
+	role, ok := GetSubAgentRoleSandbox(ctx.Ctx, roleName, roleSb, roleUserID, userAgentDirs...)
+	return role, ok
 }
 
 // parseAddress splits an address into (channelName, chatID).

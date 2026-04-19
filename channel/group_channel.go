@@ -30,12 +30,23 @@ type GroupChannel struct {
 	roundCount atomic.Int32
 	closed     atomic.Bool
 	dispatcher *Dispatcher
-	mu         sync.Mutex
+	// sendToAgent sends a message to an agent member (agent:// routing).
+	// If nil, agent members are skipped during broadcast.
+	sendToAgent func(agentAddr, content string) (string, error)
+	mu          sync.Mutex
+}
+
+// GroupChannelOpt is a functional option for NewGroupChannel.
+type GroupChannelOpt func(*GroupChannel)
+
+// WithAgentSender sets the callback for sending messages to agent members.
+func WithAgentSender(fn func(agentAddr, content string) (string, error)) GroupChannelOpt {
+	return func(g *GroupChannel) { g.sendToAgent = fn }
 }
 
 // NewGroupChannel creates a new group chat channel.
-func NewGroupChannel(id, coordAddr string, members map[string]string, maxRounds int, dispatcher *Dispatcher) *GroupChannel {
-	return &GroupChannel{
+func NewGroupChannel(id, coordAddr string, members map[string]string, maxRounds int, dispatcher *Dispatcher, opts ...GroupChannelOpt) *GroupChannel {
+	g := &GroupChannel{
 		id:         id,
 		name:       "group:" + id,
 		members:    members,
@@ -43,6 +54,10 @@ func NewGroupChannel(id, coordAddr string, members map[string]string, maxRounds 
 		maxRounds:  maxRounds,
 		dispatcher: dispatcher,
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 // Name returns the channel name (e.g., "group:roundtable").
@@ -55,6 +70,7 @@ func (g *GroupChannel) Start() error { return nil }
 func (g *GroupChannel) Stop() { g.Close("stopped") }
 
 // Send broadcasts the message to all members via Dispatcher.
+// For agent:// members, uses the sendToAgent callback if available.
 // Uses fire-and-forget semantics: errors are logged but don't block.
 func (g *GroupChannel) Send(msg bus.OutboundMessage) (string, error) {
 	g.mu.Lock()
@@ -67,6 +83,20 @@ func (g *GroupChannel) Send(msg bus.OutboundMessage) (string, error) {
 	formatted := fmt.Sprintf("[Group %s] %s", g.id, msg.Content)
 	sent := 0
 	for memberAddr, channelName := range g.members {
+		// Check if this is an agent member
+		if len(memberAddr) > 6 && memberAddr[:6] == "agent:" {
+			if g.sendToAgent != nil {
+				if _, err := g.sendToAgent(memberAddr, formatted); err != nil {
+					log.WithError(err).WithField("member", memberAddr).Warn("Failed to broadcast to agent member")
+				} else {
+					sent++
+				}
+			} else {
+				log.WithField("member", memberAddr).Warn("Agent member skipped (no sendToAgent callback)")
+			}
+			continue
+		}
+		// IM/other channel member — send via Dispatcher
 		outMsg := bus.OutboundMessage{
 			Channel: channelName,
 			ChatID:  memberAddr,

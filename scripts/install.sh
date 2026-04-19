@@ -93,9 +93,9 @@ write_config() {
     local mode="$1" port="$2" token="$3"
     mkdir -p "$XBOT_HOME"
     require_cmd python3
-    python3 - "$CONFIG_PATH" "$mode" "$port" "$token" <<'PY'
+    python3 - "$CONFIG_PATH" "$mode" "$port" "$token" "$HOME" <<'PY'
 import json, os, sys
-path, mode, port, token = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+path, mode, port, token, home = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
 if os.path.exists(path):
     with open(path, 'r', encoding='utf-8') as f:
         try:
@@ -109,6 +109,7 @@ cfg.setdefault('server', {})
 cfg.setdefault('web', {})
 cfg.setdefault('cli', {})
 cfg.setdefault('admin', {})
+cfg.setdefault('agent', {})
 changes = []
 preserved = []
 
@@ -128,6 +129,8 @@ def set_always(section, key, value):
         preserved.append(f'{section}.{key}={old}')
 
 set_if_missing('admin', 'token', token)
+# Ensure agent.work_dir is set to user home so server has a stable working directory
+set_if_missing('agent', 'work_dir', home)
 if mode == 'server-client':
     set_if_missing('server', 'host', '127.0.0.1')
     set_always('server', 'port', port)
@@ -160,7 +163,7 @@ write_systemd_unit() {
     local xbot_home
     xbot_home="$(cd "$XBOT_HOME" && pwd)"
     local work_dir
-    work_dir="$(pwd)"
+    work_dir="$HOME"
     cat > "$unit_file" <<EOF_UNIT
 [Unit]
 Description=xbot Agent Server
@@ -212,6 +215,7 @@ install_launchd() {
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>${HOME}</string>
   <key>EnvironmentVariables</key><dict>
     <key>XBOT_HOME</key><string>${XBOT_HOME}</string>
   </dict>
@@ -289,7 +293,7 @@ main() {
     fi
 
     backup_config
-    CONFIG_UPDATE_OUTPUT="$(write_config "$MODE" "$PORT" "$TOKEN")"
+    CONFIG_UPDATE_OUTPUT="$(write_config "$MODE" "$PORT" "$TOKEN" "$HOME")"
     echo "$CONFIG_UPDATE_OUTPUT" | sed -n '/^CONFIG_CHANGES_BEGIN$/,/^CONFIG_CHANGES_END$/p' | sed '1d;$d' | while IFS= read -r line; do
         [ -n "$line" ] && info "Config set: $line"
     done

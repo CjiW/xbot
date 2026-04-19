@@ -7,6 +7,9 @@ import AssistantTurn from './components/AssistantTurn'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { WsProgressPayload, IterationSnapshot } from './components/ProgressPanel'
+import { getCodeBlockProps } from './components/CodeBlock'
+
+const codeBlockComponents = getCodeBlockProps()
 
 
 import TiptapEditor from './components/TiptapEditor'
@@ -253,7 +256,7 @@ function UserMessageContent({ content }: { content: string }) {
 
   // If no attachments found, render as normal markdown
   if (attachments.length === 0) {
-    return <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+    return <Markdown remarkPlugins={[remarkGfm]} components={codeBlockComponents}>{content}</Markdown>
   }
 
   // Split clean content by attachment placeholders and render interleaved
@@ -269,7 +272,7 @@ function UserMessageContent({ content }: { content: string }) {
       }
     } else if (part.trim()) {
       elements.push(
-        <Markdown key={`md-${elements.length}`} remarkPlugins={[remarkGfm]}>
+        <Markdown key={`md-${elements.length}`} remarkPlugins={[remarkGfm]} components={codeBlockComponents}>
           {part}
         </Markdown>
       )

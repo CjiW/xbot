@@ -34,18 +34,23 @@ body {
 .markdown-body h3 { font-size: 1.1em; font-weight: 600; margin: 0.5em 0; }
 .markdown-body h4 { font-size: 1em; font-weight: 600; margin: 0.5em 0; }
 .markdown-body p { margin: 0.4em 0; line-height: 1.65; }
+/* Inline code within markdown (not inside code blocks) */
 .markdown-body code {
   background: #1e293b;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.9em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.markdown-body pre {
+/* Fallback <pre> for un-enhanced code blocks (rare) */
+.markdown-body pre:not(.xbot-codeblock-pre) {
   background: #0d1117;
-  padding: 0;
+  padding: 12px 16px;
   border-radius: 8px;
   overflow-x: auto;
   margin: 0.5em 0;
+  border: 1px solid rgba(51, 65, 85, 0.4);
 }
 .markdown-body pre code {
   background: transparent;
@@ -436,8 +441,9 @@ body {
   background: #ddd9d4;
   color: #1e293b;
 }
-[data-theme="light"] .markdown-body pre {
+[data-theme="light"] .markdown-body pre:not(.xbot-codeblock-pre) {
   background: #eae7e2;
+  border-color: #d1cdc7;
 }
 [data-theme="light"] .markdown-body pre code {
   background: transparent;
@@ -519,47 +525,7 @@ body {
   color: #a8a29e;
 }
 
-/* ============ Code blocks (dark mode defaults) ============ */
-.xbot-codeblock {
-  position: relative;
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 0.5em 0;
-}
-.xbot-codeblock-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 12px;
-  background: #161b22;
-  font-size: 12px;
-  color: #8b949e;
-}
-.xbot-codeblock-pre {
-  padding: 12px 16px;
-  overflow-x: auto;
-  margin: 0;
-  background: #0d1117;
-}
-.xbot-codeblock-pre code {
-  background: transparent;
-  padding: 0;
-  font-size: 0.875em;
-}
-.xbot-codeblock-copy {
-  background: transparent;
-  border: none;
-  color: #8b949e;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.xbot-codeblock-copy:hover {
-  color: #c9d1d9;
-  background: rgba(255,255,255,0.1);
-}
+/* ============ Code blocks — see "Enhanced Code Block" section below for main styles ============ */
 
 /* Inline code (dark mode default) */
 .xbot-inline-code {
@@ -568,32 +534,11 @@ body {
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 0.9em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-/* ============ Code blocks (light mode) ============ */
-[data-theme="light"] .xbot-codeblock-header {
-  background: #e2dfda;
-  color: #57534e;
-  border-bottom: 1px solid #d1cdc7;
-}
-[data-theme="light"] .xbot-codeblock-pre {
-  background: #edeae5;
-  /* border removed — parent .xbot-codeblock already has border */
-}
-[data-theme="light"] .xbot-codeblock {
-  border: 1px solid #d1cdc7;
-}
-[data-theme="light"] .xbot-codeblock-copy {
-  color: #78716c;
-}
-[data-theme="light"] .xbot-codeblock-copy:hover {
-  color: #3d3833;
-  background: rgba(0,0,0,0.06);
-}
-[data-theme="light"] .xbot-inline-code {
-  background: #e2dfda;
-  color: #1e293b;
-}
+/* ============ Code blocks light mode — see Enhanced Code Block section ============ */
 
 /* User message bubble inline code: override for blue background */
 .bg-blue-600 .xbot-inline-code,
@@ -2614,11 +2559,13 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
 /* ========================================================================== */
 
 .xbot-codeblock {
+  position: relative;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgba(51, 65, 85, 0.5);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   transition: border-color 0.2s ease;
+  margin: 0.5em 0;
 }
 
 .xbot-codeblock:hover {
@@ -2633,6 +2580,7 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
   align-items: center;
   border-bottom: 1px solid rgba(51, 65, 85, 0.3);
   font-size: 12px;
+  color: #8b949e;
 }
 
 .xbot-codeblock-copy {
@@ -2655,8 +2603,16 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
   margin: 0;
   padding: 12px 16px;
   overflow-x: auto;
+  background: #0d1117;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.xbot-codeblock-pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.875em;
+  border-radius: 0;
 }
 
 /* Inline code enhancement */
@@ -2667,6 +2623,44 @@ body, .markdown-body, .tiptap-wrapper .tiptap-editor p {
   font-size: 0.88em;
   border: 1px solid rgba(51, 65, 85, 0.3);
   color: #93c5fd;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Light mode overrides for code blocks */
+[data-theme="light"] .xbot-codeblock {
+  border-color: #d1cdc7;
+  box-shadow: 0 2px 8px rgba(28, 25, 23, 0.08);
+}
+
+[data-theme="light"] .xbot-codeblock:hover {
+  border-color: #bbb7b0;
+}
+
+[data-theme="light"] .xbot-codeblock-header {
+  background: linear-gradient(135deg, #e2dfda, #ddd9d4);
+  color: #57534e;
+  border-bottom-color: #d1cdc7;
+}
+
+[data-theme="light"] .xbot-codeblock-pre {
+  background: #edeae5;
+}
+
+[data-theme="light"] .xbot-codeblock-copy {
+  color: #78716c;
+  background: rgba(28, 25, 23, 0.06);
+}
+
+[data-theme="light"] .xbot-codeblock-copy:hover {
+  color: #3d3833;
+  background: rgba(28, 25, 23, 0.12);
+}
+
+[data-theme="light"] .xbot-inline-code {
+  background: #e2dfda;
+  color: #1e293b;
+  border-color: #d1cdc7;
 }
 
 /* ========================================================================== */

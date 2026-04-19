@@ -1178,16 +1178,16 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 		sessions := backend.ListInteractiveSessions("web", senderID)
 		result := make([]channel.SessionInfo, len(sessions))
 		for i, s := range sessions {
-		result[i] = channel.ChatRoom{
-			ID:       s.Role + "/" + s.Instance,
-			Type:     "subagent",
-			Label:    s.Role + "/" + s.Instance,
-			Role:     s.Role,
-			Instance: s.Instance,
-			Running:  s.Running,
-			Preview:  s.Preview,
-			Members:  "Agent ↔ " + s.Role,
-		}
+			result[i] = channel.ChatRoom{
+				ID:       s.Role + "/" + s.Instance,
+				Type:     "subagent",
+				Label:    s.Role + "/" + s.Instance,
+				Role:     s.Role,
+				Instance: s.Instance,
+				Running:  s.Running,
+				Preview:  s.Preview,
+				Members:  "Agent ↔ " + s.Role,
+			}
 		}
 		return result
 	}
@@ -1195,11 +1195,11 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	callbacks.SessionMessages = func(senderID, roleName, instance string) ([]channel.SessionChatMessage, bool) {
 		msgs, ok := backend.GetSessionMessages("web", senderID, roleName, instance)
 		if !ok {
-		return nil, false
+			return nil, false
 		}
 		result := make([]channel.SessionChatMessage, len(msgs))
 		for i, m := range msgs {
-		result[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
+			result[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
 		}
 		return result, true
 	}
@@ -1207,22 +1207,22 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	// Wire ChatList — list user's chatrooms
 	callbacks.ChatList = func(senderID, currentChatID string) ([]channel.UserChatWithPreview, error) {
 		if webDB == nil {
-		return nil, nil
+			return nil, nil
 		}
 		cs := sqlite.NewChatService(webDB)
 		chats, err := cs.ListUserChats("web", senderID, currentChatID)
 		if err != nil {
-		return nil, err
+			return nil, err
 		}
 		result := make([]channel.UserChatWithPreview, len(chats))
 		for i, c := range chats {
-		result[i] = channel.UserChatWithPreview{
-			ChatID:     c.ChatID,
-			Label:      c.Label,
-			LastActive: c.LastActive.Format(time.RFC3339),
-			Preview:    c.Preview,
-			IsCurrent:  c.IsCurrent,
-		}
+			result[i] = channel.UserChatWithPreview{
+				ChatID:     c.ChatID,
+				Label:      c.Label,
+				LastActive: c.LastActive.Format(time.RFC3339),
+				Preview:    c.Preview,
+				IsCurrent:  c.IsCurrent,
+			}
 		}
 		return result, nil
 	}
@@ -1230,7 +1230,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	// Wire ChatCreate — create new chatroom
 	callbacks.ChatCreate = func(senderID, label string) (string, error) {
 		if webDB == nil {
-		return "", fmt.Errorf("database not available")
+			return "", fmt.Errorf("database not available")
 		}
 		cs := sqlite.NewChatService(webDB)
 		return cs.CreateChat("web", senderID, label)
@@ -1239,7 +1239,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	// Wire ChatDelete — delete chatroom
 	callbacks.ChatDelete = func(senderID, chatID string) error {
 		if webDB == nil {
-		return fmt.Errorf("database not available")
+			return fmt.Errorf("database not available")
 		}
 		cs := sqlite.NewChatService(webDB)
 		return cs.DeleteChat("web", senderID, chatID)
@@ -1248,7 +1248,7 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sq
 	// Wire ChatRename — rename chatroom
 	callbacks.ChatRename = func(senderID, chatID, label string) error {
 		if webDB == nil {
-		return fmt.Errorf("database not available")
+			return fmt.Errorf("database not available")
 		}
 		cs := sqlite.NewChatService(webDB)
 		return cs.RenameChat("web", senderID, chatID, label)
@@ -1562,7 +1562,7 @@ func Run(args []string) error {
 		// Build member map: address → channel name in Dispatcher
 		memberMap := make(map[string]string, len(members))
 		for _, addr := range members {
-		memberMap[addr] = bus.ResolveChannelName(addr)
+			memberMap[addr] = bus.ResolveChannelName(addr)
 		}
 		gc := channel.NewGroupChannel(groupID, "", memberMap, maxRounds, disp)
 		disp.Register(gc)

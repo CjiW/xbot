@@ -776,7 +776,7 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.BgTaskManager = cfg.BgTaskManager
 		sessionKey := cfg.SessionKey
 		if sessionKey == "" {
-		sessionKey = cfg.Channel + ":" + cfg.ChatID
+			sessionKey = cfg.Channel + ":" + cfg.ChatID
 		}
 		tc.BgSessionKey = sessionKey
 		// NOTE: OnComplete callback registration moved to Agent.bgNotifyLoop.

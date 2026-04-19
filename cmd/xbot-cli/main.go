@@ -990,17 +990,17 @@ func main() {
 	app.backend.SetDirectSend(disp.SendDirect)
 	app.backend.SetChannelFinder(disp.GetChannel)
 	if lb, ok := app.backend.(*agent.LocalBackend); ok {
-			lb.Agent().SetMessageSender(disp)
-			lb.Agent().SetCreateGroupFn(func(groupID string, members []string, maxRounds int) (string, error) {
-				memberMap := make(map[string]string, len(members))
-				for _, addr := range members {
-					memberMap[addr] = bus.ResolveChannelName(addr)
-				}
-				gc := channel.NewGroupChannel(groupID, "", memberMap, maxRounds, disp)
-				disp.Register(gc)
-				return gc.Name(), nil
-			})
-		}
+		lb.Agent().SetMessageSender(disp)
+		lb.Agent().SetCreateGroupFn(func(groupID string, members []string, maxRounds int) (string, error) {
+			memberMap := make(map[string]string, len(members))
+			for _, addr := range members {
+				memberMap[addr] = bus.ResolveChannelName(addr)
+			}
+			gc := channel.NewGroupChannel(groupID, "", memberMap, maxRounds, disp)
+			disp.Register(gc)
+			return gc.Name(), nil
+		})
+	}
 
 	// 注入 CLI 渠道特化 prompt 提供者
 	app.backend.SetChannelPromptProviders(&channel.CliPromptProvider{})

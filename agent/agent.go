@@ -833,7 +833,7 @@ func New(cfg Config) (*Agent, error) {
 			tools.NewTimingHook(),
 			tools.NewApprovalHook(nil), // handler set later by channel when available
 		),
-		bgTaskMgr:   tools.NewBackgroundTaskManager(),
+		bgTaskMgr: tools.NewBackgroundTaskManager(),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）

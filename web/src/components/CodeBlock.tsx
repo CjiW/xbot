@@ -187,6 +187,11 @@ export function getCodeBlockProps() {
     a(props: { href?: string; children?: React.ReactNode }) {
       return <a href={props.href} target="_blank" rel="noopener noreferrer">{props.children}</a>
     },
+    pre(props: { children?: React.ReactNode }) {
+      // Unwrap react-markdown's outer <pre> — the code component already
+      // renders its own container (.xbot-codeblock / .mermaid-wrapper / etc.)
+      return <>{props.children}</>
+    },
     table(props: { children?: React.ReactNode }) {
       return <div className="table-wrapper"><table>{props.children}</table></div>
     },

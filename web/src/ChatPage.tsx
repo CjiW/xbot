@@ -647,6 +647,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                   phase: 'thinking',
                   iteration: prevIterationRef.current >= 0 ? prevIterationRef.current : 0,
                   thinking: reasoningRef.current,
+                  active_tools: [],
+                  completed_tools: [],
                 }
                 progressRef.current = p
                 prevIterationRef.current = p.iteration
@@ -690,7 +692,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                     phase: 'done' as const,
                     iteration: prevIterationRef.current >= 0 ? prevIterationRef.current : 0,
                     thinking: accumulatedReasoning,
-                  })
+                    active_tools: [],
+                    completed_tools: [],
+                  } as WsProgressPayload)
                 : null
 
             // Build current iteration snapshot — prefer reasoningRef over progress thinking
@@ -1180,7 +1184,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             const isActive = loading || progress !== null
             if (turn.type === 'user') {
 	              const content = (
-	                <div className="flex justify-end msg-fade-in" data-msg-id={turn.message.id}>
+	                <div className="flex justify-end" data-msg-id={turn.message.id}>
 	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
 		                    <UserMessageContent content={turn.message.content} />
 	                    {turn.message.ts && (

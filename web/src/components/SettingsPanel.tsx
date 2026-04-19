@@ -52,7 +52,7 @@ function lsSet<K extends keyof UserSettings>(key: K, value: UserSettings[K]) {
   localStorage.setItem(LS_KEYS[key], value as string)
 }
 
-async function fetchSettings(): Promise<UserSettings> {
+async function fetchSettings(): Promise<UserSettings & Record<string, string>> {
   try {
     const resp = await fetch('/api/settings')
     const data = await resp.json()
@@ -63,6 +63,16 @@ async function fetchSettings(): Promise<UserSettings> {
         nickname: data.settings.nickname || lsGet('nickname', DEFAULT_SETTINGS.nickname),
         language: (data.settings.language as Language) || lsGet('language', DEFAULT_SETTINGS.language),
         preset_commands: data.settings.preset_commands,
+        // Agent settings
+        context_mode: data.settings.context_mode || 'auto',
+        max_iterations: data.settings.max_iterations || '2000',
+        max_concurrency: data.settings.max_concurrency || '3',
+        max_context_tokens: data.settings.max_context_tokens || '200000',
+        max_output_tokens: data.settings.max_output_tokens || '8192',
+        thinking_mode: data.settings.thinking_mode ?? '',
+        enable_auto_compress: data.settings.enable_auto_compress ?? 'true',
+        enable_stream: data.settings.enable_stream ?? 'true',
+        enable_masking: data.settings.enable_masking ?? 'true',
       }
     }
   } catch {
@@ -90,7 +100,7 @@ async function saveSettings(settings: Partial<UserSettings>): Promise<boolean> {
   }
 }
 
-type TabId = 'appearance' | 'presets' | 'llm' | 'runner' | 'market'
+type TabId = 'appearance' | 'agent' | 'presets' | 'llm' | 'runner' | 'market'
 
 interface MarketEntry {
   id: number
@@ -111,6 +121,7 @@ interface MyMarketEntry {
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'appearance', label: '外观', icon: '🎨' },
+  { id: 'agent', label: 'Agent', icon: '🤖' },
   { id: 'presets', label: '快捷指令', icon: '⚡' },
   { id: 'llm', label: 'LLM', icon: '🧠' },
   { id: 'runner', label: 'Runner', icon: '🖥️' },
@@ -165,6 +176,21 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   const [llmMaxContext, setLlmMaxContext] = useState<number>(0)
   const [llmMaxContextSaving, setLlmMaxContextSaving] = useState(false)
 
+  // Agent settings state (user-scoped, stored in user_settings table)
+  const [agentSettings, setAgentSettings] = useState<Record<string, string>>({
+    context_mode: 'auto',
+    max_iterations: '2000',
+    max_concurrency: '3',
+    max_context_tokens: '200000',
+    max_output_tokens: '8192',
+    thinking_mode: '',
+    enable_auto_compress: 'true',
+    enable_stream: 'true',
+    enable_masking: 'true',
+    language: '',
+  })
+  const [agentSaving, setAgentSaving] = useState(false)
+
   const [llmFormProvider, setLlmFormProvider] = useState('openai')
   const [llmFormBaseUrl, setLlmFormBaseUrl] = useState('')
   const [llmFormApiKey, setLlmFormApiKey] = useState('')
@@ -177,10 +203,10 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   useEffect(() => {
     if (!open) return
     fetchSettings().then((s) => {
-      setTheme(s.theme)
-      setFontSize(s.font_size)
+      setTheme(s.theme as Theme)
+      setFontSize(s.font_size as FontSize)
       setNickname(s.nickname)
-      setLanguage(s.language)
+      setLanguage(s.language as Language)
       // Load presets from the same response
       if (s.preset_commands) {
         try {
@@ -188,6 +214,19 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           if (Array.isArray(parsed)) setPresetList(parsed)
         } catch { /* ignore */ }
       }
+      // Load agent settings
+      setAgentSettings({
+        context_mode: s.context_mode || 'auto',
+        max_iterations: s.max_iterations || '2000',
+        max_concurrency: s.max_concurrency || '3',
+        max_context_tokens: s.max_context_tokens || '200000',
+        max_output_tokens: s.max_output_tokens || '8192',
+        thinking_mode: s.thinking_mode ?? '',
+        enable_auto_compress: s.enable_auto_compress ?? 'true',
+        enable_stream: s.enable_stream ?? 'true',
+        enable_masking: s.enable_masking ?? 'true',
+        language: s.language || '',
+      })
     })
   }, [open])
 
@@ -409,6 +448,20 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
   }, [llmMaxContext])
 
 
+  // Agent settings save handler
+  const saveAgentSetting = useCallback(async (key: string, value: string) => {
+    setAgentSaving(true)
+    const ok = await saveSettings({ [key]: value })
+    if (ok) {
+      setAgentSettings(prev => ({ ...prev, [key]: value }))
+      showToast('设置已保存', 'success')
+    } else {
+      showToast('保存失败', 'error')
+    }
+    setAgentSaving(false)
+  }, [showToast])
+
+
   // Market functions
   const loadMarket = useCallback(async () => {
     setMarketLoading(true)
@@ -618,6 +671,161 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                 <option value="zh-CN">简体中文</option>
                 <option value="en">English</option>
               </select>
+            </div>
+          </div>
+        )}
+
+        {/* ── Agent 设置 ── */}
+        {activeTab === 'agent' && (
+          <div className={sectionClass}>
+            <div className={sectionTitleClass}>🤖 Agent 设置</div>
+            <p className="text-xs text-slate-500 mb-3">
+              控制 Agent 的行为参数。修改后立即生效。
+            </p>
+
+            <div className="settings-item">
+              <label className="settings-label">上下文模式 Context Mode</label>
+              <select
+                className="settings-select"
+                value={agentSettings.context_mode}
+                onChange={(e) => saveAgentSetting('context_mode', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="auto">自动（默认）</option>
+                <option value="manual">手动压缩</option>
+                <option value="none">不压缩</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">控制上下文管理策略</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">最大迭代次数 Max Iterations</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={agentSettings.max_iterations}
+                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_iterations: e.target.value }))}
+                onBlur={() => saveAgentSetting('max_iterations', agentSettings.max_iterations)}
+                min={1}
+                step={100}
+              />
+              <div className="text-[11px] text-slate-500 mt-1">单次对话最大工具调用迭代次数</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">最大并发数 Max Concurrency</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={agentSettings.max_concurrency}
+                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_concurrency: e.target.value }))}
+                onBlur={() => saveAgentSetting('max_concurrency', agentSettings.max_concurrency)}
+                min={1}
+                max={10}
+              />
+              <div className="text-[11px] text-slate-500 mt-1">同时处理的最大请求数</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">最大上下文 Token Max Context Tokens</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={agentSettings.max_context_tokens}
+                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_context_tokens: e.target.value }))}
+                onBlur={() => saveAgentSetting('max_context_tokens', agentSettings.max_context_tokens)}
+                min={0}
+                step={10000}
+              />
+              <div className="text-[11px] text-slate-500 mt-1">上下文最大 token 数，0 使用系统默认</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">最大输出 Token Max Output Tokens</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={agentSettings.max_output_tokens}
+                onChange={(e) => setAgentSettings(prev => ({ ...prev, max_output_tokens: e.target.value }))}
+                onBlur={() => saveAgentSetting('max_output_tokens', agentSettings.max_output_tokens)}
+                min={0}
+                step={256}
+              />
+              <div className="text-[11px] text-slate-500 mt-1">单次回复最大 token 数</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">思考模式 Thinking Mode</label>
+              <select
+                className="settings-select"
+                value={agentSettings.thinking_mode}
+                onChange={(e) => saveAgentSetting('thinking_mode', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="">自动（默认）</option>
+                <option value="enabled">开启</option>
+                <option value='{"type":"enabled","clear_thinking":false}'>开启（保留历史推理）</option>
+                <option value="disabled">关闭</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">模型推理/思维链模式</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">自动压缩 Auto Compress</label>
+              <select
+                className="settings-select"
+                value={agentSettings.enable_auto_compress}
+                onChange={(e) => saveAgentSetting('enable_auto_compress', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="true">开启（默认）</option>
+                <option value="false">关闭</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">上下文过长时自动压缩</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">流式输出 Stream</label>
+              <select
+                className="settings-select"
+                value={agentSettings.enable_stream}
+                onChange={(e) => saveAgentSetting('enable_stream', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="true">开启（默认）</option>
+                <option value="false">关闭</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">使用流式 API 调用 LLM，实时显示回复内容</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">工具结果遮蔽 Tool Result Masking</label>
+              <select
+                className="settings-select"
+                value={agentSettings.enable_masking}
+                onChange={(e) => saveAgentSetting('enable_masking', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="true">开启（默认）</option>
+                <option value="false">关闭</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">上下文较大时自动遮蔽旧工具结果以释放空间</div>
+            </div>
+
+            <div className="settings-item">
+              <label className="settings-label">回复语言 Language</label>
+              <select
+                className="settings-select"
+                value={agentSettings.language}
+                onChange={(e) => saveAgentSetting('language', e.target.value)}
+                disabled={agentSaving}
+              >
+                <option value="">跟随 Prompt（默认）</option>
+                <option value="en">English</option>
+                <option value="zh">中文</option>
+                <option value="ja">日本語</option>
+              </select>
+              <div className="text-[11px] text-slate-500 mt-1">Agent 回复使用的语言</div>
             </div>
           </div>
         )}

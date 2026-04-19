@@ -185,7 +185,7 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
   const shouldShowCurrentThinking = currentThinking.length > 0 && !seenThinkings.has(currentThinking)
 
   return (
-    <div className="flex justify-start msg-fade-in">
+    <div className="flex justify-start">
       <div className="assistant-turn-container">
         {/* Collapsible: Thinking section */}
         {thinkingMsgs.length > 0 && (

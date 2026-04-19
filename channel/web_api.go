@@ -1379,3 +1379,125 @@ func snippetAround(content, queryLower string) string {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": msgs})
 	}
+
+	// ── Chatroom Management APIs ──
+
+	// handleChats handles GET/POST /api/chats — list or create chatrooms.
+	func (wc *WebChannel) handleChats(w http.ResponseWriter, r *http.Request) {
+		senderID := senderIDFromContext(r.Context())
+		if senderID == "" {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			if wc.callbacks.ChatList == nil {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chats": []any{}})
+				return
+			}
+			currentChatID := wc.getCurrentChatID(senderID)
+			chats, err := wc.callbacks.ChatList(senderID, currentChatID)
+			if err != nil {
+				jsonErrorResponse(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chats": chats})
+
+		case http.MethodPost:
+			if wc.callbacks.ChatCreate == nil {
+				jsonErrorResponse(w, http.StatusNotImplemented, "chat creation not available")
+				return
+			}
+			var body struct {
+				Label string `json:"label"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				jsonErrorResponse(w, http.StatusBadRequest, "invalid body")
+				return
+			}
+			chatID, err := wc.callbacks.ChatCreate(senderID, body.Label)
+			if err != nil {
+				jsonErrorResponse(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chat_id": chatID})
+
+		default:
+			jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+
+	// handleChatSwitch handles POST /api/chats/{chatID}/switch — switch active chatroom.
+	func (wc *WebChannel) handleChatSwitch(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		senderID := senderIDFromContext(r.Context())
+		if senderID == "" {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		chatID := r.PathValue("chatID")
+		if chatID == "" {
+			jsonErrorResponse(w, http.StatusBadRequest, "chat_id is required")
+			return
+		}
+
+		wc.userCurrentChatMu.Lock()
+		wc.userCurrentChat[senderID] = chatID
+		wc.userCurrentChatMu.Unlock()
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chat_id": chatID})
+	}
+
+	// handleChatDelete handles DELETE /api/chats/{chatID} — delete a chatroom.
+	func (wc *WebChannel) handleChatDelete(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		senderID := senderIDFromContext(r.Context())
+		if senderID == "" {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		chatID := r.PathValue("chatID")
+		if chatID == "" {
+			jsonErrorResponse(w, http.StatusBadRequest, "chat_id is required")
+			return
+		}
+
+		if wc.callbacks.ChatDelete == nil {
+			jsonErrorResponse(w, http.StatusNotImplemented, "chat deletion not available")
+			return
+		}
+
+		if err := wc.callbacks.ChatDelete(senderID, chatID); err != nil {
+			jsonErrorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		// If deleting current chat, switch back to default
+		wc.userCurrentChatMu.Lock()
+		if wc.userCurrentChat[senderID] == chatID {
+			delete(wc.userCurrentChat, senderID)
+		}
+		wc.userCurrentChatMu.Unlock()
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+
+	// getCurrentChatID returns the currently active chatID for a user.
+	// Defaults to senderID (backward compatible).
+	func (wc *WebChannel) getCurrentChatID(senderID string) string {
+		wc.userCurrentChatMu.RLock()
+		defer wc.userCurrentChatMu.RUnlock()
+		if id, ok := wc.userCurrentChat[senderID]; ok {
+			return id
+		}
+		return senderID
+	}

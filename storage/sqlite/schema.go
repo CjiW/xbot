@@ -98,7 +98,7 @@ END;
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version (version) VALUES (18);
+INSERT INTO schema_version (version) VALUES (30);
 
 CREATE TABLE runner_tokens (
     user_id     TEXT PRIMARY KEY,
@@ -205,6 +205,17 @@ CREATE TABLE event_triggers (
 );
 CREATE INDEX idx_event_triggers_sender ON event_triggers(sender_id);
 CREATE INDEX idx_event_triggers_type ON event_triggers(event_type, enabled);
+
+CREATE TABLE user_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(channel, sender_id, chat_id)
+);
+CREATE INDEX idx_user_chats_sender ON user_chats(channel, sender_id);
 `
 	if _, err := db.Conn().Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)

@@ -971,7 +971,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 }
 
 // buildWebCallbacks creates WebCallbacks with all Runner/Registry closures.
-func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.WebCallbacks {
+func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend, webDB *sql.DB) channel.WebCallbacks {
 	callbacks := channel.WebCallbacks{
 		RunnerTokenGet: func(senderID string) string {
 			db := tools.GetRunnerTokenDB()
@@ -1203,6 +1203,56 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 		}
 		return result, true
 	}
+
+	// Wire ChatList — list user's chatrooms
+	callbacks.ChatList = func(senderID, currentChatID string) ([]channel.UserChatWithPreview, error) {
+		if webDB == nil {
+		return nil, nil
+		}
+		cs := sqlite.NewChatService(webDB)
+		chats, err := cs.ListUserChats("web", senderID, currentChatID)
+		if err != nil {
+		return nil, err
+		}
+		result := make([]channel.UserChatWithPreview, len(chats))
+		for i, c := range chats {
+		result[i] = channel.UserChatWithPreview{
+			ChatID:     c.ChatID,
+			Label:      c.Label,
+			LastActive: c.LastActive.Format(time.RFC3339),
+			Preview:    c.Preview,
+			IsCurrent:  c.IsCurrent,
+		}
+		}
+		return result, nil
+	}
+
+	// Wire ChatCreate — create new chatroom
+	callbacks.ChatCreate = func(senderID, label string) (string, error) {
+		if webDB == nil {
+		return "", fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.CreateChat("web", senderID, label)
+	}
+
+	// Wire ChatDelete — delete chatroom
+	callbacks.ChatDelete = func(senderID, chatID string) error {
+		if webDB == nil {
+		return fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.DeleteChat("web", senderID, chatID)
+	}
+
+	// Wire ChatRename — rename chatroom
+	callbacks.ChatRename = func(senderID, chatID, label string) error {
+		if webDB == nil {
+		return fmt.Errorf("database not available")
+		}
+		cs := sqlite.NewChatService(webDB)
+		return cs.RenameChat("web", senderID, chatID, label)
+	}
 	return callbacks
 }
 
@@ -1278,7 +1328,7 @@ func registerChannels(disp *channel.Dispatcher, cfg *config.Config, msgBus *bus.
 				}
 			}
 
-			webCh.SetCallbacks(buildWebCallbacks(cfg, backend))
+			webCh.SetCallbacks(buildWebCallbacks(cfg, backend, webDB))
 			// Wire up RemoteSandbox callbacks to push real-time status to WebChannel.
 			// In WebChannel, senderID == chatID (see handleWS: client.userID = senderID, chatID := c.userID).
 			sb := tools.GetSandbox()

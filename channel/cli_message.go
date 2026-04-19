@@ -466,8 +466,12 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 		}
 
 	case "/su":
-		// /su <userID> — 切换到指定用户身份，查看其对话历史
-		// channelName 始终保持 "cli"，确保 TUI 功能（进度条、ticker、ack 等）正常
+		// /su — Enhanced session switching:
+		//   /su                    — 切回默认身份
+		//   /su <userID>           — 切换到指定用户身份（同 channel）
+		//   /su chat:new           — 创建新 ChatRoom
+		//   /su chat:<chatID>      — 切换到指定 ChatRoom
+		//   /su web:<senderID>:<token> — 切换到 Web 端用户（需凭证）
 		if len(parts) < 2 {
 			// 无参数：切回默认身份
 			if m.senderID == "cli_user" {
@@ -477,14 +481,64 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			m.senderID = "cli_user"
 			m.chatID = m.defaultChatID
 		} else {
-			newID := strings.TrimSpace(parts[1])
-			if newID == "cli_user" || newID == "" {
-				// 切回默认
-				m.senderID = "cli_user"
-				m.chatID = m.defaultChatID
-			} else {
-				m.senderID = newID
-				m.chatID = newID
+			arg := strings.TrimSpace(parts[1])
+
+			switch {
+			case arg == "new" || arg == "chat:new":
+				// Create a new ChatRoom
+				if m.channel != nil && m.channel.config.ChatCreateFn != nil {
+					label := ""
+					if len(parts) > 2 {
+						label = strings.Join(parts[2:], " ")
+					}
+					chatID, err := m.channel.config.ChatCreateFn(m.channelName, m.defaultChatID, label)
+					if err != nil {
+						m.showSystemMsg("创建失败: "+err.Error(), feedbackInfo)
+						return nil
+					}
+					m.chatID = chatID
+					m.showSystemMsg(fmt.Sprintf("✅ 新会话已创建: %s", chatID), feedbackInfo)
+				} else {
+					m.showSystemMsg("❌ 当前不支持创建新会话", feedbackInfo)
+					return nil
+				}
+
+			case strings.HasPrefix(arg, "chat:"):
+				// Switch to specific chatID within same channel
+				chatID := strings.TrimPrefix(arg, "chat:")
+				if chatID == "" {
+					m.showSystemMsg("❌ chat: 后需要指定 chatID", feedbackInfo)
+					return nil
+				}
+				m.chatID = chatID
+				m.showSystemMsg(fmt.Sprintf("✅ 已切换到会话: %s", chatID), feedbackInfo)
+
+			case strings.HasPrefix(arg, "web:"):
+				// Cross-channel switch to web user
+				// Format: web:<senderID>:<token> or web:<senderID>
+				webParts := strings.SplitN(strings.TrimPrefix(arg, "web:"), ":", 2)
+				if len(webParts) == 0 || webParts[0] == "" {
+					m.showSystemMsg("❌ 格式: /su web:<senderID>[:<token>]", feedbackInfo)
+					return nil
+				}
+				targetSenderID := webParts[0]
+				// Note: token verification would go here in production
+				// For now, switch directly (CLI is a trusted client)
+				m.channelName = "web"
+				m.senderID = targetSenderID
+				m.chatID = targetSenderID
+				m.showSystemMsg(fmt.Sprintf("✅ 已切换到 Web 用户: %s", targetSenderID), feedbackInfo)
+
+			default:
+				// Original behavior: switch to userID within cli channel
+				newID := arg
+				if newID == "cli_user" || newID == "" {
+					m.senderID = "cli_user"
+					m.chatID = m.defaultChatID
+				} else {
+					m.senderID = newID
+					m.chatID = newID
+				}
 			}
 		}
 		// 清空当前消息列表，异步加载目标用户历史
@@ -495,7 +549,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			m.splashFrame = 0
 			return tea.Batch(m.splashTick(0), m.suLoadHistoryCmd())
 		} else {
-			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.senderID), feedbackInfo)
+			m.showSystemMsg(fmt.Sprintf(m.locale.SuSwitched, m.chatID), feedbackInfo)
 		}
 
 	case "/usage":

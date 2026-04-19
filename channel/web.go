@@ -137,6 +137,25 @@ type WebCallbacks struct {
 	// SessionMessages returns the conversation messages for a specific SubAgent session.
 	// Returns (messages, true) if found, (nil, false) otherwise.
 	SessionMessages func(senderID, roleName, instance string) ([]SessionChatMessage, bool)
+
+	// ChatList returns all chatrooms for a user (main + user-created).
+	ChatList func(senderID, currentChatID string) ([]UserChatWithPreview, error)
+	// ChatCreate creates a new chatroom for a user. Returns new chatID.
+	ChatCreate func(senderID, label string) (string, error)
+	// ChatDelete deletes a chatroom (except the default one).
+	ChatDelete func(senderID, chatID string) error
+	// ChatRename renames a chatroom.
+	ChatRename func(senderID, chatID, label string) error
+}
+
+// UserChatWithPreview is a chatroom with metadata for API responses.
+// This mirrors storage/sqlite.UserChatWithPreview to avoid channel→storage dependency.
+type UserChatWithPreview struct {
+	ChatID     string `json:"chat_id"`
+	Label      string `json:"label"`
+	LastActive string `json:"last_active"` // RFC3339
+	Preview    string `json:"preview"`
+	IsCurrent  bool   `json:"is_current"`
 }
 
 // ChatRoom represents a conversation between the user and/or agents.
@@ -670,6 +689,11 @@ type WebChannel struct {
 	// Event stream buffer — per chatID monotonic seq + ring buffer for replay
 	evtBuf   map[string]*eventStream
 	evtBufMu sync.Mutex
+
+	// Per-user current chatID (multi-chatroom support).
+	// Key: senderID, Value: chatID (defaults to senderID if not set).
+	userCurrentChat   map[string]string
+	userCurrentChatMu sync.RWMutex
 }
 
 type sessionInfo struct {
@@ -682,12 +706,13 @@ type sessionInfo struct {
 // NewWebChannel 创建 Web 渠道
 func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 	return &WebChannel{
-		config:   cfg,
-		msgBus:   msgBus,
-		hub:      newHub(),
-		sessions: make(map[string]sessionInfo),
-		db:       cfg.DB,
-		stopCh:   make(chan struct{}),
+		config:          cfg,
+		msgBus:          msgBus,
+		hub:             newHub(),
+		sessions:        make(map[string]sessionInfo),
+		db:              cfg.DB,
+		stopCh:          make(chan struct{}),
+		userCurrentChat: make(map[string]string),
 	}
 }
 
@@ -771,6 +796,11 @@ func (wc *WebChannel) Start() error {
 	// Sessions API
 	mux.HandleFunc("/api/sessions", wc.authMiddleware(wc.handleSessions))
 	mux.HandleFunc("/api/sessions/messages", wc.authMiddleware(wc.handleSessionMessages))
+
+	// Chatroom API
+	mux.HandleFunc("/api/chats", wc.authMiddleware(wc.handleChats))
+	mux.HandleFunc("/api/chats/{chatID}/switch", wc.authMiddleware(wc.handleChatSwitch))
+	mux.HandleFunc("/api/chats/{chatID}", wc.authMiddleware(wc.handleChatDelete))
 
 	// Static files
 	if wc.staticDir != "" {

@@ -453,6 +453,7 @@ type CLIChannelConfig struct {
 	AgentList            func() []AgentPanelEntry                                                                                       // 列出活跃 interactive agents（用于 panel 展示）
 	AgentInspect         func(roleName, instance string, tailCount int) (string, error)                                                 // 窥探 interactive agent 的最近活动（tail 风格）
 	AgentMessages        func(roleName, instance string) []SessionChatMessage                                                             // 获取 interactive agent 的对话消息
+	ChatCreateFn         func(channelName, senderID, label string) (string, error)                                                        // 创建新 ChatRoom（返回 chatID）
 }
 
 // AgentPanelEntry is the channel-layer representation of an interactive agent session for panel display.

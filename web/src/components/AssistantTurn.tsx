@@ -216,6 +216,11 @@ export default function AssistantTurn({ messages, progress, liveIterations, load
                   <div className="text-[11px] text-slate-600/90 font-mono mb-1">
                     #{snap.iteration}
                   </div>
+                  {snap.reasoning && (
+                    <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">
+                      {snap.reasoning}
+                    </div>
+                  )}
                   {snap.thinking && (
                     <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">
                       {snap.thinking}

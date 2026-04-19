@@ -34,6 +34,7 @@ interface WsProgressPayload {
 export interface IterationSnapshot {
   iteration: number
   thinking?: string
+  reasoning?: string
   tools: IterationToolSnapshot[]
 }
 
@@ -147,11 +148,13 @@ export function BouncingDots({ text }: { text?: string }) {
 
 export function CompletedIteration({ snap }: { snap: IterationSnapshot }) {
   const hasThinking = !!(snap.thinking || '').trim()
+  const hasReasoning = !!(snap.reasoning || '').trim()
   const hasTools = (snap.tools ?? []).length > 0
-  const isEmpty = !hasThinking && !hasTools
+  const isEmpty = !hasThinking && !hasReasoning && !hasTools
   return (
     <div className="px-3 py-2 border-b border-slate-700/30 last:border-b-0">
       <div className="flex items-center gap-1 text-[11px] text-slate-600/90 font-mono mb-1">#{snap.iteration}</div>
+      {hasReasoning && <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">{snap.reasoning}</div>}
       {hasThinking && <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">{snap.thinking}</div>}
       {hasTools && (
         <div className="space-y-0.5">

@@ -468,12 +468,21 @@ func (a *Agent) buildMainRunConfig(
 					remoteCLICh = rc
 				}
 			}
+			var webCh *channelpkg.WebChannel
+			if ch, ok := a.channelFinder("web"); ok {
+				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					webCh = wc
+				}
+			}
 			cfg.StreamContentFunc = func(content string) {
 				if cliCh != nil {
 					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, content, "")
+				}
+				if webCh != nil {
+					webCh.SendStreamContent(chatID, content, "")
 				}
 			}
 			cfg.StreamReasoningFunc = func(content string) {
@@ -482,6 +491,9 @@ func (a *Agent) buildMainRunConfig(
 				}
 				if remoteCLICh != nil {
 					remoteCLICh.SendStreamContent(chatID, "", content)
+				}
+				if webCh != nil {
+					webCh.SendStreamContent(chatID, "", content)
 				}
 			}
 		}

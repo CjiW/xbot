@@ -637,8 +637,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             if (!reasoning && !content) break
 
             // Accumulate reasoning
+            // NOTE: backend sends accumulated full text, so we REPLACE not append
             if (reasoning) {
-              reasoningRef.current += reasoning
+              reasoningRef.current = reasoning
               if (progressRef.current) {
                 progressRef.current = { ...progressRef.current, thinking: reasoningRef.current }
                 setProgress({ ...progressRef.current })
@@ -657,18 +658,19 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             }
 
             // Accumulate content — show as streaming text in the assistant turn
+            // NOTE: backend sends accumulated full text (not delta), so we REPLACE not append
             if (content) {
-              streamingContentRef.current += content
+              streamingContentRef.current = content
               setMessages(prev => {
                 // Find or create a streaming placeholder message at the end
                 const last = prev[prev.length - 1]
                 if (last && last.id === '__streaming__') {
-                  return [...prev.slice(0, -1), { ...last, content: streamingContentRef.current }]
+                  return [...prev.slice(0, -1), { ...last, content: content }]
                 }
                 return [...prev, {
                   id: '__streaming__',
                   type: 'assistant' as const,
-                  content: streamingContentRef.current,
+                  content: content,
                 }]
               })
             }

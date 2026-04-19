@@ -408,12 +408,9 @@ func (a *Agent) buildMainRunConfig(
 
 						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 						wc.SendProgress(chatID, payload)
-						// Save CLI-format snapshot for mid-session reconnect.
-						a.lastProgressSnapshot.Store(progressKey, &channelpkg.CLIProgressPayload{
-							Phase:     string(s.Phase),
-							Iteration: s.Iteration,
-							Thinking:  s.ThinkingContent,
-						})
+						// Save full progress snapshot for mid-session reconnect.
+						// CLIProgressPayload is the union format used by GetActiveProgress.
+						a.lastProgressSnapshot.Store(progressKey, payload.ToCLIProgressPayload())
 					}
 				} else {
 					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")

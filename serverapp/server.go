@@ -1164,6 +1164,15 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 	callbacks.RPCHandler = func(method string, params json.RawMessage, senderID string) (json.RawMessage, error) {
 		return handleCLIRPC(cfg, backend, method, params, senderID)
 	}
+	// Wire IsProcessing — check if agent is actively processing a request for the user.
+	// In WebChannel, senderID == chatID.
+	callbacks.IsProcessing = func(senderID string) bool {
+		return backend.IsProcessing("web", senderID)
+	}
+	// Wire GetActiveProgress — returns latest progress snapshot for mid-session reconnect.
+	callbacks.GetActiveProgress = func(channel, chatID string) *channel.CLIProgressPayload {
+		return backend.GetActiveProgress(channel, chatID)
+	}
 	return callbacks
 }
 

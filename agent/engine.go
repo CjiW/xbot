@@ -202,6 +202,10 @@ type RunConfig struct {
 	// BgTaskManager 后台任务管理器（nil = 不支持后台任务）
 	BgTaskManager *tools.BackgroundTaskManager
 
+	// PostOffice Agent 间消息路由（nil = 不启用，由 Agent.postOffice 注入）。
+	// SubAgent 通过 PostOffice 注册 Mailbox，实现 Agent 间直接通信。
+	PostOffice *bus.PostOffice
+
 	// OnIterationSnapshot is called after each iteration snapshot is created.
 	// Used by background interactive sessions to incrementally expose iteration
 	// history for real-time inspect, instead of waiting for Run() to finish.
@@ -770,11 +774,16 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 		tc.BgTaskManager = cfg.BgTaskManager
 		sessionKey := cfg.SessionKey
 		if sessionKey == "" {
-			sessionKey = cfg.Channel + ":" + cfg.ChatID
+		sessionKey = cfg.Channel + ":" + cfg.ChatID
 		}
 		tc.BgSessionKey = sessionKey
 		// NOTE: OnComplete callback registration moved to Agent.bgNotifyLoop.
 		// Engine no longer registers callbacks per-buildToolContext call.
+	}
+
+	// 注入 PostOffice Agent 间消息路由
+	if cfg.PostOffice != nil {
+		tc.PostOffice = newPostOfficeAdapter(cfg.PostOffice)
 	}
 
 	// 注入 session cwd（PWD 工具优化）

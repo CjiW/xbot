@@ -260,6 +260,10 @@ type Agent struct {
 	// sync.Map provides atomic Load/Store/Delete/LoadOrStore, no additional mutex needed
 	interactiveSubAgents sync.Map
 
+	// postOffice manages Agent-to-Agent message routing (Mailbox-based).
+	// Each SubAgent registers a Mailbox here; other Agents deliver messages via PostOffice.
+	postOffice *bus.PostOffice
+
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
 
@@ -326,6 +330,9 @@ func (a *Agent) LLMFactory() *LLMFactory { return a.llmFactory }
 
 // BgTaskManager returns the Agent's BackgroundTaskManager.
 func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMgr }
+
+// PostOffice returns the Agent's PostOffice for Agent-to-Agent message routing.
+func (a *Agent) PostOffice() *bus.PostOffice { return a.postOffice }
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }
@@ -820,7 +827,8 @@ func New(cfg Config) (*Agent, error) {
 			tools.NewTimingHook(),
 			tools.NewApprovalHook(nil), // handler set later by channel when available
 		),
-		bgTaskMgr: tools.NewBackgroundTaskManager(),
+		bgTaskMgr:   tools.NewBackgroundTaskManager(),
+		postOffice:  bus.NewPostOffice(),
 	}
 
 	// 5. 初始化各类服务（修改 agent 指针）

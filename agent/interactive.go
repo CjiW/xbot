@@ -251,6 +251,15 @@ func (a *Agent) SpawnInteractiveSession(
 			}
 		}
 
+		// Register Mailbox for background interactive session
+		if a.postOffice != nil {
+			subAgentAddr := bus.NewAgentAddress(cfg.AgentID)
+			mb := bus.NewMailbox(subAgentAddr)
+			if err := a.postOffice.Register(mb); err != nil {
+				log.Ctx(subCtx).WithField("addr", subAgentAddr).Debug("mailbox already registered")
+			}
+		}
+
 		go func() {
 			startTime := time.Now()
 			defer func() {
@@ -371,6 +380,16 @@ func (a *Agent) SpawnInteractiveSession(
 
 	// Foreground mode: execute synchronously
 	out := Run(subCtx, cfg)
+
+	// Register Mailbox for interactive session after successful foreground Run
+	// (only for sessions that completed without error and have a valid config)
+	if a.postOffice != nil {
+		subAgentAddr := bus.NewAgentAddress(cfg.AgentID)
+		mb := bus.NewMailbox(subAgentAddr)
+		if err := a.postOffice.Register(mb); err != nil {
+			log.Ctx(subCtx).WithField("addr", subAgentAddr).Debug("mailbox already registered")
+		}
+	}
 
 	if out.Error != nil {
 		a.interactiveSubAgents.Delete(key) // 清理占位符
@@ -826,6 +845,12 @@ func (a *Agent) UnloadInteractiveSession(
 
 	// 清理
 	a.interactiveSubAgents.Delete(key)
+
+	// Unregister Mailbox from PostOffice
+	if a.postOffice != nil {
+		subAgentAddr := bus.NewAgentAddress(cfg.AgentID)
+		a.postOffice.Unregister(subAgentAddr)
+	}
 
 	log.WithField("role", roleName).Info("Interactive session unloaded")
 	return nil

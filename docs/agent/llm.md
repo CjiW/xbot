@@ -29,6 +29,13 @@
 - Parent cancel bridged via separate goroutine
 - `GenerateStream` does NOT use perAttemptCtx — defer cancel() would kill async stream goroutine (`retry.go:278`)
 
+## Client Fingerprinting
+
+The OpenAI Go SDK (`openai-go/v3`) injects `X-Stainless-*` headers that TypeScript clients never send. These are stripped via `option.WithHeaderDel()` to match opencode's fingerprint:
+- `X-Stainless-Lang`, `X-Stainless-Package-Version`, `X-Stainless-OS`, `X-Stainless-Arch`, `X-Stainless-Runtime`, `X-Stainless-Runtime-Version`, `X-Stainless-Timeout`
+- Default `User-Agent` set to `opencode/1.14.17` (matches opencode's format)
+- `stream_options: {include_usage: true}` added to all requests (matches Vercel AI SDK behavior)
+
 ## Async Model Loading
 
 `NewOpenAILLM` loads model list in a goroutine (non-blocking). `ListModels()` returns fallback model immediately, full list updates when API responds.

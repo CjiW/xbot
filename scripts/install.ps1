@@ -169,7 +169,7 @@ function Write-Config {
     }
 
     # Ensure top-level sections exist
-    foreach ($section in @("server", "web", "cli", "admin")) {
+    foreach ($section in @("server", "web", "cli", "admin", "agent")) {
         if (-not $cfg.ContainsKey($section)) {
             $cfg[$section] = @{}
         }
@@ -202,6 +202,9 @@ function Write-Config {
     Set-IfMissing "admin" "token" $Token
     $adminToken = $cfg["admin"]["token"]
     if (-not $adminToken) { $adminToken = $Token }
+
+    # Ensure agent.work_dir is set to user home so server has a stable working directory
+    Set-IfMissing "agent" "work_dir" $env:USERPROFILE
 
     if ($Mode -eq "server-client") {
         Set-IfMissing "server" "host" "127.0.0.1"
@@ -315,7 +318,7 @@ function Install-ServiceNssm {
         [string]$CfgPath
     )
 
-    $workDir = if ($PWD.ProviderPath) { $PWD.ProviderPath } else { (Get-Location).Path }
+    $workDir = $env:USERPROFILE
 
     # Stop and remove existing service if present
     & $NssmPath stop $SERVICE_NAME 2>$null
@@ -373,7 +376,7 @@ function Install-ServiceSc {
     Start-Sleep -Seconds 2
 
     $binArgs = "serve --config $CfgPath"
-    $workDir = if ($PWD.ProviderPath) { $PWD.ProviderPath } else { (Get-Location).Path }
+    $workDir = $env:USERPROFILE
 
     # Create the service using sc.exe
     sc.exe create $SERVICE_NAME binPath= "`"$BinPath`" $binArgs" start= auto DisplayName= "xbot Agent Server"
@@ -418,7 +421,7 @@ function Install-ScheduledTask {
     Write-Warn "The server will start at user logon and restart on failure."
 
     $taskName = "xbot-server"
-    $workDir = if ($PWD.ProviderPath) { $PWD.ProviderPath } else { (Get-Location).Path }
+    $workDir = $env:USERPROFILE
 
     # Remove existing task
     schtasks.exe /Delete /TN $taskName /F 2>$null

@@ -108,7 +108,14 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		option.WithAPIKey(cfg.APIKey),
 	}
 
-	// Set custom User-Agent if provided, otherwise use default (Cursor).
+	// Strip Go SDK fingerprint headers — TypeScript clients (opencode, cursor)
+	// never send these. Options run AFTER requestconfig sets defaults, so
+	// WithHeaderDel correctly removes them.
+	for _, h := range stainlessHeaders {
+		opts = append(opts, option.WithHeaderDel(h))
+	}
+
+	// Set custom User-Agent if provided, otherwise use default (opencode).
 	ua := cfg.UserAgent
 	if ua == "" {
 		ua = DefaultOpenAIUserAgent
@@ -150,8 +157,21 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 }
 
 // DefaultOpenAIUserAgent is the default User-Agent for OpenAI-compatible clients.
-// Masquerades as Cursor to avoid coding-agent rate limits on providers like Zhipu.
-const DefaultOpenAIUserAgent = "cursor/0.45.3"
+// Matches opencode's User-Agent to avoid coding-agent fingerprinting.
+const DefaultOpenAIUserAgent = "opencode/1.14.17"
+
+// stainlessHeaders are headers injected by the OpenAI Go SDK that TypeScript
+// clients (opencode, cursor) never send. They must be stripped to avoid
+// client fingerprinting.
+var stainlessHeaders = []string{
+	"X-Stainless-Lang",
+	"X-Stainless-Package-Version",
+	"X-Stainless-OS",
+	"X-Stainless-Arch",
+	"X-Stainless-Runtime",
+	"X-Stainless-Runtime-Version",
+	"X-Stainless-Timeout",
+}
 
 // ListModels 获取可用模型列表
 func (o *OpenAILLM) ListModels() []string {
@@ -564,6 +584,10 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 
 	if len(tools) > 0 {
 		p.Tools = toOpenAITools(tools)
+	}
+	// Match opencode's stream_options: {include_usage: true}
+	p.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: param.Opt[bool]{Value: true},
 	}
 	return p
 }

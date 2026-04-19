@@ -154,8 +154,18 @@ export function CompletedIteration({ snap }: { snap: IterationSnapshot }) {
   return (
     <div className="px-3 py-2 border-b border-slate-700/30 last:border-b-0">
       <div className="flex items-center gap-1 text-[11px] text-slate-600/90 font-mono mb-1">#{snap.iteration}</div>
-      {hasReasoning && <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">{snap.reasoning}</div>}
-      {hasThinking && <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">{snap.thinking}</div>}
+      {hasReasoning && (
+        <div className="px-2 py-1.5 mb-1 rounded bg-indigo-500/10 border-l-2 border-indigo-500/40">
+          <div className="text-[10px] text-indigo-400/70 font-medium mb-0.5">💭 Reasoning</div>
+          <div className="text-xs text-indigo-300/90 whitespace-pre-wrap break-words">{snap.reasoning}</div>
+        </div>
+      )}
+      {hasThinking && (
+        <div className="px-2 py-1.5 mb-1 rounded bg-amber-500/10 border-l-2 border-amber-500/40">
+          <div className="text-[10px] text-amber-400/70 font-medium mb-0.5">💡 Thinking</div>
+          <div className="text-xs text-amber-300/80 italic whitespace-pre-wrap break-words">{snap.thinking}</div>
+        </div>
+      )}
       {hasTools && (
         <div className="space-y-0.5">
           {(snap.tools ?? []).map((tool, i) => {
@@ -293,7 +303,10 @@ export default function ProgressPanel({ progress, liveIterations, loading }: Pro
               <div className="flex items-center gap-1 text-[11px] text-slate-600/90 font-mono mb-1">#{progress.iteration}</div>
 
               {shouldShowCurrentThinking && (
-                <div className="px-2 py-1 mb-1 text-xs text-slate-400 italic whitespace-pre-wrap break-words">{progress.thinking}</div>
+                <div className="px-2 py-1.5 mb-1 rounded bg-indigo-500/10 border-l-2 border-indigo-500/40">
+                  <div className="text-[10px] text-indigo-400/70 font-medium mb-0.5">💭 Reasoning</div>
+                  <div className="text-xs text-indigo-300/90 whitespace-pre-wrap break-words">{progress.thinking}</div>
+                </div>
               )}
 
               {progress.phase === 'thinking' && !progress.thinking && <BouncingDots text="thinking…" />}

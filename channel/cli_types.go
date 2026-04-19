@@ -205,9 +205,10 @@ type CLIProgressPayload struct {
 	Reasoning              string // model's reasoning/thinking chain (reasoning_content)
 	SubAgents              []CLISubAgent
 	Todos                  []CLITodoItem
-	TokenUsage             *CLITokenUsage // Token 用量快照（实时更新）
-	StreamContent          string         // LLM streaming text content (accumulated, for real-time render)
-	ReasoningStreamContent string         // LLM streaming reasoning content (accumulated, for real-time render)
+	TokenUsage             *CLITokenUsage       // Token 用量快照（实时更新）
+	StreamContent          string               // LLM streaming text content (accumulated, for real-time render)
+	ReasoningStreamContent string               // LLM streaming reasoning content (accumulated, for real-time render)
+	IterationHistory       []CLIProgressPayload // completed iteration snapshots (for mid-session reconnect restore)
 }
 
 // CLITokenUsage Token 使用量（对应 agent.TokenUsageSnapshot）

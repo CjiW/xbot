@@ -277,7 +277,25 @@ func (a *Agent) buildMainRunConfig(
 							}
 						}
 						cliCh.SendProgress(chatID, payload)
-						// Save snapshot for mid-session reconnect (GetActiveProgress RPC).
+						// Save snapshot + track iteration history for mid-session reconnect.
+						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
+							prev := prevSnap.(*channelpkg.CLIProgressPayload)
+							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
+								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
+								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+								already := false
+								for _, h := range hist {
+									if h.Iteration == prev.Iteration {
+										already = true
+										break
+									}
+								}
+								if !already {
+									updated := append(hist, *prev)
+									a.iterationHistories.Store(progressKey, &updated)
+								}
+							}
+						}
 						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
 					if remoteCLICh != nil {
@@ -408,9 +426,32 @@ func (a *Agent) buildMainRunConfig(
 
 						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 						wc.SendProgress(chatID, payload)
-						// Save full progress snapshot for mid-session reconnect.
-						// CLIProgressPayload is the union format used by GetActiveProgress.
-						a.lastProgressSnapshot.Store(progressKey, payload.ToCLIProgressPayload())
+
+						// Track iteration history: when iteration advances, snapshot the
+						// PREVIOUS iteration into the history list for mid-session reconnect.
+						cliSnapshot := payload.ToCLIProgressPayload()
+						if prevSnap, loaded := a.lastProgressSnapshot.Load(progressKey); loaded {
+							prev := prevSnap.(*channelpkg.CLIProgressPayload)
+							if s.Iteration > prev.Iteration && prev.Iteration >= 0 {
+								// Iteration advanced — save previous iteration to history
+								histPtr, _ := a.iterationHistories.LoadOrStore(progressKey, &[]channelpkg.CLIProgressPayload{})
+								hist := *histPtr.(*[]channelpkg.CLIProgressPayload)
+								// Only append if this iteration isn't already recorded
+								already := false
+								for _, h := range hist {
+									if h.Iteration == prev.Iteration {
+										already = true
+										break
+									}
+								}
+								if !already {
+									updated := append(hist, *prev)
+									a.iterationHistories.Store(progressKey, &updated)
+								}
+							}
+						}
+						// Save current iteration snapshot
+						a.lastProgressSnapshot.Store(progressKey, cliSnapshot)
 					}
 				} else {
 					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")

@@ -91,13 +91,27 @@ func (b *LocalBackend) IsProcessing(ch, chatID string) bool {
 	return found
 }
 
-// GetActiveProgress returns the latest progress snapshot for an active turn.
+// GetActiveProgress returns the latest progress snapshot for an active turn,
+// including completed iteration history for mid-session reconnect.
 func (b *LocalBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload {
 	key := ch + ":" + chatID
-	if v, ok := b.agent.lastProgressSnapshot.Load(key); ok {
-		return v.(*channel.CLIProgressPayload)
+	v, ok := b.agent.lastProgressSnapshot.Load(key)
+	if !ok {
+		return nil
 	}
-	return nil
+	snapshot := v.(*channel.CLIProgressPayload)
+	// Attach iteration history if available
+	if histPtr, ok := b.agent.iterationHistories.Load(key); ok {
+		hist := *histPtr.(*[]channel.CLIProgressPayload)
+		if len(hist) > 0 {
+			// Clone to avoid mutating shared state
+			result := *snapshot
+			result.IterationHistory = make([]channel.CLIProgressPayload, len(hist))
+			copy(result.IterationHistory, hist)
+			return &result
+		}
+	}
+	return snapshot
 }
 
 // OnProgress is a no-op for LocalBackend: progress flows through the

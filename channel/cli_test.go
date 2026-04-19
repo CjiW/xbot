@@ -796,12 +796,16 @@ func TestStartAgentTurnDoesNotDuplicateChain(t *testing.T) {
 		t.Error("startAgentTurn should not inject tickCmd when chain was already running")
 	}
 
-	// When no chain (fastTickActive=false), it SHOULD inject
+	// startAgentTurn no longer manages tickCmd directly.
+	// The wasTyping guard at the end of Update() handles idle→typing transitions.
+	// Simulate this via cliProcessingMsg (realistic remote-mode scenario):
+	// server sends SetProcessing(true) → cliProcessingMsg → startAgentTurn.
 	model.fastTickActive = false
 	model.pendingCmds = nil
-	model.startAgentTurn()
-	if len(model.pendingCmds) == 0 {
-		t.Error("startAgentTurn should inject tickCmd when fastTickActive is false (no chain)")
+	model.typing = false
+	_, cmd := model.Update(cliProcessingMsg{processing: true})
+	if cmd == nil {
+		t.Fatal("Update should return cmd (tickCmd) after idle→typing transition via wasTyping guard")
 	}
 }
 

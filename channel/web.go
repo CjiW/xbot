@@ -133,81 +133,113 @@ type WebCallbacks struct {
 // Hub: manages all WebSocket clients
 // ---------------------------------------------------------------------------
 
-// Hub 管理所有 WebSocket 连接
+// Hub 管理所有 WebSocket 连接。
+// Routing is by business chatID (e.g. "/home/smith/src/xbot" or feishuUserID).
+// Auth identity (c.userID, e.g. "admin") is NOT used for routing.
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[string]*Client     // senderID → Client
-	offline map[string]*ringBuffer // senderID → offline message buffer
+	conns   map[string]*Client         // clientID → Client (lifecycle management)
+	subs    map[string]map[string]bool // chatID → set of clientIDs (message routing)
+	offline map[string]*ringBuffer     // chatID → offline message buffer
 	offMu   sync.Mutex
 }
 
 func newHub() *Hub {
 	return &Hub{
-		clients: make(map[string]*Client),
+		conns:   make(map[string]*Client),
+		subs:    make(map[string]map[string]bool),
 		offline: make(map[string]*ringBuffer),
 	}
 }
 
-func (h *Hub) addClient(senderID string, c *Client) {
+// addClient registers a WS connection for lifecycle management.
+// Use subscribe() to register it for message routing.
+func (h *Hub) addClient(clientID string, c *Client) {
 	h.mu.Lock()
-	// Close existing connection for same user
-	if old, ok := h.clients[senderID]; ok {
-		old.closeDone()
-
-	}
-	h.clients[senderID] = c
+	h.conns[clientID] = c
 	h.mu.Unlock()
+}
 
-	// Flush offline messages
-	h.offMu.Lock()
-	if buf, ok := h.offline[senderID]; ok {
-		msgs := buf.flush()
-		for _, msg := range msgs {
-			select {
-			case c.sendCh <- msg:
-			default:
-				// sendCh full, drop message
-			}
+// removeClient removes a WS connection and all its subscriptions.
+func (h *Hub) removeClient(clientID string) {
+	h.mu.Lock()
+	delete(h.conns, clientID)
+	for chatID, clients := range h.subs {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(h.subs, chatID)
 		}
-		delete(h.offline, senderID)
-	}
-	h.offMu.Unlock()
-}
-
-func (h *Hub) removeClient(senderID string, c *Client) {
-	h.mu.Lock()
-	if existing, ok := h.clients[senderID]; ok && existing == c {
-		delete(h.clients, senderID)
 	}
 	h.mu.Unlock()
 }
 
-func (h *Hub) getClient(senderID string) *Client {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.clients[senderID]
+// subscribe registers a client to receive messages for a given chatID.
+// Idempotent — safe to call on every message from the client.
+func (h *Hub) subscribe(clientID, chatID string) {
+	h.mu.Lock()
+	if h.subs[chatID] == nil {
+		h.subs[chatID] = make(map[string]bool)
+		// Flush any offline messages for this chatID
+		h.offMu.Lock()
+		if buf, ok := h.offline[chatID]; ok {
+			msgs := buf.flush()
+			for _, msg := range msgs {
+				if c, ok := h.conns[clientID]; ok {
+					select {
+					case c.sendCh <- msg:
+					default:
+					}
+				}
+			}
+			delete(h.offline, chatID)
+		}
+		h.offMu.Unlock()
+	}
+	h.subs[chatID][clientID] = true
+	h.mu.Unlock()
 }
 
-func (h *Hub) sendToClient(senderID string, msg wsMessage) bool {
-	c := h.getClient(senderID)
-	if c != nil {
+// sendToClient sends a message to all clients subscribed to a chatID.
+// If no clients are subscribed, buffers the message for later delivery.
+func (h *Hub) sendToClient(chatID string, msg wsMessage) bool {
+	h.mu.RLock()
+	// Copy subscriber keys to a slice to avoid iterating the map while
+	// removeClient() may concurrently delete from it (data race).
+	chatIDs, ok := h.subs[chatID]
+	var subscriberIDs []string
+	if ok {
+		for cid := range chatIDs {
+			subscriberIDs = append(subscriberIDs, cid)
+		}
+	}
+	h.mu.RUnlock()
+
+	sent := false
+	for _, cid := range subscriberIDs {
+		h.mu.RLock()
+		c := h.conns[cid]
+		h.mu.RUnlock()
+		if c == nil {
+			continue
+		}
 		select {
 		case c.sendCh <- msg:
-			return true
+			sent = true
 		default:
-			// Channel full, buffer offline
+			// sendCh full, skip
 		}
 	}
-	// Buffer as offline message
-	h.offMu.Lock()
-	buf, ok := h.offline[senderID]
-	if !ok {
-		buf = newRingBuffer(webOfflineMsgBufSize)
-		h.offline[senderID] = buf
+	if !sent {
+		h.offMu.Lock()
+		buf, ok := h.offline[chatID]
+		if !ok {
+			buf = newRingBuffer(webOfflineMsgBufSize)
+			h.offline[chatID] = buf
+		}
+		buf.push(msg)
+		h.offMu.Unlock()
 	}
-	buf.push(msg)
-	h.offMu.Unlock()
-	return false
+	return sent
 }
 
 func (c *Client) closeDone() {
@@ -216,10 +248,11 @@ func (c *Client) closeDone() {
 
 func (h *Hub) stopAll() {
 	h.mu.Lock()
-	for id, c := range h.clients {
+	for _, c := range h.conns {
 		c.closeDone()
-		delete(h.clients, id)
 	}
+	h.conns = make(map[string]*Client)
+	h.subs = make(map[string]map[string]bool)
 	h.mu.Unlock()
 }
 
@@ -235,6 +268,7 @@ type Client struct {
 	closeOnce sync.Once
 	hub       *Hub
 	userID    string
+	id        string // unique client ID (UUID), generated at connection time
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +324,11 @@ type wsMessage struct {
 	TS              int64              `json:"ts,omitempty"`               // timestamp
 	Progress        *WsProgressPayload `json:"progress,omitempty"`         // structured progress data
 	ProgressHistory string             `json:"progress_history,omitempty"` // JSON-encoded iteration history for completed turns
+	Channel         string             `json:"channel,omitempty"`
+	ChatID          string             `json:"chat_id,omitempty"`
+	SenderID        string             `json:"sender_id,omitempty"`
+	SenderName      string             `json:"sender_name,omitempty"`
+	ChatType        string             `json:"chat_type,omitempty"`
 	// RPC response fields (used when Type == "rpc_response")
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
@@ -298,10 +337,11 @@ type wsMessage struct {
 // WsProgressPayload — structured progress data (corresponds to agent.StructuredProgress).
 type WsProgressPayload struct {
 	Phase          string              `json:"phase,omitempty"`
-	Iteration      int                 `json:"iteration,omitempty"`
+	Iteration      int                 `json:"iteration"`
 	ActiveTools    []WsToolProgress    `json:"active_tools,omitempty"`
 	CompletedTools []WsToolProgress    `json:"completed_tools,omitempty"`
 	Thinking       string              `json:"thinking,omitempty"`
+	Reasoning      string              `json:"reasoning,omitempty"`
 	SubAgents      []WsSubAgent        `json:"sub_agents,omitempty"`
 	TokenUsage     *WsTokenUsage       `json:"token_usage,omitempty"`
 	Todos          []WsTodoItem        `json:"todos,omitempty"`
@@ -371,6 +411,11 @@ type wsClientMessage struct {
 	FileSizes  []int64  `json:"file_sizes,omitempty"`
 	UploadKeys []string `json:"upload_keys,omitempty"` // OSS upload keys (for qiniu mode)
 	FileMimes  []string `json:"file_mimes,omitempty"`  // MIME types
+	Channel    string   `json:"channel,omitempty"`
+	ChatID     string   `json:"chat_id,omitempty"`
+	SenderID   string   `json:"sender_id,omitempty"`
+	SenderName string   `json:"sender_name,omitempty"`
+	ChatType   string   `json:"chat_type,omitempty"`
 }
 
 // WsAskUserPayload is the payload for "ask_user" WS messages (agent needs user input).
@@ -444,6 +489,11 @@ func NewWebChannel(cfg WebChannelConfig, msgBus *bus.MessageBus) *WebChannel {
 		db:       cfg.DB,
 		stopCh:   make(chan struct{}),
 	}
+}
+
+// Hub returns the web channel's hub for sharing with other channels.
+func (wc *WebChannel) Hub() *Hub {
+	return wc.hub
 }
 
 // SetStaticDir sets the directory for serving frontend static files.
@@ -585,6 +635,7 @@ func (wc *WebChannel) Stop() {
 // ---------------------------------------------------------------------------
 
 // Send 发送消息到 Web 客户端（非阻塞）
+
 func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
 
@@ -605,10 +656,11 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 		ProgressHistory: msg.Metadata["progress_history"],
 	}
 
+	targetClientID := msg.ChatID
+
 	// Send via hub (non-blocking: writes to buffered channel)
-	if !wc.hub.sendToClient(msg.ChatID, wsMsg) {
-		// Client offline, message buffered in ring buffer
-		log.WithField("chat_id", msg.ChatID).Debug("Web client offline, message buffered")
+	if !wc.hub.sendToClient(targetClientID, wsMsg) {
+		log.WithFields(log.Fields{"chat_id": msg.ChatID, "target_client_id": targetClientID}).Debug("Web client offline, message buffered")
 	}
 
 	// AskUser: agent needs user input
@@ -629,7 +681,7 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 			TS:       time.Now().Unix(),
 			Progress: askPayload,
 		}
-		wc.hub.sendToClient(msg.ChatID, askMsg)
+		wc.hub.sendToClient(targetClientID, askMsg)
 	}
 
 	return msgID, nil
@@ -724,7 +776,17 @@ func (wc *WebChannel) wsUpgrader() *websocket.Upgrader {
 					return true
 				}
 			}
-			return u.Host == r.Host
+			// Always allow requests from the backend's own host (e.g. Vite proxy
+			// sets Origin to the backend host, or direct browser access).
+			if u.Host == r.Host {
+				return true
+			}
+			// Allow localhost origins in development (Vite dev server on
+			// a different port proxies to the backend).
+			if u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" {
+				return true
+			}
+			return false
 		},
 	}
 }
@@ -774,11 +836,13 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 		done:   make(chan struct{}),
 		hub:    wc.hub,
 		userID: senderID,
+		id:     strings.ReplaceAll(uuid.New().String(), "-", ""),
 	}
 
-	wc.hub.addClient(senderID, client)
+	wc.hub.addClient(client.id, client)
 	log.WithFields(log.Fields{
 		"sender_id": senderID,
+		"client_id": client.id,
 		"username":  username,
 	}).Info("Web client connected")
 
@@ -858,11 +922,13 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 	defer func() {
 		c.conn.Close()
 		c.closeDone()
-		wc.hub.removeClient(c.userID, c)
+		wc.hub.removeClient(c.id)
+		// Note: do NOT removeRoutes here — multiple clients may share the same
+		// senderID. Routes are idempotent and re-registered on each message.
 		log.WithField("sender_id", c.userID).Info("Web client disconnected")
 	}()
 
-	c.conn.SetReadLimit(65536) // 64KB max message
+	c.conn.SetReadLimit(10 << 20) // 10MB max message (agent replies with code blocks can be large)
 	c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -913,18 +979,34 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 
 		switch msg.Type {
 		case "cancel":
-			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus
+			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus.
+			// Resolve business channel/chatID from WS message fields (same as message handler)
+			// so the cancel key matches the one used during message processing.
+			msgChannel := "web"
+			msgChatID := chatID
+			msgSenderID := c.userID
+			msgSenderName := username
+			if msg.Channel != "" && msg.ChatID != "" {
+				msgChannel = msg.Channel
+				msgChatID = msg.ChatID
+				if msg.SenderID != "" {
+					msgSenderID = msg.SenderID
+				}
+				if msg.SenderName != "" {
+					msgSenderName = msg.SenderName
+				}
+			}
 			wc.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    "web",
-				SenderID:   c.userID,
-				SenderName: username,
-				ChatID:     chatID,
+				Channel:    msgChannel,
+				SenderID:   msgSenderID,
+				SenderName: msgSenderName,
+				ChatID:     msgChatID,
 				ChatType:   "p2p",
 				Content:    "/cancel",
 				Time:       time.Now(),
 				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-				From:       bus.NewIMAddress("web", c.userID),
-				To:         bus.NewIMAddress("web", chatID),
+				From:       bus.NewIMAddress(msgChannel, msgSenderID),
+				To:         bus.NewIMAddress(msgChannel, msgChatID),
 			}
 			continue
 		case "rpc":
@@ -1010,28 +1092,55 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 				wc.hub.sendToClient(chatID, echoMsg)
 			}
 
+			msgChannel := "web"
+			msgSenderID := c.userID
+			msgSenderName := username
+			msgChatID := chatID
+			msgChatType := "p2p"
+			if msg.Channel != "" && msg.ChatID != "" {
+				msgChannel = msg.Channel
+				msgChatID = msg.ChatID
+				if msg.SenderID != "" {
+					msgSenderID = msg.SenderID
+				}
+				if msg.SenderName != "" {
+					msgSenderName = msg.SenderName
+				}
+				if msg.ChatType != "" {
+					msgChatType = msg.ChatType
+				}
+			}
+			// Subscribe this client to receive messages for this chatID.
+			// Hub routes by business chatID directly — no transport metadata needed.
+			// Always subscribe on every message — idempotent and handles both
+			// vanilla web messages (no channel/chat_id) and CLI relay messages.
+			wc.hub.subscribe(c.id, msgChatID)
+
 			// Eagerly save user message so history API can return it during processing.
 			// Skip bang commands (! prefix) — they should never be persisted.
+			// For remote CLI (business channel=cli), do NOT eager-save here: this web-layer
+			// helper persists by web sender/chat tenant, while remote CLI history must be
+			// stored under business tenant (channel=cli, chat_id=<abs cwd>) inside agent.processMessage().
 			trimmed := strings.TrimSpace(content)
-			if len(trimmed) <= 1 || trimmed[0] != '!' {
-				if err := eagerSaveUserMsg(wc.db, c.userID, content); err != nil {
+			if msgChannel != "cli" && (len(trimmed) <= 1 || trimmed[0] != '!') {
+				if err := eagerSaveUserMsg(wc.db, msgSenderID, content); err != nil {
 					log.WithError(err).Warn("Failed to eager-save user message")
 				}
 				metadata["user_msg_eager_saved"] = "true"
 			}
 
 			wc.msgBus.Inbound <- bus.InboundMessage{
-				Channel:    "web",
-				SenderID:   c.userID,
-				SenderName: username,
-				ChatID:     chatID,
-				ChatType:   "p2p",
+				Channel:    msgChannel,
+				SenderID:   msgSenderID,
+				SenderName: msgSenderName,
+				ChatID:     msgChatID,
+				ChatType:   msgChatType,
 				Content:    content,
 				Media:      mediaPaths,
 				Time:       time.Now(),
 				RequestID:  strings.ReplaceAll(uuid.New().String(), "-", ""),
-				From:       bus.NewIMAddress("web", c.userID),
-				To:         bus.NewIMAddress("web", chatID),
+				From:       bus.NewIMAddress(msgChannel, msgSenderID),
+				To:         bus.NewIMAddress(msgChannel, msgChatID),
 				Metadata:   metadata,
 			}
 		case "ask_user_response":
@@ -1238,4 +1347,106 @@ func eagerSaveUserMsg(db *sql.DB, userID string, content string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ---------------------------------------------------------------------------
+// remoteCLIChannel — virtual CLI channel for remote mode (CLI→WS→server)
+// ---------------------------------------------------------------------------
+
+// remoteCLIChannel is a virtual Channel implementation registered as "cli"
+// in the server's dispatcher. It routes outbound messages to the correct
+// WebSocket client via the web channel's hub.
+type RemoteCLIChannel struct {
+	hub *Hub
+}
+
+// NewRemoteCLIChannel creates a virtual CLI channel that shares the given hub.
+func NewRemoteCLIChannel(hub *Hub) *RemoteCLIChannel {
+	return &RemoteCLIChannel{hub: hub}
+}
+
+func (c *RemoteCLIChannel) Name() string { return "cli" }
+
+func (c *RemoteCLIChannel) Start() error { return nil }
+
+func (c *RemoteCLIChannel) Stop() {}
+
+// SendProgress sends structured progress to remote CLI clients via the Hub.
+func (c *RemoteCLIChannel) SendProgress(chatID string, payload *WsProgressPayload) {
+	if payload == nil {
+		return
+	}
+	wsMsg := wsMessage{
+		Type:     "progress_structured",
+		TS:       time.Now().Unix(),
+		Progress: payload,
+	}
+	if !c.hub.sendToClient(chatID, wsMsg) {
+		log.WithField("chat_id", chatID).Debug("Remote CLI client offline, progress event buffered")
+	}
+}
+
+// SendStreamContent sends streaming LLM content to remote CLI clients via the Hub.
+func (c *RemoteCLIChannel) SendStreamContent(chatID, content, reasoning string) {
+	if content == "" && reasoning == "" {
+		return
+	}
+	wsMsg := wsMessage{
+		Type: "stream_content",
+		TS:   time.Now().Unix(),
+		Progress: &WsProgressPayload{
+			StreamContent:          content,
+			ReasoningStreamContent: reasoning,
+		},
+	}
+	_ = c.hub.sendToClient(chatID, wsMsg) // stream events are ephemeral, safe to drop
+}
+
+func (c *RemoteCLIChannel) Send(msg bus.OutboundMessage) (string, error) {
+	msgID := strings.ReplaceAll(uuid.New().String(), "-", "")
+
+	content := msg.Content
+	msgType := "text"
+
+	if strings.HasPrefix(content, "__FEISHU_CARD__") {
+		msgType = "card"
+		content = ConvertFeishuCard(content)
+	}
+
+	targetClientID := msg.ChatID
+
+	wsMsg := wsMessage{
+		Type:            msgType,
+		ID:              msgID,
+		Content:         content,
+		TS:              time.Now().Unix(),
+		ProgressHistory: msg.Metadata["progress_history"],
+	}
+
+	if !c.hub.sendToClient(targetClientID, wsMsg) {
+		log.WithFields(log.Fields{"chat_id": msg.ChatID, "target_client_id": targetClientID}).Debug("CLI WS client offline, message buffered")
+	}
+
+	// AskUser: agent needs user input
+	if msg.WaitingUser {
+		askPayload := &WsProgressPayload{}
+		if msg.Metadata != nil {
+			askPayload.RequestID = msg.Metadata["request_id"]
+			if qJSON := msg.Metadata["ask_questions"]; qJSON != "" {
+				var qs []WsAskUserQuestion
+				if json.Unmarshal([]byte(qJSON), &qs) == nil {
+					askPayload.Questions = qs
+				}
+			}
+		}
+		askMsg := wsMessage{
+			Type:     "ask_user",
+			ID:       msgID,
+			TS:       time.Now().Unix(),
+			Progress: askPayload,
+		}
+		c.hub.sendToClient(targetClientID, askMsg)
+	}
+
+	return msgID, nil
 }

@@ -434,6 +434,11 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 type CLIChannelConfig struct {
 	WorkDir              string                                                                                                         // 工作目录（用于标题栏显示）
 	ChatID               string                                                                                                         // 会话 ID（按工作目录区分）
+	RemoteMode           bool                                                                                                           // 是否为 remote backend 模式（用于标题栏/轻提示）
+	RemoteServerURL      string                                                                                                         // remote server URL (for header display, e.g. "ws://host:port")
+	DebugMode            bool                                                                                                           // --debug: UI capture + key injection via SIGUSR1
+	DebugInput           string                                                                                                         // --debug-input "1,enter,ctrl+c": auto-inject key sequence after startup
+	DebugCaptureMs       int                                                                                                            // --debug-capture-ms 200: UI capture interval in ms (default 1000)
 	HistoryLoader        func() ([]HistoryMessage, error)                                                                               // 会话恢复：加载历史消息
 	DynamicHistoryLoader func(channelName, chatID string) ([]HistoryMessage, error)                                                     // /su 切换用户后加载目标用户历史
 	GetCurrentValues     func() map[string]string                                                                                       // 获取当前配置值（用于 settings panel 初始值）
@@ -477,6 +482,23 @@ type CLIChannel struct {
 	// Lifecycle
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+
+	// Progress coalescing: prevent WS message floods from blocking the
+	// Bubble Tea event loop. SendProgress writes to asyncCh (non-blocking);
+	// a single drain goroutine calls program.Send. This ensures the WS readPump
+	// never blocks on program.Send, and intermediate progress events are
+	// dropped when the event loop is behind (the next event will be fresher).
+	// PhaseDone ("done") events bypass this and use program.Send directly,
+	// since they must never be dropped.
+	//
+	// Why a single drain goroutine matters: Bubble Tea's p.msgs is unbuffered.
+	// Multiple concurrent senders (readLoop for keys, handleProgressDrain,
+	// handleOutbound) all compete for the single receiver (eventLoop). With
+	// 3+ senders, key events get ~25% scheduling probability. By consolidating
+	// ALL non-critical sends through one channel + one goroutine, we reduce
+	// concurrent senders to 2 (readLoop + drain), giving keys ~50% chance.
+	progressCh chan *CLIProgressPayload
+	asyncCh    chan tea.Msg // unified async send channel (buffered)
 
 	// Services (injected by Agent or main)
 	settingsSvc SettingsService // interface for GetSettings/SetSetting

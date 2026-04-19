@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"xbot/bus"
@@ -76,6 +77,29 @@ func (b *LocalBackend) Bus() *bus.MessageBus { return b.bus }
 
 func (b *LocalBackend) IsRemote() bool { return false }
 
+// IsProcessing returns true if there is an active agent turn for the given chat.
+func (b *LocalBackend) IsProcessing(ch, chatID string) bool {
+	prefix := ch + ":" + chatID + ":"
+	found := false
+	b.agent.chatCancelCh.Range(func(key, _ interface{}) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// GetActiveProgress returns the latest progress snapshot for an active turn.
+func (b *LocalBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload {
+	key := ch + ":" + chatID
+	if v, ok := b.agent.lastProgressSnapshot.Load(key); ok {
+		return v.(*channel.CLIProgressPayload)
+	}
+	return nil
+}
+
 // OnProgress is a no-op for LocalBackend: progress flows through the
 // Dispatcher → CLIChannel.SendProgress path directly.
 func (b *LocalBackend) OnProgress(_ func(*channel.CLIProgressPayload)) {}
@@ -136,6 +160,24 @@ func (b *LocalBackend) SetContextMode(mode string) error {
 	return b.agent.SetContextMode(mode)
 }
 
+func (b *LocalBackend) SetCWD(ch, chatID, dir string) error {
+	// CWD sync only makes sense when sandbox is "none" — CLI and server share
+	// the same filesystem. In docker/remote mode, host paths don't map to the
+	// sandbox environment.
+	if b.agent.sandboxMode != "none" {
+		return fmt.Errorf("CWD sync not supported in %s sandbox mode", b.agent.sandboxMode)
+	}
+	if b.agent.MultiSession() == nil {
+		return fmt.Errorf("no session manager")
+	}
+	sess, err := b.agent.MultiSession().GetOrCreateSession(ch, chatID)
+	if err != nil {
+		return err
+	}
+	sess.SetCurrentDir(dir)
+	return nil
+}
+
 func (b *LocalBackend) SetMaxIterations(n int) {
 	b.agent.SetMaxIterations(n)
 }
@@ -186,6 +228,11 @@ func (b *LocalBackend) SetUserModel(senderID, model string) error {
 	return b.agent.SetUserModel(senderID, model)
 }
 
+func (b *LocalBackend) SwitchModel(senderID, model string) error {
+	b.agent.llmFactory.SwitchModel(senderID, model)
+	return nil
+}
+
 func (b *LocalBackend) GetUserMaxContext(senderID string) int {
 	return b.agent.GetUserMaxContext(senderID)
 }
@@ -199,7 +246,16 @@ func (b *LocalBackend) GetUserMaxOutputTokens(senderID string) int {
 }
 
 func (b *LocalBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
-	return b.agent.SetUserMaxOutputTokens(senderID, maxTokens)
+	if err := b.agent.SetUserMaxOutputTokens(senderID, maxTokens); err != nil {
+		// LLMConfig may not exist (e.g. remote CLI user using server default) —
+		// fallback to updating the factory cache directly.
+		// Still apply basic validation.
+		if maxTokens < 0 {
+			return fmt.Errorf("max_output_tokens must be >= 0, got %d", maxTokens)
+		}
+		b.agent.llmFactory.SetUserMaxOutputTokens(senderID, maxTokens)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
@@ -207,7 +263,14 @@ func (b *LocalBackend) GetUserThinkingMode(senderID string) string {
 }
 
 func (b *LocalBackend) SetUserThinkingMode(senderID string, mode string) error {
-	return b.agent.SetUserThinkingMode(senderID, mode)
+	validModes := map[string]bool{"": true, "enabled": true, "disabled": true, "auto": true}
+	if !validModes[mode] {
+		return fmt.Errorf("invalid thinking_mode: %q", mode)
+	}
+	if err := b.agent.SetUserThinkingMode(senderID, mode); err != nil {
+		b.agent.llmFactory.SetUserThinkingMode(senderID, mode)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetLLMConcurrency(senderID string) int {

@@ -169,12 +169,6 @@ func MkdirAllAsUser(runAsUser, path string, perm os.FileMode) error {
 	return nil
 }
 
-// shellEscape wraps a path in single quotes, escaping any embedded single quotes.
-func shellEscape(s string) string {
-	// Replace ' with '\'' (end quote, escaped quote, start quote)
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // CheckSudoers tests whether sudo -n -u <user> -- true works (NOPASSWD configured).
 // Returns nil if sudoers is properly configured for the given user.
 func CheckSudoers(user string) error {

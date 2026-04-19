@@ -103,8 +103,9 @@ func (a *Agent) buildBaseRunConfig(
 		SandboxMode:      a.sandboxMode,
 
 		// 循环控制
-		MaxIterations:   a.getMaxIterations(),
-		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(senderID),
+		MaxIterations:    a.getMaxIterations(),
+		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(senderID),
+		DynamicMaxTokens: a.dynamicMaxTokens(),
 
 		// Session
 		SessionKey: sessionKey,
@@ -203,13 +204,23 @@ func (a *Agent) buildMainRunConfig(
 		// CLI 渠道进度处理
 		switch channel {
 		case "cli":
+			var cliCh *channelpkg.CLIChannel
+			var remoteCLICh *channelpkg.RemoteCLIChannel
 			if ch, ok := a.channelFinder("cli"); ok {
 				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-					cfg.ProgressEventHandler = func(event *ProgressEvent) {
-						if event == nil || event.Structured == nil {
-							return
-						}
-						s := event.Structured
+					cliCh = cc
+				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+					remoteCLICh = rc
+				}
+			}
+			if cliCh != nil || remoteCLICh != nil {
+				progressKey := channel + ":" + chatID
+				cfg.ProgressEventHandler = func(event *ProgressEvent) {
+					if event == nil || event.Structured == nil {
+						return
+					}
+					s := event.Structured
+					if cliCh != nil {
 						payload := &channelpkg.CLIProgressPayload{
 							Phase:     string(s.Phase),
 							Iteration: s.Iteration,
@@ -236,7 +247,6 @@ func (a *Agent) buildMainRunConfig(
 								Summary:   t.Summary,
 							})
 						}
-						// Parse sub-agent tree from progress lines
 						if len(event.Lines) > 0 {
 							subAgents := ExtractSubAgentTree(event.Lines)
 							if len(subAgents) > 0 {
@@ -252,18 +262,12 @@ func (a *Agent) buildMainRunConfig(
 								payload.SubAgents = cliSubAgents
 							}
 						}
-						// Copy todo items for CLI display
 						if len(s.Todos) > 0 {
 							payload.Todos = make([]channelpkg.CLITodoItem, len(s.Todos))
 							for i, td := range s.Todos {
-								payload.Todos[i] = channelpkg.CLITodoItem{
-									ID:   td.ID,
-									Text: td.Text,
-									Done: td.Done,
-								}
+								payload.Todos[i] = channelpkg.CLITodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
 							}
 						}
-						// §18 传递 Token 使用量快照
 						if s.TokenUsage != nil {
 							payload.TokenUsage = &channelpkg.CLITokenUsage{
 								PromptTokens:     s.TokenUsage.PromptTokens,
@@ -272,15 +276,69 @@ func (a *Agent) buildMainRunConfig(
 								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
 							}
 						}
-						cc.SendProgress(chatID, payload)
+						cliCh.SendProgress(chatID, payload)
+						// Save snapshot for mid-session reconnect (GetActiveProgress RPC).
+						a.lastProgressSnapshot.Store(progressKey, payload)
 					}
-				} else {
-					log.WithField("channel", channel).Warn("CLI channel found but type assertion failed, skipping ProgressEventHandler")
+					if remoteCLICh != nil {
+						payload := &channelpkg.WsProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+							Reasoning: s.ReasoningContent,
+						}
+						for _, t := range s.ActiveTools {
+							payload.ActiveTools = append(payload.ActiveTools, channelpkg.WsToolProgress{
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
+							})
+						}
+						for _, t := range s.CompletedTools {
+							payload.CompletedTools = append(payload.CompletedTools, channelpkg.WsToolProgress{
+								Name:      t.Name,
+								Label:     t.Label,
+								Status:    string(t.Status),
+								Elapsed:   t.Elapsed.Milliseconds(),
+								Summary:   t.Summary,
+								Iteration: t.Iteration,
+							})
+						}
+						if len(event.Lines) > 0 {
+							subAgents := ExtractSubAgentTree(event.Lines)
+							if len(subAgents) > 0 {
+								wsSubAgents := make([]channelpkg.WsSubAgent, len(subAgents))
+								for i, sa := range subAgents {
+									wsSubAgents[i] = channelpkg.WsSubAgent{Role: sa.Role, Status: sa.Status, Desc: sa.Desc, Children: convertWsSubAgentTree(sa.Children)}
+								}
+								payload.SubAgents = wsSubAgents
+							}
+						}
+						if len(s.Todos) > 0 {
+							payload.Todos = make([]channelpkg.WsTodoItem, len(s.Todos))
+							for i, td := range s.Todos {
+								payload.Todos[i] = channelpkg.WsTodoItem{ID: td.ID, Text: td.Text, Done: td.Done}
+							}
+						}
+						if s.TokenUsage != nil {
+							payload.TokenUsage = &channelpkg.WsTokenUsage{
+								PromptTokens:     s.TokenUsage.PromptTokens,
+								CompletionTokens: s.TokenUsage.CompletionTokens,
+								TotalTokens:      s.TokenUsage.TotalTokens,
+								CacheHitTokens:   s.TokenUsage.CacheHitTokens,
+							}
+						}
+						remoteCLICh.SendProgress(chatID, payload)
+					}
 				}
 			}
 		case "web":
 			if ch, ok := a.channelFinder("web"); ok {
 				if wc, ok := ch.(*channelpkg.WebChannel); ok {
+					progressKey := channel + ":" + chatID
 					cfg.ProgressEventHandler = func(event *ProgressEvent) {
 						if event == nil || event.Structured == nil {
 							return
@@ -350,6 +408,12 @@ func (a *Agent) buildMainRunConfig(
 
 						// Keep event order stable for frontend rendering. SendProgress itself is non-blocking.
 						wc.SendProgress(chatID, payload)
+						// Save CLI-format snapshot for mid-session reconnect.
+						a.lastProgressSnapshot.Store(progressKey, &channelpkg.CLIProgressPayload{
+							Phase:     string(s.Phase),
+							Iteration: s.Iteration,
+							Thinking:  s.ThinkingContent,
+						})
 					}
 				} else {
 					log.WithField("channel", channel).Warn("Web channel found but type assertion failed, skipping ProgressEventHandler")
@@ -394,35 +458,30 @@ func (a *Agent) buildMainRunConfig(
 	// Stream — default ON for all channels; wire callbacks per channel type.
 	if !streamDisabled {
 		cfg.Stream = true
-		// Wire stream content callback: push accumulated content into progress block
-		// via CLIChannel.SendProgress (not bus) so it renders inside the progress panel.
-		if ch, ok := a.channelFinder("cli"); ok {
-			if cc, ok := ch.(*channelpkg.CLIChannel); ok {
-				cfg.StreamContentFunc = func(content string) {
-					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-						StreamContent: content,
-					})
-				}
-				cfg.StreamReasoningFunc = func(content string) {
-					cc.SendProgress(chatID, &channelpkg.CLIProgressPayload{
-						ReasoningStreamContent: content,
-					})
+		if a.channelFinder != nil {
+			var cliCh *channelpkg.CLIChannel
+			var remoteCLICh *channelpkg.RemoteCLIChannel
+			if ch, ok := a.channelFinder("cli"); ok {
+				if cc, ok := ch.(*channelpkg.CLIChannel); ok {
+					cliCh = cc
+				} else if rc, ok := ch.(*channelpkg.RemoteCLIChannel); ok {
+					remoteCLICh = rc
 				}
 			}
-		}
-		// Also wire for web channel — needed for CLI RemoteBackend clients
-		// connected via WebSocket who receive stream_content messages.
-		if ch, ok := a.channelFinder("web"); ok {
-			if wc, ok := ch.(*channelpkg.WebChannel); ok {
-				if cfg.StreamContentFunc == nil {
-					cfg.StreamContentFunc = func(content string) {
-						wc.SendStreamContent(chatID, content, "")
-					}
+			cfg.StreamContentFunc = func(content string) {
+				if cliCh != nil {
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{StreamContent: content})
 				}
-				if cfg.StreamReasoningFunc == nil {
-					cfg.StreamReasoningFunc = func(content string) {
-						wc.SendStreamContent(chatID, "", content)
-					}
+				if remoteCLICh != nil {
+					remoteCLICh.SendStreamContent(chatID, content, "")
+				}
+			}
+			cfg.StreamReasoningFunc = func(content string) {
+				if cliCh != nil {
+					cliCh.SendProgress(chatID, &channelpkg.CLIProgressPayload{ReasoningStreamContent: content})
+				}
+				if remoteCLICh != nil {
+					remoteCLICh.SendStreamContent(chatID, "", content)
 				}
 			}
 		}
@@ -629,18 +688,19 @@ func (a *Agent) buildSubAgentRunConfig(
 	}
 
 	cfg := RunConfig{
-		LLMClient:       llmClient,
-		Model:           subModel,
-		ThinkingMode:    thinkingMode,
-		Stream:          stream,
-		MaxOutputTokens: a.llmFactory.GetMaxOutputTokens(originUserID),
-		Tools:           subTools,
-		Messages:        messages,
-		AgentID:         subAgentID,
-		Channel:         parentCtx.Channel,
-		ChatID:          parentCtx.ChatID,
-		SenderID:        parentAgentID, // SubAgent: 直接调用者 = 父 Agent
-		OriginUserID:    originUserID,  // SubAgent: 继承原始用户 ID
+		LLMClient:        llmClient,
+		Model:            subModel,
+		ThinkingMode:     thinkingMode,
+		Stream:           stream,
+		MaxOutputTokens:  a.llmFactory.GetMaxOutputTokens(originUserID),
+		DynamicMaxTokens: a.dynamicMaxTokens(),
+		Tools:            subTools,
+		Messages:         messages,
+		AgentID:          subAgentID,
+		Channel:          parentCtx.Channel,
+		ChatID:           parentCtx.ChatID,
+		SenderID:         parentAgentID, // SubAgent: 直接调用者 = 父 Agent
+		OriginUserID:     originUserID,  // SubAgent: 继承原始用户 ID
 
 		// 从父 Agent 继承工作区 & 沙箱配置
 		WorkingDir:       parentCtx.WorkingDir,
@@ -1000,27 +1060,30 @@ func (a *Agent) buildMemoryToolSetup(channel, chatID string) ([]llm.ToolDefiniti
 	return defs, exec
 }
 
-// buildToolContextExtras 构建 Letta 记忆相关的 ToolContext 扩展字段。
-// 通用字段（InjectInbound、Registry）已迁移到 RunConfig，此处仅处理 Letta memory。
+// buildToolContextExtras 构建 ToolContext 扩展字段。
+// 通用字段（TenantID、MemorySvc）从 TenantSession 直接获取，对所有 memory 类型生效。
+// LettaMemory 专属字段（CoreMemory、ArchivalMemory、ToolIndexer）仅在 LettaMemory 时设置。
 func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtras {
 	extras := &ToolContextExtras{
 		InvalidateAllSessionMCP: func() { a.multiSession.InvalidateAll() },
 	}
 
-	// Wire Letta memory fields if the session uses LettaMemory
 	ts, err := a.multiSession.GetOrCreateSession(channel, chatID)
 	if err != nil {
 		log.WithError(err).WithFields(log.Fields{
 			"channel": channel,
 			"chat_id": chatID,
-		}).Warn("buildToolContextExtras: GetOrCreateSession failed, Letta memory fields will be empty")
+		}).Warn("buildToolContextExtras: GetOrCreateSession failed, fields will be empty")
 	} else {
+		// Tenant-level fields: work for all memory provider types
+		extras.TenantID = ts.TenantID()
+		extras.MemorySvc = ts.MemoryService()
+		extras.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
+
+		// LettaMemory-specific fields
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
-			extras.TenantID = lm.TenantID()
 			extras.CoreMemory = lm.CoreService()
 			extras.ArchivalMemory = lm.ArchivalService()
-			extras.MemorySvc = lm.MemoryService()
-			extras.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
 			extras.ToolIndexer = lm
 		}
 	}

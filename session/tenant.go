@@ -99,6 +99,13 @@ func (s *TenantSession) TenantID() int64 {
 	return s.tenantID
 }
 
+// MemoryService returns the underlying SQLite memory service for this tenant.
+// Used for tenant-level state operations (token state, consolidation state, etc.)
+// that are independent of the memory provider implementation.
+func (s *TenantSession) MemoryService() *sqlite.MemoryService {
+	return s.memorySvc
+}
+
 // Channel returns the channel name
 func (s *TenantSession) Channel() string {
 	return s.channel

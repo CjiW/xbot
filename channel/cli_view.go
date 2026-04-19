@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,7 +48,10 @@ func (m *cliModel) View() tea.View {
 	titleLeft := m.titleText()
 	// 标题栏右侧快捷键提示：紧凑的点分隔，比 | 更柔和
 	titleRight := m.locale.TitleHint
-	if m.updateNotice != nil && m.updateNotice.HasUpdate {
+	// Askuser panel: override titleRight with panel-specific hints (always visible)
+	if m.panelMode == "askuser" {
+		titleRight = m.askUserTitleHints()
+	} else if m.updateNotice != nil && m.updateNotice.HasUpdate {
 		titleRight = fmt.Sprintf("%s→%s · /update · /help", m.updateNotice.Current, m.updateNotice.Latest)
 	}
 	// Runner status + identity indicator in title bar
@@ -177,7 +181,7 @@ func (m *cliModel) View() tea.View {
 		scrollHint := ""
 		if totalAskLines > askVisibleH {
 			pct := (m.askPanelScrollY + askVisibleH) * 100 / totalAskLines
-			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] ↑↓PgUp/PgDn scroll", pct))
+			scrollHint = m.styles.PanelDesc.Render(fmt.Sprintf(" [%d%%] Ctrl+↑↓/PgUp/PgDn", pct))
 		}
 		content = fmt.Sprintf(
 			"%s\n%s\n%s%s%s",
@@ -428,17 +432,57 @@ func (m *cliModel) renderTodoBar() string {
 	return sb.String()
 }
 
-// titleText 生成标题栏文字（纯 ASCII，避免 emoji 宽度不一致）
+// titleText 生成标题栏文字。
 func (m *cliModel) titleText() string {
+	modeLabel := "⌂ xbot"
+	if m.remoteMode {
+		host := m.remoteServerURL
+		// Strip scheme for display: "ws://host:port" → "host:port"
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		// Connection state via plain Unicode symbol (no ANSI — colors break titleBar background)
+		var cloud string
+		switch m.connState {
+		case "connected":
+			cloud = "☁"
+		case "disconnected":
+			cloud = "⊘"
+		case "reconnecting":
+			cloud = "◌"
+		default:
+			cloud = "☁"
+		}
+		if host != "" {
+			modeLabel = fmt.Sprintf("%s xbot %s", cloud, host)
+		} else {
+			modeLabel = fmt.Sprintf("%s xbot remote", cloud)
+		}
+	}
 	if m.workDir != "" {
 		// Resolve to absolute path so "." → actual directory name
 		abs, err := filepath.Abs(m.workDir)
 		if err == nil {
-			return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(abs))
+			return fmt.Sprintf(" %s [%s]", modeLabel, filepath.Base(abs))
 		}
-		return fmt.Sprintf(" xbot CLI [%s]", filepath.Base(m.workDir))
+		return fmt.Sprintf(" %s [%s]", modeLabel, filepath.Base(m.workDir))
 	}
-	return " xbot CLI"
+	return " " + modeLabel
+}
+
+// ---------------------------------------------------------------------------
+// §14 Dynamic title bar hints
+// ---------------------------------------------------------------------------
+
+// askUserTitleHints returns the minimal control hints for the askuser panel,
+// displayed in the header bar so they're always visible regardless of scroll.
+// Keep it short — header width is limited and line wrap looks terrible.
+func (m *cliModel) askUserTitleHints() string {
+	hints := []string{"Shift+↑↓ history", "Ctrl+↑↓ question", "Enter submit", "Esc cancel"}
+	if len(m.panelItems) > 1 {
+		hints = append([]string{"←→/Tab switch"}, hints...)
+	}
+	return strings.Join(hints, " · ")
 }
 
 // ---------------------------------------------------------------------------

@@ -32,9 +32,19 @@
 - **Tier fallback**: unconfigured tier → vanguard→balance→swift chain. Empty tier must NOT return default client with wrong model.
 - **`createClientFromSub` uses sub's credentials with a *different* model** — verify target model is served by that endpoint.
 
+### Context Management & Token Estimation
+- **`maybeCompress` must NEVER use pure local token estimation.** Token counts must come from API responses (`lastPromptTokens`/`lastCompletionTokens`). The `no_data` fallback (no API data) skips all compress/masking checks with `totalTokens=0`. Tests must set `cfg.LastPromptTokens` to simulate a previous Run.
+- **`buildToolContextExtras` uses `TenantSession.MemoryService()` for `MemorySvc`/`TenantID`, NOT `LettaMemory` type assertion.** These are tenant-level fields that work for all memory providers. Only LettaMemory-specific fields (CoreMemory, ArchivalMemory, ToolIndexer) stay inside the type assertion.
+- **`ObservationMaskStore` and `OffloadStore` both persist to disk.** Mask uses `{WorkDir}/.xbot/mask_store/{id}.json`, Offload uses `{WorkDir}/.xbot/offload_store/{session}/{id}.json`. `Recall` falls back to disk on memory miss. Both cleaned on compress and `/clear`.
+
 ### Startup
 - `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.
 - Settings save is synchronous — all local I/O, no network calls.
+
+### CLI / BubbleTea
+- **`parseKeyInput` with modifiers must NOT set `Text` field.** `Key.String()` returns `Text` if non-empty (ultraviolet `key.go:392`), bypassing `Keystroke()`. `{Code:'c', Text:"c", Mod:ModCtrl}.String()` → `"c"` not `"ctrl+c"`, breaking cancel.
+- **Iteration snapshot deduplication**: PhaseDone + handleAgentMessage can both snapshot the same iteration. Always dedup by iteration number, preferring PhaseDone (has reasoning from server).
+- **`ElapsedWall` must be set in ALL snapshot paths** — missing it causes total time to fall back to summing only last iteration's tool.Elapsed.
 
 ### Windows
 - `syscall.PROCESS_QUERY_LIMITED_INFORMATION` and `STILL_ACTIVE` not in Go stdlib — define as uint32 constants.

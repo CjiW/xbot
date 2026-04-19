@@ -187,11 +187,12 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus              *bus.MessageBus
-	multiSession     *session.MultiTenantSession // Multi-tenant session manager
-	tools            *tools.Registry
-	maxIterations    int
-	purgeOldMessages bool
+	bus                     *bus.MessageBus
+	multiSession            *session.MultiTenantSession // Multi-tenant session manager
+	tools                   *tools.Registry
+	maxIterations           int
+	dynamicMaxTokensEnabled bool
+	purgeOldMessages        bool
 
 	skills             *SkillStore
 	agents             *AgentStore
@@ -242,6 +243,12 @@ type Agent struct {
 	// per-request cancel: 用于 /cancel 取消当前正在处理的请求
 	// key: "channel:chatID:senderID" -> chan struct{} (buffered, cap=1)
 	chatCancelCh sync.Map
+
+	// lastProgressSnapshot stores the latest CLIProgressPayload per active chat,
+	// updated by ProgressEventHandler during processing. Used by GetActiveProgress
+	// RPC to restore progress state on mid-session reconnect.
+	// key: "channel:chatID" -> *channel.CLIProgressPayload
+	lastProgressSnapshot sync.Map
 
 	// interactiveSubAgents stores interactive SubAgent sessions
 	// key: "channel:chatID/roleName" -> *interactiveAgent
@@ -455,6 +462,11 @@ type Config struct {
 	CompressionThreshold float64 // 触发压缩的 token 比例阈值（默认 0.7）
 	EnableAutoCompress   bool    // 是否启用自动上下文压缩（默认 true，旧字段）
 
+	// DynamicMaxTokens dynamically adjusts max_output_tokens based on remaining
+	// context space. When enabled, max_output_tokens is reduced when the context
+	// is large to prevent context_window_exceeded errors.
+	DynamicMaxTokens bool
+
 	// SubAgent 深度控制
 	MaxSubAgentDepth int // SubAgent 最大嵌套深度（默认 6）
 
@@ -648,7 +660,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	// 默认关闭：通过 settings 的 enable_masking 开启。
 	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
-	a.maskStore = NewObservationMaskStore(200)
+	maskDir := filepath.Join(cfg.WorkDir, ".xbot", "mask_store")
+	a.maskStore = NewObservationMaskStore(200, maskDir)
+	go a.maskStore.CleanStale(7)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {
@@ -665,6 +679,32 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	editStore := NewContextEditStore(100)
 	contextEditor := NewContextEditor(editStore)
 	a.contextEditor = contextEditor
+	// Wire up persistence callback for context edits (best-effort sync to DB).
+	// IMPORTANT: PersistFn is called while ContextEditor.mu is held (write lock).
+	// Do NOT acquire ContextEditor.mu inside PersistFn — deadlock!
+	sessionSvc := sqlite.NewSessionService(multiSession.DB())
+	contextEditor.PersistFn = func(editedIndices []int) {
+		tenantID := contextEditor.tenantID
+		if tenantID == 0 {
+			return
+		}
+		// messages is safe to read here — caller (applyEdit/deleteTurn) holds the write lock
+		msgs := contextEditor.messages
+		if msgs == nil {
+			return
+		}
+		for _, idx := range editedIndices {
+			if idx < 0 || idx >= len(msgs) {
+				continue
+			}
+			if err := sessionSvc.UpdateMessageContentNonDisplayOnly(tenantID, idx, msgs[idx].Content); err != nil {
+				log.WithError(err).WithFields(log.Fields{
+					"tenant_id": tenantID,
+					"index":     idx,
+				}).Warn("Failed to persist context edit to database")
+			}
+		}
+	}
 	registry.RegisterCore(&tools.ContextEditTool{Handler: contextEditor})
 
 	// 初始化并注册 TODO 管理工具
@@ -747,12 +787,13 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		bus:              cfg.Bus,
-		multiSession:     multiSession,
-		tools:            registry,
-		maxIterations:    cfg.MaxIterations,
-		maxConcurrency:   cfg.MaxConcurrency,
-		purgeOldMessages: cfg.PurgeOldMessages,
+		bus:                     cfg.Bus,
+		multiSession:            multiSession,
+		tools:                   registry,
+		maxIterations:           cfg.MaxIterations,
+		maxConcurrency:          cfg.MaxConcurrency,
+		dynamicMaxTokensEnabled: cfg.DynamicMaxTokens,
+		purgeOldMessages:        cfg.PurgeOldMessages,
 
 		skills:             skillStore,
 		agents:             agentStore,
@@ -848,6 +889,10 @@ func (a *Agent) getMaxIterations() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
 	return a.maxIterations
+}
+
+func (a *Agent) dynamicMaxTokens() bool {
+	return a.dynamicMaxTokensEnabled
 }
 
 func (a *Agent) getMaxConcurrency() int {
@@ -1077,23 +1122,19 @@ func (a *Agent) Run(ctx context.Context) error {
 			// /cancel 拦截：不进入 chatWorker 队列，直接发 cancel 信号
 			if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
 				cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
+				log.WithField("cancel_key", cancelKey).Info("Received /cancel request")
 				if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
 					select {
 					case ch.(chan struct{}) <- struct{}{}:
-						a.bus.Outbound <- bus.OutboundMessage{
-							Channel: msg.Channel,
-							ChatID:  msg.ChatID,
-							Content: "Request cancelled.",
-						}
+						log.Info("Cancel signal sent to processing goroutine")
+						_ = a.sendMessage(msg.Channel, msg.ChatID, "Request cancelled.")
 					default:
 						// cancel 信号已发过
+						log.WithField("cancel_key", cancelKey).Warn("Cancel signal already sent (buffer full)")
 					}
 				} else {
-					a.bus.Outbound <- bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: "No active request.",
-					}
+					log.WithField("cancel_key", cancelKey).Warn("No active request found for cancel")
+					_ = a.sendMessage(msg.Channel, msg.ChatID, "No active request.")
 				}
 				continue
 			}
@@ -1262,7 +1303,9 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 						return
 					}
 					if response != nil {
-						a.bus.Outbound <- *response
+						if sendErr := a.sendMessage(m.Channel, m.ChatID, response.Content, response.Metadata); sendErr != nil {
+							a.bus.Outbound <- *response
+						}
 					}
 				}(msg, cmd)
 			} else {
@@ -1277,31 +1320,6 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 		}
 
 		// 普通消息：转发到内部队列，由 processLoop 串行处理
-		// /cancel 拦截：在 chatWorker 层面处理，不进入 msgCh，
-		// 避免 chatProcessLoop 阻塞在 processMessage 时 /cancel 无法被处理导致死锁。
-		if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
-			cancelKey := msg.Channel + ":" + msg.ChatID + ":" + msg.SenderID
-			if ch, ok := a.chatCancelCh.Load(cancelKey); ok {
-				select {
-				case ch.(chan struct{}) <- struct{}{}:
-					a.bus.Outbound <- bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: "Request cancelled.",
-					}
-				default:
-					// cancel 信号已发过
-				}
-			} else {
-				a.bus.Outbound <- bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: "No active request.",
-				}
-			}
-			continue
-		}
-
 		select {
 		case msgCh <- msg:
 		case <-ctx.Done():
@@ -1371,6 +1389,7 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			defer func() {
 				reqCancel()
 				a.chatCancelCh.Delete(cancelKey)
+				a.lastProgressSnapshot.Delete(msg.Channel + ":" + msg.ChatID)
 				<-sem // 释放槽位
 			}()
 
@@ -1393,9 +1412,12 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			// 请求被用户 /cancel 取消（而非全局 ctx 关闭）
 			log.WithFields(log.Fields{"request_id": msg.RequestID, "chat": chatKey}).Info("Request cancelled by user")
 			// 即使取消也要发送 response，让 CLI 清理 typing/progress 状态。
-			// processMessage 内部可能已返回 "Agent was cancelled."，但 wasCancelled 时被跳过。
 			if response != nil {
-				a.bus.Outbound <- *response
+				_ = a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata)
+			} else {
+				// No response generated yet (cancelled mid-tool-call) — send empty
+				// message to signal turn end so CLI can clean up typing/progress state.
+				_ = a.sendMessage(msg.Channel, msg.ChatID, "")
 			}
 			continue
 		}
@@ -1415,7 +1437,27 @@ func (a *Agent) chatProcessLoop(ctx context.Context, chatKey string, ch <-chan b
 			continue
 		}
 		if response != nil {
-			a.bus.Outbound <- *response
+			if response.WaitingUser {
+				// WaitingUser response: send directly with WaitingUser flag set.
+				// Bypass sendMessage (which doesn't support WaitingUser) to avoid metadata hack.
+				outMsg := bus.OutboundMessage{
+					Channel:     msg.Channel,
+					ChatID:      msg.ChatID,
+					Content:     response.Content,
+					WaitingUser: true,
+					Metadata:    response.Metadata,
+				}
+				if outMsg.Metadata == nil {
+					outMsg.Metadata = make(map[string]string)
+				}
+				select {
+				case a.bus.Outbound <- outMsg:
+				default:
+					log.Ctx(ctx).Warn("Message bus outbound channel is full, dropping WaitingUser response")
+				}
+			} else if err := a.sendMessage(msg.Channel, msg.ChatID, response.Content, response.Metadata); err != nil {
+				log.Ctx(ctx).WithError(err).Warn("Failed to dispatch response via sendMessage")
+			}
 		}
 
 		// 更新最后活跃的 senderID
@@ -1493,6 +1535,11 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
 	}
 
+	// Set tenant ID for context editor persistence (context edits happen during engine run)
+	if a.contextEditor != nil {
+		a.contextEditor.SetTenantID(tenantSession.TenantID())
+	}
+
 	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）
 	a.chatHistory.Add(msg.Channel, msg.ChatID, msg.SenderID, msg.Content)
 	log.Ctx(ctx).WithFields(log.Fields{
@@ -1568,7 +1615,12 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 			userMsg.Timestamp = msg.Time
 		}
 		if err := tenantSession.AddMessage(userMsg); err != nil {
-			log.Ctx(ctx).WithError(err).Warn("Failed to eager-save user message")
+			log.Ctx(ctx).WithError(err).WithFields(log.Fields{
+				"channel": msg.Channel,
+				"chat_id": msg.ChatID,
+				"sender":  msg.SenderID,
+				"content": msg.Content,
+			}).Warn("Failed to eager-save user message")
 		}
 	}
 
@@ -1721,12 +1773,16 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		// Send the WaitingUser outbound so CLI can open the ask-user panel.
 		// Content may be empty (no assistant reply yet), which is fine — the
 		// panel reads the question from Metadata["ask_question"].
+		meta := map[string]string{}
+		for k, v := range out.Metadata {
+			meta[k] = v
+		}
 		waitOut := &bus.OutboundMessage{
 			Channel:     msg.Channel,
 			ChatID:      msg.ChatID,
 			Content:     finalContent,
 			WaitingUser: true,
-			Metadata:    out.Metadata,
+			Metadata:    meta,
 		}
 		return waitOut, nil
 	}
@@ -2023,6 +2079,9 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 	if len(metadata) > 0 && metadata[0] != nil {
 		msg.Metadata = metadata[0]
 	}
+	if msg.Metadata == nil {
+		msg.Metadata = make(map[string]string)
+	}
 
 	isFinal := strings.HasPrefix(content, "__FEISHU_CARD__:")
 
@@ -2046,6 +2105,12 @@ func (a *Agent) sendMessage(channel, chatID, content string, metadata ...map[str
 			}
 		}
 
+		log.WithField("send_channel", msg.Channel).
+			WithField("send_chat_id", msg.ChatID).
+			WithField("orig_channel", channel).
+			WithField("orig_chat_id", chatID).
+			WithField("is_final", isFinal).
+			Info("sendMessage directSend dispatch")
 		msgID, err := a.directSend(msg)
 		if err != nil {
 			return err

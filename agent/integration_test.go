@@ -224,6 +224,9 @@ func TestIntegration_Masking_TriggeredAtThreshold(t *testing.T) {
 	cfg.ContextManager = &mockCompressor{}
 	// Masking is disabled by default; explicitly enable for this test
 	cfg.MaskStore = env.maskStore
+	// Simulate API token data from a previous Run (production code always has
+	// LastPromptTokens set via DB restoration — tests must do the same).
+	cfg.LastPromptTokens = 9500
 	out := Run(context.Background(), cfg)
 
 	if out.Error != nil {
@@ -816,6 +819,8 @@ func TestIntegration_Compress_TriggeredWhenOverThreshold(t *testing.T) {
 
 	cfg := env.buildRunConfig(messages)
 	cfg.ContextManager = compressor
+	// Simulate API token data from a previous Run
+	cfg.LastPromptTokens = 3000
 
 	out := Run(context.Background(), cfg)
 
@@ -904,6 +909,8 @@ func TestIntegration_MaxContext_CustomThreshold(t *testing.T) {
 		cfg.ContextManager = &mockCompressor{}
 		// Masking is disabled by default; explicitly enable for this test
 		cfg.MaskStore = env.maskStore
+		// Simulate API token data from a previous Run
+		cfg.LastPromptTokens = 5800
 
 		Run(context.Background(), cfg)
 

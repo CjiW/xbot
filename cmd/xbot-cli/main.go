@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +33,7 @@ import (
 	"xbot/config"
 	"xbot/llm"
 	log "xbot/logger"
+	"xbot/serverapp"
 	"xbot/storage"
 	"xbot/storage/sqlite"
 	"xbot/tools"
@@ -72,14 +75,35 @@ func isFirstRun() bool {
 	return cfg.LLM.APIKey == ""
 }
 
+// isLocalServer returns true if the server URL points to a local/loopback address.
+func isLocalServer(serverURL string) bool {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return false
+	}
+	h := strings.Split(u.Host, ":")[0] // strip port
+	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == ""
+}
+
 // newCLIApp 执行公共初始化：加载配置、创建 Backend。
 // If serverURL is non-empty, creates a RemoteBackend (agent runs on server).
 // Otherwise creates a LocalBackend (agent runs in-process).
-func newCLIApp(serverURL, token string) *cliApp {
+func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 	cfg := config.Load()
 
 	// Derive cfg.LLM from active subscription (single source of truth)
 	syncLLMFromActiveSub(cfg)
+
+	// If --server was not specified on the command line, fall back to config.
+	// --local disables this fallback and forces legacy in-process mode.
+	if !forceLocal {
+		if serverURL == "" && cfg.CLI.ServerURL != "" {
+			serverURL = cfg.CLI.ServerURL
+		}
+		if token == "" && cfg.CLI.Token != "" {
+			token = cfg.CLI.Token
+		}
+	}
 
 	workDir := cfg.Agent.WorkDir
 	xbotHome := config.XbotHome()
@@ -179,16 +203,64 @@ func (app *cliApp) Close() {
 }
 
 func main() {
+	xbotHome := config.XbotHome()
+	defer func() {
+		if r := recover(); r != nil {
+			appendCLIPanicLog(xbotHome, r)
+			panic(r)
+		}
+	}()
 	fmt.Printf("xbot CLI %s\n", version.Version)
+
+	printHelp := func() {
+		fmt.Println("Usage: xbot-cli [options] [prompt]")
+		fmt.Println()
+		fmt.Println("Modes:")
+		fmt.Println("  default             Auto mode: use remote server if cli.server_url is configured")
+		fmt.Println("  --local             Force legacy local mode (in-process agent, old behavior)")
+		fmt.Println("  --server <ws-url>   Force remote mode and connect to server")
+		fmt.Println("  serve               Run server mode in the same binary")
+		fmt.Println()
+		fmt.Println("Options:")
+		fmt.Println("  --help, -h          Show this help")
+		fmt.Println("  --new               Start a new session")
+		fmt.Println("  --resume            Resume last session (default)")
+		fmt.Println("  -p <prompt>         Non-interactive single prompt")
+		fmt.Println("  --token <token>     Token for remote server")
+		fmt.Println("  --workspace <path>  Override workspace")
+	}
+
+	// Sub-commands: handled before flag parsing.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			fmt.Println("install 子命令已不再主推，请使用 scripts/install.sh")
+			fmt.Println("例如: curl -fsSL https://raw.githubusercontent.com/CjiW/xbot/master/scripts/install.sh | bash")
+			return
+		case "serve":
+			if err := serverapp.Run(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "--help", "-h", "help":
+			printHelp()
+			return
+		}
+	}
 
 	// 解析命令行标志
 	prompt := ""
 	newSession := false
 	var (
-		flagServer    string // --server ws://host:port (RemoteBackend: agent runs on server)
-		flagShare     string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
-		flagToken     string // --token xxx
-		flagWorkspace string // --workspace /path (overrides config)
+		flagServer     string // --server ws://host:port (RemoteBackend: agent runs on server)
+		flagShare      string // --share ws://host:port/ws/userID (Runner mode: tools run locally)
+		flagToken      string // --token xxx
+		flagWorkspace  string // --workspace /path (overrides config)
+		flagLocal      bool   // --local force legacy in-process mode
+		flagDebug      bool   // --debug enable UI capture + key injection via SIGUSR1
+		flagDebugInput string // --debug-input "1,enter,ctrl+c" auto-inject key sequence after startup
+		flagDebugCapMs int    // --debug-capture-ms 200  UI capture interval in ms (default 1000)
 	)
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -205,6 +277,27 @@ func main() {
 				flagServer = os.Args[i+1]
 				i++
 			}
+		case "--local":
+			flagLocal = true
+		case "--debug":
+			flagDebug = true
+		case "--debug-input":
+			if len(os.Args) > i+1 {
+				flagDebugInput = os.Args[i+1]
+				i++
+				flagDebug = true // auto-enable debug mode
+			}
+		case "--debug-capture-ms":
+			if len(os.Args) > i+1 {
+				n, err := strconv.Atoi(os.Args[i+1])
+				if err == nil && n >= 50 {
+					flagDebugCapMs = n
+				}
+				i++
+			}
+		case "--help", "-h":
+			printHelp()
+			return
 		case "--share":
 			if len(os.Args) > i+1 {
 				flagShare = os.Args[i+1]
@@ -250,7 +343,17 @@ func main() {
 	}
 	fmt.Println("Starting...")
 
-	app := newCLIApp(flagServer, flagToken)
+	if flagLocal {
+		flagServer = ""
+	}
+	app := newCLIApp(flagServer, flagToken, flagLocal)
+	if flagLocal {
+		fmt.Println("Backend: legacy local mode (--local)")
+	} else if app.backend != nil && app.backend.IsRemote() {
+		fmt.Println("Backend: remote server mode")
+	} else {
+		fmt.Println("Backend: local mode")
+	}
 	defer app.Close()
 
 	disp := channel.NewDispatcher(app.msgBus)
@@ -258,22 +361,32 @@ func main() {
 	// 用工作目录绝对路径作为 ChatID，不同目录有不同的会话
 	absWorkDir, _ := filepath.Abs(app.workDir)
 
+	_, isRemoteBackend := app.backend.(*agent.RemoteBackend)
+	remoteServerURL := ""
+	if rb, ok := app.backend.(*agent.RemoteBackend); ok {
+		remoteServerURL = rb.ServerURL()
+	}
 	cliCfg := channel.CLIChannelConfig{
-		WorkDir:    app.workDir,
-		ChatID:     absWorkDir,
-		IsFirstRun: firstRun,
+		WorkDir:         app.workDir,
+		ChatID:          absWorkDir,
+		RemoteMode:      isRemoteBackend,
+		RemoteServerURL: remoteServerURL,
+		DebugMode:       flagDebug,
+		DebugInput:      flagDebugInput,
+		DebugCaptureMs:  flagDebugCapMs,
+		IsFirstRun:      firstRun,
 		GetCurrentValues: func() map[string]string {
 			// In remote mode, read current values from server via RPC.
 			if app.backend != nil && app.backend.IsRemote() {
 				vals := make(map[string]string)
-				// Model from server
-				vals["llm_model"] = app.backend.GetDefaultModel()
 				// Settings from server (contains most config values)
 				if sv, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
 					for k, v := range sv {
 						vals[k] = v
 					}
 				}
+				// Model from server — must be AFTER settings to override stale llm_model in DB
+				vals["llm_model"] = app.backend.GetDefaultModel()
 				// Context mode from server
 				vals["context_mode"] = app.backend.GetContextMode()
 				// Defaults for fields not in settings
@@ -388,15 +501,19 @@ func main() {
 					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
 				// Push runtime state to server
+				// enable_auto_compress is a legacy alias for context_mode.
+				// Only apply it if context_mode is NOT also being set.
+				if v, ok := values["enable_auto_compress"]; ok {
+					if _, hasContextMode := values["context_mode"]; !hasContextMode {
+						if v == "true" {
+							_ = app.backend.SetContextMode("auto")
+						} else {
+							_ = app.backend.SetContextMode("none")
+						}
+					}
+				}
 				if v, ok := values["context_mode"]; ok && v != "" {
 					_ = app.backend.SetContextMode(v)
-				}
-				if v, ok := values["enable_auto_compress"]; ok {
-					if v == "true" {
-						_ = app.backend.SetContextMode("auto")
-					} else {
-						_ = app.backend.SetContextMode("none")
-					}
 				}
 				if v, ok := values["max_iterations"]; ok {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -413,8 +530,13 @@ func main() {
 						app.backend.SetMaxContextTokens(n)
 					}
 				}
-				if v, ok := values["sandbox_mode"]; ok && v != "" {
-					app.backend.SetSandbox(nil, v)
+				if v, ok := values["max_output_tokens"]; ok {
+					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+						_ = app.backend.SetUserMaxOutputTokens("cli_user", n)
+					}
+				}
+				if v, ok := values["thinking_mode"]; ok {
+					_ = app.backend.SetUserThinkingMode("cli_user", v)
 				}
 				return
 			}
@@ -619,8 +741,10 @@ func main() {
 			}
 			app.llmClient = client
 			if app.backend != nil {
-				app.backend.LLMFactory().SetDefaults(client, model)
-				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
+				if factory := app.backend.LLMFactory(); factory != nil {
+					factory.SetDefaults(client, model)
+					factory.SetModelTiers(app.cfg.LLM)
+				}
 			}
 			return nil
 		},
@@ -757,10 +881,15 @@ func main() {
 			cliCh.SetModelLister(newRemoteModelLister(app.backend))
 			// Forward user messages to server instead of local bus
 			cliCh.SetSendInboundFn(func(msg bus.InboundMessage) bool {
-				if err := app.backend.SendInbound(msg); err != nil {
-					log.WithError(err).Warn("Failed to forward message to remote server")
-					return false
-				}
+				go func() {
+					if err := app.backend.SendInbound(msg); err != nil {
+						log.WithError(err).Warn("Failed to forward message to remote server")
+						// For /cancel specifically, show a toast so the user knows it failed.
+						if strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel" {
+							cliCh.SendToast("Failed to cancel: "+err.Error(), "✗")
+						}
+					}
+				}()
 				return true
 			})
 			// Forward server responses directly to CLI channel (skip dispatcher
@@ -774,7 +903,7 @@ func main() {
 			})
 			// Inject TrimHistoryFn for Ctrl+K session truncation (RPC-backed)
 			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
-				return app.backend.TrimHistory("", "", cutoff)
+				return app.backend.TrimHistory("cli", cliCfg.ChatID, cutoff)
 			})
 			cliCh.SetResetTokenStateFn(func() {
 				app.backend.ResetTokenState()
@@ -829,16 +958,12 @@ func main() {
 		}
 	}
 
-	// Apply saved theme at startup (works in both local and remote mode)
-	if app.backend != nil {
-		if app.backend.IsRemote() {
-			// Remote mode: use RPC directly (SettingsService() is nil for RemoteBackend)
-			if vals, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
-				if t, ok := vals["theme"]; ok && t != "" {
-					channel.ApplyTheme(t)
-				}
-			}
-		} else if ss := app.backend.SettingsService(); ss != nil {
+	// Apply saved theme at startup.
+	// Local mode can read settings immediately; remote mode must wait until backend.Start()
+	// establishes the WS/RPC connection, otherwise theme fetch races and the UI keeps default
+	// colors until the user re-saves settings.
+	if app.backend != nil && !app.backend.IsRemote() {
+		if ss := app.backend.SettingsService(); ss != nil {
 			if vals, err := ss.GetSettings("cli", "cli_user"); err == nil {
 				if t, ok := vals["theme"]; ok && t != "" {
 					channel.ApplyTheme(t)
@@ -856,15 +981,117 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_ = app.backend.Start(ctx)
+
+	// Remote mode: connect to server with retry loop before starting TUI.
+	// Shows progress to the user instead of silently failing.
+	if app.backend.IsRemote() {
+		fmt.Fprintf(os.Stderr, "\n  Connecting to remote server %s ...\n", app.cfg.CLI.ServerURL)
+		const maxRetries = 5
+		var connectErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			connectErr = app.backend.Start(ctx)
+			if connectErr == nil {
+				fmt.Fprintln(os.Stderr, "  Connected.")
+				break
+			}
+			delay := time.Duration(1<<uint(attempt)) * time.Second
+			if attempt < maxRetries-1 {
+				fmt.Fprintf(os.Stderr, "  Connection failed: %v\n  Retrying in %vs (%d/%d)...\n", connectErr, delay, attempt+1, maxRetries)
+				select {
+				case <-ctx.Done():
+					fmt.Fprintln(os.Stderr, "\n  Cancelled.")
+					app.Close()
+					return
+				case <-time.After(delay):
+				}
+			}
+		}
+		if connectErr != nil {
+			fmt.Fprintf(os.Stderr, "\n  %s\n  Could not connect to server after %d attempts. Please check:\n    1. Server is running (xbot-cli serve)\n    2. Port matches in config (%s)\n    3. Token is correct\n  %s\n\n",
+				red("ERROR: "+connectErr.Error()),
+				maxRetries,
+				config.ConfigFilePath(),
+				red("Exiting."))
+			app.Close()
+			return
+		}
+	} else {
+		if err := app.backend.Start(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start backend: %v\n", err)
+			app.Close()
+			return
+		}
+	}
 	go disp.Run()
 
-	// Remote mode: load history from server after WS connection is established
+	// Remote mode: load history from server after WS connection is established.
+	// Use the original CLI tenant key so remote mode can resume the same session
+	// as legacy local mode: channel=cli, chat_id=absWorkDir.
 	if app.backend.IsRemote() {
-		if history, err := app.backend.GetHistory("", ""); err != nil {
-			log.WithError(err).Warn("Failed to load remote session history")
-		} else if len(history) > 0 {
-			cliCh.LoadHistory(history)
+		if vals, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
+			if t, ok := vals["theme"]; ok && t != "" {
+				channel.ApplyTheme(t)
+			}
+		}
+		remoteChatID, _ := filepath.Abs(app.workDir)
+
+		// Auto-set CWD: if connected to a local server (127.0.0.1/localhost),
+		// sync the CLI's actual cwd to the server session so the agent uses
+		// the correct directory regardless of where the server was started.
+		if isLocalServer(app.cfg.CLI.ServerURL) {
+			if cwd, err := os.Getwd(); err == nil {
+				if err := app.backend.SetCWD("cli", remoteChatID, cwd); err != nil {
+					log.WithError(err).Warn("Failed to sync CWD to server")
+				} else {
+					log.WithField("cwd", cwd).Info("Synced CLI CWD to local server")
+				}
+			}
+		}
+
+		if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
+			log.WithError(err).WithField("chat_id", remoteChatID).Warn("Failed to load remote session history")
+		} else {
+			log.WithFields(log.Fields{"chat_id": remoteChatID, "count": len(history)}).Info("CLI loaded remote history via RPC")
+			if len(history) > 0 {
+				cliCh.LoadHistory(history)
+			}
+		}
+		// Check if server has an active agent turn for this chat (mid-session reconnect).
+		// Run in goroutine to avoid blocking TUI startup on RPC timeout.
+		go func() {
+			if progress := app.backend.GetActiveProgress("cli", remoteChatID); progress != nil {
+				cliCh.SendProgress(cliCfg.ChatID, progress)
+				cliCh.SetProcessing(true)
+			}
+		}()
+
+		// Wire reconnect callback to reload history on WS reconnect.
+		if rb, ok := app.backend.(interface{ OnReconnect(func()) }); ok {
+			rb.OnReconnect(func() {
+				// Re-sync CWD on reconnect (server may have restarted, losing in-memory cwd)
+				if isLocalServer(app.cfg.CLI.ServerURL) {
+					if cwd, err := os.Getwd(); err == nil {
+						_ = app.backend.SetCWD("cli", remoteChatID, cwd)
+					}
+				}
+				if history, err := app.backend.GetHistory("cli", remoteChatID); err != nil {
+					log.WithError(err).Warn("Failed to reload history after reconnect")
+				} else {
+					cliCh.LoadHistory(history)
+				}
+				// Re-check processing state after reconnect.
+				if app.backend.IsProcessing("cli", remoteChatID) {
+					cliCh.SetProcessing(true)
+				} else {
+					cliCh.SetProcessing(false)
+				}
+			})
+		}
+		// Wire connection state change callback for header bar indicator.
+		if csc, ok := app.backend.(interface{ OnConnStateChange(func(string)) }); ok {
+			csc.OnConnStateChange(func(state string) {
+				cliCh.SetConnState(state)
+			})
 		}
 		// Background goroutine: periodically refresh agent count/list cache
 		// (RPC calls must not happen from BubbleTea event loop → deadlock)
@@ -1270,9 +1497,14 @@ func (s *configLLMSubscriber) GetDefaultModel() string {
 	return s.factory.GetDefaultModel()
 }
 
+// red wraps text in ANSI red for terminal error output.
+func red(s string) string {
+	return "\033[0;31m" + s + "\033[0m"
+}
+
 // executeNonInteractive 非交互模式：单次执行 prompt 并输出到 stdout。
 func executeNonInteractive(prompt string) {
-	app := newCLIApp("", "") // non-interactive always uses local backend
+	app := newCLIApp("", "", true) // non-interactive always uses local backend
 	defer app.Close()
 
 	absWorkDir, _ := filepath.Abs(app.workDir)
@@ -1435,19 +1667,33 @@ func (s *remoteLLMSubscriber) SwitchSubscription(senderID string, sub *channel.S
 	if sub == nil {
 		return nil
 	}
-	if err := s.backend.SetDefaultSubscription(sub.ID); err != nil {
-		return err
-	}
-	if sub.Model != "" {
-		return s.backend.SetUserModel(senderID, sub.Model)
-	}
-	return nil
+	// Server-side set_default_subscription invalidates the LLM cache so
+	// the next GetLLM call picks up the new subscription's provider/model/credentials.
+	// Do NOT call SetUserModel here — it would create a conflicting LLMConfig
+	// that overrides the subscription's model.
+	return s.backend.SetDefaultSubscription(sub.ID)
 }
 
 func (s *remoteLLMSubscriber) SwitchModel(senderID, model string) {
-	_ = s.backend.SetUserModel(senderID, model)
+	if err := s.backend.SwitchModel(senderID, model); err != nil {
+		log.WithError(err).Warn("remoteLLMSubscriber: SwitchModel RPC failed")
+	}
 }
 
 func (s *remoteLLMSubscriber) GetDefaultModel() string {
 	return s.backend.GetDefaultModel()
+}
+
+func appendCLIPanicLog(xbotHome string, recovered any) {
+	logDir := filepath.Join(xbotHome, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(logDir, "cli-panic.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "\n==== %s panic ====\n%v\n%s\n", time.Now().Format(time.RFC3339), recovered, debug.Stack())
 }

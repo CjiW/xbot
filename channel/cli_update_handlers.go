@@ -341,6 +341,25 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 				m.progress.CompletedTools = prev.CompletedTools
 			}
 		}
+		// Carry forward Reasoning/Thinking from previous progress within the same iteration.
+		// When a tool completes, the server sends a new progress event (Phase="tool") that
+		// may not include Reasoning — replacing progress would clear it mid-iteration.
+		if prev != nil {
+			sameIter := m.progress.Iteration == prev.Iteration || m.progress.Iteration == 0
+			if m.progress.Reasoning == "" && prev.Reasoning != "" && sameIter {
+				m.progress.Reasoning = prev.Reasoning
+			}
+			if m.progress.Thinking == "" && prev.Thinking != "" && sameIter {
+				m.progress.Thinking = prev.Thinking
+			}
+			// ReasoningStreamContent: carry forward if new payload doesn't have it
+			// and we're still in reasoning streaming phase (no StreamContent yet).
+			if m.progress.ReasoningStreamContent == "" && prev.ReasoningStreamContent != "" && sameIter {
+				if m.progress.StreamContent == "" {
+					m.progress.ReasoningStreamContent = prev.ReasoningStreamContent
+				}
+			}
+		}
 	}
 	// Preserve SubAgent tree across progress updates within the SAME iteration.
 	// Progress events may arrive with incomplete subagent data (missing deep
@@ -408,11 +427,15 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Iteration field because tools from earlier iterations may have been
 			// carried forward via the CompletedTools carry-forward logic.
 			prevIterTools := prev.CompletedTools
-			if len(prevIterTools) > 0 || prev.Thinking != "" || prev.Reasoning != "" {
+			prevReasoning := prev.Reasoning
+			if prevReasoning == "" {
+				prevReasoning = prev.ReasoningStreamContent
+			}
+			if len(prevIterTools) > 0 || prev.Thinking != "" || prevReasoning != "" {
 				snap := cliIterationSnapshot{
 					Iteration:   m.lastSeenIteration,
 					Thinking:    prev.Thinking,
-					Reasoning:   prev.Reasoning,
+					Reasoning:   prevReasoning,
 					Tools:       prevIterTools,
 					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 				}
@@ -421,9 +444,9 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 			// Clear lastCompletedTools to prevent stale tools from being
 			// re-snapshotted when the final iteration is snapshotted in handleAgentMessage.
 			m.lastCompletedTools = m.lastCompletedTools[:0]
+			m.lastSeenIteration = msg.payload.Iteration
+			m.iterationStartTime = time.Now()
 		}
-		m.lastSeenIteration = msg.payload.Iteration
-		m.iterationStartTime = time.Now()
 
 		// §2 工具可视化：快照 CompletedTools 到独立字段
 		// Accept all completed tools regardless of their Iteration field — they
@@ -470,11 +493,14 @@ func (m *cliModel) handleProgressMsg(msg cliProgressMsg) {
 						ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 					}
 					// Carry over reasoning: priority is lastReasoning (captured before progress clear)
-					// > prev progress > PhaseDone payload
+					// > prev progress Reasoning > prev ReasoningStreamContent
+					// > PhaseDone payload Reasoning
 					if m.lastReasoning != "" {
 						snap.Reasoning = m.lastReasoning
 					} else if prev != nil && prev.Reasoning != "" {
 						snap.Reasoning = prev.Reasoning
+					} else if prev != nil && prev.ReasoningStreamContent != "" {
+						snap.Reasoning = prev.ReasoningStreamContent
 					} else if msg.payload.Reasoning != "" {
 						snap.Reasoning = msg.payload.Reasoning
 					}

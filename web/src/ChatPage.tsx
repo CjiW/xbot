@@ -284,9 +284,21 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<WsProgressPayload | null>(null)
-  const [liveIterations, setLiveIterations] = useState<IterationSnapshot[]>([])
+  const [liveIterations, _setLiveIterations] = useState<IterationSnapshot[]>([])
+  const liveIterationsRef = useRef<IterationSnapshot[]>([])
+  // Keep ref in sync so we can read the latest value synchronously
+  // (React setState updater callbacks are async and cannot be relied upon).
+  const setLiveIterationsSync = (updater: IterationSnapshot[] | ((prev: IterationSnapshot[]) => IterationSnapshot[])) => {
+    _setLiveIterations(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      liveIterationsRef.current = next
+      return next
+    })
+  }
   const prevIterationRef = useRef<number>(-1)
   const progressRef = useRef<WsProgressPayload | null>(null) // sync ref to avoid stale closures
+  const reasoningRef = useRef<string>('') // accumulated reasoning from stream_content
+  const streamingContentRef = useRef<string>('') // accumulated content from stream_content
   const [autoScroll, setAutoScroll] = useState(true)
   const [reconnecting, setReconnecting] = useState(true) // true = initial connecting state
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -446,11 +458,12 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               if (m.role === 'assistant' && m.display_only && !m.content && !m.detail) return false
               return true
             })
-            .map((m: { id: number; role: string; content: string; detail?: string }) => {
+            .map((m: { id: number; role: string; content: string; detail?: string; created_at?: string }) => {
               const msg: Message = {
                 id: `hist-${m.id}`,
                 type: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
                 content: m.content,
+                ts: m.created_at ? Math.floor(new Date(m.created_at).getTime() / 1000) : undefined,
               }
               // Parse iteration history from detail field
               if (m.detail) {
@@ -560,7 +573,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 }
               }
 
-              // When iteration advances, snapshot the previous iteration and append
+              // When iteration advances, snapshot the previous iteration and append.
+              // Prefer reasoningRef over prevProgress.thinking — progress_structured
+              // may have overwritten thinking with empty string.
               if (prevIter >= 0 && p.iteration > prevIter && prevProgress) {
                 const allTools = [
                   ...(prevProgress.completed_tools ?? []),
@@ -571,24 +586,27 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                   status: t.status,
                   elapsed_ms: t.elapsed_ms,
                 }))
-                setLiveIterations(prev => {
+                const snapThinking = reasoningRef.current.trim() || prevProgress.thinking || ''
+                setLiveIterationsSync(prev => {
                   const merged = normalizeIterationHistory([
                     ...prev,
                     {
                       iteration: prevIter,
-                      thinking: prevProgress.thinking,
+                      thinking: snapThinking,
                       tools: allTools,
                     },
                   ])
                   return merged
                 })
+                // Clear reasoning for the new iteration
+                reasoningRef.current = ''
               }
 
               // Frontend safety net: if backend event for iteration N already carries
               // completed_tools of iteration N-1, persist that snapshot immediately.
               if (p.iteration > 0 && (p.completed_tools?.length ?? 0) > 0) {
                 const inferredPrev = p.iteration - 1
-                setLiveIterations(prev => {
+                setLiveIterationsSync(prev => {
                   const hasPrev = prev.some((s) => s.iteration === inferredPrev)
                   if (hasPrev) return prev
                   return normalizeIterationHistory([
@@ -613,17 +631,71 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             setLoading(true)
             break
 
+          case 'stream_content': {
+            const reasoning = data.progress?.reasoning_stream_content || ''
+            const content = data.progress?.stream_content || ''
+            if (!reasoning && !content) break
+
+            // Accumulate reasoning
+            if (reasoning) {
+              reasoningRef.current += reasoning
+              if (progressRef.current) {
+                progressRef.current = { ...progressRef.current, thinking: reasoningRef.current }
+                setProgress({ ...progressRef.current })
+              } else {
+                const p: WsProgressPayload = {
+                  phase: 'thinking',
+                  iteration: prevIterationRef.current >= 0 ? prevIterationRef.current : 0,
+                  thinking: reasoningRef.current,
+                }
+                progressRef.current = p
+                prevIterationRef.current = p.iteration
+                setProgress(p)
+              }
+            }
+
+            // Accumulate content — show as streaming text in the assistant turn
+            if (content) {
+              streamingContentRef.current += content
+              setMessages(prev => {
+                // Find or create a streaming placeholder message at the end
+                const last = prev[prev.length - 1]
+                if (last && last.id === '__streaming__') {
+                  return [...prev.slice(0, -1), { ...last, content: streamingContentRef.current }]
+                }
+                return [...prev, {
+                  id: '__streaming__',
+                  type: 'assistant' as const,
+                  content: streamingContentRef.current,
+                }]
+              })
+            }
+
+            setLoading(true)
+            break
+          }
+
           case 'text':
           case 'card': {
             // Final message — snapshot current iteration + all completed iterations
+            const accumulatedReasoning = reasoningRef.current.trim()
             const progressSnap = progressRef.current
               ? {
                   ...progressRef.current,
+                  thinking: progressRef.current.thinking || accumulatedReasoning,
                   active_tools: [],
                 } as WsProgressPayload
-              : null
+              : accumulatedReasoning
+                ? ({
+                    phase: 'done' as const,
+                    iteration: prevIterationRef.current >= 0 ? prevIterationRef.current : 0,
+                    thinking: accumulatedReasoning,
+                  })
+                : null
 
-            // Build current iteration snapshot
+            // Build current iteration snapshot — prefer reasoningRef over progress thinking
+            // to avoid losing reasoning that progress_structured may have overwritten
+            const snapThinking = accumulatedReasoning || progressSnap?.thinking || ''
             const currentSnap = progressSnap ? (() => {
               const allTools = [
                 ...(progressSnap.completed_tools ?? []),
@@ -636,22 +708,20 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
               }))
               return {
                 iteration: prevIterationRef.current,
-                thinking: progressSnap.thinking,
+                thinking: snapThinking,
                 tools: allTools,
               }
             })() : null
 
-            // Combine local snapshots first.
-            let localHistory: IterationSnapshot[] = []
-            setLiveIterations(prev => {
-              localHistory = [...prev]
-              if (currentSnap) localHistory.push(currentSnap)
-              return []
-            })
+            const currentLive = liveIterationsRef.current ?? []
+            let localHistory: IterationSnapshot[] = [...currentLive]
+            if (currentSnap) localHistory.push(currentSnap)
+            localHistory = normalizeIterationHistory(localHistory)
+
+            setLiveIterationsSync([])
 
             localHistory = normalizeIterationHistory(localHistory)
 
-            // Prefer backend-provided history so current view matches refreshed history.
             let finalHistory = localHistory
             if (data.progress_history) {
               try {
@@ -667,17 +737,26 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             setProgress(null)
             prevIterationRef.current = -1
             progressRef.current = null
+            reasoningRef.current = ''
             setLoading(false)
 
-            const msg: Message = {
-              id: data.id || `ws-${Date.now()}`,
-              type: data.type === 'card' ? 'system' : 'assistant',
-              content: data.content,
-              ts: data.ts,
-              savedProgress: progressSnap,
-              iterationHistory: finalHistory.length > 0 ? finalHistory : undefined,
-            }
-            setMessages((prev) => [...prev, msg])
+            // Use accumulated streaming content if available, otherwise use server content
+            const finalContent = streamingContentRef.current || data.content || ''
+            streamingContentRef.current = ''
+
+            // Replace streaming placeholder with final message
+            setMessages((prev) => {
+              const filtered = prev.filter(m => m.id !== '__streaming__')
+              const msg: Message = {
+                id: data.id || `ws-${Date.now()}`,
+                type: data.type === 'card' ? 'system' : 'assistant',
+                content: finalContent,
+                ts: data.ts,
+                savedProgress: progressSnap,
+                iterationHistory: finalHistory.length > 0 ? finalHistory : undefined,
+              }
+              return [...filtered, msg]
+            })
             break
           }
 
@@ -751,9 +830,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         // Clear both frontend state and backend history
         setMessages([])
         setProgress(null)
-        setLiveIterations([])
+        setLiveIterationsSync([])
         prevIterationRef.current = -1
         progressRef.current = null
+        reasoningRef.current = ''
+        streamingContentRef.current = ''
         setLoading(false)
         fetch('/api/history', { method: 'DELETE' }).catch(() => {})
         showToast('对话已清空', 'info')
@@ -762,9 +843,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       if (cmd === '/new') {
         setMessages([])
         setProgress(null)
-        setLiveIterations([])
+        setLiveIterationsSync([])
         prevIterationRef.current = -1
         progressRef.current = null
+        reasoningRef.current = ''
+        streamingContentRef.current = ''
         setLoading(false)
         showToast('新对话', 'info')
         return
@@ -790,9 +873,11 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     }
     setMessages((prev) => [...prev, userMsg])
     setProgress(null)
-    setLiveIterations([])
+    setLiveIterationsSync([])
     prevIterationRef.current = -1
     progressRef.current = null
+    reasoningRef.current = ''
+    streamingContentRef.current = ''
     setLoading(true)
     setAutoScroll(true)
 
@@ -829,8 +914,13 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     wsRef.current.send(JSON.stringify({ type: 'cancel' }))
     setLoading(false)
     setProgress(null)
-    setLiveIterations([])
+    setLiveIterationsSync([])
     prevIterationRef.current = -1
+    progressRef.current = null
+    reasoningRef.current = ''
+    streamingContentRef.current = ''
+    // Remove streaming placeholder if present
+    setMessages(prev => prev.filter(m => m.id !== '__streaming__'))
   }, [])
 
   // --- Preset commands ---
@@ -996,7 +1086,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           </button>
           <button
             onClick={handleLogout}
-            className="text-sm text-slate-400 hover:text-white transition-colors"
+            className="text-sm text-slate-400 hover:text-white transition-colors p-1"
           >
             Logout
           </button>
@@ -1073,9 +1163,10 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
         className="flex-1 overflow-y-auto px-4 py-4 space-y-4 chat-messages"
       >
         {messages.length === 0 && !loading && (
-          <div className="text-center text-slate-500 mt-20">
-            <p className="text-2xl mb-2">💬</p>
-            <p>开始一段对话</p>
+          <div className="text-center py-20">
+            <div className="text-4xl mb-3 opacity-40">🤖</div>
+            <p className="text-slate-500 text-sm">开始一段对话</p>
+            <p className="text-slate-600 text-xs mt-1">发送消息开始与 AI 助手交流</p>
           </div>
         )}
 
@@ -1110,9 +1201,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             // Assistant turn — last one gets live progress & loading
             const turnSavedProgress = turn.messages[turn.messages.length - 1]?.savedProgress ?? null
             const assistantContent = (
-              <div data-msg-id={turn.messages[0].id}>
+              <div data-msg-id={turn.messages[0].id} key={turn.messages[0].id}>
                 <AssistantTurn
-                  key={turn.messages[0].id}
                   messages={turn.messages}
                   progress={isLatestTurn && isActive ? progress : null}
                   liveIterations={isLatestTurn && isActive ? liveIterations : undefined}

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"time"
 	"xbot/bus"
+	log "xbot/logger"
 	"xbot/storage/sqlite"
 	"xbot/tools"
 	"xbot/version"
@@ -184,10 +185,46 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
-// cycleModel switches to the next model in the available model list.
-// Wraps around when reaching the end.
+// cycleModel switches to the next active subscription.
+// If only one subscription exists, falls back to cycling models within it.
 func (m *cliModel) cycleModel() {
-	if m.channel == nil || m.channel.modelLister == nil {
+	if m.channel == nil {
+		return
+	}
+
+	// Prefer cycling through active subscriptions
+	if m.subscriptionMgr != nil && m.llmSubscriber != nil {
+		subs, err := m.subscriptionMgr.List(m.senderID)
+		if err == nil && len(subs) >= 2 {
+			// Find current default
+			def, _ := m.subscriptionMgr.GetDefault(m.senderID)
+			currentID := ""
+			if def != nil {
+				currentID = def.ID
+			}
+			// Cycle to next
+			nextIdx := 0
+			for i, s := range subs {
+				if s.ID == currentID {
+					nextIdx = (i + 1) % len(subs)
+					break
+				}
+			}
+			next := subs[nextIdx]
+			if err := m.llmSubscriber.SwitchSubscription(m.senderID, &next); err != nil {
+				m.showTempStatus(fmt.Sprintf("Switch failed: %v", err))
+				return
+			}
+			m.cachedModelName = next.Model
+			log.WithField("subscription", next.Name).WithField("model", next.Model).Info("cycleModel: switched subscription")
+			m.showTempStatus(fmt.Sprintf("%s (%s)", next.Name, next.Model))
+			m.updateQuickSwitchModels(next.Model)
+			return
+		}
+	}
+
+	// Fallback: cycle models within current subscription (single-sub setup)
+	if m.channel.modelLister == nil {
 		return
 	}
 	models := m.channel.modelLister.ListAllModels()
@@ -213,7 +250,6 @@ func (m *cliModel) cycleModel() {
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
-	// Update quickSwitch panel models so UI stays consistent
 	m.updateQuickSwitchModels(nextModel)
 }
 
@@ -224,6 +260,9 @@ type tickerTickMsg struct{}
 type splashTickMsg struct {
 	frame int // 当前帧索引
 }
+
+// debugCaptureMsg triggers a UI capture (dump View() to file).
+type debugCaptureMsg struct{}
 
 // splashDoneMsg 启动画面结束消息
 type splashDoneMsg struct{}
@@ -322,11 +361,16 @@ type cliModel struct {
 	twCjkSkipTick        bool                   // alternates each tick to halve CJK speed (stream)
 
 	// --- Session ---
-	workDir       string // 工作目录（标题栏显示用）
-	senderID      string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
-	channelName   string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
-	defaultChatID string // 默认 chatID（/su 切换回来时恢复）
-	chatID        string // 会话 ID（按工作目录区分）
+	workDir         string // 工作目录（标题栏显示用）
+	remoteMode      bool   // 是否连接 remote backend（标题栏提示用）
+	remoteServerURL string // remote server host for header display (e.g. "host:port")
+	connState       string // WS connection state: "connected"|"disconnected"|"reconnecting"
+	debugMode       bool   // --debug: UI capture + key injection via SIGUSR1
+	debugCaptureMs  int    // --debug-capture-ms: UI capture interval in ms (0 = default 1000)
+	senderID        string // 当前身份 ID（默认 "cli_user"，/su 命令可切换）
+	channelName     string // 当前 channel（默认 "cli"，/su 切换时可能变为 "web"）
+	defaultChatID   string // 默认 chatID（/su 切换回来时恢复）
+	chatID          string // 会话 ID（按工作目录区分）
 
 	// --- §1 增量渲染 ---
 	renderCacheValid    bool   // 全局缓存是否有效（resize 后置 false）
@@ -382,14 +426,15 @@ type cliModel struct {
 	panelCursorBackup   int                            // saved panelCursor before quick switch
 	panelOnSubmitBackup func(values map[string]string) // saved onSubmit callback
 	// --- AskUser panel ---
-	panelItems      []askItem            // askuser panel: question items
-	panelTab        int                  // askuser panel: current tab (question index)
-	panelOptSel     map[int]map[int]bool // askuser panel: selected option indices per question
-	panelOptCursor  map[int]int          // askuser panel: highlighted option index per question
-	panelAnswerTA   textarea.Model       // askuser panel: free-input editor (no-options mode)
-	panelOtherTI    textinput.Model      // askuser panel: single-line Other input
-	askPanelScrollY int                  // askuser panel: internal scroll offset for long content
-	panelSchema     []SettingDefinition  // settings panel: schema copy
+	panelItems         []askItem            // askuser panel: question items
+	panelTab           int                  // askuser panel: current tab (question index)
+	panelOptSel        map[int]map[int]bool // askuser panel: selected option indices per question
+	panelOptCursor     map[int]int          // askuser panel: highlighted option index per question
+	panelAnswerTA      textarea.Model       // askuser panel: free-input editor (no-options mode)
+	panelOtherTI       textinput.Model      // askuser panel: single-line Other input
+	askPanelScrollY    int                  // askuser panel: internal scroll offset for long content
+	askPanelTotalLines int                  // cached total line count for scroll clamping
+	panelSchema        []SettingDefinition  // settings panel: schema copy
 	// --- Approval panel ---
 	approvalRequest      *tools.ApprovalRequest // pending approval request
 	approvalResultCh     chan<- tools.ApprovalResult
@@ -603,6 +648,22 @@ type cliProgressMsg struct {
 	payload *CLIProgressPayload
 }
 
+// cliProcessingMsg sets the typing/processing state externally (remote reconnect).
+type cliProcessingMsg struct {
+	processing bool
+}
+
+// cliConnStateMsg updates the WS connection state for the header bar indicator.
+type cliConnStateMsg struct {
+	state string // "connected" | "disconnected" | "reconnecting"
+}
+
+// cliHistoryLoadMsg loads history messages into the model from a goroutine-safe context.
+// Data is pre-converted, so the Update handler only appends and rebuilds viewport.
+type cliHistoryLoadMsg struct {
+	history []cliMessage
+}
+
 // cliTickMsg 定时刷新（用于流式输出动画）
 type cliTickMsg struct{}
 
@@ -687,7 +748,22 @@ func (m *cliModel) refreshCachedModelName() {
 
 // Init 初始化 — 启动 splash 画面动画（最小展示 1 秒）
 func (m *cliModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.splashTick(0))
+	cmds := []tea.Cmd{textarea.Blink, m.splashTick(0)}
+	if m.debugMode {
+		cmds = append(cmds, m.debugCaptureTick())
+	}
+	return tea.Batch(cmds...)
+}
+
+// debugCaptureTick returns a tea.Cmd that fires periodically to capture UI state.
+func (m *cliModel) debugCaptureTick() tea.Cmd {
+	interval := time.Duration(m.debugCaptureMs) * time.Millisecond
+	if interval < 50*time.Millisecond {
+		interval = 1 * time.Second
+	}
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		return debugCaptureMsg{}
+	})
 }
 
 // splashTick 生成启动画面动画的 tick 命令

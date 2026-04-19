@@ -83,9 +83,11 @@ func (s *ContextEditStore) History() []ContextEditResult {
 // ContextEditor 执行 context editing 操作。
 // 它持有一个指向 messages slice 的指针，由 engine.go 在每次 Run 开始时设置。
 type ContextEditor struct {
-	Store    *ContextEditStore
-	messages []llm.ChatMessage // 当前对话消息，由 engine 在 Run 时设置
-	mu       sync.RWMutex      // 保护 messages 引用
+	Store     *ContextEditStore
+	messages  []llm.ChatMessage         // 当前对话消息，由 engine 在 Run 时设置
+	mu        sync.RWMutex              // 保护 messages 引用
+	PersistFn func(editedIndices []int) // persistence callback for syncing edits to DB (best-effort)
+	tenantID  int64                     // current tenant ID for persistence (set per-request)
 }
 
 // NewContextEditor 创建 ContextEditor。
@@ -98,6 +100,14 @@ func (e *ContextEditor) SetMessages(messages []llm.ChatMessage) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.messages = messages
+}
+
+// SetTenantID sets the current tenant ID for persistence callbacks.
+// Called per-request before the engine run that may trigger context edits.
+func (e *ContextEditor) SetTenantID(tenantID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tenantID = tenantID
 }
 
 // HandleRequest 处理 context_edit 请求，直接修改 messages slice。
@@ -177,6 +187,7 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 
 	beforeChars := fmt.Sprintf("%d chars", len([]rune(msg.Content)))
 	var afterChars string
+	editedIndices := []int{actualIdx} // track which slice indices were modified for persistence
 
 	switch req.Action {
 	case ContextEditDelete:
@@ -197,6 +208,7 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 					messages[j].ToolCallID = ""
 					messages[j].ToolName = ""
 					messages[j].ToolArguments = ""
+					editedIndices = append(editedIndices, j)
 				}
 			}
 		}
@@ -265,6 +277,11 @@ func (e *ContextEditor) applyEdit(messages []llm.ChatMessage, action string, par
 		"after":       afterChars,
 		"reason":      req.Reason,
 	}).Info("Context edit applied")
+
+	// Persist edited message(s) to database (best-effort).
+	if e.PersistFn != nil {
+		e.PersistFn(editedIndices)
+	}
 
 	return fmt.Sprintf("✅ %s message #%d [%s]: %s → %s — %s", req.Action, req.MessageIdx, msg.Role, beforeChars, afterChars, req.Reason), nil
 }
@@ -454,6 +471,15 @@ func (e *ContextEditor) deleteTurn(messages []llm.ChatMessage, params map[string
 		"tool_count": t.ToolCount,
 		"reason":     reason,
 	}).Info("Context edit: deleted turn")
+
+	// Persist deleted turn messages to database (best-effort).
+	if e.PersistFn != nil {
+		turnIndices := make([]int, 0, t.EndSliceIdx-t.StartSliceIdx+1)
+		for i := t.StartSliceIdx; i <= t.EndSliceIdx; i++ {
+			turnIndices = append(turnIndices, i)
+		}
+		e.PersistFn(turnIndices)
+	}
 
 	return fmt.Sprintf("✅ Deleted turn %d (%d messages, %d tool calls, %d total chars) — %s",
 		idx, deletedMsgCount, t.ToolCount, t.TotalChars, reason), nil

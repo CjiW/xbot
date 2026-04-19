@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "xbot/logger"
@@ -23,12 +24,53 @@ type OpenAILLM struct {
 	mu             sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
 	models         []string       // 可用模型列表
 	defaultModel   string         // 默认模型
-	maxTokens      int            // 最大生成 token 数
+	maxTokens      int            // 最大生成 token 数（用户配置值，作为上限）
 	onModelsLoaded func([]string) // callback after models loaded from API
+
+	// dynamicMaxTokens is the dynamically adjusted max_tokens for the next API call.
+	// Set by AdjustMaxTokens() based on remaining context space. Resets after each call.
+	// When 0 (default), buildParams uses the static maxTokens value.
+	// Uses atomic for thread-safety: the same OpenAILLM instance may be shared
+	// across concurrent agents (defaultLLM singleton, or per-user cached client).
+	dynamicMaxTokens atomic.Int64
 
 	// maxTokensUpgrade tracks models that reject the legacy max_tokens param
 	// and need the newer max_completion_tokens. Learned at runtime via 400 errors.
 	maxTokensUpgrade sync.Map // model -> bool
+}
+
+// MaxTokensAdjuster is an optional interface that LLM clients can implement
+// to support dynamic max_tokens adjustment based on remaining context space.
+// The engine calls AdjustMaxTokens before each API call when the feature is enabled.
+type MaxTokensAdjuster interface {
+	AdjustMaxTokens(inputTokens, maxContextTokens int)
+}
+
+// AdjustMaxTokens dynamically adjusts the max_tokens parameter for the next API call.
+// inputTokens: the token count from the previous API call (or estimated).
+// maxContextTokens: the model's context window size (MaxContextTokens config).
+// The adjusted value is: min(configuredMaxTokens, maxContextTokens - inputTokens - safetyMargin)
+// This prevents context_window_exceeded errors by leaving room for the response.
+func (o *OpenAILLM) AdjustMaxTokens(inputTokens, maxContextTokens int) {
+	if maxContextTokens <= 0 || inputTokens <= 0 {
+		return
+	}
+	// Safety margin: 10% of context window or at least 2048 tokens.
+	// Accounts for token counting inaccuracies, tool result growth, and
+	// the next iteration's input increase.
+	safetyMargin := maxContextTokens / 10
+	if safetyMargin < 2048 {
+		safetyMargin = 2048
+	}
+	available := maxContextTokens - inputTokens - safetyMargin
+	if available <= 0 {
+		available = 256 // minimum: let the model at least respond with something
+	}
+	if available < o.maxTokens {
+		o.dynamicMaxTokens.Store(int64(available))
+	}
+	// else: context is small enough, use the full configured maxTokens
+	// (dynamicMaxTokens stays 0, which means "use static value")
 }
 
 // OpenAIConfig OpenAI 配置
@@ -418,6 +460,69 @@ func toOpenAITools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam
 }
 
 // buildParams 构建请求参数
+// modelMaxOutputTokens returns the maximum output tokens a model can produce.
+// Used to clamp max_tokens/max_completion_tokens to prevent API errors when
+// the user configures a value larger than the model supports.
+// Returns 0 for unknown models (no clamping — let the API decide).
+func modelMaxOutputTokens(model string) int {
+	// Prefix match: "gpt-4.1-mini-2025-04-14" should match "gpt-4.1-mini".
+	// Order matters: more specific prefixes first.
+	type limit struct {
+		prefix string
+		tokens int
+	}
+	limits := []limit{
+		// OpenAI GPT-4.1 family (2025-04)
+		{"gpt-4.1-nano", 32768},
+		{"gpt-4.1-mini", 32768},
+		{"gpt-4.1", 32768},
+		// OpenAI o-series reasoning models
+		{"o4-mini", 100000},
+		{"o3-mini", 65536},
+		{"o3", 100000},
+		{"o1-mini", 65536},
+		{"o1", 100000},
+		// OpenAI GPT-4o family
+		{"gpt-4o-mini", 16384},
+		{"gpt-4o", 16384},
+		{"gpt-4-turbo", 4096},
+		{"gpt-4-32k", 4096},
+		{"gpt-4", 8192},
+		{"gpt-3.5-turbo", 4096},
+		// Anthropic Claude (via proxy)
+		{"claude-opus-4", 32768},
+		{"claude-sonnet-4", 16384},
+		{"claude-3-5-sonnet", 8192},
+		{"claude-3-opus", 4096},
+		{"claude-3-haiku", 4096},
+		// DeepSeek
+		{"deepseek-r1", 16384},
+		{"deepseek-reasoner", 16384},
+		{"deepseek-v3", 8192},
+		{"deepseek-chat", 8192},
+		// Zhipu GLM
+		{"glm-4-plus", 4096},
+		{"glm-4", 4096},
+		{"glm-4-flash", 4096},
+		// Google Gemini (via proxy)
+		{"gemini-2.5-pro", 65536},
+		{"gemini-2.5-flash", 65536},
+		{"gemini-2.0-flash", 8192},
+		{"gemini-1.5-pro", 8192},
+		// Qwen
+		{"qwen-max", 8192},
+		{"qwen-plus", 8192},
+		{"qwen-turbo", 8192},
+	}
+	lower := strings.ToLower(model)
+	for _, l := range limits {
+		if strings.HasPrefix(lower, l.prefix) {
+			return l.tokens
+		}
+	}
+	return 0
+}
+
 func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []ToolDefinition) openai.ChatCompletionNewParams {
 	openaiMessages := toOpenAIMessages(messages)
 
@@ -436,10 +541,25 @@ func (o *OpenAILLM) buildParams(model string, messages []ChatMessage, tools []To
 	// runtime and switch to max_completion_tokens (see isMaxTokensParamError).
 	// Note: some providers (GLM) silently ignore max_completion_tokens without
 	// error, so max_tokens is the safer default.
+	// Determine max_tokens: use dynamic value if set (from AdjustMaxTokens),
+	// otherwise fall back to the static configured value.
+	// Swap(0) atomically reads and resets in one operation.
+	effectiveMaxTokens := int(o.dynamicMaxTokens.Swap(0))
+	if effectiveMaxTokens <= 0 {
+		effectiveMaxTokens = o.maxTokens
+	}
+
+	// Clamp to model's max output token limit to prevent API errors.
+	// Models not in this table are left unclamped — the API will return
+	// its own error if the value exceeds the model's limit.
+	if maxOut := modelMaxOutputTokens(model); maxOut > 0 && effectiveMaxTokens > maxOut {
+		effectiveMaxTokens = maxOut
+	}
+
 	if _, useNew := o.maxTokensUpgrade.Load(model); useNew {
-		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+		p.MaxCompletionTokens = param.Opt[int64]{Value: int64(effectiveMaxTokens)}
 	} else {
-		p.MaxTokens = param.Opt[int64]{Value: int64(o.maxTokens)}
+		p.MaxTokens = param.Opt[int64]{Value: int64(effectiveMaxTokens)}
 	}
 
 	if len(tools) > 0 {

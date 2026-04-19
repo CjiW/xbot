@@ -30,11 +30,13 @@ import (
 
 func NewCLIChannel(cfg CLIChannelConfig, msgBus *bus.MessageBus) *CLIChannel {
 	return &CLIChannel{
-		config:  cfg,
-		msgBus:  msgBus,
-		workDir: cfg.WorkDir,
-		msgChan: make(chan bus.OutboundMessage, cliMsgBufSize),
-		stopCh:  make(chan struct{}),
+		config:     cfg,
+		msgBus:     msgBus,
+		workDir:    cfg.WorkDir,
+		msgChan:    make(chan bus.OutboundMessage, cliMsgBufSize),
+		progressCh: make(chan *CLIProgressPayload, 1), // buffered-1: latest progress wins
+		asyncCh:    make(chan tea.Msg, 64),            // unified async send: progress + outbound
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -74,6 +76,13 @@ func (c *CLIChannel) Start() error {
 	c.model.refreshCachedModelName()
 	c.model.SetMsgBus(c.msgBus)
 	c.model.workDir = c.workDir
+	c.model.remoteMode = c.config.RemoteMode
+	c.model.remoteServerURL = c.config.RemoteServerURL
+	c.model.debugMode = c.config.DebugMode
+	if c.config.RemoteMode {
+		c.model.connState = "connected"
+	}
+	c.model.debugCaptureMs = c.config.DebugCaptureMs
 	c.model.senderID = "cli_user"
 
 	// Apply pending injections that were set before model existed
@@ -150,10 +159,14 @@ func (c *CLIChannel) Start() error {
 	}
 
 	// 创建 Bubble Tea program
-	c.programMu.Lock()
-	c.program = tea.NewProgram(c.model,
+	programOpts := []tea.ProgramOption{
 		tea.WithOutput(origStdout),
-	)
+	}
+	if os.Getenv("XBOT_BUBBLETEA_PANIC") == "1" {
+		programOpts = append(programOpts, tea.WithoutCatchPanics())
+	}
+	c.programMu.Lock()
+	c.program = tea.NewProgram(c.model, programOpts...)
 	c.programMu.Unlock()
 
 	// Wire CLIApprovalHandler into the ApprovalHook now that the program exists
@@ -170,6 +183,15 @@ func (c *CLIChannel) Start() error {
 	// 启动 outbound 消息处理 goroutine
 	c.wg.Add(1)
 	go c.handleOutbound()
+
+	// 启动 progress coalescing goroutine: drains progressCh and forwards
+	// to the unified async channel.
+	c.wg.Add(1)
+	go c.handleProgressDrain()
+
+	// 启动 unified async drain goroutine: single sender to p.msgs
+	c.wg.Add(1)
+	go c.handleAsyncDrain()
 
 	// §13 异步检查更新（不阻塞 TUI 启动）
 	c.CheckUpdateAsync()
@@ -202,12 +224,38 @@ func (c *CLIChannel) Start() error {
 		}()
 	}
 
+	// --debug: start Unix socket for key injection
+	var debugSock *debugSockListener
+	if c.config.DebugMode {
+		sockPath, err := debugSockPath()
+		if err == nil {
+			debugSock, err = startDebugSock(sockPath, func(msg tea.Msg) {
+				c.program.Send(msg)
+			})
+			if err != nil {
+				log.WithError(err).Warn("Failed to start debug socket")
+			} else {
+				log.WithField("socket", sockPath).Info("Debug socket listening")
+			}
+		}
+		// --debug-input: auto-inject key sequence after startup
+		if c.config.DebugInput != "" {
+			startAutoInput(c.config.DebugInput, c.asyncCh, c.stopCh)
+		}
+	}
+
 	// 运行 Bubble Tea（阻塞）
 	if _, err := c.program.Run(); err != nil {
 		log.WithError(err).Error("CLI channel exited with error")
+		if debugSock != nil {
+			debugSock.Stop()
+		}
 		return err
 	}
 
+	if debugSock != nil {
+		debugSock.Stop()
+	}
 	log.Info("CLI channel stopped")
 	return nil
 }
@@ -247,11 +295,63 @@ func (c *CLIChannel) Send(msg bus.OutboundMessage) (string, error) {
 }
 
 // SendProgress 发送结构化进度事件到 CLI（非阻塞）。
+// ALL messages (including PhaseDone) go through asyncCh to ensure there is only
+// ONE goroutine (handleAsyncDrain) calling program.Send(). This prevents multiple
+// senders from competing on the unbuffered p.msgs channel, which would starve
+// the Bubble Tea readLoop (keyboard events) and cause Ctrl+C freeze.
 func (c *CLIChannel) SendProgress(chatID string, payload *CLIProgressPayload) {
 	if payload == nil || c.program == nil {
 		return
 	}
-	c.program.Send(cliProgressMsg{payload: payload})
+	select {
+	case c.progressCh <- payload:
+	default:
+		// Drain stale, send fresh
+		select {
+		case <-c.progressCh:
+		default:
+		}
+		select {
+		case c.progressCh <- payload:
+		default:
+		}
+	}
+}
+
+// SetProcessing externally sets the typing/processing state (for remote reconnect).
+func (c *CLIChannel) SetProcessing(processing bool) {
+	if c.program == nil {
+		return
+	}
+	select {
+	case c.asyncCh <- cliProcessingMsg{processing: processing}:
+	default:
+		// Drop if asyncCh full — processing state will recover on next message
+	}
+}
+
+// SetConnState updates the connection state indicator in the header bar.
+// Non-blocking — drops if asyncCh is full.
+func (c *CLIChannel) SetConnState(state string) {
+	if c.program == nil {
+		return
+	}
+	select {
+	case c.asyncCh <- cliConnStateMsg{state: state}:
+	default:
+	}
+}
+
+// SendToast shows a toast notification in the CLI (non-blocking).
+func (c *CLIChannel) SendToast(text, icon string) {
+	if c.program == nil {
+		return
+	}
+	select {
+	case c.asyncCh <- cliToastMsg{text: text, icon: icon}:
+	default:
+		// Drop if asyncCh full — toast is non-critical
+	}
 }
 
 // SetApprovalHook stores the ApprovalHook reference so that Start() can wire
@@ -276,22 +376,15 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 
 // LoadHistory loads session history into the CLI model.
 // Used by remote mode where history must be fetched via RPC after the WS connection
-// is established (HistoryLoader runs during NewCLIChannel, before backend.Start()).
-// If the model hasn't been created yet (before Run()), the history is cached and
-// applied when the model is initialized.
+// is established. Thread-safe: always goes through asyncCh to avoid racing with
+// BubbleTea's View (glamour is not goroutine-safe).
 func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 	if len(history) == 0 {
 		return
 	}
-	c.programMu.Lock()
-	defer c.programMu.Unlock()
-	if c.model == nil {
-		// Model not created yet — cache for later application in newCLIModel
-		c.pendingHistory = history
-		log.WithField("count", len(history)).Info("Cached remote history (model not ready yet)")
-		return
-	}
-	for _, hm := range history {
+	// Pre-convert to cliMessage outside the event loop (cheap allocation).
+	msgs := make([]cliMessage, len(history))
+	for i, hm := range history {
 		cm := cliMessage{
 			role:      hm.Role,
 			content:   hm.Content,
@@ -301,13 +394,37 @@ func (c *CLIChannel) LoadHistory(history []HistoryMessage) {
 		}
 		if len(hm.Iterations) > 0 {
 			cm.iterations = make([]cliIterationSnapshot, len(hm.Iterations))
-			for i, hi := range hm.Iterations {
-				cm.iterations[i] = cliIterationSnapshot(hi)
+			for j, hi := range hm.Iterations {
+				cm.iterations[j] = cliIterationSnapshot(hi)
 			}
 		}
-		c.model.messages = append(c.model.messages, cm)
+		msgs[i] = cm
 	}
-	log.WithField("count", len(history)).Info("Restored session history (remote)")
+
+	c.programMu.Lock()
+	defer c.programMu.Unlock()
+	if c.model == nil {
+		// Model not created yet — cache for later application in newCLIModel
+		c.pendingHistory = history
+		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Cached remote history (model not ready yet)")
+		return
+	}
+	if c.program == nil {
+		// Program not started yet (ensureModel path) — safe to mutate directly.
+		// View() hasn't been called, so no concurrent rendering.
+		c.model.messages = append(c.model.messages, msgs...)
+		c.model.invalidateAllCache(false)
+		c.model.updateViewportContent()
+		log.WithFields(log.Fields{"count": len(history), "chat_id": c.config.ChatID}).Info("Applied remote history (before program start)")
+		return
+	}
+	// Program is running — send through asyncCh to avoid racing with View()
+	// (glamour is not goroutine-safe).
+	select {
+	case c.asyncCh <- cliHistoryLoadMsg{history: msgs}:
+	default:
+		log.Warn("LoadHistory: asyncCh full, history not applied")
+	}
 }
 
 // SetTrimHistoryFn sets the callback for /rewind DB truncation.
@@ -349,7 +466,10 @@ func (c *CLIChannel) SetCheckpointHook(hook *tools.CheckpointHook) {
 // 在 CLI 界面上显示为一条 user 消息，和用户手动输入的效果一致。
 func (c *CLIChannel) InjectUserMessage(content string) {
 	if c.program != nil {
-		c.program.Send(cliInjectedUserMsg{content: content})
+		select {
+		case c.asyncCh <- cliInjectedUserMsg{content: content}:
+		default:
+		}
 	}
 }
 
@@ -395,11 +515,14 @@ func (c *CLIChannel) CheckUpdateAsync() {
 	}
 	go func() {
 		info := version.CheckUpdate(context.Background())
-		c.program.Send(cliUpdateCheckMsg{info: info})
+		select {
+		case c.asyncCh <- cliUpdateCheckMsg{info: info}:
+		default:
+		}
 	}()
 }
 
-// handleOutbound 处理从 agent 发来的消息
+// handleOutbound 处理从 agent 发来的消息 — 通过 asyncCh 合并发送
 func (c *CLIChannel) handleOutbound() {
 	defer c.wg.Done()
 
@@ -411,8 +534,67 @@ func (c *CLIChannel) handleOutbound() {
 			c.programMu.Lock()
 			p := c.program
 			c.programMu.Unlock()
-			if p != nil {
+			if p == nil {
+				continue
+			}
+			// Route through asyncCh: non-blocking send, drops if full.
+			// WaitingUser messages (AskUser) must not be dropped, send directly.
+			if msg.WaitingUser {
 				p.Send(cliOutboundMsg{msg: msg})
+				continue
+			}
+			select {
+			case c.asyncCh <- cliOutboundMsg{msg: msg}:
+			default:
+				// asyncCh full — drain one stale message, then send
+				select {
+				case <-c.asyncCh:
+				default:
+				}
+				select {
+				case c.asyncCh <- cliOutboundMsg{msg: msg}:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// handleProgressDrain drains the progress coalescing channel and forwards
+// events to the unified asyncCh. Non-blocking — drops stale progress events.
+func (c *CLIChannel) handleProgressDrain() {
+	defer c.wg.Done()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case payload := <-c.progressCh:
+			select {
+			case c.asyncCh <- cliProgressMsg{payload: payload}:
+			default:
+				// Drop: eventLoop is behind, next progress will be fresher
+			}
+		}
+	}
+}
+
+// handleAsyncDrain is the SINGLE goroutine that forwards messages from asyncCh
+// to the Bubble Tea event loop via program.Send. This is the only non-readLoop
+// sender to p.msgs, ensuring key events get fair scheduling (~50% instead of ~25%).
+func (c *CLIChannel) handleAsyncDrain() {
+	defer c.wg.Done()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case msg := <-c.asyncCh:
+			c.programMu.Lock()
+			p := c.program
+			c.programMu.Unlock()
+			if p != nil {
+				p.Send(msg)
 			}
 		}
 	}

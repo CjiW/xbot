@@ -274,6 +274,12 @@ func (m *cliModel) sendMessage(content string) tea.Cmd {
 		msg.Media = media
 		m.sendInbound(msg)
 		m.startAgentTurn()
+	} else if m.sendInboundFn != nil {
+		// Remote mode: msgBus is nil but sendInboundFn is set
+		msg := m.newInbound(content, nil)
+		msg.Media = media
+		m.sendInbound(msg)
+		m.startAgentTurn()
 	}
 	return nil
 }
@@ -315,7 +321,7 @@ func (m *cliModel) resetProgressState() {
 	m.lastSeenIteration = 0
 	m.lastReasoning = ""
 	m.progress = nil
-	m.iterationStartTime = time.Time{}
+	m.iterationStartTime = time.Now() // wall-clock start for iteration 0
 	m.typingStartTime = time.Now()
 }
 
@@ -365,25 +371,7 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 			} else {
 				// Get current values: config is the single source of truth for LLM settings.
 				// Only overlay non-LLM settings from SettingsService (e.g. theme, language).
-				currentValues := make(map[string]string)
-				if m.channel.config.GetCurrentValues != nil {
-					for k, v := range m.channel.config.GetCurrentValues() {
-						currentValues[k] = v
-					}
-				}
-				if m.channel.settingsSvc != nil {
-					vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
-					if err == nil {
-						for k, v := range vals {
-							// Skip LLM fields — they come from config (single source of truth)
-							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
-								continue
-							}
-							currentValues[k] = v
-						}
-					}
-				}
+				currentValues := m.mergeCLISettingsValues()
 				// Inject model list into combo options
 				// ALL model dropdowns (llm_model + tiers) use ListAllModels() which includes
 				// default LLM models + all subscription Model fields, so newly added
@@ -407,26 +395,15 @@ func (m *cliModel) handleSlashCommand(cmd string) tea.Cmd {
 					// and must NOT be written back — they would overwrite the new subscription.
 					// This is the structural guarantee against subscription data corruption.
 					if m.panelSubGeneration != m.subGeneration {
-						for _, k := range []string{"llm_provider", "llm_model", "llm_base_url", "llm_api_key"} {
-							delete(values, k)
-						}
-					}
-					// Persist non-LLM settings to SettingsService (SQLite).
-					// LLM settings go only to config.json (single source of truth).
-					if m.channel.settingsSvc != nil {
-						for k, v := range values {
-							switch k {
-							case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
-								continue
+						for k := range values {
+							if isSubscriptionScopedSettingKey(k) {
+								delete(values, k)
 							}
-							_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)
 						}
 					}
-					// Apply settings: write config.json + update runtime state
-					// (LLM client rebuild, agent state updates — all non-UI work)
-					if m.channel.config.ApplySettings != nil {
-						m.channel.config.ApplySettings(values)
-					}
+					// Persist user-scoped settings to SettingsService, and apply global/runtime
+					// settings through config.ApplySettings (single source of truth for global/LLM).
+					m.persistCLISettingsValues(values)
 					// NOTE: UI updates (theme/locale/model/viewport) are handled
 					// by handleSettingsSavedMsg in Update() — do NOT call them here
 					// since this callback runs in a background goroutine.
@@ -604,18 +581,22 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 		}
 		// 重置流式状态
 		m.streamingMsgIdx = -1
-		// 清除进度信息（保留 TODO，可跨 turn 存活）
-		// Capture reasoning before clearing — needed for final iteration snapshot.
-		if turnID == m.agentTurnID {
-			if m.progress != nil {
-				if m.progress.Reasoning != "" {
-					m.lastReasoning = m.progress.Reasoning
-				}
-				if m.progress.Thinking != "" {
-					m.lastThinking = m.progress.Thinking
-				}
+		// Capture reasoning from progress before it might be cleared.
+		// Do NOT clear m.progress here — progress is only cleared by endAgentTurn.
+		// Intermediate text messages (e.g. thinking content) arrive while the agent
+		// is still running; clearing progress here would hide the progress panel
+		// and make it look like the turn ended prematurely.
+		if turnID == m.agentTurnID && m.progress != nil {
+			reasoning := m.progress.Reasoning
+			if reasoning == "" {
+				reasoning = m.progress.ReasoningStreamContent
 			}
-			m.progress = nil
+			if reasoning != "" {
+				m.lastReasoning = reasoning
+			}
+			if m.progress.Thinking != "" {
+				m.lastThinking = m.progress.Thinking
+			}
 		}
 		m.renderCacheValid = false
 		m.updateViewportContent()
@@ -722,10 +703,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 					}
 				}
 				snap := cliIterationSnapshot{
-					Iteration: m.lastSeenIteration,
-					Reasoning: m.lastReasoning,
-					Thinking:  m.lastThinking,
-					Tools:     finalTools,
+					Iteration:   m.lastSeenIteration,
+					Reasoning:   m.lastReasoning,
+					Thinking:    m.lastThinking,
+					Tools:       finalTools,
+					ElapsedWall: time.Since(m.iterationStartTime).Milliseconds(),
 				}
 				if len(finalTools) > 0 || m.lastReasoning != "" || m.lastThinking != "" {
 					m.iterationHistory = append(m.iterationHistory, snap)
@@ -735,9 +717,14 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 
 		// §2 工具可视化：在 assistant 消息之前插入 tool_summary
 		// Build iterations from pendingToolSummary (PhaseDone) + local iterationHistory.
-		// If PhaseDone already appended a placeholder, remove it first.
+		// Deduplicate: if an iteration exists in both, prefer the PhaseDone version
+		// (which has complete reasoning from the server) over the local snapshot.
 		var toolSummaryIterations []cliIterationSnapshot
+		pendingIters := make(map[int]bool)
 		if m.pendingToolSummary != nil {
+			for _, it := range m.pendingToolSummary.iterations {
+				pendingIters[it.Iteration] = true
+			}
 			toolSummaryIterations = append(toolSummaryIterations, m.pendingToolSummary.iterations...)
 			// Remove the last tool_summary placeholder that PhaseDone appended.
 			// We track by index from end because append copies the value,
@@ -751,7 +738,11 @@ func (m *cliModel) handleAgentMessage(msg bus.OutboundMessage) {
 			m.pendingToolSummary = nil
 		}
 		if len(m.iterationHistory) > 0 {
-			toolSummaryIterations = append(toolSummaryIterations, m.iterationHistory...)
+			for _, it := range m.iterationHistory {
+				if !pendingIters[it.Iteration] {
+					toolSummaryIterations = append(toolSummaryIterations, it)
+				}
+			}
 		}
 		if len(toolSummaryIterations) > 0 {
 			toolMsg := cliMessage{
@@ -1207,19 +1198,12 @@ func (m *cliModel) renderMessage(msg *cliMessage) string {
 		thinkingGuide := s.ProgressIndent
 		hintStyle := s.ToolHint
 
-		// 统计总工具数和总耗时（使用 wall-clock 时间，非工具时间之和）
+		// 统计总工具数和总耗时
 		allTools, iterCount := msg.iterToolsFlat()
 		totalTools := len(allTools)
 		totalMs := int64(0)
 		for _, it := range msg.iterations {
-			if it.ElapsedWall > 0 {
-				totalMs += it.ElapsedWall
-			} else {
-				// Fallback: sum tool times for snapshots without wall-clock tracking
-				for _, tool := range it.Tools {
-					totalMs += tool.Elapsed
-				}
-			}
+			totalMs += it.ElapsedWall
 		}
 
 		var toolSb strings.Builder

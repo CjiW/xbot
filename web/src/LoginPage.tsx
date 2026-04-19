@@ -84,7 +84,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">🤖 xbot</h1>
-          <p className="text-slate-400 text-sm">Web Chat Interface</p>
+          <p className="text-slate-400 text-sm">智能对话助手</p>
         </div>
 
         <form

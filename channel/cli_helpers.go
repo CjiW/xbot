@@ -9,6 +9,120 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+var cliUserScopedSettingKeys = map[string]struct{}{
+	"theme":                {},
+	"language":             {},
+	"context_mode":         {},
+	"max_iterations":       {},
+	"max_concurrency":      {},
+	"max_context_tokens":   {},
+	"enable_auto_compress": {},
+	"runner_server":        {},
+	"runner_token":         {},
+	"runner_workspace":     {},
+}
+
+var cliGlobalScopedSettingKeys = map[string]struct{}{
+	"llm_provider":      {},
+	"llm_api_key":       {},
+	"llm_model":         {},
+	"llm_base_url":      {},
+	"vanguard_model":    {},
+	"balance_model":     {},
+	"swift_model":       {},
+	"sandbox_mode":      {},
+	"memory_provider":   {},
+	"tavily_api_key":    {},
+	"max_output_tokens": {},
+	"thinking_mode":     {},
+	"enable_stream":     {},
+	"enable_masking":    {},
+	"default_user":      {},
+	"privileged_user":   {},
+}
+
+var cliActionSettingKeys = map[string]struct{}{
+	"subscription_manage": {},
+	"runner_panel":        {},
+	"danger_zone":         {},
+}
+
+var cliSubscriptionScopedSettingKeys = map[string]struct{}{
+	"llm_provider": {},
+	"llm_api_key":  {},
+	"llm_model":    {},
+	"llm_base_url": {},
+}
+
+func isUserScopedSettingKey(key string) bool {
+	_, ok := cliUserScopedSettingKeys[key]
+	return ok
+}
+
+func isGlobalScopedSettingKey(key string) bool {
+	_, ok := cliGlobalScopedSettingKeys[key]
+	return ok
+}
+
+func isActionSettingKey(key string) bool {
+	_, ok := cliActionSettingKeys[key]
+	return ok
+}
+
+func isSubscriptionScopedSettingKey(key string) bool {
+	_, ok := cliSubscriptionScopedSettingKeys[key]
+	return ok
+}
+
+func cliSettingScope(key string) string {
+	if isUserScopedSettingKey(key) {
+		return "user"
+	}
+	if isGlobalScopedSettingKey(key) {
+		return "global"
+	}
+	if isActionSettingKey(key) {
+		return "action"
+	}
+	return "unknown"
+}
+
+func (m *cliModel) mergeCLISettingsValues() map[string]string {
+	values := make(map[string]string)
+	if m.channel == nil {
+		return values
+	}
+	if m.channel.config.GetCurrentValues != nil {
+		for k, v := range m.channel.config.GetCurrentValues() {
+			values[k] = v
+		}
+	}
+	if m.channel.settingsSvc != nil {
+		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
+		if err == nil {
+			for k, v := range vals {
+				if isUserScopedSettingKey(k) {
+					values[k] = v
+				}
+			}
+		}
+	}
+	return values
+}
+
+func (m *cliModel) persistCLISettingsValues(values map[string]string) {
+	if m.channel != nil && m.channel.settingsSvc != nil {
+		for k, v := range values {
+			if isUserScopedSettingKey(k) {
+				_ = m.channel.settingsSvc.SetSetting(m.channelName, m.senderID, k, v)
+			}
+		}
+	}
+	if m.channel != nil && m.channel.config.ApplySettings != nil {
+		m.channel.config.ApplySettings(values)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Refactored common patterns (方案 B: 提取重复代码)
 // ---------------------------------------------------------------------------
@@ -80,32 +194,14 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 		}
 	}
 	// Re-read ALL values fresh (including LLM fields from new active subscription)
-	values := make(map[string]string)
-	if m.channel.config.GetCurrentValues != nil {
-		for k, v := range m.channel.config.GetCurrentValues() {
-			values[k] = v
-		}
-	}
-	if m.channel.settingsSvc != nil {
-		vals, err := m.channel.settingsSvc.GetSettings(m.channelName, m.senderID)
-		if err == nil {
-			for k, v := range vals {
-				switch k {
-				case "llm_provider", "llm_model", "llm_base_url", "llm_api_key", "vanguard_model", "balance_model", "swift_model":
-					continue
-				}
-				values[k] = v
-			}
-		}
-	}
-	// Overlay non-LLM settings from backup (preserves user's in-memory edits for global settings)
-	perSubKeys := map[string]bool{
-		"llm_provider": true, "llm_api_key": true, "llm_model": true, "llm_base_url": true,
-	}
+	values := m.mergeCLISettingsValues()
+	// Overlay non-subscription values from backup (preserves user's in-memory edits).
+	// Subscription quick switch should only refresh the active subscription-backed keys.
 	for k, v := range m.panelValuesBackup {
-		if !perSubKeys[k] {
-			values[k] = v
+		if isSubscriptionScopedSettingKey(k) {
+			continue
 		}
+		values[k] = v
 	}
 	cursor := m.panelCursorBackup
 	onSubmit := m.panelOnSubmitBackup
@@ -125,11 +221,19 @@ func (m *cliModel) openSettingsFromQuickSwitch() {
 func (m *cliModel) startAgentTurn() {
 	m.agentTurnID++
 	m.typing = true
-	// If fast tick chain is NOT running (e.g. we're on idle tick after Ctrl+C),
-	// inject a tickCmd so the spinner starts immediately.
-	if !m.fastTickActive {
-		m.pendingCmds = append(m.pendingCmds, tickCmd())
+	// Remote mode: optimistically show initial progress so the user sees
+	// immediate feedback (progress bubble) without waiting for the server's
+	// first progress_structured event (which has network round-trip latency).
+	if m.remoteMode && m.progress == nil {
+		m.progress = &CLIProgressPayload{
+			Phase:     "thinking",
+			Iteration: 0,
+		}
+		m.renderCacheValid = false
 	}
+	// NOTE: Callers are responsible for ensuring the tick chain starts:
+	//   - Inside Bubble Tea Update: return tickCmd() in the cmd chain
+	//   - Outside Update (callbacks): append to m.pendingCmds before calling
 	// Sync checkpoint hook turn index
 	if m.checkpointHook != nil {
 		m.checkpointHook.SetTurnIdx(int(m.agentTurnID))
@@ -332,8 +436,11 @@ func (m *cliModel) clampPanelScroll(rawContent string) {
 
 // clampAskUserPanelScroll adjusts askPanelScrollY for the askuser split layout.
 // The visible height depends on viewport height + fixed chrome, not panelVisibleHeight().
+// Default scroll is 0 (show question at top), not bottom (hints).
+// Caches total line count in askPanelTotalLines for use by ensureAskUserVisible.
 func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	total := strings.Count(rawContent, "\n") + 1
+	m.askPanelTotalLines = total
 	fixedLines := 2 // titleBar + toast (no separate footer — hints are in-panel)
 	panelBorder := 2
 	viewportH := m.layoutViewportHeight()
@@ -344,11 +451,6 @@ func (m *cliModel) clampAskUserPanelScroll(rawContent string) {
 	if total <= visible {
 		m.askPanelScrollY = 0
 		return
-	}
-	// When content overflows, default to showing the bottom (hints) rather than the top.
-	// Only respect user's explicit scroll position if they've scrolled away from default.
-	if m.askPanelScrollY == 0 {
-		m.askPanelScrollY = total - visible
 	}
 	if m.askPanelScrollY < 0 {
 		m.askPanelScrollY = 0
@@ -368,25 +470,6 @@ func (m *cliModel) askUserPanelVisibleHeight() int {
 		return 3
 	}
 	return visible
-}
-
-// ensureAskPanelCursorVisible scrolls the askuser panel so the current cursor line is visible.
-func (m *cliModel) ensureAskPanelCursorVisible() {
-	// The cursor is at approximately: tab bar (1-2 lines) + question (1) + gap (1) + cursor position
-	lineOfCursor := 2 // question + gap
-	if m.panelTab > 0 {
-		lineOfCursor = 2 // tab bar + gap
-	}
-	cursor := m.panelOptCursor[m.panelTab]
-	lineOfCursor += cursor + 1 // +1 for the option line itself
-
-	visible := m.askUserPanelVisibleHeight()
-	if m.askPanelScrollY+visible <= lineOfCursor {
-		m.askPanelScrollY = lineOfCursor - visible + 1
-	}
-	if m.askPanelScrollY > lineOfCursor {
-		m.askPanelScrollY = lineOfCursor
-	}
 }
 
 // applyLanguageChange applies a language/locale change and invalidates cache.

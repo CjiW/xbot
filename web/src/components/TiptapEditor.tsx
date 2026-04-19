@@ -39,7 +39,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, TiptapEditorProps>(
     extensions: [
       StarterKit.configure({ codeBlock: false }),
       Placeholder.configure({
-        placeholder: () => connectedRef.current ? '输入消息...' : '连接中...',
+        placeholder: () => connectedRef.current ? '输入消息... (Shift+Enter 换行)' : '连接中...',
       }),
       CodeBlockLowlight.configure({ lowlight }),
       TaskList,

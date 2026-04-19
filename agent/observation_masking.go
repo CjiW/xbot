@@ -3,7 +3,10 @@ package agent
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -31,23 +34,119 @@ const (
 // ObservationMaskStore 管理 observation masking 的存储和召回。
 // 零成本压缩策略：遮蔽旧 tool result，不发给 LLM，但完整保留可通过工具召回。
 // 双重容量限制：maxSize（条数）+ maxChars（总字符数），任一超限则淘汰最旧条目。
+//
+// 磁盘持久化：每个 mask entry 存为 {storeDir}/{id}.json，重启后可恢复。
+// Recall 时优先内存查找，miss 则读磁盘。CleanOldEntries 时同步删除磁盘文件。
 type ObservationMaskStore struct {
 	mu         sync.RWMutex
 	entries    []MaskedObservation // 按 mask 顺序存储
 	maxSize    int                 // 最大存储条数
 	maxChars   int                 // 最大存储总字符数
 	totalChars int                 // 当前总字符数
+	storeDir   string              // 磁盘存储目录（空 = 纯内存模式）
+	loaded     bool                // 是否已从磁盘加载
 }
 
 // NewObservationMaskStore 创建 ObservationMaskStore。
-func NewObservationMaskStore(maxSize int) *ObservationMaskStore {
+// storeDir 非空时启用磁盘持久化。
+func NewObservationMaskStore(maxSize int, storeDir ...string) *ObservationMaskStore {
 	if maxSize <= 0 {
 		maxSize = defaultMaxEntries
 	}
-	return &ObservationMaskStore{
+	s := &ObservationMaskStore{
 		maxSize:  maxSize,
 		maxChars: defaultMaxChars,
 	}
+	if len(storeDir) > 0 && storeDir[0] != "" {
+		s.storeDir = storeDir[0]
+	}
+	return s
+}
+
+// SetStoreDir 设置磁盘存储目录（用于延迟初始化场景）。
+func (s *ObservationMaskStore) SetStoreDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.storeDir = dir
+}
+
+// ensureLoaded 首次访问时从磁盘目录加载所有 mask entries。
+func (s *ObservationMaskStore) ensureLoaded() {
+	if s.loaded || s.storeDir == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loaded {
+		return
+	}
+	s.loaded = true
+
+	dir := s.storeDir
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.WithError(err).Warn("ObservationMaskStore: failed to list store directory")
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			log.WithError(err).WithField("file", entry.Name()).Warn("ObservationMaskStore: failed to read entry file")
+			continue
+		}
+		var obs MaskedObservation
+		if err := json.Unmarshal(data, &obs); err != nil {
+			log.WithError(err).WithField("file", entry.Name()).Warn("ObservationMaskStore: failed to unmarshal entry")
+			continue
+		}
+		s.entries = append(s.entries, obs)
+		s.totalChars += len([]rune(obs.Content))
+	}
+
+	// 按时间排序（保证淘汰顺序正确）
+	sort.Slice(s.entries, func(i, j int) bool {
+		return s.entries[i].MaskedAt.Before(s.entries[j].MaskedAt)
+	})
+
+	if len(s.entries) > 0 {
+		log.WithField("count", len(s.entries)).Info("ObservationMaskStore: loaded entries from disk")
+	}
+}
+
+// persistEntry 将单个 entry 写入磁盘。
+func (s *ObservationMaskStore) persistEntry(entry MaskedObservation) {
+	if s.storeDir == "" {
+		return
+	}
+	if err := os.MkdirAll(s.storeDir, 0o755); err != nil {
+		log.WithError(err).Warn("ObservationMaskStore: failed to create store directory")
+		return
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		log.WithError(err).Warn("ObservationMaskStore: failed to marshal entry")
+		return
+	}
+	fp := filepath.Join(s.storeDir, entry.ID+".json")
+	if err := os.WriteFile(fp, data, 0o644); err != nil {
+		log.WithError(err).Warn("ObservationMaskStore: failed to persist entry")
+	}
+}
+
+// deleteEntryFile 删除磁盘上的 entry 文件。
+func (s *ObservationMaskStore) deleteEntryFile(id string) {
+	if s.storeDir == "" {
+		return
+	}
+	fp := filepath.Join(s.storeDir, id+".json")
+	os.Remove(fp)
 }
 
 // generateMaskID 生成 mask ID: "mk_" + 8位随机 hex。
@@ -65,6 +164,7 @@ func generateMaskID() string {
 // Mask 遮蔽一条 tool result，存储完整内容并返回占位符文本。
 // 占位符格式: 📂 [masked:mk_xxxx] ToolName(args_preview) — N chars — 结果已遮蔽，使用 recall_masked 可查看完整内容
 func (s *ObservationMaskStore) Mask(toolName, arguments, content string, messageIdx int) (MaskedObservation, string) {
+	s.ensureLoaded()
 	id := generateMaskID()
 
 	entry := MaskedObservation{
@@ -86,6 +186,8 @@ func (s *ObservationMaskStore) Mask(toolName, arguments, content string, message
 		s.totalChars -= len([]rune(evicted.Content))
 		s.entries = s.entries[1:]
 		evictedCount++
+		// 异步删除磁盘文件（不需要等，淘汰是低频操作）
+		go s.deleteEntryFile(evicted.ID)
 	}
 	// 重新分配 slice，释放被淘汰条目占用的底层数组内存
 	if evictedCount > 0 {
@@ -95,6 +197,9 @@ func (s *ObservationMaskStore) Mask(toolName, arguments, content string, message
 	}
 	s.entries = append(s.entries, entry)
 	s.totalChars += contentLen
+
+	// 持久化到磁盘
+	s.persistEntry(entry)
 
 	// 生成占位符
 	argsPreview := arguments
@@ -108,20 +213,43 @@ func (s *ObservationMaskStore) Mask(toolName, arguments, content string, message
 }
 
 // Recall 按 ID 召回已遮蔽的完整 tool result。
+// 优先内存查找，miss 则从磁盘加载。
 func (s *ObservationMaskStore) Recall(id string) (MaskedObservation, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.ensureLoaded()
 
+	s.mu.RLock()
 	for _, e := range s.entries {
 		if e.ID == id {
+			s.mu.RUnlock()
 			return e, nil
 		}
 	}
+	s.mu.RUnlock()
+
+	// 内存未找到，尝试从磁盘读取
+	if s.storeDir != "" {
+		fp := filepath.Join(s.storeDir, id+".json")
+		data, err := os.ReadFile(fp)
+		if err == nil {
+			var obs MaskedObservation
+			if jsonErr := json.Unmarshal(data, &obs); jsonErr == nil {
+				// 恢复到内存
+				s.mu.Lock()
+				s.entries = append(s.entries, obs)
+				s.totalChars += len([]rune(obs.Content))
+				s.mu.Unlock()
+				return obs, nil
+			}
+		}
+	}
+
 	return MaskedObservation{}, fmt.Errorf("masked observation %s not found", id)
 }
 
 // List 列出所有已遮蔽的 observation（按 mask 时间倒序）。
 func (s *ObservationMaskStore) List() []MaskedObservation {
+	s.ensureLoaded()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -132,17 +260,24 @@ func (s *ObservationMaskStore) List() []MaskedObservation {
 
 // Size 返回当前存储的 observation 数量。
 func (s *ObservationMaskStore) Size() int {
+	s.ensureLoaded()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.entries)
 }
 
-// Clear 清空所有已遮蔽的 observation。
+// Clear 清空所有已遮蔽的 observation（内存 + 磁盘）。
 func (s *ObservationMaskStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = nil
 	s.totalChars = 0
+	// 删除磁盘文件
+	if s.storeDir != "" {
+		os.RemoveAll(s.storeDir)
+		os.MkdirAll(s.storeDir, 0o755)
+	}
 }
 
 // CleanOldEntries 删除 MaskedAt 在 cutoff 之前的记录。
@@ -156,6 +291,8 @@ func (s *ObservationMaskStore) CleanOldEntries(cutoff time.Time) int {
 		if e.MaskedAt.Before(cutoff) {
 			s.totalChars -= len([]rune(e.Content))
 			removedCount++
+			// 删除磁盘文件
+			go s.deleteEntryFile(e.ID)
 		} else {
 			kept = append(kept, e)
 		}
@@ -169,6 +306,40 @@ func (s *ObservationMaskStore) CleanOldEntries(cutoff time.Time) int {
 		}).Info("ObservationMaskStore: cleaned old entries after compression")
 	}
 	return removedCount
+}
+
+// CleanStale 清理超过指定天数的残留 mask 数据（磁盘文件）。
+// 用于定期清理。
+func (s *ObservationMaskStore) CleanStale(maxAgeDays int) {
+	if s.storeDir == "" || maxAgeDays <= 0 {
+		return
+	}
+	cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
+	entries, err := os.ReadDir(s.storeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.WithError(err).Warn("ObservationMaskStore: failed to list store directory for stale cleanup")
+		return
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(s.storeDir, entry.Name()))
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.WithField("removed", removed).Info("ObservationMaskStore: cleaned stale entries from disk")
+	}
 }
 
 // --- tools.MaskedRecallStore 接口实现 ---

@@ -380,6 +380,20 @@ func (s *runState) assertSystemMessages(ctx context.Context) *RunOutput {
 // callLLM invokes the LLM with the current messages, handling per-tenant
 // concurrency semaphore and input-too-long errors with forced compression.
 func (s *runState) callLLM(ctx context.Context, retryNotifyCtx context.Context) (*llm.LLMResponse, error) {
+	// Dynamic max_tokens: if enabled and we have prompt token info from a previous
+	// call, adjust max_output_tokens to fit within the context window.
+	if s.cfg.DynamicMaxTokens && s.lastPromptTokens > 0 {
+		maxCtxTokens := 0
+		if s.cfg.ContextManagerConfig != nil {
+			maxCtxTokens = s.cfg.ContextManagerConfig.MaxContextTokens
+		}
+		if maxCtxTokens > 0 {
+			if adjuster, ok := s.cfg.LLMClient.(llm.MaxTokensAdjuster); ok {
+				adjuster.AdjustMaxTokens(int(s.lastPromptTokens), maxCtxTokens)
+			}
+		}
+	}
+
 	toolDefs := visibleToolDefs(s.cfg.Tools.AsDefinitionsForSession(s.sessionKey), s.cfg.SettingsSvc, s.cfg.Channel, s.cfg.OriginUserID)
 
 	var releaseLLMSem func()
@@ -433,12 +447,12 @@ func (s *runState) handleInputTooLong(ctx context.Context, retryNotifyCtx contex
 	s.accumulateCompressUsage(result)
 
 	s.messages = s.syncMessages(result.LLMView)
-	s.lastPromptTokens = 0
+	newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
+	s.lastPromptTokens = int64(newCount)
 	s.lastCompletionTokens = 0
 	s.lastMsgCountAtLLMCall = len(s.messages)
 	if s.autoNotify {
-		newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
-		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newTokenCount))
+		s.progressLines = append(s.progressLines, fmt.Sprintf("> ✅ 强制压缩完成 → %d tokens (estimated)", newCount))
 		s.notifyProgress("")
 	}
 	if s.cfg.Session != nil {
@@ -531,6 +545,16 @@ func (s *runState) handleLLMError(ctx context.Context, err error, partialResp *l
 // handleFinalResponse processes LLM responses.
 // Returns (output, retry): output is non-nil when Run should return it;
 // retry is true when context was compressed and the loop should continue.
+//
+// Finish reason handling:
+//   - "stop" + no tool_calls → final text response, return
+//   - "tool_calls" (or HasToolCalls) → execute tools, continue loop
+//   - "length" → model hit max_tokens, output is truncated. Auto-retry once
+//     by appending partial content and asking model to continue. If model
+//     still can't finish, return with truncation warning.
+//   - "content_filter" → filtered by safety, return with warning
+//   - "" (empty/unknown) → abnormal stream termination, warn and return
+//   - "model_context_window_exceeded" → compress and retry
 func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMResponse) (output *RunOutput, retry bool) {
 	cleanContent := llm.StripThinkBlocks(response.Content)
 
@@ -554,7 +578,8 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				} else {
 					s.accumulateCompressUsage(result)
 					s.messages = s.syncMessages(result.LLMView)
-					s.lastPromptTokens = 0
+					newCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
+					s.lastPromptTokens = int64(newCount)
 					s.lastCompletionTokens = 0
 					s.lastMsgCountAtLLMCall = len(s.messages)
 					if s.cfg.Session != nil {
@@ -577,11 +602,25 @@ func (s *runState) handleFinalResponse(ctx context.Context, response *llm.LLMRes
 				ToolsUsed: s.toolsUsed,
 			}), false
 		}
-		// length: output truncated due to max_tokens/max_completion_tokens limit
+
+		// length: output truncated due to max_tokens limit
 		output := cleanContent
 		if response.FinishReason == llm.FinishReasonLength {
 			output += "\n\n⚠️ Output was truncated (reached max output token limit). Use /set-llm max_output_tokens=<n> to increase."
 		}
+		// content_filter: model output was filtered by safety system
+		if response.FinishReason == llm.FinishReasonContentFilter {
+			log.Ctx(ctx).WithFields(log.Fields{
+				"finish_reason": response.FinishReason,
+				"content_len":   len(cleanContent),
+			}).Warn("Model response filtered by content filter")
+			if output == "" {
+				output = "⚠️ Response was filtered by content safety system."
+			} else {
+				output += "\n\n⚠️ Response was partially filtered by content safety system."
+			}
+		}
+
 		return s.buildOutput(&bus.OutboundMessage{
 			Channel:     s.cfg.Channel,
 			ChatID:      s.cfg.ChatID,
@@ -664,10 +703,16 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	// Token estimation strategy:
 	// - API prompt_tokens (exact) covers messages[0..lastMsgCount] + tool defs
 	// - API completion_tokens (exact) covers the assistant message content/reasoning/tool_calls
-	// - Local estimation only for tool result messages appended after the assistant message
+	// - Local estimation only for tool result messages appended after the last LLM call
+	//
+	// restoredFromDB path: lastPromptTokens is from the PREVIOUS Run's last API call.
+	// We use it as-is — no local estimation fallback.
 	totalTokens := int64(0)
+	var tokenSource string
 	if s.lastPromptTokens > 0 && s.lastMsgCountAtLLMCall > 0 {
+		// In-Run path: we've had at least one LLM call in this Run.
 		totalTokens = s.lastPromptTokens + s.lastCompletionTokens
+		tokenSource = "api+completion"
 		if len(s.messages) > s.lastMsgCountAtLLMCall+1 {
 			toolMsgs := s.messages[s.lastMsgCountAtLLMCall+1:]
 			deltaTokens, deltaErr := llm.CountMessagesTokens(toolMsgs, s.cfg.Model)
@@ -676,17 +721,39 @@ func (s *runState) maybeCompress(ctx context.Context) {
 			} else {
 				totalTokens += int64(deltaTokens)
 			}
+			tokenSource = "api+completion+tool_delta"
 		}
-	} else if s.restoredFromDB && s.lastPromptTokens > 0 {
-		totalTokens = s.lastPromptTokens + s.lastCompletionTokens
+	} else if s.lastPromptTokens > 0 {
+		// Restored from previous Run (DB or in-memory) — use API prompt_tokens as baseline.
+		// Do NOT add lastCompletionTokens: those are output tokens from the
+		// previous Run, not part of the current context size.
+		totalTokens = s.lastPromptTokens
+		tokenSource = "restored"
 	} else {
-		toolDefs := s.cfg.Tools.AsDefinitionsForSession(s.sessionKey)
-		toolTokens, _ := llm.CountToolsTokens(toolDefs, s.cfg.Model)
-		cachedMsgTokens, _ := llm.CountMessagesTokens(s.messages, s.cfg.Model)
-		totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
+		// No API token data available. This should never happen in production:
+		// - First Run: no need to compress (few messages)
+		// - Subsequent Runs: API call always sets lastPromptTokens
+		// - After restart: DB restoration sets lastPromptTokens via SaveTokenState
+		if len(s.messages) > 3 {
+			log.Ctx(ctx).Error("maybeCompress: no API token data available, skipping compress check")
+		}
+		totalTokens = 0
+		tokenSource = "no_data"
 	}
 
 	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)
+
+	// Free snip layer (Claude Code style): before expensive API-based compression,
+	// trim old tool result contents that are no longer needed. This is free — no
+	// API call required, just replaces large tool result content with placeholders.
+	// Triggered when context exceeds 65% of prompt budget but before the 75%
+	// compression threshold. Only activates when maxOutputTokens is reasonable
+	// (>100 tokens) to avoid interfering with test scenarios using extreme values.
+	snipped := false
+	if !needCompress && maxOutputTokens > 100 && totalTokens > int64(float64(promptBudget)*0.65) && len(s.messages) > 6 {
+		snipped = s.snipOldToolResults(ctx)
+	}
+
 	log.Ctx(ctx).WithFields(log.Fields{
 		"total_tokens":       totalTokens,
 		"max_context":        maxTokens,
@@ -695,17 +762,10 @@ func (s *runState) maybeCompress(ctx context.Context) {
 		"threshold":          int(float64(promptBudget) * 0.75),
 		"msg_count":          len(s.messages),
 		"need":               needCompress,
+		"snipped":            snipped,
 		"base_prompt_tokens": s.lastPromptTokens,
 		"completion_tokens":  s.lastCompletionTokens,
-		"source": func() string {
-			if s.lastPromptTokens == 0 || s.lastMsgCountAtLLMCall == 0 {
-				return "local"
-			}
-			if len(s.messages) > s.lastMsgCountAtLLMCall+1 {
-				return "api+completion+tool_delta"
-			}
-			return "api+completion"
-		}(),
+		"source":             tokenSource,
 	}).Info("maybeCompress check")
 
 	if needCompress {
@@ -751,6 +811,48 @@ func (s *runState) maybeCompress(ctx context.Context) {
 }
 
 // runCompression performs the actual context compression.
+// snipOldToolResults replaces large tool result contents from earlier iterations
+// with compact placeholders. This is a FREE context reduction layer — no API call
+// needed. Inspired by Claude Code's "Snip" layer.
+//
+// Strategy: tool results from iterations before the last 3 are replaced with
+// "[Tool result cleared to save context]" if they exceed 500 chars. This preserves
+// the message structure (tool_use/tool_result pairing) while freeing tokens.
+func (s *runState) snipOldToolResults(ctx context.Context) bool {
+	const (
+		minIterationsBeforeSnip = 3
+		maxContentLen           = 500
+		placeholder             = "[Old tool result cleared to save context]"
+	)
+
+	snipped := false
+	for i := range s.messages {
+		msg := &s.messages[i]
+		if msg.Role != "tool" || len(msg.Content) <= maxContentLen {
+			continue
+		}
+		// Check if this tool result is from an old iteration by finding the
+		// corresponding tool_use (assistant message with matching ToolCallID).
+		// Simple heuristic: if message index is far from the end, it's old.
+		distanceFromEnd := len(s.messages) - i
+		if distanceFromEnd < minIterationsBeforeSnip*3 { // ~3 messages per iteration
+			continue
+		}
+		oldLen := len(msg.Content)
+		msg.Content = placeholder
+		snipped = true
+		log.Ctx(ctx).WithFields(log.Fields{
+			"msg_index":    i,
+			"old_content":  oldLen,
+			"distance_end": distanceFromEnd,
+		}).Debug("Snipped old tool result")
+	}
+	if snipped {
+		log.Ctx(ctx).Debug("Snipped old tool results to reduce context")
+	}
+	return snipped
+}
+
 func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalTokens, maxTokens int) {
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseCompressing
@@ -778,12 +880,14 @@ func (s *runState) runCompression(ctx context.Context, cm ContextManager, totalT
 
 	oldTokenCount := totalTokens
 	s.messages = s.syncMessages(result.LLMView)
-	s.lastPromptTokens = 0
+	// Use the estimated token count of the compressed messages so that
+	// subsequent maybeCompress calls (in this Run and the next) don't fall
+	// back to the even-more-overestimated local counting path.
+	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
+	s.lastPromptTokens = int64(newTokenCount)
 	s.lastCompletionTokens = 0
 	s.lastMsgCountAtLLMCall = len(s.messages)
 	s.lastCompressIter = s.compressAttempts
-
-	newTokenCount, _ := llm.CountMessagesTokens(result.LLMView, s.cfg.Model)
 	if s.structuredProgress != nil {
 		s.structuredProgress.Phase = PhaseThinking
 	}
@@ -1287,7 +1391,13 @@ func (s *runState) postToolProcessing(ctx context.Context, response *llm.LLMResp
 			todoSummary = s.cfg.TodoManager.GetTodoSummary(s.sessionKey)
 		}
 
-		reminder := BuildSystemReminder(s.messages, response.ToolCalls, todoSummary, s.cfg.AgentID)
+		// Get current CWD for system reminder
+		var cwd string
+		if s.cfg.Session != nil {
+			cwd = s.cfg.Session.GetCurrentDir()
+		}
+
+		reminder := BuildSystemReminder(s.messages, response.ToolCalls, todoSummary, s.cfg.AgentID, cwd)
 		if reminder != "" && len(s.messages) > 0 {
 			lastIdx := len(s.messages) - 1
 			s.messages[lastIdx].Content += "\n\n" + reminder

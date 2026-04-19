@@ -6,13 +6,30 @@ import (
 	"charm.land/lipgloss/v2"
 	"fmt"
 	"image/color"
+	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	log "xbot/logger"
 )
 
 // Update 处理消息
-func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *cliModel) Update(msg tea.Msg) (model tea.Model, retCmd tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.WithField("panic", r).Error("cli model update panicked")
+			_ = os.MkdirAll(filepath.Join(configXbotHome(), "logs"), 0o755)
+			if f, err := os.OpenFile(filepath.Join(configXbotHome(), "logs", "cli-panic.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				_, _ = fmt.Fprintf(f, "\n==== %s update panic ====\nmsg=%T\npanic=%v\n%s\n", time.Now().Format(time.RFC3339), msg, r, stack)
+				_ = f.Close()
+			}
+			panic(r)
+		}
+	}()
 	var (
 		cmd  tea.Cmd
 		cmds []tea.Cmd
@@ -100,6 +117,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+z" {
 		m.showSystemMsg(m.locale.EmergencyQuitHint, feedbackWarning)
 		return m, tea.Quit
+	}
+
+	// DEBUG: log all KeyPressMsg to trace ctrl+c handling
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		log.WithFields(log.Fields{"str": key.String(), "code": key.Code, "mod": key.Mod}).Debug("DEBUG keypress")
 	}
 
 	// Ctrl+C: 统一处理，位于所有其他 key handler 之前。
@@ -270,6 +292,12 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		model, keyCmds, handled := m.handleKeyPress(msg, wasTyping)
 		if handled {
+			// wasTyping guard: ensure tick chain starts on idle→typing transition.
+			// handleKeyPress may call sendMessage→startAgentTurn which sets typing=true,
+			// but the early return below skips the wasTyping guard at the end of Update.
+			if cm, ok := model.(*cliModel); ok && !wasTyping && cm.typing && !cm.fastTickActive {
+				keyCmds = append(keyCmds, tickCmd())
+			}
 			return model, tea.Batch(keyCmds...)
 		}
 		// Unhandled key: fall through to post-switch processing
@@ -286,8 +314,18 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliProgressMsg:
 		m.handleProgressMsg(msg)
+
+	case cliProcessingMsg:
+		if msg.processing && !m.typing {
+			m.startAgentTurn()
+		} else if !msg.processing && m.typing {
+			m.endAgentTurn(m.agentTurnID)
+		}
 		// NOTE: do NOT flush queue here even if needFlushQueue is true!
 		// PhaseDone can arrive before cliOutboundMsg (the reply text). If we
+
+	case cliConnStateMsg:
+		m.connState = msg.state
 		// flush here, the queued message gets appended BEFORE the reply,
 		// producing wrong order: msg1, msg2, reply1 instead of msg1, reply1, msg2.
 		// Flush is handled in cliTickMsg instead (next tick after typing=false).
@@ -401,6 +439,11 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashTickMsg:
 		return m.handleSplashTick(msg)
 
+	case debugCaptureMsg:
+		// --debug: dump current TUI view to file every second
+		m.debugCaptureUI()
+		cmds = append(cmds, m.debugCaptureTick())
+
 	case splashDoneMsg:
 		// §14 启动画面结束确认
 		m.splashDone = true
@@ -411,6 +454,17 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cliToastMsg:
 		cmds = append(cmds, m.handleToastMsg(msg)...)
+
+	case cliHistoryLoadMsg:
+		if len(msg.history) > 0 {
+			m.messages = append(m.messages, msg.history...)
+			m.invalidateAllCache(false)
+			m.updateViewportContent()
+			if m.streamingMsgIdx < 0 {
+				m.viewport.GotoBottom()
+			}
+			log.WithFields(log.Fields{"count": len(msg.history)}).Info("Applied history load in Update loop")
+		}
 
 	case cliToastClearMsg:
 		cmds = append(cmds, m.handleToastClear(msg)...)
@@ -445,9 +499,13 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// NOTE: tick chain is now started inside startAgentTurn() via pendingCmds.
-	// No need for a separate wasTyping guard here — all idle→typing transitions
-	// go through startAgentTurn() which guarantees tickCmd() is queued.
+	// Idle→typing transition guard: if typing just started (e.g. from
+	// handleInjectedUserMsg or cliProcessingMsg), ensure the tick chain is running.
+	// This is the universal safety net — callers that can return cmds do so
+	// directly, but this catches any missed transitions.
+	if !wasTyping && m.typing && !m.fastTickActive {
+		cmds = append(cmds, tickCmd())
+	}
 
 	// 更新 viewport
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -741,4 +799,11 @@ func (m *cliModel) handleRunnerStatusMsg(msg runnerStatusMsg) tea.Cmd {
 		return m.clearTempStatusCmd()
 	}
 	return nil
+}
+
+func configXbotHome() string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".xbot")
+	}
+	return ".xbot"
 }

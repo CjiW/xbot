@@ -222,16 +222,25 @@ func (f *LLMFactory) SwitchSubscription(senderID string, sub *sqlite.LLMSubscrip
 }
 
 // SwitchModel switches a user's active model without changing the subscription/LLM client.
-// Works by invalidating the cache so next GetLLM call picks up the new model from DB.
+// Persists to DB subscription via the RPC handler. This method only updates in-memory cache.
 func (f *LLMFactory) SwitchModel(senderID, model string) {
 	f.mu.Lock()
-	if _, ok := f.clients[senderID]; ok {
-		// User has a custom client — update model in cache
-		f.models[senderID] = model
-	} else {
-		// User uses default client — update default model
-		f.defaultModel = model
-	}
+	f.models[senderID] = model
+	f.mu.Unlock()
+}
+
+// SetUserMaxOutputTokens updates the max_output_tokens cache for a user.
+// This is a lightweight update that doesn't require LLMConfig.
+func (f *LLMFactory) SetUserMaxOutputTokens(senderID string, n int) {
+	f.mu.Lock()
+	f.maxOutputTokens[senderID] = n
+	f.mu.Unlock()
+}
+
+// SetUserThinkingMode updates the thinking_mode cache for a user.
+func (f *LLMFactory) SetUserThinkingMode(senderID, mode string) {
+	f.mu.Lock()
+	f.thinkingModes[senderID] = mode
 	f.mu.Unlock()
 }
 

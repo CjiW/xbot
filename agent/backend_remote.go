@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,7 +65,12 @@ type RemoteBackend struct {
 	progressCb func(*channel.CLIProgressPayload)
 
 	// Reconnect
-	reconnectCh chan struct{}
+	reconnectCh   chan struct{}
+	onReconnectCb func() // called after successful reconnect (for history reload)
+
+	// Connection state — tracks WS liveness for CLI header bar indicator
+	connState     string // "connected" | "disconnected" | "reconnecting"
+	onConnStateCb func(state string)
 
 	// RPC pending calls: requestID → response channel
 	rpcMu      sync.Mutex
@@ -109,11 +115,16 @@ type wsIncomingMessage struct {
 
 // wsOutgoingMessage represents a message sent to the server.
 type wsOutgoingMessage struct {
-	Type    string          `json:"type"`
-	Content string          `json:"content,omitempty"`
-	ID      string          `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	Type       string          `json:"type"`
+	Content    string          `json:"content,omitempty"`
+	ID         string          `json:"id,omitempty"`
+	Method     string          `json:"method,omitempty"`
+	Params     json.RawMessage `json:"params,omitempty"`
+	Channel    string          `json:"channel,omitempty"`
+	ChatID     string          `json:"chat_id,omitempty"`
+	SenderID   string          `json:"sender_id,omitempty"`
+	SenderName string          `json:"sender_name,omitempty"`
+	ChatType   string          `json:"chat_type,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +180,24 @@ func (b *RemoteBackend) SendInbound(msg bus.InboundMessage) error {
 	// Set write deadline to avoid blocking indefinitely on dead connections.
 	b.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	defer b.conn.SetWriteDeadline(time.Time{}) // reset
-	outMsg := wsOutgoingMessage{Type: "message", Content: msg.Content}
+
+	// Detect /cancel and send as "cancel" type so the server's cancel handler
+	// routes it correctly (web.go readPump switch on msg.Type).
+	msgType := "message"
+	isCancel := strings.TrimSpace(strings.ToLower(msg.Content)) == "/cancel"
+	if isCancel {
+		msgType = "cancel"
+	}
+
+	outMsg := wsOutgoingMessage{
+		Type:       msgType,
+		Content:    msg.Content,
+		Channel:    msg.Channel,
+		ChatID:     msg.ChatID,
+		SenderID:   msg.SenderID,
+		SenderName: msg.SenderName,
+		ChatType:   msg.ChatType,
+	}
 	return b.conn.WriteJSON(outMsg)
 }
 
@@ -186,11 +214,73 @@ func (b *RemoteBackend) Bus() *bus.MessageBus { return nil }
 // IsRemote returns true — the agent loop runs on the server.
 func (b *RemoteBackend) IsRemote() bool { return true }
 
+// ServerURL returns the configured server URL for display purposes.
+func (b *RemoteBackend) ServerURL() string { return b.serverURL }
+
+// IsProcessing returns true if there is an active agent turn for the given chat.
+func (b *RemoteBackend) IsProcessing(ch, chatID string) bool {
+	raw, err := b.callRPC("is_processing", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == "true"
+}
+
+// GetActiveProgress returns the latest progress snapshot for an active turn via RPC.
+func (b *RemoteBackend) GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload {
+	raw, err := b.callRPC("get_active_progress", map[string]string{
+		"channel": ch, "chat_id": chatID,
+	})
+	if err != nil || len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var payload channel.CLIProgressPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	return &payload
+}
+
 // OnProgress registers a callback for streaming progress events.
 func (b *RemoteBackend) OnProgress(callback func(*channel.CLIProgressPayload)) {
 	b.progressMu.Lock()
 	defer b.progressMu.Unlock()
 	b.progressCb = callback
+}
+
+// OnReconnect registers a callback invoked after a successful WS reconnection.
+// Used to reload history and re-sync state that may have changed during disconnect.
+func (b *RemoteBackend) OnReconnect(callback func()) {
+	b.onReconnectCb = callback
+}
+
+// OnConnStateChange registers a callback invoked when the WS connection state changes.
+// States: "connected", "disconnected", "reconnecting".
+// Used by CLI to update the header bar connection indicator in real-time.
+func (b *RemoteBackend) OnConnStateChange(callback func(state string)) {
+	b.onConnStateCb = callback
+}
+
+// ConnState returns the current connection state string.
+func (b *RemoteBackend) ConnState() string {
+	b.connMu.Lock()
+	defer b.connMu.Unlock()
+	return b.connState
+}
+
+// setConnState updates connState and fires the callback if state changed.
+// Must be called with connMu held OR from a single-threaded context.
+func (b *RemoteBackend) setConnState(state string) {
+	b.connMu.Lock()
+	prev := b.connState
+	b.connState = state
+	cb := b.onConnStateCb
+	b.connMu.Unlock()
+	if prev != state && cb != nil {
+		cb(state)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +337,7 @@ func (b *RemoteBackend) connect(ctx context.Context) error {
 		old.Close()
 	}
 	log.Info("Connected to remote xbot server")
+	b.setConnState("connected")
 	return nil
 }
 
@@ -278,10 +369,18 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			} else {
 				log.WithError(err).Info("WS connection closed")
 			}
+			// Unblock all pending RPC callers so they don't hang until timeout.
+			b.rpcMu.Lock()
+			for id, ch := range b.pending {
+				close(ch)
+				delete(b.pending, id)
+			}
+			b.rpcMu.Unlock()
 			select {
 			case b.reconnectCh <- struct{}{}:
 			default:
 			}
+			b.setConnState("disconnected")
 			return
 		}
 		var msg wsIncomingMessage
@@ -308,7 +407,7 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			cb := b.outboundCb
 			b.outboundMu.RUnlock()
 			if cb != nil {
-				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Debug("RemoteBackend: dispatching outbound message")
+				log.WithField("msg_type", msg.Type).WithField("content_len", len(msg.Content)).Info("RemoteBackend: dispatching outbound message")
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
@@ -330,7 +429,27 @@ func (b *RemoteBackend) readPump(ctx context.Context) {
 			})
 		case "ask_user":
 			if msg.Progress != nil {
-				b.dispatchProgress(convertWsProgressToCLI(msg.Progress))
+				if len(msg.Progress.Questions) > 0 {
+					qJSON, _ := json.Marshal(msg.Progress.Questions)
+					outMsg := bus.OutboundMessage{
+						Channel:     "cli",
+						WaitingUser: true,
+						Metadata: map[string]string{
+							"ask_questions": string(qJSON),
+						},
+					}
+					if msg.Progress.RequestID != "" {
+						outMsg.Metadata["request_id"] = msg.Progress.RequestID
+					}
+					b.outboundMu.RLock()
+					cb := b.outboundCb
+					b.outboundMu.RUnlock()
+					if cb != nil {
+						cb(outMsg)
+					} else {
+						log.Warn("Received ask_user but no outbound callback registered")
+					}
+				}
 			}
 		}
 	}
@@ -382,6 +501,7 @@ func convertWsProgressToCLI(wp *channel.WsProgressPayload) *channel.CLIProgressP
 		Phase:     wp.Phase,
 		Iteration: wp.Iteration,
 		Thinking:  wp.Thinking,
+		Reasoning: wp.Reasoning,
 	}
 	for _, t := range wp.ActiveTools {
 		payload.ActiveTools = append(payload.ActiveTools, channel.CLIToolProgress{
@@ -466,6 +586,8 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-b.reconnectCh:
+			b.setConnState("reconnecting")
+			consecutiveFailures := 0
 			for delay := time.Second; delay <= 30*time.Second; delay *= 2 {
 				select {
 				case <-b.done:
@@ -486,10 +608,30 @@ func (b *RemoteBackend) reconnectLoop(ctx context.Context) {
 				case <-timer.C:
 				}
 				if err := b.connect(ctx); err != nil {
+					consecutiveFailures++
 					log.WithError(err).Warn("Reconnect failed")
+					// Notify user after 3 consecutive failures via outbound callback.
+					if consecutiveFailures == 3 {
+						b.outboundMu.RLock()
+						cb := b.outboundCb
+						b.outboundMu.RUnlock()
+						if cb != nil {
+							cb(bus.OutboundMessage{
+								Channel: "remote",
+								Content: fmt.Sprintf("Connection lost, reconnecting (attempt %d)...", consecutiveFailures),
+							})
+						}
+					}
 					continue
 				}
 				log.Info("Reconnected to server")
+				consecutiveFailures = 0
+				// Notify CLI to reload history and re-sync state.
+				// Run in goroutine — callback may make slow RPC calls that
+				// should not block the reconnectLoop.
+				if b.onReconnectCb != nil {
+					go b.onReconnectCb()
+				}
 				b.readPumpWg.Add(1)
 				go b.readPump(ctx)
 				break
@@ -626,6 +768,12 @@ func (b *RemoteBackend) SetContextMode(mode string) error {
 	return b.callRPCVoid("set_context_mode", map[string]string{"mode": mode})
 }
 
+func (b *RemoteBackend) SetCWD(ch, chatID, dir string) error {
+	return b.callRPCVoid("set_cwd", map[string]string{
+		"channel": ch, "chat_id": chatID, "dir": dir,
+	})
+}
+
 func (b *RemoteBackend) SetMaxIterations(n int) {
 	if err := b.callRPCVoid("set_max_iterations", map[string]int{"n": n}); err != nil {
 		log.WithError(err).Warn("RemoteBackend: SetMaxIterations RPC failed")
@@ -658,6 +806,12 @@ func (b *RemoteBackend) ClearProxyLLM(senderID string) {
 
 func (b *RemoteBackend) SetUserModel(senderID, model string) error {
 	return b.callRPCVoid("set_user_model", map[string]string{"model": model})
+}
+
+// SwitchModel switches the active model for a user (memory-only, like LLMFactory.SwitchModel).
+// Unlike SetUserModel, this does not require an existing LLMConfig.
+func (b *RemoteBackend) SwitchModel(senderID, model string) error {
+	return b.callRPCVoid("switch_model", map[string]string{"model": model})
 }
 
 func (b *RemoteBackend) SetUserMaxContext(senderID string, maxContext int) error {
@@ -751,7 +905,7 @@ func (b *RemoteBackend) InspectInteractiveSession(ctx context.Context, roleName,
 // ---------------------------------------------------------------------------
 
 func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]string, error) {
-	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace})
+	raw, err := b.callRPC("get_settings", map[string]string{"namespace": namespace, "sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -767,7 +921,7 @@ func (b *RemoteBackend) GetSettings(namespace, senderID string) (map[string]stri
 
 func (b *RemoteBackend) SetSetting(namespace, senderID, key, value string) error {
 	return b.callRPCVoid("set_setting", map[string]string{
-		"namespace": namespace, "key": key, "value": value,
+		"namespace": namespace, "sender_id": senderID, "key": key, "value": value,
 	})
 }
 
@@ -809,6 +963,12 @@ func (b *RemoteBackend) ClearMemory(ctx context.Context, ch, chatID, targetType,
 	return b.callRPCVoid("clear_memory", map[string]string{
 		"channel": ch, "chat_id": chatID, "target_type": targetType,
 	})
+}
+
+// RewindCheckpoints rolls back file checkpoints on the server side.
+// Returns JSON-encoded RewindResult.
+func (b *RemoteBackend) RewindCheckpoints(turnIdx int) (string, error) {
+	return b.callRPCString("rewind_checkpoints", map[string]any{"turn_idx": turnIdx})
 }
 
 func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID string) map[string]string {
@@ -976,7 +1136,7 @@ func RPCMethodList() []string {
 		"get_context_mode", "set_context_mode",
 		"get_settings", "set_setting",
 		"set_max_iterations", "set_max_concurrency", "set_max_context_tokens",
-		"get_default_model", "set_user_model",
+		"get_default_model", "set_user_model", "switch_model",
 		"get_user_max_context", "set_user_max_context",
 		"get_user_max_output_tokens", "set_user_max_output_tokens",
 		"get_user_thinking_mode", "set_user_thinking_mode",
@@ -995,5 +1155,7 @@ func RPCMethodList() []string {
 		"update_subscription", "set_subscription_model",
 		"get_history", "trim_history",
 		"reset_token_state",
+		"is_processing", "get_active_progress",
+		"rewind_checkpoints",
 	}
 }

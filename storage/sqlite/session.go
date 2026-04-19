@@ -339,6 +339,31 @@ func (s *SessionService) UpdateMessageContent(tenantID int64, messageIndex int, 
 	return nil
 }
 
+// UpdateMessageContentNonDisplayOnly updates the content of the Nth non-display-only message (0-indexed) for a tenant.
+// The index corresponds to the ordering used by GetAllMessages (which excludes display_only messages).
+// Used by context_edit persistence to sync in-memory edits back to the database.
+func (s *SessionService) UpdateMessageContentNonDisplayOnly(tenantID int64, messageIndex int, content string) error {
+	conn := s.db.Conn()
+	result, err := conn.Exec(`
+		UPDATE session_messages SET content = ?
+		WHERE tenant_id = ? AND id = (
+			SELECT id FROM session_messages
+			WHERE tenant_id = ? AND COALESCE(display_only, 0) = 0
+			ORDER BY id ASC
+			LIMIT 1
+			OFFSET ?
+		)
+	`, content, tenantID, tenantID, messageIndex)
+	if err != nil {
+		return fmt.Errorf("update non-display-only message content at index %d: %w", messageIndex, err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no non-display-only message found at index %d for tenant %d", messageIndex, tenantID)
+	}
+	return nil
+}
+
 // scanMessages scans message rows from a query result
 func (s *SessionService) scanMessages(rows *sql.Rows) ([]llm.ChatMessage, error) {
 	var messages []llm.ChatMessage

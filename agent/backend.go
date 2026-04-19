@@ -41,6 +41,15 @@ type AgentBackend interface {
 	// (SettingsService, LLMFactory, BgTaskManager, ToolHookChain, MultiSession).
 	IsRemote() bool
 
+	// IsProcessing returns true if there is an active agent turn for the given channel/chatID.
+	// Used by CLI to restore typing indicator on mid-session reconnect.
+	IsProcessing(ch, chatID string) bool
+
+	// GetActiveProgress returns the latest progress snapshot for an active turn,
+	// or nil if no turn is active. Used by CLI to restore tool call progress
+	// and streaming content on mid-session reconnect.
+	GetActiveProgress(ch, chatID string) *channel.CLIProgressPayload
+
 	// OnProgress registers a callback for streaming progress events from the server.
 	// LocalBackend: no-op (progress flows through dispatcher/channel directly).
 	// RemoteBackend: converts WS progress_structured/stream_content messages to
@@ -88,6 +97,10 @@ type AgentBackend interface {
 	// InspectInteractiveSession inspects a running interactive subagent.
 	InspectInteractiveSession(ctx context.Context, roleName, channelName, chatID, instance string, tailCount int) (string, error)
 
+	// SetCWD sets the current working directory for a session on the server.
+	// Used by CLI remote mode to sync the client's cwd to the server session.
+	SetCWD(ch, chatID, dir string) error
+
 	// SetContextMode changes the runtime context management mode.
 	SetContextMode(mode string) error
 
@@ -128,6 +141,9 @@ type AgentBackend interface {
 
 	// SetUserModel sets the model for a specific user.
 	SetUserModel(senderID, model string) error
+
+	// SwitchModel switches the active model in memory (no LLMConfig required).
+	SwitchModel(senderID, model string) error
 
 	// GetUserMaxContext returns the max context tokens for a specific user.
 	GetUserMaxContext(senderID string) int

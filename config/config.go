@@ -108,6 +108,16 @@ type WebConfig struct {
 }
 
 // Config 应用配置
+// CLIConfig CLI 客户端配置（存储在 config.json，供 xbot-cli 读取）。
+type CLIConfig struct {
+	// ServerURL 指定远端 agent server 的 WebSocket 地址（如 ws://localhost:8080）。
+	// 若非空，xbot-cli 默认以 RemoteBackend 连接该 server，而非本地运行 agent。
+	// 可通过 --server flag 在命令行覆盖此值。
+	ServerURL string `json:"server_url,omitempty"`
+	// Token 连接 server 时使用的认证 token（对应 server 端的 admin.token）。
+	Token string `json:"token,omitempty"`
+}
+
 type Config struct {
 	Server        ServerConfig         `json:"server"`
 	LLM           LLMConfig            `json:"llm"`
@@ -127,6 +137,7 @@ type Config struct {
 	OSS           OSSConfig            `json:"oss"`
 	TavilyAPIKey  string               `json:"tavily_api_key"`
 	Subscriptions []SubscriptionConfig `json:"subscriptions,omitempty"`
+	CLI           CLIConfig            `json:"cli,omitempty"`
 }
 
 // FeishuConfig 飞书渠道配置
@@ -158,6 +169,7 @@ type AgentConfig struct {
 	EnableAutoCompress   *bool   `json:"enable_auto_compress,omitempty"`
 	MaxContextTokens     int     `json:"max_context_tokens"`
 	CompressionThreshold float64 `json:"compression_threshold"`
+	DynamicMaxTokens     *bool   `json:"dynamic_max_tokens,omitempty"` // nil = true (default)
 
 	PurgeOldMessages bool `json:"purge_old_messages"`
 
@@ -401,6 +413,11 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Agent.EnableAutoCompress = &b
 		}
 	}
+	if v := os.Getenv("AGENT_DYNAMIC_MAX_TOKENS"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Agent.DynamicMaxTokens = &b
+		}
+	}
 	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxContextTokens == 0 {
 			cfg.Agent.MaxContextTokens = i
@@ -617,6 +634,15 @@ func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 		return true
 	}
 	return *a.EnableAutoCompress
+}
+
+// EffectiveDynamicMaxTokens returns whether dynamic max_tokens adjustment is enabled.
+// Default: true (enabled). Set agent.dynamic_max_tokens=false in config.json to disable.
+func (a AgentConfig) EffectiveDynamicMaxTokens() bool {
+	if a.DynamicMaxTokens == nil {
+		return true
+	}
+	return *a.DynamicMaxTokens
 }
 
 // Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。

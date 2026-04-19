@@ -161,12 +161,15 @@ var dangerConfirmStrings = map[string]string{
 // openAskUserPanel activates the ask-user panel overlay.
 func (m *cliModel) openAskUserPanel(items []askItem, onAnswer func(map[string]string), onCancel func()) {
 	m.panelMode = "askuser"
+	m.progress = nil
+	m.typing = false
 	m.relayoutViewport() // viewport gets split-layout height
 	m.panelItems = items
 	m.panelTab = 0
 	m.panelOptSel = make(map[int]map[int]bool)
 	m.panelOptCursor = make(map[int]int)
 	m.askPanelScrollY = 0
+	m.askPanelTotalLines = 0
 	ta := textarea.New()
 	ta.Placeholder = m.locale.PanelEditPlaceholder
 	ta.Prompt = "  "
@@ -881,8 +884,13 @@ func (m *cliModel) updatePanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	}()
 
 	// 对有 cursor 导航的 panel：cursor 超出可见区域时自动滚动
-	if handled && m.panelMode == "settings" {
-		m.ensurePanelCursorVisible()
+	if handled {
+		switch m.panelMode {
+		case "settings":
+			m.ensurePanelCursorVisible()
+		case "askuser":
+			m.ensureAskUserVisible()
+		}
 	}
 
 	return handled, newModel, cmd
@@ -1187,7 +1195,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 	}
 
-	// Panel-internal scroll for long content (PgUp/PgDn)
+	// Panel-internal scroll for long content.
+	// Two separate scroll targets:
+	//   Shift+↑/↓ — scroll the conversation viewport (history above)
+	//   Ctrl+↑/↓  — scroll the ask panel content (question/options)
+	//   PgUp/PgDn — scroll the ask panel content (page at a time)
 	switch {
 	case msg.String() == "ctrl+o":
 		// §11 Ctrl+O toggles tool summary expand/collapse — must work in askuser mode too
@@ -1206,6 +1218,16 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		return true, m, nil
 	case msg.String() == "shift+down":
 		m.viewport.ScrollDown(1)
+		return true, m, nil
+	case msg.String() == "ctrl+up":
+		m.askPanelScrollY -= 1
+		if m.askPanelScrollY < 0 {
+			m.askPanelScrollY = 0
+		}
+		return true, m, nil
+	case msg.String() == "ctrl+down":
+		m.askPanelScrollY += 1
+		// clamp happens in View via clampAskUserPanelScroll
 		return true, m, nil
 	case msg.String() == "pgup":
 		m.askPanelScrollY -= 5
@@ -1255,13 +1277,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		if hasOpts {
 			if onOther {
 				m.panelOptCursor[m.panelTab] = numOpts - 1
-				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor > 0 {
 				m.panelOptCursor[m.panelTab] = cursor - 1
 			}
-			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()
@@ -1278,13 +1298,11 @@ func (m *cliModel) updateAskUserPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 				if isLastTab {
 					m.panelOptCursor[m.panelTab] = numOpts + 1
 				}
-				m.ensureAskPanelCursorVisible()
 				return true, m, nil
 			}
 			if cursor < maxCursor {
 				m.panelOptCursor[m.panelTab] = cursor + 1
 			}
-			m.ensureAskPanelCursorVisible()
 			return true, m, nil
 		}
 		m.autoExpandAskTA()
@@ -1461,7 +1479,7 @@ func (m *cliModel) restoreOtherInput() {
 	m.panelOtherTI.CursorEnd()
 }
 
-// autoExpandAskTA adjusts textarea height based on content.
+// autoExpandAskTA dynamically grows the textarea height based on content.
 func (m *cliModel) autoExpandAskTA() {
 	lines := strings.Count(m.panelAnswerTA.Value(), "\n") + 1
 	if lines < 2 {
@@ -1701,7 +1719,6 @@ func (m *cliModel) viewAskUserPanel() string {
 	// §20 使用缓存样式
 	s := &m.styles
 	questionStyle := s.WarningSt.Bold(true)
-	hintStyle := s.PanelHint
 	activeTabStyle := s.PanelHeader
 	inactiveTabStyle := s.PanelDesc
 	checkStyle := s.ToolItem
@@ -1794,23 +1811,6 @@ func (m *cliModel) viewAskUserPanel() string {
 			sb.WriteString("\n")
 		}
 	}
-
-	// Hints
-	sb.WriteString("\n")
-	hints := []string{}
-	if len(m.panelItems) > 1 {
-		hints = append(hints, m.locale.PanelAskNav)
-	}
-	if len(m.panelItems) > 0 && m.panelTab < len(m.panelItems) {
-		item := m.panelItems[m.panelTab]
-		if len(item.Options) > 0 {
-			hints = append(hints, m.locale.PanelAskToggle, m.locale.PanelAskOther, m.locale.PanelAskSubmit)
-		} else {
-			hints = append(hints, m.locale.PanelAskNewline)
-		}
-	}
-	hints = append(hints, "Shift+↑↓ scroll history", "Ctrl+O expand tools", m.locale.PanelAskCancel)
-	sb.WriteString(hintStyle.Render("  " + strings.Join(hints, " · ")))
 
 	return sb.String()
 }
@@ -2249,19 +2249,16 @@ func (m *cliModel) openRunnerPanel() {
 	token := ""
 	workspace := m.workDir
 
-	// 从设置中读取已保存的值
-	if m.channel != nil && m.channel.settingsSvc != nil {
-		if vals, err := m.channel.settingsSvc.GetSettings("cli", "cli_user"); err == nil {
-			if v, ok := vals["runner_server"]; ok && v != "" {
-				serverURL = v
-			}
-			if v, ok := vals["runner_token"]; ok && v != "" {
-				token = v
-			}
-			if v, ok := vals["runner_workspace"]; ok && v != "" {
-				workspace = v
-			}
-		}
+	// 从统一设置视图中读取已保存的值
+	vals := m.mergeCLISettingsValues()
+	if v, ok := vals["runner_server"]; ok && v != "" {
+		serverURL = v
+	}
+	if v, ok := vals["runner_token"]; ok && v != "" {
+		token = v
+	}
+	if v, ok := vals["runner_workspace"]; ok && v != "" {
+		workspace = v
 	}
 
 	m.panelRunnerServerTI = m.newPanelTextInput(serverURL, m.locale.RunnerServerPlaceholder)
@@ -2377,11 +2374,11 @@ func (m *cliModel) updateRunnerPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.
 		}
 
 		// 保存设置
-		if m.channel != nil && m.channel.settingsSvc != nil {
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_server", serverURL)
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_token", token)
-			_ = m.channel.settingsSvc.SetSetting("cli", "cli_user", "runner_workspace", workspace)
-		}
+		m.persistCLISettingsValues(map[string]string{
+			"runner_server":    serverURL,
+			"runner_token":     token,
+			"runner_workspace": workspace,
+		})
 
 		// 回到 settings，发起连接
 		m.panelMode = "settings"
@@ -2500,4 +2497,29 @@ func (m *cliModel) viewRunnerPanel() string {
 	}
 
 	return sb.String()
+}
+
+func (m *cliModel) ensureAskUserVisible() {
+	if m.panelMode != "askuser" || m.panelTab < 0 || m.panelTab >= len(m.panelItems) {
+		return
+	}
+	visible := m.askUserPanelVisibleHeight()
+	if visible <= 0 {
+		return
+	}
+	total := m.askPanelTotalLines
+	if total == 0 {
+		return
+	}
+	if total <= visible {
+		m.askPanelScrollY = 0
+		return
+	}
+	if m.askPanelScrollY < 0 {
+		m.askPanelScrollY = 0
+	}
+	maxScroll := total - visible
+	if m.askPanelScrollY > maxScroll {
+		m.askPanelScrollY = maxScroll
+	}
 }

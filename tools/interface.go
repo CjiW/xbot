@@ -74,6 +74,12 @@ type ToolContext struct {
 	BgSessionKey string
 	// MessageSender allows sending messages to any Channel via Dispatcher.
 	MessageSender bus.MessageSender
+	// RegisterAgentChannel registers an AgentChannel in the Dispatcher.
+	// Called by CreateChat/SubAgent after spawning a SubAgent.
+	RegisterAgentChannel func(name string, runFn bus.RunFn) error
+	// UnregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	// Called on unload/cleanup.
+	UnregisterAgentChannel func(name string)
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖

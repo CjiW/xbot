@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -193,6 +194,11 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			if err := im.UnloadInteractive(ctx, params.Role, params.Instance); err != nil {
 				return nil, err
 			}
+			// Unregister AgentChannel from Dispatcher
+			agentChName := "agent:" + params.Role + "/" + params.Instance
+			if ctx.UnregisterAgentChannel != nil {
+				ctx.UnregisterAgentChannel(agentChName)
+			}
 			return NewResult(fmt.Sprintf("Interactive session for role %q unloaded successfully.", params.Role)), nil
 
 		case "send":
@@ -237,6 +243,17 @@ func (t *SubAgentTool) Execute(ctx *ToolContext, input string) (*ToolResult, err
 			result, err := im.SpawnInteractive(ctx, params.Task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
 			if err != nil {
 				return nil, fmt.Errorf("interactive spawn failed: %w", err)
+			}
+			// Register AgentChannel in Dispatcher so SendMessage(agent://) can route to it
+			agentChName := "agent:" + params.Role + "/" + params.Instance
+			if ctx.RegisterAgentChannel != nil {
+				sendFn := func(sendCtx context.Context, task string) (string, error) {
+					return im.SendInteractive(ctx, task, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
+				}
+				if regErr := ctx.RegisterAgentChannel(agentChName, sendFn); regErr != nil {
+					// Non-fatal: SubAgent works, but SendMessage routing won't work
+					result += fmt.Sprintf("\n\nWarning: AgentChannel registration failed: %v", regErr)
+				}
 			}
 			return NewResult(result), nil
 		}

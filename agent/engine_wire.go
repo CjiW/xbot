@@ -870,6 +870,8 @@ func (a *Agent) buildSubAgentRunConfig(
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
 	cfg.MessageSender = a.messageSender
+	cfg.RegisterAgentChannel = a.registerAgentChannel
+	cfg.UnregisterAgentChannel = a.unregisterAgentChannel
 
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -916,22 +918,24 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		SenderName:   senderName,
 		SendFunc:     a.sendMessage,
 
-		WorkingDir:       workingDir,
-		WorkspaceRoot:    workspaceRoot,
-		ReadOnlyRoots:    a.globalSkillDirs,
-		SkillsDirs:       a.globalSkillDirs,
-		AgentsDir:        a.agentsDir,
-		MCPConfigPath:    tools.UserMCPConfigPath(a.workDir, sandboxUserID),
-		GlobalMCPConfig:  filepath.Join(a.xbotHome, "mcp.json"),
-		DataDir:          a.workDir,
-		SandboxEnabled:   a.sandboxMode != "none",
-		PreferredSandbox: a.sandboxMode,
-		Sandbox:          resolveSandbox(a.sandbox, sandboxUserID),
-		SandboxMode:      a.sandboxMode,
-		InjectInbound:    a.injectInbound,
-		Tools:            a.tools,
-		BgTaskManager:    a.bgTaskMgr,
-		MessageSender:    a.messageSender,
+		WorkingDir:             workingDir,
+		WorkspaceRoot:          workspaceRoot,
+		ReadOnlyRoots:          a.globalSkillDirs,
+		SkillsDirs:             a.globalSkillDirs,
+		AgentsDir:              a.agentsDir,
+		MCPConfigPath:          tools.UserMCPConfigPath(a.workDir, sandboxUserID),
+		GlobalMCPConfig:        filepath.Join(a.xbotHome, "mcp.json"),
+		DataDir:                a.workDir,
+		SandboxEnabled:         a.sandboxMode != "none",
+		PreferredSandbox:       a.sandboxMode,
+		Sandbox:                resolveSandbox(a.sandbox, sandboxUserID),
+		SandboxMode:            a.sandboxMode,
+		InjectInbound:          a.injectInbound,
+		Tools:                  a.tools,
+		BgTaskManager:          a.bgTaskMgr,
+		MessageSender:          a.messageSender,
+		RegisterAgentChannel:   a.registerAgentChannel,
+		UnregisterAgentChannel: a.unregisterAgentChannel,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {

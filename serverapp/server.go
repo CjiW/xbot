@@ -1558,6 +1558,19 @@ func Run(args []string) error {
 	})
 	backend.SetChannelFinder(disp.GetChannel)
 	backend.Agent().SetMessageSender(disp)
+	backend.Agent().SetAgentChannelRegistry(
+		func(name string, runFn bus.RunFn) error {
+			ac := channel.NewAgentChannel(name, runFn)
+			if err := ac.Start(); err != nil {
+				return fmt.Errorf("start AgentChannel %s: %w", name, err)
+			}
+			disp.Register(ac)
+			return nil
+		},
+		func(name string) {
+			disp.Unregister(name)
+		},
+	)
 
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {

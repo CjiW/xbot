@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
@@ -117,7 +118,17 @@ func (t *CreateChatTool) createAgentChat(ctx *ToolContext, params *CreateChatPar
 		return nil, fmt.Errorf("failed to spawn SubAgent %q (%s): %w", params.Role, params.Instance, err)
 	}
 
+	// Register AgentChannel in Dispatcher so SendMessage(agent://) can route to it
 	addr := "agent:" + params.Role + "/" + params.Instance
+	if ctx.RegisterAgentChannel != nil {
+		sendFn := func(sendCtx context.Context, msg string) (string, error) {
+			return im.SendInteractive(ctx, msg, params.Role, role.SystemPrompt, role.AllowedTools, role.Capabilities, params.Instance, effectiveModel)
+		}
+		if regErr := ctx.RegisterAgentChannel(addr, sendFn); regErr != nil {
+			result += fmt.Sprintf("\n\nWarning: AgentChannel registration failed: %v", regErr)
+		}
+	}
+
 	return NewResult(fmt.Sprintf("Created agent chat: %s\n%s\n\nUse SendMessage(to=\"%s\", message=\"...\") to send tasks.", addr, result, addr)), nil
 }
 

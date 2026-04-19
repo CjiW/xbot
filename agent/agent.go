@@ -262,6 +262,10 @@ type Agent struct {
 
 	// messageSender allows sending messages to any Channel via Dispatcher.
 	messageSender bus.MessageSender
+	// registerAgentChannel registers an AgentChannel in the Dispatcher.
+	registerAgentChannel func(name string, runFn bus.RunFn) error
+	// unregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	unregisterAgentChannel func(name string)
 
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
@@ -332,6 +336,12 @@ func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMg
 
 // SetMessageSender sets the Dispatcher reference for unified messaging.
 func (a *Agent) SetMessageSender(ms bus.MessageSender) { a.messageSender = ms }
+
+// SetAgentChannelRegistry sets the callbacks for registering/unregistering AgentChannels.
+func (a *Agent) SetAgentChannelRegistry(register func(name string, runFn bus.RunFn) error, unregister func(name string)) {
+	a.registerAgentChannel = register
+	a.unregisterAgentChannel = unregister
+}
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }

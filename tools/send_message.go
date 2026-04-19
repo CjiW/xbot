@@ -94,23 +94,18 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 	return NewResult(fmt.Sprintf("Message sent to %s", params.To)), nil
 }
 
-// sendToAgent sends a message to a single agent and returns the reply.
+// sendToAgent sends a message to a single agent via Dispatcher.
+// The agent must have been registered as an AgentChannel (by SubAgent or CreateChat).
 func (t *SendMessageTool) sendToAgent(ctx *ToolContext, addr, message string) (*ToolResult, error) {
-	im, ok := ctx.Manager.(InteractiveSubAgentManager)
-	if !ok {
-		return nil, fmt.Errorf("agent messaging not available in this context")
+	if ctx.MessageSender == nil {
+		return nil, fmt.Errorf("message sending not available in this context")
 	}
-	role, instance := parseAgentAddress(addr)
-	if role == "" || instance == "" {
-		return nil, fmt.Errorf("invalid agent address %q: expected format agent:<role>/<instance>", addr)
-	}
-	roleDef, ok := loadRoleFromCtx(ctx, role)
-	if !ok {
-		return nil, fmt.Errorf("unknown agent role: %s", role)
-	}
-	result, err := im.SendInteractive(ctx, message, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
+	result, err := ctx.MessageSender.SendMessage(addr, "", message)
 	if err != nil {
 		return nil, fmt.Errorf("agent send failed: %w", err)
+	}
+	if result == "" {
+		return nil, fmt.Errorf("agent %s returned empty response (session may have ended)", addr)
 	}
 	return NewResult(result), nil
 }
@@ -142,27 +137,15 @@ func (t *SendMessageTool) sendToGroup(ctx *ToolContext, groupName, message strin
 		return NewResult(fmt.Sprintf("Message added to group %s discussion (history: %d messages). No agents @mentioned, so no one was triggered.", groupName, historyLen)), nil
 	}
 
-	// Trigger each @mentioned agent sequentially
-	im, ok := ctx.Manager.(InteractiveSubAgentManager)
-	if !ok {
-		return nil, fmt.Errorf("agent messaging not available in this context")
+	// Trigger each @mentioned agent sequentially via Dispatcher
+	if ctx.MessageSender == nil {
+		return nil, fmt.Errorf("message sending not available in this context")
 	}
 
 	var responses []string
 	for _, agentAddr := range mentions {
-		role, instance := parseAgentAddress(agentAddr)
-		if role == "" || instance == "" {
-			responses = append(responses, fmt.Sprintf("[ERROR] Invalid agent address: %s", agentAddr))
-			continue
-		}
 		if !gs.IsMember(agentAddr) {
 			responses = append(responses, fmt.Sprintf("[ERROR] %s is not a member of this group", agentAddr))
-			continue
-		}
-
-		roleDef, ok := loadRoleFromCtx(ctx, role)
-		if !ok {
-			responses = append(responses, fmt.Sprintf("[ERROR] Unknown agent role: %s", role))
 			continue
 		}
 
@@ -176,7 +159,8 @@ func (t *SendMessageTool) sendToGroup(ctx *ToolContext, groupName, message strin
 
 The moderator just @mentioned you. Please respond to their message. Stay focused on the topic and provide your analysis/opinion.`, history)
 
-		result, err := im.SendInteractive(ctx, prompt, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
+		// Send via Dispatcher (AgentChannel)
+		result, err := ctx.MessageSender.SendMessage(agentAddr, "", prompt)
 		if err != nil {
 			responses = append(responses, fmt.Sprintf("[ERROR] %s: %v", agentAddr, err))
 			continue

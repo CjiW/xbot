@@ -204,6 +204,10 @@ type RunConfig struct {
 	// MessageSender 允许 Agent 向任何 Channel 发消息（IM、Agent、Group）。
 	// nil = 不启用（SubAgent 继承主 Agent 的 MessageSender）。
 	MessageSender bus.MessageSender
+	// RegisterAgentChannel registers an AgentChannel in the Dispatcher.
+	RegisterAgentChannel func(name string, runFn bus.RunFn) error
+	// UnregisterAgentChannel removes an AgentChannel from the Dispatcher.
+	UnregisterAgentChannel func(name string)
 
 	// OnIterationSnapshot is called after each iteration snapshot is created.
 	// Used by background interactive sessions to incrementally expose iteration
@@ -782,6 +786,9 @@ func buildToolContext(ctx context.Context, cfg *RunConfig) *tools.ToolContext {
 
 	// 注入 MessageSender（Dispatcher 引用，允许 Agent 向任何 Channel 发消息）
 	tc.MessageSender = cfg.MessageSender
+	// 注入 AgentChannel 注册/注销回调
+	tc.RegisterAgentChannel = cfg.RegisterAgentChannel
+	tc.UnregisterAgentChannel = cfg.UnregisterAgentChannel
 	// 注入 ToolContext extras (memory, MCP, etc.)
 
 	// 注入 session cwd（PWD 工具优化）

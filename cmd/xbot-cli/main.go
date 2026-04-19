@@ -991,6 +991,19 @@ func main() {
 	app.backend.SetChannelFinder(disp.GetChannel)
 	if lb, ok := app.backend.(*agent.LocalBackend); ok {
 		lb.Agent().SetMessageSender(disp)
+		lb.Agent().SetAgentChannelRegistry(
+			func(name string, runFn bus.RunFn) error {
+				ac := channel.NewAgentChannel(name, runFn)
+				if err := ac.Start(); err != nil {
+					return fmt.Errorf("start AgentChannel %s: %w", name, err)
+				}
+				disp.Register(ac)
+				return nil
+			},
+			func(name string) {
+				disp.Unregister(name)
+			},
+		)
 	}
 
 	// 注入 CLI 渠道特化 prompt 提供者

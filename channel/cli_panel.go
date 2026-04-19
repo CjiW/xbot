@@ -551,16 +551,16 @@ func (m *cliModel) openBgTasksPanel() {
 // updateBgTasksPanel handles key events in the bg tasks panel.
 // Returns (handled, newModel, cmd).
 func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
-// Refresh task list
-if m.channel != nil && m.channel.bgTaskMgr != nil {
-m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-}
-// Refresh agent list
-if m.agentListFn != nil {
-m.panelBgAgents = m.agentListFn()
-}
-// Total: 1 (main chatroom) + bg tasks + agents
-totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
+	// Refresh task list
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
+	}
+	// Refresh agent list
+	if m.agentListFn != nil {
+		m.panelBgAgents = m.agentListFn()
+	}
+	// Total: 1 (main chatroom) + bg tasks + agents
+	totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
 
 	// Log viewing sub-mode
 	if m.panelBgViewing {
@@ -616,66 +616,66 @@ totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
 
 	case msg.Code == tea.KeyEnter:
 		if m.panelBgCursor == 0 {
-		// Main ChatRoom: show recent messages from history
-		m.panelBgLogLines = m.getMainChatroomMessages()
-		m.panelBgViewing = true
-		m.panelScrollY = 0
+			// Main ChatRoom: show recent messages from history
+			m.panelBgLogLines = m.getMainChatroomMessages()
+			m.panelBgViewing = true
+			m.panelScrollY = 0
 		} else if m.panelBgCursor > 0 && m.panelBgCursor <= len(m.panelBgTasks) {
-		// Task entry: view output log
-		task := m.panelBgTasks[m.panelBgCursor-1]
-		m.panelBgLogLines = splitLines(task.Output)
-		if len(m.panelBgLogLines) == 0 {
-			m.panelBgLogLines = []string{"(no output)"}
-		}
-		m.panelBgViewing = true
-		m.panelScrollY = 0
+			// Task entry: view output log
+			task := m.panelBgTasks[m.panelBgCursor-1]
+			m.panelBgLogLines = splitLines(task.Output)
+			if len(m.panelBgLogLines) == 0 {
+				m.panelBgLogLines = []string{"(no output)"}
+			}
+			m.panelBgViewing = true
+			m.panelScrollY = 0
 		} else if m.panelBgAgents != nil {
-		// Agent entry: view conversation messages
-		agentIdx := m.panelBgCursor - 1 - len(m.panelBgTasks)
-		if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
-			ag := m.panelBgAgents[agentIdx]
-			if m.agentMessagesFn != nil {
-			msgs := m.agentMessagesFn(ag.Role, ag.Instance)
-			if len(msgs) == 0 {
-				// Fallback to inspect
-				if m.agentInspectFn != nil {
-				result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
-				if err != nil {
-					m.panelBgLogLines = []string{"Error: " + err.Error()}
-				} else if result == "" {
-					m.panelBgLogLines = []string{"(no activity yet)"}
-				} else {
-					m.panelBgLogLines = splitLines(result)
+			// Agent entry: view conversation messages
+			agentIdx := m.panelBgCursor - 1 - len(m.panelBgTasks)
+			if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
+				ag := m.panelBgAgents[agentIdx]
+				if m.agentMessagesFn != nil {
+					msgs := m.agentMessagesFn(ag.Role, ag.Instance)
+					if len(msgs) == 0 {
+						// Fallback to inspect
+						if m.agentInspectFn != nil {
+							result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
+							if err != nil {
+								m.panelBgLogLines = []string{"Error: " + err.Error()}
+							} else if result == "" {
+								m.panelBgLogLines = []string{"(no activity yet)"}
+							} else {
+								m.panelBgLogLines = splitLines(result)
+							}
+						} else {
+							m.panelBgLogLines = []string{"(no messages yet)"}
+						}
+					} else {
+						m.panelBgLogLines = m.formatSessionMessages(msgs)
+					}
+					m.panelBgViewing = true
+					m.panelScrollY = 0
+				} else if m.agentInspectFn != nil {
+					// Fallback to inspect
+					result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
+					if err != nil {
+						m.panelBgLogLines = []string{"Error: " + err.Error()}
+					} else if result == "" {
+						m.panelBgLogLines = []string{"(no activity yet)"}
+					} else {
+						m.panelBgLogLines = splitLines(result)
+					}
+					m.panelBgViewing = true
+					m.panelScrollY = 0
 				}
-				} else {
-				m.panelBgLogLines = []string{"(no messages yet)"}
-				}
-			} else {
-				m.panelBgLogLines = m.formatSessionMessages(msgs)
 			}
-			m.panelBgViewing = true
-			m.panelScrollY = 0
-			} else if m.agentInspectFn != nil {
-			// Fallback to inspect
-			result, err := m.agentInspectFn(ag.Role, ag.Instance, 5)
-			if err != nil {
-				m.panelBgLogLines = []string{"Error: " + err.Error()}
-			} else if result == "" {
-				m.panelBgLogLines = []string{"(no activity yet)"}
-			} else {
-				m.panelBgLogLines = splitLines(result)
-			}
-			m.panelBgViewing = true
-			m.panelScrollY = 0
-			}
-		}
 		}
 		return true, m, nil
 
 	case msg.Code == tea.KeyDelete || msg.String() == "ctrl+d":
 		// Kill selected running task (skip index 0 = main chatroom)
 		if m.panelBgCursor > 0 && m.panelBgCursor <= len(m.panelBgTasks) {
-		task := m.panelBgTasks[m.panelBgCursor-1]
+			task := m.panelBgTasks[m.panelBgCursor-1]
 			if task.Status == tools.BgTaskRunning {
 				if m.channel != nil && m.channel.bgTaskMgr != nil {
 					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
@@ -714,151 +714,151 @@ func (m *cliModel) viewBgTasksPanel() string {
 // viewBgTaskList renders the unified ChatRoom list view.
 // Layout: [1 main chatroom] + [bg tasks] + [agent chatrooms]
 func (m *cliModel) viewBgTaskList() string {
-// §20 使用缓存样式
-s := &m.styles
-cursorStyle := s.PanelCursor
-header := s.PanelHeader.Render(m.locale.BgTasksTitle)
-help := s.PanelDesc.Render(m.locale.BgTasksHelp)
+	// §20 使用缓存样式
+	s := &m.styles
+	cursorStyle := s.PanelCursor
+	header := s.PanelHeader.Render(m.locale.BgTasksTitle)
+	help := s.PanelDesc.Render(m.locale.BgTasksHelp)
 
-var sb strings.Builder
-sb.WriteString(header)
-sb.WriteString("  ")
-sb.WriteString(help)
-sb.WriteString("\n")
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString("  ")
+	sb.WriteString(help)
+	sb.WriteString("\n")
 
-// Calculate dynamic truncation width.
-contentW := m.width - 4
-if contentW < 20 {
-contentW = 20
-}
+	// Calculate dynamic truncation width.
+	contentW := m.width - 4
+	if contentW < 20 {
+		contentW = 20
+	}
 
-// Count: 1 (main) + bg tasks + agents
-totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
-idx := 0
+	// Count: 1 (main) + bg tasks + agents
+	totalItems := 1 + len(m.panelBgTasks) + len(m.panelBgAgents)
+	idx := 0
 
-if totalItems == 0 {
-sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
-} else {
-// --- Main ChatRoom ---
-{
-prefix := "  "
-if idx == m.panelBgCursor {
-prefix = cursorStyle.Render("▸")
-}
-mainLabel := "👤 主会话  You ↔ Agent"
-line := fmt.Sprintf("%s %s  %s",
-prefix,
-lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render("●"),
-lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render(mainLabel),
-)
-sb.WriteString(truncateToWidth(line, contentW))
-sb.WriteString("\n")
-idx++
-}
+	if totalItems == 0 {
+		sb.WriteString(s.PanelEmpty.Render(m.locale.BgTasksEmpty))
+	} else {
+		// --- Main ChatRoom ---
+		{
+			prefix := "  "
+			if idx == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
+			mainLabel := "👤 主会话  You ↔ Agent"
+			line := fmt.Sprintf("%s %s  %s",
+				prefix,
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render("●"),
+				lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981")).Render(mainLabel),
+			)
+			sb.WriteString(truncateToWidth(line, contentW))
+			sb.WriteString("\n")
+			idx++
+		}
 
-// --- Background Tasks ---
-for _, task := range m.panelBgTasks {
-elapsed := time.Since(task.StartedAt).Round(time.Second)
-if task.FinishedAt != nil {
-elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
-}
-statusIcon := "●"
-statusStyle := s.ProgressRunning
-if task.Status == tools.BgTaskDone {
-if task.Error != "" || task.ExitCode != 0 {
-statusIcon = "✗"
-statusStyle = s.ProgressError
-} else {
-statusIcon = "✓"
-statusStyle = s.ProgressDone
-}
-}
+		// --- Background Tasks ---
+		for _, task := range m.panelBgTasks {
+			elapsed := time.Since(task.StartedAt).Round(time.Second)
+			if task.FinishedAt != nil {
+				elapsed = task.FinishedAt.Sub(task.StartedAt).Round(time.Second)
+			}
+			statusIcon := "●"
+			statusStyle := s.ProgressRunning
+			if task.Status == tools.BgTaskDone {
+				if task.Error != "" || task.ExitCode != 0 {
+					statusIcon = "✗"
+					statusStyle = s.ProgressError
+				} else {
+					statusIcon = "✓"
+					statusStyle = s.ProgressDone
+				}
+			}
 
-prefix := "  "
-if idx == m.panelBgCursor {
-prefix = cursorStyle.Render("▸")
-}
+			prefix := "  "
+			if idx == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
 
-cmd := task.Command
-cmdW := contentW - 23
-if cmdW < 10 {
-cmdW = 10
-}
-cmd = truncateToWidth(cmd, cmdW)
+			cmd := task.Command
+			cmdW := contentW - 23
+			if cmdW < 10 {
+				cmdW = 10
+			}
+			cmd = truncateToWidth(cmd, cmdW)
 
-line := fmt.Sprintf("%s %s  %-8s %s  %s",
-prefix,
-statusStyle.Render(statusIcon),
-task.ID,
-formatElapsed(int64(elapsed.Milliseconds())),
-cmd,
-)
-sb.WriteString(truncateToWidth(line, contentW))
-sb.WriteString("\n")
-idx++
-}
+			line := fmt.Sprintf("%s %s  %-8s %s  %s",
+				prefix,
+				statusStyle.Render(statusIcon),
+				task.ID,
+				formatElapsed(int64(elapsed.Milliseconds())),
+				cmd,
+			)
+			sb.WriteString(truncateToWidth(line, contentW))
+			sb.WriteString("\n")
+			idx++
+		}
 
-// --- Agent ChatRooms ---
-for _, ag := range m.panelBgAgents {
-statusIcon := "●"
-roleColor := lipgloss.Color(RoleColor(ag.Role))
-statusStyle := lipgloss.NewStyle().Foreground(roleColor)
-if !ag.Running {
-statusIcon = "◦"
-statusStyle = statusStyle.Faint(true)
-}
+		// --- Agent ChatRooms ---
+		for _, ag := range m.panelBgAgents {
+			statusIcon := "●"
+			roleColor := lipgloss.Color(RoleColor(ag.Role))
+			statusStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !ag.Running {
+				statusIcon = "◦"
+				statusStyle = statusStyle.Faint(true)
+			}
 
-prefix := "  "
-if idx == m.panelBgCursor {
-prefix = cursorStyle.Render("▸")
-}
+			prefix := "  "
+			if idx == m.panelBgCursor {
+				prefix = cursorStyle.Render("▸")
+			}
 
-label := fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
-if ag.Task != "" {
-taskPreview := ag.Task
-if runes := []rune(taskPreview); len(runes) > 35 {
-taskPreview = string(runes[:32]) + "..."
-}
-taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
-label = fmt.Sprintf("🤖 %s: %s", ag.Role, taskPreview)
-}
-labelW := contentW - 5
-if labelW < 10 {
-labelW = 10
-}
-label = truncateToWidth(label, labelW)
+			label := fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
+			if ag.Task != "" {
+				taskPreview := ag.Task
+				if runes := []rune(taskPreview); len(runes) > 35 {
+					taskPreview = string(runes[:32]) + "..."
+				}
+				taskPreview = strings.ReplaceAll(taskPreview, "\n", " ")
+				label = fmt.Sprintf("🤖 %s: %s", ag.Role, taskPreview)
+			}
+			labelW := contentW - 5
+			if labelW < 10 {
+				labelW = 10
+			}
+			label = truncateToWidth(label, labelW)
 
-labelStyle := lipgloss.NewStyle().Foreground(roleColor)
-if !ag.Running {
-labelStyle = labelStyle.Faint(true)
-}
+			labelStyle := lipgloss.NewStyle().Foreground(roleColor)
+			if !ag.Running {
+				labelStyle = labelStyle.Faint(true)
+			}
 
-line := fmt.Sprintf("%s %s  %s",
-prefix,
-statusStyle.Render(statusIcon),
-labelStyle.Render(label),
-)
-sb.WriteString(truncateToWidth(line, contentW))
-sb.WriteString("\n")
-if ag.Preview != "" {
-preview := strings.ReplaceAll(ag.Preview, "\n", " ")
-preview = strings.TrimSpace(preview)
-previewW := contentW - 4
-if previewW < 10 {
-previewW = 10
-}
-preview = truncateToWidth(preview, previewW)
-previewStyle := s.PanelDesc
-if !ag.Running {
-previewStyle = previewStyle.Faint(true)
-}
-fmt.Fprintf(&sb, "    %s\n", previewStyle.Render(preview))
-}
-idx++
-}
-}
+			line := fmt.Sprintf("%s %s  %s",
+				prefix,
+				statusStyle.Render(statusIcon),
+				labelStyle.Render(label),
+			)
+			sb.WriteString(truncateToWidth(line, contentW))
+			sb.WriteString("\n")
+			if ag.Preview != "" {
+				preview := strings.ReplaceAll(ag.Preview, "\n", " ")
+				preview = strings.TrimSpace(preview)
+				previewW := contentW - 4
+				if previewW < 10 {
+					previewW = 10
+				}
+				preview = truncateToWidth(preview, previewW)
+				previewStyle := s.PanelDesc
+				if !ag.Running {
+					previewStyle = previewStyle.Faint(true)
+				}
+				fmt.Fprintf(&sb, "    %s\n", previewStyle.Render(preview))
+			}
+			idx++
+		}
+	}
 
-return sb.String()
+	return sb.String()
 }
 
 // viewBgTaskLog renders the log viewer for a selected task.
@@ -882,8 +882,8 @@ func (m *cliModel) viewBgTaskLog() string {
 	} else if m.panelBgAgents != nil {
 		agentIdx := m.panelBgCursor - 1 - len(m.panelBgTasks)
 		if agentIdx >= 0 && agentIdx < len(m.panelBgAgents) {
-		ag := m.panelBgAgents[agentIdx]
-		title = fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
+			ag := m.panelBgAgents[agentIdx]
+			title = fmt.Sprintf("🤖 %s/%s", ag.Role, ag.Instance)
 		}
 	}
 	help := s.PanelDesc.Render(m.locale.BgTaskLogHelp)

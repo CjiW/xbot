@@ -113,14 +113,14 @@ func (db *DB) migrateSchema(from int) error {
 	// v29: add cached_models to user_llm_subscriptions
 	if from < 29 {
 		if err := migrateV28ToV29(db.Conn()); err != nil {
-		return fmt.Errorf("migrate to v29: %w", err)
+			return fmt.Errorf("migrate to v29: %w", err)
 		}
 	}
 
 	// v30: add user_chats table for multi-chatroom support
 	if from < 30 {
 		if err := migrateV29ToV30(db.Conn()); err != nil {
-		return fmt.Errorf("migrate to v30: %w", err)
+			return fmt.Errorf("migrate to v30: %w", err)
 		}
 	}
 

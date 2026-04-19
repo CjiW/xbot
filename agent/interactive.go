@@ -992,17 +992,17 @@ func summarizeInteractivePreviewLocked(ia *interactiveAgent) string {
 		return "Error: " + ia.lastError
 	}
 	return ia.lastReply
-	}
+}
 
-	// SessionMessage represents a single message in a SubAgent conversation.
-	type SessionMessage struct {
-	Role    string `json:"role"`    // "user", "assistant", "system"
+// SessionMessage represents a single message in a SubAgent conversation.
+type SessionMessage struct {
+	Role    string `json:"role"` // "user", "assistant", "system"
 	Content string `json:"content"`
-	}
+}
 
-	// GetSessionMessages returns the conversation history of a specific interactive SubAgent session.
-	// Returns the messages and true if found, nil and false otherwise.
-	func (a *Agent) GetSessionMessages(channel, chatID, roleName, instance string) ([]SessionMessage, bool) {
+// GetSessionMessages returns the conversation history of a specific interactive SubAgent session.
+// Returns the messages and true if found, nil and false otherwise.
+func (a *Agent) GetSessionMessages(channel, chatID, roleName, instance string) ([]SessionMessage, bool) {
 	key := interactiveKey(channel, chatID, roleName, instance)
 	val, ok := a.interactiveSubAgents.Load(key)
 	if !ok {
@@ -1029,11 +1029,11 @@ func summarizeInteractivePreviewLocked(ia *interactiveAgent) string {
 			for _, tc := range m.ToolCalls {
 				toolNames = append(toolNames, tc.Name)
 			}
-		content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
+			content = "[Tool calls: " + strings.Join(toolNames, ", ") + "]"
 		}
 		if content != "" {
-		msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
+			msgs = append(msgs, SessionMessage{Role: string(m.Role), Content: content})
 		}
 	}
 	return msgs, true
-	}
+}

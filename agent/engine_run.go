@@ -708,7 +708,7 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	// restoredFromDB path: lastPromptTokens is from the PREVIOUS Run's last API call.
 	// We use it as-is — no local estimation fallback.
 	totalTokens := int64(0)
-	tokenSource := "unknown"
+	var tokenSource string
 	if s.lastPromptTokens > 0 && s.lastMsgCountAtLLMCall > 0 {
 		// In-Run path: we've had at least one LLM call in this Run.
 		totalTokens = s.lastPromptTokens + s.lastCompletionTokens

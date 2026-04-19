@@ -78,6 +78,9 @@ function normalizeIterationHistory(input: unknown): IterationSnapshot[] {
     const thinkingRaw = snap.thinking ?? snap.Thinking
     const thinking = typeof thinkingRaw === 'string' ? thinkingRaw : undefined
 
+    const reasoningRaw = snap.reasoning ?? snap.Reasoning
+    const reasoning = typeof reasoningRaw === 'string' ? reasoningRaw : undefined
+
     const rawTools = Array.isArray(snap.tools) ? snap.tools : (Array.isArray(snap.Tools) ? snap.Tools : [])
     const tools = rawTools
       .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
@@ -101,6 +104,7 @@ function normalizeIterationHistory(input: unknown): IterationSnapshot[] {
     normalized.push({
       iteration,
       thinking,
+      reasoning,
       tools,
     })
   }
@@ -111,6 +115,7 @@ function normalizeIterationHistory(input: unknown): IterationSnapshot[] {
     byIteration.set(snap.iteration, {
       iteration: snap.iteration,
       thinking: snap.thinking,
+      reasoning: snap.reasoning,
       tools: Array.isArray(snap.tools) ? snap.tools : [],
     })
   }
@@ -522,17 +527,18 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             // Restore iteration history (completed iterations 1..N-1)
             if (ap.iteration_history && ap.iteration_history.length > 0) {
               const restoredIterations: IterationSnapshot[] = ap.iteration_history.map(
-                (iter: { iteration: number; thinking?: string; completed_tools?: { name: string; label?: string; status: string; summary?: string }[] }) => ({
-                  iteration: iter.iteration,
-                  thinking: iter.thinking || '',
-                  tools: (iter.completed_tools || []).map(t => ({
-                    name: t.name,
-                    label: t.label,
-                    status: t.status,
-                    summary: t.summary,
-                  })),
-                })
-              )
+	                (iter: { iteration: number; thinking?: string; reasoning?: string; completed_tools?: { name: string; label?: string; status: string; summary?: string }[] }) => ({
+	                  iteration: iter.iteration,
+	                  thinking: iter.thinking || '',
+	                  reasoning: iter.reasoning || '',
+	                  tools: (iter.completed_tools || []).map(t => ({
+	                    name: t.name,
+	                    label: t.label,
+	                    status: t.status,
+	                    summary: t.summary,
+	                  })),
+	                })
+	              )
               setLiveIterationsSync(restoredIterations)
             }
           }

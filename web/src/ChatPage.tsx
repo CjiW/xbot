@@ -299,6 +299,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
   const progressRef = useRef<WsProgressPayload | null>(null) // sync ref to avoid stale closures
   const reasoningRef = useRef<string>('') // accumulated reasoning from stream_content
   const streamingContentRef = useRef<string>('') // accumulated content from stream_content
+  const lastSeqRef = useRef<number>(0) // last processed event seq (for dedup & sync)
   const [autoScroll, setAutoScroll] = useState(true)
   const [reconnecting, setReconnecting] = useState(true) // true = initial connecting state
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -483,6 +484,41 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           if (isProcessing && lastIsUser) {
             setLoading(true)
           }
+          // Restore active progress from server (mid-session refresh recovery).
+          // This allows the frontend to immediately show iteration state and
+          // streaming content without waiting for WS reconnect.
+          if (isProcessing && data.active_progress) {
+            const ap = data.active_progress
+            progressRef.current = {
+              phase: ap.phase || 'running',
+              iteration: ap.iteration || 0,
+              thinking: ap.thinking || '',
+              active_tools: (ap.active_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
+                name: t.name, label: t.label, status: t.status, summary: t.summary,
+              })),
+              completed_tools: (ap.completed_tools || []).map((t: { name: string; label: string; status: string; summary: string }) => ({
+                name: t.name, label: t.label, status: t.status, summary: t.summary,
+              })),
+            }
+            prevIterationRef.current = ap.iteration || 0
+            if (ap.thinking) {
+              reasoningRef.current = ap.thinking
+            }
+            setProgress(progressRef.current)
+            // If there's stream content, create/update a streaming message
+            if (ap.stream_content) {
+              streamingContentRef.current = ap.stream_content
+              setMessages(prev => [...prev, {
+                id: '__streaming__',
+                type: 'assistant' as const,
+                content: ap.stream_content,
+              }])
+            }
+          }
+          // Store last_seq for WS sync handshake
+          if (data.last_seq) {
+            lastSeqRef.current = data.last_seq
+          }
           setTimeout(scrollToBottom, 100)
         }
       })
@@ -502,6 +538,9 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       serverStopped.current = false
       intentionalClose.current = false
       reconnectDelayRef.current = 1000
+      // Send sync handshake with last_seq from history API.
+      // Server replays missed events (covers GAP between history load and WS connect).
+      ws.send(JSON.stringify({ type: 'sync', last_seq: lastSeqRef.current }))
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
@@ -542,6 +581,15 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
+
+        // Seq-based dedup: ignore events we've already processed.
+        // Events from replay (sync) or duplicate pushes are safely skipped.
+        if (data.seq && data.seq <= lastSeqRef.current) {
+          return
+        }
+        if (data.seq) {
+          lastSeqRef.current = data.seq
+        }
 
         switch (data.type) {
           case 'progress':
@@ -744,6 +792,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
             prevIterationRef.current = -1
             progressRef.current = null
             reasoningRef.current = ''
+            lastSeqRef.current = 0
             setLoading(false)
 
             // Use accumulated streaming content if available, otherwise use server content

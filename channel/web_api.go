@@ -17,11 +17,29 @@ import (
 // ---------------------------------------------------------------------------
 
 type historyResponse struct {
-	OK         bool      `json:"ok"`
-	Messages   []histMsg `json:"messages,omitempty"`
-	Processing bool      `json:"processing,omitempty"` // true if backend is actively processing a request
-	Error      string    `json:"error,omitempty"`
-	Deleted    int64     `json:"deleted,omitempty"`
+	OK             bool          `json:"ok"`
+	Messages       []histMsg     `json:"messages,omitempty"`
+	Processing     bool          `json:"processing,omitempty"`      // true if backend is actively processing a request
+	ActiveProgress *histProgress `json:"active_progress,omitempty"` // live progress snapshot for in-progress turns
+	LastSeq        uint64        `json:"last_seq,omitempty"`        // seq of active_progress snapshot (for WS sync)
+	Error          string        `json:"error,omitempty"`
+	Deleted        int64         `json:"deleted,omitempty"`
+}
+
+type histProgress struct {
+	Phase          string     `json:"phase,omitempty"`
+	Iteration      int        `json:"iteration"`
+	Thinking       string     `json:"thinking,omitempty"`
+	ActiveTools    []histTool `json:"active_tools,omitempty"`
+	CompletedTools []histTool `json:"completed_tools,omitempty"`
+	StreamContent  string     `json:"stream_content,omitempty"`
+}
+
+type histTool struct {
+	Name    string `json:"name,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type histMsg struct {
@@ -126,7 +144,39 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 	if wc.callbacks.IsProcessing != nil {
 		processing = wc.callbacks.IsProcessing(senderID)
 	}
-	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages, Processing: processing})
+
+	// If processing, attach the live progress snapshot so frontend can
+	// restore iteration state immediately (no need to wait for WS reconnect).
+	var activeProgress *histProgress
+	if processing && wc.callbacks.GetActiveProgress != nil {
+		if p := wc.callbacks.GetActiveProgress("web", senderID); p != nil {
+			hp := &histProgress{
+				Phase:         p.Phase,
+				Iteration:     p.Iteration,
+				Thinking:      p.Thinking,
+				StreamContent: p.StreamContent,
+			}
+			for _, t := range p.ActiveTools {
+				hp.ActiveTools = append(hp.ActiveTools, histTool{
+					Name: t.Name, Label: t.Label, Status: t.Status, Summary: t.Summary,
+				})
+			}
+			for _, t := range p.CompletedTools {
+				hp.CompletedTools = append(hp.CompletedTools, histTool{
+					Name: t.Name, Label: t.Label, Status: t.Status, Summary: t.Summary,
+				})
+			}
+			activeProgress = hp
+		}
+	}
+
+	// Include current event stream seq so frontend can WS sync from this point
+	var lastSeq uint64
+	if es := wc.getEventStream(senderID); es != nil {
+		lastSeq = es.lastSeq()
+	}
+
+	writeJSON(w, http.StatusOK, historyResponse{OK: true, Messages: messages, Processing: processing, ActiveProgress: activeProgress, LastSeq: lastSeq})
 }
 
 // handleHistoryDelete clears all messages for the current user.

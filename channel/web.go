@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -102,6 +103,9 @@ type WebCallbacks struct {
 	LLMGetConfig func(senderID string) (provider, baseURL, model string, ok bool)
 	// IsProcessing returns true if the backend is actively processing a request for the user.
 	IsProcessing func(senderID string) bool
+	// GetActiveProgress returns the latest progress snapshot for an active turn.
+	// Used by Web history API to restore progress state on page refresh.
+	GetActiveProgress func(channel, chatID string) *CLIProgressPayload
 	// LLMSetConfig sets user's personal LLM config.
 	LLMSetConfig func(senderID, provider, baseURL, apiKey, model string, maxOutputTokens int, thinkingMode string) error
 	// LLMDelete reverts user to global LLM config.
@@ -268,7 +272,8 @@ type Client struct {
 	closeOnce sync.Once
 	hub       *Hub
 	userID    string
-	id        string // unique client ID (UUID), generated at connection time
+	id        string                      // unique client ID (UUID), generated at connection time
+	syncCh    atomic.Pointer[chan uint64] // for reconnect sync: client sends last_seq
 }
 
 // ---------------------------------------------------------------------------
@@ -313,12 +318,93 @@ func (rb *ringBuffer) flush() []wsMessage {
 }
 
 // ---------------------------------------------------------------------------
+// Event stream — seq-stamped ring buffer for replay / dedup
+// ---------------------------------------------------------------------------
+
+// eventStream tracks monotonic seq and buffers recent events per chatID.
+// Used for:
+//  1. Dedup: each event carries seq, frontend ignores stale (seq <= lastSeen)
+//  2. Replay: on WS reconnect, server sends events with seq > client's last_seq
+const eventStreamSize = 512
+
+type eventStream struct {
+	seq   atomic.Uint64
+	mu    sync.Mutex
+	buf   []wsMessage // ring buffer of seq-stamped events
+	head  int
+	tail  int
+	count int
+}
+
+func newEventStream() *eventStream {
+	return &eventStream{
+		buf: make([]wsMessage, eventStreamSize),
+	}
+}
+
+// nextSeq atomically increments and returns the new seq.
+func (es *eventStream) nextSeq() uint64 {
+	return es.seq.Add(1)
+}
+
+// lastSeq returns the current seq (0 if no events yet).
+func (es *eventStream) lastSeq() uint64 {
+	return es.seq.Load()
+}
+
+// push appends a seq-stamped event to the ring buffer.
+func (es *eventStream) push(msg wsMessage) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if es.count == eventStreamSize {
+		es.head = (es.head + 1) % eventStreamSize
+		es.count--
+	}
+	es.buf[es.tail] = msg
+	es.tail = (es.tail + 1) % eventStreamSize
+	es.count++
+}
+
+// eventsAfter returns all buffered events with seq > fromSeq, in order.
+func (es *eventStream) eventsAfter(fromSeq uint64) []wsMessage {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	if es.count == 0 {
+		return nil
+	}
+	var result []wsMessage
+	for i := 0; i < es.count; i++ {
+		idx := (es.head + i) % eventStreamSize
+		if es.buf[idx].Seq > fromSeq {
+			result = append(result, es.buf[idx])
+		}
+	}
+	return result
+}
+
+// getEventStream returns (or creates) the eventStream for a chatID.
+func (wc *WebChannel) getEventStream(chatID string) *eventStream {
+	wc.evtBufMu.Lock()
+	defer wc.evtBufMu.Unlock()
+	if wc.evtBuf == nil {
+		wc.evtBuf = make(map[string]*eventStream)
+	}
+	es, ok := wc.evtBuf[chatID]
+	if !ok {
+		es = newEventStream()
+		wc.evtBuf[chatID] = es
+	}
+	return es
+}
+
+// ---------------------------------------------------------------------------
 // WS protocol messages
 // ---------------------------------------------------------------------------
 
 type wsMessage struct {
 	Type            string             `json:"type"`                       // "text", "progress", "card", "progress_structured", "user_echo", "ask_user", "stream_content", "rpc_response"
 	ID              string             `json:"id,omitempty"`               // UUID or RPC request ID
+	Seq             uint64             `json:"seq,omitempty"`              // monotonic sequence number per chatID for dedup & replay
 	Content         string             `json:"content,omitempty"`          // message content
 	OriginalContent string             `json:"original_content,omitempty"` // user's original text before file processing (for user_echo matching)
 	TS              int64              `json:"ts,omitempty"`               // timestamp
@@ -352,6 +438,34 @@ type WsProgressPayload struct {
 	ReasoningStreamContent string `json:"reasoning_stream_content,omitempty"`
 }
 
+// cliProgressToWS converts CLIProgressPayload to WsProgressPayload for WS delivery.
+func cliProgressToWS(p *CLIProgressPayload) *WsProgressPayload {
+	if p == nil {
+		return nil
+	}
+	wp := &WsProgressPayload{
+		Phase:                  p.Phase,
+		Iteration:              p.Iteration,
+		Thinking:               p.Thinking,
+		Reasoning:              p.Reasoning,
+		StreamContent:          p.StreamContent,
+		ReasoningStreamContent: p.ReasoningStreamContent,
+	}
+	for _, t := range p.ActiveTools {
+		wp.ActiveTools = append(wp.ActiveTools, WsToolProgress{
+			Name: t.Name, Label: t.Label, Status: t.Status,
+			Elapsed: t.Elapsed, Summary: t.Summary,
+		})
+	}
+	for _, t := range p.CompletedTools {
+		wp.CompletedTools = append(wp.CompletedTools, WsToolProgress{
+			Name: t.Name, Label: t.Label, Status: t.Status,
+			Elapsed: t.Elapsed, Summary: t.Summary,
+		})
+	}
+	return wp
+}
+
 // GetStreamContent returns the StreamContent field.
 // Used by RemoteBackend to extract stream text from stream_content messages.
 func (p *WsProgressPayload) GetStreamContent() string {
@@ -368,6 +482,59 @@ func (p *WsProgressPayload) GetReasoningStreamContent() string {
 		return ""
 	}
 	return p.ReasoningStreamContent
+}
+
+// ToCLIProgressPayload converts WsProgressPayload to CLIProgressPayload format
+// for storage in lastProgressSnapshot (used by GetActiveProgress RPC).
+func (p *WsProgressPayload) ToCLIProgressPayload() *CLIProgressPayload {
+	if p == nil {
+		return nil
+	}
+	cp := &CLIProgressPayload{
+		Phase:                  p.Phase,
+		Iteration:              p.Iteration,
+		Thinking:               p.Thinking,
+		Reasoning:              p.Reasoning,
+		StreamContent:          p.StreamContent,
+		ReasoningStreamContent: p.ReasoningStreamContent,
+	}
+	for _, t := range p.ActiveTools {
+		cp.ActiveTools = append(cp.ActiveTools, CLIToolProgress{
+			Name:    t.Name,
+			Label:   t.Label,
+			Status:  t.Status,
+			Elapsed: t.Elapsed,
+			Summary: t.Summary,
+		})
+	}
+	for _, t := range p.CompletedTools {
+		cp.CompletedTools = append(cp.CompletedTools, CLIToolProgress{
+			Name:    t.Name,
+			Label:   t.Label,
+			Status:  t.Status,
+			Elapsed: t.Elapsed,
+			Summary: t.Summary,
+		})
+	}
+	for _, sa := range p.SubAgents {
+		cp.SubAgents = append(cp.SubAgents, CLISubAgent{
+			Role:   sa.Role,
+			Status: sa.Status,
+			Desc:   sa.Desc,
+		})
+	}
+	if p.TokenUsage != nil {
+		cp.TokenUsage = &CLITokenUsage{
+			PromptTokens:     p.TokenUsage.PromptTokens,
+			CompletionTokens: p.TokenUsage.CompletionTokens,
+			TotalTokens:      p.TokenUsage.TotalTokens,
+			CacheHitTokens:   p.TokenUsage.CacheHitTokens,
+		}
+	}
+	for _, t := range p.Todos {
+		cp.Todos = append(cp.Todos, CLITodoItem{Text: t.Text, Done: t.Done})
+	}
+	return cp
 }
 
 // WsToolProgress 单个工具的执行进度（对应 agent.ToolProgress）。
@@ -470,6 +637,10 @@ type WebChannel struct {
 
 	// OSS provider for file storage (local or qiniu)
 	ossProvider OSSProvider
+
+	// Event stream buffer — per chatID monotonic seq + ring buffer for replay
+	evtBuf   map[string]*eventStream
+	evtBufMu sync.Mutex
 }
 
 type sessionInfo struct {
@@ -658,6 +829,9 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 
 	targetClientID := msg.ChatID
 
+	// Stamp seq and buffer for replay
+	wsMsg = wc.stampAndBuffer(targetClientID, wsMsg)
+
 	// Send via hub (non-blocking: writes to buffered channel)
 	if !wc.hub.sendToClient(targetClientID, wsMsg) {
 		log.WithFields(log.Fields{"chat_id": msg.ChatID, "target_client_id": targetClientID}).Debug("Web client offline, message buffered")
@@ -687,6 +861,15 @@ func (wc *WebChannel) Send(msg bus.OutboundMessage) (string, error) {
 	return msgID, nil
 }
 
+// stampAndBuffer assigns a monotonic seq to the message and appends it to the
+// per-chatID event stream buffer. Returns the stamped message (ready to send).
+func (wc *WebChannel) stampAndBuffer(chatID string, msg wsMessage) wsMessage {
+	es := wc.getEventStream(chatID)
+	msg.Seq = es.nextSeq()
+	es.push(msg)
+	return msg
+}
+
 // SendProgress 发送结构化进度事件到 Web 客户端（非阻塞）。
 // 内部通过 hub 的缓冲通道发送，保持调用路径轻量。
 func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
@@ -694,11 +877,11 @@ func (wc *WebChannel) SendProgress(chatID string, payload *WsProgressPayload) {
 		return
 	}
 
-	wsMsg := wsMessage{
+	wsMsg := wc.stampAndBuffer(chatID, wsMessage{
 		Type:     "progress_structured",
 		TS:       time.Now().Unix(),
 		Progress: payload,
-	}
+	})
 
 	if !wc.hub.sendToClient(chatID, wsMsg) {
 		log.WithField("chat_id", chatID).Debug("Web client offline, progress event buffered")
@@ -711,14 +894,14 @@ func (wc *WebChannel) SendStreamContent(chatID, content, reasoning string) {
 	if content == "" && reasoning == "" {
 		return
 	}
-	wsMsg := wsMessage{
+	wsMsg := wc.stampAndBuffer(chatID, wsMessage{
 		Type: "stream_content",
 		TS:   time.Now().Unix(),
 		Progress: &WsProgressPayload{
 			StreamContent:          content,
 			ReasoningStreamContent: reasoning,
 		},
-	}
+	})
 	_ = wc.hub.sendToClient(chatID, wsMsg) // stream events are ephemeral, safe to drop
 }
 
@@ -840,11 +1023,23 @@ func (wc *WebChannel) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wc.hub.addClient(client.id, client)
+
+	// Immediately subscribe the client to their chatID (p2p mode)
+	// so they can receive server-pushed events (progress, stream, etc.)
+	// without waiting for the first outbound message.
+	chatID := senderID // p2p mode: chatID == senderID
+	wc.hub.subscribe(client.id, chatID)
+
 	log.WithFields(log.Fields{
 		"sender_id": senderID,
 		"client_id": client.id,
 		"username":  username,
 	}).Info("Web client connected")
+
+	// Reconnect sync: wait for client's sync message with last_seq,
+	// then replay missed events from the event stream buffer.
+	// This runs in a goroutine to not block the read pump startup.
+	go wc.replayMissedEvents(client, chatID)
 
 	// Write pump
 	wc.wg.Add(1)
@@ -881,6 +1076,63 @@ func (wc *WebChannel) validateCLIToken(token string) (string, error) {
 		return "", fmt.Errorf("invalid token")
 	}
 	return userID, nil
+}
+
+// replayMissedEvents replays buffered events with seq > client's last_seq.
+// Waits up to 2s for the client's sync message, then replays.
+func (wc *WebChannel) replayMissedEvents(client *Client, chatID string) {
+	// The client sends sync immediately after WS connect.
+	// If no sync arrives within 2s, send current state anyway (backward compat).
+	syncCh := make(chan uint64, 1)
+	client.syncCh.Store(&syncCh)
+	defer client.syncCh.Store(nil)
+
+	var fromSeq uint64
+	select {
+	case lastSeq := <-syncCh:
+		fromSeq = lastSeq
+	case <-time.After(2 * time.Second):
+		// No sync message — client is old version. Send current progress snapshot.
+		if wc.callbacks.GetActiveProgress != nil {
+			if p := wc.callbacks.GetActiveProgress("web", chatID); p != nil {
+				wsPayload := cliProgressToWS(p)
+				select {
+				case client.sendCh <- wsMessage{
+					Type:     "progress_structured",
+					TS:       time.Now().Unix(),
+					Progress: wsPayload,
+				}:
+				default:
+				}
+				if p.StreamContent != "" || p.ReasoningStreamContent != "" {
+					select {
+					case client.sendCh <- wsMessage{
+						Type: "stream_content",
+						TS:   time.Now().Unix(),
+						Progress: &WsProgressPayload{
+							StreamContent:          p.StreamContent,
+							ReasoningStreamContent: p.ReasoningStreamContent,
+						},
+					}:
+					default:
+					}
+				}
+			}
+		}
+		return
+	}
+
+	// Replay missed events from buffer
+	es := wc.getEventStream(chatID)
+	events := es.eventsAfter(fromSeq)
+	for _, evt := range events {
+		select {
+		case client.sendCh <- evt:
+		default:
+			log.Debug("Client sendCh full during replay, stopping")
+			return
+		}
+	}
 }
 
 func (wc *WebChannel) writePump(c *Client) {
@@ -978,6 +1230,23 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 		}
 
 		switch msg.Type {
+		case "sync":
+			// Client reconnect sync: sends last_seq from history API response.
+			// The replayMissedEvents goroutine is waiting on this.
+			if ch := c.syncCh.Load(); ch != nil {
+				lastSeq := uint64(0)
+				var syncMsg struct {
+					LastSeq uint64 `json:"last_seq"`
+				}
+				if err := json.Unmarshal(raw, &syncMsg); err == nil {
+					lastSeq = syncMsg.LastSeq
+				}
+				select {
+				case *ch <- lastSeq:
+				default:
+				}
+			}
+			continue
 		case "cancel":
 			// Reuse existing /cancel mechanism: push "/cancel" text into msgBus.
 			// Resolve business channel/chatID from WS message fields (same as message handler)

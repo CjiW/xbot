@@ -97,6 +97,9 @@ type AgentBackend interface {
 	// InspectInteractiveSession inspects a running interactive subagent.
 	InspectInteractiveSession(ctx context.Context, roleName, channelName, chatID, instance string, tailCount int) (string, error)
 
+	// GetSessionMessages returns the conversation messages for a specific interactive SubAgent session.
+	GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool)
+
 	// SetCWD sets the current working directory for a session on the server.
 	// Used by CLI remote mode to sync the client's cwd to the server session.
 	SetCWD(ch, chatID, dir string) error

@@ -720,6 +720,24 @@ func (b *RemoteBackend) callRPCString(method string, params any) (string, error)
 	return s, nil
 }
 
+func (b *RemoteBackend) GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool) {
+	raw, err := b.callRPC("get_session_messages", map[string]any{
+		"channel": channelName, "chat_id": chatID,
+		"role": roleName, "instance": instance,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var msgs []SessionMessage
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, false
+	}
+	return msgs, true
+}
+
 func (b *RemoteBackend) callRPCInt(method string, params any) (int, error) {
 	raw, err := b.callRPC(method, params)
 	if err != nil {

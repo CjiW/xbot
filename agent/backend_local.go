@@ -170,6 +170,10 @@ func (b *LocalBackend) InspectInteractiveSession(ctx context.Context, roleName, 
 	return b.agent.InspectInteractiveSession(ctx, roleName, channelName, chatID, instance, tailCount)
 }
 
+func (b *LocalBackend) GetSessionMessages(channelName, chatID, roleName, instance string) ([]SessionMessage, bool) {
+	return b.agent.GetSessionMessages(channelName, chatID, roleName, instance)
+}
+
 func (b *LocalBackend) SetContextMode(mode string) error {
 	return b.agent.SetContextMode(mode)
 }

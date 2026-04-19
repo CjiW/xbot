@@ -1246,4 +1246,57 @@ func snippetAround(content, queryLower string) string {
 		snippet = snippet + "..."
 	}
 	return snippet
-}
+	}
+
+	// handleSessions handles GET /api/sessions — lists all SubAgent sessions for the user.
+	func (wc *WebChannel) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if wc.callbacks.SessionsList == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sessions": []any{}})
+		return
+	}
+
+	sessions := wc.callbacks.SessionsList(senderID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sessions": sessions})
+	}
+
+	// handleSessionMessages handles GET /api/sessions/messages — returns messages for a specific SubAgent session.
+	func (wc *WebChannel) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	senderID := senderIDFromContext(r.Context())
+	if senderID == "" {
+		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	roleName := r.URL.Query().Get("role")
+	instance := r.URL.Query().Get("instance")
+	if roleName == "" || instance == "" {
+		jsonErrorResponse(w, http.StatusBadRequest, "role and instance are required")
+		return
+	}
+
+	if wc.callbacks.SessionMessages == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
+		return
+	}
+
+	messages, found := wc.callbacks.SessionMessages(senderID, roleName, instance)
+	if !found {
+		jsonErrorResponse(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": messages})
+	}

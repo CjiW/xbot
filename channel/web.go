@@ -131,6 +131,28 @@ type WebCallbacks struct {
 	// senderID is the authenticated user ID (from the WS connection / runner token).
 	// Returns JSON-encoded result or an error.
 	RPCHandler func(method string, params json.RawMessage, senderID string) (json.RawMessage, error)
+	// SessionsList returns interactive SubAgent sessions for a user (channel="web", chatID=senderID).
+	// Returns JSON-serializable session info objects.
+	SessionsList func(senderID string) []SessionInfo
+	// SessionMessages returns the conversation messages for a specific SubAgent session.
+	// Returns (messages, true) if found, (nil, false) otherwise.
+	SessionMessages func(senderID, roleName, instance string) ([]SessionChatMessage, bool)
+}
+
+// SessionInfo represents a snapshot of an interactive SubAgent session (for API responses).
+type SessionInfo struct {
+	Role       string `json:"role"`
+	Instance   string `json:"instance"`
+	Running    bool   `json:"running"`
+	Background bool   `json:"background"`
+	Task       string `json:"task,omitempty"`
+	Preview    string `json:"preview,omitempty"`
+}
+
+// SessionChatMessage is a single message in a SubAgent conversation (for API responses).
+type SessionChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ---------------------------------------------------------------------------
@@ -738,6 +760,10 @@ func (wc *WebChannel) Start() error {
 
 	// File API
 	mux.HandleFunc("/api/files/upload", wc.authMiddleware(wc.handleFileUpload))
+
+	// Sessions API
+	mux.HandleFunc("/api/sessions", wc.authMiddleware(wc.handleSessions))
+	mux.HandleFunc("/api/sessions/messages", wc.authMiddleware(wc.handleSessionMessages))
 
 	// Static files
 	if wc.staticDir != "" {

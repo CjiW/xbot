@@ -176,11 +176,11 @@ func (wc *WebChannel) handleHistoryGet(w http.ResponseWriter, r *http.Request, s
 			}
 			// Attach iteration history (completed iterations 1..N-1)
 			for _, iter := range p.IterationHistory {
-					snap := histIterSnapshot{
-						Iteration: iter.Iteration,
-						Thinking:  iter.Thinking,
-						Reasoning: iter.Reasoning,
-					}
+				snap := histIterSnapshot{
+					Iteration: iter.Iteration,
+					Thinking:  iter.Thinking,
+					Reasoning: iter.Reasoning,
+				}
 				for _, t := range iter.CompletedTools {
 					snap.CompletedTools = append(snap.CompletedTools, histTool{
 						Name: t.Name, Label: t.Label, Status: t.Status, Summary: t.Summary,

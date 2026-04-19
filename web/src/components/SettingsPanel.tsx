@@ -572,8 +572,8 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
         onClick={onClose}
       />
       {/* Panel */}
-      <div className="settings-panel" style={{ maxWidth: '520px' }}>
-        <div className="flex items-center justify-between mb-4">
+      <div className="settings-panel">
+        <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-white">⚙️ 设置</h2>
           <div className="flex items-center gap-2">
             {saving && <span className="text-xs text-slate-500">保存中...</span>}
@@ -582,7 +582,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-4 p-1 bg-slate-700/50 rounded-lg">
+        <div className="flex gap-1 p-1 bg-slate-700/50 rounded-lg flex-shrink-0">
           {TABS.map((tab) => (
             <button
               key={tab.id}
@@ -597,6 +597,9 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
             </button>
           ))}
         </div>
+
+        {/* Scrollable content area */}
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
         {/* ── 外观设置 ── */}
         {activeTab === 'appearance' && (
@@ -1281,6 +1284,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
             )}
           </div>
         )}
+        </div>{/* end scrollable content */}
       </div>
       {/* Toast notification */}
       {toast && (

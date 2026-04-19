@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"xbot/bus"
 	"xbot/llm"
 	"xbot/memory"
 	"xbot/storage/sqlite"
@@ -71,10 +72,8 @@ type ToolContext struct {
 	BgTaskManager *BackgroundTaskManager
 	// SessionKey for task scoping (set by engine, not via RunConfig)
 	BgSessionKey string
-
-	// PostOffice Agent 间消息路由（nil = 不启用）。
-	// 通过 PostOffice 可访问 Mailbox 注册表和群聊功能。
-	PostOffice PostOfficeProvider
+	// MessageSender allows sending messages to any Channel via Dispatcher.
+	MessageSender bus.MessageSender
 }
 
 // SubAgentManager SubAgent 管理接口，避免循环依赖
@@ -86,46 +85,7 @@ type SubAgentManager interface {
 	RunSubAgent(parentCtx *ToolContext, task string, systemPrompt string, allowedTools []string, caps SubAgentCapabilities, roleName string, model string) (string, error)
 }
 
-// PostOfficeProvider provides access to the Agent-to-Agent message routing system.
-// Implemented by bus.PostOfficeAdapter. Uses interface to avoid tools→bus import.
-type PostOfficeProvider interface {
-	// LookupMailbox finds a registered Mailbox by address string.
-	LookupMailbox(addr string) (PostOfficeMailbox, bool)
-	// ListMailboxAddresses returns all registered mailbox addresses.
-	ListMailboxAddresses() []string
-	// LookupGroup finds a group by ID.
-	LookupGroup(id string) (PostOfficeGroup, bool)
-	// RegisterGroup creates and registers a new group.
-	RegisterGroup(def PostOfficeGroupDef) error
-	// UnregisterGroup removes a group by ID.
-	UnregisterGroup(id string)
-}
-
-// PostOfficeMailbox is a read-only view of a Mailbox.
-type PostOfficeMailbox interface {
-	OwnerAddress() string
-	InboxLen() int
-	IsClosed() bool
-}
-
-// PostOfficeGroup is a handle for interacting with a group chat.
-type PostOfficeGroup interface {
-	GroupID() string
-	MemberAddresses() []string
-	CurrentRound() int
-	MaxRounds() int
-	IsClosed() bool
-	Broadcast(fromAddr string, content string) error
-	Close(reason string)
-}
-
-// PostOfficeGroupDef defines a new group to create.
-type PostOfficeGroupDef struct {
-	ID              string
-	MemberAddresses []string
-	CoordinatorAddr string
-	MaxRounds       int
-}
+// --- Tool Registry ---
 
 // ToolResult 工具执行结果
 type ToolResult struct {
@@ -668,7 +628,9 @@ func DefaultRegistry(memoryProvider string) *Registry {
 	r.RegisterCore(&FileCreateTool{})
 	r.RegisterCore(&FileReplaceTool{})
 	r.RegisterCore(&SubAgentTool{})
-	r.RegisterCore(&GroupChatTool{})
+	// CreateChatTool — registered but returns "not implemented" for future use.
+	r.RegisterCore(&CreateChatTool{})
+	r.RegisterCore(&SendMessageTool{})
 	r.RegisterCore(&SkillTool{})
 	r.RegisterCore(&TaskStatusTool{})
 	r.RegisterCore(&TaskKillTool{})

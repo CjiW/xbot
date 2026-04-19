@@ -1557,6 +1557,7 @@ func Run(args []string) error {
 		return disp.SendDirect(msg)
 	})
 	backend.SetChannelFinder(disp.GetChannel)
+	backend.Agent().SetMessageSender(disp)
 
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {

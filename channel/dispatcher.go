@@ -52,7 +52,15 @@ func (d *Dispatcher) Run() {
 				log.WithField("channel", msg.Channel).Warn("Unknown channel, dropping message")
 				continue
 			}
-			if _, err := ch.Send(msg); err != nil {
+			if _, err := func() (ret string, err error) {
+				defer func() {
+					if r := recover(); r != nil {
+						log.WithField("channel", msg.Channel).Errorf("Channel.Send panic: %v", r)
+						err = fmt.Errorf("channel %s panic: %v", msg.Channel, r)
+					}
+				}()
+				return ch.Send(msg)
+			}(); err != nil {
 				log.WithError(err).WithField("channel", msg.Channel).Error("Failed to send message")
 			}
 		}
@@ -68,6 +76,44 @@ func (d *Dispatcher) Stop() {
 	}
 	d.mu.RUnlock()
 }
+
+// Unregister removes a channel from the dispatcher.
+func (d *Dispatcher) Unregister(name string) {
+	d.mu.Lock()
+	delete(d.channels, name)
+	d.mu.Unlock()
+	log.WithField("channel", name).Info("Channel unregistered")
+}
+
+// SendMessage implements bus.MessageSender.
+func (d *Dispatcher) SendMessage(channelName, chatID, content string) (string, error) {
+	return d.SendDirect(bus.OutboundMessage{
+		Channel: channelName,
+		ChatID:  chatID,
+		Content: content,
+	})
+}
+
+// RegisterDynamic implements bus.MessageSender.
+func (d *Dispatcher) RegisterDynamic(name string, ch bus.ChannelLike) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c, ok := ch.(Channel)
+	if !ok {
+		return fmt.Errorf("RegisterDynamic: %T does not implement Channel interface", ch)
+	}
+	d.channels[name] = c
+	log.WithField("channel", name).Info("Dynamic channel registered")
+	return nil
+}
+
+// UnregisterDynamic implements bus.MessageSender.
+func (d *Dispatcher) UnregisterDynamic(name string) {
+	d.Unregister(name)
+}
+
+// Compile-time interface check
+var _ bus.MessageSender = (*Dispatcher)(nil)
 
 // SendDirect 同步发送消息到指定渠道，返回平台消息 ID
 func (d *Dispatcher) SendDirect(msg bus.OutboundMessage) (string, error) {

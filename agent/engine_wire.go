@@ -869,7 +869,7 @@ func (a *Agent) buildSubAgentRunConfig(
 	// HookChain — SubAgent inherits parent Agent's hook chain
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
-	cfg.PostOffice = a.postOffice
+	cfg.MessageSender = a.messageSender
 
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -931,7 +931,7 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		InjectInbound:    a.injectInbound,
 		Tools:            a.tools,
 		BgTaskManager:    a.bgTaskMgr,
-		PostOffice:       a.postOffice,
+		MessageSender:    a.messageSender,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {
@@ -1370,16 +1370,6 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	}
 	a.interactiveSubAgents.Store(oneshotKey, oneshotIA)
 
-	// Register a Mailbox for this oneshot SubAgent so it's addressable
-	// via PostOffice during its lifetime. Unregistered after Run completes.
-	subAgentAddr := bus.NewAgentAddress(cfg.AgentID)
-	oneshotMB := bus.NewMailbox(subAgentAddr)
-	if a.postOffice != nil {
-		if err := a.postOffice.Register(oneshotMB); err != nil {
-			log.Ctx(ctx).WithField("addr", subAgentAddr).Debug("mailbox already registered, skipping")
-		}
-	}
-
 	// Wire incremental snapshot callback so iteration history is available
 	// during Run() for panel preview and inspect — not only after completion.
 	// Lock mu to avoid data race with ListInteractiveSessions/summarizeInteractivePreviewLocked.
@@ -1409,11 +1399,6 @@ func (a *Agent) spawnSubAgent(ctx context.Context, msg bus.InboundMessage) (*bus
 	// Also cascade: cancel any bg sessions spawned during this one-shot's Run().
 	a.cancelChildSessions(oneshotKey)
 	a.interactiveSubAgents.Delete(oneshotKey)
-
-	// Unregister the oneshot Mailbox
-	if a.postOffice != nil {
-		a.postOffice.Unregister(subAgentAddr)
-	}
 
 	log.Ctx(ctx).WithFields(log.Fields{
 		"parent":    parentAgentID,

@@ -989,6 +989,9 @@ func main() {
 	// 注入 channelFinder 以启用结构化进度事件（工具调用、思考过程等）
 	app.backend.SetDirectSend(disp.SendDirect)
 	app.backend.SetChannelFinder(disp.GetChannel)
+	if lb, ok := app.backend.(*agent.LocalBackend); ok {
+		lb.Agent().SetMessageSender(disp)
+	}
 
 	// 注入 CLI 渠道特化 prompt 提供者
 	app.backend.SetChannelPromptProviders(&channel.CliPromptProvider{})

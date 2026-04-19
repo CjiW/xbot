@@ -17,18 +17,18 @@ import SettingsPanel from './components/SettingsPanel'
 import FileUpload, { uploadFile, usePasteUpload, type PendingFile } from './components/FileUpload'
 
 // --- Lazy rendering: only render when element enters viewport ---
-// --- Lazy rendering wrapper: only renders children when element enters viewport ---
-function LazyTurn({ children }: { children: React.ReactNode }) {
+// Use `eager` to skip IntersectionObserver (for turns near bottom that need instant render).
+function LazyTurn({ children, eager }: { children: React.ReactNode; eager?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null)
-  const [visible, setVisible] = useState(false)
+  const [visible, setVisible] = useState(() => eager ?? false)
 
   useEffect(() => {
+    if (eager) return
     const el = ref.current
     if (!el) return
     const container = el.parentElement
     // Skip IntersectionObserver for small message lists — overhead not worth it
     if ((container?.children.length ?? 0) < 30) {
-      // Use microtask to avoid synchronous setState in effect
       const raf = requestAnimationFrame(() => setVisible(true))
       return () => cancelAnimationFrame(raf)
     }
@@ -38,7 +38,7 @@ function LazyTurn({ children }: { children: React.ReactNode }) {
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [eager])
 
   return (
     <div ref={ref}>
@@ -422,25 +422,27 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
 
   // --- Scroll management ---
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  const isNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 150
+  }, [])
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
   }, [])
 
   const handleContainerScroll = useCallback(() => {
-    const el = messagesContainerRef.current
-    if (!el) return
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (distFromBottom > 150) {
-      setAutoScroll(false)
-    } else {
-      setAutoScroll(true)
-    }
-  }, [])
+    setAutoScroll(isNearBottom())
+  }, [isNearBottom])
 
-  // Auto-scroll when new messages arrive (if autoScroll is on)
+  // Auto-scroll during streaming/progress updates — instant, no animation.
+  // Only follows when user is already at the bottom (autoScroll=true).
   useEffect(() => {
     if (autoScroll) {
-      scrollToBottom()
+      scrollToBottom('instant')
     }
   }, [messages, progress, autoScroll, scrollToBottom])
 
@@ -538,7 +540,13 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
           if (data.last_seq) {
             lastSeqRef.current = data.last_seq
           }
-          setTimeout(scrollToBottom, 100)
+          // Scroll to bottom after initial history load.
+          // Two-phase: first instant scroll after DOM settles, then a re-scroll
+          // after one frame to catch any lazy-loaded content that expanded.
+          setTimeout(() => {
+            scrollToBottom('instant')
+            requestAnimationFrame(() => scrollToBottom('instant'))
+          }, 100)
         }
       })
       .catch(() => {})
@@ -979,8 +987,8 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
     wsRef.current.send(JSON.stringify(payload))
 
-    setTimeout(scrollToBottom, 50)
-  }, [scrollToBottom, pendingFiles])
+    setTimeout(() => scrollToBottom(isNearBottom() ? 'instant' : 'smooth'), 50)
+  }, [scrollToBottom, isNearBottom, pendingFiles])
 
   // --- Cancel generation ---
   const handleCancel = useCallback(() => {
@@ -1246,27 +1254,29 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
 
         {(() => {
           const turns = groupMessagesIntoTurns(messages)
+          const eagerCount = 6 // always render last N turns (avoids lazy-load vs scroll conflict)
           return turns.map((turn, i) => {
             const isLatestTurn = i === turns.length - 1
+            const isEager = i >= turns.length - eagerCount
             // Only bind live progress to the latest assistant turn if we are
             // actively processing a request. After a page refresh the last
             // historical assistant turn would otherwise steal the progress.
             const isActive = loading || progress !== null
             if (turn.type === 'user') {
-	              const content = (
-	                <div className="flex justify-end" data-msg-id={turn.message.id}>
-	                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
-		                    <UserMessageContent content={turn.message.content} />
-	                    {turn.message.ts && (
-	                      <div className="text-xs mt-1 text-right text-blue-200/50">
-	                        {formatTime(turn.message.ts)}
-	                      </div>
-	                    )}
-	                  </div>
-	                </div>
-	              )
+		              const content = (
+		                <div className="flex justify-end" data-msg-id={turn.message.id}>
+		                  <div className="max-w-[80%] rounded-xl px-4 py-3 bg-blue-600 text-white markdown-body text-sm">
+			                    <UserMessageContent content={turn.message.content} />
+		                    {turn.message.ts && (
+		                      <div className="text-xs mt-1 text-right text-blue-200/50">
+		                        {formatTime(turn.message.ts)}
+		                      </div>
+		                    )}
+		                  </div>
+		                </div>
+		              )
 
-              return isLatestTurn ? (
+              return (isLatestTurn || isEager) ? (
                 <div key={turn.message.id}>{content}</div>
               ) : (
                 <LazyTurn key={turn.message.id}>{content}</LazyTurn>
@@ -1285,7 +1295,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
                 />
               </div>
             )
-            return isLatestTurn ? assistantContent : (
+            return (isLatestTurn || isEager) ? assistantContent : (
               <LazyTurn key={turn.messages[0].id}>{assistantContent}</LazyTurn>
             )
           })
@@ -1302,7 +1312,7 @@ export default function ChatPage({ onLogout }: ChatPageProps) {
       {/* Scroll to bottom button */}
       {!autoScroll && (messages.length > 0 || loading) && (
         <button
-          onClick={() => { scrollToBottom(); setAutoScroll(true) }}
+          onClick={() => { setAutoScroll(true); requestAnimationFrame(() => scrollToBottom('smooth')) }}
           className="scroll-to-bottom-btn"
         >
           ↓ 新消息

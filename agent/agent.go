@@ -1310,6 +1310,12 @@ func (a *Agent) chatWorker(ctx context.Context, chatKey string, ch <-chan bus.In
 			if cmd.Concurrent() {
 				// 无状态命令：独立 goroutine 处理，不占信号量，不阻塞
 				go func(m bus.InboundMessage, c Command) {
+					// 清除 sessionFinalSent：command 不走 processMessage，
+					// 需要手动清除否则 sendMessage 会被拦截
+					cmdKey := m.Channel + ":" + m.ChatID
+					a.sessionMsgIDs.Delete(cmdKey)
+					a.sessionFinalSent.Delete(cmdKey)
+
 					response, err := c.Execute(ctx, a, m)
 					if err != nil {
 						log.WithFields(log.Fields{"request_id": m.RequestID, "chat": chatKey}).WithError(err).Error("Error processing command")

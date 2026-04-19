@@ -1060,27 +1060,30 @@ func (a *Agent) buildMemoryToolSetup(channel, chatID string) ([]llm.ToolDefiniti
 	return defs, exec
 }
 
-// buildToolContextExtras 构建 Letta 记忆相关的 ToolContext 扩展字段。
-// 通用字段（InjectInbound、Registry）已迁移到 RunConfig，此处仅处理 Letta memory。
+// buildToolContextExtras 构建 ToolContext 扩展字段。
+// 通用字段（TenantID、MemorySvc）从 TenantSession 直接获取，对所有 memory 类型生效。
+// LettaMemory 专属字段（CoreMemory、ArchivalMemory、ToolIndexer）仅在 LettaMemory 时设置。
 func (a *Agent) buildToolContextExtras(channel, chatID string) *ToolContextExtras {
 	extras := &ToolContextExtras{
 		InvalidateAllSessionMCP: func() { a.multiSession.InvalidateAll() },
 	}
 
-	// Wire Letta memory fields if the session uses LettaMemory
 	ts, err := a.multiSession.GetOrCreateSession(channel, chatID)
 	if err != nil {
 		log.WithError(err).WithFields(log.Fields{
 			"channel": channel,
 			"chat_id": chatID,
-		}).Warn("buildToolContextExtras: GetOrCreateSession failed, Letta memory fields will be empty")
+		}).Warn("buildToolContextExtras: GetOrCreateSession failed, fields will be empty")
 	} else {
+		// Tenant-level fields: work for all memory provider types
+		extras.TenantID = ts.TenantID()
+		extras.MemorySvc = ts.MemoryService()
+		extras.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
+
+		// LettaMemory-specific fields
 		if lm, ok := ts.Memory().(*letta.LettaMemory); ok {
-			extras.TenantID = lm.TenantID()
 			extras.CoreMemory = lm.CoreService()
 			extras.ArchivalMemory = lm.ArchivalService()
-			extras.MemorySvc = lm.MemoryService()
-			extras.RecallTimeRange = a.multiSession.RecallTimeRangeFunc()
 			extras.ToolIndexer = lm
 		}
 	}

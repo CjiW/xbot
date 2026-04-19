@@ -32,6 +32,11 @@
 - **Tier fallback**: unconfigured tier → vanguard→balance→swift chain. Empty tier must NOT return default client with wrong model.
 - **`createClientFromSub` uses sub's credentials with a *different* model** — verify target model is served by that endpoint.
 
+### Context Management & Token Estimation
+- **`maybeCompress` must NEVER use pure local token estimation.** Token counts must come from API responses (`lastPromptTokens`/`lastCompletionTokens`). The `no_data` fallback (no API data) skips all compress/masking checks with `totalTokens=0`. Tests must set `cfg.LastPromptTokens` to simulate a previous Run.
+- **`buildToolContextExtras` uses `TenantSession.MemoryService()` for `MemorySvc`/`TenantID`, NOT `LettaMemory` type assertion.** These are tenant-level fields that work for all memory providers. Only LettaMemory-specific fields (CoreMemory, ArchivalMemory, ToolIndexer) stay inside the type assertion.
+- **`ObservationMaskStore` and `OffloadStore` both persist to disk.** Mask uses `{WorkDir}/.xbot/mask_store/{id}.json`, Offload uses `{WorkDir}/.xbot/offload_store/{session}/{id}.json`. `Recall` falls back to disk on memory miss. Both cleaned on compress and `/clear`.
+
 ### Startup
 - `NewOpenAILLM` loads model list asynchronously. `ListModels()` returns fallback immediately.
 - Settings save is synchronous — all local I/O, no network calls.

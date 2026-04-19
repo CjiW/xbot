@@ -706,11 +706,9 @@ func (s *runState) maybeCompress(ctx context.Context) {
 	// - Local estimation only for tool result messages appended after the last LLM call
 	//
 	// restoredFromDB path: lastPromptTokens is from the PREVIOUS Run's last API call.
-	// Since the current messages include the full history + new user message, and
-	// lastPromptTokens covers the history up to the last LLM call, we add a local
-	// estimate for the new user message delta.
+	// We use it as-is — no local estimation fallback.
 	totalTokens := int64(0)
-	tokenSource := "local"
+	tokenSource := "unknown"
 	if s.lastPromptTokens > 0 && s.lastMsgCountAtLLMCall > 0 {
 		// In-Run path: we've had at least one LLM call in this Run.
 		totalTokens = s.lastPromptTokens + s.lastCompletionTokens
@@ -725,24 +723,22 @@ func (s *runState) maybeCompress(ctx context.Context) {
 			}
 			tokenSource = "api+completion+tool_delta"
 		}
-	} else if s.restoredFromDB && s.lastPromptTokens > 0 {
-		// Restored from previous Run — use API prompt_tokens as baseline.
+	} else if s.lastPromptTokens > 0 {
+		// Restored from previous Run (DB or in-memory) — use API prompt_tokens as baseline.
 		// Do NOT add lastCompletionTokens: those are output tokens from the
 		// previous Run, not part of the current context size.
 		totalTokens = s.lastPromptTokens
 		tokenSource = "restored"
-		// Local estimate includes new user message + saved assistant reply.
-		// Use as floor to account for messages added since last API call.
-		localEstimate, _ := llm.CountMessagesTokens(s.messages, s.cfg.Model)
-		if int64(localEstimate) > totalTokens {
-			totalTokens = int64(localEstimate)
-			tokenSource = "restored+local_floor"
-		}
 	} else {
-		toolDefs := s.cfg.Tools.AsDefinitionsForSession(s.sessionKey)
-		toolTokens, _ := llm.CountToolsTokens(toolDefs, s.cfg.Model)
-		cachedMsgTokens, _ := llm.CountMessagesTokens(s.messages, s.cfg.Model)
-		totalTokens = int64(cachedMsgTokens) + int64(toolTokens)
+		// No API token data available. This should never happen in production:
+		// - First Run: no need to compress (few messages)
+		// - Subsequent Runs: API call always sets lastPromptTokens
+		// - After restart: DB restoration sets lastPromptTokens via SaveTokenState
+		if len(s.messages) > 3 {
+			log.Ctx(ctx).Error("maybeCompress: no API token data available, skipping compress check")
+		}
+		totalTokens = 0
+		tokenSource = "no_data"
 	}
 
 	needCompress := len(s.messages) > 3 && shouldCompact(int(totalTokens), promptBudget) && (s.lastCompressIter == 0 || s.compressAttempts-s.lastCompressIter >= 5)

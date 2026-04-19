@@ -134,6 +134,10 @@ func (a *Agent) handleNewSession(ctx context.Context, msg bus.InboundMessage, te
 	if a.offloadStore != nil {
 		a.offloadStore.CleanSession(tenantKey)
 	}
+	// 清理 mask 数据
+	if a.maskStore != nil {
+		a.maskStore.Clear()
+	}
 
 	return &bus.OutboundMessage{
 		Channel: msg.Channel,

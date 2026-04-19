@@ -660,7 +660,9 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	// 默认关闭：通过 settings 的 enable_masking 开启。
 	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
-	a.maskStore = NewObservationMaskStore(200)
+	maskDir := filepath.Join(cfg.WorkDir, ".xbot", "mask_store")
+	a.maskStore = NewObservationMaskStore(200, maskDir)
+	go a.maskStore.CleanStale(7)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
 	if a.offloadStore != nil {

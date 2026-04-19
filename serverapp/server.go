@@ -1173,18 +1173,20 @@ func buildWebCallbacks(cfg *config.Config, backend agent.AgentBackend) channel.W
 	callbacks.GetActiveProgress = func(channel, chatID string) *channel.CLIProgressPayload {
 		return backend.GetActiveProgress(channel, chatID)
 	}
-	// Wire SessionsList — returns interactive SubAgent sessions for the user.
+	// Wire SessionsList — returns interactive SubAgent sessions for the user as ChatRooms.
 	callbacks.SessionsList = func(senderID string) []channel.SessionInfo {
 		sessions := backend.ListInteractiveSessions("web", senderID)
 		result := make([]channel.SessionInfo, len(sessions))
 		for i, s := range sessions {
-		result[i] = channel.SessionInfo{
-			Role:       s.Role,
-			Instance:   s.Instance,
-			Running:    s.Running,
-			Background: s.Background,
-			Task:       s.Task,
-			Preview:    s.Preview,
+		result[i] = channel.ChatRoom{
+			ID:       s.Role + "/" + s.Instance,
+			Type:     "subagent",
+			Label:    s.Role + "/" + s.Instance,
+			Role:     s.Role,
+			Instance: s.Instance,
+			Running:  s.Running,
+			Preview:  s.Preview,
+			Members:  "Agent ↔ " + s.Role,
 		}
 		}
 		return result

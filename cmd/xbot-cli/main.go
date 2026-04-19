@@ -831,6 +831,20 @@ func main() {
 			}
 			return app.backend.InspectInteractiveSession(context.Background(), roleName, "cli", absWorkDir, instance, tailCount)
 		},
+		AgentMessages: func(roleName, instance string) []channel.SessionChatMessage {
+			if app.backend == nil {
+				return nil
+			}
+			msgs, _ := app.backend.GetSessionMessages("cli", absWorkDir, roleName, instance)
+			if msgs == nil {
+				return nil
+			}
+			result := make([]channel.SessionChatMessage, len(msgs))
+			for i, m := range msgs {
+				result[i] = channel.SessionChatMessage{Role: m.Role, Content: m.Content}
+			}
+			return result
+		},
 	}
 
 	// 设置历史消息加载器（会话恢复）

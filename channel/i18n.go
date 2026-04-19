@@ -35,7 +35,7 @@ type UILocale struct {
 	PanelAskNewline string // "Ctrl+J newline"
 	PanelAskCancel  string // "Esc cancel"
 
-	BgTasksTitle       string // "Background Tasks"
+	BgTasksTitle       string // "ChatRooms"
 	BgTasksHelp        string // "↑↓ navigate  Enter view log  Del kill  Esc close"
 	BgTasksEmpty       string // "No background tasks running"
 	BgTasksUnsupported string // "Background tasks not supported."
@@ -223,7 +223,7 @@ func localeZH() *UILocale {
 		PanelAskNewline: "Ctrl+J 换行",
 		PanelAskCancel:  "Esc 取消",
 
-		BgTasksTitle:       "任务 & 代理",
+		BgTasksTitle:       "💬 ChatRooms",
 		BgTasksHelp:        "↑↓ 导航  Enter 查看日志  Del 终止  Esc 关闭",
 		BgTasksEmpty:       "没有正在运行的任务或代理",
 		BgTasksUnsupported: "不支持后台任务。",
@@ -608,7 +608,7 @@ func localeEN() *UILocale {
 		PanelAskNewline: "Ctrl+J newline",
 		PanelAskCancel:  "Esc cancel",
 
-		BgTasksTitle:       "Tasks & Agents",
+		BgTasksTitle:       "💬 ChatRooms",
 		BgTasksHelp:        "↑↓ navigate  Enter view log  Del kill  Esc close",
 		BgTasksEmpty:       "No running tasks or agents",
 		BgTasksUnsupported: "Background tasks not supported.",
@@ -993,7 +993,7 @@ func localeJA() *UILocale {
 		PanelAskNewline: "Ctrl+J 改行",
 		PanelAskCancel:  "Esc キャンセル",
 
-		BgTasksTitle:       "タスク & エージェント",
+		BgTasksTitle:       "💬 ChatRooms",
 		BgTasksHelp:        "↑↓ 移動  Enter ログ表示  Del 終了  Esc 閉じる",
 		BgTasksEmpty:       "実行中のタスクやエージェントはありません",
 		BgTasksUnsupported: "バックグラウンドタスクは未対応です。",

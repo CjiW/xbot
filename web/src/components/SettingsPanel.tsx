@@ -120,12 +120,14 @@ interface MyMarketEntry {
 }
 
 interface SessionInfo {
-  role: string
-  instance: string
-  running: boolean
-  background: boolean
-  task?: string
+  id: string
+  type: string       // "main" | "subagent"
+  label: string
+  role?: string
+  instance?: string
+  running?: boolean
   preview?: string
+  members?: string
 }
 
 interface SessionMessage {
@@ -576,7 +578,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     try {
       const resp = await fetch('/api/sessions')
       const data = await resp.json()
-      if (data.ok) setSessions(data.sessions || [])
+      if (data.ok) setSessions(data.rooms || [])
     } catch {}
     setSessionsLoading(false)
   }, [])
@@ -590,7 +592,7 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
     setSessionMessagesLoading(true)
     setSessionMessages([])
     try {
-      const resp = await fetch(`/api/sessions/messages?role=${encodeURIComponent(session.role)}&instance=${encodeURIComponent(session.instance)}`)
+      const resp = await fetch(`/api/sessions/messages?id=${encodeURIComponent(session.id)}`)
       const data = await resp.json()
       if (data.ok) setSessionMessages(data.messages || [])
     } catch {}
@@ -732,12 +734,12 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
           </div>
         )}
 
-        {/* ── 会话管理 ── */}
+        {/* ── 会话管理 (ChatRooms) ── */}
         {activeTab === 'sessions' && (
           <div className={sectionClass}>
-            <div className={sectionTitleClass}>💬 会话 Sessions</div>
+            <div className={sectionTitleClass}>💬 ChatRooms</div>
             <p className="text-xs text-slate-500 mb-3">
-              查看主会话和 SubAgent 会话的对话记录。
+              所有对话都是 ChatRoom — 人↔Agent、Agent↔Agent 统一管理。
             </p>
 
             <div className="flex gap-2 mb-3">
@@ -759,25 +761,31 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
             </div>
 
             {selectedSession ? (
-              /* ── 查看会话消息 ── */
+              /* ── 查看 ChatRoom 消息 ── */
               <div>
                 <div className="flex items-center gap-2 mb-3 p-2 rounded-lg bg-slate-800/50">
-                  <span className="text-sm font-medium text-slate-200">
-                    {selectedSession.role}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    / {selectedSession.instance}
-                  </span>
-                  <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
-                    selectedSession.running
-                      ? 'bg-green-900/50 text-green-400'
-                      : 'bg-slate-700 text-slate-400'
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    selectedSession.type === 'main'
+                      ? 'bg-emerald-900/50 text-emerald-400'
+                      : 'bg-indigo-900/50 text-indigo-400'
                   }`}>
-                    {selectedSession.running ? '运行中' : '已完成'}
+                    {selectedSession.type === 'main' ? '👤 主会话' : '🤖 Agent'}
                   </span>
-                  {selectedSession.background && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400">
-                      后台
+                  <span className="text-sm font-medium text-slate-200">
+                    {selectedSession.label}
+                  </span>
+                  {selectedSession.members && (
+                    <span className="text-xs text-slate-500">
+                      {selectedSession.members}
+                    </span>
+                  )}
+                  {selectedSession.type !== 'main' && (
+                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                      selectedSession.running
+                        ? 'bg-green-900/50 text-green-400'
+                        : 'bg-slate-700 text-slate-400'
+                    }`}>
+                      {selectedSession.running ? '运行中' : '已完成'}
                     </span>
                   )}
                 </div>
@@ -811,42 +819,44 @@ export default function SettingsPanel({ open, onClose, onNicknameChange, onPrese
                 )}
               </div>
             ) : (
-              /* ── 会话列表 ── */
+              /* ── ChatRoom 列表 ── */
               sessionsLoading ? (
                 <div className="text-center py-6 text-slate-500 text-sm">加载中...</div>
               ) : sessions.length === 0 ? (
                 <div className="text-center py-6 text-slate-500">
                   <p className="text-2xl mb-2">📭</p>
-                  <p className="text-sm">暂无活跃会话</p>
-                  <p className="text-xs mt-1">使用 SubAgent 工具创建会话后，会话将显示在这里</p>
+                  <p className="text-sm">暂无 ChatRoom</p>
                 </div>
               ) : (
                 <div className="space-y-2">
                   {sessions.map((s) => (
                     <div
-                      key={`${s.role}-${s.instance}`}
+                      key={s.id}
                       className="p-3 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 cursor-pointer transition-colors"
                       onClick={() => setSelectedSession(s)}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-slate-200">{s.role}</span>
-                        <span className="text-xs text-slate-500">/ {s.instance}</span>
-                        <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
-                          s.running
-                            ? 'bg-green-900/50 text-green-400'
-                            : 'bg-slate-700 text-slate-400'
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                          s.type === 'main'
+                            ? 'bg-emerald-900/50 text-emerald-400'
+                            : 'bg-indigo-900/50 text-indigo-400'
                         }`}>
-                          {s.running ? '运行中' : '已完成'}
+                          {s.type === 'main' ? '👤' : '🤖'}
                         </span>
-                        {s.background && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400">
-                            后台
+                        <span className="text-sm font-medium text-slate-200">{s.label}</span>
+                        {s.members && (
+                          <span className="text-xs text-slate-500">{s.members}</span>
+                        )}
+                        {s.type !== 'main' && (
+                          <span className={`ml-auto text-xs px-1.5 py-0.5 rounded ${
+                            s.running
+                              ? 'bg-green-900/50 text-green-400'
+                              : 'bg-slate-700 text-slate-400'
+                          }`}>
+                            {s.running ? '运行中' : '已完成'}
                           </span>
                         )}
                       </div>
-                      {s.task && (
-                        <div className="text-xs text-slate-400 mt-1 truncate">{s.task}</div>
-                      )}
                       {s.preview && (
                         <div className="text-xs text-slate-500 mt-1 truncate">{s.preview}</div>
                       )}

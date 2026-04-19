@@ -344,6 +344,7 @@ type cliModel struct {
 	agentCountFn   func() int                                                     // callback to get current agent count (set by channel)
 	agentListFn    func() []panelAgentEntry                                       // callback to list active agents for panel
 	agentInspectFn func(roleName, instance string, tailCount int) (string, error) // callback to inspect agent activity
+	agentMessagesFn func(roleName, instance string) []SessionChatMessage // callback to get agent conversation messages
 
 	// --- Usage query ---
 	usageQueryFn func(senderID string, days int) (cumulative *sqlite.UserTokenUsage, daily []sqlite.DailyTokenUsage, err error)

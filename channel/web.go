@@ -139,15 +139,22 @@ type WebCallbacks struct {
 	SessionMessages func(senderID, roleName, instance string) ([]SessionChatMessage, bool)
 }
 
-// SessionInfo represents a snapshot of an interactive SubAgent session (for API responses).
-type SessionInfo struct {
-	Role       string `json:"role"`
-	Instance   string `json:"instance"`
-	Running    bool   `json:"running"`
-	Background bool   `json:"background"`
-	Task       string `json:"task,omitempty"`
-	Preview    string `json:"preview,omitempty"`
+// ChatRoom represents a conversation between the user and/or agents.
+// Both human↔agent and agent↔agent conversations are ChatRooms.
+type ChatRoom struct {
+	ID       string `json:"id"`       // "main" for primary chat, "role/instance" for SubAgent
+	Type     string `json:"type"`     // "main" (human↔agent) or "subagent" (agent↔agent)
+	Label    string `json:"label"`    // Display name: "主会话" or "brainstorm/rt-1"
+	Role     string `json:"role"`     // SubAgent role name (empty for main)
+	Instance string `json:"instance"` // SubAgent instance ID (empty for main)
+	Running  bool   `json:"running"`  // Is the SubAgent currently running?
+	Preview  string `json:"preview"`  // Latest message/progress preview
+	Members  string `json:"members"`  // "You ↔ Agent" or "reviewer ↔ tester"
 }
+
+// SessionInfo represents a snapshot of an interactive SubAgent session (for API responses).
+// Deprecated: Use ChatRoom instead.
+type SessionInfo = ChatRoom
 
 // SessionChatMessage is a single message in a SubAgent conversation (for API responses).
 type SessionChatMessage struct {

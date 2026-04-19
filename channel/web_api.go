@@ -1248,55 +1248,134 @@ func snippetAround(content, queryLower string) string {
 	return snippet
 	}
 
-	// handleSessions handles GET /api/sessions — lists all SubAgent sessions for the user.
+	// handleSessions handles GET /api/sessions — lists all ChatRooms for the user.
+	// Returns both the main conversation (human↔agent) and SubAgent conversations (agent↔agent).
 	func (wc *WebChannel) handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	senderID := senderIDFromContext(r.Context())
-	if senderID == "" {
-		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
-		return
+		if r.Method != http.MethodGet {
+			jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		senderID := senderIDFromContext(r.Context())
+		if senderID == "" {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		rooms := []ChatRoom{}
+
+		// Main chatroom (human ↔ agent)
+		rooms = append(rooms, ChatRoom{
+			ID:      "main",
+			Type:    "main",
+			Label:   "主会话",
+			Members: "You ↔ Agent",
+		})
+
+		// SubAgent chatrooms (agent ↔ agent)
+		if wc.callbacks.SessionsList != nil {
+			sessions := wc.callbacks.SessionsList(senderID)
+			rooms = append(rooms, sessions...)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rooms": rooms})
 	}
 
-	if wc.callbacks.SessionsList == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sessions": []any{}})
-		return
-	}
-
-	sessions := wc.callbacks.SessionsList(senderID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sessions": sessions})
-	}
-
-	// handleSessionMessages handles GET /api/sessions/messages — returns messages for a specific SubAgent session.
+	// handleSessionMessages handles GET /api/sessions/messages — returns messages for a ChatRoom.
+	// For "main" room: returns the main conversation history from DB.
+	// For SubAgent rooms: returns the SubAgent's conversation messages.
 	func (wc *WebChannel) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	senderID := senderIDFromContext(r.Context())
-	if senderID == "" {
-		jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
-		return
+		if r.Method != http.MethodGet {
+			jsonErrorResponse(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		senderID := senderIDFromContext(r.Context())
+		if senderID == "" {
+			jsonErrorResponse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		roomID := r.URL.Query().Get("id")
+		if roomID == "" {
+			// Legacy support: role + instance
+			roleName := r.URL.Query().Get("role")
+			instance := r.URL.Query().Get("instance")
+			if roleName == "" || instance == "" {
+				jsonErrorResponse(w, http.StatusBadRequest, "id (or role+instance) is required")
+				return
+			}
+			roomID = roleName + "/" + instance
+		}
+
+		// Main room: fetch from DB
+		if roomID == "main" {
+			wc.handleMainSessionMessages(w, r, senderID)
+			return
+		}
+
+		// SubAgent room: fetch from agent
+		parts := strings.SplitN(roomID, "/", 2)
+		if len(parts) != 2 {
+			jsonErrorResponse(w, http.StatusBadRequest, "invalid room id")
+			return
+		}
+		roleName, instance := parts[0], parts[1]
+
+		if wc.callbacks.SessionMessages == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
+			return
+		}
+
+		messages, found := wc.callbacks.SessionMessages(senderID, roleName, instance)
+		if !found {
+			jsonErrorResponse(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": messages})
 	}
 
-	roleName := r.URL.Query().Get("role")
-	instance := r.URL.Query().Get("instance")
-	if roleName == "" || instance == "" {
-		jsonErrorResponse(w, http.StatusBadRequest, "role and instance are required")
-		return
-	}
+	// handleMainSessionMessages returns the main conversation history as session messages.
+	func (wc *WebChannel) handleMainSessionMessages(w http.ResponseWriter, r *http.Request, senderID string) {
+		var tenantID int64
+		err := wc.db.QueryRow(
+			"SELECT id FROM tenants WHERE channel = 'web' AND chat_id = ?", senderID,
+		).Scan(&tenantID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
+			return
+		}
 
-	if wc.callbacks.SessionMessages == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
-		return
-	}
+		limit := 50
+		var boundaryID sql.NullInt64
+		_ = wc.db.QueryRow(`
+			SELECT id FROM session_messages
+			WHERE tenant_id = ? AND role = 'user'
+			ORDER BY id DESC LIMIT 1 OFFSET ?`, tenantID, limit).Scan(&boundaryID)
 
-	messages, found := wc.callbacks.SessionMessages(senderID, roleName, instance)
-	if !found {
-		jsonErrorResponse(w, http.StatusNotFound, "session not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": messages})
+		var rows *sql.Rows
+		if boundaryID.Valid {
+			rows, err = wc.db.Query(`
+				SELECT role, content FROM session_messages
+				WHERE tenant_id = ? AND id >= ? AND role IN ('user', 'assistant')
+				ORDER BY id ASC`, tenantID, boundaryID.Int64)
+		} else {
+			rows, err = wc.db.Query(`
+				SELECT role, content FROM session_messages
+				WHERE tenant_id = ? AND role IN ('user', 'assistant')
+				ORDER BY id ASC`, tenantID)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": []any{}})
+			return
+		}
+		defer rows.Close()
+
+		var msgs []SessionChatMessage
+		for rows.Next() {
+			var role, content string
+			if err := rows.Scan(&role, &content); err != nil {
+				continue
+			}
+			msgs = append(msgs, SessionChatMessage{Role: role, Content: content})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": msgs})
 	}

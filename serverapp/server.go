@@ -1558,16 +1558,6 @@ func Run(args []string) error {
 	})
 	backend.SetChannelFinder(disp.GetChannel)
 	backend.Agent().SetMessageSender(disp)
-	backend.Agent().SetCreateGroupFn(func(groupID string, members []string, maxRounds int) (string, error) {
-		// Build member map: address → channel name in Dispatcher
-		memberMap := make(map[string]string, len(members))
-		for _, addr := range members {
-			memberMap[addr] = bus.ResolveChannelName(addr)
-		}
-		gc := channel.NewGroupChannel(groupID, "", memberMap, maxRounds, disp)
-		disp.Register(gc)
-		return gc.Name(), nil
-	})
 
 	// 设置飞书渠道的 CardBuilder（用于卡片回调处理）
 	if feishuCh != nil {

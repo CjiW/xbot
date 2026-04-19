@@ -12,38 +12,33 @@ import (
 var groupCounter atomic.Int64
 
 // CreateChatTool creates a new conversation (agent private chat or group chat).
-// Agent type delegates to InteractiveSubAgentManager (existing SubAgent infrastructure).
-// Group type creates a GroupChannel and registers it with the Dispatcher.
 type CreateChatTool struct{}
 
 func (t *CreateChatTool) Name() string { return "CreateChat" }
 
 func (t *CreateChatTool) Description() string {
-	return `Create a new conversation — either a private chat with a SubAgent or a group chat among multiple agents.
-
-## Types
-- "agent": Creates a new interactive SubAgent session. The agent runs in the background.
-  Use SendMessage with the agent address to send follow-up tasks.
-  The agent auto-cleans when unloaded or when the parent session ends.
-- "group": Creates a group chat among multiple agents.
-  Use SendMessage with the group address to broadcast to all members.
-  Members must be already-running interactive SubAgents.
+	return `Create a new conversation — either a private chat with a SubAgent or a moderated group chat.
 
 ## Agent type
-- Spawns an interactive SubAgent (same as SubAgent tool with interactive=true)
-- Returns an address like "agent:<role>/<instance>" for use with SendMessage
-- The SubAgent runs in background, processing messages via SendMessage
+Creates an interactive SubAgent session (same as SubAgent tool with interactive=true).
+Returns an address like "agent:<role>/<instance>" for use with SendMessage.
+The SubAgent runs in background, processing messages via SendMessage.
 
-## Group type
-- Creates a broadcast group among SubAgents
-- Members are specified as addresses (e.g., ["agent:reviewer/cr1", "agent:tester/ts1"])
+## Group type — Meeting Mode
+Creates a moderated group discussion among multiple SubAgents.
+- Members are specified as agent addresses (e.g., ["agent:reviewer/cr1", "agent:tester/ts1"])
 - Returns a group address like "group:<id>" for use with SendMessage
-- Group auto-closes after max_rounds (default 10)
+- The group works like a meeting: the moderator (you) controls who speaks
+- Messages without @mentions just add to the discussion history (no agent triggered)
+- Use @agent:role/instance in your message to trigger specific agents to respond
+- Triggered agents see the FULL discussion history before responding
+- Group auto-closes after max_rounds moderator messages with @mentions (default 10)
 
-## Note
-CreateChat(agent) is equivalent to the SubAgent tool's interactive mode.
-For group chat with agent members, use the SubAgent tool with multiple interactive sessions
-and coordinate via SendMessage to each agent individually.`
+## Example workflow
+1. CreateChat(type="group", members=["agent:reviewer/r1", "agent:tester/t1"])
+2. SendMessage(to="group:g1", message="Let's discuss the API design.") → no agents triggered
+3. SendMessage(to="group:g1", message="@agent:reviewer/r1 What's your opinion?") → reviewer responds
+4. SendMessage(to="group:g1", message="@agent:tester/t1 Any concerns about testability?") → tester responds with full context`
 }
 
 type CreateChatParams struct {
@@ -131,10 +126,6 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 		return nil, fmt.Errorf("group requires at least 2 members, got %d", len(params.Members))
 	}
 
-	if ctx.CreateGroupFn == nil {
-		return nil, fmt.Errorf("group chat not available in this context")
-	}
-
 	maxRounds := params.MaxRounds
 	if maxRounds <= 0 {
 		maxRounds = 10
@@ -142,11 +133,15 @@ func (t *CreateChatTool) createGroupChat(ctx *ToolContext, params *CreateChatPar
 
 	// Generate unique group ID
 	groupID := fmt.Sprintf("g%d", groupCounter.Add(1))
+	groupName := "group:" + groupID
 
-	groupName, err := ctx.CreateGroupFn(groupID, params.Members, maxRounds)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create group: %w", err)
-	}
+	// Create group state directly (no external callback needed)
+	CreateGroupState(groupID, "moderator", params.Members, maxRounds)
 
-	return NewResult(fmt.Sprintf("Created group chat: %s\nMembers: %v\nMax rounds: %d\n\nUse SendMessage(to=\"%s\", message=\"...\") to broadcast.", groupName, params.Members, maxRounds, groupName)), nil
+	return NewResult(fmt.Sprintf(
+		"Created group chat: %s\nMembers: %v\nMax rounds: %d\n\n"+
+			"Usage:\n"+
+			"- SendMessage(to=\"%s\", message=\"...\") → add to discussion (no agent triggered)\n"+
+			"- SendMessage(to=\"%s\", message=\"@agent:role/instance ...\") → trigger specific agent",
+		groupName, params.Members, maxRounds, groupName, groupName)), nil
 }

@@ -262,8 +262,6 @@ type Agent struct {
 
 	// messageSender allows sending messages to any Channel via Dispatcher.
 	messageSender bus.MessageSender
-	// createGroupFn creates a GroupChannel and registers it with the Dispatcher.
-	createGroupFn func(groupID string, members []string, maxRounds int) (string, error)
 
 	// hookChain is the shared tool execution hook chain for this Agent and all SubAgents.
 	hookChain *tools.HookChain
@@ -334,11 +332,6 @@ func (a *Agent) BgTaskManager() *tools.BackgroundTaskManager { return a.bgTaskMg
 
 // SetMessageSender sets the Dispatcher reference for unified messaging.
 func (a *Agent) SetMessageSender(ms bus.MessageSender) { a.messageSender = ms }
-
-// SetCreateGroupFn sets the callback for creating group chat channels.
-func (a *Agent) SetCreateGroupFn(fn func(groupID string, members []string, maxRounds int) (string, error)) {
-	a.createGroupFn = fn
-}
 
 // RegistryManager returns the Agent's RegistryManager (for external injection of callbacks).
 func (a *Agent) RegistryManager() *RegistryManager { return a.registryManager }

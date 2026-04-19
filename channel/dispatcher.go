@@ -94,24 +94,6 @@ func (d *Dispatcher) SendMessage(channelName, chatID, content string) (string, e
 	})
 }
 
-// RegisterDynamic implements bus.MessageSender.
-func (d *Dispatcher) RegisterDynamic(name string, ch bus.ChannelLike) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	c, ok := ch.(Channel)
-	if !ok {
-		return fmt.Errorf("RegisterDynamic: %T does not implement Channel interface", ch)
-	}
-	d.channels[name] = c
-	log.WithField("channel", name).Info("Dynamic channel registered")
-	return nil
-}
-
-// UnregisterDynamic implements bus.MessageSender.
-func (d *Dispatcher) UnregisterDynamic(name string) {
-	d.Unregister(name)
-}
-
 // Compile-time interface check
 var _ bus.MessageSender = (*Dispatcher)(nil)
 

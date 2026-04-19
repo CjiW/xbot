@@ -870,7 +870,6 @@ func (a *Agent) buildSubAgentRunConfig(
 	cfg.HookChain = a.hookChain
 	cfg.SettingsSvc = a.settingsSvc
 	cfg.MessageSender = a.messageSender
-	cfg.CreateGroupFn = a.createGroupFn
 
 	// Interactive 回调独立注入，不依赖 SpawnAgent
 	cfg.InteractiveCallbacks = &InteractiveCallbacks{
@@ -933,7 +932,6 @@ func (a *Agent) buildToolExecutor(channel, chatID, senderID, senderName, sandbox
 		Tools:            a.tools,
 		BgTaskManager:    a.bgTaskMgr,
 		MessageSender:    a.messageSender,
-		CreateGroupFn:    a.createGroupFn,
 	}
 
 	cfg.SpawnAgent = func(spawnCtx context.Context, inMsg bus.InboundMessage) (*bus.OutboundMessage, error) {

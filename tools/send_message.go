@@ -9,9 +9,8 @@ import (
 	"xbot/llm"
 )
 
-// SendMessageTool sends a message to any addressable Channel.
-// This is the unified messaging tool — works for agent-to-agent,
-// agent-to-IM, and group broadcast.
+// SendMessageTool sends a message to any addressable target.
+// For groups, uses a meeting model: moderator controls who speaks via @mentions.
 type SendMessageTool struct{}
 
 func (t *SendMessageTool) Name() string { return "SendMessage" }
@@ -24,15 +23,26 @@ func (t *SendMessageTool) Description() string {
 - Group: "group:<id>" (e.g., "group:g1")
 - IM user (Feishu): "feishu:<open_id>" (e.g., "feishu:ou_xxx")
 
-## Behavior
-- For agent targets: blocks until reply (RPC), returns the agent's response
-- For group targets: broadcasts to all members, returns confirmation
-- For IM targets: sends message immediately (fire-and-forget)
+## Agent target
+Blocks until reply (RPC), returns the agent's response.
 
-## Use cases
-- Send a task to a SubAgent after creating it with CreateChat
-- Proactively notify a Feishu user about task completion
-- Broadcast a message to a group of agents`
+## Group target — Meeting Mode
+Group chats work like a moderated meeting:
+- Only the moderator's messages with @mentions trigger agents to speak.
+- Messages without @mentions are added to the discussion history but do NOT trigger anyone.
+- Each @mentioned agent receives the FULL discussion history + the current message.
+- The agent's response is added to the history for future reference.
+
+Examples:
+- SendMessage(to="group:g1", message="Let's discuss the API design.")
+  → Adds moderator message to history. No agent triggered.
+- SendMessage(to="group:g1", message="@agent:reviewer/r1 What do you think?")
+  → Triggers agent:reviewer/r1 with full history + this question. Response added to history.
+- SendMessage(to="group:g1", message="@agent:reviewer/r1 @agent:tester/t1 Please both review.")
+  → Triggers both agents sequentially. Both see the same history. Both responses added.
+
+## IM target
+Sends message immediately (fire-and-forget).`
 }
 
 type SendMessageParams struct {
@@ -43,7 +53,7 @@ type SendMessageParams struct {
 func (t *SendMessageTool) Parameters() []llm.ToolParam {
 	return []llm.ToolParam{
 		{Name: "to", Type: "string", Description: "Target address (agent:xxx, group:xxx, feishu:xxx)", Required: true},
-		{Name: "message", Type: "string", Description: "Message content to send", Required: true},
+		{Name: "message", Type: "string", Description: "Message content to send. For groups, use @agent:role/instance to trigger specific agents.", Required: true},
 	}
 }
 
@@ -59,30 +69,16 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 	}
 
 	// Agent addresses go through InteractiveSubAgentManager.SendInteractive
-	// (not Dispatcher, since SubAgents are not registered Channels).
 	if len(channelName) > 6 && channelName[:6] == "agent:" {
-		im, ok := ctx.Manager.(InteractiveSubAgentManager)
-		if !ok {
-			return nil, fmt.Errorf("agent messaging not available in this context")
-		}
-		// Parse "agent:<role>-<instance>" → role, instance
-		role, instance := parseAgentAddress(channelName)
-		if role == "" || instance == "" {
-			return nil, fmt.Errorf("invalid agent address %q: expected format agent:<role>-<instance>", params.To)
-		}
-		// Load role to get system prompt and capabilities for SendInteractive
-		roleDef, ok := loadRoleFromCtx(ctx, role)
-		if !ok {
-			return nil, fmt.Errorf("unknown agent role: %s", role)
-		}
-		result, err := im.SendInteractive(ctx, params.Message, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
-		if err != nil {
-			return nil, fmt.Errorf("agent send failed: %w", err)
-		}
-		return NewResult(result), nil
+		return t.sendToAgent(ctx, channelName, params.Message)
 	}
 
-	// Group and IM addresses go through Dispatcher
+	// Group addresses use meeting model
+	if len(channelName) > 6 && channelName[:6] == "group:" {
+		return t.sendToGroup(ctx, channelName, params.Message)
+	}
+
+	// IM addresses go through Dispatcher
 	if ctx.MessageSender == nil {
 		return nil, fmt.Errorf("message sending not available in this context")
 	}
@@ -96,6 +92,146 @@ func (t *SendMessageTool) Execute(ctx *ToolContext, raw string) (*ToolResult, er
 		return NewResult(result), nil
 	}
 	return NewResult(fmt.Sprintf("Message sent to %s", params.To)), nil
+}
+
+// sendToAgent sends a message to a single agent and returns the reply.
+func (t *SendMessageTool) sendToAgent(ctx *ToolContext, addr, message string) (*ToolResult, error) {
+	im, ok := ctx.Manager.(InteractiveSubAgentManager)
+	if !ok {
+		return nil, fmt.Errorf("agent messaging not available in this context")
+	}
+	role, instance := parseAgentAddress(addr)
+	if role == "" || instance == "" {
+		return nil, fmt.Errorf("invalid agent address %q: expected format agent:<role>/<instance>", addr)
+	}
+	roleDef, ok := loadRoleFromCtx(ctx, role)
+	if !ok {
+		return nil, fmt.Errorf("unknown agent role: %s", role)
+	}
+	result, err := im.SendInteractive(ctx, message, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
+	if err != nil {
+		return nil, fmt.Errorf("agent send failed: %w", err)
+	}
+	return NewResult(result), nil
+}
+
+// sendToGroup handles the meeting model for group chats.
+// Moderator messages without @mentions just add to history.
+// @mentioned agents receive the full discussion history + the question.
+func (t *SendMessageTool) sendToGroup(ctx *ToolContext, groupName, message string) (*ToolResult, error) {
+	gs, ok := GetGroupState(groupName)
+	if !ok {
+		return nil, fmt.Errorf("group %q not found (create it with CreateChat first)", groupName)
+	}
+	if gs.Closed {
+		return nil, fmt.Errorf("group %q is closed", groupName)
+	}
+
+	// Identify sender as the moderator
+	sender := "moderator"
+
+	// Parse @mentions from the message
+	mentions := parseMentions(message)
+
+	// Always add moderator message to history
+	gs.AddMessage(sender, message, false)
+
+	// No @mentions → just record, don't trigger anyone
+	if len(mentions) == 0 {
+		historyLen := len(gs.Messages)
+		return NewResult(fmt.Sprintf("Message added to group %s discussion (history: %d messages). No agents @mentioned, so no one was triggered.", groupName, historyLen)), nil
+	}
+
+	// Trigger each @mentioned agent sequentially
+	im, ok := ctx.Manager.(InteractiveSubAgentManager)
+	if !ok {
+		return nil, fmt.Errorf("agent messaging not available in this context")
+	}
+
+	var responses []string
+	for _, agentAddr := range mentions {
+		role, instance := parseAgentAddress(agentAddr)
+		if role == "" || instance == "" {
+			responses = append(responses, fmt.Sprintf("[ERROR] Invalid agent address: %s", agentAddr))
+			continue
+		}
+		if !gs.IsMember(agentAddr) {
+			responses = append(responses, fmt.Sprintf("[ERROR] %s is not a member of this group", agentAddr))
+			continue
+		}
+
+		roleDef, ok := loadRoleFromCtx(ctx, role)
+		if !ok {
+			responses = append(responses, fmt.Sprintf("[ERROR] Unknown agent role: %s", role))
+			continue
+		}
+
+		// Build the prompt with full discussion history
+		history := gs.GetHistory()
+		prompt := fmt.Sprintf(`You are participating in a group discussion. Here is the full conversation so far:
+
+%s
+
+---
+
+The moderator just @mentioned you. Please respond to their message. Stay focused on the topic and provide your analysis/opinion.`, history)
+
+		result, err := im.SendInteractive(ctx, prompt, role, roleDef.SystemPrompt, roleDef.AllowedTools, roleDef.Capabilities, instance, "")
+		if err != nil {
+			responses = append(responses, fmt.Sprintf("[ERROR] %s: %v", agentAddr, err))
+			continue
+		}
+
+		// Add agent's response to group history
+		gs.AddMessage(agentAddr, result, false)
+		responses = append(responses, fmt.Sprintf("[%s]:\n%s", agentAddr, result))
+	}
+
+	// Check round limit
+	gs.mu.Lock()
+	gs.Round++
+	round := gs.Round
+	maxRounds := gs.MaxRounds
+	gs.mu.Unlock()
+
+	if maxRounds > 0 && round >= maxRounds {
+		gs.Close(fmt.Sprintf("max rounds (%d) reached", maxRounds))
+	}
+
+	summary := fmt.Sprintf("Group %s — round %d/%d\nModerator: %s\n\n%s",
+		groupName, round, maxRounds, message, strings.Join(responses, "\n\n---\n\n"))
+
+	if gs.Closed {
+		summary += "\n\n[Group closed: max rounds reached]"
+	}
+
+	return NewResult(summary), nil
+}
+
+// parseMentions extracts @agent:role/instance addresses from a message.
+// Returns unique addresses in order of first appearance.
+func parseMentions(message string) []string {
+	var result []string
+	seen := make(map[string]bool)
+	// Find all @agent:xxx/yyy patterns
+	for i := 0; i < len(message); i++ {
+		if message[i] == '@' && i+6 < len(message) && message[i+1:i+7] == "agent:" {
+			// Find end of address (whitespace or end of string)
+			end := len(message)
+			for j := i + 7; j < len(message); j++ {
+				if message[j] == ' ' || message[j] == '\n' || message[j] == '\t' || message[j] == '\r' {
+					end = j
+					break
+				}
+			}
+			addr := message[i+1 : end] // strip the @
+			if addr != "" && !seen[addr] {
+				seen[addr] = true
+				result = append(result, addr)
+			}
+		}
+	}
+	return result
 }
 
 // parseAgentAddress splits "agent:<role>/<instance>" into (role, instance).

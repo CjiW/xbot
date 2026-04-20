@@ -80,8 +80,8 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 			return m, nil, true
 		}
 
-	case msg.String() == "ctrl+s":
-		// Ctrl+S: Open Sessions panel
+	case msg.String() == "ctrl+t":
+		// Ctrl+T: Open Sessions panel (T = Tabs/Sessions)
 		if m.panelMode == "" && !m.typing {
 			m.openSessionsPanel()
 			return m, nil, true
@@ -104,7 +104,9 @@ func (m *cliModel) handleKeyPress(msg tea.KeyPressMsg, wasTyping bool) (tea.Mode
 		}
 
 	case msg.Text == "^":
-		if m.panelMode == "" && m.inputHistoryIdx == -1 {
+		// ^ opens bg tasks panel only when input is empty AND there are running tasks.
+		// Gate prevents intercepting the ^ character during normal typing.
+		if m.panelMode == "" && m.inputHistoryIdx == -1 && m.bgTaskCount > 0 {
 			m.openBgTasksPanel()
 			return m, nil, true
 		}

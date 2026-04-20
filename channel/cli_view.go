@@ -681,7 +681,7 @@ func (m *cliModel) renderFooter() string {
 			if m.subscriptionMgr != nil {
 				hints = append(hints, m.ctrlKey("p", "Subs"))
 			}
-			hints = append(hints, m.ctrlKey("s", "Sessions"))
+			hints = append(hints, m.ctrlKey("t", "Sessions"))
 			if m.bgTaskCount > 0 {
 				hints = append(hints, m.keyHint("^", m.locale.FooterBgTasks))
 			}

@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build run dev clean ci clean-memory
+.PHONY: fmt lint test build run dev clean ci clean-memory install-cli
 
 BINARY_NAME := xbot
 
@@ -33,4 +33,8 @@ ci: lint build test
 clean-memory:
 	rm -rf .xbot/
 	@echo "Memory cleaned!"
+
+install-cli:
+	go build -ldflags "$(LDFLAGS)" -o /tmp/xbot-cli ./cmd/xbot-cli
+	sudo mv /tmp/xbot-cli /usr/local/bin/
 

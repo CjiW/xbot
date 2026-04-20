@@ -823,29 +823,29 @@ func (b *RemoteBackend) ClearProxyLLM(senderID string) {
 }
 
 func (b *RemoteBackend) SetUserModel(senderID, model string) error {
-	return b.callRPCVoid("set_user_model", map[string]string{"model": model})
+	return b.callRPCVoid("set_user_model", map[string]string{"model": model, "sender_id": senderID})
 }
 
 // SwitchModel switches the active model for a user (memory-only, like LLMFactory.SwitchModel).
 // Unlike SetUserModel, this does not require an existing LLMConfig.
 func (b *RemoteBackend) SwitchModel(senderID, model string) error {
-	return b.callRPCVoid("switch_model", map[string]string{"model": model})
+	return b.callRPCVoid("switch_model", map[string]string{"model": model, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserMaxContext(senderID string, maxContext int) error {
-	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext})
+	return b.callRPCVoid("set_user_max_context", map[string]any{"max_context": maxContext, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserMaxOutputTokens(senderID string, maxTokens int) error {
-	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"max_tokens": maxTokens})
+	return b.callRPCVoid("set_user_max_output_tokens", map[string]any{"max_tokens": maxTokens, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetUserThinkingMode(senderID string, mode string) error {
-	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"mode": mode})
+	return b.callRPCVoid("set_user_thinking_mode", map[string]string{"mode": mode, "sender_id": senderID})
 }
 
 func (b *RemoteBackend) SetLLMConcurrency(senderID string, personal int) error {
-	return b.callRPCVoid("set_llm_concurrency", map[string]any{"personal": personal})
+	return b.callRPCVoid("set_llm_concurrency", map[string]any{"personal": personal, "sender_id": senderID})
 }
 
 // ---------------------------------------------------------------------------
@@ -858,22 +858,22 @@ func (b *RemoteBackend) GetDefaultModel() string {
 }
 
 func (b *RemoteBackend) GetUserMaxContext(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_context", nil)
+	n, _ := b.callRPCInt("get_user_max_context", map[string]string{"sender_id": senderID})
 	return n
 }
 
 func (b *RemoteBackend) GetUserMaxOutputTokens(senderID string) int {
-	n, _ := b.callRPCInt("get_user_max_output_tokens", nil)
+	n, _ := b.callRPCInt("get_user_max_output_tokens", map[string]string{"sender_id": senderID})
 	return n
 }
 
 func (b *RemoteBackend) GetUserThinkingMode(senderID string) string {
-	s, _ := b.callRPCString("get_user_thinking_mode", nil)
+	s, _ := b.callRPCString("get_user_thinking_mode", map[string]string{"sender_id": senderID})
 	return s
 }
 
 func (b *RemoteBackend) GetLLMConcurrency(senderID string) int {
-	n, _ := b.callRPCInt("get_llm_concurrency", nil)
+	n, _ := b.callRPCInt("get_llm_concurrency", map[string]string{"sender_id": senderID})
 	return n
 }
 
@@ -1071,7 +1071,7 @@ func (b *RemoteBackend) KillBgTask(taskID string) error {
 }
 
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
-	raw, err := b.callRPC("list_subscriptions", nil)
+	raw, err := b.callRPC("list_subscriptions", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1086,7 +1086,7 @@ func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscripti
 }
 
 func (b *RemoteBackend) GetDefaultSubscription(senderID string) (*channel.Subscription, error) {
-	raw, err := b.callRPC("get_default_subscription", nil)
+	raw, err := b.callRPC("get_default_subscription", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}

@@ -1432,19 +1432,14 @@ func (wc *WebChannel) readPump(c *Client, si *sessionInfo) {
 			if msg.Channel != "" && msg.ChatID != "" {
 				msgChannel = msg.Channel
 				msgChatID = msg.ChatID
+				if msg.SenderID != "" {
+					msgSenderID = msg.SenderID
+				}
 				if msg.SenderName != "" {
 					msgSenderName = msg.SenderName
 				}
 				if msg.ChatType != "" {
 					msgChatType = msg.ChatType
-				}
-				// For CLI clients (si == nil), always use WS auth senderID
-				// (e.g. "admin"). CLI messages carry senderID="cli_user" but
-				// server-side per-user state (max_output_tokens, thinking_mode,
-				// token usage, subscriptions, etc.) is keyed by WS auth ID.
-				// Using "cli_user" would break all per-user settings.
-				if si != nil && msg.SenderID != "" {
-					msgSenderID = msg.SenderID
 				}
 			}
 			// Subscribe this client to receive messages for this chatID.

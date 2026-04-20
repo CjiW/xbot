@@ -672,7 +672,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.BgTaskManager() == nil {
 			return json.Marshal([]struct{}{})
 		}
-		tasks := backend.BgTaskManager().ListRunning(p.SessionKey)
+		// Return ALL tasks (running + done + error), not just running.
+		// The task panel needs to show completed tasks too.
+		tasks := backend.BgTaskManager().ListAllForSession(p.SessionKey)
 		// Strip internal fields before serialization
 		type bgTaskJSON struct {
 			ID         string `json:"id"`

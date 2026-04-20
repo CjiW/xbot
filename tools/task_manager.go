@@ -405,6 +405,22 @@ func (m *BackgroundTaskManager) ListRunning(sessionKey string) []*BackgroundTask
 	return tasks
 }
 
+// ListAllForSession returns all tasks for a session (running + done + error).
+// Used by task panel to show completed tasks as well.
+func (m *BackgroundTaskManager) ListAllForSession(sessionKey string) []*BackgroundTask {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids := m.sessions[sessionKey]
+	tasks := make([]*BackgroundTask, 0, len(ids))
+	for _, id := range ids {
+		if t, ok := m.tasks[id]; ok {
+			tasks = append(tasks, t)
+		}
+	}
+	return tasks
+}
+
 // OnComplete registers a callback for task completion in a session.
 // Only one callback per session is kept — subsequent calls replace the previous one.
 func (m *BackgroundTaskManager) OnComplete(sessionKey string, callback func(task *BackgroundTask)) {

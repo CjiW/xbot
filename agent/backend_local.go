@@ -397,7 +397,8 @@ func (b *LocalBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
 	if b.agent.bgTaskMgr == nil {
 		return nil, nil
 	}
-	tasks := b.agent.bgTaskMgr.ListRunning(sessionKey)
+	// Return all tasks (running + done + error) for the task panel.
+	tasks := b.agent.bgTaskMgr.ListAllForSession(sessionKey)
 	result := make([]BgTaskJSON, len(tasks))
 	for i, t := range tasks {
 		result[i] = BgTaskJSON{

@@ -497,7 +497,7 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 			return len(c.bgTaskMgr.ListRunning(key))
 		}
 		c.model.bgTaskListFn = func() []*tools.BackgroundTask {
-			return c.bgTaskMgr.ListRunning(key)
+			return c.bgTaskMgr.ListAllForSession(key)
 		}
 		c.model.bgTaskKillFn = func(taskID string) error {
 			return c.bgTaskMgr.Kill(taskID)

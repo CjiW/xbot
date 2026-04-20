@@ -568,17 +568,28 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		result := backend.MultiSession().GetMemoryStats(context.Background(), p.Channel, p.ChatID, senderID)
 		return json.Marshal(result)
 	case "get_user_token_usage":
+		// senderID from RPC params overrides auth senderID (CLI may use "cli_user"
+		// as its identity, while WS auth returns "admin" — we need to query by the
+		// actual business senderID that usage was recorded under).
+		usageSenderID := senderID
+		var usageP struct {
+			SenderID string `json:"sender_id"`
+		}
+		if err := json.Unmarshal(params, &usageP); err == nil && usageP.SenderID != "" {
+			usageSenderID = usageP.SenderID
+		}
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		usage, err := backend.MultiSession().GetUserTokenUsage(senderID)
+		usage, err := backend.MultiSession().GetUserTokenUsage(usageSenderID)
 		if err != nil {
 			return nil, err
 		}
 		return json.Marshal(usage)
 	case "get_daily_token_usage":
 		var p struct {
-			Days int `json:"days"`
+			Days     int    `json:"days"`
+			SenderID string `json:"sender_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
@@ -586,7 +597,11 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.MultiSession() == nil {
 			return nil, fmt.Errorf("multi-session not available")
 		}
-		daily, err := backend.MultiSession().GetDailyTokenUsage(senderID, p.Days)
+		usageSenderID := senderID
+		if p.SenderID != "" {
+			usageSenderID = p.SenderID
+		}
+		daily, err := backend.MultiSession().GetDailyTokenUsage(usageSenderID, p.Days)
 		if err != nil {
 			return nil, err
 		}

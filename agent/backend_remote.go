@@ -1005,7 +1005,7 @@ func (b *RemoteBackend) GetMemoryStats(ctx context.Context, ch, chatID, senderID
 }
 
 func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, error) {
-	raw, err := b.callRPC("get_user_token_usage", nil)
+	raw, err := b.callRPC("get_user_token_usage", map[string]string{"sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -1020,7 +1020,7 @@ func (b *RemoteBackend) GetUserTokenUsage(senderID string) (map[string]any, erro
 }
 
 func (b *RemoteBackend) GetDailyTokenUsage(senderID string, days int) ([]map[string]any, error) {
-	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"days": days})
+	raw, err := b.callRPC("get_daily_token_usage", map[string]any{"days": days, "sender_id": senderID})
 	if err != nil {
 		return nil, err
 	}

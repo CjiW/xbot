@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -356,7 +355,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		}
 		// Apply runtime changes for admin
 		if isAdmin(effectiveSenderID) {
-			applyRuntimeSetting(cfg, backend, p.Key, p.Value)
+			applyRuntimeSetting(cfg, backend, effectiveSenderID, p.Key, p.Value)
 		}
 		return nil, nil
 
@@ -1519,9 +1518,7 @@ func Run(args []string) error {
 	// DB is the source of truth — config.json may be stale after user changes.
 	if ss := backend.SettingsService(); ss != nil {
 		if vals, err := ss.GetSettings("cli", cliSenderID); err == nil {
-			for k, v := range vals {
-				applyRuntimeSetting(cfg, backend, k, v)
-			}
+			applyRuntimeSettings(cfg, backend, cliSenderID, vals)
 			log.Info("Agent runtime settings synced from DB")
 		}
 	}
@@ -2352,75 +2349,6 @@ func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.
 	return nil
 }
 
-// applyRuntimeSetting applies a setting change to the in-memory config and backend.
-// Used by both admin and non-admin users after the setting is persisted to DB.
-func applyRuntimeSetting(cfg *config.Config, backend agent.AgentBackend, key, value string) {
-	switch key {
-	case "llm_provider":
-		cfg.LLM.Provider = value
-	case "llm_api_key":
-		cfg.LLM.APIKey = value
-	case "llm_model":
-		cfg.LLM.Model = value
-	case "llm_base_url":
-		cfg.LLM.BaseURL = value
-	case "vanguard_model":
-		cfg.LLM.VanguardModel = value
-	case "balance_model":
-		cfg.LLM.BalanceModel = value
-	case "swift_model":
-		cfg.LLM.SwiftModel = value
-	case "sandbox_mode":
-		cfg.Sandbox.Mode = value
-	case "memory_provider":
-		cfg.Agent.MemoryProvider = value
-	case "tavily_api_key":
-		cfg.TavilyAPIKey = value
-	case "context_mode":
-		cfg.Agent.ContextMode = value
-		if backend != nil {
-			backend.SetContextMode(value)
-		}
-	case "max_iterations":
-		cfg.Agent.MaxIterations = mustParseInt(value, cfg.Agent.MaxIterations)
-		if backend != nil {
-			backend.SetMaxIterations(cfg.Agent.MaxIterations)
-		}
-	case "max_concurrency":
-		cfg.Agent.MaxConcurrency = mustParseInt(value, cfg.Agent.MaxConcurrency)
-		if backend != nil {
-			backend.SetMaxConcurrency(cfg.Agent.MaxConcurrency)
-		}
-	case "max_context_tokens":
-		cfg.Agent.MaxContextTokens = mustParseInt(value, cfg.Agent.MaxContextTokens)
-		if backend != nil {
-			backend.SetMaxContextTokens(cfg.Agent.MaxContextTokens)
-		}
-	case "enable_auto_compress":
-		b := strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
-		cfg.Agent.EnableAutoCompress = &b
-		// Also update runtime context manager
-		if backend != nil {
-			if b {
-				_ = backend.SetContextMode("phase1")
-			} else {
-				_ = backend.SetContextMode("none")
-			}
-		}
-	case "max_output_tokens":
-		if n, err := strconv.Atoi(value); err == nil && n >= 0 {
-			cfg.LLM.MaxOutputTokens = n
-			if backend != nil {
-				_ = backend.SetUserMaxOutputTokens(cliSenderID, n)
-			}
-		}
-	}
-	if backend != nil && backend.LLMFactory() != nil {
-		backend.LLMFactory().SetModelTiers(cfg.LLM)
-	}
-	_ = saveServerConfig(cfg)
-}
-
 // saveServerConfig persists only the config sections the server actually modifies.
 // It reads the current disk config first, overwrites ONLY LLM and Agent,
 // then writes back — all other sections are preserved untouched.
@@ -2438,14 +2366,6 @@ func saveServerConfig(cfg *config.Config) error {
 	merged.LLM = cfg.LLM     // via applyRuntimeSetting / rebuildLLMFromSubscription
 	merged.Agent = cfg.Agent // via applyRuntimeSetting (max_iterations, max_concurrency, etc.)
 	return config.SaveToFile(config.ConfigFilePath(), merged)
-}
-
-func mustParseInt(s string, def int) int {
-	var n int
-	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
-		return def
-	}
-	return n
 }
 
 // adminSenderID is the WS auth identity for admin users.

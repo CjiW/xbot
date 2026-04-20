@@ -190,9 +190,9 @@ func TestMigrateCLIUserSettingsFromGlobalIfNeeded_SkipsWhenUserAlreadyHasSetting
 func TestApplyRuntimeSetting_UpdatesConfig(t *testing.T) {
 	cfg := newTestConfig()
 	var backend agent.AgentBackend // nil is fine — we only test cfg mutation
-	applyRuntimeSetting(cfg, backend, "llm_model", "new-model")
-	applyRuntimeSetting(cfg, backend, "llm_base_url", "https://new.url")
-	applyRuntimeSetting(cfg, backend, "max_concurrency", "99")
+	applyRuntimeSetting(cfg, backend, "cli_user", "llm_model", "new-model")
+	applyRuntimeSetting(cfg, backend, "cli_user", "llm_base_url", "https://new.url")
+	applyRuntimeSetting(cfg, backend, "cli_user", "max_concurrency", "99")
 	if cfg.LLM.Model != "new-model" {
 		t.Fatalf("llm_model = %q, want %q", cfg.LLM.Model, "new-model")
 	}
@@ -201,6 +201,30 @@ func TestApplyRuntimeSetting_UpdatesConfig(t *testing.T) {
 	}
 	if cfg.Agent.MaxConcurrency != 99 {
 		t.Fatalf("max_concurrency = %d, want %d", cfg.Agent.MaxConcurrency, 99)
+	}
+}
+
+func TestAllRuntimeKeysHaveHandlers(t *testing.T) {
+	missing := missingHandlerKeys()
+	if len(missing) > 0 {
+		t.Errorf("settingHandlerRegistry is missing handlers for keys in channel.CLIRuntimeSettingKeys: %v\n"+
+			"Add entries to settingHandlerRegistry in setting_handlers.go for each missing key.", missing)
+	}
+}
+
+func TestApplyRuntimeSetting_WarnsOnUnknownKey(t *testing.T) {
+	cfg := newTestConfig()
+	var backend agent.AgentBackend
+	applyRuntimeSetting(cfg, backend, "cli_user", "totally_unknown_key", "value")
+	// Should not panic, just log a warning
+}
+
+func TestApplyRuntimeSetting_ThinkingMode(t *testing.T) {
+	cfg := newTestConfig()
+	var backend agent.AgentBackend
+	applyRuntimeSetting(cfg, backend, "cli_user", "thinking_mode", "enabled")
+	if cfg.LLM.ThinkingMode != "enabled" {
+		t.Fatalf("thinking_mode = %q, want %q", cfg.LLM.ThinkingMode, "enabled")
 	}
 }
 

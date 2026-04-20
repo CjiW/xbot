@@ -819,44 +819,8 @@ func main() {
 					}
 					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
-				// Push runtime state to server
-				// enable_auto_compress is a legacy alias for context_mode.
-				// Only apply it if context_mode is NOT also being set.
-				if v, ok := values["enable_auto_compress"]; ok {
-					if _, hasContextMode := values["context_mode"]; !hasContextMode {
-						if v == "true" {
-							_ = app.backend.SetContextMode("auto")
-						} else {
-							_ = app.backend.SetContextMode("none")
-						}
-					}
-				}
-				if v, ok := values["context_mode"]; ok && v != "" {
-					_ = app.backend.SetContextMode(v)
-				}
-				if v, ok := values["max_iterations"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.backend.SetMaxIterations(n)
-					}
-				}
-				if v, ok := values["max_concurrency"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.backend.SetMaxConcurrency(n)
-					}
-				}
-				if v, ok := values["max_context_tokens"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						app.backend.SetMaxContextTokens(n)
-					}
-				}
-				if v, ok := values["max_output_tokens"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						_ = app.backend.SetUserMaxOutputTokens("cli_user", n)
-					}
-				}
-				if v, ok := values["thinking_mode"]; ok {
-					_ = app.backend.SetUserThinkingMode("cli_user", v)
-				}
+				// Push runtime state to server via handler map
+				applyCLISettingsToBackend(app.backend, "cli_user", values)
 				return
 			}
 
@@ -867,78 +831,22 @@ func main() {
 				}
 				loadLLMFromDBSubscription(app.backend, app.cfg)
 			}
-			if v, ok := values["vanguard_model"]; ok {
-				app.cfg.LLM.VanguardModel = strings.TrimSpace(v)
-			}
-			if v, ok := values["balance_model"]; ok {
-				app.cfg.LLM.BalanceModel = strings.TrimSpace(v)
-			}
-			if v, ok := values["swift_model"]; ok {
-				app.cfg.LLM.SwiftModel = strings.TrimSpace(v)
-			}
+			// Apply all config field updates via handler map
+			applyCLISettingsToConfig(app.cfg, values)
+			// Model tiers (needs explicit check since config-only)
 			if app.backend != nil && (vanguardChanged || balanceChanged || swiftChanged) {
 				app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 			}
+			// Sandbox reinit (local-only, needs app.workDir closure)
 			if v, ok := values["sandbox_mode"]; ok && v != "" {
-				app.cfg.Sandbox.Mode = v
 				tools.ReinitSandbox(app.cfg.Sandbox, app.workDir)
 				if app.backend != nil {
 					app.backend.SetSandbox(tools.GetSandbox(), v)
 				}
 			}
-			if v, ok := values["memory_provider"]; ok && v != "" {
-				app.cfg.Agent.MemoryProvider = v
-			}
-			if v, ok := values["tavily_api_key"]; ok {
-				app.cfg.TavilyAPIKey = v
-			}
-			if v, ok := values["context_mode"]; ok && v != "" {
-				app.cfg.Agent.ContextMode = v
-				if app.backend != nil {
-					app.backend.SetContextMode(v)
-				}
-			}
-			if v, ok := values["max_iterations"]; ok {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					app.cfg.Agent.MaxIterations = n
-					if app.backend != nil {
-						app.backend.SetMaxIterations(n)
-					}
-				}
-			}
-			if v, ok := values["max_concurrency"]; ok {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					app.cfg.Agent.MaxConcurrency = n
-					if app.backend != nil {
-						app.backend.SetMaxConcurrency(n)
-					}
-				}
-			}
-			if v, ok := values["max_context_tokens"]; ok {
-				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-					app.cfg.Agent.MaxContextTokens = n
-					if app.backend != nil {
-						app.backend.SetMaxContextTokens(n)
-					}
-				}
-			}
-			if v, ok := values["max_output_tokens"]; ok {
-				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-					if app.backend != nil {
-						_ = app.backend.SetUserMaxOutputTokens(cliSenderID, n)
-					}
-					app.cfg.LLM.MaxOutputTokens = n
-				}
-			}
-			if v, ok := values["thinking_mode"]; ok {
-				if app.backend != nil {
-					_ = app.backend.SetUserThinkingMode(cliSenderID, v)
-				}
-				app.cfg.LLM.ThinkingMode = v
-			}
-			if v, ok := values["enable_auto_compress"]; ok {
-				b := v == "true"
-				app.cfg.Agent.EnableAutoCompress = &b
+			// Apply all backend runtime effects via handler map
+			if app.backend != nil {
+				applyCLISettingsToBackend(app.backend, cliSenderID, values)
 			}
 			loadLLMFromDBSubscription(app.backend, app.cfg)
 			if err := saveCLIConfig(app.cfg); err != nil {
@@ -958,33 +866,6 @@ func main() {
 						app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 					} else {
 						log.Warnf("Failed to rebuild LLM client: %v", err)
-					}
-				}
-			}
-			if app.backend != nil {
-				if v, ok := values["context_mode"]; ok && v != "" {
-					_ = app.backend.SetContextMode(v)
-				}
-				if v, ok := values["max_iterations"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.backend.SetMaxIterations(n)
-					}
-				}
-				if v, ok := values["max_concurrency"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						app.backend.SetMaxConcurrency(n)
-					}
-				}
-				if v, ok := values["max_context_tokens"]; ok {
-					if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-						app.backend.SetMaxContextTokens(n)
-					}
-				}
-				if v, ok := values["enable_auto_compress"]; ok {
-					if v == "true" {
-						_ = app.backend.SetContextMode("auto")
-					} else {
-						_ = app.backend.SetContextMode("none")
 					}
 				}
 			}

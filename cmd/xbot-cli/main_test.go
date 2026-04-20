@@ -505,3 +505,43 @@ func (b *fakeAgentBackend) TrimHistory(string, string, time.Time) error { return
 func (b *fakeAgentBackend) ResetTokenState()                            {}
 func (b *fakeAgentBackend) Close() error                                { return nil }
 func (b *fakeAgentBackend) Run(context.Context) error                   { return nil }
+
+func TestCLISettingHandlersCoversAllRuntimeKeys(t *testing.T) {
+	missing := missingCLIHandlerKeys()
+	if len(missing) > 0 {
+		t.Errorf("cliSettingHandlers is missing handlers for keys in channel.CLIRuntimeSettingKeys: %v\n"+
+			"Add entries to cliSettingHandlers in setting_handlers.go for each missing key.", missing)
+	}
+}
+
+func TestApplyCLISettingsToConfig(t *testing.T) {
+	cfg := &config.Config{}
+	handled := applyCLISettingsToConfig(cfg, map[string]string{
+		"llm_model":         "gpt-4.1",
+		"max_iterations":    "50",
+		"max_output_tokens": "4096",
+		"thinking_mode":     "enabled",
+		"context_mode":      "auto",
+	})
+	if cfg.LLM.Model != "gpt-4.1" {
+		t.Errorf("llm_model = %q, want %q", cfg.LLM.Model, "gpt-4.1")
+	}
+	if cfg.Agent.MaxIterations != 50 {
+		t.Errorf("max_iterations = %d, want %d", cfg.Agent.MaxIterations, 50)
+	}
+	if cfg.LLM.MaxOutputTokens != 4096 {
+		t.Errorf("max_output_tokens = %d, want %d", cfg.LLM.MaxOutputTokens, 4096)
+	}
+	if cfg.LLM.ThinkingMode != "enabled" {
+		t.Errorf("thinking_mode = %q, want %q", cfg.LLM.ThinkingMode, "enabled")
+	}
+	if cfg.Agent.ContextMode != "auto" {
+		t.Errorf("context_mode = %q, want %q", cfg.Agent.ContextMode, "auto")
+	}
+	// All keys should be handled
+	for _, k := range []string{"llm_model", "max_iterations", "max_output_tokens", "thinking_mode", "context_mode"} {
+		if !handled[k] {
+			t.Errorf("expected %q to be handled", k)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package channel
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,51 @@ var cliGlobalScopedSettingKeys = map[string]struct{}{
 	"enable_masking":    {},
 	"default_user":      {},
 	"privileged_user":   {},
+}
+
+// CLIRuntimeSettingKeys lists all setting keys that require runtime application
+// beyond DB persistence. Both serverapp and cmd/xbot-cli use this list to verify
+// every runtime-affecting key has a handler registered.
+//
+// To add a new runtime setting:
+//  1. Add the key here
+//  2. Add a handler to settingHandlerRegistry (serverapp) AND cliRuntimeHandlers (cmd/xbot-cli)
+//  3. That's it. The test TestAllRuntimeKeysHaveHandlers will catch omissions.
+var CLIRuntimeSettingKeys = []string{
+	"llm_provider",
+	"llm_api_key",
+	"llm_model",
+	"llm_base_url",
+	"vanguard_model",
+	"balance_model",
+	"swift_model",
+	"sandbox_mode",
+	"memory_provider",
+	"tavily_api_key",
+	"context_mode",
+	"max_iterations",
+	"max_concurrency",
+	"max_context_tokens",
+	"max_output_tokens",
+	"thinking_mode",
+	"enable_auto_compress",
+}
+
+// ParseSettingBool parses a boolean setting value.
+// Accepts "true", "1", "yes" (case-insensitive) as true; everything else as false.
+// Shared between serverapp and cmd/xbot-cli for consistent behavior.
+func ParseSettingBool(value string) bool {
+	return strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
+}
+
+// ParseSettingInt parses an integer setting value, returning fallback on failure.
+// Shared between serverapp and cmd/xbot-cli for consistent behavior.
+func ParseSettingInt(value string, fallback int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 var cliActionSettingKeys = map[string]struct{}{

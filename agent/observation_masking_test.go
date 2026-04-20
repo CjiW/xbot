@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,6 +117,42 @@ func TestObservationMaskStore_MaskedRecallStore(t *testing.T) {
 	}
 	if list[0]["id"] != obs.ID {
 		t.Fatal("id mismatch")
+	}
+}
+
+func TestObservationMaskStore_TenantScopedDiskLayout(t *testing.T) {
+	baseDir := t.TempDir()
+	store := NewObservationMaskStore(10)
+	store.SetBaseDir(baseDir)
+	store.SetTenantID(42)
+
+	obs42, _ := store.Mask("Shell", `{}`, "tenant-42", 0)
+	path42 := filepath.Join(baseDir, "42", obs42.ID+".json")
+	if _, err := os.Stat(path42); err != nil {
+		t.Fatalf("expected tenant 42 mask file at %s: %v", path42, err)
+	}
+
+	store.SetTenantID(99)
+	if got := store.Size(); got != 0 {
+		t.Fatalf("expected empty store after tenant switch, got size=%d", got)
+	}
+	obs99, _ := store.Mask("Read", `{}`, "tenant-99", 0)
+	path99 := filepath.Join(baseDir, "99", obs99.ID+".json")
+	if _, err := os.Stat(path99); err != nil {
+		t.Fatalf("expected tenant 99 mask file at %s: %v", path99, err)
+	}
+
+	if _, err := store.Recall(obs42.ID); err == nil {
+		t.Fatal("expected current tenant store to not recall another tenant's entry")
+	}
+
+	store.SetTenantID(42)
+	recalled, err := store.Recall(obs42.ID)
+	if err != nil {
+		t.Fatalf("expected tenant 42 recall to succeed: %v", err)
+	}
+	if recalled.Content != "tenant-42" {
+		t.Fatalf("unexpected recalled content: %q", recalled.Content)
 	}
 }
 

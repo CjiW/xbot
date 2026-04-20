@@ -295,7 +295,7 @@ Layer 4: ContextEdit → 精确删除/裁剪/替换
 - **保留策略**: 按 ratio 动态计算 keepGroups（3/5/8/12 组）
 - **活跃文件保护**: 最近 3 轮涉及的文件不会被 mask
 - **折叠优化**: 纯工具组（assistant.Content 为空）折叠为一对消息，减少 message 数量
-- **存储**: 纯内存 `ObservationMaskStore`，FIFO 淘汰，双重限制（200 条 / 2MB chars）
+- **存储**: `ObservationMaskStore` 按租户持久化到 `~/.xbot/mask/{tenantID}/`，同时保留内存缓存；FIFO 淘汰，双重限制（200 条 / 2MB chars）
 - **恢复**: `recall_masked` 工具
 - **压缩后清理**: `CleanOldEntries(cutoff)` 删除压缩点之前的记录
 

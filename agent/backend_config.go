@@ -43,6 +43,7 @@ func (bc BackendConfig) AgentConfig() Config {
 	}
 
 	offloadDir := filepath.Join(bc.XbotHome, "offload_store")
+	maskDir := filepath.Join(bc.XbotHome, "mask")
 
 	return Config{
 		Bus:                  bc.Bus,
@@ -78,5 +79,6 @@ func (bc BackendConfig) AgentConfig() Config {
 		SandboxIdleTimeout:   cfg.Sandbox.IdleTimeout,
 		PersonaIsolation:     bc.PersonaIsolation,
 		OffloadDir:           offloadDir,
+		MaskDir:              maskDir,
 	}
 }

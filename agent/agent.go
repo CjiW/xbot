@@ -496,8 +496,11 @@ type Config struct {
 	// 压缩后清理旧消息
 	PurgeOldMessages bool // 压缩后自动删除旧消息（默认 false）
 
-	// OffloadDir: offload 文件存储目录（默认 WorkDir/.xbot/offload_store）
+	// OffloadDir: offload 文件存储目录（默认 ~/.xbot/offload_store）
 	OffloadDir string
+
+	// MaskDir: mask 文件存储基目录（默认 ~/.xbot/mask/{tenantID}）
+	MaskDir string
 }
 
 // initStores 初始化各类存储和注册表，返回 skillStore, agentStore, chatHistory, registry, cardBuilder。
@@ -683,8 +686,13 @@ func initServices(a *Agent, cfg Config, multiSession *session.MultiTenantSession
 	// 初始化 ObservationMaskStore（Phase 3: Observation Masking）
 	// 默认关闭：通过 settings 的 enable_masking 开启。
 	// 始终创建（工具注册需要），但 engine 层通过 RunConfig.MaskStore 控制。
-	maskDir := filepath.Join(cfg.WorkDir, ".xbot", "mask_store")
-	a.maskStore = NewObservationMaskStore(200, maskDir)
+	// 磁盘落在全局 ~/.xbot/mask/{tenantID}/，避免污染当前工作目录。
+	maskDir := cfg.MaskDir
+	if maskDir == "" {
+		maskDir = filepath.Join(a.xbotHome, "mask")
+	}
+	a.maskStore = NewObservationMaskStore(200)
+	a.maskStore.SetBaseDir(maskDir)
 	go a.maskStore.CleanStale(7)
 
 	// 注册 offload_recall 工具（需要 OffloadStore 依赖注入）
@@ -1582,9 +1590,13 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		return nil, fmt.Errorf("get/create tenant session: %w", err)
 	}
 
-	// Set tenant ID for context editor persistence (context edits happen during engine run)
+	// Set tenant-scoped stores for this request.
+	tenantID := tenantSession.TenantID()
 	if a.contextEditor != nil {
-		a.contextEditor.SetTenantID(tenantSession.TenantID())
+		a.contextEditor.SetTenantID(tenantID)
+	}
+	if a.maskStore != nil {
+		a.maskStore.SetTenantID(tenantID)
 	}
 
 	// 缓存消息到聊天历史（用于 ChatHistory 工具查询）

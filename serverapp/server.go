@@ -1434,6 +1434,19 @@ func Run(args []string) error {
 		if err := migrateConfigSubscriptions(cfg, subSvc, adminSenderID); err != nil {
 			log.WithError(err).Warn("Failed to migrate config subscriptions to DB")
 		}
+		// Sync LLM client from DB's active subscription (not config.json).
+		// After migration, DB is the source of truth.
+		if defSub, err := subSvc.GetDefault(adminSenderID); err == nil && defSub != nil {
+			cfg.LLM.Provider = defSub.Provider
+			cfg.LLM.BaseURL = defSub.BaseURL
+			cfg.LLM.APIKey = defSub.APIKey
+			cfg.LLM.Model = defSub.Model
+			cfg.LLM.MaxOutputTokens = defSub.MaxOutputTokens
+			if newClient, err := createAdminLLM(cfg); err == nil {
+				backend.LLMFactory().SetDefaults(newClient, defSub.Model)
+				log.WithFields(log.Fields{"provider": defSub.Provider, "model": defSub.Model}).Info("LLM client synced from DB default subscription")
+			}
+		}
 	}
 
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）

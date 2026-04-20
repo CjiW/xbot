@@ -57,7 +57,11 @@ func GetGroupState(name string) (*GroupState, bool) {
 	if !ok {
 		return nil, false
 	}
-	return v.(*GroupState), true
+	gs, ok := v.(*GroupState)
+	if !ok {
+		return nil, false
+	}
+	return gs, true
 }
 
 // DeleteGroupState removes a group from the store.

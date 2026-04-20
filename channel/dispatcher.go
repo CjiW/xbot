@@ -77,12 +77,21 @@ func (d *Dispatcher) Stop() {
 	d.mu.RUnlock()
 }
 
-// Unregister removes a channel from the dispatcher.
+// Unregister removes a channel from the dispatcher and stops it.
+// This ensures goroutines are cleaned up when channels are removed.
 func (d *Dispatcher) Unregister(name string) {
 	d.mu.Lock()
-	delete(d.channels, name)
+	ch, ok := d.channels[name]
+	if ok {
+		delete(d.channels, name)
+	}
 	d.mu.Unlock()
-	log.WithField("channel", name).Info("Channel unregistered")
+	if ok {
+		ch.Stop()
+		log.WithField("channel", name).Info("Channel unregistered and stopped")
+	} else {
+		log.WithField("channel", name).Warn("Channel not found for unregister")
+	}
 }
 
 // SendMessage implements bus.MessageSender.

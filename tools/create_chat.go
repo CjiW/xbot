@@ -92,8 +92,8 @@ func (t *CreateChatTool) createAgentChat(ctx *ToolContext, params *CreateChatPar
 	}
 
 	im, ok := ctx.Manager.(InteractiveSubAgentManager)
-	if !ok {
-		return nil, fmt.Errorf("interactive SubAgent not supported in this context")
+	if !ok || im == nil {
+		return nil, fmt.Errorf("interactive SubAgent not supported in this context (type %T)", ctx.Manager)
 	}
 
 	// Load role definition

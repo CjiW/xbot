@@ -248,7 +248,9 @@ func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, 
 			settings["max_output_tokens"] = fmt.Sprintf("%d", sub.MaxOutputTokens)
 		}
 		for k, v := range settings {
-			_ = ss.SetSetting("cli", adminSenderID, k, v)
+			if err := ss.SetSetting("cli", adminSenderID, k, v); err != nil {
+				log.WithError(err).WithField("key", k).Warn("Failed to sync subscription settings to DB")
+			}
 		}
 	}
 

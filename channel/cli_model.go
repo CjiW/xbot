@@ -184,13 +184,19 @@ func (m *cliModel) updatePlaceholder() {
 	}
 }
 
-// cycleModel switches to the next model within the current subscription.
+// cycleModel switches to the next model across all subscriptions.
+// Uses ListAllModels() so models from ALL subscriptions are visible (not just the
+// current default LLM). When the target model belongs to a different subscription,
+// auto-switches the active subscription so the correct API credentials are used.
 func (m *cliModel) cycleModel() {
 	if m.channel == nil {
 		return
 	}
 
-	models := m.channel.modelLister.ListModels()
+	// Use ListAllModels to include models from ALL subscriptions, not just
+	// the current default LLM. This prevents "Only one model available" when
+	// the user has multiple subscriptions with different models.
+	models := m.channel.modelLister.ListAllModels()
 	if len(models) < 2 {
 		m.showTempStatus("Only one model available")
 		return
@@ -209,7 +215,24 @@ func (m *cliModel) cycleModel() {
 	m.cachedModelName = nextModel
 	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
 
-	// Persist via LLM subscriber (writes active subscription + derives cfg.LLM + saves)
+	// If the target model belongs to a different subscription, switch to it
+	// so the correct API credentials are used.
+	if m.subscriptionMgr != nil {
+		if subs, err := m.subscriptionMgr.List(""); err == nil {
+			for _, sub := range subs {
+				if sub.Model == nextModel {
+					if m.llmSubscriber != nil {
+						m.llmSubscriber.SwitchSubscription(m.senderID, &sub)
+					}
+					m.updateQuickSwitchModels(nextModel)
+					m.subGeneration++
+					return
+				}
+			}
+		}
+	}
+
+	// No matching subscription — just update model name on current subscription.
 	if m.llmSubscriber != nil {
 		m.llmSubscriber.SwitchModel(m.senderID, nextModel)
 	}
@@ -299,8 +322,10 @@ type cliModel struct {
 	needFlushQueue bool     // true = handleAgentMessage 后需要刷新队列
 
 	// --- Background tasks ---
-	bgTaskCount   int        // running background tasks (0 = no indicator)
-	bgTaskCountFn func() int // callback to get current bg task count (set by channel)
+	bgTaskCount   int                            // running background tasks (0 = no indicator)
+	bgTaskCountFn func() int                     // callback to get current bg task count (set by channel)
+	bgTaskListFn  func() []*tools.BackgroundTask // callback to list running tasks (remote mode)
+	bgTaskKillFn  func(taskID string) error      // callback to kill a task (remote mode)
 
 	// --- Interactive agents ---
 	agentCount      int                                                            // active interactive agent sessions (0 = no indicator)

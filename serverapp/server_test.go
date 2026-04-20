@@ -131,6 +131,8 @@ func (b fakeBackend) GetMemoryStats(_ context.Context, _, _, _ string) map[strin
 func (b fakeBackend) GetUserTokenUsage(_ string) (map[string]any, error)                 { return nil, nil }
 func (b fakeBackend) GetDailyTokenUsage(_ string, _ int) ([]map[string]any, error)       { return nil, nil }
 func (b fakeBackend) GetBgTaskCount(_ string) int                                        { return 0 }
+func (b fakeBackend) ListBgTasks(_ string) ([]agent.BgTaskJSON, error)                   { return nil, nil }
+func (b fakeBackend) KillBgTask(_ string) error                                          { return nil }
 func (b fakeBackend) GetHistory(_, _ string) ([]channel.HistoryMessage, error)           { return nil, nil }
 func (b fakeBackend) TrimHistory(_, _ string, _ time.Time) error                         { return nil }
 func (b fakeBackend) ResetTokenState()                                                   {}

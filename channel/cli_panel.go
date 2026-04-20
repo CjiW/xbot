@@ -81,11 +81,12 @@ func (m *cliModel) openSettingsPanel(schema []SettingDefinition, values map[stri
 		if _, ok := m.panelValues[def.Key]; !ok && def.DefaultValue != "" {
 			m.panelValues[def.Key] = def.DefaultValue
 		}
-		// Inject current subscription model list as combo options for llm_model.
-		// This limits the selector to models available on the current provider,
-		// while vanguard/balance/swift model selectors use ListAllModels (cross-subscription).
+		// Inject model list as combo options for llm_model.
+		// Use ListAllModels so models from ALL subscriptions are visible,
+		// not just the current default LLM. This allows the user to switch
+		// to a model on a different subscription (e.g. glm-5.1) directly.
 		if def.Key == "llm_model" && m.channel.modelLister != nil && len(def.Options) == 0 {
-			models := m.channel.modelLister.ListModels()
+			models := m.channel.modelLister.ListAllModels()
 			if len(models) > 0 {
 				opts := make([]SettingOption, len(models))
 				for j, mdl := range models {
@@ -486,12 +487,8 @@ func (m *cliModel) openBgTasksPanel() {
 	m.panelMode = "bgtasks"
 	m.relayoutViewport() // 缩小 viewport 为 panel 腾出空间
 
-	// Fetch tasks
-	if m.channel != nil && m.channel.bgTaskMgr != nil {
-		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-	} else {
-		m.panelBgTasks = nil
-	}
+	// Fetch tasks — use callback (works for both local and remote mode)
+	m.panelBgTasks = m.listBgTasks()
 
 	m.panelBgCursor = 0
 	m.panelBgViewing = false
@@ -506,13 +503,33 @@ func (m *cliModel) openBgTasksPanel() {
 	}
 }
 
+// listBgTasks returns running background tasks via callback or direct access.
+func (m *cliModel) listBgTasks() []*tools.BackgroundTask {
+	if m.bgTaskListFn != nil {
+		return m.bgTaskListFn()
+	}
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		return m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
+	}
+	return nil
+}
+
+// killBgTask kills a background task via callback or direct access.
+func (m *cliModel) killBgTask(taskID string) error {
+	if m.bgTaskKillFn != nil {
+		return m.bgTaskKillFn(taskID)
+	}
+	if m.channel != nil && m.channel.bgTaskMgr != nil {
+		return m.channel.bgTaskMgr.Kill(taskID)
+	}
+	return fmt.Errorf("background tasks not available")
+}
+
 // updateBgTasksPanel handles key events in the bg tasks panel.
 // Returns (handled, newModel, cmd).
 func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea.Cmd) {
 	// Refresh task list
-	if m.channel != nil && m.channel.bgTaskMgr != nil {
-		m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-	}
+	m.panelBgTasks = m.listBgTasks()
 	totalItems := len(m.panelBgTasks)
 
 	// Log viewing sub-mode
@@ -585,19 +602,17 @@ func (m *cliModel) updateBgTasksPanel(msg tea.KeyPressMsg) (bool, tea.Model, tea
 		if m.panelBgCursor >= 0 && m.panelBgCursor < len(m.panelBgTasks) {
 			task := m.panelBgTasks[m.panelBgCursor]
 			if task.Status == tools.BgTaskRunning {
-				if m.channel != nil && m.channel.bgTaskMgr != nil {
-					if err := m.channel.bgTaskMgr.Kill(task.ID); err != nil {
-						m.showTempStatus(fmt.Sprintf(m.locale.KillFailed, err))
-						return true, m, m.clearTempStatusCmd()
-					}
-					// Refresh list after kill
-					m.panelBgTasks = m.channel.bgTaskMgr.ListRunning(m.channel.bgSessionKey)
-					newTotal := len(m.panelBgTasks)
-					if m.panelBgCursor >= newTotal {
-						m.panelBgCursor = max(0, newTotal-1)
-					}
-					return true, m, nil
+				if err := m.killBgTask(task.ID); err != nil {
+					m.showTempStatus(fmt.Sprintf(m.locale.KillFailed, err))
+					return true, m, m.clearTempStatusCmd()
 				}
+				// Refresh list after kill
+				m.panelBgTasks = m.listBgTasks()
+				newTotal := len(m.panelBgTasks)
+				if m.panelBgCursor >= newTotal {
+					m.panelBgCursor = max(0, newTotal-1)
+				}
+				return true, m, nil
 			}
 		}
 		return true, m, nil

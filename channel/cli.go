@@ -374,6 +374,19 @@ func (c *CLIChannel) SetBgTaskManager(mgr *tools.BackgroundTaskManager, sessionK
 	c.updateBgTaskCountFn()
 }
 
+// SetBgTaskRemoteCallbacks configures remote-mode background task callbacks.
+// Used when BgTaskManager is not available (remote CLI mode) to enable
+// background task display and management via RPC.
+func (c *CLIChannel) SetBgTaskRemoteCallbacks(sessionKey string, countFn func() int, listFn func() []*tools.BackgroundTask, killFn func(taskID string) error) {
+	c.bgSessionKey = sessionKey
+	c.bgTaskKill = killFn
+	if c.model != nil {
+		c.model.bgTaskCountFn = countFn
+		c.model.bgTaskListFn = listFn
+		c.model.bgTaskKillFn = killFn
+	}
+}
+
 // LoadHistory loads session history into the CLI model.
 // Used by remote mode where history must be fetched via RPC after the WS connection
 // is established. Thread-safe: always goes through asyncCh to avoid racing with
@@ -482,6 +495,12 @@ func (c *CLIChannel) updateBgTaskCountFn() {
 		key := c.bgSessionKey
 		c.model.bgTaskCountFn = func() int {
 			return len(c.bgTaskMgr.ListRunning(key))
+		}
+		c.model.bgTaskListFn = func() []*tools.BackgroundTask {
+			return c.bgTaskMgr.ListRunning(key)
+		}
+		c.model.bgTaskKillFn = func(taskID string) error {
+			return c.bgTaskMgr.Kill(taskID)
 		}
 	}
 	// Wire agent count/list callbacks

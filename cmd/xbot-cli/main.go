@@ -272,6 +272,27 @@ func persistActiveSubscription(backend agent.AgentBackend, cfg *config.Config, v
 	if backend == nil {
 		return nil
 	}
+
+	// When only llm_model changes (no provider/key/url change), check if the
+	// target model belongs to a different subscription. If so, switch to that
+	// subscription instead of overwriting the current one's model field.
+	if v, ok := values["llm_model"]; ok && strings.TrimSpace(v) != "" {
+		targetModel := strings.TrimSpace(v)
+		_, providerChanged := values["llm_provider"]
+		_, keyChanged := values["llm_api_key"]
+		_, urlChanged := values["llm_base_url"]
+		if !providerChanged && !keyChanged && !urlChanged {
+			if sub := findSubscriptionByModel(backend, cfg, targetModel); sub != nil {
+				// Found a subscription with this model — switch to it.
+				// SetDefaultSubscription already handles LLM cache invalidation.
+				if sub.ID != "" {
+					return backend.SetDefaultSubscription(sub.ID)
+				}
+				return nil
+			}
+		}
+	}
+
 	sub := currentActiveSubscription(backend, cfg)
 	if sub == nil {
 		sub = &channel.Subscription{
@@ -316,6 +337,36 @@ func persistActiveSubscription(backend agent.AgentBackend, cfg *config.Config, v
 		return backend.AddSubscription(cliSenderID, *sub)
 	}
 	return backend.UpdateSubscription(sub.ID, *sub)
+}
+
+// findSubscriptionByModel searches all subscriptions (DB + config) for one whose
+// Model field matches the target model. Returns nil if not found.
+func findSubscriptionByModel(backend agent.AgentBackend, cfg *config.Config, targetModel string) *channel.Subscription {
+	// Check DB subscriptions first (remote + local with DB)
+	if backend != nil {
+		if subs, err := backend.ListSubscriptions(cliSenderID); err == nil {
+			for _, sub := range subs {
+				if sub.Model == targetModel {
+					return &sub
+				}
+			}
+		}
+	}
+	// Check config subscriptions (local-only fallback)
+	for _, sub := range localSeedSourceSubscriptions(cfg) {
+		if sub.Model == targetModel {
+			return &channel.Subscription{
+				ID:       sub.ID,
+				Name:     sub.Name,
+				Provider: sub.Provider,
+				BaseURL:  sub.BaseURL,
+				APIKey:   sub.APIKey,
+				Model:    sub.Model,
+				Active:   sub.Active,
+			}
+		}
+	}
+	return nil
 }
 
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
@@ -1163,6 +1214,39 @@ func main() {
 			app.backend.OnProgress(func(p *channel.CLIProgressPayload) {
 				cliCh.SendProgress(cliCfg.ChatID, p)
 			})
+			// Inject remote bg task callbacks (BgTaskManager is nil in remote mode)
+			bgSessionKey := "cli:" + cliCfg.ChatID
+			cliCh.SetBgTaskRemoteCallbacks(
+				bgSessionKey,
+				func() int { return app.backend.GetBgTaskCount(bgSessionKey) },
+				func() []*tools.BackgroundTask {
+					tasks, _ := app.backend.ListBgTasks(bgSessionKey)
+					if tasks == nil {
+						return nil
+					}
+					result := make([]*tools.BackgroundTask, len(tasks))
+					for i, t := range tasks {
+						result[i] = &tools.BackgroundTask{
+							ID:       t.ID,
+							Command:  t.Command,
+							Status:   tools.BgTaskStatus(t.Status),
+							Output:   t.Output,
+							ExitCode: t.ExitCode,
+							Error:    t.Error,
+						}
+						if sa, err := time.Parse(time.RFC3339, t.StartedAt); err == nil {
+							result[i].StartedAt = sa
+						}
+						if t.FinishedAt != "" {
+							if fa, err := time.Parse(time.RFC3339, t.FinishedAt); err == nil {
+								result[i].FinishedAt = &fa
+							}
+						}
+					}
+					return result
+				},
+				func(taskID string) error { return app.backend.KillBgTask(taskID) },
+			)
 			// Inject TrimHistoryFn for Ctrl+K session truncation (RPC-backed)
 			cliCh.SetTrimHistoryFn(func(cutoff time.Time) error {
 				return app.backend.TrimHistory("cli", cliCfg.ChatID, cutoff)

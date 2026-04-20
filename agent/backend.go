@@ -211,6 +211,12 @@ type AgentBackend interface {
 	// GetBgTaskCount returns the count of active background tasks.
 	GetBgTaskCount(sessionKey string) int
 
+	// ListBgTasks returns detailed info about running background tasks (remote: RPC-backed).
+	ListBgTasks(sessionKey string) ([]BgTaskJSON, error)
+
+	// KillBgTask terminates a background task by ID (remote: RPC-backed).
+	KillBgTask(taskID string) error
+
 	// ListSubscriptions lists LLM subscriptions.
 	ListSubscriptions(senderID string) ([]channel.Subscription, error)
 

@@ -526,7 +526,8 @@ type CLIChannel struct {
 	llmSubscriber   LLMSubscriber       // switches active LLM (propagated to model)
 
 	// Background tasks
-	bgTaskMgr *tools.BackgroundTaskManager
+	bgTaskMgr  *tools.BackgroundTaskManager
+	bgTaskKill func(taskID string) error // remote mode: RPC-backed kill
 
 	// Runner LLM access
 	llmClient    llm.LLM

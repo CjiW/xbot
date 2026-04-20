@@ -187,12 +187,11 @@ func (a *Agent) IndexGlobalTools() {
 
 // Agent 核心 Agent 引擎
 type Agent struct {
-	bus                     *bus.MessageBus
-	multiSession            *session.MultiTenantSession // Multi-tenant session manager
-	tools                   *tools.Registry
-	maxIterations           int
-	dynamicMaxTokensEnabled bool
-	purgeOldMessages        bool
+	bus              *bus.MessageBus
+	multiSession     *session.MultiTenantSession // Multi-tenant session manager
+	tools            *tools.Registry
+	maxIterations    int
+	purgeOldMessages bool
 
 	skills             *SkillStore
 	agents             *AgentStore
@@ -818,13 +817,12 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	agent := &Agent{
-		bus:                     cfg.Bus,
-		multiSession:            multiSession,
-		tools:                   registry,
-		maxIterations:           cfg.MaxIterations,
-		maxConcurrency:          cfg.MaxConcurrency,
-		dynamicMaxTokensEnabled: cfg.DynamicMaxTokens,
-		purgeOldMessages:        cfg.PurgeOldMessages,
+		bus:              cfg.Bus,
+		multiSession:     multiSession,
+		tools:            registry,
+		maxIterations:    cfg.MaxIterations,
+		maxConcurrency:   cfg.MaxConcurrency,
+		purgeOldMessages: cfg.PurgeOldMessages,
 
 		skills:             skillStore,
 		agents:             agentStore,
@@ -924,10 +922,6 @@ func (a *Agent) getMaxIterations() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
 	return a.maxIterations
-}
-
-func (a *Agent) dynamicMaxTokens() bool {
-	return a.dynamicMaxTokensEnabled
 }
 
 func (a *Agent) getMaxConcurrency() int {
@@ -1751,13 +1745,31 @@ func (a *Agent) processMessage(ctx context.Context, msg bus.InboundMessage) (*bu
 		}
 	}
 
-	// Wire drain callback so Run loop can inject bg notifications as tool messages
+	// Wire drain callback so Run loop can inject bg notifications as tool messages.
+	// Only return notifications matching THIS session's key. Other sessions' notifications
+	// are put back into the pending list to prevent cross-session contamination.
+	currentSessionKey := msg.Channel + ":" + msg.ChatID
 	cfg.DrainBgNotifications = func() []tools.BgNotification {
 		a.bgRunPendingMu.Lock()
 		pending := a.bgRunPending
 		a.bgRunPending = nil
 		a.bgRunPendingMu.Unlock()
-		return pending
+		var mine []tools.BgNotification
+		var others []tools.BgNotification
+		for _, n := range pending {
+			if n.SessionKey() == currentSessionKey {
+				mine = append(mine, n)
+			} else {
+				others = append(others, n)
+			}
+		}
+		// Put other sessions' notifications back
+		if len(others) > 0 {
+			a.bgRunPendingMu.Lock()
+			a.bgRunPending = append(a.bgRunPending, others...)
+			a.bgRunPendingMu.Unlock()
+		}
+		return mine
 	}
 	out := Run(ctx, cfg)
 	atomic.StoreInt32(&a.bgRunActive, 0)

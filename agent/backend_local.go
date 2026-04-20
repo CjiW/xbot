@@ -393,6 +393,36 @@ func (b *LocalBackend) GetBgTaskCount(sessionKey string) int {
 	return len(b.agent.bgTaskMgr.List(sessionKey))
 }
 
+func (b *LocalBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
+	if b.agent.bgTaskMgr == nil {
+		return nil, nil
+	}
+	tasks := b.agent.bgTaskMgr.ListRunning(sessionKey)
+	result := make([]BgTaskJSON, len(tasks))
+	for i, t := range tasks {
+		result[i] = BgTaskJSON{
+			ID:        t.ID,
+			Command:   t.Command,
+			Status:    string(t.Status),
+			StartedAt: t.StartedAt.Format(time.RFC3339),
+			ExitCode:  t.ExitCode,
+			Output:    t.Output,
+			Error:     t.Error,
+		}
+		if t.FinishedAt != nil {
+			result[i].FinishedAt = t.FinishedAt.Format(time.RFC3339)
+		}
+	}
+	return result, nil
+}
+
+func (b *LocalBackend) KillBgTask(taskID string) error {
+	if b.agent.bgTaskMgr == nil {
+		return fmt.Errorf("background tasks not available")
+	}
+	return b.agent.bgTaskMgr.Kill(taskID)
+}
+
 func (b *LocalBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	svc := b.agent.llmFactory.GetSubscriptionSvc()
 	if svc == nil {

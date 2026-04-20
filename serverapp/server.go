@@ -656,6 +656,55 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return json.Marshal(0)
 		}
 		return json.Marshal(len(backend.BgTaskManager().List(p.SessionKey)))
+	case "list_bg_tasks":
+		var p struct {
+			SessionKey string `json:"session_key"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() == nil {
+			return json.Marshal([]struct{}{})
+		}
+		tasks := backend.BgTaskManager().ListRunning(p.SessionKey)
+		// Strip internal fields before serialization
+		type bgTaskJSON struct {
+			ID         string `json:"id"`
+			Command    string `json:"command"`
+			Status     string `json:"status"`
+			StartedAt  string `json:"started_at"`
+			FinishedAt string `json:"finished_at,omitempty"`
+			Output     string `json:"output"`
+			ExitCode   int    `json:"exit_code"`
+			Error      string `json:"error,omitempty"`
+		}
+		result := make([]bgTaskJSON, len(tasks))
+		for i, t := range tasks {
+			result[i] = bgTaskJSON{
+				ID:        t.ID,
+				Command:   t.Command,
+				Status:    string(t.Status),
+				StartedAt: t.StartedAt.Format(time.RFC3339),
+				ExitCode:  t.ExitCode,
+				Output:    t.Output,
+				Error:     t.Error,
+			}
+			if t.FinishedAt != nil {
+				result[i].FinishedAt = t.FinishedAt.Format(time.RFC3339)
+			}
+		}
+		return json.Marshal(result)
+	case "kill_bg_task":
+		var p struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if backend.BgTaskManager() == nil {
+			return nil, fmt.Errorf("background tasks not available")
+		}
+		return nil, backend.BgTaskManager().Kill(p.TaskID)
 
 	// --- History ---
 	case "get_history":

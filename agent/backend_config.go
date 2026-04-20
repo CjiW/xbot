@@ -72,7 +72,6 @@ func (bc BackendConfig) AgentConfig() Config {
 		EnableAutoCompress:   cfg.Agent.EffectiveEnableAutoCompress(),
 		MaxContextTokens:     cfg.Agent.MaxContextTokens,
 		CompressionThreshold: cfg.Agent.CompressionThreshold,
-		DynamicMaxTokens:     cfg.Agent.EffectiveDynamicMaxTokens(),
 		ContextMode:          ContextMode(cfg.Agent.ContextMode),
 		MaxSubAgentDepth:     cfg.Agent.MaxSubAgentDepth,
 		PurgeOldMessages:     cfg.Agent.PurgeOldMessages,

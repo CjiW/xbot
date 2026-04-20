@@ -413,15 +413,17 @@ func (b *fakeAgentBackend) InspectInteractiveSession(context.Context, string, st
 func (b *fakeAgentBackend) GetSessionMessages(string, string, string, string) ([]agent.SessionMessage, bool) {
 	return nil, false
 }
-func (b *fakeAgentBackend) SetContextMode(string) error         { return nil }
-func (b *fakeAgentBackend) SetCWD(string, string, string) error { return nil }
-func (b *fakeAgentBackend) SetMaxIterations(int)                {}
-func (b *fakeAgentBackend) SetMaxConcurrency(int)               {}
-func (b *fakeAgentBackend) SetMaxContextTokens(int)             {}
-func (b *fakeAgentBackend) SetSandbox(tools.Sandbox, string)    {}
-func (b *fakeAgentBackend) GetCardBuilder() *tools.CardBuilder  { return nil }
-func (b *fakeAgentBackend) SetEventRouter(*event.Router)        {}
-func (b *fakeAgentBackend) GetBgTaskCount(string) int           { return 0 }
+func (b *fakeAgentBackend) SetContextMode(string) error                    { return nil }
+func (b *fakeAgentBackend) SetCWD(string, string, string) error            { return nil }
+func (b *fakeAgentBackend) SetMaxIterations(int)                           {}
+func (b *fakeAgentBackend) SetMaxConcurrency(int)                          {}
+func (b *fakeAgentBackend) SetMaxContextTokens(int)                        {}
+func (b *fakeAgentBackend) SetSandbox(tools.Sandbox, string)               {}
+func (b *fakeAgentBackend) GetCardBuilder() *tools.CardBuilder             { return nil }
+func (b *fakeAgentBackend) SetEventRouter(*event.Router)                   {}
+func (b *fakeAgentBackend) GetBgTaskCount(string) int                      { return 0 }
+func (b *fakeAgentBackend) ListBgTasks(string) ([]agent.BgTaskJSON, error) { return nil, nil }
+func (b *fakeAgentBackend) KillBgTask(string) error                        { return nil }
 func (b *fakeAgentBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	svc := b.factory.GetSubscriptionSvc()
 	subs, err := svc.List(senderID)

@@ -1039,6 +1039,37 @@ func (b *RemoteBackend) GetBgTaskCount(sessionKey string) int {
 	return n
 }
 
+// BgTaskJSON is a transport-only struct for serializing background tasks over RPC.
+type BgTaskJSON struct {
+	ID         string `json:"id"`
+	Command    string `json:"command"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Output     string `json:"output"`
+	ExitCode   int    `json:"exit_code"`
+	Error      string `json:"error,omitempty"`
+}
+
+func (b *RemoteBackend) ListBgTasks(sessionKey string) ([]BgTaskJSON, error) {
+	raw, err := b.callRPC("list_bg_tasks", map[string]string{"session_key": sessionKey})
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var result []BgTaskJSON
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal bg tasks: %w", err)
+	}
+	return result, nil
+}
+
+func (b *RemoteBackend) KillBgTask(taskID string) error {
+	return b.callRPCVoid("kill_bg_task", map[string]string{"task_id": taskID})
+}
+
 func (b *RemoteBackend) ListSubscriptions(senderID string) ([]channel.Subscription, error) {
 	raw, err := b.callRPC("list_subscriptions", nil)
 	if err != nil {

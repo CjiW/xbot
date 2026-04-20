@@ -169,7 +169,7 @@ type AgentConfig struct {
 	EnableAutoCompress   *bool   `json:"enable_auto_compress,omitempty"`
 	MaxContextTokens     int     `json:"max_context_tokens"`
 	CompressionThreshold float64 `json:"compression_threshold"`
-	DynamicMaxTokens     *bool   `json:"dynamic_max_tokens,omitempty"` // nil = true (default)
+	DynamicMaxTokens     *bool   `json:"dynamic_max_tokens,omitempty"` // DEPRECATED: no longer used, kept for config.json compat
 
 	PurgeOldMessages bool `json:"purge_old_messages"`
 
@@ -413,11 +413,6 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Agent.EnableAutoCompress = &b
 		}
 	}
-	if v := os.Getenv("AGENT_DYNAMIC_MAX_TOKENS"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.Agent.DynamicMaxTokens = &b
-		}
-	}
 	if v := os.Getenv("AGENT_MAX_CONTEXT_TOKENS"); v != "" {
 		if i, err := strconv.Atoi(v); err == nil && cfg.Agent.MaxContextTokens == 0 {
 			cfg.Agent.MaxContextTokens = i
@@ -634,15 +629,6 @@ func (a AgentConfig) EffectiveEnableAutoCompress() bool {
 		return true
 	}
 	return *a.EnableAutoCompress
-}
-
-// EffectiveDynamicMaxTokens returns whether dynamic max_tokens adjustment is enabled.
-// Default: true (enabled). Set agent.dynamic_max_tokens=false in config.json to disable.
-func (a AgentConfig) EffectiveDynamicMaxTokens() bool {
-	if a.DynamicMaxTokens == nil {
-		return true
-	}
-	return *a.DynamicMaxTokens
 }
 
 // Load 加载配置：先从全局 config.json 读取基础值，再用环境变量覆盖。

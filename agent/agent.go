@@ -889,8 +889,13 @@ func (a *Agent) SetContextMode(mode string) error {
 		return nil
 	}
 
+	// "auto" is a user-facing alias for "phase1" (automatic compression)
+	if target == "auto" {
+		target = ContextModePhase1
+	}
+
 	if !IsValidContextMode(target) {
-		return fmt.Errorf("invalid mode %q; valid: phase1, none, default", mode)
+		return fmt.Errorf("invalid mode %q; valid: phase1, auto, none, default", mode)
 	}
 
 	cfg.SetRuntimeMode(target)

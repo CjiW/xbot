@@ -156,8 +156,12 @@ func NewContextManager(cfg *ContextManagerConfig) ContextManager {
 // resolveContextMode determines the context mode from Config.
 func resolveContextMode(cfg Config) ContextMode {
 	if cfg.ContextMode != "" {
-		if IsValidContextMode(cfg.ContextMode) {
-			return cfg.ContextMode
+		m := ContextMode(cfg.ContextMode)
+		if m == "auto" {
+			return ContextModePhase1
+		}
+		if IsValidContextMode(m) {
+			return m
 		}
 		log.WithField("mode", cfg.ContextMode).Warn("Invalid AGENT_CONTEXT_MODE, ignoring")
 	}

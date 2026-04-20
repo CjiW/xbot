@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -2398,6 +2399,21 @@ func applyRuntimeSetting(cfg *config.Config, backend agent.AgentBackend, key, va
 	case "enable_auto_compress":
 		b := strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
 		cfg.Agent.EnableAutoCompress = &b
+		// Also update runtime context manager
+		if backend != nil {
+			if b {
+				_ = backend.SetContextMode("phase1")
+			} else {
+				_ = backend.SetContextMode("none")
+			}
+		}
+	case "max_output_tokens":
+		if n, err := strconv.Atoi(value); err == nil && n >= 0 {
+			cfg.LLM.MaxOutputTokens = n
+			if backend != nil {
+				_ = backend.SetUserMaxOutputTokens(cliSenderID, n)
+			}
+		}
 	}
 	if backend != nil && backend.LLMFactory() != nil {
 		backend.LLMFactory().SetModelTiers(cfg.LLM)

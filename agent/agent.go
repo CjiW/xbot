@@ -927,6 +927,9 @@ func (a *Agent) getMaxIterations() int {
 func (a *Agent) getMaxConcurrency() int {
 	a.contextManagerMu.RLock()
 	defer a.contextManagerMu.RUnlock()
+	if a.maxConcurrency < 1 {
+		return 1
+	}
 	return a.maxConcurrency
 }
 

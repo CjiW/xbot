@@ -156,7 +156,7 @@ func (s *UserLLMConfigService) SetConfig(cfg *UserLLMConfig) error {
 		"sender_id": cfg.SenderID,
 		"provider":  cfg.Provider,
 		"model":     cfg.Model,
-	}).Info("User LLM config saved")
+	}).Debug("User LLM config saved")
 
 	return nil
 }

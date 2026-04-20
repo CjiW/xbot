@@ -291,10 +291,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		// Always use WS auth senderID for admin CLI clients.
+		// See set_setting for rationale.
 		effectiveSenderID := senderID
-		if p.SenderID != "" {
-			effectiveSenderID = p.SenderID
-		}
 		// All users (including admin) go through DB settings service.
 		// Migrate config.json values on first access if DB has no data yet.
 		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
@@ -335,10 +334,10 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
+		// Always use WS auth senderID for admin CLI clients.
+		// CLI may pass senderID="cli_user" in params, but server-side state
+		// (settings, subscriptions, token usage) is keyed by WS auth ID.
 		effectiveSenderID := senderID
-		if p.SenderID != "" {
-			effectiveSenderID = p.SenderID
-		}
 		// All users (including admin) go through DB settings service.
 		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
 			return nil, err

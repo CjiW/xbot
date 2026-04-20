@@ -301,6 +301,7 @@ type iterToolSnap struct {
 	Label     string `json:"label,omitempty"`
 	Status    string `json:"status"`
 	ElapsedMS int64  `json:"elapsed_ms"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 // ConvertMessagesToHistory converts raw DB messages into HistoryMessages for CLI display.
@@ -368,6 +369,7 @@ func ConvertMessagesToHistory(msgs []llm.ChatMessage) []HistoryMessage {
 								Status:    t.Status,
 								Elapsed:   t.ElapsedMS,
 								Iteration: snap.Iteration,
+								Summary:   t.Summary,
 							}
 						}
 						iters = append(iters, HistoryIteration{

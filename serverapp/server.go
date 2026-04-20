@@ -492,7 +492,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
-		return json.Marshal(backend.LLMFactory().ListAllModelsForUser(senderID))
+		models := backend.LLMFactory().ListAllModelsForUser(senderID)
+		log.WithField("count", len(models)).Info("RPC list_all_models")
+		return json.Marshal(models)
 	case "set_model_tiers":
 		if !isAdmin(senderID) {
 			return nil, fmt.Errorf("admin only")

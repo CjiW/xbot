@@ -186,8 +186,9 @@ func (m *cliModel) updatePlaceholder() {
 
 // cycleModel switches to the next model across all subscriptions.
 // Uses ListAllModels() so models from ALL subscriptions are visible (not just the
-// current default LLM). When the target model belongs to a different subscription,
-// auto-switches the active subscription so the correct API credentials are used.
+// current default LLM). Cycles through the model names displayed in the status bar.
+// Note: this only changes the cached model name — the actual subscription switch
+// happens when a new LLM call is made (or via quick switch panel).
 func (m *cliModel) cycleModel() {
 	if m.channel == nil {
 		return
@@ -216,7 +217,7 @@ func (m *cliModel) cycleModel() {
 	m.showTempStatus(fmt.Sprintf("Model: %s", nextModel))
 
 	// If the target model belongs to a different subscription, switch to it
-	// so the correct API credentials are used.
+	// so the correct API credentials are used for subsequent LLM calls.
 	if m.subscriptionMgr != nil {
 		if subs, err := m.subscriptionMgr.List(""); err == nil {
 			for _, sub := range subs {

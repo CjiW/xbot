@@ -253,12 +253,14 @@ func adminSetSubscriptionModel(cfg *config.Config, backend agent.AgentBackend, i
 // rebuildLLMFromSubscription creates a new LLM client from a DB subscription
 // and sets it as the factory default.
 func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, sub *sqlite.LLMSubscription) error {
-	// Temporarily set cfg.LLM from subscription for createAdminLLM
+	// Update cfg.LLM from subscription
 	cfg.LLM.Provider = sub.Provider
 	cfg.LLM.BaseURL = sub.BaseURL
 	cfg.LLM.APIKey = sub.APIKey
 	cfg.LLM.Model = sub.Model
 	cfg.LLM.MaxOutputTokens = sub.MaxOutputTokens
+
+	// Rebuild LLM client
 	newClient, err := createAdminLLM(cfg)
 	if err != nil {
 		return fmt.Errorf("create LLM from subscription: %w", err)
@@ -268,6 +270,24 @@ func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, 
 		factory.SetModelTiers(cfg.LLM)
 		factory.Invalidate(adminSenderID)
 	}
+
+	// Sync LLM fields into user_settings so Settings panel shows correct values.
+	// Without this, user_settings retains stale base_url/api_key from a previous subscription.
+	if ss := backend.SettingsService(); ss != nil {
+		settings := map[string]string{
+			"llm_provider": sub.Provider,
+			"llm_base_url": sub.BaseURL,
+			"llm_api_key":  sub.APIKey,
+			"llm_model":    sub.Model,
+		}
+		if sub.MaxOutputTokens > 0 {
+			settings["max_output_tokens"] = fmt.Sprintf("%d", sub.MaxOutputTokens)
+		}
+		for k, v := range settings {
+			_ = ss.SetSetting("cli", adminSenderID, k, v)
+		}
+	}
+
 	return nil
 }
 
@@ -309,13 +329,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.SenderID != "" {
 			effectiveSenderID = p.SenderID
 		}
-		if effectiveSenderID == "admin" {
-			result, err := getGlobalCLISettings(cfg)
-			if err != nil {
-				return nil, err
-			}
-			return json.Marshal(result)
-		}
+		// All users (including admin) go through DB settings service.
+		// Migrate config.json values on first access if DB has no data yet.
 		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
 			return nil, err
 		}
@@ -325,6 +340,23 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		result, err := backend.SettingsService().GetSettings(p.Namespace, effectiveSenderID)
 		if err != nil {
 			return nil, err
+		}
+		// Inject current subscription's LLM values to override any stale DB values.
+		// This ensures Settings panel always shows the active subscription's endpoint,
+		// regardless of which user is asking (admin, cli_user, web user).
+		if subSvc := backend.LLMFactory().GetSubscriptionSvc(); subSvc != nil {
+			// Try user's own subscription first, then admin's
+			var sub *sqlite.LLMSubscription
+			if s, err := subSvc.GetDefault(effectiveSenderID); err == nil && s != nil {
+				sub = s
+			} else if s, err := subSvc.GetDefault(adminSenderID); err == nil && s != nil {
+				sub = s
+			}
+			if sub != nil {
+				result["llm_provider"] = sub.Provider
+				result["llm_base_url"] = sub.BaseURL
+				result["llm_model"] = sub.Model
+			}
 		}
 		return json.Marshal(result)
 	case "set_setting":
@@ -341,19 +373,21 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if p.SenderID != "" {
 			effectiveSenderID = p.SenderID
 		}
-		if effectiveSenderID == "admin" {
-			if err := setGlobalCLISetting(cfg, backend, p.Key, p.Value); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
+		// All users (including admin) go through DB settings service.
 		if err := migrateCLIUserSettingsFromGlobalIfNeeded(cfg, backend, p.Namespace, effectiveSenderID); err != nil {
 			return nil, err
 		}
 		if backend.SettingsService() == nil {
 			return nil, fmt.Errorf("settings service not available")
 		}
-		return nil, backend.SettingsService().SetSetting(p.Namespace, effectiveSenderID, p.Key, p.Value)
+		if err := backend.SettingsService().SetSetting(p.Namespace, effectiveSenderID, p.Key, p.Value); err != nil {
+			return nil, err
+		}
+		// Apply runtime changes for admin
+		if isAdmin(effectiveSenderID) {
+			applyRuntimeSetting(cfg, backend, p.Key, p.Value)
+		}
+		return nil, nil
 
 	// --- Max iterations / concurrency / context tokens ---
 	case "set_max_iterations":
@@ -2275,39 +2309,9 @@ func migrateCLIUserSettingsFromGlobalIfNeeded(cfg *config.Config, backend agent.
 	return nil
 }
 
-func getGlobalCLISettings(cfg *config.Config) (map[string]string, error) {
-	vals := map[string]string{
-		"llm_provider":       cfg.LLM.Provider,
-		"llm_api_key":        cfg.LLM.APIKey,
-		"llm_model":          cfg.LLM.Model,
-		"llm_base_url":       cfg.LLM.BaseURL,
-		"vanguard_model":     cfg.LLM.VanguardModel,
-		"balance_model":      cfg.LLM.BalanceModel,
-		"swift_model":        cfg.LLM.SwiftModel,
-		"sandbox_mode":       cfg.Sandbox.Mode,
-		"memory_provider":    cfg.Agent.MemoryProvider,
-		"tavily_api_key":     cfg.TavilyAPIKey,
-		"context_mode":       cfg.Agent.ContextMode,
-		"max_iterations":     fmt.Sprintf("%d", cfg.Agent.MaxIterations),
-		"max_concurrency":    fmt.Sprintf("%d", cfg.Agent.MaxConcurrency),
-		"max_context_tokens": fmt.Sprintf("%d", cfg.Agent.MaxContextTokens),
-		"theme":              "midnight",
-	}
-	if cfg.Agent.EnableAutoCompress != nil {
-		vals["enable_auto_compress"] = fmt.Sprintf("%t", *cfg.Agent.EnableAutoCompress)
-	} else {
-		vals["enable_auto_compress"] = "true"
-	}
-	if vals["sandbox_mode"] == "" {
-		vals["sandbox_mode"] = "none"
-	}
-	if vals["memory_provider"] == "" {
-		vals["memory_provider"] = "flat"
-	}
-	return vals, nil
-}
-
-func setGlobalCLISetting(cfg *config.Config, backend agent.AgentBackend, key, value string) error {
+// applyRuntimeSetting applies a setting change to the in-memory config and backend.
+// Used by both admin and non-admin users after the setting is persisted to DB.
+func applyRuntimeSetting(cfg *config.Config, backend agent.AgentBackend, key, value string) {
 	switch key {
 	case "llm_provider":
 		cfg.LLM.Provider = value
@@ -2331,26 +2335,32 @@ func setGlobalCLISetting(cfg *config.Config, backend agent.AgentBackend, key, va
 		cfg.TavilyAPIKey = value
 	case "context_mode":
 		cfg.Agent.ContextMode = value
-		backend.SetContextMode(value)
+		if backend != nil {
+			backend.SetContextMode(value)
+		}
 	case "max_iterations":
 		cfg.Agent.MaxIterations = mustParseInt(value, cfg.Agent.MaxIterations)
-		backend.SetMaxIterations(cfg.Agent.MaxIterations)
+		if backend != nil {
+			backend.SetMaxIterations(cfg.Agent.MaxIterations)
+		}
 	case "max_concurrency":
 		cfg.Agent.MaxConcurrency = mustParseInt(value, cfg.Agent.MaxConcurrency)
-		backend.SetMaxConcurrency(cfg.Agent.MaxConcurrency)
+		if backend != nil {
+			backend.SetMaxConcurrency(cfg.Agent.MaxConcurrency)
+		}
 	case "max_context_tokens":
 		cfg.Agent.MaxContextTokens = mustParseInt(value, cfg.Agent.MaxContextTokens)
-		backend.SetMaxContextTokens(cfg.Agent.MaxContextTokens)
+		if backend != nil {
+			backend.SetMaxContextTokens(cfg.Agent.MaxContextTokens)
+		}
 	case "enable_auto_compress":
 		b := strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes")
 		cfg.Agent.EnableAutoCompress = &b
-	default:
-		return nil
 	}
-	if backend.LLMFactory() != nil {
+	if backend != nil && backend.LLMFactory() != nil {
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
 	}
-	return config.SaveToFile(config.ConfigFilePath(), cfg)
+	_ = config.SaveToFile(config.ConfigFilePath(), cfg)
 }
 
 func mustParseInt(s string, def int) int {

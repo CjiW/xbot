@@ -183,27 +183,19 @@ func TestMigrateCLIUserSettingsFromGlobalIfNeeded_SkipsWhenUserAlreadyHasSetting
 	}
 }
 
-func TestGetGlobalCLISettings_IncludesExpectedScopes(t *testing.T) {
+func TestApplyRuntimeSetting_UpdatesConfig(t *testing.T) {
 	cfg := newTestConfig()
-	vals, err := getGlobalCLISettings(cfg)
-	if err != nil {
-		t.Fatalf("getGlobalCLISettings() error = %v", err)
+	var backend agent.AgentBackend // nil is fine — we only test cfg mutation
+	applyRuntimeSetting(cfg, backend, "llm_model", "new-model")
+	applyRuntimeSetting(cfg, backend, "llm_base_url", "https://new.url")
+	applyRuntimeSetting(cfg, backend, "max_concurrency", "99")
+	if cfg.LLM.Model != "new-model" {
+		t.Fatalf("llm_model = %q, want %q", cfg.LLM.Model, "new-model")
 	}
-	checks := map[string]string{
-		"llm_provider":         "openai",
-		"llm_model":            "gpt-4.1",
-		"sandbox_mode":         "docker",
-		"memory_provider":      "flat",
-		"context_mode":         "manual",
-		"max_iterations":       "321",
-		"max_concurrency":      "7",
-		"max_context_tokens":   "456789",
-		"enable_auto_compress": "false",
-		"theme":                "midnight",
+	if cfg.LLM.BaseURL != "https://new.url" {
+		t.Fatalf("llm_base_url = %q, want %q", cfg.LLM.BaseURL, "https://new.url")
 	}
-	for k, want := range checks {
-		if got := vals[k]; got != want {
-			t.Fatalf("%s = %q, want %q", k, got, want)
-		}
+	if cfg.Agent.MaxConcurrency != 99 {
+		t.Fatalf("max_concurrency = %d, want %d", cfg.Agent.MaxConcurrency, 99)
 	}
 }

@@ -789,11 +789,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return json.Marshal([]channel.Subscription{})
 		}
-		effectiveSenderID := senderID
-		if isAdmin(senderID) {
-			effectiveSenderID = "admin"
-		}
-		subs, err := svc.List(effectiveSenderID)
+		// list_subscriptions always uses the caller's senderID — no admin override.
+		// This ensures each user sees their own subscriptions.
+		subs, err := svc.List(senderID)
 		if err != nil {
 			return nil, err
 		}
@@ -814,11 +812,8 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if svc == nil {
 			return nil, nil
 		}
-		effectiveSenderID := senderID
-		if isAdmin(senderID) {
-			effectiveSenderID = "admin"
-		}
-		sub, err := svc.GetDefault(effectiveSenderID)
+		// get_default_subscription always uses the caller's senderID.
+		sub, err := svc.GetDefault(senderID)
 		if err != nil || sub == nil {
 			return nil, err
 		}

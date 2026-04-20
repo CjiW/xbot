@@ -207,47 +207,12 @@ func adminRemoveSubscription(cfg *config.Config, backend agent.AgentBackend, id 
 	return subSvc.Remove(id)
 }
 
-func adminSetDefaultSubscription(cfg *config.Config, backend agent.AgentBackend, id string) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	if err := subSvc.SetDefault(id); err != nil {
-		return fmt.Errorf("set default subscription in DB: %w", err)
-	}
-	// Rebuild LLM client from the new default subscription
-	sub, err := subSvc.Get(id)
-	if err != nil {
-		return fmt.Errorf("get subscription: %w", err)
-	}
-	return rebuildLLMFromSubscription(cfg, backend, sub)
-}
-
 func adminRenameSubscription(cfg *config.Config, backend agent.AgentBackend, id, name string) error {
 	subSvc := backend.LLMFactory().GetSubscriptionSvc()
 	if subSvc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
 	return subSvc.Rename(id, name)
-}
-
-func adminSetSubscriptionModel(cfg *config.Config, backend agent.AgentBackend, id, model string) error {
-	subSvc := backend.LLMFactory().GetSubscriptionSvc()
-	if subSvc == nil {
-		return fmt.Errorf("subscription service not available")
-	}
-	if err := subSvc.SetModel(id, model); err != nil {
-		return err
-	}
-	// If this is the default subscription, rebuild LLM client
-	def, _ := subSvc.GetDefault("admin")
-	if def != nil && def.ID == id {
-		sub, _ := subSvc.Get(id)
-		if sub != nil {
-			return rebuildLLMFromSubscription(cfg, backend, sub)
-		}
-	}
-	return nil
 }
 
 // rebuildLLMFromSubscription creates a new LLM client from a DB subscription
@@ -272,7 +237,6 @@ func rebuildLLMFromSubscription(cfg *config.Config, backend agent.AgentBackend, 
 	}
 
 	// Sync LLM fields into user_settings so Settings panel shows correct values.
-	// Without this, user_settings retains stale base_url/api_key from a previous subscription.
 	if ss := backend.SettingsService(); ss != nil {
 		settings := map[string]string{
 			"llm_provider": sub.Provider,
@@ -918,9 +882,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminSetDefaultSubscription(cfg, backend, p.ID)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -939,6 +900,9 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, err
 		}
 		backend.LLMFactory().Invalidate(sub.SenderID)
+		if err := backend.LLMFactory().SwitchSubscription(sub.SenderID, sub); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	case "rename_subscription":
 		var p struct {
@@ -975,9 +939,6 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		if isAdmin(senderID) {
-			return nil, adminSetSubscriptionModel(cfg, backend, p.ID, p.Model)
-		}
 		if backend.LLMFactory() == nil {
 			return nil, fmt.Errorf("LLM factory not available")
 		}
@@ -992,7 +953,23 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 		if !isAdmin(senderID) && sub.SenderID != senderID {
 			return nil, fmt.Errorf("subscription not found")
 		}
-		return nil, svc.SetModel(p.ID, p.Model)
+		if err := svc.SetModel(p.ID, p.Model); err != nil {
+			return nil, err
+		}
+		updated, err := svc.Get(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		if updated != nil {
+			def, _ := svc.GetDefault(updated.SenderID)
+			if def != nil && def.ID == updated.ID {
+				backend.LLMFactory().Invalidate(updated.SenderID)
+				if err := backend.LLMFactory().SwitchSubscription(updated.SenderID, updated); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return nil, nil
 
 	case "reset_token_state":
 		backend.ResetTokenState()
@@ -1478,6 +1455,17 @@ func Run(args []string) error {
 		}
 	}
 
+	// Sync Agent runtime settings from DB (admin user).
+	// DB is the source of truth — config.json may be stale after user changes.
+	if ss := backend.SettingsService(); ss != nil {
+		if vals, err := ss.GetSettings("cli", adminSenderID); err == nil {
+			for k, v := range vals {
+				applyRuntimeSetting(cfg, backend, k, v)
+			}
+			log.Info("Agent runtime settings synced from DB")
+		}
+	}
+
 	// 注册 OAuth 和 Feishu MCP 工具（如果启用）
 	if cfg.OAuth.Enable && oauthManager != nil {
 		// 注册 OAuth 工具
@@ -1689,7 +1677,7 @@ func Run(args []string) error {
 					return fmt.Errorf("unknown tier: %s", tier)
 				}
 				backend.LLMFactory().SetModelTiers(cfg.LLM)
-				return config.SaveToFile(config.ConfigFilePath(), cfg)
+				return saveServerConfig(cfg)
 			},
 			LLMListAllModels: func() []string {
 				return backend.LLMFactory().ListAllModelsForUser("")
@@ -2355,7 +2343,26 @@ func applyRuntimeSetting(cfg *config.Config, backend agent.AgentBackend, key, va
 	if backend != nil && backend.LLMFactory() != nil {
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
 	}
-	_ = config.SaveToFile(config.ConfigFilePath(), cfg)
+	_ = saveServerConfig(cfg)
+}
+
+// saveServerConfig persists only the config sections the server actually modifies.
+// It reads the current disk config first, overwrites ONLY LLM and Agent,
+// then writes back — all other sections are preserved untouched.
+//
+// ⚠️ IMPORTANT: Do NOT add more sections here without careful review.
+// Every field copied here must be one that the server actually modifies at runtime.
+// Copying extra fields (Sandbox, CLI, Admin, Web, etc.) will overwrite user-set
+// values with in-memory defaults, which is exactly the class of bug this function prevents.
+func saveServerConfig(cfg *config.Config) error {
+	merged := config.LoadFromFile(config.ConfigFilePath())
+	if merged == nil {
+		merged = &config.Config{}
+	}
+	// Server only ever modifies these two sections:
+	merged.LLM = cfg.LLM     // via applyRuntimeSetting / rebuildLLMFromSubscription
+	merged.Agent = cfg.Agent // via applyRuntimeSetting (max_iterations, max_concurrency, etc.)
+	return config.SaveToFile(config.ConfigFilePath(), merged)
 }
 
 func mustParseInt(s string, def int) int {

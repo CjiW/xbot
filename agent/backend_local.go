@@ -434,11 +434,15 @@ func (b *LocalBackend) AddSubscription(senderID string, sub channel.Subscription
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	return svc.Add(&sqlite.LLMSubscription{
+	if err := svc.Add(&sqlite.LLMSubscription{
 		ID: sub.ID, SenderID: senderID, Name: sub.Name,
 		Provider: sub.Provider, BaseURL: sub.BaseURL, APIKey: sub.APIKey,
 		Model: sub.Model, IsDefault: sub.Active,
-	})
+	}); err != nil {
+		return err
+	}
+	b.agent.llmFactory.Invalidate(senderID)
+	return nil
 }
 
 func (b *LocalBackend) RemoveSubscription(id string) error {
@@ -470,6 +474,9 @@ func (b *LocalBackend) SetDefaultSubscription(id string) error {
 	sub, err := svc.Get(id)
 	if err == nil && sub != nil {
 		b.agent.llmFactory.Invalidate(sub.SenderID)
+		if err := b.agent.llmFactory.SwitchSubscription(sub.SenderID, sub); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -487,15 +494,31 @@ func (b *LocalBackend) UpdateSubscription(id string, sub channel.Subscription) e
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	dbSub := &sqlite.LLMSubscription{
-		ID:       sub.ID,
-		Name:     sub.Name,
-		Provider: sub.Provider,
-		BaseURL:  sub.BaseURL,
-		APIKey:   sub.APIKey,
-		Model:    sub.Model,
+	existing, err := svc.Get(id)
+	if err != nil {
+		return err
 	}
-	return svc.Update(dbSub)
+	if existing == nil {
+		return fmt.Errorf("subscription %s not found", id)
+	}
+	dbSub := &sqlite.LLMSubscription{
+		ID:              id,
+		SenderID:        existing.SenderID,
+		Name:            sub.Name,
+		Provider:        sub.Provider,
+		BaseURL:         sub.BaseURL,
+		APIKey:          sub.APIKey,
+		Model:           sub.Model,
+		MaxContext:      existing.MaxContext,
+		MaxOutputTokens: existing.MaxOutputTokens,
+		ThinkingMode:    existing.ThinkingMode,
+		IsDefault:       sub.Active,
+	}
+	if err := svc.Update(dbSub); err != nil {
+		return err
+	}
+	b.agent.llmFactory.Invalidate(existing.SenderID)
+	return nil
 }
 
 func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
@@ -503,7 +526,17 @@ func (b *LocalBackend) SetSubscriptionModel(id, model string) error {
 	if svc == nil {
 		return fmt.Errorf("subscription service not available")
 	}
-	return svc.SetModel(id, model)
+	sub, err := svc.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := svc.SetModel(id, model); err != nil {
+		return err
+	}
+	if sub != nil {
+		b.agent.llmFactory.Invalidate(sub.SenderID)
+	}
+	return nil
 }
 
 func (b *LocalBackend) GetHistory(ch, chatID string) ([]channel.HistoryMessage, error) {

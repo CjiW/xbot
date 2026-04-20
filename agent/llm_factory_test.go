@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"xbot/config"
+	"xbot/llm"
+	"xbot/storage/sqlite"
 )
 
 func TestGuessProvider(t *testing.T) {
@@ -252,5 +254,25 @@ func TestResolveTierModel_AllUnconfigured(t *testing.T) {
 	}
 	if model != "" {
 		t.Errorf("model = %q, want empty (no tiers configured)", model)
+	}
+}
+
+func TestHasCustomLLMChecksSubscriptionSvc(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XBOT_HOME", dir)
+	db, err := sqlite.Open(config.DBFilePath())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	factory := NewLLMFactory(sqlite.NewUserLLMConfigService(db), &llm.MockLLM{}, "default-model")
+	subSvc := sqlite.NewLLMSubscriptionService(db)
+	factory.SetSubscriptionSvc(subSvc)
+	if err := subSvc.Add(&sqlite.LLMSubscription{ID: "sub-1", SenderID: "cli_user", Name: "s1", Provider: "openai", BaseURL: "https://example.com/v1", APIKey: "sk-test", Model: "m1", IsDefault: true}); err != nil {
+		t.Fatalf("add sub: %v", err)
+	}
+	if !factory.HasCustomLLM("cli_user") {
+		t.Fatal("expected HasCustomLLM to return true when default subscription exists")
 	}
 }

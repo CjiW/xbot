@@ -46,6 +46,278 @@ import (
 // saveWg tracks in-flight config saves so SIGINT can wait for them.
 var saveWg sync.WaitGroup
 
+const cliSenderID = "cli_user"
+
+// saveCLIConfig merges CLI-owned global fields into the latest on-disk config.
+// It intentionally preserves unrelated sections like on-disk subscriptions and
+// existing remote CLI connection settings unless the caller provides overrides.
+// refreshRemoteValuesCache fetches current settings from the remote server
+// and updates the local cache. Called from a background goroutine — never from
+// the BubbleTea Update loop (which would freeze the TUI on WS disconnect).
+func (app *cliApp) refreshRemoteValuesCache() {
+	if app.backend == nil {
+		return
+	}
+	vals := make(map[string]string)
+	if sv, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
+		for k, v := range sv {
+			vals[k] = v
+		}
+	}
+	vals["llm_model"] = app.backend.GetDefaultModel()
+	vals["context_mode"] = app.backend.GetContextMode()
+	if _, ok := vals["sandbox_mode"]; !ok {
+		vals["sandbox_mode"] = "none"
+	}
+	if _, ok := vals["memory_provider"]; !ok {
+		vals["memory_provider"] = "flat"
+	}
+	if _, ok := vals["max_iterations"]; !ok {
+		vals["max_iterations"] = "30"
+	}
+	if _, ok := vals["max_concurrency"]; !ok {
+		vals["max_concurrency"] = "3"
+	}
+	if _, ok := vals["max_context_tokens"]; !ok {
+		vals["max_context_tokens"] = "0"
+	}
+	app.valuesCacheMu.Lock()
+	app.valuesCache = vals
+	app.valuesCacheMu.Unlock()
+}
+
+func saveCLIConfig(cfg *config.Config) error {
+	merged := config.LoadFromFile(config.ConfigFilePath())
+	if merged == nil {
+		merged = &config.Config{}
+	}
+	// CLI only ever modifies these sections:
+	merged.LLM = cfg.LLM     // via settings panel / subscription switch
+	merged.Agent = cfg.Agent // via settings panel (max_iterations, etc.)
+	// CLI remote connection settings: only write if non-empty (e.g. first setup)
+	if cfg.CLI.ServerURL != "" || cfg.CLI.Token != "" {
+		merged.CLI = cfg.CLI
+	}
+	return config.SaveToFile(config.ConfigFilePath(), merged)
+}
+
+func isCLISubscriptionSettingKey(key string) bool {
+	switch key {
+	case "llm_provider", "llm_api_key", "llm_model", "llm_base_url":
+		return true
+	default:
+		return false
+	}
+}
+
+func localSeedSourceSubscriptions(cfg *config.Config) []config.SubscriptionConfig {
+	if len(cfg.Subscriptions) > 0 {
+		return cfg.Subscriptions
+	}
+	if strings.TrimSpace(cfg.LLM.Provider) == "" &&
+		strings.TrimSpace(cfg.LLM.BaseURL) == "" &&
+		strings.TrimSpace(cfg.LLM.APIKey) == "" &&
+		strings.TrimSpace(cfg.LLM.Model) == "" {
+		return nil
+	}
+	name := strings.TrimSpace(cfg.LLM.Provider)
+	if name == "" {
+		name = "default"
+	}
+	return []config.SubscriptionConfig{{
+		ID:              "default",
+		Name:            name,
+		Provider:        cfg.LLM.Provider,
+		BaseURL:         cfg.LLM.BaseURL,
+		APIKey:          cfg.LLM.APIKey,
+		Model:           cfg.LLM.Model,
+		MaxOutputTokens: cfg.LLM.MaxOutputTokens,
+		ThinkingMode:    cfg.LLM.ThinkingMode,
+		Active:          true,
+	}}
+}
+
+func hasActiveSeedSubscription(subs []config.SubscriptionConfig) bool {
+	for _, sub := range subs {
+		if sub.Active {
+			return true
+		}
+	}
+	return false
+}
+
+func seedSubscriptionsForSender(svc *sqlite.LLMSubscriptionService, senderID string, subs []config.SubscriptionConfig) error {
+	if svc == nil || len(subs) == 0 {
+		return nil
+	}
+	hasActive := hasActiveSeedSubscription(subs)
+	for i, sub := range subs {
+		if err := svc.Add(&sqlite.LLMSubscription{
+			ID:              sub.ID,
+			SenderID:        senderID,
+			Name:            sub.Name,
+			Provider:        sub.Provider,
+			BaseURL:         sub.BaseURL,
+			APIKey:          sub.APIKey,
+			Model:           sub.Model,
+			MaxOutputTokens: sub.MaxOutputTokens,
+			ThinkingMode:    sub.ThinkingMode,
+			IsDefault:       sub.Active || (i == 0 && !hasActive),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedLocalDBSubscriptionsFromConfig(db *sqlite.DB, cfg *config.Config) error {
+	if db == nil {
+		return nil
+	}
+	svc := sqlite.NewLLMSubscriptionService(db)
+	sourceSubs := localSeedSourceSubscriptions(cfg)
+	if len(sourceSubs) == 0 {
+		return nil
+	}
+	existing, err := svc.List(cliSenderID)
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	return seedSubscriptionsForSender(svc, cliSenderID, sourceSubs)
+}
+
+func loadLLMFromLocalDB(db *sqlite.DB, cfg *config.Config) bool {
+	if db == nil {
+		return false
+	}
+	llmCfg, err := sqlite.NewUserLLMConfigService(db).GetConfig(cliSenderID)
+	if err != nil || llmCfg == nil {
+		return false
+	}
+	cfg.LLM.Provider = llmCfg.Provider
+	cfg.LLM.BaseURL = llmCfg.BaseURL
+	cfg.LLM.APIKey = llmCfg.APIKey
+	cfg.LLM.Model = llmCfg.Model
+	cfg.LLM.MaxOutputTokens = llmCfg.MaxOutputTokens
+	cfg.LLM.ThinkingMode = llmCfg.ThinkingMode
+	return true
+}
+
+func seedLocalDBSubscriptions(backend agent.AgentBackend, cfg *config.Config) error {
+	if backend == nil || backend.LLMFactory() == nil {
+		return nil
+	}
+	svc := backend.LLMFactory().GetSubscriptionSvc()
+	if svc == nil {
+		return nil
+	}
+	sourceSubs := localSeedSourceSubscriptions(cfg)
+	if len(sourceSubs) == 0 {
+		return nil
+	}
+	existing, err := svc.List(cliSenderID)
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	return seedSubscriptionsForSender(svc, cliSenderID, sourceSubs)
+}
+
+func loadLLMFromDBSubscription(backend agent.AgentBackend, cfg *config.Config) bool {
+	if backend == nil {
+		return false
+	}
+	sub, err := backend.GetDefaultSubscription(cliSenderID)
+	if err != nil || sub == nil {
+		return false
+	}
+	cfg.LLM.Provider = sub.Provider
+	cfg.LLM.BaseURL = sub.BaseURL
+	cfg.LLM.APIKey = sub.APIKey
+	cfg.LLM.Model = sub.Model
+	cfg.LLM.MaxOutputTokens = backend.GetUserMaxOutputTokens(cliSenderID)
+	cfg.LLM.ThinkingMode = backend.GetUserThinkingMode(cliSenderID)
+	return true
+}
+
+func currentActiveSubscription(backend agent.AgentBackend, cfg *config.Config) *channel.Subscription {
+	if backend != nil {
+		if sub, err := backend.GetDefaultSubscription(cliSenderID); err == nil && sub != nil {
+			return sub
+		}
+	}
+	sourceSubs := localSeedSourceSubscriptions(cfg)
+	for i, sub := range sourceSubs {
+		if sub.Active || (i == 0 && !hasActiveSeedSubscription(sourceSubs)) {
+			return &channel.Subscription{
+				ID:       sub.ID,
+				Name:     sub.Name,
+				Provider: sub.Provider,
+				BaseURL:  sub.BaseURL,
+				APIKey:   sub.APIKey,
+				Model:    sub.Model,
+				Active:   true,
+			}
+		}
+	}
+	return nil
+}
+
+func persistActiveSubscription(backend agent.AgentBackend, cfg *config.Config, values map[string]string) error {
+	if backend == nil {
+		return nil
+	}
+	sub := currentActiveSubscription(backend, cfg)
+	if sub == nil {
+		sub = &channel.Subscription{
+			ID:       "default",
+			Name:     "default",
+			Provider: "openai",
+			Active:   true,
+		}
+	}
+
+	oldProvider := sub.Provider
+	if v, ok := values["llm_provider"]; ok && strings.TrimSpace(v) != "" {
+		sub.Provider = strings.TrimSpace(v)
+		if sub.Name == "" || sub.Name == oldProvider {
+			sub.Name = sub.Provider
+		}
+	}
+	if v, ok := values["llm_api_key"]; ok && strings.TrimSpace(v) != "" {
+		sub.APIKey = strings.TrimSpace(v)
+	}
+	if v, ok := values["llm_model"]; ok && strings.TrimSpace(v) != "" {
+		sub.Model = strings.TrimSpace(v)
+	}
+	if v, ok := values["llm_base_url"]; ok && strings.TrimSpace(v) != "" {
+		sub.BaseURL = strings.TrimSpace(v)
+	} else if provider, ok := values["llm_provider"]; ok && strings.TrimSpace(provider) != "" {
+		switch strings.TrimSpace(provider) {
+		case "anthropic":
+			if sub.BaseURL == "" || sub.BaseURL == "https://api.openai.com/v1" {
+				sub.BaseURL = "https://api.anthropic.com"
+			}
+		case "openai":
+			if sub.BaseURL == "" || sub.BaseURL == "https://api.anthropic.com" {
+				sub.BaseURL = "https://api.openai.com/v1"
+			}
+		}
+	}
+	sub.Active = true
+
+	if sub.ID == "" {
+		sub.ID = "default"
+		return backend.AddSubscription(cliSenderID, *sub)
+	}
+	return backend.UpdateSubscription(sub.ID, *sub)
+}
+
 // cliApp 封装 CLI 的公共初始化逻辑，供交互和非交互模式共享。
 type cliApp struct {
 	cfg       *config.Config
@@ -60,6 +332,10 @@ type cliApp struct {
 	agentCacheMu    sync.RWMutex
 	agentCacheCount int
 	agentCacheList  []channel.AgentPanelEntry
+
+	// Remote-mode async cache for GetCurrentValues (avoid RPC from Update loop → 30s freeze)
+	valuesCacheMu sync.RWMutex
+	valuesCache   map[string]string
 }
 
 // isFirstRun 检测是否是首次运行（config.json 不存在或 API Key 未配置）
@@ -91,9 +367,6 @@ func isLocalServer(serverURL string) bool {
 func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 	cfg := config.Load()
 
-	// Derive cfg.LLM from active subscription (single source of truth)
-	syncLLMFromActiveSub(cfg)
-
 	// If --server was not specified on the command line, fall back to config.
 	// --local disables this fallback and forces legacy in-process mode.
 	if !forceLocal {
@@ -104,6 +377,7 @@ func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 			token = cfg.CLI.Token
 		}
 	}
+	localMode := serverURL == ""
 
 	workDir := cfg.Agent.WorkDir
 	xbotHome := config.XbotHome()
@@ -112,20 +386,6 @@ func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 	if err := setupLogger(cfg.Log, xbotHome); err != nil {
 		log.WithError(err).Fatal("Failed to setup logger")
 	}
-
-	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
-		Attempts: uint(cfg.Agent.LLMRetryAttempts),
-		Delay:    cfg.Agent.LLMRetryDelay,
-		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
-		Timeout:  cfg.Agent.LLMRetryTimeout,
-	})
-	if err != nil {
-		log.WithError(err).Fatal("Failed to create LLM client")
-	}
-	log.WithFields(log.Fields{
-		"provider": cfg.LLM.Provider,
-		"model":    cfg.LLM.Model,
-	}).Info("LLM client created")
 
 	msgBus := bus.NewMessageBus()
 
@@ -142,6 +402,31 @@ func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 	} else {
 		tools.SetRunnerTokenDB(db.Conn())
 	}
+
+	if localMode {
+		if err := seedLocalDBSubscriptionsFromConfig(db, cfg); err != nil {
+			log.WithError(err).Warn("Failed to seed local DB subscriptions from config")
+		}
+		if !loadLLMFromLocalDB(db, cfg) {
+			syncLLMFromActiveSub(cfg)
+		}
+	} else {
+		syncLLMFromActiveSub(cfg)
+	}
+
+	llmClient, err := createLLM(cfg.LLM, llm.RetryConfig{
+		Attempts: uint(cfg.Agent.LLMRetryAttempts),
+		Delay:    cfg.Agent.LLMRetryDelay,
+		MaxDelay: cfg.Agent.LLMRetryMaxDelay,
+		Timeout:  cfg.Agent.LLMRetryTimeout,
+	})
+	if err != nil {
+		log.WithError(err).Fatal("Failed to create LLM client")
+	}
+	log.WithFields(log.Fields{
+		"provider": cfg.LLM.Provider,
+		"model":    cfg.LLM.Model,
+	}).Info("LLM client created")
 
 	tools.InitSandbox(cfg.Sandbox, workDir)
 
@@ -171,7 +456,6 @@ func newCLIApp(serverURL, token string, forceLocal bool) *cliApp {
 		backend.RegisterCoreTool(tools.NewWebSearchTool(cfg.TavilyAPIKey))
 		backend.IndexGlobalTools()
 		backend.LLMFactory().SetModelTiers(cfg.LLM)
-		backend.LLMFactory().SetConfigSubs(func() []config.SubscriptionConfig { return cfg.Subscriptions })
 		backend.LLMFactory().SetRetryConfig(llm.RetryConfig{
 			Attempts: uint(cfg.Agent.LLMRetryAttempts),
 			Delay:    cfg.Agent.LLMRetryDelay,
@@ -376,52 +660,31 @@ func main() {
 		DebugCaptureMs:  flagDebugCapMs,
 		IsFirstRun:      firstRun,
 		GetCurrentValues: func() map[string]string {
-			// In remote mode, read current values from server via RPC.
+			// In remote mode, return cached values — never block the BubbleTea Update loop.
+			// The cache is refreshed asynchronously by refreshRemoteValuesCache().
 			if app.backend != nil && app.backend.IsRemote() {
-				vals := make(map[string]string)
-				// Settings from server (contains most config values)
-				if sv, err := app.backend.GetSettings("cli", "cli_user"); err == nil {
-					for k, v := range sv {
-						vals[k] = v
-					}
-				}
-				// Model from server — must be AFTER settings to override stale llm_model in DB
-				vals["llm_model"] = app.backend.GetDefaultModel()
-				// Context mode from server
-				vals["context_mode"] = app.backend.GetContextMode()
-				// Defaults for fields not in settings
-				if _, ok := vals["sandbox_mode"]; !ok {
-					vals["sandbox_mode"] = "none"
-				}
-				if _, ok := vals["memory_provider"]; !ok {
-					vals["memory_provider"] = "flat"
-				}
-				if _, ok := vals["max_iterations"]; !ok {
-					vals["max_iterations"] = "30"
-				}
-				if _, ok := vals["max_concurrency"]; !ok {
-					vals["max_concurrency"] = "3"
-				}
-				if _, ok := vals["max_context_tokens"]; !ok {
-					vals["max_context_tokens"] = "0"
-				}
-				if _, ok := vals["max_output_tokens"]; !ok {
-					vals["max_output_tokens"] = "8192"
-				}
-				if _, ok := vals["enable_auto_compress"]; !ok {
-					vals["enable_auto_compress"] = "true"
-				}
-				if _, ok := vals["theme"]; !ok {
-					vals["theme"] = "midnight"
-				}
-				return vals
+				app.valuesCacheMu.RLock()
+				cache := app.valuesCache
+				app.valuesCacheMu.RUnlock()
+				return cache
 			}
-			// Local mode: read from config
+			// Local mode: read directly from config (fast, no RPC).
+			activeSub := currentActiveSubscription(app.backend, app.cfg)
+			llmProvider := app.cfg.LLM.Provider
+			llmAPIKey := app.cfg.LLM.APIKey
+			llmModel := app.cfg.LLM.Model
+			llmBaseURL := app.cfg.LLM.BaseURL
+			if activeSub != nil {
+				llmProvider = activeSub.Provider
+				llmAPIKey = activeSub.APIKey
+				llmModel = activeSub.Model
+				llmBaseURL = activeSub.BaseURL
+			}
 			return map[string]string{
-				"llm_provider":   app.cfg.LLM.Provider,
-				"llm_api_key":    app.cfg.LLM.APIKey,
-				"llm_model":      app.cfg.LLM.Model,
-				"llm_base_url":   app.cfg.LLM.BaseURL,
+				"llm_provider":   llmProvider,
+				"llm_api_key":    llmAPIKey,
+				"llm_model":      llmModel,
+				"llm_base_url":   llmBaseURL,
 				"vanguard_model": app.cfg.LLM.VanguardModel,
 				"balance_model":  app.cfg.LLM.BalanceModel,
 				"swift_model":    app.cfg.LLM.SwiftModel,
@@ -438,24 +701,12 @@ func main() {
 				"max_concurrency":    fmt.Sprintf("%d", app.cfg.Agent.MaxConcurrency),
 				"max_context_tokens": fmt.Sprintf("%d", app.cfg.Agent.MaxContextTokens),
 				"max_output_tokens": func() string {
-					for _, sub := range app.cfg.Subscriptions {
-						if sub.Active {
-							if sub.MaxOutputTokens > 0 {
-								return fmt.Sprintf("%d", sub.MaxOutputTokens)
-							}
-							break
-						}
+					if app.cfg.LLM.MaxOutputTokens > 0 {
+						return fmt.Sprintf("%d", app.cfg.LLM.MaxOutputTokens)
 					}
 					return "8192" // default value used in llm/openai.go
 				}(),
-				"thinking_mode": func() string {
-					for _, sub := range app.cfg.Subscriptions {
-						if sub.Active {
-							return sub.ThinkingMode
-						}
-					}
-					return ""
-				}(),
+				"thinking_mode": app.cfg.LLM.ThinkingMode,
 				"enable_auto_compress": func() string {
 					if app.cfg.Agent.EnableAutoCompress == nil || *app.cfg.Agent.EnableAutoCompress {
 						return "true"
@@ -493,11 +744,28 @@ func main() {
 			if app.backend == nil {
 				return
 			}
+			_, llmChanged := values["llm_provider"]
+			_, keyChanged := values["llm_api_key"]
+			_, modelChanged := values["llm_model"]
+			_, urlChanged := values["llm_base_url"]
+			_, vanguardChanged := values["vanguard_model"]
+			_, balanceChanged := values["balance_model"]
+			_, swiftChanged := values["swift_model"]
+			_, maxOutputChanged := values["max_output_tokens"]
+			_, thinkingChanged := values["thinking_mode"]
 
 			// ── Remote mode: all settings go to server, skip config.json ──
 			if app.backend.IsRemote() {
+				if llmChanged || keyChanged || modelChanged || urlChanged {
+					if err := persistActiveSubscription(app.backend, app.cfg, values); err != nil {
+						log.Warnf("Failed to update active subscription: %v", err)
+					}
+				}
 				// Persist every setting to server via RPC
 				for k, v := range values {
+					if isCLISubscriptionSettingKey(k) {
+						continue
+					}
 					_ = app.backend.SetSetting("cli", "cli_user", k, v)
 				}
 				// Push runtime state to server
@@ -542,54 +810,11 @@ func main() {
 			}
 
 			// ── Local mode: write config.json + apply runtime ──
-			_, llmChanged := values["llm_provider"]
-			_, keyChanged := values["llm_api_key"]
-			_, modelChanged := values["llm_model"]
-			_, urlChanged := values["llm_base_url"]
-			_, vanguardChanged := values["vanguard_model"]
-			_, balanceChanged := values["balance_model"]
-			_, swiftChanged := values["swift_model"]
 			if llmChanged || keyChanged || modelChanged || urlChanged {
-				for i := range app.cfg.Subscriptions {
-					if app.cfg.Subscriptions[i].Active {
-						if v, ok := values["llm_provider"]; ok && v != "" {
-							app.cfg.Subscriptions[i].Provider = v
-						}
-						if v, ok := values["llm_api_key"]; ok && v != "" {
-							app.cfg.Subscriptions[i].APIKey = v
-						}
-						if v, ok := values["llm_model"]; ok && v != "" {
-							app.cfg.Subscriptions[i].Model = v
-						}
-						if v, ok := values["llm_base_url"]; ok && v != "" {
-							app.cfg.Subscriptions[i].BaseURL = v
-						}
-						break
-					}
+				if err := persistActiveSubscription(app.backend, app.cfg, values); err != nil {
+					log.Warnf("Failed to update active subscription: %v", err)
 				}
-				if v, ok := values["llm_provider"]; ok && v != "" {
-					if _, urlSet := values["llm_base_url"]; !urlSet {
-						switch v {
-						case "anthropic":
-							for i := range app.cfg.Subscriptions {
-								if app.cfg.Subscriptions[i].Active {
-									app.cfg.Subscriptions[i].BaseURL = "https://api.anthropic.com"
-									break
-								}
-							}
-						case "openai":
-							for i := range app.cfg.Subscriptions {
-								if app.cfg.Subscriptions[i].Active {
-									if app.cfg.Subscriptions[i].BaseURL == "https://api.anthropic.com" {
-										app.cfg.Subscriptions[i].BaseURL = "https://api.openai.com/v1"
-									}
-									break
-								}
-							}
-						}
-					}
-				}
-				syncLLMFromActiveSub(app.cfg)
+				loadLLMFromDBSubscription(app.backend, app.cfg)
 			}
 			if v, ok := values["vanguard_model"]; ok {
 				app.cfg.LLM.VanguardModel = strings.TrimSpace(v)
@@ -648,40 +873,24 @@ func main() {
 			}
 			if v, ok := values["max_output_tokens"]; ok {
 				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-					for i := range app.cfg.Subscriptions {
-						if app.cfg.Subscriptions[i].Active {
-							app.cfg.Subscriptions[i].MaxOutputTokens = n
-							break
-						}
+					if app.backend != nil {
+						_ = app.backend.SetUserMaxOutputTokens(cliSenderID, n)
 					}
 					app.cfg.LLM.MaxOutputTokens = n
-					if app.backend != nil {
-						if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
-							app.llmClient = newClient
-							app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
-							app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
-						} else {
-							log.Warnf("Failed to rebuild LLM client: %v", err)
-						}
-					}
 				}
 			}
 			if v, ok := values["thinking_mode"]; ok {
-				for i := range app.cfg.Subscriptions {
-					if app.cfg.Subscriptions[i].Active {
-						app.cfg.Subscriptions[i].ThinkingMode = v
-						break
-					}
-				}
 				if app.backend != nil {
-					app.backend.LLMFactory().SetDefaultThinkingMode(v)
+					_ = app.backend.SetUserThinkingMode(cliSenderID, v)
 				}
+				app.cfg.LLM.ThinkingMode = v
 			}
 			if v, ok := values["enable_auto_compress"]; ok {
 				b := v == "true"
 				app.cfg.Agent.EnableAutoCompress = &b
 			}
-			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
+			loadLLMFromDBSubscription(app.backend, app.cfg)
+			if err := saveCLIConfig(app.cfg); err != nil {
 				log.Warnf("Failed to save config.json: %v", err)
 			}
 			if theme, ok := values["theme"]; ok && theme != "" && app.backend != nil {
@@ -689,11 +898,12 @@ func main() {
 					_ = ss.SetSetting("cli", "cli_user", "theme", theme)
 				}
 			}
-			if llmChanged || keyChanged || modelChanged || urlChanged {
+			if llmChanged || keyChanged || modelChanged || urlChanged || maxOutputChanged || thinkingChanged {
 				if app.backend != nil {
 					if newClient, err := createLLM(app.cfg.LLM, llm.DefaultRetryConfig()); err == nil {
 						app.llmClient = newClient
 						app.backend.LLMFactory().SetDefaults(newClient, app.cfg.LLM.Model)
+						app.backend.LLMFactory().SetDefaultThinkingMode(app.cfg.LLM.ThinkingMode)
 						app.backend.LLMFactory().SetModelTiers(app.cfg.LLM)
 					} else {
 						log.Warnf("Failed to rebuild LLM client: %v", err)
@@ -966,8 +1176,9 @@ func main() {
 				cliCh.SetSettingsService(ss)
 			}
 			cliCh.SetModelLister(&cliModelLister{
-				factory: app.backend.LLMFactory(),
-				cfg:     app.cfg,
+				factory:  app.backend.LLMFactory(),
+				cfg:      app.cfg,
+				senderID: cliSenderID,
 			})
 			// Inject BgTaskManager for background task display
 			bgSessionKey := "cli:" + cliCfg.ChatID
@@ -1196,6 +1407,27 @@ func main() {
 		}()
 	}
 
+	// Background goroutine: periodically refresh remote values cache
+	// (GetCurrentValues must not call RPC from BubbleTea Update loop)
+	if app.backend != nil && app.backend.IsRemote() {
+		// Initial seed
+		app.refreshRemoteValuesCache()
+		valuesCtx, valuesCancel := context.WithCancel(context.Background())
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					app.refreshRemoteValuesCache()
+				case <-valuesCtx.Done():
+					return
+				}
+			}
+		}()
+		_ = valuesCancel // cleanup on app exit if needed
+	}
+
 	if newSession {
 		app.msgBus.Inbound <- bus.InboundMessage{
 			Channel:    "cli",
@@ -1251,32 +1483,12 @@ func main() {
 		cliCh.SetSubscriptionManager(newRemoteSubscriptionManager(app.backend))
 		cliCh.SetLLMSubscriber(newRemoteLLMSubscriber(app.backend))
 	} else {
-		if len(app.cfg.Subscriptions) == 0 {
-			// Migration: create first subscription from current LLM config
-			app.cfg.Subscriptions = []config.SubscriptionConfig{{
-				ID:       "default",
-				Name:     app.cfg.LLM.Provider,
-				Provider: app.cfg.LLM.Provider,
-				BaseURL:  app.cfg.LLM.BaseURL,
-				APIKey:   app.cfg.LLM.APIKey,
-				Model:    app.cfg.LLM.Model,
-				Active:   true,
-			}}
-			if err := config.SaveToFile(config.ConfigFilePath(), app.cfg); err != nil {
-				log.WithError(err).Warn("Failed to save migrated subscriptions")
-			}
+		if err := seedLocalDBSubscriptions(app.backend, app.cfg); err != nil {
+			log.WithError(err).Warn("Failed to seed local DB subscriptions")
 		}
-		saveConfig := func() error {
-			saveWg.Add(1)
-			defer saveWg.Done()
-			return config.SaveToFile(config.ConfigFilePath(), app.cfg)
-		}
-		cliCh.SetSubscriptionManager(newConfigSubscriptionManager(app.cfg, saveConfig, func(llmCfg config.LLMConfig) {
-			if app.backend != nil {
-				app.backend.LLMFactory().SetModelTiers(llmCfg)
-			}
-		}))
-		cliCh.SetLLMSubscriber(newConfigLLMSubscriber(app.cfg, app.backend.LLMFactory(), saveConfig))
+		loadLLMFromDBSubscription(app.backend, app.cfg)
+		cliCh.SetSubscriptionManager(newLocalSubscriptionManager(app.backend))
+		cliCh.SetLLMSubscriber(newLocalLLMSubscriber(app.backend))
 	}
 
 	// --share flag: auto-connect as runner after TUI starts
@@ -1304,8 +1516,9 @@ func main() {
 // cliModelLister wraps LLMFactory + config to implement channel.ModelLister.
 // ListAllModels collects models from default LLM + all config subscriptions.
 type cliModelLister struct {
-	factory *agent.LLMFactory
-	cfg     *config.Config
+	factory  *agent.LLMFactory
+	cfg      *config.Config
+	senderID string
 }
 
 func (l *cliModelLister) ListModels() []string {
@@ -1321,6 +1534,17 @@ func (l *cliModelLister) ListAllModels() []string {
 			result = append(result, m)
 		}
 	}
+	if svc := l.factory.GetSubscriptionSvc(); svc != nil && l.senderID != "" {
+		if subs, err := svc.List(l.senderID); err == nil {
+			for _, sub := range subs {
+				if sub.Model != "" && !seen[sub.Model] {
+					seen[sub.Model] = true
+					result = append(result, sub.Model)
+				}
+			}
+			return result
+		}
+	}
 	for _, sub := range l.cfg.Subscriptions {
 		if sub.Model != "" && !seen[sub.Model] {
 			seen[sub.Model] = true
@@ -1328,6 +1552,80 @@ func (l *cliModelLister) ListAllModels() []string {
 		}
 	}
 	return result
+}
+
+type localSubscriptionManager struct {
+	backend agent.AgentBackend
+}
+
+func newLocalSubscriptionManager(backend agent.AgentBackend) *localSubscriptionManager {
+	return &localSubscriptionManager{backend: backend}
+}
+
+func (m *localSubscriptionManager) List(senderID string) ([]channel.Subscription, error) {
+	if senderID == "" {
+		senderID = cliSenderID
+	}
+	return m.backend.ListSubscriptions(senderID)
+}
+
+func (m *localSubscriptionManager) GetDefault(senderID string) (*channel.Subscription, error) {
+	if senderID == "" {
+		senderID = cliSenderID
+	}
+	return m.backend.GetDefaultSubscription(senderID)
+}
+
+func (m *localSubscriptionManager) Add(sub *channel.Subscription) error {
+	return m.backend.AddSubscription(cliSenderID, *sub)
+}
+
+func (m *localSubscriptionManager) Remove(id string) error {
+	return m.backend.RemoveSubscription(id)
+}
+
+func (m *localSubscriptionManager) SetDefault(id string) error {
+	return m.backend.SetDefaultSubscription(id)
+}
+
+func (m *localSubscriptionManager) SetModel(id, model string) error {
+	return m.backend.SetSubscriptionModel(id, model)
+}
+
+func (m *localSubscriptionManager) Rename(id, name string) error {
+	return m.backend.RenameSubscription(id, name)
+}
+
+func (m *localSubscriptionManager) Update(id string, sub *channel.Subscription) error {
+	return m.backend.UpdateSubscription(id, *sub)
+}
+
+type localLLMSubscriber struct {
+	backend agent.AgentBackend
+}
+
+func newLocalLLMSubscriber(backend agent.AgentBackend) *localLLMSubscriber {
+	return &localLLMSubscriber{backend: backend}
+}
+
+func (s *localLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
+	if sub == nil {
+		return nil
+	}
+	return s.backend.SetDefaultSubscription(sub.ID)
+}
+
+func (s *localLLMSubscriber) SwitchModel(senderID, model string) {
+	if senderID == "" {
+		senderID = cliSenderID
+	}
+	if err := s.backend.SwitchModel(senderID, model); err != nil {
+		log.WithError(err).Warn("localLLMSubscriber: SwitchModel failed")
+	}
+}
+
+func (s *localLLMSubscriber) GetDefaultModel() string {
+	return s.backend.GetDefaultModel()
 }
 
 // configSubscriptionManager manages CLI subscriptions in config.json (no database).
@@ -1469,24 +1767,8 @@ func (m *configSubscriptionManager) Update(id string, sub *channel.Subscription)
 	return fmt.Errorf("subscription %s not found", id)
 }
 
-// configLLMSubscriber switches LLM at runtime using config-based subscriptions.
-// Single source of truth: cfg.Subscriptions[active].Model/Provider/BaseURL/APIKey.
-// cfg.LLM.* is a read-only view derived from the active subscription.
-type configLLMSubscriber struct {
-	cfg     *config.Config
-	factory *agent.LLMFactory
-	saveFn  func() error
-}
-
-func newConfigLLMSubscriber(cfg *config.Config, factory *agent.LLMFactory, saveFn func() error) *configLLMSubscriber {
-	// On startup, derive cfg.LLM from active subscription
-	syncLLMFromActiveSub(cfg)
-	return &configLLMSubscriber{cfg: cfg, factory: factory, saveFn: saveFn}
-}
-
-// syncLLMFromActiveSub derives cfg.LLM.* from the active subscription.
-// It only writes the 6 subscription-derived fields; tier fields (VanguardModel/BalanceModel/SwiftModel)
-// are global and NOT touched here.
+// syncLLMFromActiveSub derives cfg.LLM.* from the active config subscription.
+// It is still used by legacy config-backed helper paths and migration logic.
 func syncLLMFromActiveSub(cfg *config.Config) {
 	for _, sc := range cfg.Subscriptions {
 		if sc.Active {
@@ -1499,70 +1781,6 @@ func syncLLMFromActiveSub(cfg *config.Config) {
 			return
 		}
 	}
-	// No active subscription — keep cfg.LLM as-is (single-subscription or migration case)
-}
-
-func (s *configLLMSubscriber) SwitchSubscription(senderID string, sub *channel.Subscription) error {
-	// Find full config (with API key) for this subscription
-	for i := range s.cfg.Subscriptions {
-		if s.cfg.Subscriptions[i].ID == sub.ID {
-			sc := &s.cfg.Subscriptions[i]
-			// Inherit from global config if not specified per-subscription
-			provider := sc.Provider
-			baseURL := sc.BaseURL
-			apiKey := sc.APIKey
-			if provider == "" {
-				provider = s.cfg.LLM.Provider
-			}
-			if baseURL == "" {
-				baseURL = s.cfg.LLM.BaseURL
-			}
-			if apiKey == "" {
-				apiKey = s.cfg.LLM.APIKey
-			}
-			llmCfg := config.LLMConfig{
-				Provider:        provider,
-				BaseURL:         baseURL,
-				APIKey:          apiKey,
-				Model:           sc.Model,
-				MaxOutputTokens: sc.MaxOutputTokens,
-			}
-			client, err := createLLM(llmCfg, llm.DefaultRetryConfig())
-			if err != nil {
-				return fmt.Errorf("create LLM for subscription: %w", err)
-			}
-			s.factory.SetDefaults(client, sc.Model)
-			s.factory.SetDefaultThinkingMode(sc.ThinkingMode)
-			s.factory.SetModelTiers(s.cfg.LLM)
-			// Set active flag + derive cfg.LLM + save (all in one place)
-			for j := range s.cfg.Subscriptions {
-				s.cfg.Subscriptions[j].Active = (s.cfg.Subscriptions[j].ID == sub.ID)
-			}
-			syncLLMFromActiveSub(s.cfg)
-			return s.saveFn()
-		}
-	}
-	return fmt.Errorf("subscription %s not found in config", sub.ID)
-}
-
-func (s *configLLMSubscriber) SwitchModel(senderID, model string) {
-	s.factory.SwitchModel(senderID, model)
-	// Single source of truth: update active subscription's model, then derive cfg.LLM
-	for i := range s.cfg.Subscriptions {
-		if s.cfg.Subscriptions[i].Active {
-			s.cfg.Subscriptions[i].Model = model
-			break
-		}
-	}
-	syncLLMFromActiveSub(s.cfg)
-	s.factory.SetModelTiers(s.cfg.LLM)
-	if err := s.saveFn(); err != nil {
-		log.WithError(err).Warn("Failed to persist model switch")
-	}
-}
-
-func (s *configLLMSubscriber) GetDefaultModel() string {
-	return s.factory.GetDefaultModel()
 }
 
 // red wraps text in ANSI red for terminal error output.

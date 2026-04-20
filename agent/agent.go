@@ -1039,15 +1039,15 @@ func (a *Agent) GetCardBuilder() *tools.CardBuilder {
 	return a.cardBuilder
 }
 
-// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户
-// 每个用户有独立的信号量（容量为1），确保该用户的请求串行处理
-// 使用 LoadOrStore 原子操作避免并发创建多个信号量
+// getUserSemaphore 获取用户独立的信号量，用于有自定义 LLM 配置的用户。
+// 容量与 maxConcurrency 一致：允许同一用户的不同会话并行处理，
+// 但总并发不超过全局上限。
+// 使用 LoadOrStore 原子操作避免并发创建多个信号量。
 func (a *Agent) getUserSemaphore(senderID string) chan struct{} {
 	if val, ok := a.userSemaphores.Load(senderID); ok {
 		return val.(chan struct{})
 	}
-	// LoadOrStore 原子操作：如果 key 不存在则存储，返回存储的值
-	sem, _ := a.userSemaphores.LoadOrStore(senderID, make(chan struct{}, 1))
+	sem, _ := a.userSemaphores.LoadOrStore(senderID, make(chan struct{}, a.getMaxConcurrency()))
 	return sem.(chan struct{})
 }
 

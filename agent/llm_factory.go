@@ -155,15 +155,27 @@ func (f *LLMFactory) HasCustomLLM(senderID string) bool {
 	}
 	f.mu.RUnlock()
 
-	// 从数据库检查
-	cfg, err := f.configSvc.GetConfig(senderID)
-	if err != nil || cfg == nil {
-		f.hasCustomLLMCache.Store(senderID, false)
-		return false
+	// 从数据库检查旧单配置
+	if f.configSvc != nil {
+		cfg, err := f.configSvc.GetConfig(senderID)
+		if err == nil && cfg != nil {
+			hasCustom := cfg.BaseURL != "" && cfg.APIKey != ""
+			if hasCustom {
+				f.hasCustomLLMCache.Store(senderID, true)
+				return true
+			}
+		}
 	}
-	hasCustom := cfg.BaseURL != "" && cfg.APIKey != ""
-	f.hasCustomLLMCache.Store(senderID, hasCustom)
-	return hasCustom
+	// 再检查多订阅系统
+	if f.subscriptionSvc != nil {
+		sub, err := f.subscriptionSvc.GetDefault(senderID)
+		if err == nil && sub != nil && sub.BaseURL != "" && sub.APIKey != "" {
+			f.hasCustomLLMCache.Store(senderID, true)
+			return true
+		}
+	}
+	f.hasCustomLLMCache.Store(senderID, false)
+	return false
 }
 
 // InvalidateCustomLLMCache 使指定用户的自定义 LLM 缓存失效

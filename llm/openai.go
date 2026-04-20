@@ -20,12 +20,14 @@ import (
 
 // OpenAILLM OpenAI LLM 实现
 type OpenAILLM struct {
-	client         *openai.Client
-	mu             sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
-	models         []string       // 可用模型列表
-	defaultModel   string         // 默认模型
-	maxTokens      int            // 最大生成 token 数（用户配置值，作为上限）
-	onModelsLoaded func([]string) // callback after models loaded from API
+	client            *openai.Client
+	mu                sync.RWMutex   // 保护 models 和 defaultModel 的并发读写（C-12）
+	models            []string       // 可用模型列表
+	defaultModel      string         // 默认模型
+	maxTokens         int            // 最大生成 token 数（用户配置值，作为上限）
+	onModelsLoaded    func([]string) // callback after models loaded from API
+	onModelsLoadError func(error)    // callback after models load fails
+	modelsLoaded      bool           // true after first ListModels() triggers async fetch
 
 	// dynamicMaxTokens is the dynamically adjusted max_tokens for the next API call.
 	// Set by AdjustMaxTokens() based on remaining context space. Resets after each call.
@@ -139,19 +141,11 @@ func NewOpenAILLM(cfg OpenAIConfig) *OpenAILLM {
 		o.mu.Unlock()
 	}
 
-	// Load model list asynchronously to avoid blocking startup.
-	// The fallback model above ensures ListModels() works before API responds.
-	onError := cfg.OnModelsLoadError
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := o.LoadModelsFromAPI(ctx); err != nil {
-			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
-			if onError != nil {
-				onError(err)
-			}
-		}
-	}()
+	// Lazy: don't fire LoadModelsFromAPI in constructor.
+	// Trigger on first ListModels() call instead, so unused clients
+	// (e.g. subscriptions for users who haven't sent a message yet)
+	// don't spam the API on startup.
+	o.onModelsLoadError = cfg.OnModelsLoadError
 
 	return o
 }
@@ -174,12 +168,44 @@ var stainlessHeaders = []string{
 }
 
 // ListModels 获取可用模型列表
+// Triggers an async model list fetch on the first call (lazy loading).
 func (o *OpenAILLM) ListModels() []string {
 	o.mu.RLock()
-	defer o.mu.RUnlock()
 	result := make([]string, len(o.models))
 	copy(result, o.models)
+	loaded := o.modelsLoaded
+	o.mu.RUnlock()
+
+	// Lazy load: trigger async fetch on first call.
+	if !loaded {
+		o.triggerModelLoad()
+	}
+
 	return result
+}
+
+// triggerModelLoad fires a one-time async model list fetch.
+// Subsequent calls are no-ops once modelsLoaded is set.
+func (o *OpenAILLM) triggerModelLoad() {
+	o.mu.Lock()
+	if o.modelsLoaded {
+		o.mu.Unlock()
+		return
+	}
+	o.modelsLoaded = true
+	onError := o.onModelsLoadError
+	o.mu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := o.LoadModelsFromAPI(ctx); err != nil {
+			log.WithError(err).Warn("[LLM] Failed to load models from OpenAI API")
+			if onError != nil {
+				onError(err)
+			}
+		}
+	}()
 }
 
 // GetDefaultModel 获取默认模型

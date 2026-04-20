@@ -519,6 +519,7 @@ type cliModel struct {
 
 	channel         *CLIChannel // back-reference to owning channel (set during Start)
 	cachedModelName string      // cached model name for View() performance
+	modelCount      int         // cached model list length for View() performance
 
 	// === Runner Bridge ===
 	runnerBridge *RunnerBridge
@@ -739,6 +740,10 @@ func (m *cliModel) refreshCachedModelName() {
 	// Single source of truth: read from cfg.LLM.Model (derived from active subscription)
 	if m.channel.config.GetCurrentValues != nil {
 		m.cachedModelName = m.channel.config.GetCurrentValues()["llm_model"]
+	}
+	// Cache model count for View() (avoids ListAllModels RPC per frame)
+	if m.channel.modelLister != nil {
+		m.modelCount = len(m.channel.modelLister.ListAllModels())
 	}
 }
 

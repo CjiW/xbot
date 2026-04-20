@@ -244,7 +244,7 @@ func (m *cliModel) View() tea.View {
 			// 模型名称（使用缓存，避免每次 View() 重复查找）
 			if m.cachedModelName != "" {
 				modelHint := m.cachedModelName
-				if m.channel != nil && m.channel.modelLister != nil && len(m.channel.modelLister.ListAllModels()) > 1 {
+				if m.modelCount > 1 {
 					modelHint += " [Ctrl+N]"
 				}
 				readyParts = append(readyParts, modelHint)

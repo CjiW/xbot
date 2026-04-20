@@ -404,7 +404,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			_, m, _, _ := backend.LLMFactory().GetLLM(senderIDFromParams(params, senderID))
 			model = m
 		}
-		log.WithField("sender_id", senderIDFromParams(params, senderID)).WithField("model", model).Info("RPC get_default_model")
+		log.WithField("sender_id", senderIDFromParams(params, senderID)).WithField("model", model).Debug("RPC get_default_model")
 		return json.Marshal(model)
 	case "set_user_model":
 		var p struct {
@@ -494,7 +494,7 @@ func handleCLIRPC(cfg *config.Config, backend agent.AgentBackend, method string,
 			return nil, fmt.Errorf("LLM factory not available")
 		}
 		models := backend.LLMFactory().ListAllModelsForUser(senderID)
-		log.WithField("count", len(models)).Info("RPC list_all_models")
+		log.WithField("count", len(models)).Debug("RPC list_all_models")
 		return json.Marshal(models)
 	case "set_model_tiers":
 		if !isAdmin(senderID) {
